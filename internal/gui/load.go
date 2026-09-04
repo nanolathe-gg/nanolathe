@@ -433,6 +433,18 @@ type SliderArt struct {
 	// ArrowExtent is the long-axis size of frames base+6 and base+8, the two
 	// arrows: their width on a horizontal bar, their height on a vertical one.
 	ArrowExtent int32
+	// ArrowCrossExtent is the arrows' own cross-axis size: a horizontal bar's
+	// arrow height, a vertical bar's arrow width. The builder writes each
+	// arrow's full rectangle — both axes — straight from that arrow's own
+	// frame (base+6 for the decrement arrow, base+8 for the increment one),
+	// never from the bar's own short axis (BaseExtent, above): the two reads
+	// are independent, from different frames, made before either the
+	// horizontal or vertical branch below touches the bar. In the shipped
+	// `anims/commongui.gaf` SLIDERS entry the two arrows' cross-axis size
+	// happens to equal each other and BaseExtent in both orientations
+	// (16px), which is why one field carries it for the pair rather than
+	// two [07 R-WGT-01 §5].
+	ArrowCrossExtent int32
 }
 
 // SliderFrameBase returns the SLIDERS frame base for a kind-4 gadget's
@@ -461,11 +473,10 @@ func SliderFrameBase(r Rect) int32 {
 // at `y + h - arrowH`, the bar shrinks and shifts likewise, and travel is left
 // as authored — a vertical bar takes its travel from its list or the screen.
 //
-// TODO(question): what is an arrow gadget's cross-axis extent? [07 R-WGT-01 §5]
-// gives each arrow's position and its long-axis frame size and says nothing
-// about the other axis; the bar's own short axis, used here, is the only extent
-// in scope at that point. Decider: a static trace of the arrow gadget's
-// rectangle store.
+// Each arrow's cross-axis extent (a horizontal bar's arrow height, a vertical
+// bar's arrow width) is that arrow's own frame's size on that axis — read
+// directly from frame base+6 or base+8, not from the bar's short axis
+// [07 R-WGT-01 §5], carried here as art.ArrowCrossExtent.
 func BuildSlider(bar Gadget, art *SliderArt) (Gadget, []Gadget) {
 	if art == nil {
 		travel := bar.Rect.W
@@ -495,15 +506,15 @@ func BuildSlider(bar Gadget, art *SliderArt) (Gadget, []Gadget) {
 		},
 	}
 	if horizontal {
-		arrows[0].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y, W: art.ArrowExtent, H: bar.Rect.H}
-		arrows[1].Rect = Rect{X: bar.Rect.X + bar.Rect.W - art.ArrowExtent, Y: bar.Rect.Y, W: art.ArrowExtent, H: bar.Rect.H}
+		arrows[0].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y, W: art.ArrowExtent, H: art.ArrowCrossExtent}
+		arrows[1].Rect = Rect{X: bar.Rect.X + bar.Rect.W - art.ArrowExtent, Y: bar.Rect.Y, W: art.ArrowExtent, H: art.ArrowCrossExtent}
 		bar.Rect.W -= 2 * art.ArrowExtent
 		bar.Rect.X += art.ArrowExtent
 		bar.KnobSize = int16(art.KnobExtent)
 		bar.Range = int16(bar.Rect.W - int32(bar.KnobSize) - 4)
 	} else {
-		arrows[0].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y, W: bar.Rect.W, H: art.ArrowExtent}
-		arrows[1].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y + bar.Rect.H - art.ArrowExtent, W: bar.Rect.W, H: art.ArrowExtent}
+		arrows[0].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y, W: art.ArrowCrossExtent, H: art.ArrowExtent}
+		arrows[1].Rect = Rect{X: bar.Rect.X, Y: bar.Rect.Y + bar.Rect.H - art.ArrowExtent, W: art.ArrowCrossExtent, H: art.ArrowExtent}
 		bar.Rect.H -= 2 * art.ArrowExtent
 		bar.Rect.Y += art.ArrowExtent
 	}

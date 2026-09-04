@@ -498,13 +498,84 @@ visits
 (uint16)globalLiveUnitCount / 30 + 1
 ```
 
-units per call — an integer divide of a **global** unit count, so the per-unit
-revisit period is roughly 30 ticks only while the player owns a typical share
-of the world's units — advancing a persistent cursor through the owning
-player's unit vector and wrapping to its beginning at the end. The visited unit
-must have a nonzero definition index, a remaining-build-fraction of exactly
-zero, one high status bit set, and its two-bit stance field equal to the
-fire-at-will value.
+units per call — advancing a persistent cursor through the owning player's unit
+vector and wrapping to its beginning at the end. The visited unit must have a
+nonzero definition index, a remaining-build-fraction of exactly zero, one high
+status bit set, and its two-bit stance field equal to the fire-at-will value.
+The word divided is **not** a live unit count and the vector is **not** a
+compacted list of live units; both are corrected below.
+
+##### The third clause is the armed bit — Established (2026-09-04, WU-19-147)
+
+The third clause's "one high status bit set" is the **armed** bit: bit 31 of
+the unit's 32-bit runtime status word, the second of the two high bits named
+under `[08 "Classifier eligibility, destinations, and order"]`, set once by the
+common allocator initializer from the definition's derived boolean flag and set
+unless all three of the definition's resolved weapon slots are empty. The sense
+is **set**: a clear bit ends the unit's visit immediately, before the three
+weapon slots are looked at.
+
+The scan reads it off the same status-word load that then supplies the stance
+field: the word is fetched once, tested against the armed bit, and only then
+masked down to the two-bit standing-fire field and compared with the
+fire-at-will value. The clause order is therefore definition index, then
+remaining-build-fraction, then armed bit, then stance.
+
+The previous text left the bit unnamed — "one high status bit set", with no
+section identifying which — which was incomplete rather than wrong. It was
+incomplete in a way that mattered to implementers: an implementation that
+omits the clause scans a superset that includes every weaponless unit, and one
+that guesses the *first* high bit (building class, `bmcode == 0`) instead would
+restrict autonomous acquisition to buildings and silence every mobile unit.
+
+Consequence in practice: the narrowing is a formalization, not a behavior
+change, for units created in the running session, because a definition with no
+resolved weapon slot also populates no weapon slot, and the per-slot loop the
+clause guards would skip all three anyway. It is load-bearing only where the
+status word and the slot control bytes can disagree — a save restore, where the
+persisted slot control byte is authoritative on its own — and as documentation
+of why the clause exists: it is retail's early-out over the weaponless majority
+of a player's array.
+
+##### The budget word is the per-player unit limit, and the per-player slice is fixed for the session — Established (2026-09-04, WU-19-147)
+
+**Correction.** The previous text said the scan visits
+`(uint16)globalLiveUnitCount / 30 + 1` units per call, "an integer divide of a
+**global** unit count, so the per-unit revisit period is roughly 30 ticks only
+while the player owns a typical share of the world's units". The formula's
+shape is right and its dividend is wrong. The sixteen-bit word the scan divides
+is the session's **per-player unit limit** — a setup constant, not a counter —
+and the vector the cursor walks is the player's whole fixed record slice, free
+records included.
+
+The same word sizes the unit-record array at session entry: the array is
+allocated as `perPlayerLimit x 10 + 1` records of 280 bytes and zeroed, and
+each player's slice is `perPlayerLimit` consecutive records, its first and last
+record addresses stored on the player object once and never written again. That
+is the same arithmetic `[01 §6.1]` and `[I5]` already record for the pool's
+capacity. The word itself is written only at startup, from a registry/INI
+integer whose default is 200, and at session entry, from the setup value; no
+per-tick writer exists.
+
+Three consequences follow, and all three differ from the previous reading:
+
+- the budget is **constant for the session** — with the stock default,
+  `200 / 30 + 1 = 7` records per player per tick — and does not move as units
+  are built or die;
+- the revisit period is a fixed `ceil(perPlayerLimit / budget)` ticks, close to
+  30 by construction rather than "only while the player owns a typical share";
+- the cursor steps over **free records too**, and the clause "nonzero
+  definition index" is exactly the free-record test: a never-allocated record
+  is zeroed, so its definition-index word is zero. A player owning few units
+  therefore spends most of its budget on empty records, and its units are
+  revisited on the same fixed period as a player owning many — the opposite of
+  what a live-count dividend would give.
+
+Nanolathe currently implements the superseded reading (`internal/combat`'s
+autonomous scan cursor divides the live unit count and walks a compacted vector
+of live units); the divergence is carried as a `TODO(T25)` at that constant,
+because correcting it needs the per-player pool capacity and a free-record-
+inclusive walk exposed from `internal/units`.
 
 **Established fact:** Within a visited unit the three slots are processed in
 numeric order, and a slot is skipped unless its armed/has-target flag and its
@@ -5836,6 +5907,15 @@ gates. No bullet is added.
 - Manual unit and point target encoding, command-fire replacement, and the
   full set of manual-versus-autonomous latch callers · §3.2, doc 07 · static
   trace.
+- What a freed unit record reads back as before the next allocation overwrites
+  it — specifically whether the death teardown clears the record's definition
+  pointer, its definition-index word or its activation byte, or leaves the
+  record intact. It decides what the target registry's third list offers for a
+  pad destroyed inside a rebuild window, since that list holds raw record
+  addresses and the scan re-tests only the three admission flags · §3.1, doc 04
+  `[R-AIR-01 §11]` · static trace of the death teardown's record release; the
+  world-teardown sweep's "definition index nonzero" test is the only free-record
+  marker located so far, and no store that clears it was found.
 - Acquisition bypasses and category behavior for non-unit target types · §3.3
   · static trace.
 - Whether the ballistic solver's `acos` argument can exceed one on malformed

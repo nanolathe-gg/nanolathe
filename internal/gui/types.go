@@ -106,14 +106,14 @@ type Gadget struct {
 	FilePath string
 	HotOrNot int32 // blank surface hotornot, bit 0 of the surface flag word [02 §6][07 R-WGT-01 §11]
 	// `nuttin` is the kind-10 line gadget's key, stored as a 32-bit word at the
-	// start of the text field [07 R-WGT-01 §11]. The line painter's use of it is
-	// still open.
-	// TODO(question): does the kind-10 line painter read `nuttin` as the
-	// attribute-4 (outline) second X coordinate? [07 R-WGT-01 §8] describes the
-	// horizontal/vertical/outlined line and doc 07's "Unknown" list keeps the
-	// outline's second X open because the decompiler drops it. Decider: an
-	// instruction-level read of the line painter. Parsed and retained losslessly
-	// meanwhile.
+	// start of the text field [07 R-WGT-01 §11]. This used to carry an open
+	// question — whether the line painter reads it as the attribute-4
+	// (outline) second X coordinate — closed by an instruction-level trace of
+	// the painter: it never reads the text field's `nuttin` slot at all. The
+	// outline case's second X coordinate is `x + w - 1`, the gadget's own
+	// rect, computed the same way as the horizontal line's endpoint and left
+	// unmodified on that path [07 R-WGT-01 §8]. `nuttin` is parsed and
+	// retained losslessly; no traced reader consumes it.
 	Nuttin int32 // kind-10 line gadget [02 §6][07 R-WGT-01 §11]
 
 	ItemHeight int16 // listbox itemheight rare [02 §6][fmt gui]

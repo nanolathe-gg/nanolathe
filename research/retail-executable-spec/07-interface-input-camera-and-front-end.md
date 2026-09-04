@@ -1106,6 +1106,32 @@ note:** [R-FE-01 §6]'s "arrow length − 6 vertical, width − arrow length −
 exact forms are the two above. `SHARE` overrides both (`travel := w − h`,
 [R-HUD-03 §9]).
 
+**Established — an arrow gadget's cross-axis extent (WU-19-144, 2026-09-04).**
+This closes an open question this document previously left as `TODO(question)`
+in Nanolathe's loader: `arrowW`/`arrowH` above is each arrow's size on its
+*long* axis, but the short axis of the appended button gadget's own rectangle
+was unstated. A static trace of the arrow gadget's rectangle store (the
+builder's kind-4 arm, the two button-record writes right after the frame-base
+lookup) found that **both** axes of each arrow's rectangle are written
+straight from that arrow's own `SLIDERS` frame — width and height alike,
+copied as a pair before the horizontal/vertical branch above runs. The
+decrement arrow (frame `base+6`) takes its full rectangle from frame `base+6`;
+the increment arrow (frame `base+8`) takes its from frame `base+8`. Neither
+read touches the bar's own short axis (the `BaseExtent` frame `base` sets,
+above) — the two are independent frame lookups, not a reuse. The
+horizontal/vertical branch that follows only ever writes the second arrow's
+position and the bar's own rectangle, knobsize and travel; it never revisits
+either arrow's width or height. **Asset corroboration:** in the shipped
+`anims/commongui.gaf` `SLIDERS` entry, frames `base+6` and `base+8` share the
+same size on their cross axis as frame `base` itself, in both orientations
+(16px for both the vertical set at base 0 and the horizontal set at base 10)
+— so a renderer that reused the bar's `BaseExtent` for the arrows' cross axis
+would draw pixel-identical arrows to one that reads each arrow's own frame,
+for this one asset. The mechanism is still the per-frame read: nothing in the
+executable ties the arrows' cross axis to `BaseExtent`, and a modified
+`SLIDERS` entry with mismatched cap and arrow heights would expose the
+difference.
+
 **Established — the knob rectangle.** Horizontal: `(gx+1+knob, gy+1) –
 (gx+1+knob+knobsize, gy+h−1)`; vertical: `(gx+1, gy+2+knob) – (gx+w−1,
 gy+2+knob+knobsize)`; the track is the whole gadget rectangle.
@@ -1214,12 +1240,15 @@ surface copied, else a fill with window colour entry 7. A picture box
 (kind 12) blits its frame (keyed by `colorf` while it decays, §1) and
 darkens by 28 steps when its own flag bit is set; a "line" gadget draws a
 horizontal (attribute 1), vertical (2) or outlined (4) line in the
-gadget's colour. After every full repaint, when the window's key-navigation flag is set,
+gadget's colour (mechanics and the outline's second coordinate below).
+After every full repaint, when the window's key-navigation flag is set,
 the builder paints a **focus halo** around the focused gadget: for a
 button or surface six one-pixel frames growing outward with palette
 lightening 31, 28, 24, 19, 13, 6; for a text input it sets `colorf` to 30
 instead (lists and labels get none). The kind-8 "ordinal lookup" of the ledger always returns null —
 kind 8 has no runtime behaviour.
+
+**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 ### Closed — selection presentation: the shared eligibility predicate and the footprint quad [R-WGT-01 §9] (2026-08-29)
 
@@ -7636,9 +7665,10 @@ section rather than deleted.
   asset census. (Bubbling, default controls, shared focus, capture and
   association precedence, listbox rows, picture-box binding and the widget
   callback map are closed in [R-WGT-01 §§1–8].)
-- The key-navigation flag's clear state per front-end screen; the kind-10
-  outline X coordinate; who fills each listbox's `maxTop`; the record-list
-  item structures · §3, §4 [R-WGT-01] · static trace.
+- The key-navigation flag's clear state per front-end screen; who fills each
+  listbox's `maxTop`; the record-list item structures · §3, §4 [R-WGT-01] ·
+  static trace. (The kind-10 outline X coordinate and `nuttin`'s runtime role
+  are closed in [R-WGT-01 §8].)
 - The restart request word's consumer; the
   `DitheredFog` presenter · §5 [R-FE-01 §7, §11] · static trace. (The
   `screenchat` filter polarity is closed in [R-HUD-03 §14]; the single-player

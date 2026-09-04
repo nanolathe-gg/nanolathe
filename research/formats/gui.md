@@ -162,7 +162,7 @@ into a 32-byte field and the window builder opens
 
 | Field | Meaning |
 | --- | --- |
-| `nuttin` | Integer, stored as a 32-bit word in the text field; no reader found. The line itself is drawn from `attribs`: `1` horizontal, `2` vertical, `4` rectangle outline, in the gadget colour [07 R-WGT-01 §8]. |
+| `nuttin` | Integer, stored as a 32-bit word in the text field; a WU-19-144 instruction-level trace of the painter confirms no reader — it never dereferences this offset. The line itself is drawn from `attribs`: `1` horizontal (`(x,y)–(x+w−1,y)`), `2` vertical (`(x,y)–(x,y+h−1)`), `4` a single diagonal line across the gadget's rectangle (`(x,y)–(x+w−1,y+h−1)`, not a four-sided rectangle outline — "outlined" is the bit's name, not the shape it draws), in the gadget colour (`colorf` as a window colour-table row) [07 R-WGT-01 §8]. **Correction (2026-09-04, WU-19-144):** the previous "rectangle outline" for attribute 4 was a guess from the bit's name; the trace shows one diagonal line. |
 
 ### Picture box (`id=12`)
 

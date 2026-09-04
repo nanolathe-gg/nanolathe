@@ -68,12 +68,18 @@ func mustPulse(t *testing.T, id uint16, tick uint32) uint8 {
 	return a
 }
 
-// The height key is half the model-relative height, biased into byte range.
-func TestNanoframeHeightKey(t *testing.T) {
-	if got := NanoframeHeightKey(0); got != NanoframeHeightBias {
-		t.Fatalf("ground key = %d, want %d", got, NanoframeHeightBias)
+// The height key base keeps geometry below the model origin non-negative, and a
+// Digger definition's further +75 puts the erase threshold exactly at that
+// origin [03 R-REN-03A §2][03 R-REN-03A §8]. This test previously asserted a
+// halved key through a `NanoframeHeightKey` helper in this package; the halving
+// was a misreading of the anti-aliased vertex path (which doubles the vertex
+// before dividing) and the helper has been removed in favour of the client
+// composer's single `modelHeightKey`.
+func TestNanoframeHeightBias(t *testing.T) {
+	if NanoframeHeightBias != 50 {
+		t.Fatalf("height key base = %d, want 50", NanoframeHeightBias)
 	}
-	if got := NanoframeHeightKey(40); got != NanoframeHeightBias+20 {
-		t.Fatalf("key at 40 units = %d, want %d", got, NanoframeHeightBias+20)
+	if NanoframeHeightBias+75 != 125 {
+		t.Fatalf("Digger erase threshold = %d, want 125", NanoframeHeightBias+75)
 	}
 }

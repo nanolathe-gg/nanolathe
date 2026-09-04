@@ -15,22 +15,30 @@ const (
 	NanoframeKeep  = -1 // the pixel keeps its composed (textured or flat) colour
 )
 
-// NanoframeHeightBias is the constant the model rasterizer adds to half a
-// vertex's model-relative height to form the per-pixel height key, which
-// doubles as the model's own depth key [03 §5.2].
+// NanoframeHeightBias is the constant the model rasterizer adds to a vertex's
+// whole model-relative height to form the per-pixel height key, which doubles
+// as the model's own depth key [03 §5.2][03 R-REN-03A §2]. The base exists so
+// that geometry below the model origin still keys non-negative.
 //
-// TODO(question): retail selects 125 instead of 50 on one unit-definition flag
-// bit whose authored name is not identified; every stock draw path observed
-// takes the 50 branch, so only that constant is implemented.
+// This constant previously carried "TODO(question): retail selects 125 instead
+// of 50 on one unit-definition flag bit whose authored name is not identified;
+// every stock draw path observed takes the 50 branch". Both halves of that are
+// now answered and the marker is retired. The bit is the FBI `Digger` key; its
+// contribution is a further +75, which is where 125 came from (125 = 50 + 75),
+// and after the waterline pass the finished image is erased wherever the key is
+// at or below 125 — exactly the geometry at or below the model origin, the
+// buried half of a pop-up defence. Three stock units author it: ARMAMB,
+// CORTOAST and CORVIPE [03 R-REN-03A §8]. It is not a branch between two bases:
+// the raised base and the erase are one behavior and only make sense together.
+//
+// The key is also the *whole* height, not half of it; the halved reading came
+// from the anti-aliased vertex path, which doubles the vertex before dividing
+// [03 R-REN-03A §2 "Correction to the key formula"]. The one live key builder
+// is `modelHeightKey` in the client's model composer, which applies this base,
+// the Digger term, and the floor narrowing together; a second, divergent copy
+// of the formula used to live here and has been removed rather than repaired,
+// so there is one site (I11).
 const NanoframeHeightBias = 50
-
-// NanoframeHeightKey is the per-vertex height key: half the vertex's height
-// above the unit origin in whole world units, biased into byte range. The
-// rasterizer interpolates it across each primitive and the reveal compares the
-// result against the sweep line [03 §5.2].
-func NanoframeHeightKey(modelRelativeY int32) int32 {
-	return modelRelativeY/2 + NanoframeHeightBias
-}
 
 // NanoframePulse returns the two nanoframe pulse colours for one unit at one
 // tick. Both ping-pong across the sixteen-entry green ramp at 0xa0, at 33/30

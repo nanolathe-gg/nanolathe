@@ -791,10 +791,22 @@ func (s *Service) TickWeapons(tick uint32, w *units.World, vis *visibility.Servi
 const stanceFireAtWill uint32 = 2
 
 // autonomousScanDivisor is the divisor of the scan's per-call unit budget
-// [06 §3.2]: it visits `(uint16)globalLiveUnitCount / 30 + 1` units per player
-// per tick. The count is the GLOBAL live unit count, not the scanning player's,
-// so the per-unit revisit period is roughly thirty ticks only while the player
-// owns a typical share of the world's units.
+// [06 §3.2]: it visits `word / 30 + 1` array entries per player per tick.
+//
+// TODO(T25): the dividend is wrong here, and correcting it is blocked on an
+// accessor this package does not own. [06 §3.2 "The budget word is the
+// per-player unit limit"] establishes that the sixteen-bit word the scan
+// divides is the session's PER-PLAYER UNIT LIMIT — a setup constant, stock
+// default 200 — and not a live unit count, and that the cursor walks that
+// player's whole fixed record slice, free slots included, rather than a
+// compacted vector of its live units. The budget is therefore constant for the
+// session and every slot is revisited on a fixed period near thirty ticks.
+// Placeholder: keep the live-count dividend and the compacted-vector cursor
+// below, which agree with the corrected model whenever a player's live count is
+// near the limit and drift wider as it falls. Settling it needs the per-player
+// pool capacity and a free-slot-inclusive walk from internal/units, which this
+// unit does not own; the numbers only ever change the phase and period of an
+// acquisition, never whether one is legal.
 const autonomousScanDivisor = 30
 
 // combatPlayerSlots is the session's ten player slots [05 "Player slot"]. The
@@ -818,7 +830,7 @@ const combatPlayerSlots = 10
 type autonomousScanCursor struct {
 	tick   uint32
 	primed bool
-	span   int // this tick's budget, `(uint16)globalLive/30 + 1`
+	span   int // this tick's budget, `word/30 + 1` (see the TODO(T25) above)
 	cursor [combatPlayerSlots]int
 	seen   [combatPlayerSlots]int
 	count  [combatPlayerSlots]int
@@ -846,9 +858,10 @@ func (c *autonomousScanCursor) beginTick(tick uint32, globalLive int) {
 	if globalLive < 0 {
 		globalLive = 0
 	}
-	// `(uint16)globalLiveUnitCount / 30 + 1` [06 §3.2] — the count is truncated
-	// to sixteen bits before the divide, which is retail's storage width for it
-	// [08 "Counters"].
+	// `word / 30 + 1` [06 §3.2] — the dividend is truncated to sixteen bits
+	// before the divide, which is retail's storage width for it [08 "Counters"].
+	// Which word it is stands corrected at autonomousScanDivisor's TODO(T25):
+	// retail divides the per-player unit LIMIT, not this live count.
 	c.span = int(uint16(globalLive))/autonomousScanDivisor + 1
 	c.tick = tick
 	c.primed = true
@@ -880,9 +893,10 @@ func (c *autonomousScanCursor) visits(owner uint8) bool {
 }
 
 // autonomousScanVisitsUnit is the autonomous scan's per-unit admission
-// [06 §3.2]: "The visited unit must have a nonzero definition index, a
-// remaining-build-fraction of exactly zero, one high status bit set, and its
-// two-bit stance field equal to the fire-at-will value."
+// [06 §3.2]: the visited unit must have a nonzero definition index, a
+// remaining-build-fraction of exactly zero, the ARMED status bit set, and its
+// two-bit stance field equal to the fire-at-will value — read in that order off
+// the one runtime status word.
 //
 // The cursor is consumed first and unconditionally, because the budget is spent
 // on vector entries rather than on units that pass.
@@ -900,13 +914,20 @@ func (s *Service) autonomousScanVisitsUnit(u *units.Unit, tick uint32, w *units.
 	if u.Remaining != 0 {
 		return false // "a remaining-build-fraction of exactly zero"
 	}
-	// TODO(question): [06 §3.2]'s third clause, "one high status bit set", does
-	// not name the bit, and no other section identifies a status bit this scan
-	// reads. It is not modelled here rather than guessed at; the clause can only
-	// narrow the visited set, so omitting it scans a superset. Decider: a static
-	// trace of the scan's own status-word test against the unit status-word
-	// census of [08 "Classifier eligibility, destinations, and order"], which
-	// names two high status bits set once at creation from the definition.
+	// The third clause, now named [06 §3.2 "The third clause is the armed
+	// bit"]. The previous text here was a TODO(question) saying that "one high
+	// status bit set" did "not name the bit, and no other section identifies a
+	// status bit this scan reads", and left the clause unmodelled so the gate
+	// scanned a superset. That was incomplete rather than wrong: the scan reads
+	// the same runtime status word this line's stance field lives in, and the
+	// bit it tests is the ARMED bit — the second of the two high bits the
+	// classifier census names, set once at creation when the definition
+	// resolved at least one of its three weapon slots [08 "Classifier
+	// eligibility, destinations, and order"]. The sense is SET: a clear bit
+	// ends the unit's visit before any slot is looked at.
+	if u.Flags&units.ArmedStatus == 0 {
+		return false
+	}
 	return u.Flags>>units.StandingFireShift&units.StandingFieldMask == stanceFireAtWill
 }
 

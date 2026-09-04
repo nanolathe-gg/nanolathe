@@ -96,6 +96,15 @@ func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Un
 	target := w.Unit(targetH)
 	attachTestCOB(shooter, shooter.GetScript())
 	attachTestCOB(target, target.GetScript())
+	// The autonomous scan's third clause is the ARMED status bit
+	// [06 §3.2 "The third clause is the armed bit"], which unit creation derives
+	// from the definition's three weapon links. These fixtures create units from
+	// a weaponless literal definition and then hand a slot a weapon through
+	// InstallWeapon, so the derived bit would be clear and the scan would visit
+	// nothing. Raising it here is what the definition would have done: the
+	// fixture units stand in for armed definitions.
+	shooter.Flags |= units.ArmedStatus
+	target.Flags |= units.ArmedStatus
 	// Set Y above sea level
 	shooter.Y = numeric.FixedFromInt(10)
 	target.Y = numeric.FixedFromInt(10)

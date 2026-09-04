@@ -6061,6 +6061,53 @@ pitch the X slot, each with a constant negative half-circle (180-degree)
 authored model-facing offset — and a propeller-style variant feeds its spin
 angle through the same slot machinery.
 
+**Closed — the propeller variant's slot and offset (2026-09-04). Established
+(direct-static).** The sentence above left "the same slot machinery"
+unresolved, and the implementation site carried
+`TODO(question): propeller variant slot (Y vs Z) and whether it carries the
+-32768 offset not fully established`, provisionally feeding Y with no offset.
+The slot was wrong; the missing offset was right.
+
+A model projectile is drawn from a **three-word angle block**, and the drawer
+rotates every vertex by those three words in a fixed order — each step rotates
+one coordinate pair in place, so the pair named is the one that turns:
+
+| Block word | Coordinate pair rotated | Axis | Named |
+|---|---|---|---|
+| 0 | (X, Y) | Z | roll / bank |
+| 2 | (Y after word 0, Z) | X | pitch |
+| 1 | (X after word 0, Z after word 2) | Y | yaw / heading |
+
+The block is therefore ordered `{roll, yaw, pitch}` onto the `{Z, Y, X}` slots —
+the same bank→Z, heading→Y, pitch→X assignment the unit root fold uses — and is
+applied Z, then X, then Y. Only words 1 and 2 receive the negative half-circle
+model-facing offset; word 0 is used verbatim. [06 R-WFX-01 §4] states the block
+as `{roll word, yaw − 0x8000, pitch − 0x8000}`, and its render type 6 draws
+`{roll, yaw, pitch}` with no offsets at all — both consistent with this
+ordering.
+
+**The `propeller` weapon flag substitutes the record's spinning propeller angle
+for word 0 — the roll slot — with no offset.** Three further facts constrain any
+reimplementation:
+
+- the substitution applies to the model's **child piece only**. The parent model
+  is drawn first, from the unsubstituted block, so a propeller weapon's body
+  keeps whatever roll the record holds and does not spin;
+- the child is drawn at all only when the model has one **and** the current tick
+  is strictly less than the record's expiry tick;
+- the angle is advanced by the simulation, a fixed 1,024 units per tick, before
+  any family motion runs ([06 §6.2]); the draw path only reads it.
+
+Nothing in the draw path chooses between two rotation *sources* — the flag picks
+which value goes into word 0 and nothing else, which is the same correction
+[06 R-WFX-01 §4] already applied to the older "directly computed versus
+record-stored rotation chosen by that same flag" reading. This also fixes what
+the roll word means for a non-propeller model projectile: it is the record's
+first orientation word, which only the meteor family accumulates, so an ordinary
+missile draws with whatever roll its pool slot last held ([06 R-WFX-01 §4]
+records that consequence as a Supported inference with a writer census as its
+decider).
+
 Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)` through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel. (**Correction, 2026-08-29:** this sentence previously said "n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers … the flat path is quads-only". The arities were transposed, as [03 §2.4.1] item 2 already records: textured faces are quads only and the flat filler takes any vertex count. The exact edge, span and rounding rules of both fillers are [R-RAST-01 §1].) No stored UVs, no perspective divide (bounded-negative), the default corners are `w-1/h-1` of the selected frame, nearest sample. (The earlier "transparent holes skip `SHD`" clause is withdrawn: no model span writer tests the sampled texel against a transparent or colour-key index — see [R-REN-03A §5]. Model transparency is carried by the composition image's own background index, which the final blit keys against.) Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
 #### Nanoframe reveal [R-P0-19-N]
@@ -6393,6 +6440,34 @@ shadow categories share one stencil are not established"):
   features, and the fog overlay (after all strips) covers shadows like all
   world drawing. The feature-memory marker makes a tall feature's shadow
   persist independent of current line of sight.
+
+**Closed — no water flag, and no aircraft-height term (2026-09-04).
+Established.** The model-shadow implementation site carried "the residual water
+flag and exact aircraft-height behavior remain `TODO(question)`". Neither is
+open, and the first was looking for something that does not exist.
+
+*There is no water flag.* What the marker was reaching for is the mobile
+silhouette branch's **waterline erase**, which is computed per draw rather than
+authored: with `t = seaLevel − trunc(unitY)`, a subject with `t > 0` is partly
+submerged, and every pixel whose height key is at or below `t + 50` is erased
+before the tinted blit, so only the above-water hull casts a shadow
+([R-REN-03D §1] branch 2). No definition key gates it; the only authored inputs
+are the ones already listed in the branch gates. The body image runs the same
+threshold shape in its own waterline pass, where the local player's own units
+are blue-tinted instead of erased ([R-REN-03A §8]). The Digger branch's erase is
+the constant `50 + 75` rather than this computed threshold, and the two are
+separate erasures on separate branches, not one parameterized pass.
+
+*Aircraft height enters nothing.* No shadow gate and no shadow placement reads
+the unit's own height. What makes a flying unit's shadow behave like one falls
+out of the placement above: the shadow's shear term is the terrain height
+beneath the subject (`− terrainHeight >> 1`), while the body's is the unit's own
+height (`− unitY >> 1`), so the two separate vertically on screen exactly as the
+unit climbs, and rejoin when it lands. The silhouette is a 1:1 copy of the body
+image, so the shadow neither shrinks, softens, nor fades with altitude, and
+there is no altitude cut-off above which it stops being drawn. The mobile
+branch's `canhover` and `floater` rejections are hover and float gates, not
+flight gates; nothing in the three branches tests a flight capability at all.
 
 #### 5.3.1 Feature shadow selection and blit order
 
@@ -9693,11 +9768,19 @@ by the sharper question it turned into.
 - The name and authored source of the display-mode byte that forces every
   unit body through the tinted blitter (cleared by the film/HUD-hide key
   family) · [R-RAST-01 §7] · static trace of its writers (doc 07 owns the key).
-- Aircraft altitude versus ground projection in the shadow pass · §5.3,
-  [R-REN-03D] · static trace.
-- Water-flag bit semantics, the exact darken row identity within `SHD`, and
-  the interplay between the dither option and the shading gate · §5.3 ·
-  static trace. Marked `TODO(question)`.
+- ~~Aircraft altitude versus ground projection in the shadow pass~~ ·
+  **Closed 2026-09-04**, §5.3 "no water flag, and no aircraft-height term".
+  No shadow gate or placement reads the unit's own height; the body/terrain
+  shear difference is the whole behavior.
+- ~~Water-flag bit semantics, the exact darken row identity within `SHD`, and
+  the interplay between the dither option and the shading gate~~ ·
+  **Closed 2026-09-04**, §5.3 "no water flag, and no aircraft-height term" plus
+  [R-REN-03D §1]/[R-REN-03D §4] and §5.3's own "Correction". There is no water
+  flag — the mobile branch's waterline erase is computed from sea level and the
+  unit's height; there is no `SHD` row in any shadow path — every shadow pixel
+  is index 0 and the blitter resolves `ALP[0*256 + dst]`; the dithered-fog bit
+  is read by no shadow branch, and the `Shading` bit gates the tinted blitter by
+  early return rather than by branch selection.
 - The identical-model six-variant shading matrix predicted by [R-RND-02A] has
   not been run · §5 · manual retail observation.
 - Whether the palette window's blue-table feature bit can be clear in a retail
