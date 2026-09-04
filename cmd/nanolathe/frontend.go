@@ -542,14 +542,14 @@ func (g *gameShell) applyDisplaySize(cl *client.Client, width, height int) {
 // the surface follows it when they differ [07 R-FE-01 §11]. It runs at the
 // transition that starts the load, so the battle composes at the chosen size.
 //
-// The authored HUD windows keep their 640x480 rectangles: `.GUI` position
-// sentinels resolve against the authored 640x480 design space [02 §6][07 §1]
-// and no display-scale conversion is established, so at a larger mode the
-// terrain view grows and the panels stay where they were authored.
-// TODO(question): retail's HUD panels are described as anchored to the screen
-// edges at larger modes; which sentinel or runtime rewrite moves them is not
-// established here. Decider: a static trace of the battle window opener's
-// rectangle arithmetic against a non-640x480 display size.
+// The battle chrome is not scaled to the new size; it extends by rule
+// [07 R-HUD-05]: the world viewport takes `(128,32)..(W-1,H-33)` [03 §4.1],
+// the bottom strip moves to `H-32` and both horizontal strips are stamped
+// rightward to the surface edge, the left rail keeps its authored 129x480 art
+// with palette index 0 below it, the footer's anchors shift by `H - baseheight`
+// and the modal windows re-centre in the live view. The authored `.GUI` rail
+// pages keep their coordinates. The battle composer reads the surface size at
+// draw time, so nothing here has to reach into it.
 func (g *gameShell) applyDisplayMode(cl *client.Client) {
 	if g == nil {
 		return

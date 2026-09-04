@@ -27,6 +27,7 @@ type Options struct {
 	ShotZoom   float64 // presentation zoom applied before --shot captures (1 = native)
 	ShotFocus  string  // "x,y" screen point kept fixed while zooming; default the screen centre
 	ShotSelect bool    // run the Ctrl+A select-all before --shot captures, so the command page is open
+	ShotSize   string  // "WxH" surface size for --shot; empty composes at the authored 640x480
 
 	// Host-side profiling. None of these reach the session: a profiled run
 	// draws the same numbers in the same order as an unprofiled one, so the
@@ -69,6 +70,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.Float64Var(&opts.ShotZoom, "shot-zoom", 1, "presentation zoom for --shot, 0.25..4 (1 = native)")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --shot-zoom (default the screen centre)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
+	set.StringVar(&opts.ShotSize, "shot-size", "", "surface size \"WxH\" for --shot, one of the display modes (default 640x480)")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with --shot, run the real viewer loop headlessly for this many seconds of battle time and report ms per frame")

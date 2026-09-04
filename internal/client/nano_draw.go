@@ -62,7 +62,14 @@ func (c *Client) tickNanolathe(cur *frame.Frame) {
 	c.nano.Tick(cur.Tick, func() int32 { return rng.Rand() })
 }
 
-// nanoTargetBox resolves the target's world bounding box. A target whose model
+// nanoTargetBox resolves the target's world bounding box. Every unit-target
+// work step — forward (build, repair, help-build/assist, resurrection-into-
+// unit) and reversed (unit reclaim, capture) alike — now publishes its own
+// box on the event [05 R-WORK-01 §8][02 R-CAT-01 §7], so the model-bounds
+// derivation below only ever runs for an event that carries none (a
+// script-emitted nano segment with no unit target). Real model geometry is
+// the wrong shape for that box regardless: the published record is
+// footprint-derived in X/Z, not the model's silhouette. A target whose model
 // is not resolvable collapses to the published target point, which keeps the
 // spray a straight line rather than inventing a spread [I9].
 func (c *Client) nanoTargetBox(cur *frame.Frame, e *frame.EffectView) (min, max [3]numeric.Fixed) {

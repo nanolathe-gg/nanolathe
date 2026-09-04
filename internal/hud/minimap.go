@@ -117,6 +117,13 @@ func MinimapViewportRect(cam *camera.Camera, m camera.Minimap, playW, playH int3
 	if viewW <= 0 || viewH <= 0 {
 		return Rect{}, false
 	}
+	// Retail holds the viewport's extents as cell counts — the subrect span
+	// shifted right by four — and shifts them back left for this projection,
+	// so a span that is not a multiple of 16 (the 536 of 800x600) is floored
+	// to one (528). At 640x480 both spans are multiples of 16 [03 R-MM-01 §1]
+	// [07 R-HUD-05].
+	viewW &^= 15
+	viewH &^= 15
 	// Retail's camera origin, from this build's framebuffer-origin camera
 	// [03 §4.1][03 R-MM-01 §1].
 	camX := cam.X + camera.OriginX

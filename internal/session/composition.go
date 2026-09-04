@@ -1102,6 +1102,20 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					e.NanolatheTargetBoxKnown = true
 					e.NanolatheTargetMin, e.NanolatheTargetMax = boxMin, boxMax
 					e.NanolatheBoxAtSource = true
+				} else {
+					// The ordinary work direction — repair, help-build/assist,
+					// mobile/building construction, and a resurrection whose
+					// target has already resolved into a unit — sprays FROM
+					// the builder's nano piece INTO the target unit, so the
+					// box sits at the DESTINATION end (NanolatheBoxAtSource
+					// stays false) [05 R-WORK-01 §8]. Publishing the same
+					// derivation the reversed producers use [02 R-CAT-01 §7]
+					// lets the client stop re-deriving the destination from
+					// real model geometry, which is the wrong shape: the
+					// record is footprint-derived in X/Z.
+					boxMin, boxMax = target.NanolatheBox()
+					e.NanolatheTargetBoxKnown = true
+					e.NanolatheTargetMin, e.NanolatheTargetMax = boxMin, boxMax
 				}
 				if !s.publication.events.EmitNanolathe(e) {
 					return false

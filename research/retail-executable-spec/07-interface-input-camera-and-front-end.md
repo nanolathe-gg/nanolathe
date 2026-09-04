@@ -31,7 +31,10 @@ Retail has two related but distinct interface families:
 
 Both families use a logical 640 by 480 design space. The active display may
 have another size, but GUI layout and battle chrome are authored in the
-logical space and then presented to the display surface.
+logical space and then presented to the display surface. The front end always
+runs at 640×480 ([R-FE-02 §2]); the battle chrome is neither scaled nor
+letterboxed at a larger mode but extended by the per-element rules of
+[R-HUD-05].
 
 The front-end and battle interface share the following services:
 
@@ -4364,6 +4367,94 @@ tuple order are established above.
   static trace of the mission-event text producers.
 
 
+### Closed — the battle chrome at display modes larger than 640×480 [R-HUD-05] (2026-09-04)
+
+The question this closes: when the negotiated surface is one of the larger
+modes of [R-FE-02 §9], applied at the load transition of [R-FE-01 §11], how
+does the battle interface reach the new edges? It is neither scaled nor
+letterboxed. Every element follows one of a handful of rules, each reading the
+surface width `W` and height `H` that the presentation state holds, and the
+authored 640×480 art is reused as-is. `W×H = 640×480` is the degenerate case of
+every rule below, which is why nothing in this section changes the 640×480
+picture.
+
+**Established — the surface and the world viewport.** The battle presenter
+re-creates its offscreen composition surface at exactly `W×H` when the battle
+shell starts, and the battle loader rebuilds the world viewport subrect as
+`(128, 32)..(W−1, H−33)` inclusive, a span of `W−128 × H−64` [03 §4.1]. The
+composer's viewport extents in cells are those spans shifted right by four
+(floor), and the minimap viewport rectangle of [03 R-MM-01 §1] uses the cell
+count shifted back left, so the 536-row span of 800×600 projects as 528.
+
+**Established — the first paint.** Before the first frame the presenter fills
+the whole surface with palette index 0 and stamps the three panel entries at
+their final origins — `PANELTOP` at `(129, 0)`, `PANELBOT` at `(129, H−32)`,
+`PANELSIDE` at `(0, 0)` — through the offset-cancelling contract of §6's
+"Panel asset binding and draw origins". `PANELSIDE` is stamped here and
+nowhere else: the loader and this first paint are the only readers of its
+handle in the image.
+
+**Established — what the per-frame composer repaints, and where it stops.**
+
+1. The top strip, when the resource snapshot changes ([R-HUD-03 §4]):
+   `PANELTOP` at `(129, 0)`, then the side's `PANELBOT` frame at each
+   successive `x += frameWidth` while `x < W`, every stamp at `y = 0`. The
+   stock `PANELBOT` frames are 33 rows tall against the strip's 32, so on the
+   frames that repaint the strip each extension stamp's last row lands on the
+   viewport's first row (`y = 32`), and the world composition — which runs
+   first, every frame — takes that row back on the frames that do not. At
+   640×480 the stock `PANELTOP` (513 wide for ARM, 511 for CORE) reaches the
+   edge in one stamp and no extension is drawn.
+2. The footer's backdrop ([R-HUD-03 §1]): `PANELBOT` at `(x, H−32)` for
+   `x = 129, 129 + frameWidth, …` while `x < W`. The 33rd row falls off the
+   surface.
+3. The GUI window pass repaints a window only when it is marked dirty or when
+   its rectangle intersects the viewport subrect. The rail windows — the root
+   `<prefix>MAIN2.GUI` and every command page, all authored at `(0, 128)`
+   with size `128×352` — therefore persist from their own paints, and no
+   per-frame path touches the rail's columns `0..128` below row 479 or the
+   bottom strip's columns `0..128`. **On a surface taller than 480, the band
+   under `PANELSIDE` stays palette index 0 for the whole battle.**
+
+**Established — what follows the surface, and what stays put.**
+
+| Rule | Elements |
+|---|---|
+| Anchored to the bottom edge `H` | the footer's `y` anchors through `dy = H − baseheight` ([R-HUD-03 §1]); the §6 slide strip; the `Send` throughput meter at `(129, H−95)`; the frozen-frame `Click to continue` line at `y = H−20` |
+| Anchored to the right edge `W` | the Space-held score panel, `x = W − slide` ([R-HUD-04 §1]); both strip stamp loops; the pointer clamp and edge-scroll tests at `W−1` / `H−1` (§10) |
+| Centred on the surface | a window opened with the "centre" placement flag: `x = (W − w) / 2`, `y = (H − h) / 2` |
+| Centred in the view | a window opened with the "centre in the view" flag — `EXITMENU`, `YESORNO` ("Tab options menu and manual exit"): `x = (W − 128 − w) / 2 + 128`, `y = (H − h) / 2`; the in-game title frames `igpaused` / `igvictory` / `igdefeat` (§11), whose draw origin is the view centre `((W + 128) / 2, H / 2)` less the frame's authored offsets; the camera clamp's maximum, `PlayRight − (W − 128)` and `PlayBottom − (H − 64)` ([R-CAM-01 §13], corrected there) |
+| Fixed in authored coordinates | the top strip's anchors (`LOGO`, the bars and their numbers — no `dy`); the radar canvas, a 126-pixel square at the surface's top-left corner letterboxed by map aspect, with `RADAR FINAL` blitted at its pad offsets; the message column at `x = 138`, first line `y = 52` ([R-HUD-03 §14.4]); every rail window and gadget rectangle; the unit information screen ([R-HUD-03 §8]) |
+
+All divisions above are truncating integer divides.
+
+**Established — the window initializer's sentinel rules.** The two placement
+flags write sentinels into the root gadget's `xpos`/`ypos` before placement:
+"centre" writes `−1` into both, "centre in the view" writes `−2` into `x` and
+`−1` into `y`. Placement then tests **`x` alone**: `x = −1` centres both axes
+on the surface, `x = −2` centres `x` in the view and `y` on the surface; `y`'s
+own value is never consulted. Afterwards, an `x + w > W` recentres `x` and a
+`y + h > H` recentres `y`, and a window wider or taller than the surface is
+refused. `W` and `H` are the live surface size, so a sentinel-placed window
+moves with the display mode while an explicitly placed one does not.
+
+**Nanolathe impact (WU-19-151).** The build reads the surface size at draw time
+and applies the rules above: `hud.StripStamps` / `hud.BottomStripY` /
+`hud.RailGap` / `hud.ModalPlacement` carry the arithmetic and the battle
+composer stamps the strips, paints the rail band and re-places the two modal
+windows from them. Two deliberate presentation choices, each recorded at the
+site: the top strip's extension stamps are clipped to the strip's 32 rows,
+because this composer repaints the strip every frame and would otherwise show
+the 33rd-row overlap permanently rather than only on retail's repaint frames;
+and the rail band is measured from the art's authored 480 rows rather than from
+the slid panel, so the panel slide's own uncovered rows remain the 640×480
+matter they were. Not changed here, because it is not a display-mode matter
+and the 640×480 output was held byte-identical: the build centres the paused
+title on the full surface rather than the view, and its `.GUI` loader resolves
+`−1`/`−2` per axis against 640×480 — correct for every front-end screen and,
+through the composer's own placement, for the two battle modals.
+
+
 ## 7. Fonts, text, palette, and localization use
 
 ### Established fact
@@ -6745,18 +6836,18 @@ anchored at map pixel `(104, 152)`, appears at framebuffer x ≈ 232 — that is
 `104 + 128`, the vent's map pixel plus the viewport's left inset, with the
 camera at its floor of 0.
 
-**Supported inference — the maximum's extent operand is the same subrect
-span.** The two bounds are symmetric if `viewSize` is the subrect span
-(`512 × 416` at 640×480, `W-128 × H-64` generally [03 §4.1]): the floor puts the
-playable area's first pixel on the viewport's leading edge and the maximum puts
-its last pixel on the trailing edge. That reading is what [R-CRD-006 §1]'s
-wording ("subtracting half the viewport span", `mapPixelExtent −
-viewportExtent`) says, and it is the only reading under which the playable
-extents `PlayRight = Width·16 − 32` / `PlayBottom = Height·16 − 128` [03 §1] are
-fully visible. It is **not** separately traced here: the alternative — the
-clamp reading the negotiated display width and height instead — would leave the
-map's last 128 playable columns and last 64 rows permanently off screen.
-*Decider:* a static trace of which extent pair the clamp's maximum reads.
+**Established — the maximum's extent operand is the subrect span (corrected
+2026-09-04, WU-19-151).** The clamp computes its maximum per axis as the
+play-area extent minus the viewport subrect's own width and height words —
+`PlayRight − (W−128)` and `PlayBottom − (H−64)` [03 §4.1] — and the floor test
+runs first. The two bounds are therefore symmetric: the floor puts the playable
+area's first pixel on the viewport's leading edge and the maximum puts its last
+pixel on the trailing edge, so the playable extents `PlayRight = Width·16 − 32`
+/ `PlayBottom = Height·16 − 128` [03 §1] are fully visible at every display
+mode. The previous text carried this as a *Supported inference* with the
+alternative — the clamp reading the negotiated display width and height — left
+open; that alternative is disproved: the clamp reads the subrect's span words,
+not the surface size. See [R-HUD-05] for the rest of the display-mode layout.
 
 **Nanolathe impact (defect PT5-01, fixed 2026-08-31).** This build's camera
 origin is the world point drawn at the *framebuffer's* top-left corner, not the

@@ -289,10 +289,12 @@ func (u *Unit) SlotAt(idx int) *Slot {
 // NanolatheBox is the six-word box the nano-segment submission routine builds
 // when a unit is the boxed end of a work segment: this unit's world position
 // plus the six signed extents of its definition's bounding record
-// [05 R-WORK-01 §8][02 R-CAT-01 §7]. Both reversed producers — unit reclaim
-// and capture, where the box is the SOURCE and the builder's nano piece is the
-// degenerate destination — read it through here so the two share one
-// derivation.
+// [05 R-WORK-01 §8][02 R-CAT-01 §7]. The reversed producers — unit reclaim and
+// capture, where the box is the SOURCE and the builder's nano piece is the
+// degenerate destination — and the forward producers — build, repair, help-
+// build/assist, and a resurrection whose target has already resolved into a
+// unit, where the box is the DESTINATION — all read it through here so every
+// unit-target spray direction shares one derivation.
 //
 // The box is presentation geometry: nothing in the emission path is
 // authoritative [05 R-WORK-01 §8], so no caller may read it back into

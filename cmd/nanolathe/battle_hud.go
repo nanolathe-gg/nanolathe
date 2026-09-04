@@ -39,18 +39,22 @@ type retailBattleHUD struct {
 	guiFont *formats.FNT
 	pal     *palette.Tables
 
-	panelTop           *formats.GAFFrame
-	panelSide          *formats.GAFFrame
-	panelBottom        *formats.GAFFrame
-	intGAF             *formats.GAF
-	common             *formats.GAF
-	oldMain            *formats.GAF
-	share              *formats.GAF
-	logos              *formats.GAF
-	optionsGAF         *formats.GAF
-	optionsWin         *gui.Window
-	exitWin            *gui.Window
-	confirmWin         *gui.Window
+	panelTop    *formats.GAFFrame
+	panelSide   *formats.GAFFrame
+	panelBottom *formats.GAFFrame
+	intGAF      *formats.GAF
+	common      *formats.GAF
+	oldMain     *formats.GAF
+	share       *formats.GAF
+	logos       *formats.GAF
+	optionsGAF  *formats.GAF
+	optionsWin  *gui.Window
+	exitWin     *gui.Window
+	confirmWin  *gui.Window
+	// screenW/screenH is the negotiated surface size the chrome is currently
+	// laid out for; applyDisplaySize re-places the size-dependent windows when
+	// it changes [07 R-HUD-05].
+	screenW, screenH   int32
 	modalFont          *formats.GAFEntry
 	pausedFrame        *formats.GAFFrame
 	victoryFrame       *formats.GAFFrame  // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
@@ -422,15 +426,6 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		resultPanel = ui.NewPanel(resultWin)
 		configureResultPanel(fs, sess, resultPanel)
 	}
-	// EXITMENU and YESORNO are opened with the executable's 0x1000 placement
-	// flag. The modal initializer replaces their authored origins with sentinels,
-	// then centers them in the 512-pixel playfield to the right of the rail.
-	if exitWin != nil {
-		placeBattleModal(exitWin, 640, 480)
-	}
-	if confirmWin != nil {
-		placeBattleModal(confirmWin, 640, 480)
-	}
 	h := &retailBattleHUD{
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
@@ -448,6 +443,9 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		productGAFs:       make(map[string]*formats.GAF),
 		productGAFChecked: make(map[string]bool),
 	}
+	// The chrome is laid out for the authored 640x480 surface until the
+	// composer sees the negotiated one [07 R-HUD-05].
+	h.applyDisplaySize(retailScreenW, retailScreenH)
 	// The empty-selection command page is the first page composed at battle
 	// entry. Require its authored window now so a failed battle construction
 	// cannot defer a missing GUI to a blank draw path. Numbered builder pages
@@ -542,16 +540,36 @@ func buildBattleRadar(fs vfs.FSOps, cat *content.Catalog, mapName string, terrai
 	return render.BuildRadarPicture(terrain, playW, playH, layout, baked, bakedW, bakedH, pal)
 }
 
+// applyDisplaySize lays the chrome out for a negotiated surface of w×h pixels
+// [07 R-HUD-05]. Only the size-dependent windows need re-placing: EXITMENU and
+// YESORNO are opened with the executable's "centre in the view" placement
+// flag, so the window initializer replaces their authored origins with
+// sentinels and centres them in the surface width left of the rail and in the
+// full surface height, at the live size [07 "Tab options menu and manual
+// exit"]. Everything else the composer derives from the surface size at draw
+// time. Repeated calls at an unchanged size are no-ops.
+func (h *retailBattleHUD) applyDisplaySize(w, height int) {
+	if h == nil || w <= 0 || height <= 0 {
+		return
+	}
+	if int32(w) == h.screenW && int32(height) == h.screenH {
+		return
+	}
+	h.screenW, h.screenH = int32(w), int32(height)
+	placeBattleModal(h.exitWin, w, height)
+	placeBattleModal(h.confirmWin, w, height)
+}
+
 // placeBattleModal applies the established 0x1000 modal placement at the
-// negotiated logical display size. The battle rail occupies x=0..127; modal
-// centering therefore uses the remaining width and adds 128 [07 "Tab options
-// menu and manual exit"].
+// negotiated display size. The battle rail occupies x=0..127; modal centering
+// therefore uses the remaining width and adds 128 [07 "Tab options menu and
+// manual exit"][07 R-HUD-05].
 func placeBattleModal(window *gui.Window, screenW, screenH int) {
 	if window == nil {
 		return
 	}
-	x := (screenW-128-int(window.Rect.W))/2 + 128
-	y := (screenH - int(window.Rect.H)) / 2
+	px, py := hud.ModalPlacement(int32(screenW), int32(screenH), window.Rect.W, window.Rect.H)
+	x, y := int(px), int(py)
 	window.Rect.X, window.Rect.Y = int32(x), int32(y)
 	window.OriginX, window.OriginY = int32(x), int32(y)
 	if len(window.Gadgets) != 0 {
@@ -732,13 +750,54 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
 	// frames are static at the authored 129-pixel rail boundary; only the side
 	// strip and its GUI contents use the panel slide offset [07 §6].
-	blitBattlePanel(c, h.panelTop, 129, 0)
-	blitBattlePanel(c, h.panelBottom, 129, 480-32)
+	//
+	// At a display mode larger than 640x480 the chrome extends by rule, not
+	// by scaling [07 R-HUD-05]: the bottom strip sits at the surface height
+	// minus 32, and both horizontal strips are stamped rightward — the top one
+	// with PANELTOP once and then the side's PANELBOT frame, the bottom one
+	// with PANELBOT throughout — each stamp advancing by its frame width until
+	// the running x reaches the surface width [07 R-HUD-03 §1][07 R-HUD-03 §4].
+	// At 640x480 every stock frame reaches the edge in one stamp.
+	screenW, screenH := c.Size()
+	h.applyDisplaySize(screenW, screenH)
+	blitBattlePanel(c, h.panelTop, hud.ChromeRailX, 0)
+	if h.panelTop != nil && h.panelBottom != nil {
+		stamps := hud.StripStamps(int32(screenW), int32(h.panelTop.Width), int32(h.panelBottom.Width))
+		for _, x := range stamps[1:] {
+			// PANELBOT is 33 rows tall against the top strip's 32, and retail
+			// repaints the strip only when the resource snapshot changes, after
+			// the world: its 33rd row lands on the viewport's first row on those
+			// frames and the world takes the row back on the others. This
+			// composer repaints the strip every frame and has no such
+			// alternation, so the extension is clipped to the strip's 32 rows —
+			// the state retail shows whenever the strip is at rest.
+			c.UIBlitClipped(h.panelBottom, int(x), 0, int(x), 0, int(h.panelBottom.Width), hud.ChromeStripHeight)
+		}
+	}
+	if h.panelBottom != nil {
+		bottomY := int(hud.BottomStripY(int32(screenH)))
+		for _, x := range hud.StripStamps(int32(screenW), int32(h.panelBottom.Width), int32(h.panelBottom.Width)) {
+			blitBattlePanel(c, h.panelBottom, int(x), bottomY)
+		}
+	}
 	offset := 0
 	if b != nil {
 		offset = int(b.battleState().PanelOffset)
 	}
 	blitBattlePanel(c, h.panelSide, 0, offset)
+	// The left rail keeps its authored 129x480 art: retail stamps PANELSIDE
+	// once at battle start onto a surface cleared to palette index 0 and never
+	// extends it, so on a surface taller than the art the band under the panel
+	// stays index 0 for the whole battle [07 R-HUD-05]. This composer draws the
+	// world across the whole framebuffer first, so the band is painted here.
+	// The band is measured from the art's authored 480 rows, not from the slid
+	// panel: the slide's own uncovered rows are a 640x480 matter this unit does
+	// not touch.
+	if h.panelSide != nil {
+		if gap, ok := hud.RailGap(int32(screenH), int32(h.panelSide.Width), int32(h.panelSide.Height)); ok {
+			c.UIFillRect(int(gap.X1), int(gap.Y1), int(gap.X2-gap.X1+1), int(gap.Y2-gap.Y1+1), 0)
+		}
+	}
 	// The §6 slide strip's three readouts, drawn over the bottom strip while
 	// the slide is off its closed detent [07 R-HUD-04 §4].
 	if cur != nil {
@@ -2999,9 +3058,12 @@ func (h *retailBattleHUD) overWorld(x, y int32) bool {
 	if h.panelTop != nil {
 		top = int32(h.panelTop.Height)
 	}
-	bottom := int32(480)
-	if h.panelBottom != nil {
-		bottom = 480 - int32(h.panelBottom.Height)
+	// The world viewport's last row is `H-33` inclusive at every display
+	// mode, one row above the bottom strip's origin [03 §4.1][07 R-HUD-05].
+	screenH := h.screenH
+	if screenH <= 0 {
+		screenH = retailScreenH
 	}
+	bottom := hud.BottomStripY(screenH)
 	return y >= top && y < bottom
 }

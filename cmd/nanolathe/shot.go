@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/settings"
 )
 
 // startCPUProfile begins host-side CPU sampling and returns the stop function.
@@ -102,14 +103,24 @@ func runShot(opts Options, cs *contentSet) error {
 	}
 	sess := authoritative.Session
 
+	// The capture surface defaults to the authored 640x480; `--shot-size`
+	// composes at another display mode the way the load transition would have
+	// resized the window [07 R-FE-01 §11], so the chrome layout at that mode
+	// [07 R-HUD-05] can be reviewed as a picture.
+	shotW, shotH := retailScreenW, retailScreenH
+	if opts.ShotSize != "" {
+		if _, err := fmt.Sscanf(opts.ShotSize, "%dx%d", &shotW, &shotH); err != nil || shotW < settings.MinDisplaymodeWidth || shotH < settings.MinDisplaymodeHeight {
+			return fmt.Errorf("nanolathe: shot: --shot-size wants \"WxH\" of at least %dx%d, got %q", settings.MinDisplaymodeWidth, settings.MinDisplaymodeHeight, opts.ShotSize)
+		}
+	}
 	var (
 		b  *battleSession
 		cl *client.Client
 	)
 	cl, err = client.New(client.Options{
 		Buffer: sess.Snapshot,
-		Width:  retailScreenW,
-		Height: retailScreenH,
+		Width:  shotW,
+		Height: shotH,
 		Title:  "Nanolathe — " + opts.Map,
 		Step:   func(delta float64) { b.viewerStep(delta, cl) },
 	})
@@ -122,6 +133,13 @@ func runShot(opts Options, cs *contentSet) error {
 		return err
 	}
 	defer b.teardown(cl)
+	// The battle composes its camera at the authored size; square it with the
+	// capture surface the way the windowed installation point does
+	// [07 R-FE-01 §11].
+	if b.cam != nil {
+		b.cam.ViewW, b.cam.ViewH = int32(shotW), int32(shotH)
+		b.cam.Clamp()
+	}
 
 	// Sampling starts after content load and battle composition so a profile
 	// describes the steady-state loop rather than one-time setup. With
@@ -168,7 +186,7 @@ func runShot(opts Options, cs *contentSet) error {
 	// Zoom is presentation-only [F-P1-008]; it is applied after the ticks so
 	// the simulation is identical to an unzoomed capture of the same seed.
 	if opts.ShotZoom != 0 && opts.ShotZoom != 1 && b.cam != nil {
-		fx, fy := int32(retailScreenW/2), int32(retailScreenH/2)
+		fx, fy := int32(shotW/2), int32(shotH/2)
 		if opts.ShotFocus != "" {
 			if _, err := fmt.Sscanf(opts.ShotFocus, "%d,%d", &fx, &fy); err != nil {
 				return fmt.Errorf("nanolathe: shot: --shot-focus wants \"x,y\", got %q", opts.ShotFocus)

@@ -1572,15 +1572,28 @@ func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {
 	// The producer identity routes the event to effect strip 6 (beam/muzzle/
 	// nanolathe) and the geometry flag opens the client's nanolathe draw gate
 	// [03 §5.5][R-P0-06 §5].
+	//
+	// The ordinary work direction sprays FROM the builder's nano piece INTO
+	// the product, so the box below sits at the DESTINATION end
+	// (NanolatheBoxAtSource stays false) [05 R-WORK-01 §8]. Publishing the
+	// product's own box here — the same derivation the reversed reclaim/
+	// capture producers use [02 R-CAT-01 §7] — lets the client stop
+	// re-deriving the destination from real model geometry, which is the
+	// wrong shape: the record is footprint-derived in X/Z, not the model's
+	// silhouette.
+	boxMin, boxMax := product.NanolatheBox()
 	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: product.Handle, Piece: piece,
 		X: source.X(), Y: source.Y(), Z: source.Z(),
 		TargetX: product.X, TargetY: product.Y, TargetZ: product.Z,
 		EffectID: 6, Mode: 1, Team: builder.Owner,
-		Producer:               frame.ProducerBeam,
-		PaletteRow:             6,
-		NanolatheActiveUntil:   tick + 300,
-		NanolatheGeometryKnown: true,
+		Producer:                frame.ProducerBeam,
+		PaletteRow:              6,
+		NanolatheActiveUntil:    tick + 300,
+		NanolatheGeometryKnown:  true,
+		NanolatheTargetBoxKnown: true,
+		NanolatheTargetMin:      boxMin,
+		NanolatheTargetMax:      boxMax,
 	})
 }
 

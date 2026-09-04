@@ -167,3 +167,76 @@ func TestUnitReclaimNanoSpraysFromTheTargetUnitsBox(t *testing.T) {
 			r.DstOrigin[0]-r.SrcOrigin[0], boxMax[0]-boxMin[0])
 	}
 }
+
+// The ordinary work direction — build, repair, help-build/assist, and a
+// resurrection whose target has already resolved into a unit — is the mirror
+// of the unit-reclaim/capture family above: the box is still the TARGET
+// UNIT's own [02 R-CAT-01 §7], but it now sits at the DESTINATION end, with
+// the builder's nano piece as the degenerate source
+// (NanolatheBoxAtSource=false) [05 R-WORK-01 §8].
+//
+// The defect this locks: the forward producers published no box at all, so
+// the client fell back to deriving the destination from the target's real
+// model geometry — the wrong shape, since the published record is
+// footprint-derived in X/Z, not the model's silhouette [02 R-CAT-01 §7]. A
+// unit under repair or construction could then spray into a box shaped like
+// its rendered mesh instead of its definition's bounding record.
+func TestForwardNanoSpraysIntoTheTargetUnitsBox(t *testing.T) {
+	// Same asymmetric footprint guard as the reversed-unit test: Z is twice X,
+	// and the model top is nonzero.
+	const footX, footZ, modelTop = 2, 4, 40
+	def := &content.UnitDef{FootprintX: footX, FootprintZ: footZ, ModelTopFixed: modelTop << 16}
+
+	target := &units.Unit{Def: def, X: nanoFixed(500), Y: nanoFixed(10), Z: nanoFixed(600)}
+	boxMin, boxMax := target.NanolatheBox()
+	nanoPiece := [3]numeric.Fixed{nanoFixed(900), nanoFixed(20), nanoFixed(600)}
+
+	// Shaped exactly as the forward producers publish it: the box rides as the
+	// TARGET box (destination), and NanolatheBoxAtSource is false.
+	e := frame.EffectView{
+		Kind: frame.EventKindNanolathe.String(), Strip: 6, StartTick: 5,
+		X: nanoPiece[0], Y: nanoPiece[1], Z: nanoPiece[2],
+		TargetX: target.X, TargetY: target.Y, TargetZ: target.Z,
+		NanolatheGeometryKnown:  true,
+		NanolatheTargetBoxKnown: true,
+		NanolatheBoxAtSource:    false,
+		NanolatheTargetMin:      boxMin,
+		NanolatheTargetMax:      boxMax,
+	}
+	c := &Client{}
+	cur := &frame.Frame{Tick: 5}
+	cur.Effects = append(cur.Effects, e)
+	c.tickNanolathe(cur)
+	if len(c.nano.Records) != 1 {
+		t.Fatalf("admitted %d records, want 1", len(c.nano.Records))
+	}
+	r := c.nano.Records[0]
+
+	for a := 0; a < 3; a++ {
+		if r.SrcExtent[a] != 0 {
+			t.Fatalf("axis %d: source extent %v, want the degenerate nano piece", a, r.SrcExtent[a])
+		}
+		if r.DstExtent[a] <= 0 {
+			t.Fatalf("axis %d: destination extent %v, want the target's own box span", a, r.DstExtent[a])
+		}
+		if r.DstOrigin[a] < boxMin[a] || r.DstOrigin[a] > boxMax[a] {
+			t.Fatalf("axis %d: destination origin %v outside the target box [%v, %v]",
+				a, r.DstOrigin[a], boxMin[a], boxMax[a])
+		}
+	}
+	// The footprint asymmetry survives the narrowing: Z is twice X, to within
+	// one raw 16.16 step of the truncation [I3].
+	if d := 2*r.DstExtent[0] - r.DstExtent[2]; d < 0 || d > 1 {
+		t.Fatalf("destination extents X=%v Z=%v, want Z twice X for a %dx%d footprint",
+			r.DstExtent[0], r.DstExtent[2], footX, footZ)
+	}
+	// The source is the builder's nano piece, not a second point inside the
+	// target's own box.
+	if r.SrcOrigin != nanoPiece {
+		t.Fatalf("source %v, want the builder's nano piece %v", r.SrcOrigin, nanoPiece)
+	}
+	if r.SrcOrigin[0]-r.DstOrigin[0] <= boxMax[0]-boxMin[0] {
+		t.Fatalf("spray span %v does not exceed the target's own box width %v",
+			r.SrcOrigin[0]-r.DstOrigin[0], boxMax[0]-boxMin[0])
+	}
+}
