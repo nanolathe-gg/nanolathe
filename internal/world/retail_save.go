@@ -65,25 +65,6 @@ func (t *Terrain) RestoreRetailPlayerFeatures(data []byte) error {
 	return nil
 }
 
-// RetailMappingImage always fails, and the owner it cannot reach is named.
-//
-// This comment used to say "mapping is a separate half-grid save source, not
-// the LOS history word grid", with an open question asking which runtime owner
-// retains it. Both were wrong. The Mapping box is "the mapping grid verbatim"
-// [08 R-SAVE-02 §12], and that grid is the explored-memory word grid of
-// [03 §3.1] — the same grid the share screen's merge walks, `(cell width ×
-// cell height) / 4` sixteen-bit words [05 R-SHARE-01 §6], which is exactly the
-// box's `(width × height) >> 1` bytes. The visibility service owns it, and
-// session.RetailMappingImage already writes it from there.
-//
-// A Terrain alone still cannot produce those bytes — internal/visibility
-// imports internal/world, so the dependency cannot run the other way — which
-// is why this entry point stays a hard failure rather than inventing a source.
-// Use the session-level writer.
-func (t *Terrain) RetailMappingImage() ([]byte, error) {
-	return nil, fmt.Errorf("world: retail save: Mapping source is unavailable: logical path save/Mapping, providers searched [Terrain], expected the visibility service's explored-memory word grid")
-}
-
 func (t *Terrain) retailPlotCount() (int, error) {
 	if t == nil {
 		return 0, fmt.Errorf("world: retail save: nil terrain")

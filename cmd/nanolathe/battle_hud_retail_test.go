@@ -67,7 +67,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestRetailNoSelectionClosesCommandWindows(t *testing.T) {
 	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +407,7 @@ func TestRetailEnergyProductionAnchorFits640Viewport(t *testing.T) {
 		}
 	}
 	pal := loadPalette(cs)
-	h, err := loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	h, err := loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

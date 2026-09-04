@@ -954,6 +954,67 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				}
 				return s.Build.Repair(builder, patient, construction.WorkerQuantum(builder.Def.WorkerTime))
 			},
+			// Capture is the ownership-transfer seam the `Capture` row's last
+			// phase needs [05 R-WORK-01 §6][05 R-WORK-01 §11]. The central
+			// transfer — a brand-new replacement record with the copy list of
+			// [05 R-WORK-01 §11], the old record killed with a cause-4 packet
+			// — lives in internal/construction, which imports this package, so
+			// it is reached through this port exactly as Assist, Repair and
+			// Resurrect are.
+			//
+			// The refusal shape is the row's own: the transfer's entry gate
+			// (owner differs, alive set, death latch clear) refuses silently,
+			// so this seam does not branch on TransferOwnership's bool beyond
+			// deciding whether the replacement's completion posture runs.
+			Capture: func(captor *units.Unit, n *orders.Node, _ uint32) bool {
+				if s.Build == nil || n == nil || worldQueries.LookupUnit == nil || captor == nil {
+					return false
+				}
+				target := worldQueries.LookupUnit(n.Target)
+				if target == nil {
+					return false
+				}
+				preTransferOwner := target.Owner
+				repl, ok := s.Build.TransferOwnership(target, captor.Owner)
+				if !ok || repl == nil {
+					return false
+				}
+				// The replacement is created through the ordinary allocator
+				// [05 R-WORK-01 §11], so it needs the same completion posture
+				// a freshly finished construction product gets: mover state
+				// registered and occupancy stamped before its first visibility
+				// publish [05 R-WORK-01 §1] — the same call Assist and
+				// Resurrect make above for their own products.
+				s.CompleteUnit(repl.Handle)
+				// The old record is destroyed inside TransferOwnership
+				// (cause 4, null attacker [06 §12.1]) but the phase-2 slot
+				// finalizer that unpublishes it, retires its AI-group entry
+				// and raises `NotifyUnitDied` for its OLD owner is deferred
+				// to the next sweep [04 §2.3][04 §2.4] — that generic death
+				// teardown needs no help from this seam. The capture-transfer
+				// notification is the one event that teardown does not raise:
+				// `NotifyUnitCaptured` (the `CaptureUnitType` mission trigger)
+				// and the capture audio cue are driven from `Units.OnCapture`,
+				// wired in session.go, and fire correctly here because the old
+				// record is still `Alive` (only `Dying`) until that deferred
+				// sweep runs, so its definition and the pre-transfer owner
+				// this call captured are exactly what the trigger's "owner
+				// slot before the transfer" test reads [08 "Evaluation"].
+				if s.Units != nil {
+					s.Units.NotifyCapture(target.Handle, preTransferOwner, captor.Owner)
+				}
+				// TODO(question): retail's local-branch copy list does not
+				// mention the selected bit or any task-group record for the
+				// captor's replacement [05 R-WORK-01 §11] — only the remote
+				// peer branch (out of scope) clears a selected bit. Selection
+				// is presentation state Nanolathe does not carry in the sim
+				// unit record, and a fresh replacement starts in group 0 like
+				// any other newly created unit, so no further action is taken
+				// here; if a later trace finds retail moves the victim's task
+				// group or a local selection set onto the replacement, this is
+				// the seam that needs it.
+				return true
+			},
 			Resurrect: func(builder *units.Unit, n *orders.Node, _ uint32) bool {
 				return s.resurrectStep(builder, n, worldQueries.LookupFeature)
 			},

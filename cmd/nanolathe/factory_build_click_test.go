@@ -109,7 +109,7 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 	}
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := loadPalette(cs)
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

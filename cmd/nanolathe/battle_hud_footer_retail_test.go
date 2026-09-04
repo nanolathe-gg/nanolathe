@@ -87,7 +87,7 @@ func footerShotSession(t *testing.T) (*battleSession, *contentSet, *camera.Camer
 	}
 	centerBattleStartCamera(sess, cam)
 	pal := loadPalette(cs)
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		cs.Close()
 		t.Fatal(err)

@@ -256,7 +256,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
 	// PANELSIDE, PANELBOT, the 30 SIDEDATA anchors, side fonts, and the authored
 	// general command page [07 §6][07 §9].
-	hud, err := loadRetailBattleHUD(cs.fs, sess, cat, pal)
+	hud, err := loadRetailBattleHUD(cs.fs, sess, cat, pal, shell)
 	if err != nil {
 		return nil, err
 	}

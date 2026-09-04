@@ -1170,6 +1170,30 @@ func WorkerQuantum(workerTime int32) int32 {
 	return int32(uint16(workerTime) / 30)
 }
 
+// HealQuantum derives the worker quantum the `healtime` self-repair path hands
+// to Repair: `((uint16)healtime × 8) / 30` [05 R-WORK-01 §3, "`healtime`, the
+// only consumer"].
+//
+// The eight is the CADENCE, not a rate multiplier. The self-repair branch runs
+// once every eight ticks (`tick & 7 == 0`), so multiplying by eight before the
+// same divide-by-thirty that WorkerQuantum performs expresses `healtime` on the
+// identical per-30-tick scale as `workertime`: a definition wanting the same
+// work per second as a `workertime` builder authors the same number.
+//
+// The definition word is signed 16-bit but is read UNSIGNED here, exactly as
+// `workertime` is, so the low sixteen bits are zero-extended before the
+// multiply. The multiply and the divide are 32-bit, so a large authored value
+// does not wrap in the eight.
+//
+// Because both of Repair's terms are clamped to exactly one whenever positive,
+// any `healtime` big enough to make this quotient non-zero (`healtime >= 4`)
+// yields the same observable rate — one health point and one energy unit per
+// eight ticks — and a `healtime` of 1..3 yields a zero quantum, hence zero
+// terms, hence no healing and no charge [05 R-WORK-01 §3].
+func HealQuantum(healTime int32) int32 {
+	return int32(uint16(healTime)) * 8 / 30
+}
+
 // RemainingStep computes new remaining fraction clamp(old - worker/buildTime,0,1) [05 "Construction arithmetic"].
 func RemainingStep(old float32, worker int32, buildTime int32) float32 {
 	if buildTime <= 0 {

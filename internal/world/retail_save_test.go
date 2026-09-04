@@ -41,9 +41,3 @@ func TestRetailTerrainImagesRoundTripAndPreserveFlags(t *testing.T) {
 		}
 	}
 }
-
-func TestRetailMappingImageIsExplicitlyUnavailable(t *testing.T) {
-	if _, err := (&Terrain{CellW: 2, CellH: 2, Plot: make([]PlotCell, 4)}).RetailMappingImage(); err == nil {
-		t.Fatal("mapping image unexpectedly synthesized")
-	}
-}

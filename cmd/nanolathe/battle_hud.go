@@ -301,14 +301,14 @@ func battleFrameWithDiag(fs vfs.FSOps, g *formats.GAF, logical, name string) (*f
 // CORE does not load ARM-specific options unconditionally [07 "Tab options menu and manual exit"].
 // GUI/GAF loads are cached at battle entry in the HUD maps (windows/pages) so
 // the frame loop does not re-read VFS [07 §4].
-func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, pal *palette.Tables) (*retailBattleHUD, error) {
+func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, pal *palette.Tables, shell *gameShell) (*retailBattleHUD, error) {
 	if fs == nil || sess == nil || cat == nil {
 		return nil, fmt.Errorf("battle HUD: missing VFS, session, or catalog")
 	}
 	if pal == nil {
 		return nil, fmt.Errorf("battle HUD: PALETTE.PAL tables are required [03 §4.3]")
 	}
-	side, err := battleSide(fs, sess, cat)
+	side, err := battleSide(fs, sess, cat, shell)
 	if err != nil {
 		return nil, err
 	}
@@ -600,21 +600,24 @@ func battleFrame(g *formats.GAF, name string) (*formats.GAFFrame, error) {
 // [08 "Enumeration of campaigns"][07 R-FE-01 §4]. The campaign file's
 // `campaignside` is therefore the authored record of the side the mission is
 // played as whenever it names one, and it is the only such record a session
-// started from a campaign path carries.
+// started from a campaign path carries. `shell` — the front end's own
+// `missionSide` word, written by the new-game panel's Side0/Side1 gadgets —
+// carries the registry side word for the one case a named campaign does not
+// settle: `campaignside=ALL` [08 R-CAMP-01 §1].
 //
 // This replaces a scan of the local player's units for one whose `UnitName`
 // matched a side's `Commander`. That was invented: nothing in retail derives
 // the interface side from unit identity, and the scan simply failed on the Arm
 // campaign's first mission (AC01), which gives the local player no commander at
 // all — the HUD then refused to build with "local side -1 is unavailable".
-func battleSide(fs vfs.FSOps, sess *session.Session, cat *content.Catalog) (*content.SideDef, error) {
+func battleSide(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, shell *gameShell) (*content.SideDef, error) {
 	if cat == nil || len(cat.Sides) == 0 {
 		return nil, fmt.Errorf("battle HUD: no compiled side definitions [02 §6]")
 	}
 	idx := 0
 	if sess != nil {
 		if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
-			return campaignBattleSide(fs, sess.Mission, cat)
+			return campaignBattleSide(fs, sess.Mission, cat, shell)
 		}
 		owner := int(sess.LocalOwner)
 		if owner >= 0 && owner < len(sess.Skirmish.Players) {
@@ -629,7 +632,18 @@ func battleSide(fs vfs.FSOps, sess *session.Session, cat *content.Catalog) (*con
 
 // campaignBattleSide resolves a campaign mission's interface side from the
 // campaign file's `[HEADER] campaignside` name [08 "Enumeration of campaigns"].
-func campaignBattleSide(fs vfs.FSOps, m *mission.Mission, cat *content.Catalog) (*content.SideDef, error) {
+//
+// `campaignside` filters which campaigns the new-game panel offers; it never
+// assigns a side. The side is decided first — the registry `side` word,
+// rewritten by the Side0/Side1 gadgets — and a campaign that names a side is
+// only ever offered to that one side, so the named value and the local side
+// agree whenever a name is present [08 R-CAMP-01 §1]. `campaignside=ALL` is
+// offered to both sides and settles nothing on its own; the local side for
+// that case is the registry word carried here as `shell.missionSide`
+// (frontend.go's field, written by the Side0/Side1 gadgets and already read
+// from battle code as `b.shell.missionSide` — postbattle.go does the same for
+// the between-missions summary) [07 R-HUD-04 §4].
+func campaignBattleSide(fs vfs.FSOps, m *mission.Mission, cat *content.Catalog, shell *gameShell) (*content.SideDef, error) {
 	logical := ""
 	if m != nil {
 		logical = m.CampaignPath
@@ -638,30 +652,15 @@ func campaignBattleSide(fs vfs.FSOps, m *mission.Mission, cat *content.Catalog) 
 	if err != nil {
 		return nil, err
 	}
-	// TODO(question): this is not an open retail question — it is a missing
-	// seam, recorded here because closing it changes a signature this file's
-	// unit does not own. [07 R-HUD-04 §4] closes the behavior: "`campaignside =
-	// ALL` needs no retail contract beyond [R-FE-01 §4]: the side a campaign
-	// battle uses when the campaign names none is the local player's side
-	// record, written from the registry `side` word before the campaign was
-	// chosen; carrying that word into battle entry is plumbing, not an open
-	// question." [08 R-CAMP-01 §1] says the same from the other end —
-	// `campaignside` *filters* which campaigns the panel offers and never
-	// assigns a side, so a named side is the local side only because the
-	// campaign was offered to that side alone.
-	//
-	// What is missing: the shell's own side word — frontend.go's `missionSide`,
-	// written by the new-game panel's Side0/Side1 gadgets and already read from
-	// battle code as `b.shell.missionSide` (postbattle.go does exactly that for
-	// the between-missions summary) — never reaches this resolver. battleSide
-	// and loadRetailBattleHUD take (fs, sess, cat) and neither
-	// internal/mission.Mission nor internal/session carries the word, so both
-	// signatures have to grow one argument, which touches the HUD test files
-	// that call loadRetailBattleHUD. Until then this branch is a diagnostic,
-	// not a default: no stock campaign authors ALL.
 	if name == "" || name == "ALL" {
+		if shell != nil {
+			idx := shell.missionSide
+			if idx >= 0 && idx < len(cat.Sides) && cat.Sides[idx] != nil {
+				return cat.Sides[idx], nil
+			}
+		}
 		return nil, hudAssetError(fs, logical,
-			fmt.Sprintf("campaign HEADER campaignside naming a compiled side, got %q [08 \"Enumeration of campaigns\"]", name),
+			fmt.Sprintf("campaign HEADER campaignside naming a compiled side, got %q, and no local side word to fall back on [08 R-CAMP-01 §1]", name),
 			fmt.Errorf("campaignside does not name a side"))
 	}
 	for _, side := range cat.Sides {

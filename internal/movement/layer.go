@@ -267,8 +267,13 @@ func (l *ClassLayer) StaticRevision() uint64 {
 
 // syncStaticRevision refreshes terrain/profile-derived layer cells after a
 // blocking feature mutation. Owner/building bits are a separate overlay and
-// are deliberately preserved; the completed-structure writer is unresolved
-// in this unit [04 §6.1][04 §8.2].
+// are deliberately preserved: nothing here is unwired. A building blocks
+// through the occupancy grid's occupant word, where classifyCell's
+// mover-null arm hard-blocks it unconditionally at every watermark and from
+// the first classification that finds it [04 R-PATH-01 §14], and
+// restampOccupantRect restamps the occupant rectangle at commit time —
+// neither route reads staticRevision, so no completed-structure writer
+// needs to bump it [04 §6.1][04 §8.2].
 func (l *ClassLayer) syncStaticRevision() {
 	if l == nil || l.Terrain == nil {
 		return

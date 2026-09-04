@@ -312,10 +312,8 @@ func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
 // visit, between the unit's script drain and its order pumps — running a sweep
 // per visit would be both quadratic and in the wrong order.
 //
-// TODO(T25): the `healtime` self-repair of [R-SPEC-01 §4], which retail runs
-// immediately after this on ticks where `tick & 7 == 0` while health is below
-// `maxdamage`, has no implementation anywhere in this build; the definition's
-// `healtime` is compiled and unread. It belongs at this call site, right below.
+// The act that follows it in the same block is stepHealTimeSelfRepair below
+// [04 R-SPEC-01 §4].
 func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 	if s == nil || u == nil || s.World == nil {
 		return
@@ -345,6 +343,67 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 		// Destroy arm [04 R-UNIT-06 §5].
 		s.Units.Destroy(u.Handle, units.DeathKilled) // [04 §2.4] marks Dying; step 10 finalizes it
 	}
+}
+
+// stepHealTimeSelfRepair is the `healtime` self-repair act, the second act of
+// step 9 of the per-unit visit: retail runs it in the general unit update
+// immediately after the water-damage test above and before the same pass's
+// cloak settlement [04 R-SPEC-01 §4][04 R-MOV-03 §1].
+//
+// It is the ONLY reader of the definition's `healtime` word anywhere in retail
+// [04 R-SPEC-01 §4]. It is not an order, not a state and not a capability: a
+// definition that authors the word heals itself, wherever it is and whatever
+// it is doing.
+//
+// The gates, all of them [05 R-WORK-01 §3, "`healtime`, the only consumer"]:
+//
+//   - the definition's `healtime` is non-zero;
+//   - `(unsigned)health < (unsigned)maxdamage` — the UNSIGNED compare, so a
+//     unit whose health went negative (an overkill, or the drowning packet the
+//     act above may just have applied) reads as a very large value and is
+//     refused rather than healed;
+//   - `tick & 7 == 0`, an eight-tick cadence of its own, unrelated to the
+//     water step's thirty;
+//   - the owner is an ordinary or a computer player — the caller's `work` gate,
+//     the block's control-byte 1-or-2 test [06 R-DMG-01 §8].
+//
+// The work itself is the SHARED REPAIR HELPER, called with this unit as both
+// the builder and the target: the unit bills itself and heals itself. The
+// quantum is construction.HealQuantum, and the helper's two terms are each
+// clamped to exactly one whenever positive, so the observable effect for every
+// definition that authors the word is one health point and one energy unit per
+// eight ticks — a hundred and twenty-five hit points and a hundred and
+// twenty-five energy per minute [05 R-WORK-01 §3].
+//
+// It DOES cost resources. The energy goes through the ordinary one-resource
+// admission against the unit's own buckets, so a player whose energy carry has
+// gone positive — a stall — stops self-healing until the stall clears; the
+// heal and the charge are refused together, never one without the other.
+//
+// It stops when the unit reaches full health: the gate above closes and the
+// helper's own signed entry compare closes behind it. There is no completion
+// cue, no order to advance and no state to leave — the act simply stops firing.
+//
+// It draws no random number [05 R-WORK-01 §3, "repair's randomness"].
+func (s *Session) stepHealTimeSelfRepair(u *units.Unit, tick uint32) {
+	if s == nil || u == nil || u.Def == nil || s.Build == nil {
+		return
+	}
+	if u.Def.HealTime == 0 {
+		return
+	}
+	// The unsigned compare, which is also what keeps a unit the water packet
+	// just killed out of the helper.
+	if uint32(u.Health) >= uint32(u.Def.MaxDamage) {
+		return
+	}
+	if tick&7 != 0 {
+		return
+	}
+	// Builder and target are the same unit. Repair owns the signed entry
+	// compare, the two clamped terms, the one-resource energy admission against
+	// the BUILDER's buckets and the kind-10 heal packet [05 R-WORK-01 §3].
+	s.Build.Repair(u, u, construction.HealQuantum(u.Def.HealTime))
 }
 
 func (s *Session) stepUnitPhase(tick uint32) {
@@ -408,6 +467,12 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			// `canhover` exemption — live in stepWaterDamage.
 			if work {
 				s.stepWaterDamage(u, tick)
+				// The second act of the same step: `healtime` self-repair,
+				// which retail runs immediately after the water-damage test
+				// and before the pass's cloak settlement [04 R-SPEC-01 §4].
+				// Its own gates — the eight-tick cadence, the non-zero
+				// `healtime` and the unsigned health test — live in the act.
+				s.stepHealTimeSelfRepair(u, tick)
 			}
 			// order resolve/pump per unit (PumpUnit) [04 §3.3]. Producers bind
 			// queues when they create them, while existing queues are bound
