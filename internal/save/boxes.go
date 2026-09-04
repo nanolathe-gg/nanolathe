@@ -521,6 +521,18 @@ func PlayerSlotFromEconomy(index int, p economy.Player) PlayerSlot {
 // then the account's own alliance row when the box loaded. Runtime bucket
 // carry stays with its existing account reader, preserving the retail
 // partial-load boundaries [08 "Player records"].
+//
+// The six cumulative doubles it restores are the running totals, not rates.
+// The per-pass production and consumption pair — the four floats the HUD
+// resource bar samples and the settled pair the planner scores with — has no
+// item in this account and is therefore not restorable: the writer/reader
+// census is closed at the nineteen scalars above plus `Alliances` (Established,
+// bounded-negative; the WU-19-158 addendum under [08 "Player records"]).
+// Retail is in the same position, and by a wider margin — its world rebuild
+// zeroes every slot's "stocks, incomes, expenditures" before the restoration
+// dispatcher runs [08 R-ENTRY-01 §3 step 24] — and refills the pair at the
+// slot's next settlement pass [05 R-ECO-01 §6]. See the restore site in
+// internal/session/retail_restore_core.go.
 func (p PlayerSlot) ApplyToEconomy(dst *economy.Player) {
 	if dst == nil {
 		return

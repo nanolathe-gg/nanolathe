@@ -15,3 +15,6 @@ remastered/units/*/preview/
 remastered/out/
 remastered/*.hpi
 /remaster
+
+# headless -report f output when run from the repo root
+/f

@@ -33,6 +33,34 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 
 	// Player fields are gated by the successful GameTime decode in D1. Apply
 	// them in account order, preserving the typed economy reader's defaults.
+	//
+	// The per-player income and expense aggregates are deliberately NOT among
+	// them, and their reading zero here is retail, not an omission. The
+	// `Player%i` account is closed: the writer emits exactly the nineteen
+	// scalars of the field table — the two stocks, the six cumulative doubles,
+	// the two storage floats, `AddPlayerStorage`, `Kills`, `Losses`,
+	// `UpdateTime`, `WinLoseTime`, `DisplayTimer`, `Controller`, `Logo`,
+	// `Side` — followed by the 11-byte `Alliances` box and nothing else, and
+	// the reader is symmetric (Established, bounded-negative;
+	// [08 "Player records"], the WU-19-158 addendum). The four per-pass rate
+	// floats the HUD resource bar samples, and the settled production and
+	// consumption pair the planner scores with, are not in that list. Retail
+	// loses them twice over: the world rebuild runs "for every kind and for
+	// loads alike" and its per-player reset zeroes the whole economy and
+	// statistics block — "stocks, incomes, expenditures" — BEFORE the
+	// restoration dispatcher runs at all [08 R-ENTRY-01 §3 step 24]
+	// [08 R-SAVE-02 §11].
+	//
+	// They come back where they are written in an ordinary session: at the
+	// owning player's next settlement pass, which writes all four per-pass
+	// counters and the two cumulative totals from the pass's own gather
+	// [05 R-ECO-01 §6]. On the load path that is at most thirty ticks away and
+	// is often immediate, because the restored `UpdateTime` is an absolute
+	// deadline the account does carry, and the battle-entry tail primes the
+	// per-player phase "on the restored world at the restored global tick"
+	// — "the per-slot timers restored by `Players` decide whether the 30-tick
+	// block fires" [08 R-ENTRY-01 §8]. Copying a saved aggregate here would be
+	// inventing a save field.
 	for i := range image.Players {
 		p := image.Players[i]
 		if p.Index < 0 || p.Index >= len(s.Econ.Players) {

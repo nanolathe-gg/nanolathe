@@ -1673,13 +1673,24 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	if n.Phase > 1 {
 		return Code(7) // *cancel-all* [04 R-UNIT-06 §1]
 	}
+	// The air twin's entry carries one step the ground row does not: "every
+	// visit then copies the target's position into the record goal"
+	// [04 R-ORD-02 §3]. A `VTOL_Follow` record's goal triple is therefore the
+	// ward's POSITION, where `Follow_Ground`'s is the anchor OFFSET
+	// [04 R-ORD-01 §8 point 2] — the two rows keep different things in the same
+	// three fields, which is why the orbit leg below reads the ward directly and
+	// why GuardFollowPoint is never asked about an air record
+	// (internal/movement/goals.go names `Follow_Ground` alone).
+	if unitCanFly(u) {
+		n.GoalX, n.GoalY, n.GoalZ = ward.X, ward.Y, ward.Z
+	}
 	if n.Phase == 0 {
 		return guardAdmit(u, n, ward)
 	}
 	// slot 0 is null [01 §6.1] — a live unit never has Handle 0; the assist
 	// legs cannot address such a guard, so it falls straight to maintenance.
 	if u.Handle == 0 {
-		return guardFollowMaintenance(u, n, ward, tick)
+		return guardFollowMaintenance(u, n, ward, satisfied, tick)
 	}
 	// The ward's recorded-attacker link, resolved once: legs 1 and 2 share it
 	// [04 R-UNIT-06 §1]. RWU-19-13 closes what §1 recorded as Unknown and
@@ -1805,8 +1816,9 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 		}
 	}
 	// Leg 5, the follow maintenance, on every visit that falls through the
-	// legs above [04 R-UNIT-06 §1][04 R-ORD-01 §8 point 3].
-	return guardFollowMaintenance(u, n, ward, tick)
+	// legs above [04 R-UNIT-06 §1][04 R-ORD-01 §8 point 3]; for the air twin it
+	// is leg 4 of [04 R-ORD-02 §3], which is the same position in the same list.
+	return guardFollowMaintenance(u, n, ward, satisfied, tick)
 }
 
 // guardAdmit is the ground guard's phase 0 [04 R-ORD-01 §8 points 1 and 2],
@@ -1828,6 +1840,9 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 // derivation — sees the offset and must add the ward's position to it
 // [04 R-ORD-01 §8 point 2]; GuardFollowPoint is that sum.
 func guardAdmit(u *units.Unit, n *Node, ward *units.Unit) Code {
+	if unitCanFly(u) {
+		return vtolFollowAdmit(u, n)
+	}
 	clearWeaponBuildTargets(u)
 	radius := guardFollowRadius(u, ward)
 	n.Param1 = uint32(radius)
@@ -1856,20 +1871,140 @@ func guardAdmit(u *units.Unit, n *Node, ward *units.Unit) Code {
 //
 // Legs 1 and 2 are above and no longer approximations; every phase-1 visit that
 // falls through legs 1-4 reaches this one [04 R-ORD-01 §8 point 3].
-func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, tick uint32) Code {
+//
+// The air twin's maintenance is a different leg with a different marker family:
+// airspace circling with the `0x80` arrival radius [04 R-UNIT-06 §1], written
+// out in full as leg 4 of [04 R-ORD-02 §3]. It is vtolFollowOrbit below; the
+// ground body here is unchanged.
+func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, satisfied uint32, tick uint32) Code {
+	if unitCanFly(u) {
+		return vtolFollowOrbit(u, n, ward, satisfied, tick)
+	}
 	x, y, z, radius := GuardFollowPoint(n, ward.X, ward.Y, ward.Z)
 	// The payload form is used rather than installPointGoal so the record's
-	// goal triple keeps the offset [04 R-ORD-01 §8 point 2]. An air guard takes
-	// the installer's canfly arm, which is release-only.
-	//
-	// TODO(T25): the air twin's own maintenance is airspace circling with a
-	// `0x80` arrival radius [04 R-UNIT-06 §1]; that marker family belongs to
-	// internal/movement's air goals and is outside this unit, so a `VTOL_Follow`
-	// record installs nothing here and keeps only its cadence.
+	// goal triple keeps the offset [04 R-ORD-01 §8 point 2].
 	installPointGoalPayload(u, n, x, y, z, radius)
 	armDeadline(n, tick, 30)        // fixed 30, no draw; the setter ORs gate bit 0x01
 	n.DynamicGate |= guardRearmBits // the two re-arm bits [04 R-ORD-01 §8 point 4]
 	return Code(2)                  // *hold*, phase left at 1
+}
+
+// The air guard's orbit constants, all of them [04 R-ORD-02 §3] leg 4 and its
+// phase 0. They are the same family the two seek states already fly in
+// internal/movement (`legVTOLSeekAttack`, `legVTOLSeekGuard`), which is why the
+// bonus, the arrival radius and the gate word repeat those values exactly:
+// §3 states leg 4 once and `VTOL_SeekGuard` reuses it by reference.
+const (
+	// airFollowOrbitBonus is the `+ 0xA0` world units the orbit adds to the
+	// slot-0 weapon `Range` [04 R-ORD-02 §3][04 R-AIR-01 §7].
+	airFollowOrbitBonus int32 = 0xA0
+	// airFollowUnarmedRadius is the orbit radius of a guard whose state word
+	// has no armed bit: "else 320" [04 R-ORD-02 §3].
+	airFollowUnarmedRadius int32 = 320
+	// airFollowArrivalRadius is the horizontal arrival radius of the installed
+	// marker, the `0x80` [04 R-UNIT-06 §1] names for the air twin.
+	airFollowArrivalRadius int32 = 0x80
+	// airFollowOrbitStep and airFollowOrbitJitter are the subtractive bearing
+	// step `p1 −= 0x4000 + RNG(0x2000)`: a quarter turn plus up to 45° further,
+	// always subtractive [04 R-ORD-02 §3].
+	airFollowOrbitStep   uint32 = 0x4000
+	airFollowOrbitJitter uint32 = 0x2000
+	// airFollowArrivalBits is the `satisfied ∩ 0xE0` that gates that step, and
+	// airFollowOrbitGate the `gate |= 0xF8` the leg leaves behind — the three
+	// movement outcomes plus the guard's own two re-arm bits.
+	airFollowArrivalBits uint32 = 0xE0
+	airFollowOrbitGate   uint32 = 0xF8
+)
+
+// vtolFollowAdmit is `VTOL_Follow`'s phase 0 [04 R-ORD-02 §3]:
+//
+//	mover and `canfly` (else cancel-all); caption clear with `Guarding`; the
+//	takeoff preamble; draw RNG(0x10000) into p1 (the orbit bearing) and its low
+//	bit into p2; advance.
+//
+// airWorkPreamble is that caption-clear-plus-takeoff-preamble pair, already
+// this package's expression of it for the five air work twins [04 R-ORD-01 §7],
+// and its own mover/`canfly` gate is the row's. The record's goal triple is NOT
+// written here: the entry copy in guardHandler has already put the ward's
+// position there, and the air row keeps no anchor offset — p1 is a bearing, not
+// the ground row's radius.
+//
+// The stream cost is one RNG(0x10000), exactly as the ground admit's anchor
+// draw, so forking the two admits does not move the simulation stream for any
+// guard already in flight (I4).
+//
+// TODO(T25): three further air-twin differences [04 R-UNIT-06 §1] and
+// [04 R-ORD-02 §3] state are still unwired, all of them entry-side rather than
+// maintenance-side: the interrupt pre-check that fails the order on satisfied
+// `0x48` and hands the record to a tail-appended `VTOL_SeekGuard`, the
+// sentinel-sector diversion to the off-map loiter path of [04 R-AIR-01 §5], and
+// §3's separate phase 1 ("inhibit all three slots; advance") which shifts the
+// leg evaluation to phase 2. Placeholder: the shared two-phase shape of the
+// ground row, whose phase 1 runs the same four legs in the same order — §1 has
+// the air handler repeating branches 1-4 byte-equivalently, so only the phase
+// NUMBER differs and no leg is skipped.
+func vtolFollowAdmit(u *units.Unit, n *Node) Code {
+	if code := airWorkPreamble(u, n, "Guarding"); code != Code(1) {
+		return code
+	}
+	draw := drawBelow(u, 0x10000)
+	n.Param1 = draw
+	n.Param2 = draw & 1
+	return Code(1) // *advance*
+}
+
+// vtolFollowOrbit is leg 4 of [04 R-ORD-02 §3], the air guard's follow
+// maintenance — what [04 R-UNIT-06 §1] calls "airspace circling (radius `0x80`
+// arrival)" where the ground row installs a point goal:
+//
+//	Satisfied ∩ 0xE0 → p1 −= 0x4000 + RNG(0x2000). Radius r = my slot-0 weapon
+//	`Range + 0xA0` world units when my state word has bit 31, else 320. Point
+//	marker at `wardPos − offset(p1, r)` with horizontal arrival radius 0x80;
+//	install; deadline 30; gate |= 0xF8; hold.
+//
+// Three points of care:
+//
+//   - `wardPos − offset(...)` is the negate-and-add sign of [04 R-MOV-01 §4]:
+//     `pos − bearingOffset(h, r)` moves r world units ALONG h, so the marker
+//     sits r units from the ward on the bearing p1 and the subtractive step
+//     walks it around the ward. Both air seek legs write the same expression.
+//   - the "state word bit 31" is the armed bit [04 R-ORD-01 §3], which this
+//     build carries as units.ArmedStatus — set once by the allocator for a
+//     definition that resolved at least one weapon slot — so an unarmed
+//     aircraft (a scout, a transport) circles at the flat 320 instead of at a
+//     range it does not have.
+//   - the marker's Y is the ward's, and the air marker family recomputes it
+//     from the sector height at cruise altitude on every update
+//     [04 R-AIR-01 §4], so the guard circles overhead rather than diving to the
+//     ward's own height.
+//
+// The draw is conditional, and it is the leg's only one: a visit that is not
+// answering an arrival advances no stream state (I4).
+func vtolFollowOrbit(u *units.Unit, n *Node, ward *units.Unit, satisfied uint32, tick uint32) Code {
+	if satisfied&airFollowArrivalBits != 0 {
+		n.Param1 = uint32(uint16(n.Param1) - uint16(airFollowOrbitStep+drawBelow(u, airFollowOrbitJitter)))
+	}
+	r := airFollowUnarmedRadius
+	if u != nil && u.Flags&units.ArmedStatus != 0 {
+		r = engagementDistance(u, 0) + airFollowOrbitBonus
+	}
+	ox, oz := bearingOffset(uint16(n.Param1), numeric.Fixed(int64(r)<<16))
+	if b := bindingOfUnit(u); b != nil && b.Movement != nil && b.Movement.InstallAir != nil {
+		// The air seam owns the release of the displaced payload, the `0x80`
+		// raise on its owner and the closing pending clear [04 R-ORD-01 §9],
+		// exactly as it does for `VTOL_Patrol`'s marker next door.
+		b.Movement.InstallAir(AirGoalRequest{
+			Owner:  n.Owner,
+			Node:   n,
+			X:      ward.X - ox,
+			Y:      ward.Y,
+			Z:      ward.Z - oz,
+			Radius: airFollowArrivalRadius,
+		})
+	}
+	armDeadline(n, tick, 30) // deadline 30; the setter ORs gate bit 0x01
+	n.DynamicGate |= airFollowOrbitGate
+	return Code(2) // *hold*, phase left at 1
 }
 
 func unitCanFly(u *units.Unit) bool {

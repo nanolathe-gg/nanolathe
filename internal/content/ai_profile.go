@@ -120,6 +120,26 @@ type AIWeightPlan struct {
 	Limits  map[string]int32
 }
 
+// aiDirectiveTypeAndValue reads the type-name and value arguments of a
+// `weight` or `limit` directive's Args, exactly as both dispatchers of
+// [08 R-AI-01 §18] read them: only the type name (Args[0]) is required, and
+// the value argument (Args[1]) falls back to "" when absent so the caller
+// applies the established default instead of dropping the directive — retail
+// dispatches a definition's `ai_weight` fragment "exactly as a line of
+// ai\default.txt is dispatched", with no argument-conversion gate. Both
+// ParseAIProfile and ParseAIWeight call this so the two readers cannot drift
+// apart on what counts as "no argument".
+func aiDirectiveTypeAndValue(args []string) (typeName, valueStr string, ok bool) {
+	if len(args) == 0 {
+		return "", "", false // no name argument: nothing for the matcher to expand
+	}
+	typeName = args[0]
+	if len(args) >= 2 {
+		valueStr = args[1]
+	}
+	return typeName, valueStr, true
+}
+
 // ParseAIWeight parses the directive text stored in a unit definition's
 // ai_weight field. Unlike a profile file, this field contains directives
 // directly (the shipped form is `weight <type> <factor>`), so there is no plan
@@ -127,61 +147,35 @@ type AIWeightPlan struct {
 // grammar; weight multiplication is deferred to the active profile boundary
 // so the authored factor remains intact at the established float32 narrowing
 // point [08 "Computer-controlled players"] [08 "Established AI-facing data and rooted planner"].
-// An unknown keyword is ignored. A malformed argument still drops the
-// directive here; see the TODO(T25) in the loop for why that diverges from the
-// profile reader and what has to move for it to stop.
+// An unknown keyword is ignored.
+//
+// The fragment is tokenized by the same ParseAIDirectives dispatcher a whole
+// profile file goes through, and a directive whose argument is absent or
+// unconvertible applies the established default (0.0 for `weight`, 0 for
+// `limit`) rather than being dropped — retail's per-definition passes hand
+// the whole fragment to the profile grammar unfiltered, so this reader must
+// agree with ParseAIProfile on that point [08 R-AI-01 §18].
 func ParseAIWeight(data []byte) *AIWeightPlan {
 	plan := &AIWeightPlan{
 		Limits: make(map[string]int32),
 	}
-	for _, rawLine := range strings.Split(string(data), "\n") {
-		line := strings.TrimRight(rawLine, "\r")
-		if idx := strings.Index(line, "//"); idx >= 0 {
-			line = line[:idx]
-		}
-		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), ";"))
-		if line == "" {
+	for _, d := range ParseAIDirectives(data) {
+		typeName, valueStr, ok := aiDirectiveTypeAndValue(d.Args)
+		if !ok {
 			continue
 		}
-		parts := strings.Fields(line)
-		// TODO(T25): this fragment reader still drops a directive whose
-		// argument is absent or unconvertible, where ParseAIProfile now applies
-		// the established default (0.0 for `weight`, 0 for `limit`). Retail has
-		// one dispatcher for both — the per-definition fragment is dispatched
-		// "exactly as a line of ai\default.txt is dispatched", with every
-		// keyword admitted and no argument-conversion gate [08 R-AI-01 §18], so
-		// the two must agree. The wiring is the four lines below (require only
-		// the name, then read parts[2] with a "" fallback); the blocker is
-		// TestParseAIWeightMalformedLinesIgnored in ai_weight_test.go, which
-		// locks the drop arm and is outside this unit's file ownership.
-		// Unauthored either way: of the reference install's 278 FBI files only
-		// 7 author ai_weight, carrying 7 directive lines, all well formed
-		// (WU-19-167 census).
-		if len(parts) < 3 {
-			continue
-		}
-		switch strings.ToLower(parts[0]) {
-		case "weight":
-			factor, ok := parseAIWeightFactor(parts[2])
-			if !ok {
-				continue
-			}
-			ck := CanonicalKey(parts[1])
-			if ck == "" {
-				continue
-			}
+		ck := CanonicalKey(typeName)
+		switch d.Keyword {
+		case AIDirectiveWeight:
+			factor, _ := parseAIWeightFactor(valueStr)
 			// Keep the source multiplier intact. The active profile value is
 			// supplied later, and each directive is narrowed and clamped there.
 			plan.Weights = append(plan.Weights, AIWeightDirective{
 				Type:   ck,
 				Factor: float32(factor),
 			})
-		case "limit":
-			ck := CanonicalKey(parts[1])
-			if ck == "" {
-				continue
-			}
-			plan.Limits[ck] = formats.ParseTDFInteger(parts[2])
+		case AIDirectiveLimit:
+			plan.Limits[ck] = formats.ParseTDFInteger(valueStr)
 		}
 	}
 	return plan
@@ -388,10 +382,6 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if len(currentPlans) == 0 {
 				continue // gate: weight lines before plan do not apply [PLAN 11 C4]
 			}
-			if len(parts) < 2 {
-				continue // no name argument: nothing for the matcher to expand
-			}
-			typeName := parts[1]
 			// The factor is "a float, defaulting to 0.0" [08 R-AI-01 §12], and
 			// the directive applies with that default — nothing in the grammar
 			// conditions the write on the argument converting. This used to
@@ -410,9 +400,9 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			// install's ten AI profiles carry 947 `weight` directives and every
 			// factor is a plain decimal (WU-19-167 census) — so the arms differ
 			// only on third-party profiles.
-			factorStr := ""
-			if len(parts) >= 3 {
-				factorStr = parts[2]
+			typeName, factorStr, ok := aiDirectiveTypeAndValue(parts[1:])
+			if !ok {
+				continue
 			}
 			factor, _ := parseAIWeightFactor(factorStr)
 			ck := CanonicalKey(typeName)
@@ -440,18 +430,14 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if len(currentPlans) == 0 {
 				continue // gate [PLAN 11 C4]
 			}
-			if len(parts) < 2 {
-				continue // no name argument: nothing for the matcher to expand
-			}
-			typeName := parts[1]
 			// "an integer defaulting to 0" [08 R-AI-01 §12], and the directive
 			// applies with that default, exactly as `weight` does above. Stock
 			// content reaches this: `ai/krogoth.txt` authors both a unit name
 			// containing a space and a letter O in place of a zero, and retail's
 			// integer accessor converts neither.
-			valueStr := ""
-			if len(parts) >= 3 {
-				valueStr = parts[2]
+			typeName, valueStr, ok := aiDirectiveTypeAndValue(parts[1:])
+			if !ok {
+				continue
 			}
 			// Integer accessor style: leading decimal digits, trailing junk
 			// ignored, non-numeric text is 0 [02 §4][fmt tdf].

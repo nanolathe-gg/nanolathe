@@ -101,6 +101,18 @@ func initializeRestoredBattleAI(s *Session, fs vfs.FSOps, m *mission.Mission) er
 // the first restored tick is ever stepped [08 R-AI-01 §1] [08 R-ENTRY-01 §8
 // step 4]. Their vectors are already populated, because the unit restore
 // enrolled every saved unit in its saved group [08 R-SAVE-02 §6].
+//
+// The prime is also where the restored player's income and expense aggregates
+// come back, and it is the only place they can: the `Player%i` account carries
+// no per-pass rate item (the restore site in retail_restore_core.go states that
+// census), and the planner keeps no copy of its own — the resource score reads
+// the settled production and consumption pair straight off the economy player
+// record, the same record the HUD resource bar samples its four per-pass floats
+// from [08 "Established AI-facing data and rooted planner"] [05 R-ECO-01 §6].
+// One event refills both consumers, the owning slot's next settlement:
+// immediately in this prime when the restored `UpdateTime` is already due at
+// the restored tick, and otherwise within thirty ticks [08 R-ENTRY-01 §8]
+// [05 "Authoritative settlement order"].
 func finishRestoredBattleEntry(s *Session) error {
 	if s == nil || s.Econ == nil {
 		return fmt.Errorf("session: retail restore: missing economy for battle-entry tail")
