@@ -2740,11 +2740,20 @@ locally at once:
    (presentation only).
 
 The factory handler then copies its standing bits 18–21 onto the product and
-inserts `GetBuilt` **queued** ([R-P0-09]), so the product's primary queue at
-the end of the visit is, front to back, `[BeCarried, GetBuilt]`. The
-`BeCarried` record is the release lane that [R-FAC-01] and [R-FAC-01B §1]
-could not find: it is not a factory-owned node and it is not in the factory
-handler — it is a side effect of the attach event.
+inserts `GetBuilt` **queued** ([R-P0-09]). The `BeCarried` record is the
+release lane that [R-FAC-01] and [R-FAC-01B §1] could not find: it is not a
+factory-owned node and it is not in the factory handler — it is a side effect
+of the attach event.
+
+**Correction (2026-09-04, [R-ORD-01 §15]).** The sentence above used to end "so
+the product's primary queue at the end of the visit is, front to back,
+`[BeCarried, GetBuilt]`". That derived the order from reading "queued" as the
+after-marker insertion path. The producer insertion branches on the new
+record's static-mask copy, never on the modifier ([R-ORD-01 §13]), and
+`GetBuilt`'s mask carries bit 5 — so its insertion **head-inserts in front of
+the `BeCarried` step 5 just head-inserted**. The queue at the end of the visit
+is `[GetBuilt, BeCarried]`, with neither record carrying the active marker.
+Everything else in the walk above stands.
 
 **Established — the piece byte is signed on the read side.** The commit's
 carried branch and the orientation copy (§2) read the hang-piece byte back as
@@ -2837,12 +2846,30 @@ limit never existed (the 300-tick retry of [R-P0-09]).
 
 ### Closed — the order form after release, and its latency [R-FAC-02 §4] (2026-08-29)
 
-**Established — the product's first order is `BeCarried`, its second is
-`GetBuilt`, and the rally or `Park` is appended by `GetBuilt`.** Neither the
-factory nor the product installs any goal before `GetBuilt` runs; the
-ota-fac-01d claim "no factory or `GetBuilt` writer installs a ground goal
-before the inherited rally" is confirmed for goals, but the queue is not empty
-before the rally — it holds the two records above.
+**Established — the product's two records are `BeCarried` and `GetBuilt`, and
+the rally or `Park` is appended by `GetBuilt`.** Neither the factory nor the
+product installs any goal before `GetBuilt` runs; the ota-fac-01d claim "no
+factory or `GetBuilt` writer installs a ground goal before the inherited rally"
+is confirmed for goals, but the queue is not empty before the rally — it holds
+the two records above.
+
+**Correction (2026-09-04, [R-ORD-01 §15]) — the order is the other way round,
+and the whole latency composition below is withdrawn.** This paragraph used to
+open "the product's **first** order is `BeCarried`, its **second** is
+`GetBuilt`". The traced queue is `[GetBuilt, BeCarried]`: `GetBuilt` is
+inserted through the producer insertion, whose branch is on the record's own
+static mask, and its bit 5 head-inserts it in front of the `BeCarried` the
+attach commit head-inserted ([R-ORD-01 §13], [R-FAC-02 §1] correction).
+Everything below that composes a latency from `BeCarried` standing in front of
+`GetBuilt` — the "while carried, `GetBuilt` runs only on a tick on which
+`BeCarried`'s 10-tick deadline has just expired" bullet, the `t0 + 301` /
+`t0 + 331` / twenty-tick composition, and the 2026-09-02 correction's
+"`GetBuilt` is **never visited while the product is carried**" — follows from
+that order and is withdrawn with it. What survives is each record's own arms,
+stated in the next paragraph, and the pump-gate reasoning, which now applies
+with `GetBuilt` as the head: it holds on a gated deadline after every visit, so
+the pass ends there and `BeCarried` is not reached until `GetBuilt` is
+unlinked. [R-ORD-01 §15] states the replacement.
 
 `BeCarried` ([R-ORD-01 §2]): carrier null → complete; phase 0 releases the
 slots and advances; phase 1 sets deadline 10 and holds. `GetBuilt`
@@ -4418,9 +4445,16 @@ The per-unit visit pumps every live unit whose owner is human- or
 computer-controlled, with no completion gate, so an unfinished product is
 pumped while it is being built; a bit raised in the builder's visit is
 consumed in the product's visit of the same tick when the product's slot
-sorts later, otherwise in the next tick's. For a carried factory product the
-head is `BeCarried`, whose gate is bit 0 only, so bit 15 is never consumed
-until release ([R-FAC-02 §4]); the factory case is unaffected.
+sorts later, otherwise in the next tick's.
+
+**Correction (2026-09-04, [R-ORD-01 §15]).** The paragraph above used to end
+"For a carried factory product the head is `BeCarried`, whose gate is bit 0
+only, so bit 15 is never consumed until release ([R-FAC-02 §4]); the factory
+case is unaffected." The head of a carried factory product is `GetBuilt`, not
+`BeCarried` — the producer insertion head-inserts it on bit 5 — so bit 15 **is**
+consumed on the ordinary schedule while the product is cargo, and the carve-out
+is withdrawn. The contract below therefore holds for factory products with no
+exception.
 
 **The contract, restated for the implementer.** A nanoframe decays only after
 30 consecutive ticks in which no builder's forward work step touched it (11
@@ -4593,6 +4627,10 @@ insertion shapes exist and they divide as follows.
    [R-ORD-01 §2]'s "later paralyzer hits add to p1 of the waiting head record"
    reachable at all. This closes §3.1's "bit 5" entry in the unnamed-static-bit
    census: bit 5 selects the head-insert branch of the producer insertion.
+   (**Two names in that list are suspect**, 2026-09-04: §3.1's byte-exact
+   descriptor table gives `SelfRepair` `0x1000204` and `WaitForAttack` `0x204`,
+   neither carrying bit 5. The branch reads the mask, so the table decides —
+   see [R-ORD-01 §15]'s Unknown. The other ten names agree with the table.)
 2. **Handler head insert** (§1's spawn). It writes the link, the owner and the
    inherited bit 14 and **nothing else** — it never reads or writes bit 12. The
    marker stays exactly where it was, including "nowhere": a spawn into an
@@ -4715,6 +4753,76 @@ whatever those bits hold. §9.2's own whole-image census already found no writer
 for either bit; this closes the same question from the caller's side, and
 retires a `TODO(T25)` that treated the ungated case as a placeholder rather than
 as the contract.
+
+### Closed — the factory product's queue is `[GetBuilt, BeCarried]`: the head-insert branch wins over "inserted queued" [R-ORD-01 §15] (2026-09-04)
+
+**Established (direct static trace of the factory handler's allocation
+epilogue, the attach commit and its local apply, the queue-flush/head-insert
+helper that apply calls, and the producer insertion; WU-19-181.)** §13 traced
+the producer insertion's two branches; this closes what they mean for the one
+caller three other sections had already described from the outside.
+
+**What the earlier text said.** [R-FAC-02 §1] ends its attach walk with "the
+factory handler then copies its standing bits 18–21 onto the product and
+inserts `GetBuilt` **queued**, so the product's primary queue at the end of the
+visit is, front to back, `[BeCarried, GetBuilt]`". [R-FAC-02 §4] opens
+"**the product's first order is `BeCarried`, its second is `GetBuilt`**" and
+builds its whole handoff-latency composition on that order, including its
+2026-09-02 correction "`GetBuilt` is **never visited while the product is
+carried**". [R-ORD-01 §11] repeats it as "for a carried factory product the head
+is `BeCarried`, whose gate is bit 0 only, so bit 15 is never consumed until
+release; the factory case is unaffected".
+
+**Why all three are wrong.** Each read "inserted queued" as the after-marker
+path. It is not a path: the queued/non-queued argument decides only whether the
+caption-pending bit is armed (§13, bit 13). The **branch** is on the new
+record's static-mask copy alone — bit 5 or bit 18 set takes the head insert,
+whatever the modifier — and `GetBuilt`'s static mask carries bit 5 (§3.1,
+`0x224`). The traced order inside the one allocation visit is: the attach
+commit's local apply flushes the cargo's primary queue of records lacking bit 2
+and **head-inserts** `BeCarried` ([R-FAC-02 §1] step 5), then the factory
+inserts `GetBuilt` through the **producer insertion with the queued argument
+set**, which head-inserts it in front of `BeCarried`. A head insert on top of a
+head insert leaves, front to back, **`[GetBuilt, BeCarried]`**. Neither record
+carries the active marker: no head insert writes bit 12.
+
+The same holds for a mobile builder's nanoframe: both `MobileBuild`-family
+sites that create a product insert `GetBuilt` queued through the producer
+insertion, and a building-class product is never attached, so its queue is
+`[GetBuilt]` alone.
+
+**What changes downstream.**
+
+1. `GetBuilt` runs **from the allocation visit**, carried or not, on its own
+   arms (300 to phase 1, 30 to phase 2, 11 per decay visit) and consumes the
+   `0x8000` wake bit the shared work step raises. [R-ORD-01 §11]'s carve-out
+   "the factory case is unaffected" is withdrawn: its plain contract — a
+   nanoframe decays after 30 ticks with no forward work step, 11 after a decay
+   visit — applies to factory products exactly as to any other nanoframe.
+2. [R-FAC-02 §4]'s latency composition is withdrawn in full: there is no
+   `t0 + 301` pad dwell, no ten-tick `BeCarried` alignment, and no twenty-tick
+   decay cadence. `GetBuilt` reaches its completion arm on the first due visit
+   at which the remaining fraction is 0.0 — under continuous work, within the
+   30-tick phase-2 re-arm of completion — and inserts the rally records or
+   `Park` **queued** there; those carry neither bit 5 nor bit 18, so they take
+   the after-marker path and, with no record carrying the marker, land at the
+   tail.
+3. `BeCarried` is reached only once `GetBuilt` is unlinked, because the primary
+   pump reloads the head after every code ([R-ORD-01 §10]) and `GetBuilt` holds
+   with a gated deadline. Its own arms then run: carrier null completes it at
+   once, otherwise phase 0 releases the slots and phase 1 holds ten ticks. So
+   the product's dwell after completion is bounded by `BeCarried`'s single
+   visit, not by a 300-tick wait — which is the retail-observable half of this
+   finding.
+
+**Unknown — §13's prose list of the bit-5 carriers.** §13 names `SelfRepair`
+and `WaitForAttack` among the descriptors carrying bit 5. §3.1's byte-exact
+descriptor table gives their static masks as `0x1000204` and `0x204`, neither
+of which has bit 5. The branch reads the record's own mask, so the table
+decides and those two take the after-marker path; the prose list is the
+suspect half. Decider: a re-read of those two descriptor templates' mask words
+against §3.1's audit.
+
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 

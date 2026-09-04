@@ -7573,11 +7573,22 @@ finding. The recitals are deleted here only; the body sections and the
 
 ### Sessions and campaign
 
-- The runtime player row that owns the single 11-byte `Players/Alliances`
-  save box during battle restoration; the box's detached bytes and forced
-  self byte are established, but applying them to a particular player row is
-  **Unknown** · "Player records" / [R-SAVE-02 §6] · static trace of the
-  alliance reader's destination.
+- ~~The runtime player row that owns the single 11-byte `Players/Alliances`
+  save box during battle restoration~~ · **closed 2026-09-04** (WU-19-182):
+  there is no single box. The item's premise was the error. WU-19-158's
+  writer census, recorded under "Player records", walks the ten player
+  records and, for each active one, selects `Player%i` and emits the nineteen
+  scalars "followed by the 11-byte `Alliances` box, and nothing else"; the
+  reader is symmetric. The box is therefore an item of the per-slot account,
+  not of `Players`, and row *i* is slot *i*'s own alliance row — the
+  destination this item asked for is named by the account the box sits in.
+  What the census does not settle is WHICH of the two eleven-byte rows each
+  slot holds ([05 R-SHARE-01 §1]) the box carries; the first row is the one
+  every simulation consumer indexes and the one skirmish setup fills, and the
+  second keeps only its diagonal in skirmish ([R-SKIR-01 §2]), so a
+  first-row reading loses nothing observable in single-player. **Unknown**
+  for the row identity · static trace of the alliance reader's destination
+  field.
 - UI-level names for session states 0–4; their behavior, transitions,
   callbacks, and admission-mask classes are established · "Session states" ·
   static trace.

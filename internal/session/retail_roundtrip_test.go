@@ -537,3 +537,133 @@ func firstRetailDivergence(a, b *Session) string {
 	}
 	return "no enumerated unit, projectile or economy field differs; the difference is in state HashState covers and this report does not (AI group vectors)"
 }
+
+// retailAllianceCensus is one line per active slot: the eleven-byte first
+// alliance row as the save carries it [05 R-SHARE-01 §1] [08 "Player records"].
+func retailAllianceCensus(s *Session) map[int]string {
+	out := make(map[int]string)
+	if s == nil || s.Econ == nil {
+		return out
+	}
+	for i := range s.Econ.Players {
+		if !s.Econ.Players[i].Exists {
+			continue
+		}
+		out[i] = fmt.Sprintf("%v", s.Econ.AllianceRow(i))
+	}
+	return out
+}
+
+// TestRetailBattleSaveLoadCarriesAllianceRows is WU-19-182's gate. The
+// `Alliances` box lives inside each `Player%i` account and row *i* is slot
+// *i*'s own first alliance row [08 "Player records"], so a three-seat skirmish
+// with one ally pair must come back with the pair still allied, the third seat
+// still hostile to both, and every self column set.
+//
+// A two-seat fixture cannot fail this: with no ally pair every row is
+// self-only, and the self column is forced to 1 on load whether or not
+// anything was persisted. The ally pair is what makes the assertion able to
+// fail.
+func TestRetailBattleSaveLoadCarriesAllianceRows(t *testing.T) {
+	f := loadRetailFixture(t)
+	cfg := f.cfg
+	cfg.NumPlayers = 3
+	cfg.RNGSimSeed, cfg.RNGCrtSeed = roundTripSeed, roundTripSeed
+	// Slots 0 and 2 share ally group 1; slot 1 keeps a group of its own, so it
+	// is allied with nobody but itself [08 R-SKIR-01 §2].
+	cfg.Players[0].Side, cfg.Players[0].Controller, cfg.Players[0].AllyGroup = 0, SkirmishControllerHuman, 1
+	cfg.Players[1].Side, cfg.Players[1].Controller, cfg.Players[1].AllyGroup = 1, SkirmishControllerComputer, 2
+	cfg.Players[2].Side, cfg.Players[2].Controller, cfg.Players[2].AllyGroup = 0, SkirmishControllerComputer, 1
+	src, err := NewSkirmishWithFS(f.fs, f.cat, cfg)
+	if err != nil {
+		// The kind-2 start-slot walk is fatal on a missing start position
+		// [08 R-ENTRY-01 §5], so a map authored for two seats cannot host this
+		// scenario at all.
+		t.Skipf("three-seat skirmish on %q is unavailable: %v", retailMap, err)
+	}
+	if err := src.ValidateComposition(); err != nil {
+		t.Fatalf("validate three-seat composition: %v", err)
+	}
+	stepRetail(src, 60)
+
+	want := retailAllianceCensus(src)
+	if len(want) != 3 {
+		t.Fatalf("three-seat skirmish produced %d active slots: %v", len(want), want)
+	}
+	if !src.Econ.DeclaresAlliance(0, 2) || !src.Econ.DeclaresAlliance(2, 0) {
+		t.Fatalf("the ally pair is not allied before the save: %v", want)
+	}
+	if src.Econ.DeclaresAlliance(0, 1) || src.Econ.DeclaresAlliance(1, 0) || src.Econ.DeclaresAlliance(1, 2) {
+		t.Fatalf("slot 1 is not hostile before the save: %v", want)
+	}
+
+	summary := RetailBattleSummary(src, "alliances", "0")
+	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
+	if err != nil {
+		t.Fatalf("battle save inputs: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "ALLIES.SAV")
+	if err := src.WriteRetailSave(path, in); err != nil {
+		t.Fatalf("write retail battle save: %v", err)
+	}
+
+	// The wire shape, before the loader gets a chance to be symmetric with a
+	// writer that is wrong in the same way: one 11-byte box per `Player%i`
+	// account and none under `Players` [08 "Player records"].
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read bank: %v", err)
+	}
+	bank, err := save.OpenBytes(raw)
+	if err != nil {
+		t.Fatalf("open bank: %v", err)
+	}
+	if ac, ok := bank.Account("Players"); ok {
+		if _, present := ac.BoxData("Alliances", 0); present {
+			t.Fatal("the Players account carries an Alliances box; the box is per Player%i")
+		}
+	}
+	for slot := 0; slot < 3; slot++ {
+		row, ok := save.ReadAlliances(bank, slot)
+		if !ok {
+			t.Fatalf("Player%d carries no 11-byte Alliances box", slot)
+		}
+		if row[slot] != 1 {
+			t.Fatalf("Player%d self column = %d, want 1", slot, row[slot])
+		}
+	}
+	if row, _ := save.ReadAlliances(bank, 0); row[2] != 1 || row[1] != 0 {
+		t.Fatalf("slot 0's saved row does not carry the ally pair: %v", row)
+	}
+	if row, _ := save.ReadAlliances(bank, 1); row[0] != 0 || row[2] != 0 {
+		t.Fatalf("slot 1's saved row is not hostile to both: %v", row)
+	}
+
+	result, err := LoadRetailSavePath(path, RetailLoadDeps{
+		FS: f.fs, Catalog: f.cat,
+		SimSeed: roundTripSeed, CRTSeed: roundTripSeed,
+		UnitLimit: src.Skirmish.UnitLimit,
+	})
+	if err != nil {
+		t.Fatalf("load retail battle save: %v", err)
+	}
+	if result.Battle == nil || result.Battle.Session == nil {
+		t.Fatalf("load route = %d produced no battle", result.Route)
+	}
+	dst := result.Battle.Session
+	got := retailAllianceCensus(dst)
+	if len(got) != len(want) {
+		t.Fatalf("restored %d active slots, want %d", len(got), len(want))
+	}
+	for slot, row := range want {
+		if got[slot] != row {
+			t.Fatalf("slot %d alliance row restored as %s, want %s", slot, got[slot], row)
+		}
+	}
+	if !dst.Econ.DeclaresAlliance(0, 2) || !dst.Econ.DeclaresAlliance(2, 0) {
+		t.Fatalf("the ally pair did not survive the round trip: %v", got)
+	}
+	if dst.Econ.DeclaresAlliance(0, 1) || dst.Econ.DeclaresAlliance(1, 0) || dst.Econ.DeclaresAlliance(1, 2) {
+		t.Fatalf("hostility did not survive the round trip: %v", got)
+	}
+}

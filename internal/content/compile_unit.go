@@ -264,12 +264,14 @@ type UnitDef struct {
 	SelfDestructCountdownPresent bool   // whether authored
 
 	// Weapon link resolution (resolved after compile per C1 [02 §5]).
-	// A name that matches no weapon record resolves to the record-0 inactive
-	// sentinel [02 §5 R-CONTENT-02] — stock [noweapon], ID 0 — and is nil
-	// only when the name is empty or the family carries no record 0. The
-	// sentinel is inactive by its zero slot number: consumers test ID == 0,
-	// also when a name resolves to record 0 directly.
-	Weapon1Def        *WeaponDef // resolved weapon1; nil when the key is empty (see LinkUnitWeapons TODO(T25)) or the family has no record 0
+	// A name that matches no weapon record — including an empty name, which
+	// can never match a record's blanked-out catalog name [02 §5
+	// R-CONTENT-02] — resolves to the record-0 inactive sentinel, stock
+	// [noweapon], ID 0 [06 R-DMG-01 §5]. The link is nil only when the
+	// family carries no record 0 at all. The sentinel is inactive by its
+	// zero slot number: consumers test content.IsWeaponInactive, never a nil
+	// check, also when a name resolves to record 0 directly.
+	Weapon1Def        *WeaponDef // resolved weapon1
 	Weapon2Def        *WeaponDef // resolved weapon2
 	Weapon3Def        *WeaponDef // resolved weapon3
 	ExplodeAsDef      *WeaponDef // resolved explodeas
@@ -871,35 +873,14 @@ func CompileUnitsSorted(fs vfs.FSOps) ([]*UnitDef, error) {
 // content.IsWeaponInactive, also when a name resolves to record 0 directly
 // [02 §5 R-CONTENT-02].
 //
-// An empty name stays unresolved (nil), and that is a divergence.
-//
-// TODO(T25): fill the slot for an absent or empty key too. The marker that
-// stood here asked whether the FBI compiler runs the record scan at all for an
-// empty key, and worried that if it did, an empty name would match whichever
-// record still holds an empty catalog name — the table's initializer empties
-// every record's name bytes [02 §5 R-CONTENT-02], so unauthored IDs really do
-// sit there with blank names. It is answered, and in the document that owns
-// the death-weapon side rather than the catalog side: the lookup "returns
-// not-found both for a name that matches nothing and for an **empty** name —
-// and replaces not-found with a reference to weapon record 0", so the five
-// links "are therefore never null for any definition that went through the
-// loader" [06 R-DMG-01 §5]. Established. The scan runs, an empty name cannot
-// collide with a blank record, and the result is the record-0 sentinel.
-//
-// Not wired, because the change needs three sites and two of them are outside
-// this unit's file ownership: dropping the `!= ""` guards below; the same
-// guard in Catalog.rewireWeaponLink (catalog.go), which would otherwise strip
-// the links back off on every Clone; and skirmish_preflight.go, whose
-// `u.Weapon1Def != nil` gate would then demand QueryPrimary/AimFromPrimary/
-// AimPrimary/FirePrimary of every unarmed unit in the game and fail entry.
-//
-// No simulation behaviour rides on it today: IsWeaponInactive already answers
-// true for both nil and record 0, and every simulation consumer gates on that
-// predicate, so nil and the sentinel are observationally equal outside
-// preflight. Doing it anyway is worth it for the death path's honesty —
-// [06 R-DMG-01 §5] spells out what retail actually performs for a death whose
-// explodeas is absent, and "no explosion" is the stock outcome rather than the
-// rule.
+// An empty name resolves the same way as a miss: the loader's record scan
+// cannot match an empty name against a record's blanked-out catalog name
+// [02 §5 R-CONTENT-02], so the lookup "returns not-found both for a name
+// that matches nothing and for an **empty** name — and replaces not-found
+// with a reference to weapon record 0"; the five links "are therefore never
+// null for any definition that went through the loader" [06 R-DMG-01 §5].
+// Established. An unarmed definition's weapon links resolve to record 0 like
+// any other miss, never to nil, for a family that carries the sentinel.
 func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	if units == nil || weapons == nil {
 		return
@@ -916,21 +897,11 @@ func LinkUnitWeapons(units map[string]*UnitDef, weapons map[string]*WeaponDef) {
 	view := &Catalog{Weapons: weapons}
 	for _, k := range keys {
 		u := units[k]
-		if u.Weapon1 != "" {
-			u.Weapon1Def, _ = view.WeaponLink(u.Weapon1)
-		}
-		if u.Weapon2 != "" {
-			u.Weapon2Def, _ = view.WeaponLink(u.Weapon2)
-		}
-		if u.Weapon3 != "" {
-			u.Weapon3Def, _ = view.WeaponLink(u.Weapon3)
-		}
-		if u.ExplodeAs != "" {
-			u.ExplodeAsDef, _ = view.WeaponLink(u.ExplodeAs)
-		}
-		if u.SelfDestructAs != "" {
-			u.SelfDestructAsDef, _ = view.WeaponLink(u.SelfDestructAs)
-		}
+		u.Weapon1Def, _ = view.WeaponLink(u.Weapon1)
+		u.Weapon2Def, _ = view.WeaponLink(u.Weapon2)
+		u.Weapon3Def, _ = view.WeaponLink(u.Weapon3)
+		u.ExplodeAsDef, _ = view.WeaponLink(u.ExplodeAs)
+		u.SelfDestructAsDef, _ = view.WeaponLink(u.SelfDestructAs)
 	}
 }
 

@@ -126,15 +126,26 @@ type Node struct {
 	// with nothing this build allocates there; keeping it separate is what
 	// stops a restored record from inheriting an invented static bit.
 	//
-	// TODO(T25): the arming is conditional in retail — the insertion helper
-	// takes a queued/non-queued argument and arms the bit only on the
-	// NON-QUEUED (Replace) issue, so a Shift-queued order is inserted silent.
-	// This package's Push carries no such argument: a non-queued issuer signals
-	// itself by calling PurgeUnprotected first, which is caller-side state Push
-	// cannot see. Wiring it needs Push to take the modifier the caller already
-	// knows (Replace vs Append) — a signature change whose callers are in
-	// internal/session, internal/hud and internal/ai, outside this unit.
+	// The arming is conditional, and the condition is now wired (WU-19-181):
+	// the insertion helper takes a queued/non-queued argument and arms the bit
+	// only on the NON-QUEUED (Replace) issue, so a Shift-queued order is
+	// inserted silent [04 R-ORD-01 §13]. QueuedIssue below carries that
+	// argument into Push.
 	CaptionPending bool
+
+	// QueuedIssue is the queue modifier of [04 §3.3] — false for a non-queued
+	// (Replace) issue, true for a queued (Append / Shift-queue) one. It is an
+	// INSERTION-TIME INPUT to Push, not record state: retail passes it as an
+	// argument to the producer insertion and the 86-byte record has no field
+	// for it [04 §3.2][04 R-ORD-01 §13]. newNode therefore clears it on the
+	// stored record, so nothing downstream can mistake it for a persisted bit.
+	//
+	// Every producer that already knows its modifier passes it through
+	// NewNodeForOrder's `queued` argument, so no caller signature changed. The
+	// producers that do not yet distinguish the two — the build-page adds of
+	// internal/construction/queue.go, the mission spawner and the AI planner —
+	// keep the non-queued default, which is what they issue today.
+	QueuedIssue bool
 }
 
 // Queue holds the two segments [04 §3.2] C5.
@@ -763,7 +774,7 @@ func (p *Pump) PumpUnit(handle pool.Handle, tick uint32) PumpResult {
 }
 
 func isSecondary(id ID) bool {
-	return DescriptorFor(id).StaticGate&0x40000 != 0 // [04 §3.1] rear-segment selection flag
+	return DescriptorFor(id).StaticGate&staticRearSegment != 0 // [04 §3.1] rear-segment selection flag
 }
 
 func (q *Queue) simForJitter() *rng.Simulation {
@@ -981,6 +992,28 @@ func (q *Queue) ensureSingleActive() {
 // `BeCarried`, `Paralyze`, `SelfRepair` and `BuildingBuild` [04 §3.1].
 const staticPurgeSurvivor uint32 = 0x4
 
+// staticHeadInsert is bit 5 of a descriptor's static gate mask. It is the
+// head-insert selector of the producer insertion: a record carrying it skips
+// the after-marker path entirely and is head-inserted into the segment bit 18
+// selects, with no write to the active marker [04 R-ORD-01 §13]. The ten
+// descriptors that carry it are `Activate`, `Deactivate`, `Cloak_On`,
+// `Cloak_Off`, `Standing_MoveOrder`, `Standing_FireOrder`, `Paralyze`,
+// `GetBuilt`, `BeCarried` and `Guard_NoMove` [04 §3.1].
+//
+// TODO(question): [04 R-ORD-01 §13]'s prose list of the bit-5 carriers also
+// names `SelfRepair` and `WaitForAttack`, whose static masks in §3.1's
+// byte-exact descriptor table (0x1000204 and 0x204, reproduced in table.go)
+// carry no bit 5. The branch here reads the record's own mask, so the table
+// decides and those two take the after-marker path. What would settle it: a
+// re-read of the two descriptor templates' mask words against §3.1's audit.
+const staticHeadInsert uint32 = 0x20
+
+// staticRearSegment is bit 18: "marks a record that belongs in the rear queue
+// segment" [04 §3.1]. It selects the segment for every insertion shape —
+// producer, handler spawn, patrol append and the pump's own idle refill — and
+// only `BuildWeapon` and `SelfDestruct` carry it.
+const staticRearSegment uint32 = 0x40000
+
 func newNode(id ID, n Node) *Node {
 	desc := DescriptorFor(id)
 	nn := n
@@ -1029,6 +1062,10 @@ func newNode(id ID, n Node) *Node {
 	// constructor writes the static-mask copy from the descriptor's own mask and
 	// arms no runtime bit at all [04 R-ORD-01 §13]; the arming belongs to the
 	// producer-side insertion helper, which is Push / PushSecondary below.
+	//
+	// The queue modifier is an argument to that helper, not a record field
+	// [04 §3.2], so the stored record never carries it.
+	nn.QueuedIssue = false
 	node := &Node{}
 	*node = nn
 	return node
@@ -1219,30 +1256,44 @@ func (q *Queue) DropLeadingAutoOps() {
 
 // Push is the producer-side insertion — the one helper the HUD, the AI, COB,
 // the mission spawner, rally inheritance and factory completion all enter
-// through [04 §3.3]. It arms the record's caption-pending flag, drops leading
-// auto/default records, and inserts immediately after the active marker.
+// through [04 §3.3]. It constructs the record, drops leading auto/default
+// records, arms the caption-pending flag on a non-queued issue, and then takes
+// ONE OF TWO branches on the new record's static-mask copy [04 R-ORD-01 §13]:
 //
-// TODO(T25): retail's producer insertion has a second branch this build does
-// not model. A record whose descriptor's STATIC mask carries bit 5 (0x20) or
-// the rear-segment bit 18 does not take the insert-after-marker path at all: it
-// HEAD-inserts into the segment bit 18 selects, inherits the displaced head's
-// auto-op flag, and never touches the active marker [04 R-ORD-01 §13]. Bit 5 is
-// carried by `Paralyze`, `BeCarried`, `GetBuilt`, `SelfRepair`, `WaitForAttack`,
-// `Guard_NoMove`, the cloak pair, the activation pair and the two standing-order
-// descriptors — so in retail a paralyzer hit lands at the FRONT of the queue,
-// which is what makes [04 R-ORD-01 §2]'s "later paralyzer hits add to p1 of the
-// waiting head record" reachable. Routing them here changes the order of a
-// fresh factory product's `BeCarried`/`GetBuilt` pair, so it belongs to a unit
-// that owns internal/construction's expectations, not to this one.
+//	bit 5 and bit 18 both clear — insert immediately after the active marker
+//	(tail when nothing carries it), and move the marker onto the new record;
+//
+//	bit 5 or bit 18 set — HEAD-insert into the segment bit 18 selects,
+//	inheriting the displaced head's auto-op flag, with NO marker write at all.
+//
+// Bit 5 (staticHeadInsert) is carried by `Paralyze`, `BeCarried`, `GetBuilt`,
+// `Guard_NoMove`, the cloak pair, the activation pair and the two
+// standing-order descriptors; bit 18 (staticRearSegment) by `BuildWeapon` and
+// `SelfDestruct` [04 §3.1]. So a paralyzer hit lands at the FRONT of the queue
+// — which is what makes [04 R-ORD-01 §2]'s "later paralyzer hits add to p1 of
+// the waiting head record" reachable — a stance or cloak toggle takes effect
+// before the order the unit is running, and a player-issued `BuildWeapon`
+// lands on the REAR segment where its own pump drives it, instead of blocking
+// the silo's front queue.
+//
+// Retail's helper also runs the Replace purge itself, gated on the new
+// record's bit 6; in this build the purge is caller-side (PurgeUnprotected),
+// which is why Push does not run it here. That split predates this unit.
 func (q *Queue) Push(id ID, n Node) {
 	if q == nil {
 		return
 	}
+	queued := n.QueuedIssue // the modifier is an argument, never record state [04 R-ORD-01 §13]
+	node := newNode(id, n)  // [04 §3.3][05 "Queue insertion"] C9
+	segment := &q.primary
+	if node.StaticGate&staticRearSegment != 0 {
+		segment = &q.secondary
+	}
 	// [P1-I09] dynamic storage: retail has no cap (NEGATIVE-BOUNDED); previous
 	// 64/32 caps were inside stock (corpus max 105 raw tokens -> 64 truncated).
 	// Now unbounded with OOM guard far outside stock (10000 >> 105).
-	if len(q.primary) >= OOMGuardQueue {
-		q.recordDiagnostic(fmt.Sprintf("orders: primary queue OOM guard (%d), dropping %s", len(q.primary), DescriptorFor(id).Name))
+	if len(*segment) >= OOMGuardQueue {
+		q.recordDiagnostic(fmt.Sprintf("orders: queue OOM guard (%d), dropping %s", len(*segment), DescriptorFor(id).Name))
 		return
 	}
 	// "Issuing a front-segment record drops leading auto/default records (those
@@ -1252,15 +1303,31 @@ func (q *Queue) Push(id ID, n Node) {
 	// (refillIdle below) parks a standing `Standby` / `VTOL_Standby` record at
 	// the head, and every later order queues behind a record whose gate no
 	// producer in this build can satisfy.
-	if q.hasLeadingAutoOp() {
+	//
+	// The drop is skipped for a record bound for the REAR segment: retail's
+	// step runs only when the new record's static-mask copy lacks bit 18
+	// [04 R-ORD-01 §13], so queueing a nuke does not silence a silo's standing
+	// record.
+	if node.StaticGate&staticRearSegment == 0 && q.hasLeadingAutoOp() {
 		q.DropLeadingAutoOps()
 	}
-	node := newNode(id, n) // [04 §3.3][05 "Queue insertion"] C9
 	// Arm the one-shot caption-pending flag. The producer-side insertion helper
-	// is its only writer [04 R-ORD-01 §13]; see the TODO(T25) on
-	// Node.CaptionPending for the half that still needs the caller's queue
-	// modifier.
-	node.CaptionPending = true
+	// is its only writer, and it arms the bit only on the NON-QUEUED (Replace)
+	// issue [04 R-ORD-01 §13] — a Shift-queued order is inserted silent.
+	if !queued {
+		node.CaptionPending = true
+	}
+	if node.StaticGate&(staticHeadInsert|staticRearSegment) != 0 {
+		// Head insert into the selected segment, inheriting the displaced
+		// head's auto-op flag. The active marker is not read and not written:
+		// it stays exactly where it was, including "nowhere" [04 R-ORD-01 §13].
+		node.Flags &^= FlagActive
+		if len(*segment) > 0 {
+			node.Flags |= (*segment)[0].Flags & FlagAutoOp
+		}
+		*segment = append([]*Node{node}, *segment...)
+		return
+	}
 	// The inserted record takes the active marker unconditionally, and the
 	// record that held it loses it [04 R-ORD-01 §13]. That is what makes
 	// repeated interface adds queue FIFO behind the running order; when nothing

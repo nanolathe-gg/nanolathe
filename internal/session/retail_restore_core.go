@@ -54,11 +54,13 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	if image.HumanPlayer >= 0 && image.HumanPlayer < 10 {
 		s.LocalOwner = uint8(image.HumanPlayer)
 	}
-	if image.HasAlliances {
-		// TODO(question): trace which runtime player row owns the single
-		// Players/Alliances row before applying it; the detached image is kept
-		// untouched until that ownership is established [08 R-SAVE-02 §6].
-	}
+	// Alliance rows are applied by the per-slot loop above, through
+	// PlayerSlot.ApplyToEconomy. The row is the last item of each `Player%i`
+	// account, so row *i* is slot *i*'s own first alliance row and the
+	// ownership question this site used to carry is answered by the account
+	// the box sits in [08 "Player records"] [05 R-SHARE-01 §1]. The self
+	// column is forced to 1 on the way in, and a slot whose account carried no
+	// box keeps the row battle entry built.
 
 	// Every standard body has already been forced-allocated by D1. Restore
 	// bodies in image order, never deriving live identity from enumeration.

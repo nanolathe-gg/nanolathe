@@ -164,6 +164,7 @@ func TestFrontendCueAliasesResolve(t *testing.T) {
 		"BigButton", "smlButton", "Previous", "options", "skirmish", "SideSelect", "SideSelect2",
 		"oktobuild", "notoktobuild", "addbuild", "subbuild", "nextbuildmenu",
 		"immediateorders", "specialorders", "setmoveorders", "setfireorders",
+		"ordersbutton", "buildbutton",
 		"SelectMultipleUnits", "CreateSquad", "SelectSquad", "Panel",
 	}
 	for _, alias := range aliases {

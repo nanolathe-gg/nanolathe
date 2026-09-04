@@ -52,13 +52,15 @@ func TestLatchToCodeMapping(t *testing.T) {
 }
 
 func TestParseButtonLatchChain(t *testing.T) {
-	// Button parse chain precedence: STOP → ATTACK → BLAST → DEFEND → REPAIR →
-	// PATROL → RECLAIM → CAPTURE → UNLOAD → LOAD → MOVE [07 §9] C11.
+	// Button parse chain precedence: MOVE → STOP → ATTACK → BLAST → DEFEND →
+	// REPAIR → PATROL → RECLAIM → CAPTURE → UNLOAD → LOAD [07 §9 "Corrected
+	// and completed"] C11.
 	tests := []struct {
 		name string
 		gate uint32
 		want input.Latch
 	}{
+		{"move", 1, input.LatchMove}, // MOVE is the first test, not a default
 		{"STOP", 1, input.LatchNormal},
 		{"attack", 1, input.LatchAttack}, // case-insensitive
 		{"BLAST", 1, input.LatchBlast},
@@ -69,11 +71,13 @@ func TestParseButtonLatchChain(t *testing.T) {
 		{"CAPTURE", 1, input.LatchCapture},
 		{"UNLOAD", 1, input.LatchUnload},
 		{"LOAD", 1, input.LatchPickup},
-		{"pickup", 1, input.LatchPickup}, // LOAD/PICKUP alias [07 §9]
-		{"move", 1, input.LatchMove},
-		// Default when no predicate matches.
-		{"BUILD_ARM", 1, input.LatchMove},
-		{"", 1, input.LatchMove},
+		// Retail has no PICKUP compare, only LOAD: a name that only contains
+		// PICKUP is not handled [07 §9 "Corrected and completed"].
+		{"pickup", 1, NotHandled},
+		// No default at all: an unmatched name is not handled — no latch
+		// write, no cue [07 §9 "Corrected and completed"].
+		{"BUILD_ARM", 1, NotHandled},
+		{"", 1, NotHandled},
 		// Gate zero forces Normal regardless of name [07 §9].
 		{"ATTACK", 0, input.LatchNormal},
 		{"MOVE", 0, input.LatchNormal},
@@ -87,6 +91,24 @@ func TestParseButtonLatchChain(t *testing.T) {
 	}
 }
 
+// TestParseButtonLatchNotHandled locks the distinct not-handled result: it is
+// invalid, distinct from every armed latch (including Normal), and is what a
+// button whose name matches no chain predicate produces [07 §9 "Corrected and
+// completed"].
+func TestParseButtonLatchNotHandled(t *testing.T) {
+	if NotHandled.IsValid() {
+		t.Fatalf("NotHandled must not be a valid latch, got %v", NotHandled)
+	}
+	if NotHandled == input.LatchNormal {
+		t.Fatalf("NotHandled must be distinct from LatchNormal")
+	}
+	for _, name := range []string{"PICKUP", "FOO", "GADGET1", ""} {
+		if got := ParseButtonLatch(name, 1); got != NotHandled {
+			t.Errorf("ParseButtonLatch(%q, 1) = %v, want NotHandled", name, got)
+		}
+	}
+}
+
 func TestParseButtonLatchPrecedence(t *testing.T) {
 	// A button satisfying multiple predicates picks per chain order [07 §9] C11.
 	precedence := []struct {
@@ -94,10 +116,11 @@ func TestParseButtonLatchPrecedence(t *testing.T) {
 		want input.Latch
 		desc string
 	}{
-		{"STOPATTACKBLASTDEFENDREPAIRPATROLRECLAIMCAPTUREUNLOADLOADMOVE", input.LatchNormal, "STOP first"},
+		{"MOVESTOPATTACKBLASTDEFENDREPAIRPATROLRECLAIMCAPTUREUNLOADLOAD", input.LatchMove, "MOVE first"},
+		{"STOPATTACKBLASTDEFENDREPAIRPATROLRECLAIMCAPTUREUNLOADLOAD", input.LatchNormal, "STOP before the rest once MOVE is absent"},
 		{"ATTACKBLAST", input.LatchAttack, "ATTACK before BLAST"},
-		{"ATTACKMOVE", input.LatchAttack, "ATTACK before MOVE"},
-		{"BLASTMOVE", input.LatchBlast, "BLAST before MOVE"},
+		{"ATTACKMOVE", input.LatchMove, "MOVE is tested before ATTACK"},
+		{"BLASTMOVE", input.LatchMove, "MOVE is tested before BLAST"},
 		{"DEFENDREPAIR", input.LatchFollow, "DEFEND before REPAIR"},
 		{"REPAIRPATROL", input.LatchRepair, "REPAIR before PATROL"},
 		{"RECLAIMCAPTURE", input.LatchReclaim, "RECLAIM before CAPTURE"},
@@ -105,9 +128,9 @@ func TestParseButtonLatchPrecedence(t *testing.T) {
 		{"UNLOAD_LOAD", input.LatchUnload, "UNLOAD vs LOAD contains"},
 		{"RECLAIM_UNLOAD", input.LatchReclaim, "RECLAIM before UNLOAD"},
 		{"CAPTURE_UNLOAD", input.LatchCapture, "CAPTURE before UNLOAD"},
-		{"PICKUP", input.LatchPickup, "PICKUP alias for LOAD"},
-		{"LOADPICKUP", input.LatchPickup, "LOAD alias pickup"},
-		{"MOVE", input.LatchMove, "default MOVE"},
+		{"PICKUP", NotHandled, "retail has no PICKUP compare"},
+		{"LOADPICKUP", input.LatchPickup, "LOAD substring, PICKUP irrelevant"},
+		{"MOVE", input.LatchMove, "MOVE is a first-class test, not a default"},
 	}
 	for _, tc := range precedence {
 		got := ParseButtonLatch(tc.name, 1)

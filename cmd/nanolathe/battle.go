@@ -1687,9 +1687,14 @@ func (b *battleSession) handleHudOrderButton(name string) {
 	latch := hud.ParseButtonLatch(name, 1)
 	// STOP is a distinct immediate command. It must never dispatch contextual
 	// code 1 at the map origin before the Stop descriptor [04 §3.4][07 §9].
+	// STOP is the one arm that ignores the gate and always writes the idle
+	// latch, but it is still a matched arm: it plays `immediateorders` just
+	// like the other nine arms of that family [07 §9 "Corrected and
+	// completed"].
 	if latch == input.LatchNormal && containsStop(name) {
 		_ = b.dispatchStopCommand()
 		b.battleState().Input.Latch = input.LatchNormal
+		b.playUICue(nil, cueImmediateOrders)
 		return
 	}
 	if latch.IsValid() {
@@ -1699,6 +1704,8 @@ func (b *battleSession) handleHudOrderButton(name string) {
 		// hit test, so a button whose parse yields no valid latch is silent.
 		b.playUICue(nil, orderButtonCue(latch))
 	}
+	// A name matching none of the chain's tests is not handled: no latch
+	// write, no cue [07 §9 "Corrected and completed"].
 }
 
 func containsStop(s string) bool {

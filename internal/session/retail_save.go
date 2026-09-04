@@ -49,14 +49,19 @@ type RetailSaveInputs struct {
 	// one directly.
 	Mapping []byte
 
-	HasAlliances bool
-	Alliances    [11]byte
-	Meteor       save.MeteorScalars
+	// Alliances are NOT caller metadata: each active slot's eleven-byte row is
+	// the last item of that slot's own `Player%i` account, and the projection
+	// takes it from the runtime table through `economy.Player.AllianceRow`
+	// [08 "Player records"] [05 R-SHARE-01 §1]. The two fields that stood here
+	// modelled one account-level box under `Players`; no caller ever set them,
+	// so the box was never written.
+	Meteor save.MeteorScalars
 }
 
 // ProjectRetailSession maps established live Session state into a detached
-// save projection. Session-owned economy/player fields and the 28-byte clock
-// snapshot are read through their existing APIs; caller-owned metadata and
+// save projection. Session-owned economy/player fields — the nineteen scalars
+// and the slot's own alliance row — and the 28-byte clock snapshot are read
+// through their existing APIs; caller-owned metadata and
 // opaque subsystem images are copied explicitly [08 "Player records"] [08
 // "Scheduler and random state in saves"].
 func ProjectRetailSession(s *Session, in RetailSaveInputs) (save.RetailProjection, error) {
@@ -64,12 +69,10 @@ func ProjectRetailSession(s *Session, in RetailSaveInputs) (save.RetailProjectio
 		return save.RetailProjection{}, fmt.Errorf("nanolathe: retail save projection: nil session: logical path session/save, providers searched [session], expected live Session")
 	}
 	p := save.RetailProjection{
-		Summary:      in.Summary,
-		Camera:       in.Camera,
-		Mapping:      append([]byte(nil), in.Mapping...),
-		HasAlliances: in.HasAlliances,
-		Alliances:    in.Alliances,
-		Meteor:       in.Meteor,
+		Summary: in.Summary,
+		Camera:  in.Camera,
+		Mapping: append([]byte(nil), in.Mapping...),
+		Meteor:  in.Meteor,
 	}
 
 	// A continuation has no live battle account families and therefore does

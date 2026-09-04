@@ -8,17 +8,21 @@ import (
 )
 
 // TestStockWeaponLinksComplete locks stock-corpus link completeness [02 §5
-// R-CONTENT-02]: with the reference install present, every authored unit
-// weapon link (weapon1..3, explodeas, selfdestructas) resolves to a non-nil
-// record — a name matching no record resolves to the record-0 inactive
-// sentinel, not nil and not an error.
+// R-CONTENT-02]: with the reference install present, every unit weapon link
+// (weapon1..3, explodeas, selfdestructas) resolves to a non-nil record —
+// authored or empty, a name matching no record (including an empty one, which
+// can never match a record's blanked-out catalog name) resolves to the
+// record-0 inactive sentinel, not nil and not an error [06 R-DMG-01 §5].
 //
 // Retail itself misses exactly the placeholder explosion names below
 // (measured on the reference install): ten units author explodeas or
 // selfdestructas names that exist in no parsed weapon file, and each of those
-// links must carry the record-0 [noweapon] def. A nil link anywhere, or a
-// sentinel link outside this set, means the weapon family lost or gained a
-// record — a packaging regression, not retail behavior.
+// links must carry the record-0 [noweapon] def. A nil link anywhere, or an
+// authored-hit sentinel link outside this set, means the weapon family lost
+// or gained a record — a packaging regression, not retail behavior. (Every
+// unarmed slot in the corpus also resolves to the sentinel by construction —
+// an empty name is a miss like any other — so it is not tracked in
+// wantMisses, which lists only misses on an *authored* name.)
 func TestStockWeaponLinksComplete(t *testing.T) {
 	cat := compiledRetailCatalog(t)
 	w0, ok := cat.WeaponByID(0)
@@ -52,11 +56,16 @@ func TestStockWeaponLinksComplete(t *testing.T) {
 			{"explodeas", u.ExplodeAs, u.ExplodeAsDef},
 			{"selfdestructas", u.SelfDestructAs, u.SelfDestructAsDef},
 		} {
-			if link.authored == "" {
+			if link.def == nil {
+				t.Errorf("unit %s %s %q: link is nil, want the record-0 sentinel", key, link.family, link.authored)
 				continue
 			}
-			if link.def == nil {
-				t.Errorf("unit %s %s %q: authored link is nil, want the record-0 sentinel", key, link.family, link.authored)
+			if link.authored == "" {
+				// An unarmed slot: must be the sentinel itself, since the
+				// family carries record 0 (checked above) [06 R-DMG-01 §5].
+				if link.def != w0 {
+					t.Errorf("unit %s %s (unarmed): def = %v, want the record-0 [noweapon] sentinel", key, link.family, link.def)
+				}
 				continue
 			}
 			if link.def.ID == 0 {

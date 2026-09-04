@@ -2470,11 +2470,13 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				// [07 §9]. Product BMcode determines queue versus placement.
 				if !hud.ProductArmsPlacement(prodDef) {
 					delta := factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick)
+					// The counted-add routine's own cue runs before the
+					// descriptor routing and before the queue coalesce, so a
+					// click that ends up changing nothing is still audible
+					// [07 R-P0-11 §1].
+					b.playUICue(nil, countedBuildCue(delta))
 					if err := h.dispatchFactoryBuild(b, prodKey, delta); err != nil {
 						h.dispatchErr = err
-					} else {
-						// The counted-add routine's own cue [07 R-P0-11 §1].
-						b.playUICue(nil, countedBuildCue(delta))
 					}
 					return true
 				}

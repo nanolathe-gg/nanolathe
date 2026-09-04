@@ -614,9 +614,22 @@ func TestFactoryProductUsesCarriedQueueAndDetachHandoff(t *testing.T) {
 			if product.Attachment.Carrier != factory.Handle || product.Attachment.AttachPiece != 0 || product.Move.Mode != 1 {
 				t.Fatalf("attachment=%+v mode=%d, want factory/piece0/grounded", product.Attachment, product.Move.Mode)
 			}
+			// Front to back `[GetBuilt, BeCarried]`: the attach commit
+			// head-inserts `BeCarried` ([04 R-FAC-02 §1] step 5), then the
+			// queued `GetBuilt` producer insertion takes the head-insert
+			// branch its static bit 5 selects [04 R-ORD-01 §13]. The opposite
+			// order this test used to assert came from §1's and §4's reading
+			// of "queued" as the after-marker path, corrected 2026-09-04.
 			prim := orders.QueueForUnit(product).Primary()
-			if len(prim) != 2 || prim[0].ID != orders.Lookup("BeCarried") || prim[1].ID != orders.Lookup("GetBuilt") {
-				t.Fatalf("product queue=%v, want [BeCarried GetBuilt]", prim)
+			if len(prim) != 2 || prim[0].ID != orders.Lookup("GetBuilt") || prim[1].ID != orders.Lookup("BeCarried") {
+				t.Fatalf("product queue=%v, want [GetBuilt BeCarried]", prim)
+			}
+			// Neither record carries the active marker: a head insert never
+			// writes it [04 R-ORD-01 §13].
+			for i, n := range prim {
+				if n.Flags&orders.FlagActive != 0 {
+					t.Fatalf("product queue record %d carries the active marker; the head insert writes none", i)
+				}
 			}
 			x, y, z := product.X, product.Y, product.Z
 			svc.applyCompletionPosture(product)

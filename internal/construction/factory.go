@@ -2046,19 +2046,30 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		if beCarriedID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)
 			pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
-			pq.Push(beCarriedID, productRecord(product, tick, orders.Node{Target: factory.Handle}))
+			// `BeCarried` is not a producer insertion: it is a side effect of
+			// the attach commit, which flushes the cargo's primary queue of
+			// records lacking static bit 2 and HEAD-INSERTS the record
+			// [04 R-FAC-02 §1] step 5. A freshly allocated product's queue is
+			// empty, so the flush is a no-op and the head insert is the whole
+			// step. It arms no caption and writes no active marker.
+			pq.PushHead(beCarriedID, productRecord(product, tick, orders.Node{Target: factory.Handle}))
 		}
 	}
 
-	// Attach inserts BeCarried first; GetBuilt is queued behind it
-	// [04 R-FAC-02 §1][04 R-FAC-02 §4].
+	// The attach commit inserted `BeCarried` at the head; `GetBuilt` follows as
+	// a QUEUED producer insertion [04 R-FAC-02 §1][04 R-FAC-02 §4]. Because
+	// `GetBuilt`'s static mask carries bit 5, that insertion takes the
+	// head-insert branch [04 R-ORD-01 §13], so the product's primary queue at
+	// the end of this visit is, front to back, `[GetBuilt, BeCarried]`. See the
+	// 2026-09-04 correction under [04 R-FAC-02 §1]: the two sections that gave
+	// the opposite order derived it from the after-marker path, before the
+	// bit-5 branch was traced.
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
-		// Queued mode, zero count per [05 C18]: Param2 zero count special? Queue treats 0 as 1? But we pass 0 and CoalesceTail will treat 0 as 1? However plan says zero count. We pass Node with Param2 0.
-		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0}))
-		// Ensure product's queue head is GetBuilt with active marker.
+		// Queued, count zero [05 C18].
+		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0, QueuedIssue: true}))
 	}
 
 	// The factory uses ONLY the edge form: it raises the building-bit edge here
@@ -2253,7 +2264,10 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 		parkID := orders.Lookup("Park")
 		if parkID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)
-			pq.Push(parkID, productRecord(product, tick, orders.Node{}))
+			// Inserted QUEUED, like every record this arm makes
+			// [04 R-FAC-02 §4] — so the product does not speak an
+			// acknowledgement for an order it was never given [04 R-ORD-01 §13].
+			pq.Push(parkID, productRecord(product, tick, orders.Node{QueuedIssue: true}))
 		}
 		return
 	}
@@ -3069,7 +3083,9 @@ func (s *Service) successEpilogueMobile(builder *units.Unit, node *orders.Node, 
 	getBuiltID := orders.Lookup("GetBuilt")
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
-		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0}))
+		// Queued, like the factory's [04 R-FAC-02 §1]; the record's bit 5 puts
+		// it at the head of the nanoframe's own queue [04 R-ORD-01 §13].
+		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0, QueuedIssue: true}))
 	}
 	// No heading snap here. The question this site used to record — whether
 	// retail rotates the unit or leaves the turn to the script — is answered:

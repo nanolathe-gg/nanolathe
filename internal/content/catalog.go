@@ -1057,15 +1057,14 @@ func (c *Catalog) RebuildWeaponIndex() {
 
 // rewireWeaponLink rewires one cloned unit weapon link onto the cloned weapon
 // table, re-deriving WeaponLink's resolution and miss policy [02 §5
-// R-CONTENT-02]: a name hit points at the cloned record; a miss fills the
-// slot with the clone's own record-0 inactive sentinel (ID 0) when the family
-// carries one, else leaves the explicit nil inactive marker — so a cloned
-// catalog preserves sentinel links instead of dropping them to nil. An empty
-// name leaves the slot nil, as at compile.
+// R-CONTENT-02]: a name hit points at the cloned record; a miss — including an
+// empty name, which the loader's record scan can never match against a
+// record's blanked-out name [06 R-DMG-01 §5] — fills the slot with the
+// clone's own record-0 inactive sentinel (ID 0) when the family carries one,
+// else leaves the explicit nil inactive marker. So a cloned catalog preserves
+// sentinel links (including for unarmed definitions) instead of dropping them
+// to nil.
 func (c *Catalog) rewireWeaponLink(name string, slot **WeaponDef) {
-	if strings.TrimSpace(name) == "" {
-		return
-	}
 	if w, ok := c.Weapons[CanonicalKey(name)]; ok {
 		*slot = w
 		return

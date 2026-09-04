@@ -19,8 +19,11 @@ import (
 //   - queued: queue modifier — true is Append/Shift-queue (insert after active without purge),
 //     false is Replace (purge unprotected + drop leading auto before insert) [04 §3.3][P0-08].
 //
-// The queued flag selects what the CALLER does to the queue before inserting; it writes
-// nothing onto the record. Purge survivorship is the descriptor's static gate bit 2, and
+// The queued flag selects what the CALLER does to the queue before inserting, and it is
+// also the producer insertion's own argument: Push arms the one-shot caption-pending bit
+// only on a NON-QUEUED (Replace) issue, so a Shift-queued order is inserted silent
+// [04 R-ORD-01 §13]. It is carried to Push in Node.QueuedIssue and written onto no stored
+// record. Purge survivorship is the descriptor's static gate bit 2, and
 // newNode applies it at insertion [04 §3.3][04 R-MOV-03 §6].
 // StaticGate/DynamicGate/Deadline are filled later by newNode from the descriptor;
 // caller may set Param1..3 for command-specific fields before Push.
@@ -34,7 +37,7 @@ func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixe
 		CreationTick: tick,
 		Owner:        owner,
 	}
-	_ = queued // the modifier is the caller's; survivorship is the descriptor's [04 R-MOV-03 §6]
+	n.QueuedIssue = queued // the producer insertion's queued/non-queued argument [04 R-ORD-01 §13]
 	return n
 }
 

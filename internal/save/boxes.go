@@ -367,32 +367,49 @@ func ReadGameTime(bank *Bank) (*clock.State, bool) {
 }
 
 // ---------------------------------------------------------------------------
-// Alliances box — exactly 11 bytes with forced self-alliance 1
-// [08 "Player records"] [GAP T9] C16.
+// Alliances box — one per Player%i account, exactly 11 bytes, with forced
+// self-alliance 1 [08 "Player records"] [GAP T9] C16.
+//
+// The box is NOT an account-level item under `Players`. The writer census of
+// WU-19-158 walks the ten player records and, for each active one, selects
+// `Player%i` and emits the nineteen scalar items "followed by the 11-byte
+// `Alliances` box, and nothing else"; the reader is symmetric [08 "Player
+// records"]. Row *i* is therefore slot *i*'s own alliance row, and the
+// runtime-row ownership question that stood open in the doc tail is answered
+// by the account the box sits in.
+//
+// This corrects the earlier model, which put ONE box under the `Players`
+// account. That model was not "right for slot 0": a retail bank has no
+// `Players/Alliances` box at all, so the reader found nothing for any slot,
+// and the writer emitted a box in an account whose retail reader never looks
+// for one. It was inert in both directions rather than partially correct.
 // ---------------------------------------------------------------------------
 
-// WriteAlliances writes the Alliances box as exactly 11 bytes into
-// Players/Alliances [08 "Player records"] [GAP T9] C16. The self byte is
-// forced to 1 on read, not necessarily on write, but we force it here for
-// canonical output.
-func WriteAlliances(b *Builder, selfSlot int, alliances [11]byte) {
-	if b == nil {
+// WriteAlliances appends slot's 11-byte Alliances box to its `Player%i`
+// account [08 "Player records"] [GAP T9] C16. The self byte is forced to 1 on
+// read, not necessarily on write; it is forced here so the written row and the
+// row a load produces are the same bytes.
+func WriteAlliances(b *Builder, slot int, alliances [11]byte) {
+	if b == nil || slot < 0 || slot >= 10 {
 		return
 	}
 	// C16: forced self-alliance 1 [08 "Player records"] [GAP T9].
-	if selfSlot >= 0 && selfSlot < 11 {
-		alliances[selfSlot] = 1
-	}
-	ac := builderAccount(b, PlayersAccount)
+	alliances[slot] = 1
+	ac := builderAccount(b, playerAccountName(slot))
 	ac.AppendBox(AlliancesBoxName, 0, alliances[:])
 }
 
-// ReadAlliances reads the Alliances box, validates exactly 11 bytes, and
-// forces the self-alliance byte to 1 [08 "Player records"] [GAP T9] C16.
-// It returns the 11-byte payload and whether the box was present with exact size.
-func ReadAlliances(bank *Bank, selfSlot int) ([11]byte, bool) {
+// ReadAlliances reads slot's Alliances box from its `Player%i` account,
+// requires exactly 11 bytes, and forces the self-alliance byte to 1
+// [08 "Player records"] [GAP T9] C16. A box of any other size does not load —
+// it is not an error, the runtime row simply keeps the values battle entry
+// gave it. It returns the 11-byte payload and whether the box loaded.
+func ReadAlliances(bank *Bank, slot int) ([11]byte, bool) {
 	var out [11]byte
-	ac, ok := bank.Account(PlayersAccount)
+	if slot < 0 || slot >= 10 {
+		return out, false
+	}
+	ac, ok := bank.Account(playerAccountName(slot))
 	if !ok {
 		return out, false
 	}
@@ -401,9 +418,7 @@ func ReadAlliances(bank *Bank, selfSlot int) ([11]byte, bool) {
 		return out, false
 	}
 	copy(out[:], data)
-	if selfSlot >= 0 && selfSlot < 11 {
-		out[selfSlot] = 1 // forced self-alliance [08 "Player records"] [GAP T9] C16
-	}
+	out[slot] = 1 // forced self-alliance [08 "Player records"] [GAP T9] C16
 	return out, true
 }
 
@@ -465,11 +480,19 @@ type PlayerSlot struct {
 	// Wire type integer, runtime low byte [08 "Player records"]:
 	Logo uint8
 	Side uint8
-	// Logo and Side close the account: the writer follows them only with the
-	// 11-byte Alliances box [08 "Player records"] [08 R-SAVE-02 §12]. The
+	// Logo and Side close the scalar list: the writer follows them only with
+	// the 11-byte Alliances box [08 "Player records"] [08 R-SAVE-02 §12]. The
 	// T25 marker that stood here reserved space for "network identity,
 	// connection/alive state, sharing options" — none of which the Player%i
 	// account carries in either direction (WU-19-158 census).
+
+	// Alliances is this slot's own eleven-byte alliance row, emitted as the
+	// account's last item and indexed by player slot [08 "Player records"]
+	// [05 R-SHARE-01 §1]. HasAlliances distinguishes an absent or mis-sized
+	// box — which retail does not load, leaving the runtime row as battle
+	// entry built it — from a loaded all-zero row.
+	Alliances    [11]byte
+	HasAlliances bool
 }
 
 // PlayerSlotFromEconomy projects the established scalar/statistics fields into
@@ -488,15 +511,26 @@ func PlayerSlotFromEconomy(index int, p economy.Player) PlayerSlot {
 		Kills:            p.Kills, Losses: p.Losses,
 		UpdateTime: int32(p.UpdateTime), WinLoseTime: int32(p.WinLoseTime), DisplayTimer: int32(p.DisplayTimer),
 		Controller: p.ControllerState, Logo: p.Logo, Side: p.Side,
+		// Row i of the bank is slot i's own alliance row, taken from the
+		// runtime table that owns it [08 "Player records"] [05 R-SHARE-01 §1].
+		Alliances: p.AllianceRow(index), HasAlliances: true,
 	}
 }
 
-// ApplyToEconomy restores the scalar/statistics fields that PlayerSlot owns.
-// Runtime bucket carry and alliance state remain with their existing account
-// readers, preserving the retail partial-load boundaries [08 "Player records"].
+// ApplyToEconomy restores the scalar/statistics fields that PlayerSlot owns,
+// then the account's own alliance row when the box loaded. Runtime bucket
+// carry stays with its existing account reader, preserving the retail
+// partial-load boundaries [08 "Player records"].
 func (p PlayerSlot) ApplyToEconomy(dst *economy.Player) {
 	if dst == nil {
 		return
+	}
+	// The row belongs to this account's slot and the self column is forced to
+	// 1 [08 "Player records"]. A missing or mis-sized box leaves the runtime
+	// row untouched, which is retail's "other bytes keep their initialized
+	// values".
+	if p.HasAlliances {
+		dst.SetAllianceRow(p.Index, p.Alliances)
 	}
 	dst.Stock[economy.Energy], dst.Stock[economy.Metal] = p.Energy, p.Metal
 	dst.TotalProduced[economy.Energy], dst.TotalProduced[economy.Metal] = p.TotalEnergyProduced, p.TotalMetalProduced
@@ -547,6 +581,11 @@ func WritePlayerSlot(b *Builder, p PlayerSlot) {
 	ac.SetInt("Controller", int32(p.Controller)) // u8 [08 "Player records"]
 	ac.SetInt("Logo", int32(p.Logo))             // low byte [08 "Player records"]
 	ac.SetInt("Side", int32(p.Side))             // low byte [08 "Player records"]
+	// The account closes with the 11-byte Alliances box, after Side and
+	// nothing after it [08 "Player records"].
+	if p.HasAlliances {
+		WriteAlliances(b, p.Index, p.Alliances)
+	}
 }
 
 // ReadPlayerSlot reads one Player%i account with the defaults from the table
@@ -592,6 +631,7 @@ func ReadPlayerSlot(bank *Bank, index int) (PlayerSlot, bool) {
 	p.Controller = uint8(getInt("Controller") & 0xFF) // u8 [08 "Player records"]
 	p.Logo = uint8(getInt("Logo") & 0xFF)             // low byte [08 "Player records"]
 	p.Side = uint8(getInt("Side") & 0xFF)
+	p.Alliances, p.HasAlliances = ReadAlliances(bank, index)
 	return p, true
 }
 

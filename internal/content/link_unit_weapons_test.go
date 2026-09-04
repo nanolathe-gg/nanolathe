@@ -30,9 +30,10 @@ func newLinkFixtureUnits(weapon1, weapon2, weapon3, explodeAs, selfDestructAs st
 
 // TestLinkUnitWeaponsMissResolvesToRecord0Sentinel locks the miss policy on a
 // family that carries record 0 [02 §5 R-CONTENT-02]: every missed link across
-// all five families resolves to the [noweapon] record — non-nil, ID 0 — while
-// a hit returns the named record case-insensitively and an empty name stays
-// unresolved.
+// all five families resolves to the [noweapon] record — non-nil, ID 0 —
+// while a hit returns the named record case-insensitively. The empty-name
+// case is the same miss policy and is locked separately in
+// TestLinkUnitWeaponsUnarmedResolvesAllFiveToRecord0Sentinel.
 func TestLinkUnitWeaponsMissResolvesToRecord0Sentinel(t *testing.T) {
 	noweapon := &WeaponDef{ID: 0}
 	noweapon.CanonicalKey = "noweapon"
@@ -59,6 +60,66 @@ func TestLinkUnitWeaponsMissResolvesToRecord0Sentinel(t *testing.T) {
 		}
 		if link.def.ID != 0 {
 			t.Fatalf("%s sentinel ID = %d, want 0 (consumers recognize the inactive sentinel by the zero slot)", link.family, link.def.ID)
+		}
+	}
+}
+
+// TestLinkUnitWeaponsUnarmedResolvesAllFiveToRecord0Sentinel locks WU-19-176:
+// an unarmed definition — every one of weapon1..3, explodeas, selfdestructas
+// authored empty — resolves all five links to the record-0 [noweapon]
+// sentinel when the family carries one, exactly like any other miss. The
+// loader's record scan cannot match an empty name against a record's
+// blanked-out catalog name [02 §5 R-CONTENT-02], so an empty name is a miss,
+// not a special case that stays unresolved [06 R-DMG-01 §5].
+func TestLinkUnitWeaponsUnarmedResolvesAllFiveToRecord0Sentinel(t *testing.T) {
+	noweapon := &WeaponDef{ID: 0}
+	noweapon.CanonicalKey = "noweapon"
+	weapons := map[string]*WeaponDef{"noweapon": noweapon}
+
+	units := newLinkFixtureUnits("", "", "", "", "")
+	LinkUnitWeapons(units, weapons)
+	u := units["linkme"]
+
+	for _, link := range []struct {
+		family string
+		def    *WeaponDef
+	}{
+		{"weapon1", u.Weapon1Def}, {"weapon2", u.Weapon2Def}, {"weapon3", u.Weapon3Def},
+		{"explodeas", u.ExplodeAsDef}, {"selfdestructas", u.SelfDestructAsDef},
+	} {
+		if link.def != noweapon {
+			t.Fatalf("unarmed %s = %v, want the record-0 [noweapon] sentinel", link.family, link.def)
+		}
+		if !IsWeaponInactive(link.def) {
+			t.Fatalf("unarmed %s must be inactive by the canonical predicate", link.family)
+		}
+	}
+
+	// The same holds after Clone: rewireWeaponLink must not strip these links
+	// back to nil for an unarmed unit.
+	c := &Catalog{Weapons: weapons, Units: units}
+	c.RebuildWeaponIndex()
+	clone := c.Clone()
+	cu, ok := clone.Unit("linkme")
+	if !ok {
+		t.Fatalf("clone lost unit linkme")
+	}
+	cloneSentinel := clone.Weapons["noweapon"]
+	for _, link := range []struct {
+		family string
+		def    *WeaponDef
+	}{
+		{"weapon1", cu.Weapon1Def}, {"weapon2", cu.Weapon2Def}, {"weapon3", cu.Weapon3Def},
+		{"explodeas", cu.ExplodeAsDef}, {"selfdestructas", cu.SelfDestructAsDef},
+	} {
+		if link.def == nil {
+			t.Fatalf("clone dropped unarmed %s sentinel link to nil", link.family)
+		}
+		if link.def != cloneSentinel {
+			t.Fatalf("clone unarmed %s link must hold the clone's own record-0 pointer", link.family)
+		}
+		if !IsWeaponInactive(link.def) {
+			t.Fatalf("clone unarmed %s link must be inactive by the canonical predicate", link.family)
 		}
 	}
 }

@@ -228,7 +228,7 @@ func TestRetailAlliancesExactSizeAndSelfByte(t *testing.T) {
 	b := NewBuilder()
 	data := bytes.Repeat([]byte{0}, 11)
 	data[4] = 1
-	b.Add(PlayersAccount).AppendBox(AlliancesBoxName, 0, data)
+	b.Add("Player2").AppendBox(AlliancesBoxName, 0, data)
 	bank, err := OpenBytes(b.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes: %v", err)
@@ -238,7 +238,7 @@ func TestRetailAlliancesExactSizeAndSelfByte(t *testing.T) {
 		t.Fatalf("alliances = %v, ok=%v", got, ok)
 	}
 	wrong := NewBuilder()
-	wrong.Add(PlayersAccount).AppendBox(AlliancesBoxName, 0, bytes.Repeat([]byte{1}, 12))
+	wrong.Add("Player0").AppendBox(AlliancesBoxName, 0, bytes.Repeat([]byte{1}, 12))
 	wrongBank, err := OpenBytes(wrong.Bytes())
 	if err != nil {
 		t.Fatalf("OpenBytes wrong length: %v", err)

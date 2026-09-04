@@ -19,11 +19,12 @@ type RetailProjection struct {
 	Summary Summary
 	Camera  Camera
 
-	HumanPlayer  int32
-	Scheduler    [28]byte
-	HasAlliances bool
-	Alliances    [11]byte
-	Players      []PlayerSlot
+	HumanPlayer int32
+	Scheduler   [28]byte
+	// Each PlayerSlot carries its own alliance row; there is no projection-
+	// level row, because the box is emitted inside `Player%i` [08 "Player
+	// records"].
+	Players []PlayerSlot
 
 	Units    UnitImage
 	Features FeatureImage
@@ -48,8 +49,6 @@ func RetailProjectionFromBattleImage(image *BattleImage) (RetailProjection, erro
 		Camera:         image.Camera,
 		HumanPlayer:    image.HumanPlayer,
 		Scheduler:      image.Scheduler,
-		HasAlliances:   image.HasAlliances,
-		Alliances:      image.Alliances,
 		Players:        clonePlayers(image.Players),
 		Units:          cloneUnitImage(image.Units),
 		Features:       cloneFeatureImage(image.Features),
@@ -65,7 +64,6 @@ func RetailProjectionFromBattleImage(image *BattleImage) (RetailProjection, erro
 func (p RetailProjection) Clone() RetailProjection {
 	q, err := RetailProjectionFromBattleImage(&BattleImage{
 		Summary: p.Summary, Camera: p.Camera, Scheduler: p.Scheduler,
-		Alliances: p.Alliances, HasAlliances: p.HasAlliances,
 		HumanPlayer: p.HumanPlayer, Players: p.Players, Units: p.Units,
 		Features: p.Features, Metal: p.Metal, PlayerFeatures: p.PlayerFeatures,
 		Mapping: p.Mapping, Meteor: p.Meteor, Triggers: p.Triggers,
@@ -104,9 +102,9 @@ func (p RetailProjection) Build() (*Builder, error) {
 	players := builderAccount(b, PlayersAccount)
 	players.SetInt("Human Player", p.HumanPlayer)
 	players.AppendBox(GameTimeBoxName, 0, p.Scheduler[:])
-	if p.HasAlliances {
-		players.AppendBox(AlliancesBoxName, 0, p.Alliances[:])
-	}
+	// The `Players` account carries `Human Player` and the 28-byte `GameTime`
+	// box and nothing else; each slot's alliance row is written inside its own
+	// `Player%i` account by WritePlayerSlot [08 "Player records"].
 	for _, slot := range sortedPlayers(p.Players) {
 		WritePlayerSlot(b, slot)
 	}

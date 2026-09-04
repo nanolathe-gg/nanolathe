@@ -77,6 +77,7 @@ var coherenceOffsets = [16][2]int{{-1, -2}, {-1, -1}, {-1, 0}, {-1, 1}, {-1, 2},
 
 func main() {
 	root := flag.String("root", defaultAssetRoot(), "asset root")
+	gafDir := flag.String("dir", "anims", "VFS directory the GAF files live in (anims for features, textures for model textures)")
 	gafList := flag.String("gaf", "trees", "comma-separated GAF names; the first holds the query entries, all supply examples")
 	seq := flag.String("seq", "leaf1", "entry name, comma-separated names, or 'all' for every entry of the first GAF")
 	frameIndex := flag.Int("frame", 0, "frame of the entry, -1 for every frame (later frames are seeded from the previous frame's matches)")
@@ -92,6 +93,7 @@ func main() {
 	closeness := flag.Int("closeness", 3*24*24, "colour closure: an example block is admitted only when each of its colours is within this squared RGB distance of a colour the query sprite uses, so rare highlights from other entries cannot leak in; -1 disables")
 	mismatch := flag.Int("mismatch", 3*64*64, "coherence charge for an opacity mismatch between the candidate's authored surround and the synthesized surround, in squared-RGB units")
 	relax := flag.Bool("relax", true, "also accept blocks that reduce to a palette entry one blend step from the parent when they average closer to the parent's colour, as the terrain upscaler does")
+	edgeClamp := flag.Bool("clamp", false, "treat pixels beyond a sprite's edge as copies of the edge pixel instead of transparent (opaque textures)")
 	writeEPX := flag.Bool("epx", false, "also write a Scale2x result for comparison")
 	flag.Parse()
 	started := time.Now()
@@ -121,7 +123,7 @@ func main() {
 	var queries []*sprite
 	var db []*sprite
 	for gi, name := range strings.Split(*gafList, ",") {
-		g, err := formats.LoadGAFFile(fs, "anims/"+strings.ToLower(strings.TrimSpace(name))+".gaf")
+		g, err := formats.LoadGAFFile(fs, *gafDir+"/"+strings.ToLower(strings.TrimSpace(name))+".gaf")
 		if err != nil {
 			fatalf("%s: %v", name, err)
 		}
@@ -153,6 +155,7 @@ func main() {
 	if len(queries) == 0 {
 		fatalf("no entry matches -seq %q in the first GAF", *seq)
 	}
+	clampEdges = *edgeClamp
 	if err := os.MkdirAll(*out, 0o755); err != nil {
 		fatalf("%v", err)
 	}
@@ -176,6 +179,9 @@ func main() {
 			for x := range p.w {
 				examples[p.begin+y*p.w+x].feat = windowFeature(func(dy, dx int) int16 {
 					yy, xx := y+dy, x+dx
+					if clampEdges {
+						yy, xx = min(max(yy, 0), p.h-1), min(max(xx, 0), p.w-1)
+					}
 					if yy < 0 || yy >= p.h || xx < 0 || xx >= p.w {
 						return keyClear
 					}
@@ -365,6 +371,9 @@ func upscale(query *sprite, seed []int32, db []*sprite, planes []plane, examples
 		for x := range qw {
 			qfeat[y*qw+x] = windowFeature(func(dy, dx int) int16 {
 				yy, xx := y+dy, x+dx
+				if clampEdges {
+					yy, xx = min(max(yy, 0), qh-1), min(max(xx, 0), qw-1)
+				}
 				if yy < 0 || yy >= qh || xx < 0 || xx >= qw {
 					return keyClear
 				}
@@ -730,6 +739,10 @@ func epx(s *sprite) *sprite {
 	}
 	return r
 }
+
+// clampEdges makes out-of-bounds neighbourhood lookups repeat the edge
+// pixel: model textures are opaque and have no silhouette to respect.
+var clampEdges bool
 
 func windowFeature(key func(dy, dx int) int16, contributions []float32) [dims]int16 {
 	var sums [dims]float32

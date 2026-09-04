@@ -146,18 +146,24 @@ func TestGetBuiltDeadlineRaisesOnlyOrdinaryBit(t *testing.T) {
 	}
 }
 
-// TestFactoryCarriedGetBuiltWaitsForRelease locks [04 R-FAC-02 §4]'s 2026-09-02
-// correction: `GetBuilt` is never visited while the product is carried, and its
-// first visit is the release pass.
+// TestFactoryCarriedGetBuiltRunsAtTheHead locks the product queue's traced
+// order and the two records' division of labour: `GetBuilt` is the HEAD from
+// the allocation visit and runs on its own arms while the product is cargo,
+// and `BeCarried` sits behind it and is never reached until `GetBuilt` is
+// unlinked [04 R-ORD-01 §13][04 R-ORD-01 §10].
 //
-// It used to be TestFactoryCarriedGetBuiltQueueCadence and asserted the
-// retracted latency composition — GetBuilt's phase 0 → 1 at tick 301, phase 1 →
-// 2 at 331, and a phase-2 decay visit at 351 — which followed from §4's
-// withdrawn claim that a hold does not stop the walk. The primary pump reloads
-// the head after every result code [04 R-ORD-01 §10]; `BeCarried` phase 1 arms
-// a ten-tick deadline and returns 2 on every visit, so the pass ends at
-// `BeCarried` and the record behind it is never reached.
-func TestFactoryCarriedGetBuiltWaitsForRelease(t *testing.T) {
+// The order is: the attach commit head-inserts `BeCarried` ([04 R-FAC-02 §1]
+// step 5), then the queued `GetBuilt` producer insertion takes the head-insert
+// branch its static bit 5 selects, leaving `[GetBuilt, BeCarried]`.
+//
+// This test has been rewritten twice before, both times on the opposite order.
+// It was TestFactoryCarriedGetBuiltQueueCadence (phase 0 → 1 at 301, 1 → 2 at
+// 331, a decay visit at 351, from §4's withdrawn "a hold does not stop the
+// walk"), then TestFactoryCarriedGetBuiltWaitsForRelease ("GetBuilt is never
+// visited while the product is carried"). Both assumed `BeCarried` was the
+// head; the 2026-09-04 trace of the producer insertion's two branches
+// disproves that, and §1's, §4's and §11's statements of it are corrected.
+func TestFactoryCarriedGetBuiltRunsAtTheHead(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := newProductDef("armflash", 1, 1, 100, 100)
 	def.BMCode = true
@@ -183,44 +189,53 @@ func TestFactoryCarriedGetBuiltWaitsForRelease(t *testing.T) {
 	for tick := uint32(1); tick <= 351; tick++ {
 		q.Pump(product, tick)
 	}
-	gb := q.Primary()[1]
-	// Untouched: never dispatched once in 351 ticks of being carried. The
-	// pushed record's own phase 0, no-deadline, no-gate state is still there.
-	if State(gb.Phase) != State0 || gb.Deadline != -1 || gb.DynamicGate != 0 || gb.Satisfied != 0 || product.Remaining != 0.5 {
-		t.Fatalf("GetBuilt while carried: deadline=%d phase=%d gate=%#x satisfied=%#x remaining=%v, want the untouched pushed record -1/0/0/0/0.5 [04 R-FAC-02 §4]",
-			gb.Deadline, gb.Phase, gb.DynamicGate, gb.Satisfied, product.Remaining)
+	if head := q.Primary()[0]; head.ID != orders.Lookup("GetBuilt") {
+		t.Fatalf("product queue %v, want GetBuilt at the head [04 R-ORD-01 §13]", q.Primary())
 	}
-	// BeCarried is what the pass stops at, re-armed ten ticks past its last
-	// expiry — `t0 + 1 + 10k`, which for a record pushed at tick 0 is 11, 21,
-	// … 351, so the next deadline is 361 [04 R-FAC-02 §4][04 R-ORD-01 §2].
-	if be := q.Primary()[0]; be.Deadline != 361 || be.Phase != 1 || be.DynamicGate != 1 {
-		t.Fatalf("BeCarried at tick 351 deadline=%d phase=%d gate=%#x, want 361/1/0x1", be.Deadline, be.Phase, be.DynamicGate)
+	be := q.Primary()[1]
+	// Untouched: never dispatched once in 351 ticks. The pass stops at the
+	// gated GetBuilt head after every code [04 R-ORD-01 §10], so the record
+	// behind it keeps the pushed phase 0, no-deadline, no-gate state.
+	if be.Phase != 0 || be.Deadline != -1 || be.DynamicGate != 0 || be.Satisfied != 0 {
+		t.Fatalf("BeCarried while carried: deadline=%d phase=%d gate=%#x satisfied=%#x, want the untouched pushed record -1/0/0/0 [04 R-ORD-01 §10]",
+			be.Deadline, be.Phase, be.DynamicGate, be.Satisfied)
+	}
+	// GetBuilt is the record that ran, on its own arms: 300 to phase 1, 30 to
+	// phase 2, then a decay visit every 11 ticks from 331 with no builder
+	// raising the wake bit [04 R-ORD-01 §11]. At 351 the last visit was 342 and
+	// the next is armed for 353.
+	gb := q.Primary()[0]
+	if State(gb.Phase) != State2 || gb.Deadline != 353 || gb.DynamicGate != 0x8001 {
+		t.Fatalf("GetBuilt at tick 351 phase=%d deadline=%d gate=%#x, want 2/353/0x8001 [04 R-ORD-01 §11]", gb.Phase, gb.Deadline, gb.DynamicGate)
+	}
+	if !(product.Remaining > 0.5) {
+		t.Fatalf("remaining=%v, want the unworked nanoframe to have decayed above 0.5 [04 R-ORD-01 §11]", product.Remaining)
 	}
 	if sim.Draws() != drawsBefore || sim.State != stateBefore {
 		t.Fatalf("the carried wait consumed RNG: state %d->%d draws %d->%d", stateBefore, sim.State, drawsBefore, sim.Draws())
 	}
 
-	// Release. The first GetBuilt visit in the product's whole life is the pass
-	// in which BeCarried sees a null carrier, completes (code 5) and is
-	// unlinked; the head reload [04 R-ORD-01 §10] then dispatches GetBuilt, and
-	// with the remaining fraction already 0.0 that visit is the completion arm.
+	// Release. The completion pass is one pump: with the remaining fraction at
+	// 0.0 GetBuilt's next due visit takes the completion arm and returns 5, the
+	// head reload [04 R-ORD-01 §10] then dispatches BeCarried, which sees a
+	// null carrier and completes too. Both records leave in the same pass.
 	product.Remaining = 0
 	if _, ok := movement.DetachCargo(w, product.Handle); !ok {
 		t.Fatal("completion detach failed")
 	}
-	for tick := uint32(352); tick <= 360; tick++ {
+	for tick := uint32(352); tick <= 352; tick++ {
 		q.Pump(product, tick)
 	}
 	if len(q.Primary()) != 2 {
-		t.Fatalf("queue before BeCarried's expiry=%v, want both records still linked", q.Primary())
+		t.Fatalf("queue before GetBuilt's expiry=%v, want both records still linked", q.Primary())
 	}
-	q.Pump(product, 361)
+	q.Pump(product, 353)
 	for _, n := range q.Primary() {
 		if n.ID == orders.Lookup("BeCarried") {
 			t.Fatal("BeCarried survived the detach: a null carrier completes it [04 R-ORD-01 §2]")
 		}
 		if n.ID == orders.Lookup("GetBuilt") {
-			t.Fatal("GetBuilt survived the release pass: its first visit is the completion arm [04 R-FAC-02 §4]")
+			t.Fatal("GetBuilt survived the release pass: a zero remaining fraction takes the completion arm [04 R-FAC-02 §4]")
 		}
 	}
 }

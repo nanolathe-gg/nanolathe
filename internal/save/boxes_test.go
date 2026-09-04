@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/economy"
 )
 
 // TestSummaryRoundTrip locks the Summary writer table order and field defaults
@@ -158,24 +159,31 @@ func TestGameTimeBoxRoundTrip(t *testing.T) {
 	}
 }
 
-// TestAlliancesBoxRoundTrip locks C16: exactly 11 bytes with forced self-alliance 1 [08 "Player records"] [GAP T9].
+// TestAlliancesBoxRoundTrip locks C16: the box is per `Player%i`, exactly 11
+// bytes, with the account's own self-alliance byte forced to 1, and row i
+// belongs to slot i [08 "Player records"] [GAP T9].
 func TestAlliancesBoxRoundTrip(t *testing.T) {
 	b := NewBuilder()
-	var alliances [11]byte
-	for i := range alliances {
-		alliances[i] = 0
-	}
-	alliances[3] = 1
-	alliances[7] = 1
-	// self slot 2 should be forced to 1 even if we write 0 there.
-	alliances[2] = 0
-	WriteAlliances(b, 2, alliances)
+	var two [11]byte
+	two[3] = 1
+	two[7] = 1
+	two[2] = 0 // self slot 2 is forced to 1 even though we write 0 here
+	WriteAlliances(b, 2, two)
+	// A second slot's row must land in its own account and not disturb the
+	// first: row i belongs to slot i [08 "Player records"].
+	var five [11]byte
+	five[9] = 1
+	WriteAlliances(b, 5, five)
 	payload := b.Bytes()
 	bank, err := OpenBytes(payload)
 	if err != nil {
 		t.Fatalf("OpenBytes alliances: %v", err)
 	}
-	// Correct size should succeed and force self.
+	if ac, ok := bank.Account(PlayersAccount); ok {
+		if _, present := ac.BoxData(AlliancesBoxName, 0); present {
+			t.Fatal("Alliances must not be an account-level box under Players")
+		}
+	}
 	got, ok := ReadAlliances(bank, 2)
 	if !ok {
 		t.Fatalf("ReadAlliances missing")
@@ -183,16 +191,26 @@ func TestAlliancesBoxRoundTrip(t *testing.T) {
 	if got[2] != 1 {
 		t.Fatalf("self-alliance not forced: got %d want 1", got[2])
 	}
-	if got[3] != 1 || got[7] != 1 {
-		t.Fatalf("alliances other bytes lost %v", got)
+	if got[3] != 1 || got[7] != 1 || got[9] != 0 {
+		t.Fatalf("slot 2 row wrong %v", got)
 	}
 	if len(got) != 11 {
 		t.Fatalf("alliances len %d want 11", len(got))
 	}
-	// Wrong size should be rejected (not 11 bytes) [08 "Player records"] C16.
+	got5, ok := ReadAlliances(bank, 5)
+	if !ok {
+		t.Fatalf("ReadAlliances slot 5 missing")
+	}
+	if got5[5] != 1 || got5[9] != 1 || got5[3] != 0 || got5[7] != 0 {
+		t.Fatalf("slot 5 row wrong %v", got5)
+	}
+	// A slot with no account of its own has no row.
+	if _, ok := ReadAlliances(bank, 7); ok {
+		t.Fatal("slot 7 has no Player account and must report no row")
+	}
+	// Wrong size does not load (not 11 bytes) [08 "Player records"] C16.
 	b2 := NewBuilder()
-	ac2 := b2.Add(PlayersAccount)
-	ac2.AppendBox(AlliancesBoxName, 0, []byte{1, 2, 3}) // 3 bytes, not 11
+	b2.Add("Player0").AppendBox(AlliancesBoxName, 0, []byte{1, 2, 3}) // 3 bytes, not 11
 	payload2 := b2.Bytes()
 	bank2, err := OpenBytes(payload2)
 	if err != nil {
@@ -200,14 +218,6 @@ func TestAlliancesBoxRoundTrip(t *testing.T) {
 	}
 	if _, ok := ReadAlliances(bank2, 0); ok {
 		t.Fatalf("Alliances with wrong size should be rejected")
-	}
-	// Verify that reading with different selfSlot still forces that slot.
-	got3, ok := ReadAlliances(bank, 5)
-	if !ok {
-		t.Fatalf("ReadAlliances second read missing")
-	}
-	if got3[5] != 1 {
-		t.Fatalf("self-alliance 5 not forced %v", got3)
 	}
 }
 
@@ -318,5 +328,97 @@ func TestNormalizeSAV(t *testing.T) {
 	}
 	if got := NormalizeSAV("nosuffix"); got != "nosuffix.SAV" {
 		t.Fatalf("nosuffix = %q want nosuffix.SAV", got)
+	}
+}
+
+// TestAlliancesArePerPlayerAccount locks the WU-19-158 census: each active
+// `Player%i` account carries its own eleven-byte row as its last item, row i
+// is slot i's row, and the `Players` account carries no row at all
+// [08 "Player records"] [05 R-SHARE-01 §1].
+func TestAlliancesArePerPlayerAccount(t *testing.T) {
+	var zero, one economy.Player
+	// Slots 0 and 1 are allies; slot 2 is hostile to both.
+	zero.Allies[0], zero.Allies[1] = true, true
+	one.Allies[0], one.Allies[1] = true, true
+	var two economy.Player
+	two.Allies[2] = true
+
+	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
+	b := NewBuilder()
+	WritePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
+	for i, p := range []economy.Player{zero, one, two} {
+		WritePlayerSlot(b, PlayerSlotFromEconomy(i, p))
+	}
+	bank, err := OpenBytes(b.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	if ac, ok := bank.Account(PlayersAccount); ok {
+		if _, present := ac.BoxData(AlliancesBoxName, 0); present {
+			t.Fatal("the Players account must carry no Alliances box")
+		}
+	}
+	for i := 0; i < 3; i++ {
+		ac, ok := bank.Account("Player" + string(rune('0'+i)))
+		if !ok {
+			t.Fatalf("Player%d account missing", i)
+		}
+		data, ok := ac.BoxData(AlliancesBoxName, 0)
+		if !ok || len(data) != 11 {
+			t.Fatalf("Player%d Alliances box ok=%v len=%d, want a present 11-byte box", i, ok, len(data))
+		}
+		if data[i] != 1 {
+			t.Fatalf("Player%d self column = %d, want the forced 1", i, data[i])
+		}
+		if data[10] != 0 {
+			t.Fatalf("Player%d column 10 = %d; the neutral row is never allied", i, data[10])
+		}
+	}
+	// Restoring reproduces each row on its own slot, hostility included.
+	var restored [3]economy.Player
+	for i := 0; i < 3; i++ {
+		slot, ok := ReadPlayerSlot(bank, i)
+		if !ok || !slot.HasAlliances {
+			t.Fatalf("Player%d slot ok=%v hasAlliances=%v", i, ok, slot.HasAlliances)
+		}
+		slot.ApplyToEconomy(&restored[i])
+	}
+	if !restored[0].Allies[1] || !restored[1].Allies[0] {
+		t.Fatalf("ally pair lost: %v %v", restored[0].Allies, restored[1].Allies)
+	}
+	if restored[0].Allies[2] || restored[2].Allies[0] || restored[2].Allies[1] {
+		t.Fatalf("hostility lost: %v %v", restored[0].Allies, restored[2].Allies)
+	}
+	for i := 0; i < 3; i++ {
+		if !restored[i].Allies[i] {
+			t.Fatalf("slot %d self-alliance not forced on restore", i)
+		}
+	}
+}
+
+// TestAllianceBoxAbsenceLeavesRuntimeRow locks the load rule: a box that is
+// absent or not exactly 11 bytes does not load, and the runtime row keeps the
+// values battle entry gave it [08 "Player records"].
+func TestAllianceBoxAbsenceLeavesRuntimeRow(t *testing.T) {
+	clk := &clock.State{Requested: 10, Active: 10, GlobalTick: 100}
+	b := NewBuilder()
+	WritePlayersMeta(b, PlayersMeta{HumanPlayer: 0}, clk)
+	WritePlayerSlot(b, PlayerSlot{Index: 0, Controller: 1}) // HasAlliances false
+	bank, err := OpenBytes(b.Bytes())
+	if err != nil {
+		t.Fatalf("OpenBytes: %v", err)
+	}
+	slot, ok := ReadPlayerSlot(bank, 0)
+	if !ok {
+		t.Fatal("Player0 missing")
+	}
+	if slot.HasAlliances {
+		t.Fatal("no box was written, so none may be reported")
+	}
+	live := economy.Player{}
+	live.Allies[4] = true
+	slot.ApplyToEconomy(&live)
+	if !live.Allies[4] {
+		t.Fatalf("an absent box must leave the runtime row alone: %v", live.Allies)
 	}
 }

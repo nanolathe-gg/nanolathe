@@ -15,13 +15,15 @@ import (
 // session loader owns catalog resolution, map validation, fix-up, and commit
 // [08 "Load process"] [08 "Unit and script records"].
 type BattleImage struct {
-	Summary      Summary
-	Camera       Camera
-	Scheduler    [28]byte
-	Alliances    [11]byte
-	HasAlliances bool
-	HumanPlayer  int32
-	Players      []PlayerSlot
+	Summary     Summary
+	Camera      Camera
+	Scheduler   [28]byte
+	HumanPlayer int32
+	// Players carries each active slot's scalars and, as the last item of
+	// that slot's own account, its eleven-byte alliance row. The box is per
+	// `Player%i`; the `Players` account holds only `Human Player` and the
+	// 28-byte `GameTime` box [08 "Player records"].
+	Players []PlayerSlot
 
 	Units          UnitImage
 	Features       FeatureImage
@@ -197,13 +199,6 @@ func decodePlayers(bank *Bank, image *BattleImage) error {
 		return battleImageError("short Players GameTime box", "at least 28 bytes")
 	}
 	copy(image.Scheduler[:], gameTime[:28])
-	if alliances, present := ac.BoxData(AlliancesBoxName, 0); present {
-		if len(alliances) != 11 {
-			return battleImageError("invalid Players Alliances box", "exactly 11 bytes")
-		}
-		copy(image.Alliances[:], alliances)
-		image.HasAlliances = true
-	}
 	if meta, present := ReadPlayersMeta(bank); present {
 		image.HumanPlayer = meta.HumanPlayer
 	}
@@ -211,9 +206,21 @@ func decodePlayers(bank *Bank, image *BattleImage) error {
 	// Player%i accounts are left for battle-entry defaults; this decoder does
 	// not infer active ownership from Summary.Players [08 "Player records"].
 	for i := 0; i < 10; i++ {
-		if player, present := ReadPlayerSlot(bank, i); present {
-			image.Players = append(image.Players, player)
+		player, present := ReadPlayerSlot(bank, i)
+		if !present {
+			continue
 		}
+		// Each account's own Alliances box is the last item it carries, and
+		// it must be exactly 11 bytes [08 "Player records"]. Retail simply
+		// declines to load a box of any other size; this decoder stages a
+		// whole bank before touching live state, so a present-but-mis-sized
+		// box is a malformed image rather than a silent skip.
+		if pac, ok := bank.Account(playerAccountName(i)); ok {
+			if alliances, ok := pac.BoxData(AlliancesBoxName, 0); ok && len(alliances) != 11 {
+				return battleImageError(fmt.Sprintf("invalid Player%d Alliances box", i), "exactly 11 bytes")
+			}
+		}
+		image.Players = append(image.Players, player)
 	}
 	return nil
 }

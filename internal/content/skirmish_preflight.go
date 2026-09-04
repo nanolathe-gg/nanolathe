@@ -485,7 +485,7 @@ func (p *skirmishPreflight) script(kind string, u *UnitDef, required bool) {
 			p.diag(SkirmishDiagnostic{Code: "missing-callback", Fatal: required, Kind: kind + ".cob", Logical: path, Entry: entry, Message: fmt.Sprintf("required COB entry point is unavailable: logical path %s, expected %s", path, entry)})
 		}
 	}
-	if u.Weapon1Def != nil {
+	if !IsWeaponInactive(u.Weapon1Def) {
 		for _, entry := range []string{"QueryPrimary", "AimFromPrimary", "AimPrimary", "FirePrimary"} {
 			if !hasScript(program, entry) {
 				p.diag(SkirmishDiagnostic{Code: "missing-callback", Fatal: required, Kind: kind + ".cob", Logical: path, Entry: entry, Message: fmt.Sprintf("required COB entry point is unavailable: logical path %s, expected %s", path, entry)})
