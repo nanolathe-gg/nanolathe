@@ -139,8 +139,14 @@ func TestP0I07_MovementRefreshThreshold(t *testing.T) {
 	if s.byteGrids[0][newIdx] == 0 {
 		t.Fatalf("new footprint should be present after far cell change")
 	}
-	// Document TODO if threshold not exact: our implementation follows C6 exactly (cell/2 and height>5 for ray, quantized radius for sprite).
-	// TODO(question): exact retail threshold for sprite vs ray and height vs radius is C6 as implemented; publish on every movement tick would also be correct but less efficient.
+	// The throttle is not an efficiency choice and neither threshold is open:
+	// [03 §3.2 "The refresh throttle and the publication gates"][R-VIS-01 §2]
+	// gives both branches exactly — the ray branch refreshes on a stored-tile
+	// change or an emitter-byte difference STRICTLY greater than 5, the sprite
+	// branch on a stored-tile change or a different quantized shape index.
+	// Publishing on every movement tick would NOT be equivalent: retail's
+	// stored-tile compare is what makes a sub-tile move publish nothing, and
+	// the two branches shear the Z tile differently.
 }
 
 // TestP0I07_SaveLoadRebuildOrder verifies RebuildAll before publish [03 §3.3] C10.

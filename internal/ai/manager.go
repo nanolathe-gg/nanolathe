@@ -40,7 +40,16 @@ const (
 	waveMax        = 6
 )
 
-// TODO(T25): AI transport geometry (attachment, naval, air) remains blocked [PLAN_11 Explicit unknowns][P0-02]. No new T25 beyond this.
+// TODO(T25): AI transport geometry, and any naval or air expansion policy
+// beyond the generic move orders, is unknown — still stated as such by doc 08
+// itself ("AI transport geometry and any distinct naval or air expansion policy
+// beyond the generic move orders are not in this lane and remain unknown",
+// [08 "What remains not established"]), which is why this is an accepted
+// blocked item and not a gap to fill here. The planner below issues only the
+// generic orders it has contracts for; nothing invents a loading, beaching or
+// carrier-assignment rule. Decider: a trace of the computer player's task
+// bodies for a transport-class producer, in the AI lane that owns doc 08.
+// No new T25 beyond this.
 
 // Manager is the per-player AI manager [PLAN_11 Public API] [08 "Established AI-facing data and rooted planner"].
 // It is session-owned and dispatched inside kernel phase 5's per-player coordinator

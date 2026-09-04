@@ -699,18 +699,26 @@ func TestNegativeTimerIsAWrappedLargePositiveOne(t *testing.T) {
 	}
 }
 
-// TODO(T25): the width of the wrap is wrong in this build, and correcting it
-// needs a file this unit does not own. [06 §6.6] makes `weapontimer` a **16-bit
-// unsigned** store, so an authored negative value reaches the record as at most
-// 65,535 ticks; the weapon-definition compiler keeps the float-to-integer
-// conversion in a 32-bit field with no 16-bit truncation
-// (`internal/content/compile_weapon.go`, the `weapontimer` row of the durations
-// block — `[01 "Definition parsers"]` lists this whole row of keys as 16-bit),
-// so `now + uint32(w.WeaponTimer)` here wraps modulo 2^32 instead: a deadline
-// roughly 65,000 times further out. Unreachable on stock content, which authors
-// no negative or out-of-range duration; reachable by a mod. Settling it is a
-// one-line truncation in the compiler plus whatever the same row owes the other
-// eight duration keys, which belongs to whoever owns internal/content.
+// Retired (WU-19-163). This TODO(T25) said the width of the wrap was wrong in
+// this build: `weapontimer` reaches the record through a 16-bit unsigned
+// store [06 §7.3], so an authored negative should reach the record as at most
+// 65,535 ticks, but the weapon-definition compiler kept the float-to-integer
+// conversion in a 32-bit field with no 16-bit truncation, so `now +
+// uint32(w.WeaponTimer)` here would have wrapped modulo 2^32 instead — a
+// deadline roughly 65,000 times further out.
+//
+// internal/content/compile_weapon.go now wraps `weapontimer` (and turnrate,
+// reloadtime, randomdecay, flighttime, holdtime — the six of the nine
+// [01 "Definition parsers"] duration keys with an established width AND
+// signedness) to its 16-bit store at compile time, so `WeaponDef.WeaponTimer`
+// is always already in 0..65,535 by the time it reaches this package; the
+// `uint32(timer)` above is a correct zero-extension of that already-bounded
+// value, not a second truncation this file would need to own. The
+// hand-constructed `WeaponTimer: -5` above stays a useful direct test of
+// `nowPlusTimer`'s own unsigned-wrap arithmetic even though the compiler
+// would never emit that raw value now. burstrate, duration and smokedelay
+// keep an established 16-bit width but no established signedness and are
+// left untruncated with a TODO(question) at the compile site.
 
 func nowPlusTimer(now uint32, timer int32) uint32 { return now + uint32(timer) }
 

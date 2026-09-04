@@ -694,7 +694,13 @@ func clamp100(v int32) int32 {
 // -0.01, -0.002, 30, -0.0025, 5, 100, and -0.02.
 // Every float→int via __ftol trunc toward zero with narrow to float32 at each CALL (FSTP) [P0-01 §4].
 // Clamps to [-100,100] before i8 store. Zero RNG inside routine [P0-01 §5].
-// TODO(T23): x87 control-word beyond default narrow points is TODO(T23) only if word differs [P0-01 §8].
+// TODO(T23): platform residual, not a gap in this routine. The narrowing to
+// float32 at every helper invocation boundary is established and reproduced
+// above; what is not established is the x87 control word in force between those
+// points, and doc 08 records it as exactly this class — "an unknown of platform
+// residual class; the default rounding mode is assumed"
+// [08 "What remains not established"][P0-01 §8]. It can only change a result if
+// the retail word differs from the default; nothing here depends on the answer.
 func (s *Strategic) recomputeClassVectors() {
 	if s.ClassVectors == nil {
 		s.ClassVectors = make(map[string]ClassVector)
@@ -759,9 +765,9 @@ func (s *Strategic) recomputeClassVectors() {
 			costMetal = float32(def.BuildCostMetal)
 			costEnergy = float32(def.BuildCostEnergy)
 		}
-		t0f := float32(acc0) + costMetal*float32(-0.01) // FC9BC
-		t0 := ftol(t0f)                                 // narrow to float32 at CALL then ftol [P0-01 §4] TODO(T23) control-word
-		t1f := float32(t0) + costEnergy*float32(-0.002) // FC9C0
+		t0f := float32(acc0) + costMetal*float32(-0.01)
+		t0 := ftol(t0f) // narrow to float32 at CALL then ftol [P0-01 §4] TODO(T23) control-word
+		t1f := float32(t0) + costEnergy*float32(-0.002)
 		t1 := ftol(t1f)
 
 		// weapon budget
@@ -871,8 +877,8 @@ func (s *Strategic) recomputeClassVectors() {
 		cv.C0 = int8(val)
 
 		// Energy-mix coefficient [P0-01 §3].
-		fE := costEnergy * float32(-0.0025) // FC9C8
-		g := fval * float32(5.0)            // FC9CC
+		fE := costEnergy * float32(-0.0025)
+		g := fval * float32(5.0)
 		diff := fE - g
 		if diff > 100 {
 			diff = 100
@@ -893,7 +899,7 @@ func (s *Strategic) recomputeClassVectors() {
 		if def != nil && def.MakesMetal != 0 { // [P0-01 §2.2; R-P0-05]
 			metalAdj = -25 // [P0-01 §3]
 		}
-		adjf := costMetal*float32(-0.02) + float32(metalAdj) // FC9D4
+		adjf := costMetal*float32(-0.02) + float32(metalAdj)
 		sumf := float32(baseVal) + adjf
 		if sumf > 100 {
 			sumf = 100

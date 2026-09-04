@@ -87,9 +87,15 @@ type Terrain struct {
 	FeatureDefs []*content.FeatureDef
 
 	// staticObstacleRevision is the monotonic Nanolathe revision for blocking
-	// feature mutations. No established completed-structure writer is wired in
-	// this unit; that boundary remains TODO(question). It is runtime metadata
-	// only; retail route save bytes do not contain it [04 §7.3].
+	// feature mutations, and only those. No completed-structure writer bumps
+	// it, and none is missing: a building blocks through the occupancy grid's
+	// occupant word, where the mover-null arm hard-blocks it unconditionally at
+	// every watermark and from the first classification that finds it
+	// [04 R-PATH-01 §14], and the class layer restamps the occupant rectangle
+	// at commit time — neither route reads this counter. This comment used to
+	// call that boundary an open question, which read as an unwired writer.
+	// It is runtime metadata only; retail route save bytes do not contain it
+	// [04 §7.3][04 §8.2][docs/SPEC_CONFLICTS SC22].
 	staticObstacleRevision uint64
 
 	// PlayableWpix/Hpix are raw Wpix/Hpix; PlayRight/Bottom are Wpix-32/Hpix-128 [P1-15] used by camera clamp.
@@ -102,9 +108,10 @@ type Terrain struct {
 }
 
 // StaticObstacleRevision returns the shared movement-facing revision for
-// blocking feature changes that persist in routing. Mobile occupancy and the
-// unresolved completed-structure writer are separate/unknown channels and do
-// not change this value [04 §8.2][docs/SPEC_CONFLICTS SC22].
+// blocking feature changes that persist in routing. Mobile occupancy and
+// completed structures are a separate channel — the occupancy grid's occupant
+// word, read live by the classifier [04 R-PATH-01 §14] — and do not change
+// this value [04 §8.2][docs/SPEC_CONFLICTS SC22].
 func (t *Terrain) StaticObstacleRevision() uint64 {
 	if t == nil {
 		return 0

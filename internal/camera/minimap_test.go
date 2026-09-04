@@ -37,9 +37,12 @@ func TestMinimapLetterbox(t *testing.T) { // [07 §10][03 §3.6]
 	if m.W != 126 || m.H != 126 || m.PadX != 0 || m.PadY != 0 {
 		t.Fatalf("square want 126x126 0,0 got %dx%d %d,%d", m.W, m.H, m.PadX, m.PadY)
 	}
-	// letterbox bars are fill inference 0 black [03 §3.6] TODO(question)
-	// ALP blend downscale not needed here; picture generation uses ALP 64K [03 §3.7]
-	// TODO(question) ALP quadrant order is supported inference, not exercised in lens package.
+	// The letterbox bars are not this package's to fill: no radar surface
+	// covers them and the presenter paints no fill there [03 R-MM-01 §3].
+	// The ALP downscale of picture generation is not exercised here either;
+	// its 2x2 pairing is row-first and Established, not an inference
+	// [03 §3.7 "Downsample: two-level ALP blend, row-first"]. Lens
+	// conversions in this package are integer truncation only.
 }
 
 func TestHitTestInclusive(t *testing.T) { // [07 §10][03 §3.11]
@@ -220,12 +223,18 @@ func TestMinimapDisplayCanvasRoundTrip(t *testing.T) {
 	}
 }
 
-func TestMinimapLetterboxFillTODO(t *testing.T) { // TODO(question) 0 black [03 §3.6]
-	// Letterbox bars beyond RadarW×RadarH retain heap bytes — inference 0 black pending capture.
-	// This test locks the current inference so review knows it is deliberate.
+// TestMinimapCanvasLongSide locks the fixed canvas constant the aspect fit
+// divides into [03 §3.6].
+//
+// This test's earlier comment claimed the bars "retain heap bytes"; that was
+// wrong twice over and is corrected here. The picture allocation is exactly
+// RadarW×RadarH plus its descriptor, so there are no heap bytes past the radar
+// rect [03 §3.6], and the presenter blits the final surface at (padX, padY)
+// and paints no fill at all, so nothing this package computes ever writes a
+// bar pixel [03 R-MM-01 §3]. What the composed frame holds under the bars is
+// the client's business and is still Unknown there.
+func TestMinimapCanvasLongSide(t *testing.T) {
 	if MinimapLongSide != 126 {
 		t.Fatalf("MinimapLongSide want 126 got %d", MinimapLongSide)
 	}
-	// ALP blend downscale [03 §3.7] is not exercised in lens package;
-	// lens conversions are integer TRUNC only.
 }

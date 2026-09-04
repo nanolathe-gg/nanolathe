@@ -185,8 +185,13 @@ func TestFallbackToDefault(t *testing.T) {
 }
 
 func TestUnknownPlanLineBehavior(t *testing.T) {
-	// Unknown plan line behavior consistent with content/ai_profile.go TODO(question)
-	// content resets currentPlan = "" on unknown, so subsequent weight lines before next valid plan do not apply.
+	// The gate of [08 R-AI-01 §12]: a `plan` directive clears the gate first and
+	// sets it only for `any` (first position only) or the active difficulty's
+	// keyword, so a directive naming nothing disables every directive after it
+	// until the next `plan`. (The comment here used to point at the parser's own
+	// open marker, which asks a different question — which decimal conversion
+	// reads the weight factor — and at a `currentPlan` string the parser no
+	// longer has; it keeps a plan-name slice.)
 	fs := tempFS(t, map[string]string{
 		"ai/unknown.txt": "plan any\nweight GOOD1 0.5\nplan unknown\nweight BAD 0.5\nplan hard\nweight GOOD2 0.5\n",
 	})

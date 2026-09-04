@@ -463,10 +463,8 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 		// builder"): the attacker unit's own owner byte, or the neutral side
 		// 10 when the packet has no attacker at all [06 R-WPN-04 §2].
 		attackerSide := units.NeutralAttackerSide
-		attackerKills := int32(0)
 		if killer := w.Unit(killerHandle); killer != nil {
 			attackerSide = killer.Owner
-			attackerKills = killer.Kills
 		}
 		// Copy list for deterministic iteration (slot asc already)
 		cargos := append([]pool.Handle(nil), dying.Attachment.Cargo...)
@@ -487,19 +485,32 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 				// real posture operand and closes itself on the amount, rather
 				// than being skipped here.
 				//
-				// TODO(question): [06 §12.1] names defender veterancy and the
-				// armor gate explicitly but is silent on step 3, the ATTACKER
-				// veterancy multiplier, which the ordinary builder applies from
-				// the packet's attacker — here the carrier's killer. Passing
-				// its kills is the builder taken as written; if a probe shows
-				// the cascade bypasses step 3, this argument becomes 0 and
-				// nothing else changes. Either way the amount stays at or above
-				// 30000, so the strict armor gate is closed on both readings.
+				// The marker retired here asked whether the cascade also takes
+				// step 3, the ATTACKER veterancy multiplier, and passed the
+				// killer's kill count on the reading that it might. It does
+				// not, and the research says so from two sides. [06 §9.1]:
+				// the amount "is computed by one shared routine (§9.2) and
+				// handed to the packet builder, WHICH APPLIES THE
+				// DEFENDER-SIDE SCALES"; §9.2's own listing puts the attacker
+				// tier above its `-- packet builder, defender side --` line
+				// and gates it on `record.shooter != null` — a damage record
+				// the cascade never builds. §9.2 then calls this one of "the
+				// FIXED 30,000 self-damage, cargo-cascade and refund packets",
+				// which is only true if nothing scales it before the gate.
+				// So the attacker argument names the credit, not a multiplier,
+				// and the amount entering the builder is exactly 30000.
+				//
+				// This was not a cosmetic difference. The packet amount is
+				// truncated to sixteen bits [06 §9.2] step 7 and applied as a
+				// modular subtraction read back as signed [06 §9.1], so a
+				// killer at tier 2 (ten kills) would have produced 33,600 —
+				// negative as an int16 — and HEALED the cargo it was supposed
+				// to destroy.
 				damageModifier := int32(65536)
 				if cargo.Def != nil {
 					damageModifier = cargo.Def.DamageModifier
 				}
-				amount := combat.ComputeScaledAmount(30000, 1, attackerKills, cargo.Kills,
+				amount := combat.ComputeScaledAmount(30000, 1, 0, cargo.Kills,
 					combat.UnitArmored(cargo), damageModifier, false, false, false)
 				// The packet's provenance pair, written where the ordinary
 				// intake writes it — on the application, before the health arm
@@ -716,16 +727,16 @@ func (s *System) TryUnload(w *units.World, carrierHandle, cargoHandle pool.Handl
 	// was a divergence and is gone; re-centring the cargo onto the validated
 	// anchor is precisely what retail does not do.
 	//
-	// TODO(T25): the released cargo's first free commit does not run in this
-	// build until something gives it an order. Retail's mover tick and its
-	// post-move correction run for every live unit — [04 R-MOV-01 §5]'s gate is
-	// transform-dirty or `canhover`, never an order — but `StepUnit` in
-	// internal/movement/integrate.go returns before the ground branch when the
-	// unit's primary queue is empty or its head is a goal-less record such as
-	// the `BeCarried` this release retires. Until that gate goes, a cargo
-	// released and left alone keeps its hang Y and holds no ground word; both
-	// appear on its first commit. Removing the gate is an upstream change
-	// WU-19-28 does not own (integrate.go is not in its file set).
+	// The marker retired here said the released cargo's first free commit does
+	// not run until something gives it an order, because `StepUnit` returned
+	// before the ground branch for an empty queue or a goal-less head. That
+	// gate is gone: `StepUnit` now takes the orderless mover through the whole
+	// mover tick — the no-waypoint follower brakes without turning
+	// [04 R-MOV-01 §3], the commit takes its stationary or same-cell arm
+	// [04 R-COLL-01 §1], and the post-move correction owns Y [04 R-MOV-01 §5],
+	// which is the gate research states (transform-dirty or `canhover`, never
+	// an order). A cargo released and left alone therefore resolves its Y and
+	// its ground word on its own next tick, with no order at all.
 	DetachCargoMode(w, cargoHandle, 1)
 	// The request mode the detach wrote is the committed pair; this package's
 	// per-unit motion records carry this package's copy of that same pair

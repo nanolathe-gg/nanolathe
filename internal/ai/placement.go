@@ -97,11 +97,17 @@ func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) 
 
 // extractorHelperA is retained as a fixture adapter. Production supplies the
 // exact root origin directly to retailExtractorHelperA [08 R-AI-03 §3].
-// TODO(question): retail omits the exhaustive candidate row-sign test. Decider:
-// a static trace of the helper's negative-row branch, or a top-row retail
-// probe, settling whether it rejects, reads preceding storage, or faults. The
-// placement geometry residual is still listed open in [08 R-P0-05 §8]; the
-// finding belongs in [08 R-AI-03 §6].
+// The marker retired here asked for a trace of the helper's negative-row
+// branch. It has one: [08 R-AI-03 §7.1] traced the blocker's entry test in
+// 2026-09-02 and the answer is "reads preceding storage". The test is
+// `candX > 0` on the signed column AND the packed cell word exceeding 0xffff as
+// unsigned, so row 0 is rejected exactly as column 0 is, a negative row passes
+// and the walk then addresses cells before the plot grid with no guard.
+// Whether that storage is mapped is Unknown and undecidable from the
+// executable, so §7.1 gives the implementation rule instead: reject a negative
+// row as Nanolathe's deterministic choice, marked as that choice, and reject
+// row 0 as retail does. validateRetailAICandidate in placement_heap.go does
+// both, and says which is which.
 func extractorHelperA(m *Manager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
 	_ = surfaceMetal
 	pd, failure := resolveRetailPlacementDef(m, defKey)

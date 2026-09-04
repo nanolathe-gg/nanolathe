@@ -416,3 +416,73 @@ func TestWeaponFirestarterTruncatesToByte(t *testing.T) {
 		}
 	}
 }
+
+// TestWeaponDurationKeysWrapTo16Bits locks WU-19-163: retail stores
+// weapontimer, turnrate, reloadtime, randomdecay, flighttime and holdtime as
+// 16-bit words, so the *30 (or *1/30) truncated tick count is wrapped a
+// second time to the field's width before it reaches the record
+// [06 §4.2, §4.3, §6.6, §6.7, §7.3][07 "in-flight camera move"]. An authored
+// negative therefore reaches the compiled record as a small wrapped value —
+// at most 65,535 for the unsigned stores, within -32768..32767 for the
+// signed ones — never as an arbitrary-magnitude 32-bit negative.
+//
+// burstrate, duration and smokedelay have an established 16-bit width but no
+// established signedness [06 §4.3, §6.4]; this test also locks that they are
+// deliberately left as a plain *30 truncation with no second wrap, so a
+// later change that starts guessing a sign for them is caught here too.
+func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
+	body := `[DURTEST]
+{
+	ID=1;
+	weapontimer=-1;
+	randomdecay=-1;
+	flighttime=-1;
+	burstrate=-1;
+	duration=-1;
+	smokedelay=-1;
+	turnrate=-40;
+	reloadtime=-1200;
+	holdtime=-1200;
+}
+`
+	doc := mustParseTDF(t, body)
+	sec := doc.Root.Sections()[0]
+	wd := compileWeaponSection(sec, "DURTEST", Provenance{})
+
+	// Unsigned 16-bit stores: trunc(-1*30) = -30, zero-extended from a 16-bit
+	// store wraps to 65,536-30 = 65,506.
+	if wd.WeaponTimer != 65506 {
+		t.Fatalf("weapontimer(-1) = %d, want 65506 [06 §7.3]", wd.WeaponTimer)
+	}
+	if wd.RandomDecay != 65506 {
+		t.Fatalf("randomdecay(-1) = %d, want 65506 [06 §4.3]", wd.RandomDecay)
+	}
+	if wd.FlightTime != 65506 {
+		t.Fatalf("flighttime(-1) = %d, want 65506 [06 §6.6]", wd.FlightTime)
+	}
+	// turnrate: trunc(-40 * 1/30) = -1, zero-extended wraps to 65,535.
+	if wd.TurnRate != 65535 {
+		t.Fatalf("turnrate(-40) = %d, want 65535 [06 §6.7]", wd.TurnRate)
+	}
+
+	// Signed 16-bit stores: trunc(-1200*30) = -36000, which is outside the
+	// int16 range and wraps (sign-extended back) to 29,536 rather than
+	// staying at -36000.
+	if wd.ReloadTime != 29536 {
+		t.Fatalf("reloadtime(-1200) = %d, want 29536 [06 §4.2]", wd.ReloadTime)
+	}
+	if wd.HoldTime != 29536 {
+		t.Fatalf("holdtime(-1200) = %d, want 29536 [07 \"in-flight camera move\"]", wd.HoldTime)
+	}
+
+	// No established signedness: left as the plain *30 truncation, unwrapped.
+	if wd.BurstRate != -30 {
+		t.Fatalf("burstrate(-1) = %d, want -30 (untruncated, signedness not established)", wd.BurstRate)
+	}
+	if wd.Duration != -30 {
+		t.Fatalf("duration(-1) = %d, want -30 (untruncated, signedness not established)", wd.Duration)
+	}
+	if wd.SmokeDelay != -30 {
+		t.Fatalf("smokedelay(-1) = %d, want -30 (untruncated, signedness not established)", wd.SmokeDelay)
+	}
+}

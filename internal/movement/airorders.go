@@ -516,14 +516,15 @@ func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderSt
 		// the producer does nothing at all and the aircraft continues on its
 		// last command [04 R-AIR-01 §1].
 		//
-		// TODO(T25): `Stop` spawns `VTOL_LandIfCan` (target none, goal = own
-		// position, p1..p3 = 0) at the head for an airborne `canfly` unit
-		// [04 R-ORD-01 §2], and `VTOL_Standby` phase 2 spawns the same record
-		// for an idle unloaded aircraft [04 R-AIR-01 §7]. Both spawns are order
-		// -record insertions, which belong to internal/orders — a package this
-		// unit does not own, and one where `Stop` currently has no handler at
-		// all. Placeholder: the executors below are reachable only from a
-		// record another layer pushes.
+		// The marker retired here said the two `VTOL_LandIfCan` producers were
+		// unreachable, because both are order-record insertions in a package
+		// this file does not own and `Stop` "currently has no handler at all".
+		// Both halves are false. `Stop`'s row is implemented in internal/orders
+		// — its handler spawns `VTOL_LandIfCan` at the head with no target, the
+		// unit's own position and zeroed parameters, for an airborne `canfly`
+		// unit [04 R-ORD-01 §2] — and `VTOL_Standby` phase 2's idle unloaded
+		// arm spawns the same record from this file through airSpawnAtHead
+		// [04 R-AIR-01 §7]. Both producers reach the executors above.
 	}
 }
 
@@ -801,13 +802,22 @@ func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrder
 		// and the air leg's marker is the site itself.
 		//
 		// TODO(T25): `VTOL_MobileBuild` phase 1 snaps that goal onto the
-		// PRODUCT's footprint before building the marker [04 R-ORD-02 §2], and
-		// `VTOL_HelpBuild` phase 1 takes the target's own position
-		// [04 R-ORD-01 §7]. The product's footprint pair is a definition this
-		// package cannot resolve — the catalog lives behind internal/content and
-		// the record carries only the canonical key. Placeholder: the record's
-		// stored goal, which is the site anchor the order layer already centred,
-		// and the target's position whenever the record names a live one.
+		// PRODUCT's footprint — anchor cell from the recorded position, then
+		// the reverse `(foot + 2·cell)·2^19` centre — before building the
+		// marker [04 R-ORD-02 §2][04 R-PATH-01 §13]; `VTOL_HelpBuild` phase 1
+		// takes the target's own position [04 R-ORD-01 §7], which the arm below
+		// already does. snapToOwnFootprint is that arithmetic and takes the
+		// footprint pair as an argument; what is missing is the PRODUCT's pair.
+		// The record carries both the canonical key and the catalog index, so
+		// the record is not the blocker: internal/movement holds no catalog
+		// handle and units.World exports none, while the ground twin's
+		// construction.Service already computes exactly this quantity
+		// (siteAnchorCell/siteCentre) from the catalog it does hold. Closing it
+		// needs a seam this unit does not own — a product-footprint resolver on
+		// System, bound in session composition. Placeholder: the record's
+		// stored goal, the site anchor the order layer centred, which differs
+		// from the snapped centre by at most half a cell per axis against an
+		// arrival radius of `builddistance`.
 		goalX, goalY, goalZ := head.GoalX, head.GoalY, head.GoalZ
 		if t := s.unitFor(head.Target); t != nil && t.Alive {
 			goalX, goalY, goalZ = t.X, t.Y, t.Z
@@ -1842,10 +1852,12 @@ func (s *System) installEvadeBreak(u *units.Unit, n *orders.Node, multiple int64
 // airLegUnbound is the answer a leg gives when the simulation stream it must
 // draw from is not bound to the unit's queue.
 //
-// TODO(T25): [04 R-AIR-01 §7] and [§8] give every one of these draws as
-// unconditional, so there is no retail arm for "no stream". Placeholder: the
-// one-tick deadline hold of [04 R-ORD-01 §1], which keeps the record at the
-// head and re-dispatches it rather than consuming a draw that does not exist or
+// This is not an open retail question and carries no marker: [04 R-AIR-01 §7]
+// and [§8] give every one of these draws as unconditional, so retail has no
+// "no stream" arm at all — the stream is the session's, and a bound queue
+// always has it. The arm exists only because simRNG can answer nil for a queue
+// this build has not bound yet. It holds the record at the head for one tick
+// [04 R-ORD-01 §1] rather than consuming a draw that does not exist or
 // completing an order the player still owns.
 func airLegUnbound(n *orders.Node, tick uint32) orders.Code {
 	airDeadline(n, tick, 1)

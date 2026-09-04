@@ -67,7 +67,7 @@ type Controller struct {
 	nextTrack     int // requested / next to play (0 means none)
 	status        StatusMode
 	playMode      PlayMode
-	desiredCat    int        // for mode 4, 1..4
+	desiredCat    int        // for mode 4: 0..4, Building|Battle|Victory|Defeat|Unused [03 R-AUD-01 §4]
 	trackCategory [100]uint8 // (i%4)+1 cycle, retail builds 100 entries
 	offset        int        // playhead offset used by a backend adapter
 	crtState      uint32     // last drawn presentation-CRT state for isolated tests
@@ -100,13 +100,17 @@ func NewMusicController() *Controller {
 }
 
 // Configure sets play mode and desired category for ModeCategoryShuffle.
-// desiredCat is 1..4, corresponding to trackCategory values.
+// desiredCat is 0..4: 0 Building, 1 Battle, 2 Victory, 3 Defeat, 4 Unused
+// (silence). 0 is a real, selectable category — not a "no category" sentinel
+// — and the retail default per-disc category list is seven Battle bytes
+// followed by Building zeros, so Building is the common case, not an edge
+// case [03 R-AUD-01 §4].
 func (c *Controller) Configure(mode PlayMode, desiredCat int) {
 	if c == nil {
 		return
 	}
 	c.playMode = mode
-	if desiredCat >= 1 && desiredCat <= 4 {
+	if desiredCat >= 0 && desiredCat <= 4 {
 		c.desiredCat = desiredCat
 	}
 }
@@ -429,11 +433,19 @@ func (c *Controller) playSingle() {
 // playCategoryShuffle implements mode 4 filtered shuffle.
 // Retail scans (rand&0xF+1)*numTracks candidates forward wrapping 1..numTracks
 // for first where trackCategory[track]==desiredCat. We mirror.
+//
+// desiredCat 0 (Building) is a real, selectable category, not "no category" —
+// the tick's "new category ≠ 0" clause that the research once flagged as a
+// possible sentinel belongs to SetDesired's fade-completion handoff (which
+// this controller does not model: it delays running the tick by a one-shot
+// pause when the *transition* lands on Building, so calm music doesn't cut in
+// immediately after battle), not to the shuffle scan itself
+// [03 R-AUD-01 §4, "Established fact — changing the desired category"].
 func (c *Controller) playCategoryShuffle() {
 	if c.numTracks == 0 {
 		return
 	}
-	if c.desiredCat < 1 || c.desiredCat > 4 {
+	if c.desiredCat < 0 || c.desiredCat > 4 {
 		c.Stop()
 		return
 	}
@@ -457,10 +469,18 @@ func (c *Controller) playCategoryShuffle() {
 // Tick advances media state once per presentation frame. The boolean isPlaying reflects
 // the mci poll `status cdaudio mode` vs "playing". When false, mode-specific
 // transition fires; when true, nothing. While paused (status==2) early return.
-// If numTracks==0 early return. Category mode 4 special at desired==4? Actually
-// in retail desired==4 is still just another category, but there is a special
-// case when desired==4 at entry that stops immediately (maybe test for MCI?).
-// We keep generic.
+// If numTracks==0 early return.
+//
+// TODO(question): retail's tick has two category-driven overrides this
+// dispatch does not model — desired==4 (Unused) always stops regardless of
+// play mode, and desired∈{2,3} (Victory/Defeat) always takes the category
+// branch regardless of play mode [03 R-AUD-01 §4 steps 2 and 4]. This
+// controller has no caller yet that drives desiredCat independently of
+// PlayMode (Configure sets both together), so the gap is inert today; it
+// becomes load-bearing only once a caller can set desiredCat to 2, 3, or 4
+// while playMode is something other than ModeCategoryShuffle — that is the
+// scenario that would settle whether this dispatch needs the same override,
+// out of scope for the category-vocabulary fix here (WU-19-162).
 //
 // The controller must be polled each rendered frame (presentation), not each
 // presentation loop polling.

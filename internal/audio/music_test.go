@@ -89,6 +89,58 @@ func TestMusic_CategoryShuffle(t *testing.T) {
 	}
 }
 
+// TestMusic_CategoryShuffleBuildingSelectable locks [03 R-AUD-01 §4]:
+// categories are 0..4 with 0 = Building, and the retail default per-disc
+// list is seven Battle bytes followed by Building zeros — so Building is
+// the common resting category, not an invalid or unreachable one. Configure
+// must accept desiredCat 0, and the shuffle scan must be able to land on a
+// Building-tagged track.
+func TestMusic_CategoryShuffleBuildingSelectable(t *testing.T) {
+	m := NewMusicController()
+	m.Open(4)
+	// Force the retail-shaped default list: Battle tracks then Building
+	// zeros, rather than the (i%4)+1 bring-up cycle which never emits 0.
+	m.trackCategory[1] = 1 // Battle
+	m.trackCategory[2] = 1 // Battle
+	m.trackCategory[3] = 0 // Building
+	m.trackCategory[4] = 0 // Building
+
+	m.Configure(ModeCategoryShuffle, 0) // desired Building
+	if m.desiredCat != 0 {
+		t.Fatalf("Configure must accept desiredCat=0 (Building); got %d", m.desiredCat)
+	}
+	m.Seed(77)
+	m.Tick(false)
+	if m.CurTrack() == 0 {
+		t.Fatalf("Building (0) must be selectable by the category shuffle, not treated as invalid")
+	}
+	if int(m.trackCategory[m.CurTrack()]) != 0 {
+		t.Fatalf("chosen track %d has category %d, want 0 (Building)", m.CurTrack(), m.trackCategory[m.CurTrack()])
+	}
+}
+
+// TestMusic_ConfigureCategoryGateIsZeroToFour locks the corrected gate: all
+// five retail categories (0 Building .. 4 Unused) are accepted, and only
+// values outside that range are rejected (left unchanged) [03 R-AUD-01 §4].
+func TestMusic_ConfigureCategoryGateIsZeroToFour(t *testing.T) {
+	m := NewMusicController()
+	for cat := 0; cat <= 4; cat++ {
+		m.Configure(ModeCategoryShuffle, cat)
+		if m.desiredCat != cat {
+			t.Fatalf("Configure should accept desiredCat=%d, got %d", cat, m.desiredCat)
+		}
+	}
+	m.Configure(ModeCategoryShuffle, 3)
+	m.Configure(ModeCategoryShuffle, -1) // out of range → left unchanged
+	if m.desiredCat != 3 {
+		t.Fatalf("Configure should reject desiredCat=-1 and keep prior value 3, got %d", m.desiredCat)
+	}
+	m.Configure(ModeCategoryShuffle, 5) // out of range → left unchanged
+	if m.desiredCat != 3 {
+		t.Fatalf("Configure should reject desiredCat=5 and keep prior value 3, got %d", m.desiredCat)
+	}
+}
+
 func TestMusic_Pause(t *testing.T) {
 	m := NewMusicController()
 	m.Open(5)

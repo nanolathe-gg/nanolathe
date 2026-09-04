@@ -6836,18 +6836,44 @@ anchored at map pixel `(104, 152)`, appears at framebuffer x ≈ 232 — that is
 `104 + 128`, the vent's map pixel plus the viewport's left inset, with the
 camera at its floor of 0.
 
-**Established — the maximum's extent operand is the subrect span (corrected
-2026-09-04, WU-19-151).** The clamp computes its maximum per axis as the
-play-area extent minus the viewport subrect's own width and height words —
-`PlayRight − (W−128)` and `PlayBottom − (H−64)` [03 §4.1] — and the floor test
-runs first. The two bounds are therefore symmetric: the floor puts the playable
-area's first pixel on the viewport's leading edge and the maximum puts its last
-pixel on the trailing edge, so the playable extents `PlayRight = Width·16 − 32`
-/ `PlayBottom = Height·16 − 128` [03 §1] are fully visible at every display
-mode. The previous text carried this as a *Supported inference* with the
-alternative — the clamp reading the negotiated display width and height — left
-open; that alternative is disproved: the clamp reads the subrect's span words,
-not the surface size. See [R-HUD-05] for the rest of the display-mode layout.
+**Established (2026-09-04, WU-19-151 and WU-19-158, independently) — the
+maximum's extent operand is the same subrect span.** *This paragraph previously read "Supported inference … It
+is not separately traced here", with the decider "a static trace of which
+extent pair the clamp's maximum reads". That trace has now been done and it
+confirms the inference; nothing about the reading changes, only its confidence.*
+
+The battle-setup routine that arms the viewport writes six words in one block,
+in this order: the negotiated display width and height, copied from the mode
+record (they are initialised to `640 × 480` a few lines earlier and then
+overwritten); the subrect's left `128` and top `32` as literals; the subrect's
+**inclusive** right as `displayWidth − 1` and its **inclusive** bottom as
+`displayHeight − 33`; and finally the span pair as `right − left + 1` and
+`bottom − top + 1`. So the span pair is `W − 128` by `H − 64`, held in globals
+distinct from the display size, and it is that *span* pair — not the display
+pair — that the clamp's maximum subtracts. The same span pair, halved, is the
+operand of every recenter and camera-jump site (the minimap latch, the
+camera-jump family, the follow recenters), so one span definition serves the
+clamp, the jumps and the recenters, exactly as this section assumed.
+
+The two bounds are therefore symmetric (`512 × 416` at 640×480, `W-128 × H-64`
+generally [03 §4.1]): the floor puts the playable area's first pixel on the
+viewport's leading edge and the maximum puts its last pixel on the trailing
+edge. That is what [R-CRD-006 §1]'s wording ("subtracting half the viewport
+span", `mapPixelExtent − viewportExtent`) says, and it is the only reading
+under which the playable extents `PlayRight = Width·16 − 32` /
+`PlayBottom = Height·16 − 128` [03 §1] are fully visible. The rejected
+alternative — the clamp reading the negotiated display width and height — would
+have left the map's last 128 playable columns and last 64 rows permanently off
+screen.
+
+**Established, same block — the insets are the ones [03 §4.1] gives.** The
+literal left `128` and the inclusive right `displayWidth − 1` make the X insets
+leading 128 / trailing 0; the literal top `32` and the inclusive bottom
+`displayHeight − 33` make the Z insets leading 32 / trailing 32 (rows
+`H−32 … H−1` are chrome). Previously these came from [03 §4.1] alone; they are
+now corroborated by the viewport arming itself.
+
+See [R-HUD-05] for the rest of the display-mode layout.
 
 **Nanolathe impact (defect PT5-01, fixed 2026-08-31).** This build's camera
 origin is the world point drawn at the *framebuffer's* top-left corner, not the
@@ -7064,14 +7090,13 @@ Open items only; the decider follows each.
 - Camera clamp behavior in unusual domains — a map whose view size exceeds the
   map size on an axis, where the ordered clamp form is the only established
   behavior · static trace.
-- Which extent pair the clamp's maximum reads — the battle viewport subrect's
-  span or the negotiated display's — where only the subrect reading makes the
-  whole playable area reachable ([R-CAM-01 §13]) · static trace of the clamp's
-  maximum. Corroborated meanwhile from the other side: `[03 R-MM-01 §1]`, traced
-  independently for the minimap repaint pre-pass, states that the clamped camera
-  keeps the viewport rectangle inside the radar rect "because
-  `cameraX <= PlayRight - viewWidth`" — which is the subrect reading of this
-  maximum. Two traces agreeing is not the trace; the item stays open.
+- ~~Which extent pair the clamp's maximum reads — the battle viewport subrect's
+  span or the negotiated display's~~ · **closed 2026-09-04** (WU-19-158): the
+  subrect span, traced to the battle-setup block that derives it as
+  `right − left + 1` / `bottom − top + 1` from the subrect corners and keeps it
+  in globals distinct from the negotiated display size ([R-CAM-01 §13]). Agrees
+  with `[03 R-MM-01 §1]`'s independent minimap-repaint trace
+  (`cameraX <= PlayRight - viewWidth`).
 - ~~Mapping of the three sensor callback tables to the radar versus jammer
   palette entries~~ · **closed 2026-08-31**: the circles come from the contacts
   pass, not the callback tables (`[03 §3.10]` correction), and their colours are

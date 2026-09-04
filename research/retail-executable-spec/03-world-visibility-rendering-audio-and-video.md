@@ -4032,10 +4032,19 @@ well as the three undeclared sections), and a sight distance below 32 selects
 `g = 0`, whose record lies **16 bytes before the table list's storage**. What
 those bytes hold at run time — and therefore how many "lines" such an
 observer walks — is **Unknown** (decider: the tagged allocator's block header
-layout, or a retail capture of a unit with `sightdistance < 32`). Which stock
-definitions have `sightdistance < 32` is also **Unknown** (decider: a catalog
-census). A clone must reproduce the skew for `g ≥ 1`; for `g = 0` it may
-substitute an empty line list as a sanctioned divergence, stated as such.
+layout, or a retail capture of a unit with `sightdistance < 32`). A clone must
+reproduce the skew for `g ≥ 1`; for `g = 0` it may substitute an empty line
+list as a sanctioned divergence, stated as such.
+
+**Addendum (2026-09-04, WU-19-158) — Established: no stock definition reaches
+group 0.** This section previously left "which stock definitions have
+`sightdistance < 32`" as a second **Unknown** with a catalog census as its
+decider. That census has been run over the reference install: all 278 stock
+`.fbi` definitions author a `sightdistance`, and the minimum over the corpus is
+**55** (the seven mines), giving `g = floor(55/32) = 1` and `TABLE 0`. So the
+group-0 record is never selected in stock play, and the sanctioned empty-line
+substitution above is unobservable there — it becomes reachable only under a
+mod that authors a sight distance below 32.
 
 ### Closed — eyeball expiry: the post-phase sweep removes the byte-grid footprint and compacts the list [R-COMP-02 §2] (2026-08-29)
 
@@ -4421,9 +4430,18 @@ its descriptor header — there are no heap bytes beyond the radar rect that
 could leak into the letterbox bars. The blend overwrites every destination
 byte, and the surface allocator never memsets the pixel region. The bars are
 therefore HUD canvas outside the radar rect, not picture heap.
-**Supported inference.** The bar pixels read 0 (black), consistent with the
+**Superseded (2026-09-04, WU-19-158).** This paragraph previously read
+"**Supported inference.** The bar pixels read 0 (black), consistent with the
 panel clear and the dark fog-fill index; a canvas-capture probe settles it.
-`TODO(question):` bar fill color.
+`TODO(question):` bar fill color." The `[R-MM-01 §3]` finding below, traced
+independently afterwards, is stricter and owns the question: the presenter
+paints **no fill** in the bars at all, so what shows there is whatever the
+composed frame already holds, and which pixels those are is **Unknown** with
+that section's decider. The "0 black" wording invited a clone to paint a black
+fill, which retail does not do. A retail battle capture inspected for this unit
+was inconclusive: its minimap canvas read index-0 black across all 126 columns,
+but the map was almost wholly unexplored, so the fog fill and any bars are
+indistinguishable in it.
 
 Surface descriptors hold width, height, and a pointer to the w×h pixel block;
 the pixel pitch is (w+3) & ~3 (DWORD-aligned), while allocation is w×h rather
@@ -9625,9 +9643,15 @@ deleted here only; the findings stand in the body sections that own them.
 
 ### World and visibility
 - What the LOS table-by-index accessor reads for group 0 (`sightdistance <
-  32`), and which stock definitions have such a sight distance · [R-COMP-02
-  §1] · decider: the tagged allocator's block-header layout or a retail
-  capture of such a unit; a catalog census for the second half.
+  32`) · [R-COMP-02 §1] · decider: the tagged allocator's block-header layout
+  or a retail capture of such a unit. **The second half is closed
+  (2026-09-04, WU-19-158): no stock definition has such a sight distance.** A
+  census of all 278 stock `.fbi` files in the reference install finds every one
+  of them authoring a `sightdistance`, the smallest being 55 (the seven mines),
+  so the lowest group any stock unit selects is 1 and group 0 is unreachable
+  from stock content. The remaining half is therefore mod-only, and a clone's
+  sanctioned empty-line-list substitution for group 0 is unobservable in stock
+  play.
 - Whether the tinted blitter's gate flag ("ALP table present" in
   [R-COMP-01 §2], "the `Shading` option" in [R-REN-03D §4]) is one bit,
   making every strip sprite of [R-FX-02 §2–§3] invisible with `Shading` off ·
@@ -9674,7 +9698,19 @@ by the sharper question it turned into.
   `activatewhenbuilt` nor `onoffable`, are not aircraft and are not factories,
   so not one of the traced writers of the activation bit reaches them:
   pre-built creation and build completion, the Activate/Deactivate handlers,
-  the factory production pump, and the aircraft mover-mode setter. Under
+  the factory production pump, and the aircraft mover-mode setter.
+  **The one channel that list omitted is now censused too (2026-09-04,
+  WU-19-158).** `[05 R-PROD-01 §2]` and `[04 §4.7]` both name a further writer
+  this bullet did not: the COB `ACTIVATION` port (port 1), which a unit's own
+  script can write. A census of all 278 stock `.cob` files in the reference
+  install — scanning for the compiled `set` shape of `[fmt cob]`, a
+  push-constant `1` followed by a value push and the set-unit-value opcode —
+  finds exactly **nine** scripts writing that port: `armarad`, `armason`,
+  `armmmkr`, `armsolar`, `armtarg`, `cordoom`, `cormmkr`, `corsolar`,
+  `cortarg`. None of the five is among them; `ARMACSUB` and `CORACSUB` write
+  only port 5 (in build stance) and `ARMANNI`, `ARMSS` and `CORSS` write no
+  engine port at all. So the script channel is eliminated as well, and the
+  static arm of the decider below is spent. Under
   §3.4's emitter gate — "active" is the instance activation bit — their
   authored range is therefore dead data. **Supported inference** that they
   never emit; **Unknown** whether that is retail's intent. The reading is
@@ -9686,10 +9722,12 @@ by the sharper question it turned into.
   found. It stays open because "retail's Annihilator offers no radar and
   retail's stealth subs no sonar" is an inference from that shared bit, not an
   observation · §3.4 `[R-VIS-01 §4]` pass 2 and the "Sensor callback gate
-  correction" above · decider: a manual retail observation is enough — park a
-  stealth sub within `sonardistance` of an enemy unit that no other sensor and
-  no line of sight covers, and watch for the contact; failing that, a static
-  trace for a further writer of the activation bit. Definition counts are
+  correction" above · decider, and now the **only** one left: a manual retail
+  observation — park a stealth sub within `sonardistance` of an enemy unit that
+  no other sensor and no line of sight covers, and watch for the contact. The
+  alternative arm this bullet used to offer, "failing that, a static trace for
+  a further writer of the activation bit", is spent: every named writer,
+  script channel included, has now been checked. Definition counts are
   checked against the reference install — 278 definitions, 52 authoring a
   sensor distance, 37 of them `activatewhenbuilt` [I14]. Marked
   `TODO(question)`.

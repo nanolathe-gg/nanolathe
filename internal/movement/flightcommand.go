@@ -101,11 +101,16 @@ type FlightCommand struct {
 	Heading uint16
 	// Flags is the flags byte described above.
 	//
-	// TODO(question): [04 R-AIR-01 §1] names bit 0x01 a "mover mode changed"
-	// dirty flag and bits 1..2 the mirror of the last observed committed mode,
-	// but names neither the flag's reader nor where it is cleared, and states no
-	// initial value for the byte. Nothing here clears it. What would settle it
-	// is a reader census of the flags byte across the mover's callers.
+	// TODO(question): [04 R-AIR-01 §1] establishes the WRITER — the controller's
+	// per-tick hook sets bit 0x01 when the committed mover mode differs from the
+	// mirror in bits 1..2, before the producer runs — and this build reproduces
+	// that write exactly (StepFlightCommand below). What no section gives is a
+	// READER: no consumer of bit 0x01, no site that clears it, and no initial
+	// value for the byte. The field is consequently write-only here and
+	// behavior-inert — nothing in the mover, the integrator or the order layer
+	// branches on it — so no contract depends on the answer until a reader
+	// exists. Decider: a reader census of the flags byte across the mover's
+	// callers, which would also name the clear site.
 	Flags uint8
 }
 

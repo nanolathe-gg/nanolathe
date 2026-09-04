@@ -217,8 +217,8 @@ func windInterval(crt *rng.CRT) uint32 {
 // windVectors recomputes the world X/Z wind vectors from strength and heading
 // using the shared simulation trig table [04 §5.1]. The direction vector pair
 // is −2 × the fixed-point trig of the heading with the speed as the magnitude
-// [01 §4.4]. [R-WIND-01] closes the axis question (it had carried a
-// TODO(question) here): the FIRST word is the X term −2·speed·sin(heading) and
+// [01 §4.4]. [R-WIND-01] closes the axis question this function once left
+// open: the FIRST word is the X term −2·speed·sin(heading) and
 // the SECOND word is the Z term −2·speed·cos(heading) — one shared 512-entry
 // sine table (entry k = 8192·sin(2πk/512)) serves both axes, the cosine
 // reading the same table a quarter turn (128 entries) ahead, and the product

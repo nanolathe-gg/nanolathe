@@ -165,15 +165,18 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	// correction"].
 	//
 	// TODO(question): five stock definitions author a sensor distance that
-	// this gate can never admit, because no traced writer of the activation
-	// bit reaches them — ARMANNI, ARMSS, CORSS, ARMACSUB and CORACSUB author
+	// this gate can never admit, because no writer of the activation bit
+	// reaches them — ARMANNI, ARMSS, CORSS, ARMACSUB and CORACSUB author
 	// neither `activatewhenbuilt` nor `onoffable`, and are neither aircraft
-	// nor factories. Their authored range is dead data, which is consistent
-	// with [05 R-PROD-01 §2] but is an inference, not an observation. Do not
-	// widen this gate to "fix" it: doing so asserts a further activation
-	// writer nobody has found. Recorded with its decider in doc 03's "Missing
-	// and unknown"; a manual retail observation of a stealth sub's sonar
-	// contact settles it.
+	// nor factories. The remaining channel, the COB ACTIVATION port
+	// ([04 §4.7] port 1, named as a writer by [05 R-PROD-01 §2]), was censused
+	// over all 278 stock scripts by WU-19-158 and does not reach them either:
+	// exactly nine scripts write that port and none is one of the five
+	// [03 §3.4 "Sensor callback gate correction"]. So every named writer is now
+	// eliminated and their authored range is dead data. What stays open is only
+	// whether that is retail's intent. Do not widen this gate to "fix" it:
+	// doing so asserts a writer that does not exist. Decider, now the only one
+	// left: a manual retail observation of a stealth sub's sonar contact.
 	for i := range units {
 		e := &units[i]
 		if !e.Alive || e.Owner != s.local || !e.Active {

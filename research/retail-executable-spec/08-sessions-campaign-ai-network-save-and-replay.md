@@ -4828,6 +4828,13 @@ defaults on missing or mistyped items: `maxunits` low 16 bits else 0;
 fields default 1. `Thumbs` is copied during preflight, so a malformed absence
 can drive a copy from a null source (retail risk preserved).
 
+*Addendum (2026-09-04, WU-19-158) — Established, bounded-negative: that list
+is the whole account.* The writer was re-read for this unit and emits exactly
+the items named above, in that order, and no others. Nothing "beyond the
+established list" remains to decode: an implementation that carried a `T25`
+placeholder for further Summary fields was reserving space for items the
+account does not have.
+
 Residual: the upstream GUI filename edit-character policy and code-page
 interpretation remain unknown.
 
@@ -5545,6 +5552,25 @@ All `Player%i` scalar restoration is gated on a successful 28-byte
 accounts (after the human-player byte has already been applied). Before main
 battle init, an independent pre-pass visits all ten player accounts and
 restores `Controller` (default 0) so controller types exist for setup.
+
+*Addendum (2026-09-04, WU-19-158) — Established, bounded-negative: the table
+above is the whole account.* Both sides were read end to end. The **writer**
+selects the `Players` account, emits `Human Player` and the 28-byte `GameTime`
+box, then walks the ten player records and, for each whose active byte is set,
+selects `Player%i` and emits exactly the nineteen items of the table above in
+its printed order — the two narrowed floats, the six doubles, the two storage
+floats, `AddPlayerStorage`, `Kills`, `Losses`, `UpdateTime`, `WinLoseTime`,
+`DisplayTimer`, `Controller`, `Logo`, `Side` — followed by the 11-byte
+`Alliances` box, and nothing else. The **reader** is symmetric with the stated
+defaults, minus `Controller`, which the independent pre-pass above owns.
+
+Three consequences worth stating because implementations have assumed
+otherwise. There are **no commander-kill or commander-loss keys**: those
+counters exist only in [R-CAMP-01 §10]'s statistics score board, which is not
+persisted. There is **no network identity, connection or alive state, and no
+sharing option** in the account. And `Logo` and `Side` are read from the
+player's *definition* record rather than the player record itself, which is why
+they sit outside the runtime-width column above.
 
 ### Closed — the Save Game screen: file naming, the slot list, overwrite and delete [R-SAVE-02 §1] (2026-08-29)
 
@@ -7440,9 +7466,13 @@ finding. The recitals are deleted here only; the body sections and the
   sections, so that the skirmish catalog's forward translation and the
   loader's reverse-translation fallback can fire on stock data · [R-CAMP-01
   §11] · asset census of a localized install.
-- Whether commander-kill and commander-loss counters have save-bank keys in
-  addition to the established `Kills` and `Losses` entries · "Player records"
-  / [R-CAMP-01 §10] · static trace of the Player%i writer and reader.
+- ~~Whether commander-kill and commander-loss counters have save-bank keys in
+  addition to the established `Kills` and `Losses` entries~~ · **closed
+  2026-09-04** (WU-19-158): they do not. The `Player%i` writer and reader were
+  traced end to end and their complete item censuses are recorded under "Player
+  records"; neither names a commander counter, and the only place in the image
+  that spells `Commanders Killed` / `Commanders Lost` is [R-CAMP-01 §10]'s
+  statistics score board, which no save path touches.
 - Transport-selection policy beyond generic move orders, and any distinct
   naval or air placement geometry · "Placement root and search helpers"
   [P0-04] · static trace.

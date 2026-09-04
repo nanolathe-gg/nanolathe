@@ -365,7 +365,7 @@ func ExpandPlot(attrs []formats.TNTAttribute, cellW, cellH int) []PlotCell {
 // spans its four corners — and it makes the average track the bilinear query
 // of [03 §2.3]. Corners past the last row/column clamp inward, which is the
 // same sample the "x+1 < W / z+1 < H" edge guard selects. The previous text
-// here called the rule unknown; it is not, and the TODO(question) is retired.
+// here called the rule unknown; it is not, and the marker it carried is gone.
 //
 // Retail's own pass clips its extent to W−1 and H−1 exclusive, so its last
 // column and last row keep whatever the plot allocation held. That is

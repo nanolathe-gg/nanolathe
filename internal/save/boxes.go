@@ -28,8 +28,13 @@ import (
 // ---------------------------------------------------------------------------
 
 // Summary holds the established Summary writer fields in the order the writer
-// emits them [08 "Summary"]. Fields beyond this list remain TODO(T25) unknown
-// and are not decoded by this account helper.
+// emits them [08 "Summary"] [08 "Account inventory"].
+//
+// There are no fields beyond this list. The comment here previously said any
+// further ones remained an unknown T25 residual; that was stale — doc 08's account
+// inventory already gave the writer's items exhaustively, and WU-19-158
+// re-censused the writer itself and found exactly these and no others
+// (Established, bounded-negative).
 type Summary struct {
 	// Dynamic build keys (integer 0) [08 "Summary"].
 	BuildDateKey string // e.g. "BUILD DATE:Aug 23 2026" — prefix BUILD DATE:
@@ -154,8 +159,18 @@ func WriteSummary(b *Builder, s Summary) {
 	if len(s.RadarImage) > 0 {
 		ac.AppendBox(RadarImageBoxName, 0, s.RadarImage)
 	}
-	// TODO(T25): retail save bulk-box byte layouts beyond established lengths
-	// remain unknown and are not decoded here [GAP T25].
+	// The bulk boxes are byte-for-byte pass-through here on purpose, not
+	// because their layouts are unknown. The T25 marker that stood on this
+	// line — "byte layouts beyond established lengths remain unknown" — was
+	// stale: `[08 R-SAVE-02 §6]`–`§12` name every one of them, and
+	// PLAN_14's own explicit-unknowns entry says the marker "should be retired
+	// as they are implemented". `Radar Image` is a `u32` width, a `u32` height
+	// and then `height` rows of `width` palette bytes [08 R-SAVE-02 §3]; the
+	// caller supplies that header with the payload, and a short box yields no
+	// image rather than an error. `Metal`, `PlayerFeatures` and `Mapping` are
+	// exact-size plot maps owned by internal/world and internal/session
+	// [08 R-SAVE-02 §12]; the `Units` family is [08 R-SAVE-02 §6]–§11. The
+	// only spans still opaque are those [08 R-SAVE-02 §13] does not name.
 }
 
 const (
@@ -396,9 +411,15 @@ func ReadAlliances(bank *Bank, selfSlot int) ([11]byte, bool) {
 // Player%i field tables [08 "Player records"].
 // ---------------------------------------------------------------------------
 
-// PlayerSlot holds the established Player%i scalar fields with wire types
-// and defaults as transcribed verbatim with citations; unknown fields stay
-// TODO(T25) opaque [08 "Player records"].
+// PlayerSlot holds the Player%i scalar fields with wire types and defaults as
+// transcribed verbatim with citations [08 "Player records"].
+//
+// The list is complete: doc 08 states the per-slot item list is "the full
+// Player records table plus Logo and Side", and WU-19-158 censused the writer
+// and the reader and found exactly these nineteen items and the 11-byte
+// Alliances box, in this order, and nothing else (Established,
+// bounded-negative). The T25 "unknown fields stay opaque" clause this comment
+// used to carry named fields the account does not have.
 type PlayerSlot struct {
 	Index int // 0..9 — selects account Player%i [08 "Player records"]
 
@@ -424,10 +445,12 @@ type PlayerSlot struct {
 	// Wire type integer, runtime low signed 16 bits [08 "Player records"]:
 	Kills  int16
 	Losses int16
-	// TODO(question): the save writer's Player%i table establishes Kills and
-	// Losses but does not establish commander-counter keys. Commander counters
-	// remain authoritative runtime/result data until a save-writer trace settles
-	// whether they have a separate account or are not persisted [08 "Player records"] [08 R-CAMP-01 §10].
+	// Commander-kill and commander-loss counters are NOT persisted: the
+	// Player%i writer and reader carry no key for them, and the only place the
+	// image spells "Commanders Killed"/"Commanders Lost" is the statistics
+	// score board handed to the lobby and online callbacks, which no save
+	// touches [08 "Player records"] [08 R-CAMP-01 §10]. Traced by WU-19-158;
+	// the marker here previously said the question was open.
 
 	// Wire type integer, runtime i32 [08 "Player records"]:
 	// UpdateTime is the player's economy settlement deadline — absolute tick
@@ -442,9 +465,11 @@ type PlayerSlot struct {
 	// Wire type integer, runtime low byte [08 "Player records"]:
 	Logo uint8
 	Side uint8
-	// TODO(T25): fields beyond the established table (network identity,
-	// connection/alive state, sharing options, etc) remain unknown and are kept
-	// unsupported until their retail consumers are established [GAP T25].
+	// Logo and Side close the account: the writer follows them only with the
+	// 11-byte Alliances box [08 "Player records"] [08 R-SAVE-02 §12]. The
+	// T25 marker that stood here reserved space for "network identity,
+	// connection/alive state, sharing options" — none of which the Player%i
+	// account carries in either direction (WU-19-158 census).
 }
 
 // PlayerSlotFromEconomy projects the established scalar/statistics fields into

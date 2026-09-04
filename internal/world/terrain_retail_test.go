@@ -144,14 +144,19 @@ func TestEveryMapLoads(t *testing.T) {
 	if unbound != 0 {
 		t.Errorf("%d feature references did not bind to the catalog", unbound)
 	}
-	// Fringe anchors: see stampFeatureAnchors' TODO(question) for why this is a
-	// measured floor rather than 100%.
+	// Fringe anchors. This used to be an 80% floor, deferring to a
+	// marker on stampFeatureAnchors that no longer exists: that pass
+	// now derives fringe entirely from the anchors' own footprints and leaves
+	// every uncovered authored fringe empty [05 R-FEAT-01 §17], so every cell
+	// that reads back as fringe is one an anchor covers and must hop to it.
+	// Measured over the corpus: 417,202 fringe cells, all of them resolving.
+	// The exact equality is the point — a regression in the signed anchor-delta
+	// bytes would show up as a handful of stragglers that a ratio floor hides.
 	if fringe == 0 {
 		t.Fatal("no fringe cells found; the corpus should have tens of thousands")
 	}
-	if ratio := float64(resolved) / float64(fringe); ratio < 0.80 {
-		t.Errorf("only %.1f%% of %d fringe cells resolve to an anchor, want >= 80%%",
-			100*ratio, fringe)
+	if resolved != fringe {
+		t.Errorf("%d of %d fringe cells did not resolve to an anchor", fringe-resolved, fringe)
 	}
 	t.Logf("%d maps, %d fringe cells, %.1f%% resolved", loaded, fringe, 100*float64(resolved)/float64(fringe))
 }

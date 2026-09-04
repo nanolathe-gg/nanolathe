@@ -106,13 +106,16 @@ const (
 // domain as an open question. Nothing here closes it.
 func clampAxis(camera, mapSize, viewportSpan, leading int32) int32 { // [07 §10][03 §4.1]
 	minimum := -leading
-	// TODO(question): the floor is Established — a retail capture on Great
-	// Divide scrolled hard west shows the map's column 0 on the viewport's left
-	// edge [07 R-CAM-01 §13]. Which extent the *maximum* subtracts is a
-	// Supported inference: the viewport subrect's span, not the negotiated
-	// display's. A static trace of the clamp's maximum operand would settle it;
-	// the display reading would leave the last 128 playable columns and 64 rows
-	// permanently off screen [07 R-CAM-01 §13].
+	// Both bounds are Established [07 R-CAM-01 §13]. The floor: a retail capture
+	// on Great Divide scrolled hard west shows the map's column 0 on the
+	// viewport's left edge. The maximum subtracts the battle viewport SUBRECT's
+	// span, not the negotiated display's — retail's battle setup derives that
+	// span as right−left+1 / bottom−top+1 from the subrect corners and holds it
+	// in words distinct from the display size, and the clamp's maximum reads
+	// those. The same span halved is every recenter's operand, so one span
+	// definition serves clamp, jump and recenter. (Traced 2026-09-04; the
+	// display reading, now rejected, would have left the last 128 playable
+	// columns and 64 rows permanently off screen.)
 	maximum := mapSize - viewportSpan - leading
 	if camera < minimum {
 		return minimum

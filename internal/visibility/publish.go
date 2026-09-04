@@ -170,10 +170,15 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 	// Group g walks TABLE g-1 [03 R-COMP-02 §1]: sight in [32(k+1), 32(k+2))
 	// walks TABLE k, and TABLE numtables-1 is unreachable.
 	//
-	// TODO(question): group 0 (sightdistance < 32) reads the record before
-	// the table list in retail and its content is unknown [03 R-COMP-02 §1];
-	// the doc sanctions an empty line list here, so only the origin is
-	// admitted. A retail capture of a unit with sightdistance < 32 settles it.
+	// Group 0 (sightdistance < 32) reads the record 16 bytes BEFORE the table
+	// list's storage in retail, and what those bytes hold at run time is still
+	// Unknown [03 R-COMP-02 §1]; the doc sanctions an empty line list as a
+	// stated divergence, so only the origin is admitted. That divergence is
+	// unobservable on stock content: WU-19-158's census of all 278 stock
+	// definitions found every one authoring a sightdistance, the smallest being
+	// 55, so the lowest group any stock unit selects is 1 and group 0 is never
+	// reached [03 R-COMP-02 §1]. It becomes visible only under a mod, and only
+	// a retail capture of such a unit could settle what retail draws there.
 	var spokes [][]step
 	if g >= 1 {
 		spokes = s.raySpokes(g - 1)

@@ -18,27 +18,32 @@ import (
 // the two were interchangeable here until now.
 //
 // They are not interchangeable for a build order. The MOBILEBUILD record's
-// stored position is the footprint's centre [07 §9], while build-site
-// generation "passes a selected point goal into path search" [04 §7.4] — a
-// perimeter candidate outside the footprint. Reading the order position as the
-// steering target walked the builder into its own site: any published route is
-// consumed by the C15 prune once the mover is within five cells of its last
-// waypoint [04 §7.3] C15, and every tick after that the mover steered at the
-// order position again, so the last few cells of every approach ended on the
-// centre no matter what the route said.
+// stored position is the footprint's centre [07 §9]. Reading it as the steering
+// target walked the builder into its own site: any published route is consumed
+// by the C15 prune once the mover is within five cells of its last waypoint
+// [04 §7.3] C15, and every tick after that the mover steered at the order
+// position again, so the last few cells of every approach ended on the centre
+// no matter what the route said.
 //
-// ENGINE MECHANISM, not a traced retail claim: the binding below is Nanolathe's
+// The marker retired here asked which retail structure holds the steering
+// target, and whether MOBILEBUILD binds it to "the selected build-site
+// candidate" or leaves it on the order position. Its second premise was
+// withdrawn research: §7.4's unanchored "build-site generation enumerates
+// perimeter candidates ... and passes a selected point goal into path search"
+// was closed as a bounded negative by [04 R-PATH-01 §13]. The handler's
+// approach phase reads the product's footprint pair, snaps the record's X and
+// Z to that footprint's centre, and installs the RECTANGLE goal of
+// [04 R-PATH-01 §12] with the product's anchor cell and footprint as its origin
+// and size — no candidate enumeration, no range filter, no sort, no point goal.
+// The candidates ARE the grown rectangle's border cells and the "selection" is
+// the search's own. So the answer is neither arm of the question: the handler
+// binds a shaped goal that is not the record's raw position, which is what this
+// binding carries for it (InstallRectangleGoal in goals.go).
+//
+// ENGINE MECHANISM, not a traced retail claim: the layout below is Nanolathe's
 // representation of that handle — a per-unit world point tagged with the order
-// node that owns it. Retail's own layout is not recovered.
-//
-// TODO(question): which retail structure holds the mover's steering target,
-// and whether the MOBILEBUILD handler binds its goal handle to the selected
-// build-site candidate or leaves the handle on the order position and steers
-// from the route alone, is untraced. What IS established is that a goal handle
-// exists separately from the order record [04 §8.3] and that build-site
-// generation selects a perimeter point goal for path search [04 §7.4]; binding
-// that selected point as the mover's goal is the engine's way of honouring
-// both. Tracing the MOBILEBUILD handler's goal-handle bind would settle it.
+// node that owns it, plus the optional shape payload. Retail's own field order
+// is not recovered and nothing here depends on it.
 //
 // Lifetime: this is derived state, like the arrival handle beside it. It is
 // not written to a save box; the owner rebinds it on the first tick after a
