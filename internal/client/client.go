@@ -269,14 +269,12 @@ func New(opts Options) (*Client, error) {
 	// `MAXLINES`, `TXTSCROL` and `UNITCHAT` controls and the `ScreenChat`
 	// command are the runtime writers [07 §5][07 R-FE-01 §11].
 	//
-	// TODO(T25): this build's settings store (internal/settings) does not carry
-	// the four values yet, so nothing calls ConfigureMessageLines or
-	// SetScreenChat with a persisted choice and the defaults above stand for
-	// the whole session. Blocked on files this unit does not own: add the four
-	// to settings.Settings with these defaults, and have the shell's
-	// applySettings call the two setters that already exist here. Behavior is
-	// correct for a fresh profile either way, which is why it is accepted
-	// rather than guessed at.
+	// These are only the values a fresh profile installs. internal/settings
+	// now carries the four (Settings.Messages), and cmd/nanolathe's
+	// installBattleClient calls ConfigureMessageLines/SetScreenChat with the
+	// persisted choice, so a returning profile's stored values reach this
+	// client instead of these defaults standing for the whole session
+	// (WU-19-170).
 	c.in = *newInputState()
 	// Fallback display palette: grayscale. This keeps the framebuffer path
 	// valid before SetPalette installs PALETTE.PAL [03 §4.3].

@@ -1185,6 +1185,51 @@ re-arm keeps the record, so its `StartBuilding` keeps running with no
 secondary 5/8/9/6/7, purge and cancel paths) emits it for a flagged record
 before the tombstone-gated TargetCleared step runs.
 
+### Closed — the three weapon-target-clear entry points: two order verbs and one control-byte-free helper [R-ORDER-02 §3] (2026-09-04)
+
+**Established (direct static trace of all three routines; WU-19-168.)** §2 above
+ends "Two sibling entry points serve mid-life clears by handlers: one with the
+mirror guard (fires only while bit 4 is set, then clears bit 4), and one
+unconditional." Read as three variants of one cleanup helper, that left two
+questions open — whether the unconditional form also writes the slot control
+byte, and whether it skips a slot whose enabled bit is clear — and it appeared
+to contradict `[06 R-WPN-05 §3]`, whose census of the control byte names bit 4's
+writers as "the slot initializer … thereafter only the two order verbs".
+
+They are three routines sharing one tail, and the two guarded ones **are** those
+order verbs (`[R-ORD-01 §7]`'s inhibit and release), not variants of the
+cleanup:
+
+| Entry | Arguments | Guard | Control-byte write |
+|---|---|---|---|
+| inhibit verb | (unit, k) | control byte bit 1 set **and** bit 4 clear | sets bit 4 |
+| release verb | (unit, k) | bit 1 set **and** bit 4 set | clears bit 4 |
+| unconditional clear | (unit, slot) | none | **none — it neither reads nor writes the byte** |
+
+So both sections are right and neither needs correcting: the bit-4 writes belong
+to the verbs, and §2's "bit 4 is then set" describes the cleanup path's use of
+the *inhibit* verb. What the reading did leave wrong is the impression that
+"unconditional" might still mean "unguarded but still writing the latch": it
+does not. The unconditional entry writes no control byte at all, and it clears
+an unassigned or disabled slot's stale target pair as readily as an assigned
+one.
+
+**The `k = 3` form belongs to the verbs only.** Passing 3 to either verb is not
+a slot index: the routine recurses on slots 0 and 1 and falls through to slot 2,
+which is what makes "release all slots" slots 0, 1, 2 **in that order**. The
+unconditional entry has no such form — it takes one slot index, so a caller
+wanting all three walks them itself (`Stop`'s row, `[R-ORD-01 §2]`, and
+`Paralyze`'s three clears, `[R-ORD-01 §2]`).
+
+**The shared tail, identical in all three.** If the slot's target pair is
+already empty — the 16-bit target word zero **and** the companion word at its
+−32,768 sentinel — the routine does nothing whatever: no reset, no callback. In
+every other case it writes the empty pair, resolves `StartBuilding` by name in
+the owner's script and **discards the result** (a lookup with no call and no
+flag write), and arranges `TargetCleared` with the slot index as its **first**
+script argument, arity 1, receiver none — the cell map of `[R-UNIT-06 §4]`, not
+the raw push sequence §2 quoted.
+
 ### 3.4 Command resolution
 
 **Established fact:** Player and network commands do not name descriptors
@@ -4626,6 +4671,50 @@ compare, as [01 §7.1] records. A caller that forms a 64-bit quantity — the
 and a low half at or above 2^31 draws nothing and leaves the state untouched.
 Both effects need a separation past 92681 world units, beyond the diagonal of
 any map the reference install ships.
+
+### Closed — the self-destruct row's p2 word, exactly: a full-nibble marker over a 28-bit count [R-ORD-01 §14] (2026-09-04)
+
+**Established (direct static trace of the shared handler body; WU-19-168.)**
+[R-ORD-01 §2]'s row says "p2's high nibble marks initialisation" and stops
+there, which left the bit pattern open; Nanolathe's handler carried a
+`TODO(question)` that had picked the nibble's low bit as a behaviourally
+equivalent stand-in. The body settles the whole word:
+
+* the **initialisation test** masks with the whole high nibble and compares
+  against zero — as §2 says, the nibble, not one bit in it;
+* the **seed store** writes `(definition countdown field) | 0xF0000000`: all
+  four marker bits are set, never one;
+* the **remaining count** is read as `p2 & 0x0FFFFFFF` — the twenty-eight bits
+  below the marker, not three. The seed is the definition's three-bit field, so
+  a stock session never holds a count above 7, but the handler's own arithmetic
+  is 28-bit;
+* the **decrement replaces the word**: `p2 = (count − 1) | 0xF0000000`, not a
+  merge into a narrow field. An implementation that preserves other bits of p2
+  across a step is preserving bits retail discards.
+
+The announce is a **six-entry local table** of status kinds
+`{22, 21, 20, 19, 18, 17}` indexed by the remaining count, which equals
+`22 − count` for every in-range value. The table is why §2's "n ≥ 6 indexes
+past the six-entry table" is a real out-of-range read rather than an
+arithmetic underflow: the subtraction form and the table agree on 0..5 and part
+company above it. That Unknown (authored countdown 6 or 7) is unchanged.
+
+Everything else in §2's row is confirmed unchanged by the same read: the
+counting branch is entered on `p1 = 0` **and the DEFINITION's** three-bit field
+being non-zero (not the remaining count); the zero step arms one `RNG(15)` draw
+and every other step 30; the gate OR is bit 1; the cancelled arm emits status 23
+only when the unit lacks auto flag 14 and applies no damage in either case; and
+the terminal arm calls the **packet builder** directly with attacker and victim
+both this unit, amount 30,000, kind 3.
+
+**Consequence for [06 §9.2]'s two global gates.** Because the terminal arm
+enters at the packet builder, everything §9.2 applies *above* the builder — the
+area falloff, the attacker-veterancy scale, and the global double and half gates
+of options-word bits 7 and 8 — is not on the self-destruct path at all,
+whatever those bits hold. §9.2's own whole-image census already found no writer
+for either bit; this closes the same question from the caller's side, and
+retires a `TODO(T25)` that treated the ungated case as a placeholder rather than
+as the contract.
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
 
@@ -14383,6 +14472,13 @@ replacement bullet is needed because the ground path has no vertical term.
 
 - Out-of-map and mode behavior of the placement validator outside the
   production path · §6.4 · static trace. Marked `TODO(question)`.
+- `VTOL_HelpBuild` phase 0's extra precondition, "the definition's
+  builder-specific script slot must be present (else cancel-all)" ·
+  [R-ORD-01 §7] · static read of that phase's gate, naming the definition word
+  it tests and which script function that word caches. The phrase occurs once
+  in the whole corpus and nothing else defines a per-definition script slot;
+  Nanolathe leaves the clause unevaluated (an unevaluated EXTRA precondition
+  admits what retail admits) and marks the site `TODO(question)`.
 - Allocator and slot-reuse cleanup when a dead factory slot is reused · §3.8 ·
   static trace. Marked `TODO(question)`; reclamation and inheritance must not
   be invented.

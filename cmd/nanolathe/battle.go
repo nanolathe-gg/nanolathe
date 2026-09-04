@@ -309,7 +309,12 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetCamera(b.cam)
 	cl.SetPalette(b.hud.pal)
 	cl.SetFNT(b.hud.console)
-	applyDamageBarsSetting(loadedSettings())
+	s := loadedSettings()
+	applyDamageBarsSetting(s)
+	// `textlines`/`textscroll` configure the message ring and `screenchat`
+	// sets its class filter; retail's startup loader installs these the same
+	// way it installs damagebars [02 §3][07 R-HUD-03 §14.3][07 R-HUD-03 §14.4].
+	applyMessageLineSettings(cl, s)
 	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
 	// The presentation effect pool needs each admitted effect's authored
 	// per-frame holds, which live in the GAF entry the event names — an asset
@@ -1928,6 +1933,22 @@ func loadedSettings() settings.Settings {
 // [03 R-FX-01 §6].
 func applyDamageBarsSetting(s settings.Settings) {
 	client.SetDamageBars(s.DamageBarsEnabled())
+}
+
+// applyMessageLineSettings installs the loaded block's message-column ring
+// configuration onto the battle client. `textlines` is the ring's line
+// budget and `textscroll` its line-age limit; both are read once at settings
+// load, the same as `damagebars` [02 §3][07 R-HUD-03 §14.3]. `screenchat`
+// sets the class filter the message column paints through [07 R-HUD-03
+// §14.4]. Normalize (already run by settings.Load) guarantees non-negative
+// values here.
+func applyMessageLineSettings(cl *client.Client, s settings.Settings) {
+	if cl == nil {
+		return
+	}
+	m := s.Messages
+	cl.ConfigureMessageLines(uint16(m.TextLines), uint16(m.TextScroll))
+	cl.SetScreenChat(uint8(m.ScreenChat))
 }
 
 // damageBarsSettingValue is the live bit, in the form the persisted block

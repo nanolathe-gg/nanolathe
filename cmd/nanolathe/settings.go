@@ -48,6 +48,9 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// the load transition reads and the option values the three two-stage
 	// buttons drive [07 R-FE-01 §6][07 R-FE-01 §11].
 	g.display = s.Display
+	// The message-column ring configuration has no editing screen here, so it
+	// rides through unchanged from whatever the file held [02 §3].
+	g.messages = s.Messages
 	// The configured per-player unit limit rides on the setup record into
 	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
 	// screen edits it: retail reads it from the profile file, and the
@@ -146,6 +149,8 @@ func (g *gameShell) captureSettings() settings.Settings {
 		// rewrite the whole block; the value it saves is whatever the live
 		// display record holds [07 R-FE-01 §6][07 R-FE-01 §11].
 		Display: g.display,
+		// Written back unchanged: no screen here edits it [02 §3].
+		Messages: g.messages,
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed

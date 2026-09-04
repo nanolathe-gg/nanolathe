@@ -150,6 +150,15 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err := createAndBindServices(s); err != nil {
 		return nil, fmt.Errorf("session: retail shell composition: %w", err)
 	}
+	// The per-player reset that builds every AI record belongs to the world
+	// rebuild, which runs "for every kind and for loads alike" — before the
+	// restoration dispatcher, and before any unit exists [08 R-ENTRY-01 §3
+	// step 24][08 R-SAVE-02 §11-A]. Keeping it here, ahead of
+	// the forced-slot reservation, is what makes a restored battle's planner a
+	// battle-entry planner that then meets a restored world.
+	if err := initializeRestoredBattleAI(s, deps.FS, m); err != nil {
+		return nil, fmt.Errorf("session: retail restore: computer player construction: %w", err)
+	}
 	stable, err := reserveRetailUnits(s.Units, cat, image.Units.Records)
 	if err != nil {
 		return nil, err

@@ -25,8 +25,17 @@
 // production queues; the movement payload adapter retains exact node identity
 // [04 R-ORD-01 §1][P0-00 B].
 //
-// TODO(T25): "refresh the builder interface" is a presentation call [07]; this
-// package cannot make one and does not.
+// "Refresh the builder interface", which several rows below name, is a
+// presentation call and nothing else: retail's battle panel caches its command
+// and build-page state in interface words and the refresh is what recomputes
+// them from the current selection [07 R-HUD-03 §13]. It writes no unit, record
+// or world state, so no row's arithmetic
+// depends on it. This build has no such cache to invalidate — the HUD composes
+// from the committed frame every present [03 §2.4] — so there is nothing for
+// the order layer to call, and the rows below say so at their sites rather than
+// pretending to a missing seam. (The work adapter carries an unused `Refresh`
+// port from an earlier reading; it is not wired, because a repaint hint has no
+// consumer here.)
 package orders
 
 import (
@@ -324,6 +333,26 @@ func boundAssist(q *Queue, builder *units.Unit, n *Node, tick uint32) (bool, boo
 			emitNanolathe(builder, n, tick)
 		}
 		return ok, true
+	}
+	return false, false
+}
+
+// boundCapture is the ownership-transfer seam the `Capture` row's last phase
+// needs [04 R-ORD-01 §5][05 R-WORK-01 §11]. The central transfer lives in
+// internal/construction, which imports this package, so the call goes out
+// through the work adapter exactly as assist, repair and resurrect do.
+//
+// The refusal shape is the row's: [05 R-WORK-01 §11] says the transfer's entry
+// gate (owner differs, alive set, death latch clear) refuses silently and "the
+// executor still raises cue slot 16 with no text", so the caller does not
+// branch on the result — only on whether the seam was bound at all, which is
+// what a fixture without a work adapter reports.
+func boundCapture(q *Queue, captor *units.Unit, n *Node, tick uint32) (bool, bool) {
+	if q == nil || n == nil {
+		return false, false
+	}
+	if b := q.Binding(); b != nil && b.Work != nil && b.Work.Capture != nil {
+		return b.Work.Capture(captor, n, tick), true
 	}
 	return false, false
 }
@@ -973,13 +1002,21 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		}
 		return 1 // advance
 	case 5:
-		// TODO(T25): the central ownership-transfer path is
-		// construction.Service.TransferOwnership [05 "Capture"]; that package
-		// imports this one, so the call cannot be made from here and no
-		// injection seam of the SetGetBuiltHandler shape exists for it.
-		// Placeholder: the record completes and raises its cue exactly as the
-		// row says, and the target keeps its owner. Reported upward by WU-18-2
-		// as the one seam this family cannot reach.
+		// "Transfer the target, status 16, complete" [04 R-ORD-01 §5]. The
+		// transfer itself is construction.Service.TransferOwnership
+		// [05 R-WORK-01 §11], which this package cannot call directly — that
+		// package imports this one — so it goes out through the work adapter's
+		// Capture port, the same seam shape assist, repair and resurrect use.
+		//
+		// TODO(question): the port is declared but the session binds no
+		// implementation for it, so a captured unit still keeps its owner in a
+		// live battle. Nothing further is needed on this side: the call, the
+		// order and the silent-refusal shape are all the row's. What settles it
+		// is one binding in session composition — `Capture:` alongside
+		// `Assist:`/`Repair:`/`Resurrect:`, resolving the record's target and
+		// calling TransferOwnership with the captor's owner. Reported upward by
+		// WU-19-168; the file that needs it is outside this unit's ownership.
+		boundCapture(QueueForUnit(u), u, n, tick)
 		workStatus(u, statusCapture, "")
 		return 5 // complete
 	default:
@@ -1543,7 +1580,11 @@ func spawnResurrectionRepair(u *units.Unit, n *Node) {
 	if id == 0 {
 		return
 	}
-	q.PushHead(id, Node{Owner: n.Owner, Target: n.Target, GoalX: product.X, GoalY: product.Y, GoalZ: product.Z})
+	// Routed by the descriptor's rear-segment flag, as every handler spawn is
+	// [04 R-ORD-01 §1]: the resolver returns a repair descriptor today, and the
+	// routing is the head insert's rule rather than this caller's knowledge of
+	// which descriptor came back.
+	spawnAtSegmentHead(q, id, Node{Owner: n.Owner, Target: n.Target, GoalX: product.X, GoalY: product.Y, GoalZ: product.Z})
 }
 
 // ---------------------------------------------------------------------------

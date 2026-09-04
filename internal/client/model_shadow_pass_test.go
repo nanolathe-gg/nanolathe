@@ -37,13 +37,18 @@ func TestShadowProjectionShearsByAQuarterHeight(t *testing.T) {
 	}
 }
 
-// TestShadowGateReadsOptionsAndAuthoredKeys locks the three option bits and the
-// three authored keys [R-REN-03D §1].
+// TestShadowGateReadsOptionsAndAuthoredKeys locks the corrected shadow gate: a
+// mobile unit needs the master bit, the vehicle-shadow bit, and none of
+// noshadow/canhover/floater; a structure needs only the master bit and
+// noshadow — SHADING gates neither [R-REN-03D §1, corrected].
 func TestShadowGateReadsOptionsAndAuthoredKeys(t *testing.T) {
 	c := compositionClient(t)
 	c.shadows, c.vehicleShadows, c.shading = true, true, true
-	if !c.castsModelShadow(false, false, false) {
-		t.Fatal("an ordinary unit with all options on must cast a shadow")
+	if !c.castsModelShadow(false, false, false, false) {
+		t.Fatal("an ordinary mobile unit with all options on must cast a shadow")
+	}
+	if !c.castsModelShadow(false, false, false, true) {
+		t.Fatal("an ordinary structure with all options on must cast a shadow")
 	}
 	for _, tc := range []struct {
 		name                        string
@@ -53,9 +58,20 @@ func TestShadowGateReadsOptionsAndAuthoredKeys(t *testing.T) {
 		{"canhover", false, true, false},
 		{"floater", false, false, true},
 	} {
-		if c.castsModelShadow(tc.noShadow, tc.canHover, tc.floater) {
-			t.Fatalf("%s must suppress the model shadow", tc.name)
+		if c.castsModelShadow(tc.noShadow, tc.canHover, tc.floater, false) {
+			t.Fatalf("mobile %s must suppress the model shadow", tc.name)
 		}
+	}
+	// A structure's branch tests only the master bit and noshadow: it does
+	// not read canhover or floater at all.
+	if c.castsModelShadow(true, false, false, true) {
+		t.Fatal("structure noshadow must suppress the model shadow")
+	}
+	if !c.castsModelShadow(false, true, false, true) {
+		t.Fatal("structure canhover must not suppress the model shadow")
+	}
+	if !c.castsModelShadow(false, false, true, true) {
+		t.Fatal("structure floater must not suppress the model shadow")
 	}
 	for _, tc := range []struct {
 		name                     string
@@ -63,13 +79,25 @@ func TestShadowGateReadsOptionsAndAuthoredKeys(t *testing.T) {
 	}{
 		{"master off", false, true, true},
 		{"vehicle off", true, false, true},
-		// Every tinted blit is gated on shading, so the shadow goes with it.
-		{"shading off", true, true, false},
 	} {
 		c.shadows, c.vehicleShadows, c.shading = tc.master, tc.vehicle, tc.shading
-		if c.castsModelShadow(false, false, false) {
-			t.Fatalf("%s must suppress the model shadow", tc.name)
+		if c.castsModelShadow(false, false, false, false) {
+			t.Fatalf("mobile %s must suppress the model shadow", tc.name)
 		}
+	}
+	// A structure does not read the vehicle-shadow bit at all.
+	c.shadows, c.vehicleShadows, c.shading = true, false, true
+	if !c.castsModelShadow(false, false, false, true) {
+		t.Fatal("structure with vehicle shadows off must still cast a shadow")
+	}
+	// SHADING has no part in the gate for either class: it selects the
+	// shaded model renderer only, not shadow casting.
+	c.shadows, c.vehicleShadows, c.shading = true, true, false
+	if !c.castsModelShadow(false, false, false, false) {
+		t.Fatal("mobile unit must still cast a shadow with shading off")
+	}
+	if !c.castsModelShadow(false, false, false, true) {
+		t.Fatal("structure must still cast a shadow with shading off")
 	}
 }
 

@@ -121,6 +121,12 @@ type gameShell struct {
 	// page's option values. The options screen is their only writer; the load
 	// transition is the size pair's only reader [07 R-FE-01 §6][07 R-FE-01 §11].
 	display settings.Display
+	// messages is the message-column ring configuration (`textlines`,
+	// `textscroll`, `screenchat`, `unitchattext`) [02 §3][07 R-FE-01 §11]. No
+	// screen edits it yet — retail's `SPEEDS` page has no nanolathe
+	// counterpart — so it is written back unchanged from whatever the loaded
+	// block held, the same as UnitLimit.
+	messages settings.Messages
 
 	campaigns              []mission.Campaign
 	campaignOptions        []mission.Campaign
@@ -212,6 +218,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
 	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
 	shell.display = settings.DefaultDisplay()       // [02 R-KEYS-01 §5]
+	shell.messages = settings.DefaultMessages()     // [02 §3]
 	shell.assets = loadMenuAssets(cs)
 	if shell.assets == nil {
 		return nil, fmt.Errorf("nanolathe: retail frontend assets: construction returned no asset set")

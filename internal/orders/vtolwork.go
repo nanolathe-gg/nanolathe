@@ -23,15 +23,24 @@
 // are worth stating once:
 //
 //   - installWorkGoal's `canfly` arm IS the air side of [04 R-ORD-01 §1]: all
-//     four installers "skip the install entirely — release only — when the
-//     owner's definition has the `canfly` bit", so every twin below gets the
-//     release-and-clear half for free and none of them writes a ground goal
-//     payload. The air marker replacement is wired below through the adapter.
+//     four GROUND installers "skip the install entirely — release only — when
+//     the owner's definition has the `canfly` bit", so no twin below writes a
+//     ground goal payload. What replaces it is the air marker family
+//     [04 R-AIR-01 §4], which installWorkGoal reaches through the movement
+//     adapter's air port — so the altitude offsets and arrival radii the rows
+//     below name DO reach a marker: the offset is folded into the Y this
+//     package passes, and the radius is the request's own field. An earlier
+//     reading of this header said both had "nowhere to go", from a time when
+//     the air port was unimplemented; the sites that repeated it are corrected
+//     with it.
 //
 // Air marker installation is routed through the session-owned movement
 // adapter. The movement package retains ownership of marker construction and
 // release; this package supplies only the node identity and scalar goal data
-// [04 R-AIR-01 §4][P0-00 B].
+// [04 R-AIR-01 §4][P0-00 B]. That package also owns the air-leg executors that
+// run alongside these rows — the takeoff preamble, the approach leg and the
+// 150-tick construction orbit of [04 §10.3] — so a leg named in a row below
+// and absent from its body is there, one layer down, not missing.
 package orders
 
 import (
@@ -78,16 +87,26 @@ func health16(u *units.Unit) uint32 {
 }
 
 // dropFromCarrier is the preamble's "when the unit is carried, drop it from its
-// carrier" [04 R-ORD-01 §7]. It severs both ends of the link that
-// internal/orders owns: the carried unit's carrier reference and the carrier's
-// cargo list, in list order (I1).
+// carrier through the attach commit of [R-COB-03 §5] with the third value 2"
+// [04 R-ORD-01 §7]. It severs both ends of the link that internal/orders owns —
+// the carried unit's carrier reference and the carrier's cargo list, in list
+// order (I1) — and writes the third value.
 //
-// TODO(T25): the section routes this through the attach commit of
-// [R-COB-03 §5] "with the third value 2 (the only engine sites that pass a
-// nonzero third value)". This build's AttachmentState has no field for that
-// third value and no attach-commit entry point that takes one, so the value has
-// nowhere to go; what survives is the link severance itself, which is the half
-// every later phase reads.
+// The third value is not an opaque byte: [R-COB-03 §5]'s closure of 2026-09-01
+// identifies the two-bit field it lands in as the cargo's COMMITTED MOVER-MODE
+// pair — 0 attached/parked, 1 grounded, 2 airborne ([04 R-AIR-01 §3],
+// [04 R-MOV-01 §8]) — which is the field this file already writes at the
+// preamble's takeoff arm and the field `VTOL_Unload`'s release writes 1 into
+// ([04 R-AIR-01 §10]). So "third value 2" means the dropped unit is committed
+// airborne by the drop itself. A marker here used to say the value had nowhere
+// to go, on the premise that this build has no field for it; the field is
+// `Move.Mode`'s low pair and has existed all along.
+//
+// This is also why the preamble's takeoff arm does not fire afterwards: it runs
+// "only when the mover is grounded (mode 1)", and a unit that was carried is
+// now 2, not 1. An aircraft released from a transport to work is already
+// airborne and takes no takeoff marker — which is the row as written, not an
+// omission.
 func dropFromCarrier(u *units.Unit) {
 	if u == nil || u.Attachment.Carrier == 0 {
 		return
@@ -95,6 +114,9 @@ func dropFromCarrier(u *units.Unit) {
 	carrier := lookupTarget(u, u.Attachment.Carrier)
 	u.Attachment.Carrier = 0
 	u.Attachment.AttachPiece = -1
+	// The third value's low two bits, written into the committed mover-mode
+	// pair and leaving the rest of the mode byte alone [R-COB-03 §5].
+	u.Move.Mode = (u.Move.Mode &^ 0x3) | 2
 	if carrier == nil {
 		return
 	}
@@ -135,9 +157,7 @@ func airWorkPreamble(u *units.Unit, n *Node, stateText string) Code {
 		u.Move.Mode = (u.Move.Mode &^ 0x3) | 2 // grounded -> airborne [04 R-MOV-01 §8]
 		// The takeoff marker sits over the unit's own position at half its
 		// cruise altitude; `cruisealt / 2` is a signed halving of the 16-bit
-		// definition word. Only the release half of the install is reachable
-		// (see the file header), so the offset has nowhere to go.
-		_ = u.Def.CruiseAlt / 2
+		// definition word, folded into the Y handed to the air port.
 		if !installWorkGoal(u, n, u.X, u.Y+numeric.Fixed(int64(u.Def.CruiseAlt/2)<<16), u.Z) {
 			return 7
 		}
@@ -216,21 +236,25 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 	case 0:
 		// TODO(question): [04 R-ORD-01 §7] adds "the definition's
 		// builder-specific script slot must be present (else cancel-all)" to
-		// this phase and does not say which slot that is — no other section
-		// names a builder-specific script slot, and this build's UnitDef caches
-		// no script-function indices at all. The clause is therefore not
-		// evaluated: skipping an unevaluable EXTRA precondition admits records
-		// retail would also admit, where a cancel-all on it would kill every
-		// air assist. A trace naming that slot (which cached script function,
-		// and the definition field holding it) settles it [04 R-ORD-01 §7].
+		// this phase and does not say what that slot is. Re-checked against the
+		// whole spec (WU-19-168): the phrase appears exactly once, in that row,
+		// and no section defines a per-definition script slot of any kind — the
+		// only other "script slot" in the corpus is a COB THREAD slot
+		// [05 R-FAC-01R], which is per-unit runtime state and cannot be a
+		// definition precondition. This build's UnitDef carries the whole
+		// compiled program (`Script`, rejected at catalog link when missing) but
+		// no cached per-function index, so there is nothing here that could be
+		// absent for a definition that loaded at all. The clause is left
+		// unevaluated: skipping an EXTRA precondition admits records retail also
+		// admits, where guessing it and cancelling would kill every air assist.
+		// Decider: read the row's phase-0 gate and name the definition word it
+		// tests and which script function that word caches [04 R-ORD-01 §7].
 		return airWorkPreamble(u, n, "Building")
 	case 1:
 		n.Param3 = 0
 		// The marker's horizontal arrival radius is `builddistance` with the
 		// radius-flag setter, so arrival is `dist < builddistance` in whole
-		// units — strict, unlike the ground reach test's inclusive compare. See
-		// the file header for why the radius has nowhere to go.
-		_ = u.Def.BuildDistance
+		// units — strict, unlike the ground reach test's inclusive compare.
 		if !installWorkGoalWithRadius(u, n, target.X, target.Y, target.Z, u.Def.BuildDistance) {
 			return 7
 		}
@@ -251,9 +275,15 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		emitStartBuildingAbsolute(u, n, target)
 		return 1
 	case 3:
-		// TODO(T25): the 150-tick orbit-marker rebuild (bearing builder->target
-		// plus 0xDB6E, radius `builddistance`, heading stored on the marker,
-		// [04 §10.3]) is a marker-family call; see the file header.
+		// The 150-tick orbit-marker rebuild of [04 §10.3] is neither missing
+		// nor this file's to make. Markers belong to internal/movement, and
+		// its air-leg executor already runs the recurrence for this very
+		// descriptor: the station is the target's position PLUS the un-negated
+		// component pair at `bearing(me, target) + 0xDB6E`, radius
+		// `builddistance`, that angle stored as the marker's explicit heading,
+		// no arrival-radius and no altitude setter. Both air build orders share
+		// that body — [04 §10.3]'s "the identical code appears in both bodies".
+		//
 		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]. Corrected
 		// with the ground twin (PT3-04): this arm used to admit no work at all,
 		// which made an air builder's assistance a no-op.
@@ -326,7 +356,6 @@ func vtolRepairUnitHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32
 		}
 		return airWorkPreamble(u, n, "Repairing")
 	case 1:
-		_ = u.Def.CruiseAlt // the marker's full-cruise-altitude offset; see the file header
 		if !installWorkGoal(u, n, n.GoalX, n.GoalY+numeric.Fixed(int64(u.Def.CruiseAlt)<<16), n.GoalZ) {
 			return 7
 		}
@@ -534,7 +563,6 @@ func vtolRepairPatrolHandler(u *units.Unit, n *Node, satisfied uint32, tick uint
 		if satisfied&gateMoveOutcomes != 0 {
 			return 6 // rotate: the leg is done, the next waypoint takes the head
 		}
-		_ = u.Def.CruiseAlt // the marker's full-cruise-altitude offset; see the file header
 		if !installWorkGoal(u, n, n.GoalX, n.GoalY, n.GoalZ) {
 			return 7
 		}

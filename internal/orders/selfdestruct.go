@@ -17,6 +17,19 @@ package orders
 // The two producers that spawn this record with p1 = 1 — `Attack_Kamikaze`'s
 // arrival and `Standby_Mine`'s detonation — share combat.go's
 // spawnImmediateSelfDestruct.
+//
+// Both spawn through the handler head insert, which goes to "the front of the
+// segment the record's rear-segment flag selects" [04 R-ORD-01 §1], and
+// `SelfDestruct`'s descriptor carries that flag (static bit 18, [04 §3.1]) —
+// so the spawned record lands at the head of the REAR segment, which is what
+// makes [04 R-ORD-01 §2]'s "the record lives on the rear segment" true for a
+// spawned one as well as an issued one, and what keeps it from blocking the
+// primary queue. `Queue.PushHead` inserts into the primary segment
+// unconditionally, so the routing belongs at the spawn site: every handler
+// spawn in this package goes through spawnAtSegmentHead (stop.go), which is the
+// shape combat.go's self-destruct producer already inlines. `SelfDestructFG` —
+// the `d` button's descriptor — carries no such flag and is issued, not
+// spawned. A test in wu19168_test.go locks the segment.
 
 import (
 	"strconv"
@@ -28,22 +41,26 @@ import (
 )
 
 const (
-	// selfDestructCountField is the remaining count's 3-bit field inside p2.
-	// The authored `selfdestructcountdown` is a 3-bit field ([02 "Unit record"]:
-	// absent -> 5, present -> its decimal value masked to 3 bits), and the row
-	// stores the remaining count back into p2 on every step.
-	selfDestructCountField uint32 = 0x7
+	// selfDestructCountField is the remaining count's field inside p2. The
+	// handler reads it as the low TWENTY-EIGHT bits — the whole word below the
+	// marker nibble — not as the three bits the seed happens to fill
+	// [04 R-ORD-01 §14]. The authored `selfdestructcountdown` is a 3-bit field
+	// ([02 "Unit record"]: absent -> 5, present -> its decimal value masked to
+	// 3 bits), so a stock session never sees a count above 7; the arithmetic is
+	// still the row's.
+	selfDestructCountField uint32 = 0x0fffffff
 
-	// selfDestructInitialised marks p2 as initialised. [04 R-ORD-01 §2] says
-	// only that "p2's high nibble marks initialisation".
-	//
-	// TODO(question): the exact marker value is not established — the row names
-	// the nibble, not the bit pattern. Any nonzero value in p2's high nibble is
-	// behaviourally identical for this handler, because the only reads of p2 are
-	// this marker test and the 3-bit count, so the low bit of that nibble is
-	// used here. A trace of the handler's marker store and test would settle it.
-	selfDestructInitialised uint32 = 1 << 28
-	selfDestructMarkerMask  uint32 = 0xf << 28
+	// selfDestructInitialised is the marker the seed store ORs into p2 and the
+	// value the initialisation test masks with: the WHOLE high nibble, all four
+	// bits, never one of them [04 R-ORD-01 §14]. [04 R-ORD-01 §2] names the
+	// nibble; §14 gives the pattern.
+	selfDestructInitialised uint32 = 0xf0000000
+	selfDestructMarkerMask  uint32 = 0xf0000000
+
+	// selfDestructDefinitionField is the width of the DEFINITION's authored
+	// countdown, which the seed store masks to three bits before ORing the
+	// marker [02 "Unit record"][04 R-ORD-01 §14].
+	selfDestructDefinitionField uint32 = 0x7
 
 	// selfDestructDamage is the self-inflicted amount and selfDestructStep the
 	// per-count wait, both from [04 R-ORD-01 §2] / [04 R-SPEC-01 §13].
@@ -66,7 +83,7 @@ func selfDestructCountdownField(def *content.UnitDef) uint32 {
 	if err != nil {
 		v = 0
 	}
-	return uint32(v) & selfDestructCountField
+	return uint32(v) & selfDestructDefinitionField
 }
 
 // selfDestructHandler is the shared body of [04 R-ORD-01 §2]'s self-destruct
@@ -105,8 +122,15 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 			if count == 0 {
 				n.Param1 = 1
 			} else {
-				n.Param2 = (n.Param2 &^ selfDestructCountField) | (count - 1)
+				// The decrement REPLACES the word — count-1 with the marker
+				// re-ORed — rather than merging into a narrow field
+				// [04 R-ORD-01 §14].
+				n.Param2 = (count - 1) | selfDestructInitialised
 			}
+			// The announce is a six-entry table of kinds {22..17} indexed by
+			// the remaining count, which is 22 − count for every in-range one
+			// [04 R-ORD-01 §14]. Counts 6 and 7 index past it — the Unknown
+			// [04 R-ORD-01 §2] records.
 			workStatus(u, uint8(22-count), "")
 			if count == 0 {
 				armDeadline(n, tick, drawBelow(u, 15)) // the one draw of the timeline [04 R-SPEC-01 §13]
@@ -148,9 +172,14 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 // itself", so that attacker is this unit and the link ends as its own handle —
 // not as whoever shot it before it was told to self-destruct.
 //
-// TODO(T25): the funnel's two global double/half gates [06 §9.2] step 4 are
-// session state with no surface here. Placeholder: the ungated case, which is
-// the only one a stock session runs.
+// The funnel's two global double/half gates [06 §9.2] are not on this path,
+// which is why nothing here consults them. The row enters at the PACKET BUILDER
+// — attacker and victim both this unit, amount 30000, kind 3 [04 R-ORD-01 §14]
+// [06 R-WPN-05 §11] — and §9.2 applies those two bits in the per-recipient
+// routine ABOVE the builder, alongside the area falloff and the attacker
+// veterancy this row equally does not take. §9.2's own whole-image census
+// independently finds no writer for either bit, so both are stock-inert as
+// well; either fact alone settles the site.
 func applySelfDestructDamage(u *units.Unit) {
 	if u == nil || u.Def == nil {
 		return

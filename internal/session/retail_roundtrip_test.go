@@ -17,8 +17,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/save"
 )
@@ -27,6 +29,12 @@ const (
 	roundTripSeed       = 7
 	roundTripSaveTick   = 600
 	roundTripAfterTicks = 300
+	// The computer player's slowest reachable effect is a placed building: the
+	// construction task runs every 90 ticks, its builder has to walk to the site
+	// it chose, and the nanoframe only then exists. This window is the one
+	// WU-19-161 measured, tripled, so the gate fails on a planner that never
+	// resumed rather than on one that resumed slowly [08 R-AI-01 §3].
+	roundTripAIResumeTicks = 900
 )
 
 // retailRoundTripSource composes the seed-7 skirmish this test saves from and
@@ -271,6 +279,201 @@ func TestRetailBattleSaveLoadContinuationReport(t *testing.T) {
 		return
 	}
 	t.Logf("still divergent at tick %d: %s", base+int32(roundTripAfterTicks), firstRetailDivergence(src, dst))
+}
+
+// retailAIActivity is the play-tester's question in one line per computer-owned
+// unit: where it is, how long its order queue is, and what it is building. The
+// planner's effect on the world is a change in this census; a planner that was
+// never reconstructed leaves it frozen except for whatever the save's own
+// orders finish on their own.
+func retailAIActivity(s *Session, owner uint8) map[uint16]string {
+	out := make(map[uint16]string)
+	if s == nil || s.Units == nil {
+		return out
+	}
+	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
+		u := s.Units.Unit(pool.Handle(slot))
+		if u == nil || !u.Alive || u.Owner != owner {
+			continue
+		}
+		primary, secondary := 0, 0
+		if q := orders.QueueForUnit(u); q != nil {
+			primary, secondary = q.LenPrimary(), q.LenSecondary()
+		}
+		name := ""
+		if u.Def != nil {
+			name = u.Def.UnitName
+		}
+		out[uint16(slot)] = fmt.Sprintf("%s x=%d z=%d orders=%d/%d remaining=%.4f group=%d",
+			name, int64(u.X.Raw()), int64(u.Z.Raw()), primary, secondary, u.Remaining, u.Group)
+	}
+	return out
+}
+
+// TestRetailBattleSaveLoadComputerPlayerResumes is WU-19-172's gate. Retail
+// rebuilds a computer player's planner on the load path exactly as at a fresh
+// battle entry — the per-player reset that constructs the AI record runs "for
+// every kind and for loads alike", before the restoration dispatcher, and the
+// battle-entry tail then primes the per-player phase once on the restored world
+// at the restored global tick [08 R-ENTRY-01 §3 step 24][08 R-ENTRY-01 §8].
+// Nothing of the planner is in the bank except each unit's group index
+// [08 R-SAVE-02 §6, §11], so this asserts the reconstruction and the
+// resumption, never hash equality with the source: retail reseeds both random
+// streams before any restoration, so no bit-identical continuation exists
+// [08 "Scheduler and random state in saves"].
+func TestRetailBattleSaveLoadComputerPlayerResumes(t *testing.T) {
+	f, src := retailRoundTripSource(t)
+	summary := RetailBattleSummary(src, "roundtrip", "0")
+	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
+	if err != nil {
+		t.Fatalf("battle save inputs: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "ROUNDTRIP.SAV")
+	if err := src.WriteRetailSave(path, in); err != nil {
+		t.Fatalf("write retail battle save: %v", err)
+	}
+	result, err := LoadRetailSavePath(path, RetailLoadDeps{
+		FS: f.fs, Catalog: f.cat,
+		SimSeed: roundTripSeed, CRTSeed: roundTripSeed,
+		UnitLimit: src.Skirmish.UnitLimit,
+	})
+	if err != nil {
+		t.Fatalf("load retail battle save: %v", err)
+	}
+	dst := result.Battle.Session
+	restoredTick := dst.Clock.GlobalTick
+
+	// The reset's slot rule is the controller byte, which the `Player%i`
+	// accounts carry: every non-remote slot owns a record, and the computer
+	// slots are the ones the manager's outer gate dispatches
+	// [08 R-ENTRY-01 §3 step 24][08 R-AI-01 §1].
+	srcSlots, dstSlots := restoredComputerSlots(src), restoredComputerSlots(dst)
+	if len(dstSlots) == 0 {
+		t.Fatal("restored battle has no computer player: the per-player reset built no AI record")
+	}
+	if len(srcSlots) != len(dstSlots) {
+		t.Fatalf("restored computer slots %v, source %v", dstSlots, srcSlots)
+	}
+	for i := range srcSlots {
+		if srcSlots[i] != dstSlots[i] {
+			t.Fatalf("restored computer slots %v, source %v", dstSlots, srcSlots)
+		}
+	}
+	// A human slot owns a record too; only remote peers do not
+	// [08 R-ENTRY-01 §3 step 24].
+	if dst.AI[src.LocalOwner] == nil {
+		t.Fatalf("local slot %d lost its AI record across the restore", src.LocalOwner)
+	}
+	for _, slot := range dstSlots {
+		if dst.AI[slot] == nil || dst.AI[slot].Player != slot {
+			t.Fatalf("slot %d has no manager after restore", slot)
+		}
+	}
+
+	// The saved group words are the whole of the planner's persisted state, and
+	// their reader's side effect is the group-vector append [08 R-SAVE-02 §6].
+	for _, slot := range dstSlots {
+		for group := uint8(1); group <= 9; group++ {
+			want := 0
+			for _, u := range src.Units.IterSliced() {
+				if u != nil && u.Alive && u.Owner == slot && u.Group == group {
+					want++
+				}
+			}
+			if got := len(dst.AI[slot].GroupMembers(group)); got != want {
+				t.Fatalf("restored slot %d group %d holds %d members, saved %d", slot, group, got, want)
+			}
+		}
+	}
+
+	// Every task record is constructed with deadline 0 and the dispatcher's
+	// compare is unsigned `deadline <= tick`, so the battle-entry prime at the
+	// restored tick runs all ten slots once and each rescheduling task writes
+	// its next deadline past that tick [08 R-AI-01 §1][08 R-ENTRY-01 §8 step 4].
+	// A planner that was never dispatched leaves them all at zero.
+	dispatched := []ai.TaskKind{ai.TaskResource, ai.TaskConstruction, ai.TaskWaveA, ai.TaskWaveB, ai.TaskRegroupA, ai.TaskRegroupB, ai.TaskExplore, ai.TaskRally}
+	for _, slot := range dstSlots {
+		mgr := dst.AI[slot]
+		for _, k := range dispatched {
+			if mgr.Deadlines[k] <= restoredTick {
+				t.Fatalf("slot %d task %d deadline %d did not advance past the restored tick %d: the battle-entry prime never dispatched it",
+					slot, k, mgr.Deadlines[k], restoredTick)
+			}
+		}
+	}
+
+	// The behavioural half. The signal has to be one only the planner can
+	// produce, because the bank's own orders keep running either way: a nanoframe
+	// already under construction finishes, and a mover already under way keeps
+	// walking, in a session whose managers were never rebuilt. Nothing else
+	// submits an order on a computer slot — there is no input on it — so a unit
+	// the slot did not own at the restore boundary is a building the planner
+	// placed, and an order queue that grows is an order the planner submitted
+	// [08 R-AI-01 §2, §3].
+	computer := dstSlots[0]
+	mgr := dst.AI[computer]
+	before := retailAIActivity(dst, computer)
+	beforeOrders := retailAIOrderCounts(dst, computer)
+	created := dst.Units.CreatedCountForPlayer(int(computer))
+	resourceDeadline, dispatches := mgr.Deadlines[ai.TaskResource], 0
+	acted, actedAt := "", 0
+	for i := 1; i <= roundTripAIResumeTicks; i++ {
+		dst.Step(int32(restoredTick) + int32(i))
+		if mgr.Deadlines[ai.TaskResource] != resourceDeadline {
+			resourceDeadline = mgr.Deadlines[ai.TaskResource]
+			dispatches++
+		}
+		if acted != "" {
+			continue
+		}
+		if now := dst.Units.CreatedCountForPlayer(int(computer)); now != created {
+			acted, actedAt = fmt.Sprintf("units created %d -> %d", created, now), i
+			continue
+		}
+		for id, count := range retailAIOrderCounts(dst, computer) {
+			if was, ok := beforeOrders[id]; !ok || count > was {
+				acted, actedAt = fmt.Sprintf("unit %d order queue %d -> %d", id, was, count), i
+				break
+			}
+		}
+	}
+	if acted == "" {
+		t.Fatalf("computer player %d ordered nothing for %d ticks after the restore; its census is still\n  %v",
+			computer, roundTripAIResumeTicks, before)
+	}
+	t.Logf("computer player %d resumed %d tick(s) after the restore: %s", computer, actedAt, acted)
+	for id, line := range retailAIActivity(dst, computer) {
+		t.Logf("  computer unit %d: %s", id, line)
+	}
+
+	// Resumption is not a one-shot: the resource task's own 30-tick cadence has
+	// to keep rescheduling for the whole window, not fire once at the prime
+	// [08 R-AI-01 §1, §2].
+	if want := roundTripAIResumeTicks/30 - 1; dispatches < want {
+		t.Fatalf("slot %d resource task was dispatched %d times in %d ticks, want at least %d",
+			computer, dispatches, roundTripAIResumeTicks, want)
+	}
+}
+
+// retailAIOrderCounts is the per-unit order-queue depth of one player's units,
+// the quantity that can only grow when someone submits an order.
+func retailAIOrderCounts(s *Session, owner uint8) map[uint16]int {
+	out := make(map[uint16]int)
+	if s == nil || s.Units == nil {
+		return out
+	}
+	for slot := 1; slot < s.Units.TotalRecords(); slot++ {
+		u := s.Units.Unit(pool.Handle(slot))
+		if u == nil || !u.Alive || u.Owner != owner {
+			continue
+		}
+		count := 0
+		if q := orders.QueueForUnit(u); q != nil {
+			count = q.LenPrimary() + q.LenSecondary()
+		}
+		out[uint16(slot)] = count
+	}
+	return out
 }
 
 // retailStateLines enumerates the same authoritative quantities HashState

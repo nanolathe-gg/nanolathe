@@ -314,7 +314,8 @@ func TestVTOLRepairPatrolHoldsOnItsOwnDeadline(t *testing.T) {
 }
 
 // TestRepairWaterClause locks both halves of the air-repair water clause of
-// [04 R-ORD-01 §7], which was passed unconditionally while its TODO(T25) stood.
+// [04 R-ORD-01 §7], which was passed unconditionally while the T25 marker
+// there stood.
 // It drives the single admission `nanoReach`, which the copy that used to live
 // in this file (`repairAdmission`) was collapsed into [04 R-ORD-02 §7].
 func TestRepairWaterClause(t *testing.T) {

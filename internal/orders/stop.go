@@ -56,7 +56,7 @@ func spawnLandIfCan(u *units.Unit, tick uint32) {
 	if q == nil {
 		return
 	}
-	q.PushHead(id, Node{
+	spawnAtSegmentHead(q, id, Node{
 		Owner:        u.Handle,
 		GoalX:        u.X,
 		GoalY:        u.Y,
@@ -65,26 +65,51 @@ func spawnLandIfCan(u *units.Unit, tick uint32) {
 	})
 }
 
-// clearWeaponTargetsUnconditional is the unconditional sibling of the
-// weapon-target-clear helper [R-ORDER-02 §2]. That section gives three entry
-// points to one walk over the three weapon slots in order: the cleanup-side
-// form guarded by the slot's assigned bit and its clear latch
-// (clearWeaponBuildTargets above), a mid-life form with the mirror guard, and
-// this one, which handlers call with no guard at all. What survives in every
-// form is the empty test and the notification: a slot whose target pair is
-// already empty is skipped, and any other slot has its pair reset to the empty
-// form and the owner's COB function `TargetCleared` arranged with the slot
-// index as the first script argument. The event is script-only, and the
-// arrange is a no-op when the unit's script defines no such function.
+// spawnAtSegmentHead is the handler head insert of [04 R-ORD-01 §1], routed:
+// "a handler that spawns a new record inserts it at the FRONT of the segment
+// the record's rear-segment flag selects". That flag is the descriptor's static
+// bit 18 [04 §3.1][04 §3.2], the same bit `Queue.appendTail` and the producer
+// insertion's head-insert branch select on [04 R-ORD-01 §13].
 //
-// TODO(question): [R-ORDER-02 §2] distinguishes the three entry points only by
-// their latch guard ("one with the mirror guard (fires only while bit 4 is
-// set, then clears bit 4), and one unconditional"), so whether the
-// unconditional form also writes the latch bit — and whether it skips a slot
-// whose assigned bit is clear — is not established. This form leaves the
-// control byte alone, which is the reading that keeps "unconditional" meaning
-// "no control-byte condition". A trace of the unconditional entry's writes to
-// the slot control byte would settle it.
+// `Queue.PushHead` inserts into the primary segment unconditionally, so a
+// caller that spawns a descriptor whose static mask carries bit 18 —
+// `SelfDestruct` and `BuildWeapon` are the only two [R-ORDER-02 §2] — must make
+// the choice itself. Every handler spawn in this package goes through here so
+// that a later descriptor gaining the flag routes without a second site being
+// remembered.
+func spawnAtSegmentHead(q *Queue, id ID, n Node) *Node {
+	if q == nil || id == 0 {
+		return nil
+	}
+	if isSecondary(id) {
+		q.PushSecondary(id, n)
+		if rear := q.Secondary(); len(rear) > 0 {
+			return rear[0]
+		}
+		return nil
+	}
+	return q.PushHead(id, n)
+}
+
+// clearWeaponTargetsUnconditional is the unconditional entry of the
+// weapon-target clear [R-ORDER-02 §3]. The three entries share one tail and
+// differ only at the top: the inhibit and release VERBS carry the control-byte
+// guards ([04 R-ORD-01 §7]), and this one reads and writes no control byte at
+// all. So it neither skips an unassigned slot nor touches the enabled bit or
+// autonomy — which is what makes `Stop` "clear the three weapon-slot targets
+// unconditionally" [04 R-ORD-01 §2] leave a slot's posture exactly as it was.
+//
+// The shared tail, identical in all three: a slot whose target pair is already
+// empty is skipped entirely; any other slot has its pair reset to the empty
+// form, `StartBuilding` is resolved in the owner's script and the result
+// DISCARDED, and the owner's COB function `TargetCleared` is arranged with the
+// slot index as its FIRST script argument (arity 1, [04 R-UNIT-06 §4]). The
+// event is script-only, and the arrange is a no-op when the unit's script
+// defines no such function.
+//
+// The verbs' "all slots" argument (k = 3) recurses over slots 0 and 1 and falls
+// through to 2; this entry has no such form — it takes one slot, so a caller
+// that wants all three walks them in index order, as here.
 func clearWeaponTargetsUnconditional(u *units.Unit) {
 	if u == nil {
 		return

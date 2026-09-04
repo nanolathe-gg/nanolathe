@@ -110,6 +110,15 @@ func LoadRetailSaveWithDeps(bank *save.Bank, deps RetailLoadDeps) (RetailLoadRes
 	if err := RestoreRetailBattleCore(stage); err != nil {
 		return RetailLoadResult{}, err
 	}
+	// The battle-entry tail follows the restoration dispatcher, not the other
+	// way round: GUI, then the per-player phase primed once on the restored
+	// world at the restored global tick, no second resource grant, then the
+	// metal-spot lists [08 R-ENTRY-01 §8][08 R-SAVE-02 §11-A]. That prime runs
+	// every task record whose constructed deadline is 0, which is how a
+	// restored computer player resumes play.
+	if err := finishRestoredBattleEntry(stage.Session); err != nil {
+		return RetailLoadResult{}, err
+	}
 	return RetailLoadResult{Summary: preflight.Summary, Route: preflight.Route, Battle: stage}, nil
 }
 

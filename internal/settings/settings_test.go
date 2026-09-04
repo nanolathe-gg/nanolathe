@@ -43,6 +43,10 @@ func TestDefaultsMatchRetail(t *testing.T) {
 			t.Errorf("Players[%d] = %+v, want %+v", i, p, want)
 		}
 	}
+	wantMessages := Messages{TextLines: 10, TextScroll: 10, ScreenChat: 1, UnitChatText: 5}
+	if s.Messages != wantMessages {
+		t.Errorf("Messages = %+v, want %+v [02 §3]", s.Messages, wantMessages)
+	}
 }
 
 func TestRoundTrip(t *testing.T) {
@@ -62,6 +66,7 @@ func TestRoundTrip(t *testing.T) {
 	want.Skirmish.Map = "Comet Catcher"
 	want.Skirmish.NumPlayers = 3
 	want.Skirmish.Mapping = 0
+	want.Messages = Messages{TextLines: 20, TextScroll: 0, ScreenChat: 0, UnitChatText: 10}
 	want.Skirmish.Players[0] = Player{Controller: 1, Side: 1, Color: 4, AllyGroup: 0, Metal: 2500, Energy: 500}
 	want.Skirmish.Players[1] = Player{Controller: 2, Side: 0, Color: 0, AllyGroup: 1, Metal: 200, Energy: 200}
 	if err := want.SaveTo(path); err != nil {
@@ -75,6 +80,12 @@ func TestRoundTrip(t *testing.T) {
 	if got.Difficulty != want.Difficulty || got.Skirmish.Map != want.Skirmish.Map ||
 		got.Skirmish.NumPlayers != want.Skirmish.NumPlayers || got.Skirmish.Mapping != want.Skirmish.Mapping {
 		t.Errorf("scalars round-tripped as %+v, want %+v", got, want)
+	}
+	// TextScroll and ScreenChat are stored zeros here, not absent values, so
+	// they must survive round-tripping rather than being repaired back to
+	// their defaults.
+	if got.Messages != want.Messages {
+		t.Errorf("Messages round-tripped as %+v, want %+v", got.Messages, want.Messages)
 	}
 	// The zeros in these two rows are stored choices, not absent values, so
 	// they must survive the normalization the loader runs.
@@ -173,6 +184,10 @@ func TestLoadFromDistinguishesAbsentFromZero(t *testing.T) {
 			{"Difficulty", got.Difficulty, DefaultDifficulty},
 			{"NumPlayers", got.Skirmish.NumPlayers, DefaultNumPlayers},
 			{"ScrollSpeed", got.ScrollSpeed, DefaultScrollSpeed},
+			{"TextLines", got.Messages.TextLines, DefaultTextLines},
+			{"TextScroll", got.Messages.TextScroll, DefaultTextScroll},
+			{"ScreenChat", got.Messages.ScreenChat, DefaultScreenChat},
+			{"UnitChatText", got.Messages.UnitChatText, DefaultUnitChatText},
 		} {
 			if tc.got != tc.want {
 				t.Errorf("absent %s = %d, want the default %d", tc.name, tc.got, tc.want)
@@ -182,7 +197,8 @@ func TestLoadFromDistinguishesAbsentFromZero(t *testing.T) {
 
 	t.Run("explicit zero is retained", func(t *testing.T) {
 		body := `{"version":` + strconv.Itoa(FileVersion) + `,"skirmish":{` +
-			`"commanderDeath":0,"mapping":0,"lineOfSight":0,"losType":0,"location":0}}`
+			`"commanderDeath":0,"mapping":0,"lineOfSight":0,"losType":0,"location":0},` +
+			`"messages":{"textLines":0,"textScroll":0,"screenChat":0,"unitChatText":0}}`
 		got, err := LoadFrom(write(t, body))
 		if err != nil {
 			t.Fatalf("LoadFrom: %v", err)
@@ -196,6 +212,10 @@ func TestLoadFromDistinguishesAbsentFromZero(t *testing.T) {
 			{"LineOfSight", got.Skirmish.LineOfSight},
 			{"LOSType", got.Skirmish.LOSType},
 			{"Location", got.Skirmish.Location},
+			{"TextLines", got.Messages.TextLines},
+			{"TextScroll", got.Messages.TextScroll},
+			{"ScreenChat", got.Messages.ScreenChat},
+			{"UnitChatText", got.Messages.UnitChatText},
 		} {
 			if tc.got != 0 {
 				t.Errorf("stored %s = %d, want the stored 0", tc.name, tc.got)

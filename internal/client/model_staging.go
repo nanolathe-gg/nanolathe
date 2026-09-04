@@ -329,7 +329,7 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 	// [R-REN-03A §2].
 	draw.Structure = !v.BMCode
 	draw.KeyPlane = v.ZBuffer || v.BuildRemaining > 0
-	draw.CastsShadow = c.castsModelShadow(v.NoShadow, v.CanHover, v.Floater)
+	draw.CastsShadow = c.castsModelShadow(v.NoShadow, v.CanHover, v.Floater, draw.Structure)
 	draw.GroundY = c.groundHeightUnder(v.X, v.Z)
 	draw.DiggerClip = v.Digger
 	if v.Digger {

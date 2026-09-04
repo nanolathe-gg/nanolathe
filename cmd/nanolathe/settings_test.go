@@ -31,6 +31,9 @@ func TestSettingsRoundTripThroughShell(t *testing.T) {
 	src.setup.Players[0] = session.SkirmishPlayer{Side: 1, Color: 4, AllyGroup: 0, Metal: 2500, Energy: 700}
 	src.setup.Players[1] = session.SkirmishPlayer{Side: 0, Color: 0, AllyGroup: 1, Metal: 200, Energy: 10000, Controller: 1}
 	src.setup.Players[2] = session.SkirmishPlayer{Side: 1, Color: 9, AllyGroup: 1, Metal: 1000, Energy: 1000, Controller: 1}
+	// No screen edits the message-column block, so it has to ride through
+	// captureSettings/applySettings unchanged, the same as UnitLimit.
+	src.messages = settings.Messages{TextLines: 20, TextScroll: 15, ScreenChat: 0, UnitChatText: 8}
 
 	blob := src.captureSettings()
 
@@ -62,6 +65,9 @@ func TestSettingsRoundTripThroughShell(t *testing.T) {
 	}
 	if dst.retailControllers != src.retailControllers {
 		t.Errorf("controllers = %v, want %v", dst.retailControllers, src.retailControllers)
+	}
+	if dst.messages != src.messages {
+		t.Errorf("messages = %+v, want %+v", dst.messages, src.messages)
 	}
 	for i := 0; i < 3; i++ {
 		a, b := src.setup.Players[i], dst.setup.Players[i]

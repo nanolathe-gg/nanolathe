@@ -25,19 +25,34 @@ const shadowColorIndex uint8 = 0
 // blits the body at +128 and the shadow at +133 [R-REN-03D §3].
 const shadowXOffset int32 = 5
 
-// castsModelShadow resolves the shadow gate. The master shadow bit, the
-// vehicle-shadow bit and the shading bit must all be on — every tinted blit is
-// gated on shading, so turning shading off removes model shadows outright —
-// and the definition must author none of noshadow, canhover or floater
-// [R-REN-03D §1].
-func (c *Client) castsModelShadow(noShadow, canHover, floater bool) bool {
+// castsModelShadow resolves the shadow gate. Retail selects one of three
+// shadow branches once the master-shadows bit and the definition's
+// `noshadow` have passed: a Digger's buried-clip silhouette, a mobile unit's
+// waterline-clip silhouette (both additionally gated on the vehicle-shadow
+// bit and on neither `canhover` nor `floater` being authored), and a
+// structure's re-rasterized, punched, cached shadow, which tests only the
+// master bit and `noshadow` — not the vehicle-shadow bit, not `canhover`,
+// not `floater` [R-REN-03D §1, corrected]. This client implements only the
+// structure branch's rasterize/punch/tint technique (see punchOut's doc
+// comment); it is applied here for both structure-class draws (the
+// technique the retail structure branch itself uses) and for the
+// mobile/Digger branches it stands in for until their own silhouette-clip
+// shadows are built, so the vehicle-shadow gate still applies to those.
+//
+// The SHADING option is not part of any branch's gate — that reading of
+// "every tinted blit is gated on shading" was wrong. SHADING selects the
+// shaded model renderer only [R-RND-02A]; it has no effect on shadows.
+func (c *Client) castsModelShadow(noShadow, canHover, floater, structure bool) bool {
 	if c == nil || c.pal == nil {
 		return false
 	}
-	if !c.shadows || !c.vehicleShadows || !c.shading {
+	if !c.shadows || noShadow {
 		return false
 	}
-	return !noShadow && !canHover && !floater
+	if structure {
+		return true
+	}
+	return c.vehicleShadows && !canHover && !floater
 }
 
 // shadowLocalVertex is the shadow projection. It is the body's own narrowing

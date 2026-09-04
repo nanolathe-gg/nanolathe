@@ -65,6 +65,17 @@ const (
 	DefaultDamageBars     = 0    // damagebars absent: the bit is cleared [03 R-FX-01 §6]
 )
 
+// The message-column values. `textlines`/`textscroll` are the SPEEDS page's
+// MAXLINES/TXTSCROL controls, `screenchat` is the `ScreenChat` command's
+// stored value, and `unitchattext` is the caption priority gauge [02 §3]
+// [07 R-FE-01 §11].
+const (
+	DefaultTextLines    = 10 // textlines: the message ring's line budget
+	DefaultTextScroll   = 10 // textscroll: line age limit (textscroll+1)*30 ticks
+	DefaultScreenChat   = 1  // screenchat: nonzero draws every message class
+	DefaultUnitChatText = 5  // unitchattext: caption gate 10-v < priority
+)
+
 // The display block. `VISUALS`'s `VIDSLDR` and its `RESTORE`/`UNDO` buttons are
 // the only writers; the skirmish and campaign load transitions are the only
 // readers, comparing the pair to the presentation window's current size and
@@ -167,8 +178,60 @@ type Settings struct {
 	UnitLimit int `json:"unitLimit"`
 	// Display is the `DisplaymodeWidth`/`DisplaymodeHeight` pair and the six
 	// visual option values the `VISUALS` page writes [07 R-FE-01 §6].
-	Display  Display  `json:"display"`
+	Display Display `json:"display"`
+	// Messages is the message-column ring configuration: `textlines`,
+	// `textscroll`, `screenchat` and `unitchattext` [02 §3][07 R-FE-01 §11].
+	Messages Messages `json:"messages"`
 	Skirmish Skirmish `json:"skirmish"`
+}
+
+// Messages is the message-column ring configuration. All four values are
+// legitimate to store as zero — a zero `textlines` disables ring storage
+// outright [07 R-FE-01 §11] — so their defaults are installed by Defaults()
+// rather than treated as absent by Normalize.
+type Messages struct {
+	// TextLines is `textlines`, the message ring's line budget
+	// [07 R-HUD-03 §14.3].
+	TextLines int `json:"textLines"`
+	// TextScroll is `textscroll`; a line's age limit is
+	// (textscroll+1)*30 simulation ticks [07 R-HUD-03 §14.3].
+	TextScroll int `json:"textScroll"`
+	// ScreenChat is `screenchat`: nonzero draws every message class, zero
+	// retains only classes 1, 4 and 8 [07 R-HUD-03 §14.4].
+	ScreenChat int `json:"screenChat"`
+	// UnitChatText is `unitchattext`, the caption priority gauge: a status
+	// caption is admitted when `10 - unitchattext < priority`
+	// [07 R-HUD-03 §14.1].
+	UnitChatText int `json:"unitChatText"`
+}
+
+// DefaultMessages is the block the startup reader installs when nothing is
+// stored [02 §3].
+func DefaultMessages() Messages {
+	return Messages{
+		TextLines:    DefaultTextLines,
+		TextScroll:   DefaultTextScroll,
+		ScreenChat:   DefaultScreenChat,
+		UnitChatText: DefaultUnitChatText,
+	}
+}
+
+// Normalize repairs a negative stored value, the one thing decoding cannot
+// rule out on its own; zero is a legitimate choice for every field here and
+// is left alone.
+func (m *Messages) Normalize() {
+	if m.TextLines < 0 {
+		m.TextLines = DefaultTextLines
+	}
+	if m.TextScroll < 0 {
+		m.TextScroll = DefaultTextScroll
+	}
+	if m.ScreenChat < 0 {
+		m.ScreenChat = DefaultScreenChat
+	}
+	if m.UnitChatText < 0 {
+		m.UnitChatText = DefaultUnitChatText
+	}
 }
 
 // Display is the `VISUALS` page's persisted block. The two size values are
@@ -272,6 +335,7 @@ func StoreDamageBars(on bool) error {
 func Defaults() Settings {
 	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit}
 	s.Display = DefaultDisplay()
+	s.Messages = DefaultMessages()
 	s.Skirmish = Skirmish{
 		NumPlayers:     DefaultNumPlayers,
 		Difficulty:     DefaultDifficulty,
@@ -359,6 +423,7 @@ func (s *Settings) Normalize() {
 		s.UnitLimit = MaxUnitLimit
 	}
 	s.Display.Normalize()
+	s.Messages.Normalize()
 	s.Skirmish.Normalize()
 }
 

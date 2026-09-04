@@ -6035,6 +6035,85 @@ ordinary constructors and first ticks:
 - the scheduler's clock anchor after the first budget pass ("Scheduler and
   random state in saves").
 
+### Closed — the computer player after a battle restore [R-SAVE-02 §11-A] (2026-09-04)
+
+**Established.** The list above — "the AI's strategic state, class vectors and
+manager tasks" are regenerated — says what is *absent*; this section says what
+the load path runs *instead*, because an implementation that reads that line as
+"rebuild the planner from the bank" finds nothing to rebuild it from and leaves
+the computer player idle for the rest of the battle. No new tracing was needed:
+every clause below is drawn from sections already closed, and this section
+exists so the load-path answer sits in one place. Written for WU-19-172, whose
+predecessor observed a restored Nanolathe battle in which the human player's
+units continued exactly and the computer player's commander never moved again.
+
+**The planner is re-entered as at session entry, not restored.** The world
+rebuild "runs next, once per battle, for every kind and for loads alike"
+([R-ENTRY-01 §3]), and its per-player reset (step 24) is what constructs the AI
+record: the ten task records with their initial deadlines, the strategic state
+whose constructor makes the eight simulation draws, and the per-side classifier
+table entry; then the AI profile is loaded from the resource slot with the
+`ai\default.txt` fallback and the difficulty tables are applied to every
+computer-controlled slot. That step runs **before** the restoration dispatcher —
+the load-path summary of [R-ENTRY-01 §8] orders it "§3 world rebuild in full,
+including the AI constructors' draws … → the restoration dispatcher … → phase
+priming" — so a loaded battle's planner is a battle-entry planner that then
+meets a restored world.
+
+Four consequences, each answering a question an implementer will ask:
+
+1. **Slots.** The reset builds a record for every slot whose controller byte is
+   non-zero unless the controller is 3 (remote); humans included, and a human's
+   record is simply never dispatched, because the manager's outer gate admits
+   only controller 2 ([R-AI-01 §1]). On a load those controller bytes are
+   already the saved ones: an independent pre-pass restores `Controller` from
+   every `Player%i` account before battle init ("Player records"), and the save
+   gate copies them into the setup record's rows ([R-ENTRY-01 §2] step 5).
+2. **Cadences restart from zero.** Every task deadline is constructed as 0, and
+   the strategic state's stored refresh tick with it. That is unambiguous on the
+   load path because the world rebuild sets the global tick to 0 (step 21) and
+   the restored tick only arrives later, when the dispatcher reads
+   `Players/GameTime`. So at the restored tick every one of the ten task slots
+   is due on the first dispatch — the compare is unsigned `deadline <= tick`
+   ([R-AI-01 §1]) — and the strategic refresh, whose gate is a stored tick and
+   not a countdown ([R-P0-05 §6]), is due on that same pass. The manager's
+   classification countdown is the one counter that does not fire immediately:
+   it is constructed at 30 and decrements once per eligible entry
+   ([R-ENTRY-01 §8] step 4).
+3. **Difficulty is re-read, from the Summary account.** The `Player%i` account
+   carries no difficulty word at all — the whole account is the table under
+   "Player records". Difficulty is the `Summary` integer `Difficulty`, restored
+   with the rest of the game metadata before battle entry ("Summary", "Load
+   process" step 3), and it reaches the planner exactly as in a fresh battle:
+   through the profile's `plan` gate and the economy discount ([R-SKIR-01 §9],
+   [R-AI-01 §12]).
+4. **Groups do come back — through the units, not through the planner.** The
+   task vectors are constructed empty, and the one AI word the bank carries is
+   per unit: the base record's AI group index, whose reader "moves the unit out
+   of whatever group it holds and into this one (group-vector append)", the
+   single base-record word with a side effect beyond a field copy (§6, and the
+   "scenario and save unit load" caller of the direct group writer in
+   [R-P0-04 §3]). The restored slice therefore repopulates the group records as
+   it is restored, and the tasks that run at the priming pass find their
+   members already enrolled.
+
+**The tail differs from a fresh entry in exactly two ways** ([R-ENTRY-01 §8],
+"Load path summary"): the per-player phase is primed once "on the restored
+world at the **restored** global tick" rather than at tick 0, and the second
+starting-resource grant is skipped. The metal-spot list rebuild for every slot
+that owns an AI record is unchanged. That priming pass is where a restored
+computer player resumes: it dispatches all ten task slots once, on the restored
+world, before the first tick after the load is run at all.
+
+**Bounded negative.** Nothing else of the planner is persisted. The account
+inventory holds no AI account, the `Player%i` item list is closed (the
+WU-19-158 addendum under "Player records"), and the group index is the only
+AI-owned word in the unit box (§6). A restored battle therefore cannot continue
+a computer player's *plan*; it can only restart one — which, with both random
+streams reseeded before any restoration ("Scheduler and random state in
+saves"), is the same statement as "a loaded save resumes logical world state,
+not bit-identical future behavior".
+
 ### Closed — Camera, Metal, PlayerFeatures and Mapping, exactly [R-SAVE-02 §12] (2026-08-29)
 
 `Camera`: two integer items, `X Position` and `Z Position`, the camera's

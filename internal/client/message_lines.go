@@ -3,7 +3,10 @@ package client
 // drawMessageLines is the master-composer message column. Unit captions use
 // the no-speaker sentinel, so they draw directly at x=138 with dcb[15]; the
 // same consumer also handles future chat and announcement lines [07 R-HUD-03
-// §14.4].
+// §14.4]. Each line installs its own colour-map entry immediately before its
+// text call — entry 10 for the record F3 last jumped to, entry 15 for every
+// other line — so the highlight cannot leak onto a following line
+// [07 R-CAM-01 §14].
 func (c *Client) drawMessageLines() {
 	if c == nil || c.fnt == nil {
 		return
@@ -16,6 +19,6 @@ func (c *Client) drawMessageLines() {
 			continue
 		}
 		y := 52 + i*int(c.fnt.Height)
-		DrawText(c.indexed, c.width, c.height, c.fnt, line.Text, 138, y, 0, 15)
+		DrawText(c.indexed, c.width, c.height, c.fnt, line.Text, 138, y, 0, line.LogicalColor())
 	}
 }
