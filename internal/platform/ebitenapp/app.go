@@ -19,12 +19,18 @@ import (
 type app struct {
 	c   *client.Client
 	img *ebiten.Image
+	// windowW/windowH are the size last pushed to the window system. The
+	// client owns the logical size and the adapter only follows it, so the
+	// load transition's Client.Resize moves the window on the next update
+	// without the shell ever reaching a device [07 R-FE-01 §11][I6].
+	windowW, windowH int
 }
 
 // Update runs at ebiten.TPS (60/s). Delta is the fixed 1/TPS period: stable
 // input pacing for menus and camera, and the session converts to sim ticks via
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *app) Update() error {
+	a.syncWindowSize()
 	pollInput(a.c.Input())
 	a.c.SetFocused(ebiten.IsFocused())
 	a.c.Step(1.0 / float64(ebiten.TPS()))
@@ -45,10 +51,39 @@ func (a *app) Draw(screen *ebiten.Image) {
 	screen.DrawImage(a.img, &ebiten.DrawImageOptions{})
 }
 
+// syncWindowSize pushes a logical size change out to the window system. It is
+// the "move the window and re-select the mode" half of the display-mode change
+// [07 R-FE-01 §11]; the client already re-allocated the offscreen.
+func (a *app) syncWindowSize() {
+	width, height := a.c.Size()
+	if width == a.windowW && height == a.windowH {
+		return
+	}
+	a.windowW, a.windowH = width, height
+	ebiten.SetWindowSize(width, height)
+}
+
 // Layout keeps the logical resolution fixed; Ebitengine letterboxes if the
 // window is resized.
 func (a *app) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return a.c.Size()
+}
+
+// DesktopSize reports the current monitor's size in logical pixels, or (0, 0)
+// when no monitor is available — before the loop is entered, or in a headless
+// process.
+//
+// The display-mode table the `VIDSLDR` slider indexes is gated on the desktop
+// size in retail's windowed (GDI) presentation: 640x480, 800x600 and 1024x768
+// unconditionally, then 1280x1024 only when the desktop is at least 1280x1024
+// and 1600x1200 only when the desktop is at least 1600x1200, both axes
+// inclusive [07 R-FE-02 §9]. This is the screen-metrics query that gate reads.
+func DesktopSize() (int, int) {
+	monitor := ebiten.Monitor()
+	if monitor == nil {
+		return 0, 0
+	}
+	return monitor.Size()
 }
 
 // Run starts the windowed main loop and blocks until the window closes. It
@@ -75,5 +110,5 @@ func Run(c *client.Client) error {
 	// A software cursor is installed, so hide the window system's pointer and
 	// leave the drawn one as the only visible pointer [07 §8].
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
-	return ebiten.RunGame(&app{c: c})
+	return ebiten.RunGame(&app{c: c, windowW: width, windowH: height})
 }

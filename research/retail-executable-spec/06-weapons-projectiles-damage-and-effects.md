@@ -1059,12 +1059,65 @@ The word has **no other writer** in the decompiled set (bounded over every
 slot-relative access in the weapon region; the fire-time turret executor and
 the ballistic solver do not store it; save load restores the record
 wholesale), so this creation-time value is what the ballistic creator divides
-for the whole life of the unit — see the correction under §6.4. **Unknown:**
-whether the unit's heading has already been drawn when the initializer runs
-(the three unit creators call it; the heading store and the initializer call
-sit in different routines), so whether the delta is taken at the spawn heading
-or at heading zero. *Decider:* order of the heading write and the
-slot-initializer call inside the common unit creator. It ends by dispatching `SetMaxReloadTime` with the largest of
+for the whole life of the unit — see the correction under §6.4.
+
+**Closed (2026-09-03, WU-19-138) — the frame, the order, and the sign.
+Established (direct-static).** The paragraph above left **Unknown** "whether
+the unit's heading has already been drawn when the initializer runs … so
+whether the delta is taken at the spawn heading or at heading zero", with the
+decider "order of the heading write and the slot-initializer call inside the
+common unit creator". Reading all three unit creators settles it: they are
+three routines but one sequence, and each runs the same three calls back to
+back, in this order:
+
+1. the **common position/state initializer** of `[04 §2.3b]` — it reads
+   `buildangle`, draws once on the simulation stream and writes the resulting
+   heading into the unit's orientation triple, zeroing the other two
+   components;
+2. the **script and model instantiation** — it creates the unit's COB thread
+   context and its piece-model instance and dispatches `Create`;
+3. the **slot initializer** — weapon links, control byte, reload word,
+   stockpile byte, distance word.
+
+So the piece model exists and the spawn heading is already in force when the
+two piece queries run: **the delta is taken at the spawn heading**, never at
+heading zero. Nothing rewrites the word afterwards — the initializer has
+exactly three call sites, all of them step 3 of that sequence, and no
+heading-change, build-completion or weapon-reinstall path re-enters it (the
+scaling constant 1.25 has exactly one reference in the image, and it is this
+routine).
+
+Two consequences follow.
+
+*The two points are world-space, rotated.* Each query returns the unit's own
+position plus the piece's composed offset, and the composer walks the piece's
+parent chain applying each node's rotation, **adding the unit's orientation
+triple to the root node's own rotation words** before it rotates. The offsets
+are therefore rotated by the spawn heading, not raw authored model offsets. The
+unit position still cancels in the difference, but the rotation does not: the
+same unit spawned at two headings stores two different words. It is the **same**
+piece-point routine the fire path calls for the muzzle spawn — one routine, one
+frame — so an implementation whose muzzle spawn point and whose distance word
+disagree about how a composed piece offset becomes a world point has one of the
+two wrong; they cannot be reconciled separately. The mission
+placer's authored facing angle — copied over the initialized heading *after*
+the creator returns `[04 §2.3b]` — arrives too late
+to affect it.
+
+*The stock corpus stores a positive word.* A tank's `Query*` piece is the flare
+at the end of the barrel and its `AimFrom*` piece the turret behind it, so the
+delta is the barrel offset projected onto world Z. Heading `h` faces
+`(−sin h, −cos h)` (§4 fact 1), so a muzzle a distance `d` forward of the
+aim-from piece gives a world-Z delta of `−d·cos h`, and the spawn band is
+`0x8000 ± buildangle/2` — for the stock values (`buildangle` 0 or 4096) that is
+within a quarter turn of the half turn, where `cos h < 0` and the delta is
+positive. The **Unknown** under §6.4 asking whether stock units ever store a
+negative value is therefore answered: not at a spawn heading. The negative case
+remains reachable arithmetic — a script that answers the two queries the other
+way round, or a definition with a `buildangle` wide enough to carry the spawn
+heading past a quarter turn — and §6.4's unsigned divide still governs it.
+
+The initializer ends by dispatching `SetMaxReloadTime` with the largest of
 the three `reloadtime` values scaled to milliseconds (`ticks × 1000 / 30`,
 truncated).
 
@@ -2242,11 +2295,40 @@ region; the turret executor solves into locals and the solver is pure). `T0`
 is therefore a per-unit constant, not a flight time to the current target:
 `(uint32)initialValue / weaponvelocity`, and because the divide is unsigned a
 negative initial value (muzzle behind the aim-from piece along world Z at
-initialization) yields a very large `T0`. Established for the arithmetic;
-**Unknown** whether stock units ever store a negative value (it depends on the
-orientation the piece transform sees at initialization, see [R-WPN-05 §3]).
-*Decider:* a manual retail observation of one ballistic unit's first shot at
-two spawn headings, or the creator-order trace named there. The pre-decrement of
+initialization) yields a very large `T0`. Established for the arithmetic.
+
+**Closed (2026-09-03, WU-19-138) — the divide is unsigned, and stock units do
+not reach the negative case. Established (direct-static).** The paragraph above
+left **Unknown** "whether stock units ever store a negative value", with the
+decider "a manual retail observation of one ballistic unit's first shot at two
+spawn headings, or the creator-order trace named there". The creator-order
+trace is done and is written up under [R-WPN-05 §3]: the slot initializer runs
+*after* the spawn heading is written, so the delta is taken at the spawn
+heading, and the spawn band `0x8000 ± buildangle/2` keeps a forward-mounted
+muzzle's world-Z delta positive for every stock `buildangle`. So the retail
+answer is **no** for the stock corpus at spawn, and the very-large-`T0` branch
+below is not a case an implementation has to make ordinary shots survive.
+
+Confirming that the divide really is unsigned: the creator zeroes the high
+dividend word and issues the *unsigned* 32-bit divide of the stored word by the
+weapon velocity, so a word of −1 becomes a quotient near 2^32 / velocity rather
+than −1. Two adjacent facts follow. A **zero** word yields `T0 = 0` and the
+launch reduces to the bare angle build with no pre-decrement at all — that is
+the "script answered neither piece query" case of [R-WPN-05 §3], not an error.
+A zero **velocity** raises the processor divide exception, as the malformed
+paragraph below already records.
+
+*Why the sign matters so much.* The pre-decrement is `T0 × gravity` subtracted
+from the vertical component, so an inverted word does not merely mis-shape the
+arc: at a stock light-cannon velocity a word of the right magnitude and the
+wrong sign turns a `T0` of five ticks into some eleven thousand, and the
+resulting vertical velocity drives the record more than a thousand world units
+straight down on its first integration. The shot detonates underground at its
+own muzzle on the tick it is created. An implementation that reads its composed
+piece points in the wrong frame reproduces exactly that, and it looks like
+"ballistic weapons never fire" rather than like a sign error.
+
+The pre-decrement of
 the vertical component by one flight-time's worth of gravity is part of the
 launch, not an integrator artefact, and must be reproduced. **Unknown:** the
 intended geometric meaning of that pre-decrement, and therefore whether an

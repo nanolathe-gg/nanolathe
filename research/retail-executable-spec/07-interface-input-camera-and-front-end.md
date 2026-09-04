@@ -2382,6 +2382,24 @@ ascending by width then height, modes below 640×480 dropped) and writes
 the stand-alone form of the same slider; its opener branch has no live
 caller (every call site passes the merged-page flag), so it is never shown.
 
+**Supported inference (asset census, 2026-09-03) — the page background.**
+The paragraph above names `options4x` as the options root's background and
+describes no per-page swap, but the install ships one full-screen background
+per page beside it — `OptSound4x`, `Optmusic4x`, `OptInterface4x`,
+`OptVisual4x` — and each carries the plates the merged page's controls sit
+on: `OptVisual4x`'s middle column lines up pixel for pixel with
+`VISUALS.GUI`'s authored gadget rectangles (gamma at y 80–115, screen size
+at 143–197, the three two-stage buttons at 224–401), which the bare
+`Options4x` leaves as empty wall. The in-battle set is the `Igopt…x` family.
+So the merge-flag open evidently selects the page's own background as well
+as appending its gadgets. **Unknown:** which routine picks it — the page
+opener's bitmap argument, or a repaint of the root. Decider: a static trace
+of the merge-flag arm of the window opener. A second question the merge
+leaves open: how a page whose own window record carries a non-zero origin is
+placed, `SOUND.GUI` being authored at (49, 182) while `VISUALS.GUI` is at
+(0, 0); the appended gadget rectangles are window-local and whether the
+opener adds the page's origin or the root's is not established.
+
 **Established fact — `SPEEDS` / `SPEEDSRT`.** `GAME` (max 21) → game
 speed, applied at once through the speed setter of [R-CAM-01 §3];
 `SCREEN` (max 65) → scroll speed byte; `TXTSCROL` (max 20) → `textscroll`,

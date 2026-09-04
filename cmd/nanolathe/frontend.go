@@ -117,6 +117,10 @@ type gameShell struct {
 	// screenshot path and the tests never touch the user's settings file.
 	settingsWritable bool
 	scrollSpeed      int // persisted scrollspeed [02 "Settings"] [07 §10] C2 presentation-only
+	// display is the live `DisplaymodeWidth`/`Height` pair and the `VISUALS`
+	// page's option values. The options screen is their only writer; the load
+	// transition is the size pair's only reader [07 R-FE-01 §6][07 R-FE-01 §11].
+	display settings.Display
 
 	campaigns              []mission.Campaign
 	campaignOptions        []mission.Campaign
@@ -207,6 +211,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.setup = newSkirmishMenuConfig(mapName)
 	shell.missionDifficultyValue = session.SkirmishDefaultDifficulty
 	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
+	shell.display = settings.DefaultDisplay()       // [02 R-KEYS-01 §5]
 	shell.assets = loadMenuAssets(cs)
 	if shell.assets == nil {
 		return nil, fmt.Errorf("nanolathe: retail frontend assets: construction returned no asset set")
@@ -255,6 +260,9 @@ func runGameShell(opts Options, cs *contentSet) error {
 	clPtr = cl // entering a battle morphs THIS client
 	cl.SetModelFS(cs.fs)
 	cl.SetCamera(shell.cam)
+	// The preferences were read before the client existed, so the three
+	// display-option bits reach it here [07 R-FE-01 §6].
+	shell.applyRetailVisualOptions(cl)
 	if shell.assets != nil && shell.assets.pal != nil {
 		// Retail keeps one indexed display palette for frontend and battle. GAF,
 		// PCX, and FNT raster bytes all address PALETTE.PAL directly; GUIPAL is
@@ -490,6 +498,63 @@ func (g *gameShell) openMenu(mode shellMode) {
 	g.frontend.Open(mode, panel, saveUnder)
 	g.refreshRetailPanel()
 	g.resolveRetailButtonGeometry()
+	if mode <= modeMenuSkirmish {
+		// The shell loader and the post-battle controller both call the one
+		// routine that forces the logical display size back to 640x480 and,
+		// only when the window differs, re-creates the presentation surface
+		// and the offscreen: the front end always runs at 640x480 whatever
+		// `DisplaymodeWidth`/`Height` hold [07 R-FE-02 §2]. Every authored
+		// menu screen is opened through here, so this is that routine's site.
+		// The loading screen and the battle are excluded: they are the other
+		// direction, handled at the load transition [07 R-FE-01 §11].
+		g.applyDisplaySize(clPtr, retailScreenW, retailScreenH)
+	}
+}
+
+// applyDisplaySize moves the presentation surface to one logical size. It is
+// retail's "compare to the current window size and, when different, resize the
+// window, re-select the mode and re-create the offscreen" step, in both of its
+// directions [07 R-FE-01 §11][07 R-FE-02 §2].
+//
+// The client owns the size and the offscreen; the platform adapter follows it
+// for the window and the uploaded image, so nothing here reaches a device.
+// The shell's own camera viewport follows too, because the front end's camera
+// is the surface [I6].
+func (g *gameShell) applyDisplaySize(cl *client.Client, width, height int) {
+	if g == nil || cl == nil {
+		return
+	}
+	if width < settings.MinDisplaymodeWidth || height < settings.MinDisplaymodeHeight {
+		width, height = retailScreenW, retailScreenH
+	}
+	if w, h := cl.Size(); w == width && h == height {
+		return
+	}
+	cl.Resize(width, height)
+	if g.cam != nil {
+		g.cam.ViewW, g.cam.ViewH = int32(width), int32(height)
+		g.cam.Clamp()
+	}
+}
+
+// applyDisplayMode is the load transition's half: the stored
+// `DisplaymodeWidth`/`Height` pair is compared to the current window size and
+// the surface follows it when they differ [07 R-FE-01 §11]. It runs at the
+// transition that starts the load, so the battle composes at the chosen size.
+//
+// The authored HUD windows keep their 640x480 rectangles: `.GUI` position
+// sentinels resolve against the authored 640x480 design space [02 §6][07 §1]
+// and no display-scale conversion is established, so at a larger mode the
+// terrain view grows and the panels stay where they were authored.
+// TODO(question): retail's HUD panels are described as anchored to the screen
+// edges at larger modes; which sentinel or runtime rewrite moves them is not
+// established here. Decider: a static trace of the battle window opener's
+// rectangle arithmetic against a non-640x480 display size.
+func (g *gameShell) applyDisplayMode(cl *client.Client) {
+	if g == nil {
+		return
+	}
+	g.applyDisplaySize(cl, g.display.Width, g.display.Height)
 }
 
 func (g *gameShell) activePanel() *ui.Panel {
@@ -614,6 +679,18 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	g.cam = nil
 	installBattleClient(clPtr, battle)
 	g.cam = battle.cam
+	// The battle viewport is the presentation surface. Battle composition
+	// builds the camera at the authored 640x480 design size; the surface may
+	// already be at the chosen display mode, so the viewport is squared with
+	// it here, at the one render-thread installation point that sees both
+	// [07 R-FE-01 §11].
+	if clPtr != nil && g.cam != nil {
+		if w, h := clPtr.Size(); w > 0 && h > 0 {
+			g.cam.ViewW, g.cam.ViewH = int32(w), int32(h)
+			g.cam.Clamp()
+		}
+	}
+	g.applyRetailVisualOptions(clPtr)
 	g.battle = battle
 	g.battle.returnToMenu = g.returnFromBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {

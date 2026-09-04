@@ -267,6 +267,13 @@ func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request
 	g.loading = state
 	g.loadingReturn = back
 	g.openMenu(modeLoading)
+	// The skirmish and campaign load transitions compare
+	// `DisplaymodeWidth`/`Height` to the current window size and, when they
+	// differ, resize the window, re-select the mode and re-create the
+	// offscreen [07 R-FE-01 §11]. This is that transition: the front end runs
+	// at 640x480 whatever the pair holds [07 R-FE-02 §2], and the battle about
+	// to be composed runs at the chosen mode.
+	g.applyDisplayMode(clPtr)
 	go func() {
 		authoritative, err := composeAuthoritativeBattle(request)
 		if err == nil && after != nil {

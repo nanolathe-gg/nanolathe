@@ -27,6 +27,9 @@ func (g *gameShell) attachSettings() {
 	}
 	g.applySettings(loaded)
 	g.settingsWritable = true
+	// The three display-option bits reach the presentation as soon as they are
+	// read; retail's own loader installs them the same way [07 R-FE-01 §6].
+	g.applyRetailVisualOptions(clPtr)
 }
 
 // applySettings installs a loaded block over the shell's default setup.
@@ -41,6 +44,10 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// `damagebars` becomes bit 0 of the interface-flags word at settings load
 	// [07 R-HUD-03 §7][03 R-FX-01 §6].
 	applyDamageBarsSetting(s)
+	// The display block is the options screen's `VISUALS` page: the size pair
+	// the load transition reads and the option values the three two-stage
+	// buttons drive [07 R-FE-01 §6][07 R-FE-01 §11].
+	g.display = s.Display
 	// The configured per-player unit limit rides on the setup record into
 	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
 	// screen edits it: retail reads it from the profile file, and the
@@ -135,6 +142,10 @@ func (g *gameShell) captureSettings() settings.Settings {
 		// preserves whatever the file held rather than inventing a value
 		// [08 R-SKIR-01 §6].
 		UnitLimit: g.setup.UnitLimit,
+		// The options root's `PREV` ("OK") is one of the save points that
+		// rewrite the whole block; the value it saves is whatever the live
+		// display record holds [07 R-FE-01 §6][07 R-FE-01 §11].
+		Display: g.display,
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed

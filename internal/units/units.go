@@ -1704,9 +1704,11 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 //
 //	slotDistance = trunc(1.25 × (queryPoint.z − aimFromPoint.z))
 //
-// as a 32-bit integer: a horizontal Z-axis difference of two 16.16 positions —
-// the unit position cancels, so the composed piece offsets are the whole of it
-// — scaled by 1.25 and truncated toward zero [06 R-WPN-05 §3] (RWU-19-39). It
+// as a 32-bit integer: a horizontal Z-axis difference of two 16.16 WORLD
+// positions — the unit position cancels, so the two rotated piece offsets are
+// the whole of it, but they must be converted out of model space first (see
+// composedPieceZ) — scaled by 1.25 and truncated toward zero
+// [06 R-WPN-05 §3] (RWU-19-39, corrected WU-19-138). It
 // is not a length, not a square, and involves neither X nor height. When the
 // script answers neither query the two points coincide and the word is zero.
 //
@@ -1716,14 +1718,14 @@ func installWeapons(u *Unit, def *content.UnitDef) {
 // narrowing does (I3). Keeping it integral avoids a float64 term in
 // authoritative state (I2).
 //
-// TODO(question): retail's ordering of the heading write against the slot
-// initializer is Unknown — [06 R-WPN-05 §3] leaves open whether the delta is
-// taken at the spawn heading or at heading zero, with the decider "order of
-// the heading write and the slot-initializer call inside the common unit
-// creator". This build writes the word at the point it resolves the two pieces
-// (initializeCreationCallbacks, after the allocation heading is drawn), so it
-// takes the spawn heading; nothing here chooses that, the existing piece
-// resolution site does.
+// Settled (WU-19-138), closing the TODO(question) that stood here. All three
+// retail unit creators run the same three-call sequence — the common
+// position/state initializer that draws and writes the spawn heading, then the
+// script/model instantiation that also starts `Create`, then the slot
+// initializer — so the delta is always taken at the SPAWN heading, and there is
+// no later rewrite of the word on a heading change or on build completion
+// [06 R-WPN-05 §3 correction]. That is what this site does: it writes the word
+// where the two pieces first resolve, after the allocation heading is drawn.
 func WriteSlotDistanceWords(u *Unit, binding *cob.Binding) {
 	if u == nil || binding == nil {
 		return
@@ -1747,9 +1749,23 @@ func WriteSlotDistanceWords(u *Unit, binding *cob.Binding) {
 	}
 }
 
-// composedPieceZ resolves one piece identity to the world Z of its composed
+// composedPieceZ resolves one piece identity to the WORLD Z of its composed
 // origin. A negative identity is the "script answered no piece" case
 // [04 §5.3], which the caller reads as a coincident point.
+//
+// Correction (WU-19-138). This returned the composed Z straight out of the
+// piece composer, which is MODEL space — mirrored in Z against world space, so
+// a piece mounted forward of the unit's origin composes to a NEGATIVE model Z
+// [03 R-RAST-01 §2]. Every other consumer that turns a composed offset into a
+// world point already subtracts it: the muzzle world-position resolver in
+// combat, the build plate and nano emitter queries [03 §5.5], the hover hull,
+// the selection quad. This site did not, so the whole distance word came out
+// with its sign inverted — and because the ballistic `T0` divide is UNSIGNED
+// [06 §6.4], the inverted word became a `T0` of some eleven thousand ticks and
+// the launch's `T0 × gravity` pre-decrement drove the shell about 1400 world
+// units straight down on its first tick. A stock tank's shell exploded
+// underground at its own muzzle on the tick it was born, which is why no tank
+// shot was ever seen in flight.
 func composedPieceZ(u *Unit, binding *cob.Binding, piece int32) (numeric.Fixed, bool) {
 	if piece < 0 {
 		return 0, false
@@ -1758,7 +1774,11 @@ func composedPieceZ(u *Unit, binding *cob.Binding, piece int32) (numeric.Fixed, 
 	if !ok {
 		return 0, false
 	}
-	return origin[2], true
+	// World Z = unit Z − composed model Z, the same conversion the muzzle
+	// resolver performs [03 R-RAST-01 §2]. The unit term cancels in the caller's
+	// difference; it is kept here so this reads as the one world point retail
+	// builds, not as a bare offset.
+	return u.Z.Sub(origin[2]), true
 }
 
 // CreateWithForcedSlot allocates a unit at the exact forcedSlot for save

@@ -14,8 +14,13 @@ import (
 // The distance word is the per-unit constant the slot initializer wrote at
 // construction [06 R-WPN-05 §3], not a flight distance to this shot's target,
 // so `T0` does not vary with range. The negative case is reproduced as the
-// section states — the unsigned divide turns it into a very large tick count —
-// and whether stock units ever store a negative word is Unknown.
+// section states — the unsigned divide turns it into a very large tick count.
+// It is not reachable for the stock corpus at a spawn heading (WU-19-138: the
+// initializer runs after the heading write, the spawn band sits within a
+// quarter turn of the half turn, and a forward-mounted muzzle therefore gives
+// a positive world-Z delta there), but the divide's behavior on a negative
+// word is what makes a sign error in the word's writer catastrophic rather
+// than subtle — it buried every stock tank shell on its birth tick.
 func TestBallisticT0DividesTheSlotDistanceWordUnsigned(t *testing.T) {
 	const vel = 65536 // one world unit per tick, 16.16
 	if got := BallisticFlightTicks(5*vel, vel); got != 5 {

@@ -16,9 +16,15 @@
 //
 // Nanolathe keeps the value set, the defaults, and the read-once/write-whole
 // shape, and swaps the registry for one JSON file. Only the preferences retail
-// actually persists are stored here — display mode, audio mixing, and the
-// networking identity fields are retail values Nanolathe has no owner for yet
-// and are deliberately absent rather than written as invented defaults.
+// actually persists are stored here — audio mixing and the networking identity
+// fields are retail values Nanolathe has no owner for yet and are deliberately
+// absent rather than written as invented defaults.
+//
+// The display block (`DisplaymodeWidth`/`DisplaymodeHeight`) and the visual
+// option values (`Anti-Alias`, `Shadows`, `FeatureShadows`, `VehicleShadows`,
+// `Shading`, `Gamma`) are here because the options screen's `VISUALS` page is
+// their only writer [07 R-FE-01 §6][07 R-FE-01 §11]; their missing-value
+// defaults are the registry loader's [02 R-KEYS-01 §5].
 package settings
 
 import (
@@ -57,6 +63,39 @@ const (
 	DefaultEnergy         = 1000 // Player%dEnergy
 	DefaultScrollSpeed    = 32   // scrollspeed [02 "Settings"] default 32 [07 §10]
 	DefaultDamageBars     = 0    // damagebars absent: the bit is cleared [03 R-FX-01 §6]
+)
+
+// The display block. `VISUALS`'s `VIDSLDR` and its `RESTORE`/`UNDO` buttons are
+// the only writers; the skirmish and campaign load transitions are the only
+// readers, comparing the pair to the presentation window's current size and
+// resizing when they differ [07 R-FE-01 §6][07 R-FE-01 §11]. The missing-value
+// defaults are 640 and 480 [02 R-KEYS-01 §5].
+const (
+	DefaultDisplaymodeWidth  = 640
+	DefaultDisplaymodeHeight = 480
+	// The front end itself always runs at 640x480 whatever the pair holds
+	// [07 R-FE-02 §2]; modes below that are dropped from the slider's table
+	// [07 R-FE-01 §6], so the pair can never name a smaller surface.
+	MinDisplaymodeWidth  = 640
+	MinDisplaymodeHeight = 480
+)
+
+// The visual option values. `ANTI`, `BSHADOWS` and `SHADING` are the three
+// two-stage buttons of the `VISUALS` page, bound to bits 1, 4 and 5 of the
+// display option word; `BSHADOWS` copies bit 4 into bit 3 and bit 3 into bit 2,
+// so the one control drives `FeatureShadows`, `VehicleShadows` and `Shadows`
+// together [07 R-FE-01 §6]. Every one of the five defaults to set and `Gamma`
+// to 12 [02 R-KEYS-01 §5].
+const (
+	DefaultAntiAlias      = 1
+	DefaultShadows        = 1
+	DefaultFeatureShadows = 1
+	DefaultVehicleShadows = 1
+	DefaultShading        = 1
+	DefaultGamma          = 12
+	// `VISUALS` `GAMMA` is a kind-4 slider whose maximum is 20; the stored
+	// integer is applied as the palette factor 0.5 + g/24 [07 R-FE-01 §6].
+	MaxGamma = 20
 )
 
 // The configured per-player unit limit. Retail reads it once at start-up from
@@ -125,8 +164,72 @@ type Settings struct {
 	// the unit pool at skirmish battle entry [05 R-SHARE-01 §7]. No screen
 	// edits it — retail's skirmish lobby has no gadget for it — so it reaches
 	// the session unchanged from whatever the file holds.
-	UnitLimit int      `json:"unitLimit"`
-	Skirmish  Skirmish `json:"skirmish"`
+	UnitLimit int `json:"unitLimit"`
+	// Display is the `DisplaymodeWidth`/`DisplaymodeHeight` pair and the six
+	// visual option values the `VISUALS` page writes [07 R-FE-01 §6].
+	Display  Display  `json:"display"`
+	Skirmish Skirmish `json:"skirmish"`
+}
+
+// Display is the `VISUALS` page's persisted block. The two size values are
+// retail's `DisplaymodeWidth`/`DisplaymodeHeight`; the five option values are
+// the display-option-word bits the page's three two-stage buttons drive, kept
+// as separate registry values because that is how retail stores them
+// [07 R-FE-01 §6][02 R-KEYS-01 §5].
+type Display struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+	// AntiAlias is `Anti-Alias`, bit 1 of the display option word.
+	AntiAlias int `json:"antiAlias"`
+	// Shadows / FeatureShadows / VehicleShadows are bits 2, 4 and 3. One
+	// control writes all three, but they stay separate values so a file
+	// written by a build that later separates them is not silently collapsed.
+	Shadows        int `json:"shadows"`
+	FeatureShadows int `json:"featureShadows"`
+	VehicleShadows int `json:"vehicleShadows"`
+	// Shading is bit 5.
+	Shading int `json:"shading"`
+	// Gamma is the 0..20 slider integer, applied as the palette factor
+	// 0.5 + g/24 [07 R-FE-01 §6].
+	Gamma int `json:"gamma"`
+}
+
+// DefaultDisplay is the block the startup reader installs when nothing is
+// stored [02 R-KEYS-01 §5].
+func DefaultDisplay() Display {
+	return Display{
+		Width:          DefaultDisplaymodeWidth,
+		Height:         DefaultDisplaymodeHeight,
+		AntiAlias:      DefaultAntiAlias,
+		Shadows:        DefaultShadows,
+		FeatureShadows: DefaultFeatureShadows,
+		VehicleShadows: DefaultVehicleShadows,
+		Shading:        DefaultShading,
+		Gamma:          DefaultGamma,
+	}
+}
+
+// Normalize repairs a truncated or hand-edited display block. Zero is not a
+// stored choice for either size — the slider's table drops everything below
+// 640x480 [07 R-FE-01 §6] — so a zero or sub-minimum size takes the default.
+// The five option values are booleans in a DWORD, so only a negative value is
+// repaired; a stored 0 is "off" and is kept. Gamma is clamped into the
+// slider's own 0..20 range.
+func (d *Display) Normalize() {
+	if d.Width < MinDisplaymodeWidth {
+		d.Width = DefaultDisplaymodeWidth
+	}
+	if d.Height < MinDisplaymodeHeight {
+		d.Height = DefaultDisplaymodeHeight
+	}
+	for _, value := range []*int{&d.AntiAlias, &d.Shadows, &d.FeatureShadows, &d.VehicleShadows, &d.Shading} {
+		if *value < 0 {
+			*value = 1
+		}
+	}
+	if d.Gamma < 0 || d.Gamma > MaxGamma {
+		d.Gamma = DefaultGamma
+	}
 }
 
 // DamageBarsEnabled is the loader's rule for the value: present → bit 0 of the
@@ -168,6 +271,7 @@ func StoreDamageBars(on bool) error {
 // elevation ignored — so a loader may not treat a zero as an absent value.
 func Defaults() Settings {
 	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit}
+	s.Display = DefaultDisplay()
 	s.Skirmish = Skirmish{
 		NumPlayers:     DefaultNumPlayers,
 		Difficulty:     DefaultDifficulty,
@@ -254,6 +358,7 @@ func (s *Settings) Normalize() {
 	if s.UnitLimit > MaxUnitLimit {
 		s.UnitLimit = MaxUnitLimit
 	}
+	s.Display.Normalize()
 	s.Skirmish.Normalize()
 }
 

@@ -305,6 +305,34 @@ func (c *Client) SetSnapshot(b *frame.Buffer) {
 // Size returns the negotiated logical framebuffer size.
 func (c *Client) Size() (int, int) { return c.width, c.height }
 
+// Resize re-negotiates the logical framebuffer size and re-allocates the
+// indexed surface and its RGBA expansion.
+//
+// This is retail's offscreen re-creation. Both directions of the size change
+// run it: the load transitions compare `DisplaymodeWidth`/`Height` to the
+// presentation window's current size and, when different, free the offscreen,
+// drop and re-create the presentation surface and re-allocate the offscreen at
+// the new size [07 R-FE-01 §11]; the shell loader and the post-battle
+// controller do the same in reverse, back to 640x480 [07 R-FE-02 §2].
+//
+// Nanolathe's offscreen is these two buffers, so re-allocating them is the
+// whole of it — every drawing path reads c.width/c.height at use time. The
+// platform adapter follows Size() for the window and the uploaded image, so
+// this is the single point that owns the surface size. A same-size call is a
+// no-op, which is what makes the "when different" test above cheap enough to
+// run unconditionally at the transition.
+func (c *Client) Resize(width, height int) {
+	if c == nil || width <= 0 || height <= 0 {
+		return
+	}
+	if width == c.width && height == c.height {
+		return
+	}
+	c.width, c.height = width, height
+	c.indexed = make([]uint8, width*height)
+	c.rgba = make([]byte, width*height*4)
+}
+
 // IsFocused reports the platform window focus sampled at the client edge.
 // Battle camera predicates consume this value without importing Ebitengine;
 // focus is checked before edge scrolling, and an unfocused window suppresses

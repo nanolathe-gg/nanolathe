@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PatchMatch terrain gallery</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; background: #11140f; color: #e8ecdf; }
+    body { display: grid; grid-template-rows: auto auto minmax(0, 1fr); }
+    header {
+      z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 16px;
+      min-width: max-content; padding: 10px 14px; background: #181b16;
+      border-bottom: 1px solid #485140;
+    }
+    h1 { margin: 0 auto 0 0; font-size: 15px; font-weight: 650; }
+    label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+    button, select {
+      border: 1px solid #59634d; border-radius: 4px; padding: 5px 9px;
+      background: #262b22; color: inherit; font: inherit; cursor: pointer;
+    }
+    button[aria-pressed="true"] { background: #697d50; border-color: #a8c978; }
+    #note { padding: 8px 14px; color: #b8c0ad; font-size: 12px; background: #151812; }
+    #viewport {
+      position: relative; min-height: 0; overflow: auto; background: #050604;
+      cursor: crosshair; user-select: none;
+    }
+    #world { position: relative; background: #000; }
+    #canvas {
+      position: absolute; left: 0; top: 0; z-index: 2; display: block;
+      pointer-events: none; image-rendering: pixelated; image-rendering: crisp-edges;
+    }
+    #status {
+      position: fixed; left: 16px; bottom: 16px; z-index: 4; padding: 8px 11px;
+      background: rgba(37, 42, 33, .95); border: 1px solid #59634d; font-size: 12px;
+    }
+    #status.error { color: #ffad9f; border-color: #9a5148; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Per-tile PatchMatch · same settings on three maps</h1>
+    <label>
+      Map
+      <select id="mapSelect">
+        <option value="great-divide" selected>Great Divide · temperate / rock</option>
+        <option value="painted-desert">Painted Desert · desert</option>
+        <option value="moon-quartet">Moon Quartet · lunar</option>
+      </select>
+    </label>
+    <span id="compareHint">Hold mouse down over the map to show the original</span>
+    <div aria-label="Zoom">
+      <button class="zoom" data-zoom="0.5" aria-pressed="false">50%</button>
+      <button class="zoom" data-zoom="1" aria-pressed="true">100%</button>
+      <button class="zoom" data-zoom="2" aria-pressed="false">200%</button>
+    </div>
+    <button id="gridButton" aria-pressed="false">Show tile grid</button>
+  </header>
+  <div id="note">Processed view · hold mouse down over the map for the original · 50% = original authored dimensions</div>
+  <main id="viewport" tabindex="0" aria-label="Scrollable map comparison">
+    <div id="world"></div>
+    <canvas id="canvas"></canvas>
+  </main>
+  <div id="status">Loading Great Divide…</div>
+
+  <script>
+    const maps = {
+      'great-divide': {
+        label: 'Great Divide', prefix: 'great-divide-patchmatch-go',
+        sourceWidth: 2560, sourceHeight: 4096, runtime: '2.02s total / 1.40s search', unique: '2,773'
+      },
+      'painted-desert': {
+        label: 'Painted Desert', prefix: 'painted-desert-patchmatch-go',
+        sourceWidth: 9248, sourceHeight: 9344, runtime: '5.40s total / 3.56s search', unique: '6,875'
+      },
+      'moon-quartet': {
+        label: 'Moon Quartet', prefix: 'moon-quartet-patchmatch-go',
+        sourceWidth: 9760, sourceHeight: 9856, runtime: '4.03s total / 2.77s search', unique: '4,388'
+      }
+    };
+
+    const viewport = document.querySelector('#viewport');
+    const world = document.querySelector('#world');
+    const canvas = document.querySelector('#canvas');
+    const context = canvas.getContext('2d', { alpha: false });
+    const mapSelect = document.querySelector('#mapSelect');
+    const compareHint = document.querySelector('#compareHint');
+    const gridButton = document.querySelector('#gridButton');
+    const note = document.querySelector('#note');
+    const status = document.querySelector('#status');
+
+    let loaded = null;
+    let zoom = 1;
+    let showGrid = false;
+    let showOriginal = false;
+    let drawPending = false;
+    let loadToken = 0;
+
+    function loadImage(src) {
+      return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error(`Could not load ${src}`));
+        image.src = src;
+      });
+    }
+
+    async function loadMap(key) {
+      const token = ++loadToken;
+      const config = maps[key];
+      loaded = null;
+      status.hidden = false;
+      status.className = '';
+      status.textContent = `Loading ${config.label} tile atlases…`;
+      const base = `output/${config.prefix}`;
+      try {
+        const [tileMap, source, processed] = await Promise.all([
+          fetch(`${base}-tilemap.json?v=3`).then(response => {
+            if (!response.ok) throw new Error(`Could not load ${base}-tilemap.json`);
+            return response.json();
+          }),
+          loadImage(`${base}-source-tileset.png?v=3`),
+          loadImage(`${base}-tileset.png?v=3`)
+        ]);
+        if (token !== loadToken) return;
+        loaded = { config, tileMap, source, processed };
+        viewport.scrollTo(0, 0);
+        updateWorldSize();
+        note.textContent = `Processed view · hold mouse down over the map for the original · ` +
+          `50% = authored ${config.sourceWidth}×${config.sourceHeight} · ${config.unique} unique tiles · ${config.runtime}`;
+        status.textContent = `${config.label} · output ${config.sourceWidth * 2}×${config.sourceHeight * 2} · scroll to inspect`;
+        window.setTimeout(() => { if (token === loadToken) status.hidden = true; }, 1800);
+        scheduleDraw();
+      } catch (error) {
+        if (token !== loadToken) return;
+        status.hidden = false;
+        status.className = 'error';
+        status.textContent = error.message;
+      }
+    }
+
+    function updateWorldSize() {
+      if (!loaded) return;
+      const displayTile = loaded.tileMap.tile_size * zoom;
+      world.style.width = `${loaded.tileMap.width * displayTile}px`;
+      world.style.height = `${loaded.tileMap.height * displayTile}px`;
+      scheduleDraw();
+    }
+
+    function scheduleDraw() {
+      if (drawPending) return;
+      drawPending = true;
+      requestAnimationFrame(() => {
+        drawPending = false;
+        draw();
+      });
+    }
+
+    function draw() {
+      if (!loaded) return;
+      const width = viewport.clientWidth;
+      const height = viewport.clientHeight;
+      const dpr = window.devicePixelRatio || 1;
+      const backingWidth = Math.max(1, Math.round(width * dpr));
+      const backingHeight = Math.max(1, Math.round(height * dpr));
+      if (canvas.width !== backingWidth || canvas.height !== backingHeight) {
+        canvas.width = backingWidth;
+        canvas.height = backingHeight;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+      }
+      canvas.style.transform = `translate(${viewport.scrollLeft}px, ${viewport.scrollTop}px)`;
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      context.imageSmoothingEnabled = false;
+      context.globalAlpha = 1;
+      context.fillStyle = '#000';
+      context.fillRect(0, 0, width, height);
+
+      const { tileMap, source, processed } = loaded;
+      const displayTile = tileMap.tile_size * zoom;
+      const left = Math.max(0, Math.floor(viewport.scrollLeft / displayTile));
+      const top = Math.max(0, Math.floor(viewport.scrollTop / displayTile));
+      const right = Math.min(tileMap.width, Math.ceil((viewport.scrollLeft + width) / displayTile));
+      const bottom = Math.min(tileMap.height, Math.ceil((viewport.scrollTop + height) / displayTile));
+      const alpha = showOriginal ? 0 : 1;
+
+      for (let tileY = top; tileY < bottom; tileY++) {
+        for (let tileX = left; tileX < right; tileX++) {
+          const tile = tileMap.map[tileY * tileMap.width + tileX];
+          const atlasX = tile % tileMap.columns;
+          const atlasY = Math.floor(tile / tileMap.columns);
+          const destinationX = Math.round(tileX * displayTile - viewport.scrollLeft);
+          const destinationY = Math.round(tileY * displayTile - viewport.scrollTop);
+          const destinationSize = Math.ceil(displayTile);
+          context.globalAlpha = 1;
+          context.drawImage(source, atlasX * 32, atlasY * 32, 32, 32,
+            destinationX, destinationY, destinationSize, destinationSize);
+          if (alpha > 0) {
+            context.globalAlpha = alpha;
+            context.drawImage(processed, atlasX * 64, atlasY * 64, 64, 64,
+              destinationX, destinationY, destinationSize, destinationSize);
+          }
+        }
+      }
+
+      if (showGrid) {
+        context.globalAlpha = 0.7;
+        context.strokeStyle = '#ff50c8';
+        context.lineWidth = 1;
+        context.beginPath();
+        const offsetX = -(viewport.scrollLeft % displayTile);
+        const offsetY = -(viewport.scrollTop % displayTile);
+        for (let x = offsetX; x <= width; x += displayTile) {
+          context.moveTo(Math.round(x) + 0.5, 0);
+          context.lineTo(Math.round(x) + 0.5, height);
+        }
+        for (let y = offsetY; y <= height; y += displayTile) {
+          context.moveTo(0, Math.round(y) + 0.5);
+          context.lineTo(width, Math.round(y) + 0.5);
+        }
+        context.stroke();
+      }
+      context.globalAlpha = 1;
+    }
+
+    mapSelect.addEventListener('change', () => loadMap(mapSelect.value));
+    function setOriginal(visible) {
+      if (showOriginal === visible) return;
+      showOriginal = visible;
+      compareHint.textContent = visible
+        ? 'Original · release mouse for processed'
+        : 'Hold mouse down over the map to show the original';
+      scheduleDraw();
+    }
+    viewport.addEventListener('mousedown', event => {
+      if (event.button === 0) setOriginal(true);
+    });
+    window.addEventListener('mouseup', () => setOriginal(false));
+    window.addEventListener('blur', () => setOriginal(false));
+    document.querySelectorAll('.zoom').forEach(button => {
+      button.addEventListener('click', () => {
+        if (!loaded) return;
+        const oldWorldWidth = parseFloat(world.style.width) || 1;
+        const oldWorldHeight = parseFloat(world.style.height) || 1;
+        const centerX = (viewport.scrollLeft + viewport.clientWidth / 2) / oldWorldWidth;
+        const centerY = (viewport.scrollTop + viewport.clientHeight / 2) / oldWorldHeight;
+        zoom = Number(button.dataset.zoom);
+        document.querySelectorAll('.zoom').forEach(item =>
+          item.setAttribute('aria-pressed', String(item === button)));
+        updateWorldSize();
+        const newWorldWidth = parseFloat(world.style.width);
+        const newWorldHeight = parseFloat(world.style.height);
+        viewport.scrollLeft = centerX * newWorldWidth - viewport.clientWidth / 2;
+        viewport.scrollTop = centerY * newWorldHeight - viewport.clientHeight / 2;
+        scheduleDraw();
+      });
+    });
+    gridButton.addEventListener('click', () => {
+      showGrid = !showGrid;
+      gridButton.setAttribute('aria-pressed', String(showGrid));
+      gridButton.textContent = showGrid ? 'Hide tile grid' : 'Show tile grid';
+      scheduleDraw();
+    });
+    viewport.addEventListener('scroll', scheduleDraw, { passive: true });
+    new ResizeObserver(scheduleDraw).observe(viewport);
+    loadMap(mapSelect.value);
+  </script>
+</body>
+</html>
