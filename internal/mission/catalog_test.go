@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -489,18 +490,7 @@ func TestDiscoverAssetGuarded(t *testing.T) {
 
 func retailRoot(t *testing.T) string {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		root = filepath.Join(os.Getenv("HOME"), "TotalAnnihilation")
-	}
-	// Check for gamedata directory as marker per AGENTS.md
-	if _, err := os.Stat(filepath.Join(root, "gamedata")); err != nil {
-		// Also check for at least one HPI to be more lenient
-		if _, err2 := os.Stat(filepath.Join(root, "totala1.hpi")); err2 != nil {
-			t.Skipf("retail assets not present at %q (set NANOLATHE_TA_ROOT)", root)
-		}
-	}
-	return root
+	return testsupport.RetailRoot(t)
 }
 
 func campaignPaths(cs []Campaign) []string {

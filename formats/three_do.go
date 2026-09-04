@@ -290,9 +290,23 @@ func Load3DOFile(fs vfs.FSOps, name string) (*ThreeDO, error) { return LoadThree
 // accumulator starts at zero and only ever grows, so the value is floored at
 // zero and a model entirely below its origin reports 0.
 //
-// The LOS writer reads only the HIGH word of that dword — `def+0x170`, the top
-// in whole world units — as the observer's height addend, which is why the eye
-// sits at the model's top rather than on the ground [03 §3.2].
+// The LOS writer reads only the HIGH word of that dword — the top in whole
+// world units — as the observer's height addend, which is why the eye sits at
+// the model's top rather than on the ground [03 §3.2][03 R-P0-18-A §1]. (That
+// sentence previously named the definition word by its executable offset; the
+// offset is a clean-room violation and carries no information the logical name
+// does not.)
+//
+// There is deliberately NO min-Y counterpart to this walk. Established
+// [02 R-CAT-01 §7][07 R-REV-01 §7]: retail's catalog loader zeroes the
+// definition's minimum-Y word immediately before calling this helper, stores
+// the helper's answer as the maximum-Y word, and rewrites the Y extent as
+// `max - min` — which is why the Y extent simply is the model total height.
+// The helper above is the only bound retail derives from model geometry; the X
+// and Z bounds come from the authored footprint. Every consumer that looks like
+// it wants a "model bottom" — the `setSFXoccupy` band-3 test
+// [04 R-MOV-01 §8a], the transport lowering offset [04 R-AIR-01 §9] — reads
+// this same maximum-Y word instead. Do not add an inverted walk here.
 func (t *ThreeDO) ModelTop() int32 {
 	if t == nil || len(t.Objects) == 0 {
 		return 0

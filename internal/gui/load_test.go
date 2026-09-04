@@ -1,11 +1,11 @@
 package gui
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -20,18 +20,6 @@ func testFS(t *testing.T, dir string) vfs.FSOps {
 		t.Fatalf("mount %s: %v", abs, err)
 	}
 	return fs
-}
-
-func retailRoot(t *testing.T) string {
-	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		root = filepath.Join(os.Getenv("HOME"), "TotalAnnihilation")
-	}
-	if _, err := os.Stat(filepath.Join(root, "gamedata")); err != nil {
-		t.Skip("retail assets not present")
-	}
-	return root
 }
 
 func TestLoadAllKinds(t *testing.T) {
@@ -509,7 +497,7 @@ func TestHitTestHoversGreyedButOnlyUngreyedFires(t *testing.T) {
 }
 
 func TestRealGUIsAssetGuarded(t *testing.T) {
-	root := retailRoot(t)
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount game dir %s: %v", root, err)

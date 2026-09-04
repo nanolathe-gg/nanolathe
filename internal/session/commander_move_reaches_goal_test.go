@@ -2,8 +2,6 @@ package session
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -12,28 +10,15 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/world"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
 func TestCommanderMoveReachesGoalCell(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h := os.Getenv("HOME"); h != "" {
-			root = filepath.Join(h, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present — skip")
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Skipf("mount: %v", err)
-	}
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Skipf("catalog compile: %v", err)
-	}
+	// Read-only: this test only walks a commander with NewSkirmishWithFS and
+	// never writes back into the catalog, so it shares the process-wide
+	// compile [internal/testsupport/retailcat].
+	cat, fs := retailcat.Shared(t)
 	rng.SeedGlobal(100, 200)
 	cfg := SkirmishConfig{MapName: "coast to coast", NumPlayers: 2}
 	cfg.ApplyDefaults()

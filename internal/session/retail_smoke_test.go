@@ -14,7 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/testsupport"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -39,18 +39,15 @@ type retailFixture struct {
 // loadRetailFixture is the sole retail-root and catalog setup path for this
 // package. Missing fixture assets skip; an installed but malformed corpus is
 // a test failure, so content regressions are not hidden by substitution.
+//
+// The catalog comes from retailcat.Shared: every caller below only reads it
+// (unit/side/map lookups, NewSkirmishWithFS's own read-only catalog use), so
+// one compile per package binary is enough rather than one per test
+// [internal/testsupport/retailcat]. The shared filesystem is kept alive for
+// the process lifetime by that cache, so this fixture must not close it.
 func loadRetailFixture(t *testing.T) *retailFixture {
 	t.Helper()
-	root := testsupport.RetailRoot(t)
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Fatalf("mount retail %q: %v", root, err)
-	}
-	t.Cleanup(func() { _ = fs.Close() })
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("compile retail catalog: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 	if err := cat.Validate(); err != nil {
 		t.Fatalf("validate retail catalog: %v", err)
 	}

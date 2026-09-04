@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -49,27 +48,11 @@ func newHiddenFS(base vfs.FSOps, providers []vfs.ProviderInfo, hide ...string) *
 	return &hiddenFS{FSOps: base, providers: providers, hidden: m}
 }
 
-func retailRootForRobust(t *testing.T) string {
-	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = filepath.Join(home, "TotalAnnihilation")
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail assets unavailable at %s: %v", root, err)
-	}
-	return root
-}
-
 // TestBattleHUDLoadsARMAndCORE verifies ARM and CORE side HUDs load on retail
 // assets (or skip when no assets) [07 §6][07 §8]. It checks side, fonts, 30
 // anchors and core panel frames are mandatory and succeed for both sides.
 func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
-	root := retailRootForRobust(t)
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {
@@ -122,7 +105,7 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 // pause/title/options modal resources do not prevent battle entry [07 §8][07 §11].
 // Valid core battle reaches its first frame while those optional resources are unavailable.
 func TestMissingOptionalStillEntersBattle(t *testing.T) {
-	root := retailRootForRobust(t)
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {
@@ -188,7 +171,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 // mandatory side font/anchor fails before client creation with exact
 // path/provider diagnostic [02 §6][AGENTS.md §Diagnostics].
 func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
-	root := retailRootForRobust(t)
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

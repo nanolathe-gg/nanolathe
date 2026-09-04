@@ -1,12 +1,11 @@
 package render
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -372,17 +371,7 @@ func TestGafCursorGafResolution(t *testing.T) {
 // TestGafCursorAssetGuarded exercises optional walk over an install cursor GAF [07 §8][fmt gaf].
 // It is asset-guarded: when ~/TotalAnnihilation is absent the test is skipped.
 func TestGafCursorAssetGuarded(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home dir: %v", err)
-	}
-	root := filepath.Join(home, "TotalAnnihilation")
-	if configured := os.Getenv("NANOLATHE_TA_ROOT"); configured != "" {
-		root = configured
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail data unavailable at %s: %v", root, err)
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Skipf("mount failed: %v", err)

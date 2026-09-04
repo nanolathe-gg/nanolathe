@@ -11,6 +11,8 @@ package orders
 
 import (
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -429,31 +431,108 @@ func waitHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 // Teleport [04 R-ORD-01 §2]
 // ---------------------------------------------------------------------------
 
+// teleportBox is the ordering unit's model bounding box in absolute world
+// coordinates: its position plus the definition's min/max triple
+// [04 R-ORD-01 §2], the "six signed world-unit extents stored in the unit
+// definition around its position" of [03 R-LAYER §4].
+//
+// The triple is the bounding record the catalog compiler writes
+// [02 R-CAT-01 §7]: the X and Z bounds come from the FOOTPRINT, not the model
+// — `±(FootprintX << 20) / 2` and `±(FootprintZ << 20) / 2` in 16.16 — and the
+// Y bounds are the model-top walk, with the LOWER bound "zeroed just before"
+// the upper is stored. So the box is
+//
+//	X in [x − (footX<<20)/2, x + (footX<<20)/2]
+//	Y in [y,                 y + ModelTopFixed ]
+//	Z in [z − (footZ<<20)/2, z + (footZ<<20)/2 ]
+//
+// A cell is 2^20 in 16.16 (16 world units), so the half-extent is the
+// footprint's half-width in cells expressed in world units. A definition whose
+// model is missing or entirely below its origin has ModelTopFixed 0
+// [02 R-CAT-01 §7], which collapses the box to the ground plane — the honest
+// consequence of an unresolved model, not a substituted height.
+func teleportBox(u *units.Unit) (minX, maxX, minY, maxY, minZ, maxZ numeric.Fixed, ok bool) {
+	if u == nil || u.Def == nil {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	footX, footZ := u.Def.FootprintX, u.Def.FootprintZ
+	if footX < 0 || footZ < 0 {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	halfX := numeric.Fixed((int64(footX) << 20) / 2)
+	halfZ := numeric.Fixed((int64(footZ) << 20) / 2)
+	top := numeric.Fixed(u.Def.ModelTopFixed)
+	return u.X - halfX, u.X + halfX, u.Y, u.Y + top, u.Z - halfZ, u.Z + halfZ, true
+}
+
 // teleportHandler is a single visit. For every live unit other than itself
-// whose position lies inside this unit's model bounding box, the row moves that
-// unit by the same delta the teleporter's goal describes — its new position is
-// `goal + (its position - my position)` — emits the teleport effect (kind 5,
-// duration 30) from old to new, and places it through the position setter,
-// which re-registers occupancy when the footprint cell changes. Then complete.
-// The teleporter itself never moves.
+// whose position lies inside this unit's model bounding box — inclusive on all
+// three axes — the row moves that unit by the same delta the teleporter's goal
+// describes: its new position is `goal + (its position - my position)`. It
+// emits the teleport effect from the old position to the new one, then places
+// it there through the position setter, which re-registers occupancy when the
+// footprint cell changes. Then complete. The teleporter itself never moves
+// [04 R-ORD-01 §2].
 //
-// Narrowed (WU-19-4): this marker used to give two reasons, and the first is
-// no longer true — the queue binding does offer a walk over live units
-// (QueueBinding.ForEachUnit, the enumerator the typed-attack and patrol scans
-// use), so the enumeration half of this row is reachable from here.
+// The row is ungated and free: no capability bit, no pairing, no economy call
+// [04 R-SPEC-01 §2]. The `teleporter` FBI key has no reader in the image, so it
+// is NOT tested here.
 //
-// TODO(T25): what is still missing is the move itself. The row places each
-// enclosed unit "through the position setter (re-registers occupancy when the
-// footprint cell changes)" [04 R-ORD-01 §2], and this package has no seam for
-// that: writing X/Y/Z on a unit without the occupancy restamp would leave the
-// ground words of its old footprint claimed forever, which is the failure the
-// class-layer restamp family exists to prevent [04 R-MOV-03 §3]. The teleport
-// effect (kind 5, duration 30) has no order-facing emitter either. Retiring
-// this needs a position-setter entry point on the movement or world adapter,
-// which is a cross-package addition no single unit here owns. Placeholder:
-// nothing is moved and the record completes on its single visit, which is also
-// what retail does when the bounding box contains no other unit.
-func teleportHandler(_ *units.Unit, _ *Node, _ uint32, _ uint32) Code {
+// Order within one enclosed unit is effect first, commit second — the two calls
+// [03 R-LAYER §4] enumerates, in that order. The effect is emitted once PER
+// MOVED UNIT, not once for the record.
+//
+// The walk is QueueBinding.ForEachUnit, the live-unit enumerator the
+// typed-attack and repair scans use: players 0..9 ascending then pool slot
+// ascending, live units only [01 §6.2][I1]. A carried unit is not skipped —
+// [04 R-ORD-01 §2] says "every live unit other than itself" and names no
+// exclusion — but the carried branch of the occupancy commit rewrites a carried
+// unit's position from its carrier every tick, so it "cannot drift, be pushed,
+// or be teleported while carried" [04 R-FAC-02 §2]: the displacement is undone
+// on the next commit rather than being suppressed here.
+//
+// Retired (WU-19-142): the TODO(T25) that stood here reported the row as
+// blocked on a missing seam, not on missing research. The seam is now
+// MovementGoalAdapter.PlaceUnit, bound to internal/movement's direct position
+// commit [04 R-COLL-01 §4], so the ground words of a moved unit's old footprint
+// are released and the class layers over them reclassified [04 R-MOV-03 §3].
+func teleportHandler(u *units.Unit, n *Node, _ uint32, _ uint32) Code {
+	if u == nil || n == nil {
+		return Code(5) // *complete* — single visit [04 R-ORD-01 §2]
+	}
+	b := bindingFor(u)
+	if b == nil {
+		return Code(5)
+	}
+	minX, maxX, minY, maxY, minZ, maxZ, ok := teleportBox(u)
+	if !ok {
+		return Code(5)
+	}
+	b.ForEachUnit(func(h pool.Handle, other *units.Unit) bool {
+		if h == 0 || other == nil || !other.Alive || other == u {
+			return scanNext
+		}
+		// Inclusive on all three axes [04 R-ORD-01 §2].
+		if other.X < minX || other.X > maxX ||
+			other.Y < minY || other.Y > maxY ||
+			other.Z < minZ || other.Z > maxZ {
+			return scanNext
+		}
+		// `goal + (its position − my position)`, per axis, in the row's own
+		// order of operations [04 R-ORD-01 §2]. The teleporter's own position
+		// is read from the unit, not from a snapshot: it never moves, so the
+		// delta is the same for every enclosed unit however many are moved.
+		newX := n.GoalX + (other.X - u.X)
+		newY := n.GoalY + (other.Y - u.Y)
+		newZ := n.GoalZ + (other.Z - u.Z)
+		if b.Presentation != nil && b.Presentation.Teleport != nil {
+			b.Presentation.Teleport(other, other.X, other.Y, other.Z, newX, newY, newZ)
+		}
+		if b.Movement != nil && b.Movement.PlaceUnit != nil {
+			b.Movement.PlaceUnit(PlaceRequest{Unit: h, X: newX, Y: newY, Z: newZ})
+		}
+		return scanNext
+	})
 	return Code(5) // *complete* — single visit [04 R-ORD-01 §2]
 }
 

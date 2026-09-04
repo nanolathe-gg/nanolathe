@@ -1,12 +1,11 @@
 package client
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -31,17 +30,7 @@ func TestMissingCursorRootIsExplicitError(t *testing.T) {
 // mountRetail opens the reference install, or skips.
 func mountRetail(t *testing.T) *vfs.FS {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("no home dir: %v", err)
-		}
-		root = filepath.Join(home, "TotalAnnihilation")
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail data unavailable at %s: %v", root, err)
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Skipf("mount failed: %v", err)

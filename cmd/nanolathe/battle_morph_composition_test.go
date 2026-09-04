@@ -3,12 +3,12 @@
 package main
 
 import (
-	"os"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
 // The menu morphs its own client into the battle instead of building a new
@@ -17,14 +17,7 @@ import (
 // trajectory, screen shake stops jittering, and no cue reaches the device —
 // so the join is asserted rather than left to inspection [01 §7.2][I4].
 func TestMenuBattleMorphJoinsThePresentationCRT(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

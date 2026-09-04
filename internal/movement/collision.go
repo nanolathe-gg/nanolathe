@@ -177,6 +177,18 @@ type OccupancyGrid struct {
 	// restamp only stamps, so it cannot start a second clear; the flag keeps
 	// a future writer from turning the scan quadratic by accident.
 	inOverlapScan bool
+	// scan is the overlap scan's reusable candidate buffer. The scan gathers
+	// before it restamps, which is safe because nothing the restamp does moves
+	// a unit between sector buckets: retail's restamp never re-links, and its
+	// clear never unlinks [04 R-COLL-01 §4A].
+	scan []overlapCandidate
+}
+
+// overlapCandidate is one unit the clear's overlap scan reaches, tagged with
+// the sector record the stamp filed it under [04 R-COLL-01 §4A].
+type overlapCandidate struct {
+	id     int
+	sx, sz int32
 }
 
 // eliminatedPlayerState is the owner player-row state byte whose units yield a
@@ -212,6 +224,18 @@ type OverlapUnits interface {
 	// The building class stamps only the cells its yard map still selects and
 	// releases the self-held cells it no longer selects [04 R-COLL-01 §4].
 	RestampFootprint(id int)
+}
+
+// OverlapPositions is the optional half of the overlap binding: the committed
+// 16.16 position whose sector index the stamp files a unit under
+// [04 R-COLL-01 §4A]. It is separate from OverlapUnits because the position is
+// only needed to order the clear's overlap scan, and a fixture that never
+// exercises the sector sweep should not have to supply one — without it the
+// scan falls back on the cached rectangle's centre, which is where a unit
+// standing on its cached pair is. *System implements it.
+type OverlapPositions interface {
+	// OverlapPosition returns the unit's committed X and Z in 16.16.
+	OverlapPosition(id int) (x, z int32, ok bool)
 }
 
 // AttachOverlap binds the overlap protocol's unit window and the owner
@@ -705,12 +729,34 @@ func (g *OccupancyGrid) releaseOverlap(id int, anchor Cell, fx, fz int16) {
 // which stamps and clears nothing, so passing it to the restamp writes no cell
 // either way [04 R-COLL-01 §4].
 //
-// TODO(question): retail visits the candidates in sector-bucket order, and a
-// bucket's own order is its insertion order, which is untraced. This walks the
-// sweep's deterministic live-unit order instead (player slot, then pool slot
-// ascending) [I1]. The two differ only when two intruders contend for the same
-// released cell — the first restamped takes it. What would settle it is a
-// trace of the end of the bucket list the stamp links a unit onto.
+// The sweep is the sector one [04 R-COLL-01 §4A]: sector column ascending in
+// the outer loop, sector row ascending in the inner, over the rectangle's
+// sector span grown by one sector on every side, skipping a sector index
+// outside the grid. A unit filed in the off-map sector record is never reached,
+// because that record is not in the grid array — so an intruder whose own
+// rectangle has left the map keeps its intruder bit instead of having it
+// cleared by a restamp that would write no cell anyway.
+//
+// The correction the previous text needed: it said "a bucket's own order is its
+// insertion order, which is untraced" and walked the sweep's live-unit order
+// for the whole scan. Both halves were wrong. The bucket order is *not*
+// insertion order — the stamp head-inserts, so a bucket reads back in reverse
+// order of linking — and the sector sweep itself is fully determined by each
+// candidate's own position, which is what this now walks.
+//
+// TODO(question): within one sector this still falls back on the sweep's
+// deterministic live-unit order (player slot, then pool slot ascending) [I1].
+// Retail reads the bucket from its head, which is reverse order of each unit's
+// most recent *relink* — the stamp only re-links when the sector index its
+// committed position selects has changed, so a unit that has not crossed a
+// sector boundary keeps its place while everything that has crossed one since
+// sits ahead of it [04 R-COLL-01 §4A]. That history is per-unit state this
+// build does not carry: reproducing it needs a link sequence maintained at
+// every stamp site (unit creation and the building stamp in integrate.go, the
+// takeoff stamp, the retail restore, the factory's per-cell stamp in
+// internal/construction) and dropped at ForgetUnit, none of which this unit
+// owns. Two intruders contending for one released cell inside a single sector
+// are therefore still ordered by slot, not by relink recency.
 func (g *OccupancyGrid) overlapScan(clearing int, anchor Cell, fx, fz int16) {
 	if g == nil || g.overlap == nil || g.inOverlapScan {
 		return
@@ -724,8 +770,19 @@ func (g *OccupancyGrid) overlapScan(clearing int, anchor Cell, fx, fz int16) {
 	if fz <= 0 {
 		fz = 1
 	}
+	// The span: the rectangle's own sectors, one sector of margin on every
+	// side, and the "column start past column end" early return retail takes
+	// before it enters either loop [04 R-COLL-01 §4A].
+	sxLo, sxHi := sectorOfCell(anchor.X)-1, sectorOfCell(anchor.X+int32(fx))+1
+	szLo, szHi := sectorOfCell(anchor.Z)-1, sectorOfCell(anchor.Z+int32(fz))+1
+	if sxLo > sxHi {
+		return
+	}
 	g.inOverlapScan = true
 	defer func() { g.inOverlapScan = false }()
+
+	positions, _ := g.overlap.(OverlapPositions)
+	g.scan = g.scan[:0]
 	g.overlap.VisitOverlapCandidates(func(id int) {
 		if id == clearing || id <= 0 {
 			return
@@ -734,8 +791,67 @@ func (g *OccupancyGrid) overlapScan(clearing int, anchor Cell, fx, fz int16) {
 		if !ok || !rectsIntersect(anchor, fx, fz, a, cfx, cfz) {
 			return
 		}
-		g.Restamp(id)
+		sx, sz, filed := g.unitSector(id, a, cfx, cfz, positions)
+		if !filed || sx < sxLo || sx > sxHi || sz < szLo || sz > szHi {
+			return
+		}
+		g.scan = append(g.scan, overlapCandidate{id: id, sx: sx, sz: sz})
 	})
+	// Column-major over the sectors. SliceStable keeps the live-unit order
+	// inside one sector, which is the fallback the marker above names; the
+	// visit order it sorts is itself deterministic, so the result is [I1].
+	sort.SliceStable(g.scan, func(i, j int) bool {
+		if g.scan[i].sx != g.scan[j].sx {
+			return g.scan[i].sx < g.scan[j].sx
+		}
+		return g.scan[i].sz < g.scan[j].sz
+	})
+	for _, c := range g.scan {
+		g.Restamp(c.id)
+	}
+	g.scan = g.scan[:0]
+}
+
+// sectorCellShift converts a cell coordinate to its occupancy sector index: a
+// sector is 8 cells on a side, 128 world units [04 R-COLL-01 §4A][04 R-AIR-01 §5].
+// The shift is arithmetic, so a negative coordinate floors to the sector below
+// zero rather than toward it — the grid's own bounds test then drops it.
+const sectorCellShift = 3
+
+// sectorWorldShift converts a 16.16 world coordinate to the same sector index:
+// 128 world units is 0x800000 in 16.16 [04 R-COLL-01 §4A].
+const sectorWorldShift = 23
+
+func sectorOfCell(c int32) int32 { return c >> sectorCellShift }
+
+// unitSector reports which sector record the stamp filed this identity under,
+// and whether it is in the grid at all [04 R-COLL-01 §4A]. The stamp indexes
+// the grid from the unit's committed 16.16 position, not from its cell pair;
+// the off-map decision is the other way round — it is the cell rectangle's
+// bounds test, the same one StampPlane applies before it writes a cell. A unit
+// that fails it is filed in the one off-map record, which is not in the grid
+// array and which no sweep ever visits.
+//
+// With no position binding (fixtures) the position is taken to be the centre of
+// the cached rectangle, which is where a unit standing on its cached pair is.
+func (g *OccupancyGrid) unitSector(id int, anchor Cell, fx, fz int16, positions OverlapPositions) (sx, sz int32, filed bool) {
+	if !g.RectOnMap(anchor, fx, fz) {
+		return 0, 0, false
+	}
+	if positions != nil {
+		if x, z, ok := positions.OverlapPosition(id); ok {
+			return x >> sectorWorldShift, z >> sectorWorldShift, true
+		}
+	}
+	if fx <= 0 {
+		fx = 1
+	}
+	if fz <= 0 {
+		fz = 1
+	}
+	cx := int64(anchor.X)*worldUnitsPerCell + int64(fx)*worldUnitsPerCell/2
+	cz := int64(anchor.Z)*worldUnitsPerCell + int64(fz)*worldUnitsPerCell/2
+	return int32(cx >> sectorWorldShift), int32(cz >> sectorWorldShift), true
 }
 
 // Restamp is the section's restamp [04 R-COLL-01 §4]: gated on flags bit 27,
@@ -1286,10 +1402,24 @@ func (s *System) OverlapRect(id int) (Cell, int16, int16, bool) {
 	return coll.CachedAnchor, fx, fz, true
 }
 
+// OverlapPosition returns the unit's committed 16.16 X and Z — the pair whose
+// sector index the stamp files it under [04 R-COLL-01 §4A].
+func (s *System) OverlapPosition(id int) (int32, int32, bool) {
+	if s == nil {
+		return 0, 0, false
+	}
+	coll := s.Collisions[pool.Handle(id)]
+	if coll == nil {
+		return 0, 0, false
+	}
+	return coll.X, coll.Z, true
+}
+
 // VisitOverlapCandidates visits live unit identities in the sweep's order —
-// players 0..9 ascending, then pool slot ascending [I1][01 §6.2]. Retail walks
-// the sector buckets touching the rectangle instead; the divergence and what
-// would settle it are recorded at OccupancyGrid.overlapScan.
+// players 0..9 ascending, then pool slot ascending [I1][01 §6.2]. It is the
+// candidate *population*, not the visit order: the clear's overlap scan sorts
+// what it gathers into retail's sector sweep and keeps this order only inside
+// one sector [04 R-COLL-01 §4A].
 func (s *System) VisitOverlapCandidates(fn func(id int)) {
 	if s == nil || s.world == nil || fn == nil {
 		return

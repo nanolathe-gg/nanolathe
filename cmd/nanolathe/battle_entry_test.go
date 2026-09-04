@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -9,17 +8,11 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
 func TestBattleEntryDirectAndMenuCompositionMatch(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

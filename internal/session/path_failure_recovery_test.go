@@ -1,38 +1,23 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/world"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// TestPathFailureRecovery_ImpasseGoalKeepsPollingUntilReplaced is read-only
+// against the catalog — it only feeds it to NewSkirmishWithFS, it never
+// writes into it, so it shares the process-wide compile
+// [internal/testsupport/retailcat].
 func TestPathFailureRecovery_ImpasseGoalKeepsPollingUntilReplaced(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h := os.Getenv("HOME"); h != "" {
-			root = filepath.Join(h, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present at ~/TotalAnnihilation — skip")
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Skipf("mount retail %q: %v", root, err)
-	}
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Skipf("catalog compile: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 	rng.SeedGlobal(100, 200)
 	cfg := SkirmishConfig{MapName: "coast to coast", NumPlayers: 2}
 	cfg.ApplyDefaults()

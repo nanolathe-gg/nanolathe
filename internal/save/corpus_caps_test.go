@@ -3,34 +3,12 @@
 package save
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/vfs"
 )
-
-func retailFSSave(t *testing.T) *vfs.FS {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("cannot determine home: %v", err)
-	}
-	root := filepath.Join(home, "TotalAnnihilation")
-	if configured := os.Getenv("OPENTA_TA_ROOT"); configured != "" {
-		root = configured
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail data unavailable at %s: %v", root, err)
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Fatalf("mount: %v", err)
-	}
-	return fs
-}
 
 // TestCorpusSaveCaps_Retail proves save-related fault guards are outside
 // stock-reachable behavior. It measures the retail corpus for TDF/OTA sizes,
@@ -44,13 +22,7 @@ func retailFSSave(t *testing.T) *vfs.FS {
 //
 // This locks the P1-I09 requirement that bounds checks are outside stock.
 func TestCorpusSaveCaps_Retail(t *testing.T) {
-	fs := retailFSSave(t)
-	defer fs.Close()
-
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 	t.Logf("catalog: units=%d maps=%d features=%d weapons=%d", len(cat.Units), len(cat.Maps), len(cat.Features), len(cat.Weapons))
 
 	// Verify that all stock maps parse within limits (fault guards not hit)

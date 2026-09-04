@@ -7,37 +7,22 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/construction"
-	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// TestSolarAndDepositExtractorRetail is read-only against the catalog — it
+// only looks up unit/map definitions and reads terrain plot bytes, it never
+// writes into the catalog, so it shares the process-wide compile
+// [internal/testsupport/retailcat].
 func TestSolarAndDepositExtractorRetail(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			root = filepath.Join(h, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present at ~/TotalAnnihilation")
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Skipf("mount retail: %v", err)
-	}
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("catalog compile: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 
 	// Deterministic map choice: first sorted map with a Network schema.
 	mapKeys := make([]string, 0, len(cat.Maps))

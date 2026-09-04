@@ -3,27 +3,23 @@
 package content
 
 import (
-	"os"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// retailRoot returns the reference install root, or skips the test [PLAN_02
-// Tests; AGENTS.md §Test policy].
+// retailRoot returns the reference install root, or skips the test. content,
+// cob and model import one another, so this package's tests cannot import
+// internal/testsupport/retailcat (which imports content) without an import
+// cycle — route through testsupport.RetailRoot directly and keep this
+// package's own catalog cache below [PLAN_02 Tests; AGENTS.md §Test policy].
 func retailRoot(t *testing.T) string {
 	t.Helper()
-	root := os.Getenv("TOTALA_ROOT")
-	if root == "" {
-		root = os.Getenv("HOME") + "/TotalAnnihilation"
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("reference install not present at %s", root)
-	}
-	return root
+	return testsupport.RetailRoot(t)
 }
 
 func mountRetail(t *testing.T) *vfs.FS {

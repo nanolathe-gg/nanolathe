@@ -3,7 +3,6 @@
 package main
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
 // TestRetailFactoryProductClickQueuesAndBuilds locks the skirmish play-test
@@ -25,14 +25,7 @@ import (
 // the authored bmcode [08 "Classifier eligibility, destinations, and order"]),
 // and the retail compiler's engine-write operand order [R-P0-10].
 func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

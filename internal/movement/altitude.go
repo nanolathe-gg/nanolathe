@@ -109,7 +109,7 @@ func AirArrival(ax, az, bx, bz numeric.Fixed, explicitRadius int32, ay, by numer
 // MediumBand is the `setSFXoccupy` classifier of [04 §9.1][04 R-MOV-01 §8a]:
 // five values, computed by sequential overwrite from the committed mover-mode
 // mirror, the signed height word, the map sea level, the definition's waterline
-// byte and its model-bottom word, starting from the band cached for this unit.
+// byte and its model-top word, starting from the band cached for this unit.
 //
 //	if mode not in {1,2}: band = 0
 //	else if wy > wt:      band = 4
@@ -117,14 +117,14 @@ func AirArrival(ax, az, bx, bz numeric.Fixed, explicitRadius int32, ay, by numer
 //	    band = cached
 //	    if wy - wt > -5:  band = 1
 //	    if wl + wy == wt: band = 2
-//	    if mb + wy < wt:  band = 3
+//	    if mt + wy < wt:  band = 3
 //
 // The three underwater tests are ordered overwrites, not exclusive branches:
 // `3` wins if both `2` and `3` hold, and if none matches the cached band is
 // retained. Every comparison is a signed integer in height-byte units, never
 // 16.16 world units. Band `4` is strictly above water, `1` the shoreline skirt
-// within five units above water, `2` draft exactly at the surface, `3` model
-// bottom below water.
+// within five units above water, `2` draft exactly at the surface, `3` the
+// whole model below water.
 //
 // Corrected 2026-08-31: this function previously returned an invented mapping —
 // `0` for anything above sea level, `1` at exactly sea level, then `2`/`3` split
@@ -134,14 +134,20 @@ func AirArrival(ax, az, bx, bz numeric.Fixed, explicitRadius int32, ay, by numer
 // gate that owns band `0`, dropped the cached-band retention entirely, and made
 // the tests exclusive.
 //
-// TODO(question): the band-3 test needs `mb`, the definition's signed
-// model-bottom word — the model's min-Y bound, a different word from the
-// model total-height dword that [04 R-AIR-01 §9] reads, and there is no
-// authored `model-bottom` key to read it from. `content.UnitDef` carries
-// `ModelTop` but no counterpart, so this build has no source for `mb` and the
-// overwrite is not run: band `3` is unreachable today. What would settle it is
-// the retail loader's min-Y walk over the 3DO, the counterpart of the
-// established model-top walk in `formats.ThreeDO.ModelTop`.
+// Corrected 2026-09-04 (WU-19-140): the marker that stood here said the band-3
+// test needed `mb`, "the definition's signed model-bottom word — the model's
+// min-Y bound", that `content.UnitDef` had no counterpart to `ModelTop` to
+// supply it, and that the retail loader's min-Y walk over the 3DO would settle
+// it. Both halves were wrong. Retail computes **no** min-Y walk at all: the
+// definition's minimum-Y word is zeroed immediately before the model-top walk
+// runs and is never written from model geometry [02 R-CAT-01 §7]. And the band-3
+// operand is not that word — it is the signed 16-bit high half of the model
+// total-height dword, the same word the LOS emitter reads as its observer-height
+// addend [03 R-P0-18-A §1] and the weapon water gates read as `(int16)`
+// [06 R-WPN-05 §1]. Band 3 is therefore "the model's top, lifted by the unit's
+// height, is still below the water level" — fully submerged — and it is
+// reachable from `UnitDef.ModelTopFixed` with no new field and no new walk.
+// Nothing above this note changes; only the operand's identity was misnamed.
 func MediumBand(terrain *world.Terrain, u *units.Unit, cached int) int {
 	if u == nil {
 		return 0
@@ -164,10 +170,22 @@ func MediumBand(terrain *world.Terrain, u *units.Unit, cached int) int {
 	if wy-wt > -5 {
 		band = 1 // shoreline skirt [04 §9.1]
 	}
-	if u.Def != nil && u.Def.Waterline+wy == wt {
-		band = 2 // draft exactly at the surface [04 §9.1]
+	if u.Def != nil {
+		if u.Def.Waterline+wy == wt {
+			band = 2 // draft exactly at the surface [04 §9.1]
+		}
+		// `mt` is the definition's model total-height word read the way the
+		// classifier reads it: the SIGNED 16-BIT high half of the 16.16 dword
+		// the model-top walk produced, not the byte the LOS emitter takes
+		// [04 R-MOV-01 §8a][03 R-P0-18-A §1]. Reading it at 16-bit width is the
+		// contract, so a model taller than 32767 world units wraps negative
+		// exactly as retail does rather than saturating — hence the int16 cast
+		// rather than a comparison on ModelTopFixed.
+		mt := int32(int16(u.Def.ModelTopFixed >> 16))
+		if mt+wy < wt {
+			band = 3 // the whole model is below the water level [04 §9.1]
+		}
 	}
-	// The band-3 overwrite is not run; see the note above the classifier.
 	return band
 }
 

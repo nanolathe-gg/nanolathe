@@ -26,6 +26,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -36,14 +37,7 @@ const footerShotW, footerShotH = 640, 480
 // the archived rate slots the footer reads [05 R-ECO-01 §5].
 func footerShotSession(t *testing.T) (*battleSession, *contentSet, *camera.Camera, *palette.Tables) {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

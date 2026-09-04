@@ -3617,6 +3617,32 @@ extents `maxX − minX`, `maxZ − minZ` and a "radius" word
 compiler. Consumers (selection box, picking, the composition image key) are
 documents 03 and 07 and are not enumerated here.
 
+**Established fact — there is no min-Y walk, and who reads the height word
+(2026-09-04, WU-19-140).** The paragraph above already implies this; it is
+stated outright here because two behavioral sections had been reading the
+definition's minimum-Y word as a derived "model bottom". The height walk above
+is the **only** bound retail derives from model geometry. The minimum-Y word is
+written exactly once — the zero store immediately before the walk — and no
+second walk with an inverted comparison exists: the height helper has a single
+caller (this compiler), and the rest of the bounding record is footprint-derived.
+So every unit definition in the corpus has minimum-Y zero, and any contract that
+appears to want a model bottom is either reading that zero or reading the
+maximum-Y word instead. [07 R-REV-01 §7] traces the same pass independently from
+the hover-reduction side and agrees.
+
+The maximum-Y dword's **high half** is the height in whole world units, and it
+is the word the behavioral consumers share — at two different read widths:
+
+| Consumer | Read width | Citation |
+|---|---|---|
+| LOS observer emitter height addend | **byte** — a model above 255 world units wraps | `[03 R-P0-18-A §1]` |
+| Weapon above/below-water gates | signed 16-bit | `[06 R-WPN-05 §1]` |
+| Transport lowering and hang altitude offset | signed 16-bit | `[04 R-AIR-01 §9]` |
+| `setSFXoccupy` band-3 (fully submerged) test | signed 16-bit | `[04 R-MOV-01 §8a]`, `[04 R-MOV-01 §8b]` |
+
+A reimplementation may keep the byte-masked and full forms as separate fields,
+but must not feed the byte-masked form to the 16-bit readers.
+
 **Established fact — texture bind.** Immediately after the height, every
 primitive of the model that carries a texture name is bound as
 `[03 §2.4]` item 4 states; one precision worth recording here: the

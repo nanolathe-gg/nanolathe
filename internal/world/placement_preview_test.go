@@ -1,13 +1,11 @@
 package world
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 )
 
 // TestFootprintForUnitMatchesMovementProfile locks C-7: the footprint comes from
@@ -301,28 +299,11 @@ func TestGhostPreviewFootprintSweepMatchesSim(t *testing.T) {
 // present. It is corpus-style but sampled to stay fast: for each building with a
 // movement class, a fixed grid of cells is validated via preview and sim helpers.
 // Preview and sim must agree on every sampled cell [R-P0-08][07 §9].
+// Read-only against the catalog: it only looks up unit and movement
+// definitions, it never writes into it, so it shares the process-wide
+// compile [internal/testsupport/retailcat].
 func TestCorpusPreviewConsistency(t *testing.T) {
-	retailRoot := os.Getenv("NANOLATHE_TA_ROOT")
-	if retailRoot == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			cand := filepath.Join(home, "TotalAnnihilation")
-			if _, err := os.Stat(filepath.Join(cand, "totala1.hpi")); err == nil {
-				retailRoot = cand
-			}
-		}
-	}
-	if retailRoot == "" {
-		t.Skip("retail assets not present: set NANOLATHE_TA_ROOT")
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(retailRoot); err != nil {
-		t.Skipf("mount retail %q: %v", retailRoot, err)
-	}
-	defer fs.Close()
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("catalog compile: %v", err)
-	}
+	cat, _ := retailcat.Shared(t)
 	// Collect defs with a movement class (building filter per task, but
 	// also include mobile as synthetic corpus uses movement footprint for both
 	// [07 §9] C-7). In retail, buildings have no MC, mobiles do; the sampled

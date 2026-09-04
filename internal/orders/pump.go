@@ -287,6 +287,16 @@ type AirGoalRequest struct {
 	Flags   uint16
 }
 
+// PlaceRequest names one live unit and the world position a handler is
+// committing it to, for the direct position commit of [04 R-COLL-01 §4]. It
+// carries no radius, no node and no mode: the setter writes the position it is
+// given and derives the cell pair and plane from the unit's own committed
+// mover mode.
+type PlaceRequest struct {
+	Unit    pool.Handle
+	X, Y, Z numeric.Fixed
+}
+
 // MovementGoalAdapter is the narrow goal/release port used by order handlers.
 // Each callback returns false when the owner cannot accept the request. The
 // callback itself is responsible for publishing the pending word at the
@@ -312,6 +322,26 @@ type MovementGoalAdapter struct {
 	// storage and is read-only to this package; callers filter it with
 	// combat.ScanAirBaseList.
 	AirBases func(allyGroup uint8) []pool.Handle
+
+	// PlaceUnit is the direct position commit — retail's "carried-position
+	// setter", the occupancy commit's success branch without the validator
+	// [04 R-COLL-01 §4]. Same cell and mode writes XYZ only; otherwise it
+	// clears the old footprint, writes XYZ, the cell pair and the mode, stamps
+	// the new footprint under the overlap protocol, and publishes LOS.
+	//
+	// It belongs on THIS adapter rather than on WorldQueryAdapter because the
+	// two things the setter touches — the occupancy planes' cached cell pair
+	// and the class-layer restamp family [04 R-MOV-03 §3] — are owned by the
+	// same package this adapter already fronts. WorldQueryAdapter is a
+	// read-only query port: nothing on it writes simulation state, and routing
+	// an occupancy write through it would give the world queries a second
+	// owner.
+	//
+	// The one order-facing caller is the `Teleport` row's per-unit placement
+	// [04 R-ORD-01 §2]. Like every callback here it returns false when the
+	// owner cannot accept, and like every callback here it — not the handler —
+	// owns whatever the movement boundary must republish afterwards.
+	PlaceUnit func(PlaceRequest) bool
 }
 
 // FeatureView is the value-only feature identity exposed to order scans. It
@@ -427,6 +457,21 @@ type PresentationAdapter struct {
 	Status           func(*units.Unit, uint8, string) bool
 	Nanolathe        func(*units.Unit, *Node, uint32) bool
 	NanolatheFeature func(*units.Unit, *Node, FeatureView, uint32) bool
+
+	// Teleport is the `Teleport` row's per-moved-unit effect: the strip-5
+	// flame-stream container spawned at the moved unit's OLD position, laying
+	// one animated segment every 10 ticks between the old position and the
+	// displaced one for its 30-tick life [04 R-ORD-01 §2][03 R-LAYER §4].
+	//
+	// The row emits it once per moved unit and BEFORE that unit's position
+	// commit, which is why the endpoints are arguments rather than something
+	// the presentation edge could re-derive from the unit afterwards.
+	//
+	// [03 R-LAYER §4] is also the retraction of the older reading that made
+	// strip 5 a "flame-weapon area scan": the teleport handler is strip 5's
+	// only producer besides burning-feature smoke, so no combat path competes
+	// for this callback.
+	Teleport func(moved *units.Unit, fromX, fromY, fromZ, toX, toY, toZ numeric.Fixed) bool
 }
 
 // Validate reports whether the binding is complete enough to run a battle.

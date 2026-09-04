@@ -4,26 +4,15 @@ package formats
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
 func retailFS(t *testing.T) *vfs.FS {
 	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("cannot determine home directory: %v", err)
-	}
-	root := filepath.Join(home, "TotalAnnihilation")
-	if configured := os.Getenv("OPENTA_TA_ROOT"); configured != "" {
-		root = configured
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail data unavailable: %v", err)
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount game directory: %v", err)

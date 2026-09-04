@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
@@ -141,14 +142,7 @@ func TestClientResizeReallocatesTheOffscreen(t *testing.T) {
 // retailAssetShell opens the mounted install and builds the frontend, or skips.
 func retailAssetShell(t *testing.T) (*gameShell, *contentSet, *client.Client) {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root}
 	cs, err := openContent(opts)
 	if err != nil {
@@ -310,14 +304,7 @@ func TestRetailOptionsRootEscapeClosesThroughPrev(t *testing.T) {
 // With NANOLATHE_OPTIONS_SHOT set to a directory, the battle is written there
 // at both sizes for comparison.
 func TestBattleComposesAtTheChosenDisplayMode(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

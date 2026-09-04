@@ -3,7 +3,6 @@ package cob
 import (
 	"bytes"
 	"encoding/binary"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -387,18 +386,10 @@ func TestLoadTruncatedTable(t *testing.T) {
 }
 
 // Asset-guarded test: loads every COB via VFS and asserts structural
-// relationships. Skips when retail assets absent per AGENTS.md §Test policy pattern
-// os.Stat $HOME/TotalAnnihilation/gamedata, but uses testsupport.RetailRoot
-// so the suite passes on machines with no game installed.
+// relationships. Skips when retail assets are not opted in via
+// testsupport.RetailRoot, so the suite passes on machines with no game
+// installed.
 func TestLoadRetailCOBs(t *testing.T) {
-	// Pattern guard per brief: skip when ~/TotalAnnihilation absent.
-	home, _ := os.UserHomeDir()
-	gamedataPath := filepath.Join(home, "TotalAnnihilation", "gamedata")
-	if _, err := os.Stat(gamedataPath); err != nil {
-		// Fall back to testsupport check which also verifies HPI presence.
-		// This keeps both patterns covered.
-		t.Skip("retail assets not present")
-	}
 	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {

@@ -1,8 +1,6 @@
 package cob
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/testsupport"
@@ -41,10 +39,6 @@ import (
 // the target after thirty ticks. The angle advanced is therefore
 // Σ(3k, k=1..30) = 1395 in the 65536-per-circle domain.
 func TestExtractorSetSpeedSizesStockSpin(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	if _, err := os.Stat(filepath.Join(home, "TotalAnnihilation", "gamedata")); err != nil {
-		t.Skip("retail assets not present")
-	}
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(testsupport.RetailRoot(t)); err != nil {
 		t.Fatalf("mount: %v", err)

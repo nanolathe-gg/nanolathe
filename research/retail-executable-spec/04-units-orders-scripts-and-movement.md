@@ -719,7 +719,7 @@ descriptor table, are drawn from:
 |---:|---|---|
 | `0x1` | every deadline; the shared deadline setter always ORs it | the pump sets it on expiry |
 | `0x2` | cancel-current notification | producer is a removal path, not a bit writer ([R-ORDER-02 §2]) |
-| `0x4` | the `INBUILDSTANCE` wait of the work orders (§3.9) and the wait/select family | |
+| `0x4` | the `INBUILDSTANCE` wait of the work orders (§3.9) and the wait/select family | **producer closed 2026-09-04, [R-COB-06]:** the COB engine-write opcode raises it on the unit's own order-event word on every execution, valid port identifier or not; neither consumer sets a deadline |
 | `0x8` | interrupt/abandon; paired with `0x10` by the guards | producer unlocated |
 | `0x10` | guard re-arm; also the second interrupt bit | producer unlocated |
 | `0x20` `0x40` `0x80` | the movement outcomes above | the move, patrol, park and work families arm `0xE0`; several work handlers arm `0xE8` (adding `0x8`) |
@@ -3335,6 +3335,10 @@ retail relies on the record pool never being exhausted at these sites.
 *advance* (1) when the unit's build-stance byte (the COB `INBUILDSTANCE`
 port, [R-COB-03 §3]) is set, and otherwise writes the dynamic gate to
 `extra | 0x4` and returns *hold* (2). The `extra` per caller is given below.
+The helper sets **no deadline**; gate bit `0x4`'s producer is the COB
+engine-write opcode, which raises it on the unit's order-event word on every
+execution ([R-COB-06]), so a parked record is re-polled exactly when its own
+script next touches an engine port, and not otherwise.
 
 **The `StartBuilding` emitter** is [R-ORDER-02 §2]'s: it arranges
 `StartBuilding(0, 0, 1, value16, 0, 0, 0)` and sets the StopBuilding-pending
@@ -3394,7 +3398,7 @@ truncated toward zero.
 | `Wait` | p1 = timeout budget in ticks, p2 = scan radius. With p2 ≠ 0 (every phase): enumerate the target registry within p2 of the unit for the unit's side (inclusive `d² ≤ r²` in whole units); any hit → complete; else if p1 < 1 → complete; else draw `r = RNG(30)`, `p1 −= r + 150`, deadline `r + 150`, hold. With p2 = 0: phase 0 deadline = p1, advance; phase 1 complete; other cancel-all. |
 | `SelfDestruct` / `SelfDestructFG` | Shared body. p2's high nibble marks initialisation: when clear, p2 = the definition's `selfdestructcountdown` (3-bit field, default 5) with the marker. If p1 = 0 and the countdown field is nonzero: with the satisfied set lacking bit 1 (cancel-current), let `n` = the remaining count; if n = 0 set p1 = 1 else store n − 1; emit status kind `22 − n` (`five` … `zero`; n ≥ 6 indexes past the six-entry table and is prevented only by the parser's 3-bit field, values 6 and 7 being **Unknown** — decider: the FBI parser's clamp); deadline `RNG(15)` when n was 0, else 30; gate |= `0x2`; advance. With bit 1 present (cancelled): if the unit lacks auto flag 14 emit status 23 (`Self destruct terminated`); complete. Otherwise (countdown finished, or the definition has no countdown): apply 30000 damage to itself with damage cause 3; complete. The record lives on the rear segment ([R-ORDER-02 §1]), so only its own deadline and the cancel path drive it. |
 | `SelfRepair` | Target (the repairer) null → status 7 with `Repair aborted.`; abandon. Phase 0: target definition must have `builder` (else cancel-all); target must be complete (remaining fraction 0.0) and activated (edge bit 0) → release all slots, advance; else abandon. Phase 1: if own health ≥ own `maxdamage` → advance; else stamp nanolathe-active `tick + 150` on itself, run the repair step (doc 05: the repairer's per-tick heal against this unit); when it did work, draw the spray from the **target's** nano piece to **this unit's** box; deadline 1; gate |= `0x8`; hold. Phase 2: status 10 with `Unit repaired`; complete. Other: cancel-all. |
-| `Teleport` | Single visit. For every live unit other than itself whose position lies inside this unit's model bounding box (position plus the definition's min/max triple, inclusive on all three axes): its new position is `goal + (its position − my position)`; emit the teleport effect (kind 5, duration 30) from old to new, then place it there through the position setter (re-registers occupancy when the footprint cell changes). Complete. The teleporter itself never moves. |
+| `Teleport` | Single visit. For every live unit other than itself whose position lies inside this unit's model bounding box (position plus the definition's min/max triple, inclusive on all three axes): its new position is `goal + (its position − my position)`; emit the teleport effect (kind 5, duration 30) from old to new, then place it there through the position setter (re-registers occupancy when the footprint cell changes). Complete. The teleporter itself never moves. **Cross-references (2026-09-04, WU-19-142).** Nothing above changes; three terms it uses are owned elsewhere and were expensive to find. (1) The min/max triple is the bounding record of `[02 R-CAT-01 §7]`: X and Z come from the **footprint**, not the model — `±(FootprintX << 20) / 2` and `±(FootprintZ << 20) / 2` in 16.16 — and Y is the model-top walk stored as the upper bound with the lower bound zeroed, so the Y span is `[y, y + modelTop]`. (2) "Kind 5" is **strip** 5, the flame-stream container of `[03 R-LAYER §4]`: a 30-tick object laying one animated segment every 10 ticks between the moved unit's old and new position, spawned at the old position and BEFORE the position commit; that section's producer census names this handler as strip 5's only caller besides burning-feature smoke. (3) The position setter is the carried-position setter of `[R-COLL-01 §4]`: same cell and mode writes XYZ only, otherwise clear the old footprint, write XYZ, the cell pair and the mode, stamp under the overlap protocol, publish LOS — dirty either way. |
 | `Park` | Phase 0: no mover reference → cancel-all. With `canfly`: goal = own position, re-identify the record as `VTOL_Move`, *restart* (the air move runs in the same cascade). Else `s = FootPrintX` (+3 when the movement class's `MinWaterDepth` word is non-negative — template default −10000, so land classes get no `+3`; corrected 2026-08-29 per [R-FAC-02 §7], previously "the definition's yard-map width word"); install a rectangle goal with origin `(cellX − 4s, cellZ − 3s)` and size `(8s, 6s)` in cells, where cellX/Z are the unit's whole-unit position shifted to cells; gate = `0xE0`; advance. Phase 1: satisfied `0x20` → complete; a record behind it exists → complete; else deadline 30, *restart*. Other: cancel-all. |
 
 ### Closed — the combat handlers [R-ORD-01 §3] (2026-08-29)
@@ -5992,7 +5996,8 @@ spawns a projectile — is [R-WPN-03 §6] and is not restated here.
 exactly six write arms — ports 1, 5, 6, 18, 19, 20. There is no STANDGROUND,
 no WEAPON1/2/3, and no CLOAKED write port; an identifier without a write arm
 only sets the unit's script-touched marker, and every write arm sets that
-marker in addition to its own effect (section 4.4). The compiled form pushes
+marker in addition to its own effect (section 4.4). **That marker is order
+gate bit `0x4` — [R-COB-06] identifies it and closes the gate bit's producer.** The compiled form pushes
 the identifier first and the value second, so the value sits on top of the
 stack, and the opcode pops the value first and the identifier last. A census
 of shipped scripts (armlab, armcom, and every write site in each) shows the
@@ -6041,7 +6046,10 @@ instruction stream, finds exactly six sites that touch its bit 3:
   for port 19 (the dispatch's arms are also exported individually, so the one
   arm appears twice);
 * the COB **set-port** dispatch's arm for port 19, which writes the bit from
-  the low bit of the value and sets the unit's interface-refresh bit;
+  the low bit of the value and sets the marker this section calls the
+  interface-refresh bit — **renamed 2026-09-04 by [R-COB-06]:** it is bit 2 of
+  the unit's order-event word, i.e. order gate bit `0x4`, and every arm of the
+  dispatch sets it, not just this one;
 * the **creation/reset** clear that zeroes the byte's whole low nibble (the
   "zero at creation" of §4.4);
 * the **save writer**'s pack of that low nibble into the packed status word of
@@ -6051,7 +6059,9 @@ There is no test of that bit anywhere in the movement follower, the collision
 commit, the occupancy stamp/clear/restamp, the placement validator, the order
 pump or any order handler, the factory production node, or the AI. Setting
 `BUGGER_OFF` therefore asks the engine for nothing: a script can set it and
-read it back, the interface refreshes, and the save file carries it. From the
+read it back, the order pump's `0x4` wake fires ([R-COB-06], which renames
+what this paragraph called the interface refresh), and the save file carries
+it. From the
 simulation's point of view port 19 is a **write-only flag** — the same shape as
 `canstop` in [R-STANCE-01 §8].
 
@@ -6081,6 +6091,88 @@ evidence, and warned against generalizing the authored retry. That warning
 stands and is now stronger than a warning: on the engine side of this bit the
 coupling does not exist, established by census rather than by absence of
 search. The doc 05 warning is left in place and cross-referenced there.
+
+### Closed — the script-touched marker *is* gate bit `0x4` [R-COB-06] (2026-09-04)
+
+The gate-bit table under [R-ORD-01 §0] left the `0x4` column's producer blank,
+and §3.9's `INBUILDSTANCE` wait therefore had no way to be satisfied: with the
+gate armed and nothing able to raise the bit, every work record that reached
+that wait would park at the head of its unit's queue forever. This closes the
+producer. **Established** by an instruction-level census of the whole image,
+not by inference.
+
+**Established — one bit, three names, one writer.** The order pump's satisfied
+set is `(record.pending | owner's order-event word) & record.dynamicGate`
+(§3.3, [R-ORD-01 §6]). Bit 2 of that per-unit order-event word — the same
+16-bit word that carries the weapon layer's `0x400`/`0x800`/`0x1000`
+([06 R-WPN-05 §6]) — is **gate bit `0x4`**. Its only writer anywhere in the
+image is the COB **engine-write opcode dispatch**: the routine §4.4 and §4.7
+describe, which binds write arms for ports 1, 5, 6, 18, 19 and 20. Every one
+of those six arms ORs bit 2 into the word in addition to its own effect, and
+so does the dispatch's fall-through arm — the one an identifier with **no**
+write arm takes, including an identifier outside 1..20, which the dispatch
+range-checks and sends straight to that arm. The census is exhaustive: the
+instruction stream contains exactly six sites that OR the immediate 4 into a
+byte at that word's low half, and all six are inside this one dispatch.
+
+That is the "script-touched marker" §4.4 names ("an identifier without a write
+arm only sets the unit's script-touched marker, and every write arm sets that
+marker in addition to its own effect"). §4.4's sentence and this section
+describe the same store; the marker is not a separate field.
+
+**Correction to [R-COB-05] and to §4.7's port-19 bullet.** Both call this store
+"the unit's interface-refresh bit" — R-COB-05's census row reads "writes the
+bit from the low bit of the value and sets the unit's interface-refresh bit",
+and §4.7's port-19 bullet inherits the same name. That name was assumed, never
+traced, and it is wrong: nothing in the interface, HUD or refresh paths reads
+this word. A bounded census of every read of the word finds exactly two — the
+order pump's merge above, and the save writer's pack (with the loader's
+restore) — so its sole live consumer is the order pump. The `BUGGER_OFF`
+verdict of [R-COB-05] is untouched: bit 3 of the *second state byte* still has
+no engine reader. Only the name of the side effect the port-19 arm shares with
+the other five arms changes.
+
+**Established — what the bit means and what waits on it.** The bit says *this
+unit's script executed an engine write since an order last consumed the
+notice*. It is not a stance signal, and it carries no value. Two order helpers
+gate on it, and both are level tests of the second state byte that the same
+dispatch writes ([R-COB-03 §4], §4.7):
+
+* the `INBUILDSTANCE` wait of [R-ORD-01 §1] — *advance* (1) when the
+  in-build-stance level is set, otherwise `gate = extra | 0x4` and *hold* (2);
+* the `BUSY` wait of the ground transport pair ([R-AIR-01 §9] as corrected
+  under [R-ORD-02 §3]) — *hold* with `gate = 0x8 | 0x4` while `BUSY` is set,
+  *advance* otherwise.
+
+**Neither helper sets a deadline.** Nothing in either body touches the
+record's deadline word. A record parked on `0x4` is woken by exactly one
+thing: the unit's script writing an engine port. The helper then re-reads the
+level byte and either advances or re-arms `0x4` and holds again. Because the
+bit is per-unit and value-free, a write to *any* port wakes the wait —
+`set BUSY to 0` wakes an `INBUILDSTANCE` wait just as `set INBUILDSTANCE to 1`
+does — and the re-test is what decides the outcome. That is the whole
+mechanism, and it is why the stock choreography works: the lab template's
+`Go` calls `OpenYard` and only then writes `INBUILDSTANCE = 1` (§4.7), so the
+`OpenYard` port-18 write already wakes the waiting record once, it re-tests,
+finds the stance still clear, re-arms, and the stance write wakes it again to
+advance.
+
+**Established — accumulation and clearing.** The bit is raised on the unit,
+not on a record, and the pump clears from the word only the bits the visited
+record's gate names (`word &= ~satisfied`). A port write made while no record
+is waiting on `0x4` therefore *persists* and satisfies the next record that
+arms the bit, on that record's first visit. The unit constructor zeroes the
+whole word, and the save writer persists it with the rest ([08
+R-SAVE-WEAPON-01] owns the packing).
+
+**Consequence for a reimplementation.** The consumer side needs nothing beyond
+§3.3's merge, which already ORs the unit's order-event word into the satisfied
+set. The producer belongs at the engine-write opcode itself — one OR of bit 2
+into the owning unit's order-event word on **every** execution of that opcode,
+before or after the port's own effect, unconditionally and regardless of the
+identifier's validity. Attaching it to individual port handlers instead (only
+port 5, say) would be a narrower rule than retail's and would deadlock the
+transport handshake, whose wake comes from port 6.
 
 **Established fact — activation edge machine and engine drivers [R-P0-10]:**
 The shared edge machine computes the old and new state, writes back, and on a
@@ -6194,9 +6286,14 @@ Killed, Activate, the Aim family, the Fire family, and the movement callbacks
 refutes the "mask zero" report in the COB format document, which already
 flagged itself as an unprobed community report.
 
-**Open questions [R-P0-10]:** `TODO(question)` — the consumer of the
+**Open questions [R-P0-10]:** ~~`TODO(question)` — the consumer of the
 script-touched marker is unlocated: every write arm sets it and no reviewed
-reader consumes it (write-only in the bounded census; store it opaque).
+reader consumes it (write-only in the bounded census; store it opaque).~~
+**Closed (2026-09-04, [R-COB-06]):** the marker is bit 2 of the unit's
+order-event word — order gate bit `0x4` — and its consumer is the order pump's
+satisfied-set merge, which the earlier census missed because it looked for a
+reader of a marker rather than for the word the pump already merges. It is not
+write-only and must not be stored opaque.
 `TODO(question)` — the semantic NAME of the busy bit beyond the transport
 scripts that write it; the admission half is closed: the nine-gate transport
 admission predicate performs no busy-bit test (bounded census of the
@@ -6378,8 +6475,10 @@ to §3.4/§3.5 and are RWU-04-6's, not settled here.
 binds identifiers 1, 5, 6, 18, 19 and 20, exactly as §4.7 states. The
 script-touched marker bit is set on **every** path — each of the six arms, and
 the fall-through every unbound identifier takes — so a write of an
-unimplemented port is observable only through that marker (whose consumer
-remains unlocated, §4.7).
+unimplemented port is observable only through that marker. **Its consumer is
+closed (2026-09-04, [R-COB-06]):** the marker is order gate bit `0x4`, read by
+the order pump's satisfied-set merge; this paragraph's parenthetical "remains
+unlocated" is superseded.
 
 **Established — the bit writes.** Ports 5, 6 and 19 write bits 0, 1 and 3 of
 the second state byte from the **low bit** of the value, leaving the rest of
@@ -6884,7 +6983,7 @@ until its next cross-cell proposal replaces the verdict, whatever its speed
 word says. Established (re-read of the classifier against the commit's writer;
 the mover constructor seeds the byte with mode 1 and the flag clear).
 
-**Established fact:** `setSFXoccupy` is a five-value classifier (run after the rate classifier inside the movement integration, mode I, arity 1, spelling exact with lower-case `s`). Occupancy is `0` when the current movement mode (the low two bits of the movement-mode word) is not `1` or `2`. In those modes the classifier compares signed Y (the signed high word of the unit's 16.16 Y), the map water level (`wt`), the definition's waterline byte (`wl`) and the definition's model-bottom signed word (`mb`), yielding `4` if `wy > wt`; otherwise starting from the cached band it can yield `1` when `wy - wt > -5`, `2` when `wl + wy == wt`, and `3` when `mb + wy < wt`, with later tests overriding earlier ones (`1→2→3`). The value is cached and emitted via the argument-carrying name-form adapter only on change (cell 0 = band `0..4`).
+**Established fact:** `setSFXoccupy` is a five-value classifier (run after the rate classifier inside the movement integration, mode I, arity 1, spelling exact with lower-case `s`). Occupancy is `0` when the current movement mode (the low two bits of the movement-mode word) is not `1` or `2`. In those modes the classifier compares signed Y (the signed high word of the unit's 16.16 Y), the map water level (`wt`), the definition's waterline byte (`wl`) and the definition's model-top signed 16-bit word (`mt`; this sentence said "model-bottom signed word (`mb`)" until [R-MOV-01 §8b]), yielding `4` if `wy > wt`; otherwise starting from the cached band it can yield `1` when `wy - wt > -5`, `2` when `wl + wy == wt`, and `3` when `mt + wy < wt`, with later tests overriding earlier ones (`1→2→3`). The value is cached and emitted via the argument-carrying name-form adapter only on change (cell 0 = band `0..4`).
 
 **Supported inference:** Wake effects and medium bands are script-authored behavior. The engine does not need a separate hard-coded wake renderer to reproduce the callback contract.
 
@@ -10926,7 +11025,9 @@ mode 2 — air word equal to self → 0. Then flags bit 27 is cleared, and if
 bit 26 was set both 26 and 27 are cleared and the *overlap scan* runs: every
 live unit (and every unit on a live unit's cargo list) filed in a sector
 bucket touching the rectangle whose own rectangle intersects it is passed to
-the *restamp* below. Finally the class-layer maintenance: for a unit with a
+the *restamp* below. Which buckets, in what order, and where in a bucket the
+stamp files a unit are [R-COLL-01 §4A]. Finally the class-layer maintenance:
+for a unit with a
 mover, each of the sixteen class-layer records whose watermark exceeds the
 mover's *last-stamp tick* reclassifies the rectangle ([R-PATH-01 §2]'s
 footprint-aware classifier over the rectangle), and the last-stamp tick is
@@ -10939,7 +11040,8 @@ bounds test of §2 steps 1–4 on the cached pair: out of map → the unit is
 moved to the off-map sector bucket (unlinked from its previous bucket unless
 carried) and **no cell is written**. In map → the sector bucket is
 `(Z >> 23)·sectorsWide + (X >> 23)` from the committed 16.16 position (128
-world-unit sectors), relinked when it changed and the unit is not carried;
+world-unit sectors), relinked when it changed and the unit is not carried —
+the relink is a **head insert**, exactly [R-COLL-01 §4A];
 then the plane loop above with the overlap protocol; for the building class
 the derived-height recompute over the grown rectangle and a reclassification
 of the rectangle in every active class layer follow.
@@ -10979,6 +11081,115 @@ unit's owner state (for the state-3 displacement) and a per-unit flag word it
 can write. The order the displacement rule runs in is the plane loop's — one
 cell at a time, row-major over the rectangle, each cell arbitrated as it is
 visited — so a rectangle can end half displaced when the occupants differ.
+
+### Closed — the sector bucket: head insert, and the clear scan's column-major sweep [R-COLL-01 §4A] (2026-09-04)
+
+§4 above named the *overlap scan* — "every live unit (and every unit on a live
+unit's cargo list) filed in a sector bucket touching the rectangle whose own
+rectangle intersects it is passed to the restamp" — without saying which
+buckets, in what order, or where in a bucket the stamp files a unit. WU-19-145
+settles all three by direct trace. Everything here is **Established**.
+
+**Correction.** The `overlapScan` marker this closes read: "retail visits the
+candidates in sector-bucket order, and a bucket's own order is its insertion
+order, which is untraced." Both halves were wrong. The bucket is **not** in
+insertion order — the stamp head-inserts, so it reads back in *reverse* order
+of linking — and the sweep is not untraced, it is fully determined below.
+
+**The structure.** The sector grid is the one `[R-AIR-01 §5]` and
+`[03 R-TERR-01 §5]` build: one 10-byte record per 128 × 128 world-unit cell
+(8 attribute cells on a side), indexed `sectorZ · columns + sectorX`, plus one
+extra record outside the array — the *off-map* record — held in a global. Each
+record's last field is the head of a singly-linked list of the units filed
+there, chained through a per-unit *next* link. A unit also stores which record
+it is filed in.
+
+**The link operation is a head insert.** The link routine is four
+instructions: the new unit's next link takes the record's current head, and
+the record's head takes the new unit. Nothing walks the list, and there is no
+tail pointer. Removal is the only walk — from the head, to find the
+predecessor. So **traversing a bucket from its head yields the units in
+reverse order of the moment each was linked into it**, most recent first.
+
+**Where the relink happens.** Inside the *stamp*, and nowhere else on the
+movement path. Its order, ahead of the stamp's class dispatch, so it runs even
+for the modes that write no cell:
+
+1. Bounds test on the **cell pair and footprint** — `cellX < 0 || cellZ < 0 ||
+   cellX + fx >= width || cellZ + fz >= height`, the same test §2 steps 1–4
+   state. On failure the unit is filed in the **off-map record** and no cell is
+   written.
+2. Otherwise the record index comes from the unit's **committed 16.16
+   position**, not from its cell pair: `sectorX = X >> 23`, `sectorZ = Z >> 23`
+   (arithmetic, i.e. floor), `record = grid[sectorZ · columns + sectorX]`. The
+   two are the same measure — a 16.16 position shifted 23 and a cell coordinate
+   shifted 3 both divide by 128 world units — but the position is the
+   footprint's *centre* and the cell pair its corner, so for a footprint wider
+   than one cell they can select adjacent sectors. The position wins.
+3. If that record is the one the unit is already filed in, nothing happens —
+   **a unit that has not crossed a sector boundary keeps its place in its
+   bucket.** If the unit is *carried*, only its record field is rewritten: no
+   unlink and no insert, so cargo is in no bucket at all (which is why the scan
+   walks cargo lists separately).
+4. Otherwise: unlink from the old record, head-insert into the new, store the
+   new record.
+
+The **restamp does not relink** — it has its own cell loop and never touches
+either link field — and the **clear does not unlink**. Buckets therefore do not
+move during an overlap scan, and a unit's position in its bucket is stable
+between sector crossings. The other movers of a unit between buckets are the
+cargo attach/detach event apply and unit finalisation.
+
+**The sweep.** The clear passes its own cell pair and size pair to a
+cell-rectangle sector visitor, with the restamp as the callback. Let the
+rectangle be `x0 = cellX`, `x1 = x0 + fx`, `z0 = cellZ`, `z1 = z0 + fz`. Then:
+
+```text
+sxLo = (x0 >> 3) - 1        sxHi = (x1 >> 3) + 1        # arithmetic shifts
+szLo = (z0 >> 3) - 1        szHi = (z1 >> 3) + 1
+if sxLo > sxHi: return                                  # tested before either loop
+
+for sx = sxLo .. sxHi:                                  # OUTER — sector column
+    for sz = szLo .. szHi:                              # INNER — sector row
+        if (unsigned)sx >= columns or (unsigned)sz >= rows: continue
+        for u = grid[sz*columns + sx].head; u; u = u.next:
+            if rect(u) intersects the query rectangle: restamp(u)
+            for c = u.cargo; c; c = c.next:
+                if rect(c) intersects the query rectangle: restamp(c)
+```
+
+Four things to hold onto. (1) The sweep is **column-major** — sector column in
+the outer loop, sector row in the inner. The neighbouring world-position sector
+visitor is row-major; they do not agree, so neither can be assumed from the
+other. (2) The span is the rectangle's own sectors grown by **one whole sector
+on every side**, which is what lets a unit filed by its centre in a
+neighbouring sector still be reached; a footprint wider than eight cells would
+fall outside that margin, and none is. (3) The unsigned bound test drops both
+negative and past-the-end sector indices, so the off-map record — which is not
+in the array — is never visited by any sweep, and an intruder whose rectangle
+has left the map keeps its intruder bit. (4) The visitor applies no liveness
+test and no self test: the clearing unit is still in its own bucket, but the
+clear lowered its own bits 26 and 27 immediately before the call, so the
+restamp's bit-27 gate makes it a no-op.
+
+The intersection test is half-open on both axes, matching §2's: overlap iff
+`x0 < ux + ufx and x1 > ux and z0 < uz + ufz and z1 > uz`.
+
+**What this decides.** Two intruders refused the same cell of one host are
+both restamped when the host clears it, and **the first restamped takes the
+cell**. The order is: lower sector column first; within a column, lower sector
+row; within one sector, the bucket from its head, i.e. whichever of the two
+most recently crossed into that sector. A carrier's cargo is visited
+immediately after the carrier, and cargo mover mode is 0, so its restamp
+writes no cell either way.
+
+*Implementation note (not a retail fact).* Nanolathe reproduces the sector
+selection and the column-major sweep exactly, deriving each candidate's record
+from its committed position and its off-map filing from the same bounds test.
+It does **not** reproduce the within-bucket order: that needs a per-unit link
+sequence maintained at every stamp site and dropped at finalisation, which the
+build does not carry. Inside one sector it falls back on the deterministic
+live-unit order, and `OccupancyGrid.overlapScan` carries the marker.
 
 ### Closed — the blocked flag: writers, readers, persistence, and the save bit [R-COLL-01 §5] (2026-08-29)
 
@@ -11375,7 +11586,7 @@ rejects candidates whose mode is `2`). Modes `0` and `3` are preserved through
 save and load but have no ordinary bounded gameplay producer and are used only
 as `0`-mappings in the classifier below.
 
-**Established fact:** `setSFXoccupy` is a five-value classifier with sequential overwrite and edge-triggered caching. It is computed from the committed mover-mode mirror, signed integer height `wy` (the signed high word of 16.16 Y, same domain as the sea-level byte `wt`), authored waterline byte `wl`, signed model-bottom word `mb`, and the cached prior band. All comparisons are signed integers in height-byte units, not 16.16 world units:
+**Established fact:** `setSFXoccupy` is a five-value classifier with sequential overwrite and edge-triggered caching. It is computed from the committed mover-mode mirror, signed integer height `wy` (the signed high word of 16.16 Y, same domain as the sea-level byte `wt`), authored waterline byte `wl`, the definition's signed 16-bit **model-top** word `mt` — the high half of the model total-height dword, not a model bottom; the operand was named `mb` and described as "the signed model-bottom word" here until the naming correction of [R-MOV-01 §8b] below — and the cached prior band. All comparisons are signed integers in height-byte units, not 16.16 world units:
 
 ```
 if mode not in {1,2}: band = 0
@@ -11384,10 +11595,10 @@ else:
     band = cachedBand
     if wy - wt > -5:  band = 1
     if wl + wy == wt: band = 2
-    if mb + wy < wt:  band = 3
+    if mt + wy < wt:  band = 3
 ```
 
-The three underwater tests are ordered overwrites `1→2→3` — `3` wins if both `2` and `3` hold — not exclusive branches; if none matches the cached band is retained. Band `4` is strictly above water; `1` is the shoreline skirt within five units above water; `2` is draft exactly at surface; `3` is model bottom below water. When `band != cachedBand` the engine starts one-argument asynchronous `setSFXoccupy` with `band` and updates the cache; otherwise no callback is emitted. The classifier runs once per mover tick after the occupancy commit and before the stopped-state Y correction.
+The three underwater tests are ordered overwrites `1→2→3` — `3` wins if both `2` and `3` hold — not exclusive branches; if none matches the cached band is retained. Band `4` is strictly above water; `1` is the shoreline skirt within five units above water; `2` is draft exactly at surface; `3` is the whole model below water — the model's top, lifted by the unit's height, is still under the water level. When `band != cachedBand` the engine starts one-argument asynchronous `setSFXoccupy` with `band` and updates the cache; otherwise no callback is emitted. The classifier runs once per mover tick after the occupancy commit and before the stopped-state Y correction.
 
 **Established fact:** Hover and floater units reuse the ground integrator and terrain validator — the same heading clamp, acceleration/brake choice, pitch-table cap, and footprint validator as ground — not a separate hover controller. Water depth, slope, and sea-level tests remain profile-driven via the movement class. Wake is not an engine GAF: the engine emits only the band change; shipped hover scripts gate wake effects on bands `2` or `3` and spawn them via `emit-sfx` types `2` through `5` from dedicated `wake` pieces (single-vertex pieces), with no engine wake renderer.
 
@@ -11462,9 +11673,66 @@ triggers the water half-speed branch and the water damage of section 9.2.
 `canhover` raises the same conform's floor to sea level, so a hovercraft rides
 the surface over water and the terrain over land in one expression.
 
+### Correction — band 3's operand is the model-TOP word; retail computes no model bottom at all [R-MOV-01 §8b] (2026-09-04)
+
+**What the earlier text said.** §9.1's classifier above, §9.2's "Other medium
+fields" sentence, and the `modelBottom` mentions in this document's
+"Missing and unknown" list all named the band-3 operand `mb`, "the definition's
+signed model-bottom word", and read the test `mb + wy < wt` as "model bottom
+below water". The implementation marker in `internal/movement/altitude.go`
+followed them: it left band `3` unreachable and named "the retail loader's
+min-Y walk over the 3DO" as the decider, on the assumption that such a walk
+exists and that its result lands in a definition word distinct from the model
+total height.
+
+**Why it was wrong.** There is no model-bottom word, because there is no min-Y
+walk. Two independently traced sections already said so from their own sides
+and were never reconciled with §9.1:
+
+* [02 R-CAT-01 §7] — the catalog loader **zeroes** the definition's minimum-Y
+  word immediately before it calls the model-height helper, stores that
+  helper's answer as the maximum-Y word, and rewrites the Y extent as
+  `max − min`; the horizontal bounds of the same record come from the authored
+  footprint, never from the model. So the definition's minimum-Y word is a
+  constant zero for every unit in the corpus, written once and never derived
+  from geometry.
+* [07 R-REV-01 §7] — the same zero-then-store pass, traced from the hover
+  reduction's side, with the same conclusion: "because the minimum was just
+  zeroed, the Y extent the reduction reads **is** the model total height".
+
+And the band-3 test does not read that zeroed word in any case. Its operand is
+the **signed 16-bit high half of the model total-height dword** — the same word
+the transport lowering offset reads ([R-AIR-01 §9], itself already corrected
+once in this direction), the same word the LOS emitter takes as its observer
+height addend ([03 R-P0-18-A §1], where it is read as a **byte**), and the same
+word the weapon water gates compare against sea level ([06 R-WPN-05 §1], where
+it is read as `(int16)` as here). The model-height helper is described in
+[02 R-CAT-01 §7] and [07 R-REV-01 §7]; its file-side geometry is [fmt 3do].
+
+**What the test therefore means — Established (direct-static).** Band `3` is
+**fully submerged**: `modelTopWholeUnits + wy < wt`, i.e. the model's top,
+lifted by the unit's integer height, is still strictly below the water level.
+That reading also makes the five bands a monotone ladder in height, which the
+"model bottom" reading did not: `4` clear of the water, `1` the shoreline skirt
+just under it, `2` the draft-at-surface case, `3` under water entirely. Band `3`
+is reachable from the definition data this build already compiles — the
+`ModelTop`/`ModelTopFixed` pair — and needs no new definition field, no new
+authored key, and no new walk.
+
+**Read width.** The classifier reads the word as a signed 16-bit quantity, not
+as the byte the LOS emitter takes. The two agree for every stock model (all are
+far under 255 world units tall); they diverge only for a model above 255, where
+the emitter wraps ([03 R-P0-18-A §1]) and this test does not. Implementations
+must not share one byte-masked field between the two consumers.
+
+**What is unaffected.** The mover-mode gate, the overwrite order `1→2→3`, the
+cached-band retention, the edge-triggered callback, and the height-byte domain
+of every comparison all re-verify unchanged. Only the operand's identity was
+misnamed.
+
 ### 9.2 Flags and damage
 
-**Established fact:** Definition bits and fields participate as: `canhover` is bit 12, `floater` is bit 19, `upright` is bit 20, `amphibious` is bit 21, `hoverattack` is bit 27. `canhover` excludes the unit from water-damage and participates in the stopped-state Y pre-gate; `floater` selects the ship surface clamp at `waterline + sea level`; `upright` keeps the model vertical and computes Y as `max(terrain, sea level minus waterline)`; `hoverattack` selects the gunship attack variant, not hover locomotion. The `amphibious` bit is parsed and stored but has no reader in the bounded recovered movement, medium, targeting, or transport code — parser-only in that bound (bounded absence, not whole-executable impossibility). Shipped amphibious-looking behavior compensates via movement class `TANKHOVER3` values (movement class MaxSlope 12, MaxWaterSlope 255, no depth limits) and the `canhover`/`upright`/`waterline`/`modelBottom`/`movementclass` fields, not via the amphibious bit. Other medium fields are `waterline` byte (draft for band `2`), `movementclass` name resolved to profile, and `modelBottom` signed word (threshold for band `3`).
+**Established fact:** Definition bits and fields participate as: `canhover` is bit 12, `floater` is bit 19, `upright` is bit 20, `amphibious` is bit 21, `hoverattack` is bit 27. `canhover` excludes the unit from water-damage and participates in the stopped-state Y pre-gate; `floater` selects the ship surface clamp at `waterline + sea level`; `upright` keeps the model vertical and computes Y as `max(terrain, sea level minus waterline)`; `hoverattack` selects the gunship attack variant, not hover locomotion. The `amphibious` bit is parsed and stored but has no reader in the bounded recovered movement, medium, targeting, or transport code — parser-only in that bound (bounded absence, not whole-executable impossibility). Shipped amphibious-looking behavior compensates via movement class `TANKHOVER3` values (movement class MaxSlope 12, MaxWaterSlope 255, no depth limits) and the `canhover`/`upright`/`waterline`/`modelTop`/`movementclass` fields, not via the amphibious bit. Other medium fields are `waterline` byte (draft for band `2`), `movementclass` name resolved to profile, and the `modelTop` signed word (threshold for band `3`). **Correction (2026-09-04, [R-MOV-01 §8b]):** both places in this paragraph said `modelBottom`; the field is the model-top word and there is no model-bottom field — see the correction above.
 
 **Correction (2026-08-29, [R-SPEC-01 §15]).** The "no reader" sentence above is
 too broad: `amphibious` is read by the repair-admission water clause
@@ -12743,7 +13011,12 @@ the height at which cargo suspended below the carrier touches the ground. The
 same word, on the same definition, supplies the altitude offset of
 `VTOL_Landing` phase 5 when the lander is carrying something. There is no
 authored `model-bottom` key and the definition's min-Y bound is a different
-word, which is why the earlier reading could not be implemented.
+word, which is why the earlier reading could not be implemented. **Addendum
+(2026-09-04, [R-MOV-01 §8b]):** that min-Y bound is not merely a different word,
+it is a constant zero — the catalog loader zeroes it and never writes it from
+geometry ([02 R-CAT-01 §7], [07 R-REV-01 §7]), so retail derives no model bottom
+at all. The band-3 test of [R-MOV-01 §8a] turns out to read this same
+total-height word too, and for the same reason.
 
 **Correction — the detach half of the attachment helper takes the mover mode
 from the request, and the "becarried" re-arm is gated on player state, not on
@@ -13500,8 +13773,10 @@ held-key census of [07 R-CAM-01 §2]).
 its tests in a fixed order with later results overriding earlier ones: above
 sea level is band 4; otherwise the band starts from the previous value, then
 `height − sea > −5` sets 1, then `height + waterline == sea` sets 2, then
-`height + modelBottom < sea` sets 3 (with `waterline` the definition byte and
-`modelBottom` the signed 16-bit reference-height word). A mover whose mode is
+`height + modelTop < sea` sets 3 (with `waterline` the definition byte and
+`modelTop` the signed 16-bit reference-height word — this sentence named that
+operand `modelBottom` until [R-MOV-01 §8b], although "reference-height word"
+was already the model top's other name, [03 R-P0-18-A §1]). A mover whose mode is
 neither grounded nor airborne classifies as band 0. The `setSFXoccupy` start
 fires only on a change of band.
 
@@ -14039,8 +14314,11 @@ question is the engine's own pool allocator. Two new bullets are added.
   the creation-time hold helper raise a `TargetCleared` for the previous
   tenant before the new unit's script is bound · [R-CB-01 §4] · static trace
   of the unit allocator's clearing of the record before initialization.
-- Consumer of the script-touched marker · §4.7 [R-P0-10] · static trace.
-  Write-only in the bounded census. Marked `TODO(question)`.
+- ~~Consumer of the script-touched marker · §4.7 [R-P0-10] · static trace.
+  Write-only in the bounded census. Marked `TODO(question)`.~~ **Closed
+  (2026-09-04, [R-COB-06]):** the marker is order gate bit `0x4`; the order
+  pump's satisfied-set merge is its consumer, and this also closes the gate
+  bit's own missing producer.
 - Name of the engine-driven cloak-family bit (bit 2 of the first state byte)
   and its writers outside the edge machine · §4.7 · static trace, naming only.
   Marked `TODO(question)`.
@@ -14140,10 +14418,11 @@ state and page-flip availability, not follower state — doc 03 owns them.)*
   [R-MOV-03 §1].)
 - Whether the hover bob's per-corner perturbation — at most two height units,
   [R-MOV-01 §5] — can carry a hovering unit's committed integer height across
-  the sea-level, waterline, or model-bottom thresholds that the band
+  the sea-level, waterline, or model-top thresholds that the band
   classifier, the below-water half-speed branch, and water damage compare
   against · §9.1, §9.2 [R-MOV-01 §5] · a bounded numeric argument over the
-  stock `waterline` and `modelBottom` values, or manual retail observation of
+  stock `waterline` and model-top values (this entry said `modelBottom` until
+  [R-MOV-01 §8b]), or manual retail observation of
   a hovercraft parked on a shoreline. The wall-clock read and its write path
   into the authoritative height word are established.
 - Writer and configured value of the rate field that scales the wall-clock

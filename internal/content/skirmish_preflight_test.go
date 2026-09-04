@@ -1,23 +1,17 @@
 package content
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// skirmishAssetRoot is also called from compile_unit_mobility_test.go and
+// compile_unit_placement_test.go (not owned by this change).
 func skirmishAssetRoot(t *testing.T) string {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		root = filepath.Join(os.Getenv("HOME"), "TotalAnnihilation")
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail assets not present at %s", root)
-	}
-	return root
+	return testsupport.RetailRoot(t)
 }
 
 func TestSkirmishPreflightRetailBundle(t *testing.T) {

@@ -11,36 +11,21 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
 )
-
-func compositionRetailRoot(t *testing.T) string {
-	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		root = filepath.Join(os.Getenv("HOME"), "TotalAnnihilation")
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail assets not present at %s", root)
-	}
-	return root
-}
 
 // TestCompositionRetailCOBBindings exercises the production path against the
 // authored chain selected by the retail preflight: commander, Peewee, solar,
 // mex, and Kbot lab. It is deliberately asset-gated; no synthetic model or
 // empty COB is accepted here.
+//
+// Read-only: it only looks up units and binds independently-constructed COB
+// state, it never writes into the catalog, so it shares the process-wide
+// compile [internal/testsupport/retailcat].
 func TestCompositionRetailCOBBindings(t *testing.T) {
-	root := compositionRetailRoot(t)
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Fatalf("mount retail: %v", err)
-	}
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("compile retail catalog: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 	manifest, err := content.PreflightSkirmish(fs, cat, "Ashap Plateau", 0)
 	if err != nil {
 		t.Fatalf("retail preflight: %v", err)

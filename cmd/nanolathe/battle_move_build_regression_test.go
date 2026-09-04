@@ -3,7 +3,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -12,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -20,12 +20,7 @@ import (
 // select commander, right-click move far away, step the authoritative loop,
 // and watch where the order takes the commander.
 func TestBattleMoveAndBuildReachGoal(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			root = h + "/TotalAnnihilation"
-		}
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "coast to coast", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

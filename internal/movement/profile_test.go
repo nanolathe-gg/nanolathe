@@ -1,11 +1,11 @@
 package movement
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -317,15 +317,7 @@ func TestHoverBandBehavior(t *testing.T) {
 // and that a retail ground profile agrees with intuitive passability.
 // Never fails the suite when retail assets are absent.
 func TestRealMapOptional(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h := os.Getenv("HOME"); h != "" {
-			root = filepath.Join(h, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present")
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Skip("mount failed: " + err.Error())

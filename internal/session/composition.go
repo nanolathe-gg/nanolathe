@@ -846,6 +846,15 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		movementGoals.InstallAir = func(req orders.AirGoalRequest) bool {
 			return s.Movement.InstallAirGoal(req)
 		}
+		// The direct position commit of [04 R-COLL-01 §4] — the setter that
+		// clears the old footprint, writes XYZ and the cell pair, and stamps
+		// the new one under the overlap protocol without asking the placement
+		// validator. internal/movement owns the occupancy planes and the
+		// class-layer restamp family [04 R-MOV-03 §3], so it owns this too; the
+		// `Teleport` row is its order-facing caller [04 R-ORD-01 §2].
+		movementGoals.PlaceUnit = func(req orders.PlaceRequest) bool {
+			return s.Movement.PlaceUnit(req)
+		}
 	}
 	return &orders.QueueBinding{
 		Economy:   s.Econ,
@@ -1144,6 +1153,22 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				}
 				return s.publication.events.EmitNanolathe(e)
 			},
+			// TODO(T25): PresentationAdapter.Teleport stays nil. The row's
+			// effect is the strip-5 flame-stream container of [03 R-LAYER §4] —
+			// a 30-tick object that lays one 52-byte animated flame segment
+			// every 10 ticks between a moved unit's old and new position, with
+			// one CRT draw per segment for its start frame — and internal/frame
+			// has no strip-5 producer: frame.Strip carries no constant for it
+			// and frame.RouteForProducer would return StripUnknown, which is
+			// the sentinel that refuses a guessed route [03 §1][I9]. Adding the
+			// producer means an event kind in internal/frame, a container in
+			// internal/render and a painter in internal/client, none of which
+			// WU-19-142 owns. Placeholder: the simulation half of the row runs
+			// in full (the units move and their footprints restamp) and the
+			// flame stream is not drawn. The handler already treats a nil
+			// callback as "no effect" and still commits the position, so this
+			// binding is the only thing that has to change when the producer
+			// lands.
 		},
 	}
 }

@@ -2,43 +2,20 @@ package main
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
-// findRetailRoot returns a usable retail install path for integration tests.
-func findRetailRoot() string {
-	if root := os.Getenv("NANOLATHE_TA_ROOT"); root != "" {
-		if info, err := os.Stat(root); err == nil && info.IsDir() {
-			return root
-		}
-	}
-	if home, err := os.UserHomeDir(); err == nil {
-		p := filepath.Join(home, "TotalAnnihilation")
-		if info, err := os.Stat(p); err == nil && info.IsDir() {
-			return p
-		}
-	}
-	if info, err := os.Stat("/path/to/home/TotalAnnihilation"); err == nil && info.IsDir() {
-		return "/path/to/home/TotalAnnihilation"
-	}
-	return ""
-}
-
-// probeRetail skips integration tests when the original assets are absent.
+// probeRetail skips integration tests when the retail assets are not opted
+// in. It is the shared helper several test files in this package call;
+// routing it through testsupport.RetailRoot here fixes the opt-in for every
+// caller without each of them resolving ~/TotalAnnihilation on its own.
 func probeRetail(t *testing.T) string {
 	t.Helper()
-	if root := findRetailRoot(); root != "" {
-		if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err == nil {
-			return root
-		}
-	}
-	t.Skip("retail assets not available")
-	return ""
+	return testsupport.RetailRoot(t)
 }
 
 func TestParseFlagsDefaults(t *testing.T) {

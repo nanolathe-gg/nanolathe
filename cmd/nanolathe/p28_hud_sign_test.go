@@ -5,13 +5,13 @@ package main
 import (
 	"image"
 	"image/color"
-	"os"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
 // p28PanelResourceStage limits the asset-backed assertion to the battle shell
@@ -35,14 +35,7 @@ func (s p28PanelResourceStage) DrawUI(c *client.Client, _ client.UIFrame) {
 }
 
 func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("retail assets unavailable: %v", err)
-		}
-		root = home + "/TotalAnnihilation"
-	}
+	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
 	cs, err := openContent(opts)
 	if err != nil {

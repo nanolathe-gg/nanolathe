@@ -1,38 +1,18 @@
 package ai_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/headless"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// retailRoot resolves the reference install. Every test in this file is
-// skipped when it is absent, per the repository test policy.
-func retailRoot(t *testing.T) string {
-	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skip("nanolathe: no retail install root")
-		}
-		root = filepath.Join(home, "TotalAnnihilation")
-	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		t.Skip("nanolathe: no retail install root")
-	}
-	return root
-}
-
 func liveSkirmish(t *testing.T, mapName string, seed uint32) *session.Session {
 	t.Helper()
-	root := retailRoot(t)
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Skipf("nanolathe: mounting install failed: logical path %s, providers searched [], expected a readable Total Annihilation install: %v", root, err)

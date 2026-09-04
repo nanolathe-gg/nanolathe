@@ -6,8 +6,6 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
@@ -15,8 +13,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
 func cellsToWorld(n int32) numeric.Fixed { return numeric.Fixed(int64(n) << 20) }
@@ -41,24 +39,11 @@ func waitCompletedUnit(t *testing.T, sess *Session, stepOne func(), maxSteps int
 	return nil
 }
 
+// TestFactoryProductionEndToEndRetail is read-only against the catalog — it
+// only looks up units, menus and defs, it never writes into it, so it shares
+// the process-wide compile [internal/testsupport/retailcat].
 func TestFactoryProductionEndToEndRetail(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			root = filepath.Join(h, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present at ~/TotalAnnihilation")
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Skipf("mount retail: %v", err)
-	}
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("catalog compile: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 
 	// Deterministic map choice: first sorted map with a Network schema.
 	mapKeys := make([]string, 0, len(cat.Maps))

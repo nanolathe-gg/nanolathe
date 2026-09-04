@@ -4,35 +4,13 @@ package orders
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/vfs"
 )
-
-func retailFSOrders(t *testing.T) *vfs.FS {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("cannot determine home: %v", err)
-	}
-	root := filepath.Join(home, "TotalAnnihilation")
-	if configured := os.Getenv("OPENTA_TA_ROOT"); configured != "" {
-		root = configured
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail data unavailable at %s: %v", root, err)
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Fatalf("mount: %v", err)
-	}
-	return fs
-}
 
 // TestCorpusQueueCaps_Retail measures the stock corpus to prove the
 // previous 64/32 caps were inside stock-reachable behavior and that the
@@ -60,13 +38,8 @@ func retailFSOrders(t *testing.T) *vfs.FS {
 // This test locks the measurement: if stock content grows beyond the
 // guard, the test will fail and the guard must be revisited.
 func TestCorpusQueueCaps_Retail(t *testing.T) {
-	fs := retailFSOrders(t)
-	defer fs.Close()
+	cat, fs := retailcat.Shared(t)
 
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
 	if len(cat.Units) != 278 {
 		t.Logf("units: %d (expected 278 per prompt; install may vary)", len(cat.Units))
 	}
@@ -242,9 +215,9 @@ func TestStockNotHittingBoundsChecks_Retail(t *testing.T) {
 	// exercised in formats/coverage_test.go TestFormatCoverage (run with
 	// -tags retail). Here we just assert the queue guards are outside stock
 	// as already measured above, and that the format parsers succeed on
-	// stock maps/units.
-	fs := retailFSOrders(t)
-	defer fs.Close()
+	// stock maps/units. Reuses the shared mounted filesystem: this test does
+	// not need a compiled catalog, only the VFS retailcat.Shared already holds.
+	_, fs := retailcat.Shared(t)
 
 	records, err := fs.Manifest(vfs.ManifestOptions{})
 	if err != nil {

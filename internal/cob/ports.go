@@ -25,6 +25,14 @@ import (
 // [04 §4.4] and a write to an id with no write arm only sets the script-
 // touched marker. Every write arm sets that marker in addition to its effect
 // [04 §4.4].
+//
+// The marker is not an opaque flag: it is bit 2 of the owning unit's
+// order-event word, which is order gate bit 0x4, and the order pump's
+// satisfied-set merge is its only consumer [04 R-COB-06]. The INBUILDSTANCE
+// wait and the transport BUSY wait park on that bit with no deadline, so a
+// script's engine write is the only thing that re-polls them. Wiring that
+// producer belongs at the engine-write opcode in vm.go and the unit-side word
+// in internal/units; see the note on inBuildStanceWait in internal/orders.
 type PortInfo struct {
 	ID        Port
 	Name      string
@@ -86,15 +94,22 @@ func IsEnginePort(id int32) bool { return id >= 1 && id <= 20 }
 // ---------------------------------------------------------------------------
 
 // trigScalar multiplies a table-scaled trig value (8192 scale, from
-// numeric.Sin/Cos [04 §5.1]) by an unscaled integer scalar and rounds to
-// nearest before truncation. The scale is 1<<13, so rounding adds 4096 then
-// arithmetic shifts right 13 [04 §5.1] C25 (I2).
+// numeric.Sin/Cos [04 §5.1]) by an unscaled integer scalar. The product is
+// formed at full 64-bit width, half the scale (4096) is added to it, and the
+// result is an ARITHMETIC shift right by 13 — so the rounding FLOORS: a
+// negative product rounds toward negative infinity and a tie rounds up
+// [04 §5.3][04 R-MOV-01 §4][04 §10.3] C25 (I2).
 //
-// TODO(question): retail's rounding for negative products is not closed; this
-// helper adds half unconditionally (matching numeric.MulRound) so negative
-// values bias by +0.5. The spec states "products round to nearest before
-// truncation" without naming the negative tie path; validate against the retail
-// -cos*800 and HitByWeapon 400 sequences before depending on negative angles.
+// The earlier text here carried a TODO(question) saying "retail's rounding for
+// negative products is not closed ... negative values bias by +0.5" and asked
+// for the -cos*800 and HitByWeapon 400 sequences to be checked before relying
+// on negative angles. That is now closed, and the doubt was misplaced: the two
+// shared component routines RockUnit and HitByWeapon call are the same pair the
+// ground mover and the air work bodies use, and they contain no divide and no
+// float-to-integer conversion — nothing that could truncate toward zero. Adding
+// half and then flooring IS the contract, so the "+0.5 bias on negatives" the
+// old marker treated as a risk is the behavior being cloned. Go's >> on int64
+// is arithmetic, which makes this line bit-identical to it.
 func trigScalar(tableVal, scalar int32) int32 {
 	return int32((int64(tableVal)*int64(scalar) + 4096) >> 13)
 }
@@ -102,8 +117,8 @@ func trigScalar(tableVal, scalar int32) int32 {
 // RockUnitArgs computes the two arguments for the RockUnit callback [GAP T15]
 // [04 §5.3] C15/C25: (-cos(rel)*800, -sin(rel)*800) where
 // rel = (int16)(barrelDir - unitHeading) evaluated through the shared 512-
-// entry table with round-to-nearest products. Both signs are negative [04
-// §5.3] and there is no completion receiver [GAP T15]. Model draw trig is
+// entry table, each product adding half the 8192 scale and flooring. Both
+// signs are negative [04 §5.3] and there is no completion receiver [GAP T15]. Model draw trig is
 // separate float path [03 §2.4] and is not used here (C25).
 func RockUnitArgs(rel int16) (int32, int32) {
 	// rel as signed 16-bit circular angle, widened to uint16 for the 65536
@@ -111,7 +126,7 @@ func RockUnitArgs(rel int16) (int32, int32) {
 	a := numeric.Angle(uint16(rel))
 	cosVal := numeric.Cos(a)
 	sinVal := numeric.Sin(a)
-	// Products round to nearest before truncation [04 §5.1] C25.
+	// Products add half the 8192 scale and floor [04 §5.3] C25.
 	c := trigScalar(cosVal, 800)
 	s := trigScalar(sinVal, 800)
 	return -c, -s // [GAP T15] both negative
@@ -120,7 +135,8 @@ func RockUnitArgs(rel int16) (int32, int32) {
 // HitByWeaponArgs computes the two arguments for HitByWeapon [04 §5.1]
 // [GAP T15] C15/C25: (cos(dir)*400, sin(dir)*400) where dir is the packet
 // direction byte shifted left 8 into the 65536 domain [04 §5.1] C26. Products
-// round to nearest before truncation [04 §5.1] C25.
+// go through the same two shared component routines RockUnit uses, radius 400
+// and positive signs: add half the scale, then floor [04 §5.3] C25.
 func HitByWeaponArgs(dirByte uint8) (int32, int32) {
 	angle := numeric.Angle(uint16(dirByte) << 8) // byte shifted left 8 [04 §5.1] C26
 	cosVal := numeric.Cos(angle)

@@ -8,13 +8,12 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // aiE2ETickCap bounds the battle at the retail bound for this proof: thirty
@@ -36,18 +35,14 @@ const aiE2ETickCap = uint32(54000)
 // aiE2ESeed is the seed both this test and the displayless runs use.
 const aiE2ESeed = uint32(7)
 
+// aiE2ERetailRoot is kept for the sibling probes in this package
+// (ai_terrain_pocket_probe_test.go, unit_limit_pool_test.go) that still mount
+// their own filesystem and compile their own one-off catalog; it now only
+// resolves the root, through the shared opt-in gate, rather than duplicating
+// that resolution itself.
 func aiE2ERetailRoot(t *testing.T) string {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if home, err := os.UserHomeDir(); err == nil {
-			root = filepath.Join(home, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present at ~/TotalAnnihilation")
-	}
-	return root
+	return testsupport.RetailRoot(t)
 }
 
 // aiE2ESkirmish composes the ordinary two-slot direct skirmish the displayless
@@ -66,18 +61,18 @@ func aiE2ESkirmish(t *testing.T, mapName string, seed uint32) *Session {
 // rather than inheriting the default.
 func aiE2ESkirmishAt(t *testing.T, mapName string, seed uint32, difficulty int) *Session {
 	t.Helper()
-	root := aiE2ERetailRoot(t)
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Skipf("mount retail install: %v", err)
-	}
-	t.Cleanup(func() { _ = fs.Close() })
+	// The catalog is read-only from here: NewSkirmishWithProgress validates it
+	// and copies definitions into the session/unit pool, it never writes back
+	// into the compiled catalog. Every subtest and every WU-19-107/-115 rally
+	// scenario built on this helper can therefore share one process-wide
+	// compile instead of paying for its own [internal/testsupport/retailcat].
+	cat, fs := retailcat.Shared(t)
 	cfg := DirectSkirmishConfig(mapName)
 	cfg.ApplyDefaults()
 	cfg.Difficulty = difficulty
 	cfg.RNGSimSeed = seed
 	cfg.RNGCrtSeed = seed
-	sess, err := NewSkirmishWithProgress(fs, nil, cfg, nil)
+	sess, err := NewSkirmishWithProgress(fs, cat, cfg, nil)
 	if err != nil {
 		t.Fatalf("compose skirmish %q: %v", mapName, err)
 	}

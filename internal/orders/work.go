@@ -381,23 +381,40 @@ func deadlineRestart(n *Node, tick uint32, ticks int32) Code {
 // writes the dynamic gate to `extra | 0x4` and returns *hold* (2). The gate is
 // assigned, not ORed, exactly as the section states.
 //
-// TODO(T25): gate bit `0x4` has no producer in this build. [04 §3.1]'s gate-bit
-// table names this wait and the wait/select family as the bit's consumers and
-// names no producer for it; the COB engine-write port that carries the stance
-// byte ([R-COB-03 §3]) writes the unit field and nothing else. The byte is set
-// by the script's own `StartBuilding` body, which the emitter of [R-ORDER-02 §2]
-// arranges as a DEFERRED callback, so it is never already set on the visit that
-// first reaches this wait: with the gate armed and nothing able to satisfy it,
-// every work record that reaches this helper would park at the head of its
-// unit's queue permanently. Retail's stance byte does clear this wait, so a
-// permanent park is not the behavior being cloned. Placeholder, the same shape
-// airHandOff uses (vtolair.go): arm the shared deadline setter for one tick
-// alongside the row's own gate, so the stance byte is re-polled on the next
-// visit. The record keeps its place at the head and its phase, exactly as
-// *hold* requires, and the added bit becomes inert the moment a producer for
-// `0x4` exists.
-// Decider: trace the INBUILDSTANCE engine-write port for a write of bit 2 into
-// the unit's pending word.
+// Gate bit `0x4` HAS a producer, and it is now Established [04 R-COB-06]. The
+// previous text here said the opposite — "gate bit `0x4` has no producer in
+// this build ... the COB engine-write port that carries the stance byte
+// ([R-COB-03 §3]) writes the unit field and nothing else" — and concluded that
+// nothing could ever satisfy the gate, so a permanent park had to be avoided
+// with a one-tick deadline borrowed from airHandOff (vtolair.go). The premise
+// was wrong in one specific way: the engine-write port does NOT write only the
+// unit field. Every arm of the COB engine-write opcode dispatch — all six write
+// arms and the fall-through an identifier with no write arm (or no valid
+// identifier at all) takes — also ORs bit 2 into the owning unit's order-event
+// word, the same 16-bit word the pump merges in `(n.Satisfied | u.Pending) &
+// n.DynamicGate` [04 §3.3]. That bit IS gate bit `0x4`. Retail calls it the
+// "script-touched marker" and it means *this unit's script executed an engine
+// write*: it carries no value, so a write to ANY port re-polls the wait, which
+// then re-tests the stance byte and either advances or re-arms. Retail sets no
+// deadline here at all, and the deferred `StartBuilding` body of
+// [R-ORDER-02 §2] is exactly what raises it in the ordinary case.
+//
+// The consumer side of that is already correct: internal/orders/pump.go merges
+// `u.Pending`, so arming `gateBuildStance` is all this helper needs to do.
+//
+// TODO(T25): the PRODUCER is not wired in this build, and the two files that
+// must carry it are outside this unit's ownership: the engine-write opcode arm
+// in internal/cob/vm.go (case 0x10082000), which must raise the marker on every
+// execution regardless of the identifier, and the unit-side hop that turns it
+// into `u.Pending |= 0x4` in internal/units (the VM has no unit pointer; the
+// port closures in internal/units/cob_binding.go do). Until that lands, the
+// stand-in below stays: arm the shared deadline setter for one tick alongside
+// the row's own gate so the stance byte is re-polled on the next visit. The
+// record keeps its place at the head and its phase, exactly as *hold* requires,
+// and the extra bit becomes inert — and must be deleted — the moment the
+// producer exists. Do NOT wire the raise to port 5 alone: retail's marker is
+// raised by every port, and the transport `BUSY` wait on the same gate bit
+// ([R-AIR-01 §9] as corrected) is woken by port 6.
 func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, tick uint32) Code {
 	if u != nil && u.InBuildStance {
 		return 1

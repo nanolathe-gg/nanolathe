@@ -1,7 +1,6 @@
 package cob
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -10,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -554,12 +554,7 @@ func TestPieceMoveInterpolate(t *testing.T) {
 }
 
 func TestAssetGuardedRealCOB(t *testing.T) {
-	home, _ := os.UserHomeDir()
-	gamedataPath := filepath.Join(home, "TotalAnnihilation", "gamedata")
-	if _, err := os.Stat(gamedataPath); err != nil {
-		t.Skip("retail assets not present")
-	}
-	root := filepath.Join(home, "TotalAnnihilation")
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount: %v", err)

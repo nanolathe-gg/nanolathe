@@ -272,6 +272,43 @@ so a truncated model faults during relocation. A texture name that no
 texture GAF holds turns the primitive into flat colour index 209
 (`[03 §2.4]`). Full outcome table: `[02 R-MALF-01 §2]`.
 
+### The one bound measured from the geometry: the model-top walk (2026-09-04)
+
+Exactly one number is derived from a loaded model's vertices, and it is a
+maximum. Immediately after the model is loaded, relocated and texture-bound,
+the engine walks the hierarchy once and takes
+
+```
+modelTop = max over every piece P, every vertex V of P:
+               V.y + sum of P.y-translation and those of P's ancestors
+```
+
+starting from an accumulator of **0** at the root, with the accumulator never
+lowered. Concretely, one recursive pass over a piece's sibling chain: for each
+piece, the maximum of `vertex.y + piece.translation.y` over its own vertex
+array, and, when it has a child chain, the maximum against
+`walk(firstChild) + piece.translation.y`. The result is in the file's native
+16.16 world units, like every other coordinate here.
+
+Three consequences of the zero seed, all load-bearing:
+
+- a model whose vertices all sit below its origin measures **0**, not a
+  negative;
+- a subtree hanging entirely below its parent contributes 0 rather than
+  lowering the answer; and
+- the walk applies **no** minimum-vertex-count gate and reads no orientation —
+  it runs once, on the authored bind pose.
+
+**There is no min-Y counterpart.** No inverted walk exists: the definition's
+minimum-Y bound is zeroed by the loader just before this walk runs and is never
+written from geometry, and the horizontal bounds beside it come from the
+authored footprint rather than the model. A model bottom is not something
+retail measures. The definition-side arithmetic, the store, and the list of
+consumers of the resulting word are `[02 R-CAT-01 §7]`; `[07 R-REV-01 §7]`
+traces the same pass from the selection-hover side; the behavioral contract
+that most looks like it wants a model bottom — the `setSFXoccupy` band-3
+"fully submerged" test — reads this maximum instead, `[04 R-MOV-01 §8b]`.
+
 ## Unknowns and caveats
 
 - `Unknown_1`/`Unknown_2` are editor leftovers and are nonzero somewhere in

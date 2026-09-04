@@ -3,33 +3,10 @@
 package combat
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/vfs"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 )
-
-func retailFSCombat(t *testing.T) *vfs.FS {
-	t.Helper()
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("cannot determine home: %v", err)
-	}
-	root := filepath.Join(home, "TotalAnnihilation")
-	if configured := os.Getenv("OPENTA_TA_ROOT"); configured != "" {
-		root = configured
-	}
-	if _, err := os.Stat(root); err != nil {
-		t.Skipf("retail data unavailable at %s: %v", root, err)
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Fatalf("mount: %v", err)
-	}
-	return fs
-}
 
 // TestCorpusProjectileCaps_Retail proves the projectile pool cap 300 is
 // outside stock-reachable behavior and that weapon burst etc. do not hit
@@ -38,12 +15,7 @@ func retailFSCombat(t *testing.T) *vfs.FS {
 // span in stock play. This locks the I5 contract that pool.Projectiles is
 // the sole authority with append-tail and compaction at entry count [P1-I09].
 func TestCorpusProjectileCaps_Retail(t *testing.T) {
-	fs := retailFSCombat(t)
-	defer fs.Close()
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("compile: %v", err)
-	}
+	cat, _ := retailcat.Shared(t)
 	if ProjectileCapacity != 300 {
 		t.Fatalf("ProjectileCapacity = %d, want 300 [01 §6.1][06 §5.1]", ProjectileCapacity)
 	}

@@ -9,8 +9,6 @@
 package session
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
@@ -19,31 +17,17 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// fr4Session mounts the retail install, compiles the catalog and drives a
-// two-player skirmish into battle, or skips.
+// fr4Session composes a two-player skirmish and drives it into battle, or
+// skips. It is read-only against the catalog — it only reads map schemas and
+// hands the catalog to NewSkirmishWithFS, it never writes into it — so it
+// shares the process-wide compile [internal/testsupport/retailcat].
 func fr4Session(t *testing.T) (*Session, *content.Catalog, func()) {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			root = filepath.Join(h, "TotalAnnihilation")
-		}
-	}
-	if _, err := os.Stat(filepath.Join(root, "totala1.hpi")); err != nil {
-		t.Skip("retail assets not present at ~/TotalAnnihilation")
-	}
-	fs := vfs.New()
-	if err := fs.MountGameDirectory(root); err != nil {
-		t.Skipf("mount retail: %v", err)
-	}
-	cat, err := content.Compile(fs)
-	if err != nil {
-		t.Fatalf("catalog compile: %v", err)
-	}
+	cat, fs := retailcat.Shared(t)
 	keys := make([]string, 0, len(cat.Maps))
 	for k := range cat.Maps {
 		keys = append(keys, k)
