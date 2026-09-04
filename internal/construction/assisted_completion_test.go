@@ -3,6 +3,8 @@ package construction
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -115,5 +117,49 @@ func TestAssistedProductStillCompletesTheFactoryNode(t *testing.T) {
 	}
 	if node := headNodeForTest(factory); node != nil && State(node.Phase) == State3 {
 		t.Fatalf("the factory node is still in state 3 after the assisted completion")
+	}
+}
+
+// TestAssistRunsTheCompletionTransitionAfterEveryExit is WU-19-153's half of the
+// same contract, at the sibling site.
+//
+// [05 R-WORK-01 §1] places the completion transition after EVERY exit of the
+// shared step, and its FIRST line makes a step on an already-zero fraction
+// return not-committed. `Service.Assist` used to run the zero test only behind
+// a committed step, which is exactly the shape WU-19-132 had to correct in the
+// factory's state-3 body. Assert the transition on the not-committed exit, so a
+// frame whose zero was stored elsewhere still receives the posture from a
+// helper's own visit.
+func TestAssistRunsTheCompletionTransitionAfterEveryExit(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	helperDef := newFactoryDef("assistexithelper", 1, 1, 30)
+	helperDef.BMCode = true
+	helperDef.CanMove = true
+	prodDef := newProductDef("assistexitprod", 1, 1, 1, 100)
+	cat.Units[helperDef.CanonicalKey] = helperDef
+	cat.Units[prodDef.CanonicalKey] = prodDef
+	w := newConstructionFixtureWorld(8, cat)
+	hh, err := w.Create(helperDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ph, err := w.Create(prodDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helper, product := w.Unit(hh), w.Unit(ph)
+	// Someone else already stored the zero; this helper's own step therefore
+	// takes §1's first line and commits nothing.
+	product.Remaining = 0
+	product.Health = 0
+	product.Flags &^= FlagCompleted
+
+	svc := NewService(nil, cat, w, &economy.Service{})
+	if svc.Assist(helper, product, 10) {
+		t.Fatal("a step on an already-zero fraction reported committed work [05 R-WORK-01 §1]")
+	}
+	if product.Flags&FlagCompleted == 0 || product.Health != product.MaxHealth {
+		t.Fatalf("the not-committed exit skipped the completion transition: flags %#x health %d/%d [05 R-WORK-01 §1]",
+			product.Flags, product.Health, product.MaxHealth)
 	}
 }

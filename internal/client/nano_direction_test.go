@@ -3,8 +3,10 @@ package client
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func nanoFixed(v int64) numeric.Fixed { return numeric.Fixed(v << 16) }
@@ -79,5 +81,89 @@ func TestReversedNanoDirectionPutsTheBoxAtTheSourceEnd(t *testing.T) {
 	}
 	if rev.SrcOrigin[0] != nanoFixed(100+originOffset) {
 		t.Fatalf("reversed source origin %v, want the box narrowed to %v", rev.SrcOrigin[0], nanoFixed(100+originOffset))
+	}
+}
+
+// The unit-reclaim/capture family is the other half of the same submission
+// routine [05 R-WORK-01 §8]: the box is the TARGET UNIT's — its position plus
+// the six signed extents of its definition's bounding record [02 R-CAT-01 §7]
+// — and it sits at the source end, with the builder's nano piece as the
+// degenerate destination.
+//
+// The defect this locks: the producer swapped the point pair but published no
+// box and no NanolatheBoxAtSource flag, so the client re-derived bounds from
+// the model and read them as the DESTINATION. Source and destination then both
+// lay inside the victim, and a capture or a unit reclaim drew no spray that
+// ever left the thing being reclaimed.
+func TestUnitReclaimNanoSpraysFromTheTargetUnitsBox(t *testing.T) {
+	// The Z footprint is deliberately twice the X footprint so an axis swap
+	// cannot pass, and the model top is nonzero so a dropped Y extent cannot.
+	const footX, footZ, modelTop = 2, 4, 40
+	def := &content.UnitDef{FootprintX: footX, FootprintZ: footZ, ModelTopFixed: modelTop << 16}
+
+	// The bounding record itself: ±(footprint << 20)/2 on X and Z, zero to the
+	// model-top walk on Y. Y has no lower walk in retail [02 R-CAT-01 §7], so a
+	// negative minimum here would be invented geometry, and the symmetric X/Z
+	// halves are world-space — the model/world Z mirror of [03 R-RAST-01 §2]
+	// has no purchase on them.
+	lo, hi := def.BoundingExtents()
+	wantLo := [3]int32{-(footX << 19), 0, -(footZ << 19)}
+	wantHi := [3]int32{footX << 19, modelTop << 16, footZ << 19}
+	if lo != wantLo || hi != wantHi {
+		t.Fatalf("bounding extents = %v/%v, want %v/%v", lo, hi, wantLo, wantHi)
+	}
+
+	target := &units.Unit{Def: def, X: nanoFixed(500), Y: nanoFixed(10), Z: nanoFixed(600)}
+	boxMin, boxMax := target.NanolatheBox()
+	nanoPiece := [3]numeric.Fixed{nanoFixed(900), nanoFixed(20), nanoFixed(600)}
+
+	// Shaped exactly as the two reversed producers publish it.
+	e := frame.EffectView{
+		Kind: frame.EventKindNanolathe.String(), Strip: 6, StartTick: 5,
+		X: boxMin[0], Y: boxMin[1], Z: boxMin[2],
+		TargetX: nanoPiece[0], TargetY: nanoPiece[1], TargetZ: nanoPiece[2],
+		NanolatheGeometryKnown:  true,
+		NanolatheTargetBoxKnown: true,
+		NanolatheBoxAtSource:    true,
+		NanolatheTargetMin:      boxMin,
+		NanolatheTargetMax:      boxMax,
+	}
+	c := &Client{}
+	cur := &frame.Frame{Tick: 5}
+	cur.Effects = append(cur.Effects, e)
+	c.tickNanolathe(cur)
+	if len(c.nano.Records) != 1 {
+		t.Fatalf("admitted %d records, want 1", len(c.nano.Records))
+	}
+	r := c.nano.Records[0]
+
+	for a := 0; a < 3; a++ {
+		if r.DstExtent[a] != 0 {
+			t.Fatalf("axis %d: destination extent %v, want the degenerate nano piece", a, r.DstExtent[a])
+		}
+		if r.SrcExtent[a] <= 0 {
+			t.Fatalf("axis %d: source extent %v, want the target's own box span", a, r.SrcExtent[a])
+		}
+		if r.SrcOrigin[a] < boxMin[a] || r.SrcOrigin[a] > boxMax[a] {
+			t.Fatalf("axis %d: source origin %v outside the target box [%v, %v]",
+				a, r.SrcOrigin[a], boxMin[a], boxMax[a])
+		}
+	}
+	// The footprint asymmetry survives the narrowing, which is the axis-swap
+	// guard: the Z footprint is twice the X footprint. The 4/11..7/11 span
+	// truncates per axis [I3], so the doubling is exact to within one raw
+	// 16.16 step, not to the bit.
+	if d := 2*r.SrcExtent[0] - r.SrcExtent[2]; d < 0 || d > 1 {
+		t.Fatalf("source extents X=%v Z=%v, want Z twice X for a %dx%d footprint",
+			r.SrcExtent[0], r.SrcExtent[2], footX, footZ)
+	}
+	// And the spray leaves the victim: the destination is the builder's nano
+	// piece four hundred world units away, not a second point inside the box.
+	if r.DstOrigin != nanoPiece {
+		t.Fatalf("destination %v, want the builder's nano piece %v", r.DstOrigin, nanoPiece)
+	}
+	if r.DstOrigin[0]-r.SrcOrigin[0] <= boxMax[0]-boxMin[0] {
+		t.Fatalf("spray span %v does not exceed the target's own box width %v",
+			r.DstOrigin[0]-r.SrcOrigin[0], boxMax[0]-boxMin[0])
 	}
 }

@@ -316,6 +316,53 @@ func (u *UnitDef) DefinitionMask() CategoryMask {
 	return u.UnitMask
 }
 
+// BoundingExtents returns the definition's bounding record as six signed
+// 16.16 world-unit extents relative to a unit's own position, in the order
+// `min = (x1, y1, z1)`, `max = (x2, y2, z2)`. This is the record the
+// nano-segment submission routine expands into the six-word box for a unit
+// target: `x1 = target.x + extent[0]`, `x2 = target.x + extent[3]`, and so on
+// for Y and Z [05 R-WORK-01 §8].
+//
+// Only the maximum Y comes from model geometry [02 R-CAT-01 §7]. The X and Z
+// bounds are footprint-derived, `±(footprint << 20) / 2`, where the shift is
+// the sixteen world units per cell folded into the 16.16 representation; the
+// minimum Y word is the zero store the definition loader makes immediately
+// before the model-top walk (there is no min-Y walk anywhere in retail), and
+// the maximum Y word is that walk's result, which ModelTopFixed already holds
+// floored at zero.
+//
+// Two consequences worth stating, because both look like open questions in
+// [05 R-WORK-01 §8] and neither is one here. First, that section records that
+// `ReclaimUnit`, `Capture`, `SelfRepair`, `BuildingBuild` and the ground
+// `RepairUnit` variants write `y1 = target.y` with the first Y extent omitted
+// while `MobileBuild` and `HelpBuild` add it: the omitted extent is zero for
+// every definition, so the two forms coincide and the divergence is
+// unobservable. That also settles, for this build, the section's Unknown about
+// which form the four VTOL work executors use.
+//
+// Second, these are world-space extents, so the model/world Z mirror of
+// [03 R-RAST-01 §2] does not apply — the sign defect WU-19-138 found in the
+// slot-distance word cannot recur here. X and Z are symmetric halves of the
+// footprint, and Y is the height walk, which runs after the model-mirroring
+// pass and on the one coordinate that pass never negates [02 "Mirroring"].
+//
+// A nil definition, or one with a zero footprint, yields a degenerate box at
+// the unit's position; no fallback size is invented [I9].
+func (u *UnitDef) BoundingExtents() (min, max [3]int32) {
+	if u == nil {
+		return min, max
+	}
+	// (footprint << 20) / 2 == footprint << 19, formed at the same 32-bit
+	// width the definition loader uses.
+	halfX := u.FootprintX << 19
+	halfZ := u.FootprintZ << 19
+	top := u.ModelTopFixed
+	if top < 0 {
+		top = 0 // the walk is floored at zero [02 R-CAT-01 §7]
+	}
+	return [3]int32{-halfX, 0, -halfZ}, [3]int32{halfX, top, halfZ}
+}
+
 // UnknownKeysSorted returns inert keys sorted for hash stability (I1).
 func (u *UnitDef) UnknownKeysSorted() []string {
 	if u.Unknown == nil {

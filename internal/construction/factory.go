@@ -1184,14 +1184,23 @@ func repairTerms(maxDamage, energyCost, worker, buildTime int32) (int32, int32) 
 // health, and decay deferral remain owned here just as they are for factory
 // products [05 R-WORK-01 §1].
 func (s *Service) Assist(builder, target *units.Unit, tick uint32) bool {
-	if !s.applyWorkStep(builder, target, tick) {
-		return false
-	}
-	if target.Remaining == 0 {
-		// Assist is the owning boundary for a mobile helper's final increment.
+	committed := s.applyWorkStep(builder, target, tick)
+	// The stored fraction's zero test, not this step's committed return, is what
+	// governs the completion transition: [05 R-WORK-01 §1] places it "on both
+	// arms and also on the admission-refused path", after EVERY exit of the
+	// shared step. This is the same correction WU-19-132 made to the factory's
+	// state-3 body, applied to the sibling site — §1's FIRST line makes a step
+	// on an already-zero fraction return not-committed, so gating the zero test
+	// on the committed return is how a completion gets dropped.
+	//
+	// Assist is the owning boundary for a mobile helper's final increment: the
+	// step that stores the zero is the step that runs the transition, and its
+	// builder is whichever builder called it — the helper, not the frame's
+	// original builder.
+	if target != nil && target.Remaining == 0 {
 		s.applyCompletionPosture(target)
 	}
-	return true
+	return committed
 }
 
 // applyWorkStep is the ordinary forward entry to the shared step: it derives

@@ -84,9 +84,24 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 			lastMove = now
 			lastX, lastZ = u.X, u.Z
 		}
+		// The move is over when nothing ISSUED is left in the front list — not
+		// when the list is empty. The pump refills an idle unit's front list
+		// from `defaultmissiontype` and constructs that record with the auto-op
+		// flag [04 §3.3], and ARMCOM authors `defaultmissiontype = Standby`, so
+		// one tick after the walk retires a `Standby` record stands at the head
+		// and stays there.
 		q := orders.QueueForUnit(u)
-		if q == nil || q.LenPrimary() == 0 {
+		if !q.HasIssuedWork() {
 			t.Logf("move completed at tick %d: pos %d,%d (goal %d,%d)", now, u.X.Raw(), u.Z.Raw(), gx.Raw(), gz.Raw())
+			// The record must have retired by ARRIVING: the committed tile
+			// meets the goal cell at threshold 0 [04 R-PATH-01 §8]. One cell of
+			// slack covers the footprint bias between the click's cell and the
+			// mover's anchor; a record cancelled or abandoned short of the
+			// click still fails here.
+			if dcx, dcz := world.WorldToCell(u.X)-world.WorldToCell(gx), world.WorldToCell(u.Z)-world.WorldToCell(gz); dcx < -1 || dcx > 1 || dcz < -1 || dcz > 1 {
+				t.Fatalf("move retired %d,%d cells from the goal: pos %d,%d goal %d,%d",
+					dcx, dcz, u.X.Raw(), u.Z.Raw(), gx.Raw(), gz.Raw())
+			}
 			// Phase 2: mobile build — the same walk machinery must carry the
 			// commander to the build site (previously the walk order completed
 			// far short of the site and build orders froze).
@@ -154,7 +169,7 @@ func TestBattleMoveAndBuildReachGoal(t *testing.T) {
 					walked = true
 				}
 				qb := orders.QueueForUnit(ub)
-				if qb == nil || qb.LenPrimary() == 0 {
+				if !qb.HasIssuedWork() { // same idle-refill rule as the walk phase
 					t.Logf("build order completed at tick %d: pos %d,%d site %d,%d walked=%v", now, ub.X.Raw(), ub.Z.Raw(), bx.Raw(), bz.Raw(), walked)
 					if !walked {
 						t.Fatalf("build walk did not move the builder to the site")

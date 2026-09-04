@@ -911,7 +911,39 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				if s.Build == nil || n == nil || worldQueries.LookupUnit == nil {
 					return false
 				}
-				return s.Build.Assist(builder, worldQueries.LookupUnit(n.Target), tick)
+				target := worldQueries.LookupUnit(n.Target)
+				var before float32
+				if target != nil {
+					before = target.Remaining
+				}
+				ok := s.Build.Assist(builder, target, tick)
+				// [05 R-WORK-01 §1] runs the completion transition from inside
+				// the shared step, so the builder that stores the zero is the
+				// builder that completes the frame — a HelpBuild helper, or a
+				// guard assisting, just as much as the frame's own builder.
+				//
+				// This build defers a product's mover state and its visibility
+				// publication to CompleteUnit, and the only caller of that hook
+				// on the construction path was the WorkResult a builder's own
+				// StepUnit window returns. A frame finished by a helper
+				// therefore got the whole completion posture — remaining zero,
+				// full health, the completed and classifier bits, the
+				// activatewhenbuilt edge, its placement retired — and no mover
+				// record and no publish, so it stood finished on the map unable
+				// to answer a Move and covering nothing. Its own builder
+				// recovered it one visit later, but only while that builder was
+				// still alive and still holding the record; a frame whose
+				// builder had walked away or died never completed at all.
+				// Resurrection's seam below is the same call for the same
+				// reason [01 §6.1][03 §3].
+				//
+				// The test is the transition edge, not the flag: it fires on
+				// the one step that stored the zero, so the hook runs once even
+				// when a second helper is working the same frame.
+				if target != nil && before != 0 && target.Remaining == 0 {
+					s.CompleteUnit(target.Handle)
+				}
+				return ok
 			},
 			Repair: func(builder, patient *units.Unit, n *orders.Node, _ uint32) bool {
 				if s.Build == nil || n == nil || worldQueries.LookupUnit == nil {
@@ -1037,37 +1069,51 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				default:
 					return false
 				}
-				x, y, z := source.X(), source.Y(), source.Z()
-				targetX, targetY, targetZ := target.X, target.Y, target.Z
-				if name == "Capture" || name == "ReclaimUnit" || name == "VTOL_ReclaimUnit" {
-					x, y, z = target.X, target.Y, target.Z
-					targetX, targetY, targetZ = source.X(), source.Y(), source.Z()
-					// These three are the reversed direction too — target box
-					// into the builder's nano piece [05 R-WORK-01 §8] — but
-					// their box is the TARGET UNIT's six model extents, which
-					// this producer does not publish at all: the client
-					// resolves it from the model and then, having no
-					// NanolatheBoxAtSource flag here, reads it as the
-					// destination. The result is the same collapse the feature
-					// rows had. Fixing it is the unit-reclaim row's work, not
-					// the feature-reclaim path's, and needs the six extents
-					// published rather than re-derived.
-				}
+				nanoPiece := [3]numeric.Fixed{source.X(), source.Y(), source.Z()}
+				reversed := name == "Capture" || name == "ReclaimUnit" || name == "VTOL_ReclaimUnit"
 				e := frame.Event{
 					Tick: tick, Source: builder.Handle, Target: target.Handle,
-					X: x, Y: y, Z: z,
-					TargetX: targetX, TargetY: targetY, TargetZ: targetZ,
+					X: nanoPiece[0], Y: nanoPiece[1], Z: nanoPiece[2],
+					TargetX: target.X, TargetY: target.Y, TargetZ: target.Z,
 					EffectID: 6, Mode: 1, Team: builder.Owner,
 					Producer: frame.ProducerBeam, PaletteRow: 6,
 					NanolatheGeometryKnown: true, NanolatheActiveUntil: activeUntil,
+				}
+				var boxMin, boxMax [3]numeric.Fixed
+				if reversed {
+					// The reversed direction [05 R-WORK-01 §8]: the six-word
+					// box is the TARGET UNIT's — its world position plus its
+					// definition's six signed extents [02 R-CAT-01 §7] — and it
+					// sits at the SOURCE end, with the builder's nano piece as
+					// the degenerate destination.
+					//
+					// Both halves of that used to be missing. The point pair
+					// was swapped, but the box was never published, so the
+					// client re-derived it from the model and — with no
+					// NanolatheBoxAtSource flag to say which end carried the
+					// extent — read it as the destination. Source and
+					// destination then both lay inside the target unit and
+					// every particle of a capture or a unit reclaim was born
+					// and died inside the victim, exactly the collapse the
+					// feature rows had before WU-19-134.
+					boxMin, boxMax = target.NanolatheBox()
+					e.X, e.Y, e.Z = boxMin[0], boxMin[1], boxMin[2]
+					e.TargetX, e.TargetY, e.TargetZ = nanoPiece[0], nanoPiece[1], nanoPiece[2]
+					e.NanolatheTargetBoxKnown = true
+					e.NanolatheTargetMin, e.NanolatheTargetMax = boxMin, boxMax
+					e.NanolatheBoxAtSource = true
 				}
 				if !s.publication.events.EmitNanolathe(e) {
 					return false
 				}
 				if s.strips != nil {
-					s.appendStripNanoEmitter(
-						[3]numeric.Fixed{e.X, e.Y, e.Z},
-						[3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ})
+					if reversed {
+						s.appendStripNanoEmitterFromBox(boxMin, boxMax, nanoPiece)
+					} else {
+						s.appendStripNanoEmitter(
+							[3]numeric.Fixed{e.X, e.Y, e.Z},
+							[3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ})
+					}
 				}
 				return true
 			},

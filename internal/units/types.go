@@ -286,6 +286,30 @@ func (u *Unit) SlotAt(idx int) *Slot {
 	return &u.Slots[idx]
 }
 
+// NanolatheBox is the six-word box the nano-segment submission routine builds
+// when a unit is the boxed end of a work segment: this unit's world position
+// plus the six signed extents of its definition's bounding record
+// [05 R-WORK-01 §8][02 R-CAT-01 §7]. Both reversed producers — unit reclaim
+// and capture, where the box is the SOURCE and the builder's nano piece is the
+// degenerate destination — read it through here so the two share one
+// derivation.
+//
+// The box is presentation geometry: nothing in the emission path is
+// authoritative [05 R-WORK-01 §8], so no caller may read it back into
+// simulation state (I6).
+func (u *Unit) NanolatheBox() (min, max [3]numeric.Fixed) {
+	if u == nil {
+		return min, max
+	}
+	lo, hi := u.Def.BoundingExtents()
+	pos := [3]numeric.Fixed{u.X, u.Y, u.Z}
+	for a := 0; a < 3; a++ {
+		min[a] = pos[a] + numeric.Fixed(lo[a])
+		max[a] = pos[a] + numeric.Fixed(hi[a])
+	}
+	return min, max
+}
+
 // InstallWeapon binds a weapon definition to a slot [06 §1.2] C1.
 // The definition must be compiled via content [02 "Weapon record"].
 //

@@ -618,6 +618,35 @@ func (q *Queue) LenSecondary() int {
 	}
 	return len(q.secondary)
 }
+
+// HasIssuedWork reports whether the primary segment still holds a record that
+// was ISSUED — by the interface, by a producer, or by a handler spawn — as
+// opposed to one the pump created for itself.
+//
+// An empty primary segment is not the same thing as an idle unit, and a caller
+// asking "is this unit still working?" wants this predicate rather than
+// `LenPrimary() == 0`. The pump refills an idle unit's front list from the
+// definition's `defaultmissiontype` and constructs that record with the
+// auto/default-operation flag [04 §3.3, "Closed — the idle-queue refill from
+// `defaultmissiontype`"], so the segment does not stay empty: the stock ground
+// units author `defaultmissiontype = Standby` (ARMCOM, CORCOM and ARMPW read
+// back from the reference install; ARMMINE1 authors `Standby_Mine`), and on the
+// tick after a `Move_Ground` retires a flagged `Standby` record stands at the
+// head in its place. Such a record is not work — the next issued order drops it on
+// the way in, which is why Push begins by clearing leading auto-op records
+// [04 §3.3].
+func (q *Queue) HasIssuedWork() bool {
+	if q == nil {
+		return false
+	}
+	for _, n := range q.primary {
+		if n != nil && n.Flags&FlagAutoOp == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (q *Queue) Primary() []*Node {
 	if q == nil {
 		return nil

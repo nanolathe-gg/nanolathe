@@ -4639,6 +4639,20 @@ spray origin plane on the majority form. **Unknown:** which form the four VTOL
 work executors use — decider: static trace of their work phases (the two
 ground forms are established).
 
+**Established — the two forms are observationally identical, and the VTOL
+Unknown above is therefore inert (2026-09-04, WU-19-152).** The omitted term
+is `extent[1]`, the definition's **minimum** Y bound, and
+[02 R-CAT-01 §7] establishes that word is written exactly once — the zero store
+immediately before the model-top walk — with no min-Y walk anywhere in the
+image, so it is zero for every unit definition in the corpus. `target.y + 0`
+and `target.y` are the same number: the "slightly different spray origin plane"
+described above does not exist, and which form the four VTOL executors use
+cannot be observed from the box they produce. The Unknown stays open only as a
+question about the instruction sequences, not about behavior; nothing depends
+on its answer. The same section gives the rest of the record a unit target's
+box needs: X and Z are `±(footprint << 20) / 2`, and `extent[4]` is the
+model-top walk's result floored at zero.
+
 For a feature target — feature reclaim and resurrection — the box is built from
 the cell instead:
 

@@ -245,14 +245,26 @@ func (s *Service) emitReclaimNano(tick uint32, builder, target *units.Unit) {
 	// reclaim reverses the ordinary work direction: the target box is the
 	// source and the builder's QueryNanoPiece is the destination [05 R-WORK-01
 	// §8].
+	//
+	// The box is the target unit's own — its world position plus the six signed
+	// extents of its definition's bounding record [02 R-CAT-01 §7] — and it has
+	// to ride the event, because the flag is what tells presentation which end
+	// carries the extent. Publishing the corner pair alone left the client
+	// re-deriving the bounds and reading them as the DESTINATION, so a reclaim
+	// spray was born and died inside the victim and never reached the builder.
+	boxMin, boxMax := target.NanolatheBox()
 	s.Presentation.EmitNanolathe(frame.Event{
 		Tick: tick, Source: builder.Handle, Target: target.Handle, Piece: piece,
-		X: target.X, Y: target.Y, Z: target.Z,
+		X: boxMin[0], Y: boxMin[1], Z: boxMin[2],
 		TargetX: source.X(), TargetY: source.Y(), TargetZ: source.Z(),
 		EffectID: 6, Mode: 2, Team: builder.Owner,
-		Producer:               frame.ProducerBeam,
-		PaletteRow:             6,
-		NanolatheActiveUntil:   tick + 900,
-		NanolatheGeometryKnown: true,
+		Producer:                frame.ProducerBeam,
+		PaletteRow:              6,
+		NanolatheActiveUntil:    tick + 900,
+		NanolatheGeometryKnown:  true,
+		NanolatheTargetBoxKnown: true,
+		NanolatheTargetMin:      boxMin,
+		NanolatheTargetMax:      boxMax,
+		NanolatheBoxAtSource:    true,
 	})
 }
