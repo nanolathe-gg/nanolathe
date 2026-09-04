@@ -1,0 +1,36 @@
+#!/bin/sh
+# Integration gate: the full retail corpus. Run before merging to main.
+#
+# tools/check is the fast tier and the one CI runs; it skips every asset-gated
+# test. This gate opts in, so the whole-corpus catalog compiles, the map and
+# mission censuses and the long headless sessions all execute.
+#
+# Point it at an install with $NANOLATHE_RETAIL_ASSETS, or let it default to
+# ~/TotalAnnihilation. An unreadable root fails loudly rather than skipping,
+# so a typo cannot masquerade as a green run.
+set -e
+
+if [ -z "${NANOLATHE_RETAIL_ASSETS:-}" ] && [ -n "${NANOLATHE_TA_ROOT:-}" ]; then
+	NANOLATHE_RETAIL_ASSETS="$NANOLATHE_TA_ROOT"
+fi
+: "${NANOLATHE_RETAIL_ASSETS:=$HOME/TotalAnnihilation}"
+export NANOLATHE_RETAIL_ASSETS
+
+if [ ! -d "$NANOLATHE_RETAIL_ASSETS" ]; then
+	echo "nanolathe: retail assets not found: logical path $NANOLATHE_RETAIL_ASSETS, providers searched [\$NANOLATHE_RETAIL_ASSETS, \$NANOLATHE_TA_ROOT, \$HOME/TotalAnnihilation], expected a directory of HPI archives" >&2
+	exit 1
+fi
+
+echo "==> retail assets: $NANOLATHE_RETAIL_ASSETS"
+
+# -tags retail ADDS the 22 files carrying `//go:build retail` to the build; it
+# excludes nothing, so this run is a strict superset of the untagged tier.
+# Without the tag those files are never compiled, which is how the tagged tier
+# came to be red on main without anyone noticing.
+echo "==> go vet (retail tag)"
+go vet -tags retail ./...
+echo "==> go test (retail corpus, tagged)"
+# Bounded for the same reason as tools/check, and it matters more here: each
+# package binary that opts in holds a compiled retail catalog.
+go test -tags retail -p "${NANOLATHE_TEST_P:-4}" ./... -count=1
+echo "OK"

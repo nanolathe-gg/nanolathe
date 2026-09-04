@@ -1,6 +1,21 @@
 #!/bin/sh
-# Pre-dispatch and pre-merge gate. See AGENTS.md §"Dispatching and reviewing sub-agents".
+# Fast gate: build, vet, and the synthetic-fixture test tier.
+#
+# This is the tier CI runs, because CI has no retail install: asset-gated
+# tests opt in through $NANOLATHE_RETAIL_ASSETS (internal/testsupport.
+# RetailRoot) and skip without it. Keep it fast enough to run on every edit.
+#
+# Before merging to main, also run tools/check-retail, which sets that
+# variable and exercises the full retail corpus.
 set -e
+
+# Retail assets are opt-in, and this gate is the opt-OUT tier. Clearing the
+# variables here means the gate behaves identically whether or not the
+# developer exports them in their shell profile — otherwise "the gate passed"
+# would mean different things on different machines.
+unset NANOLATHE_RETAIL_ASSETS
+unset NANOLATHE_TA_ROOT
+
 echo "==> gofmt"
 # Tracked files only. `gofmt -l .` walks the whole directory, which in a
 # checkout that hosts agent worktrees under .worktrees/ reports files that
@@ -16,6 +31,10 @@ echo "==> go build"
 go build ./...
 echo "==> go vet"
 go vet ./...
-echo "==> go test"
-go test ./...
+echo "==> go test (synthetic tier)"
+# -p bounds how many package binaries run at once. The default is one per CPU;
+# several of these binaries hold a whole simulation session, so on a twelve-core
+# machine the unbounded default is several gigabytes of peak resident memory for
+# no wall-clock gain.
+go test -p "${NANOLATHE_TEST_P:-4}" ./...
 echo "OK"

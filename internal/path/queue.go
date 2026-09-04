@@ -454,9 +454,34 @@ func (s *Scheduler) Tick(tick uint32) {
 				s.recordTrace(Trace{Request: RequestTrace{Unit: req.Unit, Player: req.Player, Start: req.Start, Goal: DescribeGoal(req.Goal), Activation: req.Activation}, Goal: DescribeGoal(req.Goal), Points: append([]Point(nil), points...), Status: status, Done: done, Tick: tick})
 			}
 			if !done {
+				// A budget-exhausted slice ends the ITERATION, not the call.
+				// [04 R-PATH-01 §6]: "a single long search consumes 100-step
+				// slices from its own player's accumulator until that
+				// accumulator goes non-positive, at which point the loop ends
+				// for the tick with the request still latched, and resumes
+				// next tick." The loop guard above and `total` are what end it;
+				// breaking here capped the whole session at one 100-pop slice
+				// per tick instead of the ~`stepAllowance / playerCount` steps
+				// the equal share buys, so a search costing a few thousand pops
+				// held the single global working set for tens of ticks and
+				// every other mover's request queued behind it. Followers that
+				// re-arm on the blocked bit then waited far longer than the
+				// 60-tick throttle of [04 R-MOV-01 §7] for the route that frees
+				// them, which is the "at most one throttle period per stage"
+				// jostle of [04 R-PATH-01 §14] item 2 turning into a stall of
+				// hundreds of ticks.
 				s.accumulator[s.activePlayer] -= charge
 				total -= charge
-				break
+				// Termination rests on every iteration charging something. A
+				// live heap always pops, so a continuation that reports no
+				// setup steps and no pops without finishing is a search that
+				// made no progress; end the call rather than spin on it. This
+				// is the same outcome a budget boundary produces — the request
+				// stays latched and resumes next call.
+				if charge <= 0 {
+					break
+				}
+				continue
 			}
 			s.accumulator[s.activePlayer] -= charge
 			total -= charge

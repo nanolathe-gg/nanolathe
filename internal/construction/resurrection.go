@@ -16,7 +16,11 @@ import (
 // repair, reclaim, or capture multiplier
 // [05 "Resurrection", "Established fact — delay"][05 R-WORK-01 §7].
 // delay = trunc(buildTime*0.3 / floor(workTime/30)) — plus underscore
-// truncation of the corpse name and one placement-jitter RNG draw.
+// truncation of the corpse name. The order's sole simulation-RNG draw is not
+// a placement jitter: it is phase 1's approach-point vertical term, bounded
+// by the feature's height byte, not by any feature "spread" field — see
+// ResurrectionJitter [05 "Resurrection", "Established — cost and
+// randomness"].
 const resurrectionCoeff = 0.3 // [05 R-WORK-01 §7 "Established — the delay"]
 
 // ResurrectionDelay computes delay ticks [05 R-WORK-01 §7 "Established — the
@@ -53,17 +57,27 @@ func FeatureNameToDefName(featureName string) string {
 	return featureName
 }
 
-// ResurrectionJitter performs the single resurrection placement jitter draw
-// [P0-15]: one simulation-stream draw bounded by the feature's spread byte
-// (feature catalog spread field) [I4] DET-01.
-func ResurrectionJitter(sim *rng.Simulation, spreadByte uint8) int {
+// ResurrectionJitter performs the resurrection order's sole simulation-stream
+// draw [P0-15][I4].
+//
+// Retired (WU-19-143): this was documented as "the placement jitter draw...
+// bounded by the feature's spread byte (feature catalog spread field)". Both
+// halves were wrong. There is no authored "spread" feature key — retail's
+// feature parser reads no such key at all [05 R-FEAT-01 §1], confirmed by a
+// full census of every stock feature section, and the draw is not a
+// placement jitter: it is the approach phase's vertical walk-target term,
+// bounded by the feature's ordinary `height` byte, and it happens before
+// this package's Resurrect (which implements only phase 5 "create")
+// [05 "Resurrection", "Established — cost and randomness"][05 R-WORK-01
+// §7 phase 1]. This helper models the draw's shape — a single bounded pull,
+// skipped without advancing the stream when the bound is below two — for
+// whichever call site ends up owning the approach phase; `bound` is the
+// feature's height byte there, not a spread byte.
+func ResurrectionJitter(sim *rng.Simulation, bound uint8) int {
 	if sim == nil {
 		return 0
 	}
-	if spreadByte == 0 {
-		return 0
-	}
-	return int(sim.Uint32n(uint32(spreadByte))) // 0..spread-1
+	return int(sim.Uint32n(uint32(bound))) // Uint32n already returns 0 without advancing when bound < 2 [I4].
 }
 
 // Resurrect performs resurrection allocation [05 R-WORK-01 §7 phase 5
@@ -72,6 +86,17 @@ func ResurrectionJitter(sim *rng.Simulation, spreadByte uint8) int {
 // fraction to 0 and health to 1, no ledger cost, delay via ResurrectionDelay.
 // Per-def limit -1 sentinel unlimited; pool fail returns the same 300-tick
 // retry with "Unable to create any more units".
+//
+// Retired (WU-19-143): this used to look up a per-feature "jitter spread"
+// byte here (including a fringe-anchor resolution walk to find it for a
+// multi-cell footprint) and feed it to ResurrectionJitter before removing
+// the feature. Both the byte and the call site were wrong: no such feature
+// key exists in retail [05 R-FEAT-01 §1], and the order's one simulation
+// draw belongs to phase 1's approach step, not phase 5's create step which
+// this function implements — phase 5 draws no randomness at all
+// [05 "Resurrection", "Established — cost and randomness"]. The `sim`
+// parameter is kept for call-site stability (phase 1's approach draw is a
+// separate, not-yet-wired concern) but this function no longer uses it.
 func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, def *content.UnitDef, posX, posY, posZ numeric.Fixed, sim *rng.Simulation) (*units.Unit, error) {
 	if s == nil || s.World == nil || builder == nil || def == nil {
 		return nil, nil
@@ -79,50 +104,6 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 	if !CheckPerDefLimit(s.World, builder.Owner, def) {
 		return nil, ErrLimit
 	}
-	// Capture the jitter spread from the feature catalog BEFORE the feature
-	// removal below clears the plot cell [05 R-WORK-01 §7 phase 1].
-	var spread uint8
-	if featureCell != nil && s.Terrain != nil && s.Terrain.FeatureDefs != nil {
-		idx := featureCell.Feature()
-		if idx < 0xFFFB && int(idx) < len(s.Terrain.FeatureDefs) {
-			if fd := s.Terrain.FeatureDefs[idx]; fd != nil {
-				spread = fd.ResurrectSpread
-			}
-		} else if idx == world.PlotFeatureFringe && s.Terrain.CellW > 0 && s.Terrain.CellH > 0 {
-			// TODO(T25): the fringe-anchored jitter spread is not fully located.
-			// It needs the anchor resolution the plot cell's anchor word pair
-			// carries [03 §2.2]; this build walks the plot for the anchor
-			// instead. Decider: static trace of the resurrect spawn's anchor
-			// read.
-			anchorIdx := -1
-			for i := range s.Terrain.Plot {
-				if &s.Terrain.Plot[i] == featureCell {
-					anchorIdx = i
-					break
-				}
-			}
-			if anchorIdx >= 0 {
-				cx := int32(anchorIdx) % s.Terrain.CellW
-				cz := int32(anchorIdx) / s.Terrain.CellW
-				dx := int32(featureCell.AnchorDXSigned())
-				dz := int32(featureCell.AnchorDZSigned())
-				ax := cx + dx
-				az := cz + dz
-				if ax >= 0 && ax < s.Terrain.CellW && az >= 0 && az < s.Terrain.CellH {
-					aIdx := int(az*s.Terrain.CellW + ax)
-					if aIdx >= 0 && aIdx < len(s.Terrain.Plot) {
-						aFeat := s.Terrain.Plot[aIdx].Feature()
-						if aFeat < 0xFFFB && int(aFeat) < len(s.Terrain.FeatureDefs) {
-							if fd := s.Terrain.FeatureDefs[aFeat]; fd != nil {
-								spread = fd.ResurrectSpread
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	_ = ResurrectionJitter(sim, spread)
 	// Feature removal runs BEFORE the new unit's alive word is written: the
 	// resurrection state's fifth step calls the feature-removal helper first
 	// [P0-15]. The helper clears the terrain plot's filler and anchor words.

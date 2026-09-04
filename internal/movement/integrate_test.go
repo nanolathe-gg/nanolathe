@@ -231,11 +231,27 @@ func syntheticLargeTerrainForBudget() *world.Terrain {
 
 // TestBigRequestStaysActiveAcrossTicks verifies budget-honoring end-to-end [04 §7.3] C11 C12.
 // A big synthetic request stays active across ticks and never publishes a partial prefix.
+//
+// Corrected 2026-09-04. This used to assert that a search needing more than
+// 100 pops CANNOT publish on the tick it was admitted. That is not the
+// contract; it was a reading of the old §7.3 wording that [04 R-PATH-01 §6]
+// corrects. The 100 is the budget of ONE SLICE, and a scheduler call runs
+// slices "until that accumulator goes non-positive, at which point the loop
+// ends for the tick with the request still latched" — so with a whole
+// player's share to spend, a few-hundred-pop search finishes on its admission
+// tick. What C12 actually forbids is a PARTIAL publication, which this test
+// now checks on every tick rather than inferring from the first one. The
+// across-ticks half is kept by sharing the step allowance over ten players, so
+// the request really does cross a budget boundary.
 func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	terrain := syntheticLargeTerrainForBudget()
 	profile := Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, BadSlope: 25, MaxWaterSlope: 30, BadWaterSlope: 15}
 	grid := NewOccupancyGrid()
 	system := NewSystem(terrain, profile, grid)
+	// Ten players share the 1333-step allowance, so one call buys 133 steps:
+	// the 100-step admission charge plus one 100-pop slice already overdraws
+	// it and the request has to resume on a later call [04 R-PATH-01 §6].
+	system.ConfigurePath(10, 500)
 
 	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, Acceleration: 3 * 65536, BrakeRate: 3 * 65536, TurnRate: 500}
@@ -297,47 +313,34 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 		t.Fatalf("one-shot should succeed")
 	}
 
-	// First scheduler tick: budget 100, should NOT publish partial prefix [04 §7.3] C12.
-	system.Scheduler.Tick(1)
-	route := system.Routes[h]
-	if route != nil && route.Active {
-		t.Fatalf("big request first tick must stay inactive (full-or-empty), got active count %d [04 §7.3] C12", route.Count)
-	}
-	if system.Scheduler.TraceState().Pending[0] != 1 {
-		t.Fatalf("request should remain ACTIVE after budget exhaustion, active %d [04 §7.3] C11", system.Scheduler.TraceState().Pending[0])
-	}
-
-	// Capture route bytes before second tick to ensure no partial publication overwrote stale bytes incorrectly.
-	var beforePoints [20]Point
-	var beforeCount uint8
-	var beforeActive bool
-	if route != nil {
-		beforePoints = route.Points
-		beforeCount = route.Count
-		beforeActive = route.Active
-	}
-
-	// Second tick should resume and eventually complete. May need a few ticks if distance large.
-	done := false
-	for tick := uint32(2); tick < 10; tick++ {
-		system.Scheduler.Tick(tick)
+	// Every tick, the route is either untouched or carries the COMPLETE route:
+	// a budget boundary publishes nothing at all [04 §7.3] C12.
+	fullOrEmpty := func(tick uint32) bool {
 		r := system.Routes[h]
-		if r != nil && r.Active {
+		if r == nil || !r.Active {
+			return false
+		}
+		if int(r.Count) != len(oneShot.Points) {
+			t.Fatalf("tick %d published %d points, a partial prefix of the %d-point route [04 §7.3] C12", tick, r.Count, len(oneShot.Points))
+		}
+		return true
+	}
+	done := false
+	ticksTaken := uint32(0)
+	for tick := uint32(1); tick < 10 && !done; tick++ {
+		system.Scheduler.Tick(tick)
+		if fullOrEmpty(tick) {
 			done = true
-			break
+			ticksTaken = tick
 		}
-		// Ensure we never published a partial prefix that differs from final.
-		if r != nil && r.Active {
-			t.Fatalf("should not have published partial at tick %d", tick)
-		}
-		// While inactive, stale bytes should stay as before (publish zero leaves bytes untouched [04 §7.3] C14).
-		// We check that we never observed a nonempty publication that is not the final full route.
-		_ = beforePoints
-		_ = beforeCount
-		_ = beforeActive
 	}
 	if !done {
 		t.Fatalf("big request should have completed within 10 ticks, active %d", system.Scheduler.TraceState().Pending[0])
+	}
+	// The share is smaller than the search, so the request had to survive at
+	// least one budget boundary with its working set latched [04 R-PATH-01 §6].
+	if ticksTaken < 2 {
+		t.Fatalf("a %d-pop search finished on its admission tick with only a 133-step share; the budget boundary is not being honoured [04 R-PATH-01 §6]", oneShot.Popped)
 	}
 	// Determinism: resumed route must equal one-shot route (converted to movement.Point) [04 §7.3] C11.
 	final := system.Routes[h]

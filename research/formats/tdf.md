@@ -215,7 +215,7 @@ Field reference (all optional unless the feature type needs them):
 | `animating` / `animtrans` / `shadtrans` | Animation / transparency flags for sprite features |
 | `seqnameshad` | Shadow sprite entry. The engine also reads `seqnamedieshad` and `seqnamereclamateshad`, the shadow companions of `seqnamedie` and `seqnamereclamate`. |
 | `footprintx`, `footprintz` | Size in 16-pixel grid cells |
-| `height` | Height for shot-over tests |
+| `height` | Height for shot-over tests. Also the resurrection order's approach-phase draw bound: `y = terrainHeight(cell) + boundedDraw(height)` — the sole simulation-RNG draw resurrection consumes, in phase 1, not a placement effect `[05 R-WORK-01 §7]`. There is no separate authored "resurrection spread" or "jitter spread" key — `resurrectspread`, `jitterspread` and a bare `spread` are all absent from the retail feature parser's key census and from every stock feature section (WU-19-143 census: 177 files, 1,645 sections, 41 distinct keys, none of the three) `[05 R-FEAT-01 §1]` |
 | `blocking` | `1` = blocks unit movement |
 | `hitdensity` | Community-understood as hit-probability weighting. Authored on all 1,645 retail records and **inert** — no string for it exists in the executable. |
 | `damage` | HP before turning into `featuredead` (or vanishing) |

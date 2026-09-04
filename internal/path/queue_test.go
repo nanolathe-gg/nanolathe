@@ -200,7 +200,12 @@ func TestSchedulerPopBudgetEnforcement(t *testing.T) {
 	}
 	s := newTestScheduler(search, publish)
 	s.SetUnitLimit(1)
-	s.SetPlayerCount(1)
+	// The budget under test is the SLICE budget of 100 pops, not a per-call
+	// one: a call keeps taking slices until the player's accumulator goes
+	// non-positive [04 R-PATH-01 §6]. Ten players make the share small enough
+	// that the admission charge plus one slice overdraws it, so the call ends
+	// on a real budget boundary with the request latched.
+	s.SetPlayerCount(10)
 	s.SetBase(DefaultBase)
 	s.Submit(Request{Unit: 1, Player: 0, Start: Cell{0, 0}, Goal: PointGoal(Cell{10, 10}, 0)})
 	s.Tick(0)
@@ -288,7 +293,13 @@ func TestSchedulerFullOrEmpty(t *testing.T) {
 	}
 	s := newTestScheduler(search, publish)
 	s.SetUnitLimit(1)
-	s.SetPlayerCount(1)
+	// Ten players share the step allowance, so one call buys 133 steps: the
+	// 100-step admission charge plus its setup step leave room for exactly one
+	// 100-pop slice before the accumulator goes non-positive and the call ends
+	// with the request latched [04 R-PATH-01 §6]. With a single player the
+	// call would spend the whole 1333-step share and run both slices, which is
+	// correct behaviour but puts the budget boundary out of this test's reach.
+	s.SetPlayerCount(10)
 	s.Submit(Request{Unit: 1, Player: 0, Start: Cell{0, 0}, Goal: PointGoal(Cell{10, 10}, 0)})
 	s.Tick(0)
 	if len(publishes) != 0 {
@@ -409,8 +420,21 @@ func TestSchedulerActiveRequestKeepsReceivingPlayerShare(t *testing.T) {
 	s.accumulator[0] = 0
 	beforeCalls := calls
 	s.Tick(1)
-	if calls <= beforeCalls || s.accumulator[0] <= 0 {
-		t.Fatalf("active request did not resume with a new player share: calls=%d beforeCalls=%d accumulator=%d", calls, beforeCalls, s.accumulator[0])
+	// With the accumulator forced to zero, the ONLY thing that lets the active
+	// request take a slice is the accrual term that credits the active
+	// player's share even though its request has left the provider: without
+	// it the loop's `accumulator <= 0` guard breaks before the first slice.
+	if calls <= beforeCalls {
+		t.Fatalf("active request did not resume with a new player share: calls=%d beforeCalls=%d", calls, beforeCalls)
+	}
+	// Corrected 2026-09-04: this used to also require the accumulator to end
+	// the tick POSITIVE, which only held while the call stopped after a single
+	// 100-pop slice. A call spends the share in slices "until that accumulator
+	// goes non-positive" [04 R-PATH-01 §6], so ending non-positive is the
+	// contract, and the observable for the accrual is how many slices the
+	// share bought.
+	if got := calls - beforeCalls; got < 2 {
+		t.Fatalf("one tick's share bought %d slices of 100 pops, want the several the equal share covers [04 R-PATH-01 §6]", got)
 	}
 }
 

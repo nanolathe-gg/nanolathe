@@ -191,10 +191,24 @@ func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 	r := q[i]
 	// A request is removed only when admitted; the cursor advances and wraps
 	// on every visit, preserving stable follower polling [04 R-PATH-01 §6].
-	p.cursor[player] = (i + 1) % len(q)
+	//
+	// Removing index i shifts the request that was at i+1 down INTO i, so the
+	// cursor that advances past this visit is i, not i+1. Storing i+1 stepped
+	// the cursor over that shifted-down request, and every poll skipped one
+	// waiting follower. The established consequence of the admission walk is
+	// that fairness comes from the round-robin alone — "no starvation guard
+	// beyond the round-robin and no priority" [04 R-PATH-01 §6] — and a poll
+	// that skips every other waiting request breaks exactly that guarantee.
+	// The follower cannot compensate: while a request is pending its per-tick
+	// service returns at the has-request gate without re-submitting
+	// [04 R-MOV-01 §7], so a skipped request waits for the cursor to come all
+	// the way round while the mover stands blocked against the cell its stale
+	// route steers into.
 	p.requests[player] = append(q[:i], q[i+1:]...)
-	if p.cursor[player] >= len(p.requests[player]) && len(p.requests[player]) > 0 {
+	if i >= len(p.requests[player]) {
 		p.cursor[player] = 0
+	} else {
+		p.cursor[player] = i
 	}
 	return r, path.PollRequest
 }
@@ -2395,6 +2409,26 @@ func acceptGroundRoute(route *Route, u *units.Unit, goal path.Goal, goalX, goalZ
 	}
 	if accepted {
 		route.Active = true
+		// Re-activating the held points is a decision to keep walking them
+		// under the CURRENT static world, so the route now carries that
+		// revision. Without this write the points kept the revision of the
+		// publication that produced them, and the static-replan gate in
+		// StepUnit — "an active route was produced against an older static
+		// obstacle revision" — stayed armed for as long as the route lived:
+		// the gate deactivated the route, ReplanMove re-accepted it here and
+		// set Active again with the same stale stamp, and the gate fired on
+		// the next tick. Every one of those passes cancelled the request the
+		// previous pass had submitted [04 R-PATH-01 §8], so the search was
+		// restarted from setup every tick and could never reach a
+		// publication. A mover in that loop kept its old route, its capped
+		// speed word and its walk callbacks and never moved again — the
+		// scheduler was serving its request slot every poll and completing
+		// nothing.
+		//
+		// The synthetic branch below already stamps the revision through
+		// PublishAtRevision; this is the same stamp for the branch that keeps
+		// the points it already has.
+		route.StaticRevision = revision
 	}
 	if !accepted && haveGoalPoint && allowSynthetic {
 		synthetic := []Point{
