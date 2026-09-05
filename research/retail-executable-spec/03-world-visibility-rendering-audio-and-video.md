@@ -55,7 +55,9 @@ computed from projected screen Y, appended in enumeration order), so paint
 order is Y-sorted rows with in-row enumeration order — there is no depth
 test.
 
-**Strip storage and lifecycle.** Each strip is a vector descriptor; a draw
+#### Strip storage and lifecycle
+
+Each strip is a vector descriptor; a draw
 dispatcher forwards each stored object to its draw entry, and an update
 dispatcher evaluates removal BEFORE update for every object, destroying and
 stably compacting on a positive verdict so survivors keep their order. A
@@ -63,7 +65,7 @@ terminal condition created during an update is noticed only on the next
 invocation. Producers append at the end; when the pre-insert count exceeds
 400 the oldest object is destroyed first, so steady state holds at most 401
 records per strip and same-strip order among survivors equals insertion
-order. Both dispatchers are now identified (2026-08-27, [R-STRIP-01]): the
+order. Both dispatchers are identified ([R-STRIP-01]): the
 update dispatcher is the per-tick sweep of document 01 §4.4 phase 11, and the
 draw dispatcher is the frame composer itself, which walks each strip in the
 staged order of this section and invokes each object's draw entry with the
@@ -71,27 +73,14 @@ framebuffer descriptor; the object's draw entry forwards the call to each of
 its sub-records together with the camera origin, which is how sub-records
 acquire their screen positions ([R-STRIP-01 §2]).
 
-**Strip producer census (closed 2026-08-27, [R-STRIP-01 §1]).** An earlier
-bounded census (promoted 2026-08-25, re-verified 2026-08-26) searched a
-decompile corpus for a `push` immediately preceding a producer call and
-concluded: literal-index producers for strips 2, 4, 6, 7, and 9 (2 shockwave,
-4 crater/decal with "seventeen" strip-6 sites, 7 lightning/flame, 9
-smoke/splash twelve sites) and no producer for strips 0, 1, 3, 5, 8. That
-census is superseded. Its method was wrong: the retail producers take the
-strip index as the low word of a stack argument that is pushed FIRST (often
-many bytes ahead of the call, as the first argument rather than the last), so
-the `push`-adjacent-to-`call` pattern missed real sites (strip 5) and its
-"crater/decal literal 4" finding has no producer anywhere in the image. A
-complete image-wide census — every reader of the strip-table root word, every
-append invocation, and every call site of all twelve producer functions —
-replaces it; the producer table and per-strip events are [R-STRIP-01 §1]
-below. The strip-2 and strip-9 site counts of the old census were confirmed
-(4 and 12); strip 6 has sixteen literal sites in the reference graph (the old
-"seventeen" was not reproduced); strip 7 has three. (Corrected 2026-09-02,
-[R-FX-02 §5]: the strip-6 count is **seventeen** call sites — the old census
-was right; the "sixteen" counted functions where two functions each hold two
-calls. The 0/1/3/8 "none" rows are re-verified there by two independent
-exhaustive enumerations.)
+The producer census is image-wide — every reader of the strip-table root
+word, every append invocation, and every call site of all twelve producer
+functions. The retail producers take the strip index as the low word of a
+stack argument pushed first, often many bytes ahead of the call, which is why
+a census that only looks at the push adjacent to the call misses sites. The
+producer table and per-strip events are [R-STRIP-01 §1] below; the 0/1/3/8
+"none" rows are verified there by two independent exhaustive enumerations
+([R-FX-02 §5]).
 
 #### R-STRIP-01 §1 — producer census and per-strip events
 
@@ -106,38 +95,30 @@ argument at every call site. The complete strip → producer/event map:
 |---|---|---|
 | 0 | none — no producer exists anywhere in the image | always empty |
 | 1 | none | always empty |
-| 2 | COB emit-sfx vector types 2–5 (the "impact-effect switch" — see the re-verification note below): one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawn interval 1 tick with the per-site spacing parameter (16 or 8) scaling puff lifetime; palette colors `0x61`/`0x67` | 4 |
+| 2 | COB emit-sfx vector types 2–5 (the emit-sfx type-byte dispatch, below): one jittered smoke puff (three CRT draws of `rand×7/0x8000 − 3` per axis) per spawn, spawn interval 1 tick with the per-site spacing parameter (16 or 8) scaling puff lifetime; palette colors `0x61`/`0x67` | 4 |
 | 3 | none | always empty |
-| 4 | the geothermal steam producer of [05 R-ECO-02 §3]: a flame-class object appended with init literals `(5, 0, 150)` under the pool gate and the 400-cap eviction (corrected 2026-08-29 — this row previously read "none … always empty"; the retired "crater/decal literal 4" retraction of §3.7 stands) | 1 |
-| 5 | teleport order effect (1 site — see [R-LAYER §4]; an earlier reading called this a "flame-weapon area scan" plus an "ignition callback", both retracted: the producer is the Teleport order-state handler and the second call is the unit position commit): for every other unit inside the ordering unit's definition-relative world box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame while the handler commits that unit to its displaced position; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site and a third, the puff's last frame, inside the producer; init row `(0, 1, 0, 0, 0)` — `smoke 1`, lifetime 0, a one-shot container ([05 R-FEAT-01 §16]) | 2 |
-| 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 17 (corrected 2026-09-02 from 16, [R-FX-02 §5]) |
+| 4 | the geothermal steam producer of [05 R-ECO-02 §3]: an object of the vent's smoke-puff class ([R-FX-02 §3]) appended with init `(interval 5, hold 0 → 7, lifetime 150)` under the pool gate and the 400-cap eviction; there is no crater/decal producer on this strip | 1 |
+| 5 | teleport order effect (1 site — see [R-LAYER §4]: the producer is the Teleport order-state handler, and the handler's second call is the unit position commit): for every other unit inside the ordering unit's definition-relative world box, a 30-tick flame-stream object that lays one animated segment every 10 ticks with a random start frame while the handler commits that unit to its displaced position; burning-feature smoke (1 site, phase 6 of doc 01 §4.4): one wind-drifted smoke puff every 3rd tick with two CRT jitter draws at the call site and a third, the puff's last frame, inside the producer; init row `(0, 1, 0, 0, 0)` — `smoke 1`, lifetime 0, a one-shot container ([05 R-FEAT-01 §16]) | 2 |
+| 6 | construction/reclaim nanolathe emitters: a source point and a target box, five particles per spawn tick over a two-tick spawn window (six CRT draws per particle) | 17 ([R-FX-02 §5]) |
 | 7 | flame-stream trail (2 sites): one animated flame segment per tick over a 6–7 tick flight from source to target; smoke sprinkle variant (1 site): the strip-2 family with 8-tick spacing and a 7-tick life | 3 |
 | 8 | none (the composer still draws the strip, unconditionally) | always empty |
-| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the emit-sfx smoke point cases — white `0x101` and black `0x102`, two sites (see the re-verification note below), the fixed-effect-pool append side effect when the effect lands above sea level (1), and the death-corpse finalizer's land-path long-lived (900-tick) smoke column (1 — an earlier reading labeled this the "sinking-wreck path"; see [R-LAYER §3]) | 12 |
+| 9 | impact smoke: the authoritative impact dispatcher under a weapon-definition flag (1), the projectile phase's trail-window and impact branches (2), the land/water/lava impact effect variants under a second weapon flag (3), the emit-sfx smoke point cases — white `0x101` and black `0x102`, two sites, the fixed-effect-pool append side effect when the effect lands above sea level (1), and the death-corpse finalizer's land-path long-lived (900-tick) smoke column (1 — see [R-LAYER §3]) | 12 |
 
-The old census's strip-2 count (4 sites) and strip-9 count (12 sites) are
-confirmed; strip 6's count is sixteen sites in the reference graph, one short
-of the old census's seventeen (the extra site was not reproduced and is not
-assumed to exist). **Correction, 2026-09-02 ([R-FX-02 §5]):** the sentence
-before this one is withdrawn. Enumerating the code references to the two
-nanolathe producer routines by call-site address gives ten and seven —
-seventeen sites, every one pushing the literal 6. Two construction routines
-hold two calls each; the "sixteen" was a count that collapsed one of those
-pairs. The old census's seventeen was right.
+The strip-6 count is by call site: the two nanolathe producer routines have
+ten and seven callers, seventeen sites, every one pushing the literal 6; two
+construction routines hold two calls each, so a count by calling function
+gives sixteen and is wrong.
 
-**Re-verification — the "impact-effect switch" is the COB emit-sfx type
-dispatch (2026-08-28, direct-static).** The strip-2 producer named above as
-the "weapon impact-effect switch" is the COB `emit-sfx` opcode's type-byte
-dispatch, not the impact dispatcher: vector types 2–5 run the strip-2/7
-sprinkle family (types 2/3 source→target, 4/5 with the endpoints swapped;
-the swapped pair needs the piece's second effect vertex, whose derivation is
+**The emit-sfx type dispatch (Established, direct-static).** The strip-2
+producer is reached from the COB `emit-sfx` opcode's type-byte dispatch, not
+from the impact dispatcher: vector types 2–5 run the strip-2/7 sprinkle
+family (types 2/3 source→target, 4/5 with the endpoints swapped; the swapped
+pair needs the piece's second effect vertex, whose derivation is
 `TODO(question)`), type `0x101` is a white smoke point and `0x102` a black
 smoke point (both strip 9), and type `0x103` is the strip-7 water-line
-sub-bubble sprinkle. The earlier partition counted the black smoke point
-under the sinking-wreck path, which contributes one site, not two; the
-strip-9 total of 12 is unchanged.
+sub-bubble sprinkle.
 
-Two sprinkle-family mechanics the original row compressed: the 16-or-8 value
+Two sprinkle-family mechanics: the 16-or-8 value
 is the per-site **spacing** parameter, which scales puff lifetime (puffs live
 `spacing×6` ticks); the spawn interval itself is 1 tick, and a sprinkle
 container holds two puffs (one at construction, one at the single gate fire —
@@ -152,47 +133,34 @@ of document 01 §4.4 phase 11 evaluates, per object in insertion order, a
 removal verdict virtual BEFORE the update virtual; the update advances each
 sub-record's position by its velocity, advances its animation state, removes
 expired sub-records (each carries its own expiry tick) with stable in-place
-compaction, and may spawn new sub-records through a spawn gate (next-spawn tick
-compared against both the object's window end and the global tick). The removal
-verdict is "the internal list is empty" (the container object dies once its
-last particle/segment expires). One family's sub-records also expire early when
-the terrain height beneath them falls below sea level — its marks die on water.
+compaction, and may spawn new sub-records through a spawn gate. Both virtuals
+are per class, and a reimplementation must take each family's pair from its
+own class. For the flame, nano, trail and sprinkle families the removal
+verdict is "the internal list is empty" (the container dies once its last
+particle/segment expires). "The smoke family" is two classes: the strips-5/9
+smoke puffer — impact, muzzle, trail, emit-sfx, burning-feature and
+sinking-wreck smoke, which is all the smoke a player normally sees — has the
+verdict "list empty **and** stored deadline passed" and a spawn gate that
+compares the next-spawn tick against both the object's window end and the
+global tick, so the deadline its producer stores is a real lifetime and a
+weapon-side container with lifetime 0 is a one-shot; the geothermal vent's
+class alone has a constant-false verdict and a gate with no window term, so a
+vent steams until the strip evicts it. The table of the four differences, and
+the parts that are identical, is in [R-FX-01 §3]. One family's sub-records
+also expire early when the terrain height beneath them falls below sea level —
+its marks die on water.
 
-**Correction, 2026-09-01 — neither the verdict nor the gate is general, and
-"the smoke family" is two classes.** The parenthesis above used to end "; one
-family additionally requires its window to have passed", and the spawn-gate
-parenthesis before it is not universal either. Both virtuals are per class, and
-a reimplementation must take each family's pair from its own class rather than
-from this summary.
-
-An earlier version of this correction, written the same day, said the override
-with neither term belonged to "the smoke-puff family". It belongs to the
-**geothermal vent's** class alone. The strips-5/9 smoke puffer — impact,
-muzzle, trail, emit-sfx, burning-feature and sinking-wreck smoke, which is all
-the smoke a player normally sees — keeps both terms, so the deadline its
-producer stores is a real lifetime and a weapon-side container with lifetime 0
-is a one-shot. Getting this backwards left an immortal emitter at every place a
-shot had landed. Full table of the four differences, and the parts that are
-identical, in [R-FX-01 §3 addendum §B].
-
-**Correction, 2026-08-31 — the smoke puff's own draw and its end.** §3 below
-called the smoke family's per-spawn draw "the start frame". It is not: the
-spawn writes the puff's **last frame**, drawn as
-`crtRand·(limit − 2)/0x8000 + 2` against the emitter's frame-limit field —
-`min(frameCount − 1, frameCap)` when the producer caps it and `frameCount − 1`
-otherwise — and the puff's cursor starts at **0**. `[06 R-WFX-01 §5]` records
-the same correction from the producer side (RWU-03-10, 2026-08-29) together
-with the four producers' parameter rows; only this document's §3 row was left
-saying "start frame". The particle is removed when its frame index **reaches**
-its last frame. The puff dies when that cursor
-passes its own last frame, which is the animation-driven expiry this section
-otherwise leaves to "each carries its own expiry tick" — the smoke family's
-expiry is a frame cursor, not a tick deadline. Reading the draw as a start
-frame leaves a puff with no end at all: nothing retires it, and the strip
-fills to its 401-record bound with smoke that never fades. The staggered last
-frame is what makes a plume thin out instead of standing still, and it is why
-the container has to hold the entry's frame count from its init. The draw
-entry invoked by the composer's per-strip walk forwards each sub-record to a
+The smoke puff's per-spawn draw is its **last frame**, not its start frame:
+the spawn writes `crtRand·(limit − 2)/0x8000 + 2` against the emitter's
+frame-limit field — `min(frameCount − 1, frameCap)` when the producer caps it
+and `frameCount − 1` otherwise — and the puff's cursor starts at **0**
+(`[06 R-WFX-01 §5]` carries the four producers' parameter rows). The particle
+is removed when its frame index **reaches** its last frame, which is the
+animation-driven expiry this section otherwise leaves to "each carries its own
+expiry tick" — the smoke family's expiry is a frame cursor, not a tick
+deadline. The staggered last frame is what makes a plume thin out instead of
+standing still, and it is why the container holds the entry's frame count from
+its init. The draw entry invoked by the composer's per-strip walk forwards each sub-record to a
 per-sub-record draw that applies the ordinary projection with the half-height
 shear, gates on the local player's mode-selected coverage at the projected
 tile, and blits either a GAF frame or a two-by-two filled rectangle (fill
@@ -219,7 +187,7 @@ segment (random start frame); the impact sprinkle spends three draws per spawn
 entries consume no draws. All of this randomness is presentation-stream only;
 the simulation Park–Miller stream is never touched by phase 11.
 
-#### R-LAYER §3 — the wreck-smoke trigger is the corpse finalizer's land path (2026-08-28)
+#### R-LAYER §3 — the wreck-smoke trigger is the corpse finalizer's land path
 
 **Established (direct-static).** The long-lived smoke column of the strip-9
 producer census spawns inside the death-time corpse finalizer — the same pass
@@ -254,22 +222,15 @@ transition at death time — not a descent timer, not a height threshold during
 the descent, and not any state change of the sinking wreck afterwards. A
 sinking (underwater) wreck emits no smoke at all, which is exactly [05
 "Feature sinking and water interaction"]'s "underwater stamps are silent"; the
-900-tick column is the **land-wreck** smoke. The earlier strip-9 row wording
-"the sinking-wreck path's long-lived smoke column" was a misnomer carried from
-the first producer trace, which had named the whole corpse finalizer "the
-sinking path"; corrected above and in the strip-9 row. The producer's argument
-shape is also corrected here: the census note had recorded the sinking call as
-three arguments (position, variant, life); the smoke producer actually takes a
+900-tick column is the **land-wreck** smoke. The smoke producer takes a
 fourth argument, the literal strip index, at both of its call sites —
 consistent with the census's "strip index is a literal argument at every call
-site" rule, which the note had collapsed for this family.
+site" rule.
 
-#### R-LAYER §4 — strip 5 has no combat producer: the "flame scan" is the teleport order effect (2026-08-28)
+#### R-LAYER §4 — strip 5 has no combat producer: the "flame scan" is the teleport order effect
 
-**Established (direct-static).** The standing open item "the weapon-class
-dispatch selector that reaches the strip-5 flame scan (owned by document 06)"
-dissolves: the strip-5 flame-stream producer is reached through the **order
-descriptor table, not any weapon path**. The producer's sole caller is the
+**Established (direct-static).** The strip-5 flame-stream producer is reached
+through the **order descriptor table, not any weapon path**. The producer's sole caller is the
 handler of the canonical **Teleport** order state (the order descriptor table's
 teleport entry — state label, handler, and the acknowledgement-ring
 presentation helper of the teleport family; document 04 §3.1 owns the table).
@@ -286,8 +247,7 @@ things:
    restamps occupancy without the movement validator — the same commit the
    carried-unit path uses every tick.
 
-The earlier "ignition callback" reading of the second call is retracted: the
-call is the position commit, not a combat ignition. **No combat event —
+The second call is the position commit, not a combat ignition. **No combat event —
 projectile impact class, fire-damage application, or building burning state —
 produces strip-5 flame events anywhere in the image.** The flame *weapon*
 render type, `firestarter`, and feature fire (document 06 §6.10) have no
@@ -307,13 +267,10 @@ the cross-reference.
   segment;
 - the per-step flight vector triple (container total displacement divided by
   its segment count, computed once at container init);
-- the segment's expiry tick: spawn tick plus the container's per-segment
-  interval word, computed once at container init from the container lifetime
-  through a truncating float-to-int conversion and an integer division by
-  five. `TODO(question)`: the float expression feeding that conversion is not
-  preserved in the recovered code, so the exact interval derivation — 10 for
-  the teleport call's 30-tick container, which matches the re-armed next-lay
-  cadence below — is supported inference, not established;
+- the segment's expiry tick: spawn tick plus `segLife = floor(spanWorldUnits
+  / 5)`, computed once at container init from the source→target span
+  ([R-FX-02 §2] has the arithmetic); this word is a segment life, not the
+  10-tick re-lay interval below;
 - the animation's frame count minus one; and
 - the start frame: one CRT-stream draw, scaled by `frame × (frameCount−1) /
   0x8000` — the "random start frame" of the producer census.
@@ -331,7 +288,7 @@ family's one CRT draw per segment already counted in [R-STRIP-01 §3].
 Document 01 §7.3 (phase 8) records that the wind direction pair is computed as
 −2 × the fixed-point trig of the heading, scaled by the speed; the producer
 side is doc 01's territory. This section names the axes from the consumer
-side (Established, direct-static, 2026-08-27): the first word of the pair is
+side (Established, direct-static): the first word of the pair is
 the **X** term and the second word is the **Z** term. The first word is −2 ×
 speed × **sin**(heading), the second word is −2 × speed × **cos**(heading),
 where the trigonometry is one shared 512-entry sine table of signed 16-bit
@@ -348,7 +305,9 @@ therefore publish `windX = −2·round(speed·sin(h))` and
 words by a further 8 per tick and the fire probe by 2 per probe step, both
 factors belonging to those contracts' own scales.
 
-**Fixed effect pool.** Effects are not strip objects: a separate fixed pool
+#### Fixed effect pool
+
+Effects are not strip objects: a separate fixed pool
 holds up to 300 fixed-size effect records, and appends at or above the cap
 allocate nothing. Rendering walks the whole pool once per embedded animation
 category and again for model-bearing records, each draw guarded by buffer
@@ -360,11 +319,11 @@ emptied records by stable left compaction within the same updater invocation —
 animation terminating during its step retires its record that same invocation,
 unlike generic strip objects.
 
-### Closed — composer-side diagnostics helpers: frame rate, profile buckets, packet-rate lines, and the developer draw hook [R-COMP-01 §5] (2026-08-29)
+#### Composer-side diagnostics helpers: frame rate, profile buckets, packet-rate lines, and the developer draw hook [R-COMP-01 §5]
 
 These are the helpers the frame composer calls under its developer-mode
-predicates (the toggles and the overlay text itself are document 07's; the
-in-flight `R-FE-02` there owns the developer overlay). They read no
+predicates (the toggles and the overlay text itself are document 07's;
+[07 R-FE-02] owns the developer overlay). They read no
 simulation state, draw no RNG, and are presentation-only. **Established
 (direct-static)** unless marked.
 
@@ -457,14 +416,14 @@ offset is slot 10 and its flag is slot 11 bit 0; and it selects the four-byte
 attribute path. An authored nonnegative OTA `wind` or `gravity` value overrides
 the terrain value only for canonical maps; legacy maps retain their own header
 values. When neither source supplies gravity the engine falls back to the
-constant `0x1FDB`; tidal strength falls back to `0.5`.
+constant `0x1FDB`; tidal strength falls back to `0.5` ([R-TERR-01 §6] has
+the omitted-key case, which is not "neither source").
 
 The tile map is a row-major array of 16-bit tile indices with dimensions
 `cellWidth/2` by `cellHeight/2`. A tile index selects a 1,024-byte block (32 by
 32) in the indexed tile set. The tile blitter computes source block plus
 intra-tile pixel remainder, clips the edge tiles at the viewport clip
-rectangle (not at map bounds — corrected in [R-COMP-01 §1], which has the
-exact pass), and handles partial edge rectangles. It does not use a depth buffer or a textured water mesh.
+rectangle (not at map bounds; [R-COMP-01 §1] has the exact pass), and handles partial edge rectangles. It does not use a depth buffer or a textured water mesh.
 
 The loader expands each canonical attribute entry (four bytes: height,
 feature `uint16` little-endian, and a zero unknown byte) into a 13-byte plot
@@ -479,10 +438,13 @@ table. In plain terms, each 13-byte cell holds:
   query);
 * metal byte at offset 7, seeded uniformly from the mission `SurfaceMetal`
   scalar — every cell receives the same signed byte, no per-cell raster;
-* feature word at offset 8 with quaternary sentinels: `0xFFFF` empty, `0xFFFE`
-  fringe (follow signed offsets), `0xFFFD` void (engine map-edge strips and
-  lava-world fill), and `< 0xFFFB` live feature index; `0xFFFB`/`0xFFFC` behave
-  as void because consumers test `< 0xFFFB` before dereferencing;
+* feature word at offset 8 with sentinels: `0xFFFF` empty, `0xFFFE`
+  fringe (follow signed offsets), `< 0xFFFB` live feature index, and two void
+  codes with two writers — `0xFFFC` from the stamp service for every
+  TNT-authored void cell, `0xFFFD` from the edge/lava sweep; no reader compares
+  the word with either void value (every consumer classifies `== 0xFFFF` empty,
+  `< 0xFFFB` live, `== 0xFFFE` fringe, anything else blocked/void), and
+  `0xFFFB` has no writer;
 * signed anchor offsets at offsets 10 and 11: the Z delta is the width-scaled
   byte and the X delta is the unscaled byte, both `int8` `-128..127` from fringe
   toward anchor; out-of-range stays zero and leaves the fringe unresolved; at
@@ -512,10 +474,8 @@ order. A TNT-authored `0xFFFE` that no footprint rectangle covers is never
 stamped and ends up `0xFFFF` after load — such cells are not fringe at all, they
 disappear (measured: about 5,283 such cells across the 275-map corpus). Merged
 blobs resolve by last-stamp-wins: a later footprint overwrites an earlier one's
-fringe cells with its own offsets, which is why the retired 83.2% row-major
-left/above later-wins heuristic misassigned the seam cells of overlapping blobs
-(the heuristic had no adjacency path to a later anchor that was not left/above a
-fringe cell). Declaration footprints alone resolve 65.1% of raw fringe; the
+fringe cells with its own offsets; a row-major left/above later-wins heuristic
+misassigns the seam cells of overlapping blobs. Declaration footprints alone resolve 65.1% of raw fringe; the
 sequential stamp resolves 100% of footprint-covered fringe by construction.
 `TODO(question)` remains only for the dense-pack rule — whether a footprint that
 overlaps a live anchor cell is rejected or silently overwrites — which the
@@ -524,18 +484,16 @@ stamper's occupancy guard decides per consumer.
 Void and edge generation runs after the full-map minimum/maximum recompute and
 after feature placement. Right columns `Width-2` and `Width-1` are set to
 `0xFFFD` where the feature word is empty or fringe — live features and anchors
-in those columns survive (an earlier copy of this sentence said "every row
-unconditionally"; superseded by document 02 §6's traced edge rules). Playable
+in those columns survive. Playable
 insets `PlayRight = WidthPixels
 - 32` and `PlayBottom = HeightPixels - 128` are set at that time and gate the
 camera clamp. When the mission `lavaworld` flag is set, a bulk sweep sets
 `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
-`0xFFFF` or `0xFFFE`. North and south height-dependent void strips are
-established in document 02 §6 (north `z*16 < height>>1` on raw height,
-south `(Height-1-z)*16 + (height>>1) < 112`; empty-or-fringe cells only) —
-an earlier copy of this paragraph carried the predicate as `TODO(question)`;
-note that the south predicate is evaluated on row `z` but the cell voided
-is row `z-1`, see `[R-TERR-01 §2]` below.
+`0xFFFF` or `0xFFFE`. North and south height-dependent void strips (north
+`z*16 < height>>1` on raw height, south `(Height-1-z)*16 + (height>>1) <
+112`; empty-or-fringe cells only) are stated exactly in `[R-TERR-01 §2]`
+below; the south predicate is evaluated on row `z` but the cell voided is
+row `z-1`.
 Outside the map rectangle, height returns sentinel `-1` with unsigned
 candidate bounds before any terrain read; movement is blocked for generic modes
 and allowed only for factory-exit search mode 2; the LOS writer stores an empty
@@ -548,8 +506,7 @@ only; negative or legacy seed 0). The TNT unknown byte is zero corpus-wide and
 is not a metal source, and no `Width × Height` metal raster is allocated. The
 legacy terrain version seeds each cell from its 8-byte attribute record's
 per-cell metal byte — there is no varying metal file; the legacy attribute
-byte is the only per-cell source (document 02 §6, superseding the earlier
-`TODO(question)`). An extractor
+byte is the only per-cell source (document 02 §6). An extractor
 at placement sums `unsigned(metalByte) + 1` over its footprint and multiplies by
 its `extractsmetal` scalar; the stored result is never resampled. Feature metal
 is reclaim reward only.
@@ -559,9 +516,9 @@ units by multiplying by 65,536. Water/lava map state and minimum/maximum water
 depth/slope thresholds are cached for placement and impact decisions.
 
 
-### Closed — the two attribute encodings, the header slot map, and what the loader writes per cell [R-TERR-01 §1] (2026-08-29)
+#### The two attribute encodings, the header slot map, and what the loader writes per cell [R-TERR-01 §1]
 
-Status: **Established** unless marked (direct static trace of the map loader,
+**Established** unless marked (direct static trace of the map loader,
 the feature stamp entry, the TNT reader, and the save-blob writers). The
 byte offsets of the *file* are `[fmt tnt]`'s; this section states what the
 engine does with them.
@@ -579,8 +536,7 @@ little-endian 32-bit slots and branches on slot 0:
 | 13 | — | gravity (authored units, see §6) |
 | 14, 15 | — | minimap offset, minimap-present flag (bit 0) |
 
-`[fmt tnt]` listed slot 11 (file offset `0x2C`) as "unknown1, always 1": it is
-the minimap-present flag — when bit 0 is clear the engine keeps no embedded
+Slot 11 (file offset `0x2C`) is the minimap-present flag — when bit 0 is clear the engine keeps no embedded
 minimap image at all and the minimap presentation falls back to the generated
 picture (§3.7). Any other version word raises the diagnostic
 `Unknown TNT version:  0x%08x` (two spaces, as shipped) through the fatal
@@ -627,9 +583,7 @@ disappear, above); and because voids are stamped first, a footprint that
 overlaps an authored void is vetoed by the stamp service's teardown test —
 the void wins, not the feature.
 
-**Correction.** This section's sentinel list said `0xFFFD` is the void
-value "(engine map-edge strips and lava-world fill)" and that `0xFFFB`/
-`0xFFFC` merely "behave as void". At runtime there are **two** void codes with
+**Two void codes.** At runtime there are **two** void codes with
 two writers: `0xFFFC` is written by the stamp service for every
 TNT-authored void cell, and `0xFFFD` is written only by the edge/lava sweep
 of §2. No reader anywhere compares the feature word with either value; every
@@ -652,8 +606,8 @@ save/plot dump. The `0xFFFB` value has no writer at all.
 | 10–11 anchor offsets | the fringe resolver; at anchors the live slot / damage accumulator `[R-FEAT-01 §3]` |
 | 12 flags | bit 0 instance present; bit 1 building-occupied, set by the building stamp for every yard cell whose yardmap byte has bit 0 and cleared by the unstamp; bit 2 never-seen; bits 3–6 placer nibble — the save `PlayerFeatures` blob packs two cells' nibbles per byte as `(odd.flags >> 3 & 0xF) \| ((even.flags & 0xF8) << 1)` |
 
-**Closed (2026-08-29) — the last column and last row's derived bytes are
-heap garbage in retail.** The min/max recompute (§3) never writes column
+**The last column and last row's derived bytes are heap garbage in
+retail.** The min/max recompute (§3) never writes column
 `Width-1` or row `Height-1`, and the loader's own initialisation loop writes
 only bytes 0–3 (zero), byte 7 (the per-map value), bytes 8–9 (`0xFFFF`) and
 clears bits 0–1 of byte 12; bytes 4–6, 10–11 and bits 2–7 of byte 12 keep
@@ -661,13 +615,11 @@ whatever the allocator left, and the allocator **does not zero-fill** (the
 labelled wrapper discards its label and calls the C runtime allocator with no
 fill; [01 R-PLAT-01 §5]). So the sector-grid sweep and the lava flood read
 undefined bytes for that column and row in retail. Nanolathe's zero
-initialisation is a documented divergence, not a contract; the
-`TODO(question)` at the plot loader may cite this paragraph instead of
-asking. (Previous text: "whether the allocator zero-fills is not traced".)
+initialisation is a documented divergence, not a contract.
 
-### Closed — the void strips, exactly, and the row-above rule [R-TERR-01 §2] (2026-08-29)
+#### The void strips, exactly, and the row-above rule [R-TERR-01 §2]
 
-Status: **Established** (direct static trace; the south-edge rule re-read at
+**Established** (direct static trace; the south-edge rule re-read at
 the instruction level because the decompiler's row arithmetic is easy to
 misread).
 
@@ -699,16 +651,12 @@ build, and only ever converts cells whose feature word is `0xFFFF` or
 5. **Lava flood.** When the mission's `lavaworld` is non-zero, every cell
    whose derived **minimum** byte is `≤ SeaLevel` (unsigned byte compare).
 
-**Correction to doc 02 §6 and to this section's earlier summary.** Both
-say the south rule voids "an empty-or-fringe cell at row z" and tabulate
-"the last row voids heights < 224". The predicate is right; the target cell
-is wrong by one row. The loader steps the cell pointer back one row (a
+**The target row.** The loader steps the cell pointer back one row (a
 subtraction of one row stride) *before* it reads and writes the feature
 word, so the voided cell is the row above the tested one and the bottom row
-itself is untouched. An implementation that voids the tested row will void
-one extra row at the south edge on every map and will void the bottom row,
-which retail never does. Doc 02's table belongs to its owner; the corrected
-statement is here.
+itself is untouched. An implementation that voids the tested row voids
+one extra row at the south edge on every map and voids the bottom row,
+which retail never does.
 
 **Who treats void specially — nobody, by name.** Established from the
 reader census of §1: no consumer tests `0xFFFD` or `0xFFFC`. Void cells are
@@ -720,18 +668,16 @@ edge/lava sweep itself skips it (it only converts empty/fringe). There is no
 void raster for rendering — the tile art under a void cell is drawn
 normally; the "hole" look of retail map edges is authored tile art.
 
-### Closed — terrain deformation does not exist [R-TERR-01 §3] (2026-08-29)
+#### Terrain deformation does not exist [R-TERR-01 §3]
 
-Status: **Established — bounded negative** over the complete decompiled
+**Established — bounded negative** over the complete decompiled
 function set.
 
 The plot height byte has exactly one writer: the loader's attribute pass.
 The tile-index map has one writer (the loader's copy) and two readers (the
 tile blitter and the minimap generator). No weapon impact, feature death,
-construction or COB path writes either. The tail's open item "per-tick
-sequencing of terrain deformation against movers" is therefore closed as
-moot: there is no deformation to sequence, and craters and scorch marks (§3.7
-tail) are not height edits.
+construction or COB path writes either. There is no deformation to sequence
+against movers, and craters and scorch marks are not height edits.
 
 What does exist, and is easy to mistake for deformation, is the **derived
 min/max recompute**, which has three live callers: the loader (whole map,
@@ -746,7 +692,8 @@ the rectangle to `x < Width−1`, `z < Height−1` **exclusive**, evaluating eac
 cell as the maximum/minimum over itself, its east neighbour (when `x <
 Width−1`), its south neighbour (when `z < Height−1`) and its south-east
 neighbour (when both), writing maximum to byte 5 and minimum to byte 6. The
-last column and last row are never evaluated (§1's Unknown).
+last column and last row are never evaluated (the heap-garbage note of
+[R-TERR-01 §1]).
 
 ### 2.3 Height queries
 
@@ -787,15 +734,6 @@ is in `0..255`, which is what makes `-1` usable as an off-map sentinel. The row
 stride multiplies the **second** coordinate, which is the decisive evidence
 that the record's first component is X and its third is Z `[04 §4.4]`.
 
-**Correction to the preceding paragraph.** It stated the bias as
-`(val>>31 & 0xF) >>4`, which is not an expression: the sign term is *added to
-the value* before the shift, as written above, and dropping the addend turns a
-toward-zero division into a floor. It also named only the `cx+1 < Width` and
-`cz+1 < Height` guards; the real predicate additionally requires `cx >= 0` and
-`cz >= 0`, so **both** the cell index and its successor must be on the map on
-both axes. And it did not state the interpolation order, without which the
-rounding cannot be reproduced.
-
 **Established — one arithmetic, two call shapes.** The movement layer's
 four-corner terrain conform `[04 §8.1]` does not call this query; it inlines
 the same cell indexing, the same `trunc16`, and the same X-then-Z order, and
@@ -808,24 +746,22 @@ sampler between the two, but must keep the two failure behaviors distinct.
 The LOS writer uses a different, coarser height representation. It quantizes
 to 32-pixel visibility tiles and reads a `uint16` word per visibility tile (see
 section 3.2), aggregated from the terrain heights at map load — not the
-four-corner bilinear query, and not rebuilt during a battle. The builder is now
-traced and the aggregation is
-established — and it is the REVERSE of what was inferred here: the table is
+four-corner bilinear query, and not rebuilt during a battle. The table is
 seeded low = `0x00` / high = `0xFF` and updated with `low = max`, `high = min`,
 so the **low byte is the neighbourhood MAXIMUM and the high byte its MINIMUM**.
 Cells are scattered into it through the same height shear the observer's
 coverage tile uses, carrying a perspective-scaled value, and a tail pass blends
 the pair by thirds and floors both at sea level. See §3.5
-`[R-P0-18-B §1–§4]` for the derivation; the earlier
-(minimum, maximum) reading is the maximally occlusive pairing and produces
-false shadows on ground retail leaves visible. A tall feature does not raise
+`[R-P0-18-B §1–§4]` for the derivation; a (minimum, maximum) pairing is the
+maximally occlusive one and produces false shadows on ground retail leaves
+visible. A tall feature does not raise
 the LOS ray height — nothing but the map-load build does, since the word is
 never invalidated.
 
 
-### Closed — the height queries: every caller family and the sentinel each one gets [R-TERR-01 §4] (2026-08-29)
+#### The height queries: every caller family and the sentinel each one gets [R-TERR-01 §4]
 
-Status: **Established** (direct static trace of both query bodies and of
+**Established** (direct static trace of both query bodies and of
 every call site the call graph reaches; the two dead helpers are named so
 the census is complete).
 
@@ -845,7 +781,7 @@ of the map* is on-map to the coarse query and returns cell (0, ·)'s
 average, while the same position is off-map (`−1`) to the bilinear query;
 and a position in the last column or row (`cx == Width−1`) is off-map to the
 bilinear query but on-map to the coarse one — where it reads the
-uninitialized derived bytes of §1's Unknown.
+uninitialized derived bytes of [R-TERR-01 §1].
 
 **Cell-space helpers.** Alongside the two queries sit four small helpers that
 callers use instead of the queries: (a) *cell height by cell coordinates* —
@@ -893,12 +829,11 @@ position is returned as is. Otherwise probe one more row `z + 16` to get
 the height at the interpolated point, again floored at sea level; the
 returned Y is that height `<< 16`.
 
-### Closed — the air sector grid, as doc 03's own statement [R-TERR-01 §5] (2026-08-29)
+#### The air sector grid [R-TERR-01 §5]
 
-Status: **Established.** `[R-AIR-01 §5]` in doc 04 states the grid, the
-sentinel and its eight consumers at implementable precision; the build is
-repeated here only where doc 03 owns the input and where the re-derivation
-found one error.
+**Established.** `[04 R-AIR-01 §5]` states the grid, the sentinel and its
+eight consumers at implementable precision; the build is repeated here where
+doc 03 owns the input.
 
 * Built by the same map-load routine that then builds the LOS height-word
   table of §3.5 `[R-P0-18-B]`; it runs after the full min/max recompute and
@@ -911,27 +846,25 @@ found one error.
   byte and edge bits like any other but are never swept.
 * Edge bits `1` top row, `2` bottom row, `4` left column, `8` right column,
   OR'd in that order; the sentinel record carries `0x1F`.
-* **Correction to `[R-AIR-01 §5]` step 3.** It says the sweep raises the
-  record's first byte to "the cell's height byte". The sweep reads the cell's
+* **The swept byte.** The sweep reads the cell's
   **derived maximum byte** (byte 5 of the plot cell — the 2×2 maximum), not
   the raw height at byte 4. The difference is one cell of reach: a peak in the
   first column or row of the *next* sector already raises this sector's
   byte. The value is therefore `max(seaLevel, max over the sector's cells of
   hmax)`, and the smoothed second byte is the 3×3 sector maximum of that.
-  (Doc 04 owns the anchor; the correction is recorded here and reported.)
 * Consumers are `[R-AIR-01 §1]` (cruise altitude reads the smoothed byte) and
   the sentinel readers of `[R-AIR-01 §5]`; no terrain-side reader exists.
 
-### Closed — the map-global block: sources, conversions, defaults [R-TERR-01 §6] (2026-08-29)
+#### The map-global block: sources, conversions, defaults [R-TERR-01 §6]
 
-Status: **Established** (loader trace at the FPU-instruction level for the
+**Established** (loader trace at the FPU-instruction level for the
 gravity conversion; the OTA parser for key names; consumers cited).
 
 | Runtime value | Source and rule | Default when absent |
 |---|---|---|
-| minimum wind, maximum wind (integers) | OTA `minwindspeed` / `maxwindspeed` when the authored value is `≥ 0` **and** the map is canonical; otherwise the legacy header slots 10/11; on a canonical map the "header" values are the hard-coded `100` / `2000` | `100`, `2000` on a canonical map with a **negative** authored value, or when no `[GlobalHeader]` was parsed at all (the loader prologue seeds −1). An **omitted** key is not "unparsed": the OTA parser stores its integer default `0`, which passes the `≥ 0` test, so the wind range is `0..0` (corrected 2026-08-29 against [02 R-MAP-01]; `[R-PROD-01 §3]` is the consumer) |
-| gravity (runtime word) | OTA `gravity` when `≥ 0` and canonical: `ftol((double)g × 65536.0 × (1/900))` — the integer is converted to double, multiplied by 65536.0, then by the double constant `0.001111…` (exactly the nearest double to 1/900), then truncated toward zero. Otherwise, when the legacy header slot 13 is non-zero, the same conversion of that slot | `0x1FDB` = 8155, which is exactly what authored `112` converts to (`112·65536/900 = 8155.59`). So a canonical map whose OTA omits or negates `gravity` behaves as `gravity=112` |
-| tidal strength (single float) | mission `tidalstrength` unless it is `< 0.0` (strict) | `0.5` (`[R-PROD-01 §4]`; no version test) |
+| minimum wind, maximum wind (integers) | OTA `minwindspeed` / `maxwindspeed` when the authored value is `≥ 0` **and** the map is canonical; otherwise the legacy header slots 10/11; on a canonical map the "header" values are the hard-coded `100` / `2000` | `100`, `2000` on a canonical map with a **negative** authored value, or when no `[GlobalHeader]` was parsed at all (the loader prologue seeds −1). An **omitted** key is not "unparsed": the OTA parser stores its integer default `0`, which passes the `≥ 0` test, so the wind range is `0..0` (`[02 R-MAP-01]`; `[R-PROD-01 §3]` is the consumer) |
+| gravity (runtime word) | OTA `gravity` when `≥ 0` and canonical: `ftol((double)g × 65536.0 × (1/900))` — the integer is converted to double, multiplied by 65536.0, then by the double constant `0.001111…` (exactly the nearest double to 1/900), then truncated toward zero. Otherwise, when the legacy header slot 13 is non-zero, the same conversion of that slot | `0x1FDB` = 8155, which is exactly what authored `112` converts to (`112·65536/900 = 8155.59`). The default is reached for a **negative** authored value, for legacy terrain whose slot 13 is zero, or for a session with no parsed `[GlobalHeader]`. A canonical map whose OTA merely **omits** `gravity` gets the parser's integer default `0`, which passes the `≥ 0` test — runtime gravity is then **0**, not `0x1FDB`, and `AirStrike` cancels ([04 R-AIR-01 §8], `docs/SPEC_CONFLICTS.md` SC23) |
+| tidal strength (single float) | mission `tidalstrength` unless it is `< 0.0` (strict) | `0.5` (`[R-PROD-01 §4]`; no version test); an omitted key is the parser's `0.0`, not `0.5` |
 | sea level (byte) | terrain header slot 9, low byte | none — always present. There is no OTA key: the string `SeaLevel` exists in the image with no reader, and `nosealeveltrigger` is a mission flag unrelated to the value |
 | surface metal seed (signed byte) | mission `SurfaceMetal` when `≥ 0` and canonical | `0` |
 | lava world (flag) | mission `lavaworld` | `0` |
@@ -941,16 +874,8 @@ The wind pair, gravity and tidal value are written once at map load, in that
 order, before any plot memory is allocated; nothing rewrites them during a
 battle. Units: the gravity word is 16.16 world units per tick², which is why
 the divisor is `30²`; `[fmt ota]` states the same identity from the asset
-side and the 192-of-275 census of `gravity=112`.
-
-**Correction (2026-08-29, [02 R-MAP-01]):** the "default when absent" column
-above applies to a *negative* authored value, legacy terrain, or a session with
-no parsed `[GlobalHeader]`. A canonical map whose OTA merely **omits**
-`gravity` gets the parser's integer default `0`, which passes the `≥ 0` test —
-runtime gravity is then **0**, not `0x1FDB`, and `AirStrike` cancels
-([04 R-AIR-01 §8], `docs/SPEC_CONFLICTS.md` SC23). Likewise an omitted
-`tidalstrength` is `0.0`, not `0.5`. All 275 retail OTAs author all four
-keys, so the fallbacks are reachable only through authored negatives.
+side and the 192-of-275 census of `gravity=112`. All 275 retail OTAs author
+all four keys, so the fallbacks are reachable only through authored negatives.
 
 ### 2.4 3DO model hierarchy
 
@@ -973,10 +898,9 @@ remaining primitives from index one upward are then bubble-sorted into ascending
 order of the integer mean of their vertices' second coordinate. A separate
 recursive pass then negates the first and third vertex coordinates and the first
 and third parent translations of every object in the hierarchy, a half-turn about
-the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back (the hover-pick projection in [07 R-REV-01 §3] writes that same negation explicitly as `(unitZ - cameraZ) - z`; an earlier `+ z` form in [07 R-SEL-02B2] contradicted this paragraph and has been corrected) — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) remains the sole persistent conversion (`H_A` net `-X,-Z` established, `H_C` net `-X` rejected, `H_B` already rejected). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation; a flare authored at `(2,1,-30)` appears at `(-2,1,+30)` world plus unit origin (direct-static for `H_A` vs `H_C` via store-path data-flow, bounded-negative for a second store; heading-zero nose mapping remains
-supported inference, probe-pending — the `ta_probe_xz` fixture (child
-translation signs at headings 0/90/180/270) is designed to settle it, see
-rr-06 §4). Draw order within a piece is
+the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back (the hover-pick projection in [07 R-REV-01 §3] writes that same negation explicitly as `(unitZ - cameraZ) - z`) — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) is the sole persistent conversion (net `-X,-Z` established by store-path data-flow; a net `-X`-only conversion and a second store are both rejected, the latter bounded-negative). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation: a flare authored at `(2,1,-30)` is stored as `(-2,1,+30)` in model space, and the piece locator of [R-RAST-01 §8] hands a simulation consumer the world offset `(-2, 1, -30)` — model-space `(x, y, z)` maps to world `(x, y, −z)` on every consumer path. Which authored axis is the nose at heading zero remains
+supported inference (an asset-side question; decider: a probe of child
+translation signs at headings 0/90/180/270). Draw order within a piece is
 therefore fixed at load time, not recomputed per frame, and a per-frame sort
 does not reproduce retail tie order.
 
@@ -1016,6 +940,70 @@ vestigial per-piece rebuild-gate counter is never observed holding a nonzero
 value, so every dirty frame rebuilds each reachable piece from pristine
 coordinates through its full ancestor chain.
 
+#### The composed piece offset a simulation consumer adds is `(x, y, −z)` of the model-space composition [R-RAST-01 §8]
+
+The sense of Z that a *simulation* consumer of a queried piece position
+owes: there is one piece locator and every simulation-side consumer goes
+through it, so the build plate, the nano source ([§5.5 "The nano source
+point's coordinate space"]) and the weapon muzzle ([06 §4.1]) share one
+answer.
+
+**Established — the locator.** Given a unit and a piece index it returns a
+three-word offset, built as follows (all 16.16, integer arithmetic except the
+rotation helper's trig):
+
+1. Start with the piece's own translation: the post-load parent translation
+   of §2.4 (already half-turned: `−X, −Z` of the authored file) plus the
+   piece's three script translation lanes. The piece's own rotation words
+   are **not** applied — a piece rotates about its own origin, so they cannot
+   move it.
+2. Walk the parent chain to the root. For each ancestor: rotate the running
+   offset by that ancestor's three rotation words in the order Z, then X,
+   then Y through the shared coordinate-pair rotation helper — the same
+   order §2.4 gives the draw path — and then add the ancestor's post-load
+   parent translation plus its script lanes. When the ancestor is the root
+   (no parent of its own), the unit's bank is added to its Z word, the
+   unit's heading to its Y word and the unit's pitch to its X word before
+   the rotation, by plain sixteen-bit addition with no negation — the C24
+   fold, confirmed at the simulation locator and not only in the draw path.
+3. Return `(x, y, −z)`: the Z component is negated **on output**, in a
+   register, as the last step. Nothing is stored back to the model.
+
+**Established — the consumers.** Every simulation caller that turns the
+triple into a world point adds it to the unit's own position with no further
+sign change: `world = unitPosition + (x, y, −z)`. Those callers are the
+weapon muzzle query for all three weapon slots (the
+`QueryPrimary`/`QuerySecondary`/`QueryTertiary` path of [06 §4.1] and the
+burst re-query of [06 §4.3]), the `QueryNanoPiece` spray source of §5.5, and
+the two piece-position COB ports of [04 R-COB-03 §2] (packed X/Z whole
+parts, and world Y). The only other caller, the transport pickup executor of
+[04 R-AIR-01 §9], reads the locator for its `QueryTransport` piece and uses
+the Y word alone (negated, as the hang altitude of the follow marker), so
+the Z sense never reaches it. No caller re-negates, and no caller adds the
+un-negated triple.
+
+**Consequence — the two paths agree, and the sign convention.** The draw
+path narrows a model-relative vertex as `hi16(−vz)` while a unit's own
+position enters unnegated ([R-RAST-01 §2]); the locator negates the
+composed Z once on output. Both therefore map model-space `(x, y, z)` to
+world `(x, y, −z)`, and a muzzle, a spray source or a script-queried piece
+sits where the model pass draws it. In authored (file) coordinates, with the
+half-turn of §2.4 folded in, a piece authored at `(ax, ay, az)` on a unit at
+heading 0 — which faces world `−Z` ([04 R-MOV-01 §4], [06 R-WPN-05 §11]) —
+lands at world `unit + (−ax, ay, +az)`: the authored X is mirrored, the
+authored Z is kept, and the heading rotation is the plain Y-word rotation
+of §2.4 with the unit heading added unnegated. Confidence: **Established**
+for the sense (direct read of the locator's output and of every caller's
+addition); the rotation helper's own formulas are §2.4's and are not
+re-derived here.
+
+**Implementation rule.** Compose in model space exactly as the draw path
+does (post-half-turn translations plus script lanes, rotations Z, X, Y with
+the unit's bank/heading/pitch added to the root's words), then negate Z
+once, then add the unit position. Do not negate per consumer; do not negate
+inside the composition; do not skip the negation for any of the three
+consumer families that form a world point.
+
 ### 2.4.1 Model rasterization — face dispatch and shading
 
 The per-unit rasterizer projects every piece vertex with the section 2.5
@@ -1026,42 +1014,27 @@ projection, then walks pieces and primitives with these established rules:
    index 1 — the plate is never drawn as a model face. Unit picking is a 2D
    bounding-box test elsewhere and does not consult the mesh.
 2. **Flat-colored faces render at any vertex count; textured faces are quads
-   only.** This **corrects** the previous text of this item and the next,
-   which said "flat-colored faces are quads only — untextured triangles and
-   n-gons draw nothing" and "textured faces render through the scanline
-   mapper for any vertex count". The two arities were transposed. The
-   dispatcher reads the primitive's colored flag first: when it is set the
+   only.** The dispatcher reads the primitive's colored flag first: when it is set the
    face goes to the **generic edge-table polygon filler**, which takes an
    explicit vertex count and draws lines, triangles, quads and n-gons alike;
    when it is clear the dispatcher **requires a vertex count of exactly four**
    before it binds any texture or calls the quad mapper, and a textured
    triangle or n-gon therefore draws nothing. The quad mapper is hard-wired to
    four corners — it has no vertex-count parameter at all. See
-   [R-REN-03A §5] for the dispatch in full and for the stock-asset census that
-   makes the corrected reading unfalsifiable: across all 608 base 3DO models
-   and 50,443 primitives, every one of the 43,845 textured primitives is a
-   quad, while the 6,598 flat primitives occur at vertex counts 2, 3, 4, 5, 6,
-   7, 8, 10, 12, 13 and 16. Under the old reading the engine would have
-   discarded 3,312 authored flat non-quads and retained a textured-n-gon path
-   that no stock asset ever reaches.
-
-   **Correction (2026-08-29).** This item previously ended "a flat quad
-   carrying the team-color flag combination fills through the unit's LOGOS
-   frame with a per-player shade byte from the player record instead". The
-   team bits are consulted only on the textured branch, and the byte is the
-   owner's colour index selecting a `LOGOS` frame, not a shade — see
-   [R-RAST-01 §3].
-3. **`SHD` applies to flat fills too, in the shaded renderer.** This
-   **corrects** the previous claim that the flat fill "takes the resolved
-   color byte with no SHD shading — flat colors do not vary with face
-   orientation (confirmed by a two-normal 3DO probe)". The probe result is
-   sound but was generalised past its case: it was taken on a renderer that
-   applies no `SHD` to anything. There are two flat span writers, one per
-   renderer. The **unshaded** renderer's flat writer stores the color byte
-   raw. The **shaded** renderer's flat writer stores `SHD[row*256 + color]`
-   with the same Gouraud-interpolated row the textured path uses. So a flat
-   face on a `BMcode=1` unit, or on any unit with `Shading` off, does not vary
-   with orientation — which is what the probe measured — but a flat face on a
+   [R-REN-03A §5] for the dispatch in full and for the stock-asset census:
+   across all 608 base 3DO models and 50,443 primitives, every one of the
+   43,845 textured primitives is a quad, while the 6,598 flat primitives occur
+   at vertex counts 2, 3, 4, 5, 6, 7, 8, 10, 12, 13 and 16 (3,312 of them are
+   non-quads). The team-colour bits are consulted only on the textured branch,
+   and the byte they select with is the owner's colour index choosing a
+   `LOGOS` frame, not a shade — see [R-RAST-01 §3].
+3. **`SHD` applies to flat fills too, in the shaded renderer.** There are two
+   flat span writers, one per renderer. The **unshaded** renderer's flat
+   writer stores the color byte raw. The **shaded** renderer's flat writer
+   stores `SHD[row*256 + color]` with the same Gouraud-interpolated row the
+   textured path uses. So a flat face on a `BMcode=1` unit, or on any unit
+   with `Shading` off, does not vary with orientation (a two-normal 3DO probe
+   on the unshaded renderer measured exactly that), but a flat face on a
    `BMcode=0` structure with `Shading` on does. Everything in this item
    describes the **shaded** piece renderer,
    which retail reaches only for a `BMcode=0` unit with the `Shading` display
@@ -1087,8 +1060,8 @@ N = per-vertex smooth normal:
    `0x0F` (15); else `row = trunc(dot*5.0) & 0x1F`
    wrapping negatives to `27..31` (not clamped); the gouraud interpolant is
    `rowStep = (rowR-rowL)/width` in signed 16.16 fixed point, and each pixel samples
-   `SHD[row*256+texel]`; the flat path fills the span directly with no `SHD`
-   lookup (direct-static). The light direction is read from three settings as
+   `SHD[row*256+texel]` on the textured path and `SHD[row*256+color]` on the
+   flat path (direct-static). The light direction is read from three settings as
    integers scaled by 0.01 and written through a dedicated setter that then
    rebuilds the shadow caches.
 
@@ -1109,17 +1082,18 @@ that image is blitted once. This section is the complete contract for that
 image: how it is sized, what its two planes mean, which pieces go into it and
 in what order, how a structure's image is anti-aliased through a 2×
 supersample, and how the result is placed on screen. Everything below is
-**Established (direct-static)** unless a paragraph says otherwise. It
-supersedes nothing in [03 §2.4] (the piece transform chain is unchanged) but
-it does correct [03 §2.4.1], [03 §5.2] and [03 §5.3] where noted.
+**Established (direct-static)** unless a paragraph says otherwise. The piece
+transform chain of [03 §2.4] is unchanged by it.
 
 ##### 1. The composition image
 
 Before any piece is drawn the engine measures the model. It walks every
 **visible** piece (draw bit set) and every vertex of those pieces, projects
 each vertex with the ordinary orthographic rule of [03 §2.5] **minus the
-viewport bias** — `sx = trunc(x)`, `sy = trunc(-z) - (trunc(y) >> 1)`, each
-component narrowed to signed 16-bit before use — and tracks the minimum and
+viewport bias** — `sx = hi16(x)`, `sy = hi16(-z) - (hi16(y) >> 1)`, where
+`hi16` is the high word of the 16.16 value, a floor ([R-RAST-01 §2] has the
+exact pipeline), each component narrowed to signed 16-bit before use — and
+tracks the minimum and
 maximum of `sx` and `sy`. The running extrema are **seeded at zero, not at
 the first vertex**, so the box always contains the model origin even for a
 model that lies entirely off to one side. The image is then
@@ -1153,7 +1127,7 @@ the model rasterizes, every projected vertex carries a third component beside
 its two screen coordinates:
 
 ```
-key = trunc(vertexY) + 50 + (definition authors Digger ? 75 : 0)
+key = hi16(vertexY) + 50 + (definition authors Digger ? 75 : 0)
 ```
 
 where `vertexY` is the vertex's height in whole world units **relative to the
@@ -1171,26 +1145,21 @@ non-strict, so **the highest face at each pixel wins and equal keys go to the
 later-drawn face**. When the key-plane pointer is null every span writer falls
 through to an unconditional write and the image is pure painter order.
 
-**Correction to the key formula.** [R-P0-19-N] previously stated
-`key = trunc(vertexY/2) + bias`, with the bias "50, or 125 when one
-unit-definition flag bit is set (`TODO(question)`: the authored name of that
-bit is not identified)". Both halves were wrong, and they were wrong for the
-same reason: the reading was taken from the anti-aliased branch of the vertex
-loop without noticing that that branch has **already doubled the vertex** two
-instructions earlier. The renderer has two vertex paths — plain, and the
-supersampled path of §6 — and they compute
+**The two vertex paths compute the same key.** The renderer has two vertex
+paths — plain, and the supersampled path of §6, which has already doubled the
+vertex two instructions before the key is formed — and they compute
 
 ```
-plain:        key = 50 [+75] + trunc(vertexY)
-supersampled: key = 50 [+75] + (2 * trunc(vertexY)) / 2
+plain:        key = 50 [+75] + hi16(vertexY)
+supersampled: key = 50 [+75] + (2 * hi16(vertexY)) / 2
 ```
 
 which are the same number. The `/2` is there to undo the doubling, not to
 halve the height. **The key is the whole world height, not half of it**, and
-implementing the halved form throws away half the depth resolution and
-roughly doubles how often two faces tie. The unidentified definition bit is
-the FBI key **`Digger`**, and its contribution is `+75`, which is what makes
-the documented `125` (`50 + 75`); see §7 for what the raised base is for.
+implementing a halved form throws away half the depth resolution and
+roughly doubles how often two faces tie. The definition bit is
+the FBI key **`Digger`**, and its contribution is `+75`, which makes
+`125` (`50 + 75`); see §8 for what the raised base is for.
 
 **The `ZBuffer` gate.** Whether a unit's image gets a key plane at all is
 **authored data**. At unit creation the instance copies one bit out of its
@@ -1207,13 +1176,11 @@ these holds, and the one-plane image otherwise:
 The engine's feature-backed pseudo-unit sets the same instance bit
 unconditionally, having no FBI to read.
 
-**Established (asset census, base `totala1.hpi`, 2026-08-28).** All 278 stock
+**Established (asset census, base `totala1.hpi`).** All 278 stock
 unit definitions author `ZBuffer`. Exactly two author `0` — `CORFAV` and
 `CORTRUCK` — and the other 276 author `1`. The per-pixel height buffer is
 therefore the normal case for stock content, not an exotic one, and an
 implementation that omits it reproduces retail for two units out of 278.
-`fbi.md`'s note that `ZBuffer` is "always 1; read by the engine" is now
-answered: it selects the key plane.
 
 ##### 3. Piece order and the tie rule
 
@@ -1229,7 +1196,7 @@ later piece**, while inside a piece the higher-mean-Y primitive wins. A
 forward piece walk inverts every one of those tie-breaks. This is not a
 cosmetic detail: on stock models whole regions of the silhouette change owner.
 
-**Established (composition experiment against stock geometry, 2026-08-28).**
+**Established (composition experiment against stock geometry).**
 Composing `ARMSOLAR` and `ARMLAB` from the base archive under the traced
 policy and under a forward walk, and counting pixels whose owning piece
 differs:
@@ -1300,8 +1267,7 @@ or re-blitted into it, both planes. Then:
 3. the waterline and digger passes of §7 run over the staging image;
 4. the staging image is blitted once.
 
-**Store width of the shifted key (Established, direct-static, 2026-09-02,
-RWU-19-43).** In step 2 the comparison is made at full register width — both
+**Store width of the shifted key (Established, direct-static).** In step 2 the comparison is made at full register width — both
 stored key bytes widened, the signed height delta added to the child's — but
 the store narrows: the staging plane receives the **low byte** of
 `childKey + heightDelta`, a wrapping byte add, not a saturation. A child
@@ -1309,15 +1275,13 @@ lifted far enough above its carrier for the sum to pass 255 therefore wins the
 comparison and then records a small key that later children and the waterline
 and digger erases see as low. Stock cargo and factory products stay within a
 few tens of world units of their carrier, so the wrap is unreachable with
-stock content; it is recorded because Nanolathe had guessed a saturating clamp
-there. The composite also has no clip of its own: it is skipped entirely when
+stock content; it is not a saturating clamp. The composite also has no clip of its own: it is skipped entirely when
 the child's pixel offset into the staging image is negative on either axis,
 and otherwise writes the child's whole box, which the union box always holds.
 
-This closes the `TODO(question)` recorded in [R-RND-02A] about "the unit
-placement path's second, separate invocation of the unshaded piece renderer,
-targeting a different image record than the dispatcher's". It is the live-piece
-pass: same renderer, different target (the staging image, not the cached one),
+The unit placement path's second, separate invocation of the unshaded piece
+renderer, targeting a different image record than the dispatcher's
+([R-RND-02A]), is this live-piece pass: same renderer, different target (the staging image, not the cached one),
 different mode selector (live rather than cached), and its guard — "the
 structure-class bit is clear, or the construction fraction equals the completed
 sentinel" — is exactly the "skip for a structure under construction" rule
@@ -1367,8 +1331,7 @@ All four apply the §2 key test identically and all four fall through to
 unconditional writes when the key plane is absent. **Established
 (bounded-negative):** none of the four tests the sampled texel against a
 transparent or color-key index — within the model raster path a texture is
-fully opaque. This corrects the incidental "transparent holes skip `SHD`"
-remark in [03 §5.2]; transparency in the model path is expressed only by the
+fully opaque. Transparency in the model path is expressed only by the
 composition image's own background index, which is what the final blit keys
 against.
 
@@ -1388,8 +1351,8 @@ plane to the transparent index, and rasterizes the whole model into that.
 Every projected vertex component is shifted left by one before the shear:
 
 ```
-sx = 2*trunc(x) + 2*origin.x
-sy = (2*trunc(-z) - ((2*trunc(y)) >> 1)) + 2*origin.y
+sx = 2*hi16(x) + 2*origin.x
+sy = (2*hi16(-z) - ((2*hi16(y)) >> 1)) + 2*origin.y
 ```
 
 Note that `(2y) >> 1` is exactly `y`, whereas `2 * (y >> 1)` loses the low
@@ -1431,11 +1394,8 @@ Two consequences follow directly and both are visible in retail:
   pads and nano beams are rasterized at 1× directly into the staging image
   over an anti-aliased cached body.
 
-**Closed (2026-08-29).** This paragraph previously recorded the shipped
-default of the `Anti_Alias` option as Unknown ("no compiled-in default write
-was found"). The default is in the settings reader: a registry miss sets the
-bit — anti-aliasing is **on** by default — and writes it back. See
-[R-RAST-01 §4].
+**The `Anti_Alias` default is on.** The settings reader sets the bit on a
+registry miss and writes it back ([R-RAST-01 §4]).
 
 **Bounded-negative residual.** The 2× scratch and the §4 staging image are the
 **same** buffer. Within one unit's presentation they are used in sequence, so
@@ -1451,10 +1411,8 @@ a BMcode=0 child unit.`
 
 ##### 7. The red/purple fringe is the downscale blending with palette index 1
 
-This closes [R-REN-02R], which listed "palette or `SHD` lookup" as
-"Established as a mapping stage; the actual row and output index are Unknown"
-and recorded the whole question as a P28 residual blocked on a capture. No
-capture is needed; the mechanism is arithmetic.
+The mechanism is arithmetic; no capture is needed to attribute the fringe
+pixels ([R-REN-02R] carries the bounded-negative census of what they are not).
 
 The composition image's background is not "nothing". It is the ordinary
 palette index **1**, written into every pixel of the colour plane before
@@ -1497,13 +1455,12 @@ reference screenshot. Implement the three `ALP` lookups verbatim, including
 the background samples.
 
 Note also what this rules out. The fringe is **not** authored texture content
-— the "authored texture fringe" reading offered as a supported inference in
-[R-REN-02R] is not needed and does not explain why the colours appear only on
+— an authored-fringe reading does not explain why the colours appear only on
 edges, only on buildings, and only in one-pixel width. It is not the model
 shadow, not a dither, not a team mapping, and not an outline writer; no
-generic outline writer exists, as [R-REN-02R] already established. The pixels
-`R-REN-02R` could not attribute are downscale outputs, and their neighbours
-inside the silhouette are ordinary blended texture.
+generic outline writer exists ([R-REN-02R]). The fringe pixels are downscale
+outputs, and their neighbours inside the silhouette are ordinary blended
+texture.
 
 ##### 8. Waterline, digger clipping, and the model shadow
 
@@ -1515,18 +1472,13 @@ the key must stay non-negative for geometry below the model origin.
 the unit is below the water surface and the threshold `t + 50 [+75 if Digger]`
 selects it. Which pass runs depends on ownership:
 
-- if the unit does not carry one particular runtime status bit **and** its
-  owner is not the local player, every pixel with `key <= threshold` is
+- if the unit does not carry the sonar-contact bit of [R-VIS-01 §4] **and**
+  its owner is not the local player, every pixel with `key <= threshold` is
   **erased** — set to the image's transparent index — so a submerged enemy
   simply is not drawn below the surface;
 - otherwise every pixel with `key <= threshold` whose colour is not already
   the transparent index is recoloured through a 256-entry **`BLUE TABLE`**, so
   the local player sees their own submerged hull tinted rather than cut off.
-
-**Closed (2026-08-29).** The status bit is the sonar-contact bit of
-[R-VIS-01 §4]; this paragraph previously carried an open question marker for
-its meaning. See [R-RAST-01 §4], which also corrects the ship/structure
-attribution two paragraphs below.
 
 **Digger clipping.** A definition that authors `Digger` gets `+75` added to
 every key in §2, and after the waterline pass the image is erased wherever
@@ -1536,7 +1488,7 @@ below the model origin: the buried half of a pop-up defence. **Established
 `CORVIPE`.
 
 **Model shadows use three branches.** The complete Established contract is
-[R-REN-03D], with the branch census closed in [R-RAST-01 §4]. After the common
+[R-REN-03D], with the branch census in [R-RAST-01 §4]. After the common
 master-shadow and `noshadow` tests, retail selects exactly one branch:
 
 1. A **Digger** copies the finished body image, flattens each non-transparent
@@ -1560,25 +1512,15 @@ the terrain height under the subject, and blend palette index 0 through `ALP`.
 The tinted blitter produces no visible shadow when `Shading` is disabled. None
 of the branches uses a stencil, dither, or `SHD` row.
 
-**Correction.** This section previously described every model shadow as a
-copy of the finished body silhouette and asserted that no second
-rasterization existed. That was complete only for the Digger and mobile
-branches; the structure branch performs the separate rasterization described
-above. It also incorrectly applied the mobile `canhover`/`floater` gate to
-structures and attributed the cached branch to ships.
-
-**Table roster correction.** [03 §4.3] lists `ALP`, `LHT` and `SHD`. The
-renderer installs **five** tables, and two consumers documented elsewhere were
-attributed to the wrong one. In install order and size: the 65,536-byte
+**Table roster.** The renderer installs **five** tables. In install order and
+size: the 65,536-byte
 `ALPHA TABLE` (`ALP`), the 8,192-byte `SHADE TABLE` (`SHD`), the 8,192-byte
 `LIGHT TABLE` (`LHT`), a 256-byte `GRAY TABLE` ([03 §4.3.3]), and a 256-byte
 `BLUE TABLE`. The anti-alias downscale of §6 reads `ALP`; the shaded span
 writers read `SHD`; the submerged tint of this section reads `BLUE TABLE`.
-This supersedes the earlier note that a shadow path "darkens through an `SHD`
-row" reached by way of the fifth table slot — that slot is the blue tint and
-that path is the waterline, not a shadow. It likewise supersedes the earlier
-bounded-negative claim that "`ALP` is not used" in this family: `ALP` is used,
-by the anti-alias downscale, three times per output pixel.
+The fifth table slot is the blue tint and its consumer is the waterline, not
+a shadow; `ALP` is used, by the anti-alias downscale, three times per output
+pixel.
 
 ##### 9. Order of operations, in one place
 
@@ -1610,10 +1552,8 @@ construction change):
 
 #### R-REN-03D — model shadows: projection, fill, tinting, and cache
 
-[R-REN-03A §8] corrected [03 §5.3]'s "doubled stencil with an `SHD` darken and
-a dither checker" but then described every shadow as a flattened silhouette
-copy. That was incomplete: the Digger and ordinary-mobile branches use that
-silhouette path, while the structure branch re-rasterizes the model through a
+The Digger and ordinary-mobile branches of [R-REN-03A §8] use the flattened
+silhouette copy, while the structure branch re-rasterizes the model through a
 dedicated shadow projection and caches the result. This section is the whole
 contract. Everything is **Established (direct-static)** unless a paragraph
 says otherwise.
@@ -1666,29 +1606,16 @@ sy  = hi16(-vertexZ) - q
 key = hi16(vertexY) + 25
 ```
 
-**Correction (2026-08-30).** This block previously read `q = trunc(vertexY)
->> 2`, `sx = trunc(vertexX) + q`, `sy = trunc(vertexZ) - q`, `key =
-trunc(vertexY) + 25` — narrowing by truncation toward zero, and building the
-screen Y lane from the **plain** vertex Z with no negation. Both halves were
-wrong and the missing Z sign was the material one. Three things settle it.
-First, [R-RAST-01 §2] later established that every composition-path vertex
-narrows by taking the high word of the 16.16 value — floor, which differs from
-truncation by one on a negative fractional coordinate, and rotated vertices
-routinely carry a fractional part — and restated the body's own screen Y lane
-as `Zn = hi16(-vz)`, the negation applied before the narrowing; that section
-corrected [R-REN-03A §1] and [R-REN-03A §6] but did not reach this block.
-Second, this section's own prose names exactly three differences between the
-shadow walk and the body walk — the cache-bit gate, the flat filler at any
-vertex count, and the literal fill colour — and a Z sign is not among them; the
-only projection difference it states is quarter-shear-instead-of-half. Third,
-the old reading is self-refuting on the geometry: two projections of one model
-that disagree on handedness make a structure's shadow a Z-mirrored copy of its
-own body, swinging the wrong way as the unit turns, and put the structure
-branch out of step with the Digger and mobile branches of §6, which cast the
-finished body silhouette itself and therefore carry the body's sign by
-construction. The negated, high-word form above is **Established
-(direct-static)**; the previous form was a transcription slip in this write-up,
-not a second observation that competes with it.
+The narrowing is the high word of the 16.16 value (floor, as for every
+composition-path vertex, [R-RAST-01 §2]) and the Z lane is negated before it,
+exactly as the body's own screen Y lane `Zn = hi16(-vz)`; the shadow walk
+differs from the body walk only in the cache-bit gate, the flat filler at any
+vertex count, the literal fill colour, and the quarter shear in place of the
+half shear. Two projections of one model that disagreed on handedness would
+make a structure's shadow a Z-mirrored copy of its own body, out of step with
+the Digger and mobile branches of §6, which cast the finished body silhouette
+itself and therefore carry the body's sign by construction. **Established
+(direct-static).**
 
 That is a 45-degree light in screen space: a vertex one unit up moves a quarter
 pixel right and a quarter pixel up. The key base is **25**, not the body
@@ -1731,9 +1658,7 @@ if (src != srcImage.transparentIndex)
 ```
 
 Three facts follow. It reads `ALP`, the same 65,536-byte blend table the
-anti-alias downscale uses — this is the second consumer that [03 §5.3]'s
-"ALP is not used in either shadow family (bounded-negative)" denied, and that
-claim is now withdrawn twice over. It is a **blend with what is already on the
+anti-alias downscale uses. It is a **blend with what is already on the
 ground**, so a shadow darkens terrain rather than replacing it. And because
 every shadow pixel is index 0, the result is `ALP[0*256 + ground]`: each ground
 pixel snapped to the nearest palette entry halfway to black. No `SHD` row, no
@@ -1756,13 +1681,11 @@ After the structure rasterization of §2, retail additionally:
    RLE, copies the dimensions and origin across, and caches it on the draw
    record. The cache is dropped whenever the composition image is rebuilt.
 
-**Closed (2026-08-29).** This paragraph previously recorded as Unknown how
-the punch-out's five-pixel offset composes with the blit's, and advised
-drawing the shadow without the punch-out. The two offsets cancel: the hole
-lands exactly at the body's own screen position. Implement the punch-out.
-See [R-RAST-01 §4].
+The punch-out's five-pixel offset and the blit's cancel: the hole lands
+exactly at the body's own screen position ([R-RAST-01 §4]). Implement the
+punch-out.
 
-##### 6. The silhouette branches and correction to [R-REN-03A §8]
+##### 6. The silhouette branches
 
 The Digger and ordinary-mobile branches copy the unit's own finished
 composition image — both planes — and flatten every non-transparent colour
@@ -1770,13 +1693,24 @@ pixel to palette index 0. Their branch-specific key-plane erasures are stated
 in §1. The structure branch instead re-rasterizes through §2 and fills its
 faces with index 0 directly. All three end at the same §4 blitter with the same
 §3 placement: a black silhouette blended over the ground, five pixels right
-and sheared by terrain height. The earlier section was therefore correct about
-the result and the two silhouette branches, but wrong to imply that no separate
-shadow geometry exists.
+and sheared by terrain height.
 
 #### R-REN-02R — red/purple fringe provenance
 
-**Established (asset census, 2026-08-28).** The representative ARMSOLAR and
+The fringe is produced by the structure anti-alias downscale of
+[R-REN-03A §6]–[R-REN-03A §7]: a building is rasterized into a 2x offscreen
+image whose background is palette index 1, and the 2:1 downscale feeds all
+four samples of every 2x2 block through the `ALP` blend table without
+excluding background samples. Blocks that straddle the silhouette therefore
+blend model colour with `PALETTE.PAL` entry 1, `(128, 0, 0)` — dark maroon —
+and land on red or dusty-purple palette entries. The fringe pixels are already
+present in the unit's own composition image before it reaches the world
+surface. Reproduce the filter verbatim, background samples included: a
+downscale that skipped them would draw cleaner silhouettes than retail. This
+section records the asset and renderer census that excludes every other
+candidate.
+
+**Established (asset census).** The representative ARMSOLAR and
 ARMLAB 3DOs reference ordinary indexed GAF model textures. The inspected
 entries are uncompressed, use color key `9`, and contain authored red/maroon
 or purple palette indices as ordinary texels:
@@ -1786,84 +1720,41 @@ or purple palette indices as ordinary texels:
 | ARMSOLAR base and dish pieces | `stone2`, `CorSol1a`, `metal3a`–`metal3d`, `Arm01b`–`Arm01d`, `32XGouraud` | `stone2` is 64×64 with no key texels and includes red/maroon source indices 19, 21, 22, 23, and 27; `CorSol1a` is 32×64 with no key texels and includes purple source indices 154–159 and 221. |
 | ARMLAB base and child pieces | `ArmV3a`–`ArmV3d`, `noise6b`–`noise6d`, `Energy1`, `Energy4`, `ArmPlat02`, `ArmPlat02c`, `32XGouraud` | The entries are likewise indexed model textures; red/purple indices occur in `noise6*` and `Energy4` rather than in one special fringe resource. |
 
-These are source-texture indices, before any model `SHD` lookup. The broad
-presence of such values inside opaque texture interiors, and their recurrence
-in unrelated model textures, establishes authored colored texels as a
-possible provenance. It does **not** identify any screenshot pixel or prove a
-generic fringe rule. The two observed color-key texels in `Arm01b` are on its
-top edge; that bounded example is insufficient to generalize a color-key edge
-effect. Texture selection, indexed sampling, and the shaded/unshaded `SHD`
-boundary remain the contracts in [03 §2.4.1] and [03 §4.3].
+These are source-texture indices, before any model `SHD` lookup. Such values
+occur inside opaque texture interiors and recur in unrelated model textures;
+they are real authored content, but they do not explain a one-pixel border
+that appears only on edges, only on `BMcode=0` units, and only when the
+`Anti_Alias` option is on. The two observed color-key texels in `Arm01b` are
+on its top edge; that bounded example does not generalize to a color-key
+edge effect. Texture selection, indexed sampling, and the shaded/unshaded
+`SHD` boundary are the contracts in [03 §2.4.1] and [03 §4.3].
 
 **Established (bounded renderer behavior).** The model face mapper consumes a
-source GAF index, skips structural key pixels, and either writes that index
-directly or applies the selected `SHD` row; it has no established generic
-anti-alias, outline, RGB blend, or random/dither fringe writer. The separate
-model-shadow path is the three-branch `ALP` contract of [R-REN-03D] and uses
-neither a stencil nor dither; it does not write the model's body pixels.
-Painter ordering means a later admitted writer can replace an earlier indexed
-pixel; this is not evidence that the replacing writer is a fringe pass.
+source GAF index and either writes that index directly or applies the
+selected `SHD` row; it has no generic anti-alias, outline, RGB blend, or
+random/dither fringe writer of its own — the anti-aliasing is the resolve
+step that runs after the whole model is rasterized, not the mapper. The
+separate model-shadow path is the three-branch `ALP` contract of [R-REN-03D]
+and uses neither a stencil nor dither; it does not write the model's body
+pixels. Painter ordering means a later admitted writer can replace an earlier
+indexed pixel; this is not evidence that the replacing writer is a fringe
+pass.
 
-The candidate causes are consequently classified as follows:
+The candidate causes, classified:
 
-- **Authored texture fringe — Supported inference only.** It is viable when a
-  winner trace reaches one of the colored source texels, but no screenshot
-  pixel has been tied to one.
-- **Palette or `SHD` lookup — Established as a mapping stage; the actual row
-  and output index are Unknown** for the representative pixels.
-- **Polygon edge/span inclusion and equal-height tie — Unknown.** The asset
-  census cannot distinguish an edge sample from an interior sample or identify
-  the winning face.
-- **Team mapping — Unknown.** The exactly-10-frame `32XGouraud` team-texture
-  rule is established, but these screenshots do not establish that it wrote
-  the fringe pixels.
-- **Shadow or dither — rejected.** Model shadows are drawn before the body and
-  do not write body pixels; no model-shadow branch uses dither.
-- **Outline or anti-alias writer — no generic writer is established.** This is
-  not permission to add one.
-- **Color-key edge — rejected as a broad explanation by the opaque examples;
-  still Unknown for any particular edge pixel.**
-- **Framebuffer compositing — painter overwrite is Established, but the
-  exact winning writer is Unknown.**
-
-**Supported inference.** If a captured fringe pixel can be tied to one of the
-opaque source texels above, its red or purple appearance is most plausibly
-authored texture content after the normal palette/`SHD` mapping. The recurrence
-of those colors across ordinary textures argues against a model-wide red or
-purple outline, but does not establish the final pixel writer.
-
-**Closed (2026-08-28) — see [R-REN-03A §7].** The residual recorded here is
-answered, and the answer required no capture. The fringe is produced by the
-structure anti-alias downscale: a building is rasterized into a 2x offscreen
-image whose background is palette index 1, and the 2:1 downscale feeds all
-four samples of every 2x2 block through the `ALP` blend table without
-excluding background samples. Blocks that straddle the silhouette therefore
-blend model colour with `PALETTE.PAL` entry 1, `(128, 0, 0)` — dark maroon —
-and land on red or dusty-purple palette entries. The disposition of the
-candidate causes listed above changes accordingly:
-
-- **Palette lookup — now Established, and it is `ALP`, not `SHD`.** The row
-  and output index are given by the three-lookup box filter in
-  [R-REN-03A §6]; the specific outputs for white, black and yellow sources
-  are measured in [R-REN-03A §7].
-- **Authored texture fringe — no longer needed.** The colored source texels
-  catalogued above are real, but they do not explain a one-pixel border that
-  appears only on edges, only on `BMcode=0` units, and only when the
-  `Anti_Alias` option is on. Nothing here demotes the asset census; it simply
-  is not the cause.
-- **Anti-alias writer — Established.** The earlier statement that "no generic
-  anti-alias writer is established … this is not permission to add one" was
-  correct about the *model face mapper*, which indeed has none. The
-  anti-aliasing is not in the mapper; it is the resolve step that runs after
-  the whole model is rasterized.
-- **Team mapping, shadow, dither, colour-key edge — all remain not-the-cause,
-  and are now excluded rather than merely unranked.**
-- **Framebuffer compositing — not involved.** The fringe pixels are already
-  present in the unit's own composition image before it reaches the world
-  surface.
-
-Reproduce the filter verbatim, background samples included: a downscale that
-skipped them would draw cleaner silhouettes than retail.
+- **Palette lookup — Established, and it is `ALP`, not `SHD`.** The row and
+  output index are given by the three-lookup box filter in [R-REN-03A §6];
+  the specific outputs for white, black and yellow sources are measured in
+  [R-REN-03A §7].
+- **Authored texture fringe — not the cause.** The colored source texels
+  catalogued above are real, but they do not explain the border's
+  edge-only, structure-only, option-gated appearance.
+- **Team mapping, shadow, dither, colour-key edge — excluded.** Model shadows
+  are drawn before the body and do not write body pixels; no model-shadow
+  branch uses dither; the exactly-10-frame `32XGouraud` team-texture rule
+  is established but writes no fringe pixel.
+- **Outline writer — none exists.** This is not permission to add one.
+- **Framebuffer compositing — not involved.**
 
 #### R-SEL-02A — selection geometry, palette, and composition boundary
 
@@ -1871,8 +1762,7 @@ skipped them would draw cleaner silhouettes than retail.
 swapped to primitive zero during model loading and the ordinary model-face
 walk starts at primitive one whenever such a primitive exists. It therefore
 does not contribute a model pixel, a model paint key, or a model hit shape.
-This corrects the earlier selection-plan assumption that the authored plate
-was the retail selection wireframe. The same exclusion is used by completed
+The same exclusion is used by completed
 and under-construction model paths; a construction image does not re-admit
 primitive zero.
 
@@ -1889,35 +1779,16 @@ frame writer is clipped against the active inclusive world-surface clip.
 The palette argument is already a physical indexed-pixel value. The outer
 frame selects logical map entry 15 and the inner frame always selects entry 0;
 the 6/4 pair replaces the outer entry only while the armed latch is MOBILEBUILD
-— entry 6 when latch-flag bit `0x40` is set, entry 4 when it is clear
-[07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"]. Each logical
+— entry 6 when **bit 6 of the pointer-flags byte** is set, entry 4 when it is
+clear [07 R-P0-11 §1 "The drawing."][07 §6 "Frame composition passes"]. That
+bit is the site-valid bit of [07 R-CAM-01 §14] step 1, whose one writer is the
+in-view placement preview and whose clearer is the world rebuild; it is not
+bit `0x40` of the latch-flags word, which carries immediate-versus-special
+helptext. Each logical
 entry is resolved once through the runtime logical-to-physical map before the
 solid writer; there is no ALP, LHT, or SHD operation and no per-pixel blend.
 This is the complete palette contract for the observed selection outline; no
 authored-plate wireframe palette exists in the traced renderer.
-
-**Correction (2026-08-31, PT4).** The previous text of this paragraph said
-"The outer frame selects logical map entry 4, or entry 6 when the armed
-build/wake flag is set; outside that box-selection mode it selects entry 15."
-That is inverted. It read the 6/4 pair as the ordinary case and entry 15 as a
-fallback reached only outside box-selection mode, but the two independent
-statements in doc 07 agree that entry 15 is the ordinary drag rectangle and
-that the 6/4 pair is conditioned on the armed MOBILEBUILD latch, not on the
-existence of a drag: [07 R-P0-11 §1 "The drawing."] states that the
-drag-selection rectangle "takes 15 (white) outer and 0 (black) inner", and
-[07 §6]'s minimap-marker correction states that the 6/4 values are "the
-drag-selection rectangle's outer colour-map entries chosen by that same latch
-bit **while the armed latch is MOBILEBUILD** (outer entry 6 when the bit is
-set, 4 when clear, else entry 15; inner entry 0)". The inverted reading was
-observable: logical 4 resolves to a dark red, so a build following this
-paragraph painted every selection drag red. What writes the bit that picks 6 over 4 is closed (2026-09-04, WU-19-160):
-it is **bit 6 of the pointer-flags byte**, the site-valid bit of
-[07 R-CAM-01 §14] step 1, whose one writer is the in-view placement preview and
-whose clearer is the world rebuild — not bit `0x40` of the latch-flags word,
-which carries immediate-versus-special helptext. This paragraph and doc 07's
-Unknown list both named the latch-flags word, which is why a census of that
-word's writers found nothing: the question was asked of the wrong byte, both
-bits being written `0x40`. **Established.**
 
 Fog is composed after the world strips, units, projectiles, and effects, and
 before this selection overlay. Thus world pixels are subject to the fog/LOS
@@ -1930,9 +1801,8 @@ not be substituted for the clip rectangle's left/top values. The HUD rail is
 composed later and may cover overlapping outline pixels. A separate
 authored-plate clip policy cannot be claimed because the plate is not drawn.
 
-**Viewport-coordinate correction.** Earlier descriptions in this document
-and in the interface document conflated the transition-time battle viewport
-record with the beam-space projection origin. The static call chain proves
+**Viewport-coordinate record.** The transition-time battle viewport record
+and the beam-space projection origin are distinct. The static call chain proves
 which record the selection writer consumes, but not the record's left edge
 for every panel/mode state (the corpus contains both a visible-panel
 `(128,32,W-1,H-33)` description and a transition/input `(0,32,W-1,H-33)`
@@ -1951,27 +1821,19 @@ boundary questions.
 
 ### OTA-RND-02A — model-path shading and stock reachability [R-RND-02A]
 
-**Correction.** The previous text of this section said that the model path
-"does not test FBI `BMcode`, `CanMove`, or `CanFly`", that both the fixed and
-mobile paths "use the same per-vertex normal, `SHD` row, and Gouraud row
-interpolation", and that "there is therefore no established class-wide
-mobile-unshaded rule". That is wrong, and it was wrong because it answered a
-different question than the one asked. The unit piece-draw dispatcher makes
-**two independent decisions**, and the earlier trace followed only the first
-of them. The first decision — which image record the piece geometry is
-composed into — is indeed taken from runtime draw state and does test no FBI
-field. The second decision, taken further down the same dispatcher, chooses
-**which of two piece renderers** runs, and it is a class gate: retail shades
-structures and never shades mobile units. A player's report that retail
-shades buildings, or parts of them, and never shades mobile units is
-accurate, and the corrected contract below is what produces it.
+The unit piece-draw dispatcher makes **two independent decisions**. The
+first — which image record the piece geometry is composed into — is taken
+from runtime draw state and tests no FBI field. The second, taken further
+down the same dispatcher, chooses **which of two piece renderers** runs, and
+it is a class gate: retail shades structures and never shades mobile units.
+Retail visibly shades buildings, or parts of them, and never shades mobile
+units; the contract below is what produces it.
 
 **Established (direct-static): the two decisions.**
 
 1. *Image source.* The fixed/mobile split selects an image-cache/rebuild path
    from runtime draw state (main versus auxiliary draw, the runtime unit state
-   bit, and construction fraction). It tests no FBI field. This part of the
-   earlier description stands.
+   bit, and construction fraction). It tests no FBI field.
 2. *Rasterizer.* The dispatcher then runs the **shaded** piece renderer if and
    only if two conditions both hold: the unit instance's class/status word has
    the structure-class bit set, **and** the global display option named
@@ -1993,14 +1855,17 @@ having no FBI to read. So the renderer's class gate reduces to authored data:
 
 **Established (direct-static): what the two renderers differ in.** Both walk
 the same piece list, honour the same per-piece draw and cache bits, apply the
-same selection-plate exclusion, the same quads-only rule for untextured
-primitives, and the same team/logo flat-fill treatment. The shaded renderer
+same selection-plate exclusion, the same quads-only rule for textured
+primitives and any-arity rule for flat ones, and the same team-texture
+(`LOGOS`) treatment. The shaded renderer
 additionally computes face normals and per-vertex smooth normals, derives a
 `SHD` row per vertex, emits a fourth per-vertex component carrying that row,
 and hands textured faces to the Gouraud `SHD` scanline mapper of section
 2.4.1. The unshaded renderer emits three-component vertices with no row at
 all and hands textured faces to a plain texture mapper that performs no `SHD`
-lookup. Untextured flat faces bypass `SHD` in both, as before.
+lookup. Untextured flat faces take the shaded flat writer
+(`SHD[row*256 + color]`) in the shaded renderer and the raw colour byte in
+the unshaded one ([R-REN-03A §5]).
 
 **Established (bounded-negative):** the per-piece shade bit is read **only**
 inside the shaded renderer. The unshaded renderer reads the same piece flags
@@ -2015,8 +1880,7 @@ restore-defaults path sets that bit, so shading is on unless the player turns
 it off. With it off, structures take the unshaded renderer too and the game
 draws no model shading at all.
 
-**Established (direct-static): piece-flag polarity is unchanged by this
-correction.** The model fill starts each geometry-bearing piece with the shade
+**Established (direct-static): piece-flag polarity.** The model fill starts each geometry-bearing piece with the shade
 bit **set**; the interpreter passes one for `SHADE` and zero for `DONT_SHADE`
 into a per-piece setter that writes that value into the bit; and the shaded
 renderer computes the normal-derived row when the bit is set and pins row 15
@@ -2079,7 +1943,7 @@ gate. **Established (static bytecode census):** no requested script uses
 `Create`/activation callback set, and it addresses the named pieces in the
 table.
 
-The census also reads differently now. Every row with `Create DONT` greater
+Reading the census: every row with `Create DONT` greater
 than zero is a `BMcode=0` structure, and every `BMcode=1` row has a zero
 count. That is not a coincidence of authoring taste: a `DONT_SHADE` in a
 mobile unit's script would have no observable effect, because the renderer
@@ -2090,12 +1954,12 @@ structure stays shaded — which is exactly the "parts of a building are
 shaded" appearance. `ARMSOLAR`, a `BMcode=0` structure with no `DONT_SHADE`
 at all, is fully shaded.
 
-**Effective policy for OTA-RND-02B.** Select the shaded piece renderer when
+**Effective policy.** Select the shaded piece renderer when
 the unit's definition authors `BMcode=0` **and** the `Shading` display option
 is on; otherwise select the unshaded renderer. In the shaded renderer, apply
 the per-piece shade bit (set by default, cleared by `DONT_SHADE`, restored by
-`SHADE`), pin row 15 when it is clear, and let untextured flat faces bypass
-`SHD`. In the unshaded renderer, ignore the per-piece shade bit entirely.
+`SHADE`), pin row 15 when it is clear, and write flat faces through the same
+row. In the unshaded renderer, ignore the per-piece shade bit entirely.
 Do **not** gate on `CanMove`, `MaxVelocity`, or `CanFly`.
 
 **Unknown.** The identical-model six-variant runtime matrix was not run: the
@@ -2103,12 +1967,10 @@ clean-room work-unit constraint forbids automating the retail executable, so
 pixel-for-pixel outcomes of that synthetic matrix remain unverified against a
 running retail build. The static contract above does not depend on it.
 
-**Closed (2026-08-28).** This section previously recorded as Unknown "a
-second, separate invocation of the unshaded piece renderer, targeting a
-different image record than the dispatcher's, guarded by 'the structure-class
-bit is clear, or it is set and the construction fraction equals the completed
-sentinel'", and asked whether it was a second body pass, a silhouette pass, or
-a live draw. It is the **live-piece pass** of [R-REN-03A §4]: the same
+**The second unshaded-renderer invocation** — targeting a different image
+record than the dispatcher's, guarded by "the structure-class bit is clear,
+or it is set and the construction fraction equals the completed sentinel" —
+is the **live-piece pass** of [R-REN-03A §4]: the same
 renderer, targeting the staging image rather than the cached one, with the
 mode selector set to draw exactly the pieces whose cache bit is clear — the
 animated doors, pads, nano beams and blinkers. Its guard is the "skip for a
@@ -2119,9 +1981,9 @@ pass nor a silhouette pass. Note also that the live pass always runs the
 gate, so an animated piece on a `BMcode=0` structure takes no `SHD` row even
 when the rest of that structure is shaded. Stock factory scripts clear the
 per-piece shade bit on exactly those pieces anyway (the `DONT_SHADE` census
-below), so the two mechanisms agree rather than compete.
+above), so the two mechanisms agree rather than compete.
 
-### Closed — the polygon raster, exactly: edge walk, span inclusion, the winding cull, and the fixed-point steps [R-RAST-01 §1] (2026-08-29)
+#### The polygon raster, exactly: edge walk, span inclusion, the winding cull, and the fixed-point steps [R-RAST-01 §1]
 
 [R-REN-03A §5] named the four span writers and the key test; this section is
 the scan converter that feeds them, at the precision an implementer needs to
@@ -2192,7 +2054,7 @@ to `0`) until the next index equals `m`, writing `right[r]` and `rightA[r]`.
 Both chains index the edge table from row `yStart`; an edge clipped at `T`
 lands on the same table row as an unclipped one would have.
 
-**Edge table rows are always written (Established, 2026-09-02, RWU-19-43).**
+**Edge table rows are always written (Established).**
 The two tables are uninitialised scratch — stack arrays the filler only
 probes for — and there is no per-face clear, yet no row the fill reads is ever
 stale. Each chain is an index path that starts at the corner holding `minY`
@@ -2203,8 +2065,7 @@ itself writes some rows more than once, and such a row keeps the **later**
 edge's values. Clipping does not change this: the fill's `[yStart, yEnd)` lies
 inside `[minY, maxY)`, and an edge clipped at `T` still writes every row of its
 own range at or below `T`. An implementation needs neither a "written" mark nor
-a clear; a row it would consider unwritten cannot occur. (Nanolathe had carried
-a `TODO(question)` treating such a row as an empty span; there is no such row.)
+a clear; a row it would consider unwritten cannot occur.
 
 **5. The fill.** For `r` in `[yStart, yEnd)`, with `xl = left[r]` and
 `xr = right[r]`:
@@ -2260,12 +2121,11 @@ RNG-silent end to end (the composer, the per-unit present, both piece
 renderers, the staging and child composite, and every filler call no RNG
 helper).
 
-### Closed — the vertex pipeline: floor, not truncation; and the live-piece path sums before it floors [R-RAST-01 §2] (2026-08-29)
+#### The vertex pipeline: floor, not truncation; and the live-piece path sums before it floors [R-RAST-01 §2]
 
-**Correction to [R-REN-03A §1] and [R-REN-03A §6].** Those sections wrote
-the projected components as `trunc(x)`, `trunc(-z)`, `trunc(y)`. The
-operation is the **high 16-bit word of the 16.16 value**, i.e. `floor`, and
-for a negative fractional coordinate floor and trunc differ by one. The
+The projected components of [R-REN-03A §1] and [R-REN-03A §6] are the
+**high 16-bit word of the 16.16 value**, i.e. `floor`, not a truncation; for
+a negative fractional coordinate floor and trunc differ by one. The
 rotate helper of [03 §2.4] rounds to nearest before storing ([R-DET-01 §2]
 owns that rounding), so a rotated vertex generally carries a fractional
 part, and the distinction is live. Established (direct-static), the
@@ -2305,17 +2165,13 @@ not share one projection helper between the two paths.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-### Closed — team colour: the owner's colour index selects the `LOGOS` frame, and the frame's own size feeds the default corners [R-RAST-01 §3] (2026-08-29)
+#### Team colour: the owner's colour index selects the `LOGOS` frame, and the frame's own size feeds the default corners [R-RAST-01 §3]
 
-**Correction to [03 §2.4.1] item 2.** That item said "a flat quad carrying
-the team-color flag combination fills through the unit's LOGOS frame with a
-per-player shade byte from the player record instead". Wrong on both counts:
-the team bits are read only on the **textured** branch (authored `IsColored`
-bit 0 clear, exactly four vertices), and the byte is not a shade — it is the
-owner's **colour index**, used as a frame number. A flat primitive goes to
-the flat filler with its authored colour byte and never consults the team
-bits. The dispatch in [R-REN-03A §5] was already correct; the sentence in
-item 2 was a leftover from an earlier reading.
+The team bits are read only on the **textured** branch (authored `IsColored`
+bit 0 clear, exactly four vertices), and the byte they select with is not a
+shade — it is the owner's **colour index**, used as a frame number. A flat
+primitive goes to the flat filler with its authored colour byte and never
+consults the team bits ([R-REN-03A §5]).
 
 **Established (direct-static).** For a textured quad whose loader-written
 resolve-at-draw-time bit is set: when the team bit is also set the frame is
@@ -2337,15 +2193,14 @@ owns those writers; the renderer only reads the byte.
 **Which primitives are team-coloured.** The loader sets the team bit on
 every primitive whose texture name resolves to an entry with **exactly ten
 frames** ([03 §2.4.1] item 4, [R-CRD-005 §1]); the artist authors nothing but
-the name. **Established (asset census, stock `textures/logos.gaf`,
-2026-08-29):** the file holds 18 entries; 17 have ten frames — `colorslt`,
+the name. **Established (asset census, stock `textures/logos.gaf`):** the
+file holds 18 entries; 17 have ten frames — `colorslt`,
 `colorsmd`, `colorsdk`, `colordk2`, `Solid1a`, `Solid2a`, `Solid3a`,
 `Solid3b`, `Solgradb`, `32xlogos`, `32XGouraud`, `Arm32Lt`, `Arm32Dk`,
 `Core32Lt`, `Core32Dk` and two more of the same shape — and `onoff01` has
 two frames and is therefore an ordinary animated texture, not a team one.
 
-**The "per-player dimension deltas" of the old tail item.** There are no
-deltas to apply. The textured mapper reads only the selected frame's width,
+**Per-player dimension deltas.** There are none to apply. The textured mapper reads only the selected frame's width,
 height and pixel plane; it never reads the frame's `xOff`/`yOff`, and it
 builds the default corners `(0,0) (w-1,0) (w-1,h-1) (0,h-1)` from **that
 frame's** `w` and `h`. Frames of one entry are not all the same size —
@@ -2357,16 +2212,14 @@ rows over the same screen area that another player's `32×32` frame covers in
 `h-1` is one larger. The frame offsets, which vary wildly across colours in
 the stock file, are inert in the model path.
 
-### Closed — corrections gathered from the shadow, waterline and option paths [R-RAST-01 §4] (2026-08-29)
+#### The option defaults, the waterline bit, the shadow gate and the punch-out offset [R-RAST-01 §4]
 
-**`Anti_Alias` shipped default — closes the Unknown in [R-REN-03A §6].** The
-settings reader looks the value up under the registry key `Anti-Alias` (the
+**`Anti_Alias` shipped default.** The settings reader looks the value up under the registry key `Anti-Alias` (the
 value name carries a hyphen; the option's in-engine name is the underscore
 form) alongside `Shadows`, `VehicleShadows` and `FeatureShadows`. On a miss
 it **sets** the bit — anti-aliasing is on by default — and writes the default
-back through the registry miss-path helper of [R-TERR-01 §8]. The earlier
-"no compiled-in default write was found" looked in the option handlers; the
-default is in the reader. **Established (direct-static).** The Options
+back through the registry miss-path helper of [R-TERR-01 §8]. The default
+is in the reader, not in the option handlers. **Established (direct-static).** The Options
 screen's `RESTORE` gadget likewise sets bits 1..5 (anti-alias, master
 shadows, vehicle shadows, feature shadows, shading) together.
 
@@ -2379,9 +2232,8 @@ three then rebuilds the shadow caches and repaints when a battle is live.
 `BSHADOWS` is that gadget's name, not a registry value and not an authored
 key; the registry mirrors are the four names above.
 
-**The submerged erase-versus-tint bit — closes the open question in
-[R-REN-03A §8].** The "particular runtime status bit" is the **sonar-contact
-bit** of the sensor phase ([R-VIS-01 §4], [R-VIS-01 §5]): the same bit the
+**The submerged erase-versus-tint bit.** The status bit the waterline pass
+of [R-REN-03A §8] tests is the **sonar-contact bit** of the sensor phase ([R-VIS-01 §4], [R-VIS-01 §5]): the same bit the
 direct-visibility predicate consults to accept a fully submerged unit. The
 waterline pass therefore reads: a submerged enemy the viewer has **no sonar
 contact on** is cut off at the surface; a unit the viewer owns, or has on
@@ -2389,9 +2241,7 @@ sonar, is tinted through the `BLUE TABLE` instead. The engine's feature-backed
 pseudo-unit sets the bit permanently at construction, so a 3DO feature — a
 wreck — is **always tinted, never cut** (§6 below).
 
-**The shadow gate — corrects [R-REN-03D §1].** That section required the
-vehicle-shadow bit for every model shadow. The unit present has **three**
-shadow branches, selected after the master-shadows bit and the definition's
+**The shadow gate.** The unit present has **three** shadow branches, selected after the master-shadows bit and the definition's
 `noshadow` have passed:
 
 1. **Digger** (definition bit set): silhouette copy of the finished body
@@ -2418,25 +2268,22 @@ shadow branches, selected after the master-shadows bit and the definition's
 
 So toggling `VehicleShadows` off removes the shadows of mobile units and
 diggers and leaves structure shadows in place; the master `Shadows` bit
-removes all three. [R-REN-03A §8]'s "ships take a separate cached shadow
-image instead, gated on the unit being above sea level" conflated branches
-2 and 3: ships are mobile and take branch 2; the cached image belongs to
-structures, and the sea-level gate only ever bites on wrecks. Everything in
+removes all three. Ships are mobile and take branch 2; the cached image
+belongs to structures, and the sea-level gate only ever bites on wrecks.
+Everything in
 this paragraph is **Established (direct-static)** except the ordinal-0
 inference, which the decider names.
 
-**The punch-out offset — closes the Unknown in [R-REN-03D §5].** The
-punch-out composites the body image into the shadow image with an X shift of
+**The punch-out offset.** The punch-out composites the body image into the shadow image with an X shift of
 `+5` applied to the *body* column and a row mapping through the two images'
 recorded origins; in model space that places the body silhouette **five
 pixels to the left** of where the shadow geometry sits. The blit of
 [R-REN-03D §3] then places the shadow image five pixels to the **right** of
 the body. The two cancel exactly: the hole lands at the body's own screen
 position, the same on X and Y, so the ground directly under the body is not
-darkened before the body covers it. The "opposite signs" that looked
-unexplained are the difference between shifting a source and shifting a
-destination. Implement the punch-out; the earlier advice to omit it is
-withdrawn. **Established (direct-static).**
+darkened before the body covers it. The opposite signs are the difference
+between shifting a source and shifting a destination. Implement the
+punch-out. **Established (direct-static).**
 
 **The no-key-plane present is not a reduced copy of the full one.** When the
 cached image has no key plane ([R-REN-03A §2] gate false), the unit present
@@ -2447,7 +2294,7 @@ framebuffer; there is no staging, no waterline and no digger pass at all.
 **Established (direct-static).** A `CORFAV` or `CORTRUCK` — the two stock
 `ZBuffer=0` types — is therefore never cut at the waterline or tinted.
 
-### Closed — lighting in the model path is `SHD` only [R-RAST-01 §5] (2026-08-29)
+#### Lighting in the model path is `SHD` only [R-RAST-01 §5]
 
 **Established (bounded-negative over the model raster path).** The only
 palette table a model span writer reads is `SHD`, and only in the shaded
@@ -2459,7 +2306,7 @@ downscale ([R-REN-03A §6]) and by the tinted blitter that shadows and cloaked
 bodies go through ([R-REN-03D §4]). There is no per-polygon light selection
 beyond the row; the light direction is the one global vector of [03 §2.4.1].
 
-### Closed — image scratch records, the transform pass order, and what a script write dirties [R-COMP-01 §4] (2026-08-29)
+#### Image scratch records, the transform pass order, and what a script write dirties [R-COMP-01 §4]
 
 **Image scratch records (Established, direct-static).** The composition and
 staging images of [R-REN-03A §1] and §4 are allocated by two routines over
@@ -2491,7 +2338,7 @@ receives the unit's three orientation words, added component-wise in
 **reverse storage order** (the unit's first orientation word adds to the
 piece's third angle word, the second to the second, the third to the first);
 which of the three is heading, pitch or bank is the shared rotation helper's
-naming, still the tail's "pitch/bank naming" item.
+naming and is **Unknown** (the tail's pitch/bank naming item).
 
 **Face-normal helpers (Established).** The shaded renderer's per-vertex
 `SHD` row ([R-RAST-01 §5]) starts from a face normal built by three float
@@ -2516,9 +2363,9 @@ cache/shadow bit setters write unconditionally and reset a third model word.
 (The setters' own contract is document 04's; only their effect on the
 presentation cache is recorded here.)
 
-### Closed — render piece state: allocation, the point-list copies, release, and the composition-cache purge [R-COMP-02 §3] (2026-08-29)
+#### Render piece state: allocation, the point-list copies, release, and the composition-cache purge [R-COMP-02 §3]
 
-Status: **Established** (direct-static: the allocator, the recursive fill,
+**Established** (direct-static: the allocator, the recursive fill,
 the piece counter, the release and the cache purge). The flag polarity is
 [04 §4.3 "Piece flag polarity"] and is not restated; the transform passes over
 these records are [R-COMP-01 §4].
@@ -2549,9 +2396,9 @@ of every match; it does not reclaim the record. A clone that reuses cache
 entries across a unit's death without this purge shows the dead unit's body
 on the next unit to occupy the same record address.
 
-### Closed — the animated-texture cursor registry and the phase-7 advance [R-COMP-02 §4] (2026-08-29)
+#### The animated-texture cursor registry and the phase-7 advance [R-COMP-02 §4]
 
-Status: **Established** (direct-static: the model loader's texture bind, the
+**Established** (direct-static: the model loader's texture bind, the
 registry, the phase-7 walker; the cursor step itself is [06 R-WFX-01 §1] /
 [02 "Animation playback"]).
 
@@ -2635,14 +2482,13 @@ absent, never decremented, rebuilt by reset instead. The global word map is
 reset and rebuilt when the visibility mode or map state requires it. This
 establishes that the word grid gates a form of visibility or mapping without
 proving one universal semantic name. The byte grid is rebuilt by walking
-current sight sources. The grid's **consumer census is now closed**
-([R-LAYER §1] below): every non-presentation reader tests it as a per-player
-gate on path requests, placement validation, and order destination validation,
-and the path-search consumption that document 04 §6.1 ([R-DOC04-B]) calls the
-"owner/building-mask word" is this grid. What remains unnamed is the
-mode-word initialization semantics, not the gameplay role.
+current sight sources. The grid's consumer census ([R-LAYER §1] below):
+every non-presentation reader tests it as a per-player gate on path requests,
+placement validation, and order destination validation, and the path-search
+consumption of document 04 §6.1 ([R-DOC04-B]) reads this grid. What remains
+unnamed is the mode-word initialization semantics, not the gameplay role.
 
-#### R-LAYER §1 — the mapping word grid is the path search's "owner/building-mask": complete write-site census (2026-08-28)
+#### R-LAYER §1 — the mapping word grid is the path search's "owner/building-mask": complete write-site census
 
 **Established (direct-static, bounded writer census).** The mode-dependent
 word grid of section 3.1 item 2 — allocated at map load as the mapped-memory
@@ -2652,12 +2498,11 @@ document 04 §6.1's path consumption ([R-DOC04-B]) calls the "owner/building-
 mask word": identical allocation and geometry, and the path passability test
 reads the requesting player's own bit `1 << playerSlot` from exactly this
 grid, returning its bit-miss value 2 when the tile is not mapped for the
-requesting player. The name "owner/building-mask" is a misnomer that doc 04's
-text inherited from the first trace: **no building bit exists in the grid and
-no building state is ever written to it.** The tested bit is the requesting
-player's mapping bit; hard building blocking happens at the movement commit
-validator, as [R-DOC04-B] itself states. Document 04 should eventually be
-re-labeled; the finding is recorded here because the grid is doc 03's object.
+requesting player. The name "owner/building-mask" is a misnomer: **no
+building bit exists in the grid and no building state is ever written to
+it.** The tested bit is the requesting player's mapping bit; hard building
+blocking happens at the movement commit validator, as [R-DOC04-B] itself
+states.
 
 **Complete writer census.** Exactly three write sites exist:
 
@@ -2708,30 +2553,24 @@ targeting/visibility predicates of section 3.1. This consumer set is what
 pins the grid's gameplay role as the per-player explored/mapping gate while
 the semantic naming hedge of section 3.1 item 2 stands.
 
-**Confirmation (2026-09-02, RWU-19-30).** Re-read against a code marker that
-asked for the grid's "occupancy-commit write sites": there are none. The
-occupancy commit, the footprint stamp and clear, unit creation and building
-completion do not reference the grid; the three writers above are the
-complete set, and the runtime bit writer is the phase-5 LOS sweep alone. The
-grid the path search, the landing-legality accept (`[04 R-AIR-01 §6a]`) and
-the placement validators read is this one — a movement-side "owner mask" is
-an alias of the visibility publisher's array, never a separately maintained
-copy (`[04 R-PATH-01 §14]`). Established.
+**The occupancy commit has no write site either.** The occupancy commit,
+the footprint stamp and clear, unit creation and building completion do not
+reference the grid; the three writers above are the complete set, and the
+runtime bit writer is the phase-5 LOS sweep alone. The grid the path search,
+the landing-legality accept (`[04 R-AIR-01 §6a]`) and the placement
+validators read is this one — a movement-side "owner mask" is an alias of
+the visibility publisher's array, never a separately maintained copy
+(`[04 R-PATH-01 §14]`). Established.
 
-#### R-VIS-01 §1 — the visibility mode word: authored option provenance and exact polarity (2026-08-29)
+#### R-VIS-01 §1 — the visibility mode word: authored option provenance and exact polarity
 
-Status: **Established** (direct static trace of the battle-entry initializer,
+**Established** (direct static trace of the battle-entry initializer,
 the registry loader, the skirmish setup screen, the in-battle options overlay
 and the bulk rebuild's fill constants).
 
-This closes what
-`docs/PLAN_RESEARCH_COMPLETION_QUESTIONS.md` called its single most
-consequential entry — *"an entire documented user-facing option has no
-documented simulation consumer"* — and corrects the claim in that file that
-"doc 03 §3's visibility predicate does not branch on an LOS mode anywhere in
-the spec". It does: the predicate's mode-selected source (§3.2) and the raster
-selection (§3.2) are exactly the two branches the option drives, and the
-missing link was the provenance chain below, not the branch.
+The visibility predicate's mode-selected source (§3.2) and the raster
+selection (§3.2) are exactly the two branches the user-facing options drive;
+the provenance chain is below.
 
 **Three authored options, one word.** Three session options — *Mapping*,
 *Line of Sight* and *LOS Type* — are written into the low three bits of the
@@ -2742,11 +2581,8 @@ simulation. Retail persists them under `Software\Cavedog Entertainment` (doc
 `SkirmishMapping` / `SkirmishLineOfSight` / `SkirmishLOSType`, and
 `MultiMapping` / `MultiLineOfSight` / `MultiLOSType`. **Each defaults to 1**
 when the registry value is absent, and the loader then **stores** that default
-back into the registry, so the key exists from the first run on. *(Correction
-2026-08-29, `[R-TERR-01 §8]`: this sentence previously said the loader "deletes
-the value"; the miss-path helper it calls is the DWORD store used by every
-other key in the same loader, and doc 08's `[R-SKIR-01 §1]` traces the
-same helper as a store. Nothing in the loader deletes registry values.)*
+back into the registry, so the key exists from the first run on
+(`[R-TERR-01 §8]`).
 
 **Battle entry.** The session kind selects the source, and each assignment is
 a plain one-bit copy — no inversion anywhere:
@@ -2830,9 +2666,9 @@ enum.** Bits 0 and 1 gate the two publishers independently:
   — into the word grid only — so the explored region grows and never shrinks.
 
 
-#### R-TERR-01 §7 — the Mapping array and the rectangle-plus-ring stamp, stated once for doc 03 (2026-08-29)
+#### R-TERR-01 §7 — the Mapping array and the rectangle-plus-ring stamp, stated once for doc 03
 
-Status: **Established** (restated from the traces of `[R-LAYER §1]` above
+**Established** (restated from the traces of `[R-LAYER §1]` above
 and `[R-PATH-01 §2]` in doc 04, which agree; no new trace).
 
 The mode-dependent word grid of §3.1 item 2 **is** the per-player mapping
@@ -2844,9 +2680,7 @@ viewing player's slot bit by exactly one writer as tiles become seen. Its
 only simulation readers are the per-player gates of `[R-LAYER §1]` and the
 path search's passability probe, which returns its "unexplored" value 2 —
 treated as passable by every consumer — when the requesting player's bit is
-absent (`[R-PATH-01 §2]`). No building state is written to it, and the
-name "owner/building-mask" that earlier text used for it is retired in
-both documents.
+absent (`[R-PATH-01 §2]`). No building state is written to it.
 
 The class-layer stamp that consumes the plot grid classifies a **rectangle,
 not a cell**: the class's authored `FootPrintX × FootPrintZ` rectangle
@@ -2859,12 +2693,12 @@ an implementer reading only this document would otherwise classify single
 cells. Buildings block the search through the occupant-age channel of the
 same anchor, not through this grid.
 
-#### R-TERR-01 §8 — the registry miss path stores the default (2026-08-29)
+#### R-TERR-01 §8 — the registry miss path stores the default
 
-Status: **Established.** The registry loader that supplies the three
+**Established.** The registry loader that supplies the three
 visibility options of `[R-VIS-01 §1]` calls, on every missing key, the same
 DWORD store helper it uses for every other key it reads; there is no delete
-call in it. `[R-VIS-01 §1]` is corrected in place above; doc 08's
+call in it, and nothing in the loader deletes registry values. Doc 08's
 `[R-SKIR-01 §1]` traces the identical helper as a store.
 
 ### 3.2 Sight shape and terrain occlusion
@@ -2914,7 +2748,8 @@ over the parsed LOS.TDF tables, and the spokes walked for that group are that
 table's authored line list — line counts grow with the table index (a radius-9
 table carries fourteen lines, radius-10 sixteen). LOS.TDF declares
 `numtables = 9` but ships twelve table sections; the clamp uses the declared
-nine and the three excess tables are unreachable authoring residue.
+nine and the three excess tables are unreachable authoring residue (the
+one-based accessor of `[R-COMP-02 §1]` leaves `TABLE 8` unreachable too).
 Neither raster uses a synthesized circle or a fixed spoke set.
 
 **Terrain height word for the ray.** The LOS reader does not use the per-cell
@@ -2926,30 +2761,24 @@ dirty-tracked). The low byte is tested for admission and the
 high byte is tested to advance the retained horizon — identical strict
 comparisons, but the low byte decides whether the cell is seen and the high byte
 decides whether the horizon rises. The full builder contract is **Established**
-(see §3.5 [R-P0-18-B]); the earlier reading recorded here — low = minimum and
-high = maximum over the four attribute cells of one visibility tile, with the
-exact formula open as `TODO(question)` — was **inverted**: the low byte is the
-**maximum** of raw heights over the scattered neighbourhood and the high byte
-the **minimum** of perspective-scaled values, with the pair blended by thirds
-and floored at sea level in a final pass. The old pairing is the maximally
-occlusive one and scatters false shadows across ground retail leaves fully
-visible. The builder fills the whole word array in one pass at load; the lazy
+(§3.5 [R-P0-18-B]): the low byte is the **maximum** of raw heights over the
+scattered neighbourhood and the high byte the **minimum** of
+perspective-scaled values, with the pair blended by thirds and floored at sea
+level in a final pass. The builder fills the whole word array in one pass at load; the lazy
 cache that rebuilds "when the cache-valid mode bit is clear" is the fog/minimap
 overlay cache of section 3.3, not this table.
 
 **Spoke geometry.** Each LOS.TDF line is expanded at load time into four
 quadrant copies by quarter-turn rotation; the exact transform, the storage
-layout and the file grammar are `[R-VIS-01 §3]`, which also corrects this
-paragraph's earlier word "mirrored" — the copies are rotations, not
-reflections. The authored offsets are **absolute positions from the
+layout and the file grammar are `[R-VIS-01 §3]` — the copies are rotations,
+not reflections. The authored offsets are **absolute positions from the
 observer, not cumulative deltas** (established): the ray stepper applies each
 rotated pair directly to the origin cell (`x = tileX + dx`, `y = tileY + dy`)
 with no running accumulation, and the step-distance counter used by the horizon
 test counts from one — both only cohere if the authored pairs are absolute
-positions along the spoke. The earlier `TODO(question)` on absolute versus
-cumulative is closed.
+positions along the spoke.
 
-**Jammer separation is closed.** The sensor phase's jammer circles are drawn onto
+**Jammer separation.** The sensor phase's jammer circles are drawn onto
 separate radar-presentation surfaces that are wiped each tick and never affect
 the gameplay LOS word mask or the per-player byte grids. Radar, sonar, and
 jammer presentation never authors the LOS mask.
@@ -3070,11 +2899,10 @@ weapon placement/order validation inlines a word-grid-first reject plus the
 same mode-selected source test at the projected cell; projectiles use the
 one-point form; feature drawing uses a **two-corner form** over footprint
 extents — first corner at the cell origin (sheared), then a single corner
-displaced by the footprint offsets; the earlier four-corner reading in §5.1.5
-was wrong and is corrected there; the sensor phase's
-final pass inlines a single-point test.
+displaced by the footprint offsets (§5.1.5); the sensor phase's final pass
+inlines a single-point test.
 
-**Ally semantics are closed: never OR’d.** The writer ORs only the source
+**Ally semantics: never OR’d.** The writer ORs only the source
 unit’s own player-slot bit into each cell, and every reader tests only the
 local player’s bit. No routine merges an alliance group into a cell before
 test, and allied owners hold distinct player records, so the owner bypass
@@ -3094,12 +2922,12 @@ Radar, sonar, and jammers never author this mask: the sensor phase rasterizes
 range and jam circles onto separate presentation surfaces that are wiped each
 tick, while the LOS mask persists.
 
-#### R-VIS-01 §2 — LOS stamping: the observer record, the refresh throttle, and which publisher runs (2026-08-29)
+#### R-VIS-01 §2 — LOS stamping: the observer record, the refresh throttle, and which publisher runs
 
-Status: **Established** (direct static trace of the sweep, the per-unit record
+**Established** (direct static trace of the sweep, the per-unit record
 builder, the throttled refresh and both publishers).
 
-**Producers of the temporary-sight ("eyeball") record (2026-08-29).** Besides
+**Producers of the temporary-sight ("eyeball") record.** Besides
 the per-unit stamp below, the central unit-death handler appends a 60-tick
 eyeball for a locally owned victim under `Circular`/`True` LOS in every
 session kind, single player included ([08 R-SESS-01 §3]); its expiry and
@@ -3193,9 +3021,9 @@ visible until a bulk rebuild. Nanolathe may bound this as a sanctioned
 divergence; it must not be "fixed" silently in a way that changes the ray
 branch, which is guarded.
 
-#### R-VIS-01 §3 — the LOS.TDF spoke tables and the ray walk, exactly (2026-08-29)
+#### R-VIS-01 §3 — the LOS.TDF spoke tables and the ray walk, exactly
 
-Status: **Established** (direct static trace of the loader, the per-table
+**Established** (direct static trace of the loader, the per-table
 parse, the per-line quadrant expansion and the raster).
 
 **File grammar.** The tables live in `gamedata/los.tdf`. A `[TABLEINFO]`
@@ -3225,15 +3053,17 @@ copy 3 : (dx, dz) = (-v, -u)
 
 which is `copy k = R^k(u, −v)` for the quarter-turn `R(x, y) = (−y, x)`. It is
 a pure rotation: no copy is a reflection, and the sign flip on `v` in copy 0 is
-part of the base transform, not a mirror. The earlier text in §3.2 calling
-these "four mirrored quadrants" is corrected here — the geometry is right, the
-word "mirrored" is not, and a clone that mirrors instead of rotating produces
-the same set only for lines that are symmetric about the diagonal.
+part of the base transform, not a mirror. A clone that mirrors instead of
+rotating produces the same set only for lines that are symmetric about the
+diagonal.
 
 **Table selection.** The group index is `min(max(floorDiv(sightdistance, 32),
 0), numtables − 1)`, using the **declared** `numtables`, which is why
 `los.tdf`'s twelve shipped `TABLE%d` sections with `numtables = 9` leave three
-unreachable.
+unreachable. The table-by-index accessor is **one-based**, so the table
+walked for group `g` is record `g − 1` — `[R-COMP-02 §1]` states the skew and
+its consequences (the highest reachable table is `TABLE numtables − 2`, and
+group 0 reads before the list's storage).
 
 **The walk**, per observer, after the origin cell has been admitted
 unconditionally:
@@ -3274,7 +3104,7 @@ height bytes are unsigned, so both differences lie in −255 … 255.
 
 ### 3.3 Fog and unexplored edges
 
-Compatibility anchors retained from the folded fog addendum:
+Anchors of the fog findings (`[R-RR16-A]`):
 
 | Anchor | Finding in this section |
 |---|---|
@@ -3299,11 +3129,11 @@ shadows use `ALP` and no dither. `DitheredFog` is therefore not permission to
 add checkerboard fog to the LOS mask.
 
 Unexplored map borders/voids can remain black where no valid tile blit reaches
-the backbuffer. The clean-room evidence is medium for the exact distinction
-between an in-map void tile and an out-of-map clipped region (probe-pending:
-a capture at the map edge distinguishes them and shows whether the backbuffer
-persists stale bytes beyond the play rect), but high that
-visibility culling itself is binary and hard-edged.
+the backbuffer. The exact distinction between an in-map void tile and an
+out-of-map clipped region is **Supported inference** (decider: a capture at
+the map edge distinguishes them and shows whether the backbuffer persists
+stale bytes beyond the play rect); that visibility culling itself is binary
+and hard-edged is **Established**.
 
 The mapping word grid is serialized in a save blob; the transient byte sight
 grid, dirty flags, eyeball queue, and radar surfaces are not all serialized.
@@ -3333,7 +3163,7 @@ the camera in 32-pixel cells including signed residues. Per cell:
   via the plain blitter. Channel one therefore renders BEFORE channel zero.
 
 This overlay sits at the compositor position after all strips/effects and
-before selection/interface (section 1). The cached channel derivation is now established (direct-static): hi accumulates the per-player byte-grid (`cur==0`) only when mode bit 1 is set else zeroed, lo accumulates the word-grid history mask `1<<player` regardless; each holds a 4-bit nibble `0..15` via four bounded bit-OR sites for masks `1,2,4,8` (`0` transparent, `15` solid dark, `1..14` index `value-1` into the Gray=hi=current and Black=lo=history four-way variant families with `variant=(col+row+camPhase)&3` deterministically from `floorMod(camera,32)` residues `0..31` via `offX/offZ=(res<16?-16:+16)-res` and `rect=[vpLeft+offX+col*32, vpTop+offZ+row*32, +31]` inclusive), edge rows/cols reached by conditional border fixups when the viewport extends beyond the map (see the fixup table below — never unconditional 15 stores). The bit→cache-cell geometry is direct-static (re-exported 2026-08-26): a fogged tile ORs bit 1 into the cache cell of its own tile, bit 2 into the west cell, bit 4 into the north cell, bit 8 into the northwest cell — the cell accumulates from the four tiles around its centre corner. Corner→bit `1=NW,2=NE,4=SW,8=SE` (which GAF quarter each bit paints) remains supported inference pending asymmetric fog.gaf probe; retail’s hard fog edge must not be softened to improve image metrics.
+before selection/interface (section 1). The cached channel derivation is established (direct-static): hi accumulates the per-player byte-grid (`cur==0`) only when mode bit 1 is set else zeroed, lo accumulates the word-grid history mask `1<<player` regardless; each holds a 4-bit nibble `0..15` via four bounded bit-OR sites for masks `1,2,4,8` (`0` transparent, `15` solid dark, `1..14` index `value-1` into the Gray=hi=current and Black=lo=history four-way variant families with `variant=(col+row+camPhase)&3` deterministically from `floorMod(camera,32)` residues `0..31` via `offX/offZ=(res<16?-16:+16)-res` and `rect=[vpLeft+offX+col*32, vpTop+offZ+row*32, +31]` inclusive), edge rows/cols reached by conditional border fixups when the viewport extends beyond the map (see the fixup table below — never unconditional 15 stores). The bit→cache-cell geometry is direct-static: a fogged tile ORs bit 1 into the cache cell of its own tile, bit 2 into the west cell, bit 4 into the north cell, bit 8 into the northwest cell — the cell accumulates from the four tiles around its centre corner. Corner→bit `1=NW,2=NE,4=SW,8=SE` (which GAF quarter each bit paints) is supported inference (decider: an asymmetric fog.gaf probe); retail’s hard fog edge must not be softened to improve image metrics.
 
 **Fog art and family behavior [R-RR16-A].** The four-way variant selector is
 world-anchored, not camera-relative: substituting the cache-relative column
@@ -3351,10 +3181,8 @@ cloud quarter in each of the four cells around its bottom-right corner.
 The GAF fog frames carry their placement in the frame header's signed
 `XOffset`/`YOffset` words — destination `(x − XOffset, y − YOffset)` before
 clipping — and every shipped frame uses exactly two pixel values: palette
-index 9 is the transparent color key and palette index 0 is the cloud.
-**Correction:** an earlier reading that the clouds are bright blue
-`(84,84,252)` by palette was inverted; drawing them that way puts blue blobs
-along every fog edge (see `[fmt gaf]` frame header +8). Frame `n` covers the
+index 9 is the transparent color key and palette index 0 is the cloud
+(the offsets are `[fmt gaf]` frame header +8). Frame `n` covers the
 cell area implied by nibble value `n+1`: value 1 → 16×16 quarter at `(0,0)`,
 2 → 16×16 at `(-16,0)`, 4 → 16×16 at `(0,-16)`, 8 → 16×16 at `(-16,-16)`;
 intermediate values are unions with sizes `16×16..33×21` and matching offsets.
@@ -3377,8 +3205,7 @@ or the fringe comes out red and yellow.
 
 **Map-edge propagation [R-RR16-A].** The four producer border fixups run only
 when the cache window crosses the map edge and apply conditional bit ORs, never
-unconditional stores — **correcting** the earlier reading that "border loops
-force edge rows/cols to 15":
+unconditional stores:
 
 | Fixup | Triggers when | Effect |
 |---|---|---|
@@ -3398,7 +3225,7 @@ anchoring to the window end minus two and gating on the window crossing the map
 edge is visually equivalent (the thickened 16px strip is only on screen when
 the window crosses).
 
-**Unexplored-versus-fogged mechanism (adjudicated).** The plot flag byte’s
+**Unexplored-versus-fogged mechanism.** The plot flag byte’s
 0x04 bit marks a cell never-explored/fogged. The composer’s feature pass
 clears it per cell before evaluating; a skipped hidden feature leaves it set,
 and a cell whose anchor feature exists with feature height >= 10 is re-marked
@@ -3410,9 +3237,7 @@ the intervening terrain. Pass two redraws a fogged cell’s feature only when
 the feature quick-accepts or the two-corner predicate admits; otherwise the
 marker stays set.
 
-Full flag-byte semantics (write model verified; this adjudication SUPERSEDES
-the older occupied-visited/LOS-level-nibble reading of the same byte, which
-had no supporting writer):
+Full flag-byte semantics (write model verified):
 
 - Bit 0 — live feature-instance present: set exactly when the feature stamper
   allocates an animation slot, cleared by teardown, and read by the feature
@@ -3436,9 +3261,8 @@ current mode is disabled — and republishes any units already present. Unit
 reconstruction then publishes each reconstructed unit’s footprint
 synchronously to every mode-enabled store before the loader returns: there is
 NO empty-coverage first frame. A missing or size-mismatched Mapping blob
-leaves the array unchanged while publication proceeds. The earlier possibility
-that current-sight coverage could stand empty for one frame/tick after load
-is RETRACTED; a deferred next-frame rebuild must not be implemented.
+leaves the array unchanged while publication proceeds. A deferred next-frame
+rebuild must not be implemented.
 
 ### 3.4 Radar and sonar
 
@@ -3446,8 +3270,7 @@ The radar picture is built from the terrain tile set or an optional baked minima
 Its aspect ratio preserves the map shape with a fixed long side. When generated,
 the renderer supersamples to twice the radar dimensions, maps each output sample
 back to map/tile coordinates, and **samples the tile-set pixel bytes directly**
-— there is no height read and no terrain radar table (the earlier sentence in
-this section is corrected by §3.7 [minimap]): the fill picks the tile from the
+— there is no height read and no terrain radar table (§3.7): the fill picks the tile from the
 tile map and copies the indexed pixel at `(z & 31)*32 + (x & 31)` within the
 tile block. It then creates radar-picture, mapped, and final surfaces.
 
@@ -3457,21 +3280,15 @@ circles are rasterized onto the radar surface using distinct palette colors.
 The radar-mapped surface is wiped and rebuilt each tick, while the authoritative
 LOS mask persists untouched by this path.
 
-**Correction (2026-08-29, `[R-VIS-01 §5]`).** This paragraph previously
-continued: "**The effect of jammers on authoritative contact state is closed:
-there is none.** No reader ORs the jammer (or sensor-circle) surfaces into the
-mapping word grid, and the gameplay visibility predicate never samples them —
-jammer influence is presentation-only distortion." The statement about the
-*surfaces* stands and is restated below; the conclusion drawn from it was
-wrong, because jamming does not act through a surface at all. The jam callbacks
-write the unit status word directly: `radardistancejam` clears the runtime
-**seen** bit and `sonardistancejam` clears the runtime **sonar** bit. Both
-effects are authoritative — they change acquisition candidacy `[06 §3.1]` and,
-through the sonar bit, the direct-visibility predicate's underwater rejection
-(`[R-WPN-02 §4]`). What remains true of the surfaces is only this: no reader
-ORs the jammer or sensor-circle surfaces into the mapping word grid or the
-per-player byte grids, and the gameplay visibility predicate never samples them
-(bounded negative over the sensor and predicate families).
+**Jamming is authoritative and acts on status bits, not through a surface.**
+The jam callbacks write the unit status word directly: `radardistancejam`
+clears the runtime **seen** bit and `sonardistancejam` clears the runtime
+**sonar** bit (`[R-VIS-01 §5]`). Both effects change acquisition candidacy
+`[06 §3.1]` and, through the sonar bit, the direct-visibility predicate's
+underwater rejection (`[R-WPN-02 §4]`). The surfaces play no part in it: no
+reader ORs the jammer or sensor-circle surfaces into the mapping word grid or
+the per-player byte grids, and the gameplay visibility predicate never samples
+them (bounded negative over the sensor and predicate families).
 
 **Sensor and proximity phase.** The per-tick sensor phase runs only when more
 than one player is present. It is five unit walks and it writes nothing but
@@ -3491,52 +3308,27 @@ the first pass writes, `0x400` = jammed (a marker with no reader anywhere),
 `0x1000` = decloak timer. The phase never writes the word mask or any
 per-player byte grid.
 
-**Correction (2026-08-29, `[R-VIS-01 §4]`/`[R-VIS-01 §5]`).** Four statements
-previously made here are wrong and are replaced by the closures below.
+There is no rasterization in the sensor phase at all: the shift of 23 and
+the 128-world-unit cell of `[R-VIS-01 §5]` are the **unit spatial grid** the
+shared radius visitor walks to find candidates, not a pixel surface, and the
+three callback tables hold three one-line functions that write unit status
+bits. The arbitration between the passes is the bit-write order of
+`[R-VIS-01 §4]`. The minimap's sensor circles are drawn by presentation
+(§3.9, §3.10). The secondary radar-like candidate list of `[06 §3.1]` is the
+seen set this phase writes, from the viewing observer's point of view
+(`[R-WPN-02 §6]`).
 
-1. It said the emitters *"rasterize circles onto backing surfaces whose
-   dimensions are held in engine root state; positions project at a shift of
-   23, one surface cell per 128 world units"*, and that *"the three callback
-   tables rasterize onto the minimap presentation surface sequentially —
-   radar/sonar outer circle first, then the two jam circles — with
-   last-writer-wins per pixel (plain pixel stores, not OR), each circle family
-   in its own palette index"*. There is no rasterization in the sensor phase at
-   all. The shift of 23 and the 128-world-unit cell are the **unit spatial
-   grid** the shared radius visitor walks to find candidates, not a pixel
-   surface; the three callback tables hold three one-line functions that write
-   unit status bits. Consequently the "per-table palette mapping" that this
-   paragraph recorded as supported inference is not a question about the sensor
-   phase, and the last-writer-wins arbitration it described does not exist —
-   the real arbitration between the passes is the bit-write order of
-   `[R-VIS-01 §4]`. The minimap's sensor circles are drawn elsewhere (§3.9,
-   §3.10); §3.10 still repeats the "emitted through their callback tables"
-   reading and is owned by that section.
-2. It said the friendly pass sets the pair on *"own units and
-   alliance/sensor-qualified units"*. The allied disjunct exists but cannot
-   fire: it gates on a bit that no writer in the recovered image ever sets
-   (`[R-VIS-01 §7]`).
-3. It said the minimum-cloak scan searches *"the indexed unit list"*. It
-   searches the **primary candidate list of the cloaking unit's own side**
-   (`[06 §3.1]`), which is rebuilt at most once per thirty ticks, so the scan
-   is over stale, already-visibility-filtered hostiles.
-4. It closed with *"The unresolved gameplay side is the identity of the
-   secondary radar-like candidate list … that flag's authored name is not
-   proved"*. The list's identity is closed (`[R-WPN-02 §6]`): it is the seen
-   set this phase writes, from the viewing observer's point of view. What
-   survives is narrower and lives in doc 06's tail — the authored FBI key
-   behind the definition flag that arms the list.
-
-**Sensor callback gate correction (Established).** “Active” in the sensor
+**Sensor callback gate (Established).** “Active” in the sensor
 phase means the unit instance's activation/on-state bit is set. A live unit
-whose radar or sonar distance is nonzero emits its outer circle only after
+whose radar or sonar distance is nonzero emits its contact query only after
 that activation test. The cloak/hidden instance bit is not consulted by this
 circle-callback gate; it belongs to the separate visibility and decloak paths.
 The selected-unit circle presentation has an additional definition test
 documented in §3.9.
 
-**Sensor phase placement in the tick (Established, 2026-08-27,
-[R-SENSOR-01]; closes the DET-06 seam question).** The sensor phase is not a
-phase of its own and does not run at composer time: it executes inside the
+#### R-SENSOR-01 — sensor phase placement in the tick
+
+**Established.** The sensor phase is not a phase of its own and does not run at composer time: it executes inside the
 per-player pass of document 01 §4.4 phase 5, in the LOCAL viewing player's
 iteration, after that player's order dispatch, per-player work, LOS stamp
 sweep, per-tick minimap contacts pass, and 30-tick victory/defeat block — and
@@ -3551,21 +3343,18 @@ decloak status bit, and the final seen-marker pass) cover the whole unit pool
 in that one placement, once per tick — Nanolathe should schedule the
 sensor/deadline work as a single per-tick pass keyed to the local viewing
 slot, positioned after the local player's stamp sweep, not as a separate
-tick phase and not adjacent to the composer. The residual recorded here — "the
-writer that clears the per-unit seen marker (status bit `0x100`) between
-passes was not located" — is closed by `[R-VIS-01 §4]` below: the clear is the
-phase's own first pass, and a second clear is the radar-jam callback.
+tick phase and not adjacent to the composer. The writer that clears the
+per-unit seen marker (status bit `0x100`) between passes is the phase's own
+first pass; a second clear is the radar-jam callback (`[R-VIS-01 §4]`).
 
-#### R-VIS-01 §4 — the sensor phase's five passes, exactly (2026-08-29)
+#### R-VIS-01 §4 — the sensor phase's five passes, exactly
 
-Status: **Established** (direct static trace of the phase and its three
+**Established** (direct static trace of the phase and its three
 callbacks; complete image-wide writer census for the three status bits).
 
-This section states at implementable precision what the prose above and
-`[06 §3.1]`/`[R-WPN-02 §6]` describe as "four ordered passes". There are in
-fact **five** unit walks; the mode-selected seen probe and the minimum-cloak
-proximity scan are separate walks, and the phase's first pass is both the
-friendly-marking pass and the clear.
+There are **five** unit walks, not four: the mode-selected seen probe and
+the minimum-cloak proximity scan are separate walks, and the phase's first
+pass is both the friendly-marking pass and the clear.
 
 **Which observer.** Two per-battle globals hold a player slot: the local
 player's **own** slot, and the **viewing** slot. They are written together at
@@ -3729,9 +3518,9 @@ anywhere in the sensor or LOS-stamp families (bounded negative over the
 complete callee sets of the phase, the sweep, the throttled refresh, both
 publishers and the bulk rebuild).
 
-#### R-VIS-01 §5 — the radius visitor and the three contact callbacks (2026-08-29)
+#### R-VIS-01 §5 — the radius visitor and the three contact callbacks
 
-Status: **Established** (direct static trace; complete writer census).
+**Established** (direct static trace; complete writer census).
 
 **The visitor.** All three sensor callbacks are driven by one shared routine
 that walks the unit spatial grid. Its cells are **128 world units** on a side
@@ -3786,9 +3575,7 @@ They apply to **every** unit the visitor delivers — no owner test, no alliance
 test, no stealth test, no re-test of distance beyond the visitor's inclusive
 `d² <= r²`. So `radardistancejam` clears the seen bit and `sonardistancejam`
 clears the sonar bit, for friend and foe alike, including the jammer's own
-side. This corrects the earlier reading in this section that jamming has no
-authoritative effect: it is correct for the minimap surfaces, and wrong for the
-unit status word (`[R-WPN-02 §4]`). **What a jammed contact loses**, stated
+side (`[R-WPN-02 §4]`). **What a jammed contact loses**, stated
 positively:
 
 * *radar jam* — the seen bit, hence membership of every side's secondary
@@ -3811,14 +3598,13 @@ image, the seen, sonar and jammed bits are written at exactly five sites: the
 sensor phase's first pass (`| 0x300` / `& ~0x700`), the contact callback
 (`| 0x100`, `| 0x200`), the two jam callbacks, and the unit constructor, which
 seeds the sonar bit as `(owner.slot == viewingSlot)` and clears the other two.
-Nothing else in the image touches them. The residual recorded in `[06]`'s tail
-— whether a producer of the seen bit exists outside the recovered sensor phase
-— is therefore bounded-negative over the recovered set and remains open only
+Nothing else in the image touches them; a producer of the seen bit outside
+the sensor phase is bounded-negative over the recovered set and open only
 for the unrecovered regions.
 
-#### R-VIS-01 §6 — cloak, stealth, and the decloak deadline (2026-08-29)
+#### R-VIS-01 §6 — cloak, stealth, and the decloak deadline
 
-Status: **Established** for the fields, the flags and the gate; the
+**Established** for the fields, the flags and the gate; the
 per-tick cost arithmetic is doc 05's.
 
 **Authored inputs**, all read by the unit-definition parser:
@@ -3836,9 +3622,7 @@ second definition flag word exactly when the parsed `cloakcost` is strictly
 greater than `0.0`. That bit is the gate on pass 4, so a definition with
 `mincloakdistance` but no `cloakcost` is never scanned.
 
-**The init-cloak spawn writer is a single site, not a walk.** The bounded
-negative recorded in this document's tail ("the init-cloaked spawn writer is
-bounded-negative today, one candidate site, not closed") is closed: the unit
+**The init-cloak spawn writer is a single site, not a walk.** The unit
 constructor copies the `init_cloaked` definition bit into the runtime
 **cloak-wanted** status bit (bit 11) as part of the same masked store that
 copies the two standing-order fields, and there is no other writer of that bit
@@ -3847,11 +3631,7 @@ proximity test, and no spawn-time visibility edit. A unit authored
 `init_cloaked=1` simply starts with cloak requested, and the ordinary upkeep
 below decides tick by tick whether it is actually cloaked.
 
-**Re-verified (2026-09-02, RWU-19-26) against doc 05's contrary text.** Doc
-05's [R-ECO-01 §9] had said the bit "is not seeded from `init_cloaked`" and
-that `init_cloaked` feeds "the initial-posture path"; a second bounded trace
-confirms this section and doc 05 is corrected in place. Precisely: the
-constructor clears bit 11 in an early masked store and then, in its final
+**The constructor store, exactly.** The constructor clears bit 11 in an early masked store and then, in its final
 status-word store, ORs in the definition's `init_cloaked` flag shifted to
 bit 11 alongside the standing-move and standing-fire copies; the complete
 writer set for bit 11 is that constructor store, the `Cloak_On` / `Cloak_Off`
@@ -3878,7 +3658,7 @@ cannot pay, the unit is not cloaked this tick. The result is pushed to the
 instance cloak bit, which is what §3.2's predicate step 2 and the sensor
 phase's pass 5 read.
 
-**Closed (2026-09-02, RWU-19-29) — the not-due pass clears too.** "The result
+**The not-due pass clears too.** "The result
 is pushed" holds on every exit: a pass on which `cloakActive` is false — the
 request bit clear, the decloak-forced bit set, *or* the deadline not yet
 reached — pushes *clear* to the instance bit through the same transition call
@@ -3901,7 +3681,7 @@ and 06 own those) — so a later write always wins outright, and a shorter
 sensor breach can *shorten* a longer reveal already in progress. Retail does
 not take a maximum.
 
-**Writer census of the shared deadline (2026-09-02, RWU-19-26).** Every
+**Writer census of the shared deadline.** Every
 store to the per-unit deadline word in the recovered image, by value:
 
 | Value | Writer | Owner |
@@ -3921,15 +3701,14 @@ word and all twelve gameplay writers overwrite it. `BuildingBuild`,
 reader — the cloak debit gate's `currentTick >= deadline` term (doc 05
 [R-ECO-01 §9]); the save writer copies it out and nothing else, presentation
 included, reads it. The sensor breach and the order handlers only write.
-The earlier sentence above ("firing and several order transitions write …")
-is therefore exact but under-specified; this table is the contract.
+This table is the contract.
 
 **Cloak is still a predicate early-out, not a mask edit** (§3.2): nothing in
 this path writes either visibility grid.
 
-#### R-VIS-01 §7 — allied sensor sharing: what is shared, and the bounded absence (2026-08-29)
+#### R-VIS-01 §7 — allied sensor sharing: what is shared, and the bounded absence
 
-Status: **Established** that no allied sharing occurs anywhere in the
+**Established** that no allied sharing occurs anywhere in the
 recovered image; **Unknown** whether the gate bit the phase reads is the one
 retail's authors intended.
 
@@ -3977,9 +3756,9 @@ sharing — and must not "restore" sharing on the grounds that it seems intended
 not this document's: nothing in the recovered visibility or sensor path
 consumes an incoming share.
 
-#### R-VIS-01 §8 — what the sensor and LOS phases publish to presentation (2026-08-29)
+#### R-VIS-01 §8 — what the sensor and LOS phases publish to presentation
 
-Status: **Established**.
+**Established**.
 
 The simulation half writes exactly two presentation inputs, both from the LOS
 publisher and the bulk rebuild, never from the sensor phase:
@@ -4004,18 +3783,17 @@ distinct sensor state: there is no "radar-only contact" or "jammed contact"
 presentation state, and the seen/sonar/jammed bits are not consulted by the
 caption at all. Doc 07 owns the caption's placement.
 
-#### R-VIS-01 §9 — the five dead sensor definitions are retail's: the activation bit's complete writer census (2026-09-04)
+#### R-VIS-01 §9 — the five dead sensor definitions are retail's: the activation bit's complete writer census
 
-Status: **Established** (direct static read of the sensor phase's gate; a
+**Established** (direct static read of the sensor phase's gate; a
 whole-image census of every store to the unit's first state byte, direct and
 through the shared edge setter; an asset census of the five definitions).
 
-**The question.** `ARMANNI` (`radardistance` 1200), `ARMSS` and `CORSS`
+**The five.** `ARMANNI` (`radardistance` 1200), `ARMSS` and `CORSS`
 (`sonardistance` 489) and `ARMACSUB` and `CORACSUB` (`sonardistance` 400 and
-500) author a sensor range but no traced writer of the activation bit reaches
-them, so under §3.4's "Sensor callback gate correction" they never emit. The
-"Missing and unknown" bullet left open only whether a writer had been missed,
-or whether sonar was gated on a different bit than radar. Both are closed.
+500) author a sensor range but no writer of the activation bit reaches
+them, so under §3.4's sensor callback gate they never emit. Neither a missed
+writer nor a sonar-specific gate exists:
 
 **One bit, one read, for radar and sonar alike.** Pass 2 of `[R-VIS-01 §4]`
 admits a unit with one compound test — alive, not death-latched, **activation
@@ -4063,24 +3841,18 @@ without bit 0 (cloak, building, the two interface bits).
 `onoffable`, has no build list (so never receives `BuildingBuild`), authors
 `makesmetal 0`, is not `canfly` (so never runs an air executor or the
 mover-mode setter's airborne arm), and its script writes no port 1
-(`[R-VIS-01 §4]`'s census of all 278 stock scripts, WU-19-158). Writer 7
+(a census of all 278 stock scripts). Writer 7
 only propagates a byte another writer produced. So for their entire life the
 bit holds the constructor's zero, the sensor gate rejects them every tick,
 and their authored range is dead data **in retail**. This is the behavior
 Nanolathe reproduces; widening the gate for them would assert a writer that
 does not exist. **Established.**
 
-**What this corrects.** The "Missing and unknown" bullet below recorded the
-same conclusion as *Supported inference* with a manual observation as the
-only remaining decider. The observation is no longer needed: the writer set
-is closed by census, and the sonar-versus-radar alternative is excluded by
-the gate's single read. The bullet is struck.
+#### The LOS table accessors are one-based: the raster reads table `g − 1` [R-COMP-02 §1]
 
-### Closed — the LOS table accessors are one-based: the raster reads table `g − 1` [R-COMP-02 §1] (2026-08-29)
-
-Status: **Established** (instruction-level read of the six table accessors,
+**Established** (instruction-level read of the six table accessors,
 the `los.tdf` loader's per-table store, and all three LOS publishers' table
-selection). This corrects the "Table selection" paragraph of [R-VIS-01 §3].
+selection).
 
 The loaded `los.tdf` lives in three nested dynamic arrays with six trivial
 accessors: the table list (16-byte table records; *count* = `(end − begin) /
@@ -4114,24 +3886,21 @@ layout, or a retail capture of a unit with `sightdistance < 32`). A clone must
 reproduce the skew for `g ≥ 1`; for `g = 0` it may substitute an empty line
 list as a sanctioned divergence, stated as such.
 
-**Addendum (2026-09-04, WU-19-158) — Established: no stock definition reaches
-group 0.** This section previously left "which stock definitions have
-`sightdistance < 32`" as a second **Unknown** with a catalog census as its
-decider. That census has been run over the reference install: all 278 stock
+**No stock definition reaches group 0 (Established, catalog census over the
+reference install).** All 278 stock
 `.fbi` definitions author a `sightdistance`, and the minimum over the corpus is
 **55** (the seven mines), giving `g = floor(55/32) = 1` and `TABLE 0`. So the
 group-0 record is never selected in stock play, and the sanctioned empty-line
 substitution above is unobservable there — it becomes reachable only under a
 mod that authors a sight distance below 32.
 
-### Closed — eyeball expiry: the post-phase sweep removes the byte-grid footprint and compacts the list [R-COMP-02 §2] (2026-08-29)
+#### Eyeball expiry: the post-phase sweep removes the byte-grid footprint and compacts the list [R-COMP-02 §2]
 
-Status: **Established** (direct-static: the sweep, its call site in the tick
-executor, and the decrement publisher). Closes the standing question of how a
-temporary sight source ("eyeball", [01 R-PLAT-02 §5] / [08 R-OOS-01 §1]) expires.
-(An earlier draft of this paragraph said the producer is packet-only and the
-sweep inert in single player; the central death handler appends eyeballs in
-every session kind — [08 R-SESS-01 §3] — so the sweep does real work.)
+**Established** (direct-static: the sweep, its call site in the tick
+executor, and the decrement publisher). This is how a temporary sight source
+("eyeball", [01 R-PLAT-02 §5] / [08 R-OOS-01 §1]) expires; the central death
+handler appends eyeballs in every session kind ([08 R-SESS-01 §3]), so the
+sweep does real work in single player.
 
 The tick executor runs the eyeball sweep once per sub-tick **after the twelve
 phases and after the deadline-ring slide**, as its last step. Over the eyeball
@@ -4155,16 +3924,12 @@ history is permanent for every observer. No CRT or simulation draw is made.
 
 ### 3.5 LOS observer height, coverage tile, and the terrain height word [R-P0-18-A] [R-P0-18-B]
 
-Status: every finding below is **Established** (direct static evidence). This
-section folds R-P0-18-A and R-P0-18-B; it supersedes the supported-inference
-paragraph "Terrain height word for the ray" in §3.2 and closes its
-`TODO(question)` entries: the emitter-height addend provenance, the coverage
-tile's Z term, and the aggregated two-byte height-word derivation. The
-aggregation formula was re-verified instruction-by-instruction against the map-load
-builder in 2026-08-26 (including the per-column carry, which appears in no
-earlier note); the only claim corrected since the previous revision is §4's
-"lazy rebuild", which misidentified the fog-cache builder as this table's
-producer — the terrain word is built once per map load and never rebuilt.
+Every finding below is **Established** (direct static evidence; the
+aggregation formula verified instruction-by-instruction against the map-load
+builder, including the per-column carry). This section carries R-P0-18-A and
+R-P0-18-B: the emitter-height addend provenance, the coverage tile's Z term,
+and the aggregated two-byte height-word derivation. The terrain word is built
+once per map load and never rebuilt.
 
 #### R-P0-18-A §1 — Observer emitter height and model-top provenance
 
@@ -4235,9 +4000,7 @@ than 5.
 #### R-P0-18-B §1 — Terrain height-word polarity
 
 **Polarity: the low byte is the maximum, the high byte the minimum.** The
-reading recorded in §3.2 — low byte = minimum and high byte = maximum over the
-four attribute cells of one visibility tile — is inverted. The table is
-allocated as `((TileW * TileH) + 7) & ~7` sixteen-bit words with
+table is allocated as `((TileW * TileH) + 7) & ~7` sixteen-bit words with
 `TileW = CellW/2` and `TileH = CellH/2` (arithmetic shifts), i.e. one word per
 visibility tile, and each word is seeded low byte `0x00`, high byte `0xFF`.
 Every update then applies, per scattered value:
@@ -4255,11 +4018,11 @@ smaller values replacing high.
 The pair is not symmetric in the horizon rule of §3.2: admission tests
 `retainedNum * stepDist < candidateDiff * retainedDen` with
 `candidateDiff = low - emitter`, and the horizon advances on
-`highDiff = high - emitter`. The old reading was the maximally occlusive
-pairing of the two — low as the minimum makes the candidate difference more
-negative (harder to admit) and high as the maximum makes the retained horizon
-shallower (harder to admit afterwards) — and it scatters false shadows across
-ground retail leaves fully visible.
+`highDiff = high - emitter`. The inverse pairing is the maximally occlusive
+one — low as the minimum makes the candidate difference more negative (harder
+to admit) and high as the maximum makes the retained horizon shallower
+(harder to admit afterwards) — and scatters false shadows across ground
+retail leaves fully visible.
 
 #### R-P0-18-B §2 — Cell scatter through the beam shear
 
@@ -4319,13 +4082,9 @@ after the derived height pass and before the void fixup, and the array is freed
 at battle teardown. There is **no** lazy rebuild and no invalidation during a
 battle — terrain deformation does not refresh it, a tall feature never does,
 and the mode word's bit 3 is not a terrain-word dirty bit: it is the
-fog-cache-valid bit of section 3.1, whose lazy rebuild (the fog/minimap overlay
-cache) was the routine misidentified in an earlier research pass as this
-table's producer. (This paragraph corrects the previous text, which claimed
-the table is "torn down and rebuilt behind the mode word's cache-dirty bit
-(bit 3, §3.1), filling the whole word array at once. Terrain deformation —
-plot-data changes — is the event that invalidates it".) A reimplementation must
-build the word once at map load and keep it stale for the battle.
+fog-cache-valid bit of section 3.1, whose lazy rebuild is the fog/minimap
+overlay cache of section 3.3. A reimplementation must build the word once at
+map load and keep it stale for the battle.
 
 ### 3.6 Minimap surfaces and lifecycle
 
@@ -4341,10 +4100,9 @@ Retail holds four indexed surfaces for the minimap rather than one framebuffer r
   its dirty bit is set.
 - **Radar final** — the composited minimap the player sees: mapped wiped onto
   final as the background, then unit blips, feature dots and sensor circles.
-  Rebuilt every tick from mapped. (**Corrected 2026-08-31:** this list ended
-  "…sensor circles, and the viewport marker". The viewport rectangle exists but
-  is not on FINAL — the HUD composer strokes it onto its own destination surface
-  after copying FINAL there, `[R-MM-01 §1]`.)
+  Rebuilt every tick from mapped. The viewport rectangle is not on FINAL —
+  the HUD composer strokes it onto its own destination surface after copying
+  FINAL there, `[R-MM-01 §1]`.
 - **Radar temp** — a transient 2× supersampled buffer used only while
   generating the picture, freed immediately afterwards.
 
@@ -4355,8 +4113,8 @@ viewport-sized) is a distinct surface; the minimap path and the fog overlay
 share only a dirty bit.
 
 Radar, sonar, and jammer presentation never authors the gameplay LOS word mask
-— circles reach the final surface only through the sensor callback tables of
-section 3.4. Fog and unexplored territory on the minimap is mapped masking, not
+— circles reach the final surface only through the contacts pass of
+section 3.9. Fog and unexplored territory on the minimap is mapped masking, not
 the viewport fog cache.
 
 **Lifecycles.** The panel surfaces live from battle enter until battle exit. The
@@ -4373,7 +4131,7 @@ down to 0 drives the blink phase. The picture is built once, dirty-triggered;
 mapped composites when dirty; final is rebuilt every tick after the sensor
 phase.
 
-**Mapped-surface invalidation, exactly (Established, 2026-08-30).** "Placement
+**Mapped-surface invalidation, exactly (Established).** "Placement
 invalidation" in the cadence paragraph above is the LOS *raster* publication,
 not unit or building placement. The tail of the raster that ORs a footprint's
 bits into the mapping word grid raises the mapped-dirty bit and clears the
@@ -4430,14 +4188,11 @@ for y in 0 .. 2*RadarH-1, x in 0 .. 2*RadarW-1:
 ```
 
 The tile map and tile-set pixels never mutate after load (bounded-negative: no
-writer outside the map loader). **Correction (2026-08-27):** the next sentence
-previously read "Crater decals go through the strip-4 path only". That clause
-is retracted — the complete producer census [R-STRIP-01 §1] finds no writer
-for strip 4 anywhere in the image, so no crater decal can be a strip-4 strip
-object. How ground scorch marks are actually authored (a direct map/tile edit
-versus another store) is therefore unknown again: `TODO(question)` — trace the
-crater writer; the placement-invalidates-the-mapped-surface behavior that
-followed the clause is unaffected and stands. Picture bytes are PALETTE.PAL
+writer outside the map loader). Crater decals are not strip objects — the
+producer census [R-STRIP-01 §1] finds no crater/decal producer on any strip
+— and how ground scorch marks are authored (a direct map/tile edit versus
+another store) is **Unknown** (decider: trace the crater writer). Picture
+bytes are PALETTE.PAL
 indices — no LHT brightening or SHD shading — resolved to RGB only at
 presentation.
 
@@ -4461,11 +4216,9 @@ pairings are rejected by exhaustive search (bounded-negative).
 on screen remains open; an asymmetric-palette probe (row-first, column-first,
 and diagonal orderings yielding distinct results) settles it.
 
-**Correction to the prior paragraph (Established, direct-static).** The prior
-text left non-integral baked sampling as a supported inference because the
-asset dimensions alone did not settle it. A bounded clean-room trace of the
-shared picture resampler shows that both picture legs enter one generic routine
-with independent source and destination dimensions. For each destination axis
+**The shared resampler (Established, direct-static).** Both picture legs
+enter one generic routine with independent source and destination
+dimensions. For each destination axis
 it truncates the source coordinate ratio, blends that sample with its adjacent
 source sample, and applies the same row-first three-lookup ALP sequence above.
 There is no nearest-neighbor path. This includes the authored 252×252 and
@@ -4474,19 +4227,18 @@ There is no nearest-neighbor path. This includes the authored 252×252 and
 **Established** for the ratio/truncation and ALP order; the source bytes and
 dimensions remain authored by the TNT format [fmt tnt].
 
-**Correction (2026-09-03, WU-19-133, `[fmt tnt "How the used sub-rectangle is
-sized"]`).** The "source dimensions" that feed this resize are not always the
+**The baked source sub-rectangle** (`[fmt tnt "How the used sub-rectangle is
+sized"]`). The source dimensions that feed this resize are not always the
 baked minimap's stored `width x height`: on a non-square map, only a top-left
 sub-rectangle of the stored bitmap is real terrain, and the rest of its short
 axis is the format's `0x64` fill (`[fmt tnt]`). A reader that hands the full
-stored dimensions to the generic resize above — as this build did until this
-correction — stretches that fill into the visible picture, which on a
-markedly non-square map reads as the terrain being shifted toward one corner
-with a solid band of the fill color occupying the rest. The used
-sub-rectangle's size is computed from the map's `PlayRight`/`PlayBottom` by
-the same long-side fit `camera.LayoutMinimap` uses for the on-screen radar
-rectangle, substituting the stored bitmap dimension for that function's
-126-pixel canvas constant; the formula and its verification against five
+stored dimensions to the generic resize above stretches that fill into the
+visible picture, which on a markedly non-square map reads as the terrain
+being shifted toward one corner with a solid band of the fill color occupying
+the rest. The used sub-rectangle's size is computed from the map's
+`PlayRight`/`PlayBottom` by the same long-side fit the on-screen radar
+rectangle uses (the aspect rule below), substituting the stored bitmap
+dimension for the 126-pixel canvas constant; the formula and its verification against five
 shipped maps are in `[fmt tnt]`. Only the cropped sub-rectangle enters the
 resize described above.
 
@@ -4508,12 +4260,8 @@ its descriptor header — there are no heap bytes beyond the radar rect that
 could leak into the letterbox bars. The blend overwrites every destination
 byte, and the surface allocator never memsets the pixel region. The bars are
 therefore HUD canvas outside the radar rect, not picture heap.
-**Established (2026-09-04, WU-19-160) — the bars are the rail's own art.**
-This previously read "**Supported inference.** The bar pixels read 0 (black),
-consistent with the panel clear and the dark fog-fill index; a canvas-capture
-probe settles it. `TODO(question):` bar fill color." The colour it predicted is
-right on stock content and the mechanism it predicted is wrong, which matters
-because the mechanism is what modded art changes. Nothing fills the bars,
+
+**The bars are the rail's own art (Established).** Nothing fills the bars,
 before or after the FINAL blit. What occupies those pixels is what the battle
 presenter's **first paint** left there: it clears the whole surface to palette
 index 0 once and stamps `PANELSIDE` at `(0, 0)`, and that stamp is the only one
@@ -4525,30 +4273,20 @@ area included, so the index-0 clear is never what shows through. Measured on the
 reference install: over the 126×126 the radar canvas covers, `ARMINT.GAF` and
 `CORINT.GAF` `PANELSIDE` each carry 15,876 opaque pixels and not one transparent
 or index-0 pixel, so index 0 cannot appear in the bars at all. The art there is
-the dithered near-black panel texture ([fmt gaf "Unknowns and caveats"]), which
-is where the old inference's colour came from.
-
-*Reconciled at merge (2026-09-04): WU-19-158, working concurrently, had marked
-the same paragraph superseded by [R-MM-01 §3] with the pixels left Unknown and
-an inconclusive retail capture (a near-wholly unexplored map, fog and bars
-indistinguishable). The measurement above answers that Unknown.*
+the dithered near-black panel texture ([fmt gaf "Unknowns and caveats"]).
 
 Surface descriptors hold width, height, and a pointer to the w×h pixel block;
 the pixel pitch is (w+3) & ~3 (DWORD-aligned), while allocation is w×h rather
 than pitch×h. Drawing clips against the descriptor bounds.
 
-**The letterbox bars and the sampling domain (Established, 2026-09-02 —
-[R-MM-01 §3]).** No radar surface covers the bars. The picture, mapped and
+**The letterbox bars and the sampling domain (Established, [R-MM-01 §3]).**
+No radar surface covers the bars. The picture, mapped and
 final surfaces are all allocated at exactly the fitted `RadarW × RadarH`,
 the radar rectangle words are `(padX, padY)–(padX + RadarW − 1,
 padY + RadarH − 1)`, and the presenter blits FINAL at `(padX, padY)` into
 the composer's frame and paints no fill. What shows in the bars is whatever
 the frame holds there, and that is the **side-panel shell's own art**
-(2026-09-04, WU-19-160): the closure is at the end of §3.7 above, and it needed
-no probe — [R-HUD-05]'s first-paint and per-frame-repaint census answers it
-from the composer's side. The earlier "**Unknown** — decider: the bar-fill
-probe of RWU-19-9, one retail session on a non-square map" is retired. The generated picture's
-loop never leaves the tile map: `worldX = PlayRight · x / (2·RadarW)` with
+(above). The generated picture's loop never leaves the tile map: `worldX = PlayRight · x / (2·RadarW)` with
 `x < 2·RadarW` lies in `[0, PlayRight)`, likewise Z, so there is no
 out-of-domain sample to define; the tile-index guard above is the only one.
 
@@ -4577,10 +4315,8 @@ viewport fog cache uses as its default fill. The composite shares the LOS grids
 with gameplay visibility but is a distinct presentation: it never writes the
 word mask, and it sets the final-dirty bit when done.
 
-**Correction (2026-08-30): the remap is the gray table, not a GUI remap
-(Established, direct static).** The two sentences above previously named that
-table "the GUI remap table". That was wrong, and it inverted the intended
-appearance. The composite loads the remap pointer from the display
+**The remap is the gray table, not a GUI remap (Established, direct
+static).** The composite loads the remap pointer from the display
 environment's table slot that the platform layer fills with the 256-byte
 **GRAY TABLE** at environment initialization — the same allocation, the same
 slot, and the same table the main-view fog overlay's gray-family span writer
@@ -4606,8 +4342,7 @@ Layer order on the final surface (later layers overwrite; no blending):
    the blink phase bit is set — so the blip draws when
    `blinkSuppressByte == 0 || blinkPhase`. The byte is a per-unit countdown,
    decremented each tick while nonzero, that forces the blip into blink-only
-   mode while it runs; the earlier "(hidden byte nonzero)" wording was
-   inverted — it is the byte reading zero that admits the blip;
+   mode while it runs;
 3. commander blip from the FX `nuclogo` GAF, frame 0, when the unit's identity
    matches the commander slot held in engine root state;
 4. sensor circles (radar/sonar outer, jammer) in their distinct palette indices
@@ -4627,10 +4362,10 @@ recolored through `GUIPAL.PAL` or a separate blit color argument. **Established.
 
 **Blip gate.** The unit blip draws when any of: a global options word bit 9 is
 set, the minimap mode word's low two bits are zero, the unit carries the
-friendly-contact status bits (mask 0x300), or the unit's owner is the local
+friendly-contact status bits (mask 0x300), or the unit's owner is the viewing
 player.
 
-*Named (2026-09-02, [R-MM-01 §3]):* the "global options word bit 9" is the
+*Named ([R-MM-01 §3]):* the "global options word bit 9" is the
 full-radar bit of the mode-flags word that the `+Radar` cheat toggles
 ([07 R-CAM-01 §6]) and the world rebuild clears; the "minimap mode word's
 low two bits" are the render-flags word's mapping and LOS mask bits (the
@@ -4691,11 +4426,10 @@ ring palette index. **Established.** The literal 32 is the segment count: the
 dashed routine divides the full circle into `0x10000 / 32 = 0x800`-unit angular
 steps and draws alternating one-segment dashes and one-segment gaps — a
 segment is emitted only when `(segmentIndex + blinkPhase) & 1 == 1`, so the
-dash parity is seeded by the blink phase bit and flips per segment. The dash
-pattern is fully determined; the earlier `TODO(question)` is closed.
+dash parity is seeded by the blink phase bit and flips per segment.
 
-**Selected-unit circle gate correction (Established).** The previous
-“no-radar” label was wrong. In the contact pass, the selected/range-status bit
+**Selected-unit circle gate (Established).** In the contact pass, the
+selected/range-status bit
 must be set, and circles are then drawn when the unit instance is active OR
 the definition's `onoffable` bit is clear. The unit parser stores `onoffable`
 in definition flags bit 2 (`0x04`); it does not load a unit `noradar` key.
@@ -4728,9 +4462,10 @@ The minimap's radar, sonar and jammer circles are **presentation drawn by
 the contacts pass** of §3.9, layer 4, through the solid-circle rasterizer
 (2,048 angular steps over 32 segments), in the distinct radar and jammer
 palette indices held in engine root state. For each unit that passes the
-contacts pass's gates, the outer circle radius is `max(radardistance,
-sonardistance)` and the two jam circles use `radardistancejam` and
-`sonardistancejam`; each radius scales as `RadarW · distance / PlayRight`
+contacts pass's gates, the radar and sonar outer circles are drawn at their
+two authored distances (one circle per nonzero distance, both in the radar
+index) and the two jam circles use `radardistancejam` and
+`sonardistancejam` (both in the jammer index); each radius scales as `RadarW · distance / PlayRight`
 (truncating), the centre is the unit's projected minimap position of §3.9,
 and the circles land on the final surface, which is wiped from the mapped
 composite and rebuilt every tick. Nothing in this path writes the mapping
@@ -4740,22 +4475,9 @@ The per-tick **sensor phase** (§3.4, `[R-VIS-01 §4]`, `[R-VIS-01 §5]`) is a
 different thing: it runs only when more than one player is present, walks
 units through the 128-world-unit spatial grid, and writes unit status bits —
 the seen marker, the sonar bit, and the jam clears — that the contacts pass
-and the acquisition predicate then read. It draws nothing.
-
-**Correction (2026-08-29, `[R-TERR-01]`).** This section previously read:
-"The per-tick sensor phase … Its minimap output: the outer radar/sonar circle
-at max(radar, sonar) in the radar palette index, plus separate radar-jam and
-sonar-jam circles in the jammer palette index, all three emitted through their
-callback tables." That attributed the circles to the sensor phase's three
-callback tables, which `[R-VIS-01 §5]` establishes are one-line status-bit
-writers with no rasterization at all; the §3.4 correction already retracted
-the "callback tables rasterize" reading and named this section as the last
-place that repeated it. The radii, the palette split (outer circle in the
-radar index, both jam circles in the jammer index), the `RadarW / PlayRight`
-scaling and the wipe-per-tick statement survive unchanged; only the producer
-was wrong. The numeric identity of the two palette indices was recorded here as
-still open; it is closed in `[R-MM-01 §2]` — colour-map entry 10 for the radar
-and sonar outer circles, entry 12 for both jam circles.
+and the acquisition predicate then read. It draws nothing. The two palette
+indices are colour-map entry 10 for the radar and sonar outer circles and
+entry 12 for both jam circles (`[R-MM-01 §2]`).
 
 ### 3.11 Lens: minimap ↔ world mapping
 
@@ -4763,34 +4485,20 @@ World → radar: `rx = worldX * RadarW / PlayRight`, `ry = (worldZ - worldY/2) *
 RadarH / PlayBottom`. Radar → world: `worldX = (radarX - originX) * PlayRight /
 RadarW`, `worldZ = (radarY - originY) * PlayBottom / RadarH` — both truncating.
 
-Click handling hit-tests the inclusive minimap rect first. When the click
-misses the rect, or the drag-mode flag is set, the **drag branch** applies:
-clamp the mouse to the viewport rectangle, then new camera = stored camera +
-(clamped mouse − viewport origin) — the camera moves by the mouse delta.
-Otherwise the **lens branch** writes the projected world point directly as the
-new camera origin: `cameraX = (mouse − rect origin) · PlayRight / RadarW` and
-`cameraZ = (mouse − rect origin) · PlayBottom / RadarH`. Either way the result
-is clamped to the play area and the terrain height queried at the result. The
-lens inverts the minimap projection directly; it does not reuse the main
-view's cursor-to-world projection.
-**Correction to the prior wording (Established).** An earlier sentence in this
-section said that the lens branch recentered by subtracting half the viewport.
-The direct-static trace resolves that as incorrect: the lens branch performs
-only `(mouseX − letterboxOriginX) · PlayRight / RadarW` and
-`(mouseY − letterboxOriginY) · PlayBottom / RadarH`, truncating each operation;
-there is no `−viewSize/2` term and no mapWidth/mapHeight scale. The drag branch
-alone adds the clamped viewport delta to the stored camera. Document 07's
-recenter formula is the corresponding stale reading and is corrected there.
+Click handling hit-tests the inclusive minimap rect first. The conversion of
+the pointer to a **world position** is the pointer classification of step 1
+of the host frame (it feeds orders and hover, [07 R-CAM-01 §1]), not a camera
+write. When the click misses the rect, or the drag-mode flag is set, the
+pointer's world position is the stored camera plus (the mouse clamped to the
+viewport rectangle − the viewport origin). Otherwise the **lens branch**
+inverts the minimap projection directly: `(mouseX − letterboxOriginX) ·
+PlayRight / RadarW` and `(mouseY − letterboxOriginY) · PlayBottom / RadarH`,
+truncating each operation, with no `−viewSize/2` term and no
+mapWidth/mapHeight scale; it does not reuse the main view's cursor-to-world
+projection. Either way the result is clamped to the play area and the
+terrain height queried at the result.
 
-**Correction (Established; 2026-08-29, from [07 R-CAM-01 §11]).** The two
-paragraphs above are right about the **pointer's world position** and wrong
-about the **camera**. The previous text said "the lens branch writes the
-projected world point directly as the new camera origin: `cameraX = (mouse −
-rect origin) · PlayRight / RadarW` …" and "there is no `−viewSize/2` term".
-That conversion is the pointer classification of step 1 of the host frame
-(it feeds orders and hover, [07 R-CAM-01 §1]); the trace that produced the
-sentence read it as the camera writer. The camera jump performed while the
-minimap latch is held is
+The **camera** jump performed while the minimap latch is held is
 
 ```
 cameraX = (ptrX − padX) · PlayRight  / RadarW − trunc(viewWidth  / 2)
@@ -4798,64 +4506,48 @@ cameraZ = (ptrY − padY) · PlayBottom / RadarH − trunc(viewHeight / 2)
 ```
 
 (signed truncating divisions, half-viewport terms signed), so the clicked
-point becomes the view **centre**; and the "drag branch" formula above
-(`stored camera + (clamped mouse − viewport origin)`) is likewise the
-pointer's world position for a click outside the minimap, not a camera
-write. The Ctrl+right drag-scroll of the world view moves the camera by
-`(trunc(Δ / 4) + trunc(prev / 16)) · 16` per axis. [07 R-CAM-01 §11] is the
-owning statement; this section keeps only the radar↔world scale, which is
-right.
+point becomes the view **centre**. The Ctrl+right drag-scroll of the world
+view moves the camera by `(trunc(Δ / 4) + trunc(prev / 16)) · 16` per axis.
+[07 R-CAM-01 §11] is the owning statement; this section owns the
+radar↔world scale.
 
 ### 3.12 Ground-pick crosshair, and the debug display mode (composer-time)
 
-**Correction (2026-08-31).** This section was headed "Viewport marker
-(composer-time)" and opened "The camera marker on the minimap is drawn at
-composer time, not in the contacts pass … The lines clip to the inclusive
-minimap rect", and it named the crossing point "the camera-derived radar
-position" from "camera centre" fields. Two of those three claims are wrong, and
-the third is a misnomer:
+The ground-pick crosshair is a film-mode diagnostic of the **world**
+composer, not a minimap figure:
 
-* **The figure is not drawn on the minimap.** It is drawn by the **world**
-  composer, into the main backbuffer through the clipped **game viewport**
-  descriptor the composer re-establishes before its tile pass (§4.1) — the same
-  surface the tile pass, the debug terrain grid and the unit band draw into. The
-  `+128` and `+32` are that viewport's origin literals (§4.1), applied
-  per-primitive exactly as §4.1 records for beam and site projection; they are
-  not a minimap offset. The lines clip to the game viewport, not to the minimap
-  rect. Retail's minimap carries its radar picture and its contacts, and no
-  camera or viewport indicator of any kind.
-* **The crossing point is not the camera centre.** The three fields the composer
-  reads are the **ground resolver's** output — the world point under the pointer
-  (or, while the pointer is over the radar rect, the lens-projected point), as
-  §3.11 and the ground resolver of `[07 §8]` produce it. The resolver writes X,
-  Y and Z as three 16.16 words and the composer reads each one's high word, so
-  the values are the integer world coordinates of the picked point. The
-  half-height shear and the camera-scroll subtraction are then the ordinary
-  world-to-screen projection of §2.1, which is why the earlier reading — a
-  minimap position — looked self-consistent.
-* **"Minimap mode byte" is a misnomer** for the mode byte, kept only by
-  inheritance from an older note. Nothing about the byte concerns the radar; it
-  selects among the composer's debug displays. See "Debug display mode" below.
+* **It is drawn into the main backbuffer** through the clipped **game
+  viewport** descriptor the composer re-establishes before its tile pass
+  (§4.1) — the same surface the tile pass, the debug terrain grid and the
+  unit band draw into. The `+128` and `+32` are that viewport's origin
+  literals (§4.1), applied per-primitive exactly as §4.1 records for beam and
+  site projection; they are not a minimap offset. The lines clip to the game
+  viewport, not to the minimap rect. (The minimap's own viewport rectangle is
+  a different figure with a different producer, `[R-MM-01 §1]`.)
+* **The crossing point is the ground resolver's output** — the world point
+  under the pointer (or, while the pointer is over the radar rect, the
+  lens-projected point), as §3.11 and the ground resolver of `[07 §8]`
+  produce it. The resolver writes X, Y and Z as three 16.16 words and the
+  composer reads each one's high word, so the values are the integer world
+  coordinates of the picked point. The half-height shear and the
+  camera-scroll subtraction are then the ordinary world-to-screen projection
+  of §2.1.
+* **The mode byte is not a minimap byte.** Nothing about it concerns the
+  radar; it selects among the composer's debug displays. See "Debug display
+  mode" below.
 
-**Established.** The figure itself stands exactly as previously recorded: two
-1-pixel Bresenham lines in the ring/viewport palette index — the same index the
+**Established.** The figure is two 1-pixel Bresenham lines in the ring/viewport palette index — the same index the
 weapon and interceptor rings use, distinct from the radar-circle and jammer
 indices — drawn when the debug display mode byte equals 2, as
 `(px+126, py+32) → (px+130, py+32)` and `(px+128, py+30) → (px+128, py+34)`
 where `px = pickX − camX` and `py = pickZ − (pickY >> 1) − camZ`. So it is a
 five-pixel cross of two one-pixel lines crossing at `(px+128, py+32)`, and the
 endpoints are literals, not an inference. Thickness claims of 6/4 pixels belong
-to the selection brackets, not this figure. (Corpus trail: minimap note §5.5,
-viewport note §2, r03-03 §4, and the world-composer decompile; the ground
-resolver's three-word output is the r03-03 §3 lens/pick path.)
+to the selection brackets, not this figure.
 
-**Debug display mode (Established, was Unknown).** The previous text recorded
-the mode byte's source as an explicit Unknown — "the available clean-room writer
-census found no simulation, session, mission, or map input that writes this
-distinct minimap mode byte" — with a standing `TODO(question)`. That is now
-closed, and the reason the census came up empty is that the byte has no
-simulation, session, mission or map input at all: it is a **developer film-mode
-display selector**, and its complete writer set is three sites.
+**Debug display mode (Established).** The mode byte has no simulation,
+session, mission or map input at all: it is a **developer film-mode display
+selector**, and its complete writer set is three sites.
 
 * The **battle interface initializer** stores zero, alongside the rest of the
   interface state it clears at battle entry.
@@ -4875,7 +4567,8 @@ pair `DisplaymodeDepth = 256` with `Games = 1` `[07 R-CAM-01 §9]`. **None of it
 is reachable in a stock configuration**, so in ordinary play the byte holds zero
 from battle entry to battle exit and neither the crosshair above nor the debug
 grid below is ever drawn. A player who remembers a camera indicator on TA's
-minimap is not remembering this figure; retail has no such indicator.
+minimap is remembering the viewport rectangle of `[R-MM-01 §1]`, not this
+figure.
 
 The other two readers of the same byte, for completeness: the debug terrain-grid
 overlay draws its wireframe whenever the byte is nonzero and takes an extra
@@ -4889,28 +4582,16 @@ zero and the `0..4` cycle — and publishes it unchanged through the frame. It
 implements neither developer nor film mode, so nothing calls the cycle and the
 value is zero throughout, which is what retail does too. The debug crosshair of
 this section takes no minimap argument; the minimap's own viewport rectangle is
-a different figure with a different producer — see `[R-MM-01 §1]` immediately
-below, which corrects this section's closing claim.
+a different figure with a different producer — `[R-MM-01 §1]` immediately
+below.
 
-### Closed — the minimap viewport rectangle, and the two sensor-circle colours [R-MM-01] (2026-08-31)
+#### The minimap viewport rectangle, and the two sensor-circle colours [R-MM-01]
 
-#### R-MM-01 §1 — the minimap *does* carry a viewport rectangle
+##### R-MM-01 §1 — the minimap *does* carry a viewport rectangle
 
-**Correction (2026-08-31).** §3.12's correction of the same date is right that
-the five-pixel crosshair belongs to the **world** composer and is a film-mode
-diagnostic. It then overreached. Its bullet said, in these words: "Retail's
-minimap carries its radar picture and its contacts, and no camera or viewport
-indicator of any kind", and its closing paragraph said "A player who remembers a
-camera indicator on TA's minimap is not remembering this figure; retail has no
-such indicator." **Both sentences are wrong.** Retail draws a camera viewport
-rectangle on the minimap in every ordinary battle frame. The error was one of
-scope: that pass traced the crosshair, found it in the world composer, and
-concluded from the crosshair's absence that no minimap indicator existed —
-without looking at the routine that puts the radar picture on the panel. The
-two figures are unrelated. §3.6's layer list ("…sensor circles, and the viewport
-marker" under *Radar final*) and `[07 §10]`'s "the *final* surface … draws start
-positions plus the viewport rectangle" were right that the rectangle exists and
-wrong only about which surface carries it; see the layering note below.
+Retail draws a camera viewport rectangle on the minimap in every ordinary
+battle frame. It is unrelated to the film-mode crosshair of §3.12, and it is
+not on the FINAL surface (§3.6); the layering is below.
 
 **Established — the producer.** The rectangle is not drawn by the contacts pass
 and is not part of the FINAL surface. The battle HUD composer, once per host
@@ -4920,10 +4601,9 @@ surface onto the HUD's own destination surface at the canvas letterbox origin
 `(padX, padY)`, and then strokes the camera-to-radar rectangle's outline onto
 that same destination. So the rectangle lives on the destination surface, above
 a FINAL that never contains it — which is why it survives the per-tick FINAL
-wipe and why a save-restored FINAL carries no marker. Corollary for §3.6: FINAL
-is *mapped wipe → blips → commander markers → sensor circles → weapon rings →
-projectile/feature dots*, and nothing else; strike "the viewport marker" from
-that list and read it here instead.
+wipe and why a save-restored FINAL carries no marker. FINAL is *mapped wipe →
+blips → commander markers → sensor circles → weapon rings →
+projectile/feature dots*, and nothing else (§3.6).
 
 **Established — the rectangle.** The rectangle is the **camera-to-radar
 rectangle**, a four-integer inclusive record recomputed by the per-axis camera
@@ -4957,18 +4637,14 @@ radar rect anyway, because `cameraX ≤ PlayRight − viewWidth`. The colour is
 stock install to physical index 194, `(247,227,103)`. That is the pale yellow a
 retail screen shot shows around the visible area, and it is a different entry
 from the crosshair's entry 15 (white) and from the drag rectangle's 6/4/15
-family `[07 §6]`. The `TODO(question)` that stood on this colour is closed.
+family `[07 §6]`.
 
 Note that entry 14 is shared with the minimap's 1×1 projectile dot (§3.9 layer
 6); the two figures simply use the same colour-map slot.
 
-#### R-MM-01 §2 — the sensor-circle colours are entries 10 and 12
+##### R-MM-01 §2 — the sensor-circle colours are entries 10 and 12
 
-**Established (was Unknown).** §3.10's tail recorded "What remains open is the
-numeric identity of the two palette indices", and `[07 §10]`'s Unknown list
-carries the matching row ("Mapping of the three sensor callback tables to the
-radar versus jammer palette entries"). Both are closed. The contacts pass reads
-the same colour-map block as everything else in §3.9/§3.10 and takes:
+**Established.** The contacts pass reads the same colour-map block as everything else in §3.9/§3.10 and takes:
 
 | Circle | Colour-map entry | GUIPAL source | Stock physical |
 |---|---|---|---|
@@ -4982,12 +4658,11 @@ So the bright green ring a retail screen shot shows around a radar-carrying
 unit's revealed area is the **radar coverage circle** of §3.10, not an outline
 of the LOS-revealed region: nothing in retail traces the revealed region's
 boundary. The radar and sonar outer circles are two separate circles at the two
-authored distances, both in entry 10 — §3.10's "the outer circle radius is
-`max(radardistance, sonardistance)`" describes one circle where the pass emits
-one per nonzero distance; the visible result is identical whenever one distance
-dominates, which is the stock case.
+authored distances, both in entry 10 (§3.10); the visible result is identical
+to a single circle at the larger distance whenever one dominates, which is
+the stock case.
 
-#### R-MM-01 §3 — the blip gate's two words, the ring gate, the bars, and the picture's domain (2026-09-02)
+##### R-MM-01 §3 — the blip gate's two words, the ring gate, the bars, and the picture's domain
 
 **Established — the two gate words.** In the contacts pass (§3.9) a live
 unit is admitted when any of: the mode-flags word's **full-radar bit** (bit
@@ -5005,8 +4680,8 @@ masks read true, so the gate reduces to the last two terms.
 **Established — rings are gated on selection.** Within one unit's
 iteration: blip; commander/hover marker; then, **only if the unit's
 selected bit (status bit 4) is set**: the four sensor circles when the
-instance is active or the definition lacks `onoffable` (the "circle gate
-correction" of §3.9), and then — independently of that inner test but still
+instance is active or the definition lacks `onoffable` (the selected-unit
+circle gate of §3.9), and then — independently of that inner test but still
 under the selected bit — the weapon/interceptor ring loop when definition
 word A bit 29 is set. A detected enemy is never ringed; §3.9's layer 5 is
 the *selected* unit's rings.
@@ -5014,8 +4689,7 @@ the *selected* unit's rings.
 **Established — the bars and the domain.** See the closure at the end of
 §3.7: the three radar surfaces are `RadarW × RadarH`, the presenter paints
 no bar fill, and the generated-picture loop samples only inside the play
-area. Bar content: the rail's own `PANELSIDE` art, **Established** 2026-09-04
-(the closure is at the end of §3.7).
+area. Bar content: the rail's own `PANELSIDE` art, **Established** (§3.7).
 
 ## 4. Indexed renderer, palettes, and asset layers
 
@@ -5127,8 +4801,7 @@ no channel arithmetic and no interpolation between rows.
   orange/yellow band).
 
 **When it is used (established).** `LHT` drives exactly one presentation
-family — the lit-ground halo drawn around an explosion and around muzzle
-flashes. The engine precomputes a small square flash texture (`N×N` plus a
+family — the lit-ground halo drawn around an explosion. The engine precomputes a small square flash texture (`N×N` plus a
 24-byte header) whose bytes encode intensity — the inner core varies around
 index `0x6F` minus a jittered radial distance, a thin ring is exactly `0x6E`,
 and outside the disc the byte is `0xFF` transparent — then for each screen
@@ -5142,52 +4815,37 @@ and seeded from the time of day before the world rebuild ([08 R-ENTRY-01 §2],
 [01 R-PLAT-01 §4]), so the noise pattern differs between two retail battles by
 design and follows from no authored datum; a clone's choice of seed is
 presentation-only, and the shape — the ramp, the ellipse, the up-to-nine
-thirty-seconds jitter — is the whole contract (Established, 2026-09-02).
+thirty-seconds jitter — is the whole contract (Established).
 
-**Correction, 2026-08-31 — where it composites, and the muzzle-flash half.**
-This sentence said the halo is "composited after the flat tile pass and before
-shadows, units, and fog". It is not. The disc is the explosion pool's
-**secondary** cursor, and that pool's draw entry — both of its walks, the
-secondary through the flash blitter and then the primary art — is invoked from
-the world-draw sequence between the projectile renderer and strip 7, which is
-stage 7 of §1's ten-stage order and therefore **after** every unit traversal.
-Read directly from the composer's own call sequence: strips 0–2, the feature
+**Where it composites.** The disc is the explosion pool's **secondary**
+cursor, and that pool's draw entry — both of its walks, the secondary through
+the flash blitter and then the primary art — is invoked from the world-draw
+sequence between the projectile renderer and strip 7, which is stage 7 of
+§1's ten-stage order and therefore **after** every unit traversal. Read
+directly from the composer's own call sequence: strips 0–2, the feature
 pass, strips 3–4, the grounded unit pass, strip 5, strip 6, the projectile
-draw, the explosion pool, strip 7. `[06 R-WFX-01 §2]` already placed the pool
-draw there and cited §1 for it; only this sentence disagreed.
+draw, the explosion pool, strip 7 (`[06 R-WFX-01 §2]`). There is **no
+muzzle-time sprite producer in any weapon path** (`[06 R-WFX-01 §4]`) — the
+only muzzle-time presentation is the `startsmoke` puff, the `soundstart`
+sound, and whatever the unit's `Fire*` script emits — so a halo at a muzzle
+arrives through one of those, not through a producer of its own.
 
-The same sentence's "and around muzzle flashes" also wants qualifying:
-`[06 R-WFX-01 §4]` establishes that there is **no muzzle-time sprite producer
-in any weapon path** — the only muzzle-time presentation is the `startsmoke`
-puff, the `soundstart` sound, and whatever the unit's `Fire*` script emits. Any
-halo at a muzzle therefore arrives through one of those, not through a
-producer of its own.
+**The first-walk blitter brightens; the row is `src − 0x4F` (Established).**
+The first-walk blitter is its own routine, gated on the display's
+light-table-loaded bit, and **both** of its span writers — the raw one and
+the run-length one — replace each destination byte under an opaque source
+byte with `LHT[(src − 0x4F)·256 + dst]`, exactly as [R-FX-01 §4] states. The
+disc is a brightening of what is under it; with no light table loaded the
+blitter draws nothing, not an opaque disc. The row is `discByte − 0x4F = 32 −
+q` for the ramp bytes `q = 1..32` and `31` for the ring byte, needing no
+clamp because the ramp `0x4F..0x6E` is exactly rows `0..31`. The effect
+remains presentation-only, not authoritative, not hashed, and not
+save/loaded.
 
-**Correction, 2026-09-02 (RWU-19-43) — brightening, established; and the row
-is `src − 0x4F`.** This paragraph previously stood as an Unknown: "the pool's
-first walk goes through a blitter distinct from the second's, and a search of
-that blitter and its span writers found no read of the `LHT` table; if it
-simply writes the disc's bytes, the disc is an opaque `0x4F..0x6E` ramp". The
-search was wrong. The first-walk blitter is its own routine, gated on the
-display's light-table-loaded bit, and **both** of its span writers — the raw
-one and the run-length one — replace each destination byte under an opaque
-source byte with `LHT[(src − 0x4F)·256 + dst]`, exactly as [R-FX-01 §4]
-states. The disc is a brightening of what is under it; with no light table
-loaded the blitter draws nothing, not an opaque disc. The mapping sentence
-below previously read `level = clamp(discByte − 0x50, 0, 31) = 31 − q`; the
-traced row is `discByte − 0x4F = 32 − q` for the ramp bytes `q = 1..32` and
-`31` for the ring byte — one row brighter at every byte, and needing no clamp
-because the ramp `0x4F..0x6E` is exactly rows `0..31`. The effect remains
-presentation-only, not authoritative, not hashed, and not save/loaded.
+`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `discByte − 0x4F = 32 − q` (`31` for the ring byte) bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
 
-`LHT` never darkens; darkening is through `SHD` rows 0–14. The `discByte→level` mapping is established (direct-static for the byte thresholds — the flash-disc precompute was re-exported and verified in 2026-08-26): the disc canvas is filled per pixel with one CRT draw each, `R = trunc(CRT*10/0x8000)` in `0..9`, radial distance `sqrt(dx*dx + 1.33*dy*dy)`, `q = trunc(((R + sqrt) / H) * 32.0)`, then the stored byte is `0x6F − q` while `(0x20 − q) mod 256 < 0x20`, `0x6E` while that byte-compare lies in `0x20..0x21`, and `0xFF` from `0x22` up — the 0xFF band is what makes the disc's outer area transparent, the visible region being the band where `q mod 256` lies in `0..31`. The halo level is `discByte − 0x4F = 32 − q` (`31` for the ring byte; corrected 2026-09-02 above from `clamp(discByte − 0x50, 0, 31) = 31 − q`) bright centre to rim, and the disc is drawn to screen as radial spokes from angle `0x800` through `0x10000` in steps of `0x800` through the sin/cos helper pair (the same angular step as the minimap circle rasterizers).
-
-**Correction, 2026-08-31 — the ellipticity axis and the division.** This
-paragraph previously put the 1.33 "applied to the x-axis term" and stated
-"the multiplier is ×32 with no division", retracting an earlier reading of
-`q = trunc((R+sqrt)/cx*32)`. Both halves of that were wrong, and the earlier
-retracted reading was closer to right than the retraction. The generator's own
-arithmetic ([06 R-WFX-01 §2], re-derived directly): the **row** term carries
+**The ellipticity axis and the division.** The generator's own arithmetic
+([06 R-WFX-01 §2]): the **row** term carries
 the factor — for row `y` and column `x` of an `n`-sided frame with `H = n/2`,
 `A = (H − y)² · 1.33` and the distance is `sqrt((H − x)² + A)` — and the sum
 **is** divided by `H` before the ×32. So the disc is an ellipse compressed
@@ -5195,30 +4853,30 @@ the factor — for row `y` and column `x` of an `n`-sided frame with `H = n/2`,
 vertically, and the `/H` is what makes every frame of every table span the same
 number of ramp steps regardless of its side. Measured against a rendered
 impact: the brightened region is 49×43 pixels, a ratio of 1.140 against
-`sqrt(1.33) = 1.153`. Under the retracted reading the disc would have been
-taller than wide. The byte thresholds and the `discByte→level` mapping in the
-sentence above are unaffected and stand. Multi-tick fading envelope remains presentation tuning; the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
+`sqrt(1.33) = 1.153`. The multi-tick fading envelope remains presentation tuning; the 32-row/256-column layout, the near-identity row 0, the +51.51 bright end, and the exclusive flash binding are direct. The two brightening ramps overlap: `LHT` row 3 and `SHD` row 16
 both lift mean luminance by +6.83, `LHT` row 5 and `SHD` row 17 both by +12.60,
 but the files are distinct and neither is synthesized from the other.
 
 #### 4.3.2 SHD shading
 
 Indexed texture pixels may be passed through an `SHD` row for model face
-lighting; flat-colored 3DO primitives and laser lines bypass `SHD`. Team/logo
+lighting; flat-colored 3DO primitives take the same row through the shaded
+flat writer in the shaded renderer and bypass `SHD` in the unshaded one
+([R-REN-03A §5]); laser lines bypass `SHD`. Team/logo
 textures select the player-specific frame before palette/shading lookup. `SHD`
 rows 0–14 darken (row 0 near-black, only index 0 survives; mean −97.59),
 row 15 is near-identity (232 of 256 self, mean +0.17), and rows 16–31 brighten
 past identity to +53.53 at row 31 — a full signed ramp that `LHT` does not
-replicate. The `SHD` row selection is now established (direct-static):
+replicate. The `SHD` row selection is established (direct-static):
 the cleared render-piece shade bit (`DONT_SHADE`) pins row `15`, else
 `row = trunc(dot*5.0) & 0x1F` with
 `L=(-0.8,1,0.25)`, wrapping negatives; the row interpolates gouraud-style as
 `(rowR-rowL)/width`, sampling
-`SHD[row*256+texel]` per pixel; the flat path bypasses `SHD` and fills the span
-directly. All of that lives in the shaded piece renderer, which retail reaches
+`SHD[row*256+texel]` per pixel on textured faces and `SHD[row*256+color]` on
+flat ones. All of that lives in the shaded piece renderer, which retail reaches
 only for a `BMcode=0` unit with the `Shading` display option on ([R-RND-02A]);
-the renderer every other unit takes maps textured faces with no `SHD` step. Identity row `15` and the 32-row layout remain direct; the `1=NW`
-corner→bit mapping remains supported inference pending probe.
+the renderer every other unit takes maps textured faces with no `SHD` step. Identity row `15` and the 32-row layout are direct; the `1=NW`
+corner→bit mapping of §3.3 is supported inference.
 
 #### 4.3.3 Gray table construction [R-RR16-A §1]
 
@@ -5353,11 +5011,11 @@ without importing presentation details:
 These probes also separate the phase-7 strict countdown predicate from the
 wall-clock cursor path's signed-delta and multi-frame loop. **Established.**
 
-### Closed — named GAF banks and slots, the fog fade families, and the cursor bank [R-FX-01 §1] (2026-08-29)
+#### Named GAF banks and slots, the fog fade families, and the cursor bank [R-FX-01 §1]
 
 **Established (direct-static; reader census over the whole decompile
-export).** The startup binder this section summarizes as "wires named
-entries" loads five banks through the animation-bank cache (a bank name
+export).** The startup binder of §4.4 ("wires named entries") loads five
+banks through the animation-bank cache (a bank name
 resolves to `anims\<name>.gaf`; a bank that fails to load ends the process
 with a message box — [06 R-WFX-01 §1]) and looks up fixed entry names in
 each. A name that is absent leaves a null slot; the binder additionally clears
@@ -5384,11 +5042,11 @@ describes without naming them. The fog overlay draws frame `value − 1` of
 channel, then the same-indexed `Black` entry for the history channel — the
 Gray slot base plus the variant times the slot stride, and the Black slot base
 likewise. **No other reader exists**: not the shadow pass, not cloak, not the
-nanolathe (which has no fade at all, [R-P0-19-P]), not any palette fade. The
-lane question's three candidate uses are all bounded-negative over the whole
-export. **Established.**
+nanolathe (which has no fade at all, [R-P0-19-P]), not any palette fade;
+every other candidate use is bounded-negative over the whole export.
+**Established.**
 
-### Closed — the frame blitter family and the raster primitives [R-COMP-01 §2] (2026-08-29)
+#### The frame blitter family and the raster primitives [R-COMP-01 §2]
 
 Every GAF frame, tile, panel, fog cloud, cursor and scratch image on screen
 goes through one blitter shell and a handful of primitives. This section is
@@ -5485,9 +5143,9 @@ rectangle, two float-scaled (magnifying) keyed/tinted frame blitters, and a
 named-region registry have no callers anywhere in the image; an
 implementation does not need them.
 
-### Closed — circle rasterizers, the rectangle shader, image-record wrappers, and screen redirection [R-COMP-02 §5] (2026-08-29)
+#### Circle rasterizers, the rectangle shader, image-record wrappers, and screen redirection [R-COMP-02 §5]
 
-Status: **Established (direct-static)** unless marked. These are the raster
+**Established (direct-static)** unless marked. These are the raster
 helpers [R-COMP-01 §2] listed by name but did not spell out.
 
 **The sin/cos helper pair.** One 512-entry signed 16-bit table holds
@@ -5553,19 +5211,16 @@ entry 14 of the logical-to-physical map. The film-mode crosshair of [03 §3.12]
 is a separate world-composer figure. Which events set bit 1 is [03 §3.6]'s
 lifecycle; the pre-pass itself is only the consumer.
 
-**Correction (2026-08-31).** The paragraph above called the copied surface "the
-minimap picture" and the outline "the panel frame rectangle outline". The
-surface is FINAL, not PICTURE — PICTURE carries neither fog nor contacts — and
-the outline is not chrome: its four inclusive corners are the camera origin and
-the game viewport's extents projected through the radar lens, recomputed by the
-per-axis camera clamp. It is the minimap's viewport indicator, and this pre-pass
-is its only producer. `[R-MM-01 §1]` is the owning statement.
+The rectangle's four inclusive corners are the camera origin and the game
+viewport's extents projected through the radar lens, recomputed by the
+per-axis camera clamp; it is the minimap's viewport indicator, this pre-pass
+is its only producer, and `[R-MM-01 §1]` is the owning statement.
 
-### Closed — the two standalone unshaded-renderer entries: debris pieces and effect/projectile models [R-COMP-02 §6] (2026-08-29)
+#### The two standalone unshaded-renderer entries: debris pieces and effect/projectile models [R-COMP-02 §6]
 
-Status: **Established** (direct-static). The primitive dispatch and span
+**Established** (direct-static). The primitive dispatch and span
 writers are [R-REN-03A §5]; [R-RND-02A] names the unshaded renderer; this
-closes the two entries that reach it outside the unit path.
+section states the two entries that reach it outside the unit path.
 
 Both entries take a model piece and a world position triple (16.16), project
 every vertex to the screen — `sx = high16(X + vx) + 128`, `sy = high16(Z −
@@ -5593,8 +5248,7 @@ same test before calling the effect entry. Neither entry reads `SHD`, the height
 composition image; both write straight to the target image.
 
 **Consequently a projectile or effect model has no key plane and never reaches
-the structure anti-alias gate (Established, direct-static, 2026-09-02,
-RWU-19-43).** The fillers these entries call are the **framebuffer** variants
+the structure anti-alias gate (Established, direct-static).** The fillers these entries call are the **framebuffer** variants
 of [R-RAST-01 §1], which carry no key plane and resolve overlapping primitives
 in painter order — the primitives' stored order within the piece — and the
 supersampled vertex path of [R-REN-03A §6] is reachable only from the unit
@@ -5609,9 +5263,9 @@ Whether any stock projectile model carries pieces retail therefore never draws
 is `TODO(question)`: an asset census of the projectile 3DOs' piece trees would
 settle it.
 
-### Closed — the composition memory cache and its composite surface, the strip pool's growth, and the container `finished` query [R-COMP-02 §7] (2026-08-29)
+#### The composition memory cache and its composite surface, the strip pool's growth, and the container `finished` query [R-COMP-02 §7]
 
-Status: **Established (direct-static)** except where marked.
+**Established (direct-static)** except where marked.
 
 **The composition memory cache — creation and size.** The catalog compiler
 ([02 R-CAT-01 §5] step 2) creates the cache after the movement classes are
@@ -5778,7 +5432,7 @@ one cell per sim tick; each visited cell draws one simulation-RNG value even at
 probability zero. Stock maps are inert because every shipped definition
 authors `reproduce=0`.
 
-#### R-LAYER §2 — feature changes restamp every movement class directly; they bypass the request revision pass (2026-08-28)
+#### R-LAYER §2 — feature changes restamp every movement class directly; they bypass the request revision pass
 
 **Established (direct-static, bounded caller census).** The movement-class
 layers of [04 §6.1 R-DOC04-B] — the packed 2-bit per-cell stamps, one heap per
@@ -5826,10 +5480,6 @@ direct restamps above are how feature blocking enters and leaves the class
 layers. Unit-side building commits likewise restamp directly (sites 3–5), so
 the revision pass is purely the mobile-occupant aging channel.
 
-**Corrections this closes.** Doc 04's earlier phrasing that "dynamic
-placement/removal causes rectangle restamps" named the mechanism without its
-sites; the census above is that site list.
-
 #### 5.1.3 Composer staging and pool membership
 
 The frame composer stages through ten fixed-order barriers (section 1). Feature
@@ -5839,17 +5489,10 @@ work sits outside the strip abstraction:
   feature pass that owns the unexplored-marker state. That pass loops the plot
   row-major, clears the never-seen marker, and dispatches visible features
   through the per-cell dispatcher. A second, interleaved pass walks the
-  window's plot rows mixing grounded-mode units and deferred tall features.
-  (**Correction, 2026-08-29:** this sentence previously read "walks screen-Y
-  bucket rows mixing soft units and deferred tall/shadow features so that
-  feature–unit overlap is painter-ordered by projected Y". The rows are world
-  Z plot rows, "soft" is the mode-mirror value `1`, and the deferred features
-  are the tall ones; the units drawn in the later pass after projectiles are
-  the ones whose mirror is not `1` — [R-RAST-01 §6], [R-RAST-01 §7].
-  **Second correction, 2026-08-30:** the first correction ended "structures
-  and airborne units are drawn in a later pass after projectiles". Structures
-  are not: their mode mirror is `1`, so they are in this interleaved pass with
-  the grounded units — see the 2026-08-30 correction under [R-RAST-01 §7].)
+  window's world-Z plot rows mixing the units whose mode mirror is `1`
+  (grounded movers, landed aircraft and every structure) with the deferred
+  tall features; the units whose mirror is not `1` are drawn in a later pass
+  after projectiles — [R-RAST-01 §6], [R-RAST-01 §7].
 - The ten-strip strip objects are confined to the strip dispatcher and capped
   per strip; the fixed 300-record effect pool sits between strips 6 and 7
   behind the same mode gate. Features are not strip objects and are not
@@ -5884,21 +5527,17 @@ rectangle; fully off-screen features are culled whole.
 Per-frame visibility for features is a predicate-consensus:
 
 - Short features (`height < 10`) are tested against memory/fog. Features that
-  do not carry the `nodrawundergray` flag draw unconditionally once explored.
-  Features that do (Great Divide has none of these on its native table, but
+  do not carry the `nodrawundergray` flag draw unconditionally — the gate has
+  no explored or fog term ([R-RAST-01 §6-A]); the fog overlay is what hides
+  them. Features that do (Great Divide has none of these on its native table, but
   wall/fort types do) draw only when the plot's placer nibble equals the local
   player slot or when the two-corner LOS test passes — first corner at the
   sheared cell origin, then a single corner displaced by the footprint offsets.
-  (This corrects the earlier "four-corner LOS test" reading in this section:
-  the feature predicate evaluates two corners, per the traced predicate; the
-  section 3.2 cross-reference is now consistent.) The placer nibble is
-  stamped as `(placer & 0xF) << 3`, with a nibble of 10 for map-authored
-  features and the owning player's slot for corpses, so owned wrecks are
-  remembered. This corrects the older §5.1 reading of a "team-memory nibble":
-  the memory accept is keyed to the placer nibble and applies only to features
-  whose definition carries `nodrawundergray`, which is also the answer to the
-  open question in "Missing and unknown" about which feature-definition flag
-  gates the owner-memory accept.
+  The placer nibble is stamped as `(placer & 0xF) << 3`, with a nibble of 10
+  for map-authored features and the owning player's slot for corpses, so
+  owned wrecks are remembered. The memory accept is keyed to the placer
+  nibble and applies only to features whose definition carries
+  `nodrawundergray`.
 - Tall features (`height >= 10`) force the never-seen marker — bit 2 (value
   `0x04`) of the plot cell's flag byte at offset 12 — regardless of LOS,
   casting a persistent unexplored shadow over their own cells. Their drawing
@@ -5910,16 +5549,11 @@ bits 3..6); the consolidated contract adds the height threshold of 10 and the
 `nodrawundergray` gating of the memory accept. The draw-versus-marker order is:
 the feature pass **clears** the never-seen marker per cell before evaluating; a
 skipped hidden feature leaves it set; tall features re-mark their own cells
-unconditionally; then drawing is decided by the memory-or-LOS gate. (The older
-§5.1 reading — check visibility, then set a "marker for a later frame" — had
-the clear/draw order inverted.)
+unconditionally; then drawing is decided by the memory-or-LOS gate.
 
 Fog presentation afterwards draws a hard 32-pixel overlay from the visibility
 grid, leaving unexplored cells dark (section 3.3). The feature passes themselves
-are the authors of the per-cell never-seen bit. The corner-count
-`TODO(question)` that pitted the two-corner form of section 3.2 against the
-four-corner reading here is resolved: the feature predicate is two-corner, and
-this section now records it as such.
+are the authors of the per-cell never-seen bit.
 
 #### 5.1.6 Animation and the burning lifecycle
 
@@ -5939,8 +5573,7 @@ this section now records it as such.
   established one-shot `simulationRandom(sparktime / 2) + (sparktime / 2)`
   (one Park-Miller draw of `sparktime/2` plus `sparktime/2`), owned by
   document 05's fire contract (`[05 "Feature burning"]`, mirrored in `[06]`
-  weapon firestarter handling); the earlier deferral `TODO(question)` here is
-  closed.
+  weapon firestarter handling).
 - **Clipping and transparency** — GAF drawing composes subframes clipped to
   the parent canvas; later opaque pixels overwrite earlier ones; skip commands
   are the sole transparency mechanism. Shadow drawing may select the
@@ -5957,7 +5590,7 @@ trees (`Tree1Dead`, `Tree2Dead`), four metal deposits (`RockMetal`,
 (green-world). No initially-placed feature carries a 3DO `object`; all are
 sprite-class (`filename` present) except later corpses.
 
-### Closed — the tile pass, exactly [R-COMP-01 §1] (2026-08-29)
+#### The tile pass, exactly [R-COMP-01 §1]
 
 **Established (direct-static).** Inputs: the camera origin `(camX, camZ)` in
 world pixels; the viewport origin `(vpLeft, vpTop)` and size `(W, H)` of
@@ -6001,18 +5634,15 @@ the grid. A tile is never clipped against the map — only against the viewport
 — so a camera the clamp lets reach the map edge shows whatever the grid holds
 there ([R-TERR-01 §2] void strips are ordinary indices).
 
-**Correction to §2.2.** That section's tile-blitter sentence read "computes
-source block plus intra-tile pixel remainder, **clips at map bounds**, and
-handles partial edge rectangles". There is no map-bounds clip anywhere in the
-tile pass: the only clipping is the viewport clip rectangle applied to the
-edge tiles by the raw blitter's shell, and the interior copy is not clipped at
-all. The sentence in §2.2 now points here.
+**No map-bounds clip.** There is no map-bounds clip anywhere in the tile
+pass: the only clipping is the viewport clip rectangle applied to the edge
+tiles by the raw blitter's shell, and the interior copy is not clipped at
+all.
 
-### Closed — feature draw order and clipping, and the water line on 3DO wrecks [R-RAST-01 §6] (2026-08-29)
+#### Feature draw order and clipping, and the water line on 3DO wrecks [R-RAST-01 §6]
 
-This section states the composer's feature passes at the precision §5.1.3
-and §5.1.5 lacked, and corrects §5.1.3's "screen-Y bucket rows". Everything
-is **Established (direct-static)** unless marked.
+This section states the composer's feature passes exactly. Everything is
+**Established (direct-static)** unless marked.
 
 **The window.** Both feature passes and the unit buckets share one window of
 plot cells, computed once per frame from the camera:
@@ -6020,7 +5650,7 @@ plot cells, computed once per frame from the camera:
 ```
 rowFirst = trunc(camZ / 16) - 16          camZ, camX in map pixels; trunc toward zero
 colFirst = trunc(camX / 16) - 10
-rows     = the bucket-row count;  cols = the bucket-column count     (map-derived globals)
+rows     = the bucket-row count;  cols = the bucket-column count     (viewport-derived, [R-RAST-01 §6-A])
 rows/cols are reduced by any part of the window that falls below 0, and the
 window is clipped so that rowFirst + rows <= mapHeightCells - 1 and
 colFirst + cols <= mapWidthCells - 1 (the last row and column are excluded)
@@ -6036,8 +5666,8 @@ player's slot, **or** the two-corner LOS predicate of §5.1.5 passes.
 
 **Pass 2 — mode-`1` units and tall features (between strips 4 and 5).** For
 each window row in order: first every unit in that row's bucket whose
-flags-word mode mirror is `1` (`[04 R-MOV-01 §8]`; structures included — see
-the 2026-08-30 correction under §7) — §7 gives the bucket rule — then,
+flags-word mode mirror is `1` (`[04 R-MOV-01 §8]`; structures included,
+[R-RAST-01 §7]) — §7 gives the bucket rule — then,
 column-major across the row, every cell whose never-seen
 bit is set (a deferred tall feature), under the same gate as pass 1.
 Consequences an implementer must keep: a tall feature paints **over** the
@@ -6045,9 +5675,7 @@ mode-`1` units of its own row and of every earlier row; a short feature
 paints **under** every unit; a mode-`1` unit paints over the short features
 and over tall features in rows above it; and airborne aircraft and units
 attached to a carrier paint over all features because they are drawn later
-(§7). **Correction, 2026-08-30:** that last clause read "structures and
-airborne units paint over all features because they are drawn later" —
-structures are in this pass, not the later one.
+(§7).
 
 **Per feature (the per-cell dispatcher).** The anchor is §5.1.4's formula.
 Then:
@@ -6091,13 +5719,12 @@ rasterizers reads the visibility grids. The fog overlay of §3.3 is composed
 after strip 9 and darkens features, units, shadows and projectiles alike
 ([R-SEL-02A]).
 
-### Closed — the feature window's two counts, and the gate has no fog term [R-RAST-01 §6-A] (2026-08-30)
+#### The feature window's two counts, and the gate has no fog term [R-RAST-01 §6-A]
 
-Two residuals of [R-RAST-01 §6] are closed. Both are **Established
-(direct-static)**.
+Both are **Established (direct-static)**.
 
 **The window's row and column counts are viewport-derived, not map-derived.**
-§6 named `rows` and `cols` only as "map-derived globals". They are fields of
+They are fields of
 the frame-window descriptor, written once during map load from the battle
 viewport's pixel dimensions:
 
@@ -6126,33 +5753,32 @@ floor: the dividend is biased by fifteen when negative before the arithmetic
 shift. The unit bucket key is `trunc((unitZ - camZ)/16) + 16` and is admitted
 on `0 <= row < rows` against the *unclipped* row count, as §7 states.
 
-**The gate contains no visibility term of its own.** §5.1.5's phrasing
-"features that do not carry the `nodrawundergray` flag draw unconditionally
-once explored" has been read as an explored precondition. It is not one. The
-per-cell loop of pass 1 is, in order: clear the never-seen bit unconditionally;
+**The gate contains no visibility term of its own.** There is no explored
+precondition. The per-cell loop of pass 1 is, in order: clear the never-seen bit unconditionally;
 skip when the cell's feature word is not live (`>= 0xFFFB`); read the
 definition; if `height >= 10` set the never-seen bit and defer to pass 2;
 otherwise draw when the definition's `nodrawundergray` bit is clear, else draw
 when the plot cell's placer nibble equals the local player's slot, else draw
 when the two-corner LOS predicate returns nonzero, else skip. The loop reads
 neither fog channel and neither visibility grid. §6's "fog and LOS are not
-applied at raster time" is exact, and the clause in §5.1.5 describes the
-overlay's effect on the finished frame, not a branch in the pass.
+applied at raster time" is exact; what §5.1.5 describes is the overlay's
+effect on the finished frame, not a branch in the pass.
 
 The practical consequence, and the one a reimplementation must keep: a feature
 whose cell has never been seen is still composed, and the 32-pixel fog blocks
 laid down after strip 9 are the only thing that hides it. Where a tall sprite
 straddles the boundary the covered part goes black and the rest stays visible —
 treetops stand out of the unexplored dark — and no feature ever appears or
-disappears as a whole when a visibility tile changes state. This is what
-playtest defect PT3-10 was: our two feature passes gated each feature on its
-anchor cell's fog tile, an edge that does not line up with the fog blocks.
+disappears as a whole when a visibility tile changes state. Gating each
+feature on its anchor cell's fog tile is wrong: that edge does not line up
+with the fog blocks.
 
 
 ### 5.2 Units and 3DO models
 
-Units are bucketed by projected vertical/screen position so that the software
-renderer can process them in a deterministic order. Visibility gates are applied
+Units are bucketed by world-Z plot row relative to the camera
+([R-RAST-01 §7]) so that the software renderer can process them in a
+deterministic order. Visibility gates are applied
 before drawing hidden units. A visible model traverses the 3DO sibling/child
 tree, resolves fixed-point piece transforms, triangulates primitives, applies
 player/team palette selection, and optionally renders a shadow pass.
@@ -6169,17 +5795,11 @@ factor of the chain. Unit position never enters piece math: pieces transform
 around the model origin, and position enters only the final screen placement.
 Projectile models reuse the identical rotation helper — yaw feeds the Y slot,
 pitch the X slot, each with a constant negative half-circle (180-degree)
-authored model-facing offset — and a propeller-style variant feeds its spin
-angle through the same slot machinery.
+authored model-facing offset — and the `propeller` variant substitutes its
+spin angle for the roll word, as follows.
 
-**Closed — the propeller variant's slot and offset (2026-09-04). Established
-(direct-static).** The sentence above left "the same slot machinery"
-unresolved, and the implementation site carried
-`TODO(question): propeller variant slot (Y vs Z) and whether it carries the
--32768 offset not fully established`, provisionally feeding Y with no offset.
-The slot was wrong; the missing offset was right.
-
-A model projectile is drawn from a **three-word angle block**, and the drawer
+**The model-projectile angle block and the propeller variant (Established,
+direct-static).** A model projectile is drawn from a **three-word angle block**, and the drawer
 rotates every vertex by those three words in a fixed order — each step rotates
 one coordinate pair in place, so the pair named is the one that turns:
 
@@ -6210,16 +5830,14 @@ reimplementation:
   any family motion runs ([06 §6.2]); the draw path only reads it.
 
 Nothing in the draw path chooses between two rotation *sources* — the flag picks
-which value goes into word 0 and nothing else, which is the same correction
-[06 R-WFX-01 §4] already applied to the older "directly computed versus
-record-stored rotation chosen by that same flag" reading. This also fixes what
-the roll word means for a non-propeller model projectile: it is the record's
+which value goes into word 0 and nothing else ([06 R-WFX-01 §4]). The roll
+word for a non-propeller model projectile is the record's
 first orientation word, which only the meteor family accumulates, so an ordinary
 missile draws with whatever roll its pool slot last held ([06 R-WFX-01 §4]
 records that consequence as a Supported inference with a writer census as its
 decider).
 
-Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)` through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel. (**Correction, 2026-08-29:** this sentence previously said "n-gons 5–16 are `n`-edge affine polygons through the edge-table scanline mappers … the flat path is quads-only". The arities were transposed, as [03 §2.4.1] item 2 already records: textured faces are quads only and the flat filler takes any vertex count. The exact edge, span and rounding rules of both fillers are [R-RAST-01 §1].) No stored UVs, no perspective divide (bounded-negative), the default corners are `w-1/h-1` of the selected frame, nearest sample. (The earlier "transparent holes skip `SHD`" clause is withdrawn: no model span writer tests the sampled texel against a transparent or colour-key index — see [R-REN-03A §5]. Model transparency is carried by the composition image's own background index, which the final blit keys against.) Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path bypasses `SHD`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
+Texture mapping is corner-index affine 16.16 (direct-static): quads map index order `0→(0,0) 1→(1,0) 2→(1,1) 3→(0,1)` through the edge-table scanline mappers (ten-dword edge records) with per-edge `(dx<<16)/dy`, per-scanline `(uR-uL)/width` and `rowStep=(rowR-rowL)/width`, sampling `SHD[row*256+texel]` per pixel. (Textured faces are quads only and the flat filler takes any vertex count, [03 §2.4.1] item 2; the exact edge, span and rounding rules of both fillers are [R-RAST-01 §1].) No stored UVs, no perspective divide (bounded-negative), the default corners are `w-1/h-1` of the selected frame, nearest sample. No model span writer tests the sampled texel against a transparent or colour-key index ([R-REN-03A §5]); model transparency is carried by the composition image's own background index, which the final blit keys against. Face row is `trunc(dot(N,L)*5.0)&0x1F` with `L=(-0.8,1,0.25)`; a cleared render-piece shade bit (`DONT_SHADE`) pins the identity row `15`; the gouraud row interpolates as `row delta/width` (direct-static); the flat path takes the same row through `SHD[row*256+color]`. The `SHD` steps above belong to the shaded piece renderer only, which retail selects on `BMcode=0` plus the `Shading` display option ([R-RND-02A]); the unshaded renderer maps textured faces with the same affine mapper and no `SHD` lookup. Row `0x0F` is identity, rows `0..14` darken, `16..31` brighten (see §4.3.2).
 
 #### Nanoframe reveal [R-P0-19-N]
 
@@ -6230,20 +5848,13 @@ blitted. Everything below is **Established (direct-static)**.
 **The height key.** The key plane the reveal reads is the unit composition
 image's ordinary depth plane; its full contract, including which units get one
 at all, is [R-REN-03A §2]. In brief:
-`key = trunc(vertexY) + 50 + (Digger ? 75 : 0)`, where `vertexY` is the
-vertex's whole-world-unit height above the unit origin. The span writers
-interpolate it in 16.16 across each scanline and narrow it to a byte; a pixel
-is admitted only when the stored key is less than or equal to the incoming one,
-so the highest face at each pixel wins and ties go to the later-drawn face.
-
-**Correction.** This paragraph previously read `key = trunc(vertexY/2) + bias`
-with "`bias` is `50`, or `125` when one unit-definition flag bit is set
-(`TODO(question)`: the authored name of that bit is not identified)". The
-halving was a misreading of the anti-aliased vertex path, which doubles the
-vertex before dividing and so cancels out; the key is the whole height. The
-unidentified bit is the FBI key `Digger` and it contributes `+75`, which is
-where `125` came from. See [R-REN-03A §2] for the derivation and
-[R-REN-03A §8] for what the raised base is for.
+`key = hi16(vertexY) + 50 + (Digger ? 75 : 0)`, where `vertexY` is the
+vertex's whole-world-unit height above the unit origin — the whole height,
+not half of it. The span writers interpolate it in 16.16 across each scanline
+and narrow it to a byte; a pixel is admitted only when the stored key is less
+than or equal to the incoming one, so the highest face at each pixel wins and
+ties go to the later-drawn face. [R-REN-03A §8] is what the raised base is
+for.
 
 **The reveal.** With `p = trunc(remaining × 255)` from the construction
 remaining fraction (`1` at request, `0` at completion, so `p` counts down), the
@@ -6276,36 +5887,31 @@ one its diagnostic text formats — so two adjacent nanoframes do not pulse
 together.
 
 **The outline.** After the recolour, every primitive of every visible piece is
-overdrawn as a closed polyline in `pulse B`, with the load-time selection
-primitive the one exclusion — the same primitive the raster pass skips. The
-outline is not depth-tested, so the whole wireframe shows through the body. This
-is why a nanoframe reads as a pulsing wireframe at the start of construction:
-the body is entirely erased and only the outline remains. (Superseded in
-detail by [R-COMP-01 §3]: the overdraw is two pixels per polygon scanline, it
-is key-tested whenever the image has a key plane, and it is a pass over the
-composition image — never the framebuffer.)
+overdrawn in `pulse B` at its per-scanline extremes — two pixels per polygon
+row — with the load-time selection primitive the one exclusion, the same
+primitive the raster pass skips. The overdraw is key-tested whenever the
+image has a key plane, and it is a pass over the composition image, never the
+framebuffer ([R-COMP-01 §3]). At the start of construction the body is
+entirely erased and only the outline remains, which is why a nanoframe reads
+as a pulsing wireframe.
 
 **Not the reveal.** The construction fraction also forces the mobile image-cache
 path and suppresses one shadow branch. Neither changes the soft/hard draw
 classification or the bucket key.
 
-### Closed — the nanoframe outline is the edge walk's row extremes, and it is key-tested [R-COMP-01 §3] (2026-08-29)
+#### The nanoframe outline is the edge walk's row extremes, and it is key-tested [R-COMP-01 §3]
 
-**Correction to [R-P0-19-N] "The outline".** That paragraph reads: "every
-primitive of every visible piece is overdrawn as a closed polyline in `pulse
-B` … The outline is not depth-tested, so the whole wireframe shows through the
-body." Both halves are imprecise. The overdraw is not a polyline and it is
-depth-tested whenever the image has a key plane. **Established
-(direct-static):**
+The overdraw of [R-P0-19-N] is not a polyline and it is depth-tested whenever
+the image has a key plane. **Established (direct-static):**
 
 - Pieces are walked **last to first**; only pieces with the draw bit set take
   part. Per piece the primitives are taken in stored order from index 1 when
   the model declares a selection primitive (the load-time swap of §2.4 put it
   at index 0) and from index 0 otherwise — the exclusion the paragraph states.
-- Each vertex projects as `sx = trunc(x) + originX`, `sy = trunc(−z) −
-  (trunc(y) >> 1) + originY` (the composition image's origin pair), with the
-  key `trunc(y) + 50 + (Digger ? 75 : 0)` — the whole height, exactly
-  [R-P0-19-N]'s key, not halved.
+- Each vertex projects as `sx = hi16(x) + originX`, `sy = hi16(−z) −
+  (hi16(y) >> 1) + originY` (the composition image's origin pair,
+  [R-RAST-01 §2]), with the key `hi16(y) + 50 + (Digger ? 75 : 0)` — the
+  whole height, exactly [R-P0-19-N]'s key, not halved.
 - The primitive's vertices (closed with a copy of the first) go through an
   edge walk of the [R-RAST-01 §1] form — extrema, left chain toward the
   previous index, right chain toward the next, `x = x0 × 65536 + 0xFFFF` and
@@ -6324,8 +5930,8 @@ depth-tested whenever the image has a key plane. **Established
 - The colour is `pulse B`, unchanged; the recolour verdicts of [R-P0-19-N]
   are as stated there (pixels equal to the transparent index are skipped).
 
-**The target image, and where the pass sits (Established, direct-static,
-2026-09-02, RWU-19-43).** The reveal and the outline are one pass over a
+**The target image, and where the pass sits (Established, direct-static).**
+The reveal and the outline are one pass over a
 **composition image**, never over the framebuffer, and which image depends on
 whose nanoframe it is:
 
@@ -6342,21 +5948,16 @@ whose nanoframe it is:
   composited later covers the carrier's own outline where its keys win.
 
 An outline pixel stores its key beside its colour, which is what lets every
-later key test see it. This retires the question Nanolathe carried on whether
-the outline was a framebuffer overdraw a carrier could never occlude: it had
-been implemented as one.
+later key test see it; the outline is not a framebuffer overdraw, and a
+carrier can occlude it.
 
-### Closed — unit draw order: the Z-row buckets, the two unit passes, and where shadows and tints happen [R-RAST-01 §7] (2026-08-29)
+#### Unit draw order: the Z-row buckets, the two unit passes, and where shadows and tints happen [R-RAST-01 §7]
 
-**Corrections.** §5.2 above says units are "bucketed by projected
-vertical/screen position" and §5.1.3 says the second pass "walks screen-Y
-bucket rows mixing soft units and deferred tall/shadow features". The bucket
-key is the unit's **world Z in 16-pixel plot rows relative to the camera**,
-not a screen coordinate and not the sheared Y; "soft" is the flags-word mode
-mirror value `1` ([04 R-MOV-01 §8] — read the 2026-08-30 correction below
-before using this section's pass split); and the deferred features are the
-**tall** ones (`height >= 10`), shadow or not. Everything below is
-**Established (direct-static)**.
+The bucket key is the unit's **world Z in 16-pixel plot rows relative to the
+camera**, not a screen coordinate and not the sheared Y; the pass split is
+the unit record's flags-word **mode mirror** ([04 R-MOV-01 §8]); and the
+deferred features are the **tall** ones (`height >= 10`), shadow or not.
+Everything below is **Established (direct-static)**.
 
 **The bucket build (once per frame, before strip 0).** The composer walks the
 **on-screen unit list** — the list the health-bar pass also reads
@@ -6381,8 +5982,7 @@ mode mirror** is `1` — and only when the composer's render-mode argument is
 nonzero: (i) when the unit's **selected** bit is set and the diagnostic
 bit permits (set unconditionally at settings load), the selected-unit
 footprint quad of [R-WATER-01 §1] is drawn — there is no water-wake
-rectangle; this step previously said "wake status bit … water-wake rectangle
-pass of §5.7" (corrected 2026-08-29); (ii)
+rectangle; (ii)
 when the unit has a model draw record, the per-unit present runs. Then that
 row's deferred tall features ([R-RAST-01 §6]).
 
@@ -6390,36 +5990,25 @@ row's deferred tall features ([R-RAST-01 §6]).
 fixed effect pool).** Every row in order, every bucketed unit whose mode
 mirror is **not** `1`, with the same two steps.
 
-#### Correction — the pass split reads the unit record's mode mirror, and a structure's mirror is `1`, so structures are pass A [R-RAST-01 §7] (2026-08-30)
-
-**What the previous text said.** The two paragraphs above read "each bucketed
-unit whose mover mode is grounded" for pass A and, for pass B, "every bucketed
-unit whose mover mode is **not** grounded — structures (no mover, mode `0`)
-and airborne units (mode `2`) … Structures therefore paint over every feature,
-every grounded unit and every projectile regardless of their Z row … This is
-the retail order; it is not a bug to fix."
-
-**Why it was wrong.** The pass predicate was read as the **mover object's**
-mode, and from there it followed that a unit which owns no mover at all —
-every building, since the allocator constructs a mover only for `bmcode 1`
-([04 R-FAC-02 §5]) — must read `0` and belong to pass B. The composer never
-touches a mover. Both passes load the **unit record's own flags word** and
-test its low two bits, which is the *mode mirror* of [04 R-MOV-01 §8], not the
-mover's copy; a unit with no mover still has a mirror. And the mirror is `1`
-for a structure: unit creation writes the low two bits to `01` before any
-class test, and the spawn wrapper then overwrites them with its own mode
-argument, which **every spawn call site in the image passes as the literal
-`1`** — the `BuildingBuild` order handler that lays a nanoframe, the mobile
-`Build` handlers, the map-start placer, the commander respawn, the campaign
-placer. The mover constructor writes `1` as well, so the two words agree for a
-mobile unit and the older reading was invisible there. Nothing ever writes a
+**The pass predicate is the unit record's mode mirror, and a structure's
+mirror is `1`.** The composer never touches a mover. Both passes load the
+**unit record's own flags word** and test its low two bits, which is the
+*mode mirror* of [04 R-MOV-01 §8], not the mover's copy; a unit with no mover
+(every building — the allocator constructs a mover only for `bmcode 1`,
+[04 R-FAC-02 §5]) still has a mirror, and it is `1`: unit creation writes the
+low two bits to `01` before any class test, and the spawn wrapper then
+overwrites them with its own mode argument, which **every spawn call site in
+the image passes as the literal `1`** — the `BuildingBuild` order handler
+that lays a nanoframe, the mobile `Build` handlers, the map-start placer, the
+commander respawn, the campaign placer. The mover constructor writes `1` as
+well, so the two words agree for a mobile unit. Nothing ever writes a
 different mirror for a unit that owns no mover, so a building's mirror is `1`
-from the tick it is laid as a nanoframe until it dies — which is also what
-[04 R-FAC-02 §5] already states ("stays `1` for a factory's whole life") and
-what makes a factory pass its own mirror as the placement validator's mode
+from the tick it is laid as a nanoframe until it dies — which is what
+[04 R-FAC-02 §5] states ("stays `1` for a factory's whole life") and what
+makes a factory pass its own mirror as the placement validator's mode
 argument ([04 §10] `BuildingBuild`).
 
-**The corrected contract — Established (direct-static).**
+**The two passes, exactly — Established (direct-static).**
 
 * **Pass A** is every bucketed unit whose mirror is `1`: ground and sea
   movers, landed aircraft, **and every structure, complete or still a
@@ -6433,23 +6022,19 @@ argument ([04 §10] `BuildingBuild`).
   mover record installed later leaves a unit sorted into the wrong pass for
   the frames between its creation and that installation, which for a building
   nanoframe is the whole of its most visible life.
-* Consequences that reverse: structures do **not** paint over grounded units,
-  projectiles or the effect strips; they are painted in Z-row order among the
-  grounded units, so a mobile unit in a later row paints over the building in
-  front of it. What paints over everything world-drawn is the airborne set,
-  which is the point of a second pass.
+* Structures do **not** paint over grounded units, projectiles or the effect
+  strips; they are painted in Z-row order among the grounded units, so a
+  mobile unit in a later row paints over the building in front of it. What
+  paints over everything world-drawn is the airborne set, which is the point
+  of a second pass.
 * **The nanolathe spray therefore paints over the unit being built.** Strip 6
   ([R-STRIP-01 §1]) is drawn after pass A and before pass B, so its particles
   land over every structure, every nanoframe and every grounded builder, and
   under airborne aircraft and units riding a transport. A construction spray
   hidden behind the building it is completing is a defect, not the retail
-  order; the sentence "This is the retail order; it is not a bug to fix" was
-  reasoning from the inverted partition and does not survive.
+  order.
 
-The bucket build, the in-row ordering, the interleaved tall features and the
-per-unit present below are unaffected; only which pass a unit falls into
-changes. One detail the previous text omitted: pass A's per-unit work is
-itself inside the render-mode gate — a zero render-mode argument suppresses
+Pass A's per-unit work is itself inside the render-mode gate — a zero render-mode argument suppresses
 pass A, pass B and strips 5–7 alike, leaving only strips 0–4, the feature
 pass and strip 8.
 
@@ -6485,16 +6070,13 @@ separate dithered-fog option. Unit definitions provide a `noshadow`-like control
 and shadow-capability flags. The shadow GAF entry is used for feature/sprite
 shadows; model shadows are projected through a separate ground pass.
 
-The exact composer staging is (superseding the older high-level "draw terrain,
-prepare feature shadows, draw projected shadows, draw units and features"
-order): the feature pass runs between strips 0–2 and strips 3–4, followed by a
-second interleaved pass over screen-Y bucket rows mixing soft units and
-deferred tall/shadow features, painter-ordered by projected Y; per feature the
-shadow blit precedes the normal blit at the same anchor (section 5.1.3).
-Model shadows do not use `SHD`, a stencil, or dither; their final blend uses
-`ALP`. **Shadow presentation is now established** (this replaces the stale
-"Projection coefficients, exact shadow footprint clipping, and whether all
-shadow categories share one stencil are not established"):
+The composer staging: the feature pass runs between strips 0–2 and strips
+3–4, followed by a second interleaved pass over the Z-row buckets mixing the
+mode-mirror-`1` units and the deferred tall features ([R-RAST-01 §6],
+[R-RAST-01 §7]); per feature the shadow blit precedes the normal blit at the
+same anchor (section 5.1.3). Model shadows do not use `SHD`, a stencil, or
+dither; their final blend uses `ALP`. **Shadow presentation is
+established:**
 
 - **Option bits.** One options word (engine root state) carries six visual
   bits: bit 1 Anti_Alias (the structure-body supersample, not a shadow pass),
@@ -6529,37 +6111,26 @@ shadow categories share one stencil are not established"):
   finished body silhouette to palette index 0. (C) Structure model shadows
   rerasterize every face directly at index 0, punch out the body, and cache the
   result as RLE. Both model families blit through `ALP` before the body; see
-  [R-REN-03D].
-
-  **Correction.** This bullet previously said model shadows "build a doubled
-  stencil image and compose it over the ground with a per-pixel depth compare
-  … and darken through an `SHD` row (near-black row); the dither variant seeds
-  a checker stencil with the 0x01010101 pattern and a screen parity term", and
-  that "ALP is not used in either shadow family". Every clause belonged to a
-  different mechanism. The doubled image is the structure anti-alias
-  supersample, a body pass gated on `Anti_Alias` ([R-REN-03A §6]); the
-  `0x01010101` fill is the composition image's background prefill, the
-  transparent index `1` written four bytes at a time ([R-REN-03A §1]); the
-  depth compare is the body key test every span writer performs
-  ([R-REN-03A §2]); and the `SHD` darken belongs to the submerged-hull tint,
-  which in fact reads a separate 256-entry `BLUE TABLE`, not `SHD`
-  ([R-REN-03A §8]). `ALP` *is* used both by the anti-alias downscale (three
-  lookups per output pixel) and by the final model-shadow blitter.
-- **Order.** Per bucket row the shadow is drawn before the body for both the
-  soft and hard unit traversals, and per feature the shadow GAF precedes the
+  [R-REN-03D]. `ALP` is used both by the anti-alias downscale (three lookups
+  per output pixel) and by the final model-shadow blitter; no shadow family
+  builds a doubled stencil, seeds a dither pattern, or darkens through an
+  `SHD` row (the doubled image is the anti-alias supersample of
+  [R-REN-03A §6], the `0x01010101` fill is the composition image's background
+  prefill of [R-REN-03A §1], the depth compare is the body key test of
+  [R-REN-03A §2], and the submerged-hull tint reads the `BLUE TABLE` of
+  [R-REN-03A §8]).
+- **Order.** Per bucket row the shadow is drawn before the body in both unit
+  passes, and per feature the shadow GAF precedes the
   body GAF; all shadow work sits between the terrain tiles and the units/
   features, and the fog overlay (after all strips) covers shadows like all
   world drawing. The feature-memory marker makes a tall feature's shadow
   persist independent of current line of sight.
 
-**Closed — no water flag, and no aircraft-height term (2026-09-04).
-Established.** The model-shadow implementation site carried "the residual water
-flag and exact aircraft-height behavior remain `TODO(question)`". Neither is
-open, and the first was looking for something that does not exist.
+**No water flag, and no aircraft-height term (Established).**
 
-*There is no water flag.* What the marker was reaching for is the mobile
-silhouette branch's **waterline erase**, which is computed per draw rather than
-authored: with `t = seaLevel − trunc(unitY)`, a subject with `t > 0` is partly
+*There is no water flag.* The only water-dependent shadow behaviour is the
+mobile silhouette branch's **waterline erase**, which is computed per draw
+rather than authored: with `t = seaLevel − trunc(unitY)`, a subject with `t > 0` is partly
 submerged, and every pixel whose height key is at or below `t + 50` is erased
 before the tinted blit, so only the above-water hull casts a shadow
 ([R-REN-03D §1] branch 2). No definition key gates it; the only authored inputs
@@ -6590,11 +6161,7 @@ runtime shadow cursor copy pre-wired at load; burning instances use the slot's
 shadow cursor. The shadow path respects the same clipping as the normal path;
 `shadtrans=1` selects the translucent darkening blitter. On Great Divide
 trees, rocks, and the vent all carry `shadtrans=1`, so their shadows are
-translucent. This refines the statement above with the exact selection rules;
-the earlier `TODO(question)` on projection coefficients, footprint clipping,
-and stencil sharing is closed by the subsection above (the two raster
-families are separate primitives; the model family's inclusive-rect clipping
-and per-pixel depth compare are direct evidence).
+translucent. The two raster families are separate primitives.
 
 ### 5.4 Projectiles and laser beams
 
@@ -6620,28 +6187,31 @@ definition’s rendertype byte; all eight cases are established:
   remapped through the live palette lookup; a zero secondary byte draws one
   one-pixel stroke, otherwise two adjacent strokes ordered endpoint-swapped,
   secondary first and primary on top.
-- 1 — common base sprite (frame 0 of the shared projectile GAF), then the
-  definition’s model oriented from the projectile record; an optional
-  secondary model appears while a definition flag is set and the current tick
-  precedes the record’s expiry deadline, with directly computed versus
-  record-stored rotation chosen by that same flag.
-- 2 — a fixed global GAF entry drawn at the projected point; a failed
+- 1 — the ground shadow sprite (frame 0 of the `fx` bank's `shadow` entry at
+  the record's cached floor height, [R-FX-01 §2]), then the definition’s
+  model oriented from the projectile record; the model's child piece is
+  drawn whenever the model has one and the current tick is strictly before
+  the record’s expiry deadline, with the `propeller` flag substituting the
+  spinning propeller angle for the roll word (§5.2).
+- 2 — a fixed global GAF entry (the 22×22 lens frame) drawn at the projected point; a failed
   draw-buffer admission executes an immediate return that ABORTS THE ENTIRE
   PROJECTILE RENDERER, not just this record — the only control-flow exit
   spanning later records.
 - 3 — common base sprite plus definition model through a distinct orientation
   path with a separately built angle block.
-- 4 — the definition’s selector byte picks one of five global GAF sequences;
-  selector -1 suppresses the branch entirely; frame =
-  `(currentTick - spawnTick) mod frameCount`.
+- 4 — the definition’s `color` byte picks one of five global GAF sequences
+  (0 `cannonshell`, 1 `plasmasm`, 2 `plasmamd`, 3 `ultrashell`, 4
+  `plasmasm`); 255 (−1) suppresses the branch entirely and 5..254 draw
+  nothing; frame = `(currentTick - spawnTick) mod frameCount`.
 - 5 — one fixed global sequence; frame = `frameCount -
   ((expiryTick - currentTick) * frameCount) / (16-bit definition lifetime
   field)`, lifetime-scaled, drawn only while `0 <= frame < frameCount`.
 - 6 — common base sprite plus definition model using the orientation stored
   verbatim in the projectile record.
-- 7 — two randomized segmented-line passes. Segment count derives from the
-  endpoint span divided by the literal constant 327680 (0x50000), skipped when
-  zero; each generated point receives integer per-axis jitter of
+- 7 — two randomized segmented-line passes. Segment count is the truncated
+  16.16 endpoint span divided by the literal constant 327680 (`5 << 16`) —
+  `trunc(dist / 5)`, five whole world units per segment — skipped when zero;
+  each generated point receives integer per-axis jitter of
   `rand() * 11 / 0x8000 - 5` applied to X, height, and Z before each
   sub-segment projects through the standard line path.
 
@@ -6664,49 +6234,40 @@ Model missiles use 3DO rendering and a projected shadow. Homing turns by a
 per-tick turn-rate limit. The recovered target-loss branch supports an
 inference that a missile coasts toward its last known point rather than
 immediately reacquiring, but exact dead-target validation and reacquisition are
-open. Trail smoke cadence is closed: a trail emitter keeps an additive next-
+open. Trail smoke cadence: a trail emitter keeps an additive next-
 emission deadline, so a delayed emitter preserves any owed puffs and a
 **zero-delay definition emits one puff every tick**; burst parents never emit
 trail smoke, and expiry without collision leaves one final trail-style puff for
 timer families without the burn-blow flag.
 
-### Closed — the projectile presentation hand-offs, as doc 03's statement [R-FX-01 §2] (2026-08-29)
+#### The projectile presentation hand-offs [R-FX-01 §2]
 
-The eight-case list above was written before the projectile renderer was
-traced case by case; [06 R-WFX-01 §4] now owns the per-case arithmetic and
-the stock-author census. Four of the case descriptions above are corrected
-here, each quoting the old text. **Established (direct-static)** throughout;
-the CRT/simulation stream attribution is [06 R-WFX-01 §6].
+[06 R-WFX-01 §4] owns the per-case arithmetic and the stock-author census;
+this section states the presentation hand-offs of the eight-case list above.
+**Established (direct-static)** throughout; the CRT/simulation stream
+attribution is [06 R-WFX-01 §6].
 
-- Case 1 said "common base sprite (frame 0 of the shared projectile GAF)".
-  The sprite is frame 0 of the `fx` bank's **`shadow`** entry ([R-FX-01 §1]),
-  drawn at `(Xword − viewX + 128, (Zword − floor/2) − viewZ + 32)` where
-  `floor` is the record's **cached average floor height** (doc 06 §8.1), not
-  the projectile's own Y — it is the ground shadow. Cases 3, 4 and 6 draw the
-  same shadow the same way; case 4's earlier "shadow" omission is implied by
-  the list and is corrected by the same sentence.
-- Case 1 said "an optional secondary model appears while a definition flag is
-  set and the current tick precedes the record's expiry deadline, with directly
-  computed versus record-stored rotation chosen by that same flag". Wrong on
-  the gate: the child piece is drawn whenever the model **has** one and
+- **The ground shadow (cases 1, 3, 4 and 6).** The base sprite is frame 0 of
+  the `fx` bank's **`shadow`** entry ([R-FX-01 §1]), drawn at `(Xword − viewX
+  + 128, (Zword − floor/2) − viewZ + 32)` where `floor` is the record's
+  **cached average floor height** (doc 06 §8.1), not the projectile's own Y.
+- **The child piece (case 1)** is drawn whenever the model **has** one and
   `currentTick < expiry` (strict). The `propeller` flag only substitutes the
   record's spinning propeller angle for the first word of the angle block; it
   does not choose between two rotation sources.
-- Case 4 said "the definition's selector byte picks one of five global GAF
-  sequences". The selector is the authored **`color`** byte ([06 R-WFX-01
+- **The case-4 selector** is the authored **`color`** byte ([06 R-WFX-01
   §1]): 0 `cannonshell`, 1 `plasmasm`, 2 `plasmamd`, 3 `ultrashell`, 4
   `plasmasm`; 255 (−1) suppresses the case; 5..254 draw nothing.
-- Case 7 said the segment count "derives from the endpoint span divided by the
-  literal constant 327680" and left its units open in the tail. The span is
-  the truncated 16.16 length of the tail→head vector, so `327680 = 5 << 16`
-  and the count is `trunc(dist / 5)` **whole world units per segment, in map
-  space** — closing the tail item. The per-axis jitter `rand·11/0x8000 − 5` is
-  in whole world units added to the point's high word, three CRT draws per
-  generated point, `2·n` points, `6·n` draws per lightning record per
-  **rendered frame** (the renderer runs per present, not per tick).
-- Case 2's "fixed global GAF entry" is the 22×22 **lens frame** built at
-  startup beside the calculated explosion tables ([06 R-WFX-01 §2]); its
-  blitter is [R-FX-01 §4] below.
+- **The case-7 segment count.** The span is the truncated 16.16 length of the
+  tail→head vector, so `327680 = 5 << 16` and the count is `trunc(dist / 5)`
+  **whole world units per segment, in map space**. The per-axis jitter
+  `rand·11/0x8000 − 5` is in whole world units added to the point's high
+  word, three CRT draws per generated point, `2·n` points, `6·n` draws per
+  lightning record per **rendered frame** (the renderer runs per present,
+  not per tick).
+- **The case-2 entry** is the 22×22 **lens frame** built at startup beside
+  the calculated explosion tables ([06 R-WFX-01 §2]); its blitter is
+  [R-FX-01 §4] below.
 
 **The render-transform refresh cache (as doc 03's statement).** Every
 consumer of a unit's cached piece world transforms — the effect opcode's
@@ -6731,19 +6292,14 @@ tick count stored at the frame-reference array entry (frame base plus index
 times eight, plus four) — consumed by the standard countdown cursor, so flash
 and explosion animation timing is simulation-tick countdown ticks like every
 other sequence family. Build/reclaim direction uses the builder and target
-positions.
+positions. The literal `6` the nano producers pass is the **strip
+selector**, not a colour (doc 05: "selector 6 and strip 6 are one number");
+the record carries no colour field and has no fade — it is a particle emitter
+whose particles carry their own colours and lifetimes.
 
-**Correction (2026-08-27).** This section previously read "the segment color is
-the fixed palette index 6 (established, direct-static) for both reclaim/capture
-and build-assist emissions, while the per-segment fade/lifetime remains
-`TODO(question)`." That was wrong on both counts. The literal `6` those producers
-pass is the **strip selector**, not a colour — the same number doc 05 closes as
-"selector 6 and strip 6 are one number" — and the record carries no colour field
-at all. There is also no fade: a nano record is a particle emitter whose
-particles carry their own colours and lifetimes, described next. Nothing in the
-executable writes a palette index 6 for a nano segment.
+#### The nanolathe spray [R-P0-19-P]
 
-**The nanolathe spray [R-P0-19-P].** Established (direct-static). A nano segment
+**Established (direct-static).** A nano segment
 record is an emitter, not a line. It is constructed from a source **point** (the
 `QueryNanoPiece` world position, passed as a degenerate box) and a target
 **box** (the target's world bounding box: the target's position plus the two
@@ -6769,11 +6325,9 @@ work step contributes **ten particles over two ticks**; continuous construction
 therefore holds two live records and ten new particles per tick. Per tick the
 record's update advances each particle, drops the ones whose expiry tick has
 passed, and the record itself is destroyed once its particle list empties.
-(2026-08-27 cross-confirmation [R-STRIP-01 §2]: the spray record is the
-strip-6 container object of the strip lifecycle — the emitter is a pooled
-strip object whose update advances, expires, and refills its internal
-particle list, and the emitters evict under the common 401-record rule. Every
-number above was re-verified against that path, including the `0x100` word.)
+The spray record is the strip-6 container object of [R-STRIP-01 §2]: a
+pooled strip object whose update advances, expires, and refills its internal
+particle list, evicted under the common 401-record rule.
 
 Each particle draws at its world position through the ordinary projection,
 gated by the local player's coverage at its own projected tile — the same
@@ -6790,10 +6344,10 @@ observed; its purpose is `TODO(question)`.
 **Where the spray lands in the frame.** Strip 6 is drawn after the first unit
 pass and before the second, so the particles paint **over** the unit being
 built — a nanoframe, a finished structure and a grounded builder alike — and
-under airborne aircraft and units riding a carrier. See the 2026-08-30
-correction under [R-RAST-01 §7]: the pass split is on the unit record's mode
-mirror, and a structure's mirror is `1`, so a structure is in the *first*
-pass. A spray hidden behind the building it is completing is a defect.
+under airborne aircraft and units riding a carrier ([R-RAST-01 §7]: the pass
+split is on the unit record's mode mirror, and a structure's mirror is `1`,
+so a structure is in the *first* pass). A spray hidden behind the building
+it is completing is a defect.
 
 **Nanolathe presentation pipeline [R-P0-19]:** Construction and reclaim work
 producers route their nano events through the beam-family strip-6 identity and
@@ -6805,31 +6359,20 @@ instead of skipping the beam. One segment is emitted per accepted work step
 [R-P0-06 §1]; build assist's two-segment cadence is separate.
 
 **The nano source point's coordinate space [R-P0-19-P].** The source end of a
-nano record is "the piece's world point", and this section had never said which
-sense of Z that is. It matters by twice the piece's authored depth offset,
-which for the stock two-emitter builders is tens of whole world units, and the
-strip-6 particle draw carries the error straight into `sy = (Zword − Yword/2) −
-viewZ`, so a wrong sign moves the whole spray that many pixels down or up the
-screen. Two established contracts pin it. The model pass narrows a
+nano record is "the piece's world point", and the sense of Z matters by
+twice the piece's authored depth offset — tens of whole world units for the
+stock two-emitter builders — which the strip-6 particle draw carries
+straight into `sy = (Zword − Yword/2) − viewZ`. The model pass narrows a
 model-relative vertex as `Zn = hi16(−vz)` while a unit's own position enters
 the blit unnegated — model space is mirrored in Z against world space
-([R-RAST-01 §2], §2.4). The particle pass projects a plain world triple with
-no such mirror (§5.5 above, and [R-FX-01 §3]'s common sub-record projection).
-For the spray to leave the nano piece the model pass draws — which is what
-retail shows — the world point handed to the record must therefore be
-`unit + (offsetX, offsetY, −offsetZ)` of the composed piece offset, not
-`unit + offset`. **Supported inference**, derived from the two projections
-rather than traced at the submission site. Decider: the `ta_probe_xz` fixture
-that §2.4 already names for the heading-zero nose mapping settles the sense of
-the composed offset directly, and observing one stock aircraft plant's spray
-against its `beam1`/`beam2` posts settles it for this producer alone.
-
-The same question stands, untraced, over every other consumer that turns a
-queried piece into a world point: the weapon muzzle of [06 §4.1], the carrier
-attach point, and the factory build plate. Only the build plate has been
-settled independently, by the stock yard maps ([05 "Factory production
-lifecycle"], exit-footprint evidence); the muzzle is **Unknown** and is listed
-as such under §2.4's note.
+([R-RAST-01 §2], §2.4) — and the particle pass projects a plain world triple
+with no such mirror ([R-FX-01 §3]'s common sub-record projection). The world
+point handed to the record is `unit + (offsetX, offsetY, −offsetZ)` of the
+composed piece offset, not `unit + offset`: **Established** at the
+submission site by the piece locator of [R-RAST-01 §8], which serves every
+consumer that turns a queried piece into a world point — this spray source,
+the weapon muzzle of [06 §4.1], the carrier attach point and the factory
+build plate — so the spray leaves the nano piece the model pass draws.
 
 The cursor is software-drawn. Cursor GAF entries are loaded into a table;
 `GetCursorPos` and configured hotspots determine placement. The renderer saves
@@ -6837,7 +6380,7 @@ and restores dirty cursor rectangles, changes cursor icon/mode for move, attack,
 repair, patrol, build, and other order states, and uses the same logical-to-
 physical palette mapping. GUI queue lines/icons are also software-drawn.
 
-### Closed — the strip object families, strip by strip [R-FX-01 §3] (2026-08-29)
+#### The strip object families, strip by strip [R-FX-01 §3]
 
 [R-STRIP-01 §1–§3] gives the producer census, the container lifecycle, the
 sub-record strides and the draw census. This section pins the per-family
@@ -6855,20 +6398,22 @@ tick` (both inclusive); every family here sets `nextSpawn = tick + 1` after a
 spawn and spawns once from its init. The per-tick update (phase 11 of [01
 §4.4]) advances every sub-record in order, removes the ones whose expiry test
 passes by stable compaction, then spawns if due. The removal verdict the
-dispatcher tests before the update is "the list is empty". Sub-record draws
+dispatcher tests before the update is per class ([R-STRIP-01 §2]): "the list
+is empty" for the flame, trail, sprinkle and nano families, "list empty and
+deadline passed" for the strips-5/9 smoke puffer, and constant false for the
+vent (the two smoke classes are tabulated below). Sub-record draws
 project `sx = Xword − viewX + 128`, `sy = (Zword − Yword/2) − viewZ + 32`
 (16-bit truncated) and pass the one-point coverage gate at tile `(Xword >> 5,
 (Zword − Yword/2) >> 5)` — the viewing player's byte grid when mode bit 1 is
 set, else the word-grid bit — with an off-map tile failing the gate. The
-"root flag byte that disables all strip allocation" (tail item, [R-STRIP-01
-§1]) has **twenty readers and no writer anywhere in the image**: it is a
+"root flag byte that disables all strip allocation" ([R-STRIP-01 §1]) has **twenty readers and no writer anywhere in the image**: it is a
 zero-initialized static, the disable branch is dead in retail, and the pool
 gate is only the pool itself. **Established (reference census).**
 
 | Strip | Family | Producer events and per-site parameters |
 |---|---|---|
 | 2 | impact sprinkle | COB `emit-sfx` types 2 and 3 (piece vertex 0 → vertex 1, spacing **16** / **8**, colour flag 1) and types 4 and 5 (vertex 1 → vertex 0, spacing 16 / 8, flag 1) [04 R-COB-03 §6] |
-| 4 | smoke puff | the geothermal steam producer of [05 R-ECO-02 §3]: init `(point, spawnInterval 5, frameHold 0 → 7, lifetime 150)` — added 2026-08-31; the row was missing because §1's strip-4 row had said "none" |
+| 4 | smoke puff (the vent's class, [R-FX-02 §3]) | the geothermal steam producer of [05 R-ECO-02 §3]: init `(point, spawnInterval 5, frameHold 0 → 7, lifetime 150)` |
 | 5 | teleport flame segments; burning-feature smoke | [R-LAYER §4]; [R-STRIP-01 §1] |
 | 6 | nanolathe emitter | [R-P0-19-P] |
 | 7 | flame-stream trail; impact sprinkle | `emit-sfx` type 0 (VTOL: vertex 0 → vertex 1, lifetime **6**) and type 1 (thrust: lifetime **7**), both hold 1; `emit-sfx` type `0x103` (sub-bubble: sprinkle from the piece's point toward `(X, seaLevel << 16, Z)`, spacing 8, colour flag **0**) |
@@ -6880,9 +6425,8 @@ frameHold 0 → 7, lifetime 15, selector 0 → smoke 1)` on strip 9 — one puff
 spawn and one every seventh tick while `nextSpawn ≤ spawn + 15`, three puffs
 in all, each playing all twelve `smoke 1` frames at hold 7 with the CRT
 countdown of [06 R-WFX-01 §5]. It is the land-dust puff every above-sea
-explosion emits. The "calculated frame" wording of that section (a narrow
-window near `0x6f`) should be read as [06 R-WFX-01 §2]: the ramp `0x4f..0x6e`
-with transparency by radius.
+explosion emits. The calculated frame is the ramp `0x4f..0x6e` with
+transparency by radius ([06 R-WFX-01 §2]).
 
 **Smoke-puff family** (strip 4's geothermal steam, strip 9's weapon puffs and
 the emit-sfx smoke points, strip 5's burning-feature smoke). Its 32-byte
@@ -6905,21 +6449,11 @@ vent steam puff by `112·16/65536`. A puff drifts a
 world unit or two over its whole life and rises slowly; it does not travel.
 The vertical term's scale global is the same authored gravity word the
 projectile conversion divides by 900 (`[03 §2.2]` C4), read here unconverted.
-**Established (direct-static, 2026-08-31.)**
-
-**Correction, 2026-09-02 (RWU-19-17) — the Y scale is per class.** The block
-above previously read `y += authoredGravity · 16` (commented "the map's
-`gravity` key, before any per-tick conversion") for the whole family, and the
-sentence under it
-"the gravity word of a stock map lifts it by `112·16/65536`". That was the
-geothermal vent's update read as if strips 4, 5 and 9 shared one class; they
-do not ([R-FX-01 §3 addendum §B], and [06 R-WFX-01 §5]'s 2026-09-01
-correction, which this block contradicted). Re-read side by side for this
-correction, the two per-tick updates are identical instruction for instruction
-except the shift applied to the gravity word: two (× 4) in the strips-5/9
-smoke puffer that every weapon, burning-feature and `emit-sfx` producer uses,
-four (× 16) in the strip-4 vent-steam class. Both wind terms shift by three
-(× 8) in both classes. **Established** (direct static, both update routines).
+The gravity shift is per class: two (× 4) in the strips-5/9 smoke puffer that
+every weapon, burning-feature and `emit-sfx` producer uses, four (× 16) in
+the strip-4 vent-steam class; both wind terms shift by three (× 8) in both
+classes ([06 R-WFX-01 §5]). **Established** (direct static, both update
+routines).
 
 The animation clock counts the hold down; on zero it advances the frame and
 redraws the next hold as half to full of the authored value, one CRT draw per
@@ -6981,10 +6515,8 @@ ticks at spacing 16, 48 at 8). Update: `pos += step`; `phase = (phase + 1) mod
 spacing`; when it wraps `colour += dir`, then `colour > 0x67 → 0x61` and
 `colour < 0x61 → 0x67` — the emit-sfx puffs climb the seven-entry ramp
 `0x61..0x67` one step per `spacing` ticks and wrap to its bottom, the
-sub-bubble puff descends it and wraps to its top. Expiry (corrected 2026-08-29 by
-[R-WATER-01 §1]; this sentence previously read "removed when the height is
-strictly below sea level — the marks die over water and off-map", which had
-the branch sense backwards): the puff **survives** only while `tick ≤ expiry`
+sub-bubble puff descends it and wraps to its top. Expiry ([R-WATER-01 §1]):
+the puff **survives** only while `tick ≤ expiry`
 **and** the bilinear terrain height under it ([R-TERR-01 §4]; −1 off-map) is
 strictly below the sea-level byte; it is removed the tick it reaches land
 (height `≥ seaLevel`) or expires — off-map (−1) counts as water. This is what
@@ -7002,14 +6534,63 @@ selector byte chooses the `smoke 1` (0) or `smoke 2` (nonzero) entry; the
 puff draws the selected frame through the ordinary frame blitter after its
 own coverage gate.
 
+**The two smoke classes (Established: both class vtables read out and every
+overridden slot decompiled; the vent's behaviour corroborated by an
+eighteen-second retail capture of a geothermal vent on a green map).** The
+strips-5/9 smoke puffer and the geothermal vent's class of [R-FX-02 §3] are
+**two classes with two object vtables**, not one class reached from two
+producers. Read side by side, they differ in exactly four places:
+
+| | strips-5/9 smoke puffer | geothermal vent |
+|---|---|---|
+| removal verdict | sub-record list empty **and** stored deadline `< tick` | `return 0` — constant false |
+| spawn gate | next-spawn `<=` deadline **and** next-spawn `<=` tick | next-spawn `<=` tick |
+| vertical drift | gravity word **× 4** | gravity word **× 16** |
+| blitted entry | selected by an init flag between the two smoke entries | the first smoke entry, bound directly |
+
+Everything else is identical, instruction for instruction: the two wind terms
+(both × 8), the countdown and its `hold/2 + crtRand × (hold/2) / 0x8000`
+redraw, the retirement compare `frame < lastFrame` made on every visit (a
+sub-record survives while `frame < lastFrame`, signed, and is compacted out
+otherwise), the single-puff spawn with its one draw for `crtRand × (frameCount
+− 1 − 2) / 0x8000 + 2`, and `nextSpawn = tick + interval` written
+unconditionally at the end of the spawn. The record layouts differ only by
+the selector word the puffer carries and the vent does not, which shifts the
+puffer's position triple one word later.
+
+The stored deadline (`tick + lifetime`) is read by the spawn's capacity
+reservation in both classes — the sub-record vector grows by `(deadline −
+tick + interval) / interval` records when that count is positive, and the
+guard covers only the vector resize; the puff-append below it is
+unconditional — so the deadline never gates a spawn *directly* in either
+class. What gates the puffer's spawn is its own gate's first term, which the
+vent's class drops. For the strips-5/9 puffer the stored deadline therefore
+**is** a lifetime: every weapon-side site passes lifetime 0 — the trail
+puff, `endsmoke` at impact, `startsmoke` at the muzzle, and both emit-sfx
+smoke points — which leaves the deadline at the creation tick; the gate then
+refuses the second spawn and the verdict retires the container on the first
+tick after its one puff is gone. That is what makes these producers
+one-shots. The two parameterised sites are the only ones with a real window:
+the above-sea explosion's land dust (interval 7, lifetime 15 — three puffs)
+and the sinking-wreck column (interval 15, lifetime 900). For the vent the
+deadline is only an allocation hint: its container is never removed by the
+sweep — the 401-record eviction in the producer is the only thing that
+removes one — so a geothermal vent steams for the whole battle, and because
+a puff's whole life is a few tens of ticks the drift terms move it a
+fraction of a world unit before it retires, which is why the plume looks
+anchored even in a gale. Applying the vent's virtuals to the puffer would
+turn every muzzle, impact and trail container into an immortal
+one-puff-per-tick emitter and park strip 9 at its 401-object bound within
+twenty seconds of a small firefight; retail shows nothing of the kind.
+
 **Strip-5 flame segments** ([R-LAYER §4]) and the **nanolathe emitter**
-([R-P0-19-P]) are unchanged by this pass; the nano particle's `0x100` word is
-now bounded-negative over that class's particle advance and particle draw (neither
-reads it) and stays in the tail.
+([R-P0-19-P]) are stated at those anchors; the nano particle's `0x100` word
+is bounded-negative over that class's particle advance and particle draw
+(neither reads it) and remains **Unknown** (tail).
 
-### Closed — the strip object pool and the base object [R-FX-02 §1] (2026-08-29)
+#### The strip object pool and the base object [R-FX-02 §1]
 
-Status: **Established** (direct-static). Supplements [R-STRIP-01 §1]'s "one
+**Established** (direct-static). Supplements [R-STRIP-01 §1]'s "one
 shared fixed pool".
 
 The strip pool is a **LIFO free list of fixed-size slots**: a slot array, a
@@ -7023,12 +6604,10 @@ lifetime`; the pooled **destructor** re-installs the base vtable and, when
 its delete flag bit 0 is set (as the sweep's eviction and removal always
 pass), returns the slot to the pool. The 400-object eviction of
 [R-STRIP-01 §1] destroys the **front** object of the strip (the oldest) with
-that flag and shifts the vector down. The pool's capacity is the vector
-grown by the pool's own allocator; its initial size is [R-STRIP-01 §1]'s
-concern and is not re-derived here. (Corrected 2026-09-02, [R-FX-02 §4]: the
-capacity is **1000 slots of 76 bytes**, fixed for the life of the process —
-the growth routine has exactly one caller, the pool's constructor, so the
-"vector grown by the pool's own allocator" never grows again after start-up.)
+that flag and shifts the vector down. The pool's capacity is **1000 slots of
+76 bytes**, fixed for the life of the process ([R-FX-02 §4]): the growth
+routine has exactly one caller, the pool's constructor, so the pool never
+grows again after start-up.
 
 The sweep ([01 §4.4] phase 11) runs strips 0 … 9 in order and, per object in
 insertion order, the removal-verdict virtual before the update virtual; a
@@ -7040,13 +6619,11 @@ target image, in insertion order. The COB `emit-sfx` cases 0–5 of
 `(hold 1, lifetime 7)`; types 2–5 build the strip-2 sprinkle with spacing
 16, 8, 16, 8 and the endpoints swapped for 4 and 5.
 
-### Closed — the strip-5 flame family, exactly: segment life is `floor(span / 5)` ticks, not an interval [R-FX-02 §2] (2026-08-29)
+#### The strip-5 flame family, exactly: segment life is `floor(span / 5)` ticks, not an interval [R-FX-02 §2]
 
-Status: **Established** (instruction-level read of the family init, spawn,
-step, expiry and draw). This corrects [R-LAYER §4]'s "expiry tick: spawn
-tick plus the container's per-segment interval word … 10 for the teleport
-call's 30-tick container — supported inference". The word is not an
-interval and is not 10.
+**Established** (instruction-level read of the family init, spawn, step,
+expiry and draw). The segment's expiry word is a segment life, not the
+10-tick re-lay interval.
 
 **Init** `(A, B, lifetime)`: `deadline = tick + lifetime`; copy `A`, `B`;
 `Δ = B − A` per axis (16.16); `L = sqrt(Δx² + Δy² + Δz²)` in floating point
@@ -7088,12 +6665,12 @@ is clear. **Supported inference:** that gate is the `Shading` display option
 `ALP`. If so, every flame, trail and smoke strip sprite vanishes with
 `Shading` off.
 
-### Closed — the 32-byte smoke-puff family, exactly; the geothermal steam is this class on strip 4 [R-FX-02 §3] (2026-08-29)
+#### The 32-byte smoke-puff family, exactly; the geothermal steam is this class on strip 4 [R-FX-02 §3]
 
-Status: **Established** (instruction-level read of the constructor, the
-three-argument init, spawn, update and draw). This corrects [R-STRIP-01 §1]
-row 4 ("a flame-class object") and adds strip 4 to [R-FX-01 §3]'s "smoke
-puff family (strips 5 and 9)".
+**Established** (instruction-level read of the constructor, the
+three-argument init, spawn, update and draw). This is the **vent's** class;
+[R-FX-01 §3] tabulates its four differences from the strips-5/9 smoke
+puffer.
 
 **Constructor:** base constructor, then the smoke vtable, creation tick,
 empty puff vector. **Init** `(point, interval, hold, lifetime)`: `deadline =
@@ -7103,8 +6680,8 @@ then spawn once. The geothermal producer of [05 R-ECO-02 §3] takes a pool
 slot, zeroes it, constructs this class and calls init with `(vent point,
 interval 5, hold 0 → 7, lifetime 150)` under the 400-cap eviction, appending
 to **strip 4**; the literals' roles are therefore settled. Its update is the
-smoke update of [06 R-WFX-01 §5] (wind drift, rise, countdown, frame
-advance, removal at the last frame).
+smoke update of [06 R-WFX-01 §5] (wind × 8 drift, gravity × 16 rise,
+countdown, frame advance, removal at the last frame).
 
 **Spawn:** grow capacity to `size + (deadline − tick + interval) /
 interval` when larger; append one 32-byte puff: the smoke entry, position =
@@ -7112,141 +6689,25 @@ the point, **`lastFrame = crtRand × (lastFrameBase − 2) / 0x8000 + 2`** (one
 CRT draw; a random last frame in `2 … lastFrameBase − 1`, so puffs of one
 producer vanish after differing frame counts), `frame = 0`, `hold`, and
 `countdown = hold` — the first countdown is **not** random; then `nextSpawn
-= tick + interval`. With `interval 5, lifetime 150` the steam vent lays a
-puff every fifth tick, 31 puffs per container, one container per producer
-tick of [05 R-ECO-02 §3].
+= tick + interval`. With `interval 5` the steam vent lays a puff every fifth
+tick for as long as the container lives — which, because this class's
+removal verdict is constant false ([R-FX-01 §3]), is until the strip evicts
+it; `lifetime 150` is only the capacity reservation's hint, not a bound. One
+container per producer tick of [05 R-ECO-02 §3].
 
 **Draw:** for every puff, `(high16(X) − viewX + 128, high16(Z) −
 high16(Y)/2 − viewZ + 32)`, frame `frame` of the entry, through the tinted
 blitter — **with no coverage gate**: this family's draw walk tests nothing
-before blitting, unlike the flame and sprinkle families. Cross-document:
-[06 R-WFX-01 §5] states "after its own one-point coverage gate", "first
-countdown `crtRand · (hold − 2) / 0x8000 + 2`" and "removed when its frame
-index reaches its last frame"; the puff record read here has the random
-draw in the last-frame word and the hold in the countdown word, and no gate
-in the draw. Document 06's producer-parameter table is unaffected; the
-per-puff sentences should be re-derived against this section.
+before blitting, unlike the flame and sprinkle families. The puff record has
+the random draw in the last-frame word and the hold in the countdown word,
+and no gate in the draw.
 
-### Correction — the smoke-puff container is immortal and its gate has no window [R-FX-01 §3 addendum] (2026-09-01)
+#### The strip pool's capacity, and what a dropped object costs [R-FX-02 §4]
 
-Status: **Established** (the class's four overridden virtuals read directly,
-plus the ten-strip sweep that calls them; corroborated by an eighteen-second
-retail capture of a geothermal vent on a green map).
-
-**What the earlier text said.** The paragraph above closed with "With
-`interval 5, lifetime 150` the steam vent lays a puff every fifth tick, 31
-puffs per container", and [R-STRIP-01 §2] gave the family's removal verdict as
-"the internal list is empty; the smoke family additionally requires its window
-to have passed" and its spawn gate as "the next-spawn tick is compared against
-both the object's window end and the global tick". [05 R-ECO-02 §3] drew the
-consequence in as many words: "A vent therefore produces thirty-one puffs over
-five seconds … and then stops. There is no perpetual plume."
-
-**Why that is wrong.** A retail capture of a vent shows its plume still
-running, anchored and undiminished, eighteen seconds after the recording
-starts — no thinning, no downwind slide, no end. Reading the smoke-puff class's
-own virtuals settles why. The class overrides four slots of its object vtable,
-and two of them are the ones in question:
-
-* the **removal verdict** — the virtual the ten-strip sweep evaluates before
-  it runs any update work — is a body that does nothing but `return 0`. A
-  smoke container is never removed by the sweep, whatever its sub-record list
-  holds and whatever tick it is. The only thing that removes one is the
-  401-record eviction in the producer.
-* the **"is it time to spawn" predicate**, which the update calls at its end
-  and then acts on, is a single unsigned compare: the stored next-spawn tick
-  at or before the global tick. There is **no** second term. The deadline the
-  init stores is never consulted here.
-
-The stored deadline (`currentTick + lifetime`) has exactly one reader in the
-whole class: the spawn's capacity reservation, which grows the sub-record
-vector by `(deadline − tick + interval) / interval` records when that count is
-positive. Past the deadline the expression is non-positive and the reservation
-is skipped; the spawn then appends as usual. It is an allocation hint, not a
-lifetime, and calling it one is what produced the wrong reading.
-
-The update itself is unchanged from the paragraph above and was re-read
-alongside: per sub-record, add the first published wind word × 8 to the raw X
-and the second × 8 to the raw Z, add the map's gravity word × 16 to the raw Y,
-decrement the countdown, and on reaching zero advance the frame and redraw the
-countdown as `hold/2 + crtRand × (hold/2) / 0x8000`. The removal compare is
-then made **on every visit**, not only on the visits that advanced the cursor:
-a sub-record survives while `frame < lastFrame`, signed, and is compacted out
-otherwise. Because a puff's whole life is a few tens of ticks, the drift terms
-move it a fraction of a world unit before it retires — which is why retail's
-plume looks anchored even in a gale, and why the immortal puffs of the earlier
-reading were the only ones ever seen to travel.
-
-**Consequences for the producer that builds this class.** The geothermal steam
-producer of [05 R-ECO-02 §3] cannot bound its container. A geothermal vent
-therefore steams for the whole battle, which is what a player sees.
-
-### Correction to the correction — this is the VENT's class, not the smoke family's [R-FX-01 §3 addendum §B] (2026-09-01)
-
-Status: **Established** (both class vtables read out and every overridden slot
-decompiled; the differing instructions are single shift immediates).
-
-**What the section above said.** Its last paragraph read "There are exactly two
-call sites that construct it — the geothermal steam producer and the general
-smoke-puff producer that serves the strip-5 and strip-9 sites — and neither can
-bound its container. Every smoke emitter in the game runs until the strip evicts
-it." That paragraph is withdrawn; it is replaced by the one now in its place.
-
-**Why that is wrong.** The vent and the strips-5/9 smoke puffer are **two
-classes with two object vtables**, not one class reached from two producers.
-Everything the section above establishes is true — of the vent's class only.
-Reading the two vtables side by side, they differ in exactly four places:
-
-| | strips-5/9 smoke puffer | geothermal vent |
-|---|---|---|
-| removal verdict | sub-record list empty **and** stored deadline `< tick` | `return 0` — constant false |
-| spawn gate | next-spawn `<=` deadline **and** next-spawn `<=` tick | next-spawn `<=` tick |
-| vertical drift | gravity word **× 4** | gravity word **× 16** |
-| blitted entry | selected by an init flag between the two smoke entries | the first smoke entry, bound directly |
-
-Everything else is identical, instruction for instruction: the two wind terms
-(both × 8), the countdown and its `hold/2 + crtRand × (hold/2) / 0x8000`
-redraw, the retirement compare `frame < lastFrame` made on every visit, the
-single-puff spawn with its one draw for `crtRand × (frameCount − 1 − 2) / 0x8000
-+ 2`, and `nextSpawn = tick + interval` written unconditionally at the end of
-the spawn. The record layouts differ only by the selector word the puffer
-carries and the vent does not, which shifts the puffer's position triple one
-word later.
-
-The capacity-reservation finding above survives intact and applies to both
-classes: the reservation is guarded by "is this count positive", and that guard
-covers only the vector resize — the puff-append below it is unconditional. So
-the deadline never gates a spawn *directly* in either class. What gates the
-puffer's spawn is its own gate's first term, which the vent's class drops.
-
-**What this means for the deadline.** For the strips-5/9 puffer the stored
-`tick + lifetime` **is** a lifetime, exactly as [R-STRIP-01 §2] originally
-said. Every weapon-side site passes lifetime 0 — the trail puff, `endsmoke` at
-impact, `startsmoke` at the muzzle, and both emit-sfx smoke points — which
-leaves the deadline at the creation tick. The gate then refuses the second
-spawn (the next-spawn tick is already past the window) and the verdict retires
-the container on the first tick after its one puff is gone. That is what makes
-these producers one-shots. The two parameterised sites are the only ones with a
-real window: the above-sea explosion's land dust (interval 7, lifetime 15 —
-three puffs) and the sinking-wreck column (interval 15, lifetime 900).
-
-**How the conflation showed.** Applying the vent's virtuals to the puffer turns
-every muzzle, impact and trail container into an immortal one-puff-per-tick
-emitter. Twenty seconds of a small firefight saturates strip 9 at its
-401-object bound and parks it there, holding roughly fifteen thousand live
-puffs for the rest of the battle — a carpet of smoke standing over every place
-a shot has ever landed. Retail shows nothing of the kind, which is the
-observation that should have been weighed against the vent capture from the
-start: both captures are real, and they are of different classes.
-
-### Closed — the strip pool's capacity, and what a dropped object costs [R-FX-02 §4] (2026-09-02)
-
-Status: **Established** (direct static: the pool's constructor, its single
+**Established** (direct static: the pool's constructor, its single
 growth routine and that routine's single caller, the take and return entries,
 the family destructors, the battle-exit teardown, and the static-initialization
-table entry that runs the constructor). Closes the `TODO(question)` at the head
-of `internal/session/strips.go` and the "initial size … not re-derived here"
-gap of [R-FX-02 §1].
+table entry that runs the constructor).
 
 **When and how the pool is built.** The slot pool of [R-FX-02 §1] is
 constructed **once per process**, by a routine registered in the executable's
@@ -7301,16 +6762,15 @@ after spending only the draws its own call site makes; every destruction path
 per-strip 401 bound of [R-STRIP-01 §1] is applied after, and independently of,
 this test.
 
-### Closed — every producer call site by strip literal; strips 0, 1, 3 and 8 have no producer [R-FX-02 §5] (2026-09-02)
+#### Every producer call site by strip literal; strips 0, 1, 3 and 8 have no producer [R-FX-02 §5]
 
-Status: **Established** (direct static, exhaustive over two independent
+**Established** (direct static, exhaustive over two independent
 enumerations: every code reference to each of the thirteen producer routines
 — thirty-nine call sites — with the strip literal read from each site's own
 argument pushes; and every instruction in the image that reads or writes the
-strip-table root word — nineteen). This re-verifies [R-STRIP-01 §1]'s
-"none — no producer exists anywhere in the image" rows by a different method
-from the one that census used, and closes the `TODO(T23)` markers on the four
-barrier calls in `internal/client/world_draw.go`.
+strip-table root word — nineteen). This verifies [R-STRIP-01 §1]'s "none —
+no producer exists anywhere in the image" rows by a second, independent
+method.
 
 | Strip | Live call sites | Producer routine(s) and event |
 |---|---|---|
@@ -7339,30 +6799,22 @@ table.
 
 **Consequence.** Strips 0, 1, 3 and 8 hold no object in any retail session —
 skirmish, campaign or otherwise — and the composer's unconditional walk over
-them ([03 §1]) is a no-op in retail. This is a **static** closure: the manual
-retail observation that WU-19-18 was holding those four markers for
-(RWU-19-9's probe session) has nothing left to settle for the strips; the
-probe's remaining scope is the other items on its list. Nanolathe may keep the
-four barrier calls as empty passes or omit them; what it must never do is
-attach a producer to any of the four.
+them ([03 §1]) is a no-op in retail. This is a static closure and needs no
+retail observation. Nanolathe may keep the four barrier calls as empty
+passes or omit them; what it must never do is attach a producer to any of
+the four.
 
-### Closed by citation — the strip-object implementation questions, one rule each [R-FX-02 §6] (2026-09-02)
+#### The strip-object implementation rules, one line each [R-FX-02 §6]
 
-`internal/session/strips.go` carried nine `TODO(question)` markers, written
-before [R-FX-01 §3] and [R-FX-02 §2–§3] landed; every one but the pool
-capacity (now [R-FX-02 §4]) was already answered there, and all nine have
-since been removed from the source. This section is the
-index that retires them — the rule in one line each, with the section that
-owns the arithmetic. **Established** unless marked; the strip-5 flame class's
-init, spawn and update were re-read for this pass and match [R-FX-02 §2] as
-written.
+The strip-object rules an implementation needs, one line each, with the
+section that owns the arithmetic. **Established** unless marked.
 
-| Question at the marker | Rule | Owner |
+| Question | Rule | Owner |
 |---|---|---|
 | shared pool capacity, behaviour when full | 1000 containers across all ten strips, process-lifetime; a full pool drops the object silently after only the call-site draws | [R-FX-02 §4] |
 | start-frame mapping to a GAF frame index | there is no reduction step — each family's frame word is already an index into its bound entry: the smoke puff starts at 0 in `smoke 1`/`smoke 2`; the strip-5 flame segment starts at `crtRand × (frameCount − 1) / 0x8000` (in `0 … frameCount − 2`) of `flamestream`; the trail segment starts at 0 of `flamestream`; the nano particle and the sprinkle puff draw no frame at all (filled rectangles) | [R-FX-02 §2], [R-FX-02 §3], [R-FX-01 §3] |
 | per-site lifetimes: sprinkle | container window closes one tick after creation (two puffs); each puff's tick deadline is `spacing × 6` (96 at spacing 16, 48 at 8), **and** it dies the tick the terrain under it is at or above sea level — a wake that lives only over water | [R-FX-01 §3], [R-WATER-01 §1] |
-| per-site lifetimes: smoke | the puff has **no tick deadline**: it retires when its frame cursor reaches its own drawn last frame; the container's lifetime is the producer's literal (0 for every weapon-side, burning-feature and `emit-sfx` site — one-shot; 15 for land dust; 900 for the wreck column; the vent is unbounded) | [06 R-WFX-01 §5], [05 R-FEAT-01 §16], [R-FX-01 §3 addendum §B] |
+| per-site lifetimes: smoke | the puff has **no tick deadline**: it retires when its frame cursor reaches its own drawn last frame; the container's lifetime is the producer's literal (0 for every weapon-side, burning-feature and `emit-sfx` site — one-shot; 15 for land dust; 900 for the wreck column; the vent is unbounded) | [06 R-WFX-01 §5], [05 R-FEAT-01 §16], [R-FX-01 §3] |
 | per-site lifetimes: flame stream | container 30 ticks (the teleport site); each segment lives `segLife = floor(spanUnits / 5)` ticks, laid every 10 ticks — four segments per container | [R-FX-02 §2] |
 | sprinkle animation walk | `phase = (phase + 1) mod spacing`; on wrap `colour += dir` (`dir = +1` for flag 1, `−1` for flag 0), wrapping `> 0x67 → 0x61` and `< 0x61 → 0x67`; no draws | [R-FX-01 §3] |
 | flame segment frame wrap | `frame = (frame + 1) mod (frameCount − 1)` every tick — the entry's last frame is never shown | [R-FX-02 §2] |
@@ -7372,7 +6824,7 @@ written.
 | flame segment travel law | `step = (B − A) / segLife` per axis, signed truncating — five world units per tick; a span under five units faults | [R-FX-02 §2] |
 | smoke default frame hold | 7 when the producer passes 0 | [R-STRIP-01 §1], [R-FX-02 §3] |
 
-### Closed — the flash and lens blitters, and which families do not use the countdown cursor [R-FX-01 §4] (2026-08-29)
+#### The flash and lens blitters, and which families do not use the countdown cursor [R-FX-01 §4]
 
 **The flash blitter (Established, direct-static).** The explosion pool's first
 draw walk ([06 R-WFX-01 §2]) hands every record's calculated (secondary) frame
@@ -7425,7 +6877,7 @@ of [R-FX-01 §5] (`tick / (2 · hold0) mod frames`). Their cadences are stated
 at those anchors; none of them reads a frame's own hold word except the queue
 icon, which reads only frame 0's. **Established.**
 
-### Closed — cursors: table, selection data path, hotspot, cadence, and save-under [R-FX-01 §5] (2026-08-29)
+#### Cursors: table, selection data path, hotspot, cadence, and save-under [R-FX-01 §5]
 
 **The table (Established).** The `cursors` bank ([R-FX-01 §1]) is bound into
 one contiguous table of sequence pointers indexed 1..21, in this order:
@@ -7436,13 +6888,12 @@ one contiguous table of sequence pointers indexed 1..21, in this order:
 17 `cursorred`, 18 `cursorgrn`, 19 `cursornormal`, 20 `cursorhourglass`,
 21 `pathicon`. Index 0 is the word before the first slot, which the binder
 never writes and the session-block clear leaves zero: a selector that yields 0
-binds a null sequence (no cursor art). The stock file's twenty-second entry,
-`cursorprotect` (8 frames), is bound by nothing. **Established.**
+binds a null sequence, which is undefined behaviour (below), not "no cursor
+art". The stock file's twenty-second entry, `cursorprotect` (8 frames), is
+bound by nothing. **Established.**
 
-**Correction (2026-09-02, RWU-19-43) — index 0, a missing name and a frameless
-entry are undefined, not "no cursor art".** The sentence above says a selector
-yielding 0 "binds a null sequence (no cursor art)". The binding happens; the
-outcome is not a blank pointer. The sequence binder of §4.4 reads the entry's
+**Index 0, a missing name and a frameless entry are undefined.** The binding
+happens; the outcome is not a blank pointer. The sequence binder of §4.4 reads the entry's
 frame count — for its start-index clamp — **before** it tests the entry
 pointer, and its null arm then reads the loop byte through the same null
 pointer, so binding a null sequence faults on the first read. The same holds
@@ -7533,7 +6984,7 @@ target 1.6 units per tick and repeat every 30 ticks), only when the segment is
 at least one world unit long; each dot steps the entry's frame index by one
 (stock `pathicon` has one frame).
 
-### Closed — `damagebars` and the health-bar raster [R-FX-01 §6] (2026-08-29)
+#### `damagebars` and the health-bar raster [R-FX-01 §6]
 
 **The option (Established, direct-static).** `damagebars` is a value under the
 game's registry key, read at settings load into **bit 0 of the display-options
@@ -7557,8 +7008,7 @@ get a bar, whatever the option; strip-9 smoke therefore composes **over** the
 bars and the projectile/explosion passes before them. There is no
 line-of-sight test beyond the list's own admission.
 
-**The raster (Established, direct-static; closes the `[07 §6]` footer's
-geometry).** Given the unit's signed 16-bit current health `hp` and its
+**The raster (Established, direct-static).** Given the unit's signed 16-bit current health `hp` and its
 definition's 32-bit `maxdamage`:
 
 ```
@@ -7578,14 +7028,13 @@ shows a one-pixel fill; the comparisons are signed and strict. `dcb[n]` is
 entry `n` of the active logical-to-physical table, the same entries [07 §6]
 names for the thresholds. Death (`hp ≤ 0`) hides the bar the same frame.
 
-#### R-FX-01 §6A — the group digit's "default colour" is entry 15 (2026-09-04, WU-19-160)
+#### R-FX-01 §6A — the group digit's "default colour" is entry 15
 
-**The question this closes.** §6 above says the group digit is drawn "in the
-default colour", and [R-FONT-01 §6] establishes that the FNT drawer takes the
-display context's foreground/background bytes and that *each painter installs
-them itself* — so "the default colour" names a piece of renderer state, and no
-section said which entry that state holds when the composer reaches the label
-walk. It is **colour-map entry 15**.
+§6 above says the group digit is drawn "in the default colour", and
+[R-FONT-01 §6] establishes that the FNT drawer takes the display context's
+foreground/background bytes and that *each painter installs them itself* —
+so "the default colour" names a piece of renderer state. The entry that state
+holds when the composer reaches the label walk is **colour-map entry 15**.
 
 **Established (direct-static).** The digit's own text call passes the string
 and the pen and installs nothing. The install belongs to the frame composer,
@@ -7603,29 +7052,23 @@ Confidence: **Established** for the install, its position in the pass and the
 digit call's lack of one; **bounded negative** for the absence of a second
 install, over the strip drawers the composer invokes directly between them.
 
-**Why this is worth stating.** The alternative readings were both plausible and
-both wrong: that the digit takes whatever the *previous frame's* last painter
-left (it does not — this composer installs its own foreground every frame), and
-that it takes the resource counters' entries (it does not — those are installed
-inside the strip-repaint block, which runs before this install and only on
-frames where the resource snapshot changed).
+**Bounded alternatives.** The digit does not take whatever the *previous
+frame's* last painter left (this composer installs its own foreground every
+frame), and it does not take the resource counters' entries (those are
+installed inside the strip-repaint block, which runs before this install and
+only on frames where the resource snapshot changed).
 
-### Closed — `NoShake`, the named scratch surfaces, and the residuals [R-FX-01 §7] (2026-08-29)
+#### `NoShake`, the named scratch surfaces, and the residuals [R-FX-01 §7]
 
 **`NoShake` (Established, direct-static).** The token is an entry of the
 in-battle **typed-command registry** — the table the battle setup registers
 beside `Radar`, `fog`, `Contour`, `ScrollSpeed`, `IFace`, `Give` and `CDPlay`,
 consulted by the text-entry line's command parser (doc 07 owns the line). Its
 handler toggles **bit 4 of the session preference word**, which is exactly the
-"preference bit `0x10`" §5.6 names as the shake request's early return. So
-§5.6's "which authored setting drives that bit is not established" closes:
-no authored setting drives it; it is a per-session typed toggle, off at
-battle start (the word is cleared with the session block) and not persisted.
+"preference bit `0x10`" §5.6 names as the shake request's early return. No
+authored setting drives it; it is a per-session typed toggle, not persisted.
 
-**Correction (2026-09-02, RWU-19-42) — where the bit is cleared.** The
-previous paragraph said the toggle is "off at battle start (the word is
-cleared with the session block)". That is wrong about the clearing site:
-the preference word is the same word that holds the persisted `clock` bit
+**Where the bit is cleared.** The preference word is the same word that holds the persisted `clock` bit
 and the other registry-backed display preferences, and it survives battle
 entry — the battle-entry orchestrator ([08 R-ENTRY-01]) never touches it.
 The bit's writers, exhaustively over the recovered function set, are two:
@@ -7670,7 +7113,7 @@ dispatcher, so every peer requests the same shakes from the same weapon data.
 
 **Request.** If the preference bit `0x10` is set, the request returns with state
 untouched; that bit is the typed `NoShake` toggle, not an authored setting
-([R-FX-01 §7], 2026-08-29 — the earlier "not established" is closed). Otherwise
+([R-FX-01 §7]). Otherwise
 if inactive the two amplitude accumulators are cleared to zero while the
 duration accumulator is left unchanged. The new duration is
 `trunc((duration + authoredDuration)/2)` with signed truncation toward zero,
@@ -7696,29 +7139,20 @@ cameraY += rand() * sy / 0x8000 - (sy / 2)     (sy / 2: signed, truncating)
 remaining -= 1
 ```
 
-**Correction (2026-08-27).** The two jitter lines previously read
-`- (abs(sx) >> 1)` and `- (abs(sy) >> 1)`. That magnitude form is wrong: the
-binary forms the half term with the compiler's signed truncating-halving idiom
-(add the sign mask, then arithmetic-shift right by one), which is `sx / 2`
-rounding toward zero. The two readings differ exactly when the amplitude term
-is negative and odd — `abs(sx) >> 1` floors while `sx / 2` truncates, an
-off-by-one on the negative side. Established (re-verified by direct
-instruction read, 2026-08-27, confirming the 2026-08-27 R-CORE-01 packet's
-finding). Consequence 1's "-abs(s)/2" phrase below must be read as "-s/2":
-for odd negative displacement terms the noise band is asymmetric by one unit;
-all other claims in this section were re-verified in the same read and stand
-(request blending, exactly two CRT draws per active tick and none on the
-expiry tick, the linear-decay envelope, the in-place permanent camera
-mutation, and the clamp + follow-glide damping).
+The half term is the compiler's signed truncating-halving idiom (add the
+sign mask, then arithmetic-shift right by one), which is `s / 2` rounding
+toward zero — not `abs(s) >> 1`, which differs by one when the amplitude term
+is negative and odd; for odd negative displacement terms the noise band is
+therefore asymmetric by one unit. **Established** (direct instruction read).
 
 Three consequences matter:
 
 1. The envelope is a **linear decay with uniform white noise**, not a sinusoid
-   and not an exponential. The `-s/2` term (signed truncating, see the
-   correction above) centres each axis.
+   and not an exponential. The `-s/2` term (signed truncating) centres each
+   axis.
 2. The two draws come from the **CRT presentation random stream, not the
    simulation stream**. Shake costs exactly two presentation draws per active
-   tick and never touches lockstep state.
+   tick, none on the expiry tick, and never touches lockstep state.
 3. The jitter is added **in place into the global camera origin** — the same
    integers every renderer subtracts to get screen coordinates. There is no
    separate render-time offset. So the world, fog, selection rectangle, and
@@ -7732,8 +7166,8 @@ glide-halfway-to-target behavior damps it while tracking a unit.
 
 ### 5.6.1 CRD-006 follow-camera producer census [R-CRD-006 §2]
 
-This addendum narrows the earlier follow-camera description to the producer
-and lifetime paths that are established by the bounded retail census. The
+This section states the follow-camera producer and lifetime paths that are
+established by the bounded retail census. The
 phase-10 consumer and its priority remain the contract in [07 §10] and
 [01 §4.4]: in-flight camera motion wins over a followed projectile, which wins
 over a valid tracked object. A selected point is converted to a desired origin
@@ -7841,35 +7275,27 @@ test seam rather than claiming that it is retail's producer.
 ### 5.7 Construction and water wakes
 
 The construction/nanolathe path uses target footprint and builder position to
-build short line segments. Mover bounds produce wake rectangles, which are
-filled with a palette tint and suppressed when the relevant fog/visibility gate
-is active. Wakes are not a water surface simulation.
+build short line segments. There is no wake rectangle: wakes are the
+script-emitted strip-2 sprinkles of [R-WATER-01 §1], and they are not a water
+surface simulation.
 
-### Closed — there is no wake rectangle: wakes are the script-emitted strip-2 sprinkles, and the rectangle was the selection frame [R-WATER-01 §1] (2026-08-29)
+#### There is no wake rectangle: wakes are the script-emitted strip-2 sprinkles, and the rectangle is the selection frame [R-WATER-01 §1]
 
-Status: **Established** (direct static trace of the composer's post-fog
+**Established** (direct static trace of the composer's post-fog
 rectangle, of the per-unit overlay the composer keys on the status word, of
 the sprinkle container and puff, and of the emit-sfx dispatch; the survival
 branch was read at the instruction level).
 
-**Correction (2026-08-29).** The paragraph above previously said "Mover
-bounds produce wake rectangles, which are filled with a palette tint and
-suppressed when the relevant fog/visibility gate is active", and §5.2 Pass A
-step (i) still says "when the unit's wake status bit is set and the
-typed-command word's wake bit permits, the water-wake rectangle pass of §5.7
-runs". Both readings came from two earlier trails that labelled the
-composer's post-fog rectangle pair a "wake rect". That pair is the
-**box-selection outline of §2.4.1**: its two world endpoints are the drag
-corners, its gate is the drag-active bit of the selection mode word, its
-outer colour is logical entry 4 (6 when the armed-build bit is set) and its
-inner colour entry 0. Nothing about it reads a mover, a medium, a wake state,
-or the sea level. The per-unit status bit the composer tests in Pass A and
-Pass B is the **selected** bit — the same bit `Ctrl+A` select-all sets
-([07 R-CAM-01 §2]) — and the pass it enables is the selected-unit footprint
-quad below, not a wake. Document 04 reconciled the two documents on 2026-08-26 by
-assuming both mechanisms existed ([04 §9.2] "Reconciliation with document
-03"); the mover-bound rectangle half of that split does not exist and should
-be withdrawn there.
+**The composer's post-fog rectangle is the selection outline.** The
+composer's post-fog rectangle pair is the **box-selection outline of
+[R-SEL-02A]**: its two world endpoints are the drag corners, its gate is the
+drag-active bit of the selection mode word, its outer colour is logical
+entry 15 (6 or 4 while the armed latch is MOBILEBUILD) and its inner colour
+entry 0. Nothing about it reads a mover, a medium, a wake state, or the sea
+level. The per-unit status bit the composer tests in Pass A and Pass B
+([R-RAST-01 §7]) is the **selected** bit — the same bit `Ctrl+A` select-all
+sets ([07 R-CAM-01 §2]) — and the pass it enables is the selected-unit
+footprint quad below, not a wake.
 
 **What a wake is.** A wake is the *impact sprinkle* family of [R-FX-01 §3]:
 `emit-sfx` types 2–5 from the unit's COB script ([04 R-COB-03 §6]), spawned
@@ -7882,21 +7308,16 @@ the medium bands of [04 §9.2]). The container, puff, jitter, half-unit step,
 seven-entry colour ramp `0x61..0x67`, `spacing · 6` lifetime and 2×2 raw-index
 rectangle are [R-FX-01 §3]'s arithmetic and are not restated here.
 
-**Correction to [R-FX-01 §3] — the survival test is inverted there.** That
-section says a puff is "removed when `tick > expiry` **or** the bilinear
-terrain height under the puff … is strictly below the sea-level byte — the
-marks die over water and off-map". The instruction-level read is the
-opposite: the puff **survives** exactly while `tick ≤ expiry` **and**
-`height(pos) < seaLevel` (strict; the bilinear query of [R-TERR-01 §4], which
-returns −1 off-map). Both exits — `tick > expiry` and `height ≥ seaLevel` —
-return the "erase" verdict; only the fall-through returns "keep". So the
-marks live only over water (and off-map, where −1 is below any sea level)
-and die on the tick they drift onto land at or above the water plane. The
-earlier text read the verdict's sense backwards; the caller erases on a
-non-zero verdict. A clone that keeps the inverted rule draws wakes on land
-and never on water.
+**The survival test.** The puff **survives** exactly while `tick ≤ expiry`
+**and** `height(pos) < seaLevel` (strict; the bilinear query of
+[R-TERR-01 §4], which returns −1 off-map). Both exits — `tick > expiry` and
+`height ≥ seaLevel` — return the "erase" verdict, which the caller acts on
+when non-zero; only the fall-through returns "keep". So the marks live only
+over water (and off-map, where −1 is below any sea level) and die on the tick
+they drift onto land at or above the water plane. A clone that inverts the
+rule draws wakes on land and never on water.
 
-**The selected-unit footprint quad (the pass §5.2 mislabels).** For every
+**The selected-unit footprint quad.** For every
 bucketed unit whose selected bit is set, in the same Pass A / Pass B slot and
 before the model present, the composer draws a four-line quad:
 
@@ -7946,9 +7367,9 @@ separate definition flags from the visual media choice.
 The absence of a water mesh is high-confidence within the current bounded
 rendering invocation census, not proof that every un-decompiled helper lacks one.
 
-### Closed — water and lava, exactly: what exists, what does not, and the blue table [R-WATER-01 §2] (2026-08-29)
+### Water and lava, exactly: what exists, what does not, and the blue table [R-WATER-01 §2]
 
-Status: **Established** unless marked; each negative is a reader census over
+**Established** unless marked; each negative is a reader census over
 the complete decompile export (the binder's holders, the mission fields, and
 the runtime map-global words), not a bounded sample.
 
@@ -7984,8 +7405,7 @@ complete contract is [R-REN-03A §8] with the ownership rule of
 
 Features (3DO wrecks) take the blue path always ([R-RAST-01 §6]).
 
-**3. The blue table — provenance closed (was an Unknown in §4.3.3 /
-[fmt pal]).** The 256-byte blue table is allocated beside the gray table when
+**3. The blue table.** The 256-byte blue table is allocated beside the gray table when
 the palette window's blue-table feature bit is set, and is **built from
 `PALETTE.PAL`** by the same nearest-colour search the gray table uses
 (§4.3.3), at session initialisation, once:
@@ -8081,20 +7501,17 @@ and rasterizes glyph rows directly into the indexed framebuffer. Glyph bits are
 is byte value 10. The active font, the foreground/background colour pair and
 the transparent-colour sentinel are software-renderer state.
 
-**Correction (2026-08-29, RWU-03-5).** The previous text called the third
-colour field "shadow color state" and said the header/layout details and
-baseline/kerning behaviour were medium-confidence. The third field is the
-*skip* colour: a palette index that the glyph rasterizer refuses to write
-(§4 below). There is no shadow flag anywhere in the text primitives; every
-shadow or outline seen in retail is a caller drawing the string more than
-once at pixel offsets. The header, baseline, advance and clipping questions
-are closed below with direct-static evidence; there is no kerning.
+The third colour field is the *skip* colour: a palette index that the glyph
+rasterizer refuses to write ([R-FONT-01 §4]). There is no shadow flag
+anywhere in the text primitives; every shadow or outline seen in retail is a
+caller drawing the string more than once at pixel offsets. There is no
+kerning.
 
 The renderer does not use GDI `TextOut` for gameplay text. GDI remains
 present for window/palette presentation; whether any shell dialog draws text
 through GDI is still open (see the Unknown list at the end of §7.1).
 
-### Closed — the FNT record as the executable reads it [R-FONT-01 §1] (2026-08-29)
+#### The FNT record as the executable reads it [R-FONT-01 §1]
 
 **Established, direct-static.** An FNT file is loaded as raw bytes through the
 ordinary VFS file loader and used in place; no parse or conversion step
@@ -8114,12 +7531,11 @@ the high side — the routines index `(code − first) & 0xFFFF` for any byte
 `≥ first` — so a font whose first code is 0 must carry 256 entries, which is
 what every retail font does. A glyph record is one byte of **advance**
 followed by `advance × height` bits packed MSB-first with no row padding
-(`[fmt fnt]` owns the layout; the format doc's old "u16 height / u16 unknown"
-header is corrected there). There is no per-glyph height, no bearing, no
+(`[fmt fnt]` owns the layout). There is no per-glyph height, no bearing, no
 baseline table and no kerning table: the pen moves by exactly the advance
 byte and the only vertical datum is header byte 2.
 
-### Closed — the width measurer [R-FONT-01 §2] (2026-08-29)
+#### The width measurer [R-FONT-01 §2]
 
 **Established, direct-static.** `width(font, s)` walks `s` until a NUL or a
 byte 10 (newline) and sums the advance byte of each glyph that exists:
@@ -8138,7 +7554,7 @@ is inlined verbatim in the drawer, the centred-text helper and the outlined
 text helper; there is no cache. Newline terminates measurement, so a
 multi-line string measures its first line only.
 
-### Closed — the string drawer: truncate, then whole-rectangle clip [R-FONT-01 §3] (2026-08-29)
+#### The string drawer: truncate, then whole-rectangle clip [R-FONT-01 §3]
 
 **Established, direct-static.** `draw(dst, s, x, y, maxW)` runs in this order:
 
@@ -8179,7 +7595,7 @@ drawer lock the default presentation surface, draw through the same test
 against that surface's clip rectangle, and unlock; if no surface can be
 locked nothing is drawn.
 
-### Closed — the glyph rasterizer, the skip colour, and how shadows are made [R-FONT-01 §4] (2026-08-29)
+#### The glyph rasterizer, the skip colour, and how shadows are made [R-FONT-01 §4]
 
 **Pen and row placement (Established, direct-static).** The rasterizer takes
 the surface base and stride, the font, the string, `(x, y)`, and three colour
@@ -8205,11 +7621,8 @@ skip colour and passing it as the background, so retail text is drawn with
 `bg == skip`: clear bits write nothing and the glyph is transparent. The
 value 254 is the sentinel doc 07 §7 calls the "transparent palette sentinel";
 it is a plain palette index, and a foreground of 254 would also be invisible.
-
-**Correction to doc 07 §7's "drop-shadow switch" (cross-doc).** The ninth
-argument of the rasterizer is this skip colour, not a shadow toggle; the
-field it is read from is the skip colour, not a shadow flag. Doc 07 owns that
-paragraph; the change is listed as a cross-doc need.
+The ninth argument of the rasterizer is this skip colour, not a shadow
+toggle.
 
 **Shadows and outlines (Established).** They are caller compositions of the
 plain drawer:
@@ -8228,7 +7641,7 @@ plain drawer:
   ([03 §4]). A plain centred helper with the same `penX` and one pass exists
   but has no callers.
 
-### Closed — which fonts are loaded, by whom, and which routine draws which family [R-FONT-01 §5] (2026-08-29)
+#### Which fonts are loaded, by whom, and which routine draws which family [R-FONT-01 §5]
 
 **Startup preloads (Established, direct-static).** Before the shell opens,
 `fonts/COMIX` and `fonts/SMLFONT` are loaded into two global slots. A null
@@ -8262,37 +7675,27 @@ and label painters switch the window's GAF font to slot 1 (`hattfont11`) for
 their text and restore slot 0 afterwards, and so does the button painter when
 the button's small-font attribute bit `0x8000` is set; a button without that
 bit draws its caption with slot 0 (`hattfont12`), which is what a side page's
-build count does (correction below). GDI text is not used by any of these
-paths.
+build count does (below). The kind-13 score-bar painter of §6 selects slot 1
+the same way the list and label painters do. GDI text is not used by any of
+these paths.
 
-**Correction (2026-09-04, WU-19-221).** The paragraph above previously read
-"The build-card count label switches the window's GAF font to slot 1
-(`hattfont11`) for its duration and restores slot 0 afterwards; so do the
-list, button (when the button's small-font attribute bit `0x8000` is set) and
-label painters." The clause about the three painters is unaffected and is kept
-above; the subject of the first clause is wrong. There is no build-count
-routine that selects a font: the count-label writer stores the number in the
-product button's own text slot ([07 R-P0-11 §2]) and the GUI button painter
-draws it as that button's caption (§6, "Side-page build count"), so it takes
-the button rule — the window's current slot, slot 0 (`hattfont12`), unless the
-button authors `0x8000`. No count-bearing product button authors it: an asset
-census over the reference install's `guis/*.gui` finds all 488 kind-1 buttons
-carrying `commonattribs` 4 or 8 authoring `attribs = 32` and a 64x64
-rectangle, and none of them `0x8000`. A side-page build count therefore draws
-in `hattfont12`, not `hattfont11`. The "switches to slot 1" subject is the
-kind-13 score-bar painter that RWU-19-34 re-identified in §6 — the same
-mis-subject that correction fixed there ("the side-page build count is a
-button caption ... and never passes through this routine") while leaving this
-sentence standing; whether that painter selects slot 1 was an open item in
-"Missing and unknown" — closed 2026-09-04 (WU-19-230): it does, see the §6
-correction.
+**The side-page build count (Established; asset census).** There is no
+build-count routine that selects a font: the count-label writer stores the
+number in the product button's own text slot ([07 R-P0-11 §2]) and the GUI
+button painter draws it as that button's caption (§6, "Side-page build
+count"), so it takes the button rule — the window's current slot, slot 0
+(`hattfont12`), unless the button authors `0x8000`. No count-bearing product
+button authors it: an asset census over the reference install's `guis/*.gui`
+finds all 488 kind-1 buttons carrying `commonattribs` 4 or 8 authoring
+`attribs = 32` and a 64x64 rectangle, and none of them `0x8000`. A side-page
+build count therefore draws in `hattfont12`, not `hattfont11`.
 
-### Closed — the GAF-font pen: measure, metric, draw, wrap, and the gadget painters [R-FONT-01 §6] (2026-08-29)
+#### The GAF-font pen: measure, metric, draw, wrap, and the gadget painters [R-FONT-01 §6]
 
-Doc 07 §4 already records the GAF-font loader's baseline rule (the capital-I
+Doc 07 §4 records the GAF-font loader's baseline rule (the capital-I
 frame's height is subtracted from every frame's Y offset once at load) and
 the blitter placement `penX − XOffset, penY − normalizedYOffset`. This section
-records the pen arithmetic that was left open there.
+records the pen arithmetic.
 
 **Measure (Established, direct-static).** With a GAF font in the window's
 current slot, `gafWidth(s)` sums, for every byte of `s` until NUL (newline
@@ -8302,7 +7705,7 @@ for a byte whose frame index is out of range. With a null slot it is
 
 **Line metric (Established).** `metric = height(frame['I']) + 2` with a GAF
 font, else header byte 0 of the active FNT. This is the "capital-I height
-plus two" of doc 07 §5, now verified.
+plus two" of doc 07 §5.
 
 **Draw (Established).** `gafDraw(dst, s, x, y, maxW, mode)`; with a null
 slot it calls the FNT drawer with `maxW = −1` (the caller's width limit is
@@ -8371,7 +7774,7 @@ least one line is always drawn.
 * otherwise (GAF path): when `2 × metric < h − 1` the wrapper is used with
   `maxW = w`, `maxH = h`; else the single-line drawer with `maxW = w`.
 
-**Button painter (Established; verifies doc 07 §5).** With `s = 1` when the
+**Button painter (Established).** With `s = 1` when the
 gadget's `stages` field is non-zero, else 0:
 
 * `penY = gy + trunc((h − 1 − metric) / 2) + s` (C division, truncation
@@ -8382,15 +7785,15 @@ gadget's `stages` field is non-zero, else 0:
   `maxW = w` and `mode = 0`;
 * the build-attribute variant (bit 0x20, when neither left nor right nor
   centre is set) keeps the centred `penX` and uses `penY = bottom − 4 −
-  metric + s`, then draws a second string after the first in the window's
-  colour-table entry 10; doc 07 (HUD build cards, [R-HUD-03]) owns what that
-  second string is.
+  metric + s`, then draws the caption as three runs — the prefix in the
+  button colour, the quickkey letter in map entry 10, the remainder in the
+  button colour again, each placed after the measured width of the previous
+  run ([07 R-WGT-01 §3]).
 
 The pressed/held state never moves the pen — only `stages` does — which is
 what doc 07 §5 states.
 
-**The FNT foreground each painter installs (Established, RWU-19-34,
-2026-09-02).** The FNT drawer of §3 draws in the display context's
+**The FNT foreground each painter installs (Established).** The FNT drawer of §3 draws in the display context's
 foreground/background/skip bytes (§4), and nothing installs them on the
 painter's behalf: each gadget painter runs the pair setter itself, directly
 ahead of its text call, reading the skip colour back as the background (so
@@ -8446,44 +7849,23 @@ without that lookup.
   number is drawn in map entry `colorf`, which is map entry 0 unless the
   button is mid-flash.
 
-**Correction (RWU-19-34) to two sentences above.** (1) The build-attribute
-bullet of the button painter said it "draws a second string after the first
-in the window's colour-table entry 10; doc 07 … owns what that second
-string is". There is no second string: the caption is cut at its quickkey
-letter and drawn as three runs — the prefix in the button colour, the single
-letter in map entry 10, the remainder in the button colour again, each
-placed after the measured width of the previous run — as [07 R-WGT-01 §3]
-records. (2) The paragraph that followed, headed "Build-card count", said
-"the count label switches to slot 1 and draws the decimal count at
-`(gx + trunc(w/2) − trunc(tw/2), gy + trunc(h/2) − trunc(metric/2))` with
-no width limit". The pen arithmetic is right but the subject is wrong: that
-routine is the **kind-13 score-bar painter** of [07 R-HUD-03 §11] (the
-end-of-mission bars), not anything on a build card, and it does **not**
-switch the window's GAF slot — it measures and draws with whatever slot the
-window already holds. It also installs no foreground: the decimal is drawn
-with the context bytes exactly as the previously painted gadget left them.
-Its two fills take the gadget's `colorb` (inner background) and `colorf`
-(progress) bytes raw, and its bevel is the map-entry 0/17/20 frame of
-[07 R-FE-02 §4].
+**Kind-13 score-bar painter (Established).** The score-bar painter of
+[07 R-HUD-03 §11] (the end-of-mission bars) writes the window record's
+current-GAF-font word from **slot 1** (`hattfont11`) as its first statement
+and restores it from slot 0 as its last — the same two writes the list and
+label painters make. Between them it draws the bevel (the map-entry 0/17/20
+frame of [07 R-FE-02 §4]), two fills taking the gadget's `colorb` (inner
+background) and `colorf` (progress) bytes raw, and (when `showNumber` is
+set) the decimal count through the GAF pen at `(gx + trunc(w/2) −
+trunc(tw/2), gy + trunc(h/2) − trunc(metric/2))` with no width limit and
+mode 0, measuring the width and the capital-I metric against slot 1. It
+installs no foreground: the decimal is drawn with the context bytes exactly
+as the previously painted gadget left them. So the end-of-mission bar's
+number is `hattfont11`, one point smaller than the `hattfont12` a plain
+button caption draws in. The side-page build count is a button caption
+(above) and never passes through this routine.
 
-**Correction (2026-09-04, WU-19-230) to the sentence just above.** "it does
-**not** switch the window's GAF slot — it measures and draws with whatever
-slot the window already holds" is wrong; the WU-19-221 reading was right.
-Re-traced from the gadget painter's kind-13 case: the score-bar painter's
-first statement writes the window record's current-GAF-font word from
-**slot 1** (`hattfont11`), and its last restores it from slot 0 — the same
-two writes the list and label painters make. Between them it draws the bevel,
-the two fills, and (when `showNumber` is set) the decimal through the GAF pen
-with no width limit and mode 0, measuring the width and the capital-I metric
-against slot 1. So the end-of-mission bar's number is `hattfont11`, one
-point smaller than the `hattfont12` a plain button caption draws in; the pen
-arithmetic and the fill/bevel/foreground statements above are unchanged.
-Trail `/tmp/ta-decompile/notes/wu-19-230.md`. **Established.**
-
-The side-page build count is a button caption (above) and
-never passes through this routine.
-
-### Code page and character mapping [R-FONT-01 §7] (2026-08-29)
+#### Code page and character mapping [R-FONT-01 §7]
 
 **Established.** Both families map a string byte to a glyph by its raw
 value: the FNT path by `byte − first` into the offset table, the GAF path by
@@ -8493,7 +7875,7 @@ that position (the retail 222/223-glyph fonts carry Windows-1252 shapes
 there, [fmt fnt]). Whether any string *producer* translates before drawing
 is a doc 07 question (its translation-table path) and is listed there.
 
-### Unknown — §7.1, open items only
+#### Unknown — §7.1, open items only
 
 - Whether any shell dialog draws text through GDI rather than the FNT/GAF
   paths · decider: import-table and reference census of `TextOut`/`DrawText`
@@ -8527,35 +7909,34 @@ repeat rate, focus-loss behavior, and all gadget hit-testing are not settled.
 
 ### 8.1 Backend selection
 
-Startup chooses among three established paths:
+Startup chooses among three established paths ([R-AUD-01 §1]):
 
 1. DirectSound via `DirectSoundCreate`, cooperative level, a primary buffer,
-   and a PCM format observed as 11,025 Hz, 16-bit, stereo;
-2. WinMM `waveOut`/`aux` fallback when DirectSound is disabled, unavailable, or
-   reports the allocated-device failure; and
-3. Win32 `PlaySoundA` when `UseWindowsSound` is selected. This path is used for
-   legacy/frontend or configured Windows sounds and forces DirectSound off.
+   and a PCM format of 11,025 Hz, 16-bit, stereo;
+2. Win32 `PlaySoundA` when `UseWindowsSound` is selected. This path is used
+   for legacy/frontend or configured Windows sounds and forces DirectSound
+   off; and
+3. **silence** when DirectSound is disabled or unavailable — there is no
+   waveOut playback backend (the executable imports no
+   `waveOutOpen`/`waveOutWrite`; WinMM is used only for volume and MCI), and
+   every play gate tests the no-DirectSound flag and returns without playing.
 
-Initialization failure handling is exact: a device-allocated failure
-(`DSERR_ALLOCATED`) disables the DirectSound path and selects the waveOut
-backend; a waveOut initialization failure shows the message box "Sound system
-initialization failed."; the `UseWindowsSound` key sets the no-DirectSound flag
-as well, so every cue thereafter plays through the Windows sound API. CD audio
-initialization is always attempted independently of the sound-system result,
-including after a failed waveOut initialization.
-**Superseded (2026-08-29) by [R-AUD-01 §1]:** the tested failure is
-`DSERR_NODRIVER`, there is no waveOut playback backend (path 2 above is
-silence, WinMM being volume-only), the message box text is
-`Error:  Sound system initialization failed.`, and `NoDirectSound`/
-`UseWindowsSound` are `totala.ini` `[Preferences]` integers, not registry
-keys. The correction is quoted in full there.
+Initialization failure handling is exact: a `DSERR_NODRIVER` failure sets
+the no-DirectSound flag silently; any other DirectSound failure shows the
+message box `Error:  Sound system initialization failed.` (two spaces after
+the colon). `NoDirectSound` and `UseWindowsSound` are `totala.ini`
+`[Preferences]` integers, not registry keys; the latter sets the
+no-DirectSound flag as well, so every cue thereafter plays through the
+Windows sound API. CD audio initialization is always attempted independently
+of the sound-system result.
 
-**Superseded (2026-08-29) by [R-AUD-01 §1]** — the paragraph below is
-retained for the audit trail; DS3D buffers *are* used (positions, min/max
-distance) whenever Sound Mode is `3D`, and the `0x82` descriptor belongs to
-the streaming path (called dead there; live per [R-AUD-02 §1]).
-
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+DS3D buffers *are* used — every real sample is a `0x92` static buffer with
+`CTRL3D`, live for the session and duplicated on demand — and the positional
+helper of section 8.3 sets a DS3D position and the minimum/maximum distances
+whenever Sound Mode is `3D`; in `Mono` mode a two-level in-view/off-screen
+attenuation applies instead. No listener is ever configured. The `{size
+0x14, flags 0x82, bytes}` descriptor with size `rate · channels ·
+bytesPerSample · 2` belongs to the streaming path of [R-AUD-02 §1].
 
 ### 8.2 WAV decoding and cache
 
@@ -8584,21 +7965,17 @@ Every failure path (unreadable file, undersized `fmt `, missing `data`,
 truncated chunks) closes the handle and returns silence — a failed decode never
 crashes.
 
-**Allocation modes.** Each decoded sample is dispatched by mode: mode 0 builds
-an in-memory PCM blob (the PlaySound path), mode 1 preloads a sound buffer,
-mode 2 streams (returning a sentinel handle rather than a real buffer). The
-three dispatch sites and the fail-to-silence rule are established; which
-aliases use which mode is a bounded-negative gap (no per-alias mode field was
-found at registration) — keep `TODO(question): per-alias mode selection`.
-**Superseded (2026-08-29) by [R-AUD-01 §1]:** mode 0 is the static DirectSound
-buffer every registered alias gets, mode 1 is load-and-play for unit voice
-lines and the options preview, and mode 2 is dead; the mode is chosen by the
-caller, so the per-alias question is closed.
+**Allocation modes.** Each decoded sample is dispatched by a mode chosen by
+the *caller*, never by an authored field ([R-AUD-01 §1]): mode 0 creates the
+static DirectSound buffer every registered alias gets; mode 1 is
+load-and-play for unit voice lines and the options preview; mode 2 is the
+streaming path of mission narration and glamour sounds ([R-AUD-02 §1]). The
+three dispatch sites and the fail-to-silence rule are established.
 
-**Caching.** Samples are cached at the alias level: one decoded PCM blob per
-alias, retained for the life of the session, with no eviction beyond the alias
-cap of 8.3. The secondary buffer is freed and recreated for each load — there
-is no pool or LRU beyond "free the old buffer first". (A FIFO-255 presentation
+**Caching.** Samples are cached at the alias level: one static buffer per
+alias, retained for the life of the session and duplicated on demand for up
+to four simultaneous instances ([R-AUD-01 §1]), with no eviction beyond the
+alias cap of 8.3; there is no pool or LRU. (A FIFO-255 presentation
 sample cache in Nanolathe is a documented divergence, not retail
 secondary-buffer eviction.)
 
@@ -8613,9 +7990,7 @@ of 64-byte strings: the sound alias and its speech caption.
 
 **Static slot table.** Alongside the categories the executable carries one
 static record per slot, holding the slot index, a **priority**, a **cooldown
-multiplier** (the window is `multiplier × 30` frames — the earlier "seconds"
-reading coincides numerically at 30 Hz but states the wrong mechanism), the
-authored key name, a default speech caption, and a mutable *next-allowed
+multiplier** (the window is `multiplier × 30` frames), the authored key name, a default speech caption, and a mutable *next-allowed
 frame* cache. Priorities and cooldowns are per slot and global across every
 unit, not per category:
 
@@ -8688,9 +8063,7 @@ priority.
 
 When the second reentry flag (the honk/sing flag) is set, the alias is
 replaced by a fixed cue: `sing` unless `(frame / 30) & 7 == 0`, then `honk`.
-The writer is the `Sing` interface option [07 R-CAM-01 §7] (closed 2026-08-29,
-[R-AUD-01 §3]; the earlier text here read "not located in the bounded corpus —
-**Unknown** … `TODO(T23)`").
+The writer is the `Sing` interface option [07 R-CAM-01 §7] ([R-AUD-01 §3]).
 
 **Drain**, once per rendered frame and outside the simulation: if the queue is
 empty do nothing; if the current frame is within 30 frames of the base time,
@@ -8781,9 +8154,9 @@ visibility source — the local viewing player's explored-memory byte grid
 (nonzero byte visible, tested with the half-height shear and the grid bounds)
 or the LOS word mask tested at the bit `1 << (localSlot & 31)`. The local
 player slot only — no ally OR anywhere. Named feature cues are forwarded
-through the same gate. Second, **viewport-relative placement**: when the sound
-backend reports stereo capability the helper computes the viewport-relative
-pan vector with the half-height shear:
+through the same gate. Second, **placement**: when the device's 3-D flag is
+set (Sound Mode `3D`) the helper computes the viewport-relative pan vector
+with the half-height shear:
 
 ```
 dx = pixelX − ((viewW/2) << 4) − viewLeft
@@ -8791,17 +8164,15 @@ dy = viewTop + ((viewH/2) << 4) + (pixelY >> 1) − pixelZ
 ```
 
 (the 16.16 position is narrowed to its signed pixel component first), stores
-(dx, 0, dy) as a stereo mixer offset — not a 3D position — and updates the
-mixer reference center to `((mapW + mapH) / 2) << 4`. **Superseded
-(2026-08-29) by [R-AUD-01 §1]:** the vector is a DS3D position, the two
-floats are the DS3D minimum/maximum distances, and the "stereo capability"
-is the Sound Mode `3D` flag; the two-level attenuation below holds only in
-`Mono` mode. Attenuation is **binary,
+(dx, 0, dy) as the buffer's DS3D position and sets the DS3D minimum and
+maximum distances ([R-AUD-01 §1] has the distances and the attenuation
+curve). With the flag clear (Sound Mode `Mono`) attenuation is **binary,
 never a curve**: in-view sources play at −585 in the DirectSound
-centibel-style volume encoding, off-screen sources at −1585 — exactly the same
-two levels, with the viewport border inclusive (on the border is in-view).
-Off-screen events are quieter, never discarded; a source at the viewport
-center yields a zero pan vector (mixed as centered) at the same in-view level.
+centibel-style volume encoding, off-screen sources at −1585 — exactly the
+same two levels, with the viewport border inclusive (on the border is
+in-view). Off-screen events are quieter, never discarded; a source at the
+viewport center yields a zero pan vector (mixed as centered) at the same
+in-view level.
 
 **Random-stream contract.** Audio uses the CRT stream only — never the
 simulation Park-Miller stream. Variant picks and CD random picks share the CRT
@@ -8863,23 +8234,20 @@ exactly five modes:
 | 1 sequential | advance `next` by one, wrapping modulo the track count (`(track mod numTracks) + 1`), and play |
 | 2 random | play `random_draw mod numTracks + 1` |
 | 3 single | play the requested track (a requested track of zero stops playback) |
-| 4 category-shuffle | stop and reset, then scan up to `(draw & 15 + 1) × numTracks` candidate tracks forward with wrap for the first whose category equals the desired category; none found → stop |
+| 4 category-shuffle | stop and reset, then scan up to `(draw & 15 + 1) × numTracks` candidate tracks forward with wrap for the `max(1, draw & 15)`-th whose category equals the desired category; none found → stop |
 
-Mode 4's "shuffle" is therefore a category-filtered forward scan, not a general
-shuffle; a history ring of recent tracks is used to deduplicate shuffle picks
-(writer details not fully traced).
-**Superseded (2026-08-29) by [R-AUD-01 §4]:** the modes are the `TRACKMODE`
-choices `Play All|Random|Repeat|Custom` (1..4) with 0 = idle, the "category"
-is the per-track `TRACKTYPE` (`Building|Battle|Victory|Defeat|Unused`), the
-"history ring" is the per-disc category list persisted as registry
-`CDLISTS`, the "playhead offset" is the data-track offset, and the scan
-picks the `(rand & 15) + 1`-th match; the corrected tick is written out
-there.
+The modes are the `TRACKMODE` choices `Play All|Random|Repeat|Custom` (1..4)
+with 0 = idle; the "category" is the per-track `TRACKTYPE`
+(`Building|Battle|Victory|Defeat|Unused`), persisted per disc as the registry
+`CDLISTS` list. Mode 4 is a category-filtered forward scan, not a general
+shuffle, and no history of recent tracks influences a pick ([R-AUD-01 §4],
+[R-AUD-01 §8]).
 
 The play primitive deduplicates a request for the track already playing,
-applies the CD volume, and issues `play cdaudio from %i` — appending ` to %i`
-when a stored playhead offset keeps the end track below the track count — plus
-` notify`, with the notification window handle. An MCI error at play leaves
+applies the CD volume, and issues `play cdaudio from %i` — appending ` to
+<physical + 1>` when the physical track (the logical track plus the
+data-track offset) is below the track count — plus ` notify`, with the
+notification window handle. An MCI error at play leaves
 the status at playing; the next poll detects the failure and retries. After
 any transition the CD volume is re-applied and status is set to playing.
 
@@ -8890,8 +8258,9 @@ any transition the CD volume is re-applied and status is set to playing.
   position with `status cdaudio position/track %i` and re-issues play from the
   saved position.
 - **Volume restoration:** CD volume is applied through the auxiliary volume
-  control, wave audio through the waveOut volume control; restoration is
-  flagged on shutdown.
+  control, wave audio through the waveOut volume control; the sampled system
+  levels are restored unconditionally at shutdown, and `RestoreVolume` gates
+  a registry round-trip of the player's levels ([R-AUD-01 §2]).
 - **Mission media are not CD tracks.** The mission fields `brief`, `narration`,
   `glamoursound`, and similar are separate WAV aliases under paths like
   `camps/briefs/`, dispatched through the same decode path of 8.2. CD tracks
@@ -8902,11 +8271,10 @@ any transition the CD volume is re-applied and status is set to playing.
 
 The missing-CD failure chain above (window-enumeration retry, then give up;
 time-format failure stops and closes; track-count failure idles the tick) and
-the `MM_MCINOTIFY` handler registration are now established. History
-persistence is closed by [R-AUD-01 §4] (`CDLISTS`); the volume-restore
-sentence above is corrected in [R-AUD-01 §2].
+the `MM_MCINOTIFY` handler registration are established; history persistence
+is [R-AUD-01 §4] (`CDLISTS`).
 
-### Closed — the sound device: bring-up, sample buffers, the 32-voice mixer, and the 3-D model [R-AUD-01 §1] (2026-08-29)
+#### The sound device: bring-up, sample buffers, the 32-voice mixer, and the 3-D model [R-AUD-01 §1]
 
 Everything in this section is presentation-only: no field it describes is read
 by a simulation phase [03 §1].
@@ -8937,15 +8305,12 @@ no-DirectSound flag). With DirectSound allowed it then:
 
 CD initialization ([R-AUD-01 §4]) then runs regardless of the outcome, and the
 eight-entry voice queue of §8.3 is allocated (count 0, base time 0, window
-30, and a second constant 150 that nothing reads — bounded negative, closes
-the `TODO(T23)` on the "unused 150-frame queue field": it is initialised and
-never consumed).
+30, and a second constant 150 that nothing reads — bounded negative: it is
+initialised and never consumed).
 
-**Correction (Established).** §8.1 said "a device-allocated failure
-(`DSERR_ALLOCATED`) disables the DirectSound path and selects the waveOut
-backend; a waveOut initialization failure shows the message box". Both
-halves were wrong. The tested code is `DSERR_NODRIVER` (device absent), not
-`DSERR_ALLOCATED`; and there is **no waveOut playback backend at all** — the
+**No waveOut backend (Established).** The tested code is `DSERR_NODRIVER`
+(device absent), not `DSERR_ALLOCATED`; and there is **no waveOut playback
+backend at all** — the
 executable imports no `waveOutOpen`/`waveOutWrite`. WinMM is used only for
 volume (`waveOutGetVolume`/`waveOutSetVolume`, `auxGetVolume`/`auxSetVolume`)
 and for MCI. The three backends of §8.1 are therefore: DirectSound; the
@@ -8962,15 +8327,14 @@ finds the first auxiliary device whose capability technology is CD audio
 device that answers, low 16 bits) and the CD-aux volume (low 16 bits), each
 −1 when unavailable.
 
-**Established fact — sample loading modes (closes `TODO(question): per-alias
-mode selection`).** The WAV loader of §8.2 is entered in one of three modes,
+**Established fact — sample loading modes.** The WAV loader of §8.2 is entered in one of three modes,
 and the mode is chosen by the *caller*, never by an authored field:
 
 | Mode | Caller | What it does |
 |---|---|---|
 | 0 | alias registration (§8.3 "Alias registration"), i.e. every `sound.tdf`/`allsound` alias and every weapon/feature sound | decodes and creates one **static** secondary buffer; returns a 16-byte sample record `{buffer, 0, 0, 0}` (tagged `Digital Audio Sample`) whose four slots hold up to four instances of the same buffer |
 | 1 | the unit voice-cue resolver (§8.3 step 3) and the sound-options `TEST` button | decodes into a fresh static buffer and plays it **immediately** through the mixer, holding it in one of **8 transient slots** until it finishes; if all 8 transient slots are occupied the cue is dropped (returns 0). The loader runs the reaper first (below), so a slot whose buffer has stopped is freed before the test |
-| 2 | nobody — the two wrappers that request it have no callers | a streaming buffer (flags static + volume, size `rate · channels · bytesPerSample · 2`, half-buffer refill with silence fill) — **dead code** — *corrected 2026-08-29 by [R-AUD-02 §1]: live; it is the mission narration and glamour-sound path, entered through a timer callback* |
+| 2 | the stream opener, entered through a timer callback ([R-AUD-02 §1]) | a streaming buffer (flags static + volume, size `rate · channels · bytesPerSample · 2`, half-buffer refill with silence fill) — the mission narration and glamour-sound path |
 
 So every alias-registered sound is a preloaded static buffer, while every
 **unit voice line is re-read from the VFS and decoded on each play** (mode 1,
@@ -8990,14 +8354,9 @@ buffer and yields a null sample (silence). The FPU control word is forced to
 a fixed precision around `CreateSoundBuffer` (a DirectSound-era library
 precaution; no arithmetic depends on it).
 
-**Correction (Established).** §8.1 said "the observed secondary-buffer
-creation descriptor is `{size 0x14, flags 0x82, bytes}` … a software-located
-static buffer (no 3D caps) … freed and recreated per sample load (no
-pooling)", and §8.2 "mode 0 builds an in-memory PCM blob (the PlaySound path),
-mode 1 preloads a sound buffer, mode 2 streams". The `0x82` descriptor is the
-*streaming* buffer of the dead mode 2. Real samples are `0x92` (with
-`CTRL3D`), live for the session, and are **duplicated** on demand (below),
-not recreated.
+The `0x82` descriptor is the *streaming* buffer of mode 2 ([R-AUD-02 §1]);
+real samples are `0x92` (with `CTRL3D`), live for the session, and are
+**duplicated** on demand (below), not recreated.
 
 **Established fact — the voice mixer (`Play(sample, volume, pan)`).** Every
 non-CD sound goes through one routine. In order:
@@ -9042,10 +8401,9 @@ non-CD sound goes through one routine. In order:
 
 **Reaper.** Before a transient load (mode 1) the device walks the 8
 transient samples and the 32 voice slots, freeing/clearing every entry whose
-buffer reports *not playing* (or whose status query fails). There is no
-per-tick reaper; voice slots are otherwise reclaimed only by the steal of
-step 2 (*corrected 2026-08-29 by [R-AUD-02 §2]: the application pump reaps
-every ≥99 ms of wall clock*). **Stop-all** (`MODE` set to `Off`, movie start, battle exit) stops
+buffer reports *not playing* (or whose status query fails). The application pump also reaps every ≥99 ms of wall clock
+([R-AUD-02 §2]); there is no per-tick reaper, and voice slots are otherwise
+reclaimed only by the steal of step 2. **Stop-all** (`MODE` set to `Off`, movie start, battle exit) stops
 every voice slot's buffer and clears the table.
 
 **Established fact — what each producer passes.** Volumes are DirectSound
@@ -9081,7 +8439,11 @@ default inverse-distance rolloff (−6 dB per doubling of distance beyond
 the library's documented default, not engine arithmetic; Nanolathe may
 implement it directly.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+The buffers are DS3D buffers, the vector is a DS3D **position**, and the
+two floats are the DS3D **minimum and maximum distance**. The binary
+−585/−1585 levels apply **only when the 3-D flag is clear** (Sound Mode
+`Mono`); in `3D` mode the level is always −585 and distance attenuation is
+DirectSound's. The 3-D flag is the user's Sound Mode, not a hardware probe.
 
 **Established fact — the `PlaySound` backend.** With `UseWindowsSound`, a
 by-id cue plays its in-memory image with `SND_ASYNC | SND_MEMORY` (plus
@@ -9096,7 +8458,7 @@ one `PlaySound` can be audible at a time — a library property.
 they run (weapon fire and impact inside the sub-tick, voice lines from the
 drain), and nothing is deferred except through the §8.3 voice queue.
 
-### Closed — the audio preferences: registry names, bit map, and consumers [R-AUD-01 §2] (2026-08-29)
+#### The audio preferences: registry names, bit map, and consumers [R-AUD-01 §2]
 
 **Established fact — the packed sound-flags byte** (the second packed word of
 [02 §3]), each value read from `Software\Cavedog Entertainment\Total
@@ -9145,14 +8507,10 @@ pushed to the devices, and at save the *current* device levels are written
 to those two values — persisting the player's mixer levels across sessions.
 With the bit clear the two values are neither read nor written.
 
-**Correction (Established).** §8.4 said "restoration is flagged on
-shutdown". Shutdown restoration is unconditional; the flag gates the
-registry round-trip above.
+#### The unit voice pick and its gates [R-AUD-01 §3]
 
-### Closed — the unit voice pick and its gates [R-AUD-01 §3] (2026-08-29)
-
-§8.3 already states the queue, the variant draw, and the crowding gates.
-The closures here complete the producer side.
+§8.3 states the queue, the variant draw, and the crowding gates; this
+section is the producer side.
 
 **Established fact — producer gate.** A unit voice request (any of the 82
 sites, slot 1..23) is enqueued only when the unit's owner is the **local
@@ -9170,9 +8528,8 @@ play reloads the WAV (mode 1, [R-AUD-01 §1]) and may be dropped when the 8
 transient slots are all busy, in which case the cooldown is **still**
 re-armed (the re-arm follows the gate, not the play result).
 
-**Closed — the honk/sing flag.** The writer is the `Sing` interface option
-[07 R-CAM-01 §7]; the `TODO(T23): locate the honk/sing flag writer` of §8.3
-is closed. While it is set the audible alias is `sing`, or `honk` when
+**The honk/sing flag.** The writer is the `Sing` interface option
+[07 R-CAM-01 §7]. While it is set the audible alias is `sing`, or `honk` when
 `(frame / 30) & 7 == 0` (frame = the global tick counter, truncating
 division).
 
@@ -9181,10 +8538,10 @@ window and the mixer's voice limit ([R-AUD-01 §1]) there is no per-tick cap
 on cues: a weapon salvo of *n* shots issues *n* positional plays in the same
 sub-tick, and the mixer steals the oldest non-looping voices to fit them.
 
-### Closed — CD audio: modes, categories, disc identity, transitions, and the MUSIC screen [R-AUD-01 §4] (2026-08-29)
+#### CD audio: modes, categories, disc identity, transitions, and the MUSIC screen [R-AUD-01 §4]
 
-This section replaces the mode table and the "history ring" and "playhead
-offset" sentences of §8.4; the open/probe and failure chain there stand.
+§8.4 states the open/probe and failure chain; this section states the
+modes, categories, disc identity and transitions.
 
 **Established fact — the CD object.** Fields, with their sources: *play
 mode* (`cdmode`, 1..4, and 0 = idle); *audio track count* (below);
@@ -9195,9 +8552,7 @@ bit 0); *data-track offset*; *fade step*; *base volume*. Categories are
 0..4 and the MUSIC screen labels them `Building | Battle | Victory | Defeat
 | Unused` (`TRACKTYPE` gadget text; a static table of the same five slots
 holds the names `NOTRAK`, `NORMTRAK`, `RANDTRAK`, `REPTTRAK`, `SPECTRAK`,
-which nothing reads — bounded negative — and which closes the
-`NORMTRAK…SPECTRAK` question of the lane 03 question list as an unreferenced
-vocabulary).
+which nothing reads — bounded negative; an unreferenced vocabulary).
 
 **Established fact — track count and the data track.** On open and on every
 media-arrival notification: the first drive whose type is CD-ROM (scanning
@@ -9243,8 +8598,7 @@ was off); `UNDO` restores the entry snapshot (volume, list, mode, enable,
 requested). `TRACKTYPE` is active only when `musicmode` is on and the mode
 is `Custom`; the transport buttons and `TRACKMODE` are disabled when
 `musicmode` is off. Closing the screen runs the tick when in battle,
-otherwise stops and resets. This closes the "CD-player control vocabulary"
-and "`NO DISC`" questions.
+otherwise stops and resets.
 
 **Established fact — the play primitive `PlayTrack(t)`.** Disabled → report
 success and do nothing. `t = 0` → run the tick instead. Poll `status
@@ -9257,13 +8611,6 @@ notify target, then `set cdaudio time format milliseconds`; return whether
 the play command succeeded. Consequence: the last audio track (and, on a
 disc with a data track, the second-to-last) plays with no end bound —
 through to the end of the disc.
-
-**Correction (Established).** §8.4 said the play command appends ` to %i`
-"when a stored playhead offset keeps the end track below the track count"
-and that "a history ring of recent tracks is used to deduplicate shuffle
-picks (writer details not fully traced)". The offset is the data-track
-offset above and the bound is `physical + 1`; the ring is the per-disc
-category list — it never influences a pick.
 
 **Established fact — the tick** (once per host frame from the front-end and
 battle pumps; MCI completion notifications also run it):
@@ -9295,11 +8642,10 @@ battle pumps; MCI completion notifications also run it):
    happens every tick in this branch even while a matching track plays).
    If `playing` and `category[next] == desired` → step 7. Else scan forward
    from `next` for up to `(u + 1) · count` steps, wrapping `count → 1`; the
-   `(u + 1)`-th track whose category equals `desired` is played (**corrected
-   2026-09-04**: the `max(1, u)`-th match, see [R-AUD-01 §8]; a uniform
-   pick among the matching tracks when the scan is long enough — the
-   `(u+1)·count` budget guarantees it whenever at least one matches);
-   none → stop and reset (status 0, `next = 1`), skip step 7.
+   `max(1, u)`-th track whose category equals `desired` is played
+   ([R-AUD-01 §8]; the `(u+1)·count` budget guarantees a hit whenever at
+   least one matches); none → stop and reset (status 0, `next = 1`), skip
+   step 7.
 7. Tail: re-apply the base volume through the fade-aware setter; status = 1.
 
 The "not `playing`" test is the exact string compare of the `status cdaudio
@@ -9352,7 +8698,7 @@ open flag is 0 and every entry point returns). The MUSIC screen then shows
 `NO DISC` and `musicmode` toggles have no audible effect. No message is
 shown.
 
-### Closed — music selection: the battle intensity chooser and the front-end loop [R-AUD-01 §5] (2026-08-29)
+#### Music selection: the battle intensity chooser and the front-end loop [R-AUD-01 §5]
 
 **Established fact — who requests which category.** Exhaustive caller census
 of `SetDesired`:
@@ -9404,7 +8750,7 @@ lands on `Mono` outside a battle (the exclusive check makes the re-issue a
 no-op while it still plays). There is no "intense" switch in the front end
 and no menu-versus-battle CD category: the front end is CD-silent.
 
-### Closed — random draws and the throttle summary [R-AUD-01 §6] (2026-08-29)
+#### Random draws and the throttle summary [R-AUD-01 §6]
 
 **Established fact.** Every audio draw is on the **CRT** stream
 (`x' = x × 214013 + 2531011`, bits 16..30): the variant pick of §8.3 (one per
@@ -9423,14 +8769,13 @@ voice limit (steal oldest), the four-instances-per-sample cap (steal
 furthest-along), the 8 transient slots for voice lines (drop), and the
 single exclusive loop. Nothing counts cues per tick.
 
-### Closed — the engine status-cue sink: codes are slots, the raise-site gate, and what else reacts [R-AUD-01 §7] (2026-09-02)
+#### The engine status-cue sink: codes are slots, the raise-site gate, and what else reacts [R-AUD-01 §7]
 
-Status: **Established** (instruction-level read of the raise helper and its
+**Established** (instruction-level read of the raise helper and its
 two siblings, the queue's insert, every reader of the queue, and the unit
-edge machine of [05 R-ECO-01 §8]). Written so that one implementation unit
-can wire the four codes the engine raises from the edge machine — 3
-`activate`, 4 `deactivate`, 14 `cloak`, 15 `uncloak` — which Nanolathe
-emits nowhere today; the order handlers' 82 voice sites use the same sink.
+edge machine of [05 R-ECO-01 §8]). The four codes the engine raises from the
+edge machine — 3 `activate`, 4 `deactivate`, 14 `cloak`, 15 `uncloak` — and
+the order handlers' 82 voice sites use the same sink.
 
 **The codes are slot indices.** The integer the edge machine passes as a
 "status code" is the index into the static slot table of §8.3, record by
@@ -9508,7 +8853,7 @@ no visibility-grid or fog write, no statistic, no score, no positional sound.
 Bounded absence, re-confirmed: no cue is raised by the death or removal path
 (§8.3); the teardown purge is the only removal-side touch.
 
-**Acceptance for the wiring unit.** With the sink wired: an `init_cloaked`
+**Consequences.** An `init_cloaked`
 unit owned by the view slot raises 14 on its first paid pass ([05 R-ECO-01
 §9] arm (d)) and, if the speech gate passes, prints `Cloaked`; an unpayable
 or not-due pass on a hidden unit raises 15; a pass that leaves the byte
@@ -9516,21 +8861,18 @@ unchanged raises nothing; a computer player's cloaking units raise nothing;
 a second 14 while one is queued is dropped; and the CRT stream is untouched
 until the drain resolves the entry.
 
-### Closed — the streamed narration path: mode 2 is live, its delay timer, half-buffer refill, and stop [R-AUD-02 §1] (2026-08-29)
+#### The streamed narration path: mode 2 is live, its delay timer, half-buffer refill, and stop [R-AUD-02 §1]
 
 Everything here is presentation-only and runs on the application pump; no
 simulation phase reads any of it [03 §1].
 
-**Correction (Established).** [R-AUD-01 §1] said of the WAV loader's mode 2
-"nobody — the two wrappers that request it have no callers … a streaming
-buffer … **dead code**", and §8.1's superseding note said "the `0x82`
-descriptor belongs to a dead streaming path". That was a call-graph census,
-and the path is entered through a **timer callback** — a code pointer, not a
-call — which the census does not see. Mode 2 is the path every mission
-narration and end-of-mission glamour sound takes. The one wrapper that
-takes a caller-supplied volume without the timer has no reference of any
-kind in the image and stays dead (bounded negative over call edges, data
-references and code-pointer dwords).
+**Mode 2 is live (Established).** The WAV loader's mode 2 is entered
+through a **timer callback** — a code pointer, not a call, which a
+call-graph census does not see — and is the path every mission narration
+and end-of-mission glamour sound takes. The one wrapper that takes a
+caller-supplied volume without the timer has no reference of any kind in
+the image and is dead (bounded negative over call edges, data references
+and code-pointer dwords).
 
 **Established fact — who streams.** Exactly two sounds are streamed, both
 through one gate that returns without playing when the no-DirectSound flag
@@ -9547,8 +8889,6 @@ Both pass **delay 60** and **volume 0**. The delay is in the scaled
 presentation-tick units of the timer table (`GetTickCount × rate / 1000`,
 [07 R-CAM-01 §1]) — two seconds at the default rate — and the volume is the
 DirectSound attenuation (`0` = full scale), *not* the −585 of ordinary cues.
-[08 R-CAMP-01 §2] reads the 60 as "started at volume 60"; the 60 is the
-delay and the volume is full — a cross-document correction for doc 08.
 
 **Established fact — start.** `StartStream(path, volume, delay)` copies the
 path into a single global path buffer, stores the volume in a global, arms a
@@ -9607,8 +8947,7 @@ click on the glamour screen, and the results-sequence exit) cancels a
 pending timer, stops and releases the buffer, and closes the file; a stop
 with nothing pending is a no-op. `SHUTUP` is a toggle: its stage after the
 click is tested — `0` stops, any other stage starts the narration again
-(with the same 60-unit delay), which refines [08 R-CAMP-01 §2]'s "`SHUTUP`
-stops it".
+(with the same 60-unit delay).
 
 **Edges (Established).** A missing or undecodable narration file: the
 loader returns without creating a buffer, the timer has already been
@@ -9622,13 +8961,12 @@ only `SetVolume` on it is the opener's).
 poll are wall-clock; nothing here is visible to the simulation or the
 save file.
 
-### Closed — the reaper runs from the pump; and what the audio-init cluster also swept in [R-AUD-02 §2] (2026-08-29)
+#### The reaper runs from the pump [R-AUD-02 §2]
 
-**Correction (Established).** [R-AUD-01 §1] said "There is no per-tick
-reaper; voice slots are otherwise reclaimed only by the steal of step 2."
-The reaper (walk the 8 transient samples and the 32 voice slots, freeing or
-clearing every entry whose buffer reports *not playing* or whose status
-query fails, then poll the stream) is also called by the application pump
+**Established.** The reaper (walk the 8 transient samples and the 32 voice
+slots, freeing or clearing every entry whose buffer reports *not playing*
+or whose status query fails, then poll the stream) is called by the
+application pump
 on every busy iteration in which at least 99 ms of wall clock have passed
 since the previous call — the "media keepalive" walk that [01 R-PLAT-01 §1]
 records with its slot counts (eight, then thirty-two) and its ≥99 ms gate,
@@ -9638,113 +8976,15 @@ steal ([R-AUD-01 §1] step 2) only ever evicts voices that are still
 playing. The consequence for Nanolathe: the *active voice* count that the
 `MixingBuffers` limit compares against is the count of buffers still
 playing (to within 100 ms), not the count of voices ever started. The
-reaper still also runs before every transient (mode 1) load, as stated.
-
-**Ledger note (Established, bounded to the cluster).** The "audio subsystem
-init" cluster was grown from the audio start routine by call-graph breadth
-and swept in the session-init neighbours that share its caller: the
-`sidedata.tdf` loader and its anchor-rectangle reader ([02 §6 "SIDE and
-battle interface data"]), the `PALETTE.PAL` install and the derived-table
-load-or-build routines ([03 §4.3]), the front-end context's path prefixes,
-common GUI GAF and font install ([07 "Frontend asset failure boundaries"]),
-the order-descriptor registrar and its sort ([04 §2.4]), the AI profile
-directives ([08 R-AI-01 §12]), the developer `AI` chat command
-([07 R-CAM-01 §6]), the network record and packet-handler stubs
-([08 R-OOS-01 §1]), and the window-close callback with its rejection
-messages ([07 R-FE-02 §1]). None of them touches audio state; each is cited
-to its owner in the ledger. Two audio facts they settled: the constant
+reaper still also runs before every transient (mode 1) load. The constant
 helper that makes `UseWindowsSound` force the no-DirectSound flag simply
-returns 1 ([R-AUD-01 §1]); and the reaper cadence above.
-### Closed — the composed piece offset a simulation consumer adds is `(x, y, −z)` of the model-space composition [R-RAST-01 §8] (2026-09-04, RWU-19-198)
+returns 1 ([R-AUD-01 §1]).
 
-§2.4 left the sense of Z that a *simulation* consumer of a queried piece
-position owes as a probe-pending inference, and three consumers were in three
-states — the build plate settled by yard maps, the nano source a Supported
-inference ([§5.5 "The nano source point's coordinate space"]), the weapon
-muzzle Unknown ([06 §4.1]). The piece locator itself has now been read, with
-every simulation-side caller. There is one locator and every consumer goes
-through it, so the three share one answer.
+#### The music tick's two category overrides, their precedence, and the category scan's pick index [R-AUD-01 §8]
 
-**Established — the locator.** Given a unit and a piece index it returns a
-three-word offset, built as follows (all 16.16, integer arithmetic except the
-rotation helper's trig):
-
-1. Start with the piece's own translation: the post-load parent translation
-   of §2.4 (already half-turned: `−X, −Z` of the authored file) plus the
-   piece's three script translation lanes. The piece's own rotation words
-   are **not** applied — a piece rotates about its own origin, so they cannot
-   move it.
-2. Walk the parent chain to the root. For each ancestor: rotate the running
-   offset by that ancestor's three rotation words in the order Z, then X,
-   then Y through the shared coordinate-pair rotation helper — the same
-   order §2.4 gives the draw path — and then add the ancestor's post-load
-   parent translation plus its script lanes. When the ancestor is the root
-   (no parent of its own), the unit's bank is added to its Z word, the
-   unit's heading to its Y word and the unit's pitch to its X word before
-   the rotation, by plain sixteen-bit addition with no negation — the C24
-   fold, confirmed at the simulation locator and not only in the draw path.
-3. Return `(x, y, −z)`: the Z component is negated **on output**, in a
-   register, as the last step. Nothing is stored back to the model.
-
-**Established — the consumers.** Every simulation caller that turns the
-triple into a world point adds it to the unit's own position with no further
-sign change: `world = unitPosition + (x, y, −z)`. Those callers are the
-weapon muzzle query for all three weapon slots (the
-`QueryPrimary`/`QuerySecondary`/`QueryTertiary` path of [06 §4.1] and the
-burst re-query of [06 §4.3]), the `QueryNanoPiece` spray source of §5.5, and
-the two piece-position COB ports of [04 R-COB-03 §2] (packed X/Z whole
-parts, and world Y). The only other caller, the transport pickup executor of
-[04 R-AIR-01 §9], reads the locator for its `QueryTransport` piece and uses
-the Y word alone (negated, as the hang altitude of the follow marker), so
-the Z sense never reaches it. No caller re-negates, and no caller adds the
-un-negated triple.
-
-**Consequence — the two paths agree, and the sign convention.** The draw
-path narrows a model-relative vertex as `hi16(−vz)` while a unit's own
-position enters unnegated ([R-RAST-01 §2]); the locator negates the
-composed Z once on output. Both therefore map model-space `(x, y, z)` to
-world `(x, y, −z)`, and a muzzle, a spray source or a script-queried piece
-sits where the model pass draws it. In authored (file) coordinates, with the
-half-turn of §2.4 folded in, a piece authored at `(ax, ay, az)` on a unit at
-heading 0 — which faces world `−Z` ([04 R-MOV-01 §4], [06 R-WPN-05 §11]) —
-lands at world `unit + (−ax, ay, +az)`: the authored X is mirrored, the
-authored Z is kept, and the heading rotation is the plain Y-word rotation
-of §2.4 with the unit heading added unnegated. Confidence: **Established**
-for the sense (direct read of the locator's output and of every caller's
-addition); the rotation helper's own formulas are §2.4's and are not
-re-derived here.
-
-**Corrections.**
-
-- §2.4's worked example — "a flare authored at `(2,1,-30)` appears at
-  `(-2,1,+30)` world plus unit origin", with "the pristine post-load vectors
-  without a second negation" — describes the *stored* model-space vector
-  correctly (no second store exists) but names it "world" wrongly: the
-  locator's output negation makes the world offset `(−2, 1, −30)`. The
-  example's Z sign is inverted; the "no second store" clause stands.
-- §5.5's nano source point: the Supported inference
-  `unit + (offsetX, offsetY, −offsetZ)` is now **Established**, at the
-  submission site rather than by the two projections.
-- [06 §4.1]'s Unknown on the sense of "added to the unit's world position"
-  is closed by this section: the muzzle is `unit + (x, y, −z)`.
-- The `ta_probe_xz` fixture §2.4 and §5.5 name as the decider is no longer
-  needed for the sense of a composed offset; it remains only as a check on
-  the authored nose axis, which is an asset-side question.
-
-**Implementation rule.** Compose in model space exactly as the draw path
-does (post-half-turn translations plus script lanes, rotations Z, X, Y with
-the unit's bank/heading/pitch added to the root's words), then negate Z
-once, then add the unit position. Do not negate per consumer; do not negate
-inside the composition; do not skip the negation for any of the three
-consumer families that form a world point.
-
-### Closed — the music tick's two category overrides, their precedence, and the category scan's pick index [R-AUD-01 §8] (2026-09-04, RWU-19-198)
-
-[R-AUD-01 §4]'s seven-step tick has been re-read end to end to settle whether
-an implementation whose desired category can be set independently of the
-play mode must reproduce steps 2 and 4. It must; the order of the steps is
-the order of the tests in the tick, and two precisions and one correction
-follow.
+The order of [R-AUD-01 §4]'s tick steps is the order of the tests in the
+tick, and an implementation whose desired category can be set independently
+of the play mode must reproduce steps 2 and 4. Two precisions follow.
 
 **Established — the two overrides and their precedence.** After the
 `count == 0` return and **before** the paused test:
@@ -9771,9 +9011,8 @@ then the play mode. Nothing in the executable requests categories 2 or 3
 (§4's bounded negative stands), so the second override is inert in retail
 content; the first is exercised by every front-end screen ([R-AUD-01 §5]).
 
-**Correction — the scan's pick index.** §4 step 6 said the scan plays "the
-`(u + 1)`-th track whose category equals `desired`". It plays the
-**`max(1, u)`-th** matching track: the counter is decremented on each match
+**The scan's pick index.** The scan plays the **`max(1, u)`-th** matching
+track: the counter is decremented on each match
 and the scan stops when it reaches zero or below, so `u = 0` and `u = 1`
 both select the first match, `u = 2` the second, and `u = 15` the
 fifteenth. The budget of `(u + 1) · count` steps is unchanged and still
@@ -9843,15 +9082,11 @@ and unknown" without a resolution plan.
 - The frame composer’s ten-strip numeric order with render-mode gates,
   removal-before-update strip lifecycle, oldest-first eviction past 400
   records (steady bound 401), and the separate 300-record effect pool with
-  same-invocation compaction are established. The producer census is closed
+  same-invocation compaction are established. The producer census is complete
   for every strip ([R-STRIP-01 §1]): strips 2, 4, 5, 6, 7, and 9 receive
-  objects; strips 0, 1, 3, and 8 have no producer anywhere in the image and
-  are always empty. **Corrected 2026-08-31:** this sentence still carried the
-  retracted reading that strip 4 is empty. Strip 4 has exactly one producer,
-  the geothermal steam of [05 R-ECO-02 §3], and §1's own row was corrected to
-  say so on 2026-08-29 — the summary was not. (The separate retraction of the
-  retired census's "crater/decal literal 4" stands: that literal was this
-  site, not a crater.) The strip objects are pooled container
+  objects (strip 4's one producer is the geothermal steam of
+  [05 R-ECO-02 §3]); strips 0, 1, 3, and 8 have no producer anywhere in the
+  image and are always empty. The strip objects are pooled container
   records over internal fixed-stride particle/segment lists
   ([R-STRIP-01 §2]), and the phase-11 sweep's object-internal CRT draws are
   enumerated in [R-STRIP-01 §3]. The wind direction pair's axis assignment is
@@ -9871,18 +9106,15 @@ and unknown" without a resolution plan.
   no-build, never-explored marker, placer nibble) are adjudicated;
   post-load visibility publication is synchronous with unit reconstruction.
   Fringe-anchor partition is placement order (sequential rectangle stamps,
-  last-stamp-wins; orphaned raw fringe vanishes), replacing the retired
-  row-major heuristic.
+  last-stamp-wins; orphaned raw fringe vanishes).
 - Shadow presentation is established: GAF feature shadows plus the Digger,
   ordinary-mobile silhouette, and structure-rerasterization model branches;
   their option and `noshadow` gates; the model branches' index-0 `ALP` blend,
   five-pixel offset, terrain-height shear, and shadow-before-body order. Model
-  shadows use no stencil, dither, or `SHD` row. (**Corrected 2026-08-31:** this
-  entry ended "The minimap viewport marker is a five-pixel cross of two 1-pixel
-  Bresenham lines at +128/+32 from the sheared camera centre in the ring palette
-  index." That figure is the world composer's film-mode crosshair, §3.12; the
-  minimap's viewport marker is a one-pixel rectangle outline in colour-map
-  entry 14, `[R-MM-01 §1]`.)
+  shadows use no stencil, dither, or `SHD` row. The minimap's viewport marker
+  is a one-pixel rectangle outline in colour-map entry 14 (`[R-MM-01 §1]`);
+  the five-pixel crosshair of §3.12 is the world composer's film-mode
+  diagnostic.
 - Piece transforms compose as ordered in-place rotate-then-translate passes in
   Z, X, Y chronological order using floating-point trigonometry, with
   bank/heading/pitch injected into the root piece’s Z/Y/X slots; there is no
@@ -9893,8 +9125,9 @@ and unknown" without a resolution plan.
   projection; collision damage is at the beam head.
 - Water/lava impacts select per-weapon GAF and sound media; no independent
   retail water mesh is proven.
-- DirectSound, waveOut, PlaySound, eight-slot sound arbitration, MCI CD audio,
-  and Smacker cinematic/capture paths are present.
+- DirectSound, PlaySound, eight-slot sound arbitration, MCI CD audio, and
+  Smacker cinematic/capture paths are present; there is no waveOut playback
+  backend.
 
 ### Supported inference
 
@@ -9913,11 +9146,10 @@ and unknown" without a resolution plan.
 
 ### Confidence limits
 
-- SHD row selection and the semantic naming of individual strips remain medium
-  (the numeric strip order and the complete producer census are established,
-  [R-STRIP-01 §1]; the names used there come from each family's asset
-  bindings, not from any engine-side label).
-  GAF frame-duration interpretation for the
+- The semantic naming of individual strips remains medium (the numeric strip
+  order and the complete producer census are established, [R-STRIP-01 §1];
+  the names used there come from each family's asset bindings, not from any
+  engine-side label). GAF frame-duration interpretation for the
   simulation-tick and wall-clock countdown cursors is established (section 4.4);
   sequence-flag naming and families not shown to use that cursor remain medium.
 - In-map void rendering versus out-of-map clipped regions is less certain than
@@ -9935,54 +9167,23 @@ Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it. Findings that closed an item live in the
 body — most under `R-<id>` headings — and are not restated here.
 
-**Correction (2026-08-28, RWU-00-5).** This tail had become a closure ledger:
-its bullets opened with an open item and then spent ten or twenty lines
-reciting what §3.2, §3.5, [R-STRIP-01], [R-REN-03A], [R-RND-02A], [R-SENSOR-01]
-and [R-P0-19-P] had established, including whole re-statements of the LOS
-height-word derivation and the fog-cache channel values. The open residual was
-buried inside prose that read as if it were still open. Every such narrative is
-deleted here only; the findings stand in the body sections that own them.
-
 ### World and visibility
+
 - What the LOS table-by-index accessor reads for group 0 (`sightdistance <
-  32`) · [R-COMP-02 §1] · decider: the tagged allocator's block-header layout
-  or a retail capture of such a unit. **The second half is closed
-  (2026-09-04, WU-19-158): no stock definition has such a sight distance.** A
-  census of all 278 stock `.fbi` files in the reference install finds every one
-  of them authoring a `sightdistance`, the smallest being 55 (the seven mines),
-  so the lowest group any stock unit selects is 1 and group 0 is unreachable
-  from stock content. The remaining half is therefore mod-only, and a clone's
-  sanctioned empty-line-list substitution for group 0 is unobservable in stock
-  play.
+  32`; unreachable from stock content, whose smallest authored value is 55)
+  · [R-COMP-02 §1] · decider: the tagged allocator's block-header layout, or
+  a retail capture of such a unit under a mod.
 - Whether the tinted blitter's gate flag ("ALP table present" in
   [R-COMP-01 §2], "the `Shading` option" in [R-REN-03D §4]) is one bit,
   making every strip sprite of [R-FX-02 §2–§3] invisible with `Shading` off ·
-  decider: the palette-init request word that loads `ALP`.
-
-
-**Correction (2026-08-29, RWU-03-2).** Five bullets are removed here. Four
-were closed by `[R-VIS-01]`: *"palette mapping of each of the three
-jammer-circle callback tables"* (its premise was wrong — those callbacks are
-not rasterizers; the surviving minimap question is restated below and belongs
-to §3.9/§3.10), *"writer that clears the per-unit seen marker (status bit
-0x100) between sensor passes"* (it is the phase's own first pass, plus the
-radar-jam callback), *"the full stealth and init-cloak spawn state walk; the
-init-cloaked spawn writer is bounded-negative today"* (there is no walk: the
-unit constructor copies the definition bit into the runtime cloak-wanted bit,
-and it is the only writer), and *"gameplay radar-versus-sonar contact rules
-beyond the presentation circles, including the authored flag name on the
-secondary candidate list"* (the contact rules are `[R-VIS-01 §5]`; the flag's
-authored key is doc 06's tail, not this one). The fifth, *"whether any
-unresolved identity path shares visibility grids across players"*, is replaced
-by the sharper question it turned into.
-
+  [R-FX-02 §2] · decider: the palette-init request word that loads `ALP`.
 - Reader for plot flag bit 7, and whether any unexported code writes
   placer-nibble values into it · §2.2 · static trace over the unrecovered
   regions. Marked `TODO(T23)`.
 - Dense-pack rule: whether a footprint overlapping a live anchor cell is
   rejected or silently overwrites · §2.2 · manual retail observation
   (dense-pack fringe map probe). Marked `TODO(question)`.
-- Whether the fog cache's `1 = NW` corner-to-bit assignment holds · §3.4
+- Whether the fog cache's `1 = NW` corner-to-bit assignment holds · §3.3
   [R-RR16-A] · manual retail observation (asymmetric fog GAF probe). Supported
   inference today.
 - Whether the sensor phase's allied-vision gate reads the option word by
@@ -9993,25 +9194,10 @@ by the sharper question it turned into.
   (two-human-ally skirmish probe in which only one ally has radar coverage of
   a third player's unit). Until it lands, the bounded behavior — no allied
   sensor sharing on any channel — is what Nanolathe implements.
-- ~~Whether the five stock definitions that author a sensor distance but that
-  no traced edge can ever activate are meant to emit at all (`ARMANNI`,
-  `ARMSS`, `CORSS`, `ARMACSUB`, `CORACSUB`)~~ — **closed 2026-09-04
-  (RWU-19-196)** by `[R-VIS-01 §9]`: the activation bit's writer census is
-  complete (creation/completion, the order handlers, the COB port, the factory
-  pump, the computer player's maker toggle, the air executors and mover-mode
-  setter, and three byte copies), none reaches the five, and the sensor gate
-  admits radar and sonar through one read of that bit. They never emit in
-  retail; Established, no observation required. The `TODO(question)` in
-  `internal/visibility/sensors.go` is retired.
 - What the 450-tick allied radar/sensor share command carries on the receiving
   side; nothing in the recovered visibility or sensor path consumes an
   incoming share · doc 05 "Sensor sharing", doc 08 · static trace of the
   command's receive handler.
-- ~~The numeric identity of the radar and jammer palette indices the minimap
-  sensor circles use~~ · **closed 2026-08-31**, `[R-MM-01 §2]`: colour-map
-  entry 10 for the radar and sonar outer circles, entry 12 for both jam
-  circles. (Where they are drawn was already closed: the contacts pass,
-  `[R-TERR-01]`'s §3.10 restatement.)
 - Legacy terrain header slot 12 and attribute bytes 1, 3, 4, 5, 7: no reader
   in the loader · §2.2 `[R-TERR-01 §1]` · static trace over the unrecovered
   regions; inert until one is found.
@@ -10025,8 +9211,6 @@ by the sharper question it turned into.
 - Whether the radar picture's left/right orientation within a row is mirrored
   on screen · §3.7 · manual retail observation (asymmetric-palette probe with
   row-first, column-first, and diagonal orderings). Marked `TODO(question)`.
-- Bar fill colour · §3.7 · manual retail observation (canvas-capture probe;
-  the bar fill 0 probe). Marked `TODO(question)`.
 - Minimap marker blit site · §3.9 · static trace. The layer ordering
   (contacts overwrite markers) is supported inference. Marked `TODO(question)`.
 
@@ -10057,19 +9241,29 @@ by the sharper question it turned into.
   for a second subrect writer · §4.1, §4.2 · static trace. Marked `TODO(T23)`.
 - Semantic strip naming beyond the GAF/asset bindings of [R-STRIP-01 §2]
   · §1 · static trace.
-- The float expression feeding the strip-5 interval's truncating conversion;
-  the conversion and the divide-by-five are established · [R-LAYER §4] ·
-  static trace. Marked `TODO(question)`.
 - Whether any code outside the established load-time swap and bubble sort
   smooths 3DO pieces · §2.4 · static trace.
-- ALP usage by any non-LOS UI or fade path; bounded-negative over the renderer
-  cluster (ALP loads only in the minimap picture downsample) · §4 · static
+- Pitch/bank naming in the model transform · §2.4 [R-COMP-01 §4] · static
   trace.
-- Pitch/bank naming in the model transform · §2.4 · static trace. (The
-  team/logo "per-player dimension deltas" half of this bullet is closed by
-  [R-RAST-01 §3].)
+- Which authored axis is a unit's nose at heading zero (the sense of a
+  composed piece offset is Established, [R-RAST-01 §8]; this is the
+  asset-side half) · §2.4 · a probe of child translation signs at headings
+  0/90/180/270.
 - Whether any retail-reachable configuration attaches a `BMcode = 0` child
   unit · [R-REN-03A] · asset census. Marked `TODO(question)`.
+- The selection clip rectangle's left value outside a captured panel/mode
+  state, and whether any per-selected-unit plate pass, primary-selection
+  treatment, or cursor use of the authored selection polygon exists ·
+  [R-SEL-02A] · a mode/panel capture of the descriptor at the selection call;
+  a retail capture with two selected units and points on each projected hull
+  edge.
+- Whether any stock projectile model carries pieces retail never draws (each
+  model-projectile call draws one piece plus, under its flag and deadline,
+  the header's child slot) · [R-COMP-02 §6] · asset census of the projectile
+  3DOs' piece trees. Marked `TODO(question)`.
+- Whether stock play ever reaches the strip pool's 1000 live containers ·
+  [R-FX-02 §4] · a strip-object count over a retail recording of a large
+  late-game battle.
 - Whether the unit catalog's ordinal `0` is a reserved null slot (the
   loader's sort walk starts at ordinal 1; the feature pseudo-unit records
   ordinal `0`) — if a stock unit type could occupy it, that type's structure
@@ -10078,19 +9272,6 @@ by the sharper question it turned into.
 - The name and authored source of the display-mode byte that forces every
   unit body through the tinted blitter (cleared by the film/HUD-hide key
   family) · [R-RAST-01 §7] · static trace of its writers (doc 07 owns the key).
-- ~~Aircraft altitude versus ground projection in the shadow pass~~ ·
-  **Closed 2026-09-04**, §5.3 "no water flag, and no aircraft-height term".
-  No shadow gate or placement reads the unit's own height; the body/terrain
-  shear difference is the whole behavior.
-- ~~Water-flag bit semantics, the exact darken row identity within `SHD`, and
-  the interplay between the dither option and the shading gate~~ ·
-  **Closed 2026-09-04**, §5.3 "no water flag, and no aircraft-height term" plus
-  [R-REN-03D §1]/[R-REN-03D §4] and §5.3's own "Correction". There is no water
-  flag — the mobile branch's waterline erase is computed from sea level and the
-  unit's height; there is no `SHD` row in any shadow path — every shadow pixel
-  is index 0 and the blitter resolves `ALP[0*256 + dst]`; the dithered-fog bit
-  is read by no shadow branch, and the `Shading` bit gates the tinted blitter by
-  early return rather than by branch selection.
 - The identical-model six-variant shading matrix predicted by [R-RND-02A] has
   not been run · §5 · manual retail observation.
 - Whether the palette window's blue-table feature bit can be clear in a retail
@@ -10100,9 +9281,10 @@ by the sharper question it turned into.
 - The mouse-event buffer and the "loaded surface wrapper" named beside the
   cursor save-under surfaces · [R-FX-01 §7] · static trace of their
   allocation sites (doc 07 owns the event buffer).
-- Meaning of the window-state bit the flash blitter requires before it
-  writes; it is set in every observed battle present · [R-FX-01 §4] · static
-  trace of its writer.
+- Meaning of the window-state bit the flash and lens blitters require before
+  they write; it is set in every observed battle present, and it is the one
+  open item on render type 2 (`mindgun`), whose lens blitter is otherwise
+  fully described · [R-FX-01 §4] · static trace of its writer.
 - Teardown behavior of the model-player registry — whether a destroyed player
   is cleared, retained as an inactive slot, or removed with compaction
   · §5.6 [R-CRD-005 §1] · static trace. This is the CRD-005 residual, not
@@ -10111,9 +9293,7 @@ by the sharper question it turned into.
   producer behind it · §5.6.1 · static trace over a whole-image reference
   census, or manual retail observation. Marked `TODO(CRD-006)` at two sites.
 - Any shell path that uses GDI text directly · §7.1 [R-FONT-01] · import
-  and reference census of `TextOut`/`DrawText` callers. (The FNT baseline,
-  advance, header bytes and clipping edge are closed by [R-FONT-01 §1–§4];
-  there is no kerning.)
+  and reference census of `TextOut`/`DrawText` callers.
 - The keyed GAF blitter's uncompressed-frame path — whether the `mode` byte
   selects a light-table row as the compressed path does · §7.1
   [R-FONT-01 §6] · static trace of the raw keyed writer.
@@ -10136,36 +9316,18 @@ by the sharper question it turned into.
 - Beam fixed-point scale and lifetime edge cases, collision ordering at map
   borders, and line-colour remap initialization · §5.4 · static trace.
 - Missile target invalidation and reacquisition · §5.4 · static trace (doc
-  06 owns the homing contract). Strip lifetimes and colour cycles are closed
-  in [R-FX-01 §3].
-- (Closed 2026-09-02 by [05 R-FEAT-01 §16]: `smoke 1`, no frame cap, hold 7,
-  lifetime 0, three phase-6 CRT draws.) ~~The strip-5 burning-feature smoke
-  producer's puff parameters (variant, life) · §5.5, [R-STRIP-01 §1] · static
-  trace of the phase-6 site.~~
+  06 owns the homing contract).
 
 ### Audio and music
 
 - The speech-*text* threshold writer among the sound-options gadgets (the
   audio threshold's writer is established) · §8.3, [R-AUD-01 §2] · static
-  trace of the `SOUNDSRT` handler (RWU-07-1 owns the screen).
+  trace of the `SOUNDSRT` handler (doc 07 owns the screen).
 - Whether dynamically or externally reached callers outside the bounded
   direct-invocation census can drive the 18-byte sound broadcast packet in
   game · §8.3 · static trace over the unrecovered regions.
 - Exact PCM conversion for every legacy WAV variant beyond the DIGI and raw
   rules of §8.2 · §8.2 · asset census of the non-RIFF files.
-- Whether the variant draw of Resolve step 2 consumes a CRT draw when the
-  resolved row's variant count is **zero** · §8.3 · static trace of the
-  resolve body. §8.3 says two things that do not settle each other: "the draw
-  happens on **every** resolve — including silent ones — before any gate",
-  which reads as unconditional, and "Count zero produces no pick and the cue
-  is silent", which describes only the result. It is worth a bullet because it
-  changes the stream's draw count, and §8.3's random-stream contract makes
-  that count the thing a reimplementation is asked to reproduce; an empty row
-  is reached often rather than rarely, since the reference install's 120
-  categories author no `load` or `unload` variant at all and only two author
-  `cloak`. Nanolathe skips the draw on an empty row today and carries a
-  `TODO(question)` at the site; because our queue draws a private presentation
-  copy of the stream, the choice cannot reach the simulation either way.
 
 ### Video and capture
 

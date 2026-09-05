@@ -1,6 +1,22 @@
 // Command loc-audit reports exact physical line counts for tracked Go files.
 // It deliberately measures bytes from either the checkout or a Git tree; it
 // does not estimate source size from blob bytes or depend on an external CSV.
+//
+// Sources. With -source=worktree (the default) the file set comes from
+// `git ls-files` and the bytes from the working checkout. With -source=blob
+// the set comes from `git ls-tree` and the bytes from `git cat-file blob`
+// against -ref, so a committed tree can be measured without checking it out:
+//
+//	go run ./tools/loc-audit -source=blob -ref=HEAD .
+//
+// Counting rule. A newline terminates a line; a non-empty unterminated final
+// line counts as one, and an empty file counts as zero. A CRLF file counts
+// the same as an LF one.
+//
+// Report. Rows are grouped by their package directory path, and files ending
+// in _test.go are reported separately from production files, so a size claim
+// about the engine is not inflated by its tests. The command is standard
+// library only: it shells out to git and does nothing else.
 package main
 
 import (

@@ -5,8 +5,6 @@
 # dangle so they can be removed. Fix the comment (or restore the heading the
 # comment cites) and delete the line — this file only shrinks.
 02 §6.2
-03 "Fixed effect pool"
-03 "Strip storage and lifecycle"
 04 "barriers and flush points"
 04 "unit sweep"
 05 §...
@@ -22,21 +20,6 @@
 05 "the build-order caption census"
 05 "Weapon per-shot cost"
 05 "which units can request cloak at all"
-07 "in-flight camera move"
-07 "Tab options menu and manual exit"
-08 "AI group vectors"
-08 "Argument parsing..."
-08 "battle versus campaign continuations and timing"
-08 "Campaign camera"
-08 "Common tail (all kinds)"
-08 "Counters"
-08 "Enumeration of campaigns"
 08 "Established AI-facing data"
-08 "Mission list"
-08 "Mission loader, campaign branch (kind 1)"
-08 "Mission-unit creation..."
-08 "Opening a campaign"
-08 "Session kinds"
-08 "The setup record"
 08 §3
 08 §8

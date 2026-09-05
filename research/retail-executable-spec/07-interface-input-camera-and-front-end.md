@@ -161,7 +161,7 @@ The observed input path has these conceptual phases:
 5. Dispatch remaining tokens to the battle or front-end state machine.
 6. Recompute dirty presentation state and redraw.
 
-### Closed — the host frame: where input becomes simulation state [R-CAM-01 §1] (2026-08-29)
+### The host frame: where input becomes simulation state [R-CAM-01 §1]
 
 **Established fact — one host frame, in order.** The battle frame handler
 (the pointer/cursor update of §8, installed as the mode's frame function)
@@ -223,7 +223,7 @@ next frame). The raw wall-clock delta feeds only the tick budget and the
 scroll pass; the only wall-clock value that leaks into authoritative state
 is the hover bob of [01 §7.4], which is a separate sampler.
 
-### Closed — the battle hotkey census [R-CAM-01 §2] (2026-08-29)
+### The battle hotkey census [R-CAM-01 §2]
 
 **Established fact.** The battle hotkey dispatcher pops one token (§2 token
 model) and switches on it. Shift, Ctrl and Alt are **held-key queries**
@@ -234,8 +234,7 @@ that Ctrl composition is already folded into the token by the translator
 character for printable keys. "Own selectable unit" below means a unit in the
 local player's slot range whose status word has the selectable bit set, whose
 build-progress fraction is `0.0`, whose post-capture grace counter is zero
-(corrected 2026-08-29 per [R-WGT-01]: this previously read "whose transporter
-reference is null"), and whose carrier reference is either null or itself
+([R-WGT-01 §10]), and whose carrier reference is either null or itself
 marked as a visible carrier — the same predicate the rectangle selection of
 §9 uses and the trigger system's eligible-unit predicate [08 R-TRIG-01 §3]. "Cue" means
 the named sound cue played through the interface sound path.
@@ -268,8 +267,8 @@ the named sound cue played through the interface sound path.
 | `0xD6` | Ctrl+F9 | Screenshot — consumed by the input pass before the dispatcher (§2 "Input ordering"). |
 | `0xD7` | Ctrl+F10 | Developer mode only: start/stop the movie capture series ([R-CAM-01 §8]). |
 | `0xE2` | F1 | Shift not held: open `UNITINFOx.GUI` for the hovered unit (or the build button's product when a build button is hovered) — the unit-info panel of §6. Shift held: arm the **Unit State Probe** diagnostic overlay on the hovered unit. |
-| `0xE4` | F3 | Clear the "visited" bit on all thirty message-ring records, then glide the camera to the first message whose source unit is alive and not yet visited (marking it visited); if none, clear the visited bits and retry once ([R-CAM-01 §12]). |
-| `0xE5` | F4 | Toggle interface-flags bit `0x80`. Its two readers are presentation: the HUD side-panel slide treats the bit as "Space held" (the panel stays extended while it is set), and the kill announcement path arms two 30-frame counters (killer's player index, victim's side) on each kill only while the bit is set. The counters' visible effect is closed in [R-CAM-01 §14] (the killer's `Kills` and the victim's `Losses` number flash bright and fade to row 0 over half a second on the pinned panel). **Unknown:** the user-facing name alone — no string in the image names the bit, and nothing observable turns on it. **Correction (2026-09-04, WU-19-174):** this row read "**Unknown:** the user-facing name and the counters' visible effect"; the second half was closed by [R-CAM-01 §14] on 2026-09-02 and the row was not updated. |
+| `0xE4` | F3 | Clear the "last jumped-to" bit (`0x20`) on all thirty message-ring records, then glide the camera to the first message whose source unit is alive and whose visited bit (`0x10`) is clear, setting both bits on it; if none, clear the visited bits and retry once ([R-CAM-01 §12], [R-CAM-01 §14]). |
+| `0xE5` | F4 | Toggle interface-flags bit `0x80`. Its two readers are presentation: the HUD side-panel slide treats the bit as "Space held" (the panel stays extended while it is set), and the kill announcement path arms two 30-frame counters (killer's player index, victim's side) on each kill only while the bit is set. The counters' visible effect is closed in [R-CAM-01 §14] (the killer's `Kills` and the victim's `Losses` number flash bright and fade to row 0 over half a second on the pinned panel). **Unknown:** the user-facing name alone — no string in the image names the bit, and nothing observable turns on it. |
 | `0xEC` | F11 | Developer mode only: toggle film mode ([R-CAM-01 §9]). |
 | `0xED` | F12 | Clear the message ring (producer and display indices both reset to zero). |
 | `0xF8` | Pause | Toggle the local pause bit and emit packet `0x19` with sub-kind `0` and the new bit ([01 §4.3]). |
@@ -279,15 +278,14 @@ Tokens with no case (including `0x20` Space, digits with Ctrl+0, and every
 tokens are never dispatched at all — scrolling uses the held-key queries
 in the scroll pass, not the ring.
 
-**Established fact — Escape versus F2.** Earlier text in §2 and §11 calls
-token `0xE3` "the ESC-menu path". `0xE3` is **F2** under the translator
-table of §2 (F1..F12 → `0xE2..0xED`); Escape reaches the dispatcher as the
-`WM_CHAR` value `0x1B`, whose case is the cancel/close chain above. The
-options window is therefore opened by F2 (or Tab outside battle mode) and
-closed by either F2 or Escape. The "ESC bit" name for the battle-interface
-state bit is kept because it is the bit Escape clears.
+**Established fact — Escape versus F2.** Token `0xE3` is **F2** under the
+translator table of §2 (F1..F12 → `0xE2..0xED`); Escape reaches the
+dispatcher as the `WM_CHAR` value `0x1B`, whose case is the cancel/close
+chain above. The options window is therefore opened by F2 (or Tab outside
+battle mode) and closed by either F2 or Escape. The "ESC bit" of the
+battle-interface state byte is so named because it is the bit Escape clears.
 
-### Closed — the game-speed hotkey and its announcement [R-CAM-01 §3] (2026-08-29)
+### The game-speed hotkey and its announcement [R-CAM-01 §3]
 
 **Established fact.** Speed changes from the hotkeys, the `GAME` slider of the
 interface options ([R-CAM-01 §7]) and the `+`-command path all go through one
@@ -308,40 +306,32 @@ if (send) emit packet 0x19 sub-kind 1 with byte s
 The hotkey path passes `send = 1` and computes `requested` as the target
 word ±1; the announcement therefore prints the **offset from normal**
 (`Game Speed  +3`, `Game Speed   -2` — a space precedes negative values,
-whose sign comes from `%d`). The HUD's own speed line (`Game Speed: Normal`
-or `%+d`, with ` (%+d)` appended while the adapted current speed differs
-from the target) is a separate formatter in the composer. The speed state
-and its adaptation are [01 §4.3]; this closure supplies the clamp bounds and
-the announcement, which that section left unstated.
+whose sign comes from `%d`). The speed state and its adaptation are
+[01 §4.3]; this section supplies the clamp bounds and the announcement.
 
-**Established (2026-09-04, WU-19-174) — what the strip's two `%+d` print.**
-Both arguments are the **offset from normal**, formed the same way the
+**Established fact — the slide strip's speed line.** The HUD's own speed
+line is a separate formatter in the composer: `%s %s` of the translated
+`Game Speed` key and either `Normal` or `%+d`, with ` (%+d)` appended while
+the adapted current speed differs from the target — no colon follows the key
+([R-HUD-04 §4] has the exact formats of all three strip lines). Both `%+d`
+arguments are the **offset from normal**, formed the same way the
 announcement forms its own: the 16-bit speed word is widened without sign
-extension and 10 is subtracted, and the 32-bit difference is the `%+d`
-argument. So `Game Speed: +3` at target 13 and `Game Speed: -2` at target 8,
-never `+13`/`+8`. The two words are read separately — the `Normal`-versus-
-`%+d` branch tests the **target** word against 10, and the suffix tests the
+extension and 10 is subtracted, and the 32-bit difference is the argument.
+So `Game Speed +3` at target 13 and `Game Speed -2` at target 8, never
+`+13`/`+8`. The two words are read separately — the `Normal`-versus-`%+d`
+branch tests the **target** word against 10, and the suffix tests the
 **adapted current** word against the target and, when they differ, appends
 ` (%+d)` of the current word minus 10 to the string the branch already
-produced. The suffix is therefore appended after the `Normal` branch joins,
-so `Game Speed: Normal (+2)` is a reachable string while the adaptation is
-above a target of 10. This settles the reading the composer's paragraph in §6
-left open; nothing above is corrected by it.
+produced. The suffix is appended after the `Normal` branch joins, so
+`Game Speed Normal (+2)` is a reachable string while the adaptation is above
+a target of 10.
 
-**Correction (2026-09-04, WU-19-230).** The strip's line carries **no colon**:
-its format is `%s %s` of the translated `Game Speed` key and the `Normal` /
-`%+d` text, so the reachable strings are `Game Speed Normal`, `Game Speed +3`
-and `Game Speed Normal (+2)`, not `Game Speed: …` as the two paragraphs above
-spell them. The colon was a gloss, never read from the executable; the exact
-formats of all three strip lines are in [R-HUD-04 §4]. **Established.**
-
-### Closed — `SwitchAlt` [R-CAM-01 §4] (2026-08-29)
+### `SwitchAlt` [R-CAM-01 §4]
 
 **Established fact.** `SwitchAlt` is a persistent interface option: registry
 value `SwitchAlt` (DWORD, absent → `0`; bit 0 kept) stored as bit 8 of the
-interface-flags word — the "battle-mode flag & 1" of §9's digit-key gate is
-this bit, not a battle-mode flag. **Correction:** §9 "Digits `1..9` … under an
-exact battle-mode/Alt gate" named the bit wrongly; the gate is
+interface-flags word. The digit-key gate of §9 tests this bit, not a
+battle-mode flag; the gate is
 
 ```
 switchAlt = SwitchAlt option bit
@@ -359,7 +349,7 @@ path, and by the chat command `+SwitchAlt` — with no argument it toggles the
 bit and writes the registry; with an argument it stores `arg & 1` without
 writing ([R-CAM-01 §6]).
 
-### Closed — `LEFTCLICK`: mouse-button polarity [R-CAM-01 §5] (2026-08-29)
+### `LEFTCLICK`: mouse-button polarity [R-CAM-01 §5]
 
 **Established fact.** The interface options' `LEFTCLICK` two-stage button
 (`Left Click|Right Click`, `SPEEDS.GUI`; the `Button Interface` label) writes
@@ -367,7 +357,7 @@ a dword, persisted as registry `Interface Type` (absent → `0`), also set by
 `+IFace n`. Its value gates the click dispatch of the frame handler and the
 world-click cursor resolver:
 
-* **`0` (`Left Click`, default)** — the polarity §9 documents as closed:
+* **`0` (`Left Click`, default)** — the polarity §9 documents:
   left down over the world starts the drag rectangle; left down over the
   minimap issues the armed order / world click at the minimap's world point
   (the hover conversion of [R-CAM-01 §11]); right down with an order armed
@@ -388,24 +378,19 @@ world-click cursor resolver:
   cursors, and consults the definition's order-capability bits for the
   right-button column.
 
-**Correction.** §9 "Mouse-button assignment is closed … no right-button path
-queues an order" holds only for `Interface Type = 0`; under `1` the
-right-button path queues orders. The paragraph stays as the default-polarity
-description. **Unknown:** the complete right-button cursor column under
-`Interface Type = 1` (which latch shapes it offers) · §8 static trace of the
-cursor resolver's second case family.
+§9's mouse-button assignment describes `Interface Type = 0`; under `1` the
+right-button path queues orders. **Unknown:** the complete right-button
+cursor column under `Interface Type = 1` (which latch shapes it offers) · §8
+· static trace of the cursor resolver's second case family.
 
-### Closed — the chat `+` command vocabulary [R-CAM-01 §6] (2026-08-29)
+### The chat `+` command vocabulary [R-CAM-01 §6]
 
-**Correction.** §5 "Chat" said the `+` vocabulary was closed at three AI
-tuning commands (`plan`, `weight`, `limit`, mask 8) registered by the
-message-builder and that the default-handler slot was never installed, so
-"the dispatch never consumes a chat `+` message". That reading covered only
-the AI registrar. The **battle entry orchestrator** registers three more
-tables into the same sorted command vector and installs the default handler;
-83 commands are dispatchable from chat. The inline `+<digit>`/`+a`/`+e`
-mini-language described there is unchanged and runs **after** the command
-dispatch on the same text.
+**Established fact — the vocabulary.** The message-builder registers three
+AI tuning commands (`plan`, `weight`, `limit`, mask 8) and the **battle entry
+orchestrator** registers three more tables into the same sorted command
+vector and installs the default handler; 83 commands are dispatchable from
+chat. The inline `+<digit>`/`+a`/`+e` mini-language of §5 "Chat" runs
+**after** the command dispatch on the same text.
 
 **Established fact — dispatch mechanics.** A `+` line is copied (at most 79
 bytes) into a persistent last-command buffer, tokenised into up to 20
@@ -415,19 +400,15 @@ vector by **case-insensitive** binary search. The entry's route mask is ANDed
 with the caller's route word: on a nonzero result the entry's handler runs and
 the entry's mask is returned; otherwise, if a default handler is installed
 and its mask matches, the default handler runs and its mask is returned;
-otherwise `0`. The chat route word is `1 | 2` in ordinary play (the "referenced
-dword" of §5 is a constant `1` in the image, so bit 2 is always present) and
-`1 | 2 | 4` in developer mode ([R-CAM-01 §9]). After dispatch the line —
-including the `+` — is still sent as ordinary chat; when the returned mask has
-bit 2 the outgoing recipient mode is forced to `0` (everyone), so a cheat is
-broadcast to all players. `Cheat Codes` as a game option is a multiplayer
-lobby word [08 R-SKIR-01 §11]. *Correction ([08 R-OOS-01 §2], 2026-08-29):*
-this paragraph previously said "the single-player path consults no cheat
-gate — every mask-1 and mask-2 command is live in skirmish and campaign".
-That is wrong for campaign: route bit 2 is supplied by the entry-time cheat
-word (skirmish 1, campaign 0, multiplayer the host's `Cheat Codes` bit), so
-mask-2 commands do **not** dispatch in campaign outside developer mode;
-mask-1 commands are live in every kind.
+otherwise `0`. The chat route word carries bit 1 always, bit 2 when the
+entry-time cheat word is set — skirmish `1`, campaign `0`, multiplayer the
+host's `Cheat Codes` bit ([08 R-OOS-01 §2]; `Cheat Codes` as a game option
+is a multiplayer lobby word [08 R-SKIR-01 §11]) — and bit 4 in developer
+mode ([R-CAM-01 §9]). Mask-1 commands are therefore live in every session
+kind; mask-2 commands do **not** dispatch in campaign outside developer
+mode. After dispatch the line — including the `+` — is still sent as
+ordinary chat; when the returned mask has bit 2 the outgoing recipient mode
+is forced to `0` (everyone), so a cheat is broadcast to all players.
 **Unknown (out of scope):** how the multiplayer receive path applies the
 lobby bit before re-dispatching a received `+` line.
 
@@ -513,7 +494,7 @@ separate string with a network-only reader. None of these run outside
 developer mode. Their deeper effects are not part of the single-player
 contract and are recorded here only so the vocabulary is complete.
 
-### Closed — interface options (`SPEEDS.GUI`) and their consumers [R-CAM-01 §7] (2026-08-29)
+### Interface options (`SPEEDS.GUI`) and their consumers [R-CAM-01 §7]
 
 **Established fact — controls and storage.** The interface options screen
 opens `SPEEDS.GUI` (or `SPEEDSRT.GUI` from the in-battle options) with the
@@ -536,10 +517,9 @@ no gadget ([R-CAM-01 §4]).
 
 **Established fact — slider value mapping.** Every slider callback computes
 its value from the slider's knob position word `pos` and range word `range`
-(the widget model of §4). *Settled 2026-08-29:* the "range" word is the
-slider synthesiser's **computed track length** (`travel`), not the authored
-`range` key — [R-FE-01 §5] traces the read-out and the position writer; the
-earlier *Supported inference* that it was the authored key is withdrawn:
+(the widget model of §4); the "range" word is the slider synthesiser's
+**computed track length** (`travel`, [R-WGT-01 §5]), not the authored
+`range` key ([R-FE-01 §6] traces the read-out and the position writer):
 
 ```
 value = (range < 2) ? 0 : trunc( float(pos) / float(range - 1) * max )     x87 division then multiply, __ftol
@@ -563,10 +543,12 @@ inert for a watching player.
   when `(producer + 1) mod count == displayIndex`, the display index advances
   first (dropping the oldest visible line); then the text is copied (64 bytes,
   forced terminator), stamped with the current tick, kind nibble, source unit
-  and a silence byte; the producer advances mod 30; `MessageArrived` plays
-  unless the silence byte is `'\n'`. The composer draws at most `count` lines
-  walking back from the producer to the display index (fewer when the ring
-  holds fewer). This is the ring of §11 "Status scrollback".
+  and the speaker's player slot (`10`, which renders as `'\n'`, is the
+  no-speaker sentinel, [R-HUD-03 §14.3]); the producer advances mod 30;
+  `MessageArrived` plays only when the speaker slot is a real slot. The
+  composer draws at most `count − 1` lines walking back from the producer to
+  the display index ([R-HUD-03 §14.4]) — `count` is a modulus, not the
+  on-screen budget. This is the ring of §11 "Status scrollback".
 * **`textscroll` (TXTSCROL).** Once per host frame **after** the sub-tick
   loop (so it runs whether or not any tick ran), if the ring is non-empty and
   `messageTick + (seconds + 1) × 30 < currentTick` for the oldest displayed
@@ -581,17 +563,13 @@ inert for a watching player.
   and the unit is alive. With the `Sing` toggle set the voice path
   substitutes one of two fixed sound names on `tick / 30 mod 8`. Levels are
   bytes: `Off` = `0` (only priorities above 10 pass — none in stock content),
-  `Medium` = `5`, `Full` = `10`. **Correction (2026-09-02, WU-19-61).** This
-  bullet named the acknowledgement producer "doc 04 [R-DET-01 §5]". That
-  anchor is wrong: `R-DET-01` is doc 01's determinism finding and heads
-  nothing in doc 04, so the pointer resolved to no contract at all. The
-  producer of an order acknowledgement is the **shared status emitter** of
-  [04 R-ORD-01 §1] — it owns the three-clause producer gate and the kind →
-  (sound name, default text) table of 23 kinds whose priorities these two
-  levels arbitrate. Established.
+  `Medium` = `5`, `Full` = `10`. The producer is the **shared status
+  emitter** of [04 R-ORD-01 §1], which owns the three-clause producer gate
+  and the kind → (sound name, default text) table of 23 kinds whose
+  priorities these two levels arbitrate.
 * **`scrollspeed`** — [R-CAM-01 §10]. **`gamespeed`** — [01 §4.3].
 
-### Closed — movie capture series [R-CAM-01 §8] (2026-08-29)
+### Movie capture series [R-CAM-01 §8]
 
 **Established fact.** Ctrl+F10 in developer mode toggles the capture series.
 Starting: scan `<screenshotDir>\MOVIE*` and take the largest numeric suffix
@@ -607,7 +585,7 @@ the capture time does not enter the next raw delta. `<screenshotDir>` is the
 `%s\%s` path built at startup from the install directory. The `Film`/
 `FilmSpeed` developer commands write the same rate and a recording flag.
 
-### Closed — developer mode [R-CAM-01 §9] (2026-08-29)
+### Developer mode [R-CAM-01 §9]
 
 **Established fact.** The developer bit (mode-flags bit 1) is set by the
 six-word `+Now` password of [R-CAM-01 §6] and by the registry pair
@@ -634,20 +612,12 @@ serialization.
 
 ### Unknown
 
-Open items only; the decider follows each. The translator dispatch table, the
-OEM punctuation aliases, the Ctrl composition ranges, the ordinary-mode zero
-gate, the mouse button record model (double-click fields and queue refusal),
-middle-button/wheel default processing, drag/double-click capture into
-timestamped records, the `CF_TEXT`-only clipboard contract, and the mouse
-motion-record consumers are established above.
-
-- Consumer coverage: the battle dispatcher's cases are the census of
-  [R-CAM-01 §2]; which front-end screen paths handle which tokens is per
-  screen (§5) · static trace.
-- The unsupported-device census · static trace.
-- Text-input code page and IME behavior · presentation-level platform detail;
-  no retail contract observed beyond the ASCII token set. Marked `TODO(T23)`
-  in the tail.
+- Which front-end screen paths handle which key tokens (the battle
+  dispatcher's cases are the census of [R-CAM-01 §2]) · §5 · static trace.
+- The unsupported-device census · §2 · static trace.
+- Text-input code page and IME behavior · §2, §7 · presentation-level
+  platform detail; no retail contract observed beyond the ASCII token set
+  (`TODO(T23)`).
 
 
 ## 3. Modal windows, focus, and event ownership
@@ -681,20 +651,28 @@ with zero); other peeked tokens are observed without the initial consumption.
 The active GUI is the top object of a linked stack, and its event pass walks
 authored gadgets in increasing index order (the declared count is inclusive:
 N gadgets admit GADGET0..GADGETN). Hit testing is inclusive on both axes:
-`gx <= x <= gx+w-1 && gy <= y <= gy+h-1`. Grayed and hidden gadgets reject
-interaction: the hidden flag and the grayed attribute bit are tested before
-activation effects. Callbacks and association handling can redirect which
-gadget becomes active. **Correction (2026-09-02, RWU-19-31).** "The grayed
-attribute bit" is not a bit of `attribs` — `attribs` has no greyed bit. It
-is bit 0 of the button's own grey word, tested by the button handler at press
-time (before its hit test) and never by the pass's hover hit test, which
-skips only hidden gadgets; see [R-WGT-01 §13].
+`gx <= x <= gx+w-1 && gy <= y <= gy+h-1`. Hidden gadgets are skipped before
+the hit test; a greyed button (bit 0 of its own grey word — `attribs` has no
+greyed bit) refuses the press at press time, before its own hit test, and
+never at hover ([R-WGT-01 §13]). Callbacks and association handling can
+redirect which gadget becomes active.
 
 **Top-object close is closed.** Closing the active GUI object invokes its
 registered callbacks, redraws under nest-counted cursor/display protection,
 removes the object, reactivates the predecessor when one exists (the stack
 head is replaced and the predecessor is marked for redraw), and applies one
 extra redraw request selected by GUI flag `0x800`.
+
+GUI flag `0x800` requests one extra redraw pass when the window closes, and
+`0x1000` centers a modal window in the playfield right of the 128-pixel rail
+(§11). The per-dialog Escape/Enter/focus defaults are authored data — each
+GUI file declares its own `escdefault`, `crdefault`, and `defaultfocus`
+controls — and the fixed matrix that consumes them is [R-WGT-01 §2]. There
+is no parent/child bubbling (one flat gadget array, first firing gadget in
+index order wins), the default-control rules are the Enter/Escape/Space rows
+of the matrix, focus is single (one focused gadget, one capture), and
+association is a post-change synchronisation, not a redirection
+([R-WGT-01 §1, §2, §5–§7]).
 
 Escape, Enter, Backspace, and numeric/character input are observed in dialog
 and chat paths.
@@ -707,42 +685,23 @@ tests and prevents a click intended for a dialog from selecting a world unit.
 
 ### Unknown
 
-Open items only; the decider follows each. Top-object close, predecessor
-reactivation, token suppression range, and hit-test bounds are established
-above. Two flag meanings are mechanically named: `0x800` requests one extra
-redraw pass when the window closes, and `0x1000` centers a modal window in the
-playfield right of the 128-pixel rail (§11). The per-dialog Escape/Enter/focus
-defaults are authored data — each GUI file declares its own `escdefault`,
-`crdefault`, and `defaultfocus` controls — and the fixed matrix that consumes
-them is [R-WGT-01 §2]. **Correction (2026-08-29, RWU-07-3).** This list
-carried "event bubbling between parent and child panels", "default-control
-rules for every panel", "whether keyboard focus can be shared by a list and a
-textbox" and "overlap, capture, and association redirection precedence" as
-open; all four are closed in [R-WGT-01 §§1–2, §5–§7]: there is no
-parent/child bubbling (one flat gadget array, first firing gadget in index
-order wins), the default-control rules are the Enter/Escape/Space rows of
-the matrix, focus is single (one focused gadget, one capture), and
-association is a post-change synchronisation, not a redirection.
-
-- User-facing naming of every GUI mode/flag bit · static trace.
+- User-facing naming of every GUI mode/flag bit · §3 · static trace.
 - The meaning of the window key-navigation flag's *clear* state in the
   front end — which screens deliberately leave Tab/Enter/Escape to their
-  own key callback rather than the matrix · per-screen static trace.
-- **The identity of the matrix gate's second word** (2026-09-04, WU-19-174).
-  [R-WGT-01 §1] step 3 and [R-WGT-01 §2] call it the interface object's
-  key-navigation flag. It is a single dword on the interface object with a
-  set-to-1 helper and a clear-to-0 helper, about fourteen screens calling the
-  first and seven the second — and the same word matches the description
-  [R-WGT-02 §2] gives the **fired-result** word (set to 1 by the window open
-  routine, cleared by a screen callback that wants to stay open). The two
-  readings have never been separated, and no finding above depends on which
-  is right: the matrix's *first* gate — a non-zero window token-mode word —
-  is on its own enough to keep the matrix out of every battle window
-  (traced independently, WU-19-174). Decider: a static trace naming the
-  readers of that dword outside the GUI pass · low priority.
+  own key callback rather than the matrix · §3 · per-screen static trace.
+- The identity of the matrix gate's second word. [R-WGT-01 §1] step 3 and
+  [R-WGT-01 §2] call it the interface object's key-navigation flag: a single
+  dword on the interface object with a set-to-1 helper and a clear-to-0
+  helper, about fourteen screens calling the first and seven the second —
+  and the same word matches the description [R-WGT-02 §2] gives the
+  **fired-result** word (set to 1 by the window open routine, cleared by a
+  screen callback that wants to stay open). No finding depends on which is
+  right: the matrix's *first* gate — a non-zero window token-mode word — is
+  on its own enough to keep the matrix out of every battle window
+  ([R-WGT-01 §2]) · §3 · static trace naming the readers of that dword
+  outside the GUI pass, low priority.
 
-
-### Closed — the gadget service pass: order, capture, hover help, and who closes the window [R-WGT-01 §1] (2026-08-29)
+### The gadget service pass: order, capture, hover help, and who closes the window [R-WGT-01 §1]
 
 **Established.** One routine services the top window once per host frame
 (the "GUI pass" of §2). Its order is fixed:
@@ -801,7 +760,7 @@ each step). Screens set it through the gadget-colour setter to make a
 button flash and fade; the window builder zeroes it for every button and
 label at open.
 
-### Closed — the key matrix: Tab, Enter, Escape, Space, arrows, and focus order [R-WGT-01 §2] (2026-08-29)
+### The key matrix: Tab, Enter, Escape, Space, arrows, and focus order [R-WGT-01 §2]
 
 **Established.** The window key matrix runs before any gadget sees the
 token, and only when the window's token mode is non-zero and its
@@ -810,8 +769,7 @@ flag; battle windows leave it clear, so in battle none of this applies and
 tokens reach the hotkey dispatcher after the gadget loop). A consumed token
 is replaced by zero for the gadget loop.
 
-**Confirmed (2026-09-04, WU-19-174) — the token-mode arm alone settles
-battle.** The two gate words are tested together, and the token-mode word is
+**Established — the token-mode arm alone settles battle.** The two gate words are tested together, and the token-mode word is
 the one whose value for a battle window is not in doubt: only the front-end
 shell and the in-battle options root set it ([R-WGT-02 §2]), and the
 in-battle window openers — `UNITINFOx.GUI`'s among them — set nothing. With
@@ -874,20 +832,16 @@ The observed control kinds are:
 * Font selector.
 * Picture-box style control.
 
-**Control-kind mapping is closed.** The parser's control-kind byte selects
-among twelve handled cases: background/panel (with -1 centering and the
-`BackTile` fallback chain), button (including staged buttons chosen by
-best-fit frame size and `|`-separated multi-line labels), listbox, text input
-(name capped at 127 bytes), slider (which synthesizes two scrollbar child
-gadgets with derived knob travel), a text case, an unnamed zeroing case, two
-embedded-file cases, and three further single-purpose cases. Gadgets live in
-fixed 347-byte records; each kind resolves its art from its own named GAF
-entry first, then the side-specific interface GAF, then the built-in fallback.
-**Correction (2026-09-02, RWU-19-31).** The count and the labels of the last
-seven cases above are superseded by [R-WGT-01 §12]: the builder's switch has
-eleven keys over ten arms (kind 11 shares the panel arm), no arm only zeroes,
-and "text input (name capped at 127 bytes)" is the `maxchars` cap, not the
-name. The parser's own per-kind key table is [R-WGT-01 §11].
+**Control-kind mapping.** The parser reads a per-kind key table selected by
+the control-kind byte ([R-WGT-01 §11]); the window builder's switch then has
+eleven keys over ten arms ([R-WGT-01 §12]): background/panel (with -1
+centering and the `BackTile` fallback chain; kind 11 shares the arm), button
+(including staged buttons chosen by best-fit frame size and `|`-separated
+multi-line labels), listbox, text input (`maxchars` capped at 127), slider
+(which synthesizes two scrollbar child gadgets with derived knob travel),
+label, font file, raw file, picture, and score bar. Gadgets live in fixed
+347-byte records; each kind resolves its art from its own named GAF entry
+first, then the side-specific interface GAF, then the built-in fallback.
 
 **Runtime control-kind dispatch is closed.** The active-GUI pass routes each
 gadget's stored control-type byte to distinct runtime families:
@@ -897,9 +851,9 @@ gadget's stored control-type byte to distinct runtime families:
 | `1` | Clickable control path with callback result; can become the active gadget. |
 | `2` | Distinct stateful control path. |
 | `3` | Focusable text editor: drains queued edit tokens until empty or Escape; cursor movement, insertion, deletion, navigation, and clipboard paste (above). |
-| `4` | Dedicated control update path. |
-| `5` | Association-capable path that can redirect activation by comparing up to 16 bytes of a gadget name identifier across other gadgets during a fixed-record-stride scan. |
-| `6` | Distinct callback-producing path. |
+| `4` | Scrollbar/slider: knob, travel and assoc synchronisation ([R-WGT-01 §5]). |
+| `5` | Label whose `link` names the gadget the pass redirects to, found by comparing up to 16 bytes of the gadget name across the other gadgets during a fixed-record-stride scan ([R-WGT-01 §7]). |
+| `6` | Surface with a per-pass callback and the `hotornot` click ([R-WGT-01 §8]). |
 | `12` | Repeating/decrementing path: auto-repeat decrements a counter while a throttle predicate holds. |
 | `13` | Timed/range path: animates a range value toward a maximum using per-gadget interval/threshold fields, then fires the path. |
 
@@ -940,30 +894,13 @@ ordering.
 
 ### Unknown
 
-Open items only; the decider follows each. Field lengths, control-specific
-defaults, and the control-kind-to-parser mapping are established in document
-02; text-editor admission limits, clipboard paste bounds, and the
-control-type-to-runtime-family dispatch are established above; the per-kind
-callback map, listbox row rules and picture-box binding are [R-WGT-01 §§3–8].
-**Correction (2026-08-29, RWU-07-3).** The runtime-family table above calls
-kind 4 a "dedicated control update path", kind 5 an "association-capable path
-that can redirect activation" and kind 6 a "distinct callback-producing path";
-the traced roles are: 4 = scrollbar/slider ([R-WGT-01 §5]), 5 = label whose
-**`link`** (not `assoc`) names the gadget the pass redirects to ([R-WGT-01
-§7]), 6 = surface with a per-pass callback and the `hotornot` click
-([R-WGT-01 §8]). "Scrollbars can be associated with lists; the engine updates
-their range, knob size, and position from the associated list rather than
-trusting every authored value" stands, with the arithmetic in [R-WGT-01 §5].
-
-- The kind-10 line gadget's attribute-4 (outline) second X coordinate — the
-  decompiler drops it · instruction-level read of the line painter.
 - Who fills a listbox's `maxTop` word for each screen (the widget code only
-  reads it) · per-screen static trace, RWU-07-1.
+  reads it) · §4 [R-WGT-01 §4] · per-screen static trace.
 - The record-list (`0x20`/`0x80`) item structures beyond the height word the
-  hit test and knob arithmetic read · static trace of the save/load screens.
+  hit test and knob arithmetic read · §4 [R-WGT-01 §4, §5] · static trace of
+  the save/load screens.
 
-
-### Closed — buttons: art resolution, press semantics per attribute, quickkeys, cue sounds [R-WGT-01 §3] (2026-08-29)
+### Buttons: art resolution, press semantics per attribute, quickkeys, cue sounds [R-WGT-01 §3]
 
 **Established — the record.** The authored `status` is stored as the
 button's **down-state word** (0 up, non-zero down); `stages` is a byte and
@@ -991,8 +928,7 @@ left-aligned. So the retail frame layout is: *base* (rest), *base+1*
 `k` is stage `k` directly with `frames−2` the pressed look and `frames−1`
 the greyed look.
 
-**Established — the painter's frame choice** (completes [R-HUD-03 §6],
-which named the down-state word "stage"): not greyed and down-state set
+**Established — the painter's frame choice.** Not greyed and down-state set
 with `stages < frameCount` → `base + downState` when `stages == 0`, else
 `frames − 2`; not greyed otherwise → `base` (`stages == 0`) or the
 current-stage byte (`stages ≠ 0`, base ignored); greyed → `frames − 1`
@@ -1002,25 +938,19 @@ steps unless attribute `0x80`; arrow → `base`, darkened; staged → the
 current stage, darkened. With no art at all the button is a bevel in
 window colours 0/17/20 (raised when up, sunken when down; greyed 0/19/19).
 The label pen is [03 R-FONT-01 §6]; the "second string" that section
-leaves to this document is the **quickkey character**: for a centred
-(attribute 2) or build-attribute (`0x20`) label containing the key
-(case-insensitive search), the text is drawn in three runs — the part
-before the key in the gadget colour, the key character in window colour
-entry 10, the remainder in the gadget colour — so the accelerator letter is
-highlighted. A greyed button draws no highlight.
-
-**Correction (RWU-19-34, 2026-09-02).** The paragraph above gives the
-centred and build-attribute branches the same treatment; they differ. Only
-the **build-attribute** (`0x20`) branch draws the key character in window
-colour entry 10, and it does so whether or not the button is greyed. The
-**centred** (attribute 2) branch draws all three runs in the gadget colour
-and **underlines** the key instead: a one-pixel line on row
-`penY + metric − 1` spanning the key character's width, in window colour
-entry 2 (entry 0 when `stages` is non-zero); it is this branch that a greyed
-button skips (the whole caption is then drawn as one run). The "gadget
-colour" of both branches is the window colour-table entry the button's
-`colorf` selects when `stages` is zero, and entry 0 when it is not
-([03 R-FONT-01 §6]).
+leaves to this document is the **quickkey character**. For a label
+containing the key (case-insensitive search) the text is drawn in three runs
+— the part before the key, the key character, the remainder — and the two
+branches differ. The **build-attribute** (`0x20`) branch draws the key
+character in window colour entry 10 and the other two runs in the gadget
+colour, whether or not the button is greyed. The **centred** (attribute 2)
+branch draws all three runs in the gadget colour and **underlines** the key
+instead: a one-pixel line on row `penY + metric − 1` spanning the key
+character's width, in window colour entry 2 (entry 0 when `stages` is
+non-zero); a greyed button skips this branch and draws the whole caption as
+one run. The "gadget colour" of both branches is the window colour-table
+entry the button's `colorf` selects when `stages` is zero, and entry 0 when
+it is not ([03 R-FONT-01 §6]).
 
 **Established — quickkey assignment.** The builder clears the authored key
 and assigns the **first non-space character of the label whose lowercase
@@ -1028,8 +958,8 @@ form is not already the quickkey of any button or linked label in the
 window**; a staged button gets no key; a button with attribute `0x10000`
 keeps its authored key. The authored `quickkey` field is therefore inert
 for every stock button that lacks `0x10000` — the accelerator is always
-the first free letter of the caption. Correction to [fmt gui]: "Keyboard
-accelerator as an ASCII code" describes the field, not its effect.
+the first free letter of the caption ([fmt gui]'s "keyboard accelerator as
+an ASCII code" describes the field, not its effect).
 
 **Established — press semantics.** Greyed buttons ignore everything. A
 press (left or right button-down message) inside takes the capture and
@@ -1060,7 +990,7 @@ player when they act on a result, so which cue a button plays is authored
 per screen in code, not per gadget kind or size. A reimplementation should
 play the cue in the screen handler that consumes the result.
 
-### Closed — listbox: rows, hit rows, selection, scrolling, double-click, headings [R-WGT-01 §4] (2026-08-29)
+### Listbox: rows, hit rows, selection, scrolling, double-click, headings [R-WGT-01 §4]
 
 **Established — geometry.** `metric` is the current font's line metric
 ([03 R-FONT-01 §6]: GAF font `height(I) + 2`, FNT font header height).
@@ -1127,7 +1057,7 @@ the selected row (attribute `0x100` clear) is lightened by 30 steps whether
 or not the list has focus. Record lists draw each item's frame and lighten
 the selected one by 20.
 
-### Closed — the kind-4 gadget: scrollbar, slider, knob and travel arithmetic, synthesised arrows, value read-out [R-WGT-01 §5] (2026-08-29)
+### The kind-4 gadget: scrollbar, slider, knob and travel arithmetic, synthesised arrows, value read-out [R-WGT-01 §5]
 
 **Established — one kind.** `SCROLLSLIDER`, `VIDSLDR`, `SLIDER%d` and the
 `SHARE` sliders are all kind 4. The record holds: `travel` (authored
@@ -1149,21 +1079,14 @@ bar shrinks by `2·arrowW` and shifts right by `arrowW`, `knobsize :=
 width(frame base+5)` and `travel := w' − knobsize − 4` (with the shrunken
 `w'`). Vertical: the second arrow sits at `y + h − arrowH`, the bar shrinks
 and shifts likewise, and **`travel` is left as authored** — a vertical bar
-gets its travel from its list (below) or from the screen. **Cross-section
-note:** [R-FE-01 §6]'s "arrow length − 6 vertical, width − arrow length −
-4 horizontal" is the no-art and horizontal formula stated loosely; the
-exact forms are the two above. `SHARE` overrides both (`travel := w − h`,
-[R-HUD-03 §9]).
+gets its travel from its list (below) or from the screen. `SHARE` overrides
+both (`travel := w − h`, [R-HUD-03 §9]).
 
-**Established — an arrow gadget's cross-axis extent (WU-19-144, 2026-09-04).**
-This closes an open question this document previously left as `TODO(question)`
-in Nanolathe's loader: `arrowW`/`arrowH` above is each arrow's size on its
-*long* axis, but the short axis of the appended button gadget's own rectangle
-was unstated. A static trace of the arrow gadget's rectangle store (the
-builder's kind-4 arm, the two button-record writes right after the frame-base
-lookup) found that **both** axes of each arrow's rectangle are written
-straight from that arrow's own `SLIDERS` frame — width and height alike,
-copied as a pair before the horizontal/vertical branch above runs. The
+**Established — an arrow gadget's cross-axis extent.** `arrowW`/`arrowH`
+above is each arrow's size on its *long* axis; **both** axes of each arrow's
+rectangle are written straight from that arrow's own `SLIDERS` frame — width
+and height alike, copied as a pair (in the builder's kind-4 arm, right after
+the frame-base lookup) before the horizontal/vertical branch above runs. The
 decrement arrow (frame `base+6`) takes its full rectangle from frame `base+6`;
 the increment arrow (frame `base+8`) takes its from frame `base+8`. Neither
 read touches the bar's own short axis (the `BaseExtent` frame `base` sets,
@@ -1233,7 +1156,7 @@ knobsize`, **not** the `travel − 1` of the `SHARE` read-back helper
 [R-HUD-03 §9] and of [R-FE-01 §6]'s option sliders — those screens
 compute their own values and only *display* them through labels.
 
-### Closed — text input: focus, Enter, Escape, caret [R-WGT-01 §6] (2026-08-29)
+### Text input: focus, Enter, Escape, caret [R-WGT-01 §6]
 
 **Established.** A press inside (left or right) sets the input's colour
 from the window table, selects its font (the `fontnumber`-th font gadget,
@@ -1250,12 +1173,11 @@ gy + 3)` limited to the gadget width, and, while captured, a one-pixel
 caret at `gx + width(text[0..caret))` from `gy + 3` to `gy + 3 + metric`
 in window colour entry 9. Focus arriving by Tab or by a label link (§7)
 performs the same setup without a press. Quickkeys are suppressed while an
-input holds the capture unless Alt is held (§3, §7). **Whether a list and a
-text box can share focus** (the old Unknown of §3): they cannot — the
-window has one focused gadget and one capture; the list→text `assoc`
-copy of §5 is what the save-name screen uses instead.
+input holds the capture unless Alt is held (§3, §7). A list and a text box
+cannot share focus — the window has one focused gadget and one capture; the
+list→text `assoc` copy of §5 is what the save-name screen uses instead.
 
-### Closed — labels, links, and label quickkeys [R-WGT-01 §7] (2026-08-29)
+### Labels, links, and label quickkeys [R-WGT-01 §7]
 
 **Established.** A label with attribute `0x10` and no quickkey is inert.
 Otherwise a press inside takes the capture and a release inside fires; a
@@ -1274,7 +1196,7 @@ The label painter is [03 R-FONT-01 §6]; the builder sets attribute
 `0x10` on every label whose `link` is empty, which is why plain caption
 labels never react.
 
-### Closed — surfaces (`hotornot`), picture boxes, lines, and the focus halo [R-WGT-01 §8] (2026-08-29)
+### Surfaces (`hotornot`), picture boxes, lines, and the focus halo [R-WGT-01 §8]
 
 **Established.** A surface (kind 6) calls its per-pass callback every pass
 with the context and the gadget (this is how map previews and save
@@ -1294,12 +1216,28 @@ After every full repaint, when the window's key-navigation flag is set,
 the builder paints a **focus halo** around the focused gadget: for a
 button or surface six one-pixel frames growing outward with palette
 lightening 31, 28, 24, 19, 13, 6; for a text input it sets `colorf` to 30
-instead (lists and labels get none). The kind-8 "ordinal lookup" of the ledger always returns null —
-kind 8 has no runtime behaviour.
+instead (lists and labels get none). Kind 8 has no runtime behaviour.
 
-**Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
+**Established — the kind-10 line painter, exactly, and `nuttin`'s runtime
+role.** The painter reads only the gadget's own rectangle, its `attribs`
+word, and `colorf` (as a row index into the window's colour table); it never
+reads `nuttin`'s slot (§11) at all. Computed once,
+unconditionally, before the attribute test: `x2 := x + w − 1` (the gadget's
+own rectangle, right edge). Then, gated on the paint pass carrying the redraw
+bit: attribute 1 (horizontal) draws `(x, y)–(x2, y)` and returns; attribute 2
+(vertical), attribute 1 clear, redefines the second endpoint's X to `x`
+(collapsing to a vertical run) and draws `(x, y)–(x, y2)` where `y2 := y + h
+− 1`; attribute 4 ("outlined"), both 1 and 2 clear, draws `(x, y)–(x2, y2)` —
+the `x2` from the unconditional computation above, never reassigned on this
+path. That is a **single diagonal line** across the gadget's rectangle, not a
+four-sided rectangle outline — "outlined" is this attribute bit's name, not a
+description of the shape it draws. With none of attributes 1, 2 or 4 set,
+nothing is drawn. So: the outline case's second X coordinate is `x + w − 1`,
+identical to the horizontal case's, not `nuttin` — and `nuttin` has no traced
+reader anywhere in the painter. `nuttin` remains parsed and retained
+losslessly (§11); no runtime consumer of it has been found.
 
-### Closed — selection presentation: the shared eligibility predicate and the footprint quad [R-WGT-01 §9] (2026-08-29)
+### Selection presentation: the shared eligibility predicate and the footprint quad [R-WGT-01 §9]
 
 **Established.** The rectangle selection and the category/select-all
 paths of [R-CAM-01 §2] test, per unit: status bit 5 (*selectable*) set,
@@ -1307,23 +1245,18 @@ construction remaining `== 0.0`, the post-capture grace counter `== 0`, and
 carrier null or the carrier's status bit 30 (*cargo-selectable*) set —
 byte-for-byte the predicate the trigger system shares ([08 R-TRIG-01 §3];
 that section's account of the grace counter and of bit 5 applies here).
-*Cross-doc:* [R-CAM-01 §2]'s "whose transporter reference is null" names
-the grace-counter test wrongly — the word tested is the counter, not a
-reference — and cites `§5` where `§3` holds the predicate. The selected
-unit's on-screen mark is the **footprint quad** of [03 R-WATER-01 §1]
+The selected unit's on-screen mark is the **footprint quad** of
+[03 R-WATER-01 §1]
 (root-piece bounds on the `y = min` plane, projected, four lines in
 logical entry 10, always on): document 03 owns its drawing; nothing in
 the widget or footer code draws a selection count ([R-HUD-03 §12]).
 
 
-### Closed — the eligibility float is the remaining-build fraction, and no order state feeds it [R-WGT-01 §10] (2026-09-01)
+### The eligibility float is the remaining-build fraction, and no order state feeds it [R-WGT-01 §10]
 
-RWU-19-14 asked what the "per-unit order-guard float" that §8's
-Supported-inference block and §9's Established block compared with `0.0` is,
-who writes it, and whether an idle unit's standing order keeps it nonzero.
-There is no order-guard float. §9 above and [08 R-TRIG-01 §3] already had the
-field right; this section records the census that settles it and corrects the
-three places that did not.
+The single-precision unit-record word that the eligibility sites of §8 and
+§9 compare with `0.0` is not an order-guard float, and no standing order
+keeps it nonzero. This section records the census that identifies it.
 
 **Established — identity.** The single-precision unit-record word every
 eligibility site compares with literal `0.0` is the unit's **remaining-build
@@ -1346,9 +1279,8 @@ whole-record copies carry it unchanged.
 2. *The shared construction step* [05 R-WORK-01 §1]: the clamped `0..1` new
    fraction — on the forward arm only after the two-resource admission
    succeeds, on the reverse (deconstruction/decay) arm unconditionally. The
-   step returns without writing when the fraction is already `0.0`. This is
-   the "clamped `0..1` ratio" the retracted text attributed to order
-   processing: it is a build-work quantum divided by `buildtime`, not an
+   step returns without writing when the fraction is already `0.0`. The
+   fraction is a build-work quantum divided by `buildtime`, not an
    order-state ratio.
 3. *Construction completion* [04 §3.8][05 R-PROD-01 §2]: zero, together with
    the product's presentation-dirty bit; the step invokes it synchronously
@@ -1360,15 +1292,15 @@ whole-record copies carry it unchanged.
 No routine of the order subsystem stores to the word: not the order-record
 constructor, not the primary or secondary pump, not the handler
 return-code epilogue, not cancel-all, not the single-record expiry helper,
-and not the idle-queue refill of [04 §3.3]. "Zeroed at order completion" was
-true only of the build order's completion on its *product*, which is item 3.
+and not the idle-queue refill of [04 §3.3]. The only order-related zeroing is
+the build order's completion on its *product*, item 3.
 
 **Established — readers beyond the two gates.** Every other load compares the
 same word with `0.0` in one of two senses. *Finished* (`== 0.0`): point-click
 selection and every bulk-selection walk — select-all, category select,
 select-on-screen, control-group recall, and the next-eligible-unit loops of
-[R-CAM-01 §2]; the build-menu opener, which opens no menu on a nanoframe
-[R-17-B]; `SelfRepair` and `RepairUnitNoMove`'s admit test [04 R-ORD-01 §5];
+[R-CAM-01 §2]; the build-menu opener, which opens no menu on a nanoframe;
+`SelfRepair` and `RepairUnitNoMove`'s admit test [04 R-ORD-01 §5];
 the damage-intake reaction, which only a finished unit runs [06 R-WPN-04 §2];
 the per-player round-robin acquisition scan and the target-registry rebuild
 [06 §3.1–§3.2]; the targeting-upgrade registry rebuild [04 R-SPEC-01 §8]; the
@@ -1387,8 +1319,8 @@ fraction is exactly `0.0`, otherwise `1 − trunc(...)` per [04 R-COB-03 §2].
 **Established — the idle queue is irrelevant to the predicate, and what an
 idle unit's queue holds.** Because nothing in the order subsystem touches the
 word, a finished unit is eligible whatever its queue contains. What it does
-contain is authored data: the refill of [04 §3.3, "Closed — the idle-queue
-refill"] parks a `defaultmissiontype` record on an empty queue. A census over
+contain is authored data: the idle-queue refill of [04 §3.3] parks a
+`defaultmissiontype` record on an empty queue. A census over
 the 278 unit definitions of the reference install gives `Standby` 122,
 `VTOL_Standby` 30, `Standby_Mine` 12, `Guard_NoMove` 26, and no key on 88 —
 every one of the 88 a structure (factories, extractors, generators, storage,
@@ -1424,17 +1356,14 @@ listed, short-circuiting.
 The "finished" clause of the build's inspect predicate — the remaining
 fraction is zero — is therefore the entire "empty current-task" gate, and a
 build carrying a separate order-derived guard word has one clause too many.
-Nothing here is a Supported inference; every claim is the store and load
-census plus the authored key census, and the trail is in the decompile
-workspace's notes for this unit.
+Every claim here is Established: the store and load census plus the
+authored key census.
 
 
-### Closed — the kind byte and the parser's per-kind key table [R-WGT-01 §11] (2026-09-02)
+### The kind byte and the parser's per-kind key table [R-WGT-01 §11]
 
-**Scope.** RWU-19-31, static trace of the panel parser (the `[COMMON]`
-reader, the per-kind reader it dispatches to, and the kind-0 header reader).
-Everything here is **Established**; the raw trail is in the decompile
-workspace's notes for this unit.
+**Established** (static trace of the panel parser: the `[COMMON]` reader,
+the per-kind reader it dispatches to, and the kind-0 header reader).
 
 **The kind byte.** `id` is read as an integer and stored as **one byte** —
 the low eight bits — so the byte the builder and the service pass dispatch
@@ -1461,7 +1390,7 @@ minus one, as [02 R-MALF-01 §5] states. Nothing in the parser rejects an
 unknown kind; the record keeps its `[COMMON]` fields and the builder (§12)
 decides whether any build work follows.
 
-### Closed — the window builder's kind switch, exactly [R-WGT-01 §12] (2026-09-02)
+### The window builder's kind switch, exactly [R-WGT-01 §12]
 
 **Established — the table.** The builder (the routine that resolves art,
 synthesises the slider arrows and paints the tree — the "control-kind
@@ -1485,19 +1414,11 @@ kind 11 shares the panel arm with kind 0:
 | 12 | picture: `colorf` and the frame pointer zeroed, then frame 0 of the entry named by the gadget's name, own GAF first, then the common GAF |
 | 13 | score bar: the next-due stamp ← scaled timer + the gadget's `interval` ([R-HUD-03 §11]) |
 
-**Correction to §4 "Control-kind mapping is closed".** That paragraph
-counted "twelve handled cases" and named "a text case, an unnamed zeroing
-case, two embedded-file cases, and three further single-purpose cases". The
-switch has eleven keys over ten arms as tabled above. Mapping the old
-labels: the "text case" is the label arm (5); the "two embedded-file cases"
-are 7 and 8; the "three single-purpose cases" are 11 (an alias of the panel
-arm), 12 and 13; and **no arm only zeroes** — the label and picture arms
-zero `colorf` (and the picture arm its frame pointer) before their own work,
-which is the nearest thing to a "zeroing case". The same paragraph's "text
-input (name capped at 127 bytes)" is the `maxchars` cap; the name field is
-16 bytes for every kind. `[fmt gui]` carries the file-side consequences.
+No arm only zeroes — the label and picture arms zero `colorf` (and the
+picture arm its frame pointer) before their own work. The name field is 16
+bytes for every kind. `[fmt gui]` carries the file-side consequences.
 
-### Closed — the grey flag: one word, its writers and every test site [R-WGT-01 §13] (2026-09-02)
+### The grey flag: one word, its writers and every test site [R-WGT-01 §13]
 
 **Established.** "Greyed" is bit 0 of a per-gadget word that is **not** the
 `attribs` word — `attribs` has no greyed bit. The word is written by the
@@ -1523,7 +1444,160 @@ hovered gadget and still feeds `HELPTEXT`. A reimplementation therefore needs
 one boolean per gadget carrying `grayedout` and the helpers' writes; nothing
 derives it from `attribs`.
 
-### Closed — art-less bevels: geometry, the three colour fields, and the window fill [R-FE-02 §4] (2026-08-29)
+### The bitmap cache, window-record words, gadget appenders and small gadget contracts [R-WGT-02]
+
+#### The front-end bitmap cache [R-WGT-02 §1]
+
+**Established.** Every front-end screen and the in-battle options root
+request their backdrop by name through one cache (`FrontendX`, `options4x`,
+`dhelp`, `drestart`, `GameSettings`, … — the names in [R-FE-01]). The
+request carries the name (or null), a *clear-first* flag, an *apply
+palette* flag and a *keep-window* flag:
+
+1. With *clear-first* set, the display is cleared through the framebuffer's
+   clear and presented before anything else.
+2. A null name skips the cache: the image is null.
+3. Otherwise the cache — **ten** entries, each an image, a palette and a
+   name, most-recently-used first — is searched by exact (case-sensitive)
+   name. A hit is moved to the front (the entries above it shift down by
+   one).
+4. A miss decodes `bitmaps\<name>.pcx` with a fresh 1024-byte palette
+   buffer; a decoder failure is fatal through the modal status channel
+   ([01 R-PLAT-01 §8]) with the composed path as the message. Unless the
+   host mode word is 6 (the in-battle briefing of [R-FE-01 §4] — the one
+   request made from inside a battle is decoded but not cached), the last entry's image is freed with its palette, every entry
+   shifts down by one and the new image, palette and name take entry 0.
+5. With *keep-window* clear: when **no** window is open the image becomes the
+   global background image and the name is copied into the background-name
+   field (an empty name when the request was null); when a window is open
+   the image is handed to the **top window's background-image slot** (the
+   window record's backdrop pointer) and, if *apply palette* is set, the
+   decoded palette is installed as the display palette. The return is 1
+   when an image was resolved (or the name was null), else 0. With
+   *keep-window* set nothing is installed and the return is 0.
+
+So the ten most recent backdrops stay decoded across screen changes, a
+name is never decoded twice while it remains in the ten, and the front-end
+never evicts during a load. The `.pcx` decoder itself is [02 "PCX"] /
+[fmt pcx].
+
+#### Window-record words and their setters [R-WGT-02 §2]
+
+**Established.** The interface object owns a stack of *window records*
+(one per open `.GUI`, head = top window; each record holds the gadget
+array, the rectangle, the backdrop image and the words below). The
+screen-side helpers that every screen calls set single words:
+
+| Word | Meaning | Setters |
+|---|---|---|
+| fired-result word (interface object) | non-zero after a gadget fires; a callback that leaves it set closes the window ([R-WGT-01 §1] step 8) | *request close* sets 1; *stay open* clears to 0 — the clear is the first line of nearly every screen callback; the window open routine sets it to 1 |
+| redraw-request word (interface object) | 1 = repaint the top window this pass | *request redraw*; set by every text/stage/grey mutation of [R-FE-02 §5] and by the unfold of [R-HUD-04 §2] |
+| dirty word (window record) | 1 = the gadget painter re-lays the whole window | *mark dirty* (through the top record; a no-op with no window); the painter and every gadget mutation set it |
+| token-mode word (window record) | non-zero = the GUI pass pops keyboard tokens, zero = it peeks ([R-WGT-01 §1] step 3; with zero the text editor pops for itself) | *set token mode*; the front-end shell and the options root set 1 |
+| quickkey-enable word (interface object) | 1 = button and label quickkeys are honoured; the window open routine sets 1 | *set quickkey enable* — `LOADGAME`/`SAVELIST`/`RESTRICT2` clear it while a name is typed ([R-WGT-01 §7] gates on it after the Alt test) |
+| fired-button word (interface object, mirrored into the window record) | 1 = the fired gadget was pressed with the left button, 2 = the right button; the button, label, link and list handlers write it when they fire; a screen reads the mirror to distinguish a right-click on a row (`SKIRMISH` uses 2 for its row actions, [R-FE-01 §5]) | written by the gadget handlers only |
+| held-button bits (interface object) | the mouse sample's held-button mask of [R-WGT-01 §1] step 2 (1 left, 2 right) | the sample fetch; the *held-button test* helper masks it |
+| top-window backdrop pointer (window record) | the image the window painter blits behind the gadgets | the bitmap cache (§1) |
+
+**Established — the two mouse-message predicates.** The "last mouse
+message" word of [R-WGT-01 §1] step 2 holds the Win32 message identity.
+*Pressed* with mask 1 is true for `WM_LBUTTONDOWN` or `WM_LBUTTONDBLCLK`,
+with mask 2 for `WM_RBUTTONDOWN` or `WM_RBUTTONDBLCLK`; mask 1 is tested
+first and a mask with both bits tests only the left button. *Double-clicked*
+is the same with only the `…DBLCLK` identities. These are the press and
+double-click tests every kind handler of [R-WGT-01 §§3–8] uses.
+
+**Established — the window stack repaint.** Repainting walks the window
+records from the **bottom** of the stack to the top (recursion before
+work). A record is repainted when its dirty word is 1, or — when a clip
+rectangle is supplied — when its rectangle (`x, y, x + w − 1, y + h − 1`)
+overlaps the clip rectangle by the inclusive overlap test of
+[03 R-COMP-01 §2]; a repaint clears the dirty word and blits the record's
+backdrop image at the record's origin. Records that are neither dirty nor
+overlapped are skipped, so a top window that moves leaves the windows below
+untouched unless the clip rectangle says otherwise.
+
+**Established — top-window name test.** "Is `<name>` the top window" is a
+16-byte compare of the top record's name (false with no window). The page
+close of [R-HUD-04 §3] and the options-close path use it.
+
+**Established — the fired-gadget name test.** The callback-side "which
+gadget fired" test of [R-FE-01 §2] compares the **focused** gadget's name
+(the record at the interface object's focused index — the fired gadget
+becomes the focused gadget before the fired callback runs, [R-WGT-01 §1]
+step 8) with the wanted text by a full C string compare — not the 16-byte
+bounded compare of the lookups in [R-FE-02 §5]; false when no window is
+open or no gadget is focused. Because authored names are at most 16 bytes
+with a terminator the two compares agree on stock content.
+
+#### Gadget appenders for the dialog builders [R-WGT-02 §3]
+
+**Established.** Beside the *append record* of [R-FE-02 §5] (forces kind 1)
+there are two more appenders with the same 200-gadget refusal: *append
+text region* copies a 204-byte template into the next 347-byte record,
+forces kind **6** (the text-region gadget that `MOREBAR` pages,
+[R-HUD-03 §10]) and zeroes its text word, its two scroll words and its
+16-bit page word; *append stat bar* copies a 214-byte template and forces
+kind **13** (the score bar of [R-HUD-03 §11]). `MSGBOX`, `CDCHECK` and the
+report screen use them; the three appenders are the only way a window grows
+after the `.GUI` parse.
+
+#### Small gadget contracts [R-WGT-02 §4]
+
+**Established — set text by index, refined.** The *set text* of
+[R-FE-02 §5] has two additions. For a kind-1 button whose `stages` byte is
+non-zero, after the 128-byte copy and the label-fit the text is split at
+every `|` into NUL-separated pieces (the multi-line / per-stage labels of
+§4), each piece is re-localised and the pieces are re-packed
+back-to-back into the 128-byte field — `stages` pieces are read. For a kind
+3 input a non-zero fourth argument replaces the input's `maxchars` word.
+Kind 5 labels get the copy and the label-fit only. Every kind sets the
+redraw-request word.
+
+**Established — the text-input caret and the length clamp.** The interface
+object's caret word is the insertion index the editor of §4 uses. The
+*re-lay* of [R-WGT-01 §6] is: with the *force-empty* flag clear and
+`len(text) ≤ maxchars` the caret becomes `len(text)`; otherwise the text is
+emptied and the caret is 0; the gadget is then re-laid.
+
+**Established — the edit-token loop, refined.** The kind-3 editor of §4
+runs as a loop: with the window's token-mode word zero it pops its first
+token itself, otherwise it takes the token the pass hands it; after each
+token it pops the next until the ring is empty ([01 R-PLAT-01 §6]) or an
+Escape token (`0x1B`) stops the loop; it returns the last token seen, and
+re-lays the gadget once if any token was processed. Per token: Backspace
+(`0x08`) with the caret above 0 moves the caret back one and closes the
+gap; Delete (`0xEF`) with a non-empty text and the caret below the length
+closes the gap at the caret; Home (`0xF0`) and End (`0xF1`) move the caret
+to 0 / the length; Left (`0xF4`) and Right (`0xF6`) move it by one within
+`0..len`; the paste tokens (`0xBF`, `0xEE`) are §2's; a printable token
+(`0x20..0x7F`) is inserted at the caret — shifting the tail right — when
+the current length is not already `maxchars`, the attribute-`0x02` filter
+admits it (alphanumeric, or space, underscore, apostrophe), and the rendered
+width rule of §4 holds, and the caret advances. Other tokens are ignored.
+
+**Established — font by `fontnumber`, gadget parse, basename.** *Select
+font by gadget*: the n-th kind-7 record of the window (n = the gadget's
+`fontnumber`, counting from 0 in index order) selects its font and returns
+that record's index; with no such record the default (common) font is
+selected and −1 returned ([R-FE-02 §5] "focus a text input"). *Gadget
+parse of the common keys*: `status` → the 16-bit status word; `text` →
+128 bytes, then re-localised in place; `quickkey` → the byte is the first
+character when it is a letter, else the decimal value of the text
+(`83` → `S`); `grayedout` → bit 0 of the flag word (the other bits are
+preserved); `stages` → the stages byte — the grammar is [fmt gui]. *GUI
+basename*: a loader path is reduced in place to the text after its last
+backslash before it is used as the window name (the `.GUI` opener of §4).
+
+#### The keyboard-ring flush [R-WGT-02 §5]
+
+**Established.** The flush called by the front-end controller at each screen
+change, by the window open path and by the report and end-mission screens
+zeroes both indices of the 30-slot key-token ring of §2 ([01 R-PLAT-01
+§6]): pending tokens are discarded and the ring is empty. Nothing else is
+touched — the button ring and the held-key table keep their state.
+
+### Art-less bevels: geometry, the three colour fields, and the window fill [R-FE-02 §4]
 
 **Established fact — geometry.** Every art-less control (a button whose name
 resolves to no GAF entry, the score bar, the slider track and knob without
@@ -1570,27 +1644,18 @@ greyed), `F` = field `20` (field `19` when greyed):
 So an un-pressed art-less button reads: interior field 20, top/left field
 17, bottom/right field 0; pressing swaps the two edge colours.
 
-**Correction** to the tile-fill sentence of "Retail frontend control
-activation and raster rules" (§5), which reads "it tiles the window's art
-entry — the stock fallback entry is `BackTile` … — across the window
-rectangle, then draws a two-pixel raised bevel … The first four edge runs use
-color `17` and the next use color `0`; where color `20` is used is
-`TODO(T23)`". The two halves are exclusive, not sequential: when the window
-resolved a tile entry (`BackTile` in the window's own GAF or the common one)
-the fill tiles it across the rectangle and draws **no** bevel; only when no
-tile entry exists is the rectangle filled with field `20` and bevelled — runs
-1–4 (top/left) in field `17`, runs 5–8 (bottom/right) in field `0`. Field
-`20` is therefore the interior of every art-less button and of the score bar,
-and the art-less window/panel fill; it is never an edge colour. (A listbox
-background is the same routine with the `Listbox` entry and the rectangle
-inset by 3, [R-WGT-01 §4].) The `TODO(T23)` is closed. Whether the stock
-`commongui.gaf` authors a `BackTile` entry — which decides whether any stock
-window ever shows the bevel — is an asset question, not an engine one.
+**Established fact — the window fill.** The tile and bevel forms are
+exclusive, not sequential: when the window resolved a tile entry (`BackTile`
+in the window's own GAF or the common one) the fill tiles it across the
+rectangle and draws **no** bevel; only when no tile entry exists is the
+rectangle filled with field `20` and bevelled — runs 1–4 (top/left) in
+field `17`, runs 5–8 (bottom/right) in field `0`. Field `20` is therefore
+the interior of every art-less button and of the score bar, and the art-less
+window/panel fill; it is never an edge colour. (A listbox background is the
+same routine with the `Listbox` entry and the rectangle inset by 3,
+[R-WGT-01 §4].)
 
-**Closed (2026-09-04, WU-19-230) — how the tile fill tiles.** Static trace of
-the fill routine and an asset census; trail
-`/tmp/ta-decompile/notes/wu-19-230.md`. "Tiles it across the rectangle" above
-under-describes the routine. With the resolved entry `E`, the panel's
+**Established fact — how the tile fill tiles.** With the resolved entry `E`, the panel's
 rectangle `(x1, y1)–(x2, y2)` inclusive (`W = x2 − x1 + 1`, `H = y2 − y1 +
 1`), and the origin `(0, 0)` of the window's own surface for the panel itself
 (gadget 0) or `(x1, y1)` for any other gadget:
@@ -1622,7 +1687,7 @@ nowhere — `EXITMENU.GUI` (empty `panel=`), `YESORNO.GUI` (unusable bytes),
 `MSGBOX.GUI` and `ARMOPT.GUI` all fill from `BackTile` as a nine-slice plate:
 corner and edge frames along the border, the centre frame across the
 interior. A retail capture of the in-battle exit and confirmation windows
-(2026-08-09) shows exactly that plate. **Established.**
+shows exactly that plate.
 
 ## 5. Front-end screen and state families
 
@@ -1725,12 +1790,6 @@ life/timer ranges as above, and must restore the background byte before each
 move. Spawning over dark `MAINMENU` art (low nibble `<= 0xC`) must remain
 suppressed — retail never sparkles over the grey menu bar.
 
-This section absorbs the earlier standalone menu-spark note in full; that note
-added no behavior beyond the above — its buffer size,
-pitch-640 offset, `0xAA` sparkle index, CRT-only `rand()` stream, spawn band
-and low-nibble threshold, life/timer ranges, and parity-driven orthogonal
-steps are already stated here.
-
 #### Single-player and campaign
 
 The single-player family includes campaign selection, arbitrary mission
@@ -1774,14 +1833,14 @@ wizard:
 |---|---|---|---|
 | Main | `mainmenu.gui` | `frontendx.pcx`, `mainmenu.gaf`, `commongui.gaf` | `SINGLE` opens `single.gui`; `EXIT` enters the frontend close state |
 | Single-player chooser | `single.gui` | `singlebg.pcx`, `single.gaf`, `commongui.gaf` | `NewCamp` opens `newgame.gui`; `Skirmish` opens `skirmish.gui` directly |
-| Campaign/mission | `newgame.gui` | `playanygame4.pcx` (see correction), `newgame.gaf` | Campaign and mission list gadgets are populated from discovered `camps` data; `Side0/Side1`, `Difficulty`, `Start`, and `PrevMenu` retain their authored callbacks. **Correction (2026-08-29, [R-FE-01 §4]):** this row said `newcampaign4.pcx` or `newcampaign4x.pcx`; both `NewCamp` and `AnyMsn` open the play-any layout whose background is `playanygame4.pcx`, and the two `newcampaign4` files belong to the unreachable campaign layout |
+| Campaign/mission | `newgame.gui` | `playanygame4.pcx`, `newgame.gaf` | Campaign and mission list gadgets are populated from discovered `camps` data; `Side0/Side1`, `Difficulty`, `Start`, and `PrevMenu` retain their authored callbacks. Both `NewCamp` and `AnyMsn` open the play-any layout whose background is `playanygame4.pcx`; the two `newcampaign4` files belong to the unreachable campaign layout ([R-FE-01 §4]) |
 | Map selection | `selmap.gui` | `dselectmap2.pcx`, `commongui.gaf`, plus the TNT minimap surface | The map-selection callback opens the window through the window-open routine with flags `0x980`, then hands `DSELECTMAP2` to the bitmap cache, which installs it on the open window through the bitmap-install path. The authored `494×420` record at origin `(84,12)` is a panel window composed over the screen it was reached from; `MAPNAMES`, `SLIDER`, `MAPPIC`, `DESCRIPTION`, `SIZE`, `LOAD`, and `PREVMENU` remain window-local records placed at that origin |
 | Skirmish setup | `skirmish.gui` | `skirmsetup4x.pcx`, `skirmish.gaf`, `commongui.gaf`, `textures/logos.gaf` | `Player%d`, `Side%d`, `Color%d`, `Allies%d`, `Metal%d`, and `Energy%d` are appended by the runtime builder; their row geometry is `step=200/n`, `y=(180-(n-1)*step)/2+79` |
 
 `selectgame2x.pcx` is not part of this path: the multiplayer `SELGAME.GUI`
-lobby path loads it (verified: the selmap callback fetches `DSELECTMAP2` from
-the bitmap cache, and the SELGAME opener fetches `selectgame2x`), and that lobby is out of scope for the single-player
-slice. `dselectmap2.pcx` is a `640×480` file whose panel art occupies only the
+lobby path loads it (the selmap callback fetches `DSELECTMAP2` from the
+bitmap cache; the SELGAME opener fetches `selectgame2x`), and that lobby is
+out of scope for the single-player slice. `dselectmap2.pcx` is a `640×480` file whose panel art occupies only the
 top-left `494×420`, which is exactly the `selmap.gui` window rectangle: the
 window fill copies the bitmap into the window's own surface at `(0,0)`, so the
 art lands at the window origin and the rest of the file is outside the window
@@ -1793,30 +1852,27 @@ The single-player screen openers use one common `.GUI` window-open path and do
 not test the returned window before installing callbacks or reading its gadget
 list. A missing GUI file therefore does not select a second authored GUI, and
 a parser rejection does not enter a caller-level recovery branch. **Established
-— the absence of a caller check.** [07 §4] (Refined in [R-FE-01 §12]: the
-`MSGBOX`, `YESORNO` and HUD build-page openers do check the result; every
-front-end screen opener does not.)
+— the absence of a caller check.** The `MSGBOX`, `YESORNO` and HUD build-page
+openers do check the result; every front-end screen opener does not
+([R-FE-01 §12]).
 
-**Closed (2026-09-04, WU-19-171) — the process-level outcome, which stood here
-as Unknown.** The window opener does not test its own result either. Its first
-act after building the search path is to ask the content layer for the file;
-when that reports nothing, it jumps over the **entire** allocate-and-parse
-block — the only block that assigns its window pointer — and lands on the
-shared tail. That pointer was zeroed in the prologue and is still zero, and the
-tail copies the window's name through it at offset 2. The store is to linear
-address 2: the process takes an access violation. There is no diagnostic, no
-fallback layout, and in particular **no empty screen** — the earlier caution
-against reading the missing caller check as "the screen proceeds with an empty
-layout" was right, and the reason is that the screen does not proceed at all.
-The malformed case differs in shape: the parse is attempted, and when it is
-rejected the opener frees the record it has just allocated and then runs the
-same tail through the freed block — a use-after-free rather than a null store,
-so its symptom is not fixed. **Established for the missing file; Established
-that no recovery branch exists for either.** A reimplementation cannot clone
-this; report the failure and refuse the screen instead.
+**Established — the process-level outcome.** The window opener does not test
+its own result either. Its first act after building the search path is to ask
+the content layer for the file; when that reports nothing, it jumps over the
+**entire** allocate-and-parse block — the only block that assigns its window
+pointer — and lands on the shared tail, which copies the window's name
+through the still-null pointer: the process takes an access violation. There
+is no diagnostic, no fallback layout, and no empty screen — the screen does
+not proceed at all. The malformed case differs in shape: the parse is
+attempted, and when it is rejected the opener frees the record it has just
+allocated and then runs the same tail through the freed block — a
+use-after-free rather than a null store, so its symptom is not fixed.
+**Established for the missing file; Established that no recovery branch
+exists for either.** A reimplementation cannot clone this; report the failure
+and refuse the screen instead.
 
 The single-player PCX backgrounds in this table — `frontendx`, `singlebg`,
-the `newcampaign4`/`newcampaign4x` choice, `dselectmap2`, and `skirmsetup4x` —
+`playanygame4`, `dselectmap2`, and `skirmsetup4x` —
 go through the shared bitmap loader. A missing file or a decode failure enters
 the common fatal content diagnostic and terminates the process; no `BackTile`,
 other screen, or caller-level error transition is selected. The same contract
@@ -1873,9 +1929,9 @@ then calls the alliance-icon refresher, which rewrites the frame index of
 frame index. For each row the refresher counts the configured rows, meaning
 controller not `Open`, whose alliance number equals that row's, then selects the `TEAMICONSx`
 frame: a count of zero gives frame `10`, exactly one gives `group*2 + 1`, and
-two or more give `group*2` (re-verified: the refresher counts the matching
-configured rows and writes the frame index into the row's surface field with
-exactly that three-way branch). The entry's twelve frames are six symbols in that
+two or more give `group*2` (the refresher counts the matching configured
+rows and writes the frame index into the row's surface field with exactly
+that three-way branch). The entry's twelve frames are six symbols in that
 order, the odd frame of each pair split in half and the even frame whole, so a
 row alone in its alliance shows the broken symbol and a row sharing it shows
 the joined one. Alliance `5`, the unassigned sentinel of
@@ -1913,8 +1969,8 @@ null GAF-font slot falls back to the active FNT. At GAF-font load, the
 font-loader routine finds the capital-I frame — the hattfont frames are
 indexed by character, so this is the frame at the ASCII position of `I` — and
 subtracts its height from
-every frame's runtime `YOffset` (re-verified: the loader reads the `I` frame's
-height and subtracts it from every frame's stored YOffset in one pass). The
+every frame's runtime `YOffset` (the loader reads the `I` frame's height and
+subtracts it from every frame's stored YOffset in one pass). The
 glyph blitter then places a frame at
 `penX-XOffset, penY-normalizedYOffset`; the text loop passes the pen directly
 and does not pre-add either offset. Consequently, stock `hattfont12` glyphs
@@ -1922,7 +1978,7 @@ whose raw `YOffset` is 11 rasterize one pixel below their pen because the
 capital-I height is 12. The button text-pen arithmetic
 `y + trunc((height − 1 − metric) / 2) + (stages ≠ 0)`, with the metric the
 capital-I height plus two, is verified at the button painter's pen site
-([03 R-FONT-01 §6]; closed 2026-08-29, previously `TODO(question)`). The
+([03 R-FONT-01 §6]). The
 startup context also selects `fonts/COMIX.FNT`
 (the active slot of the font registry, chosen by the font-selection routine)
 for the fallback path; `SMLFONT.FNT` is a separate preloaded font slot. [07 §4]
@@ -2012,15 +2068,15 @@ horizontal frames. The staged common entries used by this menu are
   frontend screens cover the display only because they are authored
   `(0,0,640,480)`. If the window has a background bitmap it is copied into that
   surface at `(0,0)` — the window origin on screen — and clipped to the
-  rectangle. Without one the fill is the tile-fill routine: it tiles the
-  window's art entry — the stock fallback entry is `BackTile`, whose frame
-  offsets the initializer zeroes — across the window rectangle, then draws a
-  two-pixel raised bevel through the bevel routine `(surface, rect, c1, c2,
-  c3)`. The three colors are the GUI context's semantic color fields `0`,
-  `17` and `20`, resolved through the nearest-color map the bootstrap builds.
-  The first four edge runs use color `17` and the next use color `0`; where
-  color `20` is used was `TODO(T23)` — closed in [R-FE-02 §4]: it is the interior
-  fill of the no-tile branch only, and the bevel is drawn only in that branch. Flag `0x80`, which `selmap.gui` passes,
+  rectangle. Without one the fill is the tile-fill routine: when the window
+  resolved a tile entry — the stock fallback entry is `BackTile`, whose frame
+  offsets the initializer zeroes — it is tiled across the window rectangle as
+  a nine-slice and no bevel is drawn; only with no tile entry is the
+  rectangle filled with the GUI context's semantic color field `20` and given
+  a two-pixel bevel through the bevel routine `(surface, rect, c1, c2, c3)`,
+  the first four edge runs in field `17` and the next four in field `0`, all
+  three resolved through the nearest-color map the bootstrap builds
+  ([R-FE-02 §4]). Flag `0x80`, which `selmap.gui` passes,
   suppresses that fill for the open pass, so a window that loads its bitmap
   after opening shows the saved screen until its first repaint.
   Child gadget records are shifted by the window origin at open time, unless
@@ -2065,17 +2121,12 @@ horizontal frames. The staged common entries used by this menu are
 
 Campaign and map controls also retain data-driven display behavior. The
 campaign list is rebuilt from the discovered campaign documents and filters
-the `HEADER campaignside` value to the selected side, accepting `ALL`.
-**Correction (2026-08-29, [R-FE-01 §4]).** This paragraph continued: "For
-New Campaign, when the installed campaign set has two or fewer entries, the
-campaign and mission list controls are hidden and the side-specific
-`Arm Campaign` or `Core Campaign` file is selected directly. Play Any uses
-the same `newgame.gui` but exposes the campaign and mission lists and applies
-the retail compressed list rectangles at runtime." That describes the
-opener's two layouts correctly but attributes the first to `NewCamp`: in the
-retail executable `NewCamp` and `AnyMsn` both open the play-any layout (both
-lists shown, compressed rectangles, `playanygame4` background), and the
-campaign-only layout is never reached.
+the `HEADER campaignside` value to the selected side, accepting `ALL`. Both
+`NewCamp` and `AnyMsn` open the play-any layout of `newgame.gui` — both lists
+shown, the compressed list rectangles applied at runtime, background
+`playanygame4`; the campaign-only layout, which hides the lists and selects
+the side's `Arm Campaign` / `Core Campaign` file directly, is never reached
+([R-FE-01 §4]).
 
 The `MAPNAMES` items are the OTA file stems the map-census routine collects
 from the `Maps\*.ota` census, kept with the case the archive records; the
@@ -2162,7 +2213,7 @@ The repainted composition, in the order it is drawn:
   `PALETTE.LHT` and fades back over
   fifteen repaints — three seconds at the screen's own cadence.
 
-**Established (2026-09-04, WU-19-171) — what each of the six loaders writes.**
+**Established — what each of the six loaders writes.**
 Each bar is its own loader's own division; there is no shared progress helper,
 and two of the six misbehave in ways a faithful screen would show.
 
@@ -2191,8 +2242,7 @@ commanders, and finishes by opening `MAIN2.GUI`, the in-game HUD — the
 `<side>main2.gui` window whose name is stored as the battle root's command-
 window name (see §6). The transition that starts the thread also fixes the
 battle viewport rectangle to `(0, 32, W-1, H-33)` and initializes the
-player-slot ready table; the map line, the mission-type-1 gate, the row colors,
-and the thread entry are all verified above.
+player-slot ready table.
 
 #### Multiplayer
 
@@ -2254,14 +2304,11 @@ with ownership/routing bit value `4`; the message dispatcher selects handlers
 by masking its command-table entries against that route word. If the first
 non-space byte of the committed text is `+`, the remainder enters the command
 path instead of chat display, routed with bits `1`, or `7` when the chat-
-alias flag byte has bit `1` set, additionally OR'd with `2` when a referenced
-dword is nonzero. The `+` command vocabulary is closed: the message-builder's
-dispatch table registers exactly three commands — `plan`, `weight`, and
-`limit` — each with route mask 8 that no chat route (1/7/2) matches, and the
-default-handler slot is never installed, so the dispatch never consumes a chat
-`+` message. **Corrected in [R-CAM-01 §6]:** that census covered only the AI
-registrar; the battle entry orchestrator registers 83 more commands and the
-default handler, and the chat routes do match them. The chat commit callback itself handles the mini-language inline:
+alias flag byte has bit `1` set, additionally OR'd with `2` when the
+entry-time cheat word is nonzero. The `+` command vocabulary — 83 commands
+over the mask-1, mask-2 and mask-4 tables plus the default handler — and the
+dispatch mechanics are [R-CAM-01 §6]. After the command dispatch the chat
+commit callback handles the mini-language inline on the same text:
 `+<digit>` (occupied slot) sets the per-player custom-recipient byte for that
 digit, `+a`/`+e` (case-insensitive) set the recipient-mode byte to allies or
 enemies with the matching label, and any other `+...` sends the whole text as
@@ -2274,7 +2321,7 @@ terminator byte) plus the `SENDTO` toggle bit on every exit path. While
 `TALK.GUI` is present, held-arrow camera movement is suppressed; pointer-edge
 scrolling is never suppressed by chat.
 
-### Closed — the front-end controller: phases, substates and the pump [R-FE-01 §1] (2026-08-29)
+### The front-end controller: phases, substates and the pump [R-FE-01 §1]
 
 **Established fact.** The shell controller is one function called once per
 front-end frame by the host-mode-2 pump. At the top of every pass, if the
@@ -2321,7 +2368,7 @@ re-allocated with a type word — 1 campaign, 2 skirmish, 3 multiplayer,
 in-battle menu branch on that word. The cursor is switched to the busy
 shape while a screen opens and back to the arrow when a callback leaves.
 
-### Closed — the single-player transition table [R-FE-01 §2] (2026-08-29)
+### The single-player transition table [R-FE-01 §2]
 
 **Established fact.** Gadget names are authored; the callback association is
 by name through the forward scan of §5 (first match wins). "MSGBOX" means
@@ -2339,7 +2386,7 @@ table before the transition.
 | `SINGLE` | `NewCamp` (N) | disc check 0 else MSGBOX (Disc 2); mount pass; cue `BigButton`; requested 10 | `NEWGAME` (play-any layout) |
 | `SINGLE` | `AnyMsn` | disc check 0; mount pass; cue `bigButton`; requested 0xe | `NEWGAME` (play-any layout) |
 | `SINGLE` | `Skirmish` (S) | disc check 1 else MSGBOX (Disc 1); mount pass; cue `skirmish`; requested 0xb | `SKIRMISH` |
-| `SINGLE` | `LoadGame` (L) | cue `BigButton` (named 2026-09-04, WU-19-171 — it shares `NewCamp`'s alias); opens the load dialog over `SINGLE` | `LOADGAME` (load mode) |
+| `SINGLE` | `LoadGame` (L) | cue `BigButton` (it shares `NewCamp`'s alias); opens the load dialog over `SINGLE` | `LOADGAME` (load mode) |
 | `SINGLE` | `Options` (O) | cue `options`; opens the options root as a child window over `SINGLE` (phase 7 unchanged; `PREV`/`CANCEL` pop it) | `STARTOPT` |
 | `SINGLE` | `PrevMenu` (P) | cue `Previous`; requested 3 | `MAINMENU` |
 | `NEWGAME` | `Start` (S), or a click in `Missions`, or in `Campaign` (campaign layout) | cue `bigButton`; disc check 0 else MSGBOX; mount pass; select the campaign (§4); load the mission; failure leaves the screen; success: side records fixed (player 0 → 0, player 1 → 1), preferences saved, requested 0xf (campaign layout) / 0x10 (play-any) | `MSNBRIEF` |
@@ -2383,7 +2430,7 @@ null (a missing `MSGBOX.GUI`/`YESORNO.GUI` silently shows nothing and the
 caller continues). The backgrounds named below go through the fatal bitmap
 loader of that section. **Established.**
 
-### Closed — startup, the movies and `MAINMENU` [R-FE-01 §3] (2026-08-29)
+### Startup, the movies and `MAINMENU` [R-FE-01 §3]
 
 **Established fact.** Movies are files `Data\<n>.zrb`; a missing file is
 skipped silently (the player is entered only when the file exists). `1.zrb`
@@ -2413,17 +2460,16 @@ rather than a disc; `INTRO` and `Credits` require full-screen and either
 disc. The `EXIT` substate quits through the post-shutdown path directly; no
 confirmation is asked.
 
-### Closed — `SINGLE`, `NEWGAME` and the briefing screens [R-FE-01 §4] (2026-08-29)
+### `SINGLE`, `NEWGAME` and the briefing screens [R-FE-01 §4]
 
 **Established fact — `SINGLE.GUI`.** Opened with no flags over a cleared
 display, background `singlebg`; the mission record is re-allocated as type 1
 on entry. The registry `side` value (0 Arm, 1 Core) is written into the
 local player's side record and its inverse into the next slot. `AnyMsn` is
 authored inactive and is shown only when the `AllMissions` preference bit
-is set. On a Spanish install the `Skirmish` gadget's text-status byte is
-set to `0x73` (a layout tweak; its consumer is the button text renderer).
-**Corrected in [R-FE-02 §5]:** the byte written is the button's quickkey, so the
-Spanish label keeps `s` as its hotkey.
+is set. On a Spanish install the `Skirmish` button's quickkey byte is set
+to `s` (`0x73`) through *set quickkey by name* ([R-FE-02 §5]), so the
+Spanish label keeps the English hotkey.
 
 **Established fact — `NEWGAME.GUI` has two layouts, and the shell reaches
 only one.** The opener takes a flag: 0 selects the *campaign* layout
@@ -2433,19 +2479,12 @@ only one.** The opener takes a flag: 0 selects the *campaign* layout
 layout (background `playanygame4`; `Campaign` and `CampaignKnob` moved to
 y = 308 with height 48, `Missions` height 62; both lists shown and filled).
 Both `NewCamp` and `AnyMsn` reach the opener through controller substates
-whose call sites pass 1 — verified against the raw call sites, not only the
-decompilation. The only call with 0 is the `PrevMenu` return edge of phase
-0xb, and phase 0xb is entered only by a `Start` issued from the flag-0
-layout; the campaign layout is therefore unreachable in this executable and
-`newcampaign4`/`newcampaign4x` are never loaded. **Correction** to the
-"Retail closure for the single-player menu slice" table and to the
-paragraph "For New Campaign, when the installed campaign set has two or
-fewer entries…" above: both described the flag-0 layout as the `NewCamp`
-path. What differs between `NewCamp` and `AnyMsn` is only the sound cue and
-the substate number; the screen, background and lists are identical. The
-same attribution ("new campaign (0) from `NewCamp`") appears in
-[08 R-CAMP-01 §3], whose description of the two layouts is otherwise exact;
-that sentence needs the same correction.
+whose call sites pass 1. The only call with 0 is the `PrevMenu` return edge
+of phase 0xb, and phase 0xb is entered only by a `Start` issued from the
+flag-0 layout; the campaign layout is therefore unreachable in this
+executable and `newcampaign4`/`newcampaign4x` are never loaded. What differs
+between `NewCamp` and `AnyMsn` is only the sound cue and the substate
+number; the screen, background and lists are identical.
 
 The campaign list is rebuilt for the current side (the campaign-side filter
 of [08 R-CAMP-01 §2]); selecting a `Side0`/`Arm` or `Side1`/`Core` button
@@ -2468,7 +2507,7 @@ mode 6). `PrevMenu` returns to the screen the briefing was reached from
 in a campaign) is the same text and pager over background `igmbrief`, with
 `OK` closing it.
 
-### Closed — `SKIRMISH` start preflight and `SELMAP` [R-FE-01 §5] (2026-08-29)
+### `SKIRMISH` start preflight and `SELMAP` [R-FE-01 §5]
 
 **Established fact.** The row controller, alliance icons, resource steps and
 colour rules are closed in "Retail closure for the single-player menu
@@ -2498,7 +2537,7 @@ an empty census raises `There are no skirmish maps to choose from` and does
 not open. The map census reads `Maps\*.ota`, keeps maps that pass the
 multiplayer-capable filter, and switches the cursor to busy while scanning.
 
-### Closed — the options family and the slider arithmetic [R-FE-01 §6] (2026-08-29)
+### The options family and the slider arithmetic [R-FE-01 §6]
 
 **Established fact — window.** The options root is `STARTOPT.GUI`
 (front end, background `options4x`) or `PREFS.GUI` (in battle: the
@@ -2529,27 +2568,22 @@ ascending by width then height, modes below 640×480 dropped) and writes
 the stand-alone form of the same slider; its opener branch has no live
 caller (every call site passes the merged-page flag), so it is never shown.
 
-**Established (2026-09-04, WU-19-171) — the page background, the page names,
-and where the merge puts a page's gadgets.** This supersedes the asset-census
-inference that stood here. That text was right about *what* is drawn —
-`OptSound4x`, `Optmusic4x`, `OptInterface4x`, `OptVisual4x`, one full-screen
-plate set per page, the in-battle `Igopt…x` family beside them, and
-`OptVisual4x`'s middle column lining up with `VISUALS.GUI`'s authored
-rectangles — and left two questions open. Both are now closed, and one of
-them was framed around the wrong file.
+**Established — the page background, the page names, and where the merge
+puts a page's gadgets.** Each page draws one full-screen plate —
+`OptSound4x`, `Optmusic4x`, `OptInterface4x`, `OptVisual4x`, with the
+in-battle `Igopt…x` family beside them; `OptVisual4x`'s middle column lines
+up with `VISUALS.GUI`'s authored rectangles.
 
 *The background.* The page opener picks it, not the window opener and not a
 repaint of the root: each of the four page routines calls the merge-flag
 window open and then, in the very next statement, hands its own bitmap to
-the shared bitmap cache. It is a separate call, so there is no "bitmap
-argument" of the opener to look for. The in-battle arm of the same four
+the shared bitmap cache. The in-battle arm of the same four
 routines opens the `…RT.GUI` variant and hands **no** bitmap at all, leaving
 the battle visible behind the page.
 
 *The page files.* The root's `SOUND` button opens `SOUNDS`, not `SOUND.GUI`.
 `SOUND.GUI` (7 gadgets, 517×268, authored at (49, 182)) is a different file
-this family never opens, so the earlier text's worked example of a non-zero
-page origin was about a file that is not a page. The four merged pages are
+this family never opens. The four merged pages are
 `SOUNDS` (authored at (0, 1)), `MUSIC` (0, 0), `SPEEDS.GUI` (0, 0) and
 `VISUALS.GUI` (0, 0); the in-battle variants are `SOUNDSRT.GUI`,
 `MUSICRT.GUI`, `SPEEDSRT.GUI`, `VISUALRT.GUI`.
@@ -2571,7 +2605,7 @@ so the front-end family always takes the origin-add arm, and `SOUNDS`'s
 (0, 1) shifts that whole page down one pixel. The in-battle arm is the one
 that reaches the `PANEL` branch, since it synthesises the gadget.
 
-**Established (2026-09-04, WU-19-171) — the options family's cue column.**
+**Established — the options family's cue column.**
 Every control the four page callbacks and the root callback recognise plays
 `Options`, and `CANCEL` alone plays `Previous`. That includes `RESTORE` and
 `UNDO`, which the transition table of [R-FE-01 §2] does not list: both arms
@@ -2583,7 +2617,7 @@ video-mode button. The sliders are the exception and are silent: a knob move
 runs the slider's own value callback, and neither the `VIDSLDR` nor the
 `GAMMA` callback plays anything.
 
-**Established (2026-09-04, WU-19-171) — `VIDSLDR`'s maximum.** It is the
+**Established — `VIDSLDR`'s maximum.** It is the
 mode table's count minus one, written into the slider record by the page
 opener out of the table it has just built — not a stored constant like
 `GAMMA`'s literal 20 beside it. The slider's change callback and a pointer
@@ -2601,7 +2635,7 @@ After the page opens every slider's value callback runs once so the labels
 match. Clamps: `GAME` value < 1 → 1; `SCREEN` value ≤ 1 → 1; `MAXLINES`
 value < 0 → 0; the others none.
 
-**Established fact — slider arithmetic** (verified in the raw float code):
+**Established fact — slider arithmetic.**
 
 * Read-out, on every knob move: `value = trunc(pos / (travel − 1) × max)`
   where `pos` is the knob position, `travel` the knob travel length the
@@ -2622,13 +2656,13 @@ value < 0 → 0; the others none.
 `SOUND`/`MUSIC` pages: gadget maps and effects are closed in
 [03 R-AUD-01 §2] and [03 R-AUD-01 §4]; nothing here re-traces them.
 
-### Closed — the in-battle menus [R-FE-01 §7] (2026-08-29)
+### The in-battle menus [R-FE-01 §7]
 
 **Established fact.** `ARMOPT.GUI` (Escape; flags `0x800`) grays `SAVEGAME`
 and `LOADGAME` in a multiplayer game, relabels `MISSION` to the translated
-`Settings` for skirmish and multiplayer (session kind 2 or 3 — the button is
-relabelled through the gadget text setter, never hidden or greyed; a retail
-skirmish capture of 2026-08-09 shows `Settings` in the `Briefing` slot),
+`Settings` for skirmish and multiplayer (session kind 2 or 3; the button is
+relabelled through the gadget text setter, never hidden or greyed — a retail
+skirmish capture shows `Settings` in the `Briefing` slot),
 sets the pause bit outside multiplayer and pauses
 audio; its close clears both and the options-open bit. Buttons: `LOADGAME`
 / `SAVEGAME` → the two `LOADGAME.GUI` modes (§8); `PREFS` → the options
@@ -2647,7 +2681,9 @@ labels selected by the session's two LOS bits), then in multiplayer
 *Starting Energy* (lobby words × 100 in multiplayer, the skirmish record
 otherwise) and *Max Units*; `EXIT` → `EXITMENU.GUI`; `OK` → close.
 
-`TABMENU.GUI` (Tab) is closed in the chat/menus note above; its `OPTIONS`
+#### Tab options menu and manual exit
+
+`TABMENU.GUI` (Tab; the in-battle menu bar of §11): its `OPTIONS`
 sets the options-open bit and opens `ARMOPT`, `SHARE` opens the transfer
 dialog [R-HUD-03 §9], `CONTROL` opens `CONTROL.GUI` (host-only player
 control: `WATCHING` and `GAMEOPEN` toggles of the lobby word, `LIVEPLYR<n>`
@@ -2673,9 +2709,9 @@ into `MISSIONNAME`/`MISSIONNAME1` and focuses `Difficulty`; `RESTART` does
 the disc check for the mission type, the mount pass, stores the
 `Difficulty` stage and raises the restart request word (its consumer, the
 restart itself, is described from the campaign side in [08 R-CAMP-01 §8];
-the reader in the battle pump is not cited here · static trace).
+the reader in the battle pump is **Unknown** · static trace).
 
-### Closed — save and load [R-FE-01 §8] (2026-08-29)
+### Save and load [R-FE-01 §8]
 
 **Established fact.** One `LOADGAME.GUI` serves both directions. *Save*
 (flags `0x880`, background `DSAVEGAME2`, from `ARMOPT`/`ENDMSN`): the pause
@@ -2712,9 +2748,9 @@ battle-start bit and enters phase 0xe — the briefing of the next mission.
 (`SAVEGAME\*.LST`) of the lobby `RESTRICT2` screen (its `Save`/`Load`
 buttons); they share the enumerator shape and the `There are no saved
 lists to choose from` refusal. Edge recorded; the restriction semantics are
-07-1b's.
+out of scope.
 
-### Closed — dialog primitives [R-FE-01 §9] (2026-08-29)
+### Dialog primitives [R-FE-01 §9]
 
 **Established fact — `MSGBOX`.** The opener takes (text, width, showOK,
 autoWidth). The text is localised, wrapped to `width`, and split at `\n`
@@ -2729,11 +2765,8 @@ continues. The call sites in this document use widths 200 (disc prompts),
 320 (map/save refusals), 480 (skirmish preflight), 500 (checksum and sound
 warnings), and the checksum text width `+ 20` for pending lobby errors.
 
-**Refinement (2026-08-31) — the labels are runtime gadgets, and what the
-constants above name.** Nothing in the paragraph above is wrong; three points
-it leaves implicit are worth stating, because reading `MSGBOX.GUI` and looking
-for the text control it describes finds none and leads straight to an
-unimplementable message box.
+**Established fact — the labels are runtime gadgets, and what the constants
+above name.**
 
 *The authored file holds no text control at all.* `MSGBOX.GUI` is two gadgets:
 the `HEADER` panel (116,82,372,272; empty `panel=`, so the `BackTile` fallback
@@ -2794,7 +2827,7 @@ ticks) and `REPORT.GUI` (score reporting through `reporter.dll`, with the
 `Unable to initialize scores reporting.` `MSGBOX` over background
 `ReportError`) are multiplayer-only; edges recorded, semantics out of scope.
 
-### Closed — the post-battle machine and `ENDMSN` [R-FE-01 §10] (2026-08-29)
+### The post-battle machine and `ENDMSN` [R-FE-01 §10]
 
 **Established fact.** Host mode 7 is the results controller: its eight
 states, the darkening fade, the glamour fade-in, the `Click to continue.`
@@ -2830,7 +2863,7 @@ set of [08 R-CAMP-01 §8] is the only thing that shows any of it. The
 was not won) — is the same test the opener and the gadget-set helper both
 evaluate.
 
-### Closed — registry write census and readers [R-FE-01 §11] (2026-08-29)
+### Registry write census and readers [R-FE-01 §11]
 
 **Established fact — who persists.** The preference saver (every DWORD and
 string name of [02 R-KEYS-01 §5], plus `FixedLocations`, which the loader
@@ -2852,7 +2885,7 @@ left by `PREV` persist at the next save point.
 | `Gamma` | `VISUALS` `GAMMA`, `RESTORE` (12) | applied as the palette factor `0.5 + g/24` at battle init and at every slider move |
 | `DitheredFog` | `VISUALS` `RESTORE` clears it (front end); no gadget sets it | fog presenter (doc 03) — reader not traced here |
 | `SwitchAlt` | nothing | [R-CAM-01 §4] |
-| `screenchat` | nothing | the **message column**'s class filter, closed 2026-08-30 in [R-HUD-03 §14]: `screenchat` 0 draws only the lines whose routing class is 1, 4 or 8, and any other value draws every class. The row previously called this "the footer's chat-line filter" and left the polarity open; the filter is not in the footer |
+| `screenchat` | nothing | the **message column**'s class filter ([R-HUD-03 §14]): `screenchat` 0 draws only the lines whose routing class is 1, 4 or 8, and any other value draws every class; the filter is not in the footer |
 | `textlines` | `SPEEDS` `MAXLINES` | the message line ring: a line is stored only when `textlines ≠ 0`, and when storing one would exceed `textlines` visible lines the oldest visible line is dropped (`(head + 1) mod textlines == tail` advances the tail; both indices wrap at 30). `textlines` is the **modulus**, not the on-screen budget: the drawer shows `textlines − 1` lines ([R-HUD-03 §14.3], [R-HUD-03 §14.4]) |
 | `textscroll` | `SPEEDS` `TXTSCROL` | line ageing: the oldest visible line expires once `(textscroll + 1) × 30` ticks have passed since it was stored |
 | `mousespeed` | nothing | **nothing** — no reader in the whole export beyond the loader; persisted and inert |
@@ -2869,15 +2902,14 @@ with `LeftEdge`, `TopEdge`, `Width`, `Height`, `Zoomed`; no game screen
 reads or writes it. `totala.ini` carries only the two `[Preferences]` sound
 switches of [02 §3]; no front-end screen touches it.
 
-### Closed — never-opened GUIs, default bindings and misfiled names [R-FE-01 §12] (2026-08-29)
+### Never-opened GUIs, default bindings and misfiled names [R-FE-01 §12]
 
 **Established fact (bounded negative, whole image).** `LOGOSEL.GUI` has no
 reference. `BUILDER.GUI` is only *tested for* by the build-completion path
 (to request a repaint when it is open) and has no opener. `SELVMODE.GUI`'s
 opener branch has no caller (§6). `<side>GEN.GUI` (`ARMGEN`/`CORGEN`) is
 the HUD's general build page selected by the selection-to-page routine of
-[R-HUD-03 §6], not a front-end screen; the ledger's `SGEN.GUI screen`
-cluster is that page.
+[R-HUD-03 §6], not a front-end screen.
 
 **Established fact — Enter/Escape defaults.** The panel-header parser
 stores `crdefault`, `escdefault` and `defaultfocus` as three gadget names.
@@ -2888,12 +2920,12 @@ first button beginning `PREV` or `Cancel`. Openers may overwrite both after
 the fact (the `YESORNO` and `MSNBRIEF` openers do). This closes the
 `crdefault` behaviour left unconfirmed in [fmt gui].
 
-**Refinement** to "Frontend asset failure boundaries": the openers that do
-test the returned window are the `MSGBOX` opener (returns 0), the four
-`YESORNO` openers, and the HUD build-page opener; every front-end screen
-opener in this document does not.
+**Established fact — which openers test the returned window.** The
+`MSGBOX` opener (returns 0), the four `YESORNO` openers, and the HUD
+build-page opener test it; every front-end screen opener in this document
+does not (§5 "Frontend asset failure boundaries").
 
-### Closed — multiplayer screen edges (out of scope) [R-FE-02 §1] (2026-08-29)
+### Multiplayer screen edges (out of scope) [R-FE-02 §1]
 
 **Established fact — the boundary.** Multiplayer is out of Nanolathe's scope
 ([08 R-OOS-01]). The screens below are reached only through the multiplayer
@@ -2928,14 +2960,14 @@ connection with the host`, `You need a unit you don't have …`, `You need a
 newer version of the game`, `No watching is allowed for this game`, `The
 creator has left the game`, else `You were rejected from the game`), the
 `online.dll` service loaded by the `-c` command-line switch, and the lobby
-game record (restriction lists and the player-shared map) — is classified
-out of scope in the ledger with this section as its edge. Two pieces of
+game record (restriction lists and the player-shared map) — is out of
+scope, with this section as its edge. Two pieces of
 this code do run in single player and are stated where they belong: the
 network half of the surrender teardown is a no-op when the session's network
 bit is clear (§3), and the lobby-launch detector is what diverts phase 2 /
 phase 0xf when a lobby connection is pending ([R-FE-01 §1]).
 
-### Closed — the pump's per-frame residue: catalog reload, cursor visibility, 640×480, and the checksum stub [R-FE-02 §2] (2026-08-29)
+### The pump's per-frame residue: catalog reload, cursor visibility, 640×480, and the checksum stub [R-FE-02 §2]
 
 **Established fact — catalog reload step.** Before the controller runs, the
 host-mode-2 pump ([R-FE-01 §1]) tests two words: when the unit catalog is
@@ -2973,7 +3005,7 @@ formats `Code segment checksum error found when switching FE states.` and
 raises it as a `MSGBOX` of width 500 is therefore unreachable. Nanolathe
 needs no equivalent.
 
-### Closed — the surrender teardown: what returning to the shell frees [R-FE-02 §3] (2026-08-29)
+### The surrender teardown: what returning to the shell frees [R-FE-02 §3]
 
 **Established fact.** `Yes` on the surrender question ([R-FE-01 §7]) stops
 all sounds and runs one teardown routine before the windows are closed and
@@ -3010,7 +3042,7 @@ from scratch, so nothing survives across battles except the session globals
 and the preferences. Every free is null-checked and zeroes its pointer;
 there is no reference counting.
 
-### Closed — gadget lookup, mutation and synthesis helpers [R-FE-02 §5] (2026-08-29)
+### Gadget lookup, mutation and synthesis helpers [R-FE-02 §5]
 
 **Established fact — name lookup.** Every screen in this document finds its
 gadgets by name through one family of helpers, all of which scan gadget
@@ -3082,12 +3114,7 @@ under it. *Label fit* measures a label's localised text (GAF font: the sum of
 the glyph frame widths; FNT: the font width routine) and, while it exceeds
 `w − 6`, drops the last character.
 
-**Refinement** to [R-FE-01 §4]: the Spanish-install tweak on `SINGLE` sets
-the `Skirmish` button's **quickkey** byte to `s` (`0x73`), not a
-"text-status byte" — the previous text mis-named the field; the routine is
-*set quickkey by name*, so the Spanish label keeps the English hotkey.
-
-### Closed — the word-wrap routine [R-FE-02 §6] (2026-08-29)
+### The word-wrap routine [R-FE-02 §6]
 
 **Established fact.** `MSGBOX`, `RESTART`'s mission name and the briefing
 text share one wrapper `wrap(text, width, font)`. It allocates
@@ -3106,7 +3133,7 @@ runs to the previous space or hyphen, even one before an earlier break); the hyp
 consumed; the emitted separator is `\r\n`, which the label splitter of
 [R-FE-01 §9] and the pager treat as one line end; `0xFF` ends the text.
 
-### Closed — briefing blink words [R-FE-02 §7] (2026-08-29)
+### Briefing blink words [R-FE-02 §7]
 
 **Established fact.** The text pager of [R-HUD-03 §10] does more with a
 `&X…&` run than choose a colour: when it lays a page it registers every
@@ -3134,7 +3161,7 @@ label is not settled here; the pager copies the run text into the blink
 entry, and the label text it emits is built from the same walk · static
 trace of the pager's copy loop.
 
-### Closed — skirmish row synthesis geometry [R-FE-02 §8] (2026-08-29)
+### Skirmish row synthesis geometry [R-FE-02 §8]
 
 **Established fact.** `SKIRMISH.GUI` authors no per-player rows; the opener
 synthesises them for `NumSkirmishPlayers` rows through the append helpers of
@@ -3159,7 +3186,7 @@ row keep ten rows (60) far under the 200-record cap of §5. The row
 controller, colours, alliance icons and resource steps are closed in §5
 "Retail closure for the single-player menu slice" and [08 R-SKIR-01].
 
-### Closed — the display-mode source list [R-FE-02 §9] (2026-08-29)
+### The display-mode source list [R-FE-02 §9]
 
 **Established fact.** The mode table the `VIDSLDR` slider indexes
 ([R-FE-01 §6]) comes from one routine: in the GDI (windowed) presentation
@@ -3170,7 +3197,7 @@ axes inclusive); in the DirectDraw presentation it is the driver's
 enumeration of 8-bit modes, each appended as `(w, h)`. The options page then
 sorts and filters that table as [R-FE-01 §6] states.
 
-### Closed — `DRDEATH`, and the `AllMissions` toggle [R-FE-02 §10] (2026-08-29)
+### `DRDEATH`, and the `AllMissions` toggle [R-FE-02 §10]
 
 **Established fact.** `SINGLE.GUI` installs a per-frame hook that compares
 the last seven bytes of the window's key history (the 15-byte upper-cased
@@ -3185,7 +3212,7 @@ state the first match set. This is the only way to set `AllMissions`; no
 options page exposes it. (`AnyMsn` opens the play-any layout of `NEWGAME`,
 [R-FE-01 §4].)
 
-### Closed — the developer contour overlay [R-FE-02 §11] (2026-08-29)
+### The developer contour overlay [R-FE-02 §11]
 
 **Established fact.** The `+Contour a b` command ([R-CAM-01 §6]) stores two
 16.16 words, *spacing* and *offset*; while spacing is nonzero the composer's
@@ -3200,7 +3227,7 @@ interpolation `(p1 × (d − t) + p2 × t) / d` per axis and joined with a
 Bresenham line whose colour is `contourColour[((L >> 8) − seaLevel + 256) >> 4]`
 from a 32-entry table. Developer tooling; Nanolathe does not need it.
 
-### Closed — the chat line composer [R-FE-02 §12] (2026-08-29)
+### The chat line composer [R-FE-02 §12]
 
 **Established fact.** Chat text leaves the `TALK` dialog through one
 composer: it formats `<name> text` — the local player's name (three name
@@ -3220,37 +3247,18 @@ validation, and endgame continuation.
 
 ### Unknown
 
-Open items only; the decider follows each. The controller phase/substate
-mechanism, the post-battle phase machine, the planet-driven briefing tables,
-the chat contract, and — since [R-FE-01] — the single-player transition
-graph, the movie/intro/credits machine, campaign continuation, load-failure
-dialogs, every single-player error dialog, and the registry write census are
-established above.
-
-**Correction (2026-08-29, RWU-07-1a).** The previous first bullet listed the
-transition-graph edges, the movie state machine, credits timing, campaign
-transition rules, load-failure restoration and the error dialogs as one open
-item; all of those are closed in [R-FE-01 §1]–[R-FE-01 §12] and the bullet
-is replaced by the residuals below. **Correction (2026-08-29, RWU-07-5).**
-The multiplayer-screens bullet (`CONTROL`, `TIMEOUT`, `REPORT`,
-`SAVELIST`/`LOADLIST`, `VIEWMAP`, `SELGAME`, the lobby-launched variants) is
-no longer open: every such screen is out of scope with its reaching edge
-recorded once in [R-FE-02 §1].
-
 - The consumer of the restart request word raised by `RESTART.GUI`'s
   `RESTART` button (the restart control is described from the campaign side
   in [08 R-CAMP-01 §8]; the word's reader in the battle pump is not cited) ·
-  [R-FE-01 §7], doc 08 · static trace.
+  §5 [R-FE-01 §7], doc 08 · static trace.
 - The `DitheredFog` bit's presenter and the `Gamma` factor's exact palette
-  application beyond the `0.5 + g/24` factor · [R-FE-01 §11], doc 03 ·
+  application beyond the `0.5 + g/24` factor · §5 [R-FE-01 §11], doc 03 ·
   static trace.
 - Whether the label under a briefing blink word also draws the run (so the
-  blink overdraws it) or elides it · [R-FE-02 §7] · static trace of the
+  blink overdraws it) or elides it · §5 [R-FE-02 §7] · static trace of the
   pager's copy loop.
-- Process-level outcome of a missing or parser-rejected required `.GUI` file
-  for the openers that do not check the open result (every front-end screen;
-  the `MSGBOX`, `YESORNO` and build-page openers do check) · static trace.
-- Malformed HATTFONT and malformed GAF payloads whose decoders return null ·
+- Process-level outcome of malformed HATTFONT and malformed GAF payloads
+  whose decoders return null · §5 "Frontend asset failure boundaries" ·
   static trace.
 
 
@@ -3295,53 +3303,38 @@ through `RELOAD3`.
 negotiated video-mode dimensions with the static `PANEL` backdrop blitted
 into it, together with a cleared 300×480 backup scratch strip whose strip
 header words are saved; the in-game gadget tree is enabled, and the command
-panel starts visible when a session mode byte has bit `0x04` set. The side
-rail slides with an exact animation contract: the panel owns a signed pixel
-offset advanced on a 15-millisecond wall-clock throttle (a step whose
-timestamp is early is skipped); each accepted step eases by remaining-
-distance/3 with a minimum step of one pixel in both directions so it always
-converges; detents are -31 (parked) and 0 (fully visible). Crossing into a
-detent plays cues: leaving -31 upward and leaving 0 downward play `Panel`;
-reaching 0 and reaching -31 play `Options`.
+panel starts visible when a session mode byte has bit `0x04` set. What
+slides is the Space-held **readout strip** at the bottom edge of the view —
+not the side rail: `PANELSIDE` has one final origin, `(0,0)`, stamped by the
+first paint and nowhere else, and every rail window and gadget rectangle is
+fixed in authored coordinates ("Panel asset binding and draw origins" below;
+[R-HUD-05]). The strip owns a signed pixel offset advanced on a
+15-millisecond wall-clock throttle (a step whose timestamp is early is
+skipped); each accepted step eases by remaining-distance/3 with a minimum
+step of one pixel in both directions so it always converges; detents are 0
+(parked: the strip sits at the surface's bottom edge, off screen, and is not
+drawn) and -31 (fully raised, its rows on screen over the bottom strip).
+Crossing into a detent plays cues: leaving -31 upward and leaving 0 downward
+play `Panel`; reaching 0 and reaching -31 play `Options`. The strip is
+stepped unconditionally in every session kind ([R-HUD-03 §1]); the bottom
+strip's own draw is the offset's one consumer.
 
-Space polarity: with Space held the panel slides toward -31 unless a latched
+Space polarity: with Space held the strip slides toward -31 unless a latched
 typed gadget whose authored record type equals `3` (the text-editor family)
 holds focus, in which case it slides toward 0; with Space released it always
 slides toward 0.
 
-**Correction (2026-09-04, WU-19-223) — the two detent labels are reversed, and
-the subject is not the side rail.** The paragraph above said "The side rail
-slides with an exact animation contract" and "detents are -31 (parked) and 0
-(fully visible)", and the Space-polarity paragraph carries the same reversal in
-its subject: "with Space held the **panel** slides toward -31".
-
-Both are wrong about *what* moves and about *which* detent is the visible one.
-The arithmetic is untouched by this correction — 15 ms throttle, ease by
-remaining-distance/3, minimum step one pixel, detents -31 and 0, the `Panel` and
-`Options` cue crossings, and Space held driving toward -31 all stand exactly as
-written above.
-
-*What moves.* Not the side rail. [R-HUD-03 §1 "the panel-slide gate"] already
-corrected the session-kind gate off this paragraph and said so in as many words:
-"the §6 slide strip (`Game Time` / `Total Units` / `Game Speed`, 15 ms throttle,
-−31/0 detents) is stepped unconditionally in every session kind, and it is not a
-side rail but the strip that slides up from the bottom edge of the view when
-Space is held." `PANELSIDE` has one final origin, `(0,0)`; it is stamped there
-by the first paint and "nowhere else", and "every rail window and gadget
-rectangle" is fixed in authored coordinates ("Panel asset binding and draw
-origins" below; [R-HUD-05]). No rail art, rail window or gadget rectangle takes
-this offset — the bottom strip's own draw is its one consumer.
-
-*Which detent is visible.* 0 is the **parked** state and -31 the **fully
-raised** one, the reverse of the labels above. [R-HUD-04 §4] fixes it: the strip
-art is blitted at `(x, yBottom + off)` with `off` in `−31..0` and is "drawn only
-while non-zero", so at 0 the strip sits at the surface's bottom edge and is off
-screen, and at -31 its rows are fully on screen over the bottom strip. That is
-also the only reading consistent with the Space polarity, since Space held
-drives toward -31 and holding Space is what *shows* the readouts.
-
-The labels are what is corrected; an implementation that followed the arithmetic
-and [R-HUD-04 §4]'s draw rule was already right. **Established.**
+Whenever the offset is nonzero, the band — frame index 1 of the common GUI
+GAF's `LIGHTBAR` entry — is blitted at `(x, yBottom + offset)`, with `x` the
+left edge and `yBottom` the bottom edge of the battle view `(128, 32)–(W−1,
+H−33)`, and three translated strings are written on one line at
+`yBottom + offset + 10` in GAF font slot 1 (`hattfont11`), light-table row 0:
+`Game Time` at `x + 25` as `%s : %02d:%02d:%02d`, `Total Units` at `x + 190`
+as `%s : %d  (Max %d)` (two spaces before the parenthesis), and `Game Speed`
+at `x + 380` as `%s %s` — the `Normal`-or-`%+d` text of [R-CAM-01 §3] with
+` (%+d)` appended while the adapted speed differs from the target. A
+space-colon-space follows the first two keys and nothing follows the third
+([R-HUD-04 §4]).
 
 **Panel asset binding and draw origins are closed.** The side loader opens the
 GAF named by the selected SIDE's `intgaf` field and caches the named entries
@@ -3401,12 +3394,8 @@ logical-to-physical map. Production/consumption values are latched every 30
 simulation ticks — the master composer holds a per-resource-record next-due
 tick and re-samples the four rate values only when it is due, advancing the
 due tick by 30 — while the current-over-capacity bars and the current numbers
-remain a live presentation of committed stock, drawn every frame *(corrected
-in [R-HUD-03 §4]: the eased display value of [05 R-ECO-01 §6], repainted only
-when the strip's snapshot changes)*. An earlier
-corpus reading that tied the step-30 pair to the scrollback ring concerned
-different state (the chat/status ring indices) and does not contradict the
-composer's own 30-tick sample latch.
+show the eased display value of [05 R-ECO-01 §6], repainted only when the
+strip's snapshot changes ([R-HUD-03 §4]).
 
 **Unit health color thresholds are closed.** The retail health primitive uses
 the active logical-to-physical table entries `dcb[10]`, `dcb[12]`, and
@@ -3416,97 +3405,24 @@ outer health rectangle uses entry `dcb[0]`; the inner fill is inset before
 the current/max fraction is truncated toward zero. This is separate from
 the side `DAMAGEBAR` anchor, whose placement remains data-authored.
 
-#### R-HUD-02R — footer state, priority, and formatting boundary
+#### Footer state and formatting boundary [R-HUD-02R]
 
-This subsection is the implementation contract for the bottom/status readout.
-It deliberately separates what the executable proves from fields that are only
-suggested by anchor names. The battle composer has a diagnostic path whose
-visible strings include `Unit State Probe`; that path is an optional debug
-overlay, not the ordinary unit-information footer. A previous evidence note
-described that diagnostic output as the operational hover/status footer. That
-description is corrected here: the ordinary footer's state multiplexer and
-field writers are not located in the surviving static corpus.
+The bottom/status readout's sources, priority, redraw and formatting are
+[R-HUD-03 §1]–[R-HUD-03 §3]; this subsection keeps the boundary facts they
+build on. The battle composer has a diagnostic path whose visible strings
+include `Unit State Probe`; that path is an optional debug overlay — the
+leading branch of the footer routine ([R-HUD-03 §1]) — not the ordinary
+unit-information footer.
 
 **Established (direct-static).** Selection and world hover are separate state.
 The pointer update publishes the hover result once per host frame, and click
 and cursor targeting consume that same result [R-SEL-02B2]. A hovered unit can
-therefore coexist with a selected primary or selected group; selecting or
-clearing a unit does not, by itself, establish that the footer replaces the
-hover readout. The side loader does establish the available semantic anchors:
-`UNITNAME`, `DAMAGEBAR`, `UNITMETALMAKE`, `UNITMETALUSE`, `UNITENERGYMAKE`,
-`UNITENERGYUSE`, `MISSIONTEXT`, `UNITNAME2`, `DAMAGEBAR2`, `NAME`, and
-`DESCRIPTION`, along with the reload anchors. It does not establish which
-ordinary footer state writes each anchor.
-
-**Unknown (direct-static boundary).** No reviewed operational path closes the
-priority among status/mission text, build-card hover, world-unit hover,
-selected primary, selected group, and no target. In particular, the following
-are not established by anchor names or by the existence of separate selection
-and hover state:
-
-* whether status/mission suppresses every other source or only supplements it;
-* whether build-card hover precedes or follows world-unit hover;
-* whether world-unit hover replaces selected-unit fields or supplements them;
-* whether a primary selection differs from a one-member group for footer data;
-* which of the `UNITNAME`/`UNITNAME2` and `DAMAGEBAR`/`DAMAGEBAR2` pairs is
-  primary versus secondary; and
-* what the no-target state clears, leaves latched, or renders from the root
-  `MAIN2` page.
-
-The evidence boundary for the requested state-to-anchor mapping is therefore:
-
-| Candidate state | Anchor names suggested by the side record | Confidence for ordinary-footer use |
-| --- | --- | --- |
-| Status or mission text | `MISSIONTEXT` | **Unknown** — status scrollback and mission data are established separately, but this footer writer is not located. |
-| Build-card hover | `NAME`, `DESCRIPTION` | **Unknown** — the build-page product identity is established, not this footer consumer. |
-| World-unit hover | `UNITNAME`, `DAMAGEBAR`, the four unit make/use anchors, and possibly the `2` pair | **Unknown** — hover hull admission is closed; text/bar writes are not. |
-| Selected primary unit | The same unit-information anchor family | **Unknown** — single-selection command-page switching is separate from footer writes. |
-| Selected group | The same unit-information anchor family, or an aggregate subset | **Unknown** — no aggregate footer write is proven. |
-| No target | No dynamic field, or the root `MAIN2` page | **Unknown** — clearing and latching behavior are not proven. |
-
-This table is an anchor census, not a claim that similarly named fields are
-written in those states. The side loader's required-anchor failure behavior and
-the tuple order remain established in §6; only the runtime consumer assignment
-is open.
-
-The safe deterministic API is consequently a candidate-preserving record with
-an explicit unresolved mux result, not a guessed UX order. The retail priority
-and replacement/supplement mode are outputs of the yet-to-be-traced state
-writer. A `retailRank` is useful only after that writer has produced it; an
-unproduced rank must never be treated as a selector:
-
-```text
-collectFooter(record):
-    # Keep every present source; this is not a priority reduction.
-    return FooterCandidates(
-        sources = record.candidates in recorded stable order,
-        muxMode = record.muxMode,              # Replace/Supplement/Unknown
-        ranks = record.retailRanks,            # values may be Unknown
-    )
-
-resolveFooter(candidates):
-    if candidates.muxMode == Unknown:
-        return FooterResolution{mode: Unknown, candidates: candidates}
-    if any present candidate has an Unknown retailRank:
-        return FooterResolution{mode: Unknown, candidates: candidates}
-    if candidates.muxMode == Replace:
-        chosen = stable minimum rank (equal ranks keep earlier candidate)
-        return FooterResolution{mode: Replace, candidates: candidates,
-                                chosen: chosen}
-    # Supplement is known, but its field/anchor render sequence is not.
-    return FooterResolution{mode: Supplement, candidates: candidates,
-                            renderSequence: Unknown}
-```
-
-This shape is deterministic and implementation-facing without dropping any
-candidate. A producer must not publish a hard-coded status > build > hover >
-primary > group order, and a renderer must not compare placeholder ranks. The
-frame record retains every candidate's source, payload, presence bit, and
-optional rank, together with `muxMode`; that makes the unresolved
-replacement/supplement behavior observable without reading live simulation
-state during drawing. `NoTarget` is a source value only when the record says
-there is no present candidate; it does not by itself prove that the previous
-footer pixels are cleared.
+therefore coexist with a selected primary or selected group, and the footer
+never reads the selection ([R-HUD-03 §1]). The side loader establishes the
+available semantic anchors: `UNITNAME`, `DAMAGEBAR`, `UNITMETALMAKE`,
+`UNITMETALUSE`, `UNITENERGYMAKE`, `UNITENERGYUSE`, `MISSIONTEXT`,
+`UNITNAME2`, `DAMAGEBAR2`, `NAME`, and `DESCRIPTION`, along with the reload
+anchors; which footer state writes each is [R-HUD-03 §5].
 
 **Established (content and text primitives).** A unit display name and
 description come from the language-prefixed authored-field accessor: it tries
@@ -3514,150 +3430,16 @@ description come from the language-prefixed authored-field accessor: it tries
 [fmt fbi]. The returned authored capitalization is preserved; no uppercasing
 or canonical-identifier fallback is established for the footer. The bitmap
 text path measures glyph advances, truncates to a supplied maximum width
-before clipping, and then clips to the destination [07 §7]. This is a
-primitive contract only; it does not prove that any particular footer field
-passes a maximum width.
+before clipping, and then clips to the destination [07 §7]; the footer passes
+no maximum width ([R-HUD-03 §1]).
 
-**Unknown (footer field sources).** For a world unit or selected unit/group,
-the value behind each make/use field is not closed. The content meanings are
-closed: `EnergyMake` and `EnergyUse` are authored active-state rates, and
-metal production is `MetalMake`; retail has no `MetalUse` key, so metal upkeep
-is represented by a negative `MetalMake` [fmt fbi]. The top-strip production
-and consumption values are a different, established presentation record: they
-are latched every 30 simulation ticks and use integer energy or one-decimal
-metal formatting [07 §6]. That cadence and formatting must not be copied into
-the unit footer without evidence. The footer may use definition constants,
-active runtime values, accepted ledger values, or the latched presentation
-record; the surviving static path does not distinguish them. A committed
-footer value therefore needs a source tag (`definition`, `runtime`, `ledger`,
-or `latched`) and an explicit unknown value rather than silently borrowing the
-top-strip rate.
-
-**Unknown (damage and build-card formatting).** The health primitive's color
-thresholds and inset fill are established above, but they do not establish the
-footer damage-bar numerator, denominator, rounding, zero/dead visibility, or
-whether `DAMAGEBAR2` is an alternate state. Likewise, `NAME` and `DESCRIPTION`
-are plausible build-card anchors, and authored unit `name`/`description` are
-known inputs, but the build-button callback that supplies them is not traced.
-The exact build-card maximum widths, ellipsis policy, newline handling,
-line-wrap algorithm, and clipping rectangle are therefore Unknown. Until a
-probe records them, a renderer must preserve the source strings and use the
-generic FNT truncate-before-clip operation only when the committed record
-contains a traced maximum width; it must not invent wrapping, ellipses, or a
-second line. Unknown damage bars and unknown resource values remain absent,
-not zero-filled.
-
-The formatter contract below is intentionally total: every source has a
-deterministic result, but unresolved fields remain explicit `Unknown` values
-and cannot acquire behavior from a neighboring state.
-
-```text
-formatFooter(record, layout):
-    candidates = collectFooter(record)
-    resolution = resolveFooter(candidates)
-    if resolution.mode == Unknown:
-        return Footer{mode: Unknown, candidates: candidates,
-                      fields: Unknown, bars: Unknown}
-    if resolution.mode == Supplement:
-        return Footer{mode: Supplement, candidates: candidates,
-                      renderSequence: Unknown}
-    chosen = resolution.chosen
-    if chosen is none:
-        return Footer{mode: Replace, source: NoTarget,
-                      fields: Unknown, bars: Unknown}
-
-    out.source = chosen.source
-    out.statusMission = chosen.statusMission       # only when present
-    out.name = localizedAuthored(chosen.name)      # preserve authored case
-    out.description = localizedAuthored(chosen.description)
-    out.damage = chosen.damage                     # Unknown if not published
-    out.metalMake = rate(chosen.metalMake)          # retain source tag
-    out.metalUse = rate(chosen.metalUse)            # Unknown for retail unit data
-    out.energyMake = rate(chosen.energyMake)
-    out.energyUse = rate(chosen.energyUse)
-
-    for field in [statusMission, name, description, resource text]:
-        if field.maxWidth is present:
-            field.text = fntTruncateBeforeClip(field.text, field.maxWidth)
-        # A line-wrap policy is required before emitting multiple lines.
-        # If it is not in the record, leave the field single-line/unresolved.
-    draw only fields whose presence bit is set, at their traced anchor.
-```
-
-The `rate` formatter must carry the source tag through to presentation. When
-the source is the established top-strip resource record, energy is integer
-text, energy values outside inclusive `-99999..99999` use the truncated
-integer `K` form, consumption strips its sign in the normal range, and metal
-uses one fractional digit with absolute-valued consumption [07 §6]. These
-rules are **not** a claim about unit-footer rates. No-target clearing,
-status/mission replacement, field pairing, damage arithmetic, and build-card
-wrapping remain Unknown until the probes below produce the missing record.
-The `Unknown` result for an unresolved mux is a typed implementation sentinel;
-it is not a retail claim that the previous pixels are cleared or latched. The
-`Replace`/`Supplement` branches become usable only when the committed record
-contains the corresponding traced mode and all ranks/field render order needed
-by that branch. This is the explicit block for P28-HUD-02I: it must carry the
-stable candidates forward rather than inventing a single winner.
-P28-HUD-02I remains blocked on the named residuals: state priority, anchor
-pairing, replacement versus supplement, no-target clearing, footer damage
-source/rounding/visibility, unit make/use provenance and format, and build-card
-`NAME`/`DESCRIPTION` clipping or wrapping.
-*(Superseded 2026-08-29: every one of those residuals is closed in
-[R-HUD-03 §§1–3] below; the candidate-preserving API above is no longer the
-contract.)*
-
-**Executable probes and evidence.** A focused capture can close the remaining
-contract without relying on visual plausibility:
-
-1. Hold a mission/status message visible while independently hovering a build
-   product, a world unit, and empty terrain; repeat with one selected unit and
-   then a selected group. Record every footer anchor's text and clear/write
-   event per host frame. This resolves priority and replacement versus
-   supplement, including the no-target clear rule.
-2. Use two authored unit definitions whose localized and plain names differ in
-   case and spelling. Compare hover, primary, and group output while changing
-   the active language. This resolves the footer name source and capitalization
-   without treating a canonical unit id as display text.
-3. For one active resource-maker and one builder, hold definition values fixed
-   while changing active state and accepted resource deltas across 29, 30, and
-   31 simulation ticks. Capture the displayed make/use values and damage bar
-   endpoints. This distinguishes definition, runtime, ledger, and 30-tick
-   latched sources and records rounding/visibility at zero and death.
-4. Supply build-card names/descriptions containing spaces, a long unbroken
-   token, explicit newlines, and a localized variant. Capture the `NAME` and
-   `DESCRIPTION` rectangles at widths just below and above each measured line.
-   The result must record clipping, truncation, wrapping, and ellipsis
-   separately; absence of a line-break write remains Unknown.
-5. For hover hulls, sample an interior point, each projected edge, and points
-   just across each edge with two overlapping units. Capture the stable hot
-   list and winning id. The bounds extrema, corner mapping and polygon
-   predicate are now traced, so this probe is a confirmation of
-   [R-SEL-02B2][R-REV-01] rather than the decider for them; its remaining
-   value is checking the min-Y ground quad against a tall model.
-
-Whenever the offset is nonzero, the moving strip is blitted at y+offset and
-three translated strings are drawn onto it: `Game Time:` as `hh:mm:ss`,
-`Total Units: %d (Max %d)`, and `Game Speed: %s%s` with a `(+/-n)` suffix
-when the requested speed differs from the active speed and the localized
-normal-speed word at value 10.
-
-**Correction (2026-09-04, WU-19-230).** The three formats above are glosses;
-the literal formats are `%s : %02d:%02d:%02d`, `%s : %d  (Max %d)` (two
-spaces before the parenthesis) and `%s %s`, each `%s` the translated key
-`Game Time` / `Total Units` / `Game Speed` — a space-colon-space follows the
-first two keys and nothing follows the third. The band is frame index 1 of
-the common GUI GAF's `LIGHTBAR` entry and the font is GAF slot 1
-(`hattfont11`); both are closed in [R-HUD-04 §4]. **Established.**
-
-**Text placement (Established, 2026-09-02 — [R-HUD-04 §4]).** "y" above is
-the composer surface rectangle's **bottom** edge and the offset runs `−31..0`
-(the strip rises out of the bottom edge; at `0` it is off screen and not
-drawn). With `x` the rectangle's left edge, the three strings are written on
-one line at `yBottom + offset + 10`: `Game Time:` at `x + 25`, `Total Units:`
-at `x + 190`, `Game Speed:` at `x + 380`, through the panel text writer with
-the default font and light-table row 0. (The "default font" is GAF slot 1,
-selected for the three strings and restored afterwards, and the rectangle is
-the battle view `(128, 32)–(W−1, H−33)` — [R-HUD-04 §4], 2026-09-04.)
+**Established (content meanings).** `EnergyMake` and `EnergyUse` are
+authored active-state rates, and metal production is `MetalMake`; retail has
+no `MetalUse` key, so metal upkeep is represented by a negative `MetalMake`
+[fmt fbi]. The top-strip production and consumption values are a different
+presentation record — latched every 30 simulation ticks, integer energy or
+one-decimal metal formatting (§6 above) — and the footer's four rate fields
+are the archived settlement slots of [R-HUD-03 §2], not that record.
 
 **Frame composition passes.** The master battle frame runs ten ordered layer
 passes: terrain tiles → features/wrecks → soft units → hard units → shadows
@@ -3668,38 +3450,23 @@ squadId` digits when a squad-overlay bit is set or the squad id is nonzero.
 The composer's five-pixel crosshair — two one-pixel Bresenham lines crossing at
 a projected point plus the `(128,32)` view origin, in color-map entry 15 — is a
 **world** figure and a film-mode diagnostic, not the minimap's viewport
-indicator [03 §3.12]. The "thickness varies between 6 and 4 pixels with
-latch-flag bit `0x40`" reading of an earlier revision was a mis-transcription:
-the 6/4 values are the drag-selection rectangle's outer color-map entries chosen
-by that same latch bit while the armed latch is MOBILEBUILD (outer entry 6 when
-the bit is set, 4 when clear, else entry 15; inner entry 0), not a viewport
-thickness.
-
-**Correction (2026-08-31).** This paragraph previously opened "The minimap
-viewport indicator is not a thick rectangle: in minimap mode the composer draws
-two one-pixel Bresenham lines crossing at the camera point…", which read the
-crosshair as the minimap's viewport indicator and so denied the minimap any
-rectangle. The two are separate figures with separate producers. The minimap's
-viewport indicator **is** a rectangle outline — one pixel wide, in color-map
+indicator [03 §3.12]. The minimap's viewport indicator is a separate figure
+with a separate producer: a rectangle outline one pixel wide, in color-map
 entry 14, stroked by the HUD's minimap-presentation routine onto the
-destination surface after the radar picture is copied there. `[03 R-MM-01 §1]`
-is the owning statement; only the crosshair's own description above survives
-here.
+destination surface after the radar picture is copied there ([03 R-MM-01 §1]
+is the owning statement). The drag-selection rectangle's outer color-map
+entry is 6 or 4 while the armed latch is MOBILEBUILD — chosen by the
+pointer-flags *site-valid* bit, 6 when set and 4 when clear ([R-CAM-01 §14]
+step 1) — and entry 15 otherwise, with inner entry 0.
 
-### Closed — the ordinary footer: sources, priority, redraw and clearing [R-HUD-03 §1] (2026-08-29)
+### The ordinary footer: sources, priority, redraw and clearing [R-HUD-03 §1]
 
-**Correction (2026-08-29, RWU-07-2).** [R-HUD-02R] above says "the ordinary
-footer's state multiplexer and field writers are not located in the surviving
-static corpus" and that the `Unit State Probe` diagnostic path is a separate
-overlay. The footer writer *is* located: it is the routine the master
+**Established — the writer.** The footer is drawn by the routine the master
 composer calls immediately after the top resource strip and before the
-minimap, once per host frame. The earlier pass read only the routine's
-leading branch — the developer overlay that prints `PFSTATE`, `DELTATIME`,
-`GAMETIME`, `PACKETS` and friends when both low bits of the developer flag
-word are set — and stopped there; the ordinary footer is the remainder of the
-same routine. Everything in R-HUD-02R's Unknown table is closed below; its
-candidate-preserving API shape is superseded by the fixed priority in this
-section and P28-HUD-02I is unblocked.
+minimap, once per host frame. Its leading branch is the developer overlay
+that prints `PFSTATE`, `DELTATIME`, `GAMETIME`, `PACKETS` and friends when
+both low bits of the developer flag word are set; the ordinary footer is the
+remainder of the same routine.
 
 **Established — the three sources and their fixed priority.** The footer
 reads exactly three inputs, in this order, and the first that applies wins
@@ -3730,8 +3497,7 @@ outright (replacement, never supplement):
 
 With none present the footer draws nothing but its backdrop. **The footer
 never reads the selection**: neither the primary selected unit nor the group
-is a footer source, which closes R-HUD-02R's "selected primary" and "selected
-group" rows as *not footer states*.
+is a footer source.
 
 **Established — redraw and clearing.** The routine builds a fifteen-word
 snapshot every frame — the current order caption pointer, the hovered unit id
@@ -3768,17 +3534,16 @@ field wraps, ellipsises or truncates. "Centred at anchor A" below means
 glyph-advance sum of the string in the side font (signed division, truncating
 toward zero).
 
-**Established — the panel-slide gate (corrected 2026-08-29, RWU-07-6).**
-The session-kind gate belongs to the Space-held **Kills/Losses score panel**
-([R-HUD-04 §1]): the composer draws it only when the session kind is 2 or 3
-(skirmish or multiplayer in doc 08's vocabulary) and never in a campaign
-mission (kind 1). The previous text attributed the gate to "the side-rail
-slide of §6"; that was wrong — the §6 slide strip (`Game Time` / `Total
-Units` / `Game Speed`, 15 ms throttle, −31/0 detents) is stepped
-unconditionally in every session kind, and it is not a side rail but the
-strip that slides up from the bottom edge of the view when Space is held.
+**Established — the panel-slide gate.** The session-kind gate belongs to the
+Space-held **Kills/Losses score panel** ([R-HUD-04 §1]): the composer draws
+it only when the session kind is 2 or 3 (skirmish or multiplayer in doc 08's
+vocabulary) and never in a campaign mission (kind 1). The §6 slide strip
+(`Game Time` / `Total Units` / `Game Speed`, 15 ms throttle, −31/0 detents)
+is stepped unconditionally in every session kind; it is not a side rail but
+the strip that slides up from the bottom edge of the view when Space is
+held.
 
-### Closed — the unit readout: name, damage bar, logo, rates, kills, caption and the secondary field [R-HUD-03 §2] (2026-08-29)
+### The unit readout: name, damage bar, logo, rates, kills, caption and the secondary field [R-HUD-03 §2]
 
 **Established — admission.** The hovered unit must be alive (its definition
 index word nonzero). Then the viewing player's direct-visibility predicate
@@ -3794,9 +3559,7 @@ bit 17 (`showplayername`) or bit 18 (`commander`) set; otherwise it is the
 definition record's leading name field — the FBI `name` after the
 language-prefixed accessor of [02 §6], stored at load — drawn **verbatim**,
 without a second localization lookup. Centred at `UNITNAME`, colour 83.
-*Cross-doc:* this is a reader of `showplayername`; doc 04's [R-SPEC-01 §14]
-"reader census: none" is wrong for that key and should be corrected by lane
-04 — the census missed this routine for the same reason R-HUD-02R did.
+This routine is a reader of `showplayername`.
 
 **Established — the damage bar (`DAMAGEBAR`).** Drawn when the unit's owner
 slot equals the viewing slot **or** the definition lacks `hidedamage`
@@ -3876,14 +3639,13 @@ mutually exclusive uses, decided after the caption:
 This closes the "which pair is primary" question: `UNITNAME`/`DAMAGEBAR` are
 always the hovered unit; the `2` pair is its stockpile or its order target.
 
-**Closure (2026-09-02) — which entry the logo frame belongs to.** The GAF
-handle the `LOGO2` draw indexes by the owner's lobby colour byte is the entry
-named `32xlogos` of `textures/logos.gaf`, bound during battle-data
-initialization; the score panel of [R-HUD-04 §1] reads the same handle. Rule:
-`frame = logos.gaf["32xlogos"].Frames[lobbyColour]`. **Established.**
-[R-HUD-04 §4]
+**Established — the logo entry.** The GAF handle the `LOGO2` draw indexes by
+the owner's lobby colour byte is the entry named `32xlogos` of
+`textures/logos.gaf`, bound during battle-data initialization; the score
+panel of [R-HUD-04 §1] reads the same handle. Rule:
+`frame = logos.gaf["32xlogos"].Frames[lobbyColour]` ([R-HUD-04 §4]).
 
-### Closed — feature and build-card readouts: `NAME` and `DESCRIPTION` [R-HUD-03 §3] (2026-08-29)
+### Feature and build-card readouts: `NAME` and `DESCRIPTION` [R-HUD-03 §3]
 
 **Established — feature hover.** With no hovered unit and a hovered feature,
 and the feature definition's `nodisplayinfo` bit clear (or the F11 overlay
@@ -3909,14 +3671,13 @@ only at the destination surface. The `CORBUILD` exclusion is a literal name
 test with no other reader (Unknown why; decider: asset census for a gadget
 of that name).
 
-### Closed — the top strip: redraw condition, bar arithmetic, share marker and alignment [R-HUD-03 §4] (2026-08-29)
+### The top strip: redraw condition, bar arithmetic, share marker and alignment [R-HUD-03 §4]
 
-**Correction (2026-08-29, RWU-07-2).** §6 above says the current-over-capacity
-bars and the current numbers "remain a live presentation of committed stock,
-drawn every frame". They are neither: the displayed stock is the eased
-display value of [05 R-ECO-01 §6] (an eighth of the integer gap per host
-frame, minimum step one, clamped to capacity), and the strip is repainted only
-when its snapshot changes.
+**Established — displayed stock.** The current-over-capacity bars and the
+current numbers are not a live presentation of committed stock: the displayed
+stock is the eased display value of [05 R-ECO-01 §6] (an eighth of the
+integer gap per host frame, minimum step one, clamped to capacity), and the
+strip is repainted only when its snapshot changes.
 
 **Established — redraw condition.** The composer keeps a 33-byte snapshot —
 the viewing slot byte, then eight singles: displayed energy, latched energy
@@ -3955,7 +3716,7 @@ one). The capacity number is the only right-aligned text on the strip:
 retail's `ENERGYMAX`/`METALMAX` anchors are authored at the bar's right end
 and the number ends there.
 
-### Closed — side-anchor consumer census [R-HUD-03 §5] (2026-08-29)
+### Side-anchor consumer census [R-HUD-03 §5]
 
 **Established.** The side record's HUD anchors have exactly two readers, the
 top-strip painter ([R-HUD-03 §4]) and the footer ([R-HUD-03 §§1–3]); no
@@ -3983,7 +3744,7 @@ bar anchors. There is no slide/modal anchor combination and no per-side
 fallback: a missing anchor is the loader's diagnostic (§6), never a borrowed
 rectangle.
 
-### Closed — build pages: name composition, the `DL` template, `NEXT`/`PREV`, and command-button state [R-HUD-03 §6] (2026-08-29)
+### Build pages: name composition, the `DL` template, `NEXT`/`PREV`, and command-button state [R-HUD-03 §6]
 
 **Established — page window names and the page cycle.** The page state of a
 builder is its status word's paged bit (22) and page field (bits 23–25, §9).
@@ -4004,7 +3765,7 @@ every build-menu entry whose builder matches and whose authored `PAGE` byte
 minus one equals the page number. The definition's page-count byte is the
 maximum authored page plus one, so valid pages are `0 .. count−1`.
 
-**Where the page-count byte comes from (Established, 2026-08-30).** It is the
+**Where the page-count byte comes from (Established).** It is the
 probe of `guis/<internal name>N.GUI` the catalog compiler runs per record,
 [02 R-CAT-01 §5] step 5 — not the length of the builder's `CANBUILD` list
 divided by the six product gadgets a full stock page carries. The two agree
@@ -4023,7 +3784,7 @@ are in it — `ARMASP`/`CORASP`, `ARMCARRY`/`CORCARRY`, `ARMDECOM`/`CORDECOM`,
 `ARMFARK` and `CORNECRO`.
 
 **The state a builder is first selected in (Established — manual retail
-observation, 2026-08-30).** Selecting a builder that has not yet had a page
+observation).** Selecting a builder that has not yet had a page
 selected shows its **first build page**, not the orders state; the order
 palette is reached by clicking `ORDERS`. Because `ORDERS` selects page 0,
 which clears the page-shown bit and leaves the page field alone, the choice is
@@ -4031,9 +3792,17 @@ remembered per unit from then on and the default fires only once. A builder
 whose page-count byte is below 2 has no build page to open and stays on the
 orders state.
 
-(The `TODO(question)` that stood here — "which retail writer puts a builder
-on its first build page" — is closed by the correction below and
-[R-HUD-04 §4]: the writer is unit creation. Removed 2026-09-02, RWU-19-42.)
+**Established — the first-page writer.** The writer that puts a builder on
+its first build page is **unit creation**: the unit initializer seeds the
+status word with page field `1` and the paged bit set (bits 22–23 both set)
+for every definition whose page-count byte is `2` or more, and leaves the
+field and the bit clear otherwise. The `BUILD` and `ORDERS` clicks only set
+or clear the paged bit through [R-P0-11 §1]'s deferred bits; no click writes
+the field, and the only field writers are the `.`/`,` keys, the
+`NEXT`/`PREV` gadgets and the digit keys in the table below. So a `BUILD`
+click always re-shows the remembered page, which is `1` until the unit
+pages, and "the paged bit set over a zero field" is unreachable for a
+builder that has pages ([R-HUD-04 §4]).
 
 The page-cycle keys and buttons ([R-CAM-01 §2]) move as follows, every
 change setting battle-interface dirty bit `0x10` and playing `nextbuildmenu`:
@@ -4070,43 +3839,22 @@ disagreement values, and the identity of every capability bit named "—" below
 | `MOVE` `STOP` `ATTACK` `DEFEND` `PATROL` `RECLAIM` `CAPTURE` `REPAIR` | — | **no** selected unit carries that command's capability key [R-HUD-03 §13] |
 | `LOAD` / `UNLOAD` / `BLAST` | — | transport bit (`canload`) clear: `LOAD` hidden, `UNLOAD` greyed, `BLAST` greyed unless the blast bit (`candgun`); transport bit set: `BLAST` hidden |
 
-*Correction (2026-08-30).* This table previously glossed the `CLOAK` and
-`ONOFF` greying value `3` as "(mixed)" and left the capability row's bits
-unnamed. `3` is the not-applicable sentinel and `2` is the mixed value; the
-greying condition itself was and is `3`. [R-HUD-03 §13] carries the fold, the
-evidence, and the auditable form of the correction.
+For `CLOAK` and `ONOFF`, `3` is the not-applicable sentinel and `2` is the
+mixed value; the greying condition is `3`.
 
 A stage write goes to the gadget's stage word; greying sets bit 0 of the
-gadget's flag word and marks the tree dirty. The button painter then chooses
-the GAF frame: not greyed → `status + stage` (the authored `status` starting
-frame, [fmt gui]) while the mouse is up, the pressed frame while it is held;
-greyed → `status + min(stage + 2, frames − 1)` (or `frames − 1` when the
-gadget's attribute bit `0x100` is set) and the rectangle is darkened by 20
-palette steps afterwards. So a stance button's art is authored as
-`status + stage` for the live frames and `status + stage + 2` for the greyed
-frames; the painter never reads the label for a staged button.
+gadget's grey word ([R-WGT-01 §13]) and marks the tree dirty. The button
+painter then chooses the GAF frame by the rule of [R-WGT-01 §3]: the authored
+`status` is the **down-state word**, the frame base comes from art
+resolution, the pressed frame is drawn while the mouse is held, and a greyed
+button draws `base + min(downState + 2, frames − 1)` (or `frames − 1` when
+the gadget's attribute bit `0x100` is set) and then passes its rectangle
+through the rectangle shader of [03 R-COMP-02 §5] at level `−20` —
+PALETTE.SHD darken row 12 (`−20 + 32`) — after the frame blit, skipped when
+the button carries attribute `0x80`. The painter never reads the label for a
+staged button.
 
-**Correction and closure (2026-09-02 — [R-HUD-04 §4]).** (a) The
-`TODO(question)` above is closed: the writer that puts a builder on its first
-build page is **unit creation**. The unit initializer seeds the status word
-with page field `1` and the paged bit set (bits 22–23 both set) for every
-definition whose page-count byte is `2` or more, and leaves the field and the
-bit clear otherwise. The `BUILD` and `ORDERS` clicks only set or clear the
-paged bit through [R-P0-11 §1]'s deferred bits; no click writes the field,
-and the only field writers are the `.`/`,` keys, the `NEXT`/`PREV` gadgets and
-the digit keys in the table above. So a `BUILD` click always re-shows the
-remembered page, which is `1` until the unit pages, and "the paged bit set
-over a zero field" is unreachable for a builder that has pages. (b) The
-painter paragraph above — "not greyed → `status + stage` … greyed →
-`status + min(stage + 2, frames − 1)`" — is superseded by [R-WGT-01 §3]: the
-authored `status` is the **down-state word**, the frame base comes from art
-resolution, and the greyed frame is `base + min(downState + 2, frames − 1)`.
-"Darkened by 20 palette steps" is the rectangle shader of [03 R-COMP-02 §5]
-called at level `−20`: PALETTE.SHD **darken row 12** (`−20 + 32`) applied to
-the gadget rectangle after the frame blit, skipped when the button carries
-attribute `0x80`. **Established.**
-
-### Closed — the `damagebars` option is the "label every unit" bit [R-HUD-03 §7] (2026-08-29)
+### The `damagebars` option is the "label every unit" bit [R-HUD-03 §7]
 
 **Established.** The registry value `damagebars` ([03 R-FX-01 §6]) and the
 "label every unit" bit of [R-CAM-01 §2] are the same bit — bit 0 of the
@@ -4115,7 +3863,7 @@ written back immediately. Doc 07 names it `damagebars` from here on; the
 composer's consumer (own units get a world health bar; grouped units their
 digit) is [03 R-FX-01 §6].
 
-### Closed — the unit information screen `UNITINFOx.GUI` [R-HUD-03 §8] (2026-08-29)
+### The unit information screen `UNITINFOx.GUI` [R-HUD-03 §8]
 
 **Established — trigger and subject.** F1 ([R-CAM-01 §2]) opens the screen
 when the options window is not open. The subject is the hovered gadget's
@@ -4148,7 +3896,7 @@ widened; the unit words `m/s`, `m/s/s`, `deg/s` are localized. The `0.4`
 factor is retail's world-unit-to-metre convention for this screen only; no
 other reader uses it.
 
-### Closed — `SHARE.GUI`'s `METAL#` / `ENERGY#` [R-HUD-03 §9] (2026-08-29)
+### `SHARE.GUI`'s `METAL#` / `ENERGY#` [R-HUD-03 §9]
 
 **Established.** `METAL` and `ENERGY` are gadget-kind-4 sliders
 (`attribs=1`, horizontal), not text fields. On open each slider's range word
@@ -4161,13 +3909,12 @@ authored gadget (the knob is a square of the gadget height) and a travel
 below 2 reading back as 0. `METAL#` and `ENERGY#` are
 label gadgets whose text is `"%d"` of that read-back value, written on open
 (so both start at `0`) and again by each slider's change callback. The
-confirm handler reads the same two read-back values ([05 R-SHARE-01 §5]).
-*Cross-doc:* [05 R-SHARE-01 §5]'s "two text fields … parsed by the
-string-to-integer helper" is wrong on the control kind — the 64-bit result it
-saw is the slider read-back's `ftol`; the amount semantics it states
-(truncate, clamp to live stock, zero is a no-op) are unaffected.
+confirm handler reads the same two read-back values ([05 R-SHARE-01 §5]:
+the amount semantics — truncate, clamp to live stock, zero is a no-op — are
+that section's; the 64-bit result it reads is the slider read-back's
+`ftol`).
 
-### Closed — `MOREBAR` / `MORE...` text-region paging [R-HUD-03 §10] (2026-08-29)
+### `MOREBAR` / `MORE...` text-region paging [R-HUD-03 §10]
 
 **Established.** The shared paging routine serves every screen with a
 `TextRegion` gadget and a `MOREBAR` button (briefings, the end-of-mission
@@ -4184,10 +3931,9 @@ per line at `(regionX + 5, regionY + (fontHeight+2)/2 + i × (fontHeight+2))`,
 using the side's four-entry text-colour table: plain text is entry 0 and a
 run bracketed as `&G…&`, `&Y…&` or `&R…&` is drawn in entry 1, 2 or 3 (any
 other letter after `&` also reads as entry 3); the caption colour is entry 1. A line ends at `\n`; `0xFF` or NUL ends the
-text. There is no thumb: `MOREBAR` is a plain button, and the "thumb
-arithmetic" item of the plan does not exist.
+text. There is no thumb: `MOREBAR` is a plain button.
 
-### Closed — the score-bar gadget (kind 13) and its `value / 15` step [R-HUD-03 §11] (2026-08-29)
+### The score-bar gadget (kind 13) and its `value / 15` step [R-HUD-03 §11]
 
 **Established.** The end-of-mission score rows ([08 R-CAMP-01 §7]) create
 kind-13 gadgets carrying: `current := 0`, `target := value`,
@@ -4195,18 +3941,18 @@ kind-13 gadgets carrying: `current := 0`, `target := value`,
 `interval := 1`, `animating := 1`, `showNumber := 1`. The gadget-tree
 service pass steps every kind-13 gadget whose `animating` flag is set and
 whose `current < target`: when the scaled timer ([R-CAM-01 §10]; 30 units
-per second) has passed the gadget's next-due stamp, `current += ftol(step)`,
-clamped to `target` (clearing `animating` when it lands), and the next-due
-stamp becomes `timer + interval`. The painter draws the bevelled frame, insets
+per second) has passed the gadget's next-due stamp, `current += ftol(step)`;
+a step that strictly overshoots `target` is clamped to it and clears
+`animating` (landing exactly on the target leaves the flag set), and the
+next-due stamp becomes `timer + interval`. The painter draws the bevelled frame, insets
 by 2, fills the inner rectangle with the gadget's background colour, then
 `[x .. x + ftol(current / max scaled to the inner width)]` with the gadget's
 foreground colour, and when `showNumber` is set centres `current` as decimal text in the
 rectangle. So a bar fills in about fifteen 1/30-second steps whatever its
-value (one step per tick for values below 15). This closes doc 08's "whether
-the per-gadget `value / 15` float is the bar renderer's fill increment"
-(cross-doc: doc 08 to cite) — it is the animation step, not a fill fraction.
+value (one step per tick for values below 15); the per-gadget `value / 15`
+float is the animation step, not a fill fraction.
 
-**Correction (2026-08-31, Wave B3).** The runtime kind-13 record keeps the
+**Established — geometry.** The runtime kind-13 record keeps the
 authored dimensions `width=67,height=18`, but its inclusive painted footprint
 is `(x,y)..(x+67,y+18)` (68×19). The standard raised two-pixel bevel is the
 `fill + raised` primitive of [R-FE-02 §4]: semantic fields 0 on the top/left
@@ -4221,10 +3967,8 @@ literal RGB values.
 The service examines only active, visible bars and enters its body only while
 `current < target`. A bar is then due only when `nextDue < presentationUnit`;
 it advances once and then stores
-`nextDue = presentationUnit + 1`, even if the sampled clock jumped. Landing
-exactly on the target leaves the animation flag set; only a candidate step
-that strictly overshoots the target clears it (the prior "when it lands"
-wording was too broad). The result rows'
+`nextDue = presentationUnit + 1`, even if the sampled clock jumped. The
+result rows'
 player surface is 91×21 at x=16 and uses the source slot's frame from
 `textures/logos.gaf:32xlogos`, stretched by the established surface painter;
 the name is centred in the 90×15 text area at x=16 with foreground field 15.
@@ -4234,9 +3978,9 @@ expired so Kills can reveal on the first pass; each group then schedules
 `deadline = presentationUnit + 10`. In the single-player result surface, a
 keyboard edge activates all seven groups and plays `ActivateAllStatBars`, then
 the same pass performs the ordinary one-group reveal and cue. Mouse input does
-not skip the reveal. **Established.**
+not skip the reveal.
 
-### Closed — selection-count and group displays [R-HUD-03 §12] (2026-08-29)
+### Selection-count and group displays [R-HUD-03 §12]
 
 **Established — there is no selection-count readout.** Nothing in the battle
 composer, the footer or the gadget painters prints the number of selected
@@ -4245,25 +3989,11 @@ strip (§6), which is the player's live unit count against its limit, not the
 selection. Group membership is shown only as the `'0' + group` digit under
 own units ([03 R-FX-01 §6]) and, on the footer, not at all.
 
-### Closed — unit captions: the presenter, the message-line ring, and the column that draws it [R-HUD-03 §14] (2026-08-30)
+### Unit captions: the presenter, the message-line ring, and the column that draws it [R-HUD-03 §14]
 
-Closes three rows of [R-FE-01 §11] (`unitchattext`, `textlines`/`textscroll`,
-`screenchat`), the "which branch of the footer's chat-line filter draws when
-`screenchat` is 0" item of [R-FE-02 §12]'s Unknown list, and the presenter
-question left open by [05 "the build-order caption census"].
-
-**Correction to [R-FE-01 §11] (2026-08-30).** Its `screenchat` row said "the
-**footer's** chat-line filter branches on it: with `screenchat` 0 the lines
-whose routing class is 1, 4 or 8 take a different branch from the rest — which
-side draws is not settled here", and [R-FE-02 §12]'s Unknown list repeated
-"which branch of the **footer's** chat-line filter draws". Both were wrong
-about the owner. The footer draws no message line at any setting; the filter
+The footer draws no message line at any setting; the `screenchat` filter
 belongs to a separate column that the master composer paints near the end of
-the frame, long after the footer. The earlier pass reached the filter through
-the settings-key consumer census, which names the reading routine but not the
-routine's caller, and attributed it to the footer because the footer is the
-other consumer of the same font and colour table. The correct owner and the
-settled polarity are [R-HUD-03 §14.4] below.
+the frame, long after the footer ([R-HUD-03 §14.4]).
 
 **Established — a raised caption is not the footer's order caption.** Two
 different mechanisms, with no connection between them:
@@ -4300,27 +4030,17 @@ table; the caption — given or defaulted — then goes through the localization
 table before it is queued. Two further variants of the helper exist that
 additionally require the unit to be, or not to be, in the current selection;
 only the *not selected* variant has a caller, and the *selected* variant is
-unreachable code.
+unreachable code. ([03 R-AUD-01 §3] names these same two gates "the unit's
+chat-enable status bit" and "the silenced bit"; the predicate is identical.)
 
-*Cross-doc:* [03 R-AUD-01 §3] names these same two gates "the unit's
-chat-enable status bit" and "the silenced bit". Doc 04's state-word census
-([04 §8]) names them the **live bit (28)** and **death-pending (14)**, which is
-what they are; lane 03 should adopt that naming. The predicate itself is
-identical in both readings, so nothing downstream changes.
-
-**Correction to [05 "the build-order caption census"] (2026-08-30) — the
-`Slot` column is an event slot, not a priority.** That census tabulates each
-caption with a bare number under the heading `Slot` (9, 8, 7) and says nothing
-about what the number indexes; read alongside [R-FE-01 §11]'s gate
-`10 − unitchattext < priority`, the only number on offer, it invites the
-reading that the slot *is* the priority — which inverts the result, because
-the gate would then admit slots 8 and 9 at the default setting and reject
-nothing that slot 7 raises. It is not a priority. It is the **sound event
-slot** of [03 §8.3]'s static slot table, i.e. which `[SOUNDS]` event of the
-unit's sound category the caption rides on. The priority the gate compares is a
-separate column of that table, looked up by the slot, and the two numbers move
-in opposite directions here: the *lowest*-numbered slot the census uses carries
-the *highest* priority. For the three slots the census uses:
+**Established — the `Slot` column of [05 "the build-order caption census"]
+is an event slot, not a priority.** The number is the **sound event slot** of
+[03 §8.3]'s static slot table, i.e. which `[SOUNDS]` event of the unit's
+sound category the caption rides on. The priority the gate
+`10 − unitchattext < priority` compares is a separate column of that table,
+looked up by the slot, and the two numbers move in opposite directions here:
+the *lowest*-numbered slot the census uses carries the *highest* priority.
+For the three slots the census uses:
 
 | Slot | Key | Priority | Cooldown |
 |---:|---|---:|---:|
@@ -4410,34 +4130,24 @@ sub-tick loop, the oldest visible line expires when
 `storedTick + (textscroll + 1) × 30 < currentTick`, and the display index
 advances by one.
 
-**Correction to [R-CAM-01 §7] (2026-08-30) — the fourth append field is a
-player slot, not a silence flag.** That section's `textlines` bullet said the
-stored line is "stamped with the current tick, kind nibble, source unit and a
-**silence byte**", and that "`MessageArrived` plays unless the silence byte is
-`'\n'`". The arithmetic is right and nothing about the cue changes, but the
-name misses what the field is for and hides a second consumer. The field is the
-**speaker's player slot**. The value 10 is a sentinel meaning "no speaker" —
-`'\n'` is simply what 10 renders as, and no real slot reaches 10 — so the cue
-rule is "plays only for a line with a real speaker", not "plays unless
-silenced". The earlier reading came from the poster alone, where the byte is
-only ever compared against `'\n'`; the drawer is the second reader, and there
-the same byte selects the owner logo stamped ahead of the text (§14.4), which
-is why the field exists at all. Unit captions and chat lines both pass the
-sentinel — the chat composer already embeds `<name>` in the text itself
-([R-FE-02 §12]) — so in a single-player session no line is ever "silenced" and
-none draws a logo.
+**Established — the fourth append field is the speaker's player slot.** The
+value 10 is a sentinel meaning "no speaker" — `'\n'` is simply what 10
+renders as, and no real slot reaches 10 — so the cue rule is "plays only for
+a line with a real speaker". The poster compares the byte only against
+`'\n'`; the drawer is the second reader, and there the same byte selects the
+owner logo stamped ahead of the text (§14.4), which is why the field exists
+at all. Unit captions and chat lines both pass the sentinel — the chat
+composer already embeds `<name>` in the text itself ([R-FE-02 §12]) — so in
+a single-player session no line ever carries a speaker and none draws a
+logo.
 
-**Correction to [R-CAM-01 §7] (2026-08-30) — the on-screen budget is
-`textlines − 1`.** That section's `textlines` bullet said "The composer draws
-at most `count` lines walking back from the producer to the display index
-(fewer when the ring holds fewer)", and [R-FE-01 §11]'s `textlines` row called
-the value "the on-screen line budget". Both are off by one. The walk-back runs
-at most `textlines − 1` steps before drawing forward (§14.4), so `textlines`
-lines are never on screen: `textlines = 1` draws **nothing at all**, and the
-default 10 shows nine. The append rule agrees and always did — the drop test
+**Established — the on-screen budget is `textlines − 1`.** The walk-back
+runs at most `textlines − 1` steps before drawing forward (§14.4), so
+`textlines` lines are never on screen: `textlines = 1` draws **nothing at
+all**, and the default 10 shows nine. The append rule agrees — the drop test
 `(producer + 1) mod textlines == display` keeps at most `textlines − 1` lines
-between the two indices — so the earlier text contradicted the rule quoted two
-lines above it. `textlines` is a **modulus**; the budget is one less.
+between the two indices. `textlines` is a **modulus**; the budget is one
+less.
 
 #### Where the lines are drawn [R-HUD-03 §14.4]
 
@@ -4501,7 +4211,7 @@ else in the image writes it, so the other two branches (mode 1: draw only class
 | 8 | two session/network lines |
 
 So `screenchat = 0` hides the score and share announcements and the class-0
-producer, and keeps captions and chat. This closes [R-FE-02 §12]'s open item.
+producer, and keeps captions and chat.
 
 #### What a reimplementation must do to put `Target area was blocked` on screen [R-HUD-03 §14.5]
 
@@ -4535,45 +4245,309 @@ producers above is the campaign/objective text path; whether mission scripts
 reach this ring or a separate one is not established here. *Decider:* trace the
 mission-event text producers of doc 08 for a call into the ring append.
 
-### Supported inference
+### The Kills/Losses score panel, the options-window unfold, and the latch-to-idle group reset [R-HUD-04]
 
-Battle chrome should be data-driven from side-data, while semantic values and
-command availability remain runtime state. A generic GUI implementation may
-share drawing primitives, but must retain the side-data anchor contract.
+#### The Space-held Kills/Losses score panel [R-HUD-04 §1]
 
-**Battle-rail minimap destination is closed (Established).** The battle composer
-copies the FINAL radar surface to the origin of its fixed 126×126 logical canvas.
-The aspect-dependent `originX/originY` values belong to the picture's internal
-letterbox and are not an additional screen placement. Consequently the canonical
-destination rectangle is inclusive `(0,0)..(125,125)`; drawing and input both
-apply the same letterbox inside that canvas [07 §6][07 §10].
+**Established — what it is and when it runs.** Holding Space in a skirmish
+or multiplayer battle slides a score panel in from the **right** screen edge
+listing every player's kills and losses. It is drawn by the battle frame
+composer ([03 R-COMP-01]) after the world and chrome and only when the
+session kind is 2 or 3 (skirmish / multiplayer — doc 08's kind vocabulary);
+a campaign mission (kind 1) never calls it, so its slide word is inert
+there. It is separate from the bottom *slide strip* of §6 (`Game Time` /
+`Total Units` / `Game Speed`), which the composer steps unconditionally in
+every session kind ([R-HUD-03 §1]).
 
-### Unknown
+**Established — show/hide polarity.** The panel is *showing* when the F4
+interface bit ([R-CAM-01 §2]) is set, or when Space is held (held-key query
+for token `0x20`) **and** the focused gadget of the top window is not a
+kind-3 text editor. Otherwise it is *hiding*: a text editor with the focus
+takes Space for itself and the panel retracts. (The bottom slide strip uses
+the same "Space unless a text editor has focus" test, §6.)
 
-Open items only; the decider follows each. All invoked retail anchors and their
-tuple order are established above.
+**Established — the slide arithmetic.** One signed slide word `s` in
+`0..125` is the number of panel pixels on screen; it is stepped once per
+composed frame (no wall-clock throttle — unlike the §6 strip's 15 ms gate):
 
-- The reader, if any, of the `CORBUILD` gadget-name exclusion in the build
-  card ([R-HUD-03 §3]) · asset census for a gadget of that name.
-- Whether any stock or third-party content authors a `<unit>0.GUI` page (the
-  authored-page bit of [R-HUD-03 §6] is never set by stock content) · asset
-  census.
-- Whether the message ring's backing memory is zero-initialised at session
-  start, which decides whether the drawer's second text colour (`dcb[10]`, on
-  class-byte bit 5) is reachable at all · [R-HUD-03 §14.4] · static trace of
-  the session-init clear.
-- Whether a mission script can post to the message ring, or whether campaign
-  objective text has its own path; none of the ring's producers in
-  [R-HUD-03 §14.4]'s class census is a mission-event producer · doc 08 ·
-  static trace of the mission-event text producers.
+* hiding: if `s < 1` nothing is drawn and the routine returns; if `s == 125`
+  the cue `Panel` plays (leaving the open detent); `step := trunc(s / 4)`
+  (signed, toward zero), `max(step, 1)`; `s := s − step`; if `s < 1` then
+  `s := 0` and the cue `Options` plays (reached the closed detent);
+* showing: if `s < 125`: if `s == 0` the cue `Panel` plays; `step :=
+  trunc((125 − s) / 4)`, `max(step, 1)`; `s := s + step`; if `s > 124` then
+  `s := 125` and the cue `Options` plays;
+* the panel is then drawn at the new `s` in the same frame, including every
+  intermediate position, so a press shows one frame of a 31-pixel sliver
+  (`125/4`).
 
+The cues are the same two aliases the §6 strip plays, through the sound
+alias cue of [08 R-CAMP-01 §6]. Because the step is a quarter of the
+remaining distance with a floor of one pixel, both directions converge in a
+bounded number of frames: 18 composed frames from fully closed to fully
+open, and 18 back.
 
-### Closed — the battle chrome at display modes larger than 640×480 [R-HUD-05] (2026-09-04)
+**Established — geometry and painting.** With `W` the composer surface
+width, `x0 = W − s`, `x1 = x0 + 125`, `y0 = 32`, `y1 = 40 × playerCount +
+46` (the session's player-count word): the rectangle `(x0, y0)–(x1, y1)` is
+darkened through the rectangle shader at level `−24` ([03 R-COMP-02 §5]).
+The localised `Kills` heading is written at `(x0 + 2, 32)` and `Losses`
+right-aligned at `(x1 − textWidth − 2, 32)`, both with a text width limit of
+119 and light-table row 0 (the panel text writer's brightness argument).
+Rows start at `y = 47` and advance by 40 per row drawn.
 
-The question this closes: when the negotiated surface is one of the larger
-modes of [R-FE-02 §9], applied at the load transition of [R-FE-01 §11], how
-does the battle interface reach the new edges? It is neither scaled nor
-letterboxed. Every element follows one of a handful of rules, each reading the
+**Established — row order and content.** Rows are emitted in **rank order**
+`r = 0 .. playerCount − 1`. For each rank the ten player slots are scanned
+in slot order for the first that qualifies: record present; controller byte
+1, 2 or 3; side byte ≠ 10; live-unit count ≠ 0 **or** the slot's auxiliary
+word == 0 (a word with no writer, which therefore reads zero,
+[08 R-CAMP-01 §7]); the lobby record's watcher bit
+(`0x40`) clear; and the slot's **rank byte equals `r`** (the rank byte and
+its maintenance on every credited kill are [08 R-CAMP-01 §9]). The first
+match draws the row and the scan stops; if **no** slot holds rank `r`, every
+qualifying slot whose rank is greater than `r` has its rank byte
+decremented by one (compaction of a vacated rank) and the next rank is
+tried — so a vacated rank collapses in the same frame and the row count on
+screen equals the number of qualifying slots. For the drawn row, with `y`
+the row's top:
+
+* when the slot is the **local** player, the rectangle `(x0 + 4, y − 1)–
+  (x1 − 4, y + 38)` is lightened twice, at levels `31` then `20`;
+* the side logo is the frame numbered by the lobby record's logo byte in
+  entry `32xlogos` of `textures/logos.gaf` (§4), drawn by the quad-mapped blitter
+  ([03 R-RAST-01 §1]) from source corners `(1,1) (w−1,1) (w−1,h−1)
+  (1,h−1)` (the frame interior, `w`/`h` the frame size) onto the destination
+  quad `(x0+7, y+1) (x0+119, y+1) (x0+119, y+37) (x0+7, y+37)` — i.e.
+  stretched to 112 × 36;
+* the player name is written at `(x0 + 9, y + 6)`, width limit 119, row 0;
+* the kill count is formatted `%d` and written at `(x0 + 9, y + 21)`; the
+  loss count `%d` right-aligned at `(x0 + 119 − textWidth − 2, y + 21)`;
+  both with width limit 119 and their **flash brightness** (below).
+
+**Established — which counters, and the flash.** The kills value is the
+slot's kill counter, or its **commander-kill** counter when the
+commander-death option word is 2 (*Deathmatch* — [R-FE-01 §7] names the
+values); losses likewise select the loss counter or the commander-loss
+counter. These are the same words the report screen's `Kills`/`Losses`
+columns and the kill-lead line read ([08 R-CAMP-01 §7, §9]); the save
+account of the same name persists the first pair ([08 "Player records"]).
+Two ten-entry byte arrays hold a per-slot flash for kills and for losses:
+the kill-record finalize ([08 R-SKIR-01 §3]) sets the crediting slot's kill
+flash and the victim slot's loss flash to **30**, but only while the F4
+interface bit is set ([R-CAM-01 §14]; with it clear the finalize skips the
+arm and both arrays stay zero, so a Space-held panel shows steady numbers —
+the flash is the F4 bit's second visible effect); the score panel routine
+decays every non-zero entry by **2** once per unit of the scaled timer
+([R-CAM-01 §10], 30 units per second — the same once-per-unit latch as
+[R-WGT-01 §1] step 1) whether or not the panel is showing, and passes the
+byte as the light-table row of the number's text ([03 R-FONT-01 §6]): a
+fresh kill draws its number bright and fades to row 0 over half a second.
+Battle entry zeroes both arrays.
+
+**Established — the rank byte's initial value, and the watcher bit's
+writers.** *Rank:* the per-slot registration helper — the "registers the slot as human / computer /
+inactive" step of [08 R-SKIR-01 §2]'s row-to-player conversion, also run by
+the campaign entry for its two seats and by the multiplayer player creation
+— writes the slot's **rank byte = the slot index** (and two neighbouring
+slot-index bytes) beside the controller byte. Battle entry itself never
+touches the byte, and its only other writer is the kill-lead shift of
+[08 R-CAMP-01 §9]. So before the first credited kill the ranks are
+`0..9` in slot order, distinct, and the panel's rank walk draws the
+qualifying slots in ascending slot order with vacated ranks compacted.
+**Established.** *Watcher:* the lobby record's watcher bit (`0x40`) has
+exactly two setters, both multiplayer-only: the battleroom's `SIDE%d`
+control, which turns a human slot into a watcher when the side is cycled
+past the last side (and back when clicked again), and the kind-3 branch of
+the elimination handler (`You're out!  Continue Watching?`), which sets the
+eliminated slot's bit so the player stays in the session as a spectator.
+The skirmish elimination branch, the registration helper and battle entry
+never set it (registration and the lobby screens only clear neighbouring
+bits or clear this one). In every single-player session the bit is
+therefore constantly clear, and it is **not** derived from the settlement
+gate's observer byte ([05 "Authoritative settlement order"]), which is a
+different field. What reads it: this panel's row gate, the score helper's
+row gate and the statistics rows' flag bit 3 ([08 R-CAMP-01 §7, §10]), the
+kill-lead scan's "non-watcher" filter ([08 R-CAMP-01 §9]), the elimination
+and participant filters, the multiplayer camera placement at battle start
+([08 R-ENTRY-01 §5] "when the local player is watching") and the lobby's
+`Watching:` label. **Established** (bounded census of the bit's writers over
+the recovered function set).
+
+#### The in-battle options window unfold [R-HUD-04 §2]
+
+**Established.** Opening the options root in battle (`PREFS.GUI`,
+[R-FE-01 §6]) snapshots the top window's surface into the `FLIPSURFACE`
+backup, wraps it as a one-frame sprite, and arms an *unfold* animation:
+`counter := 0`, `limit := windowWidth − 1`, `top := windowY` (the window
+record's y), `skew := 0`, and the options-open word. While that word is set
+the composer runs the unfold once per frame, after the score panel and the
+chat/diagnostic overlays and before presentation:
+
+1. If `counter < 277`: `counter := counter + 21`; if it is now `> 276` the
+   cue `Options` plays and `counter := 277`. Then, if `counter > limit` and
+   the **previous** counter was `< limit`, frame 2 of the `LIGHTBAR` entry of
+   the common GUI GAF is blitted once into the snapshot at the frame's own
+   hotspot (a one-time stamp on the backdrop).
+2. `skew := skew + 6` while `counter < limit`; otherwise `skew := max(skew −
+   6, 0)`.
+3. If `limit < counter < 277`: `counter := counter + 1` (one extra pixel per
+   frame after the width is passed).
+4. The snapshot is drawn onto the composer surface by the quad-mapped
+   blitter ([03 R-RAST-01 §1]) from source corners `(1,1) (w−1,1) (w−1,h−1)
+   (1,h−1)` (the snapshot interior) onto a destination quad whose bottom is
+   pinned to screen row **479** and whose top edge is skewed by `skew`:
+   * while `counter ≤ limit`: corners `(counter, top − skew) (127, top)
+     (127, 479) (counter, 479)` — the left edge sweeps right from `x = 0`
+     while the right edge stays at the side rail's edge `x = 127`;
+   * once `counter > limit`: corners `(limit, top) (counter, top − skew)
+     (counter, 479) (limit, 479)` — the left edge parks at the window width
+     and the right edge continues to `x = 277`.
+   Whether an inverted quad (left corner past the right corner) paints is the
+   two-chain rule of [03 R-RAST-01 §1] step 7, not a separate test here.
+5. The top window's redraw word is set, battle-interface dirty bit 2 is set,
+   and the "full chrome repaint" word is set to 1 — so the HUD repaints every
+   frame while the options window is open, not only during the sweep.
+
+The counter, skew and limit words have no other reader; the only observable
+effects are the `Options` cue when the counter saturates, the one-time
+`LIGHTBAR` stamp, the per-frame quad and the per-frame repaint requests.
+Closing the options root clears the options-open word and frees the
+snapshot ([R-FE-01 §6]).
+
+**Supported inference.** With the stock in-battle `PREFS` layout (the
+window widened by 150, [R-FE-01 §6]) `limit` equals the 277 saturation
+value, so the "counter > limit" branch — the `LIGHTBAR` stamp, the extra
+one-pixel steps and the second quad form — is unreachable, and the skew
+rises for the whole sweep (13 frames, to 78) and then decays. Decider: the
+authored `PREFS.GUI` panel width plus 150 (asset census).
+
+#### Command-panel page close and the latch-to-idle group reset [R-HUD-04 §3]
+
+**Established — the page close.** The command-panel *page close* is called
+by every selection change ([R-CAM-01 §2]'s deselect, the `n`/`t` cycles,
+the `+BigBrother` sweep tail [04 R-MOV-03 §1], the build-page switch of
+[R-HUD-03 §6] and the front-end teardown) with one argument, *force*:
+
+1. When *force* is 0 and any of: battle-interface flag bit `0x800`, any of
+   its bits `0x65` (bits 0, 2, 5, 6), or any of bits 5–7 of the session-shell
+   byte (set while `TABMENU` is open, [R-FE-01 §7]) is set, the close is **deferred**: battle-interface dirty bit
+   `0x10` is set and the routine returns 0 without closing anything — the
+   interface pass that clears those bits re-runs the close.
+2. Otherwise the current-page word is zeroed; if no window is open the
+   routine returns 0.
+3. Then, while a window is open: if the **top** window's name equals (first
+   16 bytes) the command-window name the HUD recorded at battle entry, the
+   routine returns 1 — the command window is on top and the pages above it
+   are gone; else the top window is closed through the top-object close of
+   §3 ([R-WGT-01 §1]) and the test repeats. Returns 0 when the stack empties
+   without meeting the command window.
+
+**Established — the latch-to-idle reset.** The *return the command latch to
+idle* step named by [R-CAM-01 §2] (Escape with a latch armed) and §8
+(right-click) is one routine: the armed-order latch byte becomes 1 (idle),
+bit `0x20` of the latch flags byte (the Shift-latch persistence bit) is
+cleared, and — the "palette's default control" phrase of [R-CAM-01 §2] —
+the gadget named `STOP` is looked up by index (non-fatal; a miss skips the
+rest) and every kind-1 gadget with the same `assoc` byte as `STOP` (the
+radio group of [R-WGT-01 §3]) whose status word is non-zero has that word zeroed and is repainted, then
+the window redraw word is set. The status word is the button's authored
+`status` ([fmt gui]) — the frame base of [R-HUD-03 §6] — so this returns
+every button of the order palette's radio group to its up frame. The
+group-reset helper takes any gadget index and is shared with the other
+latch writers.
+
+#### HUD markers: the logo entry, the slide strip's text offsets, the greyed-button darken row, the first-page seed, and the F4 flash gate [R-HUD-04 §4]
+
+* **Side logo (Established).** Both logo draws — the footer's `LOGO2`
+  ([R-HUD-03 §2]) and the score panel's row logo (§1) — read one GAF handle:
+  entry `32xlogos` of `textures/logos.gaf`, bound during battle-data
+  initialization; the frame index is the owner's lobby colour byte. Rule:
+  `frame = logos.gaf["32xlogos"].Frames[lobbyColour]`.
+* **Slide strip text (Established).** [07 §6]'s strip: with `x` the left
+  edge and `yBottom` the bottom edge of the composer surface's clip rectangle
+  (below) and `off` the slide offset (`−31..0`, drawn only while non-zero),
+  the strip art is blitted at `(x, yBottom + off)` and the three strings on
+  one line at `yBottom + off + 10`: `Game Time` at `x + 25`, `Total Units`
+  at `x + 190`, `Game Speed` at `x + 380`; GAF font slot 1, light-table
+  row 0.
+* **Greyed art buttons (Established).** After the frame blit the gadget
+  rectangle goes through the rectangle shader ([03 R-COMP-02 §5]) at level
+  `−20` — darken row `12` — unless the button carries attribute `0x80`.
+  Frame choice is [R-WGT-01 §3]; the authored `status` is the down-state
+  word, not a frame base.
+* **First build page (Established).** Unit creation seeds page field `1`
+  with the paged bit set when the definition's page-count byte is `≥ 2`,
+  else clears both; no click writes the field ([R-HUD-03 §6]).
+* **F4 (Established).** The kill/loss flash arms only while interface-flags
+  bit `0x80` is set (§1, [R-CAM-01 §14]).
+
+**Established — the slide strip's band, rectangle, font and formats.**
+
+* *Band.* Battle-data initialization looks up entry `LIGHTBAR` of the common
+  GUI GAF (`anims/commongui.gaf`, the window record's common GAF of
+  [03 R-FONT-01 §5]), takes **frame index 1** (the second frame; 507 × 32 in
+  the stock file — index 2 is the 149 × 354 stamp of §2), zeroes that frame's
+  two hotspot words in place, and caches the frame pointer; the composer
+  blits it through the plain frame blitter at `(x, yBottom + off)`. With the
+  hotspot zeroed the blit lands exactly there. Zero frames in the entry
+  leaves a null cache and nothing draws.
+* *Rectangle.* `x` and `yBottom` are the left and bottom edges of the
+  composer surface's **clip rectangle**, which battle entry sets to the view:
+  left `128`, top `32`, right `W − 1`, bottom `H − 33` (screen height less
+  the 32-row bottom strip, less one). At 640 × 480 the fully raised band
+  therefore covers rows `416..447` of columns `128..634` and the text line
+  is `y = 426`, with `Game Time` at `x = 153`, `Total Units` at `318` and
+  `Game Speed` at `508`.
+* *Font.* Before the first string the composer writes the window record's
+  current-GAF-font word from **slot 1** (`hattfont11`) and after the last it
+  restores slot 0 (`hattfont12`); the strings go through the GAF pen of
+  [03 R-FONT-01 §6] with no width limit and mode 0 (glyph bytes copied, no
+  light-table remap) — slot 1 and the plain blitter. The side FNT is reached
+  only through the pen's null-slot fallback.
+* *Formats.* Literal, with the translated key as the first `%s`:
+  `%s : %02d:%02d:%02d` (`Game Time`; hours, minutes, seconds of the tick
+  count at 30 per second), `%s : %d  (Max %d)` (`Total Units`; the local
+  player's live count and the unit limit; two spaces before the
+  parenthesis), and `%s %s` (`Game Speed`; the `Normal`-or-`%+d` text of
+  [R-CAM-01 §3], with ` (%+d)` appended afterwards while the adapted speed
+  differs). No colon follows `Game Speed`; a space-colon-space follows the
+  other two keys. With no translation table loaded every key is returned
+  verbatim [02 "Translation table"].
+
+`campaignside = ALL` needs no retail contract beyond [R-FE-01 §4]: the side a
+campaign battle uses when the campaign names none is the local player's side
+record, written from the registry `side` word before the campaign was chosen;
+carrying that word into battle entry is plumbing, not an open question.
+
+#### The `ORDERS` and `BUILD` stage buttons' cues [R-HUD-04 §5]
+
+**Established** (the command-window click handler that also owns the
+factory product click of [R-P0-11 §1]). The handler tests the clicked
+gadget's name against four
+literals, in this order, before it reaches the product path: `PREV`, `NEXT`,
+`ORDERS`, `BUILD`. Each test is a **substring** search, not a whole-name
+compare, which is what admits the side-prefixed stock names (`ARMORDERS`,
+`CORBUILD`). Each of the four raises one deferred bit and returns; only the
+two stage buttons also **play a named cue**, through the ordinary interface
+cue helper (the same helper `addbuild`, `Panel` and `Options` use, with the
+local-player argument):
+
+| Gadget name | Deferred bit | Cue |
+|---|---|---|
+| `ORDERS` | the bit whose consumer clears the unit's page-shown bit | `ordersbutton` |
+| `BUILD` | the bit whose consumer sets it | `buildbutton` |
+
+The cue is played on the click, before the deferred bit's consumer runs, and
+neither button plays `nextbuildmenu` — the `PREV` and `NEXT` rows above are
+silent at the click, and `nextbuildmenu` is played by the page-switch routine
+their deferred bits reach (§9, [R-P0-11]).
+
+### The battle chrome at display modes larger than 640×480 [R-HUD-05]
+
+When the negotiated surface is one of the larger modes of [R-FE-02 §9],
+applied at the load transition of [R-FE-01 §11], the battle interface is
+neither scaled nor letterboxed. Every element follows one of a handful of
+rules, each reading the
 surface width `W` and height `H` that the presentation state holds, and the
 authored 640×480 art is reused as-is. `W×H = 640×480` is the degenerate case of
 every rule below, which is why nothing in this section changes the 640×480
@@ -4624,7 +4598,7 @@ handle in the image.
 | Anchored to the bottom edge `H` | the footer's `y` anchors through `dy = H − baseheight` ([R-HUD-03 §1]); the §6 slide strip; the `Send` throughput meter at `(129, H−95)`; the frozen-frame `Click to continue` line at `y = H−20` |
 | Anchored to the right edge `W` | the Space-held score panel, `x = W − slide` ([R-HUD-04 §1]); both strip stamp loops; the pointer clamp and edge-scroll tests at `W−1` / `H−1` (§10) |
 | Centred on the surface | a window opened with the "centre" placement flag: `x = (W − w) / 2`, `y = (H − h) / 2` |
-| Centred in the view | a window opened with the "centre in the view" flag — `EXITMENU`, `YESORNO` ("Tab options menu and manual exit"): `x = (W − 128 − w) / 2 + 128`, `y = (H − h) / 2`; the in-game title frames `igpaused` / `igvictory` / `igdefeat` (§11), whose draw origin is the view centre `((W + 128) / 2, H / 2)` less the frame's authored offsets; the camera clamp's maximum, `PlayRight − (W − 128)` and `PlayBottom − (H − 64)` ([R-CAM-01 §13], corrected there) |
+| Centred in the view | a window opened with the "centre in the view" flag — `EXITMENU`, `YESORNO` ("Tab options menu and manual exit"): `x = (W − 128 − w) / 2 + 128`, `y = (H − h) / 2`; the in-game title frames `igpaused` / `igvictory` / `igdefeat` (§11), whose draw origin is the view centre `((W + 128) / 2, H / 2)` less the frame's authored offsets; the camera clamp's maximum, `PlayRight − (W − 128)` and `PlayBottom − (H − 64)` ([R-CAM-01 §13]) |
 | Fixed in authored coordinates | the top strip's anchors (`LOGO`, the bars and their numbers — no `dy`); the radar canvas, a 126-pixel square at the surface's top-left corner letterboxed by map aspect, with `RADAR FINAL` blitted at its pad offsets; the message column at `x = 138`, first line `y = 52` ([R-HUD-03 §14.4]); every rail window and gadget rectangle; the unit information screen ([R-HUD-03 §8]) |
 
 All divisions above are truncating integer divides.
@@ -4639,7 +4613,7 @@ own value is never consulted. Afterwards, an `x + w > W` recentres `x` and a
 refused. `W` and `H` are the live surface size, so a sentinel-placed window
 moves with the display mode while an explicitly placed one does not.
 
-**Nanolathe impact (WU-19-151).** The build reads the surface size at draw time
+**Nanolathe impact.** The build reads the surface size at draw time
 and applies the rules above: `hud.StripStamps` / `hud.BottomStripY` /
 `hud.RailGap` / `hud.ModalPlacement` carry the arithmetic and the battle
 composer stamps the strips, paints the rail band and re-places the two modal
@@ -4656,6 +4630,39 @@ title on the full surface rather than the view, and its `.GUI` loader resolves
 through the composer's own placement, for the two battle modals.
 
 
+### Supported inference
+
+Battle chrome should be data-driven from side-data, while semantic values and
+command availability remain runtime state. A generic GUI implementation may
+share drawing primitives, but must retain the side-data anchor contract.
+
+**Battle-rail minimap destination is closed (Established).** The battle composer
+copies the FINAL radar surface to the origin of its fixed 126×126 logical canvas.
+The aspect-dependent `originX/originY` values belong to the picture's internal
+letterbox and are not an additional screen placement. Consequently the canonical
+destination rectangle is inclusive `(0,0)..(125,125)`; drawing and input both
+apply the same letterbox inside that canvas [07 §6][07 §10].
+
+### Unknown
+
+- The reader, if any, of the `CORBUILD` gadget-name exclusion in the build
+  card · §6 [R-HUD-03 §3] · asset census for a gadget of that name.
+- Whether any stock or third-party content authors a `<unit>0.GUI` page (the
+  authored-page bit of [R-HUD-03 §6] is never set by stock content) · §6
+  [R-HUD-03 §6] · asset census.
+- Whether the message ring's backing memory is zero-initialised at session
+  start, which decides whether the drawer's second text colour (`dcb[10]`, on
+  class-byte bit 5) is reachable at all · §6 [R-HUD-03 §14.4] · static trace
+  of the session-init clear.
+- Whether a mission script can post to the message ring, or whether campaign
+  objective text has its own path; none of the ring's producers in
+  [R-HUD-03 §14.4]'s class census is a mission-event producer · §6, doc 08 ·
+  static trace of the mission-event text producers.
+- The authored width of the in-battle `PREFS` window, which decides whether
+  the options unfold's second quad form and `LIGHTBAR` stamp are reachable ·
+  §6 [R-HUD-04 §2] · asset census.
+
+
 ## 7. Fonts, text, palette, and localization use
 
 ### Established fact
@@ -4670,9 +4677,8 @@ total glyph advance exceeds it, the string is copied through a bounded copy
 into a 300-byte buffer and trailing bytes are removed until the measured
 advance fits — this happens before any clipping test occurs.
 
-**There is no drop-shadow switch (corrected 2026-08-29).** This paragraph
-previously said the glyph rasterizer's extra argument was a "shadow"
-presentation-context field. It is the **skip colour** — the palette index
+**There is no drop-shadow switch.** The glyph rasterizer's extra argument is
+the **skip colour** — the palette index
 the rasterizer treats as transparent, set once to 254 at front-end
 initialisation — and font data carries no shadow either. Every shadow or
 outline seen in retail is a caller composition: the label painter draws the
@@ -4703,17 +4709,16 @@ and missing-key fallback are not fully established.
 
 ### Unknown
 
-Open items only; the decider follows each. Truncate-before-clip and the
-presentation-context drop-shadow switch are established above.
-
-- Full text wrapping and line-breaking policy · static trace.
-- Code-page behavior for extended bytes · static trace. Marked `TODO(T23)`.
+- Text wrapping beyond the two closed wrappers ([R-FE-02 §6],
+  [03 R-FONT-01 §6]) — whether any other caller wraps · §7 · static trace.
+- Code-page behavior for extended bytes · §7 · static trace (`TODO(T23)`).
 - Font fallback order beyond the closed missing-HATTFONT-to-active-FNT path
-  · asset census.
-- Translation-table missing-key rules · static trace.
-- Malformed HATTFONT (no `I` frame) handling · §5 · undefined by
+  · §7 · asset census.
+- Translation-table missing-key rules and the complete translation lookup
+  fallback · §7 · static trace.
+- Malformed HATTFONT (no `I` frame) handling · §5, §7 · undefined by
   construction in retail ([03 R-FONT-01 §6]); asset census decides whether
-  it ever occurs. (Button text-pen arithmetic closed in [03 R-FONT-01 §6].)
+  it ever occurs.
 
 
 ## 8. Software cursor and world picking
@@ -4733,11 +4738,10 @@ init from named entries: index 1 `cursorattack`, 2 `cursorairstrike`,
 15 `cursorselect`, 16 `cursorfindsite`, 17 `cursorred`, 18 `cursorgrn`,
 19 `cursornormal`, 20 `cursorhourglass`, 21 `pathicon`; slot 0 is the zero
 word before the first handle, which no producer selects and which would fault
-if bound ([03 R-FX-01 §5], correction of 2026-09-02; this previously read
-"unused/gray overflow"). Slot 10 is filled last by the init sequence, out of the otherwise
-ascending order — a revision of this document that transcribed the sequence
-rather than the slot offsets dropped it and shifted every later index by one
-(see `docs/SPEC_CONFLICTS.md`). Index 19 is the idle default the pointer
+if bound ([03 R-FX-01 §5]). Slot 10 is filled last by the init sequence, out
+of the otherwise ascending order (`docs/SPEC_CONFLICTS.md` records the
+transcription that once shifted every later index by one). Index 19 is the
+idle default the pointer
 update falls back to, and 20 is the loading shape the front end installs
 around blocking transitions. The index writer diffs and swaps shapes, so
 re-selecting the shape already shown does not restart its animation. The
@@ -4757,25 +4761,19 @@ selected units of the local player — walked over the owner's inclusive range a
 the fixed 280-byte stride, admitted by the membership bit `0x10` — together
 with the hovered unit are
 each asked for a shape, and **the lowest index wins**, so the table's numbering is
-also its shape priority order (re-verified: the chooser collects the selected
-units plus the hover id, evaluates each through the per-latch shape table, and
-keeps the smallest index with a strict `<` reduction). Fourth, when that
+also its shape priority order (the chooser collects the selected units plus
+the hover id, evaluates each through the per-latch shape table, and keeps the
+smallest index with a strict `<` reduction). Fourth, when that
 candidate set is empty the
 idle latch over an own, selectable, finished unit gives `cursorselect`
 and everything else gives `cursornormal`. The tests behind "selectable,
 finished" are the shared eligibility predicate of [R-WGT-01 §9]: status bit
 5, remaining-build fraction exactly `0.0`, post-capture grace counter zero,
-and carrier null or cargo-selectable.
-
-**Correction (2026-09-01, [R-WGT-01 §10]).** The sentence above previously
-read "an own, active, finished, untasked unit". "Untasked" was wrong: the
-predicate reads no order state at all, and its float compare — which the
-Supported-inference block later in this section and §9 called "a per-unit
-order guard float" — is the remaining-build fraction, the very word
-"finished" names. An implementation that tested a separate order-queue
+and carrier null or cargo-selectable. The predicate reads no order state at
+all ([R-WGT-01 §10]): an implementation that tested a separate order-queue
 emptiness would gate `cursorselect` off for every idle unit whose queue
-holds its `defaultmissiontype` standing record ([04 §3.3, "Closed — the
-idle-queue refill"]).
+holds its `defaultmissiontype` standing record (the idle-queue refill of
+[04 §3.3]).
 
 Per selected unit the shape is dispatched on the armed latch and gated on the
 same authored capability flags the order predicate reads, so the advertised
@@ -4870,9 +4868,7 @@ The division is unguarded in retail, so a degenerate bracket faults; nothing in
 the stock corpus reaches it. The interpolation is linear in the projected rows,
 not in the terrain, so on steep ground the returned point can still project a
 few pixels off the clicked row — that residue is retail's own approximation, not
-an error to correct. The probe loop, budget, start offset, clamp bounds, and
-the `max(height, sea level)` water pick were re-verified constant-for-constant
-against the resolver.
+an error to correct.
 
 The triple is stored for the frame, and its cell index (`>> 20` per axis) is what
 the order dispatcher, the build-site validator, and the hover/status readout all
@@ -4882,14 +4878,13 @@ Queued orders and path previews use separate cursor/indicator artwork. The
 cursor validity state is therefore a presentation of command legality, not
 just a pointer shape.
 
-#### R-SEL-02A — selection overlay and picking evidence
+#### Selection overlay and picking evidence [R-SEL-02A]
 
 **Established (direct-static).** The authored 3DO selection primitive is not
 the retail selection wireframe. Model loading moves a declared selection
 primitive to primitive zero, and the model draw walk skips that slot. No
 selection primitive read occurs in the bulk drag selector or in the traced
-hover path. This corrects the earlier plan-facing assumption that one
-authored plate could be reused by every selection consumer.
+hover path; no authored plate is reused by any selection consumer.
 
 The four consumers have the following established split:
 
@@ -4905,27 +4900,20 @@ The four consumers have the following established split:
   walks the `HOT UNITS` list, projects each unit's transformed root-piece
   bounds as a four-corner screen polygon, and retains the smallest score with
   a strict `<` comparison. Equal scores therefore retain the earlier list
-  member (the lower stable pool position). **Correction (2026-08-28):** this
-  bullet previously read "admits visible eligible units from the sensor-built
-  hot-unit list … transformed hierarchy bounds". All three readings were
-  wrong: the list is rebuilt by a frame/presentation producer rather than by
-  the sensor phase, its membership test is not the §9 eligible-unit
-  predicate, and the projected box comes from the selected root piece alone
-  [R-REV-01].
+  member (the lower stable pool position). The list is rebuilt by a
+  frame/presentation producer rather than by the sensor phase, its
+  membership test is not the §9 eligible-unit predicate, and the projected
+  box comes from the selected root piece alone [R-REV-01].
 * Cursor targeting consumes that same hover/visibility result for its
   target-dependent cursor branches; no authored selection primitive is read.
 
-The established drag boundary rule is therefore `min <= coordinate <= max`
-after independent endpoint sorting. **Correction (2026-08-28):** the earlier
-version of this paragraph left the projected-hull edge convention open and
-proposed an edge probe. R-SEL-02B2 now closes that question: the polygon helper
-requires a strictly positive signed cross-product at every edge, so equality
-on an edge is rejected. That strict rule must not be confused with the
-inclusive drag-rectangle rule. **Further correction (2026-08-28):** the
-sentence that closed this paragraph said "only the bounds-extrema-to-corner
-mapping remains open". That mapping is now closed too, and the sign
-convention printed for the cross-product was the reverse of the traced one;
-both are corrected in [R-REV-01].
+The drag boundary rule is therefore `min <= coordinate <= max` after
+independent endpoint sorting. The projected-hull edge convention is the
+opposite: the polygon helper requires a strictly positive signed
+cross-product at every edge, so equality on an edge is rejected
+([R-SEL-02B2]; the sign convention and the bounds-extrema-to-corner mapping
+are [R-REV-01 §2, §4]). The strict rule must not be confused with the
+inclusive drag-rectangle rule.
 
 **Established layer order and clipping.** World terrain, features, units,
 projectiles, and effects are composed first; the world fog/LOS overlay is
@@ -4937,14 +4925,14 @@ state. Its projected rectangle coordinates carry the separate beam-space
 values. The later HUD rail can overwrite pixels in its own interface pass.
 No separate plate clipping rule exists because no plate is drawn.
 
-**Viewport-coordinate correction.** The earlier `(0,32,W-1,H-33)` wording
-in this section and the `(128,32,W-1,H-33)` wording in [03 §4.1] describe
-different coordinate records, not one universal selection clip. The static
+**Viewport coordinates.** The `(0,32,W-1,H-33)` battle viewport rectangle
+of §5 and the `(128,32,W-1,H-33)` subrect of [03 §4.1] describe different
+coordinate records, not one universal selection clip. The static
 call chain establishes that selection consumes the runtime surface-descriptor
 clip, but does not establish its left value for every visible/hidden-panel
 state. That selection-left value is therefore **Unknown** until a focused
 mode/panel capture records the descriptor at the selection draw. Neither
-earlier tuple may be used as a universal canonical value.
+tuple may be used as a universal canonical value.
 
 **Established palette/remap.** The rectangular outline's outer color is
 logical map entry **15** for an ordinary drag-selection rectangle; the 6/4 pair
@@ -4952,19 +4940,11 @@ replaces it only while the armed latch is MOBILEBUILD — entry 6 when the
 site-valid bit is set, entry 4 when it is clear. Its inner frame is entry 0.
 Each is looked up once through the logical-to-physical palette map before the
 solid indexed writer. The outline is neither fog-remapped nor blended; raw GAF
-image bytes and this semantic map path must not be conflated.
-
-**Correction (2026-09-04, WU-19-160).** The paragraph above read "outer color
-is logical map entry 4 in ordinary box-selection mode, entry 6 for the armed
-build/wake variant, and entry 15 outside that mode". That is the inverted
-reading [03 R-SEL-02A] corrected on 2026-08-31 and this copy was never brought
-into line, leaving two sections of the spec disagreeing about which entry the
-ordinary case takes. It is observable which way round it goes: logical 4
-resolves to a dark red, so a build following the old text paints every
-selection drag red instead of white. The conditioning term is the armed latch,
-never the existence of a drag. Which bit picks 6 over 4 is now closed too — it
-is the pointer-flags site-valid bit, [R-CAM-01 §14] step 1, not the latch-flags
-helptext bit.
+image bytes and this semantic map path must not be conflated. The
+conditioning term is the armed latch, never the existence of a drag (logical
+4 resolves to a dark red, so the ordinary case is visibly entry 15), and the
+bit that picks 6 over 4 is the pointer-flags site-valid bit of
+[R-CAM-01 §14] step 1, not the latch-flags helptext bit.
 
 **Unknown.** The static evidence does not show a per-selected-unit plate
 pass, an extra primary-selection wireframe/chrome rule, or an authored plate
@@ -4974,29 +4954,20 @@ selected units, a single/primary selection, overlapping hover hulls, and
 pointer samples around the hull corners would settle those remaining questions;
 edge equality itself is already closed by R-SEL-02B2.
 
-#### R-SEL-02B2 — hover hull arithmetic and publication boundary
+#### Hover hull arithmetic and publication boundary [R-SEL-02B2]
 
 **Established (direct-static).** The hover finder is a separate point-pick
 pass from the drag selector. In the viewport it walks the `HOT UNITS` list,
-which is populated by an ascending unit-pool walk and retains that order. The
-list contains units only; feature contacts are not candidates in this pass. A
+which is rebuilt by a frame/presentation producer from an ascending unit-pool
+walk and retains that order ([R-REV-01 §5] states the producer's admission);
+neither the producer nor the hover consumer evaluates the §9 eligibility
+predicate — those gates belong to their own selection consumers. The list
+contains units only; feature contacts are not candidates in this pass. A
 non-empty unit definition/model reference is required before the hull helper
 is called. The visibility source is mode-selected: the local player's bit in
 the shared word coverage, or a nonzero byte in the selected per-viewer
 coverage grid. Visibility is resolved when the list is built, so a hidden
 unit cannot win merely by having a nearer hull.
-
-**Correction (2026-08-28) — list producer and membership gates
-[R-REV-01].** The paragraph above previously called the list "sensor-produced"
-and stated that a candidate "must also pass the shared visible and
-eligible-unit gates described in §9: the active state, an exact zero order
-guard, no disqualifying state reference, and the established parent-state
-gate". Both readings were wrong. The list is rebuilt by a frame/presentation
-producer that walks unit memory itself, and neither the producer nor the
-hover consumer evaluates the §9 eligibility predicate; those gates belong to
-their own selection consumers and must not be treated as `HOT UNITS`
-membership requirements. The producer's own admission is stated in
-[R-REV-01].
 
 **Established (direct-static).** For an admitted viewport candidate, retail
 asks the unit's model/piece-hierarchy bounding-box helper for its model-space
@@ -5011,13 +4982,9 @@ screenY = int16(((unitZ - cameraZ) - z) >> 16)
          - (int16((y + unitY) >> 16) >> 1) + 32
 ```
 
-**Correction (2026-08-28) — projected Z sign [R-REV-01].** The second line
-previously read `int16((z + unitZ - cameraZ) >> 16)`. That is wrong: the
-transformed Z is **subtracted** from the camera-relative unit Z, not added.
-The `+z` form contradicted [03 §2.4], which already described this trailing
-sign as a transient negation of Z inside the projection helpers; the
-subtraction here is that negation, folded into the same expression.
-
+The transformed Z is **subtracted** from the camera-relative unit Z, not
+added: the subtraction is the transient negation of Z that [03 §2.4]
+describes inside the projection helpers, folded into the same expression.
 The narrowing occurs before the half-height shift and before the view-origin
 addition. The unit's committed position supplies `unitX/unitY/unitZ`, and its
 three committed orientation accumulators supply the hierarchy transform;
@@ -5025,17 +4992,10 @@ camera X/Z are the current presentation camera values, scaled to 16.16 before
 the subtraction. This is the exact projection used by the four-point hover
 path and is distinct from the origin-only drag projection in §9.
 
-**Correction (2026-08-28) — extrema and corner mapping now closed
-[R-REV-01].** This section previously carried an **Unknown (direct-static
-boundary)** paragraph stating that the static record "does not name the
-helper's six independent extrema or expose the final component mapping that
-constructs the four corner records", and that the helper's model-space box
-provenance was not established as a bind-pose or runtime box. That boundary
-is closed by the re-derivation in [R-REV-01]: the helper's outputs, its
-vertex source, the disabled hierarchy walk, and the exact four-corner
-component mapping are all Established. The prohibition the paragraph attached
-still stands — a production replacement must not substitute `FootprintX/Z`,
-the authored selection face, or a generic bind-pose box.
+The helper's outputs, its vertex source, the disabled hierarchy walk, and
+the exact four-corner component mapping are [R-REV-01 §1–§2]. A production
+replacement must not substitute `FootprintX/Z`, the authored selection face,
+or a generic bind-pose box.
 
 **Established (direct-static).** The four projected corners are passed to a
 four-point polygon hit helper. The helper's return value is the sole viewport
@@ -5063,14 +5023,8 @@ containsStrictPolygon(point, vertices):
     return true
 ```
 
-**Correction (2026-08-28) — predicate operand order [R-REV-01].** The two
-products above were previously printed the other way round, with
-`lhs = (next.x - prev.x) * (point.y - prev.y)` and
-`rhs = (next.y - prev.y) * (point.x - prev.x)`. That is the reverse of the
-traced comparison. The strictness was right; the sign convention was
-inverted, which flips which winding of the quad counts as inside. Combined
-with the corner order established in [R-REV-01], the earlier form admitted
-the complement of the retail hull.
+The operand order fixes which winding of the quad counts as inside; the
+reversed order would admit the complement of the retail hull.
 
 For the retail hover path `vertices` has four entries. `signed32` means that
 the low signed 32-bit product is the value compared; it is not a floating
@@ -5089,11 +5043,9 @@ score = ((((modelHeight * 32768) >> 16) + zSpan) * xSpan) >> 16
 ```
 
 `modelHeight` is the compiled model total-height term, while `xSpan` and
-`zSpan` are the compiled horizontal box spans. **Correction (2026-08-28):**
-this paragraph previously said their provenance "remains subject to the
-bounds helper gap above". They are not bounds-helper outputs at all — they
-are three compiled definition words read directly by the reduction, and they
-are unrelated to the six hull extrema [R-REV-01]. Both multiplications are
+`zSpan` are the compiled horizontal box spans — three compiled definition
+words read directly by the reduction, unrelated to the six hull extrema
+([R-REV-01 §7] names their writers). Both multiplications are
 evaluated as signed 64-bit products and each `>> 16` is an arithmetic shift
 of that 64-bit intermediate before the result is taken as a signed 32-bit
 score; they are fixed-point narrowing steps, not floating-point rounding
@@ -5108,44 +5060,28 @@ retains the first member on an equal distance.
 computed by the pointer update; it does not recompute the hull. Cursor target
 shapes consume that same hover/visibility result. Thus cursor and click agree
 for every admitted interior point and reject an edge point under the same
-strict polygon test. **Correction (2026-08-28):** this sentence previously
-ended "only the unresolved corner construction remains a shared boundary".
-The corner construction is no longer unresolved [R-REV-01]; what cursor and
-click share is one computed hover result, not an open boundary.
+strict polygon test; what cursor and click share is one computed hover
+result.
 
 **Presentation publication gap (supported inference from [03 §2.4] and
-[03 §2.5]).** The committed `frame.UnitView` currently publishes the unit
-pose (`X/Y/Z` and heading/pitch/bank), model name and definition id, flags,
-footprint, and per-piece rotation/translation/hidden state. The compiled model
-contains authored hierarchy vertices and parent links, and the renderer can
-derive a bind-pose `ModelBounds`. The frame does not publish the
-`HOT UNITS` membership/order, the producer's viewport/visibility admission
-result, the helper's six runtime hull extrema, or the three score terms as a
-typed pick record. The current
-presentation picker therefore cannot reproduce this hover contract without
-guessing a bounds source, reading live simulation state, or treating the frame
-slice as the hot list. [03 §2.4] forbids the latter class of live read at the
-presentation boundary [03 §2.4–§2.5][07 R-SEL-02A].
+[03 §2.5]).** The committed `frame.UnitView` publishes the unit pose (`X/Y/Z`
+and heading/pitch/bank), model name and definition id, flags, footprint
+(`FootX`/`FootZ`), and per-piece rotation/translation/hidden state. The hull
+corners and the three score terms are reproducible from that
+([R-REV-01 §7, §10]); what the frame does not publish is the `HOT UNITS`
+membership/order and the producer's viewport/visibility admission result.
+Reading live simulation state or treating the frame slice as the hot list is
+forbidden at the presentation boundary [03 §2.4–§2.5][07 R-SEL-02A], so a
+pixel-for-pixel replacement of the producer needs a committed ordered
+candidate record ([R-REV-01 §6]). `TODO(question)`: publish that record at
+the committed-frame boundary.
 
-The safe implementation boundary is consequently a future committed-frame
-pick record containing, at minimum, hot-list membership/order, the resolved
-four-corner hull inputs (or the six extrema plus their documented mapping),
-the producer's viewport/visibility admission result, and the three score
-terms. Until those fields or an equivalently traced pure helper are
-published, replacing the current 16-pixel picker is not established. The box
-helper's extrema-to-corner mapping and the polygon helper's edge rule are
-both closed in [R-REV-01]; the publication record is the only part of this
-boundary that is still open. `TODO(question)`: publish the ordered candidate
-record described in [R-REV-01 §6] at the committed-frame boundary.
+#### Hover hull extrema, corner mapping, projection sign, polygon predicate, and HOT UNITS producer [R-REV-01]
 
-#### R-REV-01 — hover hull extrema, corner mapping, projection sign, polygon predicate, and HOT UNITS producer (2026-08-28)
-
-This section is an independent pre-merge re-derivation of the whole viewport
-hover chain — list producer, foreign-visibility helper, per-candidate hull
-test, model bounds helper, orientation transform, four-point polygon helper,
-and score reduction. It closes the extrema/corner boundary that
-[R-SEL-02B2] recorded as **Unknown** and corrects four statements in that
-section. Nothing here changes the drag-rectangle or minimap contracts.
+This section derives the whole viewport hover chain — list producer,
+foreign-visibility helper, per-candidate hull test, model bounds helper,
+orientation transform, four-point polygon helper, and score reduction.
+Nothing here changes the drag-rectangle or minimap contracts.
 
 **1. Model bounds helper — Established (direct-static).** A wrapper
 zero-fills two output triples and a zero base triple, then calls a recursive
@@ -5187,17 +5123,9 @@ minimum Y — a ground-level quad, traversed in a consistent winding — not a
 diagonal slice through the box and not a full projected AABB. When the helper
 returns all zeros (see §1) the four all-zero records still enter the normal
 transform and projection loop; no separate caller-side invalid-model fallback
-exists on this path.
-
-*What the previous text said, and why it was wrong.* [R-SEL-02B2] recorded
-this as **Unknown**, saying the static record "does not name the helper's six
-independent extrema or expose the final component mapping that constructs the
-four corner records", so that "the exact corner order and whether each corner
-uses the helper's minimum or maximum on each model axis cannot be reproduced".
-The mapping is in fact directly readable from the caller's record
-initialization: each of the four records is written from named helper output
-components before the transform loop starts. The conservative reading also
-implied that a maximum-Y corner existed; it does not.
+exists on this path. The mapping is directly readable from the caller's
+record initialization: each of the four records is written from named helper
+output components before the transform loop starts.
 
 **3. Projection — Established (direct-static).** Each corner record is fed
 through the same three-axis orientation transform the renderer uses, driven
@@ -5214,9 +5142,8 @@ where `x/y/z` are the transformed corner components, `unitX/unitY/unitZ` the
 unit's committed position, and the camera X/Z values are scaled to 16.16
 before the subtraction. Each `>> 16` narrowing and its truncation to a signed
 16-bit value happen **before** the half-height shear and before the viewport
-bias is added. The transformed Z is subtracted, not added — the correction
-recorded above — which is the same trailing Z sign [03 §2.4] describes for
-the projection helpers.
+bias is added. The transformed Z is subtracted, not added: the same trailing
+Z sign [03 §2.4] describes for the projection helpers.
 
 **4. Four-point polygon predicate — Established (direct-static).** The helper
 returns false for fewer than three points. Otherwise it visits every directed
@@ -5233,9 +5160,7 @@ evaluated as two low signed 32-bit integer products compared with a signed
 comparison. Equality rejects, so every exactly collinear point — edge
 interior or vertex — is outside. There is no tolerance, widening, saturation,
 alternate edge path, or overflow guard, and the index wrap is signed integer
-division and remainder. The operand order above is the traced one; the form
-previously printed in [R-SEL-02B2] had the two sides swapped, which inverts
-the accepted winding.
+division and remainder.
 
 **5. `HOT UNITS` producer and consumer — Established (direct-static), with
 the caller context a Supported inference.** The list is rebuilt from scratch
@@ -5277,10 +5202,7 @@ exactly three tests, in this order:
    later samples are evaluated only after an earlier one fails.
 
 The producer body evaluates **no** selectable-bit, remaining-build-fraction,
-grace-counter, carrier-state, or health predicate (this sentence previously
-listed "active-state, zero-order guard, parent-state, health, or
-build-fraction"; the "zero-order guard" and "build-fraction" entries were one
-field [R-WGT-01 §10]). The viewport hover
+grace-counter, carrier-state, or health predicate. The viewport hover
 consumer walks the stored identities in producer order, repeats only test 1,
 calls the hull path of §§1–4, applies the score reduction, and replaces the
 winner only on a strictly smaller score — so an equal score retains the
@@ -5292,8 +5214,8 @@ sensor phase is **Supported inference**: the producer reads only unit memory,
 camera, viewport, and coverage state, and holds no sensor list, but the
 bounded caller census that places it in the frame update was not re-derived
 here. What would settle it is a caller census of the producer taken from the
-frame-update and front-end refresh roots. The prior "sensor-built" /
-"sensor-produced" wording is retracted either way: no sensor product is read.
+frame-update and front-end refresh roots. Either way no sensor product is
+read.
 
 **6. Remaining boundary — Unknown.** The committed `frame.UnitView` cannot
 represent this result: its `Units` slice is the published unit set, not the
@@ -5309,34 +5231,16 @@ mapping), and the three score terms or the reduced score. This is a data
 boundary, not a prescribed API. Whether the existing authoritative
 presentation pass can publish it without a new cross-package API is
 **Unknown**; the decider is a design pass over the publication boundary, not
-a further trace. The authored provenance of the three score terms — which
-compiled definition fields they are loaded from — is also **Unknown**; the
-decider is a writer trace from the definition compiler into those words.
+a further trace. The authored provenance of the three score terms is §7; the
+reduction itself is reproducible at the presentation boundary with no new
+record (§10).
 
-**Correction (2026-08-30) — score-term provenance now closed [R-REV-01 §7].**
-The sentence immediately above recorded the authored provenance of the three
-score terms as **Unknown**, and the paragraph before it said the current
-presentation picker "cannot reproduce this hover contract without guessing a
-bounds source". The provenance trace has since been done and that item is
-closed: the X and Z extents are written by the FBI unit-record compiler from
-the authored `FootprintX`/`FootprintZ` keys as `footprint << 20`, and the Y
-extent is rewritten by the catalog loader as the model total height once the
-3DO is loaded. Because both inputs are already committed — `FootX`/`FootZ` on
-the published unit view and the authored model the hull path already resolves —
-the reduction is reproducible at the presentation boundary with no new record
-[R-REV-01 §10]. What is still unpublished is the producer's list rank and its
-viewport/visibility admission result, so the `TODO(question)` below stands for
-a pixel-for-pixel replacement of the producer itself.
+#### The three hover score terms, their definition-compiler writers, and what decides an overlapping click [R-REV-01 §7–§10]
 
-#### R-REV-01 §7–§10 — the three hover score terms, their definition-compiler writers, and what decides an overlapping click (2026-08-30)
-
-This section closes the last open item of [R-REV-01 §6]: the authored
-provenance of the three compiled definition words the hover reduction reads.
-[R-REV-01 §6] recorded it as **Unknown** with "a writer trace from the
-definition compiler into those words" named as the decider. That trace has now
-been done, and all three writers are in the definition compiler and the catalog
-loader. Nothing here changes the hull geometry, the projection, the polygon
-predicate, or the producer's admission tests.
+The three compiled definition words the hover reduction reads are written by
+the definition compiler and the catalog loader. Nothing here changes the hull
+geometry, the projection, the polygon predicate, or the producer's admission
+tests.
 
 **7. The three words and their writers — Established (direct-static).** Each
 compiled unit definition carries a six-word model box — a per-axis minimum and
@@ -5386,8 +5290,8 @@ bounds helper of [R-REV-01 §1] and not to this one — reads no orientation, an
 runs once per definition at load time on the authored bind pose.
 
 **8. The reduction, restated with its terms named — Established
-(direct-static).** [R-SEL-02B2] already established the arithmetic; only the
-term names were open. With the writers above it reads:
+(direct-static).** With the writers above, the reduction of [R-SEL-02B2]
+reads:
 
 ```text
 score = ((((yExtent * 32768) >> 16) + zExtent) * xExtent) >> 16
@@ -5438,17 +5342,15 @@ a 2×2 building resolves to the building — and what would settle the stock-set
 claim is a census of `FootprintX`/`FootprintZ` and model heights over the stock
 definitions, not a further trace.
 
-**10. Presentation boundary — Established consequence.** [R-SEL-02B2]'s
-"presentation publication gap" concluded that the three score terms could not be
-computed at the committed-frame boundary without guessing. With §7 that no longer
-holds: `frame.UnitView` already publishes `FootX`/`FootZ` — the same authored
-`FootprintX`/`FootprintZ` the compiler read — and the authored model the hull
-path already resolves supplies the model total height by the §7 walk. The
-reduction is reproducible from what is already committed, so no new pick record
-is needed for the ordering. The rest of [R-REV-01 §6] is unaffected: the
-producer's viewport/visibility admission and its list rank are still not
-published, and the `TODO(question)` for the ordered candidate record still
-stands for anyone wanting a pixel-for-pixel replacement of the producer.
+**10. Presentation boundary — Established consequence.** `frame.UnitView`
+already publishes `FootX`/`FootZ` — the same authored `FootprintX`/`FootprintZ`
+the compiler read — and the authored model the hull path already resolves
+supplies the model total height by the §7 walk. The reduction is reproducible
+from what is already committed, so no new pick record is needed for the
+ordering. The producer's viewport/visibility admission and its list rank are
+still not published ([R-REV-01 §6]), and the `TODO(question)` for the ordered
+candidate record stands for anyone wanting a pixel-for-pixel replacement of
+the producer.
 
 
 ### Supported inference
@@ -5467,36 +5369,19 @@ target and `cursorgrn` over a friendly one, after the same own-finished-unit
 test that otherwise gives `cursorselect`, and the can-reclaim/can-attack
 branches also resolve to the green validity shape; when it equals `0` (the
 default), the specific per-latch shapes of the table above apply (including the
-idle ATTACK/RECLAIM rewrite over hostile targets). The earlier claim that the
-diverting condition was "not implemented because its byte's writer was not
-located" is superseded: the writers are the option loaders and the gate is the
-option value itself.
+idle ATTACK/RECLAIM rewrite over hostile targets). The option word's writers
+are the option loaders, and the gate is the option value itself.
 
 The shared eligibility predicate's exact single-precision compare is **equal to
 `0.0`**, not `1.0`: all eligibility sites compile to an exact compare against
-the constant `0.0`. An earlier reading of the constant as `1.0` (and the corpus
-note that endorsed it) misread the compared value; the machine code and the
-constant's bytes are unambiguous.
-
-**Correction (2026-09-01, [R-WGT-01 §10]) — the compared field.** This
-paragraph previously opened with "The runtime active-state bit `0x20` and the
-empty-current-task field that the own-unit inspect predicate also tests are
-established for retail but have no counterpart in the current runtime flag
-word (see `docs/SPEC_CONFLICTS.md`)", and continued after the constant: "and
-the compared field is a per-unit order guard float — zeroed at unit creation
-and at order completion, written with a clamped `0..1` ratio while an order is
-being processed — so eligibility means the unit is not mid-order". Both are
-retracted. The compared field is the **remaining-build fraction** — the word
-the construction step drives from `1.0` toward `0.0` [05 R-WORK-01 §1] — so
-"eligible" means *construction complete*, exactly as [R-WGT-01 §9] and
-[08 R-TRIG-01 §3] already state. The "clamped `0..1` ratio" that misled the
-earlier reading is the construction step's own clamp, and the "order
-completion" that zeroes it is the completion of the *build* order on the
-product; no routine of the order subsystem writes the word. The
-"empty-current-task field" is therefore not a second gate but the "finished"
-gate itself, and the `0x20` half is the *selectable* status bit of
-[08 R-P0-04 "Runtime eligibility bit lifecycle"]; both have counterparts in the
-build (`Remaining` and the eligibility status bit).
+the constant `0.0`. The compared field is the **remaining-build fraction** —
+the word the construction step drives from `1.0` toward `0.0`
+[05 R-WORK-01 §1] — so "eligible" means *construction complete*
+([R-WGT-01 §9, §10], [08 R-TRIG-01 §3]); no routine of the order subsystem
+writes the word, and there is no separate "empty current task" gate. The
+other half of the predicate, status bit 5 (`0x20`), is the *selectable* bit
+of [08 R-P0-04 "Runtime eligibility bit lifecycle"]; both have counterparts in
+the build (`Remaining` and the eligibility status bit).
 
 The visibility gate is the word-grid bit `1 << (localPlayer & 0x1F)` versus the
 per-viewer byte grid selected by a visibility-mode bit. The named-entry index
@@ -5509,38 +5394,27 @@ uses.
 
 ### Unknown
 
-Open items only; the decider follows each. The hull's existence, its four-point
-projection stage, unit-only hot-list scope, bounds-helper extrema,
-extrema-to-corner mapping, projected Z sign, polygon predicate, and score
-reduction are established in [R-SEL-02B2][R-REV-01].
-
-**Correction (2026-08-28).** This block previously listed the bounds-helper
-component mapping as still Unknown and called the earlier "picking hull closed"
-wording too broad. The mapping is closed by [R-REV-01]; what remains open is
-the committed publication record, not the arithmetic.
-
-**Correction (2026-08-30).** The first bullet below previously read "The
-committed pick record, and the authored provenance of the three score terms ·
-[R-REV-01 §6] · static trace. A pixel-for-pixel presentation replacement is
-blocked on both." The score-term half is closed by [R-REV-01 §7] — they are the
-footprint-derived X and Z extents and the model total height — and with it the
-ordering itself is reproducible from what the committed frame already carries
-[R-REV-01 §10], so a replacement is no longer blocked on the reduction. Only the
-producer's own list rank and admission result remain unpublished.
-
 - The committed pick record: the producer's list rank and its
-  viewport/visibility admission result · [R-REV-01 §6] · static trace. A
-  pixel-for-pixel replacement of the *producer* is blocked on it; the hull test
-  and the score reduction are not.
+  viewport/visibility admission result · §8 [R-REV-01 §6] · a design pass
+  over the publication boundary. A pixel-for-pixel replacement of the
+  *producer* is blocked on it; the hull test and the score reduction are not.
 - Whether a stock aircraft always outscores the stock buildings it can fly over
-  · [R-REV-01 §9] · a census of `FootprintX`/`FootprintZ` and model heights over
-  the stock definitions. The mechanism is Established; only the generalization
-  over the stock set is a Supported inference.
-- Cursor handle slot 0 identity — the unused/overflow slot · static trace. The
-  only remaining cursor-table item.
+  · §8 [R-REV-01 §9] · a census of `FootprintX`/`FootprintZ` and model heights
+  over the stock definitions. The mechanism is Established; only the
+  generalization over the stock set is a Supported inference.
+- The selection rectangle's clip-left value for every visible/hidden-panel
+  state · §8 [R-SEL-02A] · a focused mode/panel capture recording the surface
+  descriptor at the selection draw.
 - Feature-versus-unit pointer priority; features are absent from the unit
   hover list, and reclaim families resolve features separately at the pointer
-  · static trace.
+  · §8 · static trace.
+- Whether the `HOT UNITS` producer runs in the frame/presentation update
+  rather than the sensor phase (Supported inference) · §8 [R-REV-01 §5] · a
+  caller census of the producer from the frame-update and front-end refresh
+  roots.
+- Whether the two low status bits the producer tests before its terrain
+  clamp are the movement-mode bits of doc 04 (Supported inference) · §8
+  [R-REV-01 §5] · a writer census of that status word.
 
 
 ## 9. Selection, control groups, orders, and build pages
@@ -5563,13 +5437,7 @@ fields: the *selectable* status bit `0x20` (bit 5) of unit runtime flags; the
 remaining-build fraction compared exactly equal to `0.0` — construction
 complete; the post-capture grace counter equal to zero; and either no carrier
 reference or a carrier whose runtime flags carry the *cargo-selectable* bit
-`0x40000000` (bit 30) [R-WGT-01 §9][R-WGT-01 §10]. **Correction (2026-09-01,
-[R-WGT-01 §10]):** the second and third clauses previously read "an exact
-runtime single-precision value compared equal to `0.0` — a per-unit
-order-guard float zeroed at unit creation and at order completion, nonzero
-while an order is being processed; no disqualifying state reference (zero)".
-The float is the remaining-build fraction and reads no order state; the
-"state reference" is the grace counter. Selection membership is bit
+`0x40000000` (bit 30) [R-WGT-01 §9][R-WGT-01 §10]. Selection membership is bit
 `0x10` of unit runtime flags. Bulk changes also clear the selected-builder
 single-select id, refresh aggregate command/UI state, and set battle-
 interface dirty bit `0x10` (a different field that coincidentally shares the
@@ -5604,12 +5472,11 @@ catalog definition id; selected units (flag `0x10`) receive the requested
 group value, and unselected units already carrying that group have it zeroed.
 
 Digits `1..9` (tokens `0x31..0x39`) route between build-page selection and
-group recall under an exact `SwitchAlt`/Alt gate — Alt is held-key token
-`0xFB`, not Shift (**correction in [R-CAM-01 §4]:** the `modeBit` below is the
-persistent `SwitchAlt` option bit, not a battle-mode flag):
+group recall under an exact `SwitchAlt`/Alt gate ([R-CAM-01 §4]) — Alt is
+held-key token `0xFB`, not Shift:
 
 ```
-modeBit = battle-mode flag & 1
+modeBit = SwitchAlt option bit (interface-flags bit 8)
 alt     = held-key query for token 0xFB (Alt)
 if (!modeBit && !alt)  -> build page for digit - 1
 else if (modeBit && alt) -> build page for digit - 1
@@ -5660,15 +5527,11 @@ a fixed chain, writing the parsed value only when the button's runtime gate
 value is nonzero, else writing `1`. Every matched arm clears latch-flag bit
 `0x08` and plays one of two cues.
 
-**Corrected and completed (2026-09-04, WU-19-171) — the chain and the cue
-column.** The chain used to be given here as "STOP … then ATTACK, BLAST,
-DEFEND, REPAIR, PATROL, RECLAIM, CAPTURE, UNLOAD, LOAD/PICKUP alias, and
-default MOVE", and the cue as two families with three arms unassigned. Three
-things in that were wrong. **MOVE is the first test, not a default**; there
-is **no default at all** — a name matching none of the eleven returns "not
-handled", writing no latch and playing no cue, so the button falls through to
-whatever the panel handler tries next; and there is **no `PICKUP` compare**,
-only `LOAD`. Each test is a substring search (case-sensitive) over the
+**The chain and the cue column.** `MOVE` is the first test and there is
+**no default**: a name matching none of the eleven returns "not handled",
+writing no latch and playing no cue, so the button falls through to whatever
+the panel handler tries next; there is no `PICKUP` compare, only `LOAD`.
+Each test is a substring search (case-sensitive) over the
 gadget's 16-byte name, so `UNLOAD` must precede `LOAD` — and does. The chain
 in order, with the value written when the gate is nonzero and the cue:
 
@@ -5702,20 +5565,18 @@ inaudible in the shipped install and audible only under replaced sound data.
 Latch-flag bit `0x40` selects immediate-versus-special helptext, bit `0x20`
 marks placement-valid pending, and bit `0x08` additionally gates placement
 drawing; the dispatcher clears bit `0x08` while the Escape cancel path clears
-bit `0x20`. **This word is not the one the drag rectangle's colour reads
-(2026-09-04, WU-19-160).** The "special latch flag" of §6 and [R-SEL-02A] is
-bit 6 of the **pointer-flags** byte — the site-valid bit of [R-CAM-01 §14]
-step 1 — and the two bytes were conflated because both bits are written `0x40`.
-Nothing in the build-button handler touches this helptext word, which is why a
-census of it found no writer for a question that was never about it. The latch writers are now census-complete: the order-button
+bit `0x20`. This word is not the one the drag rectangle's colour reads: the
+bit that picks the drag box's outer entry is bit 6 of the **pointer-flags**
+byte — the site-valid bit of [R-CAM-01 §14] step 1 — a different byte whose
+bit is also written `0x40`; nothing in the build-button handler touches the
+helptext word. The latch writers, census-complete: the order-button
 dispatcher arms `1..9`, `0xC`, `0xD`; the battle-HUD build-button handler arms
 `0xE` (MOBILEBUILD) when the product's `BMcode` byte is zero, storing the
 product id in the pending-build word and playing `addbuild` — the click arms
 it, not the ghost show; idle resets write `1`. **Latch value `0xB` (TELEPORT)
 has no writer anywhere in the image** — it is a consumer-only switch key
-(order dispatch, shape table), so the "exact arming trigger for the two
-off-button values" question closes as: MOBILEBUILD armed by the build-button
-click, TELEPORT never armed by retail's own code.
+(order dispatch, shape table) — MOBILEBUILD is armed by the build-button
+click, TELEPORT never by retail's own code.
 
 **The stance buttons are a separate producer from the order latch.** The
 `MOVEORD` and `FIREORD` gadgets do **not** arm the command latch above: they
@@ -5739,8 +5600,8 @@ button artwork, not `text=` fields. The unit-side fields, their two-bit masks,
 the acceptance flags, and the simulation consumers are
 [04 §3.4a][R-STANCE-01 §1][R-STANCE-01 §2].
 
-**Established (2026-09-04, WU-19-171) — the battle-panel handler's own chain,
-and where the two dispatchers above sit inside it.** One callback receives
+**Established — the battle-panel handler's own chain, and where the two
+dispatchers above sit inside it.** One callback receives
 every click on the command window and tests the gadget's name against a
 substring chain of its own before it reaches either producer described above:
 
@@ -5800,8 +5661,7 @@ MOBILEBUILD latch (`0xE`), stores the id in a pending-build word and plays the
 `addbuild` cue. Nothing is queued; the click that follows on the world is what
 issues the order. A product whose BMcode is nonzero never reaches that branch and
 falls through to the counted factory-queue producer of the order-producer block
-below ([R-P0-11 §1]) — a signed counted add/subtract that never purges. The
-"immediate queue path" phrasing of an earlier reading is superseded there.
+below ([R-P0-11 §1]) — a signed counted add/subtract that never purges.
 
 BMcode zero is the structure class — the same test that decides whether a
 definition carries a yard map at all [04 §6.2] — so the discriminator is "is this
@@ -5889,18 +5749,13 @@ chain, a circle at the order point, a queued-order icon, and a per-unit pass tha
 draws range rings once (per-bit dispatch in R-P0-11 §3 below).
 The hovered/selected unit is drawn with the full mask and other local units with
 the marker-only subset, and only when some builder context exists. The
-per-order-kind mask byte values are now closed from the registration tables
-[R-P0-11 §3]:
-MOBILEBUILD marker+dashes+rings (`0x13`), VTOL_MOBILEBUILD marker+dashes
-(`0x03`), MOVE and PATROL dashes+rings (`0x12`), QMOVE/QPATROL dashes (`0x02`),
-and every attack-family kind icon-only (`0x08`) — the circle bit is set by no
-stock record. An earlier reading of this paragraph — a four-bit mask, a plain
-connecting line, a line-only subset for other selected units, and no stock order
-using the circle bit — was superseded: no stock helper draws a plain connecting
-segment (the dash chain is the only connector), the bit-4 helper is a circle,
-and the icon helper (bit 8) was missing from the enumeration. A later revision
-that re-added the circle bit to the attack family was itself wrong: the attack
-family is icon-only, and no stock order uses the circle.
+per-order-kind mask byte values come from the registration tables
+([R-P0-11 §3] has the full census): MOBILEBUILD marker+dashes+rings (`0x13`),
+VTOL_MOBILEBUILD marker+dashes (`0x03`), MOVE and PATROL dashes+rings
+(`0x12`), QMOVE/QPATROL dashes (`0x02`), and every attack-family kind
+icon-only (`0x08`) — the circle bit is set by no stock record. No stock
+helper draws a plain connecting segment; the dash chain is the only
+connector.
 
 **The build-site marker is eight lines with a ten-tick sweep.** For an order
 carrying a nonzero build definition id, the footprint rectangle is projected
@@ -5927,17 +5782,13 @@ Selection changes can update the side panel, build page, command palette,
 health bars (whose visibility to other players is the `hidedamage` gate of
 [04 R-SPEC-01 §6]), unit name, and queued-order cursor indicators.
 
-#### UI order producers (R-P0-11)
+#### UI order producers [R-P0-11]
 
-The findings below are folded from addendum R-P0-11. The headings keep the
-addendum's section numbers so `[R-P0-11 §N]` citations still resolve; the
-addendum's contract table is not repeated. Nanolathe impact: battle-HUD product
-clicks become counted ±1/±5 producers that never purge, the queue-count labels,
-the five-bit overlay walker, Shift-latch persistence, and the COB signal-mask
-seed 1; the regression fixtures that lock these cover the counted coalesce,
-tail-most cancellation, and the dash cadence.
+Nanolathe impact: battle-HUD product clicks are counted ±1/±5 producers that
+never purge; the queue-count labels, the five-bit overlay walker, Shift-latch
+persistence and the COB signal-mask seed 1 follow.
 
-##### Factory product click producer (R-P0-11 §1)
+#### Factory product click producer [R-P0-11 §1]
 
 **Established.** The battle-HUD click handler resolves the clicked build-page
 toy's name to a product definition id, loads the single-selected unit from the
@@ -5947,12 +5798,11 @@ nonzero (every factory product) falls through to a signed counted add/subtract
 against the builder's production queue. The count is derived from the click's
 button identity and the live held-key query for token `0xF9` (Shift): +1 for a
 plain left-click, +5 for Shift+left-click, -1 for a plain right-click, -5 for
-Shift+right-click. The "immediate queue path" phrasing of the build-placement
-paragraph above is superseded by this: the path is a counted producer that
-never purges — the Shift axis scales the count, not the queue mode.
+Shift+right-click. The path is a counted producer that never purges — the
+Shift axis scales the count, not the queue mode.
 
-The counted-add routine plays the `addbuild`/`subbuild` cue (see the
-correction below), routes the stockpile buttons `MAKENUKE`/`MAKEANTI` to the
+The counted-add routine plays the `addbuild`/`subbuild` cue (below), routes
+the stockpile buttons `MAKENUKE`/`MAKEANTI` to the
 `BUILDWEAPON` order descriptor and everything else to the
 `MOBILEBUILD`/`BUILDINGBUILD` descriptors from the product definition, then
 coalesces the signed count into the queue:
@@ -5975,9 +5825,7 @@ Counted nodes keep their descriptor flags, including the counted-production
 flag the button counter filters on; the world-order shift-chain flag does not
 participate on this path.
 
-**Corrected (2026-09-04, WU-19-171) — the cue's gate.** The parenthetical
-above read "(local player; positive counts only)", which left `subbuild`
-with no producer at all. The routine's first statement is the local-player
+**The cue's gate.** The routine's first statement is the local-player
 test — the selected builder's owning-player byte against the local-player
 byte — and inside it a **single signed test on the count**: one or more plays
 `addbuild`, anything else plays `subbuild`. There is no third arm and no
@@ -5986,7 +5834,7 @@ coalesce, so a click that ends up changing nothing is still audible. Zero is
 not reachable from a click (the count is always ±1 or ±5) but it is on the
 `subbuild` side of the test.
 
-##### Queue-count display (R-P0-11 §2)
+#### Queue-count display [R-P0-11 §2]
 
 **Established.** After every enqueue or cancel the click handler runs the
 count-label writer over the page's toys; for each build-product toy it sums
@@ -6001,10 +5849,7 @@ window's font handle and foreground/background GUI color fields, anchored by
 the toy's authored rectangle); there is no separate count primitive and no
 display cap.
 
-**Refinement (2026-08-31) — which flag field, and what each format prints.**
-The paragraph above is right that the toy's flag bits select the format and that
-the sum spans both lists. Two things it leaves open have been read wrongly in
-implementation and are pinned here.
+**Established — which flag field, and what each format prints.**
 
 *The flag field is the toy's authored `commonattribs` byte* — the `[COMMON]`
 key of that name, which the loader keeps in the runtime toy record immediately
@@ -6044,7 +5889,7 @@ order list.
 *Whose queues.* The writer is handed the single selected builder the click
 handler resolved (§1), so only that unit's two lists are counted.
 
-##### Order-queue overlay helpers (R-P0-11 §3)
+#### Order-queue overlay helpers [R-P0-11 §3]
 
 **Established, gate and ordering.** The world composer draws the selected
 units' queue quads after the unit band and again after the projectile/impact
@@ -6056,9 +5901,7 @@ paragraph above. The walker passes a caller mask to a per-unit dispatcher:
 mask `0x1F` for four privileged units and marker-only `1` for the remaining
 local units, the latter only when some builder context exists. The four
 privileged units, and the exact Shift gate, are enumerated in "Who gets the
-full mask, and is the marker Shift-only" below — an earlier reading of this
-sentence called them "the acted-on/hovered/single-selected units", which was
-too vague to implement and wrong about "acted-on". Per order node the
+full mask, and is the marker Shift-only" below. Per order node the
 effective mask is `table[kind].drawMask & callerMask`; the five bits
 dispatch:
 
@@ -6087,22 +5930,13 @@ SelfDestruct pair, Paralyze, GetBuilt, BeCarried, MakeSelectable, Wait,
 WaitForAttack, AttackUType, Guard_NoMove, SelfRepair, QMove, QPatrol), and the
 VTOL table (22 records: VTOL_Standby through VTOL_LandIfCan) — and their
 draw-mask words are listed in the helper table above. The icon bytes equal the
-cursor index table's values, an independent confirmation of the corrected
-table in §8.
+cursor index table's values, an independent confirmation of the table in §8.
 The
 always-on selected-unit connecting quad uses a single GUI-context color-map
 color; there is no owned-vs-other color pair in the overlay itself —
 differentiation is by mask width (full `0x1F` vs marker-only `1`), not color.
 
-Corrections to the overlay paragraph above: the mask is **five bits, not
-four** — the icon helper (bit 8) was missing from that enumeration, and the
-bit-4 helper is a circle, not a plain connecting line; no stock helper draws a
-plain connecting segment, so the dash chain is the only connector. The
-per-order-kind mask byte values in the runtime-built table are now
-**established** from the three static registration tables (the full census is
-in the helper table above), with exact bit identities.
-
-###### Who gets the full mask, and is the marker Shift-only
+##### Who gets the full mask, and is the marker Shift-only
 
 **Established.** The build-site marker is drawn **only while Shift is held**.
 There is no non-Shift path to it. The reachability is a single chain with no
@@ -6118,9 +5952,7 @@ real-time source §4 contrasts with the click message's modifier word, not a
 latched or remembered modifier. With Shift up, retail therefore draws **nothing
 at all** at a queued build site: no rectangle, no sweep, no dash chain.
 
-*Re-derived independently (2026-08-30), after a play observation contradicted
-it.* Every load-bearing claim above was checked a second time from the image by
-a different route, and each one held:
+The evidence, whole-image:
 
 * The call census is whole-image, not neighbourhood: the walker, the dispatcher
   and the marker helper each appear as a call target exactly once, and a byte
@@ -6156,13 +5988,9 @@ observed, not recalled, would settle it [07 R-P0-11 §3].` Recorded here rather
 than changed in the gate, because inventing a second trigger would be inventing
 behavior.
 
-This corrects the earlier phrasing of the paragraph that opens §3, which said
-the full mask goes to "the acted-on/hovered/single-selected units". That
-wording was wrong in a way that mattered: it invited reading "acted-on" as a
-recency mark written when an order is issued — a unit id plus a timestamp, or a
-bit on the unit. **No such mark exists.** Issuing an order writes nothing that
-this overlay consults. The unit the old text called "acted-on" is the camera's
-follow target.
+There is no "acted-on" recency mark — a unit id plus a timestamp, or a bit on
+the unit — written when an order is issued: issuing an order writes nothing
+that this overlay consults.
 
 The walker admits a local unit only when it is alive and not death-marked, then
 picks its caller mask by the first of these that matches:
@@ -6185,9 +6013,8 @@ draw anything. Note the asymmetry: the builder-context test gates the
 marker-only fallback alone — the four privileged units draw their queues
 regardless of whether anything is a builder.
 
-Two details that a reader of the old wording could get wrong. First,
-"single-selected" was misleading: **every** selected unit gets the full mask,
-not only a lone one; the command-page subject (2) is the separate notion that
+Two details. First, **every** selected unit gets the full mask, not only a
+lone one; the command-page subject (2) is the separate notion that
 is single-unit-ish, and it is an id the page machinery owns, not a count of the
 selection. Second, the walker passes the dispatcher one further byte that
 distinguishes the selected-unit branch from the other three; no helper reads
@@ -6211,10 +6038,9 @@ byte, the order-flags word or the name pointer. It is dead metadata, not a
 second dispatch table, and it is the only place the marker helper is named
 outside the dispatcher.
 
-###### The dash chain's artwork, and the anchor getter that doubles as the icon
+##### The dash chain's artwork, and the anchor getter that doubles as the icon
 
-**Established** (2026-08-30). Three facts the helper table above left open or
-stated too narrowly.
+**Established.**
 
 *The dash chain's sprite is the authored GAF entry `pathicon`.* It is resolved
 by name at start-up by the same loader and into the same handle array as the
@@ -6249,10 +6075,8 @@ byte alone. For MOBILEBUILD and VTOL_MOBILEBUILD that byte is **0**, so a
 queued build site draws no per-order icon — the sprites a player sees strung
 between queued build sites are the `pathicon` dash chain, not order icons.
 
-*The per-kind census, corrected.* The paragraph in §9 above lists only MOVE,
-PATROL, QMOVE/QPATROL and "every attack-family kind"; the two static tables
-carry more, and the icon bytes come with them. Ground-state table, in table
-order — Standby `0x10`/15, Standby_Mine `0x10`/15, Move_Ground `0x12`/14,
+*The per-kind census.* The two static tables, each record as draw mask /
+icon byte. Ground-state table, in table order — Standby `0x10`/15, Standby_Mine `0x10`/15, Move_Ground `0x12`/14,
 Follow_Ground `0x12`/5, Suppress `0x08`/1, Attack_Chase `0x08`/1,
 Attack_Kamikaze `0x08`/1, AttackSpecial `0x08`/1, Park `0x00`/14,
 Patrol `0x12`/7, Ground_Pickup `0x08`/12, Ground_Unload `0x08`/13,
@@ -6271,12 +6095,11 @@ VTOL_GetRepaired, VTOL_LandIfCan all `0x00`/19. Notes: the `0x18` kinds
 a `0x00` mask draws nothing at all however privileged the unit; the circle bit
 is still set by no stock record; and no stock ground record and no stock VTOL
 record uses icon byte 0 except the two MOBILEBUILD-family records. The
-ground-special table (Stop, QMove, QPatrol and the rest) was not re-read in
-this pass, so the `0x02` values the §9 paragraph gives for QMOVE/QPATROL stand
-as previously recorded.
+ground-special table (Stop, QMove, QPatrol and the rest) was read in an
+earlier pass only; its `0x02` values for QMOVE/QPATROL are the ones §9 gives.
 
-*Re-verification of the marker arithmetic.* The marker helper's own numbers
-were re-read against the §9 marker paragraph and match it exactly: the
+*The marker arithmetic, from the helper itself.* It matches the §9 marker
+paragraph exactly: the
 rectangle's two corners are the definition's own corner-offset fields added to
 the order node's stored position; **both** corners take the same height, which
 is what flattens the marker onto the ground plane; the age is the global tick
@@ -6286,7 +6109,7 @@ once one pixel out in the outer colour and once flush in the inner colour, with
 the colour pair chosen from the owning unit's selected flag. A node whose build
 definition id is zero draws nothing.
 
-##### Latch persistence under Shift (R-P0-11 §4)
+#### Latch persistence under Shift [R-P0-11 §4]
 
 **Established.** The world-order commit handles every armed latch on
 left-click: it issues the order (MOBILEBUILD via the build-order issuer plus
@@ -6305,19 +6128,17 @@ latch to idle, clears bit `0x20`, and refreshes the command palette. The
 arming test therefore uses the click message's Shift bit while the disarm test
 uses the real-time key state — two distinct sources.
 
-##### Engine-started COB thread signal mask (R-P0-11 §5)
+#### Engine-started COB thread signal mask [R-P0-11 §5]
 
 **Established.** The COB thread-slot allocator initializes each new
 engine-started thread slot with a fresh state word, code pointer, return
 sentinel (−1), parameter cell (0), and a **signal mask of 1** — engine-started
-threads begin accepting signal group 1, not group 0. This supersedes the
-earlier "mask 0" guess for engine-started COB threads. (Engine-side finding
-folded here with the addendum that shipped it; its natural home is the COB VM
-contract, and it is recorded here so the consolidation loses nothing.)
+threads begin accepting signal group 1, not group 0. (An engine-side finding
+whose natural home is the COB VM contract of doc 04; recorded here as well.)
 
-##### Queued world orders: a repeat click at an already-queued point removes it (R-P0-11 §6)
+#### Queued world orders: a repeat click at an already-queued point removes it [R-P0-11 §6]
 
-**Established (2026-08-30).** Every world order the interface issues goes
+**Established.** Every world order the interface issues goes
 through one producer that takes the order's canonical kind, the click's
 **queue flag** (the Shift bit of the click record's key-state word, [R-P0-11
 §4]), the acting unit, an optional target handle, and an optional goal point.
@@ -6368,32 +6189,23 @@ invalidation.
 
 Nanolathe impact: the presentation may not implement this as "coalesce a
 repeat build click into the tail node" — that adds a second building where
-retail removes the first (defect PT3-12). The removal belongs at the
-authoritative order-insertion boundary, before the queued build is
-constructed, and must search the primary queue front-to-back. It is
-implemented there, and the removal frees the whole node: there is no count
-decrement on this path, unlike the factory producer's negative-count
-subtraction of [R-P0-11 §1].
+retail removes the first. The removal belongs at the authoritative
+order-insertion boundary, before the queued build is constructed, and must
+search the primary queue front-to-back; the removal frees the whole node —
+there is no count decrement on this path, unlike the factory producer's
+negative-count subtraction of [R-P0-11 §1]. The overlay colour map is the
+boot-installed 256-byte logical-to-physical table, and every helper's entry
+is pinned — marker 1/9 and 3/10, circle 12, rings 12/14/15, attack-ring
+alternation 12/4; the dash helper reads no map entry (it blits GAF frame
+bytes directly).
 
-##### Unknowns carried from R-P0-11
-
-The overlay color-map questions are closed: the map itself is the boot-installed
-256-byte logical-to-physical table, and every helper's entry is pinned — marker
-1/9 and 3/10, circle 12, rings 12/14/15, attack-ring alternation 12/4; the
-dash helper reads no map entry (it blits GAF frame bytes directly). The
-per-order-kind draw-mask bytes are established from the registration tables
-(above). The dash-chain phase arithmetic is established (above); the only
-remaining open cell is the text-pen formula of §5.
-
-### Closed — the selection-aggregate command-state fold, its two sentinel shapes, and two corrected glosses [R-HUD-03 §13] (2026-08-30)
+### The selection-aggregate command-state fold and its two sentinel shapes [R-HUD-03 §13]
 
 The command buttons of [R-HUD-03 §6] do not read the selection at paint time.
 A single **aggregate command-state refresh** folds the selection into three
 adjacent sixteen-bit interface words, and §6's repaint only reads those words.
-This section is that fold. It leaves every greying *condition* of §6
-unchanged, corrects §6's gloss of one value, and names the capability bits §6
-left unnamed. The three-bit stance half of the same fold is
-[04 R-STANCE-01 §1] and is unchanged by this section.
+This section is that fold; the greying *conditions* are §6's. The three-bit
+stance half of the same fold is [04 R-STANCE-01 §1].
 
 **Established — when the fold runs, and when it is skipped.** The refresh
 first raises the battle panel's "refresh in progress" flag. It then tests the
@@ -6428,17 +6240,13 @@ capability". The three-bit fields need two spare values because their unit
 field holds `0..3`; the two-bit pairs need two spare values because their unit
 field holds `0..1`.
 
-**Correction — [R-HUD-03 §6]'s "mixed" gloss was inverted.** §6's stage/grey
-table read "`CLOAK` … greyed when pair == 3 (mixed)", with the `ONOFF` row
-sharing that gloss. The *condition* is right and is unchanged: `3` greys both
-gadgets. The parenthetical was wrong. `3` is the value each pair starts from,
-so it means **not applicable** — no selected unit is cloak-capable, or none is
-`onoffable` — and `2` is the mixed value. The error was to read the two-bit
-pairs' top value as carrying the same meaning as the three-bit stance fields'
-`3`; the two shapes are parallel, not identical. The stance fields grey at `4`
-(not applicable) and show the generic plate at `3` (mixed); the two-bit pairs
-grey at `3` (not applicable) and show the generic plate at `2` (mixed). §6's
-table now reads "(not applicable)" and points here.
+**Established — the two sentinel shapes.** `3` is the value each two-bit
+pair starts from, so it means **not applicable** — no selected unit is
+cloak-capable, or none is `onoffable` — and `2` is the mixed value; `3` greys
+both gadgets (§6). The two shapes are parallel, not identical: the stance
+fields grey at `4` (not applicable) and show the generic plate at `3`
+(mixed); the two-bit pairs grey at `3` (not applicable) and show the generic
+plate at `2` (mixed).
 
 **Established (asset census) — the artwork confirms which value is "mixed".**
 The `anims/commongui.gaf` entries `ARMCLOAK`/`CORCLOAK` and
@@ -6471,9 +6279,7 @@ deciding to clone the behavior: no observation can separate "intended" from "a
 missing compare", so it is recorded here rather than carried as an open item.
 
 **Established — the capability folds are a disjunction, and the bits are
-named.** §6's table said only "the selection's capability bit for that
-command" and did not identify the bits. They are, with the aggregate word each
-is deposited in:
+named.** With the aggregate word each is deposited in:
 
 | Definition key (capability word bit) | Aggregate bit | Command button |
 |---|---|---|
@@ -6492,34 +6298,23 @@ Each fold is a plain OR: the refresh **sets** the aggregate bit for any
 selected unit whose definition carries the key, and never clears one during
 the walk. §6's repaint then greys the button when its aggregate bit is clear.
 So a button is greyed only when **no** selected unit can perform the command;
-one builder plus one tank offers both `RECLAIM` and `MOVE`. `canpatrol`,
-`canreclamate`, `cancapture`, `canload` and `candgun` are named here for the
-first time; the key-by-key record is doc 02's ([02 "Unit record"]).
-
-**Correction — [04 "Mixed selection and control groups"] had this
-conjoined.** Doc 04 said "Command palette enable is the AND across the
-selected set — a button is enabled only when every selected unit carries the
-capability bit, otherwise it is greyed". That is the opposite of the fold
-above, and it is corrected in doc 04 under the section that now carries that
-heading. The likely origin of the error is the observable behavior of the
-*stance* pair, which does grey on a selection where no unit accepts the
-stance; the capability bits behave the other way.
+one builder plus one tank offers both `RECLAIM` and `MOVE` — a disjunction,
+not an AND across the selection. The key-by-key record is doc 02's
+([02 "Unit record"]).
 
 **Established — `REPAIR` reads the derived bit-9 copy of `canreclamate`, and
 bit-9 readers do exist.** The unit-definition parser stores `canreclamate` in
 capability bit 10 and, in the same instruction sequence that stores
 `canresurrect`, writes bit 9 as a copy of bit 10 ([02 R-KEYS-01 §1]). The
 `REPAIR` aggregate above reads that derived copy; the `RECLAIM` aggregate
-reads the original. [02 R-KEYS-01 §1] recorded its decider as "a bit-9 reader
-census"; that census is not empty and not confined to this panel — the command
+reads the original. The bit-9 reader census is not empty and not confined to
+this panel — the command
 resolver's patrol case tests bit 9 alone to choose the repair patrol over the
 plain patrol ([04 §3.4], code 9), the `VTOL_RepairPatrol` handler tests it as
 its own entry gate, and the repair-target predicate tests it on the repairer.
 Because the bit is a verbatim copy of bit 10, none of these can behave
 differently from testing `canreclamate`: `REPAIR` and `RECLAIM` are enabled
-and greyed together for every authored definition. Doc 02 owns that key's
-record and the closure of its open item; this section states only what doc
-07's reader does.
+and greyed together for every authored definition.
 
 ### Supported inference
 
@@ -6530,22 +6325,11 @@ orders, and multiplayer packets.
 
 ### Unknown
 
-Open items only; the decider follows each. Everything this block used to
-recite — repeated group-recall never centering, the reader-only selection flag
-`0x80000000`, hull geometry and the word-grid gate bit, page rebuild timing
-versus factory completion, the two off-button latch arming triggers, the queue
-overlay's dash cadence and radii, the per-order-kind draw-mask bytes and
-colour-map entries, factory product clicks and the queue-count label, the
-drag-rectangle truth table, the eligibility predicate, overlap pick order, the
-fog word-versus-byte gate, group assignment and recall gating, digit routing,
-pagination bit encoding, the latch/dispatcher/cursor tables, the
-mixed-selection capability gate (a disjunction, not the AND this line once
-named — [R-HUD-03 §13]), build cancellation with tombstones, queue-modifier
-mapping, and attack-ground discrimination — is established above, in
-[R-P0-11 §1–§3], [R-REV-01], and [P1-14].
-
 - Per-window census of the authored gadget association ids that resolve each
-  widget's callback target · doc 02 §6 · static trace.
+  widget's callback target · §9, doc 02 §6 · static trace.
+- Whether any retail path draws the sweeping build-site lines with Shift up
+  (a play observation contradicts the traced Shift gate) · §9 [R-P0-11 §3] ·
+  a retail session with the Shift key state observed, not recalled.
 
 
 ## 10. Camera, scrolling, projection, and radar/minimap
@@ -6625,6 +6409,8 @@ nullable object references; map dimensions and viewport spans are signed
 integer extents. These are semantic types: an implementation may represent
 the references as stable handles, but must preserve null and validity
 behavior. [01 §4.4]
+
+##### In-flight camera move: the weapon `holdtime` hold
 
 **Established fact — the "in-flight camera move" is the weapon `holdtime`
 hold, and the only thing that starts one is a projectile retirement.** No
@@ -6720,14 +6506,12 @@ occur before remaining is decremented. An invocation entering with no positive
 counter only clears the inactive state and performs no draws. The final camera
 clamp therefore also clamps a shaken origin. [01 §4.4.1]
 
-This distinction corrects a tempting but unsupported reading of the CRD-006
-handoff: retail evidence does not establish a keyboard/edge “target” that is
-advanced by phase 10. The handoff's sample-once/hold-through-the-next-pump
-requirement is a valid Nanolathe determinism seam, but it is a supported
-implementation choice rather than a retail contract. If used, the seam must
-keep host-frame sampling, phase-10 intent application, follow-target
-stepping, and shake as named stages; it must not be documented as retail's
-input algorithm. Retail's host-frame writer remains one direct movement pass
+Retail evidence does not establish a keyboard/edge “target” that is advanced
+by phase 10. A sample-once/hold-through-the-next-pump seam is a valid
+Nanolathe determinism choice, not a retail contract; if used, it must keep
+host-frame sampling, phase-10 intent application, follow-target stepping, and
+shake as named stages, and it must not be documented as retail's input
+algorithm. Retail's host-frame writer remains one direct movement pass
 per host-frame invocation, while retail's follow/shake writer runs once per
 runnable simulation sub-tick. [01 §4.4]
 
@@ -6773,10 +6557,9 @@ baked terrain image exists — each supersample output maps back through floor
 division to a source tile pixel. Four named surfaces participate: the generated
 or baked *picture*, a temporary supersample buffer, the *mapped* composite that
 carries contacts, and the *final* surface that merges mapped state with the
-picture and draws start positions. (**Corrected 2026-08-31:** this sentence
-ended "…start positions plus the viewport rectangle". The rectangle is real, but
-it is not on FINAL: the HUD composer strokes it onto its own destination surface
-after copying FINAL there, `[03 R-MM-01 §1]`.) Radar/sonar
+picture and draws start positions (the viewport rectangle is not on FINAL:
+the HUD composer strokes it onto its own destination surface after copying
+FINAL there, [03 R-MM-01 §1]). Radar/sonar
 contact blips use dedicated palette entries distinct from terrain colors, and
 the radar surface is wiped and rebuilt each tick while the picture persists.
 
@@ -6799,27 +6582,16 @@ or `padY` accordingly. The rectangle is inclusive
 `right=padX+radarWidth-1, bottom=padY+radarHeight-1`. The direct radar branch
 converts
 `worldX=(mouseX-padX)*PlayRight/radarWidth`,
-`worldZ=(mouseY-padY)*PlayBottom/radarHeight`,
-then uses those world coordinates directly as the camera coordinates and
-follows the standard movement/clamp path; no half-viewport recenter is applied
-(**superseded by [R-CAM-01 §11]:** the camera jump does subtract half the
-viewport; the recenter-free conversion is the pointer's world position).
-**Correction:** the earlier §10 wording used `mapWidth`/`mapHeight` as the
-scale numerators; the executable uses the play-area pixel extents
-`PlayRight`/`PlayBottom`, matching [03 §3.11].
-An alternate drag/current-camera branch exists
-when the direct predicate fails or a battle-mode bit is set; its boundary
-vectors are not reduced to a standalone truth table. No zoom/rotation mutation
-occurs in the reviewed edge-scroll, direct-radar, clamp, or save/load paths.
-Minimap rendering and visibility masks are separate concepts.
+`worldZ=(mouseY-padY)*PlayBottom/radarHeight` — the play-area pixel extents
+`PlayRight`/`PlayBottom` are the scale numerators, matching [03 §3.11] — which
+is the pointer's world position; the camera jump subtracts half the viewport
+from it and follows the standard movement/clamp path ([R-CAM-01 §11]). The
+alternate drag/current-camera branch is the cursor-warp drag-scroll mode of
+[R-CAM-01 §11]. No zoom/rotation mutation occurs in the reviewed edge-scroll,
+direct-radar, clamp, or save/load paths. Minimap rendering and visibility
+masks are separate concepts.
 
-**Correction (Established; [03 §3.11]) — itself corrected by [R-CAM-01 §11].** The previous formula in this section
-used raw map dimensions and a half-viewport recenter. That was a stale reading
-of the direct branch as to the scale only; the recenter was right. The clean-room reduction and implementation contract use
-playable `PlayRight/PlayBottom` extents and direct-origin camera writes; only
-the alternate drag branch applies a stored-camera delta.
-
-### Closed — the scroll pass: inputs, units, and what it cancels [R-CAM-01 §10] (2026-08-29)
+### The scroll pass: inputs, units, and what it cancels [R-CAM-01 §10]
 
 **Established fact — inputs of the host-frame writer.** The scroll pass of
 [R-CRD-006 §1] runs once per host frame, after that frame's sub-ticks and
@@ -6830,14 +6602,15 @@ hotkey dispatch ([R-CAM-01 §1]). Its inputs, with their sources:
   [R-CAM-01 §7]), the chat command `+ScrollSpeed n` (low byte of `n`), and
   `RESTORE` (`32`). It is the only settings byte preserved across the camera
   block reset at battle entry (the reset zeroes the tracked object, follow
-  target, bookmarks and hold state and restores the byte).
+  target, bookmarks, hold state and both origins, and restores the byte —
+  [R-CAM-01 §14]).
 * **Raw delta** — a signed 32-bit host value: this frame's scaled
   `GetTickCount()` reading minus the previous frame's, as stored by the
   tick-budget step ([R-CAM-01 §1]). The scale is the presentation object's
   time-scale integer, which the battle boot path sets to **30**, so the
   reading is `floor(GetTickCount() × 30 / 1000)` and the delta counts
   **thirtieths of a second** elapsed since the previous outer frame — not
-  milliseconds (see the correction below). It is refreshed
+  milliseconds. It is refreshed
   only when the budget step runs (never while paused in single-player), and
   the movie writer resets its base after each capture ([R-CAM-01 §8]).
 * **Pointer position** — when the presentation object has not captured the
@@ -6870,37 +6643,23 @@ that the `> 128` test does not cap (it is a signed comparison) and the
 scrolls the opposite way for one frame. The direction tests and the
 sequential opposing-direction behaviour are as [R-CRD-006 §1] states.
 
-**Correction — the raw delta is thirtieths of a second, not milliseconds
-(2026-08-30).** This section previously said the raw delta was taken "with
-the default time scale of `1000`" and was therefore "milliseconds elapsed
-since the previous outer frame", and concluded that "at any frame interval
-of 4 ms or more the cap makes every scrolling frame move exactly `128`
-pixels" with the setting mattering only at very high frame rates. Both
-sentences were wrong, and the second is wrong by a factor of eight at 60 fps.
+**Established fact — the raw delta is thirtieths of a second, not
+milliseconds.** The scroll pass and the tick-budget step read the same stored
+delta word — the budget step writes `scaledNow − previousAnchor` into it and
+the scroll pass multiplies it by the scroll byte — and the scaled reading
+both share is the one helper that returns `GetTickCount() × timeScale /
+1000`, whose time-scale integer is set once, to `30`, on the way into the
+battle mode. That is the `floor(ms × 30 / 1000)` timebase [01 §4.1]
+establishes for the budget, and it has to be: the budget's runnable-tick
+count is `delta × speed + carry` truncated and clamped to `0..5` [01 §4.2],
+which only yields a 30 Hz simulation if `delta` is already in simulation
+ticks. A millisecond delta would run five sub-ticks on every 16 ms frame — a
+150 Hz simulation — and would make the scroll cap fire on every frame at
+every playable frame rate. Nanolathe impact: the battle screen's keyboard and
+edge scroll must derive `rawDelta` from a 30-per-second scaled clock; feeding
+it milliseconds scrolls eight times too fast at 60 fps.
 
-*Why it was wrong.* The scroll pass and the tick-budget step read the same
-stored delta word — the budget step writes `scaledNow − previousAnchor` into
-it and the scroll pass multiplies it by the scroll byte — and the scaled
-reading both share is the one helper that returns
-`GetTickCount() × timeScale / 1000`, whose time-scale integer is set once, to
-`30`, on the way into the battle mode. That is the same `floor(ms × 30 /
-1000)` timebase [01 §4.1] establishes for the budget, and it has to be: the
-budget's runnable-tick count is `delta × speed + carry` truncated and clamped
-to `0..5` [01 §4.2], which only yields a 30 Hz simulation if `delta` is
-already in simulation ticks. A millisecond delta would run five sub-ticks on
-every 16 ms frame — a 150 Hz simulation — and would make the scroll cap fire
-on every frame at every playable frame rate.
-
-*What changes.* Only the units of `rawDelta` and everything derived from
-them: the sustained scroll rate is `scrollByte × 30` map pixels per second
-instead of `128` per frame, and the cap is a low-frame-rate limiter rather
-than the normal case. The inputs, the direction predicates, the signed
-multiply, the negative-delta reversal, and the cancel set below are
-unaffected. Nanolathe impact: the battle screen's keyboard and edge scroll
-must derive `rawDelta` from a 30-per-second scaled clock; feeding it
-milliseconds scrolls eight times too fast at 60 fps (defect PT3-11).
-
-#### The scroll pass while paused [R-CAM-01 §10] (2026-08-30)
+#### The scroll pass while paused [R-CAM-01 §10]
 
 **Established — the single-player pump skips the budget but not the scroll
 pass.** The battle host pump's single-player arm evaluates
@@ -6945,8 +6704,8 @@ pause bit *and* the options-window bit, and the latter skips hotkey dispatch
 and the scroll pass outright ([R-CAM-01 §1]). The reachable case is the pause
 hotkey.
 
-Nanolathe impact: a paused-scroll rate that looks like the PT3-11 runaway is
-correct, and zeroing the delta on pause would be a divergence, not a fix.
+Nanolathe impact: a paused-scroll rate that looks like a runaway is correct;
+zeroing the delta on pause would be a divergence, not a fix.
 
 **Established fact — what a scroll cancels.** When the pass changes either
 origin coordinate it: writes the origin, sets the view-dirty bit, runs the
@@ -6963,7 +6722,7 @@ off; it is **not** performed
 by the glide writers (`n`, F3) or by the battle-start placements, which only
 write the desired origin ([R-CAM-01 §12]).
 
-### Closed — minimap click, latch, and drag-scroll arithmetic [R-CAM-01 §11] (2026-08-29)
+### Minimap click, latch, and drag-scroll arithmetic [R-CAM-01 §11]
 
 **Established fact — pointer classification (step 1 of the frame).** With
 `RadarW`/`RadarH` the letterboxed radar extents and `padX`/`padY` its origin
@@ -7003,19 +6762,8 @@ minimap cache bit, and clears the hold count, tracked object and
 followed projectile. The clicked map point becomes the **centre** of the
 view. The latch is released by the matching button-up message, and the
 pointer record's coordinates — not `GetCursorPos` — are used, so dragging
-across the minimap pans continuously.
-
-**Correction.** The §10 sentence "then uses those world coordinates directly
-as the camera coordinates … no half-viewport recenter is applied", and the
-matching "Correction (Established; [03 §3.11])" below it, are wrong for the
-**camera**: the camera jump subtracts half the viewport on both axes. The
-trace that produced those sentences read the pointer-classification
-conversion (which has no recenter, above) as the camera writer. Only the
-scale (`PlayRight`/`PlayBottom`, not the raw map size) was corrected
-rightly. Doc 03 §3.11's "lens branch writes the projected world point
-directly as the new camera origin" carries the same error and is a
-cross-doc correction for lane 03; its formula is right for the pointer's
-world position.
+across the minimap pans continuously. The pointer-classification conversion
+above has no recenter; the camera jump does.
 
 **Established fact — the drag-scroll mode (the "alternate drag branch").**
 Under `Interface Type 0`, right-down over the **world view** (region bit 1)
@@ -7041,12 +6789,10 @@ if the record's right-button key-state bit (0x02) is clear:
 So each frame moves the camera by `16 · trunc(delta / 4)` map pixels per
 axis — four map pixels per screen pixel of mouse travel, quantised to 16 —
 relative to the previous frame, and the origin is always a multiple of 16
-while the mode is active. The doc 03 wording "new camera = stored camera +
-(clamped mouse − viewport origin)" describes neither branch and is part of
-the cross-doc correction above. The mode's entry clears the hold count,
-tracked object and followed projectile.
+while the mode is active. The mode's entry clears the hold count, tracked
+object and followed projectile.
 
-### Closed — the camera-jump family and what breaks a follow [R-CAM-01 §12] (2026-08-29)
+### The camera-jump family and what breaks a follow [R-CAM-01 §12]
 
 **Established fact — the follow state.** The follow camera's state is the
 current origin, the desired origin, the 16-bit hold count with its frozen
@@ -7073,14 +6819,12 @@ copying it to the desired origin. Every writer:
 | Phase 10 itself | steps current toward desired; a dead tracked object (alive bit clear) clears all three | — |
 | `+BigBrother` off, `+Move x y` (developer) | cancel / jump | yes / (developer, untraced) |
 
-**Established — the `+BigBrother` companion word (closed 2026-08-29,
-RWU-07-6).** The word `+BigBrother` writes `1` into is the 16-bit cycle
+**Established — the `+BigBrother` companion word.** The word `+BigBrother` writes `1` into is the 16-bit cycle
 counter of the unit sweep tail ([04 R-MOV-03 §1]): while the camera-flags
 bit is set and **Shift** (held-key query for token `0xF9`, §2) is not held,
 the tail decrements it each tick and, when it falls below 1, resets it to 90
 and re-picks the selection and the tracked object as `t` does. Shift held
-pauses the cycle. The "Unknown" for this word's reader in §2 and doc 04's
-held-key Unknown are both closed by this paragraph.
+pauses the cycle.
 
 Unit positions enter the desired origin through one conversion:
 `desiredX = sext16(unitX >> 16) − trunc(viewWidth / 2)`,
@@ -7102,7 +6846,7 @@ the slot unconditionally (the valid byte has no reader in the recall path —
 its only reader is the save/restore census, doc 08), jump, clamp, and clear
 the follow triple. Bookmarks are not in the `Camera` save account.
 
-### Closed — the clamp's frame of reference: what "camera 0" and `viewSize` mean [R-CAM-01 §13] (2026-08-31)
+### The clamp's frame of reference: what "camera 0" and `viewSize` mean [R-CAM-01 §13]
 
 **Established — a retail camera origin is the world point at the battle
 viewport's top-left corner, not at the display's.** [R-CAM-01 §11]'s pointer
@@ -7126,11 +6870,7 @@ anchored at map pixel `(104, 152)`, appears at framebuffer x ≈ 232 — that is
 `104 + 128`, the vent's map pixel plus the viewport's left inset, with the
 camera at its floor of 0.
 
-**Established (2026-09-04, WU-19-151 and WU-19-158, independently) — the
-maximum's extent operand is the same subrect span.** *This paragraph previously read "Supported inference … It
-is not separately traced here", with the decider "a static trace of which
-extent pair the clamp's maximum reads". That trace has now been done and it
-confirms the inference; nothing about the reading changes, only its confidence.*
+**Established — the maximum's extent operand is the same subrect span.**
 
 The battle-setup routine that arms the viewport writes six words in one block,
 in this order: the negotiated display width and height, copied from the mode
@@ -7160,12 +6900,12 @@ screen.
 literal left `128` and the inclusive right `displayWidth − 1` make the X insets
 leading 128 / trailing 0; the literal top `32` and the inclusive bottom
 `displayHeight − 33` make the Z insets leading 32 / trailing 32 (rows
-`H−32 … H−1` are chrome). Previously these came from [03 §4.1] alone; they are
-now corroborated by the viewport arming itself.
+`H−32 … H−1` are chrome), corroborating [03 §4.1] from the viewport arming
+itself.
 
 See [R-HUD-05] for the rest of the display-mode layout.
 
-**Nanolathe impact (defect PT5-01, fixed 2026-08-31).** This build's camera
+**Nanolathe impact.** This build's camera
 origin is the world point drawn at the *framebuffer's* top-left corner, not the
 viewport's: the world is composed across the whole framebuffer and the chrome
 is painted over it, so every draw site takes the projection of [03 §2.5] and
@@ -7183,29 +6923,22 @@ trailing 32 on Z [03 §4.1]. On X the maximum is numerically unchanged
 (`mapSize - framebufferWidth`, because the trailing inset is zero) and on Z it
 gains the bottom inset.
 
-The shipped clamp used retail's bounds unconverted. The previous text of this
-section did not say which frame `viewSize` was measured in, and "the
-presentation width `W` and height `H`" of the scroll predicates above — which
-*are* display extents — reads as an invitation to use the display size here
-too. The consequence was that the westmost 128 map pixels and northmost 32 of
-every map could never be brought on screen, and the southmost 32 could not
-either; on *Great Divide* the vent above was unreachable, which is how the
-defect was found. The commit "Place the battle-start camera from the map's
-start position" had already made this conversion for the battle-start jump
-([R-CAM-01 §12]) and did not carry it into the clamp or into the phase-10
-desired origin; both now share one conversion.
+"The presentation width `W` and height `H`" of the scroll predicates above
+*are* display extents and are not the operand here: a clamp that used retail's
+bounds unconverted left the westmost 128 map pixels, the northmost 32 and the
+southmost 32 of every map off screen. The clamp, the battle-start jump
+([R-CAM-01 §12]) and the phase-10 desired origin share one conversion.
 
-The **ordered** form is unchanged by any of this — the floor test still runs
-before the maximum test — and the Unknown below still stands: converting the
-frame does not close the viewport-larger-than-map domain, it only moves the
+The **ordered** form is unchanged — the floor test still runs before the
+maximum test — and the Unknown in the tail still stands: converting the frame
+does not close the viewport-larger-than-map domain, it only moves the
 degenerate condition from `viewSize > mapSize` to `viewportSpan > mapSize`,
 which is the same condition correctly transposed.
 
-### Closed — the battle-screen marker cluster: reset origin, saved-camera load, the start jump, the key-token producer, `n`/`N`, F3's two bits, F4's flash, and the minimap click paths [R-CAM-01 §14] (2026-09-02)
+### The battle-screen marker cluster: reset origin, saved-camera load, the start jump, the key-token producer, `n`/`N`, F3's two bits, F4's flash, and the minimap click paths [R-CAM-01 §14]
 
 Static trace of the frame handler, the world-click handler, the key
-translator and the camera writers (RWU-19-21). The pump question dispatched
-with this unit is [04 R-ORD-01 §10]; the HUD items are [R-HUD-04 §4].
+translator and the camera writers; the HUD items are [R-HUD-04 §4].
 
 **Established — the camera-block reset leaves both origins at (0, 0).** The
 reset the world rebuild runs ([08 R-ENTRY-01 §3] step 12) zeroes
@@ -7215,10 +6948,8 @@ followed-projectile references, the four bookmark origins with their valid
 bytes, the **current origin**, the **desired origin**, and the hold count
 with its anchor — so after the reset `current = desired = (0, 0)`. The
 camera-flags byte (view-dirty bit 1) and the render-flags word lie outside
-the block. §10's list ("tracked object, follow target, bookmarks and hold
-state") was incomplete: add the current and desired origins. A campaign
-without a start-position special therefore keeps `(0, 0)` as both origins
-([08 "Campaign camera"]).
+the block. A campaign without a start-position special therefore keeps
+`(0, 0)` as both origins ([08 "Campaign camera"]).
 
 **Established — a saved-camera load is a jump; the "state bits" are two.**
 The load reads `X Position` / `Z Position` of the `Camera` account with the
@@ -7288,17 +7019,14 @@ for a record whose source unit id is non-zero, whose **bit `0x10`** is
 clear, and whose unit is alive; on a hit it sets both bits (`|= 0x30`) and
 glides to the unit's map-pixel X/Z minus half the viewport (no shear). If
 the scan finds nothing it clears bit `0x10` on every record and scans once
-more. §2's row read the two writes as the same bit; they are not, so "not
-yet visited" is a real test and the retry runs once every live-source
-message has been visited. Bit `0x20` marks the record most recently jumped
-to.
+more. The two writes are different bits, so "not yet visited" is a real test
+and the retry runs once every live-source message has been visited. Bit
+`0x20` marks the record most recently jumped to.
 
-**Established — the jumped-to line is the highlighted line (2026-09-04,
-WU-19-160).** The previous sentence ended "its reader is not traced here
-(**Unknown** — a composer highlight is the natural candidate; decider: the
-readers of that bit)". The candidate was right and the bit now has its reader:
-the **message column painter** of [R-HUD-03 §14.4], and the bit decides the
-line's colour. Walking the visible records in drawing order, the painter tests
+**Established — the jumped-to line is the highlighted line.** Bit `0x20`'s
+reader is the **message column painter** of [R-HUD-03 §14.4], and the bit
+decides the line's colour. Walking the visible records in drawing order, the
+painter tests
 bit `0x20` on each admitted record and installs the FNT display context's pair
 as (colour-map entry **10**, skip colour 254) when the bit is set and
 (colour-map entry **15**, skip colour 254) when it is clear, immediately before
@@ -7369,49 +7097,23 @@ tests, in this order:
 Camera and minimap conversion should remain an explicit compatibility
 boundary. The retail paths do not share one conversion routine: the minimap
 lens does not reuse the main view's cursor-to-world projection [03 §3.11], and
-the ground resolver is a distinct search (§8).
-
-#### Camera and minimap closures
-
-Unit, commander, feature, and projectile art sources and their direct
-`PALETTE.PAL` indexing are closed in [03 §3.9]. The camera clamp order, the
-direct-radar conversion, the drag/current-camera branch, the click-versus-drag
-gate, the terrain-height projection, and the radar/visibility update cadence
-are established above, as is minimap generation (126-pixel canvas, 2x
-supersample, picture/temp/mapped/final surfaces; the minimap's viewport
-indicator is a one-pixel rectangle **outline** in colour-map entry 14, stroked
-onto the HUD destination surface after the radar picture is copied there,
-`[03 R-MM-01 §1]`).
-
-**Correction (2026-08-31).** The bullet above ended "…the lens indicator is two
-one-pixel lines in map entry 15, §6". That described the world composer's
-film-mode crosshair, not the minimap: it is the wrong figure, the wrong
-producer, the wrong shape and the wrong colour entry. `[03 R-MM-01 §1]` carries
-the rectangle's geometry, its clamp-time recomputation and its colour; §3.12 of
-doc 03 keeps the crosshair.
+the ground resolver is a distinct search (§8). The minimap's viewport
+indicator is a one-pixel rectangle **outline** in colour-map entry 14,
+stroked onto the HUD destination surface after the radar picture is copied
+there ([03 R-MM-01 §1]); the world composer's film-mode crosshair (§6) is a
+different figure.
 
 ### Unknown
 
-Open items only; the decider follows each.
-
-- Camera clamp behavior in unusual domains — a map whose view size exceeds the
-  map size on an axis, where the ordered clamp form is the only established
-  behavior · static trace.
-- ~~Which extent pair the clamp's maximum reads — the battle viewport subrect's
-  span or the negotiated display's~~ · **closed 2026-09-04** (WU-19-158): the
-  subrect span, traced to the battle-setup block that derives it as
-  `right − left + 1` / `bottom − top + 1` from the subrect corners and keeps it
-  in globals distinct from the negotiated display size ([R-CAM-01 §13]). Agrees
-  with `[03 R-MM-01 §1]`'s independent minimap-repaint trace
-  (`cameraX <= PlayRight - viewWidth`).
-- ~~Mapping of the three sensor callback tables to the radar versus jammer
-  palette entries~~ · **closed 2026-08-31**: the circles come from the contacts
-  pass, not the callback tables (`[03 §3.10]` correction), and their colours are
-  colour-map entry 10 (radar and sonar outer) and entry 12 (both jam circles),
-  `[03 R-MM-01 §2]`.
+- Camera clamp behavior in unusual domains — a map whose viewport span
+  exceeds the map size on an axis, where the ordered clamp form is the only
+  established behavior · §10 [R-CAM-01 §13] · static trace.
 - Whether any transient follow-target or shake state is reconstructed from a
-  non-`Camera` save account · doc 08 · static trace.
-- Start-position marker art and placement · doc 03 · static trace.
+  non-`Camera` save account · §10, doc 08 · static trace.
+- Start-position marker art and placement · §10, doc 03 · static trace.
+- Whether the character values of the key-token producer hold on a non-US
+  keyboard layout (Supported inference) · §10 [R-CAM-01 §14] · manual retail
+  observation.
 
 
 ## 11. Running display, pause, chat, options, and outcomes
@@ -7419,8 +7121,8 @@ Open items only; the decider follows each.
 ### Established fact
 
 The running display includes live resource bars and numbers, game time/speed
-text, a unit hover/selection information region (its ordinary footer source
-and field mux remain the R-HUD-02R residual), damage and queue indicators,
+text, a unit hover/selection information region (its footer sources and
+their priority are [R-HUD-03 §1]), damage and queue indicators,
 scrollback/status messages, chat, minimap, panel chrome, cursor, and fog.
 
 Chat opens the `TALK.GUI`/`TALK2.GUI` text-entry overlay specified in section
@@ -7442,14 +7144,14 @@ plays `SmallButton` and opens the hard-coded `guis/tabmenu.gui` window — a
 510×33 top strip (authored origin `y=-33`) carrying `OPTIONS`, `SHARE`,
 `ALLIES`, and `CONTROL`; this name is not side-prefixed. A second Tab while it
 is open closes it (the Tab-menu word bit `0x20` toggles). In battle mode the
-opener hides the diplomacy gadgets for non-diplomatic contexts. This supersedes
-the earlier reading that Tab opens `guis/armopt.gui`: the ESC-menu path (token
-`0xE3` — the F2 key, see [R-CAM-01 §2] — while the battle-interface ESC bit is clear) opens the hard-coded
-`guis/armopt.gui` window with `anims/armopt.gaf`; this
-name is not side-prefixed. Opening it sets both the battle modal bit and the
+opener hides the diplomacy gadgets for non-diplomatic contexts. F2 (token
+`0xE3`, [R-CAM-01 §2]) while the battle-interface ESC bit is clear opens the
+hard-coded `guis/armopt.gui` window with `anims/armopt.gaf`; this name is not
+side-prefixed. Opening it sets both the battle modal bit and the
 single-player pause bit, and pauses the runtime audio path. Closing the root
-window clears the modal and pause bits and resumes audio. A second ESC while
-the root options window is active therefore closes it and resumes the battle.
+window clears the modal and pause bits and resumes audio. A second F2, or
+Escape, while the root options window is active therefore closes it and
+resumes the battle.
 The authored root controls are `LOADGAME`, `SAVEGAME`, `PREFS`, `MISSION`,
 `HELP`, `EXIT`, and `OK` (`Resume`). Network mode takes a separate path and
 does not set this local pause bit.
@@ -7493,19 +7195,17 @@ and causes an `igpaused` title overlay to be drawn. Victory/defeat overlays
 come from the `igtitles` GAF family — handles `igvictory`, `igdefeat`, and
 `igpaused` — gated by mode-word bits: victory on bit 5 of one mode word,
 defeat on bit 6 of it, pause on bit 0 of the pause-mode word. Victory/defeat
-states later transition to end-mission/endgame report screens. The ESC
-options-window pause path is established above; the separate Pause-key path
-remains outside this closure.
+states later transition to end-mission/endgame report screens. The
+options-window pause path is established above; the Pause key toggles the
+same local pause bit and emits the pause packet ([R-CAM-01 §2], [01 §4.3]).
 
 Game-speed changes are clamped to the retail range and displayed as localized
 messages. In multiplayer, speed changes are represented as networked semantic
 commands rather than purely local UI changes.
 
-**Correction: authored end-mission resources supersede the earlier
-message-box description.** The earlier wording about a generated message box,
-literal header strings, and a literal `Continue` callback was not an authored
-ENDMSN contract; it came from the synthetic presentation and is not a basis
-for implementation. Retail supplies `guis/endmsn.gui` and `anims/endmsn.gaf`.
+**End-mission resources.** Retail supplies `guis/endmsn.gui` and
+`anims/endmsn.gaf`; there is no generated message box, literal header string
+or `Continue` callback.
 The GUI's named controls include `Start`, `LoadGame`, `SaveGame`, `MainMenu`,
 and `Difficulty`; the result action is attached to the authored `Start`
 control, not a control named `Continue`. The GAF contains `outcdivider`,
@@ -7516,11 +7216,12 @@ using its authored anchor offsets at the negotiated surface center [fmt gaf].
 The file's end-mission controls are initially inactive in the retail asset.
 The end-mission initializer chooses the outcome resource from campaign
 progression and activates the established route: `Start` when a campaign has a
-discovered next mission, or `MainMenu` when there is no next mission. Other
-controls remain inactive until their activation and callback contracts are
-recovered. Missing GUI/GAF resources are a degradable unsupported result, not
-a reason to generate a centered rectangle, button set, title text, or fallback
-labels [08 "Progression"]. Exact statistics presentation remains Unknown.
+discovered next mission, or `MainMenu` when there is no next mission; the
+opener's control set is [08 R-CAMP-01 §8] and the screen's edges are
+[R-FE-01 §10]. Missing GUI/GAF resources are a degradable unsupported result,
+not a reason to generate a centered rectangle, button set, title text, or
+fallback labels [08 "Progression"]. The statistics rows are
+[08 R-CAMP-01 §7] and their bar animation [R-HUD-03 §11].
 
 ### Supported inference
 
@@ -7530,17 +7231,11 @@ can remain composed under the appropriate overlay.
 
 ### Unknown
 
-Open items only; the decider follows each. The chat open/send contract, the
-`+` command mini-language (`+<digit>`, `+a`/`+e`), the scrollback ring, the
-overlay gates, and the category-cadence statistics animation are established
-above.
-
 - Chat commit-versus-cancel semantics on every send route, including whether
-  the terminator is included per route · static trace.
-- Outcome transition timing, and the per-value endgame bar-fill animation
-  mechanism; it may ride the type-13 timed/range gadget path · static trace.
+  the terminator is included per route · §11 · static trace.
+- Outcome transition timing · §11 · static trace.
 - Pause authorization and forwarding authority for chat, pause, and speed
-  packets in multiplayer · static trace. Out of implementation scope.
+  packets in multiplayer · §11 · static trace. Out of implementation scope.
 
 
 ## 12. Lobby and session shell
@@ -7601,549 +7296,46 @@ supported inference, not established fact.
 
 ### Unknown
 
-Open items only; the decider follows each. Slot classes, ready propagation,
-map-control gating, UNUSED/BLOCKED substitution, and minimum-ping write-back
-are established above.
-
 - Serial and modem UI validation, lobby timeout progression, and the complete
-  ready/start protocol · static trace. Multiplayer-only, out of Nanolathe's
-  implementation scope.
-- Map-preview camera behavior · static trace.
+  ready/start protocol · §12 · static trace. Multiplayer-only, out of
+  Nanolathe's implementation scope.
+- Map-preview camera behavior · §12 · static trace.
 - Role separation of shared player-word bit `0x20` between READY display and
   map-control authority; both consumers are proven and the semantics are not
-  separable statically · manual retail observation.
-
-
-## R-HUD-04 — the Kills/Losses score panel, the options-window unfold, and the latch-to-idle group reset (2026-08-29)
-
-Closed by RWU-07-6 (Wave 4 ledger closure, lane 07). Trail:
-`/tmp/ta-decompile/notes/gui/rwu-07-6.md`.
-
-### The Space-held Kills/Losses score panel [R-HUD-04 §1]
-
-**Established — what it is and when it runs.** Holding Space in a skirmish
-or multiplayer battle slides a score panel in from the **right** screen edge
-listing every player's kills and losses. It is drawn by the battle frame
-composer ([03 R-COMP-01]) after the world and chrome and only when the
-session kind is 2 or 3 (skirmish / multiplayer — doc 08's kind vocabulary);
-a campaign mission (kind 1) never calls it, so its slide word is inert
-there. It is separate from the bottom *slide strip* of §6 (`Game Time` /
-`Total Units` / `Game Speed`), which the composer steps unconditionally in
-every session kind — see the correction under [R-HUD-03 §1].
-
-**Established — show/hide polarity.** The panel is *showing* when the F4
-interface bit ([R-CAM-01 §2]) is set, or when Space is held (held-key query
-for token `0x20`) **and** the focused gadget of the top window is not a
-kind-3 text editor. Otherwise it is *hiding*: a text editor with the focus
-takes Space for itself and the panel retracts. (The bottom slide strip uses
-the same "Space unless a text editor has focus" test, §6.)
-
-**Established — the slide arithmetic.** One signed slide word `s` in
-`0..125` is the number of panel pixels on screen; it is stepped once per
-composed frame (no wall-clock throttle — unlike the §6 strip's 15 ms gate):
-
-* hiding: if `s < 1` nothing is drawn and the routine returns; if `s == 125`
-  the cue `Panel` plays (leaving the open detent); `step := trunc(s / 4)`
-  (signed, toward zero), `max(step, 1)`; `s := s − step`; if `s < 1` then
-  `s := 0` and the cue `Options` plays (reached the closed detent);
-* showing: if `s < 125`: if `s == 0` the cue `Panel` plays; `step :=
-  trunc((125 − s) / 4)`, `max(step, 1)`; `s := s + step`; if `s > 124` then
-  `s := 125` and the cue `Options` plays;
-* the panel is then drawn at the new `s` in the same frame, including every
-  intermediate position, so a press shows one frame of a 31-pixel sliver
-  (`125/4`).
-
-The cues are the same two aliases the §6 strip plays, through the sound
-alias cue of [08 R-CAMP-01 §6]. Because the step is a quarter of the
-remaining distance with a floor of one pixel, both directions converge in a
-bounded number of frames: 18 composed frames from fully closed to fully
-open, and 18 back.
-
-**Established — geometry and painting.** With `W` the composer surface
-width, `x0 = W − s`, `x1 = x0 + 125`, `y0 = 32`, `y1 = 40 × playerCount +
-46` (the session's player-count word): the rectangle `(x0, y0)–(x1, y1)` is
-darkened through the rectangle shader at level `−24` ([03 R-COMP-02 §5]).
-The localised `Kills` heading is written at `(x0 + 2, 32)` and `Losses`
-right-aligned at `(x1 − textWidth − 2, 32)`, both with a text width limit of
-119 and light-table row 0 (the panel text writer's brightness argument).
-Rows start at `y = 47` and advance by 40 per row drawn.
-
-**Established — row order and content.** Rows are emitted in **rank order**
-`r = 0 .. playerCount − 1`. For each rank the ten player slots are scanned
-in slot order for the first that qualifies: record present; controller byte
-1, 2 or 3; side byte ≠ 10; live-unit count ≠ 0 **or** the slot's auxiliary
-word == 0 (the word doc 08 leaves unnamed — closed 2026-09-02: it has no writer and reads zero, [08 R-CAMP-01 §7]); the lobby record's watcher bit
-(`0x40`) clear; and the slot's **rank byte equals `r`** (the rank byte and
-its maintenance on every credited kill are [08 R-CAMP-01 §9]). The first
-match draws the row and the scan stops; if **no** slot holds rank `r`, every
-qualifying slot whose rank is greater than `r` has its rank byte
-decremented by one (compaction of a vacated rank) and the next rank is
-tried — so a vacated rank collapses in the same frame and the row count on
-screen equals the number of qualifying slots. For the drawn row, with `y`
-the row's top:
-
-* when the slot is the **local** player, the rectangle `(x0 + 4, y − 1)–
-  (x1 − 4, y + 38)` is lightened twice, at levels `31` then `20`;
-* the side logo is the frame numbered by the lobby record's logo byte in
-  the side-logo GAF entry, drawn by the quad-mapped blitter
-  ([03 R-RAST-01 §1]) from source corners `(1,1) (w−1,1) (w−1,h−1)
-  (1,h−1)` (the frame interior, `w`/`h` the frame size) onto the destination
-  quad `(x0+7, y+1) (x0+119, y+1) (x0+119, y+37) (x0+7, y+37)` — i.e.
-  stretched to 112 × 36;
-* the player name is written at `(x0 + 9, y + 6)`, width limit 119, row 0;
-* the kill count is formatted `%d` and written at `(x0 + 9, y + 21)`; the
-  loss count `%d` right-aligned at `(x0 + 119 − textWidth − 2, y + 21)`;
-  both with width limit 119 and their **flash brightness** (below).
-
-**Established — which counters, and the flash.** The kills value is the
-slot's kill counter, or its **commander-kill** counter when the
-commander-death option word is 2 (*Deathmatch* — [R-FE-01 §7] names the
-values); losses likewise select the loss counter or the commander-loss
-counter. These are the same words the report screen's `Kills`/`Losses`
-columns and the kill-lead line read ([08 R-CAMP-01 §7, §9]); the save
-account of the same name persists the first pair ([08 "Player records"]).
-Two ten-entry byte arrays hold a per-slot flash for kills and for losses:
-the kill-record finalize ([08 R-SKIR-01 §3]) sets the crediting slot's kill
-flash and the victim slot's loss flash to **30**; the score panel routine
-decays every non-zero entry by **2** once per unit of the scaled timer
-([R-CAM-01 §10], 30 units per second — the same once-per-unit latch as
-[R-WGT-01 §1] step 1) whether or not the panel is showing, and passes the
-byte as the light-table row of the number's text ([03 R-FONT-01 §6]): a
-fresh kill draws its number bright and fades to row 0 over half a second.
-Battle entry zeroes both arrays.
-
-**Supported inference.** The rank byte's initial assignment at battle entry
-(before any kill) is not traced here; the row order before the first kill is
-therefore whatever the entry path wrote — decider: the per-player reset row
-of [08 R-ENTRY-01 §2] (static trace).
-
-**Closed (2026-09-02, RWU-19-42) — the rank byte's initial value, and the
-watcher bit's writers.** The inference above is upgraded. *Rank:* the
-per-slot registration helper — the "registers the slot as human / computer /
-inactive" step of [08 R-SKIR-01 §2]'s row-to-player conversion, also run by
-the campaign entry for its two seats and by the multiplayer player creation
-— writes the slot's **rank byte = the slot index** (and two neighbouring
-slot-index bytes) beside the controller byte. Battle entry itself never
-touches the byte, and its only other writer is the kill-lead shift of
-[08 R-CAMP-01 §9]. So before the first credited kill the ranks are
-`0..9` in slot order, distinct, and the panel's rank walk draws the
-qualifying slots in ascending slot order with vacated ranks compacted.
-**Established.** *Watcher:* the lobby record's watcher bit (`0x40`) has
-exactly two setters, both multiplayer-only: the battleroom's `SIDE%d`
-control, which turns a human slot into a watcher when the side is cycled
-past the last side (and back when clicked again), and the kind-3 branch of
-the elimination handler (`You're out!  Continue Watching?`), which sets the
-eliminated slot's bit so the player stays in the session as a spectator.
-The skirmish elimination branch, the registration helper and battle entry
-never set it (registration and the lobby screens only clear neighbouring
-bits or clear this one). In every single-player session the bit is
-therefore constantly clear, and it is **not** derived from the settlement
-gate's observer byte ([05 "Authoritative settlement order"]), which is a
-different field. What reads it: this panel's row gate, the score helper's
-row gate and the statistics rows' flag bit 3 ([08 R-CAMP-01 §7, §10]), the
-kill-lead scan's "non-watcher" filter ([08 R-CAMP-01 §9]), the elimination
-and participant filters, the multiplayer camera placement at battle start
-([08 R-ENTRY-01 §5] "when the local player is watching") and the lobby's
-`Watching:` label. **Established** (bounded census of the bit's writers over
-the recovered function set).
-
-**Correction (2026-09-02).** "the kill-record finalize … sets the crediting
-slot's kill flash and the victim slot's loss flash to **30**" holds **only
-while the F4 interface bit is set**; with it clear the finalize skips the arm
-and both arrays stay zero, so a Space-held panel shows steady numbers. The
-flash is the F4 bit's second visible effect ([R-CAM-01 §14]). The side-logo
-GAF entry is `32xlogos` of `textures/logos.gaf` ([R-HUD-04 §4]).
-**Established.**
-
-### The in-battle options window unfold [R-HUD-04 §2]
-
-**Established.** Opening the options root in battle (`PREFS.GUI`,
-[R-FE-01 §6]) snapshots the top window's surface into the `FLIPSURFACE`
-backup, wraps it as a one-frame sprite, and arms an *unfold* animation:
-`counter := 0`, `limit := windowWidth − 1`, `top := windowY` (the window
-record's y), `skew := 0`, and the options-open word. While that word is set
-the composer runs the unfold once per frame, after the score panel and the
-chat/diagnostic overlays and before presentation:
-
-1. If `counter < 277`: `counter := counter + 21`; if it is now `> 276` the
-   cue `Options` plays and `counter := 277`. Then, if `counter > limit` and
-   the **previous** counter was `< limit`, frame 2 of the `LIGHTBAR` entry of
-   the common GUI GAF is blitted once into the snapshot at the frame's own
-   hotspot (a one-time stamp on the backdrop).
-2. `skew := skew + 6` while `counter < limit`; otherwise `skew := max(skew −
-   6, 0)`.
-3. If `limit < counter < 277`: `counter := counter + 1` (one extra pixel per
-   frame after the width is passed).
-4. The snapshot is drawn onto the composer surface by the quad-mapped
-   blitter ([03 R-RAST-01 §1]) from source corners `(1,1) (w−1,1) (w−1,h−1)
-   (1,h−1)` (the snapshot interior) onto a destination quad whose bottom is
-   pinned to screen row **479** and whose top edge is skewed by `skew`:
-   * while `counter ≤ limit`: corners `(counter, top − skew) (127, top)
-     (127, 479) (counter, 479)` — the left edge sweeps right from `x = 0`
-     while the right edge stays at the side rail's edge `x = 127`;
-   * once `counter > limit`: corners `(limit, top) (counter, top − skew)
-     (counter, 479) (limit, 479)` — the left edge parks at the window width
-     and the right edge continues to `x = 277`.
-   Whether an inverted quad (left corner past the right corner) paints is the
-   two-chain rule of [03 R-RAST-01 §1] step 7, not a separate test here.
-5. The top window's redraw word is set, battle-interface dirty bit 2 is set,
-   and the "full chrome repaint" word is set to 1 — so the HUD repaints every
-   frame while the options window is open, not only during the sweep.
-
-The counter, skew and limit words have no other reader; the only observable
-effects are the `Options` cue when the counter saturates, the one-time
-`LIGHTBAR` stamp, the per-frame quad and the per-frame repaint requests.
-Closing the options root clears the options-open word and frees the
-snapshot ([R-FE-01 §6]).
-
-**Supported inference.** With the stock in-battle `PREFS` layout (the
-window widened by 150, [R-FE-01 §6]) `limit` equals the 277 saturation
-value, so the "counter > limit" branch — the `LIGHTBAR` stamp, the extra
-one-pixel steps and the second quad form — is unreachable, and the skew
-rises for the whole sweep (13 frames, to 78) and then decays. Decider: the
-authored `PREFS.GUI` panel width plus 150 (asset census).
-
-### Command-panel page close and the latch-to-idle group reset [R-HUD-04 §3]
-
-**Established — the page close.** The command-panel *page close* is called
-by every selection change ([R-CAM-01 §2]'s deselect, the `n`/`t` cycles,
-the `+BigBrother` sweep tail [04 R-MOV-03 §1], the build-page switch of
-[R-HUD-03 §6] and the front-end teardown) with one argument, *force*:
-
-1. When *force* is 0 and any of: battle-interface flag bit `0x800`, any of
-   its bits `0x65` (bits 0, 2, 5, 6), or any of bits 5–7 of the session-shell
-   byte (set while `TABMENU` is open, [R-FE-01 §7]) is set, the close is **deferred**: battle-interface dirty bit
-   `0x10` is set and the routine returns 0 without closing anything — the
-   interface pass that clears those bits re-runs the close.
-2. Otherwise the current-page word is zeroed; if no window is open the
-   routine returns 0.
-3. Then, while a window is open: if the **top** window's name equals (first
-   16 bytes) the command-window name the HUD recorded at battle entry, the
-   routine returns 1 — the command window is on top and the pages above it
-   are gone; else the top window is closed through the top-object close of
-   §3 ([R-WGT-01 §1]) and the test repeats. Returns 0 when the stack empties
-   without meeting the command window.
-
-**Established — the latch-to-idle reset.** The *return the command latch to
-idle* step named by [R-CAM-01 §2] (Escape with a latch armed) and §8
-(right-click) is one routine: the armed-order latch byte becomes 1 (idle),
-bit `0x20` of the latch flags byte (the Shift-latch persistence bit) is
-cleared, and — the "palette's default control" phrase of [R-CAM-01 §2] —
-the gadget named `STOP` is looked up by index (non-fatal; a miss skips the
-rest) and every kind-1 gadget with the same `assoc` byte as `STOP` (the
-radio group of [R-WGT-01 §3]) whose status word is non-zero has that word zeroed and is repainted, then
-the window redraw word is set. The status word is the button's authored
-`status` ([fmt gui]) — the frame base of [R-HUD-03 §6] — so this returns
-every button of the order palette's radio group to its up frame. The
-group-reset helper takes any gadget index and is shared with the other
-latch writers.
-
-### Closed — HUD marker closures: the logo entry, the slide strip's text offsets, the greyed-button darken row, the first-page seed, and the F4 flash gate [R-HUD-04 §4] (2026-09-02)
-
-Static trace (RWU-19-21); each item is also recorded inline at the section
-it completes or corrects.
-
-* **Side logo (Established).** Both logo draws — the footer's `LOGO2`
-  ([R-HUD-03 §2]) and the score panel's row logo (§1) — read one GAF handle:
-  entry `32xlogos` of `textures/logos.gaf`, bound during battle-data
-  initialization; the frame index is the owner's lobby colour byte. Rule:
-  `frame = logos.gaf["32xlogos"].Frames[lobbyColour]`.
-* **Slide strip text (Established).** [07 §6]'s strip: with `x` the composer
-  surface rectangle's left edge, `yBottom` its bottom edge and `off` the
-  slide offset (`−31..0`, drawn only while non-zero), the strip art is
-  blitted at `(x, yBottom + off)` and the three strings on one line at
-  `yBottom + off + 10`: `Game Time:` at `x + 25`, `Total Units:` at
-  `x + 190`, `Game Speed:` at `x + 380`; default font, light-table row 0.
-* **Greyed art buttons (Established).** After the frame blit the gadget
-  rectangle goes through the rectangle shader ([03 R-COMP-02 §5]) at level
-  `−20` — darken row `12` — unless the button carries attribute `0x80`.
-  Frame choice is [R-WGT-01 §3]; the authored `status` is the down-state
-  word, not a frame base.
-* **First build page (Established).** Unit creation seeds page field `1`
-  with the paged bit set when the definition's page-count byte is `≥ 2`,
-  else clears both; no click writes the field ([R-HUD-03 §6]).
-* **F4 (Established).** The kill/loss flash arms only while interface-flags
-  bit `0x80` is set (§1, [R-CAM-01 §14]).
-
-**Closed (2026-09-04, WU-19-230) — the slide strip's band, rectangle, font
-and formats.** Static trace of the battle-data initializer and the composer's
-strip draw; trail `/tmp/ta-decompile/notes/wu-19-230.md`. Completes the
-"Slide strip text" bullet above, which named no art entry, and corrects two
-of its words.
-
-* *Band.* Battle-data initialization looks up entry `LIGHTBAR` of the common
-  GUI GAF (`anims/commongui.gaf`, the window record's common GAF of
-  [03 R-FONT-01 §5]), takes **frame index 1** (the second frame; 507 × 32 in
-  the stock file — index 2 is the 149 × 354 stamp of §2), zeroes that frame's
-  two hotspot words in place, and caches the frame pointer; the composer
-  blits it through the plain frame blitter at `(x, yBottom + off)`. With the
-  hotspot zeroed the blit lands exactly there. Zero frames in the entry
-  leaves a null cache and nothing draws.
-* *Rectangle.* `x` and `yBottom` are the left and bottom edges of the
-  composer surface's **clip rectangle**, which battle entry sets to the view:
-  left `128`, top `32`, right `W − 1`, bottom `H − 33` (screen height less
-  the 32-row bottom strip, less one). At 640 × 480 the fully raised band
-  therefore covers rows `416..447` of columns `128..634` and the text line
-  is `y = 426`, with `Game Time` at `x = 153`, `Total Units` at `318` and
-  `Game Speed` at `508`. The bullet's "surface rectangle" is that clip
-  rectangle, not the screen.
-* *Font.* Before the first string the composer writes the window record's
-  current-GAF-font word from **slot 1** (`hattfont11`) and after the last it
-  restores slot 0 (`hattfont12`); the strings go through the GAF pen of
-  [03 R-FONT-01 §6] with no width limit and mode 0 (glyph bytes copied, no
-  light-table remap), so "default font, light-table row 0" above means slot 1
-  and the plain blitter. The side FNT is reached only through the pen's
-  null-slot fallback.
-* *Formats.* Literal, with the translated key as the first `%s`:
-  `%s : %02d:%02d:%02d` (`Game Time`; hours, minutes, seconds of the tick
-  count at 30 per second), `%s : %d  (Max %d)` (`Total Units`; the local
-  player's live count and the unit limit; two spaces before the
-  parenthesis), and `%s %s` (`Game Speed`; the `Normal`-or-`%+d` text of
-  [R-CAM-01 §3], with ` (%+d)` appended afterwards while the adapted speed
-  differs). No colon follows `Game Speed`; a space-colon-space follows the
-  other two keys. With no translation table loaded every key is returned
-  verbatim [02 "Translation table"].
-
-**Established.**
-
-`campaignside = ALL` needs no retail contract beyond [R-FE-01 §4]: the side a
-campaign battle uses when the campaign names none is the local player's side
-record, written from the registry `side` word before the campaign was chosen;
-carrying that word into battle entry is plumbing, not an open question.
-
-### Closed — the `ORDERS` and `BUILD` stage buttons' cues [R-HUD-04 §5] (2026-09-04)
-
-Static trace (WU-19-174), in the command-window click handler that also owns
-the factory product click of [R-P0-11 §1].
-
-**Established.** The handler tests the clicked gadget's name against four
-literals, in this order, before it reaches the product path: `PREV`, `NEXT`,
-`ORDERS`, `BUILD`. Each test is a **substring** search, not a whole-name
-compare, which is what admits the side-prefixed stock names (`ARMORDERS`,
-`CORBUILD`). Each of the four raises one deferred bit and returns; only the
-two stage buttons also **play a named cue**, through the ordinary interface
-cue helper (the same helper `addbuild`, `Panel` and `Options` use, with the
-local-player argument):
-
-| Gadget name | Deferred bit | Cue |
-|---|---|---|
-| `ORDERS` | the bit whose consumer clears the unit's page-shown bit | `ordersbutton` |
-| `BUILD` | the bit whose consumer sets it | `buildbutton` |
-
-The cue is played on the click, before the deferred bit's consumer runs, and
-neither button plays `nextbuildmenu` — the `PREV` and `NEXT` rows above are
-silent at the click, and `nextbuildmenu` is played by the page-switch routine
-their deferred bits reach (§9, [R-P0-11]).
-
-This closes the open item that read "which cue the `ORDERS` and `BUILD`
-gadgets play": the aliases were known to exist in `allsound.tdf`, but no
-section named their producer.
-
-## R-WGT-02 — the bitmap cache, window-record words, gadget appenders and small gadget contracts (2026-08-29)
-
-Closed by RWU-07-6. Trail: `/tmp/ta-decompile/notes/gui/rwu-07-6.md`.
-
-### The front-end bitmap cache [R-WGT-02 §1]
-
-**Established.** Every front-end screen and the in-battle options root
-request their backdrop by name through one cache (`FrontendX`, `options4x`,
-`dhelp`, `drestart`, `GameSettings`, … — the names in [R-FE-01]). The
-request carries the name (or null), a *clear-first* flag, an *apply
-palette* flag and a *keep-window* flag:
-
-1. With *clear-first* set, the display is cleared through the framebuffer's
-   clear and presented before anything else.
-2. A null name skips the cache: the image is null.
-3. Otherwise the cache — **ten** entries, each an image, a palette and a
-   name, most-recently-used first — is searched by exact (case-sensitive)
-   name. A hit is moved to the front (the entries above it shift down by
-   one).
-4. A miss decodes `bitmaps\<name>.pcx` with a fresh 1024-byte palette
-   buffer; a decoder failure is fatal through the modal status channel
-   ([01 R-PLAT-01 §8]) with the composed path as the message. Unless the
-   host mode word is 6 (the in-battle briefing of [R-FE-01 §4] — the one
-   request made from inside a battle is decoded but not cached), the last entry's image is freed with its palette, every entry
-   shifts down by one and the new image, palette and name take entry 0.
-5. With *keep-window* clear: when **no** window is open the image becomes the
-   global background image and the name is copied into the background-name
-   field (an empty name when the request was null); when a window is open
-   the image is handed to the **top window's background-image slot** (the
-   window record's backdrop pointer) and, if *apply palette* is set, the
-   decoded palette is installed as the display palette. The return is 1
-   when an image was resolved (or the name was null), else 0. With
-   *keep-window* set nothing is installed and the return is 0.
-
-So the ten most recent backdrops stay decoded across screen changes, a
-name is never decoded twice while it remains in the ten, and the front-end
-never evicts during a load. The `.pcx` decoder itself is [02 "PCX"] /
-[fmt pcx].
-
-### Window-record words and their setters [R-WGT-02 §2]
-
-**Established.** The interface object owns a stack of *window records*
-(one per open `.GUI`, head = top window; each record holds the gadget
-array, the rectangle, the backdrop image and the words below). The
-screen-side helpers that every screen calls set single words; naming them
-here so the screen closures can be read without the helper census:
-
-| Word | Meaning | Setters |
-|---|---|---|
-| fired-result word (interface object) | non-zero after a gadget fires; a callback that leaves it set closes the window ([R-WGT-01 §1] step 8) | *request close* sets 1; *stay open* clears to 0 — the clear is the first line of nearly every screen callback; the window open routine sets it to 1 |
-| redraw-request word (interface object) | 1 = repaint the top window this pass | *request redraw*; set by every text/stage/grey mutation of [R-FE-02 §5] and by the unfold of [R-HUD-04 §2] |
-| dirty word (window record) | 1 = the gadget painter re-lays the whole window | *mark dirty* (through the top record; a no-op with no window); the painter and every gadget mutation set it |
-| token-mode word (window record) | non-zero = the GUI pass pops keyboard tokens, zero = it peeks ([R-WGT-01 §1] step 3; with zero the text editor pops for itself) | *set token mode*; the front-end shell and the options root set 1 |
-| quickkey-enable word (interface object) | 1 = button and label quickkeys are honoured; the window open routine sets 1 | *set quickkey enable* — `LOADGAME`/`SAVELIST`/`RESTRICT2` clear it while a name is typed ([R-WGT-01 §7] gates on it after the Alt test) |
-| fired-button word (interface object, mirrored into the window record) | 1 = the fired gadget was pressed with the left button, 2 = the right button; the button, label, link and list handlers write it when they fire; a screen reads the mirror to distinguish a right-click on a row (`SKIRMISH` uses 2 for its row actions, [R-FE-01 §5]) | written by the gadget handlers only |
-| held-button bits (interface object) | the mouse sample's held-button mask of [R-WGT-01 §1] step 2 (1 left, 2 right) | the sample fetch; the *held-button test* helper masks it |
-| top-window backdrop pointer (window record) | the image the window painter blits behind the gadgets | the bitmap cache (§1) |
-
-**Established — the two mouse-message predicates.** The "last mouse
-message" word of [R-WGT-01 §1] step 2 holds the Win32 message identity.
-*Pressed* with mask 1 is true for `WM_LBUTTONDOWN` or `WM_LBUTTONDBLCLK`,
-with mask 2 for `WM_RBUTTONDOWN` or `WM_RBUTTONDBLCLK`; mask 1 is tested
-first and a mask with both bits tests only the left button. *Double-clicked*
-is the same with only the `…DBLCLK` identities. These are the press and
-double-click tests every kind handler of [R-WGT-01 §§3–8] uses.
-
-**Established — the window stack repaint.** Repainting walks the window
-records from the **bottom** of the stack to the top (recursion before
-work). A record is repainted when its dirty word is 1, or — when a clip
-rectangle is supplied — when its rectangle (`x, y, x + w − 1, y + h − 1`)
-overlaps the clip rectangle by the inclusive overlap test of
-[03 R-COMP-01 §2]; a repaint clears the dirty word and blits the record's
-backdrop image at the record's origin. Records that are neither dirty nor
-overlapped are skipped, so a top window that moves leaves the windows below
-untouched unless the clip rectangle says otherwise.
-
-**Established — top-window name test.** "Is `<name>` the top window" is a
-16-byte compare of the top record's name (false with no window). The page
-close of [R-HUD-04 §3] and the options-close path use it.
-
-**Established — the fired-gadget name test.** The callback-side "which
-gadget fired" test of [R-FE-01 §2] compares the **focused** gadget's name
-(the record at the interface object's focused index — the fired gadget
-becomes the focused gadget before the fired callback runs, [R-WGT-01 §1]
-step 8) with the wanted text by a full C string compare — not the 16-byte
-bounded compare of the lookups in [R-FE-02 §5]; false when no window is
-open or no gadget is focused. Because authored names are at most 16 bytes
-with a terminator the two compares agree on stock content.
-
-### Gadget appenders for the dialog builders [R-WGT-02 §3]
-
-**Established.** Beside the *append record* of [R-FE-02 §5] (forces kind 1)
-there are two more appenders with the same 200-gadget refusal: *append
-text region* copies a 204-byte template into the next 347-byte record,
-forces kind **6** (the text-region gadget that `MOREBAR` pages,
-[R-HUD-03 §10]) and zeroes its text word, its two scroll words and its
-16-bit page word; *append stat bar* copies a 214-byte template and forces
-kind **13** (the score bar of [R-HUD-03 §11]). `MSGBOX`, `CDCHECK` and the
-report screen use them; the three appenders are the only way a window grows
-after the `.GUI` parse.
-
-### Small gadget contracts [R-WGT-02 §4]
-
-**Established — set text by index, refined.** The *set text* of
-[R-FE-02 §5] has two additions. For a kind-1 button whose `stages` byte is
-non-zero, after the 128-byte copy and the label-fit the text is split at
-every `|` into NUL-separated pieces (the multi-line / per-stage labels of
-§4), each piece is re-localised and the pieces are re-packed
-back-to-back into the 128-byte field — `stages` pieces are read. For a kind
-3 input a non-zero fourth argument replaces the input's `maxchars` word.
-Kind 5 labels get the copy and the label-fit only. Every kind sets the
-redraw-request word.
-
-**Established — the text-input caret and the length clamp.** The interface
-object's caret word is the insertion index the editor of §4 uses. The
-*re-lay* of [R-WGT-01 §6] is: with the *force-empty* flag clear and
-`len(text) ≤ maxchars` the caret becomes `len(text)`; otherwise the text is
-emptied and the caret is 0; the gadget is then re-laid.
-
-**Established — the edit-token loop, refined.** The kind-3 editor of §4
-runs as a loop: with the window's token-mode word zero it pops its first
-token itself, otherwise it takes the token the pass hands it; after each
-token it pops the next until the ring is empty ([01 R-PLAT-01 §6]) or an
-Escape token (`0x1B`) stops the loop; it returns the last token seen, and
-re-lays the gadget once if any token was processed. Per token: Backspace
-(`0x08`) with the caret above 0 moves the caret back one and closes the
-gap; Delete (`0xEF`) with a non-empty text and the caret below the length
-closes the gap at the caret; Home (`0xF0`) and End (`0xF1`) move the caret
-to 0 / the length; Left (`0xF4`) and Right (`0xF6`) move it by one within
-`0..len`; the paste tokens (`0xBF`, `0xEE`) are §2's; a printable token
-(`0x20..0x7F`) is inserted at the caret — shifting the tail right — when
-the current length is not already `maxchars`, the attribute-`0x02` filter
-admits it (alphanumeric, or space, underscore, apostrophe), and the rendered
-width rule of §4 holds, and the caret advances. Other tokens are ignored.
-
-**Established — font by `fontnumber`, gadget parse, basename.** *Select
-font by gadget*: the n-th kind-7 record of the window (n = the gadget's
-`fontnumber`, counting from 0 in index order) selects its font and returns
-that record's index; with no such record the default (common) font is
-selected and −1 returned ([R-FE-02 §5] "focus a text input"). *Gadget
-parse of the common keys*: `status` → the 16-bit status word; `text` →
-128 bytes, then re-localised in place; `quickkey` → the byte is the first
-character when it is a letter, else the decimal value of the text
-(`83` → `S`); `grayedout` → bit 0 of the flag word (the other bits are
-preserved); `stages` → the stages byte — the grammar is [fmt gui]. *GUI
-basename*: a loader path is reduced in place to the text after its last
-backslash before it is used as the window name (the `.GUI` opener of §4).
-
-### The keyboard-ring flush [R-WGT-02 §5]
-
-**Established.** The flush called by the front-end controller at each screen
-change, by the window open path and by the report and end-mission screens
-zeroes both indices of the 30-slot key-token ring of §2 ([01 R-PLAT-01
-§6]): pending tokens are discarded and the ring is empty. Nothing else is
-touched — the button ring and the held-key table keep their state. (The
-ledger row for this routine had been filed as a "content catalog" helper;
-it is the key ring.)
+  separable statically · §12 · manual retail observation.
 
 
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
-and the decider that would close it. Findings that closed an item live in the
-body — several under `R-<id>` headings — and are not restated here.
-
-**Correction (2026-08-28, RWU-00-5).** This tail interleaved open items with
-long parenthetical recitals of established behavior — picking, selection
-overlap order, build cancellation, order-class dispatch, build-page patching,
-minimap colours, and the running-display cadence each appeared as a bullet
-whose open half was one clause inside a paragraph of closures. The recitals
-are deleted here only; §§2, 6, 8–11, [R-P0-11], [R-REV-01], [R-HUD-02R] and
-[R-CRD-006] continue to own them. The document's eleven "### Unknown" blocks
-were reshaped the same way in the same pass; the established text some of them
-carried (the idle-latch red/green divert, the eligibility compare against
-`0.0`, the battle-rail minimap destination) was promoted into the surrounding
-section rather than deleted.
+and the decider that would close it.
 
 ### Input and text
 
 - Which front-end screen paths handle which key tokens (the battle census is
-  closed in [R-CAM-01 §2]), and the unsupported-device census · §2, §5 ·
-  static trace.
+  [R-CAM-01 §2]), and the unsupported-device census · §2, §5 · static trace.
 - The complete right-button cursor column under `Interface Type 1` · §8
   [R-CAM-01 §5] · static trace of the cursor resolver's second case family.
 - The user-facing name of the F4 toggle; the `+MakePoster` argument grammar ·
   §2 [R-CAM-01 §2, §6] · static trace / manual retail observation (developer
-  tooling, low priority). **Correction (2026-09-04, WU-19-174):** this item
-  also listed "the visible effect of the two 30-frame counters it arms",
-  which [R-CAM-01 §14] closed on 2026-09-02 (kill/loss number flash, fading
-  to row 0 over half a second). Only the name is open, and no implementation
-  decision turns on it. (The `+BigBrother` companion word's reader is
-  closed in [R-CAM-01 §12].)
+  tooling, low priority; no implementation decision turns on either).
 - How the multiplayer receive path applies the lobby `Cheat Codes` bit before
   re-dispatching a received `+` line · §5 [R-CAM-01 §6] · out of scope.
 - Text-input code page and IME behavior · §2, §7 · presentation-level platform
-  detail; no retail contract observed beyond the ASCII token set. Marked
-  `TODO(T23)`.
+  detail; no retail contract observed beyond the ASCII token set
+  (`TODO(T23)`).
+- Whether the character values of the key-token producer hold on a non-US
+  keyboard layout (Supported inference) · §10 [R-CAM-01 §14] · manual retail
+  observation.
 - Chat commit-versus-cancel semantics on every send route, including whether
   the terminator is included · §11 · static trace.
 - Translation-table missing-key rules and the complete translation lookup
-  fallback · §7 · static trace. (FNT drawing has no wrapper — truncate then
-  clip; the GAF-font wrapper is closed: [03 R-FONT-01 §3, §6].)
+  fallback · §7 · static trace.
+- Text wrapping beyond the two closed wrappers ([R-FE-02 §6],
+  [03 R-FONT-01 §6]) — whether any other caller wraps · §7 · static trace.
 - Language-specific font fallback order beyond the closed
   missing-HATTFONT-to-active-FNT path · §7 · asset census.
-- Malformed HATTFONT (no `I` frame) handling · §5 · undefined in retail
+- Malformed HATTFONT (no `I` frame) handling · §5, §7 · undefined in retail
   ([03 R-FONT-01 §6]); asset census.
 
 ### Widgets and screens
@@ -8151,26 +7343,23 @@ section rather than deleted.
 - User-facing naming of every GUI mode/flag bit; `0x800` (extra redraw on
   close) and `0x1000` (modal centering) are mechanically named · §3 · static
   trace.
+- The meaning of the window key-navigation flag's clear state per front-end
+  screen · §3 · per-screen static trace.
+- The identity of the key matrix's second gate word (key-navigation flag or
+  the fired-result word of [R-WGT-02 §2]); the token-mode gate alone settles
+  every battle window · §3 [R-WGT-01 §2] · static trace naming the readers of
+  that dword outside the GUI pass, low priority.
+- Who fills each listbox's `maxTop`; the record-list item structures · §4
+  [R-WGT-01 §4, §5] · static trace.
 - Whether the label under a briefing blink word also draws the run, or
   elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.
-- The per-window census of authored gadget association ids · §4, doc 02 §6 ·
-  asset census. (Bubbling, default controls, shared focus, capture and
-  association precedence, listbox rows, picture-box binding and the widget
-  callback map are closed in [R-WGT-01 §§1–8].)
-- The key-navigation flag's clear state per front-end screen; who fills each
-  listbox's `maxTop`; the record-list item structures · §3, §4 [R-WGT-01] ·
-  static trace. (The kind-10 outline X coordinate and `nuttin`'s runtime role
-  are closed in [R-WGT-01 §8].)
-- The restart request word's consumer; the
-  `DitheredFog` presenter · §5 [R-FE-01 §7, §11] · static trace. (The
-  `screenchat` filter polarity is closed in [R-HUD-03 §14]; the single-player
-  transition graph, movie machine, campaign continuation, error dialogs and
-  registry write census are closed in [R-FE-01].)
+- The per-window census of authored gadget association ids · §4, §9, doc 02 §6
+  · asset census.
+- The restart request word's consumer in the battle pump; the `DitheredFog`
+  presenter · §5 [R-FE-01 §7, §11], doc 08, doc 03 · static trace.
 - Process-level outcome of malformed HATTFONT or malformed GAF payloads whose
-  decoders return null · §5 · static trace. (The missing/parser-rejected
-  `.GUI` outcome is closed in §5 "Frontend asset failure boundaries",
-  2026-09-04: the opener stores through a null window pointer and the process
-  faults.)
+  decoders return null · §5 "Frontend asset failure boundaries" · static
+  trace.
 - Battle HUD optional-asset fallback beyond the closed `intgaf` panel entries,
   side fonts, authored GUI page, page GAF, support GAF, and common-button
   resolution · §6 · static trace.
@@ -8178,57 +7367,53 @@ section rather than deleted.
   asset census.
 - Whether any content authors a `<unit>0.GUI` page for the authored-page bit ·
   §6 [R-HUD-03 §6] · asset census.
-- The rank byte's initial assignment at battle entry (the score panel's row
-  order before the first kill) · §6 [R-HUD-04 §1] · static trace of the
-  per-player reset of [08 R-ENTRY-01 §2].
 - The authored width of the in-battle `PREFS` window (decides whether the
   options unfold's second quad form and `LIGHTBAR` stamp are reachable) · §6
   [R-HUD-04 §2] · asset census.
-- The name of the player-slot auxiliary word the score panel's row filter
-  tests (`live-unit count ≠ 0 or auxiliary word == 0`) · §6 [R-HUD-04 §1],
-  doc 08 · static trace.
+- Whether the message ring's backing memory is zero-initialised at session
+  start (decides whether the drawer's second text colour, `dcb[10]` on
+  class-byte bit 5, is reachable) · §6 [R-HUD-03 §14.4] · static trace of the
+  session-init clear.
+- Whether a mission script can post to the message ring, or whether campaign
+  objective text has its own path · §6 [R-HUD-03 §14.4], doc 08 · static
+  trace of the mission-event text producers.
 
 ### Picking, selection, and orders
 
-- The committed pick record, and the authored provenance of the three score
-  terms · §8 [R-REV-01 §6] · static trace. A pixel-for-pixel presentation
-  replacement of the picker is blocked on both. Marked `TODO(question)`.
-- Cursor handle slot 0 identity — the unused/overflow slot · §8 · static
-  trace.
+- The committed pick record: the `HOT UNITS` producer's list rank and its
+  viewport/visibility admission result · §8 [R-REV-01 §6] · a design pass
+  over the publication boundary (`TODO(question)`). A pixel-for-pixel
+  replacement of the producer is blocked on it; the hull test and the score
+  reduction are not.
+- Whether a stock aircraft always outscores the stock buildings it can fly
+  over (Supported inference) · §8 [R-REV-01 §9] · a census of
+  `FootprintX`/`FootprintZ` and model heights over the stock definitions.
+- Whether the `HOT UNITS` producer runs in the frame/presentation update, and
+  whether the two low status bits it tests are the movement-mode bits
+  (Supported inferences) · §8 [R-REV-01 §5] · a caller census of the
+  producer; a writer census of that status word.
+- The selection rectangle's clip-left value for every visible/hidden-panel
+  state · §8 [R-SEL-02A] · a focused mode/panel capture recording the surface
+  descriptor at the selection draw.
 - Feature-versus-unit pointer priority; features are absent from the unit
   hover list and reclaim families resolve them separately at the pointer · §8
   · static trace.
 - Remaining command-specific cursor validity rules · §8 · static trace.
 - Manual unit and point target encoding, command-fire replacement, and the
   manual-versus-autonomous latch callers · §9, doc 06 §3.2 · static trace.
-- ~~What writes latch-flag bit `0x40` while the MOBILEBUILD latch is armed~~ ·
-  **closed 2026-09-04 (WU-19-160)**, by [R-CAM-01 §14] step 1, which had
-  already answered it from the other end. The question was framed on the wrong
-  byte, which is why the census in §9's chain came back empty: the bit that
-  picks the drag rectangle's outer entry is **bit 6 of the pointer-flags byte**
-  — the *site-valid* bit — and not bit `0x40` of the latch-flags word, whose
-  role really is immediate-versus-special helptext. The site-valid bit has
-  exactly one writer, the in-view placement preview that the frame handler runs
-  only while the pointer is over the view and the latch is MOBILEBUILD, and the
-  world rebuild clears it; [R-CAM-01 §14] step 1 states the identification in
-  as many words ("This bit is also the 'special latch flag' that picks the
-  drag-box colour in §9"). So the armed drag box is entry 6 exactly when the
-  build click would be accepted and entry 4 when it would play `notoktobuild`,
-  and the drag box, the placement cursor and the click all read one word.
-  **Established.**
+- Whether any retail path draws the sweeping build-site lines with Shift up
+  (a play observation contradicts the traced Shift gate) · §9 [R-P0-11 §3] ·
+  a retail session with the Shift key state observed, not recalled.
 
 ### Camera, minimap, and session UI
 
-- Camera clamp behavior when the view size exceeds the map size on an axis;
-  the ordered clamp form is the only established behavior · §10 · static
-  trace.
-- Mapping of the three sensor callback tables to radar versus jammer palette
-  entries · §10, doc 03 §3.3 · static trace.
+- Camera clamp behavior when the viewport span exceeds the map size on an
+  axis; the ordered clamp form is the only established behavior · §10
+  [R-CAM-01 §13] · static trace.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · §10, doc 08 · static trace.
-- Start-position markers · doc 03 · static trace.
-- Outcome transition timing · §11 · static trace. (The endgame bar-fill
-  animation is closed in §6 [R-HUD-03 §11].)
+- Start-position markers · §10, doc 03 · static trace.
+- Outcome transition timing · §11 · static trace.
 - Campaign continuation timing · §5, doc 08 · static trace.
 - Role separation of shared player-word bit `0x20` between READY display and
   map-control authority; both consumers are proven and the semantics are not

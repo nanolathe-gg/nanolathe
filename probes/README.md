@@ -11,12 +11,12 @@ Keep scenarios under this directory in the format they exercise (for example,
 the owning research section. Prefer a focused scenario that records a stable
 relationship, ordering, or hash over a census or implementation milestone.
 
-## Probe kit (RWU-00-6)
+## Probe kit
 
 Some research questions cannot be settled by static analysis and are marked
 in the category docs with the decider *manual retail observation*
-([`research/retail-executable-spec/README.md`](../research/retail-executable-spec/README.md),
-`docs/PLAN_RESEARCH_COMPLETION.md` §2.4). The kit below is the authored data
+([`research/retail-executable-spec/README.md`](../research/retail-executable-spec/README.md)
+§"Deciders"). The kit below is the authored data
 for each such probe plus a written expected-observation template. **Nothing
 here is automated**: a human copies the files into a retail install, runs the
 game by hand, looks, and writes the observation back into the owning
@@ -86,7 +86,8 @@ sections list are static-trace items, not observations.
    and state which candidate it confirms or falsifies. An observation may
    promote a **Supported inference** to *Observed* or falsify it; it never
    replaces a static trace as the source of a constant
-   (`docs/PLAN_RESEARCH_COMPLETION.md` §2.4). Then remove the matching
+   (`research/retail-executable-spec/README.md` §"Deciders"). Then remove the
+   matching
    bullet from the doc's "Missing and unknown" list and the `TODO(question)`
    marker in code that cites it. Keep the screenshot outside the repo (the
    reference install's `Screenshots/` directory); cite its file name.

@@ -53,6 +53,52 @@ reader in the recovered function set establishes only that the reader is not
 in the searched set. It does not justify inventing behavior, and it does not
 prove that an unrecovered function cannot contain the reader.
 
+## Deciders
+
+Every **Unknown** names the decider that would settle it. In order of
+preference:
+
+1. **Static trace** of the retail executable — the default, and the only
+   decider that yields **Established** arithmetic.
+2. **Asset census** over an original installation — settles what stock content
+   authors (which COB scripts read a port bare, which definitions carry a key),
+   never what the engine computes.
+3. **Manual retail observation** — a human runs retail with an authored
+   `probes/` scenario and records what is seen. Results are written as
+   *Observed (retail run YYYY-MM-DD, probe name)* and may **confirm or
+   falsify** an inference; they never replace a trace as the source of a
+   constant. Probes are authored data (maps, missions, FBI/COB fixtures),
+   never copied retail bytes. `probes/README.md` holds the kit and the
+   procedure.
+
+## Writing rules
+
+* **One statement per behavior.** A document says one thing about a behavior.
+  A correction replaces the text it corrects rather than being appended beside
+  it; the git history is the audit trail, so the commit message states what
+  the previous text said and why it was wrong.
+* **Edit the owning category document in place.** Format documents own byte
+  layouts; category documents own behavior. Never add a new directory or notes
+  file.
+* **Every claim carries a confidence level** — **Established**, **Supported
+  inference**, or **Unknown**. A Supported inference names the open branch; an
+  Unknown names its decider.
+* **Anchors and citations.** A finding that code cites is written under a
+  heading carrying its `R-<id>` anchor, and is cited as `[04 §7.2]` for a
+  numbered section, `[05 "Two-stage settlement algorithm"]` for the unnumbered
+  documents 05 and 08, `[04 R-PATH-01 §10]` for an anchored finding's
+  sub-section, and `[fmt tnt]` for a format document. Citation is by document
+  and section, never by line number. An anchor code cites is a contract: it
+  keeps its heading token across a rewrite.
+* **No addresses**, decompiler-generated names, offsets expressed as
+  executable layout, or register narration. The address-level trail stays in
+  the raw analysis workspace, where every function address is written beside
+  the spec anchor it supports so the coverage ledger can map function to
+  section mechanically.
+* **The tail is only open items.** Each document's "Missing and unknown" list
+  carries open items only, each with a decider and the section that owns it.
+  A closed item is removed from the tail; its closure lives in the body.
+
 ## Category set
 
 The engine is divided into eight categories. This is intentionally near the

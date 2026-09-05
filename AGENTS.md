@@ -91,8 +91,9 @@ research/
 ```
 
 **Adding a finding:** edit the owning category doc in place — the default and
-the only option. A correction must state what the previous text said and why
-it was wrong, so the reversal is auditable. Closed gap findings are written
+the only option. A correction replaces the text it corrects; the document says
+one thing. The git history is the audit trail, so the commit message states
+what the previous text said and why it was wrong. Closed gap findings are written
 inline under a heading carrying the `R-<id>` anchor code cites (old tokens like
 `[R-P0-01]`, `[04 §5.4]`, `[GAP T15]` must stay findable). File-format details
 go in `research/formats/<format>.md`. Never create new directories or notes
@@ -110,12 +111,14 @@ inline addendum section whose heading retains that exact anchor.
 
 **Other reference docs** (these describe *our* build, not retail):
 
-- `PHASES.md` + `docs/PLAN_*.md` — package layout, phase graph, contracts,
-  exit criteria. They point at research; they do not restate arithmetic.
+- `docs/ARCHITECTURE.md` — package map, the authoritative tick, verification,
+  citation routing.
+- `docs/DESIGN_*.md` — one per engine area: how it is built in Go and which
+  research owns each behavior. They point at research; they do not restate
+  arithmetic.
 - `docs/INVARIANTS.md` — the fourteen rules every diff is reviewed against.
 - `docs/SPEC_CONFLICTS.md` — where the reference install disproves the spec.
   Read before "fixing" anything it lists.
-- `docs/WORK_UNITS.md` — flat dispatch index of every work unit.
 
 ---
 
@@ -148,21 +151,21 @@ Delegate anything non-trivial — research sweeps, implementation units, reviews
 One sub-agent owns one unit and one set of files; the plan's Public API block
 is the contract between units. Every sub-agent works in its own worktree.
 Dispatch only when the unit's dependencies and earlier phase gates are green.
-`PHASES.md` owns package boundaries and phase dependencies;
-`docs/WORK_UNITS.md` owns safe parallel groups and required serialization.
+`docs/ARCHITECTURE.md` owns package boundaries; a dispatch names its files, and
+two concurrent units never list the same file.
 
 A dispatch brief is exactly this shape:
 
 ```
-Implement WU-07-3 from docs/PLAN_07_MOVEMENT_PATHFINDING.md.
+Implement <unit> per docs/DESIGN_MOVEMENT_PATH.md §3 (contracts C4-C9).
 
-Read first: AGENTS.md, docs/INVARIANTS.md, docs/PLAN_07_MOVEMENT_PATHFINDING.md,
+Read first: AGENTS.md, docs/INVARIANTS.md, docs/DESIGN_MOVEMENT_PATH.md,
 then research sections [04 §7.2] and [04 §7.3].
 
 Worktree: .claude/worktrees/wu-07-3 on branch wu-07-3, branched from main.
 Files you own (create/modify only these): internal/path/search.go, internal/path/search_test.go
 Files you may read but must not modify: internal/world/*, internal/movement/profile.go
-Public API you must satisfy: the Search block in the plan's "Public API" section.
+Public API you must satisfy: the Search block in the design document's package section.
 Done when: contracts C4-C9 hold, `go test ./internal/path` passes, `go vet ./...` clean.
 Unknowns: if research does not answer a question, stop and report it — do not invent a constant.
 ```
@@ -181,7 +184,7 @@ an invented constant and permanent, plausible-looking wrongness:
 1. Read the diff, not the summary (`git diff main...HEAD`). Sub-agents report
    confidently about code that does not compile.
 2. Run the checks yourself: `go build ./... && go vet ./... && gofmt -l . &&
-   go test ./...`, plus the plan's gate command. Re-run the gate **after**
+   go test ./...`, plus the design document's gate command. Re-run the gate **after**
    merging, not only in the worktree.
 3. Verify two of the most arithmetic-heavy contracts against their cited
    research section — constants, order of operations, comparison strictness.
@@ -254,7 +257,7 @@ is the one unrecoverable failure mode.
 - Comments explain *why* and cite the contract by research section. They never
   carry executable addresses.
 
-## Architecture (summary, see PHASES.md)
+## Architecture (summary, see docs/ARCHITECTURE.md)
 
 ```
 vfs        — overlay of loose dirs + HPI-family archives (HAPI, cipher, SQSH)
@@ -269,8 +272,8 @@ client     — Ebitengine window loop presents a software framebuffer from the c
 
 ## Workflow
 
-- Work from `PHASES.md`: phase table, dependency graph, exit criteria, playable
-  gates. Do not implement a later phase before its dependencies are green.
+- Work from `docs/ARCHITECTURE.md` (package map, dependency graph, what runs
+  today) and the owning `docs/DESIGN_*.md`.
 - Reference `research/retail-executable-spec/README.md` for the reading order.
 - There is **no Oracle** in this repo. For retail validation use
   `~/TotalAnnihilation` assets and a manual retail install if needed, but do

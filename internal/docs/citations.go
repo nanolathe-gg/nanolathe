@@ -1,14 +1,15 @@
-// Package docs checks that the plan documents cite research that exists.
+// Package docs checks that the design documents cite research that exists.
 //
-// A citation is the only link between a work unit and the contract it must
+// A citation is the only link between a unit of work and the contract it must
 // implement. A dangling one sends a sub-agent to a section that is not there,
 // and the usual outcome is an invented constant — the one unrecoverable
 // failure mode in AGENTS.md §"The four rules". This package resolves every
 // citation mechanically so that never happens silently.
 //
-// The four citation forms are the ones PHASES.md §"Citation convention"
-// defines: `[04 §7.2]` numbered section, `[05 "Player slot"]` heading text,
-// `[08 R-AI-01 §3]` inline addendum anchor, and `[fmt tnt]` format document.
+// The four citation forms are the ones docs/ARCHITECTURE.md §"Citation
+// conventions" defines: `[04 §7.2]` numbered section, `[05 "Player slot"]`
+// heading text, `[08 R-AI-01 §3]` inline addendum anchor, and `[fmt tnt]`
+// format document.
 package docs
 
 import (
@@ -20,7 +21,7 @@ import (
 	"strings"
 )
 
-// Citation is one reference found in a plan document.
+// Citation is one reference found in a design document.
 type Citation struct {
 	File string
 	Line int
@@ -121,19 +122,18 @@ func indexResearch(root string) (map[string]research, map[string]bool, error) {
 	return docs, formats, nil
 }
 
-// CitingFiles lists the documents whose citations are checked: the phase graph
-// and everything in docs/.
+// CitingFiles lists the documents whose citations are checked: everything in
+// docs/, which is the architecture document and the design documents.
 func CitingFiles(root string) ([]string, error) {
 	files, err := filepath.Glob(filepath.Join(root, "docs", "*.md"))
 	if err != nil {
 		return nil, err
 	}
-	files = append(files, filepath.Join(root, "PHASES.md"))
 	sort.Strings(files)
 	return files, nil
 }
 
-// Dangling returns every citation in the plan documents that does not resolve
+// Dangling returns every citation in the design documents that does not resolve
 // to a heading, section number, anchor, or format document in research/. The
 // returned paths are relative to root.
 func Dangling(root string) ([]Citation, error) {
@@ -221,11 +221,11 @@ type Finding struct {
 // String renders a finding as the citation form documents use, "[04 R-P0-09]".
 func (f Finding) String() string { return "[" + f.Doc + " " + f.Anchor + "]" }
 
-// UncitedFindings returns the anchored findings that no plan document cites.
+// UncitedFindings returns the anchored findings that no design document cites.
 // An uncited finding is a traced contract with no implementation home: it is
-// either work nobody planned, or a plan that has not caught up with a research
-// drop. Either way somebody has to decide, which is why this is checked and
-// not merely counted.
+// either work nobody designed, or a design document that has not caught up
+// with a research drop. Either way somebody has to decide, which is why this
+// is checked and not merely counted.
 func UncitedFindings(root string) ([]Finding, error) {
 	specs, err := filepath.Glob(filepath.Join(root, "research", "retail-executable-spec", "0*.md"))
 	if err != nil {
@@ -235,7 +235,6 @@ func UncitedFindings(root string) ([]Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	files = append(files, filepath.Join(root, "PHASES.md"))
 	cited := map[string]bool{}
 	for _, path := range files {
 		raw, err := os.ReadFile(path)

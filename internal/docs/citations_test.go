@@ -7,9 +7,9 @@ import (
 
 const repoRoot = "../.."
 
-// TestEveryCitationResolves is the mechanical half of PHASES.md
-// §"Deliberately out of scope": if a plan cites research that is not there,
-// the unit dispatched against it has no contract to implement.
+// TestEveryCitationResolves is the mechanical half of docs/ARCHITECTURE.md
+// §"Deliberately out of scope": if a design document cites research that is
+// not there, the unit dispatched against it has no contract to implement.
 func TestEveryCitationResolves(t *testing.T) {
 	bad, err := Dangling(repoRoot)
 	if err != nil {
@@ -38,7 +38,7 @@ func TestNormHeadingStripsClosureTagsAndDates(t *testing.T) {
 	}
 }
 
-// A heading may be cited by its qualifier-free prefix, which is how the plans
+// A heading may be cited by its qualifier-free prefix, which is how documents
 // address the "Heading — Established [P0-nn]" shape.
 func TestHeadingKeysIncludePrefix(t *testing.T) {
 	keys := headingKeys("Campaign discovery — Established [P0-05]")
@@ -80,12 +80,13 @@ func TestResolveRejectsMissingTargets(t *testing.T) {
 	}
 }
 
-// TestEveryFindingHasAPlanHome is the other half of coverage: PHASES.md
-// §"Deliberately out of scope" claims every research section is either cited
-// by a plan or listed as excluded. A traced contract that no plan cites is
-// work with no owner — the failure names it so the choice (plan it, or add it
-// to the exclusion table) is made deliberately rather than by omission.
-func TestEveryFindingHasAPlanHome(t *testing.T) {
+// TestEveryFindingHasADesignHome is the other half of coverage:
+// docs/ARCHITECTURE.md §"Deliberately out of scope" claims every research
+// section is either cited by a design document or listed as excluded. A
+// traced contract no design document cites is work with no owner — the
+// failure names it so the choice (design it, or add it to the exclusion
+// table) is made deliberately rather than by omission.
+func TestEveryFindingHasADesignHome(t *testing.T) {
 	uncited, err := UncitedFindings(repoRoot)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +98,6 @@ func TestEveryFindingHasAPlanHome(t *testing.T) {
 	for _, f := range uncited {
 		b.WriteString("\n  " + f.String())
 	}
-	t.Errorf("%d research finding(s) with no plan citation — cite each from the owning docs/PLAN_*.md, "+
-		"or list it in PHASES.md §\"Deliberately out of scope\":%s", len(uncited), b.String())
+	t.Errorf("%d research finding(s) with no design citation — cite each from the owning docs/DESIGN_*.md, "+
+		"or list it in docs/ARCHITECTURE.md §\"Deliberately out of scope\":%s", len(uncited), b.String())
 }

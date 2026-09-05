@@ -10,25 +10,38 @@ The repository keeps each kind of guidance in one place:
 
 * [`AGENTS.md`](AGENTS.md) — contribution rules, clean-room discipline,
   worktrees, dispatch, review, and landing.
-* [`PHASES.md`](PHASES.md) — build dependency graph, package ownership, and
-  falsifiable phase gates.
-* [`docs/WORK_UNITS.md`](docs/WORK_UNITS.md) — flat dispatch index and safe
-  parallel/serialized groups. The owning phase plan remains authoritative.
+* [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — package map, dependency
+  graph, the authoritative tick, what runs today, verification, and the
+  citation routing every token in the tree resolves through.
+* The ten design documents, one per engine area — how it is built in Go, its
+  contracts, and which research owns each behavior:
+  [`DESIGN_RUNTIME_DETERMINISM`](docs/DESIGN_RUNTIME_DETERMINISM.md),
+  [`DESIGN_CONTENT_VFS`](docs/DESIGN_CONTENT_VFS.md),
+  [`DESIGN_WORLD_VISIBILITY`](docs/DESIGN_WORLD_VISIBILITY.md),
+  [`DESIGN_UNITS_ORDERS_COB`](docs/DESIGN_UNITS_ORDERS_COB.md),
+  [`DESIGN_MOVEMENT_PATH`](docs/DESIGN_MOVEMENT_PATH.md),
+  [`DESIGN_ECONOMY_CONSTRUCTION`](docs/DESIGN_ECONOMY_CONSTRUCTION.md),
+  [`DESIGN_WEAPONS_PROJECTILES`](docs/DESIGN_WEAPONS_PROJECTILES.md),
+  [`DESIGN_INTERFACE_HUD_INPUT`](docs/DESIGN_INTERFACE_HUD_INPUT.md),
+  [`DESIGN_SESSIONS_AI_SAVE`](docs/DESIGN_SESSIONS_AI_SAVE.md),
+  [`DESIGN_PRESENTATION_CLIENT`](docs/DESIGN_PRESENTATION_CLIENT.md).
 * [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — cross-cutting implementation
   rules every change must preserve.
 * [`docs/SPEC_CONFLICTS.md`](docs/SPEC_CONFLICTS.md) — audited cases where a
   retail install corrected an older written contract.
+* [`docs/REMASTER.md`](docs/REMASTER.md) — the remaster authoring kit and the
+  art override the `--remaster` flag mounts.
 * [`research/retail-executable-spec/README.md`](research/retail-executable-spec/README.md)
-  — research reading order, category index, citation convention, and gap
-  disposition.
+  — research reading order, category index, evidence language, deciders,
+  writing rules, citation convention, and gap disposition.
 * [`research/formats/README.md`](research/formats/README.md) — file-format
   reference. Format documents own byte layout; the executable specification
   owns runtime behavior.
 
-`docs/PLAN_*.md` files are active implementation contracts and gate checklists.
-An unchecked box identifies a verification requirement; it does not by itself
-prove that the underlying code is absent. Dispatch follows the dependencies
-and prior gates named in `PHASES.md`.
+A design document is a description of the build, not a checklist: it states
+the contracts the packages implement and, in its last section, what is not
+implemented and what is still open. Research states what retail does; the
+design documents state how this tree does it.
 
 ## Current boundary
 

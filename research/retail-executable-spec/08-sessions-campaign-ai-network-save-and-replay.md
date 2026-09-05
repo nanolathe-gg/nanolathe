@@ -13,28 +13,18 @@ decompiler variable names, or source translation. It does not use behavior
 from another engine, a replacement implementation, executable-comparison
 tooling, or original data files as evidence.
 
-Some parts of this category are much less complete than the simulation and
-renderer. An older analysis incorrectly labeled the scenario unit reconstructor
-as the strategic AI planner. That analysis is retracted. The later whole-image
-static census instead positively roots a distinct strategic planner and
-establishes its recovered scope: the class-vector refresh and classifier, ten
-manager task slots (nine active and one null), direct task-group writer, wave
-bootstrap/merge, task deadlines and dispatch gates, economy-mixed scoring and
-profile handling, and placement selection and helpers [P0-01] [P0-02] [P0-03]
-[R-P0-04] [R-P0-05]. Those contracts are specified in the AI sections below.
-
-**Correction to the prior summary.** The earlier sentence that this document
-“treats the strategic planner as unknown and retains only the AI fields and
-control paths that the executable directly establishes” was wrong. It carried
-the scenario-reconstructor identity error forward as if it were evidence that
-no strategic planner had been found; the positive manager, classifier, group,
-wave, scoring, and placement paths now establish the planner itself. The
-planner is established only to that recovered scope. Its remaining bounded
-residuals — the semantic name of the classification helper, the two opaque
-high runtime status-bit semantics, the strategic half-capacity state writer,
-any additional indirect task-vector writer, and transport/naval/air policy or
-geometry — remain explicitly Unknown below and must not be filled by
-inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
+The networking material is much less complete than the simulation and
+renderer, and is outside Nanolathe's scope. The strategic planner is a
+distinct object from the scenario unit reconstructor (which is a load path),
+and it is established to the scope the whole-image static census recovered:
+the class-vector refresh and classifier, ten manager task slots, the direct
+task-group writer, wave bootstrap/merge, task deadlines and dispatch gates,
+economy-mixed scoring and profile handling, placement selection and its two
+helpers, and the transport, naval, air, repair, reclaim and scouting policy
+[P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05] [R-AI-01] [R-AI-03] [R-AI-04].
+Its remaining residuals — the semantic name of the classification helper and
+any additional indirect task-vector writer — are Unknown below and must not
+be filled by inference.
 
 Evidence terms:
 
@@ -109,7 +99,7 @@ Several numeric slot-state values are directly observed, but the semantic name
 of every value is not completely reconciled. Implementations should keep the
 wire values distinct even when UI labels collapse them.
 
-### Closed — the player record's peer-identity word is the kind-3 pool sort key [R-SESS-01 §7] (2026-09-02)
+### The player record's peer-identity word is the kind-3 pool sort key [R-SESS-01 §7]
 
 **Established.** The `PlayerSortKey` of [04 §2.3a] is a 32-bit word of the
 player record that the rest of the executable treats as the slot's **peer
@@ -132,9 +122,7 @@ after activation it holds the slot index anyway). The word has no save item
 ([08 "Player records"]) and a loaded battle restores its kind from the
 `Summary` `Gametype` ([08 "Load process"]), so no "saved sort key" exists to
 be surfaced: a reimplementation that never builds a kind-3 session needs no
-sort-key plumbing at all. Doc 04's "exact provenance and semantic name of
-`PlayerSortKey` … remain outside this section's scope" is answered here
-(cross-doc: doc 04 to cite).
+sort-key plumbing at all.
 
 ### Peer transport state
 
@@ -198,46 +186,39 @@ placement record's fixed fields in order are: the three interned name
 pointers, the fixed X/Z/Y coordinates, the angle word, the health
 percentage word, the creation-countdown dword, the build-priority word,
 the player byte, and the flag byte — the build-priority word sits between
-the countdown and the player byte, not after the health word as earlier
-noted.
+the countdown and the player byte.
 
-The executable parses these fields into fixed records before unit creation; the parser's key order, defaults and reader census are closed in [R-TRIG-01 §9] (`InitialGroup` is read as an integer and packed into the flag byte's low nibble; a unit-block `Kills` key has no reader).
-A complete reader census over the runtime unit record closes the parsed-only
-list above: `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`,
-`InitialGroup`, `BuildPriority` and the delayed-creation countdown have no
-reader anywhere in the image — the earlier phrasing "the creation reader
-copies build priority" is retracted; the copy it observed was the angle.
-The immunity high bit *is* transferred to a
-runtime status bit on the created unit — and that bit likewise has no reader,
-so the single consumed flag is itself inert in this executable. Retain all of
-them verbatim for save fidelity and diagnostics; act on none of them.
-
-**Correction (2026-09-02, RWU-19-38).** "That bit likewise has no reader, so
-the single consumed flag is itself inert" is wrong, and "act on none of them"
-is wrong for `Immunity`. The runtime status bit the flag is copied into —
-bit 15 of the unit status word — has two readers: the per-side target
+The executable parses these fields into fixed records before unit creation;
+the parser's key order, defaults and reader census are in [R-TRIG-01 §9]
+(`InitialGroup` is read as an integer and packed into the flag byte's low
+nibble; a unit-block `Kills` key has no reader). A complete reader census
+over the runtime unit record settles the parsed-only list above:
+`MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`, `InitialGroup`,
+`BuildPriority` and the delayed-creation countdown have no reader anywhere
+in the image. The immunity high bit is transferred to bit 15 of the created
+unit's status word, and that bit has two readers: the per-side target
 registry rebuild, which keeps a hostile unit off the **primary** acquisition
 list while the bit is set, and the computer player's nearest-hostile helper,
 which skips it ([06 §3.1] "the primary-list exclusion bit"; [R-AI-01 §9]).
 The `MakeSelectable` order (InitialMission's `s` verb) clears it. `Immunity`
-therefore means "not auto-targetable until made selectable", and a clone
-must set the bit at spawn and honour it in both readers. The other five
-parsed-only fields remain unread.
+therefore means "not auto-targetable until made selectable": a clone must
+set the bit at spawn and honour it in both readers. Retain the five unread
+fields verbatim for save fidelity and diagnostics; act on none of them.
 `UseOnlyUnits` is not inert: it is read at OTA load and routed through the
 resource resolver into the campaign `camps\useonly` area — path-building
 evidence that it feeds the campaign restricted-units mechanism.
 
-Facing angle for each placement record is converted from authored degrees to a 16-bit circle by one signed division. **Established (2026-09-04, WU-19-167, by trace of the placement-record parser).** `Angle` is read by the **integer** accessor with default 0 — the same accessor and calling shape as the `XPos`/`YPos`/`ZPos` reads that bracket it and the `Player` read that follows it — so a fractional authored value never reaches the conversion as a fraction. The value is then shifted left 16 **in a 32-bit register** and divided by 360 through the compiler's magic-multiply idiom: multiply by the reciprocal magic, add the multiplicand back into the high half (the correction a magic at or above 2^31 requires), arithmetic-shift the high half right 8, then **add the quotient's own sign bit**, which is what makes the quotient truncate toward zero rather than floor. The low 16 bits of that quotient are stored as the heading word.
+Facing angle for each placement record is converted from authored degrees to a 16-bit circle by one signed division (Established, by trace of the placement-record parser). `Angle` is read by the **integer** accessor with default 0 — the same accessor and calling shape as the `XPos`/`YPos`/`ZPos` reads that bracket it and the `Player` read that follows it — so a fractional authored value never reaches the conversion as a fraction. The value is then shifted left 16 **in a 32-bit register** and divided by 360 through the compiler's magic-multiply idiom: multiply by the reciprocal magic, add the multiplicand back into the high half (the correction a magic at or above 2^31 requires), arithmetic-shift the high half right 8, then **add the quotient's own sign bit**, which is what makes the quotient truncate toward zero rather than floor. The low 16 bits of that quotient are stored as the heading word.
 
-So the stored word is `trunc((int32)(degrees << 16) / 360)` narrowed to 16 bits, for **every** input. The only wrap in the whole sequence is that 32-bit shift, so for `-32768 <= degrees <= 32767` the shift is exact and the result is bitwise identical to truncate-toward-zero of degrees times 65536 divided by 360, reduced modulo the circle — negative degrees included. Divergence from the unbounded floating formula begins at `degrees >= 32768` and at `degrees <= -32769`.
-
-**Correction.** The previous text said "for negative degrees the result is that truncation **plus one** unit (about 0.0055 degrees of bias)" and "degrees in the 360..65535 range wrap correctly ... only |degrees| at or beyond 65536 (where the degrees-times-65536 intermediate wraps 32-bit) diverge". Both halves are wrong. There is no negative bias: the sign-bit add the earlier reading counted as an extra unit is the idiom's truncate-toward-zero step, and without it the quotient would floor — so a negative angle lands on the truncation, not one unit past it. And the wrap boundary is 32768, not 65536, because the shift is a signed 32-bit shift of the authored degrees: 32768 degrees already shifts into the sign bit, which is why an authored 65535 reads back as if it were -1 rather than as 65535 modulo the circle. The retraction the previous text made of "differs for greater-than-360 values" stands, but only over 360..32767. [P0-06] [lane 08 angle equivalence]
+So the stored word is `trunc((int32)(degrees << 16) / 360)` narrowed to 16 bits, for **every** input. The only wrap in the whole sequence is that 32-bit shift, so for `-32768 <= degrees <= 32767` the shift is exact and the result is bitwise identical to truncate-toward-zero of degrees times 65536 divided by 360, reduced modulo the circle — negative degrees included: there is no negative bias, because the sign-bit add is the truncate-toward-zero step, without which the quotient would floor. Divergence from the unbounded floating formula begins at `degrees >= 32768` and at `degrees <= -32769`, because the shift is a signed 32-bit shift of the authored degrees: 32768 degrees already shifts into the sign bit, which is why an authored 65535 reads back as if it were -1 rather than as 65535 modulo the circle. [P0-06] [lane 08 angle equivalence]
 
 The initial-mission string is interpreted once at battle start, on the loading worker after all units exist, for fresh mission-type-1 starts and for BetweenMissions-continuation loads (the save-blob gate runs the same fresh spawner when the BetweenMissions flag is present), and before any creation script, movement, or visibility publication for that tick. No other consumer of the stored script strings is located in the bounded search. [P0-06] [lane 08 BetweenMissions polarity]
 
 Tokenization scans the string for the comma character, copies each span into a 256-byte frame, and splits on every comma; the scan restarts past the comma with whitespace skipped. Tokens whose first character lies outside the A through w range are ignored and scanning resumes at the next comma. The remaining tokens dispatch through a 23-entry table that is case-insensitive for most verbs but carries a quirk: an uppercase-led W enters the build block rather than the wait block, so a plain wait can only be written lowercase as w and a wait-for-attack as lowercase wa, while an uppercase W with a following w character selects the stockpile build form. The families that appear in stock assets are move, attack with a numeric coordinate form and a by-type name form, build and stockpile build, self-destruct, guard, immediate attach, flag-bit write, patrol with timeout, make-selectable, unload, wait with seconds and an optional trailing integer, and wait-for-attack by name. Unknown letters, digits, and punctuation are ignored silently with no diagnostic and scanning resumes. [P0-06]
 
-Argument parsing uses the retail scan-format family with formats for two floats, three floats, integer pairs, and name scansets that accept alphanumerics, underscore, and dot — with one exception: the wait-for-attack scanset is `" %[a-zA-Z0-9.]"` and excludes the underscore (the earlier "all name scansets accept underscore" phrasing is retracted; attack-by-type and guard do include it). Only the numeric attack form tests that two floats were converted and only the wait-for-attack form tests that a name was converted; every other verb ignores the conversion count and still queues an order with whatever values the scan left in the frame, which for malformed numbers means zero-valued or stale stack values but still a queued order. Names for guard, immediate attach, and the name form of attack are resolved by scanning the sparse created array in placement order from zero upward, testing Ident case-insensitively first and then Unitname, returning the first occurrence and skipping null gaps left by failed allocations; duplicate names therefore resolve to the lowest placement index. A failed type lookup for attack or build produces no queue, while a failed unit lookup for guard produces no queue and for wait-for-attack falls back to self. The order queues and position scaling use truncate toward zero of floats multiplied by 65536 for coordinates and by 30 for timeouts, matching the retail helper's truncation; the flag verb writes bits without queuing and the immediate attach verb posts an internal attach without queuing. [P0-06]
+#### Argument parsing
+
+Argument parsing uses the retail scan-format family with formats for two floats, three floats, integer pairs, and name scansets that accept alphanumerics, underscore, and dot — with one exception: the wait-for-attack scanset is `" %[a-zA-Z0-9.]"` and excludes the underscore (attack-by-type and guard do include it). Only the numeric attack form tests that two floats were converted and only the wait-for-attack form tests that a name was converted; every other verb ignores the conversion count and still queues an order with whatever values the scan left in the frame, which for malformed numbers means zero-valued or stale stack values but still a queued order. Names for guard, immediate attach, and the name form of attack are resolved by scanning the sparse created array in placement order from zero upward, testing Ident case-insensitively first and then Unitname, returning the first occurrence and skipping null gaps left by failed allocations; duplicate names therefore resolve to the lowest placement index. A failed type lookup for attack or build produces no queue, while a failed unit lookup for guard produces no queue and for wait-for-attack falls back to self. The order queues and position scaling use truncate toward zero of floats multiplied by 65536 for coordinates and by 30 for timeouts, matching the retail helper's truncation; the flag verb writes bits without queuing and the immediate attach verb posts an internal attach without queuing. [P0-06]
 
 A postlude runs after the string is exhausted: when at least one order was queued it clears bit 5 of the unit's class word, and unless the string contained a numeric attack, patrol, self-destruct, or make-selectable, it queues a final make-selectable with zero auxiliaries. The census over the shipped mission corpus shows every verb shape is exercised in stock assets, with illustrative counts such as selectable near two thousand, guard above two thousand, flag-bit writes near one thousand, wait and move each above one thousand, and build, stockpile, wait-for-attack, and unload each in the hundreds; malformed-argument paths beyond the two tested verbs are not present in stock assets but still queue silently. [P0-06]
 
@@ -257,14 +238,9 @@ Record sizes fall in **nine** buckets: 12 bytes (`KillEnemyCommander`,
 `AllUnitsKilled`), 20 (`KillAllMobileUnits`, `AnyUnitPassesX/Z`), 44
 (`CaptureUnitType`), 48 (`KillUnitType`, `UnitTypeKilled`), 50
 (`BuildUnitType`), 52 (`UnitTypePassesX/Z`), 54 (`KillAllOfType`,
-`AllUnitsKilledOfType`) and 64 (`MoveUnitToRadius`). **Correction
-(2026-08-29, RWU-08-5).** The previous text listed "seven established
-buckets — `0x0C` flag-only, `0x10` timer, `0x14` boundary, `0x30`
-string+count variant A, `0x32` string+count variant B, `0x36`
-canonicalizing string shape, and `0x40` radius"; it omitted the 44-byte
-capture record and the 52-byte type-gated boundary records, and its
-"string+count" labels were wrong — only the 48-byte record carries a count
-(see [R-TRIG-01 §2] for the field layout of every bucket).
+`AllUnitsKilledOfType`) and 64 (`MoveUnitToRadius`); only the 48-byte
+record carries a count ([R-TRIG-01 §2] has the field layout of every
+bucket).
 
 Every record leads with a pointer to a six-slot table — poll, unit-removed
 notification, capture notification, unit-created notification, save, load —
@@ -303,6 +279,13 @@ The executable distinguishes at least:
 Mode selection controls which mission schema is selected, how player slots are
 populated, which options are read, whether DirectPlay is initialized, and which
 start synchronization barrier is required.
+
+### Session kinds: the accessor — Established [R-SESS-01 §5]
+
+The many sites that test the session kind (46 callers) read it through one
+accessor that returns the **first word of the session object** — the game
+type of "Game session": `1` campaign, `2` skirmish, `3` multiplayer
+([08 "Mission type dispatch"]). There is no other reader shape.
 
 ## Session lifecycle
 
@@ -346,8 +329,34 @@ state-5 loading thread installs state 6; its first run happens on the next
 orchestration dispatch, not inline.
 
 Residual: whether any provider-specific DirectPlay behavior adds transitions
-outside the reviewed callbacks. (The "UI-level names for states 0–4" residual
-is closed: the image carries no name for any session state — [R-SESS-01 §8].)
+outside the reviewed callbacks.
+
+#### The session state word has no name in the image — Established (bounded negative) [R-SESS-01 §8]
+
+- The state word is one dword; the "callback table" is a **setter with an
+  eight-way switch** that stores the state and installs one function pointer
+  for it (0 → teardown A, 1 → teardown B, 2 → router, 3 → network pre-load,
+  4 → local pre-load, 5 → battle loading, 6 → battle, 7 → results; any other
+  value installs a null pointer). The setter also picks the timer callback:
+  the battle timer for state 6, the front-end timer otherwise. There is no
+  indexed table of records and therefore no per-state label field.
+- **No string is associated with any state.** The setter and the five
+  callbacks for states 0–4 reference no string at all. The readers of the
+  state word that do reference strings are the process initializer (profile
+  keys, font names), the save `Summary` writer (`Gametype`, `maxunits`, …),
+  the solar-system screen, the campaign CD prompt and the CD-audio helper —
+  none is a state label. The setter's callers pass literal state numbers
+  beside front-end screen selections and the `BigButton` cue.
+- The only "state"-named diagnostic in the image — `Code segment checksum
+  error found when switching FE states` — belongs to the **front-end
+  screen** word, a different machine ([07 R-FE-01]); `Object State`,
+  `Object States` and `Piece States` are the script debugger's ([04 §5]).
+  No `Teardown`, `Preload`, `Router` or similar string exists.
+
+Bounded to the recovered export. The five inferred labels in the table
+above are Supported inference as *descriptions*; as *names* they are
+Nanolathe's, and an implementation's diagnostic strings for states 0–4 are
+its own to choose.
 
 ### Admission masks
 
@@ -361,7 +370,7 @@ loading/setup); bit 2 (`4`) admits state 6 (live battle).
 
 Campaign definition files live under the campaigns directory and are enumerated through the VFS in mount order: loose directory first, then patched archives, then expansion archives, then base archives, then CD-ROM archives. Within one provider the enumeration follows the host directory scan order without sorting. The first provider that contains a logical path wins; a duplicate logical path later in the scan order is hidden by the earlier winner's case-insensitive deduplication. A requested campaign file that does not resolve produces a diagnostic naming it; a missing companion terrain file for a mission is a load error, while missing optional media can fall back.
 
-A campaign file is an ordinary text file whose top level contains contiguous mission sections named Mission zero, Mission one, and so on, enumerated until the first missing index. The name MissionList that appears in the executable is only the allocation tag for the resulting 256-byte-per-entry name array, not an authored wrapper section. Each mission section supplies a mission name read through the language-prefixed string accessor that tries a language-specific key first and then the plain key, defaulting to a built-in unnamed mission error string. Discovery constructs a campaign list from the enumerated files and then a mission name list for the selected campaign by counting the contiguous sections and filling the array with those names. Duplicate mission basenames that appear in different campaigns are isolated per campaign, but when the same mission filename is requested the resolved bytes follow the same first-provider-wins rule; patch archives therefore shadow base archives. The counting stops at the first gap, so a mission section after a gap is invisible. [P0-05]
+A campaign file is an ordinary text file whose top level contains contiguous mission sections named `MISSION0`, `MISSION1`, and so on (no space, unpadded decimal), enumerated until the first missing index. The name MissionList that appears in the executable is only the allocation tag for the resulting 256-byte-per-entry name array, not an authored wrapper section. Each mission section supplies a mission name read through the language-prefixed string accessor that tries a language-specific key first and then the plain key, defaulting to a built-in unnamed mission error string. Discovery constructs a campaign list from the enumerated files and then a mission name list for the selected campaign by counting the contiguous sections and filling the array with those names. Duplicate mission basenames that appear in different campaigns are isolated per campaign, but when the same mission filename is requested the resolved bytes follow the same first-provider-wins rule; patch archives therefore shadow base archives. The counting stops at the first gap, so a mission section after a gap is invisible. [P0-05]
 
 The campaign front end consumes titles, descriptions, difficulty choices, planet identifiers, briefing and narration names, panorama, rotation, glamour, and sound media, mission ordering and availability, and completion state. The front end presents both a campaign list and a mission list.
 
@@ -369,26 +378,25 @@ The campaign front end consumes titles, descriptions, difficulty choices, planet
 
 Planet values select parallel tables for briefing keys, panorama art, and rotation animation, each table holding the same number of entries and indexed by the same planet comparison. A special lunar branch rewrites the briefing selection when a display flag is set. The briefing controller opens a briefing panel, hides and shows specific interface groups, populates text, and fetches panorama and planet imagery through the same graphic lookup used elsewhere.
 
-Wind for the briefing screen is drawn from the CRT stream before the simulation consumes either value: speed is a uniform integer in the authored minimum to maximum inclusive range, and the second draw's low six bits seed the display's jitter countdown (not a direction — corrected in [R-CAMP-01 §2]). The authored wind bounds are stored in the mission object; the two drawn values are briefing-screen display state only [01 §7.3]. Missing wind keys default to zero. [P0-05]
+Wind for the briefing screen is drawn from the CRT stream before the simulation consumes either value: speed is a uniform integer in the authored minimum to maximum inclusive range, and the second draw's low six bits seed the display's jitter countdown ([R-CAMP-01 §2]). The authored wind bounds are stored in the mission object; the two drawn values are briefing-screen display state only [01 §7.3]. Missing wind keys default to zero. [P0-05]
 
-Missing optional media can fall back or suppress presentation without aborting battle entry; missing data required to identify the mission or its terrain is a load error. A planet value that matches no table entry selects table entry 0, Green planet ([R-CAMP-01 §2]; the earlier "leaves the previous art unchanged" was wrong).
+Missing optional media can fall back or suppress presentation without aborting battle entry; missing data required to identify the mission or its terrain is a load error. A planet value that matches no table entry selects table entry 0, Green planet ([R-CAMP-01 §2]).
 
 ### Progression — Established with bounded negative and unknown residual [P0-05]
 
-The executable contains campaign selection, mission list, briefing, end-mission, score and report, and between-mission state. The end-of-mission latch is established: the trigger queues are polled once per 30 ticks in the local player's slice only, with victory as an AND across its queue and defeat as an OR, and victory evaluated first so simultaneous completion resolves as victory. When either side completes, the latch arms a countdown at four that decrements roughly once per second before a latch word is written with separate bits for ending, won, and lost; the lose path clears the win bit it would otherwise share. The score helper that writes the campaign result combines kills multiplied by a kill multiplier and the global tick divided by 60 multiplied by a time multiplier, both truncated, summed and clamped at zero, and stores a W or L character per mission slot ([R-CAMP-01 §7]; the earlier "divided by 1800" was wrong — the divisor is 60). [P0-05]
+The executable contains campaign selection, mission list, briefing, end-mission, score and report, and between-mission state. The end-of-mission latch is established: the trigger queues are polled once per 30 ticks in the local player's slice only, with victory as an AND across its queue and defeat as an OR, and victory evaluated first so simultaneous completion resolves as victory. When either side completes, the latch arms a countdown at four that decrements roughly once per second before a latch word is written with separate bits for ending, won, and lost; the lose path clears the win bit it would otherwise share. The score helper that writes the campaign result combines kills multiplied by a kill multiplier and the global tick divided by 60 multiplied by a time multiplier, both truncated, summed and clamped at zero, and stores a W or L character per mission slot ([R-CAMP-01 §7]). [P0-05]
 
-Persistence is split. Difficulty, the skirmish lobby fields, and three registry mirrors — difficulty, a games flag, and an all-missions flag — are kept under the installed software registry path and written back immediately when absent so a first run fully populates the registry (the earlier "two registry mirrors" count is corrected: the enumeration below lists three). One mirror holds the difficulty value masked to 16 bits and cycled by the difficulty controls; a second mirror holds a games flag gated on a display mode, and a third holds an all-missions flag as a single bit. The per-mission W and L characters in memory and the between-missions bank account named Summary that carries a BetweenMissions flag are written through the bank system, not the registry. The bank's timing block that persists scheduler state is a 28-byte binary box; larger boxes have trailing bytes ignored, and the bank's string pool, header, and account enumeration are not range-checked. Campaign continuation on load inspects the saved Summary account for the BetweenMissions flag to decide between fresh mission spawning and battle reconstruction — the battle-entry gate routes the flag-present case to the fresh spawner and the flag-absent case to battle restoration, never the reverse. [P0-05] [lane 08 BetweenMissions polarity]
+Persistence is split. Difficulty, the skirmish lobby fields, and three registry mirrors — difficulty, a games flag, and an all-missions flag — are kept under the installed software registry path and written back immediately when absent so a first run fully populates the registry. One mirror holds the difficulty value masked to 16 bits and cycled by the difficulty controls; a second mirror holds a games flag gated on a display mode, and a third holds an all-missions flag as a single bit. The per-mission W and L characters in memory and the between-missions bank account named Summary that carries a BetweenMissions flag are written through the bank system, not the registry. The bank's timing block that persists scheduler state is a 28-byte binary box; larger boxes have trailing bytes ignored, and the bank's string pool, header, and account enumeration are not range-checked. Campaign continuation on load inspects the saved Summary account for the BetweenMissions flag to decide between fresh mission spawning and battle reconstruction — the battle-entry gate routes the flag-present case to the fresh spawner and the flag-absent case to battle restoration, never the reverse. [P0-05] [lane 08 BetweenMissions polarity]
 
-VFS first-win, first-gap termination, language-prefixed names, wind draws from the CRT stream before simulation, the latch bits and scoring arithmetic, and the registry versus bank split are established. The all-missions registry bit's consumer is located: the single-player panel shows its "Any Msn" control and keeps the bit when set, a toggle callback (inert while the panel's text field holds the "DRDEATH" easter-egg string) flips the bit, toggles the control, and writes the bit back to the registry, and a writeback helper persists it. The mission-list build always counts every mission and neither the new-game panel nor the end-mission screen filters the list by the bit — the exact listbox-selection effect of the toggle remains the bounded residual (the earlier "no reader anywhere" is superseded). The provider-specific enumeration order beyond mount order is host-dependent but deterministic for a given filesystem, and the exact narration and glamour fallback beyond silent suppression is not closed. [P0-05] [lane 08 AllMissions]
+VFS first-win, first-gap termination, language-prefixed names, wind draws from the CRT stream before simulation, the latch bits and scoring arithmetic, and the registry versus bank split are established. The all-missions registry bit's consumer is located: the single-player panel shows its "Any Msn" control and keeps the bit when set, a toggle callback (inert while the panel's text field holds the "DRDEATH" easter-egg string) flips the bit, toggles the control, and writes the bit back to the registry, and a writeback helper persists it. The mission-list build always counts every mission and neither the new-game panel nor the end-mission screen filters the list by the bit — the exact listbox-selection effect of the toggle remains the bounded residual. The provider-specific enumeration order beyond mount order is host-dependent but deterministic for a given filesystem, and the exact narration and glamour fallback beyond silent suppression is not closed. [P0-05] [lane 08 AllMissions]
 
 
 
-### Closed — campaign catalog: file grammar, enumeration and the mission list [R-CAMP-01 §1] (2026-08-29)
+### Campaign catalog: file grammar, enumeration and the mission list [R-CAMP-01 §1]
 
-**Scope.** RWU-08-3. This section states, at implementable precision, how the
-campaign catalog is enumerated and how a campaign file becomes a mission list.
-Everything below is **Established** by static trace unless marked otherwise;
-the raw trail lives outside the repo.
+This section states, at implementable precision, how the campaign catalog
+is enumerated and how a campaign file becomes a mission list. Everything
+below is **Established** by static trace unless marked otherwise.
 
 **The campaign object.** One heap object (the *campaign record*) holds the
 session kind word (1 campaign, 2 skirmish, 3 multiplayer — the discriminant
@@ -401,13 +409,13 @@ write clears to zero. The slots are:
 |---|---|---|---|---|
 | 0 | campaign file path | `camps` | `TDF` | catalog open |
 | 1 | terrain file path | `Maps` | `TNT` | terrain loader; the slot's byte size is also stored (a missing slot stores 0) |
-| 2 | briefing text | `camps\briefs` | `TXT` | briefing text region (§3) |
-| 3 | narration sound | `camps\briefs` | `WAV` | briefing narration (§3) |
+| 2 | briefing text | `camps\briefs` | `TXT` | briefing text region (§2) |
+| 3 | narration sound | `camps\briefs` | `WAV` | briefing narration (§2) |
 | 4 | mission hint | `camps\hints` | `TXT` | **no reader in the image** (dead slot) |
-| 5 | outcome glamour | *(empty)* | `PCX` | end-of-mission outcome art (§7) |
+| 5 | outcome glamour | *(empty)* | `PCX` | end-of-mission outcome art (§6) |
 | 6 | use-only units list | `camps\useonly` | `TDF` | build-restriction loader [05] |
 | 7 | AI profile | `ai` | `txt` | computer-player profile loader [08 "Computer-controlled players"]; falls back to `default` when the key is empty |
-| 8 | glamour sound | `camps\briefs` | `WAV` | end-of-mission glamour display (§7) |
+| 8 | glamour sound | `camps\briefs` | `WAV` | end-of-mission glamour display (§6) |
 
 **Slot path construction.** A slot is filled by the *media resolver* from
 `(directory, name, extension)`: when `name` is empty the slot is cleared
@@ -422,9 +430,11 @@ stock install carries `camps\briefs-french`, `-german`, `-italian`,
 elsewhere in this unit applies the same language-suffix-then-plain rule with
 `.<extension>` appended after stripping the name's own extension. For slot 5
 the directory is empty, so the slot holds `\<glamour>.PCX`; the outcome-art
-loader (§7) skips the leading separator and re-joins under `bitmaps\glamour`.
+loader (§6) skips the leading separator and re-joins under `bitmaps\glamour`.
 
-**Enumeration of campaigns.** The new-game panel builds its campaign list by
+#### Enumeration of campaigns
+
+The new-game panel builds its campaign list by
 enumerating `camps\*.TDF` through the VFS (mount order and first-win as in
 "Campaign discovery" above). Two 256-byte-per-entry name arrays are
 allocated for the count; every enumerated file is opened as TDF and admitted
@@ -433,8 +443,7 @@ equals, case-insensitively, the local player's side name **or** the literal
 `ALL`. Files without `[HEADER]` are skipped silently. The returned count is
 the number admitted; the list order is the enumeration order.
 
-**Note (2026-08-31) — `campaignside` filters, it does not assign.** The
-direction matters to anything that wants a campaign battle's local side. The
+**`campaignside` filters, it does not assign.** The direction matters to anything that wants a campaign battle's local side. The
 side is decided *first*: the registry `side` value (0 Arm, 1 Core) is written
 into the local player's side record when `SINGLE.GUI` opens, and the `Side0` /
 `Side1` buttons of `NEWGAME.GUI` rewrite it and rebuild the list
@@ -448,7 +457,9 @@ engine that reconstructs the side from the campaign file alone is exact for a
 named side and has no answer for `ALL` — that is a real gap, not a defaulting
 opportunity.
 
-**Opening a campaign.** The catalog opener copies the requested name into the
+#### Opening a campaign
+
+The catalog opener copies the requested name into the
 record, resets all nine slots to empty, and — when the name is non-empty —
 resolves slot 0 as `camps\<name>.TDF` and parses it. A parse failure raises
 the message box `The requested campaign file, %s, does not exist.` (`%s` is
@@ -456,10 +467,11 @@ slot 0's path) and re-enters the opener with an empty name, which leaves the
 record with no campaign and no mission list. On success the mission index and
 its companion word are zeroed and the mission loader runs for index 0.
 
-**Mission list.** The list builder counts blocks named `MISSION%d` from 0
-until the first missing index (the earlier text's "Mission zero, Mission one"
-wording is corrected: the block names are `MISSION0`, `MISSION1`, … with no
-space, and the decimal is unpadded). It allocates `count × 256` bytes tagged
+#### Mission list
+
+The list builder counts blocks named `MISSION%d` from 0 until the first
+missing index (the block names are `MISSION0`, `MISSION1`, … with no space
+and an unpadded decimal). It allocates `count × 256` bytes tagged
 `MissionList` and fills entry *i* with the block's `missionname` read through
 the language-prefixed accessor (`<Language>missionname` first, then
 `missionname`, 256-byte buffer); a block with neither key yields the literal
@@ -469,12 +481,14 @@ array. Stock campaign files carry `[HEADER] campaignside=ARM|CORE` and
 Frenchmissionname=…; Italianmissionname=…; Spanishmissionname=…;` (asset
 census).
 
-**Index helpers.** *Has-mission(i)* is `i < count` with the same contiguous
-count. *Advance* (`next mission`) succeeds only when `count > index + 1`; it
-then increments the index, zeroes the companion word and reloads. *Set(i)*
-stores `i`, zeroes the companion word and reloads. Neither helper tests the
-W/L marks — progression by outcome is decided by the end-mission screen
-(§7), not by the record.
+#### Index helpers
+
+*Has-mission(i)* is `i < count` with the same contiguous count. *Advance*
+(`next mission`) succeeds only when `count > index + 1`; it then increments
+the index, zeroes the companion word and reloads. *Set(i)* stores `i`,
+zeroes the companion word and reloads. Neither helper tests the W/L marks —
+progression by outcome is decided by the end-mission screen (§8), not by the
+record.
 
 **Look-up by name.** The save loader restores a campaign mission by name: for
 session kind 1 it walks the mission list comparing `missionname` values
@@ -482,8 +496,9 @@ case-insensitively and sets the first match's index; no match leaves the
 record on index 0 and returns failure. For kinds 2 and 3 the name is an OTA
 path handled by the skirmish loader [R-SKIR-01 §1].
 
-**Mission loader, campaign branch (kind 1).** With `MISSION%d` for the current
-index: a missing block raises `The requested mission file, %s, does not
+#### Mission loader, campaign branch (kind 1)
+
+With `MISSION%d` for the current index: a missing block raises `The requested mission file, %s, does not
 exist.` (`%s` is the block name). Otherwise `missionname` (language-prefixed)
 is stored as the mission's display name; `missionfile` (plain key) missing
 raises `Old TED format no longer supported!`; the OTA path is joined as
@@ -495,8 +510,9 @@ the load (return 0). The `maxunits` key of `[GlobalHeader]` is read with
 default 200 into the session's unit-cap word here, and slot 1 becomes
 `Maps\<missionfile>.TNT`.
 
-**Common tail (all kinds).** After `[GlobalHeader]` is selected the loader
-fills the media slots in this order: `brief` → slot 2, whose file is then
+#### Common tail (all kinds)
+
+After `[GlobalHeader]` is selected the loader fills the media slots in this order: `brief` → slot 2, whose file is then
 read whole into an allocated `Briefing` buffer (VFS size + 1, NUL-terminated;
 a missing or empty file leaves the buffer null, so the briefing text region
 stays empty); `narration` → slot 3; `missionhint` → slot 4;
@@ -521,15 +537,7 @@ default 0, stored as floats), `SurfaceMetal`, `aiprofile` → slot 7
 language-suffix probe, `ALL` side wildcard and unpadded `MISSION%d` grammar
 are read directly from the code.
 
-### Closed — briefing screen: planet table, panorama, rotation, text, narration [R-CAMP-01 §2] (2026-08-29)
-
-**Correction.** "Planet and briefing selection" above said a planet value that
-matches no table entry "leaves the previous art unchanged rather than
-aborting" and that the wind draws include a "direction" of "the low six bits
-of a CRT draw". Both are wrong: an unmatched planet selects **entry 0 (Green
-planet)**, and the second draw seeds a **countdown**, not a direction (see
-"Wind display" below). Doc 01 §7.3 already records the draws as display-only;
-this section fixes their meaning.
+### Briefing screen: planet table, panorama, rotation, text, narration [R-CAMP-01 §2]
 
 **Planet table.** The briefing screen builder holds four parallel 15-entry
 tables (plus a terminating null). Index order and contents:
@@ -613,9 +621,8 @@ loader reads slot 2 (`camps\briefs\<brief>.TXT`) into a scrolling text
 region (`TextRegion`, `MOREBAR` pages it); the `SOLARSYSTEM` and `TextRegion`
 gadgets are given font index `localSide + 1`. Slot 3 (narration) is started
 with a 60-scaled-tick (two-second) **delay** at full DirectSound volume
-unless the session is in the live-battle state (corrected 2026-08-29 per
-[03 R-AUD-02 §1]: this sentence previously read "at volume 60" — the 60 is
-the timer period, the volume argument is 0 = full scale); `SHUTUP` is a
+(the volume argument is 0 = full scale, [03 R-AUD-02 §1]) unless the session
+is in the live-battle state; `SHUTUP` is a
 toggle — stage 0 stops the stream, any other stage restarts it (visible while
 it plays). The `Start` control runs the campaign-CD check
 (§5) and, when it passes, re-mounts the archive set, stops the narration
@@ -631,18 +638,16 @@ with background bitmap `mbrief<side>`; the stock GUI's gadgets are exactly
 the scroll and mask arithmetic, and the countdown semantics are read from
 the callbacks.
 
-### Closed — new-game panel: `CampaignKnob`, `MissionsKnob`, `playanygame4`, `newcampaign4x` [R-CAMP-01 §3] (2026-08-29)
+### New-game panel: `CampaignKnob`, `MissionsKnob`, `playanygame4`, `newcampaign4x` [R-CAMP-01 §3]
 
 The single-player new-game panel is `NEWGAME.GUI` (gadgets `PrevMenu`,
 `Start`, `Campaign`, `CampaignKnob`, `MissionsKnob`, `Missions`, `Side0`,
 `Side1`, `SIDENAME`, `Difficulty`, `Arm`, `Core`, `TEXT`; asset census). The
-front-end router opens it in two modes selected by one argument.
-*Correction ([07 R-FE-01 §3], 2026-08-29):* this paragraph previously said
-mode **0** (new campaign) came "from the single-player menu's `NewCamp`
-control". Both `NewCamp` and `AnyMsn` pass mode **1** (any mission — the
-play-any layout with both lists); the mode-0 campaign-only layout is reached
-only from a shell phase that this executable never enters. The results
-screen's `Missions`/`Start` route (§7) also passes mode 1. All entries run
+front-end router opens it in two modes selected by one argument. Both
+`NewCamp` and `AnyMsn` pass mode **1** (any mission — the play-any layout
+with both lists); the mode-0 campaign-only layout is reached only from a
+shell phase that this executable never enters ([07 R-FE-01 §4]). The results
+screen's `Missions`/`Start` route (§8) also passes mode 1. All entries run
 the campaign-CD check first (§5).
 
 *Background and knobs.* Mode 0 counts `camps\*.TDF`: more than two files
@@ -670,7 +675,7 @@ and plays the `SideSelect`/`SideSelect2` cue. `Difficulty` cycles
 
 *Start.* `Start` (and, in mode 1, selecting a `Missions` row or, in mode 0,
 selecting a `Campaign` row) runs the campaign-CD check (§5), re-mounts the
-archive set, **resets the progress marks to 25 × `U`** (§7), then chooses the
+archive set, **resets the progress marks to 25 × `U`** (§8), then chooses the
 campaign name: the `Campaign` selection when the fixed-campaign flag is
 clear, else the literal `Core Campaign` if the local side byte is non-zero,
 else `Arm Campaign`. The mission index is the `Missions` selection in mode 1,
@@ -687,7 +692,7 @@ mission of the campaign. Whether anything else reads the bit remains the
 
 **Confidence.** Established.
 
-### Closed — the developer warp entry is dead code [R-CAMP-01 §4] (2026-08-29)
+### The developer warp entry is dead code [R-CAMP-01 §4]
 
 Two routines read `<module directory>\Warp.ini` through the private-profile
 API: section `WARPLEVELS`, key `warp%dcampaign` (string, default `default`,
@@ -701,7 +706,7 @@ image**: the warp entry is unreachable in the retail executable. It bypasses
 nothing because it runs nothing; a reimplementation must not expose it.
 Established (call-graph query, both directions).
 
-### Closed — the CD gate family [R-CAMP-01 §5] (2026-08-29)
+### The CD gate family [R-CAMP-01 §5]
 
 **The check.** One *disc check* routine takes a selector — 0 `Campaign`,
 1 `Multiplayer`, anything else fails — and returns a drive letter on success
@@ -777,8 +782,7 @@ The mission loader dispatches on the mission type discriminant:
   source string through the translation table (case-insensitive equality
   on the translated text, first entry in table order); a second miss, or
   no table entry, fails the load silently. There is no directory scan and
-  no distance metric — the earlier "a fuzzy search falls back to the
-  closest match" wording is corrected in [R-CAMP-01 §11].
+  no distance metric ([R-CAMP-01 §11]).
 
 The common tail loads briefing/environment values, builds trigger objects,
 meteor configuration, and the remaining mission subsystems.
@@ -798,8 +802,7 @@ literal candidate values tried in fixed trial order:
 For skirmish/multiplayer, each candidate additionally counts its `StartPos`
 special records and is accepted when that count equals the player count
 (counted as the last occupied lobby slot index plus one — equivalent to the
-player count for the dense skirmish lobby; the "counting nonzero lobby
-entries" phrasing is corrected), **or** the counted player count is zero
+player count for the dense skirmish lobby), **or** the counted player count is zero
 (with the candidate still required to have at least one StartPos),
 **or** — as a fallback while no exact match has been found — this candidate's
 StartPos count is the largest seen so far. A schema with zero StartPos
@@ -807,7 +810,7 @@ records is never accepted when the player count is non-zero. The last
 accepted schema name is copied out and fed to the placement builder: after an
 exact match only later equal-count candidates overwrite it, and in the
 no-exact-match fallback a strictly larger count overwrites the previous
-choice — "first accepted" is retracted.
+choice.
 
 Selection happens before placement records are instantiated, so all peers must
 agree on the same schema.
@@ -816,8 +819,10 @@ agree on the same schema.
 
 Initial wind is drawn from the CRT stream at briefing-screen entry, before the
 simulation consumes either value: speed = `rand() % (maxWind − minWind + 1) +
-minWind` from the mission's parsed minimum/maximum, and direction =
-`rand() & 0x3F`. Document 01 carries the full simulation-side draw arithmetic.
+minWind` from the mission's parsed minimum/maximum, and the second draw's
+`rand() & 0x3F` seeds the briefing display's jitter countdown ([R-CAMP-01 §2]
+"Wind display"); both are display state. Document 01 carries the full
+simulation-side draw arithmetic.
 
 ### Mission-global values
 
@@ -848,10 +853,8 @@ Directly read mission fields include:
   `commanderDeath` key — that rule is a lobby value).
 
 The content and world specifications define numeric parsing and how these
-values initialize subsystems. The `commanderDeath`, `numplayers`, and
-`maxunits` dispositions above are closed by the mission loader and per-player
-phase; the earlier "commanderDeath injection" question is resolved — no
-mission key exists and no defeat trigger is injected for it.
+values initialize subsystems. No `commanderDeath` mission key exists and no
+defeat trigger is injected for it; the rule is a lobby value.
 
 ### Meteor showers
 
@@ -859,10 +862,9 @@ Meteor processing is closed. Authored parameters merge with the
 `gamedata/METEOR.TDF` `[Default]` record exactly as specified in document 02;
 an empty `MeteorWeapon` is the only disable predicate. Nine scheduler fields
 (enabled, active, next-strike, strike-end, next-hit, origin X/Z, target X/Z)
-persist in the save's `Meteor` account — the "and the resolved weapon"
-phrasing is retracted: the account carries nine integer items and no weapon
-identity; the weapon is resolved at load from the authored mission
-configuration. [lane 08 meteor account]
+persist in the save's `Meteor` account as nine integer items; the account
+carries no weapon identity, and the weapon is resolved at load from the
+authored mission configuration. [lane 08 meteor account]
 
 Scheduling runs in the tick phase **after wind jitter** and after the
 projectile phase, so a spawned meteor first moves on the next tick. When the
@@ -883,7 +885,7 @@ pool; a full pool drops that meteor silently and does not retry the slot.
 
 ### Mission and terrain loading order — Established [P0-04]
 
-The common-tail mission loader validates a global header block and required keys, then builds placement records in strict order: first unit records, then special records that carry start positions, then feature records. Each phase allocates a distinct heap block with its own stride and count and fills fields by scanning the text file's enumeration order without sorting. The unit phase interns name strings into a bump area after the unit array, scales world positions by shifting left 16 to 16.16 fixed point, converts facing angle with a fixed-point magic multiply that truncates toward zero, packs the owning player byte with a zero-to-one fixup, and packs flag bits for immunity, mission-critical, AI ignore, and group membership. The special phase stores a type that marks start positions together with a numeric suffix parsed from the name, and the feature phase stores a name buffer with coordinates that are cleared when negative. No other heap writer for those three counts and bases is located within the bounded search. [P0-04]
+The common-tail mission loader validates a global header block and required keys, then builds placement records in strict order: first unit records, then special records that carry start positions, then feature records. Each phase allocates a distinct heap block with its own stride and count and fills fields by scanning the text file's enumeration order without sorting. The unit phase interns name strings into a bump area after the unit array, scales world positions by shifting left 16 to 16.16 fixed point, converts facing angle with a fixed-point magic multiply that truncates toward zero, packs the owning player byte with a zero-to-one fixup, and packs flag bits for immunity, mission-critical, AI ignore, and group membership. The special phase stores a type that marks start positions together with a numeric suffix parsed from the name, and the feature phase stores a name buffer, blanking the name when a coordinate is negative so the placer drops the record ([R-TRIG-01 §9]). No other heap writer for those three counts and bases is located within the bounded search. [P0-04]
 
 ### Schema and start-position selection — Established [P0-04] [P0-05]
 
@@ -891,19 +893,21 @@ Schema choice precedes placement record instantiation so all peers agree on the 
 
 Start-position eligibility is established as three conjuncts: the ten fixed player slots are scanned in order, a slot participates only when its base value is non-zero, its control value is one, two, or three, and its **side index is not the neutral value 10**. Special records that fail the StartPos prefix test are ignored for this purpose. [P0-04]
 
-*Correction (2026-09-04, WU-19-173) — the third conjunct is the side index, not a "terminator byte".* This paragraph previously named the third clause "its terminator byte is not the newline sentinel". There is no terminator byte in the gate; the byte is the slot's side index and the sentinel is the decimal value `10`, which happens to be the code point of a newline — a value coincidence, not a string terminator. The reading is settled from three independent sites in this document that all test the same word: [R-ENTRY-01 §5] states the kind-2 stamp gate as "record live, controller 1/2/3, **side ≠ 10**"; [R-SESS-01 §1]'s two live-player counters "both first require the slot's record to exist ... and the slot's side index to differ from `10`"; and [R-CAMP-01 §7]'s score-board row condition requires that "its side is not the neutral 10". Doc 04 carries the parallel sentinel for the movement sweep's own third clause, where the byte is the ally-group byte rather than the side index and the same `10` marks a row that was never seated ([04 R-MOV-03 §10]). The "terminator" wording had propagated into implementation comments as an open question about state the session was supposed to be missing; nothing is missing. Established.
+The sentinel is the decimal value `10` in the slot's side-index byte (a value coincidence with the newline code point, not a string terminator); the same word is tested by the kind-2 stamp gate of [R-ENTRY-01 §5], the two live-player counters of [R-SESS-01 §1] and the score-board row condition of [R-CAMP-01 §7]. Doc 04 carries the parallel sentinel for the movement sweep, where the byte is the ally-group byte and the same `10` marks a row that was never seated ([04 R-MOV-03 §10]). Established.
 
 ### Randomization for skirmish starts — Established [P0-04]
 
 Two random streams are split. When a per-lobby Location flag is zero, skirmish start positions are shuffled with the CRT stream using a Fisher–Yates walk over a dense list of eligible slot numbers: a gate draw is taken when fewer than three players are eligible, then for each index from one to count minus one a draw is taken with bound index plus one. The bound expansion follows the CRT helper's rule of building a mask from 15-bit chunks until the mask covers the bound, then taking the remainder; for the small bounds that occur with ten slots this is a single draw per iteration. The resulting permutation is then assigned in slot order through a helper that stamps each logical slot with a start-position index, overwriting earlier random interior coordinates when a matching StartPos exists and otherwise retaining the random fallback. When the Location flag is non-zero the assignment is identity with no draws. [P0-04]
 
-Commander fallback placement for eligible slots draws from the simulation stream: two draws per eligible slot for X and Z interior jitter, each bounded by map dimension in cells minus 160, then offset by 80 cells and scaled to 16.16 fixed point. (**Corrected 2026-08-29:** the bounds and offset are in world units, and the jitter exists only on the multiplayer path; the skirmish stamp has no jitter and a `StartPos` miss is fatal — [R-ENTRY-01 §5], [R-ENTRY-01 §10].) When the bound is zero or negative the helper returns zero without advancing the stream, so tiny maps produce no jitter draws and the position collapses to the 80-cell margin. If a matching StartPos is found by numeric suffix lookup, its stored short coordinates are shifted to fixed point and overwrite the jitter; otherwise the jitter is kept. Missing or extra StartPos entries are handled gracefully: the lookup scans for the requested suffix and, when not found, leaves the jitter untouched and can emit a diagnostic without crashing; surplus positions beyond the player count are simply unused. [P0-04]
+Commander fallback placement exists only on the multiplayer path (kind 3): two simulation draws per eligible slot for X and Z interior jitter, each bounded by the map dimension in world units minus 160, then offset by 80 world units and scaled to 16.16 fixed point ([R-ENTRY-01 §5]). When the bound is zero or negative the helper returns zero without advancing the stream, so tiny maps produce no jitter draws and the position collapses to the 80-unit margin. If a matching StartPos is found by numeric suffix lookup, its stored short coordinates are shifted to fixed point and overwrite the jitter; otherwise the jitter is kept with no diagnostic. The skirmish stamp (kind 2) has no jitter: a `StartPos` miss is fatal ([R-ENTRY-01 §5], [R-TRIG-01 §9]). Surplus positions beyond the player count are simply unused. [P0-04]
 
 ### Unit creation and InitialMission timing — Established [P0-04] [P0-06]
 
-Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions — a failure formats `Player number %d invalid for unit %s` into the modal fatal channel and terminates the process (**correction 2026-08-29:** the earlier "emits a diagnostic … but still proceeds" is retracted, [R-TRIG-01 §9]) — then runs a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (the earlier "copies build priority" is retracted — build priority is parsed but never copied or read; the placement record's angle word is the copy source). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
+#### Mission-unit creation
 
-Timing is fixed: the mission loader's common tail runs, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots, then commanders are created with the jitter described above and resources are granted as floating-point metal and energy, then camera focus is chosen, then the sparse two-pass spawner runs, then visibility and mapping are rebuilt, then the first authoritative tick runs. (**Superseded 2026-08-29:** the visibility rebuild precedes the spawner and the per-player phase is primed at tick 0 before the first pump — [R-ENTRY-01 §6–§9], correction [R-ENTRY-01 §10].) The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** The earlier contradictory phrasing (flag-present → restore player and feature state from the bank) is retracted: a BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle; the gate's two branches verify this. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
+Mission-unit creation during battle entry uses a two-pass sparse array. The loader allocates a created array sized by the unit count and zeroes it. Pass one walks the unit records in placement order from zero upward: it validates the unit type name exists, adjusts the authored player number from one-based to zero-based with a zero-to-one fixup, checks the same eligibility predicate used for start positions — a failure formats `Player number %d invalid for unit %s` into the modal fatal channel and terminates the process ([R-TRIG-01 §9]) — then runs a position fixup helper and the normal unit allocator. The allocator scans for the lowest free pool slot in the owning player's slice and can fail; on failure the entry stays null and no unit is created. Successful creation copies the immunity high bit into a runtime status bit, scales health by percentage, and copies the authored **facing angle** into the unit's heading word (build priority is parsed but never copied or read). Pass two walks the same order again and invokes the InitialMission interpreter only when the record carries a non-null script string and the corresponding created entry is non-null; the interpreter tokenizes the string and queues orders. A per-record creation countdown field is parsed but has no reader in the image; no delayed queue, cargo loop, or separate attachment pass exists beyond the immediate attach verb. Recursive reconstruction for linked or carried units uses the same allocator path for saves but not for fresh mission spawns. [P0-04] [P0-06] [lane 08 facing angle]
+
+Timing is fixed ([R-ENTRY-01 §1]–[R-ENTRY-01 §9] give every step): the mission loader's common tail runs, then the world rebuild, then for multiplayer a barrier pumps network state and sleeps fifty milliseconds until peers arrive, then start-position assignment stamps slots and commanders are created (with the kind-3 jitter described above) and resources are granted as floating-point metal and energy, then visibility and mapping are rebuilt, then the sparse two-pass spawner runs and the campaign camera is placed, then the main GUI is loaded, the per-player phase is primed once at tick 0, the grant is written again and the metal-spot lists are built, and only then does the first authoritative tick run. The InitialMission strings are therefore interpreted after every mission unit exists at its fixed-point position but before any creation script, movement, or visibility publication for that tick, and they never take a tick of their own. BetweenMissions handling for saves uses a bank account named Summary that carries a BetweenMissions flag; **the polarity is settled by the battle-entry save-blob gate: when the flag is absent (the in-battle marker) the loader runs the battle restoration dispatcher and skips the fresh spawner; when the flag is present the loader skips battle restoration and runs the fresh spawner — the campaign continuation rebuilds the mission from the authored mission file.** A BetweenMissions save contains only the Summary account, so the flag-present route could not restore a battle. [P0-04] [P0-05] [lane 08 BetweenMissions polarity]
 
 ### Feature and terrain convergence — Established [P0-04] [P0-05]
 
@@ -913,12 +917,12 @@ Terrain-provided and mission-provided feature records converge on the same featu
 
 Multiplayer initialization enters a barrier after content and player state are prepared. The user interface reports that it is waiting for other players. The loop pumps network state and sleeps for fifty milliseconds between checks. When all required peers reach the barrier, the executable reports synchronization complete and allows authoritative ticks. The normal simulation tick is not driven by this sleep; it is confined to lobby, placement, and barrier behavior. The same barrier is not used for single-player campaign skirmish entry. [P0-04]
 
-### Closed — who runs battle entry: the loading screen, the worker thread, and the handoff [R-ENTRY-01 §1] (2026-08-29)
+### Who runs battle entry: the loading screen, the worker thread, and the handoff [R-ENTRY-01 §1]
 
-Established by RWU-08-7 from a full read of the battle-entry orchestrator,
-its one caller, the loading-screen state, the world-rebuild routine and every
-routine they call before the first tick. Sections §1–§9 are the ordered
-sequence; §10 lists the corrections to earlier text; §11 what stays open.
+Established from a full read of the battle-entry orchestrator, its one
+caller, the loading-screen state, the world-rebuild routine and every routine
+they call before the first tick. Sections §1–§9 are the ordered sequence;
+§10 restates the order and the two random streams in one place.
 
 **Established — three actors.** Battle entry is not one function on the main
 thread. It is:
@@ -962,7 +966,7 @@ peer-ready predicate from the loading state — sets the *peers ready* bit.
 The barrier of "Placement and start barrier" above is this pair of bits;
 nothing else waits.
 
-### Closed — seeding, the session words, the save gate and the setup record [R-ENTRY-01 §2] (2026-08-29)
+### Seeding, the session words, the save gate and the setup record [R-ENTRY-01 §2]
 
 The worker's orchestrator runs these steps in this order, before anything
 else:
@@ -978,7 +982,7 @@ else:
    §4/§5]) is made on the main thread and therefore continues the front-end
    stream; every CRT draw the *worker* makes (the explosion-frame builder of
    §3 and the skirmish shuffle of §5) comes from the freshly seeded thread
-   stream and is discarded with the thread. Correction in §10.
+   stream and is discarded with the thread.
 3. **Global tick ← 0** (again; the loading state already zeroed it).
 4. **Session words by kind** (kind getter of "Game-mode selection"):
    - *Kind 1 (campaign)*: local-authority flag ← 0; commander-death rule ←
@@ -994,10 +998,9 @@ else:
      section). A missing file leaves every definition available. The
      available bit is the *compatible* flag of [02 R-CAT-01 §4] (bit 23 of
      the first definition-flags word), the same one the unit allocator
-     tests ([05 R-SHARE-01 §8]). *Correction (2026-09-02, RWU-19-32):* the
-     previous text said "from index 2 upward"; the loop's counter starts at
-     2 but its first record is index 1 — verified in the instruction
-     stream. **Consequence (Established).** The catalog compile of §3 step
+     tests ([05 R-SHARE-01 §8]); the loop's counter starts at 2 but its
+     first record is index 1. **Consequence (Established).** The catalog
+     compile of §3 step
      13 runs *after* this step in the same entry and compacts every record
      whose bit is clear out of the table ([02 R-CAT-01 §5] step 3),
      re-sorting and renumbering the survivors. In a kind-1 battle the
@@ -1016,15 +1019,12 @@ else:
      host's lobby record ([02 R-MAP-01 §1]); then local-authority ← host bit
      13, commander-death ← host bits 11–12, mode bits 0–2 ← host option
      byte bits 0–2, session unit limit ← host limit word.
-   The "local-authority" flag of [R-SKIR-01 §2] has exactly one reader:
-   the chat commit callback ([07 §5 Chat]), which ORs a routing bit into
-   the message's target mask when the flag is set — it is a chat-routing
-   flag, not a simulation authority. Campaign leaves it clear.
-   *Correction (2026-08-29, [R-OOS-01 §2]): the reader is right but the
-   destination is wrong — the OR goes into the `+` command dispatcher's
-   route word (bit 2 = the cheat table), not the message's recipient mask.
-   The word is the cheat-enable gate: skirmish 1, campaign 0, multiplayer
-   the host's `Cheat Codes` bit.*
+   The "local-authority" flag of [R-SKIR-01 §2] is the **cheat-enable
+   gate** (skirmish 1, campaign 0, multiplayer the host's `Cheat Codes`
+   bit) and has exactly one reader: the chat commit callback ([07 §5
+   Chat]), which ORs route bit 2 — the cheat table — into the `+` command
+   dispatcher's route word when the flag is set ([R-OOS-01 §2]). It is not
+   a simulation authority.
 5. **The save gate, first visit.** If a save bank is open and its `Summary`
    account lacks `BetweenMissions` (the in-battle marker, "Timing is fixed"
    above): for each of the ten slots the `Player%i` account (`i` = slot
@@ -1036,7 +1036,7 @@ else:
    runs (alliances, names, local player). Kinds 1 and 3 restore their
    slots later from the `Players` account (§8).
 
-### Closed — the world rebuild: every allocation, in order [R-ENTRY-01 §3] (2026-08-29)
+### The world rebuild: every allocation, in order [R-ENTRY-01 §3]
 
 **Established.** One routine (the *world rebuild*) runs next, once per
 battle, for every kind and for loads alike. Its call order, each step with
@@ -1045,12 +1045,12 @@ what it allocates or writes:
 | # | Step | What it does |
 |---|---|---|
 | 1 | message ring clear | the F12 message ring is emptied ([07 R-CAM-01 §2]) |
-| 2 | interface scratch reset | eleven interface words are zeroed or cleared (identities are doc 07's — §11); the pause/interrupt word's bits 0 and 11 are cleared; bits 7, 8 and 9 of an interface flag word are cleared |
+| 2 | interface scratch reset | eleven interface words are zeroed or cleared (identities are doc 07's; open in the tail); the pause/interrupt word's bits 0 and 11 are cleared; bits 7, 8 and 9 of an interface flag word are cleared |
 | 3 | HUD light-bar reset | the six HUD progress words are zeroed and the `LIGHTBAR` frame handle re-fetched |
 | 4 | sound state reset | the active-sound list is drained (each entry's handle released) and the per-category "recently played" table zeroed |
 | 5 | texture table | the `textures` directory is enumerated, `logos.GAF` skipped, every other GAF loaded into the `TEXTURE_PTRS` table; the *Textures* percent byte advances per file and ends at 100 |
 | 6 | feature TDF catalog | every file under `features` is parsed into the feature catalog container ([05 R-FEAT-01 §1/§2]) |
-| 7 | a flag word ← 1 | (a bare store; its reader was not traced — §11) |
+| 7 | a flag word ← 1 | (a bare store; its reader is untraced — tail) |
 | 8 | strip table | ten 16-byte strip vectors allocated ([03 R-STRIP-01]) |
 | 9 | projectile pool | `WEAPON ARRAY`: 300 records × 107 bytes allocated and zeroed; live count ← 0 ([06 §5]) |
 | 10 | weapon table reset | the 256 weapon records: name byte zeroed, slot byte stamped ([06 R-DMG-01 §5]) |
@@ -1064,7 +1064,7 @@ what it allocates or writes:
 | 18 | path class layer | ([04 R-DOC04-B]) |
 | 19 | wind seed | wind change interval ← 5000, wind deadline ← 0, then the wind routine is called once: its gate is `deadline < globalTick`, i.e. `0 < 0`, false — **no draw**, the wind-active flag ← 0 ([05 R-PROD-01 §3], [R-CORE-02]) |
 | 20 | renderer scratch | `TEMP XFORM PTS` (2400 bytes), `TEMP PROJECTED PTS` (1600), `ASSEM PTS` (160) |
-| 21 | **scheduler block** | scaled-clock anchor ← now; global tick ← 0; kind 3 only: requested speed ← 10 and active speed ← 10; fractional carry ← 0. (Kinds 1 and 2 keep whatever the speed words already hold — §11.) |
+| 21 | **scheduler block** | scaled-clock anchor ← now; global tick ← 0; kind 3 only: requested speed ← 10 and active speed ← 10; fractional carry ← 0. (Kinds 1 and 2 keep whatever the speed words already hold; their writers are open in the tail.) |
 | 22 | meteor scheduler | active ← 0, next strike ← the authored value, weapon resolved by name ([01 R-CORE-01], [06 §6.5]) |
 | 23 | minimap surface | ([03], [fmt tnt]) |
 | 24 | **per-player reset** | for every slot whose controller byte is non-zero: the economy/statistics block is zeroed (stocks, incomes, expenditures, the sharing thresholds and flags — [05 R-P0-01]), the per-player timers ← global tick (0), the storage-bonus flag cleared, six selection/target words reset (four to 0, two to 0xffff), a per-player byte map of `(cellW/2)·(cellH/2)` entries (rounded up to 8) re-allocated and zeroed, the `SQUADS` table (ten 32-byte squad records) allocated; then **unless** the controller is 3 (remote), the **AI record** is constructed — the ten task records with their initial thresholds ([08 R-AI-01 §1]) and the strategic state, whose constructor makes the **eight simulation draws** of [R-DET-01 §4] ("AI player setup") — and the per-side classifier table entry is built. Humans get an AI record too; only remote peers do not. Then the AI profile is loaded from resource slot 7, falling back to `ai\default.txt` ([R-AI-01 §12]), and for every computer-controlled slot the difficulty tables are applied. |
@@ -1077,7 +1077,7 @@ Steps 24 and 26 are the only ones that draw: eight simulation draws per
 constructed AI record (slot order 0..9, humans included), and the CRT
 pixel draws — which, being on the worker's stream, never reach the tick.
 
-### Closed — start positions and commanders, per kind [R-ENTRY-01 §5] (2026-08-29)
+### Start positions and commanders, per kind [R-ENTRY-01 §5]
 
 (§4 is folded into §1's barrier paragraph.) After the world rebuild:
 
@@ -1088,8 +1088,7 @@ simulation draws** `sim(mapWidthWorld − 160)`, `sim(mapDepthWorld − 160)`
 form `x = (draw + 80) << 16`, `z = (draw + 80) << 16`, `y = 0` — the
 extents are the TNT width/height × 16, i.e. world units, the same words the
 commander-respawn placement of [R-SKIR-01 §3] writes straight into unit
-positions (the "cells" wording of "Randomization for skirmish starts" is
-corrected in §10). The draws happen **before** the watching test, so a
+positions. The draws happen **before** the watching test, so a
 watching slot still consumes them. For a non-watching slot the `StartPos`
 lookup by the slot's assigned position byte overwrites `x,z` on a hit and
 leaves the jitter on a miss with **no diagnostic**; the side's commander is
@@ -1118,9 +1117,8 @@ position `p_i`, in slot order:
 4. a miss is **fatal**: `Error: Could not find start position number %i on
    the map!` (the `%i` is the zero-based number, one less than the label)
    through the modal-fatal helper — message box, then process exit code 1
-   ([R-TRIG-01 §9]). No jitter fallback exists on this path; the earlier
-   "leaves the jitter untouched and can emit a diagnostic without crashing"
-   described the kind-3 path only (§10).
+   ([R-TRIG-01 §9]). No jitter fallback exists on this path; keeping the
+   jitter on a miss is the kind-3 path above.
 5. the side's commander (the side record's commander name resolved to a
    definition) is allocated at `(x, 0, z)` through the common allocator
    with the same three trailing arguments as mission spawning
@@ -1136,7 +1134,7 @@ the grant themselves.
 
 **Kind 2 with a save, kind 1, kind 3:** no stamps, no grant here.
 
-### Closed — the campaign path: spawner, InitialMission, camera, trigger reset [R-ENTRY-01 §6] (2026-08-29)
+### The campaign path: spawner, InitialMission, camera, trigger reset [R-ENTRY-01 §6]
 
 After placement (all kinds) the **visibility rebuild of §7 runs first**.
 Then:
@@ -1144,10 +1142,11 @@ Then:
 - no save and kind ≠ 1 → skip to §8;
 - save present and in-battle (no `BetweenMissions`) → the **battle
   restoration dispatcher** ([R-SAVE-02 §11]) runs instead of the spawner:
-  `Summary.maxunits` → lobby unit-limit copy (note: the pool was sized in
-  §3 from the copy as it stood *before* this restore — a loaded save's
-  pool uses the current `totala.ini [Preferences]` `UnitLimit` ([01 R-PLAT-01 §3]), and the restored value only
-  reaches the next battle; §10); then `Players`, `Camera`, `Features`,
+  `Summary.maxunits` → the configured unit-limit word ([R-SESS-01 §9]; the
+  pool was sized in §3 from that word as it stood *before* this restore —
+  a loaded save's pool uses the current `totala.ini [Preferences]`
+  `UnitLimit` ([01 R-PLAT-01 §3]), and the restored value only reaches the
+  next battle); then `Players`, `Camera`, `Features`,
   `Metal`, `PlayerFeatures`, `Mapping`, `Units`, `Meteor`, trigger records,
   in that order; the *restored* flag is set; skip to §8;
 - kind 1 without a save, or any kind with a `BetweenMissions` save → the
@@ -1184,13 +1183,15 @@ InitialMission timing").**
    ([R-TRIG-01 §6]).
 5. `created[]` freed.
 
-**Campaign camera.** The first *start position* special with stored number
-0 (`StartPos1`) places the camera at `(X − viewW/2, Z − viewH/2)`, marks the
-camera *jumped*, copies the target into the glide words and clears mode bit
-3 ([07 R-CAM-01 §12]). No such special → the camera keeps the world-rebuild
+#### Campaign camera
+
+The first *start position* special with stored number 0 (`StartPos1`)
+places the camera at `(X − viewW/2, Z − viewH/2)`, marks the camera
+*jumped*, copies the target into the glide words and clears mode bit 3
+([07 R-CAM-01 §12]). No such special → the camera keeps the world-rebuild
 reset position; no diagnostic.
 
-*Precision added 2026-08-31 (defect PT4-camera).* `viewW`/`viewH` here — and
+**The viewport half.** `viewW`/`viewH` here — and
 in every other "minus half the viewport" writer of [07 R-CAM-01 §12], the
 skirmish commander centring below included — is the **game viewport subrect**
 of [03 §4.1] (`W−128 × H−64`, so `512 × 416` at `640×480`), not the negotiated
@@ -1203,8 +1204,6 @@ chrome over it — must add the subrect's inset back in: `origin = point − 128
 viewportW/2` on X and `point − 32 − viewportH/2` on Z. Halving the framebuffer
 is right only by accident on Z, where the 32-pixel insets are symmetric and
 `32 + (H−64)/2 = H/2`; on X it lands the target 64 pixels right of centre.
-This was Nanolathe defect PT4-camera, alongside the invented commander-identity
-heuristic recorded under [R-SKIR-01 §3].
 
 **Unknown — the reset origin.** "Keeps the world-rebuild reset position" names
 a position that is not itself established: [07 R-CAM-01 §10] records only that
@@ -1222,7 +1221,7 @@ skirmish commander jump applies the shear is unresolved; the campaign branch
 cannot, since a start-position special carries no height. A static trace of the
 stamp helper's camera write would settle it.
 
-### Closed — the visibility and mapping rebuild, exactly [R-ENTRY-01 §7] (2026-08-29)
+### The visibility and mapping rebuild, exactly [R-ENTRY-01 §7]
 
 **Established.** Called with the *full* argument once, immediately after
 placement and **before** the spawner/restoration of §6 (and again at every
@@ -1247,10 +1246,9 @@ commander respawn and watch-mode entry, [R-SKIR-01 §3]):
 
 Because this precedes the spawner, mission units are **not** in step 3;
 they register their own sight at allocation ([03 R-VIS-01 §2]) and the
-first sensor phase completes the picture. (The earlier order "spawner, then
-visibility" is corrected in §10.)
+first sensor phase completes the picture.
 
-### Closed — the tail: main GUI, phase priming, second grant, teardown, ready [R-ENTRY-01 §8] (2026-08-29)
+### The tail: main GUI, phase priming, second grant, teardown, ready [R-ENTRY-01 §8]
 
 **Established**, in order, all kinds:
 
@@ -1306,13 +1304,12 @@ restored by `Players` decide whether the 30-tick block fires) → no grant →
 bank closed → metal-spot lists → ready. The scheduler block restored by
 `Players` is what §9 sees.
 
-*Addendum (2026-08-29, from [07 R-FE-02 §2]):* battle-entry definition
-finalisation raises the front end's catalog-reload flag unconditionally, so
+Per [07 R-FE-02 §2], battle-entry definition finalisation raises the front end's catalog-reload flag unconditionally, so
 the shell pump rebuilds the entire unit catalog after every battle (and
 whenever the catalog count is 0); the front end also forces 640×480 on the
 post-battle path.
 
-### Closed — the pre-tick state and the first pump [R-ENTRY-01 §9] (2026-08-29)
+### The pre-tick state and the first pump [R-ENTRY-01 §9]
 
 **Established — state at the handoff (fresh battle).** Global tick 0;
 pending ticks 0; fractional carry 0; scaled-clock anchor = the instant of
@@ -1341,58 +1338,42 @@ six tenths of a second on retail hardware, the first pump runs five ticks
 back-to-back in practice. Settled by a manual retail observation of the
 game-time counter at the first rendered battle frame.
 
-### Corrections and cross-document needs [R-ENTRY-01 §10] (2026-08-29)
+### Battle-entry order and the two streams, restated [R-ENTRY-01 §10]
 
-1. **"Timing is fixed" (above) — order.** It said "then the sparse two-pass
-   spawner runs, then visibility and mapping are rebuilt, then the first
-   authoritative tick runs". Wrong on two counts: the visibility rebuild
-   runs **before** the spawner (§6/§7), and between the spawner and the
-   first tick come the GUI load, the **per-player phase priming at tick
-   0**, the second grant and the metal-spot scan (§8). Its "camera focus is
-   chosen, then the spawner" is also reversed for the campaign camera,
-   which runs after the spawner (§6).
-2. **"Randomization for skirmish starts" (above).** "bounded by map
-   dimension in cells minus 160, then offset by 80 cells" — the words are
-   the TNT extents × 16, i.e. **world units** ([R-CORE-02] had it right).
-   "the lookup … leaves the jitter untouched and can emit a diagnostic
-   without crashing" conflates two paths: kind 3 keeps the jitter with no
-   diagnostic; kind 2 has no jitter and a miss is fatal (§5).
-3. **[R-SKIR-01 §2] order line.** "session words → placement stamps →
-   grant → world rebuild → main GUI …" — the world rebuild precedes the
-   stamps (§3 before §5). The rest of that line holds.
-4. **Doc 01 [R-CORE-02] and [R-DET-01 §5], doc 06 [R-WFX-01 §6] —
-   cross-doc need.** "Both writes land in the calling (main) thread's
-   state" and "every draw made before battle entry is wiped" are inverted
-   for the CRT stream: the reseed lands in the *worker's* thread block and
-   dies with it; the main thread's CRT state carries the front-end draws
-   into the tick's CRT consumers unbroken (§2). The 391,606 explosion-frame
-   draws are made **per battle, on the worker, after the worker's reseed**
-   — not "at process startup" and not "wiped by the battle-entry reseed"
-   (§3 step 26). Doc 01 §5.1's "No gameplay worker pool" should name the
-   loading worker (it runs no tick, but it runs all of battle entry).
-   Doc 01's "Before the first tick" table should add the priming's AI-task
-   draws (§8 step 4) and move the explosion draws to a per-battle row.
-5. **[R-SAVE-02 §11] — cross-doc need.** "Summary `maxunits` → Players →
-   …" is the restore order, but the unit pool was already sized before the
-   restore (§6). A loaded skirmish uses the current registry limit.
-6. **Doc 04 §3.6** says the interpreter runs "before any creation script,
-   movement, or visibility publication for that tick" — true, and now
-   more precisely: after the §7 rebuild and before the tick-0 priming.
+Established, gathered from §1–§9 so the whole order reads in one place:
 
-### Open — what this unit did not close [R-ENTRY-01 §11] (2026-08-29)
-
-Listed in the tail with deciders: the identities of the eleven interface
-words the world rebuild resets; the writers of the requested/active speed
-words for kinds 1 and 2 (they are not written at entry); which chat
-targets the routing bit of the "local-authority" flag selects; the external
-post-placement hook the multiplayer path calls (OOS).
+1. **Order.** Seeding and the session words (§2) → the world rebuild (§3)
+   → the placement stamps and the first grant (§5) → the visibility rebuild
+   (§7) → the spawner or the restoration dispatcher, then the campaign
+   camera (§6) → the main GUI, the **per-player phase primed at tick 0**,
+   the second grant, the metal-spot scan (§8) → the first pump (§9). The
+   visibility rebuild precedes the spawner; the campaign camera follows it;
+   the world rebuild precedes the stamps. The `InitialMission` interpreter
+   of [04 §3.6] therefore runs after the §7 rebuild and before the tick-0
+   priming.
+2. **Jitter.** The kind-3 commander jitter is bounded by the TNT extents
+   × 16, i.e. **world units**, and a `StartPos` miss keeps the jitter with
+   no diagnostic; kind 2 has no jitter and a miss is fatal (§5).
+3. **The two streams.** The battle-entry CRT reseed lands in the *worker's*
+   thread block and dies with it; the main thread's CRT state carries the
+   front-end draws into the tick's CRT consumers unbroken (§2). The
+   391,606 explosion-frame draws are made per battle, on the worker, after
+   the worker's reseed (§3 step 26) — not at process start-up and not on
+   the main thread. The loading worker runs no tick but runs all of battle
+   entry. Before the first tick the simulation stream has consumed eight
+   draws per AI record, two per allocated unit, and the priming's AI-task
+   draws (§8 step 4, §9).
+4. **Pool sizing on a load.** The restore order of [R-SAVE-02 §11] begins
+   with `Summary.maxunits`, but the unit pool was already sized before the
+   restore (§6, [R-SESS-01 §9]); a loaded skirmish uses the current
+   configured limit.
 
 
-### Closed — the spawner's height probe, exactly [R-ENTRY-02 §1] (2026-08-29)
+### The spawner's height probe, exactly [R-ENTRY-02 §1]
 
-**Established.** §6 said only that a non-mobile placement record's `y` is
-"the terrain height probe at that cell (`<< 16`)". The probe is one small
-routine shared with the build-placement anchor of [07 §9]; its contract:
+**Established.** The terrain height probe that §6 names for a non-mobile
+placement record's `y` is one small routine shared with the build-placement
+anchor of [07 §9]; its contract:
 
 - **Inputs.** The definition's footprint width `fw` and height `fh` (cells)
   and its yard-map bytes (row-major, `fh` rows of `fw`); the snapped cell pair
@@ -1421,21 +1402,17 @@ therefore sits at the water surface less `waterline` regardless of the
 terrain under it — the same rule the validator's `maxHigh < minLow` branch
 applies to a build site.
 
-### Closed — ledger closure notes for the placement and spawner clusters [R-ENTRY-02 §2] (2026-08-29)
+### The profile passes' plan gate and the strategic constructor's +20 term [R-ENTRY-02 §2]
 
-**Established — what the remaining "placement builder" and "battle entry
-orchestrator" functions are.** The bottom-up ledger pass over these clusters
-found no engine behavior left unstated. Every routine not already cited by
-[R-ENTRY-01], [R-AI-01], [R-SKIR-01] or [R-TRIG-01] is one of: a compiler
-template instantiation (the reference-counted string class, growable-vector
-insert/copy/size helpers for one-, two-, three-, four- and eight-byte
-elements, nested vector copy/destroy helpers for the LOS and mapping tables,
-the sort and lower-bound helpers), the `Sleep` thunk, an unreachable debug
-tokenizer, or a routine owned by another document (the bitmap cache, the
-download-menu compile, the path class layer, the minimap surfaces, the
-narration stream, the front-end gadget helpers, the weapon fire-method
-selector). Those are re-laned in the ledger; the cross-document needs are
-listed in the merge commit. Two details this pass did settle:
+**Established.** The placement-builder and battle-entry clusters hold no
+engine behavior beyond [R-ENTRY-01], [R-AI-01], [R-SKIR-01] and
+[R-TRIG-01]: every other routine there is a compiler template instantiation
+(the reference-counted string class, growable-vector helpers, the sort and
+lower-bound helpers), the `Sleep` thunk, an unreachable debug tokenizer, or
+a routine owned by another document (the bitmap cache, the download-menu
+compile, the path class layer, the minimap surfaces, the narration stream,
+the front-end gadget helpers, the weapon fire-method selector). Two details
+settled on the way:
 
 - The per-slot **profile passes** of [R-AI-01 §12] open the `plan` gate by
   calling the same setter the `plan` directive itself uses, before walking
@@ -1454,15 +1431,14 @@ listed in the merge commit. Two details this pass did settle:
 Conditions are authored as `[GlobalHeader]` keys and matched against a fixed
 vocabulary of eighteen condition names. The builder that turns them into
 trigger records, the exact grammar of every key, every evaluator body, the
-tick site and the notification sites are closed under [R-TRIG-01] below; the
-two tables here are the vocabulary with the **corrected** argument grammar.
-**Correction (2026-08-29, RWU-08-5).** The earlier tables listed
-`BuildUnitType`, `CaptureUnitType` and `KillAllOfType` as "type, count" and
-`AllUnitsKilledOfType` as "type". The builder never runs a scan format on
-those four: it copies the whole key value as the type name, so a value
-`ARMSY, 1` is stored verbatim and matches no unit. Only `KillUnitType`,
-`UnitTypeKilled`, `UnitTypePassesX/Z` (name + one integer) and
-`MoveUnitToRadius` (name + three integers) parse arguments [R-TRIG-01 §4].
+tick site and the notification sites are specified under [R-TRIG-01] below;
+the two tables here are the vocabulary with the argument grammar. The
+builder never runs a scan format on `BuildUnitType`, `CaptureUnitType`,
+`KillAllOfType` and `AllUnitsKilledOfType`: it copies the whole key value as
+the type name, so a value `ARMSY, 1` is stored verbatim and matches no unit.
+Only `KillUnitType`, `UnitTypeKilled`, `UnitTypePassesX/Z` (name + one
+integer) and `MoveUnitToRadius` (name + three integers) parse arguments
+[R-TRIG-01 §4].
 
 ### Victory trigger types
 
@@ -1498,29 +1474,23 @@ If the builder creates no victory condition it appends a `DestroyAllUnits`
 record; if it creates no defeat condition it appends an `AllUnitsKilled`
 record. The campaign victory and defeat predicates repeat the same injection
 at poll time when they find an empty queue, so a queue is never empty when it
-is polled [R-TRIG-01 §6].
-
-**Correction (2026-08-29, RWU-08-5).** The paragraph that stood here
-("Configured lobby skirmish ownership — Supported inference; exact retail
-dispatch distinction Unknown … Nanolathe therefore treats a populated lobby
-configuration as owning its end condition and does not poll its OTA trigger
-queues; direct OTA type-2 sessions retain the established type-2 poll
-behavior below") is retracted. There is no "populated lobby" versus "direct
-OTA" distinction anywhere in the executable: the authority branch is the
-session kind word alone, and **no type-2 or type-3 session ever polls a
-trigger queue** — see [R-TRIG-01 §1]. Its supporting argument that
-`DestroyAllUnits` "would end an ordinary lobby match on its first countdown"
-rested on the never-written-counter reading retracted in [R-TRIG-01 §4].
+is polled [R-TRIG-01 §6]. Which sessions poll at all is decided by the
+session kind word alone: no kind-2 or kind-3 session ever polls a trigger
+queue [R-TRIG-01 §1].
 
 ### Evaluation
 
-This heading is retained so that existing `[08 "Evaluation"]` citations keep
-resolving; its content was rewritten from a full static trace on 2026-08-29
-and now lives in the closed sections [R-TRIG-01 §1]–[R-TRIG-01 §10] that
-follow. The corrections to the previous text are itemized in
-[R-TRIG-01 §10].
+The evaluators are specified in the sections that follow: which session
+kinds poll ([R-TRIG-01 §1]), the record shape and construction
+([R-TRIG-01 §2]), the owner and unit predicates every condition shares
+([R-TRIG-01 §3]), every condition exactly ([R-TRIG-01 §4]), the
+`MoveUnitToRadius` geometry ([R-TRIG-01 §5]), the tick site with its
+countdown and latch ([R-TRIG-01 §6]), the notification sites
+([R-TRIG-01 §7]), the cue and persistence ([R-TRIG-01 §8]), the mission
+object readers ([R-TRIG-01 §9]) and the `StartPos` counter
+([R-TRIG-01 §12]); [R-TRIG-01 §10] is the contract in one paragraph.
 
-### Closed — authority: which sessions poll the authored triggers [R-TRIG-01 §1] (2026-08-29)
+### Authority: which sessions poll the authored triggers [R-TRIG-01 §1]
 
 **Established.** The mission loader's common tail runs the trigger builder
 for **every** session kind — campaign, skirmish and multiplayer alike — so a
@@ -1548,7 +1518,7 @@ live-unit counters own every kind-2/3 end condition; authored and injected
 triggers own kind 1 only. Both a skirmish started from the setup screen and a
 kind-2 session started on an OTA directly are the same code path.
 
-### Closed — record shape, vtable slots and construction [R-TRIG-01 §2] (2026-08-29)
+### Record shape, vtable slots and construction [R-TRIG-01 §2]
 
 **Established — the primary table has six slots, and the poll is slot 0.**
 Every record's first word points at a six-slot table: (0) **poll**, called
@@ -1559,12 +1529,9 @@ change; (3) **unit-created notification**, called with every newly allocated
 unit — present in all eighteen tables and a no-op in every one; (4) **save**
 and (5) **load**, called with the save bank. Conditions that do not use a
 slot point it at a shared no-op (poll no-op returns the Satisfied flag).
-**Correction.** The previous text said "the tick site calls only the poll
-slot … the countdown in `KillUnitType` advances only from the unit-died
-slot" — true — but it also described `DestroyAllUnits`, `KillAllMobileUnits`,
-`KillAllOfType`, `KillEnemyCommander` and `CommanderKilled` as "poll-time
-scans"; four of those five are notification-driven and only
-`DestroyAllUnits` polls (§4).
+Of `DestroyAllUnits`, `KillAllMobileUnits`, `KillAllOfType`,
+`KillEnemyCommander` and `CommanderKilled`, only `DestroyAllUnits` polls;
+the other four are notification-driven (§4).
 
 **Established — the visitor table.** The ten conditions that walk a player's
 unit slice (`KillAllMobileUnits`, `BuildUnitType`, `KillAllOfType`,
@@ -1619,7 +1586,7 @@ resolved) plus, for the last two, a 32-bit scratch count, for
 record holds the name, X (authored pixels, unconverted), a sentinel word,
 Z (authored pixels), and `radius << 16`.
 
-### Closed — the owner and unit predicates every condition shares [R-TRIG-01 §3] (2026-08-29)
+### The owner and unit predicates every condition shares [R-TRIG-01 §3]
 
 **Established — "local" and "enemy" are player slots 0 and 1, literally.**
 Every owner test in the trigger code is one of two things: a compare of the
@@ -1632,8 +1599,7 @@ placement record"). Units owned by `Player=3` and above are invisible to
 every slice walk and fail every `== 1` test; they are seen only by the
 notification-driven conditions that carry no owner test (`UnitTypeKilled`,
 `AllUnitsKilledOfType`'s own subject). No alliance row is consulted by any
-trigger. **Correction.** The earlier text's `LocalOwner`/`EnemyOwner`
-suggested the local-player index; the code compares against constants.
+trigger.
 
 **Established — "live unit" for annihilation checks.** A player's unit slice
 is the contiguous run of pool records from the player's first to last
@@ -1656,7 +1622,7 @@ always zero.
 
 **Established — "mobile"** (`KillAllMobileUnits`) means the unit carries a
 mover object, which the allocator attaches when the definition's `BMcode`
-is 1. **Correction.** The earlier "`CanMove`" reading is retracted.
+is 1 (not `CanMove`).
 
 **Established — "commander"** (`KillEnemyCommander`, `CommanderKilled`)
 means the unit's definition name equals, case-insensitively, the commander
@@ -1668,12 +1634,10 @@ unit's **stamped footprint cell** (the 16-pixel cell of the footprint's
 anchor corner, refreshed by the occupancy stamp when the unit moves), as a
 signed 16-bit value, against the record's `authored >> 4` cell; the test is
 `|cell − threshold| < 3`, i.e. a tolerance of two cells (32 pixels) either
-side of the line. **Correction.** The earlier "±2-world-unit tolerance"
-mistook the cell unit for a world unit; the earlier "after the same `>>4`
-of the world coordinate" is also wrong — the compare reads the stamped
-cell, not a shifted position.
+side of the line; the compare reads the stamped cell, not a shifted
+position.
 
-### Closed — every condition, exactly [R-TRIG-01 §4] (2026-08-29)
+### Every condition, exactly [R-TRIG-01 §4]
 
 All claims Established from the evaluator bodies. "Complete" means set
 Satisfied and, if Celebrated is clear, play the cue and set Celebrated (§8);
@@ -1685,26 +1649,16 @@ nothing on poll except return S.
 - `DestroyAllUnits` — returns `slot-1 live-unit count == 0` (the 16-bit
   counter both allocators increment and the teardown decrements,
   [R-SKIR-01 §3]). Plays the cue once when true; **never sets S**, so the
-  result is recomputed every poll and a save records `Satisfied=0`.
-  **Correction.** The previous text called this counter "a `u16` counter
-  whose only reference in the image is that read; nothing ever writes it, so
-  it holds its initial zero and the condition is satisfied from the first
-  poll" and made "the quirk … the contract". That was an address-search
-  artefact: the writers use the player-record base plus the slot stride, so
-  a search for the absolute location of slot 1's field finds only this read.
-  The condition is the ordinary "the enemy has no live units". The
-  inference drawn from it — that a shipped mission "relies on" the quirk as
-  an AND-term beside `BuildUnitType` — is withdrawn with it: such a mission
-  completes when the enemy is annihilated *and* the unit is built.
+  result is recomputed every poll and a save records `Satisfied=0`. The
+  condition is the ordinary "the enemy has no live units"; a mission that
+  authors it beside `BuildUnitType` completes when the enemy is annihilated
+  *and* the unit is built.
 - `BuildUnitType` — if S return true. If the resolved definition index is
   still zero, resolve the stored name through the definition-name binary
   search (unknown name stays zero and is retried every poll). Walk slot 0's
   slice; the first occupied record whose definition index equals the
   resolved index and whose construction remaining is `0.0` completes and
   stops the walk. No count, no `ANYTYPE`, no owner other than slot 0.
-  **Correction.** "at least the authored count of completed units …
-  a want below one is treated as one … `ANYTYPE` bypasses the name compare"
-  is retracted; none of that exists.
 - `UnitTypePassesX` / `UnitTypePassesZ` — if S return true. Walk **slot 0**'s
   slice; for each unit, if the stored name is non-empty and differs
   case-insensitively from the unit's definition name, skip; else apply the
@@ -1713,8 +1667,6 @@ nothing on poll except return S.
 - `AnyUnitPassesX` / `AnyUnitPassesZ` — if S return true. Walk **slot 1**'s
   slice (the enemy's units, no type gate) with the same boundary test; the
   first hit sets S (no cue: defeat conditions never celebrate).
-  **Correction.** The earlier text did not say which units; it is the
-  enemy's.
 - `AllUnitsKilled` — set S, then walk slot 0's slice and clear S on the
   first *eligible* unit (§3); return S. S is therefore recomputed on every
   poll and is not sticky.
@@ -1743,8 +1695,7 @@ nothing on poll except return S.
   negative counts can therefore never complete.
 - `CaptureUnitType` — on capture: if the unit's owner slot **before** the
   transfer is 1 and its definition name matches the stored name, complete.
-  No count. **Correction.** "same countdown but driven by the
-  capture/transfer slot, completing at `<= 0`" is retracted.
+  No count.
 - `CommanderKilled` — on unit removal: if the unit's owner slot is 0 and its
   definition name equals its owner's side commander name, set S (no cue).
 - `AllUnitsKilledOfType` — on unit removal of **any** owner whose definition
@@ -1768,7 +1719,7 @@ countdown (§6) only ever counts down while the predicate stays true, a
 victory combining a latching term with `DestroyAllUnits` can stall if the
 enemy is reinforced during the five-due countdown.
 
-### Closed — `MoveUnitToRadius` geometry [R-TRIG-01 §5] (2026-08-29)
+### `MoveUnitToRadius` geometry [R-TRIG-01 §5]
 
 **Established — de-projection on first poll.** The authored X and Z are map
 **pixels in the editor's projected view**, where the displayed Z of a point
@@ -1800,10 +1751,6 @@ row when the result exceeds sea level, with no effect. `mapWidthPx`/
 `mapHeightPx` are the map extents in pixels. Once converted the sentinel is
 gone and later polls skip this block; a save does not persist the converted
 centre (only Satisfied/Celebrated, §8), so a loaded mission re-derives it.
-**Correction.** The previous "optionally clamps the authored centre when the
-sentinel is present (map-edge and terrain-height snap, writing `X<<16` /
-`Z<<16` back)" named the effect but not the algorithm; the row search and
-interpolation above are the contract.
 
 **Established — the radius scan.** With centre `(cx, cz)` (16.16) and
 `r = radius << 16`: partition tiles are 128 pixels (`coordinate >> 23` in
@@ -1818,11 +1765,9 @@ planar X/Z, Y ignored. The visitor runs for every unit that passes,
 regardless of owner; the visitor's own gates are: owner slot 0; stored
 name empty or equal (case-insensitive) to the unit's definition name;
 the eligible-unit predicate of §3. A hit completes the condition; the scan
-continues through the remaining tiles. **Correction.** "tile bounds are
-`(centre ± r) >>17`" is retracted — the shift is 23 (128-pixel tiles); the
-rest of the earlier description stands.
+continues through the remaining tiles.
 
-### Closed — the tick site: cadence, order, countdown and latch [R-TRIG-01 §6] (2026-08-29)
+### The tick site: cadence, order, countdown and latch [R-TRIG-01 §6]
 
 **Established.** In the per-player phase, when the walk reaches the **local**
 player's slot and that slot's due tick has arrived (`due <= globalTick`,
@@ -1834,14 +1779,12 @@ most one predicate advances the countdown per due. For kinds 2/3: if the
 local record is inactive or its side's watch-mode bit is clear, the defeat
 predicate (live count zero, [R-SKIR-01 §3]) is evaluated first and, if true,
 steps the countdown on the lost path; otherwise the victory sweep is
-evaluated and, if true, steps the won path. **Correction.** "the defeat
-queue is polled only when the local side's commander marker (a runtime bit
-on the local player's side definition) is clear — the commander-dead test"
-is retracted on both counts: the bit is the watch-mode bit that the
-elimination handler sets, and no defeat queue is polled in kinds 2/3.
+evaluated and, if true, steps the won path. The bit tested is the
+watch-mode bit that the elimination handler sets; no defeat queue is polled
+in kinds 2/3.
 
-**The due tick is the settlement deadline — Established (2026-09-02,
-RWU-19-32).** The "due tick" above is the player record's `UpdateTime`
+**The due tick is the settlement deadline — Established.** The "due tick"
+above is the player record's `UpdateTime`
 word — the same word the economy pass compares and advances ([05 R-ECO-01
 §1]); there is no separate trigger-poll or win/lose deadline. For a slot
 whose `UpdateTime <= globalTick`, the per-player phase runs, in order: the
@@ -1869,18 +1812,14 @@ the polls in queue order, stopping at the first false; defeat injects an
 `AllUnitsKilled` if the defeat queue is empty and returns the **OR** of the
 polls in queue order, stopping at the first true.
 
-**The kind-2 victory sweep — Established, and a correction to
-[R-SKIR-01 §3].** For skirmish the sweep is simpler than the multiplayer
-one: walk slots 0–9; skip the local slot, skip any slot whose byte in the
-local player's first alliance row is non-zero (an ally), skip any slot with a
-zero live-unit count; if any slot survives the skips, no victory; after all
-ten, victory. No shared-victory bit, no controller or elimination test, and
-no rule-word test. [R-SKIR-01 §3]'s "Victory detection" describes the
-**kind-3** sweep (rule 2 never ends, shared-victory bits, both rows, all-k
-check) and then states "a skirmish is won only when every other player's
-live count is zero, allies included"; that last sentence is wrong for kind
-2 — allied players are excluded by the first alliance row, which battle
-entry fills from the setup screen's team groups [R-SKIR-01 §2].
+**The kind-2 victory sweep — Established.** For skirmish the sweep is
+simpler than the multiplayer one of [R-SKIR-01 §3]: walk slots 0–9; skip
+the local slot, skip any slot whose byte in the local player's first
+alliance row is non-zero (an ally — the row battle entry fills from the
+setup screen's team groups, [R-SKIR-01 §2]), skip any slot with a zero
+live-unit count; if any slot survives the skips, no victory; after all ten,
+victory. No shared-victory bit, no controller or elimination test, and no
+rule-word test.
 
 **Countdown and latch.** One signed 16-bit countdown is shared by every
 path: a true predicate finds it negative and sets it to 4; each later true
@@ -1890,7 +1829,7 @@ written — the sixth consecutive true due, 150 ticks after the first — as
 bit 6 with bit 4 cleared. A false due neither resets nor advances the
 countdown. The presentation after the latch is the Session end section's.
 
-### Closed — notification sites: removal, capture, creation [R-TRIG-01 §7] (2026-08-29)
+### Notification sites: removal, capture, creation [R-TRIG-01 §7]
 
 **Established — unit removed.** The unit teardown (the final release of a
 pool record, which runs for every death cause including the capture
@@ -1923,7 +1862,7 @@ notification.
 **Established — created.** Both unit allocators notify slot 3 of every
 record after allocation; every shipped condition ignores it.
 
-### Closed — the `Victory Condition` cue, and save/load [R-TRIG-01 §8] (2026-08-29)
+### The `Victory Condition` cue, and save/load [R-TRIG-01 §8]
 
 **Established — the cue.** "Complete" in a victory condition (all ten
 non-timer victory conditions) plays a sound, not text: the literal alias
@@ -1934,9 +1873,6 @@ on the digital channel when sound is enabled; a missing alias plays nothing.
 No network packet is sent (the call passes the no-broadcast flag) and no
 status-cue or message text is raised. The record's Celebrated flag gates it
 to once per record. Defeat conditions and the timers never play it.
-**Correction.** The earlier "raises the localized 'Victory Condition'
-notification … the exact presentation channel (message/sound) is not
-decomposed" is closed as above.
 
 **Established — save and load (kind 1 only).** The mission's save writer
 and loader call slots 4 and 5 of every record; each condition uses an
@@ -1949,15 +1885,14 @@ Because the account name is the condition name, two records of one
 condition would share an account; the builder's one-per-key rule makes
 that unreachable.
 
-### Closed — mission objects: `[units]`, `[features]`, `[specials]` readers [R-TRIG-01 §9] (2026-08-29)
+### Mission objects: `[units]`, `[features]`, `[specials]` readers [R-TRIG-01 §9]
 
 **Established — the unit record parser** reads, per `[unitN]` block, in this
 order: `Unitname`, `Ident`, `InitialMission` (strings, interned), `XPos`,
 `YPos`, `ZPos` (integers, each `<< 16`), `Angle` (**integer accessor,
-default 0**, then the magic multiply of "Mission placement record" —
-sharpened 2026-09-04, WU-19-167: §9 did not previously say which accessor
-reads it, and a float reading would admit fractional degrees the conversion
-never sees), `Player` (integer; 0 becomes 1),
+default 0**, then the magic multiply of "Mission placement record"; a float
+reading would admit fractional degrees the conversion never sees),
+`Player` (integer; 0 becomes 1),
 `HealthPercentage` (default 100), `BuildPriority` (integer), `CreationCountdown`
 (integer), `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget` (each
 `& 1`, packed into flag bits 4–6), `InitialGroup` (**integer** read, low
@@ -1966,10 +1901,10 @@ parse as 0), `Immunity` (bit 7). Every key is read with the ordinary
 section accessor, so a key absent from a block takes its default. Reader
 census over the parsed records: `Unitname`, `XPos`/`YPos`/`ZPos`, `Angle`,
 `Player`, `HealthPercentage`, `Immunity` (copied to the unit's status bit
-15 — **correction 2026-09-02, RWU-19-38:** previously "itself unread"; the
-bit is read by the target-registry rebuild's primary-list test and by the
-nearest-hostile helper, [06 §3.1], [R-AI-01 §9]) and `Ident`/`InitialMission` (the interpreter and the
-name resolver, [04 §3.6]) have readers; `BuildPriority`,
+15, which the target-registry rebuild's primary-list test and the
+nearest-hostile helper read, [06 §3.1], [R-AI-01 §9]) and
+`Ident`/`InitialMission` (the interpreter and the name resolver,
+[04 §3.6]) have readers; `BuildPriority`,
 `CreationCountdown`, `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`
 and `InitialGroup` have **no reader** anywhere — the census in "Mission
 placement record" stands. `Kills` on a unit block is **inert**: no
@@ -1985,24 +1920,20 @@ integer truncation.
 checks `Player − 1 < 10`, the slot active, its controller human/computer/
 remote and its team byte not the eliminated sentinel; a failure formats
 `Player number %d invalid for unit %s`, shows it in a modal box and then
-**terminates the process** through the CRT exit — it does not proceed.
-**Correction.** "emits a diagnostic for invalid player numbers but still
-proceeds to a position fixup helper and the normal unit allocator" is
-retracted; the message sink is the fatal channel.
+**terminates the process** through the CRT exit — it does not proceed; the
+message sink is the fatal channel.
 
 **Established — `[features]`.** Each `[featureN]` reads `Featurename` (up to
 128 bytes), `XPos` and `ZPos` (integers, default −1); a missing name or a
 **negative** coordinate blanks the name, and the feature placer skips blank
-names — the record is dropped, not clamped. **Correction.** "coordinates
-that are cleared when negative" is retracted; the name is cleared. Names
-are matched case-insensitively against the feature catalog at placement.
+names — the record is dropped, not clamped. Names are matched case-insensitively against the feature catalog at placement.
 
 **Established — `[specials]`.** Each `[specialN]` reads `specialwhat`; only
 values beginning with `StartPos` (case-insensitive, eight characters) are
 kept, with `XPos` and `ZPos` as 16-bit values. The suffix after `StartPos`
 is parsed as an integer when its first character is a digit, else it is a
 running counter starting at 1 in file order (advanced only by the records
-that take it — sharpened in [R-TRIG-01 §12]); the stored index is
+that take it, [R-TRIG-01 §12]); the stored index is
 `value − 1` when `value > 0`, else `value` — so `StartPos0` and `StartPos1`
 both store 0. **Established — a missing start position is fatal.** When
 the commander creator cannot find the assigned `StartPos` it formats
@@ -2022,64 +1953,39 @@ count reads is a Supported inference (a per-slot ready byte beside the
 controller byte); the text is multiplayer-only presentation and never
 drives a tick.
 
-### Closed — corrections to earlier text [R-TRIG-01 §10] (2026-08-29)
+### The trigger contract in one paragraph [R-TRIG-01 §10]
 
-Each entry quotes the retracted sentence and names the section that now
-owns the contract.
+Established, gathered from §1–§9. Record sizes fall in nine buckets (§2,
+"Trigger object"). `BuildUnitType`, `CaptureUnitType`, `KillAllOfType` and
+`AllUnitsKilledOfType` take a name only (§2). `DestroyAllUnits` polls slot
+1's live-unit count (§4). `KillAllMobileUnits` is notification-driven,
+"mobile" is the mover object (`BMcode` 1), and it completes when no *other*
+mobile enemy unit remains (§3, §4). `BuildUnitType` completes on the first
+finished unit of the type, with no count and no `ANYTYPE` (§4).
+`KillEnemyCommander` and `CommanderKilled` are notification-driven equality
+tests on the owner's side commander name (§4). The boundary conditions test
+the stamped cell with a tolerance of two cells (§3); the radius scan's tile
+bounds are `>> 23` (§5). `CaptureUnitType` has no count (§4). In kinds 2
+and 3 the bit that selects the defeat predicate is the watch-mode bit, and
+no queue is polled (§6); the authority branch is the session kind alone
+(§1). Owner tests compare against the constants 0 and 1 (§3). "Complete"
+plays the `Victory Condition` sound alias (§8). An invalid player number is
+fatal (§9). A feature record with a negative coordinate has its name
+cleared and is dropped (§9). The kind-2 victory sweep skips the slots in
+the local player's first alliance row (§6).
 
-1. "seven established buckets — `0x0C` … `0x40`" — nine; §2 and "Trigger
-   object".
-2. "`BuildUnitType` type, count", "`CaptureUnitType` type, count",
-   "`KillAllOfType` type, count" — name only; tables and §2.
-3. "`DestroyAllUnits` — the quirk is the contract … nothing ever writes it"
-   — it is slot 1's live-unit count; §4.
-4. "`KillAllMobileUnits` — succeeds when no live mobile unit (`CanMove`)
-   belonging to the enemy owner remains" — notification-driven, `BMcode`,
-   "no other"; §3, §4.
-5. "`BuildUnitType` — at least the authored count … `ANYTYPE` bypasses" —
-   first finished unit of the type; §4.
-6. "`KillEnemyCommander` / `CommanderKilled` — absence scans" —
-   notification-driven equality on the owner's side commander name; §4.
-7. "satisfied when `abs(coord − threshold) < 3`, i.e. a ±2-world-unit
-   tolerance" — stamped cell, ±2 cells; §3.
-8. "tile bounds are `(centre ± r) >>17`" — `>> 23`; §5.
-9. "`CaptureUnitType` — same countdown … completing at `<= 0`" — no
-   count; §4.
-10. "the defeat queue is polled only when the local side's commander marker
-    … is clear" — watch-mode bit, and no queue in kinds 2/3; §6.
-11. "Configured lobby skirmish ownership — Supported inference" — session
-    kind is the branch; §1.
-12. "Owner gating … compares the unit's player index against `LocalOwner` or
-    `EnemyOwner`" — constants 0 and 1; §3.
-13. "raises the localized 'Victory Condition' notification" — a sound alias;
-    §8.
-14. "emits a diagnostic for invalid player numbers but still proceeds" —
-    fatal; §9.
-15. "coordinates that are cleared when negative" (features) — the name is
-    cleared and the record dropped; §9.
-16. [R-SKIR-01 §3] "a skirmish is won only when every other player's live
-    count is zero, allies included" — kind 2 skips the first alliance row;
-    §6.
+### What the trigger readers leave open — Unknown [R-TRIG-01 §11]
 
-### Open — what this unit did not close [R-TRIG-01 §11] (2026-08-29)
+The `InitialGroup` nibble is packed into the placement flag byte and read
+by nobody in the bounded search (the `g <n>` order operand resolves through
+`Ident`/`Unitname` only, [04 §3.6]); treat the key as inert until a static
+trace from the flag byte's low-nibble mask says otherwise. The unit-created
+notification slot is ignored by every shipped condition and is kept as a
+slot. Whether a synthetic side whose `SIDEDATA` commander differs from the
+`Commander`-flagged unit is reachable in stock content is a bounded residual
+(stock agrees; the table is the authority). Deciders are in the tail.
 
-- **Unknown — `InitialGroup` low-nibble reader.** The parser packs the value
-  into the flag byte and no reader was found in the bounded search; the
-  `g <n>` order operand that stock scripts use resolves through `Ident`/
-  `Unitname` only [04 §3.6]. Decider: static trace from the flag byte's
-  bit 0–3 mask; until then treat the key as inert.
-- **Unknown — the meaning of a unit-created notification.** Every shipped
-  condition ignores slot 3; whether any non-shipped condition type existed
-  is unrecoverable. Decider: none needed for implementation; keep the slot.
-- **Unknown — side-table divergence.** Whether a synthetic side whose
-  `SIDEDATA` commander differs from the `Commander`-flagged unit is
-  reachable in stock content is a bounded residual (stock agrees); the
-  table is the authority. Decider: asset census over non-stock content.
-
-### Closed — the `StartPos` running counter, exactly [R-TRIG-01 §12] (2026-09-04)
-
-Static trace of the placement builder's `[specials]` loop (RWU-19-219),
-settling the `TODO(question)` left by WU-19-205.
+### The `StartPos` running counter, exactly [R-TRIG-01 §12]
 
 **Established — the counter advances only when it is taken.** The
 placement builder keeps one counter, a local of the builder reset to 0
@@ -2104,16 +2010,10 @@ exactly as §9 says. So `StartPos5, StartPosA, StartPos0, StartPosB` store
 collide with `StartPos0`/`StartPos1`/`StartPos2` if those are also
 authored. The digit test is `isdigit` on that one byte, **not** an
 integer parse whose zero result falls back to the counter — `StartPos0`
-goes down the numeric path, stores 0, and leaves the counter alone.
-
-**What the earlier text said.** §9 and [fmt ota] said "a running counter
-starting at 1 in file order" without stating which records advance it;
-WU-19-205 implemented the reading in which every start-position record
-advances it (so `StartPos5, StartPosA` would store 4, 1). That reading is
-retracted: only the records with a non-digit first suffix byte advance
-the counter. No stock map authors a non-numeric label, so no shipped
-content distinguishes the two; the rule matters only for authored
-content.
+goes down the numeric path, stores 0, and leaves the counter alone. No
+stock map authors a non-numeric label, so no shipped content distinguishes
+this from a counter every record advances; the rule matters only for
+authored content.
 
 ## Skirmish configuration
 
@@ -2138,19 +2038,17 @@ the game), mapping 1 (terrain is blacked out until explored), line-of-sight 1,
 and line-of-sight type 1 (terrain elevations affect LOS). Difficulty, location,
 commander death, and mapping each toggle/cycle through their ordinary menu
 alternatives. The commander-death rule is a lobby value carried into the
-game-mode word and consumed by the per-player phase, not a mission key: value
-one ends the game through the watch-mode path when the local commander dies,
-and value two respawns a new commander (a valid-placement search with up to
-9999 trials of two simulation draws each, plus terrain and lava gates, then
-metal/energy grants and a visibility rebuild). The lobby UI identifies value
-zero as continuing after commander destruction. **Supported inference:** for
-Nanolathe's two offered menu choices, value zero keeps a team active while any
-live, non-dying unit remains (including a building), while value one keeps it
-active only while a commander remains. This matches the observed
-commander-versus-all-units setup semantics, but the exact retail value-zero
-all-live-unit sweep and its alliance aggregation have not been isolated and
-remain **Unknown**. The rule word also selects the
-multiplayer no-active-player fast countdown site. The retail `LineOfSight`
+game-mode word and consumed by the per-player phase, not a mission key. The
+defeat predicate for every rule value is the player's live-unit count
+reaching zero ([R-SKIR-01 §3]): under value one the commander's death
+sweeps the owner's other units to their deaths, so the count reaches zero
+shortly after; under value zero nothing is swept and the player is defeated
+only when the last unit dies; value two runs the sweep and then respawns a
+new commander (a valid-placement search with up to 9999 trials of two
+simulation draws each, plus terrain and lava gates, then metal/energy grants
+and a visibility rebuild). The lobby UI identifies value zero as continuing
+after commander destruction. The rule word also selects the multiplayer
+no-active-player fast countdown site. The retail `LineOfSight`
 callback is a three-state control: it
 cycles from elevation-aware LOS (`LineOfSight=1`, `LineOfSightType=1`), to
 elevation-agnostic LOS (`1,0`), to all mapped terrain visible
@@ -2201,23 +2099,26 @@ The start callback's allied-group preflight is intentionally narrower than a
 simple "all live rows have the same value" test. It first finds the first live
 row whose ally group is not 5. If no such row exists (no live rows, or every
 live row is group 5), the check passes. Otherwise open rows are ignored and the
-check fails only when another live row has a different group. The color callback
-has a similarly observable quirk: it accepts the next logo when that candidate
-does not conflict with another live row, but after a conflict its fallback
-search scans every configured row, including open rows, from logo 0 upward and
-stores -1 when all ten stock logos are present. [07 "Retail closure for the
-single-player menu slice"]
+check fails only when another live row has a different group. The
+controller-cycle callback has a similarly observable quirk: when a row
+becomes live it checks the row's colour against every live row and, on a
+conflict, rescans logo indices from 0 upward for one no configured row
+holds — open rows included — and stores -1 when all ten stock logos are
+present ([R-SKIR-01 §1]). [07 "Retail closure for the single-player menu
+slice"]
 
-### Closed — the skirmish setup record and every option's consumer chain [R-SKIR-01 §1] (2026-08-29)
+### The skirmish setup record and every option's consumer chain [R-SKIR-01 §1]
 
-Status: **Established** unless a claim says otherwise (direct static trace of
-the `SKIRMISH.GUI` handler and its row builder, the registry preference
+**Established** unless a claim says otherwise (direct static trace of the
+`SKIRMISH.GUI` handler and its row builder, the registry preference
 loader/writer, the battle-entry orchestrator, the start-slot stamp, the
 resource grant, the kill-record handler, the per-player phase, the two
 elimination predicates, the `GAMEOPTIONS.GUI` overlay and the `RESTRICT2.GUI`
-screen). This unit is RWU-08-2; the raw trail is kept out of the repo.
+screen).
 
-**The setup record.** One heap object, allocated at start-up and freed at
+#### The setup record
+
+One heap object, allocated at start-up and freed at
 shutdown, holds the whole skirmish configuration. It carries ten row
 records of six 32-bit words — *controller* (`0` open, `1` player, `2`
 computer), *side* (index into the side table), *ally group* (`0..4`, or the
@@ -2288,11 +2189,8 @@ group, frame `10` when `n = 0`, `2*group + 1` when `n = 1`, `2*group` when
 modulo the `logos.gaf` frame count, mapping `-1` to `count - 1`, and
 **re-steps while the candidate equals a live row's colour** (a live row is
 one whose controller is non-zero; the row itself is excluded) — it never
-stores `-1`. **Correction.** The previous text said the colour callback
-"after a conflict … scans every configured row, including open rows, from
-logo 0 upward and stores -1 when all ten stock logos are present"; that
-scan belongs to the controller-cycle callback described above, not to
-`Color%d`. `Metal%d`/`Energy%d`: left click `v = min(v + 500, 10000)` then
+stores `-1`; the `-1` scan belongs to the controller-cycle callback above.
+`Metal%d`/`Energy%d`: left click `v = min(v + 500, 10000)` then
 `if v == 700 then v = 500`; right click `v = v - 500; if v < 201 then v =
 200` (the compare is `< 0xc9`, so 200 is the floor and the quirk rewrites
 the one increment from 200). `CommanderDeath`, `StartLocation`, `Mapping`
@@ -2322,7 +2220,7 @@ diagnostics are quoted above. On success the player count global becomes
 `players + computers`, the row-to-player conversion runs (§2), the
 preferences are written, and the front end switches to the battle state.
 
-### Closed — battle entry: what the record becomes [R-SKIR-01 §2] (2026-08-29)
+### Battle entry: what the record becomes [R-SKIR-01 §2]
 
 **Row-to-player conversion (skirmish only, before the loading screen).**
 For each row `i < NumSkirmishPlayers`: controller `1` copies colour and side
@@ -2333,7 +2231,7 @@ controller `0` registers it as inactive. Registration resets the slot's
 two alliance rows to zero, sets `allied[i][i] = 1` in both, stores the
 controller byte, writes the slot's score-panel **rank byte to the slot
 index** (its initial value; only the kill-lead shift of [R-CAMP-01 §9]
-changes it afterwards — closed 2026-09-02, [07 R-HUD-04 §1]), and (skirmish
+changes it afterwards, [07 R-HUD-04 §1]), and (skirmish
 only) names the slot `Player` for a human or
 `Arm`/`Core` for a computer by side (`side == 0` → `Arm`). Then, for a live
 row `i`, every row `j` (`j < NumSkirmishPlayers`) with the **same ally
@@ -2342,8 +2240,7 @@ group, a non-zero controller, and group ≠ 5** — or `j == i` — sets
 the byte at column `j` of player `i`'s first alliance row; it is symmetric in
 skirmish because it is derived from equal group numbers, and group 5 rows
 are allied with nobody but themselves. The second alliance row (used by the
-multiplayer alliance screen) keeps only the diagonal in skirmish. Doc 05
-should cite this predicate for sharing and the AI's side filter.
+multiplayer alliance screen) keeps only the diagonal in skirmish.
 
 **Session words.** The battle-entry orchestrator, for session kind 2
 (skirmish): copies the configured unit limit into the session unit-limit
@@ -2374,9 +2271,9 @@ entry (still gated on the absence of a save file), so the grant is written
 twice with identical values;
 the campaign branch of the pass uses the mission's authored values and the
 multiplayer branch `hostShort * 100`. Order within battle entry: session
-words → placement stamps → grant → world rebuild → main GUI → per-player
-phase primed → grant again → session start flag. (**Corrected 2026-08-29:** the world rebuild precedes the stamps — [R-ENTRY-01 §3], [R-ENTRY-01 §10].) Nothing here draws from
-the simulation stream.
+words → world rebuild → placement stamps → grant → main GUI → per-player
+phase primed → grant again → session start flag ([R-ENTRY-01 §10]).
+Nothing here draws from the simulation stream.
 
 **Save persistence.** The save `Summary` account records, for session kind 2
 only, `CommanderDeath`, `Location`, `Mapping`, `LineOfSight`,
@@ -2386,7 +2283,7 @@ record and the map name, then a small helper rewrites the commander-death
 word and the three mode-word bits from them — the same bit assignments as
 battle entry.
 
-### Closed — commander death: the whole chain [R-SKIR-01 §3] (2026-08-29)
+### Commander death: the whole chain [R-SKIR-01 §3]
 
 **Vocabulary.** The rule word is `0`, `1`, or `2`. The in-battle
 `GAMEOPTIONS.GUI` overlay names them `Game Continues`, `Game Ends`,
@@ -2410,16 +2307,20 @@ player keeps every unit and nothing else happens on commander death. Rule
 `2` runs the sweep too (the commander's other units are lost), then respawns
 (below).
 
-**Counters.** Each player carries a 16-bit *live unit count* and a 32-bit
-*units ever created*. Both unit allocators increment both; the
+#### Counters
+
+Each player carries a 16-bit *live unit count* and a 32-bit *units ever
+created*. Both unit allocators increment both; the
 kill-record handler decrements the live count when the unit is finally
 removed (the same function that clears the unit's "alive" bit), and in
 multiplayer notifies peers when it reaches zero.
 
-**Defeat detection.** In the per-player phase, on the **local** player's
-30-tick due (`globalTick >= due` then `due += 30`; the due word is the
-settlement deadline `UpdateTime`, not `WinLoseTime` — [R-TRIG-01 §6],
-2026-09-02), for session kinds 2 and 3, when the local record is inactive or its watch-mode bit is clear, the
+#### Defeat detection
+
+In the per-player phase, on the **local** player's 30-tick due
+(`globalTick >= due` then `due += 30`; the due word is the settlement
+deadline `UpdateTime`, not `WinLoseTime` — [R-TRIG-01 §6]), for session
+kinds 2 and 3, when the local record is inactive or its watch-mode bit is clear, the
 defeat predicate is evaluated: for kinds 2/3 it is simply **`local live unit
 count == 0`** (the campaign kind polls its defeat queue instead). A second,
 preceding branch of the same predicate arms a random deadline of `9000 +
@@ -2447,23 +2348,16 @@ local host still hosts live AI players, `You are placed in watch mode
 because you are hosting AI players which are still alive.  If you exit, they
 will be terminated.`; in skirmish (kind 2) it writes the end latch directly:
 `ending` bit set, `won` cleared, and `lost` set when the local record's
-end-flag byte is clear. **Correction.** The previous text said value one
-"ends the game through the watch-mode path when the local commander dies";
-the watch-mode path is multiplayer-only and the end is not keyed on the
-commander at all — it is keyed on the live-unit count that the owner sweep
-drives to zero. Consequently the "value-zero all-live-unit sweep" that the
-tail listed as Unknown is the same predicate: under rule 0 the player is
-defeated when the last of their units dies, exactly as under rule 1 after
-the sweep. Cross-section: the "Evaluation" paragraph stating that for kinds
-2/3 "the defeat queue is polled only when the local side's commander marker
-… is clear — the commander-dead test" describes this predicate wrongly (it
-is the live-count test above, and the campaign kind is the only one that
-polls a defeat queue); restated in [R-TRIG-01 §6], which also corrects
-the "allies included" sentence below for the skirmish kind.
+end-flag byte is clear. The watch-mode path is multiplayer-only, and the
+end is never keyed on the commander itself: it is keyed on the live-unit
+count, which the owner sweep drives to zero under rules 1 and 2 and which
+reaches zero under rule 0 only when the last unit dies.
 
-**Victory detection.** The elimination sweep run from the same due returns
-false immediately when the rule word is `2` (deathmatch never ends by
-elimination). Otherwise, for every other active player `j` with a
+#### Victory detection
+
+The elimination sweep run from the same due differs by kind. **Kind 3:** it
+returns false immediately when the rule word is `2` (deathmatch never ends
+by elimination). Otherwise, for every other active player `j` with a
 human/computer/remote controller, side ≠ 10 and watch-mode bit clear: if
 `j` has created no unit yet, no victory; if `j` still has live units, then
 victory continues only when both `j` and the local player have the lobby
@@ -2471,10 +2365,46 @@ victory continues only when both `j` and the local player have the lobby
 (both rows) hold, and every other active, non-eliminated player `k` is in
 `j`'s alliance row; any failure is no victory. The shared-victory bit is
 written only by the `ALLIES.GUI` screen's `VICTORY` control (opened from the
-in-battle `TABMENU.GUI`'s `ALLIES` button); the skirmish setup never sets it, so a skirmish is won
-only when every other player's live count is zero, allies included.
+in-battle `TABMENU.GUI`'s `ALLIES` button). **Kind 2:** the sweep walks
+slots 0–9 and skips the local slot, any slot whose byte in the local
+player's first alliance row is non-zero (an ally, from the setup screen's
+team groups, §2) and any slot with a zero live-unit count; if any slot
+survives the skips there is no victory, otherwise victory — no
+shared-victory bit, no controller, elimination or rule-word test
+([R-TRIG-01 §6]).
 
-### Closed — line of sight and mapping [R-SKIR-01 §4] (2026-08-29)
+### The two live-player counters — Established [R-SESS-01 §1]
+
+The per-player phase's end-of-battle block ([R-TRIG-01 §6], [R-SKIR-01 §3])
+calls two counters over the ten player slots, in slot order, each returning a
+plain count. Both first require the slot's record to exist (its first word is
+non-zero) and the slot's side index to differ from `10`, and both treat a
+slot as *live* when its 16-bit live-unit count is non-zero **or** its 32-bit
+created-unit count is zero (a player that has not yet created anything counts
+as live — the same "created nothing yet" rule the kind-3 victory sweep uses).
+
+* **Live computer players hosted here**: additionally the controller byte
+  equals `2`. Nothing else is tested; watch mode does not apply to computer
+  slots.
+* **Live human players still playing**: the controller byte is `1`, `2` or
+  `3`; then the slot must be either a local human (`1`) or a remote slot
+  (`3`) whose lobby record's registration byte equals `1` — the byte slot
+  registration writes ([R-SKIR-01 §2]); that `1` means "registered as human"
+  is **Supported inference** from that writer, the test itself is
+  Established — so a hosted computer slot (`2`) never counts; and finally the
+  lobby record's watch-mode bit (the bit the elimination handler sets,
+  [R-SKIR-01 §3]) must be clear.
+
+Every consumer of both counters is on the **kind-3** (multiplayer) branch of
+the block: the first decides between `You're out!  Continue Watching?` and
+the "hosting AI players" message and gates the whole watch-mode path together
+with the lobby's *watching allowed* bit; the second posts the watch-mode
+placement line and, at the top of the kind-3 block, steps the shared
+countdown toward the end latch when no human is left playing. Kinds 1 and 2
+never call either counter, so a single-player engine needs neither; they are
+recorded so the boundary is explicit ([R-OOS-01]).
+
+### Line of sight and mapping [R-SKIR-01 §4]
 
 The three bits' consumers, polarity and the `Permanent`/`Circular`/`True`
 and `Mapped`/`Unmapped` names are established in [03 §3.1 R-VIS-01 §1];
@@ -2487,10 +2417,46 @@ resolves its map. So for a campaign battle the mode word comes from the
 mission's OTA keys, not from the registry `Single*` triple that is read at
 start-up and immediately shadowed; the `Single*` values reach nothing.
 Skirmish is unaffected because the kind-2 branch reads the setup record.
-Cross-doc: [03 §3.1 R-VIS-01 §1] says the loader "then deletes the value"
-on a registry miss; the helper stores the default (§1 above).
+On a registry miss the loader stores the default (§1); it does not delete
+the value.
 
-### Closed — starting metal and energy [R-SKIR-01 §5] (2026-08-29)
+### The single-player eyeball producer — Established [R-SESS-01 §3]
+
+The temporary-sight observer list ("eyeball" records, [01 R-PLAT-02 §5])
+has one producer, the handler of the unit-death packet — and that handler
+**is the central death handler** the local death path calls directly, after
+building the death record that networking would send ([R-OOS-01 §1], type
+`0x0c`; [06 §12.1]). Retail therefore appends an eyeball in every session
+kind; the list is not empty in single player.
+
+The handler appends when all of these hold, in order:
+
+1. the victim's runtime status carries the *live* bit;
+2. the victim's owner slot index equals the local slot index;
+3. the visibility mode word has bit 1 set — the `Circular` or `True` modes
+   of [03 R-VIS-01 §1], never `Permanent`;
+4. the list holds fewer than 20 records (at 20 the append is silently
+   dropped).
+
+The record is then filled exactly as [01 R-PLAT-02 §5] lays it out: owner =
+the local player record; sight distance = the victim definition's
+`sightdistance` word [fmt fbi]; height byte = the low byte of the
+definition's height field (the field the target-top and repair-admission
+tests read, [04 R-SPEC-01 §15]); position = the victim's world X, Y, Z with
+Y raised to `(SeaLevel + 1) << 16` when lower; expiry = `globalTick + 60`.
+Before the count is incremented the record's coverage is computed and
+published through doc 03's observer path — the true-LOS raster when the mode
+word's bit 2 is also set (`True`), the circular coverage tile otherwise
+([03 R-VIS-01 §2]); that arithmetic is doc 03's contract and is cited here
+only to fix the order: **coverage publish, then count increment**. The 60-tick expiry is then consumed by the
+post-loop expiry pass of [01 R-PLAT-02 §5], which is therefore **not** a
+no-op in single player.
+
+Implementation consequence: a unit the local player loses keeps revealing
+its sight radius for two seconds after death under `Circular`/`True` line
+of sight.
+
+### Starting metal and energy [R-SKIR-01 §5]
 
 Ladder: the row value starts at the registry value (miss 1000) and moves by
 500 per click within `[200, 10000]` with the 200→500 rewrite (§1). At battle
@@ -2502,7 +2468,7 @@ commander alone hold the starting stock. The `GAMEOPTIONS.GUI` overlay
 prints the row's integer values under `Starting Metal:` / `Starting
 Energy:` (presentation only; multiplayer prints `hostShort * 100`).
 
-### Closed — unit limit: setup field and lobby side [R-SKIR-01 §6] (2026-08-29)
+### Unit limit: setup field and lobby side [R-SKIR-01 §6]
 
 The configured limit is read once at start-up from `totala.ini`,
 `[Preferences]` `UnitLimit`, default 250, then clamped: `> 500 → 500`, `< 20
@@ -2514,9 +2480,10 @@ for campaign missions. No skirmish gadget edits the limit; the multiplayer
 battleroom's `MAXUNITS` control does. The `GAMEOPTIONS.GUI` overlay prints
 the session word under `Max Units:`; the in-battle options snapshot copies
 it as the first word of its block. Simulation consumers (construction gate,
-AI gate) are doc 05's [RWU-05-4].
+AI gate) are doc 05's. Battle entry's copy into the session word and the
+save restore of the configured word apply no clamp ([R-SESS-01 §9]).
 
-### Closed — start placement, Fixed and Random [R-SKIR-01 §7] (2026-08-29)
+### Start placement, Fixed and Random [R-SKIR-01 §7]
 
 `StartLocation` is stored in the record and mirrored as `SkirmishLocation`;
 `1` (`Fixed`) assigns slot `i` start position `i`; `0` (`Random`) shuffles as
@@ -2527,7 +2494,7 @@ lobby word for kind 3. The command-line switches `fixedloc`, `deathends`,
 `cheating`, `watching` set the multiplayer host's lobby word only (they
 never touch the skirmish record).
 
-### Closed — player colours [R-SKIR-01 §8] (2026-08-29)
+### Player colours [R-SKIR-01 §8]
 
 The colour word is an index `0 .. frameCount(logos.gaf) - 1` (stock: ten
 frames; the row-default is the slot index). It is copied to the player's
@@ -2542,7 +2509,7 @@ is the separate `Side%d` word. Two rows may share a colour only through the
 what the texture lookup returns for it (decider: static trace of the
 frame-array accessor's bound handling).
 
-### Closed — AI difficulty [R-SKIR-01 §9] (2026-08-29)
+### AI difficulty [R-SKIR-01 §9]
 
 `Difficulty` on the skirmish screen writes both the record word and the
 session global (`0 → 1 → 2 → 0`, labels `Easy`/`Medium`/`Hard`); the
@@ -2555,13 +2522,13 @@ discount [R-ECO-01 §3]; the commander-respawn grant scaling in §3; the
 shows `Cheat Codes:` and `Watching:` from bits 13 and 15 of the host word,
 `Allowed`/`Disallowed`). The AI profile grammar is [R-AI-01 §12].
 
-### Closed — map restrictions [R-SKIR-01 §10] (2026-08-29)
+### Map restrictions [R-SKIR-01 §10]
 
 `RESTRICT2.GUI` is opened only by the multiplayer battleroom handler; no
 skirmish path reaches it. The screen builds, for every definition except
-index 0 whose `norestrict` capability bit is clear — **this is the reader
-of `norestrict` that doc 05 recorded as absent**: a `norestrict` definition
-is simply not offered for restriction — a 98-byte row (caption
+index 0 whose `norestrict` capability bit is clear — this is the reader of
+`norestrict`: a `norestrict` definition is simply not offered for
+restriction — a 98-byte row (caption
 `"%s\r%s %dM  %dE"`, definition index, current limit, and the restriction
 lookup's status) sorted by a comparator over the row, plus `OLDCOUNTS`, an integer
 per row snapshotting each limit before editing. Each `SLIDER%d` runs
@@ -2576,12 +2543,11 @@ lobby record whose local flag is set) is human- or computer-controlled,
 walks the rows and marks each definition restricted (limit
 `0`) or unrestricted through the container's two setters. The container is
 process-lifetime memory: no registry, save or file writer touches it, and the
-per-definition limit field doc 05 could not find a writer for is this
-container's *limit* word. Simulation consumers (the build-menu and order
-gates) are [RWU-05-4]; the AI's construction task consults the same
-container.
+per-definition limit field is this container's *limit* word. Simulation
+consumers (the build-menu and order gates) are doc 05's; the AI's
+construction task consults the same container.
 
-### Closed — `GAMEOPTIONS.GUI` and the remaining tokens [R-SKIR-01 §11] (2026-08-29)
+### `GAMEOPTIONS.GUI` and the remaining tokens [R-SKIR-01 §11]
 
 `GAMEOPTIONS.GUI` is the read-only in-battle "GameSettings" overlay. It
 prints `Commander Death:` (rule word → `Game Continues`/`Game Ends`/
@@ -2617,7 +2583,7 @@ Human, computer, open, and blocked slot states have different editing and
 readiness rules. The exact semantic name of every numeric state and every host
 privilege bit remains incomplete.
 
-**Out of scope (2026-08-29, RWU-08-6).** The whole battleroom — 67 functions
+**Out of scope.** The whole battleroom — 67 functions
 in the ledger's `LOUNGE2.GUI` cluster plus the provider/connection screens —
 is outside Nanolathe's single-player scope; nothing in it is reached from the
 campaign or skirmish paths ([R-OOS-01 §3]). The only battleroom-authored
@@ -2633,13 +2599,13 @@ table, [R-OOS-01 §2]); the skirmish screen writes the setup record instead
 The executable reads these AI-related definition and mission values:
 
 - per-unit `ai_weight` text in a dedicated definition field (64-byte capacity), parsed by the weight loader and applied through the profile system;
-- per-unit `ai_limit` text in a separate definition field — no reader exists, and [R-AI-01 §12] now names the mechanism: both per-definition profile passes, the weight pass and the limit pass, read the `ai_weight` field, so `ai_limit` is parsed and abandoned. It must not be wired to limits; the functioning `limit` token comes from the profile file, not this field;
+- per-unit `ai_limit` text in a separate definition field — no reader exists: both per-definition profile passes, the weight pass and the limit pass, read the `ai_weight` field ([R-AI-01 §12]), so `ai_limit` is parsed and abandoned. It must not be wired to limits; the functioning `limit` token comes from the profile file, not this field;
 - mission `aiprofile` string via a mission resource slot that loads `ai\<profile>.txt` with fallback to `ai\default.txt`;
 - mission placement fields for AI ignore, AI priority-target, build priority, and initial group — parsed at mission load but no transfer or reader is found in the creation path, so they are inert for planning;
-- computer difficulty (`0` easy, `1` medium, `2` hard) from the registry and setup state; it gates profile `plan` directives and scales every positive production contribution whose **destination** player is computer-controlled by 0.5, 0.7 or 1.0 — the exact evaluation points and float widths are doc 05's ([R-ECO-01 §3]; the earlier [R-AI-01 §12] wording is superseded by that closure);
+- computer difficulty (`0` easy, `1` medium, `2` hard) from the registry and setup state; it gates profile `plan` directives and scales every positive production contribution whose **destination** player is computer-controlled by 0.5, 0.7 or 1.0 — the exact evaluation points and float widths are doc 05's ([R-ECO-01 §3]);
 - player control byte that gates manager execution.
 
-The strategic planner is positively rooted and distinct from the scenario unit loader. The earlier analysis that mistook the unit reconstructor for AI is retracted.
+The strategic planner is a distinct object from the scenario unit loader.
 
 #### Strategic state construction and refresh — Established [P0-01]
 
@@ -2659,9 +2625,9 @@ Per-definition inputs consumed in plain terms are:
 - the extracts-metal flag as a floating-point zero versus non-zero test;
 - category and movement-class flag bits that contribute fixed integer addends and select weapon-budget bases;
 - footprint and yard-related size flags that contribute small constants and gate multipliers;
-- a slope-related field that triples one accumulator when non-negative;
+- the definition's `MinWaterDepth` word (copied from its movement class), which triples one accumulator when non-negative ([R-AI-03 §6]);
 - a weapon-related floating field that can zero one accumulator when combined with a global half-compare;
-- the weapon table entries themselves, where active weapons contribute damage divided by 40 plus **range** divided by 100 plus small constants — the TDF identities are closed: the weapon parser stores the `DAMAGE` section's `default` key into the damage word (the /40 read) and the `range` key into the range word (the /100 read); `reloadtime` is stored elsewhere (scaled by thirty) and is not read by this routine. The earlier "reload divided by 100" phrasing is retracted; it is range divided by 100, consistent with the weapons ballistics field assignment;
+- the weapon table entries themselves, where active weapons contribute damage divided by 40 plus **range** divided by 100 plus small constants — the weapon parser stores the `DAMAGE` section's `default` key into the damage word (the /40 read) and the `range` key into the range word (the /100 read); `reloadtime` is stored elsewhere (scaled by thirty) and is not read by this routine;
 - a global helper that returns a signed classification value compared against zero;
 - per-type completed counts from the strategic state that double or quadruple one accumulator and gate halving from the previously computed single-byte coefficient;
 - a player-wide flag that gates halving of one accumulator.
@@ -2678,13 +2644,13 @@ The recomputation routine itself draws no random numbers. Its outer dispatcher d
 
 #### Strategy manager and its task graph — Established [P0-02]
 
-A per-player strategy manager of fixed size is allocated for every participation-eligible slot except the live remote path. It holds a countdown that triggers a classification sweep every 30 eligible entries, a throttle deadline written by the unit-loss path, and ten task slots. Nine slots are active and one slot remains intentionally empty with a null task that never runs.
+A per-player strategy manager of fixed size is allocated for every participation-eligible slot except the live remote path. It holds a countdown that triggers a classification sweep every 30 eligible entries, a throttle deadline written by the unit-loss path, and ten task slots. Slot 0 is an empty pointer the dispatcher skips; slots 1–9 hold nine task objects, of which slot 5 is the intentional null-task class whose body returns immediately (its group record is still populated by the classifier, [R-P0-04 §2]).
 
-The nine active tasks are:
+The eight working tasks are:
 
 - eco and queue management that handles activatable building toggles and builder queue insertion — rescheduled at current tick plus 30;
 - construction and positioning that selects a build candidate, finds placement, issues a build order, and then repositions builders when at least five builders are present — rescheduled at current tick plus 90;
-- two attack-wave tasks that share the same code but hold distinct distance thresholds and count bounds — each rescheduled at current tick plus 300; the underlying wave merge is three-phase and strict: an empty own group first takes the peer's first member, then the own group sheds its farthest member to the peer while distance squared is at least threshold times the task's group count, then the peer's members within distance squared strictly below threshold times the task's count are collected and transferred into the own group — and the peer is the paired regroup task, not the other wave — thresholds twenty thousand and fifty thousand, minimum three members and maximum six per wave; the full merge order is under R-P0-04 §5 below. Audit: the earlier phrasing described the merge loosely as moving members between wave groups when distance squared exceeds threshold times count; the caller census established the two-phase order with an inclusive first comparison and a strict second, which is now the contract;
+- two attack-wave tasks that share the same code but hold distinct distance thresholds and count bounds — each rescheduled at current tick plus 300; the underlying wave merge is three-phase and strict: an empty own group first takes the peer's first member, then the own group sheds its farthest member to the peer while distance squared is at least threshold times the task's group count, then the peer's members within distance squared strictly below threshold times the task's count are collected and transferred into the own group — and the peer is the paired regroup task, not the other wave — thresholds twenty thousand and fifty thousand, minimum three members and maximum six per wave; the full merge order is under "Wave merge" below;
 - two regroup tasks paired with the waves — each rescheduled at current tick plus 150 and moving the task's group toward the peer wave's centroid;
 - an explore and gather task — rescheduled at current tick plus 30 plus a random value below 900;
 - a random-walk rally task that integrates a drifting target and validates exploration — rescheduled at current tick plus 30 plus a random value below 150.
@@ -2697,7 +2663,7 @@ Per-tick dispatch iterates the ten player slots in order and calls a manager tic
 
 When the gate passes, the manager decrements its 30-countdown; when it reaches zero it resets to 30 and runs the classification sweep over the eligible player range. It then scans the ten task slots in order and invokes any task whose deadline has arrived through its virtual table. After the virtual sweep it runs weapon maintenance. A separate alternate dispatcher with the same countdown but without weapon maintenance exists and is not used by the live tick. [P0-02]
 
-All order submission from manager tasks uses the ordinary order service. Build orders enter as a build command with a world position, queue modifier one, and type identity; positioning uses move and patrol-like commands; waves use a formation helper that can issue attack or move orders against a unit target or a centroid; the eco path can enqueue a build-option choice into a builder queue and can toggle an activatable building's active state; the regroup and explore tasks issue move-like orders to centroids or random map targets; the rally task submits attack orders per member. **Correction (2026-08-28, RWU-08-1):** the earlier reading "the rally task issues a mix of stockpile and formation orders after a guard check" was wrong — the body issues attack-intent orders one unit at a time and never uses the group broadcast helper or any stockpile command. See [R-AI-01 §7]. There is no privileged mutation path that writes economy or unit state outside those ordinary submissions. [P0-02]
+All order submission from manager tasks uses the ordinary order service. Build orders enter as a build command with a world position, queue modifier one, and type identity; positioning uses move and patrol-like commands; waves use a formation helper that can issue attack or move orders against a unit target or a centroid; the eco path can enqueue a build-option choice into a builder queue and can toggle an activatable building's active state; the regroup and explore tasks issue move-like orders to centroids or random map targets; the rally task submits attack-intent orders one unit at a time and never uses the group broadcast helper or any stockpile command ([R-AI-01 §7]). There is no privileged mutation path that writes economy or unit state outside those ordinary submissions. [P0-02]
 
 #### Eco toggle and group-vector population — Established with direct writer census [P0-02] [R-P0-04]
 
@@ -2705,9 +2671,9 @@ The eco task scans its own group vector and examines only completed units, gated
 
 **Makes-metal branch.** It compares the player's current **energy stock** against twice the player's current **metal stock**: when `energyStock <= 2 x metalStock` it disables; otherwise when net energy production is at or below zero it leaves the unit as is; otherwise it draws once with bound five and enables the unit only on a non-zero result. The two argument forms disable and enable correspond to those two invocation sites; the semantic name metal-maker on/off is supported inference, but the argument values and the stock compare are established.
 
-**Correction (2026-08-28, RWU-08-1).** The previous text read "it compares twice the stored metal income against current energy: when metal is at most half of energy it disables" and named "the eighty percent gate". Both were wrong. The compared quantities are the two **stock** fields, not an income field; the polarity is the reverse of what was written — the converter is switched **off** when metal is at least half of energy, which is the sensible rule for an energy-to-metal converter; and no `0.8` term exists anywhere in this body. The exact expression is in [R-AI-01 §2].
+The compared quantities are the two **stock** fields, not an income field: the converter is switched **off** when metal is at least half of energy, the sensible rule for an energy-to-metal converter, and no `0.8` term exists anywhere in this body. The exact expression is in [R-AI-01 §2].
 
-**Factory-queue branch — Established (2026-08-26).** A building whose makes-metal byte is zero and whose definition carries a non-zero build-option count is a factory, and this task is what queues its products. It skips the unit when its primary order queue is non-empty, so exactly one product is queued at a time and the next is queued only after the queue drains. Otherwise it runs the ordinary cumulative-reservoir selection over the builder's build options — the same selection the construction task uses — and submits one build of the selected product.
+**Factory-queue branch — Established.** A building whose makes-metal byte is zero and whose definition carries a non-zero build-option count is a factory, and this task is what queues its products. It skips the unit when its primary order queue is non-empty, so exactly one product is queued at a time and the next is queued only after the queue drains. Otherwise it runs the ordinary cumulative-reservoir selection over the builder's build options — the same selection the construction task uses — and submits one build of the selected product.
 
 This branch is why the construction task never needs to see a factory: the classifier sends every building to this record and only mobile builders to the construction record. An implementation that queues factory products from the construction task is relying on the classifier misfiling buildings, and will stop working as soon as the building-class bit is correct.
 
@@ -2721,21 +2687,13 @@ pass for ungrouped units that carry runtime bit `0x20`, assigning categories 1
 load, control-group assignment, unit initialization, and death removal; it
 appends to the destination vector, removes from the source by replacement with
 the last element, and has no gameplay member cap. See R-P0-04 §3 and §4 below for the complete
-writer and direct-store census. Transport, naval, air, or special scouting
-tasks with distinct tables are not found among the six unique virtual tables
-that cover the nine slots (corrected by [R-AI-04 §1]: the run holds **seven**
-tables — the null class has its own — and is complete). The empty slot's null
-task is intentionally inert.
+writer and direct-store census. The seven virtual tables that cover the nine
+slots (the null class has its own) are the complete run: no transport, naval,
+air or scouting task class exists ([R-AI-04 §1]). The null task is
+intentionally inert. No lifecycle admission callback seeds these vectors
+through the generic insertion helper; the located writers are the init, load,
+control-group, wave-transfer and death sites named under R-P0-04 §3.
 [P0-02] [R-P0-04]
-
-The earlier helper-only callback census (`6a3f9c5`) remains valid for its
-scope: it found no additional lifecycle admission callback that seeds these
-vectors through the generic insertion helper or the previously searched
-callback routes. It did not enumerate direct xrefs to the specialized
-direct manager-group writer. The new positive-static result therefore supersedes only
-the old conclusion about the direct manager writer; it does not invent a
-creation/completion/capture callback beyond the separately located init,
-load, control-group, wave-transfer, and death invocation sites.
 
 The classifier admission bit is the `uint32` runtime status word on the
 unit's runtime record, not an authored UnitDef field. The common
@@ -2752,7 +2710,7 @@ factory-completion writer was found; completion sets the distinct status bit
 additional authored/capture/completion writer is bounded-negative. [R-P0-04
 "Runtime eligibility bit lifecycle"]
 
-#### R-P0-04 §1 — Result: no per-tick group producer; two vector families — Established [R-P0-04]
+#### AI group vectors: no per-tick group producer; two vector families — Established [R-P0-04 §1]
 
 The retail AI has two distinct group-vector families, and neither is produced by a per-tick combat-capability scan:
 
@@ -2761,13 +2719,13 @@ The retail AI has two distinct group-vector families, and neither is produced by
 
 The manager's nine task vectors are allocated empty, but that is only their initial state: the extended static census locates the direct group-record writer and the manager's classifier, which together give the task vectors reachable producers. A production-time scan that assigns every apparently combat-capable unit to wave, explore, rally, and regroup slices is not a retail producer and must not be retained as authoritative AI behavior (see R-P0-04 §5).
 
-#### R-P0-04 §2 — Manager task slots and group-record identity — Established [R-P0-04]
+#### Manager task slots and group-record identity — Established [R-P0-04 §2]
 
 The manager allocates nine task objects in ten fixed slots. The slot order is load-bearing: resource/activity and builder queue, attack wave A, regroup A, construction/positioning, null, attack wave B, regroup B, explore/gather, random-walk rally.
 
-**Clarification (2026-08-28, RWU-08-1).** The earlier phrase "the tenth slot is an intentional null task that never runs" conflated two distinct things, and a reimplementation that keeps only one of them will misnumber every group record. There are two: **slot 0** is an empty *pointer* — the constructor zero-fills all ten slots and then assigns only slots 1 through 9, so slot 0 holds no task object at all and the dispatcher's null test skips it; and the task in **slot 5** is a real object of the intentional **null task class**, whose first virtual slot returns immediately. Slot 5 therefore owns group record 5, which the classifier populates with armed buildings, and the attack wave reads that record's centroid as its first-choice gather point ([R-AI-01 §4]). The constructor's allocation order — eco, construction, null, wave A, regroup A, wave B, regroup B, explore, rally — is not the slot order; only the slot order matters at dispatch. A task record holds, in order, its virtual table, the manager back-pointer, its group record pointer, its deadline and its owning player slot index; the group record base is on the player record and records are a fixed stride apart, so record index equals slot index. Each task points at its own player group record — a begin/end/capacity vector of unit pointers — and the dispatcher runs the task slots in ascending slot order when the computer-controller gate is active and the task's deadline is at or before the global tick. Deadline execution does not imply the task's vector is non-empty. Group record zero is the ungrouped sentinel and is not one of the nine task records. Task deadlines are listed under Strategy manager and its task graph above. [08 "Strategy manager and its task graph"; 08 "Dispatch gates and order sinks"]
+Two distinct things must both be kept, or every group record is misnumbered: **slot 0** is an empty *pointer* — the constructor zero-fills all ten slots and then assigns only slots 1 through 9, so slot 0 holds no task object at all and the dispatcher's null test skips it; and the task in **slot 5** is a real object of the intentional **null task class**, whose first virtual slot returns immediately. Slot 5 therefore owns group record 5, which the classifier populates with armed buildings, and the attack wave reads that record's centroid as its first-choice gather point ([R-AI-01 §4]). The constructor's allocation order — eco, construction, null, wave A, regroup A, wave B, regroup B, explore, rally — is not the slot order; only the slot order matters at dispatch. A task record holds, in order, its virtual table, the manager back-pointer, its group record pointer, its deadline and its owning player slot index; the group record base is on the player record and records are a fixed stride apart, so record index equals slot index. Each task points at its own player group record — a begin/end/capacity vector of unit pointers — and the dispatcher runs the task slots in ascending slot order when the computer-controller gate is active and the task's deadline is at or before the global tick. Deadline execution does not imply the task's vector is non-empty. Group record zero is the ungrouped sentinel and is not one of the nine task records. Task deadlines are listed under Strategy manager and its task graph above. [08 "Strategy manager and its task graph"; 08 "Dispatch gates and order sinks"]
 
-#### R-P0-04 §3 — Located producers and transfer order — Established [R-P0-04]
+#### Located producers and transfer order — Established [R-P0-04 §3]
 
 The producers below are the reachable set; their order of application matters for save and simulation determinism.
 
@@ -2777,7 +2735,7 @@ The strategic state owns three separate vectors, each rebuilt on the 30-tick ref
 
 ##### Wave merge
 
-**Correction (2026-08-26).** The previous text said the merge "operates only on the two wave groups passed by the task instance" and that it "can operate only after a wave vector has members". Both statements were wrong, and together they made the attack waves look unreachable. A re-derivation of the manager constructor, the wave task and the merge establishes that (a) the merge's peer is the **paired regroup task**, not the other wave, and (b) the merge **seeds an empty own group from that peer**. The classifier populates the regroup records, so the waves do have a reachable producer. The corrected contract follows.
+The merge's peer is the **paired regroup task**, not the other wave, and the merge **seeds an empty own group from that peer**; the classifier populates the regroup records, so the waves have a reachable producer.
 
 The attack-wave task calls the wave merge helper before target selection, passing the **peer slot index stored on the task instance**. Slot index and group-record index are the same number throughout the manager, so the peer slot index is also the peer group number. The authored pairings are wave A → regroup A and wave B → regroup B; the regroup tasks point back at their wave in the same way. The merge is therefore a transfer path between one wave record and its own regroup record, never between the two waves.
 
@@ -2811,40 +2769,36 @@ The classifier runs on the manager's 30-countdown cadence and scans the current 
 | first high status bit set, second high status bit set | null task |
 | otherwise, definition builder flag set | construction |
 | otherwise, definition can-fly flag set | explore/gather |
-| otherwise, definition max-slope field signed greater than zero | regroup B |
+| otherwise, definition `MinWaterDepth` word `>= 1` | regroup B |
 | otherwise, second high status bit set | regroup A |
 | otherwise | stays ungrouped |
 
-**Correction (2026-08-29, RWU-AI-03).** The "definition max-slope field" row
-above names the wrong key. The word the classifier tests is the definition's
-**`MinWaterDepth`** (copied from its movement class at FBI compile), and the
-test is `MinWaterDepth >= 1` — a definition that may stand in water goes to
-regroup B. The comparison and destination are unchanged; only the field label
-was wrong ([R-AI-03 §6]; the same word selects the scatter helper's region set
-in [R-AI-03 §4]).
+The `MinWaterDepth` word is copied from the movement class at FBI compile;
+a definition that may stand in water goes to regroup B (the same word
+selects the scatter helper's region set in [R-AI-03 §4]).
 
 The classifier never assigns wave A, wave B, or rally; it draws no random numbers; its insertion order is the ascending unit-pool traversal, and the ungrouped gate prevents duplicate append on later passes.
 
-**Correction (2026-08-26): the two high status bits are no longer opaque.** They are set once by the common allocator initializer, from the definition, and by nothing else — a whole-image scan of the runtime status word finds exactly one write site for each, so both are stable for the unit's lifetime.
+**The two high status bits.** They are set once by the common allocator initializer, from the definition, and by nothing else — a whole-image scan of the runtime status word finds exactly one write site for each, so both are stable for the unit's lifetime.
 
 - The **first** high bit is the **building-class** bit. It is set when the definition's authored `bmcode` byte is zero. That same authored byte is what decides whether a YardMap is parsed for the definition at all, so bmcode zero is the authored meaning of "building" and bmcode one is "mobile". This is also the factory production handler's building-class gate — see 05 "Factory production lifecycle". It is not a yard-map, footprint, or immobility heuristic.
 - The **second** high bit is the **armed** bit. The definition's boolean flag word carries a derived bit that is set unless all three of the definition's resolved weapon slots are empty, and the initializer copies that derived bit into the runtime status word. So the second high bit means "this unit resolved at least one weapon".
 
-Reading the branch table with those names: an unarmed building goes to resource/activity, an armed building goes to the inert null record, and among mobile units an ordinary armed ground unit — not a builder, not a flyer, max-slope not positive — goes to regroup A, which is the wave-A merge's peer. That is the path by which produced combat units reach an attack wave. [08 "Eco toggle and group-vector population"; 08 "Wave merge"]
+Reading the branch table with those names: an unarmed building goes to resource/activity, an armed building goes to the inert null record, and among mobile units an ordinary armed ground unit — not a builder, not a flyer, `MinWaterDepth` below 1 — goes to regroup A, which is the wave-A merge's peer. That is the path by which produced combat units reach an attack wave. [08 "Eco toggle and group-vector population"; 08 "Wave merge"]
 
 ##### Runtime eligibility bit lifecycle
 
 The classifier's eligibility bit is a runtime instance-status bit, not an authored definition flag. Its lifecycle — allocator initialization, InitialMission clear, save restore, death and selection clear, MakeSelectable and Selectable writes, and the bounded absence of capture, activation, and factory-completion writers — is fully specified in the Eco toggle and group-vector population section above; that text is the home for this finding. No authored UnitDef field should be added to represent the bit, and it must not be aliased with the script-owned in-build-stance byte.
 
-#### R-P0-04 §4 — Bounded writer census — Established [R-P0-04]
+#### Bounded writer census — Established [R-P0-04 §4]
 
-The generic vector insertion helper has exactly two caller classes: the strategic refresh (its three lists, inserting eligible live units in pool order) and the wave merge (temporary peer collection and transfer). The earlier helper-only census was incomplete because the direct group writer is a specialized writer rather than a path through the generic insertion helper. The constructor and the record allocator still initialize all task vectors empty, but the caller set above proves reachable population and removal after initialization. No other direct store, copy, or assignment path with a manager record alias was found in the whole-image search around the manager root, the ten task slots, the task vector fields, the record allocator and free pair, and the generic and direct writer references. The census is therefore positive-static for the direct writer and the classifier's six destinations, and bounded-negative for any additional distinct writer. The two high status bits, previously the only opaque fields of this census, are now named under "Classifier eligibility, destinations, and order" above. [08 "Eco toggle and group-vector population"]
+The generic vector insertion helper has exactly two caller classes: the strategic refresh (its three lists, inserting eligible live units in pool order) and the wave merge (temporary peer collection and transfer). The direct group writer is a specialized writer, not a path through the generic insertion helper, which is why a census of that helper's callers alone does not find it. The constructor and the record allocator still initialize all task vectors empty, but the caller set above proves reachable population and removal after initialization. No other direct store, copy, or assignment path with a manager record alias was found in the whole-image search around the manager root, the ten task slots, the task vector fields, the record allocator and free pair, and the generic and direct writer references. The census is therefore positive-static for the direct writer and the classifier's six destinations, and bounded-negative for any additional distinct writer. The two high status bits are named under "Classifier eligibility, destinations, and order" above. [08 "Eco toggle and group-vector population"]
 
-#### R-P0-04 §5 — Current heuristic versus retail contract — Established [R-P0-04]
+#### Current heuristic versus retail contract — Established [R-P0-04 §5]
 
 The production-time group scan performs actions that are not established retail behavior: it scans the whole world each tick, classifies units through movement, weapon, and economy proxies, filters owner, completion, and death within the scan, assigns ungrouped units to wave A, wave B, explore, rally, regroup A, then regroup B in a fixed fallback order, and imposes local caps of six or ten while doing so. The retail evidence establishes instead: the 30-entry manager cadence, the status-bit plus ungrouped gate, the branch order above, and the six classifier destinations. The heuristic's combat-capability predicates, per-tick timing, fallback order, and local caps are unsupported and must not be retained. The narrow producer runs only on the established cadence, appends in unit-pool order, and leaves wave A, wave B, and rally untouched. Wave A and wave B are then supplied by the wave merge's bootstrap and peer-collection steps from their paired regroup records, which the classifier does populate — see the Wave merge subsection above. Rally has no runtime producer at all: its task returns immediately when its own record is empty and calls no transfer helper, so record 9 stays empty unless a save or control-group path fills it.
 
-#### R-P0-04 §6 — Implementation guidance — Established [R-P0-04]
+#### Implementation guidance — Established [R-P0-04 §6]
 
 Keep the task-vector records and the task dispatch machinery, since their identity and deadlines are established; initialize the vectors empty, then run the narrow classifier on the manager's 30-entry cadence. Implement the wave merge as a transfer operation between a wave record and its paired regroup record, including the empty-own-group bootstrap, with the recovered comparison strictness and thresholds. Do not pair a wave with the other wave, and do not omit the bootstrap: without it the wave records are unreachable and the computer player never issues an attack order. Keep the direct writer's swap-delete source removal and append destination order for lifecycle and control-group integration. Do not use the strategic refresh vectors as substitutes for tactical groups: they have different records, consumers, and eligibility predicates.
 
@@ -2856,22 +2810,20 @@ TODO(question): Does a distinct writer, separate from the recovered direct-write
 
 #### Placement root and search helpers — Established [P0-03]
 
-The placement root is called by the construction task after a candidate has been chosen. It first grows a per-player search radius by 160 cells, capped at the larger of map width and height in cells; on successful placement the radius is reset to zero, otherwise the grown value is retained. It then steps an origin toward the strategic center: the vector from the builder to the center is measured with a floating-point square root after loading the 16.16 fixed-point deltas, converted back with truncation toward zero, scaled to 16.16 by shifting the radius, and compared as fixed-point distance. When the distance is zero or at least the scaled radius, the origin is the strategic center itself; otherwise the origin is the builder position plus the center delta scaled by radius over distance using 64-bit fixed-point multiply and divide. This is a fixed-point interpolation, not a normalized floating vector.
+The placement root is called by the construction task after a candidate has been chosen. It first grows a per-player search radius by 160 world units, capped at the larger of map width and height in world units; on successful placement the radius is reset to zero, otherwise the grown value is retained. It then steps an origin toward the strategic center: the vector from the builder to the center is measured with a floating-point square root after loading the 16.16 fixed-point deltas, converted back with truncation toward zero, scaled to 16.16 by shifting the radius, and compared as fixed-point distance. When the builder is within the scaled radius of the center (distance at or below it), the origin is the strategic center itself; otherwise the origin is the builder position plus the center delta scaled by radius over distance using 64-bit fixed-point multiply and divide ([R-AI-03 §2]). This is a fixed-point interpolation, not a normalized floating vector.
 
-Helper selection for extractor candidates is strict and opposite to the earlier inference. When the candidate's extracts-metal flag compares equal to floating zero, the root calls the statistical scatter helper directly without drawing. Otherwise it draws once with bound 255 and calls the exhaustive patch helper when the mission's uniform surface metal value is strictly less than the draw; otherwise it calls the scatter helper. The test is strictly less-than, so equality chooses the scatter path.
+Helper selection for extractor candidates is strict. When the candidate's extracts-metal flag compares equal to floating zero, the root calls the statistical scatter helper directly without drawing. Otherwise it draws once with bound 255 and calls the exhaustive patch helper when the mission's uniform surface metal value is strictly less than the draw; otherwise it calls the scatter helper. The test is strictly less-than, so equality chooses the scatter path.
 
-The exhaustive patch helper scans a precomputed metal-patch record vector within the search circle whose radius is scaled by four, filters by distance squared, sorts the qualifying patches by distance, and then validates each candidate in sorted order with the footprint blocker and the metal score. The score is the **sum of the per-cell metal bytes across the footprint** (the blocker accumulates each footprint cell's metal byte; the score getter is a trivial read of that accumulator). The exhaustive helper keeps the candidate with the highest accumulated metal sum (strict greater-than; ties keep the earlier sorted entry). It stops early when the distance of the next patch exceeds the best distance found by a slack of 160. The statistical scatter helper attempts up to 30 trials around the origin, quantizing each trial to the map grid and to per-region bounds selected by the candidate's slope sign; each trial draws up to four values (a radius-scaled offset, a direction, and region-cell offsets) and validates with the placement validator and a comparison of the same metal-byte-sum score against a limit computed as surface metal times footprint X times footprint Z times two. The scatter path writes the chosen placement as fixed-point world coordinates derived from the quantized grid, scaling the grid index by a fixed factor that corresponds to half-tile increments.
+The exhaustive patch helper scans a precomputed metal-patch record vector within the search disc whose radius is scaled by four, filters by squared cell distance, orders the qualifying patches nearest first through a binary heap, and then validates each candidate in that order with the footprint blocker and the metal score. The score is the **sum of the per-cell metal bytes across the footprint** (the blocker accumulates each footprint cell's metal byte; the score getter is a trivial read of that accumulator). The exhaustive helper keeps the candidate with the highest accumulated metal sum (strict greater-than; ties keep the earlier entry). It stops early when a candidate's squared cell distance exceeds that of the first accepted candidate by more than 160 ([R-AI-03 §3]). The statistical scatter helper attempts up to 30 trials around the origin, quantizing each trial to the map grid and to per-region bounds selected by the sign of the candidate's `MinWaterDepth`; each trial draws up to four values (a radius-scaled offset, a direction, and region-cell offsets) and validates with the placement validator and a comparison of the same metal-byte-sum score against a limit computed as surface metal times footprint X times footprint Z times two ([R-AI-03 §4]). The scatter path writes the chosen placement as fixed-point world coordinates derived from the quantized grid, scaling the grid index by a fixed factor that corresponds to half-tile increments.
 
-Water legality is now located: neither placement helper consults the waterline value directly. The placement validator's yard path (which the scatter helper uses with the waterline-check flag) rejects footprint cells whose terrain height byte falls outside the band defined by the candidate's slope fields relative to the waterline; its non-yard path delegates to the footprint blocker with no waterline test. The exhaustive helper therefore has no waterline test at all — a "water-only extractor filter" remains a heuristic, as stated above, but the mechanism behind water legality is the yard path's waterline band.
+Water legality is per cell, with the definition's own depth fields: the footprint blocker — used by the exhaustive helper and by the validator's building branch — applies the waterline band to the footprint's yard-bit heights, and the validator's mobile branch tests every cell's low and high height against the same band ([R-AI-03 §3], [R-AI-03 §4]). There is no water-only extractor filter.
 
 Failed exhaustive helper does not fall through to the scatter helper; it returns failure for the entire placement attempt. Success requires the yard and occupancy validator to report placeable; missing yard data is not treated as permissive. The scatter helper's limit check is established as the product above, and the exhaustive helper contributes no random draws while the scatter helper contributes only the draws counted per trial. The selector's single draw is the only random draw on the extractor path when the candidate is non-extractor. [P0-03] [lane 08 placement score and water]
 
-RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, the unit-loss throttle (deadline is current tick plus 30 plus a draw bounded 300), the strategic-state constructor (eight draws at setup, in order: 10, 3, then the two slope-negative region widths, then 20, 3, then the two slope-positive region widths — these seed the region and offset words the scatter helper later reads), the eco toggle with bound five, the explore task (deadline draw bounded 900, plus body draws bounded 2 and the map-dimension fractions), and the rally task (deadline draw bounded 150, drift-seed gate bounded 10, two drift draws bounded 65536, and score-comparison draws bounded by the score values). The wave, regroup, and merge bodies draw nothing. "Any other bound in this package is a bug" is retracted; the throttle, constructor, and task-body draws above complete the inventory. Separately, the session package's skirmish commander-respawn path (commander-death rule value two) draws twice per placement trial (map-width and map-height bounds) with up to 9999 trials. [P0-01] [P0-02] [P0-03] [lane 08 RNG inventory]
+RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, the unit-loss throttle (deadline is current tick plus 30 plus a draw bounded 300), the strategic-state constructor (eight draws at setup, in order: 10, 3, then the two land-set offset draws bounded by the drawn region widths, then 20, 3, then the two water-set offset draws — these seed the region and offset words the scatter helper later reads, [R-AI-03 §4]), the eco toggle with bound five, the explore task (deadline draw bounded 900, plus body draws bounded 2 and the map-dimension fractions), and the rally task (deadline draw bounded 150, drift-seed gate bounded 10, two drift draws bounded 65536, and score-comparison draws bounded by the score values). The wave, regroup, and merge bodies draw nothing; the throttle, constructor, and task-body draws above complete the inventory. Separately, the session package's skirmish commander-respawn path (commander-death rule value two) draws twice per placement trial (map-width and map-height bounds) with up to 9999 trials. [P0-01] [P0-02] [P0-03] [lane 08 RNG inventory]
 
-**Amendment (2026-08-28, RWU-08-1).** With the task bodies specified, the
-per-branch draw counts are exact and are stated at each site in [R-AI-01 §2]
-through [R-AI-01 §7]; the two entries above that were summarised loosely are
-sharpened here. The **positioning** draws are two `RNG(65536)` angle draws in
+**Per-branch draw counts.** The exact counts are stated at each site in
+[R-AI-01 §2] through [R-AI-01 §7]. The **positioning** draws are two `RNG(65536)` angle draws in
 the construction task's repositioning pass — one in each of its two branches,
 taken only when the branch's distance test selects the random-hop case
 ([R-AI-01 §3]); the placement root's scatter draws are separate and unchanged.
@@ -2884,25 +2836,25 @@ draws, one bounded by the incumbent score and one by the challenger, taken only
 when the probe validates ([R-AI-01 §7]). The wave, regroup, merge, classifier
 and weapon-maintenance bodies draw nothing.
 
-#### R-P0-05 §1 — Score inputs and update order — Established [R-P0-05]
+#### Score inputs and update order — Established [R-P0-05 §1]
 
 The AI candidate score must consume the retail player economy aggregates and the strategic class vectors, not a proxy of current stock plus per-pass produced values. The runtime production and net-production accessors read player-record aggregates that are populated from the ledger's per-unit production and request buckets plus leftover stock; current stock and capacity are separate fields on the same record. The exact bucket arithmetic and settlement order are the economy contract. [05 "Player slot"; 05 "Settlement cadence"] This wording is deliberately aligned with document 05's settlement contract: the aggregates are the settled ledger values, and this doc's "per-pass snapshots" phrasing is not used — a candidate selection never sees the current pass's un-settled production.
 
 The score has two layers: dynamic economy pressure read from the player record at candidate-selection time, and per-definition class coefficients stored in the strategic state and recomputed only on the established cadence. Update order matters: in the per-player tick loop the manager task dispatch runs before the strategic refresh, and the economy ledger runs later in that loop. A manager selection therefore observes the previous settled economy values and the previous class vectors for that tick; refresh and ledger writes become inputs to later ticks (see R-P0-05 §6).
 
-#### R-P0-05 §2 — Player economy record and strategic score fields — Established [R-P0-05]
+#### Player economy record and strategic score fields — Established [R-P0-05 §2]
 
 The player economy fields consumed by the score are: current energy stock, current metal stock, energy capacity, metal capacity, and four aggregates — energy production, energy usage, metal production, and metal usage. The production accessors are not per-pass produced values; the ledger folds per-unit production and request buckets and leftover stock into the aggregates.
 
 The strategic state contributes, per definition type: a three-byte class triple holding signed coefficients for the other, metal, and energy mixes; a completed-owner count; a single-byte coefficient used by the class path and the conditional half-addition; and an initialization-only single-byte vector written once at construction and never recomputed. The state also holds the last 30-tick refresh tick and the placement search radius. The three-byte class vector and the single-byte vectors are distinct arrays; the initialization-only vector is not an alias of the refresh-written families. [08 "Strategic state construction and refresh"]
 
-#### R-P0-05 §3 — Hard gates and economy pressure — Established [R-P0-05]
+#### Hard gates and economy pressure — Established [R-P0-05 §3]
 
 For each candidate the hard gates run first:
 
 - reject when current energy is strictly below `50.0`;
 - reject when current metal is strictly below `25.0`;
-- reject when the special mission mode equals `1` and the candidate's definition carries a particular established status bit (the bit's authored semantic name is not closed);
+- reject when the session mode word equals `1` and the candidate's definition carries the authored `downloadable` flag ([R-AI-01 §8]);
 - reject when the candidate's completed count reaches its profile limit — `count < limit` is required, and `-1` means unlimited.
 
 The pressure values then use the player fields:
@@ -2927,7 +2879,7 @@ else if metalProduction < 5.0: metalRaw += 20
 
 All integer conversions truncate toward zero.
 
-#### R-P0-05 §4 — Candidate score and cumulative weighted selection — Established [R-P0-05]
+#### Candidate score and cumulative weighted selection — Established [R-P0-05 §4]
 
 The three-way mix is:
 
@@ -2947,13 +2899,13 @@ score = trunc((other * otherMix
 
 Scores at or below zero are excluded **without drawing**. The remaining positive scores are selected in authored build-option order by cumulative weighted reservoir selection using one simulation-random draw bounded by the running positive total.
 
-**Correction (2026-08-28, RWU-08-1).** This paragraph previously closed with "The builder's own definition name is rejected as a candidate." That is not what the post-selection filter does. The filter compares the **selected** definition's authored `side` string against the **builder's own `side`** string and discards the whole selection when they differ, with no re-draw and no runner-up. The full contract, including the wasted draw a cross-side build list causes, is in [R-AI-01 §8]. [08 "Placement root and search helpers"]
+A post-selection filter then compares the **selected** definition's authored `side` string against the **builder's own `side`** string and discards the whole selection when they differ, with no re-draw and no runner-up; the full contract, including the wasted draw a cross-side build list causes, is in [R-AI-01 §8]. [08 "Placement root and search helpers"]
 
-#### R-P0-05 §5 — Class-vector compilation and refresh — Established [R-P0-05]
+#### Class-vector compilation and refresh — Established [R-P0-05 §5]
 
 The class routine walks definition IDs in strict ascending type order, skips the zero sentinel, and draws no random numbers itself. All float-to-integer conversions truncate toward zero; float32 narrowing occurs at the recovered helper boundaries. Final signed-byte coefficients clamp to `[-100, 100]`.
 
-The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's category flag is clear, plus 20 when the build-option list is non-empty — and is never rewritten by the refresh routine. **Closed (2026-09-02, §9):** the "category flag" is the authored `bmcode` byte — the 40 is added for every **building** (`bmcode == 0`). *Previous text:* "The category flag's authored semantic name is not closed and must not be replaced with a guessed meaning." [08 "Strategic state construction and refresh"]
+The initialization-only single-byte vector is written once at construction — zero, plus 40 when the definition's authored `bmcode` byte is zero (every **building**, §9), plus 20 when the build-option list is non-empty — and is never rewritten by the refresh routine. [08 "Strategic state construction and refresh"]
 
 The single coefficient (first pass):
 
@@ -2976,12 +2928,10 @@ coefficient = clamp(weaponSum + t1, -100, 100)
 ```
 
 The damage and range field identities, widths, and divisions are established
-(the `DAMAGE/default` word and the `range` word of the weapon parser); the
-earlier "reload /100" reading is retracted, and the two weapon-field TDF-key
-residual in R-P0-05 §8 is closed. The "strategic half-capacity state field" is
-also closed and was misnamed: the compared value is the owning **player
-record's live unit count**, reached through the strategic state's back-pointer,
-and the global is the session's per-player unit limit. See [R-AI-01 §13].
+(the `DAMAGE/default` word and the `range` word of the weapon parser). The
+half-capacity compare reads the owning **player record's live unit count**,
+reached through the strategic state's back-pointer, against the session's
+per-player unit limit ([R-AI-01 §13]).
 
 The triple class coefficients — the other-mix accumulator starts at zero and receives these addends:
 
@@ -2996,15 +2946,7 @@ if SonarDistance != 0:        acc += 15
 if RadarDistance != 0:       acc += 5
 ```
 
-Then `count == 0` multiplies the accumulator by four, `count == 1` by two, and `MaxSlope >= 0` by three. When `(unitLimit >> 1) < player.liveUnitCount` — an unsigned compare of the session's per-player unit limit against the owning player's live unit count — half of the single coefficient is added; this is the branch that used to be described as an unlocated "strategic half-capacity state field", and it is reachable in ordinary late-game state ([R-AI-01 §13]). The coefficient is then zeroed when `CanLoad` is set, when `IsFeature` is set, or when the wind-generator/global-wind comparison is true, and is clamped to the signed-byte range.
-
-**Correction (2026-08-29, RWU-AI-03).** The `MaxSlope >= 0` term above, and
-"max-slope" in the input lists of this section and of [R-AI-01 §16], name the
-wrong key: the definition word the class routine reads is **`MinWaterDepth`**
-(the movement-class value the FBI compile copies into the definition,
-[04 R-DOC04-A]); the multiply-by-three applies when `MinWaterDepth >= 0`, i.e.
-to definitions that may stand in water. The comparison and factor are
-unchanged ([R-AI-03 §6]).
+Then `count == 0` multiplies the accumulator by four, `count == 1` by two, and `MinWaterDepth >= 0` by three (the movement-class value the FBI compile copies into the definition, [04 R-DOC04-A] — so definitions that may stand in water, [R-AI-03 §6]). When `(unitLimit >> 1) < player.liveUnitCount` — an unsigned compare of the session's per-player unit limit against the owning player's live unit count — half of the single coefficient is added; the branch is reachable in ordinary late-game state ([R-AI-01 §13]). The coefficient is then zeroed when `CanLoad` is set, when `IsFeature` is set, or when the wind-generator/global-wind comparison is true, and is clamped to the signed-byte range.
 
 The energy coefficient: `clamp(trunc(BuildCostEnergy * -0.0025 - Classify(def) * 5.0), -100, 100)`.
 
@@ -3017,13 +2959,42 @@ metal = clamp(trunc(metalBase
                     - (25 if MakesMetal != 0 else 0)), -100, 100)
 ```
 
-The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name; the two weapon-field key identities are closed as the `DAMAGE/default` word and the `range` word.
+The definition inputs consumed by the routine — extracts-metal, makes-metal, metal and energy build costs, can-attack, builder, can-fly, can-load, is-feature, `MinWaterDepth`, radar and sonar distance, and wind-generator — are recovered runtime field mappings, not guesses based on similarly named proxies. Confidence is high for the comparisons, constants, cadence, and field mappings; medium for the classification helper's semantic name.
 
-#### R-P0-05 §9 — The three class-routine inputs the marker census left open — Established [R-P0-05]
+#### Cadence and same-tick ordering — Established [R-P0-05 §6]
 
-Traced RWU-19-22 (static: the strategic-state constructor's initialization
-pass, the class routine's weapon loop and zeroing tail, the weapon catalog
-loader). All three are Established.
+The established per-player sequence is:
+
+1. the player slot dispatches the manager, including any due candidate-selection task, before the strategic refresh;
+2. the 30-tick refresh runs when due: it clears and rebuilds the completed counts and the weighted center, stores the refresh tick, draws a single random value with bound 30, and recomputes the class vectors only when that draw is zero;
+3. the rest of the per-player unit and session work runs; and
+4. when its ledger gate is due, the economy ledger updates production, consumption, stock, and capacities from the unit buckets.
+
+A class refresh therefore sees the live-unit pool and the previous strategic counts, then writes vectors for subsequent selections. A manager task in the same iteration ran before that refresh, and a resource ledger write later in the iteration is not an input to that same manager invocation; the next tick's manager uses those newly settled aggregates. The class routine consumes zero random numbers; exactly one bound-30 draw occurs per due refresh, and the initial class computation at strategic-state creation draws none. The candidate selection's cumulative draw and the extractor placement draw are separate later consumers of the simulation stream. [08 "Strategic state construction and refresh"; 05 "Settlement cadence"]
+
+#### Extractor, profile, and request gates — Established [R-P0-05 §7]
+
+Extractor candidates take a separate placement branch: the root draws once with bound 255 and compares the draw with the selected schema's `SurfaceMetal` value; the strict `surfaceMetal < draw` result selects the exhaustive helper, while non-extractors go directly to the scatter helper. The geometry of both helpers is [R-AI-03 §3] and [R-AI-03 §4]; there is no water-only extractor filter. [08 "Placement root and search helpers"]
+
+Profile loading resolves the mission `aiprofile` through the resource system and falls back to `ai\default.txt`. `plan` enables subsequent directives only for `any` or the current difficulty (`0=easy`, `1=medium`, `2=hard`); `weight` multiplies and clamps the per-type profile weight (default 100); `limit` updates the per-type limit (default -1). The unit-definition `ai_limit` text is parsed but has no bounded runtime reader and must not replace the profile `limit`. [08 "Established AI-facing data and rooted planner"]
+
+Candidate request identity is determined by the ordinary service path: the construction task selects from the assigned builder's build list, resolves placement, and submits a build command with type identity and queue modifier one through the ordinary order service; the resource/queue task selects a build option for an idle builder and queues it through the same service. Neither path writes a unit or economy record directly. [08 "Dispatch gates and order sinks"]
+
+#### Implementation guidance and blockers — Established [R-P0-05 §8]
+
+Replace the economy adapter's stock-plus-produced proxy with the player runtime aggregate mapping. Preserve the strict gate comparisons, the pressure mix, the profile weight and limit state, the authored candidate order, the cumulative random draw, and the manager-before-refresh-before-ledger ordering. Replace strategic field proxies with the recovered definition fields, and leave unresolved semantic fields behind explicit TODOs.
+
+Locked by the score fixtures in internal/ai (o6_score_test.go, strategic_test.go) and the economy aggregate fixtures in internal/economy.
+
+The half-capacity field is the owning player record's live unit count,
+compared against the session's per-player unit limit ([R-AI-01 §13]). The
+placement geometry and water legality of the two helpers are [R-AI-03].
+
+#### The three class-routine inputs the marker census left open — Established [R-P0-05 §9]
+
+All three are Established (static trace of the strategic-state
+constructor's initialization pass, the class routine's weapon loop and
+zeroing tail, and the weapon catalog loader).
 
 **The category flag is `bmcode`.** The initialization pass walks definition
 IDs in ascending type order and writes the single-byte vector as: `0`, `+40`
@@ -3033,8 +3004,7 @@ when the definition's authored `bmcode` byte is **zero** (the building class
 initializes to 40, a factory or construction building to 60, a mobile unit
 to 0 or 20 (a mobile builder). The same pass seeds the per-type completed
 count to 0 and the other per-type vectors to their constants; none of that
-is rewritten by the refresh. The earlier caution against "substituting
-`bmcode`" is withdrawn: it is that byte.
+is rewritten by the refresh.
 
 **The weapon slot's "active" test is the record-0 sentinel test.** The class
 routine's weapon loop reads the definition's three compiled weapon links —
@@ -3057,22 +3027,21 @@ maximum wind word is **less than** the wind divisor divided by two — a signed
 integer divide of the compiled-in **5000** [05 R-PROD-01 §3], so the
 threshold is `2500`. The maximum wind word is the session's authored
 `maxwindspeed` (canonical fallback 2000 when the mission does not author it,
-[05 R-PROD-01 §3]); the comparison is strict and integer. Doc 05's correction
-note under [05 R-PROD-01 §3] already described this branch from the economy
-side; this is its home. On a map whose maximum wind is below 2500 the
+[05 R-PROD-01 §3]); the comparison is strict and integer ([05 R-PROD-01 §3]
+describes the same branch from the economy side). On a map whose maximum wind is below 2500 the
 computer player's class coefficient for every wind generator is zero, which
 suppresses the definition in the construction selection of §3–§4.
 
-#### R-P0-05 §10 — The initialization-only byte vector has exactly one reader: it is the weight of the strategic centre — Established [R-P0-05]
+#### The initialization-only byte vector has exactly one reader: it is the weight of the strategic centre — Established [R-P0-05 §10]
 
-Traced RWU-19-25 (static: every access to the strategic state's vector
-pointer field was enumerated across the whole recovered function set and each
-hit classified by the object it addresses — the strategic state, the player
-record, and two unrelated objects that happen to keep a field at the same
-displacement; the class routine, the candidate score and cumulative selection
-of §3–§4, the build-request pump, the placement search, every task body and
-the save writer were then confirmed absent from the hit list). §5 and §9
-record the vector's writer; this section closes its reader.
+Established by enumerating every access to the strategic state's vector
+pointer field across the whole recovered function set and classifying each
+hit by the object it addresses — the strategic state, the player record, and
+two unrelated objects that happen to keep a field at the same displacement;
+the class routine, the candidate score and cumulative selection of §3–§4,
+the build-request pump, the placement search, every task body and the save
+writer are absent from the hit list. §5 and §9 record the vector's writer;
+this section gives its reader.
 
 **Established — the reader.** The vector is read in exactly one place: the
 30-tick strategic refresh, where it supplies the per-unit **weight** of the
@@ -3126,47 +3095,12 @@ For the implementation: `Strategic.InitVectors` is not inert; it is the
 weight `refreshCountsAndCenter` must apply in place of its current
 unweighted mean, and the +40/+20 of §5 are live in retail.
 
-#### R-P0-05 §6 — Cadence and same-tick ordering — Established [R-P0-05]
+### Task-class bodies, difficulty, and reaction to damage — Established [R-AI-01]
 
-The established per-player sequence is:
-
-1. the player slot dispatches the manager, including any due candidate-selection task, before the strategic refresh;
-2. the 30-tick refresh runs when due: it clears and rebuilds the completed counts and the weighted center, stores the refresh tick, draws a single random value with bound 30, and recomputes the class vectors only when that draw is zero;
-3. the rest of the per-player unit and session work runs; and
-4. when its ledger gate is due, the economy ledger updates production, consumption, stock, and capacities from the unit buckets.
-
-A class refresh therefore sees the live-unit pool and the previous strategic counts, then writes vectors for subsequent selections. A manager task in the same iteration ran before that refresh, and a resource ledger write later in the iteration is not an input to that same manager invocation; the next tick's manager uses those newly settled aggregates. The class routine consumes zero random numbers; exactly one bound-30 draw occurs per due refresh, and the initial class computation at strategic-state creation draws none. The candidate selection's cumulative draw and the extractor placement draw are separate later consumers of the simulation stream. [08 "Strategic state construction and refresh"; 05 "Settlement cadence"]
-
-#### R-P0-05 §7 — Extractor, profile, and request gates — Established [R-P0-05]
-
-Extractor candidates take a separate placement branch: the root draws once with bound 255 and compares the draw with the mission's uniform surface-metal value; the strict `surfaceMetal < draw` result selects one placement helper, while non-extractors go directly to the other. The exact geometry of those helpers and any additional water legality are not established here; a water-only extractor filter is a heuristic, not a retail score gate. [08 "Placement root and search helpers"]
-
-Profile loading resolves the mission `aiprofile` through the resource system and falls back to `ai\default.txt`. `plan` enables subsequent directives only for `any` or the current difficulty (`0=easy`, `1=medium`, `2=hard`); `weight` multiplies and clamps the per-type profile weight (default 100); `limit` updates the per-type limit (default -1). The unit-definition `ai_limit` text is parsed but has no bounded runtime reader and must not replace the profile `limit`. [08 "Established AI-facing data and rooted planner"]
-
-Candidate request identity is determined by the ordinary service path: the construction task selects from the assigned builder's build list, resolves placement, and submits a build command with type identity and queue modifier one through the ordinary order service; the resource/queue task selects a build option for an idle builder and queues it through the same service. Neither path writes a unit or economy record directly. [08 "Dispatch gates and order sinks"]
-
-#### R-P0-05 §8 — Implementation guidance and blockers — Established [R-P0-05]
-
-Replace the economy adapter's stock-plus-produced proxy with the player runtime aggregate mapping. Preserve the strict gate comparisons, the pressure mix, the profile weight and limit state, the authored candidate order, the cumulative random draw, and the manager-before-refresh-before-ledger ordering. Replace strategic field proxies with the recovered definition fields, and leave unresolved semantic fields behind explicit TODOs.
-
-Locked by the score fixtures in internal/ai (o6_score_test.go, strategic_test.go) and the economy aggregate fixtures in internal/economy.
-
-The half-capacity residual is **closed**: the field is the owning player
-record's live unit count, not a strategic-state field, and the comparison is
-against the session's per-player unit limit ([R-AI-01 §13]). The remaining
-residual is the placement geometry:
-
-```text
-TODO(question): What are the exact geometry and water-legality contracts of the two placement helpers beyond the established extractor selector draw? (Narrowed: the metal score is the footprint per-cell metal-byte sum and the waterline band is enforced only by the yard path of the placement validator — see the Placement root section.)
-```
-
-### R-AI-01 — Task-class bodies, difficulty, and reaction to damage — Established [R-AI-01]
-
-RWU-08-1 (2026-08-28) opened the first virtual slot of every task class. The
-sections below give the per-invocation body of each class at implementable
-precision, plus the manager entry constants they depend on, the difficulty
-vocabulary, the damage reaction, and the closure of the half-capacity
-residual. Where a claim replaces earlier text the replaced sentence is quoted.
+The sections below give the per-invocation body of each task class at
+implementable precision, plus the manager entry constants they depend on,
+the difficulty vocabulary, the damage reaction, and the half-capacity
+comparison.
 
 Conventions used throughout: *tick* is the global simulation tick; positions
 are 16.16 fixed-point world coordinates unless the text says "world units";
@@ -3182,7 +3116,7 @@ The intents the computer player uses are `2` (move family — `Move_Ground`,
 (patrol family — `Patrol`, `QPatrol`, `VTOL_Patrol`, `RepairPatrol`,
 `VTOL_RepairPatrol`) and `14` (`MobileBuild` / `VTOL_MobileBuild`).
 
-#### R-AI-01 §1 — Manager entry, slot indexing, and the two verified constants — Established [R-AI-01]
+#### Manager entry, slot indexing, and the two verified constants — Established [R-AI-01 §1]
 
 The per-player manager tick runs before the strategic refresh [R-P0-05 §6] and
 does exactly this, in order:
@@ -3224,7 +3158,7 @@ in read-only data with two entries per class; the second entry of every class
 is never invoked by either dispatcher and has no direct caller
 [08 "Strategy manager and its task graph"].
 
-#### R-AI-01 §2 — Resource and builder-queue task body — Established [R-AI-01]
+#### Resource and builder-queue task body — Established [R-AI-01 §2]
 
 Reschedule first: `deadline = tick + 30`. Then walk the task's group vector in
 vector order. A member is examined only when its runtime status word has the
@@ -3251,16 +3185,9 @@ All three comparisons are on 32-bit floats. The doubling is `metal + metal`,
 evaluated before the compare. `setActive` is the ordinary activation toggle:
 it rewrites the unit's active bit and, on a change, raises the COB `Activate`
 or `Deactivate` callback and the matching order-descriptor event [04 §5].
-There are no other writes.
-
-**Correction.** This section previously said "when metal is at most half of
-energy it disables". That is the inverted reading: the executable disables when
-`energyStock <= 2 x metalStock`, that is when metal is at least half of energy,
-which is the behavior that makes sense for an energy-to-metal converter. The
-"eighty percent gate" the earlier text also mentioned does not exist in this
-body; there is no `0.8` term anywhere in it. The enable draw and its bound of
-five, the strict `> 0` net-energy test, and the enable-on-non-zero rule are
-unchanged and remain established.
+There are no other writes. The executable disables when `energyStock <= 2 x
+metalStock`, that is when metal is at least half of energy; there is no
+`0.8` term anywhere in this body.
 
 **Factory-queue branch (makes-metal byte zero).** The unit is skipped unless
 its definition's build-option count is non-zero and its primary order queue is
@@ -3271,7 +3198,7 @@ build-queue producer the interface uses for a factory product click
 Because the queue-empty test precedes the selection, exactly one product is
 queued at a time and the next is queued only after the queue drains.
 
-#### R-AI-01 §3 — Construction and positioning task body — Established [R-AI-01]
+#### Construction and positioning task body — Established [R-AI-01 §3]
 
 Reschedule first: `deadline = tick + 90`. Then read the **strategic centre**
 (the weighted own-unit centroid rebuilt every 30 ticks, [R-P0-05 §5]) once into
@@ -3324,8 +3251,8 @@ an omitted term: the sum is `dx*dx + 0 + dz*dz` in that order, square-rooted in
 80-bit and truncated once. Non-`cancapture` builders are not distance-capped.
 
 The order-queue test uses the current order's static gate mask, not its command
-identity [04 "Order descriptor table"]; the semantic name of mask bit 3 is not
-closed by this unit (§17).
+identity [04 "Order descriptor table"]; the semantic name of mask bit 3 is
+open (§17).
 
 **Pass 2 — reposition.**
 
@@ -3378,7 +3305,7 @@ The two passes never draw when `cancapture` is set and the distance test keeps
 the mirrored target; the only draws are the two `RNG(65536)` angle draws above,
 plus whatever §8 and the placement root consume.
 
-#### R-AI-01 §4 — Attack-wave task body: engagement hysteresis and target selection — Established [R-AI-01]
+#### Attack-wave task body: engagement hysteresis and target selection — Established [R-AI-01 §4]
 
 Reschedule first: `deadline = tick + 300`. Then run the wave merge
 ([08 "Wave merge"]) with the instance's peer slot index and distance threshold,
@@ -3398,14 +3325,14 @@ if not engage:
     for record in (slot 5 null, slot 1 resource, slot 4 construction):
         if centroid(record, out c): 
             task.engaged = false
-            broadcast(intent 2, queueModifier 0, position c, spacing 0xa0)
+            broadcast(intent 2, queueModifier 0, position c, argument 0xa0)
             return
     # no base centroid anywhere: fall through and attack
 task.engaged = true
 c = centroid(own group)
 target = nearestHostileUnit(player, c)
 if target != none:
-    broadcast(intent 3, queueModifier 0, unit target, spacing 0)
+    broadcast(intent 3, queueModifier 0, unit target, argument 0)
 ```
 
 `task.engaged` is a per-instance latch, initialized clear. Reading the two
@@ -3429,9 +3356,10 @@ slot 5 (the null task's record, which the classifier fills with **armed
 buildings**), slot 1 (the resource task's record, **unarmed buildings**) and
 slot 4 (the construction record, **builders**), tried in that order
 [R-P0-04 §3]. So the wave rallies on the defended part of the base first, on
-the economy second, and on the builders last. The `0xa0` argument is the
-broadcast helper's spacing parameter and is passed only on this gather; the
-regroup task passes `0` for the same parameter (§5).
+the economy second, and on the builders last. The `0xa0` (160) argument is
+forwarded verbatim into every member's order node as its argument word,
+where the ground move handler reads it as its arrival radius (§19); it is
+passed only on this gather, and the regroup task passes `0` (§5).
 
 The **attack destination** is the single nearest hostile unit to the wave's own
 centroid, chosen by the helper of §9. Nothing about the target's type, value,
@@ -3439,20 +3367,20 @@ threat, or the wave's composition enters the choice.
 
 The wave body draws no random numbers, and neither does the merge.
 
-#### R-AI-01 §5 — Regroup task body — Established [R-AI-01]
+#### Regroup task body — Established [R-AI-01 §5]
 
 Reschedule first: `deadline = tick + 150`. The peer is the task slot named by
 the instance's peer index — wave A for regroup A, wave B for regroup B. The
 body returns unless **both** its own group and the peer's group are non-empty,
 then computes the peer's centroid and broadcasts intent `2` (move) to it with
-queue modifier `0` and the spacing parameter `0`.
+queue modifier `0` and the argument word `0`.
 
 That is the whole body: no target selection, no draws, no state writes other
 than the deadline. The regroup record is the pool the wave merge draws its
 members from ([08 "Wave merge"]), so a regroup group that is never emptied by
 the merge simply follows its wave around at a 150-tick cadence.
 
-#### R-AI-01 §6 — Explore and gather task body — Established [R-AI-01]
+#### Explore and gather task body — Established [R-AI-01 §6]
 
 ```text
 r = RNG(900)
@@ -3469,11 +3397,11 @@ if n < 5:
             tz = centre.z + (RNG(gh) - gh/2) * 65536
             broadcast(intent = 2 if i == 0 else 9,
                       queueModifier = 0 if i == 0 else 1,
-                      position (tx, centre.y, tz), spacing 0)
+                      position (tx, centre.y, tz), argument 0)
         return
     c = centroid(own group)
     target = nearestHostileUnit(player, c)
-    broadcast(intent 9, queueModifier 1, position target.position, spacing 0)
+    broadcast(intent 9, queueModifier 1, position target.position, argument 0)
     return
 # n >= 5: strike for a random map edge
 y = 0
@@ -3483,7 +3411,7 @@ if RNG(2) != 0:
 else:
     x = 0 if RNG(2) != 0 else (mapWorldWidth - 1) << 16
     z = RNG(mapWorldHeight) << 16
-broadcast(intent 9, queueModifier 0, position (x, y, z), spacing 0)
+broadcast(intent 9, queueModifier 0, position (x, y, z), argument 0)
 ```
 
 Notes that a reimplementation must reproduce:
@@ -3517,7 +3445,7 @@ Notes that a reimplementation must reproduce:
 * Draw order per invocation is fixed: the 900-bound deadline draw always
   happens first, then the branch draws in the order written above.
 
-#### R-AI-01 §7 — Random-walk rally task body — Established [R-AI-01]
+#### Random-walk rally task body — Established [R-AI-01 §7]
 
 The rally task keeps three vectors on its own record: a **best** point, a
 **probe** point, and a **drift** vector, plus a **best score**.
@@ -3538,7 +3466,7 @@ if probeIsOnKnownGround(probe):
         best = probe
 for unit in group vector order:
     if not unit.def.canattack: continue
-    if unit.hasNoLocomotion and not orderWouldBeAccepted(unit, unit.position, best):
+    if unit.hasNoLocomotion and not shotTimeGate(unit, slot 1, unit.position, best):
         continue
     resolve intent 3 (attack) for unit at `best`
     if the resolved command is not the reject sentinel:
@@ -3572,23 +3500,54 @@ for unit in group vector order:
   validates, in that order.
 * `hasNoLocomotion` reads the unit record's **mover pointer** — the object
   [04 R-AIR-01 §1] describes, which the unit creator allocates only for a
-  `bmcode == 1` (mobile) definition — so a null value means a building. Only
-  for such a unit is a further predicate consulted first, and only such a unit
-  can be skipped by it; a mobile member is always ordered. **Closed
-  (2026-09-02, §19):** the field identity is Established (creator trace), and
-  the predicate is not an order-admission test at all but the **weapon
-  shot-time physical gate** of [06 §3.3] for the unit's first weapon slot,
-  evaluated from the unit's own position to `best`. *Previous text:* "the
-  same field the shared build-queue producer uses … The reading of that field
-  as 'locomotion object' is **Supported inference** …; its width and null test
-  are established" and the pseudo-code's `orderWouldBeAccepted(unit,
-  unit.position, best)`.
+  `bmcode == 1` (mobile) definition — so a null value means a building
+  (Established, creator trace). Only for such a unit is a further predicate
+  consulted first, and only such a unit can be skipped by it; a mobile
+  member is always ordered. The predicate is not an order-admission test but
+  the **weapon shot-time physical gate** of [06 §3.3] for the unit's first
+  weapon slot, evaluated from the unit's own position to `best` (§19).
 * Orders are resolved and submitted **per unit**, not through the group
   broadcast helper of §9, so the rally task is the only task whose order
   submission follows group-vector order rather than unit-pool order.
 * The body ends by releasing a null temporary, which is a no-op.
 
-#### R-AI-01 §8 — Candidate selection: the side filter — Established [R-AI-01]
+#### The rally task's constructor state — Established [R-AI-02 §1]
+
+[R-AI-01 §7] names the rally task's three vectors (**best**, **probe**,
+**drift**) and its **best score** but not their initial values. The
+constructor sets them, in this order, from the map's world-unit extents
+(`terrainWidthCells × 16` and `terrainHeightCells × 16` [03 §2.2]):
+
+```text
+halfX = trunc(mapWidthWorld  / 2)        # signed integer divide, toward zero
+halfZ = trunc(mapHeightWorld / 2)
+best  = (halfX << 16, 0, halfZ << 16)    # computed as trunc(float(half) * 65536.0)
+probe = best
+drift = best
+bestScore = 0
+```
+
+The conversion goes through the x87 stack (integer loaded, multiplied by the
+double `65536.0`, truncated once); because `half` is an integer the result is
+exactly `half << 16`, and the form is recorded only so the truncation site is
+not mistaken for a rounding one. The base task fields — manager back-pointer,
+group record, deadline `0`, owning slot — are written first by the shared task
+constructor ([R-P0-04 §2]); the rally-specific fields follow. Every other task
+class starts with only the base fields plus the per-class tunables listed in
+[08 "Strategy manager and its task graph"] (wave A: threshold 20000, min 3,
+max 6, peer slot 3; wave B: 50000, 3, 6, peer 7; regroup A peer 2; regroup B
+peer 6).
+
+**Consequence (Established from §7's body).** The body adds `drift` to
+`probe` on *every* invocation and reseeds `drift` only on a `RNG(10) == 0`
+draw. With the constructor's values the first invocation already moves the
+probe to `(mapWidthWorld, 0, mapHeightWorld)` and each later one adds another
+half map, so until the first reseed the probe lies outside the map, the
+on-known-ground test fails at its bounds check, and no score is adopted. The
+rally point therefore stays at the map centre for a geometrically distributed
+number of runs (mean ten). This is retail's behavior, not a defect to fix.
+
+#### Candidate selection: the side filter — Established [R-AI-01 §8]
 
 The cumulative weighted reservoir is unchanged: walk the builder's build
 options in authored order, score each with the candidate score of
@@ -3597,9 +3556,7 @@ each positive score to a running total, draw once bounded by the running total,
 and take the candidate when the draw is strictly less than that candidate's own
 score.
 
-**Correction.** [R-P0-05 §4] closed with "The builder's own definition name is
-rejected as a candidate." That is wrong. After the reservoir finishes, the
-selected definition's authored **`side`** string [fmt fbi] is compared, byte for
+After the reservoir finishes, the selected definition's authored **`side`** string [fmt fbi] is compared, byte for
 byte and case-sensitively, against the **builder's own `side`** string. When
 they differ the whole selection is discarded and the caller is told "no
 candidate"; when they match the selection stands. There is no re-draw, no
@@ -3611,10 +3568,9 @@ whole selections, and the wasted draw is still taken. The comparison is on the
 The score's third hard gate is also closed: it rejects the candidate when the
 session mode word equals `1` **and** the candidate definition carries the
 authored `downloadable` flag [fmt fbi]. That is the same flag that gates which
-definitions the per-definition profile text of §12 is read from. The earlier
-"the bit's authored semantic name is not closed" is retracted.
+definitions the per-definition profile text of §12 is read from.
 
-#### R-AI-01 §9 — Shared helpers: centroid, nearest hostile, group broadcast — Established [R-AI-01]
+#### Shared helpers: centroid, nearest hostile, group broadcast — Established [R-AI-01 §9]
 
 **Group centroid.** Returns false when the group vector is empty. Otherwise it
 sums each member's three signed 16-bit **world-unit** position words (not the
@@ -3629,22 +3585,17 @@ alliance index is not the unassigned value `10`, and the querying player's
 alliance table entry for that index is zero (not allied). Within a qualifying
 slot it walks that player's unit slice in ascending pool order and considers a
 unit when its **live** bit is set, its low two status bits are not the value
-`2`, its **dying** bit is clear, and its runtime byte bit `0x4` is clear. The
-metric is `((dx*dx) >> 32) + ((dz*dz) >> 32)` with each product taken as a
+`2`, status-word **bit 15** — the mission `Immunity` bit, the primary-list
+exclusion bit of [06 §3.1] — is clear, and its runtime byte bit `0x4` is
+clear; the death latch (bit 14) is not tested, so a hostile that is dying but
+still carries the live bit is a candidate, and an immune one is not until a
+`MakeSelectable` order clears the bit. The metric is `((dx*dx) >> 32) + ((dz*dz) >> 32)` with each product taken as a
 signed 64-bit multiply of the 16.16 deltas and shifted back — that is the
 squared distance in world units, truncated. The best is kept on a **strict**
 less-than, so the first minimum wins on ties and the iteration order (player
 slot ascending, then pool ascending) is the tie-break. The initial best is the
 maximum signed 32-bit value, and the helper returns "none" when nothing
 qualifies. The vertical coordinate is passed in but never read.
-
-**Correction (2026-09-02, RWU-19-38).** "its **dying** bit is clear" above
-mislabelled the third test. The helper tests status-word **bit 15** — the
-mission `Immunity` bit that the target-registry rebuild also reads
-([06 §3.1] "the primary-list exclusion bit") — and does **not** test the
-death latch (bit 14). A hostile that is dying but still carries the live bit
-is a candidate; an immune one is not, until a `MakeSelectable` order clears
-the bit. The first, second and fourth tests stand as written.
 
 **Group order broadcast.** Given a player, a group number, an intent, a queue
 modifier, an optional target unit, an optional target position and two
@@ -3654,14 +3605,13 @@ group number equals the given one, resolves the intent and submits the order.
 Two consequences are load-bearing: the broadcast order is unit-pool order, not
 group-vector order, so it is stable across group-vector churn; and a unit whose
 stored group number was changed since the vector was last rebuilt is included
-or excluded by the **stored number**, not by vector membership. **Closed
-(2026-09-02, §19):** the helper never reads the two trailing words; it
-forwards them verbatim into every member's order submission, where they
-become the order node's **argument word** and its companion. *Previous text*
-called the first of them "a spacing parameter"; it is not a spacing and no
-per-member transform exists.
+or excluded by the **stored number**, not by vector membership. The helper
+never reads the two trailing words; it forwards them verbatim into every
+member's order submission, where they become the order node's **argument
+word** and its companion (§19) — there is no spacing and no per-member
+transform.
 
-#### R-AI-01 §10 — The classifier also writes standing orders — Established [R-AI-01]
+#### The classifier also writes standing orders — Established [R-AI-01 §10]
 
 The classification sweep of [R-P0-04 §3] does more than assign groups. For
 **every** unit that passes its eligibility bit — including units that are
@@ -3686,7 +3636,7 @@ This is the input the weapon-maintenance sweep of §15 gates on: it acts only on
 units whose standing fire order reads exactly `2`, which is precisely what this
 writer guarantees for the computer player's own units.
 
-#### R-AI-01 §11 — Reaction to being attacked — Established [R-AI-01]
+#### Reaction to being attacked — Established [R-AI-01 §11]
 
 There is one reaction site, reached from the damage-application path for every
 damaged unit, and it does two independent things.
@@ -3718,11 +3668,8 @@ not allied, then:
   (`wpri_badTargetCategory`; the secondary and special slots' bitsets are not
   consulted by this branch) [06 §3.2], and the attacker passes the slot
   admission predicate evaluated for **slot 0** [06 §3.1], the victim is given
-  an attack order against the attacker through the ordinary order service.
-  *Precision (2026-09-02, RWU-19-39):* this bullet previously left the bit
-  unnumbered, wrote "bad-target category bitsets" as if the definition had
-  one, and omitted the slot-0 admission call that precedes the issuer; all
-  three are now traced (Established). The per-slot offer below reads each
+  an attack order against the attacker through the ordinary order service
+  (Established). The per-slot offer below reads each
   slot's **own** bad-target bitset, but only against the slot's *existing*
   target (a present target in the slot's bad set is replaced), never against
   the attacker;
@@ -3736,7 +3683,7 @@ Retaliation is therefore **not** computer-player-specific; it is the engine's
 return-fire behavior and applies to human players' units too. What the computer
 player adds is only the throttle above.
 
-#### R-AI-01 §12 — Difficulty: vocabulary, profile grammar, and the economy effect — Established [R-AI-01]
+#### Difficulty: vocabulary, profile grammar, and the economy effect — Established [R-AI-01 §12]
 
 **The difficulty word** takes the values `0` easy, `1` medium, `2` hard. It is
 written from the registry/lobby setting and from the campaign difficulty
@@ -3798,18 +3745,15 @@ so a fragment that omits `plan` still applies. So a per-unit `ai_weight` string 
 carry `plan`/`weight`/`limit` directives, and it is honoured only for types the
 global profile did not lock.
 
-**Correction (2026-09-02).** The two passes are **not** kind-specific: each
-runs the whole fragment — all three directive kinds — through the same
-dispatcher as the profile file, the gate is opened once per pass rather than
-per fragment, and a fragment's `weight` writes every manager, not the pass's
-player alone. [R-AI-01 §18] has the exact pass and the consequences.
+The two passes are **not** kind-specific: each runs the whole fragment —
+all three directive kinds — through the same dispatcher as the profile file,
+the gate is opened once per pass rather than per fragment, and a fragment's
+`weight` writes every manager, not the pass's player alone ([R-AI-01 §18]).
 
-**`ai_limit` has no reader — and now the mechanism is named.** Both passes read
-the `ai_weight` field. The `ai_limit` field is parsed into its own 64-byte slot
-by the definition loader and is never read by anything. The earlier statement
-that "no semantic reader is found after the parse" stands, and the reason is
-that the limit pass re-reads `ai_weight` instead of `ai_limit` — a retail defect,
-not a missing trace.
+**`ai_limit` has no reader.** Both passes read the `ai_weight` field. The
+`ai_limit` field is parsed into its own 64-byte slot by the definition loader
+and is never read by anything: the limit pass re-reads `ai_weight` instead of
+`ai_limit` — a retail defect, not a missing trace.
 
 **The difficulty economy effect.** Every player-to-player resource transfer —
 metal and energy have separate but identical routines — first returns
@@ -3823,35 +3767,19 @@ transfer statistics — also updated only under the accounting flag — are **no
 scaled, so resource given to an easy computer player is half-destroyed in
 transit.
 
-**Correction — the closing sentence of this section is retracted.** It read:
-"This is the whole of the documented 'difficulty scales controller-2 economy':
-there is no production, build-rate, cost, or damage multiplier anywhere in the
-computer player's path." The second clause is **false**. The same difficulty
-ladder — easy `x 0.5`, medium `x 0.7`, hard unscaled, selected from the same
-difficulty word — is applied inside the per-player economy settlement to
-**every positive production contribution of every unit owned by a
-control-byte-2 player**: at seven contribution sites in the settlement
-accumulator, and once more on the per-player credit that follows it — eight in
-all `[R-ECO-01 §3]`. Doc 05 owns that arithmetic, including the exact
-`production := float32(production - (contribution * K))` form, which must be
-reproduced literally because the factored form rounds differently.
+The same difficulty ladder — easy `x 0.5`, medium `x 0.7`, hard unscaled,
+selected from the same difficulty word — is also applied inside the
+per-player economy settlement to **every positive production contribution of
+every unit owned by a control-byte-2 player**: at seven contribution sites in
+the settlement accumulator, and once more on the per-player credit that
+follows it — eight in all `[R-ECO-01 §3]`. Doc 05 owns that arithmetic,
+including the exact `production := float32(production - (contribution * K))`
+form, which must be reproduced literally because the factored form rounds
+differently. Whether a build-rate, cost or damage multiplier exists elsewhere
+is a bounded negative over the transfer and settlement paths only; the build,
+cost and damage paths were not censused for it.
 
-The transfer finding above stands unchanged and is still Established. What was
-wrong was the trailing negative — the claim that the transfer path is the
-*only* place difficulty touches the economy. This section was not in a position
-to make that claim: it had not traced the settlement accumulator, so the
-"whole of" was a bounded absence dressed as a universal one. The remainder of
-the retracted sentence (no build-rate, cost or damage multiplier) is likewise a
-bounded negative and is **not** re-asserted here: it holds only as far as the
-census that produced it reached, and this pass did not re-run that census over
-the build, cost and damage paths.
-
-#### R-AI-01 §13 — The half-capacity comparison, closed — Established [R-AI-01]
-
-[R-P0-05 §5] and [R-P0-05 §8] carried an open item: "A global half-capacity
-comparison may contribute half of the single coefficient; its strategic-state
-writer is not located and stock state leaves that branch false." Both halves of
-that sentence were wrong about **where** the compared field lives.
+#### The half-capacity comparison, closed — Established [R-AI-01 §13]
 
 The compared value is **not** a field of the strategic state. The class routine
 loads the strategic state's first word — the back-pointer to the owning **player
@@ -3873,13 +3801,11 @@ if (unitLimit >> 1) < player.liveUnitCount:        # unsigned
 ```
 
 It fires for any player that owns **more than half its unit cap**, which is
-ordinary late-game state, not an unreachable branch. The earlier "stock state
-leaves that branch false" is retracted: it was false only because the wrong
-base pointer was assumed. Implementations must read the owning player's live
+ordinary late-game state, not an unreachable branch. Implementations must read the owning player's live
 unit count, not a strategic-state field, and must not initialize an opaque
 field to zero to model it.
 
-#### R-AI-01 §14 — The `AI:%s` diagnostic — Established [R-AI-01]
+#### The `AI:%s` diagnostic — Established [R-AI-01 §14]
 
 The player-slot initializer builds the slot's display name. When its mode
 argument is `1` it copies the locally configured player name; otherwise it
@@ -3890,7 +3816,7 @@ the same string. The format string is reproduced verbatim, with no space after
 the colon. It is a name, not a log line: it is written into the slot record and
 appears wherever slot names are shown.
 
-#### R-AI-01 §15 — The weapon-maintenance sweep — Established [R-AI-01]
+#### The weapon-maintenance sweep — Established [R-AI-01 §15]
 
 The sweep runs at the end of every manager entry, including entries where the
 outer computer gate failed (with its argument `0` instead of `1`). It advances a
@@ -3922,27 +3848,28 @@ establishes is that the computer player has **no** targeting logic of its own �
 it reuses the engine's acquisition, and its only contribution is the cadence,
 the fire-at-will precondition it writes itself, and the rotation order.
 
-#### R-AI-01 §16 — Strategic refresh: two corrections and one new unknown — Established [R-AI-01]
+#### Strategic refresh: the two scalars, the three vectors and the centre — Established [R-AI-01 §16]
 
 The 30-tick strategic refresh ([08 "Strategic state construction and refresh"],
-[R-P0-04 §3]) also maintains two scalars this document did not name:
+[R-P0-04 §3]) also maintains two scalars:
 
 * the **build-capable count** used by the construction task's two gates (§3):
   cleared at the top of the refresh and incremented once for every own live,
   completed unit whose definition has a non-empty build-option list;
 * a **targeting-upgrade present** flag, set when any own unit whose definition
-  carries `istargetingupgrade` is active. Its reader is closed by
-  [04 R-SPEC-01 §8] (2026-08-29): the target-registry rebuild sets a per-player
-  flag from it, and the registry's area enumeration falls back to radar-only
-  contacts only when the visible scan is empty. (Earlier text: "Its reader is
-  **Unknown** (§17)" — superseded by the doc 04 trace.)
+  carries `istargetingupgrade` is active. Its reader is [04 R-SPEC-01 §8]: the
+  target-registry rebuild sets a per-player flag from it, and the registry's
+  area enumeration falls back to radar-only contacts only when the visible
+  scan is empty.
 
-The three refresh vectors are also now named by predicate: the first collects
-**non-allied** live units that pass the ordinary visibility predicate and are
-not dying; the second collects non-allied units carrying one further runtime
-status bit; the third collects the player's **own** active units whose
-definition is both a builder and an air base. Only the first has a located
-consumer in this lane — the rally task's probe score (§7).
+The three refresh vectors, by predicate: the death latch is tested for every
+unit in the walk before any vector is considered; the first collects
+**non-allied** live units that pass the ordinary visibility predicate and
+whose status-word bit 15 (the mission `Immunity` bit) is clear; the second
+collects non-allied units carrying the seen bit of [03 §3.2]; the third
+collects the player's **own** active units whose definition is both a builder
+and an air base. The first is read by the rally task's probe score (§7); the
+three are the primary, secondary and third candidate lists of [06 §3.1].
 
 The centre arithmetic is: for each own completed unit, `w` is the
 **initialization-only** per-type coefficient byte ([R-P0-05 §5]); accumulate
@@ -3953,25 +3880,19 @@ into the stored 16.16 centre. When the weight sum is zero the centre is the
 truncation of the unscaled accumulators, which are then zero — that is the state
 the explore task's "centre is unset" test detects (§6).
 
-**Closed (2026-09-02, RWU-19-38) — this refresh is the target-registry
-rebuild, and human slots run it.** The refresh and doc 06's per-side target
-registry rebuild are one routine on one object per player slot — the three
-vectors above are the primary, secondary and third candidate lists of
-[06 §3.1] — with one live caller, the per-player phase's per-slot cadence
-gate, whose bound-30 draw is the one draw [R-P0-05 §6] counts. The gate is
-null-checked on the slot's strategic state, never controller-checked, and
-that state exists for every human or computer slot ([R-ENTRY-01 §3] step
-24), so the local human's slot draws on the same 30-tick cadence as a
-computer slot and a one-human, one-computer game consumes two draws per
-thirty ticks in ascending slot order. Two labels above are sharpened by the
-same trace: the first vector's extra status test is bit 15, the mission
-`Immunity` bit, not "not dying" — the death latch is tested for every unit
-in the walk before any vector is considered — and the second vector's "one
-further runtime status bit" is the seen bit of [03 §3.2]. The slot gate,
+**This refresh is the target-registry rebuild, and human slots run it.**
+The refresh and doc 06's per-side target registry rebuild are one routine on
+one object per player slot, with one live caller, the per-player phase's
+per-slot cadence gate, whose bound-30 draw is the one draw [R-P0-05 §6]
+counts. The gate is null-checked on the slot's strategic state, never
+controller-checked, and that state exists for every human or computer slot
+([R-ENTRY-01 §3] step 24), so the local human's slot draws on the same
+30-tick cadence as a computer slot and a one-human, one-computer game
+consumes two draws per thirty ticks in ascending slot order. The slot gate,
 the first-rebuild tick and the exclusion bit's full census are in
 [06 §3.1].
 
-#### R-AI-01 §17 — Open items this unit did not close — Unknown [R-AI-01]
+#### Open items — Unknown [R-AI-01 §17]
 
 * The semantic name of the order gate-mask bits the construction task tests —
   bit 3 in pass 1 and bit 14 in pass 2 [04 "Order descriptor table"] · doc 04
@@ -3979,24 +3900,19 @@ the first-rebuild tick and the exclusion bit's full census are in
 * Which global option bit selects the rally task's two probe-validation forms,
   and therefore whether the local-viewer-dependent form is reachable in a
   networked session · §7 · static trace from the skirmish option word into the
-  world flags word (RWU-08-2 owns the option side).
-* (Closed 2026-08-29 by [04 R-SPEC-01 §8]; see §16.) ~~The reader of the
-  refresh's targeting-upgrade flag.~~
-* Whether the wave's `engaged` latch is serialized; the save path's task-record
-  coverage was not re-read by this unit · doc 08 "Save-file organization" ·
-  static trace (RWU-08-4).
+  world flags word.
+* Whether the wave's `engaged` latch and the rally task's best point, drift
+  and best score are serialized; no AI account and no task-record item exists
+  in the save inventory ([R-SAVE-02 §11-A]), so the bounded reading is that
+  they are not · "Save-file organization" · static trace.
 
-#### R-AI-01 §18 — The two per-definition passes run the whole fragment, kinds unfiltered — Established [R-AI-01]
+#### The two per-definition passes run the whole fragment, kinds unfiltered — Established [R-AI-01 §18]
 
-**What §12 left ambiguous.** §12 names "the weight pass" and "the limit
-pass" and gives them different lock gates, which invited the reading that
-each pass executes only its own directive kind over a definition's
-`ai_weight` fragment. Traced (RWU-19-16): the two passes are one body
-duplicated with a single difference — the lock vector consulted (weight
-locks in the first, limit locks in the second) — and each hands the whole
-fragment to the **same** line-splitting dispatcher the global profile file
-goes through, with every keyword admitted. Nothing filters `plan`, `weight`
-or `limit` by pass.
+§12's "weight pass" and "limit pass" are one body duplicated with a single
+difference — the lock vector consulted (weight locks in the first, limit
+locks in the second) — and each hands the whole fragment to the **same**
+line-splitting dispatcher the global profile file goes through, with every
+keyword admitted. Nothing filters `plan`, `weight` or `limit` by pass.
 
 **Established — one pass, exactly.** For the computer player slot being set
 up:
@@ -4041,40 +3957,806 @@ up:
 definition not locked in that pass's vector, run the whole fragment through
 the shared handler set with all three kinds enabled. Do not filter kinds by
 pass; do not reset the gate per definition; do not scope `weight` to the
-pass's player. The `TODO(question)` at the per-definition pass is retired.
+pass's player.
+
+#### Rally admission for buildings, and the broadcast's forwarded word — Established [R-AI-01 §19]
+
+Both findings are Established (static trace of the rally task body, the
+unit creator, the shot-time gate, the broadcast helper, the order-node
+allocator and the ground-move handler).
+
+**Rally: which record, which predicate.** The member test of §7 reads the
+first word of the unit record, the pointer to the unit's mover. The creator
+allocates a mover only when the definition's `bmcode` is 1 and stores the
+pointer there; a building never gets one, and the command resolver, the
+standby handler and the height snap all treat a null there as "no mover"
+[04 R-SPEC-01 §1]. So `hasNoLocomotion` is "the member is a building". For
+such a member the task calls the **shot-time physical admission gate** of
+[06 §3.3] with the member's own position as the shooter position, `best` as
+the target position, and **weapon slot 1** (the first slot): the gate passes
+when the slot's weapon range squared is at least the planar distance squared
+(each 16.16 delta squared as a 64-bit product and shifted back 32), and, for
+a non-water weapon, when the shooter's height word plus the definition's
+firing-height term exceeds the sea-level byte and (for a ballistic weapon) the
+trajectory solver finds an angle. A building whose first slot cannot reach
+`best` is skipped without resolving anything; a building with no weapon in
+slot 1 reads the sentinel record's zero range and is likewise skipped. A
+mobile member is never gated. Implementation rule: the manager's rally
+admission binding is "for a unit with no mover, the combat service's
+slot-1 shot-time check against the point"; no order-admission predicate is
+involved.
+
+**Broadcast: the forwarded word.** The helper's two trailing arguments are
+not read by the helper; each member's submission carries them into the
+order node's **argument word** and its companion, the same slots the
+construction task fills with the product type index for a MobileBuild. The
+wave task's gather broadcast (intent 2, the group centroid) passes **160** in
+the argument word; the regroup and explore broadcasts pass 0. The ground
+move handler reads that word as its phase-0 arrival radius, `argument + 4`
+[04 R-ORD-01 §4] — so a wave gather is a move with a **164**-world-unit
+arrival radius for every member, a regroup or explore move one with radius 4.
+That is the whole effect of the "spacing" argument: no formation, no
+per-member offset. Implementation rule: the broadcast forwards the word into
+each member's move order unchanged; the move handler owns its meaning.
+
+#### The `weight` factor is read by the C runtime's `atof`; the tokenizer and its comment rule — Established [R-AI-01 §20]
+
+§12 gives the `weight` directive's second argument as a float defaulting
+to `0.0`; this section gives the conversion, from the handler and
+everything under it.
+
+**Established — the line tokenizer.** The profile text (the global
+`aiprofile` / `ai\default.txt` file and every per-definition `ai_weight`
+fragment, [§18]) reaches the same dispatcher raw: the file is loaded whole
+and handed over, with no comment blanking of any kind on the path. The
+dispatcher splits on newline; each line is split into at most **twenty**
+tokens on runtime whitespace (the C runtime's `isspace` set), and a `#`
+character ends the line — everything from the `#` on is discarded, whether
+it begins a token or sits inside one. `//` has **no meaning** here: a line
+beginning `//` is a directive whose keyword the table does not know and is
+ignored as a whole, and a `//` between a name and its factor is the factor
+token. Token 0 is lower-cased and looked up; token 1 is the name; token 2 is
+the factor (`weight`) or the limit (`limit`).
+
+**Established — the conversion.** The factor is token 2 read through the
+runtime's `atof`, with `0.0` returned when the line has fewer than three
+tokens. `atof` skips leading whitespace and converts the **longest valid
+decimal prefix**: an optional sign, digits, an optional decimal point with
+digits, and an optional exponent introduced by `e`, `E`, `d` or `D` with an
+optional sign and digits; it stops silently at the first character that
+does not fit, and yields `0.0` when no digit was consumed. There is no
+hexadecimal form, no `inf`/`nan` token, and no error path. So:
+
+| token | factor |
+|---|---|
+| `0.5`, `.5`, `+.5`, `5e-1`, `5d-1` | `0.5` |
+| `1e0`, `1E0`, `1d0`, `1.` | `1.0` |
+| `2x`, `2,5`, `2//c` | `2.0` (junk after the prefix is ignored) |
+| `abc`, `x1`, `0x10`, `-`, `.` | `0.0` (no digits before the first misfit) |
+| absent (line is `weight NAME`) | `0.0` (the accessor's default) |
+
+The directive then applies with whatever `atof` produced — nothing conditions
+the write on the token converting, which is why `weight ARMCK abc` zeroes the
+weight rather than leaving it alone (§12's rule, now with its grammar).
+
+**Established — the store's range.** The product `float(currentWeight) ×
+factor` is narrowed by the runtime's truncating float-to-integer routine
+before the clamp. That routine returns the integer-indefinite value
+(`−2^31`) for any product outside the signed thirty-two-bit range or not a
+number, and the clamp's "at or below zero becomes zero" arm then stores
+**0**. A factor such as `1e10` — or an exponent large enough to overflow the
+conversion — therefore sets the weight to 0, not 100. An implementation
+whose float-to-integer conversion saturates instead (as Go's does on some
+targets) must special-case the out-of-range product to 0.
+
+**Which reader.** Of the three candidate readers (the runtime's decimal
+conversion, the engine's fixed-point parser, the TDF integer accessor) it is
+the first, through the directive library's own "argument *n* as float"
+accessor. The same accessor family's integer form reads `limit`'s token
+through the runtime's `atoi`. The reference install's profiles are
+indifferent — every one of their `weight` factors is a plain decimal — so
+the grammar matters only for third-party profiles.
+
+#### Small contracts: profile-limit edges, strategic accessors, standing-order bits, the target pick's swap-remove — Established [R-AI-02 §2]
+
+* **Profile-limit gate edges.** The per-candidate limit test of [R-P0-05 §3]
+  (`count < limit`, `-1` unlimited) is reached through a one-argument
+  narrowing thunk (the player index is masked to a byte) and **rejects** —
+  returns "over limit" — for candidate type `0` and for any type index at or
+  above the catalog count, before the limit vector is read. The count it
+  compares is the strategic state's per-type completed count (a signed 16-bit
+  word), the limit the per-type 32-bit word the profile pass writes
+  ([R-AI-01 §12]).
+* **Strategic-centre and build-capable-count accessors.** The construction
+  task reads the centre once into a local through a three-word copy accessor
+  and the build-capable count through a plain word accessor; both read the
+  strategic state fields the 30-tick refresh writes ([R-AI-01 §16]). Neither
+  accessor computes anything, so the "read once" wording of [R-AI-01 §3] is
+  the whole contract: a refresh landing between the two passes is not seen by
+  pass 2.
+* **Classifier standing-order encoding.** The two writes of [R-AI-01 §10]
+  are field writes into the runtime status word: the standing move order
+  occupies two bits, value `2` (roam) when `cancapture` is clear and `1`
+  (maneuver) when set, the other value's bit being cleared in the same store;
+  the standing fire order's two-bit field is then set to `2` (fire at will),
+  its other bit cleared. The writes happen before the ungrouped test, so an
+  already-grouped unit still gets both fields rewritten every 30 manager
+  entries.
+* **The AI status dump is dead.** The image contains a writer that prints a
+  computer slot's game time, name, controller (`HUMAN`/`AI`/`INVALID`),
+  terrain and profile names, difficulty, and one `<limit> <base:baseML:baseEL>`
+  row per definition to a text file. Its only caller is a debug entry that no
+  code, table or callback references; no retail path produces the file.
+* **The target pick's vector removal.** The candidate picker of [06 §3.2]
+  that the computer player's order dispatch also uses draws a random index
+  into a temporary candidate vector, reads the entry, and then removes it by
+  **overwriting the drawn slot with the vector's last entry and shortening
+  the vector by one** (swap-remove; order is not preserved) before scoring
+  it, so a later draw in the same 50-iteration loop can never return the
+  same candidate, while the index-to-candidate mapping of later draws
+  depends on this exact removal shape. The removal draws nothing.
+* **The eco task is vtable-reached.** The resource/builder-queue body of
+  [R-AI-01 §2] has no direct caller; like the other task bodies it is entered
+  only through the task-class virtual table run by the manager sweep
+  ([R-AI-01 §1]). It is not dead.
+
+### Placement root: the patch vector and the scatter helper, exactly [R-AI-03]
+
+The exact arithmetic of the placement root ([R-AI-01 §3]'s
+`placeCandidate`), its two search helpers, and the metal-spot vector the
+exhaustive helper reads; "Placement root and search helpers" above is the
+summary of this. Numbers below come from the executable. Vocabulary: "cell" is a 16-world-unit
+plot cell [05 R-PROD-01 §6]; `footX`/`footZ` are the definition's footprint
+extents copied from its movement class [04 R-DOC04-A]; `RNG(b)` is the bounded
+simulation draw, which returns 0 **without advancing** when `b < 2` (signed)
+[01 §7.1].
+
+#### The metal-spot vector: builder, record, scan, consumer — Established [R-AI-03 §1]
+
+**Owner and lifetime.** Each strategic state owns one vector of metal-spot
+records. It is built by the battle-entry tail, step 7 of [R-ENTRY-01 §8] — once
+per slot that owns an AI record, after the second resource grant, on every
+session kind including a restored save. Nothing rebuilds it afterwards: the
+30-tick strategic refresh does not touch it, and reclaiming or destroying a
+feature does not remove its record. The vector therefore describes the map as
+it stood at battle start.
+
+**Record.** `{ cellX int16, cellZ int16, metal float32 }`, eight bytes, packed
+as x in the low half-word and z in the high half-word followed by the float.
+The `metal` field is the feature definition's authored `metal` value narrowed
+through the 16-bit mask the feature parser applies (`float32(value & 0xffff)`)
+[05 R-FEAT-01 §6]. **It is never read as metal**: the only consumer overwrites
+it with a sort key (§3).
+
+**Scan.** The builder first empties the vector (end := begin, capacity kept),
+then visits every plot cell in row-major order — rows `z = 0 … mapCellHeight−1`
+outer, cells `x = 0 … mapCellWidth−1` inner — and appends `(x, z, metal)` when
+all three hold, tested in this order:
+
+1. the cell's feature reference is a real feature index — strictly less than
+   the `0xfffb` reserved band. The `0xfffe` "part of a larger feature" marker
+   and the `0xffff` "no feature" value both fail this test, so a multi-cell
+   feature yields exactly one record, at its anchor cell;
+2. the referenced feature definition's `metal` compares **not equal** to
+   floating zero;
+3. the definition's `indestructible` flag is set.
+
+There is no threshold on the metal value beyond non-zero, no check of the
+reference against the feature count (the loader guarantees it), and no
+ordering step: the vector is in row-major cell order. On a stock map every
+metal deposit is an indestructible feature with a non-zero `metal`, so the
+vector is the deposit list; a map that authors a destructible metal feature
+leaves it out, and one that authors an indestructible feature with `metal`
+but no per-cell metal seeding yields records the exhaustive helper will visit
+and score at the uniform surface value.
+
+**Consumer.** The exhaustive helper (§3) is the only reader. The scatter helper
+(§4) never consults it.
+
+#### The root's origin step, exactly — Established [R-AI-03 §2]
+
+Inputs: the builder position `b` (16.16 world, three axes), the strategic
+centre `c` ([R-P0-05 §5]), the per-player **placement search radius** (a plain
+integer of world units, zero at construction), and the map's world-unit
+extents `W`, `H` (cell counts × 16, [R-AI-01 §3]).
+
+```text
+if radius < max(W, H): radius += 160            # signed; world units; the grown
+                                                #   value persists across attempts
+dx = c.x − b.x ; dy = c.y − b.y ; dz = c.z − b.z # 32-bit 16.16 differences
+dist = trunc( sqrt( dx·dx + dy·dy + dz·dz ) )   # x87: three integer loads, the
+                                                #   squares summed in that order,
+                                                #   one square root, one __ftol
+R = radius << 16
+if R < dist:                                    # signed: builder OUTSIDE the radius
+    scale    = (int64(R) << 16) / int64(dist)   # 64-bit signed divide
+    origin.a = b.a + int32( (int64(d_a) · scale) >> 16 )   # a = x, then y, then z
+else:                                           # within (or exactly at) the radius
+    origin = c
+```
+
+Because the deltas are 16.16 integers, `sqrt` of their squared sum is itself a
+16.16 distance, so `dist` compares directly with `R`. The interpolation moves
+the origin from the builder **toward** the centre by exactly `radius` world
+units; when the centre is already within reach the origin *is* the centre. All
+three axes are interpolated, but the helpers read only `x` and `z` of the
+origin: `origin.y` is dead. The first attempt of a fresh player therefore searches from a point 160 world
+units toward the centre (or the centre itself), and each failed attempt widens
+the ring by 160 until the radius reaches the larger map extent.
+
+**Helper selection** is unchanged from "Placement root and search helpers":
+`extractsmetal == 0.0` → scatter with no draw; otherwise `d = RNG(255)` and
+`surfaceMetal < d` (signed) → exhaustive, else scatter. The selector draw is
+taken **after** the origin step and before any helper draw. The exhaustive
+helper receives `radius × 4`; the scatter helper receives `radius` unscaled.
+
+#### The exhaustive metal-spot helper — Established [R-AI-03 §3]
+
+Inputs: the definition, the origin (`x`, `z` used), the metal-spot vector of
+§1, `D = radius × 4`, and the output cell. It draws **no** random numbers.
+
+**Empty vector → failure** (return false before anything else).
+
+**Origin cell.** Both coordinates are the plot cell whose *top-left* would put
+the footprint's centre nearest the origin:
+
+```text
+cx = int16( (origin.x − (footX << 19) + (1 << 19)) >> 20 )    # arithmetic shift
+cz = int16( (origin.z − (footZ << 19) + (1 << 19)) >> 20 )
+```
+
+(`1 << 19` is 8 world units in 16.16; `>> 20` divides by 16 world units and
+floors — the same rounding the build cursor uses [07 §9].)
+
+**Filter.** For each record in vector order, `d2 = (px − cx)² + (pz − cz)²`
+in 32-bit cell units; keep the record when `d2 <= D · D` (inclusive). `D` is
+a count of world units used as a count of cells, so the search disc is
+`4 × radius` **cells** — 64× the radius in world units; this is what retail
+does. A kept record is copied to a working vector and its `metal` float is
+**overwritten** with `float32(−d2)`.
+
+**Ordering.** When the working vector holds at least two records it is made
+into a binary max-heap on the float key with the standard library's
+make-heap (sift each index from `n/2 − 1` down to 0: move the hole down to a
+leaf choosing the right child unless `right.key < left.key`, then push the
+saved record back up while `parent.key < key`), and the loop below takes the
+front record and re-heaps with the pop-heap that moves the front to the last
+slot and re-sifts the former last record. The greatest key is the least
+`d2`, so candidates come **nearest first**. Ties in `d2` are ordered by the
+heap mechanics — deterministic from the vector order, but **not** the vector
+order itself; an implementation must reproduce the heap to reproduce retail's
+choice among equidistant deposits.
+
+**Candidate loop.** With `best := 0`, `bestCell := none`, `firstD2 := −1`:
+
+```text
+while working vector not empty:
+    (px, pz) = front record
+    candX = int16( px − trunc((footX − 3) / 2) )      # signed division toward zero
+    candZ = int16( pz − trunc((footZ − 3) / 2) )      #   (footX = 1 → +1; 2 → 0; 5 → −1)
+    c2 = (candX − cx)² + (candZ − cz)²                # recomputed from the CANDIDATE cell
+    if firstD2 >= 0 and c2 > firstD2 + 160: break     # early stop, squared-cell units
+    if blocker(def, candX, candZ, self = 0, ghost = 0):
+        score = accumulator
+        if score > best:                              # strict; a zero-metal footprint never wins
+            best = score ; bestCell = (candX, candZ)
+            if firstD2 == −1: firstD2 = c2            # set once, at the first accepted candidate
+    pop front
+return best != 0 ? (bestCell, true) : failure
+```
+
+The candidate offset centres the footprint on the deposit for a 3-cell
+footprint and biases larger ones toward the top-left. The early stop is
+measured against the squared distance of the **first** accepted candidate,
+never updated by later better-scoring ones, and the slack `160` is compared as
+squared cells (a candidate more than ~12.6 cells beyond the first hit stops
+the scan). Failure of this helper is failure of the whole placement attempt —
+no fall-through to §4, and the radius keeps its grown value.
+
+**The blocker call.** The validator is the yard-map footprint blocker of
+[07 §9] (the "footprint validator"; doc 05 "Geothermal requirement" for the
+yard bytes), called with self identity `0` — so any occupant rejects — and the
+ghost flag `0`, which **skips** the known-map/visibility gate: an unrevealed
+cell is as placeable as a revealed one. Its bounds test is `candX > 0`
+(strict — a candidate at cell column 0 is rejected), `candX + footX <
+mapCellWidth`, `candZ + footZ < mapCellHeight`; it does **not** test `candZ`
+for sign (see §6). On entry it clears the process-wide score accumulator and
+then, for every footprint cell in row-major order, adds the cell's **metal
+byte** ([05 R-PROD-01 §6]: the uniform `SurfaceMetal` seed on canonical
+maps, or the legacy per-cell byte) before applying that cell's yard-byte
+rules. The accumulator is therefore the footprint's metal-byte sum, and a
+rejected footprint leaves a partial sum behind (unread here, but see §4). The
+blocker's tail applies the definition's `MaxSlope` and the waterline band
+`waterline − MaxWaterDepth <= lowest yard-bit-3 height` and
+`highest <= waterline − MinWaterDepth` — so the exhaustive path **is**
+waterline-checked through the blocker.
+
+#### The statistical scatter helper — Established [R-AI-03 §4]
+
+Inputs: the strategic state, the definition, the origin (`x`, `z`), the
+unscaled `radius`, and the output cell.
+
+**Limit.** `limit = ((surfaceMetal × footZ) × footX) × 2`, 32-bit integer
+arithmetic in that order, where `surfaceMetal` is the mission's `SurfaceMetal`
+word on the session record.
+
+**Region words.** The strategic-state constructor ([R-ENTRY-01 §3]) draws the
+eight values of [R-P0-05 §5]'s inventory into two region sets, in this order:
+
+```text
+land set  (margin = 3):  cellW = RNG(10) + 11 ; cellH = RNG(3) + 11
+                         offX  = RNG(cellW) − cellW/2 ; offZ = RNG(cellH) − cellH/2
+water set (margin = 6):  cellW = RNG(20) + 14 ; cellH = RNG(3) + 14
+                         offX  = RNG(cellW) − cellW/2 ; offZ = RNG(cellH) − cellH/2
+```
+
+(the `+ 11` / `+ 14` is `margin + 8`; the halving truncates). They are int16
+words, never rewritten. The helper picks the **land** set when the
+definition's `MinWaterDepth` is negative and the **water** set when it is
+`>= 0` — that word, copied from the movement class [04 R-DOC04-A], is the
+selector, not a slope field.
+
+**Trial loop**, `t = 0 … 29` (thirty trials, counter compared `< 30`):
+
+```text
+r  = RNG(radius)                        # draw 1; radius >= 160 here, so always taken
+a  = RNG(65536)                         # draw 2
+wx = origin.x − sin(a, r << 16)         # the shared trig helpers of [R-AI-01 §3],
+wz = origin.z − cos(a, r << 16)         #   negated at use as everywhere in this planner
+qx = int16( (wx − (footX << 19) + (1 << 19)) >> 20 )     # same cell rounding as §3
+qz = int16( (wz − (footZ << 19) + (1 << 19)) >> 20 )
+ox = RNG(cellW − margin − footX)        # draw 3 — skipped (0, no advance) when bound < 2
+gx = int16( (int32(qx) / cellW) × cellW + offX + ox )    # idiv: toward zero
+oz = RNG(cellH − margin − footZ)        # draw 4 — likewise
+gz = int16( (int32(qz) / cellH) × cellH + offZ + oz )
+if validator(def, self = 0, (gx, gz), mode = 1) and accumulator <= limit:   # inclusive
+    out = (gx, gz) ; return true
+return false after the thirtieth trial
+```
+
+The quantisation snaps the trial cell to a lattice of `cellW × cellH` blocks
+(toward zero, so blocks straddle the origin asymmetrically for negative
+cells), shifts the lattice by the per-player `(offX, offZ)`, and scatters
+within the block by `ox`, `oz` — leaving `margin + footprint` cells of the
+block untouched. When the footprint is at least `cellW − margin − 1` wide the
+`ox` bound drops below 2 and **no draw is taken**; the per-trial draw count is
+therefore two, three or four depending on the footprint against the drawn
+region widths, and the order is always radius, angle, x-offset, z-offset.
+The z lattice is 11–13 cells on land and 14–16 on water, so buildings line up
+in rows; that is retail's base layout.
+
+**The validator call** is the placement validator with a mode argument
+(the routine [R-AI-01 §7]'s rally probe also uses), mode `1`, self identity
+`0`. Its contract in this mode:
+
+1. bounds: `gx >= 0`, `gz >= 0`, `gx + footX < mapCellWidth`,
+   `gz + footZ < mapCellHeight`; off-map returns **false** (only mode `2`
+   treats off-map as placeable);
+2. `bmcode == 0` (every **building**): delegate to the footprint blocker of
+   §3 with self `0` and ghost `0` — which **writes** the accumulator;
+3. `bmcode != 0` (a **mobile** definition): walk the footprint cells row-major
+   with the plain rule set, no yard bytes and no accumulator write. A cell
+   rejects when its feature reference resolves to a feature whose `blocking` flag is set
+   (a reference at or beyond the feature count, or in the `0xfffb`–`0xfffd`
+   band, blocks; a `0xfffe` part-cell is resolved through its anchor offsets to
+   the anchor's feature; `0xffff` is empty); when its occupant id is non-zero
+   (self is `0`); when its low height byte is below `waterline −
+   MaxWaterDepth`; when its high height byte is above `waterline −
+   MinWaterDepth`; or when `high − low` exceeds `MaxSlope` and either the cell
+   is above water (`low >= waterline`) or `high − low` also exceeds
+   `MaxWaterSlope`. Otherwise placeable.
+
+This is the water legality "Placement root and search helpers" located: the
+band is enforced per cell, on every cell, with the definition's own depth
+fields.
+
+**The score the limit test reads.** For a building — every definition the
+construction task hands the root in stock content, since mobile builders
+author only buildings — branch 2 runs the yard-map blocker, which clears the
+process-wide accumulator on entry and adds every footprint cell's metal byte
+before applying that cell's yard rules. A trial that passes therefore leaves
+the **trial footprint's own metal-byte sum** in the accumulator, and
+`accumulator <= limit` compares exactly that sum; a trial the blocker rejects
+is skipped before the comparison, so its partial sum is never read here.
+Only a *mobile* definition placed through the root (branch 3, no accumulator
+write) would read a stale value — the last blocker call in the process — and
+no stock build list produces one. `bmcode` is 0 for the building class —
+the same byte that selects the yard-map parse, sets the building-class flag
+at creation and adds the class routine's initialization addend (§7.4) — and
+1 for the mobile class, the only class the unit creator gives a mover
+([04 R-COLL-01 §2] has the same dispatch).
+
+##### Which authored key the `surfaceMetal` word is — Established [R-AI-03 §4-A]
+
+§4 above says the limit's `surfaceMetal` is "the mission's `SurfaceMetal` word
+on the session record" without saying which authored key fills that word. It
+is the **selected schema's** `SurfaceMetal`, not a `[GlobalHeader]` key — the
+same word that seeds every plot cell's metal byte [05 R-PROD-01 §6], which is
+why §1 can say the metal-spot scan scores "at the uniform surface value".
+
+Evidence is the authored corpus of the reference install: across its 275 map
+`.ota` files the key `SurfaceMetal` occurs 635 times and **every** occurrence
+is inside a schema section (`[Schema N]`); none is in `[GlobalHeader]`. The
+count exceeds the file count because a map authors one per schema. A reader
+that takes the word from the OTA's global section therefore yields zero on
+every map in the corpus.
+
+**Why this matters, and the failure it produces.** On a canonical map every
+cell's metal byte is that same schema word `M`, so a valid trial footprint of
+`footX × footZ` cells sums to `M × footX × footZ` — exactly **half** the
+`M × footZ × footX × 2` limit. The inclusive `<= limit` test therefore passes
+for any ordinary site and bites only where indestructible metal-bearing
+features have raised the bytes above the uniform seed across the footprint
+[05 R-FEAT-01 §7]; that is what the limit is for. The test is only
+meaningful while the limit is built from the *same* word that seeded the
+cells. Supply zero there and the limit is zero while the sum is positive,
+and the helper rejects **every** geometrically valid trial for **every**
+building: thirty trials exhausted, no non-extractor site ever accepted, and
+a computer player that places nothing but metal extractors (those take the
+exhaustive helper of §3, which has no limit test) for the whole battle.
+
+**The selector draw reads the same word.** §2's helper selection compares
+`surfaceMetal < RNG(255)` (signed) for an extractor definition. A zeroed word
+makes that comparison true on 254 of 255 draws, so extractor placement is
+effectively always exhaustive; with the schema value of a stock map (`3` on
+`Ashap Plateau`, for instance) the scatter branch is reachable as authored.
+
+#### What the root returns, and the radius — Established [R-AI-03 §5]
+
+On helper success the root converts the cell to a world position and writes
+**two** of the caller's three words:
+
+```text
+out.x = int32( footX + 2 · gx ) << 19        # = (16·gx + 8·footX) in 16.16: the footprint centre
+out.z = int32( footZ + 2 · gz ) << 19
+radius = 0
+return true
+```
+
+`out.y` is not written. The construction task's out buffer is a stack local
+that nothing initialises before the call, so the `y` of the submitted
+MobileBuild position is stack residue; what the order service does with it is
+doc 04's ([R-ORD-01]) — the position's `x`/`z` alone determine the site. On
+helper failure the root writes nothing, leaves the grown radius in place, and
+returns false; the task then skips the submit and the next invocation (90
+ticks later, [R-AI-01 §3]) grows the radius again. The `cancapture` distance
+cap of [R-AI-01 §3] is applied by the task to `out.x`/`out.z` after a
+successful return and can veto the placement without resetting anything — the
+radius is already zero by then.
+
+#### Unknowns left, with deciders — Unknown [R-AI-03 §6]
+
+- **Negative candidate row in the exhaustive path.** The blocker's row test
+  is traced (§7.1: row 0 is rejected, negative rows are not); what remains
+  Unknown is only whether the out-of-grid read faults or returns a garbage
+  verdict · a retail probe on a map with a metal deposit in its top row, or
+  the allocator's placement of the plot grid.
+- **Other readers of the `MinWaterDepth` word.** The definition word the
+  class routine ([R-P0-05 §5]), the classifier ([R-P0-04 §3]) and the scatter
+  helper (§4) read is the movement class's `MinWaterDepth`, copied at FBI
+  compile; whether any *other* reader of the word exists is open · static
+  trace of the word's readers.
+- Nothing else in the placement path is open: every constant, comparison,
+  truncation, draw bound and draw order above is read from the executable.
+
+#### The blocker's row test, the validator's mode, the dead `y`, the `bmcode` selector — Established [R-AI-03 §7]
+
+Static trace of the placement root, the two validators, the construction
+task and the MobileBuild handler. Each item names its confidence.
+
+##### The blocker's row test, and the negative row — Established, with one Unknown [R-AI-03 §7.1]
+
+The blocker's entry test is `candX > 0` on the column as a signed 16-bit word **and** "the
+packed cell word, read as an unsigned 32-bit value, exceeds `0xffff`" — which
+is true precisely when the row's 16-bit pattern is non-zero. So **row 0 is
+rejected the same way column 0 is**, and a negative row (`0xffff`, `0xfffe`,
+…) passes that test and then the signed `candZ + footZ < mapCellHeight` test.
+The cell walk then addresses `(candZ × mapCellWidth + candX)` cells before the
+plot grid's first cell for a negative row — one row of storage per unit of
+negative row — and reads metal bytes, heights, occupant and feature words from
+whatever precedes the grid. There is no guard. (Established.) Whether that
+storage is mapped, so the walk returns a garbage verdict rather than faulting,
+depends on where the process allocator placed the grid and is **Unknown**;
+nothing in the executable decides it. A deposit in row 0 or 1 under a
+footprint of five or more rows is the only way to reach it (§3's candidate
+offset). Implementation rule: a candidate whose row is negative has no retail
+verdict to reproduce; rejecting it is the only deterministic choice and must
+be marked as that choice, not as retail's. Row 0 must be rejected as retail
+does.
+
+##### The validator's mode, and who passes 2 — Established [R-AI-03 §7.2]
+
+The placement validator's mode argument is the caller's **movement mode** —
+the two-bit field [04 R-COLL-01 §2] describes (1 grounded/stopped, 2 active
+locomotion, 0 and 3 load-only), not a placement policy. Its off-map verdict
+is `mode == 2` and its non-building, non-mode-1 short-circuit is owned by
+[04 R-COLL-01 §2], which already states both. The caller census: the
+**mover commit step** passes its own mover's mode word (the only path on
+which 2 is reachable); the **factory product allocation** passes the
+factory's unit-mirrored mode, which creation sets to 1 and a building never
+changes ([04 R-FAC-02 §5]); every other recovered caller — the scatter helper
+of §4, the mobile-build site check, the skirmish spawn scan and the remaining
+order-handler site checks — passes the literal 1. No computer-player path can
+observe the mode-2 acceptance.
+
+##### The submitted `y` is dead — Established [R-AI-03 §7.3]
+
+§5 left open whether the MobileBuild handler reads the stack-residue `y` the
+construction task submits. Traced: the order node stores the triple verbatim;
+the handler's first phase re-snaps `x` and `z` to the footprint centre and
+copies `y` into a local it never uses; the walk-approach phase reads only
+`x`/`z`; and immediately before the nanoframe is created the handler runs the
+building **site-height rewrite** — for a `bmcode == 0` definition it re-snaps
+`x`/`z` again and stores `y := siteHeight(def, cell) << 16`, the same
+height-under-footprint query the blocker's tail computes. The unit creator
+then stores that rewritten triple as the new unit's position. The residue
+therefore reaches nothing that survives: an implementation submits `x`/`z`
+and any `y` (zero is fine) and derives the nanoframe's height at creation,
+exactly as the human build path does.
+
+##### `bmcode` is the building/mobile selector everywhere the placement path reads it — Established [R-AI-03 §7.4]
+
+Four readers agree: the FBI
+compile stores the authored `bmcode` byte on the definition; the unit creator
+sets the building-class flag from "`bmcode == 0`" and allocates a mover only
+for "`bmcode == 1`"; the validator sends `bmcode == 0` to the yard-map
+blocker; and the strategic state's initialization vector adds its 40 for
+`bmcode == 0` ([R-P0-05 §9]). Stock content authors `bmcode=0` on buildings
+and `bmcode=1` on mobile units.
+
+### Transport, naval, air, repair, reclaim and scouting policy [R-AI-04]
+
+Method (static trace): the task-class virtual-table run was dumped and
+matched against the manager constructor; the transitive callee
+set of the live manager dispatcher, the seven task bodies, the classifier,
+the weapon-maintenance sweep, the 30-tick strategic refresh and its two
+dispatchers, the class routine, the strategic-state constructor, the profile
+passes and the metal-spot builder was computed down to the order-service
+boundary (the shared command resolver and order submitter of
+[04 R-ORD-02 §1], the activation toggle and the factory-product producer);
+every resolver and submitter call inside that set was read with its literal
+command code and target arguments; every reader of the definition's water,
+flight and capability words and of the map's sea level, extents and cell
+counts inside the set was listed; and, image-wide, every caller of the
+resolver was read for the literal code it passes and every test of "owner's
+control byte is the computer value" was classified. The question this
+settles is whether the computer player has a transport,
+naval, air, repair, reclaim or scouting policy distinct from the generic
+orders the task bodies of [R-AI-01] issue. It has none as a separate
+mechanism; what it does have is three definition-word tests and one resolver
+consequence, spelled out below so an implementation neither invents a policy
+nor omits the tests.
+
+#### The task-class run is complete: seven classes and nothing else — Established [R-AI-04 §1]
+
+The virtual tables of the task classes are one contiguous run of seven
+two-entry tables followed by a zero word: null, attack wave, regroup,
+explore/gather, random-walk rally, construction/positioning,
+resource/queue. The manager constructor assigns exactly those seven to its
+nine slots (two waves, two regroups), and the run has no eighth table
+([R-AI-01 §1]; the null class has its own table). The only
+dispatcher with a caller is the live one of [R-AI-01 §1]; the alternate
+dispatcher and one further routine labelled as an order dispatch in the
+recovered function set are unreferenced. So "a transport, naval, air, repair,
+reclaim or scouting task class" is not a bounded absence any more: the run
+is complete, and none exists.
+
+#### Transport: no producer exists, and the computer player does not build carriers — Established (negative) [R-AI-04 §2]
+
+**Every order the computer player issues goes through the shared command
+resolver and submitter, or through the factory-product producer**, and the
+resolver's command codes used across the whole computer-player closure are
+exactly `2` (move), `3` (attack), `9` (patrol) and `14` (mobile build) —
+the four [R-AI-01] names — plus the factory product click producer of
+[R-AI-01 §2]. Codes `5` (unload), `6` (pick up), `7` (guard), `8`
+(assist/repair), `12` (reclaim/resurrect) and `13` (capture) are never
+passed. Further, **every code-2 call passes no target unit** (the wave
+gather, the regroup move, the explore legs and the construction
+repositioning all resolve against a position), so the target-dependent
+arms of code 2 in [04 R-ORD-02 §1] — `Capture`, `ReclaimUnit`, `HelpBuild`,
+`RepairUnit`, `VTOL_Landing`, the pickup pair and the follow pair — are
+unreachable; and every code-3 call from the rally task passes a position
+only, so it resolves to the position-attack forms. There is therefore no
+producer of `Ground_Pickup`, `VTOL_Pickup`, `Ground_Unload`, `VTOL_Unload`,
+`VTOL_Landing` or `BeCarried` anywhere in the computer player: no pickup
+point, no drop point, no carried set, no timing. Nothing exists to
+implement.
+
+**Image-wide bound.** Of the resolver's sixteen callers, the only one that
+passes the literal unload code is the mission `InitialMission` interpreter's
+`u x,y` verb ([04 §3.6]), which is authored per placed unit and runs once at
+battle entry; no caller passes the literal pickup code; the remaining
+callers pass a code copied from a command packet (the human and network
+command path of [07 "UI order producers (R-P0-11)"]) or a fixed
+non-transport code inside an order handler. No routine names a transport
+row by its canonical string. So a computer-controlled unit carries a
+transport order only when the mission authored it or the engine attached
+one itself (a factory product of an `isairbase` carrier, [04 R-FAC-02 §1]),
+and the handlers then run exactly as for a human owner (§6).
+
+**Carriers are not built either.** The class routine zeroes the other-mix
+coefficient for every definition with `canload` ([R-P0-05 §5]); the metal
+coefficient is `clamp(100·extractsMetal − 0.02·buildCostMetal − 25·makesMetal)`
+and the energy coefficient `clamp(−0.0025·buildCostEnergy − 5·Classify)`,
+so for a `canload` definition that does not extract metal and whose
+classification is not negative all three coefficients are at or below zero,
+the candidate score of [R-P0-05 §4] is at or below zero for every economy
+mix, and [R-AI-01 §8] skips it **without drawing**. A profile `weight`
+cannot rescue it: the weight multiplies a non-positive score. The computer
+player therefore never queues a transport of its own accord; the only
+transports it owns are mission-placed or captured ones.
+
+**What a transport it owns anyway does.** The classifier of [R-P0-04 §3]
+files it by the ordinary rows: a flying carrier goes to the explore record
+and patrols (§4); a water-class carrier (`MinWaterDepth ≥ 1`) goes to
+regroup B and follows wave B's gather moves but, being unarmed, is rejected
+by code 3 (no `canattack`, no `kamikaze`) and never attacks; an unarmed
+land carrier fails every row and **stays ungrouped for the whole game** —
+the last row requires the armed bit — receiving nothing but the standing-
+order rewrite of [R-AI-01 §10] and the engine's own return-fire. Cargo it
+carries is untouched by the manager.
+
+#### Naval policy: three `MinWaterDepth` tests, no map-level input — Established [R-AI-04 §3]
+
+The only definition word the computer player reads that separates water
+units and structures from land ones is **`MinWaterDepth`** — the movement-
+class value the FBI compile copies onto the definition, or, for a building
+with no movement class, the value the class reader takes from the unit's
+own section ([fmt fbi]); a class or section that omits it carries the
+template value **−10000** ([04 §6.1]), so every sign test below selects
+exactly the definitions that author a non-negative (or positive) depth —
+in stock content the ship classes and the shipyards. `MaxWaterDepth`, the
+`Floater`/`amphibious` keys, the water weapon flags and the hover flag are
+never read by the computer player. The three tests, all previously
+Established in their own sections and gathered here as the whole naval
+policy:
+
+1. **Grouping and attack.** The classifier row `MinWaterDepth ≥ 1 →
+   regroup B` ([R-P0-04 §3], corrected label [R-AI-03 §6]) precedes the
+   armed test, so **every** non-builder, non-flying water-class mobile,
+   armed or not, enters regroup B, and wave B is the naval wave: threshold
+   50,000 against wave A's 20,000 (the shed and collect comparisons of
+   [08 "Wave merge"] are `distance² ≥/< threshold × count`, so a naval wave
+   holds together over a radius about 1.58 times wider), the same minimum
+   three and maximum six, the same gather destinations (the armed-building,
+   unarmed-building and builder centroids, which lie on land — the move
+   handler decides what a ship does with a land goal, [04 R-ORD-01 §4]),
+   and the same target: the **nearest hostile unit of any medium** to the
+   wave's centroid ([R-AI-01 §4], [R-AI-01 §9]). No submerged/surfaced,
+   water-weapon or reachability test enters the choice; the per-member
+   resolver applies its own code-3 target-class rejects
+   ([04 R-ORD-02 §1]), so a ship without a water weapon ordered at a
+   submerged target simply gets no order that run. Land mobiles (template
+   −10000) fall through to the armed row and wave A. There is no naval
+   rally, patrol or escort.
+2. **Production bias.** In the class routine the other-mix accumulator is
+   multiplied by three when `MinWaterDepth ≥ 0` ([R-P0-05 §5], corrected
+   label [R-AI-03 §6]), after the completed-count multipliers and before the
+   `canload` / `isfeature` / wind zeroing. That is the only production term
+   that distinguishes a ship or shipyard from a land unit; the reservoir,
+   gates and economy mixes of [R-P0-05 §3–§4] are otherwise identical.
+3. **Placement.** A shipyard is a building (`bmcode 0`) and takes the
+   ordinary root of [R-AI-03 §2]: origin stepped from the builder toward
+   the strategic centre, radius grown by 160 per failed attempt, and — being
+   a non-extractor — the statistical scatter helper directly. Its
+   `MinWaterDepth ≥ 0` selects the helper's **second region set** (the wider
+   cells and the margin of 6 drawn at state construction, [R-AI-03 §4]);
+   and the placement validator's yard path applies the waterline band to
+   every footprint cell: reject when the cell's low height is below
+   `waterline − MaxWaterDepth`, reject when `waterline − MinWaterDepth` is
+   below the cell's high height ([R-AI-03 §4]). For an authored
+   `MinWaterDepth = N` that is "the whole footprint at least N below the
+   waterline"; for a land building with the template values neither test
+   can fire. There is no coast search, no water census and no fallback:
+   when the thirty trials around the origin find no cell in the band the
+   attempt fails, the radius stays grown, and the next attempt ninety ticks
+   later tries again wider ([R-AI-03 §5]).
+
+**Water starts and water-only maps change nothing else.** No routine in the
+computer-player closure reads a start position's medium, a water-cell
+count, the sea level (outside the two shared placement validators and the
+shared shot-time and visibility gates), or any per-map water statistic; the
+only map words read are the world extents and cell counts that size the
+explore and placement draws. On a map whose start neighbourhood is all
+water a land factory is still selected — the reservoir draw is spent in
+selection, before placement ([R-AI-01 §8]) — and its placement fails trial
+by trial while the radius grows; on an all-land map a shipyard does the
+same. That is the retail behavior, not a gap.
+
+#### Air policy: the explore record, the resolver's air twins, and one addend — Established [R-AI-04 §4]
+
+1. **Every non-builder aircraft is a scout and nothing else.** The
+   classifier's `canfly → explore` row ([R-P0-04 §3]) precedes both the
+   water row and the armed row, so an armed aircraft never reaches a
+   regroup record and **no attack wave ever contains one**. The explore
+   record holds only such aircraft (no other row sends anything there), and
+   its body ([R-AI-01 §6]) issues code 2 and code 9, which the resolver
+   turns into `VTOL_Move` and `VTOL_Patrol` for a `canfly` actor
+   ([04 R-ORD-02 §1]): with fewer than five aircraft, a two- or three-leg
+   patrol inside an eighth of the map around the strategic centre (or, with
+   no centre, a patrol at the nearest hostile's position); with five or
+   more, a patrol to a random map edge. The computer player never issues an
+   aircraft an attack order; its aircraft fight only through the
+   `VTOL_Patrol` handler's own engagement, the return-fire path of
+   [R-AI-01 §11] and the weapon-maintenance acquisition of [R-AI-01 §15].
+2. **Construction aircraft are builders first.** The builder row precedes
+   the flyer row, so an air builder is in the construction record: pass 1
+   gives it `VTOL_MobileBuild`, pass 2 `VTOL_RepairPatrol` (§5).
+3. **Air factories and aircraft production have no special case.** An air
+   factory is a `bmcode 0` building and takes the ordinary placement root;
+   an aircraft candidate receives `+40` in the class routine's other-mix
+   accumulator for `canfly` ([R-P0-05 §5]) and nothing else air-specific.
+4. **Pads.** The strategic refresh's third vector — own active units that
+   are both `builder` and `isairbase` — is the target registry's third list
+   ([06 §3.1]), consumed by the engine's damaged-aircraft pad search
+   ([04 R-AIR-01 §11]) inside the VTOL handlers. The manager never reads
+   it; a computer-owned aircraft lands on a pad exactly when a human-owned
+   one would.
+5. **No air rally or patrol point.** The rally task would resolve code 3 at
+   its best point for a `canfly` member (an `AirStrike`/`AirToGround` run),
+   but record 9 has no producer ([R-P0-04 §5]).
+
+#### Repair, reclaim, scouting, guard and capture — Established [R-AI-04 §5]
+
+* **Patrol is the carrier of repair and reclaim.** The manager issues code 9
+  from two bodies: the construction task's repositioning pass for every
+  member of the construction record ([R-AI-01 §3] — a `cancapture` builder
+  gets a move then a queued patrol at the strategic centre; any other
+  builder a patrol toward a point up to 320 world units short of the
+  centre) and the explore task's legs and edge run. The resolver turns code
+  9 into `RepairPatrol` / `VTOL_RepairPatrol` when the actor's definition
+  carries the `canreclamate` mirror bit and into `Patrol` / `VTOL_Patrol`
+  otherwise ([04 R-ORD-02 §1]). So every builder that authors
+  `canreclamate` — in stock content the commander and the construction
+  units and aircraft — spends its idle time on a repair patrol, and the
+  **whole** of the computer player's repair and reclaim is what that handler
+  does on its own: repair a randomly drawn damaged or unfinished friendly
+  within `sightdistance` when energy is at least 20 % of storage, and
+  reclaim features sampled on a 48-unit lattice when metal or energy is
+  below 20 % ([04 R-ORD-01 §4], [04 R-ORD-01 §7]). The manager never passes
+  code 8 or code 12, never chooses a repair or reclaim target, and never
+  orders a unit reclaimed. What the handler reclaims is credited through the
+  difficulty discount like every other computer-player income
+  ([05 R-ECO-01 §11]).
+* **Guard and capture: never.** Code 7 is passed only by the `VTOL_Follow`
+  hand-off and the `InitialMission` interpreter; code 13 by nothing in the
+  image; and the computer player's code-2 calls carry no target, so the
+  contextual `Capture` arm is unreachable. A `cancapture` unit owned by the
+  computer player is used for its build list and its `maneuver` standing
+  order ([R-AI-01 §10]), never for capturing.
+* **Scouting is the explore task, and only aircraft do it.** §4 gives the
+  record's membership; a computer player that owns no non-builder aircraft
+  never issues an exploration order to anything, and no ground unit is ever
+  sent to an unexplored point. The rally task's probe walk is the only
+  other map-exploring behaviour and has no producer.
+
+#### No order handler branches on the owner being a computer player — Established [R-AI-04 §6]
+
+**The image-wide census of computer-owner tests (Established, owned
+elsewhere).** The image-wide
+census of "owner is a computer player" tests finds, outside the manager and
+its already-documented sites (the damage throttle [R-AI-01 §11], the profile
+passes [R-AI-01 §12], the dead status dump [R-AI-02 §2], the nearest-hostile
+helper's controller test [R-AI-01 §9]), only two families: the difficulty
+economy ladder of [05 R-ECO-01 §3] and [05 R-ECO-01 §11] (settlement, build
+credit, construction arithmetic, feature-reclaim credit) and the
+acquisition helper's admission relaxation for a computer shooter, already
+in [06 §3.1]. **No order handler branches on the owner being a computer
+player**: a transport, patrol, repair or attack order runs identically for
+both, which is why §2–§5 can hand the handler contracts to doc 04 without
+a computer-player variant.
+
+**What remains.** Nothing in this lane. The one item an implementer might
+still ask — what a ship does with a wave gather aimed at a land centroid, or
+what a mission-authored unload does on a computer-owned carrier — is the
+owner-independent handler contract of [04 R-ORD-01 §4] and [04 §10.2], not a
+computer-player question.
 
 ### What remains not established — Supported inference and unknown [P0-01] [P0-02] [P0-03]
 
-The class routine's per-definition inputs now have recovered field identities — extracts-metal, makes-metal, can-attack, builder, can-fly, can-load, is-feature, max-slope, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5). Audit: this doc previously claimed the addend-gating flag names were not closed; the field-level census recovered those identities, so the residual narrowed to the semantic name of the classification helper and the "strategic half-capacity state writer". The second of those is now closed and was a misreading of the base pointer — the value is the owning player record's live unit count ([R-AI-01 §13]) — so the only residual of this paragraph is the classification helper's semantic name. The classifier's two high runtime status bits retain opaque semantic names while their tests and destinations are fixed (R-P0-04 §3). The weapon table field identities are closed: the class routine reads the `DAMAGE/default` word (damage divided by 40) and the `range` word (range divided by 100); `reloadtime` is not read by it (the earlier "reload divided by 100" was inference and is retracted). The metal score returned by the placement helpers is established as the footprint per-cell metal-byte sum (the exhaustive helper maximizes it; the scatter helper compares it against surface metal times footprint X times footprint Z times two), and water legality is the yard path's waterline band.
+The class routine's per-definition inputs have recovered field identities — extracts-metal, makes-metal, can-attack, builder, can-fly, can-load, is-feature, `MinWaterDepth`, radar and sonar distance, and wind-generator — as runtime field mappings (R-P0-05 §5), and the weapon reads are the `DAMAGE/default` word (damage divided by 40) and the `range` word (range divided by 100). The one residual of the class routine is the semantic name of its signed classification helper. The population of the nine manager task group vectors is positive-static for the direct writer and the six classifier destinations; no additional distinct writer is located in the whole-image direct-store/xref census, and no capture-specific caller of the direct manager-group writer was found. The x87 control-word edge beyond the established narrowing to float32 at every helper invocation boundary remains an unknown of platform residual class; the default rounding mode is assumed. What is still not established for the computer player is the short list in [R-AI-01 §17] and the two items of [R-AI-03 §6]. [P0-02] [P0-03] [R-P0-04] [R-AI-01]
 
-The population of the nine manager task group vectors is now positive-static
-for the direct writer and the six classifier destinations; no additional
-distinct writer is located in the whole-image direct-store/xref census. No
-capture-specific caller of the direct manager-group writer was found. AI
-transport geometry and any distinct naval or air expansion policy beyond the
-generic move orders are **closed** by [R-AI-04] (2026-09-04, RWU-19-200): no
-transport producer exists and the computer player never builds a `canload`
-definition ([R-AI-04 §2]); the naval policy is the three `MinWaterDepth`
-tests of [R-AI-04 §3] and the air policy the classifier's flyer row plus the
-resolver's air twins of [R-AI-04 §4]; repair and reclaim are carried by the
-patrol orders alone ([R-AI-04 §5]). *Previous text:* "are not in this lane
-and remain unknown". The x87
-control-word edge beyond the established narrowing to float32 at every helper
-invocation boundary remains an unknown of platform residual class; the default
-rounding mode is assumed.
-
-**Audit (2026-08-28, RWU-08-1).** Two statements above have been superseded and
-are removed rather than restated: the classifier's "two high runtime status
-bits retain opaque semantic names" was already retracted by [R-P0-04 §3] (they
-are the building-class and armed bits), and the claim that what a populated
-group would make the task bodies do "is derivable from the task body
-decompilations" but not written down is no longer true — the six first virtual
-slots are specified in [R-AI-01 §1]–[R-AI-01 §9]. What is still not established
-for the computer player is the short list in [R-AI-01 §17] plus the placement
-geometry residual in [R-P0-05 §8].
-[P0-02] [P0-03] [R-P0-04] [R-AI-01]
-
-The four inert mission placement fields and the definition `ai_limit` field remain closed as bounded negative and must not be treated as strategic inputs. Earlier weighted-random loader claims are retracted.
+The four inert mission placement fields and the definition `ai_limit` field remain closed as bounded negative and must not be treated as strategic inputs; there is no weighted-random loader.
 
 
 ## DirectPlay transport
@@ -4213,10 +4895,6 @@ slack and no padding, which independently validates the length table.
 | `0x2a` | 2 | 7 | `+1` u8 stored into a per-peer field. The local producer emits it as the mean of six per-peer bytes (loading progress). |
 | `0x2c` | 3 | 4 | **Build completion**; routes into the unit-creation path. |
 
-Two corrections to the earlier family list: the integrity-breach type is
-`0x27`, not `0x25`; and `0x28` carries unit state synchronization rather than
-an economy hash.
-
 The types whose admission mask is 1 are absent from this switch, which is
 consistent: mask 1 admits a type only outside the battle-loading/live-battle
 states, so those are lobby packets belonging to a different receiver.
@@ -4325,9 +5003,8 @@ and the CRT stream from its own clock; the packet registry (all 46 declared
 types with byte-exact layouts) contains no seed-exchange packet, no handler
 writes the seed state, and the pre-battle readiness barrier exchanges only
 readiness and assignment data. Peers therefore run divergent random
-streams, which is consistent with the engine's known desync behavior; the
-earlier "requires peer agreement on random state" phrasing is retracted.
-The doc 01 §7.1 seed formula (sum of low and high parts of
+streams, which is consistent with the engine's known desync behavior. The
+doc 01 §7.1 seed formula (sum of low and high parts of
 `QueryPerformanceCounter`, XORed with a fixed constant, forced odd) is
 authoritative and is what battle entry applies. [lane 08 seed agreement]
 
@@ -4416,9 +5093,8 @@ closed.
 
 ### Economy and integrity checks — overwrite-sync, not compare
 
-No packet family establishes a fixed resource/economy hash comparison. The
-earlier assignment of that role to `0x28` is retracted. Packet `0x28` is a
-58-byte participant state message produced by a dedicated scanner thread polling
+No packet family establishes a fixed resource/economy hash comparison.
+Packet `0x28` is a 58-byte participant state message produced by a dedicated scanner thread polling
 every 250 ms across locally-owned × remote participant pairs, plus an
 immediate echo path that re-emits the packet toward its originator when the
 inbound echo flag is set. It is not per-tick and is tied to no tick modulo.
@@ -4440,11 +5116,9 @@ error found when switching FE states." diagnostic branch dead. Self-checks run
 only when switching front-end states, never per tick. Residual: the producer
 algorithm of packet `0x27`'s twelve opaque trailing bytes is unresolved; the
 exact three-byte throttle-acknowledgement format in the `0x28` receiver is
-not fully recovered. (The earlier residual "a separate orchestrator
-referencing numbered `.zrb` files remains untraced, including its guard
-relationship to the checksum path" is withdrawn: the `.zrb` files are the
-five Smacker cinematics and their sequencer is the front-end movie player,
-[R-OOS-01 §4]; it has no relationship to the checksum path.)
+not fully recovered. The `.zrb` files are the five Smacker cinematics; their
+sequencer is the front-end movie player ([R-OOS-01 §4]) and has no
+relationship to the checksum path.
 
 The four-accumulator checksum primitive and the map/terrain checksum state are
 established, but their on-wire exchange, cadence, and mismatch handling remain
@@ -4479,15 +5153,14 @@ No complete live reconnection or late-join state-transfer protocol has been
 found. The behavior for a transient DirectPlay loss versus a permanent peer
 departure remains incomplete.
 
-### Closed — the single-player boundary [R-OOS-01 §1] — packets the local path still constructs (2026-08-29)
+### The single-player boundary: packets the local path still constructs [R-OOS-01 §1]
 
-Established by RWU-08-6 from a full read of the two send helpers, the
-receiver's entry, every constructor that hands a packet to a send helper (42
-call sites) and the gate at each site. Nanolathe implements neither
-DirectPlay nor the lobby; this block states exactly where the single-player
-(kind 1 campaign, kind 2 skirmish) contract stops. §1 packets, §2 lobby
-record, §3 the out-of-scope subsystems, §4 video, §5 corrections. The raw
-trail is kept out of the repo.
+Established from a full read of the two send helpers, the receiver's
+entry, every constructor that hands a packet to a send helper (42 call
+sites) and the gate at each site. Nanolathe implements neither DirectPlay
+nor the lobby; §1–§5 state exactly where the single-player (kind 1
+campaign, kind 2 skirmish) contract stops: §1 packets, §2 the lobby record,
+§3 the out-of-scope subsystems, §4 video, §5 the cheat gate per kind.
 
 **The two send helpers (Established).** Every packet the engine emits goes
 through one of two helpers. The *broadcast helper* first validates the
@@ -4556,7 +5229,7 @@ sound started after its record) can be preserved where a doc cites it, and
 so that the pause/speed contract of [01 R-PLAT-01 §3] is read as a pure
 local bit flip.
 
-### Closed — the single-player boundary [R-OOS-01 §2] — the lobby record and `Cheat Codes` (2026-08-29)
+### The single-player boundary: the lobby record and `Cheat Codes` [R-OOS-01 §2]
 
 **Fields of the per-slot lobby record the single-player session reads
 (Established).**
@@ -4593,23 +5266,16 @@ multiplayer they dispatch iff the host allowed `Cheat Codes`. The `+`
 dispatcher itself and the tokenizer never read the lobby word; the local
 path consults the lobby *bit* only through this entry-time copy. The
 doc 07 tail's "how the multiplayer receive path applies the lobby bit before
-re-dispatching a received `+` line" stays open and out of scope.
+re-dispatching a received `+` line" stays open and out of scope. The OR
+goes into the command dispatcher's *route* word, not the message's
+recipient mask; the recipient mode is forced to *everyone* only afterwards,
+and only when the dispatched entry's mask had bit 2 ([07 R-CAM-01 §6]).
 
-**Correction to [R-ENTRY-01 §2].** That section said the word was "a
-chat-routing flag, not a simulation authority" whose reader "ORs a routing
-bit into the message's target mask". The reader was right, the destination
-wrong: the OR goes into the command dispatcher's *route* word, not the
-message's recipient mask (the recipient mode is forced to *everyone* only
-afterwards, and only when the dispatched entry's mask had bit 2 —
-[07 R-CAM-01 §6]). The word is the **cheat-enable gate**. The tail item
-"Which chat targets the routing bit … selects" is closed by this.
+### The single-player boundary: subsystems entirely out of scope [R-OOS-01 §3]
 
-### Closed — the single-player boundary [R-OOS-01 §3] — subsystems entirely out of scope (2026-08-29)
-
-The coverage ledger (raw corpus) tags a function OOS only when every caller,
-transitively, is lobby, DirectPlay, network or video code; a fixpoint over
-the whole call graph was run this unit and each pre-existing tag sampled.
-After this unit the OOS set is 247 functions:
+A function is out of scope only when every caller, transitively, is lobby,
+DirectPlay, network or video code (a fixpoint over the whole call graph).
+The out-of-scope set is 247 functions:
 
 | Subsystem (ledger cluster) | Functions | What it is |
 |---|---:|---|
@@ -4621,12 +5287,12 @@ After this unit the OOS set is 247 functions:
 | startup and shell pump | 3 | the `-N`/`-H` lobby-launch command-line handlers ([01 R-PLAT-01 §2]) |
 | battle host pump, unclustered | 1 + 1 | the DirectPlay guaranteed-flag setter; one accessor |
 
-Nine functions previously tagged OOS were on single-player paths and are
-retagged (the broadcast helper; the slot↔id lookups; the host lookup before
-the feature-damage packet; one script-run sender; the mover record
-constructor and destructor; the per-unit account constructor; the
-battle-entry lobby refresh) — their contracts live in the sections the
-ledger now cites. The *sections* of this document that are out of scope in
+Nine functions that lobby code also reaches are on single-player paths and
+are *not* in that set: the broadcast helper, the slot↔id lookups, the host lookup before the
+feature-damage packet, one script-run sender, the mover record constructor
+and destructor, the per-unit account constructor and the battle-entry lobby
+refresh; their contracts live in the sections that cite them. The
+*sections* of this document that are out of scope in
 their entirety are "Peer transport state", "DirectPlay transport", "Packet
 framing and dispatch" beyond the length/mask table §1 relies on, "Send pacing
 and batching", "Receive buffering", "Ping and adaptive timing", "Lockstep
@@ -4635,7 +5301,7 @@ advancement" beyond the single-player scheduler facts it restates from doc
 loss", "Multiplayer saves" and "Lobby behavior"; their tail items are kept
 for exhaustiveness only.
 
-### Closed — the single-player boundary [R-OOS-01 §4] — the video boundary (2026-08-29)
+### The single-player boundary: the video boundary [R-OOS-01 §4]
 
 **What the single-player path plays (Established).** Five cinematics,
 `1.zrb` … `5.zrb`, resolved through the movie path joiner of
@@ -4645,9 +5311,8 @@ word is non-zero (miss → 1; the word is then written 0, so this runs once per
 install), else `1.zrb` alone unless the restricted-config flag of
 [01 R-PLAT-01 §2] (the `-N` switch) is set; the ending states of
 [R-CAMP-01 §6] play `3.zrb` or `4.zrb` followed by `5.zrb`; a further shell
-state plays `5.zrb` alone. The "`.zrb` orchestrator" that "Economy and
-integrity checks" listed as untraced is this sequencer; it has no relation
-to the checksum path (correction below).
+state plays `5.zrb` alone. This sequencer has no relation to the checksum
+path.
 
 **What the sequencer does around the library (Established).** For one
 file: stop all sounds; join the path; **a missing file is skipped
@@ -4675,19 +5340,13 @@ the codec, frame buffers, audio mixing or ordinals is part of the contract;
 Nanolathe may substitute any decoder that honours "play once, skip on any
 character key, resume the shell".
 
-### Closed — the single-player boundary [R-OOS-01 §5] — corrections (2026-08-29)
+### The single-player boundary: the cheat gate per kind [R-OOS-01 §5]
 
-1. **[R-ENTRY-01 §2]** — the word written per kind at battle entry is the
-   cheat-enable gate of the `+` dispatcher, not a message-target routing
-   flag (§2 above).
-2. **"Economy and integrity checks"** said "a separate orchestrator
-   referencing numbered `.zrb` files remains untraced, including its guard
-   relationship to the checksum path". It is the movie sequencer (§4) and
-   has no guard relationship to any checksum; the residual is deleted there.
-3. **Doc 07 [R-CAM-01 §6]** — "the single-player path consults no cheat gate
-   — every mask-1 and mask-2 command below is live in skirmish and campaign"
-   is wrong for campaign: mask-2 commands are gated off in kind 1 (§2).
-   Doc 07 is corrected by its owner; this document records the finding.
+The word written per kind at battle entry ([R-ENTRY-01 §2] step 4) is the
+cheat-enable gate of the `+` dispatcher (§2): mask-2 commands dispatch in
+skirmish, never in campaign (unless the developer bit supplies route `7`),
+and in multiplayer iff the host allowed `Cheat Codes` ([07 R-CAM-01 §6]).
+The `.zrb` sequencer of §4 has no guard relationship to any checksum.
 
 
 ## Save-file organization
@@ -4716,8 +5375,7 @@ pool if allocated, and returns zero. The payload after the header is either
 read as is or decompressed with the same decompressor the archive reader uses;
 a decompression failure emits a `HapiBank::OpenBank::Decompression...` /
 `LoadAccount::Decompression...` diagnostic through the **fatal** channel
-(system-modal box, then exit code 1 — [02 R-MALF-01 §11]; corrected
-2026-08-29, this sentence previously said "but parsing continues").
+(system-modal box, then exit code 1 — [02 R-MALF-01 §11]).
 
 **Accounts.** The payload is a sequence of *accounts*. Each nonempty account
 begins with a 32-byte header; empty accounts are not emitted and the body may
@@ -4746,9 +5404,8 @@ following the descriptors. Boxes grow as needed; empty file boxes have no
 descriptor. Offsets, counts, and pool references are not range-checked; short
 headers leave stack bytes in offsets; negative scalar/box counts skip loops
 rather than reject; a declared span `<= 32` leaves the cursor after the header
-instead of at `start+span` on the unfiltered path; decompression errors emit a
-diagnostic but parsing continues; payload offsets outside the logical body are
-not validated before copy.
+instead of at `start+span` on the unfiltered path; payload offsets outside
+the logical body are not validated before copy.
 
 The executable can also dump a bank as a readable audit listing — account
 count, per-account name, each box's name or number and byte count, and each
@@ -4824,7 +5481,9 @@ features are packed nibbles covering half that; mapping is raw bytes for half
 the cells; the radar image is 8 bytes of width and height plus width times
 height preview bytes and is never used for authoritative load.
 
-**Established fact — fix-up and partial-load order.** Loading mutates live
+#### Fix-up and partial-load order
+
+**Established.** Loading mutates live
 initialized state in fixed account order rather than building a shadow copy:
 Players are restored first, then Camera, then Features, then Metal, then
 PlayerFeatures, then Mapping, then Units, then Meteor, then trigger state.
@@ -4838,20 +5497,20 @@ family is skipped. File I/O is opened as write-plus-binary and truncates at
 open with no temporary or backup; every post-open write, seek, or close result
 is ignored.
 
-**Established fact — battle versus campaign continuations and timing.** Load
-preflight accepts only game type 1 (campaign) and 2 (multiplayer); any other
-value fails as invalid. **A save with BetweenMissions equal to 1 routes
+#### Battle versus campaign continuations and timing
+
+**Established.** Load preflight accepts only game type 1 (campaign) and 2
+(multiplayer); any other value fails as invalid. **A save with BetweenMissions equal to 1 routes
 through campaign-continuation handling: battle restoration is skipped and
 the fresh mission spawner rebuilds the battle from the authored mission file
 (the campaign's Summary metadata — Campaign, Mission, Difficulty, Thumbs
 W/L marks — drives the front end). A save without the BetweenMissions item
 (the in-battle marker) routes through the six-state path and directly enters
-battle restoration.** This settles the earlier contradictory corpus readings
-(flag-present → restore versus flag-present → continuation): the battle-entry
-gate checks the Summary BetweenMissions item twice, and only the absent/zero
-case calls the battle restore dispatcher; the present case falls through to
-the fresh spawner, and a BetweenMissions save contains only Summary so no
-battle state could be restored by any other reading. The 28-byte scheduler
+battle restoration.** The battle-entry gate checks the Summary
+BetweenMissions item twice, and only the absent/zero case calls the battle
+restore dispatcher; the present case falls through to the fresh spawner, and
+a BetweenMissions save contains only Summary so no battle state could be
+restored. The 28-byte scheduler
 block is persisted verbatim and then
 recomputed on the first budget pass from a stale anchor, which can produce a
 capped five-tick catch-up, zero, or pause; the per-player UpdateTime deadline
@@ -4886,12 +5545,10 @@ defaults on missing or mistyped items: `maxunits` low 16 bits else 0;
 fields default 1. `Thumbs` is copied during preflight, so a malformed absence
 can drive a copy from a null source (retail risk preserved).
 
-*Addendum (2026-09-04, WU-19-158) — Established, bounded-negative: that list
-is the whole account.* The writer was re-read for this unit and emits exactly
-the items named above, in that order, and no others. Nothing "beyond the
-established list" remains to decode: an implementation that carried a `T25`
-placeholder for further Summary fields was reserving space for items the
-account does not have.
+**That list is the whole account (Established, bounded negative).** The
+writer emits exactly the items named above, in that order, and no others;
+an implementation that reserves space for further Summary fields is
+reserving it for items the account does not have.
 
 Residual: the upstream GUI filename edit-character policy and code-page
 interpretation remain unknown.
@@ -4954,32 +5611,24 @@ names. Build queue records use encoded unit/request names and payload fields.
 The exact persistence of every script thread local, operand stack, wait state,
 signal mask, and callback is not yet closed.
 
-#### R-SAVE-UNIT-01 — Unit base record and fixed-slot reconstruction
+#### Unit base record and fixed-slot reconstruction [R-SAVE-UNIT-01]
 
-This addendum closes the part of the unit save contract needed to stage a
-deterministic fixed-slot restore. It supersedes only the preceding statement
-that a unit record stores “enough” state; it does not close the order, script,
-accessory, mobile, or feature boxes. The positions below are offsets within a
-save-file unit box, not executable layout. The record uses little-endian
-integers and has two accepted lengths: 184 bytes (`0xB8`) and the distinct
-182-byte compatibility form (`0xB6`). [Established; [01 §6.1], [04 §2.3]]
-
-**Correction to the preceding revision.** The earlier table called the
-position order X/Z/Y and left both short words and the orientation payload
-unassigned. The writer/read census, reconciled with the movement and damage
-callers, establishes the runtime order as X/Y/Z, identifies the first short as
-current health, identifies the second as the wrapping kill counter, and
-separates bank, heading, and pitch. The authored mission-placement record
-still uses its own X/Z/Y order; that unrelated format order caused the earlier
-save-record reversal. [Established; direct writer/read symmetry and bounded
-caller census]
+This section gives the part of the unit save contract needed to stage a
+deterministic fixed-slot restore; the order, script, accessory, mobile and
+feature boxes are [R-SAVE-ORDER-01], [R-SAVE-02 §9], [R-SAVE-02 §7],
+[R-SAVE-02 §8] and [R-SAVE-FEATURE-01]. The positions below are offsets
+within a save-file unit box, not executable layout. The record uses
+little-endian integers and has two accepted lengths: 184 bytes (`0xB8`) and
+the distinct 182-byte compatibility form (`0xB6`). The runtime position
+order is X/Y/Z (the authored mission-placement record's X/Z/Y order is a
+different format). [Established; [01 §6.1], [04 §2.3]]
 
 **Writer/reader symmetry.** The writer emits the fields in the fixed order
 below. The reader selects the same numbered box, accepts only one of the two
 lengths, and decodes the `0xB8` fields before running the later fix-up passes.
-The field's runtime name is included only where the current evidence closes
-it; an opaque word must remain opaque in a staged image rather than being
-assigned a plausible `Unit` field.
+Every word's runtime name is given ([R-SAVE-02 §6] and [R-SAVE-02 §14]
+carry the evidence for the ones the base census left opaque); the words
+whose semantics an implementation does not consume are preserved verbatim.
 
 | Save bytes | Wire form | Meaning and restore disposition |
 |---|---|---|
@@ -4987,7 +5636,7 @@ assigned a plausible `Unit` field.
 | `0x20` | `u8` | Source owner/player byte. It is part of the base identity and must be validated against the player slice used for the forced allocation. [Established for the wire field; exact malformed-value policy is Unknown] |
 | `0x21..0x22` | `u16` | Stable unit ID and forced pool slot. Zero is the null sentinel; a live unit may not use slot zero. [Established] |
 | `0x23..0x26` | `u32` | Count of order/build records associated with this unit. The records themselves are restored by the later order pass. [Established] |
-| `0x27..0x2A` | `u32` | Runtime boolean word. Its authoritative semantic name is Unknown; preserve it without converting it to `Alive`, `Dying`, or a command flag. |
+| `0x27..0x2A` | `u32` | **Has-mover flag**: `1` when the unit owned a mover at save time, else `0`; the reader restores the `u%04xmob` box only when it is nonzero. It is not `Alive`, `Dying`, or a command flag. [Established; [R-SAVE-02 §6]] |
 | `0x2B..0x2E`, `0x2F..0x32`, `0x33..0x36` | `u32` each | Fixed-point world X, Y, and Z, respectively. They are copied as raw 16.16 values; no terrain resampling is part of base restore. [Established; the authored placement record's separate X/Z/Y order is not this runtime record] |
 | `0x37..0x38` | `u16` | Signed bank/roll orientation component. [Established by the orientation consumer and writer source word] |
 | `0x39..0x3A` | `u16` | Unsigned 16-bit heading/yaw on the circular angle domain. [Established] |
@@ -4996,30 +5645,30 @@ assigned a plausible `Unit` field.
 | `0x3F..0x40` | `u16` | Unit kill counter used by veterancy; it wraps as a word. It is not health. [Established; [06 §9.2]] |
 | `0x41..0x88` | 3 × 24-byte embedded records | Three weapon-slot payloads. The exact per-slot map and the fields intentionally omitted from it are closed below in **R-SAVE-WEAPON-01**. [Established; [R-SAVE-WEAPON-01]] |
 | `0x89..0x8A`, `0x8B..0x8C` | `u16` each | Stable IDs for two optional cross-unit references; zero means absent. These are resolved recursively before attachment is committed. [Established] |
-| `0x8D` | `u8` | Reference-associated byte, or `0xFF` when the first reference is absent. Its complete semantic name is Unknown; preserve the sentinel. |
-| `0x8E` | `u8` | Low byte of another runtime state word. Semantic name is Unknown. |
-| `0x8F..0x92` | `u32` | Stored extractor/site-yield word used by the unit's placement/economy state. Preserve verbatim; recomputing it from the map would change save behavior. [Established for persisted word; exact public field mapping is implementation-dependent] |
-| `0x93..0x9E` | 3 × `u32` | Cached cell/footprint words used by placement and occupancy. They are derived-looking but are written and read as part of the base record; preserve them until occupancy fix-up. Their exact packing is Unknown. |
-| `0x9F..0xA6` | 2 × `u32` | Two persisted runtime counters/deadline words. Their complete semantic names are Unknown; do not map them to kills, experience, or a timer without a field-isolation probe. |
+| `0x8D` | `u8` | **Carrier attach slot**: the index the carrier's attach-position routine uses for this unit, or `0xFF` when the unit has no live carrier. [Established; [R-SAVE-02 §6]] |
+| `0x8E` | `u8` | **Attacker-side snapshot**: the owner byte of the last unit that damaged it (`10` = no attacker). [Established; [R-SAVE-02 §6]] |
+| `0x8F..0x92` | `f32` | **Spot-metal yield**: the placement-time metal sum for extractors, never resampled. Preserve verbatim; recomputing it from the map would change save behavior. [Established; [R-SAVE-02 §6]] |
+| `0x93..0x9E` | 3 × (`i16`, `i16`) | The committed occupancy cell pair, the sight-registration cell pair and the packed footprint size pair; written and read as part of the base record and re-issued by the occupancy and sight registration passes. [Established; [R-SAVE-02 §6]] |
+| `0x9F..0xA6` | 2 × `u32` | The **AI group index** (`−1` for none; its restore moves the unit into that group record) and the **reveal deadline tick**. [Established; [R-SAVE-02 §6]] |
 | `0xA7..0xAA` | raw `f32` | Construction remaining fraction. It is the saved construction state and follows the retail fraction convention (completed is zero, an unfinished unit is positive up to the authored range). [Established] |
-| `0xAB..0xAD`, `0xB0..0xB1` | five `u8` values | Persisted runtime bytes whose individual semantics are Unknown. Preserve exactly. |
-| `0xAE..0xAF` | `u16` | Capability/pending-mask word. Only the established low-width behavior may be interpreted; preserve the full short for later command/construction fix-up. [Established wire field; complete bit map remains partial] |
+| `0xAB..0xAD`, `0xB0..0xB1` | five `u8` values | The death-cause byte, the current and previous health-percentage samples, the stored line-of-sight byte and the damage-flash byte. [Established; [R-SAVE-02 §6], [R-SAVE-02 §14]] |
+| `0xAE..0xAF` | `u16` | The order pending-gate mask (the word the order pump masks with `0x83FF`). [Established; [R-ORD-01 §1]] |
 | `0xB2..0xB3` | `u16` | Low state byte, zero-extended: bit 0 activated, bit 1 armored, bit 2 engine-driven cloak, and bit 3 building. The edge machine consumes these values after base restore. [Established; [04 §2.4]] |
-| `0xB4..0xB7` | `u32` packed word | Packed unit status plus the low nibble of the second state byte. The status component carries the authoritative alive bit, death latch, and completion bit: alive is bit `0x10000000`, dying/death-mark is `0x4000`, and construction-complete is `0x2000`. The second state byte's low nibble carries in-build-stance, busy, yard-open, and bugger-off state, but its exact packed bit positions inside this save word are not closed. Bits 17..19 can contain writer-side uninitialized values and must not drive state. [Established logical status bits; Unknown packed placement of the second byte and remaining bits; [04 §2.4]] |
+| `0xB4..0xB7` | `u32` packed word | The second state byte's low nibble (in-build stance, busy, yard-open, bugger-off) in word bits 0..3 and the unit's flags word repacked around it; the live bit is **not** in the word, the completion marker is flags bit 13 and flags bit 14 is the auto flag. Word bits 17..19 can contain writer-side uninitialized values and must not drive state. The exact packing is under [R-SAVE-02 §6]. [Established; [04 §2.4]] |
 
-The table is deliberately asymmetric in one important respect: definition,
-owner, fixed-slot identity, position, orientation, current health,
-construction remaining, and the established lifecycle/state bits are safe
-inputs to a minimally live staged unit. The definition's compiled maximum
-health is the authoritative cap; no maximum-health scalar is serialized in
-the base record. The opaque weapon-slot subfields, cached cells, counters,
-individual bytes, and unassigned high status bits do not block allocation, but
-must be retained and deferred to their owning passes. [Established]
+Definition, owner, fixed-slot identity, position, orientation, current
+health, construction remaining, and the state bits are the inputs to a
+minimally live staged unit. The definition's compiled maximum health is the
+authoritative cap; no maximum-health scalar is serialized in the base
+record. The weapon-slot subfields, cell pairs, deadlines and individual
+bytes do not block allocation, but must be retained and applied by their
+owning passes. [Established]
 
 A loader must not manufacture a live unit from a name and stable ID alone: it
 must apply the saved owner, fixed-point transform, signed health, remaining
-fraction, activation/building state, and packed alive/death status, then run
-the later registration and occupancy steps. [Established]
+fraction, activation/building state, and packed status word, then run the
+later registration and occupancy steps. A loaded unit is alive because the
+forced-slot allocator made it so; no saved live bit exists. [Established]
 
 **Identity and minimal base restore.** The loader first validates the Units
 account version (`0x11`) and count. For each enumerated box, a `0xB8` stable ID
@@ -5035,19 +5684,16 @@ save enumeration order. [Established; [01 §6.1], [01 §6.1 player-slice order],
 
 The first base-restore write set is therefore: definition identity, owner,
 stable slot, X/Y/Z fixed-point position, bank/heading/pitch, signed current
-health, construction remaining, low activation/building state, the alive and
-death status bits, the complete opaque state/weapon payload, and reference
-placeholders. The allocator's live bit and the saved live bit must agree for
-a reconstructable record; a saved death latch is retained so the normal
-slot-end death path sees a dying unit rather than silently reviving it. The
-restored object is not published as a fully usable unit until reference,
+health, construction remaining, low activation/building state, the packed
+status word, the weapon payload, and reference placeholders. The restored
+object is not published as a fully usable unit until reference,
 accessory/mobile, order, script, registration, derived occupancy, and
 visibility steps have completed. A missing definition, failed forced
 allocation, duplicate stable ID, or absent referenced box is a failed staged
 image rather than an invitation to allocate a replacement slot.
-The retail reader can skip a failed reconstruction; the transactional loader
-planned by CRD-009 must report the failure before commit so that a failed image
-cannot partially replace the live session. The latter is an implementation
+The retail reader can skip a failed reconstruction; Nanolathe's transactional
+loader must report the failure before commit so that a failed image cannot
+partially replace the live session. The latter is an implementation
 boundary, not a claim that retail itself was transactional. [Retail behavior
 Established; transactional consequence Supported inference]
 
@@ -5066,14 +5712,12 @@ the base record alone:
 - the count at `0x23` drives numbered order boxes (`u%04xm%04x`) and their
   subtype records; these rebuild order nodes, targets, links, and build queues;
 - the three weapon-slot payloads are completed by the weapon/subtype path;
-- per-unit accessory and mobile boxes restore attachment and mover state —
-  the "mobile" box is keyed `u%04xmob` and is the unit's **mover** record, not
-  mobile-*builder* state (correction, 2026-08-28, RWU-04-1: the earlier
-  wording read "mobile-builder state", which named the wrong subsystem; the
-  box is written and read by the mover's own serializer and its fields are
-  listed in the tail item below and in [04 §8.1 R-MOV-01 §1]);
-- sequential script boxes restore the COB snapshot, stack, pieces, waits,
-  signals, and callbacks; script persistence remains only partially closed;
+- per-unit accessory and mobile boxes restore the resource account and the
+  mover state — the "mobile" box is keyed `u%04xmob` and is the unit's
+  **mover** record ([R-SAVE-02 §8], [04 §8.1 R-MOV-01 §1]), the accessory
+  box `u%04xacc` the resource account ([R-SAVE-02 §7]);
+- sequential script boxes restore the COB thread records, statics and
+  per-axis animation words ([R-SAVE-02 §9]);
 - registration and derived occupancy run after raw state and references;
   visibility is published last, before the first authoritative tick.
 
@@ -5082,7 +5726,7 @@ unit and prevents the first tick from observing footprints that were derived
 from stale map state. [Established fix-up order; [08 “Unit and script
 records”], [04 §2.3]]
 
-#### R-SAVE-WEAPON-01 — Fixed weapon-slot records and transient aim state
+#### Fixed weapon-slot records and transient aim state [R-SAVE-WEAPON-01]
 
 The three records at `0x41 + 0x18*n`, for `n = 0..2`, are fixed-width,
 little-endian 24-byte records. The save writer and unit reconstructor use the
@@ -5101,17 +5745,7 @@ wire map, not a prescription for Nanolathe's in-memory layout. [Established;
 | `0x12..0x13` | `s16` | Desired yaw/heading for the slot's aim request. Restore exactly on the circular 16-bit angle representation. [Established; [06 §3.3]] |
 | `0x14..0x15` | `s16` | Desired pitch for the slot's aim request. Restore exactly; it is not a unit orientation field. [Established; [06 §3.3]] |
 | `0x16` | `u8` | Stockpile remainder (completed rounds). Restore the byte exactly; launch decrements this value and does not change reload. For non-stockpile weapons the serialized byte is still part of the fixed record and must not be repurposed. [Established; [06 §11]] |
-| `0x17` | `u8` | Only bits 0..4 are meaningful persisted slot flags. Bit 0 is the Aim-request/result latch, bit 1 is armed/has-target, and bit 4 is tracking; bits 2 and 3 retain their slot-flag positions but their semantic names are not closed. The writer and reader discard/overwrite the upper three bits; their observed high-bit values are stack residue, not state. [Established bit behavior; Unknown names for bits 2/3; [06 §3.3]] |
-
-**Correction (2026-09-02, RWU-19-19, `[06 R-WPN-05 §3]`).** The `0x17` row
-above says "bits 2 and 3 retain their slot-flag positions but their semantic
-names are not closed". They are closed: bits 2–3 hold the **slot's own index**
-(0, 1, 2), written once by the slot initializer at unit construction and read
-by the muzzle queries, the projectile creators (to pick `Fire*` and the slot's
-recoil yaw) and the fire packet. A reader that restores the byte wholesale
-restores them correctly; a reader that rebuilds the byte must put the record's
-position `n` into those two bits. Bits 5–7 are inert in the executable as well
-as discarded on the wire.
+| `0x17` | `u8` | Only bits 0..4 are meaningful persisted slot flags. Bit 0 is the Aim-request/result latch, bit 1 is armed/has-target, bits 2–3 hold the **slot's own index** (0, 1, 2 — written once by the slot initializer at unit construction and read by the muzzle queries, the projectile creators and the fire packet, `[06 R-WPN-05 §3]`), and bit 4 is tracking. The writer and reader discard/overwrite the upper three bits; their observed high-bit values are stack residue, not state, and bits 5–7 are inert in the executable as well. A reader that restores the byte wholesale restores the slot index correctly; one that rebuilds the byte must put the record's position `n` into bits 2–3. [Established; [06 §3.3]] |
 
 The active-definition byte at `0x08..0x0B` is the important identity
 boundary. Two different weapon definitions with the same active gate produce
@@ -5183,12 +5817,10 @@ inference for the transactional rejection boundary]
   that only the enclosing compatibility rule accepts `0xB6` and that a partial
   weapon record never crosses into the next slot.
 
-The former R-SAVE-UNIT-01 statement that the complete weapon-slot schema was
-unknown is superseded by this map. The remaining Unknowns are limited to the
-semantic names of the two copied payload words, bits 2/3 of the saved flags,
-and the exact reader-side policy when a saved active byte disagrees with the
-unit definition. None of these permits treating the active byte as identity
-or restoring a muzzle piece from the record. [Unknown]
+The remaining Unknowns are limited to the semantic names of the two copied
+payload words and the exact reader-side policy when a saved active byte
+disagrees with the unit definition. Neither permits treating the active byte
+as identity or restoring a muzzle piece from the record. [Unknown]
 
 **Validation and compatibility-length rules.** A valid unit image requires
 Units version `0x11`, a nonpositive unit count to produce no units, exact
@@ -5244,22 +5876,16 @@ opaque:
 - feed exact `0xB6`, `0xB8`, short, and long boxes under version `0x11`, plus
   version `0x10`, to assert the compatibility/null and whole-account gates.
 
-The remaining Unknowns are the boolean at `0x27`, the semantic names of the
-two weapon-slot payload words and flag bits 2/3 (see R-SAVE-WEAPON-01), the
-exact cached-cell packing, counter/deadline meanings, the individual byte
-meanings, the full capability/pending mask, the packed placement of the
-second state byte inside `0xB4..0xB7`, and the high status bits that can
-contain writer-side stale values. None blocks fixed-slot allocation or the
-minimally live base fields above. They are not safe to infer from width or
-adjacency; an implementation depending on one must carry the raw bytes
-through the staged image and settle its mapping with the corresponding
-field-isolation probe. [Unknown]
+The remaining Unknowns of the unit record are the semantic names of the
+two weapon-slot payload words (see R-SAVE-WEAPON-01) and the value of word
+bits 17..19 of the packed status word, which the writer never sets. Neither
+blocks fixed-slot allocation or the minimally live base fields above; an
+implementation carries the raw bytes through the staged image. [Unknown]
 
-#### R-SAVE-ORDER-01 — Per-unit order records and subtype payloads
+#### Per-unit order records and subtype payloads [R-SAVE-ORDER-01]
 
-This addendum closes the save boundary for the dynamic order list. It
-supersedes the earlier statement that the 58-byte order record was only a
-length observation. The offsets below are positions in a save-file box, not
+This section gives the save boundary for the dynamic order list. The offsets
+below are positions in a save-file box, not
 native object layout. All integers are little-endian. The main record is
 exactly `0x3A` bytes and is named `u%04xm%04x`, where the first number is the
 parent unit's stable slot and the second is the order sequence emitted by the
@@ -5339,20 +5965,18 @@ other payload words are opaque subtype state until their handler defines them.
 
 | Code | Exact size | Save payload map |
 |---:|---:|---|
-| `2` | `0x36` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot. `0x0A..0x19`: 16-byte temporary/reference area; the reader consumes it as scratch and does not install it as a pointer. `0x1A..0x1B`: second unit stable slot. `0x1C..0x25`: five little-endian `u16` payload words. `0x26..0x35`: four little-endian `u32` payload words. The semantic subtype name and the relation represented by either unit are Unknown. [Established widths and reference positions; Unknown meanings] |
-| `3` | `0x2A` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot. `0x0A..0x0B`: one `u16` payload word. `0x0C..0x23`: six `u32` payload words. `0x24..0x29`: three `u16` payload words. The unit reference's subtype relation is Unknown. [Established widths and reference position; Unknown meanings] |
+| `2` | `0x36` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot (the owner). `0x0A..0x19`: 16-byte temporary/reference area; the reader consumes it as scratch and does not install it as a pointer. `0x1A..0x1B`: second unit stable slot (the target). `0x1C..0x25`: five little-endian `u16` payload words. `0x26..0x35`: four little-endian `u32` payload words. The class is the air work point (path marker); the word names are under [R-SAVE-02 §10]. [Established] |
+| `3` | `0x2A` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot (the owner). `0x0A..0x0B`: one `u16` payload word. `0x0C..0x23`: six `u32` payload words (two 16.16 triples). `0x24..0x29`: three `u16` payload words. The class is the `AirToAir` handler's velocity marker ([R-SAVE-02 §10], [R-SESS-01 §6]). [Established] |
 | `4` | `0x10` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x0F`: three `u32` payload words. No logical reference is established. [Established] |
 | `5` | `0x18` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x17`: five `u32` payload words. No logical reference is established. [Established] |
 | `6` | `0x14` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x13`: four `u32` payload words. No logical reference is established. [Established] |
 
-The subtype table deliberately does not assign names such as target, weapon,
-path, or construction state to the opaque words. The bounded writer/reader
-census proves widths, copy positions, and the two code-2 plus one code-3 unit
-references, but it does not prove the subtype dispatcher's public vocabulary.
-Those words must be retained in a staged raw payload (or a typed structure
-whose unknown fields are losslessly preserved). Treating the 16-byte code-2
-temporary area as a native pointer would create a dangling reference and is
-specifically incorrect. [Established; [04 §3.2], [06 §11.1]]
+The subtype classes and their constructors are named under [R-SAVE-02 §10];
+the words that section leaves unnamed must be retained in a staged raw
+payload (or a typed structure whose unknown fields are losslessly preserved).
+Treating the 16-byte code-2 temporary area as a native pointer would create
+a dangling reference and is specifically incorrect. [Established; [04 §3.2],
+[06 §11.1]]
 
 **Fix-up and failure rules.** The minimum deterministic reconstruction order is:
 
@@ -5392,13 +6016,11 @@ prefix bytes cannot restore them. [Established omission; [01 §4.4], [04 §3.3,
 **Closure and residual probes.** The wire contract is sufficient for a
 transactional *wire-level* queue image: a loader can validate exact lengths,
 preserve every serialized word, maintain primary/secondary sequence, and fix
-up all explicitly represented unit IDs before publication. It is not yet
-sufficient to expose semantic typed constructors for subtype codes 2–6. The
-remaining Unknowns are the subtype family names, the relation of each unit
-reference, the meaning of code-2's temporary 16 bytes, and the meanings of
-the opaque numeric payload words. They must remain raw/opaque until a bounded
-handler census or retail probe closes them. [Established closure boundary;
-Unknown semantics]
+up all explicitly represented unit IDs before publication. The subtype
+classes are named ([R-SAVE-02 §10]); the remaining Unknowns are two words of
+the code-2 payload and the three trailing `u16` words of the code-3 payload,
+which remain raw until a field-isolation trace closes them. [Established
+closure boundary; Unknown residual words]
 
 Implementation-ready probes are small and format-local: round-trip one record
 for each code at exactly its accepted size; change one payload word at a time;
@@ -5414,10 +6036,9 @@ transactional assertions]
 
 ### Feature records
 
-#### R-SAVE-FEATURE-01 — Feature record maps and staged reconstruction
+#### Feature record maps and staged reconstruction [R-SAVE-FEATURE-01]
 
-This addendum closes the feature portion of the battle image. It supersedes
-the preceding one-sentence description of the three partitions. The offsets
+This section gives the feature portion of the battle image. The offsets
 below are positions inside save-file boxes, not executable layout. All integer
 fields are little-endian. The save contains a type-name side channel and a
 plot census; it does not contain the feature allocator's free list. [Established;
@@ -5528,8 +6149,8 @@ check and are handled by normal sequential stamping and collision policy.
 [Established for the observed reader branches; Unknown for the resulting
 state of malformed out-of-range or duplicate records]
 
-These permissive paths are not a transactional contract. The CRD-009 loader
-must validate every complete record's length, coordinate, remapped type,
+These permissive paths are not a transactional contract. Nanolathe's
+transactional loader must validate every complete record's length, coordinate, remapped type,
 family classification, and duplicate anchor before touching the live terrain,
 feature pool, catalog, or occupancy cache. It must stage the records in the
 writer's family order and row-major order, run placement against the staged
@@ -5538,7 +6159,7 @@ validated. Any failure discards the staged catalog additions, feature slots,
 animation records, terrain changes, and occupancy notifications together.
 This is an implementation boundary derived from the required whole-session
 transaction; retail's own loader is incremental and has no rollback. [Retail
-mutation order Established; transactional boundary Supported inference; CRD-009]
+mutation order Established; transactional boundary Supported inference]
 
 **Closure and remaining unknowns.** The wire image is implementation-ready
 for lossless feature staging: names remap by case-insensitive identity, family
@@ -5558,6 +6179,21 @@ provide duplicate or out-of-range anchors. Transactional tests should assert
 that every malformed case leaves the live session and catalog unchanged,
 while a separate compatibility fixture may record the retail skip/no-op
 behavior. [Supported inference for transactional assertions]
+
+#### Feature writer: an animating cell whose sequence matches no family writes no record — Established [R-SESS-01 §4]
+
+[R-SAVE-FEATURE-01] gives the three record maps and says the animating
+record's selector nibble is `0`, `1` or `2` for the burn, death and reclaim
+families. The writer side has one more edge: the nibble is chosen by
+comparing the cell's live animation-sequence pointer against the
+definition's three family sequences in that order, and when it matches
+**none** of them the cell is skipped entirely — no `Animating Features`
+record, and the `Number of Animating Features` count is not incremented.
+Such a feature (one whose live sequence pointer was set by some path other
+than the three families) is simply absent from the save and does not exist
+after load. The "other selector values" the reader tolerates therefore never
+originate from the retail writer. The 3D and normal branches have no such
+skip.
 
 ### Player records
 
@@ -5585,15 +6221,13 @@ values and are not re-seeded on load; battle init seeds `UpdateTime`,
 `WinLoseTime`, and `DisplayTimer` to the current tick for all active slots
 before load overwrites them. The consumer census for the sibling fields is
 closed: `WinLoseTime` has **no reader anywhere in the image** beyond the
-save writer (the earlier display-candidate attributions were targeting and
-feature helpers that do not reference it) — it is persisted verbatim for
-compatibility and otherwise inert; `DisplayTimer` is the **HUD resource-rate
+save writer — it is persisted verbatim for compatibility and otherwise
+inert; `DisplayTimer` is the **HUD resource-rate
 refresh deadline**: a presentation function advances it by thirty whenever
 it trails the global tick and refreshes the four displayed resource-rate
 floats from the player record.
 
-*Addendum (2026-09-02, RWU-19-32) — Established.* `WinLoseTime`'s complete
-access census: written by the per-player reset of battle entry
+**`WinLoseTime`'s complete access census (Established).** It is written by the per-player reset of battle entry
 ([R-ENTRY-01 §3] step 24, when the global tick is 0) and by the save
 reader; read by the save writer only. In a battle reached without a load it
 is therefore `0` for the whole session, and a restored value never changes
@@ -5611,8 +6245,8 @@ accounts (after the human-player byte has already been applied). Before main
 battle init, an independent pre-pass visits all ten player accounts and
 restores `Controller` (default 0) so controller types exist for setup.
 
-*Addendum (2026-09-04, WU-19-158) — Established, bounded-negative: the table
-above is the whole account.* Both sides were read end to end. The **writer**
+**The table above is the whole account (Established, bounded negative).**
+Both sides were read end to end. The **writer**
 selects the `Players` account, emits `Human Player` and the 28-byte `GameTime`
 box, then walks the ten player records and, for each whose active byte is set,
 selects `Player%i` and emits exactly the nineteen items of the table above in
@@ -5630,7 +6264,32 @@ sharing option** in the account. And `Logo` and `Side` are read from the
 player's *definition* record rather than the player record itself, which is why
 they sit outside the runtime-width column above.
 
-### Closed — the Save Game screen: file naming, the slot list, overwrite and delete [R-SAVE-02 §1] (2026-08-29)
+### The `Alliances` box carries row A, the alliance predicate's row [R-SAVE-02 §15]
+
+One eleven-byte `Alliances` box is emitted per active `Player%i` account
+("Player records"); which of the slot's two rows ([05 R-SHARE-01 §1]) it
+carries is settled from both sides.
+
+**Established — writer and reader.** The writer copies the slot's **row A**
+— this player's own declaration toward each slot index, the row every
+simulation predicate indexes — into the box, eleven bytes, immediately after
+`Side`. The reader, when the selected box is exactly eleven bytes, copies
+those bytes into the same row A and then forces the slot's own column to
+`1`. **Row B** (the mirror of the other slots' declarations toward this
+player) is neither written nor read by the save path: after a load it holds
+whatever slot initialization left there (the self entry only), which in
+single-player is also what battle entry leaves ([R-SKIR-01 §2]).
+
+**Consequence.** A restored battle reproduces every giver's own alliance
+declarations exactly, so resource sharing, the sensor phase's allied
+disjunct, the guard's combat join and the all-enemies-eliminated test — all
+row-A readers — behave as before the save. The one row-B reader, the mutual
+victory test, sees a diagonal-only row B after a load; in single-player it
+saw the same before the save, so nothing observable changes. A future
+multiplayer save would lose the mirror, which is a retail limitation, not
+one to repair.
+
+### The Save Game screen: file naming, the slot list, overwrite and delete [R-SAVE-02 §1]
 
 **Established — one GUI file, two screens.** Both the save and the load
 dialog are built from `LOADGAME.GUI` with a different backdrop (`DSAVEGAME2`
@@ -5695,7 +6354,7 @@ file-delete call, ignores the result, rebuilds the list and refreshes the
 panel; there is no confirmation. `CANCEL` returns to the previous screen and
 frees the name, description, side-name and radar buffers.
 
-**Closed (2026-09-04, WU-19-171) — which timestamp the sort word is.** It is
+**The sort word is the last-modification time.** It is
 the file's **last-modification** time, as a `time_t` in seconds. The
 enumerator copies the fourth dword of the record the content layer's
 directory walk fills; that record is the C run-time's find-data block, whose
@@ -5707,8 +6366,8 @@ entry sorts as time zero. The save directory is loose-only, so that case does
 not arise for this list; it does mean the word is not usable as a timestamp
 for archive-backed listings elsewhere.
 
-**Closed (2026-09-04, WU-19-171) — what the save action does *not* do, and
-the dialog's cue column.** The save handler's whole body is: an in-battle-only
+**What the save action does *not* do, and the dialog's cue column.** The
+save handler's whole body is: an in-battle-only
 clear of one GUI-context list head, the `smlbutton` cue, and — when the
 `GAMENAME` text is non-empty — the path build and the write. It does **not**
 close the window and does **not** re-enumerate the list, so the slot just
@@ -5723,7 +6382,7 @@ nothing else; the load direction's commit arm plays `SMLBUTTON` after its disc
 gates pass and before the restore. The two route buttons are hidden in both
 directions and have no arm, hence no cue.
 
-### Closed — the Load Game screen and every load diagnostic, verbatim [R-SAVE-02 §2] (2026-08-29)
+### The Load Game screen and every load diagnostic, verbatim [R-SAVE-02 §2]
 
 **Established — the empty list.** When no file survives the list build, the
 load screen is closed again and the message box `There are no saved games to
@@ -5755,8 +6414,7 @@ follow case 4, after which the load cannot fail through a message.
 string `expected %d units, got %d` (and its sibling `No units_expected sent
 from player`) is produced by the multiplayer lounge's per-peer status text
 — it compares a peer's announced unit count with the units received during
-game start — and is not referenced by any save or load function. The
-question in this unit's brief rested on a misattribution; there is no
+game start — and is not referenced by any save or load function; there is no
 unit-count diagnostic on load. A `Number of Units` larger than the boxes
 present simply ends the enumeration when a numbered box is missing (the
 loader selects box `i`, and a failed select skips that index), and a
@@ -5774,7 +6432,7 @@ the battle-loading worker, and the list buffers are freed. A campaign save
 load-pending flag, frees the bank, and enters the new-mission sub-state — the
 continuation route already described under "Summary".
 
-### Closed — the summary panel, exactly [R-SAVE-02 §3] (2026-08-29)
+### The summary panel, exactly [R-SAVE-02 §3]
 
 The panel reads only the `Summary` account of the selected file. `RADAR`
 shows the `Radar Image` box when present (8-byte header: `u32` width, `u32`
@@ -5791,8 +6449,7 @@ when the table is absent. `DIFF` is `Easy`, `Medium`, `Hard` indexed by
 `Difficulty`. Every panel field defaults to the empty string when no entry is
 selected. [Established]
 
-**Closed (2026-09-04, WU-19-171) — the out-of-range `Difficulty`, which stood
-here as Unknown.** There is no fourth row and no clamp. The three labels are
+**The out-of-range `Difficulty`.** There is no fourth row and no clamp. The three labels are
 not a table in the image at all: the panel writer stores the three string
 pointers into three consecutive **stack** slots immediately before reading the
 `Summary` integer, then indexes those slots with the raw value and formats the
@@ -5803,7 +6460,7 @@ large enough sends a non-pointer through the formatter. A reimplementation
 should render nothing for an out-of-range value rather than invent a fourth
 label.
 
-### Closed — in-game options: when the buttons are greyed [R-SAVE-02 §4] (2026-08-29)
+### In-game options: when the buttons are greyed [R-SAVE-02 §4]
 
 The in-game options window (`ARMOPT.GUI`) routes `LOADGAME` to the load
 screen and `SAVEGAME` to the save screen. When the window is built, both
@@ -5812,11 +6469,10 @@ gadgets' first control bit is set exactly when the session kind is `3`
 interface uses for unavailable buttons (doc 07 owns its rendering —
 Supported inference that it is the greyed/disabled state; the setting
 condition itself is Established). Skirmish (kind 2) and campaign (kind 1)
-sessions may therefore save and load from the options menu; the earlier
-tail item "upstream multiplayer GUI authority and menu enablement" is closed
-by this gate. [Established gate; Supported inference for the visual effect]
+sessions may therefore save and load from the options menu. [Established
+gate; Supported inference for the visual effect]
 
-### Closed — `SAVELIST` / `LOADLIST` are unit-restriction lists, not save games [R-SAVE-02 §5] (2026-08-29)
+### `SAVELIST` / `LOADLIST` are unit-restriction lists, not save games [R-SAVE-02 §5]
 
 `SAVELIST.GUI` and `LOADLIST.GUI` (backdrops `DSaveList`, `DLoadList`; the
 title is again `Save Game`) belong to the unit-restriction editor of the
@@ -5829,7 +6485,7 @@ for each definition index from `1` upward that has a restriction record,
 one `u32` definition id word and one `u32` restriction value. The empty-list message is `There are no saved lists
 to choose from`. Nothing in this family touches a save bank. [Established]
 
-### Closed — the `Units` account, word by word [R-SAVE-02 §6] (2026-08-29)
+### The `Units` account, word by word [R-SAVE-02 §6]
 
 **Established — writer traversal and account items.** The writer walks the
 unit pool from the **last** slot down to the first and emits every unit
@@ -5858,18 +6514,18 @@ save-record positions.
 | `0x89..0x8A` | Stable slot of the **carrier** the unit is attached to (transport or air base), or `0` when it has none or the carrier is dead. On load a nonzero value is restored recursively and then re-attached through the local attach command (type 10) with the byte at `0x8D` and the mover-mode bits of `0xB4`. | [R-AIR-01], [04 §6] carrier link |
 | `0x8B..0x8C` | Stable slot of the unit's **engagement-target link**, or `0` when absent or dead. Restored recursively as a plain reference; nothing is attached. Its ordinary-play producer is the open item in [04 "Missing and unknown"]. | doc 04 guard handlers (consumer); writer/reader symmetry |
 | `0x8D` | **Carrier attach slot**: the index the carrier's attach-position routine uses for this unit; `0xFF` when the unit has no live carrier. | the carried-position resolver reads it beside the carrier pointer [R-MOV-01 §1] |
-| `0x8E` | The unit's **attacker-side snapshot**: the owner byte of the last unit that damaged it, stored beside the recorded-attacker link of `0x8B..0x8C` and read by the under-attack notice ([06 R-WPN-04 §2]; writer census in [04 R-UNIT-06 §5]). It is set to `10` (no attacker) by the spawn initializer on all three creation paths and by the developer console kill, to the attacker's owner byte by the damage dispatcher, and by save load; the per-unit tick refresh never writes it. **Correction (2026-09-02, RWU-19-17):** this row previously read "Low byte of the unit's relation-domain byte (initialised to `10` at creation and by the per-tick refresh). Its semantic name is not closed — **Unknown**; preserve. Decider: trace of the target-registry comparison that reads it." The routine that reading took for a per-tick refresh is the spawn initializer — its only callers are the three unit-creation paths — the same misidentification RWU-19-13 corrected in [04 R-UNIT-06 §1]; the actual per-unit tick refresh stores nothing to this byte, and a whole-image census of stores of `10` to it finds exactly the spawn initializer and the console kill. **Established.** | [04 R-UNIT-06 §5] writer census; writer/reader copy |
-| `0x8F..0x92` | **Spot-metal yield, `f32`** (not `u32`): the placement-time metal sum for extractors, never resampled. Correction: the earlier row's wire form was `u32`; the bit pattern is a single-precision float. | [R-PROD-01 §6] / doc 04 COB port census |
+| `0x8E` | The unit's **attacker-side snapshot**: the owner byte of the last unit that damaged it, stored beside the recorded-attacker link of `0x8B..0x8C` and read by the under-attack notice ([06 R-WPN-04 §2]; writer census in [04 R-UNIT-06 §5]). It is set to `10` (no attacker) by the spawn initializer on all three creation paths and by the developer console kill, to the attacker's owner byte by the damage dispatcher, and by save load; the per-unit tick refresh never writes it (a whole-image census of stores of `10` to it finds exactly the spawn initializer and the console kill). **Established.** | [04 R-UNIT-06 §5] writer census; writer/reader copy |
+| `0x8F..0x92` | **Spot-metal yield, `f32`**: the placement-time metal sum for extractors, never resampled; the bit pattern is a single-precision float. | [R-PROD-01 §6] / doc 04 COB port census |
 | `0x93..0x96` | Committed occupancy cell pair (`i16` x, `i16` z). | [R-COLL-01 §1] |
 | `0x97..0x9A` | Sight-registration cell pair (`i16` x, `i16` z) — the cell the visibility registration record points at. | [R-VIS-01] registration record |
 | `0x9B..0x9E` | Packed footprint size pair (`i16` x size, `i16` z size). | [R-COLL-01 §1] |
 | `0x9F..0xA2` | **AI group index**, `−1` for none: the index of the owner's group record the unit is enrolled in. On load the reader moves the unit out of whatever group it holds and into this one (group-vector append, allocating when full), so this is the one base-record word with a side effect beyond a field copy. | [R-P0-04 §2] group records |
 | `0xA3..0xA6` | **Reveal deadline tick**: the absolute tick until which the unit is exposed to sensors (the sensor phase writes `tick + 90`, a script port `tick + 300`). | [03 sensor phase], doc 04 port census |
 | `0xAB` | **Death-cause byte**: the cause code recorded by the last damage packet and passed to the `Killed` script query. | [06 §9.2] damage packet, [R-COB-04] |
-| `0xAC`, `0xAD` | A current/previous byte pair rotated once per unit tick. Semantic name **Unknown** — decider: trace of the unit tick's byte rotation and its reader. Preserve exactly. **Named 2026-09-04 by [R-SAVE-02 §14]:** the current and previous health-percentage samples of the tick-30 roll. | writer/reader copy; unit tick |
+| `0xAC`, `0xAD` | The **current and previous health-percentage samples** of the tick-30 roll ([R-SAVE-02 §14]). | writer/reader copy; unit tick |
 | `0xAE..0xAF` | Order pending-gate mask (the word the order pump masks with `0x83FF`). | [R-ORD-01 §1] |
 | `0xB0` | Stored line-of-sight byte (emitter height in ray mode, shape index in sprite mode). | [R-VIS-01] |
-| `0xB1` | A countdown byte decremented once per unit tick while nonzero. Semantic name **Unknown** — decider: trace of the two readers in the unit tick. Preserve exactly. **Named 2026-09-04 by [R-SAVE-02 §14]:** the damage-flash (minimap blink) byte of [06 R-WPN-04 §2]. | writer/reader copy |
+| `0xB1` | The **damage-flash** (minimap blink) byte of [06 R-WPN-04 §2], decremented once per unit tick while nonzero ([R-SAVE-02 §14]). | writer/reader copy |
 | `0xB2..0xB3` | The state byte zero-extended to a `u16`: bit 0 activated, bit 1 armored, bit 2 cloaked, bit 3 building; `0xB3` is always `0` on write and ignored on read. | [04 §2.4] |
 
 **Established — the packed status word at `0xB4..0xB7`, exactly.** With
@@ -5891,16 +6547,12 @@ flag bits, in word positions: mover-mode mirror at word bits 4–5 (also fed to
 the allocator and to the re-attach command), move-rate tier at 6–7,
 completion marker (flags bit 13) at word bit 16, the auto/initial-posture
 flag (flags bit 14) at 20, standing-move (flags 18–19) at 24–25 and
-standing-fire (flags 20–21) at 26–27 ([R-STANCE-01 §6]). **Correction.** The
-R-SAVE-UNIT-01 row says "the status component carries the authoritative
-alive bit … alive is bit `0x10000000`, dying/death-mark is `0x4000`, and
-construction-complete is `0x2000`". Those are runtime flag values, and the
-live bit (flags bit 28) is **not in the save word at all** — the shift drops
-flags bits 26..31; a loaded unit is alive because the forced-slot allocator
-made it so, and the reader's "allocator live bit and saved live bit must
-agree" sentence has no saved bit to compare. Flags bit 14 is the auto flag,
-not a death mark ([04 R-P0-09]); the completion marker is flags bit 13. The
-"bits 17..19 can contain writer-side uninitialized values" sentence stands.
+standing-fire (flags 20–21) at 26–27 ([R-STANCE-01 §6]). The live bit
+(flags bit 28) is **not in the save word at all** — the shift drops flags
+bits 26..31; a loaded unit is alive because the forced-slot allocator made
+it so, and there is no saved live bit to compare. Flags bit 14 is the auto
+flag, not a death mark ([04 R-P0-09]); the completion marker is flags bit
+13. Word bits 17..19 can contain writer-side uninitialized values.
 
 **Established — what the reader does with the record, in order.** Definition
 lookup by name; forced-slot allocation with the saved owner, position and
@@ -5920,7 +6572,7 @@ second state byte's yard-open bit is set, the yard re-stamp
 ([R-COLL-01 §4]). A record whose stable slot is already live is skipped
 without reading.
 
-### Closed — `u%04xacc` is the unit's resource account [R-SAVE-02 §7] (2026-08-29)
+### `u%04xacc` is the unit's resource account [R-SAVE-02 §7]
 
 The component whose two 24-byte halves the box carries is the per-unit
 resource account — the structure the direct two-resource payment and the
@@ -5932,7 +6584,7 @@ in place only when the box exists. The account's field layout is doc 05's
 individual words are copied verbatim and none is a pointer. [Established
 identity and copy; the per-word layout is owned by doc 05]
 
-### Closed — `u%04xmob`, the 35-byte mover record, exactly [R-SAVE-02 §8] (2026-08-29)
+### `u%04xmob`, the 35-byte mover record, exactly [R-SAVE-02 §8]
 
 | Box bytes | Wire form | Field |
 |---|---|---|
@@ -5952,28 +6604,14 @@ last-proposal tick, the follower pointer and the route object are rebuilt
 the packed status word (§6), so a hand-edited save can disagree between the
 two; the mover's byte wins for the mover, the mirror for the unit.
 
-**Correction to the tail (and to [04 R-COLL-01 §5]'s "second unnamed
-word").** The tail listed the order as "the 16.16 velocity triple, the
-three-component lean residual vector, one unnamed 32-bit word, the scalar
-speed word, the signed 16-bit turn residual, a second unnamed 32-bit word,
-and finally a byte", which sums to 39 bytes; the box is 35. There is no
-unnamed word between the lean vector and the speed, and the single unnamed
-word after the turn residual is the last-stamp tick named above. The
-earlier RWU-04-1 trail counted the lean vector as two components plus one
-unknown; it is three components.
+No save serializer emits a leading blocked-flag bit before a waypoint
+count: the only save record carrying the blocked flag is the byte above,
+where the mode occupies bits 0–1 and the blocked flag bit 2, and no count
+field exists in the box. (The **network** unit stream is where a blocked bit
+precedes a two-bit `min(count, 3)` waypoint count — doc 04 [R-COLL-01 §5]
+item (4), [R-PATH-01 §1] — and that writer is out of scope here.)
 
-**Verdict on the "route serializer leading bit".** An earlier report claimed
-"the route serializer emits one leading bit (mover blocked flag) before the
-2-bit count". No save serializer does this. The only save record carrying
-the blocked flag is the byte above, where the mode occupies bits 0–1 and the
-blocked flag bit 2 — the blocked bit *follows* the mode bits, and no count
-field exists in the box. The description matches the **network** unit
-stream instead (doc 04 [R-COLL-01 §5] item (4): the follower's stream writer
-copies the blocked bit into the stream, and [R-PATH-01 §1]'s
-`min(count, 3)` two-bit waypoint count) — the claim is retracted for the
-save path and referred to the stream writer, which is out of scope here.
-
-### Closed — the `Script%i` box, byte-exact [R-SAVE-02 §9] (2026-08-29)
+### The `Script%i` box, byte-exact [R-SAVE-02 §9]
 
 The box holds three concatenated images; the reader accepts the box only
 when its length equals exactly `0x528 + 4·S + 0x6C·P` (`S` statics, `P`
@@ -6013,16 +6651,10 @@ state.
    (move-now/turn-now) slots; finally the global animation-dirty gate is set
    and every per-piece busy gate is forced for the next interpolation pass.
 
-**Correction (2026-08-31).** The earlier wording called the record word at
-`0x20` unnamed, described only ten physical window words, and called the final
-restore state a separate "script restored" word. The settled record census
-identifies `0x20` as the native completion receiver, expands the physical
-window to 32 words (`0x24..0xA0`), and identifies the final restore state as
-the existing global animation-dirty gate. The ten-word limit remains an
-authored opcode semantic limit, not a wire-image truncation. This correction
-is why the loader validates raw status/top values and restores the complete
-window while deliberately leaving the receiver unbound. [Established; [04
-§4.1], [04 §4.2], [04 §4.6], [R-COB-01 §1]]
+The ten-word limit of the opcode semantics is not a wire-image truncation:
+the loader validates raw status/top values and restores the complete
+32-word window while deliberately leaving the receiver unbound.
+[Established; [04 §4.1], [04 §4.2], [04 §4.6], [R-COB-01 §1]]
 
 The writer's decompilation stores only one of its three piece-level getter
 results inside dwords 24..26 (the other two land in a stack slot the axis
@@ -6031,9 +6663,8 @@ stack values" sentence: dwords 24 and 25 carry stack residue and the reader
 installs that residue through the show/hide and cache setters. [Established
 layout and sizes.]
 
-**Closed (2026-09-04, WU-19-155) — which getter is lost, and how.** The
-byte-level trace this paragraph asked for was done, and the frame arithmetic is
-exact. The writer builds one 27-dword stack buffer per piece and calls the three
+**Which getter is lost, and how.** The frame arithmetic is exact. The
+writer builds one 27-dword stack buffer per piece and calls the three
 piece-level getters **before** the axis loop. The first two calls store into the
 **same** frame slot — dword 23 — so the second overwrites the first; the axis
 loop then writes dwords `0+a, 3+a, 6+a, 9+a, 12+a, 15+a, 18+a, 21+a` for
@@ -6049,13 +6680,12 @@ show/hide and cache ones; the shade getter is the survivor.** The residue's
 the preceding call left in that stack region, not a function of game state — so
 a reimplementation has no retail value to reproduce there and must treat those
 two dwords as a local policy choice rather than a contract. [Established
-mechanism; residue value Unknown by construction.] With this, the "script persistence
-remains only partially closed" item under R-SAVE-UNIT-01 is closed: the box
-persists every thread word, every static and every per-axis animation word,
-and nothing else (callbacks are the receiver word inside each thread record;
-there is no separate callback table).
+mechanism; residue value Unknown by construction.] Script persistence is
+therefore closed: the box persists every thread word, every static and every
+per-axis animation word, and nothing else (callbacks are the receiver word
+inside each thread record; there is no separate callback table).
 
-### Closed — the order subtype families, named [R-SAVE-02 §10] (2026-08-29)
+### The order subtype families, named [R-SAVE-02 §10]
 
 The code at `0x04` of the `u%04xm%04x` record is the value returned by the
 order's sub-object through its class slot, and the reader constructs the
@@ -6065,7 +6695,7 @@ constructors that make each class:
 | Code | Payload | Class | Constructed by |
 |---:|---:|---|---|
 | `2` | `0x36` | the **path marker** (air work point) — flag word, arrival radius, height offset, side word, owner and target unit links, goal X/Y/Z 16.16 ([R-PATH-01 §9] "Class-D"; [R-AIR-01]) | the VTOL move/patrol/follow order handlers |
-| `3` | `0x2A` | a two-vector work record: owner unit link, two 16.16 triples, three `u16` words | the `AirToAir` handler — its only runtime constructor ([R-SESS-01 §6]; this cell said **Unknown** until 2026-08-29) |
+| `3` | `0x2A` | a two-vector work record: owner unit link, two 16.16 triples, three `u16` words | the `AirToAir` handler — its only runtime constructor ([R-SESS-01 §6]) |
 | `4` | `0x10` | the **point goal** handle (relative cell pair, radius parameter, squared threshold) | `Move_Ground`/`Patrol` goal install ([R-ORD-01 §1]) |
 | `5` | `0x18` | the **annulus goal** (outer/inner) | annulus goal install ([R-ORD-01 §1]) |
 | `6` | `0x14` | the **rectangle goal** (packed origin, packed size) | rectangle goal install ([R-ORD-01 §1]) |
@@ -6087,7 +6717,21 @@ words [R-PATH-01 §9] defines. The name side channel is the string item
 parameter 1 names a definition index below the loaded count and only when
 that key is not already present. [Established]
 
-### Closed — what is not saved, and the fix-up order that rebuilds it [R-SAVE-02 §11] (2026-08-29)
+### The code-3 order sub-object has one runtime constructor: the `AirToAir` handler — Established [R-SESS-01 §6]
+
+The code-3 payload (the two-vector work record of [R-SAVE-02 §10]) is
+[04 R-PATH-01 §9]'s air moving point — the *velocity marker* whose per-tick
+turn clamp is [04 R-MOV-03 §2]'s — and its runtime constructor has exactly
+one call site: the `AirToAir` handler's phase 0/1 leg ([04 R-AIR-01 §8],
+[04 R-ORD-02 §5]). Its only other constructor is the save reader's, which
+rebuilds it from the code-3 box. A code-3 record in a save therefore always
+belongs to an `AirToAir` order that was in flight at save time; its first
+triple is the marker's position and the second its per-tick velocity, and
+the class code the reader matches is the marker's own class-code slot
+(`3`, [04 R-MOV-03 §9]). The three trailing `u16` words remain unnamed
+(tail).
+
+### What is not saved, and the fix-up order that rebuilds it [R-SAVE-02 §11]
 
 **Established — the load order, restated from the dispatchers.** Summary
 `maxunits` → Players (human-player byte, 28-byte timing block, per-slot
@@ -6123,7 +6767,39 @@ ordinary constructors and first ticks:
 - the scheduler's clock anchor after the first budget pass ("Scheduler and
   random state in saves").
 
-### Closed — the computer player after a battle restore [R-SAVE-02 §11-A] (2026-09-04)
+### The restored `maxunits` word: where it lands, unclamped, and what reads it next — Established [R-SESS-01 §9]
+
+[R-ENTRY-01 §6] names the battle-restoration dispatcher's first step,
+`Summary.maxunits` → "lobby unit-limit copy", and notes that the pool of the
+battle being loaded was already sized from that copy as it stood before the
+restore. The step itself, exactly:
+
+- The dispatcher tests the `Summary` account for a `maxunits` item; **only
+  when present** does it read it (integer, low 16 bits) and store it into
+  the **configured unit-limit word** — the one word the start-up profile
+  read seeds from `[Preferences]` `UnitLimit` (default 250, clamped 20..500,
+  [R-SKIR-01 §6]) and the multiplayer battleroom's `MAXUNITS` control
+  mirrors. A save without the item leaves the word untouched. **No clamp is
+  applied** at the restore.
+- Skirmish and multiplayer battle entry then copy that word into the
+  **session** limit word verbatim — the entry copy has no clamp either
+  ([R-SKIR-01 §6]'s "then clamped" is the start-up read only). So a restored
+  value outside 20..500 would size the *next* battle's pool at exactly that
+  value; a save written by retail carries the start-up-clamped word and never
+  exercises this.
+- The battle being restored is unaffected: its pool was allocated from the
+  pre-restore word ([R-ENTRY-01 §3]), and the restored session word is not
+  rewritten during a restore. The save writer records the configured word
+  (not the session word) as `Summary.maxunits`.
+
+*Implementation note (not a retail fact).* Nanolathe's "configured word" is
+the application's setup record in `cmd/nanolathe`, which supplies each
+battle's `UnitLimit` and the restore's pool size; the session package holds
+only the per-battle copy. Carrying the restored value to a second battle in
+one process is therefore an application-level write at the restore site,
+not a session change; `sessionUnitLimit` records exactly that.
+
+### The computer player after a battle restore [R-SAVE-02 §11-A]
 
 **Established.** The list above — "the AI's strategic state, class vectors and
 manager tasks" are regenerated — says what is *absent*; this section says what
@@ -6131,9 +6807,7 @@ the load path runs *instead*, because an implementation that reads that line as
 "rebuild the planner from the bank" finds nothing to rebuild it from and leaves
 the computer player idle for the rest of the battle. No new tracing was needed:
 every clause below is drawn from sections already closed, and this section
-exists so the load-path answer sits in one place. Written for WU-19-172, whose
-predecessor observed a restored Nanolathe battle in which the human player's
-units continued exactly and the computer player's commander never moved again.
+exists so the load-path answer sits in one place.
 
 **The planner is re-entered as at session entry, not restored.** The world
 rebuild "runs next, once per battle, for every kind and for loads alike"
@@ -6194,15 +6868,15 @@ computer player resumes: it dispatches all ten task slots once, on the restored
 world, before the first tick after the load is run at all.
 
 **Bounded negative.** Nothing else of the planner is persisted. The account
-inventory holds no AI account, the `Player%i` item list is closed (the
-WU-19-158 addendum under "Player records"), and the group index is the only
+inventory holds no AI account, the `Player%i` item list is closed ("Player
+records"), and the group index is the only
 AI-owned word in the unit box (§6). A restored battle therefore cannot continue
 a computer player's *plan*; it can only restart one — which, with both random
 streams reseeded before any restoration ("Scheduler and random state in
 saves"), is the same statement as "a loaded save resumes logical world state,
 not bit-identical future behavior".
 
-### Closed — Camera, Metal, PlayerFeatures and Mapping, exactly [R-SAVE-02 §12] (2026-08-29)
+### Camera, Metal, PlayerFeatures and Mapping, exactly [R-SAVE-02 §12]
 
 `Camera`: two integer items, `X Position` and `Z Position`, the camera's
 world position words; on load both are copied into the camera's current
@@ -6223,37 +6897,26 @@ per-slot item list is the full "Player records" table plus `Logo` and
 `Side`; the `Human Player` integer's load default is `10` (no human). All
 [Established].
 
-### Closed — corrections to earlier text [R-SAVE-02 §13] (2026-08-29)
+### The unit record's words, resolved [R-SAVE-02 §13]
 
-1. R-SAVE-UNIT-01's "alive is bit `0x10000000` … dying/death-mark is
-   `0x4000`" for the packed word: wrong — see §6; the live bit is not
-   persisted and flags bit 14 is the auto flag.
-2. R-SAVE-UNIT-01's `0x27` "runtime boolean word, name Unknown": it is the
-   has-mover flag (§6).
-3. R-SAVE-UNIT-01's `0x8F` "`u32`": it is an `f32` (§6).
-4. The "Save and replay" tail's seven-field `u%04xmob` order: wrong (39
-   bytes for a 35-byte box); see §8.
-5. The tail's "the `u%04xacc` … field list is a separate open item": closed
-   by §7 (the resource account's layout is doc 05's).
-6. The "Summary" section's "`Description` when the caller supplies a
-   non-null one": the interface always supplies the typed name (§1).
-7. The account inventory's description of `Script%i` as "per-unit" is right
-   but under-specified: it is numbered by box index, not stable slot (§6).
-8. The brief's premise that `expected %d units, got %d` is a load
-   diagnostic: it is lounge text (§2).
+Established, gathered from §1–§9: the packed status word carries no live
+bit, its completion marker is flags bit 13 and flags bit 14 is the auto flag
+(§6); `0x27` is the has-mover flag (§6); `0x8F` is an `f32` (§6); the
+`u%04xmob` box is 35 bytes in the seven-field order of §8; the `u%04xacc`
+box is the per-unit resource account, whose layout is doc 05's (§7); the
+`Summary` `Description` is always the typed name (§1); `Script%i` is
+numbered by box index, not stable slot (§6); and `expected %d units, got %d`
+is lounge text, not a load diagnostic (§2).
 
-### Closed — the `0xAC`/`0xAD` sample pair and the `0xB1` countdown byte, named [R-SAVE-02 §14] (2026-09-04)
+### The `0xAC`/`0xAD` sample pair and the `0xB1` countdown byte, named [R-SAVE-02 §14]
 
-Status: **Established** (the save writer's source field and the save reader's
+**Established** (the save writer's source field and the save reader's
 destination field for each byte, both read directly; the per-unit tick
-refresh read for the two behaviors; raw disassembly of the countdown step).
+refresh read for the two behaviors; the countdown step read at the
+instruction level).
 
-Three rows of the §6 table were left opaque — "preserve exactly" — and the
-"Missing and unknown" bullet below narrowed the `0xB1` row (WU-19-188) to two
-candidates: the minimap damage-flash byte of `[06 R-WPN-04 §2]`, or the
-post-capture grace counter of `[04 R-MOV-03 §1]` step 6. The writer and the
-reader settle all three rows, and the same trace closes the grace-counter
-alternative:
+Three bytes of the §6 table, by the writer's source and the reader's
+destination:
 
 | Save bytes | Named meaning | Evidence |
 |---|---|---|
@@ -6268,21 +6931,13 @@ selection predicates read. Neither the unit writer nor the unit reader
 touches it: a loaded unit's grace counter is whatever the allocator left,
 which is zero. So the "two readers in the unit tick" decider in the old
 `0xB1` row described the grace counter's readers, but the byte the row
-names is the flash byte — the row conflated the two adjacent countdowns.
-**Established** (bounded over the writer's and reader's field lists).
-
-**What this corrects.** The §6 rows for `0xAC`/`0xAD` ("a current/previous
-byte pair rotated once per unit tick. Semantic name Unknown") and `0xB1` ("a
-countdown byte decremented once per unit tick while nonzero. Semantic name
-Unknown") stand as descriptions of the mechanics and are superseded as to
-the names by this table; the rotation is per tick-30 roll, not per tick.
-`[06 R-WPN-04 §2]`'s "carried in the unit save record" now has its offset.
-For Nanolathe: the unit codec reads and writes `CurrentSample`,
-`PriorSample` and `BlinkSuppress` at these offsets, so a loaded unit resumes
-its blink and its death-severity history; the grace counter stays
+names is the flash byte; the two adjacent countdowns are distinct.
+**Established** (bounded over the writer's and reader's field lists). The
+sample rotation is per tick-30 roll, not per tick. A loaded unit therefore
+resumes its blink and its death-severity history; the grace counter stays
 unpersisted, as retail leaves it.
 
-### Closed — the bank writer's compression policy and the typed-item primitives [R-ENTRY-02 §3] (2026-08-29)
+### The bank writer's compression policy and the typed-item primitives [R-ENTRY-02 §3]
 
 "Location and representation" gives the byte layout and the reader's
 tolerance; this section adds what an implementer of the **writer** and of
@@ -6344,6 +6999,24 @@ reader uses.**
 - A bank object created for writing starts with no accounts and no current
   account; the first account-select creates the account.
 
+### Box write primitives — Established [R-SESS-01 §2]
+
+[R-ENTRY-02 §3] gives the bounded box **read**. The subsystem writers use
+three more primitives on the current account's current box:
+
+* **size** — returns the box's byte count;
+* **seek** — sets the box's cursor to `clamp(requested, 0, size)`; a negative
+  request seeks to 0, a request past the end seeks to the end;
+* **append** — writes `n` bytes at the cursor, first growing the box's buffer
+  to exactly `cursor + n` bytes when that exceeds the current capacity (the
+  buffer is reallocated in place, existing bytes preserved), then advances the
+  cursor by `n` and returns `n`. The copy is a plain forward byte copy; no
+  bound other than the grow applies.
+
+The feature writer's idiom — `seek(size)` then `append(record)` — is
+therefore "append at end", and a writer that seeks to 0 and appends
+overwrites from the start while never shrinking the box. Reads and writes
+share the one cursor.
 
 ## Load process
 
@@ -6465,8 +7138,9 @@ difficulty refresh), plays the outro movie, and finally shows the
 score/statistics screen with per-player stat bars (kills, losses, energy and
 metal produced and wasted, score) before returning to the front-end router.
 The score values come from the score helper's display array, which multiplies
-kills by the kill multiplier and the global tick over 60 (not 1800 — corrected
-in [R-CAMP-01 §6]) by the time multiplier with truncation and a zero clamp. Resign and host-loss latch ended-without-win
+kills by the kill multiplier and the global tick over 60 by the time
+multiplier with truncation and a zero clamp ([R-CAMP-01 §7]). Resign and
+host-loss latch ended-without-win
 directly (the end-game dialog callbacks and the peer-loss path, respectively)
 and can override an armed victory, while ordinary victory/defeat run through
 the shared four-count countdown. The exact tick at which simulation stops is
@@ -6474,20 +7148,17 @@ the session's switch out of the live battle state; the residual is only the
 precise presentation sequencing of the overlay transitions inside the
 front-end router.
 
-**Correction: the post-battle message-box wording is superseded.** The
-results surface is the authored `ENDMSN.GUI`/`endmsn.gaf` family. Its outcome
+The results surface is the authored `ENDMSN.GUI`/`endmsn.gaf` family, not a
+message box. Its outcome
 copy is selected from the authored `victory` or `defeat` frame and its
 available route is the authored `Start` control when campaign progression has
 a next mission, otherwise `MainMenu` [07 §11] [08 "Progression"].
 
-### Closed — the results sequence: states, glamour, fade, ending movie [R-CAMP-01 §6] (2026-08-29)
+### The results sequence: states, glamour, fade, ending movie [R-CAMP-01 §6]
 
-**Correction.** The paragraph above and "Progression" both said the score
-helper uses "elapsed ticks divided by 1800". The divisor is **60** (an
-unsigned magic-multiply by `0x88888889` with a 37-bit shift — exactly `n / 60`
-for the 32-bit tick count). With the 30 Hz global tick this is a two-second
-unit. The rest of that sentence (kills × kill multiplier, truncation, zero
-clamp) stands; the exact expression is in §7.
+The score helper's time term is the global tick divided by **60** — an
+unsigned division of the 32-bit tick count, a two-second unit at 30 Hz; the
+exact expression is in §7.
 
 **Entry.** The battle pump's end transition fires when the latch word of
 [R-TRIG-01 §6] has either the *won* (`0x10`) or *lost* (`0x04`) bit set —
@@ -6542,7 +7213,7 @@ palette buffers and the gadget data are freed and the display gamma restored.
 **Confidence.** Established, including the `glamour\Arm01.PCX` fallback path
 and its missing prefix (read from the two string constants).
 
-### Closed — the score helper and every statistic's source [R-CAMP-01 §7] (2026-08-29)
+### The score helper and every statistic's source [R-CAMP-01 §7]
 
 **When.** The score helper runs once, from the battle teardown at the end
 transition (§6), before the results handler is installed. It writes:
@@ -6560,9 +7231,8 @@ transition (§6), before the results handler is installed. It writes:
 A slot gets a row when its record exists, its controller is 1, 2 or 3
 (human, local, remote — the [R-SKIR-01 §1] vocabulary), its side is not the
 neutral 10 and its lobby record's watcher bit (`0x40`) is clear — **or** when
-the slot's auxiliary word is non-zero (Unknown meaning; decider: static trace
-of that word's writers) — and, in either case, its rejection-reason byte is
-0. Rows are filled as:
+the slot's auxiliary word is non-zero (a word with no writer; below) — and,
+in either case, its rejection-reason byte is 0. Rows are filled as:
 
 | Column | Source | Conversion |
 |---|---|---|
@@ -6581,10 +7251,7 @@ mission's `[GlobalHeader]` floats (default 0.0; stock missions author
 [01 §2] and the division unsigned. A negative sum is stored as 0. Each column
 maximum is raised to the row's value when the value is larger (strict).
 
-**Closed (2026-09-02, RWU-19-18) — the auxiliary word has no writer.** The
-row condition above says "or when the slot's auxiliary word is non-zero
-(Unknown meaning; decider: static trace of that word's writers)". The trace:
-the word is a 32-bit field of the battle player record, read at ten sites in
+**The auxiliary word has no writer.** The word is a 32-bit field of the battle player record, read at ten sites in
 the image — this helper (row when non-zero), the Space score panel and the
 elimination/participant filters of [07 R-HUD-04 §1] and [R-SKIR-01], the
 per-player economy pass's gate, and the multiplayer alliance-vote routine —
@@ -6617,16 +7284,9 @@ economy values are saved and restored verbatim under the `Players` account keys
 of that name [08 "Account inventory"], and the network statistics copy carries
 the same fields as floats. The `Player%i` save table above establishes keys for
 Kills and Losses;
-it does not establish save keys for the commander-specific counters. Those
-counters therefore remain runtime/result data until a separate save-writer
-trace settles their persistence.
-
-**Correction (2026-08-31, Wave B2):** The previous wording said that all
-twelve displayed values were restored under `Players` keys. That over-read the
-statistics/network row census: the Player%i writer/reader table establishes
-the economy values plus `Kills` and `Losses`, while commander-specific names
-are established only for the network statistics copy. The persistence status
-of commander counters is therefore Unknown pending the save-writer trace.
+it establishes no save keys for the commander-specific counters: the
+`Player%i` writer and reader were traced end to end ("Player records") and
+name none, so those counters are runtime/result data only.
 
 **Screen fields** (the `ENDMSN.GUI` score population, run when the panel is
 populated): for every display-array row in slot order, with `r` the running
@@ -6656,10 +7316,8 @@ score panel's column labels [07 §11]; `Energy Produced`, `Metal Produced`,
 `Excess Energy`, `Excess Metal`, `Commanders Killed`, `Commanders Lost`,
 `I am Winner` are the field names of the network statistics rows (§9).
 
-**Confidence.** Established except the bar-increment inference marked above.
-
-**Correction (2026-08-31, Wave B3).** The ENDMSN dynamic presentation uses
-the exact kind-13 geometry and strict presentation-clock service recorded in
+**Bar geometry and service (Established).** The ENDMSN dynamic presentation
+uses the exact kind-13 geometry and strict presentation-clock service recorded in
 [07 R-HUD-03 §11]: stored dimensions 67×18 are painted inclusively as 68×19,
 with the two-pixel raised bevel, inner span `(x+2,y+2)..(x+65,y+16)`, and
 foreground endpoint `x+2 + trunc(63*current/max)`. A visible bar enters the
@@ -6674,9 +7332,11 @@ reveal deadline is strict, the inherited deadline is expired for the first
 Kills pass, and each subsequent group is ten presentation units later. In the
 single-player surface, a keyboard edge activates all seven groups and plays
 `ActivateAllStatBars`, while the same pass still performs only one ordinary
-reveal/cue; mouse input is not a shortcut. **Established.**
+reveal/cue; mouse input is not a shortcut.
 
-### Closed — `ENDMSN.GUI`: outcome art, mission list, next mission, `AdjustDiff`, progress write [R-CAMP-01 §8] (2026-08-29)
+**Confidence.** Established.
+
+### `ENDMSN.GUI`: outcome art, mission list, next mission, `AdjustDiff`, progress write [R-CAMP-01 §8]
 
 **Population.** Let `route = (kind == 1) && (hasNext || !won)` where
 `hasNext` = Has-mission(endIndex + 1) on the campaign record and `endIndex` is
@@ -6745,7 +7405,7 @@ without touching the marks.
 
 **Confidence.** Established.
 
-### Closed — elimination announcements and the kill-lead line [R-CAMP-01 §9] (2026-08-29)
+### Elimination announcements and the kill-lead line [R-CAMP-01 §9]
 
 **Elimination.** In the central death handler [06 §12.1], after the victim's
 owner's live-unit count is decremented, when it reaches **0**: a multiplayer
@@ -6759,9 +7419,8 @@ liquidated`, `has been eradicated`, `has terminated`, `has bowed out`, `has
 gone to a better place`, `has been shown the door`, `has left the scene`) has
 no reference on the single-player path — but it is **not** dead data: the
 multiplayer (kind 3) elimination branch of the same death handler reads it
-with a CRT draw masked to eight entries and posts the line locally (corrected
-2026-08-29 against [01 R-DET-01 §6]; the earlier text said "no reference in
-the image"). **Determinism:** the draw is on
+with a CRT draw masked to eight entries and posts the line locally
+([01 R-DET-01 §6]). **Determinism:** the draw is on
 the **CRT** stream [01 §7.2] and happens inside the tick, so a skirmish
 elimination advances the CRT stream by one draw; the simulation stream is
 untouched. Campaign sessions post nothing.
@@ -6776,7 +7435,7 @@ in `[new, old)` is shifted down by one; when the new rank is 0 the line
 `%s has taken the lead with %d kills` (translated, then formatted) is posted
 as a status line of class 2 attributed to slot 10. Established.
 
-### Closed — the multiplayer statistics rows (`I am Winner`, `Excess …`) [R-CAMP-01 §10] (2026-08-29)
+### The multiplayer statistics rows (`I am Winner`, `Excess …`) [R-CAMP-01 §10]
 
 The *statistics collector* fills, for every slot with a record (controller
 1/2/3, side ≠ 10, or the auxiliary word non-zero), a player row (name pointer,
@@ -6797,13 +7456,13 @@ online-service callback and the DirectPlay lobby report; both are
 placed. "Excess" is therefore the `EnergyWasted`/`MetalWasted` overflow
 accumulator of §7. Established as to fields; OOS as to consumers.
 
-### Closed — mission-file recovery: the translated-name fallback, the `Old TED` test, and the score multipliers [R-CAMP-01 §11] (2026-09-01)
+### Mission-file recovery: the translated-name fallback, the `Old TED` test, and the score multipliers [R-CAMP-01 §11]
 
-**Scope.** RWU-19-7. Static trace of the mission loader (the four-way
-message-box function §1 describes), the mission-select-by-name entry that
-wraps it, the skirmish map catalog builder, the translation-table loader and
-its two lookups, and the score helper of §7. Raw trail kept out of the repo.
-Status: **Established** unless a claim says otherwise.
+**Established** unless a claim says otherwise (static trace of the mission
+loader — the four-way message-box function §1 describes — the
+mission-select-by-name entry that wraps it, the skirmish map catalog
+builder, the translation-table loader and its two lookups, and the score
+helper of §7).
 
 **1. There is no "closest match" search.** For kinds 2 and 3 the loader
 copies the requested name into the mission's display-name field, builds
@@ -6843,7 +7502,7 @@ map name ever translates and the English table is empty; the fallback only
 matters for a language file whose map-name sections are upper-cased.
 Decider: an asset census of a localized retail install's translation file.
 
-**Implementation rule.** Delete the Levenshtein search. Kinds 2/3: try
+**Implementation rule.** There is no fuzzy search. Kinds 2/3: try
 `Maps\<name>.OTA`; on a read/parse miss, look the name up as a translated
 text in the translation table (case-insensitive equality, first entry in
 source-sorted order); on a hit retry once with the source string as both
@@ -6861,8 +7520,8 @@ fails to parse and raises the "no mission defintion" box instead. No bytes
 of any map file are inspected — a legacy mission is one whose campaign
 entry predates the `missionfile` key. Kinds 2 and 3 can never raise it.
 There is therefore no legacy-file signature for the build to detect and
-nothing for `research/formats` to record; the build's "starts with `TED`"
-prefix test is invented and must go.
+nothing for `research/formats` to record; a prefix test on the map file is
+not retail.
 
 **3. `killmul` and `timemul`.** Both are plain keys of `[GlobalHeader]`,
 read by the float accessor (leading spaces skipped, then the CRT
@@ -6875,1156 +7534,13 @@ killmul)`, the division unsigned and the tick widened through a 64-bit
 integer, each product formed in extended precision from the stored single
 and truncated separately, then summed and clamped at zero (`< 0 → 0`).
 With both keys absent every score is 0; the stock `killmul=50; timemul=0;`
-scores 50 per kill. **Correction to [02 R-MAP-01 §3] and [fmt ota]:** both
-mark these keys "inert (reader census: none)"; that census missed the score
-helper, which multiplies by both. Those rows should read "read by the
-end-of-battle score helper [08 R-CAMP-01 §7]".
+scores 50 per kill. The score helper is the reader of both keys.
 
 **Unknown.** Whether any localized retail translation file authors
 upper-case map-name sections (the only way the forward translation, and so
 the reverse fallback, can fire on stock data) · decider: asset census of a
 localized install.
 
-
-#### R-AI-01 §19 — Rally admission for buildings, and the broadcast's forwarded word — Established [R-AI-01]
-
-Traced RWU-19-22 (static: the rally task body, the unit creator, the
-shot-time gate, the broadcast helper, the order-node allocator, the
-ground-move handler). Both findings are Established.
-
-**Rally: which record, which predicate.** The member test of §7 reads the
-first word of the unit record, the pointer to the unit's mover. The creator
-allocates a mover only when the definition's `bmcode` is 1 and stores the
-pointer there; a building never gets one, and the command resolver, the
-standby handler and the height snap all treat a null there as "no mover"
-[04 R-SPEC-01 §1]. So `hasNoLocomotion` is "the member is a building". For
-such a member the task calls the **shot-time physical admission gate** of
-[06 §3.3] with the member's own position as the shooter position, `best` as
-the target position, and **weapon slot 1** (the first slot): the gate passes
-when the slot's weapon range squared is at least the planar distance squared
-(each 16.16 delta squared as a 64-bit product and shifted back 32), and, for
-a non-water weapon, when the shooter's height word plus the definition's
-firing-height term exceeds the sea-level byte and (for a ballistic weapon) the
-trajectory solver finds an angle. A building whose first slot cannot reach
-`best` is skipped without resolving anything; a building with no weapon in
-slot 1 reads the sentinel record's zero range and is likewise skipped. A
-mobile member is never gated. Implementation rule: the manager's rally
-admission binding is "for a unit with no mover, the combat service's
-slot-1 shot-time check against the point"; no order-admission predicate is
-involved.
-
-**Broadcast: the forwarded word.** The helper's two trailing arguments are
-not read by the helper; each member's submission carries them into the
-order node's **argument word** and its companion, the same slots the
-construction task fills with the product type index for a MobileBuild. The
-wave task's gather broadcast (intent 2, the group centroid) passes **160** in
-the argument word; the regroup and explore broadcasts pass 0. The ground
-move handler reads that word as its phase-0 arrival radius, `argument + 4`
-[04 R-ORD-01 §4] — so a wave gather is a move with a **164**-world-unit
-arrival radius for every member, a regroup or explore move one with radius 4.
-That is the whole effect of the "spacing" argument: no formation, no
-per-member offset. Implementation rule: the broadcast forwards the word into
-each member's move order unchanged; the move handler owns its meaning.
-
-## R-AI-02 — Computer player: ledger-closure findings (2026-08-29)
-
-Bottom-up closure of the last open lane-08 computer-player rows. Everything
-here is small; each paragraph exists because an implementer reading
-[R-AI-01] alone would still have had to choose a value.
-
-### R-AI-02 §1 — The rally task's constructor state — Established [R-AI-02]
-
-[R-AI-01 §7] names the rally task's three vectors (**best**, **probe**,
-**drift**) and its **best score** but not their initial values. The
-constructor sets them, in this order, from the map's world-unit extents
-(`terrainWidthCells × 16` and `terrainHeightCells × 16` [03 §2.2]):
-
-```text
-halfX = trunc(mapWidthWorld  / 2)        # signed integer divide, toward zero
-halfZ = trunc(mapHeightWorld / 2)
-best  = (halfX << 16, 0, halfZ << 16)    # computed as trunc(float(half) * 65536.0)
-probe = best
-drift = best
-bestScore = 0
-```
-
-The conversion goes through the x87 stack (integer loaded, multiplied by the
-double `65536.0`, truncated once); because `half` is an integer the result is
-exactly `half << 16`, and the form is recorded only so the truncation site is
-not mistaken for a rounding one. The base task fields — manager back-pointer,
-group record, deadline `0`, owning slot — are written first by the shared task
-constructor ([R-P0-04 §2]); the rally-specific fields follow. Every other task
-class starts with only the base fields plus the per-class tunables listed in
-[08 "Strategy manager and its task graph"] (wave A: threshold 20000, min 3,
-max 6, peer slot 3; wave B: 50000, 3, 6, peer 7; regroup A peer 2; regroup B
-peer 6).
-
-**Consequence (Established from §7's body).** The body adds `drift` to
-`probe` on *every* invocation and reseeds `drift` only on a `RNG(10) == 0`
-draw. With the constructor's values the first invocation already moves the
-probe to `(mapWidthWorld, 0, mapHeightWorld)` and each later one adds another
-half map, so until the first reseed the probe lies outside the map, the
-on-known-ground test fails at its bounds check, and no score is adopted. The
-rally point therefore stays at the map centre for a geometrically distributed
-number of runs (mean ten). This is retail's behavior, not a defect to fix.
-
-### R-AI-02 §2 — Small contracts the ledger pass settled — Established [R-AI-02]
-
-* **Profile-limit gate edges.** The per-candidate limit test of [R-P0-05 §3]
-  (`count < limit`, `-1` unlimited) is reached through a one-argument
-  narrowing thunk (the player index is masked to a byte) and **rejects** —
-  returns "over limit" — for candidate type `0` and for any type index at or
-  above the catalog count, before the limit vector is read. The count it
-  compares is the strategic state's per-type completed count (a signed 16-bit
-  word), the limit the per-type 32-bit word the profile pass writes
-  ([R-AI-01 §12]).
-* **Strategic-centre and build-capable-count accessors.** The construction
-  task reads the centre once into a local through a three-word copy accessor
-  and the build-capable count through a plain word accessor; both read the
-  strategic state fields the 30-tick refresh writes ([R-AI-01 §16]). Neither
-  accessor computes anything, so the "read once" wording of [R-AI-01 §3] is
-  the whole contract: a refresh landing between the two passes is not seen by
-  pass 2.
-* **Classifier standing-order encoding.** The two writes of [R-AI-01 §10]
-  are field writes into the runtime status word: the standing move order
-  occupies two bits, value `2` (roam) when `cancapture` is clear and `1`
-  (maneuver) when set, the other value's bit being cleared in the same store;
-  the standing fire order's two-bit field is then set to `2` (fire at will),
-  its other bit cleared. The writes happen before the ungrouped test, so an
-  already-grouped unit still gets both fields rewritten every 30 manager
-  entries.
-* **The AI status dump is dead.** The image contains a writer that prints a
-  computer slot's game time, name, controller (`HUMAN`/`AI`/`INVALID`),
-  terrain and profile names, difficulty, and one `<limit> <base:baseML:baseEL>`
-  row per definition to a text file. Its only caller is a debug entry that no
-  code, table or callback references; no retail path produces the file.
-* **The target pick's vector removal.** The candidate picker of [06 §3.2]
-  that the computer player's order dispatch also uses draws a random index
-  into a temporary candidate vector, reads the entry, and then removes it by
-  **overwriting the drawn slot with the vector's last entry and shortening
-  the vector by one** (swap-remove; order is not preserved) before scoring
-  it, so a later draw in the same 50-iteration loop can never return the
-  same candidate, while the index-to-candidate mapping of later draws
-  depends on this exact removal shape. The removal draws nothing.
-* **The eco task is vtable-reached.** The resource/builder-queue body of
-  [R-AI-01 §2] has no direct caller; like the other task bodies it is entered
-  only through the task-class virtual table run by the manager sweep
-  ([R-AI-01 §1]). It is not dead.
-
-
-## R-SESS-01 — Session and account material: ledger-closure findings (2026-08-29)
-
-Closure of the remaining lane-08 rows that belong to no computer-player
-section: two per-player counters the per-player phase reads, the bank's box
-write primitives, a feature-writer edge, the session-kind accessor, and the
-single-player producer of the temporary-sight ("eyeball") record that doc 01
-recorded as unreachable.
-
-### R-SESS-01 §1 — The two live-player counters — Established [R-SESS-01]
-
-The per-player phase's end-of-battle block ([R-TRIG-01 §6], [R-SKIR-01 §3])
-calls two counters over the ten player slots, in slot order, each returning a
-plain count. Both first require the slot's record to exist (its first word is
-non-zero) and the slot's side index to differ from `10`, and both treat a
-slot as *live* when its 16-bit live-unit count is non-zero **or** its 32-bit
-created-unit count is zero (a player that has not yet created anything counts
-as live — the same "created nothing yet" rule the kind-3 victory sweep uses).
-
-* **Live computer players hosted here**: additionally the controller byte
-  equals `2`. Nothing else is tested; watch mode does not apply to computer
-  slots.
-* **Live human players still playing**: the controller byte is `1`, `2` or
-  `3`; then the slot must be either a local human (`1`) or a remote slot
-  (`3`) whose lobby record's registration byte equals `1` — the byte slot
-  registration writes ([R-SKIR-01 §2]); that `1` means "registered as human"
-  is **Supported inference** from that writer, the test itself is
-  Established — so a hosted computer slot (`2`) never counts; and finally the
-  lobby record's watch-mode bit (the bit the elimination handler sets,
-  [R-SKIR-01 §3]) must be clear.
-
-Every consumer of both counters is on the **kind-3** (multiplayer) branch of
-the block: the first decides between `You're out!  Continue Watching?` and
-the "hosting AI players" message and gates the whole watch-mode path together
-with the lobby's *watching allowed* bit; the second posts the watch-mode
-placement line and, at the top of the kind-3 block, steps the shared
-countdown toward the end latch when no human is left playing. Kinds 1 and 2
-never call either counter, so a single-player engine needs neither; they are
-recorded so the boundary is explicit ([R-OOS-01]).
-
-### R-SESS-01 §2 — Box write primitives — Established [R-SESS-01]
-
-[R-ENTRY-02 §3] gives the bounded box **read**. The subsystem writers use
-three more primitives on the current account's current box:
-
-* **size** — returns the box's byte count;
-* **seek** — sets the box's cursor to `clamp(requested, 0, size)`; a negative
-  request seeks to 0, a request past the end seeks to the end;
-* **append** — writes `n` bytes at the cursor, first growing the box's buffer
-  to exactly `cursor + n` bytes when that exceeds the current capacity (the
-  buffer is reallocated in place, existing bytes preserved), then advances the
-  cursor by `n` and returns `n`. The copy is a plain forward byte copy; no
-  bound other than the grow applies.
-
-The feature writer's idiom — `seek(size)` then `append(record)` — is
-therefore "append at end", and a writer that seeks to 0 and appends
-overwrites from the start while never shrinking the box. Reads and writes
-share the one cursor.
-
-### R-SESS-01 §3 — The single-player eyeball producer — Established; corrects [01 R-PLAT-02 §5] [R-SESS-01]
-
-[01 R-PLAT-02 §5] states that the temporary-sight observer list ("eyeball"
-records) has as its only producer the handler of a received unit-death
-packet, and concludes that in single player the list is always empty. The
-first half is right and the conclusion is wrong: the **same handler is the
-central death handler** the local death path calls directly, after building
-the death record that networking would send ([R-OOS-01 §1], type `0x0c`;
-[06 §12.1]). Retail therefore appends an eyeball in every session kind.
-
-The handler appends when all of these hold, in order:
-
-1. the victim's runtime status carries the *live* bit;
-2. the victim's owner slot index equals the local slot index;
-3. the visibility mode word has bit 1 set — the `Circular` or `True` modes
-   of [03 R-VIS-01 §1], never `Permanent`;
-4. the list holds fewer than 20 records (at 20 the append is silently
-   dropped).
-
-The record is then filled exactly as [01 R-PLAT-02 §5] lays it out: owner =
-the local player record; sight distance = the victim definition's
-`sightdistance` word [fmt fbi]; height byte = the low byte of the
-definition's height field (the field the target-top and repair-admission
-tests read, [04 R-SPEC-01 §15]); position = the victim's world X, Y, Z with
-Y raised to `(SeaLevel + 1) << 16` when lower; expiry = `globalTick + 60`.
-Before the count is incremented the record's coverage is computed and
-published through doc 03's observer path — the true-LOS raster when the mode
-word's bit 2 is also set (`True`), the circular coverage tile otherwise
-([03 R-VIS-01 §2]); that arithmetic is doc 03's contract and is cited here
-only to fix the order: **coverage publish, then count increment**. The 60-tick expiry is then consumed by the
-post-loop expiry pass of [01 R-PLAT-02 §5], which is therefore **not** a
-no-op in single player.
-
-Implementation consequence: a unit the local player loses keeps revealing
-its sight radius for two seconds after death under `Circular`/`True` line
-of sight. Doc 01's "always empty" paragraph and its expiry-pass remark, and
-doc 03's visibility-producer census, need the corresponding correction
-(cross-document follow-up; not edited by this unit).
-
-### R-SESS-01 §4 — Feature writer: an animating cell whose sequence matches no family writes no record — Established [R-SESS-01]
-
-[R-SAVE-FEATURE-01] gives the three record maps and says the animating
-record's selector nibble is `0`, `1` or `2` for the burn, death and reclaim
-families. The writer side has one more edge: the nibble is chosen by
-comparing the cell's live animation-sequence pointer against the
-definition's three family sequences in that order, and when it matches
-**none** of them the cell is skipped entirely — no `Animating Features`
-record, and the `Number of Animating Features` count is not incremented.
-Such a feature (one whose live sequence pointer was set by some path other
-than the three families) is simply absent from the save and does not exist
-after load. The "other selector values" the reader tolerates therefore never
-originate from the retail writer. The 3D and normal branches have no such
-skip.
-
-### R-SESS-01 §5 — The session-kind accessor — Established [R-SESS-01]
-
-The many sites that "test the session kind" (46 callers across every lane)
-read it through one accessor that returns the **first word of the session
-object** — the game type of "Game session": `1` campaign, `2` skirmish, `3`
-multiplayer ("Mission type dispatch"). There is no other reader shape.
-[08 "Mission type dispatch"]
-
-
-### R-SESS-01 §6 — The code-3 order sub-object has one runtime constructor: the `AirToAir` handler — Established [R-SESS-01]
-
-[R-SAVE-02 §10] left "which VTOL-family order handler" constructs the
-code-3 payload (the two-vector work record) as **Unknown**. The class is
-[04 R-PATH-01 §9]'s air moving point — the *velocity marker* whose per-tick
-turn clamp is [04 R-MOV-03 §2]'s — and its runtime constructor has exactly
-one call site: the `AirToAir` handler's phase 0/1 leg ([04 R-AIR-01 §8],
-[04 R-ORD-02 §5]). Its only other constructor is the save reader's, which
-rebuilds it from the code-3 box. A code-3 record in a save therefore always
-belongs to an `AirToAir` order that was in flight at save time; its first
-triple is the marker's position and the second its per-tick velocity, and
-the class code the reader matches is the marker's own class-code slot
-(`3`, [04 R-MOV-03 §9]). The three trailing `u16` words remain unnamed
-(the "Save and replay" tail keeps that item).
-
-The AI planner's group-centroid helper the ledger had left uncited is
-[R-AI-01 §9]'s ("Group centroid"); the empty virtual slot on the task-class
-method table is the base task's ([R-AI-01 §1]) and has no behaviour. The
-eleven-slot connection table's static initialiser (send interval 200 ms,
-time-out clamp, and the `(ms × 30 + 999) / 1000` tick conversion of
-[01 R-PLAT-01 §2]) and the packet-buffer class's empty virtual stubs are
-transport code and stay outside the single-player boundary of
-[R-OOS-01 §3].
-
-## R-AI-03 — Placement root: the patch vector and the scatter helper, exactly
-
-This unit closes the last implementation-blocking gap of the computer player:
-the exact arithmetic of the placement root ([R-AI-01 §3]'s `placeCandidate`),
-its two search helpers, and the metal-spot vector the exhaustive helper reads.
-It sharpens the prose of "Placement root and search helpers" in six places,
-each stated where it applies: the radius growth and its cap are **world
-units**, not cells (§2); the origin is the strategic centre when the builder is
-*within* the radius, and is interpolated only when it is *outside* it — the
-earlier "zero or at least the scaled radius" wording was inverted (§2); the
-"sort by distance" is a binary heap, and the early-stop slack of 160 is in
-**squared cell distance** (§3); the region set is selected by the sign of the
-definition's **MinWaterDepth**, not of a slope field (§4); the footprint
-blocker *does* apply the waterline band, so the exhaustive path is not
-water-blind (§3); and the scatter path's score comparison reads a **stale**
-accumulator for every `bmcode` definition, because the validator mode it uses
-never writes the accumulator (§4). Numbers below come from the executable, not
-from Nanolathe's stub or prior inference. Vocabulary: "cell" is a 16-world-unit
-plot cell [05 R-PROD-01 §6]; `footX`/`footZ` are the definition's footprint
-extents copied from its movement class [04 R-DOC04-A]; `RNG(b)` is the bounded
-simulation draw, which returns 0 **without advancing** when `b < 2` (signed)
-[01 §7.1].
-
-### R-AI-03 §1 — The metal-spot vector: builder, record, scan, consumer — Established [R-AI-03]
-
-**Owner and lifetime.** Each strategic state owns one vector of metal-spot
-records. It is built by the battle-entry tail, step 7 of [R-ENTRY-01 §8] — once
-per slot that owns an AI record, after the second resource grant, on every
-session kind including a restored save. Nothing rebuilds it afterwards: the
-30-tick strategic refresh does not touch it, and reclaiming or destroying a
-feature does not remove its record. The vector therefore describes the map as
-it stood at battle start.
-
-**Record.** `{ cellX int16, cellZ int16, metal float32 }`, eight bytes, packed
-as x in the low half-word and z in the high half-word followed by the float.
-The `metal` field is the feature definition's authored `metal` value narrowed
-through the 16-bit mask the feature parser applies (`float32(value & 0xffff)`)
-[05 R-FEAT-01 §6]. **It is never read as metal**: the only consumer overwrites
-it with a sort key (§3).
-
-**Scan.** The builder first empties the vector (end := begin, capacity kept),
-then visits every plot cell in row-major order — rows `z = 0 … mapCellHeight−1`
-outer, cells `x = 0 … mapCellWidth−1` inner — and appends `(x, z, metal)` when
-all three hold, tested in this order:
-
-1. the cell's feature reference is a real feature index — strictly less than
-   the `0xfffb` reserved band. The `0xfffe` "part of a larger feature" marker
-   and the `0xffff` "no feature" value both fail this test, so a multi-cell
-   feature yields exactly one record, at its anchor cell;
-2. the referenced feature definition's `metal` compares **not equal** to
-   floating zero;
-3. the definition's `indestructible` flag is set.
-
-There is no threshold on the metal value beyond non-zero, no check of the
-reference against the feature count (the loader guarantees it), and no
-ordering step: the vector is in row-major cell order. On a stock map every
-metal deposit is an indestructible feature with a non-zero `metal`, so the
-vector is the deposit list; a map that authors a destructible metal feature
-leaves it out, and one that authors an indestructible feature with `metal`
-but no per-cell metal seeding yields records the exhaustive helper will visit
-and score at the uniform surface value.
-
-**Consumer.** The exhaustive helper (§3) is the only reader. The scatter helper
-(§4) never consults it.
-
-### R-AI-03 §2 — The root's origin step, exactly — Established [R-AI-03]
-
-Inputs: the builder position `b` (16.16 world, three axes), the strategic
-centre `c` ([R-P0-05 §5]), the per-player **placement search radius** (a plain
-integer of world units, zero at construction), and the map's world-unit
-extents `W`, `H` (cell counts × 16, [R-AI-01 §3]).
-
-```text
-if radius < max(W, H): radius += 160            # signed; world units; the grown
-                                                #   value persists across attempts
-dx = c.x − b.x ; dy = c.y − b.y ; dz = c.z − b.z # 32-bit 16.16 differences
-dist = trunc( sqrt( dx·dx + dy·dy + dz·dz ) )   # x87: three integer loads, the
-                                                #   squares summed in that order,
-                                                #   one square root, one __ftol
-R = radius << 16
-if R < dist:                                    # signed: builder OUTSIDE the radius
-    scale    = (int64(R) << 16) / int64(dist)   # 64-bit signed divide
-    origin.a = b.a + int32( (int64(d_a) · scale) >> 16 )   # a = x, then y, then z
-else:                                           # within (or exactly at) the radius
-    origin = c
-```
-
-Because the deltas are 16.16 integers, `sqrt` of their squared sum is itself a
-16.16 distance, so `dist` compares directly with `R`. The interpolation moves
-the origin from the builder **toward** the centre by exactly `radius` world
-units; when the centre is already within reach the origin *is* the centre. All
-three axes are interpolated, but the helpers read only `x` and `z` of the
-origin: `origin.y` is dead. The earlier prose had the branch inverted. The
-first attempt of a fresh player therefore searches from a point 160 world
-units toward the centre (or the centre itself), and each failed attempt widens
-the ring by 160 until the radius reaches the larger map extent.
-
-**Helper selection** is unchanged from "Placement root and search helpers":
-`extractsmetal == 0.0` → scatter with no draw; otherwise `d = RNG(255)` and
-`surfaceMetal < d` (signed) → exhaustive, else scatter. The selector draw is
-taken **after** the origin step and before any helper draw. The exhaustive
-helper receives `radius × 4`; the scatter helper receives `radius` unscaled.
-
-### R-AI-03 §3 — The exhaustive metal-spot helper — Established [R-AI-03]
-
-Inputs: the definition, the origin (`x`, `z` used), the metal-spot vector of
-§1, `D = radius × 4`, and the output cell. It draws **no** random numbers.
-
-**Empty vector → failure** (return false before anything else).
-
-**Origin cell.** Both coordinates are the plot cell whose *top-left* would put
-the footprint's centre nearest the origin:
-
-```text
-cx = int16( (origin.x − (footX << 19) + (1 << 19)) >> 20 )    # arithmetic shift
-cz = int16( (origin.z − (footZ << 19) + (1 << 19)) >> 20 )
-```
-
-(`1 << 19` is 8 world units in 16.16; `>> 20` divides by 16 world units and
-floors — the same rounding the build cursor uses [07 §9].)
-
-**Filter.** For each record in vector order, `d2 = (px − cx)² + (pz − cz)²`
-in 32-bit cell units; keep the record when `d2 <= D · D` (inclusive). `D` is
-a count of world units used as a count of cells, so the search disc is
-`4 × radius` **cells** — 64× the radius in world units; this is what retail
-does. A kept record is copied to a working vector and its `metal` float is
-**overwritten** with `float32(−d2)`.
-
-**Ordering.** When the working vector holds at least two records it is made
-into a binary max-heap on the float key with the standard library's
-make-heap (sift each index from `n/2 − 1` down to 0: move the hole down to a
-leaf choosing the right child unless `right.key < left.key`, then push the
-saved record back up while `parent.key < key`), and the loop below takes the
-front record and re-heaps with the pop-heap that moves the front to the last
-slot and re-sifts the former last record. The greatest key is the least
-`d2`, so candidates come **nearest first**. Ties in `d2` are ordered by the
-heap mechanics — deterministic from the vector order, but **not** the vector
-order itself; an implementation must reproduce the heap to reproduce retail's
-choice among equidistant deposits.
-
-**Candidate loop.** With `best := 0`, `bestCell := none`, `firstD2 := −1`:
-
-```text
-while working vector not empty:
-    (px, pz) = front record
-    candX = int16( px − trunc((footX − 3) / 2) )      # signed division toward zero
-    candZ = int16( pz − trunc((footZ − 3) / 2) )      #   (footX = 1 → +1; 2 → 0; 5 → −1)
-    c2 = (candX − cx)² + (candZ − cz)²                # recomputed from the CANDIDATE cell
-    if firstD2 >= 0 and c2 > firstD2 + 160: break     # early stop, squared-cell units
-    if blocker(def, candX, candZ, self = 0, ghost = 0):
-        score = accumulator
-        if score > best:                              # strict; a zero-metal footprint never wins
-            best = score ; bestCell = (candX, candZ)
-            if firstD2 == −1: firstD2 = c2            # set once, at the first accepted candidate
-    pop front
-return best != 0 ? (bestCell, true) : failure
-```
-
-The candidate offset centres the footprint on the deposit for a 3-cell
-footprint and biases larger ones toward the top-left. The early stop is
-measured against the squared distance of the **first** accepted candidate,
-never updated by later better-scoring ones, and the slack `160` is compared as
-squared cells (a candidate more than ~12.6 cells beyond the first hit stops
-the scan). Failure of this helper is failure of the whole placement attempt —
-no fall-through to §4, and the radius keeps its grown value.
-
-**The blocker call.** The validator is the yard-map footprint blocker of
-[07 §9] (the "footprint validator"; doc 05 "Geothermal requirement" for the
-yard bytes), called with self identity `0` — so any occupant rejects — and the
-ghost flag `0`, which **skips** the known-map/visibility gate: an unrevealed
-cell is as placeable as a revealed one. Its bounds test is `candX > 0`
-(strict — a candidate at cell column 0 is rejected), `candX + footX <
-mapCellWidth`, `candZ + footZ < mapCellHeight`; it does **not** test `candZ`
-for sign (see §6). On entry it clears the process-wide score accumulator and
-then, for every footprint cell in row-major order, adds the cell's **metal
-byte** ([05 R-PROD-01 §6]: the uniform `SurfaceMetal` seed on canonical
-maps, or the legacy per-cell byte) before applying that cell's yard-byte
-rules. The accumulator is therefore the footprint's metal-byte sum, and a
-rejected footprint leaves a partial sum behind (unread here, but see §4). The
-blocker's tail applies the definition's `MaxSlope` and the waterline band
-`waterline − MaxWaterDepth <= lowest yard-bit-3 height` and
-`highest <= waterline − MinWaterDepth` — so the exhaustive path **is**
-waterline-checked through the blocker; the earlier statement that it "has no
-waterline test at all" is retracted.
-
-### R-AI-03 §4 — The statistical scatter helper — Established [R-AI-03]
-
-Inputs: the strategic state, the definition, the origin (`x`, `z`), the
-unscaled `radius`, and the output cell.
-
-**Limit.** `limit = ((surfaceMetal × footZ) × footX) × 2`, 32-bit integer
-arithmetic in that order, where `surfaceMetal` is the mission's `SurfaceMetal`
-word on the session record.
-
-**Region words.** The strategic-state constructor ([R-ENTRY-01 §3]) draws the
-eight values of [R-P0-05 §5]'s inventory into two region sets, in this order:
-
-```text
-land set  (margin = 3):  cellW = RNG(10) + 11 ; cellH = RNG(3) + 11
-                         offX  = RNG(cellW) − cellW/2 ; offZ = RNG(cellH) − cellH/2
-water set (margin = 6):  cellW = RNG(20) + 14 ; cellH = RNG(3) + 14
-                         offX  = RNG(cellW) − cellW/2 ; offZ = RNG(cellH) − cellH/2
-```
-
-(the `+ 11` / `+ 14` is `margin + 8`; the halving truncates). They are int16
-words, never rewritten. The helper picks the **land** set when the
-definition's `MinWaterDepth` is negative and the **water** set when it is
-`>= 0` — that word, copied from the movement class [04 R-DOC04-A], is the
-selector, not a slope field.
-
-**Trial loop**, `t = 0 … 29` (thirty trials, counter compared `< 30`):
-
-```text
-r  = RNG(radius)                        # draw 1; radius >= 160 here, so always taken
-a  = RNG(65536)                         # draw 2
-wx = origin.x − sin(a, r << 16)         # the shared trig helpers of [R-AI-01 §3],
-wz = origin.z − cos(a, r << 16)         #   negated at use as everywhere in this planner
-qx = int16( (wx − (footX << 19) + (1 << 19)) >> 20 )     # same cell rounding as §3
-qz = int16( (wz − (footZ << 19) + (1 << 19)) >> 20 )
-ox = RNG(cellW − margin − footX)        # draw 3 — skipped (0, no advance) when bound < 2
-gx = int16( (int32(qx) / cellW) × cellW + offX + ox )    # idiv: toward zero
-oz = RNG(cellH − margin − footZ)        # draw 4 — likewise
-gz = int16( (int32(qz) / cellH) × cellH + offZ + oz )
-if validator(def, self = 0, (gx, gz), mode = 1) and accumulator <= limit:   # inclusive
-    out = (gx, gz) ; return true
-return false after the thirtieth trial
-```
-
-The quantisation snaps the trial cell to a lattice of `cellW × cellH` blocks
-(toward zero, so blocks straddle the origin asymmetrically for negative
-cells), shifts the lattice by the per-player `(offX, offZ)`, and scatters
-within the block by `ox`, `oz` — leaving `margin + footprint` cells of the
-block untouched. When the footprint is at least `cellW − margin − 1` wide the
-`ox` bound drops below 2 and **no draw is taken**; the per-trial draw count is
-therefore two, three or four depending on the footprint against the drawn
-region widths, and the order is always radius, angle, x-offset, z-offset.
-The z lattice is 11–13 cells on land and 14–16 on water, so buildings line up
-in rows; that is retail's base layout.
-
-**The validator call** is the placement validator with a mode argument
-(the routine [R-AI-01 §7]'s rally probe also uses), mode `1`, self identity
-`0`. Its contract in this mode:
-
-1. bounds: `gx >= 0`, `gz >= 0`, `gx + footX < mapCellWidth`,
-   `gz + footZ < mapCellHeight`; off-map returns **false** (only mode `2`
-   treats off-map as placeable);
-2. `bmcode == 0` (every **building**): delegate to the footprint blocker of
-   §3 with self `0` and ghost `0` — which **writes** the accumulator;
-3. `bmcode != 0` (a **mobile** definition): walk the footprint cells row-major
-   with the plain rule set, no yard bytes and no accumulator write.
-
-**Correction (2026-09-02, RWU-19-22).** The two class labels above were
-inverted when first written: branch 2 read "`bmcode == 0` (a mobile
-definition)" and branch 3 "`bmcode != 0` (every building)". `bmcode` is 0 for
-the building class — the same byte that selects the yard-map parse, sets the
-building-class flag at creation, and (under §7.4) adds the class routine's
-initialization addend — and 1 for the mobile class, the only class the unit
-creator gives a mover. [04 R-COLL-01 §2] already had the dispatch the right
-way round; this section now agrees with it. The consequence for the limit
-test is stated in the paragraph below, which is rewritten. A cell rejects when
-   its feature reference resolves to a feature whose `blocking` flag is set
-   (a reference at or beyond the feature count, or in the `0xfffb`–`0xfffd`
-   band, blocks; a `0xfffe` part-cell is resolved through its anchor offsets to
-   the anchor's feature; `0xffff` is empty); when its occupant id is non-zero
-   (self is `0`); when its low height byte is below `waterline −
-   MaxWaterDepth`; when its high height byte is above `waterline −
-   MinWaterDepth`; or when `high − low` exceeds `MaxSlope` and either the cell
-   is above water (`low >= waterline`) or `high − low` also exceeds
-   `MaxWaterSlope`. Otherwise placeable.
-
-This is the water legality "Placement root and search helpers" located: the
-band is enforced per cell, on every cell, with the definition's own depth
-fields.
-
-**The score the limit test reads.** For a building — every definition the
-construction task hands the root in stock content, since mobile builders
-author only buildings — branch 2 runs the yard-map blocker, which clears the
-process-wide accumulator on entry and adds every footprint cell's metal byte
-before applying that cell's yard rules. A trial that passes therefore leaves
-the **trial footprint's own metal-byte sum** in the accumulator, and
-`accumulator <= limit` compares exactly that sum; a trial the blocker rejects
-is skipped before the comparison, so its partial sum is never read here.
-Only a *mobile* definition placed through the root (branch 3, no accumulator
-write) would read a stale value — the last blocker call in the process — and
-no stock build list produces one. *Previous text* ("The stale score … Because
-branch 3 never writes the accumulator, the `accumulator <= limit` test for a
-building reads whatever the last footprint blocker call in the process left
-there … an implementation … that prefers a sane test (the trial footprint's
-own metal-byte sum) takes a sanctioned divergence") followed from the inverted
-labels and is withdrawn: the footprint's own sum **is** retail's test, and
-§4-A's arithmetic (a uniform seed sums to half the limit) was already
-computed on that basis.
-
-#### R-AI-03 §4-A — Which authored key the `surfaceMetal` word is — Established [R-AI-03]
-
-§4 above says the limit's `surfaceMetal` is "the mission's `SurfaceMetal` word
-on the session record" without saying which authored key fills that word. It
-is the **selected schema's** `SurfaceMetal`, not a `[GlobalHeader]` key — the
-same word that seeds every plot cell's metal byte [05 R-PROD-01 §6], which is
-why §1 can say the metal-spot scan scores "at the uniform surface value".
-
-Evidence is the authored corpus of the reference install: across its 275 map
-`.ota` files the key `SurfaceMetal` occurs 635 times and **every** occurrence
-is inside a schema section (`[Schema N]`); none is in `[GlobalHeader]`. The
-count exceeds the file count because a map authors one per schema. A reader
-that takes the word from the OTA's global section therefore yields zero on
-every map in the corpus.
-
-**Why this matters, and the failure it produces.** On a canonical map every
-cell's metal byte is that same schema word `M`, so a valid trial footprint of
-`footX × footZ` cells sums to `M × footX × footZ` — exactly **half** the
-`M × footZ × footX × 2` limit. The inclusive `<= limit` test therefore passes
-for any ordinary site and bites only where indestructible metal-bearing
-features have raised the bytes above the uniform seed across the footprint
-[05 R-FEAT-01 §7]; that is what the limit is for. It follows that the
-sanctioned divergence of §4 — comparing the trial footprint's own metal-byte
-sum instead of retail's stale process accumulator — is only equivalent while
-the limit is built from the *same* word that seeded the cells. Supply zero
-there and the limit is zero while the sum is positive, and the helper rejects
-**every** geometrically valid trial for **every** building: thirty trials
-exhausted, no non-extractor site ever accepted, and a computer player that
-places nothing but metal extractors (those take the exhaustive helper of §3,
-which has no limit test) for the whole battle. This was Nanolathe defect
-PT3-14; the reading corrected here is the one that produced it.
-
-**The selector draw reads the same word.** §2's helper selection compares
-`surfaceMetal < RNG(255)` (signed) for an extractor definition. A zeroed word
-makes that comparison true on 254 of 255 draws, so extractor placement is
-effectively always exhaustive; with the schema value of a stock map (`3` on
-`Ashap Plateau`, for instance) the scatter branch is reachable as authored.
-
-### R-AI-03 §5 — What the root returns, and the radius — Established [R-AI-03]
-
-On helper success the root converts the cell to a world position and writes
-**two** of the caller's three words:
-
-```text
-out.x = int32( footX + 2 · gx ) << 19        # = (16·gx + 8·footX) in 16.16: the footprint centre
-out.z = int32( footZ + 2 · gz ) << 19
-radius = 0
-return true
-```
-
-`out.y` is not written. The construction task's out buffer is a stack local
-that nothing initialises before the call, so the `y` of the submitted
-MobileBuild position is stack residue; what the order service does with it is
-doc 04's ([R-ORD-01]) — the position's `x`/`z` alone determine the site. On
-helper failure the root writes nothing, leaves the grown radius in place, and
-returns false; the task then skips the submit and the next invocation (90
-ticks later, [R-AI-01 §3]) grows the radius again. The `cancapture` distance
-cap of [R-AI-01 §3] is applied by the task to `out.x`/`out.z` after a
-successful return and can veto the placement without resetting anything — the
-radius is already zero by then.
-
-### R-AI-03 §6 — Unknowns left, with deciders — Unknown [R-AI-03]
-
-- **Negative candidate row in the exhaustive path** — narrowed 2026-09-02,
-  see §7.1. The blocker's row test is now traced (row 0 is rejected, negative
-  rows are not); what remains Unknown is only whether the out-of-grid read
-  faults or returns a garbage verdict · a retail probe on a map with a metal
-  deposit in its top row, or the allocator's placement of the plot grid.
-- **The mode-2 off-map acceptance** — closed 2026-09-02, §7.2: doc 04 owns it
-  ([04 R-COLL-01 §2]), and the census of callers passing a non-literal mode is
-  recorded there.
-- **The `y` of the submitted position** — closed 2026-09-02, §7.3: the
-  MobileBuild handler overwrites it from the site-height query before the
-  nanoframe is created; the residue is dead.
-- **Field label in the class routine.** [R-P0-05 §5] and [R-P0-04 §3]
-  describe a "max-slope" term (`× 3` when non-negative; classifier row
-  "definition max-slope field signed greater than zero"). The definition word
-  both routines read is the one the scatter helper reads, and that word is
-  established here as **MinWaterDepth** (the FBI compile copies the movement
-  class's `MinWaterDepth` into it). Corrections are recorded at those
-  sections; the residual is only whether any *other* reader of the word
-  exists that a label change would affect · static trace of the word's
-  readers.
-- Nothing else in the placement path is open: every constant, comparison,
-  truncation, draw bound and draw order above is read from the executable.
-
-### R-AI-03 §7 — Closures from the 2026-09-02 marker census — Established [R-AI-03]
-
-Traced RWU-19-22 (static, the placement root, the two validators, the
-construction task and the MobileBuild handler). Each item names its confidence.
-
-#### R-AI-03 §7.1 — The blocker's row test, and the negative row — Established, with one Unknown [R-AI-03]
-
-§3 said the blocker "does not test `candZ` for sign". Exactly: the blocker's
-entry test is `candX > 0` on the column as a signed 16-bit word **and** "the
-packed cell word, read as an unsigned 32-bit value, exceeds `0xffff`" — which
-is true precisely when the row's 16-bit pattern is non-zero. So **row 0 is
-rejected the same way column 0 is**, and a negative row (`0xffff`, `0xfffe`,
-…) passes that test and then the signed `candZ + footZ < mapCellHeight` test.
-The cell walk then addresses `(candZ × mapCellWidth + candX)` cells before the
-plot grid's first cell for a negative row — one row of storage per unit of
-negative row — and reads metal bytes, heights, occupant and feature words from
-whatever precedes the grid. There is no guard. (Established.) Whether that
-storage is mapped, so the walk returns a garbage verdict rather than faulting,
-depends on where the process allocator placed the grid and is **Unknown**;
-nothing in the executable decides it. A deposit in row 0 or 1 under a
-footprint of five or more rows is the only way to reach it (§3's candidate
-offset). Implementation rule: a candidate whose row is negative has no retail
-verdict to reproduce; rejecting it is the only deterministic choice and must
-be marked as that choice, not as retail's. Row 0 must be rejected as retail
-does.
-
-#### R-AI-03 §7.2 — The validator's mode, and who passes 2 — Established [R-AI-03]
-
-The placement validator's mode argument is the caller's **movement mode** —
-the two-bit field [04 R-COLL-01 §2] describes (1 grounded/stopped, 2 active
-locomotion, 0 and 3 load-only), not a placement policy. Its off-map verdict
-is `mode == 2` and its non-building, non-mode-1 short-circuit is owned by
-[04 R-COLL-01 §2], which already states both. The caller census: the
-**mover commit step** passes its own mover's mode word (the only path on
-which 2 is reachable); the **factory product allocation** passes the
-factory's unit-mirrored mode, which creation sets to 1 and a building never
-changes ([04 R-FAC-02 §5]); every other recovered caller — the scatter helper
-of §4, the mobile-build site check, the skirmish spawn scan and the remaining
-order-handler site checks — passes the literal 1. No computer-player path can
-observe the mode-2 acceptance.
-
-#### R-AI-03 §7.3 — The submitted `y` is dead — Established [R-AI-03]
-
-§5 left open whether the MobileBuild handler reads the stack-residue `y` the
-construction task submits. Traced: the order node stores the triple verbatim;
-the handler's first phase re-snaps `x` and `z` to the footprint centre and
-copies `y` into a local it never uses; the walk-approach phase reads only
-`x`/`z`; and immediately before the nanoframe is created the handler runs the
-building **site-height rewrite** — for a `bmcode == 0` definition it re-snaps
-`x`/`z` again and stores `y := siteHeight(def, cell) << 16`, the same
-height-under-footprint query the blocker's tail computes. The unit creator
-then stores that rewritten triple as the new unit's position. The residue
-therefore reaches nothing that survives: an implementation submits `x`/`z`
-and any `y` (zero is fine) and derives the nanoframe's height at creation,
-exactly as the human build path does.
-
-#### R-AI-03 §7.4 — `bmcode` is the building/mobile selector everywhere the placement path reads it — Established [R-AI-03]
-
-Four readers agree, and the §4 correction above rests on them: the FBI
-compile stores the authored `bmcode` byte on the definition; the unit creator
-sets the building-class flag from "`bmcode == 0`" and allocates a mover only
-for "`bmcode == 1`"; the validator sends `bmcode == 0` to the yard-map
-blocker; and the strategic state's initialization vector adds its 40 for
-`bmcode == 0` ([R-P0-05 §9]). Stock content authors `bmcode=0` on buildings
-and `bmcode=1` on mobile units.
-
-### R-AI-01 §20 — The `weight` factor is read by the C runtime's `atof`; the tokenizer and its comment rule — Established [R-AI-01]
-
-**Renumbering (2026-09-04, WU-19-216).** RWU-19-198 first published this
-section as "R-AI-01 §19", which collided with the older rally-admission
-[R-AI-01 §19] above; two headings carried the same anchor, so a citation of
-either was ambiguous. The rally section keeps §19 and none of its citations
-change; this section is §20, and the citations that pointed here — all of
-them in `internal/content` — moved with it.
-
-[§12] gave the `weight` directive's second argument as "a float, defaulting
-to `0.0`" without naming the conversion, which left `0.5`, `.5`, `1e0`,
-`abc` and a missing argument open. The handler and everything under it have
-been read.
-
-**Established — the line tokenizer.** The profile text (the global
-`aiprofile` / `ai\default.txt` file and every per-definition `ai_weight`
-fragment, [§18]) reaches the same dispatcher raw: the file is loaded whole
-and handed over, with no comment blanking of any kind on the path. The
-dispatcher splits on newline; each line is split into at most **twenty**
-tokens on runtime whitespace (the C runtime's `isspace` set), and a `#`
-character ends the line — everything from the `#` on is discarded, whether
-it begins a token or sits inside one. `//` has **no meaning** here: a line
-beginning `//` is a directive whose keyword the table does not know and is
-ignored as a whole, and a `//` between a name and its factor is the factor
-token. Token 0 is lower-cased and looked up; token 1 is the name; token 2 is
-the factor (`weight`) or the limit (`limit`).
-
-**Established — the conversion.** The factor is token 2 read through the
-runtime's `atof`, with `0.0` returned when the line has fewer than three
-tokens. `atof` skips leading whitespace and converts the **longest valid
-decimal prefix**: an optional sign, digits, an optional decimal point with
-digits, and an optional exponent introduced by `e`, `E`, `d` or `D` with an
-optional sign and digits; it stops silently at the first character that
-does not fit, and yields `0.0` when no digit was consumed. There is no
-hexadecimal form, no `inf`/`nan` token, and no error path. So:
-
-| token | factor |
-|---|---|
-| `0.5`, `.5`, `+.5`, `5e-1`, `5d-1` | `0.5` |
-| `1e0`, `1E0`, `1d0`, `1.` | `1.0` |
-| `2x`, `2,5`, `2//c` | `2.0` (junk after the prefix is ignored) |
-| `abc`, `x1`, `0x10`, `-`, `.` | `0.0` (no digits before the first misfit) |
-| absent (line is `weight NAME`) | `0.0` (the accessor's default) |
-
-The directive then applies with whatever `atof` produced — nothing conditions
-the write on the token converting, which is why `weight ARMCK abc` zeroes the
-weight rather than leaving it alone (§12's rule, now with its grammar).
-
-**Established — the store's range.** The product `float(currentWeight) ×
-factor` is narrowed by the runtime's truncating float-to-integer routine
-before the clamp. That routine returns the integer-indefinite value
-(`−2^31`) for any product outside the signed thirty-two-bit range or not a
-number, and the clamp's "at or below zero becomes zero" arm then stores
-**0**. A factor such as `1e10` — or an exponent large enough to overflow the
-conversion — therefore sets the weight to 0, not 100. An implementation
-whose float-to-integer conversion saturates instead (as Go's does on some
-targets) must special-case the out-of-range product to 0.
-
-**Correction.** Nothing previously written was wrong; §12 named the type
-and default and left the routine open. The code marker asked which of
-three candidate readers (the runtime's decimal conversion, the engine's
-fixed-point parser, the TDF integer accessor) applies: it is the first,
-through the directive library's own "argument *n* as float" accessor. The
-same accessor family's integer form reads `limit`'s token through the
-runtime's `atoi`. The reference install's profiles are
-indifferent — every one of their `weight` factors is a plain decimal
-(WU-19-167 census) — so the grammar matters only for third-party profiles.
-
-### Closed — the `Alliances` box carries row A, the alliance predicate's row [R-SAVE-02 §15] (2026-09-04, RWU-19-198)
-
-"Player records" and the WU-19-182 closure under "Sessions and campaign"
-established that one eleven-byte `Alliances` box is emitted per active
-`Player%i` account and left open which of the slot's two rows
-([05 R-SHARE-01 §1]) it carries. Both sides have been read.
-
-**Established — writer and reader.** The writer copies the slot's **row A**
-— this player's own declaration toward each slot index, the row every
-simulation predicate indexes — into the box, eleven bytes, immediately after
-`Side`. The reader, when the selected box is exactly eleven bytes, copies
-those bytes into the same row A and then forces the slot's own column to
-`1`. **Row B** (the mirror of the other slots' declarations toward this
-player) is neither written nor read by the save path: after a load it holds
-whatever slot initialization left there (the self entry only), which in
-single-player is also what battle entry leaves ([R-SKIR-01 §2]).
-
-**Consequence.** A restored battle reproduces every giver's own alliance
-declarations exactly, so resource sharing, the sensor phase's allied
-disjunct, the guard's combat join and the all-enemies-eliminated test — all
-row-A readers — behave as before the save. The one row-B reader, the mutual
-victory test, sees a diagonal-only row B after a load; in single-player it
-saw the same before the save, so nothing observable changes. A future
-multiplayer save would lose the mirror, which is a retail limitation, not
-one to repair.
-
-**Correction.** The "Sessions and campaign" item's residual — "**Unknown**
-for the row identity" — is closed: row A. The earlier `TODO(question)` at
-the alliance row's projection chose row A on the grounds that it is the only
-row the build models; that choice is now the traced one.
-
-
-## R-AI-04 — Computer player: transport, naval, air, repair, reclaim and scouting policy (2026-09-04)
-
-Traced RWU-19-200 (static). Method: the task-class virtual-table run was
-dumped and matched against the manager constructor; the transitive callee
-set of the live manager dispatcher, the seven task bodies, the classifier,
-the weapon-maintenance sweep, the 30-tick strategic refresh and its two
-dispatchers, the class routine, the strategic-state constructor, the profile
-passes and the metal-spot builder was computed down to the order-service
-boundary (the shared command resolver and order submitter of
-[04 R-ORD-02 §1], the activation toggle and the factory-product producer);
-every resolver and submitter call inside that set was read with its literal
-command code and target arguments; every reader of the definition's water,
-flight and capability words and of the map's sea level, extents and cell
-counts inside the set was listed; and, image-wide, every caller of the
-resolver was read for the literal code it passes and every test of "owner's
-control byte is the computer value" was classified. The question this
-closes is the one [R-P0-02]'s "What remains not established" left open:
-whether the computer player has a transport, naval, air, repair, reclaim or
-scouting policy distinct from the generic orders the task bodies of
-[R-AI-01] issue. It has none as a separate mechanism; what it does have is
-three definition-word tests and one resolver consequence, spelled out below
-so an implementation neither invents a policy nor omits the tests.
-
-### R-AI-04 §1 — The task-class run is complete: seven classes and nothing else — Established [R-AI-04]
-
-The virtual tables of the task classes are one contiguous run of seven
-two-entry tables followed by a zero word: null, attack wave, regroup,
-explore/gather, random-walk rally, construction/positioning,
-resource/queue. The manager constructor assigns exactly those seven to its
-nine slots (two waves, two regroups), and the run has no eighth table
-([R-AI-01 §1] already counted seven; [08 "Eco toggle and group-vector
-population"] says "six unique virtual tables", which under-counts by one —
-the null class has its own table — and is corrected here). The only
-dispatcher with a caller is the live one of [R-AI-01 §1]; the alternate
-dispatcher and one further routine labelled as an order dispatch in the
-recovered function set are unreferenced. So "a transport, naval, air, repair,
-reclaim or scouting task class" is not a bounded absence any more: the run
-is complete, and none exists.
-
-### R-AI-04 §2 — Transport: no producer exists, and the computer player does not build carriers — Established (negative) [R-AI-04]
-
-**Every order the computer player issues goes through the shared command
-resolver and submitter, or through the factory-product producer**, and the
-resolver's command codes used across the whole computer-player closure are
-exactly `2` (move), `3` (attack), `9` (patrol) and `14` (mobile build) —
-the four [R-AI-01] names — plus the factory product click producer of
-[R-AI-01 §2]. Codes `5` (unload), `6` (pick up), `7` (guard), `8`
-(assist/repair), `12` (reclaim/resurrect) and `13` (capture) are never
-passed. Further, **every code-2 call passes no target unit** (the wave
-gather, the regroup move, the explore legs and the construction
-repositioning all resolve against a position), so the target-dependent
-arms of code 2 in [04 R-ORD-02 §1] — `Capture`, `ReclaimUnit`, `HelpBuild`,
-`RepairUnit`, `VTOL_Landing`, the pickup pair and the follow pair — are
-unreachable; and every code-3 call from the rally task passes a position
-only, so it resolves to the position-attack forms. There is therefore no
-producer of `Ground_Pickup`, `VTOL_Pickup`, `Ground_Unload`, `VTOL_Unload`,
-`VTOL_Landing` or `BeCarried` anywhere in the computer player: no pickup
-point, no drop point, no carried set, no timing. Nothing exists to
-implement.
-
-**Image-wide bound.** Of the resolver's sixteen callers, the only one that
-passes the literal unload code is the mission `InitialMission` interpreter's
-`u x,y` verb ([04 §3.6]), which is authored per placed unit and runs once at
-battle entry; no caller passes the literal pickup code; the remaining
-callers pass a code copied from a command packet (the human and network
-command path of [07 "UI order producers (R-P0-11)"]) or a fixed
-non-transport code inside an order handler. No routine names a transport
-row by its canonical string. So a computer-controlled unit carries a
-transport order only when the mission authored it or the engine attached
-one itself (a factory product of an `isairbase` carrier, [04 R-FAC-02 §1]),
-and the handlers then run exactly as for a human owner (§6).
-
-**Carriers are not built either.** The class routine zeroes the other-mix
-coefficient for every definition with `canload` ([R-P0-05 §5]); the metal
-coefficient is `clamp(100·extractsMetal − 0.02·buildCostMetal − 25·makesMetal)`
-and the energy coefficient `clamp(−0.0025·buildCostEnergy − 5·Classify)`,
-so for a `canload` definition that does not extract metal and whose
-classification is not negative all three coefficients are at or below zero,
-the candidate score of [R-P0-05 §4] is at or below zero for every economy
-mix, and [R-AI-01 §8] skips it **without drawing**. A profile `weight`
-cannot rescue it: the weight multiplies a non-positive score. The computer
-player therefore never queues a transport of its own accord; the only
-transports it owns are mission-placed or captured ones.
-
-**What a transport it owns anyway does.** The classifier of [R-P0-04 §3]
-files it by the ordinary rows: a flying carrier goes to the explore record
-and patrols (§4); a water-class carrier (`MinWaterDepth ≥ 1`) goes to
-regroup B and follows wave B's gather moves but, being unarmed, is rejected
-by code 3 (no `canattack`, no `kamikaze`) and never attacks; an unarmed
-land carrier fails every row and **stays ungrouped for the whole game** —
-the last row requires the armed bit — receiving nothing but the standing-
-order rewrite of [R-AI-01 §10] and the engine's own return-fire. Cargo it
-carries is untouched by the manager.
-
-### R-AI-04 §3 — Naval policy: three `MinWaterDepth` tests, no map-level input — Established [R-AI-04]
-
-The only definition word the computer player reads that separates water
-units and structures from land ones is **`MinWaterDepth`** — the movement-
-class value the FBI compile copies onto the definition, or, for a building
-with no movement class, the value the class reader takes from the unit's
-own section ([fmt fbi]); a class or section that omits it carries the
-template value **−10000** ([04 §6.1]), so every sign test below selects
-exactly the definitions that author a non-negative (or positive) depth —
-in stock content the ship classes and the shipyards. `MaxWaterDepth`, the
-`Floater`/`amphibious` keys, the water weapon flags and the hover flag are
-never read by the computer player. The three tests, all previously
-Established in their own sections and gathered here as the whole naval
-policy:
-
-1. **Grouping and attack.** The classifier row `MinWaterDepth ≥ 1 →
-   regroup B` ([R-P0-04 §3], corrected label [R-AI-03 §6]) precedes the
-   armed test, so **every** non-builder, non-flying water-class mobile,
-   armed or not, enters regroup B, and wave B is the naval wave: threshold
-   50,000 against wave A's 20,000 (the shed and collect comparisons of
-   [08 "Wave merge"] are `distance² ≥/< threshold × count`, so a naval wave
-   holds together over a radius about 1.58 times wider), the same minimum
-   three and maximum six, the same gather destinations (the armed-building,
-   unarmed-building and builder centroids, which lie on land — the move
-   handler decides what a ship does with a land goal, [04 R-ORD-01 §4]),
-   and the same target: the **nearest hostile unit of any medium** to the
-   wave's centroid ([R-AI-01 §4], [R-AI-01 §9]). No submerged/surfaced,
-   water-weapon or reachability test enters the choice; the per-member
-   resolver applies its own code-3 target-class rejects
-   ([04 R-ORD-02 §1]), so a ship without a water weapon ordered at a
-   submerged target simply gets no order that run. Land mobiles (template
-   −10000) fall through to the armed row and wave A. There is no naval
-   rally, patrol or escort.
-2. **Production bias.** In the class routine the other-mix accumulator is
-   multiplied by three when `MinWaterDepth ≥ 0` ([R-P0-05 §5], corrected
-   label [R-AI-03 §6]), after the completed-count multipliers and before the
-   `canload` / `isfeature` / wind zeroing. That is the only production term
-   that distinguishes a ship or shipyard from a land unit; the reservoir,
-   gates and economy mixes of [R-P0-05 §3–§4] are otherwise identical.
-3. **Placement.** A shipyard is a building (`bmcode 0`) and takes the
-   ordinary root of [R-AI-03 §2]: origin stepped from the builder toward
-   the strategic centre, radius grown by 160 per failed attempt, and — being
-   a non-extractor — the statistical scatter helper directly. Its
-   `MinWaterDepth ≥ 0` selects the helper's **second region set** (the wider
-   cells and the margin of 6 drawn at state construction, [R-AI-03 §4]);
-   and the placement validator's yard path applies the waterline band to
-   every footprint cell: reject when the cell's low height is below
-   `waterline − MaxWaterDepth`, reject when `waterline − MinWaterDepth` is
-   below the cell's high height ([R-AI-03 §4]). For an authored
-   `MinWaterDepth = N` that is "the whole footprint at least N below the
-   waterline"; for a land building with the template values neither test
-   can fire. There is no coast search, no water census and no fallback:
-   when the thirty trials around the origin find no cell in the band the
-   attempt fails, the radius stays grown, and the next attempt ninety ticks
-   later tries again wider ([R-AI-03 §5]).
-
-**Water starts and water-only maps change nothing else.** No routine in the
-computer-player closure reads a start position's medium, a water-cell
-count, the sea level (outside the two shared placement validators and the
-shared shot-time and visibility gates), or any per-map water statistic; the
-only map words read are the world extents and cell counts that size the
-explore and placement draws. On a map whose start neighbourhood is all
-water a land factory is still selected — the reservoir draw is spent in
-selection, before placement ([R-AI-01 §8]) — and its placement fails trial
-by trial while the radius grows; on an all-land map a shipyard does the
-same. That is the retail behavior, not a gap.
-
-### R-AI-04 §4 — Air policy: the explore record, the resolver's air twins, and one addend — Established [R-AI-04]
-
-1. **Every non-builder aircraft is a scout and nothing else.** The
-   classifier's `canfly → explore` row ([R-P0-04 §3]) precedes both the
-   water row and the armed row, so an armed aircraft never reaches a
-   regroup record and **no attack wave ever contains one**. The explore
-   record holds only such aircraft (no other row sends anything there), and
-   its body ([R-AI-01 §6]) issues code 2 and code 9, which the resolver
-   turns into `VTOL_Move` and `VTOL_Patrol` for a `canfly` actor
-   ([04 R-ORD-02 §1]): with fewer than five aircraft, a two- or three-leg
-   patrol inside an eighth of the map around the strategic centre (or, with
-   no centre, a patrol at the nearest hostile's position); with five or
-   more, a patrol to a random map edge. The computer player never issues an
-   aircraft an attack order; its aircraft fight only through the
-   `VTOL_Patrol` handler's own engagement, the return-fire path of
-   [R-AI-01 §11] and the weapon-maintenance acquisition of [R-AI-01 §15].
-2. **Construction aircraft are builders first.** The builder row precedes
-   the flyer row, so an air builder is in the construction record: pass 1
-   gives it `VTOL_MobileBuild`, pass 2 `VTOL_RepairPatrol` (§5).
-3. **Air factories and aircraft production have no special case.** An air
-   factory is a `bmcode 0` building and takes the ordinary placement root;
-   an aircraft candidate receives `+40` in the class routine's other-mix
-   accumulator for `canfly` ([R-P0-05 §5]) and nothing else air-specific.
-4. **Pads.** The strategic refresh's third vector — own active units that
-   are both `builder` and `isairbase` — is the target registry's third list
-   ([06 §3.1]), consumed by the engine's damaged-aircraft pad search
-   ([04 R-AIR-01 §11]) inside the VTOL handlers. The manager never reads
-   it; a computer-owned aircraft lands on a pad exactly when a human-owned
-   one would.
-5. **No air rally or patrol point.** The rally task would resolve code 3 at
-   its best point for a `canfly` member (an `AirStrike`/`AirToGround` run),
-   but record 9 has no producer ([R-P0-04 §5]).
-
-### R-AI-04 §5 — Repair, reclaim, scouting, guard and capture — Established [R-AI-04]
-
-* **Patrol is the carrier of repair and reclaim.** The manager issues code 9
-  from two bodies: the construction task's repositioning pass for every
-  member of the construction record ([R-AI-01 §3] — a `cancapture` builder
-  gets a move then a queued patrol at the strategic centre; any other
-  builder a patrol toward a point up to 320 world units short of the
-  centre) and the explore task's legs and edge run. The resolver turns code
-  9 into `RepairPatrol` / `VTOL_RepairPatrol` when the actor's definition
-  carries the `canreclamate` mirror bit and into `Patrol` / `VTOL_Patrol`
-  otherwise ([04 R-ORD-02 §1]). So every builder that authors
-  `canreclamate` — in stock content the commander and the construction
-  units and aircraft — spends its idle time on a repair patrol, and the
-  **whole** of the computer player's repair and reclaim is what that handler
-  does on its own: repair a randomly drawn damaged or unfinished friendly
-  within `sightdistance` when energy is at least 20 % of storage, and
-  reclaim features sampled on a 48-unit lattice when metal or energy is
-  below 20 % ([04 R-ORD-01 §4], [04 R-ORD-01 §7]). The manager never passes
-  code 8 or code 12, never chooses a repair or reclaim target, and never
-  orders a unit reclaimed. What the handler reclaims is credited through the
-  difficulty discount like every other computer-player income
-  ([05 R-ECO-01 §11]).
-* **Guard and capture: never.** Code 7 is passed only by the `VTOL_Follow`
-  hand-off and the `InitialMission` interpreter; code 13 by nothing in the
-  image; and the computer player's code-2 calls carry no target, so the
-  contextual `Capture` arm is unreachable. A `cancapture` unit owned by the
-  computer player is used for its build list and its `maneuver` standing
-  order ([R-AI-01 §10]), never for capturing.
-* **Scouting is the explore task, and only aircraft do it.** §4 gives the
-  record's membership; a computer player that owns no non-builder aircraft
-  never issues an exploration order to anything, and no ground unit is ever
-  sent to an unexplored point. The rally task's probe walk is the only
-  other map-exploring behaviour and has no producer.
-
-### R-AI-04 §6 — Corrections, cross-document note, and what remains — Established [R-AI-04]
-
-**Corrections.** (a) [08 "What remains not established"] read "AI transport
-geometry and any distinct naval or air expansion policy beyond the generic
-move orders are not in this lane and remain unknown"; both halves are now
-closed above — the geometry does not exist and the naval/air policy is
-§3–§4. (b) The "Missing and unknown" bullets "Transport-selection policy
-beyond generic move orders, and any distinct naval or air placement
-geometry" and "Transport, naval, air, repair, reclaim and scouting policies
-as distinct task classes" are struck with closure notes. (c) [08 "Eco toggle
-and group-vector population"]'s "six unique virtual tables" is seven (§1).
-
-**Cross-document note (Established, owned elsewhere).** The image-wide
-census of "owner is a computer player" tests finds, outside the manager and
-its already-documented sites (the damage throttle [R-AI-01 §11], the profile
-passes [R-AI-01 §12], the dead status dump [R-AI-02 §2], the nearest-hostile
-helper's controller test [R-AI-01 §9]), only two families: the difficulty
-economy ladder of [05 R-ECO-01 §3] and [05 R-ECO-01 §11] (settlement, build
-credit, construction arithmetic, feature-reclaim credit) and the
-acquisition helper's admission relaxation for a computer shooter, already
-in [06 §3.1]. **No order handler branches on the owner being a computer
-player**: a transport, patrol, repair or attack order runs identically for
-both, which is why §2–§5 can hand the handler contracts to doc 04 without
-a computer-player variant.
-
-**What remains.** Nothing in this lane. The one item an implementer might
-still ask — what a ship does with a wave gather aimed at a land centroid, or
-what a mission-authored unload does on a computer-owned carrier — is the
-owner-independent handler contract of [04 R-ORD-01 §4] and [04 §10.2], not a
-computer-player question.
-
-## R-SESS-01 — session and account material: RWU-19-199 findings (2026-09-04)
-
-### R-SESS-01 §8 — The session state word has no name in the image — Established (bounded negative) [R-SESS-01]
-
-"Session states" left as residual "UI-level names for states 0–4", with a
-static trace of the session callback table as the decider. The trace is
-done and the answer is negative:
-
-- The state word is one dword; the "callback table" is a **setter with an
-  eight-way switch** that stores the state and installs one function pointer
-  for it (0 → teardown A, 1 → teardown B, 2 → router, 3 → network pre-load,
-  4 → local pre-load, 5 → battle loading, 6 → battle, 7 → results; any other
-  value installs a null pointer). The setter also picks the timer callback:
-  the battle timer for state 6, the front-end timer otherwise. There is no
-  indexed table of records and therefore no per-state label field.
-- **No string is associated with any state.** The setter and the five
-  callbacks for states 0–4 reference no string at all. The readers of the
-  state word that do reference strings are the process initializer (profile
-  keys, font names), the save `Summary` writer (`Gametype`, `maxunits`, …),
-  the solar-system screen, the campaign CD prompt and the CD-audio helper —
-  none is a state label. The setter's callers pass literal state numbers
-  beside front-end screen selections and the `BigButton` cue.
-- The only "state"-named diagnostic in the image — `Code segment checksum
-  error found when switching FE states` — belongs to the **front-end
-  screen** word, a different machine ([07 R-FE-01]); `Object State`,
-  `Object States` and `Piece States` are the script debugger's ([04 §5]).
-  No `Teardown`, `Preload`, `Router` or similar string exists.
-
-Bounded to the recovered export. The five inferred labels in "Session
-states" stay Supported inference as *descriptions*; as *names* they are
-Nanolathe's, and an implementation's diagnostic strings for states 0–4 are
-its own to choose.
-
-### R-SESS-01 §9 — The restored `maxunits` word: where it lands, unclamped, and what reads it next — Established [R-SESS-01]
-
-[R-ENTRY-01 §6] names the battle-restoration dispatcher's first step,
-`Summary.maxunits` → "lobby unit-limit copy", and notes that the pool of the
-battle being loaded was already sized from that copy as it stood before the
-restore. The step itself, exactly:
-
-- The dispatcher tests the `Summary` account for a `maxunits` item; **only
-  when present** does it read it (integer, low 16 bits) and store it into
-  the **configured unit-limit word** — the one word the start-up profile
-  read seeds from `[Preferences]` `UnitLimit` (default 250, clamped 20..500,
-  [R-SKIR-01 §6]) and the multiplayer battleroom's `MAXUNITS` control
-  mirrors. A save without the item leaves the word untouched. **No clamp is
-  applied** at the restore.
-- Skirmish and multiplayer battle entry then copy that word into the
-  **session** limit word verbatim — the entry copy has no clamp either
-  ([R-SKIR-01 §6]'s "then clamped" is the start-up read only). So a restored
-  value outside 20..500 would size the *next* battle's pool at exactly that
-  value; a save written by retail carries the start-up-clamped word and never
-  exercises this.
-- The battle being restored is unaffected: its pool was allocated from the
-  pre-restore word ([R-ENTRY-01 §3]), and the restored session word is not
-  rewritten during a restore. The save writer records the configured word
-  (not the session word) as `Summary.maxunits`.
-
-*Implementation note (not a retail fact).* Nanolathe's "configured word" is
-the application's setup record in `cmd/nanolathe`, which supplies each
-battle's `UnitLimit` and the restore's pool size; the session package holds
-only the per-battle copy. Carrying the restored value to a second battle in
-one process is therefore an application-level write at the restore site,
-not a session change; `sessionUnitLimit` records exactly that.
 
 ## Required implementation invariants
 
@@ -8045,7 +7561,7 @@ properties:
 - Victory/defeat trigger queues are built for every session kind but polled only in the campaign kind, in the local player's once-per-30-tick block: victory first (AND) then defeat (OR). Skirmish and multiplayer never poll a trigger queue; their end conditions are the live-unit-count predicates of [R-SKIR-01 §3] and [R-TRIG-01 §6]. Removal and capture notifications reach every built record in every kind. No trigger consults an alliance row; the skirmish victory sweep does [R-TRIG-01 §1] [R-TRIG-01 §6].
 - The simulation random stream is never synchronized across peers: each process reseeds Park–Miller from its own `QueryPerformanceCounter` sample (per doc 01 §7.1) and the CRT stream from its own clock at battle entry; no packet carries or writes a seed.
 - Scenario unit reconstruction is a load path, not the strategic AI.
-- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established (the metal score is the footprint per-cell metal-byte sum; water legality is the yard path's waterline band); the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); the class routine's weapon reads are the `DAMAGE/default` word divided by 40 and the `range` word divided by 100; any additional distinct group writer remains bounded negative; transport geometry is closed as non-existent, and the naval, air, repair, reclaim and scouting policies are the `MinWaterDepth` tests, the flyer classifier row and the patrol-carried repair of [R-AI-04]. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05] [R-AI-04]
+- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, the eco toggle's stock compare and bound-five draw, and placement origin step, radius, selector, and two helper contracts are established (the metal score is the footprint per-cell metal-byte sum; water legality is the yard path's waterline band); the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); the class routine's weapon reads are the `DAMAGE/default` word divided by 40 and the `range` word divided by 100; any additional distinct group writer remains bounded negative; transport geometry is closed as non-existent, and the naval, air, repair, reclaim and scouting policies are the `MinWaterDepth` tests, the flyer classifier row and the patrol-carried repair of [R-AI-04]. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05] [R-AI-04]
 - Multiplayer transport is DirectPlay in the retail process.
 - Packet dispatch starts with a one-byte type and uses a fixed handler table.
 - Network input is consumed before the rest of an authoritative tick.
@@ -8073,65 +7589,32 @@ Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it. Findings that closed an item live in the
 body and are not restated here.
 
-**Correction (2026-08-28, RWU-00-5).** This tail had become an inventory of
-finished work: entire multi-line bullets on campaign progression, mission
-placement order, trigger evaluators, meteor spawning, restriction flags, the
-computer player's construction selection and score fields, initial seed
-agreement, host-authority migration, path/effect/projectile persistence,
-indirect random-state serialization, `WinLoseTime`/`DisplayTimer` consumers,
-campaign progress outside `.sav`, the replay-absence sweep, and session-end
-ordering opened with "are established" or "closed" and then recited the
-finding. The recitals are deleted here only; the body sections and the
-[R-P0-04] / [R-P0-05] / R-SAVE-* findings continue to own them.
-
 ### Sessions and campaign
 
-- ~~The runtime player row that owns the single 11-byte `Players/Alliances`
-  save box during battle restoration~~ · **closed 2026-09-04** (WU-19-182):
-  there is no single box. The item's premise was the error. WU-19-158's
-  writer census, recorded under "Player records", walks the ten player
-  records and, for each active one, selects `Player%i` and emits the nineteen
-  scalars "followed by the 11-byte `Alliances` box, and nothing else"; the
-  reader is symmetric. The box is therefore an item of the per-slot account,
-  not of `Players`, and row *i* is slot *i*'s own alliance row — the
-  destination this item asked for is named by the account the box sits in.
-  What the census does not settle is WHICH of the two eleven-byte rows each
-  slot holds ([05 R-SHARE-01 §1]) the box carries; the first row is the one
-  every simulation consumer indexes and the one skirmish setup fills, and the
-  second keeps only its diagonal in skirmish ([R-SKIR-01 §2]), so a
-  first-row reading loses nothing observable in single-player. Row identity
-  · **closed 2026-09-04** (RWU-19-198): row A, on both the writer and the
-  reader side — [R-SAVE-02 §15].
-- ~~UI-level names for session states 0–4; their behavior, transitions,
-  callbacks, and admission-mask classes are established · "Session states" ·
-  static trace.~~ **Closed 2026-09-04 (negative):** no string names any
-  session state; the callback "table" is a setter switch [R-SESS-01 §8].
 - The AnyMsn toggle's exact listbox-selection effect — the last residual of
   the all-missions bit and of campaign progress held outside battle `.sav`
   files · "Progression" · manual retail observation.
-- The meaning of the per-slot auxiliary word that admits a slot to the score
-  display and statistics rows even when its controller test fails ·
-  [R-CAMP-01 §7] · static trace of the word's writers.
+- Whether the multiplayer participant-state message lands a field in the
+  per-slot auxiliary word that the score display and statistics rows test;
+  no writer exists in the image, so it is zero in every single-player
+  session · [R-CAMP-01 §7] · static trace of the `0x28` receiver (out of
+  scope).
 - Whether any localized retail translation file authors upper-case map-name
   sections, so that the skirmish catalog's forward translation and the
   loader's reverse-translation fallback can fire on stock data · [R-CAMP-01
   §11] · asset census of a localized install.
-- ~~Whether commander-kill and commander-loss counters have save-bank keys in
-  addition to the established `Kills` and `Losses` entries~~ · **closed
-  2026-09-04** (WU-19-158): they do not. The `Player%i` writer and reader were
-  traced end to end and their complete item censuses are recorded under "Player
-  records"; neither names a commander counter, and the only place in the image
-  that spells `Commanders Killed` / `Commanders Lost` is [R-CAMP-01 §10]'s
-  statistics score board, which no save path touches.
-- ~~Transport-selection policy beyond generic move orders, and any distinct
-  naval or air placement geometry~~ · **closed 2026-09-04** (RWU-19-200,
-  [R-AI-04 §2], [R-AI-04 §3], [R-AI-04 §4]): no transport producer exists
-  in the computer-player closure and none of the resolver's sixteen callers
-  passes the pickup code; naval and air placement use the ordinary root, the
-  only water term being the scatter helper's `MinWaterDepth` region select
-  and the validator's waterline band, and there is no air term at all.
-- The reader, if any, of the placement record's `InitialGroup` nibble ·
-  [R-TRIG-01 §11] · static trace from the flag byte's low-nibble mask.
+- The reader, if any, of the placement record's `InitialGroup` nibble; the
+  `g <n>` order operand that stock scripts use resolves through
+  `Ident`/`Unitname` only [04 §3.6] · [R-TRIG-01 §9] · static trace from the
+  flag byte's low-nibble mask; until then the key is inert.
+- The meaning of a trigger's unit-created notification; every shipped
+  condition ignores slot 3, and whether any non-shipped condition type existed
+  is unrecoverable · [R-TRIG-01 §2] · none needed for implementation; keep
+  the slot.
+- Whether a synthetic side whose `SIDEDATA` commander differs from the
+  `Commander`-flagged unit is reachable in stock content (stock agrees; the
+  table is the authority) · [R-TRIG-01 §3] · asset census over non-stock
+  content.
 - Which per-slot flag the start barrier's `player(s) ready` count reads ·
   [R-TRIG-01 §9] · static trace of the barrier screen's slot walk.
 - What the 3DO texture frame lookup returns for the `-1` colour the
@@ -8157,6 +7640,10 @@ finding. The recitals are deleted here only; the body sections and the
 - The four presentation helpers of the handoff frame, and the external
   post-placement hook of the multiplayer path · [R-ENTRY-01 §1],
   [R-ENTRY-01 §5] · static trace (doc 07; the hook is OOS).
+- The camera's world-rebuild reset origin, and whether the skirmish
+  commander's battle-start jump applies the half-height shear ·
+  [R-ENTRY-01 §6] · static trace of the camera-block reset and of the stamp
+  helper's camera write.
 - Whether the strategic-state constructor's `+20` term sees a null pointer
   or an empty list for a definition with no download-menu entries — i.e.
   whether the download-menu list is allocated for every definition ·
@@ -8177,16 +7664,12 @@ finding. The recitals are deleted here only; the body sections and the
   additional writer may be claimed without new evidence.
 - Whether the footprint blocker reads harmlessly or faults on the negative
   candidate row the exhaustive metal-spot helper can produce (a deposit in the
-  top two rows with a footprint of five or more rows) · [R-AI-03 §6] · static
-  trace of the blocker's cell addressing for a negative row, or a retail probe.
-- Whether the MobileBuild order handler reads the `y` of the position the
-  construction task submits — the placement root writes only `x` and `z`, and
-  `y` is stack residue · [R-AI-03 §5], [R-AI-03 §6] · static trace of the
-  handler (doc 04 [R-ORD-01]).
+  top two rows with a footprint of five or more rows) · [R-AI-03 §6],
+  [R-AI-03 §7.1] · a retail probe, or the allocator's placement of the plot
+  grid.
 - Whether any reader other than the class routine, the classifier and the
-  scatter helper consumes the definition word now established as
-  `MinWaterDepth` (previously labelled "max-slope" in this doc) · [R-AI-03 §6]
-  · static trace of the word's readers.
+  scatter helper consumes the definition's `MinWaterDepth` word ·
+  [R-AI-03 §6] · static trace of the word's readers.
 - Semantic name of the class routine's signed classification helper · "Class-vector
   recomputation loop and inputs" · static trace.
 - Semantic names of the order gate-mask bits the construction task tests
@@ -8197,17 +7680,9 @@ finding. The recitals are deleted here only; the body sections and the
   visibility bit is reachable in a networked session · [R-AI-01 §7] · static
   trace from the skirmish option word into the world flags word.
 - Whether the attack wave's engaged latch and the rally task's best point,
-  drift and best score are serialized · [R-AI-01 §4], [R-AI-01 §7],
-  "Save-file organization" · static trace.
-- ~~Transport, naval, air, repair, reclaim and scouting policies as distinct
-  task classes~~ · **closed 2026-09-04** (RWU-19-200, [R-AI-04 §1]–[R-AI-04
-  §5]): the virtual-table run is complete at seven classes; the whole
-  computer-player closure passes only command codes 2, 3, 9 and 14 (never
-  unload, pick up, guard, repair, reclaim or capture), always without a
-  target unit for code 2; naval policy is three `MinWaterDepth` tests, air
-  policy is the classifier's flyer row into the explore record, and repair
-  and reclaim happen only inside the `RepairPatrol` handlers the patrol
-  orders resolve to.
+  drift and best score are serialized; the account inventory holds no AI
+  item for them · [R-AI-01 §4], [R-AI-01 §7], [R-SAVE-02 §11-A] · static
+  trace of the save writer's task-record coverage.
 
 ### Networking
 
@@ -8226,8 +7701,8 @@ a single-player implementation.
   static trace.
 - Payloads of the packet types the in-game receiver forwards whole to a
   subsystem; the type byte, per-type fixed length, admission mask, dispatch
-  roles, and inline-decoded field layouts are established · "Packet
-  registry" · static trace.
+  roles, and inline-decoded field layouts are established · "Declared packet
+  types" · static trace.
 - The lobby receiver's switch, which owns the types whose admission mask
   excludes the battle-loading and live-battle states · "Declared packet types" ·
   static trace.
@@ -8256,29 +7731,24 @@ a single-player implementation.
   format in the participant-state receiver · "Synchronization and integrity checks" · static trace.
 - Reconnect, late join, spectator join, and temporary transport-loss behavior,
   or a bounded absence for each · "Peer transport state" · static trace.
+- Whether all peers can reach the save callback in a multiplayer session
+  (the local callback has no guard; reach is not proved) · "Multiplayer
+  saves" · static trace.
 
 ### Save and replay
 
 - Remaining semantic mappings inside the bulk binary boxes: the two
   path-marker words (code-2 payload `0x22` and `0x32`), the code-3 record's
-  handler identity and word names, the unit record's relation byte (`0x8E`),
-  and the per-word layout of the `u%04xacc` resource account (doc 05) ·
-  "Save-file organization" [R-SAVE-02 §6] [R-SAVE-02 §7] [R-SAVE-02 §10] ·
+  three trailing `u16` words, the two weapon-slot payload words, and the
+  per-word layout of the `u%04xacc` resource account (doc 05) ·
+  [R-SAVE-02 §6], [R-SAVE-02 §7], [R-SAVE-02 §10], [R-SAVE-WEAPON-01] ·
   static trace (field-isolation of each reader). Everything else in the unit,
-  mover, script, order, feature and player records is named. *Narrowed
-  2026-09-04 (WU-19-188)* to two candidates for `0xB1`; **closed 2026-09-04
-  (RWU-19-196)** by [R-SAVE-02 §14]: `0xB1` is the minimap damage-flash byte
-  and `0xAC`/`0xAD` are the two health-percentage samples, by the writer's
-  source and the reader's destination fields; the post-capture grace counter
-  is not in the record at all. The unit codec now persists all three and the
-  `TODO(question)` on `BlinkSuppress` is retired.
+  mover, script, order, feature and player records is named.
 - The *value* of the script writer's two residue dwords (24 and 25 of each
-  piece record). Which getter is lost is now Established — the show/hide and
-  cache getters both store into dword 23 and are overwritten, leaving only the
-  shade getter in dword 26 ([R-SAVE-02 §9], closed 2026-09-04). The residue
-  itself is stack leftover, not derived from game state, so it is Unknown **by
-  construction**: no further trace can settle it, and a reimplementation must
-  choose a policy rather than reproduce a value.
+  piece record): stack leftover, not derived from game state, so Unknown
+  **by construction** — no further trace can settle it, and a
+  reimplementation must choose a policy rather than reproduce a value ·
+  [R-SAVE-02 §9] · none.
 - The `GAMENAME` edit gadget's admitted character set and length, and the
   code page of the file name · [R-SAVE-02 §1], doc 07 · static trace of the
   GUI edit-control key filter.

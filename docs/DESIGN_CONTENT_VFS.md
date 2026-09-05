@@ -428,7 +428,8 @@ those files [I8].
 must not be invented. The definition parser writes −1 (unlimited) into every
 definition's limit field and sets its creatable bit; the only other writer is
 the multiplayer restriction tree, which a skirmish or campaign battle never
-runs `[05 R-SHARE-01 §9]`. The allocator's limit step is therefore always
+runs `[05 R-SHARE-01 §9]`; the opener's per-player unit limit is the
+preferences value `[02 R-CONTENT-03]`. The allocator's limit step is therefore always
 passed in single player, and the only bound is the per-player slice size
 `[05 R-SHARE-01 §7]`. The computer player's own gate is its profile's per-type
 limit table, never the definition field `[05 R-SHARE-01 §10]`. `LimitEnabled`

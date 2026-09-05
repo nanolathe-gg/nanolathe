@@ -1,15 +1,18 @@
 package architecture
 
-// PROC-03 parity-drift ratchets (docs/PLAN_03_CORE_DETERMINISM.md, "Parity
-// audit 2026-08-27 findings", row PROC-03/05 "remainder"): three shrink-only
-// ratchets that keep existing parity drift from growing while the Wave-5
-// cleanup (PROC-04/PROC-07 direction) works it off incrementally.
+// PROC-03 parity-drift ratchets, defined by docs/DESIGN_RUNTIME_DETERMINISM.md
+// §3.3 "Determinism tokens": two shrink-only counts over the authoritative
+// packages — literal map-typed `range` statements [I1] and `float64`
+// occurrences [I2] — that keep existing parity drift from growing while
+// cleanup works it off incrementally. They sit here beside the boundary guard
+// that keeps the displayless command's dependency closure free of the client
+// and device packages.
 //
-// Ratchet semantics, shared by all three guards: each guard scans non-test Go
+// Ratchet semantics, shared by both ratchets: each guard scans non-test Go
 // files in the authoritative packages and records occurrences per file in a
-// committed baseline taken from the tree as of this commit. Current counts may
-// decrease freely (a decrease means the baseline row should be tightened in
-// the same commit); any increase fails and names the offending file and line.
+// committed baseline. Current counts may decrease freely (a decrease means the
+// baseline row should be tightened in the same commit); any increase fails and
+// names the offending file and line.
 // The per-file gate is deliberately strict: moving an occurrence between files
 // is a baseline-table change that must be reviewed, not a silent side effect.
 //
