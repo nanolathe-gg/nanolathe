@@ -3,8 +3,6 @@
 package construction
 
 import (
-	"math"
-
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -17,42 +15,115 @@ import (
 const CaptureDeathCause uint8 = 4
 
 // Capture timer constants [05 R-WORK-01 §6].
-// Base 150 +0.015*energyCost +0.2142857142857*metalCost, clamp 0..1800,
-// truncated toward zero.
+//
+// CORRECTION (AU-3). [05 R-WORK-01 §6] renders the base sum with three
+// constants — `0.015`, `0.2142857142857` and `150.0` — and calls them "all
+// three float32 constants". Re-tracing the capture executor this session shows
+// that rendering is a decompiler's simplification: NEITHER 0.015 nor
+// 0.2142857142857 exists anywhere in the image, as a float32 or as a double.
+// What the executor actually holds is four single-precision constants, and it
+// forms each cost term with TWO multiplies:
+//
+//	energy term = buildcostenergy × 30       × 0.0005
+//	metal term  = buildcostmetal  × 30       × (−1/140)
+//	base_f      = (energy term − metal term) − (−150)
+//
+// so the metal term is carried NEGATIVE and the bias is carried negative, and
+// both are turned around by subtractions. The reconstructed coefficients are
+// the products of the pairs, and they are NOT the float32 nearest the decimals
+// §6 prints: 30 × float32(0.0005) is 0.0150000007…, a shade ABOVE 0.015, while
+// float32(0.015) is 0.0149999997, a shade below.
+//
+// Getting that backwards is not academic — it was this unit's first attempt.
+// Writing the sum with a float32 0.015 and evaluating at working precision
+// moves `base` DOWN by one at every energy cost that is a multiple of 200 (an
+// energy cost of 200 gives 152 instead of 153), and stock energy costs are
+// dense in multiples of 200. Written as retail writes it, the base agrees with
+// the float64 decimals over the whole authored range — swept exhaustively for
+// every cost pair that lands below the 1800 clamp — so the width was never the
+// behavioral half of this contract. The clamps below are.
+//
+// The names below are the operands, not the reconstructed coefficients,
+// because the reconstruction is what invites the wrong rounding back in.
 const (
-	captureBaseTicks   = 150
-	captureEnergyCoeff = 0.015
-	captureMetalCoeff  = 0.21428571428571427 // 3/14
-	captureClampMax    = 1800
+	captureCostScale  float32 = 30.0                   // both cost terms are scaled by this first
+	captureEnergyUnit float32 = 0.0005                 // then the energy term by this
+	captureMetalUnit  float32 = -0.0071428571827709675 // and the metal term by this (negative, −1/140)
+	captureBias       float32 = -150.0                 // subtracted, so it adds 150
+	captureClampMax   int32   = 1800
 )
 
-// CaptureTimer computes capture timer per [05 R-WORK-01 §6].
+// CaptureTimer computes the capture timer of [05 R-WORK-01 §6], in the form the
+// capture executor computes it:
 //
-//	base = clamp(trunc(150 +0.015*energyCost +0.2142857*metalCost),0,1800)
-//	healthScaled = ((health + maxDamage) * base) / (2*maxDamage)
-//	timer = ((kills/5 +10)*healthScaled*10)/100
+//	base_f       = (energyCost*30*0.0005) - (metalCost*30*(-1/140)) - (-150)
+//	base         = trunc(base_f); if (base >= 1800) base = 1800    // UPPER clamp only
+//	healthScaled = (uint32)( ((int32)(int16)health + (int32)maxDamage) * base )
+//	             / (uint32)( 2 * maxDamage )                       // UNSIGNED divide
+//	killsFactor  = (int32)(uint16)kills / 5
+//	timer        = ((killsFactor + 10) * healthScaled * 10) / 100  // signed
 //
-// Kills is the target's kill count (runtime experience field), health int16, maxDamage u32.
+// Kills is the target's kill count (runtime experience field), health int16,
+// maxDamage u32. The two cost terms are formed and combined at x87 working
+// precision with a single truncation at the end; the float64 intermediates
+// below are that working precision, never stored (I2).
+//
+// Four corrections against the shape this used to have:
+//
+//  1. THE COST TERMS. See the constant block above: the two-multiply form is
+//     what the executor holds, and neither reconstructed coefficient is the
+//     float32 nearest the decimal [05 R-WORK-01 §6] prints. Over the authored
+//     range this agrees with the float64 decimals the code used to carry, so
+//     the change is one of provenance, not of value — but writing those
+//     decimals as float32 instead, which is the obvious "fix", is off by one at
+//     every energy cost that is a multiple of 200.
+//
+//  2. NO LOWER CLAMPS. "There is no lower clamp: the comparison is a single
+//     signed test against 1800 and nothing bounds the value below." The
+//     `base < 0 → 0` and `timer < 0 → 0` clamps are gone, and they were not
+//     harmless: a negative authored cost drives `base` negative, and the
+//     unsigned division below then yields an ENORMOUS healthScaled — precisely
+//     what [05 R-WORK-01 §6] says retail produces. The lower clamp turned that
+//     into a small number instead.
+//
+//  3. THE MIDDLE STEP IS AN UNSIGNED DIVIDE OF A SIGNED 32-BIT PRODUCT. The
+//     numerator wraps at 32 bits and is re-read unsigned; the old int64
+//     arithmetic could not wrap and divided signed.
+//
+//  4. THE KILL COUNT IS READ AS uint16 before the signed divide by five.
+//
+// Corrections 2 to 4 bring this into line with `captureBudget` in
+// internal/orders/work.go, which is the LIVE implementation of the same section
+// — this function has no caller. Correction 1 does not: that copy still carries
+// the three decimals as float32 literals, which happens to agree over the
+// authored range but is the rounding trap described above.
+//
+// DIVERGENCE (I11): the `maxDamage <= 0` guard below is ours. Retail divides by
+// `2 * maxdamage` with no zero test, so a definition authoring `maxdamage 0`
+// faults there; [05 R-WORK-01 §6] does not describe what the fault produces, so
+// there is no behavior to clone. Substituting 1 keeps the caller alive and is
+// unreachable on stock content, which authors no zero `maxdamage`. The live
+// copy in internal/orders/work.go reproduces the fault instead.
 func CaptureTimer(energyCost, metalCost float32, health int32, maxDamage int32, kills int32) int {
 	if maxDamage <= 0 {
-		maxDamage = 1
+		maxDamage = 1 // DIVERGENCE (I11): retail faults on the divide; see above.
 	}
-	// base with truncation toward zero [I3].
-	fBase := float64(captureBaseTicks) + captureEnergyCoeff*float64(energyCost) + captureMetalCoeff*float64(metalCost)
-	base := int(math.Trunc(fBase)) // __ftol trunc toward zero [01 §8]
-	if base < 0 {
-		base = 0
+	// Each cost term is scaled twice, the metal term is carried negative and the
+	// bias is carried negative, so both fold in through subtractions. One
+	// truncation toward zero at the end [01 §8] (I3).
+	energyTerm := float64(energyCost) * float64(captureCostScale) * float64(captureEnergyUnit)
+	metalTerm := float64(metalCost) * float64(captureCostScale) * float64(captureMetalUnit)
+	base := int32((energyTerm - metalTerm) - float64(captureBias)) // __ftol [01 §8]
+	if base >= captureClampMax {
+		base = captureClampMax // the only clamp: signed, upper, and `>=`
 	}
-	if base > captureClampMax {
-		base = captureClampMax
-	}
-	healthScaled := int((int64(health+maxDamage) * int64(base)) / (int64(2 * maxDamage))) // integer division trunc
-	killsFactor := int(kills / 5)                                                         // trunc toward zero
+	// A signed 32-bit product re-read unsigned, then divided unsigned. Go's
+	// signed arithmetic wraps, so int32 here IS the retail multiply.
+	numerator := uint32((int32(int16(health)) + maxDamage) * base)
+	healthScaled := int32(numerator / uint32(2*maxDamage))
+	killsFactor := int32(uint16(kills)) / 5 // signed, truncating, no cap
 	timer := ((killsFactor + 10) * healthScaled * 10) / 100
-	if timer < 0 {
-		timer = 0
-	}
-	return timer
+	return int(timer)
 }
 
 // CaptureEligible is the capture executor's phase-0 admission ladder

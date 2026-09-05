@@ -700,9 +700,23 @@ tick and, for each record:
    unit's capability word, intersected with the record's dynamic gate mask.
 3. **If the record has a nonzero gate mask and nothing in it is satisfied, the
    walk stops for this tick.** A blocked head therefore stalls every later
-   order behind it, and rear-segment records sit behind any front blocker.
+   order behind it **on its own segment**.
 4. Otherwise the satisfied bits are consumed from both the unit's capability
    word and the record, the dynamic gate mask is cleared, and the handler runs.
+
+**Established — the stop is segment-local.** The stop in step 3 ends **the
+front-segment walk**, not the unit's order processing for the tick: it is a
+return from the primary loop, and the per-unit tick's caller then pumps the
+rear segment regardless ([R-ORD-01 §10], "the caller pumps the two segments
+back to back"). The rear
+segment is a separate list with its own dispatch test, which **skips** a
+record it cannot run rather than stopping the pass, and which never reads the
+front head's gate. Consequence for a reimplementation: a unit whose front head
+is gated and unsatisfied — a code-3 wait, a `GetBuilt` `0x8000` wait, a guard
+re-arm, a move waiting on an arrival bit — still dispatches its rear-segment
+records that tick, and the secondary code-3 arm's `RNG(15)` draw is taken, so
+suppressing the rear pump behind a front blocker moves the simulation stream's
+position as well as losing the dispatch.
 
 The handler's return code drives the queue [P0-07][P0-08]:
 
@@ -4067,6 +4081,21 @@ a record failing that test is **skipped** (`rec = rec.next`) rather than
 stopping the pass, and after a handled record the loop reloads the rear
 head. Its code table is §3.3's secondary column; every unlink there sets the
 tombstone ([R-ORDER-02 §2]) because a rear record is never the front head.
+
+**Established — the caller pumps the two segments back to back.** The per-unit
+tick invokes the primary loop and then, as the immediately following call, the
+secondary loop, with the same unit: two adjacent calls, with no test of the
+first's outcome and no conditional branch between them. Those are the only two
+references to either loop — neither is reached through a function-pointer
+table, so there is no other entry. The `return` in the primary loop above
+therefore ends **that loop**, not the unit's tick, and the rear segment is
+pumped whatever state the front head is in. The secondary loop confirms the
+independence from its own side: it loads the rear list head from the unit
+record and walks that, and the only time it touches the front list head is to
+choose which of the two heads to unlink a record from (the record's own
+rear-segment flag bit selects it). It never reads the front head's gate mask.
+This corrects §3.3 step 3's former clause "rear-segment records sit behind any
+front blocker", which asserted a coupling that does not exist.
 
 **Established — the invariant a reimplementation must keep.** Every handler
 that returns 2 (hold) or 4 has, before returning, either armed a gate on the

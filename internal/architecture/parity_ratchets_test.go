@@ -240,7 +240,8 @@ var float64ExemptFiles = map[string]string{
 	"internal/movement/integrate.go":       "I2 ground follower goal-point bearing and route-distance/lookahead hypot temporaries [04 R-MOV-01 §2][04 R-MOV-01 §3][04 R-MOV-03 §2][04 R-PATH-01 §8]",
 	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
 	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
-	"internal/combat/damage.go":            "I2 area-damage amount product: the promoted base damage times the stored float32 falloff, truncated toward zero [06 §9.2]",
+	"internal/combat/damage.go":            "I2 area-damage falloff expression, evaluated at working precision and narrowed by one store [06 §9.3], and the amount product: the promoted base damage times that stored float32 falloff, truncated toward zero [06 §9.2]",
+	"internal/construction/capture.go":     "I2 capture timer base sum: each authored cost scaled by two float32 constants, the terms combined at working precision and truncated once into the integer budget [05 R-WORK-01 §6] (AU-3)",
 	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
 	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
 	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
@@ -269,8 +270,9 @@ var float64Baseline = map[string]int{
 	// arithmetic of [05 "Construction arithmetic"] and [05 R-WORK-01 §3] and
 	// the cancel-current refund's two halves of [05 R-ECO-01 §11]; they moved
 	// to the files those concerns went to, unchanged and in the same number.
-	"internal/construction/arithmetic.go":   16,
-	"internal/construction/capture.go":      5,
+	"internal/construction/arithmetic.go": 16,
+	// capture.go moved to float64ExemptFiles above: AU-3 added the I2 row for
+	// the capture timer's base sum, which is what its float64 sites are.
 	"internal/construction/inheritance.go":  2,
 	"internal/construction/resurrection.go": 3,
 	"internal/construction/reverse.go":      4,

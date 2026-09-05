@@ -254,10 +254,41 @@ func BroadPhaseRadiusCells(radius int32) int32 {
 
 // Falloff computes area falloff for accepted nonzero distance d and radius R [06 §9.3] C26.
 //
-//	(1 - edgeEffectiveness) * (d/R -1)^2 + edgeEffectiveness
+//	f        = (float)d / (float)R - 1.0f
+//	falloff  = (1.0f - edgeEffectiveness) * f * f + edgeEffectiveness
 //
-// Zero distance is exactly one. Executable does not clamp authored edge
-// effectiveness [06 §9.3].
+// Zero distance is exactly one. The executable does not clamp authored edge
+// effectiveness in this path [06 §9.3].
+//
+// WIDTH AND ASSOCIATION. [06 §9.3] is explicit that the whole expression is
+// "evaluated on the x87 stack and the result stored back as single precision" —
+// one store, at the end — and re-tracing the recipient loop this session
+// confirms it instruction by instruction: the distance and the radius are
+// converted from their integers, the quotient, the subtraction of one, the
+// square, the scaling by one-minus-edge and the final addition all stay on the
+// stack, and a single single-precision store writes the falloff that is then
+// passed by value to the amount scaler of [06 §9.2]. Nothing narrows in
+// between.
+//
+// This used to be a chain of float32 operations, which rounds at every step
+// where retail rounds once, and the error survives into the
+// `trunc((double)base × falloff)` of [06 §9.2]: a radius-ten blast one world
+// unit from the centre with no edge effectiveness has an exact falloff of 0.81,
+// whose float32 store times a base of 100 truncates to 81, while the stepwise
+// float32 chain lands on 0.80999994 and truncates to 80. The float64
+// intermediates below are the x87 working precision, never stored (I2, the
+// area-damage falloff row).
+//
+// The association is retail's too, and it is not the one the formula above
+// reads as: the square is formed FIRST and then scaled by one-minus-edge —
+// `f*f*(1-edge)`, not `(1-edge)*f*f`. The two differ in the last bit of the
+// working-precision value, which can survive the narrowing.
+//
+// d and R reach here already converted from the integer distance and radius of
+// [06 §9.3]; both are signed-16-bit-narrowed whole world units, so the float32
+// parameters carry them exactly and the conversion loses nothing. The r <= 0
+// arm has no retail counterpart and is unreachable from the enumerator, which
+// accepts a recipient only on a strict d < R with a non-negative d.
 func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 	if r <= 0 {
 		return 1
@@ -265,8 +296,9 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 	if d == 0 {
 		return 1 // [06 §9.3] The zero-distance value is exactly one
 	}
-	x := d/r - 1
-	return (1-edgeEffectiveness)*x*x + edgeEffectiveness // [06 §9.3]
+	f := float64(d)/float64(r) - 1
+	edge := float64(edgeEffectiveness)
+	return float32(f*f*(1-edge) + edge) // [06 §9.3] one single-precision store
 }
 
 // ComputeScaledAmount implements the arithmetic order for a projectile

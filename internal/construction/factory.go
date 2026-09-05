@@ -170,9 +170,19 @@ type Service struct {
 	ModelForFactory func(factory *units.Unit) *model.Model
 	// OnRefresh is the interface refresh hook [05 C18][05 C21][05 C22].
 	OnRefresh func(*units.Unit)
-	// Presentation receives already-admitted construction cues. It is optional
-	// for headless simulation and never feeds back into authoritative state
-	// [R-P0-06][EVENT-01].
+	// Presentation receives already-admitted construction cues: one call per
+	// accepted work step, after the authoritative update and the nano-piece
+	// query [R-P0-06 §6]. It is optional for headless simulation and its
+	// verdict never feeds back into authoritative state [EVENT-01].
+	//
+	// It is NOT a pure frame-event sink. Every producer in [R-P0-06 §1]'s
+	// table also appends the strip-6 emitter whose first five particles spend
+	// thirty CRT draws [03 R-STRIP-01 §3], and the CRT stream is authoritative
+	// [01 §7.5]. The session binds an adapter that does both halves; binding a
+	// bare frame event buffer here — as the session used to — publishes the
+	// cue and silently drops the draws. That is why this seam stays one method
+	// wide and carries the geometry on the event: the adapter needs no builder,
+	// target or piece of its own.
 	Presentation interface{ EmitNanolathe(frame.Event) bool }
 	// StatusText is the consumer-supplied status-line sink for verbatim
 	// order-handler notifications [R-ORDER-02 §1]. Retail prints these strings

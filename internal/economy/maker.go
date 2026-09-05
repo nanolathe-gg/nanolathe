@@ -27,25 +27,6 @@ func MakerProduction(makesMetal int32, energyCarry float32) float32 {
 	return float32(uint8(makesMetal))
 }
 
-// NegativeEnergyUseRefund returns the production credit for negative authored
-// energy use. The special selector arithmetic is float-by-double and narrows
-// once at the returned single-precision store [R-ECO-01 §3].
-func NegativeEnergyUseRefund(energyUse float64, controllerState uint8, selector int) float32 {
-	if energyUse >= 0 {
-		return 0
-	}
-	amount := float32(-energyUse)
-	if controllerState == 2 {
-		switch selector {
-		case 0:
-			return float32(0 - float64(amount)*-0.5)
-		case 1:
-			return float32(0 - float64(amount)*-0.7)
-		}
-	}
-	return amount
-}
-
 // InitShareThresholds applies the battle initializer's zero writes. These
 // fields remain distinct from capacity and are not refreshed by settlement
 // [R-SHARE-01 §3].
@@ -76,15 +57,30 @@ func (s *Service) TidalScalar() float32 {
 }
 
 // addContribution applies the retail positive-production discount. The two
-// difficulty factors are double constants; production is narrowed only after
-// the subtraction [R-ECO-01 §3].
+// difficulty factors are double constants; the contribution arrives at the
+// working precision of [R-ECO-01 §1] and the accumulator store is the ONLY
+// narrowing [R-ECO-01 §3][R-ECO-01 §11].
+//
+// Correction (AU-6). This helper used to narrow its argument to single
+// precision on entry (`c := float32(contribution)`) and then run the ladder on
+// the widened copy of that float32. For the two sites that hand it a value they
+// have just *computed* — the wind product and the tidal product, which
+// [R-ECO-01 §2] states are "formed as one multiply and one add with no
+// intermediate narrowing" — that was a narrowing retail does not have, and it
+// rounds differently in the last single-precision bit. §3 says so in as many
+// words: "rounding the product to single first is not bit-identical".
+//
+// The distinction the callers now carry is which of §3's two contribution
+// kinds they hold. An *authored* value is already a single float in the unit
+// record [02 "Unit record"], so those call sites narrow once themselves, which
+// is the record load, not an extra rounding. A *product just formed* stays at
+// working precision all the way into the store here.
 func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 	if b == nil {
 		return
 	}
-	c := float32(contribution)
-	if p == nil || !p.Exists || p.ControllerState != 2 || c <= 0 {
-		b.Production = float32(float64(b.Production) + float64(c))
+	if p == nil || !p.Exists || p.ControllerState != 2 || contribution <= 0 {
+		b.Production = float32(float64(b.Production) + contribution)
 		return
 	}
 	selector := 2
@@ -93,11 +89,11 @@ func addContribution(s *Service, p *Player, b *Bucket, contribution float64) {
 	}
 	switch selector {
 	case 0:
-		b.Production = float32(float64(b.Production) - float64(c)*-0.5)
+		b.Production = float32(float64(b.Production) - contribution*-0.5)
 	case 1:
-		b.Production = float32(float64(b.Production) - float64(c)*-0.7)
+		b.Production = float32(float64(b.Production) - contribution*-0.7)
 	default:
-		b.Production = float32(float64(b.Production) + float64(c))
+		b.Production = float32(float64(b.Production) + contribution)
 	}
 }
 
@@ -128,11 +124,16 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 		if branchActive {
 			switch {
 			case def.EnergyUse < 0:
-				selector := 2
-				if s.EconomySelector != nil {
-					selector = *s.EconomySelector
-				}
-				addContribution(nil, nil, energy, float64(NegativeEnergyUseRefund(def.EnergyUse, p.ControllerState, selector)))
+				// The refund is the negated authored value — a single float in
+				// the record [02 "Unit record"] — entering the same ladder as
+				// every other contribution, with the accumulator store as the
+				// only narrowing [R-ECO-01 §2][R-ECO-01 §3].
+				//
+				// Correction (AU-6). The refund used to be scaled by the
+				// difficulty factor into a float32 of its own and that float32
+				// added plain, so the value was narrowed twice. That is the
+				// factored form §3 warns rounds differently.
+				addContribution(s, p, energy, -float64(float32(def.EnergyUse)))
 				// A refund never admits the unit's production branch.
 				upkeepAdmitted = false
 			case def.EnergyUse >= 0:
@@ -147,18 +148,24 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 				addContribution(s, p, metal, float64(ExtractorProduction(u.SpotMetal, energy.Carry)))
 			case def.MakesMetal != 0 && upkeepAdmitted:
 				addContribution(s, p, metal, float64(MakerProduction(def.MakesMetal, energy.Carry)))
+			// Wind and tidal are the two "product just formed" contributions:
+			// one multiply of the published scalar by the record's single-float
+			// generator value, with no intermediate narrowing before the
+			// discount and the store [R-ECO-01 §2][R-ECO-01 §3].
 			case def.ExtractsMetal <= 0 && def.MakesMetal == 0 && def.WindGenerator > 0:
-				addContribution(s, p, energy, float64(s.WindScalar())*def.WindGenerator)
+				addContribution(s, p, energy, float64(s.WindScalar())*float64(float32(def.WindGenerator)))
 			case def.ExtractsMetal <= 0 && def.MakesMetal == 0 && def.TidalGenerator > 0:
-				addContribution(s, p, energy, float64(s.TidalScalar())*def.TidalGenerator)
+				addContribution(s, p, energy, float64(s.TidalScalar())*float64(float32(def.TidalGenerator)))
 			}
 		}
 
 		if u.Remaining == 0 {
 			// Passive production uses completion only, independent of the
-			// operational bit [05 "Completed-unit eligibility"].
-			addContribution(s, p, energy, def.EnergyMake)
-			addContribution(s, p, metal, def.MetalMake)
+			// operational bit [05 "Completed-unit eligibility"]. Both are
+			// authored values, single floats in the record [02 "Unit record"],
+			// so the record load is their one narrowing.
+			addContribution(s, p, energy, float64(float32(def.EnergyMake)))
+			addContribution(s, p, metal, float64(float32(def.MetalMake)))
 		}
 
 	})
@@ -176,38 +183,15 @@ func (s *Service) SetEconomySelector(v int) {
 	*s.EconomySelector = v
 }
 
-// RepairResourceTerm returns the per-tick heal step and its energy cost for
-// one repairing worker.
-func RepairResourceTerm(maxDamage, buildCostEnergy, worker, buildTime int32) (healTerm, resourceTerm int32) {
-	if buildTime <= 0 {
-		return 1, 1
-	}
-	healNumerator := int64(maxDamage)*int64(worker) - 1
-	resourceNumerator := int64(buildCostEnergy)*int64(worker) - 1
-	healTerm = int32(1 + healNumerator/int64(buildTime))
-	resourceTerm = int32(1 + resourceNumerator/int64(buildTime))
-	if healTerm < 1 && healNumerator >= 0 {
-		healTerm = 1
-	}
-	if resourceTerm < 1 && resourceNumerator >= 0 {
-		resourceTerm = 1
-	}
-	return
-}
-
-// AdmitRepair charges one repair tick against the builder's buckets and
-// reports whether the charge was admitted.
-func (s *Service) AdmitRepair(builderHandle pool.Handle, targetMaxDamage, targetBuildCostEnergy, worker, buildTime int32) bool {
-	if s == nil || builderHandle == 0 {
-		return false
-	}
-	s.ensureUnitBuckets(builderHandle)
-	_, resourceTerm := RepairResourceTerm(targetMaxDamage, targetBuildCostEnergy, worker, buildTime)
-	b := &s.unitBuckets[builderHandle].Buckets
-	before := b[Energy].Accepted
-	AdmitOneResource(b, float32(resourceTerm))
-	return b[Energy].Accepted != before || resourceTerm == 0
-}
+// Removed (AU-6): economy.RepairResourceTerm / (*Service).AdmitRepair. They
+// were an unreferenced second copy of the repair step's two terms, and the copy
+// was wrong twice over against [R-WORK-01 §3]: it clamped a sub-unit term UP to
+// one where the traced helper clamps a positive term DOWN to exactly one
+// ("if term >= 1 then term = 1", so zero and negative terms survive), and it
+// answered `1, 1` for a zero `buildtime` where the traced helper's low-word
+// conversion yields `0, 0`. The live repair path is construction.repairTerms,
+// which implements §3 correctly; nothing outside this file ever called the
+// economy copy.
 
 // creditReclaimedMaterial is the production-credit form both reclaim payouts
 // use, cloned from the two sites rather than from the shared contribution

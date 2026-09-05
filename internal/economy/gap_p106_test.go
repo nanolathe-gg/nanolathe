@@ -154,27 +154,169 @@ func TestUpkeepAdmissionControlsExtractor(t *testing.T) {
 	}
 }
 
-// TestNegativeEnergyUseRefund locks the computer-player refund factors [R-ECO-01 §3].
-func TestNegativeEnergyUseRefund(t *testing.T) {
-	// Plain add when controller !=2
-	if got := NegativeEnergyUseRefund(-10, 1, 0); got != 10 {
-		t.Fatalf("negative energyUse controller1 plain 10 got %v", got)
+// refundProduction runs one activated building authoring `energyUse` for a
+// player with the given control byte and difficulty selector, and reports the
+// energy production accumulator afterwards. `seed` pre-loads the accumulator so
+// the test can observe whether the refund reaches it at working precision or as
+// an already-narrowed float32.
+func refundProduction(t *testing.T, energyUse float64, controller uint8, selector int, seed float32) float32 {
+	t.Helper()
+	w := units.NewSliced(10, &content.Catalog{})
+	svc := &Service{}
+	svc.Players[0].Exists = true
+	svc.Players[0].ControllerState = controller
+	svc.SetEconomySelector(selector)
+	def := economyFixtureDef(&content.UnitDef{UnitName: "refund", EnergyUse: energyUse, BuildTime: 1, MaxDamage: 1})
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// Controller 2 selector 0 => one half
-	if got := NegativeEnergyUseRefund(-10, 2, 0); got != 5 {
-		t.Fatalf("controller2 sel0 => 5 got %v", got)
+	w.Unit(h).Activated = true
+	b := svc.UnitBuckets(h)
+	b[Energy].Production = seed
+	svc.PerUnitProductionFills(0, w)
+	return b[Energy].Production
+}
+
+// TestNegativeEnergyUseRefundFactors locks the computer-player refund factors on
+// the folded call site [R-ECO-01 §2][R-ECO-01 §3]. The helper that used to
+// pre-scale the refund into a float32 of its own is gone; the negated authored
+// value now enters the shared discount ladder directly.
+func TestNegativeEnergyUseRefundFactors(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		energyUse  float64
+		controller uint8
+		selector   int
+		want       float32
+	}{
+		{name: "human-plain", energyUse: -10, controller: 1, selector: 0, want: 10},
+		{name: "computer-easy-half", energyUse: -10, controller: 2, selector: 0, want: 5},
+		{name: "computer-medium-seven-tenths", energyUse: -10, controller: 2, selector: 1, want: 7},
+		{name: "computer-hard-plain", energyUse: -10, controller: 2, selector: 2, want: 10},
+		{name: "positive-use-no-refund", energyUse: 10, controller: 2, selector: 0, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := refundProduction(t, tc.energyUse, tc.controller, tc.selector, 0); got != tc.want {
+				t.Fatalf("energy production = %v, want %v [R-ECO-01 §3]", got, tc.want)
+			}
+		})
 	}
-	// Controller 2 selector 1 => seven tenths
-	if got := NegativeEnergyUseRefund(-10, 2, 1); got != 7 {
-		t.Fatalf("sel1 => 7 got %v", got)
+}
+
+// TestNegativeEnergyUseRefundNarrowsOnce is the E-5(b) regression guard.
+//
+// Retail's site forms `float32(production - amount * K)` in one expression, so
+// the accumulator store is the only narrowing [R-ECO-01 §3]. The old code built
+// `float32(amount * K)` first and added that float32 to production, narrowing
+// twice — the factored form §3 warns "rounds differently". With a seeded
+// accumulator the two forms land one single-precision bit apart:
+//
+//	seed   = 42.46375   (0x4229dae1)
+//	amount = 68.682304  (0x42895d57), from an authored energyuse of -68.682304
+//	two narrowings: 0x42b5152e        one narrowing: 0x42b5152d
+//
+// The fixture values are ours; only the arithmetic shape is retail's.
+func TestNegativeEnergyUseRefundNarrowsOnce(t *testing.T) {
+	const (
+		seed         = float32(42.46375)
+		twoRoundings = uint32(0x42b5152e)
+		oneRounding  = uint32(0x42b5152d)
+	)
+	if math.Float32bits(seed) != 0x4229dae1 || math.Float32bits(float32(68.682304)) != 0x42895d57 {
+		t.Fatalf("fixture constants do not carry their intended single-precision bit patterns")
 	}
-	// Other selector plain
-	if got := NegativeEnergyUseRefund(-10, 2, 2); got != 10 {
-		t.Fatalf("sel2 fallback plain 10 got %v", got)
+	got := refundProduction(t, -68.682304, 2, 1, seed)
+	if bits := math.Float32bits(got); bits != oneRounding {
+		if bits == twoRoundings {
+			t.Fatalf("refund narrowed twice: production = %.17g (%08x); retail forms "+
+				"float32(production - amount * -0.7) in one expression, expected %08x [R-ECO-01 §3]",
+				float64(got), bits, oneRounding)
+		}
+		t.Fatalf("refund production = %.17g (%08x), want %08x [R-ECO-01 §3]", float64(got), bits, oneRounding)
 	}
-	// Positive energyUse not refund
-	if got := NegativeEnergyUseRefund(10, 2, 0); got != 0 {
-		t.Fatalf("positive should be 0 got %v", got)
+}
+
+// TestWindProductNarrowsOnceForComputerPlayer is the E-5(a) regression guard.
+//
+// [R-ECO-01 §2] states the four generator products are "formed as one multiply
+// and one add with no intermediate narrowing", and [R-ECO-01 §3] adds that
+// "rounding the product to single first is not bit-identical". The old
+// addContribution narrowed its argument on entry, so an AI-owned wind generator
+// on medium difficulty rounded the discounted credit off the single-precision
+// product instead of the working-precision one.
+//
+// Fixture (ours, chosen so the two forms differ in the last bit): wind scalar
+// 0.06, windgenerator 3, empty accumulator, control byte 2, difficulty selector
+// 1 (medium, factor -0.7).
+//
+//	product narrowed first: 0x3e010624 (0.12599998712539673)
+//	product kept wide:      0x3e010625 (0.12600000202655792)
+func TestWindProductNarrowsOnceForComputerPlayer(t *testing.T) {
+	const (
+		narrowedFirst = uint32(0x3e010624)
+		keptWide      = uint32(0x3e010625)
+	)
+	w := units.NewSliced(10, &content.Catalog{})
+	svc := &Service{}
+	svc.Players[0].Exists = true
+	svc.Players[0].ControllerState = 2 // the computer player [R-ECO-01 §3]
+	svc.SetEconomySelector(1)          // medium
+	svc.Wind = &world.Wind{Scalar: 0.06}
+	def := economyFixtureDef(&content.UnitDef{UnitName: "windbit", WindGenerator: 3, BuildTime: 1, MaxDamage: 1})
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Activated = true
+	b := svc.UnitBuckets(h)
+	svc.PerUnitProductionFills(0, w)
+
+	got := b[Energy].Production
+	if bits := math.Float32bits(got); bits != keptWide {
+		if bits == narrowedFirst {
+			t.Fatalf("wind product narrowed before the discount: production = %.17g (%08x); "+
+				"[R-ECO-01 §2] forms the product with no intermediate narrowing, expected %08x",
+				float64(got), bits, keptWide)
+		}
+		t.Fatalf("wind production = %.17g (%08x), want %08x [R-ECO-01 §2][R-ECO-01 §3]", float64(got), bits, keptWide)
+	}
+}
+
+// TestTidalProductNarrowsOnceForComputerPlayer is the tidal half of E-5(a). The
+// tidal scalar is the map's tidal word over 65536, so the fixture picks a word
+// whose scalar times the generator value straddles a single-precision boundary:
+// 1294337/65536 = 19.750015, tidalgenerator 13, medium difficulty.
+//
+//	product narrowed first: 0x4333b9a2 (179.72512817382812)
+//	product kept wide:      0x4333b9a3 (179.72514343261719)
+func TestTidalProductNarrowsOnceForComputerPlayer(t *testing.T) {
+	const (
+		narrowedFirst = uint32(0x4333b9a2)
+		keptWide      = uint32(0x4333b9a3)
+	)
+	w := units.NewSliced(10, &content.Catalog{})
+	svc := &Service{}
+	svc.Players[0].Exists = true
+	svc.Players[0].ControllerState = 2
+	svc.SetEconomySelector(1)
+	svc.Terrain = &world.Terrain{Tidal: 1294337}
+	def := economyFixtureDef(&content.UnitDef{UnitName: "tidalbit", TidalGenerator: 13, BuildTime: 1, MaxDamage: 1})
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Activated = true
+	b := svc.UnitBuckets(h)
+	svc.PerUnitProductionFills(0, w)
+
+	got := b[Energy].Production
+	if bits := math.Float32bits(got); bits != keptWide {
+		if bits == narrowedFirst {
+			t.Fatalf("tidal product narrowed before the discount: production = %.17g (%08x), "+
+				"expected %08x [R-ECO-01 §2]", float64(got), bits, keptWide)
+		}
+		t.Fatalf("tidal production = %.17g (%08x), want %08x [R-ECO-01 §2][R-ECO-01 §3]", float64(got), bits, keptWide)
 	}
 }
 

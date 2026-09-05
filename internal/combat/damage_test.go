@@ -692,3 +692,41 @@ func TestFalloffProductIsFormedInDoublePrecision(t *testing.T) {
 		t.Fatalf("zero-distance damage = %d, want the base 100 [06 §9.3]", got)
 	}
 }
+
+// TestFalloffIsEvaluatedAtWorkingPrecisionAndStoredOnce locks the width of the
+// area falloff of [06 §9.3]: the quotient, the subtraction of one, the square
+// and the two products stay on the x87 stack at working precision and "the
+// result [is] stored back as single precision" — one store, at the end.
+//
+// The chain used to be written as float32 operations throughout, rounding at
+// every step where retail rounds once, and the error is not academic: it
+// reaches the `trunc((double)base × falloff)` of [06 §9.2] and moves damage by
+// one point at both ends of the curve.
+func TestFalloffIsEvaluatedAtWorkingPrecisionAndStoredOnce(t *testing.T) {
+	// One world unit from the centre of a radius-ten blast with no edge
+	// effectiveness: f = -0.9 and the exact falloff is 0.81. Rounded once, that
+	// is the float32 nearest 0.81, which lies just ABOVE it, so a base of 100
+	// truncates to 81. The stepwise float32 chain lands on 0.80999994 and
+	// truncates to 80.
+	if got := Falloff(1, 10, 0); got != float32(0.81) {
+		t.Fatalf("falloff(d=1, R=10, edge=0) = %v, want the float32 nearest 0.81 [06 §9.3]", got)
+	}
+	if got := ComputeScaledAmount(100, Falloff(1, 10, 0), 0, 0, false, 65536, false, false, false); got != 81 {
+		t.Fatalf("100 × falloff(d=1, R=10, edge=0) = %d, want 81 [06 §9.2][06 §9.3]", got)
+	}
+	// The rim of the same blast, where the ±1 goes the other way: the exact
+	// falloff is 0.01 and the float32 nearest it lies just BELOW, so a base of
+	// 100 truncates to 0. The stepwise chain landed on 0.010000004 and dealt 1.
+	if got := Falloff(9, 10, 0); got != float32(0.01) {
+		t.Fatalf("falloff(d=9, R=10, edge=0) = %v, want the float32 nearest 0.01 [06 §9.3]", got)
+	}
+	if got := ComputeScaledAmount(100, Falloff(9, 10, 0), 0, 0, false, 65536, false, false, false); got != 0 {
+		t.Fatalf("100 × falloff(d=9, R=10, edge=0) = %d, want 0 [06 §9.2][06 §9.3]", got)
+	}
+	// Edge effectiveness enters the same single store: with edge 1 every
+	// distance is exactly one, which is exact at either width and so pins the
+	// shape of the expression rather than its rounding.
+	if got := Falloff(5, 10, 1); got != 1 {
+		t.Fatalf("falloff(edge=1) = %v, want exactly 1 [06 §9.3]", got)
+	}
+}

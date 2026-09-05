@@ -378,17 +378,10 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 		e.Producer = frame.ProducerBeam
 		e.PaletteRow = 6
 		e.NanolatheGeometryKnown = true
-		s.publication.events.EmitNanolathe(e)
-		// Strip-6 producer [R-STRIP-01 §1 strip 6]: nano records append to
-		// strip 6 of the ten-strip family, one emitter per accepted
-		// submission [03 §5.5][05 "Established — the record constructor and
-		// allocator epilogue"]. The emitter is authoritative sim state; its
-		// first five particles spawn here (thirty CRT draws at the producer)
-		// and the rest advance in phase 11 [03 §5.5].
 		if s.session != nil {
-			s.session.appendStripNanoEmitter(
-				[3]numeric.Fixed{e.X, e.Y, e.Z},
-				[3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ})
+			s.session.submitNanoSegment(e)
+		} else {
+			s.publication.events.EmitNanolathe(e)
 		}
 	case cob.PresentationMuzzle:
 		s.publication.events.EmitMuzzleFlash(e)
@@ -402,6 +395,102 @@ func (s *cobPresentationSink) EmitCOBEvent(ev cob.PresentationEvent) {
 	case cob.PresentationImpact:
 		s.publication.events.EmitImpact(e)
 	}
+}
+
+// submitNanoSegment is the one admitted-nano-segment path. Every producer in
+// [05 R-P0-06 §1]'s table — mobile construction, factory production, assist,
+// repair, unit reclaim, capture, feature reclaim, resurrection and the
+// script-emitted nano of [04 §4.4] — reaches presentation through here, so
+// each accepted work step does the same two things in [05 R-P0-06 §6]'s order:
+// publish the frame event for the presentation mirror, then append the
+// strip-6 emitter.
+//
+// The append is not a decoration. The emitter's first five particles spawn at
+// construction and each spends six CRT draws, so an accepted segment costs
+// **thirty draws on the CRT presentation stream** [03 R-STRIP-01 §3][03 §5.5].
+// That stream also times wind changes, meteors and the victory instant
+// [01 §7.5], so a producer that skips the append leaves the CRT position where
+// retail's would not be. Mobile construction, factory production and unit
+// reclaim used to bind `construction.Service.Presentation` straight to the
+// frame event buffer and therefore never spent those draws at all, while the
+// order-driven producers did (audit C-10).
+//
+// The frame event's admission does NOT gate the append: the event buffer is a
+// bounded presentation window, and letting its capacity move the CRT stream
+// would be exactly the feedback [I6] forbids. Callers still get the event
+// buffer's verdict as the return value.
+func (s *Session) submitNanoSegment(e frame.Event) bool {
+	if s == nil {
+		return false
+	}
+	admitted := false
+	if s.publication != nil && s.publication.events != nil {
+		admitted = s.publication.events.EmitNanolathe(e)
+	}
+	s.appendStripNanoForEvent(e)
+	return admitted
+}
+
+// appendStripNanoForEvent derives the strip-6 emitter's geometry from the
+// published event alone, so one mapping serves every producer.
+//
+// [05 R-P0-06 §4] gives the two endpoints as the `QueryNanoPiece` world point
+// and the target position grown by its resolved footprint/model extents, and
+// [05 R-WORK-01 §8] gives which end is which: reclaim and capture reverse the
+// spray, so the six-word box sits at the SOURCE end with the nano piece as the
+// degenerate destination, while build, assist, repair and resurrection spray
+// from the nano piece INTO the target box. `NanolatheBoxAtSource` is the flag
+// the producers already publish to say which way round a record is, and
+// `NanolatheTargetMin/Max` carries the box either way.
+func (s *Session) appendStripNanoForEvent(e frame.Event) {
+	if s == nil || s.strips == nil {
+		return
+	}
+	src := [3]numeric.Fixed{e.X, e.Y, e.Z}
+	dst := [3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ}
+	switch {
+	case e.NanolatheBoxAtSource && e.NanolatheTargetBoxKnown:
+		s.appendStripNanoEmitterFromBox(e.NanolatheTargetMin, e.NanolatheTargetMax, dst)
+	case e.NanolatheTargetBoxKnown:
+		s.appendStripNanoEmitterBox(src, e.NanolatheTargetMin, e.NanolatheTargetMax)
+	default:
+		// No box published: both ends are points. The CRT cost is the same
+		// either way — six draws per particle, five particles [03 §5.5].
+		s.appendStripNanoEmitter(src, dst)
+	}
+}
+
+// buildPresentationSink binds internal/construction to submitNanoSegment.
+// construction imports neither internal/session nor internal/frame's strip
+// table, so the seam it exposes is the one-method event sink of
+// construction.Service.Presentation; this adapter is what turns an accepted
+// construction/factory/unit-reclaim work step into both halves of a segment.
+type buildPresentationSink struct{ session *Session }
+
+func (b *buildPresentationSink) EmitNanolathe(e frame.Event) bool {
+	if b == nil {
+		return false
+	}
+	return b.session.submitNanoSegment(e)
+}
+
+// bindBuildPresentation gives internal/construction the same segment path the
+// order-driven producers use.
+//
+// Mobile construction, factory production and unit reclaim are three of
+// [05 R-P0-06 §1]'s emission producers, so their accepted work steps owe the
+// same segment as assist, repair and feature reclaim: the frame event AND the
+// strip-6 emitter that spends thirty CRT draws [03 R-STRIP-01 §3][03 §5.5].
+// This field used to be bound straight to the frame event buffer, which
+// published the event and skipped the emitter, so every battle in which
+// anything was built or reclaimed ran with the CRT stream short of the draws
+// retail had spent — and that stream times wind changes, meteors and the
+// victory instant [01 §7.5].
+func (s *Session) bindBuildPresentation() {
+	if s == nil || s.Build == nil {
+		return
+	}
+	s.Build.Presentation = &buildPresentationSink{session: s}
 }
 
 func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
@@ -1182,19 +1271,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					e.NanolatheTargetBoxKnown = true
 					e.NanolatheTargetMin, e.NanolatheTargetMax = boxMin, boxMax
 				}
-				if !s.publication.events.EmitNanolathe(e) {
-					return false
-				}
-				if s.strips != nil {
-					if reversed {
-						s.appendStripNanoEmitterFromBox(boxMin, boxMax, nanoPiece)
-					} else {
-						s.appendStripNanoEmitter(
-							[3]numeric.Fixed{e.X, e.Y, e.Z},
-							[3]numeric.Fixed{e.TargetX, e.TargetY, e.TargetZ})
-					}
-				}
-				return true
+				return s.submitNanoSegment(e)
 			},
 			NanolatheFeature: func(builder *units.Unit, n *orders.Node, feature orders.FeatureView, tick uint32) bool {
 				if s.publication == nil || s.publication.events == nil || s.Build == nil || builder == nil || n == nil {
@@ -1253,13 +1330,21 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					if len(segments) != 2 {
 						return false
 					}
-					if s.publication.events.EmitNanolatheSegments(e, tick) != len(segments) {
-						return false
+					// Each segment is one accepted submission, so each one
+					// publishes its event and appends its own emitter
+					// [05 R-P0-06 §4 "A two-segment feature-reclaim visit
+					// emits two ordered events"].
+					admitted := 0
+					for _, segment := range segments {
+						segmentEvent := e
+						segmentEvent.NanolatheIndex = segment.Index
+						segmentEvent.NanolatheCount = int32(len(segments))
+						segmentEvent.PaletteRow = int16(segment.Color)
+						if s.submitNanoSegment(segmentEvent) {
+							admitted++
+						}
 					}
-					for range segments {
-						s.appendStripNanoEmitterFromBox(boxMin, boxMax, nanoPiece)
-					}
-					return true
+					return admitted == len(segments)
 				}
 				if name == "Resurrect" {
 					// The resurrection wait sprays the ordinary way round —
@@ -1270,12 +1355,12 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					e.NanolatheGeometryKnown = true
 					e.X, e.Y, e.Z = nanoPiece[0], nanoPiece[1], nanoPiece[2]
 					e.TargetX, e.TargetY, e.TargetZ = minX, minY, minZ
-					if !s.publication.events.EmitNanolathe(e) {
-						return false
-					}
-					s.appendStripNanoEmitterBox(nanoPiece, boxMin, boxMax)
-					return true
+					return s.submitNanoSegment(e)
 				}
+				// Rows that reach this fallback publish no geometry (the
+				// client's nanolathe gate stays shut), so there is no segment
+				// and no emitter — a rejected or non-spraying visit spends
+				// nothing [05 R-P0-06 §6].
 				return s.publication.events.EmitNanolathe(e)
 			},
 			// The `Teleport` row's per-moved-unit effect: the strip-5
@@ -1707,7 +1792,7 @@ func createAndBindServices(s *Session) error {
 		}
 		return u.COBBinding().Model
 	}
-	s.Build.Presentation = s.publication.events
+	s.bindBuildPresentation()
 	// Walk-to-site uses normal Move_Ground machinery [04 §3.4][R-P0-06].
 	// Bind the movement system so mobile builders walk into nano range before state 2.
 	s.Build.Movement = s.Movement

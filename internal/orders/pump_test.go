@@ -660,7 +660,15 @@ func TestCascadeUntilWaiting(t *testing.T) {
 	}
 }
 
-func TestBlockedFrontSkipsSecondary(t *testing.T) {
+// Correction (AU-13). This test used to be TestBlockedFrontSkipsSecondary and
+// asserted the opposite — that a gated, unsatisfied front head suppressed the
+// rear pump for the tick. It locked an invented coupling: [04 §3.3] step 3's
+// stop is a return from the FRONT-segment walk, and the per-unit tick pumps the
+// two segments back to back with no test between them ([04 R-ORD-01 §10], "the
+// caller pumps the two segments back to back"). The blocked head still stops
+// the front walk; only the rear expectation flips. The stream consequence is
+// locked separately in TestSecondaryPumpRunsBehindBlockedFrontHead.
+func TestBlockedFrontDoesNotSkipSecondary(t *testing.T) {
 	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	u := newTestUnit()
 	moveID := Lookup("Move_Ground")
@@ -680,11 +688,11 @@ func TestBlockedFrontSkipsSecondary(t *testing.T) {
 	})
 	defer restore()
 	q.Pump(u, 10)
-	if secondaryCalled {
-		t.Fatalf("blocked primary front should prevent secondary dispatch")
+	if !secondaryCalled {
+		t.Fatalf("blocked primary front must NOT prevent secondary dispatch [04 R-ORD-01 §10]")
 	}
 	if len(q.secondary) != 1 {
-		t.Fatalf("secondary should remain")
+		t.Fatalf("secondary should remain after a hold (code 2)")
 	}
 }
 

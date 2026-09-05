@@ -187,8 +187,9 @@ in which case the producer issues nothing `[07 R-P0-11 §6]`. The match itself i
 the session's, which supplies the resolved order identity, the optional target
 and a whole-cell inclusive per-axis tolerance.
 
-**The pump** (`pump.go`). `Pump` runs the primary walk, then the secondary walk
-unless the primary head is blocked. The primary walk is head-only: after every
+**The pump** (`pump.go`). `Pump` runs the primary walk, then the secondary walk;
+the two are adjacent calls with no test between them, and a blocked front head
+stops only its own segment `[04 R-ORD-01 §10]`. The primary walk is head-only: after every
 non-returning result code it reloads the front record and re-applies the gate
 test, so "continue" never means "visit the record behind this one"
 `[04 R-ORD-01 §10]`. Dispatch is one seam — the descriptor's handler, or the
@@ -358,8 +359,8 @@ exclusively for `BuildWeapon` and `SelfDestruct`, each with its own anchor
 **C6 — the pump's gate test.** An arrived deadline clears and raises the record's
 lowest satisfied bit `[04 R-ORD-01 §0]`. Satisfied is `(record.satisfied |
 unit.pending) & record.gate`; a **nonzero gate with nothing satisfied stops the
-walk for this tick**, stalling everything behind it and stalling the rear segment
-behind any front blocker. Otherwise the delivered bits are consumed from both
+walk for this tick**, stalling everything behind it in its own segment; the
+rear segment's walk follows regardless `[04 R-ORD-01 §10]`. Otherwise the delivered bits are consumed from both
 words, the dynamic gate is cleared, and the handler runs `[04 §3.3]`.
 
 The record constructor does **not** seed the dynamic gate from the descriptor's

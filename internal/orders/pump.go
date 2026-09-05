@@ -604,8 +604,26 @@ func (q *Queue) releaseMarkerOnRemoval() {
 }
 
 // Pump runs one unit's queue for one tick [04 §3.3]
-// [05 "Queue pumping and result codes"]: the primary walk first, then — only
-// when the front record is not blocking — the secondary one.
+// [05 "Queue pumping and result codes"]: the primary walk, then the secondary
+// walk — two independent per-unit calls, in that order, unconditionally.
+//
+// Correction (AU-13). A gate test used to stand between the two calls here:
+// after pumpPrimary, if the front-segment head carried a nonzero dynamic gate
+// with nothing satisfied, Pump returned and the rear segment was never pumped,
+// commented "blocked primary front prevents ALL secondary dispatch [04 §3.3]".
+// There is no such coupling. [04 R-ORD-01 §10] gives step 3's `return` as a
+// return from the PRIMARY LOOP, not from the per-unit tick; the per-unit tick
+// calls the two pumps back to back with no test between them, and the secondary
+// loop never reads the front head's gate at all — the only front-segment state
+// it touches is the choice of which list head to unlink from. §3.3 step 3's
+// clause "rear-segment records sit behind any front blocker" was wrong with it,
+// and has been corrected in place.
+//
+// The coupling was not merely a missed dispatch. The secondary code-3 arm
+// spends a sim(15) draw exactly as the primary's does, so a unit sitting behind
+// a gated front head with a rear record moved the simulation stream's position
+// in retail and did not here — every stock aircraft, via the VTOL_Standby
+// refill that refillIdle head-inserts into the rear segment [04 §3.3].
 //
 // This is the pump. The comment that used to stand here called it a
 // "non-authoritative compatibility wrapper" and pointed at Pump.PumpUnit, but
@@ -619,14 +637,7 @@ func (q *Queue) Pump(u *units.Unit, tick uint32) {
 	// No order-guard write here either; see PumpUnit above and
 	// [07 R-WGT-01 §10].
 	q.pumpPrimary(u, tick)
-	if len(q.primary) > 0 {
-		head := q.primary[0]
-		sat := (head.Satisfied | u.Pending) & head.DynamicGate // [04 §3.3]
-		if head.DynamicGate != 0 && sat == 0 {
-			return // blocked primary front prevents ALL secondary dispatch [04 §3.3] C6
-		}
-	}
-	q.pumpSecondary(u, tick)
+	q.pumpSecondary(u, tick) // unconditional: the two segments are separate lists [04 R-ORD-01 §10]
 }
 
 // IdleRefillMission resolves the standing task the primary pump creates for
