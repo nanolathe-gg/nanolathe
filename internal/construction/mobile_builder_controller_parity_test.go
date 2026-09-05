@@ -205,6 +205,12 @@ func TestMobileBuilderInclusiveRangeGate(t *testing.T) {
 		if !svc.IsWithinNanoRangePublic(builder, cx, cz, fx, fz) {
 			t.Fatalf("controller %d equality fixture was outside the inclusive range gate", controller)
 		}
+		// The reach expression is consulted on the arrival-failure wake and
+		// nowhere else [05 R-WORK-01 §13], so the visit that tests the
+		// comparison boundary is a `0x40` visit. Raise it; a builder at exactly
+		// the limit passes the inclusive compare, retires the approach and
+		// allocates in the same visit.
+		node.Satisfied |= 0x40
 		svc.Pump(builder, 0)
 		if node.Target == 0 {
 			t.Fatalf("controller %d did not allocate at the inclusive range equality", controller)
@@ -237,6 +243,12 @@ func TestComputerMobileBuilderObstructionKeepsRetry(t *testing.T) {
 	blocked.SetOccupantA(9)
 
 	beforeX, beforeZ := builder.X, builder.Z
+	// "Once the computer builder is in range" is now a wake, not a per-visit
+	// measurement: the reach expression runs under `satisfied & 0x40` alone and
+	// a passing test retires the approach into the placement validator
+	// [05 R-WORK-01 §13]. The blocked-area budget the test locks is what the
+	// validator's rejection then runs [R-ORDER-02 §1].
+	node.Satisfied |= 0x40
 	svc.Pump(builder, 40)
 	if node.Target != 0 {
 		t.Fatalf("blocked computer MobileBuild allocated product %d", node.Target)

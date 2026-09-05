@@ -183,6 +183,30 @@ func runShot(opts Options, cs *contentSet) error {
 		b.viewerStep(tickSeconds, cl)
 	}
 
+	// `--shot-modal` drives the same activation path the pointer drives, so a
+	// capture can show the pause/exit modal stack the composer places at the
+	// live surface size [07 "Tab options menu and manual exit"][07 R-HUD-05].
+	// Without it no capture can review those windows: they open only from
+	// input the capture path has none of.
+	if opts.ShotModal != "" {
+		var route []string
+		switch opts.ShotModal {
+		case "options":
+		case "exit":
+			route = []string{"EXIT"}
+		case "confirm":
+			route = []string{"EXIT", "MAINMENU"}
+		default:
+			return fmt.Errorf("nanolathe: shot: --shot-modal wants \"options\", \"exit\" or \"confirm\", got %q", opts.ShotModal)
+		}
+		b.openBattleMenu()
+		for _, button := range route {
+			b.activateBattleMenuButton(button, cl)
+		}
+		millis.step = uint32(opts.ShotTicks) + 2
+		b.viewerStep(tickSeconds, cl)
+	}
+
 	// Zoom is presentation-only [F-P1-008]; it is applied after the ticks so
 	// the simulation is identical to an unzoomed capture of the same seed.
 	if opts.ShotZoom != 0 && opts.ShotZoom != 1 && b.cam != nil {

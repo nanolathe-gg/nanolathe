@@ -82,6 +82,13 @@ func TestMobileBuilderCannotStampOverItself(t *testing.T) {
 	svc.StatusText = func(text string) { texts = append(texts, text) }
 	before := liveUnitCount(svc.World)
 	node.Deadline = -1
+	// The blocked-area budget belongs to the phase AFTER the approach: phase 1
+	// is dispatched only on a movement outcome, and a visit carrying `0x20`
+	// retires the approach with no distance test and falls straight into the
+	// placement validator [05 R-WORK-01 §13]. Raise the arrival the follower
+	// would have raised so this visit is that visit; without it the record is
+	// still waiting for the mover and never reaches the validator.
+	node.Satisfied |= 0x20
 	svc.handleMobileState2(builder, node, 1)
 	if got := liveUnitCount(svc.World); got != before {
 		t.Fatalf("a nanoframe was allocated over the builder: %d live units, want %d", got, before)

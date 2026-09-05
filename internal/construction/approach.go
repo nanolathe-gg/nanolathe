@@ -188,11 +188,12 @@ func (s *Service) unitFootprintAnchor(u *units.Unit, x, z numeric.Fixed) (cellX,
 	return c.X, c.Z, true
 }
 
-// needsApproach reports whether a mobile builder must still move before its
-// build order can commit [04 §3.4][05 R-WORK-01 §2][05 R-WORK-01 §12]. It is
-// the single gate the walk submission and the state-2 handler share.
+// needsApproach reports whether a mobile builder's build record is still in its
+// approach phase [04 §3.4][05 R-WORK-01 §2][05 R-WORK-01 §12][05 R-WORK-01 §13].
+// It is the single gate the walk submission and the state-2 handler share.
 //
-// The reach test is [05 R-WORK-01 §2]'s, exactly: planar in X and Z, from the
+// The reach test it runs, on the one visit it runs it, is [05 R-WORK-01 §2]'s,
+// exactly: planar in X and Z, from the
 // BUILDER's origin to the SITE's snapped centre, with the builder instance's
 // half-footprint diagonal and the PRODUCT definition's half-footprint diagonal
 // both subtracted, compared inclusively and with a signed compare against the
@@ -200,42 +201,35 @@ func (s *Service) unitFootprintAnchor(u *units.Unit, x, z numeric.Fixed) (cellX,
 // piece is resolved and no model radius appears — point 3 of §12 retires all
 // three.
 //
-// PLACEMENT, recorded rather than implemented. §12 point 2 establishes that
-// retail consults this expression ONLY on the approach phase's arrival-failure
-// wake (satisfied bit `0x40`): a successful arrival on the rectangle border is
-// itself the reach, and the work phase has no range test at all. Nanolathe's
-// state-2 handler still consults it per visit, because the record's wake
-// plumbing is owned by internal/session and internal/orders and this unit does
-// not reach it. The expression is now the traced one either way; what remains
-// approximate is where it is asked, and the difference is visible only for a
-// builder that arrives on the border while the centre-minus-pads value still
-// exceeds `builddistance` — which the rectangle's geometry makes rare rather
-// than impossible.
+// WHERE it is consulted (WU-19-218, retiring the T25 placeholder that stood
+// here — the consultation now runs where research says it runs).
+// [05 R-WORK-01 §12] point 2 and [05 R-WORK-01 §13] establish that retail asks
+// this expression ONLY on the approach phase's arrival-failure wake, satisfied
+// bit `0x40`. Phase 0 arms the record's dynamic gate to `0xE0`, so phase 1 is
+// dispatched on the three movement outcomes of [04 R-ORD-01 §0] and on nothing
+// else; the body tests its satisfied argument for `0x40` and only under it forms
+// the centre-to-centre distance. A visit carrying `0x20` (the follower reached
+// the rectangle goal) or `0x80` (a goal object was released) without `0x40`
+// skips the expression entirely — standing on the footprint's border IS the
+// reach [04 §7.2][04 R-PATH-01 §12] — and the work phase has no range test at
+// all. There is no other range term in the row.
 //
-// TODO(T25): the consultation runs per visit where retail runs it on the
-// `0x40` wake alone. Re-confirmed at the site by [05 R-WORK-01 §13]: the
-// handler's third argument is the visit's satisfied set, phase 1 is dispatched
-// only on `0x20`/`0x40`/`0x80` (gate `0xE0`), and the reach expression sits
-// under `satisfied & 0x40` — an arrival at the rectangle border retires the
-// approach with no distance test, and there is no other range term in the row.
-// Placeholder: keep consulting the expression here; the only observable
-// difference is the border case above. Moving it onto the wake needs a wake
-// this handler can read, and it cannot read the record's own satisfied word:
-// the pump computes the satisfied set as
-// `(record.satisfied | unit.pending) & record.gate` and then CLEARS the
-// delivered bits from the record [04 §3.3], so by the time internal/session
-// drives StepUnit the `0x40` is already consumed — construction sees a word
-// that is zero on exactly the visit the bit was meant for. (Re-checked
-// WU-19-166: the previous text here blamed "the approach phase's satisfied-word
-// plumbing that internal/session owns", which named the wrong half. Session
-// already acts on the bit — its activation boundary calls
-// orders.MobileBuildUnreachableVisit(active.Satisfied, …) and runs the row's
-// abandon arm; what is absent is a delivery of the same wake INTO this
-// handler.) The seam is therefore in internal/orders or internal/session:
-// either the pump dispatches construction's states from the satisfied set the
-// way it dispatches a handler row, or the wake is latched on the record for the
-// StepUnit visit that follows. Both are separate units; nothing here should
-// invent a second reach rule in the meantime.
+// needsApproach below is therefore no longer the reach expression: it is the
+// approach PHASE. It answers "is this record still waiting on a movement
+// outcome", and it runs the reach expression on exactly one visit of the
+// record's life — the first that delivers `0x40`. Its three arms are §13's
+// three: no outcome yet (keep waiting, the goal is installed and the follower
+// re-requests at its own cadence [04 R-MOV-01 §7]); `0x40` (measure, and on a
+// failure keep the record out of reach so the caller runs the row's abandon arm
+// — status 7 `I can't reach the construction site`); `0x20`/`0x80` (retire, no
+// distance test). ApproachRetired makes that one-shot: once phase 1 has consumed
+// an outcome the reach is never asked again, which is what "the work phase has
+// no range test at all" means for a machine that is visited per tick.
+//
+// The wake reaches this file through orders.DeliverApproachWake, called at the
+// activation boundary that drives StepUnit; the seam's own comment records why
+// the pump's OwnedHandler argument could not carry it while the approach parks
+// on a private wake bit instead of `0xE0`.
 //
 // Standing on the site is a separate question answered by mustClearSite below.
 // Folding it in here made the state-2 handler ("a true result means return now,
@@ -268,12 +262,77 @@ func (s *Service) needsApproach(builder *units.Unit, node *orders.Node) bool {
 	if builder.Def.CanFly {
 		return false
 	}
+	if node.ApproachRetired {
+		// Phase 1 already consumed a movement outcome. "The work phase has no
+		// range test at all — a builder that has started work keeps working at
+		// any distance" [05 R-WORK-01 §12] point 2. The record's wake is dropped
+		// rather than delivered: a later `0x40` belongs to whatever goal the
+		// clear-the-site walk installed, and no phase past the approach reads it.
+		node.ApproachWake = 0
+		return false
+	}
+	// Delivering the wake here, and only here, is what makes it a VISIT: this
+	// predicate is the single gate the walk submission and the state-2 handler
+	// share, so both see the same outcome and the bits are consumed exactly once
+	// per tick [04 §3.3].
+	switch wake := orders.DeliverApproachWake(builder, node); {
+	case wake&approachWakeNoRoute != 0:
+		// The one and only consultation of the reach expression
+		// [05 R-WORK-01 §13]. Out of reach leaves the record in the approach so
+		// the caller can run the row's abandon arm; in reach retires it.
+		if s.outOfReach(builder, node) {
+			return true
+		}
+		node.ApproachRetired = true
+		return false
+	case wake&(approachWakeArrived|approachWakeReleased) != 0:
+		// An arrival at the rectangle border retires the approach with NO
+		// distance test [05 R-WORK-01 §12 point 2][05 R-WORK-01 §13]. This is
+		// the border case the per-visit consultation used to get wrong: the
+		// builder is flush against the site, and the centre-minus-pads value may
+		// still exceed `builddistance` for a large product.
+		node.ApproachRetired = true
+		return false
+	}
+	// No movement outcome yet. The goal is installed and the follower owns the
+	// re-request cadence [04 R-MOV-01 §7]; phase 1 is not dispatched until one
+	// of the three bits arrives [05 R-WORK-01 §13].
+	return true
+}
+
+// The three movement outcomes of [04 R-ORD-01 §0], named locally so the arms
+// above read as the row does. orders.ApproachWakeGate is their union.
+const (
+	approachWakeArrived  uint32 = 0x20 // the follower reached the goal
+	approachWakeNoRoute  uint32 = 0x40 // an empty route was published away from it
+	approachWakeReleased uint32 = 0x80 // a goal object was released
+)
+
+// outOfReach is the reach expression of [05 R-WORK-01 §2] and nothing else: no
+// wake gating, no state written. needsApproach above owns WHERE it is asked; the
+// caller that runs the row's abandon arm asks it through OutOfReachPublic so
+// that the arm's two halves — `satisfied & 0x40` and the reach verdict — are the
+// row's own two halves [04 R-ORD-01 §5].
+func (s *Service) outOfReach(builder *units.Unit, node *orders.Node) bool {
+	if s == nil || builder == nil || builder.Def == nil || node == nil {
+		return false
+	}
+	if builder.Def.BuildDistance == 0 || builder.Def.CanFly {
+		return false
+	}
 	cx, cz, footX, footZ, ok := s.siteCentre(node)
 	if !ok {
 		cx, cz = node.GoalX, node.GoalZ
 		footX, footZ = 1, 1
 	}
 	return !s.isWithinNanoRange(builder, cx, cz, footX, footZ)
+}
+
+// OutOfReachPublic exposes the reach expression for the session boundary that
+// runs the mobile-build row's approach-failure arm [04 R-ORD-01 §5]
+// [05 R-WORK-01 §2].
+func (s *Service) OutOfReachPublic(builder *units.Unit, node *orders.Node) bool {
+	return s.outOfReach(builder, node)
 }
 
 // mustClearSite reports whether the builder's own footprint still covers any

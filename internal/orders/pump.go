@@ -77,6 +77,22 @@ type Node struct {
 	// en route / arrived / blocked without re-reading the movement grid.
 	MoveState  uint8  // 0 none, 1 en route, 2 arrived, 3 blocked [P0-I03]
 	PathStatus uint32 // copy of path.Status (0 success, 0x100 already, 0x200 rejected) [04 §7.2]
+	// ApproachWake and ApproachRetired carry the work approach's movement
+	// outcome to a state machine that runs OUTSIDE this pump. Neither is retail
+	// record state: retail's mobile-build row parks on gate `0xE0` and reads the
+	// satisfied set the pump hands its handler [05 R-WORK-01 §13], and a record
+	// dispatched that way needs neither field. DeliverApproachWake
+	// (queue_handlers.go) fills them and records why this build needs the detour.
+	//
+	// ApproachWake is ONE visit's satisfied set restricted to the approach gate,
+	// cleared out of the accumulating words exactly as [04 §3.3] clears a
+	// dispatched record's. ApproachRetired is the monotone "the approach phase
+	// has already consumed a movement outcome" mark: it is what keeps a retired
+	// approach from being re-entered on the next wake-less visit, and it is why
+	// the reach expression is consulted once and never again
+	// [05 R-WORK-01 §12 point 2].
+	ApproachWake    uint32
+	ApproachRetired bool
 	// P0-I05 authoritative construction payloads [05 "Factory production lifecycle"][05 "Construction arithmetic"].
 	// BuildDefKey is the canonical catalog key for factory/mobile products; it
 	// survives save/load and maps to a stable catalog index in Param1 via

@@ -490,3 +490,115 @@ func TestCanonicalPayloadIdentical(t *testing.T) {
 		t.Fatalf("canonical NewNodeForOrder should set Owner handle")
 	}
 }
+
+// surfaceHeldClick drives one human click through the production input seam:
+// the client edge's state, the host-frame sample the battle builds from it,
+// and the controller. Unlike a hand-authored BattleInputFrame it exercises the
+// pointer's transport, which is where the surface size is applied.
+func surfaceHeldClick(b *battleSession, c *BattleController, px, py int32, held int) {
+	in := input.NewState()
+	in.Mouse.SetPosition(float32(px), float32(py))
+	c.Step(b.pointerSample(in, 1.0/30.0), nil)
+	for i := 0; i < held; i++ {
+		in.Mouse.ResetEdges()
+		in.Mouse.SetPosition(float32(px), float32(py))
+		in.Mouse.SetButton(input.MouseButtonLeft, true)
+		c.Step(b.pointerSample(in, 1.0/30.0), nil)
+	}
+	in.Mouse.ResetEdges()
+	in.Mouse.SetButton(input.MouseButtonLeft, false)
+	c.Step(b.pointerSample(in, 1.0/30.0), nil)
+}
+
+// TestPlacementReachesTheWholeSurfaceAtALargerDisplayMode is the WU-19-220
+// regression. At a display mode larger than the authored design space the
+// battle chrome is neither scaled nor letterboxed: the world viewport is
+// rebuilt as `(128,32)..(W-1,H-33)` and the pointer clamp follows the live
+// surface at `W-1` / `H-1` [07 R-HUD-05][03 §4.1]. Two expressions on the
+// placement path instead fixed those edges at the authored 640x480 — the
+// host-frame sample clamped the pointer to (639,479), and the cursor's ground
+// resolution clamped it again to (639,447) — so at 800x600 every pointer past
+// the authored corner folded back onto it and no site outside the original
+// window area could be picked or built.
+//
+// The pointer below is at (700, 536): east of 640 and south of 480, but well
+// inside the 800x600 viewport, whose last world row is 567.
+func TestPlacementReachesTheWholeSurfaceAtALargerDisplayMode(t *testing.T) {
+	const (
+		screenW = int32(800)
+		screenH = int32(600)
+		px      = int32(700)
+		py      = int32(536)
+	)
+	// A map wide enough that the pointer's world point is well inside it.
+	b, s, builder := placeClickFixture(t, 128, 128)
+	b.setSurfaceSize(screenW, screenH)
+	b.cam.ViewW, b.cam.ViewH = screenW, screenH
+	c := newReplayController(b)
+	s.Step(s.Clock.ScaledAnchor + 1)
+
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind:      session.HumanSelectionReplace,
+		Selection: session.HumanSelectionCommand{Handles: []pool.Handle{builder}},
+	}); err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	s.Step(s.Clock.ScaledAnchor + 1)
+
+	prodDef, ok := b.cat.Unit("armsolar")
+	if !ok {
+		t.Fatal("fixture product missing")
+	}
+	footX, footZ := footprintCellsForCatalog(b.cat, prodDef)
+	b.armPlacement(prodDef)
+
+	// The site the pointer names, derived the way the cursor path does but
+	// without any clamp: the ground-plane inverse of the beam point, resolved
+	// against the terrain, snapped to the footprint's cell [03 §2.5][07 §9].
+	fx, fz := b.cam.ScreenToWorld(px+camera.OriginX, py+camera.OriginY)
+	gx, _, gz, ok := s.CursorToWorld(int32(fx>>16), int32(fz>>16))
+	if !ok {
+		t.Fatal("fixture terrain refused the cursor point")
+	}
+	wantCX, wantCZ := world.PlacementAnchor(gx, gz, footX, footZ)
+
+	in := input.NewState()
+	in.Mouse.SetPosition(float32(px), float32(py))
+	c.Step(b.pointerSample(in, 1.0/30.0), nil)
+
+	if got := b.battleState().Input.PointerX; got != px {
+		t.Fatalf("pointer x reached the battle as %d, want %d: the host-frame sample is clamped to the authored surface [07 R-HUD-05]", got, px)
+	}
+	if got := b.battleState().Input.PointerY; got != py {
+		t.Fatalf("pointer y reached the battle as %d, want %d: the host-frame sample is clamped to the authored surface [07 R-HUD-05]", got, py)
+	}
+	if gotX, gotZ := b.battleState().Input.BuildCellX, b.battleState().Input.BuildCellZ; gotX != wantCX || gotZ != wantCZ {
+		t.Fatalf("pointer (%d,%d) resolved site cell (%d,%d), want (%d,%d): the ground resolution is clamped to the authored viewport [07 R-HUD-05]",
+			px, py, gotX, gotZ, wantCX, wantCZ)
+	}
+	if !b.battleState().Input.BuildOK {
+		t.Fatalf("site (%d,%d) beyond the authored surface is not placeable", wantCX, wantCZ)
+	}
+
+	// And the click completes: a press at the same point must not be captured
+	// as chrome, and must queue the build at that site.
+	surfaceHeldClick(b, c, px, py, 4)
+	s.Step(s.Clock.ScaledAnchor + 1)
+
+	q := orders.QueueForUnit(s.Units.Unit(builder))
+	if q == nil || q.LenPrimary() != 1 {
+		n := 0
+		if q != nil {
+			n = q.LenPrimary()
+		}
+		t.Fatalf("primary queue has %d orders, want exactly the build order placed past the authored surface", n)
+	}
+	head := q.Head()
+	if !orders.IsMobileBuild(head.ID) {
+		t.Fatalf("queued %s, want a mobile build order", orders.DescriptorFor(head.ID).Name)
+	}
+	wantX, wantZ := world.PlacementCenter(wantCX, wantCZ, footX, footZ)
+	if head.GoalX != wantX || head.GoalZ != wantZ {
+		t.Fatalf("queued build at (%d,%d), want the site the pointer named (%d,%d)", head.GoalX, head.GoalZ, wantX, wantZ)
+	}
+}

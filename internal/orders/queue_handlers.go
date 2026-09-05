@@ -117,3 +117,49 @@ func (q *Queue) SetExternallyDrivenHandler(id ID) {
 // externallyDriven is the shared body of every "my own per-unit step advances
 // this record" registration. It writes nothing, which is the whole contract.
 func externallyDriven(*units.Unit, *Node, uint32, uint32) (Code, bool) { return 0, false }
+
+// ApproachWakeGate is the dynamic gate a ground work row's approach phase arms:
+// `0xE0`, the three movement outcomes of [04 R-ORD-01 §0] — `0x20` the follower
+// reached the goal, `0x40` an empty route was published away from it ("cannot
+// get there"), `0x80` a goal object was released. [05 R-WORK-01 §13] states it
+// for `MobileBuild` by name: phase 0 arms `0xE0`, so phase 1 is dispatched on
+// those three bits and on nothing else.
+const ApproachWakeGate uint32 = 0x20 | 0x40 | 0x80
+
+// DeliverApproachWake hands one visit's approach outcome to a record whose body
+// the owning subsystem advances from its own per-unit step, and is the half the
+// externally-driven registration above cannot supply.
+//
+// An OwnedHandler already carries the satisfied set, which is how `GetBuilt`'s
+// phase-2 body chooses its arm, and delivering the mobile-build wake that way
+// would need no new seam at all. The pump reaches an owned registration only
+// through the gate test, though: it computes `(record.satisfied | unit.pending)
+// & record.gate`, and a head whose gate is armed with nothing satisfied stalls
+// before any handler runs [04 §3.3]. This build's mobile-build approach parks
+// the record on its own wake bit with a one-tick deadline rather than on
+// retail's `0xE0`, so the `0x20`/`0x40`/`0x80` a mover raises are never inside
+// that record's satisfied set and the registration is never reached with them.
+// Until the state machine arms `0xE0` itself, the computation is performed here,
+// for the record's real visit boundary, by the caller that drives that machine.
+//
+// What it performs is the pump's own step, restricted to the approach gate: the
+// set is `(record.satisfied | unit.pending) & 0xE0` and the delivered bits are
+// cleared out of BOTH accumulating words, so a wake is consumed once and a level
+// never masquerades as an edge [04 §3.3]. The result is stored on the record for
+// the step that follows in the same slot and returned for the caller's own use.
+func DeliverApproachWake(u *units.Unit, n *Node) uint32 {
+	if n == nil {
+		return 0
+	}
+	var pending uint32
+	if u != nil {
+		pending = u.Pending
+	}
+	wake := (n.Satisfied | pending) & ApproachWakeGate
+	n.Satisfied &^= wake
+	if u != nil {
+		u.Pending &^= wake
+	}
+	n.ApproachWake = wake
+	return wake
+}

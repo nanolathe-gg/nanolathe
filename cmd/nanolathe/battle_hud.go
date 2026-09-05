@@ -1376,7 +1376,7 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		}
 		frame := h.modalGadgetFrame(gad, page, pressed, gad.GrayedOut != 0)
 		if frame != nil {
-			if gad.Kind != gui.KindButton && (int(frame.Width) != int(r.W) || int(frame.Height) != int(r.H)) {
+			if modalArtResampled(gad.Kind, frame, r) {
 				c.UIBlitFrameScaledClipped(frame, int(r.X), int(r.Y), int(r.W), int(r.H), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 			} else {
 				c.UIBlitClipped(frame, int(r.X), int(r.Y), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
@@ -1411,6 +1411,36 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 			drawRetailGAFTextClipped(c, h.modalFont, text, x, y, int(r.W), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 		}
 	}
+}
+
+// modalArtResampled reports whether a modal gadget's selected frame is
+// texture-mapped onto its authored rectangle rather than stamped at the
+// translated gadget origin.
+//
+// Retail resamples in exactly one place: a blank surface (kind 6) whose frame
+// is raw. That renderer branches on the frame's `Compressed` byte — an RLE
+// frame is stamped once at the gadget origin, a raw frame is texture-mapped
+// through the four-corner blitter with the destination spanning
+// `(x,y)..(x+w-1,y+h-1)` and the source spanning `(0,0)..(frameW-1,frameH-1)`,
+// which is what makes skirmish's raw 32x32 `logos.gaf` team colours fit their
+// authored 20x20 records. Every other control stamps: a button's runtime
+// dimensions simply become its selected frame's, and a picture box (kind 12)
+// "blits its frame" [07 "Retail frontend control activation and raster rules"]
+// [07 R-WGT-01 §8].
+//
+// This used to resample every non-button gadget whose art did not match its
+// authored rectangle. That was invented, and it was the in-battle pause menu's
+// visible defect: `ARMOPT.GUI`'s `OPTBG` picture box is authored 128x362 while
+// the RLE frame behind it is 128x354, so the panel plate was stretched eight
+// rows taller than the art and each recess drifted progressively down the rail
+// away from the button meant to sit in it — up to seven pixels by `Resume`.
+// The drift is authored-size business and has nothing to do with the display
+// mode; it was equally wrong at 640x480.
+func modalArtResampled(kind gui.Kind, frame *formats.GAFFrame, r gui.Rect) bool {
+	if frame == nil || kind != gui.KindSurface || frame.Compressed != 0 {
+		return false
+	}
+	return int32(frame.Width) != r.W || int32(frame.Height) != r.H
 }
 
 func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Window, page *formats.GAF) {

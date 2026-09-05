@@ -128,15 +128,38 @@ func logical(v float32, limit int32) int32 {
 	return int32(v)
 }
 
-// SampleFromState copies the client edge's complete state into a value. The
-// logical battle surface is authored at 640×480 [07 §1].
-func SampleFromState(in *State, elapsed float64) Sample {
+// SurfaceWidth and SurfaceHeight are the authored design space the interface
+// is laid out in [07 §1]. They are the fallback for a caller that does not yet
+// know the negotiated surface, never a clamp applied to a larger one.
+const (
+	SurfaceWidth  int32 = 640
+	SurfaceHeight int32 = 480
+)
+
+// SampleFromState copies the client edge's complete state into a value.
+//
+// surfaceW/surfaceH are the negotiated presentation surface. The interface is
+// authored in a logical 640×480 design space, but at a larger display mode the
+// battle chrome is neither scaled nor letterboxed: it extends by rule and the
+// pointer clamp follows the live surface at `W−1` / `H−1`
+// [07 §1][07 R-HUD-05 "Anchored to the right edge W"]. Clamping the sample to
+// the authored space instead made every pointer position past (639, 479)
+// unreachable, so no world command — a build placement above all — could be
+// issued outside the 640×480 corner of a larger mode. A non-positive size
+// falls back to the authored design space.
+func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sample {
+	if surfaceW <= 0 {
+		surfaceW = SurfaceWidth
+	}
+	if surfaceH <= 0 {
+		surfaceH = SurfaceHeight
+	}
 	s := Sample{Elapsed: elapsed}
 	if in == nil {
 		return s
 	}
 	if m := in.Mouse; m != nil {
-		s.MouseX, s.MouseY = logical(m.X, 640), logical(m.Y, 480)
+		s.MouseX, s.MouseY = logical(m.X, surfaceW), logical(m.Y, surfaceH)
 		s.Buttons = MouseButtons{Left: m.Held(MouseButtonLeft), Middle: m.Held(MouseButtonMiddle), Right: m.Held(MouseButtonRight)}
 		s.WheelX, s.WheelY = m.ScrollX, m.ScrollY
 		for i := range s.PressedButtons {

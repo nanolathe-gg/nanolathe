@@ -561,13 +561,26 @@ func (s *Session) stepUnitPhase(tick uint32) {
 						// with `0x40` in the satisfied set and the reach test
 						// failing, the approach is over — retail emits status 7
 						// `I can't reach the construction site` and abandons the
-						// record. `isWalk` is exactly "the reach test failed",
-						// so the two halves of the row's condition are both
-						// here. Without this arm the record re-polled its own
+						// record. Without this arm the record re-polled its own
 						// one-tick deadline forever while the follower
 						// re-requested an impossible path every 60 ticks
 						// [04 R-MOV-01 §7], which idled the whole builder.
-						text, code := orders.MobileBuildUnreachableVisit(active.Satisfied, true)
+						//
+						// Corrected (WU-19-218). The two halves used to be the
+						// record's ACCUMULATED satisfied word and the constant
+						// true, with `isWalk` standing in for "the reach test
+						// failed". `isWalk` is not that: it is also raised by the
+						// clear-the-site term, which would have abandoned a
+						// builder that had arrived in reach but still covered a
+						// cell of its own site. The halves are now the row's own
+						// two — the VISIT's `0x40` and the reach expression's
+						// verdict [04 R-ORD-01 §5][05 R-WORK-01 §2]. NeedsWalk
+						// above is what delivered that visit: it consumes the
+						// record's `0x20`/`0x40`/`0x80` through
+						// orders.DeliverApproachWake, whose own comment records
+						// why the pump cannot hand the word over here
+						// [04 §3.3][05 R-WORK-01 §13].
+						text, code := orders.MobileBuildUnreachableVisit(active.ApproachWake, s.Build.OutOfReachPublic(u, active))
 						if code == 8 {
 							orders.NotifyStatus(u, 7, text)
 							if q := orders.QueueOfUnit(u); q != nil {

@@ -18,6 +18,19 @@ import (
 // queued MOBILEBUILD node whose Goal is the site centre.
 func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units.Unit, *orders.Node) {
 	t.Helper()
+	// Cell 2 keeps the even-footprint builder's committed anchor in bounds; see
+	// the comment at the Create call below.
+	return approachFixtureAt(t, siteCellX, siteCellZ, world.CellToWorld(2), world.CellToWorld(2))
+}
+
+// approachFixtureAt is approachFixture with the builder's start position given.
+// The position matters to any test that asks about ARRIVAL: the follower tests
+// the mover's committed anchor [04 R-MOV-03 §2], and a unit whose world position
+// is assigned after creation keeps the anchor its creation stamped, because a
+// mover that does not move commits nothing. A test that needs the builder to
+// stand somewhere for the arrival predicate must therefore be created there.
+func approachFixtureAt(t *testing.T, siteCellX, siteCellZ int32, startX, startZ numeric.Fixed) (*Service, *units.Unit, *orders.Node) {
+	t.Helper()
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{},
 		Movement: map[string]*content.MovementClass{
@@ -51,7 +64,7 @@ func approachFixture(t *testing.T, siteCellX, siteCellZ int32) (*Service, *units
 	// intentionally invalid retail request start. Keep this general approach
 	// fixture in bounds so it tests the goal install rather than the path setup
 	// bounds exit [04 R-PATH-01 §4 step 1].
-	hb, err := w.Create(builderDef, 0, world.CellToWorld(2), 0, world.CellToWorld(2))
+	hb, err := w.Create(builderDef, 0, startX, 0, startZ)
 	if err != nil {
 		t.Fatalf("create builder: %v", err)
 	}
@@ -216,9 +229,13 @@ func TestApproachReachIsCentreMinusPads(t *testing.T) {
 		if got := svc.isWithinNanoRange(builder, centreX, centreZ, footX, footZ); got != tc.want {
 			t.Fatalf("reach at %d units of centre separation = %v, want %v (%s)", tc.dist, got, tc.want, tc.why)
 		}
-		// needsApproach is the same test with the sign flipped.
-		if got := svc.needsApproach(builder, node); got == tc.want {
-			t.Fatalf("needsApproach at %d units = %v, want %v", tc.dist, got, !tc.want)
+		// outOfReach is the same test with the sign flipped. It is no longer
+		// needsApproach: since WU-19-218 that predicate is the approach PHASE
+		// and consults this expression only on the `0x40` wake
+		// [05 R-WORK-01 §13]. TestReachIsConsultedOnTheNoRouteWakeAlone below
+		// locks where it is asked.
+		if got := svc.OutOfReachPublic(builder, node); got == tc.want {
+			t.Fatalf("outOfReach at %d units = %v, want %v", tc.dist, got, !tc.want)
 		}
 	}
 
@@ -271,4 +288,245 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 	if route.LastRequestTick != 100 {
 		t.Fatalf("restored route request tick changed during adoption: got %d want 100", route.LastRequestTick)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// WU-19-218: where the reach expression is consulted.
+// ---------------------------------------------------------------------------
+
+// TestReachIsConsultedOnTheNoRouteWakeAlone is the predicate-level lock for
+// [05 R-WORK-01 §12] point 2 and [05 R-WORK-01 §13]: the mobile-build row's
+// phase 1 is dispatched only on `0x20`/`0x40`/`0x80` (gate `0xE0`), the reach
+// expression sits under `satisfied & 0x40`, and there is no other range term in
+// the row. A visit carrying `0x20` or `0x80` without `0x40` skips the expression
+// entirely — standing on the footprint's border IS the reach [04 §7.2].
+//
+// The first case is the one the retired per-visit consultation could not
+// express: a builder comfortably inside `builddistance` is STILL approaching
+// while no movement outcome has been delivered, because retail's phase 1 has
+// not been dispatched at all.
+func TestReachIsConsultedOnTheNoRouteWakeAlone(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		wake    uint32
+		inReach bool
+		want    bool
+		why     string
+	}{
+		{"no wake, in reach", 0, true, true, "phase 1 is not dispatched without a movement outcome"},
+		{"no wake, out of reach", 0, false, true, "same: the expression is not what keeps it walking"},
+		{"0x40, out of reach", 0x40, false, true, "the one consultation, and it fails"},
+		{"0x40, in reach", 0x40, true, false, "the one consultation, and it passes"},
+		{"0x20, out of reach", 0x20, false, false, "an arrival retires the approach with NO distance test"},
+		{"0x80, out of reach", 0x80, false, false, "a released goal object likewise carries no distance test"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, builder, node := approachFixture(t, 10, 10)
+			if tc.inReach {
+				// The site centre itself: the left side goes negative and the
+				// signed compare passes [05 R-WORK-01 §12] point 1.
+				cx, cz, _, _, ok := svc.SiteCentrePublic(node)
+				if !ok {
+					t.Fatal("queued MobileBuild site has no footprint centre")
+				}
+				builder.X, builder.Z = cx, cz
+			}
+			if got := svc.OutOfReachPublic(builder, node); got == tc.inReach {
+				t.Fatalf("fixture reach = out %v, want in %v", got, tc.inReach)
+			}
+			node.Satisfied |= tc.wake
+			if got := svc.needsApproach(builder, node); got != tc.want {
+				t.Fatalf("needsApproach = %v, want %v (%s)", got, tc.want, tc.why)
+			}
+			// The wake is a visit, not a level: it is consumed out of the
+			// record exactly as the pump consumes a dispatched record's
+			// [04 §3.3], and is left on the record for the row's abandon arm.
+			if node.Satisfied&orders.ApproachWakeGate != 0 {
+				t.Fatalf("wake bits survived the visit: satisfied = %#x", node.Satisfied)
+			}
+			if node.ApproachWake != tc.wake {
+				t.Fatalf("delivered wake = %#x, want %#x", node.ApproachWake, tc.wake)
+			}
+			if node.ApproachRetired == tc.want {
+				t.Fatalf("ApproachRetired = %v with needsApproach %v", node.ApproachRetired, tc.want)
+			}
+		})
+	}
+}
+
+// TestBorderArrivalBeginsWorkWithNoDistanceTest is the border case itself: the
+// builder halts on the rectangle goal's border — the ring of anchor cells at
+// which its footprint is flush against the site [04 R-PATH-01 §12] — while the
+// centre-minus-pads value is still above `builddistance`, and retail starts
+// building there [05 R-WORK-01 §13]. The per-visit consultation this unit
+// retired kept such a builder walking forever.
+//
+// The case is rare rather than impossible, which is what the retired marker
+// said: for a square product the border corner sits about `(f+2)·8·sqrt(2)`
+// world units from the site centre and the two half-diagonal pads subtract
+// about as much again. What opens the gap is the asymmetry the two quantities
+// are authored from — the rectangle grows by the MOVER's footprint, which
+// world.FootprintForUnit reads from the movement class, while the reach's pads
+// are the DEFINITION's own footprint pair [05 R-WORK-01 §2][04 R-PATH-01 §12].
+// A definition whose footprint word is smaller than its movement class's is
+// steered further out than its own pad accounts for, and that is what this
+// fixture authors: definition footprint 1x1, movement class 2x2.
+func TestBorderArrivalBeginsWorkWithNoDistanceTest(t *testing.T) {
+	svc, builder, node := approachFixture(t, 10, 10)
+	anchorX, anchorZ, _, _, ok := svc.siteAnchorCell(node)
+	if !ok {
+		t.Fatal("queued MobileBuild site has no footprint anchor")
+	}
+	// The north-west corner of the goal rectangle: the installer grows the
+	// product footprint by the MOVER's own 2x2 on the west and north
+	// [04 R-PATH-01 §12], so this cell is on the border and the product's own
+	// cells stay interior.
+	extent, err := world.NewFootprintExtent(2, 2)
+	if err != nil {
+		t.Fatalf("builder extent: %v", err)
+	}
+	centre, err := world.CenterForFootprint(world.NewFootprintAnchor(anchorX-2, anchorZ-2), extent)
+	if err != nil {
+		t.Fatalf("builder centre: %v", err)
+	}
+	builder.X, builder.Z = centre.X(), centre.Z()
+	if svc.mustClearSite(builder, node) {
+		t.Fatal("a border cell must leave the product's own cells clear [04 R-PATH-01 §12]")
+	}
+	// Centre separation from the border corner is hypot(64,64) = 90 whole world
+	// units. With the definition's own footprint at 1x1 the builder pad is
+	// trunc(8·hypot(1,1)) = 11 and the product's is 67, leaving 12 against a
+	// `builddistance` of 5 [05 R-WORK-01 §2].
+	builder.Def.FootprintX, builder.Def.FootprintZ = 1, 1
+	builder.Def.BuildDistance = 5
+	if !svc.OutOfReachPublic(builder, node) {
+		t.Fatal("fixture does not exercise the border case: the reach expression still passes")
+	}
+
+	node.Satisfied |= 0x20 // the follower's arrival [04 R-PATH-01 §8]
+	svc.Pump(builder, 0)
+	if !node.ApproachRetired {
+		t.Fatal("an arrival at the border must retire the approach [05 R-WORK-01 §13]")
+	}
+	if node.Target == 0 {
+		t.Fatal("a builder that arrived at the border must begin work with no distance test")
+	}
+}
+
+// TestNoRouteWakeInReachBeginsWork is the passing half of the one consultation:
+// `0x40` delivered, the centre-to-centre distance minus both pads inside
+// `builddistance`, so the approach retires in that same visit and the record
+// falls into the placement validator and the creator [05 R-WORK-01 §13].
+func TestNoRouteWakeInReachBeginsWork(t *testing.T) {
+	svc, builder, node := approachFixture(t, 10, 10)
+	cx, cz, fx, fz, ok := svc.SiteCentrePublic(node)
+	if !ok {
+		t.Fatal("queued MobileBuild site has no footprint centre")
+	}
+	// Ten world units inside the 149-unit limit of TestApproachReachIsCentreMinusPads.
+	limit := int64(builder.Def.BuildDistance) + int64(nanoFootprintPad(builder.Def.FootprintX, builder.Def.FootprintZ)) + int64(nanoFootprintPad(fx, fz))
+	builder.X = cx - numeric.Fixed((limit-10)<<16)
+	builder.Z = cz
+	if svc.OutOfReachPublic(builder, node) {
+		t.Fatal("fixture must stand inside the reach limit")
+	}
+
+	node.Satisfied |= 0x40
+	svc.Pump(builder, 0)
+	if !node.ApproachRetired {
+		t.Fatal("a passing reach test on the `0x40` wake retires the approach [05 R-WORK-01 §13]")
+	}
+	if node.Target == 0 {
+		t.Fatal("the record must fall into the validator and create its product in that visit")
+	}
+}
+
+// TestNoRouteWakeOutOfReachReapproaches is the failing half. Construction keeps
+// the record in its approach and leaves the wake on the record; the row's
+// abandon arm — status 7 `I can't reach the construction site` — belongs to the
+// caller that drives this step, and reads exactly those two halves
+// [04 R-ORD-01 §5][05 R-WORK-01 §13].
+func TestNoRouteWakeOutOfReachReapproaches(t *testing.T) {
+	svc, builder, node := approachFixture(t, 10, 10)
+	if !svc.OutOfReachPublic(builder, node) {
+		t.Fatal("fixture must stand outside the reach limit")
+	}
+
+	node.Satisfied |= 0x40
+	svc.Pump(builder, 0)
+	if node.ApproachRetired {
+		t.Fatal("a failing reach test must not retire the approach [05 R-WORK-01 §13]")
+	}
+	if node.Target != 0 {
+		t.Fatal("an out-of-reach builder must not create a product")
+	}
+	if node.ApproachWake&0x40 == 0 {
+		t.Fatalf("the visit's `0x40` must survive on the record for the row's abandon arm: %#x", node.ApproachWake)
+	}
+	if text, code := orders.MobileBuildUnreachableVisit(node.ApproachWake, svc.OutOfReachPublic(builder, node)); code != 8 || text != orders.MobileBuildUnreachableText {
+		t.Fatalf("abandon arm = %q/%d, want %q/8 [04 R-ORD-01 §5]", text, code, orders.MobileBuildUnreachableText)
+	}
+}
+
+// TestBuilderAlreadyOnTheBorderStartsAtOnce closes the question the wake-driven
+// approach raises loudest: what happens to a builder that is ALREADY standing on
+// the goal rectangle's border when the record reaches the head. Retail's phase 1
+// is dispatched only on a movement outcome [05 R-WORK-01 §13], so the answer has
+// to come from the follower, not from a distance test — and the follower's
+// per-tick service asks the payload the arrival question first, "with a payload
+// installed ... not the presence of a published route" [04 R-MOV-03 §2], so an
+// already-satisfied start raises `0x20` on the next mover tick instead of
+// waiting for the 60-tick re-request of [04 R-MOV-01 §7] or for a wake that
+// never comes. The search's own already-satisfied notification is `0x100`, which
+// is masked out of every satisfied set [04 R-ORD-01 §0] and therefore cannot
+// stand in for it.
+//
+// The lock is the tick budget: the record must create its product within a
+// handful of ticks, not tens. Without it a regression in the arrival service
+// would surface only as an AI that builds at half speed.
+func TestBuilderAlreadyOnTheBorderStartsAtOnce(t *testing.T) {
+	// The builder must be CREATED on the border, not moved there: the follower
+	// reads the committed anchor and a mover that never moves commits nothing.
+	const siteCellX, siteCellZ = 10, 10
+	prodExtent, err := world.NewFootprintExtent(6, 6)
+	if err != nil {
+		t.Fatalf("product extent: %v", err)
+	}
+	siteAnchor, err := world.SnapFootprintAnchor(world.CellToWorld(siteCellX), world.CellToWorld(siteCellZ), prodExtent)
+	if err != nil {
+		t.Fatalf("site anchor: %v", err)
+	}
+	site := siteAnchor.Cell()
+	// West-north corner of the rectangle the installer grows by the mover's own
+	// 2x2 footprint [04 R-PATH-01 §12]: anchor (originX-2, originZ-2).
+	moverExtent, err := world.NewFootprintExtent(2, 2)
+	if err != nil {
+		t.Fatalf("builder extent: %v", err)
+	}
+	corner, err := world.CenterForFootprint(world.NewFootprintAnchor(site.X-2, site.Z-2), moverExtent)
+	if err != nil {
+		t.Fatalf("border centre: %v", err)
+	}
+
+	svc, builder, node := approachFixtureAt(t, siteCellX, siteCellZ, corner.X(), corner.Z())
+	if svc.mustClearSite(builder, node) {
+		t.Fatal("the border corner must leave the product's own cells clear [04 R-PATH-01 §12]")
+	}
+	sys := svc.Movement
+
+	const budget = 8
+	for tick := uint32(0); tick < budget; tick++ {
+		svc.Pump(builder, tick)
+		if sys.Scheduler != nil {
+			sys.Scheduler.Tick(tick)
+		}
+		sys.BeginTick(tick)
+		sys.StepUnit(builder.Handle, tick)
+		sys.EndTick(tick)
+		if node.Target != 0 {
+			return
+		}
+	}
+	t.Fatalf("a builder already on the rectangle border did not start within %d ticks: retired=%v wake=%#x satisfied=%#x",
+		budget, node.ApproachRetired, node.ApproachWake, node.Satisfied)
 }

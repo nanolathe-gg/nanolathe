@@ -99,3 +99,38 @@ func TestMobileBuildUnreachableVisit(t *testing.T) {
 		t.Fatalf("without 0x40 the approach continues, got code %d", code)
 	}
 }
+
+// TestDeliverApproachWakeIsTheSatisfiedSetComputationAndClear locks the seam
+// that hands a work approach's movement outcome to a state machine running
+// outside this pump. It performs the pump's own step of [04 §3.3] restricted to
+// the approach gate: the set is `(record.satisfied | unit.pending) & 0xE0`, the
+// delivered bits are cleared out of BOTH words, and the result is stored on the
+// record for the step that follows in the same slot.
+func TestDeliverApproachWakeIsTheSatisfiedSetComputationAndClear(t *testing.T) {
+	if ApproachWakeGate != 0x20|0x40|0x80 {
+		t.Fatalf("approach gate = %#x, want 0xE0 [05 R-WORK-01 §13]", ApproachWakeGate)
+	}
+	u := &units.Unit{Pending: 0x80 | 0x2}
+	n := &Node{Satisfied: 0x40 | 0x1, Deadline: -1}
+
+	if got := DeliverApproachWake(u, n); got != 0x40|0x80 {
+		t.Fatalf("delivered wake = %#x, want 0xc0", got)
+	}
+	if n.ApproachWake != 0x40|0x80 {
+		t.Fatalf("record wake = %#x, want 0xc0", n.ApproachWake)
+	}
+	// Bits outside the gate are untouched; delivered bits are consumed, so a
+	// second visit sees an empty set rather than the same edge again.
+	if n.Satisfied != 0x1 {
+		t.Fatalf("record satisfied = %#x, want the ungated bit 0x1 alone", n.Satisfied)
+	}
+	if u.Pending != 0x2 {
+		t.Fatalf("unit pending = %#x, want the ungated bit 0x2 alone", u.Pending)
+	}
+	if got := DeliverApproachWake(u, n); got != 0 || n.ApproachWake != 0 {
+		t.Fatalf("second visit delivered %#x (record %#x), want 0", got, n.ApproachWake)
+	}
+	if DeliverApproachWake(u, nil) != 0 {
+		t.Fatal("a nil record delivers nothing")
+	}
+}

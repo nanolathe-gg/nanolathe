@@ -44,6 +44,15 @@ type battleSession struct {
 
 	millisSource clock.MillisSource // host millisecond source for Session.Step [01 §4.1]
 
+	// surfaceW/surfaceH is the negotiated presentation surface the pointer and
+	// the world viewport are measured against. The interface art is authored in
+	// the logical 640×480 design space, but a larger display mode is neither
+	// scaled nor letterboxed: the chrome extends by rule and the world viewport
+	// takes `(128,32)..(W−1,H−33)` [07 R-HUD-05][03 §4.1]. The host frame
+	// refreshes both words from the client surface before any input is read;
+	// zero means "not negotiated yet" and reads back as the authored size.
+	surfaceW, surfaceH int32
+
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
@@ -594,10 +603,49 @@ func localCommanderUnit(sess *session.Session) (*units.Unit, bool) {
 	return nil, false
 }
 
+// setSurfaceSize records the negotiated presentation surface for this host
+// frame. The battle chrome is not scaled to a larger display mode — it extends
+// by rule and the world viewport takes what is left — so every pointer test
+// below reads the live size rather than the authored one [07 R-HUD-05].
+func (b *battleSession) setSurfaceSize(w, h int32) {
+	if b == nil || w <= 0 || h <= 0 {
+		return
+	}
+	b.surfaceW, b.surfaceH = w, h
+	// The chrome's own layout is derived at draw time, but the world-region
+	// test the click path runs reads it too; laying it out here keeps the
+	// first host frame's pointer on the same viewport the composer will paint
+	// [07 R-HUD-05]. Repeated calls at an unchanged size are a no-op.
+	b.hud.applyDisplaySize(int(w), int(h))
+}
+
+// surfaceSize returns the negotiated surface, falling back to the authored
+// design space before the first host frame has reported one [07 §1].
+func (b *battleSession) surfaceSize() (w, h int32) {
+	if b == nil || b.surfaceW <= 0 || b.surfaceH <= 0 {
+		return retailScreenW, retailScreenH
+	}
+	return b.surfaceW, b.surfaceH
+}
+
+// pointerSample is the one production expression that turns the client edge's
+// state into a host-frame sample. It exists so the pointer clamp and the world
+// mapping below cannot disagree about which surface they are on.
+func (b *battleSession) pointerSample(in *input.State, delta float64) input.Sample {
+	w, h := b.surfaceSize()
+	return input.SampleFromState(in, delta, w, h)
+}
+
 // viewerStep runs one rendered frame: input → session ticks → camera pan.
 func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
+	}
+	// The client owns the surface size; the battle follows it before reading
+	// the pointer, so a mode change reaches the placement path on the same
+	// frame it reaches the composer [07 R-FE-01 §11][07 R-HUD-05].
+	if w, h := cl.Size(); w > 0 && h > 0 {
+		b.setSurfaceSize(int32(w), int32(h))
 	}
 	// The client composes the drag frame after world/fog and before the HUD;
 	// this deferred bridge mirrors the input-owned gesture after every early
@@ -699,7 +747,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// [07 R-CAM-01 §12]: a `t` or Ctrl+C pressed below therefore begins its
 		// glide on the following frame, as retail's does.
 		b.stepFollowCamera()
-		b.controller.Step(input.SampleFromState(in, delta), cl)
+		b.controller.Step(b.pointerSample(in, delta), cl)
 		b.applyCommittedShake()
 	}
 	if b.ended {
@@ -1996,18 +2044,26 @@ func (b *battleSession) cursorWorld(sx, sy int32) (wx, wy, wz numeric.Fixed) {
 		}
 		return numeric.Fixed(mpx) << 16, 0, numeric.Fixed(mpz) << 16
 	}
-	// Clamp pointer into the battle viewport before ground resolution [07 §8] step 1 [C-2].
+	// Clamp pointer into the battle viewport before ground resolution [07 §8]
+	// step 1 [C-2]. The viewport is the drawn-chrome region of the **live**
+	// surface, not of the authored 640×480 one: the battle loader rebuilds it
+	// as `(128,32)..(W−1,H−33)` at every display mode, because the chrome
+	// extends by rule rather than scaling [03 §4.1][07 R-HUD-05]. Fixing the
+	// far edges at 639/447 folded every pointer beyond them back onto the
+	// 640×480 corner, so at a larger mode a build site could not be picked
+	// outside the authored area at all.
+	screenW, screenH := b.surfaceSize()
 	clampedX := sx
 	clampedY := sy
 	if clampedX < camera.OriginX+1 {
 		clampedX = camera.OriginX + 1
-	} else if clampedX > 639 {
-		clampedX = 639
+	} else if clampedX > screenW-1 {
+		clampedX = screenW - 1
 	}
 	if clampedY < camera.OriginY {
 		clampedY = camera.OriginY
-	} else if clampedY > 447 {
-		clampedY = 447
+	} else if clampedY > screenH-camera.OriginY-1 {
+		clampedY = screenH - camera.OriginY - 1
 	}
 	// The renderer stores world points at beam position minus OriginX/Y. Restore
 	// those fixed offsets for the camera inverse [03 §2.5].
@@ -2501,8 +2557,10 @@ func (b *battleSession) overWorld(x, y int32) bool {
 		return b.hud.overWorld(x, y)
 	}
 	// When no authored HUD layout is available, use the viewport transform's
-	// drawn-chrome rectangle [C-3][07 §8].
-	vt := client.NewViewportTransform(b.cam, nil, 640, 480)
+	// drawn-chrome rectangle at the negotiated surface [C-3][07 §8]
+	// [07 R-HUD-05].
+	screenW, screenH := b.surfaceSize()
+	vt := client.NewViewportTransform(b.cam, nil, screenW, screenH)
 	return vt.Viewport.Contains(x, y)
 }
 
