@@ -70,12 +70,6 @@ func RetailTriggerImage(victory, defeat []*Trigger) ([]RetailTriggerAccount, err
 	return accounts, nil
 }
 
-// RetailSaveAccounts is an alias for callers naming the detached projection
-// by its eventual bank representation.
-func RetailSaveAccounts(victory, defeat []*Trigger) ([]RetailTriggerAccount, error) {
-	return RetailTriggerImage(victory, defeat)
-}
-
 // RestoreRetailTriggerAccounts applies the values emitted by
 // RetailTriggerImage. Definition arguments and timer deadlines remain
 // authored mission state [08 R-TRIG-01 §8].

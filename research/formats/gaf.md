@@ -62,7 +62,7 @@ version `0x00010100`, 6 entries, unknown 0, first entry @ 0x5D0.
 | Offset | Size | Type | Name | Description |
 | ---: | ---: | --- | --- | --- |
 | +0 | 2 | u16 | frame_count | May be `0` (placeholder entries exist in retail data) |
-| +2 | 2 | u16 | unknown1 | `1` in every entry of every retail GAF (11,881 entries surveyed). **The executable reads the low byte of this word as the entry's loop flag (established 2026-08-29, `[06 R-WFX-01 §1]`):** a playback cursor copies it at initialization and, on passing the last frame, wraps to frame 0 when it is nonzero or marks the sequence finished when it is zero. Retail data therefore makes every sequence loop by default; the engine clears the byte in memory for one-shot sequences (weapon explosion art, the bound `explosion`/`explode2..5`/`nuke1`/`alfboom1`/`h2oboom2`/`lavasplash` effects, feature burn sequences) after loading. |
+| +2 | 2 | u16 | unknown1 | `1` in every entry of every retail GAF (11,881 entries surveyed). **The executable reads the low byte of this word as the entry's loop flag — Established (`[06 R-WFX-01 §1]`):** a playback cursor copies it at initialization and, on passing the last frame, wraps to frame 0 when it is nonzero or marks the sequence finished when it is zero. Retail data therefore makes every sequence loop by default; the engine clears the byte in memory for one-shot sequences (weapon explosion art, the bound `explosion`/`explode2..5`/`nuke1`/`alfboom1`/`h2oboom2`/`lavasplash` effects, feature burn sequences) after loading. |
 | +4 | 4 | u32 | unknown2 | `0` in every retail entry |
 | +8 | 32 | char[32] | name | NUL-terminated, NUL-padded. Lookup is case-insensitive. |
 
@@ -71,7 +71,7 @@ Immediately followed by `frame_count` × 8-byte **frame references**:
 | Offset | Size | Type | Description |
 | ---: | ---: | --- | --- |
 | +0 | 4 | u32 | absolute offset of the frame header |
-| +4 | 4 | u32 | small integer, 1–10 in retail data, constant across all frames of an entry. **Per-frame display duration in whole simulation ticks (established 2026-08-26):** the executable's playback cursor loads this value as the per-frame countdown and steps in whole ticks; the loader leaves it untouched. The earlier "not confirmed by any primary source" caveat and the GAFBuilder 2/10 two-state hypothesis are superseded — the cursor arithmetic is the primary source, and the spread of values 1–10 matches tick counts. |
+| +4 | 4 | u32 | small integer, 1–10 in retail data, constant across all frames of an entry. **Per-frame display duration in whole simulation ticks — Established:** the executable's playback cursor loads this value as the per-frame countdown and steps in whole ticks; the loader leaves it untouched. The cursor arithmetic is the primary source, and the spread of values 1–10 matches tick counts. |
 
 The second frame-reference value correlates with animation speed in retail
 data — fast-spinning cursors in `anims/CURSORS.GAF` store small values
@@ -99,9 +99,9 @@ but readers must not assume pixel extents are uniquely owned.
 | +2 | 2 | u16 | height | pixels, > 0 |
 | +4 | 2 | i16 | x_offset | signed placement offset (see below) |
 | +6 | 2 | i16 | y_offset | |
-| +8 | 1 | u8 | color_key | `9` in **all 48,519 retail frames**. On the raw path it is the transparent palette index: the frame draw passes this byte to the blitter, which skips every matching source pixel. The RLE path carries transparency in skip runs and does not consume this key. Historically mislabelled "palette index" and long listed as unknown. |
+| +8 | 1 | u8 | color_key | `9` in **all 48,519 retail frames**. On the raw path it is the transparent palette index: the frame draw passes this byte to the blitter, which skips every matching source pixel. The RLE path carries transparency in skip runs and does not consume this key. Community notes mislabel it "palette index" and list it as unknown. |
 | +9 | 1 | u8 | compressed | `0` = raw pixels, `1` = per-row RLE (only these two values occur in retail data) |
-| +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. **The executable reads only the low byte** (loader and compositor alike), so the effective count is `subframe_count & 0xFF`; on a *subframe* header a nonzero **high byte** (offset +11) makes the compositor draw that subframe through the light-table-remapped blit path, which draws only when the destination window has its remap flag set (`[02 R-MALF-01 §6]`). Retail data: maximum count 12, high byte always 0 (census of all 958 GAFs, 123,294 frames). **Correction (2026-08-29, RWU-02-3):** the row previously described the field as a plain u16 count. |
+| +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. **The executable reads only the low byte** (loader and compositor alike), so the effective count is `subframe_count & 0xFF`; on a *subframe* header a nonzero **high byte** (offset +11) makes the compositor draw that subframe through the light-table-remapped blit path, which draws only when the destination window has its remap flag set (`[02 R-MALF-01 §6]`). Retail data: maximum count 12, high byte always 0 (census of all 958 GAFs, 123,294 frames). |
 | +12 | 4 | u32 | unknown2 | `0` in all retail frames |
 | +16 | 4 | u32 | data_offset | → pixel data, or subframe pointer table when `subframe_count > 0` |
 | +20 | 4 | u32 | unknown3 | Historically called "timing" — specifically, the 1998–2001 `GAFBuilder` tool names this exact offset `FPS` and exposes it as a user-editable, save-round-tripped field — but ~27% of retail frames carry nonzero garbage here (in `ARMALAB.GAF`: mostly 0, one frame `480`, one `7025344`). Ignore; the plausible timing value lives in the frame *reference* record instead. |
@@ -180,7 +180,7 @@ order onto a `width × height` canvas: each subframe is placed at
 opaque. Subframes can themselves be composed; cycles are malformed. Canvas
 pixels never covered by an opaque subframe pixel are transparent.
 
-## How the engine loads it (2026-08-29, RWU-02-3)
+## How the engine loads it
 
 `[02 §6]` and `[02 R-MALF-01 §6]` own the behaviour. Byte-level facts: the
 file is read whole (a missing or zero-length file is null — fatal with the
@@ -207,8 +207,8 @@ null sequence with no message.
   into solid rectangles of palette 9 (bright blue, `84,84,252`) and fills every
   sight shape to its bounding box. The handful of stray key pixels elsewhere
   (4-8 per file in a few unit textures) is noise.
-- **A correct decode of the interface side panels looks like coloured static.
-  Established 2026-08-30 (WU-17-12).** The panel entries of the side interface
+- **A correct decode of the interface side panels looks like coloured static —
+  Established.** The panel entries of the side interface
   GAFs (`anims/ARMINT.GAF` `PANELSIDE` and `PANELSIDE2`, both 129×480, RLE) are
   authored as a per-pixel dither drawn almost entirely from the *darkest* entry
   of many different palette ramps — `PALETTE.PAL` is 16 ramps of 16 shades,

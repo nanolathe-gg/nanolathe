@@ -260,36 +260,3 @@ func SpawnMeteor(svc *Service, crt *rng.CRT, tick uint32, weapon *content.Weapon
 	p.ShooterSide = NeutralSide
 	return h, true
 }
-
-// MeteorStorm is the per-session meteor storm scheduler state [06 §6.5].
-// The OTA weapon name is the enable gate: an empty name disables scheduling
-// entirely, while zero-authored density/interval/duration substitute their
-// METEOR.TDF defaults at load (phase 2) and still enable it.
-type MeteorStorm struct {
-	Weapon     *content.WeaponDef // resolved meteor weapon; nil disables scheduling
-	Density    float64            // authored meteordensity (defaults substituted)
-	Radius     int32              // authored meteorradius (defaults substituted)
-	NextStrike uint32             // absolute tick of the next strike attempt
-}
-
-// MeteorDelay is the per-hit spacing trunc(30/density); density of 31 or
-// greater collapses to zero, attempting a spawn on every storm tick [06 §6.5].
-func meteorTick(s *Service, storm *MeteorStorm, crt *rng.CRT, tick uint32, mapWidth, mapHeight int32) {
-	if s == nil || storm == nil || crt == nil {
-		return
-	}
-	// Four scheduling-side draws are consumed on EVERY evaluation, even when
-	// the storm is disabled [06 §6.5] I4 — target Z/X then origin offsets.
-	targetX, targetZ, originX, originZ := MeteorSchedule(crt, mapWidth, mapHeight)
-	if storm.Weapon == nil || !IsMeteorEnabled(storm.Weapon.Name) {
-		return
-	}
-	if tick < storm.NextStrike {
-		return
-	}
-	storm.NextStrike = tick + uint32(MeteorDelay(storm.Density))
-	// SpawnMeteor consumes the per-hit geometry draws internally and drops
-	// silently on a full pool — the strike timer has already advanced and
-	// there is no retry [06 §6.5] I4.
-	_, _ = SpawnMeteor(s, crt, tick, storm.Weapon, targetX, targetZ, originX, originZ, storm.Radius)
-}

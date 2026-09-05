@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -22,59 +21,6 @@ const (
 	classifierOutputMask  uint32 = 0x00100000
 	classifierOutputSet   uint32 = 0x00200000
 )
-
-// isCombatUnit reports the conservative combat classification used by
-// tactical grouping and order selection. It is deliberately not used by the
-// manager task-group writer, which uses runtime status bits and the established
-// definition predicates [R-P0-04 §3].
-func isCombatUnit(def *content.UnitDef) bool {
-	if def == nil {
-		return false
-	}
-	if def.Builder {
-		return false
-	}
-	// OnOffable metal makers are economy, not combat.
-	if def.OnOffable && def.MakesMetal != 0 && def.ExtractsMetal == 0 {
-		return false
-	}
-	if def.ExtractsMetal != 0 {
-		return false
-	}
-	if def.IsFeature {
-		return false
-	}
-	if !def.CanMove && def.MaxVelocity == 0 {
-		return false
-	}
-	// Need attack capability: CanAttack or weapon present or specific attack flags.
-	if def.CanAttack || def.CanGuard || def.CanPatrol {
-		return true
-	}
-	if !content.IsWeaponInactive(def.Weapon1Def) || !content.IsWeaponInactive(def.Weapon2Def) || !content.IsWeaponInactive(def.Weapon3Def) {
-		return true
-	}
-	// Fallback: mobile units with BMCode false? Keep conservative.
-	return false
-}
-
-// isBuilderUnit reports whether def is a builder eligible for construction tasks.
-func isBuilderUnit(def *content.UnitDef) bool {
-	if def == nil {
-		return false
-	}
-	return def.Builder
-}
-
-// isInHandle checks membership deterministically via linear scan (small groups).
-func containsHandle(list []pool.Handle, h pool.Handle) bool {
-	for _, v := range list {
-		if v == h {
-			return true
-		}
-	}
-	return false
-}
 
 // classifyGroups is the recovered classifier producer. It scans this manager's
 // owner slice in pool order. A unit must carry runtime bit 0x20 and have no
@@ -348,14 +294,6 @@ func retailDistanceSquared(u *units.Unit, x, z int32) int64 {
 // values), not Fixed.Int's truncation-toward-zero path [03 §2.1; I3].
 func retailCoord(v numeric.Fixed) int32 {
 	return int32(int16(v >> 16))
-}
-
-// isInAnyGroup reports whether h is in any AI group.
-func (m *Manager) isInAnyGroup(h pool.Handle) bool {
-	if m == nil {
-		return false
-	}
-	return containsHandle(m.GroupResource, h) || containsHandle(m.GroupWaveA, h) || containsHandle(m.GroupRegroupA, h) || containsHandle(m.GroupConstruction, h) || containsHandle(m.GroupNull, h) || containsHandle(m.GroupWaveB, h) || containsHandle(m.GroupRegroupB, h) || containsHandle(m.GroupExplore, h) || containsHandle(m.GroupRally, h)
 }
 
 // groupCentroid computes the three-axis task centroid [08 R-AI-01 §9]. Each

@@ -1691,16 +1691,6 @@ func releaseWeapon(u *units.Unit, idx int) bool {
 	return w != nil && w.ReleaseSlot != nil && w.ReleaseSlot(u, idx)
 }
 
-func inhibitWeapons(u *units.Unit) {
-	w := orderWeapons(u)
-	if w == nil || w.InhibitSlot == nil {
-		return
-	}
-	for idx := 0; idx < units.NumSlots; idx++ {
-		w.InhibitSlot(u, idx)
-	}
-}
-
 func fireTargetWeapons(u *units.Unit, target pool.Handle, tick uint32) bool {
 	w := orderWeapons(u)
 	if w == nil || w.FireTarget == nil || target == 0 {

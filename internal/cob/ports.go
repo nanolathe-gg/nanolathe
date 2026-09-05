@@ -520,11 +520,6 @@ type SFXSink interface {
 	EmitSFX(piece int, sfxType int32, kind SFXKind)
 }
 
-// NullSFXSink discards all effects. Useful for headless tests.
-type NullSFXSink struct{}
-
-func (NullSFXSink) EmitSFX(int, int32, SFXKind) {}
-
 // DispatchSFX classifies t and, if visible, calls sink. Returns true if an
 // effect was classified as visible (vector/point). Ignored vocabulary returns
 // false and touches no sink. Visibility is the caller's predicate; the VM's
@@ -715,17 +710,14 @@ func Distance(packedXZ int32) int32 {
 	return int32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
 }
 
-// AtanPorts computes ports 14/15 ground helpers truncated [04 §4.4] C15.
-// Atan (port 14) returns low 16 bits of rounded angle; Hypot (port 15) is
-// truncated integer hypotenuse. These share the rounding note: only atan
-// rounds, hypot truncates [04 §4.4].
+// AtanPort computes engine port 14's read [04 §4.4] C15: the low sixteen bits
+// of the rounded angle. Ports 12 and 14 are the only port arithmetic that
+// rounds; everything else, port 15's hypotenuse included, truncates toward
+// zero [04 §4.4].
 func AtanPort(first, second int32) uint16 {
 	// Port 14 evaluates atan2(first, second), with no heading subtraction
 	// [R-COB-03 §2]. Keep that order explicit at the shared helper boundary.
 	return numeric.AngleFromAtan2(int64(first), int64(second)).Raw()
-}
-func HypotPort(a, b int32) int32 {
-	return int32(math.Hypot(float64(a), float64(b))) // trunc [01 §8] I3
 }
 
 // BuildPercentLeft computes port 17 read [04 §4.4] C15: from remaining-build

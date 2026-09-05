@@ -277,10 +277,6 @@ func tokenizeScript(s string) []string {
 	return tokens
 }
 
-func isLetter(b byte) bool {
-	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
-}
-
 // dispatchToken keys on leading letter, effectively case-insensitive [04 §3.6],
 // with the uppercase-W quirk [04 §3.6] C11.
 func dispatchToken(token string, ctx *interpCtx) {
@@ -437,18 +433,6 @@ func (ctx *interpCtx) lookupIdentOrUnitName(name string) int {
 		return idx
 	}
 	return -1
-}
-
-func (ctx *interpCtx) targetHandleForName(name string) (handle int, found bool) {
-	idx := ctx.lookupIdentOrUnitName(name)
-	if idx < 0 || idx >= len(ctx.createdSparse) {
-		return 0, false
-	}
-	u := ctx.createdSparse[idx]
-	if u == nil {
-		return 0, false
-	}
-	return int(u.Handle), true
 }
 
 // sparseUnit returns the unit for sparse placement index or nil.

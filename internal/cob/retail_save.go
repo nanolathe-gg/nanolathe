@@ -159,7 +159,7 @@ func encodeRetailThreadStatus(status int) (uint32, error) {
 	case ThreadWaitCall:
 		return 0x02800000, nil
 	default:
-		return 0, fmt.Errorf("unknown logical status %d", status)
+		return 0, fmt.Errorf("cob: unknown logical status %d", status)
 	}
 }
 

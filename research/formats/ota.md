@@ -117,8 +117,8 @@ terrain, so readers can ignore it.
 | `lavaworld` | `1` = "water" is lava (affects effects/pathing visuals) |
 | `waterdoesdamage`, `waterdamage` | Acid water: flag and damage rate |
 | `nosealeveltrigger` | Non-zero makes water opaque to projectiles and debris: the submerged-impact and debris-water tests return early [06 §8.2], [04 R-COB-04 §2]. Unrelated to the sea level value, which has no OTA key [02 R-MAP-01 §3] |
-| `killmul` | Kill score multiplier, default `0.0`. Parsed to a float and read by the end-of-battle score helper — `Score += __ftol(Kills × killmul)`, truncated separately from the time term [08 R-CAMP-01 §7]. Correction, `[08 R-CAMP-01 §11]`: this row previously read "Nominally a kill score multiplier. Parsed to a float and **inert** (reader census: none) [02 R-MAP-01 §3]"; that census missed the score helper. |
-| `timemul` | Time score multiplier, default `0.0`; three retail campaign maps author `-1`. Parsed to a float and read by the same score helper — `Score += __ftol(float(int64(tick/60 unsigned)) × timemul)`, truncated separately from the kill term [08 R-CAMP-01 §7]. Correction, `[08 R-CAMP-01 §11]`: this row previously read "Nominally a time score multiplier; three retail campaign maps author `-1`. Parsed to a float and **inert** (reader census: none) [02 R-MAP-01 §3]"; that census missed the score helper. |
+| `killmul` | Kill score multiplier, default `0.0`. Parsed to a float and read by the end-of-battle score helper — `Score += __ftol(Kills × killmul)`, truncated separately from the time term [08 R-CAMP-01 §7], [08 R-CAMP-01 §11]. It is not inert: the doc-02 reader census that reported it so missed the score helper. |
+| `timemul` | Time score multiplier, default `0.0`; three retail campaign maps author `-1`. Parsed to a float and read by the same score helper — `Score += __ftol(float(int64(tick/60 unsigned)) × timemul)`, truncated separately from the kill term [08 R-CAMP-01 §7], [08 R-CAMP-01 §11]. It is not inert: the doc-02 reader census that reported it so missed the score helper. |
 | `minwindspeed`, `maxwindspeed` | Wind energy range (wind generators). Any non-negative value is used as authored, including 0; the engine's 100/2000 fallbacks apply only to a negative value or a legacy (`0x1020`) terrain file [02 R-MAP-01 §6]. Every retail map authors both |
 | `gravity` | Gravity for ballistic weapons, converted as `trunc(g × 65536 / 900)` to 16.16 world units per tick². Every retail map authors it; 192 of 275 use `112`. The executable's built-in `0x1FDB` (= the conversion of 112) is used only for a **negative** authored value or a legacy terrain file; an *omitted* key reads as 0 and yields gravity 0 [02 R-MAP-01 §6]. |
 | `numplayers` | Recommended player counts, comma list (`2, 4, 6, 8, 10`). Stored as a string and **inert** (reader census: none); the lobby derives its count from the `[specials]` census [02 R-MAP-01 §3] |
@@ -139,7 +139,7 @@ terrain, so readers can ignore it.
 | `MohoMetal` | Nominally the extraction concentration for moho mines. Authored by all 275 retail maps and **inert**: only `SurfaceMetal` scales extraction, and a moho mine's advantage is its own larger `ExtractsMetal`. |
 | `HumanMetal`, `HumanEnergy` | Player starting resources |
 | `ComputerMetal`, `ComputerEnergy` | AI starting resources |
-| `MeteorWeapon`, `MeteorRadius`, `MeteorDensity`, `MeteorDuration`, `MeteorInterval` | Meteor storms (weapon name from [tdf.md](tdf.md); defaults in `gamedata/METEOR.TDF`). **Enable rule (correction 2026-08-26):** only an empty `MeteorWeapon` disables the shower. Zero radius/density/duration/interval do NOT disable — they substitute all five values from the `[Default]` record and the shower stays enabled. An earlier reading in this document ("disabled when the radius, density, duration, or interval is zero") was wrong. A map authoring nonzero parameters with no weapon key is disabled with its parameters discarded. |
+| `MeteorWeapon`, `MeteorRadius`, `MeteorDensity`, `MeteorDuration`, `MeteorInterval` | Meteor storms (weapon name from [tdf.md](tdf.md); defaults in `gamedata/METEOR.TDF`). **Enable rule:** only an empty `MeteorWeapon` disables the shower. Zero radius/density/duration/interval do NOT disable — they substitute all five values from the `[Default]` record and the shower stays enabled. A map authoring nonzero parameters with no weapon key is disabled with its parameters discarded. |
 
 ### Mission end conditions
 
@@ -177,11 +177,9 @@ type name containing a digit is truncated at the digit and never matches;
 `BuildUnitType=ARMSY, 1;` matches nothing. Win means every victory key
 holds at once (AND); lose means any defeat key holds (OR). Only campaign
 sessions read these keys; a skirmish on a map that authors them builds the
-records but never polls them [08 R-TRIG-01 §1]. (**Correction 2026-08-29:**
-the previous table's "Meaning" column, which called `CommanderKilled` "ends
-when the enemy commander dies" and `AllUnitsKilled` "ends when all enemy
-units are dead", had the sides reversed, and the earlier "win-vs-lose is
-campaign-context behavior" caveat is withdrawn.)
+records but never polls them [08 R-TRIG-01 §1]. Note which side each defeat
+key watches: `CommanderKilled` and `AllUnitsKilled` are about the **player's**
+units, not the enemy's.
 
 `AllUnitsKilled=1;` occurs in **every one** of the 176 retail campaign
 missions: it is the universal loss condition.
@@ -281,7 +279,7 @@ list completes. Commands:
 | `w SECONDS` | Wait (fractions allowed: `w 0.5`) |
 | `wa` | Wait until attacked |
 | `wa IDENT` | Wait until the unit with that Ident is attacked |
-| `b UNITTYPE X Y` | (Mobile builders) build a unit/building at X Y. **Ground builders only** — retail never issues `b` to a construction aircraft, and a retail capture (2026-08-20) confirmed an ARMCA silently skips it: the preceding `m` executed, the `b` did nothing. See `probes/retail-reference/air-constructor`. |
+| `b UNITTYPE X Y` | (Mobile builders) build a unit/building at X Y. **Ground builders only** — retail never issues `b` to a construction aircraft, and a retail capture confirms an ARMCA silently skips it: the preceding `m` executed, the `b` did nothing. See `probes/retail-reference/air-constructor`. |
 | `b UNITTYPE N` | (Factories) build N units of the type |
 | `i TRANSPORT` | Board the named transport (type or Ident) |
 | `u X Y` | (Transports) unload most recent cargo at X Y |
@@ -343,9 +341,8 @@ file!`, `Old TED format no longer supported!`, and `Hey, joker!  Mission file
   suppresses is doc 07/08 territory [02 R-MAP-01 §3].
 - The exact `Angle` → facing mapping (degrees, 0 = which direction,
   rotation sense) is unconfirmed.
-- (Withdrawn 2026-08-29.) This list previously said "the engine appears to
-  read several environment keys at either level"; it does not — each key is
-  read from exactly one section, see "Which keys the engine reads" above.
+- No environment key is read at both levels: each is read from exactly one
+  section, see "Which keys the engine reads" above.
 - `Ident` scoping rules (uniqueness, forward references) are inferred from
   examples only.
 - Malformed-input outcomes for an OTA (syntax error fatal, missing

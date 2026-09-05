@@ -1,4 +1,13 @@
-// Package mission inventories mission-global keys and optional-media fallback [P1-02].
+// Package mission loads a campaign and its missions: campaign discovery and
+// progression, the four mission kinds and their dispatch, schema selection,
+// placement decoding, the InitialMission interpreter, and the mission-global
+// state block [08 "Mission type dispatch"] [08 "Campaign discovery"]
+// [04 §3.6] [02 "Mission-file diagnostics"].
+//
+// It produces the immutable Mission record a session enters battle with; it
+// runs no ticks of its own.
+//
+// This file: mission-global keys and the optional-media fallback [P1-02].
 //
 // The census models the retail mission-state block: a per-mission singleton of
 // typed slots plus an extended string region read back by tick-time consumers,
@@ -355,9 +364,4 @@ func MediaFatal(key string) FatalKind {
 		}
 		return FatalKindDegrade
 	}
-}
-
-// IsOptionalMediaNotFatal reports true when missing media degrades rather than aborts [P1-02 §2.2].
-func IsOptionalMediaNotFatal(logical string) bool {
-	return MediaFatal(logical) != FatalKindFatal
 }

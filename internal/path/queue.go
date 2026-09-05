@@ -70,11 +70,15 @@ type mutableCandidateProvider interface {
 	HasRequest(unit pool.Handle) bool
 }
 
+// PollResult is what one poll of a player's candidate provider produced.
 type PollResult uint8
 
 const (
+	// PollNoUnit means the player has no candidate to offer this visit.
 	PollNoUnit PollResult = iota
+	// PollVisited means a candidate was inspected but wanted no route.
 	PollVisited
+	// PollRequest means the accompanying request is ready to search.
 	PollRequest
 )
 
@@ -164,6 +168,9 @@ type SchedulerTraceState struct {
 	Requests      []RequestTrace
 }
 
+// TraceState returns a copy of the scheduler's diagnostic state. It is empty
+// unless EnableTrace has been called and it is read by diagnostics only; the
+// scheduler's behaviour does not depend on it.
 func (s *Scheduler) TraceState() SchedulerTraceState {
 	var out SchedulerTraceState
 	if s == nil {

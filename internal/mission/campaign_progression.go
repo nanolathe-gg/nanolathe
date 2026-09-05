@@ -39,16 +39,6 @@ func NextCampaignMission(fs vfs.FSOps, campaignPath string, curIdx int) (int, bo
 	return 0, false, nil
 }
 
-// IsCampaignComplete reports whether curIdx is the last mission in the campaign.
-// It uses the same lossless discovery as NextCampaignMission [08 "Campaign discovery"].
-func IsCampaignComplete(fs vfs.FSOps, campaignPath string, curIdx int) (bool, error) {
-	_, ok, err := NextCampaignMission(fs, campaignPath, curIdx)
-	if err != nil {
-		return false, err
-	}
-	return !ok, nil
-}
-
 // CampaignMissionCount returns the number of contiguous missions in campaignPath.
 // Lossless parse with provenance [fmt tdf] [08 "Campaign discovery"].
 func CampaignMissionCount(fs vfs.FSOps, campaignPath string) (int, error) {

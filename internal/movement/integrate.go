@@ -26,7 +26,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/model"
-
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -159,6 +158,8 @@ type pathProvider struct {
 	limit    int32
 }
 
+// CancelPathRequest withdraws h's outstanding route request and drops any
+// partial search it owned. It reports whether a request was found.
 func (s *System) CancelPathRequest(h pool.Handle) bool {
 	if s == nil || s.Scheduler == nil {
 		return false
@@ -169,6 +170,10 @@ func (s *System) CancelPathRequest(h pool.Handle) bool {
 	}
 	return canceled
 }
+
+// HasPathRequest reports whether h has a route request the scheduler has not
+// finished. The follower's per-tick service returns at this gate rather than
+// re-submitting [04 R-MOV-01 §7].
 func (s *System) HasPathRequest(h pool.Handle) bool {
 	if s == nil || s.Scheduler == nil {
 		return false
@@ -227,7 +232,6 @@ func (p *pathProvider) Submit(r path.Request) {
 	if int(r.Player) >= len(p.requests) {
 		return
 	}
-	q := p.requests[r.Player]
 	for player := range p.requests {
 		for i := range p.requests[player] {
 			if p.requests[player][i].Unit == r.Unit {
@@ -236,9 +240,7 @@ func (p *pathProvider) Submit(r path.Request) {
 			}
 		}
 	}
-	q = p.requests[r.Player]
-	q = append(q, r)
-	p.requests[r.Player] = q
+	p.requests[r.Player] = append(p.requests[r.Player], r)
 }
 func (p *pathProvider) Cancel(unit pool.Handle) bool {
 	for player := range p.requests {
@@ -307,6 +309,10 @@ const (
 	arrivalGateMask     uint32 = 0xE0 // gate mask armed by the handler's phase-0 gate arm [R-P0-01]
 )
 
+// PathFailure is the last unsuccessful search outcome recorded for a unit: the
+// status the search terminated with and the tick it did so on. It is
+// diagnostic state; the mover's own blocked and empty-route bits are the
+// authoritative ones [04 R-COLL-01 §5] [04 R-COLL-01 §6].
 type PathFailure struct {
 	Status path.Status
 	Tick   uint32
@@ -1011,16 +1017,6 @@ const maxUint64 = ^uint64(0)
 const maxInt64 = int64(^uint64(0) >> 1)
 const minInt64 = -maxInt64 - 1
 
-func addSignedSaturating(a, b int64) int64 {
-	if b > 0 && a > maxInt64-b {
-		return maxInt64
-	}
-	if b < 0 && a < minInt64-b {
-		return minInt64
-	}
-	return a + b
-}
-
 // absDiffUnsigned computes |a-b| without overflowing signed subtraction.
 func absDiffUnsigned(a, b int64) uint64 {
 	if a >= b {
@@ -1367,6 +1363,7 @@ func (s *System) recordPathFailure(h pool.Handle, status path.Status, tick uint3
 	s.pathFailures[h] = PathFailure{Status: status, Tick: tick}
 }
 
+// HasPathFailure reports whether a failure record stands for h.
 func (s *System) HasPathFailure(h pool.Handle) bool {
 	if s == nil || s.pathFailures == nil {
 		return false
@@ -1375,6 +1372,8 @@ func (s *System) HasPathFailure(h pool.Handle) bool {
 	return ok
 }
 
+// PathFailure returns h's recorded failure status and the tick it was
+// recorded on.
 func (s *System) PathFailure(h pool.Handle) (path.Status, uint32, bool) {
 	if s == nil || s.pathFailures == nil {
 		return 0, 0, false
@@ -1386,6 +1385,7 @@ func (s *System) PathFailure(h pool.Handle) (path.Status, uint32, bool) {
 	return rec.Status, rec.Tick, true
 }
 
+// PathFailureRecord returns h's failure record whole.
 func (s *System) PathFailureRecord(h pool.Handle) (PathFailure, bool) {
 	if s == nil || s.pathFailures == nil {
 		return PathFailure{}, false
@@ -1394,6 +1394,7 @@ func (s *System) PathFailureRecord(h pool.Handle) (PathFailure, bool) {
 	return rec, ok
 }
 
+// ClearPathFailure drops h's failure record.
 func (s *System) ClearPathFailure(h pool.Handle) {
 	if s == nil || s.pathFailures == nil {
 		return
@@ -1401,6 +1402,9 @@ func (s *System) ClearPathFailure(h pool.Handle) {
 	delete(s.pathFailures, h)
 }
 
+// IsGoalCellPassable reports whether h's movement profile admits cell as a
+// footprint anchor. With no terrain bound it admits everything, which is what
+// a fixture without a world gets.
 func (s *System) IsGoalCellPassable(h pool.Handle, cell path.Cell) bool {
 	if s == nil {
 		return true
@@ -2535,7 +2539,7 @@ func (s *System) publishFunc(r path.Request, points []path.Point, status path.St
 	}
 	mPoints := make([]Point, len(points))
 	for i, p := range points {
-		mPoints[i] = Point{X: p.X, Z: p.Z}
+		mPoints[i] = Point(p)
 	}
 	revision := s.staticObstacleRevision()
 	if s.world != nil {
@@ -2672,7 +2676,14 @@ func (s *System) BeginTick(tick uint32) {
 	s.tickStarted = true
 	// Deterministic cargo indexing [I1][04 §10.2]: player 0..9 asc then slot asc
 	// via IterSliced yields that order [P0-16]. Build once; StepUnit consumes.
-	s.tickCarried = make(map[pool.Handle]struct{}, 8)
+	// The carried set is per-tick, but the map itself is not: clearing keeps
+	// the buckets and spares one allocation every tick. An empty map answers
+	// every read exactly as the nil map the tick used to start from.
+	if s.tickCarried == nil {
+		s.tickCarried = make(map[pool.Handle]struct{}, 8)
+	} else {
+		clear(s.tickCarried)
+	}
 	w := s.world
 	if w != nil {
 		for _, u := range w.IterSliced() {
@@ -2687,7 +2698,7 @@ func (s *System) BeginTick(tick uint32) {
 	// The target registry's third list, on its own cadence — the call is made
 	// every tick and Rebuild itself applies the 30-tick throttle, so the
 	// snapshot lands on a tick boundary [06 §3.1][04 R-AIR-01 §11].
-	if w != nil {
+	if w != nil && s.airBases.RebuildDue(tick) {
 		s.airBases.Rebuild(tick, w.Iter(), s.diplomacyRows())
 	}
 }
@@ -2747,7 +2758,7 @@ func (s *System) EndTick(tick uint32) {
 		s.SyncCarriedMotion(w) // [04 §10.2] cargo slaved to carrier, no occupancy stamp
 	}
 	s.recordCollisionHistory(tick)
-	s.tickCarried = nil
+	clear(s.tickCarried)
 	s.tickStarted = false
 }
 
@@ -2934,8 +2945,8 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	var wpWorldX, wpWorldZ numeric.Fixed
 	var dx, dz int64
 	if brakingOnly {
-		wpWorldX = u.X
-		wpWorldZ = u.Z
+		// A braking mover has no waypoint delta: dx and dz stay zero and the
+		// world-space waypoint is never read on this arm [04 R-MOV-01 §3].
 		wp = Point{X: int32(int64(u.X) >> 16), Z: int32(int64(u.Z) >> 16)}
 	} else if directGoal {
 		wpWorldX = directX
@@ -3163,54 +3174,6 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// EmptyRoute reports route absence at entry. A ground mover brakes while
 	// waiting for the follower's next eligible request [04 R-MOV-01 §3][§7].
 	return StepResult{Handle: handle, DistToGoal: d2, HasRoute: hasRouteAfter, EmptyRoute: !hadRoute, Moved: moved, Blocked: blocked, Arrived: arrived}
-}
-
-// IntegrateFlight is the can-fly branch wrapper [04 §10.1] C26–C30.
-func IntegrateFlightForUnit(u *units.Unit, w *world.Terrain) {
-	if u == nil || w == nil {
-		return
-	}
-	// Transient flight state from unit def
-	f := &FlightState{
-		Mode:         2,
-		X:            int32(u.X.Raw()),
-		Y:            int32(u.Y.Raw()),
-		Z:            int32(u.Z.Raw()),
-		Speed:        0,
-		Heading:      0,
-		MaxVelocity:  int32(u.Def.MaxVelocity),
-		Acceleration: int32(u.Def.Acceleration),
-		BrakeRate:    int32(u.Def.BrakeRate),
-		TurnRate:     int32(u.Def.TurnRate),
-		TargetY:      int32(u.Y.Raw()),
-	}
-	if f.MaxVelocity == 0 {
-		f.MaxVelocity = 65536
-	}
-	if f.Acceleration == 0 {
-		f.Acceleration = 16384
-	}
-	// Drive toward order goal if present
-	q := orders.QueueForUnit(u)
-	if q != nil && q.LenPrimary() > 0 {
-		head := q.Primary()[0]
-		if head != nil {
-			dx := int64(head.GoalX) - int64(u.X)
-			dz := int64(head.GoalZ) - int64(u.Z)
-			if dx != 0 || dz != 0 {
-				f.TargetX = int32(head.GoalX.Raw())
-				f.TargetZ = int32(head.GoalZ.Raw())
-				// This wrapper is an isolated flight fixture; keep the same
-				// self-minus-target operand order as the live flight producer
-				// [04 R-AIR-01 §1].
-				f.TargetHeading = numeric.AngleFromAtan2(-dx, -dz).Raw()
-			}
-		}
-	}
-	IntegrateFlight(f)
-	u.X = numeric.Fixed(int64(f.X))
-	u.Y = numeric.Fixed(int64(f.Y))
-	u.Z = numeric.Fixed(int64(f.Z))
 }
 
 // gridOccupancy adapts the mover occupancy lattice to the placement

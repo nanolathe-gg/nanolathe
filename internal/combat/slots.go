@@ -9,8 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // NumSlots is the fixed retail slot count [06 §1.2].
@@ -66,10 +64,6 @@ type Slot struct {
 	// DesiredPitch is the desired pitch, TA angle units [06 §1.2] P0-10.
 	DesiredPitch uint16
 
-	// AutoTarget is the automatic-targeting enable bit [06 §1.2] (I13).
-	// Retained for compat; maps to Flags & FlagTracking.
-	AutoTarget bool // [06 §1.2] (I13) -> Flags 0x10
-
 	// Aim is the asynchronous Aim handshake for this slot [GAP T15] C9/C16 [06 §3.3] (I13).
 	// Aim.IssueBit mirrors Flags & 0x01 latch; Aim.Ready granted only on nonzero return [GAP T15] C9/C16.
 	Aim cob.AimSlot // [GAP T15] C9 [06 §3.3] (I13)
@@ -98,110 +92,6 @@ type Slot struct {
 	PendingReload int32 // [06 §4.2] (I13)
 }
 
-// IsArmed reports whether the slot has the armed/hasTarget flag 0x02 [06 §1.2] P0-10.
-func (s *Slot) IsArmed() bool { return s != nil && s.Flags&FlagArmed != 0 }
-
-// IsTracking reports the tracking flag 0x10 [06 §1.2] P0-10.
-func (s *Slot) IsTracking() bool { return s != nil && s.Flags&FlagTracking != 0 }
-
-// LatchUnitTarget installs a unit target preserving the Aim latch and stale yaw/pitch [06 §1.2] P0-10.
-// Every latch writer preserves 0x01 (no AND 0xFE); replacement while Aim outstanding keeps stale yaw for one shot.
-func (s *Slot) LatchUnitTarget(handle pool.Handle) {
-	if s == nil {
-		return
-	}
-	savedYaw := s.DesiredYaw
-	savedPitch := s.DesiredPitch
-	savedIssue := s.Aim.IssueBit
-	savedReady := s.Aim.Ready
-	savedFlags := s.Flags & FlagAimLatch
-	s.Target = Target{Kind: TargetUnit, Unit: handle}
-	s.Flags |= FlagArmed
-	// Preserve latch and stale angles [06 §1.2] P0-10
-	s.DesiredYaw = savedYaw
-	s.DesiredPitch = savedPitch
-	s.Aim.IssueBit = savedIssue
-	s.Aim.Ready = savedReady
-	s.Flags |= savedFlags
-	if s.AutoTarget {
-		s.Flags |= FlagTracking
-	}
-}
-
-// InstallUnitTarget installs a unit target by pool handle preserving Aim latch [06 §1.2] P0-10.
-func (s *Slot) InstallUnitTarget(h pool.Handle) {
-	if s == nil {
-		return
-	}
-	savedYaw := s.DesiredYaw
-	savedPitch := s.DesiredPitch
-	savedIssue := s.Aim.IssueBit
-	savedReady := s.Aim.Ready
-	savedFlags := s.Flags & FlagAimLatch
-	s.Target = Target{Kind: TargetUnit, Unit: h}
-	s.Flags |= FlagArmed
-	s.DesiredYaw = savedYaw
-	s.DesiredPitch = savedPitch
-	s.Aim.IssueBit = savedIssue
-	s.Aim.Ready = savedReady
-	s.Flags |= savedFlags
-}
-
-// SetTargetUnit installs a unit target preserving Aim latch and yaw/pitch [06 §1.2] P0-10.
-// The unit-latch encoding is the target-mode sentinel value -0x8000 [06 §1.2].
-func (s *Slot) SetTargetUnit(handle pool.Handle) {
-	if s == nil {
-		return
-	}
-	savedYaw := s.DesiredYaw
-	savedPitch := s.DesiredPitch
-	savedIssue := s.Aim.IssueBit
-	savedReady := s.Aim.Ready
-	savedLatch := s.Flags & FlagAimLatch
-	s.Target = Target{Kind: TargetUnit, Unit: handle}
-	s.Flags |= FlagArmed
-	s.Aim.IssueBit = savedIssue
-	s.Aim.Ready = savedReady
-	s.Flags = (s.Flags &^ FlagAimLatch) | savedLatch
-	s.DesiredYaw = savedYaw
-	s.DesiredPitch = savedPitch
-}
-
-// SetTargetGround installs a ground point target preserving Aim latch [06 §1.2] P0-10.
-// Ground encoding: world x/z words, distinct from the unit-latch sentinel [06 §1.2].
-func (s *Slot) SetTargetGround(x, z numeric.Fixed) {
-	if s == nil {
-		return
-	}
-	savedYaw := s.DesiredYaw
-	savedPitch := s.DesiredPitch
-	savedIssue := s.Aim.IssueBit
-	savedReady := s.Aim.Ready
-	savedLatch := s.Flags & FlagAimLatch
-	s.Target = Target{Kind: TargetPoint, X: x, Z: z}
-	s.Flags |= FlagArmed
-	s.Aim.IssueBit = savedIssue
-	s.Aim.Ready = savedReady
-	s.Flags = (s.Flags &^ FlagAimLatch) | savedLatch
-	s.DesiredYaw = savedYaw
-	s.DesiredPitch = savedPitch
-}
-
-// ClearStaleTarget clears the target and Aim latch on stale/dead resolution [06 §1.2] P0-10.
-// The target-point resolver rewrites a unit target's slot words to the empty
-// encoding and starts the deferred TargetCleared callback whenever the
-// target's definition index has gone to zero (a freed slot) [06 R-WPN-04 §1].
-func (s *Slot) ClearStaleTarget() {
-	if s == nil {
-		return
-	}
-	s.Target = Target{Kind: TargetNone}
-	s.Aim.IssueBit = false
-	s.Aim.Ready = false
-	s.Flags &^= FlagAimLatch
-	// The armed flag 0x02 is cleared separately, on the STOP order path, not here [06 §1.2]; stale resolution only clears the target words and Aim latch.
-}
-
 // DecrementReload decrements a nonzero reload countdown before target resolve [06 §4.1] C1.
 // Returns true if a decrement occurred.
 // Order: this is the first step of the per-slot pipeline per [06 §4.1] (I10).
@@ -224,17 +114,6 @@ func (s *Slot) IsAimReady() bool {
 		return false
 	}
 	return s.Aim.CanFire() // [GAP T15] C9/C16: Ready only on nonzero return, no timeout P0-10
-}
-
-// StartAim arms the Aim-request latch for an Aim* dispatch [GAP T15] [06 §3.3] C9.
-// Caller must have cleared prior aim state and stored commanded angles before this call [04 §5.3].
-// The latch is set immediately after the Aim callback is dispatched [06 §3.3] P0-10.
-func (s *Slot) StartAim() {
-	if s == nil {
-		return
-	}
-	s.Aim.StartAim() // [GAP T15] sets IssueBit, Ready stays false until completion receiver [06 §3.3] P0-10
-	s.Flags |= FlagAimLatch
 }
 
 // CompleteAim is the Aim* completion receiver for this slot [GAP T15] C16/C9 [06 §3.3].
@@ -286,15 +165,6 @@ func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 	// [06 §3.3]. The fifth rung — a weapon matching no executor flag, which
 	// "can never fire" — is not a readiness question and is not decided here.
 	return false, false
-}
-
-// RequiresAim reports whether this slot's weapon family requires an aim result per [06 §3.3].
-func (s *Slot) RequiresAim() bool {
-	if s == nil {
-		return false
-	}
-	_, needResult := aimRequirement(s.Weapon)
-	return needResult
 }
 
 // ComputeStoredReload implements the integer-truncated reload computation [06 §4.2] C7 (I3) [01 §8].
@@ -515,9 +385,6 @@ func TickSlot(slot *Slot, idx int, tick uint32, spy *PipelineSpy, env PipelineEn
 	if needLatch && !slot.Aim.IssueBit {
 		// A turret whose issue latch was cleared (e.g. by TargetCleared)
 		// cannot fire even with a stale ready result [06 §3.3] P0-10.
-		if spy != nil && needResult == false {
-			// Still record AimDispatch? Already handled above for needResult case.
-		}
 		return false
 	}
 

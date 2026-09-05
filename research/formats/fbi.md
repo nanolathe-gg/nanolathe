@@ -75,10 +75,12 @@ These occur in the shipped FBIs and have no matching string anywhere in the
 executable, so nothing can consume them. Preserve them when round-tripping; do
 not give them behavior.
 
-**Correction (2026-08-29).** An earlier version placed the language-prefixed
-`Name` and `Description` keys in this table. That placement was wrong: the
-language-prefixed accessor reads and honors them, as recorded in the Identity
-table below.
+The language-prefixed `Name` and `Description` keys do not belong in this
+table even though no literal `GermanName`-style string exists in the image: the
+accessor builds the key at runtime from the configured language name, so the
+whole-string census cannot see them and the engine honors them, as recorded in
+the Identity table below. That covers the retail joke keys too —
+`JapaneseName`, `PigLatinName` and `PigLatinDescription`, one unit each.
 
 | Key | Retail units authoring it | Notes |
 | --- | ---: | --- |
@@ -93,7 +95,6 @@ table below.
 | `Scale` | 28 | — |
 | `AltFromSeaLevel` | 8 | `CruiseAlt` is the only altitude key read. |
 | `TransportMaxUnits`, `TransMaxUnits` | 3, 1 | `TransportCapacity` and `TransportSize` are the read pair. |
-| `JapaneseName`, `PigLatinName`, `PigLatinDescription` | 1 each | Jokes. |
 
 `ArmorCategory` (and its `ArmorCategorie`/`ArmorCategories` variants), `Hover`,
 `MetalUse` and `CanRepair` are third-party spellings: no shipped unit authors
@@ -131,7 +132,7 @@ what it doesn't know.
 | `Name` | Display name |
 | `Description` | Selection/tooltip description |
 | `Copyright` | **Read by the catalog loader** (string accessor, 128 bytes): after the four characters at the year position are overwritten with `0000` the value must equal `Copyright 0000 Humongous Entertainment. All rights reserved.` byte for byte; a unit that fails is dropped from the catalog **silently** (and the same flag suppresses the `Incompatible units` box for that pass). The lore that units without the line fail to load is established, with the mechanism (`[02 R-MALF-01 §5]`). |
-| `GermanName`, `FrenchDescription`, `SpanishName`, `ItalianDescription`, `JapaneseName`, `PigLatinName`, … | Localized `Name`/`Description` variants — the pattern is the language name directly followed by `Name` or `Description`. **The engine honors them** via the language-prefixed accessor (see the correction above). |
+| `GermanName`, `FrenchDescription`, `SpanishName`, `ItalianDescription`, `JapaneseName`, `PigLatinName`, … | Localized `Name`/`Description` variants — the pattern is the language name directly followed by `Name` or `Description`. **The engine honors them** via the language-prefixed accessor, which builds the key from the configured language name (see the note above the inert-key table). |
 | `TEDClass` | Editor classification: `TANK`, `KBOT`, `PLANT`, `VTOL`, `WATER`, `SPECIAL`, `FORT`, `METAL`, `ENERGY`, `COMMANDER`, `CNSTR` … The engine cannot read it, so it drives the map editor only, never AI or gameplay. |
 | `Category` | Space-separated tag list (e.g. `ARM TANK LEVEL1 WEAPON NOTAIR NOTSUB`). Tags are matched by the per-slot `wpri_`/`wsec_`/`wspe_BadTargetCategory`, by `NoChaseCategory`, and by AI text files; tags need no central declaration. |
 | `Downloadable` | Appears on add-on units. The engine reads it and carries the diagnostic `Hey!  Somebody forgot to set downloadable=1 for %s`, so it gates whether an add-on unit is accepted. |
@@ -151,13 +152,11 @@ what it doesn't know.
 | `ActivateWhenBuilt` | Unit starts activated |
 | `norestrict` | Excluded from the multiplayer unit-restriction list |
 
-**Correction (2026-08-28).** The previous entry described `BuildAngle` as a
-random yaw span around the requested build facing and left its sampling
-formula provisional. That implied a caller-facing-centered placement adjustment
-and was incomplete: the field is the unsigned bound consumed by the common
-unit-initialization sampler. The runtime heading arithmetic and lifecycle belong
-to [04 §2.3b], while this format entry records only the field's authored type
-and interpretation. `Ovradjust` remains **Unknown**; no overlap, heading, or
+`BuildAngle` is the unsigned bound consumed by the common unit-initialization
+sampler — not a random yaw span around the requested build facing, the reading
+community notes give it. The runtime heading arithmetic and lifecycle belong to
+[04 §2.3b]; this format entry records only the field's authored type and
+interpretation. `Ovradjust` remains **Unknown**; no overlap, heading, or
 geometry behavior is assigned to it.
 
 #### YardMap
@@ -304,38 +303,33 @@ removes its shading entirely. See
 | `ThreeD` | Always `1`; the engine has no string for it. |
 | `SoundCategory` | Category in `gamedata/SOUND.TDF` |
 | `Corpse` | Feature left on death ([tdf.md](tdf.md)); chained via the feature's `featuredead` |
-| `ai_limit`, `ai_weight` | AI directives stored as raw text. **Split (2026-08-26):** `ai_weight` IS consumed — the strategic-AI pass parses its text with the profile grammar; `weight` directives reach the live per-unit-type weight array (default 100, clamped to 0..100) that scales build-candidate scores, and embedded `limit` directives are registered too. `ai_limit` has NO runtime reader — the live per-type limit array is populated only by the `ai/` profile parser's `limit` token, never by this key; do not treat `ai_limit` as the source of the retail candidate limit. |
+| `ai_limit`, `ai_weight` | AI directives stored as raw text. The two keys differ: `ai_weight` IS consumed — the strategic-AI pass parses its text with the profile grammar; `weight` directives reach the live per-unit-type weight array (default 100, clamped to 0..100) that scales build-candidate scores, and embedded `limit` directives are registered too. `ai_limit` has NO runtime reader — the live per-type limit array is populated only by the `ai/` profile parser's `limit` token, never by this key; do not treat `ai_limit` as the source of the retail candidate limit. |
 | `Ovradjust` | Authored as `1` on 173 retail units. No runtime reader was found in the bounded census, so its semantics remain **Unknown**; the field is retained as authored data and no overlap, heading, or geometry behavior is assigned. |
-| `sortbias` | Parsed into a signed 16-bit field and **never read** — reader census: none [04 R-SPEC-01 §7]. **Correction (2026-08-29, RWU-02-1):** this row previously said "Read by the engine; effect unconfirmed"; the census settles it as inert. |
+| `sortbias` | Parsed into a signed 16-bit field and **never read** — reader census: none [04 R-SPEC-01 §7]. The census settles it as inert. |
 | `armoredstate` | Read by the engine and authored by no shipped unit: the starting value of the armored flag that `DamageModifier` scales. |
 | `wacky` | Read by the engine and authored by no shipped unit. Purpose unresolved. |
 
 ## Unknowns and caveats
 
 - Default values when a key is absent are engine-internal and undocumented;
-  do not assume 0 for everything. **Correction (2026-08-29, RWU-04-7):** the
-  example this bullet used to carry, "`ShootMe` behaves as 1 by default", was
-  wrong — the unit-definition parser reads `ShootMe` with a default of **0**,
-  and a definition that omits it is never picked by a human player's
-  autonomous target search ([04 R-SPEC-01 §5]). Stock definitions author
-  `ShootMe=1` explicitly, which is why the absence was never observed.
-- **Closed for the movement keys (2026-08-28, RWU-04-1).** The earlier text
-  read "Units/scales for `MaxVelocity`, `Acceleration`, `BuildTime`,
-  `WorkerTime` are relative engine ticks; exact per-tick math is still being
-  established by observation". That was wrong to defer to observation for the
-  first two: the accessor settles them statically. `MaxVelocity`,
-  `Acceleration`, `BrakeRate`, `MoveRate1` and `MoveRate2` all take the
-  fixed-point accessor and are consumed verbatim as 16.16 world units per tick
-  (or per tick squared) with no runtime rescaling, and `TurnRate` takes the
-  integer accessor on the 65,536-per-circle scale — see the Movement rows
-  above and [04 §8.1 R-MOV-01 §1]. `BuildTime` and `WorkerTime` are not
-  covered by that closure and remain open (doc 05).
+  do not assume 0 for everything, and do not assume the value stock files
+  author. `ShootMe`, for example, is read with a default of **0**, so a
+  definition that omits it is never picked by a human player's autonomous
+  target search ([04 R-SPEC-01 §5]); stock definitions all author `ShootMe=1`
+  explicitly, which is why the absent case is easy to miss.
+- **Movement key units and scales — settled by the accessors, not by
+  observation.** `MaxVelocity`, `Acceleration`, `BrakeRate`, `MoveRate1` and
+  `MoveRate2` all take the fixed-point accessor and are consumed verbatim as
+  16.16 world units per tick (or per tick squared) with no runtime rescaling,
+  and `TurnRate` takes the integer accessor on the 65,536-per-circle scale —
+  see the Movement rows above and [04 §8.1 R-MOV-01 §1]. `BuildTime` and
+  `WorkerTime` are not settled that way and remain open (doc 05).
 - Several flags above carry community-guessed semantics (`BMcode`,
-  `PitchScale`, `Ovradjust`); `sortbias` no longer does — it is inert by
-  reader census [04 R-SPEC-01 §7]. The complete key → consumer table for
-  every FBI key the executable reads is `[02 R-KEYS-01 §5]`. `MoveRate1`/`MoveRate2` are no
-  longer among them: their accessor, defaults and classifier are established
-  in the Movement table above. `BuildAngle`
+  `PitchScale`, `Ovradjust`); `sortbias` does not — it is inert by reader
+  census [04 R-SPEC-01 §7]. The complete key → consumer table for every FBI
+  key the executable reads is `[02 R-KEYS-01 §5]`. `MoveRate1`/`MoveRate2`
+  are not guesses either: their accessor, defaults and classifier are
+  established in the Movement table above. `BuildAngle`
   has an established unsigned-bound sampler, signed conversion, heading range,
   and lifecycle contract [04 §2.3b]. `Scale` is known to be inert: the engine
   has no string for it. `Ovradjust` has no recovered runtime reader in the
@@ -345,7 +339,7 @@ removes its shading entirely. See
   executable reads an `armoredstate` FBI key that no shipped unit
   authors, which is what a script-toggled armored flag with an authored initial
   value looks like.
-- `DamageModifier` was previously recorded here as a self-heal rate factor.
+- `DamageModifier` is not the self-heal rate factor community notes call it.
   That reading does not survive the data: all 16 retail units that author it
   are structures with a script-toggled armored state (both solar collectors
   at `0.33333`, Annihilator and Doomsday at `0.5`, both targeting facilities
@@ -354,9 +348,8 @@ removes its shading entirely. See
   armored damage modifier with no authored source. This is the best available
   reading, not a primary source: no shipped file documents the key. Runtime
   fallback and damage behavior belong to the numbered behavior specification.
-- **Correction (2026-08-29, RWU-02-3).** This bullet previously read "The
-  `Copyright` requirement is community lore; not re-verified." It is now
-  verified by static trace: see the `Version` and `Copyright` rows above and
+- The `Copyright` requirement is not community lore: it is verified by static
+  trace — see the `Version` and `Copyright` rows above and
   `[02 R-MALF-01 §5]`.
 - No key names the COB script — the `UnitName` → `scripts/<name>.cob`
   convention is engine behavior.

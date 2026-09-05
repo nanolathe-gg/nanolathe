@@ -152,7 +152,7 @@ func TestAnchorSweepStopsThePendingClones(t *testing.T) {
 		r := rng.NewSimulation(3)
 		clones := 0
 		for tick := uint32(1); tick <= 8; tick++ {
-			clones += s.AdvanceBursts(tick, &r, weapons, nil)
+			clones += s.AdvanceBursts(tick, &r, weaponMapLookup(weapons), nil)
 		}
 		return clones
 	}

@@ -403,25 +403,6 @@ func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
 	return false
 }
 
-// isOuterEligible reports whether the outer per-tick gate passes [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1].
-// Retail iterates ten players 0..9, and for controller ∈ {1,2,3} and index !=10
-// calls through the player's manager pointer.
-// The Player==10 check is literal retail guard [08]; it never fires for 0..9 but is kept for fidelity.
-// The control byte's values are named: 0 an open slot, 1 a locally controlled
-// human, 2 a computer player, 3 a remote peer [05 R-SHARE-01 §1]
-// [08 "The setup record"]. All three of 1/2/3 pass the gate — a human slot
-// carries a manager because the profile grammar's weight pass writes through
-// every slot that has one, not only the computer slots [08 R-AI-01 §12].
-func isOuterEligible(player uint8, ctrl uint8, hasCtrl bool) bool {
-	if player == 10 { // [08] player index !=10 [PLAN_11 C1]
-		return false
-	}
-	if !hasCtrl { // the external controller field is required by the gate
-		return false
-	}
-	return ctrl == 1 || ctrl == 2 || ctrl == 3 // [08] controller {1,2,3} [PLAN_11 C1]
-}
-
 // Tick is the per-player AI entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][C3][C11][C12].
 // It is designed to be passed as economy.TickPlayer's beforeDeadline callback (kernel phase 5 session-owned coordinator)
 // so it runs after eligible per-tick helpers but before the settlement deadline compare; a skipped slot invokes neither AI nor settlement
@@ -918,23 +899,21 @@ func (m *Manager) doWave(tick uint32, w *units.World, econ *economy.Service, thr
 	if w == nil {
 		return
 	}
-	var group []pool.Handle
 	var groupID, peerID uint8
 	var engaged *bool
 	if threshold == waveAThreshold {
-		group, groupID = m.GroupWaveA, 2
-		peerID = 3
+		groupID, peerID = 2, 3
 		engaged = &m.waveAEngaged
 	} else {
-		group, groupID = m.GroupWaveB, 6
-		peerID = 7
+		groupID, peerID = 6, 7
 		engaged = &m.waveBEngaged
 	}
+	// The merge rewrites the wave record, so the slice is read after it and
+	// never before [08 "Wave merge" correction].
 	m.mergeWaveGroupRecords(groupID, peerID, w, threshold)
+	group := m.GroupWaveB
 	if threshold == waveAThreshold {
 		group = m.GroupWaveA
-	} else {
-		group = m.GroupWaveB
 	}
 	n := len(group)
 	if n == 0 {
@@ -1477,55 +1456,5 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		}
 		id := resolveAIIntent(3, u, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ)
 		m.submitResolvedOrder(u, id, nil, m.rallyBestX, m.rallyBestY, m.rallyBestZ, tick, 0, 0)
-	}
-}
-
-// Dispatch iterates the ten players per-tick entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][P0-02].
-// Outer gate controller ∈ {1,2,3} and index !=10 dispatches through manager pointer; inner gate controller==2 is enforced inside Manager.Tick [08][PLAN_11 C1].
-// Both gates required. Stable ordering player 0..9 ascending (I1), no map iteration.
-func Dispatch(tick uint32, econ *economy.Service, managers [10]*Manager, w *units.World) {
-	if econ == nil {
-		return
-	}
-	for i := 0; i < 10; i++ { // [08] iterates ten players [PLAN_11 C1] (I1)
-		if i == 10 { // [08] player index !=10 [PLAN_11 C1]
-			continue
-		}
-		m := managers[i]
-		if m == nil {
-			continue
-		}
-		if i >= len(econ.Players) {
-			continue
-		}
-		ctrl := econ.Players[i].ControllerState  // [08]
-		if ctrl != 1 && ctrl != 2 && ctrl != 3 { // outer gate [08][PLAN_11 C1]
-			continue
-		}
-		m.Tick(tick, w, econ)
-	}
-}
-
-// DispatchSlice is a helper for variable-length slices used by session coordinator wiring [PLAN_11 C11][PLAN_03 Phase 5].
-// It iterates in ascending player order (I1) and preserves both gates [08][PLAN_11 C1].
-func DispatchSlice(tick uint32, econ *economy.Service, managers []*Manager, w *units.World) {
-	if econ == nil {
-		return
-	}
-	for i, m := range managers {
-		if i == 10 { // [08] !=10 [PLAN_11 C1]
-			continue
-		}
-		if m == nil {
-			continue
-		}
-		if i >= len(econ.Players) {
-			continue
-		}
-		ctrl := econ.Players[i].ControllerState
-		if ctrl != 1 && ctrl != 2 && ctrl != 3 {
-			continue
-		}
-		m.Tick(tick, w, econ)
 	}
 }

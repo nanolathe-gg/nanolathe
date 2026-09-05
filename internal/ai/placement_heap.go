@@ -158,7 +158,7 @@ func retailPlacementScore(terrain *world.Terrain, rect world.FootprintRect) (int
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := terrain.PlotAt(x, z)
 			if cell == nil {
-				return 0, fmt.Errorf("terrain cell %d,%d unavailable", x, z)
+				return 0, fmt.Errorf("ai: terrain cell %d,%d unavailable", x, z)
 			}
 			score += int32(cell.Metal())
 		}
@@ -172,7 +172,7 @@ func validateRetailAICandidate(terrain *world.Terrain, pd retailPlacementDef, x,
 	// which holds exactly when the row's sixteen-bit pattern is non-zero. Row 0
 	// is therefore rejected the same way column 0 is [08 R-AI-03 §7.1].
 	if x+pd.footX >= terrain.CellW || z+pd.footZ >= terrain.CellH || (!exhaustive && (x < 0 || z < 0)) || (exhaustive && (x <= 0 || z == 0)) {
-		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("candidate %d,%d outside strict AI bounds", x, z)
+		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("ai: candidate %d,%d outside strict AI bounds", x, z)
 	}
 	if exhaustive && z < 0 {
 		// A negative row passes retail's row test and the signed height test,
@@ -183,7 +183,7 @@ func validateRetailAICandidate(terrain *world.Terrain, pd retailPlacementDef, x,
 		// and is Unknown; nothing in the executable decides it [08 R-AI-03
 		// §7.1]. Rejecting is Nanolathe's deterministic choice, recorded as
 		// that choice and not as retail's behavior.
-		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("negative exhaustive row %d has no retail verdict; Nanolathe rejects deterministically", z)
+		return world.FootprintRect{}, 0, ReasonOutOfBounds, fmt.Errorf("ai: negative exhaustive row %d has no retail verdict; Nanolathe rejects deterministically", z)
 	}
 	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(x, z), pd.extent)
 	if err != nil {
@@ -261,7 +261,7 @@ func retailExtractorHelperA(m *Manager, pd retailPlacementDef, origin retailPlac
 	res := PlacementResult{Helper: HelperA, FootX: int(pd.footX), FootZ: int(pd.footZ)}
 	if len(m.Strategic.MetalSpots) == 0 {
 		res.Reason = ReasonNoPatchData
-		res.Proof = fmt.Errorf("ai placement: empty battle-entry metal vector [08 R-AI-03 §3]")
+		res.Proof = fmt.Errorf("ai: placement: empty battle-entry metal vector [08 R-AI-03 §3]")
 		return res
 	}
 	cx, cz := retailOriginCell(origin.x, pd.footX), retailOriginCell(origin.z, pd.footZ)
@@ -303,7 +303,7 @@ func retailExtractorHelperA(m *Manager, pd retailPlacementDef, origin retailPlac
 	}
 	if best == 0 {
 		res.Reason = ReasonBlocked
-		res.Proof = fmt.Errorf("ai placement: exhaustive candidates produced no positive metal score")
+		res.Proof = fmt.Errorf("ai: placement: exhaustive candidates produced no positive metal score")
 		return res
 	}
 	res.Valid, res.Reason = true, ReasonSuccess
@@ -330,7 +330,7 @@ func retailExtractorHelperB(m *Manager, pd retailPlacementDef, origin retailPlac
 	res := PlacementResult{Helper: HelperB, FootX: int(pd.footX), FootZ: int(pd.footZ)}
 	if !m.Strategic.setupDrawsReady {
 		res.Reason = ReasonMissingStrategicState
-		res.Proof = fmt.Errorf("ai placement: strategic region words were not initialized")
+		res.Proof = fmt.Errorf("ai: placement: strategic region words were not initialized")
 		return res
 	}
 	region, margin := m.Strategic.LandRegion, int32(3)
@@ -378,6 +378,6 @@ func retailExtractorHelperB(m *Manager, pd retailPlacementDef, origin retailPlac
 		return res
 	}
 	res.Reason = ReasonTooManyTrials
-	res.Proof = fmt.Errorf("ai placement: scatter exhausted %d trials", placementTrialCount)
+	res.Proof = fmt.Errorf("ai: placement: scatter exhausted %d trials", placementTrialCount)
 	return res
 }

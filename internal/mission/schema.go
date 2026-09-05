@@ -20,8 +20,10 @@ type Schema struct {
 
 var (
 	// ErrNoGlobalHeader is emitted verbatim when [GlobalHeader] is missing [08 "Schema choice"].
+	//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [08 "Schema choice"]
 	ErrNoGlobalHeader = errors.New("Very bad news! No MSG!")
 	// ErrNoSuitableSchema is emitted verbatim when no candidate matches [08 "Schema choice"].
+	//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [08 "Schema choice"]
 	ErrNoSuitableSchema = errors.New("No suitable schema type...")
 )
 

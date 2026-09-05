@@ -1,8 +1,6 @@
 package movement
 
 import (
-	"fmt"
-
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -97,6 +95,9 @@ func (s *System) ResetParityTrace() {
 	}
 }
 
+// ParityTraceDropped reports whether any diagnostic storage overflowed and
+// dropped records, so a reader knows the trace is incomplete. It never affects
+// simulation state.
 func (s *System) ParityTraceDropped() bool {
 	return s != nil && (s.collisionHistoryDropped || (s.Scheduler != nil && s.Scheduler.TraceDropped()))
 }
@@ -185,10 +186,4 @@ func (s *System) ParitySnapshot(w *units.World, tick uint32) []MovementTrace {
 		out = append(out, m)
 	}
 	return out
-}
-
-// FormatTrace is a stable human-readable diagnostic form used by fixture
-// adapters. It deliberately uses only named package state and no pointers.
-func FormatTrace(t MovementTrace) string {
-	return fmt.Sprintf("tick=%d slot=%d x=%d z=%d heading=%d speed=%d current=%d next=%d collisions=%d", t.Tick, t.Slot, t.X, t.Z, t.Heading, t.Speed, len(t.CurrentRoute), len(t.NextRoute), len(t.CollisionHistory))
 }

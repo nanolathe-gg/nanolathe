@@ -222,24 +222,6 @@ func DetachCargoMode(w *units.World, cargoHandle pool.Handle, mode int) (pool.Ha
 	return carrierHandle, true
 }
 
-// DetachAllCargo detaches all cargo of carrier [04 §10.2] carrier death cascade.
-func DetachAllCargo(w *units.World, carrierHandle pool.Handle) []pool.Handle {
-	if w == nil {
-		return nil
-	}
-	carrier := w.Unit(carrierHandle)
-	if carrier == nil {
-		return nil
-	}
-	cargos := append([]pool.Handle(nil), carrier.Attachment.Cargo...)
-	for _, h := range cargos {
-		DetachCargo(w, h)
-	}
-	// Ensure carrier list cleared if some cargos were stale (dead units)
-	carrier.Attachment.Cargo = nil
-	return cargos
-}
-
 // CargoCount returns live carried-count filtered by parent == carrier [04 §10.2].
 func CargoCount(w *units.World, carrierHandle pool.Handle) int {
 	if w == nil {
@@ -762,16 +744,4 @@ func IsCarried(w *units.World, h pool.Handle) bool {
 	}
 	u := w.Unit(h)
 	return u != nil && u.Attachment.Carrier != 0
-}
-
-// CarrierOf returns carrier handle or 0.
-func CarrierOf(w *units.World, cargo pool.Handle) pool.Handle {
-	if w == nil {
-		return 0
-	}
-	u := w.Unit(cargo)
-	if u == nil {
-		return 0
-	}
-	return u.Attachment.Carrier
 }

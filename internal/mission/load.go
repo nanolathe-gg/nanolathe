@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/triggers"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -112,6 +111,7 @@ const (
 // [02 "Mission-file diagnostics"] The requested mission file, %s, does not exist.
 // Kind 1 only: %s is the absent MISSION%d block name [08 "Mission type dispatch"].
 func errDoesNotExist(name string) error {
+	//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [02 "Mission-file diagnostics"]
 	return fmt.Errorf("The requested mission file, %s, does not exist.", name)
 }
 
@@ -120,6 +120,7 @@ func errDoesNotExist(name string) error {
 // raises this diagnostic [08 "Opening a campaign"].
 // [02 "Mission-file diagnostics"] The requested campaign file, %s, does not exist.
 func errCampaignDoesNotExist(name string) error {
+	//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [08 "Opening a campaign"]
 	return fmt.Errorf("The requested campaign file, %s, does not exist.", name)
 }
 
@@ -128,6 +129,7 @@ func errCampaignDoesNotExist(name string) error {
 // [02 "Mission-file diagnostics"] [08 "Mission loader, campaign branch (kind 1)"].
 // Hey, joker!  Mission file %s is corrupt (no header found). (two spaces after joker!)
 func errCorrupt(name string) error {
+	//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [02 "Mission-file diagnostics"]
 	return fmt.Errorf("Hey, joker!  Mission file %s is corrupt (no header found).", name)
 }
 
@@ -136,6 +138,7 @@ func errCorrupt(name string) error {
 // "defintion" is verbatim retail spelling)
 // [02 "Mission-file diagnostics"] [08 "Mission loader, campaign branch (kind 1)"].
 func errNoMissionDefinition(name string) error {
+	//lint:ignore ST1005 retail diagnostic text, reproduced verbatim, misspelling included [02 "Mission-file diagnostics"]
 	return fmt.Errorf("Hey, joker!  There is no mission defintion for this mission: %s", name)
 }
 
@@ -285,11 +288,6 @@ func LoadCampaignWithSink(fs vfs.FSOps, campaignPath string, missionIndex int, d
 	m.CampaignMissionName = missionName
 	m.Difficulty = difficulty
 	return m, nil
-}
-
-// LoadWithSink is LoadWithType with sink. [ORCH §7]
-func LoadWithSink(fs vfs.FSOps, typ Type, logicalPath string, difficulty, playerCount int, sink Sink) (*Mission, error) {
-	return loadWithTypeInternal(fs, typ, logicalPath, difficulty, playerCount, sink)
 }
 
 func loadWithTypeInternal(fs vfs.FSOps, typ Type, logicalPath string, difficulty, playerCount int, sink Sink) (*Mission, error) {

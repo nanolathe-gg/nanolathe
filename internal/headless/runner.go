@@ -18,10 +18,15 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// DefaultTickLimit is the tick ceiling a request that names none runs to: ten
+// minutes of authoritative time at 30 Hz.
 const DefaultTickLimit uint32 = 30 * 600
 
-var ErrTickLimit = errors.New("headless tick limit reached")
+// ErrTickLimit is returned when a run stops because it reached its tick
+// ceiling rather than because the battle resolved.
+var ErrTickLimit = errors.New("headless: tick limit reached")
 
+// ScenarioKind names how a run was composed, and is reported verbatim.
 type ScenarioKind string
 
 const (
@@ -161,7 +166,7 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 	case ScenarioDirectOTA, ScenarioSkirmish:
 		sess, err = session.NewSkirmishWithProgress(request.FS, request.Catalog, cfg, request.Progress)
 	default:
-		err = fmt.Errorf("unsupported fresh battle kind %q", kind)
+		err = fmt.Errorf("headless: unsupported fresh battle kind %q", kind)
 	}
 	if err != nil {
 		return FreshBattle{}, diagnostic("session load failed: "+err.Error(), identity, providersFromOps(request.FS), "a valid skirmish map or campaign mission")

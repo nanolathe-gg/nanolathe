@@ -204,14 +204,12 @@ is an asset property. UV assignment, culling, texture sampling, team-frame
 selection, shading, and span filling are runtime contracts owned by
 [03 §2.4.1] and [R-RAST-01 §1–§5].
 
-### Runtime texture resolution and face dispatch (retail rasterizer)
+### Runtime texture resolution and face dispatch
 
-This heading is retained only as correction history. Earlier versions of this
-format document gave competing runtime rules: fan-triangulation advice,
-textured polygons of arbitrary arity, and flat-color quads only. Those claims
-were wrong because they transposed the two raster branches. The current retail
-contract is [03 §2.4.1] and [R-RAST-01 §1–§3]; this format document records
-only the stored fields and stock distributions above.
+Which raster branch a primitive takes, and how its texture name resolves at
+draw time, are runtime contracts owned by [03 §2.4.1] and [R-RAST-01 §1–§3].
+This format document records only the stored fields above and the stock
+distributions below.
 
 **Established (retail asset census).** Across all 608 base `objects3d` models
 and 50,443 primitives, every one of the 43,845 primitives carrying a texture
@@ -224,9 +222,7 @@ not runtime dispatch.
 
 3DO stores neither normals nor light values. Runtime normal construction,
 renderer selection, `PALETTE.SHD` lookup, and the `dont-shade` effect are owned
-by [03 §2.4.1], [R-RND-02A], and [R-RAST-01 §5]. The earlier format text
-generalized one probe into a universal flat-face rule; that interpretation is
-withdrawn in favor of the numbered runtime contract.
+by [03 §2.4.1], [R-RND-02A], and [R-RAST-01 §5].
 
 ### Piece naming conventions
 
@@ -261,7 +257,7 @@ Version signature is 1 and object-level `Always_0` is 0 in every file.
 868 textured primitives carry `ColorIndex` values above 255 (garbage);
 no untextured primitive does.
 
-## How the engine loads it (2026-08-29, RWU-02-3)
+## How the engine loads it
 
 The file is read whole (missing or zero-length → **fatal**, the box shows
 the path, wherever a unit, weapon or feature names a model); the name and
@@ -272,7 +268,7 @@ so a truncated model faults during relocation. A texture name that no
 texture GAF holds turns the primitive into flat colour index 209
 (`[03 §2.4]`). Full outcome table: `[02 R-MALF-01 §2]`.
 
-### The one bound measured from the geometry: the model-top walk (2026-09-04)
+### The one bound measured from the geometry: the model-top walk
 
 Exactly one number is derived from a loaded model's vertices, and it is a
 maximum. Immediately after the model is loaded, relocated and texture-bound,
@@ -322,23 +318,19 @@ that most looks like it wants a model bottom — the `setSFXoccupy` band-3
   gives 2029 pieces whose authored vertex order has an outward right-handed
   normal against 90 inward, across 608 models — 600 models to 2. So the
   authored order is counter-clockwise seen from outside, and the 90 are the
-  "Invert Face" authoring bug the modeling notes describe. This document
-  previously stated the opposite; the retail asset census above is the
-  correction and establishes authored winding only. Runtime culling is owned
-  by [R-RAST-01 §1].
+  "Invert Face" authoring bug the modeling notes describe. The census
+  establishes authored winding only; runtime culling is owned by
+  [R-RAST-01 §1].
 - **Model facing is −Z, not +Z.** The TA Design Guide under "Sources"
   describes the modeling convention as +Z-forward, but retail data disagrees:
   muzzle locators (`flare*`) sit at negative Z from the barrel they are
-  mounted on 135 times against 13. **Correction (2026-08-30).** This bullet
-  previously read "Engine heading 0 travels toward +Z and increases toward +X
-  ([04 R-MOV-01 §2])". That is the inverted heading convention: the position
-  step is `vx = -(sin[h]·speed …)`, `vz = -(cos[h]·speed …)`, so heading 0
-  travels toward **−Z** and increasing heading runs −Z → −X → +Z → +X
-  ([04 R-MOV-01 §4], Established). The conclusion the bullet draws is
-  unaffected — a −Z-facing model still ends up nose-first along the travel
-  direction, because the projection negates the model-relative Z as well
-  ([R-RAST-01 §2]) — but the stated premise was wrong and was read as licence
-  to negate the folded heading in the renderer.
+  mounted on 135 times against 13. The engine heading convention runs the same
+  way: the position step is `vx = -(sin[h]·speed …)`, `vz = -(cos[h]·speed …)`,
+  so heading 0 travels toward **−Z** and increasing heading runs
+  −Z → −X → +Z → +X ([04 R-MOV-01 §4], Established). A −Z-facing model ends up
+  nose-first along the travel direction because the projection negates the
+  model-relative Z as well ([R-RAST-01 §2]); do not negate the folded heading
+  in the renderer to compensate.
   Convert source Z with `z = -z` before piece rotations/translations and
   then apply the engine heading directly. An added half turn makes the nose
   face the right direction only by rotating unconverted data; an asymmetric

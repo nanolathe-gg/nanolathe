@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -718,43 +717,4 @@ func isNotFound(err error) bool {
 	}
 	// vfs.ErrNotFound is the canonical not-found sentinel.
 	return errors.Is(err, vfs.ErrNotFound)
-}
-
-// NewManager constructs a per-player AI manager with explicit profile-load error handling [P0-07] ON-06 F-P0-007.
-// It loads ai/<profileName>.txt via LoadProfile (fallback ai/default.txt) and returns error if missing,
-// never silently producing a passive manager with nil Profile. The returned manager
-// is ready for session binding of its build queue and simulation stream.
-// Caller must bind QueueBuildTyped and a simulation RNG before ticks.
-// isAlliance is the alliance test injected at construction; nil fails closed
-// and grants no inferred relationship [08 R-AI-01 §9].
-func NewManager(player uint8, fs vfs.FSOps, profileName string, r *rng.Simulation, catalog *content.Catalog, surfaceMetal int32, isAlliance func(a, b uint8) bool) (*Manager, error) {
-	if fs == nil {
-		return nil, fmt.Errorf("ai: NewManager: nil VFS")
-	}
-	clean := strings.TrimSpace(profileName)
-	if clean == "" {
-		return nil, fmt.Errorf("ai: NewManager: empty profile name (missing selected profile) [P0-07]")
-	}
-	// Explicit profile-load with error surfacing [P0-07] F-P0-007.
-	prof, err := LoadProfile(fs, clean)
-	if err != nil {
-		return nil, fmt.Errorf("ai: NewManager: profile %q: %w [P0-07]", clean, err)
-	}
-	if prof == nil {
-		return nil, fmt.Errorf("ai: NewManager: profile %q: loaded nil profile [P0-07]", clean)
-	}
-	m := &Manager{
-		Player:       player,
-		Profile:      prof,
-		Catalog:      catalog,
-		SurfaceMetal: surfaceMetal,
-		IsAlliance:   isAlliance,
-		RNG:          r,
-	}
-	// One manager, one computer player. A session's managers share one profile
-	// record and reach the counted entry through the scoring seam instead
-	// [08 R-AI-01 §18].
-	prof.ApplyUnitDefinitions(catalog)
-	m.Strategic.Catalog = catalog
-	return m, nil
 }

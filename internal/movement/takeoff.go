@@ -14,11 +14,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// climbArrivalWindow is the air marker's altitude arrival test when an explicit
-// altitude offset is present (marker flag 0x08): |unitY − goalY| < 0x10001
-// [04 R-AIR-01 §4].
-const climbArrivalWindow = 0x10001
-
 // SetMoverMode is retail's committed-mover-mode setter [04 R-AIR-01 §3].
 //
 // It does nothing when the current low two bits already equal the request.

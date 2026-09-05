@@ -234,10 +234,9 @@ it, but **the executable requires it**: the mount validator reads the last
 36 bytes and compares them with `Copyright 0000 Cavedog Entertainment` after
 overwriting the four bytes at the year position with `0000` — any four bytes
 pass, anything else in the string fails the mount
-(`[02 R-MALF-01 §3]`). **Correction (2026-08-29, RWU-02-3).** This paragraph
-previously said "Nothing points to it; readers can ignore any bytes past the
-last referenced extent"; a writer may ignore it, a reader that wants to
-accept what retail accepts must reject archives without it.
+(`[02 R-MALF-01 §3]`). A writer may ignore the trailer, but a reader that
+wants to accept exactly what retail accepts must reject an archive without
+it.
 
 ## Retail corpus notes
 
@@ -267,7 +266,7 @@ directory order. Nothing in the format requires this layout — pointers are
 free — but tools that hand-walk archives may assume the directory
 immediately follows the header.
 
-## How the engine validates it (2026-08-29, RWU-02-3)
+## How the engine validates it
 
 Behaviour is owned by `[02 §2]` and `[02 R-MALF-01 §3]`; this list is the
 byte-level checklist a reader needs to accept exactly what retail accepts.
@@ -308,8 +307,6 @@ byte-level checklist a reader needs to accept exactly what retail accepts.
 - Saved-game (`HAPIBANK`) containers are a different container with their
   own header; the layout and the account/item grammar are in
   `[08 R-SAVE-02]`, the failure edges in `[02 R-MALF-01 §11]`.
-  (Previously: "use additional/different encryption that has not been
-  decoded here" — superseded by doc 08.)
 - Duplicate-path precedence between two archives of the same extension tier
   is not defined by the retail engine (community observation). OpenTA defines
   its own deterministic rule (case-insensitive lexical archive filename

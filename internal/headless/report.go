@@ -27,6 +27,8 @@ type GroupSample struct {
 // AttackEvent records the first attack-family order a player's units received.
 // For a computer player that order comes from the attack wave's broadcast of
 // intent 3 in unit-pool order [08 R-AI-01 §4][08 R-AI-01 §9].
+// AttackEvent is one recorded attack intent: which tick it was issued on, the
+// intent name, and the actor and target pool slots.
 type AttackEvent struct {
 	Tick   uint32 `json:"tick"`
 	Intent string `json:"intent"`
@@ -34,11 +36,13 @@ type AttackEvent struct {
 	Target uint32 `json:"target"`
 }
 
+// IntentReport counts how many orders of one intent a player submitted.
 type IntentReport struct {
 	Intent string `json:"intent"`
 	Count  int    `json:"count"`
 }
 
+// PlayerReport is one player slot's row of the run report.
 type PlayerReport struct {
 	Player          int            `json:"player"`
 	LiveUnits       int            `json:"live_units"`

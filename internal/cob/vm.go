@@ -1021,34 +1021,20 @@ func (v *VM) killThread(idx int) {
 	// explicit-return opcode has already taken and invoked its own before
 	// calling in [04 §4.3][04 §5.3].
 	v.onReturn[idx] = nil
-	// Do not clear SignalMask? Retail leaves it? We'll keep but idle threads ignore.
-	// Wake transitively: any WaitCall that waited on idx flips to Running
-	// immediately and could be running later this same Drain scan [04 §4.2].
-	// We implement iterative wake because a killed thread may itself have been
-	// waited on by multiple callers; each woken thread could itself be a callee
-	// for another waiter, so transitive chain continues.
-	// Iterate until quiescent.
-	for {
-		woke := false
-		for j := 0; j < 8; j++ {
-			ot := &v.Threads[j]
-			if ot.Status == ThreadWaitCall && ot.WaitThread == idx {
-				ot.Status = ThreadRunning
-				ot.WaitThread = -1
-				woke = true
-			}
+	// The signal mask is left as it stands: an idle thread ignores it, and
+	// retail clears nothing here [04 §4.3].
+	//
+	// Wake: any WaitCall parked on idx flips to Running immediately and can run
+	// later in this same drain scan [04 §4.2]. One pass over the eight slots is
+	// enough, because idx is a single thread identity — a waiter that is itself
+	// waited on becomes runnable, not woken, and the transitive case across
+	// several kills is signalMask's outer loop, not this one.
+	for j := 0; j < 8; j++ {
+		ot := &v.Threads[j]
+		if ot.Status == ThreadWaitCall && ot.WaitThread == idx {
+			ot.Status = ThreadRunning
+			ot.WaitThread = -1
 		}
-		if !woke {
-			break
-		}
-		// If any woken thread was itself a WaitCall target for another, the
-		// next iteration will wake that next level. For kill-path transitive
-		// this is limited depth 8.
-		// Need to also consider that woken threads might be Waiting on idx
-		// that we just killed; the idx we killed is only one value, so single
-		// pass suffices for this kill. Transitivity across multiple kills in a
-		// signal loop is handled by signalMask's outer loop.
-		break
 	}
 	t.WaitThread = -1
 }
@@ -2010,19 +1996,17 @@ func (v *VM) runThread(idx int) {
 				targetPC = codeIndexForID(v.prog, scriptID)
 			}
 			badID := targetPC == -1
-			noSlot := true
-			var newIdx int
+			newIdx := -1
 			if !badID {
-				newIdx, noSlot = func() (int, bool) {
-					for i := 0; i < 8; i++ {
-						if v.Threads[i].Status == ThreadIdle {
-							return i, false
-						}
+				// Lowest free thread slot, ascending 0..7 [04 §4.2] [I1].
+				for i := 0; i < 8; i++ {
+					if v.Threads[i].Status == ThreadIdle {
+						newIdx = i
+						break
 					}
-					return -1, true
-				}()
-				noSlot = newIdx == -1
+				}
 			}
+			noSlot := newIdx == -1
 			if badID || noSlot {
 				// Retain arguments [04 §4.3] C14: do not pop, simply advance.
 				t.PC += 3

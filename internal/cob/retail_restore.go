@@ -147,7 +147,7 @@ func decodeRetailThreadStatus(raw uint32) (int, error) {
 	case 0x02800000:
 		return ThreadWaitCall, nil
 	default:
-		return 0, fmt.Errorf("unknown raw status %#x", raw)
+		return 0, fmt.Errorf("cob: unknown raw status %#x", raw)
 	}
 }
 

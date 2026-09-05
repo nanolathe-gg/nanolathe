@@ -1,3 +1,11 @@
+// Package path is the route search: weighted A* over the plot grid, its heap
+// and node store, the goal families a request can name, and the per-player
+// request scheduler [04 §7.2] [04 §7.3] [04 R-PATH-01].
+//
+// Nothing here reads a unit or an order. A caller submits a request naming a
+// start cell, a goal and a movement profile, and polls for the route the
+// scheduler admits under the per-player share; internal/movement owns both
+// sides of that exchange and publishes what comes back.
 package path
 
 // Goal families [04 §7.2] C8 and enumeration [04 §7.4].
@@ -310,10 +318,13 @@ func (g *rectGoal) StartSatisfied(start Cell) bool {
 type airWorkGoal struct{}
 type airMovingGoal struct{}
 
-// AirWorkGoal and AirMovingGoal are the exact serialized air goal surfaces.
-// They intentionally cannot satisfy a ground search: both have H=0, enumerate
-// no cells, and never report the start as satisfied [04 R-PATH-01 §9].
-func AirWorkGoal() Goal   { return &airWorkGoal{} }
+// AirWorkGoal is the serialized air work goal. Like AirMovingGoal it cannot
+// satisfy a ground search: H is 0, it enumerates no cells, and it never
+// reports the start as satisfied [04 R-PATH-01 §9].
+func AirWorkGoal() Goal { return &airWorkGoal{} }
+
+// AirMovingGoal is the serialized air moving goal, with the same three
+// properties as AirWorkGoal [04 R-PATH-01 §9].
 func AirMovingGoal() Goal { return &airMovingGoal{} }
 
 func (airWorkGoal) H(Cell) int32   { return 0 }
@@ -338,6 +349,8 @@ func (airMovingGoal) StartSatisfied(Cell) bool { return false }
 // tested without inventing a public Kind field on Goal. No retail constant
 // is invented; helpers are presentation-only for tests and save codecs.
 
+// IsPointGoal reports whether g is a point/radius goal and, if so, returns its
+// centre and radius [04 §7.2].
 func IsPointGoal(g Goal) (center Cell, radius int32, ok bool) {
 	if pg, ok2 := g.(*pointGoal); ok2 {
 		return pg.center, pg.radius, true
@@ -345,6 +358,8 @@ func IsPointGoal(g Goal) (center Cell, radius int32, ok bool) {
 	return Cell{}, 0, false
 }
 
+// IsAnnulusGoal reports whether g is a stand-off annulus goal and, if so,
+// returns its centre and its inner and outer radii [04 §7.2].
 func IsAnnulusGoal(g Goal) (center Cell, inner, outer int32, ok bool) {
 	if ag, ok2 := g.(*annulusGoal); ok2 {
 		return ag.center, ag.inner, ag.outer, true
@@ -352,12 +367,11 @@ func IsAnnulusGoal(g Goal) (center Cell, inner, outer int32, ok bool) {
 	return Cell{}, 0, 0, false
 }
 
+// IsRectGoal reports whether g is a rectangle-perimeter goal and, if so,
+// returns its rectangle [04 §7.2].
 func IsRectGoal(g Goal) (r Rect, ok bool) {
 	if rg, ok2 := g.(*rectGoal); ok2 {
 		return rg.rect, true
 	}
 	return Rect{}, false
 }
-
-func IsAirWorkGoal(g Goal) bool   { _, ok := g.(*airWorkGoal); return ok }
-func IsAirMovingGoal(g Goal) bool { _, ok := g.(*airMovingGoal); return ok }

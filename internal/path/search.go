@@ -28,8 +28,13 @@ const (
 
 var dirDelta = [8]Cell{{0, -1}, {-1, -1}, {-1, 0}, {-1, 1}, {0, 1}, {1, 1}, {1, 0}, {1, -1}}
 
+// IsDiagonal reports whether dir is one of the four diagonal sectors. The
+// eight sectors alternate cardinal and diagonal from north, so the low bit
+// decides [04 §7.2].
 func IsDiagonal(dir uint8) bool { return dir != DirNone && dir&1 != 0 }
 
+// StepCost is the per-step cost of moving one cell in dir: cardinal 16,
+// diagonal 22 [04 §7.2].
 func StepCost(dir uint8) int32 {
 	if IsDiagonal(dir) {
 		return DiagonalCost
@@ -37,6 +42,9 @@ func StepCost(dir uint8) int32 {
 	return CardinalCost
 }
 
+// TurnPenalty is the extra cost of changing heading from prev to cur, indexed
+// by the sector delta modulo eight [04 §7.2]. A step out of, or into, the
+// no-direction sentinel costs nothing.
 func TurnPenalty(prev, cur uint8) int32 {
 	if prev == DirNone || cur == DirNone {
 		return 0
@@ -44,8 +52,12 @@ func TurnPenalty(prev, cur uint8) int32 {
 	return TurnPenaltyTable[(int(cur)-int(prev)+8)&7]
 }
 
+// ScaledHeuristic applies the per-request 16.16 heuristic weight to a raw
+// heuristic. The product is formed at full signed width and shifted down, so
+// it floors rather than truncating toward zero [04 §7.2] [I3].
 func ScaledHeuristic(h, scale int32) int32 { return int32((int64(h) * int64(scale)) >> 16) }
 
+// InBounds reports whether c lies inside bounds, both edges inclusive.
 func InBounds(c Cell, bounds Rect) bool {
 	return c.X >= bounds.Min.X && c.X <= bounds.Max.X && c.Z >= bounds.Min.Z && c.Z <= bounds.Max.Z
 }
@@ -89,8 +101,6 @@ type rayResult struct {
 	connects bool
 	steps    int
 }
-
-func opposite(dir uint8) uint8 { return (dir + 4) & 7 }
 
 // walkRay is the forward cardinal walk and alternating two-sided wall follow
 // [04 R-PATH-01 §5][04 R-PATH-01 §15]. Its only product is the acceptance
@@ -241,6 +251,10 @@ func onRayLeg(hit, candidate, target Cell) bool {
 	return (cz == 0 && 0 < cx && cx <= dx) || (cx == dx && 0 < cz && cz <= dz)
 }
 
+// SearchConfig is one route request: where the search starts, what goal it is
+// trying to reach, the heuristic weight, the mover's footprint, an optional
+// bounding rectangle, and the two callbacks the search reads the world
+// through [04 §7.2] [04 R-PATH-01].
 type SearchConfig struct {
 	Start Cell
 	Goal  Goal
@@ -258,6 +272,9 @@ type SearchConfig struct {
 	StartDir uint8
 }
 
+// SearchResult is what one completed search produced: the route points, the
+// terminating status, the status the search notified along the way, and the
+// counters the scheduler charges work against.
 type SearchResult struct {
 	Points     []Point
 	Status     Status
@@ -273,6 +290,9 @@ type entry struct {
 	node   NodeID
 }
 
+// Session is one search in progress. The scheduler drives it in bounded
+// increments through Resume, so a search that exceeds a tick's work share
+// continues on the next tick rather than being restarted [04 §7.3].
 type Session struct {
 	cfg          SearchConfig
 	scale        int32
@@ -296,6 +316,8 @@ type Session struct {
 	expanded     bool
 }
 
+// NewSession opens a search for cfg and seeds it. A zero Scale means the
+// unweighted heuristic, 1.0 in 16.16.
 func NewSession(cfg SearchConfig) *Session {
 	s := &Session{cfg: cfg, entries: make(map[Cell]entry), goalSet: make(map[Cell]struct{})}
 	s.scale = cfg.Scale
@@ -317,7 +339,6 @@ func (s *Session) passValue(c Cell) uint8 {
 	return 0
 }
 
-func (s *Session) passable(c Cell) bool  { return s.passValue(c) != 0 }
 func (s *Session) touch(c Cell, e entry) { s.entries[c] = e }
 
 func (s *Session) init() {
@@ -389,15 +410,37 @@ func (s *Session) init() {
 	s.seeded = true
 }
 
+// Config returns the request this session was opened for.
 func (s *Session) Config() SearchConfig { return s.cfg }
-func (s *Session) Start() Cell          { return s.cfg.Start }
-func (s *Session) Goal() Goal           { return s.cfg.Goal }
-func (s *Session) Popped() int          { return s.popped }
-func (s *Session) SetupSteps() int      { return s.setupSteps }
-func (s *Session) Notified() Status     { return s.notified }
-func (s *Session) Seeded() bool         { return s.seeded }
-func (s *Session) IsDone() bool         { return s.done }
 
+// Start returns the cell the search began from.
+func (s *Session) Start() Cell { return s.cfg.Start }
+
+// Goal returns the goal family the search is trying to satisfy.
+func (s *Session) Goal() Goal { return s.cfg.Goal }
+
+// Popped returns how many nodes the search has taken off the heap so far —
+// the work the scheduler charges against the player's share [04 §7.3].
+func (s *Session) Popped() int { return s.popped }
+
+// SetupSteps returns the setup work performed before the first expansion.
+func (s *Session) SetupSteps() int { return s.setupSteps }
+
+// Notified returns the status the search reported while running, which is not
+// necessarily the status it finishes with.
+func (s *Session) Notified() Status { return s.notified }
+
+// Seeded reports whether the start node reached the heap. A start the goal
+// already satisfies, or one the world rejects, is never seeded.
+func (s *Session) Seeded() bool { return s.seeded }
+
+// IsDone reports whether the search has produced its final result.
+func (s *Session) IsDone() bool { return s.done }
+
+// Resume expands at most budget nodes and reports the route, the status and
+// whether the search finished. A search that exhausts its budget without
+// finishing returns false and keeps its state for the next call, which is how
+// the scheduler spreads one search over several ticks [04 §7.3].
 func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 	if s.done {
 		return s.resultPoints, s.resultStatus, true
@@ -519,6 +562,9 @@ func routeFootPrint(cfg SearchConfig) Point {
 	return Point{X: cfg.FootPrintX, Z: cfg.FootPrintZ}
 }
 
+// Search runs cfg to completion in one call and returns its result. The
+// scheduler uses the incremental Session form instead; this is the whole-search
+// entry for callers with no work budget to honour.
 func Search(cfg SearchConfig) SearchResult {
 	s := NewSession(cfg)
 	if !s.done {

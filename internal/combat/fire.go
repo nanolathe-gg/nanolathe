@@ -13,18 +13,12 @@ type FireSpy struct {
 	Events []string
 }
 
+// Record appends one callback name in the order the fire path emitted it.
 func (s *FireSpy) Record(ev string) {
 	if s == nil {
 		return
 	}
 	s.Events = append(s.Events, ev)
-}
-
-func (s *FireSpy) Reset() {
-	if s == nil {
-		return
-	}
-	s.Events = s.Events[:0]
 }
 
 // FireScript is the COB port for the fire callbacks [06 §4.1] C2.
@@ -468,7 +462,13 @@ func recentred(draw uint32, bound int32) int32 {
 // state: every anchor belongs to a live shooter, because a shooter's death runs
 // SweepBurstAnchorsForShooter below [06 §4.3] [06 §5.2]. The branch stands for
 // fixtures that drive this without a muzzle port at all.
-func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map[int32]*content.WeaponDef, muzzlePos func(shooter pool.Handle, piece int16) (Vec3, bool)) int {
+//
+// weaponByID resolves an anchor's stored weapon identifier to its record. The
+// projectile phase hands it the catalog's own per-identifier lookup
+// [02 "Weapon record"]; a nil lookup leaves every anchor on the authored
+// defaults below. It is a lookup rather than a materialised map so the tick
+// path neither copies the weapon table nor ranges it [I1].
+func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weaponByID func(id int32) (*content.WeaponDef, bool), muzzlePos func(shooter pool.Handle, piece int16) (Vec3, bool)) int {
 	if s == nil {
 		return 0
 	}
@@ -491,8 +491,8 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weapons map
 		var sprayAngle int32
 		var randomDecay int32
 		var wDef *content.WeaponDef
-		if weapons != nil {
-			if w, ok := weapons[p.WeaponID]; ok && w != nil {
+		if weaponByID != nil {
+			if w, ok := weaponByID(p.WeaponID); ok && w != nil {
 				wDef = w
 				interval = w.BurstRate // [02 "Weapon record"] burstRate *30
 				sprayAngle = w.SprayAngle

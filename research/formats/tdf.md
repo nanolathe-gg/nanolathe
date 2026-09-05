@@ -106,16 +106,16 @@ buildable — download-menu entries also add build buttons; see below.
 Sections are `[CLASS0]`, `[CLASS1]`, …; the `Name` value is what FBI files
 reference (the engine interns each section's authored `Name` value into the
 class record head and resolves the FBI `MovementClass` string against those
-interned values, case-insensitively — confirmed by direct analysis
-2026-08-26). The loader scans `CLASS0` through `CLASS31`, bounded by its
-32-slot pool: a missing section is skipped without stopping the scan. The
+interned values, case-insensitively — confirmed by direct analysis). The
+loader scans `CLASS0` through `CLASS31`, bounded by its 32-slot pool: a
+missing section is skipped without stopping the scan. The
 retail file has 15 classes and four further keys:
 
 | Key | Classes | Meaning |
 | --- | ---: | --- |
 | `MinWaterDepth` | 5 | Minimum depth the class needs (ship classes) |
-| `MaxWaterSlope` | 3 | Slope limit that applies over water, separately from `MaxSlope`. `TANKDH3` authors `30`; both hover classes author `255` alongside `MaxSlope=12`, which is what lets a hovercraft cross steep sea floor. **Initialization (corrected 2026-08-28):** every class record is pre-filled at startup with `MaxSlope` = `BadSlope` = `MaxWaterSlope` = `BadWaterSlope` = 255 and `MaxWaterDepth`/`MinWaterDepth` = ±10000 before any parse, and the engine then runs three unconditional clamps (`MaxSlope = min(MaxSlope, MaxWaterSlope)`, then the two Bad values clamped to their Max counterparts). An omitted `MaxWaterSlope` therefore leaves `MaxSlope` at its authored value. This entry previously said the pool starts zero-filled so omitting classes compile to `MaxSlope = 0` and pointed at Nanolathe's gated clamps (SC5); that reading was superseded by `[04 §6.1 R-DOC04-A]` on 2026-08-27 and SC5 is closed. |
-| `BadSlope` | 2 | Hover classes only, `12`. **Established (2026-08-26):** the movement classifier reads it as the clear-vs-steep boundary — slopes at or below `BadSlope` are clear, slopes between `BadSlope` and `MaxSlope` are the passable-but-penalized steep tier, slopes above `MaxSlope` are hard-blocked. The earlier "no source establishes this" caveat is superseded. |
+| `MaxWaterSlope` | 3 | Slope limit that applies over water, separately from `MaxSlope`. `TANKDH3` authors `30`; both hover classes author `255` alongside `MaxSlope=12`, which is what lets a hovercraft cross steep sea floor. **Initialization:** every class record is pre-filled at startup with `MaxSlope` = `BadSlope` = `MaxWaterSlope` = `BadWaterSlope` = 255 and `MaxWaterDepth`/`MinWaterDepth` = ±10000 before any parse, and the engine then runs three unconditional clamps (`MaxSlope = min(MaxSlope, MaxWaterSlope)`, then the two Bad values clamped to their Max counterparts). An omitted `MaxWaterSlope` therefore leaves `MaxSlope` at its authored value; the pool does **not** start zero-filled, so an omitted class does not compile to `MaxSlope = 0` `[04 §6.1 R-DOC04-A]`. |
+| `BadSlope` | 2 | Hover classes only, `12`. **Established:** the movement classifier reads it as the clear-vs-steep boundary — slopes at or below `BadSlope` are clear, slopes between `BadSlope` and `MaxSlope` are the passable-but-penalized steep tier, slopes above `MaxSlope` are hard-blocked. |
 | `BadWaterSlope` | 2 | Hover classes only, `255`. Same mechanism over water. |
 
 OpenTA compiles all four into `MovementDef` and applies `MaxWaterSlope` to
@@ -215,7 +215,7 @@ Field reference (all optional unless the feature type needs them):
 | `animating` / `animtrans` / `shadtrans` | Animation / transparency flags for sprite features |
 | `seqnameshad` | Shadow sprite entry. The engine also reads `seqnamedieshad` and `seqnamereclamateshad`, the shadow companions of `seqnamedie` and `seqnamereclamate`. |
 | `footprintx`, `footprintz` | Size in 16-pixel grid cells |
-| `height` | Height for shot-over tests. Also the resurrection order's approach-phase draw bound: `y = terrainHeight(cell) + boundedDraw(height)` — the sole simulation-RNG draw resurrection consumes, in phase 1, not a placement effect `[05 R-WORK-01 §7]`. There is no separate authored "resurrection spread" or "jitter spread" key — `resurrectspread`, `jitterspread` and a bare `spread` are all absent from the retail feature parser's key census and from every stock feature section (WU-19-143 census: 177 files, 1,645 sections, 41 distinct keys, none of the three) `[05 R-FEAT-01 §1]` |
+| `height` | Height for shot-over tests. Also the resurrection order's approach-phase draw bound: `y = terrainHeight(cell) + boundedDraw(height)` — the sole simulation-RNG draw resurrection consumes, in phase 1, not a placement effect `[05 R-WORK-01 §7]`. There is no separate authored "resurrection spread" or "jitter spread" key — `resurrectspread`, `jitterspread` and a bare `spread` are all absent from the retail feature parser's key census and from every stock feature section (census: 177 files, 1,645 sections, 41 distinct keys, none of the three) `[05 R-FEAT-01 §1]` |
 | `blocking` | `1` = blocks unit movement |
 | `hitdensity` | Community-understood as hit-probability weighting. Authored on all 1,645 retail records and **inert** — no string for it exists in the executable. |
 | `damage` | HP before turning into `featuredead` (or vanishing) |
@@ -315,7 +315,7 @@ table below appears in that census except three:
 
 | Key | Authored in | Status |
 | --- | ---: | --- |
-| `ID` | 71 files, 180 records | **Read, and it selects the record slot.** The weapon parser reads `ID` with the integer accessor and a default of −1 *first*; the authored value chooses which weapon record the parser fills, and the section name is then copied into that record as its catalog name (`name` is a separate 64-byte display string). **Correction (2026-08-26):** an earlier reading in this document called `ID` inert ("no `id` string exists in the executable; weapons are resolved by section name") — the whole-string census behind that verdict misses very short strings (the same artifact that hid the textual `HAPI` magic), and the executable's weapon-key table does carry `ID`. An implementation that resolves weapons by section name only mis-assigns records whenever authored `ID` values differ from file order. The "255 IDs" content convention still holds as an authoring bound (weapons in retail data use `ID` 0–255, and `ID` −1 selects the slot before the table). |
+| `ID` | 71 files, 180 records | **Read, and it selects the record slot.** The weapon parser reads `ID` with the integer accessor and a default of −1 *first*; the authored value chooses which weapon record the parser fills, and the section name is then copied into that record as its catalog name (`name` is a separate 64-byte display string). `ID` is not inert, whatever the whole-string census suggests: that census misses very short strings (the same artifact that hid the textual `HAPI` magic), and the executable's weapon-key table does carry `ID`. An implementation that resolves weapons by section name only mis-assigns records whenever authored `ID` values differ from file order. The "255 IDs" content convention still holds as an authoring bound (weapons in retail data use `ID` 0–255, and `ID` −1 selects the slot before the table). |
 | `aimrate` | 3 files | **Inert**, despite being documented in `gamedata/WEAPONS.TDF` itself. Nothing in the executable can read it. |
 | `startfire` | 1 file | **Inert.** |
 
@@ -352,7 +352,7 @@ and velocity.
 
 | Key | Meaning |
 | --- | --- |
-| `ID` | Numeric weapon ID. **Read by the engine and used to select the weapon record slot** (default −1 = the slot before the table); the section name becomes the record's catalog name. See the correction in the census table above. |
+| `ID` | Numeric weapon ID. **Read by the engine and used to select the weapon record slot** (default −1 = the slot before the table); the section name becomes the record's catalog name. See the `ID` row of the census table above. |
 | `name` | Display name |
 | `rendertype` | Projectile rendering: 0 laser, 1 3D model, 2 not rendered, 3 dgun, 4 plasma/bitmap shell, 5 flame, 6 bomb, 7 lightning |
 | `model` | 3DO model (rendertype 1), no extension |
@@ -374,7 +374,7 @@ and velocity.
 | `energypershot`, `metalpershot` | Firing cost. The bare `energy`/`metal` keys are the same thing in an older spelling — the shipped file documents them as "amount of energy needed" / "amount of metal needed" — and OpenTA accepts either. |
 | `commandfire` | Requires explicit user fire order (D-gun, nukes) |
 | `toairweapon` | Weapon only engages air targets (anti-air missiles; retail key, undocumented historically) |
-| `holdtime` | Follow-camera hold, in whole simulation ticks (authored in seconds, multiplied by 30 and truncated with the other time-valued weapon keys). When the projectile the camera is following retires, the camera freezes on that projectile's last point and stays there for `holdtime` ticks before resuming ordinary following. It has no projectile-motion effect at all. **Correction:** this row previously read "Seen on retail stockpile/anti-air weapons; exact effect unknown", which was written before the key's readers were traced — all of them are projectile-retirement paths that load the camera hold counter, not motion code. Established; the engine side is `[06 §7.3]`, the camera side `[07 §10]`. |
+| `holdtime` | Follow-camera hold, in whole simulation ticks (authored in seconds, multiplied by 30 and truncated with the other time-valued weapon keys). When the projectile the camera is following retires, the camera freezes on that projectile's last point and stays there for `holdtime` ticks before resuming ordinary following. It has no projectile-motion effect at all: every reader is a projectile-retirement path that loads the camera hold counter, not motion code. Established; the engine side is `[06 §7.3]`, the camera side `[07 §10]`. |
 | `turret` | Weapon must be deployed from a mount with 360° rotation and pitch (143 retail weapons) |
 | `coverage` | "What the protection umbrella is for weapons that shoot other weapons" — the interceptor's protected radius |
 | `minbarrelangle` | Lowest angle in degrees the barrels can point, used in the ballistic solution |
@@ -464,7 +464,7 @@ Units not listed are grayed out in build menus during that mission.
 - `ai/*.txt` — AI profiles referenced by OTA `aiprofile=`; plain text,
   not TDF.
 
-## How the engine parses it, and what a malformed file does (2026-08-29, RWU-02-3)
+## How the engine parses it, and what a malformed file does
 
 Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
 
@@ -493,10 +493,9 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
 
 - No formal grammar exists; the rules above are inferred from the retail
   corpus. Retail files may terminate a nested section as `};`; readers should
-  treat that semicolon as part of the section terminator. **Correction
-  (2026-08-29, RWU-02-3).** This bullet previously ended "Unobserved edge
-  cases (duplicate keys, `;` in values, comments opened inside values) have
-  no defined behavior." They are defined by the executable: duplicate
+  treat that semicolon as part of the section terminator. The edge cases that
+  look undefined (duplicate keys, `;` in values, comments opened inside
+  values) are defined by the executable: duplicate
   sections are all retained (first-match accessor), an identical key
   spelling replaces the value (last wins), a case-variant key coexists as a
   second entry, comments are blanked to spaces before parsing wherever they

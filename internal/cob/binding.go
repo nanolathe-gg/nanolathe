@@ -117,6 +117,13 @@ type Binding struct {
 	SFXSink          SFXSink
 	SFXVisible       func(piece int, sfxType int32) bool
 	PresentationSink PresentationSink
+
+	// composeScratch is ComposePiece's per-call piece-state buffer. The
+	// composition reads the VM's piece words and writes model order; nothing
+	// outside the call sees the slice, and ComposePiece is not re-entrant on
+	// one binding, so a single buffer per binding replaces a per-call
+	// allocation in the movement and construction tick paths.
+	composeScratch []model.PieceState
 }
 
 // BindStrict resolves, parses, links, and initializes one production COB
@@ -226,7 +233,14 @@ func (b *Binding) ComposePiece(cobPiece int, heading, pitch, bank uint16) ([3]nu
 	if modelPiece < 0 || modelPiece >= len(b.Model.Pieces) {
 		return [3]numeric.Fixed{}, false
 	}
-	states := make([]model.PieceState, len(b.Model.Pieces))
+	states := b.composeScratch
+	if cap(states) < len(b.Model.Pieces) {
+		states = make([]model.PieceState, len(b.Model.Pieces))
+		b.composeScratch = states
+	} else {
+		states = states[:len(b.Model.Pieces)]
+		clear(states)
+	}
 	for cobIndex, modelIndex := range b.PieceMap {
 		if cobIndex < len(b.VM.Pieces) && modelIndex >= 0 && modelIndex < len(states) {
 			states[modelIndex] = b.VM.Pieces[cobIndex]
@@ -288,14 +302,14 @@ func bindingPath(req BindingRequest) (logical, unitName string, err error) {
 	if logical != "" {
 		logical = strings.ToLower(strings.TrimSpace(logical))
 		if !strings.HasPrefix(logical, "scripts/") || !strings.HasSuffix(logical, ".cob") {
-			err = fmt.Errorf("script path %q must be a logical scripts/*.cob path", req.ScriptPath)
+			err = fmt.Errorf("cob: script path %q must be a logical scripts/*.cob path", req.ScriptPath)
 		}
 	}
 	if unitName == "" {
-		err = fmt.Errorf("unit name is empty")
+		err = fmt.Errorf("cob: unit name is empty")
 	}
 	if logical == "" && err == nil {
-		err = fmt.Errorf("script path is empty")
+		err = fmt.Errorf("cob: script path is empty")
 	}
 	return logical, unitName, err
 }

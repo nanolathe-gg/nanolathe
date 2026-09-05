@@ -690,35 +690,6 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 	return AdvanceAlive
 }
 
-// CruiseThreshold is the fixed 0x400 threshold in helper comparison domain
-// [P1-07][P1-08 §2.6] [06 §6.8] — when converted distance >0x400 (1024) cruise
-// copies target X/Z into second point and forces height to 700, else height is
-// max(terrain,sea). Strict >.
-const CruiseThreshold = 0x400 // [P1-08 §2.6] [06 §6.8]
-
-// SelectCruisePoint implements the cruise waypoint helper per [P1-08 §2.6]
-// [06 §6.8] C15: cruise flag selects waypoint, not creation. Helper is
-// presentation/steering only.
-func SelectCruisePoint(stored, current Vec3, terrainHeight, seaLevel numeric.Fixed, distanceFixed int32) Vec3 {
-	if distanceFixed > CruiseThreshold { // strict > [P1-08 §2.6]
-		return Vec3{X: stored.X, Y: numeric.Fixed(int64(700) << 16), Z: stored.Z} // 700<<16 forced [P1-08 §2.6]
-	}
-	// at or below threshold: stored with height max(terrain,sea) [P1-08 §2.6][06 §6.8]
-	y := terrainHeight
-	if seaLevel.Raw() > y.Raw() {
-		y = seaLevel
-	}
-	return Vec3{X: stored.X, Y: y, Z: stored.Z}
-}
-
-// SmokeAdditiveDeadline advances the smoke deadline additively [P1-08 §4]
-// [06 §7.3] — deadline += delay preserving accumulated debt; delay 0 emits
-// every eligible tick after first. Smoke is scheduled only for alive records
-// before expiry and past next-trail deadline.
-func SmokeAdditiveDeadline(currentDeadline uint32, delay int32) uint32 {
-	return currentDeadline + uint32(delay) // additive [P1-08][06 §7.3]
-}
-
 // Case7 Jitter helpers use CRT stream, not sim [P1-07][P1-08 §2.10] [06 §6.10].
 // Each segment draws rand()*11/0x8000-5 per axis (3 axes per segment per pass,
 // 2 passes) via CRT *214013+2531011 [P1-08 §5]. This does not affect lockstep.

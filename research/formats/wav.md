@@ -40,7 +40,7 @@ Real example — `sounds/BUTTON12.WAV` from `totala1.hpi`:
 
 PCM, 1 channel, 11025 Hz, 8-bit → a 471-sample button click.
 
-## How the engine reads it (2026-08-29, RWU-02-3)
+## How the engine reads it
 
 Owned by `[02 §7]` and `[02 R-MALF-01 §10]`. Detection reads four bytes at
 0: `DIGI` with `HSHD` at 8 and `SDAT` at 32 → legacy; else `RIFF` with
@@ -57,12 +57,10 @@ message).
 
 ## Unknowns and caveats
 
-- **Closed (2026-08-29, RWU-02-3).** Previously: "Whether the retail engine
-  accepts formats beyond the table above (compressed codecs, other rates) is
-  untested". The engine never reads the format tag: any `fmt ` chunk is
-  taken as PCM of its declared channel count, rate and bit depth, so a
-  compressed file is played as noise rather than rejected; any rate is
-  accepted as authored. See "How the engine reads it".
+- The engine never reads the format tag, so formats beyond the table above
+  are neither rejected nor decoded: any `fmt ` chunk is taken as PCM of its
+  declared channel count, rate and bit depth, and a compressed file is played
+  as noise. Any rate is accepted as authored. See "How the engine reads it".
 - Volume/attenuation and 3D positioning are engine behavior, not stored in
   the files.
 

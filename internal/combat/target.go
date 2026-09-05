@@ -74,12 +74,6 @@ func PointTargetHeight(terrain *world.Terrain, x, z numeric.Fixed) numeric.Fixed
 	return numeric.Fixed(int64(h) << 16)
 }
 
-// IsUnitTarget reports whether the target names a unit slot [06 §3.2] P0-10.
-func (t Target) IsUnitTarget() bool { return t.Kind == TargetUnit && t.Unit != 0 }
-
-// IsPointTarget reports whether the target is a world point [06 §3.2] P0-10.
-func (t Target) IsPointTarget() bool { return t.Kind == TargetPoint }
-
 // ---------------------------------------------------------------------------
 // Range vs coverage distinction [06 §3.3] [06 §2.1] [06 §11.2] P0-10
 // ---------------------------------------------------------------------------
@@ -838,7 +832,7 @@ type AirBaseRegistry struct {
 // every ally group whose row admits it (I1) — the row read is the candidate
 // owner's, indexed by the group [05 R-SHARE-01 §1].
 func (r *AirBaseRegistry) Rebuild(tick uint32, list []*units.Unit, declares func(from, toward uint8) bool) {
-	if r == nil || tick%AirBaseRegistryPeriod != 0 {
+	if !r.RebuildDue(tick) {
 		return
 	}
 	for group := range r.lists {
@@ -858,6 +852,14 @@ func (r *AirBaseRegistry) Rebuild(tick uint32, list []*units.Unit, declares func
 			}
 		}
 	}
+}
+
+// RebuildDue reports whether tick falls on the registry's rebuild cadence
+// [06 §3.1] [04 R-AIR-01 §11]. Rebuild applies the same test itself; this is
+// the predicate a caller uses so it need not materialise the unit list and the
+// alliance row on the twenty-nine ticks in thirty where Rebuild reads neither.
+func (r *AirBaseRegistry) RebuildDue(tick uint32) bool {
+	return r != nil && tick%AirBaseRegistryPeriod == 0
 }
 
 // List returns one ally group's third list as the last rebuild left it. The

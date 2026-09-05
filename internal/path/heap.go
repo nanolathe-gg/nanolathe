@@ -16,6 +16,8 @@ package path
 // unknown [04 §11] and route caps (20 published, 64 reconstruction
 // ring) are enforced by the publisher, not the heap.
 
+// NodeID indexes a node in the store. Zero is the reserved null identity, so a
+// real node is always 1 or higher.
 type NodeID int
 
 const invalidNodeID NodeID = 0

@@ -5,7 +5,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -85,14 +84,6 @@ func FeatureCacheSuppressed(cache *[2]int32, cellX, cellZ int32) bool {
 // sees other occupant before either clears. This is implemented in
 // internal/movement/CollisionState.CommitSuccess and CommitSweep sorting by ID
 // asc which equals player 0..9 then pool 0x118 asc [P0-12][P1-07 §2.1] (I1).
-
-// LiquidForcedRetire reports whether the opaque liquid mode forces dead|2
-// regardless of noexplode [P1-07 §2.4] [06 §8.1][06 §13.2]. The mode is a
-// nonzero opaque-liquid flag combined with a water-classified cell and no
-// direct unit — it retires and overrides the noexplode gate [P1-07 §4][06 §13.2].
-func LiquidForcedRetire(opaqueMode bool, isWaterCell bool, hasDirectUnit bool) bool {
-	return opaqueMode && isWaterCell && !hasDirectUnit // [P1-07 §2.4]
-}
 
 // ImpactLadderResult records which ladder branch produced impact for tests
 // covering C28 refinements [06 §8.1] [06 §13.2].
@@ -486,15 +477,4 @@ func ShouldIgniteFeatureGate(globalFeatureFireEnabled bool, featureFlammable boo
 // [06 §9.4] C26 — do not add knockback. This stub exists to assert absence in tests.
 func ApplyImpulse() {
 	// No impulse [06 §9.4] — deliberately empty
-}
-
-// HitByWeaponArgs computes the two 400-radius trig components derived from packet
-// direction byte for the HitByWeapon callback [06 §9.1].
-func HitByWeaponArgs(dir uint8) (int32, int32) {
-	// Two 400-radius trig components derived from direction byte [06 §9.1]
-	ang := numeric.Angle(uint16(dir) * 256) // direction byte scaled to 8-bit of circle? 256 * dir = dir*65536/256 => dir *256
-	// 400 * sin/cos with table rounding [04 §5.1]
-	s := numeric.MulRound(numeric.Sin(ang), 400) // scale 8192 table *400
-	c := numeric.MulRound(numeric.Cos(ang), 400)
-	return s, c
 }

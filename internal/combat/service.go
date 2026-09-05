@@ -1,9 +1,12 @@
-// Package combat — integrated weapon and projectile pipeline per [06] P0-I04.
+// Package combat is the weapon and projectile pipeline: weapon slots and
+// targeting, aiming and the ballistic solver, the projectile pool and its
+// motion families, impact, damage and death causes, stockpiles and meteors
+// [06 §1] [06 §3] [06 §4] [06 §5] [06 §6] [06 §9] [06 §12].
+//
+// This file: the per-unit weapon service and the projectile phase.
 package combat
 
 import (
-	"sort"
-
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
@@ -104,17 +107,6 @@ func isUnderwaterUnit(u *units.Unit, seaLevel numeric.Fixed) bool {
 		return false
 	}
 	return u.Y.Raw() < seaLevel.Raw()
-}
-
-func aimNameForSlot(slotIdx int) string {
-	switch slotIdx {
-	case 1:
-		return "AimSecondary"
-	case 2:
-		return "AimTertiary"
-	default:
-		return "AimPrimary"
-	}
 }
 
 // callbackBridgeForUnit returns the callback bridge attached by strict unit
@@ -525,8 +517,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 					slot.Aim.IssueBit = true
 				} else {
 					key := pendingKey{Unit: u.Handle, Slot: idx}
-					if _, present := bridge.VM.ScriptPC(aimNameForSlot(idx)); !present {
-					}
 					// The first argument of Aim* is the RELATIVE yaw —
 					// (bearing - heading) mod 65536, zero meaning dead ahead —
 					// and the second is the absolute pitch
@@ -1800,6 +1790,10 @@ const (
 // 240 reads as -16 — so it reaches zero after sixteen visits [06 R-WPN-04 §2].
 const DamageFlashTicks int32 = 16
 
+// TickProjectiles is the projectile phase [06 §5]. It advances burst anchors,
+// integrates each motion family, resolves the collision ladder and its impact,
+// and compacts the pool at the tail. The active span is captured at entry, so
+// records appended during the pass wait for the next tick [06 §5.1] [I1].
 func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, windState *world.Wind, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
 	if s == nil {
 		return
@@ -1824,32 +1818,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		return muzzleWorldPosResolved(su, int32(piece))
 	}
 	// ON-04 stable lookup for burst params: use once-compiled index deterministically
-	var weaponByID map[int32]*content.WeaponDef
-	if catalog != nil {
-		if idx := catalog.WeaponIndex(); idx != nil {
-			weaponByID = idx
-		} else if catalog.Weapons != nil {
-			// Fallback for fixtures without compiled index. [02 §5 R-CONTENT-02]:
-			// the same-ID merge is last-wins — the record parser unconditionally
-			// stores every field it parses, so a later section with the same ID
-			// overwrites the earlier one. Keys are sorted for a deterministic
-			// order (I1); the last same-ID weapon in that order wins.
-			weaponByID = make(map[int32]*content.WeaponDef, len(catalog.Weapons))
-			keys := make([]string, 0, len(catalog.Weapons))
-			for k := range catalog.Weapons {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			for _, k := range keys {
-				wd := catalog.Weapons[k]
-				if wd == nil {
-					continue
-				}
-				weaponByID[wd.ID] = wd
-			}
-		}
-	}
-	s.AdvanceBursts(tick, simRNG, weaponByID, muzzleForBurst)
+	s.AdvanceBursts(tick, simRNG, s.weaponLookupFor(catalog), muzzleForBurst)
 	// [06 §6.4] ballistic/dropped drift: adds all three global wind values directly to position
 	var windVec Vec3
 	var gravity numeric.Fixed
@@ -2205,11 +2174,11 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 		}
 	}
 	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: p.TargetUnit, Position: p.Pos})
-	applyProjectileDamage(s, p, weapon, w, terrain, featSvc, econ, catalog, tick, simRNG, hasDirectTarget, isWaterTerrain, h)
+	applyProjectileDamage(s, p, weapon, w, terrain, tick, hasDirectTarget)
 	_ = wind
 }
 
-func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, simRNG *rng.Simulation, hasDirectTarget bool, isWaterTerrain bool, handle pool.Handle) {
+func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, tick uint32, hasDirectTarget bool) {
 	if w == nil || weapon == nil {
 		return
 	}
@@ -2230,9 +2199,6 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 		if victim != nil {
 			applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
 		}
-		if p.Shooter == 0 {
-			return
-		}
 		return
 	}
 	radius := BlastRadius(weapon.AreaOfEffect)
@@ -2247,13 +2213,6 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	// Shared area splash: EnumerateArea→DistanceToBox→Falloff→ApplyDamage [06 §9.3]
 	// Extracted to ExplodeWeaponAt for death DoExplosion reuse [06 §12.1] C22–C25 (I1, I2)
 	service.ExplodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, tick)
-	_ = featSvc
-	_ = econ
-	_ = catalog
-	_ = simRNG
-	_ = isWaterTerrain
-	_ = handle
-	return
 }
 
 // ExplodeWeaponAt is the shared authoritative area-damage entry point for

@@ -43,14 +43,14 @@ rendering glyphs (they produce correct letterforms).
 | 0x03 | 1 | u8 | **first character code**: the offset table is indexed by `code − first_code`; 0 in every retail font |
 | 0x04 | 2 × (256 − first_code) | u16[] | absolute file offset of each character's glyph record, indexed by `code − first_code`; `0` = character not present. The executable applies no upper bound to the index, so a font must carry an entry for every code from `first_code` to 255 |
 
-**Correction (2026-08-29, RWU-03-5).** The header was previously described
-as `u16 height` at 0x00 and `u16 unknown (= 1)` at 0x02 with an unconfirmed
-purpose. That reading was wrong because the executable reads four *single*
-bytes: the height is byte 0 alone, byte 1 is never read, byte 2 is the
-signed vertical offset the rasterizer subtracts from the pen Y, and byte 3
-is the first character code that biases the offset table. The old u16 values
-happened to match because bytes 1 and 3 are zero in every retail font. See
-[03 §7.1] (`R-FONT-01 §1`, `§4`) for the rasterizer contract.
+The header is four *single* bytes, not the two 16-bit words (`u16 height` at
+0x00, `u16 unknown` at 0x02) that older community notes describe: the
+executable reads the height from byte 0 alone, never reads byte 1, reads byte
+2 as the signed vertical offset the rasterizer subtracts from the pen Y, and
+reads byte 3 as the first character code that biases the offset table. The
+u16 reading appears to work only because bytes 1 and 3 are zero in every
+retail font. See [03 §7.1] (`R-FONT-01 §1`, `§4`) for the rasterizer
+contract.
 
 Since offsets are u16, an FNT file cannot exceed 64 KiB. Retail fonts are a
 few KiB (`SMLFONT.FNT` is 2713 bytes in the installed `totala1.hpi`, height
@@ -91,7 +91,7 @@ table, kerning, or baseline data beyond the header's vertical offset.
 
 - Byte 0x01 is never read; its authored meaning, if any, is unknown (it is
   0 in every retail font). Decider: a font-authoring tool of the period.
-- **No validation at all (2026-08-29, RWU-02-3).** The file is read whole
+- **No validation at all.** The file is read whole
   and used in place; a missing or zero-length font is fatal (path as the
   message) for the two startup fonts and every side font; a truncated font's
   offsets point past the block and the rasterizer reads what follows

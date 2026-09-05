@@ -451,10 +451,6 @@ func HeadingFromDegrees(deg int32) uint16 {
 	return uint16(int16(quotient))
 }
 
-// FixedFromPixels converts authored pixel coordinates to 16.16 fixed by
-// shifting left 16. [GAP T14] [02 "Map files"]
-func FixedFromPixels(pixels int32) int32 { return pixels << 16 }
-
 // --- Binary 36/12/136 identity helpers ---
 //
 // SYNTHETIC round-trip codecs, not retail wire formats: no retail file ever

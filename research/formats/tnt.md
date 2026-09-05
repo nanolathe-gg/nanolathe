@@ -53,7 +53,7 @@ each section.
 | 0x20 | u32 | PtrTileAnims | → feature records |
 | 0x24 | u32 | SeaLevel | Water level in height units; cells with height below this are underwater ("waterheight") |
 | 0x28 | u32 | PtrMiniMap | → minimap |
-| 0x2C | u32 | MinimapPresent | bit 0 set = an embedded minimap follows at PtrMiniMap; `1` in every observed retail map. (Engine reading established 2026-08-29, `[R-TERR-01 §1]`; formerly listed as "unknown1".) |
+| 0x2C | u32 | MinimapPresent | bit 0 set = an embedded minimap follows at PtrMiniMap; `1` in every observed retail map. (Engine reading Established, `[R-TERR-01 §1]`; community notes call the word "unknown1".) |
 | 0x30–0x3C | u32×4 | unknown/pad | `0` in observed retail maps |
 
 Real example — `maps/The Pass.tnt` from `totala2.hpi`:
@@ -168,7 +168,7 @@ campaign map) stores 252×**256**. Don't hard-code the dimensions — read
 them. The minimap is a pre-scaled snapshot of the terrain, not regenerated
 by the engine.
 
-**How the used sub-rectangle is sized (Established, 2026-09-03, WU-19-133).**
+**How the used sub-rectangle is sized — Established.**
 The stored `width x height` from the header above is the *allocated* bitmap,
 not necessarily the real image's extent: on a non-square map only a top-left
 sub-rectangle holds terrain, and the rest of the short axis is the `0x64`
@@ -275,19 +275,19 @@ most common retail value is 75.
   validated visually when implementing.
 - Whether height 255 scaling interacts with anything besides SeaLevel
   (e.g. camera) is engine behavior, not format. **Settled for passability
-  (2026-09-01, RWU-19-15, `[04 R-SLOPE-01]`).** The height byte reaches the
+  (`[04 R-SLOPE-01]`).** The height byte reaches the
   runtime plot cell **verbatim** — no scaling, shift or height-scale between
   this byte and the engine's derived per-cell minimum/maximum, which are the
   min/max over the cell, its east, south and south-east neighbours (edge
-  guarded). The WU-19-41 measurement that motivated the question ("the start
+  guarded). A measurement that appears to contradict this ("the start
   plateaus' rims classify at slope 17 while the stock vehicle classes author
-  `MaxSlope=15`", a 2735-cell pocket on `ashap plateau`) was an artefact of
+  `MaxSlope=15`", a 2735-cell pocket on `ashap plateau`) is an artefact of
   aggregating heights over the class footprint: retail classifies each cell
   on its own 2×2 corner quad and takes the minimum tier over the footprint,
   under which every cell of those rim anchors is at or below the limit (the
-  three sampled anchors: per-cell slopes 4–13) and the pocket is 53370 cells. The earlier sentence here, "The derived pair and its footprint
-  aggregation are Established", was half right — the pair is, the footprint
-  height aggregation is not retail's movement rule. Reproducer:
+  three sampled anchors: per-cell slopes 4–13) and the pocket is 53370 cells.
+  The derived min/max pair is Established; aggregating heights over the
+  footprint is not retail's movement rule. Reproducer:
   `internal/session/ai_terrain_pocket_probe_test.go`.
 
 ## Sources

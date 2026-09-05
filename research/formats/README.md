@@ -8,15 +8,35 @@ against real retail game data (the `totala*.hpi`, `*.ccx`, and `rev31.gp3`
 archives). Nanolathe's parsers are conformance consumers of this reference,
 not evidence for retail behavior.
 
-Each document follows the same structure:
+Each of the fourteen documents follows the same template:
 
 1. **Overview** — what the format is, what it stores, where it is used.
 2. **Format at a glance** — a high-level diagram of the layout.
 3. **Reference** — exhaustive byte-level documentation with worked examples
-   taken from real retail data.
+   taken from real retail data. Some documents split this across
+   named sections (`Syntax` and `Schema families` in [tdf.md](tdf.md), the
+   container/VM/instruction-set split in [cob.md](cob.md)), and a few add a
+   "How the engine loads it" section for loader-visible edges.
 4. **Unknowns and caveats** — anything we are not sure about, called out
-   explicitly rather than guessed.
+   explicitly rather than guessed, each stated as the unknown plus what would
+   settle it.
 5. **Sources** — where the information originally came from.
+
+**What this directory owns.** Byte layout in *files*: offsets, field sizes,
+types, authored defaults and the conversions applied when a value is read.
+That is authored data, so file offsets belong here. What the engine *does*
+with a value it has read is owned by `research/retail-executable-spec`; where
+a document here touches behavior it cites the owning section rather than
+restating the arithmetic. Citations into this directory are by document —
+`[fmt tnt]` resolves to `tnt.md` — and nothing inside a document is anchored,
+so headings are free to change.
+
+**One voice.** Each document states one thing. A finding that replaces an
+earlier one replaces the text it corrects instead of arguing with it; git
+history is the audit trail. Claims carry a confidence level —
+**Established**, **Supported inference**, or **Unknown** — and warnings about
+readings the community documents differently are written as warnings about
+those readings, not as this directory's own history.
 
 ## The formats
 
@@ -31,8 +51,7 @@ Each document follows the same structure:
 | [tdf.md](tdf.md) | `.tdf` | text | The general text-definition syntax and the gamedata/feature/weapon/download schemas |
 | [fbi.md](fbi.md) | `.fbi` | text (TDF syntax) | Unit definitions — one file per unit |
 | [ota.md](ota.md) | `.ota` | text (TDF syntax) | Map/mission metadata paired with a TNT, including the mission scripting mini-language |
-| [tnt.md](tnt.md) | `.tnt` | binary | Runtime map terrain: tile graphics, tile placement, height/feature grid, minimap |
-| [tnt.md](tnt.md) | `.sct` | binary | Editor section source: small tile grid, tile graphics, preview, opaque metadata |
+| [tnt.md](tnt.md) | `.tnt` `.sct` | binary | Runtime map terrain (tile graphics, tile placement, height/feature grid, minimap) and the editor's section source (small tile grid, preview, opaque metadata) |
 | [fnt.md](fnt.md) | `.fnt` | binary | 1-bit bitmap fonts used by the GUI |
 | [pcx.md](pcx.md) | `.pcx` | binary (standard) | Unit info pictures and full-screen images (standard ZSoft PCX) |
 | [wav.md](wav.md) | `.wav` | binary (RIFF plus legacy containers) | Sound effects and voice |

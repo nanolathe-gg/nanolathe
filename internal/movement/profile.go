@@ -4,7 +4,6 @@ package movement
 
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -156,45 +155,6 @@ const (
 	ClassSteep
 	ClassClear
 )
-
-// depthAt returns the water depth at cell (cx,cz) in height units (0-255)
-// [fmt tnt][04 §6.1]. Water lies where height < SeaLevel [fmt tnt] Attribute
-// map +0 height, SeaLevel at header 0x24. Depth is SeaLevel - Height when
-// underwater, otherwise 0. It uses Terrain.PlotAt attributes [fmt tnt] and
-// SeaLevelWorld for the terrain-owned sea level [03 §2.2] C9, plus HeightAt/
-// CoarseHeightAt for the sampled heights [03 §2.3] C7 C8.
-func (p Profile) depthAt(t *world.Terrain, cx, cz int32) int32 {
-	if t == nil {
-		return 0
-	}
-	cell := t.PlotAt(cx, cz)
-	if cell == nil {
-		return 0
-	}
-	// Canonical water test is height byte vs sea-level byte [fmt tnt].
-	// The height byte lives on PlotCell (Height()) [02 "Terrain file"][fmt tnt];
-	// the derived Min/Max pair (MinHeight()/MaxHeight()) is averaged by
-	// CoarseHeightAt [02 "Terrain file"][03 §2.3] C8. Depth uses the single-sample height
-	// per [04 §6.1] water legality folded into profile thresholds by comparing
-	// terrain against sea level [04 §6.1].
-	h := int32(cell.Height()) // [fmt tnt] +0 height
-	sea := int32(t.SeaLevel)  // [fmt tnt] header SeaLevel, exposed via Terrain.SeaLevel [03 §2.2] C9
-	// Exercise the Fixed helpers to lock the spec's attribute lattice path:
-	// SeaLevelWorld is byte*65536 [03 §2.2] C9, HeightAt is the bilinear
-	// 4-corner sample [03 §2.3] C7, CoarseHeightAt is (Min+Max)/2 [03 §2.3] C8.
-	_ = t.SeaLevelWorld()                                                              // [03 §2.2] C9
-	_ = t.HeightAt(numeric.Fixed(int64(cx)*1048576), numeric.Fixed(int64(cz)*1048576)) // [03 §2.3] C7 via CellToWorld
-	_ = t.CoarseHeightAt(cx, cz)                                                       // [03 §2.3] C8
-	if h >= sea {
-		return 0
-	}
-	return sea - h // 1..255 water depth [04 §6.1][fmt tnt]
-}
-
-// isWater reports whether the cell is water (depth > 0) [04 §6.1][fmt tnt].
-func (p Profile) isWater(t *world.Terrain, cx, cz int32) bool {
-	return p.depthAt(t, cx, cz) > 0
-}
 
 // isFeatureBlocked reports whether the cell's feature reference makes it
 // impassable [04 §6.2][fmt tnt][GAP T14].

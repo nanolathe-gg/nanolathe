@@ -161,15 +161,15 @@ func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error 
 		high = 0x8000
 	case TargetGround:
 		if int64(s.Target.X)&0xffff != 0 || int64(s.Target.Z)&0xffff != 0 {
-			return fmt.Errorf("ground target is not integral in save coordinates")
+			return fmt.Errorf("units: ground target is not integral in save coordinates")
 		}
 		x, z := int64(s.Target.X)>>16, int64(s.Target.Z)>>16
 		if x < math.MinInt16 || x > math.MaxInt16 || z < math.MinInt16 || z > math.MaxInt16 {
-			return fmt.Errorf("ground target (%d,%d) is outside signed 16-bit", x, z)
+			return fmt.Errorf("units: ground target (%d,%d) is outside signed 16-bit", x, z)
 		}
 		low, high = uint16(int16(x)), uint16(int16(z))
 	default:
-		return fmt.Errorf("unknown target kind %d", s.Target.Kind)
+		return fmt.Errorf("units: unknown target kind %d", s.Target.Kind)
 	}
 	binary.LittleEndian.PutUint16(data, low)
 	binary.LittleEndian.PutUint16(data[2:], high)
@@ -177,13 +177,13 @@ func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error 
 	data[8] = s.SavedActiveByte
 	binary.LittleEndian.PutUint32(data[0x0c:], s.SavedPayloadWord1)
 	if s.Reload < math.MinInt16 || s.Reload > math.MaxInt16 {
-		return fmt.Errorf("reload %d is outside signed 16-bit", s.Reload)
+		return fmt.Errorf("units: reload %d is outside signed 16-bit", s.Reload)
 	}
 	binary.LittleEndian.PutUint16(data[0x10:], uint16(int16(s.Reload)))
 	binary.LittleEndian.PutUint16(data[0x12:], s.DesiredYaw)
 	binary.LittleEndian.PutUint16(data[0x14:], s.DesiredPitch)
 	if s.Ammo < 0 || s.Ammo > math.MaxUint8 {
-		return fmt.Errorf("stockpile %d is outside byte range", s.Ammo)
+		return fmt.Errorf("units: stockpile %d is outside byte range", s.Ammo)
 	}
 	data[0x16] = byte(s.Ammo)
 	// The persisted slot-flag byte is the slot control byte's bits 0-4: aim

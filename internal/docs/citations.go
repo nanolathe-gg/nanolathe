@@ -27,6 +27,7 @@ type Citation struct {
 	Text string // the bracket contents, e.g. `04 §7.2`
 }
 
+// String renders a citation as "file:line: [text]".
 func (c Citation) String() string {
 	return fmt.Sprintf("%s:%d: [%s]", c.File, c.Line, c.Text)
 }
@@ -217,6 +218,7 @@ type Finding struct {
 	Anchor string // "R-P0-09"
 }
 
+// String renders a finding as the citation form documents use, "[04 R-P0-09]".
 func (f Finding) String() string { return "[" + f.Doc + " " + f.Anchor + "]" }
 
 // UncitedFindings returns the anchored findings that no plan document cites.

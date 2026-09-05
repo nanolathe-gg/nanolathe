@@ -1,4 +1,15 @@
-// Package cob implements the compiled script (COB) loader [fmt cob] [02 "Compiled script archive (COB)"] [04 §4.1].
+// Package cob is the compiled-script machine: the COB loader, the opcode
+// interpreter and its eight threads, the piece surface, and the engine ports
+// and callbacks that join a script to the simulation [fmt cob]
+// [02 "Compiled script archive (COB)"] [04 §4.1] [04 §4.2] [04 §4.3]
+// [04 §4.4] [04 §5].
+//
+// A VM belongs to one unit. It owns no simulation state: everything it reads
+// or writes outside its own threads and piece words goes through a bound port
+// or a callback, which internal/units and internal/session install.
+//
+// This file: the loader [fmt cob] [02 "Compiled script archive (COB)"]
+// [04 §4.1].
 //
 // Retail loads a COB file whole into one allocation and relocates absolute
 // file offsets in place [02 "Compiled script archive (COB)"] [04 §4.1]. This
@@ -308,8 +319,12 @@ type CachedLoader struct {
 	cache map[string]*Program
 }
 
+// NewCachedLoader returns an empty loader cache.
 func NewCachedLoader() *CachedLoader { return &CachedLoader{cache: make(map[string]*Program)} }
 
+// Load returns the unit's Program, parsing it on the first request and serving
+// the memoized copy afterwards. The second result is false when no COB exists
+// for the unit, which is not an error. A nil loader parses every time.
 func (c *CachedLoader) Load(fs vfs.FSOps, unitName string) (*Program, bool, error) {
 	if c == nil {
 		return LoadFromFS(fs, unitName)

@@ -943,10 +943,11 @@ type World struct {
 	pool    *pool.Units
 	catalog *content.Catalog
 
-	// iterHint is the live-unit count Iter last produced, used only to size
-	// the next Iter allocation. It is presentation-neutral bookkeeping and
-	// never reaches simulation arithmetic.
-	iterHint int
+	// iterHint and iterSlicedHint are the live-unit counts Iter and IterSliced
+	// last produced, used only to size the next allocation. They are
+	// presentation-neutral bookkeeping and never reach simulation arithmetic.
+	iterHint       int
+	iterSlicedHint int
 
 	// OnDeath is the death-notification hook [08 "Evaluation"]; nil means no
 	// consumer. It fires exactly once per unit at slot-end finalization.
@@ -1449,7 +1450,10 @@ func (w *World) defIDForDef(def *content.UnitDef) (uint16, error) {
 	// per-def counting never conflates two definitions. Claimed identities
 	// live in a slice scanned linearly: Create runs inside the simulation,
 	// and I1 bans map iteration on sim-visible paths.
-	for w.nextDefID <= 0xFFFF {
+	// The cursor is a uint16, so it wraps rather than passing 0xFFFF; the walk
+	// is bounded by the size of the identity space instead, which is what makes
+	// the exhausted diagnostic below reachable.
+	for attempt := 0; attempt < 0xFFFF; attempt++ {
 		id := w.nextDefID
 		if id == 0 {
 			id = 1
@@ -2275,7 +2279,13 @@ func (w *World) IterSliced() []*Unit {
 	if w == nil {
 		return nil
 	}
+	// The sliced walk visits the same live units the plain walk does, so the
+	// previous pass's length is a good capacity hint and spares the append
+	// ladder its regrowth copies.
 	var out []*Unit
+	if w.iterSlicedHint > 0 {
+		out = make([]*Unit, 0, w.iterSlicedHint)
+	}
 	for player := 0; player < 10; player++ {
 		start, end, ok := w.pool.SliceForPlayer(player)
 		if !ok {
@@ -2287,5 +2297,6 @@ func (w *World) IterSliced() []*Unit {
 			}
 		}
 	}
+	w.iterSlicedHint = len(out)
 	return out
 }

@@ -71,7 +71,7 @@ with the 256-color palette following.
   or logo-sized.
 - Filenames match unit short names; lookup is case-insensitive.
 
-## How the engine decodes it (2026-08-29, RWU-02-3)
+## How the engine decodes it
 
 Owned by `[02 §7]` and `[02 R-MALF-01 §9]`. Checks: the 128-byte header
 must read completely, byte 0 must be `0x0A` and byte 1 must be `5`; nothing
@@ -88,9 +88,7 @@ the seek fails and the palette bytes are read from the current position.
 
 ## Unknowns and caveats
 
-- **Closed (2026-08-29, RWU-02-3).** Previously: "Whether the engine honors
-  `bytes_per_line` padding or assumes width == stride for its own art is
-  untested". It never reads the field: each row is decoded as exactly
+- The engine never reads `bytes_per_line`: each row is decoded as exactly
   `width` pixels, so a padded file shears (each row starts in the previous
   row's padding) without any error.
 - Some retail PCX palettes disagree with `PALETTE.PAL`; the F1 screen

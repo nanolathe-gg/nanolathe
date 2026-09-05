@@ -56,17 +56,17 @@ gadget is one element of it.
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | int | Gadget type — dispatches everything else. Known: 0 header, 1 button, 2 listbox, 3 textbox, 4 scrollbar, 5 label, 6 blank surface, 7 font, 12 picture box. **Stored as one byte** (the low eight bits of the integer), so the engine dispatches on `id mod 256`. The executable also knows `8` (raw file, below), `10` (line, below), `11` (built exactly like a header/panel) and `13` (the end-of-mission score bar, created by the engine, never authored); `9` and everything above 13 read only `[COMMON]` and get no build work. Full per-kind key table: [07 R-WGT-01 §11]; builder dispatch: [07 R-WGT-01 §12]. |
-| `assoc` | int | Association key linking gadgets. Confirmed effect: a listbox and scrollbar sharing `assoc` are wired together (listbox drives knob size, scrollbar scrolls list). **Correction (2026-08-29):** "Most gadgets ignore it" was too strong — buttons with the radio attribute use it as their group, a slider's synthesised arrow buttons carry it, a listbox copies its selection to same-`assoc` listboxes and (attribute 8) to a same-`assoc` textbox; see the executable spec [07 R-WGT-01 §3, §5]. |
+| `assoc` | int | Association key linking gadgets, and most gadget kinds do use it. A listbox and scrollbar sharing `assoc` are wired together (listbox drives knob size, scrollbar scrolls list); buttons with the radio attribute use it as their group; a slider's synthesised arrow buttons carry it; a listbox copies its selection to same-`assoc` listboxes and (attribute 8) to a same-`assoc` textbox. See the executable spec [07 R-WGT-01 §3, §5]. |
 | `name` | string | Dual purpose: (a) graphic lookup — the name of a GAF entry in `<menu>.GAF` or `commongui.gaf`, falling back to default art for the type/size; (b) event binding — hard-coded per-menu event names attach behavior. `HELPTEXT` is a universal name: a label so named shows hover help text. |
 | `xpos`, `ypos` | int | Position in pixels (640×480 space). The first gadget is clamped so the interface stays on-screen. |
 | `width`, `height` | int | Size in pixels. Ignored by types whose art dictates size (buttons, labels, picture boxes). Scrollbar orientation follows the long axis. |
-| `attribs` | int | Type-dependent. Confirmed: scrollbars need `1` = horizontal, `2` = vertical. **Correction (2026-08-29):** "Other observed values … have no confirmed meaning" — the executable's bit meanings for buttons (radio `0x10`, toggle `0x40`, cycle `0x100`, auto-repeat `0x2000`, keep-authored-quickkey `0x10000`), listboxes (text list `0x10`, fire-on-click `0x40`, heading-reject `0x200`) and the alignment bits are in the executable spec [07 R-WGT-01 §§3–5]. |
+| `attribs` | int | Type-dependent bit field. Scrollbars need `1` = horizontal, `2` = vertical. The executable's bit meanings for buttons (radio `0x10`, toggle `0x40`, cycle `0x100`, auto-repeat `0x2000`, keep-authored-quickkey `0x10000`), listboxes (text list `0x10`, fire-on-click `0x40`, heading-reject `0x200`) and the alignment bits are in the executable spec [07 R-WGT-01 §§3–5]. |
 | `colorf`, `colorb` | int | GUI semantic foreground/background palette fields; retail resolves them through the GUIPAL→PALETTE nearest-RGB map before primitive/FNT writes |
 | `texturenumber` | int | No observed effect |
 | `fontnumber` | int | Partially understood: nonzero reverts labels to the default font when a custom font gadget is present |
 | `active` | int | `1` visible, `0` hidden |
 | `commonattribs` | int | No observed effect |
-| `help` | string | Declared everywhere, effect unconfirmed |
+| `help` | string | Hover help text; the window-build pass copies it into the `HELPTEXT` label [07 R-WGT-01 §1] |
 
 Cavedog files fill unused fields with the sentinel `-51` (and `52685` =
 0xCDCD, both uninitialized-memory patterns from their editor) — treat any
@@ -78,7 +78,7 @@ out-of-range value as "unset".
 | --- | --- |
 | `totalgadgets` | Declared element count; has no observed effect |
 | `panel` | Background art: GAF entry name via the same lookup rule as `name`. Empty when the screen uses a PCX background. |
-| `crdefault` | Button triggered by Return (name). **Correction (2026-08-29):** this row said "exact behavior unconfirmed"; the executable's window-open routine resolves the name by a forward scan and, when the key is empty, binds Return to the first button whose name begins `OK` or `NEXT` (case-insensitive prefix), and likewise an empty `escdefault` to the first button beginning `PREV` or `Cancel` — see the executable spec [07 R-FE-01 §12] |
+| `crdefault` | Button triggered by Return (name). The window-open routine resolves the name by a forward scan and, when the key is empty, binds Return to the first button whose name begins `OK` or `NEXT` (case-insensitive prefix), and likewise an empty `escdefault` to the first button beginning `PREV` or `Cancel` — see the executable spec [07 R-FE-01 §12] |
 | `escdefault` | Button triggered by Escape (name) |
 | `defaultfocus` | Gadget name that starts focused |
 | `[VERSION] { major=; minor=; revision=; }` | Required in all 368 retail GUIs, but **optional in the parser**: the executable's panel-header loader seeks the subsection and skips it silently when absent, leaving the three byte fields zero (see the executable spec doc 02 §6). Values are arbitrary in retail files. |
@@ -89,7 +89,7 @@ out-of-range value as "unset".
 | --- | --- |
 | `status` | Starting frame within the button's GAF entry (multi-stage buttons must use 0) |
 | `text` | Label text. Multi-stage buttons separate per-stage text with a vertical bar (e.g. `text=On\|Off;`) |
-| `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data. **Correction (2026-08-29):** this row implied the field is honoured; the executable overwrites it at window open with the first free letter of the label unless `attribs` bit `0x10000` is set — see [07 R-WGT-01 §3] |
+| `quickkey` | Keyboard accelerator as an ASCII code (`83` = `S`); a bare symbol also occurs in data. The authored value is normally discarded: the executable overwrites it at window open with the first free letter of the label unless `attribs` bit `0x10000` is set — see [07 R-WGT-01 §3] |
 | `grayedout` | `1` = visible but disabled. Stored as bit 0 of the button's own grey word — **not** an `attribs` bit — and tested by the button handler at press time, so a greyed button still shows hover help [07 R-WGT-01 §13] |
 | `stages` | Number of stages for cycle buttons (0 = plain). `stages=1`, or a label of exactly `Off\|On`, is promoted to 2 stages with the `stagebuttn1` art [07 R-WGT-01 §3] |
 
@@ -117,8 +117,8 @@ No border art — backgrounds provide the visual frame.
 
 | Field | Meaning |
 | --- | --- |
-| `range` | Knob travel in pixels (`knobpos` runs `0..range−1`), not an item count; the engine overwrites it for assoc-driven bars and for horizontal bars with `SLIDERS` art [07 R-WGT-01 §5]. **Correction (2026-08-29):** the previous "Item count" was a guess. |
-| `thick` | **Correction (2026-08-29):** this row said "No confirmed effect"; the executable reads it as the numeric range of the value label a scrollbar with `attribs` bit 4 draws beside itself (`trunc(knobpos × thick / (width − knobsize))`) — see [07 R-WGT-01 §5] |
+| `range` | Knob travel in pixels (`knobpos` runs `0..range−1`), not an item count; the engine overwrites it for assoc-driven bars and for horizontal bars with `SLIDERS` art [07 R-WGT-01 §5]. |
+| `thick` | Numeric range of the value label a scrollbar with `attribs` bit 4 draws beside itself (`trunc(knobpos × thick / (width − knobsize))`) — see [07 R-WGT-01 §5] |
 | `knobpos` | Knob position within range (engine-driven) |
 | `knobsize` | Knob size (engine-driven when assoc'd) |
 
@@ -162,7 +162,7 @@ into a 32-byte field and the window builder opens
 
 | Field | Meaning |
 | --- | --- |
-| `nuttin` | Integer, stored as a 32-bit word in the text field; a WU-19-144 instruction-level trace of the painter confirms no reader — it never dereferences this offset. The line itself is drawn from `attribs`: `1` horizontal (`(x,y)–(x+w−1,y)`), `2` vertical (`(x,y)–(x,y+h−1)`), `4` a single diagonal line across the gadget's rectangle (`(x,y)–(x+w−1,y+h−1)`, not a four-sided rectangle outline — "outlined" is the bit's name, not the shape it draws), in the gadget colour (`colorf` as a window colour-table row) [07 R-WGT-01 §8]. **Correction (2026-09-04, WU-19-144):** the previous "rectangle outline" for attribute 4 was a guess from the bit's name; the trace shows one diagonal line. |
+| `nuttin` | Integer, stored as a 32-bit word in the text field; an instruction-level trace of the painter confirms no reader — it never dereferences this offset. The line itself is drawn from `attribs`: `1` horizontal (`(x,y)–(x+w−1,y)`), `2` vertical (`(x,y)–(x,y+h−1)`), `4` a single diagonal line across the gadget's rectangle (`(x,y)–(x+w−1,y+h−1)`, not a four-sided rectangle outline — "outlined" is the bit's name, not the shape it draws), in the gadget colour (`colorf` as a window colour-table row) [07 R-WGT-01 §8]. |
 
 ### Picture box (`id=12`)
 
@@ -180,7 +180,7 @@ fields.
 - Every unit's first command page carries the same command gadgets whether
   or not the unit can use them; availability is enforced by game logic, not
   by the GUI data.
-- **Loader edges (2026-08-29, RWU-02-3, `[02 R-MALF-01 §5]`).** The panel
+- **Loader edges (`[02 R-MALF-01 §5]`).** The panel
   loader walks the top-level sections **by index in file order** — the
   `GADGET<n>` names are not consulted — and `totalgadgets` is read and then
   overwritten with the number of sections minus one (inert as authored).
@@ -208,10 +208,9 @@ dominate (4,421 of 5,840 gadgets).
 
 - The complete per-menu hard-coded event-name tables are engine-internal;
   the only way to enumerate them is inspection of the stock GUI files.
-- `texturenumber`, `commonattribs` have no confirmed
-  behavior (`crdefault`, `thick` and `help` were on this list until 2026-08-29; `thick` is closed above, `help` is the hover text the pass copies into `HELPTEXT` [07 R-WGT-01 §1]). `colorf`/`colorb` are confirmed semantic GUI palette
-  fields, but their per-gadget defaults and every primitive consumer remain
-  context-dependent.
+- `texturenumber` and `commonattribs` have no confirmed behavior.
+  `colorf`/`colorb` are confirmed semantic GUI palette fields, but their
+  per-gadget defaults and every primitive consumer remain context-dependent.
 - Exact numeric semantics of `attribs` beyond the values cited above are
   unknown.
 - Listbox behavior: rows, selection, scrolling and headings are in the

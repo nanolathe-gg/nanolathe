@@ -172,37 +172,10 @@ const (
 	KindNoReaction uint8 = 11 // subtracts health but skips reaction/callbacks [06 §9.1]
 )
 
-// Global damage gates are bits 7 and 8 of the global options word
-// [P1-07 §2.5][06 §9.2]. Bit7 (0x80) doubles damage; bit8 (0x100) halves it.
-// Order is *2 then /2, so both set nets to *1 [P1-07 §2.5] [06 §9.2] step4.
-const (
-	GlobalDoubleMask = 0x80  // global options word bit7 [P1-07 §2.5]
-	GlobalHalfMask   = 0x100 // global options word bit8 [P1-07 §2.5]
-)
-
-// ApplyGlobalGates applies the double/half gates in retail order *2 then /2
-// from the global options word [P1-07 §2.5] [06 §9.2] step4.
-func ApplyGlobalGates(amount int32, rawFlags int) int32 {
-	if rawFlags&GlobalDoubleMask != 0 {
-		amount *= 2 // [P1-07 §2.5] signed <0 branch
-	}
-	if rawFlags&GlobalHalfMask != 0 {
-		amount /= 2 // [P1-07 §2.5] bit8
-	}
-	return amount
-}
-
 // IsDamagePacketKind reports whether kind is one of the four damage packet
 // kinds the damage-intake handler accepts [P1-07 §2.6] [06 §9.1].
 func IsDamagePacketKind(k uint8) bool {
 	return k == KindOrdinary || k == KindParalyzer || k == KindHeal || k == KindNoReaction // [P1-07 §2.6]
-}
-
-// IsDeathCause reports whether cause is one of the death causes 3..11 that
-// are dispatched through the death handler's cause producer table [P1-07 §2.6]
-// [06 §12.1]. Causes 12..15 have no local producer [06 §12.1].
-func IsDeathCause(c uint8) bool {
-	return c >= 3 && c <= 11 // [P1-07 §2.6] [06 §12.1] 3 self-destruct .. 11 water damage
 }
 
 // SelectBaseDamage selects the UnitName override or default damage [06 §9.2] C19.
@@ -826,25 +799,6 @@ func ApplyDamage(currentHealth int32, amount uint16) int32 {
 		r -= 0x10000
 	}
 	return r
-}
-
-// HealthPercentWithFault computes health*100/maxHealth with retail DIV fault
-// on zero max [P1-07 §2.7] [06 §9.1]. Stock MaxDamage is always >0, so the fault
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// the pool record already incremented (if ballistic) — count not rolled back
-// [P1-07 §4][GAP T5] I11. We reproduce as panic (Go divide fault).
-func HealthPercentWithFault(health, maxHealth int32) int32 {
-	if maxHealth == 0 {
-		panic("combat: zero maxHealth divide fault [P1-07 §2.7][GAP T5]") // retail #DE [P1-07 §4]
-	}
-	v := (int64(health) * 100) / int64(maxHealth) // unsigned DIV for positive domain [04 §5.1]
-	if v < 0 {
-		v = 0
-	}
-	if v > 100 {
-		v = 100
-	}
-	return int32(v)
 }
 
 // Water damage per [04 §9.2] established block ("canhover is bit 12" through

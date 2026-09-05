@@ -39,12 +39,12 @@ byte offsets.
 | 0x08 | NumberOfPieces | Count of piece names |
 | 0x0C | CodeLength | Length of the code section **in u32 words** (historically labelled "Unknown_0" — it is the code word count) |
 | 0x10 | NumberOfStatics | Count of static-variable slots the program declares (historically "Unknown_1"). There is no static-data section in the file. Runtime initialization is owned by [R-COB-04 §7]. |
-| 0x14 | TrailingRecordCount | Number of records in the trailing 8-byte record table at `0x28`. Zero in all 835 shipped scripts, which is how the field acquired its earlier names "Always_0" / "Unknown_2" — **corrected 2026-09-04 (WU-19-155)**, see "The trailing record table" below |
+| 0x14 | TrailingRecordCount | Number of records in the trailing 8-byte record table at `0x28`. Zero in all 835 shipped scripts, which is how the field acquired its community names "Always_0" / "Unknown_2"; see "The trailing record table" below |
 | 0x18 | OffsetToScriptCodeIndexArray | → u32[NumberOfScripts]: per-script entry point, as a word index into the code section |
 | 0x1C | OffsetToScriptNameOffsetArray | → u32[NumberOfScripts]: file offsets of NUL-terminated script names |
 | 0x20 | OffsetToPieceNameOffsetArray | → u32[NumberOfPieces]: file offsets of NUL-terminated piece names |
 | 0x24 | OffsetToScriptCode | → code section (u32 words) |
-| 0x28 | OffsetToTrailingRecords | → `TrailingRecordCount` records of 8 bytes. With a count of zero in every shipped file the pointer lands on `ScriptNameOffsetArray[0]`, i.e. the start of the string pool, which is how it acquired its earlier names "OffsetToFirstScriptName" / "Unknown_3" — **corrected 2026-09-04 (WU-19-155)**, see below |
+| 0x28 | OffsetToTrailingRecords | → `TrailingRecordCount` records of 8 bytes. With a count of zero in every shipped file the pointer lands on `ScriptNameOffsetArray[0]`, i.e. the start of the string pool, which is how it acquired its community names "OffsetToFirstScriptName" / "Unknown_3"; see "The trailing record table" below |
 
 Real example — `scripts/CORTRUCK.COB` from `totala1.hpi` (this is the same
 unit the original format note documented; the retail file matches it
@@ -59,9 +59,8 @@ index array @ 0x2C0 = `[0, 83, 86]`, script names @ 0x2CC =
 
 ### The trailing record table
 
-**Established (2026-09-04, WU-19-155; corrects the two header names above).**
-Header words `0x14` and `0x28` are a *count/pointer pair* for a fifth table, not
-a reserved word and a redundant string-pool offset. The loader reads the file
+**Established.** Header words `0x14` and `0x28` are a *count/pointer pair* for
+a fifth table, not a reserved word and a redundant string-pool offset. The loader reads the file
 whole, stamps it with the content checksum, and then relocates exactly five
 table pointers — script entry points (pointer only; the entries are word
 indexes into the code array and are *not* relocated), script names (pointer plus
@@ -217,8 +216,8 @@ operator their compiler can emit. Cross-checked against those files:
 | --- | --- |
 | `0x10035000` | In the operator table as bare `"?"`, priority 20 — the same tier as bitwise OR (`0x10036000`) and adjacent to it numerically. Never given a real BOS keyword by Cavedog (no script, including their own retail corpus, can compile to it), but its grouping strongly favors a bitwise-family binary op (AND, per a common cross-engine convention) over modulo. |
 | `0x10037000`, `0x10038000` | **Absent from both `Compiler.cfg` and `Decompiler.cfg` entirely** — not even a placeholder token. Cavedog's own compiler cannot emit these opcodes under any BOS syntax; the decompiler falls back to printing `"UK"` if it ever sees them. Community engines' "bitwise XOR" / "bitwise NOT" labels for these are conventions, not attested by Cavedog's own tools. |
-| `0x10039000`, `0x1003A000`, `0x1003B000` | Present in the operator table only as placeholder tokens `"??"`, `"???"`, `"????"` — priority 5 (lower than logical AND/OR). Confirmed reserved-but-unused opcode slots; not previously documented here at all. |
-| `0x10059000` | **Does not appear anywhere in Cavedog's Scriptor source** (not in `Defs.h`, not in either `.cfg`). The "logical XOR" label in earlier versions of this doc was an unverified guess (likely borrowed from a community engine's opcode table) with zero corroboration — treat as unconfirmed. |
+| `0x10039000`, `0x1003A000`, `0x1003B000` | Present in the operator table only as placeholder tokens `"??"`, `"???"`, `"????"` — priority 5 (lower than logical AND/OR). Confirmed reserved-but-unused opcode slots. |
+| `0x10059000` | **Does not appear anywhere in Cavedog's Scriptor source** (not in `Defs.h`, not in either `.cfg`). The "logical XOR" label that community opcode tables give it is an unverified guess with no corroboration — treat as unconfirmed. |
 
 `0x10063000`, historically claimed as `call-script`'s opcode by the 1998
 community note, is in fact `CMD_FAKE_JUMP` — an internal marker the
@@ -348,11 +347,9 @@ effects, defaults, packing, timing, and failure edges are runtime behavior in
 | 19 | `BUGGER_OFF` | set/get | "ask other units to clear the area" |
 | 20 | `ARMORED` | set/get | |
 
-**Correction (2026-08-29).** Earlier text presented a masked-OR implementation
-ABI and said retail did not independently expose the pack/unpack arithmetic.
-That caveat is superseded: retail uses the signed-add packing and negative-Z
-borrow correction established in [R-COB-03 §3]. This format document does not
-restate that runtime arithmetic.
+Retail packs and unpacks the packed x,z argument with the signed-add packing
+and negative-Z borrow correction established in [R-COB-03 §3]; this format
+document does not restate that runtime arithmetic.
 
 Retail bytecode usage confirms the table: zero-argument reads
 (`get-unit-value`) use 17, 4, and 18; multi-argument reads (`get`) use
@@ -422,7 +419,7 @@ forty case-sensitive names:
 `TakeDamage` · `TargetCleared` · `TransportDrop` · `TransportPickup` ·
 `setSFXoccupy`.
 
-**Corrections (2026-08-29).** `MotionControl(moving, aiming, justmoved)` is a
+**Caveats on the list above.** `MotionControl(moving, aiming, justmoved)` is a
 compiler-recognized signature and an authored convention, but the whole-image
 census finds no `MotionControl` occurrence and no retail engine producer.
 `MoveRate1`/`MoveRate2`/`MoveRate3` are engine-invoked, but document 04 traces
@@ -448,9 +445,7 @@ A full decode of every COB in the retail archives (835 scripts across
   documented under "Values and variables". Notably these include every
   historically contested slot — retail data cannot arbitrate them.
   (`greater`=`0x10053000`, `greater-or-equal`=`0x10054000` per Scriptor's own
-  `Compiler.cfg` operator table — an earlier version of this doc had the two
-  swapped.) The count was seven before the two transport reads were traced to
-  the interpreter and censused.
+  `Compiler.cfg` operator table; community tables often swap the two.)
 - Common helper-script conventions (script names that are not engine
   callbacks but appear across many units): `Go`/`Stop` (activation
   bodies), `activatescr`/`deactivatescr` (authored animation includes),
@@ -466,19 +461,20 @@ A full decode of every COB in the retail archives (835 scripts across
 
 ## Unknowns and caveats
 
-- **Historical opcode disagreements — now resolved against Cavedog's own
-  tools.** The 1998 command note assigns `call-script` to `0x10063000`; that
-  value is actually `CMD_FAKE_JUMP`, a decompiler-internal marker, never a
-  real bytecode opcode (see "Reserved / unassigned slots" above). Real
+- **Opcode disagreements among the community notes — resolved against
+  Cavedog's own tools.** The 1998 command note assigns `call-script` to
+  `0x10063000`; that value is actually `CMD_FAKE_JUMP`, a decompiler-internal
+  marker, never a real bytecode opcode (see "Reserved / unassigned slots" above). Real
   `call-script` is `0x10062000` (`0x10061000` = start-script), confirmed by
   both retail bytecode and Scriptor's own `Defs.h`. The note also labels
   `0x1005A000` "bitwise NOT"; Scriptor's compiler config confirms it is the
   *logical* NOT (`!`/`NOT`, unary prefix, highest priority) — stock control
   flow (busy-wait on `!ready`) only works under that reading. `0x10038000`
   has no confirmed role at all (see below).
-- **Modulo vs. bitwise AND at `0x10035000`:** no longer purely a community
-  guess. Scriptor's own operator table places it, unnamed except for a bare
-  `"?"` placeholder, at the same priority tier as bitwise OR — grouping that
+- **Modulo vs. bitwise AND at `0x10035000`:** more than a community guess,
+  but still unsettled. Scriptor's own operator table places it, unnamed except
+  for a bare `"?"` placeholder, at the same priority tier as bitwise OR —
+  grouping that
   favors a bitwise-family op (AND, matching a common cross-engine
   convention) over modulo, though Cavedog never wired a real keyword to it
   either way.
@@ -486,9 +482,8 @@ A full decode of every COB in the retail archives (835 scripts across
   these have *zero* footprint in Cavedog's own Scriptor source — no opcode
   name, no operator-table entry, nothing. Retail data never exercises them
   either. Their conventional "XOR" / "bitwise NOT" / "logical XOR" labels
-  (this doc included, historically) are unverified conventions borrowed from
-  other engines' opcode tables, not attested by any Cavedog source seen so
-  far.
+  are unverified conventions borrowed from other engines' opcode tables, not
+  attested by any Cavedog source seen so far.
 - **`attach-unit` / `drop-unit` stack shapes** are established from retail
   bytecode (see the instruction table): all 48 retail call sites are uniform,
   including the `piece = -1` idiom, and the compiler-supplied third value is
@@ -497,7 +492,7 @@ A full decode of every COB in the retail archives (835 scripts across
   [04 §4.6]. This file retains only the opcode and authored-duration encoding.
 - The header word at 0x28 (first-script-name pointer) has no known runtime
   purpose.
-- **Loader edges (2026-08-29, RWU-02-3).** The file is read whole; a
+- **Loader edges.** The file is read whole; a
   missing or zero-length script is a null script pointer and the first unit
   created from the definition crashes (`[04 R-COB-04 §8]`). The five table
   pointers and the entries of the script-name, piece-name and trailing

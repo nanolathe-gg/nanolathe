@@ -67,7 +67,7 @@ type PlacementResult struct {
 }
 
 func placementFailure(helper HelperKind, reason ReasonCode, detail string) PlacementResult {
-	return PlacementResult{Valid: false, Helper: helper, Reason: reason, Proof: fmt.Errorf("ai placement: %s", detail)}
+	return PlacementResult{Valid: false, Helper: helper, Reason: reason, Proof: fmt.Errorf("ai: placement: %s", detail)}
 }
 
 // placementWorldCoordinate converts a validated footprint anchor to the
@@ -79,9 +79,6 @@ func placementWorldCoordinate(outputCell, footprint int32) numeric.Fixed {
 	word := footprint + 2*outputCell
 	return numeric.Fixed(word << 19)
 }
-
-// worldUnitsPerCell is 16*65536 = 1<<20 [03 §2.1].
-const worldUnitsPerCell = 1 << 20 // 1048576
 
 // stepTowardCenter is the two-axis fixture adapter for the three-axis root.
 // Production passes the builder and strategic-center Y through
@@ -95,60 +92,16 @@ func stepTowardCenter(originX, originZ, centerX, centerZ, radius numeric.Fixed) 
 	return p.x, p.z
 }
 
-// extractorHelperA is retained as a fixture adapter. Production supplies the
-// exact root origin directly to retailExtractorHelperA [08 R-AI-03 §3].
-// The marker retired here asked for a trace of the helper's negative-row
-// branch. It has one: [08 R-AI-03 §7.1] traced the blocker's entry test in
-// 2026-09-02 and the answer is "reads preceding storage". The test is
-// `candX > 0` on the signed column AND the packed cell word exceeding 0xffff as
-// unsigned, so row 0 is rejected exactly as column 0 is, a negative row passes
-// and the walk then addresses cells before the plot grid with no guard.
-// Whether that storage is mapped is Unknown and undecidable from the
-// executable, so §7.1 gives the implementation rule instead: reject a negative
-// row as Nanolathe's deterministic choice, marked as that choice, and reject
-// row 0 as retail does. validateRetailAICandidate in placement_heap.go does
-// both, and says which is which.
-func extractorHelperA(m *Manager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
-	_ = surfaceMetal
-	pd, failure := resolveRetailPlacementDef(m, defKey)
-	if failure.Proof != nil {
-		return failure
-	}
-	return retailExtractorHelperA(m, pd, retailPlacementPoint{x: m.OriginX, z: m.OriginZ}, m.Strategic.Radius, terrain)
-}
-
-// extractorHelperB is retained as a fixture adapter. Production supplies the
-// exact root origin directly to retailExtractorHelperB [08 R-AI-03 §4].
-func extractorHelperB(m *Manager, defKey string, surfaceMetal int32, terrain *world.Terrain) PlacementResult {
-	if m == nil {
-		return placementFailure(HelperB, ReasonNilManager, "manager unavailable")
-	}
-	if m.Catalog == nil {
-		return placementFailure(HelperB, ReasonMissingCatalog, "unit catalog unavailable")
-	}
-	if terrain == nil {
-		return placementFailure(HelperB, ReasonMissingTerrain, "terrain unavailable")
-	}
-	if m.RNG == nil {
-		return placementFailure(HelperB, ReasonMissingRNG, "simulation RNG unavailable")
-	}
-	pd, failure := resolveRetailPlacementDef(m, defKey)
-	if failure.Proof != nil {
-		return failure
-	}
-	return retailExtractorHelperB(m, pd, retailPlacementPoint{x: m.OriginX, z: m.OriginZ}, m.Strategic.Radius, surfaceMetal, terrain)
-}
-
 func placementMetalScore(terrain *world.Terrain, rect world.FootprintRect) (int64, error) {
 	if terrain == nil {
-		return 0, fmt.Errorf("terrain unavailable")
+		return 0, fmt.Errorf("ai: terrain unavailable")
 	}
 	var score int64
 	for z := rect.MinZ(); z < rect.MaxZ(); z++ {
 		for x := rect.MinX(); x < rect.MaxX(); x++ {
 			cell := terrain.PlotAt(x, z)
 			if cell == nil {
-				return 0, fmt.Errorf("terrain cell %d,%d unavailable", x, z)
+				return 0, fmt.Errorf("ai: terrain cell %d,%d unavailable", x, z)
 			}
 			score += int64(cell.Metal())
 		}
@@ -160,15 +113,15 @@ func placementMetalScore(terrain *world.Terrain, rect world.FootprintRect) (int6
 // It is the only path that mutates the order queue; no privileged write occurs.
 func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 	if !res.Valid {
-		return fmt.Errorf("placement result is invalid")
+		return fmt.Errorf("ai: placement result is invalid")
 	}
 	fac := m.Factory
 	if fac == nil {
-		return fmt.Errorf("builder unavailable")
+		return fmt.Errorf("ai: builder unavailable")
 	}
 	cb := m.QueueBuildTyped
 	if cb == nil {
-		return fmt.Errorf("typed build queue unavailable")
+		return fmt.Errorf("ai: typed build queue unavailable")
 	}
 	req := BuildRequest{
 		Builder: fac.Handle,
@@ -179,7 +132,7 @@ func queueExactResult(m *Manager, defKey string, res PlacementResult) error {
 		Kind:    BuildKindMobileSite,
 	}
 	if err := cb(req); err != nil {
-		return fmt.Errorf("typed build queue: %w", err)
+		return fmt.Errorf("ai: typed build queue: %w", err)
 	}
 	return nil
 }
@@ -241,7 +194,7 @@ func PlaceCandidate(m *Manager, defKey string, w *world.Terrain) PlacementResult
 		return placementFailure(HelperNone, ReasonMissingBuilder, "mobile build builder unavailable")
 	}
 	if m.QueueBuildTyped == nil {
-		return placementFailure(HelperNone, ReasonMissingQueue, "typed build queue unavailable")
+		return placementFailure(HelperNone, ReasonMissingQueue, "ai: typed build queue unavailable")
 	}
 	// Resolve terrain for this call: prefer passed-in w, else manager's terrain
 	terrain := w
@@ -249,7 +202,7 @@ func PlaceCandidate(m *Manager, defKey string, w *world.Terrain) PlacementResult
 		terrain = m.Terrain
 	}
 	if terrain == nil {
-		return placementFailure(HelperNone, ReasonMissingTerrain, "terrain unavailable")
+		return placementFailure(HelperNone, ReasonMissingTerrain, "ai: terrain unavailable")
 	}
 	pd, failure := resolveRetailPlacementDef(m, defKey)
 	if failure.Proof != nil {
@@ -292,23 +245,4 @@ func PlaceCandidate(m *Manager, defKey string, w *world.Terrain) PlacementResult
 	// [08 R-AI-03 §5].
 	m.Strategic.Radius = 0
 	return res
-}
-
-// Place moves the search origin toward the strategic center using the stored
-// search radius, handles the extractor branch with one RNG(255) draw against
-// mission SurfaceMetal, does not fall through on failed A, validates via yard
-// helpers, writes fixed-point placement, resets radius, and issues the build
-// command through the typed queue [08 "Established AI-facing data and rooted planner"]
-// [PLAN_11 C8, C9, C12][P0-03][P0-07].
-//
-// The selector and per-trial draw census are exact in placement_heap.go
-// [08 R-AI-03 §2, §4].
-// Typed path preserves X/Z via BuildRequest with MobileSite [P0-07] F-P0-004.
-// Exact site from PlacementResult is queued bit-for-bit [RS-11].
-func Place(m *Manager, defKey string, w *world.Terrain) (numeric.Fixed, numeric.Fixed, bool) {
-	res := PlaceWithResult(m, defKey, w)
-	if res.Valid {
-		return res.WorldX, res.WorldZ, true
-	}
-	return 0, 0, false
 }

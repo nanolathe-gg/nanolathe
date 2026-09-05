@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -222,6 +223,33 @@ type Service struct {
 	// at composition; with none installed a blast reaches units only, which is
 	// what every fixture that does not compose a session gets.
 	Features *features.Service `json:"-"`
+
+	// weaponByID is the catalog's per-identifier weapon lookup, bound once per
+	// catalog. Binding a method value allocates, and the projectile phase needs
+	// the lookup every tick, so the bound value and the catalog it came from
+	// are kept here rather than re-formed each tick.
+	weaponByIDCatalog *content.Catalog
+	weaponByID        func(id int32) (*content.WeaponDef, bool)
+}
+
+// weaponLookupFor returns the catalog's per-identifier weapon lookup
+// [02 "Weapon record"], bound once per catalog.
+//
+// The projectile phase used to ask the catalog for its whole compiled index
+// instead. That call returns a defensive COPY of the map, so a table that
+// never changes was rebuilt thirty times a second, and the fixture arm beside
+// it ranged the weapon table inside the tick — a map range on a sim-visible
+// path [I1]. Neither is needed: the catalog's own lookup answers one
+// identifier at a time and owns the fixture ordering rule.
+func (s *Service) weaponLookupFor(catalog *content.Catalog) func(id int32) (*content.WeaponDef, bool) {
+	if s == nil || catalog == nil {
+		return nil
+	}
+	if s.weaponByIDCatalog != catalog || s.weaponByID == nil {
+		s.weaponByIDCatalog = catalog
+		s.weaponByID = catalog.WeaponByID
+	}
+	return s.weaponByID
 }
 
 // Reserve appends a projectile record at the active-span tail [06 §5.1], [01 §6.1].

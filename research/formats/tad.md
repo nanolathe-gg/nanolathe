@@ -175,13 +175,13 @@ match TADR's tables and were re-validated against the corpus.
 | 0x08 | 1 | loading started |
 | 0x09 | 23 | **unit build started**: u16 unitTypeId @1, u16 netId @3, u32 x @7, u32 y @11, u32 z @15 — TA convention (x east, y up/height, z south); values are consistent with map-pixel units. Corpus shows the packet can be sent twice for the same netId (dedupe on netId + tick window). |
 | 0x0a | 7 | unknown (netId + ff 01 pattern) |
-| 0x0b | 9 | **unit take damage**: u16 victim netId @1, u16 attacker netId @3, u16 damage @5, u8 damage_modifier @7 (97 distinct values in corpus), u8 damage_type @8 (2 distinct: 1 = normal damage, 6 = paralyzer damage). Post-2026-07 field analysis; damage_modifier and damage_type decoded 2026-07-17 (WP-A4). |
-| 0x0c | 11 | **unit killed**: u16 victim netId @1, u32 undecoded @3 (4 bytes, low entropy), u16 killer netId @7, u8 weapon/cause @9, u8 param @10. Killer-netId=0 means unattributed death. Post-2026-07 field analysis on five recordings (WP-A4). |
-| 0x0d | 36 | **weapon fired**: u32 origin x @1, u32 origin y @5, u32 origin z @9, u32 aim x @13, u32 aim y @17, u32 aim z @21 — all 16.16 fixed-point world units, TA convention (x east, y up/height, z south); origin is the muzzle position at launch, aim is the target point including lead. u8 weapon TDF `ID` @25 (joins `weapons/*.tdf` authored `ID=` — confirmed 2026-07-19 by per-(ID, shooter) fire-gap cadence matching `reloadtime × 30` sender ticks across nine recordings and four recorder eras, e.g. EMG 16 → 12 ticks, ARMRL_MISSILE 106 → 60, ARMTRUCK_ROCKET 124 → 360; 100.0% of corpus shots satisfy horizontal origin→aim distance ≤ weapon `range`). u8 flag @26 (2-state: 0x00 or 0xfe; semantics unknown — air-launched weapons skew 0xfe). i16 launch heading @27 (TA angle units, 65536 = full turn; equals `atan2(dx,dz) + 32768`, circular fit R=0.956, median residual 2.9°). i16 launch pitch @29 (same units; equals `atan2(dy, horiz)` for line-of-sight weapons, median residual 1.4°; ballistic weapons deviate). u16 shooter netId @31, u16 target netId @33 (same id space as 0x0b victim/attacker: unit id = playerIndex × maxUnits + slot + 1; the playerIndex is the lobby/block index, which does NOT equal sender order — in 5 of 9 corpus recordings the capture peer owns a non-zero block, so block bases must be reconciled per session). u8 firing weapon slot @35 (0-based Weapon1/2/3 index; proven by ARMAAS_WEAPON1/2/3 → 0/1/2 etc.). The earlier "firing-unit netId @1" reading was spurious (it was the fractional bytes of origin x). Decoded 2026-07-18 (WP-A4) against all five recordings, 73,180 events. |
+| 0x0b | 9 | **unit take damage**: u16 victim netId @1, u16 attacker netId @3, u16 damage @5, u8 damage_modifier @7 (97 distinct values in corpus), u8 damage_type @8 (2 distinct: 1 = normal damage, 6 = paralyzer damage). Field analysis against the corpus. |
+| 0x0c | 11 | **unit killed**: u16 victim netId @1, u32 undecoded @3 (4 bytes, low entropy), u16 killer netId @7, u8 weapon/cause @9, u8 param @10. Killer-netId=0 means unattributed death. Field analysis on five recordings. |
+| 0x0d | 36 | **weapon fired**: u32 origin x @1, u32 origin y @5, u32 origin z @9, u32 aim x @13, u32 aim y @17, u32 aim z @21 — all 16.16 fixed-point world units, TA convention (x east, y up/height, z south); origin is the muzzle position at launch, aim is the target point including lead. u8 weapon TDF `ID` @25 (joins `weapons/*.tdf` authored `ID=` — confirmed by per-(ID, shooter) fire-gap cadence matching `reloadtime × 30` sender ticks across nine recordings and four recorder eras, e.g. EMG 16 → 12 ticks, ARMRL_MISSILE 106 → 60, ARMTRUCK_ROCKET 124 → 360; 100.0% of corpus shots satisfy horizontal origin→aim distance ≤ weapon `range`). u8 flag @26 (2-state: 0x00 or 0xfe; semantics unknown — air-launched weapons skew 0xfe). i16 launch heading @27 (TA angle units, 65536 = full turn; equals `atan2(dx,dz) + 32768`, circular fit R=0.956, median residual 2.9°). i16 launch pitch @29 (same units; equals `atan2(dy, horiz)` for line-of-sight weapons, median residual 1.4°; ballistic weapons deviate). u16 shooter netId @31, u16 target netId @33 (same id space as 0x0b victim/attacker: unit id = playerIndex × maxUnits + slot + 1; the playerIndex is the lobby/block index, which does NOT equal sender order — in 5 of 9 corpus recordings the capture peer owns a non-zero block, so block bases must be reconciled per session). u8 firing weapon slot @35 (0-based Weapon1/2/3 index; proven by ARMAAS_WEAPON1/2/3 → 0/1/2 etc.). A "firing-unit netId @1" reading of the first field is spurious — those are the fractional bytes of origin x. Decoded against all five recordings, 73,180 events. |
 | 0x0e | 14 | area of effect |
-| 0x0f | 6 | feature action: u8 reference/category @1 (5 distinct), u16 param @2 (48 distinct), u8 action @4 (35 distinct), u8 zero @5 (constant). Post-2026-07 field analysis. |
-| 0x10 | 22 | **unit start COB script**: u16 unit netId @1, u8 script-index @3 (13 distinct), u8 zero @4 (constant), u8 mode/flags @5 (3 distinct), u16 arg0 @6, u8 undecoded @8 (3 distinct), u8 zero @9 (constant), u16 arg1 @10, 10 bytes zero-padding @12..21 (constant). Post-2026-07 field analysis. |
-| 0x11 | 4 | unit state: u16 netId @1, u8 state @3. State values: 0=off, 1=on, 2+=other. Post-2026-07 field analysis. |
+| 0x0f | 6 | feature action: u8 reference/category @1 (5 distinct), u16 param @2 (48 distinct), u8 action @4 (35 distinct), u8 zero @5 (constant). Field analysis against the corpus. |
+| 0x10 | 22 | **unit start COB script**: u16 unit netId @1, u8 script-index @3 (13 distinct), u8 zero @4 (constant), u8 mode/flags @5 (3 distinct), u16 arg0 @6, u8 undecoded @8 (3 distinct), u8 zero @9 (constant), u16 arg1 @10, 10 bytes zero-padding @12..21 (constant). Field analysis against the corpus. |
+| 0x11 | 4 | unit state: u16 netId @1, u8 state @3. State values: 0=off, 1=on, 2+=other. Field analysis against the corpus. |
 | 0x12 | 5 | **unit build finished**: u16 built netId @1, u16 builder netId @3 |
 | 0x13 | 19 | play sound |
 | 0x14 | 24 | give unit (also appears in unit-data contexts) |
@@ -362,7 +362,7 @@ evidence for a speed-dependent clock interpretation, but it does not by itself
 identify the exact Windows 3.1c speed law because `dtMs` measures the capture
 peer rather than authoritative simulation time.
 
-## Corpus validation (2026-07-16)
+## Corpus validation
 
 A throwaway Python reference implementation of this contract was run against
 all five private corpus recordings (see `RECORDER.md` for the corpus):
@@ -416,13 +416,13 @@ than treating either as a subpacket stream.
   buildDone, movement identity, and the common two/three-point X/Z prefix are
   now decoded by OpenTA corpus observation. Heading, velocity/vertical state,
   the later point role, alternate movement shapes, and optional trailing
-  fields remain WP-R2b work. The external implementations inspected earlier
-  replay the body opaquely or read only the tick.
+  fields remain undecoded. The external implementations inspected replay the
+  body opaquely or read only the tick.
 - The unknown-purpose subpackets: 0x03, 0x07, 0x0a, 0x17, 0x1f, 0x21, 0x29,
   0x2e, 0xf6; and the exact layouts of 0x0e, 0x0a, 0x13, 0x14, 0x42; plus
   the undecoded 4-byte field at 0x0c offsets 3-6, the undecoded byte at
   0x10 offset 8, and the 2-state flag byte at 0x0d offset 26.
-  - 0x0b damage_modifier and damage_type decoded 2026-07-17 (damage_type: 1 =
+  - 0x0b damage_modifier and damage_type are decoded (damage_type: 1 =
     normal, 6 = paralyzer). The damage_modifier semantics (97 distinct values)
     are not yet mapped to damage-modifier formulas.
   - 0x0e (area-of-effect), 0x13 (play-sound), and 0x14 (give-unit) have 0
@@ -442,18 +442,18 @@ than treating either as a subpacket stream.
 
 ## Sources
 
-- Direct byte analysis of five private corpus recordings (2026-07-16),
-  which remains the ground truth for every claim above; structural results
-  were derived independently before source inspection and then reconciled.
+- Direct byte analysis of five private corpus recordings, which remains the
+  ground truth for every claim above; structural results were derived
+  independently before source inspection and then reconciled.
 - TA Demo Recorder 0.99b2 source (Fnordia/SJ/Yeha, released 2003-11-05,
-  clan-sy.com; local copy inspected 2026-07-16 with project-owner
-  authorization): `packet.pas` (encrypt/compress/split tables),
+  clan-sy.com; local copy inspected with project-owner authorization):
+  `packet.pas` (encrypt/compress/split tables),
   `Recorder/idplay.pas` (smartpak, 0x09/0x2c/0x19/0x23 handling),
   `Server/savefile.pas` (file layout, unsmartpak), `Server/Unitsync.pas`
   (0x1a), `Docs/saveformat.txt`, `Docs/PACKETS.TXT`, `Docs/TANET.TXT`,
   `Docs/paketjakt.txt` (subpacket examples).
 - ta-forever `gpgnet4ta` (github.com/ta-forever/gpgnet4ta, `develop`
-  branch, fetched 2026-07-16): `libs/tapacket/TPacket.{h,cpp}`
+  branch): `libs/tapacket/TPacket.{h,cpp}`
   (subpacket names/sizes, bin2int, PLAYER_INFO offsets),
   `libs/tapacket/notes/`, `apps/gpgnet4ta/GameMonitor2.cpp` (tick usage).
 - Facts taken from these sources are format documentation only; OpenTA

@@ -439,14 +439,14 @@ func TestBurstAnchor(t *testing.T) {
 	}
 	// Tick bursts: interval 1 → one clone per tick.
 	// Tick 0 not due (deadline 1)
-	if n := svc.AdvanceBursts(0, &r, weapons, nil); n != 0 {
+	if n := svc.AdvanceBursts(0, &r, weaponMapLookup(weapons), nil); n != 0 {
 		t.Fatalf("tick0 clones %d want 0", n)
 	}
 	if svc.Count() != 1 {
 		t.Fatalf("tick0 count %d want 1", svc.Count())
 	}
 	// Tick 1 due → first pellet
-	if n := svc.AdvanceBursts(1, &r, weapons, nil); n != 1 {
+	if n := svc.AdvanceBursts(1, &r, weaponMapLookup(weapons), nil); n != 1 {
 		t.Fatalf("tick1 clones %d want 1", n)
 	}
 	if svc.Count() != 2 {
@@ -460,11 +460,11 @@ func TestBurstAnchor(t *testing.T) {
 		t.Fatalf("pellet clone must have remaining 0 [06 §4.3], got %d", svc.Records[1].BurstRemaining)
 	}
 	// Tick 2 → second pellet
-	if n := svc.AdvanceBursts(2, &r, weapons, nil); n != 1 {
+	if n := svc.AdvanceBursts(2, &r, weaponMapLookup(weapons), nil); n != 1 {
 		t.Fatalf("tick2 clones %d want 1", n)
 	}
 	// Tick 3 → third pellet, anchor should die silently
-	if n := svc.AdvanceBursts(3, &r, weapons, nil); n != 1 {
+	if n := svc.AdvanceBursts(3, &r, weaponMapLookup(weapons), nil); n != 1 {
 		t.Fatalf("tick3 clones %d want 1", n)
 	}
 	if svc.Count() != 4 {
@@ -504,7 +504,7 @@ func TestBurstPoolFullConsumesAttemptNoRNGNoClone(t *testing.T) {
 	}
 	beforeDraws := r.Draws()
 	// Anchor deadline 1, tick 1 due but pool full.
-	n := svc.AdvanceBursts(1, &r, weapons, nil)
+	n := svc.AdvanceBursts(1, &r, weaponMapLookup(weapons), nil)
 	if n != 0 {
 		t.Fatalf("pool-full burst should create 0 clones, got %d", n)
 	}
@@ -561,7 +561,7 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	// very next Uint32n call on the stream, so replaying it on the copy
 	// reproduces the exact draw AdvanceBursts consumes [01 §7.1].
 	beforeState := r
-	n := svc.AdvanceBursts(5, &r, weapons, muzzlePos)
+	n := svc.AdvanceBursts(5, &r, weaponMapLookup(weapons), muzzlePos)
 	if n != 1 {
 		t.Fatalf("burst clone %d", n)
 	}
@@ -605,7 +605,7 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 	// discard-instead-of-store correction exists to preserve [06 §4.3].
 	muzzlePosCalls = 0
 	beforeState2 := r
-	n2 := svc.AdvanceBursts(10, &r, weapons, muzzlePos)
+	n2 := svc.AdvanceBursts(10, &r, weaponMapLookup(weapons), muzzlePos)
 	if n2 != 1 {
 		t.Fatalf("second burst clone %d", n2)
 	}
@@ -639,13 +639,13 @@ func TestBurstMuzzleRequeryAndSprayOrder(t *testing.T) {
 		return Vec3{X: numeric.FixedFromInt(999)}, true
 	}
 	// First due tick 2: remaining 2 even and interval 2 <=4 → no re-query [06 §4.3]
-	svc2.AdvanceBursts(2, &r2, weapons2, muzzlePos2)
+	svc2.AdvanceBursts(2, &r2, weaponMapLookup(weapons2), muzzlePos2)
 	if muzzleCalls2 != 0 {
 		t.Fatalf("even remaining with interval<=4 should not re-query, got %d", muzzleCalls2)
 	}
 	// Next tick 4: remaining 1 odd → should re-query
 	muzzleCalls2 = 0
-	svc2.AdvanceBursts(4, &r2, weapons2, muzzlePos2)
+	svc2.AdvanceBursts(4, &r2, weaponMapLookup(weapons2), muzzlePos2)
 	if muzzleCalls2 != 1 {
 		t.Fatalf("odd remaining should re-query [06 §4.3], got %d", muzzleCalls2)
 	}
@@ -667,7 +667,7 @@ func TestFireZeroBurstFollowsOrdinaryPath(t *testing.T) {
 	}
 	// AdvanceBursts should do nothing for zero burst.
 	weapons := map[int32]*content.WeaponDef{w.ID: w}
-	if n := svc.AdvanceBursts(10, &r, weapons, nil); n != 0 {
+	if n := svc.AdvanceBursts(10, &r, weaponMapLookup(weapons), nil); n != 0 {
 		t.Fatalf("zero burst anchor should not spawn, got %d", n)
 	}
 	// Ensure not dead
@@ -691,4 +691,17 @@ func TestProjectilePoolHandle(t *testing.T) {
 		t.Fatalf("TargetNone should not fire")
 	}
 	_ = pool.Handle(0)
+}
+
+// weaponMapLookup adapts a fixture's identifier→record map to the per-record
+// lookup AdvanceBursts takes. Production passes the catalog's own
+// Catalog.WeaponByID [02 "Weapon record"].
+func weaponMapLookup(m map[int32]*content.WeaponDef) func(id int32) (*content.WeaponDef, bool) {
+	if m == nil {
+		return nil
+	}
+	return func(id int32) (*content.WeaponDef, bool) {
+		w, ok := m[id]
+		return w, ok
+	}
 }
