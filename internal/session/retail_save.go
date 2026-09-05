@@ -154,17 +154,25 @@ func ProjectRetailSession(s *Session, in RetailSaveInputs) (save.RetailProjectio
 	return p.Clone(), nil
 }
 
-// projectUnitImage follows the retail writer's reverse-pool traversal. The
-// detached image retains that order; save.Build emits each unit's Script,
-// front/rear orders, mover, account, and numbered base record in turn [08
-// R-SAVE-02 §6].
+// projectUnitImage follows the retail writer's ascending pool traversal: the
+// single Units writer starts its cursor at the unit pool's base record, tests
+// it against the pool's end, and advances one record stride per iteration, so
+// the running numbered-box index rises with pool position. The detached image
+// retains that order; save.Build emits each unit's Script, front/rear orders,
+// mover, account, and numbered base record in turn [08 R-SAVE-02 §6].
+//
+// The direction matters on load, not only for byte comparability: the reader
+// restores numbered boxes 0..count-1 in index order, and the base record's AI
+// group word is the one word with a side effect beyond a field copy (it
+// appends the unit to the owner's group vector), so a reversed walk would
+// build every group vector backwards [08 R-SAVE-02 §6].
 func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.System, in RetailSaveInputs) (save.UnitImage, error) {
 	image := save.UnitImage{Version: save.UnitsVersionRetail}
 	resolve := func(h pool.Handle) (uint16, bool) {
 		id, ok := in.StableIDs[h]
 		return id, ok && id != 0
 	}
-	for slot := w.TotalRecords() - 1; slot > 0; slot-- {
+	for slot := 1; slot < w.TotalRecords(); slot++ {
 		h := pool.Handle(slot)
 		u := w.Unit(h)
 		if u == nil {

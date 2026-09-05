@@ -308,6 +308,12 @@ type PipelineEnv struct {
 	// A nil player pays nothing, which is what a shot with no economy behind
 	// it (a fixture, a neutral feature) does.
 	Player *economy.Player
+	// Buckets is the FIRING UNIT's economy subrecord, the one the direct
+	// two-resource payment credits its `requested` accumulator to
+	// [05 R-ECO-01 §7]: the helper reaches through the subrecord's owner
+	// pointer for the live stock, but the request stays on the subrecord. A nil
+	// Buckets falls back to the player mirror.
+	Buckets *[2]economy.Bucket
 }
 
 // TickSlot runs the established per-slot pipeline for slot idx in fixed order [06 §4.1] C1 P0-10.
@@ -469,7 +475,7 @@ admission:
 		eCost := float32(slot.Weapon.EnergyPerShot)
 		mCost := float32(slot.Weapon.MetalPerShot)
 		if eCost != 0 || mCost != 0 {
-			economy.ImmediateDebit(env.Player, eCost, mCost)
+			economy.ImmediateDebit(env.Player, env.Buckets, eCost, mCost)
 		}
 	}
 	// On successful allocation for turret families, Ready and latch are cleared per [06 §3.3] P0-10?

@@ -185,12 +185,24 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, g
 		return
 	}
 	pressed := retailButtonPressed(c, r)
+	grey := gad.GrayedOut != 0
 	status := p.StatusOf(gad.Name)
 	art := g.gadgetButtonArt(gad, status, pressed)
+	drawn := art
 	if art != nil {
 		blitRetailFrame(c, art, int(r.X), int(r.Y))
 	} else if frame := g.retailButtonFrame(gad, status, pressed); frame != nil {
+		drawn = frame
 		blitRetailFrame(c, frame, int(r.X), int(r.Y))
+	}
+	// A greyed button's rectangle goes through the rectangle shader after the
+	// frame blit, at level -20 — PALETTE.SHD darken row 12 — which is what the
+	// painter's "darkened by 20 palette steps" means. The cycle branch
+	// (attribute 0x100) is excluded because it has its own greyed frame, and
+	// the checkbox branch (attribute 0x80) is the painter's one exemption
+	// [07 R-WGT-01 §3][07 R-HUD-04 §4][03 R-COMP-02 §5].
+	if drawn != nil && grey && gad.Attribs&guiAttribCheckbox == 0 && !cycleButton(gad) && g.assets != nil {
+		c.UIShadeRect(g.assets.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
 	}
 	g.drawRetailText(c, p, index, gad, r)
 }

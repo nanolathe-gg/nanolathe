@@ -93,10 +93,13 @@ type FirePorts struct {
 	// muzzle path [06 §4.1] C3 — not a stand-in for an unknown position.
 	Origin Vec3
 
-	// MuzzlePiece is the synchronous COB query for the slot's muzzle piece,
-	// performed before initialization and retained on pool-full
-	// [06 §4.1] C3 [06 §4.4] C5. A nil port or a negative result takes the
-	// normal muzzle path.
+	// MuzzlePiece is the synchronous COB query for the slot's muzzle piece —
+	// the FORCED `Query*` form, cell 0 seeded 0 and `AimFrom*` never
+	// consulted — performed before initialization and retained on pool-full
+	// [06 §4.1] C3 [06 §4.4] C5. The `AimFrom*`-with-fallback form is the aim
+	// origin the angle solvers measure from and names a different piece on
+	// most stock models; it never reaches this port. A nil port or a negative
+	// result takes the normal muzzle path.
 	MuzzlePiece func(slotIdx int) int32
 
 	// MuzzleWorld resolves a piece index to its world point. When it declines,

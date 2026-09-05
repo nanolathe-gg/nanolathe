@@ -11,30 +11,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// TestCaptureTimer_HealthScale locks timer formula 150+0.015*E+0.21428*M, healthScaled, kills/5 [P0-15].
-func TestCaptureTimer_HealthScale(t *testing.T) {
-	// Example from notes: energy 1000, metal 200, health 500, max 1000, kills 0 => base 207, healthScaled 155, timer 155
-	timer := CaptureTimer(1000, 200, 500, 1000, 0)
-	if timer != 155 {
-		t.Fatalf("capture timer 500/1000/1000/200 kills0 => %d want 155", timer)
-	}
-	// High kills: 25 => kills/5=5 factor 15 => timer 232
-	timer2 := CaptureTimer(1000, 200, 500, 1000, 25)
-	if timer2 != 232 {
-		t.Fatalf("capture timer kills25 => %d want 232", timer2)
-	}
-	// Boundary clamp base 0..1800
-	timer3 := CaptureTimer(100000, 100000, 1000, 1000, 0) // base would exceed 1800 clamp
-	if timer3 <= 0 {
-		t.Fatalf("capture timer high cost should clamp not zero got %d", timer3)
-	}
-	// Health 1 => healthScaled approx 103 => timer 103
-	timer4 := CaptureTimer(1000, 200, 1, 1000, 0)
-	if timer4 != 103 {
-		t.Fatalf("health1 timer %d want 103", timer4)
-	}
-}
-
 // TestResurrectionDelay_Sole03 locks sole 0.3 use and floor(work/30) [P0-15].
 func TestResurrectionDelay_Sole03(t *testing.T) {
 	// buildTime 5000, workerTime 60 => floor 2 => 5000*0.3/2=750

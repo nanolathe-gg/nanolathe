@@ -82,6 +82,38 @@ const (
 	MaxGamma = 20
 )
 
+// The interface options page's two non-slider values. `gamespeed` is the
+// `GAME` slider's store; `Interface Type` is the `LEFTCLICK` two-stage button's
+// [07 R-CAM-01 §7][07 R-CAM-01 §5].
+const (
+	DefaultGameSpeed = 10 // gamespeed
+	// The speed setter clamps the requested speed into 1..20 on signed
+	// compares, so 21 — the `GAME` slider's own maximum — stores as 20
+	// [07 R-CAM-01 §3].
+	MinGameSpeed = 1
+	MaxGameSpeed = 20
+	// GameSliderMax is the runtime maximum the page opener writes into the
+	// `GAME` slider record; the read-out's own floor is 1 [07 R-CAM-01 §7].
+	GameSliderMax = 21
+	// ScrollSliderMax, TextScrollSliderMax and MaxLinesSliderMax are the other
+	// three interface sliders' runtime maxima [07 R-CAM-01 §7].
+	ScrollSliderMax     = 65
+	TextScrollSliderMax = 20
+	MaxLinesSliderMax   = 30
+	// MinScrollSpeed is the `SCREEN` read-out's own floor: a value at or below
+	// one stores one [07 R-CAM-01 §7].
+	MinScrollSpeed = 1
+
+	// DefaultInterfaceType is the absent-value default of `Interface Type`
+	// [07 R-CAM-01 §5].
+	DefaultInterfaceType = 0
+	// InterfaceTypeLeftClick and InterfaceTypeRightClick are the two stages of
+	// the `LEFTCLICK` button. They mirror the constants of the same name in
+	// `internal/orders`, which is the word's consumer [07 R-CAM-01 §5].
+	InterfaceTypeLeftClick  = 0
+	InterfaceTypeRightClick = 1
+)
+
 // The configured per-player unit limit. Retail reads it once at start-up from
 // the profile file's `[Preferences]` `UnitLimit` — established as a profile
 // value and *not* a registry value, unlike everything else in this file — with
@@ -98,6 +130,135 @@ const (
 	MinUnitLimit     = 20  // below 20 becomes 20 [08 R-SKIR-01 §6]
 	MaxUnitLimit     = 500 // above 500 becomes 500 [08 R-SKIR-01 §6]
 )
+
+// The audio option values the `SOUND` and `MUSIC` options pages write
+// [03 R-AUD-01 §2][03 R-AUD-01 §4]. Retail packs the first five into one
+// sound-flags byte and keeps the rest as separate registry values; they stay
+// separate fields here for the same reason the display option bits do.
+const (
+	// SoundModeOff, SoundModeMono and SoundMode3D are the three stages of the
+	// `MODE` button, stored in bits 0..2. Every play gate requires a nonzero
+	// mode; the value 2 sets the device's 3-D flag and any other value clears
+	// it [03 R-AUD-01 §2][03 R-AUD-01 §1].
+	SoundModeOff  = 0
+	SoundModeMono = 1
+	SoundMode3D   = 2
+	// MaxSoundMode is the width of the stored field, not the button's stage
+	// count: the three-stage `MODE` gadget is its only writer, but the byte
+	// holds three bits [03 R-AUD-01 §2].
+	MaxSoundMode = 7
+
+	DefaultSoundMode     = 1  // `Sound Mode`
+	DefaultRestoreVolume = 0  // `RestoreVolume`, bit 3
+	DefaultAckFX         = 1  // `ackfx`, bit 4
+	DefaultBuildFX       = 1  // `buildfx`, bit 5
+	DefaultSpeechFX      = 1  // `speechfx`, bit 6
+	DefaultFXVol         = 27 // `fxvol`
+	DefaultMusicVol      = 32 // `musicvol`
+	DefaultMixingBuffers = 8  // `MixingBuffers`
+	DefaultMusicMode     = 1  // `musicmode` bit 0
+	DefaultCDMode        = 4  // `cdmode`, 1..4
+	DefaultUnitChat      = 10 // `unitchat`, the voice-level gauge
+
+	// MaxFXVol and MaxMusicVol are the runtime maxima the two page openers
+	// write into the `FXVOL` and `MUSICVOL` slider records. Both are 64, so a
+	// knob at the end of travel reads 64 and the device level `v << 10`
+	// saturates the 16-bit mixer word [03 R-AUD-01 §2].
+	MaxFXVol    = 64
+	MaxMusicVol = 64
+	// MaxUnitChat is the ceiling of both acknowledgement gauges: the stage
+	// times five, over three stages [03 R-AUD-01 §2][07 R-CAM-01 §7].
+	MaxUnitChat = 10
+	// MinCDMode and MaxCDMode bound `cdmode`: 1 Play All, 2 Random, 3 Repeat,
+	// 4 Custom [03 R-AUD-01 §4].
+	MinCDMode = 1
+	MaxCDMode = 4
+)
+
+// Audio is the `SOUND` and `MUSIC` options pages' persisted block
+// [03 R-AUD-01 §2][03 R-AUD-01 §4].
+//
+// `AckFX` and `BuildFX` are stored and displayed but gate no sound in retail —
+// a bounded negative over the whole decompiled corpus — so they ride through
+// here inert, exactly as they do there.
+type Audio struct {
+	// SoundMode is bits 0..2 of the sound-flags byte, written by `MODE`.
+	SoundMode int `json:"soundMode"`
+	// RestoreVolume is bit 3. No traced screen has a gadget for it; it governs
+	// whether the player's system mixer levels are persisted across sessions.
+	RestoreVolume int `json:"restoreVolume"`
+	// AckFX and BuildFX are bits 4 and 5, written only by `RESTORE`/`UNDO`.
+	AckFX   int `json:"ackFX"`
+	BuildFX int `json:"buildFX"`
+	// SpeechFX is bit 6, written by `SPEECH` as `stage != 0`. It is the voice
+	// cue resolver's audible gate; captions are unaffected.
+	SpeechFX int `json:"speechFX"`
+	// FXVol is `fxvol`, the `FXVOL` gauge, 0..64.
+	FXVol int `json:"fxVol"`
+	// MusicVol is `musicvol`, the `MUSICVOL` gauge, 0..64.
+	MusicVol int `json:"musicVol"`
+	// MixingBuffers is the device voice limit. No options gadget writes it.
+	MixingBuffers int `json:"mixingBuffers"`
+	// MusicMode is `musicmode` bit 0, the `NOTRAK` toggle.
+	MusicMode int `json:"musicMode"`
+	// CDMode is `cdmode`, the `TRACKMODE` button's stage plus one.
+	CDMode int `json:"cdMode"`
+	// UnitChat is `unitchat`, the acknowledgement **voice** level the `SPEECH`
+	// gauge writes as stage times five. Its text twin is
+	// Messages.UnitChatText, which the interface page writes [07 R-CAM-01 §7].
+	UnitChat int `json:"unitChat"`
+}
+
+// DefaultAudio is the block the startup reader installs when nothing is stored
+// [03 R-AUD-01 §2].
+func DefaultAudio() Audio {
+	return Audio{
+		SoundMode:     DefaultSoundMode,
+		RestoreVolume: DefaultRestoreVolume,
+		AckFX:         DefaultAckFX,
+		BuildFX:       DefaultBuildFX,
+		SpeechFX:      DefaultSpeechFX,
+		FXVol:         DefaultFXVol,
+		MusicVol:      DefaultMusicVol,
+		MixingBuffers: DefaultMixingBuffers,
+		MusicMode:     DefaultMusicMode,
+		CDMode:        DefaultCDMode,
+		UnitChat:      DefaultUnitChat,
+	}
+}
+
+// Normalize repairs a hand-edited or truncated audio block. Zero is a stored
+// choice for every bit and for both gauges — sound off, silence — so only a
+// value outside the writer's own range is repaired.
+func (a *Audio) Normalize() {
+	if a.SoundMode < 0 || a.SoundMode > MaxSoundMode {
+		a.SoundMode = DefaultSoundMode
+	}
+	for _, bit := range []*int{&a.RestoreVolume, &a.AckFX, &a.BuildFX, &a.SpeechFX, &a.MusicMode} {
+		if *bit < 0 || *bit > 1 {
+			*bit = 1
+		}
+	}
+	if a.FXVol < 0 || a.FXVol > MaxFXVol {
+		a.FXVol = DefaultFXVol
+	}
+	if a.MusicVol < 0 || a.MusicVol > MaxMusicVol {
+		a.MusicVol = DefaultMusicVol
+	}
+	if a.MixingBuffers <= 0 {
+		a.MixingBuffers = DefaultMixingBuffers
+	}
+	if a.CDMode < MinCDMode || a.CDMode > MaxCDMode {
+		a.CDMode = DefaultCDMode
+	}
+	if a.UnitChat < 0 || a.UnitChat > MaxUnitChat {
+		a.UnitChat = DefaultUnitChat
+	}
+}
+
+// SoundEnabled is every play gate's first test: a nonzero sound mode
+// [03 R-AUD-01 §2].
+func (a Audio) SoundEnabled() bool { return a.SoundMode != SoundModeOff }
 
 // InterfaceFlagDamageBars is bit 0 of the interface-flags word — the "label
 // every unit" bit. The stored `damagebars` value and that bit are the same
@@ -152,6 +313,14 @@ type Settings struct {
 	// Display is the `DisplaymodeWidth`/`DisplaymodeHeight` pair and the six
 	// visual option values the `VISUALS` page writes [07 R-FE-01 §6].
 	Display Display `json:"display"`
+	// Audio is the `SOUND` and `MUSIC` pages' block [03 R-AUD-01 §2].
+	Audio Audio `json:"audio"`
+	// GameSpeed is `gamespeed`, the interface page's `GAME` slider
+	// [07 R-CAM-01 §7].
+	GameSpeed int `json:"gameSpeed"`
+	// InterfaceType is the `Interface Type` word the interface page's
+	// `LEFTCLICK` button writes [07 R-CAM-01 §5].
+	InterfaceType int `json:"interfaceType"`
 	// Messages is the message-column ring configuration: `textlines`,
 	// `textscroll`, `screenchat` and `unitchattext` [02 §3][07 R-FE-01 §11].
 	Messages Messages `json:"messages"`
@@ -306,8 +475,10 @@ func StoreDamageBars(on bool) error {
 // start positions, commander death continues, all terrain visible, LOS off,
 // elevation ignored — so a loader may not treat a zero as an absent value.
 func Defaults() Settings {
-	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit}
+	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit,
+		GameSpeed: DefaultGameSpeed, InterfaceType: DefaultInterfaceType}
 	s.Display = DefaultDisplay()
+	s.Audio = DefaultAudio()
 	s.Messages = DefaultMessages()
 	s.Skirmish = Skirmish{
 		NumPlayers:     DefaultNumPlayers,
@@ -395,7 +566,17 @@ func (s *Settings) Normalize() {
 	if s.UnitLimit > MaxUnitLimit {
 		s.UnitLimit = MaxUnitLimit
 	}
+	// The stored game speed is the speed setter's own clamped range, not the
+	// slider's maximum: the setter pulls 21 down to 20 before it stores
+	// [07 R-CAM-01 §3][07 R-CAM-01 §7].
+	if s.GameSpeed < MinGameSpeed || s.GameSpeed > MaxGameSpeed {
+		s.GameSpeed = DefaultGameSpeed
+	}
+	if s.InterfaceType != InterfaceTypeLeftClick && s.InterfaceType != InterfaceTypeRightClick {
+		s.InterfaceType = DefaultInterfaceType
+	}
 	s.Display.Normalize()
+	s.Audio.Normalize()
 	s.Messages.Normalize()
 	s.Skirmish.Normalize()
 }

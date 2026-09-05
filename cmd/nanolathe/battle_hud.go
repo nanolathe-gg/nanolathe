@@ -382,10 +382,18 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		Picture: picture, MapW: mapW, MapH: mapH, LocalSlot: sess.LocalOwner,
 		FogFill: fogFill, GUIRemap: guiRemap,
 	})
+	// The three contact-pass markers, in the order the contacts pass draws them
+	// [03 §3.9]: the regular unit blip is `radlogo`, whose ten frames are the
+	// ten player colours the owning-player selector indexes; the commander
+	// marker is `radlogohigh` frame 0, one ring around whichever unit's
+	// identity matches the commander slot; and the feature marker is
+	// `nuclogo`, indexed by the same owning-player selector as the blip.
+	// `h2oboom2` is loaded by the same FX initialization but no contacts-pass
+	// branch reads it.
 	if fx := loadGAFOptional(fs, "anims/fx.gaf", "radar FX markers [03 §3.9]"); fx != nil {
-		h.radarBlipGAF, _ = fx.Find("radlogohigh")
-		h.radarCommanderGAF, _ = fx.Find("nuclogo")
-		h.radarFeatureGAF, _ = fx.Find("h2oboom2")
+		h.radarBlipGAF, _ = fx.Find("radlogo")
+		h.radarCommanderGAF, _ = fx.Find("radlogohigh")
+		h.radarFeatureGAF, _ = fx.Find("nuclogo")
 	}
 	h.minimapAnchor = hud.Rect{X1: 0, Y1: 0, X2: int32(camera.MinimapLongSide - 1), Y2: int32(camera.MinimapLongSide - 1)}
 	h.minimapAnchorOK = true

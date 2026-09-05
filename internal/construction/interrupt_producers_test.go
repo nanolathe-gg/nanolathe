@@ -140,7 +140,7 @@ func TestCancelNoticeOnRemovalWithDynamicGateBitOne(t *testing.T) {
 	if k := svc.LastKill(); k.Damage != Kind9Damage || !k.NoCorpse {
 		t.Fatalf("kill packet = %+v, want the 30000 no-corpse cause-9 packet [05 C21]", k)
 	}
-	if product.Alive {
+	if !product.Dying {
 		t.Fatal("the product survived cancel-current")
 	}
 

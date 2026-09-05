@@ -631,8 +631,11 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	if product.Flags&0x00004000 != 0 {
 		t.Fatalf("completion raised instance flag bit 14 on a non-isfeature product: flags=%x", product.Flags)
 	}
-	if factory.Activated || factory.Flags&FlagStartBuilding != 0 || product.Alive {
-		t.Fatalf("cancel edges/death ordering wrong: factory activated=%t flags=%x alive=%t", factory.Activated, factory.Flags, product.Alive)
+	// The cancel latches Dying; the record stays Alive for the session's
+	// phase-2 finalizer, which frees the slot and decrements the owner's
+	// live-unit counter [01 §4.4].
+	if factory.Activated || factory.Flags&FlagStartBuilding != 0 || !product.Dying {
+		t.Fatalf("cancel edges/death ordering wrong: factory activated=%t flags=%x dying=%t", factory.Activated, factory.Flags, product.Dying)
 	}
 	if node.Param2 != 2 {
 		t.Fatalf("cancel decremented queued count to %d", node.Param2)

@@ -19,42 +19,75 @@ const (
 	reclaimRestartDelay uint32 = 15
 )
 
+// reclaimPulseFactor is the `k` of [05 R-WORK-01 §4]'s pulse helper, 15 at its
+// only call site.
+const reclaimPulseFactor int32 = 15
+
 // UnitReclaimPulse computes the one-time pulse stored on a ReclaimUnit order.
 // The value is established at order setup, not recomputed as the target loses
-// health. All operands are integer fields in the authored/runtime records, and
-// the division is the retail truncation boundary [01 §8][05 R-WORK-01 §4]:
+// health [05 R-WORK-01 §4]:
 //
-//	costM = max(target.definition.buildcostmetal, 10)
-//	n     = workertime * ((kills + 5) / 5) * target.definition.maxdamage * 15
-//	pulse = max(1, trunc(n / (costM * 300)))
+//	costM = max(target.definition.buildcostmetal, 10.0f)
+//	n     = (int32)( (uint16)builder.definition.workertime
+//	               * ((int32)((uint16)builder.kills + 5) / 5)
+//	               * (int32)target.definition.maxdamage
+//	               * 15 )                        // 32-bit SIGNED product
+//	v     = trunc( (double)(uint32)n / (costM * 300.0f) )
+//	pulse = (v <= 1) ? 1 : v
 //
 // Correction (PT3-05): the health operand is the TARGET DEFINITION's
 // `maxdamage`, not the instance's current maximum. The two agree for a stock
 // unit and part company for anything that has had its maximum adjusted, and §4
 // gives the definition word.
+//
+// CORRECTION (AU-7) — THE PRODUCT WRAPS AT 32 BITS AND IS RE-READ UNSIGNED.
+// This used to form the product in int64, which cannot overflow. §4 is explicit
+// that it is a 32-bit signed multiply and that the widening to 64 bits happens
+// AFTER the wrap, with a zero high word: "the 32-bit product can overflow
+// silently for large `workertime × maxdamage`; because it is then re-read as an
+// *unsigned* 32-bit quantity, an overflowed product becomes a very large
+// positive pulse rather than a negative one." The int64 form quietly produced a
+// modest pulse exactly where retail produces an enormous one — a Krogoth-class
+// target (maxdamage in the tens of thousands) reclaimed by a veteran builder is
+// inside stock reach, and there the two answers are a slow reclaim versus a
+// target deleted by the first pulse.
+//
+// Two-complement multiplication is associative and commutative modulo 2^32, so
+// the operand order below is §4's for readability, not for the value.
+//
+// The divisor is FLOATING: `costM` is the definition's metal cost taken as a
+// single-precision maximum against 10, multiplied by 300 in single precision,
+// and the (already unsigned) numerator is widened to double and divided by it,
+// with one truncation toward zero [01 §8]. The integer division this used to do
+// agrees over the authored range — every stock `costM × 300` is a whole number
+// well inside float32's exact-integer range — but it is not what §4 gives.
+//
+// The kill count is read as a uint16 before the `+5` and the signed divide by
+// five, exactly as §4 writes it; a `killsFactor < 0` clamp that used to sit here
+// was ours and is gone with the unsigned read that makes it unreachable.
 func UnitReclaimPulse(builder, target *units.Unit) int32 {
 	if builder == nil || target == nil || builder.Def == nil || target.Def == nil {
 		return 1
 	}
-	metalCost := target.Def.BuildCostMetal
+	// costM = max(buildcostmetal, 10.0f), in single precision [05 R-WORK-01 §4].
+	metalCost := float32(target.Def.BuildCostMetal)
 	if metalCost < 10 {
 		metalCost = 10
 	}
-	// The kill divisor is a signed integer division by five [05 R-WORK-01 §4].
-	killsFactor := (builder.Kills + 5) / 5
-	if killsFactor < 0 {
-		killsFactor = 0
-	}
-	denom := int64(metalCost) * 300 // [05 R-WORK-01 §4]
-	if denom <= 0 {
-		return 1
-	}
+	// The kill divisor is a signed integer division by five over an unsigned
+	// 16-bit read of the kill count [05 R-WORK-01 §4].
+	killsFactor := (int32(uint16(builder.Kills)) + 5) / 5
 	maxDamage := target.Def.MaxDamage
 	if maxDamage <= 0 {
 		maxDamage = target.MaxHealth
 	}
-	numer := int64(maxDamage) * int64(builder.Def.WorkerTime) * int64(killsFactor) * 15
-	pulse := int32(numer / denom) // [01 §8] truncation toward zero
+	// The 32-bit signed product. Go's int32 multiply wraps, which IS the retail
+	// multiply; the re-read as uint32 is the zero-high-word widening.
+	n := int32(uint16(builder.Def.WorkerTime)) * killsFactor
+	n *= maxDamage
+	n *= reclaimPulseFactor
+	v := float64(uint32(n)) / float64(metalCost*300)
+	pulse := int32(v) // [01 §8] truncation toward zero
 	if pulse <= 1 {
 		pulse = 1
 	}

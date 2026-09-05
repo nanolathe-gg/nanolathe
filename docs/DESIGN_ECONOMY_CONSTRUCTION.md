@@ -187,6 +187,20 @@ footprint by the mover's own footprint, a builder that arrives is standing clear
 of the site it is about to stamp; `mustClearSite` keeps the walk installed until
 it is.
 
+A construction aircraft has the same phase with a different goal and no reach
+expression. `VTOL_MobileBuild` phase 1 snaps the goal onto the product's
+footprint, installs an air point marker there with horizontal arrival radius
+`builddistance` and sets the gate to `0xE0`; the placement phase is dispatched
+by that marker's outcome and abandons on `0x40` with no caption
+`[04 R-ORD-02 §2]`. The marker and the gate belong to the air executor in
+`internal/movement` (it owns the marker family), so this service's phase 1
+installs nothing for an aircraft and only holds the record open; its phase-1
+body advances on a wake the executor confirms is the site marker's — the
+takeoff preamble's climb marker reports on the same gate first
+`[04 R-AIR-01 §6]` — and a ground rectangle goal is never submitted for an
+aircraft. Once the nanoframe exists the aircraft builds from wherever the
+150-tick orbit of `[04 §10.3]` leaves it; there is no reach test after arrival.
+
 **The carried product.** A product is cargo. It is attached to its producer at
 allocation, sits where the nanoframe sits for every tick of its construction,
 and is detached at completion — that detach *is* the release `[04 R-FAC-02 §1]`

@@ -11,6 +11,7 @@ package combat
 import (
 	"sort"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -893,4 +894,90 @@ func AirBelowThreeQuarters(u *units.Unit) bool {
 		return false
 	}
 	return uint32(int32(int16(u.Health))) < uint32((u.Def.MaxDamage>>2)*3)
+}
+
+// UnitTargetPoint is the live-unit half of the per-slot target-point resolver
+// [06 R-WPN-04 §1]: the point every consumer of a unit target aims at — the
+// aim-time yaw/pitch solve, the shot-time range and ballistic clauses, and the
+// creator's own muzzle-to-target solve [06 §3.3][06 §6.3].
+//
+// The resolver dispatches `SweetSpot` synchronously on the TARGET's script
+// with cell 0 seeded zero [06 R-WPN-03 §6][04 §5.3]; a script without the
+// entry leaves the seed, so the piece is 0. The returned piece selects a piece
+// of the target's loaded model, and the point is the target's position plus
+// the centre of that piece's own vertex bounding box, seeded at the piece
+// origin rather than the first vertex:
+//
+//	min = max = 0 ; per vertex: min = min(min, v), max = max(max, v)
+//	point = target.position + (max + min) / 2      (per axis, signed, truncating)
+//
+// Three things this deliberately does NOT do, each Established
+// [06 R-WPN-04 §1]: it applies neither the piece's parent offset nor its
+// current script state (turn, move, hide) — the offset is the piece's own
+// vertex cloud about its own origin; it does not go through the piece locator,
+// so the model-space triple is added AS-IS, with no `(x, y, −z)` output
+// negation; and a piece with no vertices yields the unit position exactly.
+// The muzzle-side transform of [06 §3.4], which walks the hierarchy and
+// negates Z once on output, is a different routine and is not reused here.
+//
+// Aiming at the bare unit position instead — which this build used to do —
+// put every shot at the target's ground point: a Peewee's pellets went for a
+// solar collector's footprint rather than its body, and a tall target's base.
+//
+// A piece index outside the model's table is an out-of-bounds read in retail;
+// this build answers the unit position for it, the bounds-check exception of
+// [I11]. A target with no binding at all (a synthetic fixture; every retail
+// definition carries a script) takes the same answer.
+func UnitTargetPoint(target *units.Unit) Vec3 {
+	if target == nil {
+		return Vec3{}
+	}
+	pos := Vec3{X: target.X, Y: target.Y, Z: target.Z}
+	binding := target.COBBinding()
+	if binding == nil {
+		return pos
+	}
+	var piece int32 // cell 0 seeded zero [06 R-WPN-03 §6]
+	if binding.Callbacks != nil {
+		piece = binding.Callbacks.SweetSpot().QueryValue()
+	}
+	centre, ok := pieceVertexBoxCentre(binding, piece)
+	if !ok {
+		return pos
+	}
+	return Vec3{X: pos.X.Add(centre[0]), Y: pos.Y.Add(centre[1]), Z: pos.Z.Add(centre[2])}
+}
+
+// pieceVertexBoxCentre is the `SweetSpot` piece-to-offset transform of
+// [06 R-WPN-04 §1]: the vertex bounding box of one piece of the bound model,
+// seeded at the origin, halved per axis with truncation toward zero. The COB
+// piece index is mapped to the model piece through the binder's piece map,
+// exactly as the locator maps it — both index the same piece table [03 §2.4]
+// [04 §4.1]. The vertices are the model's as loaded, which already carry the
+// load-time half-turn of [03 §2.4]; no further sign change is applied.
+func pieceVertexBoxCentre(b *cob.Binding, cobPiece int32) ([3]numeric.Fixed, bool) {
+	if b == nil || b.Model == nil || cobPiece < 0 || int(cobPiece) >= len(b.PieceMap) {
+		return [3]numeric.Fixed{}, false
+	}
+	modelPiece := b.PieceMap[cobPiece]
+	if modelPiece < 0 || modelPiece >= len(b.Model.Pieces) {
+		return [3]numeric.Fixed{}, false
+	}
+	var lo, hi [3]int64 // seeded at the piece origin, NOT the first vertex [06 R-WPN-04 §1]
+	for _, v := range b.Model.Pieces[modelPiece].Vertices {
+		for axis := 0; axis < 3; axis++ {
+			raw := v[axis].Raw()
+			if raw < lo[axis] {
+				lo[axis] = raw
+			}
+			if raw > hi[axis] {
+				hi[axis] = raw
+			}
+		}
+	}
+	var centre [3]numeric.Fixed
+	for axis := 0; axis < 3; axis++ {
+		centre[axis] = numeric.Fixed((hi[axis] + lo[axis]) / 2) // signed, truncating halving [I3]
+	}
+	return centre, true
 }

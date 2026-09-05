@@ -346,94 +346,13 @@ func (d *FeatureDedup) SeenFeature(cx, cz int32) bool {
 	return false
 }
 
-// ApplyAreaDamage enumerates area damage recipients per [06 §9.3] C26 and invokes
-// perRecipient for each accepted unit [06 §9.3]. There is NO impulse/pushing
-// [06 §9.4] C26 — this function never writes velocity or position.
-//
-// Impact uses direct-target shortcut only when direct unit supplied and
-// unsigned authored area ≤16: full falloff 1 to direct target; if shooter null,
-// returns after direct damage rather than falling through to AOE [06 §9.3] C26.
-// Otherwise enters area enumeration [06 §9.3].
-// Damage suppressed when controller type value 3 [06 §9.3] — semantic name unresolved,
-// represented as bool suppress param.
-// Controller type 3 suppressed case uses bool flag in config.
-//
-// This skeleton visits unit slots zero/one then feature; dedup memories are
-// implemented; broad phase clamped; order rows by increasing Z then X [06 §9.3].
-func ApplyAreaDamage(impact Vec3, weapon *content.WeaponDef, shooter pool.Handle, directTarget pool.Handle, shooterSide uint8, radius int32, terrainW, terrainH int32, unitsByCell func(cx, cz int32) [2]pool.Handle, unitView func(pool.Handle) (UnitForArea, bool), controllerIs3 bool, perUnit func(victim pool.Handle, falloff float32, distance int32)) {
-	if controllerIs3 {
-		return // damage suppressed when owner controller type value 3 [06 §9.3]
-	}
-	if weapon == nil {
-		return
-	}
-	authoredArea := weapon.AreaOfEffect // unsigned authored [06 §9.3]
-	if directTarget != 0 && authoredArea <= 16 {
-		// Direct-target shortcut: full falloff 1 to direct target [06 §9.3]
-		if perUnit != nil {
-			perUnit(directTarget, 1, 0) // [06 §9.3] full falloff one
-		}
-		if shooter == 0 {
-			return // if shooter null, resolver returns after direct damage [06 §9.3]
-		}
-		// otherwise other case enters area enumeration per [06 §9.3] — fall through? Research says every other case enters area enumeration. But directTarget with area ≤16 and shooter non-null: does it also do area? Research: "Impact uses direct-target shortcut only when direct unit supplied and unsigned authored area ≤16. That shortcut applies full falloff one to direct target. If recorded shooter is null, resolver returns after direct damage rather than falling through to AOE. Every other case enters area enumeration." Suggests when shooter non-null, even shortcut case still falls through? Or "every other case" means not (direct && area≤16) case. So shortcut case is exclusive. We'll treat shortcut as exclusive.
-		return
-	}
-	// Area enumeration [06 §9.3]
-	var unitDedup UnitDedup    // at most 20 memories but not caps [06 §9.3]
-	var featDedup FeatureDedup // at most 64 [06 §9.3]
-	EnumerateArea(impact, radius, terrainW, terrainH, func(cx, cz int32) {
-		// Within each cell visits unit slot zero, unit slot one, then feature [06 §9.3]
-		if unitsByCell != nil {
-			slots := unitsByCell(cx, cz)
-			for _, h := range slots {
-				if h == 0 {
-					continue
-				}
-				// "A unit candidate must be nonzero **and must not be the
-				// record's shooter** — the shooter is unconditionally excluded
-				// from every blast, which is the whole of retail's self-damage
-				// policy" [06 §9.3][06 R-DMG-01 §9]. There is no owner or
-				// alliance test here: the shooter's own OTHER units take full
-				// damage, and the shooter itself takes full damage from a
-				// different record's blast. A null shooter matches nobody,
-				// which is what lets a meteor or a death explosion damage every
-				// side alike.
-				//
-				// The test sits with the nonzero test, ahead of the dedup
-				// memory, so the shooter never consumes one of the twenty
-				// entries.
-				if shooter != 0 && h == shooter {
-					continue
-				}
-				if unitDedup.SeenUnit(h) {
-					continue // dedup before radius test [06 §9.3]
-				}
-				uv, ok := unitView(h)
-				if !ok {
-					continue
-				}
-				dist := DistanceToBox(impact, uv) // [06 §9.3] 3D box distance truncated
-				if dist >= radius {
-					continue // strictly less than radius [06 §9.3]
-				}
-				var falloff float32 = 1
-				if dist != 0 {
-					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3]
-				}
-				if perUnit != nil {
-					perUnit(h, falloff, dist)
-				}
-			}
-		}
-		// Feature/terrain candidate [06 §9.3] — feature distance checked before dedup
-		// Simplified: feature presence implied by cell existence? For test we skip feature unless caller provides feature map via separate hook.
-		// Feature enumeration stub: we call per feature if needed via feature callback elsewhere.
-		// But for dedup semantics, demonstrate feature distance before dedup ordering:
-		_ = featDedup // retained for dedup contract [06 §9.3]
-		// Note: feature handling would check distance before SeenFeature per [06 §9.3].
-	})
-}
+// The area sweep itself lives in the combat service's ExplodeWeaponAt, which is
+// the single authoritative entry for projectile splash and death explosions
+// alike: it carries the unit phase and the feature phase in one ordered victim
+// list, using the two dedup memories above [06 §9.3][06 R-WPN-04 §3]. A second,
+// unit-only copy of the sweep used to sit here with a stubbed feature phase and
+// an unresolved question in its comment; it had no non-test caller and read as
+// a live gap in the feature half, so it was removed (AU-14 W-6).
 
 // ---------------------------------------------------------------------------
 // Feature ignition gate [06 §13.1] [06 R-WPN-05 §10]

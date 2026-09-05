@@ -81,6 +81,47 @@ func TestUnitReclaimPulseIsAuthoredOnceAndClamped(t *testing.T) {
 	}
 }
 
+// TestUnitReclaimPulseProductWrapsAtThirtyTwoBits locks the width of the pulse
+// product [05 R-WORK-01 §4]: "the 32-bit product can overflow silently for large
+// `workertime × maxdamage`; because it is then re-read as an *unsigned* 32-bit
+// quantity, an overflowed product becomes a very large positive pulse rather
+// than a negative one."
+//
+// Two cases, because they separate three different implementations:
+//
+//   - a product that passes 2^31 but not 2^32 makes the SIGNED 32-bit value
+//     negative while the unsigned re-read is still the true product. A signed
+//     re-read would clamp the pulse to 1 here; the unsigned re-read gives the
+//     un-wrapped answer, so this case pins the *sign* of the re-read.
+//   - a product that passes 2^32 loses its high bits for good, and the pulse
+//     collapses to the low 32 bits divided by the same denominator. This is the
+//     case a 64-bit product cannot reproduce: it answers 594 where retail
+//     answers 21.
+//
+// The operands are a builder with a large `workertime` and a long kill list
+// against a target whose `maxdamage` is in the tens of thousands — the
+// Krogoth-class reach the audit that found this identified. The numbers are
+// stated, not sampled from the catalog: what is locked is the arithmetic.
+func TestUnitReclaimPulseProductWrapsAtThirtyTwoBits(t *testing.T) {
+	builder := &units.Unit{Def: &content.UnitDef{WorkerTime: 300}}
+	target := &units.Unit{Def: &content.UnitDef{MaxDamage: 45000, BuildCostMetal: 25000}}
+
+	// killsFactor = (50 + 5) / 5 = 11; 300 * 11 * 45000 * 15 = 2_227_500_000,
+	// which is above 2^31 and below 2^32. Denominator = 25000 * 300.
+	builder.Kills = 50
+	if got := UnitReclaimPulse(builder, target); got != 297 {
+		t.Fatalf("pulse over 2^31 = %d, want 297: the 32-bit product is re-read UNSIGNED, so it is still the true product here [05 R-WORK-01 §4]", got)
+	}
+
+	// killsFactor = (105 + 5) / 5 = 22; 300 * 22 * 45000 * 15 = 4_455_000_000,
+	// which is above 2^32. The low 32 bits are 160_032_704, and 160_032_704 /
+	// 7_500_000 truncates to 21. A 64-bit product answers 594.
+	builder.Kills = 105
+	if got := UnitReclaimPulse(builder, target); got != 21 {
+		t.Fatalf("pulse over 2^32 = %d, want 21: the product wraps at 32 bits before the widening, so the high bits are gone (a 64-bit product answers 594) [05 R-WORK-01 §4]", got)
+	}
+}
+
 func TestUnitReclaimBlockedRangeMakesNoProgress(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 100, 1)
 	target.X = numeric.FixedFromInt(2)

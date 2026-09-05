@@ -187,78 +187,15 @@ func (s *SteerState) UpdateHeading(desired uint16) { // [04 §8.1] C20
 	// No reverse-speed branch: Speed is left untouched and never made negative here [04 §8.1] C20
 }
 
-// UpdateSpeedWithBraking advances speed toward cap using Acceleration/BrakeRate
-// and the braking-distance test of the accel/brake decision [04 R-MOV-01 §4] M3.
-// cap is the pitch-capped speed from SpeedCapForPitch [04 R-MOV-01 §4].
-// hasWaypoint is true while waypoints remain (route.Active or directGoal) [04 §7.3] C14.
-// distToGoal is the Euclidean distance to the final goal in 16.16 units (Fixed.Raw) [03 §2.1][04 §7.3] C15.
-// blocked optionally clamps cap to MaxVelocity/2, the blocked-mover half-speed
-// clamp [04 R-MOV-01 §7] C24.
-// No float64, trunc toward zero [I2][I3], deterministic [I1].
-func (s *SteerState) UpdateSpeedWithBraking(cap int32, hasWaypoint bool, distToGoal int32, blocked bool) { // [04 R-MOV-01 §4] M3
-	if s == nil {
-		return
-	}
-	if blocked {
-		half := s.MaxVelocity / 2 // trunc toward zero [I3]; the blocked-mover half-speed clamp [04 R-MOV-01 §7]
-		if cap > half {
-			cap = half
-		}
-	}
-	// No waypoint or braking state => apply -BrakeRate [04 R-MOV-01 §4] M3
-	if !hasWaypoint {
-		if s.BrakeRate == 0 {
-			s.Speed = 0
-		} else {
-			s.Speed -= s.BrakeRate
-			if s.Speed < 0 {
-				s.Speed = 0
-			}
-		}
-		if s.Speed > cap {
-			s.Speed = cap
-		}
-		if s.Speed < 0 {
-			s.Speed = 0
-		}
-		return
-	}
-	// Stopping-distance estimate speed*speed/(brake*2), the stopping-distance
-	// term of the accel/brake decision [04 R-MOV-01 §4] M3.
-	// Integer trunc toward zero; guard divide-by-zero [I11].
-	if s.BrakeRate != 0 {
-		stoppingDist := int64(s.Speed) * int64(s.Speed) / (int64(s.BrakeRate) * 2) // [04 R-MOV-01 §4] speed*speed/(brake*2) trunc
-		// distToGoal is 16.16 fixed raw; stoppingDist is also 16.16 (since speed and brake are 16.16, speed^2/brake yields 16.16)
-		if int64(distToGoal) <= stoppingDist {
-			s.Speed -= s.BrakeRate
-			if s.Speed < 0 {
-				s.Speed = 0
-			}
-			if s.Speed > cap {
-				s.Speed = cap
-			}
-			return
-		}
-	}
-	// Accelerate toward cap [04 R-MOV-01 §4] M3
-	if s.Speed < cap {
-		if s.Acceleration == 0 {
-			// Fallback for tests with zero accel: snap to cap (preserves legacy TestNoReverse)
-			s.Speed = cap
-		} else {
-			s.Speed += s.Acceleration
-			if s.Speed > cap {
-				s.Speed = cap
-			}
-		}
-	} else if s.Speed > cap {
-		// Immediate clamp for pitch/water cap reduction [04 R-MOV-01 §4]: if cap < speed => speed=cap
-		s.Speed = cap
-	}
-	if s.Speed < 0 {
-		s.Speed = 0
-	}
-}
+// M-5 of the 2026-09-05 audit removed `UpdateSpeedWithBraking` from this file.
+// It was a second, NON-RETAIL speed integrator: it braked when
+// `distToGoal <= speed*speed/(2*brake)` and snapped straight to the cap on a
+// zero acceleration, neither of which is [04 R-MOV-01 §4]. The route follower's
+// own decision — the per-axis squares, the turn-distance term, the strict `>`
+// on both tests — lives in the follower, and the integrator it drives is
+// UpdateFollowerSpeed below. Nothing outside this package's tests ever called
+// the removed function, so its only effect was to offer a plausible wrong
+// answer to a later reader.
 
 // UpdateFollowerSpeed applies the route follower's already-selected signed
 // acceleration or braking delta, then its pitch/water ceiling. The caller owns

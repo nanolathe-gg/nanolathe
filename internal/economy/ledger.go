@@ -662,19 +662,56 @@ func AdmitOneResourceToMirror(p *Player, energy float32) {
 	AdmitOneResource(&p.Mirror, energy)
 }
 
-// ImmediateDebit attempts a direct two-resource payment that debits both in full or neither
-// per [05 "Direct two-resource payment"] C11.
-func ImmediateDebit(p *Player, energy, metal float32) bool {
+// ImmediateDebit is the direct two-resource payment of [05 R-ECO-01 §7], the
+// helper weapon fire and other immediate operations use:
+//
+//	if (e <= playerEnergyStock && m <= playerMetalStock) {
+//	    playerEnergyStock = float32( playerEnergyStock - e )
+//	    energyRequested   = float32( e + energyRequested )
+//	    playerMetalStock  = float32( playerMetalStock - m )
+//	    metalRequested    = float32( m + metalRequested )
+//	    return paid
+//	}
+//	return refused
+//
+// Both compares are inclusive and both must hold before anything is debited, so
+// this is genuinely all-or-nothing. The requested accumulator is credited and
+// the accepted accumulator is not, so an immediate payment appears in the pass's
+// requested counter but never becomes carry.
+//
+// CORRECTION (AU-7) — WHOSE `requested` IS CREDITED. §7 opens by saying all five
+// admission helpers "are small methods on the economy SUBRECORD of
+// [R-ECO-01 §2] — which means they work identically on a unit's embedded
+// subrecord and on the player-level mirror bucket, and that the 'builder's
+// subrecord' a caller passes is always a subrecord, never a player record". The
+// two direct payments reach through the subrecord's OWNER POINTER for the live
+// stock; the `requested` write stays on the subrecord itself. This helper wrote
+// both to the player mirror, so a shot's request was archived against the player
+// bucket rather than against the shooter.
+//
+// The pass totals are identical either way — the settlement fold sums the
+// per-unit subrecords into the mirror — so this is hash-neutral. What it changes
+// is the per-unit archived slot, which is the only place a caller can ask "what
+// did THIS unit request", and which had no reader precisely because it was never
+// written.
+//
+// `buckets` is the paying unit's subrecord, from Service.UnitBuckets. A nil
+// `buckets` credits the player mirror, which is what a payment with no unit
+// behind it (a fixture, a neutral firer) has always done.
+func ImmediateDebit(p *Player, buckets *[2]Bucket, energy, metal float32) bool {
 	if p == nil {
 		return false
 	}
 	if energy > p.Stock[Energy] || metal > p.Stock[Metal] {
 		return false
 	}
+	if buckets == nil {
+		buckets = &p.Mirror
+	}
 	p.Stock[Energy] = float32(float64(p.Stock[Energy]) - float64(energy))
-	p.Mirror[Energy].Requested = float32(float64(p.Mirror[Energy].Requested) + float64(energy))
+	buckets[Energy].Requested = float32(float64(buckets[Energy].Requested) + float64(energy))
 	p.Stock[Metal] = float32(float64(p.Stock[Metal]) - float64(metal))
-	p.Mirror[Metal].Requested = float32(float64(p.Mirror[Metal].Requested) + float64(metal))
+	buckets[Metal].Requested = float32(float64(buckets[Metal].Requested) + float64(metal))
 	return true
 }
 

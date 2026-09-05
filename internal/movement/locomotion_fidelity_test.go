@@ -41,8 +41,8 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 		t.Fatalf("cap %d want %d", cap, maxV)
 	}
 	for i := 1; i <= 9; i++ {
-		// large dist, hasWaypoint true, not blocked
-		s.UpdateSpeedWithBraking(cap, true, 1<<30, false)
+		// hasWaypoint true, accelerate true
+		s.UpdateFollowerSpeed(cap, true, true)
 		want := int32(i * accel)
 		if want > cap {
 			want = cap
@@ -61,7 +61,7 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 	// Choose dist 0 to force brake
 	for i := 0; i < 5; i++ {
 		prev := s.Speed
-		s.UpdateSpeedWithBraking(cap, true, 0, false)
+		s.UpdateFollowerSpeed(cap, true, false)
 		if s.Speed >= prev && prev != 0 {
 			t.Fatalf("braking tick %d speed %d not < prev %d", i, s.Speed, prev)
 		}
@@ -75,7 +75,7 @@ func TestLocomotionAccelBrakeRamp(t *testing.T) {
 	}
 	// No oscillation: braking when hasWaypoint false should stay 0, not go negative or bounce
 	for i := 0; i < 3; i++ {
-		s.UpdateSpeedWithBraking(cap, false, 0, false)
+		s.UpdateFollowerSpeed(cap, false, false)
 		if s.Speed != 0 {
 			t.Fatalf("no waypoint should stay 0, got %d", s.Speed)
 		}

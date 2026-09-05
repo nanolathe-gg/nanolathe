@@ -349,8 +349,12 @@ are the callbacks; `openMissionMenu`, `retailSkirmishStartError` and
 `[07 R-FE-01 §5]`. `retail_menu.go` owns the panel refreshes and the authored
 data flow (campaign options, map data, skirmish rows, ally icons, hover help);
 `retail_menu_list.go` the listbox and the scrollbar geometry, knob sizing and
-drag; `retail_menu_options.go` the options family, its pages, the display-mode
-list and the slider arithmetic `[07 R-FE-01 §6]`; `retail_menu_message.go` the
+drag; `retail_menu_options.go` the options family — `STARTOPT.GUI` and all four
+merged pages (`SOUNDS`, `MUSIC`, `SPEEDS` — whose root button is captioned
+`INTERFACE` — and `VISUALS`), the display-mode list, the per-page `RESTORE` and
+`UNDO`, the entry snapshot `CANCEL` restores, and the slider arithmetic
+`[07 R-FE-01 §6]` `[03 R-AUD-01 §2]` `[03 R-AUD-01 §4]` `[07 R-CAM-01 §7]`;
+`retail_menu_message.go` the
 `MSGBOX` layer with its word wrap `[07 R-FE-02 §6]` `[07 R-FE-01 §9]`;
 `retail_menu_draw.go` the screen painter, including the art-less bevel and the
 `BackTile` chain `[07 R-FE-02 §4]`.
@@ -643,10 +647,22 @@ skirmish subkey and every other skirmish value under the main key
 defaults and the read-once/write-whole shape and swaps the registry for one JSON
 file (`internal/settings`). Persisted: the campaign `Difficulty`,
 `SkirmishMap`, `NumSkirmishPlayers`, the six skirmish rule scalars and the ten
-skirmish rows, plus the display size and the message-column configuration. Not
-persisted: audio mixing and the networking identity fields, which are retail
-values this engine has no owner for and are deliberately absent rather than
-written as invented defaults.
+skirmish rows, the display block, the message-column configuration, the audio
+block (`Sound Mode`, `RestoreVolume`, `ackfx`, `buildfx`, `speechfx`, `fxvol`,
+`musicvol`, `MixingBuffers`, `musicmode`, `cdmode`, `unitchat`), `gamespeed`
+and `Interface Type` `[03 R-AUD-01 §2]` `[07 R-CAM-01 §7]` `[07 R-CAM-01 §5]`.
+Not persisted: the networking identity fields, which are retail values this
+engine has no owner for and are deliberately absent rather than written as
+invented defaults.
+
+Four persisted values are stored and re-shown but not yet consumed, each with
+its consumer named at the write site: `Sound Mode`'s `Mono`-versus-`3D`
+distinction (the output device's 3-D flag — this build pans positionally either
+way), `gamespeed` (no session exists while the front-end options root is open;
+battle entry is the reader), `Interface Type` (`internal/orders` holds the word
+behind a `TODO(T23)` and exports no setter), and the per-track music category
+array (retail persists it in the `CDLISTS` ring keyed by the drive's volume
+serial, which this build has no analogue for).
 
 **C18 — the in-battle modal chain.** An empty selection activates the
 side-authored `<prefix>gen.gui`, not the underlying `<prefix>main.gui`. In a
@@ -1028,6 +1044,19 @@ would settle it.
 * There is no general display-scale conversion contract, because retail has one
   logical size. The HUD is laid out at that size and the chrome extends by rule;
   a scale conversion would be invented `[07 §4]` `[07 R-HUD-05]`.
+
+One traced screen is built but unreachable from one of its two entries. The
+options root and its four pages are implemented for the front end
+(`STARTOPT.GUI` over `options4x`); the in-battle entry is not. `ARMOPT.GUI`'s
+`PREFS` button has no arm in `ui.BattleState.Activate`, so pressing it does
+nothing, and the in-battle form of the root is a different composition:
+`PREFS.GUI`, the `…RT.GUI` page variants, a window widened by 150 with a
+synthesised `PANEL` gadget the merge centres inside, no page plate so the battle
+stays visible, and `MAP`/`VID`-prefixed gadgets hidden `[07 R-FE-01 §6]`
+`[07 R-FE-01 §7]`. Reaching it needs a `BattleModalActionPreferences` arm in
+`internal/ui`, a `battle_menu.go` case that opens the root, and the two lines in
+`battle_hud.go`'s `drawBattleMenu` that paint a frontend panel over the battle
+surface — the same two lines the save/load dialog is already waiting on.
 
 Three differences from retail are recorded from a retail capture rather than
 from a trace, and none is implemented:

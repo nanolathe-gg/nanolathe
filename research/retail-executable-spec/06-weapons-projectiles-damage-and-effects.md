@@ -1034,8 +1034,10 @@ map's sea-level byte. In order:
    bits of its state word `[04 R-MOV-01 §8]` — must read exactly **2**,
    airborne. The operand of that airborne test (`[02 R-KEYS-01 §2]`) is the
    committed mover mode, not a definition bit and not an altitude.
-4. `ballistic` (flag bit 1): the ballistic solver is run on the source-to-target
-   delta with the weapon's `weaponvelocity` and `minbarrelangle`, and the gate
+4. `ballistic` (flag bit 1): the ballistic solver is run on the shooter-minus-
+   target delta of the two units' **own positions** on all three axes — no
+   piece is queried and no `SweetSpot` transform is applied at this gate —
+   with the weapon's `weaponvelocity` and `minbarrelangle`, and the gate
    refuses when it returns the no-solution sentinel. Gravity is not among the
    passed operands; the solver reads the world's.
 5. **Range.** `dx` and `dz` are the raw 16.16 planar deltas; the gate admits
@@ -1451,11 +1453,17 @@ belong to the acquisition and order-installation gate only.
 **Established fact:** The slot selects its pieces through four query jobs that
 must not be collapsed into a single "muzzle piece" lookup:
 
-1. QueryPrimary, QuerySecondary, or QueryTertiary supplies a fallback muzzle
-   piece and is synchronous.
+1. QueryPrimary, QuerySecondary, or QueryTertiary supplies the **muzzle**
+   piece — the point a projectile spawns from — and is synchronous. Every
+   fire-time executor runs it in the forced form: cell 0 seeded 0, the
+   `AimFrom*` entry not consulted.
 2. AimFromPrimary, AimFromSecondary, or AimFromTertiary supplies the piece from
-   which the weapon aims and is synchronous. Its sentinel is −1; only that
-   sentinel invokes the matching Query fallback.
+   which the weapon **aims** — the origin the angle solvers measure from — and
+   is synchronous. Its sentinel is −1; only that sentinel invokes the matching
+   Query fallback. The fallback form serves the aim solve and the slot
+   initializer's distance word (`[R-WPN-05 §3]`), never the spawn point: on
+   most stock models the two entries name different pieces (a Peewee aims from
+   its upper arms and fires from its barrel flares).
 3. SweetSpot supplies the selected target-piece offset and is synchronous where
    the target path requests it.
 4. AimPrimary, AimSecondary, or AimTertiary is a deferred command carrying the
@@ -1473,14 +1481,23 @@ fire permission merely by returning a piece. [04 §5.3]
 2) and are not hardcoded to the primary weapon. The recovered algorithm is:
 
 ```text
-AimPiece(k):
+AimPiece(k):                      // the AIM ORIGIN — §3.3's solvers, the distance word
     piece = -1
     AimFrom[k](piece)             // mode Q, cell 0 seeded -1
     if piece == -1:
         piece = 0
         Query[k](piece)           // mode Q, cell 0 seeded 0
     return piece
+
+MuzzlePiece(k, piece):            // the SPAWN POINT — every fire-time executor, §4.1
+    if piece < 0:                 // -1 means "ask the script"; a stored piece (the
+        piece = 0                 // burst re-query, §4.3) makes no call at all
+        Query[k](piece)           // mode Q, cell 0 seeded 0; AimFrom[k] is NOT consulted
+    return piece
 ```
+
+The two are separate routines with separate callers, and an implementation
+that collapses them spawns every shot at the aim origin.
 
 **Established fact:** The mode-Q dispatcher runs the script synchronously and
 copies back only cell 0; cells 1 through 3 are seeded zero by the dispatcher
@@ -1529,21 +1546,25 @@ energy/metal precheck of §4.2. Only an admitted attempt that passes its
 applicable resource or ammunition gate enters its executor:
 
 - **Turret:** requires both the Aim-request latch and a nonzero Aim result,
-  re-solves current geometry and applies the angular-drift gate. It then runs
-  the synchronous `AimFrom[k]`/`Query[k]` muzzle fallback, transforms the
-  selected piece, converts yaw from relative to absolute, applies the
-  accuracy spread, and calls the ordinary creator for `lineofsight` or
-  `selfprop`, the ballistic creator for `ballistic`, or no creator otherwise.
+  re-solves current geometry from a fresh `AimFrom[k]`/`Query[k]` aim-origin
+  query and applies the angular-drift gate. It then runs the forced
+  `Query[k]` muzzle query (piece −1: cell 0 seeded 0, `AimFrom[k]` not
+  consulted), transforms the selected piece, converts yaw from relative to
+  absolute, applies the accuracy spread, and calls the ordinary creator for
+  `lineofsight` or `selfprop`, the ballistic creator for `ballistic`, or no
+  creator otherwise.
 - **Vertical launch:** requires a nonzero Aim result but does not test the Aim
-  latch. It runs and transforms the muzzle fallback, writes absolute yaw and
-  pitch, performs the interceptor rescan when authored, and calls the
-  vertical-launch creator.
+  latch. It runs and transforms the forced `Query[k]` muzzle query, writes
+  absolute yaw and pitch, performs the interceptor rescan when authored, and
+  calls the vertical-launch creator.
 - **Line-of-sight/self-propelled:** uses neither Aim field. It runs and
-  transforms the muzzle fallback, writes absolute yaw and pitch, applies its
-  drift gate against the unit's own heading and pitch, and calls the ordinary
-  creator. It applies no accuracy spread.
-- **Dropped:** has no Aim or drift gate. It runs and transforms the muzzle
-  fallback and then performs its inline allocation and initialization.
+  transforms the forced `Query[k]` muzzle query, solves absolute yaw and
+  pitch from that point, applies its drift gate against the unit's own
+  heading and pitch, and calls the ordinary creator. It applies no accuracy
+  spread and never consults `AimFrom[k]`.
+- **Dropped:** has no Aim or drift gate. It runs and transforms the forced
+  `Query[k]` muzzle query and then performs its inline allocation and
+  initialization.
 
 The selected muzzle piece is stored on a successful root projectile so a
 later burst attempt can refresh its world position from the live piece.
@@ -1660,8 +1681,11 @@ enters — the offset is the piece's *own* vertex cloud about its *own* origin,
 added to the unit's world position — so a script that returns a turret piece
 aims at the unit position plus that piece's local geometry centre, not at the
 turret's animated world position, and the muzzle-side piece transform of §3.4
-(which does apply the hierarchy and piece state) is **not** reused here;
-(3) a piece with no vertices yields the unit position exactly. A piece index
+(which does apply the hierarchy and piece state, and negates Z once on output,
+`[03 R-RAST-01 §8]`) is **not** reused here — the model-space triple is added
+to the position as-is, with **no** Z negation, so a piece whose box is offset
+along Z lands mirrored against where the model pass draws it; (3) a piece with
+no vertices yields the unit position exactly. A piece index
 outside the model's piece table reads past it; shipped scripts return indices
 of their own model.
 
@@ -1688,18 +1712,24 @@ failure with nothing else done. The dropped executor is the exception: it runs
 its muzzle query before reserving.
 
 **Established fact:** A muzzle piece is queried synchronously before
-initialization through the §3.4 AimFrom/Query fallback. The engine passes a
-piece argument of −1 to mean "ask the script": the query then calls
-`AimFromPrimary`/`AimFromSecondary`/`AimFromTertiary` with a single in/out
-argument preset to −1, and falls back to `QueryPrimary`/`QuerySecondary`/
-`QueryTertiary` with the argument preset to **0** when the script left the
-AimFrom value at −1. The resulting piece index is converted through the unit's
-current piece transform and added to the unit's world position; a negative or
-invalid result resolves through the normal muzzle-position path and is never a
-reason to authorize a shot. A non-negative piece argument (the burst
-re-query, §4.3) uses that piece directly and makes no COB call. The root
-projectile records the muzzle piece identity so a later burst clone can
-re-query the muzzle world position `[R-P0-07]`.
+initialization through the **forced `Query*` form** of §3.4. The engine passes
+a piece argument of −1 to mean "ask the script": the query then calls
+`QueryPrimary`/`QuerySecondary`/`QueryTertiary` with a single in/out argument
+preset to **0** and takes whatever the script leaves there, so a script without
+the entry answers piece 0, the root. `AimFromPrimary`/`AimFromSecondary`/
+`AimFromTertiary` is **not** consulted here by any of the four executors: the
+`AimFrom*`-with-`Query*`-fallback form is the aim origin of §3.3 — the point
+the turret and direct solvers measure from and the slot initializer's distance
+word subtracts (`[R-WPN-05 §3]`) — and on most stock models it names a
+different piece from the muzzle (a Peewee aims from `ruparm`/`luparm` and
+fires from `rfire`/`lfire`; a tank aims from its turret and fires from the
+flare at the end of its barrel). The resulting piece index is converted
+through the unit's current piece transform and added to the unit's world
+position; a negative or invalid result resolves through the normal
+muzzle-position path and is never a reason to authorize a shot. A non-negative
+piece argument (the burst re-query, §4.3) uses that piece directly and makes
+no COB call. The root projectile records the muzzle piece identity so a later
+burst clone can re-query the muzzle world position `[R-P0-07]`.
 
 **Established — the sense of "added to the unit's world position".** The
 composed piece offset is in model space, which is mirrored in Z against world

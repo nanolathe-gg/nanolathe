@@ -234,6 +234,15 @@ parity plus the camera phase `[03 §3.3]` `[03 R-RR16-A §1]`. `RebuildFogWindow
 sizes the cache to the camera viewport plus a one-cell border; `RebuildFog`
 builds it map-aligned. The cache never writes the word mask.
 
+The four conditional border fixups that close the map's own edge are anchored to
+the **map** border, not to the cache window: cell row −1 and column −1 are the
+void lines the seeding reaches, and row `H−1` and column `W−1` are the last
+in-map lines. Retail names them by window position because its window overshoots
+a crossed edge by exactly one cell; ours carries a wider border, so the window
+form put every fixup on a line no tile seeds and the north and west borders drew
+partial cloud art instead of the solid unexplored fill `[03 §3.3]` "Map-edge
+propagation".
+
 **Publication of the mask.** At the end of each sub-tick the session copies the
 mode-selected coverage into the committed frame: the word grid always, the local
 player's byte grid only when current coverage is enabled, plus the fog channels

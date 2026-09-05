@@ -410,9 +410,12 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 	if orders.QueueForUnit(factory2).LenPrimary() != 0 {
 		t.Fatalf("cancel after should remove node, got %d", orders.QueueForUnit(factory2).LenPrimary())
 	}
+	// The cancel latches the cause-9 death; the record stays Alive so the
+	// phase-2 finalizer frees the slot and decrements the owner's live-unit
+	// counter [01 §4.4]. Clearing Alive here would skip that finalizer.
 	prod := w2.Unit(prodHandle)
-	if prod != nil && prod.Alive {
-		t.Fatalf("product should be dead after cancel")
+	if prod == nil || !prod.Alive || !prod.Dying {
+		t.Fatalf("product should be latched Dying (and still Alive) after cancel")
 	}
 	if _, ok := svc2.BuilderLink(prodHandle); ok {
 		t.Fatalf("builderLink not cleared after cancel after nanoframe")

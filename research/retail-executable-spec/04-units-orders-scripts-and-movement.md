@@ -5936,8 +5936,8 @@ loadable COB program cannot exist in retail". The right divergence is to
 reject the definition at catalog compile time with the standard diagnostic
 shape (`nanolathe: unit script missing: logical path scripts/<name>.cob,
 providers searched [...], expected COB program`), never to create a
-scriptless unit. ([R-COB-01 §3] reads the initializer's later VM uses as
-null-checked; the conflict is recorded there as Unknown.)
+scriptless unit. [R-COB-01 §3] reads the initializer's null branch against
+this query call and reaches the same conclusion.
 
 ### `SetSpeed`, `SetDirection`, and `MotionControl` units and signs [R-COB-04 §9]
 
@@ -6750,14 +6750,36 @@ compiled script. If it does, it allocates the VM instance, constructs it,
 stores it on the unit record, binds the program ([R-COB-01 §1]), builds the
 strict piece map from the model and the script, links the two, and starts
 `Create` once in immediate mode. If it does not, it stores a null VM, builds
-the model-only piece map, and starts nothing. **Unknown:** whether a
-scriptless unit survives creation — this read of the initializer found the
-later VM uses (the visit's interpreter pass, the callbacks, the query
-adapters) null-checked, while [R-COB-04 §8]'s guard census finds only three
-null tests and traces the weapon-slot initializer's synchronous
-`QueryPrimary` dereferencing the null VM at creation; *decider:* a re-read of
-the weapon-slot initializer's query call against the initializer's null
-branch.
+the model-only piece map, and starts nothing.
+
+**Established — a scriptless unit does not survive creation.** The null branch
+is reached, and then the weapon-slot initializer faults on it. The
+initializer's later VM uses are **not** null-checked: [R-COB-04 §8]'s guard
+census finds exactly three null tests in the whole image — the per-unit
+sweep's script drain, the metal extractor's creation-time `SetSpeed`, and the
+unit destructor's VM release — and none of them is on the creation path. The
+weapon-slot initializer's query call, read against the initializer's null
+branch, gives the sequence:
+
+1. The scriptless branch stores **zero** to the same unit-record field the
+   script branch stores the VM reference in, then builds the model-only piece
+   map and returns.
+2. All three creators run the model bind and then, as the next instruction
+   pair, the weapon-slot initializer — no test between them, on any of the
+   three.
+3. That initializer loops the three weapon slots and, per slot, calls the
+   query adapter with the piece argument **−1** (the "ask the script" form)
+   for every definition, armed or not.
+4. The adapter branches on the **piece argument alone**: a non-negative
+   argument skips the query, a negative one takes it. On the taken branch it
+   loads the VM reference from the unit record and passes it straight in as
+   the callback starter's object, with no null test. The starter's second
+   instruction reads the program pointer through that object.
+
+So the null dereference of [R-COB-04 §8] is reached during creation, before
+`SetMaxReloadTime`, before the unit is ever ticked, and with no diagnostic.
+[R-COB-04 §8]'s "Consequence for Nanolathe" — reject the definition at catalog
+compile time, never create a scriptless unit — is the unconflicted rule.
 
 **Established — nothing refuses after allocation.** The heap allocation of the
 VM instance is checked only to skip the constructor: a null result is stored
@@ -7670,7 +7692,10 @@ computed value (written before the call) and the variant local keeps its frame
 residue, exactly as in §7. "No `Killed` body", "pool full" and "body that
 ignores its parameter" are one path with one outcome, `(cause << 4) |
 (residue & 0xF)`. A unit with no VM at all (a definition with no compiled
-script, [R-COB-01 §3]) never reaches the query and packs the same residue.
+script, [R-COB-01 §3]) never reaches the query and packs the same residue —
+though such a unit never reaches a death either, because it faults during
+creation [R-COB-04 §8]; this is the shape of the null-VM path, not a state
+stock content can produce.
 
 **Established — where the residue comes from on the authoritative path.** The
 death handler's variant local is the lowest dword of its own sixteen-byte
@@ -13481,10 +13506,6 @@ and the decider that would close it.
 - Whether a stock rotated producer's exit transform coincides with its
   footprint's geometric centre · §6.3.1 [R-REV-02] · asset census of the stock
   factory models.
-- Whether a scriptless unit survives creation — [R-COB-04 §8] traces a fault
-  in the weapon-slot initializer's query, [R-COB-01 §3] reads the later VM uses
-  as null-checked · §4 [R-COB-01 §3] · re-read of the weapon-slot
-  initializer's query call against the initializer's null branch.
 - The identity of the held key the `+BigBrother` sweep tail tests · §1
   [R-MOV-03 §1] · the camera held-key census of [07 R-CAM-01 §2].
 - Restore side of pending script state · doc 08 [P1-13] · static trace.

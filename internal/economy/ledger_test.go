@@ -340,10 +340,10 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	// Immediate debit path
 	p.Stock[Energy] = 10
 	p.Stock[Metal] = 10
-	if !ImmediateDebit(p, 3, 3) {
+	if !ImmediateDebit(p, nil, 3, 3) {
 		t.Fatal("ImmediateDebit should succeed")
 	}
-	if ImmediateDebit(p, 100, 100) {
+	if ImmediateDebit(p, nil, 100, 100) {
 		t.Fatal("ImmediateDebit should fail when insufficient")
 	}
 	// Spawn credit
@@ -371,4 +371,44 @@ func TestMirrorClosedWriterSurface(t *testing.T) {
 	// There is NO factory queue-draw writer — this comment is the contract.
 	// If a future helper named FactoryQueueDraw existed, this test would fail via vet
 	// because the closed set is enumerated above.
+}
+
+// TestImmediateDebitCreditsThePayingSubrecord locks whose `requested`
+// accumulator the direct two-resource payment writes [05 R-ECO-01 §7]. The five
+// admission helpers "are small methods on the economy subrecord ... the
+// 'builder's subrecord' a caller passes is always a subrecord, never a player
+// record"; the two direct payments reach through the subrecord's owner pointer
+// for the LIVE STOCK only. This used to write the request to the player mirror,
+// which is the one bucket it must not touch.
+func TestImmediateDebitCreditsThePayingSubrecord(t *testing.T) {
+	p := &Player{}
+	p.Stock[Energy] = 10
+	p.Stock[Metal] = 10
+	var shooter [2]Bucket
+
+	if !ImmediateDebit(p, &shooter, 3, 4) {
+		t.Fatal("the payment was refused with stock in hand; both compares are inclusive [05 R-ECO-01 §7]")
+	}
+	if shooter[Energy].Requested != 3 || shooter[Metal].Requested != 4 {
+		t.Fatalf("the paying subrecord recorded (%v, %v), want (3, 4): the request stays on the subrecord [05 R-ECO-01 §7]", shooter[Energy].Requested, shooter[Metal].Requested)
+	}
+	if p.Mirror[Energy].Requested != 0 || p.Mirror[Metal].Requested != 0 {
+		t.Fatalf("the player mirror recorded (%v, %v), want (0, 0): only the live stock is reached through the owner pointer [05 R-ECO-01 §7]", p.Mirror[Energy].Requested, p.Mirror[Metal].Requested)
+	}
+	// The live stock IS the player's, and the accepted accumulator is never
+	// touched, so an immediate payment never becomes carry.
+	if p.Stock[Energy] != 7 || p.Stock[Metal] != 6 {
+		t.Fatalf("stock after the payment = (%v, %v), want (7, 6)", p.Stock[Energy], p.Stock[Metal])
+	}
+	if shooter[Energy].Accepted != 0 || shooter[Metal].Accepted != 0 {
+		t.Fatalf("the payment credited an accepted accumulator (%v, %v); it must not [05 R-ECO-01 §7]", shooter[Energy].Accepted, shooter[Metal].Accepted)
+	}
+	// All-or-nothing: a refusal debits and records nothing at all.
+	before := shooter
+	if ImmediateDebit(p, &shooter, 100, 0) {
+		t.Fatal("a payment beyond the energy stock was accepted [05 R-ECO-01 §7]")
+	}
+	if shooter != before || p.Stock[Energy] != 7 || p.Stock[Metal] != 6 {
+		t.Fatal("a refused payment moved something; both compares precede every write [05 R-ECO-01 §7]")
+	}
 }

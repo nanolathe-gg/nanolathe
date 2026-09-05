@@ -3770,9 +3770,14 @@ transit.
 The same difficulty ladder — easy `x 0.5`, medium `x 0.7`, hard unscaled,
 selected from the same difficulty word — is also applied inside the
 per-player economy settlement to **every positive production contribution of
-every unit owned by a control-byte-2 player**: at seven contribution sites in
-the settlement accumulator, and once more on the per-player credit that
-follows it — eight in all `[05 R-ECO-01 §3]`. Doc 05 owns that arithmetic,
+every unit owned by a control-byte-2 player**. The settlement accumulator
+scales the seven contribution **kinds** `[05 R-ECO-01 §3]` names — passive
+`energymake`, passive `metalmake`, extraction, maker, wind, tidal and the
+negative-`energyuse` refund — and the per-player credit that follows it is
+scaled too. Those kinds do not map one-to-one onto code sites, and this
+section does not count sites: the site census belongs to `[05 R-ECO-01 §11]`,
+which names **fourteen** sites at six copies of the constant pair and says
+what each one is. Doc 05 owns that arithmetic,
 including the exact `production := float32(production - (contribution * K))`
 form, which must be reproduced literally because the factored form rounds
 differently. Whether a build-rate, cost or damage multiplier exists elsewhere
@@ -6488,9 +6493,15 @@ to choose from`. Nothing in this family touches a save bank. [Established]
 ### The `Units` account, word by word [R-SAVE-02 §6]
 
 **Established — writer traversal and account items.** The writer walks the
-unit pool from the **last** slot down to the first and emits every unit
+unit pool from the **first** slot up to the last and emits every unit
 whose live bit is set, numbering its boxes with a running index `i`
-(0-based, in emission order). Per unit, in this order: the `Script%i` box
+(0-based, in emission order). There is exactly one `Units` writer in the
+image: its record cursor is initialised to the unit pool's **base**, compared
+against the pool's **end**, and advanced by one record stride each iteration.
+That the initial value is the base and not the end is independently provable
+from the reader, which computes a record's address from a stable slot id as
+`poolBase + id × recordStride` off the same pool anchor, so that anchor is the
+base. Per unit, in this order: the `Script%i` box
 (§9), one `u%04xm%04x` box per order — the front list first, then the rear
 list, sequence numbers continuing across both — then `u%04xmob` (§8) when
 the unit owns a mover, `u%04xacc` (§7), and finally the 184-byte base

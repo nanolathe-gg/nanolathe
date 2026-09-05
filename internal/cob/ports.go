@@ -186,34 +186,76 @@ func KilledSeverity(health, maxHealth int32, priorSample uint8) int32 {
 	return tmp // [GAP T15] C15
 }
 
-// HealthPercent is the port-4 and post-hit percentage read [04 §4.4] [04 §5.1]
-// C15/C26: current health*100 / maxHealth as an unsigned division giving
-// 0..100, clamped. It is the computation underlying port 4 (health) and the
-// TakeDamage argument after health subtraction [04 §5.1] C26.
+// HealthPercent is the ENGINE PORT 4 read, and nothing else
+// [04 §4.4 port 4][04 R-COB-03 §2]:
+//
+//	(uint32)( (int32)(int16)health * 100 ) / (uint32)maxdamage
+//
+// The health field is loaded SIGN-EXTENDED from 16 bits and multiplied by 100 as
+// a signed 32-bit product; that product is then the *unsigned* dividend of a
+// 32-bit divide with the high dividend word cleared.
+//
+// CORRECTION (AU-7). This clamped the result to 0..100. [04 R-COB-03 §2] is
+// explicit that it does not: "The port itself clamps nothing: because the signed
+// product is reinterpreted as an unsigned dividend, a negative health value
+// would give a very large quotient rather than a negative one." A script reading
+// port 4 on a unit whose 16-bit health has gone negative — reachable on a
+// locally owned victim [06 R-DMG-01 §4], and the same negative field the reload
+// tier reads [06 §4.2] — therefore sees an enormous percentage in retail and saw
+// 0 here. The high clamp was equally invented: health above `maxdamage` reads
+// above 100.
+//
+// The clamped form is a DIFFERENT contract with two other call sites — the
+// `TakeDamage` argument and the per-30-tick percentage pair — and it lives in
+// ClampedHealthPercent below. Do not merge them again.
+//
+// DIVERGENCE (I11): the `maxHealth <= 0` guard is ours. Retail divides by the
+// definition's maximum-damage field with no test, so an authored zero faults the
+// processor and kills the process [04 §4.3]; we cannot host that, and the port
+// table's own edge note says so [04 §4.4 port 4].
 func HealthPercent(health, maxHealth int32) int32 {
 	if maxHealth <= 0 {
-		// The same unguarded divide as KilledSeverity above: an authored zero
-		// maximum-damage faults retail outright [04 §4.3]. Clamping is the
-		// INVARIANTS I11 divergence, not a traced behavior.
-		return 0
+		return 0 // DIVERGENCE (I11): retail faults on the divide; see above.
 	}
-	// Unsigned division note [04 §4.4] port 4 and [04 §5.1] TakeDamage.
-	// For the positive health path this is signed trunc toward zero [01 §8] I3.
-	v := (int64(health) * 100) / int64(maxHealth)
+	// A signed 32-bit product re-read as an unsigned dividend, divided unsigned.
+	// Go's int32 multiply wraps, so this IS the retail product; over the positive
+	// domain the quotient coincides with signed truncation toward zero [01 §8] I3.
+	return int32(uint32(int32(int16(health))*100) / uint32(maxHealth))
+}
+
+// ClampedHealthPercent is the percentage read that DOES clamp: the same unsigned
+// division with the explicit `< 0 -> 0` and `> 100 -> 100` bounds retail writes
+// around it. Two call sites carry those bounds [04 §5.1][04 §4.4 item 8]:
+//
+//   - the `TakeDamage` starter's single argument, computed after the health
+//     subtraction — "an unsigned division of the product with explicit `<0->0`,
+//     `>100->100` clamps";
+//   - the per-unit percentage pair rolled on ticks where `tick mod 30 == 0`,
+//     which §4.4 calls "the same unsigned division and clamps as the
+//     `TakeDamage` percent of section 5.1".
+//
+// §4.4 notes that the `< 0` bound is unreachable for an unsigned quotient below
+// 2^31 and is "kept only for fidelity"; it is kept here for the same reason.
+// Engine port 4 has no such bounds — see HealthPercent above.
+func ClampedHealthPercent(health, maxHealth int32) int32 {
+	if maxHealth <= 0 {
+		return 0 // DIVERGENCE (I11), as HealthPercent above.
+	}
+	v := HealthPercent(health, maxHealth)
 	if v < 0 {
 		v = 0
 	}
 	if v > 100 {
 		v = 100
 	}
-	return int32(v) // [04 §4.4] port 4, [04 §5.1] C26
+	return v
 }
 
-// TakeDamagePercent is the same as HealthPercent but named for the C26 post-hit
-// call site [04 §5.1] C26: clamp(health*100/maxHealth, 0, 100) as unsigned
-// division after health was already subtracted.
+// TakeDamagePercent is ClampedHealthPercent named for the C26 post-hit call site
+// [04 §5.1] C26: the argument the `TakeDamage` starter carries after health was
+// already subtracted.
 func TakeDamagePercent(health, maxHealth int32) int32 {
-	return HealthPercent(health, maxHealth) // [04 §5.1] C26
+	return ClampedHealthPercent(health, maxHealth) // [04 §5.1] C26
 }
 
 // MaxReloadMillis converts the compiled maxReload ticks to the milliseconds

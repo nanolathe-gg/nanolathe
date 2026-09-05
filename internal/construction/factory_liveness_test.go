@@ -51,7 +51,13 @@ func TestDecayClampKillsTheNanoframe(t *testing.T) {
 	if frame.Remaining != 1 {
 		t.Fatalf("decay left remaining=%v, want the clamp at 1", frame.Remaining)
 	}
-	if frame.Alive || w.Unit(h) != nil {
+	// The clamp latches the cause-9 death; the session's phase-2 finalizer
+	// frees the slot at the end of the unit's own step [01 §4.4].
+	if !frame.Dying || !w.NeedsDeathFinalization(h) {
+		t.Fatalf("clamped frame is not latched Dying [05 \"Reverse and deconstruction\"]")
+	}
+	w.FinalizeDeath(h, 40)
+	if w.Unit(h) != nil {
 		t.Fatalf("clamped frame is still alive [05 \"Reverse and deconstruction\"]")
 	}
 	kill := svc.LastKill()
@@ -164,7 +170,12 @@ func TestAbandonedFrameOnTheExitStopsBlockingTheFactory(t *testing.T) {
 		t.Fatalf("QueueFactoryBuild: %v", err)
 	}
 	ordersPump := &orders.Pump{World: w}
+	// The decayed frame's slot is freed by the phase-2 finalizer, and the pool
+	// hands the next allocation the lowest free slot, so the replacement
+	// product routinely receives the abandoned frame's own handle. Track the
+	// free itself rather than comparing handles.
 	var produced pool.Handle
+	freed := false
 	const maxTicks = 2000
 	for i := 0; i < maxTicks && produced == 0; i++ {
 		tick++
@@ -184,11 +195,19 @@ func TestAbandonedFrameOnTheExitStopsBlockingTheFactory(t *testing.T) {
 					sys.ActivateMove(u, head)
 				}
 			}
-			if res := svc.StepUnit(ctx, h); res.Completed && res.Product != 0 && res.Product != abandoned {
+			if res := svc.StepUnit(ctx, h); res.Completed && res.Product != 0 && freed {
 				produced = res.Product
 				sys.EnsureUnit(w.Unit(res.Product))
 			}
 			sys.StepUnit(h, tick)
+			// The session's phase-2 death finalization at the end of the
+			// unit's own step [01 §4.4].
+			if w.NeedsDeathFinalization(h) {
+				w.FinalizeDeath(h, tick)
+			}
+		}
+		if !freed && w.Unit(abandoned) == nil {
+			freed = true
 		}
 		sys.EndTick(tick)
 	}
@@ -216,7 +235,7 @@ func TestAbandonedFrameOnTheExitStopsBlockingTheFactory(t *testing.T) {
 		t.Fatalf("the lab never produced again in %d ticks: abandoned frame %s; node %s; admissions [%s] — a factory whose exit is obstructed must free itself [04 R-FAC-02 §6][05 \"Reverse and deconstruction\"]",
 			maxTicks, state, nodeTxt, strings.Join(adm, " | "))
 	}
-	if w.Unit(abandoned) != nil {
+	if !freed {
 		t.Fatal("the abandoned frame outlived its own decay clamp")
 	}
 	_ = units.DeathKilled

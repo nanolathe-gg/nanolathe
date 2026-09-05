@@ -129,12 +129,22 @@ func (c *Client) enqueueStatusEvents(ringTick uint32, events []frame.EventView) 
 		return
 	}
 	for _, event := range events {
-		if event.Kind != frame.EventKindStatus {
-			continue
+		switch event.Kind {
+		case frame.EventKindStatus:
+			// A unit torn down in its raise tick had its slot zeroed before
+			// publication; Emit refuses slot 0, which is that purge [03 R-AUD-01 §7].
+			_ = c.audioService.Emit(event.Tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
+		case frame.EventKindAnnounce:
+			// An announcement is a finished line: the session has already
+			// chosen the text, the class and the slot it is attributed to, so
+			// there is no caption composition and no voice request here — it
+			// goes straight into the ring, aged from its own raise tick
+			// [07 R-HUD-03 §14.3][08 R-CAMP-01 §9]. A line attributed to a
+			// real slot rather than to the no-speaker sentinel is stored but
+			// not yet drawn: drawMessageLines skips it because the speaker
+			// logo composition is not connected to the committed roster.
+			c.messages.Append(event.StatusText, event.StatusClass, 0, event.AnnounceSlot, event.Tick)
 		}
-		// A unit torn down in its raise tick had its slot zeroed before
-		// publication; Emit refuses slot 0, which is that purge [03 R-AUD-01 §7].
-		_ = c.audioService.Emit(event.Tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
 	}
 	c.messageEventsTick = ringTick
 }

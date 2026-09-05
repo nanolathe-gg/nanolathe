@@ -71,7 +71,13 @@ func radarContactAdmitted(c render.MinimapContact, blink render.BlinkState) bool
 	// authoritative visible/friendly bits cover genuine local-player contacts;
 	// nonzero owner identity is the only owner bypass at this seam [03 §3.9].
 	admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner != 0 && c.Owner == c.LocalPlayer
-	return admit && (c.BlinkSuppress == 0 || blink.Phase&1 != 0) && (!c.Stealth || blink.IsBlinkOn())
+	// The blink term is the whole of the second half of the gate: the blip draws
+	// when the per-unit blink-suppress countdown reads zero OR the shared blink
+	// phase bit is set. Definition `stealth` is not a term of it — stealth is
+	// the sensor phase's contact-callback reject, which is where a stealthy
+	// unit loses the seen bit that would have admitted it, and one admitted by
+	// line of sight draws a steady blip [03 §3.9][03 R-VIS-01 §5].
+	return admit && (c.BlinkSuppress == 0 || blink.Phase&1 != 0)
 }
 
 func radarPublishedContactVisible(c frame.RadarContactView, local uint8) bool {

@@ -30,6 +30,9 @@ func (g *gameShell) attachSettings() {
 	// The three display-option bits reach the presentation as soon as they are
 	// read; retail's own loader installs them the same way [07 R-FE-01 §6].
 	g.applyRetailVisualOptions(clPtr)
+	// So do the two wave gates, which retail pushes to the device from the same
+	// startup read [03 R-AUD-01 §2].
+	applyRetailAudioOptions()
 }
 
 // applySettings installs a loaded block over the shell's default setup.
@@ -48,9 +51,16 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// the load transition reads and the option values the three two-stage
 	// buttons drive [07 R-FE-01 §6][07 R-FE-01 §11].
 	g.display = s.Display
-	// The message-column ring configuration has no editing screen here, so it
-	// rides through unchanged from whatever the file held [02 §3].
+	// The message-column ring configuration is the interface page's
+	// `TXTSCROL`, `MAXLINES` and `UNITCHAT` controls plus `screenchat`, which
+	// no screen edits [02 §3][07 R-CAM-01 §7].
 	g.messages = s.Messages
+	// The audio block, the stored game speed and the `Interface Type` word are
+	// the sound, music and interface pages' stores [03 R-AUD-01 §2]
+	// [07 R-CAM-01 §7][07 R-CAM-01 §5].
+	shellAudio = s.Audio
+	shellGameSpeed = s.GameSpeed
+	shellInterfaceType = s.InterfaceType
 	// The configured per-player unit limit rides on the setup record into
 	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
 	// screen edits it: retail reads it from the profile file, and the
@@ -149,8 +159,14 @@ func (g *gameShell) captureSettings() settings.Settings {
 		// rewrite the whole block; the value it saves is whatever the live
 		// display record holds [07 R-FE-01 §6][07 R-FE-01 §11].
 		Display: g.display,
-		// Written back unchanged: no screen here edits it [02 §3].
+		// The interface page's three message controls write into this block;
+		// `screenchat` rides through unchanged [02 §3][07 R-CAM-01 §7].
 		Messages: g.messages,
+		// The sound, music and interface pages' remaining stores
+		// [03 R-AUD-01 §2][07 R-CAM-01 §7][07 R-CAM-01 §5].
+		Audio:         shellAudio,
+		GameSpeed:     shellGameSpeed,
+		InterfaceType: shellInterfaceType,
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed

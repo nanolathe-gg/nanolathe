@@ -78,9 +78,12 @@ func (w *World) unitPreUpdate(u *Unit, tick uint32) {
 	// new CurrentSample. The two-byte state is required: local Killed consumes
 	// the previous window, not the value sampled at the current boundary.
 	if tick%30 == 0 && u.MaxHealth > 0 { // [04 §5.1] every 30 ticks clamp(health*100/maxHealth,0,100)
-		pct := cob.HealthPercent(u.Health, u.MaxHealth) // [04 §4.4] clamped 0..100
-		u.PriorSample = u.CurrentSample                 // [04 §5.1] previous window
-		u.CurrentSample = uint8(pct)                    // [04 §5.1] current window
+		// The rolled pair uses the CLAMPED form, not engine port 4: §4.4 item 8
+		// gives "the same unsigned division and clamps as the `TakeDamage` percent
+		// of section 5.1", while the port itself clamps nothing [04 R-COB-03 §2].
+		pct := cob.ClampedHealthPercent(u.Health, u.MaxHealth) // [04 §5.1] clamped 0..100
+		u.PriorSample = u.CurrentSample                        // [04 §5.1] previous window
+		u.CurrentSample = uint8(pct)                           // [04 §5.1] current window
 	}
 	// No Remaining mutation. No order creation. No RNG draws.
 }

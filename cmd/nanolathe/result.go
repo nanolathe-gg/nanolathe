@@ -514,13 +514,25 @@ func (h *retailBattleHUD) editorFocused() bool {
 // drawStatusMessage draws transient game-speed and pause messages [07 §11][07 §2].
 // It remains separate from result presentation; status text is produced by the
 // established battle-speed/pause path and is not an endgame label.
+//
+// This is the same message-column geometry, font and colour the master
+// composer uses to draw the shared message-line ring [07 R-HUD-03 §14.4]: the
+// primary UI font (fonts/comix.fnt, not the side's own console face), a
+// left-aligned column starting at the fixed screen point (138, 52) with no
+// baseheight adjustment, and the foreground colour-map entry
+// frame.MessageLineLogicalColor resolved through the active GUI colour table
+// rather than written as a raw palette index.
 func (b *battleSession) drawStatusMessage(c *client.Client, presented *frame.Frame) {
-	if b == nil || c == nil || !b.statusVisible(presented) || b.hud == nil || b.hud.console == nil {
+	if b == nil || c == nil || !b.statusVisible(presented) || b.hud == nil {
+		return
+	}
+	fnt := statusMessageFont(b.fs)
+	if fnt == nil {
 		return
 	}
 	// BattleState is the canonical owner of transient status text. The legacy
 	// battleSession mirror is intentionally not read here [07 §11].
 	txt := b.battleState().Input.StatusMessage
-	w := client.MeasureText(b.hud.console, txt)
-	c.UIText(b.hud.console, txt, (640-w)/2, 30, 15)
+	color := b.hud.guiColor(frame.MessageLineLogicalColor)
+	c.UIText(fnt, txt, 138, 52, color)
 }

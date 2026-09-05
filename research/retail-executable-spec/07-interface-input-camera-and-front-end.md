@@ -506,16 +506,22 @@ opens `SPEEDS.GUI` (or `SPEEDSRT.GUI` from the in-battle options) with the
 |---|---|---|---|---|
 | `GAME` | slider | `21` | game speed (target and current words) | `gamespeed` (`10`) |
 | `SCREEN` | slider | `65` | scroll setting byte | `scrollspeed` (`32`) |
-| `TXTSCROL` | slider | `20` | text-scroll seconds dword; label `TEXTSCROLLTEXT` = `%d secs` | `textscroll` (`10`) |
-| `MAXLINES` | slider | `30` | message-line count dword; label `MAXLINESTEXT` = `%d`, or `None` when `0` | `textlines` (`10`) |
+| `TXTSCROL` | slider | `20` | text-scroll seconds dword; label written to a gadget named `TEXTSCROLLTEXT` = `%d secs` — no such gadget is authored, see below | `textscroll` (`10`) |
+| `MAXLINES` | slider | `30` | message-line count dword; label written to a gadget named `MAXLINESTEXT` = `%d`, or `None` when `0` — no such gadget is authored, see below | `textlines` (`10`) |
 | `LEFTCLICK` | 2-stage button `Left Click|Right Click` | — | `Interface Type` dword | `Interface Type` (`0`) |
 | `UNITCHAT` | 3-stage button `Off|Medium|Full` | — | unit-chat **text** level byte = stage × 5; displayed stage = byte ÷ 5 | `unitchattext` (`5`) |
 | `RESTORE` | button | — | speed `10`, scroll `32`, text-scroll `10`, lines `10`, `Interface Type 0`, voice level `10`, text level `5` | — |
 | `UNDO` | button | — | every value above restored from the copies taken when the screen opened | — |
 
 The registry `unitchat` value (absent → `10`) is the unit-chat **voice** level
-byte; it is edited from the sound options screen, not here. `SwitchAlt` has
-no gadget ([R-CAM-01 §4]).
+byte; it is edited from the sound options screen's `SPEECH` gauge, not here
+([03 R-AUD-01 §2]). `SwitchAlt` has no gadget ([R-CAM-01 §4]).
+
+The two slider read-outs are written by name to gadgets called
+`TEXTSCROLLTEXT` and `MAXLINESTEXT`. Neither `SPEEDS.GUI` nor `SPEEDSRT.GUI`
+authors a gadget of either name, so the setter finds nothing and the values are
+never shown; the page's `GAMETEXT` label is authored empty and nothing writes
+it. The screen therefore draws four unlabelled slider tracks.
 
 **Established fact — slider value mapping.** Every slider callback computes
 its value from the slider's knob position word `pos` and range word `range`
@@ -2613,11 +2619,16 @@ Every control the four page callbacks and the root callback recognise plays
 `UNDO`, which the transition table of [R-FE-01 §2] does not list: both arms
 on every page converge on a shared tail that repaints and plays `Options`.
 It also includes the two-stage and list buttons (`ANTI`, `SHADING`,
-`BSHADOWS`, `MODE`, `TEST`, `LEFTCLICK`, `UNITCHAT`, `TRACKMODE`,
+`BSHADOWS`, `MODE`, `SPEECH`, `LEFTCLICK`, `UNITCHAT`, `TRACKMODE`,
 `TRACKTYPE`, `NOTRAK`, `CDPLAY`, `CDNEXT`, `CDPREV`, `CDSTOP`) and the
-video-mode button. The sliders are the exception and are silent: a knob move
-runs the slider's own value callback, and neither the `VIDSLDR` nor the
-`GAMMA` callback plays anything.
+video-mode button.
+
+Two kinds of control are silent. The sliders are driven by their own value
+callbacks, and none of them — `VIDSLDR`, `GAMMA`, `FXVOL`, `MUSICVOL`, `GAME`,
+`SCREEN`, `TXTSCROL`, `MAXLINES` — plays anything, so a knob move, a drag or an
+arrow step makes no sound. And the sound page's `TEST` plays
+`sounds\explode.wav` and returns without reaching the shared tail, so it plays
+no family cue either ([03 R-AUD-01 §2]).
 
 **Established — `VIDSLDR`'s maximum.** It is the
 mode table's count minus one, written into the slider record by the page
@@ -2629,8 +2640,13 @@ to the table it indexes are installed in the same breath.
 speed, applied at once through the speed setter of [R-CAM-01 §3];
 `SCREEN` (max 65) → scroll speed byte; `TXTSCROL` (max 20) → `textscroll`,
 label `%d secs`; `MAXLINES` (max 30) → `textlines`, label `%d` or the
-`0`-text; `LEFTCLICK` two stages → the `Interface Type` word
+`0`-text `None`; `LEFTCLICK` two stages → the `Interface Type` word
 ([R-CAM-01 §5]); `UNITCHAT` three stages → `unitchattext := stage × 5`.
+The two labels are written by name to gadgets called `TEXTSCROLLTEXT` and
+`MAXLINESTEXT`, and **neither `SPEEDS.GUI` nor `SPEEDSRT.GUI` authors a gadget
+of either name**: the text setter finds nothing and the two read-outs are never
+drawn on the stock files. The page's own `GAMETEXT` label is authored empty and
+nothing writes it, so it is blank too.
 `RESTORE` sets textscroll 10, textlines 10, game speed 10, scroll speed 32,
 `LEFTCLICK` 0, unitchat 10, unitchattext 5; `UNDO` restores the snapshot.
 After the page opens every slider's value callback runs once so the labels

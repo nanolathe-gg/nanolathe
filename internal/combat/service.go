@@ -434,29 +434,48 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		var tgtHandle pool.Handle
 		if slot.Target.Kind == units.TargetUnit {
 			tgtHandle = slot.Target.Unit
-			if tu := w.Unit(tgtHandle); tu != nil {
-				tgtPos = Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}
-			} else {
+			tu := w.Unit(tgtHandle)
+			if tu == nil {
 				continue
 			}
+			// The target-point resolver's live-unit outcome [06 R-WPN-04 §1]:
+			// `SweetSpot` on the TARGET's script, then that piece's vertex-box
+			// centre added to the target's position. This point — not the
+			// unit's ground position — is what the aim solve, the shot-time
+			// gate and the creator all receive [06 §3.3].
+			//
+			// TODO(question): the pre-fire lead of [06 §3.3] (kills > 5, not
+			// `cruise`, target has a mover, nonzero weaponvelocity) adds
+			// `mover.velocity × trunc(0.8 × D/weaponvelocity)` here. The
+			// target mover's velocity triple is not carried on units.Unit
+			// (only the scalar speed and heading are), so the lead needs a
+			// movement-package accessor for that triple before it can be
+			// applied; until then a veteran shooter aims at the unled point.
+			tgtPos = UnitTargetPoint(tu)
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}
-		// Weapon piece selection is a synchronous Q path. AimFrom* uses -1 and
-		// falls back to Query* with seed 0; SweetSpot is a separate Q query and
-		// must not be conflated with the muzzle result [R-P0-07][04 §5.3].
+		// The AIM ORIGIN: the `AimFrom[k]` query seeded −1, falling back to
+		// `Query[k]` seeded 0 only on the −1 sentinel [06 §3.4][R-P0-07]. It
+		// is the point the yaw and pitch are solved FROM [06 §3.3], and it is
+		// not the muzzle: the fire-time executors spawn the projectile from
+		// the forced `Query[k]` piece alone [06 §4.1], which tryFireForSlot
+		// queries afresh, so the result here stays local and never lands in
+		// the slot's MuzzlePiece word. Storing it there — which this site
+		// used to do — made every weapon spawn at its aim-origin piece (a
+		// Peewee's shoulder, a tank's turret) instead of its barrel flare.
+		//
+		// The seed distinction is load-bearing [R-P0-07]: with a script but
+		// neither entry the piece is 0, the root, and the locator answers
+		// the root's composed offset. Only a unit with no script at all
+		// takes the bare-position path.
+		aimPiece := int32(-1)
 		if bridge != nil {
-			piece := bridge.AimPiece(cob.WeaponSlot(idx))
-			if piece.Started && piece.QueryValue() >= 0 {
-				slot.MuzzlePiece = piece.QueryValue()
-			}
-			_ = bridge.SweetSpot()
+			aimPiece = bridge.AimPiece(cob.WeaponSlot(idx)).QueryValue()
 		}
-		muzzlePos, muzzleOK := muzzleWorldPosResolved(u, slot.MuzzlePiece)
+		muzzlePos, muzzleOK := muzzleWorldPosResolved(u, aimPiece)
 		if !muzzleOK {
-			// A strict production binding resolves nonnegative queried pieces
-			// through its model map; a negative query selects the unit-origin path.
-			continue
+			continue // no binding to compose through; a synthetic fixture
 		}
 		dx := tgtPos.X.Sub(muzzlePos.X)
 		dy := tgtPos.Y.Sub(muzzlePos.Y)
@@ -722,7 +741,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				continue
 			}
 		}
-		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w, catalog) {
+		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w, catalog, pre.tgtPos) {
 			continue
 		}
 		if needResult || needLatch {
@@ -747,7 +766,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			eCost := float32(weapon.EnergyPerShot)
 			mCost := float32(weapon.MetalPerShot)
 			if eCost != 0 || mCost != 0 {
-				economy.ImmediateDebit(&econ.Players[u.Owner], eCost, mCost)
+				// The direct two-resource payment credits the SHOOTER's
+				// subrecord, not the player mirror: the helper reaches through
+				// the subrecord's owner pointer only for the live stock
+				// [05 R-ECO-01 §7]. Pass totals are identical either way — the
+				// settlement fold sums the subrecords into the mirror.
+				economy.ImmediateDebit(&econ.Players[u.Owner], econ.UnitBuckets(u.Handle), eCost, mCost)
 			}
 		}
 		sum.Fired++
@@ -1520,10 +1544,11 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 	}
 	if weapon.Ballistic {
 		acq.BallisticFeasible = func(c Candidate) bool {
-			muzzle, muzzleOK := muzzleWorldPosResolved(u, slot.MuzzlePiece)
-			if !muzzleOK {
-				return false
-			}
+			// The unit-to-unit gate's ballistic clause solves on the delta
+			// between the two units' OWN positions [06 R-WPN-05 §1]; no piece
+			// is queried. Only the aim-time solve and the shot-time gate see a
+			// composed point [06 §3.3][06 R-WPN-05 §9].
+			muzzle := Vec3{X: u.X, Y: u.Y, Z: u.Z}
 			var tgt Vec3
 			if tu := w.Unit(c.Handle); tu != nil {
 				tgt = Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}
@@ -1606,7 +1631,13 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 	if binding := u.COBBinding(); binding != nil {
 		origin, ok := binding.ComposePiece(int(piece), u.Move.Heading, u.Move.Pitch, u.Move.Bank)
 		if !ok {
-			return Vec3{}, false
+			// The locator's own answer for a unit with no render table or a
+			// piece index outside the piece count is the ZERO offset, so the
+			// world point is the unit's position [04 R-COB-03 §2]. Declining
+			// here instead — which this site used to do — skipped the slot
+			// visit outright, so a script answering a piece its model does
+			// not carry silenced the weapon rather than firing from the unit.
+			return Vec3{X: u.X, Y: u.Y, Z: u.Z}, true
 		}
 		// ComposePiece is retail's piece locator: its triple is already the
 		// WORLD offset `(x, y, −z)`, and the muzzle is that triple added to
@@ -1650,7 +1681,16 @@ func unitStationary(u *units.Unit) bool {
 	return u.MoveTier == 0
 }
 
-func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World, catalog *content.Catalog) bool {
+// tryFireForSlot is the fire-time half of one slot visit: it binds the
+// executor's seams and hands the resolved target point to the family spawner.
+//
+// targetPoint is the point the slot visit resolved before the executor ran
+// [06 R-WPN-04 §1] — for a unit target the `SweetSpot` vertex-box centre, for
+// a point target the sea-floored terrain height — and it is what the creator
+// solves toward [06 §6.3]. The executor receives it from the pipeline rather
+// than re-resolving, so the shot leaves toward exactly the point the aim solve
+// and the shot-time gate measured.
+func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World, catalog *content.Catalog, targetPoint Vec3) bool {
 	if u == nil || slot == nil || slot.Weapon == nil || svc == nil {
 		return false
 	}
@@ -1672,28 +1712,48 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 	if terrain != nil {
 		gravity = terrain.Gravity
 	}
-	origin, ok := muzzleWorldPosResolved(u, slot.MuzzlePiece)
-	if !ok {
-		return false
-	}
+	bridge := svc.callbackBridgeForUnit(u)
+	// The normal muzzle path — the unit's own position — is where a shot
+	// starts only when no piece resolves: a script that answers a negative
+	// piece, or a unit with no script to ask [06 §4.1].
+	origin := Vec3{X: u.X, Y: u.Y, Z: u.Z}
 	targetWorld := func(h pool.Handle) (Vec3, bool) {
-		if tu := w.Unit(h); tu != nil {
-			return Vec3{X: tu.X, Y: tu.Y, Z: tu.Z}, true
+		if h == 0 || h != slot.Target.Unit || w.Unit(h) == nil {
+			return Vec3{}, false
 		}
-		return Vec3{}, false
+		return targetPoint, true // the resolved point, not the unit's position [06 R-WPN-04 §1]
 	}
-	muzzleWorld := func(piece int32) (Vec3, bool) {
-		return muzzleWorldPosResolved(u, piece)
-	}
-	muzzlePieceFn := func(slotIdx int) int32 {
-		if slot.MuzzlePiece >= 0 {
-			return slot.MuzzlePiece
-		}
-		return -1
-	}
-	scriptAdapter := &fireScriptAdapter{bridge: svc.callbackBridgeForUnit(u), unit: u}
 	// [06 §13.2] wire weapon-start events to same service sink installed at composition [06 §4.1] C2
 	fireEvents := &combatFireEvents{svc: svc, tick: tick, shooter: u.Handle, pos: origin}
+	muzzleWorld := func(piece int32) (Vec3, bool) {
+		pos, ok := muzzleWorldPosResolved(u, piece)
+		if ok {
+			// The start sound and start smoke are emitted at the record, which
+			// sits at the muzzle the executor just resolved [06 §4.1].
+			fireEvents.pos = pos
+		}
+		return pos, ok
+	}
+	// The fire-time muzzle query is the FORCED `Query[k]` — cell 0 seeded 0,
+	// `AimFrom[k]` never consulted — run synchronously inside the executor on
+	// every shot [06 §4.1][R-P0-07]. Every executor family calls the same
+	// routine: the turret after its drift gate, line-of-sight before its
+	// solve, vertical launch after its aim-ready test, dropped first of all.
+	// A script without the entry leaves the seed, so the piece is 0, the
+	// root; a unit with no script at all takes the bare-position path.
+	//
+	// This used to hand back the slot's retained word, which the aim-time
+	// visit had overwritten with the AimFrom piece: the aim origin and the
+	// spawn point are two different pieces on most stock models (a Peewee
+	// aims from `ruparm`/`luparm` and fires from `rfire`/`lfire`), so the
+	// shot left from the shoulder.
+	muzzlePieceFn := func(slotIdx int) int32 {
+		if bridge == nil {
+			return -1
+		}
+		return bridge.QueryWeapon(cob.WeaponSlot(slotIdx)).QueryValue()
+	}
+	scriptAdapter := &fireScriptAdapter{bridge: bridge, unit: u}
 	ports := FirePorts{
 		ShooterSide: uint8(u.Owner),
 		// The shooter itself, so the fill can run its real-shooter branch in
@@ -1745,7 +1805,7 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Aim:          slot.Aim,
 		Target:       tgt,
 	}
-	_, ok = TryFire(svc, &cSlot, idx, tgt, tick, ports)
+	_, ok := TryFire(svc, &cSlot, idx, tgt, tick, ports)
 	// The spread's mutation of the slot's stored angles is retained whether or
 	// not the allocation succeeded [06 §4.4].
 	slot.DesiredYaw = cSlot.DesiredYaw
@@ -2694,7 +2754,9 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 			victim.Health = 0
 		}
 		dir := hitDirectionByte(p, victim)
-		takeArg := cob.HealthPercent(victim.Health, victim.MaxHealth)
+		// The `TakeDamage` argument carries retail's explicit `<0->0` /
+		// `>100->100` clamps [04 §5.1]; engine port 4 does not [04 R-COB-03 §2].
+		takeArg := cob.TakeDamagePercent(victim.Health, victim.MaxHealth)
 		if bridge := service.callbackBridgeForUnit(victim); bridge != nil {
 			// The two damage callbacks are independent deferred starts and retain
 			// their exact order after the HitByWeapon direction conversion

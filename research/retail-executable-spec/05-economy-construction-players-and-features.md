@@ -324,15 +324,9 @@ whole ledger contains, and their exact bit patterns are the IEEE doubles for
 not exactly representable, so the medium-difficulty factor is the nearest
 double, not seven tenths.
 
-Sites: fourteen in all, at six copies of the constant pair ([R-ECO-01 §11]).
-Nine sit in the two per-unit production-gather passes — passive `energymake`,
-passive `metalmake`, the extraction output, the maker output, the wind output,
-the tidal output, the negative-`energyuse` refund, and the direct production
-credit written at spawn for a unit created outside the ledger are the named
-members, though their one-to-one mapping onto the nine sites is not
-re-derived. The other five are the two feature-reclaim payout additions, the
-unit-reclaim death-side refund, the factory build-cancel refund, and the
-reverse-construction refund. Storage contributions, the cloak debit, and the
+Sites: fourteen in all, at six copies of the constant pair. [R-ECO-01 §11]
+names every one of them and owns the census; it is not restated here.
+Storage contributions, the cloak debit, and the
 two-stage settlement itself are **not** discounted. The discount is a
 production multiplier on the computer player's whole economy; the sharing
 transfer credit of [R-SHARE-01 §2] runs the same ladder once at credit.
@@ -374,26 +368,31 @@ implementation that reads the constant's sign alone and writes
 `production += contribution x -0.7` inverts the whole effect: it charges the
 player where retail pays.
 
-**Established — five of the fourteen, by their own contracts.** The
-feature-reclaim payout's two additions (energy first, then metal, each through
-its own copy of the ladder, gated on the BUILDER's player record —
-[R-WORK-01 §5] step 4); the unit-reclaim death-side metal refund
-(`(1.0f - victim.remaining) x victim.buildcostmetal`, gated on the killer's
-record — [05 "Unit reclaim"]); the **build-cancel refund** in the factory
-handler, which forms the same `(1 - remaining) x buildcostmetal`, truncates it
-to an integer, credits the builder's metal accumulator and then sends the
-cause-9 kill packet; and the **reverse-construction refund**, which negates its
-value before the gate and credits the same accumulator. The remaining nine sit
-in the two per-unit production-gather passes.
+**Established — what each of the fourteen is.** The census reads every
+distinct multiply operand in the image against the two bit patterns and then
+follows each site to the value it forms and the accumulator it stores to.
+Exactly five of the fourteen are production-gather sites. The fourteen are:
 
-**Unknown — which of those nine is which.** The one-to-one mapping of the nine
-onto [R-ECO-01 §3]'s named members (`energymake`, `metalmake`, extraction,
-maker, wind, tidal, the negative-`energyuse` refund, the spawn credit) is not
-re-derived here, and two of the nine credit a **player-indexed record** rather
-than a unit's accumulator, which none of §3's named members obviously is.
-*Decider:* name each of the nine by the value it forms and the accumulator it
-stores to. Until then no site should be "harmonized" away on the strength of
-§3's list.
+| Sites | Where | Value formed | Credited to |
+|---:|---|---|---|
+| 5 | the per-unit production gather | the branch A/B products | the unit account's two production accumulators (3 on the energy side, 2 on the metal side) |
+| 2 | the per-player economy phase's spawn path | two 16-bit definition fields × `100.0f`, on a unit created there | the new unit's two accumulators |
+| 2 | the two player-to-player transfer routines (each opens with the "slot index 10" early return of [08 R-AI-01 §12]) | the capped transfer amount | a **player-indexed** record, not a unit accumulator |
+| 2 | the feature-reclaim payout ([R-WORK-01 §5] step 4) | the feature definition's two adjacent authored pool values, energy first then metal, each through its own copy of the ladder, gated on the BUILDER's player record | the builder's two accumulators |
+| 1 | the reverse-construction refund | a value **negated immediately before the gate** | the metal accumulator |
+| 1 | the factory build-cancel handler | `(1 - remaining) × buildcostmetal`, truncated to an integer, then the cause-9 kill packet | the builder's metal accumulator |
+| 1 | an order handler | an integer amount converted from a 64-bit integer | the metal accumulator |
+
+The two player-indexed sites are the metal and energy sharing-transfer credits
+of [R-SHARE-01 §2]. They are transfer credits rather than production-gather
+members, which is why no member of [R-ECO-01 §3]'s named list matches them.
+
+**Supported inference — the order handler's site.** That the single
+order-handler site is the **unit-reclaim pulse credit** of [05 "Unit reclaim"]
+rather than another integer refund: it forms its amount from a 64-bit integer,
+which is the reclaim pulse's shape ([R-WORK-01 §4]), but its callers were not
+walked. *Decider:* walk that handler's callers to the order kind that reaches
+it.
 
 **Established — neither reclaim site tests the sign of the contribution.** The
 ladder is entered on the player gate alone, and the negative-`energyuse` site
@@ -5082,9 +5081,12 @@ captured; the same bit also blocks reclaim [R-WORK-01 §4].
 **Established — the capture timer, instruction-exact.**
 
 ```
-base_f = 0.015 * target.definition.buildcostenergy
-       + 0.2142857142857 * target.definition.buildcostmetal
-       + 150.0                                  // all three float32 constants
+// the base sum is FOUR single-precision constants and two multiplies per
+// cost term; the metal term and the bias are both carried negative and are
+// turned around by subtractions
+energyTerm = target.definition.buildcostenergy * 30.0f * 0.0005f
+metalTerm  = target.definition.buildcostmetal  * 30.0f * -0.0071428571827709675f
+base_f = (energyTerm - metalTerm) - -150.0f
 base   = trunc(base_f)
 if (base >= 1800) base = 1800                   // UPPER clamp only, signed
 
@@ -5097,6 +5099,27 @@ healthScaled = (uint32)( ((int32)(int16)target.health
 killsFactor = (int32)(uint16)target.kills / 5    // signed, truncating
 timer       = ((killsFactor + 10) * healthScaled * 10) / 100   // signed
 ```
+
+**Established — the base sum's constants.** The executor holds **four**
+single-precision constants — `30.0f`, `0.0005f`, `-0.0071428571827709675f`
+(the float32 nearest `-1/140`) and `-150.0f` — and forms each cost term with
+**two** multiplies, the metal term carried negative and the bias carried
+negative so that both fold in through subtractions. A whole-image scan for the
+exact bit patterns of `0.015` and `0.2142857142857`, as float32 and as double,
+and a range scan for any float in `[0.0149, 0.0151]`, `[0.2142, 0.2144]` and
+`[149.999, 150.001]`, find no such constants: the three-constant rendering
+`0.015·E + 0.2142857142857·M + 150.0` is an algebraic simplification, not the
+constant list.
+
+The distinction is not cosmetic. `30 × float32(0.0005)` is
+`0.01500000071…`, a shade **above** `0.015`, whereas `float32(0.015)` is
+`0.01499999966…`, a shade **below**. An implementation that evaluates the
+printed decimals as float32 literals lands one lower at every energy cost that
+is a multiple of 200 — an energy cost of 200 gives `base = 152` where the
+executor gives `153` — and stock energy costs are dense in multiples of 200.
+Swept exhaustively over the authored cost pairs that land below the 1800
+clamp, the traced two-multiply form and a float64 evaluation of the printed
+decimals agree everywhere; only the all-float32-decimal reading departs.
 
 There is no lower clamp: the comparison is a single signed test against 1800
 and nothing bounds the value below. It cannot go negative for non-negative
@@ -6673,10 +6696,6 @@ Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it. Findings that closed an item live in the
 body and are not restated here.
 
-- Which of the nine production-gather discount sites is which of
-  [R-ECO-01 §3]'s named members, and why two of them credit a player-indexed
-  record rather than a unit accumulator · [R-ECO-01 §11] · name each site by
-  the value it forms and the accumulator it stores to.
 - Whether any discount site carries a positivity test between forming the
   contribution and entering the ladder; none of the sites examined does
   · [R-ECO-01 §11] · a read of each site for a compare against zero.

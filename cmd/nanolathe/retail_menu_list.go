@@ -276,6 +276,13 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, gad gui.G
 	}
 	thumbY := trackY + (trackH-int(thumb0.Height))/2
 	drawRetailScrollbarThumb(c, thumb0, thumb1, thumb2, trackLeft+pos, thumbY, thumbLen, true)
+	// A locked kind-4 gadget, or one carrying attribute 0x10, is inert and
+	// drawn darkened by 20 steps — the same rectangle shader a greyed button
+	// takes [07 R-WGT-01 §5][03 R-COMP-02 §5]. The lock word and the grey word
+	// share one field here, as they do in the parser [07 R-WGT-01 §13].
+	if (gad.GrayedOut != 0 || gad.Attribs&gui.AttribInert != 0) && g.assets != nil {
+		c.UIShadeRect(g.assets.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
+	}
 }
 
 func drawRetailScrollbarTrack(c *client.Client, first, middle, last *formats.GAFFrame, start, cross0, cross1 int, horizontal bool) {

@@ -429,8 +429,15 @@ func TestC26PercentageClampBounds(t *testing.T) {
 	if got := ComputeTakeDamagePercent(200, 100); got != 100 {
 		t.Fatalf("clamp high got %d want 100", got)
 	}
-	if got := ComputeTakeDamagePercent(-10, 100); got != 0 {
-		t.Fatalf("clamp low negative health got %d want 0", got)
+	// CORRECTION (AU-7): a NEGATIVE health does not clamp to 0 here. The division
+	// is unsigned, so the signed product -1000 becomes a dividend near 2^32 and
+	// the quotient saturates the `>100` bound instead. [04 §4.4] item 8 says as
+	// much about the same helper: "the `< 0 -> 0` clamp is unreachable for an
+	// unsigned quotient below 2^31 and is kept only for fidelity". The old
+	// expectation of 0 came from a signed 64-bit division, which is not the
+	// traced form [04 §5.1][04 R-COB-03 §2].
+	if got := ComputeTakeDamagePercent(-10, 100); got != 100 {
+		t.Fatalf("negative health through the clamped form got %d want 100: the unsigned dividend saturates the upper bound, it does not underflow to zero [04 §5.1]", got)
 	}
 	if got := ComputeTakeDamagePercent(50, 100); got != 50 {
 		t.Fatalf("50/100 got %d want 50", got)
@@ -438,9 +445,41 @@ func TestC26PercentageClampBounds(t *testing.T) {
 	if got := ComputeTakeDamagePercent(0, 100); got != 0 {
 		t.Fatalf("zero got %d want 0", got)
 	}
-	// HealthPercent same clamp for port4
-	if got := HealthPercent(150, 100); got != 100 {
-		t.Fatalf("HealthPercent clamp high got %d", got)
+	// ClampedHealthPercent is the same helper under its own name; engine port 4
+	// is NOT (see TestPortFourClampsNothing).
+	if got := ClampedHealthPercent(150, 100); got != 100 {
+		t.Fatalf("ClampedHealthPercent clamp high got %d", got)
+	}
+}
+
+// TestPortFourClampsNothing locks [04 R-COB-03 §2]'s statement about engine
+// port 4: "The port itself clamps nothing: because the signed product is
+// reinterpreted as an unsigned dividend, a negative health value would give a
+// very large quotient rather than a negative one."
+//
+// The port used to clamp 0..100, which is the CLAMPED contract of the
+// `TakeDamage` argument and the 30-tick percentage pair [04 §5.1][04 §4.4] --
+// a different call site with its own explicit bounds. A script reading port 4
+// on a unit whose 16-bit health has gone negative (reachable on a locally owned
+// victim [06 R-DMG-01 §4]) sees the huge quotient in retail and saw 0 here.
+func TestPortFourClampsNothing(t *testing.T) {
+	// A negative health: the signed 16-bit read is -1, the product -100, and the
+	// unsigned dividend 4294967196. Over a maxdamage of 100 that is 42949671.
+	if got := HealthPercent(-1, 100); got != 42949671 {
+		t.Fatalf("port 4 on health -1 = %d, want 42949671: the signed product is re-read as an UNSIGNED dividend and the port clamps nothing [04 R-COB-03 §2]", got)
+	}
+	// The high side is unclamped too: health above maxdamage reads above 100.
+	if got := HealthPercent(150, 100); got != 150 {
+		t.Fatalf("port 4 on health above maxdamage = %d, want 150: there is no upper clamp [04 R-COB-03 §2]", got)
+	}
+	// The health field is read SIGN-EXTENDED FROM 16 BITS, so a value that has
+	// the 16-bit sign bit set is negative here whatever its 32-bit width says.
+	if got := HealthPercent(0x8000, 100); got != HealthPercent(-32768, 100) {
+		t.Fatalf("port 4 read 0x8000 as %d rather than as the sign-extended -32768 [04 R-COB-03 §2]", got)
+	}
+	// The clamped sibling still clamps, and the two must not be merged again.
+	if got := ClampedHealthPercent(-1, 100); got != 100 {
+		t.Fatalf("the clamped form on health -1 = %d, want 100: the huge quotient saturates the `>100` bound [04 §5.1]", got)
 	}
 }
 

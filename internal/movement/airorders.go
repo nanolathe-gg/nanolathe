@@ -795,20 +795,30 @@ const (
 //
 // The record itself belongs to another driver: internal/construction runs the
 // mobile-build lifecycle from its own per-unit step and owns this record's
-// phase byte, dynamic gate and deadline, registering the row on the queue as
-// externally driven (orders.Queue.SetExternallyDrivenHandler,
-// queue_handlers.go). This executor therefore keeps its own phase in the
-// movement-side state and writes NOTHING on the record — not the phase, not
-// the gate, not the deadline. Its
-// only outputs are the goal payloads on the flight command block, and arrival
-// is read back from the payload's own test, which is how stepAir observes every
-// air leg [04 R-AIR-01 §1].
+// phase byte and deadline, registering the row on the queue as externally
+// driven (orders.Queue.SetExternallyDrivenHandler, queue_handlers.go). This
+// executor therefore keeps its own phase in the movement-side state and never
+// writes the record's phase or deadline. Its outputs are the goal payloads on
+// the flight command block — and, for `VTOL_MobileBuild`, the record's dynamic
+// gate: retail's phase 1 installs the site marker and sets the gate to `0xE0`
+// in one body, so the marker's arrival is delivered to the record as the
+// ordinary movement outcome and dispatches the placement phase
+// [04 R-ORD-02 §2]. Arrival is also read back from the payload's own test,
+// which is how stepAir observes every air leg [04 R-AIR-01 §1].
 //
 //	Phase 0: a live mover and `canfly`; the shared takeoff preamble; advance.
 //	Phase 1: a point marker at the site with horizontal arrival radius
-//	         `builddistance` and no altitude setter; install; advance.
+//	         `builddistance` and no altitude setter; install; for the mobile
+//	         build, gate = 0xE0; advance.
 //	Phase 2+: the work body's orbit — on every tick with `tick mod 150 == 0`,
 //	         rebuild the station marker of [04 §10.3].
+//
+// The two record-side wakes this executor produces are told apart by its own
+// phase: the takeoff preamble's climb marker arrives while the executor is
+// still at phase 1 (the site marker is installed on the visit AFTER the climb
+// arrival), and only a wake raised at phase 2 is the site marker's. That is
+// what AirBuildSiteLegInstalled reports to the construction service, whose
+// approach phase must advance on the second wake and not the first.
 func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrderState) {
 	switch st.phase {
 	case 0:
@@ -848,6 +858,16 @@ func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrder
 		m := s.newPointMarker(u, Vec3{X: goalX, Y: goalY, Z: goalZ})
 		m.setArrivalRadius(airBuildDistance(u))
 		s.installAirGoal(u, head, m)
+		if orders.DescriptorFor(head.ID).Name == "VTOL_MobileBuild" {
+			// `VTOL_MobileBuild` phase 1: "install; gate = 0xE0; advance"
+			// [04 R-ORD-02 §2]. The pump then holds the record until the
+			// marker reports arrival and hands that outcome to the
+			// construction service's phase-1 body [05 R-WORK-01 §13].
+			// `VTOL_HelpBuild` arms its own gate from its orders-side handler,
+			// which deliberately leaves it clear when the target is already in
+			// reach, so the gate is not written for it here.
+			head.DynamicGate = airLegGate
+		}
 		st.waiting = true
 		st.phase = 2
 	default:
@@ -857,6 +877,24 @@ func (s *System) execVTOLAirBuild(u *units.Unit, head *orders.Node, st *airOrder
 		st.waiting = false
 		s.airBuildOrbitStation(u, head)
 	}
+}
+
+// AirBuildSiteLegInstalled reports whether the air build executor for record
+// rec on unit u has installed its site marker — its phase 1 of
+// [04 R-ORD-02 §2] — so that a movement outcome delivered on the record's
+// `0xE0` gate is the site marker's arrival and not the takeoff preamble's
+// climb. The construction service's approach phase asks this before it
+// advances an aircraft's record into placement; a record the executor has not
+// reached, or whose executor is still at its climb, answers false.
+func (s *System) AirBuildSiteLegInstalled(u *units.Unit, rec *orders.Node) bool {
+	if s == nil || u == nil || rec == nil || s.airOrders == nil {
+		return false
+	}
+	st := s.airOrders[u.Handle]
+	if st == nil || st.order != rec || st.done {
+		return false
+	}
+	return st.phase >= 2
 }
 
 // airBuildDistance is the builder's authored `builddistance` as the 16-bit

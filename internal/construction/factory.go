@@ -1146,7 +1146,9 @@ func (s *Service) killDecayedNanoframe(product *units.Unit) {
 		stampKind9Death(product)
 		s.World.DestroyBy(product.Handle, units.DeathKilled, product.Handle)
 	}
-	product.Alive = false
+	// The record stays Alive for the phase-2 finalizer, as in the cancel path
+	// (handleCancelCurrent): DestroyBy latched Dying, and the finalizer does
+	// the OnDeath, the pool free and the live-unit decrement [01 §4.4].
 	s.ReleasePlacement(product.Handle)
 	delete(s.builderLinks, product.Handle)
 	delete(s.getBuiltLinks, product.Handle)

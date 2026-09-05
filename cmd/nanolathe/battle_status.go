@@ -6,10 +6,12 @@ package main
 import (
 	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // isResultVisible reports whether the authoritative result overlay should be shown [RS-05][08][P1-01].
@@ -91,9 +93,12 @@ func (b *battleSession) setStatusMessage(msg string) {
 		b.battleState().Input.StatusUntil = 0
 		return
 	}
-	// Display for 90 committed ticks (~3 seconds at 30 Hz). The exact duration
-	// remains an implementation boundary, but its lifetime uses frame ticks.
-	b.battleState().Input.StatusUntil = cur.Tick + 90
+	// A ring line ages out (textscroll + 1) x 30 ticks after it is stored
+	// [07 R-HUD-03 §14.3]; the same announcement is posted to the ring
+	// (setGameSpeed, below) so the transient line's lifetime is drawn from
+	// that ring's own TextScroll rather than a separate invented duration.
+	textScroll := uint32(b.messageRing().TextScroll)
+	b.battleState().Input.StatusUntil = cur.Tick + (textScroll+1)*30
 }
 
 // statusVisible reports whether the transient message should be drawn [07 §11].
@@ -162,4 +167,33 @@ func (b *battleSession) currentTick() uint32 {
 		return f.Tick
 	}
 	return 0
+}
+
+// messageColumnFontCache caches the primary UI font (fonts/comix.fnt) for one
+// mounted install, the same install-keyed pattern cursorArtCache uses. The
+// message column selects this font directly through the FNT drawer rather
+// than the side's own console face or the GAF-font path [07 R-HUD-03 §14.4]
+// [03 R-FONT-01 §5].
+type messageColumnFontCache struct {
+	fs   vfs.FSOps
+	fnt  *formats.FNT
+	done bool
+}
+
+var messageColumnFont messageColumnFontCache
+
+// statusMessageFont resolves the message column's font for fs, loading and
+// caching it once per mounted install.
+func statusMessageFont(fs vfs.FSOps) *formats.FNT {
+	if fs == nil {
+		return nil
+	}
+	if messageColumnFont.done && messageColumnFont.fs == fs {
+		return messageColumnFont.fnt
+	}
+	messageColumnFont = messageColumnFontCache{fs: fs, done: true}
+	if fnt, err := formats.LoadFNTFile(fs, "fonts/comix.fnt"); err == nil {
+		messageColumnFont.fnt = fnt
+	}
+	return messageColumnFont.fnt
 }

@@ -205,7 +205,7 @@ is described contract-by-contract at C12.
 ### 2.6 Firing and bursts
 
 `TryFire` is the family spawner. It validates the target and trajectory,
-queries the muzzle piece, computes the accuracy spread, reserves a record,
+runs the forced `Query*` muzzle query, computes the accuracy spread, reserves a record,
 initializes it through the creation family, and runs the callbacks — in that
 order, so everything before the reservation is retained when the pool is full
 `[06 §4.1]` `[06 §4.4]`. `FirePorts` carries the seams the spawner needs and
@@ -422,8 +422,13 @@ burst clones rerun none of it `[06 §4.1]`.
 **C3 — the muzzle piece is queried once and stored.** A muzzle piece is queried
 synchronously before initialization and its identity is stored on the record so
 a later burst clone can re-derive the muzzle world position without a second
-script call. A missing or negative result falls back to the normal muzzle path
-`[06 §4.1]` `[06 R-P0-07]`.
+script call. The query is the **forced `Query*`** form — cell 0 seeded 0,
+`AimFrom*` never consulted — and it is a different routine from the
+`AimFrom*`-with-fallback aim origin the angle solvers measure from; the two
+name different pieces on most stock models (a Peewee aims from its upper arms
+and fires from its flares), so the aim-time visit keeps its aim-origin piece
+local and never writes the slot's muzzle word. A missing or negative result
+falls back to the normal muzzle path `[06 §3.4]` `[06 §4.1]` `[06 R-P0-07]`.
 
 **C4 — a full pool suppresses the callbacks.** Fire callbacks are not called
 when the pool is full `[06 §4.1]` `[06 §5.1]`.
@@ -708,7 +713,7 @@ divergence belongs to [DESIGN_CONTENT_VFS](DESIGN_CONTENT_VFS.md).
 | Range, aim readiness, the drift gate, ballistic solving | `[06 §3.3]`, `[06 R-WPN-03 §2]`, `[06 R-WPN-01 §1]` |
 | The weapon-query path: query callbacks, seeds, the aim-time and fire-time pipelines, creator initialization, aim dispatch | `[06 §3.4]`, `[06 R-P0-07]` |
 | The `Aim*` completion receiver, the fixed-forward gate and `SweetSpot` | `[06 R-WPN-03 §6]`, `[04 R-CB-01 §6]` |
-| The target-point resolver, the dead-target clear, the point-target height | `[06 R-WPN-04 §1]` |
+| The target-point resolver: `SweetSpot` on the target's script and its vertex-box centre, the dead-target clear, the point-target height | `[06 R-WPN-04 §1]`, `[06 R-WPN-03 §6]` |
 | The static feature reference point and the animated-instance distance | `[06 R-WPN-04 §3]` |
 | The engagement distance and the order-side shot-admission gate | `[06 R-WPN-05 §1]`, `[04 R-ORD-01 §7]` |
 | Two admission gates, two routines; the fire gate has no target-side clause | `[06 R-WPN-05 §9]` |

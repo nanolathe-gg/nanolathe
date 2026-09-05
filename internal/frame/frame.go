@@ -634,12 +634,19 @@ const (
 	EventKindCorpse
 	EventKindAudio
 	EventKindStatus
+	// EventKindAnnounce is a battle message-line announcement: a finished line
+	// of text, the ring class it is posted under and the slot it is attributed
+	// to. It is a different thing from EventKindStatus, which is a unit
+	// caption/voice request keyed by an audio slot and arbitrated by the audio
+	// queue; an announcement has no audio slot and goes straight to the
+	// message ring [07 R-HUD-03 §14.3][08 R-CAMP-01 §9].
+	EventKindAnnounce
 )
 
 // String names the event kind for diagnostics; an out-of-range value reads as
 // "invalid".
 func (k EventKind) String() string {
-	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio", "status"}
+	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio", "status", "announce"}
 	if int(k) >= len(names) {
 		return names[0]
 	}
@@ -701,6 +708,11 @@ type EventView struct {
 	StatusKind  uint8
 	StatusText  string
 	StatusClass uint8
+	// AnnounceSlot is the player slot an EventKindAnnounce line is attributed
+	// to — the ring's speaker byte, which selects the logo and colour the
+	// message column draws beside the line. Sentinel 10 is "no speaker"
+	// [07 R-HUD-03 §14.3][08 R-CAMP-01 §9].
+	AnnounceSlot uint8
 }
 
 // ResultScore is one player's committed result statistic.

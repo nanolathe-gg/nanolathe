@@ -189,8 +189,31 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 	if s == nil || s.Units == nil || !s.Units.NeedsDeathFinalization(h) {
 		return
 	}
+	// The owner is read BEFORE the finalizer runs: FinalizeDeath frees the pool
+	// slot and drops the record, so the victim's owner byte is unreachable
+	// afterwards. It is only used to address the player row whose live count
+	// the finalizer decrements [08 R-CAMP-01 §9].
+	owner, liveBefore := -1, 0
+	if u := s.Units.Unit(h); u != nil {
+		owner = int(u.Owner)
+		liveBefore = s.Units.LiveCountForPlayer(owner)
+	}
 	if result := s.Units.FinalizeDeath(h, tick); !result.Freed {
 		return
+	}
+	// The elimination branch of the central death handler: the finalizer has
+	// just decremented the owner's live-unit count, and the handler's last act
+	// is to test it against zero and, in a skirmish, spend one CRT draw on the
+	// announcement line [08 R-CAMP-01 §9][01 §7.5]. It runs here — inside phase
+	// 2, at the death — because the draw's position in the CRT stream is the
+	// contract, and it runs BEFORE the commander-rule transitions below because
+	// retail reaches the commander game-over path from the death preamble only
+	// after the central handler has returned [06 §12.1].
+	// "Reached zero" is the decrement's own arrival at zero, which is why the
+	// count is sampled on both sides of the finalizer: a row already at zero
+	// takes no decrement there and must not announce a second time.
+	if owner >= 0 && liveBefore > 0 && s.Units.LiveCountForPlayer(owner) == 0 {
+		s.announceElimination(owner, tick)
 	}
 	// Commander rule transitions run only after FinalizeDeath has filed the
 	// owner's live-count decrement and released the slot [08 R-SKIR-01 §3].

@@ -137,7 +137,7 @@ func TestMalformedBuildNumbersThroughTheDecayWrapper(t *testing.T) {
 		if product.Health != 0 {
 			t.Fatalf("health=%d, want the floor at zero", product.Health)
 		}
-		if product.Alive || !product.Dying {
+		if !product.Dying {
 			t.Fatalf("a zero-energy-cost frame is removed on its first decay visit")
 		}
 		buckets := svc.Economy.UnitBuckets(product.Handle)

@@ -172,8 +172,8 @@ func TestP28FactoryCancelWinsBeforeWorkVisit(t *testing.T) {
 
 			svc.Pump(factory, 120)
 
-			if product.Alive || node.Param2 != 1 || product.Remaining != 0 {
-				t.Fatalf("cancel did not win: alive=%t count=%d remaining=%v", product.Alive, node.Param2, product.Remaining)
+			if !product.Dying || node.Param2 != 1 || product.Remaining != 0 {
+				t.Fatalf("cancel did not win: dying=%t count=%d remaining=%v", product.Dying, node.Param2, product.Remaining)
 			}
 			if !reflect.DeepEqual(got, []string{"Deactivate", "StopBuilding"}) {
 				t.Fatalf("cancel edge order = %v, want Deactivate then StopBuilding", got)

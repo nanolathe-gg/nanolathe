@@ -393,6 +393,34 @@ type MinimapContact struct {
 // absent and therefore leaves FINAL untouched. [03 §3.9]
 type MinimapContactBlitter func(dst *RadarSurface, x, y int, palette byte, commander bool)
 
+// MinimapContactGate is the contacts pass's visibility gate: a contact reaches
+// any of the pass's layers when the full-radar option bit is set, or the
+// render-flags word's mapping and LOS bits are both clear, or the unit carries
+// either of the friendly-contact status bits (mask 0x300 — the seen marker a
+// radar contact or the line-of-sight probe writes, and the sonar bit), or the
+// unit's owner is the viewing player [03 §3.9] "Blip gate" [03 R-MM-01 §3].
+//
+// Visible is the publisher's own resolution of the last two disjuncts against
+// authoritative state; it is folded in here rather than recomputed.
+func MinimapContactGate(c MinimapContact) bool {
+	return c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 ||
+		c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
+}
+
+// MinimapBlipAdmitted adds the blip layers' blink term to MinimapContactGate:
+// the blip draws when the unit's per-instance blink-suppress countdown reads
+// zero OR the shared blink phase bit is set [03 §3.9] layer 2.
+//
+// Definition `stealth` is not a term. Stealth is the sensor phase's contact
+// callback reject [03 R-VIS-01 §5], which is where a stealthy unit fails to
+// gain the seen bit; a stealthy unit admitted by line of sight draws a steady
+// blip like any other. Nor is the selected-unit circle gate a term here: a unit
+// whose blip is suppressed on a non-blink phase still runs its range branches,
+// which is what [03 §3.9] "Contact layering and ring-only cases" names.
+func MinimapBlipAdmitted(c MinimapContact, blink BlinkState) bool {
+	return MinimapContactGate(c) && (c.BlinkSuppress == 0 || blink.Phase&1 != 0)
+}
+
 func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
 	if mapped == nil || mapped.W <= 0 || mapped.H <= 0 || len(mapped.Bits) < mapped.W*mapped.H {
 		return nil
@@ -401,8 +429,7 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 	copy(final.Bits, mapped.Bits)
 	// Unit blips precede all circles, and commander art is the next layer.
 	for _, c := range contacts {
-		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
-		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() {
+		if !MinimapBlipAdmitted(c, blink) {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
@@ -411,8 +438,7 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 		}
 	}
 	for _, c := range contacts {
-		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
-		if !admit || (c.BlinkSuppress != 0 && blink.Phase&1 == 0) || c.Stealth && !blink.IsBlinkOn() || !c.IsCommander {
+		if !MinimapBlipAdmitted(c, blink) || !c.IsCommander {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
@@ -437,8 +463,7 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 	// is what "ring-only" names, and that the cloak/hidden bit and `stealth`
 	// are not this callback gate.
 	for _, c := range contacts {
-		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
-		if !admit || !c.RangeStatus {
+		if !MinimapContactGate(c) || !c.RangeStatus {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)
@@ -478,8 +503,7 @@ func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int3
 	// is what §3.9 calls the ring-only case — the same reason layer 4 carries
 	// no blink term.
 	for _, c := range contacts {
-		admit := c.Visible || c.Options&(1<<9) != 0 || c.MinimapMode&3 == 0 || c.Status&0x300 != 0 || c.Owner == c.LocalPlayer
-		if !admit || c.Status&minimapSelectedStatus == 0 || !c.RingEnabled {
+		if !MinimapContactGate(c) || c.Status&minimapSelectedStatus == 0 || !c.RingEnabled {
 			continue
 		}
 		rx, ry := RadarProjection(c.WorldX, c.WorldZ, c.WorldY, playW, playH, m)

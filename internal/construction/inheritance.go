@@ -339,8 +339,12 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 		}
 		// Release after the cause-9 death mark. Completion posture intentionally
 		// precedes the kill, so releasing before Destroy would look like a live
-		// completed product and retain its reservation.
-		product.Alive = false
+		// completed product and retain its reservation. The record stays Alive:
+		// DestroyBy latched Dying, and the phase-2 finalizer only visits records
+		// that are both Dying and Alive [01 §4.4]. Clearing the bit here skipped
+		// OnDeath and the pool free, so the slot leaked and the owner's live-unit
+		// counter — what the skirmish end condition reads [08 R-SKIR-01 §3] —
+		// stayed one high forever.
 		s.ReleasePlacement(product.Handle)
 		// Deterministically clear builder/product link after nanoframe (ON-02):
 		// before nanoframe builderLinks not yet set, so no-op; after nanoframe it must be cleared

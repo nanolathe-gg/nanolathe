@@ -838,20 +838,69 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 // Capture [04 R-ORD-01 §5][05 R-WORK-01 §6]
 // ---------------------------------------------------------------------------
 
-// captureBudget is the capture timer of [05 R-WORK-01 §6], instruction-exact:
+// Capture timer constants [05 R-WORK-01 §6].
 //
-//	base_f = 0.015·buildcostenergy + 0.2142857142857·buildcostmetal + 150.0
+// CORRECTION (AU-3, adopted here by AU-7). [05 R-WORK-01 §6] used to render the
+// base sum with three constants — `0.015`, `0.2142857142857` and `150.0` — and
+// call them "all three float32 constants". Re-tracing the capture executor
+// showed that rendering is a decompiler's simplification: NEITHER 0.015 nor
+// 0.2142857142857 exists anywhere in the image, as a float32 or as a double.
+// What the executor holds is FOUR single-precision constants, and it forms each
+// cost term with TWO multiplies:
+//
+//	energy term = buildcostenergy × 30       × 0.0005
+//	metal term  = buildcostmetal  × 30       × (−1/140)
+//	base_f      = (energy term − metal term) − (−150)
+//
+// so the metal term is carried NEGATIVE and the bias is carried negative, and
+// both are turned around by subtractions. The reconstructed coefficients are the
+// products of the pairs, and they are NOT the float32 nearest the decimals §6
+// used to print: 30 × float32(0.0005) is 0.0150000007…, a shade ABOVE 0.015,
+// while float32(0.015) is 0.0149999997, a shade below.
+//
+// That distinction is not academic. The form this file used to carry — §6's
+// decimals as float32 literals, evaluated at working precision — moves `base`
+// DOWN by one at every energy cost that is a multiple of 200 (an energy cost of
+// 200 gives 152 instead of 153), and stock energy costs are dense in multiples
+// of 200. Written as retail writes it, the base agrees with the float64
+// decimals over the whole authored range — swept exhaustively for every cost
+// pair that lands below the 1800 clamp — so the width was never the behavioral
+// half of this contract. The clamps and the divide widths below are.
+//
+// The names are the operands, not the reconstructed coefficients, because the
+// reconstruction is what invites the wrong rounding back in.
+const (
+	captureCostScale  float32 = 30.0                   // both cost terms are scaled by this first
+	captureEnergyUnit float32 = 0.0005                 // then the energy term by this
+	captureMetalUnit  float32 = -0.0071428571827709675 // and the metal term by this (negative, −1/140)
+	captureBias       float32 = -150.0                 // subtracted, so it adds 150
+	captureClampMax   int32   = 1800
+)
+
+// captureBudget is the capture timer of [05 R-WORK-01 §6], in the form the
+// capture executor computes it:
+//
+//	base_f = (energyCost·30·0.0005) − (metalCost·30·(−1/140)) − (−150)
 //	base   = trunc(base_f); if (base >= 1800) base = 1800     // UPPER clamp only
-//	healthScaled = (uint32)((int16)health + maxdamage) · base) / (uint32)(2·maxdamage)
-//	killsFactor  = (uint16)kills / 5                          // signed, truncating
+//	healthScaled = (uint32)(((int16)health + maxdamage) · base) / (uint32)(2·maxdamage)
+//	killsFactor  = (int32)(uint16)kills / 5                   // signed, truncating
 //	timer        = ((killsFactor + 10) · healthScaled · 10) / 100
 //
-// §6 corrects an earlier reading that clamped `base` below at zero: there is no
-// lower clamp, and the division that follows is UNSIGNED, so a negative
-// authored cost produces an enormous timer rather than a small one. There is no
-// cap on the experience factor. At full health the middle step is the identity,
-// and a damaged target captures faster in proportion to
-// (health + maxdamage) / (2 · maxdamage).
+// This is the ONE implementation of the section. `internal/construction` used to
+// carry a second copy under the name `CaptureTimer` with no caller at all; the
+// two had drifted apart on the constant form, so the dead copy is gone and this
+// one — the live capture executor's — carries the traced arithmetic.
+// `internal/construction` imports this package, so the shared implementation
+// lives here, where the caller is.
+//
+// There is no lower clamp: the comparison is a single signed test against 1800
+// and nothing bounds the value below. That matters because the division that
+// follows is UNSIGNED, so a negative authored cost drives `base` negative and
+// produces an ENORMOUS timer rather than a small one. There is no cap on the
+// experience factor, and the kill count is read as a uint16 before the signed
+// divide by five, so a negative kill count reads as a large positive experience.
+// At full health the middle step is the identity, and a damaged target captures
+// faster in proportion to (health + maxdamage) / (2 · maxdamage).
 //
 // The last step's arithmetic is what is implemented. §6's closing gloss reads
 // "a fresh, un-veteran target's timer is `base × 10 / 100`, i.e. one tenth of
@@ -861,19 +910,23 @@ func helpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Cod
 // settled by choosing — one tenth of `base` would capture a stock unit in
 // about half a second.
 //
-// The three constants are retail's float32 literals and the truncation is the
-// ordinary one (I3). docs/INVARIANTS.md I2 carries no row for this transient;
-// it is reported by WU-18-2 as a row the table needs, not as a new use of
-// floating point for authoritative state — the stored budget is the integer.
+// The two cost terms are formed and combined at x87 working precision with a
+// single truncation at the end (I3); the float64 intermediates below are that
+// working precision, never stored (I2) — the stored budget is the integer.
 //
 // A zero `maxdamage` divides by zero here exactly as the executable does; §6
 // states no guard, and inventing one would be inventing behavior (I11).
 func captureBudget(energyCost, metalCost, health, maxDamage, kills int32) int32 {
-	baseF := float32(0.015)*float32(energyCost) + float32(0.2142857142857)*float32(metalCost) + float32(150.0)
-	base := int32(baseF)
-	if base >= 1800 {
-		base = 1800
+	// Each cost term is scaled twice, the metal term is carried negative and the
+	// bias is carried negative, so both fold in through subtractions.
+	energyTerm := float64(float32(energyCost)) * float64(captureCostScale) * float64(captureEnergyUnit)
+	metalTerm := float64(float32(metalCost)) * float64(captureCostScale) * float64(captureMetalUnit)
+	base := int32((energyTerm - metalTerm) - float64(captureBias)) // one truncation [01 §8]
+	if base >= captureClampMax {
+		base = captureClampMax // the only clamp: signed, upper, and `>=`
 	}
+	// A signed 32-bit product re-read unsigned, then divided unsigned. Go's
+	// signed int32 arithmetic wraps, so int32 here IS the retail multiply.
 	healthScaled := uint32((int32(int16(health))+maxDamage)*base) / uint32(2*maxDamage)
 	killsFactor := int32(uint16(kills)) / 5
 	return (killsFactor + 10) * int32(healthScaled) * 10 / 100
@@ -1239,14 +1292,27 @@ func reclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		stampNanolatheActive(u, tick, nanolatheStampBuild)
 		// "p1 > 15 -> draw the spray twice to the feature box"
 		// [04 R-ORD-01 §5][05 R-WORK-01 §5]. Feature reclaim is the engine's
-		// only two-segment producer, and the `> 15` guard is why the last eight
-		// visits of every feature reclaim emit no nano at all. Neither the
-		// count nor the guard is presentation licence: an implementation that
-		// emits one segment per visit draws a single beam for the whole
-		// countdown, including the eight visits retail leaves dark.
+		// only TWO-segment producer — [05 R-P0-06 §1]'s table and
+		// [05 R-WORK-01 §8]'s census both give it exactly two segments per
+		// qualifying visit — and the `> 15` guard is why the last eight visits
+		// of every feature reclaim emit no nano at all. Neither the count nor
+		// the guard is presentation licence: an implementation that emits one
+		// segment per visit draws a single beam for the whole countdown,
+		// including the eight visits retail leaves dark.
+		//
+		// CORRECTION (AU-7). This called the emitter TWICE, on the reading that
+		// one call is one segment. It is not: the bound presentation adapter is
+		// the two-segment producer — it builds the segment pair for this row and
+		// submits each one — so a visit was appending FOUR strip-6 records, and
+		// each record costs thirty CRT draws at construction
+		// [03 R-STRIP-01 §3][05 R-P0-06 §5]. A single visit therefore spent 120
+		// draws where [05 R-P0-06 §1] gives 60, and the CRT stream is
+		// authoritative for wind timing, the meteor scheduler and the victory
+		// timer's arm [01 §7.5] — so the doubling was a determinism defect, not
+		// only a doubled beam. One call per qualifying visit; the pair is the
+		// adapter's.
 		if work > 15 {
 			if feature, ok := featureViewAtGoal(u, n); ok {
-				emitFeatureNanolathe(u, n, feature, tick)
 				emitFeatureNanolathe(u, n, feature, tick)
 			}
 		}

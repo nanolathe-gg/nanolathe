@@ -157,8 +157,9 @@ func (f *FogCache) SetChannel(x, y int32, c0, c1 uint8) {
 // Established: hi accumulates per-player byte-grid (cur==0) only when mode bit 1 is set else zeroed [03 §3.3],
 // lo accumulates word-grid history mask 1<<player regardless [03 §3.3]; each holds a 4-bit nibble 0..15 via four bounded
 // OR 1,2,4,8 sites (0 transparent, 15 solid dark, 1..14 index value-1 into Gray=hi/current and Black=lo/history four-way variant families
-// with variant=(col+row+camPhase)&3 deterministically from floorMod(camera,32) residues [03 §3.3]), edge rows/cols forced to 15
-// when viewport extends beyond map [03 §3.3]. Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [03 §3.3].
+// with variant=(col+row+camPhase)&3 deterministically from floorMod(camera,32) residues [03 §3.3]), the map-border lines reached by the
+// four conditional border fixups when the window crosses a map edge — never an unconditional 15 store [03 §3.3] "Map-edge propagation".
+// Corner→bit 1=NW,2=NE,4=SW,8=SE remains supported inference pending asymmetric probe [03 §3.3].
 // Camera residues/offX are used for viewport-sized cache alignment; for Nanolathe's map-sized cache we generate for the whole map and
 // let BuildFogOps handle viewport clipping via hard 32 edges [03 §3.3] C13 — viewport edge forcing is therefore a render-time concern
 // and the cache remains map-aligned. That is a deliberate layout divergence, not
@@ -231,7 +232,23 @@ func (s *Service) RebuildFogWindow(cameraX, cameraZ, viewW, viewH int32) {
 			}
 		}
 	}
-	// Border fixups are conditional ORs and run in the established order.
+	// Border fixups are conditional ORs and run in the established order — top,
+	// bottom, left, right, on shared bytes, so a corner cell compounds through
+	// two of them and reaches 15 [03 §3.3] "Map-edge propagation".
+	//
+	// They are anchored to the MAP border, not to the cache window. Retail's
+	// rows/cols `0` and `h-2` name the void line just outside the map and the
+	// last in-map cell line, which its cache reaches exactly when the window
+	// overshoots the edge by one cell; §3.3 records that as supported inference
+	// and says anchoring to the map edge is visually equivalent. Nanolathe's
+	// window carries a wider border than retail's, so keying off the window's
+	// own first/last-but-one line put every fixup on a line no tile ever seeds,
+	// where a conditional OR does nothing: the north and west borders then drew
+	// partial cloud art instead of the solid unexplored fill. The four lines
+	// below are the ones the seeding actually reaches — cell row -1 takes bits
+	// 4 and 8 from tile row 0, cell row H-1 takes bits 1 and 2 from tile row
+	// H-1, and the two columns mirror that — so each becomes 15 exactly when
+	// the in-map tiles behind it are unexplored [03 §3.3].
 	fix := func(dst []uint8, gx, gz int32, a, b, c, d uint8) {
 		if gx < startX || gx >= endX || gz < startZ || gz >= endZ {
 			return
@@ -244,28 +261,28 @@ func (s *Service) RebuildFogWindow(cameraX, cameraZ, viewW, viewH int32) {
 			dst[i] |= d
 		}
 	}
-	if startZ < 0 {
+	if startZ < 0 { // window crosses the north edge [03 §3.3]
 		for gx := startX; gx < endX; gx++ {
-			fix(s.fog.ch1, gx, startZ, 4, 1, 8, 2)
-			fix(s.fog.ch0, gx, startZ, 4, 1, 8, 2)
+			fix(s.fog.ch1, gx, -1, 4, 1, 8, 2)
+			fix(s.fog.ch0, gx, -1, 4, 1, 8, 2)
 		}
 	}
-	if endZ > s.H {
+	if endZ > s.H { // window crosses the south edge [03 §3.3]
 		for gx := startX; gx < endX; gx++ {
-			fix(s.fog.ch1, gx, endZ-2, 1, 4, 2, 8)
-			fix(s.fog.ch0, gx, endZ-2, 1, 4, 2, 8)
+			fix(s.fog.ch1, gx, s.H-1, 1, 4, 2, 8)
+			fix(s.fog.ch0, gx, s.H-1, 1, 4, 2, 8)
 		}
 	}
-	if startX < 0 {
+	if startX < 0 { // window crosses the west edge [03 §3.3]
 		for gz := startZ; gz < endZ; gz++ {
-			fix(s.fog.ch1, startX, gz, 8, 4, 2, 1)
-			fix(s.fog.ch0, startX, gz, 8, 4, 2, 1)
+			fix(s.fog.ch1, -1, gz, 8, 4, 2, 1)
+			fix(s.fog.ch0, -1, gz, 8, 4, 2, 1)
 		}
 	}
-	if endX > s.W {
+	if endX > s.W { // window crosses the east edge [03 §3.3]
 		for gz := startZ; gz < endZ; gz++ {
-			fix(s.fog.ch1, endX-2, gz, 4, 8, 1, 2)
-			fix(s.fog.ch0, endX-2, gz, 4, 8, 1, 2)
+			fix(s.fog.ch1, s.W-1, gz, 4, 8, 1, 2)
+			fix(s.fog.ch0, s.W-1, gz, 4, 8, 1, 2)
 		}
 	}
 	s.mode |= ModeFogCacheValid

@@ -1322,11 +1322,14 @@ func (w *World) attachCOB(u *Unit) error {
 		}
 	}
 	if prog == nil || len(prog.Code) == 0 {
-		// Retail's own scriptless branch keeps the unit alive with a null VM
+		// Retail's own scriptless branch stores a null VM and keeps going
 		// [04 R-COB-01 §3], but the weapon-slot initializer that runs
-		// immediately afterwards dereferences the VM with no null test, so a
-		// scriptless unit faults retail during creation [04 R-COB-04 §8]. The
-		// sanctioned divergence is to refuse instead of creating one.
+		// immediately afterwards asks the script through an adapter that
+		// branches on the piece argument alone and passes the VM reference on
+		// with no null test, so a scriptless unit faults retail during
+		// creation, before SetMaxReloadTime and before the unit is ever ticked
+		// [04 R-COB-04 §8]. The sanctioned divergence is to refuse instead of
+		// creating one.
 		return fmt.Errorf("nanolathe: COB attachment: unit %q has no COB program", u.Def.UnitName)
 	}
 	vm := cob.NewVM(prog)

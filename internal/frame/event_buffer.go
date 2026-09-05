@@ -30,6 +30,7 @@ const (
 	KindCorpse          = EventKindCorpse
 	KindAudio           = EventKindAudio
 	KindStatus          = EventKindStatus
+	KindAnnounce        = EventKindAnnounce
 )
 
 const (
@@ -107,6 +108,9 @@ type Event struct {
 	StatusKind           uint8
 	StatusText           string
 	StatusClass          uint8
+	// AnnounceSlot is the ring speaker byte of a KindAnnounce line; 10 is the
+	// no-speaker sentinel [07 R-HUD-03 §14.3].
+	AnnounceSlot uint8
 }
 
 // Limits are presentation-only admission bounds. They do not limit the
@@ -226,6 +230,16 @@ func (c *EventBuffer) EmitAudio(e Event) bool {
 // arbitration and message-line drawing [03 §8.3][07 R-HUD-03 §14][I6].
 func (c *EventBuffer) EmitStatus(e Event) bool {
 	e.Kind = KindStatus
+	return c.Admit(e)
+}
+
+// EmitAnnounce admits one finished battle message-line announcement. The
+// session owns the text, the ring class and the slot the line is attributed
+// to; the presentation edge owns the ring itself and the drawing. Unlike
+// EmitStatus this carries no audio slot and requests no voice
+// [07 R-HUD-03 §14.3][08 R-CAMP-01 §9][I6].
+func (c *EventBuffer) EmitAnnounce(e Event) bool {
+	e.Kind = KindAnnounce
 	return c.Admit(e)
 }
 
@@ -360,16 +374,19 @@ func (c *EventBuffer) SnapshotEventsInto(dst []EventView) []EventView {
 			NanolatheBoxAtSource: e.NanolatheBoxAtSource,
 			Sound:                e.Sound, AudioPositional: e.AudioPositional, AudioWater: e.AudioWater, AudioAudible: e.AudioAudible,
 			StatusKind: e.StatusKind, StatusText: e.StatusText, StatusClass: e.StatusClass,
+			AnnounceSlot: e.AnnounceSlot,
 		}
 	}
 	return dst
 }
 
 // isStatusKind reports whether a kind is excluded from the effect bound. The
-// bound counts every admitted event that is not a status record.
-func isStatusKind(k Kind) bool { return k == KindStatus }
+// bound counts every admitted event that is not a status or announcement
+// record: neither is an effect, so neither belongs against the effect-pool
+// bound this window stands in for.
+func isStatusKind(k Kind) bool { return k == KindStatus || k == KindAnnounce }
 
-func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindStatus }
+func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindAnnounce }
 
 func (c *EventBuffer) emit(kind Kind, e Event) bool {
 	e.Kind = kind

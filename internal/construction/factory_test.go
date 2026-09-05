@@ -932,9 +932,9 @@ func TestKind9Kill(t *testing.T) {
 	if q2 := orders.QueueForUnit(factory); q2.LenPrimary() != 0 {
 		t.Fatalf("node should be dropped, len %d", q2.LenPrimary())
 	}
-	// Verify product dead, no corpse: product Alive false
-	if prod.Alive {
-		t.Fatalf("product should be dead")
+	// Verify the product is latched Dying (the phase-2 finalizer frees it).
+	if !prod.Dying {
+		t.Fatalf("product should be latched Dying")
 	}
 	// Test with no product attached => same epilogue, node still drops
 	w2 := newTestWorld(10)

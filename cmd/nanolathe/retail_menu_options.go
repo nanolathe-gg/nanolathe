@@ -6,8 +6,8 @@ package main
 // `PREV`/`CANCEL` pop it again [07 R-FE-01 §2]. The root is `STARTOPT.GUI`
 // over the `options4x` background. Its four page buttons open their own `.GUI`
 // with the merge flag: the page's gadgets are appended to the open window
-// [07 R-FE-01 §6]. Only `VISUALS` is built here; the other three pages are
-// visible but do nothing, see openRetailOptionsPage.
+// [07 R-FE-01 §6]. All four pages are built here — `SOUND`, `MUSIC`,
+// `SPEEDS` (whose root button is captioned `INTERFACE`) and `VISUALS`.
 
 import (
 	"fmt"
@@ -15,6 +15,8 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -26,15 +28,41 @@ import (
 const (
 	retailOptionsGUI      = "guis/startopt.gui"
 	retailOptionsBackdrop = "bitmaps/options4x.pcx"
-	retailVisualsGUI      = "guis/visuals.gui"
-	// The per-page background. Established: the page opener itself hands it to
-	// the shared bitmap cache in the statement after the merge-flag window
-	// open, so it is the page's step and not an argument of the opener and not
-	// the root's repaint. Each of the four pages names its own — `optsound4x`,
-	// `optmusic4x`, `optinterface4x`, `optvisual4x` — and the in-battle
-	// variants of the same pages hand none, keeping the battle behind them
-	// [07 R-FE-01 §6].
-	retailVisualsBackdrop = "bitmaps/optvisual4x.pcx"
+)
+
+// retailOptionsPage is one of the root's four page buttons: the authored `.GUI`
+// it merges and the full-screen plate it hands to the bitmap cache.
+//
+// The background is Established as the page's own step: each of the four page
+// routines calls the merge-flag window open and then, in the very next
+// statement, hands its bitmap to the shared cache — it is not an argument of
+// the opener and not the root's repaint. The in-battle arm of the same four
+// routines opens the `…RT.GUI` variant and hands no bitmap at all, keeping the
+// battle visible behind the page [07 R-FE-01 §6].
+type retailOptionsPage struct {
+	gui      string
+	backdrop string
+}
+
+// retailOptionsPages is the root-button name to page mapping. The `SOUND`
+// button opens `SOUNDS`, not the unopened `SOUND.GUI` beside it, and the
+// `SPEEDS` button is the one the file captions `INTERFACE` [07 R-FE-01 §6].
+var retailOptionsPages = map[string]retailOptionsPage{
+	"sound":   {gui: "guis/sounds.gui", backdrop: "bitmaps/optsound4x.pcx"},
+	"music":   {gui: "guis/music.gui", backdrop: "bitmaps/optmusic4x.pcx"},
+	"speeds":  {gui: "guis/speeds.gui", backdrop: "bitmaps/optinterface4x.pcx"},
+	"visuals": {gui: "guis/visuals.gui", backdrop: "bitmaps/optvisual4x.pcx"},
+}
+
+// The audio preference block, the stored game speed and the `Interface Type`
+// word are live shell preferences with no field on `gameShell`: that type is
+// declared in frontend.go, which this unit does not own. They are process
+// singletons for the same reason the options window's own state below is, and
+// they belong on the shell as soon as one change can touch both files.
+var (
+	shellAudio         = settings.DefaultAudio()
+	shellGameSpeed     = settings.DefaultGameSpeed
+	shellInterfaceType = settings.DefaultInterfaceType
 )
 
 // retailOptionsPageSource prefixes the provenance name of every gadget a
@@ -62,17 +90,67 @@ var (
 	optionsState  *retailOptionsState
 )
 
+// retailOptionsSnapshot is the entry copy the root takes when it opens: the
+// display block, the audio block, the message-column block, the scroll speed,
+// the game speed and the `Interface Type` word. `CANCEL` restores all of it and
+// leaves; each page's `UNDO` restores the part that page writes and reopens the
+// page [07 R-FE-01 §6].
+//
+// Retail's snapshot is the 83-byte preference block plus the session mapping
+// and LOS bits, the game speed, the scroll speed, the mixer state and the
+// 100-entry CD list. The two session bits are a battle's, so the front-end root
+// has none to copy; the CD list is the per-track category array below.
+type retailOptionsSnapshot struct {
+	display       settings.Display
+	audio         settings.Audio
+	messages      settings.Messages
+	scrollSpeed   int
+	gameSpeed     int
+	interfaceType int
+	categories    [retailMusicCategoryCount]int
+}
+
+// retailMusicCategoryCount is the length of the per-track category array: one
+// byte per track index 0..99 [03 R-AUD-01 §4].
+const retailMusicCategoryCount = 100
+
 // retailOptionsState is the live options session: which page is merged, the
 // entry snapshot `CANCEL` and `UNDO` restore, and the knob position of every
 // kind-4 slider on the open page [07 R-FE-01 §6].
 type retailOptionsState struct {
-	page string // "" for the root with no page merged
-	// snapshot is the preference block captured when the root opened. `CANCEL`
-	// restores it and leaves; `UNDO` restores it and reopens the page.
-	snapshot settings.Display
+	page     string // "" for the root with no page merged
+	snapshot retailOptionsSnapshot
 	sliders  map[string]*retailSliderState
 	drag     retailSliderDrag
 	modes    []retailDisplayMode
+
+	// tracks is the music object's audio-track count and track the `MUSIC`
+	// page's selected track, 1-based, 0 when there is none. Retail keeps the
+	// selection in a global beside the CD object rather than in the object
+	// [03 R-AUD-01 §4].
+	tracks int
+	track  int
+	// categories is the per-track category byte, initialised to the `(i mod
+	// 4) + 1` cycle the CD object builds at first run and edited by
+	// `TRACKTYPE` [03 R-AUD-01 §4].
+	//
+	// Not consumed: the category branch of the music tick is the reader, and
+	// this build's music controller keeps its own copy of the same array with
+	// no accessor, so an edit here changes what the page shows and nothing
+	// else. There is also no store for it — retail persists the array in the
+	// 20-entry `CDLISTS` ring keyed by the drive's volume serial, and this
+	// build has neither a drive nor a serial.
+	categories [retailMusicCategoryCount]int
+}
+
+// retailDefaultCategories is the cycle the CD object initialises its category
+// array to before any disc is identified [03 R-AUD-01 §4].
+func retailDefaultCategories() [retailMusicCategoryCount]int {
+	var out [retailMusicCategoryCount]int
+	for i := range out {
+		out[i] = i%4 + 1
+	}
+	return out
 }
 
 // retailDisplayMode is one row of the table `VIDSLDR` indexes.
@@ -272,16 +350,86 @@ func (g *gameShell) openRetailOptionsScreen() error {
 	desktopW, desktopH := ebitenapp.DesktopSize()
 	optionsAssets = &retailPanelAssets{window: window, background: background}
 	optionsState = &retailOptionsState{
-		snapshot: g.display,
-		sliders:  map[string]*retailSliderState{},
-		modes:    retailDisplayModes(desktopW, desktopH),
+		sliders:    map[string]*retailSliderState{},
+		modes:      retailDisplayModes(desktopW, desktopH),
+		categories: retailDefaultCategories(),
+	}
+	optionsState.snapshot = g.retailOptionsSnapshot()
+	optionsState.tracks = g.retailMusicTrackCount()
+	if optionsState.tracks > 0 {
+		// A nonzero count sets the next track to 1, which is what the `MUSIC`
+		// page then shows as its selection [03 R-AUD-01 §4].
+		optionsState.track = 1
 	}
 	optionsPanel = ui.NewPanel(window)
 	if optionsPanel == nil {
 		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", retailOptionsGUI, "the authored options root", nil)
 	}
+	// `MUSIC` is greyed when the CD object never opened. This build's music
+	// object is the audio service's controller, so the arm the grey test names
+	// is reachable only when the service itself could not be built — a missing
+	// mount — and never merely because no tracks were found: a drive with no
+	// disc still opens, and the page shows `NO DISC` [07 R-FE-01 §6]
+	// [03 R-AUD-01 §4].
+	if g.retailMusicController() == nil {
+		retailGreyGadget(window, "MUSIC", true)
+	}
 	g.frontend.Panels.Push(optionsPanel)
 	return nil
+}
+
+// retailOptionsSnapshot copies the live preference values the options root
+// snapshots on entry [07 R-FE-01 §6].
+func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
+	s := retailOptionsSnapshot{
+		display:       g.display,
+		audio:         shellAudio,
+		messages:      g.messages,
+		scrollSpeed:   g.scrollSpeed,
+		gameSpeed:     shellGameSpeed,
+		interfaceType: shellInterfaceType,
+		categories:    retailDefaultCategories(),
+	}
+	if optionsState != nil {
+		s.categories = optionsState.categories
+	}
+	return s
+}
+
+// restoreRetailOptionsSnapshot writes the entry copy back and re-applies
+// everything it drives. `CANCEL` restores the snapshot and re-applies gamma and
+// the volumes before it leaves [07 R-FE-01 §6].
+func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
+	g.display = s.display
+	shellAudio = s.audio
+	g.messages = s.messages
+	g.scrollSpeed = s.scrollSpeed
+	shellGameSpeed = s.gameSpeed
+	shellInterfaceType = s.interfaceType
+	if optionsState != nil {
+		optionsState.categories = s.categories
+	}
+	g.applyRetailVisualOptions(clPtr)
+	g.applyRetailAudioOptions()
+}
+
+// retailGreyGadget sets or clears one gadget's greyed word by name. "Greyed" is
+// bit 0 of a per-gadget word that is not `attribs`; a greyed control rejects
+// its own hit test and never captures [07 R-WGT-01 §13].
+func retailGreyGadget(window *gui.Window, name string, greyed bool) {
+	if window == nil {
+		return
+	}
+	for i := range window.Gadgets {
+		if !strings.EqualFold(window.Gadgets[i].Name, name) {
+			continue
+		}
+		if greyed {
+			window.Gadgets[i].GrayedOut = 1
+		} else {
+			window.Gadgets[i].GrayedOut = 0
+		}
+	}
 }
 
 func (g *gameShell) openRetailOptionsScreenReporting() {
@@ -311,11 +459,6 @@ func (g *gameShell) retailOptionsActive() bool {
 // gadget, so there is nothing to centre inside and the authored rectangles
 // stand [07 R-FE-01 §6].
 //
-// Only `VISUALS` is implemented. `SOUND`, `MUSIC` and `SPEEDS` are refused
-// here rather than merged: their pages' controls — the two mixer gauges, the
-// six interface sliders and stage buttons — have no owner in this build, and a
-// page of controls that move but change nothing reads as a defect rather than
-// as an honest gap.
 // The merge bakes the page's own window origin into every appended rectangle
 // [07 R-FE-01 §6]: when the open window authors no gadget named `PANEL` — and
 // `STARTOPT.GUI` authors none — the opener adds the page header's x and y to
@@ -329,19 +472,20 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 		return
 	}
 	page = menuKey(page)
-	if page != "visuals" {
+	source, ok := retailOptionsPages[page]
+	if !ok {
 		return
 	}
-	pageWindow, err := gui.Load(g.cs.fs, retailVisualsGUI)
+	pageWindow, err := gui.Load(g.cs.fs, source.gui)
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(
-			retailFrontendAssetError(g.cs, "retail options page GUI unavailable", retailVisualsGUI, "the authored VISUALS page", err).Error()))
+			retailFrontendAssetError(g.cs, "retail options page GUI unavailable", source.gui, "the authored options page", err).Error()))
 		return
 	}
-	background, err := formats.LoadPCXFile(g.cs.fs, retailVisualsBackdrop)
+	background, err := formats.LoadPCXFile(g.cs.fs, source.backdrop)
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(
-			retailFrontendAssetError(g.cs, "retail options page bitmap", retailVisualsBackdrop, "the authored VISUALS background", err).Error()))
+			retailFrontendAssetError(g.cs, "retail options page bitmap", source.backdrop, "the authored options page background", err).Error()))
 		return
 	}
 
@@ -383,53 +527,120 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	g.refreshRetailOptionsPage()
 }
 
+// retailSliderMax is the runtime maximum the page opener writes into one
+// slider's record, and whether the named gadget is an options slider at all.
+//
+// Every maximum but `VIDSLDR`'s is a stored constant the opener writes
+// verbatim; `VIDSLDR`'s is the display-mode table's count minus one, computed
+// out of the table the opener has just built [07 R-FE-01 §6][07 R-CAM-01 §7]
+// [03 R-AUD-01 §2].
+func (g *gameShell) retailSliderMax(key string) (int, bool) {
+	switch key {
+	case "vidsldr":
+		return len(optionsState.modes) - 1, true
+	case "gamma":
+		return settings.MaxGamma, true
+	case "fxvol":
+		return settings.MaxFXVol, true
+	case "musicvol":
+		return settings.MaxMusicVol, true
+	case "game":
+		return settings.GameSliderMax, true
+	case "screen":
+		return settings.ScrollSliderMax, true
+	case "txtscrol":
+		return settings.TextScrollSliderMax, true
+	case "maxlines":
+		return settings.MaxLinesSliderMax, true
+	}
+	return 0, false
+}
+
+// retailSliderStoredValue is the preference each slider opens over.
+func (g *gameShell) retailSliderStoredValue(key string) int {
+	switch key {
+	case "vidsldr":
+		return retailDisplayModeIndex(optionsState.modes, g.display.Width, g.display.Height)
+	case "gamma":
+		return g.display.Gamma
+	case "fxvol":
+		return shellAudio.FXVol
+	case "musicvol":
+		return shellAudio.MusicVol
+	case "game":
+		return shellGameSpeed
+	case "screen":
+		return g.scrollSpeed
+	case "txtscrol":
+		return g.messages.TextScroll
+	case "maxlines":
+		return g.messages.TextLines
+	}
+	return 0
+}
+
 // refreshRetailOptionsPage installs every page control's state from the live
 // preference block and runs each slider's value callback once, which is what
 // the page open does [07 R-FE-01 §6].
 func (g *gameShell) refreshRetailOptionsPage() {
-	if !g.retailOptionsActive() || optionsState.page != "visuals" {
+	if !g.retailOptionsActive() {
 		return
 	}
 	p := optionsPanel
+	optionsState.sliders = map[string]*retailSliderState{}
+	// Gadget order, not map order: the value callbacks below run in the order
+	// the opener walks the window's gadget array [07 R-FE-01 §6] [I1].
+	order := make([]string, 0, len(p.Window.Gadgets))
 	for _, gad := range p.Window.Gadgets {
 		if !retailOptionsPageGadget(gad) || gad.Kind != gui.KindScrollBar {
+			continue
+		}
+		key := menuKey(gad.Name)
+		max, tracked := g.retailSliderMax(key)
+		if !tracked {
 			continue
 		}
 		travel, knobSize, arrowW, ok := g.retailSliderMetrics(gad)
 		if !ok {
 			continue
 		}
-		state := &retailSliderState{travel: travel, knobSize: knobSize, arrowW: arrowW}
-		switch menuKey(gad.Name) {
-		case "vidsldr":
-			// `VIDSLDR` indexes the display-mode table, and the page opener
-			// writes its maximum straight from that table's count minus one
-			// rather than from a stored constant — Established, unlike
-			// `GAMMA`'s literal 20 beside it [07 R-FE-01 §6].
-			state.max = len(optionsState.modes) - 1
-			state.knob = retailSliderKnob(retailDisplayModeIndex(optionsState.modes, g.display.Width, g.display.Height), travel, state.max)
-		case "gamma":
-			// `GAMMA`'s maximum is 20 and its integer is applied as the
-			// palette factor 0.5 + g/24 [07 R-FE-01 §6]. The knob and the
-			// stored value are bound; the palette factor is not, because
-			// nothing in this build owns a display-palette gamma ramp. The
-			// value persists and is re-shown, so wiring the ramp later needs
-			// no change here.
-			state.max = settings.MaxGamma
-			state.knob = retailSliderKnob(g.display.Gamma, travel, state.max)
-		default:
-			continue
+		optionsState.sliders[key] = &retailSliderState{
+			travel:   travel,
+			knobSize: knobSize,
+			arrowW:   arrowW,
+			max:      max,
+			knob:     retailSliderKnob(g.retailSliderStoredValue(key), travel, max),
 		}
-		optionsState.sliders[menuKey(gad.Name)] = state
+		order = append(order, key)
 	}
-	// Two-stage buttons: stage 1 is the "On" label of the authored `Off|On`
-	// pair. `ANTI`, `BSHADOWS` and `SHADING` are bits 1, 4 and 5 of the display
-	// option word, and `BSHADOWS` drives all three shadow values together
+	switch optionsState.page {
+	case "visuals":
+		// Two-stage buttons: stage 1 is the "On" label of the authored `Off|On`
+		// pair. `ANTI`, `BSHADOWS` and `SHADING` are bits 1, 4 and 5 of the
+		// display option word, and `BSHADOWS` drives all three shadow values
+		// together [07 R-FE-01 §6].
+		p.SetStatus("ANTI", boolInt(g.display.AntiAlias != 0))
+		p.SetStatus("SHADING", boolInt(g.display.Shading != 0))
+		p.SetStatus("BSHADOWS", boolInt(g.display.FeatureShadows != 0))
+		g.syncRetailVideoLabel()
+	case "sound":
+		g.syncRetailSoundPage()
+	case "music":
+		g.syncRetailMusicPage()
+	case "speeds":
+		// `UNITCHAT` is the acknowledgement **text** gauge, displayed as the
+		// stored byte divided by five; `LEFTCLICK` shows the `Interface Type`
+		// word directly [07 R-CAM-01 §7][07 R-CAM-01 §5].
+		p.SetStatus("UNITCHAT", g.messages.UnitChatText/5)
+		p.SetStatus("LEFTCLICK", shellInterfaceType)
+		g.syncRetailMaxLinesLabel()
+	}
+	// After the page opens, every kind-4 gadget's value callback runs once, so
+	// the labels and the stored values match the knobs the opener just placed
 	// [07 R-FE-01 §6].
-	p.SetStatus("ANTI", boolInt(g.display.AntiAlias != 0))
-	p.SetStatus("SHADING", boolInt(g.display.Shading != 0))
-	p.SetStatus("BSHADOWS", boolInt(g.display.FeatureShadows != 0))
-	g.syncRetailVideoLabel()
+	for _, key := range order {
+		g.commitRetailSliderValue(key, optionsState.sliders[key])
+	}
 }
 
 // syncRetailVideoLabel writes the `VIDVAL` read-out. Retail formats it as
@@ -439,6 +650,353 @@ func (g *gameShell) syncRetailVideoLabel() {
 		return
 	}
 	optionsPanel.SetText("VIDVAL", fmt.Sprintf("%d X %d", g.display.Width, g.display.Height))
+}
+
+// syncRetailMaxLinesLabel writes the two interface-page read-outs.
+//
+// `MAXLINES` writes `%d`, or the translated `None` at zero, into a gadget named
+// `MAXLINESTEXT`; `TXTSCROL` writes `%d secs` into one named `TEXTSCROLLTEXT`
+// [07 R-CAM-01 §7]. Neither `SPEEDS.GUI` nor `SPEEDSRT.GUI` authors a gadget of
+// either name, so on the stock files the setter finds nothing and the read-outs
+// are never drawn. The writes are made anyway, because the name is what retail
+// hands the setter and an install whose page authors the gadget would show it.
+func (g *gameShell) syncRetailMaxLinesLabel() {
+	if optionsPanel == nil {
+		return
+	}
+	text := retailNoneText
+	if g.messages.TextLines != 0 {
+		text = fmt.Sprintf("%d", g.messages.TextLines)
+	}
+	optionsPanel.SetText("MAXLINESTEXT", text)
+	optionsPanel.SetText("TEXTSCROLLTEXT", fmt.Sprintf("%d secs", g.messages.TextScroll))
+}
+
+// retailNoneText is the zero-line label of the `MAXLINES` read-out
+// [07 R-CAM-01 §7].
+const retailNoneText = "None"
+
+// syncRetailSoundPage installs the `SOUNDS` page's non-slider state.
+//
+// `MODE` shows the sound-flags byte's low three bits; `SPEECH` shows the
+// acknowledgement voice gauge divided by five, or `Off` when the `speechfx` bit
+// is clear. With the mode `Off` the `VOLTEXT` caption is deactivated and
+// `FXVOL`, `TEST` and `SPEECH` are greyed [03 R-AUD-01 §2].
+func (g *gameShell) syncRetailSoundPage() {
+	p := optionsPanel
+	if p == nil || optionsAssets == nil {
+		return
+	}
+	p.SetStatus("MODE", shellAudio.SoundMode)
+	speech := 0
+	if shellAudio.SpeechFX != 0 {
+		speech = shellAudio.UnitChat / 5
+	}
+	p.SetStatus("SPEECH", speech)
+	off := !shellAudio.SoundEnabled()
+	p.SetActive("VOLTEXT", !off)
+	for _, name := range []string{"FXVOL", "TEST", "SPEECH"} {
+		retailGreyGadget(optionsAssets.window, name, off)
+	}
+}
+
+// syncRetailMusicPage installs the `MUSIC` page's non-slider state.
+//
+// `NOTRAK` shows `musicmode` bit 0 and `TRACKMODE` shows `cdmode` minus one.
+// With music off the gauge, the four transport buttons and `TRACKMODE` are
+// disabled; `TRACKTYPE` is active only while music is on **and** the mode is
+// `Custom` [03 R-AUD-01 §4].
+func (g *gameShell) syncRetailMusicPage() {
+	p := optionsPanel
+	if p == nil || optionsAssets == nil {
+		return
+	}
+	on := shellAudio.MusicMode != 0
+	p.SetStatus("NOTRAK", boolInt(on))
+	p.SetStatus("TRACKMODE", shellAudio.CDMode-1)
+	for _, name := range []string{"MUSICVOL", "CDPREV", "CDSTOP", "CDPLAY", "CDNEXT", "TRACKMODE"} {
+		retailGreyGadget(optionsAssets.window, name, !on)
+	}
+	retailGreyGadget(optionsAssets.window, "TRACKTYPE", !(on && shellAudio.CDMode == settings.MaxCDMode))
+	p.SetStatus("TRACKTYPE", retailTrackCategory(optionsState.track))
+	g.syncRetailTrackLabel()
+}
+
+// retailTrackCategory reads one track's category byte. Track 0 is "no
+// selection" and has no entry [03 R-AUD-01 §4].
+func retailTrackCategory(track int) int {
+	if optionsState == nil || track < 1 || track > retailMusicCategoryCount {
+		return 0
+	}
+	return optionsState.categories[track-1]
+}
+
+// syncRetailTrackLabel writes the `TRACKNUM` read-out: the selected track as
+// `%d`, or `NO DISC` when the selection is 0 [03 R-AUD-01 §4].
+func (g *gameShell) syncRetailTrackLabel() {
+	if optionsPanel == nil || optionsState == nil {
+		return
+	}
+	if optionsState.track == 0 {
+		optionsPanel.SetText("TRACKNUM", retailNoDiscText)
+		return
+	}
+	optionsPanel.SetText("TRACKNUM", fmt.Sprintf("%d", optionsState.track))
+}
+
+// retailNoDiscText is the `TRACKNUM` label with no selection [03 R-AUD-01 §4].
+const retailNoDiscText = "NO DISC"
+
+// retailMusicController is this build's stand-in for the CD object the options
+// family queries: the shared audio service's music controller. It is nil only
+// when no audio service could be built at all.
+func (g *gameShell) retailMusicController() *audio.Controller {
+	svc := g.ensureFrontendAudio()
+	if svc == nil {
+		return nil
+	}
+	return svc.Music
+}
+
+// retailMusicTrackCount is the audio-track count the options root reads when it
+// opens, the analogue of retail's `status cdaudio number of tracks`
+// [03 R-AUD-01 §4]. This build's tracks are the authored music files the VFS
+// carries, so a stock install — whose music lived on the CD — reports zero and
+// the page shows `NO DISC`.
+func (g *gameShell) retailMusicTrackCount() int {
+	if g == nil || g.cs == nil || g.cs.fs == nil {
+		return 0
+	}
+	if c := g.retailMusicController(); c != nil && c.NumTracks() > 0 {
+		return c.NumTracks()
+	}
+	return audio.ProbeMusicTracks(g.cs.fs)
+}
+
+// retailWaveVolumeScale converts a stored gauge into the presentation backend's
+// effects scale.
+//
+// Retail pushes `waveOutSetVolume(dev, (v << 10) · 0x10001)` to every waveOut
+// device, clamped to `0..0xFFFF` per channel — the system wave mixer, not a
+// per-buffer attenuation [03 R-AUD-01 §2]. Nanolathe owns no system mixer, so
+// the same level is applied as the backend's own 0..1 output scale: the gauge's
+// maximum of 64 saturates the 16-bit word exactly as it does there.
+func retailWaveVolumeScale(v int) float64 {
+	if v <= 0 {
+		return 0
+	}
+	level := v << 10
+	if level > 0xFFFF {
+		level = 0xFFFF
+	}
+	return float64(level) / float64(0xFFFF)
+}
+
+// applyRetailAudioOptions pushes the two wave gates into the presentation
+// backend and the music level into the music controller.
+//
+// The two gates are retail's own: every play requires a nonzero sound mode and
+// a nonzero `fxvol` [03 R-AUD-01 §2]. `Mono` versus `3D` is not applied — the
+// value 2 sets the output device's 3-D flag, whose consumer here would be the
+// positional pan of [03 §8.3], which this build applies unconditionally.
+func (g *gameShell) applyRetailAudioOptions() {
+	applyRetailAudioOptions()
+	if c := g.retailMusicController(); c != nil {
+		c.SetVolume(shellAudio.MusicVol)
+	}
+}
+
+// applyRetailAudioOptions is the shell-free half, so the startup read can push
+// the gates before any screen exists.
+func applyRetailAudioOptions() {
+	backend, ok := audio.GlobalOutput().(*audiobackend.Backend)
+	if !ok || backend == nil {
+		return
+	}
+	backend.SetMasterEnabled(shellAudio.SoundEnabled())
+	backend.SetEffectsVolume(retailWaveVolumeScale(shellAudio.FXVol))
+}
+
+// retailCycleStage advances one staged button by a stage, wrapping.
+func retailCycleStage(value, stages int) int {
+	return cycleInt(clampMenuStage(value, stages), 0, stages-1, 1)
+}
+
+// playRetailSoundTest is the sound page's `TEST` button: it plays
+// `sounds\explode.wav` under the ordinary gates, and plays no family cue
+// [03 R-AUD-01 §2].
+func (g *gameShell) playRetailSoundTest() {
+	svc := g.ensureFrontendAudio()
+	if svc == nil || svc.Cache == nil || !shellAudio.SoundEnabled() || shellAudio.FXVol == 0 {
+		return
+	}
+	sample, err := svc.Cache.LoadPath(retailTestSound)
+	if err != nil || sample == nil {
+		return
+	}
+	if output := audio.GlobalOutput(); output != nil {
+		_ = output.PlaySample(sample, audio.VolumeFromCentibel(retailTestAttenuation), 0)
+	}
+}
+
+// retailTestAttenuation is the `TEST` sample's attenuation argument
+// [03 R-AUD-01 §2].
+const retailTestAttenuation = -585
+
+// setRetailMusicEnabled applies the `NOTRAK` toggle: disabling stops the music
+// object and resets it [03 R-AUD-01 §4].
+func (g *gameShell) setRetailMusicEnabled(on bool) {
+	c := g.retailMusicController()
+	if c == nil {
+		return
+	}
+	c.SetEnabled(on)
+	if !on {
+		c.Stop()
+	}
+}
+
+// applyRetailMusicMode applies `cdmode` to the music object. `Repeat` copies the
+// current selection into the requested track [03 R-AUD-01 §4].
+func (g *gameShell) applyRetailMusicMode() {
+	c := g.retailMusicController()
+	if c == nil {
+		return
+	}
+	c.Configure(audio.PlayMode(shellAudio.CDMode), retailTrackCategory(optionsState.track))
+	if shellAudio.CDMode == 3 && optionsState.track > 0 {
+		c.Play(optionsState.track)
+	}
+}
+
+// activateRetailMusicTransport is the four transport buttons. `CDPLAY` plays the
+// selection; `CDNEXT`/`CDPREV` step it with wrap over `1..count` and switch
+// immediately while playing; `CDSTOP` stops, resets and re-selects track 1
+// [03 R-AUD-01 §4].
+func (g *gameShell) activateRetailMusicTransport(key string) {
+	c := g.retailMusicController()
+	count := optionsState.tracks
+	switch key {
+	case "cdplay":
+		if c != nil && optionsState.track > 0 {
+			c.Play(optionsState.track)
+		}
+	case "cdnext":
+		if count > 0 {
+			optionsState.track++
+			if optionsState.track > count {
+				optionsState.track = 1
+			}
+		}
+	case "cdprev":
+		if count > 0 {
+			optionsState.track--
+			if optionsState.track < 1 {
+				optionsState.track = count
+			}
+		}
+	case "cdstop":
+		if c != nil {
+			c.Stop()
+		}
+		optionsState.track = 0
+		if count > 0 {
+			optionsState.track = 1
+		}
+	}
+	if c != nil && (key == "cdnext" || key == "cdprev") && c.IsPlaying() && optionsState.track > 0 {
+		c.Play(optionsState.track)
+	}
+	g.syncRetailMusicPage()
+}
+
+// restoreRetailOptionsDefaults is every page's `RESTORE`. Each page restores
+// only the values its own controls write, then reopens itself
+// [07 R-FE-01 §6][03 R-AUD-01 §2][03 R-AUD-01 §4][07 R-CAM-01 §7].
+func (g *gameShell) restoreRetailOptionsDefaults() {
+	switch optionsState.page {
+	case "visuals":
+		// Bits 1-5 set, gamma 12 and — front end only — 640x480 with
+		// `DitheredFog` cleared [07 R-FE-01 §6]. `DitheredFog` has no owner
+		// here, so nothing clears it; it is not persisted either.
+		g.display.AntiAlias = 1
+		g.setRetailShadowBits(true)
+		g.display.Shading = 1
+		g.display.Gamma = settings.DefaultGamma
+		g.display.Width = settings.DefaultDisplaymodeWidth
+		g.display.Height = settings.DefaultDisplaymodeHeight
+		g.applyRetailVisualOptions(clPtr)
+	case "sound":
+		// `fxvol` 27, bits 4-6 set, Sound Mode 1 with the 3-D flag cleared,
+		// and the acknowledgement voice level 10 [03 R-AUD-01 §2].
+		shellAudio.FXVol = settings.DefaultFXVol
+		shellAudio.AckFX = 1
+		shellAudio.BuildFX = 1
+		shellAudio.SpeechFX = 1
+		shellAudio.SoundMode = settings.SoundModeMono
+		shellAudio.UnitChat = settings.MaxUnitChat
+		g.applyRetailAudioOptions()
+	case "music":
+		// `musicvol` 32, `cdmode` 4, and music turned on [03 R-AUD-01 §4].
+		shellAudio.MusicVol = settings.DefaultMusicVol
+		shellAudio.CDMode = settings.DefaultCDMode
+		if shellAudio.MusicMode == 0 {
+			shellAudio.MusicMode = 1
+			g.setRetailMusicEnabled(true)
+		}
+		g.applyRetailAudioOptions()
+		g.applyRetailMusicMode()
+	case "speeds":
+		// text-scroll 10, lines 10, game speed 10, scroll speed 32,
+		// `Interface Type` 0, voice level 10, text level 5 [07 R-CAM-01 §7].
+		g.messages.TextScroll = settings.DefaultTextScroll
+		g.messages.TextLines = settings.DefaultTextLines
+		shellGameSpeed = settings.DefaultGameSpeed
+		g.scrollSpeed = settings.DefaultScrollSpeed
+		shellInterfaceType = settings.DefaultInterfaceType
+		shellAudio.UnitChat = settings.MaxUnitChat
+		g.messages.UnitChatText = settings.DefaultUnitChatText
+	default:
+		return
+	}
+	g.openRetailOptionsPage(optionsState.page)
+}
+
+// undoRetailOptionsPage is every page's `UNDO`: the values that page writes are
+// taken back from the entry snapshot and the page reopens [07 R-FE-01 §6].
+func (g *gameShell) undoRetailOptionsPage() {
+	s := optionsState.snapshot
+	switch optionsState.page {
+	case "visuals":
+		// Bits 1-6, gamma and — front end only — the display size.
+		g.display = s.display
+		g.applyRetailVisualOptions(clPtr)
+	case "sound":
+		shellAudio.SoundMode = s.audio.SoundMode
+		shellAudio.AckFX, shellAudio.BuildFX, shellAudio.SpeechFX = s.audio.AckFX, s.audio.BuildFX, s.audio.SpeechFX
+		shellAudio.FXVol = s.audio.FXVol
+		shellAudio.UnitChat = s.audio.UnitChat
+		g.applyRetailAudioOptions()
+	case "music":
+		// Volume, list, mode, enable and requested track [03 R-AUD-01 §4].
+		shellAudio.MusicVol = s.audio.MusicVol
+		shellAudio.MusicMode = s.audio.MusicMode
+		shellAudio.CDMode = s.audio.CDMode
+		optionsState.categories = s.categories
+		g.setRetailMusicEnabled(shellAudio.MusicMode != 0)
+		g.applyRetailAudioOptions()
+		g.applyRetailMusicMode()
+	case "speeds":
+		g.messages.TextScroll = s.messages.TextScroll
+		g.messages.TextLines = s.messages.TextLines
+		g.messages.UnitChatText = s.messages.UnitChatText
+		g.scrollSpeed = s.scrollSpeed
+		shellGameSpeed = s.gameSpeed
+		shellInterfaceType = s.interfaceType
+	default:
+		return
+	}
+	g.openRetailOptionsPage(optionsState.page)
 }
 
 // applyRetailVisualOptions pushes the three display-option bits into the live
@@ -470,9 +1028,12 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 // `STARTOPT` / `PREFS` rows [07 R-FE-01 §2] and the merged pages' own controls
 // [07 R-FE-01 §6]. `CANCEL` alone plays `Previous`; every other control the
 // four page callbacks recognise, `RESTORE` and `UNDO` included, plays
-// `Options`. The pages' sliders are the one exception and are absent here on
-// purpose: a slider is driven by its value callback, which plays nothing, so a
-// drag or an arrow step is silent.
+// `Options`.
+//
+// Two controls are silent. The pages' sliders are driven by their value
+// callbacks, which play nothing, so a drag or an arrow step makes no sound; and
+// the sound page's `TEST` plays `sounds\explode.wav` through the ordinary gates
+// instead of the family cue [03 R-AUD-01 §2].
 //
 // It is a table of its own rather than an arm of frontendCue because that
 // function keys on the shell mode, and the options root has no mode: it is a
@@ -482,13 +1043,21 @@ func (g *gameShell) setRetailShadowBits(on bool) {
 func retailOptionsCue(key string) string {
 	switch key {
 	case "sound", "music", "speeds", "visuals", "prev",
-		"restore", "undo", "anti", "shading", "bshadows":
+		"restore", "undo",
+		"anti", "shading", "bshadows",
+		"mode", "speech",
+		"notrak", "trackmode", "tracktype", "cdplay", "cdnext", "cdprev", "cdstop",
+		"leftclick", "unitchat":
 		return "Options"
 	case "cancel":
 		return "Previous"
 	}
 	return ""
 }
+
+// retailTestSound is the sample the sound page's `TEST` button plays: mode 1,
+// attenuation −585, no pan, under the ordinary play gates [03 R-AUD-01 §2].
+const retailTestSound = "sounds/explode.wav"
 
 func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	if !g.retailOptionsActive() {
@@ -511,36 +1080,14 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		// The entry snapshot is restored and re-applied, then the window
 		// closes. Unsaved edits made on any page are discarded, because no
 		// screen writes a value directly [07 R-FE-01 §6][07 R-FE-01 §11].
-		g.display = optionsState.snapshot
-		g.applyRetailVisualOptions(clPtr)
+		g.restoreRetailOptionsSnapshot(optionsState.snapshot)
 		g.closeRetailOptionsScreen()
 		return true
 	case "restore":
-		// `VISUALS` `RESTORE`: bits 1-5 set, gamma 12 and — front end only —
-		// 640x480 with `DitheredFog` cleared; the page reopens
-		// [07 R-FE-01 §6]. `DitheredFog` has no owner here, so nothing clears
-		// it; it is not persisted either.
-		if optionsState.page != "visuals" {
-			return true
-		}
-		g.display.AntiAlias = 1
-		g.setRetailShadowBits(true)
-		g.display.Shading = 1
-		g.display.Gamma = settings.DefaultGamma
-		g.display.Width = settings.DefaultDisplaymodeWidth
-		g.display.Height = settings.DefaultDisplaymodeHeight
-		g.applyRetailVisualOptions(clPtr)
-		g.openRetailOptionsPage(optionsState.page)
+		g.restoreRetailOptionsDefaults()
 		return true
 	case "undo":
-		// `UNDO` restores bits 1-6, gamma and — front end only — the display
-		// size from the entry snapshot, and reopens the page [07 R-FE-01 §6].
-		if optionsState.page != "visuals" {
-			return true
-		}
-		g.display = optionsState.snapshot
-		g.applyRetailVisualOptions(clPtr)
-		g.openRetailOptionsPage(optionsState.page)
+		g.undoRetailOptionsPage()
 		return true
 	case "anti":
 		g.display.AntiAlias = boolInt(g.display.AntiAlias == 0)
@@ -556,6 +1103,67 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		g.setRetailShadowBits(g.display.FeatureShadows == 0)
 		optionsPanel.SetStatus("BSHADOWS", g.display.FeatureShadows)
 		g.applyRetailVisualOptions(clPtr)
+		return true
+
+	// ---- SOUNDS ---------------------------------------------------------
+	case "mode":
+		// `MODE` writes the sound-flags byte's low three bits. `Off` stops
+		// every voice; `Mono` outside a battle re-issues the front-end `BGM`
+		// loop — this build has no such loop, so nothing is re-issued. The
+		// device's 3-D flag follows the value 2 [03 R-AUD-01 §2].
+		shellAudio.SoundMode = retailCycleStage(shellAudio.SoundMode, 3)
+		g.applyRetailAudioOptions()
+		g.syncRetailSoundPage()
+		return true
+	case "speech":
+		// `SPEECH` writes both halves at once: bit 6 takes `stage != 0` and
+		// the acknowledgement voice level takes `stage × 5` [03 R-AUD-01 §2].
+		stage := retailCycleStage(optionsPanel.StatusOf("SPEECH"), 3)
+		shellAudio.SpeechFX = boolInt(stage != 0)
+		shellAudio.UnitChat = stage * 5
+		g.syncRetailSoundPage()
+		return true
+	case "test":
+		g.playRetailSoundTest()
+		return true
+
+	// ---- MUSIC ----------------------------------------------------------
+	case "notrak":
+		shellAudio.MusicMode = boolInt(shellAudio.MusicMode == 0)
+		g.setRetailMusicEnabled(shellAudio.MusicMode != 0)
+		g.syncRetailMusicPage()
+		return true
+	case "trackmode":
+		// `TRACKMODE`'s stage plus one is `cdmode`. `Repeat` copies the
+		// selection into the requested track; `Custom` shows `TRACKTYPE` for
+		// the selection [03 R-AUD-01 §4].
+		shellAudio.CDMode = retailCycleStage(shellAudio.CDMode-1, settings.MaxCDMode) + 1
+		g.applyRetailMusicMode()
+		g.syncRetailMusicPage()
+		return true
+	case "tracktype":
+		if optionsState.track >= 1 && optionsState.track <= retailMusicCategoryCount {
+			optionsState.categories[optionsState.track-1] = retailCycleStage(retailTrackCategory(optionsState.track), 5)
+		}
+		g.syncRetailMusicPage()
+		return true
+	case "cdplay", "cdnext", "cdprev", "cdstop":
+		g.activateRetailMusicTransport(menuKey(name))
+		return true
+
+	// ---- SPEEDS (the root captions its button `INTERFACE`) --------------
+	case "leftclick":
+		// The two-stage `LEFTCLICK` button writes the `Interface Type` word
+		// [07 R-CAM-01 §5].
+		shellInterfaceType = retailCycleStage(shellInterfaceType, 2)
+		optionsPanel.SetStatus("LEFTCLICK", shellInterfaceType)
+		return true
+	case "unitchat":
+		// `UNITCHAT` is the acknowledgement **text** level, `stage × 5`. Its
+		// voice twin is the sound page's `SPEECH` [07 R-CAM-01 §7].
+		stage := retailCycleStage(optionsPanel.StatusOf("UNITCHAT"), 3)
+		g.messages.UnitChatText = stage * 5
+		optionsPanel.SetStatus("UNITCHAT", stage)
 		return true
 	}
 	// Every remaining control on the open page belongs to the options window,
@@ -593,7 +1201,53 @@ func (g *gameShell) commitRetailSliderValue(name string, s *retailSliderState) {
 		g.display.Width, g.display.Height = mode.W, mode.H
 		g.syncRetailVideoLabel()
 	case "gamma":
+		// `GAMMA`'s integer is applied as the palette factor 0.5 + g/24, and
+		// the wave and CD volumes are re-pushed whenever it changes
+		// [07 R-FE-01 §6][03 R-AUD-01 §2]. The value persists and is re-shown;
+		// the palette factor is not applied, because nothing in this build owns
+		// a display-palette gamma ramp — the consumer is the palette install of
+		// [03 R-FONT-01 §6]'s surface path.
 		g.display.Gamma = value
+		g.applyRetailAudioOptions()
+	case "fxvol":
+		// `fxvol` gates every play and sets the wave device's level; the CD
+		// level is re-pushed with it [03 R-AUD-01 §2].
+		shellAudio.FXVol = value
+		g.applyRetailAudioOptions()
+	case "musicvol":
+		shellAudio.MusicVol = value
+		g.applyRetailAudioOptions()
+	case "game":
+		// The `GAME` read-out floors at 1 and then goes through the speed
+		// setter, which clamps 21 down to 20 [07 R-CAM-01 §7][07 R-CAM-01 §3].
+		//
+		// Not consumed while the options root is a front-end child window:
+		// there is no session to apply it to. The value persists; its battle
+		// consumer is the session's speed state [01 §4.3], which battle entry
+		// owns.
+		if value < settings.MinGameSpeed {
+			value = settings.MinGameSpeed
+		}
+		if value > settings.MaxGameSpeed {
+			value = settings.MaxGameSpeed
+		}
+		shellGameSpeed = value
+	case "screen":
+		// The `SCREEN` read-out floors at 1 and stores the scroll-speed byte,
+		// which the camera's scroll pass reads [07 R-CAM-01 §7][07 §10].
+		if value < settings.MinScrollSpeed {
+			value = settings.MinScrollSpeed
+		}
+		g.scrollSpeed = value
+	case "txtscrol":
+		g.messages.TextScroll = value
+		g.syncRetailMaxLinesLabel()
+	case "maxlines":
+		if value < 0 {
+			value = 0
+		}
+		g.messages.TextLines = value
+		g.syncRetailMaxLinesLabel()
 	}
 }
 

@@ -243,6 +243,49 @@ func TestCaptureBudgetFollowsTheTracedArithmetic(t *testing.T) {
 	}
 }
 
+// TestCaptureBudgetConstantFormAndAbsentClamps locks the capture timer of
+// [05 R-WORK-01 §6] at the four places a rendering of the section can get it
+// wrong: the constant form of the base sum, the absent lower clamps, the
+// unsigned divide of the middle step, and the uint16 read of the kill count.
+//
+// It moved here from internal/construction when AU-7 deleted the caller-less
+// second copy of the section; this package holds the live implementation.
+func TestCaptureBudgetConstantFormAndAbsentClamps(t *testing.T) {
+	// THE CONSTANT FORM. §6 used to print the base sum with the coefficients
+	// 0.015 and 0.2142857142857; the executor holds neither, and forms each cost
+	// term with two multiplies instead (see the constant block in work.go). An
+	// energy cost of 200 with no metal cost is the case that separates the
+	// forms: the executor's reconstructed energy coefficient is a shade ABOVE
+	// 0.015, so the energy term is a shade above 3 and base is 153. Writing the
+	// old decimal as a float32 literal — which is what this file used to do —
+	// puts the coefficient a shade BELOW 0.015 and yields 152.
+	//
+	// At full health the middle step is the identity and with no kills the last
+	// line is (0+10)*base*10/100 = base, so the timer here IS the base.
+	if got := captureBudget(200, 0, 1000, 1000, 0); got != 153 {
+		t.Fatalf("timer(E=200, M=0, full health, no kills) = %d, want 153: each cost term is scaled twice and neither reconstructed coefficient is the float32 nearest the printed decimal [05 R-WORK-01 §6]", got)
+	}
+	// NO LOWER CLAMP, AND THE MIDDLE STEP DIVIDES UNSIGNED. A negative authored
+	// energy cost drives base to -150, the signed 32-bit numerator goes negative,
+	// and the UNSIGNED divide re-reads it as a huge positive value — retail's
+	// documented outcome. A `base < 0 -> 0` clamp, a `timer < 0 -> 0` clamp, or a
+	// signed divide all collapse this to zero instead.
+	if got := captureBudget(-20000, 0, 1000, 1000, 0); got != 2147333 {
+		t.Fatalf("timer(E=-20000) = %d, want 2147333: no lower clamp, and the middle step divides unsigned [05 R-WORK-01 §6]", got)
+	}
+	// THE KILL COUNT IS READ AS uint16 before the signed divide by five, so a
+	// negative kills argument reads as a large positive experience rather than a
+	// negative factor: -5 is 65531 as a uint16, whose factor is 13106.
+	if got := captureBudget(200, 0, 1000, 1000, -5); got != (13106+10)*153*10/100 {
+		t.Fatalf("timer(kills=-5) = %d, want the uint16 read of the kill count [05 R-WORK-01 §6]", got)
+	}
+	// A damaged target captures faster in proportion to
+	// (health + maxdamage) / (2 * maxdamage) [05 R-WORK-01 §6].
+	if got := captureBudget(200, 0, 1, 1000, 0); got != (1+1000)*153/2000*10*10/100 {
+		t.Fatalf("timer(health=1) = %d, want the health-scaled base [05 R-WORK-01 §6]", got)
+	}
+}
+
 // TestCaptureProgressAdvancesTwoPerVisit locks the progress phase's shape
 // [05 R-WORK-01 §6]: the completion test precedes the increment, so the number
 // of qualifying visits is ceil(timer/2) and the counter never decays.

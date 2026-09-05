@@ -146,7 +146,7 @@ func writeUnitImage(b *Builder, image UnitImage) error {
 	}
 
 	// Index the detached side boxes without iterating the index. The record
-	// slice remains the caller-supplied retail emission order (reverse pool
+	// slice remains the caller-supplied retail emission order (ascending pool
 	// traversal); maps are used only for keyed validation/lookups [I1].
 	accessories := make(map[uint16]RawBox, len(image.Other))
 	movers := make(map[uint16]RawBox, len(image.Other))

@@ -354,6 +354,21 @@ type creationCallbacks interface {
 // [R-CB-01 §4]. Query* supplies the muzzle identity; the separate AimFrom
 // result is retained until the aim-origin consumer wires it. The extractor
 // SetSpeed follows this sequence at a terrain-aware producer outside units.
+//
+// I11 divergence, deliberate. Retail runs this initializer unconditionally
+// after the model bind on all three creation paths, and its query adapter
+// branches on the piece argument alone: with the "ask the script" argument the
+// adapter loads the VM reference off the unit record and hands it straight to
+// the callback starter with no null test, so on a scriptless unit — whose
+// initializer stored a null VM — the starter's read of the program pointer is
+// a null dereference and retail faults while creating the unit
+// [04 R-COB-04 §8][04 R-COB-01 §3]. Exactly three producers in the whole image
+// test the VM for null and none of them is on this path. Nanolathe takes the
+// divergence §8 sanctions rather than the fault: attachCOB refuses a
+// definition with no loadable program and the skirmish preflight reports a
+// missing COB as fatal, so a scriptless unit is never created and this nil
+// guard is unreachable in a real battle. It stays because a crash is not a
+// behavior worth cloning once the state that reaches it cannot arise.
 func initializeCreationCallbacks(u *Unit, bridge creationCallbacks, maxReload int32) {
 	if bridge == nil {
 		return

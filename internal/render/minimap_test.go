@@ -493,26 +493,44 @@ func TestMinimapWeaponRingIsGatedOnSelection(t *testing.T) {
 	}
 }
 
+// The blip layer's blink term is the unit's per-instance blink-suppress
+// countdown against the shared blink phase, and nothing else [03 §3.9] layer 2.
+//
+// There is no stealth term in the blip gate (an earlier form of this test
+// asserted that a contact carrying the definition `stealth` flag blinked) — the
+// gate is the four-disjunct visibility test and then `blinkSuppress == 0 ||
+// blinkPhase`. Stealth belongs to the sensor phase's contact callback
+// [03 R-VIS-01 §5], where it suppresses the radar and sonar detection that
+// would have written the seen bit; a stealthy unit that reaches this layer at
+// all was admitted by line of sight and draws a steady blip.
 func TestMinimapBlinkGate(t *testing.T) {
 	m := camera.Minimap{W: 10, H: 10}
 	mapped := &RadarSurface{W: 10, H: 10, Bits: make([]byte, 100)}
 	for i := range mapped.Bits {
 		mapped.Bits[i] = 5
 	}
-	contacts := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 9, Stealth: true}}
 	blit := func(dst *RadarSurface, x, y int, color byte, commander bool) {
 		dst.Set(x, y, color)
 	}
-	blinkOff := BlinkState{Phase: 0}
-	finalOff := rebuildFinalExact(mapped, m, 100, 100, contacts, blinkOff, blit, 0xA0, 0xB0, 0xC0)
 	rx, ry := RadarProjection(10, 10, 0, 100, 100, m)
+
+	// A running blink-suppress countdown hides the blip off-phase and shows it
+	// on-phase.
+	suppressed := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 9, Visible: true, BlinkSuppress: 3}}
+	finalOff := rebuildFinalExact(mapped, m, 100, 100, suppressed, BlinkState{Phase: 0}, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOff.At(int(rx), int(ry)); v != 5 {
-		t.Fatalf("stealth hidden when blink==0, got %d want mapped 5 [03 §3.9]", v)
+		t.Fatalf("blink-suppressed blip drawn on the clear phase, got %d want mapped 5 [03 §3.9]", v)
 	}
-	blinkOn := BlinkState{Phase: 1}
-	finalOn := rebuildFinalExact(mapped, m, 100, 100, contacts, blinkOn, blit, 0xA0, 0xB0, 0xC0)
+	finalOn := rebuildFinalExact(mapped, m, 100, 100, suppressed, BlinkState{Phase: 1}, blit, 0xA0, 0xB0, 0xC0)
 	if v, _ := finalOn.At(int(rx), int(ry)); v != 9 {
-		t.Fatalf("stealth visible when blink==1, got %d want 9", v)
+		t.Fatalf("blink-suppressed blip missing on the blink phase, got %d want 9 [03 §3.9]", v)
+	}
+
+	// Definition stealth alone never blinks a blip.
+	stealthy := []MinimapContact{{WorldX: 10, WorldZ: 10, WorldY: 0, Palette: 9, Visible: true, Stealth: true}}
+	steady := rebuildFinalExact(mapped, m, 100, 100, stealthy, BlinkState{Phase: 0}, blit, 0xA0, 0xB0, 0xC0)
+	if v, _ := steady.At(int(rx), int(ry)); v != 9 {
+		t.Fatalf("a stealthy contact blinked, got %d want the steady blip 9 [03 §3.9][03 R-VIS-01 §5]", v)
 	}
 }
 

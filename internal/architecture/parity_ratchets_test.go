@@ -241,11 +241,19 @@ var float64ExemptFiles = map[string]string{
 	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
 	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
 	"internal/combat/damage.go":            "I2 area-damage falloff expression, evaluated at working precision and narrowed by one store [06 §9.3], and the amount product: the promoted base damage times that stored float32 falloff, truncated toward zero [06 §9.2]",
-	"internal/construction/capture.go":     "I2 capture timer base sum: each authored cost scaled by two float32 constants, the terms combined at working precision and truncated once into the integer budget [05 R-WORK-01 §6] (AU-3)",
+	"internal/construction/reclaim.go":     "I2 unit-reclaim pulse divide: the wrapped 32-bit product re-read unsigned, widened to double and divided by the single-precision max(buildcostmetal,10)×300, truncated once into the integer pulse [05 R-WORK-01 §4] (AU-7)",
 	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
 	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
 	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
 	"internal/session/strips.go":           "I2 nanolathe particle travel distance (sqrt, truncated to the tick count), float64 temporary never stored [03 §5.5]",
+	// AU-7 moved AU-3's capture-timer row here from
+	// internal/construction/capture.go: the section had two implementations and
+	// only this one has a caller, so the dead copy — and its float64 — is gone
+	// and the row follows the arithmetic. The file's other float64 site is the
+	// resurrection delay's stored double, which WU-18-2 reported as a row the
+	// allowlist needs; both are retail's own floating point, narrowed
+	// immediately to the integer the order record stores.
+	"internal/orders/work.go": "I2 capture timer base sum: each authored cost scaled by two float32 constants, the terms combined at working precision and truncated once into the integer budget [05 R-WORK-01 §6] (AU-3, moved by AU-7); and the resurrection delay's stored double 0.3·buildtime/(workertime/30) [05 R-WORK-01 §7] (WU-18-2)",
 }
 
 // float64Baseline records float64 occurrences per remaining (non-exempt)
@@ -281,17 +289,8 @@ var float64Baseline = map[string]int{
 	"internal/mission/mission_globals.go":   6,
 	"internal/mission/placement.go":         7,
 	"internal/movement/altitude.go":         6,
-	// WU-18-2, the work handlers. Two sites, both retail's own floating point
-	// and both narrowed immediately to the integer the record stores: the
-	// capture budget's three float32 constants
-	// (0.015·buildcostenergy + 0.2142857142857·buildcostmetal + 150.0,
-	// [05 R-WORK-01 §6]) and the resurrection delay's stored double
-	// (0.3·buildtime / (workertime/30), [05 R-WORK-01 §7], "the 0.3 belongs to
-	// this state alone"). docs/INVARIANTS.md I2 has no row for either; WU-18-2
-	// reports them as rows the allowlist needs rather than editing a file it
-	// does not own. Reproducing them in rationals would change which values
-	// truncate, so the arithmetic stays as retail computes it.
-	"internal/orders/work.go":         6,
+	// work.go moved to float64ExemptFiles above (AU-7): both of its sites now
+	// carry an I2 row there.
 	"internal/session/progression.go": 5,
 	"internal/session/session.go":     1,
 	"internal/session/step.go":        1,

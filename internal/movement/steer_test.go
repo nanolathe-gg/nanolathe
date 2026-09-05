@@ -306,7 +306,7 @@ func TestNoReverse(t *testing.T) {
 		BrakeRate:    32768,
 	}
 	// A no-waypoint visit applies the authored brake rate and clamps at zero.
-	s.UpdateSpeedWithBraking(s.SpeedCapForPitch(0), false, 0, false)
+	s.UpdateFollowerSpeed(s.SpeedCapForPitch(0), false, false)
 	if s.Speed < 0 {
 		t.Fatalf("braking produced negative speed %d; no reverse branch [04 R-MOV-01 §4]", s.Speed)
 	}
@@ -322,14 +322,14 @@ func TestNoReverse(t *testing.T) {
 	}
 	// Speed should never go negative even when cap is small and current Speed is high then pitch changes
 	s.Speed = 50000
-	s.UpdateSpeedWithBraking(s.SpeedCapForPitch(5<<11), true, 1<<30, false) // table 15% => cap ~15% => 9830
+	s.UpdateFollowerSpeed(s.SpeedCapForPitch(5<<11), true, true) // table 15% => cap ~15% => 9830
 	if s.Speed < 0 {
 		t.Fatalf("capped speed negative %d", s.Speed)
 	}
 	// An already negative fixture value is clamped by the integrator's final
 	// no-reverse floor after an authored acceleration step.
 	s3 := &SteerState{MaxVelocity: 65536, HeightWord: 20, SeaLevel: 10, Speed: -100, Acceleration: 1, BrakeRate: 1}
-	s3.UpdateSpeedWithBraking(s3.SpeedCapForPitch(0), true, 1<<30, false)
+	s3.UpdateFollowerSpeed(s3.SpeedCapForPitch(0), true, true)
 	if s3.Speed < 0 {
 		t.Fatalf("negative speed was retained, got %d", s3.Speed)
 	}

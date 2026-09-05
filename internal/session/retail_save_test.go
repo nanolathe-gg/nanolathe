@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -58,7 +59,7 @@ func TestProjectRetailSessionContinuationDoesNotNeedClock(t *testing.T) {
 	}
 }
 
-func TestProjectRetailSessionAssemblesRuntimeUnitInReversePoolOrder(t *testing.T) {
+func TestProjectRetailSessionAssemblesRuntimeUnit(t *testing.T) {
 	def := &content.UnitDef{UnitName: "runtime", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}}}
 	w := units.NewSliced(2, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
@@ -86,6 +87,80 @@ func TestProjectRetailSessionAssemblesRuntimeUnitInReversePoolOrder(t *testing.T
 	}
 	if len(p.Units.Other) != 1 || p.Units.Other[0].Name != "u0073acc" || len(p.Units.Other[0].Data) != 48 {
 		t.Fatalf("unit auxiliary projection = %#v, want one 48-byte account", p.Units.Other)
+	}
+}
+
+// TestProjectRetailSessionNumbersUnitBoxesAscendingWithPoolIndex pins the
+// direction of the outer walk. Retail's single Units writer starts at the pool
+// base and advances one record stride per iteration, so numbered box `i` rises
+// with pool position [08 R-SAVE-02 §6]. The direction is load-bearing: the
+// reader restores numbered boxes 0..count-1 in index order and the base
+// record's AI group word appends the unit to the owner's group vector, so a
+// reversed walk builds every group vector backwards.
+func TestProjectRetailSessionNumbersUnitBoxesAscendingWithPoolIndex(t *testing.T) {
+	def := &content.UnitDef{UnitName: "grouped", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}}}
+	w := units.NewSliced(8, nil)
+	econ := &economy.Service{}
+	const aiGroup = 3
+	stableIDs := map[pool.Handle]uint16{}
+	scratch := map[pool.Handle]units.RetailUnitWriterScratch{}
+	scriptScratch := map[pool.Handle]cob.RetailScriptWriterScratch{}
+	var handles []pool.Handle
+	for i := 0; i < 3; i++ {
+		h, err := w.Create(def, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatalf("create unit %d: %v", i, err)
+		}
+		w.Unit(h).RestoredAIGroup = aiGroup
+		econ.UnitBuckets(h)
+		handles = append(handles, h)
+		stableIDs[h] = uint16(0x40 + i)
+		scratch[h] = units.RetailUnitWriterScratch{}
+		scriptScratch[h] = cob.RetailScriptWriterScratch{}
+	}
+	if !(handles[0] < handles[1] && handles[1] < handles[2]) {
+		t.Fatalf("fixture handles are not ascending: %v", handles)
+	}
+	p, err := ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
+		Summary:             save.Summary{Gametype: 1},
+		Mapping:             []byte{1},
+		StableIDs:           stableIDs,
+		UnitWriterScratch:   scratch,
+		ScriptWriterScratch: scriptScratch,
+	})
+	if err != nil {
+		t.Fatalf("projection: %v", err)
+	}
+	if len(p.Units.Records) != len(handles) {
+		t.Fatalf("records = %d, want %d", len(p.Units.Records), len(handles))
+	}
+	// Numbered box i belongs to the i-th pool slot, and Script%i is numbered by
+	// the same running index.
+	var restoreOrder []pool.Handle
+	for i, rec := range p.Units.Records {
+		if rec.Number != i {
+			t.Fatalf("record %d carries numbered box %d", i, rec.Number)
+		}
+		if want := stableIDs[handles[i]]; rec.StableID != want {
+			t.Fatalf("numbered box %d holds stable ID %#x, want %#x (ascending pool order)", i, rec.StableID, want)
+		}
+		if p.Units.Scripts[i].Index != i {
+			t.Fatalf("Script box %d carries index %d", i, p.Units.Scripts[i].Index)
+		}
+		restoreOrder = append(restoreOrder, handles[i])
+	}
+	// The reader's group append walks the numbered boxes in index order, so the
+	// restored vector must equal that order.
+	mgr := &ai.Manager{Player: 0}
+	mgr.RestoreGroupsFromUnits(w)
+	got := mgr.GroupMembers(aiGroup)
+	if len(got) != len(restoreOrder) {
+		t.Fatalf("restored group vector = %v, want %v", got, restoreOrder)
+	}
+	for i := range got {
+		if got[i] != restoreOrder[i] {
+			t.Fatalf("restored group vector = %v, want the numbered-box order %v", got, restoreOrder)
+		}
 	}
 }
 

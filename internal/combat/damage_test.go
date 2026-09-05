@@ -281,48 +281,25 @@ func TestFalloffNoClamp(t *testing.T) {
 }
 
 func TestNoImpulse(t *testing.T) {
-	// C26: there is NO impulse or pushing [06 §9.4] C26
-	// ApplyImpulse is intentionally empty; verify area processing never modifies unit positions
-	// The victim is handle 2 and the shooter handle 1: the record's shooter is
-	// excluded from its own blast [06 §9.3], so a victim that shares the
-	// shooter's handle would never be enumerated and this test would prove
-	// nothing about impulse. (Corrected with WU-19-22, which added that reader;
-	// the case previously passed handle 1 as both.)
+	// C26: there is NO impulse or pushing [06 §9.4] C26. ApplyImpulse is
+	// intentionally empty, and this pins that it stays empty: nothing in the
+	// blast path may move a victim.
+	//
+	// The live area sweep is ExplodeWeaponAt, whose victim enumeration is
+	// covered by the splash-traversal and feature-impact cases; this test used
+	// to drive a second, unit-only copy of the sweep that had no non-test
+	// caller and has since been removed (AU-14 W-6).
 	u := UnitForArea{
 		Handle: 2,
 		Pos:    Vec3{X: numericFromInt(0), Y: numericFromInt(0), Z: numericFromInt(0)},
 		Min:    Vec3{X: numericFromInt(-10), Y: numericFromInt(-10), Z: numericFromInt(-10)},
 		Max:    Vec3{X: numericFromInt(10), Y: numericFromInt(10), Z: numericFromInt(10)},
 	}
-	impact := Vec3{X: numericFromInt(0), Z: numericFromInt(0), Y: numericFromInt(0)}
-	w := &content.WeaponDef{AreaOfEffect: 40, EdgeEffectiveness: 0}
-	radius := BlastRadius(w.AreaOfEffect) // 20
 	before := u.Pos
-	visited := 0
-	ApplyAreaDamage(impact, w, 1, 0, 0, radius, 10, 10, func(cx, cz int32) [2]pool.Handle {
-		if cx == 0 && cz == 0 {
-			return [2]pool.Handle{u.Handle, 0}
-		}
-		return [2]pool.Handle{0, 0}
-	}, func(h pool.Handle) (UnitForArea, bool) {
-		if h == u.Handle {
-			return u, true
-		}
-		return UnitForArea{}, false
-	}, false, func(victim pool.Handle, falloff float32, distance int32) {
-		visited++
-		if u.Pos != before {
-			t.Fatalf("impulse modified position [06 §9.4] C26")
-		}
-	})
-	if visited == 0 {
-		t.Fatalf("area enumeration missed unit [06 §9.3] C26")
-	}
 	ApplyImpulse()
 	if u.Pos != before {
 		t.Fatalf("ApplyImpulse is not empty [06 §9.4] C26")
 	}
-	_ = radius
 }
 
 func TestNoExplodeSuppressionScope(t *testing.T) {

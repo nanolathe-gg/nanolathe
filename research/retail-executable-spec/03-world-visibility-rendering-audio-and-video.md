@@ -4337,28 +4337,39 @@ the slot the named-block allocator writes, and no other writer touches it.
 Layer order on the final surface (later layers overwrite; no blending):
 
 1. wipe final from mapped;
-2. regular unit blip from the FX `radlogohigh` GAF, drawn when the visibility
+2. regular unit blip from the FX `radlogo` GAF, drawn when the visibility
    gate passes AND the unit's per-instance blink-suppress byte reads zero OR
    the blink phase bit is set — so the blip draws when
    `blinkSuppressByte == 0 || blinkPhase`. The byte is a per-unit countdown,
    decremented each tick while nonzero, that forces the blip into blink-only
    mode while it runs;
-3. commander blip from the FX `nuclogo` GAF, frame 0, when the unit's identity
-   matches the commander slot held in engine root state;
+3. commander blip from the FX `radlogohigh` GAF, frame 0, when the unit's
+   identity matches the commander slot held in engine root state;
 4. sensor circles (radar/sonar outer, jammer) in their distinct palette indices
    via the solid-circle rasterizer (2,048 angular steps over 32 segments);
 5. weapon/interceptor rings (below);
 6. projectile dot, 1×1 pixel, in the projectile palette index, when the
    projectile's runtime status has bits 29 and 30 clear and its 0x40 bit clear,
-   LOS-gated; otherwise a feature marker from the FX `h2oboom2` GAF.
+   LOS-gated; otherwise a feature marker from the FX `nuclogo` GAF.
 
 The three GAF handles above are loaded from the FX archive during battle-data
-initialization. A regular unit's owning-player record supplies the frame
-selector for `radlogohigh`; the feature branch uses the same owning-player
-selector for `h2oboom2`. The commander marker always selects frame 0 of
-`nuclogo`. The selected frame bytes are copied as indexed pixels through the
-GAF blitter, so they already refer to the active `PALETTE.PAL` and are not
-recolored through `GUIPAL.PAL` or a separate blit color argument. **Established.**
+initialization, from four consecutive loads in one FX initialization routine:
+`radlogo`, `radlogohigh`, `nuclogo`, `h2oboom2`. The contacts pass reads the
+first three; nothing in it reads `h2oboom2`, whose handle belongs to another
+effect family. A regular unit's owning-player record supplies the frame selector
+for `radlogo` — the byte at a fixed offset in the record the unit's owner slot
+indexes — and the feature branch of layer 6 applies the same selector to
+`nuclogo`. The commander marker always selects frame 0 of `radlogohigh`. The
+selected frame bytes are copied as indexed pixels through the GAF blitter, so
+they already refer to the active `PALETTE.PAL` and are not recolored through
+`GUIPAL.PAL` or a separate blit color argument. **Established.**
+
+The stock art corroborates the assignment exactly: `radlogo` carries ten 4×4
+frames whose interiors are the ten player colours and whose border is one shared
+index, `nuclogo` carries ten 7×7 frames on the same ten-slot pattern, and
+`radlogohigh` carries a single 6×6 frame — one ring, which is what a
+frame-0-only commander marker needs and what an owning-player selector cannot
+use `[fmt gaf]`.
 
 **Blip gate.** The unit blip draws when any of: a global options word bit 9 is
 set, the minimap mode word's low two bits are zero, the unit carries the
@@ -8479,23 +8490,38 @@ this executable. Nanolathe carries them as inert settings.
 
 | Registry value | Default | Store | Consumers |
 |---|---|---|---|
-| `fxvol` | 27 | effects gauge, slider range 0..63 (`FXVOL`, 64 stops) | every play gate (`≠ 0`); applied as `waveOutSetVolume(dev, (v << 10) · 0x10001)` on **every** waveOut device, clamped to `0..0xFFFF` per channel — i.e. the *system* wave mixer, not per-buffer attenuation |
-| `musicvol` | 32 | music gauge (`MUSICVOL`) | `auxSetVolume(cdAux, (v << 10) · 0x10001)` and the CD object's base volume ([R-AUD-01 §4]) |
+| `fxvol` | 27 | effects gauge `FXVOL`, slider maximum **64** | every play gate (`≠ 0`); applied as `waveOutSetVolume(dev, (v << 10) · 0x10001)` on **every** waveOut device, clamped to `0..0xFFFF` per channel — i.e. the *system* wave mixer, not per-buffer attenuation |
+| `musicvol` | 32 | music gauge `MUSICVOL`, slider maximum **64** | `auxSetVolume(cdAux, (v << 10) · 0x10001)` and the CD object's base volume ([R-AUD-01 §4]) |
 | `MixingBuffers` | 8 | device voice limit | the mixer's steal loop ([R-AUD-01 §1]) |
 | `musicmode` | 1 (bit 0) | CD enable | `NOTRAK` gadget (`Off|On`); the CD play primitive and the MUSIC screen enables ([R-AUD-01 §4]) |
 | `cdmode` | 4 | CD play mode 1..4 | `TRACKMODE` gadget (`Play All|Random|Repeat|Custom` = stage + 1); the CD tick ([R-AUD-01 §4]) |
 | `WaveOutVolume`, `CDAudioVolume` | — | raw mixer levels | only when `RestoreVolume` bit 3 is set: applied at load, captured at save |
 
-Both gauges scale by `<< 10`: `27 << 10 = 27,648` and `32 << 10 = 32,768` of
-65,535. The `SPEECH` gauge (`Off|Medium|Full`) stores `gauge × 5` as the
-audio crowding threshold of §8.3, so the gate `10 − threshold < priority`
-admits nothing at `Off`, priorities ≥ 6 at `Medium`, and everything at
-`Full`. `RESTORE` on the sound screen sets `fxvol` 27, bits 4–6, Sound Mode
-1 (3-D off), threshold 10; `UNDO` restores the entry snapshot. Changing
-`MODE` to `Off` stops every voice; changing it to `Mono` while not in a
-battle re-issues the front-end `BGM` loop ([R-AUD-01 §5]). The `TEST`
-button plays `sounds\explode.wav` (mode 1, −585, no pan) under the ordinary
-gates.
+Both gauges are kind-4 sliders whose runtime maximum the page opener writes
+into the record as the literal **64**, so a knob at the end of travel reads 64
+and the level `v << 10` is 65,536 — one past the 16-bit mixer word, which the
+clamp above saturates. Both scale by `<< 10`: `27 << 10 = 27,648` and
+`32 << 10 = 32,768` of 65,535. The `SPEECH` gauge (`Off|Medium|Full`) writes
+**both** halves of its store in one arm: bit 6 takes `stage ≠ 0` and `unitchat`
+takes `stage × 5`, the acknowledgement voice level of [07 R-CAM-01 §7], so the
+gate `10 − level < priority` admits nothing at `Off`, priorities ≥ 6 at
+`Medium`, and everything at `Full`. The screen opens the gauge at
+`speechfx ? unitchat ÷ 5 : 0`.
+
+`RESTORE` on the sound screen sets `fxvol` 27, bits 4–6, Sound Mode 1 (3-D
+off), voice level 10; `UNDO` restores the entry snapshot. Changing `MODE` to
+`Off` stops every voice; changing it to `Mono` while not in a battle re-issues
+the front-end `BGM` loop ([R-AUD-01 §5]). The `TEST` button plays
+`sounds\explode.wav` (mode 1, −585, no pan) under the ordinary gates and plays
+**no** options cue — it is the one control on the four pages that the family's
+cue column of [07 R-FE-01 §6] does not cover.
+
+**Established — the sound screen's enable state.** Both the opener and the
+`MODE` arm re-apply it: the `VOLTEXT` caption's active byte takes
+`(soundflags & 7) ≠ 0`, and `FXVOL`, `TEST` and `SPEECH` take the greyed/lock
+word `(soundflags & 7) == 0`. So with Sound Mode `Off` the volume caption
+disappears and the gauge, the test button and the speech gauge are inert and
+drawn darkened ([07 R-WGT-01 §3], [07 R-WGT-01 §5]).
 
 **Established fact — `RestoreVolume` and the two restore points.** The
 device constructor samples the system waveOut and CD-aux levels **before**
@@ -8599,9 +8625,16 @@ re-selects track 1; `MUSICVOL` is the gauge above; `RESTORE` sets
 `musicvol` 32, `cdmode` 4, and turns `musicmode` on (running the tick if it
 was off); `UNDO` restores the entry snapshot (volume, list, mode, enable,
 requested). `TRACKTYPE` is active only when `musicmode` is on and the mode
-is `Custom`; the transport buttons and `TRACKMODE` are disabled when
-`musicmode` is off. Closing the screen runs the tick when in battle,
-otherwise stops and resets.
+is `Custom`; the gauge, the four transport buttons and `TRACKMODE` are
+disabled when `musicmode` is off — the gauge through the kind-4 lock word and
+the buttons through the grey word, which is why two different helpers write
+them ([07 R-WGT-01 §5], [07 R-WGT-01 §13]). Closing the screen runs the tick
+when in battle, otherwise stops and resets.
+
+The options root greys its own `MUSIC` button when the CD object's open flag is
+zero — no drive, or `open cdaudio` having failed twice. A drive holding no
+audio disc still opens: that case reaches the screen, which then shows
+`NO DISC` ([07 R-FE-01 §6]).
 
 **Established fact — the play primitive `PlayTrack(t)`.** Disabled → report
 success and do nothing. `t = 0` → run the tick instead. Poll `status

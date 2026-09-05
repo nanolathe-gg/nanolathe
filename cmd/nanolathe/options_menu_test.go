@@ -3,6 +3,7 @@ package main
 import (
 	"image/png"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -471,5 +472,239 @@ func TestRetailOptionsCueColumn(t *testing.T) {
 		if got := frontendCue(ui.ModeSingle, key); got != "" {
 			t.Errorf("frontendCue(SINGLE, %q) = %q; the options root's controls must not take SINGLE's column", key, got)
 		}
+	}
+}
+
+// Every page the options root opens merges, installs its controls from the live
+// preference block and writes its own store [07 R-FE-01 §6][03 R-AUD-01 §2]
+// [03 R-AUD-01 §4][07 R-CAM-01 §7].
+//
+// With NANOLATHE_OPTIONS_SHOT set to a directory, each page is written there.
+func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
+	shell, _, cl := retailAssetShell(t)
+	shotDir := os.Getenv("NANOLATHE_OPTIONS_SHOT")
+	shell.openMenu(modeMenuSingle)
+	shell.activateGadget("Options")
+	if !shell.retailOptionsActive() {
+		t.Fatal("Options did not open the options root")
+	}
+
+	// Each page's own sliders and stage buttons.
+	for _, page := range []struct {
+		button  string
+		key     string
+		sliders []string
+		stages  []string
+	}{
+		{"SOUND", "sound", []string{"fxvol"}, []string{"MODE", "SPEECH"}},
+		{"MUSIC", "music", []string{"musicvol"}, []string{"NOTRAK", "TRACKMODE", "TRACKTYPE"}},
+		{"SPEEDS", "speeds", []string{"game", "screen", "txtscrol", "maxlines"}, []string{"LEFTCLICK", "UNITCHAT"}},
+		{"VISUALS", "visuals", []string{"gamma", "vidsldr"}, []string{"ANTI", "SHADING", "BSHADOWS"}},
+	} {
+		shell.activateGadget(page.button)
+		if optionsState.page != page.key {
+			t.Fatalf("%s merged page %q; want %q", page.button, optionsState.page, page.key)
+		}
+		for _, name := range page.sliders {
+			if shell.retailOptionsSlider(name) == nil {
+				t.Errorf("page %s installed no %s slider", page.key, name)
+			}
+		}
+		for _, name := range page.stages {
+			if !shell.hasActiveGadget(name) {
+				t.Errorf("page %s did not merge its %s control", page.key, name)
+			}
+		}
+		if shotDir != "" {
+			writeShellShot(t, cl, shotDir+"/options-"+page.key+".png")
+		}
+	}
+
+	// The interface page's four sliders each write their own store, and its two
+	// stage buttons write theirs [07 R-CAM-01 §7][07 R-CAM-01 §5].
+	shell.activateGadget("SPEEDS")
+	for _, c := range []struct {
+		slider string
+		value  int
+		read   func() int
+	}{
+		{"screen", 40, func() int { return shell.scrollSpeed }},
+		{"txtscrol", 7, func() int { return shell.messages.TextScroll }},
+		{"maxlines", 18, func() int { return shell.messages.TextLines }},
+		{"game", 14, func() int { return shellGameSpeed }},
+	} {
+		s := shell.retailOptionsSlider(c.slider)
+		if s == nil {
+			t.Fatalf("the interface page installed no %s slider", c.slider)
+		}
+		shell.moveRetailSlider(c.slider, s, retailSliderKnob(c.value, s.travel, s.max))
+		if got := c.read(); got != c.value {
+			t.Errorf("%s at value %d stored %d", c.slider, c.value, got)
+		}
+	}
+	shell.activateGadget("LEFTCLICK")
+	if shellInterfaceType != settings.InterfaceTypeRightClick {
+		t.Errorf("LEFTCLICK left Interface Type %d; want %d", shellInterfaceType, settings.InterfaceTypeRightClick)
+	}
+	shell.activateGadget("UNITCHAT")
+	if shell.messages.UnitChatText != 10 {
+		t.Errorf("UNITCHAT from Medium left the text level %d; want 10", shell.messages.UnitChatText)
+	}
+
+	// The sound page's gauge and its two stage buttons [03 R-AUD-01 §2].
+	shell.activateGadget("SOUND")
+	fx := shell.retailOptionsSlider("fxvol")
+	if fx == nil {
+		t.Fatal("the sound page installed no FXVOL slider")
+	}
+	shell.moveRetailSlider("fxvol", fx, retailSliderKnob(40, fx.travel, fx.max))
+	if shellAudio.FXVol != 40 {
+		t.Errorf("FXVOL at 40 stored %d", shellAudio.FXVol)
+	}
+	// `SPEECH` writes both halves: bit 6 and the voice level as stage times five.
+	optionsPanel.SetStatus("SPEECH", 0)
+	shell.activateGadget("SPEECH")
+	if shellAudio.SpeechFX != 1 || shellAudio.UnitChat != 5 {
+		t.Errorf("SPEECH at Medium stored speechfx %d unitchat %d; want 1 and 5", shellAudio.SpeechFX, shellAudio.UnitChat)
+	}
+	// `MODE` Off greys the gauge, the test button and the speech gauge and
+	// deactivates the volume caption [03 R-AUD-01 §2].
+	shellAudio.SoundMode = settings.SoundMode3D
+	shell.activateGadget("MODE")
+	if shellAudio.SoundMode != settings.SoundModeOff {
+		t.Fatalf("MODE from 3D left mode %d; want Off", shellAudio.SoundMode)
+	}
+	if optionsPanel.ActiveOf("VOLTEXT") {
+		t.Error("Sound Mode Off left the VOLTEXT caption active")
+	}
+	for _, name := range []string{"FXVOL", "TEST", "SPEECH"} {
+		if !retailGadgetGreyed(optionsAssets.window, name) {
+			t.Errorf("Sound Mode Off left %s ungreyed", name)
+		}
+	}
+	if shotDir != "" {
+		writeShellShot(t, cl, shotDir+"/options-sound-off.png")
+	}
+
+	// The music page shows `NO DISC` with no tracks, and greys the transport
+	// while music is off [03 R-AUD-01 §4].
+	shell.activateGadget("MUSIC")
+	if optionsState.tracks == 0 && optionsPanel.TextOf("TRACKNUM") != retailNoDiscText {
+		t.Errorf("TRACKNUM with no tracks reads %q; want %q", optionsPanel.TextOf("TRACKNUM"), retailNoDiscText)
+	}
+	shell.activateGadget("NOTRAK")
+	if shellAudio.MusicMode != 0 {
+		t.Fatalf("NOTRAK left musicmode %d; want 0", shellAudio.MusicMode)
+	}
+	for _, name := range []string{"MUSICVOL", "CDPLAY", "CDSTOP", "CDNEXT", "CDPREV", "TRACKMODE", "TRACKTYPE"} {
+		if !retailGadgetGreyed(optionsAssets.window, name) {
+			t.Errorf("music off left %s ungreyed", name)
+		}
+	}
+	if shotDir != "" {
+		writeShellShot(t, cl, shotDir+"/options-music-off.png")
+	}
+
+	// `PREV` ("OK") is the save point: the captured block carries every page's
+	// edits [07 R-FE-01 §6][07 R-FE-01 §11].
+	shell.activateGadget("PREV")
+	captured := shell.captureSettings()
+	if captured.Audio.FXVol != 40 || captured.Audio.SoundMode != settings.SoundModeOff || captured.Audio.MusicMode != 0 {
+		t.Errorf("captured audio block is %+v", captured.Audio)
+	}
+	if captured.GameSpeed != 14 || captured.InterfaceType != settings.InterfaceTypeRightClick {
+		t.Errorf("captured game speed %d interface type %d; want 14 and 1", captured.GameSpeed, captured.InterfaceType)
+	}
+	if captured.ScrollSpeed != 40 || captured.Messages.TextScroll != 7 || captured.Messages.TextLines != 18 {
+		t.Errorf("captured scroll %d textscroll %d textlines %d", captured.ScrollSpeed, captured.Messages.TextScroll, captured.Messages.TextLines)
+	}
+}
+
+// retailGadgetGreyed reports one gadget's greyed word.
+func retailGadgetGreyed(window *gui.Window, name string) bool {
+	if window == nil {
+		return false
+	}
+	for _, gad := range window.Gadgets {
+		if strings.EqualFold(gad.Name, name) {
+			return gad.GrayedOut != 0
+		}
+	}
+	return false
+}
+
+// `CANCEL` discards every page's edits, not just the visuals page's
+// [07 R-FE-01 §6].
+func TestRetailOptionsCancelDiscardsEveryPage(t *testing.T) {
+	shell, _, _ := retailAssetShell(t)
+	shell.openMenu(modeMenuSingle)
+	shell.activateGadget("Options")
+	before := shell.retailOptionsSnapshot()
+
+	shell.activateGadget("SOUND")
+	fx := shell.retailOptionsSlider("fxvol")
+	if fx == nil {
+		t.Fatal("the sound page installed no FXVOL slider")
+	}
+	shell.moveRetailSlider("fxvol", fx, retailSliderKnob(3, fx.travel, fx.max))
+	shell.activateGadget("SPEEDS")
+	shell.activateGadget("LEFTCLICK")
+	shell.activateGadget("CANCEL")
+
+	if shellAudio != before.audio {
+		t.Errorf("CANCEL left the audio block %+v; want the entry copy %+v", shellAudio, before.audio)
+	}
+	if shellInterfaceType != before.interfaceType {
+		t.Errorf("CANCEL left Interface Type %d; want %d", shellInterfaceType, before.interfaceType)
+	}
+}
+
+// Each page's `RESTORE` writes its own defaults and reopens the page
+// [07 R-FE-01 §6][03 R-AUD-01 §2][03 R-AUD-01 §4][07 R-CAM-01 §7].
+func TestRetailOptionsRestorePerPageDefaults(t *testing.T) {
+	shell, _, _ := retailAssetShell(t)
+	shell.openMenu(modeMenuSingle)
+	shell.activateGadget("Options")
+
+	shell.activateGadget("SOUND")
+	shellAudio.FXVol, shellAudio.SoundMode, shellAudio.UnitChat, shellAudio.AckFX = 3, settings.SoundModeOff, 0, 0
+	shell.activateGadget("RESTORE")
+	if shellAudio.FXVol != settings.DefaultFXVol || shellAudio.SoundMode != settings.SoundModeMono ||
+		shellAudio.UnitChat != settings.MaxUnitChat || shellAudio.AckFX != 1 {
+		t.Errorf("sound RESTORE left %+v", shellAudio)
+	}
+
+	shell.activateGadget("MUSIC")
+	shellAudio.MusicVol, shellAudio.CDMode, shellAudio.MusicMode = 5, 1, 0
+	shell.activateGadget("RESTORE")
+	if shellAudio.MusicVol != settings.DefaultMusicVol || shellAudio.CDMode != settings.DefaultCDMode || shellAudio.MusicMode != 1 {
+		t.Errorf("music RESTORE left musicvol %d cdmode %d musicmode %d", shellAudio.MusicVol, shellAudio.CDMode, shellAudio.MusicMode)
+	}
+
+	shell.activateGadget("SPEEDS")
+	shell.scrollSpeed, shellGameSpeed, shellInterfaceType = 3, 20, 1
+	shell.messages.TextScroll, shell.messages.TextLines, shell.messages.UnitChatText = 1, 1, 0
+	shell.activateGadget("RESTORE")
+	if shell.scrollSpeed != settings.DefaultScrollSpeed || shellGameSpeed != settings.DefaultGameSpeed ||
+		shellInterfaceType != settings.DefaultInterfaceType {
+		t.Errorf("interface RESTORE left scroll %d speed %d iface %d", shell.scrollSpeed, shellGameSpeed, shellInterfaceType)
+	}
+	if shell.messages.TextScroll != settings.DefaultTextScroll || shell.messages.TextLines != settings.DefaultTextLines ||
+		shell.messages.UnitChatText != settings.DefaultUnitChatText || shellAudio.UnitChat != settings.MaxUnitChat {
+		t.Errorf("interface RESTORE left messages %+v unitchat %d", shell.messages, shellAudio.UnitChat)
+	}
+}
+
+// The gauge's device level is retail's own `v << 10`, clamped to the 16-bit
+// mixer word [03 R-AUD-01 §2].
+func TestRetailWaveVolumeScale(t *testing.T) {
+	if got := retailWaveVolumeScale(0); got != 0 {
+		t.Errorf("gauge 0 scaled to %v; want 0 — a zero gauge is a closed play gate", got)
+	}
+	if got := retailWaveVolumeScale(settings.MaxFXVol); got != 1 {
+		t.Errorf("gauge %d scaled to %v; want 1 — 64 << 10 saturates the mixer word", settings.MaxFXVol, got)
+	}
+	if got, want := retailWaveVolumeScale(27), float64(27<<10)/float64(0xFFFF); got != want {
+		t.Errorf("the default gauge scaled to %v; want %v", got, want)
 	}
 }

@@ -185,15 +185,26 @@ func TestFeatureWorkOutOfRangeAdvancesAndWaitsOnTheGate(t *testing.T) {
 	}
 }
 
-// TestFeatureReclaimSpraysTwiceOnlyWhileAboveFifteen locks the engine's only
-// two-segment producer: "p1 > 15 -> draw the spray twice to the feature box"
-// [04 R-ORD-01 §5], which is also why "the last eight visits of every feature
-// reclaim emit no nano at all" [05 R-WORK-01 §5].
+// TestFeatureReclaimEmitsOncePerVisitOnlyWhileAboveFifteen locks the engine's
+// only two-segment producer: "p1 > 15 -> draw the spray twice to the feature
+// box" [04 R-ORD-01 §5], which is also why "the last eight visits of every
+// feature reclaim emit no nano at all" [05 R-WORK-01 §5].
+//
+// CORRECTION (AU-7): this used to expect TWO emitter invocations per qualifying
+// visit, and the handler duly made two calls. That is one layer too high. The
+// producer census gives feature reclaim exactly two SEGMENTS per visit
+// ([05 R-P0-06 §1] table; [05 R-WORK-01 §8] "Feature reclaim ... 2"), and the
+// bound presentation adapter is what builds and submits that pair. Two calls
+// therefore meant four strip-6 records and 120 CRT draws where the research
+// gives two records and 60 [03 R-STRIP-01 §3][05 R-P0-06 §5] — a determinism
+// defect, because the CRT stream drives wind timing, the meteor scheduler and
+// the victory timer's arm [01 §7.5]. The handler makes ONE call per qualifying
+// visit; the fixture below counts calls, not segments.
 //
 // The relationship, not a census: the countdown starts at trunc(15 + 250/2) =
 // 140 and falls by two a visit, so exactly the visits that leave it above 15
-// emit two segments each and the rest emit none.
-func TestFeatureReclaimSpraysTwiceOnlyWhileAboveFifteen(t *testing.T) {
+// emit, and the rest emit none.
+func TestFeatureReclaimEmitsOncePerVisitOnlyWhileAboveFifteen(t *testing.T) {
 	tree, _ := retailShapedTree()
 	f := newFeatureWorkFixture(t, []*content.FeatureDef{tree}, 4, 5)
 	// Stand the builder on the feature's own cell so the row reaches its work
@@ -203,7 +214,7 @@ func TestFeatureReclaimSpraysTwiceOnlyWhileAboveFifteen(t *testing.T) {
 	f.q.Push(Lookup("Reclaim"), Node{Owner: f.builder.Handle, GoalX: world.CellToWorld(4), GoalZ: world.CellToWorld(5)})
 	head := f.q.Primary()[0]
 
-	twoSegmentVisits, silentVisits := 0, 0
+	emittingVisits, silentVisits := 0, 0
 	for tick := uint32(1); tick <= 400 && f.q.LenPrimary() > 0; tick++ {
 		before, countdown := f.segments, head.Param1
 		f.q.Pump(f.builder, tick)
@@ -218,10 +229,10 @@ func TestFeatureReclaimSpraysTwiceOnlyWhileAboveFifteen(t *testing.T) {
 		switch f.segments - before {
 		case 0:
 			silentVisits++
-		case 2:
-			twoSegmentVisits++
+		case 1:
+			emittingVisits++
 		default:
-			t.Fatalf("a work visit published %d feature segments; the row draws the spray twice or not at all [04 R-ORD-01 §5]", f.segments-before)
+			t.Fatalf("a work visit invoked the feature emitter %d times; the handler emits once per qualifying visit and the adapter owns the segment pair [05 R-P0-06 §1][05 R-WORK-01 §8]", f.segments-before)
 		}
 	}
 	if f.q.LenPrimary() != 0 {
@@ -232,8 +243,8 @@ func TestFeatureReclaimSpraysTwiceOnlyWhileAboveFifteen(t *testing.T) {
 	// phases 3 and 4 SHARE the body, so phase 4 runs it once more after phase 3
 	// advanced on a non-positive counter [04 R-ORD-01 §5] — nine dark visits in
 	// all, the eight of §5's "last eight visits" plus the shared phase-4 one.
-	if twoSegmentVisits != 62 || silentVisits != 9 {
-		t.Fatalf("visits: %d emitted two segments and %d emitted none, want 62 and 9 for a 250-energy tree", twoSegmentVisits, silentVisits)
+	if emittingVisits != 62 || silentVisits != 9 {
+		t.Fatalf("visits: %d emitted and %d emitted none, want 62 and 9 for a 250-energy tree", emittingVisits, silentVisits)
 	}
 }
 
