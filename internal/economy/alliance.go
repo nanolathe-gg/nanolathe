@@ -19,14 +19,13 @@ const AllianceRowBytes = 11
 // combat join reads `attackerOwner.A[guardOwner]`, and skirmish setup derives
 // the whole row from equal ally groups [05 R-SHARE-01 §1] [08 R-SKIR-01 §2].
 //
-// TODO(question): which of the two runtime rows the eleven-byte `Alliances`
-// box carries is not stated by either the writer or the reader census [08
-// "Player records"] — one box is emitted per `Player%i` account and the
-// record holds two rows. The first row is used here because it is the row
-// the alliance predicate reads and the only row this build models at all;
-// the second row (the multiplayer alliance screen's mirror, diagonal-only in
-// skirmish [08 R-SKIR-01 §2]) has no Nanolathe representation to persist.
-// Settled by a static trace of the alliance reader's destination field.
+// The box carries exactly this row — Established (RWU-19-198): the save
+// writer copies row A into the eleven-byte `Alliances` box and the reader
+// copies the box back into row A before forcing the self column; row B (the
+// multiplayer alliance screen's mirror, diagonal-only in skirmish
+// [08 R-SKIR-01 §2]) is neither written nor read by the save path
+// [08 R-SAVE-02 §15]. This used to be an open question here, resolved by the
+// same choice on the grounds that row A is the only row this build models.
 func (p Player) AllianceRow(slot int) [AllianceRowBytes]byte {
 	var row [AllianceRowBytes]byte
 	for i := range p.Allies {

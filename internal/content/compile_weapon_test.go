@@ -426,10 +426,11 @@ func TestWeaponFirestarterTruncatesToByte(t *testing.T) {
 // at most 65,535 for the unsigned stores, within -32768..32767 for the
 // signed ones — never as an arbitrary-magnitude 32-bit negative.
 //
-// burstrate, duration and smokedelay have an established 16-bit width but no
-// established signedness [06 §4.3, §6.4]; this test also locks that they are
-// deliberately left as a plain *30 truncation with no second wrap, so a
-// later change that starts guessing a sign for them is caught here too.
+// burstrate, duration and smokedelay are unsigned 16-bit stores too: every
+// reader zero-extends the word and compares unsigned [06 R-WPN-05 §12]
+// [02 R-KEYS-01 §6], so they wrap exactly as weapontimer does; this test locks
+// the zero-extension against a sign-extending regression (a value above
+// 32767/30 seconds is the case that tells the two apart).
 func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
 	body := `[DURTEST]
 {
@@ -475,14 +476,41 @@ func TestWeaponDurationKeysWrapTo16Bits(t *testing.T) {
 		t.Fatalf("holdtime(-1200) = %d, want 29536 [07 \"in-flight camera move\"]", wd.HoldTime)
 	}
 
-	// No established signedness: left as the plain *30 truncation, unwrapped.
-	if wd.BurstRate != -30 {
-		t.Fatalf("burstrate(-1) = %d, want -30 (untruncated, signedness not established)", wd.BurstRate)
+	// Unsigned 16-bit stores read zero-extended [06 R-WPN-05 §12]: -1 wraps to
+	// 65,506 like weapontimer, never to -30.
+	if wd.BurstRate != 65506 {
+		t.Fatalf("burstrate(-1) = %d, want 65506 [06 R-WPN-05 §12]", wd.BurstRate)
 	}
-	if wd.Duration != -30 {
-		t.Fatalf("duration(-1) = %d, want -30 (untruncated, signedness not established)", wd.Duration)
+	if wd.Duration != 65506 {
+		t.Fatalf("duration(-1) = %d, want 65506 [06 R-WPN-05 §12]", wd.Duration)
 	}
-	if wd.SmokeDelay != -30 {
-		t.Fatalf("smokedelay(-1) = %d, want -30 (untruncated, signedness not established)", wd.SmokeDelay)
+	if wd.SmokeDelay != 65506 {
+		t.Fatalf("smokedelay(-1) = %d, want 65506 [06 R-WPN-05 §12]", wd.SmokeDelay)
+	}
+
+	// The case that separates zero- from sign-extension: 1100 s is 33,000
+	// ticks, above 32,767 and below 65,536. A sign-extending reader would see
+	// -32,536; the zero-extending readers see 33,000 [06 R-WPN-05 §12]. The
+	// same authored value wraps the signed reloadtime store to -32,536.
+	above := mustParseTDF(t, `[ABOVE]
+{
+	ID=2;
+	burstrate=1100;
+	duration=1100;
+	smokedelay=1100;
+	reloadtime=1100;
+}
+`)
+	wa := compileWeaponSection(above.Root.Sections()[0], "ABOVE", Provenance{})
+	for _, c := range []struct {
+		name string
+		got  int32
+	}{{"burstrate", wa.BurstRate}, {"duration", wa.Duration}, {"smokedelay", wa.SmokeDelay}} {
+		if c.got != 33000 {
+			t.Fatalf("%s(1100) = %d, want 33000 (zero-extended) [06 R-WPN-05 §12]", c.name, c.got)
+		}
+	}
+	if wa.ReloadTime != -32536 {
+		t.Fatalf("reloadtime(1100) = %d, want -32536 (sign-extended) [06 §4.2]", wa.ReloadTime)
 	}
 }

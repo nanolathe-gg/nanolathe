@@ -9255,7 +9255,8 @@ battle pumps; MCI completion notifications also run it):
    happens every tick in this branch even while a matching track plays).
    If `playing` and `category[next] == desired` → step 7. Else scan forward
    from `next` for up to `(u + 1) · count` steps, wrapping `count → 1`; the
-   `(u + 1)`-th track whose category equals `desired` is played (a uniform
+   `(u + 1)`-th track whose category equals `desired` is played (**corrected
+   2026-09-04**: the `max(1, u)`-th match, see [R-AUD-01 §8]; a uniform
    pick among the matching tracks when the scan is long enough — the
    `(u+1)·count` budget guarantees it whenever at least one matches);
    none → stop and reset (status 0, `next = 1`), skip step 7.
@@ -9614,6 +9615,141 @@ messages ([07 R-FE-02 §1]). None of them touches audio state; each is cited
 to its owner in the ledger. Two audio facts they settled: the constant
 helper that makes `UseWindowsSound` force the no-DirectSound flag simply
 returns 1 ([R-AUD-01 §1]); and the reaper cadence above.
+### Closed — the composed piece offset a simulation consumer adds is `(x, y, −z)` of the model-space composition [R-RAST-01 §8] (2026-09-04, RWU-19-198)
+
+§2.4 left the sense of Z that a *simulation* consumer of a queried piece
+position owes as a probe-pending inference, and three consumers were in three
+states — the build plate settled by yard maps, the nano source a Supported
+inference ([§5.5 "The nano source point's coordinate space"]), the weapon
+muzzle Unknown ([06 §4.1]). The piece locator itself has now been read, with
+every simulation-side caller. There is one locator and every consumer goes
+through it, so the three share one answer.
+
+**Established — the locator.** Given a unit and a piece index it returns a
+three-word offset, built as follows (all 16.16, integer arithmetic except the
+rotation helper's trig):
+
+1. Start with the piece's own translation: the post-load parent translation
+   of §2.4 (already half-turned: `−X, −Z` of the authored file) plus the
+   piece's three script translation lanes. The piece's own rotation words
+   are **not** applied — a piece rotates about its own origin, so they cannot
+   move it.
+2. Walk the parent chain to the root. For each ancestor: rotate the running
+   offset by that ancestor's three rotation words in the order Z, then X,
+   then Y through the shared coordinate-pair rotation helper — the same
+   order §2.4 gives the draw path — and then add the ancestor's post-load
+   parent translation plus its script lanes. When the ancestor is the root
+   (no parent of its own), the unit's bank is added to its Z word, the
+   unit's heading to its Y word and the unit's pitch to its X word before
+   the rotation, by plain sixteen-bit addition with no negation — the C24
+   fold, confirmed at the simulation locator and not only in the draw path.
+3. Return `(x, y, −z)`: the Z component is negated **on output**, in a
+   register, as the last step. Nothing is stored back to the model.
+
+**Established — the consumers.** Every simulation caller that turns the
+triple into a world point adds it to the unit's own position with no further
+sign change: `world = unitPosition + (x, y, −z)`. Those callers are the
+weapon muzzle query for all three weapon slots (the
+`QueryPrimary`/`QuerySecondary`/`QueryTertiary` path of [06 §4.1] and the
+burst re-query of [06 §4.3]), the `QueryNanoPiece` spray source of §5.5, and
+the two piece-position COB ports of [04 R-COB-03 §2] (packed X/Z whole
+parts, and world Y). The only other caller, the transport pickup executor of
+[04 R-AIR-01 §9], reads the locator for its `QueryTransport` piece and uses
+the Y word alone (negated, as the hang altitude of the follow marker), so
+the Z sense never reaches it. No caller re-negates, and no caller adds the
+un-negated triple.
+
+**Consequence — the two paths agree, and the sign convention.** The draw
+path narrows a model-relative vertex as `hi16(−vz)` while a unit's own
+position enters unnegated ([R-RAST-01 §2]); the locator negates the
+composed Z once on output. Both therefore map model-space `(x, y, z)` to
+world `(x, y, −z)`, and a muzzle, a spray source or a script-queried piece
+sits where the model pass draws it. In authored (file) coordinates, with the
+half-turn of §2.4 folded in, a piece authored at `(ax, ay, az)` on a unit at
+heading 0 — which faces world `−Z` ([04 R-MOV-01 §4], [06 R-WPN-05 §11]) —
+lands at world `unit + (−ax, ay, +az)`: the authored X is mirrored, the
+authored Z is kept, and the heading rotation is the plain Y-word rotation
+of §2.4 with the unit heading added unnegated. Confidence: **Established**
+for the sense (direct read of the locator's output and of every caller's
+addition); the rotation helper's own formulas are §2.4's and are not
+re-derived here.
+
+**Corrections.**
+
+- §2.4's worked example — "a flare authored at `(2,1,-30)` appears at
+  `(-2,1,+30)` world plus unit origin", with "the pristine post-load vectors
+  without a second negation" — describes the *stored* model-space vector
+  correctly (no second store exists) but names it "world" wrongly: the
+  locator's output negation makes the world offset `(−2, 1, −30)`. The
+  example's Z sign is inverted; the "no second store" clause stands.
+- §5.5's nano source point: the Supported inference
+  `unit + (offsetX, offsetY, −offsetZ)` is now **Established**, at the
+  submission site rather than by the two projections.
+- [06 §4.1]'s Unknown on the sense of "added to the unit's world position"
+  is closed by this section: the muzzle is `unit + (x, y, −z)`.
+- The `ta_probe_xz` fixture §2.4 and §5.5 name as the decider is no longer
+  needed for the sense of a composed offset; it remains only as a check on
+  the authored nose axis, which is an asset-side question.
+
+**Implementation rule.** Compose in model space exactly as the draw path
+does (post-half-turn translations plus script lanes, rotations Z, X, Y with
+the unit's bank/heading/pitch added to the root's words), then negate Z
+once, then add the unit position. Do not negate per consumer; do not negate
+inside the composition; do not skip the negation for any of the three
+consumer families that form a world point.
+
+### Closed — the music tick's two category overrides, their precedence, and the category scan's pick index [R-AUD-01 §8] (2026-09-04, RWU-19-198)
+
+[R-AUD-01 §4]'s seven-step tick has been re-read end to end to settle whether
+an implementation whose desired category can be set independently of the
+play mode must reproduce steps 2 and 4. It must; the order of the steps is
+the order of the tests in the tick, and two precisions and one correction
+follow.
+
+**Established — the two overrides and their precedence.** After the
+`count == 0` return and **before** the paused test:
+
+1. **Silence (`desired == 4`, `Unused`).** `stop cdaudio`; `next` becomes
+   `1` when the count is non-zero, else `0`; status 0; fade level 0; both
+   fade timers cancelled; return. Because this precedes the paused test, a
+   **paused** CD is stopped when a screen requests silence — the resume of
+   the pause/resume pair then has nothing to resume (status is 0, and the
+   resume path runs only when status ≠ 0).
+2. Then the paused test (status 2 → return).
+3. **Victory / Defeat (`desired ∈ {2, 3}`).** The category branch (step 6
+   of §4) runs **regardless of the play mode** — including mode 0 (idle),
+   where the ordinary dispatch would only stop a still-playing drive. The
+   category branch's own gate then decides: a `playing` drive whose `next`
+   track already carries the desired category is left alone and only the
+   tail runs; anything else scans and either plays a matching track or
+   stops.
+4. Otherwise the play-mode switch of §4 step 5, with `Custom` (mode 4)
+   entering the same category branch.
+
+So the precedence is: count, then silence, then paused, then Victory/Defeat,
+then the play mode. Nothing in the executable requests categories 2 or 3
+(§4's bounded negative stands), so the second override is inert in retail
+content; the first is exercised by every front-end screen ([R-AUD-01 §5]).
+
+**Correction — the scan's pick index.** §4 step 6 said the scan plays "the
+`(u + 1)`-th track whose category equals `desired`". It plays the
+**`max(1, u)`-th** matching track: the counter is decremented on each match
+and the scan stops when it reaches zero or below, so `u = 0` and `u = 1`
+both select the first match, `u = 2` the second, and `u = 15` the
+fifteenth. The budget of `(u + 1) · count` steps is unchanged and still
+guarantees a hit whenever at least one track matches. (With sixteen equally
+likely values of `u`, the first matching track is chosen twice as often as
+any other — a retail quirk, reproduce it.) Two draws are still consumed
+nowhere else in the branch: `u` is the only draw, taken before the poll.
+
+**Established — a dead argument.** After a successful pick the tick also
+counts how many consecutive tracks after the pick (up to `count`) share the
+desired category and passes that count as a second argument to the play
+primitive; the primitive accepts two stack arguments and never reads the
+second (the other call sites pass unrelated registers there). It has no
+effect on the `play cdaudio from … to …` command, whose bound is
+`physical + 1` as §4 states.
+
 
 ## 9. Smacker cinematics and movie capture
 

@@ -243,6 +243,73 @@ func TestSelectedSideMismatchConsumesOneDrawWithoutRedraw(t *testing.T) {
 	}
 }
 
+// TestCarrierScoreNeverPositiveWithoutMetalExtraction locks [08 R-AI-04 §2]'s
+// "carriers are not built" finding: the class routine zeroes the other-mix
+// coefficient for every `canload` definition outright, and its metal and
+// energy coefficients (`clamp(100*extractsMetal - 0.02*buildCostMetal -
+// 25*makesMetal)` and `clamp(-0.0025*buildCostEnergy - 5*Classify)`) carry no
+// positive term when the definition does not extract metal — so for a
+// `canload` definition that does not extract metal, all three coefficients
+// sit at or below zero and the candidate score is at or below zero under
+// every economy mix, regardless of profile weight.
+func TestCarrierScoreNeverPositiveWithoutMetalExtraction(t *testing.T) {
+	carrier := &content.UnitDef{
+		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("carrier")},
+		UnitName:         "carrier",
+		CanLoad:          true, // the zeroing key [08 R-AI-04 §2]
+		CanAttack:        true, // would otherwise contribute +21 to the other-mix accumulator
+		BuildCostMetal:   1000,
+		BuildCostEnergy:  8000,
+		// ExtractsMetal and MakesMetal both left at zero: "does not extract
+		// metal" [08 R-AI-04 §2].
+	}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{carrier.CanonicalKey: carrier}}
+	strat := &Strategic{
+		Catalog:       cat,
+		Counts:        map[string]int32{carrier.CanonicalKey: 0},
+		ClassVectors:  map[string]ClassVector{carrier.CanonicalKey: {}},
+		SingleVectors: map[string]int8{carrier.CanonicalKey: 0},
+	}
+	strat.recomputeClassVectors()
+	cv := strat.ClassVectors[carrier.CanonicalKey]
+	if cv.C0 > 0 || cv.C1 > 0 || cv.C2 > 0 {
+		t.Fatalf("carrier class vector = %+v, want every coefficient at or below zero [08 R-AI-04 §2]", cv)
+	}
+
+	// Every corner of the economy mix (metal-dominant, blended, other-
+	// dominant) at maximum weight still scores at or below zero: nonpositive
+	// coefficients dotted with a nonnegative mix can never turn positive.
+	mixes := []ScoreInputs{
+		{CurEnergy: 0, CapEnergy: 1000, NetEnergy: 0, ProdEnergy: 0, CurMetal: 0, CapMetal: 500, NetMetal: 0, ProdMetal: 0},         // starved: mix 100/100/0
+		{CurEnergy: 800, CapEnergy: 1000, CurMetal: 400, CapMetal: 500, NetEnergy: 5, NetMetal: 5, ProdEnergy: 300, ProdMetal: 10},  // calm: mix 25/0/75
+		{CurEnergy: 1000, CapEnergy: 1000, NetEnergy: 5, ProdEnergy: 300, CurMetal: 500, CapMetal: 500, NetMetal: 5, ProdMetal: 10}, // settled: mix 0/0/100
+	}
+	for _, in := range mixes {
+		if s := ComputeScore(in, cv, 100); s > 0 {
+			t.Fatalf("carrier score under mix %+v = %d, want at or below zero [08 R-AI-04 §2]", in, s)
+		}
+	}
+
+	// The full selection pipeline: with no positive candidate, the reservoir
+	// is never reached and the RNG stream is never drawn from — "skipped
+	// without drawing" [08 R-AI-04 §2].
+	rng.SeedGlobal(9, 0)
+	sel := &testSelector{
+		player:    1,
+		profile:   &Profile{Weight: map[string]int32{carrier.CanonicalKey: 100}, Limit: map[string]int32{}},
+		strategic: strat,
+	}
+	builder := testBuilder("armcom")
+	econStarved := testEcon(1, 50, 1000, 25, 500, 0, 0, 0, 0) // clears the C5 gates; mix is otherwise irrelevant given the vector above
+	before := rng.Global.Sim.Draws()
+	if _, ok := SelectWithCandidates(sel, builder, econStarved, []string{carrier.CanonicalKey}); ok {
+		t.Fatalf("carrier definition was selected despite a nonpositive score")
+	}
+	if after := rng.Global.Sim.Draws(); after-before != 0 {
+		t.Fatalf("carrier-only selection drew %d RNG values, want zero [08 R-AI-04 §2]", after-before)
+	}
+}
+
 // TestGates checks each C5 gate in isolation [PLAN 11 C5] [08].
 func TestGates(t *testing.T) {
 	builder := testBuilder("armcom")

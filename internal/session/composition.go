@@ -1887,17 +1887,21 @@ func sessionUnitLimit(s *Session) int32 {
 	// session composed without one (a fixture) reads the missing-value
 	// default through the same clamp.
 	//
-	// TODO(T25): where the carried-over word lives IS traced — the marker that
-	// stood here said it was not. [08 R-ENTRY-01 §6] names the destination
-	// exactly: the battle-restoration dispatcher's first step is
-	// `Summary.maxunits` → the **lobby unit-limit copy**, which is the same
-	// start-up word `[Preferences] UnitLimit` seeds and battle entry clamps
-	// 20..500 [08 R-SKIR-01 §6]. The pool for the battle being loaded was
-	// already sized from that copy as it stood *before* the restore, so the
-	// restored value only reaches the next battle — and a second load in one
-	// process must therefore read it here. This engine still drops it because
-	// the write belongs at the restore site (`SkirmishConfig.UnitLimit`, set
-	// while staging a retail battle), in files this unit does not own.
+	// TODO(T25): the restored `Summary.maxunits` does not yet reach a second
+	// battle in one process. Retail's destination is traced exactly
+	// [08 R-ENTRY-01 §6][08 R-SESS-01 §9]: the battle-restoration dispatcher
+	// stores the item, when present and unclamped, into the **configured**
+	// unit-limit word — the process-wide `[Preferences] UnitLimit` copy the
+	// start-up read clamps 20..500 — and the next skirmish battle entry copies
+	// that word verbatim into its session limit. The battle being restored is
+	// unaffected (its pool was sized before the restore, RetailLoadDeps).
+	// Nanolathe's configured word is the application's setup record in
+	// cmd/nanolathe (`g.setup.UnitLimit`, which feeds SkirmishConfig.UnitLimit
+	// and RetailLoadDeps.UnitLimit); this package holds only the per-battle
+	// copy read here, so the carry is one application-level write at the
+	// restore site — `g.setup.UnitLimit = int(stage.Image.Summary.MaxUnits)`
+	// when the Summary carries the item — not a session change. Until that
+	// write exists a second load keeps the pre-restore configured value.
 	if s == nil {
 		return int32(ClampUnitLimit(0))
 	}

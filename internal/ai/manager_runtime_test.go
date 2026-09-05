@@ -1,6 +1,10 @@
 package ai
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strconv"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -717,4 +721,189 @@ func TestWaveAndExploreNoTargetPathsAreDeterministicNoOps(t *testing.T) {
 	if q := orders.QueueOfUnit(w.Unit(group[0])); q != nil && len(q.Primary()) != 0 {
 		t.Fatalf("no-target explore submitted an order: %v", q.Primary())
 	}
+}
+
+// TestCode9ResolvesThroughReclamateMirrorBit locks [08 R-AI-04 §5]: the
+// manager's construction-repositioning and explore-patrol bodies both submit
+// intent 9 through the ordinary resolver (resolveAIIntent -> orders.Resolve),
+// whose code-9 rule turns it into RepairPatrol / VTOL_RepairPatrol when the
+// actor's definition carries the canreclamate mirror bit and into plain
+// Patrol / VTOL_Patrol otherwise [04 R-ORD-02 §1]. This is the whole of the
+// computer player's repair and reclaim policy: it never chooses a repair or
+// reclaim target itself, it only ever lands a builder on the handler that
+// does.
+func TestCode9ResolvesThroughReclamateMirrorBit(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		canReclaim bool
+		canFly     bool
+		wantOrder  string
+	}{
+		{"ground reclaimer", true, false, "RepairPatrol"},
+		{"air reclaimer", true, true, "VTOL_RepairPatrol"},
+		{"ground non-reclaimer", false, false, "Patrol"},
+		{"air non-reclaimer", false, true, "VTOL_Patrol"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			def := &content.UnitDef{
+				DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey(tt.name)},
+				UnitName:         tt.name,
+				Builder:          true,
+				CanMove:          true,
+				CanPatrol:        true,
+				CanFly:           tt.canFly,
+				CanReclamate:     tt.canReclaim,
+			}
+			actor := &units.Unit{Def: def, Alive: true} // Flags==0: mobile (bit 29 clear), so hasLiveMover admits the patrol arm rather than QPatrol
+			id := resolveAIIntent(9, actor, nil, numeric.FixedFromInt(10), 0, numeric.FixedFromInt(10))
+			want := orders.Lookup(tt.wantOrder)
+			if want == 0 {
+				t.Fatalf("test setup: %q has no registered handler", tt.wantOrder)
+			}
+			if id != want {
+				t.Fatalf("code 9 for %s resolved to id %d, want %q (id %d) [08 R-AI-04 §5][04 R-ORD-02 §1]", tt.name, id, tt.wantOrder, want)
+			}
+		})
+	}
+}
+
+// TestOrderSubmissionSeamCarriesOnlyMoveAttackPatrolCodes locks the resolver
+// half of [08 R-AI-04 §2]'s command-code census at the submitter seam,
+// without driving a battle: every task body in this file that resolves an
+// order reaches the shared resolver through exactly two call shapes,
+// resolveAIIntent(intent, actor, target, x, y, z) and
+// (*Manager).broadcastGroupOrder(w, group, intent, modifier, target, ...),
+// and doc 08 traced the whole image-wide closure's resolver codes as exactly
+// 2 (move), 3 (attack) and 9 (patrol) — never 5, 6, 7, 8, 12 or 13 — with
+// every code-2 call carrying no target unit, which is what makes the
+// target-dependent arms of code 2 (Capture, ReclaimUnit, HelpBuild,
+// RepairUnit, VTOL_Landing, the pickup and follow pairs) unreachable.
+// Command code 14 (mobile build) is not part of this resolver seam at all:
+// it is the separate typed BuildRequest producer (internal/ai/build.go),
+// which construction_order_gate_test.go and build_site_entombment_test.go
+// already exercise.
+//
+// This test parses manager.go's own source and walks every call to those two
+// functions outside broadcastGroupOrder's own body (which is only the
+// pass-through to resolveAIIntent, not a fresh submission site), resolving a
+// literal intent argument directly and a variable intent argument (doExplore's
+// leg loop, which reuses one local across a 9/2 split) through that function's
+// own literal assignments. A future call site that passes a different code, or
+// that lets a code-2 call carry a target, fails this test the moment it is
+// added — no fixture reconstruction of every task's live groups required.
+func TestOrderSubmissionSeamCarriesOnlyMoveAttackPatrolCodes(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "manager.go", nil, 0)
+	if err != nil {
+		t.Fatalf("parse manager.go: %v", err)
+	}
+
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if fn.Name.Name == "broadcastGroupOrder" {
+			// Its own body only forwards the caller's intent/target straight
+			// into resolveAIIntent; the real submission sites are its
+			// callers, walked below like any other task body.
+			continue
+		}
+		literals := collectSeamIntLiterals(fn.Body)
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			var intentArg, targetArg ast.Expr
+			switch callee := call.Fun.(type) {
+			case *ast.Ident:
+				if callee.Name != "resolveAIIntent" || len(call.Args) < 3 {
+					return true
+				}
+				intentArg, targetArg = call.Args[0], call.Args[2]
+			case *ast.SelectorExpr:
+				if callee.Sel.Name != "broadcastGroupOrder" || len(call.Args) < 5 {
+					return true
+				}
+				intentArg, targetArg = call.Args[2], call.Args[4]
+			default:
+				return true
+			}
+			pos := fset.Position(call.Pos())
+			codes := seamLiteralValues(intentArg, literals)
+			if len(codes) == 0 {
+				t.Fatalf("%s: could not resolve a literal command code for this submission seam call; extend the test's literal tracing instead of assuming a value", pos)
+			}
+			for _, code := range codes {
+				if code != 2 && code != 3 && code != 9 {
+					t.Fatalf("%s: order submission seam passed command code %d, want only 2 (move), 3 (attack) or 9 (patrol) [08 R-AI-04 §2]", pos, code)
+				}
+				if code == 2 && !isSeamNilIdent(targetArg) {
+					t.Fatalf("%s: command code 2 (move) carried a non-nil target; every code-2 call in the traced closure passes a position only [08 R-AI-04 §2]", pos)
+				}
+			}
+			return true
+		})
+	}
+}
+
+// collectSeamIntLiterals gathers, for one function body, every integer
+// literal ever assigned to a local identifier — both `:=` and `=`, matched
+// lhs/rhs by position. It is deliberately shallow (no control-flow or
+// cross-function tracing): the one seam call site that needs it,
+// doExplore's `intent, modifier := 9, uint8(1)` / `intent, modifier = 2, 0`
+// pair, only ever assigns bare integer literals to the identifier this test
+// reads back.
+func collectSeamIntLiterals(body ast.Node) map[string][]int64 {
+	out := make(map[string][]int64)
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || len(assign.Lhs) != len(assign.Rhs) {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			ident, ok := lhs.(*ast.Ident)
+			if !ok || ident.Name == "_" {
+				continue
+			}
+			lit, ok := assign.Rhs[i].(*ast.BasicLit)
+			if !ok || lit.Kind != token.INT {
+				continue
+			}
+			v, err := strconv.ParseInt(lit.Value, 0, 64)
+			if err != nil {
+				continue
+			}
+			out[ident.Name] = append(out[ident.Name], v)
+		}
+		return true
+	})
+	return out
+}
+
+// seamLiteralValues resolves one call argument to the set of literal integer
+// codes it can carry: itself, if it is already a literal, or every value the
+// enclosing function ever assigned to it, if it is a local identifier.
+func seamLiteralValues(arg ast.Expr, literals map[string][]int64) []int64 {
+	switch e := arg.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.INT {
+			return nil
+		}
+		v, err := strconv.ParseInt(e.Value, 0, 64)
+		if err != nil {
+			return nil
+		}
+		return []int64{v}
+	case *ast.Ident:
+		return literals[e.Name]
+	default:
+		return nil
+	}
+}
+
+func isSeamNilIdent(arg ast.Expr) bool {
+	ident, ok := arg.(*ast.Ident)
+	return ok && ident.Name == "nil"
 }

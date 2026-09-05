@@ -512,7 +512,8 @@ func PlayerSlotFromEconomy(index int, p economy.Player) PlayerSlot {
 		UpdateTime: int32(p.UpdateTime), WinLoseTime: int32(p.WinLoseTime), DisplayTimer: int32(p.DisplayTimer),
 		Controller: p.ControllerState, Logo: p.Logo, Side: p.Side,
 		// Row i of the bank is slot i's own alliance row, taken from the
-		// runtime table that owns it [08 "Player records"] [05 R-SHARE-01 §1].
+		// runtime table that owns it — row A, the alliance predicate's row
+		// [08 R-SAVE-02 §15] [08 "Player records"] [05 R-SHARE-01 §1].
 		Alliances: p.AllianceRow(index), HasAlliances: true,
 	}
 }

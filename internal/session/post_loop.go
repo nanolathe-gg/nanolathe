@@ -1,37 +1,44 @@
 package session
 
-// PostLoopHooks are the seams for the three outer executor structures, whose
-// order is Established [01 §4.4][01 R-PLAT-02 §7]. Nil hooks are explicit
-// no-ops for the single-thread runtime.
+// PostLoopHooks are the seams for the outer executor tail, whose order is
+// Established [01 §4.4][01 R-PLAT-02 §7]. Nil hooks are explicit no-ops for
+// the single-thread runtime.
+//
+// RetireMessageLine is the tail's second step: the in-battle message ring's
+// text-scroll retire — at most one line per call, when the line at the
+// display index was posted more than `(textscroll + 1) × 30` ticks ago
+// [01 R-PLAT-02 §8][07 R-CAM-01 §7]. The ring is presentation state owned by
+// the frame package (frame.MessageRing.Expire), never simulation state, so
+// the session carries no copy of it; the hook lets a presentation layer that
+// wants retail's cadence retire on the session's pump rather than its own.
 type PostLoopHooks struct {
 	Barrier           func(index int, lastTick uint32)
-	SlideDeadlineRing func(lastTick uint32)
+	RetireMessageLine func(lastTick uint32)
 	CompactPending    func(lastTick uint32)
 }
 
-// TODO(question): the record owner of the 30-entry post-loop deadline ring.
-// The reading that it is the network receive-frame window is *Supported
-// inference* — it sits beside the receive queue — and doc 01 carries it as an
-// open item whose decider is a static trace of the ring's producers [01 §4.4]
-// [01 "Missing and unknown", clock/network/determinism]. Nothing in a
-// single-player session produces a record for it, so the slide is inert
-// either way; SlideDeadlineRing stays a seam rather than a guess.
+// The record owner of the tail's 30-entry ring is settled: it is the in-battle
+// message ring, indexed by a producer index the poster advances and a display
+// index the retire advances, each record a 64-byte line plus its post tick,
+// source unit, silence byte and class nibble [01 R-PLAT-02 §8]. The
+// `TODO(question)` that stood here read it as the network receive-frame
+// window (a layout guess) and this package modelled a generic 30-entry
+// deadline window with no producer; both are gone. The tail is three steps —
+// barriers, message-ring retire, temporary-sight expiry — not four
+// [01 R-PLAT-02 §7][01 R-PLAT-02 §8].
 //
-// **Correction.** This marker used to ask the same question about the
-// *pending-expiry* list as well, and the PostLoopHooks comment above claimed
-// its payload was outside this package's model. Both halves were wrong.
-// [01 R-PLAT-02 §5] establishes that list completely: it is the temporary-
-// sight ("eyeball") observer list, 20 records of 36 bytes allocated at battle
-// entry, produced by the central unit-death handler in EVERY session kind,
-// with the throttled LOS refresh as its expiry callback and an in-place
-// compaction after the pass — and this package already models it, as the
-// eyeballs field below.
+// **Correction (kept for the audit trail).** An earlier marker asked the same
+// question about the *pending-expiry* list as well. [01 R-PLAT-02 §5]
+// establishes that list completely: it is the temporary-sight ("eyeball")
+// observer list, 20 records of 36 bytes allocated at battle entry, produced by
+// the central unit-death handler in EVERY session kind, with the throttled LOS
+// refresh as its expiry callback and an in-place compaction after the pass —
+// modelled here as the eyeballs field.
 
 type postLoopState struct {
 	hooks            PostLoopHooks
 	trace            []string
 	publicationCount uint32
-	ring             deadlineRing
 	pending          pendingList
 	eyeballs         eyeballList // temporary-sight records [01 R-PLAT-02 §5]
 }
@@ -97,10 +104,11 @@ func (s *Session) runRetailPostLoopTail(lastTick uint32) {
 	state.barrierOne(lastTick)
 	state.barrierTwo(lastTick)
 	state.barrierThree(lastTick)
-	state.trace = append(state.trace, "deadline-ring-slide")
-	state.ring.slide(lastTick)
-	if state.hooks.SlideDeadlineRing != nil {
-		state.hooks.SlideDeadlineRing(lastTick)
+	// The message-ring retire is presentation work [01 R-PLAT-02 §8]; the
+	// session only keeps its place in the tail.
+	state.trace = append(state.trace, "message-ring-retire")
+	if state.hooks.RetireMessageLine != nil {
+		state.hooks.RetireMessageLine(lastTick)
 	}
 	state.trace = append(state.trace, "pending-compact")
 	state.pending.compact(lastTick)
@@ -108,7 +116,7 @@ func (s *Session) runRetailPostLoopTail(lastTick uint32) {
 		state.hooks.CompactPending(lastTick)
 	}
 	// The temporary-sight expiry pass is the tail's last step, after the
-	// deadline-ring slide [03 R-COMP-02 §2][01 R-PLAT-02 §5].
+	// message-ring retire [03 R-COMP-02 §2][01 R-PLAT-02 §5].
 	state.trace = append(state.trace, "eyeball-expire")
 	state.eyeballs.expire(s.Vis, lastTick)
 }
@@ -131,30 +139,6 @@ func (s *postLoopState) barrierThree(lastTick uint32) {
 	s.trace = append(s.trace, "barrier-3")
 	if s.hooks.Barrier != nil {
 		s.hooks.Barrier(3, lastTick)
-	}
-}
-
-const deadlineRingSize = 30
-
-// deadlineRing is the fixed-size outer deadline window. count and head are
-// container bookkeeping, not claims about the unresolved retail record
-// payload or owner. Each stored value is an already-resolved effective
-// deadline (record value plus its window offset); the executor advances while
-// the head is due and leaves record production behind the owner seam [01 §6.2].
-type deadlineRing struct {
-	count             uint8
-	head              uint8
-	effectiveDeadline [deadlineRingSize]uint32
-}
-
-func (r *deadlineRing) slide(lastTick uint32) {
-	if r == nil || r.count == 0 {
-		return
-	}
-	for r.count > 0 && r.effectiveDeadline[r.head] < lastTick {
-		r.effectiveDeadline[r.head] = 0
-		r.head = (r.head + 1) % deadlineRingSize
-		r.count--
 	}
 }
 

@@ -9550,14 +9550,15 @@ advances by two. These initialization and success updates are one state
 transition contract; applying either in isolation does not preserve the
 two-sided wall-follow.
 
-**Unknown — upper successful-step state.** The exact upper successful-step
-update is not closed independently of its initialization and origin-repeat
-state. Nanolathe preserves its existing one-sector decrement as a
-`TODO(question)` placeholder because changing that update alone breaks the
-established wall-rejoin fixtures. *Decider:* a coordinated clean-room trace of
-the upper cursor's initialization, stored-versus-actual direction, successful
-transition, and origin-repeat comparison, verified by a bounded authored
-wall-rejoin fixture.
+**Closed 2026-09-04 — the whole wall-follow state machine, both cursors, is
+in [R-PATH-01 §15].** This paragraph previously read "*Unknown — upper
+successful-step state.* The exact upper successful-step update is not closed
+independently of its initialization and origin-repeat state ... Nanolathe
+preserves its existing one-sector decrement as a `TODO(question)`
+placeholder". §15 also corrects four statements made above: the lower
+cursor's first candidate, the "eight probes each charging a step" charging
+rule, the "comes back to the cell it started from" termination, and the
+direction byte the lower cursor writes.
 
 ### Closed — the goal classes, exactly [R-PATH-01 §9] (2026-08-29)
 
@@ -11585,10 +11586,10 @@ writes no cell either way.
 *Implementation note (not a retail fact).* Nanolathe reproduces the sector
 selection and the column-major sweep exactly, deriving each candidate's record
 from its committed position and its off-map filing from the same bounds test.
-It does **not** reproduce the within-bucket order: that needs a per-unit link
-sequence maintained at every stamp site and dropped at finalisation, which the
-build does not carry. Inside one sector it falls back on the deterministic
-live-unit order, and `OccupancyGrid.overlapScan` carries the marker.
+**Updated 2026-09-04:** this note used to say the build did *not* reproduce
+the within-bucket order and fell back on live-unit order inside one sector.
+It now does — the relink events an implementation must mirror are listed in
+[R-COLL-01 §11].
 
 ### Closed — the blocked flag: writers, readers, persistence, and the save bit [R-COLL-01 §5] (2026-08-29)
 
@@ -12370,7 +12371,9 @@ position** (three 16.16 components, initialized to the unit's spawn X/Y/Z), a
 **command velocity** (three 16.16 components, initialized to zero), a **command
 heading** (16-bit, initialized to the unit's spawn heading), and a flags byte
 whose bit `0x01` is a "mover mode changed" dirty flag and whose bits `1..2`
-mirror the last observed committed mover mode. The integrator's single input
+mirror the last observed committed mover mode (the byte's reader and its
+clear site are [R-AIR-01 §17]: the multiplayer unit-state stream, and nothing
+else). The integrator's single input
 fetch copies out the command position, the command velocity and the command
 heading; nothing else crosses that boundary. This is the "order-layer
 command-target supply for each non-construction air class" that §10.3's Unknown
@@ -14535,7 +14538,181 @@ row 0–9 carries its own slot number in that byte (*Supported inference* from
 [R-ORD-02 §1]'s own-unit test, which compares a unit's owner byte with the
 local slot; decider: the seat-setup writer), the third clause is inert in any
 battle — which is why [05 R-SHARE-01 §3]'s parallel gate reads it as "the
-slot's own index is not 10".
+slot's own index is not 10". **Established 2026-09-04:** the seat-setup
+writer was read and it stores the slot's own index — [R-MOV-03 §11].
+
+### Closed — the ally-group byte holds the slot's own index: the seat-setup writer [R-MOV-03 §11] (2026-09-04)
+
+**Established (RWU-19-199, direct read of the row constructor, the seat-setup
+routine, its three callers and the battleroom's renumbering pass).** §10
+left as *Supported inference* that "every seated row 0–9 carries its own slot
+number" in the ally-group byte, with the seat-setup writer as the decider.
+The writer was read:
+
+- The **row constructor** seeds the byte with `10` ([05 "Player slot"]).
+- The **seat-setup routine** takes `(slot, control)`. It writes the control
+  byte, sets the row's leading occupancy word to 1, writes **`slot` into the
+  ally-group byte** (and into the two bytes that follow it, whose readers this
+  unit did not trace), sets the row's own entry to 1 in both alliance tables
+  of [05 R-SHARE-01 §1], zeroes the 4 × 4 resource-cell block, and names the
+  row (`Player`, or one of the two computer names) — the rest is [08
+  R-ENTRY-01 §3]'s business.
+- Its **single-player callers** pass the row index as `slot` in every case:
+  the local pre-load state (session state 4) seats row 0 as control 1 and
+  row 1 as control 2; the skirmish entry's seat loop walks the setup record's
+  player list and seats row *i* from entry *i* — control 1 for the human
+  (also recording *i* as the local slot), 2 for a computer, 0 for an empty
+  entry. The network join path (kind 3, out of scope) passes the row index
+  too.
+- The only **other writer** is the multiplayer battleroom's renumbering
+  pass, which walks rows 0–9 and stores the row's own index into a seated
+  row (occupancy word nonzero, control 1/2/3, byte ≠ 10) and `10` into any
+  other. A second copy of that loop exists with no caller.
+
+So in every session kind a seated row's ally-group byte **is** its row
+index, and the only other value the byte ever holds is `10`. No
+single-player path can make it differ. [05 R-SHARE-01 §3]'s reading of the
+sweep gate as "the slot's own index is not 10" is therefore exact, and an
+implementation that indexes its alliance rows by the owner slot number and
+tests the slot for 10 performs retail's arithmetic without a separate byte.
+
+### Closed — the flight command block's flags byte: its writers, its one reader, and its clear site [R-AIR-01 §17] (2026-09-04)
+
+**Established (RWU-19-199, direct read of the block's constructor, payload
+installer, per-tick hook, serializer and the two controller vtables).** §1
+established the writer of the byte's dirty bit `0x01` and left its reader
+unnamed. The census is complete:
+
+- **Writers.** The block's constructor sets bit 0 and clears the mirror bits
+  1–2 (`(flags & ~0x06) | 0x01`; bits 3–7 keep whatever the allocator
+  left). The payload installer sets bit 0 after releasing the old payload and
+  storing the new one. The per-tick hook sets bit 0 when the committed mover
+  mode differs from bits 1–2, before running the producer (§1).
+- **The reader** is the controller's *needs republication* virtual — the same
+  slot the ground route follower fills with "dirty flag set, or the blocked
+  bit differs from the cached copy" ([R-PATH-01 §8]). The flight block's
+  version returns bit 0 alone.
+- **The clear site** is the controller's *serialize* virtual, the next slot:
+  it writes the payload class and the payload's own stream, then the mover
+  mode in two bits, and finally rewrites the byte as `(mode & 3) << 1 |
+  (flags & 0xF8)` — bit 0 cleared, the mirror refreshed. Nothing else clears
+  bit 0 or writes bits 1–2.
+- **The only caller of both virtuals** is the unit-state synchronisation
+  stream writer, called from the per-player sweep ([R-MOV-03 §1]) for
+  control-1/2 rows **only when the session's network flag is set**. It walks
+  the row's live units and serializes each whose controller reports it needs
+  republication. This is the multiplayer transport of [08 R-OOS-01 §1].
+
+**Consequence.** In campaign and skirmish the byte is set at construction,
+set again at every payload install and at every mode change, and never read
+or cleared: the mirror stays at the constructor's zero, so the per-tick
+compare is true whenever the mode is nonzero, and it writes a bit nothing
+consumes. The field is behaviour-inert off the network. An implementation
+may keep it write-only, or omit it, without changing any single-player
+outcome.
+
+### Closed — the within-bucket order, and the relink events an implementation must mirror [R-COLL-01 §11] (2026-09-04)
+
+**Established (RWU-19-199, re-read of the link, unlink, stamp, cargo-apply
+and scan routines of [R-COLL-01 §4A]).** The question the `overlapScan`
+marker still carried — inside one sector, does the clear's scan visit
+candidates in list order, handle order or insertion order — has one answer:
+**list order from the bucket's head, which is the reverse order of the
+units' most recent relink.** Neither handle order nor creation order enters
+it. For an implementation the events that relink are these, exhaustively:
+
+1. **The stamp**, on every call and before its class dispatch, when the
+   record the unit's committed position selects (or the off-map record, when
+   the cell rectangle fails the bounds test) differs from the record the unit
+   is filed in: unlink from the old, head-insert into the new. A unit whose
+   sector has not changed keeps its place. A fresh unit's record reference
+   is null, so **its first stamp always inserts**, and unit finalisation
+   unlinks, so a reused pool slot never inherits a dead unit's place.
+2. **The cargo detach apply** ([R-AIR-01 §9]'s attach/detach event, the
+   detach branch): the unit is head-inserted into the record it is filed in.
+   While carried, its mode-0 stamps kept that record reference current
+   without linking (§4A step 3), so **a released cargo becomes the most
+   recent entry of the sector it is released in**.
+3. **The cargo attach apply** unlinks the unit; while carried it is in no
+   bucket and the scan reaches it through its carrier's cargo list.
+
+The restamp and the clear never relink (§4A). The per-unit state an
+implementation needs is therefore two words: the sector the unit is filed
+under, and a monotonically increasing link sequence written at each of the
+three events above; within one sector the scan order is that sequence,
+descending.
+
+### Closed — the wall follow, exactly: both cursors, the meet test, the charge, and the direction byte [R-PATH-01 §15] (2026-09-04)
+
+**Established (RWU-19-199, instruction-level read of the pre-search ray).**
+§5 established the ray's shape and left the upper cursor's successful-step
+update *Unknown*, with the decider "a coordinated trace of the upper cursor's
+initialization, stored-versus-actual direction, successful transition, and
+origin-repeat comparison". The trace was done for both cursors together.
+Directions are the eight sectors of §7.1 (`0` north, `+1` one sector
+counter-clockwise on the map: NW, W, SW, S, SE, E, NE). Let `d` be the
+cardinal direction the greedy probe just found blocked and `hit` the cell it
+was standing on.
+
+**State.** Two cursors, *upper* (A) and *lower* (B), each with a position
+(both start at `hit`) and one direction word each: A's *actual* probe
+direction `a`, and B's *stored* probe `s`, whose actual step is the
+**opposite** sector (`s + 4`). At entry `a := d + 2` and `s := d + 2` (these
+are the values the first turn's pre-decrements below act on), and a
+*departed* flag is clear.
+
+**One iteration** (repeated until a return or a rejoin):
+
+1. **Charge one step** to the scheduler slice — **once per iteration**, i.e.
+   once per A-turn-plus-B-turn, however many blocked cells either cursor
+   probes. (§5's "one probe each, each charging a step" was wrong.)
+2. **A's turn.** Sentinel `a − 3`; start `a := a − 2`. Probe `posA +
+   delta[a]`; while blocked: if `a` equals the sentinel, **return `best`**
+   (all eight sectors were probed, the blocked `d` included), else `a := a +
+   1`. On the first iteration this makes A probe `d` again, then `d + 1`, …;
+   after a success at `a` the next turn starts at `a − 2` — two sectors back
+   toward the wall it is following.
+3. **A's meet test**, before it moves: if `posA == posB` and `a == s` and
+   *departed*, **return `best`** — A stands where B stands and is about to
+   retrace B's last step backwards (B's actual step was `s + 4`).
+4. A moves; *departed* is set; the cell is marked as §5 says (touched bit,
+   **direction byte `a`**, ray-visited bit); if it already carried the
+   acceptable-terminal bit, **return 0**.
+5. **A's rejoin test** (§5's leg test, unchanged) on the new cell against
+   `hit` and the target: on a rejoin the greedy walk resumes from that cell
+   **without folding its heuristic into `best`** — the greedy loop's own
+   charge and best-zero test follow at once.
+6. Otherwise `best := min(best, scaled h(new cell))`.
+7. **B's turn.** Sentinel `s + 3`; start `s := s + 2`. Probe `posB −
+   delta[s]` (the actual direction is `s + 4`); while blocked: if `s` equals
+   the sentinel, **return `best`**, else `s := s − 1`. On the first iteration
+   `s = d + 4`, so B too re-probes `d` first, then `d − 1`, `d − 2`, …; after
+   a success the next turn's actual start is two sectors on from the step it
+   took. (§5's "first actual candidate is `d − 1`", and the stored
+   `opposite(d − 1)`, were one sector off; the "advances by two" success rule
+   was right.)
+8. **B's meet test**: if `posA` (already moved this iteration) `== posB` and
+   `a == s`, **return `best`** — A has stepped onto B's cell while B is about
+   to step onto A's old cell. No *departed* term.
+9. B moves; the cell is marked with **direction byte `s`** — the stored
+   probe, i.e. the reverse of the step B took (§5 implied the actual step
+   direction, as for A and for the greedy walk); ray-visited bit; terminal
+   bit → **return 0**.
+10. B's rejoin test as in 5; else `best := min(best, scaled h(new cell))`.
+
+**Corrections to §5, stated.** (a) "A side ends the whole ray when it comes
+back to the cell it started from with the same probe direction on a second
+visit" — there is no origin-repeat state; the two ends are the **meet
+tests** of steps 3 and 8, which compare the two cursors with each other.
+(b) "one probe each, each charging a step" — one charge per iteration.
+(c) The lower cursor's first candidate is `d`, not `d − 1`. (d) The lower
+cursor's direction byte is its stored (reverse) probe. (e) The upper
+cursor's successful-step update is `−2`, applied to its actual direction;
+the implementation's preserved `−1` was wrong by one sector, and its
+origin-repeat termination was an invention that happened to terminate.
+Everything in §5 not named here — the greedy step, the sweep-exhaustion
+return, the marks, the acceptable-terminal return, the rejoin leg test, and
+the returned minimum — stands.
 
 ## 11. Evidence basis and correction boundaries
 
@@ -14955,11 +15132,13 @@ orchestrator).
   are Established; the steady-state tier is a Supported inference from the
   iteration rate · §7.3 [R-PATH-01 §6] · manual retail observation, or a static
   trace of the iteration count under a known unit population.
-- Exact upper wall-follow successful-step state, including its initialization,
+- ~~Exact upper wall-follow successful-step state, including its initialization,
   stored-versus-actual direction, and origin-repeat comparison; changing the
   preserved one-sector decrement alone breaks the established rejoin fixtures
   · §7.1 [R-PATH-01 §5] · coordinated clean-room trace plus a bounded authored
-  wall-rejoin fixture. Marked `TODO(question)`.
+  wall-rejoin fixture. Marked `TODO(question)`.~~ **Closed 2026-09-04:** both
+  cursors traced at instruction level; the update is −2, the end test is the
+  cursors meeting, one charge per cursor pair [R-PATH-01 §15].
 
 ### Ground movement
 

@@ -29,7 +29,7 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 				t.Fatalf("barrier index=%d after %d callbacks", index, len(events))
 			}
 		},
-		SlideDeadlineRing: func(lastTick uint32) {
+		RetireMessageLine: func(lastTick uint32) {
 			events = append(events, "ring")
 			callbackTicks = append(callbackTicks, lastTick)
 		},
@@ -46,7 +46,7 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 	if got := s.PublicationCount(); got != 5 {
 		t.Fatalf("publication count=%d, want 5 completed-subtick boundaries", got)
 	}
-	if got, want := s.PostLoopTrace(), []string{"barrier-1", "barrier-2", "barrier-3", "deadline-ring-slide", "pending-compact", "eyeball-expire"}; !reflect.DeepEqual(got, want) {
+	if got, want := s.PostLoopTrace(), []string{"barrier-1", "barrier-2", "barrier-3", "message-ring-retire", "pending-compact", "eyeball-expire"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("post-loop trace=%v, want %v", got, want)
 	}
 	if got, want := events, []string{"barrier", "barrier", "barrier", "ring", "pending"}; !reflect.DeepEqual(got, want) {
@@ -159,26 +159,6 @@ func TestZeroTickStepDoesNotMutateSimulationOrTail(t *testing.T) {
 	}
 	if got := s.PostLoopTrace(); len(got) != 0 {
 		t.Fatalf("zero-tick post-loop trace=%v, want empty", got)
-	}
-}
-
-func TestPostLoopDeadlineRingSlidesDueHeadsWithWrap(t *testing.T) {
-	state := &postLoopState{}
-	state.ring.count = 3
-	state.ring.head = deadlineRingSize - 1
-	state.ring.effectiveDeadline[29] = 4
-	state.ring.effectiveDeadline[0] = 5
-	state.ring.effectiveDeadline[1] = 10
-	state.ring.slide(10)
-	if state.ring.head != 1 || state.ring.count != 1 {
-		t.Fatalf("ring head/count=%d/%d, want 1/1 after due-head slides", state.ring.head, state.ring.count)
-	}
-	if state.ring.effectiveDeadline[1] != 10 {
-		t.Fatalf("ring removed the next live entry: deadlines=%v", state.ring.effectiveDeadline[:3])
-	}
-	state.ring.slide(10)
-	if state.ring.head != 1 || state.ring.count != 1 {
-		t.Fatalf("ring advanced an equal deadline: head/count=%d/%d, want 1/1", state.ring.head, state.ring.count)
 	}
 }
 

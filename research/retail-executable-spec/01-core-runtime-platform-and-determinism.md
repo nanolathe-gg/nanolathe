@@ -874,10 +874,12 @@ At the tail of every sub-tick, when networked and the transport flag is set,
 the engine runs resource sharing (60-tick and 450-tick cadences) and flushes
 the packet transport. This sharing block is inside the sub-tick loop, after
 phase 12 — an earlier reading placed it after the loop. After the loop the
-executor runs three empty barrier functions, then a 30-entry deadline-ring
-slide (head advances when the head record's deadline has passed; the ring
-sits beside the network receive queue and is most plausibly the receive-frame
-window — supported inference, `TODO(question)` for the record owner), then
+executor runs three empty barrier functions, then the 30-entry message-ring
+retire (**corrected 2026-09-04, [R-PLAT-02 §8]:** this text called it "a
+30-entry deadline-ring slide ... beside the network receive queue and most
+plausibly the receive-frame window — supported inference, `TODO(question)`
+for the record owner"; it is the in-battle text-scroll ring doc 07 owns, and
+the retire is the one [R-PLAT-02 §7] describes), then
 the missile/interceptor pending-list compaction (expired records invoke their
 expiry callback and are removed in place) — **corrected 2026-08-29:** the list
 is the temporary-sight ("eyeball") observer list, 36-byte records, empty in
@@ -1183,15 +1185,16 @@ The tail, in order, is:
 
 1. the **three empty barrier routines** of [R-PLAT-02 §5]'s stub census — they
    read and write nothing, and a re-implementation omits them;
-2. the deadline-ring slide of §4.4;
-3. the **text-scroll retire** — the in-battle message ring of 30 entries
-   (doc 07's object). At most one entry is retired per call: the entry at the
+2. the **text-scroll retire** — the in-battle message ring of 30 entries
+   (doc 07's object). **Corrected 2026-09-04 ([R-PLAT-02 §8]):** this list
+   carried "the deadline-ring slide of §4.4" as its own step 2 and the retire
+   as step 3; they are one routine, so the tail has three steps, not four. At most one entry is retired per call: the entry at the
    display index is retired when the tick it was posted, plus
    `(the text-scroll interface option + 1) × 30` ticks, is below the current
    tick. That option is `TXTSCROL`, in seconds, default 10
    ([07 R-CAM-01 §7]), so the term is that many seconds converted to ticks.
    This is presentation state;
-4. the **temporary-sight expiry pass** over the "eyeball" observer list of
+3. the **temporary-sight expiry pass** over the "eyeball" observer list of
    [R-PLAT-02 §5]: every record whose expiry tick is **strictly below** the
    global tick (unsigned compare) invokes the throttled LOS refresh, followed
    by the in-place compaction that section describes.
@@ -1368,10 +1371,15 @@ later occupant after reuse.
 - The post-loop ring is a 30-entry circular window of 72-byte deadline
   records: after the tick body, while the head entry's deadline (record value
   plus the current window offset times thirty ticks) has passed, the head
-  advances one slot with wraparound. The ring sits beside the network receive
-  queue and matches the 30-frame future window, so it is most plausibly the
-  receive-frame window (supported inference); it is not a generic timer
-  queue. A separate post-loop pass compacts the missile/interceptor pending
+  advances one slot with wraparound. **Correction (2026-09-04, RWU-19-199,
+  [R-PLAT-02 §8]):** this bullet went on to say the ring "sits beside the
+  network receive queue and matches the 30-frame future window, so it is
+  most plausibly the receive-frame window (supported inference)". That was a
+  layout guess: the ring is the in-battle **message ring** — the 72-byte
+  record is a 64-byte text line plus its post tick, source unit, silence
+  byte and class nibble, and the "window offset" is the `textscroll`
+  option in seconds. It is presentation state and no network path touches
+  it. It is not a generic timer queue. A separate post-loop pass compacts the missile/interceptor pending
   list (24-byte-stride records with deadline fields), invoking each expired
   record's expiry callback and removing it in place — this is the "deferred
   compaction" of earlier notes, distinct from the projectile-pool compactor
@@ -2455,7 +2463,54 @@ byte `0x0C` and the 768-byte palette.
 - Function-boundary recovery is incomplete, so absence claims are bounded by
   the current import/decompile census rather than proof over every byte.
 - Network and replay save coverage remains incomplete (no timer queue exists
-  on the tick path; the post-loop deadline ring is not serialized).
+  on the tick path; the post-loop message ring of [R-PLAT-02 §8] is
+  presentation state and is not serialized).
+
+### Closed — the post-loop "deadline ring" is the in-battle message ring, and the tail has three steps [R-PLAT-02 §8] (2026-09-04)
+
+**Established (RWU-19-199, direct read of the executor tail, the retire, the
+poster, the two index resets and the two drawers).** §4.4, §6.2 and
+[R-PLAT-02 §7] described a "30-entry deadline ring of 72-byte records" whose
+record owner was open, marked `TODO(question)`, and read as "most plausibly
+the network receive-frame window" because the ring's globals sit near the
+receive queue's. The owner is settled, and the reading was wrong in both
+halves:
+
+- **The ring is the in-battle message ring** — the text-scroll ring doc 07
+  owns ([07 R-CAM-01 §7] `textscroll`, [07 R-HUD-03 §14.3], [07 R-HUD-03
+  §14.4]). Its 30 records of 72 bytes are each a 64-byte text line with a
+  forced terminator, the **global tick at which the line was posted**, the
+  source unit's id (16-bit), a silence byte (`'\n'` suppresses the
+  `MessageArrived` cue) and a class nibble. Two 16-bit indices address it: a
+  **producer index** the poster advances and a **display index** the retire
+  advances, both modulo 30.
+- **The "deadline-ring slide" and the "text-scroll retire" are one routine.**
+  The executor's tail is: the three empty barrier routines; the message-ring
+  retire; the temporary-sight expiry pass. There is no fourth call. The
+  retire is exactly the rule [R-PLAT-02 §7] already stated: when the ring is
+  non-empty (producer ≠ display) and `postTick + (textscroll + 1) × 30 <
+  currentTick` (unsigned) for the line at the display index, the display
+  index advances one slot, wrapping at 30; at most one line per call. The
+  "record value plus the current window offset times thirty ticks" of §6.2
+  was this expression with the option unnamed.
+- **What indexes it.** The poster ([07 R-HUD-03 §14.4]'s producers — chat,
+  order acknowledgements, elimination lines, cheat and save cues) writes at
+  the producer index and stamps the current tick; the retire and the two
+  drawers read from the display index toward the producer. Both indices are
+  reset to zero by three routines: the skirmish/multiplayer battle-entry
+  path, one further set-up routine this unit did not identify, and the
+  battle state's own exit path; the F12 key clears them in play
+  ([07 R-CAM-01 §2]).
+- **No network path touches it.** The send helper, the receive dispatch and
+  the receive-frame window never read or write the ring or its indices
+  (bounded negative over the recovered export). The "receive-frame window"
+  reading rested on address adjacency alone.
+
+For an implementation this changes nothing in simulation: the ring is
+presentation state, retired once per host pump whether or not a sub-tick
+ran ([R-PLAT-02 §7]), and never serialized. The `SlideDeadlineRing` seam an
+implementation may have kept for the network reading has no simulation
+payload to carry.
 
 ## Missing and unknown
 
@@ -2510,9 +2565,11 @@ document.
 
 ### Clock, network, and determinism
 
-- Record owner of the 30-entry post-loop deadline ring; the receive-frame-
+- ~~Record owner of the 30-entry post-loop deadline ring; the receive-frame-
   window reading is a supported inference · §4.4 · static trace. Marked
-  `TODO(question)` at the site.
+  `TODO(question)` at the site.~~ **Closed 2026-09-04:** the ring is the
+  in-battle message ring doc 07 owns, retired by the text-scroll rule; the
+  network reading was a layout guess [R-PLAT-02 §8].
 - Network future-frame overflow policy, retransmission wrap, and late-join
   resynchronization · §4.3 · static trace. Out of Nanolathe's implementation
   scope (no multiplayer), recorded so the spec stays exhaustive.

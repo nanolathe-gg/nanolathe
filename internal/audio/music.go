@@ -430,9 +430,14 @@ func (c *Controller) playSingle() {
 	}
 }
 
-// playCategoryShuffle implements mode 4 filtered shuffle.
-// Retail scans (rand&0xF+1)*numTracks candidates forward wrapping 1..numTracks
-// for first where trackCategory[track]==desiredCat. We mirror.
+// categoryBranch is the tick's category branch [03 R-AUD-01 §4 step 6]
+// [03 R-AUD-01 §8]: the draw `u = rand & 15` is taken FIRST, every time the
+// branch runs, even while a matching track plays; then, if the drive reports
+// playing and the next track already carries the desired category, nothing
+// changes. Otherwise the scan walks forward from `next` with wrap, for at
+// most (u+1)·count steps, and plays the max(1,u)-th track whose category is
+// the desired one (u = 0 and u = 1 both select the first match — a retail
+// quirk, reproduced); a scan that finds nothing stops and resets.
 //
 // desiredCat 0 (Building) is a real, selectable category, not "no category" —
 // the tick's "new category ≠ 0" clause that the research once flagged as a
@@ -441,7 +446,11 @@ func (c *Controller) playSingle() {
 // pause when the *transition* lands on Building, so calm music doesn't cut in
 // immediately after battle), not to the shuffle scan itself
 // [03 R-AUD-01 §4, "Established fact — changing the desired category"].
-func (c *Controller) playCategoryShuffle() {
+//
+// Correction (RWU-19-198): this used to stop and reset before scanning, scan
+// from track 1, and play the first match. Retail neither stops first nor
+// re-anchors the scan, and the pick index is max(1,u), not the first match.
+func (c *Controller) categoryBranch(isPlaying bool) {
 	if c.numTracks == 0 {
 		return
 	}
@@ -449,43 +458,65 @@ func (c *Controller) playCategoryShuffle() {
 		c.Stop()
 		return
 	}
-	// Category mode stops and resets before beginning its bounded forward scan.
-	c.Stop()
-	r := c.drawCRT()
-	u := int(r & 0xF) // 0..15
-	tries := (u + 1) * c.numTracks
-	cur := 0
-	for i := 0; i < tries; i++ {
-		cur = cur%c.numTracks + 1
+	u := int(c.drawCRT() & 0xF) // 0..15, drawn before the poll is consulted
+	if isPlaying && c.nextTrack >= 0 && c.nextTrack < len(c.trackCategory) && int(c.trackCategory[c.nextTrack]) == c.desiredCat {
+		return // the matching track keeps playing; only the tail runs
+	}
+	budget := (u + 1) * c.numTracks
+	cur := c.nextTrack
+	if cur < 0 {
+		cur = 0
+	}
+	for i := 0; i < budget; i++ {
+		cur++
+		if cur > c.numTracks {
+			cur = 1
+		}
 		if int(c.trackCategory[cur]) == c.desiredCat {
-			c.Play(cur)
-			return
+			u--
+			if u <= 0 {
+				c.Play(cur)
+				return
+			}
 		}
 	}
-	// no eligible track found after scan → stop silence
+	// no eligible track found within the budget → stop and reset
 	c.Stop()
 }
 
-// Tick advances media state once per presentation frame. The boolean isPlaying reflects
-// the mci poll `status cdaudio mode` vs "playing". When false, mode-specific
-// transition fires; when true, nothing. While paused (status==2) early return.
-// If numTracks==0 early return.
+// Tick advances media state once per presentation frame. The boolean isPlaying
+// reflects the mci poll `status cdaudio mode` vs "playing". The dispatch is
+// retail's, in retail's order [03 R-AUD-01 §4 steps 1-7] [03 R-AUD-01 §8]:
 //
-// TODO(question): retail's tick has two category-driven overrides this
-// dispatch does not model — desired==4 (Unused) always stops regardless of
-// play mode, and desired∈{2,3} (Victory/Defeat) always takes the category
-// branch regardless of play mode [03 R-AUD-01 §4 steps 2 and 4]. This
-// controller has no caller yet that drives desiredCat independently of
-// PlayMode (Configure sets both together), so the gap is inert today; it
-// becomes load-bearing only once a caller can set desiredCat to 2, 3, or 4
-// while playMode is something other than ModeCategoryShuffle — that is the
-// scenario that would settle whether this dispatch needs the same override,
-// out of scope for the category-vocabulary fix here (WU-19-162).
+//  1. no tracks → nothing;
+//  2. desired category 4 (Unused = silence) → stop and reset, whatever the
+//     play mode and even while PAUSED — this test precedes the paused test,
+//     so a screen that requests silence stops a paused disc too;
+//  3. paused → nothing;
+//  4. desired category 2 or 3 (Victory/Defeat) → the category branch,
+//     whatever the play mode (idle included);
+//  5. otherwise by play mode, Custom (category shuffle) taking the same
+//     category branch.
+//
+// The two overrides were an open question here until RWU-19-198 read the tick:
+// they are Established, and load-bearing only once a caller drives desiredCat
+// independently of the play mode (Configure sets both together today).
 //
 // The controller must be polled each rendered frame (presentation), not each
 // presentation loop polling.
 func (c *Controller) Tick(isPlaying bool) {
-	if c == nil || c.numTracks == 0 || c.status == StatusPaused {
+	if c == nil || c.numTracks == 0 {
+		return
+	}
+	if c.desiredCat == 4 {
+		c.Stop() // silence overrides everything, the paused state included
+		return
+	}
+	if c.status == StatusPaused {
+		return
+	}
+	if c.desiredCat == 2 || c.desiredCat == 3 || c.playMode == ModeCategoryShuffle {
+		c.categoryBranch(isPlaying)
 		return
 	}
 	// Handle the mode transition only after a not-playing poll.
@@ -509,10 +540,6 @@ func (c *Controller) Tick(isPlaying bool) {
 		c.playRandom()
 	case ModeSingle:
 		c.playSingle()
-	case ModeCategoryShuffle:
-		c.playCategoryShuffle()
-	case ModeIdle:
-		c.Stop()
 	}
 }
 

@@ -93,25 +93,32 @@ type rayResult struct {
 func opposite(dir uint8) uint8 { return (dir + 4) & 7 }
 
 // walkRay is the forward cardinal walk and alternating two-sided wall follow
-// [04 R-PATH-01 §5]. Each side records its (cell,direction) states, giving the
-// exact cycle termination without an iteration guess.
+// [04 R-PATH-01 §5][04 R-PATH-01 §15]. Its only product is the acceptance
+// threshold: the minimum scaled heuristic over every cell it touched.
 func walkRay(start, target Cell, passable func(Cell) uint8, goal Goal, scale int32, visit func(Cell, uint8, bool) bool) rayResult {
 	r := rayResult{best: ScaledHeuristic(goal.H(start), scale)}
 	cur := start
 	if passable(start) == 0 {
 		return r
 	}
-	mark := func(c Cell, d uint8) bool {
+	// touch marks a cell as the ray does — touched bit, direction byte,
+	// ray-visited bit — and reports the acceptable-terminal bit, which ends the
+	// ray with a zero threshold [04 R-PATH-01 §5].
+	touch := func(c Cell, d uint8) bool {
 		if visit != nil && visit(c, d, false) {
 			r.connects = true
 			r.best = 0
 			return true
 		}
-		h := ScaledHeuristic(goal.H(c), scale)
-		if h < r.best {
+		return false
+	}
+	// fold takes a touched cell's scaled heuristic into the threshold. A
+	// rejoin cell is never folded: the greedy walk resumes from it at once
+	// [04 R-PATH-01 §15] step 5.
+	fold := func(c Cell) {
+		if h := ScaledHeuristic(goal.H(c), scale); h < r.best {
 			r.best = h
 		}
-		return false
 	}
 	for {
 		r.steps++ // the scheduler charge precedes the best-cost check [04 R-PATH-01 §5]
@@ -135,39 +142,89 @@ func walkRay(start, target Cell, passable func(Cell) uint8, goal Goal, scale int
 		}
 		next := Cell{cur.X + dirDelta[d].X, cur.Z + dirDelta[d].Z}
 		if passable(next) != 0 {
-			if mark(next, d) {
+			if touch(next, d) {
 				return r
 			}
+			fold(next)
 			cur = next
 			continue
 		}
-		upPos, downPos := cur, cur
-		// The blocked cardinal candidate was already charged above. The lower
-		// cursor's first actual probe is the next sector downward; it stores the
-		// negated direction because its steps subtract the probe [04 R-PATH-01 §5].
-		upDir, downDir := (d+1)&7, opposite((d+7)&7)
-		upOrigin, downOrigin := upPos, downPos
-		upOriginDir, downOriginDir := upDir, downDir
-		upState := raySideState{}
-		downState := raySideState{}
-		for {
-			if r.best == 0 {
+		// WALL FOLLOW [04 R-PATH-01 §15]. Two cursors start on the cell the
+		// walk was standing on: the upper cursor carries its actual probe
+		// direction a and rotates upward; the lower carries a STORED probe s,
+		// steps in the opposite sector and rotates downward. Both first
+		// re-probe the blocked cardinal d. The ray ends when the cursors meet
+		// (steps 3 and 8), when a sweep exhausts all eight sectors, or when a
+		// touched cell carries the acceptable-terminal bit; it rejoins the
+		// greedy walk when a cursor lands on the axis-aligned leg from hit to
+		// the target.
+		hit := cur
+		posA, posB := hit, hit
+		a, s := (d+2)&7, (d+2)&7
+		departed := false
+		rejoined := false
+		for !rejoined {
+			// One charge per cursor pair, however many blocked cells either
+			// cursor probes [04 R-PATH-01 §15] step 1.
+			r.steps++
+			// Upper cursor: sentinel a-3, start a-2 (two sectors back toward
+			// the wall it follows); +1 while blocked [04 R-PATH-01 §15] step 2.
+			sentinel := (a + 5) & 7
+			a = (a + 6) & 7
+			candA := Cell{posA.X + dirDelta[a].X, posA.Z + dirDelta[a].Z}
+			for passable(candA) == 0 {
+				if a == sentinel {
+					return r
+				}
+				a = (a + 1) & 7
+				candA = Cell{posA.X + dirDelta[a].X, posA.Z + dirDelta[a].Z}
+			}
+			// Meet test: standing on the lower cursor's cell and about to
+			// retrace its last step backwards [04 R-PATH-01 §15] step 3.
+			if posA == posB && a == s && departed {
 				return r
 			}
-			if !raySideStep(&upPos, &upDir, false, upOrigin, upOriginDir, &upState, passable, &r, mark) {
+			posA = candA
+			departed = true
+			if touch(candA, a) {
 				return r
 			}
-			if upPos != cur && onRayLeg(cur, upPos, target) {
-				cur = upPos
+			if onRayLeg(hit, candA, target) {
+				cur = candA
+				rejoined = true
 				break
 			}
-			if !raySideStep(&downPos, &downDir, true, downOrigin, downOriginDir, &downState, passable, &r, mark) {
+			fold(candA)
+			// Lower cursor: sentinel s+3, stored start s+2, actual step is the
+			// opposite sector; -1 while blocked [04 R-PATH-01 §15] step 7.
+			sentinel = (s + 3) & 7
+			s = (s + 2) & 7
+			candB := Cell{posB.X - dirDelta[s].X, posB.Z - dirDelta[s].Z}
+			for passable(candB) == 0 {
+				if s == sentinel {
+					return r
+				}
+				s = (s + 7) & 7
+				candB = Cell{posB.X - dirDelta[s].X, posB.Z - dirDelta[s].Z}
+			}
+			// Meet test: the upper cursor has stepped onto this cell while
+			// the lower is about to step onto its old one [04 R-PATH-01 §15]
+			// step 8.
+			if posA == posB && a == s {
 				return r
 			}
-			if downPos != cur && onRayLeg(cur, downPos, target) {
-				cur = downPos
+			posB = candB
+			// The lower cursor's direction byte is its STORED probe — the
+			// reverse of the step it took [04 R-PATH-01 §15] step 9.
+			if touch(candB, s) {
+				return r
+			}
+			if onRayLeg(hit, candB, target) {
+				cur = candB
+				rejoined = true
 				break
 			}
+			fold(candB)
 		}
 	}
 }
@@ -182,54 +239,6 @@ func onRayLeg(hit, candidate, target Cell) bool {
 		dz, cz = -dz, -cz
 	}
 	return (cz == 0 && 0 < cx && cx <= dx) || (cx == dx && 0 < cz && cz <= dz)
-}
-
-type raySideState struct {
-	departed     bool
-	blockedSweep uint8
-}
-
-func raySideStep(pos *Cell, probe *uint8, lower bool, origin Cell, originDir uint8, state *raySideState, passable func(Cell) uint8, result *rayResult, mark func(Cell, uint8) bool) bool {
-	if state.departed && *pos == origin && *probe == originDir {
-		return false
-	}
-	d := *probe
-	if lower {
-		d = opposite(d)
-	}
-	next := Cell{pos.X + dirDelta[d].X, pos.Z + dirDelta[d].Z}
-	result.steps++
-	if passable(next) == 0 {
-		state.blockedSweep++
-		if state.blockedSweep == 8 {
-			return false
-		}
-		if lower {
-			*probe = (*probe + 7) & 7
-		} else {
-			*probe = (*probe + 1) & 7
-		}
-		return true
-	}
-	state.departed = state.departed || *pos != origin || *probe != originDir
-	state.blockedSweep = 0
-	*pos = next
-	if mark(next, d) {
-		return false
-	}
-	if lower {
-		// The lower cursor stores the negated probe. A successful step advances
-		// that stored direction by two sectors before the next alternating probe
-		// [04 R-PATH-01 §5].
-		*probe = (*probe + 2) & 7
-	} else {
-		// TODO(question): The preserved upper-success update is -1. A coordinated
-		// trace of upper initialization, stored-versus-actual direction, successful
-		// transition, and origin-repeat state must settle it; changing this update
-		// alone breaks the established wall-rejoin fixtures [04 R-PATH-01 §5].
-		*probe = (*probe + 7) & 7
-	}
-	return true
 }
 
 type SearchConfig struct {

@@ -236,15 +236,16 @@ func (s *Session) finalizePhase2Death(h pool.Handle, tick uint32) {
 // economy.PlayerEliminated term this gate used to carry is removed: it was the
 // invented state.
 //
-// TODO(question): Nanolathe keeps no separate per-slot ally-group byte on the
-// player row — its alliance rows are indexed by the slot number itself
+// Nanolathe keeps no separate per-slot ally-group byte on the player row —
+// its alliance rows are indexed by the slot number itself
 // (economy.Service.DeclaresAlliance), so the byte's value here IS `owner`,
-// which for rows 0..9 is never 10. That matches the *Supported inference* of
-// [04 R-MOV-03 §10] ("every seated row 0–9 carries its own slot number in that
-// byte", which is why [05 R-SHARE-01 §3]'s parallel gate reads it as "the
-// slot's own index is not 10") and makes the clause inert, exactly as §10 says
-// it is in any battle. What would settle whether a distinct byte is needed is
-// the seat-setup writer §10 names as its decider.
+// which for rows 0..9 is never 10. That is retail's arithmetic, not an
+// approximation: the seat-setup writer stores the slot's own index into the
+// byte in every session kind, the only other writer (the multiplayer
+// battleroom's renumbering pass) stores the row index or 10, and no
+// single-player path can make the byte differ from the row index
+// [04 R-MOV-03 §11] (Established; this used to be the Supported inference of
+// [04 R-MOV-03 §10]). The clause is inert in any battle, as §10 says.
 //
 // A session with no economy service at all has no player table to read, which
 // is not a state retail can be in: the battle block allocates the table before

@@ -221,3 +221,83 @@ func TestMusic_SingleZeroStopsAndResumeReappliesVolume(t *testing.T) {
 		t.Fatalf("single requested zero must stop, cur=%d status=%d", m.CurTrack(), m.Status())
 	}
 }
+
+// TestMusic_UnusedCategoryStopsBeforeThePausedTest locks [03 R-AUD-01 §8]:
+// desired category 4 (Unused = silence) stops and resets whatever the play
+// mode, and the test precedes the paused test, so a paused disc is stopped
+// too.
+func TestMusic_UnusedCategoryStopsBeforeThePausedTest(t *testing.T) {
+	m := NewMusicController()
+	m.Open(4)
+	m.Configure(ModeSequential, 1)
+	m.Play(2)
+	m.Pause(true)
+	if m.Status() != StatusPaused {
+		t.Fatalf("setup: status %d, want paused", m.Status())
+	}
+	m.Configure(ModeSequential, 4)
+	m.Tick(true)
+	if m.Status() != StatusIdle || m.CurTrack() != 0 {
+		t.Fatalf("Unused must stop a paused disc: status %d cur %d", m.Status(), m.CurTrack())
+	}
+	// And in Play All while not paused, before the mode dispatch would advance.
+	m.Configure(ModeSequential, 4)
+	m.Tick(false)
+	if m.Status() != StatusIdle || m.CurTrack() != 0 {
+		t.Fatalf("Unused must override Play All: status %d cur %d", m.Status(), m.CurTrack())
+	}
+}
+
+// TestMusic_VictoryDefeatTakeTheCategoryBranchInAnyMode locks [03 R-AUD-01
+// §8]: desired 2 or 3 routes to the category branch regardless of play mode,
+// idle included, and the branch leaves a playing track alone only when its
+// category already matches.
+func TestMusic_VictoryDefeatTakeTheCategoryBranchInAnyMode(t *testing.T) {
+	for _, mode := range []PlayMode{ModeIdle, ModeSequential, ModeRandom, ModeSingle} {
+		m := NewMusicController()
+		m.Open(8) // categories 1,2,3,4,1,2,3,4
+		m.Seed(5)
+		m.Configure(mode, 3) // Defeat
+		m.Tick(false)
+		if m.CurTrack() == 0 || int(m.trackCategory[m.CurTrack()]) != 3 {
+			t.Fatalf("mode %d: desired 3 must pick a category-3 track, got cur %d", mode, m.CurTrack())
+		}
+		// A playing track of the wrong category is switched even while playing.
+		m.Play(1) // category 1
+		m.Tick(true)
+		if int(m.trackCategory[m.CurTrack()]) != 3 {
+			t.Fatalf("mode %d: a playing category-1 track must be replaced, got cur %d", mode, m.CurTrack())
+		}
+		// A playing track of the right category is left alone.
+		cur := m.CurTrack()
+		m.Tick(true)
+		if m.CurTrack() != cur {
+			t.Fatalf("mode %d: matching track must keep playing, got %d want %d", mode, m.CurTrack(), cur)
+		}
+	}
+}
+
+// TestMusic_CategoryScanPlaysTheMaxOneUthMatch locks the corrected pick index
+// of [03 R-AUD-01 §8]: with every track matching, the scan from `next` plays
+// the max(1,u)-th following track, u being the draw's low four bits.
+func TestMusic_CategoryScanPlaysTheMaxOneUthMatch(t *testing.T) {
+	for seed := uint32(1); seed < 40; seed++ {
+		m := NewMusicController()
+		m.Open(20)
+		for i := range m.trackCategory {
+			m.trackCategory[i] = 2
+		}
+		m.Configure(ModeCategoryShuffle, 2)
+		m.Seed(seed)
+		draw := (&presentationCRT{state: seed}).Rand()
+		u := int(draw & 0xF)
+		want := u
+		if want < 1 {
+			want = 1
+		}
+		m.Tick(false)
+		if m.CurTrack() != want {
+			t.Fatalf("seed %d (u=%d): picked track %d, want %d", seed, u, m.CurTrack(), want)
+		}
+	}
+}

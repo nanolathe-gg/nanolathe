@@ -4226,6 +4226,40 @@ above); the C-runtime decimal conversion's overflow result feeding the
 fixed accessor (§4, decider: static check of the runtime's `strtod` overflow
 path).
 
+#### §6 — `burstrate`, `duration` and `smokedelay` are unsigned 16-bit tick words [R-KEYS-01 §6] (2026-09-04, RWU-19-198)
+
+**Established — the store.** The weapon loader converts each of the three
+keys as `trunc(authored × 30)` and stores the low sixteen bits of the result,
+exactly as it does for `weapontimer`, `randomdecay` and `flighttime`
+(the "floating · 16-bit" rows of the table above were right about the width).
+
+**Established — the widening.** Every reader of the three words zero-extends
+them: the loads are plain sixteen-bit moves into a register that was cleared
+first (or masked to sixteen bits immediately after), never a sign-extending
+load, and the consumer arithmetic is unsigned. The readers are all in the
+projectile update — the burst scheduler for `burstrate`, the beam latch for
+`duration`, the trail-smoke deadline for `smokedelay` — and doc 06 states
+each one in [06 R-WPN-05 §12]. There is no other reader of any of the three
+words anywhere in the image (bounded negative: a whole-image search for
+sixteen-bit accesses at the three record offsets finds only the loader's
+stores and the projectile update's loads).
+
+**Consequence for the compiled value.** The value a Nanolathe consumer must
+see is `uint16(trunc(authored × 30))` widened to a non-negative integer:
+`0..65535` ticks. A negative authored value does not produce a negative
+interval — `burstrate=-1` is `65506` ticks — and a value at or above
+`65536/30 ≈ 2184.53` seconds wraps (`2184.6` → `2` ticks). No stock weapon
+authors any of the three outside `0..32767/30` seconds (the WU-19-167 census),
+so nothing shipped distinguishes the widening; third-party content can.
+
+**Correction.** The `TODO(question)` markers on the compiled record said
+"16-bit store established, reader extension is not" for all three keys.
+They were honest at the time — [06 §4.3] wrote the burst deadline's sum as
+unsigned without saying how the addend widened, and [06 §6.10] and [06 §7.3]
+did not mention the width at all. Nothing previously written was wrong; the
+gap is closed and the three fields now carry the same unsigned wrap as
+`weapontimer`.
+
 
 ## Missing and unknown
 

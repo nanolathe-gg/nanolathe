@@ -5981,6 +5981,49 @@ the record's stored shooter — before any radius test, with no owner or
 alliance test anywhere in the loop. Every other unit of the shooter's own side
 takes full damage, and the shooter itself takes full damage from any *other*
 projectile's blast.
+### Closed — `burstrate`, `duration` and `smokedelay` are read zero-extended, and every consumer's compare is unsigned [R-WPN-05 §12] (2026-09-04, RWU-19-198)
+
+[02 R-KEYS-01 §6] closes the store side: all three keys are sixteen-bit words
+holding `trunc(authored × 30)`. This section closes the reader side, one
+consumer at a time, so the arithmetic of §4.3, §6.10 and §7.3 can be
+implemented at the right width. All three keys have exactly the readers named
+here and no other (bounded negative over the whole image).
+
+**Established — `burstrate`, three loads, all in the burst scheduler of §4.3.**
+
+1. The due test is `creationTick + zx(burstrate) <= currentTick`, where `zx`
+   is zero-extension of the sixteen-bit word to thirty-two bits and the
+   comparison is **unsigned** on the thirty-two-bit sum — §4.3's
+   `(uint32)(creationTick + burstrate) <= currentTick` was right about the
+   sum and silent about the addend; the addend is `0..65535`.
+2. The muzzle-refresh gate "`burstrate` strictly greater than four" compares
+   the sixteen-bit word **unsigned** (`>= 5` on the word), so a wrapped word
+   such as `65506` (`burstrate=-1`) refreshes the position on every pellet.
+3. The deadline advance adds `zx(burstrate)` to the creation-tick field.
+
+**Established — `duration`, one load, the beam latch of §6.10.** The latch
+test is `creationTick + zx(duration) < currentTick` with an **unsigned**
+thirty-two-bit comparison; the strictness §6.10 states is unchanged.
+
+**Established — `smokedelay`, one load, the trail-smoke deadline of §7.3.**
+`smokeDeadline += zx(smokedelay)`; the deadline is a thirty-two-bit field and
+the word is added without sign.
+
+**Consequences.** There is no negative interval anywhere in this family: an
+authored negative value becomes a large positive count. `burstrate=-1`
+(`65506` ticks, about 36 minutes) parks the burst root at the muzzle far
+longer than any projectile lives, so the burst never fires a second pellet in
+practice; `duration=-1` never latches the beam; `smokedelay=-1` emits the
+first trail puff and then none. None of this is authored by stock content
+(WU-19-167 census: every value of the nine tick keys lies in `0..32767/30`
+seconds), so the widening is observable only on third-party weapons.
+
+**Correction.** §4.3, §6.10 and §7.3 were not wrong; they omitted the
+widening, and the compiled record's markers said the readers might sign- or
+zero-extend. They zero-extend. The implementation rule is the one
+`weapontimer`, `randomdecay` and `flighttime` already follow: compile as
+`uint16(trunc(authored × 30))`, widen without sign, compare unsigned.
+
 
 ## 14. Evidence basis and correction boundaries
 

@@ -229,27 +229,19 @@ type xformNode struct {
 // to a unit's world position must therefore negate the Z component; the model
 // path does this in its projection, and the selection quad does it explicitly.
 //
-// TODO(question): which sense of Z the sim-side consumers of a composed piece
-// offset owe. [03 §2.4] says a muzzle flare reuses "the pristine post-load
-// vectors without a second negation" and appears at world `unit + offset`,
-// against the projection's `hi16(-vz)` above; the disagreement is a MIRROR in Z
-// alone, not a rotation — X composes with the same sign on both paths — and it
-// is worth twice the piece's authored depth offset, tens of world units on a
-// long-barrelled model. Three sibling consumers, three states: the factory
-// build plate is settled by the stock yard maps [05 "Factory production
-// lifecycle"], the nano source point is a Supported inference for the negated
-// form derived from the two projections it must agree with [03 §5.5 "The nano
-// source point's coordinate space"], and the weapon muzzle is explicitly
-// Unknown at the submission site [06 §4.1 "Unknown — the sense of 'added to the
-// unit's world position'"]. The decider named by all three is the `ta_probe_xz`
-// fixture of [03 §2.4] (child translation signs at headings 0/90/180/270),
-// which [03 §2.4] also still needs for the heading-zero nose mapping — that
-// mapping is a Supported inference, not Established.
-//
-// Until it runs, the sim consumers here (weapon muzzle, cargo attach) add the
-// offset unnegated, which is the arm [03 §2.4]'s own worked example states. Do
-// not flip those signs on this note alone, and do not flip them one consumer at
-// a time: the three either share the mirror or none of them does.
+// The simulation side owes the same mirror, and owes it once — Established
+// (RWU-19-198) at retail's piece locator, the single routine every sim
+// consumer of a piece position goes through [03 R-RAST-01 §8]: it composes
+// exactly as Compose does (post-half-turn translations plus script lanes,
+// ancestors rotating in Z, X, Y order with the unit's bank/heading/pitch added
+// to the root's words) and returns `(x, y, -z)`; the weapon muzzle for all
+// three slots [06 §4.1], the nano spray source [03 §5.5] and the piece-position
+// COB ports [04 R-COB-03 §2] then add that triple to the unit position with no
+// further sign change. WorldOffset is that triple; consumers forming a world
+// point add it, never Origin. This retires the earlier question here, which
+// weighed [03 §2.4]'s worked example ("appears at world `unit + offset`") —
+// that example named the stored model-space vector "world"; the locator's
+// output negation makes the world offset `(x, y, -z)` [03 R-RAST-01 §8].
 // Each piece rotates about its own origin FIRST then translates [03 §2.4] C21.
 // Applying the transform replays the chain with float trig round-to-nearest
 // per [03 §2.4] (I2 allowlist: model draw trig), not fixed-point tables [03 §2.4] C25.
@@ -268,9 +260,21 @@ func (t Transform) ApplyVertex(v [3]numeric.Fixed) [3]numeric.Fixed {
 	return t.Apply(v)
 }
 
-// Position returns the world position of the piece origin [03 §2.4] C21.
-// Equivalent to Apply([3]Fixed{0,0,0}).
+// Position returns the model-space position of the piece origin [03 §2.4]
+// C21. Equivalent to Apply([3]Fixed{0,0,0}). It is NOT a world offset: see
+// WorldOffset.
 func (t Transform) Position() [3]numeric.Fixed { return t.Origin }
+
+// WorldOffset is the piece origin as the simulation adds it to a unit's world
+// position: `(x, y, -z)` of the model-space composition, the output of
+// retail's piece locator [03 R-RAST-01 §8]. `unitPosition + WorldOffset()` is
+// the muzzle point [06 §4.1], the nano spray source [03 §5.5] and the value
+// the piece-position COB ports report [04 R-COB-03 §2]. The negation is the
+// world/model Z mirror of [R-RAST-01 §2], applied once, after the whole
+// chain (the unit heading included) has been composed — never inside it.
+func (t Transform) WorldOffset() [3]numeric.Fixed {
+	return [3]numeric.Fixed{t.Origin[0], t.Origin[1], -t.Origin[2]}
+}
 
 // Load loads a 3DO model via the VFS and completes the load-time work owned
 // by this package [03 §2.4] C20 [PLAN_06 WU-06-8].

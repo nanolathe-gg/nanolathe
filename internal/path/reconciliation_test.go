@@ -74,96 +74,91 @@ func TestReconciliationRayCycleTerminates(t *testing.T) {
 	}
 }
 
-func TestReconciliationRayNonStartRepeatContinues(t *testing.T) {
-	pos := Cell{1, 0}
-	probe := DirE
-	state := raySideState{departed: true}
-	result := rayResult{}
-	passable := func(Cell) uint8 { return 3 }
-	mark := func(Cell, uint8) bool { return false }
-	if !raySideStep(&pos, &probe, false, Cell{}, DirE, &state, passable, &result, mark) {
-		t.Fatal("first side step unexpectedly terminated")
-	}
-	// Repeating a non-start state is not the permitted cycle stop. Restore the
-	// state to prove it is evaluated again rather than rejected by a generic
-	// visited-state map.
-	pos, probe = Cell{1, 0}, DirE
-	if !raySideStep(&pos, &probe, false, Cell{}, DirE, &state, passable, &result, mark) {
-		t.Fatal("repeated non-start side state must continue")
-	}
+// rayTouch records one cell the ray marked and the direction byte it wrote.
+type rayTouch struct {
+	c Cell
+	d uint8
 }
 
-func TestReconciliationLowerRaySideReturnsToOwnOrigin(t *testing.T) {
-	origin := Cell{1, 1}
-	pos := origin
-	probe := DirNW
-	state := raySideState{}
-	result := rayResult{}
-	passable := func(c Cell) uint8 {
-		if c == origin || c == (Cell{0, 0}) {
+func recordRay(start, target Cell, passable func(Cell) bool) (rayResult, []rayTouch) {
+	var touched []rayTouch
+	r := walkRay(start, target, func(c Cell) uint8 {
+		if passable(c) {
 			return 3
 		}
 		return 0
-	}
-	mark := func(Cell, uint8) bool { return false }
+	}, PointGoal(target, 0), 65536, func(c Cell, d uint8, _ bool) bool {
+		touched = append(touched, rayTouch{c, d})
+		return false
+	})
+	return r, touched
+}
 
-	// With the lower cursor's successful-step probe rewritten in the wrong
-	// direction, this exact two-cell fixture repeats a non-origin state
-	// forever. The established transition returns to the side's own origin
-	// state, which is the only permitted repeat termination [04 R-PATH-01 §5].
-	terminated := false
-	for range 16 {
-		if !raySideStep(&pos, &probe, true, origin, DirNW, &state, passable, &result, mark) {
-			terminated = true
-			break
+// TestRayWallFollowProtocol locks the traced two-cursor protocol on one
+// authored wall [04 R-PATH-01 §15]: the upper cursor re-probes the blocked
+// cardinal and then starts two sectors back from each success; the lower
+// cursor steps in the opposite sector of its stored probe and writes that
+// stored probe as its direction byte; the scheduler is charged once per
+// cursor pair, not per probe; and the rejoin cell resumes the greedy walk.
+func TestRayWallFollowProtocol(t *testing.T) {
+	r, touched := recordRay(Cell{}, Cell{8, 0}, func(c Cell) bool {
+		return !(c.X == 2 && c.Z >= -2 && c.Z <= 2)
+	})
+	if !r.connects || r.best != 0 {
+		t.Fatalf("ray did not reach the target: %+v", r)
+	}
+	want := []rayTouch{
+		{Cell{1, 0}, DirE},   // greedy
+		{Cell{1, -1}, DirN},  // upper: E, NE blocked, N
+		{Cell{1, 1}, DirN},   // lower: stored N, actual S
+		{Cell{1, -2}, DirN},  // upper starts N-2=E again, rotates to N
+		{Cell{1, 2}, DirN},   // lower: stored W, NW blocked, N
+		{Cell{2, -3}, DirNE}, // upper: E blocked, NE
+		{Cell{2, 3}, DirNW},  // lower: stored W blocked, NW (actual SE)
+		{Cell{3, -2}, DirSE}, // upper: NE-2 = SE
+		{Cell{3, 2}, DirSW},  // lower: stored NW+2 = SW (actual NE)
+		{Cell{3, -1}, DirS},  // upper: SW blocked, S
+		{Cell{3, 1}, DirS},   // lower: stored SE blocked, S (actual N)
+		{Cell{3, 0}, DirS},   // upper: W, SW blocked, S — on the leg: rejoin
+		{Cell{4, 0}, DirE}, {Cell{5, 0}, DirE}, {Cell{6, 0}, DirE}, {Cell{7, 0}, DirE}, {Cell{8, 0}, DirE},
+	}
+	if len(touched) != len(want) {
+		t.Fatalf("touched %d cells %v, want %d %v", len(touched), touched, len(want), want)
+	}
+	for i := range want {
+		if touched[i] != want[i] {
+			t.Fatalf("touch %d = %+v, want %+v (all: %v)", i, touched[i], want[i], touched)
 		}
 	}
-	if !terminated {
-		t.Fatal("lower side did not return to its origin state within 16 probes")
-	}
-	if !state.departed || pos != origin || probe != DirNW {
-		t.Fatalf("lower side terminated outside its origin state: pos=%v probe=%d state=%+v", pos, probe, state)
-	}
-	if result.steps != 14 {
-		t.Fatalf("lower side charged %d probes, want 14 [04 R-PATH-01 §5]", result.steps)
+	// Two greedy charges to the wall, six cursor pairs to the rejoin, five
+	// greedy steps to the target and the final charge that observes it.
+	if r.steps != 2+6+5+1 {
+		t.Fatalf("charged %d steps, want 14 [04 R-PATH-01 §15] step 1", r.steps)
 	}
 }
 
-func TestReconciliationLowerRaySuccessfulStepReturnsToOrigin(t *testing.T) {
-	origin := Cell{}
-	pos := origin
-	probe := DirNW
-	state := raySideState{}
-	result := rayResult{}
-	passable := func(c Cell) uint8 {
-		switch c {
-		case origin, (Cell{0, -2}), (Cell{-1, -1}):
-			return 3
-		default:
-			return 0
+// TestRayCursorsMeetEndsTheRay locks the meet test [04 R-PATH-01 §15] steps 3
+// and 8: in a two-cell dead end the upper cursor walks back onto the lower
+// cursor's cell facing along its last step, and the ray returns its threshold
+// rather than looping, having charged one step per cursor pair.
+func TestRayCursorsMeetEndsTheRay(t *testing.T) {
+	r, touched := recordRay(Cell{}, Cell{5, 0}, func(c Cell) bool {
+		return c == Cell{} || c == Cell{1, 0}
+	})
+	if r.connects || r.best == 0 {
+		t.Fatalf("dead end must return a nonzero threshold: %+v", r)
+	}
+	want := []rayTouch{{Cell{1, 0}, DirE}, {Cell{0, 0}, DirW}, {Cell{0, 0}, DirE}}
+	if len(touched) != len(want) {
+		t.Fatalf("touched %v, want %v", touched, want)
+	}
+	for i := range want {
+		if touched[i] != want[i] {
+			t.Fatalf("touch %d = %+v, want %+v", i, touched[i], want[i])
 		}
 	}
-	mark := func(Cell, uint8) bool { return false }
-
-	// Advancing the stored lower probe by only one sector after a successful
-	// step repeats the non-origin state (0,-2,DirS) forever on this fixture.
-	// The established two-sector transition returns to the side's own origin
-	// state after exactly 20 charged probes [04 R-PATH-01 §5].
-	terminated := false
-	for range 24 {
-		if !raySideStep(&pos, &probe, true, origin, DirNW, &state, passable, &result, mark) {
-			terminated = true
-			break
-		}
-	}
-	if !terminated {
-		t.Fatal("lower side did not return to its origin state within 24 probes")
-	}
-	if !state.departed || pos != origin || probe != DirNW {
-		t.Fatalf("lower side terminated outside its origin state: pos=%v probe=%d state=%+v", pos, probe, state)
-	}
-	if result.steps != 20 {
-		t.Fatalf("lower side charged %d probes, want 20 [04 R-PATH-01 §5]", result.steps)
+	if r.steps != 4 {
+		t.Fatalf("charged %d steps, want 4 (two greedy, two cursor pairs)", r.steps)
 	}
 }
 

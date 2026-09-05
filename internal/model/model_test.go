@@ -446,3 +446,36 @@ func handApply(m *Model, st []PieceState, piece int, pt [3]numeric.Fixed) [3]num
 	}
 	return [3]numeric.Fixed{numeric.Fixed(int64(x)), numeric.Fixed(int64(y)), numeric.Fixed(int64(z))}
 }
+
+// TestWorldOffsetMirrorsComposedZOnce locks [03 R-RAST-01 §8]: the triple a
+// simulation consumer adds to the unit position is the model-space
+// composition with Z negated once, after the whole chain — heading fold
+// included — has been composed. Worked from §2.4's own example: a piece
+// authored at (2,1,-30) is (-2,1,30) after the load-time half-turn and lands
+// at world unit + (-2,1,-30), not unit + (-2,1,30).
+func TestWorldOffsetMirrorsComposedZOnce(t *testing.T) {
+	m := &Model{
+		Pieces: []Piece{
+			{Name: "base", Parent: -1},
+			{Name: "flare", Parent: 0, Translate: [3]numeric.Fixed{-2 << 16, 1 << 16, 30 << 16}}, // post-half-turn of authored (2,1,-30)
+		},
+		Root: 0,
+	}
+	m.Pieces[0].Children = []int{1}
+	st := make([]PieceState, 2)
+	tr := Compose(m, st, 1)
+	if got, want := tr.WorldOffset(), ([3]numeric.Fixed{-2 << 16, 1 << 16, -30 << 16}); got != want {
+		t.Fatalf("WorldOffset at heading 0 = %v, want %v [03 R-RAST-01 §8]", got, want)
+	}
+	if tr.Origin[2] != 30<<16 {
+		t.Fatalf("Origin must stay model space (Z=%d), the mirror is WorldOffset's alone", tr.Origin[2])
+	}
+	// A half-turn heading folded into the root reverses X and Z of the
+	// composition before the mirror, so world Z flips with it: the mirror is
+	// applied after the fold, never inside the rotation.
+	FoldRootAngles(st, 0, 32768, 0, 0)
+	half := Compose(m, st, 1).WorldOffset()
+	if half[0] != 2<<16 || half[1] != 1<<16 || half[2] != 30<<16 {
+		t.Fatalf("WorldOffset at heading 0x8000 = %v, want [%d %d %d]", half, 2<<16, 1<<16, 30<<16)
+	}
+}

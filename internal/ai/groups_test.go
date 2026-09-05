@@ -506,6 +506,107 @@ func TestClassifierRoutesLandCombatToRegroupA(t *testing.T) {
 	}
 }
 
+// TestClassifierNavalRowIgnoresTheArmedBit locks [08 R-AI-04 §3 point 1]: the
+// classifier's regroup-B row (`MinWaterDepth >= 1`) precedes the armed test,
+// so an armed water-class mobile AND an unarmed one both land in regroup B —
+// the armed row never gets a chance to claim the armed one. A land mobile at
+// the movement template's default depth (-10000) falls through the water row
+// and lands in regroup A only when armed [08 R-AI-04 §3].
+func TestClassifierNavalRowIgnoresTheArmedBit(t *testing.T) {
+	armedShip := &content.UnitDef{UnitName: "armed-ship", MinWaterDepth: 1}
+	unarmedShip := &content.UnitDef{UnitName: "unarmed-ship", MinWaterDepth: 1}
+	templateArmedLand := &content.UnitDef{UnitName: "template-armed-land", MinWaterDepth: -10000}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	for _, def := range []*content.UnitDef{armedShip, unarmedShip, templateArmedLand} {
+		def.CanonicalKey = content.CanonicalKey(def.UnitName)
+		cat.Units[def.CanonicalKey] = def
+	}
+	w := newAIFixtureWorld(32, cat)
+	create := func(def *content.UnitDef, armed bool) pool.Handle {
+		h, err := w.Create(def, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		flags := classifierEligibleBit
+		if armed {
+			flags |= classifierArmed
+		}
+		w.Unit(h).Flags = flags
+		return h
+	}
+	armed := create(armedShip, true)
+	unarmed := create(unarmedShip, false)
+	land := create(templateArmedLand, true)
+
+	m := &Manager{Player: 0}
+	m.classifyGroups(w)
+
+	if got, want := m.GroupRegroupB, []pool.Handle{armed, unarmed}; !sameHandles(got, want) {
+		t.Fatalf("regroup B = %v, want both the armed and unarmed MinWaterDepth>=1 mobiles %v: the water row must precede the armed test [08 R-AI-04 §3]", got, want)
+	}
+	if got, want := m.GroupRegroupA, []pool.Handle{land}; !sameHandles(got, want) {
+		t.Fatalf("regroup A = %v, want the template-depth armed land mobile %v", got, want)
+	}
+	if w.Unit(unarmed).Group != 7 {
+		t.Fatalf("unarmed water mobile's stored group = %d, want 7 (regroup B)", w.Unit(unarmed).Group)
+	}
+}
+
+// TestClassifierFlyerRowSendsOnlyNonBuildersToExplore locks [08 R-AI-04 §4
+// point 1]: the `canfly` row precedes both the water and armed rows and
+// routes a non-builder aircraft to the explore record and nowhere else — no
+// row ever sends anything else there, so an armed flyer never reaches a
+// regroup record and no attack wave can ever contain one.
+func TestClassifierFlyerRowSendsOnlyNonBuildersToExplore(t *testing.T) {
+	scout := &content.UnitDef{UnitName: "scout", CanFly: true}
+	scout.CanonicalKey = content.CanonicalKey(scout.UnitName)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{scout.CanonicalKey: scout}}
+	w := newAIFixtureWorld(8, cat)
+	h, err := w.Create(scout, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Armed, to show the armed test never gets a turn against a flyer.
+	w.Unit(h).Flags = classifierEligibleBit | classifierArmed
+
+	m := &Manager{Player: 0}
+	m.classifyGroups(w)
+
+	if got, want := m.GroupExplore, []pool.Handle{h}; !sameHandles(got, want) {
+		t.Fatalf("explore = %v, want the non-builder aircraft %v [08 R-AI-04 §4]", got, want)
+	}
+	if len(m.GroupRegroupA) != 0 || len(m.GroupRegroupB) != 0 || len(m.GroupWaveA) != 0 || len(m.GroupWaveB) != 0 || len(m.GroupResource) != 0 || len(m.GroupConstruction) != 0 || len(m.GroupNull) != 0 || len(m.GroupRally) != 0 {
+		t.Fatalf("non-builder aircraft reached a record other than explore: regroupA=%v regroupB=%v waveA=%v waveB=%v resource=%v construction=%v null=%v rally=%v",
+			m.GroupRegroupA, m.GroupRegroupB, m.GroupWaveA, m.GroupWaveB, m.GroupResource, m.GroupConstruction, m.GroupNull, m.GroupRally)
+	}
+}
+
+// TestClassifierBuilderRowPrecedesTheFlyerRow locks [08 R-AI-04 §4 point 2]:
+// "construction aircraft are builders first" — the builder row precedes the
+// flyer row, so a builder that also authors `canfly` (a construction
+// aircraft) lands in the construction record, not the explore record.
+func TestClassifierBuilderRowPrecedesTheFlyerRow(t *testing.T) {
+	builderAircraft := &content.UnitDef{UnitName: "builder-aircraft", Builder: true, CanFly: true}
+	builderAircraft.CanonicalKey = content.CanonicalKey(builderAircraft.UnitName)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{builderAircraft.CanonicalKey: builderAircraft}}
+	w := newAIFixtureWorld(8, cat)
+	h, err := w.Create(builderAircraft, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Unit(h).Flags = classifierEligibleBit
+
+	m := &Manager{Player: 0}
+	m.classifyGroups(w)
+
+	if got, want := m.GroupConstruction, []pool.Handle{h}; !sameHandles(got, want) {
+		t.Fatalf("construction = %v, want the builder aircraft %v [08 R-AI-04 §4 point 2]", got, want)
+	}
+	if len(m.GroupExplore) != 0 {
+		t.Fatalf("builder aircraft also reached explore: %v", m.GroupExplore)
+	}
+}
+
 // TestWaveMergeDropsRecycledRecordEntries locks the record reconciliation.
 //
 // A retail record holds unit pointers and is emptied of a dying member by the

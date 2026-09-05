@@ -217,15 +217,13 @@ func (s *Session) Advance() {
 }
 
 // String returns a human-readable name. The transitions and side effects of
-// all eight states are Established, but the *semantic labels* for states 0–4
-// are Supported inference [08 "Session states"], so these five names are the
-// document's inferred ones, not retail's.
-//
-// TODO(question): whether the image carries any name for states 0–4 at all.
-// Doc 08 keeps "UI-level names for states 0–4" as its own residual; the
-// decider is a static trace of the session callback table for a per-state
-// diagnostic or resource string. Nothing in the simulation reads this
-// method — it is diagnostic text — so no behavior waits on the answer.
+// all eight states are Established, and the image carries **no name for any
+// state**: the "callback table" is a setter switch installing one function
+// pointer per state, and neither it nor the five state-0–4 callbacks
+// references a string (bounded negative over the recovered export)
+// [08 R-SESS-01 §8]. The labels for states 0–4 are therefore this package's
+// own descriptive names for [08 "Session states"]' inferred roles, not
+// retail's; nothing in the simulation reads this method.
 func (s State) String() string {
 	switch s {
 	case StateTeardownA:

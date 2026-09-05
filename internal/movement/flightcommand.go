@@ -99,18 +99,17 @@ type FlightCommand struct {
 	Vel Vec3
 	// Heading is the command heading, initialized to the unit's spawn heading.
 	Heading uint16
-	// Flags is the flags byte described above.
-	//
-	// TODO(question): [04 R-AIR-01 §1] establishes the WRITER — the controller's
-	// per-tick hook sets bit 0x01 when the committed mover mode differs from the
-	// mirror in bits 1..2, before the producer runs — and this build reproduces
-	// that write exactly (StepFlightCommand below). What no section gives is a
-	// READER: no consumer of bit 0x01, no site that clears it, and no initial
-	// value for the byte. The field is consequently write-only here and
-	// behavior-inert — nothing in the mover, the integrator or the order layer
-	// branches on it — so no contract depends on the answer until a reader
-	// exists. Decider: a reader census of the flags byte across the mover's
-	// callers, which would also name the clear site.
+	// Flags is the flags byte described above. Its census is complete
+	// [04 R-AIR-01 §17]: bit 0x01 is set by the block's constructor (which
+	// also zeroes the mirror bits 1..2), by every payload install, and by the
+	// per-tick hook when the committed mover mode differs from the mirror
+	// (StepFlightCommand below reproduces that last write). Its ONLY reader is
+	// the controller's needs-republication virtual and its only clear site the
+	// controller's stream serializer, which also refreshes the mirror — both
+	// called solely by the multiplayer unit-state stream, which runs only under
+	// the session's network flag [08 R-OOS-01 §1]. Off the network the byte is
+	// written and never read, so it is behaviour-inert here by retail's own
+	// arithmetic; the field stays write-only and nothing branches on it.
 	Flags uint8
 }
 

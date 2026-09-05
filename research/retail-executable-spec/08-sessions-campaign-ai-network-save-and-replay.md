@@ -345,8 +345,9 @@ two campaign players and then selects the same state-5 path. Completion of the
 state-5 loading thread installs state 6; its first run happens on the next
 orchestration dispatch, not inline.
 
-Residual: UI-level names for states 0–4, and whether any provider-specific
-DirectPlay behavior adds transitions outside the reviewed callbacks.
+Residual: whether any provider-specific DirectPlay behavior adds transitions
+outside the reviewed callbacks. (The "UI-level names for states 0–4" residual
+is closed: the image carries no name for any session state — [R-SESS-01 §8].)
 
 ### Admission masks
 
@@ -7560,6 +7561,98 @@ for "`bmcode == 1`"; the validator sends `bmcode == 0` to the yard-map
 blocker; and the strategic state's initialization vector adds its 40 for
 `bmcode == 0` ([R-P0-05 §9]). Stock content authors `bmcode=0` on buildings
 and `bmcode=1` on mobile units.
+### R-AI-01 §19 — The `weight` factor is read by the C runtime's `atof`; the tokenizer and its comment rule — Established [R-AI-01]
+
+[§12] gave the `weight` directive's second argument as "a float, defaulting
+to `0.0`" without naming the conversion, which left `0.5`, `.5`, `1e0`,
+`abc` and a missing argument open. The handler and everything under it have
+been read.
+
+**Established — the line tokenizer.** The profile text (the global
+`aiprofile` / `ai\default.txt` file and every per-definition `ai_weight`
+fragment, [§18]) reaches the same dispatcher raw: the file is loaded whole
+and handed over, with no comment blanking of any kind on the path. The
+dispatcher splits on newline; each line is split into at most **twenty**
+tokens on runtime whitespace (the C runtime's `isspace` set), and a `#`
+character ends the line — everything from the `#` on is discarded, whether
+it begins a token or sits inside one. `//` has **no meaning** here: a line
+beginning `//` is a directive whose keyword the table does not know and is
+ignored as a whole, and a `//` between a name and its factor is the factor
+token. Token 0 is lower-cased and looked up; token 1 is the name; token 2 is
+the factor (`weight`) or the limit (`limit`).
+
+**Established — the conversion.** The factor is token 2 read through the
+runtime's `atof`, with `0.0` returned when the line has fewer than three
+tokens. `atof` skips leading whitespace and converts the **longest valid
+decimal prefix**: an optional sign, digits, an optional decimal point with
+digits, and an optional exponent introduced by `e`, `E`, `d` or `D` with an
+optional sign and digits; it stops silently at the first character that
+does not fit, and yields `0.0` when no digit was consumed. There is no
+hexadecimal form, no `inf`/`nan` token, and no error path. So:
+
+| token | factor |
+|---|---|
+| `0.5`, `.5`, `+.5`, `5e-1`, `5d-1` | `0.5` |
+| `1e0`, `1E0`, `1d0`, `1.` | `1.0` |
+| `2x`, `2,5`, `2//c` | `2.0` (junk after the prefix is ignored) |
+| `abc`, `x1`, `0x10`, `-`, `.` | `0.0` (no digits before the first misfit) |
+| absent (line is `weight NAME`) | `0.0` (the accessor's default) |
+
+The directive then applies with whatever `atof` produced — nothing conditions
+the write on the token converting, which is why `weight ARMCK abc` zeroes the
+weight rather than leaving it alone (§12's rule, now with its grammar).
+
+**Established — the store's range.** The product `float(currentWeight) ×
+factor` is narrowed by the runtime's truncating float-to-integer routine
+before the clamp. That routine returns the integer-indefinite value
+(`−2^31`) for any product outside the signed thirty-two-bit range or not a
+number, and the clamp's "at or below zero becomes zero" arm then stores
+**0**. A factor such as `1e10` — or an exponent large enough to overflow the
+conversion — therefore sets the weight to 0, not 100. An implementation
+whose float-to-integer conversion saturates instead (as Go's does on some
+targets) must special-case the out-of-range product to 0.
+
+**Correction.** Nothing previously written was wrong; §12 named the type
+and default and left the routine open. The code marker asked which of
+three candidate readers (the runtime's decimal conversion, the engine's
+fixed-point parser, the TDF integer accessor) applies: it is the first,
+through the directive library's own "argument *n* as float" accessor. The
+same accessor family's integer form reads `limit`'s token through the
+runtime's `atoi`. The reference install's profiles are
+indifferent — every one of their `weight` factors is a plain decimal
+(WU-19-167 census) — so the grammar matters only for third-party profiles.
+
+### Closed — the `Alliances` box carries row A, the alliance predicate's row [R-SAVE-02 §15] (2026-09-04, RWU-19-198)
+
+"Player records" and the WU-19-182 closure under "Sessions and campaign"
+established that one eleven-byte `Alliances` box is emitted per active
+`Player%i` account and left open which of the slot's two rows
+([05 R-SHARE-01 §1]) it carries. Both sides have been read.
+
+**Established — writer and reader.** The writer copies the slot's **row A**
+— this player's own declaration toward each slot index, the row every
+simulation predicate indexes — into the box, eleven bytes, immediately after
+`Side`. The reader, when the selected box is exactly eleven bytes, copies
+those bytes into the same row A and then forces the slot's own column to
+`1`. **Row B** (the mirror of the other slots' declarations toward this
+player) is neither written nor read by the save path: after a load it holds
+whatever slot initialization left there (the self entry only), which in
+single-player is also what battle entry leaves ([R-SKIR-01 §2]).
+
+**Consequence.** A restored battle reproduces every giver's own alliance
+declarations exactly, so resource sharing, the sensor phase's allied
+disjunct, the guard's combat join and the all-enemies-eliminated test — all
+row-A readers — behave as before the save. The one row-B reader, the mutual
+victory test, sees a diagonal-only row B after a load; in single-player it
+saw the same before the save, so nothing observable changes. A future
+multiplayer save would lose the mirror, which is a retail limitation, not
+one to repair.
+
+**Correction.** The "Sessions and campaign" item's residual — "**Unknown**
+for the row identity" — is closed: row A. The earlier `TODO(question)` at
+the alliance row's projection chose row A on the grounds that it is the only
+row the build models; that choice is now the traced one.
+
 
 ## R-AI-04 — Computer player: transport, naval, air, repair, reclaim and scouting policy (2026-09-04)
 
@@ -7820,6 +7913,71 @@ what a mission-authored unload does on a computer-owned carrier — is the
 owner-independent handler contract of [04 R-ORD-01 §4] and [04 §10.2], not a
 computer-player question.
 
+## R-SESS-01 — session and account material: RWU-19-199 findings (2026-09-04)
+
+### R-SESS-01 §8 — The session state word has no name in the image — Established (bounded negative) [R-SESS-01]
+
+"Session states" left as residual "UI-level names for states 0–4", with a
+static trace of the session callback table as the decider. The trace is
+done and the answer is negative:
+
+- The state word is one dword; the "callback table" is a **setter with an
+  eight-way switch** that stores the state and installs one function pointer
+  for it (0 → teardown A, 1 → teardown B, 2 → router, 3 → network pre-load,
+  4 → local pre-load, 5 → battle loading, 6 → battle, 7 → results; any other
+  value installs a null pointer). The setter also picks the timer callback:
+  the battle timer for state 6, the front-end timer otherwise. There is no
+  indexed table of records and therefore no per-state label field.
+- **No string is associated with any state.** The setter and the five
+  callbacks for states 0–4 reference no string at all. The readers of the
+  state word that do reference strings are the process initializer (profile
+  keys, font names), the save `Summary` writer (`Gametype`, `maxunits`, …),
+  the solar-system screen, the campaign CD prompt and the CD-audio helper —
+  none is a state label. The setter's callers pass literal state numbers
+  beside front-end screen selections and the `BigButton` cue.
+- The only "state"-named diagnostic in the image — `Code segment checksum
+  error found when switching FE states` — belongs to the **front-end
+  screen** word, a different machine ([07 R-FE-01]); `Object State`,
+  `Object States` and `Piece States` are the script debugger's ([04 §5]).
+  No `Teardown`, `Preload`, `Router` or similar string exists.
+
+Bounded to the recovered export. The five inferred labels in "Session
+states" stay Supported inference as *descriptions*; as *names* they are
+Nanolathe's, and an implementation's diagnostic strings for states 0–4 are
+its own to choose.
+
+### R-SESS-01 §9 — The restored `maxunits` word: where it lands, unclamped, and what reads it next — Established [R-SESS-01]
+
+[R-ENTRY-01 §6] names the battle-restoration dispatcher's first step,
+`Summary.maxunits` → "lobby unit-limit copy", and notes that the pool of the
+battle being loaded was already sized from that copy as it stood before the
+restore. The step itself, exactly:
+
+- The dispatcher tests the `Summary` account for a `maxunits` item; **only
+  when present** does it read it (integer, low 16 bits) and store it into
+  the **configured unit-limit word** — the one word the start-up profile
+  read seeds from `[Preferences]` `UnitLimit` (default 250, clamped 20..500,
+  [R-SKIR-01 §6]) and the multiplayer battleroom's `MAXUNITS` control
+  mirrors. A save without the item leaves the word untouched. **No clamp is
+  applied** at the restore.
+- Skirmish and multiplayer battle entry then copy that word into the
+  **session** limit word verbatim — the entry copy has no clamp either
+  ([R-SKIR-01 §6]'s "then clamped" is the start-up read only). So a restored
+  value outside 20..500 would size the *next* battle's pool at exactly that
+  value; a save written by retail carries the start-up-clamped word and never
+  exercises this.
+- The battle being restored is unaffected: its pool was allocated from the
+  pre-restore word ([R-ENTRY-01 §3]), and the restored session word is not
+  rewritten during a restore. The save writer records the configured word
+  (not the session word) as `Summary.maxunits`.
+
+*Implementation note (not a retail fact).* Nanolathe's "configured word" is
+the application's setup record in `cmd/nanolathe`, which supplies each
+battle's `UnitLimit` and the restore's pool size; the session package holds
+only the per-battle copy. Carrying the restored value to a second battle in
+one process is therefore an application-level write at the restore site,
+not a session change; `sessionUnitLimit` records exactly that.
+
 ## Required implementation invariants
 
 A conforming clean-room implementation must preserve these established
@@ -7893,12 +8051,13 @@ finding. The recitals are deleted here only; the body sections and the
   slot holds ([05 R-SHARE-01 §1]) the box carries; the first row is the one
   every simulation consumer indexes and the one skirmish setup fills, and the
   second keeps only its diagonal in skirmish ([R-SKIR-01 §2]), so a
-  first-row reading loses nothing observable in single-player. **Unknown**
-  for the row identity · static trace of the alliance reader's destination
-  field.
-- UI-level names for session states 0–4; their behavior, transitions,
+  first-row reading loses nothing observable in single-player. Row identity
+  · **closed 2026-09-04** (RWU-19-198): row A, on both the writer and the
+  reader side — [R-SAVE-02 §15].
+- ~~UI-level names for session states 0–4; their behavior, transitions,
   callbacks, and admission-mask classes are established · "Session states" ·
-  static trace.
+  static trace.~~ **Closed 2026-09-04 (negative):** no string names any
+  session state; the callback "table" is a setter switch [R-SESS-01 §8].
 - The AnyMsn toggle's exact listbox-selection effect — the last residual of
   the all-missions bit and of campaign progress held outside battle `.sav`
   files · "Progression" · manual retail observation.

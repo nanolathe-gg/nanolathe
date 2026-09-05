@@ -13,10 +13,10 @@ import (
 // A sector is eight cells on a side, and the stamp indexes the grid from the
 // unit's committed 16.16 position, not from its cell pair.
 //
-// These tests lock the half of the order this build can reproduce. The other
-// half — a bucket reads back from its head, so in reverse order of each unit's
-// most recent relink — needs per-unit link history this build does not carry,
-// and the marker on OccupancyGrid.overlapScan says so.
+// The other half — a bucket reads back from its head, so in reverse order of
+// each unit's most recent relink — is carried by the sector filing the stamp
+// maintains on the collision record [04 R-COLL-01 §11]; the last test here
+// locks it through a filing-aware fixture.
 
 // sectorFixture is an overlapFixture that also answers the committed position,
 // so the scan takes the position path rather than the rectangle-centre
@@ -189,5 +189,103 @@ func TestOverlapScanSpanReachesOneSectorPastTheRectangle(t *testing.T) {
 	}
 	if id, ok := g.OccupantAt(Cell{X: 16, Z: 24}); !ok || id != 7 {
 		t.Fatalf("the released cell holds (%d,%v), want the restamped intruder 7 [04 R-COLL-01 §4A]", id, ok)
+	}
+}
+
+// filingFixture is a sectorFixture that also carries each unit's sector filing,
+// so the stamp relinks and the scan orders by relink recency
+// [04 R-COLL-01 §11]. Slot-indexed, never a map [I1].
+type filingFixture struct {
+	*sectorFixture
+	filings []SectorFiling
+}
+
+func newFilingFixture(slots int) *filingFixture {
+	return &filingFixture{sectorFixture: newSectorFixture(slots), filings: make([]SectorFiling, slots)}
+}
+
+func (f *filingFixture) OverlapFiling(id int) *SectorFiling {
+	if id <= 0 || id >= len(f.filings) || !f.rect[id].ok {
+		return nil
+	}
+	return &f.filings[id]
+}
+
+// moveTo re-files a unit at a new anchor and position, as a commit's clear and
+// stamp would.
+func (f *filingFixture) moveTo(g *OccupancyGrid, id int, anchor Cell) {
+	r := f.rect[id]
+	g.ClearPlane(PlaneGround, r.anchor, r.fx, r.fz, id)
+	f.addAt(id, f.owner[id], anchor, r.fx, r.fz)
+	f.live = f.live[:len(f.live)-1] // addAt appended the id again
+	g.StampPlane(PlaneGround, anchor, r.fx, r.fz, id)
+}
+
+// TestOverlapScanOrdersOneSectorByRelinkRecency is the contention case inside
+// ONE sector [04 R-COLL-01 §11]: two intruders refused the same cell, both
+// filed in the same sector record. The bucket reads from its head, so the one
+// that relinked most recently is restamped first and takes the cell — first
+// the later-stamped higher slot; then, after the lower slot crosses a sector
+// boundary and comes back, the lower slot ahead of a still later arrival.
+func TestOverlapScanOrdersOneSectorByRelinkRecency(t *testing.T) {
+	const contested = 12 // sector column 1, row 1
+
+	f := newFilingFixture(16)
+	f.addAt(4, activeState, Cell{X: contested, Z: 10}, 1, 1) // the holder
+	f.addAt(6, activeState, Cell{X: contested, Z: 10}, 2, 1) // same sector as 9
+	f.addAt(9, activeState, Cell{X: contested - 1, Z: 10}, 2, 1)
+	g, _ := sectorGrid(f.sectorFixture)
+	g.AttachOverlap(f, func(owner uint8) uint8 { return owner })
+	f.restamp = func(id int) {
+		r := f.rect[id]
+		g.StampPlane(PlaneGround, r.anchor, r.fx, r.fz, id)
+	}
+
+	g.StampPlane(PlaneGround, Cell{X: contested, Z: 10}, 1, 1, 4)
+	g.StampPlane(PlaneGround, Cell{X: contested, Z: 10}, 2, 1, 6)
+	g.StampPlane(PlaneGround, Cell{X: contested - 1, Z: 10}, 2, 1, 9)
+	if f.filings[6].SX != f.filings[9].SX || f.filings[6].SZ != f.filings[9].SZ {
+		t.Fatalf("both intruders must be filed in one sector: %+v / %+v", f.filings[6], f.filings[9])
+	}
+	if !(f.filings[9].Seq > f.filings[6].Seq) {
+		t.Fatalf("the later stamp must carry the later sequence: %+v / %+v", f.filings[6], f.filings[9])
+	}
+
+	// Round one: 9 was linked after 6, so it is nearer the head.
+	if !g.ClearPlane(PlaneGround, Cell{X: contested, Z: 10}, 1, 1, 4) {
+		t.Fatalf("the holder's clear must release its cell [04 R-COLL-01 §4]")
+	}
+	if len(f.restamped) != 2 || f.restamped[0] != 9 || f.restamped[1] != 6 {
+		t.Fatalf("restamped %v, want [9 6] — most recent relink first [04 R-COLL-01 §11]", f.restamped)
+	}
+	if id, _ := g.OccupantAt(Cell{X: contested, Z: 10}); id != 9 {
+		t.Fatalf("the released cell holds %d, want 9", id)
+	}
+
+	// A stamp that does not cross a sector boundary keeps the unit's place.
+	seq6 := f.filings[6].Seq
+	f.moveTo(g, 6, Cell{X: contested, Z: 11})
+	if f.filings[6].Seq != seq6 {
+		t.Fatalf("a stamp inside the same sector must not relink: %+v", f.filings[6])
+	}
+	// Crossing into the next sector column and back relinks twice; 6 is now
+	// the most recent entry of the shared sector.
+	f.moveTo(g, 6, Cell{X: contested + 4, Z: 11})
+	f.moveTo(g, 6, Cell{X: contested, Z: 10})
+	if !(f.filings[6].Seq > f.filings[9].Seq) {
+		t.Fatalf("the sector crossing must relink 6 ahead of 9: %+v / %+v", f.filings[6], f.filings[9])
+	}
+
+	// Round two: 9 holds the cell as host with 6 refused again; a fresh
+	// intruder 7 is stamped later in the same sector. When 9 releases the
+	// cell, 7 is nearer the head than 6.
+	f.addAt(7, activeState, Cell{X: contested, Z: 10}, 1, 1)
+	g.StampPlane(PlaneGround, Cell{X: contested, Z: 10}, 1, 1, 7)
+	f.restamped = nil
+	if !g.ClearPlane(PlaneGround, Cell{X: contested, Z: 10}, 1, 1, 9) {
+		t.Fatalf("9's clear must release its cell")
+	}
+	if len(f.restamped) != 2 || f.restamped[0] != 7 || f.restamped[1] != 6 {
+		t.Fatalf("restamped %v, want [7 6] — 7 was linked after 6's return [04 R-COLL-01 §11]", f.restamped)
 	}
 }

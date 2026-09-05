@@ -4,7 +4,9 @@
 package content
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,14 +71,8 @@ func ParseAIDirectives(data []byte) []AIDirective {
 	var out []AIDirective
 	for _, rawLine := range strings.Split(string(data), "\n") {
 		line := strings.TrimRight(rawLine, "\r")
-		if idx := strings.Index(line, "//"); idx >= 0 {
-			line = line[:idx]
-		}
 		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), ";"))
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
+		parts := aiLineTokens(line)
 		if len(parts) == 0 {
 			continue
 		}
@@ -93,12 +89,14 @@ func ParseAIDirectives(data []byte) []AIDirective {
 	return out
 }
 
-// ParseAIWeightFactor reads a `weight` directive's second argument. The
-// established default is 0.0 [08 R-AI-01 §12], and it covers an absent
-// argument and text that is not a float at all alike, so the returned value is
-// usable whatever the flag says. The flag reports only whether the text
-// converted; nothing in the grammar conditions the directive on it, so a caller
-// that uses the flag as an admission test is diverging from the grammar.
+// ParseAIWeightFactor reads a `weight` directive's second argument the way the
+// C runtime's atof does [08 R-AI-01 §19]: the longest decimal prefix converts
+// (`0.5`, `.5`, `1e0`, `1d0`, `2x` → 0.5, 0.5, 1, 1, 2) and a token with no
+// digit — `abc`, `0x10`, or an absent argument — is the established default
+// 0.0 [08 R-AI-01 §12], so the returned value is usable whatever the flag
+// says. The flag reports only whether a digit was consumed; nothing in the
+// grammar conditions the directive on it, so a caller that uses the flag as an
+// admission test is diverging from the grammar.
 func ParseAIWeightFactor(value string) (float64, bool) {
 	return parseAIWeightFactor(value)
 }
@@ -181,16 +179,109 @@ func ParseAIWeight(data []byte) *AIWeightPlan {
 	return plan
 }
 
+// parseAIWeightFactor is the runtime `atof` read of [08 R-AI-01 §19]; the
+// flag reports whether the token contributed at least one digit.
 func parseAIWeightFactor(value string) (float64, bool) {
-	factor, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err == nil {
-		return factor, true
+	return crtAtof(value)
+}
+
+// crtAtof converts s the way the C runtime's atof does [08 R-AI-01 §19]:
+// leading whitespace is skipped, then the longest prefix of the form
+// `[+-]digits[.digits][(e|E|d|D)[+-]digits]` is converted and everything
+// after it is ignored. A prefix with no digit (including an empty string)
+// is 0.0. There is no hexadecimal form and no `inf`/`nan` token; an
+// exponent that overflows yields the runtime's overflow value (±Inf), which
+// the weight store then turns into 0 (aiWeightStore). The second result is
+// whether a digit was consumed — informational only, the grammar never
+// conditions a directive on it.
+func crtAtof(s string) (float64, bool) {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || (s[i] >= '\t' && s[i] <= '\r')) {
+		i++ // C isspace: space, \t \n \v \f \r
 	}
-	factor = parseAIFloat(value)
-	if factor == 0 && !isZeroFloatString(value) {
+	start := i
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		i++
+	}
+	digits := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+		digits++
+	}
+	if i < len(s) && s[i] == '.' {
+		i++
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+			digits++
+		}
+	}
+	if digits == 0 {
 		return 0, false
 	}
-	return factor, true
+	mant := s[start:i]
+	exp := ""
+	if i < len(s) && (s[i] == 'e' || s[i] == 'E' || s[i] == 'd' || s[i] == 'D') {
+		j := i + 1
+		if j < len(s) && (s[j] == '+' || s[j] == '-') {
+			j++
+		}
+		k := j
+		for k < len(s) && s[k] >= '0' && s[k] <= '9' {
+			k++
+		}
+		if k > j {
+			exp = "e" + s[i+1:k] // the runtime accepts d/D as exponent letters; Go does not
+		}
+	}
+	f, err := strconv.ParseFloat(mant+exp, 64)
+	if err != nil {
+		// ParseFloat returns ±Inf (and a range error) on overflow and 0 on
+		// underflow, which is the runtime's result too; any other error is
+		// impossible for a string of this shape.
+		var ne *strconv.NumError
+		if !errors.As(err, &ne) || ne.Err != strconv.ErrRange {
+			return 0, false
+		}
+	}
+	return f, true
+}
+
+// aiWeightStore is the `weight` directive's store [08 R-AI-01 §12]
+// [08 R-AI-01 §19]: the product of the running weight and the factor is
+// truncated toward zero by the runtime's float-to-integer routine, and the
+// clamp is "at or below zero becomes zero, at or above 100 becomes 100". That
+// routine returns the integer-indefinite value (-2^31) for a product outside
+// the signed 32-bit range or not a number, so such a product stores 0 — a
+// factor of 1e10 zeroes the weight rather than pinning it at 100. Go's
+// float-to-int conversion is implementation-defined out of range, hence the
+// explicit test.
+func aiWeightStore(cur int32, factor float64) int32 {
+	product := float64(cur) * factor
+	if math.IsNaN(product) || product >= 2147483648.0 || product < -2147483648.0 {
+		return 0
+	}
+	newWeight := int32(product) // trunc toward zero [INVARIANTS I3]
+	if newWeight < 0 {
+		newWeight = 0
+	} else if newWeight > 100 {
+		newWeight = 100
+	}
+	return newWeight
+}
+
+// aiLineTokens splits one profile line the way retail's directive tokenizer
+// does [08 R-AI-01 §19]: a `#` ends the line (whether it starts a token or
+// sits inside one), tokens are separated by runtime whitespace, and at most
+// twenty tokens are kept. `//` is not a comment introducer.
+func aiLineTokens(line string) []string {
+	if idx := strings.IndexByte(line, '#'); idx >= 0 {
+		line = line[:idx]
+	}
+	parts := strings.Fields(line)
+	if len(parts) > 20 {
+		parts = parts[:20]
+	}
+	return parts
 }
 
 // aiPlanNames is the difficulty vocabulary of the plan gate [08 R-AI-01 §12].
@@ -349,15 +440,13 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 		line := strings.TrimRight(rawLine, "\r")
 		// Blank // comments to spaces before parsing, preserving offsets idea from [02 §4],
 		// but for AI plain text we simply truncate at // [08 "Computer-controlled players"].
-		// Inline // after a value is a comment and must be ignored.
-		if idx := strings.Index(line, "//"); idx >= 0 {
-			line = line[:idx]
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		parts := strings.Fields(trimmed)
+		// Correction (RWU-19-198): this used to cut the line at `//`. Retail's
+		// tokenizer knows only `#` as a comment introducer; `//` is an
+		// ordinary token, so a line starting with it is an unknown keyword
+		// (ignored whole) and a `//` between a name and its factor IS the
+		// factor [08 R-AI-01 §19]. Stock profiles are indifferent — a trailing
+		// `// note` after the factor is beyond the two read arguments either way.
+		parts := aiLineTokens(line)
 		if len(parts) == 0 {
 			continue
 		}
@@ -382,24 +471,19 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if len(currentPlans) == 0 {
 				continue // gate: weight lines before plan do not apply [PLAN 11 C4]
 			}
-			// The factor is "a float, defaulting to 0.0" [08 R-AI-01 §12], and
-			// the directive applies with that default — nothing in the grammar
-			// conditions the write on the argument converting. This used to
-			// skip the directive when the factor was absent or unconvertible,
-			// which is the one arm research rules out: retail would have
-			// written clamp(trunc(current * 0.0)) = 0, not left the weight
-			// alone. `limit` below is the same shape with an integer default
-			// of 0, and already reads that way.
-			//
-			// TODO(question): which conversion reads the factor is still open.
-			// [08 R-AI-01 §12] gives the type and the default but names no
-			// routine, and the CRT decimal converter differs from
-			// strconv.ParseFloat on trailing junk and on hex forms. Decider:
-			// the `weight` handler's conversion call, to be recorded in
-			// [08 R-AI-01 §12]. It is unauthored either way — the reference
-			// install's ten AI profiles carry 947 `weight` directives and every
-			// factor is a plain decimal (WU-19-167 census) — so the arms differ
-			// only on third-party profiles.
+			// The factor is "a float, defaulting to 0.0" [08 R-AI-01 §12], read
+			// through the C runtime's atof — the longest decimal prefix of the
+			// token, junk ignored, no digits → 0.0 — and the directive applies
+			// with whatever that yields; nothing in the grammar conditions the
+			// write on the token converting [08 R-AI-01 §19]. This used to skip
+			// the directive when the factor was absent or unconvertible, which
+			// is the one arm research rules out: retail writes
+			// clamp(trunc(current * 0.0)) = 0 rather than leaving the weight
+			// alone. `limit` below is the same shape with an integer default of
+			// 0, and already reads that way. It is unauthored either way — the
+			// reference install's ten AI profiles carry 947 `weight` directives
+			// and every factor is a plain decimal (WU-19-167 census) — so the
+			// grammar matters only for third-party profiles.
 			typeName, factorStr, ok := aiDirectiveTypeAndValue(parts[1:])
 			if !ok {
 				continue
@@ -416,15 +500,7 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 				if v, ok := pl.Weights[ck]; ok {
 					cur = v
 				}
-				// [08 R-AI-01 §12]: the directive multiplies the running per-type
-				// weight and clamps the product to [0,100].
-				newWeight := int32(float64(cur) * factor) // trunc toward zero [INVARIANTS I3]
-				if newWeight < 0 {
-					newWeight = 0
-				} else if newWeight > 100 {
-					newWeight = 100
-				}
-				pl.Weights[ck] = newWeight
+				pl.Weights[ck] = aiWeightStore(cur, factor)
 			}
 		case "limit":
 			if len(currentPlans) == 0 {
@@ -479,39 +555,6 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 	}
 	profile.Hash = HashDefinition([]byte(b.String()))
 	return profile, nil
-}
-
-func isZeroFloatString(s string) bool {
-	trim := strings.TrimSpace(s)
-	if trim == "" {
-		return false
-	}
-	for _, c := range trim {
-		if c != '0' && c != '.' && c != '+' && c != '-' {
-			return false
-		}
-	}
-	return strings.Contains(trim, "0")
-}
-
-func parseAIFloat(s string) float64 {
-	trim := strings.TrimSpace(s)
-	if trim == "" {
-		return 0
-	}
-	// Handle leading dot ".1"
-	if strings.HasPrefix(trim, ".") {
-		trim = "0" + trim
-	} else if strings.HasPrefix(trim, "-.") {
-		trim = "-0." + trim[1:]
-	} else if strings.HasPrefix(trim, "+.") {
-		trim = "+0." + trim[1:]
-	}
-	f, err := strconv.ParseFloat(trim, 64)
-	if err != nil {
-		return 0
-	}
-	return f
 }
 
 // CompileAIProfiles compiles AI profiles from ai/*.txt [08 "Computer-controlled players"] [PLAN 02 Discovery].
