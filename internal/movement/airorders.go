@@ -1436,6 +1436,15 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	u.Z = numeric.Fixed(int64(fl.Z))
 	u.Move.Heading = fl.Heading
 	u.Move.Speed = numeric.Fixed(int64(fl.Speed))
+	// The mover's VELOCITY TRIPLE [04 R-MOV-01 §1]. The flight integrator owns
+	// all three components on this path — the decay, the brake shaping, the
+	// vertical clamp and the horizontal acceleration each write them — and it
+	// assigns an exact zero triple for any mode other than airborne
+	// [04 §10.1][04 R-AIR-01 §1], so a landed aircraft publishes zero here on
+	// its very next tick without needing a second writer.
+	u.Move.VelX = numeric.Fixed(int64(fl.VX))
+	u.Move.VelY = numeric.Fixed(int64(fl.VY))
+	u.Move.VelZ = numeric.Fixed(int64(fl.VZ))
 	if coll := s.Collisions[handle]; coll != nil {
 		coll.X = int32(fl.X)
 		coll.Y = int32(fl.Y)

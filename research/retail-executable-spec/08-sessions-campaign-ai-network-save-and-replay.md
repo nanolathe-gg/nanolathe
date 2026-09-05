@@ -598,11 +598,20 @@ foreground overlay, which answers its role. The presentation clock is
 `GetTickCount × rate / 1000` where `rate` is the configured presentation
 frame rate; every "unit" in this section is one such tick.
 
-**Planet rotator** (per draw, rate-limited to one step per 25 ms of wall
-clock): when the narration has stopped playing and the `SHUTUP` control is
-visible, it is hidden; then if the current presentation tick differs from the
-last one seen, the rotation sequence advances one frame and the frame is
-blitted centred in the `PLANET` gadget.
+**Planet rotator** (per draw, its whole body rate-limited to one pass per
+25 ms of wall clock — `GetTickCount`, not the scaled clock: the pass runs
+once the tick count has reached the stored deadline and then sets the
+deadline 25 ms ahead): when the narration has stopped playing and the
+`SHUTUP` control is visible, it is hidden; then the rotation sequence takes
+**one cursor step** and the cursor's current frame is blitted centred in the
+`PLANET` gadget. That step is the shared sequence stepper of [03 §4.4], so it
+changes the frame only once the frame's own authored duration countdown has
+run out, and it wraps according to the entry's loop word: the rotation rate
+is `40 / duration` frames a second, not 40. Stock rotation entries are 35–36
+frames at duration 3, so a planet turns once every 2.6–2.7 seconds. (The
+step also sits behind a test of the scaled clock against a remembered value,
+but nothing ever writes that value, so the test always passes and it is not
+a second gate.)
 
 **Wind display.** At screen entry two CRT draws are taken (this is the
 [01 §7.3] pair): `speed = rand() % (maxwindspeed − minwindspeed + 1) +
@@ -619,7 +628,13 @@ front end runs (no simulation is ticking).
 **Briefing text and narration.** After the gadgets are bound, the text
 loader reads slot 2 (`camps\briefs\<brief>.TXT`) into a scrolling text
 region (`TextRegion`, `MOREBAR` pages it); the `SOLARSYSTEM` and `TextRegion`
-gadgets are given font index `localSide + 1`. Slot 3 (narration) is started
+gadgets are given font index `localSide + 1` — `armfont` for Arm, `corefont`
+for Core, since `MSNBRIEF`'s kind-7 records are `smlfont`, `armfont`,
+`corefont` in that order ([07 R-WGT-01 §12]). The text is wrapped before it
+is paged: the wrapper of [07 R-FE-02 §6] is called with the `TextRegion`
+gadget and that gadget's authored **width**, so it measures through the
+gadget's own FNT; the blink-run pre-split of [07 R-FE-02 §7] then runs over
+the wrapped buffer and the pager of [07 R-HUD-03 §10] lays it. Slot 3 (narration) is started
 with a 60-scaled-tick (two-second) **delay** at full DirectSound volume
 (the volume argument is 0 = full scale, [03 R-AUD-02 §1]) unless the session
 is in the live-battle state; `SHUTUP` is a
@@ -7208,15 +7223,26 @@ a decode failure leaves the image null, which sends state 5 down the
 no-glamour branch. In every other case it loads the front-end bitmap
 `Outcome1` (kind 1) or `Outcome0` (kinds 2, 3) as the background instead.
 
-**Fade table.** For each of the 1024 palette bytes `b` (index `i`): with
-`cur = currentPalette[i]` (the decoded image's palette) and
-`dst = desiredPalette[i]` (the display palette at entry), the signed step is
-`0` when equal; `max(1, (dst − cur) / 5)` when `dst > cur`; and
+**Fade table.** The glamour screen fades **up out of black into the image's
+own colours**, and it does so entirely through the palette: the picture is
+blitted once, at full opacity, into a display whose palette has just been
+zeroed, and only the palette moves afterwards. The table builder is handed the
+*desired* palette first and the *current* palette second, and state 5 passes
+the decoded image's palette as the desired one and a 1024-byte block of zeros
+as the current one, installing that black palette immediately. So
+`dst = desiredPalette[i]` is the **decoded image's** palette and
+`cur = currentPalette[i]` starts at 0. For each of the 1024 bytes the signed
+step is `0` when equal; `max(1, (dst − cur) / 5)` when `dst > cur`; and
 `min(−1, (dst − cur) / 5)` when `dst < cur` (integer division truncating
 toward zero, steps = 5). **Fade step** (once per unit): each byte becomes
 `cur + step` clamped so it never passes `dst` in the step's direction; when
 all 1024 bytes equal the target the done flag is set; the current palette is
-then pushed to the display. (Presentation of the palette itself is doc 03's.)
+pushed to the display on every step, done or not. (Presentation of the
+palette itself is doc 03's.)
+
+Nothing puts the display palette back between the fade and `ENDMSN`: what
+takes it off the glamour image's palette is the population step's own
+background install, which loads `outcome1`/`outcome0` with its palette (§8).
 
 **Cleanup.** When `ENDMSN.GUI` closes, the frame copy, glamour image, the four
 palette buffers and the gadget data are freed and the display gamma restored.
@@ -7357,6 +7383,21 @@ just-played mission into the record, the background is `outcome1`, and the
 background is `outcome0` and focus goes to `MainMenu`. (So a **won final
 mission** and every non-campaign session get `outcome0`; a lost mission or a
 won mission with a successor gets `outcome1`.)
+
+**Established — what "the background is `outcome1`" does.** The bitmap goes
+to the shared bitmap cache with `ENDMSN` already open and with both of the
+cache call's install flags set, which is three things at once: the screen is
+cleared, the decoded bitmap **replaces** the window's background pointer — so
+the authored `panel=BackTile` fill is not what `ENDMSN` shows — and the
+bitmap's own 256-entry palette is installed on the display. That last part is
+the only thing that takes the display off the glamour image's palette (§6).
+`bitmaps\outcome1.pcx` is the 640×480 statistics backdrop: it carries the
+`Name`/`Kills`/`Losses`/`Energy Produced`/`Metal Produced`/`Excess Energy`/
+`Excess Metal`/`Score` column headings and the frames the score bars, the
+mission list and the button column sit in, so a screen drawn without it is
+missing every heading (asset census). The outcome-art preparer of §6 passes
+the same call its *defer* flag instead, so its `Outcome1`/`Outcome0` load only
+decodes and caches; this population step is the one that installs.
 
 If `route`: the mission list is built (§1) and rewritten by the *mark
 prefixer*: each entry becomes two bytes plus the name, the first byte being

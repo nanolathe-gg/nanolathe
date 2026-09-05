@@ -54,22 +54,63 @@ func (g *gameShell) openCampaignBriefing() {
 	g.consumeBriefingAudio(g.briefing.OpeningAudio())
 	if loaded.OTA != nil {
 		globals := mission.DecodeMissionGlobals(loaded.OTA.Global)
-		g.briefing.SetText(readBriefingText(g.cs, globals.Brief))
+		g.briefing.text = readBriefingText(g.cs, globals.Brief)
 	}
 	g.briefingPanel = g.loadBriefingPanel(g.briefing.planet)
-	if g.briefingPanel != nil && g.briefingPanel.Window != nil {
-		for i, gadget := range g.briefingPanel.Window.Gadgets {
-			if i != 0 && strings.EqualFold(gadget.Name, "TextRegion") {
-				height := int(g.briefingPanel.Window.PlacedRect(i).H)
-				fontHeight := g.retailTextHeight()
-				if fontHeight > 0 {
-					g.briefing.SetPageLines(height / (fontHeight + 2))
-				}
-				break
-			}
-		}
-	}
+	g.installBriefingTextRegion()
 	g.briefingNowMS = 0
+}
+
+// installBriefingTextRegion resolves the TextRegion gadget's font and hands the
+// authored text, the gadget's own size and that font's metric to the pager. The
+// gadget's font index is the local side plus one, and a font index selects the
+// n-th kind-7 record of the window counting from zero — so Arm gets `armfont`
+// and Core `corefont` [08 R-CAMP-01 §2][07 R-WGT-01 §12].
+func (g *gameShell) installBriefingTextRegion() {
+	if g == nil || g.briefing == nil || g.briefingPanel == nil || g.briefingPanel.Window == nil {
+		return
+	}
+	window := g.briefingPanel.Window
+	g.briefingFont = g.loadRetailWindowFont(window, g.missionSide+1)
+	for i, gadget := range window.Gadgets {
+		if i == 0 || !strings.EqualFold(gadget.Name, "TextRegion") {
+			continue
+		}
+		rect := window.PlacedRect(i)
+		g.briefing.SetTextRegion(g.briefing.text, int(rect.W), int(rect.H), g.briefingTextHeight(), g.briefingTextWidth)
+		return
+	}
+}
+
+// loadRetailWindowFont is the FNT of the window's n-th kind-7 font record,
+// counting from zero in index order — the screen writes `localSide + 1` into
+// the TextRegion gadget's font number at open, which is what the window's
+// per-gadget selector then walks. A missing record or an unreadable file
+// leaves the font null and the caller keeps the common font
+// [07 R-WGT-01 §6][07 R-WGT-01 §12][03 R-FONT-01 §5].
+func (g *gameShell) loadRetailWindowFont(window *gui.Window, index int) *formats.FNT {
+	if g == nil || g.cs == nil || g.cs.fs == nil || window == nil || index < 0 || index > 127 {
+		return nil
+	}
+	return window.Font(g.cs.fs, uint8(index))
+}
+
+// briefingTextWidth and briefingTextHeight are the TextRegion font's metrics.
+// The wrapper, the lines-per-page divide and the run pen all measure through
+// the same font, so they share one accessor; the front-end GAF font stands in
+// only when the authored FNT could not be read [07 R-FE-02 §6][07 R-HUD-03 §10].
+func (g *gameShell) briefingTextWidth(text string) int {
+	if g != nil && g.briefingFont != nil {
+		return client.MeasureText(g.briefingFont, text)
+	}
+	return g.retailTextWidth(text)
+}
+
+func (g *gameShell) briefingTextHeight() int {
+	if g != nil && g.briefingFont != nil && g.briefingFont.Height != 0 {
+		return int(g.briefingFont.Height)
+	}
+	return g.retailTextHeight()
 }
 
 // applyRetailContinuation maps the typed Summary continuation into the same
@@ -298,6 +339,14 @@ func (g *gameShell) drawBriefing(c *client.Client) {
 		if e, ok := g.assets.briefing.art.Find(b.planet.Panorama); ok {
 			b.SetPanoramaFrameCount(len(e.Frames))
 		}
+		// The rotation column's sequence is registered with the frame-advance
+		// timer when the briefing GAF loads; a missing sequence leaves the
+		// gadget without animation [08 R-CAMP-01 §2].
+		if e, ok := g.assets.briefing.art.Find(b.planet.Rotate); ok {
+			b.SetRotationSequence(e)
+		} else {
+			b.SetRotationSequence(nil)
+		}
 	}
 	b.Update(g.briefingNowMS, briefingPresentationTick(g.briefingNowMS))
 	// The authored side background names are mbriefarm/mbriefcore. Missing
@@ -320,6 +369,18 @@ func (g *gameShell) drawBriefing(c *client.Client) {
 			g.drawBriefingSolarSystem(c, b, r)
 		case "textregion":
 			g.drawBriefingText(c, b, r)
+		case "morebar", "more":
+			// MOREBAR is a kind-5 label the pager captions; the screen leaves
+			// its own font number alone, so on MSNBRIEF it selects the first
+			// kind-7 record (`smlfont`) and the label painter takes the FNT
+			// path with the caption colour installed raw. Only the text
+			// region and the solar system get `localSide + 1`
+			// [08 R-CAMP-01 §2][07 R-WGT-01 §6][03 R-FONT-01 §6].
+			if font := g.windowGadgetFont(panel, gad); font != nil {
+				g.drawRetailLabelFNT(c, panel, gad, r, b.MoreCaption(), font, b.CaptionColor())
+			} else {
+				g.drawBriefingLine(c, b.MoreCaption(), int(r.X)+5, int(r.Y), b.CaptionColor())
+			}
 		default:
 			g.drawBriefingGadget(c, panel, i, gad, r)
 		}
@@ -402,7 +463,7 @@ func (g *gameShell) drawBriefingPlanet(c *client.Client, b *campaignBriefingCont
 	if !ok || len(e.Frames) == 0 {
 		return
 	}
-	f := e.Frames[b.rotateFrame%len(e.Frames)].Frame
+	f := e.Frames[b.RotationFrame()%len(e.Frames)].Frame
 	if f == nil {
 		return
 	}
@@ -419,10 +480,42 @@ func (g *gameShell) drawBriefingSolarSystem(c *client.Client, b *campaignBriefin
 	g.drawRetailString(c, fmt.Sprintf("Gravity : %.1f", float32(globals.Gravity)), x, y+20, int(r.W), g.guiColor(15))
 }
 
+// drawBriefingText emits the current page's labels the way the pager creates
+// them: one per line at `(regionX + 5, regionY + (fontHeight+2)/2 +
+// i × (fontHeight+2))`, in the side's plain text colour, with each `&X…&` run
+// drawn over the label at the pen the pager measured [07 R-HUD-03 §10]
+// [07 R-FE-02 §7].
 func (g *gameShell) drawBriefingText(c *client.Client, b *campaignBriefingController, r gui.Rect) {
-	if b == nil || b.text == "" {
+	if b == nil || c == nil {
 		return
 	}
-	page := b.pageText()
-	g.drawRetailString(c, page, int(r.X), int(r.Y), int(r.W), g.guiColor(15))
+	lines := b.Lines()
+	if len(lines) == 0 {
+		return
+	}
+	step := g.briefingTextHeight() + 2
+	x := int(r.X) + 5
+	plain := b.PlainColor()
+	for i, line := range lines {
+		y := int(r.Y) + step/2 + i*step
+		g.drawBriefingLine(c, line.Text, x, y, plain)
+		for _, run := range line.Runs {
+			g.drawBriefingLine(c, run.Text, x+run.X, y, run.Color(b.localSide))
+		}
+	}
+}
+
+// drawBriefingLine draws one label of the text region. The pager gives its
+// labels no width, so nothing here truncates: the wrapper is what keeps a line
+// inside the region [07 R-HUD-03 §10].
+func (g *gameShell) drawBriefingLine(c *client.Client, text string, x, y int, color byte) {
+	if text == "" {
+		return
+	}
+	if g != nil && g.briefingFont != nil {
+		width, _ := c.Size()
+		c.UITextWidth(g.briefingFont, text, x, y, width-x, color)
+		return
+	}
+	g.drawRetailString(c, text, x, y, -1, color)
 }

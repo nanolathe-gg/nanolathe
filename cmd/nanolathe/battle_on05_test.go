@@ -99,6 +99,14 @@ func newTestBattle(cat *content.Catalog, terrain *world.Terrain) *battleSession 
 	_ = orders.Lookup("Move_Ground")
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	b.cam = cam
+	// Retail has one message ring; battleSession.messageRing() reaches it
+	// through the installed presentation client [07 R-HUD-03 §14.3]. A
+	// fixture client, sized like the negotiated default surface, gives the
+	// hotkey tests (F3/F12, the speed announcement) the same ring the real
+	// battle shell shares with the composer.
+	if cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: 640, Height: 480}); err == nil {
+		b.cl = cl
+	}
 	// Picking is a hull test over the candidate's root-piece bounds
 	// [07 R-REV-01], so a fixture unit needs a model the presentation can
 	// resolve. These tests hold no VFS, so they author one: a symmetric

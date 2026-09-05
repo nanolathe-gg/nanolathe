@@ -349,11 +349,20 @@ are the callbacks; `openMissionMenu`, `retailSkirmishStartError` and
 `[07 R-FE-01 §5]`. `retail_menu.go` owns the panel refreshes and the authored
 data flow (campaign options, map data, skirmish rows, ally icons, hover help);
 `retail_menu_list.go` the listbox and the scrollbar geometry, knob sizing and
-drag; `retail_menu_options.go` the options family — `STARTOPT.GUI` and all four
+drag; `retail_menu_options.go` the options family — both roots and all four
 merged pages (`SOUNDS`, `MUSIC`, `SPEEDS` — whose root button is captioned
 `INTERFACE` — and `VISUALS`), the display-mode list, the per-page `RESTORE` and
 `UNDO`, the entry snapshot `CANCEL` restores, and the slider arithmetic
-`[07 R-FE-01 §6]` `[03 R-AUD-01 §2]` `[03 R-AUD-01 §4]` `[07 R-CAM-01 §7]`;
+`[07 R-FE-01 §6]` `[03 R-AUD-01 §2]` `[03 R-AUD-01 §4]` `[07 R-CAM-01 §7]`.
+Every routine there takes one of two arms, chosen by the `inBattle` word on the
+options state: the front end opens `STARTOPT.GUI` over `options4x` and merges
+`SOUNDS`/`MUSIC`/`SPEEDS`/`VISUALS` with their own full-screen plates; the
+battle opens `PREFS.GUI` with no bitmap at any step, widened by 150 columns with
+a `PANEL` gadget synthesised over them, `MAP`- and `VID`-prefixed gadgets
+hidden, and merges the `…RT.GUI` variants through the merge's centring branch
+instead of its origin-add branch. The stored audio block, game speed and
+`Interface Type` word live on `gameShell` beside the display and message
+blocks, so one options session can write them whichever arm it took;
 `retail_menu_message.go` the
 `MSGBOX` layer with its word wrap `[07 R-FE-02 §6]` `[07 R-FE-01 §9]`;
 `retail_menu_draw.go` the screen painter, including the art-less bevel and the
@@ -380,6 +389,21 @@ lit variant that resolves through the palette's light table. Where a window
 selects a GAF slot it restores slot 0 afterwards, and a null slot falls back to
 the active FNT with the width limit dropped `[03 R-FONT-01 §6]`
 `[07 R-HUD-04 §4]`.
+
+The active FNT is per gadget. `gui.Window.FontRecord` is the walk every text
+painter opens with — the n-th kind-7 record of the window, n the gadget's
+`fontnumber` read as a signed byte, so 0 is the window's first record and
+9/132/205 select none — and `gui.Window.Font` loads and caches that record's
+FNT through the VFS, nil when no record matches or the file is missing (the
+common font stays) `[07 R-WGT-01 §6]` `[03 R-FONT-01 §5]`. The painters apply
+it as retail does: a label whose number matched draws through the FNT drawer
+directly (`drawRetailLabelFNT`, `drawModalLabelFNT`); a button, listbox or
+text-input string, and a label that matched nothing, go through the GAF pen,
+where the selected FNT is reached only on the null-slot fallback
+(`drawRetailStringSelected`, `drawProductButtonCaptionSelected`). A side
+page's build count therefore stays `hattfont12` although every product button
+selects `armbutt`/`corbutt`; `MSNBRIEF`'s `MOREBAR` caption is `smlfont` and
+its paged lines carry the text region's `localSide + 1` `[08 R-CAMP-01 §2]`.
 
 ### 2.7 `cmd/nanolathe` — the battle session
 
@@ -409,11 +433,31 @@ that re-jumps every host frame, the left-button order at the lens point, and the
 minimap hover unit `[07 R-CAM-01 §11]` `[07 R-CAM-01 §5]`.
 `battle_placement.go` owns `cursorWorld` (the SC20 resolver), the build ghost,
 the site check and `commitBuild`. `battle_commands.go` and `battle_dispatch.go`
-are the command boundary of §3.4. `battle_menu.go` drives the modal chain;
+are the command boundary of §3.4. `battle_menu.go` drives the modal chain and `battle_options.go` the in-battle
+options window `ARMOPT`'s `PREFS` opens over it;
 `battle_settings.go` the damage-bar and message-line options;
 `battle_cursor.go` the pointer update and the footer hover;
-`battle_status.go` the status line, game speed and pause;
+`battle_status.go` the game-speed and pause hotkeys, posting the announcement
+to the shared message ring;
 `battle_queue_overlay.go` the overlay's art resolution and draw.
+
+**One message ring.** Retail has a single 30-entry message ring, fed alike by
+unit captions, chat and the game-speed announcement `[07 R-HUD-03 §14]`. The
+presentation client (`internal/client`) owns the one instance: it is what
+`drawMessageLines` paints and what the INTERFACE options page's `TXTSCROL`/
+`MAXLINES` sliders configure through `ConfigureMessageLines`. `battleSession.
+messageRing()` (`battle_status.go`) returns that same instance through the
+`*client.Client` `installBattleClient` wires onto the battle shell (field
+`battleSession.cl`), rather than holding a second ring — so F3's glide, F12's
+clear and the speed announcement's post all share the 30 entries and the one
+pair of visited/jumped cursors the composer's highlight and the caption
+producer both depend on. The announcement (`setGameSpeed`) posts to this ring
+as kind 2, silent, no source unit `[07 R-CAM-01 §3]`; its only drawn
+representation is the ring line the message column paints at its usual
+position, so nothing else renders it a second time. This is a different
+readout from the slide strip's own always-on `Game Speed` line below, which
+recomputes from the live clock every frame it is drawn and is not ring-backed
+`[07 R-HUD-04 §4]`.
 
 ### 2.8 `cmd/nanolathe` — the battle HUD
 
@@ -432,7 +476,10 @@ hit-tested but fires nothing `[07 R-WGT-01 §1]` `[07 R-WGT-01 §3]`;
 `battle_hud_minimap.go` the radar rebuild and draw;
 `battle_hud_scorepanel.go` the Space-held Kills/Losses panel;
 `battle_hud_slidestrip.go` the bottom slide strip; `battle_hud_modal.go` the
-modal draw, its placement, the nine-slice `BackTile` fill and the paused title.
+modal draw, its placement, the nine-slice `BackTile` fill and the paused title,
+and the last composition layer — the child windows `ARMOPT` opens over the
+battle: the options root (`battle_options_draw.go`) and the save/load dialog,
+with the shell's `MSGBOX` above them `[07 R-FE-01 §6]` `[07 R-FE-01 §8]`.
 `unitinfo.go` is `UNITINFOx.GUI`, a child window that services a release before
 the command page does `[07 R-HUD-03 §8]`.
 
@@ -655,14 +702,15 @@ Not persisted: the networking identity fields, which are retail values this
 engine has no owner for and are deliberately absent rather than written as
 invented defaults.
 
-Four persisted values are stored and re-shown but not yet consumed, each with
+Three persisted values are stored and re-shown but not yet consumed, each with
 its consumer named at the write site: `Sound Mode`'s `Mono`-versus-`3D`
 distinction (the output device's 3-D flag — this build pans positionally either
-way), `gamespeed` (no session exists while the front-end options root is open;
-battle entry is the reader), `Interface Type` (`internal/orders` holds the word
-behind a `TODO(T23)` and exports no setter), and the per-track music category
-array (retail persists it in the `CDLISTS` ring keyed by the drive's volume
-serial, which this build has no analogue for).
+way), `Interface Type` (`internal/orders` holds the word behind a `TODO(T23)`
+and exports no setter), and the per-track music category array (retail persists
+it in the `CDLISTS` ring keyed by the drive's volume serial, which this build
+has no analogue for). `gamespeed` is consumed only from the in-battle arm: the
+front-end root has no session to apply it to, and battle entry is the reader
+there.
 
 **C18 — the in-battle modal chain.** An empty selection activates the
 side-authored `<prefix>gen.gui`, not the underlying `<prefix>main.gui`. In a
@@ -674,10 +722,40 @@ focus on it. The options window keeps its authored origin, while the `0x1000`
 modal flag centres Exit and Yes/No in the playfield to the right of the
 128-pixel rail. The `MISSION` gadget is **relabelled** to the translated
 `Settings` for a skirmish and opens `GAMEOPTIONS.GUI`; it is never hidden or
-greyed. Each modal renders into an exactly sized clipped surface whose
-background resolves through the common `BackTile` as a nine-slice fill, and
-labels use the primary GAF font rather than the side FNT `[07 R-FE-01 §7]`
-`[07 R-FE-02 §4]` `[08 R-SKIR-01 §11]`.
+greyed. `PREFS` opens the options root as a child window over `ARMOPT`, which
+stays on the chain underneath with its pause bit still set; the root's `PREV`
+("OK") saves the whole preference block and `CANCEL` restores the entry
+snapshot, and either one returns to `ARMOPT` rather than to the battle. Escape
+takes the same route, because `PREFS.GUI` authors `escdefault=PREV`. Each modal
+renders into an exactly sized clipped surface whose background resolves through
+the common `BackTile` as a nine-slice fill, and labels use the primary GAF font
+rather than the side FNT `[07 R-FE-01 §6]` `[07 R-FE-01 §7]` `[07 R-FE-02 §4]`
+`[08 R-SKIR-01 §11]`.
+
+The in-battle options window has its own pointer pass (`battle_options.go`)
+rather than borrowing the front end's. The reason is the capture rule of
+`[07 R-WGT-01 §1]`: a press goes to the first gadget in index order whose
+handler accepts it, and a picture box has no handler at all — it blits its frame
+and returns `[07 R-WGT-01 §8]`. `PREFS.GUI` authors its whole rail plate as a
+picture box at index 1, in front of every button on the window, and each
+`…RT.GUI` page authors another over its own column, so a press test that admits
+every kind but the panel would hand every click to a plate. The pass owns only
+the capture rule; every semantic action it reaches — the page merge, the slider
+callbacks, `RESTORE`, `UNDO`, the snapshot restore, the cue column — is the same
+routine the front-end pump calls. Its painter (`battle_options_draw.go`)
+likewise exists for one reason: those plates are picture boxes whose art
+resolves own GAF then **common** GAF `[07 R-WGT-01 §12]`, and the whole
+in-battle family's plates (`IGOPT`, `SOUNDSRT`, `MUSICRT`, `SPEEDSRT`,
+`VISUALSRT`) live in the common GAF, which the front-end picture path does not
+consult.
+
+A page write in battle reaches the running session as well as the stored block:
+`GAME` goes through the session's speed setter at once, announcement included
+`[07 R-CAM-01 §3]`; `SCREEN` re-primes the camera's cached scroll byte
+`[07 §10]`; `TXTSCROL` and `MAXLINES` reconfigure the live message column
+`[07 R-HUD-03 §14.3]`; the audio gauges and the display-option bits already went
+straight to the backend and the client. `CANCEL` re-applies all of them from the
+entry snapshot, the same way it re-applies gamma and the volumes.
 
 ### 3.5 The pointer and latch state machine
 
@@ -838,8 +916,10 @@ by a simulation phase, and is not saved [I6].
 * **Never-opened GUIs.** The windows retail's own code never opens are not
   implemented, and implementing one would be inventing a screen
   `[07 R-FE-01 §12]`.
-* **`MOREBAR` text-region paging** has no consumer in this build's screens
-  `[07 R-HUD-03 §10]`.
+* **The label painter's quickkey underline and `colorb` fill.** The FNT and
+  GAF label paths draw the caption only; the one-pixel underline under a
+  label's quickkey letter and the map-entry `colorb` rectangle fill are not
+  drawn (every stock label authors `colorb` 0) `[03 R-FONT-01 §6]`.
 
 ## 4. Retail behaviour that is not a bug
 
@@ -1045,28 +1125,46 @@ would settle it.
   logical size. The HUD is laid out at that size and the chrome extends by rule;
   a scale conversion would be invented `[07 §4]` `[07 R-HUD-05]`.
 
-One traced screen is built but unreachable from one of its two entries. The
-options root and its four pages are implemented for the front end
-(`STARTOPT.GUI` over `options4x`); the in-battle entry is not. `ARMOPT.GUI`'s
-`PREFS` button has no arm in `ui.BattleState.Activate`, so pressing it does
-nothing, and the in-battle form of the root is a different composition:
-`PREFS.GUI`, the `…RT.GUI` page variants, a window widened by 150 with a
-synthesised `PANEL` gadget the merge centres inside, no page plate so the battle
-stays visible, and `MAP`/`VID`-prefixed gadgets hidden `[07 R-FE-01 §6]`
-`[07 R-FE-01 §7]`. Reaching it needs a `BattleModalActionPreferences` arm in
-`internal/ui`, a `battle_menu.go` case that opens the root, and the two lines in
-`battle_hud.go`'s `drawBattleMenu` that paint a frontend panel over the battle
-surface — the same two lines the save/load dialog is already waiting on.
+Two open questions belong to the in-battle options window and are carried as
+`TODO(question)` markers in `retail_menu_options.go`:
 
-Three differences from retail are recorded from a retail capture rather than
-from a trace, and none is implemented:
+* The rectangle the in-battle opener writes into the **synthesised `PANEL`**.
+  `[07 R-FE-01 §6]` establishes that the window is widened by 150 and that the
+  gadget is synthesised, but not where it is put. This build gives it the new
+  columns beside the root's own plate — x at the authored width, and the plate's
+  own y and height — because the traced centring divide then places every stock
+  `…RT.GUI` page at exactly its own authored header origin on **both** axes,
+  `(150−150)/2 + 128 = 128` and `(352−352)/2 + 2 = 2`, which is what the
+  origin-add branch would also produce. Two coordinates agreeing exactly is the
+  whole argument; the rectangle the opener writes would settle it.
+* The **session mapping and LOS bits** the in-battle snapshot carries beside the
+  preference block. No control on any of the four pages writes either bit —
+  `GAMEOPTIONS.GUI` shows them read-only `[07 R-FE-01 §7]` — so nothing in this
+  build can change them while the window is open and the snapshot would have
+  nothing to restore. Copying them would be two dead fields. A writer reachable
+  from the options family would settle it.
+
+Two differences from retail are recorded from a retail capture rather than
+from a trace, and neither is implemented:
 
 * Retail's exit menu shows an **active** `RESTART`, where the authored gadget's
   status byte is inactive `[07 R-FE-01 §7]`.
 * Retail does **not** draw the exit window beneath the yes/no confirmation box,
   while this build keeps the exit layer visible under it `[07 R-FE-01 §7]`.
-* The in-battle options window's unfold animation is not drawn
-  `[07 R-HUD-04 §2]`.
+
+Not implemented: `[07 R-HUD-04 §2]` unfold. Opening the options root in battle
+arms an unfold animation whose per-frame step draws the snapshotted window
+surface through the **quad-mapped** blitter of `[03 R-RAST-01 §1]` onto a skewed
+destination quad. `internal/client` exposes only axis-aligned UI blits
+(`UIBlit`, `UIBlitClipped`, `UIBlitFrameScaledClipped`, …); the quad path lives
+inside the model composer and is not reachable from the HUD, so the window
+appears at once instead of sweeping in. What is left out is the sweep itself,
+the one-time `LIGHTBAR` stamp and the `Options` cue at the counter's saturation;
+the window's final position and every control on it are unaffected. The one
+preparatory finding this build can confirm is that section's own Supported
+inference: the authored `PREFS.GUI` panel is 128 columns wide, so widened it is
+278 and `limit = windowWidth − 1 = 277` equals the saturation value, which makes
+the `counter > limit` branch unreachable.
 
 One `TODO(T25)` remains in `cmd/nanolathe`, on a parity fixture test: the pinned
 retail/Nanolathe screenshot pair does not record the scenario that produced it,

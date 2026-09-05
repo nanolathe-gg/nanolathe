@@ -1,5 +1,7 @@
 package gui
 
+import "github.com/nanolathe/nanolathe/formats"
+
 // Kind is the stored control-type byte [02 §6 "Interface panel files (.gui)"] [07 §4].
 // Retail gadgets have 347-byte record identity [07 §4][02 §6 "Control-kind mapping"]; Go uses named fields per I13.
 type Kind uint8
@@ -159,6 +161,11 @@ type Window struct {
 	Gadgets []Gadget // all gadgets in file order [07 §4] — header at 0
 	Focus   int      // index into Gadgets of default focus, -1 if none [02 §6]
 	Header  Header   // header fields
+
+	// fonts caches the FNT each kind-7 record's file slot loads, keyed by
+	// gadget index and filled by Font on first use; a nil value records a
+	// load that failed, so a missing file is looked up once [07 R-WGT-01 §12].
+	fonts map[int]*formats.FNT
 }
 
 // PlacedRect returns a gadget's screen-space rectangle. Gadget.Rect remains

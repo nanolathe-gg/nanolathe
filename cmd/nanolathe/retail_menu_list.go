@@ -44,6 +44,11 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, gad gui.Gadget
 	}
 	p.SetListTop(gad.Name, top, maxTop)
 	_, selected, top, _ := p.ListValues(gad.Name)
+	// The list painter selects the FNT the gadget's `fontnumber` picks from
+	// the window's kind-7 records (the common font when none matches) and
+	// then draws every row through the GAF pen, so the selected FNT is only
+	// reached on the pen's null-slot fallback [03 R-FONT-01 §5][03 R-FONT-01 §6].
+	rowFont := g.windowGadgetFont(p, gad)
 	for row := 0; row < visible; row++ {
 		idx := top + row
 		if idx >= len(items) {
@@ -53,7 +58,7 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, gad gui.Gadget
 		// calculating rows. The same origin is used by its text renderer.
 		y := int(r.Y) + 2 + row*itemHeight
 		color := g.guiColor(byte(gad.ColorF & 0xff))
-		g.drawRetailString(c, items[idx], int(r.X)+4, y, int(r.W)-4, color)
+		g.drawRetailStringSelected(c, items[idx], int(r.X)+4, y, int(r.W)-4, color, 0, rowFont)
 		// The highlight runs after the row's text, as the retail implementation does: the
 		// operator remaps whatever is already in the rectangle, so the glyphs
 		// are lifted along with the listbox interior.

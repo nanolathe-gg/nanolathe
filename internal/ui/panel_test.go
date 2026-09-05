@@ -261,3 +261,35 @@ func TestPanelMessageDoesNotNeedAnAuthoredTextControl(t *testing.T) {
 		t.Fatalf("second label text=%q", got)
 	}
 }
+
+// A picture box, a line, a font or raw-file record and a cold surface have no
+// press handler, so a plate authored in front of a button leaves the capture
+// to the button; a hot surface and a linked label take it [07 R-WGT-01 §7]
+// [07 R-WGT-01 §8][07 R-WGT-01 §12].
+func TestPanelOnlyHandlerKindsTakeTheCapture(t *testing.T) {
+	w := &gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel, Name: "PANEL", Active: 1},
+		{Kind: gui.KindPicture, Name: "PLATE", Active: 1, Rect: gui.Rect{X: 0, Y: 0, W: 100, H: 100}},
+		{Kind: gui.KindLine, Name: "RULE", Active: 1, Rect: gui.Rect{X: 0, Y: 0, W: 100, H: 100}},
+		{Kind: gui.KindFont, Name: "FONT", Active: 1, Rect: gui.Rect{X: 0, Y: 0, W: 100, H: 100}},
+		{Kind: gui.KindRawFile, Name: "RAW", Active: 1, Rect: gui.Rect{X: 0, Y: 0, W: 100, H: 100}},
+		{Kind: gui.KindSurface, Name: "COLD", Active: 1, Rect: gui.Rect{X: 0, Y: 0, W: 100, H: 100}},
+		{Kind: gui.KindLabel, Name: "CAPTION", Active: 1, Attribs: gui.AttribInert, Rect: gui.Rect{X: 0, Y: 0, W: 100, H: 100}},
+		{Kind: gui.KindButton, Name: "OK", Active: 1, Rect: gui.Rect{X: 10, Y: 10, W: 20, H: 10}},
+		{Kind: gui.KindSurface, Name: "HOT", Active: 1, HotOrNot: 1, Rect: gui.Rect{X: 50, Y: 10, W: 20, H: 10}},
+		{Kind: gui.KindLabel, Name: "LINKED", Active: 1, Link: "OK", QuickKey: 'O', Rect: gui.Rect{X: 10, Y: 50, W: 20, H: 10}},
+	}}
+	p := NewPanel(w)
+	if got := p.PressTest(15, 15); got != 7 {
+		t.Fatalf("press over the plate and the button captured index %d, want 7 (OK)", got)
+	}
+	if got := p.PressTest(55, 15); got != 8 {
+		t.Fatalf("press on the hot surface captured index %d, want 8", got)
+	}
+	if got := p.PressTest(15, 55); got != 9 {
+		t.Fatalf("press on the linked label captured index %d, want 9", got)
+	}
+	if got := p.PressTest(90, 90); got != -1 {
+		t.Fatalf("press over only handler-less gadgets captured index %d, want -1", got)
+	}
+}

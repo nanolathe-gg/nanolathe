@@ -265,7 +265,7 @@ func TestStockpileLaunchIntoADirtySlotStillFlies(t *testing.T) {
 		t.Fatalf("motion family %v, want self-propelled [06 §6.2]", fam)
 	}
 	before := p.Pos
-	if res := Advance(p, w, now+1, Vec3{}, 0, 0); res != AdvanceAlive {
+	if res := Advance(p, w, now+1, Vec3{}, 0, 0, GuidanceEnv{}); res != AdvanceAlive {
 		t.Fatalf("first live tick returned %v, want alive", res)
 	}
 	if p.Pos.Y.Raw() <= before.Y.Raw() {
@@ -379,7 +379,7 @@ func TestInterceptorSpawnIntoADirtySlotStillFlies(t *testing.T) {
 	}
 
 	before := p.Pos
-	if res := Advance(p, anti, now+1, Vec3{}, 0, 0); res != AdvanceAlive {
+	if res := Advance(p, anti, now+1, Vec3{}, 0, 0, GuidanceEnv{}); res != AdvanceAlive {
 		t.Fatalf("first live tick returned %v, want alive", res)
 	}
 	if p.Pos.Y.Raw() <= before.Y.Raw() {

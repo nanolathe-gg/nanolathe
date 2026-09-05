@@ -17,7 +17,7 @@ func TestSelfPropAccelerationIsUnsigned(t *testing.T) {
 	far := numeric.Fixed(0x7FFFFFFF)
 	w := &content.WeaponDef{SelfProp: true, WeaponVelocity: 65536, WeaponAcceleration: 1000}
 	p := Projectile{Speed: numeric.Fixed(-5000), ExpiryTick: 100}
-	if res := AdvanceSelfProp(&p, w, 1, 0, far); res != AdvanceAlive {
+	if res := AdvanceSelfProp(&p, w, 1, 0, far, GuidanceEnv{}); res != AdvanceAlive {
 		t.Fatalf("advance: got %v", res)
 	}
 	if p.Speed.Raw() != -5000 {
@@ -26,15 +26,15 @@ func TestSelfPropAccelerationIsUnsigned(t *testing.T) {
 
 	w2 := &content.WeaponDef{SelfProp: true, WeaponVelocity: 65536, WeaponAcceleration: -30000}
 	q := Projectile{Speed: numeric.Fixed(40000), ExpiryTick: 100}
-	AdvanceSelfProp(&q, w2, 1, 0, far)
+	AdvanceSelfProp(&q, w2, 1, 0, far, GuidanceEnv{})
 	if q.Speed.Raw() != 10000 {
 		t.Fatalf("negative acceleration decrements while non-negative: got %d want 10000", q.Speed.Raw())
 	}
-	AdvanceSelfProp(&q, w2, 2, 0, far)
+	AdvanceSelfProp(&q, w2, 2, 0, far, GuidanceEnv{})
 	if q.Speed.Raw() != 65536 {
 		t.Fatalf("crossing zero snaps up to weaponvelocity: got %d want 65536", q.Speed.Raw())
 	}
-	AdvanceSelfProp(&q, w2, 3, 0, far)
+	AdvanceSelfProp(&q, w2, 3, 0, far, GuidanceEnv{})
 	if q.Speed.Raw() != 65536 {
 		t.Fatalf("at weaponvelocity the block is skipped: got %d want 65536", q.Speed.Raw())
 	}

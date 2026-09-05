@@ -32,7 +32,7 @@ func (g *gameShell) attachSettings() {
 	g.applyRetailVisualOptions(clPtr)
 	// So do the two wave gates, which retail pushes to the device from the same
 	// startup read [03 R-AUD-01 §2].
-	applyRetailAudioOptions()
+	applyRetailAudioOptions(g.audioPrefs)
 }
 
 // applySettings installs a loaded block over the shell's default setup.
@@ -58,9 +58,9 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// The audio block, the stored game speed and the `Interface Type` word are
 	// the sound, music and interface pages' stores [03 R-AUD-01 §2]
 	// [07 R-CAM-01 §7][07 R-CAM-01 §5].
-	shellAudio = s.Audio
-	shellGameSpeed = s.GameSpeed
-	shellInterfaceType = s.InterfaceType
+	g.audioPrefs = s.Audio
+	g.gameSpeed = s.GameSpeed
+	g.interfaceType = s.InterfaceType
 	// The configured per-player unit limit rides on the setup record into
 	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
 	// screen edits it: retail reads it from the profile file, and the
@@ -164,9 +164,9 @@ func (g *gameShell) captureSettings() settings.Settings {
 		Messages: g.messages,
 		// The sound, music and interface pages' remaining stores
 		// [03 R-AUD-01 §2][07 R-CAM-01 §7][07 R-CAM-01 §5].
-		Audio:         shellAudio,
-		GameSpeed:     shellGameSpeed,
-		InterfaceType: shellInterfaceType,
+		Audio:         g.audioPrefs,
+		GameSpeed:     g.gameSpeed,
+		InterfaceType: g.interfaceType,
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed

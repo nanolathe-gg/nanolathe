@@ -204,3 +204,26 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 	}
 	return 0, false
 }
+
+// distance3DRaw is the three-dimensional distance both [06 §3.3]'s pre-fire
+// lead and [06 §6.8]'s cruise helper form, and they form it identically:
+//
+//	trunc(sqrt((dX*dX + dY*dY) + dZ*dZ))
+//
+// over RAW 16.16 deltas that have already wrapped as signed 32-bit, evaluated
+// at working precision in that association order and truncated toward zero
+// [01 §8] I3. The answer stays a raw 16.16 distance — nothing here shifts it
+// down to whole world units, and both callers depend on that: the lead divides
+// it by a 16.16 `weaponvelocity`, and the cruise helper does its own shift
+// before a signed-short compare.
+//
+// This is deliberately NOT the planar range distance of [06 §3.3], which
+// squares and shifts per axis without a square root at all; the two are
+// different quantities and neither may stand in for the other.
+//
+// float64 here is the two I2 rows citing [06 §3.3] and [06 §6.8]; the value is
+// a transient and is never stored.
+func distance3DRaw(dx, dy, dz int32) int64 {
+	fx, fy, fz := float64(dx), float64(dy), float64(dz)
+	return int64(math.Sqrt((fx*fx + fy*fy) + fz*fz))
+}

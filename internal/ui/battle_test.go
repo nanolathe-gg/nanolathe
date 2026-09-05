@@ -240,10 +240,9 @@ func TestBattleStateOwnsInputAndPlacementState(t *testing.T) {
 	s.Input.ShiftLatchSticky = true
 	s.Input.PointerX, s.Input.PointerY = 10, 20
 	s.Input.ShiftHeld = true
-	s.Input.StatusMessage, s.Input.StatusUntil = "paused", 90
 	s.Input.ResultDismissed = true
 	s.ResetInteraction()
-	if s.Input.DragActive || s.Input.HUDCaptured || s.Input.PlaceCaptured || s.Input.ShiftLatchSticky || s.Input.PointerX != 0 || s.Input.PointerY != 0 || s.Input.ShiftHeld || s.Input.StatusMessage != "" || s.Input.StatusUntil != 0 || s.Input.ResultDismissed || s.Input.Latch != input.LatchNormal {
+	if s.Input.DragActive || s.Input.HUDCaptured || s.Input.PlaceCaptured || s.Input.ShiftLatchSticky || s.Input.PointerX != 0 || s.Input.PointerY != 0 || s.Input.ShiftHeld || s.Input.ResultDismissed || s.Input.Latch != input.LatchNormal {
 		t.Fatalf("reset interaction=%+v", s.Input)
 	}
 }

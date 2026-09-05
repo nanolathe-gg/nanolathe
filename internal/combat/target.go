@@ -76,6 +76,102 @@ func PointTargetHeight(terrain *world.Terrain, x, z numeric.Fixed) numeric.Fixed
 	return numeric.Fixed(int64(h) << 16)
 }
 
+// PreFireLeadGate reports whether the five gates of the pre-fire lead
+// [06 §3.3] all pass for this shot. The lead runs when ALL of:
+//
+//   - the slot's armed bit is set — bit 1 of the slot control byte, the one
+//     the slot initializer writes for every slot whose weapon link resolved
+//     [06 R-WPN-05 §3];
+//   - the weapon is NOT `cruise` — cruise suppresses the only lead in the
+//     whole weapon pipeline [06 §6.7];
+//   - the target unit has a MOVEMENT RECORD. Buildings are exactly the units
+//     with no mover [04 R-COLL-01 §1], and this build's mover records are
+//     created for the non-building units, i.e. the ones whose definition
+//     authors `bmcode` [04 R-PATH-01 §14];
+//   - the shooter's credited-kill count is STRICTLY GREATER THAN FIVE. The
+//     count is an unsigned 16-bit field and the lead gate is the only
+//     `>`-form consumer of it in the whole engine; every other one divides
+//     [06 R-DMG-01 §8]. A unit therefore starts leading on its sixth kill,
+//     one kill after the panel stops printing a number;
+//   - `weaponvelocity` is nonzero — it is the divisor of the flight time.
+//
+// The target's motion enters the firing solution here and nowhere else: no
+// spread term, no drift gate and no in-flight guidance reads it
+// [06 R-WPN-03 §3][06 §6.7].
+func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.WeaponDef) bool {
+	if shooter == nil || target == nil || slot == nil || w == nil {
+		return false
+	}
+	if !slot.IsEnabled() {
+		return false // the armed bit [06 §3.3][06 R-WPN-05 §3]
+	}
+	if w.Cruise {
+		return false // `cruise` suppresses the lead [06 §3.3][06 §6.7]
+	}
+	if target.Def == nil || !target.Def.BMCode {
+		return false // no movement record [06 §3.3][04 R-COLL-01 §1]
+	}
+	// Unsigned, strict [06 §3.3][06 R-DMG-01 §8]. The field is a 16-bit
+	// unsigned counter that wraps at 65,536, so the comparison is made on the
+	// low sixteen bits and a wrapped count is small again.
+	if uint16(shooter.Kills) <= 5 {
+		return false
+	}
+	return w.WeaponVelocity != 0
+}
+
+// PreFireLeadPoint applies the pre-fire lead of [06 §3.3] to an already
+// resolved target point and answers the led point. It is the ONLY lead in the
+// weapon pipeline: projectile guidance is pure pursuit and adds no
+// target-velocity term in flight [06 §6.7].
+//
+// With `s` the SHOOTER's own world point (not the muzzle — the lead runs at
+// target-point resolution, before the aim origin is queried) and `point` the
+// resolved target point, both raw 16.16:
+//
+//	D  = trunc(sqrt((dX*dX + dY*dY) + dZ*dZ))    ; dX = s.X - point.X, etc.
+//	T  = (int64(D) << 16) / weaponvelocity       ; signed 64-bit divide
+//	T2 = (int64(T) * 0xcccc) >> 16               ; 52,428/65,536 = 0.79998779…
+//	point.axis += int32((int64(velocity.axis) * T2) >> 16)
+//
+// The 0.8 factor and the six-kill threshold are read from the image, not
+// chosen [06 §3.3]. Note that this distance is THREE-dimensional while the
+// range test of the same section is planar — the two are different quantities
+// and neither may be substituted for the other.
+//
+// `weaponvelocity` reaches the record already scaled to 16.16 per tick
+// [02 "Weapon record"][I8], so `T` is a flight time in ticks expressed in
+// 16.16, and the per-axis product converts it back against a per-tick
+// velocity. The addend is narrowed to a signed 32-bit word before it is added,
+// which is retail's store width for a coordinate.
+func PreFireLeadPoint(shooter, target *units.Unit, slot *units.Slot, w *content.WeaponDef, point Vec3) Vec3 {
+	if !PreFireLeadGate(shooter, target, slot, w) {
+		return point
+	}
+	// Raw 16.16 deltas, wrapping as signed 32-bit before the conversion —
+	// the same domain the ballistic solver's deltas take [06 §3.3].
+	dx := int32(shooter.X.Sub(point.X).Raw())
+	dy := int32(shooter.Y.Sub(point.Y).Raw())
+	dz := int32(shooter.Z.Sub(point.Z).Raw())
+	// The square root is taken at working precision in the stated association
+	// order and truncated toward zero into `D` [06 §3.3][01 §8] I3. `D` stays
+	// a raw 16.16 distance; nothing shifts it down to whole world units. The
+	// shared form is distance3DRaw, which [06 §6.8]'s cruise helper writes
+	// identically.
+	d := distance3DRaw(dx, dy, dz)
+	t := (d << 16) / int64(w.WeaponVelocity)
+	// 0xcccc / 65,536 = 0.79998779…, an arithmetic shift, so it floors
+	// [06 §3.3] I3.
+	t2 := (t * 0xcccc) >> 16
+	lead := func(v numeric.Fixed) numeric.Fixed {
+		return numeric.Fixed(int32((v.Raw() * t2) >> 16))
+	}
+	point.X = point.X.Add(lead(target.Move.VelX))
+	point.Y = point.Y.Add(lead(target.Move.VelY))
+	point.Z = point.Z.Add(lead(target.Move.VelZ))
+	return point
+}
+
 // ---------------------------------------------------------------------------
 // Range vs coverage distinction [06 §3.3] [06 §2.1] [06 §11.2] P0-10
 // ---------------------------------------------------------------------------

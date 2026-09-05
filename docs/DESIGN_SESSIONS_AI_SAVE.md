@@ -601,6 +601,16 @@ menu, a campaign additionally exposes the continuation when a successor mission
 exists. Its rendering is DESIGN_INTERFACE_HUD_INPUT's `[08 R-CAMP-01 §6]`
 `[08 R-CAMP-01 §8]` `[07 R-FE-01 §10]`.
 
+Three things about that sequence are easy to get backwards, and are pinned by
+tests in `cmd/nanolathe/postbattle_integration_test.go`. The glamour fade runs
+**from black up into the picture's own palette**, not from the picture's
+palette down to the game's — the image is blitted once and only the palette
+moves. Nothing restores the display palette when the glamour screen ends; the
+`ENDMSN` population's own `outcome1`/`outcome0` background install is what does
+it. And from the end of the darkening fade onwards the sequence runs at
+640×480, like every other front-end screen, whatever display mode the battle
+was at.
+
 ### 3.2 Campaign, missions and triggers — C1…C18
 
 **C1 — campaign discovery.** Walk `MISSION0..N` and stop at the first gap.

@@ -80,3 +80,51 @@ func TestSkirmishStartLeavesForLoadingScreen(t *testing.T) {
 	// the screen itself is what is under test here.
 	shell.drawLoadingScreen(cl)
 }
+
+// TestLoadingScreenStaysAt640x480 is the regression for the play-test report
+// that the loading screen was a 640x480 picture in the corner of an 800x600
+// surface. Retail's loading transition forces 640x480 on entry and only
+// resizes to `DisplaymodeWidth`/`Height` after the load thread completes, so
+// the screen composes at 640x480 whatever the display mode holds
+// [07 "The loading screen"][07 R-FE-02 §2].
+func TestLoadingScreenStaysAt640x480(t *testing.T) {
+	root := probeRetail(t)
+	opts := Options{Root: root}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Skipf("content: %v", err)
+	}
+	defer cs.Close()
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		t.Fatalf("newGameShell: %v", err)
+	}
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 800, Height: 600})
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	previous := clPtr
+	clPtr = cl
+	defer func() { clPtr = previous }()
+	shell.display.Width, shell.display.Height = 800, 600
+
+	shell.ensureRetailSkirmishControllers()
+	shell.setup.NumPlayers = 2
+	shell.retailControllers[0] = 1
+	shell.retailControllers[1] = 2
+	shell.setup.Players[0].AllyGroup = 0
+	shell.setup.Players[1].AllyGroup = 1
+	shell.openMenu(modeMenuSkirmish)
+	if w, h := cl.Size(); w != retailScreenW || h != retailScreenH {
+		t.Fatalf("front end surface = %dx%d, want the forced 640x480", w, h)
+	}
+	shell.startBattleLoad(shell.setup.MapName)
+	if shell.frontend.Mode != modeLoading {
+		t.Fatalf("mode after Start = %v, want the loading screen", shell.frontend.Mode)
+	}
+	if w, h := cl.Size(); w != retailScreenW || h != retailScreenH {
+		t.Fatalf("loading screen surface = %dx%d, want 640x480 at an 800x600 display mode", w, h)
+	}
+	// The screen is abandoned here; the load goroutine's result is never read.
+	shell.drawLoadingScreen(cl)
+}

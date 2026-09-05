@@ -75,6 +75,12 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 		b.shell.menuInput(cl)
 		return
 	}
+	if b.battlePrefsActive() {
+		// `PREFS` opens the options root over `ARMOPT`, and the top window owns
+		// the pass [07 R-FE-01 §6][07 R-WGT-01 §1].
+		b.handleBattleOptionsInput(cl)
+		return
+	}
 	state := b.battleState()
 	if b == nil || state == nil || in == nil || in.Kbd == nil || in.Mouse == nil || state.Modal() == ui.BattleModalClosed {
 		return
@@ -129,6 +135,8 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 		b.openBattleSaveLoadScreen(saveScreenMode)
 	case ui.BattleModalActionLoadGame:
 		b.openBattleSaveLoadScreen(loadScreenMode)
+	case ui.BattleModalActionPrefs:
+		b.openBattlePrefs()
 	}
 }
 

@@ -158,6 +158,25 @@ only `[06 R-WPN-03 §4]` `[06 R-WPN-05 §5]` `[06 R-WPN-01 §3]`.
 `BallisticSolve` is the trajectory solver: the discriminant, the two candidate
 angles, and the conversion into the 16-bit angle word.
 
+The **pre-fire lead** is the one place in the whole weapon pipeline where the
+target's motion enters the firing solution `[06 R-WPN-03 §3]`. It is applied to
+the resolved target point by `target.go`'s `PreFireLeadPoint`, at target-point
+resolution and before the aim origin is queried, so the aim solve, the
+shot-time gate and the creator all receive the led point. Its five gates — the
+slot's armed bit, the weapon not being `cruise`, the target having a movement
+record, the shooter's credited kills being **strictly greater than five** on
+the unsigned count, and a nonzero `weaponvelocity` — are `PreFireLeadGate`.
+The arithmetic is a **three-dimensional** distance (unlike the planar range
+test in the same section), divided by `weaponvelocity` into a 16.16 tick count,
+scaled by `0xcccc / 65536`, and multiplied per axis by the target mover's
+velocity triple `[06 §3.3]`. Projectile guidance never leads — this is the only
+lead, and `cruise` suppresses it `[06 §6.7]`.
+
+That velocity triple reaches combat through `units.MoveState`, which
+`internal/movement` publishes beside the scalar speed at every commit
+`[04 R-MOV-01 §1]` `[04 R-COLL-01 §1]`. It is a different quantity from the
+scalar speed word beside it: a magnitude versus a signed per-axis displacement.
+
 The yaw handed to the script is **relative** to the unit's heading, and the
 drift pair is relative on both sides `[06 R-WPN-05 §4]`. Which angle each
 velocity build negates, and where the half-turn numbering is crossed, is a
@@ -244,6 +263,28 @@ Ballistic and dropped records take the map's three global wind words as raw
 integrators add them with no shift `[06 §6.4]` `[06 R-WPN-05 §8]`. The
 ballistic launch pre-decrements the vertical component by one flight time's
 worth of gravity as part of the launch, not as an integrator artefact.
+
+A guided self-propelled record does not steer at the point its aim solve stored
+at launch. `GuidanceTargetPoint` is the guidance target-point helper: for a
+non-cruise weapon it answers the linked record's current point when the
+projectile-to-projectile link is set, else the retained unit target's world
+point while that unit's live flag is set, else the stored target point
+`[06 §6.7]`. The stored point is the LOST-target fallback `[06 §6.8]` and is
+never overwritten. `GuidanceEnv` carries the two lookups from the driver into
+`AdvanceSelfProp`; its projectile lookup does not filter dead records, because
+retail dereferences the link with no liveness check `[06 §5.2]`.
+
+A `cruise` weapon takes a different helper entirely. `CruiseTargetPoint`
+ignores the link and the retained unit and works from the stored target point,
+substituting only its altitude: above 1,024 whole world units of
+three-dimensional range — a **strict** compare on a signed short, so exactly
+1,024 takes the other arm — the steer point sits at a fixed 700 world units of
+ABSOLUTE Y, and within it at `max(terrainHeight, seaLevel)` `[06 §6.8]`. The
+threshold's narrowing wraps rather than saturates, which is unreachable for
+in-bounds geometry [I11]. No stock weapon authors `cruise`, so the helper is
+locked by unit test rather than by a battle. Whether that
+steering runs at all is `guiding = twophase ? (state bits ≠ 0) : guidance` — a
+two-phase weapon does not consult its `guidance` flag `[06 §6.7]`.
 
 Water weapons and torpedoes, beams, lightning, flame and feature fire, cruise
 target points and target loss, and the vertical launch's two-phase behaviour

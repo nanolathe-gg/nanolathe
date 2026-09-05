@@ -96,9 +96,17 @@ func TestRadarPublishedContactVisibilityUsesOwnerBypass(t *testing.T) {
 	if !radarPublishedContactVisible(c, 2) {
 		t.Fatal("owner-local contact did not bypass visibility gate")
 	}
-	c.Status = 0x100
+	// The second pass's only bypass is owner-local identity. The
+	// friendly-contact status pair 0x300 is a term of the UNIT pass's blip
+	// gate only and must not admit a projectile/feature candidate here
+	// [03 §3.9].
+	c.Status = 0x300
+	if radarPublishedContactVisible(c, 1) {
+		t.Fatal("friendly-contact status bits incorrectly bypassed the second-pass visibility gate")
+	}
+	c.Visible = true
 	if !radarPublishedContactVisible(c, 1) {
-		t.Fatal("friendly contact did not bypass visibility gate")
+		t.Fatal("published-visible contact did not pass the second-pass gate")
 	}
 }
 
@@ -225,6 +233,13 @@ func TestRadarContactRangeGateRequiresSelectionAndActivation(t *testing.T) {
 	}
 }
 
+// TestRadarProjectileAndFeatureStatusArtGate locks radarProjectileDot's Kind
+// gate. Retail's real selector reads bits 29/30 of the shared
+// projectile/feature list record's status regardless of kind [03 §3.9], but
+// frame.RadarContactView.Status for a RadarContactFeature is the feature
+// INSTANCE's own status word (internal/features only ever writes bit 0x01),
+// not that shared-list record — so a feature must never take the dot path
+// through an accidental zero read of unrelated status bits.
 func TestRadarProjectileAndFeatureStatusArtGate(t *testing.T) {
 	c := frame.RadarContactView{Kind: frame.RadarContactProjectile}
 	if !radarProjectileDot(c) {

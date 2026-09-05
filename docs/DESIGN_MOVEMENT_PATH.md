@@ -179,6 +179,23 @@ definition flags word. Desired heading wraps on the sixteen-bit circle, the
 change clamps to the authored turn rate, and there is no reverse branch: speed
 is non-negative and the step is forward only `[04 §8.1]`.
 
+**The velocity triple.** The mover holds a signed 16.16 velocity per axis
+beside its scalar speed word, and the two are different quantities: the scalar
+is a magnitude, the triple is the displacement the commit step adds to the
+position, `proposed = position + velocity` `[04 R-MOV-01 §1]`
+`[04 R-COLL-01 §1]`. The ground speed update writes
+`(-sin(heading, speed), 0, -cos(heading, speed))` — a ground mover never has
+vertical velocity and there is no gravity term on that path `[04 R-MOV-01 §4]`;
+the flight integrator writes all three and zeroes all three for any mode but
+airborne `[04 §10.1]`; the blocked branch rewrites the horizontal pair at the
+halved speed `[04 R-COLL-01 §1]`; and the carried branch copies the carrier's
+triple, zeroing when the carrier has no mover `[04 R-FAC-02 §2]`. Every one of
+those sites publishes the triple onto `units.MoveState`, which is how it leaves
+this package: its one reader elsewhere is the pre-fire lead of `[06 §3.3]`,
+which multiplies the **target's** triple by the scaled flight time. The retail
+mover save record carries the triple at its first three words, so
+`RestoreMover` republishes it `[08 R-SAVE-02 §8]`.
+
 **Collision and occupancy** (`collision.go`, `place.go`, `forget.go`).
 `OccupancyGrid` is the mover store and the writer of the plot cell's two
 occupancy words; the plane a mover writes is its committed mover mode — 1

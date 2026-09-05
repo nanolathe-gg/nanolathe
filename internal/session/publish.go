@@ -1056,6 +1056,10 @@ func projectileOwnerFromRecord(s *Session, shooter pool.Handle, side uint8) (uin
 	return combat.NeutralSide, false
 }
 
+// radarPointVisible is the minimap contacts pass's second-pass admission test
+// for a projectile candidate: the mode-selected local player visibility
+// source sampled at the candidate's own position, with owner-local identity
+// as the only bypass [03 §3.9].
 func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric.Fixed) bool {
 	if s == nil {
 		return false
@@ -1066,6 +1070,16 @@ func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric
 	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.LocalOwner), x, y, z)
 }
 
+// radarFeatureVisible is the minimap contacts pass's second-pass admission
+// test for a feature candidate. Retail draws projectiles and features from
+// one shared, kind-agnostic list and admits a candidate through the
+// mode-selected local player visibility source sampled at its own projected
+// point, with owner-local identity as the only bypass [03 §3.9] — the same
+// one-point test as radarPointVisible above, not the world composer's
+// two-corner footprint test of [03 §5.1.5], which is a distinct gate keyed to
+// `nodrawundergray` and the plot placer nibble (see
+// `featureVisibleForFrame` in internal/client/world_draw.go). The minimap
+// contacts pass carries neither of those terms.
 func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
 	if s == nil {
 		return false
@@ -1073,24 +1087,7 @@ func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
 	if f.OwnerKnown && f.Owner < 10 && f.Owner == s.LocalOwner {
 		return true
 	}
-	if s.Vis == nil {
-		return false
-	}
-	owner := visibility.PlayerID(f.Owner)
-	// VisibleExtents takes a player owner for its bypass check. Selector 10 is
-	// explicitly non-player, so substitute a valid non-local identity solely to
-	// run the two-corner LOS samples.
-	if !f.OwnerKnown || f.Owner >= 10 {
-		owner = visibility.PlayerID((s.LocalOwner + 1) % 10)
-	}
-	return s.Vis.VisibleExtents(visibility.PlayerID(s.LocalOwner), visibility.Box{
-		Owner: owner,
-		MinX:  world.CellToWorld(f.CX),
-		MinZ:  world.CellToWorld(f.CZ),
-		MaxX:  world.CellToWorld(f.CX + int32(f.FootX)),
-		MaxZ:  world.CellToWorld(f.CZ + int32(f.FootZ)),
-		Y:     f.Y,
-	})
+	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.LocalOwner), f.X, f.Y, f.Z)
 }
 
 func radarSensorInput(inputs []visibility.SensorInput, id uint16, index int) *visibility.SensorInput {

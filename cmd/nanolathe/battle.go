@@ -100,9 +100,13 @@ type battleSession struct {
 	footerHoverUnit    pool.Handle
 	footerHoverFeature string
 
-	// The battle shell's message ring [07 R-HUD-03 §14.3]. F12 clears it, F3
-	// walks it, and the game-speed announcement posts into it.
-	messages *frame.MessageRing
+	// cl is the presentation client installed by installBattleClient. Retail
+	// has one message ring, and the client owns the instance the composer
+	// draws and the options page configures (ConfigureMessageLines); this
+	// reference is how the battle shell's hotkeys (F3, F12) and the
+	// game-speed announcement reach that same ring instead of holding a
+	// second one [07 R-HUD-03 §14.3].
+	cl *client.Client
 
 	// panelHoldFlag is interface-flags bit 0x80. It has exactly two readers:
 	// the score panel's showing test, and the kill-credit finalize's flash arm
@@ -298,6 +302,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	if cl == nil || b == nil || b.sess == nil {
 		return
 	}
+	b.cl = cl
 	cl.SetSnapshot(b.sess.Snapshot)
 	cl.SetTerrain(b.sess.World)
 	cl.SetCamera(b.cam)
@@ -374,6 +379,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 	b.cam = nil
 	b.hud = nil
 	b.fs = nil
+	b.cl = nil
 	b.shell = nil
 	b.battleUI = nil
 	b.controller = nil
@@ -522,7 +528,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// dispatcher so the same edge cannot also activate a newly closed/opened
 		// window. Escape remains owned by the modal handler (which applies its
 		// back transition), but the whole frame is consumed either way.
-		if (keyDown(input.KeyTab) || keyDown(input.KeyF2)) && state.Modal() == ui.BattleModalOptions {
+		//
+		// A child window over `ARMOPT` owns the pass while it is up — the
+		// options root and the save/load dialog both do — so the toggle is
+		// suppressed for as long as one is open and the modal dispatcher
+		// routes the frame to it instead [07 R-WGT-01 §1][07 R-FE-01 §6].
+		if (keyDown(input.KeyTab) || keyDown(input.KeyF2)) && state.Modal() == ui.BattleModalOptions &&
+			!b.battlePrefsActive() && !(b.shell != nil && b.shell.saveLoadPanelActive()) {
 			b.closeBattleMenu()
 		} else {
 			b.handleBattleMenuInput(in, cl)

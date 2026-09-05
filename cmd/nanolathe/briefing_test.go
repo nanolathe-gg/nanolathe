@@ -98,21 +98,24 @@ func TestBriefingWindDrawOrderAndStartRequest(t *testing.T) {
 	if stream.Draws()-before != 2 {
 		t.Fatalf("wind rollover CRT draws = %d, want 2", stream.Draws()-before)
 	}
-	if b.RotationFrame() != 1 {
-		t.Fatalf("first eligible planet draw rotation = %d, want 1", b.RotationFrame())
+	if b.RotationSteps() != 1 {
+		t.Fatalf("first eligible rotator pass = %d, want 1", b.RotationSteps())
 	}
 	if b.scroll != 0 {
 		t.Fatalf("scroll advanced at deadline setup = %d", b.scroll)
 	}
 	// A later draw inside the 25 ms rotation gate still advances panorama
 	// selection from (tick/3)%count.
-	b.lastWallMS, b.lastTick = 100, 1
-	b.Update(101, 9)
+	b.Update(26, 9)
 	if b.PanoramaFrame() != 3 {
 		t.Fatalf("panorama frame = %d, want 3", b.PanoramaFrame())
 	}
-	if b.RotationFrame() != 1 {
-		t.Fatalf("rotation changed inside wall gate = %d, want 1", b.RotationFrame())
+	if b.RotationSteps() != 1 {
+		t.Fatalf("rotator stepped inside the 25 ms gate = %d, want 1", b.RotationSteps())
+	}
+	b.Update(50, 10)
+	if b.RotationSteps() != 2 {
+		t.Fatalf("rotator passes after the gate expired = %d, want 2", b.RotationSteps())
 	}
 	opening := b.OpeningAudio()
 	if len(opening) != 1 || opening[0].Kind != BriefingAudioStart || opening[0].Path != "camps/briefs/voice.wav" || opening[0].Delay != 60 || opening[0].Volume != 0 {
@@ -148,3 +151,95 @@ func TestBriefingArtKeepsPreviousOnOptionalMediaMiss(t *testing.T) {
 		t.Fatalf("optional art miss replaced prior GAF: got %p want %p", got, previous)
 	}
 }
+
+// TestRetailWordWrapContract locks the front-end wrapper's three consequences:
+// the width test is `>=` and not `>`, breaks happen only at a space or hyphen
+// (so a word longer than the width is never split), and the separator is
+// consumed and replaced by `\r\n` [07 R-FE-02 §6].
+func TestRetailWordWrapContract(t *testing.T) {
+	// One unit per byte makes the arithmetic readable.
+	measure := func(s string) int { return len(s) }
+
+	// The measure runs when the *successor* is a break byte, and the break goes
+	// back to the separator before the word that overflowed. "aa bb" measures 5,
+	// so a width of 5 breaks and a width of 6 does not: the test is `>=`.
+	if got := retailWordWrap("aa bb cc", 5, measure); got != "aa\r\nbb cc" {
+		t.Fatalf("inclusive width test = %q", got)
+	}
+	if got := retailWordWrap("aa bb cc", 6, measure); got != "aa bb cc" {
+		t.Fatalf("line narrower than the width = %q", got)
+	}
+	// A hyphen is a break opportunity and, like the space, is consumed.
+	if got := retailWordWrap("aa-bb cc", 5, measure); got != "aa\r\nbb cc" {
+		t.Fatalf("hyphen break = %q", got)
+	}
+	// A word longer than the width is never split: with no earlier separator in
+	// the line the overflow is emitted whole and the next break lands after it.
+	if got := retailWordWrap("aaaaaa bb cc", 4, measure); got != "aaaaaa\r\nbb cc" {
+		t.Fatalf("long word split = %q", got)
+	}
+	// An authored newline restarts the line without a wrap.
+	if got := retailWordWrap("ab\ncd", 8, measure); got != "ab\ncd" {
+		t.Fatalf("authored newline = %q", got)
+	}
+	// 0xFF ends the text.
+	if got := retailWordWrap("ab\xffcd", 8, measure); got != "ab" {
+		t.Fatalf("0xFF terminator = %q", got)
+	}
+}
+
+// TestBriefingBlinkRunPreSplitAndLay locks the run pre-pass and the pager's
+// marker handling: a run crossing a line end is closed and reopened, the
+// markers never reach the label, and the run's pen is the width of the label
+// text laid before it [07 R-FE-02 §7][07 R-HUD-03 §10].
+func TestBriefingBlinkRunPreSplitAndLay(t *testing.T) {
+	if got := briefingSplitBlinkRuns("ab &Ycd\r\nef& gh"); got != "ab &Ycd&\r\n&Yef& gh" {
+		t.Fatalf("pre-split = %q", got)
+	}
+	open := true
+	line := briefingLayLine("ab &Ycd& ef", func(s string) int { return len(s) }, &open, briefingBlinkWordCap)
+	if line.Text != "ab cd ef" {
+		t.Fatalf("laid label = %q, markers must not reach it", line.Text)
+	}
+	if len(line.Runs) != 1 || line.Runs[0].Text != "cd" || line.Runs[0].X != 3 || line.Runs[0].Entry != 2 {
+		t.Fatalf("laid runs = %+v", line.Runs)
+	}
+	if !open {
+		t.Fatal("the closing marker must leave the pager's marker state open")
+	}
+}
+
+// TestBriefingPagerLinesAndCaption locks the lines-per-page divide, the page
+// wrap and the three MOREBAR captions [07 R-HUD-03 §10].
+func TestBriefingPagerLinesAndCaption(t *testing.T) {
+	b := NewCampaignBriefingController(briefingMission(t, "Lava"), 0, &countingRand{}, nil)
+	// Six single-character lines, a region tall enough for two of them.
+	b.SetTextRegion("a\nb\nc\nd\ne\nf", 100, 2*12, 10, func(s string) int { return len(s) })
+	if b.pageLines != 2 || b.pageCount != 3 {
+		t.Fatalf("pageLines=%d pageCount=%d, want 2 and 3", b.pageLines, b.pageCount)
+	}
+	if got := b.MoreCaption(); got != "MORE..." {
+		t.Fatalf("page 0 caption = %q", got)
+	}
+	if len(b.Lines()) != 2 || b.Lines()[0].Text != "a" || b.Lines()[1].Text != "b" {
+		t.Fatalf("page 0 lines = %+v", b.Lines())
+	}
+	b.Dispatch(BriefingActionMore)
+	b.Dispatch(BriefingActionMore)
+	if b.Page() != 2 || b.Lines()[0].Text != "e" {
+		t.Fatalf("page 2 = %d %+v", b.Page(), b.Lines())
+	}
+	if got := b.MoreCaption(); got != "BACK TO START" {
+		t.Fatalf("last page caption = %q", got)
+	}
+	b.Dispatch(BriefingActionMore)
+	if b.Page() != 0 {
+		t.Fatalf("MORE past the last page = %d, want a wrap to 0", b.Page())
+	}
+}
+
+// countingRand is a CRT stand-in for controllers whose draws are not the
+// subject of the test.
+type countingRand struct{ n int32 }
+
+func (c *countingRand) Rand() int32 { c.n++; return c.n }

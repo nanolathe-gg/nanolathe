@@ -218,6 +218,20 @@ gate wants one bit, so the service answers with one bit and the grids stay
 private; the raw accessors exist for the publication copy and for diagnostics
 `[03 §3.2]` `[03 §8.3]` `[03 R-LAYER §1]`.
 
+`VisibleExtents`'s two-corner form belongs to the world composer's feature
+draw gate (`featureVisibleForFrame` in `internal/client/world_draw.go`), keyed
+additionally to `nodrawundergray` and the plot placer nibble `[03 §5.1.5]`.
+The minimap contacts pass's second walk over the projectile/feature list is a
+*different* consumer: it admits each candidate — feature or projectile alike,
+from one shared, kind-agnostic list — through a one-point sample at the
+candidate's own projected position, with owner-local identity as the only
+bypass; it carries neither the `nodrawundergray` nor the placer-nibble term.
+`internal/session/publish.go`'s `radarFeatureVisible` and `radarPointVisible`
+therefore both call `VisiblePoint`, never `VisibleExtents` — the projectile
+form, not the feature-draw form — and the friendly-contact status pair `0x300`
+is a term of the minimap's UNIT-pass blip gate only, never of this second pass
+`[03 §3.9]`.
+
 **Sensors** (`sensors.go`). `SensorTick` runs five walks in order over an
 immutable per-unit view, mutating only each unit's runtime status word: clear
 and friendly marking; radar and sonar emission from the viewing player's own

@@ -444,14 +444,21 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 			// unit's ground position — is what the aim solve, the shot-time
 			// gate and the creator all receive [06 §3.3].
 			//
-			// TODO(question): the pre-fire lead of [06 §3.3] (kills > 5, not
-			// `cruise`, target has a mover, nonzero weaponvelocity) adds
-			// `mover.velocity × trunc(0.8 × D/weaponvelocity)` here. The
-			// target mover's velocity triple is not carried on units.Unit
-			// (only the scalar speed and heading are), so the lead needs a
-			// movement-package accessor for that triple before it can be
-			// applied; until then a veteran shooter aims at the unled point.
-			tgtPos = UnitTargetPoint(tu)
+			// The PRE-FIRE LEAD of [06 §3.3] is applied to that resolved
+			// point and only there: projectile guidance never leads
+			// [06 §6.7]. Its five gates and its arithmetic live in
+			// PreFireLeadPoint; a shot that fails any gate keeps the unled
+			// point. Everything downstream of this line — the aim solve, the
+			// shot-time range and medium gate, and the creator's stored
+			// target point — therefore receives the LED point, which is what
+			// makes the range test measure to where the target will be.
+			//
+			// The target mover's velocity triple reaches here through
+			// units.MoveState, which internal/movement publishes beside the
+			// scalar speed at every commit [04 R-MOV-01 §1][04 R-COLL-01 §1].
+			// This site used to carry an open-question marker saying the
+			// triple was not available; it is.
+			tgtPos = PreFireLeadPoint(u, tu, slot, weapon, UnitTargetPoint(tu))
 		} else {
 			tgtPos = Vec3{X: slot.Target.X, Y: PointTargetHeight(terrain, slot.Target.X, slot.Target.Z), Z: slot.Target.Z}
 		}
@@ -1980,6 +1987,29 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		}
 		_ = windState.Scalar // scalar published to wind generators [01 §7.3] I2 allowlist
 	}
+	// The live lookups behind the guidance target-point helper [06 §6.7]. Both
+	// are built ONCE, outside the record loop, so the per-record cost is a call
+	// and not a closure allocation. The projectile lookup does not filter dead
+	// records on purpose: retail dereferences a projectile-to-projectile link
+	// with no liveness check at all [06 §5.2].
+	guidance := GuidanceEnv{
+		Projectile: func(h pool.Handle) *Projectile {
+			idx := int(h) - 1
+			if idx < 0 || idx >= len(s.Records) || idx >= s.Slots.Count() {
+				return nil
+			}
+			return &s.Records[idx]
+		},
+		Unit: func(h pool.Handle) *units.Unit {
+			if w == nil {
+				return nil
+			}
+			return w.Unit(h)
+		},
+		// The cruise helper's below-threshold branch samples the terrain for
+		// `max(terrainHeight(storedTarget), seaLevel)` [06 §6.8].
+		Terrain: terrain,
+	}
 	for i := 0; i < entry; i++ {
 		h := pool.Handle(i + 1)
 		p := &s.Records[i]
@@ -2013,7 +2043,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		case MotionMeteor:
 			res = AdvanceMeteor(p, weapon, tick)
 		case MotionSelfProp:
-			res = AdvanceSelfProp(p, weapon, tick, gravity, seaLevel)
+			res = AdvanceSelfProp(p, weapon, tick, gravity, seaLevel, guidance)
 		default:
 			res = AdvanceRetire
 		}

@@ -107,7 +107,13 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 				text = productQueueCountLabel(f, gad.Name)
 			}
 			if text != "" {
-				h.drawProductButtonCaption(c, gad, r, text)
+				// The button painter first selects the FNT the toy's
+				// `fontnumber` picks from the page's kind-7 records — number
+				// 0, which every product button authors, is the page's first
+				// record, `armbutt`/`corbutt` — and the common font when none
+				// matches. That FNT is only reached on the GAF pen's null-slot
+				// fallback below [07 R-WGT-01 §6][03 R-FONT-01 §5].
+				h.drawProductButtonCaptionSelected(c, gad, r, text, window.Font(h.fs, gad.FontNumber))
 			}
 		}
 	}
@@ -240,16 +246,33 @@ func queueCountLabelPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y
 // `colorf` (map entry 0 unless mid-flash, and nothing on this page ever
 // writes the flash word) only reaches pixels on the FNT fallback
 // [03 R-FONT-01 §6].
+//
+// `selected` is the FNT the button's `fontnumber` picked from the page's own
+// kind-7 records — nil when none matched, which leaves the common font active.
+// It is the active FNT the null-slot fallback draws with; with a GAF font in
+// the slot it is never consulted [07 R-WGT-01 §6][03 R-FONT-01 §5].
 func (h *retailBattleHUD) productButtonCaptionLayout(gad gui.Gadget, r gui.Rect, text string) (x, y int, font *formats.GAFEntry) {
+	x, y, font, _ = h.productButtonCaptionLayoutSelected(gad, r, text, nil)
+	return x, y, font
+}
+
+// productButtonCaptionLayoutSelected is productButtonCaptionLayout with the
+// button's selected FNT; the fourth result is the FNT the null-slot fallback
+// draws with, nil when a GAF font is in the slot or no FNT is available.
+func (h *retailBattleHUD) productButtonCaptionLayoutSelected(gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT) (x, y int, font *formats.GAFEntry, fallback *formats.FNT) {
 	if font = h.buttonCaptionGAFFont(); font != nil {
 		x, y = queueCountLabelPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
-		return x, y, font
+		return x, y, font, nil
 	}
-	if h.guiFont == nil {
-		return 0, 0, nil
+	fallback = selected
+	if fallback == nil {
+		fallback = h.guiFont
 	}
-	x, y = queueCountLabelPen(gad, r, client.MeasureText(h.guiFont, text), int(h.guiFont.Height))
-	return x, y, nil
+	if fallback == nil {
+		return 0, 0, nil, nil
+	}
+	x, y = queueCountLabelPen(gad, r, client.MeasureText(fallback, text), int(fallback.Height))
+	return x, y, nil, fallback
 }
 
 // buttonCaptionGAFFont is the window's current GAF-font slot for a button
@@ -271,15 +294,23 @@ func (h *retailBattleHUD) buttonCaptionGAFFont() *formats.GAFEntry {
 // called with the width limit dropped, which is what maxWidth < 0 means to
 // UITextWidth.
 func (h *retailBattleHUD) drawProductButtonCaption(c *client.Client, gad gui.Gadget, r gui.Rect, text string) {
-	x, y, font := h.productButtonCaptionLayout(gad, r, text)
+	h.drawProductButtonCaptionSelected(c, gad, r, text, nil)
+}
+
+// drawProductButtonCaptionSelected is drawProductButtonCaption with the FNT
+// the button's `fontnumber` selected from the page's kind-7 records (nil when
+// none matched): the active FNT the null-slot fallback draws with
+// [07 R-WGT-01 §6][03 R-FONT-01 §5].
+func (h *retailBattleHUD) drawProductButtonCaptionSelected(c *client.Client, gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT) {
+	x, y, font, fallback := h.productButtonCaptionLayoutSelected(gad, r, text, selected)
 	if font != nil {
 		drawRetailGAFText(c, font, text, x, y, int(r.W))
 		return
 	}
-	if h.guiFont == nil {
+	if fallback == nil {
 		return
 	}
-	c.UITextWidth(h.guiFont, text, x, y, -1, h.guiColor(0))
+	c.UITextWidth(fallback, text, x, y, -1, h.guiColor(0))
 }
 
 // commandPageIsPaged reports the selected builder's page-shown bit (status bit

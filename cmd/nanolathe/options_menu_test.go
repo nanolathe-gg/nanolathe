@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
@@ -531,7 +532,7 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		{"screen", 40, func() int { return shell.scrollSpeed }},
 		{"txtscrol", 7, func() int { return shell.messages.TextScroll }},
 		{"maxlines", 18, func() int { return shell.messages.TextLines }},
-		{"game", 14, func() int { return shellGameSpeed }},
+		{"game", 14, func() int { return shell.gameSpeed }},
 	} {
 		s := shell.retailOptionsSlider(c.slider)
 		if s == nil {
@@ -543,8 +544,8 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		}
 	}
 	shell.activateGadget("LEFTCLICK")
-	if shellInterfaceType != settings.InterfaceTypeRightClick {
-		t.Errorf("LEFTCLICK left Interface Type %d; want %d", shellInterfaceType, settings.InterfaceTypeRightClick)
+	if shell.interfaceType != settings.InterfaceTypeRightClick {
+		t.Errorf("LEFTCLICK left Interface Type %d; want %d", shell.interfaceType, settings.InterfaceTypeRightClick)
 	}
 	shell.activateGadget("UNITCHAT")
 	if shell.messages.UnitChatText != 10 {
@@ -558,21 +559,21 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		t.Fatal("the sound page installed no FXVOL slider")
 	}
 	shell.moveRetailSlider("fxvol", fx, retailSliderKnob(40, fx.travel, fx.max))
-	if shellAudio.FXVol != 40 {
-		t.Errorf("FXVOL at 40 stored %d", shellAudio.FXVol)
+	if shell.audioPrefs.FXVol != 40 {
+		t.Errorf("FXVOL at 40 stored %d", shell.audioPrefs.FXVol)
 	}
 	// `SPEECH` writes both halves: bit 6 and the voice level as stage times five.
 	optionsPanel.SetStatus("SPEECH", 0)
 	shell.activateGadget("SPEECH")
-	if shellAudio.SpeechFX != 1 || shellAudio.UnitChat != 5 {
-		t.Errorf("SPEECH at Medium stored speechfx %d unitchat %d; want 1 and 5", shellAudio.SpeechFX, shellAudio.UnitChat)
+	if shell.audioPrefs.SpeechFX != 1 || shell.audioPrefs.UnitChat != 5 {
+		t.Errorf("SPEECH at Medium stored speechfx %d unitchat %d; want 1 and 5", shell.audioPrefs.SpeechFX, shell.audioPrefs.UnitChat)
 	}
 	// `MODE` Off greys the gauge, the test button and the speech gauge and
 	// deactivates the volume caption [03 R-AUD-01 §2].
-	shellAudio.SoundMode = settings.SoundMode3D
+	shell.audioPrefs.SoundMode = settings.SoundMode3D
 	shell.activateGadget("MODE")
-	if shellAudio.SoundMode != settings.SoundModeOff {
-		t.Fatalf("MODE from 3D left mode %d; want Off", shellAudio.SoundMode)
+	if shell.audioPrefs.SoundMode != settings.SoundModeOff {
+		t.Fatalf("MODE from 3D left mode %d; want Off", shell.audioPrefs.SoundMode)
 	}
 	if optionsPanel.ActiveOf("VOLTEXT") {
 		t.Error("Sound Mode Off left the VOLTEXT caption active")
@@ -593,8 +594,8 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		t.Errorf("TRACKNUM with no tracks reads %q; want %q", optionsPanel.TextOf("TRACKNUM"), retailNoDiscText)
 	}
 	shell.activateGadget("NOTRAK")
-	if shellAudio.MusicMode != 0 {
-		t.Fatalf("NOTRAK left musicmode %d; want 0", shellAudio.MusicMode)
+	if shell.audioPrefs.MusicMode != 0 {
+		t.Fatalf("NOTRAK left musicmode %d; want 0", shell.audioPrefs.MusicMode)
 	}
 	for _, name := range []string{"MUSICVOL", "CDPLAY", "CDSTOP", "CDNEXT", "CDPREV", "TRACKMODE", "TRACKTYPE"} {
 		if !retailGadgetGreyed(optionsAssets.window, name) {
@@ -651,11 +652,11 @@ func TestRetailOptionsCancelDiscardsEveryPage(t *testing.T) {
 	shell.activateGadget("LEFTCLICK")
 	shell.activateGadget("CANCEL")
 
-	if shellAudio != before.audio {
-		t.Errorf("CANCEL left the audio block %+v; want the entry copy %+v", shellAudio, before.audio)
+	if shell.audioPrefs != before.audio {
+		t.Errorf("CANCEL left the audio block %+v; want the entry copy %+v", shell.audioPrefs, before.audio)
 	}
-	if shellInterfaceType != before.interfaceType {
-		t.Errorf("CANCEL left Interface Type %d; want %d", shellInterfaceType, before.interfaceType)
+	if shell.interfaceType != before.interfaceType {
+		t.Errorf("CANCEL left Interface Type %d; want %d", shell.interfaceType, before.interfaceType)
 	}
 }
 
@@ -667,31 +668,31 @@ func TestRetailOptionsRestorePerPageDefaults(t *testing.T) {
 	shell.activateGadget("Options")
 
 	shell.activateGadget("SOUND")
-	shellAudio.FXVol, shellAudio.SoundMode, shellAudio.UnitChat, shellAudio.AckFX = 3, settings.SoundModeOff, 0, 0
+	shell.audioPrefs.FXVol, shell.audioPrefs.SoundMode, shell.audioPrefs.UnitChat, shell.audioPrefs.AckFX = 3, settings.SoundModeOff, 0, 0
 	shell.activateGadget("RESTORE")
-	if shellAudio.FXVol != settings.DefaultFXVol || shellAudio.SoundMode != settings.SoundModeMono ||
-		shellAudio.UnitChat != settings.MaxUnitChat || shellAudio.AckFX != 1 {
-		t.Errorf("sound RESTORE left %+v", shellAudio)
+	if shell.audioPrefs.FXVol != settings.DefaultFXVol || shell.audioPrefs.SoundMode != settings.SoundModeMono ||
+		shell.audioPrefs.UnitChat != settings.MaxUnitChat || shell.audioPrefs.AckFX != 1 {
+		t.Errorf("sound RESTORE left %+v", shell.audioPrefs)
 	}
 
 	shell.activateGadget("MUSIC")
-	shellAudio.MusicVol, shellAudio.CDMode, shellAudio.MusicMode = 5, 1, 0
+	shell.audioPrefs.MusicVol, shell.audioPrefs.CDMode, shell.audioPrefs.MusicMode = 5, 1, 0
 	shell.activateGadget("RESTORE")
-	if shellAudio.MusicVol != settings.DefaultMusicVol || shellAudio.CDMode != settings.DefaultCDMode || shellAudio.MusicMode != 1 {
-		t.Errorf("music RESTORE left musicvol %d cdmode %d musicmode %d", shellAudio.MusicVol, shellAudio.CDMode, shellAudio.MusicMode)
+	if shell.audioPrefs.MusicVol != settings.DefaultMusicVol || shell.audioPrefs.CDMode != settings.DefaultCDMode || shell.audioPrefs.MusicMode != 1 {
+		t.Errorf("music RESTORE left musicvol %d cdmode %d musicmode %d", shell.audioPrefs.MusicVol, shell.audioPrefs.CDMode, shell.audioPrefs.MusicMode)
 	}
 
 	shell.activateGadget("SPEEDS")
-	shell.scrollSpeed, shellGameSpeed, shellInterfaceType = 3, 20, 1
+	shell.scrollSpeed, shell.gameSpeed, shell.interfaceType = 3, 20, 1
 	shell.messages.TextScroll, shell.messages.TextLines, shell.messages.UnitChatText = 1, 1, 0
 	shell.activateGadget("RESTORE")
-	if shell.scrollSpeed != settings.DefaultScrollSpeed || shellGameSpeed != settings.DefaultGameSpeed ||
-		shellInterfaceType != settings.DefaultInterfaceType {
-		t.Errorf("interface RESTORE left scroll %d speed %d iface %d", shell.scrollSpeed, shellGameSpeed, shellInterfaceType)
+	if shell.scrollSpeed != settings.DefaultScrollSpeed || shell.gameSpeed != settings.DefaultGameSpeed ||
+		shell.interfaceType != settings.DefaultInterfaceType {
+		t.Errorf("interface RESTORE left scroll %d speed %d iface %d", shell.scrollSpeed, shell.gameSpeed, shell.interfaceType)
 	}
 	if shell.messages.TextScroll != settings.DefaultTextScroll || shell.messages.TextLines != settings.DefaultTextLines ||
-		shell.messages.UnitChatText != settings.DefaultUnitChatText || shellAudio.UnitChat != settings.MaxUnitChat {
-		t.Errorf("interface RESTORE left messages %+v unitchat %d", shell.messages, shellAudio.UnitChat)
+		shell.messages.UnitChatText != settings.DefaultUnitChatText || shell.audioPrefs.UnitChat != settings.MaxUnitChat {
+		t.Errorf("interface RESTORE left messages %+v unitchat %d", shell.messages, shell.audioPrefs.UnitChat)
 	}
 }
 
@@ -706,5 +707,301 @@ func TestRetailWaveVolumeScale(t *testing.T) {
 	}
 	if got, want := retailWaveVolumeScale(27), float64(27<<10)/float64(0xFFFF); got != want {
 		t.Errorf("the default gauge scaled to %v; want %v", got, want)
+	}
+}
+
+// retailBattleOptionsShell composes a real battle with a frontend shell
+// attached, so `ARMOPT`'s `PREFS` has both a session to write into and a
+// mounted resource set to draw from.
+func retailBattleOptionsShell(t *testing.T) (*gameShell, *battleSession, *client.Client) {
+	t.Helper()
+	root := testsupport.RetailRoot(t)
+	opts := Options{Root: root, Map: "ashap plateau", Seed: 7}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	t.Cleanup(func() { cs.Close() })
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		t.Skipf("retail frontend unavailable: %v", err)
+	}
+	rng.SeedGlobal(7, 7)
+	sess, cat, err := newBattleSession(opts, cs)
+	if err != nil {
+		t.Skipf("retail battle unavailable: %v", err)
+	}
+	cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: retailScreenW, Height: retailScreenH})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.SetModelFS(cs.fs)
+	b, err := composeBattleEntry(sess, cat, cs, cl, shell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell.battle = b
+	// The shell's own battle hand-off puts the frontend in battle mode; this
+	// harness composes the battle directly, so it does the same here.
+	shell.frontend.SetMode(modeBattle)
+	t.Cleanup(func() {
+		optionsPanel, optionsAssets, optionsState = nil, nil, nil
+		b.teardown(cl)
+	})
+	for i := 0; i < 30; i++ {
+		b.viewerStep(1.0/30.0, cl)
+	}
+	return shell, b, cl
+}
+
+// `ARMOPT`'s `PREFS` opens the options root as a child window over the paused
+// battle; the root is `PREFS.GUI` widened by 150 with a synthesised `PANEL`,
+// and each page button merges the `…RT.GUI` variant with no page bitmap
+// [07 R-FE-01 §6][07 R-FE-01 §7].
+//
+// With NANOLATHE_OPTIONS_SHOT set to a directory the root and each merged page
+// are written there as PNGs.
+func TestBattlePrefsOpensTheInBattleOptionsRootAndMergesTheRTPages(t *testing.T) {
+	shell, b, cl := retailBattleOptionsShell(t)
+	shotDir := os.Getenv("NANOLATHE_OPTIONS_SHOT")
+
+	b.openBattleMenu()
+	if !b.battleState().Paused() {
+		t.Fatal("ARMOPT did not pause the battle")
+	}
+	b.activateBattleMenuButton("PREFS", cl)
+	if !b.battlePrefsActive() {
+		t.Fatal("PREFS did not open the options root over the battle")
+	}
+	if b.battleState().Modal() != ui.BattleModalOptions {
+		t.Fatalf("PREFS left the modal chain at %v; ARMOPT must stay underneath", b.battleState().Modal())
+	}
+	if !b.battleState().Paused() {
+		t.Fatal("opening PREFS resumed the battle")
+	}
+	// The root is the in-battle file, widened by 150 with the synthesised
+	// PANEL over the new columns [07 R-FE-01 §6].
+	root := optionsAssets.window
+	if root.Rect.W != 128+retailBattleOptionsWiden {
+		t.Fatalf("the in-battle root is %d columns wide; want the authored 128 plus %d", root.Rect.W, retailBattleOptionsWiden)
+	}
+	panelRect, _, ok := retailOptionsPanelRect(root)
+	if !ok {
+		t.Fatal("the in-battle arm synthesised no PANEL gadget")
+	}
+	if panelRect.W != retailBattleOptionsWiden || panelRect.X != 128 {
+		t.Fatalf("the synthesised PANEL is %+v; want the %d new columns beside the plate", panelRect, retailBattleOptionsWiden)
+	}
+	// No page bitmap is installed at any step, so the battle stays visible.
+	if optionsAssets.background != nil {
+		t.Fatal("the in-battle root installed a background bitmap")
+	}
+	if shotDir != "" {
+		writeShellShot(t, cl, shotDir+"/battle-prefs-root.png")
+	}
+
+	for _, page := range []struct{ button, key, gui string }{
+		{"SOUND", "sound", "guis/soundsrt.gui"},
+		{"MUSIC", "music", "guis/musicrt.gui"},
+		{"SPEEDS", "speeds", "guis/speedsrt.gui"},
+		{"VISUALS", "visuals", "guis/visualrt.gui"},
+	} {
+		shell.activateGadget(page.button)
+		if optionsState.page != page.key {
+			t.Fatalf("%s merged page %q; want %q", page.button, optionsState.page, page.key)
+		}
+		if got := retailOptionsPages[page.key].source(true); got != page.gui {
+			t.Fatalf("%s in battle merges %q; want %q", page.button, got, page.gui)
+		}
+		if optionsAssets.background != nil {
+			t.Fatalf("%s installed a page bitmap in battle", page.button)
+		}
+		// The centring arm places every stock page at its own authored header
+		// origin, which is where the widened column is [07 R-FE-01 §6].
+		merged := false
+		for _, gad := range optionsPanel.Window.Gadgets {
+			if !retailOptionsPageGadget(gad) {
+				continue
+			}
+			merged = true
+			if gad.Rect.X < 128 {
+				t.Fatalf("%s placed %q at x=%d; the merged page belongs in the widened column", page.button, gad.Name, gad.Rect.X)
+			}
+		}
+		if !merged {
+			t.Fatalf("%s merged no gadgets", page.button)
+		}
+		if shotDir != "" {
+			writeShellShot(t, cl, shotDir+"/battle-prefs-"+page.key+".png")
+		}
+	}
+
+	// PREV ("OK") closes the options root and leaves ARMOPT open, with the
+	// battle still paused [07 R-FE-01 §6].
+	shell.activateGadget("PREV")
+	if b.battlePrefsActive() {
+		t.Fatal("PREV did not close the in-battle options root")
+	}
+	if b.battleState().Modal() != ui.BattleModalOptions {
+		t.Fatalf("PREV left the modal chain at %v; want ARMOPT", b.battleState().Modal())
+	}
+	if !b.battleState().Paused() {
+		t.Fatal("PREV resumed the battle; only ARMOPT's own close does that")
+	}
+	if shotDir != "" {
+		writeShellShot(t, cl, shotDir+"/battle-armopt.png")
+	}
+}
+
+// The interface page's writes reach the live battle: `GAME` goes through the
+// session's speed setter and `SCREEN` through the camera's cached scroll byte
+// [07 R-FE-01 §6][07 R-CAM-01 §3][07 R-CAM-01 §7][07 §10]. `CANCEL` takes both
+// back from the entry snapshot.
+func TestBattlePrefsInterfacePageDrivesTheLiveSession(t *testing.T) {
+	shell, b, cl := retailBattleOptionsShell(t)
+	entrySpeed := int(b.sess.Clock.Requested)
+	entryScroll := b.scrollSetting()
+
+	b.openBattleMenu()
+	b.activateBattleMenuButton("PREFS", cl)
+	if shell.gameSpeed != entrySpeed {
+		t.Fatalf("the in-battle root opened over stored speed %d; want the session's live %d", shell.gameSpeed, entrySpeed)
+	}
+	shell.activateGadget("SPEEDS")
+
+	game := shell.retailOptionsSlider("GAME")
+	if game == nil {
+		t.Fatal("the merged interface page installed no GAME slider")
+	}
+	shell.moveRetailSlider("game", game, retailSliderKnob(settings.MaxGameSpeed, game.travel, game.max))
+	if shell.gameSpeed != settings.MaxGameSpeed {
+		t.Fatalf("GAME at the end of travel stored %d; want %d", shell.gameSpeed, settings.MaxGameSpeed)
+	}
+	if got := int(b.sess.Clock.Requested); got != settings.MaxGameSpeed {
+		t.Fatalf("GAME left the session requesting speed %d; want %d", got, settings.MaxGameSpeed)
+	}
+
+	screen := shell.retailOptionsSlider("SCREEN")
+	if screen == nil {
+		t.Fatal("the merged interface page installed no SCREEN slider")
+	}
+	shell.moveRetailSlider("screen", screen, retailSliderKnob(settings.ScrollSliderMax, screen.travel, screen.max))
+	if b.scrollSetting() != byte(shell.scrollSpeed) {
+		t.Fatalf("SCREEN left the camera reading %d; want the stored %d", b.scrollSetting(), shell.scrollSpeed)
+	}
+	if b.scrollSetting() == entryScroll {
+		t.Fatal("SCREEN at the end of travel did not move the camera's scroll byte")
+	}
+
+	shell.activateGadget("CANCEL")
+	if b.battlePrefsActive() {
+		t.Fatal("CANCEL did not close the in-battle options root")
+	}
+	if got := int(b.sess.Clock.Requested); got != entrySpeed {
+		t.Fatalf("CANCEL left the session at speed %d; want the entry copy %d", got, entrySpeed)
+	}
+	if b.scrollSetting() != entryScroll {
+		t.Fatalf("CANCEL left the camera reading %d; want the entry copy %d", b.scrollSetting(), entryScroll)
+	}
+}
+
+// The pointer capture goes to the first gadget in index order that has a press
+// handler. `PREFS.GUI` authors its whole plate as a picture box at index 1, in
+// front of every button, and a picture box takes no press [07 R-WGT-01 §1]
+// [07 R-WGT-01 §8].
+func TestBattlePrefsPressSkipsThePlatePictureBox(t *testing.T) {
+	_, b, cl := retailBattleOptionsShell(t)
+	b.openBattleMenu()
+	b.activateBattleMenuButton("PREFS", cl)
+
+	want := -1
+	for i, gad := range optionsPanel.Window.Gadgets {
+		if strings.EqualFold(gad.Name, "SOUND") {
+			want = i
+			break
+		}
+	}
+	if want < 0 {
+		t.Fatal("the in-battle root authors no SOUND button")
+	}
+	r := optionsPanel.Window.PlacedRect(want)
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	if got := battleOptionsPressTest(x, y); got != want {
+		name := "nothing"
+		if got >= 0 {
+			name = optionsPanel.Window.Gadgets[got].Name
+		}
+		t.Fatalf("a press on SOUND was captured by %q (index %d); want index %d", name, got, want)
+	}
+}
+
+// The in-battle pump is the window's whole pointer pass: a press captures the
+// gadget under it and the release inside the same gadget runs its callback
+// [07 R-WGT-01 §1][07 R-WGT-01 §3].
+func TestBattlePrefsPumpActivatesOnReleaseInside(t *testing.T) {
+	_, b, cl := retailBattleOptionsShell(t)
+	b.openBattleMenu()
+	b.activateBattleMenuButton("PREFS", cl)
+
+	index := -1
+	for i, gad := range optionsPanel.Window.Gadgets {
+		if strings.EqualFold(gad.Name, "VISUALS") {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		t.Fatal("the in-battle root authors no VISUALS button")
+	}
+	r := optionsPanel.Window.PlacedRect(index)
+	x, y := float32(r.X+r.W/2), float32(r.Y+r.H/2)
+	mouse := cl.Input().Mouse
+
+	mouse.ResetEdges()
+	mouse.SetPosition(x, y)
+	mouse.SetButton(input.MouseButtonLeft, true)
+	b.handleBattleMenuInput(cl.Input(), cl)
+	if optionsState.pressed != index {
+		t.Fatalf("the press captured gadget %d; want VISUALS at %d", optionsState.pressed, index)
+	}
+	if optionsState.page != "" {
+		t.Fatalf("the press alone merged page %q; a button fires on release", optionsState.page)
+	}
+
+	mouse.ResetEdges()
+	mouse.SetButton(input.MouseButtonLeft, false)
+	b.handleBattleMenuInput(cl.Input(), cl)
+	if optionsState == nil || optionsState.page != "visuals" {
+		t.Fatal("the release inside VISUALS did not merge the visuals page")
+	}
+	mouse.ResetEdges()
+}
+
+// `PREFS.GUI` authors `escdefault=PREV`, so Escape leaves through "OK" — the
+// tab-close path — and lands back on `ARMOPT` with the battle still paused
+// [07 R-FE-01 §6][07 R-FE-01 §12].
+func TestBattlePrefsEscapeReturnsToArmopt(t *testing.T) {
+	shell, b, cl := retailBattleOptionsShell(t)
+	b.openBattleMenu()
+	b.activateBattleMenuButton("PREFS", cl)
+	if got := optionsPanel.Window.Header.EscDefault; !strings.EqualFold(got, "PREV") {
+		t.Fatalf("the in-battle root authors escdefault %q; want PREV", got)
+	}
+	shell.activateEscape()
+	if b.battlePrefsActive() {
+		t.Fatal("Escape did not close the in-battle options root")
+	}
+	if b.battleState().Modal() != ui.BattleModalOptions {
+		t.Fatalf("Escape left the modal chain at %v; want ARMOPT", b.battleState().Modal())
+	}
+	if !b.battleState().Paused() {
+		t.Fatal("Escape on the options root resumed the battle")
+	}
+	// A second Escape is ARMOPT's own, and that one does resume.
+	in := input.NewState()
+	in.Kbd.SetKey(input.KeyEscape, true)
+	b.handleBattleMenuInput(in, cl)
+	if b.battleState().Modal() != ui.BattleModalClosed || b.battleState().Paused() {
+		t.Fatalf("Escape on ARMOPT left modal %v paused %v", b.battleState().Modal(), b.battleState().Paused())
 	}
 }

@@ -8,6 +8,13 @@ package main
 // with the merge flag: the page's gadgets are appended to the open window
 // [07 R-FE-01 §6]. All four pages are built here — `SOUND`, `MUSIC`,
 // `SPEEDS` (whose root button is captioned `INTERFACE`) and `VISUALS`.
+//
+// In battle the same routines run with one arm changed at each step: the root
+// is `PREFS.GUI`, the four pages are the `…RT.GUI` variants, no page bitmap is
+// installed at all, the root window is widened by 150 columns with a `PANEL`
+// gadget synthesised over them, and gadgets whose names begin `MAP` or `VID`
+// are hidden [07 R-FE-01 §6]. `ARMOPT`'s `PREFS` button is the only way in,
+// and it has already set the pause bit [07 R-FE-01 §7].
 
 import (
 	"fmt"
@@ -28,6 +35,20 @@ import (
 const (
 	retailOptionsGUI      = "guis/startopt.gui"
 	retailOptionsBackdrop = "bitmaps/options4x.pcx"
+	// retailBattleOptionsGUI is the in-battle root. It authors no background
+	// bitmap and no `RESTORE`/`UNDO`; its four page buttons, `PREV` and
+	// `CANCEL` are the same names the front-end root carries
+	// [07 R-FE-01 §6].
+	retailBattleOptionsGUI = "guis/prefs.gui"
+	// retailBattleOptionsWiden is the column count the in-battle arm adds to
+	// the root window before the first page merge [07 R-FE-01 §6]. On the
+	// stock file it takes the window from 128 to 278 columns, which is the
+	// width the unfold's saturation counter is measured against
+	// [07 R-HUD-04 §2].
+	retailBattleOptionsWiden = 150
+	// retailBattleOptionsPanel is the name the merge searches the open window
+	// for; the in-battle arm is the one that supplies it [07 R-FE-01 §6].
+	retailBattleOptionsPanel = "PANEL"
 )
 
 // retailOptionsPage is one of the root's four page buttons: the authored `.GUI`
@@ -41,6 +62,7 @@ const (
 // battle visible behind the page [07 R-FE-01 §6].
 type retailOptionsPage struct {
 	gui      string
+	battle   string
 	backdrop string
 }
 
@@ -48,22 +70,20 @@ type retailOptionsPage struct {
 // button opens `SOUNDS`, not the unopened `SOUND.GUI` beside it, and the
 // `SPEEDS` button is the one the file captions `INTERFACE` [07 R-FE-01 §6].
 var retailOptionsPages = map[string]retailOptionsPage{
-	"sound":   {gui: "guis/sounds.gui", backdrop: "bitmaps/optsound4x.pcx"},
-	"music":   {gui: "guis/music.gui", backdrop: "bitmaps/optmusic4x.pcx"},
-	"speeds":  {gui: "guis/speeds.gui", backdrop: "bitmaps/optinterface4x.pcx"},
-	"visuals": {gui: "guis/visuals.gui", backdrop: "bitmaps/optvisual4x.pcx"},
+	"sound":   {gui: "guis/sounds.gui", battle: "guis/soundsrt.gui", backdrop: "bitmaps/optsound4x.pcx"},
+	"music":   {gui: "guis/music.gui", battle: "guis/musicrt.gui", backdrop: "bitmaps/optmusic4x.pcx"},
+	"speeds":  {gui: "guis/speeds.gui", battle: "guis/speedsrt.gui", backdrop: "bitmaps/optinterface4x.pcx"},
+	"visuals": {gui: "guis/visuals.gui", battle: "guis/visualrt.gui", backdrop: "bitmaps/optvisual4x.pcx"},
 }
 
-// The audio preference block, the stored game speed and the `Interface Type`
-// word are live shell preferences with no field on `gameShell`: that type is
-// declared in frontend.go, which this unit does not own. They are process
-// singletons for the same reason the options window's own state below is, and
-// they belong on the shell as soon as one change can touch both files.
-var (
-	shellAudio         = settings.DefaultAudio()
-	shellGameSpeed     = settings.DefaultGameSpeed
-	shellInterfaceType = settings.DefaultInterfaceType
-)
+// source is the `.GUI` the named button merges: the front-end page, or the
+// `…RT.GUI` variant in battle [07 R-FE-01 §6].
+func (p retailOptionsPage) source(inBattle bool) string {
+	if inBattle {
+		return p.battle
+	}
+	return p.gui
+}
 
 // retailOptionsPageSource prefixes the provenance name of every gadget a
 // merged page contributed, so opening another page can remove the previous
@@ -100,6 +120,14 @@ var (
 // and LOS bits, the game speed, the scroll speed, the mixer state and the
 // 100-entry CD list. The two session bits are a battle's, so the front-end root
 // has none to copy; the CD list is the per-track category array below.
+//
+// TODO(question): the in-battle root snapshots the session's mapping and
+// line-of-sight bits as well, and `CANCEL` writes them back. No control on any
+// of the four pages writes either bit — `GAMEOPTIONS.GUI` displays them
+// read-only [07 R-FE-01 §7] — so nothing in this build can change them while
+// the window is open and there is nothing for the restore to undo. What would
+// settle it: a writer of either bit reachable from the options family; until
+// one is found, copying them here would be two dead fields.
 type retailOptionsSnapshot struct {
 	display       settings.Display
 	audio         settings.Audio
@@ -123,6 +151,18 @@ type retailOptionsState struct {
 	sliders  map[string]*retailSliderState
 	drag     retailSliderDrag
 	modes    []retailDisplayMode
+
+	// inBattle selects the in-battle arm of every routine in this file: the
+	// `PREFS.GUI` root, the `…RT.GUI` pages, no page bitmap, and the writes
+	// that reach the running session rather than only the stored block
+	// [07 R-FE-01 §6].
+	inBattle bool
+	// pressed is the index of the gadget holding the pointer capture on the
+	// in-battle window, -1 when free [07 R-WGT-01 §1 "Capture"]. The front-end
+	// arm keeps the same word on `ui.Panel`; the battle needs its own because
+	// the in-battle pump applies the capture rule this window requires — see
+	// battle_options.go.
+	pressed int
 
 	// tracks is the music object's audio-track count and track the `MUSIC`
 	// page's selected track, 1-based, 0 when there is none. Retail keeps the
@@ -332,20 +372,35 @@ func (g *gameShell) retailOptionsSlider(name string) *retailSliderState {
 	return optionsState.sliders[menuKey(name)]
 }
 
-// openRetailOptionsScreen builds `STARTOPT.GUI` and pushes it over the current
-// surface, snapshotting the preference block the way entering the options root
+// openRetailOptionsScreen builds the options root and pushes it over the
+// current surface, snapshotting the preference block the way entering the root
 // does [07 R-FE-01 §6].
-func (g *gameShell) openRetailOptionsScreen() error {
+//
+// `inBattle` selects `PREFS.GUI` over `STARTOPT.GUI`, drops the background
+// bitmap, widens the window by 150 columns with a synthesised `PANEL` over
+// them, and hides the `MAP*` / `VID*` gadgets.
+func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
+	root := retailOptionsGUI
+	if inBattle {
+		root = retailBattleOptionsGUI
+	}
 	if g == nil || g.cs == nil || g.cs.fs == nil {
-		return fmt.Errorf("nanolathe: options screen: no mounted content: logical path %s, providers searched [], expected the authored options root", retailOptionsGUI)
+		return fmt.Errorf("nanolathe: options screen: no mounted content: logical path %s, providers searched [], expected the authored options root", root)
 	}
-	window, err := gui.Load(g.cs.fs, retailOptionsGUI)
+	window, err := gui.Load(g.cs.fs, root)
 	if err != nil {
-		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", retailOptionsGUI, "the authored options root", err)
+		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", root, "the authored options root", err)
 	}
-	background, err := formats.LoadPCXFile(g.cs.fs, retailOptionsBackdrop)
-	if err != nil {
-		return retailFrontendAssetError(g.cs, "retail options bitmap", retailOptionsBackdrop, "the authored options background", err)
+	// In battle no bitmap is installed at any step, so the battle stays visible
+	// behind the window and behind every merged page [07 R-FE-01 §6].
+	var background *formats.PCX
+	if !inBattle {
+		if background, err = formats.LoadPCXFile(g.cs.fs, retailOptionsBackdrop); err != nil {
+			return retailFrontendAssetError(g.cs, "retail options bitmap", retailOptionsBackdrop, "the authored options background", err)
+		}
+	}
+	if inBattle {
+		widenRetailBattleOptionsRoot(window)
 	}
 	desktopW, desktopH := ebitenapp.DesktopSize()
 	optionsAssets = &retailPanelAssets{window: window, background: background}
@@ -353,6 +408,21 @@ func (g *gameShell) openRetailOptionsScreen() error {
 		sliders:    map[string]*retailSliderState{},
 		modes:      retailDisplayModes(desktopW, desktopH),
 		categories: retailDefaultCategories(),
+		inBattle:   inBattle,
+		pressed:    -1,
+	}
+	// Retail's stored game speed and the session's requested speed are one
+	// word: the `GAME` slider reads it, the speed setter writes it, and the
+	// battle's own speed keys write the same one [07 R-CAM-01 §3]
+	// [07 R-CAM-01 §7]. This build keeps them apart, because the shell's word
+	// outlives any session, so the in-battle root adopts the live value on
+	// entry. That is what makes the knob open over the speed the battle is
+	// actually running and the entry snapshot restore that speed rather than a
+	// stale one.
+	if inBattle {
+		if b := g.battleOptionsSession(); b != nil && b.sess != nil && b.sess.Clock != nil {
+			g.gameSpeed = int(b.sess.Clock.Requested)
+		}
 	}
 	optionsState.snapshot = g.retailOptionsSnapshot()
 	optionsState.tracks = g.retailMusicTrackCount()
@@ -361,9 +431,18 @@ func (g *gameShell) openRetailOptionsScreen() error {
 		// page then shows as its selection [03 R-AUD-01 §4].
 		optionsState.track = 1
 	}
+	// The in-battle arm hides every gadget whose name begins `MAP` or `VID`
+	// before the window is built, so the hidden state is what the panel records
+	// [07 R-FE-01 §6]. On the stock files nothing matches: the in-battle
+	// visuals page authors neither `VIDSLDR` nor `VIDVAL`, and no page in the
+	// family authors a `MAP…` control. The pass runs anyway, because the names
+	// are what retail tests and an install whose page authors one would hide it.
+	if inBattle {
+		hideRetailBattleOptionsGadgets(window)
+	}
 	optionsPanel = ui.NewPanel(window)
 	if optionsPanel == nil {
-		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", retailOptionsGUI, "the authored options root", nil)
+		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", root, "the authored options root", nil)
 	}
 	// `MUSIC` is greyed when the CD object never opened. This build's music
 	// object is the audio service's controller, so the arm the grey test names
@@ -378,16 +457,84 @@ func (g *gameShell) openRetailOptionsScreen() error {
 	return nil
 }
 
+// widenRetailBattleOptionsRoot applies the in-battle arm's two window edits:
+// the root grows by 150 columns and a `PANEL` gadget is synthesised over them
+// [07 R-FE-01 §6]. The synthesised gadget is what makes every later page merge
+// take the centring branch instead of the origin-add branch — the branch the
+// front-end root never reaches, because `STARTOPT.GUI` authors no `PANEL`.
+//
+// TODO(question): the rectangle the opener writes into the synthesised record
+// is not traced. This build gives it the new columns beside the root's own
+// plate — x at the authored width, and the plate's own y and height — because
+// the traced centring formula then places each stock `…RT.GUI` page at exactly
+// its own authored header origin on both axes: `(150−150)/2 + 128 = 128` and
+// `(352−352)/2 + 2 = 2`, which with the window origin is the page header's
+// (128, 128). Two coordinates agreeing exactly is why this shape was chosen
+// over any other; what would settle it is the rectangle the opener writes.
+func widenRetailBattleOptionsRoot(window *gui.Window) {
+	if window == nil || len(window.Gadgets) == 0 {
+		return
+	}
+	panel := gui.Rect{X: window.Rect.W, Y: 0, W: retailBattleOptionsWiden, H: window.Rect.H}
+	// The root's own plate is its single picture box (`IGOPT` on the stock
+	// file); the new columns sit beside it and share its vertical extent.
+	for _, gad := range window.Gadgets[1:] {
+		if gad.Kind == gui.KindPicture {
+			panel.Y, panel.H = gad.Rect.Y, gad.Rect.H
+			break
+		}
+	}
+	window.Rect.W += retailBattleOptionsWiden
+	window.Gadgets[0].Rect.W += retailBattleOptionsWiden
+	window.Gadgets = append(window.Gadgets, gui.Gadget{
+		Kind:       gui.KindPanel,
+		Name:       retailBattleOptionsPanel,
+		SourceName: retailBattleOptionsPanel,
+		Rect:       panel,
+		Active:     1,
+	})
+}
+
+// retailOptionsPanelRect returns the open window's `PANEL` rectangle and
+// whether it has one. The merge searches the open window's gadgets from index
+// 1 for the name [07 R-FE-01 §6].
+func retailOptionsPanelRect(window *gui.Window) (gui.Rect, int, bool) {
+	if window == nil {
+		return gui.Rect{}, -1, false
+	}
+	for i := 1; i < len(window.Gadgets); i++ {
+		if strings.EqualFold(window.Gadgets[i].Name, retailBattleOptionsPanel) {
+			return window.Gadgets[i].Rect, i, true
+		}
+	}
+	return gui.Rect{}, -1, false
+}
+
+// hideRetailBattleOptionsGadgets clears the active byte of every gadget whose
+// name begins `MAP` or `VID`, which is the in-battle arm's last window edit
+// [07 R-FE-01 §6].
+func hideRetailBattleOptionsGadgets(window *gui.Window) {
+	if window == nil {
+		return
+	}
+	for i := 1; i < len(window.Gadgets); i++ {
+		key := menuKey(window.Gadgets[i].Name)
+		if strings.HasPrefix(key, "map") || strings.HasPrefix(key, "vid") {
+			window.Gadgets[i].Active = 0
+		}
+	}
+}
+
 // retailOptionsSnapshot copies the live preference values the options root
 // snapshots on entry [07 R-FE-01 §6].
 func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 	s := retailOptionsSnapshot{
 		display:       g.display,
-		audio:         shellAudio,
+		audio:         g.audioPrefs,
 		messages:      g.messages,
 		scrollSpeed:   g.scrollSpeed,
-		gameSpeed:     shellGameSpeed,
-		interfaceType: shellInterfaceType,
+		gameSpeed:     g.gameSpeed,
+		interfaceType: g.interfaceType,
 		categories:    retailDefaultCategories(),
 	}
 	if optionsState != nil {
@@ -401,16 +548,20 @@ func (g *gameShell) retailOptionsSnapshot() retailOptionsSnapshot {
 // the volumes before it leaves [07 R-FE-01 §6].
 func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 	g.display = s.display
-	shellAudio = s.audio
+	g.audioPrefs = s.audio
 	g.messages = s.messages
 	g.scrollSpeed = s.scrollSpeed
-	shellGameSpeed = s.gameSpeed
-	shellInterfaceType = s.interfaceType
+	g.gameSpeed = s.gameSpeed
+	g.interfaceType = s.interfaceType
 	if optionsState != nil {
 		optionsState.categories = s.categories
 	}
 	g.applyRetailVisualOptions(clPtr)
 	g.applyRetailAudioOptions()
+	// In battle the restored game speed, scroll speed and message-column
+	// values have live consumers, so the same writes the page made have to be
+	// taken back from them too [07 R-CAM-01 §3][07 R-CAM-01 §7][07 §10].
+	g.applyRetailOptionsToBattle()
 }
 
 // retailGreyGadget sets or clears one gadget's greyed word by name. "Greyed" is
@@ -432,8 +583,15 @@ func retailGreyGadget(window *gui.Window, name string, greyed bool) {
 	}
 }
 
+// openRetailOptionsScreenReporting is the front-end caller: `SINGLE`'s
+// `Options` [07 R-FE-01 §2]. The in-battle caller is `ARMOPT`'s `PREFS`, in
+// battle_options.go.
 func (g *gameShell) openRetailOptionsScreenReporting() {
-	if err := g.openRetailOptionsScreen(); err != nil {
+	g.openRetailOptionsScreenReportingIn(false)
+}
+
+func (g *gameShell) openRetailOptionsScreenReportingIn(inBattle bool) {
+	if err := g.openRetailOptionsScreen(inBattle); err != nil {
 		optionsPanel, optionsAssets, optionsState = nil, nil, nil
 		reportRetailMessageError(g.showRetailMessage(err.Error()))
 	}
@@ -455,18 +613,25 @@ func (g *gameShell) retailOptionsActive() bool {
 }
 
 // openRetailOptionsPage merges one page into the open options window. The
-// page's gadgets are appended to the root's; the root authors no `PANEL`
-// gadget, so there is nothing to centre inside and the authored rectangles
-// stand [07 R-FE-01 §6].
+// page's gadgets are appended to the root's [07 R-FE-01 §6].
 //
-// The merge bakes the page's own window origin into every appended rectangle
-// [07 R-FE-01 §6]: when the open window authors no gadget named `PANEL` — and
-// `STARTOPT.GUI` authors none — the opener adds the page header's x and y to
-// each of the page's controls before appending them, and the root's own origin
-// is then added at draw time as it is for any gadget. `SOUNDS.GUI` is authored
-// at (0,1) and moves its whole page down a pixel; the other three pages are at
-// (0,0). The `PANEL` arm centres the page inside that gadget instead and is
-// unreachable from this root.
+// Two placements, chosen by whether the open window carries a gadget named
+// `PANEL` [07 R-FE-01 §6]:
+//
+//   - No `PANEL` — the front-end arm, since `STARTOPT.GUI` authors none. The
+//     opener adds the page header's own x and y to each of the page's control
+//     rectangles before appending them, and the root's origin is then added at
+//     draw time as it is for any gadget. `SOUNDS.GUI` is authored at (0,1) and
+//     moves its whole page down a pixel; the other three pages are at (0,0).
+//   - A `PANEL` — the in-battle arm, which synthesised the gadget at open. The
+//     panel's own active byte is zeroed, and each page gadget is offset by
+//     `(panel.w − page.w)/2 + panel.x` and `(panel.h − page.h)/2 + panel.y`, a
+//     signed C divide that truncates toward zero rather than an arithmetic
+//     shift, so an odd difference biases toward the origin on both signs.
+//
+// The page header (index 0) is the page's own window record, not a control; it
+// is discarded either way, because the merged list belongs to the root window
+// from here on and only the root's origin is applied when the panel is drawn.
 func (g *gameShell) openRetailOptionsPage(page string) {
 	if !g.retailOptionsActive() || optionsAssets == nil || optionsAssets.window == nil {
 		return
@@ -476,20 +641,33 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	if !ok {
 		return
 	}
-	pageWindow, err := gui.Load(g.cs.fs, source.gui)
+	inBattle := optionsState.inBattle
+	pageGUI := source.source(inBattle)
+	pageWindow, err := gui.Load(g.cs.fs, pageGUI)
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(
-			retailFrontendAssetError(g.cs, "retail options page GUI unavailable", source.gui, "the authored options page", err).Error()))
+			retailFrontendAssetError(g.cs, "retail options page GUI unavailable", pageGUI, "the authored options page", err).Error()))
 		return
 	}
-	background, err := formats.LoadPCXFile(g.cs.fs, source.backdrop)
-	if err != nil {
-		reportRetailMessageError(g.showRetailMessage(
-			retailFrontendAssetError(g.cs, "retail options page bitmap", source.backdrop, "the authored options page background", err).Error()))
-		return
+	// In battle the page routine hands no bitmap to the cache at all, so the
+	// battle stays visible behind the page [07 R-FE-01 §6].
+	var background *formats.PCX
+	if !inBattle {
+		if background, err = formats.LoadPCXFile(g.cs.fs, source.backdrop); err != nil {
+			reportRetailMessageError(g.showRetailMessage(
+				retailFrontendAssetError(g.cs, "retail options page bitmap", source.backdrop, "the authored options page background", err).Error()))
+			return
+		}
 	}
 
 	root := optionsAssets.window
+	panelRect, panelIndex, centred := retailOptionsPanelRect(root)
+	dx, dy := pageWindow.OriginX, pageWindow.OriginY
+	if centred {
+		dx = (panelRect.W-pageWindow.Rect.W)/2 + panelRect.X
+		dy = (panelRect.H-pageWindow.Rect.H)/2 + panelRect.Y
+		root.Gadgets[panelIndex].Active = 0
+	}
 	kept := make([]gui.Gadget, 0, len(root.Gadgets)+len(pageWindow.Gadgets))
 	for _, gad := range root.Gadgets {
 		if retailOptionsPageGadget(gad) {
@@ -497,17 +675,16 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 		}
 		kept = append(kept, gad)
 	}
-	// The page header (index 0) is the page's own window record, not a control.
-	// Its origin is folded into every control the page contributes, because the
-	// merged list belongs to the root window from here on and only the root's
-	// origin is applied when the panel is drawn [07 R-FE-01 §6].
 	for _, gad := range pageWindow.Gadgets[1:] {
 		gad.SourceName = retailOptionsPageSource + gad.SourceName
-		gad.Rect.X += pageWindow.OriginX
-		gad.Rect.Y += pageWindow.OriginY
+		gad.Rect.X += dx
+		gad.Rect.Y += dy
 		kept = append(kept, gad)
 	}
 	root.Gadgets = kept
+	if inBattle {
+		hideRetailBattleOptionsGadgets(root)
+	}
 	optionsAssets.background = background
 	optionsState.page = page
 	optionsState.sliders = map[string]*retailSliderState{}
@@ -564,11 +741,11 @@ func (g *gameShell) retailSliderStoredValue(key string) int {
 	case "gamma":
 		return g.display.Gamma
 	case "fxvol":
-		return shellAudio.FXVol
+		return g.audioPrefs.FXVol
 	case "musicvol":
-		return shellAudio.MusicVol
+		return g.audioPrefs.MusicVol
 	case "game":
-		return shellGameSpeed
+		return g.gameSpeed
 	case "screen":
 		return g.scrollSpeed
 	case "txtscrol":
@@ -632,7 +809,7 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		// stored byte divided by five; `LEFTCLICK` shows the `Interface Type`
 		// word directly [07 R-CAM-01 §7][07 R-CAM-01 §5].
 		p.SetStatus("UNITCHAT", g.messages.UnitChatText/5)
-		p.SetStatus("LEFTCLICK", shellInterfaceType)
+		p.SetStatus("LEFTCLICK", g.interfaceType)
 		g.syncRetailMaxLinesLabel()
 	}
 	// After the page opens, every kind-4 gadget's value callback runs once, so
@@ -687,13 +864,13 @@ func (g *gameShell) syncRetailSoundPage() {
 	if p == nil || optionsAssets == nil {
 		return
 	}
-	p.SetStatus("MODE", shellAudio.SoundMode)
+	p.SetStatus("MODE", g.audioPrefs.SoundMode)
 	speech := 0
-	if shellAudio.SpeechFX != 0 {
-		speech = shellAudio.UnitChat / 5
+	if g.audioPrefs.SpeechFX != 0 {
+		speech = g.audioPrefs.UnitChat / 5
 	}
 	p.SetStatus("SPEECH", speech)
-	off := !shellAudio.SoundEnabled()
+	off := !g.audioPrefs.SoundEnabled()
 	p.SetActive("VOLTEXT", !off)
 	for _, name := range []string{"FXVOL", "TEST", "SPEECH"} {
 		retailGreyGadget(optionsAssets.window, name, off)
@@ -711,13 +888,13 @@ func (g *gameShell) syncRetailMusicPage() {
 	if p == nil || optionsAssets == nil {
 		return
 	}
-	on := shellAudio.MusicMode != 0
+	on := g.audioPrefs.MusicMode != 0
 	p.SetStatus("NOTRAK", boolInt(on))
-	p.SetStatus("TRACKMODE", shellAudio.CDMode-1)
+	p.SetStatus("TRACKMODE", g.audioPrefs.CDMode-1)
 	for _, name := range []string{"MUSICVOL", "CDPREV", "CDSTOP", "CDPLAY", "CDNEXT", "TRACKMODE"} {
 		retailGreyGadget(optionsAssets.window, name, !on)
 	}
-	retailGreyGadget(optionsAssets.window, "TRACKTYPE", !(on && shellAudio.CDMode == settings.MaxCDMode))
+	retailGreyGadget(optionsAssets.window, "TRACKTYPE", !(on && g.audioPrefs.CDMode == settings.MaxCDMode))
 	p.SetStatus("TRACKTYPE", retailTrackCategory(optionsState.track))
 	g.syncRetailTrackLabel()
 }
@@ -800,21 +977,22 @@ func retailWaveVolumeScale(v int) float64 {
 // value 2 sets the output device's 3-D flag, whose consumer here would be the
 // positional pan of [03 §8.3], which this build applies unconditionally.
 func (g *gameShell) applyRetailAudioOptions() {
-	applyRetailAudioOptions()
+	applyRetailAudioOptions(g.audioPrefs)
 	if c := g.retailMusicController(); c != nil {
-		c.SetVolume(shellAudio.MusicVol)
+		c.SetVolume(g.audioPrefs.MusicVol)
 	}
 }
 
 // applyRetailAudioOptions is the shell-free half, so the startup read can push
-// the gates before any screen exists.
-func applyRetailAudioOptions() {
+// the gates before any screen exists. It takes the block rather than reading a
+// shell field because the startup read runs before the shell owns one.
+func applyRetailAudioOptions(a settings.Audio) {
 	backend, ok := audio.GlobalOutput().(*audiobackend.Backend)
 	if !ok || backend == nil {
 		return
 	}
-	backend.SetMasterEnabled(shellAudio.SoundEnabled())
-	backend.SetEffectsVolume(retailWaveVolumeScale(shellAudio.FXVol))
+	backend.SetMasterEnabled(a.SoundEnabled())
+	backend.SetEffectsVolume(retailWaveVolumeScale(a.FXVol))
 }
 
 // retailCycleStage advances one staged button by a stage, wrapping.
@@ -827,7 +1005,7 @@ func retailCycleStage(value, stages int) int {
 // [03 R-AUD-01 §2].
 func (g *gameShell) playRetailSoundTest() {
 	svc := g.ensureFrontendAudio()
-	if svc == nil || svc.Cache == nil || !shellAudio.SoundEnabled() || shellAudio.FXVol == 0 {
+	if svc == nil || svc.Cache == nil || !g.audioPrefs.SoundEnabled() || g.audioPrefs.FXVol == 0 {
 		return
 	}
 	sample, err := svc.Cache.LoadPath(retailTestSound)
@@ -863,8 +1041,8 @@ func (g *gameShell) applyRetailMusicMode() {
 	if c == nil {
 		return
 	}
-	c.Configure(audio.PlayMode(shellAudio.CDMode), retailTrackCategory(optionsState.track))
-	if shellAudio.CDMode == 3 && optionsState.track > 0 {
+	c.Configure(audio.PlayMode(g.audioPrefs.CDMode), retailTrackCategory(optionsState.track))
+	if g.audioPrefs.CDMode == 3 && optionsState.track > 0 {
 		c.Play(optionsState.track)
 	}
 }
@@ -918,30 +1096,35 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 	case "visuals":
 		// Bits 1-5 set, gamma 12 and — front end only — 640x480 with
 		// `DitheredFog` cleared [07 R-FE-01 §6]. `DitheredFog` has no owner
-		// here, so nothing clears it; it is not persisted either.
+		// here, so nothing clears it; it is not persisted either. The size pair
+		// is the front end's alone: the in-battle page authors no `VIDSLDR`,
+		// and resizing the surface out from under a running battle is not
+		// something the in-battle arm does.
 		g.display.AntiAlias = 1
 		g.setRetailShadowBits(true)
 		g.display.Shading = 1
 		g.display.Gamma = settings.DefaultGamma
-		g.display.Width = settings.DefaultDisplaymodeWidth
-		g.display.Height = settings.DefaultDisplaymodeHeight
+		if !optionsState.inBattle {
+			g.display.Width = settings.DefaultDisplaymodeWidth
+			g.display.Height = settings.DefaultDisplaymodeHeight
+		}
 		g.applyRetailVisualOptions(clPtr)
 	case "sound":
 		// `fxvol` 27, bits 4-6 set, Sound Mode 1 with the 3-D flag cleared,
 		// and the acknowledgement voice level 10 [03 R-AUD-01 §2].
-		shellAudio.FXVol = settings.DefaultFXVol
-		shellAudio.AckFX = 1
-		shellAudio.BuildFX = 1
-		shellAudio.SpeechFX = 1
-		shellAudio.SoundMode = settings.SoundModeMono
-		shellAudio.UnitChat = settings.MaxUnitChat
+		g.audioPrefs.FXVol = settings.DefaultFXVol
+		g.audioPrefs.AckFX = 1
+		g.audioPrefs.BuildFX = 1
+		g.audioPrefs.SpeechFX = 1
+		g.audioPrefs.SoundMode = settings.SoundModeMono
+		g.audioPrefs.UnitChat = settings.MaxUnitChat
 		g.applyRetailAudioOptions()
 	case "music":
 		// `musicvol` 32, `cdmode` 4, and music turned on [03 R-AUD-01 §4].
-		shellAudio.MusicVol = settings.DefaultMusicVol
-		shellAudio.CDMode = settings.DefaultCDMode
-		if shellAudio.MusicMode == 0 {
-			shellAudio.MusicMode = 1
+		g.audioPrefs.MusicVol = settings.DefaultMusicVol
+		g.audioPrefs.CDMode = settings.DefaultCDMode
+		if g.audioPrefs.MusicMode == 0 {
+			g.audioPrefs.MusicMode = 1
 			g.setRetailMusicEnabled(true)
 		}
 		g.applyRetailAudioOptions()
@@ -951,10 +1134,10 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 		// `Interface Type` 0, voice level 10, text level 5 [07 R-CAM-01 §7].
 		g.messages.TextScroll = settings.DefaultTextScroll
 		g.messages.TextLines = settings.DefaultTextLines
-		shellGameSpeed = settings.DefaultGameSpeed
+		g.gameSpeed = settings.DefaultGameSpeed
 		g.scrollSpeed = settings.DefaultScrollSpeed
-		shellInterfaceType = settings.DefaultInterfaceType
-		shellAudio.UnitChat = settings.MaxUnitChat
+		g.interfaceType = settings.DefaultInterfaceType
+		g.audioPrefs.UnitChat = settings.MaxUnitChat
 		g.messages.UnitChatText = settings.DefaultUnitChatText
 	default:
 		return
@@ -968,22 +1151,27 @@ func (g *gameShell) undoRetailOptionsPage() {
 	s := optionsState.snapshot
 	switch optionsState.page {
 	case "visuals":
-		// Bits 1-6, gamma and — front end only — the display size.
+		// Bits 1-6, gamma and — front end only — the display size
+		// [07 R-FE-01 §6].
+		width, height := g.display.Width, g.display.Height
 		g.display = s.display
+		if optionsState.inBattle {
+			g.display.Width, g.display.Height = width, height
+		}
 		g.applyRetailVisualOptions(clPtr)
 	case "sound":
-		shellAudio.SoundMode = s.audio.SoundMode
-		shellAudio.AckFX, shellAudio.BuildFX, shellAudio.SpeechFX = s.audio.AckFX, s.audio.BuildFX, s.audio.SpeechFX
-		shellAudio.FXVol = s.audio.FXVol
-		shellAudio.UnitChat = s.audio.UnitChat
+		g.audioPrefs.SoundMode = s.audio.SoundMode
+		g.audioPrefs.AckFX, g.audioPrefs.BuildFX, g.audioPrefs.SpeechFX = s.audio.AckFX, s.audio.BuildFX, s.audio.SpeechFX
+		g.audioPrefs.FXVol = s.audio.FXVol
+		g.audioPrefs.UnitChat = s.audio.UnitChat
 		g.applyRetailAudioOptions()
 	case "music":
 		// Volume, list, mode, enable and requested track [03 R-AUD-01 §4].
-		shellAudio.MusicVol = s.audio.MusicVol
-		shellAudio.MusicMode = s.audio.MusicMode
-		shellAudio.CDMode = s.audio.CDMode
+		g.audioPrefs.MusicVol = s.audio.MusicVol
+		g.audioPrefs.MusicMode = s.audio.MusicMode
+		g.audioPrefs.CDMode = s.audio.CDMode
 		optionsState.categories = s.categories
-		g.setRetailMusicEnabled(shellAudio.MusicMode != 0)
+		g.setRetailMusicEnabled(g.audioPrefs.MusicMode != 0)
 		g.applyRetailAudioOptions()
 		g.applyRetailMusicMode()
 	case "speeds":
@@ -991,8 +1179,8 @@ func (g *gameShell) undoRetailOptionsPage() {
 		g.messages.TextLines = s.messages.TextLines
 		g.messages.UnitChatText = s.messages.UnitChatText
 		g.scrollSpeed = s.scrollSpeed
-		shellGameSpeed = s.gameSpeed
-		shellInterfaceType = s.interfaceType
+		g.gameSpeed = s.gameSpeed
+		g.interfaceType = s.interfaceType
 	default:
 		return
 	}
@@ -1111,7 +1299,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		// every voice; `Mono` outside a battle re-issues the front-end `BGM`
 		// loop — this build has no such loop, so nothing is re-issued. The
 		// device's 3-D flag follows the value 2 [03 R-AUD-01 §2].
-		shellAudio.SoundMode = retailCycleStage(shellAudio.SoundMode, 3)
+		g.audioPrefs.SoundMode = retailCycleStage(g.audioPrefs.SoundMode, 3)
 		g.applyRetailAudioOptions()
 		g.syncRetailSoundPage()
 		return true
@@ -1119,8 +1307,8 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		// `SPEECH` writes both halves at once: bit 6 takes `stage != 0` and
 		// the acknowledgement voice level takes `stage × 5` [03 R-AUD-01 §2].
 		stage := retailCycleStage(optionsPanel.StatusOf("SPEECH"), 3)
-		shellAudio.SpeechFX = boolInt(stage != 0)
-		shellAudio.UnitChat = stage * 5
+		g.audioPrefs.SpeechFX = boolInt(stage != 0)
+		g.audioPrefs.UnitChat = stage * 5
 		g.syncRetailSoundPage()
 		return true
 	case "test":
@@ -1129,15 +1317,15 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 
 	// ---- MUSIC ----------------------------------------------------------
 	case "notrak":
-		shellAudio.MusicMode = boolInt(shellAudio.MusicMode == 0)
-		g.setRetailMusicEnabled(shellAudio.MusicMode != 0)
+		g.audioPrefs.MusicMode = boolInt(g.audioPrefs.MusicMode == 0)
+		g.setRetailMusicEnabled(g.audioPrefs.MusicMode != 0)
 		g.syncRetailMusicPage()
 		return true
 	case "trackmode":
 		// `TRACKMODE`'s stage plus one is `cdmode`. `Repeat` copies the
 		// selection into the requested track; `Custom` shows `TRACKTYPE` for
 		// the selection [03 R-AUD-01 §4].
-		shellAudio.CDMode = retailCycleStage(shellAudio.CDMode-1, settings.MaxCDMode) + 1
+		g.audioPrefs.CDMode = retailCycleStage(g.audioPrefs.CDMode-1, settings.MaxCDMode) + 1
 		g.applyRetailMusicMode()
 		g.syncRetailMusicPage()
 		return true
@@ -1155,8 +1343,8 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	case "leftclick":
 		// The two-stage `LEFTCLICK` button writes the `Interface Type` word
 		// [07 R-CAM-01 §5].
-		shellInterfaceType = retailCycleStage(shellInterfaceType, 2)
-		optionsPanel.SetStatus("LEFTCLICK", shellInterfaceType)
+		g.interfaceType = retailCycleStage(g.interfaceType, 2)
+		optionsPanel.SetStatus("LEFTCLICK", g.interfaceType)
 		return true
 	case "unitchat":
 		// `UNITCHAT` is the acknowledgement **text** level, `stage × 5`. Its
@@ -1212,26 +1400,28 @@ func (g *gameShell) commitRetailSliderValue(name string, s *retailSliderState) {
 	case "fxvol":
 		// `fxvol` gates every play and sets the wave device's level; the CD
 		// level is re-pushed with it [03 R-AUD-01 §2].
-		shellAudio.FXVol = value
+		g.audioPrefs.FXVol = value
 		g.applyRetailAudioOptions()
 	case "musicvol":
-		shellAudio.MusicVol = value
+		g.audioPrefs.MusicVol = value
 		g.applyRetailAudioOptions()
 	case "game":
-		// The `GAME` read-out floors at 1 and then goes through the speed
-		// setter, which clamps 21 down to 20 [07 R-CAM-01 §7][07 R-CAM-01 §3].
+		// The `GAME` read-out floors at 1 and is applied at once through the
+		// speed setter, which clamps 21 down to 20 [07 R-CAM-01 §7]
+		// [07 R-CAM-01 §3].
 		//
-		// Not consumed while the options root is a front-end child window:
-		// there is no session to apply it to. The value persists; its battle
-		// consumer is the session's speed state [01 §4.3], which battle entry
-		// owns.
+		// In the front end the value only persists: there is no session to
+		// apply it to, and its battle consumer is the session's speed state
+		// [01 §4.3], which battle entry owns. In battle it goes straight
+		// through the session's setter, announcement included.
 		if value < settings.MinGameSpeed {
 			value = settings.MinGameSpeed
 		}
 		if value > settings.MaxGameSpeed {
 			value = settings.MaxGameSpeed
 		}
-		shellGameSpeed = value
+		g.gameSpeed = value
+		g.applyRetailBattleGameSpeed()
 	case "screen":
 		// The `SCREEN` read-out floors at 1 and stores the scroll-speed byte,
 		// which the camera's scroll pass reads [07 R-CAM-01 §7][07 §10].
@@ -1239,15 +1429,18 @@ func (g *gameShell) commitRetailSliderValue(name string, s *retailSliderState) {
 			value = settings.MinScrollSpeed
 		}
 		g.scrollSpeed = value
+		g.applyRetailBattleScrollSpeed()
 	case "txtscrol":
 		g.messages.TextScroll = value
 		g.syncRetailMaxLinesLabel()
+		g.applyRetailBattleMessageLines()
 	case "maxlines":
 		if value < 0 {
 			value = 0
 		}
 		g.messages.TextLines = value
 		g.syncRetailMaxLinesLabel()
+		g.applyRetailBattleMessageLines()
 	}
 }
 

@@ -137,6 +137,12 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, 
 			configureResultPanelForView(h.fs, b.sess, view, h.resultPanel)
 		}
 	}
+	// `ENDMSN`'s background is the outcome bitmap the population step installed
+	// — `outcome1` on a routing result, `outcome0` otherwise — blitted whole at
+	// the window origin, under the authored panel [08 R-CAMP-01 §8].
+	if b.shell != nil && b.shell.resultBackground != nil {
+		c.UIBlitPCX(b.shell.resultBackground, 0, 0)
+	}
 	if h.resultWin != nil {
 		h.drawGUIWindow(c, h.resultWin, h.resultGAF, "")
 	}
@@ -509,30 +515,4 @@ func (h *retailBattleHUD) editorFocused() bool {
 	}
 	gadget := h.resultPanel.Window.Gadgets[index]
 	return gadget.Kind == gui.KindTextBox && gadget.Active != 0 && gadget.GrayedOut == 0 && h.resultPanel.ActiveOf(gadget.Name)
-}
-
-// drawStatusMessage draws transient game-speed and pause messages [07 §11][07 §2].
-// It remains separate from result presentation; status text is produced by the
-// established battle-speed/pause path and is not an endgame label.
-//
-// This is the same message-column geometry, font and colour the master
-// composer uses to draw the shared message-line ring [07 R-HUD-03 §14.4]: the
-// primary UI font (fonts/comix.fnt, not the side's own console face), a
-// left-aligned column starting at the fixed screen point (138, 52) with no
-// baseheight adjustment, and the foreground colour-map entry
-// frame.MessageLineLogicalColor resolved through the active GUI colour table
-// rather than written as a raw palette index.
-func (b *battleSession) drawStatusMessage(c *client.Client, presented *frame.Frame) {
-	if b == nil || c == nil || !b.statusVisible(presented) || b.hud == nil {
-		return
-	}
-	fnt := statusMessageFont(b.fs)
-	if fnt == nil {
-		return
-	}
-	// BattleState is the canonical owner of transient status text. The legacy
-	// battleSession mirror is intentionally not read here [07 §11].
-	txt := b.battleState().Input.StatusMessage
-	color := b.hud.guiColor(frame.MessageLineLogicalColor)
-	c.UIText(fnt, txt, 138, 52, color)
 }

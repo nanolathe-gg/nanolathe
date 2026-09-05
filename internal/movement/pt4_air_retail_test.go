@@ -354,12 +354,19 @@ func TestRetailFighterOnPatrolEngagesAnEnemyAircraft(t *testing.T) {
 	if fig.Flags>>units.StandingFireShift&units.StandingFieldMask != 2 {
 		t.Fatalf("authored %s does not start at fire at will", pt4FIG)
 	}
-	// The victim starts thirty cells out on level ground, is told to hold
-	// fire so the engagement observed is the patrol's own, and patrols back
-	// across the fighter's leg so that it is airborne when the two meet.
+	// The victim starts thirty cells out on level ground and patrols back
+	// across the fighter's leg so that it is airborne when the two meet. It is
+	// disarmed so that the engagement observed is the fighter's own. Clearing
+	// its standing-fire field alone does not achieve that: side 1 is the
+	// fixture's AI controller and its planner puts its own units back at fire
+	// at will within thirty ticks, after which the CORVAMP wins the duel and
+	// the fighter dies before it ever fires. Clearing the ARMED status bit as
+	// well ends the acquisition scan's visit to this unit before any slot is
+	// looked at [06 §3.2 "The third clause is the armed bit"].
 	vx, vz := f.levelPoint(t, fig.X, fig.Z, 30, 16)
 	vamp := f.place(t, pt4Vamp, 1, vx, vz)
 	vamp.Flags &^= units.StandingFieldMask << units.StandingFireShift
+	vamp.Flags &^= units.ArmedStatus
 	pt4Patrol(t, f, vamp, fig.X, fig.Z)
 	fx, fz := fig.X.Add((vx-fig.X)*2), fig.Z.Add((vz-fig.Z)*2)
 	pt4Patrol(t, f, fig, fx, fz)
@@ -370,14 +377,17 @@ func TestRetailFighterOnPatrolEngagesAnEnemyAircraft(t *testing.T) {
 	if e.launched == 0 {
 		t.Fatalf("fighter engaged at tick %d but launched no missile at the enemy aircraft by tick 1800", e.engaged)
 	}
-	// Whether the missile then connects is the projectile's business: a
-	// `guidance` weapon pursues, in order, its linked projectile, its retained
-	// unit target while that unit is live, and only then its stored target
-	// point [06 §6.7]. The pursuit point is chosen in internal/combat, outside
-	// this package; a moving aircraft is hit only once that selection is in
-	// place, so the kill is reported here and locked by the ground-unit
-	// scenario below, whose victim stands still.
-	t.Logf("engaged at tick %d, first missile at tick %d, damaged at tick %d (0 = never)", e.engaged, e.launched, e.damaged)
+	// The missile must then connect. A `guidance` weapon pursues, in order,
+	// its linked projectile, its retained unit target while that unit is live,
+	// and only then its stored target point [06 §6.7]; the stored point is the
+	// LOST-target fallback [06 §6.8]. Steering at the stored point on every
+	// tick — which internal/combat used to do — aims every missile at where
+	// the target stood when the shot was created, so no moving aircraft was
+	// ever hit and this assertion was a log line.
+	if e.damaged == 0 {
+		t.Fatalf("fighter launched at tick %d (engaged %d) but never damaged the enemy aircraft by tick 1800: a guided missile must pursue its retained unit target, not its launch point [06 §6.7]", e.launched, e.engaged)
+	}
+	t.Logf("engaged at tick %d, first missile at tick %d, damaged at tick %d", e.engaged, e.launched, e.damaged)
 }
 
 // TestRetailFighterOnPatrolEngagesAGroundUnit: the authored ARMFIG missile

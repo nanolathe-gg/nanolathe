@@ -122,11 +122,22 @@ type gameShell struct {
 	// transition is the size pair's only reader [07 R-FE-01 §6][07 R-FE-01 §11].
 	display settings.Display
 	// messages is the message-column ring configuration (`textlines`,
-	// `textscroll`, `screenchat`, `unitchattext`) [02 §3][07 R-FE-01 §11]. No
-	// screen edits it yet — retail's `SPEEDS` page has no nanolathe
-	// counterpart — so it is written back unchanged from whatever the loaded
-	// block held, the same as UnitLimit.
+	// `textscroll`, `screenchat`, `unitchattext`). The options family's
+	// interface page writes `textscroll`, `textlines` and `unitchattext`;
+	// `screenchat` rides through unchanged [02 §3][07 R-CAM-01 §7].
 	messages settings.Messages
+	// audioPrefs is the audio half of the preference block the options family
+	// snapshots on entry: the sound and music pages' stores
+	// [03 R-AUD-01 §2][03 R-AUD-01 §4].
+	audioPrefs settings.Audio
+	// gameSpeed is the stored game-speed word the interface page's `GAME`
+	// slider writes. In the front end it only persists; in battle the same
+	// write also goes through the session's speed setter
+	// [07 R-CAM-01 §7][07 R-CAM-01 §3].
+	gameSpeed int
+	// interfaceType is the `Interface Type` word the interface page's
+	// `LEFTCLICK` two-stage button writes [07 R-CAM-01 §5].
+	interfaceType int
 
 	campaigns              []mission.Campaign
 	campaignOptions        []mission.Campaign
@@ -140,6 +151,10 @@ type gameShell struct {
 	briefing      *campaignBriefingController
 	briefingPanel *ui.Panel
 	briefingNowMS int64
+	// briefingFont is the FNT the TextRegion's font index selects — `armfont`
+	// or `corefont` from MSNBRIEF's own kind-7 records. The wrapper, the pager
+	// and the label pen all read it [08 R-CAMP-01 §2][07 R-WGT-01 §12].
+	briefingFont *formats.FNT
 
 	// audioOwner is shared by the frontend briefing and the subsequently
 	// composed battle. It is the one semantic audio owner for both seams;
@@ -156,6 +171,14 @@ type gameShell struct {
 	// value through its loading adoption callback; no UI path writes W/L.
 	campaignProgress    session.BankProgress
 	campaignProgressSet bool
+
+	// resultBackground is `ENDMSN`'s authored background bitmap — `outcome1`
+	// when the results route to another mission, `outcome0` otherwise. The
+	// population step hands it to the bitmap cache with the window open, which
+	// both makes it the window's background and installs its own 256-entry
+	// palette [08 R-CAMP-01 §8].
+	resultBackground    *formats.PCX
+	resultBackgroundPal palette.Tables
 
 	// loading is live only while mode is modeLoading. The loader runs on its
 	// own goroutine, so the shell reads its progress and adopts its result
@@ -217,6 +240,12 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.scrollSpeed = settings.DefaultScrollSpeed // [02 "Settings"] [07 §10]
 	shell.display = settings.DefaultDisplay()       // [02 R-KEYS-01 §5]
 	shell.messages = settings.DefaultMessages()     // [02 §3]
+	// The audio block, the game-speed word and the `Interface Type` word are
+	// the options family's remaining stores [03 R-AUD-01 §2][07 R-CAM-01 §7]
+	// [07 R-CAM-01 §5].
+	shell.audioPrefs = settings.DefaultAudio()
+	shell.gameSpeed = settings.DefaultGameSpeed
+	shell.interfaceType = settings.DefaultInterfaceType
 	shell.assets = loadMenuAssets(cs)
 	if shell.assets == nil {
 		return nil, fmt.Errorf("nanolathe: retail frontend assets: construction returned no asset set")
@@ -522,8 +551,10 @@ func (g *gameShell) openMenu(mode shellMode) {
 		// and the offscreen: the front end always runs at 640x480 whatever
 		// `DisplaymodeWidth`/`Height` hold [07 R-FE-02 §2]. Every authored
 		// menu screen is opened through here, so this is that routine's site.
-		// The loading screen and the battle are excluded: they are the other
-		// direction, handled at the load transition [07 R-FE-01 §11].
+		// The battle is excluded: its size is the other direction, applied by
+		// the load transition's second half [07 "The loading screen"]. The
+		// loading screen is excluded here only because it sets 640x480 itself,
+		// at the transition that opens it.
 		g.applyDisplaySize(clPtr, retailScreenW, retailScreenH)
 	}
 }
@@ -531,7 +562,7 @@ func (g *gameShell) openMenu(mode shellMode) {
 // applyDisplaySize moves the presentation surface to one logical size. It is
 // retail's "compare to the current window size and, when different, resize the
 // window, re-select the mode and re-create the offscreen" step, in both of its
-// directions [07 R-FE-01 §11][07 R-FE-02 §2].
+// directions [07 R-FE-02 §2][07 "The loading screen"].
 //
 // The client owns the size and the offscreen; the platform adapter follows it
 // for the window and the uploaded image, so nothing here reaches a device.
@@ -554,10 +585,12 @@ func (g *gameShell) applyDisplaySize(cl *client.Client, width, height int) {
 	}
 }
 
-// applyDisplayMode is the load transition's half: the stored
+// applyDisplayMode is the load transition's second half: the stored
 // `DisplaymodeWidth`/`Height` pair is compared to the current window size and
-// the surface follows it when they differ [07 R-FE-01 §11]. It runs at the
-// transition that starts the load, so the battle composes at the chosen size.
+// the surface follows it when they differ. It runs once the load has completed
+// and before the in-game HUD opens, so the loading screen itself stays at
+// 640x480 and the battle composes at the chosen size
+// [07 "The loading screen"].
 //
 // The battle chrome is not scaled to the new size; it extends by rule
 // [07 R-HUD-05]: the world viewport takes `(128,32)..(W-1,H-33)` [03 §4.1],
@@ -700,7 +733,7 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	// builds the camera at the authored 640x480 design size; the surface may
 	// already be at the chosen display mode, so the viewport is squared with
 	// it here, at the one render-thread installation point that sees both
-	// [07 R-FE-01 §11].
+	// [07 "The loading screen"].
 	if clPtr != nil && g.cam != nil {
 		if w, h := clPtr.Size(); w > 0 && h > 0 {
 			g.cam.ViewW, g.cam.ViewH = int32(w), int32(h)

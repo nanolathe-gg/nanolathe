@@ -81,10 +81,14 @@ func radarContactAdmitted(c render.MinimapContact, blink render.BlinkState) bool
 }
 
 func radarPublishedContactVisible(c frame.RadarContactView, local uint8) bool {
-	// Owner-local is a retail bypass, but a zero-valued feature/projectile
-	// record is not evidence of ownership. Publisher visibility/friendly state
-	// is authoritative for player zero [03 §3.9].
-	return c.Visible || c.Status&0x300 != 0 || c.OwnerKnown && c.Owner == local
+	// Retail's second pass over the projectile/feature list admits through
+	// the mode-selected local player visibility source at the projected
+	// cell, with owner-local identity as the only bypass [03 §3.9]. The
+	// friendly-contact status pair 0x300 is a term of the UNIT pass's blip
+	// gate (radarContactAdmitted) only; a feature's status word and a
+	// projectile's flags word do not carry those bits with that meaning, so
+	// this second-pass gate must not read them.
+	return c.Visible || c.OwnerKnown && c.Owner == local
 }
 
 func radarContactRangeEnabled(c frame.RadarContactView) bool {
@@ -95,6 +99,22 @@ func radarContactRangeEnabled(c frame.RadarContactView) bool {
 }
 
 func radarProjectileDot(c frame.RadarContactView) bool {
+	// Retail selects dot-vs-marker art purely from the shared list record's
+	// status bits 29/30 (clear takes the dot, itself suppressed by bit 0x40)
+	// [03 §3.9] over one kind-agnostic projectile/feature list. Nanolathe's
+	// publisher does not carry that shared-list record status for a feature:
+	// frame.RadarContactView.Status for a RadarContactFeature is the feature
+	// INSTANCE's own status word from internal/features (only bit 0x01 is
+	// ever written there, by service.go/burn.go), not the capture-path
+	// record whose bits 29/30 retail's selector reads. A projectile's Status
+	// is that record's Flags word, which does carry retail's bits. Until the
+	// feature capture path publishes the shared-list record status, gate the
+	// dot path on Kind so a feature's unrelated status word cannot be
+	// misread as clear bits 29/30.
+	//
+	// TODO(question): what do bits 29/30 hold for a feature entry in
+	// retail's shared projectile/feature list record? Settle by tracing the
+	// projectile/feature capture path's feature-record write [03 §3.9][06].
 	return c.Kind == frame.RadarContactProjectile && c.Status&(1<<29|1<<30|0x40) == 0
 }
 
@@ -208,8 +228,11 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		return nil
 	}
 	// The projectile/feature pass follows rings. The published payload carries
-	// the status and owner/visibility gates. Projectile dots use the dedicated
-	// palette entry; other status selects the authored feature marker [03 §3.9].
+	// the status and owner/visibility gates. Retail selects dot-vs-marker art
+	// purely from the shared list record's status bits [03 §3.9], but our
+	// publisher does not carry that shared-list status for a feature (see
+	// radarProjectileDot); gate explicitly on Kind so a projectile's status
+	// word selects the dot/marker split while every feature draws its marker.
 	for _, published := range cur.Radar.Contacts {
 		if published.Kind == frame.RadarContactUnit || !radarPublishedContactVisible(published, cur.Selection.LocalPlayer) {
 			continue

@@ -331,10 +331,27 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		idx := clampMenuStage(p.StatusOf(gad.Name), len(gad.Labels))
 		text = gad.Labels[idx]
 	}
-	if text == "" || !g.hasRetailTextFont() {
+	if text == "" {
 		return
 	}
-	width := g.retailTextWidth(text)
+	// Every text painter first selects the font the gadget's `fontnumber`
+	// picks from the window's own kind-7 records — font number 0 is the first
+	// record — and the common font when none matches. Only the label painter
+	// keeps the result: a label whose number matched draws through the FNT
+	// drawer directly, while a button's caption always goes through the GAF
+	// pen, where the selected FNT is reached only when the window's GAF slot
+	// is null [03 R-FONT-01 §5][03 R-FONT-01 §6].
+	selected := g.windowGadgetFont(p, gad)
+	if gad.Kind == gui.KindLabel && selected != nil {
+		color, _ := g.retailTextPen(p, index, gad)
+		g.drawRetailLabelFNT(c, p, gad, r, text, selected, color)
+		return
+	}
+	if !g.hasRetailTextFont() && selected == nil {
+		return
+	}
+	measure, lineStep := g.retailTextMetrics(selected)
+	width := measure(text)
 	pressed := retailButtonPressed(c, r)
 	x := int(r.X)
 	// the retail implementation tests the left-aligned attribute before the right/center
@@ -357,7 +374,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 	if pressed {
 		x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
 	}
-	y := retailTextPenY(gad, r, g.retailTextHeight())
+	y := retailTextPenY(gad, r, lineStep)
 	color, shade := g.retailTextPen(p, index, gad)
 	maxWidth := int(r.W)
 	if maxWidth <= 0 {
@@ -370,19 +387,90 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 	// taller case to the wrapping renderer the retail implementation and everything else to
 	// the single-line the retail implementation. SELMAP.GUI authors DESCRIPTION 235x31 for
 	// the wrapped case and SIZE 235x18 for the single-line one [07 §4].
-	lineStep := g.retailTextHeight()
 	if int(r.H)-1 > 2*lineStep {
-		lines := retailWrapLines(text, g.retailTextWidth, maxWidth)
+		lines := retailWrapLines(text, measure, maxWidth)
 		top := int(r.Y) + (int(r.H)-1-len(lines)*lineStep)/2
 		if top < int(r.Y) {
 			top = int(r.Y)
 		}
 		for i, line := range lines {
-			g.drawRetailStringLit(c, line, x, top+i*lineStep, maxWidth, color, shade)
+			g.drawRetailStringSelected(c, line, x, top+i*lineStep, maxWidth, color, shade, selected)
 		}
 		return
 	}
-	g.drawRetailStringLit(c, text, x, y, maxWidth, color, shade)
+	g.drawRetailStringSelected(c, text, x, y, maxWidth, color, shade, selected)
+}
+
+// windowGadgetFont is the FNT a gadget's `fontnumber` selects from its own
+// window's kind-7 font records — the n-th record counting from zero, so font
+// number 0 is the window's first record — or nil when the window has no such
+// record (the painters then keep the common font) or the record's file did
+// not load [07 R-WGT-01 §6][07 R-WGT-01 §12][03 R-FONT-01 §5].
+func (g *gameShell) windowGadgetFont(p *ui.Panel, gad gui.Gadget) *formats.FNT {
+	if g == nil || g.cs == nil || g.cs.fs == nil || p == nil || p.Window == nil {
+		return nil
+	}
+	return p.Window.Font(g.cs.fs, gad.FontNumber)
+}
+
+// retailTextMetrics is the width measurer and line metric of the family the
+// GAF pen draws with: the window's GAF font when the slot holds one, else the
+// active FNT — the gadget's selected record, or the common font
+// [03 R-FONT-01 §6].
+func (g *gameShell) retailTextMetrics(selected *formats.FNT) (measure func(string) int, lineStep int) {
+	if g.retailGAFTextFont() != nil || selected == nil {
+		return g.retailTextWidth, g.retailTextHeight()
+	}
+	return func(text string) int { return client.MeasureText(selected, text) }, int(selected.Height)
+}
+
+// drawRetailStringSelected is the GAF pen with the FNT the gadget selected as
+// its null-slot fallback: with a GAF font in the slot the glyphs come from it
+// and the FNT is never consulted; with a null slot the FNT drawer is called
+// with the width limit dropped (`maxW = -1`) and the selected record's FNT —
+// or the common font when the gadget selected none [03 R-FONT-01 §6].
+func (g *gameShell) drawRetailStringSelected(c *client.Client, text string, x, y, maxWidth int, color byte, shade int, selected *formats.FNT) {
+	if selected == nil || g.retailGAFTextFont() != nil {
+		g.drawRetailStringLit(c, text, x, y, maxWidth, color, shade)
+		return
+	}
+	c.UITextWidth(selected, text, x, y, -1, color)
+}
+
+// drawRetailLabelFNT is the label painter's FNT path, taken when the label's
+// `fontnumber` matched one of the window's kind-7 records [03 R-FONT-01 §6]:
+//
+//   - an authored x of -1 centres the text on the panel width once;
+//   - attribute bit 4 (right) puts the pen at `gx + w - tw`, else bit 2
+//     (centre) at `gx + trunc(w/2) - trunc(tw/2)` — two separate truncations —
+//     else at `gx`; the pen Y is `gy` in every case;
+//   - attribute bit 8 first draws the shadow one pixel right and three down in
+//     map entry 0 [03 R-FONT-01 §4];
+//   - the FNT drawer then draws at the pen with no width limit, in the raw
+//     colour word the label painter installs.
+//
+// The GAF pen's wrap-or-single-line choice belongs to the other branch and
+// never runs here.
+func (g *gameShell) drawRetailLabelFNT(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect, text string, font *formats.FNT, color byte) {
+	if c == nil || font == nil || text == "" {
+		return
+	}
+	tw := client.MeasureText(font, text)
+	gx, gy, w := int(r.X), int(r.Y), int(r.W)
+	if gad.Rect.RawX == -1 && p != nil && p.Window != nil {
+		gx = int(p.Window.Rect.X) + (int(p.Window.Rect.W)-tw)/2
+	}
+	penX := gx
+	switch {
+	case gad.Attribs&4 != 0:
+		penX = gx + w - tw
+	case gad.Attribs&2 != 0:
+		penX = gx + w/2 - tw/2
+	}
+	if gad.Attribs&8 != 0 {
+		c.UITextWidth(font, text, penX+1, gy+3, -1, g.guiColor(0))
+	}
+	c.UITextWidth(font, text, penX, gy, -1, color)
 }
 
 // retailTextPen resolves the two things a gadget's text pen needs: the

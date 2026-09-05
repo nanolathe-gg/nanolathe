@@ -215,16 +215,11 @@ func (b *battleSession) readScrollSetting() byte {
 	return byte(ss)
 }
 
-// primeScrollSetting caches the scrollspeed byte once at battle entry
-// [WU-19-114]. Retail's in-battle ARMOPT modal chain (options -> exit ->
-// confirm [07 "Tab options menu and manual exit"]) has no live settings
-// editor — it only routes to save/load/main-menu/exit — so nothing inside a
-// running battle can change the persisted scrollspeed; the frontend's own
-// settings screens are reachable only before a battle exists (or after one
-// ends, since returning to the main menu ends the battleSession), and each
-// new battle re-primes the cache from composeBattleEntryDetached. Callable
-// more than once if that ever changes; it always re-reads rather than
-// trusting the existing cache.
+// primeScrollSetting caches the scrollspeed byte at battle entry
+// [WU-19-114] and again whenever the in-battle options window's SCREEN
+// slider writes it (ARMOPT -> PREFS -> SPEEDSRT, [07 R-FE-01 §6]); each new
+// battle re-primes the cache from composeBattleEntryDetached. It always
+// re-reads rather than trusting the existing cache.
 func (b *battleSession) primeScrollSetting() {
 	if b == nil {
 		return

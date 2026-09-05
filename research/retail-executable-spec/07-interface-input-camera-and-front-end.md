@@ -1586,9 +1586,15 @@ width rule of §4 holds, and the caret advances. Other tokens are ignored.
 
 **Established — font by `fontnumber`, gadget parse, basename.** *Select
 font by gadget*: the n-th kind-7 record of the window (n = the gadget's
-`fontnumber`, counting from 0 in index order) selects its font and returns
-that record's index; with no such record the default (common) font is
-selected and −1 returned ([R-FE-02 §5] "focus a text input"). *Gadget
+`fontnumber`, counting from 0 in index order, so 0 is the window's first
+font record) selects its font and returns that record's index; with no such
+record the default (common) font is selected and −1 returned ([R-FE-02 §5]
+"focus a text input"). The `fontnumber` byte is read **signed**: a value of
+128..255 is negative, never equals the non-negative walk counter, and so
+selects no record — the stock 132 (`LOUNGE`, `SSIDESEL`) and 205 (`TALK2`)
+are common-font gadgets even in a window that authors records, as is
+`MSNBRIEF`'s 9 against three records. The four gadget painters inline the
+same walk; which of them keep its result is [03 R-FONT-01 §5]. *Gadget
 parse of the common keys*: `status` → the 16-bit status word; `text` →
 128 bytes, then re-localised in place; `quickkey` → the byte is the first
 character when it is a letter, else the decimal value of the text
@@ -2179,6 +2185,24 @@ with the load-thread entry point, which runs the battle-entry load routine and
 fails with `Unable to start the loading thread!` — and repaints the screen
 while that thread works, sleeping 200 ms at the end of every repaint so the
 loader keeps the machine.
+
+**Established — the loading screen is 640×480 and the battle resize is the
+transition's second half.** The `640x480` force above is the full routine of
+[R-FE-02 §2]: the logical size is written, and only when the window's current
+size differs is the `OFFSCREEN` surface freed, the presentation surface
+dropped, the window moved to `(0,0)` at `640×480`, the presentation surface
+re-created and `OFFSCREEN` re-allocated. So the loading screen composes at
+`640×480` whatever `DisplaymodeWidth`/`Height` hold, and its background is
+blitted whole at `(0,0)`; nothing scales, stretches or centres the picture.
+Immediately after the force the transition copies `DisplaymodeWidth`/`Height`
+into the *battle viewport* extent pair and derives the subrect `(128, 32)` to
+`(W−1, H−33)` from them ([03 §4.1]) — the viewport is at the chosen mode
+while the window is still at `640×480`. The window catches up in the
+transition's second half, taken on the pass after the load thread signals
+completion: the same compare-and-resize runs against `DisplaymodeWidth`/
+`Height`, `OFFSCREEN` is re-created at the extent pair already holding the
+mode size, and only then is `MAIN2.GUI` opened. A resize therefore never
+happens while the loading screen is on screen.
 
 The repainted composition, in the order it is drawn:
 
@@ -3013,8 +3037,12 @@ surface, drops the presentation surface, moves the window to `(0,0)` at
 `640×480` (frame-change flag set), re-creates the presentation surface in
 the current mode (windowed or full-screen, doc 03) and re-allocates
 `OFFSCREEN` at the new size, selecting and clearing it. The front end
-therefore always runs at 640×480 regardless of `DisplaymodeWidth`/`Height`;
-the loading transitions of [R-FE-01 §11] resize the other way.
+therefore always runs at 640×480 regardless of `DisplaymodeWidth`/`Height`.
+So does the loading screen, whose transition calls this same routine on
+entry; the resize the other way is that transition's second half, taken only
+after the load thread completes (§5 "The loading screen"). The results
+controller of [R-FE-01 §10] calls it too, at the end of its fade-to-black,
+so the glamour image and `ENDMSN` are 640×480 as well.
 
 **Established fact — the checksum probe is a stub.** The code-segment
 checksum probe that precedes every phase/substate write ([R-FE-01 §1]) is a
@@ -3151,6 +3179,23 @@ runs to the previous space or hyphen, even one before an earlier break); the hyp
 consumed; the emitted separator is `\r\n`, which the label splitter of
 [R-FE-01 §9] and the pager treat as one line end; `0xFF` ends the text.
 
+The walk-back rewinds the **input** cursor alongside the output one and
+tests the *input* byte, so it is the input's separators it looks for. That
+is why the missing line-start guard is a latent hang rather than a
+formatting quirk: a word wider than `width` whose line has no separator of
+its own sends the walk-back past the earlier break to the previous line's
+separator, and the re-copy of the same word then reaches the same measure
+and the same walk-back for ever. Stock text never reaches it. A
+reimplementation must terminate; stopping the walk-back at the line start
+does, and leaves the documented consequence intact — the over-wide word is
+emitted whole and the next break lands after it.
+
+When the caller passes a gadget rather than `−1`, that gadget's font is
+selected first and every measure in the routine — the allocation's
+`spaceWidth` included — is the **FNT** width sum of that font, not the GUI's
+GAF font. The briefing's call passes the `TextRegion` gadget and the
+gadget's authored width ([R-HUD-03 §10]).
+
 ### Briefing blink words [R-FE-02 §7]
 
 **Established fact.** The text pager of [R-HUD-03 §10] does more with a
@@ -3173,11 +3218,10 @@ spans an input line break is pre-split before paging: the pre-pass closes
 the run before the newline and reopens it after (`&` + `CR LF` + `&` +
 letter), so each line blinks on its own.
 
-**Supported inference.** Whether the label under the blink word also draws
-the run (so the blink overdraws it in place) or the run is elided from the
-label is not settled here; the pager copies the run text into the blink
-entry, and the label text it emits is built from the same walk · static
-trace of the pager's copy loop.
+**Established fact — the label under the blink word draws the run too.** The
+pager's copy loop consumes only the marker bytes; every byte between them is
+appended to the label as well as copied into the blink entry, so the blink
+word overdraws the same text in place rather than filling a gap.
 
 ### Skirmish row synthesis geometry [R-FE-02 §8]
 
@@ -3950,6 +3994,30 @@ using the side's four-entry text-colour table: plain text is entry 0 and a
 run bracketed as `&G…&`, `&Y…&` or `&R…&` is drawn in entry 1, 2 or 3 (any
 other letter after `&` also reads as entry 3); the caption colour is entry 1. A line ends at `\n`; `0xFF` or NUL ends the
 text. There is no thumb: `MOREBAR` is a plain button.
+
+The marker bytes never reach a label: on an opening `&` the walk steps past
+both the `&` and its letter, on the closing `&` past the `&` alone, and the
+copy that follows resumes with the next byte. The run's own bytes **are**
+copied into the label, so the blink word of [R-FE-02 §7] overdraws the same
+text the label already carries. The open/closed marker state is initialised
+once per page, not per line — the pre-split of that section is what keeps a
+run from leaking across a line end.
+
+**Established — the side text-colour table.** It is four bytes per side,
+indexed `side × 4 + entry`, and the bytes are **physical palette indices**,
+not GUI semantic colours: the emitted labels are kind 5, and a kind-5
+painter installs its colour word raw ([03 R-FONT-01 §6]). Side 0 (Arm) is
+`53, 51, 64, 208`; side 1 (Core) is `117, 86, 82, 212`; the rows past Core
+repeat the Core row.
+
+**Established — `fontHeight` and the wrap width are the region gadget's own
+font.** The `fontHeight` the divide and the line step use is the **FNT**
+height byte of the font the `TextRegion` gadget's `fontnumber` selects
+([R-WGT-01 §12]), and the wrapper the text is passed through before paging
+([R-FE-02 §6]) is called with that same gadget, so it measures through that
+FNT and wraps to the gadget's authored **width**. On `MSNBRIEF` the font
+index is the local side plus one, which is `armfont` for Arm and `corefont`
+for Core ([08 R-CAMP-01 §2]).
 
 ### The score-bar gadget (kind 13) and its `value / 15` step [R-HUD-03 §11]
 

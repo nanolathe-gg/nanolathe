@@ -1,5 +1,20 @@
 package client
 
+import "github.com/nanolathe/nanolathe/internal/frame"
+
+// MessageRing returns the client's shared caption/chat ring [07 R-HUD-03
+// §14]. Retail has one ring, fed by unit captions, chat and the game-speed
+// announcement alike; callers outside this package (the battle shell's
+// hotkeys and status line) use this accessor instead of holding a second
+// instance, so every poster shares the same 30 entries and the same
+// visited/jumped cursors.
+func (c *Client) MessageRing() *frame.MessageRing {
+	if c == nil {
+		return nil
+	}
+	return &c.messages
+}
+
 // drawMessageLines is the master-composer message column. Unit captions use
 // the no-speaker sentinel, so they draw directly at x=138 with dcb[15]; the
 // same consumer also handles future chat and announcement lines [07 R-HUD-03

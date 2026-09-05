@@ -324,6 +324,16 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			carrierVX, carrierVZ, carrierSpeed = coll.VX, coll.VZ, coll.Speed
 		}
 		cargo.Move.Speed = numeric.Fixed(carrierSpeed)
+		// The mover's VELOCITY TRIPLE follows the same copy as the scalar: the
+		// commit's carried branch "copies the carrier's velocity triple and
+		// scalar speed into this mover (zeroes when the carrier has no mover)"
+		// [04 R-COLL-01 §1][04 R-FAC-02 §2]. The zeroing arm is the initial
+		// value of the three locals above, so a cargo riding a mover-less
+		// carrier publishes an exact zero triple and the pre-fire lead of
+		// [06 §3.3] leads it by nothing.
+		cargo.Move.VelX = numeric.Fixed(int64(carrierVX))
+		cargo.Move.VelY = numeric.Fixed(int64(carrierVY))
+		cargo.Move.VelZ = numeric.Fixed(int64(carrierVZ))
 		// Also sync FlightState for cargo if it has one? Cargo's own flight velocities should be slaved, not integrated.
 		if flCargo, ok := s.Flights[cargo.Handle]; ok {
 			flCargo.X = int32(cargo.X.Raw())

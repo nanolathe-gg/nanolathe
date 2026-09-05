@@ -46,6 +46,11 @@ const (
 	// network session [07 R-FE-01 §7] [08 R-SAVE-02 §4].
 	BattleModalActionSaveGame
 	BattleModalActionLoadGame
+	// ARMOPT's PREFS opens the options root as a child window over the battle.
+	// ARMOPT stays on the modal chain underneath and the pause bit it set stays
+	// set, so this reports the request and emits no schedule intent
+	// [07 R-FE-01 §6][07 R-FE-01 §7].
+	BattleModalActionPrefs
 )
 
 // BattleScheduleIntent is a plain presentation value. Session applies it at
@@ -95,8 +100,6 @@ type BattleInputState struct {
 	BuildSiteH  int32
 	BuildSticky bool
 
-	StatusMessage   string
-	StatusUntil     uint32
 	ResultDismissed bool
 }
 
@@ -412,6 +415,10 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 			return BattleModalActionSaveGame
 		case "loadgame":
 			return BattleModalActionLoadGame
+		case "prefs":
+			// The options root opens over ARMOPT, which stays on the modal
+			// chain [07 R-FE-01 §6][07 R-FE-01 §7].
+			return BattleModalActionPrefs
 		}
 	case BattleModalExit:
 		switch Key(name) {

@@ -6,6 +6,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // CreationFamily is the creation-time family per [06 §6.2] C15.
@@ -701,6 +703,125 @@ const (
 	StateTwoPhase  = 0x30 // state byte &0x30 two-phase state (bits 0x10|0x20) [P1-08 §2.8]
 )
 
+// GuidanceEnv carries the live lookups the guidance target-point helper of
+// [06 §6.7] needs to resolve a record's retained references, plus the terrain
+// the cruise helper of [06 §6.8] samples. The zero value resolves nothing, so
+// the helper answers the stored target point — which is exactly the
+// lost-target fallback of [06 §6.8], not a stand-in for it.
+type GuidanceEnv struct {
+	// Projectile answers the record a projectile-to-projectile link names, or
+	// nil for a handle outside the pool. It deliberately does NOT filter dead
+	// records: retail dereferences the link without any liveness check
+	// [06 §5.2], so a link into a record the collision pass already retired
+	// still supplies that record's current point.
+	Projectile func(pool.Handle) *Projectile
+	// Unit answers the unit a retained unit target names, or nil.
+	Unit func(pool.Handle) *units.Unit
+	// Terrain is the map the cruise helper's below-threshold branch samples
+	// for `max(terrainHeight(storedTarget), seaLevel)` [06 §6.8]. A nil map
+	// answers a zero floor, which is the same answer PointTargetHeight gives
+	// a caller with no terrain bound.
+	Terrain *world.Terrain
+}
+
+// GuidanceTargetPoint is the guidance target-point helper of [06 §6.7]: the
+// point a guided self-propelled record pursues on THIS tick. For a non-cruise
+// weapon it distinguishes three sources, in this order:
+//
+//  1. the projectile-to-projectile link, when set, supplies the linked
+//     record's CURRENT point — so an interceptor chases where its quarry is
+//     now, not where it was at launch;
+//  2. otherwise the retained unit target, when set and while that unit's live
+//     flag is set, supplies the unit's world point;
+//  3. otherwise the record's stored target point.
+//
+// The stored point is therefore the fallback, never the steering input while a
+// live reference exists. A lost unit target falls back to it and the record
+// does not autonomously reacquire [06 §6.8]. Nothing here writes the stored
+// point: overwriting it would destroy that fallback.
+//
+// Guidance is pure pursuit of whichever point wins — no target-velocity lead is
+// added in flight; the only lead in the pipeline is the pre-fire lead of
+// [06 §3.3] [06 §6.7].
+//
+// "The unit's world point" is the unit position. [06 §6.7] names the position
+// where the aim-side resolver of [06 R-WPN-04 §1] instead names the SweetSpot
+// vertex-box centre by name, so the two helpers answer different points and
+// UnitTargetPoint is deliberately not reused here.
+//
+// A `cruise` weapon selects the cruise waypoint helper of [06 §6.8] instead,
+// which ignores both retained references and works from the stored target
+// point; see CruiseTargetPoint. No stock weapon authors `cruise`.
+func GuidanceTargetPoint(p *Projectile, w *content.WeaponDef, env GuidanceEnv) Vec3 {
+	if p == nil {
+		return Vec3{}
+	}
+	if w != nil && w.Cruise {
+		// [06 §6.8]: `cruise` — not `commandfire` — selects the waypoint
+		// helper, and it ignores the link and the retained unit entirely.
+		return CruiseTargetPoint(p, env.Terrain)
+	}
+	if p.TargetProjectile != 0 && env.Projectile != nil { // [06 §6.7] 1. the link
+		if lp := env.Projectile(p.TargetProjectile); lp != nil {
+			return lp.Pos
+		}
+	}
+	if p.TargetUnit != 0 && env.Unit != nil { // [06 §6.7] 2. the retained unit while live
+		if u := env.Unit(p.TargetUnit); u != nil && u.Alive {
+			return Vec3{X: u.X, Y: u.Y, Z: u.Z}
+		}
+	}
+	return p.TargetPos // [06 §6.7] 3. the stored point [06 §6.8]
+}
+
+// CruiseCeiling is the cruise helper's far-branch altitude: a fixed 700 whole
+// world units of ABSOLUTE world Y, not a height above terrain [06 §6.8].
+const CruiseCeiling int64 = 700
+
+// CruiseThreshold is the cruise helper's range threshold in whole world units
+// — 1,024, i.e. 64 cells of three-dimensional distance [06 §6.8].
+const CruiseThreshold int16 = 1024
+
+// CruiseTargetPoint is the cruise waypoint helper of [06 §6.8]. A `cruise`
+// weapon's guidance ignores the projectile link and the retained unit target
+// entirely and works from the record's STORED target point, overriding only
+// that point's altitude:
+//
+//	dX = current.X - storedTarget.X               ; raw signed 32-bit 16.16
+//	dY = current.Y - storedTarget.Y
+//	dZ = current.Z - storedTarget.Z
+//	d  = trunc(sqrt((dX*dX + dY*dY) + dZ*dZ))     ; that association order
+//	if (int16)(d >> 16) > 1024:  Y = 700 whole world units
+//	else:                        Y = max(terrainHeight(storedTarget), seaLevel) << 16
+//
+// The compare is on a SIGNED SHORT and is STRICT, so exactly 1,024 whole world
+// units takes the terrain-floor branch, not the ceiling. A distance whose high
+// word reaches 32,768 whole world units wraps negative and inverts the branch;
+// that is retail's, and it is unreachable for in-bounds map geometry — the
+// narrowing here reproduces it rather than saturating [I11].
+//
+// The far branch's 700 is an absolute world Y, so a cruise missile crossing
+// high ground does not climb over it; the near branch is the ordinary
+// target-point floor, which is why PointTargetHeight answers it.
+//
+// No stock weapon authors `cruise` [06 §6.8], so nothing in a stock battle
+// reaches this helper.
+func CruiseTargetPoint(p *Projectile, terrain *world.Terrain) Vec3 {
+	if p == nil {
+		return Vec3{}
+	}
+	stored := p.TargetPos
+	// Raw 16.16 deltas, wrapping as signed 32-bit before the conversion.
+	dx := int32(p.Pos.X.Sub(stored.X).Raw())
+	dy := int32(p.Pos.Y.Sub(stored.Y).Raw())
+	dz := int32(p.Pos.Z.Sub(stored.Z).Raw())
+	d := distance3DRaw(dx, dy, dz)      // [06 §6.8], a raw 16.16 distance
+	if int16(d>>16) > CruiseThreshold { // signed short, strict [06 §6.8]
+		return Vec3{X: stored.X, Y: numeric.Fixed(CruiseCeiling << 16), Z: stored.Z}
+	}
+	return Vec3{X: stored.X, Y: PointTargetHeight(terrain, stored.X, stored.Z), Z: stored.Z}
+}
+
 // steerToward implements [06 §6.7] guidance: pure pursuit of the pursuit
 // point, desired yaw and pitch in the signed 16-bit circle, yaw processed
 // before pitch. On each axis it snaps only when |err| is STRICTLY less than
@@ -750,8 +871,10 @@ func absU16(v uint16) uint16 {
 
 // AdvanceSelfProp advances a self-propelled projectile per [06 §6.6] [06 §6.7] [06 §7.2] C16.
 // Handles acceleration, guidance, water-medium gating, speed clamp, expiry phase
-// switch, gravity fallback, and two-phase transition.
-func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity numeric.Fixed, seaLevel numeric.Fixed) AdvanceResult {
+// switch, gravity fallback, and two-phase transition. env supplies the live
+// lookups the guidance target-point helper needs; its zero value steers at the
+// stored target point [06 §6.8].
+func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity numeric.Fixed, seaLevel numeric.Fixed, env GuidanceEnv) AdvanceResult {
 	if p == nil || w == nil {
 		return AdvanceRetire
 	}
@@ -821,12 +944,23 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 			p.Speed = numeric.Fixed(int64(int32(speed)))
 		}
 	}
-	// [06 §6.7][06 §6.8] guidance pursues the stored target point; a lost unit
-	// target falls back to that stored point, so the pursuit point is always
-	// TargetPos until the driver refreshes it from a live linked record
-	// [06 §11.2].
-	if w.Guidance {
-		if failed := steerToward(p, w, p.TargetPos); failed {
+	// [06 §6.7] `guiding = twophase ? (twoPhaseStateBits != 0) : guidance`.
+	// A two-phase weapon does not consult its `guidance` flag at all: it starts
+	// unguided and begins steering only once the first expiry transition of
+	// [06 §6.6] has set the state bits. This used to read `w.Guidance` for both
+	// kinds, which steered a two-phase record from its first tick.
+	guiding := w.Guidance
+	if w.TwoPhase {
+		guiding = p.TwoPhase
+	}
+	if guiding {
+		// [06 §6.7] the pursuit point comes from the guidance target-point
+		// helper — the linked record's current point, else the retained unit's
+		// world point while it is live, else the stored point. Steering at the
+		// stored point unconditionally, which is what this used to do, made
+		// every guided missile fly at the launch-time aim point and miss any
+		// target that moved after the shot.
+		if failed := steerToward(p, w, GuidanceTargetPoint(p, w, env)); failed {
 			// Burn-blow steering failure invokes central impact; the visible
 			// velocity/motion code still runs this visit [06 §6.7].
 			p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
@@ -846,13 +980,13 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 
 // Advance dispatches to the appropriate per-family advance per [06 §6.2] motion ordering (C15).
 // Propeller presentation advances first [06 §6.2] is handled inside each family; this wrapper selects the family.
-func Advance(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec3, gravity numeric.Fixed, seaLevel numeric.Fixed) AdvanceResult {
+func Advance(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec3, gravity numeric.Fixed, seaLevel numeric.Fixed, env GuidanceEnv) AdvanceResult {
 	if p == nil || w == nil {
 		return AdvanceRetire
 	}
 	switch MotionFamilyForWeapon(w) { // [06 §6.2] selfProp → LOS → ballistic → dropped → meteor
 	case MotionSelfProp:
-		return AdvanceSelfProp(p, w, tick, gravity, seaLevel)
+		return AdvanceSelfProp(p, w, tick, gravity, seaLevel, env)
 	case MotionDirect:
 		return AdvanceDirect(p, w, tick)
 	case MotionBallistic:

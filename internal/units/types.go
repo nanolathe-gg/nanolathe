@@ -230,6 +230,27 @@ type MoveState struct {
 	Pitch   uint16        // authoritative ground-conform or flight-lean pitch [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
 	Bank    uint16        // authoritative ground-conform or flight-lean bank [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
 	Speed   numeric.Fixed // current scalar speed, 16.16 [04 §8.1]
+	// VelX, VelY and VelZ are the mover's VELOCITY TRIPLE, one 16.16 word per
+	// axis [04 R-MOV-01 §1]. It is a different quantity from the scalar speed
+	// word above it: the scalar is a magnitude, the triple is the signed
+	// per-axis displacement the commit step adds to the position each tick
+	// (`proposed = position + velocity`, [04 R-COLL-01 §1]).
+	//
+	// Producers, all in internal/movement: the ground speed update writes
+	// `(-sin(heading, speed), 0, -cos(heading, speed))` — a ground mover never
+	// has vertical velocity and there is no gravity term on that path
+	// [04 R-MOV-01 §4]; the flight integrator writes all three
+	// [04 §10.1][04 R-AIR-01 §1]; the commit's blocked branch rewrites the
+	// horizontal pair at the halved speed [04 R-COLL-01 §1]; and the carried
+	// branch copies the carrier's triple, zeroing when the carrier has no
+	// mover [04 R-COLL-01 §1][04 R-FAC-02 §2].
+	//
+	// Its one simulation reader outside internal/movement is the pre-fire lead
+	// of [06 §3.3], which multiplies the TARGET's triple by the scaled flight
+	// time. Presentation must not read it as an interpolation term [I6].
+	VelX numeric.Fixed // [04 R-MOV-01 §1] (I2)
+	VelY numeric.Fixed // [04 R-MOV-01 §1] (I2); always zero on the ground path [04 R-MOV-01 §4]
+	VelZ numeric.Fixed // [04 R-MOV-01 §1] (I2)
 	// Pending callbacks for movement window [GAP T15] C18.
 	PendingHeading uint16 // desired heading queued before movement window
 	PendingSpeed   int32  // signed dword before shift left 4 for SetSpeed [04 §5.3]

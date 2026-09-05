@@ -38,8 +38,8 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	if b.sess.Clock.Requested != 11 {
 		t.Fatalf("speed increase want 11 got %d", b.sess.Clock.Requested)
 	}
-	if b.battleState().Input.StatusMessage != "Game Speed  +1" {
-		t.Fatalf("speed message want 'Game Speed  +1' got %q", b.battleState().Input.StatusMessage)
+	if newestRingText(b) != "Game Speed  +1" {
+		t.Fatalf("speed message want 'Game Speed  +1' got %q", newestRingText(b))
 	}
 	// 10 -> Normal
 	b.sess.Clock.Requested = 11
@@ -48,8 +48,8 @@ func TestGameSpeedKeysClampAndMessage(t *testing.T) {
 	if b.sess.Clock.Requested != 10 {
 		t.Fatalf("speed decrease to 10 want 10 got %d", b.sess.Clock.Requested)
 	}
-	if b.battleState().Input.StatusMessage != "Game Speed Normal" {
-		t.Fatalf("speed normal message want 'Game Speed Normal' got %q", b.battleState().Input.StatusMessage)
+	if newestRingText(b) != "Game Speed Normal" {
+		t.Fatalf("speed normal message want 'Game Speed Normal' got %q", newestRingText(b))
 	}
 	// Via handleInput: test that +/- keys are wired [07 §2]
 	b.sess.Clock.Requested = 10
@@ -102,8 +102,8 @@ func TestPauseToggleUsesAuthoredOverlay(t *testing.T) {
 	if !b.sess.Clock.Paused {
 		t.Fatalf("pause toggle should set Paused true")
 	}
-	if b.battleState().Input.StatusMessage != "" {
-		t.Fatalf("pause must not invent a status string, got %q", b.battleState().Input.StatusMessage)
+	if newestRingText(b) != "" {
+		t.Fatalf("pause must not invent a status string, got %q", newestRingText(b))
 	}
 	committed = b.sess.Snapshot.BeginWrite()
 	committed.Paused = true
@@ -115,8 +115,8 @@ func TestPauseToggleUsesAuthoredOverlay(t *testing.T) {
 	if b.sess.Clock.Paused {
 		t.Fatalf("second toggle should clear Paused")
 	}
-	if b.battleState().Input.StatusMessage != "" {
-		t.Fatalf("resume must not invent a status string, got %q", b.battleState().Input.StatusMessage)
+	if newestRingText(b) != "" {
+		t.Fatalf("resume must not invent a status string, got %q", newestRingText(b))
 	}
 	// Via handleInput
 	committed = b.sess.Snapshot.BeginWrite()

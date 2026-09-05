@@ -3143,6 +3143,15 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		steer.Speed = coll.Speed
 		u.Move.Heading = coll.Heading
 		u.Move.Speed = numeric.Fixed(coll.Speed)
+		// The mover's VELOCITY TRIPLE, published beside the scalar speed it is
+		// not [04 R-MOV-01 §1]. It is read after the commit, so it carries the
+		// blocked branch's recomputed horizontal pair when the validator
+		// rejected the proposal [04 R-COLL-01 §1]. The Y component is a
+		// literal zero on the ground path: the speed update writes `vy = 0`
+		// and no gravity term exists there [04 R-MOV-01 §4].
+		u.Move.VelX = numeric.Fixed(int64(coll.VX))
+		u.Move.VelY = numeric.Fixed(int64(coll.VY))
+		u.Move.VelZ = numeric.Fixed(int64(coll.VZ))
 		// Emit StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18 via immediate barrier [GAP T15] C18.
 		// Must run after speed commit so tier reflects current capped speed [04 §5.2][GAP T15] C18.
 		// The scalar speed is passed as committed. A blocked mover retains a

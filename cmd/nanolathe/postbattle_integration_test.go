@@ -1,12 +1,19 @@
 package main
 
 import (
+	"image/color"
 	"testing"
+	"time"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/triggers"
+	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
 // TestPostBattleAdapterFreezesRoutesAndDrainsOnce covers the client-side
@@ -107,5 +114,156 @@ func TestSecondNewCampaignResetsProgressThumbs(t *testing.T) {
 	g.adoptCampaignProgress(continued)
 	if continued.Progress.Thumbs[3] != 'W' {
 		t.Fatal("continuation did not preserve copied campaign mark")
+	}
+}
+
+// TestGlamourFadeRunsFromBlackToTheImagePalette locks the direction of the
+// glamour fade. It rises out of black into the decoded image's own colours:
+// the table builder takes the image's palette as the target and a zeroed block
+// as the start, and the picture is blitted once while only the palette moves.
+// Running it the other way ends with the image drawn under the game palette,
+// which is what a play-test reads as "an image full of artifacts"
+// [08 R-CAMP-01 §6].
+func TestGlamourFadeRunsFromBlackToTheImagePalette(t *testing.T) {
+	var glamour formats.PCX
+	glamour.Palette[1] = color.RGBA{R: 200, G: 100, B: 50, A: 255}
+	base := &palette.Tables{}
+	base.Base[1] = [4]byte{9, 9, 9, 0}
+	b := &battleSession{
+		postBattleGlamour: &glamour,
+		hud:               &retailBattleHUD{pal: base},
+	}
+	b.initPostBattleGlamourFade(nil)
+	if !b.postBattleFadeReady {
+		t.Fatal("the fade was not armed")
+	}
+	if got := b.postBattleFadeDst[4:7]; got[0] != 200 || got[1] != 100 || got[2] != 50 {
+		t.Fatalf("fade target = %v, want the glamour image's own palette entry", got)
+	}
+	if got := b.postBattleFadeCur[4:7]; got[0] != 0 || got[1] != 0 || got[2] != 0 {
+		t.Fatalf("fade start = %v, want black", got)
+	}
+	// Five steps of 200/5 land exactly on the target and no further.
+	for i := 0; i < 5; i++ {
+		b.advancePostBattleGlamourFade(uint32(i), nil)
+	}
+	if got := b.postBattleFadeCur[4]; got != 200 {
+		t.Fatalf("after five steps the red byte is %d, want the target 200", got)
+	}
+}
+
+// TestPostBattleStartKeepsTheShellAfterTeardown is the regression for the
+// black screen the play-test hit on ENDMSN's Start: the battle's own teardown
+// clears every back-reference it holds, `shell` included, so a route that
+// reads b.shell after the teardown gets a nil receiver and silently does
+// nothing — leaving the front end on its battle mode with no battle installed
+// [07 R-FE-01 §10].
+func TestPostBattleStartKeepsTheShellAfterTeardown(t *testing.T) {
+	b := &battleSession{shell: &gameShell{}}
+	b.shell.battle = b
+	b.teardown(nil)
+	if b.shell != nil {
+		t.Fatal("teardown no longer clears the battle's shell reference; the route may read it directly again")
+	}
+}
+
+// TestCampaignWinAdvancesToTheNextBriefing walks the reported path end to end:
+// the first Arm mission entered from its briefing at an 800x600 display mode,
+// won, through the whole results sequence and out of ENDMSN's Start. It pins
+// the three things the play-test found broken — the loading screen and the
+// results screens are 640x480 while the battle is at the chosen mode, the
+// glamour screen fades up into the image's own palette, and Start lands on the
+// next mission's briefing rather than on nothing
+// [07 "The loading screen"][07 R-FE-02 §2][08 R-CAMP-01 §6][07 R-FE-01 §10].
+func TestCampaignWinAdvancesToTheNextBriefing(t *testing.T) {
+	root := probeRetail(t)
+	opts := Options{Root: root}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	defer cs.Close()
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 800, Height: 600})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := clPtr
+	clPtr = cl
+	defer func() { clPtr = previous }()
+	cl.SetPalette(shell.assets.pal)
+	cl.SetFNT(shell.font)
+	cl.SetUIStage(gameShellUIStage{shell: shell})
+	shell.display.Width, shell.display.Height = 800, 600
+	shell.missionSide = 0
+	shell.openMenu(modeMenuMission)
+	found := false
+	for i := range shell.campaignOptions {
+		if shell.campaignOptions[i].Path == "camps/arm campaign.tdf" {
+			shell.campaignIdx, found = i, true
+		}
+	}
+	if !found {
+		t.Skip("the Arm campaign is not in this install")
+	}
+	shell.missionIdx = 0
+	shell.openCampaignBriefing()
+	if shell.briefing == nil {
+		t.Fatal("the briefing did not open")
+	}
+	shell.dispatchBriefing(BriefingActionStart)
+	if w, h := cl.Size(); w != retailScreenW || h != retailScreenH {
+		t.Fatalf("loading screen surface = %dx%d, want 640x480", w, h)
+	}
+	for i := 0; i < 2000 && shell.frontend.Mode == modeLoading; i++ {
+		shell.stepLoading(0.05)
+		time.Sleep(5 * time.Millisecond)
+	}
+	if shell.battle == nil {
+		t.Fatalf("the mission never loaded; mode=%v", shell.frontend.Mode)
+	}
+	if w, h := cl.Size(); w != 800 || h != 600 {
+		t.Fatalf("battle surface = %dx%d, want the chosen 800x600 display mode", w, h)
+	}
+	b := shell.battle
+	sess := b.sess
+	// ARM1's victory is a trigger, so an already-satisfied victory queue stands
+	// in for playing it [08 R-TRIG-01 §6].
+	sess.Mission.Victory = []*triggers.Trigger{{Kind: triggers.KindBuildUnitType, Completed: true}}
+	for i := 0; i < 30*20 && !b.isResultVisible(); i++ {
+		sess.Step(sess.Clock.ScaledAnchor + 1)
+	}
+	if !b.isResultVisible() {
+		t.Fatalf("the mission never ended; latch=%+v", sess.Latch)
+	}
+	b.ensurePostBattleController()
+	for i := 0; i < 900 && b.postBattle.State() != session.PostBattleEndMission; i++ {
+		b.stepPostBattle(1.0/30.0, cl.Input(), cl)
+		if b.postBattle.State() == session.PostBattleGlamour && i > 200 {
+			// The glamour screen waits for a key once its deadline passes.
+			cl.Input().Kbd.SetKey(input.KeySpace, true)
+		}
+	}
+	if got := b.postBattle.State(); got != session.PostBattleEndMission {
+		t.Fatalf("the results sequence stalled in state %d", got)
+	}
+	if w, h := cl.Size(); w != retailScreenW || h != retailScreenH {
+		t.Fatalf("ENDMSN surface = %dx%d, want the 640x480 the results controller forces", w, h)
+	}
+	if shell.resultBackground == nil {
+		t.Fatal("ENDMSN opened without its outcome background bitmap")
+	}
+	b.doResultAction(ui.ResultActionContinue, cl)
+	if shell.battle != nil {
+		t.Fatal("Start left the finished battle installed")
+	}
+	if shell.briefing == nil || shell.frontend.Mode != modeMenuMission {
+		t.Fatalf("Start left the shell on mode %v with briefing=%v; want the next mission's briefing", shell.frontend.Mode, shell.briefing != nil)
+	}
+	if shell.missionIdx != 1 {
+		t.Fatalf("Start selected mission index %d, want the successor 1", shell.missionIdx)
 	}
 }

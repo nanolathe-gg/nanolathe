@@ -7669,19 +7669,43 @@ handle. Its callers, by the handle they pass:
 
 | handle | who selects it | what it draws |
 |---|---|---|
-| the window FNT (`COMIX`) | 21 sites: every GUI screen painter restores it after a per-gadget font, the shell entry, the report/end-mission screens | shell text drawn through the FNT fallback of the GAF-font path (§6) and the label/button painters when the label names no font gadget |
-| a per-gadget FNT | the GUI label, button, list and text-region painters (12 sites) | a label whose `fontnumber` selects the N-th **font gadget** (gadget type 7) of the same window; that gadget's FNT is loaded at GUI parse from the window's font directory plus the gadget's `filename` through the same raw file loader (missing file → null handle → the setter ignores it and the previously active font stays) |
+| the window FNT (`COMIX`) | 21 sites: every GUI screen painter restores it after a per-gadget font, the shell entry, the report/end-mission screens | shell text drawn through the FNT fallback of the GAF-font path (§6) and the label/button painters when the gadget's `fontnumber` selects no font record |
+| a per-gadget FNT | the GUI label, button, list and text-input painters, the shared select-font-by-gadget helper and its callers (the text-input focus paths, the text-region wrapper, the message box) | the FNT of the **font record** (kind 7) the gadget's `fontnumber` selects from the same window — the n-th kind-7 record counting from 0, so `fontnumber` 0 is the window's first record (the walk is below); that record's FNT is loaded at GUI parse from the window's font directory plus the record's `filename` through the same raw file loader (missing file → null handle → the setter ignores it and the previously active font stays) |
 | the local player's **side font** (`font=` of `sidedata.tdf`, [02 §6], one handle per side record) | the battle frame composer (twice) and the unit-panel painter | every HUD number and string drawn with the FNT drawer in battle — resource counters, `FRATE`, the unit-panel readout, the group digit of [R-FX-01 §6] |
 | `SMLFONT` | the minimap overlay pass inside the frame composer (two sites) | the single-character marker `G` it stamps on flagged minimap entries; the flag's meaning belongs to §3.9 |
 | `COMIX` directly | the main-menu screen and the front-end state machine; in battle, the frame composer's diagnostic overlay, the unit-state and unit-builder probes, the unit panel's debug readout, and the status footer | `FRATE`, `Release`, `MODE`, `Game Time` and the profile labels; the probe dumps; the footer, which then draws through the GAF-font path of §6 |
+
+**The per-gadget font walk (Established).** The four gadget painters that
+draw text — label, button, listbox and text input — each open with the same
+walk the shared select-font-by-gadget helper of [07 R-WGT-01 §6] performs,
+inlined: a counter starts at 0; every kind-7 record of the window, in gadget
+order, compares the counter against the painted gadget's `fontnumber` (read
+as a signed byte) and either matches — its FNT becomes the active font — or
+advances the counter. A `fontnumber` of 0 therefore selects the window's
+**first** font record; there is no "names a font gadget" gate, flag or
+non-zero test. When no record matches (the number is at or past the record
+count, or is 128..255 and reads negative), the common font — the window FNT,
+`COMIX` — is selected instead and the walk reports −1. Only the **label**
+painter keeps that report: with a match it draws through the FNT drawer
+directly, otherwise through the GAF pen. The button, listbox and text-input
+painters discard it and draw every string through the GAF pen regardless, so
+the FNT they selected is reached only on the pen's null-slot fallback (§6).
+On a stock side page — one kind-7 record, `armbutt`/`corbutt`, and every
+button authoring `fontnumber` 0 — each product button therefore makes
+`armbutt`/`corbutt` the active FNT and then draws its caption in the slot's
+GAF font all the same; the record would show only with `hattfont12.gaf`
+missing. On `MSNBRIEF`, whose records are `smlfont`, `armfont`, `corefont`,
+the buttons author `fontnumber` 9 (no record: common font) and the `MOREBAR`
+label authors 0, so its caption is `smlfont` through the FNT drawer.
 
 **Which routine draws which family (Established).** Battle HUD text goes
 through the FNT drawer directly with the side font, except the diagnostic
 overlay and probes above (`COMIX`) and the status footer (GAF-font path with
 `COMIX` as its fallback). Shell text goes through
 the GAF-font trio of §6, which prefers the window's GAF font and falls back
-to the active FNT only when that slot is null; the label and button painters
-use the FNT drawer directly only for a label that names a font gadget. The list
+to the active FNT only when that slot is null; of the gadget painters, only
+the label painter uses the FNT drawer directly, and only for a label whose
+`fontnumber` selected a font record (the walk above). The list
 and label painters switch the window's GAF font to slot 1 (`hattfont11`) for
 their text and restore slot 0 afterwards, and so does the button painter when
 the button's small-font attribute bit `0x8000` is set; a button without that
@@ -7699,7 +7723,10 @@ count"), so it takes the button rule — the window's current slot, slot 0
 button authors it: an asset census over the reference install's `guis/*.gui`
 finds all 488 kind-1 buttons carrying `commonattribs` 4 or 8 authoring
 `attribs = 32` and a 64x64 rectangle, and none of them `0x8000`. A side-page
-build count therefore draws in `hattfont12`, not `hattfont11`.
+build count therefore draws in `hattfont12`, not `hattfont11` — and not in
+the page's own `armbutt`/`corbutt` record either, which the button's walk
+selects as the active FNT (above) but the GAF pen never consults while the
+slot holds a font.
 
 #### The GAF-font pen: measure, metric, draw, wrap, and the gadget painters [R-FONT-01 §6]
 
@@ -7780,12 +7807,18 @@ least one line is always drawn.
 * attribute bit 4 (right): `penX = gx + w − tw`; else bit 2 (centre):
   `penX = gx + trunc(w / 2) − trunc(tw / 2)` (two separate truncations); else
   `penX = gx`; `penY = gy` in every case;
-* with a font gadget selected (FNT path): optional shadow as in §4, then the
-  FNT drawer at `(penX, penY)` with `maxW = −1`;
+* with a font record selected by the painter's opening walk (§5; the label's
+  `fontnumber` counted the window's kind-7 records from 0, so 0 is the first
+  record) — the FNT path: optional shadow as in §4, then the FNT drawer at
+  `(penX, penY)` with `maxW = −1`;
 * otherwise (GAF path): when `2 × metric < h − 1` the wrapper is used with
   `maxW = w`, `maxH = h`; else the single-line drawer with `maxW = w`.
 
-**Button painter (Established).** With `s = 1` when the
+**Button painter (Established).** The painter opens with the same font walk
+as the label painter (§5) and makes the selected record — or the common
+font — the active FNT, but it does not keep the walk's result: every caption
+run below goes through the GAF pen, so the selected FNT draws only on the
+pen's null-slot fallback. With `s = 1` when the
 gadget's `stages` field is non-zero, else 0:
 
 * `penY = gy + trunc((h − 1 − metric) / 2) + s` (C division, truncation
@@ -7833,10 +7866,11 @@ without that lookup.
 * **Label (kind 5).** Foreground = the gadget's `colorf` word **raw** — a
   physical palette index, not a map entry. The shadow pass (attribute bit
   8, FNT path only) is drawn first in map entry 0. A label reaches the FNT
-  drawer two ways — directly when its `fontnumber` matches a kind-7 gadget,
-  and through the GAF pen's null-slot fallback when no kind-7 gadget matches
-  and the window holds no GAF font — and the same raw `colorf` is installed
-  ahead of both. Because the builder zeroes the word, an authored label
+  drawer two ways — directly when its `fontnumber` selects a kind-7 record
+  (§5's walk: the n-th record counting from 0, so 0 is the first), and
+  through the GAF pen's null-slot fallback when no record matches and the
+  window holds no GAF font — and the same raw `colorf` is installed ahead of
+  both. Because the builder zeroes the word, an authored label
   whose window draws with an FNT and whose screen never sets its colour is
   drawn in palette index 0; the screens that build labels at run time (the
   message box, the briefing pager) write the word themselves

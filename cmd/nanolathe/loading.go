@@ -248,6 +248,11 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	// (internal/session/composition.go's sessionUnitLimit names it), so the
 	// carry is the one write below, not a session change.
 	g.applyRestoredUnitLimit(loaded.Battle.Image)
+	// `LOADGAME`'s `LOAD` reaches the battle through the loading transition, so
+	// the restored battle gets the same second-half resize a fresh one does:
+	// the window follows `DisplaymodeWidth`/`Height` before the HUD opens
+	// [07 "The loading screen"][07 R-FE-01 §8].
+	g.applyDisplayMode(clPtr)
 	// The only mutation of the active battle/frontend/client state occurs here,
 	// after both authoritative and presentation candidates are complete.
 	g.commitBattleCandidate(battle)
@@ -283,13 +288,16 @@ func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request
 	g.loading = state
 	g.loadingReturn = back
 	g.openMenu(modeLoading)
-	// The skirmish and campaign load transitions compare
-	// `DisplaymodeWidth`/`Height` to the current window size and, when they
-	// differ, resize the window, re-select the mode and re-create the
-	// offscreen [07 R-FE-01 §11]. This is that transition: the front end runs
-	// at 640x480 whatever the pair holds [07 R-FE-02 §2], and the battle about
-	// to be composed runs at the chosen mode.
-	g.applyDisplayMode(clPtr)
+	// The loading transition runs at 640x480, not at the chosen display mode.
+	// Its first half forces the logical size to 640x480 and, when the window
+	// differs, moves the window and re-creates the presentation surface and the
+	// offscreen — before the loading background is installed. The resize to
+	// `DisplaymodeWidth`/`Height` is the transition's *second* half, taken once
+	// the load thread has signalled completion and before the in-game HUD
+	// opens; stepLoading is that half [07 "The loading screen"][07 R-FE-02 §2].
+	// The authored loading picture is a 640x480 image blitted whole at (0,0)
+	// and is never scaled.
+	g.applyDisplaySize(clPtr, retailScreenW, retailScreenH)
 	go func() {
 		authoritative, err := composeAuthoritativeBattle(request)
 		if err == nil && after != nil {
@@ -320,6 +328,13 @@ func (g *gameShell) stepLoading(delta float64) {
 			reportRetailMessageError(g.showRetailMessage(res.err.Error()))
 			return
 		}
+		// The transition's second half: the completed load compares
+		// `DisplaymodeWidth`/`Height` to the current window size and, when they
+		// differ, moves the window, re-selects the mode and re-creates the
+		// offscreen at the battle size, then opens the in-game HUD
+		// [07 "The loading screen"]. A failed load stays on 640x480, where the
+		// screen it returns to belongs.
+		g.applyDisplayMode(clPtr)
 		if err := g.enterBattle(res.sess, res.sess.Catalog); err != nil {
 			g.loadingReturn = returnMode
 			g.openMenu(returnMode)

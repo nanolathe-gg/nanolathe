@@ -80,7 +80,7 @@ func TestSpeedHotkeyClampAndAnnouncement(t *testing.T) {
 	if got := b.sess.Clock.Requested; got != 11 {
 		t.Fatalf("`=` set speed %d, want 11", got)
 	}
-	if got := b.battleState().Input.StatusMessage; got != "Game Speed  +1" {
+	if got := newestRingText(b); got != "Game Speed  +1" {
 		t.Fatalf("speed-up text %q, want %q", got, "Game Speed  +1")
 	}
 	lines := b.messageRing().Visible()
@@ -95,12 +95,12 @@ func TestSpeedHotkeyClampAndAnnouncement(t *testing.T) {
 	// Back to normal, then below it: the negative offset keeps the space the
 	// `%c` writes, so the label is three spaces wide before the sign.
 	pressKeys(b, input.KeyMinus)
-	if got := b.battleState().Input.StatusMessage; got != "Game Speed Normal" {
+	if got := newestRingText(b); got != "Game Speed Normal" {
 		t.Fatalf("speed 10 text %q, want %q", got, "Game Speed Normal")
 	}
 	pressKeys(b, input.KeyMinus)
 	pressKeys(b, input.KeyMinus)
-	if got := b.battleState().Input.StatusMessage; got != "Game Speed   -2" {
+	if got := newestRingText(b); got != "Game Speed   -2" {
 		t.Fatalf("speed 8 text %q, want %q", got, "Game Speed   -2")
 	}
 
@@ -112,9 +112,9 @@ func TestSpeedHotkeyClampAndAnnouncement(t *testing.T) {
 	if got := b.sess.Clock.Requested; got != 1 {
 		t.Fatalf("floor clamp left speed %d, want 1", got)
 	}
-	b.battleState().Input.StatusMessage = ""
+	b.messageRing().Clear()
 	pressKeys(b, input.KeyMinus)
-	if got := b.battleState().Input.StatusMessage; got != "" {
+	if got := newestRingText(b); got != "" {
 		t.Fatalf("a refused decrement announced %q", got)
 	}
 	for i := 0; i < 30; i++ {

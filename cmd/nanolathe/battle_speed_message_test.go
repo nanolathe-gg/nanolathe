@@ -15,9 +15,15 @@ import (
 )
 
 // TestSpeedMessageShot composes one frame with the "Game Speed  +1"
-// announcement latched and visible, through the same production draw path
-// footerComposeShot uses. Set NANOLATHE_HUD_SHOT to a path prefix to capture
-// it as "<prefix>-speed.png".
+// announcement posted to the shared message ring, through the same
+// production draw path footerComposeShot uses. Set NANOLATHE_HUD_SHOT to a
+// path prefix to capture it as "<prefix>-speed.png".
+//
+// Retail has one ring, and the announcement's only drawn representation is
+// the ring line the master composer's message column already paints
+// [07 R-HUD-03 §14.4][07 R-CAM-01 §3]; there is no separate box to compose,
+// so the client built here is wired onto b before the speed change so both
+// share the one ring instance the composer reads.
 func TestSpeedMessageShot(t *testing.T) {
 	prefix := os.Getenv("NANOLATHE_HUD_SHOT")
 	if prefix == "" {
@@ -25,19 +31,7 @@ func TestSpeedMessageShot(t *testing.T) {
 	}
 	b, cs, cam, pal := footerShotSession(t)
 	defer cs.Close()
-	b.fs = cs.fs // drawStatusMessage resolves the message-column font through it
-
-	b.setGameSpeed(1)
-	if got := b.battleState().Input.StatusMessage; got != "Game Speed  +1" {
-		t.Fatalf("status message = %q, want %q", got, "Game Speed  +1")
-	}
-	cur, ok := b.currentSnapshot()
-	if !ok {
-		t.Fatal("no committed frame")
-	}
-	if !b.statusVisible(cur) {
-		t.Fatal("status message not visible on the committed frame")
-	}
+	b.fs = cs.fs // the message column resolves its font through it
 
 	cl, err := client.New(client.Options{Buffer: b.sess.Snapshot, Width: footerShotW, Height: footerShotH})
 	if err != nil {
@@ -49,6 +43,13 @@ func TestSpeedMessageShot(t *testing.T) {
 	cl.SetFNT(b.hud.console)
 	cl.SetModelFS(cs.fs)
 	cl.SetUIStage(battleHUDUIStage{hud: b.hud, battle: b})
+	b.cl = cl
+
+	b.setGameSpeed(1)
+	lines := cl.MessageLines()
+	if len(lines) == 0 || lines[len(lines)-1].Text != "Game Speed  +1" {
+		t.Fatalf("shared ring lines = %+v, want the announcement as the newest line", lines)
+	}
 
 	file, err := os.Create(prefix + "-speed.png")
 	if err != nil {

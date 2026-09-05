@@ -1,0 +1,79 @@
+[GADGET0]
+{
+    [COMMON]
+    {
+        id=0; name=FontsPanel; xpos=0; ypos=0; width=640; height=480; active=1;
+    }
+    totalgadgets=9;
+    panel=;
+}
+[GADGET1]
+{
+    [COMMON]
+    {
+        id=5; name=FIRST; xpos=10; ypos=10; width=100; height=15; active=1; fontnumber=0;
+    }
+    text=first record;
+}
+[GADGET2]
+{
+    [COMMON]
+    {
+        id=1; name=SECOND; xpos=10; ypos=30; width=100; height=15; active=1; fontnumber=1;
+    }
+    text=second record;
+}
+[GADGET3]
+{
+    [COMMON]
+    {
+        id=7; name=ALPHA; xpos=0; ypos=0; width=0; height=0; active=1;
+    }
+    filename=alpha;
+}
+[GADGET4]
+{
+    [COMMON]
+    {
+        id=5; name=THIRD; xpos=10; ypos=50; width=100; height=15; active=1; fontnumber=2;
+    }
+    text=third record, missing file;
+}
+[GADGET5]
+{
+    [COMMON]
+    {
+        id=7; name=BETA; xpos=0; ypos=0; width=0; height=0; active=1;
+    }
+    filename=beta;
+}
+[GADGET6]
+{
+    [COMMON]
+    {
+        id=7; name=GAMMA; xpos=0; ypos=0; width=0; height=0; active=1;
+    }
+    filename=gamma;
+}
+[GADGET7]
+{
+    [COMMON]
+    {
+        id=1; name=PASTEND; xpos=10; ypos=70; width=100; height=15; active=1; fontnumber=9;
+    }
+    text=past the end;
+}
+[GADGET8]
+{
+    [COMMON]
+    {
+        id=6; name=HIGHBIT; xpos=10; ypos=90; width=100; height=15; active=1; fontnumber=132;
+    }
+}
+[GADGET9]
+{
+    [COMMON]
+    {
+        id=0; name=HIGHBIT2; xpos=10; ypos=110; width=100; height=15; active=1; fontnumber=205;
+    }
+}

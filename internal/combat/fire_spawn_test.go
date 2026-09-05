@@ -118,7 +118,7 @@ func TestOrdinaryShotStartsAtTheMuzzleWithAUsableTrajectory(t *testing.T) {
 
 	// It advances toward the target rather than sitting still.
 	before := p.Pos.X
-	if res := Advance(p, w, 101, Vec3{}, 0, 0); res == AdvanceRetire {
+	if res := Advance(p, w, 101, Vec3{}, 0, 0, GuidanceEnv{}); res == AdvanceRetire {
 		t.Fatalf("shot retired on its first tick")
 	}
 	if p.Pos.X <= before {

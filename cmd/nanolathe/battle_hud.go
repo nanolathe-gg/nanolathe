@@ -65,6 +65,7 @@ type retailBattleHUD struct {
 	victoryFrame       *formats.GAFFrame  // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
 	defeatFrame        *formats.GAFFrame  // [07 §11] igdefeat from anims/igtitles.gaf
 	resultWin          *gui.Window        // [07 §11] authored ENDMSN.GUI result surface
+	shell              *gameShell         // the front-end shell that owns ENDMSN's installed background bitmap [08 R-CAMP-01 §8]
 	resultGAF          *formats.GAF       // [07 §11] authored endmsn.gaf outcome controls
 	resultVictoryFrame *formats.GAFFrame  // [07 §11] authored endmsn.gaf victory copy
 	resultDefeatFrame  *formats.GAFFrame  // [07 §11] authored endmsn.gaf defeat copy
@@ -311,7 +312,8 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		configureResultPanel(fs, sess, resultPanel)
 	}
 	h := &retailBattleHUD{
-		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
+		shell: shell,
+		side:  side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
@@ -725,9 +727,6 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// The unit information screen is a child window over the battle
 	// [07 R-HUD-03 §8].
 	h.drawUnitInfo(c)
-	if b != nil {
-		b.drawStatusMessage(c, cur)
-	}
 	var result frame.ResultView
 	if cur != nil {
 		result = cur.Result

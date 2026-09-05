@@ -610,7 +610,29 @@ func (p *Panel) Fires(index int) bool {
 		return false
 	}
 	g := p.Window.Gadgets[index]
-	return g.Kind != gui.KindPanel && p.ActiveOf(g.Name) && g.GrayedOut == 0
+	return kindHasPressHandler(g) && p.ActiveOf(g.Name) && g.GrayedOut == 0
+}
+
+// kindHasPressHandler reports whether a gadget kind's handler accepts a press
+// at all. Buttons [07 R-WGT-01 §3], lists [07 R-WGT-01 §4], sliders
+// [07 R-WGT-01 §5] and text inputs [07 R-WGT-01 §6] do; a label does unless
+// it is inert — attribute 0x10 with no quickkey, which is every label whose
+// `link` is empty [07 R-WGT-01 §7]; a blank surface does only while its
+// `hotornot` word is 1 [07 R-WGT-01 §8]. A picture box blits its frame and
+// returns, a line gadget only draws, and the panel, font and raw-file kinds
+// have no handler [07 R-WGT-01 §8][07 R-WGT-01 §12] — so none of them can
+// take the capture, and a plate authored in front of a column of buttons
+// (the in-battle PREFS.GUI does this) leaves the press to the buttons.
+func kindHasPressHandler(g gui.Gadget) bool {
+	switch g.Kind {
+	case gui.KindButton, gui.KindListBox, gui.KindTextBox, gui.KindScrollBar:
+		return true
+	case gui.KindLabel:
+		return g.Attribs&gui.AttribInert == 0 || g.QuickKey != 0
+	case gui.KindSurface:
+		return g.HotOrNot == 1
+	}
+	return false
 }
 
 // PressTest returns the gadget that takes the pointer capture, or -1.

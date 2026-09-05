@@ -96,6 +96,10 @@ func (h *retailBattleHUD) drawFrontendDialog(c *client.Client, b *battleSession)
 		return
 	}
 	g := b.shell
+	// `PREFS` opens the options root over `ARMOPT`, which the modal chain has
+	// already drawn, and the four merged pages leave the battle visible around
+	// it [07 R-FE-01 §6][07 R-FE-01 §7].
+	h.drawBattleOptionsWindow(c, b)
 	if g.saveLoadPanelActive() && saveLoadPanel != nil {
 		g.drawRetailWindow(c, g.panelMode(saveLoadPanel), saveLoadPanel)
 	}
@@ -159,29 +163,103 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		} else if gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
 			text = gad.Labels[0]
 		}
-		if text != "" && h.modalFont != nil && (gad.Kind == gui.KindButton || gad.Kind == gui.KindLabel) {
-			textWidth := retailGAFTextWidth(h.modalFont, text)
-			x := int(r.X)
-			switch {
-			case gad.Attribs&1 != 0:
-				x += 3
-			case gad.Attribs&4 != 0:
-				x = int(r.X+r.W) - textWidth - 3
-				if x < int(r.X) {
-					x = int(r.X)
-				}
-			case gad.Attribs&2 != 0:
-				x += (int(r.W)-1-textWidth)/2 + 1
-			default:
-				x += 3
-			}
-			if pressed {
-				x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
-			}
-			y := retailTextPenY(gad, r, retailGAFTextHeight(h.modalFont))
-			drawRetailGAFTextClipped(c, h.modalFont, text, x, y, int(r.W), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+		if text == "" || (gad.Kind != gui.KindButton && gad.Kind != gui.KindLabel) {
+			continue
 		}
+		// The painter first selects the FNT the gadget's `fontnumber` picks
+		// from the window's own kind-7 records (number 0 is the first record;
+		// the common font when none matches). A label whose number matched
+		// draws through the FNT drawer directly; a button's caption, and a
+		// label that matched nothing, go through the GAF pen, which reaches
+		// the selected FNT only when the GAF slot is null
+		// [07 R-WGT-01 §6][03 R-FONT-01 §5][03 R-FONT-01 §6]. No stock modal
+		// window authors a font record, so the FNT branches below are the
+		// rule's no-record and null-slot cases made explicit.
+		selected := window.Font(h.fs, gad.FontNumber)
+		if gad.Kind == gui.KindLabel && selected != nil {
+			h.drawModalLabelFNT(c, window, gad, r, text, selected)
+			continue
+		}
+		// The GAF pen's family: the slot's GAF font, else — the null-slot
+		// fallback — the active FNT, which is the selected record or the
+		// common font, drawn with the width limit dropped [03 R-FONT-01 §6].
+		fallback := selected
+		if fallback == nil {
+			fallback = h.guiFont
+		}
+		var textWidth, metric int
+		switch {
+		case h.modalFont != nil:
+			textWidth, metric = retailGAFTextWidth(h.modalFont, text), retailGAFTextHeight(h.modalFont)
+		case fallback != nil:
+			textWidth, metric = client.MeasureText(fallback, text), int(fallback.Height)
+		default:
+			continue
+		}
+		x := int(r.X)
+		switch {
+		case gad.Attribs&1 != 0:
+			x += 3
+		case gad.Attribs&4 != 0:
+			x = int(r.X+r.W) - textWidth - 3
+			if x < int(r.X) {
+				x = int(r.X)
+			}
+		case gad.Attribs&2 != 0:
+			x += (int(r.W)-1-textWidth)/2 + 1
+		default:
+			x += 3
+		}
+		if pressed {
+			x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
+		}
+		y := retailTextPenY(gad, r, metric)
+		if h.modalFont != nil {
+			drawRetailGAFTextClipped(c, h.modalFont, text, x, y, int(r.W), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+			continue
+		}
+		// A button installs map entry `colorf`, which the builder zeroed at
+		// open; a label installs its colour word raw, likewise zero because no
+		// battle modal writes it [03 R-FONT-01 §6].
+		color := byte(0)
+		if gad.Kind == gui.KindButton {
+			color = h.guiColor(0)
+		}
+		c.UITextWidth(fallback, text, x, y, -1, color)
 	}
+}
+
+// drawModalLabelFNT is the label painter's FNT path inside a modal window,
+// taken when the label's `fontnumber` matched one of the window's kind-7
+// records [03 R-FONT-01 §6]: an authored x of -1 centres the text on the
+// window width; attribute bit 4 puts the pen at `gx + w - tw`, bit 2 at
+// `gx + trunc(w/2) - trunc(tw/2)`, else `gx`; the pen Y is `gy`; bit 8 draws
+// the shadow first, one pixel right and three down, in map entry 0; the text
+// then goes through the FNT drawer with no width limit in the label's colour
+// word, which is raw palette index 0 here because the builder zeroes it and
+// no battle modal writes it. The FNT drawer writes unclipped: retail's private
+// window surface bounds it, and no stock modal window authors a font record,
+// so nothing reaches this path with a caption wider than its window.
+func (h *retailBattleHUD) drawModalLabelFNT(c *client.Client, window *gui.Window, gad gui.Gadget, r gui.Rect, text string, font *formats.FNT) {
+	if c == nil || window == nil || font == nil || text == "" {
+		return
+	}
+	tw := client.MeasureText(font, text)
+	gx, gy, w := int(r.X), int(r.Y), int(r.W)
+	if gad.Rect.RawX == -1 {
+		gx = int(window.Rect.X) + (int(window.Rect.W)-tw)/2
+	}
+	penX := gx
+	switch {
+	case gad.Attribs&4 != 0:
+		penX = gx + w - tw
+	case gad.Attribs&2 != 0:
+		penX = gx + w/2 - tw/2
+	}
+	if gad.Attribs&8 != 0 {
+		c.UITextWidth(font, text, penX+1, gy+3, -1, h.guiColor(0))
+	}
+	c.UITextWidth(font, text, penX, gy, -1, 0)
 }
 
 // modalArtResampled reports whether a modal gadget's selected frame is
@@ -225,6 +303,11 @@ func modalArtResampled(kind gui.Kind, frame *formats.GAFFrame, r gui.Rect) bool 
 // grid of corner pieces where retail shows one bordered plate.
 func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Window, page *formats.GAF) {
 	if window == nil || window.Rect.W <= 0 || window.Rect.H <= 0 {
+		return
+	}
+	// A window whose background bitmap the cache installed uses that bitmap
+	// instead of its authored `panel` entry [07 R-WGT-01 §12][08 R-CAMP-01 §8].
+	if window == h.resultWin && h.shell != nil && h.shell.resultBackground != nil {
 		return
 	}
 	entry := h.modalPanelEntry(window.Header.Panel, page)

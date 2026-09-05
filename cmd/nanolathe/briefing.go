@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/render"
 )
 
 // BriefingAction is the semantic command surface of MSNBRIEF.GUI. The
@@ -127,15 +129,31 @@ type campaignBriefingController struct {
 	scroll         int
 	scrollDeadline int64
 	scrollStarted  bool
-	rotateFrame    int
-	lastTick       int64
-	lastWallMS     int64
-	text           string
-	page           int
-	pageLines      int
-	pageCount      int
-	narrationPath  string
-	narrationOn    bool
+	// rotate is the PLANET sequence cursor. The rotator steps it once per
+	// 25 ms of wall clock and the cursor holds each frame for the frame's own
+	// authored duration, so a 36-frame planet at duration 3 turns once every
+	// 2.7 s [08 R-CAMP-01 §2][03 §4.4].
+	rotate       render.Cursor
+	rotateEntry  *formats.GAFEntry
+	rotateNextMS int64
+	rotateSteps  int
+
+	narrationPath string
+	narrationOn   bool
+
+	// text is the authored slot-2 file; wrapped is that text after the
+	// front-end wrapper and the run pre-split; lines are the laid labels of
+	// the current page [07 R-FE-02 §6][07 R-HUD-03 §10][07 R-FE-02 §7].
+	text      string
+	wrapped   string
+	page      int
+	pageLines int
+	pageCount int
+	lines     []briefingTextLine
+	measure   func(string) int
+	// tick is the last scaled-timer sample the screen saw. A blink entry is
+	// registered with a deadline one second ahead of it [07 R-FE-02 §7].
+	tick int64
 
 	request func() (freshBattleRequest, error)
 }
@@ -143,7 +161,7 @@ type campaignBriefingController struct {
 // NewCampaignBriefingController opens one briefing and consumes the two
 // entry CRT draws in their authored order [08 R-CAMP-01 §2][01 §7.3].
 func NewCampaignBriefingController(m *mission.Mission, localSide int, crt briefingRandom, request func() (freshBattleRequest, error)) *campaignBriefingController {
-	b := &campaignBriefingController{mission: m, localSide: localSide, crt: crt, request: request, state: BriefingOpen, lastTick: -1, lastWallMS: -1}
+	b := &campaignBriefingController{mission: m, localSide: localSide, crt: crt, request: request, state: BriefingOpen}
 	if m != nil {
 		b.minWind, b.maxWind = m.WindBounds.Min, m.WindBounds.Max
 		if m.OTA != nil && m.OTA.Global != nil {
@@ -212,6 +230,7 @@ func (b *campaignBriefingController) Update(nowMS, tick int64) {
 	if b == nil || b.state != BriefingOpen {
 		return
 	}
+	b.tick = tick
 	b.countdown--
 	if b.countdown < 1 {
 		b.changeWind()
@@ -222,10 +241,18 @@ func (b *campaignBriefingController) Update(nowMS, tick int64) {
 	if b.panoramaCount > 0 {
 		b.panoramaFrame = int((tick / 3) % int64(b.panoramaCount))
 	}
-	if nowMS-b.lastWallMS >= 25 && tick != b.lastTick {
-		b.rotateFrame++
-		b.lastWallMS, b.lastTick = nowMS, tick
+	// The planet rotator's whole body sits behind one wall-clock gate: it runs
+	// when the current tick count has reached its deadline and then sets the
+	// deadline 25 ms ahead. Each pass takes exactly one sequence step, and a
+	// step only changes the frame once the frame's own duration countdown has
+	// run out, so the rotation rate is the authored duration, not the gate
+	// [08 R-CAMP-01 §2][03 §4.4].
+	if nowMS >= b.rotateNextMS {
+		b.rotateNextMS = nowMS + briefingRotationGateMS
+		b.rotate.Step()
+		b.rotateSteps++
 	}
+	b.stepBlinkWords(tick)
 	if !b.scrollStarted {
 		b.scrollDeadline = tick + 2
 		b.scrollStarted = true
@@ -280,12 +307,13 @@ func (b *campaignBriefingController) Dispatch(action BriefingAction) (BriefingBa
 		b.narrationOn = true
 		return BriefingBattleEvent{Audio: b.startAudio()}, nil
 	case BriefingActionMore:
-		if b.pageCount > 1 {
-			b.page++
-			if b.page >= b.pageCount {
-				b.page = 0
-			}
+		// The pager advances its counter and re-lays the region; a page start
+		// the text does not reach wraps back to page 0 [07 R-HUD-03 §10].
+		b.page++
+		if b.page >= b.pageCount {
+			b.page = 0
 		}
+		b.layPage()
 	}
 	return BriefingBattleEvent{}, nil
 }
@@ -314,50 +342,364 @@ func (b *campaignBriefingController) SetPanoramaFrameCount(count int) {
 	b.panoramaCount = count
 }
 
-// SetText installs the authored slot-2 text. The pager keeps the authored bytes
-// and computes line pages when the renderer supplies the active region height
-// [07 R-HUD-03 §10].
-func (b *campaignBriefingController) SetText(text string) {
+// SetRotationSequence binds the PLANET gadget's rotation sequence. The cursor
+// starts at frame 0 with that frame's duration loaded, and the entry's own loop
+// word decides whether the sequence wraps [08 R-CAMP-01 §2][03 §4.4].
+func (b *campaignBriefingController) SetRotationSequence(entry *formats.GAFEntry) {
+	if b == nil || b.rotateEntry == entry {
+		return
+	}
+	b.rotateEntry = entry
+	b.rotate.Bind(entry, 0, entry != nil && entry.Unknown1 != 0)
+	b.rotateNextMS = 0
+}
+
+// SetTextRegion installs the authored slot-2 text into the pager. `width` and
+// `height` are the TextRegion gadget's authored size, `fontHeight` the height
+// of the font its font index selects, and `measure` that font's width metric —
+// the wrapper, the lines-per-page divide and the run pen all read the same font
+// [07 R-FE-02 §6][07 R-HUD-03 §10].
+func (b *campaignBriefingController) SetTextRegion(text string, width, height, fontHeight int, measure func(string) int) {
 	if b == nil {
 		return
 	}
 	b.text = text
-	b.page = 0
-	b.pageCount = 1
-}
-
-func (b *campaignBriefingController) SetPageLines(lines int) {
-	if b == nil {
-		return
+	b.measure = measure
+	b.wrapped = briefingSplitBlinkRuns(retailWordWrap(text, width, measure))
+	step := fontHeight + 2
+	lines := 1
+	if step > 0 {
+		lines = height / step
 	}
 	if lines < 1 {
 		lines = 1
 	}
 	b.pageLines = lines
-	lineCount := 1 + strings.Count(b.text, "\n")
-	b.pageCount = (lineCount + lines - 1) / lines
-	if b.page >= b.pageCount {
-		b.page = 0
-	}
+	// The pager finds page n by scanning for the `n × linesPerPage`-th newline
+	// and wraps to page 0 when the text has no such newline, so the page count
+	// is one more than the number of whole pages of line ends [07 R-HUD-03 §10].
+	b.pageCount = strings.Count(b.wrapped, "\n")/lines + 1
+	b.page = 0
+	b.layPage()
 }
 
-func (b *campaignBriefingController) pageText() string {
-	if b == nil || b.text == "" {
-		return ""
+// briefingBlinkWordCap is the fifteen-entry blink table the briefing, help and
+// in-battle briefing windows allocate on open [07 R-FE-02 §7].
+const briefingBlinkWordCap = 15
+
+// briefingRotationGateMS is the rotator's wall-clock gate: one sequence step
+// per 25 ms [08 R-CAMP-01 §2].
+const briefingRotationGateMS = 25
+
+// briefingBlinkPhaseB is the second blink colour, palette index 94, shared by
+// every run whatever letter opened it [07 R-FE-02 §7].
+const briefingBlinkPhaseB = 94
+
+// briefingTextRun is one `&X…&` run on a laid line. The pager copies the run's
+// bytes into the line's own label as well, so the run is drawn over the label
+// text it duplicates, alternating between the letter's colour and palette
+// index 94 [07 R-FE-02 §7].
+type briefingTextRun struct {
+	Text string
+	// X is the pen offset from the line's left edge: the measured width of the
+	// label text laid before the run opened.
+	X     int
+	Entry int
+	phase int
+	// deadline is the scaled-timer stamp the phase flips at. The registration
+	// arithmetic is single precision against an integer timer [07 R-FE-02 §7].
+	deadline float32
+}
+
+// briefingTextLine is one emitted label of the current page.
+type briefingTextLine struct {
+	Text string
+	Runs []briefingTextRun
+}
+
+// Color is the run's colour for the phase it is in: the side text-colour entry
+// the opening letter selected, or palette index 94 [07 R-FE-02 §7].
+func (r briefingTextRun) Color(side int) byte {
+	if r.phase != 0 {
+		return briefingBlinkPhaseB
 	}
-	if b.pageLines < 1 {
-		return b.text
+	return briefingSideTextColor(side, r.Entry)
+}
+
+// layPage emits the current page's labels. It clears the blink table first:
+// turning a page frees every entry the previous page registered
+// [07 R-HUD-03 §10][07 R-FE-02 §7].
+func (b *campaignBriefingController) layPage() {
+	if b == nil {
+		return
 	}
-	lines := strings.Split(b.text, "\n")
+	b.lines = nil
+	if b.wrapped == "" || b.pageLines < 1 {
+		return
+	}
+	lines := strings.Split(b.wrapped, "\n")
 	start := b.page * b.pageLines
 	if start >= len(lines) {
-		return lines[len(lines)-1]
+		b.page, start = 0, 0
 	}
 	end := start + b.pageLines
 	if end > len(lines) {
 		end = len(lines)
 	}
-	return strings.Join(lines[start:end], "\n")
+	measure := b.measure
+	if measure == nil {
+		measure = func(string) int { return 0 }
+	}
+	// The open/closed marker state is the pager's, not the line's: it is set
+	// once before the page's first label and carried across the page's lines
+	// [07 R-HUD-03 §10]. The pre-split has already closed and reopened every
+	// run that crossed a line end.
+	open := true
+	runs := 0
+	// An entry is registered in phase A with a deadline one second ahead of the
+	// clock the lay ran on [07 R-FE-02 §7].
+	deadline := float32(b.tick) + float32(briefingPresentationRate)
+	for _, raw := range lines[start:end] {
+		line := briefingLayLine(raw, measure, &open, briefingBlinkWordCap-runs)
+		for i := range line.Runs {
+			line.Runs[i].deadline = deadline
+		}
+		runs += len(line.Runs)
+		b.lines = append(b.lines, line)
+	}
+}
+
+// stepBlinkWords advances every live run's two-phase blink: phase A for one
+// second in the letter's colour, phase B for a quarter second in palette index
+// 94 [07 R-FE-02 §7].
+func (b *campaignBriefingController) stepBlinkWords(tick int64) {
+	if b == nil {
+		return
+	}
+	for i := range b.lines {
+		for j := range b.lines[i].Runs {
+			run := &b.lines[i].Runs[j]
+			if float32(tick) <= run.deadline {
+				continue
+			}
+			run.phase ^= 1
+			period := float32(1.0)
+			if run.phase != 0 {
+				period = 0.25
+			}
+			run.deadline = float32(tick) + float32(briefingPresentationRate)*period
+		}
+	}
+}
+
+// briefingPresentationRate is the configured presentation frame rate the
+// scaled clock is built from [07 R-CAM-01 §1].
+const briefingPresentationRate = 30
+
+// briefingRunColorEntry maps the letter after `&` onto the side text-colour
+// table: `G` is entry 1, `Y` entry 2, `R` entry 3, and any other letter also
+// reads as entry 3 [07 R-HUD-03 §10].
+func briefingRunColorEntry(letter byte) int {
+	switch letter {
+	case 'R':
+		return 3
+	case 'Y':
+		return 2
+	case 'G':
+		return 1
+	default:
+		return 3
+	}
+}
+
+// briefingSideTextColors is the four-entry-per-side text-colour table the
+// briefing, help and end-of-mission pagers draw through. The entries are
+// physical palette indices, not GUI semantic colours, because a kind-5 label
+// installs its colour word raw [03 R-FONT-01 §6][07 R-HUD-03 §10]. Rows past
+// Core repeat the Core row in the executable's own table.
+var briefingSideTextColors = [2][4]byte{
+	{53, 51, 64, 208},
+	{117, 86, 82, 212},
+}
+
+func briefingSideTextColor(side, entry int) byte {
+	if side < 0 || side >= len(briefingSideTextColors) {
+		side = 1
+	}
+	if entry < 0 || entry >= len(briefingSideTextColors[side]) {
+		entry = 0
+	}
+	return briefingSideTextColors[side][entry]
+}
+
+// PlainColor is the colour a laid label draws in: text-colour entry 0 of the
+// local player's side [07 R-HUD-03 §10].
+func (b *campaignBriefingController) PlainColor() byte {
+	if b == nil {
+		return briefingSideTextColor(0, 0)
+	}
+	return briefingSideTextColor(b.localSide, 0)
+}
+
+// CaptionColor is the `MOREBAR` caption colour: text-colour entry 1
+// [07 R-HUD-03 §10].
+func (b *campaignBriefingController) CaptionColor() byte {
+	if b == nil {
+		return briefingSideTextColor(0, 1)
+	}
+	return briefingSideTextColor(b.localSide, 1)
+}
+
+// Lines are the labels of the current page.
+func (b *campaignBriefingController) Lines() []briefingTextLine {
+	if b == nil {
+		return nil
+	}
+	return b.lines
+}
+
+// MoreCaption is the `MOREBAR` caption for the current page: `MORE...` while a
+// further page start exists, `BACK TO START` when it does not and the pager is
+// past page 0, and empty on a single-page text [07 R-HUD-03 §10].
+func (b *campaignBriefingController) MoreCaption() string {
+	if b == nil || b.pageLines < 1 {
+		return ""
+	}
+	if strings.Count(b.wrapped, "\n") >= (b.page+1)*b.pageLines {
+		return "MORE..."
+	}
+	if b.page > 0 {
+		return "BACK TO START"
+	}
+	return ""
+}
+
+// briefingLayLine emits one label from one wrapped line, stripping the `&X` /
+// `&` markers the pager consumes and recording each bracketed run with the pen
+// offset the label text laid before it [07 R-HUD-03 §10][07 R-FE-02 §7].
+// `open` carries the marker state across the page's lines; `budget` is the
+// blink table's remaining capacity.
+func briefingLayLine(raw string, measure func(string) int, open *bool, budget int) briefingTextLine {
+	var out []byte
+	var runs []briefingTextRun
+	for i := 0; i < len(raw); {
+		if raw[i] == '&' {
+			if *open {
+				letter := byte(0)
+				if i+1 < len(raw) {
+					letter = raw[i+1]
+				}
+				if len(runs) < budget {
+					// The run's text is the bytes up to the closing `&`, at
+					// most 127; its pen is the label's own x plus the width of
+					// the label text laid so far [07 R-FE-02 §7].
+					end := i + 2
+					for end < len(raw) && raw[end] != '&' && end-(i+2) < 127 {
+						end++
+					}
+					runs = append(runs, briefingTextRun{
+						Text:  raw[i+2 : end],
+						X:     measure(string(out)),
+						Entry: briefingRunColorEntry(letter),
+					})
+				}
+				*open = false
+				i += 2
+			} else {
+				*open = true
+				i++
+			}
+			if i >= len(raw) {
+				break
+			}
+		}
+		out = append(out, raw[i])
+		i++
+	}
+	return briefingTextLine{Text: string(out), Runs: runs}
+}
+
+// retailWordWrap is the front-end wrapper `MSGBOX`, `RESTART`'s mission name
+// and the briefing text share [07 R-FE-02 §6]. It copies the input byte by
+// byte, stopping at NUL or `0xFF`; after copying a byte whose *successor* is a
+// space, a newline or `-` it measures the current line and, when the measured
+// width has reached `width`, walks back over the copied output and the input
+// together to the nearest earlier space or hyphen, replaces that separator
+// with `CR LF` and restarts the line after it. A literal newline in the input
+// also restarts the line. The test is `>=`, breaks happen only at a space or a
+// hyphen — a word longer than the width is never split — and the separator is
+// consumed.
+func retailWordWrap(text string, width int, measure func(string) int) string {
+	if measure == nil || width <= 0 {
+		return text
+	}
+	src := []byte(text)
+	out := make([]byte, 0, len(src)+16)
+	lineStart := 0
+	for i := 0; i < len(src) && src[i] != 0 && src[i] != 0xFF; {
+		out = append(out, src[i])
+		j := len(out) - 1
+		next := byte(0)
+		if i+1 < len(src) {
+			next = src[i+1]
+		}
+		nextSrc, nextOut := i+1, j+1
+		if next == ' ' || next == '\n' || next == '-' {
+			if lineStart <= j && measure(string(out[lineStart:])) >= width {
+				// The walk-back rewinds the output and the input together to
+				// the separator the line breaks at. Retail's has no line-start
+				// guard: on a word wider than the region it rewinds past an
+				// earlier break to that line's separator, then re-copies the
+				// same word and rewinds to the same place forever. Stopping at
+				// the line start is the termination guard for that hang; its
+				// visible consequence is the documented one either way — a word
+				// longer than the width is never split.
+				back, bi := j, i
+				for back > lineStart && src[bi] != ' ' && src[bi] != '-' {
+					back--
+					bi--
+				}
+				if src[bi] == ' ' || src[bi] == '-' {
+					i, j = bi, back
+					out = append(out[:j], '\r', '\n')
+					nextSrc, nextOut = i+1, j+2
+					lineStart = nextOut
+				}
+			}
+		}
+		i = nextSrc
+		if i < len(src) && src[i] == '\n' {
+			lineStart = nextOut + 1
+		}
+	}
+	return string(out)
+}
+
+// briefingSplitBlinkRuns is the pre-pass the pager runs over the wrapped text:
+// a `&X…&` run that spans a line end is closed before the newline and reopened
+// after it, so each line blinks on its own [07 R-FE-02 §7].
+func briefingSplitBlinkRuns(text string) string {
+	src := []byte(text)
+	out := make([]byte, 0, len(src)+16)
+	open := false
+	letter := byte(0)
+	for i := 0; i < len(src) && src[i] != 0xFF; i++ {
+		out = append(out, src[i])
+		if src[i] == '&' {
+			if i+1 < len(src) {
+				letter = src[i+1]
+			}
+			open = !open
+		}
+		if src[i] == '\n' && open && len(out) >= 2 {
+			// The newline's own slot becomes `CR`, the byte before it the
+			// closing `&`, and the reopening `&` plus its letter follow.
+			out[len(out)-2] = '&'
+			out[len(out)-1] = '\r'
+			out = append(out, '\n', '&', letter)
+		}
+	}
+	return string(out)
 }
 
 func (b *campaignBriefingController) State() BriefingState {
@@ -383,7 +725,24 @@ func (b *campaignBriefingController) PlanetIndex() int {
 
 func (b *campaignBriefingController) WindSpeed() int32     { return b.windSpeed }
 func (b *campaignBriefingController) WindCountdown() int32 { return b.countdown }
-func (b *campaignBriefingController) RotationFrame() int   { return b.rotateFrame }
 func (b *campaignBriefingController) PanoramaFrame() int   { return b.panoramaFrame }
 func (b *campaignBriefingController) Page() int            { return b.page }
 func (b *campaignBriefingController) NarrationOn() bool    { return b.narrationOn }
+
+// RotationFrame is the PLANET sequence's current frame index.
+func (b *campaignBriefingController) RotationFrame() int {
+	if b == nil {
+		return 0
+	}
+	return b.rotate.Idx
+}
+
+// RotationSteps counts the rotator passes taken, which is what the 25 ms gate
+// bounds; the frame index moves more slowly than this by each frame's own
+// duration [08 R-CAMP-01 §2].
+func (b *campaignBriefingController) RotationSteps() int {
+	if b == nil {
+		return 0
+	}
+	return b.rotateSteps
+}

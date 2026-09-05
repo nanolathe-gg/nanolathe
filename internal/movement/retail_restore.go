@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // RestoreMover applies the fixed mover extension from a saved unit.  The
@@ -49,6 +50,15 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 	if st := s.Steers[h]; st != nil {
 		st.Speed = c.Speed
 	}
+	// The velocity triple the save carries at words 0..2 [08 R-SAVE-02 §8] is
+	// the mover's, and the unit-side mirror the pre-fire lead of [06 §3.3]
+	// reads has to come back with it: without this write a restored battle
+	// leads every veteran's shot by whatever the mirror held before the
+	// restore. The first mover tick after the restore refreshes it, so the gap
+	// this write closes is the weapon phase that runs before that tick.
+	u.Move.VelX = numeric.Fixed(int64(c.VX))
+	u.Move.VelY = numeric.Fixed(int64(c.VY))
+	u.Move.VelZ = numeric.Fixed(int64(c.VZ))
 	// The saved route/follower/proposal records are not present in a standard
 	// battle save.  Ensure no pre-restore request or stale route survives.
 	s.CancelPathRequest(h)
