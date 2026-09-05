@@ -648,6 +648,8 @@ const (
 	EventKindStatus
 )
 
+// String names the event kind for diagnostics; an out-of-range value reads as
+// "invalid".
 func (k EventKind) String() string {
 	names := [...]string{"invalid", "cob_sfx", "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "shake", "corpse", "audio", "status"}
 	if int(k) >= len(names) {

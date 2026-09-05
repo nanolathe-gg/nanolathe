@@ -1,5 +1,6 @@
-// Package render implements minimap/radar surfaces [03 §3.4][07 §10][03 §3.6–§3.12].
 package render
+
+// Minimap and radar surfaces [03 §3.4][07 §10][03 §3.6–§3.12].
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -99,7 +100,7 @@ func BuildRadarPicture(t *world.Terrain, playW, playH int32, m camera.Minimap, b
 	bits := make([]byte, w*h)
 
 	// Baked path: rescale through the established picture path [03 §3.7].
-	if baked != nil && len(baked) > 0 {
+	if len(baked) > 0 {
 		if bakedW <= 0 || bakedH <= 0 || bakedW > len(baked)/bakedH {
 			return nil
 		}
@@ -328,7 +329,7 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 			if word&mask == 0 {
 				out = dcb // [03 §3.8] unexplored → configured fog fill
 			} else if bVal == 0 {
-				if guiRemap != nil && len(guiRemap) == 256 {
+				if len(guiRemap) == 256 {
 					out = guiRemap[src] // [03 §3.8] GUI remap
 				} else {
 					out = src // no remap when nil [03 §3.8]

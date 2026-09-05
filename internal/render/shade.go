@@ -1,4 +1,6 @@
-// Package render — SHD row constants and the DONT_SHADE identity row
+package render
+
+// SHD row constants and the DONT_SHADE identity row
 // [03 §4.3][03 R-RAST-01 §5].
 //
 // [03 §4.3] PALETTE.SHD is 8192 bytes: 32 rows × 256 entries for
@@ -14,8 +16,6 @@
 // the one call site that read the singular ShadeRow field used it only as a
 // != NoShadeRow boolean gate, never as a numeric row. Row 16 is not a
 // retail value anywhere; it must not survive as a reachable default.
-
-package render
 
 // Shading is the presentation-level model-shading display option: with it set,
 // a unit whose class bit says structure (`BMcode=0`) draws through the shaded

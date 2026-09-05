@@ -118,13 +118,6 @@ func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
 // Dead code that reads like a contract is how an invention outlives the session
 // that wrote it (AGENTS.md rule 1), so it is removed rather than left.
 
-func abs(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
-}
-
 // headingCosSin returns fixed-point-ish cos/sin for a 65536-per-circle angle.
 func headingCosSin(h uint16) (float64, float64) {
 	const twoPi = 6.283185307179586

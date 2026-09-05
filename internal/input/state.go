@@ -13,12 +13,22 @@ type MouseState struct {
 	moved            bool
 }
 
-func (m *MouseState) Pressed(b MouseButton) bool  { return m != nil && m.edges[b] }
-func (m *MouseState) Released(b MouseButton) bool { return m != nil && m.released[b] }
-func (m *MouseState) Held(b MouseButton) bool     { return m != nil && m.buttons[b] }
-func (m *MouseState) Scrolled() bool              { return m != nil && m.scrolled }
-func (m *MouseState) Moved() bool                 { return m != nil && m.moved }
+// Pressed reports the press edge of b in this host frame.
+func (m *MouseState) Pressed(b MouseButton) bool { return m != nil && m.edges[b] }
 
+// Released reports the release edge of b in this host frame.
+func (m *MouseState) Released(b MouseButton) bool { return m != nil && m.released[b] }
+
+// Held reports whether b is down.
+func (m *MouseState) Held(b MouseButton) bool { return m != nil && m.buttons[b] }
+
+// Scrolled reports whether the wheel moved in this host frame.
+func (m *MouseState) Scrolled() bool { return m != nil && m.scrolled }
+
+// Moved reports whether the pointer position changed in this host frame.
+func (m *MouseState) Moved() bool { return m != nil && m.moved }
+
+// SetPosition records the pointer position and derives the moved flag.
 func (m *MouseState) SetPosition(x, y float32) {
 	if m == nil {
 		return
@@ -40,6 +50,7 @@ func (m *MouseState) SetButton(btn MouseButton, down bool) {
 	m.buttons[b] = down
 }
 
+// SetWheel records this host frame's wheel delta and the scrolled flag.
 func (m *MouseState) SetWheel(dx, dy float32) {
 	if m == nil {
 		return
@@ -48,6 +59,8 @@ func (m *MouseState) SetWheel(dx, dy float32) {
 	m.ScrollX, m.ScrollY = dx, dy
 }
 
+// ResetEdges clears the per-host-frame edges: press, release, wheel and
+// movement. Held button state survives.
 func (m *MouseState) ResetEdges() {
 	if m == nil {
 		return
@@ -59,6 +72,7 @@ func (m *MouseState) ResetEdges() {
 	m.ScrollX, m.ScrollY = 0, 0
 }
 
+// ButtonState is Held as the 0/1 word the authored controls compare against.
 func (m *MouseState) ButtonState(b MouseButton) int {
 	if m != nil && m.Held(b) {
 		return 1
@@ -66,15 +80,23 @@ func (m *MouseState) ButtonState(b MouseButton) int {
 	return 0
 }
 
+// KeyboardState is the per-host-frame key sample: one press edge and one held
+// bit per key in the platform-neutral vocabulary [07 §2].
 type KeyboardState struct {
 	edges [KeyCount]bool
 	held  [KeyCount]bool
 }
 
-func (k *KeyboardState) HasShift() bool       { return k != nil && k.held[KeyShift] }
+// HasShift reports whether either shift key is down.
+func (k *KeyboardState) HasShift() bool { return k != nil && k.held[KeyShift] }
+
+// KeyDown reports the press edge of key in this host frame.
 func (k *KeyboardState) KeyDown(key Key) bool { return k != nil && key < KeyCount && k.edges[key] }
+
+// KeyHeld reports whether key is down.
 func (k *KeyboardState) KeyHeld(key Key) bool { return k != nil && key < KeyCount && k.held[key] }
 
+// SetKey records a key and derives its press edge.
 func (k *KeyboardState) SetKey(key Key, down bool) {
 	if k == nil || key >= KeyCount {
 		return
@@ -84,6 +106,7 @@ func (k *KeyboardState) SetKey(key Key, down bool) {
 	k.held[key] = down
 }
 
+// ResetEdges clears the per-host-frame press edges. Held state survives.
 func (k *KeyboardState) ResetEdges() {
 	if k != nil {
 		k.edges = [KeyCount]bool{}
@@ -98,9 +121,13 @@ type State struct {
 	Kbd   *KeyboardState
 }
 
+// NewState returns an empty host-frame sample with both halves allocated.
 func NewState() *State { return &State{Mouse: &MouseState{}, Kbd: &KeyboardState{}} }
 
+// MouseButtons is the three-button held state carried by a Sample.
 type MouseButtons struct{ Left, Middle, Right bool }
+
+// Modifiers is the modifier-key held state carried by a Sample.
 type Modifiers struct{ Shift, Ctrl, Alt bool }
 
 // Sample is a platform-neutral semantic input value. PressedKeys are edge

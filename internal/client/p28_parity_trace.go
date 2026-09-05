@@ -531,8 +531,3 @@ func (c *Client) SetRendererTraceFilter(filter RendererTraceFilter) {
 		c.rendererTraceFilter = filter
 	}
 }
-
-// SetParityRendererSink is a descriptive alias for fixture callers.
-func (c *Client) SetParityRendererSink(sink RendererTraceSink) {
-	c.SetRendererTraceSink(sink)
-}

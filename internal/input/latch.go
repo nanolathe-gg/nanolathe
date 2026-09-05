@@ -1,10 +1,11 @@
+package input
+
 // Latch constants are the armed-order latch byte values [GAP T22].
 //
 // The latch byte holds values that are literally the order-dispatcher switch
 // keys (a 14-entry table indexed by value minus one) [07 §9]. They decide
 // authorization while the cursor index decides shape; the two coincide
 // numerically only by table offset and must not be conflated [07 §8].
-package input
 
 // Latch is the armed-order latch byte [GAP T22][07 §9].
 type Latch byte

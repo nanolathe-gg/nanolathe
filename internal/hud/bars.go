@@ -73,11 +73,6 @@ func HealthBarFill(anchor Rect, fraction float32) Rect {
 	return BarFillHorizontal(anchor, fraction)
 }
 
-// ReloadBarFill is the RELOAD1..3 geometry left-to-right [02 §6] [07 §6].
-func ReloadBarFill(anchor Rect, fraction float32) Rect {
-	return BarFillHorizontal(anchor, fraction)
-}
-
 // EnergyBarFromAnchors is a convenience: fetch ENERGYBAR anchor by index and fill.
 func EnergyBarFromAnchors(a Anchors, fraction float32) Rect {
 	r, _ := a.ByIndex(AnchorEnergyBar)
@@ -93,12 +88,6 @@ func MetalBarFromAnchors(a Anchors, fraction float32) Rect {
 // HealthBarFromAnchors fetches DAMAGEBAR and fills [02 §6] [07 §6].
 func HealthBarFromAnchors(a Anchors, fraction float32) Rect {
 	r, _ := a.ByIndex(AnchorDamageBar)
-	return HealthBarFill(r, fraction)
-}
-
-// HealthBar2FromAnchors fetches DAMAGEBAR2.
-func HealthBar2FromAnchors(a Anchors, fraction float32) Rect {
-	r, _ := a.ByIndex(AnchorDamageBar2)
 	return HealthBarFill(r, fraction)
 }
 

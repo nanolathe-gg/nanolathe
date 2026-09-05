@@ -252,7 +252,7 @@ func runCensus(defs map[string]*content.FeatureDef, loadGAF func(string) *format
 }
 
 func defaultAssetRoot() string {
-	if configured := os.Getenv("OPENTA_TA_ROOT"); configured != "" {
+	if configured := os.Getenv("NANOLATHE_TA_ROOT"); configured != "" {
 		return configured
 	}
 	home, err := os.UserHomeDir()

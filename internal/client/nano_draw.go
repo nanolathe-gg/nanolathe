@@ -20,6 +20,7 @@ import (
 // retail CRT stream but isolated from the authoritative session CRT [DET-01].
 type presentationRNG struct{ state uint32 }
 
+// Rand draws one value from this presentation-only CRT copy [01 §7.2] [I4].
 func (p *presentationRNG) Rand() int32 {
 	p.state = p.state*214013 + 2531011
 	return int32((p.state >> 16) & 0x7FFF)

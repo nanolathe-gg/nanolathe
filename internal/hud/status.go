@@ -156,30 +156,6 @@ func SnapshotStatus(f *frame.Frame, localPlayer uint8, selected []pool.Handle) S
 	}
 }
 
-// HUDStatus is an explicit-name alias useful at integration call sites.
-func HUDStatus(f *frame.Frame, localPlayer uint8, selected []pool.Handle) Status {
-	return SnapshotStatus(f, localPlayer, selected)
-}
-
-// StatusForFrame is a descriptive alias for SnapshotStatus.
-func StatusForFrame(f *frame.Frame, localPlayer uint8, selected []pool.Handle) Status {
-	return SnapshotStatus(f, localPlayer, selected)
-}
-
-// SelectedStatusFor returns the first selected local unit's status. Build and
-// factory fields come only from BuildProgress and OrderQueue publications;
-// health falls back to the selected UnitView when no construction target is
-// published.
-func SelectedStatusFor(f *frame.Frame, localPlayer uint8, selected []pool.Handle) SelectedStatus {
-	if f == nil {
-		return SelectedStatus{}
-	}
-	if selected == nil && f.Selection.LocalPlayer == localPlayer {
-		selected = f.Selection.Handles
-	}
-	return selectedStatus(f, localPlayer, selected)
-}
-
 func selectedStatus(f *frame.Frame, localPlayer uint8, selected []pool.Handle) SelectedStatus {
 	for _, handle := range selected {
 		if handle == 0 {
@@ -334,12 +310,6 @@ func orderStatus(o frame.OrderView) OrderStatus {
 		List: o.List, Index: o.Index, State: o.State, MoveState: o.MoveState, BuildProduct: o.BuildProduct}
 }
 
-// CanonicalOrderStatus returns the descriptor name as published by the
-// snapshot, trimmed but otherwise unchanged. Descriptor names are already
-// canonical content keys; unknown names remain unknown rather than being
-// mapped to a guessed display label.
-func CanonicalOrderStatus(o frame.OrderView) OrderStatus { return orderStatus(o) }
-
 func canonicalOrderName(name string) (string, string) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -396,9 +366,6 @@ func ResourceStatusFor(f *frame.Frame, player uint8) ResourceStatus {
 // FormatCurrent applies retail's integer conversion to a stock/capacity value.
 // Go's int(float32) truncates toward zero, matching __ftol [01 §8].
 func FormatCurrent(value float32) string { return fmt.Sprintf("%d", int(value)) }
-
-// FormatStock is an alias for the integer stock/capacity formatter.
-func FormatStock(value float32) string { return FormatCurrent(value) }
 
 // FormatEnergyRate formats a signed energy value as an integer, with a
 // truncated integer K suffix outside the inclusive -99999..99999 range

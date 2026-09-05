@@ -1,5 +1,6 @@
-// Package hud — queued build-site marker geometry [07 §9].
 package hud
+
+// Queued build-site marker geometry [07 §9].
 
 // BuildMarkerSweepTicks is the length of the build-site marker's sweep in
 // simulation ticks [07 §9]. Retail clamps the order's age into 0..10 and

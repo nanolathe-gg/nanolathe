@@ -282,22 +282,17 @@ func decodeDIGI(alias string, data []byte) (*Sample, error) {
 //
 // Retail has no eviction at all: "samples are cached at the alias level: one
 // decoded PCM blob per alias, retained for the life of the session, with no
-// eviction beyond the alias cap of §8.3", and the same paragraph names the
-// FIFO-255 cache below as "a documented divergence, not retail
-// secondary-buffer eviction" [03 §8.2 "Caching"]. So the retained session
-// cache is the retail behavior and the bounded FIFO one exists only for
-// explicitly bounded test caches; the 255 comes from the [02 "Sound aliases"]
-// alias cap, not from a cache size retail authors.
-
+// eviction beyond the alias cap of §8.3" [03 §8.2 "Caching"]. That is the only
+// behavior here. A bounded FIFO-255 variant used to stand beside it, reachable
+// only from a test constructor, and the same paragraph named it "a documented
+// divergence, not retail secondary-buffer eviction"; it is gone. The alias cap
+// itself is the registry's, from [02 "Sound aliases"], not a cache size.
+//
+// Insertion order is preserved so the alias census is deterministic [I1].
 type SampleCache struct {
-	fs  vfs.FSOps
-	cap int
-	// retained is true for the registry-owned session cache.  Explicitly
-	// bounded test caches retain the historical eviction helper, while live
-	// aliases remain resident until teardown [03 §8.2].
-	retained bool
-	order    []string // canonical aliases oldest→newest, stable iteration (I1)
-	index    map[string]*Sample
+	fs    vfs.FSOps
+	order []string // canonical aliases oldest→newest, stable iteration (I1)
+	index map[string]*Sample
 }
 
 // SetFS updates VFS resolution for an existing cache without discarding
@@ -308,38 +303,9 @@ func (c *SampleCache) SetFS(fs vfs.FSOps) {
 	}
 }
 
-// NewCache creates a cache resolving through fs and capped at 255 [GAP T14] C20.
+// NewCache creates the session cache, resolving through fs.
 func NewCache(fs vfs.FSOps) *SampleCache {
-	return &SampleCache{fs: fs, cap: 255, retained: true, index: make(map[string]*Sample)}
-}
-
-// NewCacheWithCap creates a cache with explicit cap for tests. Cap <=0 means 255.
-func NewCacheWithCap(fs vfs.FSOps, cap int) *SampleCache {
-	if cap <= 0 {
-		cap = 255
-	}
-	return &SampleCache{
-		fs:    fs,
-		cap:   cap,
-		index: make(map[string]*Sample),
-	}
-}
-
-// NewEvictingCache is a diagnostic/test helper for callers that explicitly
-// need a bounded cache. The live alias registry never uses this mode.
-func NewEvictingCache(fs vfs.FSOps, cap int) *SampleCache {
-	if cap <= 0 {
-		cap = 255
-	}
-	return &SampleCache{fs: fs, cap: cap, index: make(map[string]*Sample)}
-}
-
-// Cap returns the capacity.
-func (c *SampleCache) Cap() int {
-	if c == nil {
-		return 0
-	}
-	return c.cap
+	return &SampleCache{fs: fs, index: make(map[string]*Sample)}
 }
 
 // Len returns the number of cached samples.
@@ -387,12 +353,6 @@ func (c *SampleCache) putSample(alias string, s *Sample) *Sample {
 		// update in place, preserve order position
 		c.index[k] = s
 		return existing
-	}
-	if !c.retained && len(c.order) >= c.cap {
-		// deterministic FIFO eviction oldest-first (I1)
-		oldest := c.order[0]
-		delete(c.index, oldest)
-		c.order = c.order[1:]
 	}
 	c.index[k] = s
 	c.order = append(c.order, k)

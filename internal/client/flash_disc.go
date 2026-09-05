@@ -157,6 +157,8 @@ type flashRand struct {
 	drawn int
 }
 
+// Rand draws one value from this private CRT copy and counts the draw
+// [01 §7.2] [I4].
 func (r *flashRand) Rand() int32 {
 	r.state = r.state*214013 + 2531011
 	r.drawn++

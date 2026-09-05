@@ -27,26 +27,6 @@ type Pan struct {
 	X, Y, Z int32
 }
 
-// DistanceBounds returns the two distances the positional helper installs on
-// the device before a 3-D placement: the minimum is the viewport's half
-// extent, the maximum the map's extent, both in 16-pixel units
-// [R-AUD-01 §1 "the 3-D placement"]:
-//
-//	minDist = trunc((viewH + viewW) / 2) * 16
-//	maxDist = (mapW + mapH) * 16
-//
-// Correction. This replaces a MixerCenter helper that returned
-// `(mapW + mapH) / 2 << 4` twice as a "mixer reference centre". That reading
-// came from §8.3's original text, and [R-AUD-01 §1] retracted it: the buffers
-// are DS3D buffers, the vector is a position, and the two floats the helper
-// writes are the DS3D minimum and maximum distance. The old helper had no
-// caller, so only the formula changes.
-func DistanceBounds(v Viewport) (minDist, maxDist int32) {
-	minDist = ((v.Height + v.Width) / 2) * 16
-	maxDist = (v.MapW + v.MapH) * 16
-	return minDist, maxDist
-}
-
 // ComputePan returns the retail pan vector for a world position in 16.16
 // fixed point. It mirrors the stereo branch:
 //

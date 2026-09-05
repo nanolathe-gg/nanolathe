@@ -206,6 +206,8 @@ func (q *Queue) SetCRTRandom(r *rng.CRT) {
 	}
 }
 
+// CRTRandom is the presentation copy of the CRT stream this queue draws
+// variant selections from, nil when none was installed [I4].
 func (q *Queue) CRTRandom() *rng.CRT {
 	if q == nil {
 		return nil

@@ -34,22 +34,6 @@ func ProductArmsPlacement(def *content.UnitDef) bool {
 	return def != nil && !def.BMCode
 }
 
-// IsMobileBuilder reports a mobile builder that should arm placement [07 §9][04 §3.4] 0xE.
-func IsMobileBuilder(def *content.UnitDef) bool {
-	if def == nil {
-		return false
-	}
-	return def.Builder && def.CanMove
-}
-
-// IsFactoryBuilder reports an immobile builder (factory) that queues directly [07 §9].
-func IsFactoryBuilder(def *content.UnitDef) bool {
-	if def == nil {
-		return false
-	}
-	return def.Builder && !def.CanMove
-}
-
 // BuildProductsFor returns the authored build list for a builder key [02 "Build-menu catalog keys"].
 // It is the sole source of product names; GUI may not invent products absent here [R-P0-03].
 func BuildProductsFor(cat *content.Catalog, builderKey string) []string {

@@ -1,8 +1,9 @@
+package input
+
 // Platform-neutral key and mouse-button vocabulary.
 //
 // These mirror the retail virtual-key roles (movement, modifiers, arrows)
 // without binding presentation to any one window system [07 §2].
-package input
 
 // Key identifies a keyboard key for the windowed client paths.
 type Key uint8

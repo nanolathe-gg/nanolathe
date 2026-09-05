@@ -1,5 +1,6 @@
-// Package render implements GAF cursor playback [03 §4.4][07 §8] (C8).
 package render
+
+// GAF cursor playback [03 §4.4][07 §8] (C8).
 
 import (
 	"strings"

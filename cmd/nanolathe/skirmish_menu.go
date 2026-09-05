@@ -1,10 +1,6 @@
 package main
 
-import (
-	"strings"
-
-	"github.com/nanolathe/nanolathe/internal/session"
-)
+import "github.com/nanolathe/nanolathe/internal/session"
 
 const (
 	resourceMin  = 200
@@ -91,16 +87,6 @@ func (g *gameShell) setOpponentCount(opponents int) {
 	}
 }
 
-func clampResource(value int) int {
-	if value < resourceMin {
-		return resourceMin
-	}
-	if value > resourceMax {
-		return resourceMax
-	}
-	return value
-}
-
 func decreaseResource(value int) int {
 	value -= resourceStep
 	if value < resourceMin {
@@ -120,69 +106,6 @@ func increaseResource(value int) int {
 		return 500
 	}
 	return value
-}
-
-func nextPlayerColor(cfg session.SkirmishConfig, slot, delta int) int {
-	used := [session.SkirmishMaxPlayers]bool{}
-	for i := 0; i < cfg.NumPlayers && i < session.SkirmishMaxPlayers; i++ {
-		if i != slot && cfg.Players[i].Color >= 0 && cfg.Players[i].Color < len(used) {
-			used[cfg.Players[i].Color] = true
-		}
-	}
-	for n := 0; n < len(used); n++ {
-		candidate := cycleInt(cfg.Players[slot].Color, 0, len(used)-1, delta*(n+1))
-		if !used[candidate] {
-			return candidate
-		}
-	}
-	return cfg.Players[slot].Color
-}
-
-func compactMenuError(s string) string {
-	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 72 {
-		return s[:72]
-	}
-	return s
-}
-
-func sideName(side int) string {
-	if side&1 == 1 {
-		return "CORE"
-	}
-	return "ARM"
-}
-
-func difficultyName(value int) string {
-	switch value {
-	case 0:
-		return "EASY"
-	case 2:
-		return "HARD"
-	default:
-		return "MEDIUM"
-	}
-}
-
-func locationName(value int) string {
-	if value == 0 {
-		return "RANDOM"
-	}
-	return "FIXED"
-}
-
-func commanderDeathName(value int) string {
-	if value == 0 {
-		return "CONTINUE"
-	}
-	return "ENDS"
-}
-
-func mappingName(value int) string {
-	if value == 0 {
-		return "VISIBLE"
-	}
-	return "EXPLORE"
 }
 
 func lineOfSightName(enabled, losType int) string {

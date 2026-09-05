@@ -391,105 +391,6 @@ func TestFogBorderFixups(t *testing.T) {
 	}
 }
 
-// testFogBorderFixupsLegacy retains the former producer fixture as a record of
-// the superseded split implementation; edge behavior is now covered by the
-// visibility window builder and this package tests only translation.
-func testFogBorderFixupsLegacy(t *testing.T) {
-	build := func(ops []FogOp) map[[2]int32]FogOp {
-		m := make(map[[2]int32]FogOp)
-		for _, op := range ops {
-			if op.Channel0 == 0 {
-				continue
-			}
-			m[[2]int32{op.GridX, op.GridY}] = op
-		}
-		return m
-	}
-
-	// Single unexplored tile (1,0) in the top row; everything else visible.
-	// Nil camera enumerates the full grid plus the one-cell void ring.
-	cache := testFogCache(t, 4, 4)
-	cache.SetChannel(1, 0, 1, 0)
-	byCell := build(BuildFogOpsInto(nil, cache, nil, 0, 0, 4, 4, nil, false))
-	// Void cell west of the tile: seed bit8 (tile (1,0) is its SE source),
-	// top fixup adds bit2 => 10.
-	op, ok := byCell[[2]int32{0, -1}]
-	if !ok || op.Channel0 != 10 || op.Kind != FogKindGAFCh0 || op.Frame != 9 {
-		t.Fatalf("north void cell (0,-1) want ch0=10 GAFCh0 frame9, got %+v (ok=%v)", op, ok)
-	}
-	// Void cell above the tile: seed bit4, top fixup adds bit1 => 5.
-	op, ok = byCell[[2]int32{1, -1}]
-	if !ok || op.Channel0 != 5 || op.Kind != FogKindGAFCh0 || op.Frame != 4 {
-		t.Fatalf("north void cell (1,-1) want ch0=5 GAFCh0 frame4, got %+v (ok=%v)", op, ok)
-	}
-	// No void op beyond the tile's leak radius.
-	if op, ok := byCell[[2]int32{2, -1}]; ok {
-		t.Fatalf("north void cell (2,-1) want none, got %+v", op)
-	}
-	// In-map tile cell carries only its own bit1.
-	if got := byCell[[2]int32{1, 0}].Channel0; got != 1 {
-		t.Fatalf("in-map (1,0) want ch0=1 got %d", got)
-	}
-	// Whole top row unexplored: void cells collect bit4+bit8 seeds and the
-	// top fixup adds bit1+bit2 => 15 short-circuit (solid black over void);
-	// the NW void corner also collects the left fixup (still 15).
-	cache = testFogCache(t, 4, 4)
-	for x := int32(0); x < 4; x++ {
-		cache.SetChannel(x, 0, 1, 0)
-	}
-	byCell = build(BuildFogOpsInto(nil, cache, nil, 0, 0, 4, 4, nil, false))
-	for x := int32(0); x < 4; x++ {
-		op, ok := byCell[[2]int32{x, -1}]
-		if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
-			t.Fatalf("north void cell (%d,-1) want ch0=15 SolidDark, got %+v (ok=%v)", x, op, ok)
-		}
-	}
-	if op, ok = byCell[[2]int32{-1, -1}]; !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
-		t.Fatalf("NW void corner want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
-	}
-	// West void column at row 0: seed bit2 from tile (0,0), left fixup adds bit1 => 3.
-	op, ok = byCell[[2]int32{-1, 0}]
-	if !ok || op.Channel0 != 3 {
-		t.Fatalf("west void cell (-1,0) want ch0=3, got %+v (ok=%v)", op, ok)
-	}
-	// In-map top row cells: own bit1 plus bit2 from the east neighbour tile;
-	// the last column gets bit2 from the right-edge fixup instead (its own
-	// tile is fogged and the fixup marks the void tile east of it) — all 3.
-	for x := int32(0); x < 4; x++ {
-		if got := byCell[[2]int32{x, 0}].Channel0; got != 3 {
-			t.Fatalf("in-map (%d,0) want ch0=3 got %d", x, got)
-		}
-	}
-	// South/east void stays untouched; no ops anywhere with GridY>=4/GridX>=4.
-	for cell := range byCell {
-		if cell[0] >= 4 || cell[1] >= 4 {
-			t.Fatalf("unexpected south/east void op at %v", cell)
-		}
-	}
-
-	// Bottom row unexplored: bottom fixup (row endY-2 == 3) thickens toward
-	// the map edge: cell (0,3) = 1|2 then +4|8 => 15; cell (3,3) = 1 then +4,
-	// right fixup adds bit2 => 7.
-	cache = testFogCache(t, 4, 4)
-	for x := int32(0); x < 4; x++ {
-		cache.SetChannel(x, 3, 1, 0)
-	}
-	byCell = build(BuildFogOpsInto(nil, cache, nil, 0, 0, 4, 4, nil, false))
-	op, ok = byCell[[2]int32{0, 3}]
-	if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
-		t.Fatalf("bottom edge cell (0,3) want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
-	}
-	// Corner cell compounds both fixups in retail order (bottom: bit1→bit4;
-	// right: bit4→bit8 and bit1→bit2) => 15.
-	op, ok = byCell[[2]int32{3, 3}]
-	if !ok || op.Channel0 != 15 || op.Kind != FogKindSolidDark {
-		t.Fatalf("bottom-right cell (3,3) want ch0=15 SolidDark, got %+v (ok=%v)", op, ok)
-	}
-	if _, ok := byCell[[2]int32{0, 4}]; ok {
-		t.Fatalf("south void cell (0,4) must have no ch0 op")
-	}
-}
-
 // TestFogDeterminism verifies stable deterministic output across runs [I1].
 func TestFogDeterminism(t *testing.T) {
 	cache := testFogCache(t, 4, 4)
@@ -604,7 +505,7 @@ func TestFogVariantSelection(t *testing.T) {
 func TestFogEmptyCacheAndNil(t *testing.T) {
 	cam := &camera.Camera{X: 0, Z: 0, ViewW: 640, ViewH: 480, MapW: 128, MapH: 128}
 	ops := BuildFogOpsInto(nil, nil, cam, cam.ViewW, cam.ViewH, 4, 4, nil, false)
-	if ops != nil && len(ops) != 0 {
+	if len(ops) != 0 {
 		t.Fatalf("nil cache should yield nil/empty")
 	}
 	ops = BuildFogOpsInto(nil, testFogCache(t, 2, 2), nil, 0, 0, 2, 2, nil, false)

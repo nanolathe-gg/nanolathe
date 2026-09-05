@@ -1,5 +1,6 @@
-// Package render implements the fixed effect pool [03 §1] C5.
 package render
+
+// The fixed effect pool [03 §1] C5.
 
 import (
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -449,15 +450,3 @@ func sameEndpoint(a, b, c, d pool.Handle) bool {
 // views. It mirrors the fixed pool capacity [03 §1] C5 but is intentionally
 // separate from the strip's 400-object eviction bound [R-P0-06].
 const SnapshotEffectsCapacity = FixedEffectCap
-
-// SnapshotEffectIsVisual reports whether an EffectView originates from a
-// visual event kind that should be drawn in the world pass. Shake and sound
-// are consumed via Frame.Events, not via the effect strip [03 §5.6][03 §8.3].
-func SnapshotEffectIsVisual(kind string) bool {
-	switch kind {
-	case "nanolathe", "muzzle_flash", "smoke_start", "smoke_end", "projectile_trail", "impact", "water_impact", "explosion", "lht_flash", "cob_sfx", "corpse":
-		return true
-	default:
-		return false
-	}
-}

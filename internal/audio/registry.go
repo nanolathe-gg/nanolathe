@@ -40,10 +40,13 @@ type Registry struct {
 	count int
 }
 
+// NewRegistry creates the alias table with its own session sample cache,
+// resolving files through fs [02 "Sound aliases"].
 func NewRegistry(fs vfs.FSOps) *Registry {
 	return &Registry{fs: fs, cache: NewCache(fs)}
 }
 
+// Cache is the registry's decoded-sample store.
 func (r *Registry) Cache() *SampleCache {
 	if r == nil {
 		return nil
@@ -146,6 +149,8 @@ func (r *Registry) RegisterPath(name, soundPath string) AliasID {
 	return r.register(name, soundPath)
 }
 
+// Lookup returns the id registered for an alias name, MissingAlias when the
+// name is not registered. Names compare case-insensitively at 32 bytes.
 func (r *Registry) Lookup(name string) AliasID {
 	if r == nil {
 		return MissingAlias
@@ -159,6 +164,7 @@ func (r *Registry) Lookup(name string) AliasID {
 	return MissingAlias
 }
 
+// Count is the number of registered aliases.
 func (r *Registry) Count() int {
 	if r == nil {
 		return 0
@@ -166,6 +172,8 @@ func (r *Registry) Count() int {
 	return r.count
 }
 
+// Entry returns the registration for an id, and false for id 0 or an id past
+// the registered count.
 func (r *Registry) Entry(id AliasID) (Alias, bool) {
 	if r == nil || id == 0 || id >= AliasID(aliasCapacity) || int(id) > r.count {
 		return Alias{}, false
@@ -240,6 +248,7 @@ func authoredSoundPaths(path string) []string {
 	return paths
 }
 
+// Aliases returns a copy of every registration in registration order [I1].
 func (r *Registry) Aliases() []Alias {
 	if r == nil || r.count == 0 {
 		return nil

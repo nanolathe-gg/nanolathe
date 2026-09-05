@@ -207,31 +207,6 @@ func (g *gameShell) startBattleLoad(mapName string) {
 	// R-ENTRY-01 §1–§2].
 }
 
-// startMissionLoad is the campaign entry. Retail shows the same screen with
-// the same six bars; only the map line is gated off for a mission.
-func (g *gameShell) startMissionLoad() {
-	if g.campaignIdx < 0 || g.campaignIdx >= len(g.campaignOptions) {
-		reportRetailMessageError(g.showRetailMessage("no campaign selected"))
-		return
-	}
-	c := g.campaignOptions[g.campaignIdx]
-	if g.missionIdx < 0 || g.missionIdx >= len(c.Missions) {
-		reportRetailMessageError(g.showRetailMessage("no mission selected"))
-		return
-	}
-	path := fmt.Sprintf("%s:MISSION%d", c.Path, c.Missions[g.missionIdx].Index)
-	difficulty := g.missionDifficulty()
-	missionIndex := c.Missions[g.missionIdx].Index
-	campaignSlot := g.missionIdx
-	g.saveSettings()
-	request, err := missionBattleRequest(g.opts, g.cs, path, difficulty, missionIndex, campaignSlot, nil, newBattleSeedSource(g.opts))
-	if err != nil {
-		reportRetailMessageError(g.showRetailMessage(err.Error()))
-		return
-	}
-	g.beginFreshBattleLoad("", modeMenuMission, request, nil)
-}
-
 // loadRetailSavePath is the explicit production save-file seam. It is called
 // on the render thread by a host/UI integration that already selected a path;
 // no file-picker policy is invented here. The session package prepares all

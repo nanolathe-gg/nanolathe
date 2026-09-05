@@ -35,7 +35,7 @@ func (b *battleSession) snapshotBuilder(v frame.UnitView) bool {
 // [01 §4.4][07 §9].
 func (b *battleSession) enqueueHumanCommand(c session.HumanCommand) error {
 	if b == nil || b.sess == nil {
-		return fmt.Errorf("battle: human command has no session")
+		return fmt.Errorf("nanolathe: battle command not enqueued: no session")
 	}
 	return b.sess.EnqueueHumanCommand(c)
 }
@@ -43,14 +43,14 @@ func (b *battleSession) enqueueHumanCommand(c session.HumanCommand) error {
 func (b *battleSession) DispatchMobileBuild(product string, wx, wy, wz numeric.Fixed, queued bool) error {
 	f, ok := b.currentSnapshot()
 	if !ok {
-		return fmt.Errorf("battle: production build has no current snapshot")
+		return fmt.Errorf("nanolathe: mobile build not dispatched: no committed frame")
 	}
 	builder := f.CommandPage.Builder
 	if v, found := snapshotUnitByHandle(f, builder); !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
 		builder = 0
 	}
 	if builder == 0 {
-		return fmt.Errorf("battle: production build has no snapshot builder")
+		return fmt.Errorf("nanolathe: mobile build not dispatched: the committed command page names no builder the local player owns")
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanMobileBuild, MobileBuild: session.HumanMobileBuildCommand{
 		Builder: builder, Product: product, WX: wx, WY: wy, WZ: wz, Queued: queued,
@@ -64,14 +64,14 @@ func (b *battleSession) DispatchFactoryBuild(product string, queued bool) error 
 func (b *battleSession) DispatchFactoryBuildDelta(product string, count int) error {
 	f, ok := b.currentSnapshot()
 	if !ok {
-		return fmt.Errorf("battle: production factory has no current snapshot")
+		return fmt.Errorf("nanolathe: factory build not dispatched: no committed frame")
 	}
 	builder := f.CommandPage.Builder
 	if v, found := snapshotUnitByHandle(f, builder); !found || b.sess == nil || v.Owner != b.sess.LocalOwner || !b.snapshotBuilder(v) {
 		builder = 0
 	}
 	if builder == 0 {
-		return fmt.Errorf("battle: production factory has no snapshot builder")
+		return fmt.Errorf("nanolathe: factory build not dispatched: the committed command page names no builder the local player owns")
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanFactoryBuild, FactoryBuild: session.HumanFactoryBuildCommand{
 		Builder: builder, Product: product, Count: count,
@@ -83,7 +83,7 @@ func (b *battleSession) DispatchFactoryBuildDelta(product string, count int) err
 // accidental contextual action at (0,0) [04 §3.4][07 §9].
 func (b *battleSession) DispatchOrderCommand(cmd session.HumanOrderCommand) error {
 	if _, ok := b.currentSnapshot(); !ok {
-		return fmt.Errorf("battle: production order has no current snapshot")
+		return fmt.Errorf("nanolathe: order not dispatched: no committed frame")
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanOrder, Order: cmd})
 }
@@ -110,25 +110,25 @@ func (b *battleSession) DispatchStockpile(unit pool.Handle, queued bool) error {
 func (b *battleSession) DispatchBuildPage(page int) error {
 	f, ok := b.currentSnapshot()
 	if !ok {
-		return fmt.Errorf("battle: build page has no current snapshot")
+		return fmt.Errorf("nanolathe: build page not dispatched: no committed frame")
 	}
 	builder := f.CommandPage.Builder
 	if builder == 0 || page < 0 || page >= int(f.CommandPage.PageCount) {
-		return fmt.Errorf("battle: invalid build page %d", page)
+		return fmt.Errorf("nanolathe: build page not dispatched: page %d is outside the committed page count", page)
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanBuildPage, BuildPage: session.HumanBuildPageCommand{Builder: builder, Page: page}})
 }
 
 func (b *battleSession) DispatchGroupAssign(group int) error {
 	if group < 1 || group > 9 {
-		return fmt.Errorf("battle: invalid control group %d", group)
+		return fmt.Errorf("nanolathe: control group assign not dispatched: group %d is outside 1..9", group)
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanGroupAssign, Group: session.HumanGroupCommand{Group: group}})
 }
 
 func (b *battleSession) DispatchGroupRecall(group int, preserve bool) error {
 	if group < 1 || group > 9 {
-		return fmt.Errorf("battle: invalid control group %d", group)
+		return fmt.Errorf("nanolathe: control group recall not dispatched: group %d is outside 1..9", group)
 	}
 	return b.enqueueHumanCommand(session.HumanCommand{Kind: session.HumanGroupRecall, Group: session.HumanGroupCommand{Group: group, Preserve: preserve}})
 }

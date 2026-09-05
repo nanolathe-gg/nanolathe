@@ -80,12 +80,16 @@ func NewEffectServiceWithPool(max int, owner EffectPool) *EffectService {
 	return s
 }
 
+// SetTimingResolver installs the resolver that supplies an admitted event's
+// authored frame timing. A nil resolver leaves timing unresolved, which keeps
+// the frame player inactive rather than inventing a lifetime [03 §4.4] [I9].
 func (s *EffectService) SetTimingResolver(resolver TimingResolver) {
 	if s != nil {
 		s.resolver = resolver
 	}
 }
 
+// Dropped is the running count of events the service refused, for diagnostics.
 func (s *EffectService) Dropped() uint64 {
 	if s == nil {
 		return 0
@@ -237,19 +241,6 @@ func (s *EffectService) removePending(source, target pool.Handle) {
 		write++
 	}
 	s.pending = s.pending[:write]
-}
-
-func cloneViews(in []frame.EffectView) []frame.EffectView {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]frame.EffectView, len(in))
-	for i, view := range in {
-		out[i] = view
-		out[i].DurationsA = append([]int32(nil), view.DurationsA...)
-		out[i].DurationsB = append([]int32(nil), view.DurationsB...)
-	}
-	return out
 }
 
 func (s *EffectService) noteDrop() {

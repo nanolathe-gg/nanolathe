@@ -1,7 +1,8 @@
+package frame
+
 // EventBuffer contains deterministic ordered cue admission
 // state. Producers submit value events at tick boundaries; consumers get
 // an ordered value list and cannot feed anything back into authoritative state.
-package frame
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -147,6 +148,10 @@ type EventBuffer struct {
 	effects int
 }
 
+// NewEventBuffer creates an admission window under limits. A non-positive
+// MaxEvents takes the default capacity; a non-positive MaxEffectEvents takes
+// the whole window, so this buffer never drops a submission the pools would
+// have accepted.
 func NewEventBuffer(limits Limits) *EventBuffer {
 	if limits.MaxEvents <= 0 {
 		limits.MaxEvents = defaultEventCapacity
@@ -247,6 +252,8 @@ func (c *EventBuffer) Dropped() uint64 {
 	return c.dropped
 }
 
+// Overflow reports whether any admission was refused for want of room since
+// the last Reset.
 func (c *EventBuffer) Overflow() bool { return c != nil && c.overflow }
 
 func (c *EventBuffer) noteDrop(overflow bool) {
@@ -258,6 +265,7 @@ func (c *EventBuffer) noteDrop(overflow bool) {
 	}
 }
 
+// Events returns a copy of the admitted values in producer order.
 func (c *EventBuffer) Events() []Event {
 	if c == nil || len(c.events) == 0 {
 		return nil
@@ -287,6 +295,8 @@ type EventBatch struct {
 	Overflow bool
 }
 
+// Snapshot is the immutable hand-off for one tick: the detached event views
+// plus the drop count and overflow flag that describe the window.
 func (c *EventBuffer) Snapshot() EventBatch {
 	if c == nil {
 		return EventBatch{}
@@ -361,28 +371,45 @@ func isStatusKind(k Kind) bool { return k == KindStatus }
 
 func validKind(k Kind) bool { return k >= KindCOBSFX && k <= KindStatus }
 
-func cloneEvent(e Event) Event {
-	e.DurationsA = append([]int32(nil), e.DurationsA...)
-	e.DurationsB = append([]int32(nil), e.DurationsB...)
-	return e
-}
-
 func (c *EventBuffer) emit(kind Kind, e Event) bool {
 	e.Kind = kind
 	return c.Admit(e)
 }
 
-// The typed entry points retain the common value payload while preventing a
-// producer from accidentally admitting a cue under the wrong kind.
-func (c *EventBuffer) EmitCOBSFX(e Event) bool          { return c.emit(KindCOBSFX, e) }
-func (c *EventBuffer) EmitNanolathe(e Event) bool       { return c.emit(KindNanolathe, e) }
-func (c *EventBuffer) EmitMuzzleFlash(e Event) bool     { return c.emit(KindMuzzleFlash, e) }
-func (c *EventBuffer) EmitSmokeStart(e Event) bool      { return c.emit(KindSmokeStart, e) }
-func (c *EventBuffer) EmitSmokeEnd(e Event) bool        { return c.emit(KindSmokeEnd, e) }
+// EmitCOBSFX admits a COB SFX cue. It heads the typed entry points below,
+// which retain the common value payload while preventing a producer from
+// accidentally admitting a cue under the wrong kind.
+func (c *EventBuffer) EmitCOBSFX(e Event) bool { return c.emit(KindCOBSFX, e) }
+
+// EmitNanolathe admits a nanolathe beam cue.
+func (c *EventBuffer) EmitNanolathe(e Event) bool { return c.emit(KindNanolathe, e) }
+
+// EmitMuzzleFlash admits a muzzle-flash cue.
+func (c *EventBuffer) EmitMuzzleFlash(e Event) bool { return c.emit(KindMuzzleFlash, e) }
+
+// EmitSmokeStart admits the start of a smoke trail.
+func (c *EventBuffer) EmitSmokeStart(e Event) bool { return c.emit(KindSmokeStart, e) }
+
+// EmitSmokeEnd admits the end of a smoke trail.
+func (c *EventBuffer) EmitSmokeEnd(e Event) bool { return c.emit(KindSmokeEnd, e) }
+
+// EmitProjectileTrail admits a projectile trail cue.
 func (c *EventBuffer) EmitProjectileTrail(e Event) bool { return c.emit(KindProjectileTrail, e) }
-func (c *EventBuffer) EmitImpact(e Event) bool          { return c.emit(KindImpact, e) }
-func (c *EventBuffer) EmitWaterImpact(e Event) bool     { return c.emit(KindWaterImpact, e) }
-func (c *EventBuffer) EmitExplosion(e Event) bool       { return c.emit(KindExplosion, e) }
-func (c *EventBuffer) EmitLHTFlash(e Event) bool        { return c.emit(KindLHTFlash, e) }
-func (c *EventBuffer) EmitShake(e Event) bool           { return c.emit(KindShake, e) }
-func (c *EventBuffer) EmitCorpse(e Event) bool          { return c.emit(KindCorpse, e) }
+
+// EmitImpact admits a ground impact cue.
+func (c *EventBuffer) EmitImpact(e Event) bool { return c.emit(KindImpact, e) }
+
+// EmitWaterImpact admits a water impact cue.
+func (c *EventBuffer) EmitWaterImpact(e Event) bool { return c.emit(KindWaterImpact, e) }
+
+// EmitExplosion admits an explosion cue.
+func (c *EventBuffer) EmitExplosion(e Event) bool { return c.emit(KindExplosion, e) }
+
+// EmitLHTFlash admits a PALETTE.LHT light-flash cue.
+func (c *EventBuffer) EmitLHTFlash(e Event) bool { return c.emit(KindLHTFlash, e) }
+
+// EmitShake admits a camera-shake cue.
+func (c *EventBuffer) EmitShake(e Event) bool { return c.emit(KindShake, e) }
+
+// EmitCorpse admits a corpse-creation cue.
+func (c *EventBuffer) EmitCorpse(e Event) bool { return c.emit(KindCorpse, e) }

@@ -207,9 +207,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	}
 	shell.maps = maps
 	shell.mapLabels = make([]string, len(maps))
-	for i, name := range maps {
-		shell.mapLabels[i] = name
-	}
+	copy(shell.mapLabels, maps)
 	mapName := ""
 	if len(maps) != 0 {
 		mapName = maps[0]
@@ -428,11 +426,6 @@ func loadMenuAssets(cs *contentSet) *menuAssets {
 	// bitmaps/selectgame2x.pcx belongs to the multiplayer SELGAME.GUI lobby,
 	// which is out of scope, and is not loaded here.
 	return a
-}
-
-func loadRetailPanel(cs *contentSet, guiName, pcxName, gafName string) *retailPanelAssets {
-	p, _ := loadRetailPanelStrict(cs, guiName, pcxName, gafName, "authored frontend panel")
-	return p
 }
 
 func loadRetailPanelStrict(cs *contentSet, guiName, pcxName, gafName, expected string) (*retailPanelAssets, error) {
@@ -672,7 +665,7 @@ func (g *gameShell) enterBattle(sess *session.Session, cat *content.Catalog) err
 // [08 R-SAVE-02 §11–§12].
 func (g *gameShell) enterBattleAtCamera(sess *session.Session, cat *content.Catalog, savedCamera *save.Camera) error {
 	if g == nil || sess == nil {
-		return fmt.Errorf("nil battle session")
+		return fmt.Errorf("nanolathe: battle entry failed: no shell or session")
 	}
 	if g.audioOwner != nil && sess != nil {
 		// The frontend briefing and battle share one semantic audio owner. This
@@ -789,7 +782,7 @@ func (g *gameShell) teardownBattle(cl *client.Client) {
 // Network schema are put into the SELMAP MAPNAMES list [08 "Schema choice"].
 func enumerateSkirmishMaps(fs *vfs.FS) ([]string, error) {
 	if fs == nil {
-		return nil, fmt.Errorf("nil VFS")
+		return nil, fmt.Errorf("nanolathe: skirmish map census failed: no mounted content")
 	}
 	entries, err := fs.RetailReadDir("maps")
 	if err != nil {

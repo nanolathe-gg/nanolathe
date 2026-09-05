@@ -1,4 +1,6 @@
-// Package render implements model draw [03 §2.4][03 §5.2] presentation only (I6).
+package render
+
+// Model draw [03 §2.4][03 §5.2] presentation only (I6).
 //
 // Contracts C10, C12, C13 plus the projectile offset math are owned here:
 //   - C10 palette indices convert to RGBA at present time only; model lighting selects an SHD row [03 §4.3]
@@ -8,7 +10,6 @@
 // Uses internal/model Compose/FoldRootAngles [03 §2.4] and projectile reuse with yaw in Y, pitch in X each carrying -32768 offset [03 §5.2].
 // Produces per-piece world transforms + primitive draw lists in load-fixed order [03 §2.4] C20 [GAP 02-A6].
 // Presentation only — never writes sim state (I6).
-package render
 
 import (
 	"math"
@@ -719,28 +720,4 @@ func ModelVertexToScreen(cam *camera.Camera, unit, v [3]numeric.Fixed) (sx, sy i
 	}
 	flippedZ := unit[2].Sub(v[2].Sub(unit[2]))
 	return cam.WorldToScreen(v[0], v[1], flippedZ)
-}
-
-// UnitScreenPositions returns screen positions for all piece world origins in stable order (I1) [03 §1] C3.
-// It is presentation only (I6) and projects the committed world position [03 §2.4] C12.
-func UnitScreenPositions(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, cam *camera.Camera) [][2]int32 { // [03 §2.4] C12 [03 §2.5]
-	if m == nil || cam == nil {
-		return nil
-	}
-	transforms := UnitTransforms(m, states)
-	out := make([][2]int32, len(transforms))
-	for i, tr := range transforms {
-		worldOrigin := [3]numeric.Fixed{
-			tr.Origin[0].Add(worldPos[0]),
-			tr.Origin[1].Add(worldPos[1]),
-			tr.Origin[2].Add(worldPos[2]),
-		}
-		// worldOrigin is a composed model vertex, not a world point: the piece
-		// origin is model-relative and only the unit position is world. It
-		// therefore needs the handedness flip [R-RAST-01 §2].
-		sx, sy := ModelVertexToScreen(cam, worldPos, worldOrigin)
-		out[i][0] = sx
-		out[i][1] = sy
-	}
-	return out
 }

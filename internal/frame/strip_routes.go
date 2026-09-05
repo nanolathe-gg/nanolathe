@@ -16,6 +16,8 @@ const (
 	StripSmoke     Strip = 9
 )
 
+// StripProducer names the effect family that submitted an event. It is what
+// RouteForProducer maps to a strip [03 R-STRIP-01].
 type StripProducer uint8
 
 const (
@@ -67,6 +69,8 @@ func RouteEvent(e *Event) {
 	e.Strip = int8(route)
 }
 
+// RoutedEvent returns a copy of e with its duration slices detached and its
+// strip assigned by RouteEvent.
 func RoutedEvent(e Event) Event {
 	e.DurationsA = append([]int32(nil), e.DurationsA...)
 	e.DurationsB = append([]int32(nil), e.DurationsB...)
@@ -74,6 +78,8 @@ func RoutedEvent(e Event) Event {
 	return e
 }
 
+// NanolatheMode is which nanolathe beam a builder is drawing: build, reclaim
+// or capture [03 R-STRIP-01].
 type NanolatheMode uint8
 
 const (
@@ -82,6 +88,8 @@ const (
 	NanolatheCapture NanolatheMode = 3
 )
 
+// NanolatheSegment is one drawn beam segment: its index in the beam, its two
+// world endpoints and its palette colour.
 type NanolatheSegment struct {
 	Index               int32
 	FromX, FromY, FromZ numeric.Fixed
@@ -89,6 +97,9 @@ type NanolatheSegment struct {
 	Color               uint8
 }
 
+// NanolatheSegmentCount is how many segments a mode draws on a tick: build
+// draws two every tick, reclaim and capture draw one on even ticks and none on
+// odd ones.
 func NanolatheSegmentCount(mode NanolatheMode, tick uint32) int {
 	switch mode {
 	case NanolatheBuild:

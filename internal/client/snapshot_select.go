@@ -79,7 +79,7 @@ func SnapshotVisible(f *frame.Frame, v frame.UnitView, viewer uint8) bool {
 	return SnapshotPointVisible(m, x, y, z, viewer) // 3: west, still north-shifted
 }
 
-// snapshotPointVisible applies the committed visibility representation to one
+// SnapshotPointVisible applies the committed visibility representation to one
 // world point. Byte coverage is preferred when it is valid and selected;
 // otherwise the published word grid is used at the local player's bit. The
 // projection (including Y shear, signed 16-bit pixel narrowing, and 32-pixel
@@ -92,18 +92,11 @@ func SnapshotPointVisible(m frame.VisibilityView, x, y, z numeric.Fixed, viewer 
 		if _, ok := visibilityGridSize(m.W, m.H, len(m.Visible)); ok {
 			return PointVisible(m, x, y, z, ProjectileVisibilityModeBytes, viewer)
 		}
-		// A malformed byte publication must not expose a point. A valid word
-		// publication remains an explicit compatibility fallback.
+		// A malformed byte publication must not expose a point; the word grid
+		// the same publication always carries is tried next [03 §3.1-§3.2].
 	}
 	if _, ok := visibilityGridSize(m.W, m.H, len(m.WordVisible)); ok {
 		return PointVisible(m, x, y, z, 0, viewer)
-	}
-	if !m.CoverageBytes {
-		// Older committed fixtures may carry only byte coverage and leave the
-		// mode bit unset; accept that representation when no word grid exists.
-		if _, ok := visibilityGridSize(m.W, m.H, len(m.Visible)); ok {
-			return PointVisible(m, x, y, z, ProjectileVisibilityModeBytes, viewer)
-		}
 	}
 	return false
 }
@@ -210,14 +203,4 @@ func SnapshotUnitHandlesInRect(f *frame.Frame, cam *camera.Camera, rect Rect, vi
 		}
 	}
 	return out
-}
-
-// SnapshotGroundPosition converts a shell cursor to the fixed world ground
-// point used by typed orders. The authoritative terrain-height refinement is
-// intentionally left to the session's order/construction consumers.
-func SnapshotGroundPosition(cam *camera.Camera, sx, sy int32) (numeric.Fixed, numeric.Fixed) {
-	if cam == nil {
-		return 0, 0
-	}
-	return cam.ScreenToWorld(sx+camera.OriginX, sy+camera.OriginY)
 }

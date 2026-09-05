@@ -38,10 +38,6 @@ func ModelShadowEnabled(options uint32, noShadow, runtimeEnabled bool) bool {
 	return runtimeEnabled && !noShadow && options&ShadowMaster != 0 && options&ShadowVehicles != 0
 }
 
-func FeatureShadowEnabled(options uint32) bool {
-	return options&ShadowMaster != 0 && options&ShadowFeatures != 0
-}
-
 // ShadowScreenVertex places a model shadow on screen: the sampled ground height
 // under the subject supplies the half-height shear, and the whole shadow sits
 // five pixels right of the body [03 §5.3][03 R-REN-03D §3].

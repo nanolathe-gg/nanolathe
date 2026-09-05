@@ -1,4 +1,6 @@
-// Package client terrain draw — tile blitter with source block plus intra-tile remainder.
+package client
+
+// Terrain draw — the tile blitter with its source block plus intra-tile remainder.
 //
 // Terrain draw is the orthographic tile pass [03 §2.2] [03 §2.5] C1. The tile map
 // is row-major CellW/2 × CellH/2 16-bit indices into a 32×32 indexed tile set
@@ -12,7 +14,6 @@
 // lookups are logical→physical at present time only (C7) and happen in the
 // indexed→RGBA conversion, not in this blitter — this file writes palette
 // indices only, so palette animation stays possible.
-package client
 
 import (
 	"math"

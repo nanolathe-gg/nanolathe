@@ -282,9 +282,6 @@ func TestDecode_Errors(t *testing.T) {
 
 func TestCache_HitMiss(t *testing.T) {
 	c := NewCache(nil)
-	if c.Cap() != 255 {
-		t.Fatalf("cap %d want 255", c.Cap())
-	}
 	raw := bytesRepeat(0x80, 10)
 	s1, err := c.Put("AliasA", raw)
 	if err != nil {
@@ -321,50 +318,6 @@ func TestCache_HitMiss(t *testing.T) {
 	// miss
 	if _, ok := c.Get("missing"); ok {
 		t.Fatal("missing should miss")
-	}
-}
-
-func TestCache_EvictionFIFO(t *testing.T) {
-	c := NewCacheWithCap(nil, 3) // small cap for deterministic test
-	for i := 0; i < 3; i++ {
-		alias := string(rune('a' + i))
-		raw := bytesRepeat(byte(i), 4)
-		if _, err := c.Put(alias, raw); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if c.Len() != 3 {
-		t.Fatalf("len %d", c.Len())
-	}
-	if got := c.Aliases(); strings.Join(got, ",") != "a,b,c" {
-		t.Fatalf("order %v want a,b,c", got)
-	}
-	// insert fourth evicts oldest "a"
-	if _, err := c.Put("d", bytesRepeat(0x99, 4)); err != nil {
-		t.Fatal(err)
-	}
-	if c.Len() != 3 {
-		t.Fatalf("len after evict %d", c.Len())
-	}
-	if _, ok := c.Get("a"); ok {
-		t.Fatal("a should be evicted")
-	}
-	if _, ok := c.Get("b"); !ok {
-		t.Fatal("b should remain")
-	}
-	if _, ok := c.Get("d"); !ok {
-		t.Fatal("d should be present")
-	}
-	if got := c.Aliases(); strings.Join(got, ",") != "b,c,d" {
-		t.Fatalf("order after evict %v want b,c,d", got)
-	}
-	// deterministic: inserting same key does not change order
-	prevOrder := strings.Join(c.Aliases(), ",")
-	if _, err := c.Put("c", bytesRepeat(0x55, 4)); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(c.Aliases(), ",") != prevOrder {
-		t.Fatalf("update should preserve order, got %v want %s", c.Aliases(), prevOrder)
 	}
 }
 
@@ -422,42 +375,6 @@ func TestCache_VFSResolution(t *testing.T) {
 	// alias not found
 	if _, err := c.Load("missing_xyz"); err == nil {
 		t.Fatal("missing should error")
-	}
-}
-
-func TestCache_VFSCanonicalAndEvictionWithVFS(t *testing.T) {
-	dir := t.TempDir()
-	soundsDir := filepath.Join(dir, "sounds")
-	os.MkdirAll(soundsDir, 0755)
-	pcm := bytesRepeat(0x80, 4)
-	for i := 0; i < 5; i++ {
-		alias := string(rune('a'+i)) + ".wav"
-		mono := buildRIFF(1, 11025, 8, pcm)
-		os.WriteFile(filepath.Join(soundsDir, alias), mono, 0644)
-	}
-	fs := vfs.New()
-	fs.MountDirectory(dir, 1)
-	defer fs.Close()
-	c := NewCacheWithCap(fs, 3)
-	for i := 0; i < 3; i++ {
-		alias := string(rune('a' + i))
-		if _, err := c.Load(alias); err != nil {
-			t.Fatalf("load %s %v", alias, err)
-		}
-	}
-	// a,b,c cached; load d evicts a
-	if _, err := c.Load("d"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := c.Get("a"); ok {
-		t.Fatal("a evicted")
-	}
-	// e evicts b
-	if _, err := c.Load("e"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := c.Get("b"); ok {
-		t.Fatal("b evicted")
 	}
 }
 

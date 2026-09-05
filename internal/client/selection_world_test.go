@@ -87,7 +87,7 @@ func TestSelectionPickWorld(t *testing.T) {
 	}
 	// Rect covering only third with additive false should select only third and clear others (already cleared).
 	rect2 := NormalizeRect(20, 0, 20, 0)
-	changed, count = apply(rect2, false)
+	_, count = apply(rect2, false)
 	if count != 1 {
 		t.Fatalf("rect2 count %d want 1", count)
 	}

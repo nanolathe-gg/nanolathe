@@ -10,6 +10,7 @@ import "github.com/nanolathe/nanolathe/internal/sim/rng"
 // Nanolathe isolates it to preserve sim determinism across render cadences.
 type presentationCRT struct{ state uint32 }
 
+// Rand draws one value from this presentation-only CRT copy [DET-01] [I4].
 func (p *presentationCRT) Rand() uint32 {
 	p.state = p.state*214013 + 2531011
 	return (p.state >> 16) & 0x7FFF
@@ -69,7 +70,6 @@ type Controller struct {
 	playMode      PlayMode
 	desiredCat    int        // for mode 4: 0..4, Building|Battle|Victory|Defeat|Unused [03 R-AUD-01 §4]
 	trackCategory [100]uint8 // (i%4)+1 cycle, retail builds 100 entries
-	offset        int        // playhead offset used by a backend adapter
 	crtState      uint32     // last drawn presentation-CRT state for isolated tests
 	presCRT       *presentationCRT
 	position      int
@@ -308,12 +308,15 @@ func (c *Controller) Pause(paused bool) {
 // SetPosition records the media playhead reported by a backend. It is kept
 // across pause and is presentation state only; history persistence is still
 // intentionally unresolved [03 §8.4].
+// SetPosition records the playhead a backend adapter reports, in milliseconds.
+// A negative value is ignored.
 func (c *Controller) SetPosition(milliseconds int) {
 	if c != nil && milliseconds >= 0 {
 		c.position = milliseconds
 	}
 }
 
+// Position is the last playhead recorded by SetPosition, in milliseconds.
 func (c *Controller) Position() int {
 	if c == nil {
 		return 0
@@ -329,6 +332,7 @@ func (c *Controller) SetVolume(v int) {
 	}
 }
 
+// Volume is the authored music volume recorded by SetVolume [03 §8.4].
 func (c *Controller) Volume() int {
 	if c == nil {
 		return 0

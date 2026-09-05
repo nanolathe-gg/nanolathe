@@ -256,27 +256,6 @@ func resultActionForControl(name string) ui.ResultAction {
 	return ui.ResultActionForControl(name)
 }
 
-// handleResultInput routes release-inside gestures through the same authored
-// Panel state used by the frontend. It does not own a second result-specific
-// pressed/button state [07 §3][07 §11].
-func (h *retailBattleHUD) handleResultInput(in *input.State) ui.ResultAction {
-	if h == nil || h.resultPanel == nil || in == nil || in.Mouse == nil {
-		return ui.ResultActionNone
-	}
-	mx, my := int32(in.Mouse.X), int32(in.Mouse.Y)
-	if in.Mouse.Pressed(input.MouseButtonLeft) {
-		h.resultPanel.Press(mx, my)
-	}
-	if !in.Mouse.Released(input.MouseButtonLeft) {
-		return ui.ResultActionNone
-	}
-	action := h.resultPanel.ReleaseAction(mx, my)
-	if action.Kind != ui.ActionActivate {
-		return ui.ResultActionNone
-	}
-	return resultActionForControl(action.Gadget)
-}
-
 // Result presentation state is HUD-owned and reset when a new committed
 // result arrives. It contains only animation progress; the immutable rows and
 // maxima always come from frame.ResultView [03 §2.4][I6].

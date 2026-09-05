@@ -1,4 +1,6 @@
-// Package render implements fog presentation [03 §1][03 §3.3].
+package render
+
+// Fog presentation [03 §1][03 §3.3].
 //
 // Fog is presentation-only: it reads the published LOS mask via the snapshot
 // / FogCache (I6) and never writes sim state. The ten-strip composer stages fog
@@ -8,7 +10,6 @@
 // uses the 256-byte logical→physical table at present time (C7) [03 §4.3]. The
 // SHD row selection this file once flagged is established: the default is the
 // DONT_SHADE pin, row 15 [03 R-RAST-01 §5], and no marker remains here.
-package render
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
@@ -23,110 +24,6 @@ import (
 type FogFrames struct {
 	Gray  [4][]*formats.GAFFrame
 	Black [4][]*formats.GAFFrame
-}
-
-// BlitFog applies the canonical fog operations to an indexed framebuffer.
-// The gray channel is applied before black; keyed GAF pixels leave the
-// destination untouched. Missing families/frames are no-ops, never fallback
-// art. [03 §3.3] [R-RR16-A §1–§8]
-func BlitFog(dst []byte, width, height int, ops []FogOp, frames *FogFrames, tables *palette.Tables, camX, camZ int32) {
-	if len(dst) == 0 || width <= 0 || height <= 0 {
-		return
-	}
-	for _, op := range ops {
-		x0, y0 := int(op.ScreenX0-camera.OriginX), int(op.ScreenY0-camera.OriginY)
-		x1, y1 := int(op.ScreenX1-camera.OriginX), int(op.ScreenY1-camera.OriginY)
-		if x0 < 0 {
-			x0 = 0
-		}
-		if y0 < 0 {
-			y0 = 0
-		}
-		if x1 > width {
-			x1 = width
-		}
-		if y1 > height {
-			y1 = height
-		}
-		if x0 >= x1 || y0 >= y1 {
-			continue
-		}
-		switch op.Kind {
-		case FogKindSolidDark:
-			for y := y0; y < y1; y++ {
-				for x := x0; x < x1; x++ {
-					dst[y*width+x] = FogDarkPaletteIndex
-				}
-			}
-		case FogKindGrayRemap:
-			if tables != nil {
-				for y := y0; y < y1; y++ {
-					for x := x0; x < x1; x++ {
-						dst[y*width+x] = tables.Gray[dst[y*width+x]]
-					}
-				}
-			}
-		case FogKindPatterned:
-			parity := (camX + camZ) & 1
-			for y := y0; y < y1; y++ {
-				for x := x0; x < x1; x++ {
-					if (int32(x)+int32(y)+parity)&1 == 1 {
-						dst[y*width+x] = FogDarkPaletteIndex
-					}
-				}
-			}
-		case FogKindGAFCh1, FogKindGAFCh0:
-			if frames == nil || op.Variant < 0 || op.Variant >= 4 || op.Frame < 0 {
-				continue
-			}
-			families := &frames.Black
-			if op.Kind == FogKindGAFCh1 {
-				families = &frames.Gray
-			}
-			if op.Variant >= len(families) || op.Frame >= len((*families)[op.Variant]) {
-				continue
-			}
-			frame := (*families)[op.Variant][op.Frame]
-			if frame == nil || frame.Width == 0 || frame.Height == 0 {
-				continue
-			}
-			blitFogFrame(dst, width, height, frame, x0, y0, op.Kind == FogKindGAFCh1, op.Patterned, tables, camX, camZ)
-		}
-	}
-}
-
-func blitFogFrame(dst []byte, width, height int, frame *formats.GAFFrame, x, y int, gray, patterned bool, tables *palette.Tables, camX, camZ int32) {
-	x -= int(frame.XOffset)
-	y -= int(frame.YOffset)
-	parity := (camX + camZ) & 1
-	for sy := 0; sy < int(frame.Height); sy++ {
-		dy := y + sy
-		if dy < 0 || dy >= height {
-			continue
-		}
-		for sx := 0; sx < int(frame.Width); sx++ {
-			dx := x + sx
-			if dx < 0 || dx >= width || (patterned && (int32(dx)+int32(dy)+parity)&1 == 0) {
-				continue
-			}
-			i := sy*int(frame.Width) + sx
-			if i < 0 || i >= len(frame.Pixels) || (i < len(frame.Transparent) && frame.Transparent[i]) {
-				continue
-			}
-			if gray {
-				// Gray family is a mask over existing pixels, not a source-pixel copy.
-				if tables != nil {
-					dst[dy*width+dx] = tables.Gray[dst[dy*width+dx]]
-				}
-				continue
-			}
-			if patterned {
-				dst[dy*width+dx] = FogDarkPaletteIndex
-			} else {
-				dst[dy*width+dx] = frame.Pixels[i]
-			}
-		}
-	}
 }
 
 // FogTilePixels is the hard fog tile size in map pixels [03 §3.3][03 §2.1].

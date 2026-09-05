@@ -25,13 +25,19 @@ type Backend struct {
 }
 
 // Capabilities describes the concrete presentation device surface.
+// Capabilities is what the opened device can do: whether there is a device at
+// all, and whether it is stereo. internal/audio's positional pan is only used
+// when Stereo is set [03 §8.3].
 type Capabilities struct {
 	Device bool
 	Stereo bool
 }
 
+// New opens a backend at the default 44100 Hz output rate.
 func New() *Backend { return NewWithRate(44100) }
 
+// NewWithRate opens a backend at an explicit output rate; a non-positive rate
+// means 44100 Hz. Master output starts enabled at full effects volume.
 func NewWithRate(rate int) *Backend {
 	if rate <= 0 {
 		rate = 44100
@@ -39,6 +45,7 @@ func NewWithRate(rate int) *Backend {
 	return &Backend{sampleRate: rate, master: true, effects: 1}
 }
 
+// Capabilities reports what this backend offers. A nil backend reports none.
 func (b *Backend) Capabilities() Capabilities {
 	if b == nil {
 		return Capabilities{}
@@ -46,14 +53,17 @@ func (b *Backend) Capabilities() Capabilities {
 	return Capabilities{Device: true, Stereo: true}
 }
 
+// StereoCapable reports whether positional pan should be computed [03 §8.3].
 func (b *Backend) StereoCapable() bool { return b != nil }
 
+// SetMasterEnabled turns all playback on or off.
 func (b *Backend) SetMasterEnabled(enabled bool) {
 	if b != nil {
 		b.master = enabled
 	}
 }
 
+// SetEffectsVolume records the effects scale, narrowed to 0..1.
 func (b *Backend) SetEffectsVolume(volume float64) {
 	if b == nil {
 		return
@@ -67,8 +77,10 @@ func (b *Backend) SetEffectsVolume(volume float64) {
 	b.effects = volume
 }
 
+// CanPlay reports whether a cue submitted now would be audible.
 func (b *Backend) CanPlay() bool { return b != nil && b.master && b.effects > 0 }
 
+// SampleRate is the device output rate samples are converted to.
 func (b *Backend) SampleRate() int {
 	if b == nil || b.sampleRate == 0 {
 		return 44100
@@ -145,6 +157,8 @@ func (b *Backend) WarmUp() {
 	_ = player.Close()
 }
 
+// PlaySample converts one decoded sample to the device rate at the given
+// volume and pan and submits it. It is a no-op while playback is off.
 func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) error {
 	if b == nil || sample == nil || !b.CanPlay() {
 		return nil
@@ -238,6 +252,7 @@ func (b *Backend) PlayStream(sample *retailaudio.Sample, volume float64) error {
 	return nil
 }
 
+// StopStream closes every streaming player, ending music and speech.
 func (b *Backend) StopStream() {
 	if b == nil {
 		return
@@ -268,6 +283,8 @@ func clampPlayback(volume, pan float64) (float64, float64) {
 	return volume, pan
 }
 
+// PlayAlias loads an alias through the sample cache and plays it. A missing
+// alias is silent, not an error [03 §8.2].
 func (b *Backend) PlayAlias(alias string, cache *retailaudio.SampleCache, volume, pan float64) error {
 	if b == nil || alias == "" || cache == nil {
 		return nil
@@ -279,6 +296,7 @@ func (b *Backend) PlayAlias(alias string, cache *retailaudio.SampleCache, volume
 	return b.PlaySample(sample, volume, pan)
 }
 
+// Close stops and releases every player this backend opened.
 func (b *Backend) Close() {
 	if b == nil {
 		return

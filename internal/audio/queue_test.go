@@ -187,14 +187,13 @@ func TestInsertDuplicateDrop(t *testing.T) {
 }
 
 func TestInsertOrdering(t *testing.T) {
-	q := NewQueue()
 	_ = categoryFixture()
 	// Deactivate pri4, Activate pri4, Build pri4 -> equal priorities FIFO
 	// But we test descending: cant pri8, load pri7, ok pri5, build pri4, working pri2
 	// Insert in random order, check sorted
 	// Use slots: 7(cant 8),12(load7),5(ok5),9(build4),11(working2)
 	// Insert low then high, queue should be high first
-	q = NewQueue()
+	q := NewQueue()
 	if !q.InsertAt(0, 11, 1, "") {
 		t.Fatal("insert working")
 	}

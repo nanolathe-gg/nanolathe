@@ -64,10 +64,15 @@ type MessageRing struct {
 	TextScroll uint16
 }
 
+// NewMessageRing returns a ring carrying retail's missing-value defaults for
+// textlines and textscroll, both 10 [02 "registry preference (Total
+// Annihilation key)"].
 func NewMessageRing() *MessageRing {
 	return &MessageRing{TextLines: 10, TextScroll: 10}
 }
 
+// Configure installs the player's persisted line and scroll counts. textLines
+// is clamped to the ring's thirty entries.
 func (r *MessageRing) Configure(textLines, textScroll uint16) {
 	if r == nil {
 		return

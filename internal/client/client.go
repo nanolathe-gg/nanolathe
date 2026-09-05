@@ -138,8 +138,7 @@ type Client struct {
 	// memoised miss. Unlike every other cache here this one is consulted from
 	// an authoritative phase, so it is warmed up front and never loads on a
 	// visit; feature_sequence.go owns the contract.
-	featureSeqs  map[string]*featureSequenceInfo
-	featureYSort bool // when true force Y-bucket sort for feature pass [03 §1]
+	featureSeqs map[string]*featureSequenceInfo
 	// featureAnim holds the per-DEFINITION rest cursors of the animating
 	// features, keyed by the lower-case "filename|seqname" that names the
 	// definition's sequence. Retail initialises one cursor per definition, not

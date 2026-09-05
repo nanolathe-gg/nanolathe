@@ -1,4 +1,6 @@
-// Package client — FNT text rendering for authored UI surfaces.
+package client
+
+// FNT text rendering for authored UI surfaces.
 //
 // Retail contracts implemented here [02 §7][03 §7.1][07 §7][GAP T22] C8:
 //
@@ -33,7 +35,6 @@
 //
 // No simulation state is read or written here (I6). RNG draw counts shown in
 // the overlay are passed in by the caller.
-package client
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
@@ -105,9 +106,6 @@ func MeasureText(fnt *formats.FNT, text string) int { // [02 §7][03 §7.1]
 	}
 	return width
 }
-
-// TextWidth is an alias for MeasureText.
-func TextWidth(fnt *formats.FNT, text string) int { return MeasureText(fnt, text) }
 
 // TruncateToWidth implements the retail truncate-to-width contract [07 §7][GAP T22] C8.
 //
@@ -214,17 +212,4 @@ func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x
 		}
 		curX += int(g.Width) // advance; space advances 7 via its glyph [03 §7.1]
 	}
-}
-
-// DrawTextWithShadow draws text with a one-pixel drop shadow [07 §7].
-//
-// The shadow is drawn first at (x+1,y+1) with shadowColor, then the foreground
-// at (x,y) with color. The shadow argument is a presentation-context concept
-// [07 §7] but this helper exposes it explicitly so callers need not manage
-// context state. Truncation and clipping match DrawText.
-func DrawTextWithShadow(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color, shadowColor byte) { // [07 §7]
-	if shadowColor != color {
-		DrawText(frame, width, height, fnt, text, x+1, y+1, maxWidth, shadowColor)
-	}
-	DrawText(frame, width, height, fnt, text, x, y, maxWidth, color)
 }

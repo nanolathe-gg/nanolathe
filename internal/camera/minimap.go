@@ -1,6 +1,7 @@
-// Package camera minimap lens owns the single aspect/layout and world mapping
-// used by radar drawing and minimap input [07 §10][03 §3.4][03 §3.6][03 §3.11].
 package camera
+
+// The minimap lens owns the single aspect/layout and world mapping
+// used by radar drawing and minimap input [07 §10][03 §3.4][03 §3.6][03 §3.11].
 
 // MinimapLongSide is the fixed long side of the radar canvas [07 §10][03 §3.6].
 const MinimapLongSide = 126 // [07 §10] long side
@@ -136,11 +137,6 @@ func (m Minimap) WorldToRadarWithY(worldX, worldY, worldZ int32, playW, playH in
 	rx = m.PadX + int32(int64(worldX)*int64(m.W)/int64(playW))
 	ry = m.PadY + int32(int64(adjZ)*int64(m.H)/int64(playH))
 	return
-}
-
-// WorldToRadarWithHeight is an alias for WorldToRadarWithY for callers using height terminology.
-func (m Minimap) WorldToRadarWithHeight(worldX, worldY, worldZ int32, playW, playH int32) (rx, ry int32) {
-	return m.WorldToRadarWithY(worldX, worldY, worldZ, playW, playH)
 }
 
 // RadarToWorld inverts WorldToRadar: canvas radar → world map pixels

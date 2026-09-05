@@ -37,7 +37,7 @@ type ViewportRect struct {
 	Left, Top, Right, Bottom int32
 }
 
-// Width and Height return the number of pixels in an inclusive rectangle.
+// Width returns the number of pixels an inclusive rectangle spans across.
 func (r ViewportRect) Width() int32 {
 	if r.Right < r.Left {
 		return 0
@@ -45,6 +45,7 @@ func (r ViewportRect) Width() int32 {
 	return r.Right - r.Left + 1
 }
 
+// Height returns the number of pixels an inclusive rectangle spans down.
 func (r ViewportRect) Height() int32 {
 	if r.Bottom < r.Top {
 		return 0

@@ -179,11 +179,6 @@ func briefingMediaPath(name, extension string) string {
 	return "camps/briefs/" + name + "." + extension
 }
 
-// NewBriefingController is the exported spelling for focused controller tests.
-func NewBriefingController(m *mission.Mission, localSide int, crt briefingRandom, request func() (freshBattleRequest, error)) *campaignBriefingController {
-	return NewCampaignBriefingController(m, localSide, crt, request)
-}
-
 func (b *campaignBriefingController) entryWind() {
 	if b == nil || b.crt == nil {
 		return

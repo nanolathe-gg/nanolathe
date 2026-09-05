@@ -37,6 +37,7 @@ type UnitHullModels interface {
 // UnitHullModelFunc adapts a plain lookup to UnitHullModels.
 type UnitHullModelFunc func(name string) *compiledmodel.Model
 
+// HullModel calls f, or returns nil when f is nil.
 func (f UnitHullModelFunc) HullModel(name string) *compiledmodel.Model {
 	if f == nil {
 		return nil

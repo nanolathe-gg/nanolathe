@@ -25,7 +25,7 @@ func TestPropellerSpinUsesRollSlotWithoutOffset(t *testing.T) {
 
 	// No -32768 offset: only the yaw and pitch words carry one, which is what
 	// FoldProjectileAngles applies. A zero spin must stay zero.
-	var zero []model.PieceState = make([]model.PieceState, 1)
+	zero := make([]model.PieceState, 1)
 	FoldPropellerSpin(zero, 0, 0)
 	if zero[0].RotZ != 0 {
 		t.Fatalf("zero spin folded to %d, want 0 (word 0 takes no half-circle offset)", zero[0].RotZ)

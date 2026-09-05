@@ -6,7 +6,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -83,14 +82,6 @@ func unitInfoSeamWindow() *gui.Window {
 			{Name: "DONE", Kind: gui.KindButton, Active: 1, Rect: gui.Rect{X: 20, Y: 145, W: 96, H: 20}},
 		},
 	}
-}
-
-func pressed(keys ...input.Key) *input.KeyboardState {
-	k := &input.KeyboardState{}
-	for _, key := range keys {
-		k.SetKey(key, true)
-	}
-	return k
 }
 
 // TestUnitInfoOwnsNoKeyboardAndClosesOnSelection locks the corrected seam

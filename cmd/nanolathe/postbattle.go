@@ -120,7 +120,7 @@ func (b *battleSession) ensurePostBattleController() {
 }
 
 func postBattleGlamourPath(name string) string {
-	name = strings.TrimLeft(name, `/\\`)
+	name = strings.TrimLeft(name, `/\`)
 	if name == "" {
 		return ""
 	}

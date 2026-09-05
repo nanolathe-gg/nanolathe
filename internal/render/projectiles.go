@@ -182,7 +182,7 @@ type RenderSpec struct {
 	Strokes    []BeamStroke
 }
 
-// dispatch table size [03 §5.4] C6.
+// RendertypeCount is the dispatch table size [03 §5.4] C6.
 const RendertypeCount = 8 // [03 §5.4] eight cases 0..7
 
 // DispatchRendertype selects presentation from rendertype byte per [03 §5.4] C6.
@@ -301,14 +301,16 @@ func SegmentCount(head, tail combat.Vec3) int { // [03 §5.4]
 	return n
 }
 
-// SegmentedJitter applies integer per-axis jitter of rand()*11/0x8000 -5
-// [03 §5.4] to X, height (Y), and Z. It draws exactly three CRT values per point
-// preserving deterministic call order per [03 §5.4] and I4.
-// Presentation only (I6); never uses simulation RNG.
+// CRTRandomSource is the presentation copy of the CRT stream the segmented
+// jitter draws from. Presentation never touches the simulation stream [I4].
 type CRTRandomSource interface {
 	Rand() int32
 }
 
+// SegmentedJitter applies integer per-axis jitter of rand()*11/0x8000 -5
+// [03 §5.4] to X, height (Y), and Z. It draws exactly three CRT values per point
+// preserving deterministic call order per [03 §5.4] and I4.
+// Presentation only (I6); never uses simulation RNG.
 func SegmentedJitter(crt CRTRandomSource, x, y, z numeric.Fixed) (numeric.Fixed, numeric.Fixed, numeric.Fixed) { // [03 §5.4] [I4] (I6)
 	if crt == nil {
 		return x, y, z

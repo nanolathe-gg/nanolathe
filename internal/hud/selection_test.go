@@ -242,6 +242,12 @@ func TestGroupAssignRecallTogglePreserve(t *testing.T) {
 	}
 }
 
+// setTypeMaskBit sets definition id's bit in the 256-bit CTRL_F category
+// mask: byte id/8, bit id%8 [07 §9].
+func setTypeMaskBit(mask *[32]byte, defID uint16) {
+	mask[defID/8] |= 1 << (defID % 8)
+}
+
 // TestCtrlFFilter verifies the secondary CTRL_F branch [07 §9] C9.
 func TestCtrlFFilter(t *testing.T) {
 	// Two group-3 members with DefIDs 5 and 7. Mask admits 5 only.
@@ -251,7 +257,7 @@ func TestCtrlFFilter(t *testing.T) {
 		{Flags: 0, Group: 3, DefID: 10},
 	}
 	var mask [32]byte
-	mask[5/8] |= 1 << (5 % 8)
+	setTypeMaskBit(&mask, 5)
 	// No flag 0x80000000 anywhere: filter inactive, both members recall without filtering.
 	changed, cnt := RecallGroup(units, 3, false, mask, nil)
 	if !changed || cnt != 3 {
@@ -268,8 +274,8 @@ func TestCtrlFFilter(t *testing.T) {
 		{Flags: 0, Group: 2, DefID: 5}, // nonmatch group, should not be selected even if passes mask
 	}
 	mask = [32]byte{}
-	mask[5/8] |= 1 << (5 % 8)
-	changed, cnt = RecallGroup(units, 3, false, mask, nil)
+	setTypeMaskBit(&mask, 5)
+	_, cnt = RecallGroup(units, 3, false, mask, nil)
 	if cnt != 2 {
 		t.Fatalf("filtered recall count %d want 2 (only DefID 5 matches)", cnt)
 	}
@@ -284,8 +290,8 @@ func TestCtrlFFilter(t *testing.T) {
 		{Flags: CtrlFFlag, Group: 3, DefID: 7},     // carries flag but DefID 7 not in mask -> still nonmatch? Actually it carries flag and is mismatch, but it's still a match group, filtered out -> nonmatch.
 	}
 	mask = [32]byte{}
-	mask[5/8] |= 1 << (5 % 8) // only 5 admitted
-	changed, cnt = RecallGroup(units, 3, true, mask, nil)
+	setTypeMaskBit(&mask, 5) // only 5 admitted
+	RecallGroup(units, 3, true, mask, nil)
 	if IsSelected(units[0].Flags) {
 		t.Fatalf("preserve true filtered passing should toggle off")
 	}

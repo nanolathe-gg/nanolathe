@@ -121,7 +121,7 @@ func exportMap(fs *vfs.FS, requestedMap, outputDirectory string) error {
 }
 
 func defaultAssetRoot() string {
-	if configured := os.Getenv("OPENTA_TA_ROOT"); configured != "" {
+	if configured := os.Getenv("NANOLATHE_TA_ROOT"); configured != "" {
 		return configured
 	}
 	home, err := os.UserHomeDir()

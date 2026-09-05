@@ -64,8 +64,13 @@ func cloneRadarSurface(src *RadarSurface) *RadarSurface {
 	return &RadarSurface{W: src.W, H: src.H, Pitch: src.Pitch, Bits: append([]byte(nil), src.Bits...)}
 }
 
+// Picture returns a copy of the source radar picture [03 §3.7].
 func (s *MinimapService) Picture() *RadarSurface { return cloneRadarSurface(s.picture) }
-func (s *MinimapService) Final() *RadarSurface   { return cloneRadarSurface(s.final) }
+
+// Final returns a copy of the composed radar surface the HUD blits [03 §3.8].
+func (s *MinimapService) Final() *RadarSurface { return cloneRadarSurface(s.final) }
+
+// Blink is the current radar blink phase [01 R-CORE-03].
 func (s *MinimapService) Blink() BlinkState {
 	if s == nil {
 		return BlinkState{}

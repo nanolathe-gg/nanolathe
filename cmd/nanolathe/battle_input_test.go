@@ -68,34 +68,6 @@ func rightClickAt(b *battleSession, sx, sy int32, shift bool) {
 	applyPendingBattleCommands(b)
 }
 
-func dragSelect(b *battleSession, sx0, sy0, sx1, sy1 int32, shift bool) {
-	applyPendingBattleCommands(b)
-	in := &client.InputState{Mouse: &client.MouseState{}, Kbd: &client.KeyboardState{}}
-	if shift {
-		in.Kbd.SetKey(input.KeyShift, true)
-	}
-	in.Mouse.SetPosition(float32(sx0), float32(sy0))
-	in.Mouse.SetButton(input.MouseButtonLeft, true)
-	b.handleInput(in, nil)
-	in.Mouse.ResetEdges()
-	in.Kbd.ResetEdges()
-	if shift {
-		in.Kbd.SetKey(input.KeyShift, true)
-	}
-	in.Mouse.SetPosition(float32(sx1), float32(sy1))
-	in.Mouse.SetButton(input.MouseButtonLeft, true)
-	b.handleInput(in, nil)
-	in.Mouse.ResetEdges()
-	in.Kbd.ResetEdges()
-	if shift {
-		in.Kbd.SetKey(input.KeyShift, true)
-	}
-	in.Mouse.SetPosition(float32(sx1), float32(sy1))
-	in.Mouse.SetButton(input.MouseButtonLeft, false)
-	b.handleInput(in, nil)
-	applyPendingBattleCommands(b)
-}
-
 // applyPendingBattleCommands advances the real session input boundary used by
 // production. Input helpers bind the typed queue explicitly, then run one
 // authoritative tick so assertions inspect applied state rather than a test

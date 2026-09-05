@@ -113,15 +113,6 @@ type SelectUnit struct {
 // IsSelected reports whether flags carries SelectionFlag (0x10) [07 §9] C9.
 func IsSelected(flags uint32) bool { return flags&SelectionFlag != 0 }
 
-// SetSelected sets the selection membership bit [07 §9] C9.
-func SetSelected(flags uint32) uint32 { return flags | SelectionFlag }
-
-// ClearSelected clears the selection membership bit [07 §9] C9.
-func ClearSelected(flags uint32) uint32 { return flags &^ SelectionFlag }
-
-// ToggleSelected toggles the selection membership bit [07 §9] C9.
-func ToggleSelected(flags uint32) uint32 { return flags ^ SelectionFlag }
-
 // NextSelected is the pure truth table for one eligible unit [07 §9] C9.
 // additive==false (modifier clear): selected = inside
 // additive==true  (modifier set):   selected = inside ? !old : old

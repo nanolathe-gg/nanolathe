@@ -34,14 +34,6 @@ type StripDrawStats struct {
 	Gated      int
 }
 
-// add accumulates one barrier's counts into a frame total.
-func (s *StripDrawStats) add(o StripDrawStats) {
-	s.Blitted += o.Blitted
-	s.Filled += o.Filled
-	s.Unresolved += o.Unresolved
-	s.Gated += o.Gated
-}
-
 // drawStripSlot is one of the ten barriers of [03 §1]: the effect records
 // routed to this strip, then the strip objects the simulation published for
 // it.

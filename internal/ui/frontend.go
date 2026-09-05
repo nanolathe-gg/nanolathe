@@ -29,8 +29,10 @@ type Frontend struct {
 	Panels PanelStack
 }
 
+// NewFrontend returns a front end in mode with an empty panel stack.
 func NewFrontend(mode Mode) *Frontend { return &Frontend{Mode: mode} }
 
+// SetMode records the screen the front end is on without touching the stack.
 func (f *Frontend) SetMode(mode Mode) {
 	if f != nil {
 		f.Mode = mode
@@ -57,6 +59,8 @@ func (f *Frontend) Open(mode Mode, panel *Panel, saveUnder bool) {
 	f.Panels.Replace(panel)
 }
 
+// ActivePanel is the panel input and drawing apply to: the panel under an open
+// modal, otherwise the top of the stack [07 §3].
 func (f *Frontend) ActivePanel() *Panel {
 	if f == nil {
 		return nil

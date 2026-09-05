@@ -1,4 +1,9 @@
-// Package ui owns mutable authored frontend-panel presentation state.
+// Package ui owns the mutable screen-level state of the authored panels: the
+// front-end panel (focus, list contents and scroll positions, text fields) and
+// the battle state the desktop binary and its tests share.
+//
+// It holds state, not pixels: internal/gui supplies the authored layout and
+// internal/client draws it [07 §5] [07 §11].
 package ui
 
 import (
@@ -23,6 +28,7 @@ func (l *List) Items() []string {
 	return append([]string(nil), l.items...)
 }
 
+// Len is the number of rows the list holds.
 func (l *List) Len() int {
 	if l == nil {
 		return 0
@@ -30,6 +36,7 @@ func (l *List) Len() int {
 	return len(l.items)
 }
 
+// Selected is the currently selected row index.
 func (l *List) Selected() int {
 	if l == nil {
 		return 0
@@ -37,12 +44,14 @@ func (l *List) Selected() int {
 	return l.selected
 }
 
+// SetSelected records the selected row index.
 func (l *List) SetSelected(selected int) {
 	if l != nil {
 		l.selected = selected
 	}
 }
 
+// Top is the first visible row index.
 func (l *List) Top() int {
 	if l == nil {
 		return 0
@@ -50,6 +59,7 @@ func (l *List) Top() int {
 	return l.top
 }
 
+// SetTop records the first visible row index.
 func (l *List) SetTop(top int) {
 	if l != nil {
 		l.top = top
@@ -143,8 +153,8 @@ type PanelStack struct {
 // Stack is the short public name used by frontend callers.
 type Stack = PanelStack
 
-func NewStack() *PanelStack { return &PanelStack{} }
-
+// Replace discards the whole stack and makes panel the only entry. A nil
+// panel empties the stack.
 func (s *PanelStack) Replace(panel *Panel) {
 	if s == nil {
 		return
@@ -155,18 +165,22 @@ func (s *PanelStack) Replace(panel *Panel) {
 	}
 }
 
+// Push opens panel above the current entry, which is saved under it [07 §3].
 func (s *PanelStack) Push(panel *Panel) {
 	if s != nil && panel != nil {
 		s.entries = append(s.entries, PanelEntry{Panel: panel})
 	}
 }
 
+// PushModal opens panel above the current entry and marks it modal, so input
+// stops at it [07 §3].
 func (s *PanelStack) PushModal(panel *Panel) {
 	if s != nil && panel != nil {
 		s.entries = append(s.entries, PanelEntry{Panel: panel, Modal: true})
 	}
 }
 
+// Top is the active panel, or nil when the stack is empty.
 func (s *PanelStack) Top() *Panel {
 	if s == nil || len(s.entries) == 0 {
 		return nil
@@ -174,6 +188,7 @@ func (s *PanelStack) Top() *Panel {
 	return s.entries[len(s.entries)-1].Panel
 }
 
+// Under is the panel beneath the active one, or nil when there is none.
 func (s *PanelStack) Under() *Panel {
 	if s == nil || len(s.entries) < 2 {
 		return nil
@@ -184,6 +199,7 @@ func (s *PanelStack) Under() *Panel {
 // SaveUnder is the panel restored/drawn beneath the active entry [07 §3].
 func (s *PanelStack) SaveUnder() *Panel { return s.Under() }
 
+// Modal is the active panel when it is modal, nil otherwise.
 func (s *PanelStack) Modal() *Panel {
 	if s == nil || len(s.entries) == 0 || !s.entries[len(s.entries)-1].Modal {
 		return nil
@@ -191,6 +207,8 @@ func (s *PanelStack) Modal() *Panel {
 	return s.entries[len(s.entries)-1].Panel
 }
 
+// CloseModal pops the active panel when it is modal and returns it; it
+// returns nil and pops nothing otherwise.
 func (s *PanelStack) CloseModal() *Panel {
 	if s == nil || len(s.entries) == 0 || !s.entries[len(s.entries)-1].Modal {
 		return nil
@@ -221,12 +239,14 @@ func (s *PanelStack) Pop() *Panel {
 	return p
 }
 
+// Clear empties the stack.
 func (s *PanelStack) Clear() {
 	if s != nil {
 		s.entries = s.entries[:0]
 	}
 }
 
+// Len is the number of entries on the stack.
 func (s *PanelStack) Len() int {
 	if s == nil {
 		return 0
@@ -243,6 +263,9 @@ func (s *PanelStack) Entries() []PanelEntry {
 	return append([]PanelEntry(nil), s.entries...)
 }
 
+// NewPanel builds the mutable state for one authored window: its focus,
+// press indices and the per-gadget text, help, active, status and list maps
+// [07 §5] [07 R-WGT-01 §1].
 func NewPanel(window *gui.Window) *Panel {
 	p := &Panel{Window: window, Text: make(map[string]string), Help: make(map[string]string), Active: make(map[string]bool), Status: make(map[string]int), Lists: make(map[string]*List), Owner: make(map[string]string), focus: -1, pressed: -1, rightPressed: -1}
 	if window == nil {
@@ -284,45 +307,58 @@ func NewPanel(window *gui.Window) *Panel {
 	return p
 }
 
+// Key is the lookup form of an authored control name: trimmed and lowercased.
 func Key(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
 
+// ActiveOf reports the active flag recorded for a named control.
 func (p *Panel) ActiveOf(name string) bool { return p != nil && p.Active[Key(name)] }
 
+// SetFocus records the focused gadget index; -1 is no focus.
 func (p *Panel) SetFocus(index int) {
 	if p != nil {
 		p.focus = index
 	}
 }
 
+// Focused is the focused gadget index, -1 when none.
 func (p *Panel) Focused() int {
 	if p == nil {
 		return -1
 	}
 	return p.focus
 }
+
+// PressedIndex is the gadget the left button is held on, -1 when none.
 func (p *Panel) PressedIndex() int {
 	if p == nil {
 		return -1
 	}
 	return p.pressed
 }
+
+// SetPressed records the gadget the left button is held on.
 func (p *Panel) SetPressed(index int) {
 	if p != nil {
 		p.pressed = index
 	}
 }
+
+// RightPressedIndex is the gadget the right button is held on, -1 when none.
 func (p *Panel) RightPressedIndex() int {
 	if p == nil {
 		return -1
 	}
 	return p.rightPressed
 }
+
+// SetRightPressed records the gadget the right button is held on.
 func (p *Panel) SetRightPressed(index int) {
 	if p != nil {
 		p.rightPressed = index
 	}
 }
 
+// ResetPress clears both held-button indices.
 func (p *Panel) ResetPress() {
 	if p != nil {
 		p.pressed = -1
@@ -398,6 +434,7 @@ func (p *Panel) UpdateScrollDrag(x, y int32, held bool) bool {
 	return true
 }
 
+// CancelScrollDrag abandons an in-progress scrollbar thumb drag.
 func (p *Panel) CancelScrollDrag() {
 	if p != nil {
 		p.drag = scrollDrag{}
@@ -420,39 +457,54 @@ func (p *Panel) SetMessage(message string) {
 	p.message = message
 }
 
+// Message returns the modal message recorded by SetMessage.
 func (p *Panel) Message() string {
 	if p == nil {
 		return ""
 	}
 	return p.message
 }
+
+// SetActive records the active flag for a named control.
 func (p *Panel) SetActive(name string, active bool) {
 	if p != nil {
 		p.Active[Key(name)] = active
 	}
 }
+
+// StatusOf is the stage word recorded for a named control.
 func (p *Panel) StatusOf(name string) int {
 	if p == nil {
 		return 0
 	}
 	return p.Status[Key(name)]
 }
+
+// SetStatus records the stage word for a named control.
 func (p *Panel) SetStatus(name string, status int) {
 	if p != nil {
 		p.Status[Key(name)] = status
 	}
 }
+
+// SetText records the runtime text for a named control.
 func (p *Panel) SetText(name, value string) {
 	if p != nil {
 		p.Text[Key(name)] = value
 	}
 }
+
+// TextOf is the runtime text recorded for a named control.
 func (p *Panel) TextOf(name string) string {
 	if p == nil {
 		return ""
 	}
 	return p.Text[Key(name)]
 }
+
+// TextFor is the text one gadget draws: the runtime text when this panel owns
+// the name, and the gadget's own authored text when a differently sourced
+// gadget shares it [07 §5].
 func (p *Panel) TextFor(gadget gui.Gadget) string {
 	if p == nil {
 		return ""
@@ -463,11 +515,15 @@ func (p *Panel) TextFor(gadget gui.Gadget) string {
 	}
 	return p.Text[key]
 }
+
+// SetHelp records the hover-help text for a named control.
 func (p *Panel) SetHelp(name, value string) {
 	if p != nil {
 		p.Help[Key(name)] = value
 	}
 }
+
+// HelpOf is the hover-help text recorded for a named control.
 func (p *Panel) HelpOf(name string) string {
 	if p == nil {
 		return ""

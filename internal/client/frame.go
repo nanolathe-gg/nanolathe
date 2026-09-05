@@ -344,7 +344,6 @@ func (c *Client) drawFog(cur *frame.Frame) {
 			}
 		}
 	}
-	return
 	// No world stage has work outside the explicit adapters above.
 }
 

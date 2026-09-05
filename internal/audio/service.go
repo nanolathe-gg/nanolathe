@@ -224,12 +224,15 @@ func (a *Service) Frame() uint32 {
 	return a.frame
 }
 
+// SetViewport records the presentation viewport positional cues are attenuated
+// and panned against [03 §8.3].
 func (a *Service) SetViewport(v Viewport) {
 	if a != nil {
 		a.viewport = v
 	}
 }
 
+// Viewport is the viewport recorded by SetViewport.
 func (a *Service) Viewport() Viewport {
 	if a == nil {
 		return Viewport{}

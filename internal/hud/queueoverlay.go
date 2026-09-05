@@ -484,15 +484,6 @@ func age(now, born uint32) uint32 {
 	return now - born
 }
 
-// OrderCircleSegments emits the established fifteen-segment chord
-// approximation. The radius is supplied by immutable authored data through
-// QueueOverlayOptions; absent data suppresses this helper [07 §9][R-P0-11 §3].
-// The integer unit-circle table keeps this presentation primitive out of the
-// authoritative float domain [INVARIANTS I2].
-func OrderCircleSegments(center QueuePoint, radius int32) [][2]QueuePoint {
-	return circle15(center, radius)
-}
-
 func circle15(center QueuePoint, radius int32) [][2]QueuePoint {
 	const n = 15
 	const unit = int32(1024)

@@ -31,9 +31,9 @@ var projectileSelectorSequences = [...]string{
 // [06 R-WFX-01 §1].
 const projectileLifetimeSequence = "flamestream"
 
-// ProjectileVisibilityMode selects the published coverage representation.
-// Byte coverage is the current local-player grid; zero selects the local bit
-// in the one-point word grid [03 §5.4].
+// ProjectileVisibilityModeBytes selects the published byte coverage
+// representation: the current local-player grid. Mode zero selects the local
+// bit in the one-point word grid instead [03 §5.4].
 const ProjectileVisibilityModeBytes = 1
 
 // ProjectileVisible evaluates exactly one gate for one projectile. The same

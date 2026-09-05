@@ -1,4 +1,12 @@
-// Package render implements presentation pools and helpers [03 §1].
+// Package render owns the presentation pools and the helpers that fill them:
+// the ten effect strips and their composer, the fixed effect pool, projectile
+// render types, GAF cursors, fog presentation, camera shake, the model
+// rasterizer's inputs and the minimap surfaces.
+//
+// Everything here is presentation-only [I6]: it reads the committed frame and
+// the compiled catalogs, mutates no authoritative state, and draws only from a
+// private copy of the CRT stream [I4]. Pixels are written by internal/client
+// [03 §1].
 package render
 
 import "github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -60,19 +68,6 @@ func (s *Strip) Update(tick uint32) {
 		s.Objects[i] = nil
 	}
 	s.Objects = s.Objects[:write]
-}
-
-// Draw forwards each stored object to its draw entry if it implements
-// Draw() [03 §1]. Skeleton seam for later blitters.
-func (s *Strip) Draw() {
-	if s == nil {
-		return
-	}
-	for _, obj := range s.Objects {
-		if d, ok := obj.(interface{ Draw() }); ok {
-			d.Draw()
-		}
-	}
 }
 
 // FixedEffectCap is the fixed pool capacity [03 §1] C5 (I5).

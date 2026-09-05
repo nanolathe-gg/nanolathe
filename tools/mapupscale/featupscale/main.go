@@ -947,7 +947,7 @@ func splitmix64(x uint64) uint64 {
 }
 
 func defaultAssetRoot() string {
-	if v := os.Getenv("OPENTA_TA_ROOT"); v != "" {
+	if v := os.Getenv("NANOLATHE_TA_ROOT"); v != "" {
 		return v
 	}
 	home, _ := os.UserHomeDir()
