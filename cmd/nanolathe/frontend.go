@@ -229,6 +229,18 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	if shell.assets != nil {
 		shell.font = shell.assets.font
 	}
+	// The interface alias table is a startup preload, not a first-click lazy
+	// path: mode 0 (alias registration) probe-decodes every allsound.tdf
+	// alias once, at construction, into a session-lifetime table
+	// [03 R-AUD-01 §1 mode 0][03 §8.3 "Alias registration"] — the same
+	// bring-up timing as the two FNT loads just above (`shell.font` /
+	// `shell.assets.font`), which retail also finishes "before the shell
+	// opens" [03 R-FONT-01 §5]. Calling ensureFrontendAudio here (idempotent;
+	// playMenuCue still calls it lazily for any caller that skips this
+	// constructor) moves that fixed cost off the first interface click, where
+	// a play-test reported it as visible latency (WU-19-224; measured well
+	// under retail's own cost budget — see the commit message for numbers).
+	shell.ensureFrontendAudio()
 	shell.openMenu(modeMenuMain)
 	return shell, nil
 }

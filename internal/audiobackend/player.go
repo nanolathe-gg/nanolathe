@@ -94,6 +94,57 @@ func (b *Backend) ensureContext() {
 	}()
 }
 
+// warmUpSample is a single silent frame used only to trigger the host
+// device's bring-up (see WarmUp). It is never queued as a retail cue and
+// carries no alias identity a lookup could resolve.
+var warmUpSample = &retailaudio.Sample{
+	Alias:         "__warmup",
+	Container:     "raw",
+	AudioFormat:   1,
+	Channels:      1,
+	SampleRate:    11025,
+	ByteRate:      11025,
+	BlockAlign:    1,
+	BitsPerSample: 8,
+	Data:          []byte{0x80},
+}
+
+// WarmUp starts the host device's bring-up as early as the platform boundary
+// can, instead of paying that cost as a side effect of the first real cue.
+//
+// This is platform work, not a retail contract: retail has no equivalent
+// step, and nothing here cites the retail spec. It exists because ebiten's
+// audio.Context.IsReady() only turns true once the underlying device
+// finishes an asynchronous open — on this host that measured anywhere from
+// tens of milliseconds to low seconds on a cold process, while the Play()
+// call that starts it returns in well under a millisecond. Without a warm-up
+// that wait lands on whichever cue happens to play first, which is what a
+// play-test felt as "the first click takes a while to play" (WU-19-224).
+//
+// The probe itself is a single silent frame, played at zero volume and
+// closed immediately: it only needs to reach player.Play(), which is what
+// triggers the device open on the caller's behalf; nothing about it is meant
+// to be audible or to occupy a voice slot for any length of time.
+func (b *Backend) WarmUp() {
+	if b == nil || !b.CanPlay() {
+		return
+	}
+	b.ensureContext()
+	if b.ctx == nil {
+		return
+	}
+	data := retailaudio.ConvertSample(warmUpSample, 0, 0, b.sampleRate)
+	if len(data) == 0 {
+		return
+	}
+	player, err := b.ctx.NewPlayerF32(bytes.NewReader(data))
+	if err != nil {
+		return
+	}
+	player.Play()
+	_ = player.Close()
+}
+
 func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) error {
 	if b == nil || sample == nil || !b.CanPlay() {
 		return nil

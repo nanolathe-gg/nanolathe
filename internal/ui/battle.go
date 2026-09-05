@@ -122,8 +122,22 @@ type BattleState struct {
 	Input BattleInputState
 
 	// PanelOffset, PanelTarget, and PanelLastThrottle are the sole owner of the
-	// battle rail slide. Draw and hit testing read PanelOffset; only the input /
-	// host-frame update advances it [07 §6][I6].
+	// §6 slide. Only the input / host-frame update advances it [07 §6][I6].
+	//
+	// What the offset moves is the bottom slide strip — `Game Time` /
+	// `Total Units` / `Game Speed` — which "slides up from the bottom edge of
+	// the view when Space is held" [07 R-HUD-03 §1 "the panel-slide gate"] and
+	// is drawn at `(x, yBottom + off)`, off screen at 0 [07 R-HUD-04 §4]. It is
+	// NOT a side-rail offset: PANELSIDE is stamped at (0,0) and nowhere else,
+	// and "every rail window and gadget rectangle" is fixed in authored
+	// coordinates [07 R-HUD-05]. The one reader is the composer's slide-strip
+	// draw; nothing else may translate art or a hit test by this word
+	// (WU-19-223).
+	//
+	// PanelParked/PanelVisible keep the names §6's parenthetical labels gave
+	// them (-31 "parked", 0 "fully visible"); by the two later closures above
+	// the strip is fully drawn at -31 and invisible at 0. The arithmetic is the
+	// same under either label, so the constant names are left alone.
 	PanelOffset       int8
 	PanelTarget       int8
 	PanelLastThrottle uint32

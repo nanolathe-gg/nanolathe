@@ -171,7 +171,7 @@ func (h *retailBattleHUD) hoveredGadgetSource() (int, string) {
 // pointer, and it is reset when no window is open [07 R-HUD-03 §1]. A greyed
 // product slot is still hovered; its name simply does not resolve to a
 // definition, so the card draws nothing [07 R-HUD-03 §3][07 R-HUD-03 §6].
-func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, offset int32, x, y int32) {
+func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, x, y int32) {
 	if h == nil {
 		return
 	}
@@ -200,8 +200,9 @@ func (h *retailBattleHUD) updateHoveredGadget(b *battleSession, f *frame.Frame, 
 		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && command.hidden {
 			continue
 		}
+		// The rail's gadget rectangles are fixed in authored coordinates and
+		// the §6 slide never translates them [07 R-HUD-05] (WU-19-223).
 		r := window.PlacedRect(i)
-		r.Y += offset
 		if !guiRectContains(r, x, y) {
 			continue
 		}
@@ -760,9 +761,24 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			drawQueueOverlay(c, b, cur, cur.Tick, b.battleState().Input.ShiftHeld, cur.Selection.LocalPlayer, b.cam.Tracked(), b.footerHoverUnit)
 		}
 	}
-	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. The two horizontal
-	// frames are static at the authored 129-pixel rail boundary; only the side
-	// strip and its GUI contents use the panel slide offset [07 §6].
+	// The shell call order is PANELTOP, PANELBOT, PANELSIDE. All three panel
+	// entries are static at their authored origins — PANELTOP (129,0),
+	// PANELBOT (129,H-32), PANELSIDE (0,0) [07 §6 "Panel asset binding and
+	// draw origins"].
+	//
+	// None of them takes the §6 slide offset, and neither do the rail's GUI
+	// windows. WU-19-223 corrects the opposite reading: this composer used to
+	// blit PANELSIDE at (0, offset) and translate every rail gadget rectangle
+	// by the same word, so holding Space lifted the whole left rail — art and
+	// buttons — 31 pixels up the screen. Retail moves nothing there.
+	// [07 R-HUD-05] establishes it twice: the first paint stamps PANELSIDE at
+	// (0,0) and "PANELSIDE is stamped here and nowhere else", and the
+	// "what follows the surface" table files "every rail window and gadget
+	// rectangle" under *fixed in authored coordinates*. What the offset
+	// actually drives is the bottom slide strip: "it is not a side rail but
+	// the strip that slides up from the bottom edge of the view when Space is
+	// held" [07 R-HUD-03 §1 "the panel-slide gate"], drawn by drawSlideStrip
+	// below at the arithmetic of [07 R-HUD-04 §4].
 	//
 	// At a display mode larger than 640x480 the chrome extends by rule, not
 	// by scaling [07 R-HUD-05]: the bottom strip sits at the surface height
@@ -793,35 +809,24 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 			blitBattlePanel(c, h.panelBottom, int(x), bottomY)
 		}
 	}
-	offset := 0
-	if b != nil {
-		offset = int(b.battleState().PanelOffset)
-	}
-	blitBattlePanel(c, h.panelSide, 0, offset)
+	blitBattlePanel(c, h.panelSide, 0, 0)
 	// The left rail keeps its authored 129x480 art: retail stamps PANELSIDE
 	// once at battle start onto a surface cleared to palette index 0 and never
 	// extends it, so on a surface taller than the art the band under the panel
 	// stays index 0 for the whole battle [07 R-HUD-05]. This composer draws the
 	// world across the whole framebuffer first, so the band is painted here.
-	// The band is measured from the art's authored 480 rows, not from the slid
-	// panel: the slide's own uncovered rows are a 640x480 matter this unit does
-	// not touch.
+	// The band is measured from the art's authored 480 rows, which is now also
+	// the panel's only position: the slide does not move it.
 	if h.panelSide != nil {
 		if gap, ok := hud.RailGap(int32(screenH), int32(h.panelSide.Width), int32(h.panelSide.Height)); ok {
 			c.UIFillRect(int(gap.X1), int(gap.Y1), int(gap.X2-gap.X1+1), int(gap.Y2-gap.Y1+1), 0)
 		}
 	}
-	// The §6 slide strip's three readouts, drawn over the bottom strip while
-	// the slide is off its closed detent [07 R-HUD-04 §4].
-	if cur != nil {
-		h.drawSlideStrip(c, b, cur)
-	}
-
 	// The hovered-gadget index is the footer's first source, so the pointer
 	// pass over the open page runs before the footer draws [07 R-HUD-03 §1].
 	if c.Input() != nil && c.Input().Mouse != nil {
 		mouse := c.Input().Mouse
-		h.updateHoveredGadget(b, cur, int32(offset), int32(mouse.X), int32(mouse.Y))
+		h.updateHoveredGadget(b, cur, int32(mouse.X), int32(mouse.Y))
 	}
 	ok := false
 	ok = cur != nil
@@ -829,7 +834,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 		h.drawResources(c, cur)
 		h.drawFooter(c, b, cur)
 	}
-	h.drawSidePage(c, b, offset, cur)
+	h.drawSidePage(c, b, cur)
 	// Stock ARMINT.GAF and CORINT.GAF inspection shows PANELSIDE's decoded
 	// 129×480 raster is opaque at every pixel, including the radar area; there
 	// is no authored transparent cutout to preserve by clipping [fmt gaf].
@@ -838,6 +843,16 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// overlays remain later layers and may cover it transiently, without
 	// mutating the cached FINAL surface [03 §3.6][07 §6].
 	h.drawMinimap(c, b, cur)
+	// The §6 slide strip's three readouts, drawn over the bottom strip while
+	// the slide is off its closed detent [07 R-HUD-04 §4]. It is composed
+	// after the footer and the minimap — retail paints those early and the
+	// slide strip "much later", with only the network meter, the message
+	// column, the developer overlays and the options unfold after it
+	// [07 R-HUD-03 §14.4]. This call used to run before the footer, so the
+	// footer's own bottom-strip fields painted over the strip (WU-19-223).
+	if cur != nil {
+		h.drawSlideStrip(c, b, cur)
+	}
 	if paused {
 		h.drawPausedTitle(c)
 	}
@@ -1685,6 +1700,24 @@ const (
 // score panel of [07 R-HUD-04 §1], and its show test is Space unless a text
 // editor has the focus. That test is the rail state this build already owns, so
 // the offset is read rather than recomputed.
+//
+// This is the offset's ONE consumer. It is not a side rail: "it is not a side
+// rail but the strip that slides up from the bottom edge of the view when Space
+// is held" [07 R-HUD-03 §1 "the panel-slide gate"], and neither PANELSIDE nor
+// any rail window or gadget rectangle moves with it [07 R-HUD-05].
+//
+// TODO(question): [07 R-HUD-04 §4] says "the strip art is blitted at
+// (x, yBottom + off)" without naming which GAF entry that art is, and no other
+// section names it, so only the three text readouts are drawn here and the
+// bottom strip's own PANELBOT backdrop shows through behind them. A trace of
+// the composer's slide-strip draw naming the cached entry the blit reads — or a
+// retail capture of the Space-held bottom band next to the parked one — would
+// settle it. Note also that [07 §6]'s "Panel slide" paragraph labels -31
+// "parked" and 0 "fully visible", which is the reverse of what [07 R-HUD-04 §4]
+// ("drawn only while non-zero") and [07 R-HUD-03 §1] ("slides up ... when Space
+// is held", and Space held drives toward -31) establish; the arithmetic in both
+// readings agrees, only the two labels disagree, and this code follows the two
+// later closures.
 func (h *retailBattleHUD) drawSlideStrip(c *client.Client, b *battleSession, cur *frame.Frame) {
 	if h == nil || c == nil || b == nil || cur == nil || h.console == nil {
 		return
@@ -1839,7 +1872,7 @@ func (h *retailBattleHUD) defFor(u *frame.UnitView) (*content.UnitDef, bool) {
 	return h.cat.UnitDefByIndex(uint32(u.DefID))
 }
 
-func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offset int, f *frame.Frame) {
+func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *frame.Frame) {
 	if b == nil || b.cat == nil {
 		return
 	}
@@ -1856,8 +1889,9 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 		if i == 0 || gad.Active == 0 || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue
 		}
+		// Fixed in authored coordinates: the §6 slide moves no rail window and
+		// no gadget rectangle [07 R-HUD-05] (WU-19-223).
 		r := window.PlacedRect(i)
-		r.Y += int32(offset)
 		pressed := false
 		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
 			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
@@ -1929,30 +1963,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, offse
 				text = productQueueCountLabel(f, gad.Name)
 			}
 			if text != "" {
-				// This is a button caption, so it takes the button rule of
-				// "The FNT foreground each painter installs"
-				// [03 R-FONT-01 §6]: foreground = GUIPAL map entry 0 when
-				// `stages != 0`, else map entry `row`, the gadget's live
-				// flash word ("colorf") — never the authored `colorf` field
-				// read raw. The side page keeps no ui.Panel (WU-19-117's
-				// flash-row tracker, `Panel.FlashRow`/`SetFlashRow`) for this
-				// window, so nothing ever writes that word for these
-				// gadgets; it is always 0 — "the word is 0 whenever nothing
-				// is flashing" — so both branches resolve to map entry 0
-				// here regardless of `stages`.
-				//
-				// Pen placement is the button painter's pen arithmetic
-				// [03 R-FONT-01 §6], not a fixed left-inset/vertical-centre
-				// guess: build-product buttons author attribute 0x20 (the
-				// build-attribute variant — the same asset census over the
-				// reference install's guis/*.gui files that backs
-				// [07 R-P0-11 §2]'s refinement also finds `attribs = 32` on
-				// all 480 of them), which keeps the centred horizontal pen but
-				// anchors the caption near the button's bottom edge instead of
-				// centering it vertically.
-				tw := client.MeasureText(h.guiFont, text)
-				px, py := queueCountLabelPen(gad, r, tw, int(h.guiFont.Height))
-				c.UITextWidth(h.guiFont, text, px, py, int(r.W), h.guiColor(0))
+				h.drawProductButtonCaption(c, gad, r, text)
 			}
 		}
 	}
@@ -2010,9 +2021,10 @@ func productQueueCountLabel(f *frame.Frame, product string) string {
 // `gy + trunc((h-1-metric)/2) + s` for the left/right/centre attributes, but
 // the build-attribute variant (attribute bit 0x20) keeps the centred
 // horizontal pen and instead anchors near the bottom edge:
-// `bottom - 4 - metric + s`. `metric` is the line metric of the active font
-// family — the capital-I frame height plus two for a GAF font, or (as here,
-// an FNT family) the FNT header height field.
+// `bottom - 4 - metric + s`. `metric` is the line metric of the family the
+// caption is drawn with — the capital-I frame height plus two for a GAF font
+// (the case here; see drawProductButtonCaption), or the FNT header height
+// field on the GAF pen's null-slot fallback.
 //
 // Build-product buttons author attribute 0x20 and no left/right/centre bit
 // (asset census over the reference install's guis/*.gui files, the same
@@ -2045,6 +2057,85 @@ func queueCountLabelPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y
 	default:
 		return gx + 3 + s, gy + (h-1-metric)/2 + s
 	}
+}
+
+// productButtonCaptionLayout picks the family and pen the retail button
+// painter would use for a side-page button caption — in practice the queue
+// count the count-label writer left in the toy's own text slot
+// [07 R-P0-11 §2].
+//
+// Family. Every text call in the button painter goes through the GAF-font pen
+// with mode 0, so a button caption is drawn with the window's *current GAF
+// font*; the pen reaches the FNT drawer only when that slot is null, and then
+// with the width limit dropped (maxW = -1) [03 R-FONT-01 §6]. This is the
+// correction WU-19-221 makes: the count was drawn with the side font's FNT,
+// the wrong family.
+//
+// Which GAF slot. Startup hands the GUI window slot 0 = anims/hattfont12.gaf
+// and slot 1 = anims/hattfont11.gaf; the button painter switches the current
+// slot to 1 only for a button carrying the small-font attribute bit 0x8000,
+// and restores slot 0 when it is done, so slot 0 is what a button without
+// that bit draws with [03 R-FONT-01 §5]. No count-bearing product button
+// carries it: an asset census over the reference install's guis/*.gui files —
+// the same census that backs [07 R-P0-11 §2]'s refinement — finds all 488
+// count-bearing buttons (kind 1 with `commonattribs` 4 or 8) authoring
+// `attribs = 32` and a 64x64 rectangle, and none of them 0x8000. The count is
+// therefore hattfont12, the GAF font this HUD already loads for its other
+// retail text.
+//
+// (The sentence in [03 R-FONT-01 §5] that has "the build-card count label"
+// switching to slot 1 for its duration describes the routine RWU-19-34
+// re-identified as the kind-13 score-bar painter — the same mis-subject that
+// correction fixed in [03 R-FONT-01 §6], where it also settles that the
+// side-page build count "is a button caption and never passes through this
+// routine". Reported for a doc correction; the button rule above is what the
+// count follows.)
+//
+// Colour. The GAF pen colours from the frame bytes with mode 0 and never
+// reads the foreground the painter installs, so the button rule's map entry
+// `colorf` (map entry 0 unless mid-flash, and nothing on this page ever
+// writes the flash word) only reaches pixels on the FNT fallback
+// [03 R-FONT-01 §6].
+func (h *retailBattleHUD) productButtonCaptionLayout(gad gui.Gadget, r gui.Rect, text string) (x, y int, font *formats.GAFEntry) {
+	if font = h.buttonCaptionGAFFont(); font != nil {
+		x, y = queueCountLabelPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
+		return x, y, font
+	}
+	if h.guiFont == nil {
+		return 0, 0, nil
+	}
+	x, y = queueCountLabelPen(gad, r, client.MeasureText(h.guiFont, text), int(h.guiFont.Height))
+	return x, y, nil
+}
+
+// buttonCaptionGAFFont is the window's current GAF-font slot for a button
+// caption: slot 0, anims/hattfont12.gaf, which battle entry already loads
+// [03 R-FONT-01 §5]. A missing font file leaves the slot null rather than
+// failing battle entry, which is the pen's FNT-fallback case.
+func (h *retailBattleHUD) buttonCaptionGAFFont() *formats.GAFEntry {
+	if h == nil || h.modalFont == nil || len(h.modalFont.Frames) == 0 {
+		return nil
+	}
+	return h.modalFont
+}
+
+// drawProductButtonCaption draws that caption where productButtonCaptionLayout
+// puts it. The GAF pen blits each glyph at `penX - XOffset, penY -
+// normalizedYOffset` (the load-time baseline normalization of [07 §4]) and
+// stops on the first glyph wider than the remaining width, the painter's
+// `maxW = w` [03 R-FONT-01 §6]. On the null-slot fallback the FNT drawer is
+// called with the width limit dropped, which is what maxWidth < 0 means to
+// UITextWidth.
+func (h *retailBattleHUD) drawProductButtonCaption(c *client.Client, gad gui.Gadget, r gui.Rect, text string) {
+	x, y, font := h.productButtonCaptionLayout(gad, r, text)
+	if font != nil {
+		drawRetailGAFText(c, font, text, x, y, int(r.W))
+		return
+	}
+	if h.guiFont == nil {
+		return
+	}
+	c.UITextWidth(h.guiFont, text, x, y, -1, h.guiColor(0))
 }
 
 // commandPageIsPaged reports the selected builder's page-shown bit (status bit
@@ -2358,10 +2449,6 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			}
 		}
 	}
-	offset := int32(0)
-	if b != nil {
-		offset = int32(b.battleState().PanelOffset)
-	}
 	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
@@ -2379,8 +2466,10 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			// nor shields whatever lies behind it.
 			continue
 		}
+		// Fixed in authored coordinates: the §6 slide moves no rail gadget
+		// rectangle, so the hit test never follows it [07 R-HUD-05]
+		// (WU-19-223).
 		r := window.PlacedRect(i)
-		r.Y += offset
 		if !guiRectContains(r, x, y) {
 			continue
 		}
@@ -2592,10 +2681,6 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	if window == nil {
 		return false
 	}
-	offset := int32(0)
-	if b != nil {
-		offset = int32(b.battleState().PanelOffset)
-	}
 	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
@@ -2607,8 +2692,10 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && (command.grey || command.hidden) {
 			continue
 		}
+		// Fixed in authored coordinates: the §6 slide moves no rail gadget
+		// rectangle, so the hit test never follows it [07 R-HUD-05]
+		// (WU-19-223).
 		r := window.PlacedRect(i)
-		r.Y += offset
 		if guiRectContains(r, x, y) {
 			return true
 		}
@@ -2632,10 +2719,6 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 	if window == nil {
 		return -1
 	}
-	offset := int32(0)
-	if b != nil {
-		offset = int32(b.battleState().PanelOffset)
-	}
 	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
@@ -2647,8 +2730,10 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 		if command, isCommand := commandGadgetVerdict(gad, f, paged); isCommand && (command.grey || command.hidden) {
 			continue
 		}
+		// Fixed in authored coordinates: the §6 slide moves no rail gadget
+		// rectangle, so the hit test never follows it [07 R-HUD-05]
+		// (WU-19-223).
 		r := window.PlacedRect(i)
-		r.Y += offset
 		if guiRectContains(r, x, y) {
 			return i
 		}

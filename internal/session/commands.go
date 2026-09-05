@@ -345,7 +345,45 @@ func (s *Session) applyHumanGroup(c HumanGroupCommand, assign bool) {
 // [07 §9][07 R-HUD-04 §4 "First build page"]. The selection-time default that
 // used to stand here re-applied the same seed and is gone.
 
-func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, goalY numeric.Fixed) {
+// insertedBuildNode picks the record the construction producer just created,
+// given the primary segment as it stood before the call.
+//
+// Correction (WU-19-227). stampHumanBuild used to assume the record was the
+// primary TAIL. It is not: [04 §3.3]'s producer insertion links a new record
+// "immediately after the currently active order" and only "appends at the tail
+// when no record carries" the active marker. Any queue whose marker is not on
+// its last record therefore receives the new build node in the middle, and the
+// tail assumption then stamped the click's site height (GoalY) and creation
+// tick onto a DIFFERENT queued building — which is what moved an unrelated
+// queued site's overlay marker vertically after a Shift-click removal, while
+// the record actually created kept GoalY 0 and drew at sea level.
+//
+// A nil answer means the producer coalesced into an existing record instead of
+// allocating one ([05 "Queue insertion"]'s tail-only counted coalesce); the
+// caller then falls back to the tail, which is the record that coalesce grew.
+func insertedBuildNode(before, after []*orders.Node) *orders.Node {
+	if len(after) <= len(before) {
+		return nil
+	}
+	for _, n := range after {
+		if n == nil {
+			continue
+		}
+		known := false
+		for _, b := range before {
+			if b == n {
+				known = true
+				break
+			}
+		}
+		if !known {
+			return n
+		}
+	}
+	return nil
+}
+
+func stampHumanBuild(u *units.Unit, before []*orders.Node, product string, tick uint32, queued bool, goalY numeric.Fixed) {
 	if u == nil {
 		return
 	}
@@ -354,13 +392,16 @@ func stampHumanBuild(u *units.Unit, product string, tick uint32, queued bool, go
 		return
 	}
 	prim := q.Primary()
-	tail := prim[len(prim)-1]
-	if tail == nil || tail.BuildDefKey != content.CanonicalKey(product) {
+	node := insertedBuildNode(before, prim)
+	if node == nil {
+		node = prim[len(prim)-1]
+	}
+	if node == nil || node.BuildDefKey != content.CanonicalKey(product) {
 		return
 	}
-	tail.Owner = u.Handle
-	tail.CreationTick = tick
-	tail.GoalY = goalY
+	node.Owner = u.Handle
+	node.CreationTick = tick
+	node.GoalY = goalY
 	// The queue modifier is applied by the caller (purge or not before the
 	// insert); it is not stamped onto the record. Purge survivorship is the
 	// descriptor's static gate bit 2 and the insertion path already wrote it
@@ -556,8 +597,12 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 				q.DropLeadingAutoOps()
 			}
 		}
+		// The segment as it stands before the producer runs is what identifies
+		// the record the producer creates; it is not the tail. See
+		// insertedBuildNode.
+		beforeMobile := orders.QueueForUnit(u).Primary()
 		if err := construction.QueueMobileBuild(u, c.MobileBuild.Product, c.MobileBuild.WX, c.MobileBuild.WZ, 1, s.Catalog); err == nil {
-			stampHumanBuild(u, c.MobileBuild.Product, tick, c.MobileBuild.Queued, c.MobileBuild.WY)
+			stampHumanBuild(u, beforeMobile, c.MobileBuild.Product, tick, c.MobileBuild.Queued, c.MobileBuild.WY)
 		}
 	case HumanFactoryBuild:
 		u := s.humanUnit(c.FactoryBuild.Builder)
@@ -569,6 +614,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if count == 0 {
 			count = 1
 		}
+		beforeFactory := orders.QueueForUnit(u).Primary()
 		var err error
 		if count > 0 {
 			err = construction.QueueFactoryBuild(u, c.FactoryBuild.Product, count, s.Catalog)
@@ -581,7 +627,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		if err == nil && count > 0 {
 			// Counted factory nodes are no-purge commands. The old boolean is
 			// retained only for source compatibility with pre-count callers.
-			stampHumanBuild(u, c.FactoryBuild.Product, tick, false, 0)
+			stampHumanBuild(u, beforeFactory, c.FactoryBuild.Product, tick, false, 0)
 		}
 	case HumanCancelProduction:
 		u := s.humanUnit(c.CancelProduction.Unit)

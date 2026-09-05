@@ -8257,11 +8257,34 @@ overlay and probes above (`COMIX`) and the status footer (GAF-font path with
 `COMIX` as its fallback). Shell text goes through
 the GAF-font trio of §6, which prefers the window's GAF font and falls back
 to the active FNT only when that slot is null; the label and button painters
-use the FNT drawer directly only for a label that names a font gadget. The
-build-card count label switches the window's GAF font to slot 1
+use the FNT drawer directly only for a label that names a font gadget. The list
+and label painters switch the window's GAF font to slot 1 (`hattfont11`) for
+their text and restore slot 0 afterwards, and so does the button painter when
+the button's small-font attribute bit `0x8000` is set; a button without that
+bit draws its caption with slot 0 (`hattfont12`), which is what a side page's
+build count does (correction below). GDI text is not used by any of these
+paths.
+
+**Correction (2026-09-04, WU-19-221).** The paragraph above previously read
+"The build-card count label switches the window's GAF font to slot 1
 (`hattfont11`) for its duration and restores slot 0 afterwards; so do the
-list, button (when the button's small-font attribute bit `0x8000` is set)
-and label painters. GDI text is not used by any of these paths.
+list, button (when the button's small-font attribute bit `0x8000` is set) and
+label painters." The clause about the three painters is unaffected and is kept
+above; the subject of the first clause is wrong. There is no build-count
+routine that selects a font: the count-label writer stores the number in the
+product button's own text slot ([07 R-P0-11 §2]) and the GUI button painter
+draws it as that button's caption (§6, "Side-page build count"), so it takes
+the button rule — the window's current slot, slot 0 (`hattfont12`), unless the
+button authors `0x8000`. No count-bearing product button authors it: an asset
+census over the reference install's `guis/*.gui` finds all 488 kind-1 buttons
+carrying `commonattribs` 4 or 8 authoring `attribs = 32` and a 64x64
+rectangle, and none of them `0x8000`. A side-page build count therefore draws
+in `hattfont12`, not `hattfont11`. The "switches to slot 1" subject is the
+kind-13 score-bar painter that RWU-19-34 re-identified in §6 — the same
+mis-subject that correction fixed there ("the side-page build count is a
+button caption ... and never passes through this routine") while leaving this
+sentence standing; whether that painter selects slot 1 is now an open item in
+"Missing and unknown".
 
 ### Closed — the GAF-font pen: measure, metric, draw, wrap, and the gadget painters [R-FONT-01 §6] (2026-08-29)
 
@@ -10080,6 +10103,13 @@ by the sharper question it turned into.
 - Malformed `hattfont` with no frame at the `I` index (undefined by
   construction) — whether any installed asset triggers it · §7.1
   [R-FONT-01 §6] · asset census over GAF fonts.
+- Whether the kind-13 score-bar painter switches the window's GAF font to
+  slot 1 for its duration · §7.1 [R-FONT-01 §5–§6] · static trace of that
+  painter's slot writes. [R-FONT-01 §6] (RWU-19-34) says it does not and
+  measures with whatever slot the window already holds; a WU-19-221 read of
+  the same painter suggests it does select slot 1 and restore slot 0. Only the
+  end-of-mission bars depend on the answer — no side-page or build-card text
+  reaches this routine (§6, correction) — so nothing else moves either way.
 - Input repeat, focus and activation rules, key-token translation, cursor
   capture, gadget hit-testing, and complete HUD/minimap palette composition
   · doc 07 · static trace.

@@ -943,8 +943,13 @@ func findActive(q *Queue) int {
 // ensureSingleActive keeps the active-marker invariant: exactly one primary
 // node carries FlagActive [04 §3.3]. When none does the head takes it; when
 // several do (possible while the marker travels) later duplicates are cleared.
-// Insertion moves the mark to the inserted node and removal hands it to the
-// removed node's successor [04 §3.3][05 "Queue insertion"].
+// Insertion moves the mark to the inserted node [04 §3.3][05 "Queue
+// insertion"].
+//
+// The head fallback is a repair for the paths that reshuffle a segment
+// wholesale (the leading-auto drop, the Replace purge, the tail rotate, the
+// save/load restore). It is NOT what a removal does: see
+// releaseMarkerOnRemoval, which every removal routine calls instead.
 func (q *Queue) ensureSingleActive() {
 	if q == nil || len(q.primary) == 0 {
 		return
@@ -961,6 +966,46 @@ func (q *Queue) ensureSingleActive() {
 	}
 	if first == -1 {
 		q.primary[0].Flags |= FlagActive
+	}
+}
+
+// releaseMarkerOnRemoval is what a removal does to the active marker: it lets
+// it go.
+//
+// Correction (WU-19-227). Every removal routine used to close with
+// ensureSingleActive, commented "mark moves to the successor [04 §3.3]". There
+// is no such rule. [04 §3.3]'s runtime-bit census of the static-mask copy
+// ("The active marker's writers, and the head insert's silence about it")
+// gives bit 12 — the active marker — exactly ONE writer: the producer
+// insertion's after-marker branch, which sets it on the record it creates and
+// clears it on the record that held it. Nothing else in the traced code writes
+// the bit, removals included. So freeing the record that carried the marker
+// leaves the segment unmarked, and [04 §3.1]'s insertion rule then takes its
+// other arm: "with no marked record it appends at the tail".
+//
+// The invented fallback was the play-test defect. A Shift-click that removes
+// the most recently queued order removes exactly the record holding the marker
+// ([07 R-P0-11 §6]'s duplicate toggle); ensureSingleActive then handed the
+// marker to q.primary[0], so the next Shift-queued order was inserted at index
+// 1 — at the FRONT of the remaining queue instead of at its end.
+//
+// Only ensureSingleActive's other half is kept: a duplicate marker is cleared.
+// A removal cannot create one, but a cleanup notification that re-enters the
+// queue can, and repairing it here costs one walk of a short segment.
+func (q *Queue) releaseMarkerOnRemoval() {
+	if q == nil {
+		return
+	}
+	seen := false
+	for _, n := range q.primary {
+		if n == nil || n.Flags&FlagActive == 0 {
+			continue
+		}
+		if seen {
+			n.Flags &^= FlagActive
+			continue
+		}
+		seen = true
 	}
 }
 
@@ -1518,7 +1563,7 @@ func (q *Queue) CancelFrontMost(match func(Node) bool) bool {
 		q.cleanupNode(n) // [05 "Queue subtraction"]
 		copy(q.primary[i:], q.primary[i+1:])
 		q.primary = q.primary[:len(q.primary)-1]
-		q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+		q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 		return true
 	}
 	return false
@@ -1542,7 +1587,7 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 			q.cleanupNode(n) // [05 "Queue subtraction"]
 			copy(q.primary[i:], q.primary[i+1:])
 			q.primary = q.primary[:len(q.primary)-1]
-			q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+			q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 			return true
 		}
 	}
@@ -1958,7 +2003,7 @@ func (q *Queue) unlinkPrimary(n *Node) {
 	}
 	q.cleanupNode(n)
 	q.spliceOutPrimary(n)
-	q.ensureSingleActive() // mark moves to the successor [04 §3.3]
+	q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 }
 
 // applyPrimaryResultCode is the PRIMARY result-code table [04 §3.3] C7: it
@@ -2272,7 +2317,7 @@ func (q *Queue) RemoveHead() *Node {
 	n := q.primary[0]
 	q.cleanupNode(n)
 	q.spliceOutPrimary(n)
-	q.ensureSingleActive()
+	q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 	if n != nil {
 		n.MoveState = MoveArrived
 	}
@@ -2369,8 +2414,8 @@ func (q *Queue) releaseBoundGoals() {
 //
 // Removal follows the established subtraction order [04 §3.3][05 "Queue
 // subtraction"]: the node is marked per tombstone rules, cleanup runs exactly
-// once, the segment is spliced, and the active marker is handed to the
-// successor.
+// once, and the segment is spliced. The active marker is not rewritten — it
+// has no removal-side writer at all, see releaseMarkerOnRemoval.
 //
 // tombstone selects the marker applied before cleanup. Retail exempts the
 // primary head from the tombstone [04 §3.3]; callers that must preserve an
@@ -2410,7 +2455,7 @@ func (q *Queue) RemovePrimaryNode(node *Node, tombstone bool) *Node {
 	// cleanup's cancel notification can unlink this record itself or insert
 	// ahead of it (see spliceOutPrimary).
 	q.spliceOutPrimary(removed)
-	q.ensureSingleActive()
+	q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 	return removed
 }
 

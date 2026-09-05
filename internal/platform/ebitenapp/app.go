@@ -100,7 +100,13 @@ func Run(c *client.Client) error {
 	// was bound or drained, which is how the device package reached into a
 	// package that otherwise touches no hardware [03 §8.1][I6].
 	if audio.GlobalOutput() == nil {
-		audio.SetGlobalOutput(audiobackend.New())
+		be := audiobackend.New()
+		audio.SetGlobalOutput(be)
+		// Kick off the host device's asynchronous bring-up now, before the
+		// window is shown and before any cue can be queued, rather than
+		// letting the wait land on whichever click happens to play first.
+		// This is platform work, not retail behaviour — see Backend.WarmUp.
+		be.WarmUp()
 	}
 	width, height := c.Size()
 	ebiten.SetWindowSize(width, height)

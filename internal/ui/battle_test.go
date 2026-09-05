@@ -247,3 +247,82 @@ func TestBattleStateOwnsInputAndPlacementState(t *testing.T) {
 		t.Fatalf("reset interaction=%+v", s.Input)
 	}
 }
+
+// TestBattleStatePanelEaseSequenceTruncatesTowardZero locks the exact step
+// sequence in both directions: "each accepted step eases by remaining-
+// distance/3 with a minimum step of one pixel in both directions so it always
+// converges; detents are -31 ... and 0" [07 §6 "Panel slide"]. The division is
+// an integer divide, so it truncates toward zero, not floors [I3]: from -31 the
+// remaining 31 gives 10, and from -1 the remaining 1 gives 0 and the one-pixel
+// minimum finishes the run. A floor would step -11 out of the -31 detent and
+// change every value below.
+func TestBattleStatePanelEaseSequenceTruncatesTowardZero(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		start     int8
+		spaceHeld bool
+		want      []int8
+	}{
+		{
+			name:  "toward the zero detent",
+			start: PanelParked,
+			want:  []int8{-21, -14, -10, -7, -5, -4, -3, -2, -1, 0},
+		},
+		{
+			name:      "toward the -31 detent",
+			start:     PanelVisible,
+			spaceHeld: true,
+			want:      []int8{-10, -17, -21, -24, -26, -27, -28, -29, -30, -31},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := NewBattleState(0x04)
+			s.PanelOffset = tc.start
+			now := uint32(1000)
+			for i, want := range tc.want {
+				now += PanelThrottleMs
+				s.AdvancePanel(now, tc.spaceHeld, false)
+				if s.PanelOffset != want {
+					t.Fatalf("step %d offset=%d, want %d (sequence so far %v)", i+1, s.PanelOffset, want, tc.want[:i+1])
+				}
+			}
+			// The detent is terminal: further accepted steps do not overshoot.
+			now += PanelThrottleMs
+			s.AdvancePanel(now, tc.spaceHeld, false)
+			if s.PanelOffset != tc.want[len(tc.want)-1] {
+				t.Fatalf("offset left its detent: %d", s.PanelOffset)
+			}
+		})
+	}
+}
+
+// TestAdvancePanelNowStepsOnceFromTheHostClock covers the wall-clock entry
+// point itself. It is presentation, so it may read the host clock [I6]; one
+// call from a cold throttle is always accepted and takes exactly the
+// remaining/3 step, and it applies the Space/editor polarity of [07 §6]
+// through the same SetPanelTarget the explicit-timestamp form uses.
+func TestAdvancePanelNowStepsOnceFromTheHostClock(t *testing.T) {
+	s := NewBattleState(0x04)
+	s.PanelOffset = PanelParked
+	s.AdvancePanelNow(false, false)
+	if s.PanelTarget != PanelVisible {
+		t.Fatalf("released Space target=%d, want %d", s.PanelTarget, PanelVisible)
+	}
+	if s.PanelOffset != -21 {
+		t.Fatalf("first host-clock step offset=%d, want -21", s.PanelOffset)
+	}
+	if s.PanelLastThrottle == 0 {
+		t.Fatal("host-clock step did not stamp the throttle")
+	}
+
+	// Space held with no text editor focused reverses the target; a text editor
+	// with the focus takes Space for itself and the slide returns to 0.
+	s.AdvancePanelNow(true, false)
+	if s.PanelTarget != PanelParked {
+		t.Fatalf("held Space target=%d, want %d", s.PanelTarget, PanelParked)
+	}
+	s.AdvancePanelNow(true, true)
+	if s.PanelTarget != PanelVisible {
+		t.Fatalf("held Space with an editor focused target=%d, want %d", s.PanelTarget, PanelVisible)
+	}
+}

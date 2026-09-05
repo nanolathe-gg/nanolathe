@@ -33,16 +33,6 @@ type AIPlan struct {
 	Limits  map[string]int32 // CanonicalKey(type) -> limit, default -1
 }
 
-// AIWeightDirective retains an authored ai_weight multiplier until the AI
-// profile boundary. The retail reader narrows the running product to float32
-// before truncating it to the stored integer, so converting this factor to a
-// percentage here would lose authored precision [08 "Established AI-facing
-// data and rooted planner"].
-type AIWeightDirective struct {
-	Type   string
-	Factor float32
-}
-
 // AIDirective is one directive of the profile grammar in source order. The
 // keyword table is exactly `plan`, `weight` and `limit`; every other token is
 // ignored [08 R-AI-01 §12]. Args holds the arguments after the keyword with
@@ -89,18 +79,6 @@ func ParseAIDirectives(data []byte) []AIDirective {
 	return out
 }
 
-// ParseAIWeightFactor reads a `weight` directive's second argument the way the
-// C runtime's atof does [08 R-AI-01 §20]: the longest decimal prefix converts
-// (`0.5`, `.5`, `1e0`, `1d0`, `2x` → 0.5, 0.5, 1, 1, 2) and a token with no
-// digit — `abc`, `0x10`, or an absent argument — is the established default
-// 0.0 [08 R-AI-01 §12], so the returned value is usable whatever the flag
-// says. The flag reports only whether a digit was consumed; nothing in the
-// grammar conditions the directive on it, so a caller that uses the flag as an
-// admission test is diverging from the grammar.
-func ParseAIWeightFactor(value string) (float64, bool) {
-	return parseAIWeightFactor(value)
-}
-
 // ApplyAIWeightFactor applies one `weight` directive's factor token to a
 // running per-type weight and returns the stored result
 // [08 R-AI-01 §12] [08 R-AI-01 §20]: the token is read by the runtime's atof
@@ -115,7 +93,7 @@ func ParseAIWeightFactor(value string) (float64, bool) {
 // internal/ai, and neither may keep its own copy of the conversion, the
 // product's width or the clamp. The directive applies with whatever atof
 // produced; nothing conditions the write on the token converting, so a caller
-// must not gate on ParseAIWeightFactor's flag.
+// must not gate on parseAIWeightFactor's flag.
 func ApplyAIWeightFactor(current int32, factorToken string) int32 {
 	factor, _ := parseAIWeightFactor(factorToken)
 	return aiWeightStore(current, factor)
@@ -129,15 +107,6 @@ func ParseAILimitValue(value string) int32 {
 	return formats.ParseTDFInteger(value)
 }
 
-// AIWeightPlan contains the directives authored in a unit's ai_weight field.
-// Weights is a slice because repeated directives apply in source order;
-// Limits remain a map because a limit is an assignment rather than an
-// arithmetic fold [08 "Established AI-facing data and rooted planner"].
-type AIWeightPlan struct {
-	Weights []AIWeightDirective
-	Limits  map[string]int32
-}
-
 // aiDirectiveTypeAndValue reads the type-name and value arguments of a
 // `weight` or `limit` directive's Args, exactly as both dispatchers of
 // [08 R-AI-01 §18] read them: only the type name (Args[0]) is required, and
@@ -145,8 +114,8 @@ type AIWeightPlan struct {
 // applies the established default instead of dropping the directive — retail
 // dispatches a definition's `ai_weight` fragment "exactly as a line of
 // ai\default.txt is dispatched", with no argument-conversion gate. Both
-// ParseAIProfile and ParseAIWeight call this so the two readers cannot drift
-// apart on what counts as "no argument".
+// ParseAIProfile and the applier in internal/ai read through this so the two
+// readers cannot drift apart on what counts as "no argument".
 func aiDirectiveTypeAndValue(args []string) (typeName, valueStr string, ok bool) {
 	if len(args) == 0 {
 		return "", "", false // no name argument: nothing for the matcher to expand
@@ -156,47 +125,6 @@ func aiDirectiveTypeAndValue(args []string) (typeName, valueStr string, ok bool)
 		valueStr = args[1]
 	}
 	return typeName, valueStr, true
-}
-
-// ParseAIWeight parses the directive text stored in a unit definition's
-// ai_weight field. Unlike a profile file, this field contains directives
-// directly (the shipped form is `weight <type> <factor>`), so there is no plan
-// gate. The directive vocabulary and limit assignment follow the profile
-// grammar; weight multiplication is deferred to the active profile boundary
-// so the authored factor remains intact at the established float32 narrowing
-// point [08 "Computer-controlled players"] [08 "Established AI-facing data and rooted planner"].
-// An unknown keyword is ignored.
-//
-// The fragment is tokenized by the same ParseAIDirectives dispatcher a whole
-// profile file goes through, and a directive whose argument is absent or
-// unconvertible applies the established default (0.0 for `weight`, 0 for
-// `limit`) rather than being dropped — retail's per-definition passes hand
-// the whole fragment to the profile grammar unfiltered, so this reader must
-// agree with ParseAIProfile on that point [08 R-AI-01 §18].
-func ParseAIWeight(data []byte) *AIWeightPlan {
-	plan := &AIWeightPlan{
-		Limits: make(map[string]int32),
-	}
-	for _, d := range ParseAIDirectives(data) {
-		typeName, valueStr, ok := aiDirectiveTypeAndValue(d.Args)
-		if !ok {
-			continue
-		}
-		ck := CanonicalKey(typeName)
-		switch d.Keyword {
-		case AIDirectiveWeight:
-			factor, _ := parseAIWeightFactor(valueStr)
-			// Keep the source multiplier intact. The active profile value is
-			// supplied later, and each directive is narrowed and clamped there.
-			plan.Weights = append(plan.Weights, AIWeightDirective{
-				Type:   ck,
-				Factor: float32(factor),
-			})
-		case AIDirectiveLimit:
-			plan.Limits[ck] = formats.ParseTDFInteger(valueStr)
-		}
-	}
-	return plan
 }
 
 // parseAIWeightFactor is the runtime `atof` read of [08 R-AI-01 §20]; the

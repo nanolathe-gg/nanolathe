@@ -15,6 +15,21 @@ func TestBackendIsLazy(t *testing.T) {
 	}
 }
 
+// TestBackendWarmUpInstallsDevice locks that WarmUp actually reaches the
+// point of creating the host device context, rather than being a no-op that
+// leaves the same lazy-until-first-cue behavior TestBackendIsLazy checks
+// above. This is a functional check only (no timing assertion, which would
+// be flaky across hosts and CI sandboxes without real audio hardware); the
+// measured latency this closes is reported in the WU-19-224 commit message,
+// not locked here [platform work, not a retail contract].
+func TestBackendWarmUpInstallsDevice(t *testing.T) {
+	b := New()
+	b.WarmUp()
+	if b.ctx == nil {
+		t.Fatal("WarmUp did not install the host audio context")
+	}
+}
+
 func TestClampPlayback(t *testing.T) {
 	tests := []struct {
 		volume, pan float64

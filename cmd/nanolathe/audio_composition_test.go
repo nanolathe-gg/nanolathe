@@ -148,6 +148,48 @@ func TestDetachBattleAudio_StopsBattleAudioAndKeepsTheDevice(t *testing.T) {
 	}
 }
 
+// TestNewGameShellPreloadsFrontendAudio locks WU-19-224's fix: the frontend
+// audio owner and its alias registry exist as soon as the shell is
+// constructed, before any frame is drawn or any interface click is handled.
+//
+// Retail finishes registering (and probe-decoding) every allsound.tdf alias
+// as part of session bring-up, before the shell opens [03 R-AUD-01 §1 mode
+// 0][03 §8.3 "Alias registration"] — the same timing as the two startup FNT
+// loads [03 R-FONT-01 §5]. Before this fix, ensureFrontendAudio only ran
+// lazily on the first playMenuCue call, so the first interface click paid for
+// constructing the service and decoding the whole alias table; a play-test
+// observed that as visible latency before the first click's sound played.
+// Skipped when the retail assets are not opted in.
+func TestNewGameShellPreloadsFrontendAudio(t *testing.T) {
+	root := probeRetail(t)
+	cs, err := openContent(Options{Root: root})
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	defer cs.Close()
+
+	shell, err := newGameShell(Options{Root: root}, cs)
+	if err != nil {
+		t.Fatalf("newGameShell: %v", err)
+	}
+
+	if shell.audioOwner == nil {
+		t.Fatal("newGameShell returned with no frontend audio owner; registration is still deferred to the first click")
+	}
+	if shell.audioOwner.Registry == nil || shell.audioOwner.Registry.Count() == 0 {
+		t.Fatalf("frontend audio owner's alias registry is empty at construction; got %d aliases, want the allsound.tdf table already registered", shell.audioOwner.Registry.Count())
+	}
+	if !shell.frontendAliasesBound {
+		t.Error("frontendAliasesBound is false after newGameShell; the alias bind was expected to happen at construction, not on first cue")
+	}
+	// A representative interface cue must already resolve to a real sample —
+	// not just an occupied slot — the same assertion TestFrontendCueAliasesResolve
+	// makes against the lazy path.
+	if sample, err := shell.audioOwner.Load("BigButton"); err != nil || sample == nil {
+		t.Errorf("BigButton does not resolve immediately after construction (%v) [07 R-FE-01 §2]", err)
+	}
+}
+
 // authorTestSoundCategory gives a unit definition an authored sound category
 // with an OK variant, so the queue's resolver produces a real alias. The
 // fixture is authored by us; no retail bytes are involved.

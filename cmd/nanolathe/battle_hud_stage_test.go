@@ -275,11 +275,11 @@ func TestHoveredGadgetKeepsGreyedButtonsAndSkipsHiddenOnes(t *testing.T) {
 	b := &battleSession{sess: &session.Session{Snapshot: buf, LocalOwner: 0}, cat: &content.Catalog{}, hud: h}
 	f := buf.Current()
 
-	h.updateHoveredGadget(b, f, 0, 5, 5)
+	h.updateHoveredGadget(b, f, 5, 5)
 	if _, name := h.hoveredGadgetSource(); name != "ARMPATROL" {
 		t.Fatalf("greyed PATROL hovered as %q, want ARMPATROL", name)
 	}
-	h.updateHoveredGadget(b, f, 0, 5, 25)
+	h.updateHoveredGadget(b, f, 5, 25)
 	if index, name := h.hoveredGadgetSource(); index != hud.NoGadget || name != "" {
 		t.Fatalf("hidden LOAD hovered as %d %q, want no gadget", index, name)
 	}

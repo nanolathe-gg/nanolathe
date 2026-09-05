@@ -3265,6 +3265,40 @@ typed gadget whose authored record type equals `3` (the text-editor family)
 holds focus, in which case it slides toward 0; with Space released it always
 slides toward 0.
 
+**Correction (2026-09-04, WU-19-223) — the two detent labels are reversed, and
+the subject is not the side rail.** The paragraph above said "The side rail
+slides with an exact animation contract" and "detents are -31 (parked) and 0
+(fully visible)", and the Space-polarity paragraph carries the same reversal in
+its subject: "with Space held the **panel** slides toward -31".
+
+Both are wrong about *what* moves and about *which* detent is the visible one.
+The arithmetic is untouched by this correction — 15 ms throttle, ease by
+remaining-distance/3, minimum step one pixel, detents -31 and 0, the `Panel` and
+`Options` cue crossings, and Space held driving toward -31 all stand exactly as
+written above.
+
+*What moves.* Not the side rail. [R-HUD-03 §1 "the panel-slide gate"] already
+corrected the session-kind gate off this paragraph and said so in as many words:
+"the §6 slide strip (`Game Time` / `Total Units` / `Game Speed`, 15 ms throttle,
+−31/0 detents) is stepped unconditionally in every session kind, and it is not a
+side rail but the strip that slides up from the bottom edge of the view when
+Space is held." `PANELSIDE` has one final origin, `(0,0)`; it is stamped there
+by the first paint and "nowhere else", and "every rail window and gadget
+rectangle" is fixed in authored coordinates ("Panel asset binding and draw
+origins" below; [R-HUD-05]). No rail art, rail window or gadget rectangle takes
+this offset — the bottom strip's own draw is its one consumer.
+
+*Which detent is visible.* 0 is the **parked** state and -31 the **fully
+raised** one, the reverse of the labels above. [R-HUD-04 §4] fixes it: the strip
+art is blitted at `(x, yBottom + off)` with `off` in `−31..0` and is "drawn only
+while non-zero", so at 0 the strip sits at the surface's bottom edge and is off
+screen, and at -31 its rows are fully on screen over the bottom strip. That is
+also the only reading consistent with the Space polarity, since Space held
+drives toward -31 and holding Space is what *shows* the readouts.
+
+The labels are what is corrected; an implementation that followed the arithmetic
+and [R-HUD-04 §4]'s draw rule was already right. **Established.**
+
 **Panel asset binding and draw origins are closed.** The side loader opens the
 GAF named by the selected SIDE's `intgaf` field and caches the named entries
 `PANELTOP`, `PANELSIDE`, and `PANELBOT`. Their final framebuffer origins are
@@ -8100,6 +8134,13 @@ section rather than deleted.
   entries · §10, doc 03 §3.3 · static trace.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · §10, doc 08 · static trace.
+- Which cached GAF entry the §6 slide strip's art is. [R-HUD-04 §4] closes the
+  strip's placement — "the strip art is blitted at `(x, yBottom + off)`", with
+  the three readouts at `yBottom + off + 10` — but names no entry, and no other
+  section names one either, so a reimplementation can place the readouts and
+  not the band behind them · §6 [R-HUD-04 §4], [R-HUD-03 §1] · static trace of
+  the composer's slide-strip draw naming the cached entry the blit reads, or a
+  retail capture of the Space-held bottom band beside the parked one.
 - Start-position markers · doc 03 · static trace.
 - Outcome transition timing · §11 · static trace. (The endgame bar-fill
   animation is closed in §6 [R-HUD-03 §11].)

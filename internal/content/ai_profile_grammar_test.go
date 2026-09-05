@@ -125,15 +125,15 @@ func TestAIWeightFactorReadsLikeTheRuntimeAtof(t *testing.T) {
 		{"-2", -2, true},
 	}
 	for _, c := range cases {
-		got, ok := ParseAIWeightFactor(c.in)
+		got, ok := parseAIWeightFactor(c.in)
 		if got != c.want || ok != c.ok {
-			t.Fatalf("ParseAIWeightFactor(%q) = (%v, %v), want (%v, %v) [08 R-AI-01 §20]", c.in, got, ok, c.want, c.ok)
+			t.Fatalf("parseAIWeightFactor(%q) = (%v, %v), want (%v, %v) [08 R-AI-01 §20]", c.in, got, ok, c.want, c.ok)
 		}
 	}
 	// `0x10` converts its leading zero and stops at the x: factor 0, digit consumed.
 	// Overflow is the runtime's overflow value; the store makes it 0.
-	if f, _ := ParseAIWeightFactor("1e999"); !math.IsInf(f, 1) {
-		t.Fatalf("ParseAIWeightFactor(1e999) = %v, want +Inf (runtime overflow value)", f)
+	if f, _ := parseAIWeightFactor("1e999"); !math.IsInf(f, 1) {
+		t.Fatalf("parseAIWeightFactor(1e999) = %v, want +Inf (runtime overflow value)", f)
 	}
 	stores := []struct {
 		cur    int32
