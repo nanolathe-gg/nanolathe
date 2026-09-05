@@ -7276,9 +7276,10 @@ attach a producer to any of the four.
 
 ### Closed by citation — the strip-object implementation questions, one rule each [R-FX-02 §6] (2026-09-02)
 
-`internal/session/strips.go` carries nine `TODO(question)` markers written
+`internal/session/strips.go` carried nine `TODO(question)` markers, written
 before [R-FX-01 §3] and [R-FX-02 §2–§3] landed; every one but the pool
-capacity (now [R-FX-02 §4]) was already answered there. This section is the
+capacity (now [R-FX-02 §4]) was already answered there, and all nine have
+since been removed from the source. This section is the
 index that retires them — the rule in one line each, with the section that
 owns the arithmetic. **Established** unless marked; the strip-5 flame class's
 init, spawn and update were re-read for this pass and match [R-FX-02 §2] as

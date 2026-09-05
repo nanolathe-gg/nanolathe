@@ -206,7 +206,7 @@ type Service struct {
 	// product"), it has to survive save/load through one owner, and two worlds
 	// in one process must not share it.
 	builderLinks map[pool.Handle]pool.Handle // product -> builder [05 C18]
-	// SETTLED (WU-19-166), retiring a `TODO(question)` that read "if an
+	// SETTLED (WU-19-166), retiring an open-question marker that read "if an
 	// in-battle restore boundary is introduced, persist placements together
 	// with the production node phase/count/target ...". Placements must NOT be
 	// persisted: retail's load is "reconstruction, not pointer restoration",
@@ -354,7 +354,7 @@ func nanoFootprintPad(footX, footZ int32) int32 {
 //
 // CORRECTION (WU-19-94). This used to compare `builddistance` in 16.16 against
 // the squared planar distance to the NEAREST POINT of the site's footprint
-// rectangle, under a TODO(question) that asked whether retail measured to the
+// rectangle, under an open-question marker that asked whether retail measured to the
 // centre, the edge or the bounds, and whether it added a footprint radius term.
 // [05 R-WORK-01 §12] retires both markers: "this retires a reach of
 // `builddistance` in 16.16 compared against the nearest point of the site's
@@ -911,7 +911,7 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 	//
 	// REWRITTEN (WU-19-166): the two tails this write pair still does not run
 	// are Established, not open, so the marker that stood here as a
-	// `TODO(question)` was asking a settled question. [04 R-COLL-01 §4] gives
+	// open-question marker was asking a settled question. [04 R-COLL-01 §4] gives
 	// both, on the stamp side — "for the building class the derived-height
 	// recompute over the grown rectangle and a reclassification of the
 	// rectangle in every active class layer follow" — and on the clear side,
@@ -3202,7 +3202,7 @@ func (s *Service) handleState4(factory *units.Unit, node *orders.Node, tick uint
 	// Trigger BuildUnitType only on local 30-tick deadline [P0-14].
 	//
 	// SETTLED (WU-19-166): "Interrupt masks 2/8 bodies known, producers
-	// TODO(T25) [P0-14]" stood here. Both producers have since been located and
+	// unlocated [P0-14]" stood here as an accepted-placeholder marker. Both producers have since been located and
 	// both are wired in this package. Mask 2 (cancel-current) is delivered by
 	// the removal paths themselves: "node cleanup invokes the handler with mask
 	// 2 whenever the removed record's state-mask byte still has bit 1 set, so

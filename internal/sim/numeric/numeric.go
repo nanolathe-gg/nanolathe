@@ -48,7 +48,7 @@ func (v Fixed) Neg() Fixed            { return -v }
 // shifted down arithmetically, so it FLOORS rather than truncating toward zero.
 //
 // This is Established, not inference (corrected 2026-09-04, WU-19-155; the text
-// here previously carried a TODO(question) saying "research does not state the
+// here previously carried an open-question marker saying "research does not state the
 // rounding of a fixed-by-fixed multiply directly". It does — under the phrase
 // "64-bit product, arithmetic shift" rather than under the word "rounding").
 // The A* heuristic scaling is the flattest statement: "hScaled = (h · scale) >>

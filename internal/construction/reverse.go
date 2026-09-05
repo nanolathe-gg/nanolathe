@@ -8,7 +8,7 @@ package construction
 // Retired here (WU-19-101): ReverseStep, ApplyReverse and ReverseCause9. They
 // were a second, parallel expression of that arm written while its dispatch
 // origin was unknown, and they had no production caller once sharedStep took a
-// float32 quantum. The `TODO(question)` they carried — "which order passes a
+// float32 quantum. The open-question marker they carried — "which order passes a
 // negative worker factor is unknown" — is closed: the caller is `GetBuilt`'s
 // phase-2 decay wrapper, whose quantum is `−((float)(buildtime × 11) /
 // buildcostenergy)` [04 R-ORD-01 §11][05 R-WORK-01 §11]. Their arithmetic also

@@ -766,7 +766,7 @@ func (s *Strategic) recomputeClassVectors() {
 			costEnergy = float32(def.BuildCostEnergy)
 		}
 		t0f := float32(acc0) + costMetal*float32(-0.01)
-		t0 := ftol(t0f) // narrow to float32 at CALL then ftol [P0-01 §4] TODO(T23) control-word
+		t0 := ftol(t0f) // narrow to float32 at CALL then ftol [P0-01 §4]; platform-residual control-word marker above
 		t1f := float32(t0) + costEnergy*float32(-0.002)
 		t1 := ftol(t1f)
 

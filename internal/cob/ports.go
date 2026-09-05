@@ -103,7 +103,7 @@ func IsEnginePort(id int32) bool { return id >= 1 && id <= 20 }
 // negative product rounds toward negative infinity and a tie rounds up
 // [04 §5.3][04 R-MOV-01 §4][04 §10.3] C25 (I2).
 //
-// The earlier text here carried a TODO(question) saying "retail's rounding for
+// The earlier text here carried an open-question marker saying "retail's rounding for
 // negative products is not closed ... negative values bias by +0.5" and asked
 // for the -cos*800 and HitByWeapon 400 sequences to be checked before relying
 // on negative angles. That is now closed, and the doubt was misplaced: the two

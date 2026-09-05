@@ -48,5 +48,5 @@ func TestP28OBS00ParityFixture(t *testing.T) {
 	if os.Getenv("NANOLATHE_TA_ROOT") == "" {
 		t.Skip("P28-OBS-00 requires NANOLATHE_TA_ROOT")
 	}
-	t.Skip("P28-OBS-00 blocked: the reference captures do not record the map, player rows, start positions, seeds or command sequence needed to create the same match state; see TODO(T25) above")
+	t.Skip("P28-OBS-00 blocked: the reference captures do not record the map, player rows, start positions, seeds or command sequence needed to create the same match state; see the marker above")
 }

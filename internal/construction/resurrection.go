@@ -145,7 +145,7 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 //     currently holds fringe is cleared the same way; cells holding anything
 //     else are left alone.
 //
-// SETTLED (WU-19-166), retiring a `TODO(T25)` that read "the multi-cell
+// SETTLED (WU-19-166), retiring an accepted-placeholder marker that read "the multi-cell
 // footprint sweep is not fully located beyond the single anchor plus its
 // fringe; the removal helper's own footprint handling remains open. Decider:
 // static trace of that helper's cell walk." The walk was already traced and

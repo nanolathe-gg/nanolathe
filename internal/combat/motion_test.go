@@ -685,11 +685,11 @@ func TestAdvanceDispatch(t *testing.T) {
 // the tick the deadline is reached, which is the whole of the behavior — there
 // is no separate malformed arm to defend.
 //
-// Correction (WU-19-154): the TODO(question) that stood here said the wrapping
+// Correction (WU-19-154): the open-question marker that stood here said the wrapping
 // was "not fully closed" and called the unsigned reading a placeholder. It is
 // the Established one, under §6.6's own wording rather than the marker's
 // vocabulary. What is NOT settled by this test is where the wrap happens — see
-// the TODO(T25) below.
+// the note below.
 func TestNegativeTimerIsAWrappedLargePositiveOne(t *testing.T) {
 	w := &content.WeaponDef{Ballistic: true, WeaponTimer: -5, BurnBlow: false}
 	p := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(0)}, ExpiryTick: 0}
@@ -705,7 +705,7 @@ func TestNegativeTimerIsAWrappedLargePositiveOne(t *testing.T) {
 	}
 }
 
-// Retired (WU-19-163). This TODO(T25) said the width of the wrap was wrong in
+// Retired (WU-19-163). This accepted-placeholder marker said the width of the wrap was wrong in
 // this build: `weapontimer` reaches the record through a 16-bit unsigned
 // store [06 §7.3], so an authored negative should reach the record as at most
 // 65,535 ticks, but the weapon-definition compiler kept the float-to-integer
@@ -724,7 +724,7 @@ func TestNegativeTimerIsAWrappedLargePositiveOne(t *testing.T) {
 // `nowPlusTimer`'s own unsigned-wrap arithmetic even though the compiler
 // would never emit that raw value now. burstrate, duration and smokedelay
 // keep an established 16-bit width but no established signedness and are
-// left untruncated with a TODO(question) at the compile site.
+// left untruncated with an open-question marker at the compile site.
 
 func nowPlusTimer(now uint32, timer int32) uint32 { return now + uint32(timer) }
 

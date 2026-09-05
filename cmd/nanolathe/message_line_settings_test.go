@@ -37,7 +37,7 @@ func captionFixture(t *testing.T) (*client.Client, *audio.Service) {
 }
 
 // TestApplyMessageLineSettingsConfiguresTheRing locks the composition seam
-// that retires the TODO(T25) marker in internal/client/client.go: the
+// that retires the accepted-placeholder marker in internal/client/client.go: the
 // persisted `textlines` has to reach the battle client's message ring through
 // ConfigureMessageLines rather than the client's own built-in default of 10
 // standing for the whole session [02 §3][07 R-HUD-03 §14.3].

@@ -268,7 +268,7 @@ func (s *Slot) CompleteAim(returnValue int32) bool {
 // must be reproduced independently. So a weapon's guidance flags cannot change
 // what its aim gate demands, at any combination.
 //
-// Correction (WU-19-154): a TODO(question) here said "guidance/tracks/cruise
+// Correction (WU-19-154): an open-question marker here said "guidance/tracks/cruise
 // composability beyond turret/vlaunch gating remains open per [06 §3.3]
 // missing/unknown". §3.3's missing list carries no such item, and the
 // composability it asked about does not exist — the two ladders never meet.

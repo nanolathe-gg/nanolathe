@@ -295,7 +295,7 @@ func DistanceToBox(impact Vec3, u UnitForArea) int32 {
 	// WRAPS: [06 §9.3] states that "a distance at or above 32,768 world units
 	// wraps negative and passes the acceptance test", which is the whole reason
 	// the acceptance test's strictness is worth recording. This site used to
-	// SATURATE behind a TODO(question) that called the wrap the untraced arm;
+	// SATURATE behind an open-question marker that called the wrap the untraced arm;
 	// it is the Established one, and saturating turns a far victim that retail
 	// accepts into one that is rejected. Stock content cannot reach it — no
 	// shipped weapon has a radius anywhere near 32,767 — but a blast at that

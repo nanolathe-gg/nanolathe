@@ -12,6 +12,9 @@ package units
 // so no production code can bypass the authoritative entry point.
 
 import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
 
@@ -68,16 +71,16 @@ func (w *World) tickUnit(u *Unit, tick uint32) {
 	// health regen or activation toggles appears in the list, so the old
 	// marker's caution was aimed at the right hazard for the wrong reason.
 	//
-	// TODO(T25): unitPreUpdate (pipeline.go) implements step 8 alone. Step 6
-	// needs no field — the counter is armed only by a capture whose new owner
-	// is a remote controller, so single-player holds it at zero
-	// [08 R-TRIG-01 §3]. Steps 5 and 7 need state this package does not carry:
-	// a per-unit blink byte (its producer exists as combat's damage-flash
-	// event, which today stops at the publication boundary with no field to
-	// write) and the selected bit, which lives in the HUD rather than on the
-	// unit record. Step 2's notifier is bound in internal/ai. Wiring any of
-	// them means adding the field here and the decrement in pipeline.go, which
-	// is outside this unit's file ownership.
+	// Steps 5, 6, 7 and 8 are all in unitPreUpdate now (WU-19-188). Step 5's
+	// byte is Unit.BlinkSuppress, written 240 (signed -16) by the damage
+	// dispatcher before the reaction step and decremented as a signed byte here
+	// [06 R-WPN-04 §2]; publication copies it onto the radar contact and the
+	// contacts pass blinks the blip while it is nonzero [03 §3.9]. Step 7 clears
+	// the selected bit (0x10, on the unit record — the HUD never owned it) from
+	// a unit that stops being ready [07 R-WGT-01 §9]. Step 6's counter stays
+	// fieldless: its only writer is the ownership transfer's remote-peer branch,
+	// which is multiplayer transport, so single-player holds it at zero
+	// [08 R-TRIG-01 §3]. Step 2's notifier is bound in internal/ai.
 	w.unitPreUpdate(u, tick)
 
 	// 2. water damage and unit-level timed work [04 §9.2].
@@ -215,4 +218,124 @@ func (w *World) slotEndDeathHandling(u *Unit, tick uint32) {
 		// after the tick [04 §2.4] C2.
 		w.Destroy(u.Handle, DeathKilled)
 	}
+}
+
+// TestBlinkByteReachesZeroInSixteenVisits locks the direction and the length of
+// the pre-update's step-5 countdown [04 R-MOV-03 §1 step 5][06 R-WPN-04 §2]. The
+// damage dispatcher writes 240; the sweep reads that byte SIGNED as -16 and
+// steps it one toward zero per visit, so the blink lasts exactly sixteen visits.
+// Subtracting one instead would walk away from zero and never end; an unsigned
+// decrement of 240 would blink for eight seconds instead of half of one.
+func TestBlinkByteReachesZeroInSixteenVisits(t *testing.T) {
+	world := newFixtureWorld(2, nil)
+	def := &content.UnitDef{UnitName: "blink-unit", MaxDamage: 100, Limit: -1}
+	h, err := world.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := world.Unit(h)
+	u.Health = 100
+	if u.BlinkSuppress != 0 {
+		t.Fatalf("spawn blink byte = %d, want 0 [06 R-WPN-04 §2]", u.BlinkSuppress)
+	}
+	u.BlinkSuppress = int8(-16) // the byte retail writes as 240
+	for visit := 1; visit <= 16; visit++ {
+		world.StepPreUpdate(h, uint32(visit))
+		want := int8(-16 + visit) // one step toward zero per visit
+		if u.BlinkSuppress != want {
+			t.Fatalf("visit %d: blink byte = %d, want %d", visit, u.BlinkSuppress, want)
+		}
+	}
+	if u.BlinkSuppress != 0 {
+		t.Fatalf("blink byte after sixteen visits = %d, want 0", u.BlinkSuppress)
+	}
+	// Zero is a floor, not a wrap: a seventeenth visit must not restart the
+	// countdown at -1 (which unsigned would read as another 255-visit blink).
+	world.StepPreUpdate(h, 17)
+	if u.BlinkSuppress != 0 {
+		t.Fatalf("blink byte after the zero floor = %d, want 0", u.BlinkSuppress)
+	}
+}
+
+// TestSelectionMaintenanceClearsUnreadyUnits locks step 7 of the per-unit visit
+// [04 R-MOV-03 §1 step 7]: the selected bit survives only while the unit is
+// ready, where ready is the shared eligibility predicate [07 R-WGT-01 §9] — the
+// selectable bit, remaining-build exactly 0.0, and either no carrier or a
+// carrier whose status word carries the cargo-selectable bit.
+func TestSelectionMaintenanceClearsUnreadyUnits(t *testing.T) {
+	def := &content.UnitDef{UnitName: "select-unit", MaxDamage: 100, Limit: -1}
+	base := &content.UnitDef{UnitName: "select-base", MaxDamage: 100, Limit: -1, IsAirBase: true}
+	transport := &content.UnitDef{UnitName: "select-transport", MaxDamage: 100, Limit: -1}
+
+	newSelected := func(t *testing.T, w *World) (pool.Handle, *Unit) {
+		t.Helper()
+		h, err := w.Create(def, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u := w.Unit(h)
+		u.Health = 100
+		u.Flags |= SelectedStatus
+		return h, u
+	}
+
+	t.Run("ready unit keeps the bit", func(t *testing.T) {
+		w := newFixtureWorld(4, nil)
+		h, u := newSelected(t, w)
+		w.StepPreUpdate(h, 1)
+		if u.Flags&SelectedStatus == 0 {
+			t.Fatal("a ready unit lost the selected bit")
+		}
+	})
+
+	t.Run("incomplete unit loses the bit", func(t *testing.T) {
+		w := newFixtureWorld(4, nil)
+		h, u := newSelected(t, w)
+		u.Remaining = 0.5 // the remaining-build fraction is not exactly 0.0
+		w.StepPreUpdate(h, 1)
+		if u.Flags&SelectedStatus != 0 {
+			t.Fatal("an incomplete unit kept the selected bit")
+		}
+	})
+
+	t.Run("unselectable unit loses the bit", func(t *testing.T) {
+		w := newFixtureWorld(4, nil)
+		h, u := newSelected(t, w)
+		u.ClearClassifierEligibility()
+		w.StepPreUpdate(h, 1)
+		if u.Flags&SelectedStatus != 0 {
+			t.Fatal("a unit without the selectable bit kept the selected bit")
+		}
+	})
+
+	t.Run("cargo aboard an ordinary transport loses the bit", func(t *testing.T) {
+		w := newFixtureWorld(4, nil)
+		carrier, err := w.Create(transport, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, u := newSelected(t, w)
+		u.Attachment.Carrier = carrier
+		w.StepPreUpdate(h, 1)
+		if u.Flags&SelectedStatus != 0 {
+			t.Fatal("cargo aboard a non-airbase carrier kept the selected bit")
+		}
+	})
+
+	t.Run("cargo aboard an airbase keeps the bit", func(t *testing.T) {
+		w := newFixtureWorld(4, nil)
+		carrier, err := w.Create(base, 0, 0, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.Unit(carrier).Flags&CargoSelectableStatus == 0 {
+			t.Fatal("fixture airbase did not seed the cargo-selectable bit")
+		}
+		h, u := newSelected(t, w)
+		u.Attachment.Carrier = carrier
+		w.StepPreUpdate(h, 1)
+		if u.Flags&SelectedStatus == 0 {
+			t.Fatal("cargo aboard an airbase lost the selected bit")
+		}
+	})
 }

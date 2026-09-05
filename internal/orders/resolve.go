@@ -712,7 +712,7 @@ func resolveContextualLeftClick(actor *units.Unit, target *units.Unit, pos *Reso
 // issues code 1 only for the local human's own selection, and the skirmish
 // planner issues codes 2, 3 and 9, never 1 [08 R-AI-01 §7]. So the actor's owner
 // slot IS the local slot at every reachable call site, and the two readings
-// cannot be told apart here. TODO(T23): if a second local-slot notion ever
+// cannot be told apart here. Note: if a second local-slot notion ever
 // appears — a spectator view, or a code-1 issuer acting for another slot — the
 // order package needs the session's local slot on the queue binding rather than
 // this equivalence.

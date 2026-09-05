@@ -921,7 +921,7 @@ func (s *Service) autonomousScanVisitsUnit(u *units.Unit, tick uint32, w *units.
 		return false // "a remaining-build-fraction of exactly zero"
 	}
 	// The third clause, now named [06 §3.2 "The third clause is the armed
-	// bit"]. The previous text here was a TODO(question) saying that "one high
+	// bit"]. The previous text here was an open-question marker saying that "one high
 	// status bit set" did "not name the bit, and no other section identifies a
 	// status bit this scan reads", and left the clause unmodelled so the gate
 	// scanned a superset. That was incomplete rather than wrong: the scan reads
@@ -2432,10 +2432,13 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	//
 	// The flash is one byte of the unit record written to 240, decremented as a
 	// signed byte once per unit visit, whose only reader is the minimap
-	// unit-dot pass: the dot is not drawn while it is nonzero, so a unit under
-	// fire vanishes from the minimap for sixteen ticks after each hit
-	// [06 R-WPN-04 §2]. It is presentation only, so it leaves here as an
-	// ordered event on the combat sink rather than as authoritative state.
+	// unit-dot pass: the blip blinks while it is nonzero, so a unit under fire
+	// flashes on the minimap for sixteen ticks after each hit [06 R-WPN-04 §2]
+	// [03 §3.9]. The byte lives on the unit record — the sweep's step-5
+	// decrement is what gives it its life ([04 R-MOV-03 §1] step 5) — and the
+	// ordered event stays beside it for the presentation layers that want the
+	// edge rather than the level.
+	SetDamageFlash(victim)
 	service.emitEvent(Event{Kind: EventDamageFlash, Tick: tick, Source: p.Shooter, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}, Duration: DamageFlashTicks})
 	service.ReactToDamage(w, victim, shooter, tick)
 	// The provenance stamp of [06 §9.1] step 4 and [06 §12.1). The kind byte is

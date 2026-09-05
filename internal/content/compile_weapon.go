@@ -34,7 +34,7 @@ type WeaponDef struct {
 	// each reader applies to the stored word separates the signed from the
 	// unsigned form. Six of the nine name their reader's extension and are
 	// wrapped below; three (BurstRate, Duration, SmokeDelay) do not, and are
-	// left as the plain *30 truncation with a TODO(question) at the compile
+	// left as the plain *30 truncation with an open-question marker at the compile
 	// site rather than guessed. Measured: over the 77-file, 198-section stock
 	// weapon family every one of the nine compiles to a tick count inside
 	// 0..32767, where all three forms agree, so no stock weapon can tell them

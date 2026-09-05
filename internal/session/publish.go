@@ -616,10 +616,17 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Hidden: hidden, Stealth: stealth, Active: active,
 				OnOffable: onOffable,
 				Selected:  selected,
-				Seen:      status&visibility.SeenBit != 0,
-				Friendly:  status&visibility.FriendlyMask != 0,
-				Visible:   u.Owner == s.LocalOwner || status&visibility.SeenBit != 0,
-				Palette:   palette, PaletteKnown: paletteKnown,
+				// The damage-flash byte of [06 R-WPN-04 §2], the blink gate's
+				// per-unit term [03 §3.9]. The sim record holds it signed (the
+				// sweep decrements -16 up to zero); the frame carries retail's
+				// unsigned byte, so the wrap back to 240 is the conversion, not
+				// a reinterpretation — presentation tests the byte against zero
+				// and never for a magnitude.
+				BlinkSuppress: uint8(u.BlinkSuppress),
+				Seen:          status&visibility.SeenBit != 0,
+				Friendly:      status&visibility.FriendlyMask != 0,
+				Visible:       u.Owner == s.LocalOwner || status&visibility.SeenBit != 0,
+				Palette:       palette, PaletteKnown: paletteKnown,
 			}
 			if u.Def != nil {
 				contact.Commander = u.Def.Commander
@@ -639,10 +646,11 @@ func (s *Session) publishSnapshot(tick uint32) {
 					contact.RadarJam = u.Def.RadarDistanceJam
 					contact.SonarJam = u.Def.SonarDistanceJam
 				}
-				// No compiled unit field or instance byte currently exposes the
-				// authored no-radar/blink-suppress inputs. Keep their neutral
-				// values until that source is traced; the frame still carries the
-				// established status/hidden/friendly gates [03 §3.9].
+				// The blink-suppress input is now published above, from the
+				// unit's damage-flash byte [06 R-WPN-04 §2]. There is no authored
+				// `noradar` key to go with it: the unit parser loads none, and the
+				// selected-unit circle gate reads `onoffable` instead
+				// ([03 §3.9] "Selected-unit circle gate correction").
 				for slot := 0; slot < units.NumSlots; slot++ {
 					ws := u.SlotAt(slot)
 					if ws == nil || ws.Weapon == nil {

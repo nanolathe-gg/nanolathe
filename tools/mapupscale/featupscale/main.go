@@ -93,6 +93,7 @@ func main() {
 	closeness := flag.Int("closeness", 3*24*24, "colour closure: an example block is admitted only when each of its colours is within this squared RGB distance of a colour the query sprite uses, so rare highlights from other entries cannot leak in; -1 disables")
 	mismatch := flag.Int("mismatch", 3*64*64, "coherence charge for an opacity mismatch between the candidate's authored surround and the synthesized surround, in squared-RGB units")
 	relax := flag.Bool("relax", true, "also accept blocks that reduce to a palette entry one blend step from the parent when they average closer to the parent's colour, as the terrain upscaler does")
+	pngDir := flag.String("png", "", "read queries and examples from palette-indexed PNGs in this directory instead of GAFs (a second octave over earlier output)")
 	edgeClamp := flag.Bool("clamp", false, "treat pixels beyond a sprite's edge as copies of the edge pixel instead of transparent (opaque textures)")
 	writeEPX := flag.Bool("epx", false, "also write a Scale2x result for comparison")
 	flag.Parse()
@@ -122,7 +123,30 @@ func main() {
 	}
 	var queries []*sprite
 	var db []*sprite
+	if *pngDir != "" {
+		entries, err := os.ReadDir(*pngDir)
+		if err != nil {
+			fatalf("%v", err)
+		}
+		for _, e := range entries {
+			if !strings.HasSuffix(e.Name(), ".png") || strings.HasSuffix(e.Name(), "-1x.png") || strings.HasSuffix(e.Name(), "-epx.png") {
+				continue
+			}
+			s, err := readIndexedSprite(filepath.Join(*pngDir, e.Name()))
+			if err != nil {
+				fatalf("%s: %v", e.Name(), err)
+			}
+			s.name = strings.TrimSuffix(e.Name(), ".png")
+			db = append(db, s)
+			if wanted["all"] || wanted[strings.ToLower(s.name)] {
+				queries = append(queries, s)
+			}
+		}
+	}
 	for gi, name := range strings.Split(*gafList, ",") {
+		if *pngDir != "" {
+			break
+		}
 		g, err := formats.LoadGAFFile(fs, *gafDir+"/"+strings.ToLower(strings.TrimSpace(name))+".gaf")
 		if err != nil {
 			fatalf("%s: %v", name, err)
@@ -699,6 +723,34 @@ func fromFrame(f *formats.GAFFrame) *sprite {
 		s.alpha[i] = !f.Transparent[i]
 	}
 	return s
+}
+
+// readIndexedSprite loads a palette-indexed PNG as a sprite; the colour
+// key index is transparent.
+func readIndexedSprite(path string) (*sprite, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	img, err := png.Decode(f)
+	if err != nil {
+		return nil, err
+	}
+	p, ok := img.(*image.Paletted)
+	if !ok {
+		return nil, fmt.Errorf("not palette-indexed")
+	}
+	w, h := p.Rect.Dx(), p.Rect.Dy()
+	s := &sprite{w: w, h: h, pix: make([]byte, w*h), alpha: make([]bool, w*h)}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			v := p.Pix[y*p.Stride+x]
+			s.pix[y*w+x] = v
+			s.alpha[y*w+x] = v != colorKey
+		}
+	}
+	return s, nil
 }
 
 // epx is the Scale2x rule on indexed pixels with transparency as its own value.

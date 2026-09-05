@@ -7743,7 +7743,17 @@ a single-player implementation.
   the per-word layout of the `u%04xacc` resource account (doc 05) ·
   "Save-file organization" [R-SAVE-02 §6] [R-SAVE-02 §7] [R-SAVE-02 §10] ·
   static trace (field-isolation of each reader). Everything else in the unit,
-  mover, script, order, feature and player records is named.
+  mover, script, order, feature and player records is named. *Narrowed
+  2026-09-04 (WU-19-188):* the two per-unit countdowns the sweep steps — the
+  minimap blink byte, which [06 R-WPN-04 §2] states is carried in the save
+  record, and the post-capture grace counter of [04 R-MOV-03 §1] step 6 — are
+  the two candidates for `0xB1`, and only one of them can hold it. That row's
+  own decider ("the two readers in the unit tick") fits the grace counter,
+  whose readers are the contextual resolver's own-unit reject and the selection
+  predicates, rather than the blink byte, whose only reader is the minimap dot
+  pass. The blink byte's offset is therefore **Unknown**; a trace of the save
+  writer's source field for it would settle both rows at once. Until then this
+  build persists neither, and a loaded unit starts unblinked.
 - The *value* of the script writer's two residue dwords (24 and 25 of each
   piece record). Which getter is lost is now Established — the show/hide and
   cache getters both store into dword 23 and are overwritten, leaving only the

@@ -49,7 +49,7 @@ func TestRetailMorningChainPlacementProfiles(t *testing.T) {
 	if len(blockers) != 0 {
 		// The citation is the class split of [R-P0-08]: a definition the
 		// placement entry cannot classify has no validator to dispatch to. This
-		// message also carried a `TODO(question)` token, pointing at a marker
+		// message also carried an open-question marker token, pointing at a marker
 		// that no longer exists anywhere in this package (WU-19-166).
 		t.Fatalf("selected ARM chain has unresolved placement profiles [R-P0-08]:\n%s", strings.Join(blockers, "\n"))
 	}

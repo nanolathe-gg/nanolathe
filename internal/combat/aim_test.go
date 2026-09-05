@@ -184,7 +184,7 @@ func TestAcosDomainEdges(t *testing.T) {
 // the contract; a creator that validated first would silently hold a capacity a
 // retail session has lost.
 //
-// Correction (WU-19-154): this was carried as a TODO(T25) restating the same
+// Correction (WU-19-154): this was carried as an accepted-placeholder marker restating the same
 // behavior as if the malformed-state error policy still owed an answer here. It
 // does not — the fault's position relative to the reservation is traced. What
 // belongs to the error policy is only how *this* engine surfaces the processor

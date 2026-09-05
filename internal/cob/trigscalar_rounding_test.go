@@ -18,7 +18,7 @@ func floorDiv(a, b int64) int64 {
 }
 
 // TestTrigScalarFloorsAfterAddingHalf locks the rounding [04 §5.3]
-// [04 R-MOV-01 §4] closed on 2026-09-04, retiring the TODO(question) that
+// [04 R-MOV-01 §4] closed on 2026-09-04, retiring the open-question marker that
 // stood on trigScalar. The two shared component routines RockUnit and
 // HitByWeapon call form a signed full-width product of the signed 16-bit table
 // entry and the magnitude, add half the 8192 scale to the 64-bit sum, and

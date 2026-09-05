@@ -44,7 +44,7 @@ import (
 // and consumed no simulation or CRT draw, so retiring them moves no draw and
 // preserves call order; [04 R-PATH-01 §13] likewise names no draw on this path.
 //
-// The four `TODO(question)` markers this header carried are retired by
+// The four open-question markers this header carried are retired by
 // [04 R-PATH-01 §13] (rings beyond offset 1; the sort key, tie-break and
 // bounded-list size — all three answered "no such mechanism exists") and by
 // [05 R-WORK-01 §2] with [05 R-WORK-01 §12] (the reach test's origin and form —

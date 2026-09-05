@@ -148,7 +148,7 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 //	                  whatever the reused pool slot last held" [06 §6.5].
 //	                  Presentation only [06 §6.1].
 //	MeteorPitch       RETAINED on purpose, same sentence [06 §6.5].
-//	CacheCellX/Z      see the TODO(question) at the clear below.
+//	CacheCellX/Z      see the open-question marker at the clear below.
 //	Scratch5E         write-only scratch with no simulation reader [06 §5.1];
 //	                  retention is unobservable.
 //	OldMarker         compaction writes it for every record in the span before

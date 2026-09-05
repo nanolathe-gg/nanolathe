@@ -1274,22 +1274,22 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				}
 				return s.publication.events.EmitNanolathe(e)
 			},
-			// TODO(T25): PresentationAdapter.Teleport stays nil. The row's
-			// effect is the strip-5 flame-stream container of [03 R-LAYER §4] —
-			// a 30-tick object that lays one 52-byte animated flame segment
-			// every 10 ticks between a moved unit's old and new position, with
-			// one CRT draw per segment for its start frame — and internal/frame
-			// has no strip-5 producer: frame.Strip carries no constant for it
-			// and frame.RouteForProducer would return StripUnknown, which is
-			// the sentinel that refuses a guessed route [03 §1][I9]. Adding the
-			// producer means an event kind in internal/frame, a container in
-			// internal/render and a painter in internal/client, none of which
-			// WU-19-142 owns. Placeholder: the simulation half of the row runs
-			// in full (the units move and their footprints restamp) and the
-			// flame stream is not drawn. The handler already treats a nil
-			// callback as "no effect" and still commits the position, so this
-			// binding is the only thing that has to change when the producer
-			// lands.
+			// The `Teleport` row's per-moved-unit effect: the strip-5
+			// flame-stream container of [03 R-LAYER §4]. The handler calls
+			// this once per enclosed unit, at that unit's OLD position and
+			// BEFORE its position commit, which is why the endpoints arrive
+			// as arguments rather than being re-read from the unit
+			// [04 R-ORD-01 §2].
+			//
+			// The moved unit itself is not read: the container is built from
+			// the two world points alone, exactly as the producer's arguments
+			// give them.
+			Teleport: func(_ *units.Unit, fromX, fromY, fromZ, toX, toY, toZ numeric.Fixed) bool {
+				return s.appendStripFlameStream(
+					[3]numeric.Fixed{fromX, fromY, fromZ},
+					[3]numeric.Fixed{toX, toY, toZ},
+				)
+			},
 		},
 	}
 }
@@ -1783,9 +1783,13 @@ func createAndBindServices(s *Session) error {
 				s.publication.events.EmitWaterImpact(pe)
 			}
 		case combat.EventDamageFlash:
-			// The flash's only reader is the minimap unit-dot pass, which doc
-			// 07 owns [06 R-WPN-04 §2]. No frame emitter carries it yet, so the
-			// event stops here rather than being published as some other kind.
+			// The flash's only reader is the minimap unit-dot pass
+			// [06 R-WPN-04 §2][03 §3.9], and it reads the LEVEL, not the edge:
+			// the damage site writes the victim's blink byte, the sweep's step-5
+			// decrement runs it down, and publication copies it onto the radar
+			// contact. The cue therefore needs no frame emitter of its own —
+			// publishing it as some other event kind would double-draw the same
+			// flash — so it deliberately stops here.
 		case combat.EventProjectileImpact:
 			s.publication.events.EmitImpact(pe)
 		case combat.EventUnitKilled, combat.EventCorpse:
@@ -2310,3 +2314,64 @@ const featureAnimSelectorReclaim uint8 = 2
 // stripBurningFeatureSmoke is the literal strip index the burning-feature
 // producer passes [R-STRIP-01 §1 strip 5].
 const stripBurningFeatureSmoke = 5
+
+// stripTeleportFlame is the literal strip index the OTHER strip-5 producer
+// passes: the teleport order handler [03 R-LAYER §4][R-STRIP-01 §1 strip 5].
+// The two producers share the barrier and nothing else — one builds a smoke
+// puffer, the other the flame-stream container below.
+const stripTeleportFlame = 5
+
+// appendStripFlameStream is the strip-5 teleport flame-stream producer
+// [03 R-LAYER §4][04 R-ORD-01 §2]. It is strip 5's only producer besides the
+// burning-feature smoke puff above; no combat path reaches this family, which
+// is the retraction the section exists to record.
+//
+// The container is the 30-tick object that lays one animated `flamestream`
+// segment every 10 ticks between the moved unit's OLD position (`from`) and
+// its displaced one (`to`) — four segments in all, at ticks 0, 10, 20 and 30
+// [03 R-FX-02 §2]. The family's constructor lays the first segment itself, so
+// the window end (`tick + 30`), the interval (10) and the next-spawn slot
+// (`tick + 10`) are what the phase-11 gate needs for the remaining three: the
+// fifth slot, `tick + 40`, falls outside the window and is refused, and the
+// container dies once its last segment expires [R-STRIP-01 §2].
+//
+// Each segment costs exactly one CRT draw, its random start frame — the one
+// draw per segment counted in [R-STRIP-01 §3] — and it is spent inside
+// spawnOnce, so this producer adds no draw of its own beyond the constructor's
+// first segment. The order at the call site is effect first, position commit
+// second, which the handler already enforces [03 R-LAYER §4].
+//
+// The frame count the start frame is drawn against comes from the session's
+// effect-entry seam, the same one the smoke families read; a session with no
+// resolver gets zero, which starts every segment at frame 0 and still spends
+// the draw, exactly as the pre-seam smoke path does.
+//
+// It reports whether a container was built: a full shared pool drops the
+// object before the family init runs, so nothing is spawned and no draw is
+// spent [03 R-FX-02 §4].
+func (s *Session) appendStripFlameStream(from, to [3]numeric.Fixed) bool {
+	if s == nil || s.strips == nil {
+		return false
+	}
+	if s.strips.poolFull() {
+		return false
+	}
+	tick := uint32(0)
+	if s.Clock != nil {
+		tick = s.Clock.GlobalTick
+	}
+	o := stripObject{
+		family:         stripFamilyFlame,
+		src:            from,
+		dst:            to,
+		frameCountBase: s.effectEntryFrameCountBase(flameStreamEntry),
+		windowEnd:      tick + uint32(flameContainerLifetime),
+		spawnInterval:  flameSegmentInterval,
+		nextSpawn:      tick + uint32(flameSegmentInterval),
+	}
+	if crt := s.CrtRNG(); crt != nil {
+		o.spawnOnce(tick, crt) // the constructor's own first segment
+	}
+	s.strips.append(stripTeleportFlame, o)
+	return true
+}

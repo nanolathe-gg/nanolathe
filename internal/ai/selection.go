@@ -94,7 +94,7 @@ func ScoreInputsFromEconomy(econ *economy.Service, player uint8) ScoreInputs {
 
 // energyRaw computes the energyRaw term exactly as written [PLAN 11 C6] [08 "Established AI-facing data and rooted planner"].
 // Evaluate in float32, trunc toward zero [01 §8] [INVARIANTS I3]; the x87
-// control-word residual is the file-level TODO(T23).
+// control-word residual is the file-level platform-residual marker.
 func energyRaw(in ScoreInputs) int32 {
 	capped := in.CapEnergy
 	if capped > 1000 {
@@ -169,8 +169,8 @@ func ComputeMix(in ScoreInputs) (metalMix, energyMix, otherMix int32) {
 }
 
 // ComputeScore computes the C6 score exactly as the plan block quotes [PLAN 11 C6] [08] with truncation as written.
-// Resource inputs are float32 temporaries carrying the file-level TODO(T23)
-// x87 residual [INVARIANTS I2]; the final trunc is integer division truncating
+// Resource inputs are float32 temporaries carrying the file-level platform-residual
+// x87 marker's uncertainty [INVARIANTS I2]; the final trunc is integer division truncating
 // toward zero [01 §8] [INVARIANTS I3].
 func ComputeScore(in ScoreInputs, cv ClassVector, weight int32) int32 {
 	// Clamp weight [0,100] per [08] [PLAN 11 C4]

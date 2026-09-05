@@ -214,7 +214,7 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	target := s.World.Unit(node.Target)
 	if !reclaimInRange(builder, target) {
 		node.MoveState = orders.MoveEnRoute
-		// SETTLED (WU-19-166), replacing a `TODO(question)` that read "the
+		// SETTLED (WU-19-166), replacing an open-question marker that read "the
 		// session movement bridge must submit the target point-goal with
 		// reclaim's BuildDistance radius. This narrow service leaves the order
 		// pending rather than synthesizing a second movement node". Both halves

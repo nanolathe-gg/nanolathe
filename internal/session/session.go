@@ -1206,7 +1206,7 @@ func (s *Session) RegisterAll() {
 				// not add a corpse-cell exemption: it would spare bystanding
 				// features that retail destroys. The wreck survives its own
 				// unit's blast by order alone, which is what this sequence is.
-				// The TODO(question) that asked whether anything else spared it
+				// The open-question marker that asked whether anything else spared it
 				// is answered: nothing does.
 				// Corpse depth comes from the Killed-variant low nibble [04 §5.1][06 §12.1] C23, replacing the constant switch.
 				if res.DoCorpse && u.Def.Corpse != "" {

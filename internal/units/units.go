@@ -72,6 +72,14 @@ func DeathCauseFromKind(kind uint8) DeathCause {
 // death finalization [R-P0-04 "Runtime eligibility bit lifecycle"].
 const ClassifierEligibleStatus uint32 = 0x00000020
 
+// SelectedStatus is bit 4 of the runtime status word: selection membership
+// [07 R-WGT-01 §10]. The selection commands set and clear it, publication reads
+// it into the committed frame, and the unit sweep's selection-maintenance step
+// clears it on a unit that stops being ready ([04 R-MOV-03 §1] step 7). It has
+// always been this bit; the constant names the literal the session's selection
+// commands and the publication boundary were both spelling out.
+const SelectedStatus uint32 = 0x00000010
+
 // BuildingClassStatus and ArmedStatus are the two remaining high bits of the
 // runtime unit-status word. Both are written once by the common allocator
 // initializer from the definition and by nothing else — a whole-image scan of
@@ -527,6 +535,32 @@ type Unit struct {
 	Stunned       bool
 	CurrentSample uint8 // current 30-tick-window health sample [04 §5.1]
 	PriorSample   uint8 // previous 30-tick-window health sample for death severity [04 §5.1]
+	// BlinkSuppress is the damage-flash byte — the minimap blink of
+	// [06 R-WPN-04 §2]. Every damage packet the dispatcher accepts other than a
+	// heal (paralyze included) writes 240 here, *before* the reaction step; the
+	// per-unit pre-update decrements it as a SIGNED byte while it is nonzero, so
+	// 240 read as -16 climbs back to zero after sixteen unit visits. Hence the
+	// signed Go type: an unsigned byte would count 240 visits down instead of
+	// sixteen up.
+	//
+	// It is authoritative unit state with no simulation reader. Its one reader is
+	// the minimap contacts pass, which draws a unit's blip only when
+	// `BlinkSuppress == 0 || blinkPhase` [03 §3.9] — so a unit under fire flashes
+	// on the minimap for sixteen ticks after each hit, re-armed by every hit.
+	// Zeroed at spawn (the zero value) [06 R-WPN-04 §2].
+	//
+	// TODO(question): [06 R-WPN-04 §2] states the byte is carried in the unit
+	// save record but does not name its offset, and the 184-byte record of
+	// [08 R-SAVE-02 §6] has no byte named for it: `0xAC`/`0xAD` are the
+	// current/previous pair the tick-30 health roll rotates, and `0xB1`'s
+	// "countdown byte decremented once per unit tick" carries a two-reader
+	// decider that matches the post-capture grace counter (read by the
+	// contextual resolver's own-unit reject and by the selection predicates,
+	// [04 R-MOV-03 §1] step 6), not this byte, whose only reader is the minimap.
+	// A trace of the save writer's source field for the flash byte would settle
+	// it; until then the flash is not persisted, and a loaded unit starts
+	// unblinked rather than being written over a traced field on a guess.
+	BlinkSuppress int8
 	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
 	// Retail maintains created[placementIdx] sparse array and scans it in
 	// placement order 0..count-1 skipping NULL gaps for Ident→Unitname first-

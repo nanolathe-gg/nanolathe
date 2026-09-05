@@ -258,8 +258,9 @@ for every unit on a working retail install — clearly not what the executable
 does.
 
 **Decision:** gather `K1, K2…` regardless of the bare key's presence. The
-compile site carries the `TODO(question)` on what the executable really gates;
-this entry records why the spec letter is not implementable as written.
+compile site formerly carried a `TODO(question)` on what the executable really
+gates; that marker is closed by `[02 R-SND-01 §1]` above, and this entry
+records why the spec letter is not implementable as written.
 
 **Falsifies:** the bare-gate sentence of `[02 "Sound category record"]`. Do
 not "fix" the compiler back to the letter without re-reading the executable.

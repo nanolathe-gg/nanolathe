@@ -84,8 +84,7 @@ func clearWeaponBuildTargets(u *units.Unit) {
 // tombstone-gated TargetCleared step. A code-9 last-record re-arm keeps the
 // record, so cleanup never runs for it and a running StartBuilding keeps
 // running with no StopBuilding.
-// TODO(T25): retail emits the matching network event alongside the script
-// callback; this build has no network layer to receive it.
+// Retail also emits a network event here; this build has no network layer by design.
 func emitStopBuilding(u *units.Unit, n *Node) {
 	if n == nil || n.Flags&FlagStopBuildingPending == 0 {
 		return

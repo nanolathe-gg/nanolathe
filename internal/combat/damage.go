@@ -467,6 +467,31 @@ type ReactionSeams struct {
 // *release* takes the slot for an order's own target (clearing the bit) and
 // *inhibit* hands it back (setting it).
 
+// DamageFlashByte is the value the damage dispatcher writes into the victim's
+// minimap blink byte: retail stores 240, which the unit sweep reads back as a
+// SIGNED byte and decrements while nonzero, so -16 climbs to zero after sixteen
+// unit visits [06 R-WPN-04 §2]. The Go field is signed for that reason, so the
+// constant is written as the value the sweep actually sees.
+const DamageFlashByte int8 = -16
+
+// SetDamageFlash arms the victim's minimap blink [06 R-WPN-04 §2]. Every packet
+// the dispatcher accepts other than a heal writes it — paralyze included — and
+// the write happens BEFORE the reaction routine, which is what [06 §9.1] step 4
+// means by "set the damage flash; for every kind except 11 run
+// reaction/wake/retarget". Every hit re-arms it outright; there is no maximum
+// and no accumulation.
+//
+// The byte is authoritative unit state with no simulation reader: its one
+// consumer is the minimap contacts pass, which the publication boundary feeds
+// [03 §3.9]. The ordered EventDamageFlash cue is kept beside this write for the
+// presentation layers that want the edge rather than the level.
+func SetDamageFlash(victim *units.Unit) {
+	if victim == nil {
+		return
+	}
+	victim.BlinkSuppress = DamageFlashByte
+}
+
 // ReactToDamage is the damage-intake reaction routine of [06 §9.1] step 4,
 // closed at [06 R-WPN-04 §2]. It runs for every accepted non-heal packet whose
 // kind is not 11, AFTER the damage flash and BEFORE the kind byte and attacker
@@ -771,7 +796,7 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 	// reachable where veterancy scaling leaves the 30000 short of the unit's
 	// health — therefore sees its health drop with its script never told.
 	//
-	// The TODO(question) that stood here asked which direction byte to hand
+	// The open-question marker that stood here asked which direction byte to hand
 	// `HitByWeapon` on this path. The trace that answered it (every
 	// non-projectile call site pushes an immediate zero) also showed the call
 	// itself does not happen: retail reads the direction byte only inside the

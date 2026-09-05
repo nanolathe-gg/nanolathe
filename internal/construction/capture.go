@@ -235,7 +235,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	// freshly captured unit, which makes recapturing one cheaper, not dearer.
 	//
 	// The conditional copy is the STOCKPILE, not the metal spot. The line below
-	// read `repl.SpotMetal = victim.SpotMetal` under a TODO(question) asking
+	// read `repl.SpotMetal = victim.SpotMetal` under an open-question marker asking
 	// "which cargo predicate retail tests", with SpotMetal named in the comment
 	// as "a placeholder proxy". The gated per-slot stockpiled-round byte "is the
 	// whole of the 'cargo copied conditionally'" [05 R-WORK-01 §11], so the

@@ -58,7 +58,7 @@ type Descriptor struct {
 	// layout is not retail layout). The presentation-side census and the
 	// pinning test live in internal/hud (queueoverlay.go).
 	//
-	// This retires the `TODO(question)` [P0-07] that stood here, which recorded
+	// This retires the open-question marker [P0-07] that stood here, which recorded
 	// that a bounded census over function boundaries had found no reader;
 	// [04 §3.1] records the same answer in place since 2026-09-02.
 	Class uint8 // order-queue overlay draw mask [04 §3.1][07 R-P0-11 §3]

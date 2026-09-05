@@ -270,7 +270,7 @@ func TestCombatFamilyNeverOverwritesAnotherInstaller(t *testing.T) {
 }
 
 // TestInstallPointGoalRoutesRadius locks the two halves of [04 R-ORD-01 §1]'s
-// point installer that the retired TODO(T25) had dropped: the arrival radius
+// point installer that the retired accepted-placeholder marker had dropped: the arrival radius
 // reaches the payload owner, and a `canfly` owner gets a release instead of an
 // install.
 func TestInstallPointGoalRoutesRadius(t *testing.T) {

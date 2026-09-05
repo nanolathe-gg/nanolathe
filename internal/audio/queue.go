@@ -434,7 +434,7 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 	// and before the variant count is looked at, so the stream advances with
 	// queue pops rather than with audible successes [03 §8.3]. A zero count
 	// simply produces no pick. Corrected 2026-09-04 (WU-19-155); this code
-	// previously skipped the draw for an empty row behind a TODO(question)
+	// previously skipped the draw for an empty row behind an open-question marker
 	// calling the point unknown, which it was not — and the empty row is the
 	// common case, since the reference install authors no `load` or `unload`
 	// variant in any of its 120 categories.

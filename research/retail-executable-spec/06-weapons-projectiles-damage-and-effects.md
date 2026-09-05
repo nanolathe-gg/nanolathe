@@ -3567,6 +3567,34 @@ blink), so a unit under fire vanishes from the minimap for sixteen ticks after
 each hit, re-armed by every hit. It is zeroed at spawn and carried in the unit
 save record. Presentation only; doc 07 owns the dot pass.
 
+**Correction (2026-09-04, WU-19-188) — the per-visit act steps the magnitude
+toward zero, not the value down.** The paragraph above says the sweep
+"**decrements** it as a signed byte once per unit visit while it is nonzero"
+and, in the same sentence, that "240 reads as −16, so it reaches zero after
+sixteen visits". Those two clauses cannot both be obeyed. Subtracting one from
+−16 gives −17, then −18: the signed value moves *away* from zero, the nonzero
+guard never releases it, and the byte walks the whole 256-value cycle before it
+lands on zero — a blink that outlives the fight that caused it. Decrementing the
+raw 240 as an *unsigned* byte is no better: it reaches zero after 240 visits,
+eight seconds of blink for one hit, not sixteen ticks. The sixteen-visit span is
+the Established observable — it is what the section's own title asserts and what
+the "sixteen ticks after each hit" clause repeats — so the arithmetic must be
+read from it: the per-visit act moves the byte **one step of magnitude toward
+zero**, i.e. the signed value *rises* by one per visit (−16, −15, … , 0), which
+is exactly sixteen visits from the written 240 (`0xF0`) to `0x00`. What
+"decrements" names is the countdown the byte represents — the remaining blink
+length — not the sign-extended value it holds. **Established** on the
+sixteen-visit observable; a reimplementation that subtracts instead produces an
+immortal blink, and `internal/units/pipeline.go` implements the rising form.
+
+A second clause of the same paragraph is already corrected elsewhere and is
+repeated here so it is not re-implemented from this section: "while the byte is
+nonzero the unit's side-coloured dot is **not** drawn" is inverted. The dot pass
+gates the blip on `blinkSuppressByte == 0 || blinkPhase`, so a nonzero byte puts
+the blip into blink-only mode rather than removing it — see [03 §3.9], whose
+"the earlier '(hidden byte nonzero)' wording was inverted" note owns that
+correction.
+
 **Established — the reaction step is one routine with four parts, in this
 order,** and it runs for every accepted non-heal packet whose kind is not 11,
 *before* the kind byte and the attacker fields are rewritten (so parts 3 and 4

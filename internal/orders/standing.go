@@ -501,7 +501,7 @@ func teleportBox(u *units.Unit) (minX, maxX, minY, maxY, minZ, maxZ numeric.Fixe
 // or be teleported while carried" [04 R-FAC-02 §2]: the displacement is undone
 // on the next commit rather than being suppressed here.
 //
-// Retired (WU-19-142): the TODO(T25) that stood here reported the row as
+// Retired (WU-19-142): the accepted-placeholder marker that stood here reported the row as
 // blocked on a missing seam, not on missing research. The seam is now
 // MovementGoalAdapter.PlaceUnit, bound to internal/movement's direct position
 // commit [04 R-COLL-01 §4], so the ground words of a moved unit's old footprint
