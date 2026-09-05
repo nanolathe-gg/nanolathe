@@ -50,55 +50,13 @@ func runPhase2Sweep(w *World, tick uint32) {
 	})
 }
 
-// tickUnit executes the per-unit stage sequence for one unit visit. Kept for
-// tests that assert the per-unit stages directly; runPhase2Sweep is the
-// traversal-shaped entry point.
-func (w *World) tickUnit(u *Unit, tick uint32) {
-	if u == nil || !u.Alive {
-		return
-	}
-	// 1. per-unit pre-update/status work [04 §2.4][04 §4.2].
-	//
-	// The marker that stood here said the pre-update's contents were "not
-	// closed for this slice". They are closed, exhaustively and in order:
-	// [04 R-MOV-03 §1] lists ten numbered acts per unit visit, of which the
-	// pre-update slice is 2 (the general unit update, carrying the
-	// wind-generator notifier of [05 R-PROD-01 §3]), 5 (the minimap blink byte
-	// decremented as a SIGNED byte while nonzero, [06 R-WPN-04 §2]), 6 (the
-	// post-capture countdown decremented by one), 7 (selection maintenance: a
-	// unit carrying the selected bit loses it when it stops being ready) and 8
-	// (the tick%30 health-percentage roll). Nothing about Remaining ticks,
-	// health regen or activation toggles appears in the list, so the old
-	// marker's caution was aimed at the right hazard for the wrong reason.
-	//
-	// Steps 5, 6, 7 and 8 are all in unitPreUpdate now (WU-19-188). Step 5's
-	// byte is Unit.BlinkSuppress, written 240 (signed -16) by the damage
-	// dispatcher before the reaction step and decremented as a signed byte here
-	// [06 R-WPN-04 §2]; publication copies it onto the radar contact and the
-	// contacts pass blinks the blip while it is nonzero [03 §3.9]. Step 7 clears
-	// the selected bit (0x10, on the unit record — the HUD never owned it) from
-	// a unit that stops being ready [07 R-WGT-01 §9]. Step 6's counter stays
-	// fieldless: its only writer is the ownership transfer's remote-peer branch,
-	// which is multiplayer transport, so single-player holds it at zero
-	// [08 R-TRIG-01 §3]. Step 2's notifier is bound in internal/ai.
-	w.unitPreUpdate(u, tick)
-
-	// 2. water damage and unit-level timed work [04 §9.2].
-	w.unitWaterDamage(u, tick)
-
-	// 3. weapon-slot update and target/Aim scheduling [06 §1.2][06 §3.3][GAP T15].
-	w.weaponSlotUpdate(u, tick)
-
-	// 4. normal COB drain using the unit's actual VM and piece state
-	// [04 §4.2][04 §4.6][GAP T15] C17: delta 1, eight thread slots then one
-	// piece pass.
-	w.cobDrain(u, tick)
-
-	// 5./6. build/order and movement windows are deferred by design [GAP T15].
-
-	// 7. slot-end death handling [04 §2.4] C2 [GAP T15] C17.
-	w.slotEndDeathHandling(u, tick)
-}
+// A tickUnit method on World stood here: a second copy of the per-unit
+// stage sequence runPhase2Sweep above already drives, kept "for tests that
+// assert the per-unit stages directly" and called by none of them. Dead
+// code that reads like a contract is how an invention outlives the session
+// that wrote it, and the clean-room paragraph it carried about the ten
+// numbered acts of [04 R-MOV-03 §1] is owned by unitPreUpdate in
+// pipeline.go, on the production side of the line.
 
 // unitWaterDamage is a placeholder for the sweep's step-9 water damage
 // [04 §9.2][04 R-MOV-03 §1 step 9], and it stays a placeholder.

@@ -106,7 +106,7 @@ func (c *Client) TickAudio() {
 		// One drain per rendered frame keeps the queue's single pop and the MCI
 		// poll on the presentation cadence [03 §8.3] C18 [03 §8.4]; the
 		// accumulated positional cues are played inside it, in raise order.
-		c.audioService.DrainEvents(c.audioService.Frame()+1, committedTick, c.committedEvents)
+		c.audioService.DrainEvents(committedTick, c.committedEvents)
 		c.messages.Expire(committedTick)
 	}
 }

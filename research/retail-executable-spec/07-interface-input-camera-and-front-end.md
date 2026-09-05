@@ -402,8 +402,10 @@ the entry's mask is returned; otherwise, if a default handler is installed
 and its mask matches, the default handler runs and its mask is returned;
 otherwise `0`. The chat route word carries bit 1 always, bit 2 when the
 entry-time cheat word is set — skirmish `1`, campaign `0`, multiplayer the
-host's `Cheat Codes` bit ([08 R-OOS-01 §2]; `Cheat Codes` as a game option
-is a multiplayer lobby word [08 R-SKIR-01 §11]) — and bit 4 in developer
+host's `Cheat Codes` bit ([08 R-OOS-01 §2] for the word's one writer and one
+reader, [08 R-OOS-01 §5] for the gate stated per kind; `Cheat Codes` as a
+game option is a multiplayer lobby word [08 R-SKIR-01 §11]) — and bit 4 in
+developer
 mode ([R-CAM-01 §9]). Mask-1 commands are therefore live in every session
 kind; mask-2 commands do **not** dispatch in campaign outside developer
 mode. After dispatch the line — including the `+` — is still sent as
@@ -6560,7 +6562,10 @@ carries contacts, and the *final* surface that merges mapped state with the
 picture and draws start positions (the viewport rectangle is not on FINAL:
 the HUD composer strokes it onto its own destination surface after copying
 FINAL there, [03 R-MM-01 §1]). Radar/sonar
-contact blips use dedicated palette entries distinct from terrain colors, and
+contact blips use dedicated palette entries distinct from terrain colors —
+the sensor circles drawn beside them take colour-map entry 10 (radar and
+sonar coverage) and entry 12 (both jam circles), with the weapon/interceptor
+ring in entry 15 ([03 R-MM-01 §2]) — and
 the radar surface is wiped and rebuilt each tick while the picture persists.
 
 Per-axis camera clamp order is:

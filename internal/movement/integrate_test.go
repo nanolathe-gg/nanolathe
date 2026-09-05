@@ -401,9 +401,12 @@ func TestActivateMoveExactlyOnceAndRejectsStalePublication(t *testing.T) {
 	// Simulate a late callback for the canceled first request.  It must not
 	// overwrite the route belonging to the current head.
 	route := system.Routes[h]
+	if route == nil {
+		t.Fatal("the replacement request installed no route")
+	}
 	wantFallback := append([]Point(nil), route.Points[:route.Count]...)
 	system.publishFunc(firstRequest, []path.Point{{X: 99, Z: 99}}, 0)
-	if route == nil || !route.Active || len(wantFallback) != int(route.Count) {
+	if !route.Active || len(wantFallback) != int(route.Count) {
 		t.Fatalf("replacement goal fallback was disturbed: %+v", route)
 	}
 	for i := range wantFallback {

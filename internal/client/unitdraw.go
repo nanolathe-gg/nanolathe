@@ -1,15 +1,10 @@
 package client
 
 import (
-	"math"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
-
-func mathCos(t float64) float64 { return math.Cos(t) }
-func mathSin(t float64) float64 { return math.Sin(t) }
 
 // Unit presentation primitives drawn straight into the indexed framebuffer.
 // The palette is sampled once at SetPalette time so team/health colors resolve
@@ -117,22 +112,6 @@ func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
 // on the unit belonging to the viewing player, and it lives in healthbar.go.
 // Dead code that reads like a contract is how an invention outlives the session
 // that wrote it (AGENTS.md rule 1), so it is removed rather than left.
-
-// headingCosSin returns fixed-point-ish cos/sin for a 65536-per-circle angle.
-func headingCosSin(h uint16) (float64, float64) {
-	const twoPi = 6.283185307179586
-	theta := float64(h) * twoPi / 65536.0
-	return cos(theta), sin(theta)
-}
-
-func cos(t float64) float64 {
-	// Local math.Cos alias to keep the file dependency-light.
-	return mathCos(t)
-}
-
-func sin(t float64) float64 {
-	return mathSin(t)
-}
 
 // UIFillRect fills a clipped rectangle in the indexed framebuffer. idx is an
 // active PALETTE.PAL index, matching retail's indexed primitive writers.

@@ -167,16 +167,6 @@ func sameHandles(a, b []pool.Handle) bool {
 	return true
 }
 
-// seedAIGroup models an established admission path (classifier, load, or
-// control-group assignment) in task fixtures. Task consumers intentionally do
-// not rediscover members from the entire world.
-func seedAIGroup(m *Manager, u *units.Unit, group uint8) {
-	if m == nil || u == nil {
-		return
-	}
-	m.writeGroup(u, int8(group))
-}
-
 // mergeWaveGroupRecordsFixture exercises the production transfer path. Tests
 // seed the manager vectors explicitly, then invoke the same direct writer used
 // by the wave task so Unit.Group and vector order are checked together.

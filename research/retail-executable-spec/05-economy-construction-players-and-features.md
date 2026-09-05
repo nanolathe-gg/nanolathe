@@ -15,11 +15,8 @@ has been filled in from another engine, from a replacement implementation, or
 from visible comparison testing.
 
 The evidence is incomplete. The decompilers have not recovered every retail
-function, and several older analyses in the corpus are explicitly retracted.
-This document uses the corrected construction roots and the corrected
-floating-point economy bucket model. Where the executable does not yet support
-an exact contract, the behavior is marked **incomplete** or **unknown** instead
-of being guessed.
+function. Where the executable does not yet support an exact contract, the
+behavior is marked **incomplete** or **unknown** instead of being guessed.
 
 The following terms are used throughout:
 
@@ -73,16 +70,15 @@ contains at least:
 - optional mission-provided storage bonuses;
 - side, team, and status information used when ownership changes.
 
-**Established — the player table has an eleventh, never-occupied row
-(2026-09-01, RWU-19-11).** When the battle-state block is allocated it is
-zero-filled and the player-row constructor is then run **eleven** times over
-contiguous rows of one fixed record size. The constructor writes: the
-occupancy word to zero, the control byte to zero, four further words (the
-LOS byte-grid pointer and its width and height among them) to zero, the
-ally-group byte to `10` (the "no group" value every ally-group test
-excludes), and allocates a zeroed side-definition record for the row. Rows
-`0..9` are the ten slots above. Row `10` is reachable only by direct index —
-it is the row a projectile's neutral side byte `10` selects
+**Established — the player table has an eleventh, never-occupied row.** When
+the battle-state block is allocated it is zero-filled and the player-row
+constructor is then run **eleven** times over contiguous rows of one fixed
+record size. The constructor writes: the occupancy word to zero, the control
+byte to zero, four further words (the LOS byte-grid pointer and its width and
+height among them) to zero, the ally-group byte to `10` (the "no group" value
+every ally-group test excludes), and allocates a zeroed side-definition record
+for the row. Rows `0..9` are the ten slots above. Row `10` is reachable only
+by direct index — it is the row a projectile's neutral side byte `10` selects
 (`[06 R-DMG-01 §9]`) — and **nothing ever occupies it**: every walk of the
 table during setup, battle, join and save restore covers ten rows (the row-10
 base serves two loops as their end sentinel); the network join's free-slot
@@ -96,15 +92,13 @@ bound check that treats index `10` as "no player"; the two are
 indistinguishable to every reader in the image. (`[06 §12.1]`'s `attacker
 side != 10` guard before indexing the kill counters, and doc 08's lead-change
 status line "attributed to slot 10", are consumers of the same convention.)
-The tail item on which runtime row owns the eleven-byte `Players/Alliances`
-save box (doc 08) is unaffected: that box is alliance bytes, not this row.
+The eleven-byte `Players/Alliances` save box (doc 08) is alliance bytes, not
+this row.
 
-The current resource stocks retain fractional values. Older decompiler output
-misidentified them as integers because the player record was viewed through an
-integer pointer. Direct instruction review shows that the engine copies and
-accumulates raw 32-bit floating-point values. Production, consumption,
-capacity, and waste therefore do not discard their fractional part merely
-because they are stored in the player record.
+The current resource stocks retain fractional values: the engine copies and
+accumulates raw 32-bit floating-point values, so production, consumption,
+capacity, and waste do not discard their fractional part merely because they
+are stored in the player record.
 
 **Established fact — the width of every economy field in the player slot.**
 Per resource the slot holds, all as **single precision**: live stock;
@@ -119,6 +113,17 @@ into those running totals ([R-ECO-01 §6]). There is no integer stock, no
 integer capacity, and no integer per-pass counter anywhere in the settlement
 path; an implementation that stores stock or capacity as an integer diverges
 on the first pass.
+
+**Established fact — player-side storage is floating point.** Live stock,
+the per-pass produced and requested snapshots, and the capacities are stored
+and copied as 32-bit floats, not integers. Closing stock is copied bit-exactly
+from the settled residual and staged into the next pass by a plain float
+addition, so **fractional production survives across ticks exactly**, subject
+only to ordinary single-precision rounding. Cumulative totals and cumulative
+waste are doubles. Capacity is recomputed from zero every pass by accumulating
+each idle unit's authored storage, plus a bonus term when a player flag is set.
+The two sharing thresholds are zeroed at battle setup and never written again;
+the automatic-sharing dispatcher is their only reader ([R-SHARE-01 §3]).
 
 ### Unit definition
 
@@ -180,8 +185,8 @@ their only writer ([R-ECO-01 §5]).
 
 | Accumulator | Contributors | Gates |
 |---|---|---|
-| energy production | authored passive `energymake`; the current wind scalar times `windgenerator`; the map tidal strength times `tidalgenerator`; the refund branch for a negative authored `energyuse` | passive make and storage require a zero remaining-construction fraction; wind and tidal require the definition's `bmcode` to be zero **and** the unit's activated bit, and are reached only when `extractsmetal` and `makesmetal` are both absent ([R-ECO-01 §2]); every positive contribution is scaled by the difficulty discount when the owner is a computer player ([R-ECO-01 §3]) |
-| metal production | the metal value sampled at placement when `extractsmetal` is positive; the **numeric value** of the authored `makesmetal` byte when it is non-zero; authored passive `metalmake` | extraction and maker output require `bmcode` zero, the activated bit, and the unit's energy carry to be non-positive at dispatch; passive make requires a zero remaining fraction; every positive contribution is scaled by the difficulty discount when the owner is a computer player |
+| energy production | authored passive `energymake`; the current wind scalar times `windgenerator`; the map tidal strength times `tidalgenerator`; the refund branch for a negative authored `energyuse` | passive make and storage require a zero remaining-construction fraction; wind and tidal require the definition's `bmcode` to be zero **and** the unit's activated bit, and are reached only when `extractsmetal` and `makesmetal` are both absent ([R-ECO-01 §2]); every contribution is scaled by the difficulty discount when the owner is a computer player ([R-ECO-01 §3]) |
+| metal production | the metal value sampled at placement when `extractsmetal` is positive; the **numeric value** of the authored `makesmetal` byte when it is non-zero; authored passive `metalmake` | extraction and maker output require `bmcode` zero, the activated bit, and the unit's energy carry to be non-positive at dispatch; passive make requires a zero remaining fraction; every contribution is scaled by the difficulty discount when the owner is a computer player |
 | energy requested | positive authored `energyuse`; the cloak debit; every build admission; repair-family one-resource admission | none — always recorded |
 | energy accepted | the same positive `energyuse` when energy carry is non-positive; admitted build demands when both carries are non-positive; repair-family admission when energy carry is non-positive | energy carry non-positive (both carries for the two-resource build path) |
 | metal requested | every build admission | none — always recorded |
@@ -193,9 +198,8 @@ in the ordinary case; for a computer-owned unit it instead credits only
 one half or seven tenths of it. The engine reaches the scaled credit by
 multiplying the negated amount by a negative half or seven-tenths constant
 and subtracting the product, so production still grows — by half or seven
-tenths of the negated value. An earlier revision of this document read the
-special modes as *turning the refund into a subtraction*; the byte-level
-arithmetic is a reduced positive credit.
+tenths of the negated value; the scaled arm is a reduced positive credit,
+never a subtraction.
 
 **Established fact — gather order.** All accumulator feeds are
 per-settlement-pass amounts, consumed once per ~30 ticks per player under
@@ -208,15 +212,29 @@ energy accepted, energy carry, metal production, metal requested, metal
 accepted, metal carry. Only after the whole slice does it fold in the
 player-level mirror bucket and commit the counters.
 
-#### R-ECO-01 §2 — The per-unit gather, exactly [R-ECO-01] (2026-08-29)
+Other economy-relevant unit state includes:
+
+- owning player;
+- definition;
+- current health;
+- remaining construction fraction;
+- operational, activated, stalled, disabled, dead, and transported flags;
+- the metal-extraction amount sampled at placement time;
+- cloak state and cloak payment deadline;
+- current construction or work order;
+- weapon slots and direct per-shot resource debits;
+- construction queue heads;
+- footprint and occupancy state;
+- script object and pending callbacks.
+
+#### The per-unit gather, exactly [R-ECO-01 §2]
 
 **Established.** A unit is visited only when its status word carries the alive
 bit. The visit then takes **one of two mutually exclusive branches**, chosen by
 a status bit that is written once at spawn as *"the definition's `bmcode` byte
 is zero"* — that is, buildings take the first branch and mobile units the
-second. This replaces the previous text's vague "wind and tidal require the
-unit's operational bit and a secondary state bit": the secondary bit is the
-spawned-in `bmcode`-is-zero bit, and it is never rewritten during play.
+second. The branch bit is the spawned-in `bmcode`-is-zero bit, and it is never
+rewritten during play.
 
 *Branch A — `bmcode` zero (buildings).* Runs only when the unit's **activated**
 bit is set; otherwise the visit falls straight through to the idle block below.
@@ -236,8 +254,8 @@ It performs, in this order:
      extraction amount to **metal production**;
    - else `makesmetal` byte non-zero → and `admitted` → convert that **byte's
      numeric value** to floating point and add it to **metal production** (the
-     previous "a literal one" reading was wrong: the value is whatever the FBI
-     authored, converted from the stored byte);
+     value is whatever the FBI authored, converted from the stored byte — not
+     a literal one);
    - else `windgenerator > 0` → add `currentWindScalar × windgenerator` to
      **energy production**;
    - else `tidalgenerator > 0` → add `mapTidalStrength × tidalgenerator` to
@@ -265,29 +283,26 @@ into the pass totals. Each accumulation is `total = float32(unitField + total)`,
 so **every running total is re-rounded to single precision after every unit**;
 the totals are not kept at register precision across the slice.
 
-#### R-ECO-01 §3 — The discount is difficulty, and the special state is the computer player [R-ECO-01] (2026-08-29)
+#### The discount is difficulty, and the special state is the computer player [R-ECO-01 §3]
 
-**Established, and a correction.** The "state-2 selector discount" this
-document has carried since the corrected-economy pass is now named on both
-halves:
+**Established.** The discount has two halves:
 
 * the player **control byte value 2** is the computer-controlled player
   ([R-AI-01 §12] establishes the same byte from the AI profile loader, which
   runs its per-definition passes for exactly the slots whose control byte
-  is 2). The previous text called this "the special second state … the
-  computer-policy state per the AI-manager gate inference"; it is no longer an
-  inference.
+  is 2; [R-SHARE-01 §1] names the other two values).
 * the **global mode selector** is the **difficulty word**: it is loaded from
   the `Difficulty` registry value, masked to sixteen bits, and also written
   directly with the literals 0, 1 and 2 by three developer entry points.
   [R-AI-01 §12] establishes the same word's vocabulary as `0` easy, `1`
   medium, `2` hard.
 
-So the rule reads: **for every unit owned by a computer player, every positive
+So the rule reads: **for every unit owned by a computer player, every
 production contribution is scaled by 0.5 on easy, 0.7 on medium, and not at
 all on hard.** The gate is evaluated per contribution as "the owner's player
 record exists **and** its control byte equals 2"; a slot whose record word is
-zero takes the undiscounted path.
+zero takes the undiscounted path. No site examined tests the sign of the
+contribution before entering the ladder ([R-ECO-01 §11]).
 
 The arithmetic must be reproduced literally, because the factored form rounds
 differently:
@@ -309,44 +324,20 @@ whole ledger contains, and their exact bit patterns are the IEEE doubles for
 not exactly representable, so the medium-difficulty factor is the nearest
 double, not seven tenths.
 
-Sites, exhaustively: passive `energymake`; passive `metalmake`; the extraction
-output; the maker output; the wind output; the tidal output; the
-negative-`energyuse` refund; the reverse-construction metal refund; and the
-direct production credit written at spawn for a unit created outside the
-ledger. Storage contributions, the cloak debit, and the two-stage settlement
-itself are **not** discounted.
+Sites: fourteen in all, at six copies of the constant pair ([R-ECO-01 §11]).
+Nine sit in the two per-unit production-gather passes — passive `energymake`,
+passive `metalmake`, the extraction output, the maker output, the wind output,
+the tidal output, the negative-`energyuse` refund, and the direct production
+credit written at spawn for a unit created outside the ledger are the named
+members, though their one-to-one mapping onto the nine sites is not
+re-derived. The other five are the two feature-reclaim payout additions, the
+unit-reclaim death-side refund, the factory build-cancel refund, and the
+reverse-construction refund. Storage contributions, the cloak debit, and the
+two-stage settlement itself are **not** discounted. The discount is a
+production multiplier on the computer player's whole economy; the sharing
+transfer credit of [R-SHARE-01 §2] runs the same ladder once at credit.
 
-**Correction against document 08.** [R-AI-01 §12] closes with "there is no
-production, build-rate, cost, or damage multiplier anywhere in the computer
-player's path". The settlement disproves the production half: the eight sites
-above are a production multiplier on the computer player's whole economy, not
-only on transfers into it. The transfer finding itself stands unchanged — the
-same difficulty ladder, the source debited in full — and doc 05's sharing
-sections keep it; what must be retracted is the "no production multiplier"
-sentence. Doc 08 owns that retraction.
-
-#### R-ECO-01 §11 — The discount's fourteen sites, one pairing, and a reduced credit rather than a debit [R-ECO-01] (2026-08-31)
-
-**Correction to [R-ECO-01 §3].** §3 closes its site list with "Sites,
-exhaustively:" and names nine — passive `energymake`, passive `metalmake`, the
-extraction output, the maker output, the wind output, the tidal output, the
-negative-`energyuse` refund, the reverse-construction metal refund, and the
-direct production credit written at spawn. It is not exhaustive, and the
-omission mattered twice: it is why an implementation could reasonably conclude
-that feature reclaim is credited raw, and why a build-cancel refund could be
-written with the wrong sign under a comment defending it.
-
-**Correction to the first issue of this section.** This section first said
-**twelve** sites drawn from **four** operand pairs, and reconciled that against
-§3 as 5 + 4 + 2 + 1 = 12, minus the two feature sites and the one unit-reclaim
-refund, leaving §3's nine. That arithmetic was wrong. The census behind it read
-the values of only the operand pairs whose use counts appeared more than once in
-a frequency table and never read two operands that appear exactly once each;
-those two are a further pair of the same constants, and a second such pair was
-missed the same way. Reading **every** distinct multiply operand in the image
-against the two bit patterns gives **six** pairs and **fourteen** sites. The two
-recovered sites are precisely the two construction refunds, which is why the
-error hid the defect it was most needed to find.
+#### The discount's fourteen sites, one pairing, and a reduced credit rather than a debit [R-ECO-01 §11]
 
 **Established — fourteen sites, six operand pairs, one body.** The read-only
 data holds six separate copies of the `(-0.7, -0.5)` double pair, each with the
@@ -366,12 +357,14 @@ switch (difficultyWord):
 plain:     production := (float32)( production + contribution )
 ```
 
+The census reads **every** distinct multiply operand in the image against the
+two bit patterns; a census that reads only the operand pairs whose use counts
+recur in a frequency table misses two pairs — precisely the two construction
+refunds.
+
 **Established — the pairing is uniform, at all fourteen.** In every site the
 selector-0 branch is the jump target and takes the `-0.5` operand, and the
 selector-1 fall-through takes the `-0.7` one. **No site inverts the pairing.**
-This retires, at the executable rather than by argument, the standing claim that
-some member of the family pairs them the other way round — a claim Nanolathe's
-construction service carried as an instruction not to reconcile the two.
 
 **Established — the scaled arm is a reduced CREDIT, not a debit.** The constants
 are negative and the operation is a subtraction, so `production - contribution x
@@ -379,8 +372,7 @@ are negative and the operation is a subtraction, so `production - contribution x
 of each production contribution, on medium seven tenths, on hard all of it. An
 implementation that reads the constant's sign alone and writes
 `production += contribution x -0.7` inverts the whole effect: it charges the
-player where retail pays. §3's prose already said "scaled by 0.5 on easy" and
-never said "debited"; the arithmetic above is what settles it.
+player where retail pays.
 
 **Established — five of the fourteen, by their own contracts.** The
 feature-reclaim payout's two additions (energy first, then metal, each through
@@ -391,103 +383,27 @@ record — [05 "Unit reclaim"]); the **build-cancel refund** in the factory
 handler, which forms the same `(1 - remaining) x buildcostmetal`, truncates it
 to an integer, credits the builder's metal accumulator and then sends the
 cause-9 kill packet; and the **reverse-construction refund**, which negates its
-value before the gate and credits the same accumulator.
-
-**Established — §3 undercounts by at least four.** §3 names one construction
-refund; there are two, in different handlers, each its own site. Adding the two
-feature-reclaim sites and the unit-reclaim refund, at least four of the fourteen
-are outside §3's list. The remaining nine sit in the two per-unit
-production-gather passes.
+value before the gate and credits the same accumulator. The remaining nine sit
+in the two per-unit production-gather passes.
 
 **Unknown — which of those nine is which.** The one-to-one mapping of the nine
-onto §3's named members (`energymake`, `metalmake`, extraction, maker, wind,
-tidal, the negative-`energyuse` refund, the spawn credit) is not re-derived
-here, and two of the nine credit a **player-indexed record** rather than a
-unit's accumulator, which none of §3's named members obviously is. *Decider:*
-name each of the nine by the value it forms and the accumulator it stores to,
-and re-issue §3's list as fourteen rows. Until then §3's list should be read as
-incomplete rather than as a closed census, and no site should be "harmonized"
-away on the strength of it.
+onto [R-ECO-01 §3]'s named members (`energymake`, `metalmake`, extraction,
+maker, wind, tidal, the negative-`energyuse` refund, the spawn credit) is not
+re-derived here, and two of the nine credit a **player-indexed record** rather
+than a unit's accumulator, which none of §3's named members obviously is.
+*Decider:* name each of the nine by the value it forms and the accumulator it
+stores to. Until then no site should be "harmonized" away on the strength of
+§3's list.
 
-**Established — neither reclaim site tests the sign of the contribution.** §3's
-prose says "every **positive** production contribution is scaled". Whatever
-justifies that word, it is not a compare at the sites examined: the ladder is
-entered on the player gate alone, and the negative-`energyuse` site negates its
-value immediately before entering it, which is a deliberate negative
-contribution taking the discounted path. **Unknown:** whether any site carries a
-positivity test. *Decider:* a read of each site for a compare against zero
-between forming the contribution and entering the ladder. Until then an
+**Established — neither reclaim site tests the sign of the contribution.** The
+ladder is entered on the player gate alone, and the negative-`energyuse` site
+negates its value immediately before entering it, which is a deliberate
+negative contribution taking the discounted path. **Unknown:** whether any site
+carries a positivity test. *Decider:* a read of each site for a compare against
+zero between forming the contribution and entering the ladder. Until then an
 implementation should not add a positivity guard it cannot point at; no shipped
 feature authors a negative pool [R-WORK-01 §5-A], so the reclaim sites are
 unaffected either way.
-
-**Established fact — player-side storage is floating point.** Live stock,
-the per-pass produced and requested snapshots, and the capacities are stored
-and copied as 32-bit floats, not integers. Closing stock is copied bit-exactly
-from the settled residual and staged into the next pass by a plain float
-addition, so **fractional production survives across ticks exactly**, subject
-only to ordinary single-precision rounding. Cumulative totals and cumulative
-waste are doubles. Capacity is recomputed from zero every pass by accumulating
-each idle unit's authored storage, plus a bonus term when a player flag is set.
-Reserve thresholds are written once at battle setup from capacity and are read
-by the automatic-sharing dispatcher; a resource-bar colouring read of the
-threshold fields is not visible in the reviewed corpus and remains unverified.
-
-Other economy-relevant unit state includes:
-
-- owning player;
-- definition;
-- current health;
-- remaining construction fraction;
-- operational, activated, stalled, disabled, dead, and transported flags;
-- the metal-extraction amount sampled at placement time;
-- cloak state and cloak payment deadline;
-- current construction or work order;
-- weapon slots and direct per-shot resource debits;
-- construction queue heads;
-- footprint and occupancy state;
-- script object and pending callbacks.
-
-#### R-ECO-01 §12 — The settlement status pair is the elimination test, and it is not persisted [R-ECO-01] (2026-09-02)
-
-**Established, closing an open item; correction.** "Authoritative settlement
-order" step 4 and [R-ECO-01 §1] step 4 carry the gate as "the status-pair
-predicate holds (a nonzero halfword at one field **or** a zero word at its
-neighbor — preserved literally; … no writer was found in the bounded scan)",
-and the "Missing and unknown" list asks for "names of the two fields in the
-settlement status pair". Both fields are named. The halfword is the player's
-16-bit **live unit count** and the word is the 32-bit **units ever created**
-count of [08 R-SKIR-01 §3] "Counters" — the same two record fields, whose
-writers are the two unit allocators (both increment both) and the
-kill-record handler (decrements the live count). The predicate "halfword
-non-zero **or** word zero" therefore reads *the player still has a live unit,
-or never had one* — the exact negation of the elimination test in
-[08 R-SKIR-01 §3]. The settlement gate and the three other player walks that
-repeat the predicate all skip an **eliminated** player; the settlement
-deadline still advances for it (the advance precedes the gate chain). Nothing was
-wrong in the literal predicate; what was missing was that it is not a
-separate status at all. Nanolathe: evaluate "not eliminated" (live count
-non-zero, or ever-created zero) where the gate stands, from the same two
-counters the world already keeps, and carry no separate status pair.
-
-**Established — neither counter is persisted.** The save writer's per-player
-block enumerates its keys: the two stocks, the six cumulative totals
-(produced, consumed and wasted, per resource), the two storage values and the
-storage-bonus flag, kills, losses, the three deadlines (`UpdateTime`,
-`WinLoseTime`, `DisplayTimer`) and the alliance block. Neither counter is among
-them, and the restore path rebuilds both through the forced-slot allocator,
-one increment of each per restored unit. A slot that had lost its last unit
-at save time therefore reloads with both counters zero — "never created" —
-and resumes settling. That is retail behaviour, not a Nanolathe omission.
-
-**Established — the end-of-game arms are already placed.** The two
-arm/decrement sites of "end-of-game freeze" are the local slot's 30-tick
-deadline block (session kind 1: the victory predicate arms the win branch,
-otherwise the defeat predicate arms the lose branch; kinds 2 and 3: the defeat
-predicate behind the inactive-or-not-watching test) and the post-loop site for
-sessions with no human participant ([08 R-SKIR-01 §3] "Defeat detection",
-[08 R-TRIG-01]). The semantic names of the flag bits beyond `0x04` stay open
-as doc 08 items; the gate itself needs nothing more from this document.
 
 ### Construction target state
 
@@ -570,16 +486,16 @@ covered cells use filler sentinels that point conceptually to the same
 footprint. A live record carries animation, damage, burning, sinking, and
 presentation state as applicable.
 
-**Established (2026-09-02, RWU-19-42) — the live record's orientation
-triple.** Every live feature record also carries three 16-bit angle words —
-bank, heading and pitch, in the unit's own angle units (65536 per circle)
-and in the same order as the unit record's triple. The placement routine
-takes an optional pointer to a source triple: the death path's corpse
-placement passes the dying unit's own bank/heading/pitch, so a wreck keeps
-the orientation the unit died in, and every other placement (map-authored
-features, successor replacements, mission and network placements) passes
-none, which stores three zeros. The resurrection transplant copies the
-triple back into the new unit ([R-WORK-01 §7]).
+**Established — the live record's orientation triple.** Every live feature
+record also carries three 16-bit angle words — bank, heading and pitch, in
+the unit's own angle units (65536 per circle) and in the same order as the
+unit record's triple. The placement routine takes an optional pointer to a
+source triple: the death path's corpse placement passes the dying unit's own
+bank/heading/pitch, so a wreck keeps the orientation the unit died in, and
+every other placement (map-authored features, successor replacements, mission
+and network placements) passes none, which stores three zeros. The
+resurrection transplant copies the triple back into the new unit
+([R-WORK-01 §7]).
 
 Feature placement and removal must update all covered cells as one operation.
 The system also notifies derived occupancy and coverage systems after the
@@ -587,11 +503,10 @@ footprint changes.
 
 ### Geothermal requirement
 
-**There is no geothermal registry.** An earlier reading that invoked a
-separate registration helper is contradicted by direct review: the helper in
-question is an effect emitter feeding the capped segment ring, not vent
-bookkeeping. The geothermal requirement is enforced entirely by the building
-footprint validator at placement time, through the yard-map control bytes.
+**There is no geothermal registry.** The geothermal requirement is enforced
+entirely by the building footprint validator at placement time, through the
+yard-map control bytes; the only helper a vent's placement calls is the
+steam-strip effect producer of [R-ECO-02 §3], which is not vent bookkeeping.
 
 **Established fact — yard-map control bytes.** Yard-map characters map into a
 row-major buffer sized by the packed footprint extents:
@@ -611,11 +526,10 @@ null buffer pointer otherwise. Stock data has `BMcode=0` on buildings and
 
 **Established fact — the parse is not one-to-one.** The compiler walks the
 footprint cell by cell and the authored string character by character, and the
-two walks are free to fall out of step. A revision of this document that
-described the mapping as one-to-one implied a length contract the parser does
-not have; forty-six of the 126 stock yard maps disagree with their own
-footprint, so that reading makes those buildings unplaceable (see
-`docs/SPEC_CONFLICTS.md`). Three rules, all direct from the character loop:
+two walks are free to fall out of step. Forty-six of the 126 stock yard maps
+disagree with their own footprint (see `docs/SPEC_CONFLICTS.md`), so a
+one-to-one reading makes those buildings unplaceable. Three rules, all direct
+from the character loop:
 
 - A character outside the ten-entry table advances the string **without**
   consuming a cell. That is how the spaces stock authors use to lay a yard map
@@ -633,12 +547,13 @@ The buffer is allocated, not zeroed, so a yard map that is empty or wholly
 unusable leaves the compiler reading past the string. No stock definition
 reaches that state.
 
-**Established fact — control-byte bit roles in the footprint validator.** Per
-covered terrain cell: bit 0 gates an enemy-visibility occupancy test; bits 1-2
-reject any nonzero occupant other than the passed self identity; bit 3 enables
-slope sampling over the footprint; bit 4 enables height tracking; bit 5
-requires the cell to be free of blocking features; bit 6 fails when the
-resolved feature's catalog entry is flagged indestructible;
+#### Control-byte bit roles in the footprint validator
+
+**Established.** Per covered terrain cell: bit 0 gates an enemy-visibility
+occupancy test; bits 1-2 reject any nonzero occupant other than the passed
+self identity; bit 3 enables slope sampling over the footprint; bit 4 enables
+height tracking; bit 5 requires the cell to be free of blocking features; bit
+6 fails when the resolved feature's catalog entry is flagged indestructible;
 **bit 7 (character `G`) is the geothermal requirement.**
 
 **Established fact — bits 5, 6 and 7 all read authored feature flags.** None of
@@ -656,8 +571,7 @@ definition's flag word:
 - **Bit 6** fails when the definition carries `indestructible` (flag-word bit 9,
   mask 0x0200 — the validator tests bit 1 of the flag word's high byte). It is
   not the `reclaimable` flag, which lives at bit 7 of the same word and is never
-  read here. A revision of this document that named bit 6 a "non-reclaimable"
-  test had the flag wrong (see `docs/SPEC_CONFLICTS.md`).
+  read here (`docs/SPEC_CONFLICTS.md`).
 - **Bit 7** resolves the feature inside its own branch, so a vent under a cell
   whose yard byte is not `G` satisfies nothing.
 
@@ -747,28 +661,27 @@ no restore step needed, and the next placement at the same cells can reuse it.
 An extractor's metal amount is sampled once at placement as
 `extractsmetal × Σ(unsigned(metalByte) + 1)` over its footprint cells, stored
 on the unit, and never resampled — terrain edits after placement do not change
-it. Feature metal at the definition is reclaim reward only. Feature catalog
-entries are `0x100` bytes each, animation slots are `0x800` entries of
-`0x30` bytes, and the plot grid is `0xD` bytes per cell; exhausting the
-`0x100` catalog, the `0x800` anim pool, or map bounds causes a silent failure
-with no placement and no retry beyond the caller's own retry. Missing successor
-links (`featuredead`, `featureburnt`, `featurereclamate`) use the sentinel
-`0xFFFF` and a missing chain ends with no corpse rather than a substitution.
-Burning sequences are forced to non-looping at load — the loader clears the
-loop byte for every burn, burn-shadow, death, and reclaim sequence — so shipped
-burns have finite lifetimes (46–282 visits) and end only when the animation
-pointer clears; the countdown after `sparktime` fires its one-shot spread and
-burn-weapon event and then stays inert. Corpse placement from unit death is
-stamped through the same feature placement path at the victim's anchor cell
-before the trigger poll for the same tick, so a death and its wreck are visible
-to the same tick's victory checks.
+it. Feature metal at the definition is reclaim reward only. The live-instance
+arena holds 2048 slots ([R-FEAT-01 §2]) and the feature catalog is
+reallocated per record with no fixed cap ([R-FEAT-01 §1]); exhausting the
+slot pool or map bounds causes a silent failure with no placement and no retry
+beyond the caller's own retry. Missing successor links (`featuredead`,
+`featureburnt`, `featurereclamate`) use the sentinel `0xFFFF` and a missing
+chain ends with no corpse rather than a substitution. Burning sequences are
+forced to non-looping at load — the loader clears the loop byte for every
+burn, burn-shadow, death, and reclaim sequence — so shipped burns have finite
+lifetimes (46–282 visits) and end only when the animation pointer clears; the
+countdown after `sparktime` fires its one-shot spread and burn-weapon event
+and then stays inert. Corpse placement from unit death is stamped through the
+same feature placement path at the victim's anchor cell before the trigger
+poll for the same tick, so a death and its wreck are visible to the same
+tick's victory checks.
 
-### Closed — the building validator's entry bounds and its two published outputs [R-ECO-02 §1] (2026-08-29)
+#### The building validator's entry bounds and its two published outputs [R-ECO-02 §1]
 
 The yard-map validator above is the single function every building placement
 — builder order, factory exit, computer-player search, build ghost — passes
-through. Three facts about its envelope were never stated; all are
-**Established** (direct static).
+through. Three facts about its envelope, all **Established** (direct static):
 
 **Entry bounds are strict on both edges.** Before any cell is visited the
 validator requires, on the packed anchor cell `(x, z)` and the definition's
@@ -862,12 +775,9 @@ structure per slot index, ascending:
 4. Still inside the deadline block: the settlement gate chain — all of the
    following must hold before the settlement entry is called: the player
    record exists; the state byte is active; the observer byte excludes
-   observers; the status-pair predicate holds (a nonzero halfword at one
-   field **or** a zero word at its neighbor — preserved literally; the same
-   read-only predicate recurs at three other player walks and no writer was
-   found in the bounded scan, so it is carried verbatim — the two fields are
-   the live-unit and units-ever-created counters, so the predicate is "not
-   eliminated", [R-ECO-01 §12]); the state byte is
+   observers; the player is not eliminated — its live-unit count is non-zero
+   or its units-ever-created count is zero ([R-ECO-01 §12]; the same
+   predicate recurs at three other player walks); the state byte is
    narrowed to one of the two settling states (the third traverses but never
    settles); the game-ended flag bit is clear; and the end-of-game countdown
    is negative.
@@ -904,8 +814,8 @@ per-settlement-pass amount, consumed once per settlement pass — that is, once
 per ~30 ticks per player under ordinary play. Because deadlines are seeded
 identically at battle start, the passes are phase-aligned in practice:
 effectively one global 30-tick economy period, delivered as ten per-player
-deadlines. Every rate-scale statement derived from "one authored unit is one
-tick's worth" was wrong by a factor of thirty.
+deadlines. "One authored unit is one tick's worth" is wrong by a factor of
+thirty.
 
 The high-level pass is:
 
@@ -949,7 +859,7 @@ confirmation delay before the latch. The semantic names of the individual
 bits and of the two mission-end predicates remain open; the bit patterns and
 the never-cleared property are established.
 
-### R-ECO-01 §1 — Deadline strictness and the floating-point environment [R-ECO-01] (2026-08-29)
+### Deadline strictness and the floating-point environment [R-ECO-01 §1]
 
 **Established — the settlement deadline compare.** Per slot, ascending, the
 compare is *unsigned* and reads:
@@ -967,39 +877,33 @@ gate chain that follows is, in evaluation order and all required:
 1. the player record's existence word is non-zero;
 2. the control byte is 1, 2 or 3;
 3. the observer byte is not the observer value;
-4. the status pair holds — *the halfword at the first field is non-zero* **or**
-   *the word at the second field is zero* (still carried literally; no writer
-   of either field was found — since named: the live-unit count and the
-   units-ever-created count, i.e. "not eliminated", [R-ECO-01 §12]);
+4. the player is not eliminated — *the live-unit count halfword is non-zero*
+   **or** *the units-ever-created word is zero* ([R-ECO-01 §12]);
 5. the control byte is **narrowed to 1 or 2** — control byte 3 traverses the
    deadline block, advances its deadline, and never settles;
 6. the game-ended flag word's `0x04` bit is clear;
 7. the end-of-game countdown halfword is **signed less than zero**.
 
-**Established (2026-09-02, RWU-19-32) — what sits between the advance and
-the gate chain.** For the **local** slot only, the end-condition block of
-[08 R-TRIG-01 §6] runs there: the victory and defeat polls, the shared
-countdown and the end latch. Its 30-tick due is this same `UpdateTime`
-word — the trigger poll owns no deadline of its own, and `WinLoseTime` is
-not it. The order within one due is therefore: advance; end-condition block
-(local slot); gate chain; settlement; reference-slot tail. The end-of-game
-freeze paragraph above ("one arm/decrement family sits inside the local
-player's 30-tick deadline block") describes this block.
+**Established — what sits between the advance and the gate chain.** For the
+**local** slot only, the end-condition block of [08 R-TRIG-01 §6] runs
+there: the victory and defeat polls, the shared countdown and the end latch.
+Its 30-tick due is this same `UpdateTime` word — the trigger poll owns no
+deadline of its own, and `WinLoseTime` is not it. The order within one due is
+therefore: advance; end-condition block (local slot); gate chain; settlement;
+reference-slot tail. The end-of-game freeze paragraph above ("one
+arm/decrement family sits inside the local player's 30-tick deadline block")
+describes this block.
 
 **Established — the HUD deadline is one tick stricter.** The sibling
 `DisplayTimer` field is advanced by the same `+30` but by a **strict**
 compare, `if (playerDisplayTimer < globalTick)`. Its consumer is the resource
 bar ([R-ECO-01 §6]). `UpdateTime` uses `<=`, `DisplayTimer` uses `<`; the
-difference is real and is not a transcription slip. This closes half of the
-tail's "consumers of the `WinLoseTime` / `DisplayTimer` sibling deadlines
-beyond their save keys": `DisplayTimer` has exactly one consumer, the resource
-bar's rate latch. `WinLoseTime` is closed too (2026-09-02, RWU-19-31): a
-bounded census of every access to that record field finds only the save
-reader and writer — it has no gameplay reader ([08 "Player records"]).
-*Previous text:* "`WinLoseTime` remains open." *Addendum (2026-09-02,
-RWU-19-32):* the end-condition poll that an implementation might expect to
-own `WinLoseTime` reads `UpdateTime` instead — see the paragraph after the
-gate chain above.
+difference is real and is not a transcription slip. `DisplayTimer` has
+exactly one consumer, the resource bar's rate latch. `WinLoseTime` has no
+gameplay reader at all: a bounded census of every access to that record field
+finds only the save reader and writer ([08 "Player records"]); the
+end-condition poll that an implementation might expect to own `WinLoseTime`
+reads `UpdateTime` instead, as above.
 
 **Established — the x87 environment, and what "bit-exact" therefore means.**
 The runtime calls `fninit` at startup and immediately sets the precision
@@ -1039,6 +943,41 @@ so the NaN outcome is decided by which bits are tested:
 Signed zero compares equal to zero everywhere, so `-0.0` passes the
 completion gate and the non-positive carry gates exactly as `+0.0` does.
 
+### The settlement status pair is the elimination test, and it is not persisted [R-ECO-01 §12]
+
+**Established.** The two fields the settlement gate (step 4 above) tests are
+the player's 16-bit **live unit count** and its 32-bit **units ever created**
+count of [08 R-SKIR-01 §3] "Counters" — the same two record fields, whose
+writers are the two unit allocators (both increment both) and the kill-record
+handler (decrements the live count). The predicate "halfword non-zero **or**
+word zero" therefore reads *the player still has a live unit, or never had
+one* — the exact negation of the elimination test in [08 R-SKIR-01 §3]. The
+settlement gate and the three other player walks that repeat the predicate
+all skip an **eliminated** player; the settlement deadline still advances for
+it (the advance precedes the gate chain). It is not a separate status at all.
+Nanolathe: evaluate "not eliminated" (live count non-zero, or ever-created
+zero) where the gate stands, from the same two counters the world already
+keeps, and carry no separate status pair.
+
+**Established — neither counter is persisted.** The save writer's per-player
+block enumerates its keys: the two stocks, the six cumulative totals
+(produced, consumed and wasted, per resource), the two storage values and the
+storage-bonus flag, kills, losses, the three deadlines (`UpdateTime`,
+`WinLoseTime`, `DisplayTimer`) and the alliance block. Neither counter is among
+them, and the restore path rebuilds both through the forced-slot allocator,
+one increment of each per restored unit. A slot that had lost its last unit
+at save time therefore reloads with both counters zero — "never created" —
+and resumes settling. That is retail behaviour, not a Nanolathe omission.
+
+**Established — the end-of-game arms are already placed.** The two
+arm/decrement sites of "end-of-game freeze" are the local slot's 30-tick
+deadline block (session kind 1: the victory predicate arms the win branch,
+otherwise the defeat predicate arms the lose branch; kinds 2 and 3: the defeat
+predicate behind the inactive-or-not-watching test) and the post-loop site for
+sessions with no human participant ([08 R-SKIR-01 §3] "Defeat detection",
+[08 R-TRIG-01]). The semantic names of the flag bits beyond `0x04` stay open
+as doc 08 items; the gate itself needs nothing more from this document.
+
 ## Resource contributions
 
 ### Completed-unit eligibility
@@ -1049,13 +988,10 @@ nothing else gates a contribution:
 1. **Visit gate (Established).** The unit's status word carries the alive bit.
    That is the *only* test before the branch selection. There is no
    transported test, no disabled test, no paralyzed test and no under-attack
-   test anywhere in the pass. *Correction:* the previous text said
-   "Transported, dead, disabled, or otherwise ineligible units are skipped or
-   handled by their relevant state branch." That was wrong. A transported
-   metal maker, a paralyzed solar plant, and a unit in any other non-fatal
-   state all keep contributing for as long as the alive bit stands; only the
-   alive bit, the branch bit, the activated bit and the remaining fraction are
-   read.
+   test anywhere in the pass. A transported metal maker, a paralyzed solar
+   plant, and a unit in any other non-fatal state all keep contributing for as
+   long as the alive bit stands; only the alive bit, the branch bit, the
+   activated bit and the remaining fraction are read.
 2. **Branch gate (Established).** The building/mobile branch is chosen by the
    spawn-time `bmcode`-is-zero status bit, and the chosen branch additionally
    requires the **activated** bit (buildings) or the activated bit **or**
@@ -1074,7 +1010,7 @@ building nanoframe whose definition authors `windgenerator` **does** contribute
 wind energy, because the generator chain hangs off the branch gate and not the
 completion gate. That asymmetry is retail behavior, not an imprecision here.
 
-#### R-PROD-01 §1 — The economy fields: widths, defaults, and the reader census [R-PROD-01] (2026-08-29)
+#### The economy fields: widths, defaults, and the reader census [R-PROD-01 §1]
 
 **Established — parse widths and defaults.** The unit-definition parser reads
 these keys once, in this order, from the FBI `UNITINFO` section (`[fmt fbi]`
@@ -1146,7 +1082,7 @@ never reached by this query — while the settlement, which tests the sign, pays
 them anyway. Both callers are computer-player code; doc 08 owns what they do
 with the answer.
 
-#### R-PROD-01 §2 — The activated bit's writers, and what `onoffable` gates [R-PROD-01] (2026-08-29)
+#### The activated bit's writers, and what `onoffable` gates [R-PROD-01 §2]
 
 Which bit sets the activated bit is authored, and it is worth stating because
 every generator except passive make depends on it (Established):
@@ -1191,19 +1127,12 @@ These authored values are amounts **per settlement pass**, delivered once per
 pass — once per ~30 ticks per player under ordinary play. The retail path
 neither divides nor multiplies ordinary production and use values by thirty.
 
-Negative authored energy use takes a distinct refund/production path. Special
-player states can apply one of two executable-defined discounts through a
-global mode selector: selector value 0 credits half the negated amount and
-selector value 1 credits seven tenths of it (the engine multiplies the
-negated amount by a negative half or seven-tenths double and subtracts the
-product, so production grows by the scaled credit; an earlier revision that
-described the special modes as subtracting the scaled amount was wrong at
-byte level). Both halves of that rule are now named — the special state is the
-computer player and the selector is the difficulty word — in [R-ECO-01 §3];
-the previous sentence here, which said "the user-facing identity of those
-player modes remains open (state 2 is the computer-policy state per the
-AI-manager gate inference)", is superseded by that closure. Control-byte
-values 1 and 3 remain unnamed.
+Negative authored energy use takes the refund path of [R-ECO-01 §2]: the
+negated value is added to energy production, in full for an ordinary owner and
+at half (easy) or seven tenths (medium) for a computer player — the engine
+multiplies the negated amount by a negative half or seven-tenths double and
+subtracts the product, so production grows by the scaled credit
+([R-ECO-01 §3]).
 
 ### Wind generation
 
@@ -1224,7 +1153,7 @@ is a computer player, and reached only through the strict generator chain of
 `makesmetal` never reaches it. It is **not** gated on the unit's own energy
 admission; only extraction and the metal maker are.
 
-#### R-PROD-01 §3 — The wind phase, its draws, and the generator notification [R-PROD-01] (2026-08-29)
+#### The wind phase, its draws, and the generator notification [R-PROD-01 §3]
 
 **Established — cadence and the change detector.** The wind phase runs once
 per tick from the phase dispatcher, **after** the unit sweep and after the
@@ -1257,9 +1186,7 @@ is due, in exactly this sequence:
    one draw from the **simulation** stream — but the bounded draw returns zero
    *without advancing the stream* when its bound is less than two (signed), so
    a map with `maxwindspeed − minwindspeed ≤ 1`, or an inverted pair, consumes
-   **no simulation draw** and pins the speed at `minWindSpeed`. Doc 01 §7.3's
-   census, which lists this as one draw unconditionally, should carry the
-   exception.
+   **no simulation draw** and pins the speed at `minWindSpeed`.
 3. **Heading**, only when the new speed is non-zero: `windHeading =
    simRandom(65536)`, a second simulation draw, stored into a 16-bit field —
    the full `0 … 65535` angle domain of [04 §2]. When the speed is zero the
@@ -1282,12 +1209,10 @@ The change takes effect instantly — there is no interpolation and no ramp.
 **Established — battle entry consumes no draws.** Battle entry writes the
 divisor, zeroes the deadline, and calls the wind phase directly; the global
 tick is still zero, so `0 >= 0` fails the strict due test and the phase returns
-after clearing the flag. The first real re-roll is the first sub-tick.
-*Correction:* the previous text here said "At battle setup the briefing seeds
-strength as `CRT() % (max-min+1) + min` and a six-bit direction as
-`CRT() & 0x3f`." Those two CRT draws are real, but they are **briefing-screen
-display state** with no battle-side reader; [01 §7.3] retracted the battle
-reading and doc 08's "Wind initialization" scopes them to the front end. The
+after clearing the flag. The first real re-roll is the first sub-tick. The
+briefing screen's two CRT draws — strength as `CRT() % (max-min+1) + min` and
+a six-bit direction as `CRT() & 0x3f` — are **front-end display state** with
+no battle-side reader (doc 08's "Wind initialization" scopes them); the
 battle's initial wind is drawn by the change body above, on the first tick.
 
 **Established — where `minWindSpeed` and `maxWindSpeed` come from.** Both are
@@ -1309,8 +1234,8 @@ header pair because the version test fails before the OTA value is consulted.
 So an OTA `maxwindspeed=0` on a canonical map is honored as zero (the speed
 roll then pins at `minWindSpeed`, with no simulation draw), while an absent
 settings section yields `100 … 2000`. The header word positions for the legacy
-version are a format finding for `[fmt tnt]` (lane 02); their *meaning* —
-wind range — is established here.
+version are a format finding for `[fmt tnt]`; their *meaning* — wind range —
+is established here.
 
 **Supported inference — the heading before the first non-zero roll.** The
 heading, speed, and changed-flag globals have no writer outside the wind
@@ -1335,15 +1260,14 @@ guard**: a scriptless definition authoring `windgenerator` faults, the residual
 [04 R-COB-01 §1] records. [04 R-CB-01 §5] owns the callback contract; this
 section owns only the energy arithmetic and the phase.
 
-**Correction — there is no "build-assist bonus".** The previous text ended
-"the build-assist bonus is disabled when maximum wind is below half its
-denominator". There is no such bonus anywhere in the economy. The behavior
-that sentence garbled is a **computer-player** one: the per-definition
-build-desirability table the AI builds zeroes a definition's score when it
-authors a non-zero `windgenerator` and the map's `maxwindspeed` is below the
-divisor divided by two (a signed integer divide of the compiled 5000, so
-`2500`). It suppresses *building* wind generators on low-wind maps; it changes
-no energy. Doc 08 owns the table.
+**Established — there is no wind "build-assist bonus".** No such bonus exists
+anywhere in the economy. The only wind-gated behavior outside the generator
+arithmetic is a **computer-player** one: the per-definition build-desirability
+table the AI builds zeroes a definition's score when it authors a non-zero
+`windgenerator` and the map's `maxwindspeed` is below the divisor divided by
+two (a signed integer divide of the compiled 5000, so `2500`). It suppresses
+*building* wind generators on low-wind maps; it changes no energy. Doc 08 owns
+the table.
 
 The wind vector words also drive presentation drift (smoke, fire spread); those
 consumers are doc 03's, under [R-WIND-01].
@@ -1363,7 +1287,7 @@ that authors `extractsmetal`, a non-zero `makesmetal`, or `windgenerator > 0`
 never reaches its `tidalgenerator`. Like wind, it is not gated on the unit's
 own energy admission.
 
-#### R-PROD-01 §4 — Where tidal strength comes from, and the absent water gate [R-PROD-01] (2026-08-29)
+#### Where tidal strength comes from, and the absent water gate [R-PROD-01 §4]
 
 **Established — the value.** `mapTidalStrength` is one global single-precision
 value written once, when the map and mission are applied:
@@ -1400,8 +1324,7 @@ non-negative *and* the terrain file is the canonical version; otherwise the
 wind pair falls back to `100 … 2000` on a canonical map and to the legacy
 header's own words on a legacy map ([R-PROD-01 §3]), and gravity falls back to
 the legacy header's value or, when that is zero, to the compiled `0x1FDB`
-([R-AIR-01], [03 §2.2]). [03 §2.2]
-lists the tidal fallback beside the gravity one; the two are not parallel —
+([R-AIR-01], [03 §2.2]). The tidal and gravity fallbacks are not parallel —
 gravity's fallback is reached when neither source supplies a value, while the
 tidal fallback is reached only on a negative or never-parsed value, with no
 version test at all.
@@ -1422,9 +1345,8 @@ if (definition.makesmetal != 0 && admitted)
 
 So `makesmetal=1` contributes one metal per settlement pass — once per ~30
 ticks per player under ordinary play — and `makesmetal=8` contributes eight.
-An earlier revision read this as "a literal one"; [R-ECO-01 §2] records the
-correction. The byte truncation at parse time is the only bound: an authored
-`300` stores `44`.
+The byte truncation at parse time is the only bound: an authored `300` stores
+`44`.
 
 The arm is reached only when `extractsmetal` is not positive; a definition
 authoring both makes metal only through extraction ([R-ECO-01 §2]).
@@ -1433,7 +1355,7 @@ Energy consumption is a separate authored active-use demand (`energyuse`), and
 the two are coupled through the stall rule below rather than through any
 conversion ratio. The engine has no metal-per-energy constant.
 
-#### R-PROD-01 §5 — Upkeep timing, the maker byte, and the absent `metaluse` key [R-PROD-01] (2026-08-29)
+#### Upkeep timing, the maker byte, and the absent `metaluse` key [R-PROD-01 §5]
 
 **Established — when `energyuse` is charged.** There is no per-tick upkeep.
 `energyuse` is read exactly once per settlement pass of the owning player —
@@ -1489,14 +1411,16 @@ carry non-positive), otherwise the maker contributes no metal that pass and
 its upkeep is request-only — no callback fires. Output resumes when the
 stage-A paydown returns the carry to non-positive; sustained shortage keeps
 the maker stalled across passes, so metal production drops to passive
-`metalmake` only.
+`metalmake` only. An authored negative `energyuse` is not a demand but a
+refund ([R-ECO-01 §2]), credited through the same difficulty ladder as every
+other production site ([R-ECO-01 §3]).
 
 ### Terrain metal extraction
 
 Every plot cell carries one **unsigned metal byte**. Extraction reads it once,
 when the extractor is created, and never again.
 
-#### R-PROD-01 §6 — Seeding the metal byte, sampling the footprint, and the accumulator [R-PROD-01] (2026-08-29)
+#### Seeding the metal byte, sampling the footprint, and the accumulator [R-PROD-01 §6]
 
 **Established — where the byte comes from.** Map loading allocates the plot
 grid and seeds every cell's metal byte before anything else writes it:
@@ -1514,16 +1438,21 @@ Then the terrain attribute pass runs, and this is the one place the two
 terrain versions differ:
 
 * **canonical version** — the four-byte attribute record supplies the height
-  byte and the feature reference only. It never touches the metal byte, so
-  every cell keeps the uniform seed. There is **no per-cell metal raster**:
-  bounded negative over the loader and over the shipped 171-map corpus, whose
-  fourth attribute byte is uniformly zero and is never read as metal.
+  byte and the feature reference only. The terrain loader never touches the
+  metal byte: there is **no per-cell metal raster** in the file (bounded
+  negative over the loader and over the shipped 171-map corpus, whose fourth
+  attribute byte is uniformly zero and is never read as metal). The only
+  later writer is the deposit pass of [R-FEAT-01 §7], which runs after every
+  terrain-file and mission-file feature is stamped and writes each
+  indestructible metal feature's `metal` value into the cells of its
+  footprint; every other cell keeps the uniform seed.
 * **legacy version** — the attribute record is eight bytes and the pass copies
   its **byte 6** into the cell's metal byte (height from byte 0, feature
   reference from byte 2). The legacy version is also the one for which the
   uniform seed was forced to zero above, so on a legacy map the per-cell bytes
-  are the whole story. `[fmt tnt]` documents only the canonical four-byte
-  record; the eight-byte legacy record is a format finding for lane 02.
+  plus the deposit pass are the whole story. `[fmt tnt]` documents only the
+  canonical four-byte record; the eight-byte legacy record is a format finding
+  for `[fmt tnt]`.
 
 **Established — the sampling walk.** At unit creation, and only when the
 definition's `extractsmetal` is **strictly greater than zero**, the creator
@@ -1589,6 +1518,22 @@ rate is added to metal production through the difficulty discount of
 [R-ECO-01 §3] and under the maker-stall rule stated with the metal makers
 above.
 
+#### The intermediate's shape, restated for the implementer [R-PROD-01 §6-A]
+
+**Established.** The sum is a **sixteen-bit** accumulator of `metalByte + 1`
+per in-bounds footprint cell; the rate is
+`float32( ((float)(int32)(accumulator << 16)) × extractsmetal × 2⁻¹⁶ )`,
+evaluated left to right at the x87 working precision with the only narrowing
+at the store. Because `accumulator << 16` is exact as a floating value and
+`extractsmetal` is a single, the double product rounds once at the store to
+the same single as `float32(accumulator) × extractsmetal` for every
+accumulator below `0x8000`. There is no other rounding to preserve — no
+fixed-point-shaped intermediate and no conversion order beyond the one
+narrowing store. The single corner is the sign: at `0x8000` and above the
+shifted word is loaded as a negative 32-bit integer and the rate goes
+negative; a wider or unsigned accumulator diverges there and nowhere else,
+and no shipped footprint reaches it.
+
 ### Storage capacity
 
 At each settlement pass the engine rebuilds player capacity from scratch: both
@@ -1617,7 +1562,7 @@ Capacity is single-precision state. It is not an integer total. Destroyed,
 unfinished, or ineligible storage units cease contributing at the next pass
 because that pass rebuilds the sum from zero — capacity is never decremented.
 
-#### R-ECO-01 §4 — Capacity accumulation and the bonus, exactly [R-ECO-01] (2026-08-29)
+#### Capacity accumulation and the bonus, exactly [R-ECO-01 §4]
 
 **Established — the per-unit accumulation.** Both capacities are zeroed at the
 very top of the pass, before the first unit is visited. Inside the idle block
@@ -1633,12 +1578,7 @@ playerEnergyCapacity = float32( definition.energystorage + playerEnergyCapacity 
 **Metal is accumulated first**, and each add is stored back as a single before
 the next unit is visited, so the sum is re-rounded per unit exactly as the
 production totals are. There is no integer intermediate and no
-float-to-integer conversion anywhere in this accumulation. *Correction:* a
-previous revision said "any float-to-integer conversion at the capacity add
-truncates toward zero (INVARIANTS I3)". There is no such conversion; the
-sentence described a decompiler artifact — the player record had been typed
-through an integer pointer, so a plain single-precision add read as an
-integer store.
+float-to-integer conversion anywhere in this accumulation.
 
 **Established — where the 200 floor really lives.** The floor is **not**
 applied to capacity. It is applied by the storage-bonus setter, a small helper
@@ -1646,10 +1586,9 @@ that takes a player and two integer amounts and does exactly three things:
 set the player's bonus-enable flag bit; store `max(200, energyAmount)`
 converted to single precision into the player's energy bonus field; store
 `max(200, metalAmount)` converted to single precision into the metal bonus
-field. Both comparisons are signed integer `< 200`. *Correction:* the previous
-text said "when the bonus enable bit is set, each resource's capacity is
-floored at 200". The floor clamps the **bonus operands** at the moment they
-are written, once, outside the settlement; capacity itself is never floored.
+field. Both comparisons are signed integer `< 200`. The floor clamps the
+**bonus operands** at the moment they are written, once, outside the
+settlement; capacity itself is never floored.
 
 **Established — the bonus add inside the pass.** After the unit slice and the
 mirror-bucket fold, and before any counter is committed, the settlement tests
@@ -1673,14 +1612,9 @@ live stocks only — from a per-side authored word times 100 on the skirmish
 kind — and **never sets the bonus flag**. (b) The commander-replacement branch
 inside the per-player phase, which calls it with the same per-side words times
 100 (metal word first, energy word second) alongside the replacement spawn.
-*Correction:* the previous text said "the battle-init capacity writer runs the
-capacity helper per active player before the spawn-credit grant to preserve
-the opening 1000/1000 stocks past the 30-tick settlement clamp". It runs the
-bonus setter only on the mission session kind. On a skirmish start the opening
-stocks survive the first settlement because the commander's own authored
-`energystorage`/`metalstorage` enter the capacity sum in the same pass, not
-because of a bonus. The `[OX P1]` observation is consistent with the mission
-kind; it does not establish the skirmish path.
+On a skirmish start the opening stocks survive the first settlement because
+the commander's own authored `energystorage`/`metalstorage` enter the capacity
+sum in the same pass, not because of a bonus.
 
 ### Cloak debit
 
@@ -1694,15 +1628,14 @@ the cloak gate is due, the engine:
 4. if affordable, subtracts it immediately and records an energy request;
 5. toggles the unit's operational-byte bit 2 (mask value 4) through the normal
    transition helper — this raises status-cue slots 14 and 15 plus a network
-   packet, not StartBuilding/StopBuilding and not Activate/Deactivate (an
-   earlier revision that named the operational/building bit was imprecise;
-   slots 14 and 15 are cue slots raised with no caption text, not COB
-   callbacks — see [R-ECO-01 §8]);
+   packet, not StartBuilding/StopBuilding and not Activate/Deactivate (slots
+   14 and 15 are cue slots raised with no caption text, not COB callbacks —
+   [R-ECO-01 §8]);
 6. if unaffordable, takes the failure transition without a partial payment;
 7. if the gate is **not** due — the request bit is clear, the decloak-forced
    bit is set, or the reveal deadline has not been reached — takes the same
    failure transition (bit 2 cleared) with no cost selection and no compare
-   ([R-ECO-01 §9] "every exit", 2026-09-02).
+   ([R-ECO-01 §9] "every exit").
 
 Because units are visited in stable order, simultaneous cloak costs are
 sequential: an earlier slot can make a later slot fail during the same pass.
@@ -1711,46 +1644,28 @@ owning player, in the settlement's stable unit-slot order; authored cloak
 costs are per-settlement-pass amounts like every other authored economy
 field.
 
-#### R-PROD-01 §6-A — The intermediate's shape, restated for the implementer [R-PROD-01] (2026-09-02)
-
-The pre-closure prose of "Terrain metal extraction" said retail "performs the
-intermediate sum with fixed-point-shaped integer arithmetic and then converts
-it to a single-precision value" and that "an exact compatibility mode must
-preserve that conversion and rounding order", and a code marker still cites
-that sentence as unresolved. It is resolved by §6 above (re-verified
-RWU-19-22, Established): the sum is a **sixteen-bit** accumulator of
-`metalByte + 1` per in-bounds footprint cell; the rate is
-`float32( ((float)(int32)(accumulator << 16)) × extractsmetal × 2⁻¹⁶ )`,
-evaluated left to right at the x87 working precision with the only narrowing
-at the store. Because `accumulator << 16` is exact as a floating value and
-`extractsmetal` is a single, the double product rounds once at the store to
-the same single as `float32(accumulator) × extractsmetal` for every
-accumulator below `0x8000`. There is no other rounding to preserve. The
-single corner is the sign: at `0x8000` and above the shifted word is loaded
-as a negative 32-bit integer and the rate goes negative; a wider or unsigned
-accumulator diverges there and nowhere else, and no shipped footprint reaches
-it.
-
-#### R-PROD-01 §7 — Cost selection, the player gate, the can-cloak capability, and the unconditional transition [R-PROD-01] (2026-08-29)
+#### Cost selection, the player gate, the can-cloak capability, and the unconditional transition [R-PROD-01 §7]
 
 **Established — the player gate, exactly.** The whole cloak block — gate,
 payment and transition — is skipped for a unit whose owner's **record-exists
-word is non-zero and whose control byte is 3**; it runs for every other
-visited unit. The record-exists clause is inert in practice (a unit is only
-visited through an existing player's slot list) and is recorded so an
-implementation does not add a separate existence test. Control byte 3 remains
-unnamed (tail).
+word is non-zero and whose control byte is 3** (a remote peer,
+[R-SHARE-01 §1]); it runs for every other visited unit. The record-exists
+clause is inert in practice (a unit is only visited through an existing
+player's slot list) and is recorded so an implementation does not add a
+separate existence test.
 
-**Established — which units can request cloak at all.** The unit-definition
-parser derives a per-definition *can-cloak* capability bit at parse time as
-`cloakcost > 0.0` — a strict floating-point compare on the value already
-converted from the integer reader, evaluated after both cloak keys are read.
-The `Cloak_On` and `Cloak_Off` order handlers test that bit before writing the
-cloak-requested status bit ([R-ECO-01 §9]). Consequently a definition with
-`cloakcost` absent, zero, or negative can never carry the cloak-requested bit,
-and the settlement's "cost of zero debits nothing" path is reachable only
-through `cloakcostmoving=0` on a definition whose stationary cost is positive
-— the moving unit then cloaks for free while its stationary cost is positive.
+##### Which units can request cloak at all
+
+**Established.** The unit-definition parser derives a per-definition
+*can-cloak* capability bit at parse time as `cloakcost > 0.0` — a strict
+floating-point compare on the value already converted from the integer
+reader, evaluated after both cloak keys are read. The `Cloak_On` and
+`Cloak_Off` order handlers test that bit before writing the cloak-requested
+status bit ([R-ECO-01 §9]). Consequently a definition with `cloakcost` absent,
+zero, or negative can never carry the cloak-requested bit, and the
+settlement's "cost of zero debits nothing" path is reachable only through
+`cloakcostmoving=0` on a definition whose stationary cost is positive — the
+moving unit then cloaks for free while its stationary cost is positive.
 
 **Established — the selection, and why the conversion is a no-op in practice.**
 The cost is `cloakcostmoving` when the unit's movement-mode bits are non-zero
@@ -1779,35 +1694,28 @@ draws from either stream, and the difficulty discount of [R-ECO-01 §3] does not
 apply to it: a computer player pays cloak upkeep in full.
 
 **Established — the full debit predicate.** The debit block runs when the
-unit carries the **cloak-requested** status bit, a second status bit is clear,
-and the unit's per-unit cloak payment deadline is due — the gate is bit set
-**and** bit clear **and** deadline due. An earlier reading that OR-ed a
-cooldown bit into the gate was falsified at byte level, and the
-owner-control-byte-3 condition that would suppress the whole block is inert
-during live play because the settlement caller excludes control byte 3. The
-per-unit deadline itself is written by **ten** order-handler sites as the
-global tick plus 150 (`SelfRepair`, `RepairUnit`, `RepairUnitNoMove`), 300
-(`MobileBuild`, `HelpBuild`, `Reclaim`, `Resurrect`, `VTOL_Reclaim`) or 900
-(`Capture`, `ReclaimUnit`), and by two writers outside the order system — the
-sensor phase's proximity breach (`+ 90`, [03 R-VIS-01 §6]) and the projectile
-fill on every shot (`+ 600`, [06 §4.1]) — all into the **same** word, a later
-write always replacing an earlier one (no maximum). Idle cloaked units, which
-nothing stamps, therefore pay every pass from the first. **Correction
-(2026-09-02, RWU-19-26).** The previous text said "written by nine handler
-sites as the global tick plus 150, 300, or 900 (repair, build/get-built/
-resurrection, and capture/reclaim respectively)". A store-by-store census of
-the field found ten handler sites, not nine — `Resurrect` and `VTOL_Reclaim`
-both stamp `+ 300`, while neither `GetBuilt` nor `BuildingBuild` writes the
-field at all — and the sentence omitted the two non-handler writers that
-share the word. The full census, with readers, is [03 R-VIS-01 §6]
-"Writer census of the shared deadline" and [04 R-ORD-01 §5] "The reveal
-stamp".
+unit carries the **cloak-requested** status bit, the decloak-forced bit is
+clear, and the unit's per-unit cloak payment deadline is due — the gate is
+bit set **and** bit clear **and** deadline due. The owner-control-byte-3
+condition that would suppress the whole block is inert during live play
+because the settlement gate chain excludes control byte 3. The per-unit
+deadline itself is written by **ten** order-handler sites as the global tick
+plus 150 (`SelfRepair`, `RepairUnit`, `RepairUnitNoMove`), 300 (`MobileBuild`,
+`HelpBuild`, `Reclaim`, `Resurrect`, `VTOL_Reclaim`) or 900 (`Capture`,
+`ReclaimUnit`) — neither `GetBuilt` nor `BuildingBuild` writes the field —
+and by two writers outside the order system — the sensor phase's proximity
+breach (`+ 90`, [03 R-VIS-01 §6]) and the projectile fill on every shot
+(`+ 600`, [06 §4.1]) — all into the **same** word, a later write always
+replacing an earlier one (no maximum). Idle cloaked units, which nothing
+stamps, therefore pay every pass from the first. The full census, with
+readers, is [03 R-VIS-01 §6] "Writer census of the shared deadline" and
+[04 R-ORD-01 §5] "The reveal stamp".
 
-#### R-ECO-01 §9 — Cloak gate, conversion, and the second bit [R-ECO-01] (2026-08-29)
+#### Cloak gate, conversion, and the second bit [R-ECO-01 §9]
 
-**Established, and a correction to the reach claim.** The first gate bit —
-the **cloak-requested** status bit, bit 11 of the unit status word — has
-exactly three writers in the recovered image, and one gameplay reader:
+**Established — the first gate bit.** The **cloak-requested** status bit, bit
+11 of the unit status word, has exactly three writers in the recovered image,
+and one gameplay reader:
 
 * the **unit constructor** seeds it from the definition's `init_cloaked` flag.
   The constructor first clears the bit in a masked store of neighbouring
@@ -1816,8 +1724,7 @@ exactly three writers in the recovered image, and one gameplay reader:
   bit 11. Both creation paths in the image (the shared create service and
   the network-packet create) run this constructor, and nothing after it —
   neither the create service's own tail nor the **build-completion service**
-  — touches
-  bit 11, the instance cloaked bit, or `init_cloaked` again. An
+  — touches bit 11, the instance cloaked bit, or `init_cloaked` again. An
   `init_cloaked=1` unit is therefore cloak-requested from the tick it is
   placed, as a nanoframe, with no player order ([03 R-VIS-01 §6]);
 * the **`Cloak_On`** order handler sets it and the **`Cloak_Off`** order
@@ -1829,28 +1736,12 @@ exactly three writers in the recovered image, and one gameplay reader:
 The only reader is this gate. The two cloak orders are the runtime togglers,
 so any unit whose definition carries the cloak capability pays cloak upkeep
 for as long as the player leaves cloak on, whether or not it was authored
-`init_cloaked`. The first previous text — "the init-cloaked instance bit
-(seeded once at spawn from the definition's `init_cloaked`; no runtime
-toggler exists in the reviewed image) … authored reach is exactly the mine
-family; commanders, spies and snipers carry cloak costs but never enter this
-block" — was wrong about the togglers and the reach.
-
-**Correction (2026-09-02, RWU-19-26).** The 2026-08-29 text of this paragraph
-over-corrected: it said "The first gate bit is not seeded from
-`init_cloaked` … It is cleared at spawn along with its neighbours … 
-`init_cloaked` is a separate definition flag bit; its consumer is the
-initial-posture path, not this gate." That was wrong. The constructor's
-clearing store is followed, in the same function, by the masked store that
-copies `init_cloaked` into bit 11 — the seeding is Established at instruction
-level, and [03 R-VIS-01 §6] had it right. There is no "initial-posture path":
-the phrase came from doc 04 §3.8's description of the completion transition's
-capability-bit-24 arm, which is `isfeature` (death cause 7 and the death
-latch — [04 R-SPEC-01 §12]), not `init_cloaked` (bit 4); doc 04 §3.8 is
-corrected in place. Implementation consequence: the cloak-requested state is
-seeded from `init_cloaked` at creation, the completion transition writes
-nothing cloak-related, and nothing else consumes `init_cloaked` — the
-visibility predicate reads only the instance cloaked bit that this gate's
-transition service sets ([03 §3.2], [R-ECO-01 §8]).
+`init_cloaked`; the reach is not the mine family alone — commanders, spies
+and snipers enter this block whenever their cloak is on. There is no separate
+"initial-posture path": the completion transition writes nothing
+cloak-related, and nothing else consumes `init_cloaked` — the visibility
+predicate reads only the instance cloaked bit that this gate's transition
+service sets ([03 §3.2], [R-ECO-01 §8]).
 
 **Established — the debit is not gated on completion.** The cloak block sits
 after, and outside, the settlement's `remaining fraction == 0` test that
@@ -1860,29 +1751,21 @@ request bit is set is gated and charged exactly like a finished one. For an
 settlement pass and, when the owner can pay, is cloaked while still being
 built.
 
-**Correction (2026-09-02, RWU-19-29) — the second bit is not inert.** The
-previous text said: "**Established (bounded negative) — the second bit is
-inert.** The status bit whose clearness the gate also requires is *read* only
-here. A search of the complete decompiled function set found no writer that
-sets it, and the spawn initialiser preserves rather than sets it, so the term
-is always satisfied in practice. … Its intended meaning is **Unknown** —
-decider: static trace over the regions the export still misses." That search
-predated the sensor-phase trace and was wrong. The bit is the **decloak-forced**
-latch of [03 R-VIS-01 §4] and [03 R-VIS-01 §6]: the sensor phase's first pass
-clears it on every live unit every tick, and its proximity-breach pass sets it
-again on the same visit that stamps the `tick + 90` deadline. Its meaning is
-therefore Established. Because the breach writes the deadline on the same
-visit, the bit's own contribution to the gate is observable only on the breach
-tick itself (where the deadline term also fails); an implementation that
-carries the breach as the deadline alone diverges by nothing, but the term is
-real and a clone should keep it.
+**Established — the second bit.** The status bit whose clearness the gate also
+requires is the **decloak-forced** latch of [03 R-VIS-01 §4] and
+[03 R-VIS-01 §6]: the sensor phase's first pass clears it on every live unit
+every tick, and its proximity-breach pass sets it again on the same visit that
+stamps the `tick + 90` deadline. Because the breach writes the deadline on the
+same visit, the bit's own contribution to the gate is observable only on the
+breach tick itself (where the deadline term also fails); an implementation
+that carries the breach as the deadline alone diverges by nothing, but the
+term is real and a clone should keep it.
 
-**Closed — every exit of the cloak block writes the instance bit (2026-09-02,
-RWU-19-29).** Established at instruction level. The block's own entry test —
-the owner record's existence word is non-zero and its control byte is not the
-observer value 3 — is already implied by the settlement gate chain (steps 1
-and 5 of "Settlement cadence"), so for every player that settles, the block
-runs for every unit of the slice. Inside it the three gate terms are tested in
+**Established — every exit of the cloak block writes the instance bit.** The
+block's own entry test — the owner record's existence word is non-zero and its
+control byte is not 3 — is already implied by the settlement gate chain (steps
+1 and 5 of [R-ECO-01 §1]), so for every player that settles, the block runs
+for every unit of the slice. Inside it the three gate terms are tested in
 order — request bit set; decloak-forced bit clear; `currentTick >= deadline`
 as an unsigned, inclusive compare — and **every** failure and every success
 ends at the same transition-service call ([R-ECO-01 §8]) with bit 2 as the
@@ -1896,21 +1779,15 @@ mask and the outcome as the selector:
 | (d) gate due, integerized cost `<=` live energy stock | **set** (stock debited, request recorded) |
 | (e) gate due, cost `>` stock | cleared (no partial payment) |
 
-No exit leaves the bit alone, and the block never reads the bit. The pseudocode
-above shows only arms (d) and (e); arms (a)–(c) are the `else` of the gate,
-with no cost selection and no compare. WU-19-92's implementation assumed
-exactly this as a Supported inference — its comment reads: "gate not due at
-all — CLEAR bit 2. Supported inference, not a traced arm: `TODO(question)`:
-whether the settlement clears the instance bit on a not-due pass, or leaves it
-and the reveal happens elsewhere — decider: a trace of the debit block's exit
-paths." The decider is met; the inference is confirmed and the marker can
-close. Consequences a clone must preserve: `Cloak_Off` decloaks on the
-owner's *next settlement pass*, not on the order; a reveal stamp decloaks on
-the next pass, so a unit can stay hidden up to one settlement interval (30
-ticks) after its last stroke or shot; and since the transition write is
-unconditional but its edge notifications are suppressed when the byte did not
-change ([R-ECO-01 §8]), arms (a)–(c) and (e) on an already-visible unit raise
-nothing and send nothing.
+No exit leaves the bit alone, and the block never reads the bit. The
+pseudocode below shows only arms (d) and (e); arms (a)–(c) are the `else` of
+the gate, with no cost selection and no compare. Consequences a clone must
+preserve: `Cloak_Off` decloaks on the owner's *next settlement pass*, not on
+the order; a reveal stamp decloaks on the next pass, so a unit can stay hidden
+up to one settlement interval (30 ticks) after its last stroke or shot; and
+since the transition write is unconditional but its edge notifications are
+suppressed when the byte did not change ([R-ECO-01 §8]), arms (a)–(c) and (e)
+on an already-visible unit raise nothing and send nothing.
 
 **Established — the instance bit's writers, complete.** Bit 2 of the
 operational byte has exactly one *deciding* writer: this block, through the
@@ -1952,7 +1829,7 @@ always affordable, and debits nothing. The debit reads and writes the player's
 **live stock** directly, mid-pass, so it is visible to every later unit in the
 same slice and to the pool that stage one of [R-ECO-01 §5] later builds.
 
-#### R-PROD-01 §8 — Producer draw census and phase placement [R-PROD-01] (2026-08-29)
+#### Producer draw census and phase placement [R-PROD-01 §8]
 
 **Established.** The complete random-draw census of the producer paths this
 section owns, for the determinism ledger of [01 §7.3]:
@@ -1994,10 +1871,9 @@ term from the target's maximum damage and its resource term from the target's
 energy build cost; it then passes the resource term to this helper against the
 builder's energy subrecord. The helper always adds the amount to energy
 requested and adds it to energy accepted only when energy carry is non-positive.
-It does not address the metal subrecord. The precise user-interface identity of
-the reversed-argument variant and the behavior for malformed zero or negative
-authored inputs remain open, but the energy resource term and the energy-gated
-admission are established.
+It does not address the metal subrecord. The reversed-argument variant is the
+`SelfRepair` order, and its malformed-input behavior is stated in
+[R-WORK-01 §3].
 
 ### Direct two-resource payment
 
@@ -2007,7 +1883,14 @@ both in full or debits neither. It also records both amounts in the
 subrecord's requested accumulators. This path does not create proportional
 carry.
 
-### R-ECO-01 §7 — The five admission helpers, as expressions [R-ECO-01] (2026-08-29)
+#### Weapon per-shot cost
+
+A weapon's per-shot energy and metal costs are paid through this helper —
+all or nothing, recorded in the firing unit's requested accumulators, never
+becoming carry ([R-ECO-01 §7] gives the helper as an expression). The
+authored amounts and the fire gate that consults the helper are doc 06's.
+
+### The five admission helpers, as expressions [R-ECO-01 §7]
 
 **Established.** All five are small methods on the economy subrecord of
 [R-ECO-01 §2] — which means they work identically on a unit's embedded
@@ -2090,14 +1973,11 @@ Both compares are inclusive and both must hold before anything is debited, so
 this is genuinely all-or-nothing. The redundant inner re-test is preserved
 above because it is what the instructions do; it can never fail.
 
-### R-ECO-01 §10 — The operation-byte table, closed [R-ECO-01] (2026-08-29)
+### The operation-byte table [R-ECO-01 §10]
 
-The doc-05 tail has carried "the operation-byte table that dispatches build,
-repair, unit reclaim, feature reclaim, capture, and resurrection; the handler
-identities are established" as an open item, and doc 04 §3.1 carries the same
-residual as "the per-phase operation-byte values inside the construction
-handler family". The values are now established. Behavior remains doc 04
-§3.1's property; this entry exists because doc 05's admission callers are
+The operation-byte values that dispatch build, repair, unit reclaim, feature
+reclaim, capture, and resurrection are established. Behavior remains doc 04
+§3.1's property; this section exists because doc 05's admission callers are
 selected by these bytes.
 
 **Established — how the byte becomes a handler.** An order node's operation
@@ -2166,7 +2046,7 @@ unit-reclaim handler contains its own six-way switch on a **phase** byte
 stored in the order node beside the operation byte (values 0 through 5,
 dispatched through a dense jump table). That is the handler's internal state
 machine — reclaim start, work pulse, and four terminals — not the operation
-table. Doc 04 §3.1's "per-phase operation-byte values" residual is about these
+table. The "per-phase operation-byte values" doc 04 §3.1 refers to are these
 phase bytes; the table above is the outer dispatch.
 
 ## Two-stage settlement algorithm
@@ -2206,7 +2086,7 @@ environment of [R-ECO-01 §1]. Exact compatibility requires preserving
 evaluation order and conversion points rather than recomputing the equations
 with arbitrary higher precision.
 
-### R-ECO-01 §5 — The two stages and the apply-back, instruction-exact [R-ECO-01] (2026-08-29)
+### The two stages and the apply-back, instruction-exact [R-ECO-01 §5]
 
 **Established — the stage loop.** Energy runs first, then metal; the two are
 one loop body executed twice over adjacent slot pairs, so no metal value can
@@ -2264,14 +2144,14 @@ carryTerm := carry - debtRatio * carry                // 53-bit
 carry := f32( acceptedTerm + carryTerm )
 ```
 
-*Correction:* the previous text gave this as
-`new carry = old carry × (1 - debt ratio) + accepted × (1 - accept ratio)`.
-That is the same value in exact arithmetic but not in floating point: retail
-computes `x - ratio*x`, never `x * (1 - ratio)`, and the two round
-differently. The accepted term is also formed first and is the left operand of
-the final add. Only the final store narrows to single; both terms are computed
-at the working precision of [R-ECO-01 §1]. An unreferenced out-of-line copy of
-exactly this expression exists in the image and corroborates the reading.
+Retail computes `x - ratio*x`, never `x * (1 - ratio)`: the factored form
+`old carry × (1 - debt ratio) + accepted × (1 - accept ratio)` is the same
+value in exact arithmetic but not in floating point, and the two round
+differently. The accepted term is also formed first and is the left operand
+of the final add. Only the final store narrows to single; both terms are
+computed at the working precision of [R-ECO-01 §1]. An unreferenced
+out-of-line copy of exactly this expression exists in the image and
+corroborates the reading.
 
 **Established — what the apply-back archives and clears.** Production is
 copied into the archived-production slot and zeroed; requested is copied into
@@ -2311,7 +2191,7 @@ the archived slots outside the ledger's own redistribution — treat as no
 consumer within the reviewed boundary. The writer-set closure above likewise
 rests on that bounded census.
 
-### R-ECO-01 §6 — Commit order, the waste clamp, and the four HUD rates [R-ECO-01] (2026-08-29)
+### Commit order, the waste clamp, and the four HUD rates [R-ECO-01 §6]
 
 **Established — the commit order, exactly.** After the unit slice, the
 mirror-bucket fold and the capacity bonus of [R-ECO-01 §4], and **before** the
@@ -2337,8 +2217,8 @@ pool := f32(P + playerLiveStock)
 ```
 
 so the two per-pass counters really do report the pass's activity and never
-the funds available to pay it, as this section already said. The requested
-counter is copied bit-for-bit — no conversion, no clamp.
+the funds available to pay it. The requested counter is copied bit-for-bit —
+no conversion, no clamp.
 
 **Established — the closing stock and the waste clamp.** After the two stages
 of [R-ECO-01 §5] produce a closing value per resource:
@@ -2358,10 +2238,9 @@ inside the pass but is the literal sequence. The clamp is **strictly greater**:
 a stock exactly equal to capacity is not clamped and wastes nothing. The
 excess is computed from the unclamped value and the capacity at the working
 precision, and only the double accumulation rounds, so the fractional part of
-the overflow is preserved as this section already claimed. A NaN closing value
-takes the "no waste" arm and is written to the stock unchanged. Waste is
-accumulated **only** here; there is no other writer of the two waste totals in
-the ledger.
+the overflow is preserved. A NaN closing value takes the "no waste" arm and is
+written to the stock unchanged. Waste is accumulated **only** here; there is
+no other writer of the two waste totals in the ledger.
 
 **Established — the four floats the HUD reads, and the absence of averaging.**
 The resource bar samples four player fields — energy produced this pass,
@@ -2405,7 +2284,7 @@ unit's operational state and cause script-visible transitions. The exact
 mapping of every bit and callback is specified in the unit-script document;
 this document requires only that economic admission use that shared service.
 
-### R-ECO-01 §8 — The transition service, exactly [R-ECO-01] (2026-08-29)
+### The transition service, exactly [R-ECO-01 §8]
 
 **Established.** The service takes a unit, a bit mask, and a set/clear
 selector, and operates on the unit's one-byte operational word:
@@ -2432,15 +2311,15 @@ nothing changed. Then, in this fixed order, each guarded by its own bit:
 | bit 2 newly cleared | raise status cue slot 15 (no caption text) |
 
 An `Activate`/`Deactivate` pair therefore always raises both a script callback
-**and** a cue, while the bit-2 (cloak) pair raises **only** cues — the pair
-this document previously called "the COB callback pair #14/#15" is a pair of
-status-cue slots, not COB callbacks. Bit 3 raises only script callbacks.
+**and** a cue, while the bit-2 (cloak) pair raises **only** cues — slots 14
+and 15 are status-cue slots, not COB callbacks. Bit 3 raises only script
+callbacks.
 
 After the bit dispatch the service refreshes the unit's interface panel, and
 then, if the owning player record exists and its control byte is 1 or 2, sends
 a four-byte network event carrying a fixed type tag, the unit's slot number,
-and the **new** operational byte. Observer-controlled owners (control byte 3)
-change state silently.
+and the **new** operational byte. Remote-peer owners (control byte 3) change
+state silently.
 
 The service is the only writer of the operational byte in the economy path;
 the cloak debit of [R-ECO-01 §9] reaches it with bit 2, and construction
@@ -2453,7 +2332,9 @@ admission reaches it with bit 0.
 Energy and metal transfer helpers:
 
 - reject observer/invalid player slots;
-- optionally clamp the amount to the source's live stock;
+- optionally clamp the amount to the source's live stock (there is no share
+  buffer and nothing refills: the clamp compares the requested amount against
+  the source's single-precision live stock and takes the smaller);
 - do nothing for a zero amount;
 - debit the source through the corresponding storage object;
 - credit the destination's mirror-bucket production slot, with the computer
@@ -2465,26 +2346,17 @@ Energy and metal use parallel but separate paths. The exact arithmetic,
 widths, and the producer that drives them are in [R-SHARE-01 §2] and
 [R-SHARE-01 §5] below.
 
-**Correction (2026-08-29, RWU-05-4).** The first bullet used to read "clamp
-the amount to the source's available share buffer". There is no share buffer:
-the clamp compares the requested amount against the source's live stock
-(single precision) and takes the smaller. The "share-buffer refill rules" the
-tail listed as open therefore do not exist — nothing refills, because nothing
-is drawn down except the stock itself.
-
-#### R-SHARE-01 §1 — Control bytes, the two alliance rows, and the alliance predicate [R-SHARE-01] (2026-08-29)
+#### Control bytes, the two alliance rows, and the alliance predicate [R-SHARE-01 §1]
 
 **Established — the three control-byte identities.** The player slot's
 control byte is `1` for a locally controlled human, `2` for a computer player,
 and `3` for a remote peer. The skirmish setup path writes `1` for the local
 human seat and `2` for each computer seat; the network join path writes `3`
 for every peer it admits; and the packet sender refuses to emit unless the
-source's control byte is `1` or `2` and the destination's is `3`. This closes
-the tail's open item on the identities of values `1` and `3` ([R-ECO-01 §3]
-had already pinned `2`). Slot initialization also copies the control byte
-into the slot's option record as a "kind" byte whenever it is not `3`, so a
-remote peer's kind byte is whatever the lobby synchronized (`1` human, `2`
-computer) rather than the control byte.
+source's control byte is `1` or `2` and the destination's is `3`. Slot
+initialization also copies the control byte into the slot's option record as
+a "kind" byte whenever it is not `3`, so a remote peer's kind byte is whatever
+the lobby synchronized (`1` human, `2` computer) rather than the control byte.
 
 **Established — two alliance rows per slot.** Each player slot carries two
 eleven-byte rows indexed by player slot number:
@@ -2502,7 +2374,11 @@ kind byte says computer, or when `force` is set; when `to` is local it writes
 computer player or `force` is set. A computer player therefore reciprocates an
 alliance instantly; a remote human's reciprocal declaration arrives by packet.
 The skirmish setup writes row A for every pair of seats sharing an ally
-symbol ([08 "Skirmish configuration"] owns `ALLY%d` and the lobby side); the
+symbol — the row-to-player conversion of [08 R-SKIR-01 §2], which states the
+alliance predicate this section's sharing consumers index (`allied(i, j)` is
+column `j` of player `i`'s row A, symmetric in skirmish because it is derived
+from equal ally groups, and group 5 is allied with nobody but itself);
+[08 R-SKIR-01 §1] owns the `Allies%d` gadget and the lobby side. The
 mission setup writes only the self entries.
 
 **Established — the predicate each simulation consumer uses.** There is no
@@ -2520,7 +2396,7 @@ Nothing in the simulation reads row B for sharing; the giver shares with
 anyone it has declared alliance to, whether or not the declaration is
 returned.
 
-#### R-SHARE-01 §2 — The two transfer helpers, exactly [R-SHARE-01] (2026-08-29)
+#### The two transfer helpers, exactly [R-SHARE-01 §2]
 
 **Established — signature and gates.** Each helper takes `(source slot,
 destination slot, amount as single precision, debit flag)`. Either slot equal
@@ -2538,8 +2414,7 @@ it, and the helper returns success; otherwise nothing is paid and it returns
 failure. **The transfer helper ignores that result** and credits regardless.
 With the clamp above, a debit-flag caller can never reach the failure branch
 (after the clamp `amount <= stock` holds), and callers without the flag never
-debit; the doc's earlier "whether normal callers can reach a failed deduction"
-question is closed — they cannot.
+debit.
 
 **Established — credit and the recipient discount.** The credit is written to
 the destination's **mirror-bucket production slot** for that resource
@@ -2575,9 +2450,9 @@ no-op ([R-SHARE-01 §4]).
 gate: the clamp only lowers a too-large positive amount, the zero test is an
 exact compare, the debit test `amount <= stock` is true, so the source's stock
 *increases* by the magnitude and the destination's production slot *decreases*
-by it. Whether the SHARE screen's integer parser can produce a negative value
-is **Unknown** (decider: static trace of the shared string-to-integer helper's
-sign handling); the helpers themselves do not guard.
+by it. Whether the SHARE screen's slider read-back can produce a negative
+value is **Unknown** (decider: static trace of the slider's range against the
+`ftol` read-back of [R-SHARE-01 §5]); the helpers themselves do not guard.
 
 ### Automatic transfer
 
@@ -2585,31 +2460,21 @@ Every sixty authoritative ticks, the automatic-sharing dispatcher considers
 metal and energy independently for the local player. The corresponding
 option-word bit must be set and the local player's current stock must strictly
 exceed its per-resource sharing threshold. The thresholds are separate fields
-from capacity; they are zeroed at battle setup and nothing in the reachable
-image writes them afterwards, so in play the condition is simply "stock
-strictly greater than zero".
-
-**Correction (2026-08-29, RWU-05-4).** This section previously said the
-thresholds "are written once at battle setup from capacity". That was wrong:
-the per-player battle initializer stores zero in both threshold fields, and
-the only stores that ever derive a threshold from capacity sit in a console
-command handler region that no reachable code references (the `SetShareMetal`
-/ `SetShareEnergy` family, whose strings are also unreferenced). The exact
-consequence is in [R-SHARE-01 §3].
+from capacity; the per-player battle initializer stores zero in both, nothing
+in the reachable image writes them afterwards (the only stores that derive a
+threshold from capacity sit in a console command handler region that no
+reachable code references — the `SetShareMetal` / `SetShareEnergy` family,
+whose strings are also unreferenced), so in play the condition is simply
+"stock strictly greater than zero".
 
 The dispatcher scans player slots from zero through nine. Every eligible
 allied candidate with lower current stock replaces the previous candidate, so
 the last qualifying slot wins. Alliance is checked through the giver's row A
-([R-SHARE-01 §1]).
-
-**Correction (2026-08-29, RWU-05-4).** The earlier text said "the exact
-semantic names of all status and alliance predicates remain partly
-unresolved" and omitted a gate that changes the feature's reach entirely: a
-candidate must have control byte `3` — a **remote peer** — and its option
-record's kind byte must be `1` (human). Computer players and the local human
-are never candidates. In a single-player skirmish or mission the automatic
-share options are therefore inert; only a networked session with an allied
-remote human can receive an automatic transfer.
+([R-SHARE-01 §1]). A candidate must have control byte `3` — a **remote
+peer** — and its option record's kind byte must be `1` (human). Computer
+players and the local human are never candidates. In a single-player skirmish
+or mission the automatic share options are therefore inert; only a networked
+session with an allied remote human can receive an automatic transfer.
 
 For metal, the transfer is:
 
@@ -2624,20 +2489,7 @@ overfills beyond capacity. The helpers of [R-SHARE-01 §2] then debit the
 source and credit the destination and emit the packet; receivers apply the
 packet through the same helpers without the debit flag ([R-SHARE-01 §4]).
 
-**Established fact — maker stall and negative fields.** A metal maker or an
-extractor contributes nothing for that settlement pass when the owning unit's
-energy carry is strictly positive — the maker stalls. An authored negative
-energy use is not a demand but a refund: it is added to energy production, and
-when the owning player's control state is the special second state the refund
-is credited at one half or seven tenths of its value depending on a global
-mode selector, with the same pairing used by the factory cancel-current
-refund and the shared work helper's reverse arm (selector 0 → half,
-selector 1 → seven tenths). An earlier revision that called this pairing
-"inverted relative to the capture refund site" was wrong at byte level, and
-the referenced site is a misnomer: there is no capture refund — the site is
-the factory cancel-current refund, which shares the same pairing.
-
-#### R-SHARE-01 §3 — The automatic dispatcher, exactly [R-SHARE-01] (2026-08-29)
+#### The automatic dispatcher, exactly [R-SHARE-01 §3]
 
 **Established — where it runs.** The tick executor calls the dispatcher once
 per sub-tick for the **local player's slot only**, after the twelve phases of
@@ -2666,9 +2518,9 @@ metal then energy:
    `0.5` (energy), the multiply in single precision; then the resource's
    transfer helper is called with the debit flag set.
 
-The threshold fields are both zero throughout play (see the correction
-above), so step 1's compare is `0 < stock` and step 3's product is `stock × k`.
-No random draw is consumed.
+The threshold fields are both zero throughout play (zeroed at battle setup,
+never written), so step 1's compare is `0 < stock` and step 3's product is
+`stock × k`. No random draw is consumed.
 
 **Established — the 450-tick mapping pass.** When `tick mod 450 == 0` and
 option-word bit `5` is set, every slot passing the same candidate predicate
@@ -2683,7 +2535,7 @@ copies on the lobby/network synchronization paths (doc 08 owns them); the
 bit-level toggles (`Toggled ShareMetal to: %s` and siblings) live in the
 unreferenced console region noted above.
 
-#### R-SHARE-01 §4 — The receive side and its phase [R-SHARE-01] (2026-08-29)
+#### The receive side and its phase [R-SHARE-01 §4]
 
 **Established.** Sharing packets are consumed by the network drain — phase 1 of
 the sub-tick ([01 §4]), before any unit work. For packet type `0x16` the
@@ -2693,8 +2545,7 @@ subtype dword: `1` → the energy helper, `2` → the metal helper, both with th
 carried single-precision amount and the **debit flag clear** — the receiver
 credits the destination's bucket but never debits (the sender debited
 locally); `3` → the mapping-grid merge of [R-SHARE-01 §6]. No comparison,
-threshold, or alliance test is applied on receipt; the doc's earlier
-"overwrite-sync with no comparison" wording described this.
+threshold, or alliance test is applied on receipt.
 
 **Established — the sender's packet gate.** The packet emitter is a no-op
 unless the session flag word's networked bit is set, the source slot's control
@@ -2702,24 +2553,20 @@ byte is `1` or `2`, and the destination's is `3`. Consequently in a
 single-player battle every share, manual or automatic, is applied exactly once
 by the local helper call and never re-applied by the drain.
 
-#### R-SHARE-01 §5 — The SHARE screen producer and unit sharing [R-SHARE-01] (2026-08-29)
+#### The SHARE screen producer and unit sharing [R-SHARE-01 §5]
 
 **Established — controls.** `SHARE.GUI` binds a player list (`PLYRLIST`), two
-text fields (`METAL`, `ENERGY`), two check controls (`SHARUNIT`, `MAPINFO`), a
-confirm button, and `CANCEL` (back to the previous screen). Confirming
-resolves the selected list row to a network identity and then to a slot; the
-target must exist, have control byte `1`, `2` or `3`, have an assigned slot
-index, not carry the rule word's defeated bit, and not be eliminated. **There
-is no alliance test** — a player may share with an enemy.
+gadget-kind-4 sliders (`METAL`, `ENERGY`), two check controls (`SHARUNIT`,
+`MAPINFO`), a confirm button, and `CANCEL` (back to the previous screen).
+Confirming resolves the selected list row to a network identity and then to a
+slot; the target must exist, have control byte `1`, `2` or `3`, have an
+assigned slot index, not carry the rule word's defeated bit, and not be
+eliminated. **There is no alliance test** — a player may share with an enemy.
 
-**Established — amounts.** *(Corrected 2026-08-29: `METAL`/`ENERGY` are
-gadget-kind-4 **sliders**, not text fields, and the 64-bit integer this
-paragraph attributed to a string-to-integer parse is the slider read-back's
-`ftol` — [07 R-HUD-03 §9] gives the knob/range arithmetic; the amount
-semantics below are unchanged.)* Each slider's read-back value is truncated to
-a 32-bit integer and converted to single precision; fractions cannot be
-entered. The
-metal helper is called first, then the energy helper, both with the local
+**Established — amounts.** Each slider's read-back value is truncated to a
+32-bit integer through `ftol` ([07 R-HUD-03 §9] gives the knob/range
+arithmetic) and converted to single precision; fractions cannot be entered.
+The metal helper is called first, then the energy helper, both with the local
 slot as source, the resolved target, and the debit flag set — so each amount
 is clamped to the local live stock ([R-SHARE-01 §2]). Zero fields are no-ops.
 
@@ -2727,13 +2574,12 @@ is clamped to the local live stock ([R-SHARE-01 §2]). Zero fields are no-ops.
 selection of the local player is gathered and each selected unit is handed to
 the ownership-transfer routine (the same one capture uses, [R-WORK-01 §6])
 with the target's player record, **except** units whose status word's low two
-bits equal `2`, units with a non-zero transport-attachment reference in either
-of the two attachment slots, and units whose definition index is in the
-`Commander` category bitset. The transfer re-allocates the unit in the
-target's pool slice through the allocator of [R-SHARE-01 §8], so it fails
-silently when the target's slice is full or the definition's limit is
-reached. What the status word's low two bits denote is doc 04's field
-(**Unknown** here; decider: doc 04's status-word census).
+bits — the mover movement-mode mirror, [04 §2] — equal `2`, units with a
+non-zero transport-attachment reference in either of the two attachment
+slots, and units whose definition index is in the `Commander` category
+bitset. The transfer re-allocates the unit in the target's pool slice through
+the allocator of [R-SHARE-01 §8], so it fails silently when the target's
+slice is full or the definition's limit is reached.
 
 **Established — map information.** With `MAPINFO` checked, the mapping-grid
 merge of [R-SHARE-01 §6] is applied locally from the local slot to the target
@@ -2749,16 +2595,13 @@ phase. A static trace of the pump/executor interleaving would settle it.
 Every 450 authoritative ticks, the share-mapping option emits a packet for
 every allied remote human ([R-SHARE-01 §3]); the receiver merges the sender's
 **mapped-memory word grid** bits into its own. Nothing about line of sight,
-radar, or the visibility mode word is transferred.
-
-**Correction (2026-08-29, RWU-05-4).** The earlier text said "the visibility
-document defines what state is shared". The consumer is now traced
-([R-SHARE-01 §6]) and it touches only the mapping (explored-memory) word grid
-of [03 §3.1]; doc 03's sensor phase does not read any shared state
+radar, or the visibility mode word is transferred: the consumer
+([R-SHARE-01 §6]) touches only the mapping (explored-memory) word grid of
+[03 §3.1], and doc 03's sensor phase does not read any shared state
 ([03 §3.2 R-VIS-01 §7]). The old `ShareRadar`/`ShareLOS` console strings are
 unreferenced.
 
-#### R-SHARE-01 §6 — The mapping-grid merge [R-SHARE-01] (2026-08-29)
+#### The mapping-grid merge [R-SHARE-01 §6]
 
 **Established.** Given `(source slot, destination slot)`, the merge walks the
 mapping word grid of [03 §3.1] — `(map cell width × map cell height) / 4`
@@ -2812,19 +2655,10 @@ allocation attempt and retries. Capture and unit sharing transfer ownership
 through the same allocator and are refused by the same gate. Failure surfaces
 as the production handler's `Unable to create any more units` message plus an
 exact 300-tick retry. Exhausting the player's instance slice produces the
-same failure path. The exact gate is [R-SHARE-01 §8].
-
-**Correction (2026-08-29, RWU-05-4).** Three claims of the earlier text are
-withdrawn. (1) "No parser key or reviewed initializer writes the per-definition
-limit field, so stock defaults come from outside the reviewed corpus" — the
-definition parser initializes the field to -1 for every definition, and the
-multiplayer lobby's restriction dialog is its only other writer
-([R-SHARE-01 §9]). (2) "`norestrict` … no reviewed consumer reads it" — two
-functions of the restriction dialog read it, to exclude the definition from
-the restrictable list; the simulation never reads it ([R-SHARE-01 §9]).
-(3) The "numeric pool capacity" paragraph below said the pool is sized from
-the catalog definition count and that the mission `maxunits` field has no
-allocator reader; both are wrong ([R-SHARE-01 §7]).
+same failure path. The exact gate is [R-SHARE-01 §8]. The definition parser
+initializes the limit field to -1 for every definition, and the multiplayer
+lobby's restriction dialog is its only other writer; `norestrict` is read
+only by that dialog, never by the simulation ([R-SHARE-01 §9]).
 
 **Established fact — numeric pool capacity.** The physical unit pool is
 sized once at battle setup as `(per-player unit limit) × 10 + 1` records —
@@ -2834,7 +2668,7 @@ zero as the null identity. The per-player unit limit comes from the mission's
 mode; it is the only numeric cap on live units, and the allocator's
 first-free scan over the slice is what enforces it.
 
-#### R-SHARE-01 §7 — The unit pool is sized by the per-player unit limit [R-SHARE-01] (2026-08-29)
+#### The unit pool is sized by the per-player unit limit [R-SHARE-01 §7]
 
 **Established — sizing.** At battle entry the engine copies the session's
 per-player unit limit (an unsigned sixteen-bit value) into its runtime copy
@@ -2859,8 +2693,7 @@ written by three producers:
 
 The registry read and the clamp happen once at lobby entry; [08 "Skirmish
 configuration"] owns the ladder of selectable values and the option-record
-synchronization (RWU-08-2; this unit records only the simulation-side
-consumers).
+synchronization; this document records only the simulation-side consumers.
 
 **Established — reader census of the runtime limit.** Besides the pool sizing
 above: the lobby panel prints the number (doc 07 owns the panel); two unit-slot arithmetic
@@ -2871,18 +2704,18 @@ helpers divides by the limit (doc 08); and two option-block bulk copies carry it
 with its neighbours. No consumer compares the limit against anything the
 allocator does not already enforce through the slice size.
 
-**Established (2026-09-02, RWU-19-42) — there is no clamp at the sizing
-site, and what a zero or negative limit does.** The OTA loader stores the
-`maxunits` integer into the 16-bit session limit word by plain truncation,
-and the sizing routine reads that word back with no range test of any kind
-(the 20..500 clamp of [08 R-SKIR-01 §6] belongs to the skirmish/lobby copy
-alone). The arithmetic is all 16-bit: the record count is the **signed**
-16-bit product `limit × 10 + 1` truncated to 16 bits, then read
-**unsigned** for the allocation size, the zero-fill and the index-stamping
-loop; the two hot lists are sized from the limit read unsigned; and slot
-`i`'s slice runs from record `limit × i + 1` to record `limit × (i + 1)`
-with the limit read unsigned, the per-record owner stamp looping only while
-the slice's first record lies at or before its last. Consequently:
+**Established — there is no clamp at the sizing site, and what a zero or
+negative limit does.** The OTA loader stores the `maxunits` integer into the
+16-bit session limit word by plain truncation, and the sizing routine reads
+that word back with no range test of any kind (the 20..500 clamp of
+[08 R-SKIR-01 §6] belongs to the skirmish/lobby copy alone). The arithmetic
+is all 16-bit: the record count is the **signed** 16-bit product
+`limit × 10 + 1` truncated to 16 bits, then read **unsigned** for the
+allocation size, the zero-fill and the index-stamping loop; the two hot lists
+are sized from the limit read unsigned; and slot `i`'s slice runs from record
+`limit × i + 1` to record `limit × (i + 1)` with the limit read unsigned, the
+per-record owner stamp looping only while the slice's first record lies at or
+before its last. Consequently:
 
 * **`maxunits = 0`** allocates a **one-record pool** — the null record
   alone — and gives every slot an *empty* slice whose first record lies
@@ -2903,7 +2736,7 @@ Nanolathe refuses both cases at battle entry with a diagnostic rather than
 reproducing an empty pool or an overrun; that is a deliberate divergence
 for malformed content, recorded at the sizing call.
 
-#### R-SHARE-01 §8 — The allocator gate, exactly [R-SHARE-01] (2026-08-29)
+#### The allocator gate, exactly [R-SHARE-01 §8]
 
 **Established — inputs.** The allocator takes the owning player slot, the
 definition index (sixteen-bit), the world position triple, a "finished"
@@ -2950,22 +2783,18 @@ return is handled by:
 | `BuildingBuild` production state 2 ([05 "Factory production lifecycle"]) | caption `Unable to create any more units` (category 7), node wait of exactly 300 ticks, node flag bit 1 set, result 2 |
 | `MobileBuild` (site placement) | same caption, 300-tick wait, result 2 |
 | `Resurrect` completion ([R-WORK-01 §7]) | same caption, 300-tick wait, result 2 |
-| the VTOL mobile-build variant | same caption, result 8, **no wait** |
+| `VTOL_MobileBuild` (in-reach phase, [R-ECO-02 §4]) | same caption, result 8, **no wait** — abandons |
 | ownership transfer (capture [R-WORK-01 §6], unit sharing [R-SHARE-01 §5]) | no transfer; the unit stays with its owner |
 | start-unit and mission spawns | no unit; the spawner continues |
 
-The VTOL row is a **Supported inference**: the handler fragment is reached
-through a jump table that lies inside the `VTOL_MobileBuild` handler's address
-span and its body mirrors `MobileBuild`'s; a static trace of that jump table's
-owner would settle the name. The caption string is exactly
-`Unable to create any more units`; the success caption is
-`Starting construction`.
+The caption string is exactly `Unable to create any more units`; the success
+caption is `Starting construction`.
 
-**The creatable bit — identity, default, writers and readers (Established,
-2026-09-02, RWU-19-32).** The bit step 2 tests is bit 23 of the
-definition's first definition-flags word — the *compatible* flag of
-[02 R-CAT-01 §4]. It is a runtime bit: no FBI key parses into it and no
-accessor reads it as authored data ([02 "Unit record"]).
+**The creatable bit — identity, default, writers and readers (Established).**
+The bit step 2 tests is bit 23 of the definition's first definition-flags
+word — the *compatible* flag of [02 R-CAT-01 §4]. It is a runtime bit: no FBI
+key parses into it and no accessor reads it as authored data
+([02 "Unit record"]).
 
 *Default.* The catalog loader sets it on the `None` sentinel (index 0) and
 on every FBI record whose `Version`, `Copyright` and loose-file gates pass;
@@ -3003,20 +2832,18 @@ renumber — and keep the allocator's bit test as the cheap invariant it is
 in retail, not as the mechanism. The ordering of the multiplayer apply
 against that pre-load rebuild was not traced (out of scope).
 
-#### R-SHARE-01 §9 — The per-definition limit field, its writers, and `norestrict` [R-SHARE-01] (2026-08-29)
+#### The per-definition limit field, its writers, and `norestrict` [R-SHARE-01 §9]
 
 **Established — default.** The unit definition parser stores `-1` (unlimited)
 into the per-definition limit field of every definition it parses, and sets
 the definition's creatable bit for every definition it keeps (definitions
 failing the parser's validation lose the bit and are compacted out of the
-catalog before any battle; doc 02 owns that validation). In every single-player
-session these are the final values. *Correction (2026-09-02, RWU-19-32):*
-the previous sentence said "In every single-player session these are the
-final values" — not for the creatable bit in a kind-1 battle: a mission's
-`UseOnlyUnits` file clears it on every non-sentinel record and re-sets it per
-listed name before the battle-entry compile removes the cleared records
-([08 R-ENTRY-01 §2] step 4; the creatable-bit paragraphs of §8). The limit
-field is untouched by that path.
+catalog before any battle; doc 02 owns that validation). The limit field
+keeps that value in every single-player session. The creatable bit does not
+in a kind-1 battle: a mission's `UseOnlyUnits` file clears it on every
+non-sentinel record and re-sets it per listed name before the battle-entry
+compile removes the cleared records ([08 R-ENTRY-01 §2] step 4; the
+creatable-bit paragraphs of §8). The limit field is untouched by that path.
 
 **Established — the only other writer is the multiplayer restriction
 dialog.** The multiplayer lobby's `RESTRICTIONS` button constructs a
@@ -3027,7 +2854,8 @@ definition's `wacky` flag is set. The `RESTRICT2.GUI` screen edits nodes: its
 `No Limit` (`-1`); closing the screen marks each node "restricted"
 (`enable = 1`) when its row value is non-zero and "unrestricted" (`enable =
 0`) when the row value is zero, skipping definitions that carry
-`norestrict`. When the front end leaves the multiplayer lobby for the battle
+`norestrict` ([08 R-SKIR-01 §10] owns the screen, its row shape and the
+`Reset`/`Cancel` paths). When the front end leaves the multiplayer lobby for the battle
 it applies the tree to the catalog: for a definition with a node,
 `creatable bit = (enable != 0 && synced != 0)` and `limit field = node
 limit`; for a definition without a node, `limit field = 0` and the creatable
@@ -3040,7 +2868,7 @@ skirmish or campaign battle never executes it.
 15 of the definition's second flag word (both parser entry points write it).
 Exactly two readers exist, both in the `RESTRICT2.GUI` screen: the picture-list
 builder skips such definitions, and the close handler skips them when marking
-nodes. The allocator, the settlement, the AI, and every other simulation
+nodes ([08 R-SKIR-01 §10] reads the same pair from the screen's side). The allocator, the settlement, the AI, and every other simulation
 consumer never read the bit. A `norestrict` definition therefore keeps its
 seeded node (limit `-1`, or `0` for `wacky`) and its `enable` word at the
 seed value — an effect the lobby side owns and this document does not state.
@@ -3051,7 +2879,7 @@ for every definition; the only limit is the slice size of [R-SHARE-01 §7].
 An implementation that exposes per-definition limits must treat them as
 multiplayer-lobby data with the semantics above, not as an FBI key.
 
-#### R-SHARE-01 §10 — The computer player's gate is not the definition limit [R-SHARE-01] (2026-08-29)
+#### The computer player's gate is not the definition limit [R-SHARE-01 §10]
 
 **Established.** The computer player's per-type limit test
 ([08 R-AI-01 §12]) reads its strategic state's per-type limit table — filled
@@ -3063,20 +2891,18 @@ limit reaches the planner only through the half-capacity scoring term of
 the allocator of [R-SHARE-01 §8], so the slice size and (in multiplayer) the
 restriction limits bind it exactly as they bind a human.
 
-### Closed — the second exhaustion-caption site is `VTOL_MobileBuild` [R-ECO-02 §4] (2026-08-29)
+#### The second exhaustion-caption site is `VTOL_MobileBuild` [R-ECO-02 §4]
 
-**Established.** The tail of this document carried, since [R-SHARE-01 §8], a
-Supported inference that the jump-table fragment printing `Unable to create
-any more units` with result 8 (abandon) and **no** 300-tick wait belongs to
-`VTOL_MobileBuild`. Reading the fragment settles it: it is the in-reach phase
-body of the VTOL twin — the same site test and the same allocation call as
-`MobileBuild`, but it abandons instead of holding, and it inserts the
+**Established.** The jump-table fragment that prints `Unable to create any
+more units` with result 8 (abandon) and **no** 300-tick wait is the in-reach
+phase body of the VTOL twin — the same site test and the same allocation call
+as `MobileBuild`, but it abandons instead of holding, and it inserts the
 upper-case `GETBUILT` node the air twin uses (the ground handler inserts
 `getbuilt`). [04 R-ORD-02 §2] states the phase with exactly that outcome
 ("not created → status 7 `Unable to create any more units`, abandon"). The
 caption table of [R-WORK-01 §1] therefore reads: `MobileBuild`,
 `BuildingBuild` and `Resurrect` reschedule 300 ticks; `VTOL_MobileBuild`
-abandons. The tail bullet is removed.
+abandons.
 
 ## Build request and factory queue behavior
 
@@ -3158,16 +2984,17 @@ after every dispatch:
    primary list**, which is what serializes factory production.
 4. Otherwise the combined bits are consumed from the unit's pending word and
    the node, and the operation handler runs with them.
-5. Handler result codes: `0` restarts the state machine at state 0; `1`
-   advances the state byte; `2` and `4` stay; `3` schedules a retry at the
-   global tick plus a random 15 plus 30 with wake bit 1; `5` and `8` unlink,
+5. Handler result codes ([04 §3.3] owns the table and the two draw bounds):
+   `0` restarts the state machine at state 0; `1` advances the state byte;
+   `2` and `4` stay; `3` schedules a retry at `tick + RNG(15) + 30` (30 to 44
+   ticks) with wake bit 1; `5` and `8` unlink,
    tombstone-if-not-head, clean up, and free the node; `6` unlinks the node
    and re-appends it at the tail (yield; stays queued); `7` cancels all
    primary nodes (tombstoning non-heads) and removes every secondary node via
    the pair-removal helper before returning; `9` sets the retry mark and
-   either restarts at state 0 with a randomized 30-plus-random-30 retry when
-   no successor exists or drops the node when one does; values above 9
-   delegate to the order-expiry helper.
+   either restarts at state 0 with a `tick + RNG(30) + 30` retry (30 to 59
+   ticks) when no successor exists or drops the node when one does; values
+   above 9 delegate to the order-expiry helper.
 
 The secondary pump walks front to back and dispatches a node whose wake mask
 is zero or whose deadline has arrived, using mask 0; not-yet-due nodes are
@@ -3183,8 +3010,8 @@ The building-production handler runs as a five-state machine driven by the
 primary pump; interrupt masks are tested before the state machine with
 cancel-current first.
 
-**State 0: the count gate — Established (2026-08-26).** State 0 is three
-branches long and takes no deadline and no wake bit:
+**State 0: the count gate — Established.** State 0 is three branches long and
+takes no deadline and no wake bit:
 
 1. clear the order node's presentation goal payload;
 2. if the factory's **building-class runtime status bit** is clear, return the
@@ -3202,15 +3029,8 @@ sets from the definition's authored `bmcode` byte, described under
 [08 "Classifier eligibility, destinations, and order"]. It is **not** a
 yard-map, footprint, or immobility heuristic; a definition whose yard map,
 footprint, and mobility disagree with its bmcode would be classified
-differently by such a heuristic.
-
-Audit: an earlier implementation gave state 0 a one-tick deadline and armed
-wake bit 2 before entering state 1, and derived building class from a local
-yard-map/footprint/immobility predicate. Both were guesses recorded as such at
-the site; neither appears in the handler. The invented deadline delayed every
-factory product by one tick and armed a gate retail never arms. The same
-implementation expressed the cancel-all branch by binding a fresh queue to the
-unit, which additionally discarded the queue's service bindings.
+differently by such a heuristic. State 0 arms no one-tick deadline and no
+wake bit 2 before state 1.
 
 **Exit-spot acquisition (state 2).** Exact order:
 
@@ -3224,25 +3044,21 @@ unit, which additionally discarded the queue's service bindings.
    fixed-point to a cell index biased by half its extent, producing the
    footprint rectangle origin.
 
-**Silent blocked revalidation before allocation.** The snapped rectangle is
-area-validated with the factory's class/state flag pair as the mode and a
-null self identity. On failure the node schedules a retry in **exactly 15
-ticks**, sets wake bit 2, and stays: no product exists yet, so the retry is
-silent — no message, no sound, no allocation — and repeats every 15 ticks for
-as long as the footprint is obstructed. There is no timeout and no
-force-placement.
+#### Silent blocked revalidation before allocation
 
-Audit note (2026-08-27), see [04 §6.4 R-P0-08-A §1] for the full argument:
-"obstructed" cannot include cells stamped by the producing factory itself.
-Stock exits sit inside the factory's own footprint, so retail's validator
-must be reading an occupancy layer finished buildings do not write; an
-implementation that retains a completed product on the same mobile-stomp
-shorts its exit validation reads will deadlock every first product. The
-"Nanoframe creation … remaining fraction one, health zero" wording below is
-the established nanoframe contract; the reservation lifecycle around it
-(release at completion, structures registry as the building-mask stand-in)
-is Nanolathe-side bookkeeping and carries no retail claim beyond this audit
-note.
+The snapped rectangle is area-validated with the factory's class/state flag
+pair as the mode and a null self identity. On failure the node schedules a
+retry in **exactly 15 ticks**, sets wake bit 2, and stays: no product exists
+yet, so the retry is silent — no message, no sound, no allocation — and
+repeats every 15 ticks for as long as the footprint is obstructed. There is
+no timeout and no force-placement.
+
+**Supported inference — what "obstructed" reads.** Stock exits sit inside the
+factory's own footprint, so retail's validator must be reading an occupancy
+layer finished buildings do not write; [04 §6.4 R-P0-08-A §1] carries the
+argument and its limits. An implementation that retains a completed product
+on the same occupancy shorts its exit validation reads will deadlock every
+first product.
 
 **Nanoframe creation at the exit spot.** On validation success the allocator
 creates the unit *at* the exit spot with owner, product definition, remaining
@@ -3279,16 +3095,13 @@ common unit initialization, consumes no angle draw, and takes the distinct
 300-tick retry with its diagnostic. No failed placement consumes a speculative
 random angle.
 
-**Retail save-reconstruction finding (future parity only).** When a factory
-product is saved after allocation, its saved heading is the authoritative value
-restored by the unit-save path; restore does not recompute it from `buildangle`.
-A new successful allocation during save reconstruction still enters the common
+**Established — save reconstruction.** When a factory product is saved after
+allocation, its saved heading is the authoritative value restored by the
+unit-save path; restore does not recompute it from `buildangle`. A new
+successful allocation during save reconstruction still enters the common
 initializer and consumes its normal draw sequence before the saved heading is
 copied back. Mission placement has the analogous allocator-then-authored-angle
-overwrite described in [04 §2.3b]. Nanolathe's active boundary currently
-returns an explicit unsupported result for in-battle restoration, so this
-preserves future allocator draw ordering but does not authorize a live restore
-implementation ([PLAN_14 C10]; [INVARIANTS I13]).
+overwrite described in [04 §2.3b].
 
 **Success epilogue.** Message "Starting construction"; register the builder
 link on the product; copy standing-order bits 18-19 (standing move) and 20-21
@@ -3359,306 +3172,32 @@ counts runs only for the local player when that player's settlement deadline is
 due, so the victory poll can see a just-completed product on the same tick only
 when the deadline is due — otherwise it lags up to a full settlement period.
 
-**Correction (2026-09-02, RWU-19-18) — interrupt producers, both located.**
-This paragraph previously read: "The bodies of the two construction interrupts
-are established — cancel-current computes its refund and issues the cause-9
-kill while construction-stopped decrements count and stays — but the upstream
-producers of interrupt masks 2 and 8 sit in the UI and network command layers
-and remain unidentified. Their effects must be preserved behind those masks
-without inventing a producer." The bodies stand; the producers are not in the
-UI or network layers at all. **Mask 2 (cancel-current)** is never raised into
-the pending word: it is the cleanup notice of [04 R-ORDER-02 §2], delivered by
-every record-removal path (the counted cancel, the non-queued purge, the pump's
-own removals, death teardown) to a record whose *dynamic* gate still holds bit
-1 at removal — which is why the factory's static mask carries no bit 1 and the
-handler arms it dynamically while a product is attached. **Mask 8
-(construction stopped)** is the *target removed* notice of [04 R-ORD-01 §6]:
-the factory record binds its product as the record's target reference when
-the product is created (the `Starting construction` visit) and releases the
-reference at completion or cancel, so the notice fires — once, through the
-pump, since the static mask does carry bit 3 — exactly when the product under
-construction is destroyed. No other raiser of the pending word carries bit 3
-([04 R-ORD-01 §0], [04 §3.3]). Established.
+**Established — the interrupt producers.** The bodies of the two construction
+interrupts are established below — cancel-current computes its refund and
+issues the cause-9 kill while construction-stopped decrements count and stays
+— and their producers are not in the UI or network layers. **Mask 2
+(cancel-current)** is never raised into the pending word: it is the cleanup
+notice of [04 R-ORDER-02 §2], delivered by every record-removal path (the
+counted cancel, the non-queued purge, the pump's own removals, death
+teardown) to a record whose *dynamic* gate still holds bit 1 at removal —
+which is why the factory's static mask carries no bit 1 and the handler arms
+it dynamically while a product is attached. **Mask 8 (construction stopped)**
+is the *target removed* notice of [04 R-ORD-01 §6]: the factory record binds
+its product as the record's target reference when the product is created
+(the `Starting construction` visit) and releases the reference at completion
+or cancel, so the notice fires — once, through the pump, since the static
+mask does carry bit 3 — exactly when the product under construction is
+destroyed. No other raiser of the pending word carries bit 3
+([04 R-ORD-01 §0], [04 §3.3]).
 
-### OTA-FAC-01B targeted release-boundary pass [R-FAC-01B] (2026-08-28)
-
-This second pass corrects the evidence boundary in [R-FAC-01]. The earlier
-audit's statement that no stock COB transform census was available is
-superseded for the authored exit-piece inputs only. A clean-room census of the
-original `totala1.hpi` COB and 3DO assets establishes these synchronous
-`QueryBuildInfo` results. The listed translations are authored 3DO local
-coordinates before model-loader half-turn normalization, not runtime world
-positions ([fmt cob], [fmt 3do]). The callback indices were decoded
-independently from each stock COB's `QueryBuildInfo` sequence (literal N is
-popped into output local 0); they were not supplied by pairing the model
-files. Exact signed 16.16 numerators are retained below, with rounded
-decimals only as a reading aid:
-
-| factory | output local 0 | authored piece | local translation (signed 16.16; decimal) |
-| --- | ---: | --- | --- |
-| ARMLAB | 1 | `pad` | (32768, 26214, 229375); (0.5000, 0.4000, 3.5000) |
-| CORLAB | 1 | `pad` | (0, 3276, 942080); (0.0000, 0.0500, 14.3750) |
-| ARMVP | 1 | `pad` | (0, 32768, 655360); (0.0000, 0.5000, 10.0000) |
-| CORVP | 2 | `pad` | (0, 27456, -1015603); (0.0000, 0.4189, -15.4969) |
-| ARMAAP | 1 | `pad` | (68155, 15285, -1092098); (1.0400, 0.2332, -16.6641) |
-| CORAAP | 1 | `pad` | (0, 77561, -1638400); (0.0000, 1.1835, -25.0000) |
-| ARMSY | 6 | `slip` | (0, -573440, 0); (0.0000, -8.7500, 0.0000) |
-| CORSY | 0 | `base` | (0, 0, 0); (0.0000, 0.0000, 0.0000) |
-
-The targeted boundaries therefore have the following status:
-
-- **Target and rally handoff — split Established/Unknown.** State 2 uses the
-  output piece's hierarchy-composed transform for the product position and a
-  separately snapped footprint anchor for validation. For these eight selected
-  pieces, the parent is the root `base` with zero translation, so the
-  hierarchy-composed authored origin equals the listed piece-local
-  translation; that equality is not a generic descendant rule. The product receives `GetBuilt` on its
-  primary queue; after completion it copies queued move/patrol rallies or
-  falls back to `Park` ([05 "Factory production lifecycle"]). Within the
-  reviewed factory-handler call chain, no separate factory-owned egress order
-  or clearance segment was recovered. Whether an unobserved movement-layer
-  path adds one is **Unknown**.
-- **Producer/product collision — Unknown after allocation.** The validator
-  runs before a product exists and receives no producer/product pair. No
-  post-allocation exemption was found. Closing this requires a retail trace
-  of an overlapping exit or a complete static call chain through the first
-  product movement and occupancy admission.
-- **Blocked release and queue/build gating — split Established/Unknown.**
-  Primary-queue front blocking, positive count gating, script-owned stance,
-  and the 15-tick blocked versus 300-tick allocator retries are Established.
-  Since no post-completion release lane was recovered in the reviewed
-  factory-handler call chain, its indefinite-block behavior and any
-  force-release policy are **Unknown**. Queue serialization plus delayed
-  occupancy publication does not prove same-pass no-stacking.
-- **Aircraft takeoff — generic Established, factory ordering Unknown.** The
-  ordinary VTOL path begins its velocity-limited climb when a first flight
-  point/follow goal is installed. The reviewed factory-handler call chain
-  contains no factory-specific takeoff state before `GetBuilt`; whether takeoff
-  precedes rally handoff for a product remains **Unknown** ([04 §10.1]).
-- **Rotated transform Established; no-stacking Unknown.** The stock piece
-  indices, names, and authored local translations above are Established data.
-  **Correction (2026-08-28):** this item previously said "The exact runtime
-  heading arithmetic for those hierarchy translations … remain **Unknown**"
-  and asked for a heading-matrix capture. That arithmetic is Established in
-  [04 R-REV-02]: the shared piece locator folds the unit's committed
-  orientation into the model root node's angles before rotating, so the
-  factory heading does reach the exit position and there is no separate
-  heading matrix. The 3DO format's lack of an authored heading field is
-  consistent — the heading is runtime unit state. A same-pass no-stacking
-  guarantee remains **Unknown**; its decider is a blocked multi-product
-  trace.
-
-`TODO(question)`: record a retail run with a blocked exit, a completed ground
-product, and a completed aircraft product, including first movement,
-occupancy, and rally events. This is the evidence needed to distinguish a
-hidden release lane from ordinary `GetBuilt`/VTOL handling. Do not promote an
-unresolved interpretation into the construction contract.
-
-### OTA-FAC-01C factory-release call-chain continuation [R-FAC-01C] (2026-08-28)
-
-This continuation traces the factory handler through its placement validator,
-allocator, primary-queue pump, and product-side `GetBuilt` handler. It narrows
-the release boundary without claiming a retail runtime result that the static
-call chain cannot show. The earlier wording that treated the state-2 snapped
-coordinate as a factory movement goal is corrected here: it is a validation
-anchor only.
-
-**Ground target and order representation — split Established/Unknown.** The
-factory's state-2 sequence is: synchronously run `QueryBuildInfo` with output
-cell 0 seeded to `-1`; resolve the selected hierarchy piece with the factory
-origin into a signed 16.16 world position; derive a separate footprint anchor
-with the half-extent formula from [04 §6.3]; validate that rectangle; and,
-only on success, allocate the product at the resolved world position. The
-validator is an area check, not a path request: this sequence emits no
-move-to-exit goal, path search, repath, push, or factory-owned release node.
-The product receives an ordinary `GetBuilt` node on its own primary queue.
-Thus the mandatory ground release target is **not established as a second
-target**; the established factory-side target is the direct allocation point.
-Whether an unobserved movement-layer consumer adds a product-side clearance
-step after allocation remains **Unknown** and requires a retail trace or a
-complete first-movement call-chain capture. Do not implement an egress offset
-or hidden release order from the footprint anchor.
-
-**Query result and producer identity lifetime — split Established/Unknown.**
-The `QueryBuildInfo` result is consumed only to select the hierarchy piece and
-form the allocation position; a failed query leaves the seeded sentinel. The
-subsequent handling of that invalid sentinel is not evidence for a separately
-authored release offset. The factory production node holds
-the allocated product through construction and clears that product pointer on
-normal completion before the counted node is restarted or freed. The product
-also receives a producer link before `GetBuilt` is inserted. `GetBuilt` reads
-that link while it waits for completion and while it copies the producer's
-queued rally records. No explicit unlink of the product-side producer link was
-found in the bounded factory/GetBuilt chain; its lifetime after that handler,
-and cleanup when either unit is destroyed or captured, are **Unknown**. The
-death/capture path must not be treated as a transfer mechanism.
-
-**Rally and no-rally timing — Established.** `GetBuilt` first waits until the
-product's remaining fraction is zero. It then walks the producer's primary
-queue and appends the producer's queued move/patrol records to the product in
-queue order, preserving patrol identity. If none is found, it appends a normal
-`Park` order at that point. `Park` is therefore not issued at allocation and is
-not evidence of a release segment. The product-side order can dispatch in the
-same unit sweep only when the product's stable slot is still to be visited;
-otherwise it waits for the next sweep ([04 §3.8]).
-
-**Next-product gate and blocked behavior — split Established/Unknown.**
-Factory production records are primary-queue nodes, and an unsatisfied wake
-mask on the primary front blocks later primary nodes ([04 §3.3]). A successful
-completion decrements the counted record and returns the pump to state 0 in
-the same pass; when the count remains positive, the next product can enter
-state 2 without a release-clearance wait. Each candidate is independently
-validated before allocation. A blocked footprint retries silently after
-exactly 15 ticks, with no product allocated; allocator exhaustion is a
-separate exactly-300-tick retry with its diagnostic. No post-allocation
-release retry or force-release state appears in this chain. Consequently an
-indefinitely blocked product-side release, producer/product collision
-exemption, and no-stacking guarantee for same-pass counted products are
-**Unknown**. The validator's pre-allocation null self identity cannot establish
-an exemption for a product that does not yet exist ([04 §6.4]).
-
-**Rotated factories — split Established/Unknown.** The footprint arithmetic is
-Established: for each axis, the snapped cell is
-`(p - (f << 19) + (1 << 19)) >> 20` using a signed arithmetic shift, while the
-product remains at the independently resolved QueryBuildInfo world position
-([04 §6.3]). The factory handler adds no separate heading, yard-map, model
-extent, or fixed-cell offset. **Correction (2026-08-28):** the next sentence
-here used to read "The exact runtime heading transform applied to the
-authored hierarchy translation, including any half-turn normalization,
-remains **Unknown**". It is Established in [04 R-REV-02]: the piece locator
-walks the selected piece's parent chain, folds the unit's committed
-orientation into the model root node's angles, applies its rotations in the
-order Rz, Rx, Ry with round-to-nearest narrowing per axis, negates
-accumulated Z once on output, and the factory helper then adds the unit's
-world origin componentwise. The load-time half-turn is a separate, earlier
-conversion owned by [03 §2.4]. The stock piece census in [R-FAC-01B] still
-supplies only authored local values.
-
-**Aircraft boundary — generic Established, factory ordering Unknown.** The
-ordinary VTOL movement family begins its velocity-limited climb when its first
-flight point/follow goal is installed ([04 §10.1]). The factory sequence itself
-does not issue that goal or enter a factory-specific takeoff state before
-`GetBuilt`; the exact point at which an aircraft product takes off relative to
-inherited rally remains **Unknown**. A representative aircraft completion
-trace must record allocation, `GetBuilt`, first VTOL goal, vertical movement,
-and rally dispatch to close this boundary.
-
-**Implementation boundary.** The established implementation inputs are the
-seeded synchronous query, hierarchy-composed 16.16 allocation position,
-independent footprint-anchor validation, factory primary-queue front gate,
-15/300-tick pre-allocation retries, counted same-pass restart, producer link,
-and post-completion `GetBuilt` rally-or-`Park` sequencing. OTA-FAC-02 is
-blocked for any explicit release state, producer/product exemption, or
-aircraft release step until the Unknown items above are closed by a retail
-runtime trace or a complete static chain through first movement and occupancy.
-This is a research boundary, not permission to infer a fixed egress target.
-
-### P28-FAC-01R — final increment through factory idle/close [R-FAC-01R] (2026-08-28)
-
-This section closes the engine-side transition order and the stock factory
-COB callback choreography after the final admitted construction step. It does
-not close a hypothetical product egress lane. Evidence is the five-state
-factory handler, the primary-pump result protocol, the shared edge machine,
-the fixed phase order in [01 §4.4], and a clean-room census of the stock lab
-COBs. No retail runtime trace was available; script animation durations are
-therefore stated only where the authored COB supplies them.
-
-**Established — transition table.** Let `T` be the global tick in which the
-factory work state accepts the final resource-admitted increment and stores
-`remaining = 0`. “Deferred” means the callback thread is allocated at the
-edge and normally first executes in that unit's next normal COB drain; it is
-not a factory-node deadline.
-
-| Tick/order point | Factory state and mutation | Callback/order consequence |
-| --- | --- | --- |
-| `T`, state 3 | The shared work helper stores zero remaining and the corresponding difference-of-truncations health gain. Because the new remaining value is zero, the helper synchronously invokes the product completion transition before returning success; that transition can raise the product's deferred `Activate` edge. The factory handler returns advance and the primary pump enters state 4 in the same pass. | The product transition is synchronous engine work, not a deferred factory callback. Any product `Activate` script thread is allocated at this point and runs according to the product's own later normal drain/slot ordering. |
-| `T`, state 4, first | Lower the factory building edge. The edge machine writes the new byte before starting callbacks. | Allocate deferred factory `StopBuilding`; the callback is not interpreted yet. |
-| `T`, state 4, next | Run the factory completion transition again (its edge effects are suppressed when already set), clear the construction presentation payload, decrement the production node count once, refresh the builder interface, and return result 0. | The first completion transition from the work helper owns the product's zero/complete state and possible `Activate`; state 4's repeated transition does not create a second unchanged activation edge. |
-| `T`, same primary-pump pass | Restart the node at state 0. | If count `> 0`, the engine raises activation (normally an unchanged edge), advances through the already-set stance gate, and can allocate the next product in state 2 during this same pass. If count `<= 0`, it lowers activation, allocates deferred `Deactivate`, and returns the node-drop result. |
-| `T`, queued-next path | A successful state-2 allocation links the product, copies standing-order fields, inserts product-side `GetBuilt`, raises the next building edge, and advances to work. | The next `StartBuilding` callback is deferred. A blocked exit remains pre-allocation and retries silently after 15 ticks; no product-side release state is entered. |
-| `T`, empty path | The production node is unlinked/freed after state 0. | `StopBuilding` was allocated before `Deactivate`; both are normally run in that order in the next normal drain. |
-| `T+1` normal drain (ordinary path) | The factory's script slots are drained in ascending allocation order, then piece interpolation runs. | `StopBuilding` stops the authored pad spin and returns. It performs no door operation, piece wait, or sleep. On an empty path, `Deactivate` then signals the state-transition mask, sets its own mask, and enters its authored 5000 ms sleep. On a queued-next path, the deferred `StartBuilding` then starts the authored pad spin and returns; no `Deactivate` edge occurred. |
-| after the `Deactivate` sleep | The VM converts 5000 ms to a 150-tick timer. After the normal sleep wake, `Deactivate` starts `RequestState(1)`. | The callback itself has no engine close timer beyond this script sleep. |
-| `RequestState(1)` / `Stop` | `Stop` writes `INBUILDSTANCE = 0`, calls `CloseYard`, then runs the selected COB's authored deactivation animation and caches its pieces. | `CloseYard` writes `YARD_OPEN = 0`, polls the level, and clears `BUGGER_OFF` on success. If the gated write is still not effective, it sets `BUGGER_OFF`, sleeps 1500 ms (45 VM timer ticks), and retries. |
-| close-animation returns | The selected COB's deactivation script returns after its own authored moves/turns/sleeps. | There is no engine-side GUI timer or factory-node state left to close the yard. The exact final pose and duration are COB data. |
-
-The stock `ARMLAB` callback census gives a concrete authored close duration
-after `Stop` begins: its deactivation script uses sleeps of 998 ms, 1008 ms,
-and 48 ms, converted by the VM to 29, 30, and 1 timer ticks. These three
-waits are separated by authored piece moves/turns; they are not replaceable
-by one aggregate timer. The 5000 ms `Deactivate` delay precedes this
-animation. `CORLAB` has different activation/deactivation timings, so the
-ARM values must not be generalized to a shared factory template. A gated
-`CloseYard` retry can add one or more 1500 ms waits, so a universal wall-clock
-close duration is not established. Other factory COBs own their animation
-constants and must be read as data.
-
-Both successful `OpenYard` and successful `CloseYard` branches clear the
-`BUGGER_OFF` port before returning; the port is asserted only around a denied
-yard transition's retry loop.
-
-**Established — the engine never reads `BUGGER_OFF` [04 R-COB-05] (2026-08-30).**
-The bit the yard scripts toggle here has no simulation consumer: a complete
-census of the second state byte's bit 3 finds only the COB get and set port
-arms, the creation clear of that byte's low nibble, and the save writer. The
-assertion above is therefore entirely script-internal bookkeeping — the flag
-tells the engine nothing, and clearing it on the successful branch changes no
-engine state beyond the interface-refresh bit the set-port arm raises. This
-does not weaken the warning below; it strengthens it. A reimplementation must
-attach no movement, collision, scatter or crowd behavior to the flag. The
-observable "units in the way of a factory exit" behavior is owned by the
-state-2 exit retry, the yard-close admission gate, and the ordinary blocked
-mover [04 R-FAC-02 §5][04 R-FAC-02 §6].
-
-**Established — product movement is a separate boundary.** `GetBuilt` is on
-the product's primary queue, not on the factory's close path. Once product
-remaining is zero, it copies queued move/patrol rally records from the
-producer or inserts `Park`, then removes itself. It can dispatch in the same
-unit sweep only when the product's stable slot is still ahead of the
-factory's slot; otherwise it waits for the next tick. Any first movement,
-VTOL takeoff, occupancy admission, or producer/product collision behavior is
-therefore separate from the door callbacks above and remains subject to the
-release-boundary Unknowns in [R-FAC-01].
-
-**Established — cancellation boundaries.** Interrupt masks are tested before
-the state machine on a production-node visit. Cancel-current therefore wins
-over a state-3 final increment only if its wake bit is admitted before that
-visit's work handler begins: it refunds the established amount, runs the
-completion helper on the frame, sends the cause-9 kill, lowers activation and
-building together (deferred `Deactivate` and `StopBuilding` in edge order),
-and drops the node without decrementing its count. A work step already
-accepted is not interrupted mid-helper; the normal state-4 sequence above
-then owns completion. Construction-stopped instead decrements the node count
-once, refreshes the interface, and restarts state 0; if that reaches an empty
-count, the same-pass state-0 drop performs the activation fall. A node that
-has already completed and been freed cannot be cancelled through that
-production record. Queue removal through the ordinary cleanup path may emit
-the pending `StopBuilding` callback, but it does not establish a product
-egress or collision exemption.
-
-**Residual Unknowns (P28-FAC-01R).** The exact result when `YARD_OPEN` remains
-blocked, the number of `CloseYard` retries under each occupancy condition,
-and any runtime observation that would couple product release to producer
-clearance are not established by the static evidence. The same is true of
-producer/product collision exemptions, no-stacking, and aircraft
-takeoff-before-rally ordering. These release/egress behaviors must remain
-`TODO(question)` at any implementation site; do not convert the authored
-`BUGGER_OFF` retry into a generic movement or collision rule. The narrower
-idle-closure implementation is not blocked: it may implement
-`StopBuilding`/`Deactivate`, the 150-tick delay, `RequestState(1)`,
-`Stop`/`CloseYard`, and the selected COB's authored animation. Only the
-release/egress behavior remains blocked pending a retail trace that records
-allocation, first movement, occupancy admission, and the factory callback
-timeline together.
-
-### OTA-FAC-01 bounded factory-release audit [R-FAC-01] (2026-08-28)
+### Bounded factory-release audit [R-FAC-01]
 
 This audit separates the factory production contract from the still-unclosed
 question of how a completed product clears the producer. The evidence is the
 factory handler, the primary/secondary descriptor tables, the product-side
 `GetBuilt` handler, and the shared VTOL movement handlers. No retail runtime
-probe or stock COB transform census was available for this audit; where that
-evidence is required, the result remains **Unknown**.
+probe was available; the stock exit-piece census is [R-FAC-01B]. Where a
+runtime probe is required, the result remains **Unknown**.
 
 **Target derivation — Established.** State 2 runs the factory script's
 `QueryBuildInfo` query with output cell 0 pre-initialized to `-1`, resolves the
@@ -3721,7 +3260,7 @@ ordinary flight mover. The factory product path itself does not issue a
 factory-specific takeoff callback or state before `GetBuilt`; the descriptor
 set distinguishes `VTOL_MobileBuild`, but the exact aircraft factory handoff
 to that movement path is not established by the reviewed evidence. Therefore
-the order “takeoff before rally” remains **Unknown** for factory products.
+the order "takeoff before rally" remains **Unknown** for factory products.
 
 **Queue and heading boundaries — Established/Unknown.** Production records
 use the primary queue, whose blocked front stalls later records; the positive
@@ -3734,7 +3273,7 @@ established. A rotated factory contributes orientation through the resolved
 factory's committed orientation into the model root node before rotating
 ([04 R-REV-02]) — and no separate product-heading offset is read. The
 product's independent initial heading is the common allocator's `buildangle`
-result, now established in [R-P28-ANG-01R §3]. The remaining **Unknown** is
+result, established in [R-P28-ANG-01R §3]. The remaining **Unknown** is
 narrower still: whether a rotated producer's stock exit transform coincides
 with its geometric/model center, which is a question about the authored
 models and does not change the product-heading contract.
@@ -3744,23 +3283,281 @@ release gap: the engine-side production and rally handoff are closed, while a
 retail post-completion egress/takeoff mechanism, its collision exemption, and
 its blocked-lane policy are not. Implementations must retain these as
 `TODO(question)` until executable or authored-data evidence closes them.
+Note that a no-rally product *column* is not one of these unknowns — it is a
+route-publication defect ([R-EGRESS-02]).
 
-### Correction — a no-rally product column is a route-publication defect, not retail [R-EGRESS-02] (2026-08-31)
+### Targeted release-boundary pass: the stock exit pieces [R-FAC-01B]
 
-**Established by direct trace of the route follower's two entry points.** This
-section reverses the conclusion of `[04 R-EGRESS-01]` and closes the question
-its composition left open. It is written here because doc 05 owns the factory
-production lifecycle; `[04 R-EGRESS-01]` and `[04 R-PATH-01 §8]` need the
-pointer added by doc 04's owner.
+A clean-room census of the original `totala1.hpi` COB and 3DO assets
+establishes these synchronous `QueryBuildInfo` results for the authored
+exit-piece inputs. The listed translations are authored 3DO local coordinates
+before model-loader half-turn normalization, not runtime world positions
+([fmt cob], [fmt 3do]). The callback indices were decoded independently from
+each stock COB's `QueryBuildInfo` sequence (literal N is popped into output
+local 0); they were not supplied by pairing the model files. Exact signed
+16.16 numerators are retained below, with rounded decimals only as a reading
+aid:
 
-**What `[04 R-EGRESS-01]` said, and which part is wrong.** Its step 3 read:
-"A short route is replaced by a straight line at that point. Both point-count
-gates of the route-acceptance rule require **three or more** stored points; a
-one- or two-point route skips to the synthetic fallback, which overwrites the
-route with the unit's own position and the goal point." Its conclusion read:
-"This is **not** a deadlock and does not block the factory: each product clears
-the exit cells before the next is allocated." The gate arithmetic is right; the
-place it is applied is wrong, and the conclusion that follows is wrong.
+| factory | output local 0 | authored piece | local translation (signed 16.16; decimal) |
+| --- | ---: | --- | --- |
+| ARMLAB | 1 | `pad` | (32768, 26214, 229375); (0.5000, 0.4000, 3.5000) |
+| CORLAB | 1 | `pad` | (0, 3276, 942080); (0.0000, 0.0500, 14.3750) |
+| ARMVP | 1 | `pad` | (0, 32768, 655360); (0.0000, 0.5000, 10.0000) |
+| CORVP | 2 | `pad` | (0, 27456, -1015603); (0.0000, 0.4189, -15.4969) |
+| ARMAAP | 1 | `pad` | (68155, 15285, -1092098); (1.0400, 0.2332, -16.6641) |
+| CORAAP | 1 | `pad` | (0, 77561, -1638400); (0.0000, 1.1835, -25.0000) |
+| ARMSY | 6 | `slip` | (0, -573440, 0); (0.0000, -8.7500, 0.0000) |
+| CORSY | 0 | `base` | (0, 0, 0); (0.0000, 0.0000, 0.0000) |
+
+The targeted boundaries therefore have the following status:
+
+- **Target and rally handoff — split Established/Unknown.** State 2 uses the
+  output piece's hierarchy-composed transform for the product position and a
+  separately snapped footprint anchor for validation. For these eight selected
+  pieces, the parent is the root `base` with zero translation, so the
+  hierarchy-composed authored origin equals the listed piece-local
+  translation; that equality is not a generic descendant rule. The product
+  receives `GetBuilt` on its primary queue; after completion it copies queued
+  move/patrol rallies or falls back to `Park` ([05 "Factory production
+  lifecycle"]). Within the reviewed factory-handler call chain, no separate
+  factory-owned egress order or clearance segment was recovered. Whether an
+  unobserved movement-layer path adds one is **Unknown**.
+- **Producer/product collision — Unknown after allocation.** The validator
+  runs before a product exists and receives no producer/product pair. No
+  post-allocation exemption was found. Closing this requires a retail trace
+  of an overlapping exit or a complete static call chain through the first
+  product movement and occupancy admission.
+- **Blocked release and queue/build gating — split Established/Unknown.**
+  Primary-queue front blocking, positive count gating, script-owned stance,
+  and the 15-tick blocked versus 300-tick allocator retries are Established.
+  Since no post-completion release lane was recovered in the reviewed
+  factory-handler call chain, its indefinite-block behavior and any
+  force-release policy are **Unknown**. Queue serialization plus delayed
+  occupancy publication does not prove same-pass no-stacking.
+- **Aircraft takeoff — generic Established, factory ordering Unknown.** The
+  ordinary VTOL path begins its velocity-limited climb when a first flight
+  point/follow goal is installed. The reviewed factory-handler call chain
+  contains no factory-specific takeoff state before `GetBuilt`; whether takeoff
+  precedes rally handoff for a product remains **Unknown** ([04 §10.1]).
+- **Rotated transform Established; no-stacking Unknown.** The stock piece
+  indices, names, and authored local translations above are Established data.
+  The runtime heading arithmetic for those hierarchy translations is
+  Established in [04 R-REV-02]: the shared piece locator folds the unit's
+  committed orientation into the model root node's angles before rotating,
+  so the factory heading does reach the exit position and there is no
+  separate heading matrix. The 3DO format's lack of an authored heading field
+  is consistent — the heading is runtime unit state. A same-pass no-stacking
+  guarantee remains **Unknown**; its decider is a blocked multi-product
+  trace.
+
+`TODO(question)`: record a retail run with a blocked exit, a completed ground
+product, and a completed aircraft product, including first movement,
+occupancy, and rally events. This is the evidence needed to distinguish a
+hidden release lane from ordinary `GetBuilt`/VTOL handling. Do not promote an
+unresolved interpretation into the construction contract.
+
+### Factory-release call-chain continuation [R-FAC-01C]
+
+This continuation traces the factory handler through its placement validator,
+allocator, primary-queue pump, and product-side `GetBuilt` handler. It narrows
+the release boundary without claiming a retail runtime result that the static
+call chain cannot show. The state-2 snapped coordinate is a validation anchor
+only, not a factory movement goal.
+
+**Ground target and order representation — split Established/Unknown.** The
+factory's state-2 sequence is: synchronously run `QueryBuildInfo` with output
+cell 0 seeded to `-1`; resolve the selected hierarchy piece with the factory
+origin into a signed 16.16 world position; derive a separate footprint anchor
+with the half-extent formula from [04 §6.3]; validate that rectangle; and,
+only on success, allocate the product at the resolved world position. The
+validator is an area check, not a path request: this sequence emits no
+move-to-exit goal, path search, repath, push, or factory-owned release node.
+The product receives an ordinary `GetBuilt` node on its own primary queue.
+Thus the mandatory ground release target is **not established as a second
+target**; the established factory-side target is the direct allocation point.
+Whether an unobserved movement-layer consumer adds a product-side clearance
+step after allocation remains **Unknown** and requires a retail trace or a
+complete first-movement call-chain capture. Do not implement an egress offset
+or hidden release order from the footprint anchor.
+
+**Query result and producer identity lifetime — split Established/Unknown.**
+The `QueryBuildInfo` result is consumed only to select the hierarchy piece and
+form the allocation position; a failed query leaves the seeded sentinel. The
+subsequent handling of that invalid sentinel is not evidence for a separately
+authored release offset. The factory production node holds
+the allocated product through construction and clears that product pointer on
+normal completion before the counted node is restarted or freed. The product
+also receives a producer link before `GetBuilt` is inserted. `GetBuilt` reads
+that link while it waits for completion and while it copies the producer's
+queued rally records. No explicit unlink of the product-side producer link was
+found in the bounded factory/GetBuilt chain; its lifetime after that handler,
+and cleanup when either unit is destroyed or captured, are **Unknown**. The
+death/capture path must not be treated as a transfer mechanism.
+
+**Rally and no-rally timing — Established.** `GetBuilt` first waits until the
+product's remaining fraction is zero. It then walks the producer's primary
+queue and appends the producer's queued move/patrol records to the product in
+queue order, preserving patrol identity. If none is found, it appends a normal
+`Park` order at that point. `Park` is therefore not issued at allocation and is
+not evidence of a release segment. The product-side order can dispatch in the
+same unit sweep only when the product's stable slot is still to be visited;
+otherwise it waits for the next sweep ([04 §3.8]).
+
+**Next-product gate and blocked behavior — split Established/Unknown.**
+Factory production records are primary-queue nodes, and an unsatisfied wake
+mask on the primary front blocks later primary nodes ([04 §3.3]). A successful
+completion decrements the counted record and returns the pump to state 0 in
+the same pass; when the count remains positive, the next product can enter
+state 2 without a release-clearance wait. Each candidate is independently
+validated before allocation. A blocked footprint retries silently after
+exactly 15 ticks, with no product allocated; allocator exhaustion is a
+separate exactly-300-tick retry with its diagnostic. No post-allocation
+release retry or force-release state appears in this chain. Consequently an
+indefinitely blocked product-side release, producer/product collision
+exemption, and no-stacking guarantee for same-pass counted products are
+**Unknown**. The validator's pre-allocation null self identity cannot establish
+an exemption for a product that does not yet exist ([04 §6.4]).
+
+**Rotated factories — split Established/Unknown.** The footprint arithmetic is
+Established: for each axis, the snapped cell is
+`(p - (f << 19) + (1 << 19)) >> 20` using a signed arithmetic shift, while the
+product remains at the independently resolved QueryBuildInfo world position
+([04 §6.3]). The factory handler adds no separate heading, yard-map, model
+extent, or fixed-cell offset. The runtime heading transform applied to the
+authored hierarchy translation is Established in [04 R-REV-02]: the piece
+locator walks the selected piece's parent chain, folds the unit's committed
+orientation into the model root node's angles, applies its rotations in the
+order Rz, Rx, Ry with round-to-nearest narrowing per axis, negates
+accumulated Z once on output, and the factory helper then adds the unit's
+world origin componentwise. The load-time half-turn is a separate, earlier
+conversion owned by [03 §2.4]. The stock piece census in [R-FAC-01B] still
+supplies only authored local values.
+
+**Aircraft boundary — generic Established, factory ordering Unknown.** The
+ordinary VTOL movement family begins its velocity-limited climb when its first
+flight point/follow goal is installed ([04 §10.1]). The factory sequence itself
+does not issue that goal or enter a factory-specific takeoff state before
+`GetBuilt`; the exact point at which an aircraft product takes off relative to
+inherited rally remains **Unknown**. A representative aircraft completion
+trace must record allocation, `GetBuilt`, first VTOL goal, vertical movement,
+and rally dispatch to close this boundary.
+
+**Implementation boundary.** The established implementation inputs are the
+seeded synchronous query, hierarchy-composed 16.16 allocation position,
+independent footprint-anchor validation, factory primary-queue front gate,
+15/300-tick pre-allocation retries, counted same-pass restart, producer link,
+and post-completion `GetBuilt` rally-or-`Park` sequencing. Any explicit
+release state, producer/product exemption, or aircraft release step stays
+Unknown until closed by a retail runtime trace or a complete static chain
+through first movement and occupancy. This is a research boundary, not
+permission to infer a fixed egress target.
+
+### Final increment through factory idle and close [R-FAC-01R]
+
+This section closes the engine-side transition order and the stock factory
+COB callback choreography after the final admitted construction step. It does
+not close a hypothetical product egress lane. Evidence is the five-state
+factory handler, the primary-pump result protocol, the shared edge machine,
+the fixed phase order in [01 §4.4], and a clean-room census of the stock lab
+COBs. No retail runtime trace was available; script animation durations are
+therefore stated only where the authored COB supplies them.
+
+**Established — transition table.** Let `T` be the global tick in which the
+factory work state accepts the final resource-admitted increment and stores
+`remaining = 0`. "Deferred" means the callback thread is allocated at the
+edge and normally first executes in that unit's next normal COB drain; it is
+not a factory-node deadline.
+
+| Tick/order point | Factory state and mutation | Callback/order consequence |
+| --- | --- | --- |
+| `T`, state 3 | The shared work helper stores zero remaining and the corresponding difference-of-truncations health gain. Because the new remaining value is zero, the helper synchronously invokes the product completion transition before returning success; that transition can raise the product's deferred `Activate` edge. The factory handler returns advance and the primary pump enters state 4 in the same pass. | The product transition is synchronous engine work, not a deferred factory callback. Any product `Activate` script thread is allocated at this point and runs according to the product's own later normal drain/slot ordering. |
+| `T`, state 4, first | Lower the factory building edge. The edge machine writes the new byte before starting callbacks. | Allocate deferred factory `StopBuilding`; the callback is not interpreted yet. |
+| `T`, state 4, next | Run the factory completion transition again (its edge effects are suppressed when already set), clear the construction presentation payload, decrement the production node count once, refresh the builder interface, and return result 0. | The first completion transition from the work helper owns the product's zero/complete state and possible `Activate`; state 4's repeated transition does not create a second unchanged activation edge. |
+| `T`, same primary-pump pass | Restart the node at state 0. | If count `> 0`, the engine raises activation (normally an unchanged edge), advances through the already-set stance gate, and can allocate the next product in state 2 during this same pass. If count `<= 0`, it lowers activation, allocates deferred `Deactivate`, and returns the node-drop result. |
+| `T`, queued-next path | A successful state-2 allocation links the product, copies standing-order fields, inserts product-side `GetBuilt`, raises the next building edge, and advances to work. | The next `StartBuilding` callback is deferred. A blocked exit remains pre-allocation and retries silently after 15 ticks; no product-side release state is entered. |
+| `T`, empty path | The production node is unlinked/freed after state 0. | `StopBuilding` was allocated before `Deactivate`; both are normally run in that order in the next normal drain. |
+| `T+1` normal drain (ordinary path) | The factory's script slots are drained in ascending allocation order, then piece interpolation runs. | `StopBuilding` stops the authored pad spin and returns. It performs no door operation, piece wait, or sleep. On an empty path, `Deactivate` then signals the state-transition mask, sets its own mask, and enters its authored 5000 ms sleep. On a queued-next path, the deferred `StartBuilding` then starts the authored pad spin and returns; no `Deactivate` edge occurred. |
+| after the `Deactivate` sleep | The VM converts 5000 ms to a 150-tick timer. After the normal sleep wake, `Deactivate` starts `RequestState(1)`. | The callback itself has no engine close timer beyond this script sleep. |
+| `RequestState(1)` / `Stop` | `Stop` writes `INBUILDSTANCE = 0`, calls `CloseYard`, then runs the selected COB's authored deactivation animation and caches its pieces. | `CloseYard` writes `YARD_OPEN = 0`, polls the level, and clears `BUGGER_OFF` on success. If the gated write is still not effective, it sets `BUGGER_OFF`, sleeps 1500 ms (45 VM timer ticks), and retries. |
+| close-animation returns | The selected COB's deactivation script returns after its own authored moves/turns/sleeps. | There is no engine-side GUI timer or factory-node state left to close the yard. The exact final pose and duration are COB data. |
+
+The stock `ARMLAB` callback census gives a concrete authored close duration
+after `Stop` begins: its deactivation script uses sleeps of 998 ms, 1008 ms,
+and 48 ms, converted by the VM to 29, 30, and 1 timer ticks. These three
+waits are separated by authored piece moves/turns; they are not replaceable
+by one aggregate timer. The 5000 ms `Deactivate` delay precedes this
+animation. `CORLAB` has different activation/deactivation timings, so the
+ARM values must not be generalized to a shared factory template. A gated
+`CloseYard` retry can add one or more 1500 ms waits, so a universal wall-clock
+close duration is not established. Other factory COBs own their animation
+constants and must be read as data.
+
+Both successful `OpenYard` and successful `CloseYard` branches clear the
+`BUGGER_OFF` port before returning; the port is asserted only around a denied
+yard transition's retry loop.
+
+**Established — the engine never reads `BUGGER_OFF` ([04 R-COB-05]).** The
+bit the yard scripts toggle here has no simulation consumer: a complete
+census of the second state byte's bit 3 finds only the COB get and set port
+arms, the creation clear of that byte's low nibble, and the save writer. The
+assertion above is therefore entirely script-internal bookkeeping — the flag
+tells the engine nothing, and clearing it on the successful branch changes no
+engine state beyond the interface-refresh bit the set-port arm raises. A
+reimplementation must attach no movement, collision, scatter or crowd
+behavior to the flag. The observable "units in the way of a factory exit"
+behavior is owned by the state-2 exit retry, the yard-close admission gate,
+and the ordinary blocked mover [04 R-FAC-02 §5][04 R-FAC-02 §6].
+
+**Established — product movement is a separate boundary.** `GetBuilt` is on
+the product's primary queue, not on the factory's close path. Once product
+remaining is zero, it copies queued move/patrol rally records from the
+producer or inserts `Park`, then removes itself. It can dispatch in the same
+unit sweep only when the product's stable slot is still ahead of the
+factory's slot; otherwise it waits for the next tick. Any first movement,
+VTOL takeoff, occupancy admission, or producer/product collision behavior is
+therefore separate from the door callbacks above and remains subject to the
+release-boundary Unknowns in [R-FAC-01].
+
+#### Cancellation boundaries
+
+**Established.** Interrupt masks are tested before the state machine on a
+production-node visit. Cancel-current therefore wins over a state-3 final
+increment only if its wake bit is admitted before that visit's work handler
+begins: it refunds the established amount, runs the completion helper on the
+frame, sends the cause-9 kill, lowers activation and building together
+(deferred `Deactivate` and `StopBuilding` in edge order), and drops the node
+without decrementing its count. A work step already accepted is not
+interrupted mid-helper; the normal state-4 sequence above then owns
+completion. Construction-stopped instead decrements the node count once,
+refreshes the interface, and restarts state 0; if that reaches an empty
+count, the same-pass state-0 drop performs the activation fall. A node that
+has already completed and been freed cannot be cancelled through that
+production record. Queue removal through the ordinary cleanup path may emit
+the pending `StopBuilding` callback, but it does not establish a product
+egress or collision exemption.
+
+**Unknown.** The exact result when `YARD_OPEN` remains blocked, the number of
+`CloseYard` retries under each occupancy condition, and any runtime
+observation that would couple product release to producer clearance are not
+established by the static evidence. The same is true of producer/product
+collision exemptions, no-stacking, and aircraft takeoff-before-rally ordering.
+These release/egress behaviors must remain `TODO(question)` at any
+implementation site; do not convert the authored `BUGGER_OFF` retry into a
+generic movement or collision rule. The narrower idle-closure implementation
+is not blocked: it may implement `StopBuilding`/`Deactivate`, the 150-tick
+delay, `RequestState(1)`, `Stop`/`CloseYard`, and the selected COB's authored
+animation. Only the release/egress behavior remains blocked pending a retail
+trace that records allocation, first movement, occupancy admission, and the
+factory callback timeline together.
+
+### A no-rally product column is a route-publication defect, not retail [R-EGRESS-02]
+
+**Established by direct trace of the route follower's two entry points.** A
+column of no-rally products stalled behind one another at a factory exit is
+not retail behavior. It is what an implementation produces when it applies
+the route-acceptance gates of [04 R-PATH-01 §8] on every route publication
+instead of on goal installation alone. This section is the authoritative
+statement; doc 04's egress composition points here.
 
 **Established — the acceptance rule belongs to the goal installer, and only to
 it.** The ground route follower has two distinct entry points and they do
@@ -3788,25 +3585,19 @@ different things:
   terminal-cell test, no half-distance test and no synthetic rewrite anywhere
   in it. **A published route is adopted verbatim.**
 
-`[04 R-PATH-01 §8]`'s sentence "When a newly published route (or a new goal
-object) is installed, the follower does, in order: …" is therefore wrong in its
-parenthetical — it is the goal object alone. Everything else in that section
-stands, including the two three-or-more thresholds and the synthetic fallback's
-shape.
+The gates therefore run on the installation of a goal object alone, never on
+a newly published route; the two three-or-more thresholds and the synthetic
+fallback's shape are as `[04 R-PATH-01 §8]` states them.
 
-**Established — the flag that suppresses the synthetic fallback.** The same
-trace closes `[04 R-PATH-01 §8]`'s `TODO(question)` ("the semantic name of the
-order-record flag that suppresses the synthetic fallback"). The installer emits
-the synthetic route only when the unit has a primary queue head **and** that
-head's flags word does not carry the **completion flag** — the same bit the
-primary pump's code-9 arm sets before it re-arms or removes the record
-(`[04 §3.3]`). A record being taken down by a code-9 completion gets no
-straight-line consolation route.
+**Established — the flag that suppresses the synthetic fallback.** The
+installer emits the synthetic route only when the unit has a primary queue
+head **and** that head's flags word does not carry the **completion flag** —
+the same bit the primary pump's code-9 arm sets before it re-arms or removes
+the record (`[04 §3.3]`). A record being taken down by a code-9 completion
+gets no straight-line consolation route.
 
-**Established — why the column is a deadlock and not a contract.** With the
-gates confined to the goal installer, the egress composition of
-`[04 R-EGRESS-01]` steps 1, 2 and 4 no longer produces a column, because three
-mechanisms it omitted do their work:
+**Established — why no column forms.** With the gates confined to the goal
+installer, three mechanisms cooperate:
 
 1. **The rectangle goal's admissible set is its whole border, not its goal
    point.** The rectangle enumerator appends every cell of the perimeter, and
@@ -3844,28 +3635,27 @@ rally point still replaces `Park` with the producer's own goal
 (`[04 R-FAC-02 §4]`); it is a convenience, not the only thing that prevents a
 stall.
 
-**What `[04 R-EGRESS-01]`'s prohibitions still forbid, and what they do not.**
-Do not make the rectangle goal point per-mover, do not relax the installer's
-three-point gates, and do not scatter neighbours: those three remain
-contradicted by direct traces, and no push, stacking, force-placement or engine
-scatter exists (`[04 R-FAC-02 §6][04 R-COB-05]`). What is *not* forbidden — and
-is required — is publishing a search result verbatim.
+**What remains forbidden, and what is required.** Do not make the rectangle
+goal point per-mover, do not relax the installer's three-point gates, and do
+not scatter neighbours: those three are contradicted by direct traces, and no
+push, stacking, force-placement or engine scatter exists
+(`[04 R-FAC-02 §6][04 R-COB-05]`). What is required is publishing a search
+result verbatim.
 
-**Nanolathe divergence this reverses (2026-08-31).** Nanolathe applied the
-acceptance gates on every publication as well as on goal install. A no-rally
-product blocked behind a parked predecessor repaths on the 60-tick cadence, the
-aged predecessor blocks in the class layer, and the search correctly returns a
-route around it to a different border cell — but a straight or diagonal run
-collapses under collinear removal to exactly **two** points
-(`[04 R-PATH-01 §7]`), the misapplied gates rejected it for being under three,
-and the synthetic fallback overwrote it with the straight line at the constant
-far-edge goal point, walking the mover back into the column. The column grew
-backwards into the exit footprint and the factory's exit test never passed
-again: a permanent stall with no resource consumption, reproduced with eight
-products out of one plant. Confining the gates to the goal installer — the
-publisher writing points, count and flags and nothing else — makes the same
-scenario fan out and the exit clear. The fix is a movement-layer change owned
-by another file this round; this section is the contract it must satisfy.
+**How the defect arises when the gates are misapplied.** With the acceptance
+gates applied on every publication as well as on goal install, a no-rally
+product blocked behind a parked predecessor repaths on the 60-tick cadence,
+the aged predecessor blocks in the class layer, and the search correctly
+returns a route around it to a different border cell — but a straight or
+diagonal run collapses under collinear removal to exactly **two** points
+(`[04 R-PATH-01 §7]`), the misapplied gates reject it for being under three,
+and the synthetic fallback overwrites it with the straight line at the
+constant far-edge goal point, walking the mover back into the column. The
+column grows backwards into the exit footprint and the factory's exit test
+never passes again: a permanent stall with no resource consumption,
+reproducible with eight products out of one plant. Confining the gates to
+the goal installer — the publisher writing points, count and flags and
+nothing else — makes the same scenario fan out and the exit clear.
 
 **Confidence.** Established: direct static trace of the follower's install and
 publish methods and their call sites, the rectangle enumerator, the search's
@@ -3897,58 +3687,42 @@ drops itself.
 ### Cancel-current and stop interrupts
 
 **Cancel-current** (interrupt mask bit 1, highest priority) with a product
-attached:
+attached runs, in this order:
 
-1. compute the refund `trunc((1 - remaining fraction) × metal build cost)`;
-2. normally **add** that amount to the builder's metal bucket; but when the
-   referenced player object is in the special second state, a global mode
-   selector decides: selector value 0 credits **half** the amount, selector
-   value 1 credits **seven tenths** of it, any other value adds the full
-   amount. The engine reaches the scaled credits by multiplying the amount by
-   a negative half (selector 0) or negative seven-tenths (selector 1) double
-   and subtracting the product, so the bucket grows by 0.5× or 0.7× the
-   amount. **Correction (2026-08-26):** an earlier revision of this document
-   stated that selector 0 subtracts seven tenths, selector 1 subtracts one
-   half, and that this site's pairing is inverted relative to the ledger's
-   negative-energy-use refund site; both claims were wrong at byte level.
-   The selector mapping is selector 0 → 0.5, selector 1 → 0.7 at all three
-   sites (ledger refund, this cancel-current site, and the shared work
-   helper's reverse arm) — the pairing is the same, nothing is inverted, and
-   both special modes are reduced positive credits.
-3. run the completion transition;
-4. send the ordinary kill packet — kind-9 damage of exactly 30000 through
-   the normal death flow, unscaled by the armor branch because scaling
-   requires damage below 30000. Cause-9 deaths skip the killed-severity
-   script query entirely: severity is zero, so there is no explosion and no
-   corpse — the product simply vanishes. (An earlier revision's phrase "so
-   wreck rules apply" was a leftover of an earlier reading and is
-   withdrawn; severity zero means no wreck is produced.)
-5. lower the deactivate and start-building callback bits in one edge call
-   (firing both COB callbacks together), refresh the interface, and return
-   the drop result — the whole node drops **without decrementing its
-   remaining count**.
+1. compute the refund `trunc((1 - remaining fraction) × metal build cost)`
+   and **add** it to the builder's metal bucket — in full for an ordinary
+   owner; for a computer-player owner the difficulty word decides: easy
+   credits **half**, medium **seven tenths**, hard the full amount. The
+   engine reaches the scaled credits by multiplying the amount by a negative
+   half or negative seven-tenths double and subtracting the product, so the
+   bucket grows by 0.5× or 0.7× the amount — the same pairing as every other
+   site of the family ([R-ECO-01 §3], [R-ECO-01 §11]); nothing is inverted
+   and both special modes are reduced positive credits;
+2. run the completion transition with the factory as builder (so a product
+   with `activatewhenbuilt` receives its `Activate` edge here and dies in the
+   next step of the same call);
+3. send the kill packet
+   `damage(attacker = the factory, victim = the product, 30000, kind 9, flag 0)`
+   — kind-9 damage of exactly 30000 through the normal death flow, unscaled
+   by the armor branch because scaling requires damage below 30000. **The
+   factory is the attacker**, not the product: the self form
+   `selfKill(target, target, 30000, kind 9)` belongs to the shared work
+   helper's reverse arm alone ([R-WORK-01 §1]) — same kind and amount, not
+   the same packet. Nothing on the credit side turns on it (cause 9 has no
+   credit branch, [06 §12.1]), but the recorded-attacker link and the death
+   row hold the factory's identity for a cancelled product. Cause-9 deaths
+   skip the killed-severity script query entirely: severity is zero, so
+   there is no explosion and no corpse — the product simply vanishes;
+4. lower the activation and start-building bits in one edge call (firing
+   both COB callbacks together), refresh the interface, and return result 5
+   — the whole node drops **without decrementing its remaining count**.
 
 With no product attached the same epilogue runs and the node still drops.
+**Established.**
 
-**Correction (2026-09-02, RWU-19-27) — step 4's packet names the factory as
-attacker.** Step 4 above gave the packet only as "the ordinary kill packet —
-kind-9 damage of exactly 30000", and an implementation took the attacker from
-the reverse arm's self form. The packet cancel-current sends is
-`damage(attacker = the factory, victim = the product, 30000, kind 9, flag 0)`:
-the factory is the attacker, not the product. The self form
-`selfKill(target, target, 30000, kind 9)` belongs to the shared work helper's
-reverse arm alone ([R-WORK-01 §1]); same kind and amount, not the same packet.
-Nothing on the credit side turns on it — cause 9 has no credit branch
-([06 §12.1]) — but the recorded-attacker link and the death row hold the
-factory's identity for a cancelled product. The order inside the arm is
-exactly steps 1, 3, 4, 5: refund; completion transition with the factory as
-builder (so a product with `activatewhenbuilt` receives its `Activate` edge
-in step 3 and dies in step 4 of the same call); kill packet; then the
-activation and building bits lowered in one edge call, the interface refresh,
-and result 5. **Established.**
-The producers of interrupt masks 2 and 8 are the record-removal cleanup notice
-and the product's destruction respectively — see the correction under
-"interrupt producers" above (2026-09-02).
+The producers of interrupt masks 2 and 8 are the record-removal cleanup
+notice and the product's destruction respectively — see "the interrupt
+producers" under "Factory production lifecycle".
 
 The other interrupt (**mask bit 3, "Construction stopped"**) prints its
 message, decrements the node count **once**, refreshes the interface, and
@@ -4056,7 +3830,7 @@ the local player when that player's settlement deadline is due. The
 remaining-fraction transition and health arithmetic are established; the
 completion side-effect ordering beyond those steps is closed as cited.
 
-#### R-WORK-01 §1 — The shared construction step, instruction-exact [R-WORK-01] (2026-08-29)
+#### The shared construction step, instruction-exact [R-WORK-01 §1]
 
 **Established.** One helper implements every build, assist, factory-product and
 deconstruction step. It takes a builder, a target, and a single-precision
@@ -4113,7 +3887,7 @@ Reverse arm (`worker < 0`) — see [05 "Resurrection"] for its caller:
 ```
   refund = -(def.buildcostmetal * delta32)           // positive, delta32 < 0
   target.metalProduction += refund                   // or ×0.5 / ×0.7 under the
-                                                     // special-player selector
+                                                     // difficulty ladder
   h = health + gain                                  // gain is negative here
   target.health    = (int16)(h >= 1 ? h : 0)         // signed floor at zero,
                                                      // no maxdamage cap
@@ -4136,19 +3910,17 @@ that reuse the quotient (the resurrection delay divides by it, see
 [R-WORK-01 §7]).
 
 **Established — malformed inputs.** `buildtime = 0` makes the division produce
-an infinity; the retail conversion helper's out-of-range result has a zero low
-word, and the callers here consume only that low word [01 §7], so the derived
-integers become `0` rather than a large magnitude. `buildtime < 0` inverts the
-sign of the step, driving the fraction the wrong way through the same clamp.
-Neither case faults. **Correction (2026-09-02):** the "zero low word" sentence
-describes the resurrection delay's conversion ([R-WORK-01 §7]), not the step:
-in the step the infinity never reaches an integer conversion — the clamp
-absorbs it. [R-WORK-01 §11] gives the zero-`buildtime` and
-zero-`buildcostenergy` arms exactly.
+an infinity, which never reaches an integer conversion in the step — the clamp
+absorbs it ([R-WORK-01 §11] gives the zero-`buildtime` and
+zero-`buildcostenergy` arms exactly). `buildtime < 0` inverts the sign of the
+step, driving the fraction the wrong way through the same clamp. Neither case
+faults.
 
-**Established — the build-order caption census.** The order-state machinery is
-doc 04 §3's property; the captions are listed here because they are the
-user-visible edges of the arithmetic above. All are raised on the builder.
+#### The build-order caption census
+
+**Established.** The order-state machinery is doc 04 §3's property; the
+captions are listed here because they are the user-visible edges of the
+arithmetic above. All are raised on the builder.
 
 | Caption | Slot | Producer and predicate |
 |---|---:|---|
@@ -4157,16 +3929,16 @@ user-visible edges of the arithmetic above. All are raised on the builder.
 | `Construction stopped` | 7 | `BuildingBuild` when the order pump raises the terminate/interrupt executor-flag bit; it also decrements the factory queue count |
 | `Construction terminated` | 7 | `HelpBuild` when the order's target handle is null |
 | `Construction terminated by hostile action` | 7 | `VTOL_HelpBuild` for **either** a null target handle **or** the terminate/interrupt executor-flag bit — the air twin merges the two ground terminals under one caption |
-| `Unable to create any more units` | 7 | `MobileBuild`, `BuildingBuild` and `Resurrect` when the unit allocation fails; each then reschedules exactly 300 ticks without advancing |
+| `Unable to create any more units` | 7 | `MobileBuild`, `BuildingBuild` and `Resurrect` when the unit allocation fails; each then reschedules exactly 300 ticks without advancing. `VTOL_MobileBuild` raises the same caption and abandons with no wait ([R-ECO-02 §4]) |
 | `Waiting for target area to clear` | 7 | `MobileBuild`'s site test failing with a retry count of zero; the retry is 30 ticks |
 | `Target area was blocked` | 7 | the same site test once the retry count exceeds 10; terminal |
 | `I can't reach the construction site` | 7 | `MobileBuild`'s approach phase when the arrival-failure executor-flag bit is set and the range test of [R-WORK-01 §2] still fails |
 
 **Established — what the `Slot` column is, and where these captions go**
-(added 2026-08-30, [07 R-HUD-03 §14]). `Slot` is the **sound event slot** of
-[03 §8.3]'s static slot table — 7 `cant`, 8 `unitcomplete`, 9 `build` — not a
-priority and not a screen position. The caption is raised only for the viewing
-player's own live unit, queued on the unit voice/caption queue, and, when
+([07 R-HUD-03 §14]). `Slot` is the **sound event slot** of [03 §8.3]'s static
+slot table — 7 `cant`, 8 `unitcomplete`, 9 `build` — not a priority and not a
+screen position. The caption is raised only for the viewing player's own live
+unit, queued on the unit voice/caption queue, and, when
 `10 − unitchattext < the slot's priority`, appended to the shared message-line
 ring as `"<unit display name>: <caption>"`; the master composer draws that ring
 as a column at the top-left of the view. At the shipped `UNITCHAT = Medium`
@@ -4182,7 +3954,7 @@ a high bit that unit reclaim and capture treat as terminal. Their producers and
 names belong to doc 04 §3.1 and are not established here. Decider: static trace
 of the pump's writer set for that word.
 
-#### R-WORK-01 §9 — The clamp kill is the only thing that removes an abandoned frame [R-WORK-01] (2026-08-30)
+#### The clamp kill is the only thing that removes an abandoned frame [R-WORK-01 §9]
 
 **Established by composition of three traces already in these docs; nothing new
 is traced here.** The composition is written down because the reverse arm's
@@ -4191,8 +3963,7 @@ a permanent, silent world defect rather than a visible one.
 
 1. The reverse arm ends `if (newStored >= 1.0f) selfKill(target, target,
    30000, kind 9)` — the no-corpse, no-explosion path, severity zero
-   ([R-WORK-01 §1]'s listing above, and [05 "Resurrection"]'s prose statement
-   of the same line).
+   ([R-WORK-01 §1]'s listing above, and [05 "Reverse and deconstruction"]).
 2. A nanoframe with no builder decays: `GetBuilt` phase 2, on a visit no
    admitted work step has deferred, applies that arm with a quantum of
    `−(11 · buildtime / buildcostenergy)` ([04 R-ORD-01 §5]). Nothing else
@@ -4217,11 +3988,11 @@ floors health at zero with no `maxdamage` cap ([R-WORK-01 §1]), so the frame
 reaches zero health one or more visits *before* the fraction reaches one, and
 sits there at zero health, alive, until the clamp fires.
 
-#### R-WORK-01 §11 — Malformed build numbers through the step and the decay wrapper, exactly [R-WORK-01] (2026-09-02)
+#### Malformed build numbers through the step and the decay wrapper, exactly [R-WORK-01 §11]
 
 **Established.** Three malformed definitions reach the shared step; each is
 settled by the x87 compares and the clamp listed in [R-WORK-01 §1], and none
-faults. (RWU-19-27, static.)
+faults.
 
 *Zero `buildtime`, forward arm.* `worker / (float)0` is `+∞`; `old − ∞` is
 `−∞`; the clamp's first test (`new80 <= 0.0`) stores `0.0f`. `delta32 = old`,
@@ -4261,7 +4032,7 @@ For an implementation: the decay quantum must be formed in `float32` exactly
 as the wrapper forms it, so that `−∞` and NaN reach the step's own compares;
 a `buildcostenergy > 0` guard around the decay is not retail.
 
-#### R-WORK-01 §2 — Build-distance range test and approach radii [R-WORK-01] (2026-08-29)
+#### Build-distance range test and approach radii [R-WORK-01 §2]
 
 **Established.** The range test shared by mobile construction, repair and the
 VTOL twins is two-dimensional in X and Z, ignores Y entirely, and is
@@ -4297,22 +4068,21 @@ in = ((dx*dx) >> 32) + ((dz*dz) >> 32) <= r*r      // each square truncated
                                                     // separately, 64-bit multiply
 ```
 
-**Established — what `reclaimReach` is (2026-09-04, WU-19-166).** The name
-above is this document's; the field is the definition's **radius word**, and
-two other sections already identify it. `[04 R-ORD-01 §5]`'s `ReclaimUnit` row
-writes the same test as "`dx² + dz² ≤ (builddistance + targetModelRadius)²` in
-whole units, with the target's model radius the whole part of the definition's
-`(Xextent + Zextent)/3` word", and `[02 R-CAT-01 §7]` derives that word at
-catalog-compile time: the bounding record's X and Z bounds are
-footprint-derived `±(Footprint << 20)/2`, so the two extents are
-`FootprintX << 20` and `FootprintZ << 20` in 16.16, and the unit-record
-compiler stores `(extentX + extentZ)/3` by integer division. The reach term is
-the **high half** of that word — ten world units for a one-cell target,
-twenty-one for a two-cell one. No model geometry enters it (only the Y bound
-is measured from the model), and `[R-WORK-01 §12]` point 3 confirms the radius
-belongs to unit reclaim's squared form and to nothing else. An implementation
-that drops the term is short by the target's own radius on every reclaim,
-which is what Nanolathe's `reclaimInRange` did until WU-19-166.
+**Established — what `reclaimReach` is.** The name above is this document's;
+the field is the definition's **radius word**, and two other sections
+identify it. `[04 R-ORD-01 §5]`'s `ReclaimUnit` row writes the same test as
+"`dx² + dz² ≤ (builddistance + targetModelRadius)²` in whole units, with the
+target's model radius the whole part of the definition's `(Xextent +
+Zextent)/3` word", and `[02 R-CAT-01 §7]` derives that word at catalog-compile
+time: the bounding record's X and Z bounds are footprint-derived
+`±(Footprint << 20)/2`, so the two extents are `FootprintX << 20` and
+`FootprintZ << 20` in 16.16, and the unit-record compiler stores
+`(extentX + extentZ)/3` by integer division. The reach term is the **high
+half** of that word — ten world units for a one-cell target, twenty-one for a
+two-cell one. No model geometry enters it (only the Y bound is measured from
+the model), and `[R-WORK-01 §12]` point 3 confirms the radius belongs to unit
+reclaim's squared form and to nothing else. An implementation that drops the
+term is short by the target's own radius on every reclaim.
 
 **Established, recorded as instructions — the assist approach radius.** The
 assist state asks the mover to close to
@@ -4328,10 +4098,10 @@ radius rather than an authoritative gate. **Unknown:** whether this is a retail
 defect or an intended asymmetry — decider: manual retail observation of an
 assist approach with a footprint that is much longer in Z than in X.
 
-#### R-WORK-01 §12 — Where the reach test runs, the compare's sign, and what the nano reach is not [R-WORK-01] (2026-09-02)
+#### Where the reach test runs, the compare's sign, and what the nano reach is not [R-WORK-01 §12]
 
 **Established.** [R-WORK-01 §2] gives the expression; three things about its
-use were still read as open at the implementation (RWU-19-27, static).
+use:
 
 1. *The compare is signed.* `distWorld − builderPad + targetPad` is a signed
    32-bit value compared `<=` against the zero-extended 16-bit `builddistance`
@@ -4359,9 +4129,37 @@ use were still read as open at the implementation (RWU-19-27, static).
    half-diagonals, `trunc(8 · hypot(footX, footZ))` each, subtracted from the
    centre-to-centre distance in whole world units.
 
-This retires a reach of `builddistance` in 16.16 compared against the nearest
-point of the site's footprint rectangle: retail's test is centre-to-centre
-with both half-diagonals subtracted, and it is only the fallback above.
+Retail's test is centre-to-centre with both half-diagonals subtracted, and it
+is only the fallback above; a reach of `builddistance` in 16.16 compared
+against the nearest point of the site's footprint rectangle is not retail.
+
+#### The reach consultation is gated on the satisfied word's `0x40` alone [R-WORK-01 §13]
+
+**Established (direct read of the `MobileBuild` handler's phase-1 body).**
+[R-WORK-01 §12] point 2 states where the reach test runs; this names the gate
+word it tests. The handler receives three arguments — the unit, the record
+and the **satisfied set** the pump computed for this visit
+(`(record.satisfied | unit.pending) & record.gate`, [04 §3.3]). Phase 0 arms
+the record's dynamic gate to `0xE0`, so phase 1 is dispatched only on a visit
+whose satisfied set holds `0x20` (the follower reached the rectangle goal),
+`0x40` (an empty route was published away from the goal — "cannot get there")
+or `0x80` (a previous goal object was released) — the three movement outcomes
+of [04 R-ORD-01 §0]. The phase-1 body tests **that argument for `0x40`** and
+only under it forms the centre-to-centre distance with the two half-diagonal
+pads and compares it to `builddistance`; a fail is status 7 `I can't reach
+the construction site` and abandon. A visit carrying `0x20` or `0x80` without
+`0x40` skips the expression entirely and falls straight into the placement
+validator and the creator. The consultation is therefore neither per tick nor
+per visit: it happens on the arrival-failure wake and nowhere else, and there
+is no other range term in the row.
+
+What this settles for an implementation that steps its construction machine
+per tick rather than per wake: consulting the reach expression on every visit
+is the approximation, and its only observable difference is a builder that
+reaches the rectangle border while the centre-minus-pads value still exceeds
+`builddistance` — retail starts building there; a per-visit reach test keeps
+it walking. Removing the approximation needs the `0x20`/`0x40`/`0x80` wake
+delivered to the construction step, not a second reach rule.
 
 ### Stockpile production
 
@@ -4397,7 +4195,7 @@ Eight stockpile weapon definitions are shipped (`amd_rocket`, `armemp_weapon`,
 `fmd_rocket`, `nuclear_missile`); the behavior above is therefore stock-visible
 rather than malformed-only.
 
-**Closed residuals — byte wrap, cancellation, and repeat requeue.** The slot
+**Established fact — byte wrap, cancellation, and repeat requeue.** The slot
 byte is a uint8: completion increments wrap 255→0, and the fire gate prevents
 launch underflow (a launch only decrements a nonzero byte); a saved or
 otherwise malformed value in 200–255 blocks new production with the 300-tick
@@ -4414,12 +4212,11 @@ unit refresh call.
 
 ## Construction nano cadence and admission [R-P0-06]
 
-This section closes the construction nano-cadence contract: retail has **no
-independent "nano every N ticks" presentation timer**. Nano output is admitted
-by the construction/reclaim work paths, so the visual pulse follows accepted
-work, not a free-running clock.
+Retail has **no independent "nano every N ticks" presentation timer**. Nano
+output is admitted by the construction/reclaim work paths, so the visual pulse
+follows accepted work, not a free-running clock.
 
-### R-P0-06 §1 — Work-admission gating and emission producers
+### Work-admission gating and emission producers [R-P0-06 §1]
 
 The emission producers, their admission gates, and their cadences:
 
@@ -4440,7 +4237,7 @@ admission rejects the work step.** The presentation contract is therefore:
 publish a nano event only for an accepted work transition, carrying the
 builder/source, the target/site, the mode, and the resolved source piece.
 
-### R-P0-06 §2 — Synchronous QueryNanoPiece contract
+### Synchronous QueryNanoPiece contract [R-P0-06 §2]
 
 `QueryNanoPiece` is a mode-Q, zero-argument COB callback [04 §4.4; fmt cob
 "QueryNanoPiece"]. The engine seeds its cell-0 output to piece index `0`,
@@ -4463,7 +4260,7 @@ nanoWorld = unitWorldPosition + offset
 The query is presentation-side data acquisition. It does not itself modify
 construction fraction, health, resources, occupancy, or order state [04 §4.4].
 
-### R-P0-06 §3 — Worker quantum, visit schedule, and counter gates
+### Worker quantum, visit schedule, and counter gates [R-P0-06 §3]
 
 The mobile and factory state-3 paths call the shared construction work helper
 with the floor of worker time divided by 30 — the worker quantum of [05
@@ -4475,8 +4272,7 @@ for the product's build work [05 "Factory production lifecycle"].
 The direct static emission census recovers the remaining cadence boundaries:
 
 - the two-segment call and the recovered `15` gate belong to **feature
-  reclaim**, not to the build-assist path — see the correction in
-  [R-WORK-01 §8];
+  reclaim**, not to the build-assist path ([R-WORK-01 §8]);
 - unit reclaim's order counter advances by two per visit and the operation
   schedules the next visit on a two-tick cadence, emitting one segment each
   visit; and
@@ -4486,7 +4282,7 @@ The direct static emission census recovers the remaining cadence boundaries:
 These are operation-specific paths, not a universal construction timer [03
 §5.5; 05 "Repair"; 05 "Unit reclaim"; 05 "Capture"].
 
-### R-P0-06 §4 — Segment geometry and selector
+### Segment geometry and selector [R-P0-06 §4]
 
 Every recovered nano-segment producer passes the selector value `6` to the
 segment helper. This is an effect/visual selector, not a weapon `sprayangle`
@@ -4518,11 +4314,11 @@ team/palette identity where the presentation layer already owns it
 selector = 6
 ```
 
-An event is emitted once per admitted segment call. A two-segment assist visit
-emits two ordered events. A rejected work step emits none and must not call
-`QueryNanoPiece` merely to draw a speculative spray.
+An event is emitted once per admitted segment call. A two-segment feature-
+reclaim visit emits two ordered events. A rejected work step emits none and
+must not call `QueryNanoPiece` merely to draw a speculative spray.
 
-### R-P0-06 §5 — Shared effect admission and lifetime boundary
+### Shared effect admission and lifetime boundary [R-P0-06 §5]
 
 Nano segments append to the shared variable-length effect/sequence strip
 family. Producers append in event order. The effect allocator is guarded by
@@ -4538,13 +4334,12 @@ Nano construction work is presentation-only after the authoritative work step:
 rendering can be disabled without changing remaining fraction, health, stock,
 occupancy, or RNG state [03 §5.5; 03 §5.7].
 
-The direct census identifies a shared segment allocator and the fixed selector
-value, but does not close every effect-family ownership detail. In particular,
-the packet does not assign a strip number to nano segments solely from an
-adjacent producer, and it does not assume that all segment families share the
-same fade.
+The strip number is settled by the addendum below: the selector byte is the
+strip index, and nano records append to strip 6. Whether every segment family
+shares the same fade is not a question this section answers — the addendum
+records that the nano record has no fade curve at all.
 
-### R-P0-06 §6 — Strict admission and ordering
+### Strict admission and ordering [R-P0-06 §6]
 
 The authoritative ordering is:
 
@@ -4573,48 +4368,42 @@ event is a consumer of an accepted authoritative transition, not its gate.
 cadence, selector value 6, endpoint ownership, and cap/order behavior are
 established.
 
-**Established — the record constructor and allocator epilogue [R-P0-06 §5
-addendum].** The submission helper constructs the 76-byte segment record
+#### R-P0-06 §5 addendum — the record constructor and allocator epilogue
+
+**Established.** The submission helper constructs the 76-byte segment record
 inline: a one-time lazy zeroing of the record template, the vtable pointer,
 the selector byte (the same value that selects the strip), then the geometry
 initializer that copies the caller's source and target triples and derives
 the per-tick 4/11 and 7/11 interpolation deltas. The selector value is the
 strip index: nano records append to **strip 6** of the shared ten-strip
-family — "selector 6" and "strip 6" are one number, closing the strip-
-ownership question. The record comes from a fixed pool; exhaustion makes the
-append a silent no-op with no query side effect and no rollback of already
-committed work. The pre-insert count check evicts the oldest record when the
-count exceeds 400, keeping the steady bound at 401. The record's per-tick
-update draws its position jitter from the **CRT** random stream (six draws
-per iteration, five iterations — 30 draws per record per tick), never from
-the simulation stream, so nano presentation cannot perturb the sim RNG.
+family — "selector 6" and "strip 6" are one number. The record comes from a
+fixed pool; exhaustion makes the append a silent no-op with no query side
+effect and no rollback of already committed work. The pre-insert count check
+evicts the oldest record when the count exceeds 400, keeping the steady bound
+at 401. The record's per-tick update draws its position jitter from the
+**CRT** random stream (six draws per iteration, five iterations — 30 draws
+per record per tick), never from the simulation stream, so nano presentation
+cannot perturb the sim RNG.
 
-**Closed (2026-08-27).** This addendum previously carried a standing question
-reading "the renderer-side consumers of strip 6 — the per-segment fade curve and
-the logical-to-palette color mapping — remain open (presentation lane); the
-engine-side record carries positions, interpolation deltas, and a value of
-0xa1 + (iteration % 7) whose consumer was not traced." Both are now traced and
-the framing was wrong: there is no fade curve, because the record is a particle
-emitter rather than a drawn segment, and the `0xa1 + (iteration % 7)` value is
-the particle's own palette index, advanced one step up the green ramp every
-tick. The `4/11` and `7/11` factors narrow the source and target boxes rather
-than animating a segment. The full contract — box narrowing, five particles and
-six CRT draws per tick, the four-world-units-per-tick travel and its
-`trunc(distance/4)` lifetime, the colour cycle, and the single-pixel LOS-gated
-draw — is written up at [03 §5.5 "The nanolathe spray"] as `[R-P0-19-P]`.
+**Established — there is no fade curve.** The record is a particle emitter
+rather than a drawn segment, and the `0xa1 + (iteration % 7)` value it
+carries is the particle's own palette index, advanced one step up the green
+ramp every tick. The `4/11` and `7/11` factors narrow the source and target
+boxes rather than animating a segment. The full contract — box narrowing,
+five particles and six CRT draws per tick, the four-world-units-per-tick
+travel and its `trunc(distance/4)` lifetime, the colour cycle, and the
+single-pixel LOS-gated draw — is written up at [03 §5.5 "The nanolathe
+spray"] as `[R-P0-19-P]`.
 
-### R-WORK-01 §8 — Emission producers, direction, geometry, and the corrected assist gate [R-WORK-01] (2026-08-29)
+### Emission producers, direction, geometry, and the assist gate [R-WORK-01 §8]
 
-**Correction — which handler owns the two-segment call and the `15` gate.**
-[R-P0-06 §1] and [R-P0-06 §3] attributed both to the build-assist path
-("the build-assist path makes two segment calls when its remaining work counter
-sits above the recovered `15` gate"). Neither belongs there. The assist
-executor's work phase is byte-for-byte the ordinary construction step: one
-worker quantum, one admission, one nano query, **one** segment, retry after one
-tick. The two-call site and the `>15` counter gate are in the **feature
-reclaim** executor's work phase, where the counter in question is the order
-node's countdown of [R-WORK-01 §5]. Feature reclaim is the only two-segment
-producer in the engine.
+**Established — the two-segment call and the `15` gate belong to feature
+reclaim.** The assist executor's work phase is byte-for-byte the ordinary
+construction step: one worker quantum, one admission, one nano query, **one**
+segment, retry after one tick. The two-call site and the `>15` counter gate
+are in the **feature reclaim** executor's work phase, where the counter in
+question is the order node's countdown of [R-WORK-01 §5]. Feature reclaim is
+the only two-segment producer in the engine.
 
 **Established — the complete producer census.** Each row is one accepted work
 visit. "Direction" says which end of the segment is the source.
@@ -4650,25 +4439,23 @@ Most of the executors — `SelfRepair`, `BuildingBuild`'s work phase, both
 ground `RepairUnit` variants, `ReclaimUnit` and `Capture` — build that box but
 write `y1 = target.y` with the **first Y extent omitted**, while still using
 extent[4] for `y2`. `MobileBuild` and `HelpBuild` add extent[1] as written
-above. The two forms are not reconciled anywhere in the image; because the box
-is presentation geometry, the divergence shows only as a slightly different
-spray origin plane on the majority form. **Unknown:** which form the four VTOL
-work executors use — decider: static trace of their work phases (the two
-ground forms are established).
+above. The two forms are not reconciled anywhere in the image. **Unknown:**
+which form the four VTOL work executors use — decider: static trace of their
+work phases (the two ground forms are established).
 
 **Established — the two forms are observationally identical, and the VTOL
-Unknown above is therefore inert (2026-09-04, WU-19-152).** The omitted term
-is `extent[1]`, the definition's **minimum** Y bound, and
-[02 R-CAT-01 §7] establishes that word is written exactly once — the zero store
-immediately before the model-top walk — with no min-Y walk anywhere in the
-image, so it is zero for every unit definition in the corpus. `target.y + 0`
-and `target.y` are the same number: the "slightly different spray origin plane"
-described above does not exist, and which form the four VTOL executors use
-cannot be observed from the box they produce. The Unknown stays open only as a
-question about the instruction sequences, not about behavior; nothing depends
-on its answer. The same section gives the rest of the record a unit target's
-box needs: X and Z are `±(footprint << 20) / 2`, and `extent[4]` is the
-model-top walk's result floored at zero.
+Unknown above is therefore inert.** The omitted term is `extent[1]`, the
+definition's **minimum** Y bound, and [02 R-CAT-01 §7] establishes that word
+is written exactly once — the zero store immediately before the model-top
+walk — with no min-Y walk anywhere in the image, so it is zero for every unit
+definition in the corpus. `target.y + 0` and `target.y` are the same number:
+there is no different spray origin plane on the majority form, and which
+form the four VTOL executors use cannot be observed from the box they
+produce. The Unknown stays open only as a question about the instruction
+sequences, not about behavior; nothing depends on its answer. The same
+section gives the rest of the record a unit target's box needs: X and Z are
+`±(footprint << 20) / 2`, and `extent[4]` is the model-top walk's result
+floored at zero.
 
 For a feature target — feature reclaim and resurrection — the box is built from
 the cell instead:
@@ -4738,7 +4525,7 @@ accepted repair visit, and an unfinished repair target retries the work state
 one tick later, so the presentation follows accepted repair work rather than a
 free-running timer [R-P0-06 §3].
 
-#### R-WORK-01 §3 — Repair, exactly: the helper, the executors, and the captions [R-WORK-01] (2026-08-29)
+#### Repair, exactly: the helper, the executors, and the captions [R-WORK-01 §3]
 
 **Established — the helper, instruction-exact.** The step is one small helper
 taking a builder, a target, and a single-precision worker quantum:
@@ -4767,11 +4554,11 @@ repairStep(builder, target, worker):
   return committed
 ```
 
-Only `eax` of the conversion is consumed, so `buildtime = 0` yields terms of
-`0` rather than a large magnitude [01 §7]: the helper then requests zero
-energy, is admitted whenever energy carry is non-positive, and applies a
+Only the low word of the conversion is consumed, so `buildtime = 0` yields
+terms of `0` rather than a large magnitude [01 §7]: the helper then requests
+zero energy, is admitted whenever energy carry is non-positive, and applies a
 zero-magnitude kind-10 packet. That is the whole of the malformed-input
-behavior the doc-05 tail previously listed as open for this family.
+behavior for this family.
 
 **Established — the four repair executors and which arguments they pass.**
 
@@ -4781,9 +4568,7 @@ behavior the doc-05 tail previously listed as open for this family.
 | `SelfRepair` 40 | the order's **target** | the unit running the order | the **order target's** `workertime`/30 |
 | the `healtime` tick path | the unit itself | the unit itself | `(healtime × 8) / 30` |
 
-`SelfRepair` is the **reversed-argument variant** the earlier text recorded as
-an open identity ("a variant reverses the context and target arguments; its
-user-interface identity … remain open"). It is closed: the order lives on the
+`SelfRepair` is the **reversed-argument variant**: the order lives on the
 *patient*, the repairer is the handle stored in the order node, and the helper
 is therefore called with the two arguments swapped relative to `RepairUnit`.
 The repairer's energy is billed, the patient is healed, and the patient's own
@@ -4798,9 +4583,8 @@ out of the state when `(unsigned)maxdamage <= (unsigned)health`.
 calls the helper. Its phase 0 returns "advance" when
 `(unsigned)maxdamage <= (unsigned)health` and otherwise reschedules 30 ticks;
 its phase 1 emits the caption. The healing comes from the pad's own
-`RepairUnit`-family order. (Confirmed independently by the flight lane's
-`R-AIR-01`; the only refinement is that the unsigned test lives in phase 0 and
-the caption in phase 1.)
+`RepairUnit`-family order ([04 R-AIR-01] confirms; the unsigned test lives in
+phase 0 and the caption in phase 1).
 
 **Established — `healtime`, the only consumer.** The per-tick unit pass calls
 the same repair helper on a unit against itself when all of
@@ -4830,8 +4614,11 @@ returns terminally once the truncated hypotenuse from the leash origin reaches
 that radius. Phase 1 is the range test of [R-WORK-01 §2]; out of range, it
 re-points the mover at the target and waits `30 + boundedDraw(30)` ticks — the
 one simulation draw in this executor. Phase 3 is the work visit: if the target
-is at or above full health (**unsigned** compare) it advances; if either of the
-target's movement-mode bits is set it re-approaches and waits 15 ticks;
+is at or above full health (**unsigned** compare) it advances; if either of
+the target's **bits 2–3** — the cached movement-rate tier, not the
+movement-mode mirror of bits 0–1 the entry guard tests — is set, it emits
+`StopBuilding`, re-approaches and waits 15 ticks ([04 R-ORD-01 §12],
+[04 R-MOV-01 §6]);
 otherwise it pushes the builder's cloak deadline to `tick + 150`, calls the
 helper, and on acceptance queries the nano piece and submits one segment before
 rescheduling one tick later. `RepairUnitNoMove` 36 is the same work visit with
@@ -4851,14 +4638,13 @@ its producing predicate:
 work visit, and the `healtime` path draw nothing. Outside the work visit,
 `RepairUnit` phase 1 has the out-of-range `30 + boundedDraw(30)` retry, and
 `RepairPatrol` has one pick over the ordered damaged-unit list it gathers
-within its sight distance. If no unit action
-terminates the visit, feature pairing samples its 48-world-unit lattice and
-makes three bounded picks with replacement over each nonempty energy-bearing
-and metal-bearing list, in that order. **Correction (2026-08-31,
-[01 R-DET-01 §6]):** the previous text assigned those six draws to the unit
-gather; the unit gather is one ordered vector and costs no RNG. A
-bounded draw whose bound is below two returns zero **without advancing the
-seed**, so a single-candidate list costs no draw [01 §8].
+within its sight distance — the unit gather itself is one ordered vector and
+costs no RNG ([01 R-DET-01 §6]). If no unit action terminates the visit,
+feature pairing samples its 48-world-unit lattice and makes three bounded
+picks with replacement over each nonempty energy-bearing and metal-bearing
+list, in that order. A bounded draw whose bound is below two returns zero
+**without advancing the seed**, so a single-candidate list costs no draw
+[01 §8].
 
 ## Unit reclaim
 
@@ -4868,7 +4654,7 @@ capability, range, ownership, and target restrictions.
 
 **Established fact — capability gate.** The handler requires the builder's
 reclaim capability bit, a target whose state is not the disallowed owner state,
-and a target definition without the capture-immunity bit.
+and a target whose definition does not carry `cancapture` ([R-WORK-01 §4]).
 
 **Established fact — pulse size.** When the order is set up, a single integer
 damage pulse is computed once and stored on the order node:
@@ -4909,15 +4695,12 @@ cause-5 branch of the synchronous death finalizer computes the refund as
 
 and, in the ordinary player-state branch, adds that floating-point amount to
 the killing attacker's metal production bucket. The branch contains no
-corresponding energy credit. The two special player-mode branches apply the
-already-observed 0.5 or 0.7 scaling family instead of the ordinary addition
-(the same selector pairing as the refund family: selector 0 → half,
-selector 1 → seven tenths); their user-facing mode names remain open (state 2
-is the computer-policy state per the AI-manager gate inference; states 1 and
-3 remain unnamed). The payment is a death-side event
-after ordinary cause-5 lethal handling and before death explosion, corpse
-placement, and final teardown. The builder whose kind-5 packet is fatal
-supplies the recipient.
+corresponding energy credit. For a computer-player killer the credit goes
+through the difficulty ladder of [R-ECO-01 §3] — half on easy, seven tenths
+on medium — in place of the ordinary addition. The payment is a death-side
+event after ordinary cause-5 lethal handling and before death explosion,
+corpse placement, and final teardown. The builder whose kind-5 packet is
+fatal supplies the recipient.
 
 **Established fact — multiple reclaimers.** Reclaim and repair events apply
 synchronously during ascending unit-slot traversal, and the damage-packet
@@ -4925,10 +4708,10 @@ receiver rejects packets against already dead-latched targets, so the first
 lethal event is authoritative. Repair bills admitted energy even when the
 heal is discarded, and the victim's slot relation decides finalization order.
 
-#### R-WORK-01 §4 — Unit reclaim, exactly [R-WORK-01] (2026-08-29)
+#### Unit reclaim, exactly [R-WORK-01 §4]
 
-**Established — the eligibility predicate, and a correction.** The gate the
-executor consults at start and re-checks on every work visit is:
+**Established — the eligibility predicate.** The gate the executor consults at
+start and re-checks on every work visit is:
 
 ```
 eligible(builder, target) =
@@ -4939,8 +4722,7 @@ eligible(builder, target) =
                                                       // "capture-immunity" bit
 ```
 
-The earlier text said the handler requires "a target definition without the
-capture-immunity bit". That is the same bit the **builder** side reads for its
+The target predicate reads the same bit the **builder** side reads for its
 own capture capability: the definition key is `cancapture`, and the target
 predicate simply demands it be clear. A unit authored `cancapture=1` is
 therefore un-reclaimable *and* un-capturable ([R-WORK-01 §6] shows the capture
@@ -5037,17 +4819,13 @@ Feature reclaim is an order-driven countdown on the order node, not a share of
 the reclaimer's work rate. Its payout is a one-time completion event; the
 completion helper does not divide the feature pools into a per-tick drip.
 
-#### R-WORK-01 §5 — Feature reclaim, exactly, and a correction [R-WORK-01] (2026-08-29)
+#### Feature reclaim, exactly [R-WORK-01 §5]
 
-**Correction.** The previous text read: "Feature reclaim uses a progress counter
-associated with the feature and the reclaimer's work contribution. The feature
-definition's damage value acts as the completion threshold." Both halves are
-wrong. The counter lives on the **order node**, not on the feature; it is
-seeded from the feature definition's **energy and metal pools**, not from its
-damage; and it is decremented by a fixed two per visit, so the reclaimer's
-`workertime` has **no effect at all** on how long a feature takes. The payout
-does re-check a protection bit, which is what the damage-threshold reading was
-probably reaching for.
+**Established.** The counter lives on the **order node**, not on the feature;
+it is seeded from the feature definition's **energy and metal pools**, not
+from its damage; and it is decremented by a fixed two per visit, so the
+reclaimer's `workertime` has **no effect at all** on how long a feature
+takes. The payout re-checks a protection bit ([R-FEAT-01 §15]).
 
 **Established — the executor.** The order's stored position resolves to a
 feature definition index; `0xffff` means "no feature here" and terminates the
@@ -5091,15 +4869,16 @@ back to a terrain cell using the rounding fixup `v + ((v >> 31) & 0xfffff)`
 before the shift, follows the multi-cell anchor link when the cell stores the
 "linked" sentinel, and then:
 
-1. refuses outright — returning without paying — when the terrain cell's
-   protection bit **and** the feature definition's protection bit are both set;
+1. refuses outright — returning without paying — when the anchor's
+   instance-attached bit **and** the feature definition's sprite bit are both
+   set ([R-FEAT-01 §15]);
 2. adds the feature definition's whole `energy` value to the builder's
    **energy production** accumulator;
 3. adds the feature definition's whole `metal` value to the builder's
    **metal production** accumulator;
-4. applies the special-player scaling to each addition separately — selector 0
-   halves, selector 1 takes seven tenths — with the same pairing as every other
-   member of that family [R-ECO-01 §3];
+4. applies the computer-player difficulty scaling to each addition separately
+   — half on easy, seven tenths on medium — with the same pairing as every
+   other member of that family [R-ECO-01 §3];
 5. replaces the feature with its reclaimed successor, or removes it when no
    successor exists;
 6. emits the deterministic multiplayer state command when required;
@@ -5115,24 +4894,21 @@ vertical component of the walk target. A height byte below two returns zero
 without advancing the seed [01 §8]. The work visits and the payout draw
 nothing.
 
-#### R-FEAT-01 §15 — The payout guard's two bits, named [R-FEAT-01] (2026-08-29)
+#### The payout guard's two bits, named [R-FEAT-01 §15]
 
-**Correction to [R-WORK-01 §5].** Its payout step 1 says the helper "refuses
-outright — returning without paying — when the terrain cell's protection
-bit **and** the feature definition's protection bit are both set", and the
-tail listed the cell bit's meaning as unknown. Both bits are now named: the
-cell bit is the anchor's **instance-attached** bit (set by the stamp for 3D
-definitions and by ignition and the die/reclaim transitions for sprite
-definitions, §3/§5/§9), and the definition bit is flag bit 0, **sprite
-(filename-based) definition**. The conjunction therefore means "a sprite
-feature that currently has a live animation instance" — one that is burning,
-or already playing its death or reclaim animation. The refusal is what
-"burning blocks reclaim" under "Feature burning" describes; it never applies
-to a 3D wreck (its instance bit is always set but its definition bit is
-clear), so a sinking wreck stays reclaimable throughout, as "Feature sinking
-and water interaction" states. The item is closed.
+**Established.** The two bits the payout's step 1 tests are: the cell bit is
+the anchor's **instance-attached** bit (set by the stamp for 3D definitions
+and by ignition and the die/reclaim transitions for sprite definitions,
+§3/§5/§9), and the definition bit is flag bit 0, **sprite (filename-based)
+definition**. The conjunction therefore means "a sprite feature that
+currently has a live animation instance" — one that is burning, or already
+playing its death or reclaim animation. The refusal is what "burning blocks
+reclaim" under "Feature burning" describes; it never applies to a 3D wreck
+(its instance bit is always set but its definition bit is clear), so a
+sinking wreck stays reclaimable throughout, as "Feature sinking and water
+interaction" states.
 
-#### R-WORK-01 §5-A — What the pools are worth in stock content, and the two payout hazards [R-WORK-01] (2026-08-30)
+#### What the pools are worth in stock content, and the two payout hazards [R-WORK-01 §5-A]
 
 **Established (reference install, `~/TotalAnnihilation`, 1644 compiled feature
 definitions).** The two halves of §5's payout are not symmetric in the shipped
@@ -5155,8 +4931,8 @@ data, and the difference is what a player sees:
   No shipped definition pays both.
 * `damage` is unrelated to the countdown, and the data says so plainly:
   `tree1` has `damage 0` and still takes `trunc(15 + 250/2) = 140` work, i.e.
-  seventy visits and 140 ticks. The retired "damage value is the completion
-  threshold" reading that §5 corrects would have made every tree instant.
+  seventy visits and 140 ticks; a damage-threshold reading would have made
+  every tree instant.
 
 Two consequences follow for any implementation of §5's phase 5, and both are
 worth stating because getting either wrong is worse than not implementing
@@ -5182,14 +4958,12 @@ truncating each part gives 14. No stock definition authors a negative pool, so
 the difference is unobservable on retail content; it is recorded because the
 integer form an implementation naturally reaches for is the wrong one.
 
-**Unknown — the height byte's TDF key.** §5's phase-1 draw is bounded by "the
-feature definition's height byte". The compiled catalog's `height` key is the
-only height-shaped field on a feature record [02 "Feature record"] and its
-stock range is 0..490, so it is the field this build draws against; whether
-retail reads that key or a derived byte is still open. *Decider:* the feature
-parser's key list against the draw site's operand.
+**Established — the height byte.** §5's phase-1 draw is bounded by the
+feature definition's `height` byte — the parsed `height` key of
+[R-FEAT-01 §1], whose stock range is 0..490 before its byte truncation; there
+is no derived height field.
 
-### Closed — the world-position feature resolver [R-ECO-02 §2] (2026-08-29)
+#### The world-position feature resolver [R-ECO-02 §2]
 
 **Established.** The feature-reclaim executor's "the order's stored position
 resolves to a feature definition index" ([R-WORK-01 §5]) is one small
@@ -5234,19 +5008,20 @@ rather than mutating only the visible team color.
 the target's authored costs, its current health, and its experience:
 
 ```
-base         = clamp(trunc(150
-                         + 0.015              * target.buildcostenergy
-                         + 0.2142857142857    * target.buildcostmetal),
-                     0, 1800)
+base         = min(trunc(150
+                       + 0.015              * target.buildcostenergy
+                       + 0.2142857142857    * target.buildcostmetal),
+                   1800)
 healthScaled = floor((target.health + target.maxdamage) * base
                      / (2 * target.maxdamage))
 killsFactor  = target.kills / 5
 timer        = floor((killsFactor + 10) * healthScaled * 10 / 100)
 ```
 
-There is no observed cap on the experience factor in this handler. A later
-state advances the progress counter by 2 per visit until it reaches the timer;
-that progression is the capture's own timing, not a resource admission.
+There is no lower clamp on `base` and no cap on the experience factor
+([R-WORK-01 §6]). A later state advances the progress counter by 2 per visit
+until it reaches the timer; that progression is the capture's own timing, not
+a resource admission.
 
 **Established fact — no decay or cost while capturing.** The capture order
 itself carries no per-tick resource debit and no decay of the progress
@@ -5260,29 +5035,29 @@ later — the same one-segment/two-tick pattern as reclaim [R-P0-06 §3].
 **Established fact — ownership transfer.** The transfer path validates old and
 new ownership and the unit limits, removes the old relation, allocates a
 finished replacement where one is needed, and copies a narrow table: health,
-remaining fraction, veteran experience, and visual piece and facing fields are
-carried, while alliances, orders, queued work, group membership, and other
-player-level permissions are not. The decremented experience factor for the
-next capture is derived from the target's kill count divided by five using
-integer truncation. Multiple captors operate independently; each has its own
-node and timer, and the first to reach lethal progress wins the transfer.
-**Correction (2026-09-02, [R-WORK-01 §15]):** the kill count is **not**
-copied — "veteran experience" is not carried — and the conditional copy is the
-per-slot stockpiled-round byte; the exact list is in that section.
+remaining fraction, the orientation triple, and — per weapon slot the
+replacement has enabled — the stockpiled-round byte are carried, while
+alliances, orders, queued work, group membership, the kill count and other
+player-level permissions are not ([R-WORK-01 §15] gives the exact list). The
+next capture's experience factor therefore restarts from zero kills. Multiple
+captors operate independently; each has its own node and timer, and the first
+to reach lethal progress wins the transfer.
 
-**Closed residuals — counts, limits, and failure messages.** Capture carries
+**Established fact — counts, limits, and failure messages.** Capture carries
 no resource cost (bounded: no admission call in the handler). The ownership
 replacement increments the new owner's slice count at allocation, with a
 transient double-count until the old victim's death teardown decrements it.
-The failure-message mapping is closed: capture immunity → "That unit cannot
-be captured"; a non-idle victim → "That unit is a cloud of vapor and cannot
-be captured"; a failed transfer → "Capture failed" with the node freed; a
-per-definition limit or pool failure inside the transfer is silent but the
-node still frees. The multi-captor rule is first-wins as described; a later
-captor's stale target handle can alias a reused slot (documented stale-
-handle risk).
+The captions are: capture immunity → `That unit cannot be captured`; a
+target still under construction → `That unit is a cloud of vapor and cannot
+be captured`; `Capture failed` is the executor's shared terminal, raised for a
+null target handle, the terminate/interrupt executor-flag bits, or the
+approach phase's arrival failure — not for a failed transfer, which is
+silent; a per-definition limit or pool failure inside the transfer is silent
+and the node still frees ([R-WORK-01 §6]). The multi-captor rule is
+first-wins as described; a later captor's stale target handle can alias a
+reused slot (documented stale-handle risk).
 
-#### R-WORK-01 §6 — Capture, exactly [R-WORK-01] (2026-08-29)
+#### Capture, exactly [R-WORK-01 §6]
 
 **Established — the admission predicates, in evaluation order.** Phase 0 tests,
 and stops at the first failure:
@@ -5299,12 +5074,12 @@ and stops at the first failure:
 
 Test 5 answers what the second capture reject means: **"a cloud of vapor" is a
 target that is still under construction** — a nanoframe or a partly built unit.
-It is not a mid-death or mid-resurrection state. Test 4 uses the same
-definition bit as test 3, so any unit that can capture cannot be captured; the
-same bit also blocks reclaim [R-WORK-01 §4].
+It is not a mid-death or mid-resurrection state, and not an idleness test — a
+moving, firing or otherwise busy finished unit is captured normally. Test 4
+uses the same definition bit as test 3, so any unit that can capture cannot be
+captured; the same bit also blocks reclaim [R-WORK-01 §4].
 
-**Established — the capture timer, instruction-exact, with a correction to the
-clamp.**
+**Established — the capture timer, instruction-exact.**
 
 ```
 base_f = 0.015 * target.definition.buildcostenergy
@@ -5323,7 +5098,6 @@ killsFactor = (int32)(uint16)target.kills / 5    // signed, truncating
 timer       = ((killsFactor + 10) * healthScaled * 10) / 100   // signed
 ```
 
-The previous text wrote the first step as `clamp(trunc(150 + …), 0, 1800)`.
 There is no lower clamp: the comparison is a single signed test against 1800
 and nothing bounds the value below. It cannot go negative for non-negative
 authored costs, but a negative authored `buildcostenergy`/`buildcostmetal`
@@ -5358,65 +5132,40 @@ progress counter never decays.
 
 **Established — the transfer phase.** It calls the central ownership-transfer
 path with the target and the **builder's player record**, then raises cue slot
-16 with no caption text on the builder, and terminates the order.
+16 with no caption text on the builder, and terminates the order. The transfer
+phase itself has no failure path: a refusal inside the transfer is silent and
+cue slot 16 is raised regardless.
 
 **Established — no randomness.** No phase of the capture executor draws from
 either stream.
 
-**Correction — the failure-message mapping.** The "Closed residuals" paragraph
-above reads "capture immunity → `That unit cannot be captured`; a non-idle
-victim → `That unit is a cloud of vapor and cannot be captured`; a failed
-transfer → `Capture failed` with the node freed". Two thirds of that is wrong.
-The second reject is the under-construction test of predicate 5, not an
-idleness test — a moving, firing or otherwise busy finished unit is captured
-normally. And `Capture failed` is not a transfer-failure message: it is the
-executor's shared terminal, raised before the phase switch when the order's
-target handle is null or when the order pump raises the terminate/interrupt
-executor-flag bits, and again on the approach phase's arrival-failure branch.
-The transfer phase itself has no failure path: it calls the transfer and then
-unconditionally raises cue slot 16 with no text. What remains true is that
-capture immunity is the first reject and that the node is freed in every
-terminal.
+#### The "cloud of vapor" sentinel is the remaining-build fraction compared with literal zero [R-WORK-01 §10]
 
-#### R-WORK-01 §10 — The "cloud of vapor" sentinel is the remaining-build fraction compared with literal zero [R-WORK-01] (2026-09-01)
+**Established — the operand and the constant.** Predicate 5 of
+[R-WORK-01 §6] loads the target's remaining-build fraction — the
+single-precision field the construction step of [R-WORK-01 §1] drives from
+`1.0` toward `0.0`, seeded by the constructor with integer zero for a finished
+unit and `1.0` for a nanoframe — and compares it with a literal
+single-precision `0.0` held in the executable's constant data. The comparison
+is a floating-point compare whose only accepted outcome is *equal*: less,
+greater and unordered all take the reject branch (`That unit is a cloud of
+vapor and cannot be captured`, cue slot 7). Negative zero compares equal and
+is accepted; a NaN in the field would be rejected, but no writer produces
+one. There is no idleness sentinel, no order-state test and no health test in
+this predicate.
 
-RWU-19-5 asked which victim field predicate 5 of [R-WORK-01 §6] compares, and
-against what, because the build tests `Remaining == 0` as a proxy for an
-"idle sentinel".
+**Established — `Remaining == 0` is the retail test.** A `float32` `== 0` has
+exactly this semantics — true for `+0` and `−0`, false for every other value
+including NaN. The "victim immunity" is predicate 4, the **target's** own
+`cancapture` definition bit; the phase-0 ladder has exactly the five
+predicates listed in §6, with no same-owner and no dying-victim reject. Where
+those two exclusions live is [R-WORK-01 §15].
 
-**Established — the operand and the constant.** The predicate loads the
-target's remaining-build fraction — the single-precision field the
-construction step of [R-WORK-01 §1] drives from `1.0` toward `0.0`, seeded by
-the constructor with integer zero for a finished unit and `1.0` for a
-nanoframe — and compares it with a literal single-precision `0.0` held in the
-executable's constant data. The comparison is a floating-point compare whose
-only accepted outcome is *equal*: less, greater and unordered all take the
-reject branch (`That unit is a cloud of vapor and cannot be captured`, cue
-slot 7). Negative zero compares equal and is accepted; a NaN in the field
-would be rejected, but no writer produces one. There is no idleness sentinel,
-no order-state test and no health test in this predicate.
+#### Capture's order-side admission, and the transfer's exact copy list [R-WORK-01 §15]
 
-**Established — `Remaining == 0` is equivalent, not a proxy.** A `float32`
-`== 0` has exactly this semantics — true for `+0` and `−0`, false for every
-other value including NaN — so the build's test is the retail test and its
-marker can be retired. Two other things the build's admission does are
-resolved by [R-WORK-01 §6] itself: the "victim immunity" it could not locate
-is predicate 4, the **target's** own `cancapture` definition bit; and the
-same-owner and dying-victim rejects it adds are not in the phase-0 ladder,
-which has exactly the five predicates listed there. **Unknown:** whether the
-order-side target validation doc 04 owns excludes a same-owner or
-death-latched capture target before the executor runs; the transfer path's
-own validation of old and new ownership ([05 "Capture"], "ownership
-transfer") is the only later refusal established here. *Decider:* static
-trace of the capture order's target admission in the order builder.
-
-#### R-WORK-01 §15 — Capture's order-side admission, and the transfer's exact copy list [R-WORK-01] (2026-09-02) (renumbered from §11, 2026-09-04)
-
-**The order-side admission — Established.** [R-WORK-01 §10]'s Unknown asked
-whether the order builder excludes a same-owner or death-latched target
-before the executor's five-predicate ladder runs. The command resolver's code
-13 ([04 R-ORD-02 §1]) is the whole order-side test: the actor's `cancapture`,
-a target, and **the target's owner record differing from the actor's** — a
+**The order-side admission — Established.** The command resolver's code 13
+([04 R-ORD-02 §1]) is the whole order-side test: the actor's `cancapture`, a
+target, and **the target's owner record differing from the actor's** — a
 same-owner target never becomes a `Capture` order. Before any code's switch
 the resolver rejects a target lacking the alive bit, but it does **not** read
 the death latch (bit 14 of the state word, [04 §5.1]), and the issue helper
@@ -5429,37 +5178,59 @@ is silent (the executor still raises cue slot 16 with no text, §6). So the
 same-owner exclusion belongs at command resolution, the latch exclusion at the
 transfer, and the executor's ladder stays at five.
 
-**The transfer's copy list — Established, correcting the "ownership
-transfer" paragraph above.** That paragraph says the replacement receives
-"health, remaining fraction, veteran experience, and visual piece and facing
-fields". The local branch (new owner's control byte 1 or 2, [R-SHARE-01 §1])
-creates the replacement through the ordinary creator as a **finished** unit
-with the old unit's definition, position and movement-mode bits and the new
-owner's side; clears state bits 18–21 (both standing-order pairs, so the
-replacement starts with neither stance rather than the definition defaults
-the creator had just written); then copies, in order: the 16-bit health, the
-remaining fraction, the orientation triple (bank, heading, pitch), and — for
-each of the three weapon slots, **only when the replacement's slot control
-byte has its enabled bit** — the slot's **stockpiled-round byte** (the
-completed-ammunition byte of "Stockpile production" above). That gated
-per-slot byte is the whole of the "cargo copied conditionally": stockpiled
-rounds follow the unit, slot by slot, wherever the new record has that slot
-enabled. **Nothing else is copied. The kill count is not** — the replacement
-is a fresh record with zero kills, so "veteran experience" is not carried and
-the next capture's kills factor restarts from zero; the transported-cargo
-list, alliances, orders and groups are not carried either. The old unit is
-then killed with a cause-4 packet and a null attacker ([06 §12.1]), and the
-replacement's operational edge bits (activated, cloaked, …) are replayed from
-the old unit's operational byte — the bits it had are set, the bits it lacked
-cleared — through the state-edge setter, so an activated or cloaked unit
-stays so across the transfer. The other branch (old owner control 1 or 2,
-**new owner control 3 — a remote peer** by [R-SHARE-01 §1], not a computer
-player as [04 R-ORD-02 §1]'s "human-to-computer" gloss reads it) creates
-nothing locally: it writes the 150-tick post-capture countdown, clears the
-selected bit, emits the transfer packet (the same fields, the three stockpile
-bytes gated on slot 0's enabled bit alone) and kills the old unit with the
-same cause-4 packet; the replacement is the peer's. That branch is
-multiplayer transport and out of Nanolathe's scope.
+**The transfer's copy list — Established.** The local branch (new owner's
+control byte 1 or 2, [R-SHARE-01 §1]) creates the replacement through the
+ordinary creator as a **finished** unit with the old unit's definition,
+position and movement-mode bits and the new owner's side; clears state bits
+18–21 (both standing-order pairs, so the replacement starts with neither
+stance rather than the definition defaults the creator had just written);
+then copies, in order: the 16-bit health, the remaining fraction, the
+orientation triple (bank, heading, pitch), and — for each of the three weapon
+slots, **only when the replacement's slot control byte has its enabled bit**
+— the slot's **stockpiled-round byte** (the completed-ammunition byte of
+"Stockpile production" above). That gated per-slot byte is the whole of the
+"cargo copied conditionally": stockpiled rounds follow the unit, slot by
+slot, wherever the new record has that slot enabled. **Nothing else is
+copied. The kill count is not** — the replacement is a fresh record with zero
+kills, so "veteran experience" is not carried and the next capture's kills
+factor restarts from zero; the transported-cargo list, alliances, orders and
+groups are not carried either. The old unit is then killed with a cause-4
+packet and a null attacker ([06 §12.1]), and the replacement's operational
+edge bits (activated, cloaked, …) are replayed from the old unit's
+operational byte — the bits it had are set, the bits it lacked cleared —
+through the state-edge setter, so an activated or cloaked unit stays so
+across the transfer. The other branch (old owner control 1 or 2, **new owner
+control 3 — a remote peer** by [R-SHARE-01 §1]) creates nothing locally: it
+writes the 150-tick post-capture countdown, clears the selected bit, emits
+the transfer packet (the same fields, the three stockpile bytes gated on slot
+0's enabled bit alone) and kills the old unit with the same cause-4 packet;
+the replacement is the peer's. That branch is multiplayer transport and out
+of Nanolathe's scope.
+
+#### The capture transfer's local branch moves neither the group word nor the selected bit [R-WORK-01 §14]
+
+**Established (direct read of the transfer routine's local branch, the unit
+constructor's group assignment and its state-word initialization).**
+[R-WORK-01 §15]'s copy list is exhaustive; this names two fields it excludes.
+The replacement is created through the ordinary creator, whose unit-state
+initializer (a) initializes the state word with a mask that **clears bit 4,
+the selected bit** ([07 R-SEL-02A] reads that bit for selection), and (b)
+ends by calling the group assigner with group **0**: the assigner unlinks the
+record from any previous group's member vector (a slot reused from a dead
+unit may still name one), pushes it onto group 0's vector, and writes the
+record's group word to 0. The transfer's local branch then applies its copy
+list — health, remaining fraction, orientation triple, the gated per-slot
+stockpile bytes — and the operational edge replay, and **never reads the
+victim's group word or its selected bit** (the only status bits it carries
+over are the two movement-mode bits passed to the creator, and it clears
+bits 18–21 afterwards). The captor's replacement therefore starts in group 0
+and unselected, whatever the victim was in. The remote-peer branch
+([R-WORK-01 §15]) is the only place the selected bit is touched, and there
+it is cleared on the **victim** before the kill packet, not moved.
+
+For Nanolathe: selection is presentation state the simulation record does not
+carry, and a fresh replacement starts in group 0 like any other new unit, so
+no copy is owed at the transfer seam.
 
 ## Resurrection
 
@@ -5481,8 +5252,9 @@ general construction-speed, repair, reclaim, or capture multiplier.
 carries no energy or metal debit or refund; its only cost is the integer delay
 above, which is the sole use of the 0.3 multiplier in the executable. The
 corpse feature name is truncated at the first underscore character to obtain
-the unit name, then looked up in the definition catalog. One simulation-RNG
-draw is consumed for placement jitter, and the feature is removed before the
+the unit name, then looked up in the definition catalog. One bounded
+simulation draw is consumed in the approach phase for the walk target's
+vertical component ([R-WORK-01 §7]), and the feature is removed before the
 new unit is made alive with remaining fraction zero and health one.
 
 **Established fact — completion.** The integer delay is decremented once per
@@ -5492,35 +5264,36 @@ sets the new unit's remaining fraction to zero and its health to one, and the
 state after that reports completion. Only then is the order classifier invoked,
 and only to build a successor order node.
 
-**Established fact — reverse and deconstruction.** The shared construction
-helper has a distinct reverse arm that grows the remaining fraction instead of
-shrinking it: with a negative worker factor, `newRem = clamp(oldRem −
-worker/buildTime, 0, 1)` rises by `|worker|/buildTime` per visit. The arm
-credits only metal, directly to the target unit's metal production bucket (no
-admission, no energy credit): `refund = metal build cost × (newRem − oldRem)`.
-When the target's owner player is in the special second state, the global
-mode selector scales the credit — selector 0 → half, selector 1 → seven
-tenths — with the same pairing and sign family as the ledger refund and the
-factory cancel-current refund; nothing is inverted. If the remaining fraction
-is clamped to one, the unit kills itself with a kind-9 30000 packet — the
-no-corpse, no-explosion path (severity zero). The arm draws no RNG. In the
-sole real caller the builder and target are the same unit (the GetBuilt
+#### Reverse and deconstruction
+
+**Established.** The shared construction helper has a distinct reverse arm
+that grows the remaining fraction instead of shrinking it: with a negative
+worker factor, `newRem = clamp(oldRem − worker/buildTime, 0, 1)` rises by
+`|worker|/buildTime` per visit. The arm credits only metal, directly to the
+target unit's metal production bucket (no admission, no energy credit):
+`refund = metal build cost × (newRem − oldRem)`. For a computer-player owner
+the credit is halved on easy or scaled to seven tenths on medium — the same
+pairing and sign family as the ledger refund and the factory cancel-current
+refund ([R-ECO-01 §3], [R-ECO-01 §11]). If the remaining fraction is clamped
+to one, the unit kills itself with a kind-9 30000 packet — the no-corpse,
+no-explosion path (severity zero). The arm draws no RNG. In the sole real
+caller the builder and target are the same unit (the GetBuilt
 under-construction wait path passes a negative factor of `−11 × buildTime /
 energyCost` on its 11-tick wake cadence), so "the builder's bucket" and "the
 victim's bucket" coincide. Both arms share the same health
 difference-of-truncations, but their resource paths are distinct.
 
-**Closed residuals — owner selection, corpse eligibility, exhaustion.**
+**Established fact — owner selection, corpse eligibility, exhaustion.**
 Resurrection has no ledger cost (bounded: no admission call in the handler);
 its owner is the builder's owner byte; corpse eligibility is the catalog
 corpse flag plus the underscore-truncated name lookup (a corpse name without
 an underscore fails the lookup with the misspelled failure string); slot or
 per-definition exhaustion prints "Unable to create any more units" with an
 exact 300-tick retry; the feature is removed before the new unit is marked
-alive (remaining zero, health one); one simulation draw is consumed for
-placement jitter.
+alive (remaining zero, health one); the one simulation draw is the approach
+phase's walk-target draw, not a placement draw.
 
-#### R-WORK-01 §7 — Resurrection, exactly [R-WORK-01] (2026-08-29)
+#### Resurrection, exactly [R-WORK-01 §7]
 
 **Established — the phases.** The order's stored position resolves to a feature
 definition index before the phase switch (for phases 0 through 5); `0xffff`
@@ -5575,51 +5348,41 @@ resurrection completes immediately with no nano emitted at all. A negative
 authored `buildtime` gives a negative delay, which never equals zero, so the
 wait state repeats forever, emitting one segment per tick.
 
-**Established — the width of the stored delay (2026-09-02, RWU-19-40).**
-"Zero low word" above means the low **32-bit half** of the helper's 64-bit
-result, not a 16-bit word: the truncating helper performs one signed 64-bit
-integer store ([01 R-DET-01 §1]), and the resurrection state keeps its low
-32 bits as a plain signed 32-bit integer in the order record's delay field —
-the same 32-bit field phase 4 decrements and tests against zero. An infinity
-(positive `buildtime`, zero quantum) and a NaN (zero `buildtime` and zero
-quantum) both produce the indefinite integer, whose low 32 bits are zero, so
-the stored delay is exactly `0` in both cases; there is no saturation and no
-negative sentinel. An implementation must return `0` on this edge — a
-minimum-integer sentinel is wrong in both value and sign and would make the
-wait state repeat forever instead of completing at once.
+**Established — the width of the stored delay.** "Zero low word" above means
+the low **32-bit half** of the helper's 64-bit result, not a 16-bit word: the
+truncating helper performs one signed 64-bit integer store
+([01 R-DET-01 §1]), and the resurrection state keeps its low 32 bits as a
+plain signed 32-bit integer in the order record's delay field — the same
+32-bit field phase 4 decrements and tests against zero. An infinity (positive
+`buildtime`, zero quantum) and a NaN (zero `buildtime` and zero quantum) both
+produce the indefinite integer, whose low 32 bits are zero, so the stored
+delay is exactly `0` in both cases; there is no saturation and no negative
+sentinel. An implementation must return `0` on this edge — a minimum-integer
+sentinel is wrong in both value and sign and would make the wait state repeat
+forever instead of completing at once.
 
 **Established — the transplant.** Phase 5 allocates a unit of the resolved
 definition at the feature's recorded position and owner byte. If allocation
 fails — slot pool or per-definition limit — it prints
 `Unable to create any more units` on slot 7 and reschedules exactly 300 ticks
 without advancing. On success it re-reads the terrain cell, refuses when the
-cell's feature id is at or above the reserved-sentinel range, copies two fields
-of the live feature record (a position word and a facing word) into the new
-unit, removes the feature, emits the deterministic multiplayer state command
-when the session requires one, and then sets the new unit's remaining fraction
-to `0` and its health to `1`. The unit is therefore *finished* but at one hit
-point; nothing repairs it as part of the order.
-
-**Correction (2026-09-02, RWU-19-42) — the two copied fields.** The
-paragraph above says phase 5 "copies two fields of the live feature record
-(a position word and a facing word)". Neither is a position. The two copies
-are one 32-bit store and one 16-bit store, and together they move the
-feature record's **orientation triple** — bank and heading as the 32-bit
-pair, pitch as the 16-bit word — into the new unit's bank, heading and
-pitch words, overwriting whatever the allocator seeded. No position is
-copied: the unit was allocated at the feature's recorded position two steps
-earlier. The triple is the one the corpse placement stored from the dying
-unit ("Feature instance and terrain cell"), so a resurrected unit stands
-exactly as its predecessor fell — heading included — while a resurrection
-of a map-authored or successor feature (whose triple is zero) faces heading
-0 with no bank or pitch. [04 R-ORD-01 §5]'s "stored heading pair" is
-corrected to the same triple. **Established.**
+cell's feature id is at or above the reserved-sentinel range, copies the live
+feature record's **orientation triple** into the new unit — bank and heading
+as one 32-bit store, pitch as a 16-bit store, overwriting whatever the
+allocator seeded; no position is copied, the unit having been allocated at
+the feature's recorded position two steps earlier — removes the feature,
+emits the deterministic multiplayer state command when the session requires
+one, and then sets the new unit's remaining fraction to `0` and its health to
+`1`. The unit is therefore *finished* but at one hit point; nothing repairs it
+as part of the order. The triple is the one the corpse placement stored from
+the dying unit ("Feature instance and terrain cell"), so a resurrected unit
+stands exactly as its predecessor fell — heading included — while a
+resurrection of a map-authored or successor feature (whose triple is zero)
+faces heading 0 with no bank or pitch.
 
 **Established — the caption ordering.** `Resurrection complete` is raised in
 phase 6, i.e. **after** phase 5 has already allocated the replacement unit and
 removed the feature, and **before** phase 6 allocates the successor order node.
-The string-triage note that it is "emitted before the replacement object is
-allocated" refers to that successor order node, not to the unit.
 
 **Established — the two spellings.** The image contains two distinct failure
 strings for this order: `Resurrection failed` for "there is no feature at the
@@ -5632,8 +5395,7 @@ debit or refund; there is no admission call anywhere in the executor. Exactly
 one bounded simulation draw is consumed, in phase 1, for the vertical component
 of the walk target; it is an approach-point draw, not a placement draw, and it
 is skipped without advancing the seed when the feature's height byte is below
-two [01 §8]. Earlier text describing it as "placement jitter" placed it in the
-wrong phase.
+two [01 §8].
 
 ## Feature catalog and placement
 
@@ -5647,7 +5409,7 @@ Definitions can select either a 3D object or an animated image sequence.
 Presentation choice does not change the authoritative footprint, blocking,
 reclaim, or damage fields.
 
-#### R-FEAT-01 §1 — The feature parser, exactly: fields, widths, defaults, and the key census [R-FEAT-01] (2026-08-29)
+#### The feature parser, exactly: fields, widths, defaults, and the key census [R-FEAT-01 §1]
 
 **Established — one parser, one record shape.** Every feature definition is
 compiled by a single parser that takes a section name, finds the section in
@@ -5670,7 +5432,7 @@ noted; string keys through the string getter with an empty default.
 | section name | 128-byte name | — | successor resolution, save/load name box `[R-SAVE-FEATURE-01]`, the dragons-teeth/fortification name test below |
 | `Description` | 20-byte string | empty | presentation only (hover text); no simulation reader |
 | `footprintx`, `footprintz` | int16 each | 0 | placement, teardown, collision, reclaim box, blast centre, occupancy notify (§3, §4, `[R-WORK-01 §5]`) |
-| `height` | byte | 0 | reclaim walk-target draw bound `[R-WORK-01 §5]`; **also the resurrection order's phase 1 approach-point draw bound** — Resurrect shares Reclaim's feature-lookup and walk-target mechanism, and its sole simulation-RNG draw is `boundedDraw(featureHeight)`, not a draw against any separate "spread" or "jitter" byte `[R-WORK-01 §7]` (WU-19-143: closes the code-side `TODO(T25)` that had guessed at `resurrectspread`/`jitterspread` feature keys — neither exists; the feature parser's exhaustive key census below reads no such key at all, and a full census of every stock feature section confirms none is ever authored); the projectile feature-collision test `projectileHeight < terrainHeightByte + height` (doc 06); renderer fog-memory rule (`height < 10`, doc 03) |
+| `height` | byte | 0 | reclaim walk-target draw bound `[R-WORK-01 §5]`; **also the resurrection order's phase 1 approach-point draw bound** — Resurrect shares Reclaim's feature-lookup and walk-target mechanism, and its sole simulation-RNG draw is `boundedDraw(featureHeight)`, not a draw against any separate "spread" or "jitter" byte `[R-WORK-01 §7]` (no `resurrectspread`/`jitterspread` key exists: this key census reads none, and no stock feature section authors one); the projectile feature-collision test `projectileHeight < terrainHeightByte + height` (doc 06); renderer fog-memory rule (`height < 10`, doc 03) |
 | `object` | model handle | — | present ⇒ 3D feature: the flag word's bit 0 is **cleared** and every `seqname*` key below is **skipped** |
 | `filename` | GAF bank handle | — | sprite features only (bit 0 set); the bank is shared: if an earlier catalog record already loaded the same 16-character name the handle is reused (`REUSE`), else `anims\<filename>.gaf` is loaded |
 | `seqname`, `seqnameshad` | sequence handle | 0 | renderer (rest image and shadow); when `animating=1` they also seed the per-definition rest cursors (§10) |
@@ -5692,7 +5454,7 @@ noted; string keys through the string getter with an empty default.
 | `indestructible` | flag bit 9 | 0 | damage entry (§8), teardown honor test (§4), yard-map bit 6 `[04 §6.4]`, metal-byte seeding `[R-PROD-01 §6]` |
 | `nodisplayinfo` | flag bit 10 | 0 | presentation only (hover-info suppression) |
 | `nodrawundergray` | flag bit 11 | 0 | renderer fog-memory rule (doc 03); also **forced set** when the section name equals `DragonsTeeth`, `DragonsTeeth_Core`, `Fortification`, or `Fortification_Core` (case-insensitive) |
-| `sparktime` | read through the **float** getter (default `0.0`), truncated toward zero, stored int16 | 0 | ignition countdown (§9) |
+| `sparktime` | read through the **float** getter (default `0.0`), multiplied by 30.0, truncated toward zero, stored int16 ticks (§9) | 0 | ignition countdown (§9) |
 | `burnweapon` | weapon handle by name | 0 | burn event (§11) |
 
 **Established — keys with no reader (reader census: none).** The executable
@@ -5741,14 +5503,15 @@ a missing asset and is not one: it compiles `animating=1`, `seqname=geotherm`,
 `filename=geotherm`, and `anims/geotherm.gaf` holds one entry, `geotherm`, of
 one frame, **one pixel by one pixel**. A `geothermal` feature is the placement
 marker the geothermal-plant build test reads, not artwork; the vent a player
-sees under it is the map's own tile art. Arm campaign `AC04` (`MISSION3`)
-places three `geothermal` instances and no other vent-family feature, so that
-mission renders no vent sprite whatever the presentation layer does. The
-multi-frame gas plants are placed by nine stock maps, of which `Gasbag Forests`
-(1026 instances) and `Gasplant Plain` (615) are the dense ones — those are the
-maps on which a feature animation is observable at all.
+sees under it is the map's own tile art plus the steam strip of
+[R-ECO-02 §3]. Arm campaign `AC04` (`MISSION3`) places three `geothermal`
+instances and no other vent-family feature, so that mission renders no vent
+sprite whatever the presentation layer does. The multi-frame gas plants are
+placed by nine stock maps, of which `Gasbag Forests` (1026 instances) and
+`Gasplant Plain` (615) are the dense ones — those are the maps on which a
+feature animation is observable at all.
 
-#### R-FEAT-01 §2 — Catalog build order and the successor pass [R-FEAT-01] (2026-08-29)
+#### Catalog build order and the successor pass [R-FEAT-01 §2]
 
 **Established.** At map load the loader allocates the live-instance arena
 (2048 slots of 48 bytes, zero-filled once; three doubly-linked lists — active,
@@ -5797,7 +5560,7 @@ Features can originate in the terrain file, the mission file, unit death,
 burning, reclaim successor transitions, or other simulation effects. All
 sources converge on the same placement service.
 
-#### R-FEAT-01 §3 — The stamp service, exactly: the dense-pack rule, height snap, and the pool edge [R-FEAT-01] (2026-08-29)
+#### The stamp service, exactly: the dense-pack rule, height snap, and the pool edge [R-FEAT-01 §3]
 
 **Established.** Every feature creation — terrain file, mission file, corpse,
 successor, reproduction, save reload — goes through one stamp routine taking
@@ -5852,10 +5615,11 @@ and returning the live-instance record or 0. In order:
    word `0xFFFE`, the byte pair `(dz, dx)` = its offset from the anchor, and
    its instance bit cleared. The anchor itself keeps `(0, 0)` untouched from
    whatever was there; every reader of a fringe walks back by `dz·mapWidth +
-   dx` cells.
+   dx` cells. The write is unconditional and reads nothing from the cell
+   first (§17).
 8. If the definition's geothermal bit is set, the steam-strip producer of
-   `[R-STRIP-01 §1]` is started at the same centre/height position as step
-   4 (computed the same way when no position was supplied).
+   [R-ECO-02 §3] is started at the same centre/height position as step 4
+   (computed the same way when no position was supplied).
 9. The occupancy-listener notify is called with the anchor `(x, z)` and the
    footprint pair. Each registered occupancy map re-classifies the cells
    `x .. x+footprintx` by `z .. z+footprintz` **inclusive** — one cell of
@@ -5866,44 +5630,85 @@ and returning the live-instance record or 0. In order:
    never enter this path.
 
 **Established — map-load placement and anchoring.** The terrain loader
-stamps every TNT feature cell in row-major cell order (`-4` → void marker,
-any ordinal below the table count → stamp with a null position, so the
-Y snap above applies), then the mission file's feature list in file order.
-A mission-file entry names a feature and a cell; for a **3D** definition the
-anchor is `(cellX − footprintx/2, cellZ − footprintz/2)` with truncating
-division (the entry is centre-referenced), for a sprite definition the anchor
-is the cell itself. A mission-file name not yet compiled is compiled on the
-spot. Both loaders pass nibble 10. The reload path is `[R-SAVE-FEATURE-01]`.
+stamps every TNT feature cell in row-major cell order (`-4` → void marker;
+any word strictly below the format's reserved band — `0xFFFB` for the
+word-attribute TNT layout, `0xFC` for the byte-attribute layout → stamp with
+a null position, so the Y snap above applies; a word below the band but at
+or above the compiled table count is handed to the stamp unchecked, and what
+the stamp does with it is **Unknown** — no stock map was checked for one),
+then the mission file's feature list in file order. A mission-file entry
+names a feature and a cell; for a **3D** definition the anchor is
+`(cellX − footprintx/2, cellZ − footprintz/2)` with truncating division (the
+entry is centre-referenced), for a sprite definition the anchor is the cell
+itself. A mission-file name not yet compiled is compiled on the spot. Both
+loaders pass nibble 10. The reload path is `[R-SAVE-FEATURE-01]`.
 
-#### R-FEAT-01 §3-A — Dense pack over a fringe cell, restated [R-FEAT-01] (2026-09-02)
+#### Dense pack over a fringe cell, restated [R-FEAT-01 §3-A]
 
-A code marker asks what retail does when a footprint covers a *partial* cell
-— a `0xFFFE` fringe cell — of a different live feature. Step 3 above already
-answers it and was re-verified RWU-19-22 (Established): the covered-cell
-test is "feature word not `0xFFFF`", so a fringe cell is torn down like an
-anchor. The teardown (§4) walks the fringe back to its anchor and applies
-its rule to the **anchor's** definition: an indestructible anchor returns 0
-and the stamp fails at once, leaving the cells torn so far torn; any other
-anchor is freed and its whole footprint — anchor and every `0xFFFE` cell —
-cleared to `0xFFFF`, and the new feature's stamp proceeds. Two consequences
-for a loader that derives fringe ownership itself: a later footprint that
-overlaps an earlier non-indestructible feature **replaces** it entirely (the
-earlier anchor does not survive with a truncated fringe), and a later
-footprint that overlaps an indestructible feature's fringe is **not
+**Established.** When a footprint covers a *partial* cell — a `0xFFFE`
+fringe cell — of a different live feature, step 3 above applies: the
+covered-cell test is "feature word not `0xFFFF`", so a fringe cell is torn
+down like an anchor. The teardown (§4) walks the fringe back to its anchor
+and applies its rule to the **anchor's** definition: an indestructible anchor
+returns 0 and the stamp fails at once, leaving the cells torn so far torn;
+any other anchor is freed and its whole footprint — anchor and every
+`0xFFFE` cell — cleared to `0xFFFF`, and the new feature's stamp proceeds.
+Two consequences for a loader that derives fringe ownership itself: a later
+footprint that overlaps an earlier non-indestructible feature **replaces** it
+entirely (the earlier anchor does not survive with a truncated fringe), and
+a later footprint that overlaps an indestructible feature's fringe is **not
 stamped** (its own anchor cell is not written). Skipping the contested cell
 and keeping both anchors is neither of retail's outcomes.
 
-#### R-FEAT-01 §4 — Teardown, exactly, and two corrections [R-FEAT-01] (2026-08-29)
+#### Bootstrap fringe synthesis: every covered cell becomes fringe, whatever the TNT word says [R-FEAT-01 §17]
 
-**Correction.** The flag table under "Definition flags, teardown, and the
-Great Divide partition" said `autoreclaimable` is a "reuse-suppression;
-protects the cell from being implicitly cleared by a colliding stamp unless
-honored explicitly". That is the wrong bit: the teardown's honor test reads
-the **indestructible** flag (bit 9), and `autoreclaimable` (bit 8) has
-exactly one reader, the area-reclaim candidate scan (§6). The same passage
-also said the cleared fringe cells have "the signed offset bytes poisoned";
-they are not touched — only the feature word and the instance bit are
-written.
+**Established** (static: the terrain loader's plot allocation and its two
+attribute passes; the stamp's fringe loop).
+
+**The loader never copies the TNT feature word into the plot.** The plot
+grid is allocated with every cell's feature word set to `0xFFFF`, its slot
+word zero and its metal byte seeded. Pass 1, row-major over the TNT attribute
+array: the cell's height byte is copied; the control byte's bits are set to
+the loader's constant; and when the authored word is the void value the void
+marker is stamped (§3 step 1). Pass 2, row-major again and **skipped when a
+save file is open** (the reload path stamps from the save instead,
+[R-SAVE-FEATURE-01]): when the authored word is **strictly below the format's
+reserved band** — `0xFFFB` for the word-attribute TNT layout, `0xFC` for the
+byte-attribute layout — the stamp is called with that ordinal, a null
+position and nibble 10. Then the mission-file list (§3). The authored words
+`0xFFFE`, `0xFFFF` and the rest of the reserved band are never examined.
+
+**The stamp's fringe write is unconditional.** After the dense-pack loop
+(§3 step 3) and the anchor write (steps 4–6), the stamp walks the footprint
+`dz` outer, `dx` inner, and for every cell except `(0, 0)` writes: feature
+word `:= 0xFFFE`, offset bytes `:= (dz, dx)`, instance bit cleared. It reads
+nothing from the cell first — neither its current feature word nor anything
+authored. The per-cell rule is exactly: *covered and not the anchor → fringe,
+always.*
+
+**Consequences at bootstrap.**
+
+1. Because the grid starts all-empty and the TNT word is never copied, a
+   covered cell authored `0xFFFF` is stamped `0xFFFE` exactly like one
+   authored `0xFFFE`. The authored fringe words are redundant data; retail
+   derives fringe entirely from the anchors' footprints.
+2. An authored `0xFFFE` that no stamped footprint covers is never written and
+   stays `0xFFFF` — the same outcome an implementation reaches by clearing
+   uncovered raw fringe after the pass.
+3. A covered cell whose authored word is itself an ordinal is a second
+   anchor, stamped later in row-major order from the attribute array (not
+   from the grid, which by then holds the first feature's fringe); its
+   dense-pack loop tears the first feature down (§3-A). The later anchor
+   wins, as §3 says.
+
+An implementation that leaves an authored-empty covered cell empty diverges
+from retail in every reader that hops a fringe to its anchor — the
+passability classifier `[R-DOC04-B]`, the reclaim scan (§6), the damage
+entry (§8) and the teardown (§4): on such a map those cells are neither
+blocked, reclaimable nor cleared with their feature. A bootstrap must write
+fringe over every covered cell.
+
+#### Teardown, exactly [R-FEAT-01 §4]
 
 **Established — the routine.** `teardown(cell, honor)`:
 
@@ -5913,6 +5718,8 @@ written.
 3. If `honor == 0` and the definition is indestructible, return 0. Every
    caller in the executable passes `honor == 0`; the honoring variant is
    never used, so **an indestructible feature is never removed by any path**.
+   The honor test reads the **indestructible** flag (bit 9) and nothing else;
+   `autoreclaimable` (bit 8) plays no part in teardown (§6).
 4. If the anchor's instance bit is set: for a 3D definition release the model
    instance; then move the slot from whichever list holds it to the **head**
    of the free list (LIFO).
@@ -5920,7 +5727,7 @@ written.
 6. For every cell of the definition's footprint rectangle from the anchor,
    **only if that cell currently holds `0xFFFE`**, write `0xFFFF` and clear
    its instance bit. Cells the footprint covers that meanwhile hold something
-   else are left alone.
+   else are left alone; the cleared cells' offset bytes are not touched.
 7. Notify the occupancy listeners with the same inclusive-margin rectangle
    as the stamp. Return 1.
 
@@ -5928,76 +5735,49 @@ The accumulated-damage word of an instance-less anchor is not cleared here;
 the next stamp on that cell overwrites it (§3 step 5), so damage never leaks
 to a successor.
 
-### Closed — the geothermal steam producer, and a correction to the strip census [R-ECO-02 §3] (2026-08-29)
+#### The geothermal steam producer [R-ECO-02 §3]
 
-**Established.** Step 8 above names "the steam-strip producer of
-[R-STRIP-01 §1]". Reading the producer fixes what step 8 left to the census,
-and finds the census wrong on one row:
+**Established.** Step 8 of the stamp starts the steam-strip producer for a
+definition with the geothermal bit:
 
 - The producer is called with the centre/height position of step 4 and the
-  literal strip index **4**. [03 R-STRIP-01 §1] lists strip 4 as "none — the
-  retired crater/decal literal 4 is retracted … always empty". That row is
-  wrong: the retired census's "literal 4" was this site, and every placed
-  geothermal feature appends one object to strip 4. *Correction* to be
-  applied in doc 03 (cross-document; this document only records the
-  finding).
-- The producer follows the common producer shape of [R-STRIP-01 §1]: it
-  returns without effect when the pool-disable byte is set (never, in
-  retail — that byte has no writer), allocates one 52-byte object from the
-  shared strip pool (exhaustion drops the steam silently), constructs it as
-  the **smoke-puff** class of [03 R-FX-01 §3], calls the class's init virtual
-  with the position and the three literals `5`, `0`, `150`, evicts the oldest
-  object of strip 4 when the pre-insert count exceeds 400, and appends.
-
-  **Correction (2026-08-31).** This paragraph called the class "the
-  flame-family class". It is not: the producer constructs the smoke-puff
-  class, whose vtable is the one holding the three-argument init below. The
-  two families differ in what they blit and how their sub-records expire, so
-  the misattribution would have given a vent flame segments marching toward a
-  target point instead of puffs rising in place.
-
-  **Correction (2026-09-01) — the third literal is not a lifetime, and the
-  plume is perpetual.** The paragraph below closes with "A vent therefore
-  produces thirty-one puffs over five seconds — one from the constructor and
-  one every fifth tick while the next-spawn tick is still inside the window —
-  and then stops. There is no perpetual plume." Both sentences are withdrawn.
-  A retail capture shows a vent's plume still running eighteen seconds in, and
-  the class's own virtuals say why: its removal verdict is a body that returns
-  a constant false, and its spawn predicate is a bare "next-spawn tick at or
-  before the global tick" with no window term. The stored `currentTick + 150`
-  is read by nothing but the spawn's capacity reservation. A vent lays one puff
-  at construction and one every fifth tick for the rest of the battle; what
-  thins the plume to a handful of puffs is each puff retiring when its own
-  animation cursor reaches its own randomly drawn last frame. Full derivation
-  and the corrected update in [03 R-FX-01 §3 addendum]. Everything else in the
-  paragraph — the interval, the frame hold, the class, the single call site —
-  stands.
-
-  **Scope of that correction (2026-09-01).** It is about the vent's own class
-  and no other. The strips-5/9 smoke puffer is a **different class** whose
-  removal verdict and spawn gate both keep the window term, so its producers'
-  stored deadlines are real lifetimes; do not carry this paragraph's reading
-  across to impact, muzzle, trail or burning-feature smoke. The vent also
-  drifts upward four times as fast as those do. See
-  [03 R-FX-01 §3 addendum §B] for the two vtables side by side.
-
-  **Closed (2026-08-31) — the three literals.** The Unknown recorded here
-  asked which init parameter each literal binds to. Reading the class's init
-  virtual settles it: the first argument after the position is the **spawn
-  interval** (5 ticks), the second is the **animation frame hold** (0, which
-  the constructor defaults to 7, exactly as [R-STRIP-01 §1]'s tail note
-  says of the smoke family), and the third is the container **lifetime**
-  (150 ticks), stored as `deadline = currentTick + lifetime`. The init also
+  literal strip index **4**: every placed geothermal feature appends one
+  object to strip 4, which no other producer uses ([03 R-STRIP-01 §1] owns
+  the census).
+- The producer follows the common producer shape: it returns without effect
+  when the pool-disable byte is set (never, in retail — that byte has no
+  writer), allocates one 52-byte object from the shared strip pool
+  (exhaustion drops the steam silently), constructs it as the **vent's
+  smoke-puff class** — a class of its own, distinct from the strips-5/9
+  smoke puffer that serves impact, muzzle, trail and burning-feature smoke
+  ([03 R-FX-01 §3] tabulates the two; [03 R-FX-02 §3] is the vent's class)
+  — calls the class's init virtual with the position and the three literals
+  `5`, `0`, `150`, evicts the oldest object of strip 4 when the pre-insert
+  count exceeds 400, and appends.
+- The three literals bind, in order, to the **spawn interval** (5 ticks),
+  the **animation frame hold** (0, which the constructor defaults to 7), and
+  a **lifetime** stored as `deadline = currentTick + 150`. The init also
   stores the bound entry's frame count less one, and spawns one puff of its
-  own before returning. A vent therefore produces thirty-one puffs over five
-  seconds — one from the constructor and one every fifth tick while the
-  next-spawn tick is still inside the window — and then stops. There is no
-  perpetual plume.
+  own before returning.
+- **The plume is perpetual.** For the vent's class the stored deadline is
+  only the spawn's capacity-reservation hint: the class's removal verdict is
+  a body returning constant false, and its spawn predicate is a bare
+  "next-spawn tick at or before the global tick" with no window term
+  ([03 R-FX-01 §3]; corroborated by a retail capture with the plume still
+  running eighteen seconds in). A vent therefore lays one puff at
+  construction and one every fifth tick for the rest of the battle; what
+  thins the plume to a handful of puffs is each puff retiring when its own
+  animation cursor reaches its own randomly drawn last frame. The vent's
+  class also drifts its puffs upward four times as fast as the strips-5/9
+  puffer does. Do not carry this reading across to impact, muzzle, trail or
+  burning-feature smoke, whose containers keep the window term and whose
+  stored deadlines are real lifetimes ([R-FEAT-01 §16] for the burning
+  feature's puff).
 - The producer is reached only from the feature stamp (step 8); a wreck or
   reload that re-stamps a geothermal definition produces a new steam object
-  each time, and nothing removes the old one except its own lifetime, so a
-  vent stamped repeatedly in one session accumulates strip-4 objects up to
-  the 401 cap.
+  each time, and nothing removes the old one but the strip's own eviction,
+  so a vent stamped repeatedly in one session accumulates strip-4 objects up
+  to the 401 cap.
 
 ### Removal and successor replacement
 
@@ -6011,16 +5791,14 @@ The successor used depends on cause:
 - burning uses the burnt successor;
 - reclaim completion uses the reclaimed successor.
 
-Cause-specific priority when multiple transitions occur during the same tick is
-partially closed: burning instances reject reclaim and ignore further blast
-(no applicable accumulation branch), blast damage accumulates on
-instance-less cells against the definition's hit points, and a dead hop
-(fringe whose anchor resolves empty) is the one unresolvable case the
-blocking test lets through. The full precedence ordering when damage, burn
-completion, and reclaim arrive in the same tick beyond those rules is not
-fully closed.
+Same-tick precedence between damage, burn completion and reclaim is settled
+by the anchor's instance-attached bit and the phase order ([R-FEAT-01 §5]):
+burning instances reject reclaim and ignore further blast (no applicable
+accumulation branch), blast damage accumulates on instance-less cells
+against the definition's hit points, and a dead hop (fringe whose anchor
+resolves empty) is the one unresolvable case the blocking test lets through.
 
-#### R-FEAT-01 §5 — Transition and replacement, exactly, and same-tick precedence closed [R-FEAT-01] (2026-08-29)
+#### Transition and replacement, exactly, and same-tick precedence [R-FEAT-01 §5]
 
 **Established — two routines.** A *transition* `(x, z, isReclaim)` is what
 damage death (§8), the reclaim payout `[R-WORK-01 §5]`, the multiplayer
@@ -6058,11 +5836,8 @@ teardown again on the still-occupied anchor and fails. The damage entry
 already rejects indestructible definitions, so in practice this only guards
 the reclaim/reload paths.
 
-**Established — same-tick precedence, closed.** The earlier text left "the
-full precedence ordering when damage, burn completion, and reclaim arrive in
-the same tick" open. It is now closed by construction, because every cause is
-serialized through the anchor's **instance-attached bit** and the phase order
-of `[01 §4.4]`:
+**Established — same-tick precedence.** Every cause is serialized through the
+anchor's **instance-attached bit** and the phase order of `[01 §4.4]`:
 
 * Within a tick, weapon impacts (projectile phase) run before the feature
   phase; order handlers (reclaim payout) run in the unit phase, also before
@@ -6096,13 +5871,13 @@ reclaim"):
 | Flag | TDF default | Retail meaning |
 |---|---|---|
 | `reclaimable` | `0` | command-gated; only when `1` can a builder enter the reclaim state |
-| `autoreclaimable` | `1` | reuse-suppression; protects the cell from being implicitly cleared by a colliding stamp unless honored explicitly |
+| `autoreclaimable` | `1` | read only by the area-reclaim candidate scan ([R-FEAT-01 §6]); it is not a teardown or stamp guard, so a colliding stamp clears the feature whatever its value |
 | `indestructible` | `0` | weapon-damage and teardown guard; when `1` damage is ignored and teardown returns without clearing |
 | `blocking` | `0` | pathway/yard map predicate; when `1` the footprint is treated as blocked for generic placement |
 | `geothermal` | `0` | footprint-class flag; a `YardMap 'G'` requirement is satisfied only by a covered cell holding this flag (yard-map bit 7, `[04 §6.4]`) |
 
 **Established — teardown frees the footprint.** Teardown clears the anchor to
-`0xFFFF` and each fringe to `0xFFFF` with the signed offset bytes poisoned,
+`0xFFFF` and each fringe to `0xFFFF` (the offset bytes are left untouched),
 then notifies derived occupancy — the cleared cells become free. If a
 successor was stamped (typically a `1×1` smudge for trees/shrubs) the newly
 stamped residue may itself be non-blocking and non-reclaimable, so a reclaimed
@@ -6139,7 +5914,7 @@ and another plant can reuse the same cell without a restore step. Feature
 metal at the definition is reclaim reward only and does not drive extraction
 ("Terrain metal extraction").
 
-#### R-FEAT-01 §6 — Flag reader census, and the two flags that do less than their names [R-FEAT-01] (2026-08-29)
+#### Flag reader census, and the two flags that do less than their names [R-FEAT-01 §6]
 
 **Established — `blocking` has exactly one consumer.** The passability
 classifier of `[R-DOC04-B]` (called from the occupancy notify of §3/§4 and
@@ -6182,15 +5957,12 @@ and the area-reclaim scan above.
 and the steam-strip start at placement (§3). No wreck-transition rule reads
 it; see §7 for what happens to a corpse over a vent.
 
-#### R-FEAT-01 §7 — Metal deposits seed the metal byte, and vents versus wrecks [R-FEAT-01] (2026-08-29)
+#### Metal deposits seed the metal byte, and vents versus wrecks [R-FEAT-01 §7]
 
-**Correction to [R-PROD-01 §6].** That section said, of the canonical
-terrain version, "It never touches the metal byte, so every cell keeps the
-uniform seed. There is **no per-cell metal raster**". The bounded negative
-over the *terrain loader* stands, but the conclusion does not: a separate
-map-load pass, run after every terrain-file and mission-file feature has
-been stamped, walks every plot cell and, for each **anchor** cell whose
-definition has `metal ≠ 0` **and** `indestructible = 1`, writes
+**Established — the deposit pass.** After every terrain-file and mission-file
+feature has been stamped, a separate map-load pass walks every plot cell and,
+for each **anchor** cell whose definition has `metal ≠ 0` **and**
+`indestructible = 1`, writes
 
 ```
 cell.metalByte := (uint8) trunc( definition.metal )      ; float → int, low byte
@@ -6198,15 +5970,17 @@ cell.metalByte := (uint8) trunc( definition.metal )      ; float → int, low by
 
 into every cell of that definition's footprint (bounds-checked per cell;
 off-map cells skipped). This is the only writer of the metal byte after the
-uniform seed, and it is why `RockMetal*` deposits authored `metal=86..223`,
-`indestructible=1` are the extractor economy: the extractor's footprint sum
-`[R-PROD-01 §6]` reads these bytes. A reclaimable rock with `metal=100`
-(`Rock1a`, `indestructible=0`) does **not** seed — its metal is reclaim
-reward only. The sequence is: uniform `SurfaceMetal` seed → feature stamps →
-this pass, so a deposit overrides the uniform seed inside its footprint and
-nowhere else. Removing or replacing a feature later never rewrites the byte
-(the deposit is indestructible anyway), and a mission-placed deposit seeds
-exactly like a terrain-file one because the pass runs after both.
+uniform seed of [R-PROD-01 §6] — the terrain loader itself never touches
+the byte on a canonical map — and it is why `RockMetal*` deposits authored
+`metal=86..223`, `indestructible=1` are the extractor economy: the
+extractor's footprint sum `[R-PROD-01 §6]` reads these bytes. A reclaimable
+rock with `metal=100` (`Rock1a`, `indestructible=0`) does **not** seed — its
+metal is reclaim reward only. The sequence is: uniform `SurfaceMetal` seed →
+feature stamps → this pass, so a deposit overrides the uniform seed inside
+its footprint and nowhere else. Removing or replacing a feature later never
+rewrites the byte (the deposit is indestructible anyway), and a
+mission-placed deposit seeds exactly like a terrain-file one because the
+pass runs after both.
 
 **Established — wrecks at geothermal vents.** There is no vent-specific
 rule. A corpse whose footprint would cover a vent cell fails at the stamp's
@@ -6217,8 +5991,7 @@ corpse adjacent to a vent is unaffected. The vent itself is never damaged
 ignition on that), never reclaims (`reclaimable=0`), never burns by spread
 (the spread test reads the candidate's `flamable`), and is never torn down by
 any stamp; so its cell's feature word is constant for the whole session and
-the `YardMap 'G'` test is stable. This closes the "wreck transitions at
-geothermal vent cells" item.
+the `YardMap 'G'` test is stable.
 
 ## Wreckage and corpse production
 
@@ -6264,12 +6037,14 @@ burning, records the tile, plays the burn sound at the tile's world position,
 and draws the burn countdown as
 
 ```
-countdown = simulationRandom(sparktime / 2) + (sparktime / 2)
+sparkTicks = trunc(sparktime × 30)
+countdown  = simulationRandom(sparkTicks / 2) + (sparkTicks / 2)
 ```
 
 with a **single** draw from the simulation stream. The shipped spark time of 5
-therefore yields a countdown of 2 or 3. A remotely-triggered ignition sets a
-suppression flag that prevents this instance from spreading.
+stores 150 ticks and therefore yields a countdown of 75..149 feature-phase
+visits — 2.5 to 5 seconds ([R-FEAT-01 §9]). A remotely-triggered ignition
+sets a suppression flag that prevents this instance from spreading.
 
 **Established fact — burning tick.** The feature phase computes one smoke flag
 per call, true when the global tick is a multiple of three, and shares it
@@ -6296,9 +6071,12 @@ across every burning instance in the pass. For each burning instance:
    **candidate's** own `spreadchance` — never the burning feature's.
 2. **Wind embers, exactly five steps.** A probe walks in 16.16 tile space from
    the origin, adding twice each wind component per step, and tests the tile at
-   each step with the same legality chain and the same draw rule. Zero wind
-   collapses all five probes onto the origin tile, where they are skipped, so
-   no draws happen at all.
+   each step with the same legality chain and the same draw rule. A probe that
+   lands on the **same tile as the previous probe** (the origin for the first)
+   is skipped, so any wind slower than half a tile per probe skips the
+   repeated tiles and draws happen only when the tile changes; zero wind
+   collapses all five probes onto the origin and makes no draws at all
+   ([R-FEAT-01 §11]).
 3. **Burn weapon.** After both spread passes and regardless of their results,
    if the definition names a `burnweapon`, an ordinary weapon request is fired
    at the footprint centre, at the sampled terrain height.
@@ -6341,7 +6119,7 @@ distinct lifetimes observed are 46, 56, 58, 70, 84, 92, 114, 120, 122, 126, 141,
 have one. Malformed or missing burn sequences and non-filename object/fire
 combinations remain separate loader edges.
 
-#### R-FEAT-01 §8 — The damage entry, exactly: gates, accumulation, and the network codes [R-FEAT-01] (2026-08-29)
+#### The damage entry, exactly: gates, accumulation, and the network codes [R-FEAT-01 §8]
 
 **Established — how impacts reach features.** The projectile impact
 dispatcher walks the cells inside the blast radius; for each cell whose
@@ -6395,17 +6173,13 @@ damage class. No armour, no `edgeeffectiveness` falloff, no minimum: the
 full default value lands regardless of distance inside the radius (the
 falloff computed for units in the same loop is not applied here).
 
-#### R-FEAT-01 §9 — Ignition, exactly, and the spark-time correction [R-FEAT-01] (2026-08-29)
+#### Ignition, exactly [R-FEAT-01 §9]
 
-**Correction.** The "Established fact — ignite" paragraph above says the
-countdown is `simulationRandom(sparktime / 2) + (sparktime / 2)` and that
-"the shipped spark time of 5 therefore yields a countdown of 2 or 3". That
-skipped the parser's scaling: `sparktime` is read as a float, **multiplied
-by 30.0** (a double constant), truncated toward zero and stored as int16
-ticks — the same seconds-to-ticks convention as every other authored time
-`[02 "Feature record"]`. The shipped value of 5 stores 150, and the countdown
-below is 75..149 feature-phase visits, i.e. 2.5 to 5 seconds. Everything
-else in that paragraph stands.
+**Established — spark time is in ticks.** `sparktime` is read as a float,
+**multiplied by 30.0** (a double constant), truncated toward zero and stored
+as int16 ticks — the same seconds-to-ticks convention as every other authored
+time `[02 "Feature record"]`. The shipped value of 5 stores 150, and the
+countdown below is 75..149 feature-phase visits, i.e. 2.5 to 5 seconds.
 
 **Established — `ignite(x, z, remote)`.**
 
@@ -6445,7 +6219,7 @@ Save reload re-ignites a saved burning feature through this routine with
 command; the saved countdown is not restored (the reload copies the saved
 accumulator word over the instance after ignition) `[R-SAVE-FEATURE-01]`.
 
-#### R-FEAT-01 §10 — The feature phase, in order [R-FEAT-01] (2026-08-29)
+#### The feature phase, in order [R-FEAT-01 §10]
 
 **Established.** Phase 6 of `[01 §4.4]` runs, every tick, these four passes
 in this order:
@@ -6503,16 +6277,7 @@ frame's delay expires; the lifetime in visits is Σ over frames of `max(delay, 1
 per-frame delay words from the GAF entry — the asset census under "Feature
 burning" already lists the shipped totals.
 
-#### R-FEAT-01 §11 — The burn event, exactly, with the wind-probe skip rule [R-FEAT-01] (2026-08-29)
-
-**Correction.** "Wind embers, exactly five steps" above says "Zero wind
-collapses all five probes onto the origin tile, where they are skipped".
-The actual rule is more general: a probe is skipped when it lands on the
-**same tile as the previous probe** (the origin for the first), so with any
-wind slower than half a tile per probe the repeated tiles are skipped and
-draws happen only when the tile changes. The five probes therefore make
-between zero and five draws depending on wind speed, and a fast wind that
-jumps a tile never tests the skipped tile.
+#### The burn event, exactly, with the wind-probe skip rule [R-FEAT-01 §11]
 
 **Established — `burnEvent(definition, anchor)`.**
 
@@ -6528,7 +6293,11 @@ jumps a tile never tests the skipped tile.
    64-bit multiply/shift); `tile := (pos.x >> 16, pos.z >> 16)` as signed
    16-bit; if `tile == previous` skip, else `previous := tile` and apply the
    same legality chain and draw rule as step 1 on that tile (the tile may be
-   off-map, which the cell lookup rejects). At most five draws.
+   off-map, which the cell lookup rejects). At most five draws. The skip
+   rule is general: with any wind slower than half a tile per probe the
+   repeated tiles are skipped and draws happen only when the tile changes,
+   so the five probes make between zero and five draws depending on wind
+   speed, and a fast wind that jumps a tile never tests the skipped tile.
 3. **Burn weapon.** If `burnweapon` resolved, fire it at the footprint
    centre `((footprintx + 2x)·8, (footprintz + 2z)·8)` at the bilinear
    terrain height, owned by the dummy feature unit (§2), through the
@@ -6563,10 +6332,9 @@ walk and the draw-before-check order, or every later simulation draw after
 the feature phase shifts. This walk is the sole per-tick feature-phase RNG
 consumer beyond burning and meteors.
 
-#### R-FEAT-01 §12 — The reproduction walk's exact target arithmetic, including its axis defect [R-FEAT-01] (2026-08-29)
+#### The reproduction walk's exact target arithmetic, including its axis defect [R-FEAT-01 §12]
 
-**Established.** The paragraph above is correct as far as it goes; the
-target expression it leaves as "offsets in `±reproducearea/2`" is:
+**Established.** The target expression:
 
 ```
 cursor    -= 1 ; if cursor < 0 { cursor = W·H − 1 ; return }     ; W, H = map cell width/height
@@ -6638,7 +6406,7 @@ Water/lava splash art belongs to debris records and projectile water entry, not
 to sinking wrecks. There is no depth-triggered removal: a settled sunken wreck
 stays forever unless damaged, reclaimed, or replaced by a successor.
 
-#### R-FEAT-01 §13 — Sinking, exactly: the integration step, the two height queries, and lava [R-FEAT-01] (2026-08-29)
+#### Sinking, exactly: the integration step, the two height queries, and lava [R-FEAT-01 §13]
 
 **Established — the 3D branch of the feature phase (§10 pass 3).** For an
 active 3D instance whose velocity triple is not all zero:
@@ -6693,7 +6461,7 @@ tears down every non-indestructible feature under its footprint and is
 silently not created over an indestructible one, a void cell, or when the
 slot pool is empty (§3). There is one attempt.
 
-#### R-FEAT-01 §14 — Slot reuse: what a new 3D instance inherits [R-FEAT-01] (2026-08-29)
+#### Slot reuse: what a new 3D instance inherits [R-FEAT-01 §14]
 
 **Established.** The stamp writes an instance's ordinal, accumulator,
 anchor, position, orientation and model handle, and nothing else; the pool
@@ -6706,9 +6474,9 @@ word the stamp does not write, whatever the slot's previous occupant left:
   keeps the predecessor's velocity — this is the mechanism behind the
   sentence in "Feature sinking and water interaction" that a destroyed
   sinking wreck "hands its submerged position — and typically its stale
-  downward velocity — to its successor", which stands. A settled (dormant)
-  wreck's successor starts with zero velocity, is retired on its first
-  visit, and rests where the predecessor rested.
+  downward velocity — to its successor". A settled (dormant) wreck's
+  successor starts with zero velocity, is retired on its first visit, and
+  rests where the predecessor rested.
 * **Sprite cursors overlap the velocity words.** A burning, dying, or
   reclaiming sprite instance keeps its main cursor in the bytes a 3D
   instance uses for the model handle and position X/Y (all rewritten by the
@@ -6725,7 +6493,7 @@ word the stamp does not write, whatever the slot's previous occupant left:
   burning tree with a shadow sequence); established as to every step of the
   mechanism. Decider: manual retail observation with an authored probe (a
   unit killed over a burning `Tree1`), or a static trace showing a writer of
-  those words that this unit did not find. Nanolathe must zero the velocity
+  those words that has not been found. Nanolathe must zero the velocity
   triple at stamp unless it chooses to reproduce this.
 * **Mode bits.** The stamp clears only the burning bit; the reclaim-animation
   and remote bits persist from the previous occupant. For a 3D instance the
@@ -6735,11 +6503,10 @@ word the stamp does not write, whatever the slot's previous occupant left:
   `featuredead`. Established mechanism; the observable is a Supported
   inference with the same deciders.
 
-#### R-FEAT-01 §16 — The burning-feature smoke puff: its parameters, its three draws, and where the jitter lands [R-FEAT-01] (2026-09-02)
+#### The burning-feature smoke puff: its parameters, its three draws, and where the jitter lands [R-FEAT-01 §16]
 
-§10 pass 3a gives the jitter arithmetic; this closes the three things it
-left open (RWU-19-16). Doc 03's open-list item "the strip-5 burning-feature
-smoke producer's puff parameters (variant, life)" is closed by it.
+§10 pass 3a gives the jitter arithmetic; this section gives the puff's
+parameters, its draw order, and the words the jitter lands on.
 
 **Established — the producer and its parameters.** The phase-6 site calls
 the strips-5/9 smoke-puff producer of `[03 R-STRIP-01 §1]` with the strip
@@ -6752,19 +6519,18 @@ is a one-shot — its constructor spawns exactly one puff, its spawn gate never
 fires again (`nextSpawn = tick + 1` is past the deadline `tick`), and the
 removal verdict retires the container as soon as that puff reaches its last
 frame `[03 R-STRIP-01 §2]`. Every third tick of a burn therefore adds one
-puff in one fresh container, never a container that keeps spawning.
+puff in one fresh container, never a container that keeps spawning. (This
+is the bounded strips-5/9 class; the geothermal vent's container is the
+immortal class of [R-ECO-02 §3].)
 
 **Established — three CRT draws per emission, all in phase 6.** In order:
 the horizontal jitter draw, the vertical jitter draw (both at the call site,
 §10 pass 3a), then — inside the producer, because the family's init calls
 its spawn virtual — the puff's last-frame draw
 `crt · (frameCount − 2) / 0x8000 + 2` of `[03 R-STRIP-01 §2]`. The per-tick
-hold redraws that follow are phase-11 work and are counted there.
-**Correction to `[01 §7.5]`'s phase-6 CRT row**, which read "2 per
-fire-effect emission (position jitter)" and cited §12: the row counted the
-call site only and missed that the constructor's draw is taken at the call,
-not at the puff's first phase-11 visit; it now reads 3 and cites §10 and
-this section.
+hold redraws that follow are phase-11 work and are counted there. The
+constructor's draw is taken at the call, not at the puff's first phase-11
+visit, so the phase-6 CRT count per emission is three ([01 §7.5]).
 
 **Established — the jitter moves the container's world X and world height.**
 The site builds the position triple (X, Y, Z) from the footprint centre
@@ -6776,10 +6542,8 @@ the first addend of §10 pass 3a to the **whole part of X** and rewrites
 draw₂·(frameHeight/2)/32768) − 2·(frameHeight/4)`; Z is passed through
 untouched. It is the container's world position that is jittered — the
 puff spawns there, and its own update then drifts it by the wind and gravity
-words `[03 §5.5]`. The reading recorded at the implementation site as
-*Supported inference* (X and Y are the two jittered words, Z stays at the
-centre, the factor of two on Y is the half-height projection shear) is
-confirmed and is now Established; the `TODO(question)` there is retired.
+words `[03 §5.5]`. X and Y are the two jittered words, Z stays at the
+centre, and the factor of two on Y is the half-height projection shear.
 
 ## Saving economy, construction, and features
 
@@ -6798,6 +6562,8 @@ are restored verbatim, not re-seeded to the loaded tick, so each player
 resumes its saved settlement phase after a load. The global tick counter is
 persisted inside the game-time account blob that gates scalar restoration;
 scalar restoration is skipped entirely when that blob read fails or is short.
+The live-unit and units-ever-created counters are not persisted; the restore
+rebuilds both through the forced-slot allocator ([R-ECO-01 §12]).
 
 Features are serialized in three groups: normal, animated, and 3D. Each group
 uses its own fixed record shape. A feature-type-name table maps the save's local
@@ -6870,21 +6636,21 @@ preserve these invariants:
 - Repair admission is energy-only: the energy resource term is always added to
   energy requested and is added to energy accepted only when energy carry is
   non-positive, with no metal ledger effect.
-- Nano presentation has no free-running timer: build and repair emit one
-  segment per accepted work visit and retry one tick later, build assist emits
-  two segments per visit while its counter sits above the 15 gate, and
-  reclaim/capture emit one segment per visit on a two-tick cadence; rejected
-  work emits no query and no segment [R-P0-06].
+- Nano presentation has no free-running timer: build, assist and repair emit
+  one segment per accepted work visit and retry one tick later, feature
+  reclaim emits two segments per visit while its countdown sits above the 15
+  gate, and unit reclaim/capture emit one segment per visit on a two-tick
+  cadence; rejected work emits no query and no segment [R-P0-06].
 - Unit reclaim's fatal payment is metal-only: `(1 - remaining fraction) ×
   metal build cost` credited to the killer's metal production bucket at death
   finalization, with no per-pulse payment and no energy credit.
-- The special-player discount family is identical at every positive
-  production contribution in the ledger (passive makes, extraction, maker,
-  wind, tidal, and the negative-energy-use refund) and at the two refund
-  sites (factory cancel-current and the shared work helper reverse arm):
-  selector 0 credits half, selector 1 credits seven tenths, any other value
-  credits the full amount — reduced positive credits, never subtractions,
-  with no inverted pairing.
+- The computer-player difficulty discount is one ladder at all fourteen of
+  its sites — the production gathers (passive makes, extraction, maker, wind,
+  tidal, the negative-energy-use refund, the spawn credit), the feature-
+  reclaim payout, the unit-reclaim refund, the factory cancel-current refund
+  and the shared work helper's reverse arm: easy credits half, medium seven
+  tenths, hard the full amount — reduced positive credits, never
+  subtractions, with no inverted pairing.
 - The feature phase's reproduction walk consumes one simulation draw per
   eligible cell per tick (draw before the `reproduce` comparison), even
   though every shipped feature authors `reproduce = 0`.
@@ -6901,182 +6667,29 @@ preserve these invariants:
   every tick; burn ends only when the burn animation pointer clears; shipped
   burns are finite and immune to reclaim and further blast while burning.
 
-## RWU-19-197 — two construction residuals re-read (2026-09-04)
-
-Static re-reads closing two markers in `internal/construction` and
-`internal/session`; the four companion closures for the same unit are in doc
-04 ([04 R-ORD-01 §16] to [04 R-ORD-01 §18], [04 R-FAC-02 §9]).
-
-#### R-WORK-01 §13 — The reach consultation is gated on the satisfied word's `0x40` alone, re-confirmed at the site [R-WORK-01] (2026-09-04)
-
-**Established (direct read of the `MobileBuild` handler's phase-1 body;
-RWU-19-197).** [R-WORK-01 §12] point 2 stated where the reach test runs; the
-implementation asked for the gate word it tests, and this names it. The
-handler receives three arguments — the unit, the record and the **satisfied
-set** the pump computed for this visit (`(record.satisfied | unit.pending) &
-record.gate`, [04 §3.3]). Phase 0 arms the record's dynamic gate to `0xE0`,
-so phase 1 is dispatched only on a visit whose satisfied set holds `0x20`
-(the follower reached the rectangle goal), `0x40` (an empty route was
-published away from the goal — "cannot get there") or `0x80` (a previous goal
-object was released) — the three movement outcomes of [04 R-ORD-01 §0]. The
-phase-1 body tests **that argument for `0x40`** and only under it forms the
-centre-to-centre distance with the two half-diagonal pads and compares it to
-`builddistance`; a fail is status 7 `I can't reach the construction site` and
-abandon. A visit carrying `0x20` or `0x80` without `0x40` skips the expression
-entirely and falls straight into the placement validator and the creator. The
-consultation is therefore neither per tick nor per visit: it happens on the
-arrival-failure wake and nowhere else, and there is no other range term in
-the row.
-
-What this settles for an implementation that steps its construction machine
-per tick rather than per wake: consulting the reach expression on every visit
-is the approximation, and its only observable difference is a builder that
-reaches the rectangle border while the centre-minus-pads value still exceeds
-`builddistance` — retail starts building there; a per-visit reach test keeps
-it walking. Removing the approximation needs the `0x20`/`0x40`/`0x80` wake
-delivered to the construction step, not a second reach rule.
-
-#### R-WORK-01 §14 — The capture transfer's local branch moves neither the group word nor the selected bit [R-WORK-01] (2026-09-04)
-
-**Established (direct read of the transfer routine's local branch, the unit
-constructor's group assignment and its state-word initialization;
-RWU-19-197).** [R-WORK-01 §15]'s copy list is exhaustive; this closes the two
-fields the implementation asked about by name. The replacement is created
-through the ordinary creator, whose unit-state initializer (a) initializes the
-state word with a mask that **clears bit 4, the selected bit** ([07 R-SEL-02A]
-reads that bit for selection), and (b) ends by calling the group assigner
-with group **0**: the assigner unlinks the record from any previous group's
-member vector (a slot reused from a dead unit may still name one), pushes it
-onto group 0's vector, and writes the record's group word to 0. The transfer's
-local branch then applies its copy list — health, remaining fraction,
-orientation triple, the gated per-slot stockpile bytes — and the operational
-edge replay, and **never reads the victim's group word or its selected bit**
-(the only status bits it carries over are the two movement-mode bits passed
-to the creator, and it clears bits 18–21 afterwards). The captor's replacement
-therefore starts in group 0 and unselected, whatever the victim was in. The
-remote-peer branch ([R-WORK-01 §15]) is the only place the selected bit is
-touched, and there it is cleared on the **victim** before the kill packet, not
-moved.
-
-For Nanolathe: selection is presentation state the simulation record does not
-carry, and a fresh replacement starts in group 0 like any other new unit, so
-no copy is owed at the transfer seam. Nothing remains open here.
-
-
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it. Findings that closed an item live in the
-body — most under `R-<id>` headings — and are not restated here.
+body and are not restated here.
 
-**Correction (2026-08-28, RWU-00-5).** Roughly half of this tail's bullets
-described closed work: the same-tick settlement order, the metal-maker stall
-rule, negative ordinary economy fields, the unit-pool capacity, factory
-order-node leaks on death or capture, terrain-metal sampling, the nano-segment
-record constructor, and the special-player discount family were all listed as
-"missing" while being fully established in the body. One was actively stale:
-it said a `TODO(question)` remained for the nano-segment fade curve and the
-logical-to-palette mapping, but [R-P0-06 §6] recorded on 2026-08-27 that both
-were traced and that the framing was wrong — there is no fade curve, the
-record is a particle emitter, and the contract lives at
-[03 §5.5 "The nanolathe spray"] as `[R-P0-19-P]`. The closure narratives are
-deleted here only; no finding left the document.
-
-**Correction (2026-08-29, RWU-05-1).** Four bullets are re-cut against
-[R-ECO-01]. The operation-byte bullet said the table's values were unknown
-while the handler identities were established; the values are listed in
-[R-ECO-01 §10], and what remains open is only whether the empty-named
-descriptor holds index 0. The special-player bullet said state 2 was the
-computer-policy state "by inference" and left the selector unnamed; both are
-named in [R-ECO-01 §3], so the bullet narrows to control bytes 1 and 3. The
-sibling-deadline bullet asked for consumers of both `WinLoseTime` and
-`DisplayTimer`; `DisplayTimer`'s sole consumer is closed in [R-ECO-01 §6].
-The bit-exact floating-point bullet asked for exceptional values, overflow,
-signed zero and NaN; all four are stated in [R-ECO-01 §1] and [R-ECO-01 §5],
-and only the untested exponent-range edge survives. One bullet is added: the
-cloak gate's second status bit has no writer anywhere in the recovered image.
-
-**Correction (2026-08-29, RWU-05-2).** The producer questions this unit
-owned — the `solarstrength` reader census, the wind range's source and the
-wind phase's cadence and draws, the tidal source, the exact extraction walk
-and accumulator, the maker byte and `onoffable`, upkeep timing, the cloak
-debit's cost selection and player gate, and storage eligibility — are closed
-under [R-PROD-01 §1]–[R-PROD-01 §8]. Two bullets that would otherwise have
-been added are cross-document handoffs, not unknowns: the legacy terrain
-attribute record's eight-byte layout (metal byte at offset 6) and the legacy
-header's wind-range words belong to `[fmt tnt]`, and the wind speed roll's
-no-draw exception when the range is below two belongs in [01 §7.3]'s census.
-One bullet is added below for the wind heading's pre-roll value.
-
-**Correction (2026-08-29, RWU-05-3).** The reversed-argument repair bullet is
-removed: the variant is the `SelfRepair` order and its malformed-input behavior
-is stated in [R-WORK-01 §3], so nothing about it is open. Four bullets replace
-it, all raised by the work-handler pass and none of them a restatement of a
-closed finding.
-
-**Correction (2026-08-29, RWU-05-4).** Three bullets are removed as closed
-under [R-SHARE-01]. The sharing-residuals bullet asked for share-buffer refill
-rules that do not exist (the clamp is against live stock), for the state-2
-discount scalar (0.5 / 0.7 in double, applied once at credit), and for the
-predicate names (row A of the giver, remote-human candidates only) —
-[R-SHARE-01 §1]–[R-SHARE-01 §4]. The limit-field bullet's two "bounded
-negatives" were both wrong: the parser writes the -1 default and the
-multiplayer restriction dialog is the writer; `norestrict` has two lobby
-readers — [R-SHARE-01 §9]. The control-byte bullet is closed: 1 is the local
-human and 3 the remote peer — [R-SHARE-01 §1]. Two claims in the body were
-corrected in place: the unit pool is sized by the per-player unit limit, not
-the catalog count, and `maxunits` is that limit's campaign source
-[R-SHARE-01 §7]; and the automatic-share thresholds are zero, not derived
-from capacity [R-SHARE-01 §3]. Four bullets are added below.
-
-**Correction (2026-08-29, RWU-05-5).** Five feature bullets are removed as
-closed under [R-FEAT-01]: the reclaim payout's two "protection" bits are the
-anchor's instance-attached bit and the definition's sprite bit
-[R-FEAT-01 §15]; same-tick precedence is closed by the instance-bit
-serialization and the phase order [R-FEAT-01 §5]; the "malformed burn
-animation" loader question narrows to the bank lookup's miss return (kept
-below) because a definition without `seqnameburn` simply cannot ignite and a
-3D definition never has one [R-FEAT-01 §1][R-FEAT-01 §9]; "catalog
-exhaustion" does not exist (the catalog is reallocated per record) and the
-pool-exhaustion order is established — collision teardown precedes the pool
-check [R-FEAT-01 §3]; and wreck transitions at vents are governed by the
-dense-pack rule alone [R-FEAT-01 §7]. Two claims elsewhere in this document
-were corrected in place: the ignition countdown's spark time is in ticks
-(`sparktime × 30`, truncated), not in authored seconds [R-FEAT-01 §9], and
-`autoreclaimable` is not the teardown honor bit [R-FEAT-01 §4]. One claim in
-[R-PROD-01 §6] was corrected by [R-FEAT-01 §7]: indestructible metal
-features seed the plot metal byte after the uniform seed. The bullets below
-are the residue.
-
-**Correction (2026-08-29, RWU-05-6).** One bullet is removed as closed: the
-jump-table fragment that prints `Unable to create any more units` with
-result 8 and no wait is `VTOL_MobileBuild`'s in-reach phase, traced and
-named in [R-ECO-02 §4]. No bullet is added: the ledger-closure pass wrote
-its findings inline ([R-ECO-02 §1]–[R-ECO-02 §3]) and its one open question
-— which init parameter each of the steam producer's three literals binds to
-— is a doc 03 effects-class question recorded in [R-ECO-02 §3] with its
-decider, not an economy unknown. The "per-tick order of produced, consumed
-and wasted accumulation" question that older plans list against this
-document is closed by [R-ECO-01 §6] (energy before metal, the four per-pass
-fields before the pool fold, waste only at the strictly-greater clamp) and
-has no bullet here.
-
-**Correction (2026-09-01, RWU-19-5).** No bullet is removed or added:
-the capture executor's "cloud of vapor" predicate was never listed here.
-[R-WORK-01 §10] states its operand (the remaining-build fraction) and its
-constant (literal single-precision zero), retiring the build's proxy marker,
-and records one narrower unknown inline — whether the order-side target
-validation excludes same-owner and death-latched capture targets before the
-executor's phase 0 runs.
-
+- Which of the nine production-gather discount sites is which of
+  [R-ECO-01 §3]'s named members, and why two of them credit a player-indexed
+  record rather than a unit accumulator · [R-ECO-01 §11] · name each site by
+  the value it forms and the accumulator it stores to.
+- Whether any discount site carries a positivity test between forming the
+  contribution and entering the ladder; none of the sites examined does
+  · [R-ECO-01 §11] · a read of each site for a compare against zero.
 - Whether the build-assist approach radius's summand
   `footprintX × footprintX + footprintZ + footprintZ` is a retail defect or an
   intended asymmetry; the instructions are established and reproduced, only the
   intent is open · [R-WORK-01 §2] · manual retail observation of an assist
   approach against a footprint much longer in Z than in X.
 - Which of the two nano-box Y forms the four VTOL work executors use — the
-  majority form omits the first Y extent, `MobileBuild` and `HelpBuild` add it
-  · [R-WORK-01 §8] · static trace of the VTOL work phases.
+  majority form omits the first Y extent, `MobileBuild` and `HelpBuild` add it;
+  the two forms are observationally identical because that extent is always
+  zero, so nothing depends on the answer · [R-WORK-01 §8] · static trace of
+  the VTOL work phases.
 - Producers and names of the order-pump executor-flag bits that the work
   handlers test as terminate/interrupt, cancel, arrival-failure and the high
   bit unit reclaim and capture treat as terminal · doc 04 §3.1 · static trace
@@ -7084,8 +6697,7 @@ executor's phase 0 runs.
   [R-WORK-01 §1..§7].
 - Response when a malformed factory product node bypasses queue preflight and
   reaches state 2 — cancellation, retry, or termination · "Factory queue" ·
-  static trace. The current admission boundary records a bounded diagnostic
-  and leaves the node unchanged.
+  static trace.
 - Whether the empty-named descriptor really holds operation byte 0: nothing
   was found that writes its name slot before the startup sort, but a writer
   there would shift every operation byte in [R-ECO-01 §10] by one
@@ -7096,27 +6708,17 @@ executor's phase 0 runs.
   for same-pass coalesced products · [R-FAC-01][R-FAC-01B][R-FAC-01R] ·
   manual retail observation (one run with a blocked exit, a completed ground
   product, and a completed aircraft product, recording first movement,
-  occupancy, and rally events). Marked `TODO(question)` at three sites; the
-  authored `BUGGER_OFF` retry must not be generalized into a movement or
-  collision rule.
-- Semantic meaning of the game-ended flag bits and of the two mission-end
-  predicates behind the confirmation delay; the bit patterns and the
-  freeze-on-settlement effect are established · doc 08 · static trace.
-- ~~The consumer of the `WinLoseTime` sibling deadline beyond its save key~~ — closed 2026-09-02 (RWU-19-31): none exists beyond the save reader/writer ([08 "Player records"]);
-  the end-condition poll's due is `UpdateTime` (RWU-19-32, [R-ECO-01 §1]);
-  `DisplayTimer`'s sole consumer is closed by [R-ECO-01 §6], and the two
-  settlement status-pair fields are named by [R-ECO-01 §12] (the live-unit and
-  units-ever-created counters) · "Authoritative settlement order" · static
-  trace.
+  occupancy, and rally events). Marked `TODO(question)` at the implementation
+  sites; the authored `BUGGER_OFF` retry must not be generalized into a
+  movement or collision rule. (A no-rally product column is not among these:
+  [R-EGRESS-02].)
+- Semantic meaning of the game-ended flag bits beyond `0x04` and of the two
+  mission-end predicates behind the confirmation delay; the bit patterns and
+  the freeze-on-settlement effect are established · doc 08 · static trace.
 - Whether any reader of the per-unit archived economy snapshots exists outside
   the ledger's own redistribution; bounded-negative in the reviewed image
   · "Authoritative settlement order" · static trace over the unrecovered
   regions.
-- Meaning of the second status bit the cloak gate requires to be clear: it has
-  no writer in the complete decompiled function set, so the term is inert and
-  the behavior is unobservable · "Cloak debit" · static trace over the regions
-  the export still misses. The rest of the gate, the truncation, and the
-  inclusive affordability compare are closed by [R-ECO-01 §9].
 - Value of the global wind heading before the first non-zero speed roll — it
   reaches wind-generator scripts through `SetDirection` on a map whose first
   roll is zero; inferred zero from fresh allocation · "Wind generation",
@@ -7128,17 +6730,19 @@ executor's phase 0 runs.
   retail observation with an authored extreme-cost probe. Exceptional-value
   behavior, signed zero, the truncation sites, and the float-versus-double
   widths are closed by [R-ECO-01 §1] and [R-ECO-01 §5].
-- Meaning of the unit status word's low two bits, which unit sharing tests
-  against `2` to skip a selected unit · [R-SHARE-01 §5] · doc 04's status-word
-  census.
+- Whether the SHARE screen's slider read-back can produce a negative amount;
+  the transfer helpers do not guard, and a negative amount reverses the
+  transfer · [R-SHARE-01 §2], [R-SHARE-01 §5] · static trace of the slider's
+  range against its `ftol` read-back.
+- Whether the SHARE screen's transfer lands between sub-ticks (the handler
+  runs from the window message pump the main loop services between executor
+  calls) — a Supported inference · [R-SHARE-01 §5] · static trace of the
+  pump/executor interleaving.
 - Effect of a `norestrict` definition's untouched restriction node on the
   lobby side (seeded limit `-1`, or `0` when `wacky`; `enable` word at its
   seed value) · [R-SHARE-01 §9] · static trace of the node seed's `enable`
   word and of the synchronization acknowledgement; multiplayer lobby, out of
   scope for the simulation.
-- Upstream UI and network producers of the factory production interrupts —
-  cancel-current (mask 2) and "Construction stopped" (mask 8) · doc 04 §3.3,
-  doc 07 · static trace. Handler-side semantics for both are established.
 - Trigger for the deadline catch-up burst, which is structurally present in
   the pre-gameplay setup pass with no natural trigger identified
   · "Authoritative settlement order" · static trace.
@@ -7151,7 +6755,6 @@ executor's phase 0 runs.
   authoritative totals versus presentation-only cached values · doc 07 ·
   static trace. The live-stock and pass-counter HUD readers are partially
   enumerated.
-
 - What the feature parser's field reads do with a null section handle after
   `Record "%s" missing from feature files` — the record is appended and the
   parser continues; a fault is the likely outcome but is not traced
@@ -7163,6 +6766,10 @@ executor's phase 0 runs.
   absent from the bank (zero, which the code treats as "no sequence", or a
   fault) · "Catalog construction", [R-FEAT-01 §1] · static trace of the
   sequence lookup's miss path; the shipped corpus has no such case.
+- What the stamp does with a TNT feature word that is below the format's
+  reserved band but at or above the compiled table count; no stock map was
+  checked for one · "Placement", [R-FEAT-01 §17] · static trace of the
+  stamp's ordinal test, or a census of the shipped TNT corpus.
 - Identities of the two table-dispatched handlers that consume the
   area-reclaim candidate scan (the builder's area-reclaim order body and the
   computer player's) — the scan's predicate is established, the consumers
@@ -7177,68 +6784,16 @@ executor's phase 0 runs.
   play; every step of the mechanism is established · [R-FEAT-01 §14] ·
   manual retail observation with an authored probe (a unit killed over a
   burning `Tree1` that has `seqnameburnshad`), or a static trace finding a
-  velocity-word writer this unit missed.
+  velocity-word writer that has not been found.
 - Meaning of the per-hit feature flag-word copy the projectile hit test
   stores in a global for the script layer (it is the whole flag word; which
   bits the consumer reads is a doc 04 COB question) · [R-FEAT-01 §1]
   `blocking` census · static trace of that global's script-port consumer.
-
-#### R-FEAT-01 §17 — Bootstrap fringe synthesis: every covered cell becomes fringe, whatever the TNT word says [R-FEAT-01] (2026-09-02)
-
-§3 step 7 says every covered cell other than the anchor receives the fringe
-mark `0xFFFE`. A repository test encoded the opposite for map bootstrap — that
-a covered cell whose authored TNT word is `0xFFFF` (empty) stays empty and
-only cells the TNT itself marks `0xFFFE` become fringe. Traced RWU-19-25
-(static: the terrain loader's plot allocation and its two attribute passes;
-the stamp's fringe loop). Everything below is **Established**.
-
-**The loader never copies the TNT feature word into the plot.** The plot
-grid is allocated with every cell's feature word set to `0xFFFF`, its slot
-word zero and its metal byte seeded. Pass 1, row-major over the TNT attribute
-array: the cell's height byte is copied; the control byte's bits are set to
-the loader's constant; and when the authored word is the void value the void
-marker is stamped (§3 step 1). Pass 2, row-major again and **skipped when a
-save file is open** (the reload path stamps from the save instead,
-[R-SAVE-FEATURE-01]): when the authored word is **strictly below the format's
-reserved band** — `0xFFFB` for the word-attribute TNT layout, `0xFC` for the
-byte-attribute layout — the stamp is called with that ordinal, a null
-position and nibble 10. Then the mission-file list (§3). The authored words
-`0xFFFE`, `0xFFFF` and the rest of the reserved band are never examined.
-
-*Correction to §3 "map-load placement".* Previous text: "any ordinal below
-the table count → stamp with a null position". The bound is the reserved
-band, not the compiled table count; a word below `0xFFFB` (or `0xFC`) but at
-or above the count is handed to the stamp unchecked. What the stamp does
-with such a word is outside this trace (Unknown; no stock map was checked
-for one).
-
-**The stamp's fringe write is unconditional.** After the dense-pack loop
-(§3 step 3) and the anchor write (steps 4–6), the stamp walks the footprint
-`dz` outer, `dx` inner, and for every cell except `(0, 0)` writes: feature
-word `:= 0xFFFE`, offset bytes `:= (dz, dx)`, instance bit cleared. It reads
-nothing from the cell first — neither its current feature word nor anything
-authored. The per-cell rule is exactly: *covered and not the anchor → fringe,
-always.*
-
-**Consequences at bootstrap.**
-
-1. Because the grid starts all-empty and the TNT word is never copied, a
-   covered cell authored `0xFFFF` is stamped `0xFFFE` exactly like one
-   authored `0xFFFE`. The authored fringe words are redundant data; retail
-   derives fringe entirely from the anchors' footprints.
-2. An authored `0xFFFE` that no stamped footprint covers is never written and
-   stays `0xFFFF` — the same outcome an implementation reaches by clearing
-   uncovered raw fringe after the pass.
-3. A covered cell whose authored word is itself an ordinal is a second
-   anchor, stamped later in row-major order from the attribute array (not
-   from the grid, which by then holds the first feature's fringe); its
-   dense-pack loop tears the first feature down (§3-A). The later anchor
-   wins, as §3 says.
-
-An implementation that leaves an authored-empty covered cell empty diverges
-from retail in every reader that hops a fringe to its anchor — the
-passability classifier `[R-DOC04-B]`, the reclaim scan (§6), the damage
-entry (§8) and the teardown (§4): on such a map those cells are neither
-blocked, reclaimable nor cleared with their feature. The repository test
-that asserts the empty outcome encodes a non-retail premise and its
-bootstrap must write fringe over every covered cell.
+- The outcome when a feature-reclaim payout and a resurrection transplant
+  target the same freshly placed wreck in one tick: both are unit-phase
+  order handlers visited in slot order, the payout replaces the wreck at
+  once ([R-FEAT-01 §5]) and the transplant re-reads the cell and refuses
+  only a reserved-band word ([R-WORK-01 §7]) — whether the transplant then
+  proceeds against the `featurereclamate` successor is not traced
+  · [R-WORK-01 §7], [R-FEAT-01 §5] · static trace of the transplant's
+  cell re-read against a successor ordinal.

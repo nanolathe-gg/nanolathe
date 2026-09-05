@@ -1,7 +1,6 @@
 package main
 
 import (
-	"os"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -9,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -191,10 +191,7 @@ func TestUnitInfoDoneClosesAndTheWindowOwnsItsClicks(t *testing.T) {
 // [07 R-HUD-03 §8].
 func TestUnitInfoAuthoredWindowCarriesTheGadgetsTheSectionNames(t *testing.T) {
 	resetUnitInfoState(t)
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		t.Skip("NANOLATHE_TA_ROOT is unset; skipping the asset-backed unit-info layout check")
-	}
+	root := testsupport.RetailRoot(t)
 	cs, err := openContent(Options{Root: root})
 	if err != nil {
 		t.Skipf("retail content unavailable: %v", err)

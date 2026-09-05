@@ -76,10 +76,12 @@ func (h *retailBattleHUD) LastDispatchError() error {
 	return h.dispatchErr
 }
 
+// dispatchFactoryBuild is the HUD's single call into the command boundary for
+// a factory product button [01 §4.4][07 §9]. It used to consult a function
+// field on the HUD first, so a test could substitute its own dispatcher; the
+// field's only writer was one diagnostic test, which now drives the production
+// dispatcher into a refusal it raises itself.
 func (h *retailBattleHUD) dispatchFactoryBuild(b *battleSession, product string, count int) error {
-	if h != nil && h.factoryDispatch != nil {
-		return h.factoryDispatch(b, product, count)
-	}
 	return b.DispatchFactoryBuildDelta(product, count)
 }
 

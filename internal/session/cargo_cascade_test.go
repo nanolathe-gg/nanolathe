@@ -186,26 +186,10 @@ func TestCommanderSweepSilentBranchStampsCauseThree(t *testing.T) {
 	}
 }
 
-// TestEveryBattleDeathCarriesARecordedCauseRetail is the fail-loud signal made
-// into a contract. Retail's death handler reads the packet's cause nibble
-// unconditionally [06 §12.1]; a death that reaches this build's finalizer with
-// no damage-kind byte is a producer nobody wired, and the finalizer can only
-// count it. Running a whole battle and asserting the count is zero is what
-// keeps a new death site from quietly joining the three this unit stamped.
-//
-// Hard only: the Medium run of the same battle is twice as long and proves
-// nothing extra here.
-func TestEveryBattleDeathCarriesARecordedCauseRetail(t *testing.T) {
-	sess := aiE2ESkirmishAt(t, "ashap plateau", aiE2ESeed, 2)
-	scaled := sess.Clock.ScaledAnchor
-	for sess.State != StatePostBattle && sess.Clock.GlobalTick < aiE2ETickCap {
-		scaled += 5
-		sess.Step(scaled)
-	}
-	if !sess.GetResult().Ended {
-		t.Fatalf("battle did not end by tick %d", sess.Clock.GlobalTick)
-	}
-	if n := sess.DeathsWithNoRecordedCause(); n != 0 {
-		t.Fatalf("%d deaths reached the finalizer with no damage-kind byte; every producer must stamp one [06 §12.1]", n)
-	}
-}
+// The "every battle death carries a recorded cause" contract [06 §12.1] used
+// to live here as TestEveryBattleDeathCarriesARecordedCauseRetail, which ran
+// the Hard `ashap plateau` battle at aiE2ESeed to its end and read
+// DeathsWithNoRecordedCause — the same battle, tick for tick, that
+// TestComputerPlayerEliminatesIdleHumanRetail/Hard already runs. The assertion
+// now rides that battle inside idleHumanEliminationRetail, where it costs
+// nothing and covers Medium as well as Hard.

@@ -41,7 +41,7 @@ func TestCommittedAudioSurvivesAudienceChangeBeforeDrain(t *testing.T) {
 	spy := &sessionAudioOutputSpy{}
 	audio.SetGlobalOutput(spy)
 	t.Cleanup(func() { audio.SetGlobalOutput(old) })
-	s.Audio.DrainEvents(30, 7, s.publication.events.SnapshotEvents())
+	s.Audio.DrainEvents(7, s.publication.events.SnapshotEvents())
 	if spy.plays != 1 {
 		t.Fatalf("admitted event was suppressed after audience changed: plays=%d", spy.plays)
 	}

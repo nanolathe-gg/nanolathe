@@ -68,7 +68,9 @@ func TestOTARND02BMobileBypassesSHDAtEveryOrientation(t *testing.T) {
 			if prim.ShadeRow != NoShadeRow || prim.ShadeRows != nil {
 				t.Fatalf("heading %d piece %d emitted shade rows: row=%d rows=%v", heading, piece, prim.ShadeRow, prim.ShadeRows)
 			}
-			got, _, _, _ := PrimitiveRGBA(&tables, prim)
+			// No SHD row means the unshaded span writer, which writes the
+			// byte raw [03 R-REN-03A §5].
+			got, _, _, _ := PaletteRGBA(&tables, byte(prim.ColorIndex&0xFF))
 			if got != source {
 				t.Fatalf("heading %d piece %d resolved %d want raw texel %d", heading, piece, got, source)
 			}
@@ -99,8 +101,10 @@ func TestOTARND02BStructureShadingAndPerPieceDontShade(t *testing.T) {
 	const source, pinnedIndex, computedIndex = byte(7), byte(41), byte(23)
 	tables.Shade[pinned.ShadeRow][source] = pinnedIndex
 	tables.Shade[computed.ShadeRow][source] = computedIndex
-	gotPinned, _, _, _ := PrimitiveRGBA(&tables, pinned)
-	gotComputed, _, _, _ := PrimitiveRGBA(&tables, computed)
+	// Both carry a real SHD row, so the shaded span writer resolves them
+	// through SHD[row*256 + byte] [03 R-REN-03A §5].
+	gotPinned, _, _, _ := ShadeRGBA(&tables, byte(pinned.ColorIndex&0xFF), pinned.ShadeRow)
+	gotComputed, _, _, _ := ShadeRGBA(&tables, byte(computed.ColorIndex&0xFF), computed.ShadeRow)
 	if gotPinned != pinnedIndex || gotComputed != computedIndex || gotPinned == gotComputed {
 		t.Fatalf("SHD relationship: pinned=%d computed=%d want %d/%d", gotPinned, gotComputed, pinnedIndex, computedIndex)
 	}
@@ -125,20 +129,12 @@ func TestOTARND02BShadingOptionOffMatchesMobile(t *testing.T) {
 	}
 }
 
-// C5: flat-colored quads bypass SHD on both piece-renderer paths
-// [03 §2.4.1][03 §4.3.2].
-func TestOTARND02BFlatColorBypassesSHDInBothPaths(t *testing.T) {
-	tables := otaRND02BTables()
-	const source, remapped = byte(7), byte(41)
-	for row := range tables.Shade {
-		tables.Shade[row][source] = remapped
-	}
-
-	for _, row := range []int{NoShadeRow, 5} {
-		prim := PrimitiveDraw{ColorIndex: uint32(source), IsColored: 1, ShadeRow: row, TextureName: "tex"}
-		got, _, _, _ := PrimitiveRGBA(&tables, prim)
-		if got != source {
-			t.Fatalf("row %d flat color resolved %d want %d", row, got, source)
-		}
-	}
-}
+// C5 stood here: "flat-colored quads bypass SHD on both piece-renderer
+// paths". It exercised the render package's PrimitiveRGBA helper, whose flat
+// arm returned the raw palette byte whatever SHD row the primitive carried —
+// and [03 R-REN-03A §5] puts the SHD split on the RENDERER, not on the
+// authored 3DO flat/textured discriminator, so a flat face under the shaded
+// renderer writes SHD[row*256 + color]. The test pinned the helper's
+// divergence rather than a retail rule, and the helper is gone. The live
+// contract is internal/client's TestShadedFlatWriterResolvesThroughSHD and
+// TestUnshadedFlatWriterEmitsTheRawColour, which drive the real span writers.

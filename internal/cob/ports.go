@@ -720,6 +720,20 @@ func AtanPort(first, second int32) uint16 {
 	return numeric.AngleFromAtan2(int64(first), int64(second)).Raw()
 }
 
+// HypotPort computes engine port 15's read [04 §4.4] C15: the C-runtime
+// hypotenuse of the two arguments taken as signed 32-bit values, with NO
+// unpacking, truncated toward zero by the shared float-to-integer conversion
+// [R-COB-03 §2][01 §8] I3. Port 13 is the same helper fed the unpacked halves;
+// port 15 is fed the raw arguments unchanged, which is the whole difference
+// between them [04 §4.4].
+//
+// It was deleted as unreachable by CL-3 and is restored here because WU-19-234
+// binds the port that reaches it.
+func HypotPort(first, second int32) int32 {
+	h := math.Hypot(float64(first), float64(second))
+	return int32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
+}
+
 // BuildPercentLeft computes port 17 read [04 §4.4] C15: from remaining-build
 // fraction f (1→0): zero when f exactly zero, otherwise 1 - trunc(f * -99.0).
 // I2 allowlist: construction remaining fraction is float32 [05 §...].
@@ -824,6 +838,149 @@ func GroundHeightPortFunc(heightFn func(x, z numeric.Fixed) numeric.Fixed) func(
 			packed = args[1]
 		}
 		return int32(GroundHeight(packed, heightFn))
+	}
+}
+
+// portArg returns argument slot n of an engine read, or zero when the authored
+// call pushed fewer slots. The compiler always pushes the port id followed by
+// four argument slots and zero-fills the ones a port does not use [fmt cob], so
+// an absent slot and an authored zero are the same value; the one-argument read
+// opcode passes the identifier alone, which is why the length test is needed at
+// all [04 §4.4][04 R-COB-03 §1].
+func portArg(args []int32, n int) int32 {
+	if n < len(args) {
+		return args[n]
+	}
+	return 0
+}
+
+// PieceWorldPoint resolves a COB piece index to its world point for ports 7
+// and 8. The piece world position is the unit's own position plus the piece
+// locator's offset; an out-of-range piece index, or a unit with no render
+// table, contributes a ZERO offset, so the port answers the unit's own
+// position rather than failing [04 §4.4][04 R-COB-03 §2]. An implementation
+// therefore returns the unit position, not an ok flag, for a bad index — ports
+// 7 and 8 have no failure value.
+type PieceWorldPoint func(piece int32) [3]numeric.Fixed
+
+// UnitPortLookup resolves the identifier argument of ports 9, 10 and 11. The
+// identifier is masked to sixteen bits and a zero identifier — including the
+// zero-filled argument slot of a bare `get` — reads zero, as does a slot whose
+// alive bit is clear [04 §4.4][04 R-COB-03 §2]. Implementations return ok=false
+// for both cases; the port then pushes zero.
+//
+// modelHeight is the definition's model bounding-box maximum Y in 16.16, which
+// is what port 11 pushes [04 R-MOV-03 §5]. It is the same word the transport
+// admission and the repair water clause read [04 §7 R-ORD-01 §7].
+type UnitPortLookup func(id int32) (pos [3]numeric.Fixed, modelHeight int32, ok bool)
+
+// PiecePositionXZPortFunc adapts the piece locator into port 7's read: the
+// piece's world position packed as X in the high half and Z in the low half
+// [04 §4.4][04 R-COB-03 §3]. args[1] is the piece index.
+func PiecePositionXZPortFunc(pieceWorld PieceWorldPoint) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		if pieceWorld == nil {
+			return 0
+		}
+		p := pieceWorld(portArg(args, 1))
+		return PackXZ(p[0], p[2]) // [04 §4.4] port 7
+	}
+}
+
+// PiecePositionYPortFunc adapts the piece locator into port 8's read: the
+// piece's world Y as a RAW 16.16 value, not shifted, with the same zero-offset
+// fallback as port 7 [04 §4.4]. The 32-bit narrowing is retail's word width.
+func PiecePositionYPortFunc(pieceWorld PieceWorldPoint) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		if pieceWorld == nil {
+			return 0
+		}
+		p := pieceWorld(portArg(args, 1))
+		return int32(p[1].Raw()) // [04 §4.4] port 8, raw 16.16
+	}
+}
+
+// UnitPositionXZPortFunc is port 9's read: the named unit's position packed the
+// same way as port 7 [04 §4.4].
+func UnitPositionXZPortFunc(lookup UnitPortLookup) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		if lookup == nil {
+			return 0
+		}
+		pos, _, ok := lookup(portArg(args, 1))
+		if !ok {
+			return 0 // zero identifier or a slot whose alive bit is clear [04 §4.4]
+		}
+		return PackXZ(pos[0], pos[2]) // [04 §4.4] port 9
+	}
+}
+
+// UnitPositionYPortFunc is port 10's read: the same unit's Y as a raw 16.16
+// value under the same identifier and alive gates as port 9 [04 §4.4].
+func UnitPositionYPortFunc(lookup UnitPortLookup) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		if lookup == nil {
+			return 0
+		}
+		pos, _, ok := lookup(portArg(args, 1))
+		if !ok {
+			return 0
+		}
+		return int32(pos[1].Raw()) // [04 §4.4] port 10, raw 16.16
+	}
+}
+
+// UnitHeightPortFunc is port 11's read: the definition height — the model
+// bounding-box maximum Y in 16.16 — of the unit the identifier selects, via the
+// same unit-table lookup and alive gate as ports 9 and 10 [04 §4.4]
+// [04 R-MOV-03 §5].
+func UnitHeightPortFunc(lookup UnitPortLookup) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		if lookup == nil {
+			return 0
+		}
+		_, height, ok := lookup(portArg(args, 1))
+		if !ok {
+			return 0
+		}
+		return height // [04 §4.4] port 11
+	}
+}
+
+// RelativeBearingPortFunc is port 12's read: atan2 over the unpacked halves of
+// args[1], less the reading unit's own heading, masked to sixteen bits
+// [04 §4.4]. headingFn is read at call time because the heading moves every
+// tick; a nil headingFn reads heading zero, which no production binding uses.
+func RelativeBearingPortFunc(headingFn func() uint16) func(args []int32) int32 {
+	return func(args []int32) int32 {
+		var heading uint16
+		if headingFn != nil {
+			heading = headingFn()
+		}
+		return int32(RelativeBearing(portArg(args, 1), heading)) // [04 §4.4] port 12
+	}
+}
+
+// DistancePortFunc is port 13's read: the hypotenuse of the UNPACKED halves of
+// args[1], a 16.16 result truncated toward zero [04 §4.4].
+func DistancePortFunc() func(args []int32) int32 {
+	return func(args []int32) int32 { return Distance(portArg(args, 1)) } // [04 §4.4] port 13
+}
+
+// AtanPortFunc is port 14's read: atan2 of the two independent arguments in the
+// same scaled domain as port 12, masked to sixteen bits with no heading
+// subtraction [04 §4.4].
+func AtanPortFunc() func(args []int32) int32 {
+	return func(args []int32) int32 {
+		return int32(AtanPort(portArg(args, 1), portArg(args, 2))) // [04 §4.4] port 14
+	}
+}
+
+// HypotPortFunc is port 15's read: the hypotenuse of the two arguments taken as
+// signed 32-bit values with NO unpacking, truncated toward zero [04 §4.4].
+func HypotPortFunc() func(args []int32) int32 {
+	return func(args []int32) int32 {
+		return HypotPort(portArg(args, 1), portArg(args, 2)) // [04 §4.4] port 15
 	}
 }
 

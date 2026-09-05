@@ -127,10 +127,14 @@ func localCommanderUnit(sess *session.Session) (*units.Unit, bool) {
 		return nil, false
 	}
 	owner := int(sess.LocalOwner)
-	if owner < 0 || owner >= len(sess.Skirmish.Players) {
+	// The PLAYER RECORD's side, not the setup row's: the setup row is the
+	// pre-battle mirror and a load restores nothing into it but the rule words
+	// and the map name, so a restored battle reads side 0 for every slot
+	// [08 R-SKIR-01 §2] "Save persistence".
+	side, ok := sess.SideForOwner(owner)
+	if !ok {
 		return nil, false
 	}
-	side := sess.Skirmish.Players[owner].Side
 	if side < 0 || side >= len(sess.Catalog.Sides) || sess.Catalog.Sides[side] == nil {
 		return nil, false
 	}

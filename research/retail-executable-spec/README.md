@@ -1,21 +1,35 @@
 # Retail executable clean-room design specification
 
-## Scope
+## Purpose and scope
 
-This directory is a category-oriented design specification for the retail
-Total Annihilation executable. It describes the engine as behavior and logical
-data structures that can guide an independent implementation.
+This directory is the behavioral contract for the retail Total Annihilation
+executable: what the engine does, described as logical state and arithmetic an
+independent implementation can write from. It is the source of truth for
+**behavior**. `research/formats` is the source of truth for **byte layout in
+files**. They do not compete; where a category document needs a record layout
+it cites the format document instead of restating it.
 
-The specification is derived only from the isolated decompilation and static
-analysis of the retail executable. It does not use another engine, a
-replacement implementation, executable-comparison tooling, or third-party
-behavior as retail evidence. Original game assets are not used to fill gaps in
-the executable analysis.
+The specification is derived only from isolated static analysis of the retail
+executable. It does not use another engine, a replacement implementation,
+executable-comparison tooling, or third-party behavior as retail evidence, and
+original game assets are never used to fill a gap in the executable analysis —
+an asset census settles what stock content *authors*, never what the engine
+computes.
 
-The documents intentionally omit executable addresses, memory offsets,
+The documents deliberately omit executable addresses, memory offsets,
 decompiler-generated symbols, disassembly, and translated source code. Exact
-file-record byte positions and protocol values are included only when they are
-part of a data or wire format rather than a position inside the executable.
+byte positions and protocol values appear only when they are part of a data or
+wire format rather than a position inside the executable.
+
+Scope is the single-player engine Nanolathe implements: skirmish and the
+campaign, and everything they need. Networking is described where the local
+path still constructs it, and is otherwise outside scope; the transport, lobby
+and codec internals are named as excluded rather than left silently missing.
+
+This is a broad but not complete design. Each document ends with a "Missing and
+unknown" list, and every item on it is open. A stated Unknown is part of the
+specification: it stops later implementation work from silently substituting a
+remembered or modern behavior for a retail behavior nobody established.
 
 ## Retail binary and evidence boundary
 
@@ -24,34 +38,30 @@ The analyzed input is the retail PE32 executable whose recorded hashes are:
 - MD5: `8e74a1dffa1f5988624c52048f5b20cd`
 - SHA-1: `764dc919c3bd0365751aefba8e9a667299a3ce2e`
 
-At the time of this synthesis (re-measured 2026-08-28 after a function-boundary reconciliation pass), the decompiler index contains 4,024 function starts covering 960,488 of the 1,026,560 code bytes (93.6 %), and every one of those functions has an exported decompilation. Code that no function claims is down to 40 bytes; a further 25,061 bytes of the code section remain undecoded, alongside 34,144 bytes of alignment padding and 6,827 bytes of in-code data tables. Of the recognized functions, 883 (158,231 bytes) are identified as compiler runtime, C++ standard library, compression library, or the developer's shared debug and performance library; 500 (60,159 bytes) have no reference of any kind anywhere in the image; the remaining 2,641 functions (742,098 bytes) are game code. A second disassembler, run independently, recognizes 2,608 starts and agrees with 2,480 of them; each tool still finds starts the other misses, and end boundaries differ. (The previous text here — 2,657 starts, 941 exported decompilations, a 3,808-start independent index agreeing on 2,568 — described an earlier, partly lost analysis state and is superseded.)
-
-The specification is self-contained: it does not cite the analysis workspace,
+The specification is self-contained: it never cites the analysis workspace,
 because that workspace is not distributed with this repository. Where a
-contract matters to an implementer, it is stated here in full rather than
+contract matters to an implementer it is stated here in full rather than
 referenced.
-
-This is therefore a broad but incomplete executable design. Every category
-ends with an explicit list of missing and unknown work. A placeholder is part
-of the specification: it prevents later implementation work from silently
-substituting a remembered or modern behavior for a retail behavior that has
-not been established.
 
 ## Evidence language
 
-The category documents use three levels:
+Every claim carries one of three confidence levels.
 
-- **Established**: direct static data flow, imported API use, embedded schema
-  or protocol vocabulary, a reconciled bounded instruction analysis, or a
-  bounded negative search supports the statement.
-- **Supported inference**: the direct evidence strongly favors the statement,
-  but an important caller, identity, branch, or edge case remains open.
-- **Unknown**: the current executable analysis cannot support a safe contract.
+- **Established** — direct static control or data flow, imported API use, an
+  embedded schema or protocol vocabulary, a reconciled bounded instruction
+  analysis, or a bounded negative search supports the statement.
+- **Supported inference** — the direct evidence strongly favors the statement,
+  but an important caller, identity, branch, or edge case is still open. A
+  Supported inference is a standing invitation to trace it; several have been
+  found inverted rather than merely imprecise, so work that depends on one
+  verifies it first.
+- **Unknown** — the current analysis cannot support a safe contract. An
+  implementation keeps the gap explicit.
 
-Bounded absence is not universal absence. For example, failing to find a
-reader in the recovered function set establishes only that the reader is not
-in the searched set. It does not justify inventing behavior, and it does not
-prove that an unrecovered function cannot contain the reader.
+Bounded absence is not universal absence. Failing to find a reader in the
+recovered function set establishes only that the reader is not in the searched
+set. It does not justify inventing behavior, and it does not prove that an
+unrecovered function cannot contain the reader.
 
 ## Deciders
 
@@ -73,76 +83,73 @@ preference:
 
 ## Writing rules
 
-* **One statement per behavior.** A document says one thing about a behavior.
-  A correction replaces the text it corrects rather than being appended beside
-  it; the git history is the audit trail, so the commit message states what
-  the previous text said and why it was wrong.
-* **Edit the owning category document in place.** Format documents own byte
-  layouts; category documents own behavior. Never add a new directory or notes
-  file.
-* **Every claim carries a confidence level** — **Established**, **Supported
-  inference**, or **Unknown**. A Supported inference names the open branch; an
-  Unknown names its decider.
-* **Anchors and citations.** A finding that code cites is written under a
-  heading carrying its `R-<id>` anchor, and is cited as `[04 §7.2]` for a
-  numbered section, `[05 "Two-stage settlement algorithm"]` for the unnumbered
-  documents 05 and 08, `[04 R-PATH-01 §10]` for an anchored finding's
-  sub-section, and `[fmt tnt]` for a format document. Citation is by document
-  and section, never by line number. An anchor code cites is a contract: it
-  keeps its heading token across a rewrite.
+The corpus speaks in one voice. It is a reference, not a notebook.
+
+* **One statement per behavior.** A document says one thing about a behavior,
+  in its current form. There is no "previously we thought" text beside it.
+* **A correction replaces the text it corrects.** The commit message states
+  what the previous text said and why it was wrong; git history is the audit
+  trail, so the document itself carries no change log, no dates, and no work
+  unit identifiers.
+* **Edit the owning category document in place.** Behavior goes in the owning
+  category document, byte layout in `research/formats`. Never add a new
+  directory, addendum, or notes file.
+* **Every claim carries a confidence level.** A Supported inference names the
+  open branch; an Unknown names its decider.
+* **Anchors are contracts.** A finding that code cites is written under a
+  heading carrying its `R-<id>` anchor, and keeps that token across a rewrite.
+* **Cite by document and section, never by line number** — `[04 §7.2]`,
+  `[05 "Two-stage settlement algorithm"]`, `[04 R-PATH-01 §10]`, `[fmt tnt]`.
 * **No addresses**, decompiler-generated names, offsets expressed as
-  executable layout, or register narration. The address-level trail stays in
-  the raw analysis workspace, where every function address is written beside
-  the spec anchor it supports so the coverage ledger can map function to
-  section mechanically.
-* **The tail is only open items.** Each document's "Missing and unknown" list
-  carries open items only, each with a decider and the section that owns it.
-  A closed item is removed from the tail; its closure lives in the body.
+  executable layout, or register narration. If a behavior cannot be described
+  without an address, it is not yet understood. The address-level trail stays
+  in the raw analysis workspace, where each function address is written beside
+  the anchor it supports.
+* **The tail is only open items.** Each "Missing and unknown" list carries open
+  items only, each naming what is unknown, the section that owns it, and its
+  decider. A closed item is removed from the tail; its closure lives in the
+  body.
 
-## Category set
+## The eight category documents
 
-The engine is divided into eight categories. This is intentionally near the
-upper end of the requested range: fewer documents would combine unrelated
-subsystems into unreviewable files, while more would fragment prerequisites
-and state transitions across too many boundaries. Each document is the
-exhaustive, self-contained home for its feature area: corrections and closures
-that were once tracked as separate addenda files (`R-*.md`) and gap-analysis
-files have been folded inline, under headings that keep the old `R-<id>`
-anchors so existing citations still resolve.
+The engine is divided into eight documents. Each is the exhaustive,
+self-contained home for its feature area: closures and corrections that were
+once tracked as separate addendum and gap-analysis files are folded inline,
+under headings that keep their `R-<id>` anchors so existing citations resolve.
 
-| Document | Category | Main ownership |
-|---|---|---|
-| [01-core-runtime-platform-and-determinism.md](01-core-runtime-platform-and-determinism.md) | Core runtime, platform, and determinism | PE/Win32 lifecycle, window/message pump, scheduler, authoritative phase order, threads, locks, allocators, pools, queues, RNG, x87, diagnostics, runtime failures |
-| [02-content-vfs-formats-and-data-loading.md](02-content-vfs-formats-and-data-loading.md) | Content, VFS, formats, and loading | Current directory, mount tiers, loose/archive resolution, HPI family, TDF grammar, configuration/localization, catalogs, file decoders, linking, caching and load failures (incl. R-P0-03 category registry) |
-| [03-world-visibility-rendering-audio-and-video.md](03-world-visibility-rendering-audio-and-video.md) | World and presentation | Coordinates, terrain, height/water, visibility/radar/fog, software rasterizer, GDI/DirectDraw, palettes, 3DO/GAF presentation, minimap, features rendering, effects, shadows, audio, CD music, Smacker and capture (incl. R-P0-18-A/B LOS height, R-RR16-A fog, R-P0-19 nanolathe pipeline) |
-| [04-units-orders-scripts-and-movement.md](04-units-orders-scripts-and-movement.md) | Units, orders, scripts, and movement | Unit identity/lifetime, order state, COB VM and pieces, A*, path scheduling, steering, collision/occupancy, hover, VTOL, transport and air work positioning (incl. R-P0-01/02/08/09/10, R-P0-19 mobile-build walk target) |
-| [05-economy-construction-players-and-features.md](05-economy-construction-players-and-features.md) | Economy, construction, players, and features | Resource buckets/settlement, storage, extraction, sharing, nanoframes, factory queues, build/repair/reclaim/capture/resurrection, limits, feature placement/successors/fire/sinking (incl. R-P0-06 nano cadence) |
-| [06-weapons-projectiles-damage-and-effects.md](06-weapons-projectiles-damage-and-effects.md) | Weapons and combat | Weapon definitions/slots/targets, costs and cadence, projectiles/trajectories/guidance/beams, collision, armor, AOE, status, veterancy, stockpile/interception, death and combat events (incl. R-P0-07 weapon query path) |
-| [07-interface-input-camera-and-front-end.md](07-interface-input-camera-and-front-end.md) | Interface, input, camera, and frontend | Win32 input, software cursor, picking/selection/groups, command UI, build pages, queue overlays, camera control, minimap interaction, GUI widgets/screens, HUD, chat and text (incl. R-P0-11 UI order producers) |
-| [08-sessions-campaign-ai-network-save-and-replay.md](08-sessions-campaign-ai-network-save-and-replay.md) | Sessions, campaign, AI, networking, save, and replay | Game modes, campaigns/missions/triggers, skirmish/lobby, known AI inputs, DirectPlay packet/lockstep state, checksums, disconnects, save/load and bounded replay absence (incl. R-P0-04/05 AI group vectors and score fields) |
+| Document | Owns |
+|---|---|
+| [01-core-runtime-platform-and-determinism.md](01-core-runtime-platform-and-determinism.md) | The process: singleton, startup, window creation and the message pump, orderly shutdown; the wall-clock budget that decides how many fixed 30 Hz steps run; the authoritative twelve-phase tick order; threads, locks and thread-local runtime state; fixed pools and linked queues whose reuse and iteration order are behavior; the two random streams; the x87 environment and integer conversion; diagnostics, configuration and error paths |
+| [02-content-vfs-formats-and-data-loading.md](02-content-vfs-formats-and-data-loading.md) | Startup content discovery, the mount tiers and provider precedence, the HPI family, registry configuration, language and localization; the TDF grammar and typed access with defaults and duplicate policy; catalog construction and linking for units, weapons, features, movement classes, sides, sounds, GUI and maps; the interface, map, animation, model, script, font, image and sample decoders; failure, caching and lifetime rules |
+| [03-world-visibility-rendering-audio-and-video.md](03-world-visibility-rendering-audio-and-video.md) | World coordinates, terrain grids, height, water and projection; visibility, LOS, radar and fog presentation; the 8-bit indexed software renderer, its ten fixed-order effect strips, palettes and asset layers; world render passes and object presentation including models, shadows, selection and the nanolathe effects; media-dependent impacts; fonts, text and interface-owned drawing; audio backends, mixing and music; Smacker playback and movie capture |
+| [04-units-orders-scripts-and-movement.md](04-units-orders-scripts-and-movement.md) | Simulation prerequisites and the per-unit sweep; player, unit, definition and lifetime identities; orders, queues and dispatch, including stances, guard, factory completion and the special-behavior keys; the COB loader, VM, threads and script timing; the engine-to-COB callbacks and ports; terrain and movement prerequisites; ground path search and its scheduler; ground steering, collision and occupancy; hover, floaters and amphibious behavior; VTOL, flight and transports |
+| [05-economy-construction-players-and-features.md](05-economy-construction-players-and-features.md) | Player resource state, the authoritative settlement order and its two-stage algorithm, admission and carry, stocks, counters and waste, activation and stall transitions, allied resource and sensor sharing; unit creation and limits; build requests and factory queues; construction arithmetic and the nano cadence; repair, unit and feature reclaim, capture, resurrection; the feature catalog, placement, wreckage, burning, reproduction and sinking; saving all of it |
+| [06-weapons-projectiles-damage-and-effects.md](06-weapons-projectiles-damage-and-effects.md) | Combat prerequisites and phase order; the weapon catalog and logical flags; target acquisition, retention and fire eligibility including the weapon-query path and the accuracy family; firing callbacks, costs, reload and bursts; the projectile pool, identity and lifetime; family dispatch, motion and timers; collision and impact selection; impact, armor, damage and area effects; paralyzer, stockpile and interception; death, kill credit, corpses and feature conversion; weapon-driven feature, fire, audio and effect events |
+| [07-interface-input-camera-and-front-end.md](07-interface-input-camera-and-front-end.md) | The two interface families — the `.gui` front-end shell and the in-battle HUD; Win32 input translation and focus; modal windows and event ownership; the GUI file and widget model; front-end screen and state families; the battle HUD and side data; text, palette and localization use; the software cursor and world picking; selection, control groups, orders and build pages; camera, scrolling, projection and the radar/minimap; running display, pause, chat, options and outcomes |
+| [08-sessions-campaign-ai-network-save-and-replay.md](08-sessions-campaign-ai-network-save-and-replay.md) | Session structures, game-mode selection and the session lifecycle; the campaign catalog and progression, mission and map schema selection, placement and battle entry; victory and defeat triggers; skirmish configuration; computer-controlled players — the class-vector refresh, manager task slots, task groups, deadlines and dispatch gates, scoring, placement and the per-domain policies; the DirectPlay transport and lockstep material that remains out of scope; save-file organization, the load process, and the bounded replay evidence |
 
 ## Reading order
 
-The documents are numbered by dependency, not by importance:
+The documents are numbered by dependency, not by importance.
 
 1. Read the core runtime first for time, iteration, identity, lifetime, random,
    and floating-point rules.
 2. Read content loading before any subsystem whose definitions come from retail
    data.
-3. Read world/presentation before movement, construction, or combat when the
+3. Read world and presentation before movement, construction or combat when the
    behavior depends on coordinates, terrain cells, water, visibility, or
    presentation events.
-4. Read units/orders/scripts/movement before construction and combat because
+4. Read units/orders/scripts/movement before construction and combat, because
    both consume unit state, orders, pieces, and target identities.
 5. Economy/construction/features and combat can then be read in either order;
    their cross-links are stated explicitly.
 6. Interface consumes the preceding simulation and presentation state.
-7. Sessions/network/save orchestrate and serialize all categories.
+7. Sessions, campaign, AI and save orchestrate and serialize all categories.
 
 ## Cross-category coverage map
 
-The following map is intended to prevent a subsystem from disappearing between
-document boundaries:
+This map exists so a subsystem cannot disappear between two document
+boundaries.
 
 | Engine concern | Owning document | Important consumers |
 |---|---|---|
@@ -156,308 +163,373 @@ document boundaries:
 | HPI family, TDF, FBI, MOVEINFO, GAF, 3DO, TNT, OTA, GUI, SIDE, FNT, PCX, WAV | 02 | 03–08 |
 | Coordinates, terrain cells, height, metal, water, lava, occupancy substrate | 03 | 04, 05, 06, 07, 08 |
 | LOS, mapping memory, radar/sonar, fog and minimap presentation state | 03 | 04, 06, 07, 08 |
-| Indexed framebuffer, blitting, palettes, lighting/shading tables, models/sprites | 03 | 05, 06, 07 |
+| Indexed framebuffer, effect strips, palettes, shading tables, models/sprites | 03 | 05, 06, 07 |
 | Sounds, mixing, CD music, cinematics and movie capture | 03 | 06, 07, 08 |
 | Unit definitions/instances, slots, creation/deletion, flags | 04 | 05, 06, 07, 08 |
 | Canonical orders, state dispatch and queued unit intent | 04 | 05, 06, 07, 08 |
-| COB loader, VM, threads, callbacks and piece animation | 04 | 05, 06, 08 |
-| A*, path scheduler, locomotion, collision, hover, VTOL, transport | 04 | 05, 06, 07 |
+| COB loader, VM, threads, callbacks and piece animation | 04 | 03, 05, 06, 08 |
+| Path search, scheduler, locomotion, collision, hover, VTOL, transport | 04 | 05, 06, 07 |
 | Player resources, settlement, storage, sharing and statistics | 05 | 06, 07, 08 |
 | Building, repair, reclaim, capture, resurrection, factories and unit limits | 05 | 04, 07, 08 |
 | Features, wrecks, successors, fire, sinking and geothermal registration | 05 | 03, 04, 06, 08 |
 | Weapon slots, firing, projectiles, collision, damage, status and death | 06 | 03, 04, 05, 07, 08 |
 | Keyboard/mouse/focus, cursor, selection, groups and command UI | 07 | 04, 05, 06 |
-| Camera/minimap interaction, frontend GUI and battle HUD | 07 | 03, 08 |
-| Campaigns, missions, triggers, skirmish, lobby and endgame | 08 | 02, 07 |
-| Computer-player data and the rooted strategic planner, with explicit residual policy gaps | 08 | 04, 05, 06 |
-| DirectPlay, command frames, lockstep, checksums and disconnects | 08 | 01, 04, 05, 06 |
-| Save/load and bounded replay evidence | 08 | all categories |
+| Camera/minimap interaction, front-end GUI and battle HUD | 07 | 03, 08 |
+| Campaigns, missions, triggers, skirmish and endgame | 08 | 02, 07 |
+| Computer-player data and the rooted strategic planner | 08 | 04, 05, 06 |
+| DirectPlay framing and lockstep, kept only as the single-player boundary | 08 | 01, 04, 05, 06 |
+| Save/load and the bounded replay evidence | 08 | all categories |
 
-## Source hygiene and corrections
+## Citation forms
 
-The decompilation corpus contains raw exports, current clean-room notes,
-superseded notes, incomplete notes, quarantined placeholder reports, machine
-indexes, and contradiction ledgers. This synthesis follows these rules:
+A citation names a document and a place inside it, never a line number.
 
-- Explicitly retracted, superseded, or quarantined behavior is not promoted to
-  an affirmative contract.
-- A corrected function identity outranks an earlier semantic label.
-- A direct writer/reader chain outranks a field name inferred only from an
-  offset or nearby string.
-- Data loaded from a key is not assumed to affect gameplay until a consumer is
-  found.
-- A parsed but unconsumed field is documented as retained/inert or unknown,
-  according to the bounded search.
-- UI text and function adjacency can identify a subsystem, but they do not by
-  themselves establish its arithmetic.
-- Imported APIs establish available platform behavior; a specific engine use
-  requires a call path.
-- File decoders are specified only to the extent their retail read/write paths
-  have been traced.
-- Several strategic-AI policy branches, sensor interactions, script opcodes,
-  and malformed-input paths remain explicit gaps rather than reconstructed
-  folklore. The planner itself is positively rooted in document 08.
+| Form | Resolves to |
+|---|---|
+| `[04 §7.2]` | section 7.2 of document 04. Documents 01–04, 06 and 07 carry numbered sections |
+| `[05 "Two-stage settlement algorithm"]` | a heading of document 05. Documents 05 and 08 have unnumbered headings, so they are cited by heading text |
+| `[04 R-PATH-01 §10]` | the inline finding anchored `R-PATH-01` in document 04, sub-section §10 |
+| `[fmt tnt]` | `research/formats/tnt.md`. Format documents are cited whole; nothing inside one is anchored |
 
-Important corpus corrections reflected across the category documents include:
+`internal/docs` resolves all four forms mechanically. `go test ./internal/docs`
+fails when a citation in `docs/*.md` or in a Go comment under the source trees
+does not resolve, and when an anchored finding no design document cites — a
+traced contract with no implementation home. A dangling citation sends an
+implementer to a section that is not there, and the usual outcome is an
+invented constant.
 
-- the scenario unit reconstructor is not the strategic AI planner;
-- the ordinary visibility writer is distinct from fog/minimap presentation;
-- sequence advancement is distinct from visibility scanning;
-- the corrected economy uses floating-point stock and two-stage carry
-  settlement;
-- automatic resource sharing runs after settlement from the local source,
-  uses separate thresholds and destination capacity gaps, and selects the
-  last qualifying player slot;
-- the corrected construction helper uses a decreasing remaining fraction;
-- current pathfinding uses a 16-world-unit grid and the corrected A* roots;
-- the per-unit script drain uses the COB interpreter path, not a small GAF
-  allocation helper;
-- weapon accuracy is read by the turret executor's fire-time spread and
-  tolerance/pitch-tolerance by the angular-drift gate — one reader each, none
-  in admission, motion or damage `[R-WPN-03 §1]`; `aimrate` and
-  `movingaccuracy` have no key in the image at all (corrected 2026-08-29; the
-  earlier text said they had no gameplay reader);
-- automatic targeting uses randomized preferred/fallback selection, while
-  target retention and shot-time physical admission intentionally recheck
-  different predicates;
-- projectiles use a fixed packed pool with stable compaction, and ordinary
-  save/load does not serialize that pool;
-- area damage, paralyzer scheduling, damage-packet arithmetic, local versus
-  received-network Killed dispatch, corpse-chain placement, and no-explode
-  behavior use the corrected retail control flow in document 06;
-- receive retention windows and delayed gameplay queues do not prove one
-  universal network input delay;
-- the weapon record's catalog slot is selected by its authored `ID` key, and
-  the section name is stored as the record's name — an earlier reading that
-  `ID` is unread is retracted;
-- authored unit names and descriptions are localized through a
-  language-prefixed key lookup, not only through the translation table;
-- the terrain file's legacy version carries wind and gravity in its own
-  header while the canonical version hard-codes those fallbacks — an earlier
-  reading had the two versions reversed;
-- interface anchors are corner rectangles named `x1`, `y1`, `x2`, `y2`, not
-  origin-plus-size;
-- economy settlement is gated by an absolute per-player deadline normally
-  advanced by 30 ticks; eligible per-tick helpers run before the deadline
-  compare, and a late player catches up one settlement per tick;
-- a script sleep costs at least one tick, never zero;
-- a script pop with an unrecognized addressing mode advances without popping
-  rather than faulting;
-- the weapon start sound precedes the Fire callback rather than following it.
+## Inline finding anchors
 
-Further corrections folded during the 2026-08-22 reconciliation pass:
+A traced finding that code cites is written inline under a heading carrying an
+`R-<id>` anchor, next to the numbered section it refines. This table is
+generated from those headings: it names the document that introduces each
+anchor, what the anchor establishes, and the range of `§k` sub-sections its
+headings carry (`—` where the finding is a single heading with no sub-sections).
+An anchor introduced in more than one document has one row per document, and
+the row's document is authoritative, not the citing one.
 
-- a paralyzer hit prepends a scheduled command task carrying the stun credit
-  as a one-shot timed wait; there is no per-tick decay pool, and repeat hits
-  extend the wait;
-- `burst = N` is an inclusive total of flying pellets plus one immobile anchor
-  record that silently self-removes when pellet N launches; spray re-aims the
-  root record's velocity between copies, so every draw is relative to the
-  original aim;
-- interceptor claim happens at spawn after a fire-time rescan; the aim scan
-  measures the separate interceptor-coverage square on the incoming
-  projectile's stored aim point, while the slot stores its current position;
-- unit status bits 0–1 mirror the runtime mover movement mode: mode 1 is
-  grounded/on-surface and mode 2 is airborne; movement within either medium
-  does not change that classification [04 R-MOV-01 §8];
-- water damage applies on exactly every 30th tick to player-class 1/2 units at
-  or below sea level without the hover flag, as a no-callback damage type;
-- sinking wrecks descend at a fixed constant rate (-11468 fixed) with a
-  corpse-placement medium predicate deciding whether the descent starts;
-- feature reproduction has a live consumer that rolls per visited cell and is
-  stock-inert only because every shipped feature authors zero;
-- zero-valued meteor parameters merge the `gamedata/METEOR.TDF [Default]`
-  values while leaving the shower enabled; only an empty `MeteorWeapon`
-  disables it;
-- factory products queue in the primary order list; coalescing of identical
-  products is tail-only;
-- initial wind strength and six-bit direction use CRT draws; the next-change
-  interval is `((CRTdraw * 10) / 0x8000 + 5) * 30` ticks, while later strength
-  and full 16-bit heading use the simulation stream, jumping instantly and
-  notifying wind generators only on change ticks;
-- GAF frame-reference durations are whole simulation ticks;
-- the LOS mask carries per-source-player-slot bits and is never OR'd across
-  allied players.
+| Anchor | Doc | Sub-sections | Establishes |
+|---|---|---|---|
+| `R-AI-01` | 08 | §1–§20 | computer-player manager entry, slot indexing, and the verified constants |
+| `R-AI-02` | 08 | §1, §2 | the rally task's constructor state |
+| `R-AI-03` | 08 | §1–§7.4 | the metal-spot vector: builder, record, scan, consumer |
+| `R-AI-04` | 08 | §1–§6 | the task-class run is complete: seven classes and nothing else |
+| `R-AIR-01` | 04 | §1–§17 | the flight command block, its per-tick producer, and the transport executor pairs with their hang and drop offsets |
+| `R-AIR-02` | 04 | — | how a factory-built aircraft leaves the pad |
+| `R-AUD-01` | 03 | §1–§8 | sound device bring-up, sample buffers, the 32-voice mixer, and the 3-D model |
+| `R-AUD-02` | 03 | §1, §2 | the streamed narration path: delay timer, half-buffer refill, stop |
+| `R-CAM-01` | 07 | §1–§14 | the host frame where input becomes simulation state, the battle hotkey census, chat commands, interface options, movie capture, developer mode |
+| `R-CAMP-01` | 08 | §1–§11 | the campaign catalog and its grammar, the briefing screen, the new-game panel, the CD gate family, the dead warp entry |
+| `R-CAT-01` | 02 | §1–§8 | wildcard matching, the union enumerator and how "first backing wins" is enforced; key, value and section trimming; the download-menu compile; the alias catalog read |
+| `R-CB-01` | 04 | §1–§9 | the engine-to-COB callback name census and its bounded negative |
+| `R-COB-01` | 04 | §1–§3 | COB VM initialization and engine-call frames |
+| `R-COB-02` | 04 | §1, §2 | vertical-slice callback and port mappings |
+| `R-COB-03` | 04 | §1–§6 | the engine port set, exactly, including the transport attach and drop reads |
+| `R-COB-04` | 04 | §1–§10 | the explode opcode's flag bits and debris record |
+| `R-COB-05` | 04 | — | `BUGGER_OFF` has no engine reader |
+| `R-COB-06` | 04 | — | the script-touched marker is gate bit `0x4` |
+| `R-COLL-01` | 04 | §1–§11 | the collision commit step, in order |
+| `R-COMP-01` | 03 | §1–§5 | the frame composer's passes, starting with the tile pass |
+| `R-COMP-02` | 03 | §1–§7 | the LOS table accessors are one-based, and how the fog and mask layers compose |
+| `R-CONTENT-01` | 02 | — | movement-profile template initialization |
+| `R-CONTENT-02` | 02 | — | weapon-family discovery and same-ID merge |
+| `R-CONTENT-03` | 02 | — | the unit limit |
+| `R-CORE-01` | 01 | — | phase 9, 10 and 11 identities, the shake arithmetic, and the visibility publication seam |
+| `R-CORE-02` | 01 | — | battle RNG seeding and a chronological draw census |
+| `R-CORE-03` | 01 | — | the phase-12 radar blink cadence (also cited as `CRD-008`) |
+| `R-CRD-005` | 03 | §1 | phase-7 model-texture sequence traversal |
+| `R-CRD-006` | 03 | §2 | the follow-camera producer census |
+| `R-CRD-006` | 07 | §1 | the camera cadence seam and its two retail writers |
+| `R-DET-01` | 01 | §1–§6 | the float→int conversion census, the two round-to-nearest sites, control-word mutations, the per-phase draw table, the CRT stream's other consumers, and the lane claims checked against the census |
+| `R-DMG-01` | 06 | §1–§14 | the armor table is the weapon's `[DAMAGE]` block; damage-packet arithmetic and area effects |
+| `R-DOC04-A` | 04 | — | the movement startup pool template and the class-record defaults |
+| `R-DOC04-B` | 04 | — | the per-cell passability classifier, its consumption by the search, and the request revision pass |
+| `R-DOC04-C` | 04 | — | the order descriptor table verified from the static templates |
+| `R-ECO-01` | 05 | §1–§12 | settlement deadline strictness and the floating-point environment, the admission helpers, the two stages and the apply-back, commit order, the waste clamp and the four HUD rates |
+| `R-ECO-02` | 05 | §1–§4 | the building validator's entry bounds and its two published outputs |
+| `R-EGRESS-01` | 04 | — | why no-rally products queue at a factory exit |
+| `R-EGRESS-02` | 05 | — | a no-rally product column is a route-publication defect, not retail |
+| `R-ENTRY-01` | 08 | §1–§10 | battle entry: who runs it, the seeding and save gate, the world rebuild in allocation order, start positions, the visibility rebuild, the tail, and the first pump |
+| `R-ENTRY-02` | 08 | §1–§3 | the mission spawner's height probe and the profile passes' plan gate |
+| `R-FAC-01` | 04 | — | the factory movement boundary |
+| `R-FAC-01` | 05 | — | the bounded factory-release audit |
+| `R-FAC-01B` | 04 | — | the factory release boundary |
+| `R-FAC-01B` | 05 | — | the targeted release-boundary pass over the stock exit pieces |
+| `R-FAC-01C` | 05 | — | the factory-release call-chain continuation |
+| `R-FAC-01R` | 05 | — | the final increment through factory idle and close |
+| `R-FAC-02` | 04 | §1–§9 | the product is cargo: attach at allocation |
+| `R-FE-01` | 07 | §1–§12 | the front-end controller: phases, substates, and the pump |
+| `R-FE-02` | 07 | §1–§12 | the multiplayer screen edges, named as out of scope |
+| `R-FEAT-01` | 05 | §1–§17 | the feature parser's fields, widths, defaults and key census, and feature placement, successors, burning, reproduction and sinking |
+| `R-FONT-01` | 03 | §1–§7 | the FNT record as the executable reads it, and text drawing |
+| `R-FX-01` | 03 | §1–§7 | named GAF banks and slots, the fog fade families, and the cursor bank |
+| `R-FX-02` | 03 | §1–§6 | the strip object pool and the base object |
+| `R-HUD-02R` | 07 | — | the HUD footer's state and formatting boundary |
+| `R-HUD-03` | 07 | §1–§14.5 | the ordinary footer: sources, priority, redraw and clearing |
+| `R-HUD-04` | 07 | §1–§5 | the Space-held Kills/Losses score panel |
+| `R-HUD-05` | 07 | — | the battle chrome at display modes larger than 640×480 |
+| `R-KEYS-01` | 02 | §1–§6 | the key consumer table: unit- and weapon-record consumers not stated elsewhere |
+| `R-LAYER` | 03 | §1–§4 | the mapping word grid is the path search's owner/building mask; the wreck-smoke trigger is the corpse finalizer's land path; strip 5 has no combat producer |
+| `R-MALF-01` | 02 | §1–§11 | the loader malformed-input matrix |
+| `R-MAP-01` | 02 | §1–§9 | the map-load pipeline: entry points, order, the resource-path slots, and schema selection |
+| `R-MM-01` | 03 | §1–§3 | the minimap does carry a viewport rectangle |
+| `R-MOV-01` | 04 | §1–§9 | the ground mover, exactly, and the movement-mode status bits |
+| `R-MOV-02A` | 04 | — | the dynamic-blocker boundary |
+| `R-MOV-03` | 04 | §1–§11 | the per-player unit sweep step by step, its three gates, the queue helpers and the purge |
+| `R-OOS-01` | 08 | §1–§5 | the single-player boundary: the packets the local path still constructs |
+| `R-ORD-01` | 04 | §0–§18 | the pending word's bits and who arms them |
+| `R-ORD-02` | 04 | §1–§7 | command resolution, exactly |
+| `R-ORDER-02` | 04 | §1–§3 | handler retry, pre-reject mapping, and the cleanup callbacks |
+| `R-P0-01` | 04 | — | final-order arrival and the satisfied-bit handshake |
+| `R-P0-02` | 04 | — | the build footprint anchor and the model center |
+| `R-P0-03` | 02 | §1–§8 | the category token registry and membership-bitset compilation |
+| `R-P0-04` | 08 | §1–§6 | AI group vectors: no per-tick group producer, and two vector families |
+| `R-P0-05` | 08 | §1–§10 | score inputs and update order |
+| `R-P0-06` | 05 | §1–§6 | the construction nano cadence: work-admission gating and the emission producers |
+| `R-P0-07` | 06 | — | the weapon-query path: callbacks and seeds, the per-slot and fire-time pipelines, aim dispatch, and the target-point resolver |
+| `R-P0-08` | 04 | — | placement footprint legality |
+| `R-P0-08-B` | 04 | §1 | yard bit 0: the structure-yard mark and the known-site gate |
+| `R-P0-09` | 04 | — | factory completion, activation, and rally inheritance |
+| `R-P0-10` | 04 | — | engine port write semantics, the factory stance handshake, and thread-start masks |
+| `R-P0-11` | 07 | §1–§6 | the UI order producers, starting with the factory product click |
+| `R-P0-16-A` | 04 | — | player-slice order at battle entry |
+| `R-P0-18-A` | 03 | §1, §2 | observer emitter height and model-top provenance |
+| `R-P0-18-B` | 03 | §1–§4 | terrain height-word polarity and the LOS height word |
+| `R-P0-19-N` | 03 | — | the nanoframe reveal |
+| `R-P0-19-P` | 03 | — | the nanolathe spray: its source point's coordinate space and the inclusive rectangle filler |
+| `R-P28-ANG-01R` | 02 | §1 | the building heading field audit |
+| `R-P28-ANG-01R` | 04 | §2 | the unit-initialization heading |
+| `R-P28-ANG-01R` | 05 | §3 | the factory product heading |
+| `R-P28-COB-01R` | 04 | — | the construction-KBot initial-pose boundary |
+| `R-PATH-01` | 04 | §1–§15 | the path search working set, entry array and touched bitmap, its costs, and the scheduler |
+| `R-PLAT-01` | 01 | §1–§9 | the application and battle host pumps, the command-line and profile reads, pause framing and the speed clamp, the thread census, the tagged allocator, input queue capacity and overflow, which thread's CRT block each consumer reads, the exception filter, and the developer console |
+| `R-PLAT-02` | 01 | §1–§8 | process static initialisation and the engine block, the quit and shutdown sequence, window-creation defaults, and the scaled-clock timer table |
+| `R-PROD-01` | 05 | §1–§8 | the economy fields with widths, defaults and reader census; the activated bit; the wind phase and its draws; tidal strength; upkeep timing; the metal byte and footprint sampling |
+| `R-RAST-01` | 03 | §1–§8 | the polygon raster: edge walk, span inclusion, the winding cull, the fixed-point steps, and SHD-only lighting in the model path |
+| `R-REN-02R` | 03 | — | red/purple fringe provenance |
+| `R-REN-03A` | 03 | — | the per-unit composition image, the height key, and structure anti-aliasing |
+| `R-REN-03D` | 03 | — | model shadows: projection, fill, tinting, and cache |
+| `R-REV-01` | 07 | §7, §10 | hover hull extrema, corner mapping, projection sign, the polygon predicate, and the HOT UNITS producer |
+| `R-REV-02` | 04 | — | the exit-piece locator transform |
+| `R-RND-02A` | 03 | — | model-path shading and stock reachability |
+| `R-RND-02A` | 04 | — | the script-side shading census |
+| `R-RR16-A` | 03 | §1 | gray table construction |
+| `R-SAVE-02` | 08 | §1–§15 | the Save Game screen: file naming, the slot list, overwrite and delete |
+| `R-SAVE-FEATURE-01` | 08 | — | feature record maps and staged reconstruction |
+| `R-SAVE-ORDER-01` | 08 | — | per-unit order records and subtype payloads |
+| `R-SAVE-UNIT-01` | 08 | — | the unit base record and fixed-slot reconstruction |
+| `R-SAVE-WEAPON-01` | 08 | — | fixed weapon-slot records and transient aim state |
+| `R-SEL-02A` | 03 | — | selection geometry, palette, and the composition boundary |
+| `R-SEL-02A` | 07 | — | the selection overlay and the picking evidence |
+| `R-SEL-02B2` | 07 | — | hover hull arithmetic and its publication boundary |
+| `R-SENSOR-01` | 03 | — | sensor phase placement in the tick |
+| `R-SESS-01` | 08 | §1–§9 | session kinds and the accessor, the player record's peer-identity sort key, and the two live-player counters |
+| `R-SHARE-01` | 05 | §1–§10 | the sharing control bytes, the two alliance rows and the alliance predicate, the two transfer helpers, and the automatic dispatcher |
+| `R-SKIR-01` | 08 | §1–§11 | the skirmish setup record and every option's consumer chain |
+| `R-SLOPE-01` | 04 | §5 | the height byte's path into the movement slope test, and the footprint rule |
+| `R-SND-01` | 02 | §1, §2 | the sound-category loader: file, record, bare and numbered keys, captions |
+| `R-SPEC-01` | 04 | §0–§15 | the special-behavior FBI keys: storage, reader census, contracts |
+| `R-STANCE-01` | 04 | §1–§9 | stance values and labels, the writer chain from button to unit field, the standing-fire and standing-move gates, the chase leash, defaults and factory inheritance |
+| `R-STRIP-01` | 03 | §1–§3 | the effect strips: producer census and per-strip events, object families and terminal state, and the sweep's CRT draws |
+| `R-TERR-01` | 03 | §1–§8 | the two terrain attribute encodings and the header slot map, the void strips, the height queries and their sentinels, the air sector grid, the map-global block, and the absence of deformation |
+| `R-TRIG-01` | 08 | §1–§12 | trigger authority, record shape and construction, the shared predicates, every condition, `MoveUnitToRadius` geometry, and the tick site's cadence and latch |
+| `R-UNIT-06` | 04 | §1–§6 | guard assistance retargeted and sized, the guard's wake and re-target producers, and the attachment and transport callback encoding |
+| `R-VIS-01` | 03 | §1–§9 | the visibility mode word's provenance and polarity, and the LOS mask's per-source-slot bits |
+| `R-WATER-01` | 03 | §1, §2 | wakes are the script-emitted strip-2 sprinkles; there is no wake rectangle |
+| `R-WFX-01` | 06 | §1–§6 | the weapon presentation keys: parse, storage, art binding, and the loop byte |
+| `R-WGT-01` | 07 | §1–§13 | the gadget service pass and who closes the window, the key matrix, per-kind gadget behavior, the parser's key table, and the grey flag |
+| `R-WGT-02` | 07 | §1–§5 | the front-end bitmap cache, window-record words and their setters, and the gadget appenders |
+| `R-WIND-01` | 03 | — | the wind direction vector: which table feeds which axis |
+| `R-WORK-01` | 05 | §1–§15 | the shared construction step instruction-exact, and reclaim, capture and resurrection, exactly |
+| `R-WPN-01` | 06 | §4 | the fixed trigonometry table is 512 entries, quantizing to 128 angle units |
+| `R-WPN-02` | 06 | §2, §5 | the death latch and the paralyzer gate read the victim's player controller type |
+| `R-WPN-03` | 06 | §1–§6 | the accuracy family's full reader census, the drift gate, and the spread — one reader each, and no moving-accuracy or aim-rate mechanism |
+| `R-WPN-04` | 06 | §1–§4 | the target-point resolver: point-target height, the dead-target clear, and SweetSpot's vertex-box centre |
+| `R-WPN-05` | 06 | §1–§12 | the weapon-slot engagement distance and the order-side shot-admission gate, the slot control byte, the wind words, and the stockpile queue's malformed arms |
+
+Three anchors that code and the design documents still cite are introduced
+under a bold paragraph lead-in rather than a heading, so they are not in the
+table above and are listed here instead: `R-DOC04-D` (mobile occupancy and path
+search, document 04), `R-P0-08-A` (the occupancy layer finished buildings do
+not write, document 04, cited from 05), and `R-P0-19` (the nanolathe
+presentation pipeline, document 03, with the mobile-build walk target in 04).
+They resolve, because the citation checker indexes an anchor wherever it
+appears in a document, but a finding that code cites belongs under a heading;
+promote them when the owning section is next edited.
 
 ## Legacy packet citation routing
 
-Early implementation comments cite research packets that were later folded
-into the category documents. The packet files and orchestration plan are not
-part of the curated reference; this table preserves their searchable IDs and
-routes readers to the current authoritative home. A packet-local `§` suffix in
-an old citation describes the retired packet outline, not a section number in
-the destination document.
+Early implementation comments cite research packets that were later folded into
+the category documents. The packet files are not part of the curated reference;
+this table keeps their searchable identifiers and routes each to its current
+home. A packet-local `§` suffix in an old citation describes the retired packet
+outline, not a section of the destination.
 
-| Legacy ID | Current authoritative home |
+| Legacy ID | Current home |
 |---|---|
-| `[P0-01]`, `[P0-02]`, `[P0-03]` | doc 08 §"Established AI-facing data and rooted planner" |
-| `[P0-04]` | doc 08 mission/skirmish placement and initialization |
-| `[P0-05]` | doc 08 campaign progression and session end |
-| `[P0-06]` | docs 04 §3.6 and 08 mission loading |
-| `[P0-07]`, `[P0-08]`, `[P0-09]` | doc 04 §3 orders, queue pumping, and same-tick dispatch |
-| `[P0-10]` | doc 06 §§3–4 targeting, Aim, and firing |
-| `[P0-11]` | docs 03 §3.2 and 06 §3 sensors and target admission |
-| `[P0-12]` | doc 04 §8 ground collision and occupancy |
-| `[P0-13]` | doc 04 §7 path search, goals, and scheduling |
-| `[P0-14]` | docs 04 §3.8 and 05 construction completion |
-| `[P0-15]` | doc 05 unit reclaim, capture, resurrection, and reverse construction |
-| `[P0-16]` | docs 04 §2 and 05 §"Unit creation and limits" |
-| `[P0-17]` | doc 03 terrain plus `[fmt tnt]` plot-cell encoding |
-| `[P0-18]` | doc 03 §3.2 visibility-mask and LOS raster behavior |
-| `[P1-01]` | doc 08 §"Session end and reporting" |
-| `[P1-02]` | docs 02 mission data and 08 mission loading/media behavior |
-| `[P1-03]` | docs 02 movement-class data and 04 §6/§9 terrain-medium behavior |
-| `[P1-04]` | doc 04 §§9–10 hover, amphibious, and flight behavior |
-| `[P1-05]` | doc 04 transport and attachment behavior |
-| `[P1-06]` | doc 05 settlement, admission, and sharing |
-| `[P1-07]` | docs 04 §8 and 06 §§8–9 collision and damage |
-| `[P1-08]` | doc 06 §§5–10 projectile families and edge states |
-| `[P1-09]` | doc 06 §11 stockpile and interceptor behavior |
-| `[P1-10]` | doc 05 feature placement, extraction, lifecycle, and fire |
-| `[P1-11]` | doc 04 §§4–5 COB VM, ports, callbacks, and persistence |
-| `[P1-12]` | doc 02 content resolution, overrides, sounds, and error policy |
-| `[P1-13]` | doc 08 save organization, contents, and load process |
-| `[P1-14]` | docs 04 §3.7 and 07 picking, selection, latches, and build UI |
-| `[P1-15]` | docs 03 terrain and 05 terrain-metal extraction |
+| `[P0-01]`, `[P0-02]`, `[P0-03]` | `[08 "Established AI-facing data and rooted planner"]` |
+| `[P0-04]` | `[08 "Placement and battle entry"]` |
+| `[P0-05]` | `[08 "Campaign catalog and progression"]`, `[08 "Session end and reporting"]` |
+| `[P0-06]` | `[04 §3.6]`, `[08 "Mission and map schema selection"]` |
+| `[P0-07]`, `[P0-08]`, `[P0-09]` | `[04 §3]` — orders, queue pumping, and same-tick dispatch |
+| `[P0-10]` | `[06 §3]`, `[06 §4]` — targeting, Aim, and firing |
+| `[P0-11]` | `[03 §3.2]`, `[06 §3]` — sensors and target admission |
+| `[P0-12]` | `[04 §8]` — ground collision and occupancy |
+| `[P0-13]` | `[04 §7]` — path search, goals, and scheduling |
+| `[P0-14]` | `[04 §3.8]`, `[05 "Construction arithmetic"]` |
+| `[P0-15]` | `[05 "Unit reclaim"]`, `[05 "Capture"]`, `[05 "Resurrection"]` |
+| `[P0-16]` | `[04 §2]`, `[05 "Unit creation and limits"]` |
+| `[P0-17]` | `[03 §2]` terrain grids, plus `[fmt tnt]` plot-cell encoding |
+| `[P0-18]` | `[03 §3.2]` — visibility mask and LOS raster behavior |
+| `[P1-01]` | `[08 "Session end and reporting"]` |
+| `[P1-02]` | `[02 §6]` mission data, `[08 "Mission and map schema selection"]` |
+| `[P1-03]` | `[02 §5]` movement-class data, `[04 §6]`, `[04 §9]` |
+| `[P1-04]` | `[04 §9]`, `[04 §10]` — hover, amphibious, and flight |
+| `[P1-05]` | `[04 §10.2]`, `[04 R-AIR-01 §9]`, `[04 R-UNIT-06 §3]` — transport and attachment |
+| `[P1-06]` | `[05 "Authoritative settlement order"]`, `[05 "Resource admission and carry"]`, `[05 "Allied resource and sensor sharing"]` |
+| `[P1-07]` | `[04 §8]`, `[06 §8]`, `[06 §9]` — collision and damage |
+| `[P1-08]` | `[06 §5]`, `[06 §6]`, `[06 §7]` — projectile families and edge states |
+| `[P1-09]` | `[06 §11]` — stockpile and interception |
+| `[P1-10]` | `[05 "Feature catalog and placement"]`, `[05 "Feature burning"]`, `[05 "Feature sinking and water interaction"]` |
+| `[P1-11]` | `[04 §4]`, `[04 §5]` — COB VM, ports, callbacks, and persistence |
+| `[P1-12]` | `[02 §2]`, `[02 §8]` — content resolution, overrides, and error policy |
+| `[P1-13]` | `[08 "Save-file organization"]`, `[08 "Load process"]` |
+| `[P1-14]` | `[04 §3.7]`, `[07 §8]`, `[07 §9]` — picking, selection, latches, and build UI |
+| `[P1-15]` | `[03 §2]` terrain, `[05 "Resource contributions"]` terrain-metal extraction |
 
 ## Gap disposition
 
-The gap-analysis files (`GAP-ANALYSIS.md`, `GAP_ANALYSIS.md`) were removed on
-2026-08-26: they were a working audit that had gone stale, and open questions
-should be ephemeral — tracked as `TODO(T23)` / `TODO(T25)` / `TODO(question)`
-markers at the exact site in code and as **Unknown** items in each category
-doc's "Missing and unknown" list. Their closed tasks were promoted into the
-category documents before removal; the mapping recorded in the last revision:
+The gap-analysis files were a working audit that went stale and were removed;
+open questions are ephemeral and belong at the site of the work, as
+`TODO(T23)` / `TODO(T25)` / `TODO(question)` markers in code and as **Unknown**
+items in each document's "Missing and unknown" list. Their closed tasks were
+promoted into the category documents first. A `[GAP Tn]` citation in code means
+the task's content now lives here:
 
 | Task | Promoted to |
 |---|---|
-| T1 economy ledger cadence | doc 05 settlement |
-| T2 flight integrator arithmetic | doc 04 §10 |
-| T3 factory production lifecycle | docs 04 §3.5 / 05 |
-| T4 death-cause producer table | doc 06 §12.1 |
-| T5 ballistic malformed/overflow table | doc 06 |
-| T6 pool-full fire retains draws | doc 06 |
-| T7 visibility predicate + sight shapes | doc 03 §3.2 |
-| T8 InitialMission mini-language | docs 02 / 08 |
-| T9 session states, lockstep pacing, save | doc 08 |
-| T10 trigger objects and mission mechanics | doc 08 |
-| T11 peer hash overwrite-sync | docs 01 / 08 |
-| T12 SP vs MP pause/carry | doc 01 §4.3 |
-| T13 wind draw arithmetic | doc 01 §7.3 |
-| T14 content-layer promotions | doc 02 |
-| T15 COB callback catalog + same-tick windows | doc 04 §5.4 |
-| T16 route publication + water damage | doc 04 §7.3/§9.2/§10.2 |
-| T17 sensor phase + fog + compositor | doc 03 |
-| T18 script rotation order | docs 03 / 04 |
-| T19 path heuristic family | doc 04 §7.2 |
-| T20 economy/feature residuals | doc 05 |
-| T21 combat residuals | doc 06 |
-| T22 interface promotions | doc 07 |
+| T1 economy ledger cadence | `[05 "Authoritative settlement order"]` |
+| T2 flight integrator arithmetic | `[04 §10]` |
+| T3 factory production lifecycle | `[04 §3.5]`, `[05 "Build request and factory queue behavior"]` |
+| T4 death-cause producer table | `[06 §12.1]` |
+| T5 ballistic malformed and overflow table | `[06 §7]` |
+| T6 pool-full fire retains draws | `[06 §5]` |
+| T7 visibility predicate and sight shapes | `[03 §3.2]` |
+| T8 InitialMission mini-language | `[04 §3.6]`, `[08 "Mission and map schema selection"]` |
+| T9 session states, lockstep pacing, save | `[08 "Session lifecycle"]`, `[08 "Save-file organization"]` |
+| T10 trigger objects and mission mechanics | `[08 "Victory and defeat triggers"]` |
+| T11 peer hash overwrite-sync | `[01 §9]`, `[08 "Synchronization and integrity checks"]` |
+| T12 single- versus multiplayer pause and carry | `[01 §4.3]` |
+| T13 wind draw arithmetic | `[01 §7.3]` |
+| T14 content-layer promotions | `[02 §5]` |
+| T15 COB callback catalog and same-tick windows | `[04 §5.4]` |
+| T16 route publication and water damage | `[04 §7.3]`, `[04 §9.2]`, `[04 §10.2]` |
+| T17 sensor phase, fog, and compositor | `[03 §3]`, `[03 §5]` |
+| T18 script rotation order | `[03 §5]`, `[04 §4]` |
+| T19 path heuristic family | `[04 §7.2]` |
+| T20 economy and feature residuals | `[05 "Feature catalog and placement"]` and the settlement sections |
+| T21 combat residuals | `[06 §9]`, `[06 §12]` |
+| T22 interface promotions | `[07 §6]`, `[07 §9]` |
 | T23 platform residuals | `TODO(T23)` markers in code — none gate gameplay |
-| T24 network internals | out of scope (no multiplayer) |
-| T25 accepted blocked items | `TODO(T25)` markers in code (extractor placement helpers, resource-activity ledger arguments, definition flag semantics, save bulk-box byte layouts) |
+| T24 network internals | out of scope; no multiplayer |
+| T25 accepted blocked items | `TODO(T25)` markers in code: extractor placement helpers, resource-activity ledger arguments, definition flag semantics, save bulk-box byte layouts |
 
-A `[GAP Txx]` citation in code means the task's content now lives at the
-promoted location above. The compressed GAF decoder is **not** a gap: it is
-fully specified in `[fmt gaf]` and implemented in `formats/gaf.go`.
+The compressed GAF decoder is **not** a gap: it is fully specified in
+`[fmt gaf]` and implemented.
 
-### Tails and markers (RWU-00-5, 2026-08-28)
+## How coverage of the executable was established
 
-The eight "Missing and unknown" tails, and the "### Unknown" blocks inside
-documents 02 and 07, were regenerated on 2026-08-28 so that they contain
-**only open items**. Each item is one bullet naming what is unknown, the
-section that owns it, and the decider that would settle it — *static trace*,
-*asset census*, or *manual retail observation*. Closure narratives were
-deleted from the tails; every finding they recited is in the body section that
-owns it, and each regenerated tail carries a correction note saying what the
-previous text said and why it was wrong. Where a tail held established text
-that existed nowhere else, that text was promoted into its section rather than
-deleted.
+The corpus was completed from the executable inward, not from the documents'
+own lists of open questions. Every reachable function in the retail
+executable's game code carries a row in a coverage ledger with one of six
+classifications: **covered** — a research section states its behavior at
+implementable precision and the row cites that section; **library** — compiler
+runtime, decompressor, video codec or platform shim, with the evidence;
+**dead** — no caller, no table reference, no callback registration; **out of
+scope** — the networking transport, lobby and codec internals excluded above,
+still named so the boundary is explicit; and **partial** and **uncovered**, of
+which none remain. Functions were grouped into clusters by walking the call
+graph from known roots — the tick phase dispatcher, the order descriptor
+table, the GUI window handler table, the COB port switch, the front-end state
+table — and by string vocabulary (GUI screen names, TDF keys, diagnostics);
+each cluster maps to one document. A section was accepted as covering a row
+only when a fresh implementer, reading that section alone, could write the
+function without choosing anything: inputs named with units and defaults,
+arithmetic and widths spelled out, comparisons exact, edges and timing stated,
+confidence marked per claim.
 
-Markers and tails are reconciled in both directions: every live
-`TODO(question)` / `TODO(T23)` / `TODO(T25)` / `TODO(CRD-006)` marker in
-`research/` has a bullet in the owning document's tail that names it, and no
-tail bullet describes something already closed. Markers that appear only
-inside a quotation of retracted text no longer spell the marker syntax, so a
-grep counts live questions. Exact counts are regenerated by the raw-corpus
-citation/marker check rather than duplicated as hand-maintained metadata here.
-`research/formats/pal.md` holds the single marker outside the category
-documents (the blue tint table's provenance), listed in doc 03's tail.
+The ledger itself lives outside this repository, in the raw analysis corpus,
+because its rows are keyed by executable address. It is re-checked against the
+research headings whenever a document changes, so a rewrite that drops a cited
+section is caught there as well as by `internal/docs`. What can be committed —
+the map from cluster role to design document, in role names only — is in
+`docs/ARCHITECTURE.md`.
 
-### Inline finding anchors
+## Source hygiene
 
-Closures are written inline under a heading — or, in documents 05 and 08,
-under a bold paragraph lead-in — carrying an `R-<id>` anchor. This table maps
-every anchor in the corpus to the document that introduces it, so a
-`[R-…]` citation resolves without a search. The citation resolver kept in the
-raw corpus (`scripts/check_citations.py`) regenerates it and reports anchors
-that are cited but never introduced.
+The raw analysis corpus contains exports, current notes, superseded notes,
+incomplete notes, quarantined placeholder reports, machine indexes, and
+contradiction ledgers. Promotion into these documents follows fixed rules:
 
-| Anchor | Introduced in |
-|---|---|
-| `R-CORE-01`, `R-CORE-02`, `R-CORE-03`, `R-DET-01`, `R-PLAT-01`, `R-PLAT-02` | doc 01 |
-| `R-CAT-01`, `R-CONTENT-01`, `R-CONTENT-02`, `R-CONTENT-03`, `R-KEYS-01`, `R-MALF-01`, `R-MAP-01`, `R-P0-03`, `R-SND-01` | doc 02 |
-| `R-AUD-01`, `R-AUD-02`, `R-COMP-01`, `R-COMP-02`, `R-CRD-005`, `R-FONT-01`, `R-FX-01`, `R-FX-02`, `R-P0-18-A`, `R-P0-18-B`, `R-P0-19`, `R-P0-19-N`, `R-P0-19-P`, `R-RAST-01`, `R-REN-02R`, `R-REN-03A`, `R-REN-03D`, `R-RR16-A`, `R-SENSOR-01`, `R-STRIP-01`, `R-TERR-01`, `R-VIS-01`, `R-WATER-01`, `R-WIND-01` | doc 03 |
-| `R-AIR-01`, `R-CB-01`, `R-COB-01`, `R-COB-02`, `R-COB-03`, `R-COB-04`, `R-COLL-01`, `R-DOC04-A`, `R-DOC04-B`, `R-DOC04-C`, `R-DOC04-D`, `R-FAC-02`, `R-MOV-01`, `R-MOV-02A`, `R-MOV-03`, `R-ORD-01`, `R-ORD-02`, `R-ORDER-02`, `R-P0-01`, `R-P0-02`, `R-P0-08`, `R-P0-08-A`, `R-P0-09`, `R-P0-10`, `R-P0-16-A`, `R-P28-COB-01R`, `R-PATH-01`, `R-REV-02`, `R-SPEC-01`, `R-STANCE-01`, `R-UNIT-06` | doc 04 |
-| `R-ECO-01`, `R-ECO-02`, `R-FAC-01C`, `R-FAC-01R`, `R-FEAT-01`, `R-P0-06`, `R-PROD-01`, `R-SHARE-01`, `R-WORK-01` | doc 05 |
-| `R-DMG-01`, `R-P0-07`, `R-WFX-01`, `R-WPN-01`, `R-WPN-02`, `R-WPN-03`, `R-WPN-04` | doc 06 |
-| `R-CAM-01`, `R-FE-01`, `R-FE-02`, `R-HUD-02R`, `R-HUD-03`, `R-HUD-04`, `R-P0-11`, `R-REV-01`, `R-SEL-02B2`, `R-WGT-01`, `R-WGT-02` | doc 07 |
-| `R-AI-01`, `R-AI-02`, `R-AI-03`, `R-CAMP-01`, `R-ENTRY-01`, `R-ENTRY-02`, `R-OOS-01`, `R-P0-04`, `R-P0-05`, `R-SAVE-02`, `R-SAVE-FEATURE-01`, `R-SAVE-ORDER-01`, `R-SAVE-UNIT-01`, `R-SAVE-WEAPON-01`, `R-SESS-01`, `R-SKIR-01`, `R-TRIG-01` | doc 08 |
-| `R-CRD-006` | docs 03 (§2 producer census) and 07 (§1 cadence seam) |
-| `R-FAC-01`, `R-FAC-01B` | docs 04 (movement boundary) and 05 (release audit) |
-| `R-LAYER` | docs 03 (§§1–4) and 06 |
-| `R-P28-ANG-01R` | docs 02 (§1), 04 (§2) and 05 (§3) |
-| `R-RND-02A`, `R-SEL-02A` | docs 03 and 04 / 03 and 07 respectively |
+- Explicitly retracted, superseded, or quarantined behavior is never promoted
+  to an affirmative contract.
+- A corrected function identity outranks an earlier semantic label.
+- A direct writer/reader chain outranks a field name inferred only from an
+  offset or a nearby string.
+- Data loaded from a key is not assumed to affect gameplay until a consumer is
+  found; a parsed but unconsumed field is documented as retained, inert, or
+  unknown, according to the bounded search.
+- UI text and function adjacency can identify a subsystem; they do not by
+  themselves establish its arithmetic.
+- Imported APIs establish available platform behavior; a specific engine use
+  requires a call path.
+- File decoders are specified only to the extent their retail read and write
+  paths have been traced.
+- Strategic-AI policy branches, sensor interactions, script opcodes, and
+  malformed-input paths that remain open are written as explicit gaps rather
+  than reconstructed folklore.
 
-Some anchors are introduced in one document and cited from several — `R-LAYER`
-and `R-DOC04-A` are the widest — which is why the home column, not the citing
-document, is authoritative.
-
-## How to use the specifications
-
-For implementation work:
+## How to use the specification
 
 1. Implement only established behavior as a strict retail contract.
-2. Isolate supported inference behind named compatibility decisions so later
-   decompilation can replace it without rewriting unrelated systems.
-3. Represent unknown behavior explicitly in code and documentation; do not
+2. Isolate supported inference behind a named seam, so a later trace can
+   replace it without rewriting unrelated systems.
+3. Represent unknown behavior explicitly in code and documentation; never
    choose a modern default and label it retail.
-4. Preserve data that the retail executable reads even when its consumer is
+4. Preserve data the retail executable reads even when its consumer is
    unknown, provided preservation does not invent an effect.
 5. Preserve authoritative order, single-precision narrowing, integer
    truncation, stable pool order, allocation failure, sentinel values, and
-   queue capacity wherever established.
-6. Keep presentation events separate from authoritative outcomes even when the
-   same retail function initiates both.
-7. Update the relevant document's final unknown list when new static evidence
-   closes or contradicts a behavior. New findings are edited into the owning
-   category doc in place — a closure of a tracked unknown or a long finding is
-   written inline under a heading carrying an `R-<id>` anchor (the old addenda
-   files no longer exist); a correction must state what the previous text said
-   and why it was wrong.
+   queue capacity wherever they are established.
+6. Keep presentation events separate from authoritative outcomes, even where
+   one retail routine initiates both.
+7. When new static evidence closes or contradicts a behavior, edit the owning
+   document in place: the closure goes under the heading that owns it, with an
+   `R-<id>` anchor if code will cite it, and the correction replaces the text
+   it corrects. Update that document's "Missing and unknown" list in the same
+   change.
 
 ## Global missing and unknown
 
 - Complete function-boundary reconciliation across the whole executable.
-- Recover executable regions missed by both current disassemblers.
-- Re-audit all library/runtime identifications so compiler support code is not
+- Recover executable regions missed by every disassembler used so far.
+- Re-audit library and runtime identifications, so compiler support code is not
   mistaken for engine behavior and game code is not discarded as a library.
-- Finish reader/writer/caller censuses for every dynamically addressed global
-  structure.
-- Close all explicitly quarantined COB opcode, port, callback, construction,
-  visibility, content-format, renderer, audio, AI, and save placeholders.
+- Finish reader, writer, and caller censuses for every dynamically addressed
+  global structure.
+- Close the quarantined COB opcode, port, callback, construction, visibility,
+  content-format, renderer, audio, AI, and save placeholders.
 - Establish malformed-input, overflow, allocation-failure, and shutdown
   behavior for every file, queue, pool, and platform service.
 - Complete cross-category same-tick ordering for creation, callbacks, economy,
-  movement, projectiles, features, visibility, network commands, and cleanup.
+  movement, projectiles, features, visibility, and cleanup.
 - Derive bit-exact floating-point and random-consumption behavior for every
-  authoritative algorithm that still has ambiguous evaluation order.
-- Close the strategic planner's remaining policy branches named as Unknown in
+  authoritative algorithm whose evaluation order is still ambiguous.
+- Close the strategic planner's remaining policy branches, named as Unknown in
   document 08.
-- Decode the complete DirectPlay packet protocol and lockstep barrier.
-- Inventory every save section and determine whether random/scheduler state is
-  serialized indirectly.
+- Inventory every save section and determine whether random and scheduler state
+  is serialized indirectly.
 - Extend the bounded replay search to unrecovered functions and dynamically
   constructed names.
-- Reconcile all current contradictions without using visible behavior or a
+- Reconcile the remaining contradictions without using visible behavior or a
   non-retail implementation as the deciding source.

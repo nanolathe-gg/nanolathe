@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
 // resetSaveLoadScreenState clears the process-wide dialog singletons so one
@@ -29,10 +30,7 @@ func resetSaveLoadScreenState(t *testing.T) {
 // directory so no test ever writes into the retail install.
 func retailShellForTest(t *testing.T) (*gameShell, string) {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		t.Skip("NANOLATHE_TA_ROOT is unset; skipping the asset-backed campaign walk")
-	}
+	root := testsupport.RetailRoot(t)
 	cs, err := openContent(Options{Root: root})
 	if err != nil {
 		t.Skipf("retail content unavailable: %v", err)

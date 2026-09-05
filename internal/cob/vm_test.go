@@ -26,9 +26,10 @@ func synthProg(code []uint32, pieces []string, statics int, byID []int) *Program
 		scripts[string(rune('A'+i))] = pc
 		_ = pc
 	}
-	// Ensure isValidEntry works: need map values containing each byID pc
-	// For single-script case we already have byID[0]; map contains it.
-	// For tests that use direct pc as script id, progHasID fallback allows direct pc.
+	// Every fixture program declares its entry-point table: a script id is an
+	// index into ScriptsByID and nothing else [04 §4.3] C14. The VM used to
+	// carry a second arm that read the id as a direct code word index when a
+	// program had no table, which only hand-built programs could reach.
 	return &Program{
 		Code:        code,
 		Scripts:     scripts,

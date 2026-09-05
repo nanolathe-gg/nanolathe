@@ -114,7 +114,11 @@ func TestPumpWedgeIsNotRescued(t *testing.T) {
 		fmt.Println("wedge pump returned; engine rescued a tight loop")
 		os.Exit(0)
 	}
-	cmd := exec.Command(os.Args[0], "-test.run=^TestPumpWedgeIsNotRescued$", "-test.timeout=5s")
+	// One second of spinning is the observation, not five: the wedge does
+	// millions of dispatches in that window, so any cap large enough to be
+	// mistaken for "no cap" would still have returned. The wait is the whole
+	// cost of this test, and it is paid on every run of the fast tier.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPumpWedgeIsNotRescued$", "-test.timeout=1s")
 	cmd.Env = append(os.Environ(), "NANOLATHE_PUMP_WEDGE_CHILD=1")
 	out, err := cmd.CombinedOutput()
 	if err == nil {

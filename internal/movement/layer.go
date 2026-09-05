@@ -117,9 +117,10 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 		cells:   make([]uint32, int(t.CellW)*int((t.CellH+15)>>4)),
 		commits: make(map[pool.Handle]uint32),
 	}
-	if t != nil {
-		l.staticRevision = t.StaticObstacleRevision()
-	}
+	// No nil guard on t: the struct literal above reads four of its fields, so
+	// a nil terrain has already panicked by here. A guard that stands after the
+	// dereferences it claims to protect reads as if nil were a supported input.
+	l.staticRevision = t.StaticObstacleRevision()
 	l.stampAll()
 	return l
 }

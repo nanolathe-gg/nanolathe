@@ -139,6 +139,13 @@ func TestComputerPlayerEliminatesIdleHumanRetail(t *testing.T) {
 		{"Medium", SkirmishDefaultDifficulty},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The two difficulties are independent battles over one shared
+			// read-only catalog, and each is minutes of simulation; running
+			// them concurrently costs the wall time of the slower one instead
+			// of the sum. Nothing crosses between them: NewSkirmishWithProgress
+			// copies definitions into a session-owned pool and each session
+			// carries its own clock and RNG streams.
+			t.Parallel()
 			idleHumanEliminationRetail(t, tc.difficulty)
 		})
 	}
@@ -196,6 +203,15 @@ func idleHumanEliminationRetail(t *testing.T, difficulty int) {
 	}
 	if result.Tick == 0 || result.Tick > aiE2ETickCap {
 		t.Fatalf("result latched at tick %d, outside the bounded battle", result.Tick)
+	}
+	// Every death in the battle just fought must carry a damage-kind byte.
+	// Retail's death handler reads the packet's cause nibble unconditionally
+	// [06 §12.1]; a death that reaches this build's finalizer without one is a
+	// producer nobody wired, and the finalizer can only count it. This rode a
+	// second full run of the same battle until CL-4 folded it into the one
+	// that was already being fought here.
+	if n := sess.DeathsWithNoRecordedCause(); n != 0 {
+		t.Fatalf("%d deaths reached the finalizer with no damage-kind byte; every producer must stamp one [06 §12.1]", n)
 	}
 	// Kill credit is deliberately not asserted; the arithmetic that decides it
 	// belongs to the combat package's own tests, not to this unit. It used to

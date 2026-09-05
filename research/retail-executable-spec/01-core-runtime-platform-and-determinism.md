@@ -1215,9 +1215,11 @@ helper thread. The exception filter (gated by bit 1) and FPU setup (gated by
 bit 2) remain enabled in that same call.
 
 The C-runtime thread-local block is 116 bytes. It stores thread identity and a
-four-byte `rand` state in the historical Microsoft layout (seed established at
-startup from local/system time and time-zone conversion at one-second
-resolution, and reseeded at battle entry from the same helper; §7.2). Each
+four-byte `rand` state in the historical Microsoft layout. Each block is seeded
+from local/system time and time-zone conversion at one-second resolution:
+the **main thread's** at process startup and never again, the **loading
+thread's** by the battle-entry orchestrator running on it, so the two blocks
+have independent histories (§7.2, [08 R-ENTRY-01 §10]). Each
 thread obtains the block lazily with `TlsGetValue`; missing
 state is allocated, initialized, and installed with `TlsSetValue`. There is no
 worker *pool*; the thread census below finds a loading thread that runs the
@@ -1515,7 +1517,8 @@ consumes both streams for different outputs, making the separation
 observable. The complete consumer census — every call site of the CRT draw in
 the image, including the sound-variant picker, the elimination-message picker,
 the victory-timer arm, the effect strips, the lightning renderer and the
-startup explosion frames — is §7.6 [R-DET-01 §5].
+battle-entry explosion frames ([06 R-WFX-01 §6]: drawn per battle on the
+loading worker's block, not at process start) — is §7.6 [R-DET-01 §5].
 
 **The widening sampler (Established).** Every CRT sample whose bound may
 exceed 32,767 goes through one inlined sampler:
@@ -1582,7 +1585,10 @@ spans both streams and is fully recovered:
   quantized to 30-tick units, using 64-bit multiply/divide, drawn **before**
   the new speed and heading.
 - When due, the new speed is a bounded simulation-stream draw
-  `simRand(maxWind − minWind) + minWind`. The new heading is a simulation draw
+  `simRand(maxWind − minWind) + minWind` — and the §7.1 bound test applies, so
+  a map whose `maxwindspeed − minwindspeed` is below 2 (an equal or inverted
+  pair included) consumes **no** simulation draw and pins the speed at
+  `minWind` ([05 R-PROD-01 §3]). The new heading is a simulation draw
   of `simRand(0x10000)` truncated to 16 bits, taken only when the speed is
   nonzero; the direction vector pair is computed as **−2 × the fixed-point
   trig** of the heading.
@@ -1716,8 +1722,14 @@ or CRT-stream draw at all. It does not make retail's single-player behavior
 non-reproducible in any way the two streams already bound — it makes a hovering
 unit's committed height a function of elapsed real time.
 
-**Unknown.** The writer and configured value of the rate field that scales
-`GetTickCount()` here · §7.4, `[04 §9.1]` · static trace.
+**Established — the rate field.** The rate word has exactly one writer, the
+boot-time timebase installer, which stores **30** into it once before any
+battle exists; it is not a session option, a registry key or anything a battle
+rewrites. The counter is therefore `floor(GetTickCount() · 30 / 1000)` — the
+same 30-per-second wall-clock scale §4.1's budget uses, read raw with no start
+offset and masked to its low five bits. The per-unit phase it is combined with
+is the allocator's full-domain simulation draw, stored once at unit creation
+([04 R-MOV-01 §5c]).
 
 **Established — the perturbation does cross a threshold.** Two of the three
 readers named above — the below-water half-speed branch and the water damage —
@@ -1863,8 +1875,8 @@ fragment), [04 R-PATH-01 §11] and [04 R-MOV-01] (none), [04 R-AIR-01 §7, §8]
 including the conditional `8192` orbit draw, [05 R-PROD-01 §3, §8] (wind),
 [05 R-FEAT-01 §9, §11] (ignition bound `sparkTicks ÷ 2`, burn `sim(100)`),
 [06 §3.1] (gate 30), [06 §3.2], [06 §4.3] (randomdecay before sprayangle),
-[06 R-WPN-03 §4], [06 R-WFX-01 §6] (lightning 6 per point per frame; startup
-site and per-pixel rule), [08 R-AI-01] (constructor order 10, 3, widths, 20,
+[06 R-WPN-03 §4], [06 R-WFX-01 §6] (lightning 6 per point per frame; the
+battle-entry explosion-frame site and its per-pixel rule), [08 R-AI-01] (constructor order 10, 3, widths, 20,
 3, widths; task bounds), [08 R-SKIR-01 §2, §3], [08 R-TRIG-01 §6],
 [08 R-CAMP-01 §9] (the skirmish `mod 3` draw is inside the tick on the death
 path).
@@ -2303,6 +2315,11 @@ byte `0x0C` and the 768-byte palette.
 - The post-loop ring is the in-battle message ring doc 07 owns, retired by the
   `textscroll` rule; the executor's tail has three steps
   ([R-PLAT-02 §7], [R-PLAT-02 §8]).
+- Peer state synchronization is push-and-overwrite: the quarter-second scanner
+  pushes counters and resource totals, receivers copy every field with no
+  comparison, threshold or abort, and the only gate is the echo-flood check,
+  so divergence handling is notification (kick/chat) rather than repair or
+  abort-on-mismatch (§9; the manual sync-error chat handler alone is inferred).
 - The directive tokeniser splits on C `isspace` (so CR-LF is safe), keeps
   20 arguments in 126 bytes, and substitutes `%N`; screenshots are
   `<prefix>%04i.pcx` with the highest existing number plus one, RLE-encoded
@@ -2315,10 +2332,8 @@ byte `0x0C` and the 768-byte palette.
   buffers.
 - Active speed is a load regulator that can move away from a user request under
   sustained frame/tick pressure, then recover slowly.
-- Network divergence handling is overwrite-plus-notification (kick/chat
-  flows), not automatic repair or abort-on-mismatch; multiplayer tick
-  advancement is soft-paced by oldest remote progress rather than synchronized
-  per tick by a barrier.
+- Multiplayer tick advancement is soft-paced by oldest remote progress rather
+  than synchronized per tick by a barrier.
 - Most fixed pools are intentionally chosen to make insertion/retirement order
   deterministic, not merely as performance optimizations.
 
@@ -2409,9 +2424,6 @@ stated in the body, not here.
   frames ([06 R-WFX-01 §6]) are exact; the site and the one-draw-per-pixel
   rule are established, the three strips were not recounted · §7.5 · static
   recount of the strip parameter sets.
-- Writer and configured value of the rate field scaling the `GetTickCount()`
-  animation counter that reaches the authoritative height word of `canhover`
-  units · §7.4, doc 04 §9.1 · static trace.
 
 ### Memory and queues
 

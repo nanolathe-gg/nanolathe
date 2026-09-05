@@ -27,6 +27,9 @@ echo "==> retail assets: $NANOLATHE_RETAIL_ASSETS"
 # excludes nothing, so this run is a strict superset of the untagged tier.
 # Without the tag those files are never compiled, which is how the tagged tier
 # came to be red on main without anyone noticing.
+echo "==> lint (staticcheck + deadcode, retail tag)"
+"$(dirname "$0")/lint"
+
 echo "==> go vet (retail tag)"
 go vet -tags retail ./...
 echo "==> go test (retail corpus, tagged)"

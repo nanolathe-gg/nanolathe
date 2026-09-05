@@ -106,7 +106,7 @@ func (f *overlapFixture) RestampFootprint(id int) {
 // distinguishes: any playing row versus the state-3 row [04 R-COLL-01 §4].
 const (
 	activeState     uint8 = 1
-	eliminatedState uint8 = eliminatedPlayerState
+	eliminatedState uint8 = displaceableOwnerState
 )
 
 // overlapGrid builds a grid over a small flat map with the fixture bound.

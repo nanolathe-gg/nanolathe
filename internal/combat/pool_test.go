@@ -11,13 +11,11 @@ import (
 // Full active span still rejects allocation even though a hole exists.
 func TestCombatTailAppendNeverFillsHoles(t *testing.T) {
 	var s Service
-	var handles []pool.Handle
 	for i := 0; i < 5; i++ {
 		h, ok := s.Reserve()
 		if !ok || h == 0 {
 			t.Fatalf("reserve %d failed", i)
 		}
-		handles = append(handles, h)
 		// Tag stable order via WeaponID.
 		s.Records[int(h)-1].WeaponID = int32(i + 1)
 	}

@@ -53,6 +53,7 @@ func exitCatalog(defs ...*content.UnitDef) *content.Catalog {
 }
 
 func exitService(t *testing.T, terrain *world.Terrain, cat *content.Catalog) (*Service, *units.World) {
+	t.Helper()
 	svc := NewService(terrain, cat, newConstructionFixtureWorld(64, cat), &economy.Service{})
 	if svc == nil {
 		t.Fatal("nil service")
@@ -61,6 +62,7 @@ func exitService(t *testing.T, terrain *world.Terrain, cat *content.Catalog) (*S
 }
 
 func stepUntil(t *testing.T, svc *Service, cat *content.Catalog, builder *units.Unit, maxSteps int, wantDefs ...string) pool.Handle {
+	t.Helper()
 	ctx := TickContext{World: svc.World, Economy: svc.Economy, Terrain: svc.Terrain, Catalog: cat}
 	for i := 0; i < maxSteps; i++ {
 		ctx.Tick++

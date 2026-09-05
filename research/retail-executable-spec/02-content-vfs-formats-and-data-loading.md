@@ -2836,6 +2836,14 @@ are little-endian.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
+The pass that derives `0x05`/`0x06` takes the minimum and maximum over the
+cell's own height byte and its east, south and south-east neighbours, and
+clips its extent to `W−1` and `H−1` **exclusive** — so the last column and the
+last row never receive a derived pair and those two bytes keep whatever the
+plot allocation held, which is a plain heap block and not zero-filled
+([04 §6.1]). Nothing observes it: the strip pass voids those edges and every
+footprint validator rejects a rectangle reaching them.
+
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.

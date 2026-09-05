@@ -756,24 +756,36 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	idx := cz*w + cx
 	featIdx := s.featureIndexForDef(def)
 	if featIdx == world.PlotFeatureNone {
-		// Def not in terrain's FeatureDefs; for tests with synthetic terrain
-		// we may have appended def, so try to find by canonical key.
-		// If still not found, synthesize index 0 as placeholder for single-cell
-		// tests that don't rely on FeatureDefs mapping via resolver beyond sentinel check.
-		// This keeps tests deterministic even when terrain was built without a catalog.
-		// We will assign 0 if terrain has at least one entry, else treat as error.
-		if len(s.Terrain.FeatureDefs) > 0 {
-			if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit {
-				return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
-			}
-			// Try to append def to list for future resolves.
-			s.Terrain.FeatureDefs = append(s.Terrain.FeatureDefs, def)
-			featIdx = uint16(len(s.Terrain.FeatureDefs) - 1)
-			// Also need to ensure FeatureNames length matches if present? Not needed for logic.
-		} else {
-			featIdx = 0
-			s.Terrain.FeatureDefs = []*content.FeatureDef{def}
+		// A definition the map did not author is admitted into the terrain's
+		// own record list and takes the next index — the same admission
+		// stampFeatureDef performs, so a successor the map never names can
+		// still be placed [05 R-FEAT-01 §2]. Refusing at FeatureCatalogLimit is
+		// this build's existing behavior and is left exactly as it was.
+		//
+		// Two arms stood here, one for an empty record list and one for a
+		// non-empty one. They computed the same index — appending to an empty
+		// slice yields 0 — and the empty arm's comment described the result as
+		// a synthesized placeholder for catalog-less fixture terrain, which
+		// read as a second, non-retail admission rule where there is only one.
+		// Collapsing them changes no index and no refusal.
+		//
+		// TODO(question): whether FeatureCatalogLimit (0x100) is a retail cap
+		// at all. It was written from doc 05's statement that "feature catalog
+		// entries are 0x100 bytes each ... exhausting the 0x100 catalog ...
+		// causes a silent failure", which reads the per-entry SIZE as a count.
+		// The research-05 pass now on main restates the same finding as: the
+		// live-instance arena holds 2048 slots and "the feature catalog is
+		// reallocated per record with no fixed cap" [05 R-FEAT-01 §1]. If that
+		// correction stands, this refusal and the identical one in
+		// stampFeatureDef are guards against a limit retail does not have.
+		// What would settle it: the catalog allocator's growth behavior, and
+		// which of the two pools the silent placement failure belongs to.
+		// CL-4 is a test cleanup and does not get to decide it.
+		if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit {
+			return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
 		}
+		s.Terrain.FeatureDefs = append(s.Terrain.FeatureDefs, def)
+		featIdx = uint16(len(s.Terrain.FeatureDefs) - 1)
 	}
 	// Normalize zero/negative extents to the service's established 1x1
 	// placement behavior before invoking the shared terrain writer.

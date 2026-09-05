@@ -48,7 +48,7 @@ func TestServiceInitBindsLaterFSWithoutReplacingStateOrPlayback(t *testing.T) {
 	}
 	// The queue clock is the committed global tick, not the rendered-frame
 	// counter [03 §8.3]; the cue was inserted at tick 30, so drain there.
-	s.DrainEvents(30, 30, nil)
+	s.DrainEvents(30, nil)
 	if calls != 1 {
 		t.Fatalf("Drain reconfigured playback callback: calls=%d", calls)
 	}
@@ -67,11 +67,11 @@ func TestServiceDrainEventsDefersPositionalPlaybackUntilPresentation(t *testing.
 	if len(spy.plays) != 0 {
 		t.Fatal("authoritative event fixture played before drain")
 	}
-	s.DrainEvents(30, 7, ev)
+	s.DrainEvents(7, ev)
 	if len(spy.plays) != 1 {
 		t.Fatalf("presentation drain play count=%d want 1", len(spy.plays))
 	}
-	s.DrainEvents(31, 7, ev)
+	s.DrainEvents(7, ev)
 	if len(spy.plays) != 1 {
 		t.Fatalf("committed event replayed on second rendered frame: %d", len(spy.plays))
 	}
@@ -161,15 +161,13 @@ func TestServiceQueueClockIsTheCommittedTick(t *testing.T) {
 	// Slot 5 (`ok`) carries cooldown multiplier 1, i.e. a 30-frame window.
 	s.Queue.Register(1, &Category{Rows: [24]Row{5: {Variants: []string{"voice"}}}}, "unit", true)
 
-	// A 60 Hz host against the 30 Hz simulation: two rendered frames per tick.
-	renderedFrame := uint32(0)
+	// A 60 Hz host against the 30 Hz simulation: two drains per committed tick.
 	audible := 0
 	for tick := uint32(1); tick <= 600; tick++ {
 		s.Emit(tick, SlotOK, 1, "")
 		for i := 0; i < 2; i++ {
-			renderedFrame++
 			before := len(spy.plays)
-			s.DrainEvents(renderedFrame, tick, nil)
+			s.DrainEvents(tick, nil)
 			audible += len(spy.plays) - before
 		}
 	}
@@ -198,7 +196,7 @@ func TestServiceVoiceLinesDoNotConsumeAliasRegistry(t *testing.T) {
 	for i := 0; i < 300; i++ {
 		tick += 30
 		s.Emit(tick, SlotSelect, 1, "")
-		s.DrainEvents(tick, tick, nil)
+		s.DrainEvents(tick, nil)
 	}
 	if len(spy.plays) == 0 {
 		t.Fatal("no voice line reached the backend")

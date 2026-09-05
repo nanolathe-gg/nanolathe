@@ -34,7 +34,7 @@ func TestMissionRecordsCarryTheirOwningUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create B: %v", err)
 	}
-	uA, uB := w.Unit(hA), w.Unit(hB)
+	uA, uB := atPlacement(w.Unit(hA), 0), atPlacement(w.Unit(hB), 1)
 
 	m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{
 		{UnitName: "ARMCOM", Ident: "alpha", InitialMission: "p 100,100,5"},

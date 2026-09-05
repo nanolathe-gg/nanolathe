@@ -449,6 +449,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 	if binding.VM != nil && s.World != nil {
 		binding.VM.BindPort(cob.Port(16), cob.GroundHeightPortFunc(s.World.HeightAt))
 	}
+	s.bindQueryPorts(binding, u)
 	if err := u.AttachCOBBinding(binding); err != nil {
 		if registeredPlacement {
 			s.Build.ReleasePlacement(u.Handle)
@@ -1600,13 +1601,21 @@ func createAndBindServices(s *Session) error {
 		return fx, fz, true
 	}
 	// The occupancy overlap protocol arbitrates a contested cell from the
-	// OCCUPANT'S OWNER player-row state byte and records the outcome on both
+	// OCCUPANT'S OWNER player-row control byte and records the outcome on both
 	// units' flag words [04 R-COLL-01 §4]. The grid carries neither fact, so
 	// the composer hands it the same player table the damage funnel and the
 	// sweep gate read — the row's ControllerState, never the unit's own owner
 	// byte, which is the slot number [06 R-DMG-01 §8]. An unoccupied row, or
 	// an index past the ten records, reads as ControlByteAbsent, which is not
 	// the displacing state, so its units are never displaced.
+	//
+	// ControllerState is the right field: [04 R-COLL-01 §4]'s "player state 3"
+	// is the control byte's value 3, the remote peer [05 R-SHARE-01 §1] that
+	// doc 05 also calls the third of "the three active states" — the one that
+	// traverses the deadline block and never settles
+	// [05 "Authoritative settlement order"]. It is NOT the sweep gate's
+	// separate byte with its eliminated value 10 [04 R-MOV-03 §1]; see
+	// movement.displaceableOwnerState, which carries the whole reading.
 	s.Movement.AttachOverlapBinding(func(owner uint8) uint8 {
 		if s.Econ == nil || int(owner) >= len(s.Econ.Players) {
 			return combat.ControlByteAbsent

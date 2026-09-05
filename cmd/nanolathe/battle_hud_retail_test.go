@@ -66,7 +66,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	}
 	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
-	pal := loadPalette(cs)
+	pal := retailPaletteForTest(t, cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,10 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	// observation, and [07 R-HUD-04 §4] names unit creation as its writer.
 	wantWindow := strings.ToLower(commanderName) + "1.gui"
 	ordersWindow := strings.ToLower(b.hud.side.NamePrefix) + "gen.gui"
-	w, _ := b.hud.windowFor(b, cur)
+	w, _, err := b.hud.windowForRequired(b, cur)
+	if err != nil {
+		t.Fatalf("command window: %v", err)
+	}
 	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
 		if w == nil {
 			t.Fatalf("freshly selected commander window is nil; want suffix %q", wantWindow)
@@ -168,7 +171,10 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	step := int32(31)
 	clickCommandButton := func(suffix string) {
 		t.Helper()
-		window, _ := b.hud.windowFor(b, sess.Snapshot.Current())
+		window, _, err := b.hud.windowForRequired(b, sess.Snapshot.Current())
+		if err != nil {
+			t.Fatalf("command window: %v", err)
+		}
 		if window == nil {
 			t.Fatalf("no command window to click %s in", suffix)
 		}
@@ -201,7 +207,10 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if cur.CommandPage.Page != 0 || commandPageIsPaged(cur) || len(cur.CommandPage.ProductKeys) != 0 {
 		t.Fatalf("ORDERS left page %d (paged=%v) with products %v, want the orders page", cur.CommandPage.Page, commandPageIsPaged(cur), cur.CommandPage.ProductKeys)
 	}
-	w, _ = b.hud.windowFor(b, cur)
+	w, _, err = b.hud.windowForRequired(b, cur)
+	if err != nil {
+		t.Fatalf("command window: %v", err)
+	}
 	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), ordersWindow) {
 		if w == nil {
 			t.Fatalf("commander orders window is nil; want suffix %q", ordersWindow)
@@ -213,7 +222,10 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if cur.CommandPage.Page != 1 || !commandPageIsPaged(cur) {
 		t.Fatalf("BUILD returned to page %d (paged=%v), want the remembered page 1", cur.CommandPage.Page, commandPageIsPaged(cur))
 	}
-	w, _ = b.hud.windowFor(b, cur)
+	w, _, err = b.hud.windowForRequired(b, cur)
+	if err != nil {
+		t.Fatalf("command window: %v", err)
+	}
 	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), wantWindow) {
 		t.Fatalf("commander window after the round trip = %v; want suffix %q", w, wantWindow)
 	}
@@ -229,7 +241,7 @@ func TestRetailCommanderPageDrawsAndArmsAuthoredProduct(t *testing.T) {
 	if !ok || commanderDef == nil {
 		t.Fatalf("commander definition %q missing from catalog", commanderName)
 	}
-	wantPages := b.hud.buildPageCount(commanderDef)
+	wantPages := authoredBuildPageCount(b.hud, commanderDef)
 	if wantPages < 1 {
 		t.Fatalf("%s authored no build page window", commanderName)
 	}
@@ -336,7 +348,7 @@ func TestRetailNoSelectionClosesCommandWindows(t *testing.T) {
 	}
 	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
-	pal := loadPalette(cs)
+	pal := retailPaletteForTest(t, cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -345,7 +357,7 @@ func TestRetailNoSelectionClosesCommandWindows(t *testing.T) {
 	if cur == nil {
 		t.Fatal("no-selection snapshot not published")
 	}
-	if window, _ := b.hud.windowFor(b, cur); window != nil {
+	if window, _, _ := b.hud.windowForRequired(b, cur); window != nil {
 		t.Fatalf("no-selection window = %q; the command windows are closed to the root [07 §6]", window.Name)
 	}
 
@@ -406,7 +418,7 @@ func TestRetailEnergyProductionAnchorFits640Viewport(t *testing.T) {
 			break
 		}
 	}
-	pal := loadPalette(cs)
+	pal := retailPaletteForTest(t, cs)
 	h, err := loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)

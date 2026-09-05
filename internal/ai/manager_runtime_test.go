@@ -624,7 +624,12 @@ func TestRallyConstructorAndProbeAdditionWrapPositionWords(t *testing.T) {
 	seed := uint32(1)
 	for {
 		probe := rng.NewSimulation(seed)
-		if probe.Uint32n(10) != 0 && probe.Uint32n(10) != 0 {
+		// Two SEPARATE draws off the same stream, not one expression written
+		// twice: this seed search wants a seed whose first two draws are both
+		// non-zero.
+		first := probe.Uint32n(10)
+		second := probe.Uint32n(10)
+		if first != 0 && second != 0 {
 			break
 		}
 		seed++

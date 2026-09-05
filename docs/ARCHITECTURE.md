@@ -325,7 +325,11 @@ exports `NANOLATHE_RETAIL_ASSETS` (defaulting to `~/TotalAnnihilation`,
 honouring the older `NANOLATHE_TA_ROOT`), fails loudly if the directory is
 missing, and runs `go vet` and `go test` with `-tags retail`, which adds the
 tagged whole-corpus files — catalog compiles, map and mission censuses, long
-headless sessions — to the untagged set. `internal/testsupport.RetailRoot` is
+headless sessions — to the untagged set. It runs `tools/lint` first: pinned
+`staticcheck` and `deadcode` over the retail-tagged build, because the corpus
+tests are the only callers of some production code and the untagged build
+would report their targets as unused. A retail diagnostic string that trips
+`ST1005` carries `//lint:ignore ST1005 retail text` with its citation. `internal/testsupport.RetailRoot` is
 the single place a test consults those variables and skips.
 
 **Determinism fingerprint.** The headless report's `state_hash` is the

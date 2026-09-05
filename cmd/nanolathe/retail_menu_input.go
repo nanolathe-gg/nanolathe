@@ -191,8 +191,11 @@ noRetailArrowRepeat:
 }
 
 func (g *gameShell) modalInput(cl *client.Client) {
+	if g == nil || cl == nil || cl.Input() == nil {
+		return
+	}
 	m := g.frontend.Panels.Modal()
-	if g == nil || m == nil || m.Window == nil || cl == nil || cl.Input() == nil {
+	if m == nil || m.Window == nil {
 		return
 	}
 	in := cl.Input()

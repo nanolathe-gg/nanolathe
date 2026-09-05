@@ -230,8 +230,9 @@ clear:
   slot byte — and fully built: it is counted into the
   per-definition census, into an economy counter when its definition carries
   the corresponding scalar, and into the weighted centroid; and it sets the
-  registry's **secondary-list gate** when its definition carries one particular
-  flag bit and the unit is active.
+  registry's **secondary-list gate** when its definition carries
+  `istargetingupgrade` and the unit is active ([04 R-SPEC-01 §8], which also
+  states the enumeration that reads the gate).
 
 *The third list.* The same own-unit
 branch also fills a **third list**, cleared with the other two at every
@@ -284,15 +285,20 @@ squared as a plain 32-bit signed multiply of the authored integer.
 **Established fact (secondary-list identity):** The runtime bit that puts a
 hostile unit on the secondary list is the
 **seen** bit of the unit status word, and it is recomputed every tick by the
-sensor bookkeeping phase from the **local player's** point of view only
-`[03 §3.2]`. That phase, in order: clears the bit for every unit that is not
-own/allied-with-shared-vision and sets it (together with the sonar bit) for
-those that are; sets it for units inside a **local** radar circle, whose radius
-is `radardistance + 2 × (unit height in whole world units)`, and sets the sonar
-bit for units at or below the water plane inside a local sonar circle; clears
-it and sets a jam bit for units inside a hostile radar-jam circle; and finally
-sets it for any remaining unit whose projected tile is lit in the local
-player's line-of-sight state. So the secondary list is exactly *"hostile units
+sensor bookkeeping phase from the **viewing** player's point of view only —
+the local human's slot except in an observer session, which the two must not
+be collapsed into one `[03 R-VIS-01 §4]`. That phase is **five** ordered
+passes `[03 R-VIS-01 §4]`; four of them write the seen bit: pass 1 clears it
+for every unit that is not own/allied-with-shared-vision and sets it (together
+with the sonar bit) for those that are; pass 2 sets it for units inside a
+**viewing-side** radar circle, whose test radius is
+`radardistance + 2 × (the emitter's world Y high word — its altitude in whole
+world units, not its model height)`, and sets the sonar bit for units at or
+below the water plane inside a sonar circle; pass 3 clears it and sets a jam
+bit for units inside a hostile radar-jam circle; pass 4 is the minimum-cloak
+proximity scan, which writes no seen bit; and pass 5 sets it for any remaining
+unit whose projected tile is lit in the viewing player's line-of-sight state.
+So the secondary list is exactly *"hostile units
 the local observer can currently see or detect"*. Three consequences are
 contracts:
 
@@ -892,7 +898,7 @@ incremented before the unsigned distance-over-velocity division raises the
 processor divide exception, and the count is not rolled back (§6.4).
 
 **Cross-reference.** The three visibility-like layers, the minimap radar
-surfaces, the jammer circles and the four-pass sensor phase are `[03 §3.2]`'s
+surfaces, the jammer circles and the five-pass sensor phase are `[03 §3.2]`'s
 and `[03 §3.4]`'s contract; §3.1 above carries the acquisition-facing half —
 the identity, gate and writers of the primary and secondary candidate lists.
 
@@ -1695,21 +1701,18 @@ re-query, §4.3) uses that piece directly and makes no COB call. The root
 projectile records the muzzle piece identity so a later burst clone can
 re-query the muzzle world position `[R-P0-07]`.
 
-**Unknown — the sense of "added to the unit's world position".** The sentence
-above does not say which sign the composed offset's Z carries when it is added,
-and the two are tens of whole world units apart on a long-barrelled model. The
+**Established — the sense of "added to the unit's world position".** The
 composed piece offset is in model space, which is mirrored in Z against world
-space: the model pass narrows a model-relative vertex as `hi16(-vz)` while the
-unit's own position enters the blit unnegated `[03 R-RAST-01 §2]`. A consumer
-that wants the muzzle to sit at the barrel the model pass draws therefore owes
-that mirror. Two sibling consumers have already been settled the same way and
-independently of each other — the factory build plate, by the stock yard maps
-(`[05 "Factory production lifecycle"]`), and the nanolathe source point, by the
-two projections it has to agree with (`[03 §5.5 "The nano source point's
-coordinate space"]`) — but neither is evidence for this one, because a muzzle
-point is consumed by projectile spawn arithmetic rather than by a draw.
-Decider: the `ta_probe_xz` fixture of `[03 §2.4]`, which settles the sense of a
-composed offset directly.
+space, and the piece locator negates the composed Z **once, on output**, so
+every simulation consumer forms `world = unitPosition + (x, y, −z)` with no
+further sign change `[03 R-RAST-01 §8]`. The muzzle query of this section and
+the burst re-query of §4.3 are two of that section's named callers, alongside
+the nanolathe source point and the two piece-position COB ports; the factory
+build plate resolves the same way (`[05 "Factory production lifecycle"]`). So
+the muzzle sits exactly at the barrel the model pass draws, whose vertices
+narrow as `hi16(−vz)` against an unnegated unit position `[03 R-RAST-01 §2]`.
+An implementation must not negate per consumer, negate inside the composition,
+or skip the negation.
 
 **Established fact:** FirePrimary, FireSecondary, or FireTertiary is a deferred
 zero-cell callback and RockUnit is a deferred two-cell callback. RockUnit's
@@ -5362,7 +5365,7 @@ passes `(point, water/lava holder, 0, 1)`; debris landings pass table 0 on
 ground and `(h2oboom2 or lavasplash, −1, 1)` on water (`[04 R-COB-04 §2]`);
 the `explode` opcode's bitmap bits pass table 2 with `waterFlag = 0`. Nothing
 passes table 1: the second calculated strip (15 frames, 128 down to 30) is
-built, costs CRT draws at startup (§6), and is **never drawn**.
+built, costs CRT draws at every battle entry (§6), and is **never drawn**.
 
 **Established — the record-0 answer** (the `[R-DMG-01 §5]` residual). A
 death whose `explodeas`/`selfdestructas` resolved to weapon record 0
@@ -5378,8 +5381,10 @@ calculated flash disc plus a smoke puff, no named art, no sound. It is a
 presentation event, not nothing.
 
 **Established — the calculated (procedural) explosion frames, exactly.**
-Three tables are built at startup, before any session, with the CRT stream
-(`[04 R-COB-04 §4]` gives the shape; this is the pixel expression). For a
+Three tables are built once per battle, during the world rebuild of battle
+entry and on the loading worker's own CRT block ([08 R-ENTRY-01 §2],
+[08 R-ENTRY-01 §10]), not at process start (`[04 R-COB-04 §4]` gives the
+shape; this is the pixel expression). For a
 frame of side `n`: `H = n / 2` (truncating integer, then converted to
 double); the frame's x and y offsets are both `H`; the transparent index is
 `0xFF`. For row `y` and column `x` (both `0..n−1`):
@@ -5403,7 +5408,9 @@ per-pixel draw `r` giving the fuzzy edge. Table 0: 12 frames, sides 64, 60,
 15 frames, sides 200 down in steps of 11 (200 … 46). Every frame's hold word
 is 2, so table 0 plays for 24 ticks and tables 1/2 for 30; every table's loop
 byte is 0. The draw counts are 23,456, 107,335 and 260,815 CRT draws
-respectively — 391,606 **per battle**, drawn on the loading worker thread's own CRT state during the world rebuild ([08 R-ENTRY-01 §2]), so they never touch the main thread's CRT stream (`[R-WFX-01 §6]`). A 22×22
+respectively — 391,606 **per battle**, drawn on the loading worker thread's
+own CRT state during the world rebuild ([08 R-ENTRY-01 §2]), so they never
+touch the main thread's CRT stream (`[R-WFX-01 §6]`). A 22×22
 displacement ("lens") frame is built beside them for render type 2
 (`[R-WFX-01 §4]`); it consumes no draws.
 
@@ -5519,18 +5526,23 @@ means 7.
 | `startsmoke` (§4.1, muzzle point) | `(3, 1, 30, 0, 0)` | one particle, frames 0..3 of `smoke 1`, hold 30 — a slow four-frame puff |
 | land dust of every above-sea explosion (§2) | `(0, 7, 0, 15, 0)` | one particle at spawn and one every 7 ticks while `nextSpawn ≤ now + 15`: three particles, all frames, hold 7 |
 
-**Established** (the emitter's spawn loop and the particle update). Per
-particle: at spawn the emitter draws one CRT value for the particle's **last
-frame**, `crtRand() · (frames − 2) / 0x8000 + 2` where `frames` is the
-emitter's frame-limit field, and sets the first countdown to `hold` directly
-(no draw). Every tick the particle moves by `windX · 8`, `+gravity · 4` in Y
-(upward), `windZ · 8`, decrements the countdown, and at zero advances one frame
-and redraws `crtRand() · (hold/2) / 0x8000 + hold/2`; it is removed when its
-frame index reaches its last frame. Each particle is drawn as the selected
-frame at its projected point with **no** coverage gate of its own. The
-frame-limit field holds the resolved frame count (the table's `frameCap`, or
-the sequence length when `frameCap` is 0). Exhaustion of the shared strip pool
-drops the puff silently; a root flag byte disables every strip allocation
+**Established** (the emitter's spawn loop and the particle update; the family's
+record is `[03 R-FX-02 §3]`, whose reading this states for the weapon-side
+producers). Per particle: at spawn the emitter draws one CRT value for the
+particle's **last frame**, `crtRand() · (lastFrameBase − 2) / 0x8000 + 2`,
+and sets the first countdown to `hold` directly — the first countdown is
+**not** random. Every tick the particle moves by `windX · 8`, `+gravity · 4`
+in Y (upward), `windZ · 8`, decrements the countdown, and at zero advances one
+frame and redraws `crtRand() · (hold/2) / 0x8000 + hold/2`; it is removed when
+its frame index reaches its last frame. Each particle is drawn as the selected
+frame at its projected point with **no** coverage gate of its own — this
+family's draw walk tests nothing before blitting, unlike the flame and
+sprinkle families `[03 R-FX-02 §3]`. `lastFrameBase` is the emitter's
+frame-limit field: the bound entry's frame count **less one**, clamped by the
+table's `frameCap` when that is nonzero — so with `frameCap` 0 a puff's life
+is `crtRand · (frameCount − 3) / 0x8000 + 2` frames `[03 R-FX-01 §3]`.
+Exhaustion of the shared strip pool drops the puff silently; a root flag byte
+disables every strip allocation
 (`[03 R-STRIP-01 §1]`).
 
 The Y multiplier here is **4**, not the 16 of the geothermal vent's class: the
@@ -5611,15 +5623,17 @@ body and are not restated here.
 
 ### Catalog and targeting
 
-- The authored FBI key behind the definition flag that arms a side's secondary
-  candidate list, and the authored keys behind the two candidate-admission
-  flags and the one global option bit in the acquisition filter · §3.1, §3.2 ·
-  static trace of the unit-definition parser's flag sequence and the options
-  loader.
+- The authored key or writer behind the one global option bit of the
+  acquisition filter's second admission (the third disjunct beside `shootme`
+  and the computer-controller term) · §3.2 · static trace of the options
+  loader. The other keys that bullet asked for are named:
+  `istargetingupgrade` arms the secondary-list gate ([04 R-SPEC-01 §8]),
+  `shootme` is the candidate flag ([04 R-SPEC-01 §5]) and `kamikaze` the
+  shooter's bypass ([04 R-SPEC-01 §1]).
 - Whether any writer of the runtime *seen* status bit exists outside the
-  recovered four-pass sensor phase, and the complete sonar and jammer
-  interactions on the presentation surfaces · §3.1, doc 03 §3.2/§3.4 · static
-  trace over the unrecovered regions.
+  recovered five-pass sensor phase (`[03 R-VIS-01 §4]`), and the complete
+  sonar and jammer interactions on the presentation surfaces · §3.1,
+  doc 03 §3.2/§3.4 · static trace over the unrecovered regions.
 - Manual unit and point target encoding, command-fire replacement, and the
   full set of manual-versus-autonomous latch callers · §3.2, doc 07 · static
   trace.
@@ -5639,8 +5653,12 @@ body and are not restated here.
   resulting unordered angle comparisons really accept and serialize it · §3.3
   · static trace of the runtime `acos` domain path plus a reachability argument
   over the root expression.
-- Target replacement during an outstanding Aim, and malformed-state
-  interactions around the closed family readiness gates · §3.4 · static trace.
+- Malformed-state interactions around the closed family readiness gates ·
+  §3.4 · static trace. Target replacement during an outstanding Aim is closed
+  by [04 R-CB-01 §6]: the aim issue clears the slot's aim-state word and
+  restarts the deferred callback, readiness is granted only by a nonzero value
+  through the slot's completion receiver, and the issue bit gates re-issue,
+  not readiness.
 - Boundary between the general muzzle query and the per-family dropped/meteor
   muzzle paths, and the side effects of the shared muzzle fallback on
   malformed piece indices · §3.4 [R-P0-07] · static trace. Medium confidence

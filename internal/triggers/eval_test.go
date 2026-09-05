@@ -389,7 +389,12 @@ func TestVictoryCelebrationIsOncePerRecord(t *testing.T) {
 	celebrations := 0
 	c.Celebrate = func() { celebrations++ }
 	pure := New(KindDestroyAllUnits, "")
-	if !pure.Poll(c) || !pure.Poll(c) || pure.Completed || !pure.Celebrated || celebrations != 1 {
+	// Two SEPARATE polls, not one predicate written twice: the record is
+	// polled again after it has already celebrated, and must not celebrate a
+	// second time.
+	firstPoll := pure.Poll(c)
+	secondPoll := pure.Poll(c)
+	if !firstPoll || !secondPoll || pure.Completed || !pure.Celebrated || celebrations != 1 {
 		t.Fatalf("pure victory predicate cue state got trigger=%+v cues=%d", pure, celebrations)
 	}
 }

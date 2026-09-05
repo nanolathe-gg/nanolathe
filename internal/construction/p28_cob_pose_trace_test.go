@@ -1,7 +1,6 @@
 package construction
 
 import (
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -18,10 +18,7 @@ import (
 
 func p28RetailFactoryWorld(t *testing.T) (*content.Catalog, *units.World, func(*units.Unit) *model.Model) {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		t.Skip("P28-COB-01R requires NANOLATHE_TA_ROOT")
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount retail: %v", err)

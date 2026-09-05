@@ -47,12 +47,6 @@ func testBuildingDef(name string) *content.UnitDef {
 	return d
 }
 
-func testFlyerDef(name string) *content.UnitDef {
-	d := testDef(name)
-	d.CanFly = true
-	return d
-}
-
 // initialMissionCatalog contains every authored product name used by these
 // fixtures. The `b` verb's building-versus-mobile choice is a property of the
 // ACTING unit (mover or not), not of the product record [04 §3.6 correction
@@ -71,24 +65,11 @@ func initialMissionCatalog(includeUnknown bool) *content.Catalog {
 
 var testInitialCatalog = initialMissionCatalog(false)
 
-func newWorldWithUnits(defs []*content.UnitDef, idents []string, unitNames []string) (*units.World, []*units.Unit) {
-	w := newMissionFixtureWorld(20, nil)
-	var us []*units.Unit
-	for i, def := range defs {
-		h, err := w.Create(def, 0, numeric.Fixed(0), numeric.Fixed(0), numeric.Fixed(0))
-		if err != nil {
-			panic(err)
-		}
-		u := w.Unit(h)
-		// Set initial flags bit5 set to test clearing.
-		u.Flags |= 1 << 5
-		us = append(us, u)
-		_ = idents
-		_ = unitNames
-		_ = i
-	}
-	return w, us
-}
+// A newWorldWithUnits helper stood here, building a world of fixture units
+// from parallel defs/idents/unitNames slices. Nothing called it: every block
+// below stands up its own world so it can name the placement each unit stands
+// for. Its two unused parameters had already been silenced with blank
+// assignments.
 
 func queueLen(u *units.Unit) int {
 	q := orders.QueueForUnit(u)
@@ -159,7 +140,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", Ident: "u0", InitialMission: "m 100 200"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -182,7 +163,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 300 400"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -199,7 +180,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a ARMCK"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -212,7 +193,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		// unknown type should queue nothing -> still postlude? No queued orders, so no MakeSelectable.
 		w2 := newMissionFixtureWorld(5, nil)
 		h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u2 := w2.Unit(h2)
+		u2 := atPlacement(w2.Unit(h2), 0)
 		u2.Flags |= 1 << 5
 		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a unknown_type_xyz"}}}
 		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -230,7 +211,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500 600"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -247,7 +228,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		// A mover-less acting unit (a factory) queues BuildingBuild.
 		w2 := newMissionFixtureWorld(5, nil)
 		h2, _ := w2.Create(testBuildingDef("ARMFAB"), 0, 0, 0, 0)
-		u2 := w2.Unit(h2)
+		u2 := atPlacement(w2.Unit(h2), 0)
 		u2.Flags |= 1 << 5
 		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMFAB", InitialMission: "b ARMCK 3 700 800"}}}
 		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -262,7 +243,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		giveStockpileSlot(u)
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "bw 5"}}}
@@ -284,7 +265,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "d"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -301,8 +282,8 @@ func TestInitialMissionVerbs(t *testing.T) {
 		w1 := newMissionFixtureWorld(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
-		uA := w1.Unit(hA)
-		uB := w1.Unit(hB)
+		uA := atPlacement(w1.Unit(hA), 0)
+		uB := atPlacement(w1.Unit(hB), 1)
 		uA.Flags |= 1 << 5
 		// mission units mapping: placement 0 -> uA, placement1 -> uB
 		// uA guards uB via Ident
@@ -324,7 +305,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		// unresolved g should queue nothing
 		w2 := newMissionFixtureWorld(5, nil)
 		hA2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		uA2 := w2.Unit(hA2)
+		uA2 := atPlacement(w2.Unit(hA2), 0)
 		uA2.Flags |= 1 << 5
 		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", Ident: "a", InitialMission: "g nonexistent"}}}
 		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -340,8 +321,8 @@ func TestInitialMissionVerbs(t *testing.T) {
 		w1 := newMissionFixtureWorld(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
-		uA := w1.Unit(hA)
-		uB := w1.Unit(hB)
+		uA := atPlacement(w1.Unit(hA), 0)
+		uB := atPlacement(w1.Unit(hB), 1)
 		uA.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{
 			{UnitName: "ARMCOM", Ident: "alpha", InitialMission: "i beta"},
@@ -381,7 +362,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		// guard applies here — the verb table gives no separate case for `i`.
 		w2 := newMissionFixtureWorld(5, nil)
 		hC, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		uC := w2.Unit(hC)
+		uC := atPlacement(w2.Unit(hC), 0)
 		uC.Flags |= 1 << 5
 		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", Ident: "gamma", InitialMission: "i nonexistent"}}}
 		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -393,7 +374,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags = 0
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o 1 2"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -409,7 +390,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "p 100 200 10"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -434,7 +415,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "s"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -458,7 +439,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "u 300 400"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -477,7 +458,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "w 5 7"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -497,7 +478,8 @@ func TestInitialMissionVerbs(t *testing.T) {
 		w1 := newMissionFixtureWorld(5, nil)
 		hA, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 		hB, _ := w1.Create(testDef("ARMCK"), 0, 0, 0, 0)
-		uA := w1.Unit(hA)
+		uA := atPlacement(w1.Unit(hA), 0)
+		atPlacement(w1.Unit(hB), 1)
 		uA.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{
 			{UnitName: "ARMCOM", Ident: "alpha", InitialMission: "wa beta"},
@@ -514,7 +496,7 @@ func TestInitialMissionVerbs(t *testing.T) {
 		// wa unresolved fallback to self
 		w2 := newMissionFixtureWorld(5, nil)
 		hA2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		uA2 := w2.Unit(hA2)
+		uA2 := atPlacement(w2.Unit(hA2), 0)
 		uA2.Flags |= 1 << 5
 		m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "wa nonexistent"}}}
 		RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -532,7 +514,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	// C11: uppercase-led W… token enters BUILD block, never plain Wait.
 	w1 := newMissionFixtureWorld(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u := w1.Unit(h)
+	u := atPlacement(w1.Unit(h), 0)
 	u.Flags |= 1 << 5
 	// Uppercase W 10 should be BUILD, not Wait.
 	// We treat "W 10" as building build with name "10"? That still not Wait.
@@ -545,7 +527,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	// Lowercase w should be Wait.
 	w2 := newMissionFixtureWorld(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u2 := w2.Unit(h2)
+	u2 := atPlacement(w2.Unit(h2), 0)
 	u2.Flags |= 1 << 5
 	m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "w 10"}}}
 	RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -555,7 +537,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	// Wa lowercase should be WaitForAttack
 	w3 := newMissionFixtureWorld(5, nil)
 	h3, _ := w3.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u3 := w3.Unit(h3)
+	u3 := atPlacement(w3.Unit(h3), 0)
 	u3.Flags |= 1 << 5
 	m3 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "wa target"}}}
 	RunInitialMissionsWithCatalog(m3, w3, testInitialCatalog)
@@ -565,7 +547,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	// Uppercase Wa should NOT be WaitForAttack (it goes to BUILD)
 	w4 := newMissionFixtureWorld(5, nil)
 	h4, _ := w4.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u4 := w4.Unit(h4)
+	u4 := atPlacement(w4.Unit(h4), 0)
 	u4.Flags |= 1 << 5
 	m4 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "Wa target"}}}
 	RunInitialMissionsWithCatalog(m4, w4, testInitialCatalog)
@@ -575,7 +557,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	// Uppercase Ww should be BuildWeapon via quirk
 	w5 := newMissionFixtureWorld(5, nil)
 	h5, _ := w5.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u5 := w5.Unit(h5)
+	u5 := atPlacement(w5.Unit(h5), 0)
 	u5.Flags |= 1 << 5
 	giveStockpileSlot(u5)
 	m5 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "Ww 4"}}}
@@ -586,7 +568,7 @@ func TestUppercaseWQuirk(t *testing.T) {
 	// Lowercase bw also BuildWeapon but via normal path
 	w6 := newMissionFixtureWorld(5, nil)
 	h6, _ := w6.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u6 := w6.Unit(h6)
+	u6 := atPlacement(w6.Unit(h6), 0)
 	u6.Flags |= 1 << 5
 	giveStockpileSlot(u6)
 	m6 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "bw 4"}}}
@@ -602,7 +584,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 10 20"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -617,7 +599,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a 10 20"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -632,7 +614,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a ARMCK"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -644,7 +626,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "p 10 20 5"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -656,7 +638,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "d"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -668,7 +650,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "s"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -687,7 +669,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: ""}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -702,7 +684,7 @@ func TestPostludeMakeSelectableSuppression(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 1 1, d"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -730,7 +712,7 @@ func TestSilentMalformed(t *testing.T) {
 	// Malformed numbers still queue with 0.
 	w1 := newMissionFixtureWorld(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u := w1.Unit(h)
+	u := atPlacement(w1.Unit(h), 0)
 	u.Flags |= 1 << 5
 	m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "?, 123, m 10 20, !, w 5"}}}
 	RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -749,7 +731,7 @@ func TestSilentMalformed(t *testing.T) {
 	// malformed numbers: move with bad numbers should still queue with 0.
 	w2 := newMissionFixtureWorld(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u2 := w2.Unit(h2)
+	u2 := atPlacement(w2.Unit(h2), 0)
 	u2.Flags |= 1 << 5
 	m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m bad,numbers"}}}
 	RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -763,7 +745,7 @@ func TestSilentMalformed(t *testing.T) {
 	// wa fallback to self when unresolved
 	w3 := newMissionFixtureWorld(5, nil)
 	h3, _ := w3.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u3 := w3.Unit(h3)
+	u3 := atPlacement(w3.Unit(h3), 0)
 	u3.Flags |= 1 << 5
 	m3 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "wa nosuch"}}}
 	RunInitialMissionsWithCatalog(m3, w3, testInitialCatalog)
@@ -774,7 +756,7 @@ func TestSilentMalformed(t *testing.T) {
 	// g unresolved should queue nothing -> no postlude if no other orders? Actually g unresolved queues nothing, so queued==0 -> no tail and bit5 not cleared.
 	w4 := newMissionFixtureWorld(5, nil)
 	h4, _ := w4.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u4 := w4.Unit(h4)
+	u4 := atPlacement(w4.Unit(h4), 0)
 	u4.Flags |= 1 << 5
 	m4 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "g nosuch"}}}
 	RunInitialMissionsWithCatalog(m4, w4, testInitialCatalog)
@@ -793,7 +775,7 @@ func TestClamp255(t *testing.T) {
 	// Our clamp should truncate to 255 and not panic.
 	w1 := newMissionFixtureWorld(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u := w1.Unit(h)
+	u := atPlacement(w1.Unit(h), 0)
 	u.Flags |= 1 << 5
 	// Use a long token that is "m " plus many spaces to exceed 255 but without comma.
 	long2 := "m " + strings.Repeat("1", 300)
@@ -808,7 +790,7 @@ func TestClamp255(t *testing.T) {
 	// At least ensure no panic for long script.
 	w2 := newMissionFixtureWorld(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u2 := w2.Unit(h2)
+	u2 := atPlacement(w2.Unit(h2), 0)
 	m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: long}}}
 	RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
 	// long "a..." token: fields after 'a' are 299 'a's which are not numeric, so a by-type with name "aaa..." -> should queue AttackUType if type exists.
@@ -872,7 +854,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 	for i, tc := range cases {
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags = 0
 		// For move/p/w we need flag bit5 set to test clearing, but o test clears flags.
 		if tc.token[0] != 'o' {
@@ -888,7 +870,7 @@ func TestCoordinatesAndTimesVectors(t *testing.T) {
 	{
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags |= 1 << 5
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "w -1.5"}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -903,7 +885,7 @@ func TestNonCampaignNoOp(t *testing.T) {
 	// C9: only type 1 and BetweenMissions restores run. Type 2 should be no-op.
 	w1 := newMissionFixtureWorld(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u := w1.Unit(h)
+	u := atPlacement(w1.Unit(h), 0)
 	u.Flags |= 1 << 5
 	m1 := &Mission{Type: TypeSkirmish, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "m 10 20"}}}
 	RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -931,7 +913,7 @@ func TestMissionOFlagBits(t *testing.T) {
 	for _, c := range cases {
 		w1 := newMissionFixtureWorld(5, nil)
 		h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w1.Unit(h)
+		u := atPlacement(w1.Unit(h), 0)
 		u.Flags = 0
 		m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o " + strconv.Itoa(c.d1) + " " + strconv.Itoa(c.d2)}}}
 		RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)
@@ -956,7 +938,7 @@ func TestMissionOFlagBits(t *testing.T) {
 func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
 	w := newMissionFixtureWorld(5, nil)
 	h, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u := w.Unit(h)
+	u := atPlacement(w.Unit(h), 0)
 	u.Flags |= 1 << 5
 	m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "b ARMFAB 2 500 600"}}}
 	RunInitialMissionsWithCatalog(m, w, testInitialCatalog)
@@ -970,7 +952,7 @@ func TestInitialBuildCarriesResolvableProductIdentity(t *testing.T) {
 
 	w2 := newMissionFixtureWorld(5, nil)
 	h2, _ := w2.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u2 := w2.Unit(h2)
+	u2 := atPlacement(w2.Unit(h2), 0)
 	u2.Flags |= 1 << 5
 	m2 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "a ARMFAB"}}}
 	RunInitialMissionsWithCatalog(m2, w2, testInitialCatalog)
@@ -1000,7 +982,9 @@ func TestInitialMissionAttachOrderMatchesVerbOrder(t *testing.T) {
 	hCarrier, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
 	hOne, _ := w.Create(testDef("ARMCK"), 0, 0, 0, 0)
 	hTwo, _ := w.Create(testDef("ARMCK"), 0, 0, 0, 0)
-	uCarrier := w.Unit(hCarrier)
+	uCarrier := atPlacement(w.Unit(hCarrier), 0)
+	uOne := atPlacement(w.Unit(hOne), 1)
+	uTwo := atPlacement(w.Unit(hTwo), 2)
 
 	m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{
 		{UnitName: "ARMCOM", Ident: "carrier", InitialMission: ""},
@@ -1012,8 +996,6 @@ func TestInitialMissionAttachOrderMatchesVerbOrder(t *testing.T) {
 	if got := uCarrier.Attachment.Cargo; len(got) != 2 || got[0] != hTwo || got[1] != hOne {
 		t.Fatalf("cargo list order should be verb order with the latest attach at the head: got %v want [%v %v]", got, hTwo, hOne)
 	}
-	uOne := w.Unit(hOne)
-	uTwo := w.Unit(hTwo)
 	if uOne.Attachment.Carrier != hCarrier || uTwo.Attachment.Carrier != hCarrier {
 		t.Fatalf("both units should carry the carrier link: one=%v two=%v want %v", uOne.Attachment.Carrier, uTwo.Attachment.Carrier, hCarrier)
 	}
@@ -1045,7 +1027,7 @@ func TestBwRefusesAUnitWithNoStockpileSlot(t *testing.T) {
 	} {
 		w := newMissionFixtureWorld(5, nil)
 		h, _ := w.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-		u := w.Unit(h)
+		u := atPlacement(w.Unit(h), 0)
 		u.Flags |= 1 << 5
 		tc.arm(u)
 		m := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "bw 5"}}}
@@ -1071,7 +1053,7 @@ func TestBwRefusesAUnitWithNoStockpileSlot(t *testing.T) {
 func TestMissionOFlagPreseed(t *testing.T) {
 	w1 := newMissionFixtureWorld(5, nil)
 	h, _ := w1.Create(testDef("ARMCOM"), 0, 0, 0, 0)
-	u := w1.Unit(h)
+	u := atPlacement(w1.Unit(h), 0)
 	u.Flags = (2 << units.StandingMoveShift) | (3 << units.StandingFireShift)
 	m1 := &Mission{Type: TypeCampaign, Units: []UnitPlacement{{UnitName: "ARMCOM", InitialMission: "o 1"}}}
 	RunInitialMissionsWithCatalog(m1, w1, testInitialCatalog)

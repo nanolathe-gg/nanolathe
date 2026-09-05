@@ -130,3 +130,27 @@ func (s *Session) ownersAllied(i, j int) bool {
 	}
 	return p.Allies[j]
 }
+
+// Exported views of the record, for the callers outside this package.
+//
+// Three of them read `Skirmish.Players[owner]` until WU-19-234 — the headless
+// runner's watching gate and the two side lookups in cmd/nanolathe. They are
+// all post-entry readers, so all three read the wrong table: a load restores
+// into the setup record only the five rule words and the map name
+// [08 R-SKIR-01 §2] "Save persistence", which leaves every setup row at
+// controller 0, colour 0, side 0 whatever the battle actually is. A restored
+// skirmish therefore reported side 0 for every slot and no observer anywhere.
+// These wrappers give those callers the same readers the package already uses.
+
+// SideForOwner is the slot's side ordinal, false when the slot has none. It is
+// the exported form of the one side reader; see sideForOwner for the campaign
+// and unwired-composition arms.
+func (s *Session) SideForOwner(owner int) (int, bool) { return s.sideForOwner(owner) }
+
+// OwnerIsObserver reports the record's observer byte, which excludes a slot
+// from settlement [05 "Authoritative settlement order"] and from a result row.
+// The battle-entry conversion copies it out of the setup row's observer
+// controller, so before a save the two agree and after a load only this one is
+// still right. See ownerIsObserver for the save-persistence question the byte
+// still carries.
+func (s *Session) OwnerIsObserver(owner int) bool { return s.ownerIsObserver(owner) }

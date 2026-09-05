@@ -416,7 +416,7 @@ func TestBeamLatch(t *testing.T) {
 		t.Fatalf("before latch, tail fixed: pos %d start %d want 65536,0", p.Pos.X.Raw(), p.StartPos.X.Raw())
 	}
 	// tick 106: creation+duration < tick true => set latch this tick, tail still fixed
-	res = AdvanceDirect(&p, w, 106)
+	AdvanceDirect(&p, w, 106)
 	if !p.BeamLatch {
 		t.Fatalf("latch should be set at tick 106")
 	}
@@ -424,7 +424,7 @@ func TestBeamLatch(t *testing.T) {
 		t.Fatalf("latch setting tick, tail still fixed: pos %d start %d want 131072,0", p.Pos.X.Raw(), p.StartPos.X.Raw())
 	}
 	// tick 107: already latched => both move
-	res = AdvanceDirect(&p, w, 107)
+	AdvanceDirect(&p, w, 107)
 	if p.Pos.X.Raw() != 196608 || p.StartPos.X.Raw() != 65536 {
 		t.Fatalf("after latch both move: pos %d start %d want 196608,65536", p.Pos.X.Raw(), p.StartPos.X.Raw())
 	}
@@ -671,7 +671,7 @@ func TestAdvanceDispatch(t *testing.T) {
 
 	wMet := &content.WeaponDef{Meteor: true}
 	p5 := Projectile{Pos: Vec3{X: fix(0)}, Velocity: Vec3{X: fix(65536)}}
-	res = Advance(&p5, wMet, 0, Vec3{X: fix(100000)}, fix(8192), fix(0))
+	Advance(&p5, wMet, 0, Vec3{X: fix(100000)}, fix(8192), fix(0))
 	if p5.Pos.X.Raw() != 65536 {
 		t.Fatalf("meteor advance should ignore wind, pos got %d", p5.Pos.X.Raw())
 	}

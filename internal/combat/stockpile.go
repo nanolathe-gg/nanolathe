@@ -9,6 +9,7 @@ package combat
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // ---------------------------------------------------------------------------
@@ -384,7 +385,19 @@ func IsProjectileClaimed(svc *Service, candidate pool.Handle) bool {
 // fixed target words), and whether a candidate was found.
 // Determinism: prefix ascending, first unclaimed wins, not nearest [06 §11.2] I1.
 func FindInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide uint8, coverage int32, weapons map[int32]*content.WeaponDef) (pool.Handle, Vec3, bool) {
-	if svc == nil {
+	return findInterceptorTarget(svc, interceptorPos, interceptorSide, coverage, func(id int32) (*content.WeaponDef, bool) {
+		w, ok := weapons[id]
+		return w, ok
+	})
+}
+
+// findInterceptorTarget is FindInterceptorTarget over a weapon LOOKUP rather
+// than a map. The production caller resolves through the catalog's
+// once-compiled slot index, which resolves colliding ids in the documented
+// order [02 "Weapon record"] and allocates nothing; the exported map form above
+// is the fixture seam its tests were written against.
+func findInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide uint8, coverage int32, weaponByID func(int32) (*content.WeaponDef, bool)) (pool.Handle, Vec3, bool) {
+	if svc == nil || weaponByID == nil {
 		return 0, Vec3{}, false
 	}
 	cnt := svc.Count() // capture at entry [01 §6.2] [06 §5.2] projectile phase capture
@@ -398,8 +411,8 @@ func FindInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide ui
 			continue // owner byte differs required, alliance not consulted [06 §11.2]
 		}
 		// Weapon is targetable check [06 §11.2]
-		w := weapons[rec.WeaponID]
-		if w == nil || !w.Targetable {
+		w, okW := weaponByID(rec.WeaponID)
+		if !okW || w == nil || !w.Targetable {
 			continue // not targetable [06 §11.2]
 		}
 		// Stored aim point vs coverage square [06 §11.2]
@@ -742,4 +755,50 @@ func ApplyInterceptorExplosion(svc *Service, exploder pool.Handle, exploderPos V
 	if onVictims != nil {
 		onVictims(victims, victimSigs, exploderSigs)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// The automatic interceptor scan and the fire-time rescan [06 §11.2] C29
+// ---------------------------------------------------------------------------
+
+// interceptorScanCandidate is the scan both interceptor passes run [06 §11.2]:
+// the aim-time automatic scan, which "runs from the same per-slot position in
+// the autonomous scan that ordinary acquisition runs from (§3.2) and is chosen
+// by the slot weapon's interceptor flag", and the fire-time rescan the
+// vertical-launch executor performs immediately before firing.
+//
+// The gates, in the section's order: the slot's ammunition byte is nonzero;
+// then the pool prefix walk, which accepts the first candidate whose owner side
+// differs from the interceptor unit's (the alliance matrix is NOT consulted),
+// whose weapon carries `targetable`, whose STORED AIM POINT lies inside the
+// inclusive coverage square measured from the interceptor UNIT's position, and
+// which no pool record's reservation link already claims. Neither pass tests
+// the dead bit.
+//
+// The returned Vec3 is the candidate's CURRENT position, which is what the slot
+// store takes — [06 §11.2] is explicit that the two positions play different
+// roles and must not be conflated: the scan metric is the stored aim point (so
+// interceptors defend the aimed-at ground point) and the slot store is the
+// current position.
+//
+// The coverage operand is the weapon's own `coverage` scalar, which is separate
+// from ordinary fire range [06 §11.2]; it is passed through verbatim, negative
+// and oversized values included [06 R-WPN-05 §10].
+func interceptorScanCandidate(svc *Service, u *units.Unit, slot *units.Slot, catalog *content.Catalog) (pool.Handle, Vec3, bool) {
+	if svc == nil || u == nil || slot == nil || slot.Weapon == nil || catalog == nil {
+		return 0, Vec3{}, false
+	}
+	if !slot.Weapon.Interceptor {
+		return 0, Vec3{}, false
+	}
+	if slot.Ammo <= 0 {
+		return 0, Vec3{}, false // requires a nonzero slot ammunition byte [06 §11.2]
+	}
+	// The subtraction is the interceptor UNIT's position, not its weapon piece
+	// [06 R-WPN-05 §10].
+	pos := Vec3{X: u.X, Y: u.Y, Z: u.Z}
+	// The owner-side operand is the unit's owning-player byte [06 §11.2]. The
+	// catalog's once-compiled slot index resolves the candidate weapon; ranging
+	// a map here would resolve colliding ids in Go's randomised order (I1).
+	return findInterceptorTarget(svc, pos, u.Owner, slot.Weapon.Coverage, catalog.WeaponByID)
 }

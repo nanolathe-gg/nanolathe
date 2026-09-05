@@ -1,7 +1,6 @@
 package session
 
 import (
-	"os"
 	"reflect"
 	"testing"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -20,10 +20,7 @@ import (
 // resulting values are the still-untraced retail first visual pose
 // [R-P28-COB-01R][01 §4.4][03 §2.4].
 func TestP28COB01RScenarioARMCKPublishesStrictCreateState(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		t.Skip("P28-COB-01R requires NANOLATHE_TA_ROOT")
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount retail: %v", err)

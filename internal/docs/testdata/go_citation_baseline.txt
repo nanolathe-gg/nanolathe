@@ -5,21 +5,11 @@
 # dangle so they can be removed. Fix the comment (or restore the heading the
 # comment cites) and delete the line — this file only shrinks.
 02 §6.2
-04 "barriers and flush points"
-04 "unit sweep"
 05 §...
-05 "Cancellation boundaries"
 05 "Capture", "Established fact — ownership transfer"
-05 "control-byte bit roles in the footprint validator"
 05 "Feature sinking"
-05 "R-P0-06 §5 addendum"
 05 "Resurrection", "Established — cost and randomness"
 05 "Resurrection", "Established fact — delay"
-05 "Reverse and deconstruction"
-05 "Silent blocked revalidation before allocation"
-05 "the build-order caption census"
-05 "Weapon per-shot cost"
-05 "which units can request cloak at all"
 08 "Established AI-facing data"
 08 §3
 08 §8

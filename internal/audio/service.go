@@ -187,16 +187,20 @@ func (a *Service) Emit(frame uint32, slot Slot, unit pool.Handle, text string) b
 // their inserts with the same tick (Service.Emit), so a second clock here put
 // the next-allowed frames in a domain the insert test could never satisfy —
 // with a rendered frame ahead of the tick, `tick < nextAllowed` held forever
-// and every slot fell silent after its first audible resolve. renderedFrame is
-// retained for callers that count their own presentation cadence.
-func (a *Service) DrainEvents(renderedFrame, committedTick uint32, events []framepkg.EventView) {
+// and every slot fell silent after its first audible resolve.
+//
+// The rendered-frame count was a leading parameter here until CL-4, discarded
+// on the first line of the body. Keeping it in the signature invited exactly
+// the reading the paragraph above rules out — that the drain arbitrates
+// against a presentation clock — and one test existed to pass two different
+// values for it on one tick.
+func (a *Service) DrainEvents(committedTick uint32, events []framepkg.EventView) {
 	if a == nil {
 		return
 	}
 	if a.Queue == nil || a.Music == nil {
 		a.Init(nil)
 	}
-	_ = renderedFrame
 	a.Queue.Drain(committedTick)
 	if events != nil && (!a.hasEventTick || committedTick != a.lastEventTick) {
 		for _, ev := range events {

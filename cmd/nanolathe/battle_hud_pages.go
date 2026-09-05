@@ -17,45 +17,16 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// buildPageCount returns the number of authored <unit>N.GUI pages. Retail's
-// unit definition page-count byte is populated from the DOWNLOADMENU records;
-// the mounted generated pages are the clean data equivalent and keep modded
-// layouts data-driven [07 §9]. Page flag encoding itself has only three bits.
-func (h *retailBattleHUD) buildPageCount(def *content.UnitDef) int {
-	if h == nil || def == nil {
-		return 0
-	}
-	key := strings.ToLower(def.UnitName)
-	if count, ok := h.pageCounts[key]; ok {
-		return count
-	}
-	count := 0
-	for page := 1; page <= 8; page++ {
-		name := fmt.Sprintf("%s%d", key, page)
-		if window, _ := h.loadWindowProbe(name); window == nil {
-			break
-		}
-		count++
-	}
-	h.pageCounts[key] = count
-	return count
-}
-
-func (h *retailBattleHUD) windowFor(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF) {
-	window, page, err := h.windowForRequired(b, f)
-	if err != nil {
-		if h != nil {
-			h.assetErr = err
-		}
-		return nil, nil
-	}
-	return window, page
-}
+// Two dead helpers stood here. buildPageCount counted authored <unit>N.GUI
+// pages [07 §9]; nothing called it, and the page-count contract is locked in
+// internal/content by TestBuildPageCountFollowsAuthoredPageWindowsAndDownloads.
+// windowFor was a two-value wrapper over windowForRequired that discarded the
+// construction error onto h.assetErr and returned nils, kept "to keep older
+// inspection helpers source-compatible"; those helpers are gone and it had no
+// callers.
 
 // windowForRequired returns a selected authored page construction error to
-// every presentation and input caller. The two-value windowFor wrapper keeps
-// older inspection helpers source-compatible while retaining the diagnostic
-// on the HUD [07 §6][07 §9].
+// every presentation and input caller [07 §6][07 §9].
 func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF, error) {
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1]
 	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10

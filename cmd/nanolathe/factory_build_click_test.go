@@ -108,12 +108,15 @@ func TestRetailFactoryProductClickQueuesAndBuilds(t *testing.T) {
 		MapW: int32(sess.World.CellW * 16), MapH: int32(sess.World.CellH * 16),
 	}
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
-	pal := loadPalette(cs)
+	pal := retailPaletteForTest(t, cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, _ := b.hud.windowFor(b, cur)
+	w, _, err := b.hud.windowForRequired(b, cur)
+	if err != nil {
+		t.Fatalf("command window: %v", err)
+	}
 	if w == nil || !strings.HasSuffix(strings.ToLower(w.Name), "armlab1.gui") {
 		if w == nil {
 			t.Fatal("lab window is nil; want armlab1.gui")

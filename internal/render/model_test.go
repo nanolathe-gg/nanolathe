@@ -267,25 +267,6 @@ func TestPieceDrawOrder(t *testing.T) {
 	if rs != 21 || gs != 255-21 || bs != 10 {
 		t.Fatalf("ShadeRGBA: got %d %d %d want 21 %d 10", rs, gs, bs, 255-21)
 	}
-	// PrimitiveRGBA's two arms [03 §4.3]. These pin the helper as written, not
-	// a retail contract: [03 R-REN-03A §5] gives four span writers and puts the
-	// SHD/no-SHD split on shaded-vs-unshaded, so a flat face under the shaded
-	// renderer writes SHD[row*256 + color] where this arm writes the raw byte.
-	// The divergence is described at PrimitiveRGBA.
-	primColored := PrimitiveDraw{ColorIndex: 5, IsColored: 1, ShadeRow: testRow, TextureName: "foo"}
-	rc, gc, bc, _ := PrimitiveRGBA(tables, primColored)
-	if rc != 5 {
-		t.Fatalf("flat primitive takes the raw-palette arm: got %d want 5", rc)
-	}
-	_ = gc
-	_ = bc
-	primTex := PrimitiveDraw{ColorIndex: 5, IsColored: 0, ShadeRow: testRow, TextureName: "tex"}
-	rt, gt, bt, _ := PrimitiveRGBA(tables, primTex)
-	if rt != 21 {
-		t.Fatalf("textured via SHD: got %d want 21", rt)
-	}
-	_ = gt
-	_ = bt
 }
 
 // TestLeafAttachmentEmit verifies leaf with vertex but no primitive surfaces as emit point [03 §2.4] C23.

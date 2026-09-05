@@ -251,6 +251,31 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	}
 	var preps [NumSlots]*slotPrep
 	var queuedTargetCleared bool
+	// The ordinary target clear [06 §3.2]: drop the target, drop the Aim
+	// handshake and its latch, and queue TargetCleared when the slot was
+	// actually pointing somewhere. Both the autonomous scan's retention drops
+	// and the interceptor scan's miss go through it — [06 §11.2] says an
+	// interceptor miss "clears the slot target through the ordinary path", so
+	// it has to be one body rather than two that drift apart.
+	//
+	// Bit 1 is the slot's ENABLED bit, whose one writer is the slot
+	// initializer [06 R-WPN-05 §3]; a lost target does not disable the slot.
+	// This used to clear it, reading it as an armed/has-target flag.
+	clearSlotTarget := func(slot *units.Slot, idx int) {
+		clearedHeading := slot.DesiredYaw != 0
+		clearedPitch := slot.DesiredPitch != 0x8000
+		slot.Target = units.Target{Kind: units.TargetNone}
+		slot.Aim.IssueBit = false
+		slot.Aim.Ready = false
+		slot.Flags &^= 0x01
+		if s.pendingAims != nil {
+			delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
+		}
+		if (clearedHeading || clearedPitch) && bridge != nil {
+			bridge.TargetCleared(int32(idx))
+			queuedTargetCleared = true
+		}
+	}
 	for idx := 0; idx < NumSlots; idx++ {
 		slot := u.SlotAt(idx)
 		if slot == nil || !slot.IsPopulated() {
@@ -290,7 +315,45 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// neither half of the scan. Retention is inside the scan ("the scan
 		// first tries to retain"), so it waits for the unit's next visit too.
 		autonomous := scanning && slot.Flags&units.SlotFlagAutonomous != 0
-		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
+		// The AUTOMATIC INTERCEPTOR SCAN [06 §11.2]. It "runs from the same
+		// per-slot position in the autonomous scan that ordinary acquisition
+		// runs from (§3.2) and is chosen by the slot weapon's interceptor
+		// flag", so it stands here, at that position, as the other arm of the
+		// same branch rather than as an extra pass somewhere else.
+		//
+		// It has no retention half. Retention's three drops [06 §3.2] are all
+		// tests on a target UNIT (allied now, bad-target mask, paralyzer versus
+		// the stunned mark) and an interceptor slot's target is a POINT, so
+		// there is nothing for them to test; the scan simply runs again and its
+		// own hit or miss decides. A miss "clears the slot target through the
+		// ordinary path", which is the shared clear above.
+		//
+		// The scan's own gates — nonzero ammunition, differing owner side,
+		// `targetable`, the coverage square on the candidate's stored aim
+		// point, unclaimed — live in interceptorScanCandidate. The slot store
+		// is the candidate's CURRENT position, not the aim point it was
+		// matched on [06 §11.2].
+		//
+		// Everything below this branch is unchanged for an interceptor slot:
+		// the shot-time gate, the muzzle query, the vertical-launch executor
+		// and the stockpile fire gate all run exactly as they do for any other
+		// weapon [06 §11.1].
+		if slot.Weapon != nil && slot.Weapon.Interceptor {
+			if autonomous {
+				if _, candPos, found := interceptorScanCandidate(s, u, slot, catalog); found {
+					// A hit installs a POINT target from the candidate's
+					// current position [06 §11.2]. The Aim handshake and the
+					// stored angles are left alone: the vertical-launch
+					// executor runs no drift gate [06 §3.3].
+					slot.Target = units.Target{Kind: units.TargetGround, X: candPos.X, Z: candPos.Z}
+				} else {
+					clearSlotTarget(slot, idx)
+				}
+			}
+			if slot.Target.Kind == units.TargetNone {
+				continue // nothing to shoot at [06 §11.2]
+			}
+		} else if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
 			// Stale/dead resolution belongs to the slot pipeline's own target
 			// resolution and runs for every slot, autonomous or not: [06 §3.2]
@@ -319,23 +382,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				}
 			}
 			if drop {
-				clearedHeading := slot.DesiredYaw != 0
-				clearedPitch := slot.DesiredPitch != 0x8000
-				slot.Target = units.Target{Kind: units.TargetNone}
-				slot.Aim.IssueBit = false
-				slot.Aim.Ready = false
-				slot.Flags &^= 0x01
-				if s.pendingAims != nil {
-					delete(s.pendingAims, pendingKey{Unit: u.Handle, Slot: idx})
-				}
-				if (clearedHeading || clearedPitch) && bridge != nil {
-					bridge.TargetCleared(int32(idx))
-					queuedTargetCleared = true
-				}
-				// Bit 1 is the slot's ENABLED bit, whose one writer is the
-				// slot initializer [06 R-WPN-05 §3]; a lost target does not
-				// disable the slot. This used to clear it here, reading it as
-				// an armed/has-target flag.
+				clearSlotTarget(slot, idx)
 				continue
 			}
 		}
@@ -679,7 +726,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 				continue
 			}
 		}
-		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w) {
+		if !tryFireForSlot(u, slot, idx, tick, terrain, simRNG, s, w, catalog) {
 			continue
 		}
 		if needResult || needLatch {
@@ -1607,7 +1654,7 @@ func unitStationary(u *units.Unit) bool {
 	return u.MoveTier == 0
 }
 
-func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World) bool {
+func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terrain *world.Terrain, simRNG *rng.Simulation, svc *Service, w *units.World, catalog *content.Catalog) bool {
 	if u == nil || slot == nil || slot.Weapon == nil || svc == nil {
 		return false
 	}
@@ -1660,13 +1707,27 @@ func tryFireForSlot(u *units.Unit, slot *units.Slot, idx int, tick uint32, terra
 		Shooter:     u,
 		Origin:      origin,
 		MuzzlePiece: muzzlePieceFn,
-		MuzzleWorld: muzzleWorld,
-		TargetWorld: targetWorld,
-		Gravity:     gravity,
-		Script:      scriptAdapter,
-		Events:      fireEvents,
-		RNG:         simRNG,
-		Spy:         nil,
+		// The fire-time interceptor rescan, bound ONLY for an `interceptor`
+		// weapon [06 §11.2]. The vertical-launch executor performs it
+		// immediately before firing and the vertical creator stores what it
+		// returns as the new interceptor's matched-projectile link
+		// [06 §4.4][06 §6.6]. It is the same scan the aim-time acquisition
+		// ran — same gates, same pool order — re-run because the pool has
+		// moved since: a candidate may have been claimed by another launcher,
+		// or left coverage, in the ticks between the two.
+		//
+		// The `combat.Slot` TryFire hands back is the pipeline's per-shot copy;
+		// the ammunition byte the scan gates on is the same value, so the copy
+		// is read rather than the live slot to keep the executor reading one
+		// slot record.
+		InterceptorRescan: interceptorRescanPort(svc, u, weapon, catalog),
+		MuzzleWorld:       muzzleWorld,
+		TargetWorld:       targetWorld,
+		Gravity:           gravity,
+		Script:            scriptAdapter,
+		Events:            fireEvents,
+		RNG:               simRNG,
+		Spy:               nil,
 		// The three shooter terms of the turret spread's computed bound
 		// [06 §4.4] [06 R-WPN-03 §4].
 		ShooterHealth:    u.Health,
@@ -2683,4 +2744,37 @@ func completeArtPair(bank, entry string) (string, string) {
 		return "", ""
 	}
 	return bank, entry
+}
+
+// interceptorRescanPort builds the FirePorts.InterceptorRescan closure, or nil
+// when this unit's slot is not an `interceptor` weapon [06 §11.2].
+//
+// nil is the gate: an ordinary vertical launch — a nuclear missile — performs
+// no rescan and must not be refused a shot by one. Only the four
+// interceptor-flagged weapons in the retail corpus (I14) get a non-nil port,
+// and all four are `vlaunch`, which is why the vertical-launch executor is the
+// executor that owns the rescan [06 §4.4].
+func interceptorRescanPort(svc *Service, u *units.Unit, weapon *content.WeaponDef, catalog *content.Catalog) func(int, *Slot) pool.Handle {
+	if svc == nil || u == nil || catalog == nil || weapon == nil || !weapon.Interceptor {
+		// nil, not a closure that answers zero: TryFire reads a zero return as
+		// "the rescan found nothing", which refuses the shot [06 §11.2]. A
+		// nuclear missile is `vlaunch` and not `interceptor`, so a closure here
+		// would silently disarm every nuke silo in the game.
+		return nil
+	}
+	return func(_ int, cSlot *Slot) pool.Handle {
+		if cSlot == nil || cSlot.Weapon == nil || !cSlot.Weapon.Interceptor {
+			return 0
+		}
+		// The executor's own slot view carries the ammunition byte and the
+		// coverage scalar the scan needs; interceptorScanCandidate takes the
+		// units-side record, so the two fields are lifted across rather than
+		// re-read from the live slot.
+		probe := units.Slot{Weapon: cSlot.Weapon, Ammo: cSlot.Ammo}
+		h, _, ok := interceptorScanCandidate(svc, u, &probe, catalog)
+		if !ok {
+			return 0
+		}
+		return h
+	}
 }

@@ -177,7 +177,12 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 
 	watching := request.Watching
 	owner := sess.LocalOwner
-	if int(owner) < len(sess.Skirmish.Players) && sess.Skirmish.Players[owner].IsObserver() {
+	// The PLAYER RECORD, not the setup row: battle entry copies the setup
+	// row's observer controller into the record, and a load restores only the
+	// rule words and the map name into the setup record, so a restored battle
+	// reads every setup row back as an ordinary participant
+	// [08 R-SKIR-01 §2] "Save persistence".
+	if sess.OwnerIsObserver(int(owner)) {
 		watching = true
 	}
 	if request.LocalOwner >= 0 && request.LocalOwner != int(owner) {

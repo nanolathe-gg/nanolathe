@@ -209,12 +209,36 @@ type SectorFiling struct {
 	Seq    uint64
 }
 
-// eliminatedPlayerState is the owner player-row state byte whose units yield a
-// contested cell to whoever stamps over it [04 R-COLL-01 §4]. The label
-// (the eliminated/watch population, whose units the per-unit sweep visits but
-// never pumps or moves) is a Supported inference [04 R-MOV-03 §1]; the value
-// and the arithmetic are Established.
-const eliminatedPlayerState uint8 = 3
+// displaceableOwnerState is the owner player-row CONTROL byte whose units yield
+// a contested cell to whoever stamps over it [04 R-COLL-01 §4]. The byte is the
+// player row's control byte — the one doc 04 also calls the "player-state byte"
+// when it writes "a live unit whose owner's player-state byte is 1 or 2"
+// [04 R-MOV-01 §3] — and its value set is exactly {1, 2, 3}: 1 a locally
+// controlled human, 2 a computer player, 3 a remote peer
+// [05 R-SHARE-01 §1]. Doc 05 names the same three values "the three active
+// states", narrows settlement to "the two settling states" 1 and 2, and says
+// the third "traverses but never settles"
+// [05 "Authoritative settlement order"]. So player state 3 IS control byte 3,
+// and economy.Player.ControllerState is the field that carries it.
+//
+// This constant was called `eliminatedPlayerState` and its comment offered the
+// eliminated/watch population as a Supported-inference label, citing the sweep
+// gate of [04 R-MOV-03 §1]. That was a conflation of three different bytes and
+// is corrected here without changing a value: the sweep gate tests the control
+// byte for 1/2/3 AND a separate byte "for the eliminated value 10", and 10 is
+// the neutral-side sentinel that recurs as "side index is not the neutral
+// value 10" [08 P0-04] — a third byte again. Nothing anywhere makes 3 an
+// eliminated value, and elimination on this build is derived from the row's two
+// unit counters, not from a state byte at all (economy.PlayerEliminated). The
+// name mattered: read beside [04 R-MOV-03 §1] the old one invited a "fix" to
+// value 10 on a byte this protocol never reads.
+//
+// [04 R-COLL-01 §4] still labels the value "the eliminated/watch state" as a
+// Supported inference and cites [R-MOV-01 §3], which is the route follower and
+// cannot support it. The arithmetic there is Established and is what this
+// constant implements; only the label is wrong, and correcting it in the
+// research doc belongs to the doc's owner.
+const displaceableOwnerState uint8 = 3
 
 // OverlapUnits is the occupancy layer's window onto the facts the overlap
 // protocol of [04 R-COLL-01 §4] needs and the grid does not carry: which unit
@@ -301,7 +325,7 @@ func (g *OccupancyGrid) displaceable(occupant int) bool {
 	if !ok {
 		return false
 	}
-	return g.ownerState(owner) == eliminatedPlayerState
+	return g.ownerState(owner) == displaceableOwnerState
 }
 
 // raiseOverlap ORs the named bits into a unit's flag word. Retail raises one

@@ -8514,9 +8514,12 @@ section is the producer side.
 
 **Established fact — producer gate.** A unit voice request (any of the 82
 sites, slot 1..23) is enqueued only when the unit's owner is the **local
-viewing player**, the unit's chat-enable status bit is set, and a second
-status bit (the "silenced" bit, the same `0x4000` family §8.3 mentions for
-the `ok` sites) is clear. The caption passed is the caller's override or the
+viewing player**, the unit's status word carries the **live** bit (bit 28)
+and its **death-pending** bit (bit 14 — the `0x4000` §8.3 mentions for the
+`ok` sites) is clear: the same two gates the caption raiser applies
+([07 R-HUD-03 §14.1], [R-AUD-01 §7]; [04 R-ORD-01 §12] and
+[04 R-SPEC-01 §12] name the two bits).
+The caption passed is the caller's override or the
 slot's default caption run through the localisation table. Selection
 (`select`) is slot 1: cooldown 0, priority 10 — it always passes the
 crowding gate and is limited only by the 30-frame window and the
@@ -8791,9 +8794,9 @@ overrideText)`, which does exactly three things:
 1. *Gate.* The unit's owner slot must equal the **view slot** — the slot whose
    side the HUD presents, a global distinct from the local human's slot (the
    two are equal in single player; an observer may change the view slot) —
-   the unit's status word must carry the alive bit (bit 28, the bit
-   [R-AUD-01 §3] calls "chat-enable") and must not carry the death latch
-   (bit 14, §3's "silenced" bit; [04 R-SPEC-01 §12] names it). When the gate
+   the unit's status word must carry the live bit (bit 28) and must not carry
+   the death-pending bit (bit 14; [04 R-SPEC-01 §12] names it) — the same pair
+   the voice producer of [R-AUD-01 §3] tests. When the gate
    fails the helper returns having touched nothing: no queue write, no
    allocation, no draw. Remote and computer players' units therefore never
    enter the queue, and a dying unit's edges are silent.

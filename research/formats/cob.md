@@ -38,7 +38,7 @@ byte offsets.
 | 0x04 | NumberOfScripts | Count of script entry points (functions) |
 | 0x08 | NumberOfPieces | Count of piece names |
 | 0x0C | CodeLength | Length of the code section **in u32 words** (historically labelled "Unknown_0" — it is the code word count) |
-| 0x10 | NumberOfStatics | Count of static-variable slots the program declares (historically "Unknown_1"). There is no static-data section in the file. Runtime initialization is owned by [R-COB-04 §7]. |
+| 0x10 | NumberOfStatics | Count of static-variable slots the program declares (historically "Unknown_1"). There is no static-data section in the file. Runtime initialization is owned by [04 R-COB-04 §7]. |
 | 0x14 | TrailingRecordCount | Number of records in the trailing 8-byte record table at `0x28`. Zero in all 835 shipped scripts, which is how the field acquired its community names "Always_0" / "Unknown_2"; see "The trailing record table" below |
 | 0x18 | OffsetToScriptCodeIndexArray | → u32[NumberOfScripts]: per-script entry point, as a word index into the code section |
 | 0x1C | OffsetToScriptNameOffsetArray | → u32[NumberOfScripts]: file offsets of NUL-terminated script names |
@@ -89,7 +89,7 @@ image. Nanolathe validates the table's bounds and does not parse the records.
   array. Piece names correspond (case-insensitively) to 3DO piece names.
 - The file records names but no callback classification. BOS/COB may reach any
   stored entry by `call-script` or `start-script`; the retail engine's fixed
-  name producers and lookup behavior are specified by [R-CB-01 §1–§2].
+  name producers and lookup behavior are specified by [04 R-CB-01 §1–§2].
 
 ## The virtual machine
 
@@ -99,7 +99,7 @@ At the bytecode level, instructions push and pop signed 32-bit cells;
 wait instructions encode cooperative control flow. Exact runtime allocation,
 initial values, signal masks, failure edges, tick conversion, wake order, and
 piece-motion timing are intentionally not duplicated here. They are specified
-by [04 §4.1–§4.6], [R-COB-01 §1], and [R-COB-04 §7].
+by [04 §4.1–§4.6], [04 R-COB-01 §1], and [04 R-COB-04 §7].
 
 ### Value scaling conventions
 
@@ -112,7 +112,7 @@ Verified by comparing `ARMFLASH.BOS` with its compiled `ARMFLASH.COB`:
 | bare number | raw integer | as written (`sleep 150` → `150`) |
 
 The table states compiler constant encoding only. Runtime callback argument
-units and coordinate transforms are owned by [R-CB-01 §2] and [04 §4.4].
+units and coordinate transforms are owned by [04 R-CB-01 §2] and [04 §4.4].
 
 ## Instruction set
 
@@ -156,8 +156,14 @@ commit behavior are the runtime contract in [04 §4.6].
 | `0x10061000` | start-script | script index, argument count | `( args... -- )` spawn thread |
 | `0x10065000` | return | — | `( value -- )` return from function/thread |
 | `0x10013000` | sleep | — | `( milliseconds -- )` |
-| `0x10067000` | signal | — | `( mask -- )` kill other threads matching mask |
-| `0x10068000` | set-signal-mask | — | `( mask -- )` set current thread's mask |
+| `0x10067000` | signal | — | `( mask -- )` release every thread whose mask intersects the popped mask, **the signalling thread included** |
+| `0x10068000` | set-signal-mask | — | `( mask -- )` replace the current thread's mask |
+
+Every engine-started root thread begins with signal mask **`1`**, and
+`start-script` gives the child the parent's current mask; a thread's mask is
+`1` until a `set-signal-mask` changes it — the community report of a zero
+starting mask is wrong `[04 R-P0-10]`. Signal termination delivers nothing to
+a completion receiver `[04 §4.2]`.
 
 Jump targets are word indexes **relative to the code section start** and
 must land on an instruction boundary.
@@ -178,16 +184,17 @@ must land on an instruction boundary.
 | `0x10082000` | set-unit-value | — | `( sysvar_id value -- )` write engine port; retail compiles `set X to V` as `push X, push V, set` |
 | `0x10083000` | attach-unit | — | `( unit piece extra -- )`; the compiler supplies `extra = 0`. All 48 retail call sites have this shape, including authored piece `-1`. |
 | `0x10084000` | drop-unit | — | `( unit -- )` |
-| `0x10044000` | cargo-membership read (conventional name) | — | `( unitid -- value )`; no BOS keyword; see below |
-| `0x10045000` | carrier-identity read (conventional name) | — | `( -- value )`; no BOS keyword; see below |
+| `0x10044000` | cargo-membership read (conventional name) | — | `( unitid -- value )`; walks **this** unit's cargo list and pushes 1 on the first entry whose 16-bit identifier matches, 0 when the list is empty or exhausted `[04 R-COB-03 §5]`; no BOS keyword; see below |
+| `0x10045000` | carrier-identity read (conventional name) | — | `( -- value )`; follows this unit's **carrier back-pointer** (not the cargo-list head) and pushes that unit's identifier, or 0 when the unit is not carried `[04 R-COB-03 §5]`; no BOS keyword; see below |
 
 **`0x10044000` and `0x10045000` — encoded interpreter slots absent from
 Cavedog's toolchain and retail content.** Neither value appears in Scriptor's
 `Compiler.cfg`, `Decompiler.cfg`, or `Defs.h`, so no known BOS syntax emits
 it. A census of all 841 COB copies in the retail archives finds zero instances.
 Their one-pop/one-push and zero-pop/one-push shapes are established by the
-interpreter; cargo-list meaning and side effects are runtime behavior owned by
-[R-COB-03 §5]. The names above are conventional labels, not authored names.
+interpreter, and their cargo-list semantics by `[04 R-COB-03 §5]`, which also
+owns the linkage they read (a carrier back-pointer plus a singly linked cargo
+list, new cargo pushed at the head). The names above are conventional labels, not authored names.
 
 ### Arithmetic, comparison, logic
 
@@ -322,7 +329,7 @@ Cavedog's):
 The **Access** column is Cavedog's authored intent from that header, not a
 claim about which retail engine switch arms exist. Read arithmetic, write
 effects, defaults, packing, timing, and failure edges are runtime behavior in
-[04 §4.4], [04 §4.7], and [R-COB-03 §1–§6].
+[04 §4.4], [04 §4.7], and [04 R-COB-03 §1–§6].
 
 | ID | Name | Authored access | Cavedog's comment |
 | ---: | --- | --- | --- |
@@ -348,7 +355,7 @@ effects, defaults, packing, timing, and failure edges are runtime behavior in
 | 20 | `ARMORED` | set/get | |
 
 Retail packs and unpacks the packed x,z argument with the signed-add packing
-and negative-Z borrow correction established in [R-COB-03 §3]; this format
+and negative-Z borrow correction established in [04 R-COB-03 §3]; this format
 document does not restate that runtime arithmetic.
 
 Retail bytecode usage confirms the table: zero-argument reads
@@ -374,7 +381,7 @@ Authoritative values from the retail `scripts/EXPTYPE.H`:
 | 16128 | `BITMAPMASK` | "Mask of the possible bitmap bits" |
 
 The retail meaning and tested-bit set are runtime behavior in [04 §4.5] and
-[R-COB-04 §1].
+[04 R-COB-04 §1].
 
 Flags are OR-ed. Retail `Killed()` bodies overwhelmingly use
 `BITMAPONLY | BITMAPn` for light damage and
@@ -390,7 +397,7 @@ vector-class constants are `SFXTYPE_VTOL` = 0, `SFXTYPE_THRUST` = 1,
 `SFXTYPE_POINTBASED` = 256, `SFXTYPE_WHITESMOKE` = 256|1,
 `SFXTYPE_BLACKSMOKE` = 256|2, `SFXTYPE_SUBBUBBLES` = 256|3. Runtime geometry,
 visibility gates, dispatch, and presentation effects are owned by
-[R-COB-03 §6] and [03 R-FX-01 §3].
+[04 R-COB-03 §6] and [03 R-FX-01 §3].
 
 ### Engine callbacks
 
@@ -403,7 +410,7 @@ callback bit. Three distinct facts must therefore remain separate:
    names and argument counts for diagnostics/decompilation.
 3. **Retail invocation:** only an executable producer proves that the engine
    starts a name. The complete producer, argument, mode, timing, and side-effect
-   contract is [R-CB-01 §1–§8].
+   contract is [04 R-CB-01 §1–§8].
 
 The retail executable's fixed-name producer census contains exactly these
 forty case-sensitive names:
@@ -487,7 +494,9 @@ A full decode of every COB in the retail archives (835 scripts across
 - **`attach-unit` / `drop-unit` stack shapes** are established from retail
   bytecode (see the instruction table): all 48 retail call sites are uniform,
   including the `piece = -1` idiom, and the compiler-supplied third value is
-  always zero. Its engine-side consumer is established in [R-COB-03 §5].
+  always zero. It is **not** inert: the shared attach/drop commit writes its
+  low two bits into the cargo's committed mover-mode pair (`0` attached,
+  `1` grounded, `2` airborne) — `[04 R-COB-03 §5]`.
 - **Sleep and wait runtime behavior** is established in [04 §4.2] and
   [04 §4.6]. This file retains only the opcode and authored-duration encoding.
 - The header word at 0x28 (first-script-name pointer) has no known runtime

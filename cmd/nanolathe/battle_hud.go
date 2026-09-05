@@ -79,8 +79,7 @@ type retailBattleHUD struct {
 	// authored support-GAF fallback chain supplies the control art [07 §6].
 	pageChecked map[string]bool
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
-	windows    map[string]*gui.Window
-	pageCounts map[string]int
+	windows map[string]*gui.Window
 	// generatedWindows are cloned command pages patched from the committed
 	// download-menu slot records. The unmodified authored page/template stays
 	// in windows so another generated page can safely reuse it [07 R-HUD-03
@@ -122,10 +121,6 @@ type retailBattleHUD struct {
 	// clicks remain consumed; no new retail status text is synthesized [01
 	// §4.4][07 §3].
 	dispatchErr error
-	// factoryDispatch is a narrow test seam for the presentation boundary;
-	// production calls battleSession.DispatchFactoryBuildDelta directly.
-	factoryDispatch func(*battleSession, string, int) error
-
 	// hoveredGadget is the battle window tree's hovered-gadget index, -1 when
 	// none, and hoveredGadgetName its authored name. It is the footer's
 	// highest-priority source [07 R-HUD-03 §1]; the gadget-tree pointer pass
@@ -326,7 +321,6 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		fs:                fs,
 		pages:             make(map[string]*formats.GAF),
 		windows:           make(map[string]*gui.Window),
-		pageCounts:        make(map[string]int),
 		generatedWindows:  make(map[string]*gui.Window),
 		generatedPageArt:  make(map[string]*formats.GAF),
 		generatedProducts: make(map[string]bool),
@@ -491,9 +485,12 @@ func battleSide(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, shell
 		if sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign {
 			return campaignBattleSide(fs, sess.Mission, cat, shell)
 		}
-		owner := int(sess.LocalOwner)
-		if owner >= 0 && owner < len(sess.Skirmish.Players) {
-			idx = sess.Skirmish.Players[owner].Side
+		// The PLAYER RECORD's side, not the setup row's: a load restores only
+		// the rule words and the map name into the setup record, which would
+		// leave a restored battle rendering the Arm interface for a Core
+		// player [08 R-SKIR-01 §2] "Save persistence".
+		if side, ok := sess.SideForOwner(int(sess.LocalOwner)); ok {
+			idx = side
 		}
 	}
 	if idx < 0 || idx >= len(cat.Sides) || cat.Sides[idx] == nil {

@@ -72,10 +72,7 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 		if err != nil {
 			t.Fatalf("side %d %s session: %v", sideIdx, wantPrefix, err)
 		}
-		pal := loadPalette(cs)
-		if pal == nil {
-			t.Skip("palette not available")
-		}
+		pal := retailPaletteForTest(t, cs)
 		hud, err := loadRetailBattleHUD(cs.fs, sess, sess.Catalog, pal, nil)
 		if err != nil {
 			t.Fatalf("side %d %s HUD load failed: %v", sideIdx, wantPrefix, err)
@@ -102,8 +99,14 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 }
 
 // TestMissingOptionalStillEntersBattle verifies that missing optional
-// pause/title/options modal resources do not prevent battle entry [07 §8][07 §11].
-// Valid core battle reaches its first frame while those optional resources are unavailable.
+// pause/title/options modal resources do not prevent battle entry
+// [07 §8][07 §11]: a valid core battle reaches its first frame while each of
+// those optional resources is unavailable.
+//
+// The session, palette and world are built ONCE. Only the HUD load and the
+// frame composition see the hidden filesystem, so which battle it is composing
+// is not part of the contract, and standing up five identical sessions to hide
+// five different files was five map loads for one claim.
 func TestMissingOptionalStillEntersBattle(t *testing.T) {
 	root := testsupport.RetailRoot(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
@@ -112,7 +115,13 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 		t.Skipf("retail assets unavailable: %v", err)
 	}
 	defer cs.Close()
-	// Hide optional assets via hiddenFS.
+	pal := retailPaletteForTest(t, cs)
+	sess, _, err := newBattleSession(opts, cs)
+	if err != nil {
+		t.Fatalf("session: %v", err)
+	}
+	sess.Step(1)
+
 	providers := cs.fs.Providers()
 	base := cs.fs
 	for _, hide := range [][]string{
@@ -122,48 +131,37 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 		{"guis/yesorno.gui"},
 		{"anims/hattfont12.gaf"},
 	} {
-		hfs := newHiddenFS(base, providers, hide...)
-		// Need a session for each test.
-		sess, _, err := newBattleSession(opts, cs)
-		if err != nil {
-			t.Fatalf("session: %v", err)
-		}
-		pal := loadPalette(cs)
-		if pal == nil {
-			t.Skip("palette missing")
-		}
-		hud, err := loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil)
-		if err != nil {
-			t.Fatalf("optional hide %v should not fail HUD load: %v", hide, err)
-		}
-		if hud == nil {
-			t.Fatalf("hud nil after hide %v", hide)
-		}
-		// Verify core mandatory still present.
-		if hud.panelTop == nil || hud.console == nil {
-			t.Fatalf("core HUD missing after hiding optional %v", hide)
-		}
-		// Verify we can compose a first frame with this HUD (even without optional).
-		cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: 640, Height: 480})
-		if err != nil {
-			t.Fatalf("client: %v", err)
-		}
-		cl.SetTerrain(sess.World)
-		cl.SetPalette(pal)
-		cl.SetFNT(hud.console)
-		cl.SetModelFS(cs.fs)
-		b := &battleSession{sess: sess, cat: sess.Catalog, cam: nil, hud: hud}
-		cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
-		// Advance one tick and compose — should not panic.
-		sess.Step(1)
-		func() {
+		t.Run(strings.Join(hide, "+"), func(t *testing.T) {
+			hfs := newHiddenFS(base, providers, hide...)
+			hud, err := loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil)
+			if err != nil {
+				t.Fatalf("optional hide %v should not fail HUD load: %v", hide, err)
+			}
+			if hud == nil {
+				t.Fatalf("hud nil after hide %v", hide)
+			}
+			// The mandatory half must survive hiding an optional resource.
+			if hud.panelTop == nil || hud.console == nil {
+				t.Fatalf("core HUD missing after hiding optional %v", hide)
+			}
+			// A first frame must compose with this HUD.
+			cl, err := client.New(client.Options{Buffer: sess.Snapshot, Width: 640, Height: 480})
+			if err != nil {
+				t.Fatalf("client: %v", err)
+			}
+			cl.SetTerrain(sess.World)
+			cl.SetPalette(pal)
+			cl.SetFNT(hud.console)
+			cl.SetModelFS(cs.fs)
+			b := &battleSession{sess: sess, cat: sess.Catalog, cam: nil, hud: hud}
+			cl.SetUIStage(battleHUDUIStage{hud: hud, battle: b})
 			defer func() {
 				if r := recover(); r != nil {
 					t.Fatalf("compose with missing optional %v panicked: %v", hide, r)
 				}
 			}()
 			_ = cl.ComposeFrame()
-		}()
+		})
 	}
 }
 
@@ -182,10 +180,7 @@ func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
-	pal := loadPalette(cs)
-	if pal == nil {
-		t.Skip("palette missing")
-	}
+	pal := retailPaletteForTest(t, cs)
 	// Determine mandatory font logical path for this side.
 	side, err := battleSide(cs.fs, sess, sess.Catalog, nil)
 	if err != nil {

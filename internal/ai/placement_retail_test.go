@@ -2,12 +2,12 @@ package ai
 
 import (
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -338,10 +338,7 @@ func TestPlacementSignedWordOverflowBoundariesDoNotDraw(t *testing.T) {
 }
 
 func TestPlacementRepresentativeRetailAssetsGuarded(t *testing.T) {
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		t.Skip("set NANOLATHE_TA_ROOT to run guarded placement fixtures")
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Skipf("mount retail assets: %v", err)

@@ -159,7 +159,7 @@ func TestFeatureClickResolvesReclaimOrder(t *testing.T) {
 	terrain := testWorldON05(10, 10)
 	// Place feature at cell 9,5 so it lies inside the visible framebuffer
 	// surface rather than under the side rail.
-	featDef, _ := cat.Features[content.CanonicalKey("armrock")]
+	featDef := cat.Features[content.CanonicalKey("armrock")]
 	terrain.FeatureNames = []string{"armrock"}
 	terrain.FeatureDefs = []*content.FeatureDef{featDef}
 	b := newTestBattle(cat, terrain)

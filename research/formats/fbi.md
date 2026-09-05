@@ -275,7 +275,7 @@ removes its shading entirely. See
 | `kamikaze`, `kamikazedistance` | Self-destruct attack |
 | `SelfDestructAs`, `ExplodeAs` | Weapon names for self-destruct and death explosions |
 | `selfdestructcountdown` | Countdown seconds |
-| `ShootMe` | `1` = broadcasts as a target (dragon's teeth use 0) |
+| `ShootMe` | `1` = the definition may be picked by another player's autonomous target search (dragon's teeth author 0). Parsed into word A bit 15 with a default of **0**, and read only by the shared target search, where it is one of three disjuncts — a computer-controlled shooter or a session option bit admits a candidate without it [04 R-SPEC-01 §5]. |
 | `ImmuneToParalyzer` | EMP immunity |
 
 ### Sensors and stealth

@@ -23,7 +23,6 @@ func (s *testScheduler) Pending(p uint8) int {
 func (s *testScheduler) TotalPending() int {
 	return len(s.provider.(*testCandidateProvider).AllRequests())
 }
-func (s *testScheduler) newProvider()           {}
 func testPending(s *testScheduler, p uint8) int { return s.Pending(p) }
 
 func (p *testCandidateProvider) PlayerCount() int { return 10 }

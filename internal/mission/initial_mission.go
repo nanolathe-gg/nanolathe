@@ -50,28 +50,20 @@ func RunInitialMissionsWithCatalog(m *Mission, w *units.World, cat *content.Cata
 	// leaving a null hole where the pool or the per-player limit refused it;
 	// pass two walks that sparse array and skips the holes [P0-06].
 	// We reconstruct the sparse array by the placement index stored on the unit.
+	//
+	// PlacementIdx is the only linkage: a unit the creator refused never
+	// carries one, and its slot stays null. There is no second reconstruction
+	// — a dense-order arm used to stand here for fixtures that created units
+	// without stamping the index, and it made "the world holds as many units as
+	// there are placements" mean "they are in placement order", which is
+	// precisely what the sparse array exists to stop assuming.
 	createdSparse := make([]*units.Unit, len(m.Units))
-	// Build index from world units by PlacementIdx.
-	mapped := 0
 	for _, u := range w.Iter() {
 		if u == nil {
 			continue
 		}
 		if u.PlacementIdx >= 0 && u.PlacementIdx < len(createdSparse) {
 			createdSparse[u.PlacementIdx] = u
-			mapped++
-		}
-	}
-	// Fallback for legacy fixtures that create world units without
-	// placement linkage (PlacementIdx==-1). If no placement-indexed units
-	// were found but world size matches placements, assume dense order for
-	// test compatibility [P0-06] (retail sparse path would have PlacementIdx).
-	if mapped == 0 && len(w.Iter()) == len(m.Units) && len(w.Iter()) > 0 {
-		ws := w.Iter()
-		for i := range m.Units {
-			if i < len(ws) {
-				createdSparse[i] = ws[i]
-			}
 		}
 	}
 	if len(m.Units) == 0 {

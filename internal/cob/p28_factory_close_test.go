@@ -1,18 +1,15 @@
 package cob
 
 import (
-	"os"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
 func p28RetailARMLABVM(t *testing.T) *VM {
 	t.Helper()
-	root := os.Getenv("NANOLATHE_TA_ROOT")
-	if root == "" {
-		t.Skip("P28-FAC-01I requires NANOLATHE_TA_ROOT")
-	}
+	root := testsupport.RetailRoot(t)
 	fs := vfs.New()
 	if err := fs.MountGameDirectory(root); err != nil {
 		t.Fatalf("mount retail assets: %v", err)

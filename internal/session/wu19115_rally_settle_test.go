@@ -178,26 +178,7 @@ func TestRallyMoversSettleRetail(t *testing.T) {
 	}
 }
 
-// wu19115Report is the measurement harness the work unit's before/after numbers
-// come from. It asserts nothing; run it with -run and read the log.
-func TestRallyMoversSettleReport(t *testing.T) {
-	if testing.Short() {
-		t.Skip("measurement harness")
-	}
-	sess, step, made, goal := wu19115Rally(t)
-	t.Logf("goal cell (%d,%d)", goal.X, goal.Z)
-	for _, window := range []string{"issue+0..3000", "issue+3000..6000"} {
-		got := wu19115Observe(sess, step, made, 3000)
-		for _, h := range made {
-			s := got[h]
-			u := sess.Units.Unit(h)
-			name := ""
-			if u != nil {
-				name = wu19107HeadName(u)
-			}
-			t.Logf("%s mover %d: restarts=%d moves=%d running=%d firstStop=%d cell=(%d,%d) head=%q",
-				window, h, s.restarts, s.moves, s.running, s.firstStop,
-				world.WorldToCell(u.X), world.WorldToCell(u.Z), name)
-		}
-	}
-}
+// The work unit's before/after measurement harness, TestRallyMoversSettleReport,
+// lived here. It asserted nothing — it re-ran wu19115Rally for 6000 ticks and
+// logged per-mover restart/move/running counts — and the numbers it was written
+// to produce are now the assertions in TestRallyMoversSettleRetail above.

@@ -661,15 +661,21 @@ func (s *Session) stepProjectilePhase(tick uint32) {
 	// 3 projectile integration and collision + pool compactor [01 §4.4][06 §5][06 §11.2]
 	// Interceptor guidance pre-step before motion [06 §11.2]
 	//
-	// TODO(T25): nothing in this build LAUNCHES an interceptor. The two steps
-	// below are the post-launch halves of [06 §11.2] C29 — guidance retargets a
-	// live interceptor at its linked candidate, the detonation sweep clears
-	// projectiles inside the blast — and both are reached only for a projectile
-	// whose weapon carries `interceptor`, which only the automatic launch scan
-	// or combat's unbound `InterceptorRescan` port can create. An unreachable
-	// launch scan used to sit in stockpile.go beside them and was deleted by
-	// CL-5 rather than left to look wired. Placeholder behavior: a vertical
-	// launcher never fires at an incoming missile.
+	// The two steps below are the post-launch halves of [06 §11.2] C29 —
+	// guidance retargets a live interceptor at its linked candidate, the
+	// detonation sweep clears projectiles inside the blast — and both are
+	// reached only for a projectile whose weapon carries `interceptor`.
+	//
+	// The TODO(T25) that stood here said nothing in this build LAUNCHED one, so
+	// neither step could run. WU-19-234 closed the launch half in
+	// internal/combat: the automatic interceptor scan now runs from its
+	// per-slot position in the autonomous scan and installs the point target,
+	// and the vertical-launch executor's fire-time rescan is bound and supplies
+	// the matched-projectile link the vertical creator retains [06 §11.2]
+	// [06 §4.4] [06 §6.6]. The chain is exercised end to end, on retail
+	// content, by TestRetailAntiNukeIntercept: an ARM Protector holding one
+	// stockpiled round engages a nuclear missile aimed at the ground it stands
+	// on, and the missile does not arrive.
 	s.interceptorGuidanceTick()
 	if s.Combat != nil {
 		// [06 §6.4] plumb world wind vectors into ballistic/dropped drift

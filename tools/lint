@@ -1,0 +1,30 @@
+#!/bin/sh
+# Static analysis gate: staticcheck and deadcode over the retail-tagged build.
+#
+# Both tools run with -tags retail because the retail corpus tests are the
+# only callers of some production code; the untagged build reports those
+# callers' targets as unused. The versions are pinned so a new release cannot
+# turn the gate red on its own; `go run pkg@version` fetches into the module
+# cache without touching go.mod.
+#
+# Retail diagnostic strings are reproduced verbatim where the research quotes
+# them; a site that trips ST1005 for that reason carries
+# `//lint:ignore ST1005 retail text` with its citation.
+set -e
+
+STATICCHECK_VERSION=2025.1.1
+DEADCODE_VERSION=v0.36.0
+
+echo "==> staticcheck (retail tag)"
+go run "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}" -tags retail ./...
+
+echo "==> deadcode (retail tag, tests included)"
+# deadcode prints one line per unreachable function and exits 0; the gate
+# fails on any output.
+dead=$(go run "golang.org/x/tools/cmd/deadcode@${DEADCODE_VERSION}" -tags retail -test ./... 2>&1 | grep -v '^go: ' || true)
+if [ -n "$dead" ]; then
+	echo "unreachable code:"
+	echo "$dead"
+	exit 1
+fi
+echo "OK"

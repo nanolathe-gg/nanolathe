@@ -1,8 +1,9 @@
 package main
 
 import (
-	"os"
 	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/testsupport"
 )
 
 // TestP28OBS00ParityFixture reserves the acceptance gate for the authored
@@ -45,8 +46,6 @@ import (
 // the claim dated from the 2026-08-28 baseline the ledger pins. Scenario
 // provenance is the only thing left blocking the fixture.
 func TestP28OBS00ParityFixture(t *testing.T) {
-	if os.Getenv("NANOLATHE_TA_ROOT") == "" {
-		t.Skip("P28-OBS-00 requires NANOLATHE_TA_ROOT")
-	}
+	testsupport.RetailRoot(t)
 	t.Skip("P28-OBS-00 blocked: the reference captures do not record the map, player rows, start positions, seeds or command sequence needed to create the same match state; see the marker above")
 }

@@ -68,8 +68,25 @@ type FirePorts struct {
 	Shooter *units.Unit
 
 	// InterceptorRescan is the fire-time interceptor rescan a vertical-launch
-	// executor retains even on a pool-full failure [06 §4.4] C5. nil skips it.
-	InterceptorRescan func(slotIdx int, slot *Slot)
+	// executor performs immediately before firing, and retains even on a
+	// pool-full failure [06 §4.4] C5 [06 §11.2]. It returns the matched
+	// candidate's handle, which the vertical creator stores as the new
+	// interceptor's MATCHED-PROJECTILE LINK — "the authoritative reservation,
+	// and that store is what later scans test when rejecting candidates
+	// already claimed by any pool record" [06 §11.2] [06 §6.6].
+	//
+	// A zero return means the rescan found no candidate. That is not a
+	// no-op: "no candidate before firing leaves the shot pending", and "the
+	// spawner path then performs no ammunition, reload, firing-state, or
+	// resource mutation, matching the ordinary slot pipeline's failure path"
+	// [06 §11.2] — so TryFire returns failure and the pipeline's own
+	// ammunition and reload steps, which are gated on its success, do not run.
+	//
+	// nil skips it, which is every weapon that is not `interceptor`: an
+	// ordinary vertical launch (a nuclear missile) must not be blocked by a
+	// rescan it never performs. The binding site is the one place that knows
+	// the weapon, so the nil is the whole gate.
+	InterceptorRescan func(slotIdx int, slot *Slot) pool.Handle
 
 	// Origin is the firing unit's world point. It is the muzzle the shot
 	// starts from when the COB query yields no piece, which is the normal
@@ -277,8 +294,20 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// check precedes common initialization and the Fire/RockUnit callbacks
 	// [06 §5.1]. Vertical launch retains its slot-angle rewrite (the muzzle
 	// query above) and the fire-time interceptor rescan on failure [06 §4.4] C5.
+	//
+	// The vertical-launch executor's fire-time interceptor rescan runs HERE,
+	// before the reservation, which is what makes it "retained on failure"
+	// [06 §4.4]: a pool-full return below still leaves the scan performed.
+	var interceptorLink pool.Handle
 	if fam == CreationVertical && ports.InterceptorRescan != nil {
-		ports.InterceptorRescan(slotIdx, slot)
+		interceptorLink = ports.InterceptorRescan(slotIdx, slot)
+		if interceptorLink == 0 {
+			// No candidate before firing leaves the shot pending, with no
+			// record and no mutation [06 §11.2]. The rescan is bound only for
+			// an `interceptor` weapon, so an ordinary vertical launch never
+			// reaches this arm.
+			return 0, false
+		}
 	}
 	if !ballisticReserved {
 		h, ok = svc.Reserve()
@@ -336,6 +365,15 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 	// Family dispatch [06 §6.2] C15: this is what gives the record its
 	// position, yaw, pitch, scalar speed, velocity and family expiry.
 	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity, dropperHeading, dropperMaxVelocity)
+
+	// The matched-projectile link is stored AFTER the family dispatch, because
+	// the common initializer clears it first [06 §4.1]; the vertical creator
+	// "retains the unit target and, when the interceptor rescan supplied one,
+	// the matched-projectile link" [06 §6.6]. It is the authoritative
+	// reservation later scans test [06 §11.2].
+	if interceptorLink != 0 {
+		p.TargetProjectile = interceptorLink
+	}
 
 	// Apply the retained spread to the aimed trajectory, recomputing the
 	// velocity components from the perturbed angles through the fixed-point

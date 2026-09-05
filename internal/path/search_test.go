@@ -482,12 +482,7 @@ func TestToleranceWriteOnce(t *testing.T) {
 	// That best corresponds to h at (4,0) maybe 18*6=108 etc, tolerance = that.
 	// Search should terminate when popped node reaches tolerance region (near wall) even though enumerated goal behind wall not reachable.
 	// We'll make isPassable block column x=5 all z
-	isPassable := func(c Cell) bool {
-		if c.X == 5 {
-			return false
-		}
-		return true
-	}
+	isPassable := func(c Cell) bool { return c.X != 5 }
 	goal := PointGoal(Cell{10, 0}, 0) // h =18*max+7*min
 	cfg := SearchConfig{
 		Start: Cell{0, 0},
@@ -727,7 +722,7 @@ func TestResumableBudgetHonoring(t *testing.T) {
 	var all []Point
 	var st Status
 	var done bool
-	all, st, done = sess2.Resume(50)
+	_, _, done = sess2.Resume(50)
 	if done {
 		t.Fatalf("50 budget should not finish")
 	}
@@ -910,10 +905,20 @@ func TestReviseRunsBeforeExpansion(t *testing.T) {
 // TestRayWalkValueSemantics locks the greedy-ray probe against the value
 // form [04 §6.1 R-DOC04-B]: owner/building-mask miss (2) and steep (1) cells
 // are traversable to the ray; only 0 stops it.
+//
+// The fixture is a bounded 12x12 terrain — every cell outside it reads 0 —
+// because the wall follow of [04 R-PATH-01 §15] ends only when a sweep
+// exhausts all eight sectors or the two cursors meet, and neither can happen
+// against a wall with no ends. With an unbounded fixture the blocked case
+// followed a wall of infinite length until the cursor coordinates wrapped.
+// The bound is fixture geometry, not a rule about the ray.
 func TestRayWalkValueSemantics(t *testing.T) {
 	goal := PointGoal(Cell{X: 9, Z: 5}, 0)
 	walk := func(mid func(Cell) uint8) (bool, bool) {
 		vals := func(c Cell) uint8 {
+			if c.X < 0 || c.X > 11 || c.Z < 0 || c.Z > 11 {
+				return 0
+			}
 			if c.X >= 3 && c.X <= 6 {
 				return mid(c)
 			}

@@ -86,7 +86,7 @@ func footerShotSession(t *testing.T) (*battleSession, *contentSet, *camera.Camer
 		sess.Step(step)
 	}
 	centerBattleStartCamera(sess, cam)
-	pal := loadPalette(cs)
+	pal := retailPaletteForTest(t, cs)
 	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
 	if err != nil {
 		cs.Close()
@@ -155,7 +155,10 @@ func TestRetailFooterHoverShots(t *testing.T) {
 		commander.ArchivedMetalUse, commander.ArchivedEnergyUse)
 
 	// (b) a build button on the commander's authored page.
-	window, _ := b.hud.windowFor(b, cur)
+	window, _, err := b.hud.windowForRequired(b, cur)
+	if err != nil {
+		t.Fatalf("command window: %v", err)
+	}
 	if window == nil {
 		t.Fatal("commander page did not open")
 	}

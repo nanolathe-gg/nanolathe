@@ -30,16 +30,6 @@ type modelCorner struct {
 type unitModel struct {
 	compiled    *compiledmodel.Model
 	pieceByName map[string]int // lower-case name → piece index
-	// tris is retained only for the opt-in probe test's reporting surface; the
-	// production draw path never reads or populates this diagnostic cache.
-	tris []modelTri
-}
-
-type modelTri struct {
-	c      [3]modelCorner
-	piece  string
-	color  uint8
-	hasTex bool
 }
 
 func (c *Client) orientationCache(id uint64) *presentationrender.OrientationCache {

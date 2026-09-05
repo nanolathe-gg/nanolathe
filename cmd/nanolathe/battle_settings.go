@@ -65,14 +65,6 @@ func (b *battleSession) toggleDamageBars() {
 	}
 }
 
-// loadPalette loads the retail palette tables for compatibility with focused
-// presentation tests. Production construction uses loadPaletteStrict so a
-// missing or malformed shared palette cannot become an unannounced nil.
-func loadPalette(cs *contentSet) *palette.Tables {
-	p, _ := loadPaletteStrict(cs)
-	return p
-}
-
 func loadPaletteStrict(cs *contentSet) (*palette.Tables, error) {
 	if cs == nil || cs.fs == nil {
 		return nil, retailFrontendAssetError(cs, "retail palette", "palettes/PALETTE.PAL", "the shared retail palette tables", fmt.Errorf("missing VFS"))

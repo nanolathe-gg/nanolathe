@@ -229,16 +229,20 @@ func TestMinBarrelEdge(t *testing.T) {
 }
 
 // TestDeltaWrap verifies X/Z delta wrapping via int32.
+// TestDeltaWrap locks the solver against the two extremes of the signed
+// horizontal delta: the largest positive raw value and the largest negative
+// one, which is the positive one plus one and wraps. Both stand far beyond the
+// reach a velocity of 500000 buys, so both must report no solution, and
+// neither may fault on the way there.
+//
+// It used to end in an empty `if ok1 || ok2 {}` whose comment said "allow
+// either", which asserted nothing at all: the wrap could have produced a
+// spurious solution and the test would still have passed.
 func TestDeltaWrap(t *testing.T) {
 	minBarrel := deg(-11.25)
-	// dx raw 0x7fffffff vs 0x80000000 wrap to negative, both large distance => no solution regardless, but should not panic.
-	dx1 := int32(2147483647)
-	dx2 := int32(-2147483648)
-	_, ok1 := BallisticSolve(fixRaw(dx1), fixRaw(0), fixRaw(0), fixRaw(500000), fixRaw(8155), minBarrel)
-	_, ok2 := BallisticSolve(fixRaw(dx2), fixRaw(0), fixRaw(0), fixRaw(500000), fixRaw(8155), minBarrel)
-	// Just ensure no panic and both are no solution (far beyond range)
-	if ok1 || ok2 {
-		// Could be ok if velocity huge, but with 500k they are far => no solution expected.
-		// Allow either, just ensure deterministic.
+	for _, dx := range []int32{2147483647, -2147483648} {
+		if _, ok := BallisticSolve(fixRaw(dx), fixRaw(0), fixRaw(0), fixRaw(500000), fixRaw(8155), minBarrel); ok {
+			t.Fatalf("dx raw %d is far beyond the reach of velocity 500000, yet the solver reported a solution", dx)
+		}
 	}
 }

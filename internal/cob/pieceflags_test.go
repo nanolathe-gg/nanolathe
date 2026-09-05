@@ -240,7 +240,18 @@ func TestPieceFlagOpcodePolarity(t *testing.T) {
 	}
 }
 
-// TestPieceFlagsInitialSnapshot ensures a fresh VM has visible defaults 0x07 for fixture fallback [04 §4.3] [R-COB-01 §1].
+// TestPieceFlagsInitialSnapshot locks the VM's own piece-flag allocation
+// against the retail fill pass [04 §4.3]: the array is zero-filled, bit 1
+// (cache) and bit 2 (shade) are set unconditionally, and bit 0 (draw) is set
+// only where the piece's model object has at least three vertices — which this
+// layer cannot see, so it leaves bit 0 clear and the unit-creation binding that
+// owns the model link supplies it [R-COB-01 §1].
+//
+// It used to assert 0x07 here, bit 0 included, describing it as a fixture
+// fallback: a VM with no external binding drew nothing until Create ran. That
+// made this array a second and more permissive default than retail's, and it
+// is unreachable in production — the unit-owned table is installed before
+// Create runs [04 §"Piece flag polarity"].
 func TestPieceFlagsInitialSnapshot(t *testing.T) {
 	prog := &Program{
 		Code:        []uint32{0x10065000},
@@ -254,8 +265,8 @@ func TestPieceFlagsInitialSnapshot(t *testing.T) {
 		t.Fatalf("snap len %d want 2", len(snap))
 	}
 	for i, f := range snap {
-		if f != 0x07 {
-			t.Fatalf("piece %d initial flags %#x want 0x07 fixture fallback [04 §4.3]", i, f)
+		if f != 0x06 {
+			t.Fatalf("piece %d initial flags %#x, want the fill pass's unconditional cache|shade 0x06 [04 §4.3]", i, f)
 		}
 	}
 }

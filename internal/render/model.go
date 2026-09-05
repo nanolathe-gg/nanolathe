@@ -650,32 +650,17 @@ func ShadeRGBA(tables *palette.Tables, idx byte, row int) (r, g, b, a uint8) { /
 	return e[0], e[1], e[2], 255
 }
 
-// PrimitiveRGBA resolves a primitive's color to RGBA, selecting shading per type [03 §4.3] C10.
-//
-// What selects SHD is the **renderer**, not the face kind. [03 R-REN-03A §5]
-// enumerates four span writers, one per (shaded, unshaded) × (textured, flat):
-// the unshaded pair write the sampled texel and the color byte raw, while the
-// shaded pair write `SHD[row*256 + texel]` and `SHD[row*256 + color]`. A flat
-// polygon under the shaded renderer therefore goes through SHD exactly as a
-// textured quad does; only the unshaded renderer bypasses it. The comment that
-// stood here — "flat-colored primitives ... bypass SHD" — read the authored
-// 3DO `IsColored` flat/textured discriminator as if it were the shading one.
-//
-// Divergence, recorded and not fixed by this unit (its scope is the comment):
-// the condition below still routes every flat primitive to the raw palette
-// whatever row it carries, so it implements the unshaded flat writer only.
-// `ShadeRow == NoShadeRow` is the one term of the three that matches §5's real
-// split. This helper is not on the production draw path — the client's model
-// draw interpolates PrimitiveDraw.ShadeRows itself, as ShadeRGBA above notes —
-// so the divergence is confined to this reusable primitive and its tests.
-func PrimitiveRGBA(tables *palette.Tables, prim PrimitiveDraw) (r, g, b, a uint8) { // [03 §4.3] C10
-	if prim.TextureName == "" || (prim.IsColored == 1 && prim.ColorIndex < 256) || prim.ShadeRow == NoShadeRow {
-		// The unshaded span writers of [03 R-REN-03A §5] write the byte raw.
-		return PaletteRGBA(tables, byte(prim.ColorIndex&0xFF))
-	}
-	// Textured via the primitive's real SHD row [03 §4.3] [03 R-RAST-01 §5].
-	return ShadeRGBA(tables, byte(prim.ColorIndex&0xFF), prim.ShadeRow)
-}
+// The four span writers of [03 R-REN-03A §5] — shaded/unshaded x
+// textured/flat — live in internal/client's model raster, which interpolates
+// PrimitiveDraw.ShadeRows itself. A PrimitiveRGBA helper used to stand here
+// that resolved a primitive's colour by reading the authored 3DO IsColored
+// flat/textured discriminator as if it were the shading one, so every flat
+// primitive took the raw-palette arm whatever row it carried. That is the
+// unshaded flat writer only, and §5 puts the split on the RENDERER. Nothing on
+// the draw path called it; two tests did. They now call the writer they mean,
+// PaletteRGBA or ShadeRGBA, and internal/client's
+// TestShadedFlatWriterResolvesThroughSHD and
+// TestUnshadedFlatWriterEmitsTheRawColour hold the real contract.
 
 // ModelProjectToScreen projects a world-space point to screen via the orthographic formula [03 §2.5].
 // Uses camera.WorldToScreen with the half-height shear [03 §2.5].

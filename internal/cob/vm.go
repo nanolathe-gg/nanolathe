@@ -330,19 +330,23 @@ func (v *VM) SetProgram(prog *Program) {
 	v.Pieces = make([]model.PieceState, len(prog.Pieces)) // zero-filled by the bind [R-COB-01 §1]
 	v.anims = make([]pieceAnim, len(prog.Pieces))         // piece animation words all zero [R-COB-01 §1]
 	v.pieceBusy = make([]bool, len(prog.Pieces))          // piece dirty/busy flags all zero [04 §4.6]
+	// The retail fill pass zero-fills the allocation and then sets bit 1
+	// (cache) and bit 2 (shade) unconditionally, setting bit 0 (draw) only when
+	// the piece's model object has at least three vertices [04 §4.3]. This
+	// layer has no model link — the geometry-driven part of the walk belongs to
+	// the unit-creation binding, which owns it [R-COB-01 §1] — so it writes the
+	// two unconditional bits and leaves bit 0 to whoever knows the geometry.
+	//
+	// It used to write 0x07, bit 0 included, on the grounds that a fixture VM
+	// with everything hidden made early snapshots fall back to squares. That
+	// made this array a second, more permissive default than the one retail's
+	// fill pass produces, and it is only ever read by a VM with no external
+	// binding: production installs the unit-owned table before Create runs, so
+	// getRenderFlags and setRenderFlag never reach pieceFlags there
+	// [04 §"Piece flag polarity"].
 	v.pieceFlags = make([]uint8, len(prog.Pieces))
-	// Defaults: bit 1 (cache) and bit 2 (shade) set, bit 0 (draw) clear for
-	// now; retail sets bit 0 per-geometry at creation [04 §4.3] "allocation is
-	// zero-filled and then a fill pass ... sets bit 1 and 2 unconditionally and
-	// sets bit 0 only when the piece's model object has at least three
-	// vertices". For synthetic VMs we start with visible+cached+shaded (0x07)
-	// [04 §4.3]; 0x06 would leave all pieces hidden until Create shows them,
-	// which makes early snapshots fallback to squares. Retail's first present
-	// after Create has shown, so start visible to avoid the all-hidden window.
-	// The geometry-driven fill walk itself belongs to the unit-creation binding
-	// (internal/units owns the model link) [R-COB-01 §1].
 	for i := range v.pieceFlags {
-		v.pieceFlags[i] = 0x07 // [04 §4.3] visible — fixture fallback; production uses unit-owned table [04 §"Piece flag polarity"]
+		v.pieceFlags[i] = 0x06 // cache|shade, the fill pass's unconditional bits [04 §4.3]
 	}
 	// Clear any prior render-piece delegation — the new program re-binds flags
 	// from the unit's model-driven table via BindRenderFlags [04 §"Piece flag polarity"].
@@ -1988,13 +1992,9 @@ func (v *VM) runThread(idx int) {
 			}
 			scriptID := int(v.prog.Code[t.PC+1])
 			argc := int(v.prog.Code[t.PC+2])
-			// Validate script id as table index into script entries.
-			// Program's valid script id range is 0..len(ScriptsByID)-1 or map size.
-			// We approximate via Programs Scripts map values via isValidEntry after translation.
-			targetPC := -1
-			if progHasID(v.prog, scriptID) {
-				targetPC = codeIndexForID(v.prog, scriptID)
-			}
+			// The id is an index into the entry-point table; out of range is
+			// the bad-id arm [04 §4.3] C14.
+			targetPC := codeIndexForID(v.prog, scriptID)
 			badID := targetPC == -1
 			newIdx := -1
 			if !badID {
@@ -2053,10 +2053,7 @@ func (v *VM) runThread(idx int) {
 			}
 			scriptID := int(v.prog.Code[t.PC+1])
 			argc := int(v.prog.Code[t.PC+2])
-			targetPC := -1
-			if progHasID(v.prog, scriptID) {
-				targetPC = codeIndexForID(v.prog, scriptID)
-			}
+			targetPC := codeIndexForID(v.prog, scriptID)
 			badID := targetPC == -1
 			// Find free slot
 			newIdx := -1
@@ -2280,14 +2277,16 @@ func (v *VM) runThread(idx int) {
 // It returns 0 for identifiers outside 1..20 [04 §4.4] C15, else 0 as stock
 // default.
 //
-// Port 16 (GROUND_HEIGHT) has no zero-answer default in retail — the engine
-// always has terrain bound, so there is no "unbound" case to compare against
-// and no retail behavior this arm could be wrong about. A fixture VM built
-// without a session (no GroundHeightPortFunc bound via BindPort) falls through
-// here and reads 0 for every coordinate, which is neither a real height nor
-// retail's off-map −0x10000 [04 §4.4]. Every production VM binds port 16 in
-// internal/session/composition.go, so only VM fixtures built directly by tests
-// can observe this default.
+// The QUERY ports 7 through 16 have no zero-answer default in retail — the
+// engine always has a unit, a piece table and terrain bound, so there is no
+// "unbound" case to compare against and no retail behavior this arm could be
+// wrong about. A fixture VM built without a session falls through here and
+// reads 0 for a piece position, another unit's position or height, a bearing,
+// a distance, a hypotenuse or a ground height, none of which is the real
+// answer and none of which is retail's off-map −0x10000 [04 §4.4]. Every
+// production VM binds 7 through 16 through internal/session's per-unit binding
+// (composition.go and cob_query_ports.go), so only VM fixtures built directly
+// by tests can observe this default.
 func (v *VM) readPortDefault(id int32, args []int32) int32 {
 	if id < 1 || id > 20 {
 		return 0 // [04 §4.4] outside range reads zero
@@ -2306,38 +2305,23 @@ func (v *VM) writePortDefault(id, val int32) {
 
 // helpers for Program id mapping.
 
-func progHasID(prog *Program, id int) bool {
-	if prog == nil {
-		return false
-	}
-	// If additive ScriptsByID slice exists, use length check.
-	if prog.ScriptsByID != nil {
-		return id >= 0 && id < len(prog.ScriptsByID)
-	}
-	// Fallback: id is word index within code and present in Scripts map.
-	// For synthetic programs with no map entries, treat any in-bounds id as valid?
-	// We'll consider valid only if map non-empty and code index matches.
-	if len(prog.Scripts) == 0 {
-		return id >= 0 && id < len(prog.Code) // allow direct pc as id for fixtures
-	}
-	return false
-}
-
+// codeIndexForID resolves a script id to the code word the new thread starts
+// at. Retail admits an id by ONE test, the signed range `0 <= id <
+// scriptCount` where the count is the compiled program's own header word, and
+// takes the PC from the script entry-point table at that index [04 §4.3] C14.
+// ScriptsByID is that table; a negative result is the bad-id arm.
+//
+// A second arm used to stand beside it: when a Program carried no entry-point
+// table at all, the id was treated as a direct code word index. Nothing Load
+// produces looks like that — it fills Scripts[name] and ScriptsByID[i] from the
+// one entry-point array — so the arm existed for hand-built fixture programs,
+// and it made an out-of-range id resolve to a real PC instead of reaching the
+// bad-id arm the opcode is written around. Fixtures declare their table.
 func codeIndexForID(prog *Program, id int) int {
-	if prog == nil {
+	if prog == nil || id < 0 || id >= len(prog.ScriptsByID) {
 		return -1
 	}
-	if prog.ScriptsByID != nil {
-		if id < 0 || id >= len(prog.ScriptsByID) {
-			return -1
-		}
-		return prog.ScriptsByID[id]
-	}
-	// Fallback: id is direct pc for fixtures with no ScriptsByID.
-	if id >= 0 && id < len(prog.Code) {
-		return id
-	}
-	return -1
+	return prog.ScriptsByID[id]
 }
 
 // stack helpers per thread [04 §4.2] C13 stack depth 10.

@@ -2257,7 +2257,7 @@ takes no further draws. Eligible slots are those whose record is active,
 whose controller is human, computer or remote, and whose side is not the
 sentinel 10. The stamp helper per slot copies side and colour again, calls
 the storage-bonus setter with the row's energy and metal (each floored at
-200 and converted to single precision, bonus flag set — [R-ECO-01 §4]),
+200 and converted to single precision, bonus flag set — [05 R-ECO-01 §4]),
 resolves `StartPos<n>` for the assigned position (diagnostic `Error: Could
 not find start position number %i on the map!` on a miss), creates the
 side's commander there, and centres the camera on the local player's.
@@ -2517,7 +2517,7 @@ session global (`0 → 1 → 2 → 0`, labels `Easy`/`Medium`/`Hard`); the
 persists it as `SkirmishDifficulty`. The plain `Difficulty` registry value
 (miss 1, `& 0xffff`) feeds the campaign. Consumers: the computer player's
 economy discount and transfer scaling [R-AI-01 §12] and the settlement
-discount [R-ECO-01 §3]; the commander-respawn grant scaling in §3; the
+discount [05 R-ECO-01 §3]; the commander-respawn grant scaling in §3; the
 `GAMEOPTIONS.GUI` overlay's `Difficulty:` label (kinds 1/2 only — kind 3
 shows `Cheat Codes:` and `Watching:` from bits 13 and 15 of the host word,
 `Allowed`/`Disallowed`). The AI profile grammar is [R-AI-01 §12].
@@ -2602,7 +2602,7 @@ The executable reads these AI-related definition and mission values:
 - per-unit `ai_limit` text in a separate definition field — no reader exists: both per-definition profile passes, the weight pass and the limit pass, read the `ai_weight` field ([R-AI-01 §12]), so `ai_limit` is parsed and abandoned. It must not be wired to limits; the functioning `limit` token comes from the profile file, not this field;
 - mission `aiprofile` string via a mission resource slot that loads `ai\<profile>.txt` with fallback to `ai\default.txt`;
 - mission placement fields for AI ignore, AI priority-target, build priority, and initial group — parsed at mission load but no transfer or reader is found in the creation path, so they are inert for planning;
-- computer difficulty (`0` easy, `1` medium, `2` hard) from the registry and setup state; it gates profile `plan` directives and scales every positive production contribution whose **destination** player is computer-controlled by 0.5, 0.7 or 1.0 — the exact evaluation points and float widths are doc 05's ([R-ECO-01 §3]);
+- computer difficulty (`0` easy, `1` medium, `2` hard) from the registry and setup state; it gates profile `plan` directives and scales every positive production contribution whose **destination** player is computer-controlled by 0.5, 0.7 or 1.0 — the exact evaluation points and float widths are doc 05's ([05 R-ECO-01 §3]);
 - player control byte that gates manager execution.
 
 The strategic planner is a distinct object from the scenario unit loader.
@@ -3772,7 +3772,7 @@ selected from the same difficulty word — is also applied inside the
 per-player economy settlement to **every positive production contribution of
 every unit owned by a control-byte-2 player**: at seven contribution sites in
 the settlement accumulator, and once more on the per-player credit that
-follows it — eight in all `[R-ECO-01 §3]`. Doc 05 owns that arithmetic,
+follows it — eight in all `[05 R-ECO-01 §3]`. Doc 05 owns that arithmetic,
 including the exact `production := float32(production - (contribution * K))`
 form, which must be reproduced literally because the factored form rounds
 differently. Whether a build-rate, cost or damage multiplier exists elsewhere
@@ -6577,7 +6577,7 @@ without reading.
 The component whose two 24-byte halves the box carries is the per-unit
 resource account — the structure the direct two-resource payment and the
 per-tick request/consumption paths debit ([05 "Direct two-resource
-payment"] [R-ECO-01 §7]). The box is the raw image of the 48-byte account:
+payment"] [05 R-ECO-01 §7]). The box is the raw image of the 48-byte account:
 the first 24 bytes then the next 24, written unconditionally and read back
 in place only when the box exists. The account's field layout is doc 05's
 (energy half then metal half in the payment helper's argument order); its
@@ -6884,14 +6884,14 @@ world position words; on load both are copied into the camera's current
 (the camera state word is doc 07's; their names are not closed here), and
 the presentation re-derives everything else.
 `Metal`/`Plotmap`: one byte per plot cell in row-major order, the cell's
-metal byte ([R-TERR-01 §1]); the reader requires the box length to equal
+metal byte ([03 R-TERR-01 §1]); the reader requires the box length to equal
 `width × height` exactly. `PlayerFeatures`/`Plotmap`: `(width × height)/2`
 bytes; each byte packs the **placer nibble** (cell flag byte bits 3..6,
-[R-TERR-01 §1][03 §3.3]) of two consecutive cells — the even cell in the high
+[03 R-TERR-01 §1][03 §3.3]) of two consecutive cells — the even cell in the high
 nibble, the odd cell in the low nibble; the reader restores bits 3..6 of each
 cell's flag byte and preserves the others; exact-size gate as for metal.
 `Mapping`: one unnamed box of `(width × height) >> 1` bytes, the mapping
-grid verbatim ([R-SHARE-01 §6]); exact-size gate. `Players`: the writer
+grid verbatim ([05 R-SHARE-01 §6]); exact-size gate. `Players`: the writer
 emits a `Player%i` account only for slots whose active byte is set, and the
 per-slot item list is the full "Player records" table plus `Logo` and
 `Side`; the `Human Player` integer's load default is `10` (no human). All

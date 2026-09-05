@@ -47,7 +47,7 @@ func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
 	if err != nil {
 		t.Skipf("retail assets unavailable: %v", err)
 	}
-	pal := loadPalette(cs)
+	pal := retailPaletteForTest(t, cs)
 	if pal == nil {
 		t.Skip("retail palette unavailable")
 	}

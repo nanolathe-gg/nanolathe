@@ -55,3 +55,27 @@ func newMissionFixtureWorld(maxDefs int, cat *content.Catalog) *units.World {
 	w.SetCOBSource(missionFixtureCOBFS{}, cob.NewCachedLoader())
 	return w
 }
+
+// atPlacement stamps the index of the placement a fixture unit stands for and
+// returns it, so a fixture can be written as one expression per unit.
+//
+// The retail spawner is two passes over a SPARSE created[] array [P0-06]: pass
+// one calls the creator once per placement and stores the result at that
+// placement's index, leaving a null hole where the pool or the per-player limit
+// refused it; pass two walks that array and skips the holes. PlacementIdx is
+// how a unit says which slot it occupies, and it is the only linkage the
+// interpreter has — the `g`, `i` and `wa` verbs resolve a name to a placement
+// index and then look for the unit standing there [04 §3.6].
+//
+// A fixture that creates units without stamping it is not exercising that
+// scan. RunInitialMissionsWithCatalog used to carry a second, non-retail arm
+// for exactly those fixtures — if nothing carried an index and the world's unit
+// count happened to equal the placement count, it assumed dense creation order
+// — which meant twenty tests were passing through a code path retail has no
+// equivalent of.
+func atPlacement(u *units.Unit, placement int) *units.Unit {
+	if u != nil {
+		u.PlacementIdx = placement
+	}
+	return u
+}

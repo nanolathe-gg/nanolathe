@@ -70,11 +70,9 @@ func TestSparseVsDenseDivergence(t *testing.T) {
 	// Force failure of middle: we already have middle present, last missing. Need
 	// case where middle missing and last present to show divergence.
 	// Reset and make middle fail.
-	w2 := newMissionFixtureWorld(2, cat)
-	// Fill pool with dummy to force middle failure: allocate 0 succeeds, then
-	// artificially exhaust before 1, then free one slot and allocate 2?
-	// Simpler: capacity 1, 2 placements: first succeeds, second fails.
-	w2 = newMissionFixtureWorld(1, cat)
+	// Capacity 1 against three placements: the first succeeds and the rest are
+	// refused, which is the sparse hole this case exists to show.
+	w2 := newMissionFixtureWorld(1, cat)
 	placements2 := []UnitPlacement{
 		{UnitName: "armcom", Ident: "a", InitialMission: "g c"},
 		{UnitName: "armck", Ident: "b", InitialMission: ""},
