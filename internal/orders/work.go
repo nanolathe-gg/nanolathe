@@ -5,8 +5,9 @@
 //
 // This file owns the ORDER RECORDS only. `internal/construction` owns the work
 // BODIES for factory build, mobile build and unit reclaim and drives those five
-// records from its own per-unit step (handlerlessButDriven, pump.go); nothing
-// here duplicates or touches them.
+// records from its own per-unit step, registering each row on the queue as
+// externally driven (Queue.SetExternallyDrivenHandler, queue_handlers.go);
+// nothing here duplicates or touches them.
 //
 // Three shared facts govern every body below, all from [04 R-ORD-01 §1]:
 //
@@ -338,11 +339,11 @@ func boundAssist(q *Queue, builder *units.Unit, n *Node, tick uint32) (bool, boo
 }
 
 // boundCapture is the ownership-transfer seam the `Capture` row's last phase
-// needs [04 R-ORD-01 §5][05 R-WORK-01 §11]. The central transfer lives in
+// needs [04 R-ORD-01 §5][05 R-WORK-01 §15]. The central transfer lives in
 // internal/construction, which imports this package, so the call goes out
 // through the work adapter exactly as assist, repair and resurrect do.
 //
-// The refusal shape is the row's: [05 R-WORK-01 §11] says the transfer's entry
+// The refusal shape is the row's: [05 R-WORK-01 §15] says the transfer's entry
 // gate (owner differs, alive set, death latch clear) refuses silently and "the
 // executor still raises cue slot 16 with no text", so the caller does not
 // branch on the result — only on whether the seam was bound at all, which is
@@ -1004,7 +1005,7 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 	case 5:
 		// "Transfer the target, status 16, complete" [04 R-ORD-01 §5]. The
 		// transfer itself is construction.Service.TransferOwnership
-		// [05 R-WORK-01 §11], which this package cannot call directly — that
+		// [05 R-WORK-01 §15], which this package cannot call directly — that
 		// package imports this one — so it goes out through the work adapter's
 		// Capture port, the same seam shape assist, repair and resurrect use.
 		//
@@ -1013,7 +1014,7 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		// `Assist:`/`Repair:`/`Resurrect:`, resolving the record's target and
 		// calling TransferOwnership with the captor's owner. Nothing further is
 		// needed on this side: the call, the order and the silent-refusal shape
-		// are all the row's [05 R-WORK-01 §11][05 R-WORK-01 §14].
+		// are all the row's [05 R-WORK-01 §15][05 R-WORK-01 §14].
 		boundCapture(QueueForUnit(u), u, n, tick)
 		workStatus(u, statusCapture, "")
 		return 5 // complete

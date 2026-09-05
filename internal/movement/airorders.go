@@ -704,9 +704,10 @@ func (s *System) execVTOLStandby(u *units.Unit, head *orders.Node, st *airOrderS
 		// still refuse a hold-fire or hold-position definition.
 		//
 		// The wait draw is taken here rather than in the pump for the same
-		// reason phase 2's three draws are: this record is
-		// `handlerlessButDriven`, so no pump result code is ever applied to it
-		// and the executor arms its own deadline [04 R-AIR-01 §1].
+		// reason phase 2's three draws are: this record's queue registration
+		// reports `(0, false)` (orders.OwnedHandler, queue_handlers.go), so no
+		// pump result code is ever applied to it and the executor arms its own
+		// deadline [04 R-AIR-01 §1].
 		if orders.AutonomousAcquire(u) {
 			head.DynamicGate = 0
 			if sim != nil {
@@ -780,9 +781,11 @@ const (
 //
 // The record itself belongs to another driver: internal/construction runs the
 // mobile-build lifecycle from its own per-unit step and owns this record's
-// phase byte, dynamic gate and deadline (orders.handlerlessButDriven). This
-// executor therefore keeps its own phase in the movement-side state and writes
-// NOTHING on the record — not the phase, not the gate, not the deadline. Its
+// phase byte, dynamic gate and deadline, registering the row on the queue as
+// externally driven (orders.Queue.SetExternallyDrivenHandler,
+// queue_handlers.go). This executor therefore keeps its own phase in the
+// movement-side state and writes NOTHING on the record — not the phase, not
+// the gate, not the deadline. Its
 // only outputs are the goal payloads on the flight command block, and arrival
 // is read back from the payload's own test, which is how stepAir observes every
 // air leg [04 R-AIR-01 §1].

@@ -5266,7 +5266,7 @@ player-level permissions are not. The decremented experience factor for the
 next capture is derived from the target's kill count divided by five using
 integer truncation. Multiple captors operate independently; each has its own
 node and timer, and the first to reach lethal progress wins the transfer.
-**Correction (2026-09-02, [R-WORK-01 §11]):** the kill count is **not**
+**Correction (2026-09-02, [R-WORK-01 §15]):** the kill count is **not**
 copied — "veteran experience" is not carried — and the conditional copy is the
 per-slot stockpiled-round byte; the exact list is in that section.
 
@@ -5410,7 +5410,7 @@ own validation of old and new ownership ([05 "Capture"], "ownership
 transfer") is the only later refusal established here. *Decider:* static
 trace of the capture order's target admission in the order builder.
 
-#### R-WORK-01 §11 — Capture's order-side admission, and the transfer's exact copy list [R-WORK-01] (2026-09-02)
+#### R-WORK-01 §15 — Capture's order-side admission, and the transfer's exact copy list [R-WORK-01] (2026-09-02) (renumbered from §11, 2026-09-04)
 
 **The order-side admission — Established.** [R-WORK-01 §10]'s Unknown asked
 whether the order builder excludes a same-owner or death-latched target
@@ -6940,7 +6940,7 @@ delivered to the construction step, not a second reach rule.
 
 **Established (direct read of the transfer routine's local branch, the unit
 constructor's group assignment and its state-word initialization;
-RWU-19-197).** [R-WORK-01 §11]'s copy list is exhaustive; this closes the two
+RWU-19-197).** [R-WORK-01 §15]'s copy list is exhaustive; this closes the two
 fields the implementation asked about by name. The replacement is created
 through the ordinary creator, whose unit-state initializer (a) initializes the
 state word with a mask that **clears bit 4, the selected bit** ([07 R-SEL-02A]
@@ -6954,7 +6954,7 @@ edge replay, and **never reads the victim's group word or its selected bit**
 (the only status bits it carries over are the two movement-mode bits passed
 to the creator, and it clears bits 18–21 afterwards). The captor's replacement
 therefore starts in group 0 and unselected, whatever the victim was in. The
-remote-peer branch ([R-WORK-01 §11]) is the only place the selected bit is
+remote-peer branch ([R-WORK-01 §15]) is the only place the selected bit is
 touched, and there it is cleared on the **victim** before the kill packet, not
 moved.
 

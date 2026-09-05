@@ -22,7 +22,7 @@ import (
 // bindings and the real movement/placement services: a completed `Capture`
 // order must leave a captor-owned replacement standing at the victim's site,
 // and the old record must be a genuinely different, dead record rather than
-// the same handle with its owner field flipped [05 R-WORK-01 §11].
+// the same handle with its owner field flipped [05 R-WORK-01 §15].
 func TestRetailCommanderCapturesEnemyLab(t *testing.T) {
 	f := loadRetailFixture(t)
 	s := f.session(t)
@@ -73,7 +73,7 @@ func TestRetailCommanderCapturesEnemyLab(t *testing.T) {
 	for r := 0; r < maxRounds && repl == nil; r++ {
 		stepRetail(s, round)
 		if victim.Owner == captor.Owner {
-			t.Fatalf("the victim's own record changed owner in place; retail creates a fresh replacement and kills the old record instead [05 R-WORK-01 §11]")
+			t.Fatalf("the victim's own record changed owner in place; retail creates a fresh replacement and kills the old record instead [05 R-WORK-01 §15]")
 		}
 		for _, u := range s.Units.IterSliced() {
 			if u == nil || u == victim {
@@ -89,7 +89,7 @@ func TestRetailCommanderCapturesEnemyLab(t *testing.T) {
 		t.Fatalf("no ARM-owned replacement of %s appeared; the commander's Capture order never transferred it", retailCORELab)
 	}
 	if repl.X != victimX || repl.Z != victimZ {
-		t.Fatalf("replacement position = (%v,%v), want the victim's site (%v,%v) [05 R-WORK-01 §11]", repl.X, repl.Z, victimX, victimZ)
+		t.Fatalf("replacement position = (%v,%v), want the victim's site (%v,%v) [05 R-WORK-01 §15]", repl.X, repl.Z, victimX, victimZ)
 	}
 	if victim.Alive && !victim.Dying {
 		t.Fatal("the old lab record is still alive and not even marked dying after the transfer")

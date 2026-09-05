@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
 )
 
@@ -263,10 +264,40 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	if err != nil {
 		return err
 	}
+	// Retail's battle-restoration dispatcher runs as part of the staging
+	// above and, as its first step, carries the save's own `Summary.maxunits`
+	// into the process-wide configured unit-limit word — never into the
+	// battle just restored, whose pool was already sized from that word as it
+	// stood before the restore [08 R-ENTRY-01 §6][08 R-SESS-01 §9]. That
+	// configured word is this application's `g.setup.UnitLimit`
+	// (internal/session/composition.go's sessionUnitLimit names it), so the
+	// carry is the one write below, not a session change.
+	g.applyRestoredUnitLimit(loaded.Battle.Image)
 	// The only mutation of the active battle/frontend/client state occurs here,
 	// after both authoritative and presentation candidates are complete.
 	g.commitBattleCandidate(battle)
 	return nil
+}
+
+// applyRestoredUnitLimit is the one carry retail's battle-restoration
+// dispatcher performs into the configured unit-limit word: store the save's
+// `Summary.maxunits`, unclamped, but only when the save's Summary account
+// carried the item at all — a save without the item leaves the configured
+// word untouched [08 R-SESS-01 §9]. The clamp `[Preferences] UnitLimit`
+// receives is a start-up read only and is deliberately not repeated here
+// [08 R-SKIR-01 §6]; a later skirmish battle entry copies this word verbatim
+// into its own session limit.
+//
+// save.Summary represents "the item is absent" and "the item is present with
+// stored value zero" the same way — MaxUnits reads back 0 for both
+// [internal/save/boxes.go ReadSummary] — so this treats a zero as absent.
+// Retail's writer only ever records the start-up-clamped configured word
+// (20..500), so a real save never exercises that seam.
+func (g *gameShell) applyRestoredUnitLimit(image *save.BattleImage) {
+	if g == nil || image == nil || image.Summary.MaxUnits == 0 {
+		return
+	}
+	g.setup.UnitLimit = int(image.Summary.MaxUnits)
 }
 
 func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request freshBattleRequest, after func(*session.Session)) {

@@ -955,9 +955,9 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				return s.Build.Repair(builder, patient, construction.WorkerQuantum(builder.Def.WorkerTime))
 			},
 			// Capture is the ownership-transfer seam the `Capture` row's last
-			// phase needs [05 R-WORK-01 §6][05 R-WORK-01 §11]. The central
+			// phase needs [05 R-WORK-01 §6][05 R-WORK-01 §15]. The central
 			// transfer — a brand-new replacement record with the copy list of
-			// [05 R-WORK-01 §11], the old record killed with a cause-4 packet
+			// [05 R-WORK-01 §15], the old record killed with a cause-4 packet
 			// — lives in internal/construction, which imports this package, so
 			// it is reached through this port exactly as Assist, Repair and
 			// Resurrect are.
@@ -980,7 +980,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 					return false
 				}
 				// The replacement is created through the ordinary allocator
-				// [05 R-WORK-01 §11], so it needs the same completion posture
+				// [05 R-WORK-01 §15], so it needs the same completion posture
 				// a freshly finished construction product gets: mover state
 				// registered and occupancy stamped before its first visibility
 				// publish [05 R-WORK-01 §1] — the same call Assist and
@@ -1008,7 +1008,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				// The replacement comes out of the ordinary creator, whose
 				// state-word initialization clears the selected bit and whose
 				// closing group assignment puts it in group 0, and the copy
-				// list [05 R-WORK-01 §11] never reads either field of the
+				// list [05 R-WORK-01 §15] never reads either field of the
 				// victim; only the remote-peer branch (out of scope) touches
 				// the selected bit, and there it clears it on the VICTIM.
 				// Selection is presentation state Nanolathe does not carry in
@@ -1887,8 +1887,8 @@ func sessionUnitLimit(s *Session) int32 {
 	// session composed without one (a fixture) reads the missing-value
 	// default through the same clamp.
 	//
-	// TODO(T25): the restored `Summary.maxunits` does not yet reach a second
-	// battle in one process. Retail's destination is traced exactly
+	// Closed (WU-19-214): the restored `Summary.maxunits` now reaches a
+	// second battle in one process. Retail's destination is traced exactly
 	// [08 R-ENTRY-01 §6][08 R-SESS-01 §9]: the battle-restoration dispatcher
 	// stores the item, when present and unclamped, into the **configured**
 	// unit-limit word — the process-wide `[Preferences] UnitLimit` copy the
@@ -1898,10 +1898,10 @@ func sessionUnitLimit(s *Session) int32 {
 	// Nanolathe's configured word is the application's setup record in
 	// cmd/nanolathe (`g.setup.UnitLimit`, which feeds SkirmishConfig.UnitLimit
 	// and RetailLoadDeps.UnitLimit); this package holds only the per-battle
-	// copy read here, so the carry is one application-level write at the
-	// restore site — `g.setup.UnitLimit = int(stage.Image.Summary.MaxUnits)`
-	// when the Summary carries the item — not a session change. Until that
-	// write exists a second load keeps the pre-restore configured value.
+	// copy read here, so the carry is one application-level write outside it
+	// — `cmd/nanolathe/loading.go`'s `applyRestoredUnitLimit`, called from
+	// `loadRetailSavePath` right after the save is staged and restored, so it
+	// lands before the setup record can feed a second battle entry.
 	if s == nil {
 		return int32(ClampUnitLimit(0))
 	}

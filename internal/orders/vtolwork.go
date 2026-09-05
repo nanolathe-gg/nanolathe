@@ -11,10 +11,11 @@
 // site.
 //
 // The fifth twin of §7, `VTOL_ReclaimUnit`, is deliberately absent: WU-17-14
-// established that internal/construction drives it from its own per-unit step
-// (handlerlessButDriven, pump.go) and the pump leaves its phase, gate and
-// deadline alone. Registering a descriptor handler for it would write over a
-// live state machine.
+// established that internal/construction drives it from its own per-unit step,
+// and internal/construction registers it on the queue as externally driven
+// (Queue.SetExternallyDrivenHandler, queue_handlers.go), so the pump leaves
+// its phase, gate and deadline alone. Registering a descriptor handler for it
+// would write over a live state machine.
 //
 // Everything work.go's header records applies here unchanged and is not
 // repeated per site: the status emitter, the nanolathe spray and its stamp, and

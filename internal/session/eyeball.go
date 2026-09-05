@@ -95,7 +95,7 @@ func (s *Session) appendDeathEyeball(u *units.Unit) {
 	// tile arithmetic the per-unit stamp uses, then the raster the mode word's
 	// bit 2 selects [03 R-VIS-01 §2].
 	rec.emitter = heightByteAt(u, seaLevelFor(s))
-	rec.cx, rec.cz = observerTile(u, rec.emitter)
+	rec.cx, rec.cz = observerCell(s, u, rec.emitter)
 	w, h := s.Vis.GridDimensions()
 	if uint32(rec.cx) < uint32(w) && uint32(rec.cz) < uint32(h) {
 		s.Vis.Publish(rec.owner, rec.cx, rec.cz, rec.emitter, int32(rec.sightDistance))

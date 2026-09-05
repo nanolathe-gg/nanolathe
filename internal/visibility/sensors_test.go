@@ -16,11 +16,11 @@ func TestSensorTickRequiresTwoPlayers(t *testing.T) {
 	var status uint32
 	units := []SensorUnit{{ID: 1, Owner: 0, Status: &status, Alive: true, Active: true, RadarDistance: 100}}
 
-	s.SensorTick(0, 1, nil, units)
+	s.SensorTick(0, 1, units)
 	if len(s.SensorInputs()) != 0 || status != 0 {
 		t.Fatalf("the sensor phase ran with a single player: inputs %d, status %#x", len(s.SensorInputs()), status)
 	}
-	s.SensorTick(0, 2, nil, units)
+	s.SensorTick(0, 2, units)
 	if len(s.SensorInputs()) != 1 || status&FriendlyMask == 0 {
 		t.Fatalf("the sensor phase did not run with two players: inputs %d, status %#x", len(s.SensorInputs()), status)
 	}
@@ -45,7 +45,7 @@ func TestSensorPhaseNeverTouchesTheWordMask(t *testing.T) {
 		X: tileWorld(10), Z: tileWorld(10),
 		RadarDistance: 200, SonarDistance: 500, RadarJam: 80, SonarJam: 90,
 	}}
-	s.SensorTick(0, 2, nil, units)
+	s.SensorTick(0, 2, units)
 
 	for i := range before {
 		if s.wordMask[i] != before[i] {
@@ -75,12 +75,12 @@ func TestSensorEmissionRequiresTheActivationBit(t *testing.T) {
 		{ID: 2, Owner: 0, Status: &theirs, Alive: true, Hidden: true,
 			X: tileWorld(6), Z: tileWorld(6)},
 	}
-	s.SensorTick(4, 2, nil, units)
+	s.SensorTick(4, 2, units)
 	if theirs&SeenBit != 0 {
 		t.Fatalf("an INACTIVE emitter detected an enemy: status %#x [R-VIS-01 §4] pass 2", theirs)
 	}
 	units[0].Active = true
-	s.SensorTick(5, 2, nil, units)
+	s.SensorTick(5, 2, units)
 	if theirs&SeenBit == 0 {
 		t.Fatalf("an ACTIVE emitter missed an enemy inside its authored range: status %#x", theirs)
 	}
@@ -90,7 +90,7 @@ func TestSensorSeenBitClearsAtFrameStart(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	var status uint32 = SeenBit
 	units := []SensorUnit{{ID: 1, Owner: 1, Status: &status, Alive: true, X: tileWorld(10), Z: tileWorld(10)}}
-	s.SensorTick(1, 2, nil, units)
+	s.SensorTick(1, 2, units)
 	if status&SeenBit != 0 {
 		t.Fatal("unseen unit retained stale per-frame SeenBit")
 	}
@@ -116,13 +116,15 @@ func TestFriendlyMarkingExemptsUnderwater(t *testing.T) {
 	s.Publish(0, 10, 10, 0, 320)
 
 	var mine, allies, theirs uint32
-	allied := func(a, b PlayerID) bool { return a == 0 && b == 1 }
 	units := []SensorUnit{
 		{Owner: 0, Status: &mine, Alive: true},   // the viewing player's own unit
 		{Owner: 1, Status: &allies, Alive: true}, // allied with the local player
 		{Owner: 2, Status: &theirs, Alive: true}, // not allied
 	}
-	s.SensorTick(0, 3, allied, units)
+	// No alliance row is fed at all: the phase takes none (WU-19-210), because
+	// the only pass that consulted one now reads the per-side primary candidate
+	// lists instead [06 §3.1].
+	s.SensorTick(0, 3, units)
 
 	// 0x300 is 0x100|0x200 and the seen pass also sets 0x100, so the
 	// discriminating bit is the upper one — which is exactly the underwater
@@ -152,9 +154,16 @@ func TestFriendlyMarkingExemptsUnderwater(t *testing.T) {
 	}
 }
 
-// TestProximityDecloak locks C10/C12: a cloaked unit's proximity search writes
-// the decloak deadline (tick+90) and the decloak bit into the cloaked unit
-// itself when an enemy is within mincloakdistance [03 §3.4][R-VIS-01 §4] pass 4.
+// TestProximityDecloak locks C10/C12: a cloak-capable unit's proximity search
+// writes the decloak deadline (tick+90) and the decloak bit into that unit
+// itself when a PRIMARY CANDIDATE of its own side is within mincloakdistance
+// [03 §3.4][R-VIS-01 §4] pass 4.
+//
+// Correction (WU-19-210). The source used to be gated on the instance cloak bit
+// and the candidate set used to be every live hostile. The section gates the
+// source on the derived can-cloak flag and an active controller of type 1 or 2,
+// does not test current cloak at all, and searches only the source owner's
+// primary candidate list of [06 §3.1].
 func TestProximityDecloak(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	var cloakedStatus, nearStatus, farStatus uint32
@@ -163,11 +172,12 @@ func TestProximityDecloak(t *testing.T) {
 
 	units := []SensorUnit{
 		{Owner: 1, Status: &cloakedStatus, Alive: true, Hidden: true,
+			CanCloak: true, OwnerLocallySimulated: true,
 			X: px(100), Z: px(100), MinCloakDistance: 50, DecloakDeadline: &cloakedDeadline},
-		{Owner: 0, Status: &nearStatus, Alive: true, X: px(120), Z: px(100)},
-		{Owner: 0, Status: &farStatus, Alive: true, X: px(300), Z: px(100)},
+		{Owner: 0, Status: &nearStatus, Alive: true, PrimaryCandidateOf: 1 << 1, X: px(120), Z: px(100)},
+		{Owner: 0, Status: &farStatus, Alive: true, PrimaryCandidateOf: 1 << 1, X: px(300), Z: px(100)},
 	}
-	s.SensorTick(1000, 2, nil, units)
+	s.SensorTick(1000, 2, units)
 
 	if cloakedStatus&DecloakBit == 0 {
 		t.Fatal("a cloaked unit with enemy inside mincloakdistance was not marked [03 §3.4] P0-11")
@@ -184,8 +194,120 @@ func TestProximityDecloak(t *testing.T) {
 	// Test timeout: move cloaked far away before deadline expires, then advance beyond deadline.
 	units[0].X = px(1000)
 	units[0].Z = px(1000)
-	s.SensorTick(1000+DecloakDeadlineAdd+1, 2, nil, units)
+	s.SensorTick(1000+DecloakDeadlineAdd+1, 2, units)
 	if cloakedStatus&DecloakBit != 0 {
 		t.Fatal("decloak bit should clear after GT>=deadline and no longer within range [03 §3.4] P0-11")
+	}
+}
+
+// TestProximityIgnoresEnemiesOffThePrimaryList is the R14 regression: the
+// candidate set of pass 4 is the SOURCE OWNER's primary candidate list of
+// [06 §3.1], so a hostile that never entered that list cannot move the
+// suppression deadline however close it stands [R-VIS-01 §4] pass 4.
+//
+// The review's probe: with empty visibility grids an invisible cloaked enemy
+// ten world units from a cloaked source still moved the source's deadline. Such
+// an enemy fails the rebuild's cloak clause every time, so it can never be a
+// candidate, and repeating the scan every tick let it suppress cloak forever.
+func TestProximityIgnoresEnemiesOffThePrimaryList(t *testing.T) {
+	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+	px := func(p int64) numeric.Fixed { return numeric.Fixed(p * 65536) }
+	var srcStatus, enemyStatus, listedStatus uint32
+	var deadline uint32
+
+	units := []SensorUnit{
+		{Owner: 1, Status: &srcStatus, Alive: true, Hidden: true, CanCloak: true,
+			OwnerLocallySimulated: true, X: px(100), Z: px(100), MinCloakDistance: 50,
+			DecloakDeadline: &deadline},
+		// A live hostile ten units away that is on nobody's list.
+		{Owner: 0, Status: &enemyStatus, Alive: true, X: px(110), Z: px(100)},
+		// A live hostile on ANOTHER side's list — slot 0's, not the source's.
+		{Owner: 0, Status: &listedStatus, Alive: true, PrimaryCandidateOf: 1 << 0,
+			X: px(112), Z: px(100)},
+	}
+	s.SensorTick(7, 2, units)
+	if deadline != 0 || srcStatus&DecloakBit != 0 {
+		t.Fatalf("an enemy off the source owner's primary list breached: deadline %d status %#x [R-VIS-01 §4] pass 4", deadline, srcStatus)
+	}
+
+	// The same enemy, now filed on the source owner's list, does breach.
+	units[1].PrimaryCandidateOf = 1 << 1
+	s.SensorTick(7, 2, units)
+	if deadline != 7+DecloakDeadlineAdd || srcStatus&DecloakBit == 0 {
+		t.Fatalf("a listed enemy inside mincloakdistance must breach: deadline %d status %#x", deadline, srcStatus)
+	}
+}
+
+// TestProximityCandidateLivenessIsRetestedAtUse locks the half of the staleness
+// contract that is not the list's: the list is up to thirty ticks old, so the
+// pass re-tests the candidate's alive bit and death latch at use, exactly as the
+// per-attempt acquisition filter does [06 §3.1][R-VIS-01 §4] pass 4.
+func TestProximityCandidateLivenessIsRetestedAtUse(t *testing.T) {
+	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+	px := func(p int64) numeric.Fixed { return numeric.Fixed(p * 65536) }
+	var srcStatus, candStatus uint32
+	var deadline uint32
+	units := []SensorUnit{
+		{Owner: 1, Status: &srcStatus, Alive: true, Hidden: true, CanCloak: true,
+			OwnerLocallySimulated: true, X: px(100), Z: px(100), MinCloakDistance: 50,
+			DecloakDeadline: &deadline},
+		{Owner: 0, Status: &candStatus, Alive: true, PrimaryCandidateOf: 1 << 1,
+			X: px(110), Z: px(100)},
+	}
+
+	units[1].Dying = true // still listed, but death-latched
+	s.SensorTick(10, 2, units)
+	if deadline != 0 {
+		t.Fatalf("a death-latched candidate breached: deadline %d [06 §3.1]", deadline)
+	}
+	units[1].Dying, units[1].Alive = false, false
+	s.SensorTick(11, 2, units)
+	if deadline != 0 {
+		t.Fatalf("a dead candidate breached: deadline %d [06 §3.1]", deadline)
+	}
+	units[1].Alive = true
+	s.SensorTick(12, 2, units)
+	if deadline != 12+DecloakDeadlineAdd {
+		t.Fatalf("a live listed candidate must breach: deadline %d", deadline)
+	}
+}
+
+// TestProximitySourceGates locks pass 4's three source gates: the derived
+// can-cloak flag (`cloakcost > 0`), an owning player record that is active with
+// controller type 1 or 2, and liveness — and locks what is NOT a gate: "the pass
+// does not test whether the unit is currently cloaked" [R-VIS-01 §4] pass 4.
+//
+// The uncloaked case is the one the old implementation could not express: it
+// required the instance cloak bit, so a cloak-capable unit that had not yet paid
+// its cloak debit could never accumulate a suppression window.
+func TestProximitySourceGates(t *testing.T) {
+	px := func(p int64) numeric.Fixed { return numeric.Fixed(p * 65536) }
+	run := func(t *testing.T, src SensorUnit) uint32 {
+		t.Helper()
+		s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+		var srcStatus, candStatus uint32
+		var deadline uint32
+		src.Status = &srcStatus
+		src.DecloakDeadline = &deadline
+		src.Owner = 1
+		src.X, src.Z = px(100), px(100)
+		src.MinCloakDistance = 50
+		units := []SensorUnit{src, {Owner: 0, Status: &candStatus, Alive: true,
+			PrimaryCandidateOf: 1 << 1, X: px(110), Z: px(100)}}
+		s.SensorTick(50, 2, units)
+		return deadline
+	}
+
+	if got := run(t, SensorUnit{Alive: true, Hidden: false, CanCloak: true, OwnerLocallySimulated: true}); got != 50+DecloakDeadlineAdd {
+		t.Fatalf("an eligible but currently UNCLOAKED source must receive the suppression deadline, got %d [R-VIS-01 §4] pass 4", got)
+	}
+	if got := run(t, SensorUnit{Alive: true, Hidden: true, CanCloak: false, OwnerLocallySimulated: true}); got != 0 {
+		t.Fatalf("a source whose definition has no cloakcost is not a proximity source, got %d", got)
+	}
+	if got := run(t, SensorUnit{Alive: true, Hidden: true, CanCloak: true, OwnerLocallySimulated: false}); got != 0 {
+		t.Fatalf("a source whose owner is not an active controller of type 1 or 2 is skipped, got %d [06 R-WPN-02 §2]", got)
+	}
+	if got := run(t, SensorUnit{Alive: false, Hidden: true, CanCloak: true, OwnerLocallySimulated: true}); got != 0 {
+		t.Fatalf("a dead source is skipped, got %d", got)
 	}
 }

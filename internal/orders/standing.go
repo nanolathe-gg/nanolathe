@@ -721,9 +721,10 @@ func autoEngage(u *units.Unit, target *units.Unit, force bool) bool {
 // whether a target was both FOUND and ACCEPTED.
 //
 // It exists because the air family's idle row lives in another package.
-// `VTOL_Standby` is `handlerlessButDriven` — its executor is the mover-side
-// machine that owns the air marker family [04 R-AIR-01 §4] — and internal/
-// movement cannot reach an unexported pair in here. Without a seam that
+// `VTOL_Standby` is registered on the queue as externally driven
+// (Queue.SetExternallyDrivenHandler, queue_handlers.go) — its executor is the
+// mover-side machine that owns the air marker family [04 R-AIR-01 §4] — and
+// internal/movement cannot reach an unexported pair in here. Without a seam that
 // executor's phase 1 stood as a placeholder that always took the no-target arm,
 // so every stock aircraft, all of which author `defaultmissiontype =
 // VTOL_Standby`, was incapable of acquiring anything on its own: an idle

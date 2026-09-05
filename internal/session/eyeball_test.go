@@ -171,3 +171,36 @@ func TestEyeballCoverageLingersSixtyTicks(t *testing.T) {
 		t.Fatalf("count=%d after expiry, want 0", got)
 	}
 }
+
+// TestEyeballUsesObserverCellDispatch locks that the eyeball producer projects
+// through the same mode-dispatched observer path every other publisher uses
+// [08 R-SESS-01 §3], not the terrain-ray branch unconditionally. The victim is
+// placed at the review's known-divergent position (X=320 Y=64 Z=384, model top
+// 64: ray branch row 10, sprite branch row 11, [03 R-VIS-01 §2]); the session
+// runs Circular (sprite-mask) LOS, so a correct record lands on row 11 and a
+// record still using the ray shear would land on row 10.
+func TestEyeballUsesObserverCellDispatch(t *testing.T) {
+	s := newEyeballSession(t)
+	s.Clock.GlobalTick = 100
+
+	def := &content.UnitDef{UnitName: "eyeballdivergent", MaxDamage: 100, SightDistance: 160, FootprintX: 1, FootprintZ: 1, Script: fixtureCOBProgram(), ModelTop: 64}
+	def.CanonicalKey = content.CanonicalKey(def.UnitName)
+	h, err := s.Units.Create(def, 0, worldUnits(320), worldUnits(64), worldUnits(384))
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	u := s.Units.Unit(h)
+	publishOne(s, u)
+	kill(s, u)
+
+	if got := s.EyeballCount(); got != 1 {
+		t.Fatalf("count=%d, want 1", got)
+	}
+	rec := s.postLoop.eyeballs.records[0]
+	if rec.cx != 10 || rec.cz != 11 {
+		t.Fatalf("eyeball cell=(%d,%d), want (10,11): the sprite-mask projection did not run", rec.cx, rec.cz)
+	}
+	if rayX, rayZ := observerTile(u, rec.emitter); rayX == rec.cx && rayZ == rec.cz {
+		t.Fatalf("eyeball cell matches the terrain-ray branch (%d,%d): dispatch collapsed to one branch", rayX, rayZ)
+	}
+}

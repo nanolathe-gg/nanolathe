@@ -99,6 +99,15 @@ func RetailScriptRestore(v *VM, image []byte) error {
 	}
 
 	copy(v.Threads[:], threads[:])
+	for i := range threads {
+		// A restored thread is a fresh VM-private allocation, not a
+		// continuation of whatever occupied the slot before the load:
+		// claimThread both stamps the identity ThreadAliveAs answers for and
+		// clears the previous occupant's completion receiver and unconsumed
+		// return, matching the receiver's own non-restoration above
+		// [08 R-SAVE-02 §9].
+		v.claimThread(i)
+	}
 	copy(v.statics, statics)
 	v.activeThreadCount = active
 	v.dirty = dirty

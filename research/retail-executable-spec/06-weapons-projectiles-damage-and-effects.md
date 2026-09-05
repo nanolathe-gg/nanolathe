@@ -5260,7 +5260,7 @@ their gates:
    `activatewhenbuilt` activation and then, when the definition carries
    `isfeature` (capability word A bit 24), stores kind 7 and raises the death
    latch. A nanoframe creation (flag clear) skips the block entirely. The
-   capture replacement of [05 R-WORK-01 §11] is one traced finished creation;
+   capture replacement of [05 R-WORK-01 §15] is one traced finished creation;
    any other caller creating a complete `isfeature` unit takes the same
    branch, and the unit converts on its next sweep.
 2. **The build-completion service** ([05 R-WORK-01 §1]'s completion

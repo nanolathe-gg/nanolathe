@@ -97,13 +97,13 @@ func AdvanceCaptureProgress(cs *CaptureState) {
 //
 // The same-owner and dying-victim rejects this function used to add are NOT in
 // the ladder — [05 R-WORK-01 §10] states it has exactly these five — so they
-// are gone. [05 R-WORK-01 §11] says where each one does live, and the answer is
+// are gone. [05 R-WORK-01 §15] says where each one does live, and the answer is
 // two different layers:
 //
 //   - the SAME-OWNER exclusion is the command resolver's code 13, whose whole
 //     test is "the actor's `cancapture`, a target, and the target's owner
 //     record differing from the actor's — a same-owner target never becomes a
-//     `Capture` order" [05 R-WORK-01 §11][04 R-ORD-02 §1]. It is implemented
+//     `Capture` order" [05 R-WORK-01 §15][04 R-ORD-02 §1]. It is implemented
 //     there, in internal/orders/resolve.go's code-13 arm;
 //   - the DEATH LATCH is the ownership transfer's own entry gate, and only
 //     there. The resolver rejects a target lacking the alive bit but "does not
@@ -131,7 +131,7 @@ func CaptureEligible(builder *units.Unit, victim *units.Unit) bool {
 }
 
 // TransferOwnership performs the central narrow ownership transfer
-// [05 R-WORK-01 §11]. Its exact copy list is in that section; perDefLimit below
+// [05 R-WORK-01 §15]. Its exact copy list is in that section; perDefLimit below
 // returns the effective per-definition limit and whether one applies.
 func perDefLimit(def *content.UnitDef) (int32, bool) {
 	if def == nil {
@@ -160,7 +160,7 @@ func perDefLimit(def *content.UnitDef) (int32, bool) {
 }
 
 // TransferOwnership is the local branch of the central ownership transfer
-// [05 R-WORK-01 §11]. Its ENTRY GATE is three tests — `owner ≠ new owner`, the
+// [05 R-WORK-01 §15]. Its ENTRY GATE is three tests — `owner ≠ new owner`, the
 // alive bit set, and the DEATH LATCH CLEAR — and "a refusal there is silent
 // (the executor still raises cue slot 16 with no text)". The latch test is the
 // one that has no counterpart anywhere earlier: neither the command resolver
@@ -176,7 +176,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	if s == nil || s.World == nil || victim == nil || victim.Def == nil {
 		return nil, false
 	}
-	// The entry gate of [05 R-WORK-01 §11], in its order. Every refusal here is
+	// The entry gate of [05 R-WORK-01 §15], in its order. Every refusal here is
 	// silent: no caption, no diagnostic.
 	if victim.Owner == newOwner {
 		return nil, false
@@ -212,7 +212,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	if repl == nil {
 		return nil, false
 	}
-	// THE COPY LIST, in [05 R-WORK-01 §11]'s order and nothing beyond it: the
+	// THE COPY LIST, in [05 R-WORK-01 §15]'s order and nothing beyond it: the
 	// 16-bit health, the remaining fraction, the orientation triple (bank,
 	// heading, pitch), and — per weapon slot, only where the REPLACEMENT's slot
 	// control byte carries its enabled bit — that slot's stockpiled-round byte.
@@ -228,7 +228,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	// The kill count is NOT carried. The line here read `repl.Kills =
 	// victim.Kills`, on [05 "Capture"]'s "health, remaining fraction, veteran
 	// experience, and visual piece and facing fields are carried".
-	// [05 R-WORK-01 §11] corrects that paragraph in place: "The kill count is
+	// [05 R-WORK-01 §15] corrects that paragraph in place: "The kill count is
 	// not — the replacement is a fresh record with zero kills, so 'veteran
 	// experience' is not carried and the next capture's kills factor restarts
 	// from zero". CaptureTimer's killsFactor term therefore reads 0 for a
@@ -238,7 +238,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	// read `repl.SpotMetal = victim.SpotMetal` under an open-question marker asking
 	// "which cargo predicate retail tests", with SpotMetal named in the comment
 	// as "a placeholder proxy". The gated per-slot stockpiled-round byte "is the
-	// whole of the 'cargo copied conditionally'" [05 R-WORK-01 §11], so the
+	// whole of the 'cargo copied conditionally'" [05 R-WORK-01 §15], so the
 	// marker is retired and the placeholder is gone. SpotMetal is not copied:
 	// the replacement is made by the ordinary creator, which samples the
 	// placement-time metal sum for itself at the same position
@@ -254,7 +254,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 		repl.Slots[i].Ammo = victim.Slots[i].Ammo
 	}
 	// The transported-cargo list, alliances, orders and groups are not carried
-	// either [05 R-WORK-01 §11]; the victim's queues leak on capture exactly as
+	// either [05 R-WORK-01 §15]; the victim's queues leak on capture exactly as
 	// they do on death [05 "Factory product heading"].
 	//
 	// The old unit is then killed with a cause-4 packet and a null attacker:
@@ -286,7 +286,7 @@ const CaptureTickRate = 2
 // IsCaptureComplete tests the first-lethal gate: has the victim already been
 // marked dying? Retail latches this on the ownership-transfer kill so a second
 // captor's node cannot re-trigger it, and the transfer's own entry gate reads
-// the same latch [05 R-WORK-01 §11]; Dying is that latch here
+// the same latch [05 R-WORK-01 §15]; Dying is that latch here
 // [05 "Capture", "Established fact — ownership transfer"].
 func IsCaptureComplete(victim *units.Unit) bool {
 	return victim != nil && victim.Dying

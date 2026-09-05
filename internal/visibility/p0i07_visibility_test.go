@@ -72,7 +72,7 @@ func TestP0I07_TruthTable(t *testing.T) {
 	s2.Publish(0, 10, 10, 0, 320)
 	before := append([]uint16(nil), s2.wordMask...)
 	var st uint32
-	s2.SensorTick(0, 2, nil, []SensorUnit{{
+	s2.SensorTick(0, 2, []SensorUnit{{
 		Owner: 1, Status: &st, Alive: true, Active: true,
 		X: tileWorld(10), Z: tileWorld(10),
 		RadarDistance: 0, SonarDistance: 0, RadarJam: 200,
@@ -193,11 +193,11 @@ func TestP0I07_SensorGate(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 32, CellH: 32}, ModeHistoryEnabled|ModeCurrentEnabled)
 	var st uint32
 	u := []SensorUnit{{ID: 1, Owner: 0, Status: &st, Alive: true, Active: true, RadarDistance: 100, X: tileWorld(5), Z: tileWorld(5)}}
-	s.SensorTick(0, 1, nil, u)
+	s.SensorTick(0, 1, u)
 	if len(s.SensorInputs()) != 0 {
 		t.Fatalf("sensor should not run with 1 player")
 	}
-	s.SensorTick(0, 2, nil, u)
+	s.SensorTick(0, 2, u)
 	if len(s.SensorInputs()) != 1 {
 		t.Fatalf("sensor should run with 2 players")
 	}

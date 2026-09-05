@@ -24,6 +24,11 @@ const (
 // DecloakDeadlineAdd is the decloak deadline offset in ticks [R-VIS-01 §4] pass 4.
 const DecloakDeadlineAdd = 90
 
+// primaryCandidateSlots is the width of SensorUnit.PrimaryCandidateOf's slot
+// membership: one bit per player slot, over the same fixed ten-slot range the
+// per-side target registry of [06 §3.1] indexes.
+const primaryCandidateSlots = 10
+
 // SensorUnit is one unit as the sensor phase sees it [03 §3.4] P0-11.
 //
 // The phase mutates Status through the pointer — that is its entire
@@ -37,10 +42,34 @@ type SensorUnit struct {
 	X, Z      numeric.Fixed // 16.16 world position
 	Y         numeric.Fixed
 	Alive     bool
+	Dying     bool // death latch; a latched unit is not a proximity candidate [R-VIS-01 §4] pass 4
 	Hidden    bool // instance cloak bit; the seen probe's second gate [R-VIS-01 §4] pass 5
 	Stealth   bool // definition stealth: the contact callback's third reject [R-VIS-01 §5]
 	Active    bool // runtime activation/on-state bit required by the emitters [R-VIS-01 §4]
 	OnOffable bool // definition on/off flag used by selected-unit circle presentation [03 §3.9]
+
+	// CanCloak is the definition's DERIVED can-cloak flag — `cloakcost > 0` on
+	// the parsed value, not an authored key and not `init_cloaked` — and it is
+	// the proximity pass's definition gate [R-VIS-01 §4] pass 4. That pass does
+	// not test whether the unit is currently cloaked, so this must not be
+	// reconstructed from Hidden.
+	CanCloak bool
+
+	// OwnerLocallySimulated reports that this unit's owning player record is
+	// active with controller type 1 or 2 — the locally simulated human and
+	// computer controllers, as against 3 (remote) and 0 (empty), the same
+	// predicate as [06 R-WPN-02 §2]. It is the proximity pass's second source
+	// gate [R-VIS-01 §4] pass 4.
+	OwnerLocallySimulated bool
+
+	// PrimaryCandidateOf is this unit's membership in the per-side PRIMARY
+	// candidate lists of [06 §3.1], one bit per player slot: bit s is set when
+	// the unit was on slot s's primary list at that side's last registry
+	// rebuild. The proximity pass searches exactly the source owner's list
+	// [R-VIS-01 §4] pass 4, so a hostile that never entered it can never
+	// suppress cloak. Slots at or above primaryCandidateSlots are not
+	// representable and are not searched; the registry has ten.
+	PrimaryCandidateOf uint16
 
 	// Authored sensor distances [02 "Unit record"] P0-11. Zero means absent.
 	RadarDistance    int32
@@ -125,13 +154,16 @@ func planarSquared(a, b *SensorUnit) int64 {
 // The phase writes neither visibility grid, and it consumes no random draws
 // [R-VIS-01 §4] "Ordering and outputs", "Random draws".
 //
-// allied supplies the caller's alliance row. It is deliberately NOT consulted
-// by pass 1: [R-VIS-01 §7] establishes that pass 1's allied disjunct cannot
-// fire in retail — no writer anywhere sets the option bit it gates on — so an
-// ally's radar contact never appears on the viewer's minimap and an ally's
-// units are not exempted from the underwater rejection on the viewer's behalf.
-// Only the proximity scan of pass 4 uses it, to separate hostiles from friends.
-func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b PlayerID) bool, units []SensorUnit) {
+// No pass consults an alliance row. Pass 1's allied disjunct cannot fire in
+// retail — [R-VIS-01 §7] establishes that no writer anywhere sets the option
+// bit it gates on — so an ally's radar contact never appears on the viewer's
+// minimap and an ally's units are not exempted from the underwater rejection on
+// the viewer's behalf. Pass 4 used to take an alliance predicate to separate
+// hostiles from friends in a live-unit scan; it no longer scans, because
+// hostility was settled once, for the whole side, when that side's target
+// registry was rebuilt [06 §3.1], and the pass reads the resulting membership
+// off SensorUnit.PrimaryCandidateOf (WU-19-210).
+func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	if s == nil {
 		return
 	}
@@ -249,34 +281,53 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 		}
 	}
 
-	// Pass 4 — minimum-cloak proximity [R-VIS-01 §4]. Retail searches the
-	// cloaking unit's own side's primary candidate list of [06 §3.1], which is
-	// rebuilt at most once every thirty ticks, so its breach test reads "an
-	// enemy I could see up to a second ago is within mincloakdistance".
-	// Nanolathe has no such per-side registry yet, so this scan walks live
-	// hostiles directly and therefore breaches up to a second earlier than
-	// retail. Nothing here is unknown: wiring the scan to that list once it
-	// exists is the whole of the remaining work.
+	// Pass 4 — minimum-cloak proximity [R-VIS-01 §4]. The candidate set is the
+	// SOURCE OWNER's primary candidate list of [06 §3.1] — the hostiles that
+	// passed the direct-visibility predicate when that side's registry was last
+	// rebuilt, up to thirty ticks earlier — and never a fresh scan over live
+	// hostiles. The breach test therefore reads "an enemy I could see up to a
+	// second ago is within mincloakdistance", and an enemy that never entered
+	// the registry cannot move the suppression deadline at all, however close it
+	// comes. Until WU-19-210 this walked every live hostile, so a permanently
+	// excluded enemy — one no side can see — suppressed cloak repeatedly.
+	//
+	// The list is stale by construction, so liveness and the death latch are
+	// re-tested here, at use, exactly as the per-attempt acquisition filter
+	// re-tests them [06 §3.1]. Walking the unit array filtered by membership
+	// visits the same set retail's walk of the list visits, and the outcome is
+	// order-independent: any one hit writes the same bit and the same deadline.
+	//
+	// The source gates are the section's three: alive; an owning player record
+	// that is active with controller type 1 or 2 (the locally simulated human
+	// and computer controllers, the same predicate as [06 R-WPN-02 §2]); and the
+	// definition's derived can-cloak flag, `cloakcost > 0`. "The pass does not
+	// test whether the unit is currently cloaked" — an eligible unit that is not
+	// hidden receives the deadline just as a hidden one does, which is what
+	// makes the deadline a suppression window rather than a decloak event.
 	for i := range units {
 		src := &units[i]
-		if !src.Alive || !src.Hidden || src.MinCloakDistance <= 0 || src.Status == nil {
+		if !src.Alive || src.Status == nil {
 			continue
 		}
-		r2 := int64(src.MinCloakDistance) * int64(src.MinCloakDistance)
+		if !src.CanCloak || !src.OwnerLocallySimulated {
+			continue
+		}
+		if int(src.Owner) >= primaryCandidateSlots {
+			continue // outside the registry's slot range: no list to search
+		}
+		// A plain 32-bit signed square of the authored integer: an unauthored
+		// mincloakdistance of 0 leaves the test `d² <= 0`, which effectively
+		// never fires [R-VIS-01 §4] pass 4.
+		mc := src.MinCloakDistance
+		r2 := int64(mc * mc)
+		member := uint16(1) << uint(src.Owner)
 		for j := range units {
-			if i == j {
-				continue
-			}
 			dst := &units[j]
-			if !dst.Alive {
-				continue
+			if dst.PrimaryCandidateOf&member == 0 {
+				continue // not on this side's primary list [06 §3.1]
 			}
-			isEnemy := dst.Owner != src.Owner
-			if allied != nil && allied(src.Owner, dst.Owner) {
-				isEnemy = false
-			}
-			if !isEnemy {
-				continue
+			if !dst.Alive || dst.Dying {
+				continue // liveness and death latch, re-tested at use [06 §3.1]
 			}
 			if planarSquared(src, dst) > r2 {
 				continue // the breach test is inclusive [R-VIS-01 §4] pass 4

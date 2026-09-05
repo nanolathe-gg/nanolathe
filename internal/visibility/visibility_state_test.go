@@ -74,7 +74,7 @@ func TestSensorVisibilityUsesSinglePoint(t *testing.T) {
 	s.incByteGrid(int(2*s.W+2), 0)
 	var status uint32
 	units := []SensorUnit{{Owner: 1, Status: &status, Alive: true, Active: true, X: 0, Y: 0, Z: 0, RadarDistance: 100, SonarDistance: 200}}
-	s.SensorTick(1, 2, nil, units)
+	s.SensorTick(1, 2, units)
 	if status&SeenBit != 0 {
 		t.Fatal("sensor final pass applied owner bypass or hull samples")
 	}
@@ -83,7 +83,7 @@ func TestSensorVisibilityUsesSinglePoint(t *testing.T) {
 	}
 	beforeWord := append([]uint16(nil), s.wordMask...)
 	beforeByte := append([]uint8(nil), s.byteGrids[0]...)
-	s.SensorTick(2, 2, nil, units)
+	s.SensorTick(2, 2, units)
 	if len(s.SensorInputs()) != 1 || s.SensorInputs()[0].Status != status {
 		t.Fatal("sensor snapshot was not refreshed from authoritative status")
 	}

@@ -237,6 +237,14 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	}
 	var holders []holder
 	var sensorUnits []visibility.SensorUnit
+	// Pass 4's candidate set: the per-side PRIMARY candidate lists of [06 §3.1],
+	// folded into one membership bit per player slot so the sensor pass can read
+	// "is this unit on my owner's list" without a second lookup structure. The
+	// lists keep their own thirty-tick rebuild cadence — the combat service owns
+	// it, this is a read of what the last rebuild left [03 R-VIS-01 §4] pass 4.
+	// A slot with no registry contributes no bits, so its units never breach,
+	// which is the fail-closed direction (WU-19-210).
+	primaryOf := s.primaryCandidateMasks()
 	for _, u := range s.Units.IterSliced() {
 		if u == nil || !u.Alive {
 			continue
@@ -271,6 +279,12 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		stealth := false
 		var rd, sd, rj, sj, mc, modelTop int32
 		onOffable := false
+		// The proximity pass's definition gate is the DERIVED can-cloak flag,
+		// `cloakcost > 0` — the same derivation `Cloak_On`/`Cloak_Off` gate on
+		// [04 R-ORD-01 §2] — and never `init_cloaked` and never the instance
+		// cloak bit: pass 4 "does not test whether the unit is currently
+		// cloaked" [03 R-VIS-01 §4] pass 4.
+		canCloak := false
 		if u.Def != nil {
 			stealth = u.Def.Stealth
 			onOffable = u.Def.OnOffable
@@ -280,48 +294,44 @@ func (s *Session) stepSensorPhase(tick uint32) {
 			sj = u.Def.SonarDistanceJam
 			mc = u.Def.MinCloakDistance
 			modelTop = u.Def.ModelTop
+			canCloak = u.Def.CloakCost > 0
+		}
+		var mask uint16
+		if h >= 0 && h < len(primaryOf) {
+			mask = primaryOf[h]
 		}
 		sensorUnits = append(sensorUnits, visibility.SensorUnit{
-			ID:               uint16(u.Handle),
-			Owner:            visibility.PlayerID(u.Owner),
-			Status:           sp,
-			X:                u.X,
-			Z:                u.Z,
-			Y:                u.Y,
-			Alive:            true,
-			Hidden:           hidden,
-			Stealth:          stealth,
-			Active:           u.Activated,
-			OnOffable:        onOffable,
-			RadarDistance:    rd,
-			SonarDistance:    sd,
-			RadarJam:         rj,
-			SonarJam:         sj,
-			MinCloakDistance: mc,
-			ModelTop:         modelTop,
-			DecloakDeadline:  dp,
+			ID:                    uint16(u.Handle),
+			Owner:                 visibility.PlayerID(u.Owner),
+			Status:                sp,
+			X:                     u.X,
+			Z:                     u.Z,
+			Y:                     u.Y,
+			Alive:                 true,
+			Dying:                 u.Dying,
+			Hidden:                hidden,
+			Stealth:               stealth,
+			Active:                u.Activated,
+			OnOffable:             onOffable,
+			RadarDistance:         rd,
+			SonarDistance:         sd,
+			RadarJam:              rj,
+			SonarJam:              sj,
+			MinCloakDistance:      mc,
+			ModelTop:              modelTop,
+			DecloakDeadline:       dp,
+			CanCloak:              canCloak,
+			OwnerLocallySimulated: s.ownerLocallySimulated(u.Owner),
+			PrimaryCandidateOf:    mask,
 		})
 	}
-	// The alliance row. AllyGroup 5 is the UNASSIGNED sentinel, not a team:
-	// every slot carries it in a default lobby, so equality alone would make
-	// every player everyone's ally [08 "Skirmish configuration"] — the same
-	// reading teamForOwner already applies. The sensor phase consumes this row
-	// for the proximity scan only; pass 1's allied disjunct cannot fire in
-	// retail [R-VIS-01 §7].
-	allied := func(a, b visibility.PlayerID) bool {
-		if a == b {
-			return true
-		}
-		if s.Skirmish.NumPlayers > 0 && int(a) < 10 && int(b) < 10 {
-			ga := s.Skirmish.Players[a].AllyGroup
-			gb := s.Skirmish.Players[b].AllyGroup
-			if ga == SkirmishDefaultAllyGroup || gb == SkirmishDefaultAllyGroup {
-				return false
-			}
-			return ga == gb
-		}
-		return false
-	}
+	// No alliance row reaches the phase any more. Pass 1's allied disjunct
+	// cannot fire in retail [R-VIS-01 §7], and pass 4 — the one pass that used
+	// to consult a row, to separate hostiles from friends in a live-unit scan —
+	// now reads the per-side primary candidate lists, where hostility was
+	// settled once at the registry rebuild against the alliance rows economy
+	// owns [06 §3.1] (WU-19-210).
+	//
 	// The friendly pass's third disjunct: a defeated or observing viewer marks
 	// every live unit friendly [R-VIS-01 §4] pass 1. Retail keeps the local
 	// player's own slot and the viewing slot as two separate globals and reads
@@ -340,8 +350,53 @@ func (s *Session) stepSensorPhase(tick uint32) {
 		defeated = p.IsObserver || s.ownerEliminated(viewer)
 	}
 	s.Vis.SetViewerDefeated(defeated)
-	s.Vis.SensorTick(tick, active, allied, sensorUnits)
+	s.Vis.SensorTick(tick, active, sensorUnits)
 	for _, h := range holders {
 		s.visStatus[h.handle] = *h.statusPtr
 	}
+}
+
+// primaryCandidateMasks folds the per-side PRIMARY candidate lists of [06 §3.1]
+// into one membership word per unit handle: bit s is set when that unit was on
+// player slot s's primary list at that side's last registry rebuild.
+//
+// It is a READ of the combat service's registry, never a rebuild: the lists keep
+// their own thirty-tick cadence, taken from the strategic refresh's one gate
+// [06 §3.1], and the sensor phase must see them exactly as stale as an
+// acquisition attempt does — that staleness is the contract, because pass 4's
+// breach test is "an enemy I could see up to a second ago is within
+// mincloakdistance" [03 R-VIS-01 §4] pass 4.
+//
+// The row is indexed by handle over the pool's fixed record count, never a map
+// (I1). With no combat service there are no lists and no unit ever breaches.
+func (s *Session) primaryCandidateMasks() []uint16 {
+	if s == nil || s.Combat == nil || s.Units == nil {
+		return nil
+	}
+	n := s.Units.TotalRecords()
+	if n <= 0 {
+		return nil
+	}
+	masks := make([]uint16, n)
+	for slot := 0; slot < 10; slot++ {
+		for _, h := range s.Combat.PrimaryTargets(uint8(slot)) { // a slice, in registry order (I1)
+			if int(h) > 0 && int(h) < n {
+				masks[int(h)] |= 1 << uint(slot)
+			}
+		}
+	}
+	return masks
+}
+
+// ownerLocallySimulated reports whether a player slot's record is active with
+// controller type 1 or 2 — the locally simulated human and computer
+// controllers, as against 3 (remote) and 0 (empty). It is pass 4's source gate
+// [03 R-VIS-01 §4] pass 4, the same predicate the death latch and the paralyzer
+// gate read on a victim's owner [06 R-WPN-02 §2].
+func (s *Session) ownerLocallySimulated(owner uint8) bool {
+	if s == nil || s.Econ == nil || int(owner) >= len(s.Econ.Players) {
+		return false
+	}
+	p := &s.Econ.Players[owner]
+	return p.Exists && (p.ControllerState == 1 || p.ControllerState == 2)
 }

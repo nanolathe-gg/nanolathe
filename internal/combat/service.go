@@ -1080,6 +1080,27 @@ func (s *Service) TargetRegistryRebuildTick(slot uint8) uint32 {
 	return s.targets.lastRebuild[slot]
 }
 
+// PrimaryTargets returns one side's primary candidate list exactly as that
+// side's last registry rebuild left it [06 §3.1]. It is read-only: the slice is
+// the registry's own storage, and a caller must neither write through it nor
+// retain it across a rebuild.
+//
+// Its one consumer outside this package is the sensor phase's minimum-cloak
+// proximity pass, whose candidate set is "the primary candidate list of
+// registry[unit.ownerSlot]" and nothing else [03 R-VIS-01 §4] pass 4. That pass
+// re-tests liveness and the death latch at use, because the list is up to
+// thirty ticks stale by construction — which is the point of reading it rather
+// than scanning: the breach test is "an enemy I could see up to a second ago is
+// within mincloakdistance", not "an enemy is within mincloakdistance". A
+// hostile that never passed the rebuild's direct-visibility predicate is not on
+// the list and can never suppress cloak, however close it comes.
+func (s *Service) PrimaryTargets(slot uint8) []pool.Handle {
+	if s == nil {
+		return nil
+	}
+	return s.targets.primaryList(slot)
+}
+
 // RebuildTargetRegistryIfDue is this package's half of the ONE retail routine
 // of [06 §3.1] — the routine that is both "the per-side target registry
 // rebuild" of doc 06 and "the 30-tick strategic refresh" of

@@ -91,7 +91,7 @@ func captureTransferFixture(t *testing.T) (*Service, *units.Unit) {
 	return &Service{World: w, Catalog: cat}, victim
 }
 
-// TestTransferOwnershipCopyList locks [05 R-WORK-01 §11]'s exact copy list: the
+// TestTransferOwnershipCopyList locks [05 R-WORK-01 §15]'s exact copy list: the
 // 16-bit health, the remaining fraction, the orientation triple, and per weapon
 // slot — only where the REPLACEMENT's control byte carries its enabled bit —
 // the stockpiled-round byte. "Nothing else is copied. The kill count is not."
@@ -121,10 +121,10 @@ func TestTransferOwnershipCopyList(t *testing.T) {
 		t.Fatalf("replacement owner = %d, want the new owner 0", repl.Owner)
 	}
 	if repl.Health != 37 || repl.Remaining != 0 {
-		t.Fatalf("health/remaining = %d/%v, want 37/0 [05 R-WORK-01 §11]", repl.Health, repl.Remaining)
+		t.Fatalf("health/remaining = %d/%v, want 37/0 [05 R-WORK-01 §15]", repl.Health, repl.Remaining)
 	}
 	if repl.Move.Bank != 111 || repl.Move.Heading != 222 || repl.Move.Pitch != 333 {
-		t.Fatalf("orientation triple = (%d,%d,%d), want (111,222,333) [05 R-WORK-01 §11]",
+		t.Fatalf("orientation triple = (%d,%d,%d), want (111,222,333) [05 R-WORK-01 §15]",
 			repl.Move.Bank, repl.Move.Heading, repl.Move.Pitch)
 	}
 	// The stockpile follows the unit, slot by slot, wherever the new record has
@@ -134,17 +134,17 @@ func TestTransferOwnershipCopyList(t *testing.T) {
 			repl.Slots[0].IsEnabled(), repl.Slots[1].IsEnabled(), repl.Slots[2].IsEnabled())
 	}
 	if repl.Slots[0].Ammo != 5 || repl.Slots[1].Ammo != 7 {
-		t.Fatalf("stockpiled rounds = %d/%d, want 5/7 [05 R-WORK-01 §11]", repl.Slots[0].Ammo, repl.Slots[1].Ammo)
+		t.Fatalf("stockpiled rounds = %d/%d, want 5/7 [05 R-WORK-01 §15]", repl.Slots[0].Ammo, repl.Slots[1].Ammo)
 	}
 	if repl.Slots[2].Ammo != 0 {
-		t.Fatalf("a disabled slot received %d rounds; the copy is gated on the replacement's enabled bit [05 R-WORK-01 §11]", repl.Slots[2].Ammo)
+		t.Fatalf("a disabled slot received %d rounds; the copy is gated on the replacement's enabled bit [05 R-WORK-01 §15]", repl.Slots[2].Ammo)
 	}
 	// The corrections.
 	if repl.Kills != 0 {
-		t.Fatalf("replacement kills = %d, want 0: the kill count is NOT copied [05 R-WORK-01 §11]", repl.Kills)
+		t.Fatalf("replacement kills = %d, want 0: the kill count is NOT copied [05 R-WORK-01 §15]", repl.Kills)
 	}
 	if repl.SpotMetal == 4.5 {
-		t.Fatalf("SpotMetal was copied from the victim; the creator samples it for the replacement [05 R-PROD-01 §6][05 R-WORK-01 §11]")
+		t.Fatalf("SpotMetal was copied from the victim; the creator samples it for the replacement [05 R-PROD-01 §6][05 R-WORK-01 §15]")
 	}
 	// The old record is killed with the cause-4 packet and a null attacker.
 	if !victim.Dying || victim.LastDamageCause != CaptureDeathCause || victim.LastDamageSide != units.NeutralAttackerSide {
@@ -153,7 +153,7 @@ func TestTransferOwnershipCopyList(t *testing.T) {
 	}
 }
 
-// TestTransferOwnershipEntryGate locks [05 R-WORK-01 §11]'s entry gate: owner
+// TestTransferOwnershipEntryGate locks [05 R-WORK-01 §15]'s entry gate: owner
 // differing from the new owner, the alive bit set, the death latch clear — and
 // "a refusal there is silent". The latch test exists nowhere earlier: the
 // command resolver rejects a target lacking the alive bit but does not read the
@@ -165,23 +165,23 @@ func TestTransferOwnershipEntryGate(t *testing.T) {
 		victim.Dying = true // killed this tick; alive bit still set until the sweep
 		repl, ok := svc.TransferOwnership(victim, 0)
 		if ok || repl != nil {
-			t.Fatalf("a latched victim was transferred: ok=%v repl=%v [05 R-WORK-01 §11]", ok, repl)
+			t.Fatalf("a latched victim was transferred: ok=%v repl=%v [05 R-WORK-01 §15]", ok, repl)
 		}
 		if !victim.Alive {
-			t.Fatal("the refusal must not touch the victim; it is silent [05 R-WORK-01 §11]")
+			t.Fatal("the refusal must not touch the victim; it is silent [05 R-WORK-01 §15]")
 		}
 	})
 	t.Run("a same-owner target is refused", func(t *testing.T) {
 		svc, victim := captureTransferFixture(t)
 		if repl, ok := svc.TransferOwnership(victim, victim.Owner); ok || repl != nil {
-			t.Fatalf("a same-owner transfer succeeded: ok=%v repl=%v [05 R-WORK-01 §11]", ok, repl)
+			t.Fatalf("a same-owner transfer succeeded: ok=%v repl=%v [05 R-WORK-01 §15]", ok, repl)
 		}
 	})
 	t.Run("a dead victim is refused", func(t *testing.T) {
 		svc, victim := captureTransferFixture(t)
 		victim.Alive = false
 		if repl, ok := svc.TransferOwnership(victim, 0); ok || repl != nil {
-			t.Fatalf("a victim without the alive bit was transferred: ok=%v repl=%v [05 R-WORK-01 §11]", ok, repl)
+			t.Fatalf("a victim without the alive bit was transferred: ok=%v repl=%v [05 R-WORK-01 §15]", ok, repl)
 		}
 	})
 }

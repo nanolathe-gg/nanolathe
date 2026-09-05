@@ -148,7 +148,7 @@ func (f *registryFixture) sensorTick(tick uint32) {
 			RadarDistance: rd, DecloakDeadline: new(uint32),
 		})
 	}
-	f.vis.SensorTick(tick, 2, func(a, b visibility.PlayerID) bool { return a == b }, sensorUnits)
+	f.vis.SensorTick(tick, 2, sensorUnits)
 }
 
 // The registry rebuild is gated on `lastRebuild + 30 <= currentTick` [06 §3.1],
@@ -368,5 +368,104 @@ func TestRegistrySweepRebuildsEverySide(t *testing.T) {
 	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
 	if got := len(s.targets.primaryList(3)); got != 2 {
 		t.Fatalf("the rebuild ran twice inside one window, got %d", got)
+	}
+}
+
+// TestCloakProximityFollowsTheRegistryCadence is the R14 regression at the seam:
+// the sensor phase's minimum-cloak proximity pass searches the SOURCE OWNER's
+// primary candidate list of [06 §3.1] through the read-only accessor, so it
+// inherits that list's thirty-tick staleness in both directions
+// [03 R-VIS-01 §4] pass 4.
+//
+// The three properties, in one run: an enemy that never enters the list never
+// breaches; an enemy that becomes visible waits for the next rebuild; and an
+// enemy that goes dark after it was filed keeps breaching until the rebuild that
+// drops it.
+func TestCloakProximityFollowsTheRegistryCadence(t *testing.T) {
+	f := newRegistryFixture(t, true) // the hostile starts cloaked: off the list
+	f.onProjectedGrid()
+	// The source is the local player's own unit: cloak-capable by definition,
+	// twenty world units from the hostile, and owned by an active controller of
+	// type 1 [06 R-WPN-02 §2].
+	f.shooter.Def.MinCloakDistance = 50
+	f.shooter.Def.CloakCost = 10
+	// Cloaked, as the review's probe had it: under the old all-hostiles scan
+	// this is exactly the pairing that moved the deadline.
+	f.shooter.Hidden = true
+	f.econ.Players[0].Exists = true
+	f.econ.Players[0].ControllerState = 1
+
+	s := &Service{}
+	var deadline uint32
+	// The session builds this membership word from Service.PrimaryTargets; the
+	// test builds the same word the same way so the accessor is what is under
+	// test, not a copy of the registry's internals.
+	step := func(tick uint32) {
+		rebuildEverySlot(s, tick, f.world, f.vis, f.terrain, f.econ)
+		masks := map[pool.Handle]uint16{}
+		for slot := 0; slot < combatPlayerSlots; slot++ {
+			for _, h := range s.PrimaryTargets(uint8(slot)) {
+				masks[h] |= 1 << uint(slot)
+			}
+		}
+		var sensorUnits []visibility.SensorUnit
+		for _, u := range f.world.Iter() {
+			sp, ok := f.status[u.Handle]
+			if !ok {
+				sp = new(uint32)
+				f.status[u.Handle] = sp
+			}
+			su := visibility.SensorUnit{
+				ID: uint16(u.Handle), Owner: visibility.PlayerID(u.Owner), Status: sp,
+				X: u.X, Y: u.Y, Z: u.Z, Alive: u.Alive, Dying: u.Dying, Hidden: u.Hidden,
+				Active: u.Activated, RadarDistance: u.Def.RadarDistance,
+				MinCloakDistance:      u.Def.MinCloakDistance,
+				CanCloak:              u.Def.CloakCost > 0,
+				OwnerLocallySimulated: u.Owner == 0,
+				PrimaryCandidateOf:    masks[u.Handle],
+			}
+			if u.Handle == f.shooter.Handle {
+				su.DecloakDeadline = &deadline
+			} else {
+				su.DecloakDeadline = new(uint32)
+			}
+			sensorUnits = append(sensorUnits, su)
+		}
+		f.vis.SensorTick(tick, 2, sensorUnits)
+	}
+
+	// A cloaked hostile fails the rebuild's visibility clause, so it is on no
+	// list and cannot suppress cloak however close it stands. This is the
+	// review's probe: the old all-hostiles scan moved the deadline here.
+	step(targetRegistryPeriod)
+	if deadline != 0 {
+		t.Fatalf("an enemy that cannot enter the primary list breached: deadline %d [R-VIS-01 §4] pass 4", deadline)
+	}
+	// It decloaks one tick after the rebuild that refused it: no breach until
+	// the next rebuild files it.
+	f.enemy.Hidden = false
+	for tick := targetRegistryPeriod + 1; tick < 2*targetRegistryPeriod; tick++ {
+		step(tick)
+		if deadline != 0 {
+			t.Fatalf("a newly visible enemy breached at tick %d, before the rebuild that files it [06 §3.1]", tick)
+		}
+	}
+	step(2 * targetRegistryPeriod)
+	if deadline != 2*targetRegistryPeriod+visibility.DecloakDeadlineAdd {
+		t.Fatalf("deadline %d after the rebuild that files the enemy, want %d", deadline, 2*targetRegistryPeriod+visibility.DecloakDeadlineAdd)
+	}
+	// A filed entry that goes dark stays eligible until the rebuild drops it.
+	f.enemy.Hidden = true
+	step(2*targetRegistryPeriod + 1)
+	if deadline != 2*targetRegistryPeriod+1+visibility.DecloakDeadlineAdd {
+		t.Fatalf("a retained candidate must stay eligible until the next rebuild: deadline %d", deadline)
+	}
+	// The rebuild at tick 90 re-runs the visibility clause and drops the
+	// re-cloaked enemy, so the deadline stops moving from that tick on.
+	before := deadline
+	step(3 * targetRegistryPeriod)
+	step(3*targetRegistryPeriod + 1)
+	if deadline != before {
+		t.Fatalf("the rebuild at tick %d drops the re-cloaked enemy, so the deadline must stop moving: %d -> %d", 3*targetRegistryPeriod, before, deadline)
 	}
 }

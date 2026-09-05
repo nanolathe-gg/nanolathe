@@ -157,6 +157,36 @@ func TestCampaignContinuationWalkWritesAndResumesABank(t *testing.T) {
 	}
 }
 
+// TestApplyRestoredUnitLimitCarriesSummaryMaxUnits is WU-19-214: retail's
+// battle-restoration dispatcher stores the save's own `Summary.maxunits`,
+// unclamped, into the configured unit-limit word only when the save carried
+// the item at all [08 R-ENTRY-01 §6][08 R-SESS-01 §9]. Nanolathe's configured
+// word is g.setup.UnitLimit.
+func TestApplyRestoredUnitLimitCarriesSummaryMaxUnits(t *testing.T) {
+	shell := &gameShell{}
+	shell.setup.UnitLimit = 250
+
+	// A value far outside the 20..500 start-up clamp stays exactly as saved:
+	// the restore applies no clamp [08 R-SESS-01 §9].
+	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 12}})
+	if shell.setup.UnitLimit != 12 {
+		t.Fatalf("configured UnitLimit = %d, want 12 unclamped", shell.setup.UnitLimit)
+	}
+
+	// A save without the item — represented as the zero value, indistinguishable
+	// here from a stored zero — leaves the configured word untouched.
+	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 0}})
+	if shell.setup.UnitLimit != 12 {
+		t.Fatalf("configured UnitLimit = %d, want unchanged 12 after a missing item", shell.setup.UnitLimit)
+	}
+
+	// A nil image (defensive) is also a no-op.
+	shell.applyRestoredUnitLimit(nil)
+	if shell.setup.UnitLimit != 12 {
+		t.Fatalf("configured UnitLimit = %d, want unchanged 12 after a nil image", shell.setup.UnitLimit)
+	}
+}
+
 // An empty SAVEGAME directory closes the load screen again with the authored
 // message and opens nothing [08 R-SAVE-02 §2].
 func TestLoadScreenRefusesAnEmptyList(t *testing.T) {

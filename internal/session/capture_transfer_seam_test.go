@@ -70,12 +70,12 @@ func captureSeamSession(t *testing.T) *Session {
 // Capture port — internal/orders/work.go's captureHandler reached phase 5,
 // called the seam, and got nothing back, so the transfer never happened and
 // a captured unit kept its owner in a live battle [05 R-WORK-01 §6]
-// [05 R-WORK-01 §11]. This drives a real `Capture` order end to end through
+// [05 R-WORK-01 §15]. This drives a real `Capture` order end to end through
 // the authoritative phases (approach, build stance, the progress timer) and
 // asserts that a live replacement ends up owned by the captor, at the
 // victim's position, while the old record is destroyed rather than mutated
 // in place — the transfer allocates a fresh record and kills the old one
-// with a cause-4 packet [05 R-WORK-01 §11], it does not flip `Owner` on the
+// with a cause-4 packet [05 R-WORK-01 §15], it does not flip `Owner` on the
 // same handle.
 func TestCommanderCapturesEnemyUnit(t *testing.T) {
 	s := captureSeamSession(t)
@@ -124,7 +124,7 @@ func TestCommanderCapturesEnemyUnit(t *testing.T) {
 		s.Clock.GlobalTick = tick
 		s.stepAuthoritativePhases(tick)
 		if victim.Owner == captor.Owner {
-			t.Fatalf("the victim's own record changed owner in place at tick %d; retail creates a fresh replacement and kills the old record instead [05 R-WORK-01 §11]", tick)
+			t.Fatalf("the victim's own record changed owner in place at tick %d; retail creates a fresh replacement and kills the old record instead [05 R-WORK-01 §15]", tick)
 		}
 		for _, u := range w.IterSliced() {
 			if u == nil || u == victim {
@@ -140,7 +140,7 @@ func TestCommanderCapturesEnemyUnit(t *testing.T) {
 		t.Fatalf("no captor-owned replacement of %q appeared within 400 ticks; the captured unit never changed owner", victimDef.UnitName)
 	}
 	if repl.X != victimX || repl.Z != victimZ {
-		t.Fatalf("replacement position = (%v,%v), want the victim's original position (%v,%v) [05 R-WORK-01 §11]", repl.X, repl.Z, victimX, victimZ)
+		t.Fatalf("replacement position = (%v,%v), want the victim's original position (%v,%v) [05 R-WORK-01 §15]", repl.X, repl.Z, victimX, victimZ)
 	}
 	if victim.Alive && !victim.Dying {
 		t.Fatal("the old record is still alive and not even marked dying after the transfer")

@@ -42,6 +42,11 @@ func TestRetailScriptRestoreSignatureAtomicAndFullState(t *testing.T) {
 	if vm.Threads[0].Status != ThreadSleeping || vm.Threads[0].Sleep != 17 || vm.Threads[0].SP != 10 || vm.Threads[0].WaitThread != -1 || vm.Threads[0].SignalMask != 0x55aa || vm.Threads[0].Stack[0] != 0x12345678 || vm.Threads[0].Stack[31] != -2023406815 || vm.ActiveThreadCount() != 1 || !vm.ScriptDirty() {
 		t.Fatalf("restored VM state: thread=%#v active=%d dirty=%v", vm.Threads[0], vm.ActiveThreadCount(), vm.ScriptDirty())
 	}
+	// A restored thread is a first-class VM-private allocation: ThreadAliveAs
+	// must answer for it, not just IsThreadAlive.
+	if id := vm.ThreadIdentity(0); id == 0 || !vm.ThreadAliveAs(0, id) {
+		t.Fatalf("restored thread identity=%d, ThreadAliveAs=%v; want nonzero and alive", id, vm.ThreadAliveAs(0, id))
+	}
 	if got := vm.Pieces[0].Trans[0]; got != 0x00020000 {
 		t.Fatalf("piece translation=%v", got)
 	}

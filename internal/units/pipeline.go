@@ -31,7 +31,7 @@ import (
 //
 // Step 6 has no field and needs none. The counter's only writer is the
 // ownership transfer's branch whose NEW owner is a remote peer of controller 3
-// ([05 R-WORK-01 §11], the ownership transfer's second branch), which is
+// ([05 R-WORK-01 §15], the ownership transfer's second branch), which is
 // multiplayer transport and out of scope, so in a single-player session the
 // counter is zero for every unit at every visit and the decrement is inert.
 // That is why step 7's third clause below is a constant true rather than a
