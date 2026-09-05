@@ -516,7 +516,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				TargetY:        p.TargetPos.Y,
 				TargetZ:        p.TargetPos.Z,
 				TrailFrame:     0,  // no authored/runtime trail-frame field is established [I9]
-				Selector:       -1, // explicit suppression sentinel when no selector art is established [03 §5.4]
+				Selector:       -1, // suppression sentinel until the weapon record's `color` byte replaces it below [06 R-WFX-01 §1]
 			}
 			if s.Catalog != nil {
 				if w, ok := s.Catalog.WeaponByID(p.WeaponID); ok && w != nil {
@@ -536,6 +536,33 @@ func (s *Session) publishSnapshot(tick uint32) {
 					// carries the compiled field (already `weapontimer × 30`
 					// truncated at catalog compile time, per I8).
 					pv.Lifetime = w.WeaponTimer
+					// The two authored presentation bytes. The weapon record
+					// stores `color` and `color2` as BYTES [06 R-WFX-01 §1],
+					// and `color` has two readers: it is the palette index
+					// the beam (type 0) and lightning (type 7) strokes are
+					// drawn in, and it is the sequence selector of render
+					// type 4 — 0 `cannonshell`, 1 `plasmasm`, 2 `plasmamd`,
+					// 3 `ultrashell`, 4 `plasmasm`, with 5..254 drawing
+					// nothing and 255 read as −1, which suppresses the whole
+					// case [06 R-WFX-01 §4].
+					//
+					// Publishing the pair is what makes stock guns, shells
+					// and lasers visible at all. The draw dispatch suppresses
+					// a record whose colour is absent and a type-4 record
+					// whose selector is the −1 sentinel, so the unconditional
+					// sentinel this replaces left every render-type-4 weapon
+					// (82 of the 198 stock weapons, the Peewee's `emg` among
+					// them) and every type-0 beam drawing nothing at all.
+					pv.PrimaryColor = uint8(w.Color)
+					pv.HasPrimaryColor = true
+					pv.SecondaryColor = uint8(w.Color2)
+					pv.HasSecondaryColor = true
+					// The selector is that same byte read as a signed value,
+					// which is what turns the 255 the stock `earthquake`
+					// authors into the −1 sentinel [06 R-WFX-01 §1]. Any
+					// other out-of-range byte resolves no entry and the
+					// resolver suppresses it there instead.
+					pv.Selector = int32(int8(uint8(w.Color)))
 				}
 			}
 			// The cached average floor height the ground shadow is anchored

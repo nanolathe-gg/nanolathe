@@ -112,9 +112,13 @@ func (s *Service) AcquireWeaponTarget(u *units.Unit, idx int, rangeLimit uint32,
 	return s.acquireTargetForSlotRange(u, u.SlotAt(idx), idx, w, vis, terrain, sim, econ, limit, catalog)
 }
 
-// WeaponCanEngage answers the hover attack's engagement query using the same
-// planar range relation used by shot admission. The detailed aim/projectile
-// gates remain in StepWeaponsForUnit [04 R-AIR-01 §8][06 §3.3].
+// WeaponCanEngage is the planar range relation of shot admission asked about
+// a slot's CURRENT target; the order adapter's Engaged port is bound to it.
+// It is NOT the hover attack's engagement query: that query is the
+// unit-to-unit shot-admission gate CanEngageSlotTarget, asked with the
+// record's target on slot 0 [04 R-AIR-01 §8] (corrected 2026-09-04,
+// WU-19-226 — the orbit counted a "miss" off this range test and never
+// consulted the gate's medium and air clauses).
 func WeaponCanEngage(u *units.Unit, idx int, target *units.Unit) bool {
 	s := orderSlot(u, idx)
 	if s == nil || s.Weapon == nil || u == nil || target == nil || !target.Alive {

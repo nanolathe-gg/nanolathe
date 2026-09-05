@@ -12587,8 +12587,27 @@ goal = a supplied triple); **follow-unit** (flags `0x01`, or `0x07` with the
 radial offset set to the unit's first weapon slot's `Range` in 16.16 — or
 `0x640000`, 100 world units, when that `Range` is zero — whenever the **target**
 is `canfly`); **follow-unit-piece** (flags `0x05`, with the piece index);
-**frozen terrain point** (flags `0xA3`, goal = a supplied triple); and the
-save/network reconstructor.
+**frozen terrain point** (flags `0xA3`, **the target**, goal = a supplied
+triple); and the save/network reconstructor.
+
+**Correction (2026-09-04, WU-19-226).** The frozen terrain-point constructor
+was listed above as "(flags `0xA3`, goal = a supplied triple)", with no
+target. Re-reading the constructor settles that it takes **three** things: the
+owning record, a **target unit** stored through the same weak-reference helper
+the follow-unit constructor uses, and the goal triple — and its one air caller,
+`AirToGroundHover` phase 3 ([R-AIR-01 §8]), passes the **record's target**. The
+omission mattered because the `0xA3` flags are exactly the follow bit, the
+radial bit, the terrain-altitude bit and the freeze bit: the freeze skips the
+follow branch of the goal update, so the goal never moves, but the **heading
+supply** and **persistence** methods below are not touched by the freeze and
+read the target as written — with a live target the marker supplies
+`bearing(unitPos, targetPos)` as the command heading (inside the producer's
+320-world-unit consultation range, [R-AIR-01 §1] step 5) and persists through
+arrival. Built without a target the same flags supply no heading and release on
+arrival, which is a point marker with a slower name; a reimplementation that
+followed the old text produced a gunship facing its own line of flight and
+firing only on the ticks its turn swept the target through the drift gate of
+[06 R-WPN-03 §2].
 
 **Established — goal update.** With flag `0x01` clear **or** flag `0x80` set,
 and only when flag `0x08` (explicit altitude offset) is clear, the marker
@@ -13298,8 +13317,26 @@ miss counter). Phase 3 is the orbit:
   horizontal arrival radius `0x10` (16), and gate `= 0x100E8`.
 * Then the same health-below-three-quarters find-a-base branch.
 
+**Established (2026-09-04, WU-19-226) — the two operands phase 3 leaves
+unnamed above.** The "can engage" query is the unit-to-unit **shot-admission
+gate** of [06 §3.1] — the same routine the attack and guard handlers ask
+before binding a slot ([R-ORD-01 §7]) — called with the unit, the **record's
+target** and slot **0**; it is not a planar range test on whatever the slot
+happens to hold. And the frozen terrain-relative marker is built **about the
+record's target** ([R-AIR-01 §4] as corrected the same day): while the
+target lives it supplies `bearing(unit, target)` as the command heading
+whenever the aircraft is within 320 world units of the standoff point, and it
+persists through arrival, so the arrival bit is raised on every tick the
+aircraft is inside the 16-unit radius and phase 3 re-runs to pick the other
+side. The flight integrator accelerates toward the command **position**
+independently of the heading ([04 §10.1]), which is why a gunship slides
+between its two standoff points broadside-on, facing the target the whole
+way, and fires on every reload once its line-of-sight weapon's `tolerance`
+yaw gate ([06 R-WPN-03 §2]) is satisfied by that facing.
+
 `hoverattack` selects this executor at command resolution; it changes no
-arithmetic inside the mover.
+arithmetic inside the mover. The facing is the marker's doing, not a mover
+branch on the flag.
 
 **Established — `AirToAir` uses a second, velocity-carrying goal payload.**
 The dogfight legs do not command a point: they command a *position and a

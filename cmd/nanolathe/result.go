@@ -448,8 +448,18 @@ func (h *retailBattleHUD) drawResultBar(c *client.Client, row, column, current, 
 			c.UIFillRect(innerX, innerY, fillX-innerX+1, innerH, h.guiColor(4))
 		}
 	}
-	if h.console != nil {
-		text := resultBarText(current)
+	// The kind-13 painter selects the window's GAF-font slot 1 (hattfont11)
+	// for its decimal and restores slot 0 afterwards; the number goes through
+	// the GAF pen with no width limit and mode 0, centred at
+	// `x + trunc(w/2) - trunc(tw/2)`, `y + trunc(h/2) - trunc(metric/2)` with
+	// `metric` the capital-I height plus two. Only a null slot reaches the FNT
+	// drawer [03 R-FONT-01 §6][07 R-HUD-03 §11].
+	text := resultBarText(current)
+	if h.modalFontSmall != nil {
+		textWidth := retailGAFTextWidth(h.modalFontSmall, text)
+		fontMetric := retailGAFTextHeight(h.modalFontSmall)
+		drawRetailGAFText(c, h.modalFontSmall, text, x+33-textWidth/2, y+9-fontMetric/2, -1)
+	} else if h.console != nil {
 		textWidth := client.MeasureText(h.console, text)
 		fontMetric := int(h.console.Height)
 		c.UIText(h.console, text, x+33-textWidth/2, y+9-fontMetric/2, h.guiColor(15))

@@ -537,8 +537,22 @@ func TestSnapshotContainsProjectileRenderState(t *testing.T) {
 	if got.Family != int32(combat.CreationBallistic) || got.RenderType != w.RenderType || got.Model != w.Model || got.Graphic != w.Model || !got.SmokeTrail || got.Lifetime != w.WeaponTimer {
 		t.Fatalf("authored render metadata = %+v", got)
 	}
-	if got.Selector != -1 {
-		t.Fatalf("selector = %d, want explicit suppression sentinel", got.Selector)
+	// The selector is the weapon record's `color` BYTE, not a placeholder: it
+	// is the render-type-4 sequence selector and, read as a signed value, the
+	// 255 the stock `earthquake` authors becomes the −1 that suppresses that
+	// case [06 R-WFX-01 §1][06 R-WFX-01 §4]. `color` and `color2` are also the
+	// palette indices the beam and lightning strokes are drawn in, so both
+	// travel with a presence bit. This assertion used to demand the
+	// unconditional −1 the publication wrote before any of that was carried —
+	// which suppressed every gun, shell and laser in the game at the dispatch.
+	if got.Selector != int32(w.Color) || !got.HasPrimaryColor || got.PrimaryColor != uint8(w.Color) || !got.HasSecondaryColor || got.SecondaryColor != uint8(w.Color2) {
+		t.Fatalf("colour/selector = selector %d, primary %d/%v, secondary %d/%v; want the authored `color`/`color2` bytes",
+			got.Selector, got.PrimaryColor, got.HasPrimaryColor, got.SecondaryColor, got.HasSecondaryColor)
+	}
+	w.Color = 255
+	s.publishSnapshot(11)
+	if again := s.Snapshot.Current().Projectiles[0]; again.Selector != -1 || again.PrimaryColor != 255 {
+		t.Fatalf("an authored `color` of 255 published selector %d colour %d, want the −1 suppression sentinel over the unchanged byte", again.Selector, again.PrimaryColor)
 	}
 }
 

@@ -27,6 +27,10 @@ var projectileSelectorSequences = [...]string{
 	"plasmasm",
 }
 
+// projectileLifetimeSequence is render type 5's one fixed sequence
+// [06 R-WFX-01 §1].
+const projectileLifetimeSequence = "flamestream"
+
 // ProjectileVisibilityMode selects the published coverage representation.
 // Byte coverage is the current local-player grid; zero selects the local bit
 // in the one-point word grid [03 §5.4].
@@ -71,16 +75,26 @@ func PointVisible(v frame.VisibilityView, x, y, z numeric.Fixed, mode uint8, loc
 }
 
 // projectileDispatchOptions supplies only metadata established by the
-// immutable publication boundary. Shared-GAF lookup remains unresolved because
-// the committed view does not publish its archive/entry route; those families
-// stay suppressed rather than selecting a synthetic sprite or palette byte.
+// immutable publication boundary. The shared-GAF lookup reaches the fixed `fx`
+// slots the retail trace closed and nothing else: a family whose art identity
+// is not published stays suppressed rather than selecting a synthetic sprite or
+// palette byte [06 R-WFX-01 §1].
 func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 	return render.ProjectileDispatchOptions{
 		FrameCount: func(v frame.ProjectileView) (int, bool) {
-			if v.FrameCount <= 0 {
-				return 0, false
+			if v.FrameCount > 0 {
+				return int(v.FrameCount), true
 			}
-			return int(v.FrameCount), true
+			// The frame count of the two frame-selected families is a
+			// property of the shared `fx` bank entry, not of the committed
+			// record: type 4 wraps `(now − creationTick)` modulo the
+			// selected sequence's length and type 5 scales its lifetime by
+			// `flamestream`'s [06 R-WFX-01 §4]. The publication boundary
+			// carries the authored selector; the entry it names is
+			// presentation asset data and is resolved here, through the same
+			// bank cache the frame blit goes through, so the modulus and the
+			// frame that is blitted can never disagree.
+			return c.projectileSequenceFrameCount(v)
 		},
 		Color: func(v frame.ProjectileView) (int32, int32, bool) {
 			if !v.HasPrimaryColor {
@@ -106,6 +120,43 @@ func (c *Client) projectileDispatchOptions() render.ProjectileDispatchOptions {
 		},
 		ResolveGAF: c.resolveProjectileGAF,
 	}
+}
+
+// projectileSequenceFrameCount reports how many frames the shared `fx`
+// sequence a frame-selected projectile draws holds [06 R-WFX-01 §1][06
+// R-WFX-01 §4].
+//
+// Only the two families that index a sequence by frame have one: render type 4
+// selects one of the five fixed slots with the weapon's `color` byte, and
+// render type 5 has the single fixed `flamestream`. Every other family draws a
+// model, a stroke or a single fixed frame and has no modulus to take, so it
+// reports no count rather than a plausible one.
+func (c *Client) projectileSequenceFrameCount(v frame.ProjectileView) (int, bool) {
+	var name string
+	switch v.RenderType {
+	case render.RenderTypeSelectorGAF:
+		if v.Selector < 0 || v.Selector >= int32(len(projectileSelectorSequences)) {
+			return 0, false
+		}
+		name = projectileSelectorSequences[v.Selector]
+	case render.RenderTypeLifetimeGAF:
+		name = projectileLifetimeSequence
+	default:
+		return 0, false
+	}
+	gaf := c.ensureProjectileGAF()
+	if gaf == nil {
+		return 0, false
+	}
+	entry, ok := gaf.Find(name)
+	if !ok || entry == nil || entry.FrameCount == 0 || len(entry.Frames) == 0 {
+		return 0, false
+	}
+	n := int(entry.FrameCount)
+	if len(entry.Frames) < n {
+		n = len(entry.Frames)
+	}
+	return n, true
 }
 
 // ensureProjectileGAF performs one lazy lookup of the shared projectile bank.
@@ -155,7 +206,7 @@ func (c *Client) resolveProjectileGAF(req render.ProjectileGAFRequest) (*formats
 		if req.Sequence != 0 {
 			return nil, false
 		}
-		name = "flamestream"
+		name = projectileLifetimeSequence
 	default:
 		// Type 2's lens is a startup-built displacement frame rather than a
 		// shared fx.gaf entry. Its pixel mechanics remain owned by doc 03.

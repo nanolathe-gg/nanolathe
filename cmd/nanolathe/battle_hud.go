@@ -54,8 +54,17 @@ type retailBattleHUD struct {
 	// screenW/screenH is the negotiated surface size the chrome is currently
 	// laid out for; applyDisplaySize re-places the size-dependent windows when
 	// it changes [07 R-HUD-05].
-	screenW, screenH   int32
-	modalFont          *formats.GAFEntry
+	screenW, screenH int32
+	modalFont        *formats.GAFEntry
+	// modalFontSmall is GAF-font slot 1, anims/hattfont11.gaf — the face the
+	// composer selects for the slide strip's three readouts and the kind-13
+	// score-bar painter selects for its decimal, each restoring slot 0
+	// (modalFont, hattfont12) afterwards [03 R-FONT-01 §5][07 R-HUD-04 §4].
+	modalFontSmall *formats.GAFEntry
+	// stripArt is the cached second frame (index 1) of the common GUI GAF's
+	// `LIGHTBAR` entry with its hotspot zeroed: the band the Space-held slide
+	// strip is blitted from [07 R-HUD-04 §4].
+	stripArt           *formats.GAFFrame
 	pausedFrame        *formats.GAFFrame
 	victoryFrame       *formats.GAFFrame  // [07 §11] igvictory from anims/igtitles.gaf via intgaf/gui machinery
 	defeatFrame        *formats.GAFFrame  // [07 §11] igdefeat from anims/igtitles.gaf
@@ -283,6 +292,30 @@ func loadGUIOptional(fs vfs.FSOps, logical, ctx string) *gui.Window {
 	return w
 }
 
+// loadGAFFontOptional loads one GAF font's glyph entry, or nil with a
+// provider-aware warning: a missing GAF font is a null slot, not fatal
+// [03 R-FONT-01 §5].
+func loadGAFFontOptional(fs vfs.FSOps, logical, ctx string) *formats.GAFEntry {
+	gaf, err := formats.LoadGAFFile(fs, logical)
+	if err != nil {
+		hudAssetWarning(fs, logical, ctx, err)
+		return nil
+	}
+	if len(gaf.Entries) == 0 || len(gaf.Entries[0].Frames) == 0 {
+		hudAssetWarning(fs, logical, ctx+" has no glyph entry", fmt.Errorf("empty"))
+		return nil
+	}
+	return &gaf.Entries[0]
+}
+
+// optionsMissionButton is the ARMOPT control the opener relabels outside a
+// campaign, and optionsSettingsLabel the translation key it installs
+// [07 R-FE-01 §7].
+const (
+	optionsMissionButton = "MISSION"
+	optionsSettingsLabel = "Settings"
+)
+
 func battleFrameWithDiag(fs vfs.FSOps, g *formats.GAF, logical, name string) (*formats.GAFFrame, error) {
 	f, err := battleFrame(g, name)
 	if err != nil {
@@ -369,17 +402,35 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	optionsGAF := loadGAFOptional(fs, "anims/armopt.gaf", "options GAF [07 \"Tab options menu and manual exit\"]")
 	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]")
 	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]")
-	// Optional modal font — degradable [07 §4].
-	var modalFont *formats.GAFEntry
-	hattPath := "anims/hattfont12.gaf"
-	if gaf, ferr := formats.LoadGAFFile(fs, hattPath); ferr == nil {
-		if len(gaf.Entries) == 0 || len(gaf.Entries[0].Frames) == 0 {
-			hudAssetWarning(fs, hattPath, "hattfont12.gaf has no glyph entry [07 §4]", fmt.Errorf("empty"))
+	// Optional modal fonts — degradable [07 §4]. Startup hands the GUI window
+	// slot 0 = hattfont12 and slot 1 = hattfont11; a missing GAF font is a null
+	// slot, not fatal [03 R-FONT-01 §5].
+	modalFont := loadGAFFontOptional(fs, "anims/hattfont12.gaf", "hattfont12.gaf [07 §4]")
+	modalFontSmall := loadGAFFontOptional(fs, "anims/hattfont11.gaf", "hattfont11.gaf [03 R-FONT-01 §5]")
+	// The slide strip's band: frame index 1 of the common GUI GAF's LIGHTBAR
+	// entry, cached at battle-data initialization with its hotspot words
+	// zeroed so the blit lands exactly at the strip origin [07 R-HUD-04 §4].
+	var stripArt *formats.GAFFrame
+	if common != nil {
+		if entry, ok := common.Find("LIGHTBAR"); ok && len(entry.Frames) > 1 && entry.Frames[1].Frame != nil {
+			stripArt = entry.Frames[1].Frame
 		} else {
-			modalFont = &gaf.Entries[0]
+			hudAssetWarning(fs, "anims/commongui.gaf", "LIGHTBAR has no second frame for the slide strip [07 R-HUD-04 §4]", fmt.Errorf("missing authored frame"))
 		}
-	} else {
-		hudAssetWarning(fs, hattPath, "hattfont12.gaf [07 §4]", ferr)
+	}
+	// The options opener relabels `MISSION` to the translated `Settings`
+	// whenever the session kind is skirmish or multiplayer; only a campaign
+	// mission keeps the authored `Briefing` (and reaches BRIEFING.GUI from it;
+	// the other kinds reach GAMEOPTIONS.GUI) [07 R-FE-01 §7]. The button is
+	// relabelled, never hidden or greyed. With no translation table loaded
+	// the key is returned verbatim [02 "Translation table"].
+	if optionsWin != nil && !(sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign) {
+		for i := range optionsWin.Gadgets {
+			if gui.Name16Equal(optionsWin.Gadgets[i].Name, optionsMissionButton) {
+				optionsWin.Gadgets[i].Text = optionsSettingsLabel
+				optionsWin.Gadgets[i].Labels = nil
+			}
+		}
 	}
 	// Optional title art — degradable [07 §11]. Load via same intgaf/gui machinery as HUD panels [07 §6][07 §11].
 	var pausedFrame, victoryFrame, defeatFrame *formats.GAFFrame
@@ -432,7 +483,8 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
-		modalFont: modalFont, pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
+		modalFont: modalFont, modalFontSmall: modalFontSmall, stripArt: stripArt,
+		pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
 		fs:                fs,
 		pages:             make(map[string]*formats.GAF),
@@ -1458,23 +1510,109 @@ func modalArtResampled(kind gui.Kind, frame *formats.GAFFrame, r gui.Rect) bool 
 	return int32(frame.Width) != r.W || int32(frame.Height) != r.H
 }
 
+// drawWindowBackground paints a window's panel fill the way the initializer's
+// first paint does [07 §4]. The panel entry is resolved own GAF → common GAF →
+// the common GAF's literal `BackTile` (every frame's hotspot zeroed) and the
+// tile fill then draws it across the root rectangle [07 R-WGT-02] — see
+// nineSliceFill for the frame selection. EXITMENU.GUI authors an empty
+// `panel=` and YESORNO.GUI an unusable one, so both reach `BackTile`, whose
+// nine frames are a bevelled frame with a dark interior; this used to stamp
+// frame 0 (the top-left corner piece) over the whole window, which drew a
+// grid of corner pieces where retail shows one bordered plate.
 func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Window, page *formats.GAF) {
 	if window == nil || window.Rect.W <= 0 || window.Rect.H <= 0 {
 		return
 	}
-	frame := h.modalArtFrame(window.Header.Panel, page)
-	if frame == nil {
-		// YESORNO.GUI has no usable PANEL value. Retail does not treat that as
-		// a transparent dialog: the initializer makes one final literal BackTile
-		// lookup after the file-specific and GUI-context searches.
-		frame = h.modalArtFrame("BackTile", page)
-	}
-	if frame == nil || frame.Width == 0 || frame.Height == 0 {
+	entry := h.modalPanelEntry(window.Header.Panel, page)
+	if entry == nil {
 		return
 	}
-	for y := int(window.Rect.Y); y < int(window.Rect.Y+window.Rect.H); y += int(frame.Height) {
-		for x := int(window.Rect.X); x < int(window.Rect.X+window.Rect.W); x += int(frame.Width) {
-			c.UIBlitClipped(frame, x, y, int(window.Rect.X), int(window.Rect.Y), int(window.Rect.W), int(window.Rect.H))
+	nineSliceFill(entry, int(window.Rect.X), int(window.Rect.Y), int(window.Rect.W), int(window.Rect.H), func(f *formats.GAFFrame, x, y int) {
+		c.UIBlitClipped(f, x, y, int(window.Rect.X), int(window.Rect.Y), int(window.Rect.W), int(window.Rect.H))
+	})
+}
+
+// modalPanelEntry resolves a window's panel entry: the window's own GAF, then
+// the common GUI GAF, then the common GAF's literal `BackTile` [07 §4]
+// [07 R-WGT-02]. A name that resolves nowhere, or an empty one, falls to
+// `BackTile`; only a common GAF without `BackTile` yields nil.
+func (h *retailBattleHUD) modalPanelEntry(name string, page *formats.GAF) *formats.GAFEntry {
+	if name != "" {
+		for _, gaf := range []*formats.GAF{page, h.common} {
+			if gaf == nil {
+				continue
+			}
+			if entry, ok := gaf.Find(name); ok && len(entry.Frames) != 0 {
+				return entry
+			}
+		}
+	}
+	if h.common != nil {
+		if entry, ok := h.common.Find("BackTile"); ok && len(entry.Frames) != 0 {
+			return entry
+		}
+	}
+	return nil
+}
+
+// nineSliceFill is the GUI tile fill for a resolved art entry over the
+// rectangle `(x0, y0)` of size `w x h` [07 R-WGT-02 "tile fill"].
+//
+// An entry with fewer than two frames is stamped once at the origin and is
+// not tiled. Otherwise frame 0's size is the tile pitch and every tile picks
+// its frame by band and column, `band + column` in 0..8:
+//
+//	band:   0 on the first row; then 6 (bottom) when the tile would overflow
+//	        the rectangle (`y + tileH > h`), else 3 (middle);
+//	column: 2 (right) when the tile reaches or passes the right edge
+//	        (`x + tileW >= w`), else 1 (middle) unless `x == 0`, then 0 (left).
+//
+// A row that overflows is pulled flush to the bottom (`y = h - tileH`) and a
+// right column flush to the right (`x = w - tileW`), overlapping the previous
+// tile rather than being clipped. The two edge tests differ in strictness — a
+// row that ends exactly on the bottom edge is a middle band, a column that
+// ends exactly on the right edge is the right column — and are kept as traced.
+func nineSliceFill(entry *formats.GAFEntry, x0, y0, w, h int, blit func(f *formats.GAFFrame, x, y int)) {
+	if entry == nil || len(entry.Frames) == 0 || w <= 0 || h <= 0 {
+		return
+	}
+	frame := func(i int) *formats.GAFFrame {
+		if i < 0 || i >= len(entry.Frames) {
+			return nil
+		}
+		return entry.Frames[i].Frame
+	}
+	first := frame(0)
+	if first == nil || first.Width == 0 || first.Height == 0 {
+		return
+	}
+	if len(entry.Frames) < 2 {
+		blit(first, x0, y0)
+		return
+	}
+	tileW, tileH := int(first.Width), int(first.Height)
+	for y := 0; y < h; y += tileH {
+		band := 0
+		if y != 0 {
+			band = 3
+			if y+tileH > h {
+				band = 6
+			}
+		}
+		if y+tileH > h {
+			y = h - tileH
+		}
+		for x := 0; x < w; x += tileW {
+			column := 0
+			if x+tileW >= w {
+				column = 2
+				x = w - tileW
+			} else if x != 0 {
+				column = 1
+			}
+			if f := frame(band + column); f != nil {
+				blit(f, x0+x, y0+y)
+			}
 		}
 	}
 }
@@ -1669,32 +1807,38 @@ func formatEnergyRate(value float32) string {
 // ENERGYPRODUCED at (609,5), so painting the clock there overlapped the
 // energy production reading and partly occluded it. The running display
 // belongs to the Space-held slide strip, whose three translated lines are
-// `Game Time:` as hh:mm:ss, `Total Units: %d (Max %d)` and `Game Speed: %s%s`
-// [07 R-HUD-03 §6].
+// `Game Time : hh:mm:ss`, `Total Units : %d  (Max %d)` and `Game Speed %s%s`
+// [07 R-HUD-04 §4].
 //
-// The slide strip's text placement is now established [07 R-HUD-04 §4]: with
-// `x` the composer surface rectangle's left edge, `yBottom` its bottom edge
-// and `off` the slide offset (-31..0, drawn only while non-zero), the three
-// strings are written on one line at `yBottom + off + 10` — `Game Time:` at
-// `x + 25`, `Total Units:` at `x + 190`, `Game Speed:` at `x + 380` — in the
-// default font at light-table row 0. drawSlideStrip below is that draw; the
-// strip used to paint its art with no text at all.
+// The slide strip's placement is established [07 R-HUD-04 §4]: with `x` the
+// composer clip rectangle's left edge (the view's, 128), `yBottom` its bottom
+// edge (H - 33) and `off` the slide offset (-31..0, drawn only while
+// non-zero), the band is blitted at `(x, yBottom + off)` and the three
+// strings are written on one line at `yBottom + off + 10` — `Game Time` at
+// `x + 25`, `Total Units` at `x + 190`, `Game Speed` at `x + 380` — in GAF
+// slot 1 (hattfont11). drawSlideStrip below is that draw.
 
-// Slide-strip text offsets [07 R-HUD-04 §4]. `x` is the composer surface
-// rectangle's left edge and `yBottom` its bottom edge.
+// Slide-strip geometry [07 R-HUD-04 §4]. `x` is the composer surface
+// rectangle's left edge and `yBottom` its bottom edge. In battle that
+// rectangle is the composer's clip rectangle, which battle entry sets to the
+// view — left 128, top 32, right W-1, bottom H-33 — so the strip's origin is
+// the view's bottom-left corner, not the screen's.
 const (
-	slideStripTimeX  = 25
-	slideStripUnitsX = 190
-	slideStripSpeedX = 380
-	slideStripTextY  = 10
+	slideStripViewLeft     = 128
+	slideStripViewBottomUp = 33
+	slideStripTimeX        = 25
+	slideStripUnitsX       = 190
+	slideStripSpeedX       = 380
+	slideStripTextY        = 10
 	// slideStripNormalSpeed is the speed word at which the line prints the
 	// localized normal word instead of an offset [07 §6][07 R-CAM-01 §3].
 	slideStripNormalSpeed = 10
 )
 
-// drawSlideStrip writes the §6 strip's three readouts. The strip is drawn only
-// while the slide offset is non-zero — at 0 it is off screen — and every string
-// sits on one line at `yBottom + off + 10` [07 R-HUD-04 §4][07 §6].
+// drawSlideStrip draws the §6 strip: the band, then its three readouts. The
+// strip is drawn only while the slide offset is non-zero — at 0 it is off
+// screen — and every string sits on one line at `yBottom + off + 10`
+// [07 R-HUD-04 §4][07 §6].
 //
 // The composer steps this strip in every session kind, unlike the Space-held
 // score panel of [07 R-HUD-04 §1], and its show test is Space unless a text
@@ -1706,20 +1850,21 @@ const (
 // is held" [07 R-HUD-03 §1 "the panel-slide gate"], and neither PANELSIDE nor
 // any rail window or gadget rectangle moves with it [07 R-HUD-05].
 //
-// TODO(question): [07 R-HUD-04 §4] says "the strip art is blitted at
-// (x, yBottom + off)" without naming which GAF entry that art is, and no other
-// section names it, so only the three text readouts are drawn here and the
-// bottom strip's own PANELBOT backdrop shows through behind them. A trace of
-// the composer's slide-strip draw naming the cached entry the blit reads — or a
-// retail capture of the Space-held bottom band next to the parked one — would
-// settle it. Note also that [07 §6]'s "Panel slide" paragraph labels -31
-// "parked" and 0 "fully visible", which is the reverse of what [07 R-HUD-04 §4]
-// ("drawn only while non-zero") and [07 R-HUD-03 §1] ("slides up ... when Space
-// is held", and Space held drives toward -31) establish; the arithmetic in both
-// readings agrees, only the two labels disagree, and this code follows the two
-// later closures.
+// Band. The art is frame index 1 of the common GUI GAF's `LIGHTBAR` entry
+// (507x32 in the stock file), cached with its hotspot zeroed and blitted by
+// the plain frame blitter at `(x, yBottom + off)` [07 R-HUD-04 §4]. This used
+// to be a TODO(question): the band was not drawn and PANELBOT showed through.
+//
+// Text. The composer selects the window's GAF-font slot 1 (hattfont11) for the
+// three strings and restores slot 0 afterwards; each goes through the GAF pen
+// with no width limit and mode 0 — glyph bytes copied, no light-table remap
+// [03 R-FONT-01 §6][07 R-HUD-04 §4]. The formats are literal: `%s : %02d:%02d:%02d`,
+// `%s : %d  (Max %d)` (two spaces) and `%s %s`, each `%s` the translated key
+// `Game Time` / `Total Units` / `Game Speed`; no colon follows the key. This
+// used to be drawn with the side FNT in the GUI colour map's entry 0 at
+// screen-relative offsets, which is what made it look unlike retail.
 func (h *retailBattleHUD) drawSlideStrip(c *client.Client, b *battleSession, cur *frame.Frame) {
-	if h == nil || c == nil || b == nil || cur == nil || h.console == nil {
+	if h == nil || c == nil || b == nil || cur == nil {
 		return
 	}
 	off := int(b.battleState().PanelOffset)
@@ -1727,17 +1872,43 @@ func (h *retailBattleHUD) drawSlideStrip(c *client.Client, b *battleSession, cur
 		return
 	}
 	_, height := c.Size()
-	y := height + off + slideStripTextY
-	write := func(x int, text string) {
-		c.UIText(h.console, text, x, y, h.guiColor(0))
+	x := slideStripViewLeft
+	yBottom := height - slideStripViewBottomUp
+	if h.stripArt != nil {
+		c.UIBlit(h.stripArt, x, yBottom+off)
 	}
-	write(slideStripTimeX, "Game Time: "+retailSummaryTime(int32(cur.Tick)))
+	font := h.modalFontSmall
+	y := yBottom + off + slideStripTextY
+	write := func(dx int, text string) {
+		if font != nil {
+			drawRetailGAFText(c, font, text, x+dx, y, -1)
+		} else if h.console != nil {
+			// Null slot: the pen falls back to the active FNT with the width
+			// limit dropped [03 R-FONT-01 §6].
+			c.UIText(h.console, text, x+dx, y, h.guiColor(0))
+		}
+	}
 	live := 0
 	if slot := int(cur.Selection.LocalPlayer); slot >= 0 && slot < len(cur.Players) {
 		live = cur.Players[slot].LiveUnits
 	}
-	write(slideStripUnitsX, fmt.Sprintf("Total Units: %d (Max %d)", live, cur.Strip.UnitLimit))
-	write(slideStripSpeedX, "Game Speed: "+slideStripSpeedText(cur.Strip))
+	write(slideStripTimeX, slideStripTimeText(int32(cur.Tick)))
+	write(slideStripUnitsX, slideStripUnitsText(live, cur.Strip.UnitLimit))
+	write(slideStripSpeedX, "Game Speed "+slideStripSpeedText(cur.Strip))
+}
+
+// slideStripTimeText is the strip's clock line, `%s : %02d:%02d:%02d` of the
+// translated `Game Time` key and the tick count as h:m:s at 30 Hz
+// [07 R-HUD-04 §4].
+func slideStripTimeText(tick int32) string {
+	return "Game Time : " + retailSummaryTime(tick)
+}
+
+// slideStripUnitsText is the strip's unit line, `%s : %d  (Max %d)` — note the
+// two spaces before the parenthesis — of the translated `Total Units` key
+// [07 R-HUD-04 §4].
+func slideStripUnitsText(live int, limit int32) string {
+	return fmt.Sprintf("Total Units : %d  (Max %d)", live, limit)
 }
 
 // slideStripSpeedText is the composer's own speed formatter, which is separate

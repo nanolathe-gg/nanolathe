@@ -328,6 +328,13 @@ so `Game Speed: Normal (+2)` is a reachable string while the adaptation is
 above a target of 10. This settles the reading the composer's paragraph in §6
 left open; nothing above is corrected by it.
 
+**Correction (2026-09-04, WU-19-230).** The strip's line carries **no colon**:
+its format is `%s %s` of the translated `Game Speed` key and the `Normal` /
+`%+d` text, so the reachable strings are `Game Speed Normal`, `Game Speed +3`
+and `Game Speed Normal (+2)`, not `Game Speed: …` as the two paragraphs above
+spell them. The colon was a gloss, never read from the executable; the exact
+formats of all three strip lines are in [R-HUD-04 §4]. **Established.**
+
 ### Closed — `SwitchAlt` [R-CAM-01 §4] (2026-08-29)
 
 **Established fact.** `SwitchAlt` is a persistent interface option: registry
@@ -1580,6 +1587,43 @@ inset by 3, [R-WGT-01 §4].) The `TODO(T23)` is closed. Whether the stock
 `commongui.gaf` authors a `BackTile` entry — which decides whether any stock
 window ever shows the bevel — is an asset question, not an engine one.
 
+**Closed (2026-09-04, WU-19-230) — how the tile fill tiles.** Static trace of
+the fill routine and an asset census; trail
+`/tmp/ta-decompile/notes/wu-19-230.md`. "Tiles it across the rectangle" above
+under-describes the routine. With the resolved entry `E`, the panel's
+rectangle `(x1, y1)–(x2, y2)` inclusive (`W = x2 − x1 + 1`, `H = y2 − y1 +
+1`), and the origin `(0, 0)` of the window's own surface for the panel itself
+(gadget 0) or `(x1, y1)` for any other gadget:
+
+* an entry with **fewer than two frames** is stamped once at the origin and
+  is not tiled;
+* otherwise frame 0's width and height are the tile pitch `tw × th`, and
+  every tile picks its frame as `band + column`, walking rows `y = 0, th, 2th,
+  …` while `y < H` and columns `x = 0, tw, …` while `x < W`:
+  * `band` is `0` on the first row (`y == 0`); on later rows `6` when the
+    tile would overflow the rectangle (`y + th > H`), else `3`;
+  * a row that would overflow is pulled flush: `y := H − th` (the tile
+    overlaps the previous row rather than being clipped);
+  * `column` is `2` when the tile reaches or passes the right edge
+    (`x + tw >= W`), in which case `x := W − tw` likewise; else `1`, except
+    `0` when `x == 0`.
+
+  The two edge tests differ in strictness: a row ending exactly on the bottom
+  edge is a *middle* band (`3..5`), while a column ending exactly on the right
+  edge is the *right* column. Frame indices `0..8` are therefore a nine-slice
+  — top-left, top, top-right, left, centre, right, bottom-left, bottom,
+  bottom-right — and a rectangle smaller than one tile draws a negative-offset
+  top band, clipped by the surface.
+
+*Asset census.* The stock `anims/commongui.gaf` **does** author `BackTile`:
+nine 64 × 64 frames, a bevelled metal frame with a dark interior. So the
+art-less bevel branch never fires for a stock window whose `panel` resolves
+nowhere — `EXITMENU.GUI` (empty `panel=`), `YESORNO.GUI` (unusable bytes),
+`MSGBOX.GUI` and `ARMOPT.GUI` all fill from `BackTile` as a nine-slice plate:
+corner and edge frames along the border, the centre frame across the
+interior. A retail capture of the in-battle exit and confirmation windows
+(2026-08-09) shows exactly that plate. **Established.**
+
 ## 5. Front-end screen and state families
 
 The following state families are directly evidenced by GUI names, strings,
@@ -2581,8 +2625,11 @@ value < 0 → 0; the others none.
 ### Closed — the in-battle menus [R-FE-01 §7] (2026-08-29)
 
 **Established fact.** `ARMOPT.GUI` (Escape; flags `0x800`) grays `SAVEGAME`
-and `LOADGAME` in a multiplayer game, relabels `MISSION` to `Settings` for
-skirmish and multiplayer, sets the pause bit outside multiplayer and pauses
+and `LOADGAME` in a multiplayer game, relabels `MISSION` to the translated
+`Settings` for skirmish and multiplayer (session kind 2 or 3 — the button is
+relabelled through the gadget text setter, never hidden or greyed; a retail
+skirmish capture of 2026-08-09 shows `Settings` in the `Briefing` slot),
+sets the pause bit outside multiplayer and pauses
 audio; its close clears both and the options-open bit. Buttons: `LOADGAME`
 / `SAVEGAME` → the two `LOADGAME.GUI` modes (§8); `PREFS` → the options
 root (§6); `HELP` → `HELP.GUI` (flags `0x1881`, background `dhelp`) whose
@@ -3200,9 +3247,6 @@ recorded once in [R-FE-02 §1].
 - Whether the label under a briefing blink word also draws the run (so the
   blink overdraws it) or elides it · [R-FE-02 §7] · static trace of the
   pager's copy loop.
-- Whether the stock `commongui.gaf` authors a `BackTile` entry, which decides
-  whether any stock window ever shows the art-less bevel · [R-FE-02 §4] ·
-  asset census.
 - Process-level outcome of a missing or parser-rejected required `.GUI` file
   for the openers that do not check the open result (every front-end screen;
   the `MSGBOX`, `YESORNO` and build-page openers do check) · static trace.
@@ -3597,13 +3641,23 @@ three translated strings are drawn onto it: `Game Time:` as `hh:mm:ss`,
 when the requested speed differs from the active speed and the localized
 normal-speed word at value 10.
 
+**Correction (2026-09-04, WU-19-230).** The three formats above are glosses;
+the literal formats are `%s : %02d:%02d:%02d`, `%s : %d  (Max %d)` (two
+spaces before the parenthesis) and `%s %s`, each `%s` the translated key
+`Game Time` / `Total Units` / `Game Speed` — a space-colon-space follows the
+first two keys and nothing follows the third. The band is frame index 1 of
+the common GUI GAF's `LIGHTBAR` entry and the font is GAF slot 1
+(`hattfont11`); both are closed in [R-HUD-04 §4]. **Established.**
+
 **Text placement (Established, 2026-09-02 — [R-HUD-04 §4]).** "y" above is
 the composer surface rectangle's **bottom** edge and the offset runs `−31..0`
 (the strip rises out of the bottom edge; at `0` it is off screen and not
 drawn). With `x` the rectangle's left edge, the three strings are written on
 one line at `yBottom + offset + 10`: `Game Time:` at `x + 25`, `Total Units:`
 at `x + 190`, `Game Speed:` at `x + 380`, through the panel text writer with
-the default font and light-table row 0.
+the default font and light-table row 0. (The "default font" is GAF slot 1,
+selected for the three strings and restored afterwards, and the rectangle is
+the battle view `(128, 32)–(W−1, H−33)` — [R-HUD-04 §4], 2026-09-04.)
 
 **Frame composition passes.** The master battle frame runs ten ordered layer
 passes: terrain tiles → features/wrecks → soft units → hard units → shadows
@@ -7811,6 +7865,47 @@ it completes or corrects.
 * **F4 (Established).** The kill/loss flash arms only while interface-flags
   bit `0x80` is set (§1, [R-CAM-01 §14]).
 
+**Closed (2026-09-04, WU-19-230) — the slide strip's band, rectangle, font
+and formats.** Static trace of the battle-data initializer and the composer's
+strip draw; trail `/tmp/ta-decompile/notes/wu-19-230.md`. Completes the
+"Slide strip text" bullet above, which named no art entry, and corrects two
+of its words.
+
+* *Band.* Battle-data initialization looks up entry `LIGHTBAR` of the common
+  GUI GAF (`anims/commongui.gaf`, the window record's common GAF of
+  [03 R-FONT-01 §5]), takes **frame index 1** (the second frame; 507 × 32 in
+  the stock file — index 2 is the 149 × 354 stamp of §2), zeroes that frame's
+  two hotspot words in place, and caches the frame pointer; the composer
+  blits it through the plain frame blitter at `(x, yBottom + off)`. With the
+  hotspot zeroed the blit lands exactly there. Zero frames in the entry
+  leaves a null cache and nothing draws.
+* *Rectangle.* `x` and `yBottom` are the left and bottom edges of the
+  composer surface's **clip rectangle**, which battle entry sets to the view:
+  left `128`, top `32`, right `W − 1`, bottom `H − 33` (screen height less
+  the 32-row bottom strip, less one). At 640 × 480 the fully raised band
+  therefore covers rows `416..447` of columns `128..634` and the text line
+  is `y = 426`, with `Game Time` at `x = 153`, `Total Units` at `318` and
+  `Game Speed` at `508`. The bullet's "surface rectangle" is that clip
+  rectangle, not the screen.
+* *Font.* Before the first string the composer writes the window record's
+  current-GAF-font word from **slot 1** (`hattfont11`) and after the last it
+  restores slot 0 (`hattfont12`); the strings go through the GAF pen of
+  [03 R-FONT-01 §6] with no width limit and mode 0 (glyph bytes copied, no
+  light-table remap), so "default font, light-table row 0" above means slot 1
+  and the plain blitter. The side FNT is reached only through the pen's
+  null-slot fallback.
+* *Formats.* Literal, with the translated key as the first `%s`:
+  `%s : %02d:%02d:%02d` (`Game Time`; hours, minutes, seconds of the tick
+  count at 30 per second), `%s : %d  (Max %d)` (`Total Units`; the local
+  player's live count and the unit limit; two spaces before the
+  parenthesis), and `%s %s` (`Game Speed`; the `Normal`-or-`%+d` text of
+  [R-CAM-01 §3], with ` (%+d)` appended afterwards while the adapted speed
+  differs). No colon follows `Game Speed`; a space-colon-space follows the
+  other two keys. With no translation table loaded every key is returned
+  verbatim [02 "Translation table"].
+
+**Established.**
+
 `campaignside = ALL` needs no retail contract beyond [R-FE-01 §4]: the side a
 campaign battle uses when the campaign names none is the local player's side
 record, written from the registry `side` word before the campaign was chosen;
@@ -8058,9 +8153,6 @@ section rather than deleted.
   trace.
 - Whether the label under a briefing blink word also draws the run, or
   elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.
-- Whether stock `commongui.gaf` authors a `BackTile` entry (decides whether
-  any stock window shows the art-less bevel of [R-FE-02 §4]) · §4 · asset
-  census.
 - The per-window census of authored gadget association ids · §4, doc 02 §6 ·
   asset census. (Bubbling, default controls, shared focus, capture and
   association precedence, listbox rows, picture-box binding and the widget
@@ -8134,13 +8226,6 @@ section rather than deleted.
   entries · §10, doc 03 §3.3 · static trace.
 - Whether any transient follow-target or shake state is reconstructed from a
   non-`Camera` save account · §10, doc 08 · static trace.
-- Which cached GAF entry the §6 slide strip's art is. [R-HUD-04 §4] closes the
-  strip's placement — "the strip art is blitted at `(x, yBottom + off)`", with
-  the three readouts at `yBottom + off + 10` — but names no entry, and no other
-  section names one either, so a reimplementation can place the readouts and
-  not the band behind them · §6 [R-HUD-04 §4], [R-HUD-03 §1] · static trace of
-  the composer's slide-strip draw naming the cached entry the blit reads, or a
-  retail capture of the Space-held bottom band beside the parked one.
 - Start-position markers · doc 03 · static trace.
 - Outcome transition timing · §11 · static trace. (The endgame bar-fill
   animation is closed in §6 [R-HUD-03 §11].)

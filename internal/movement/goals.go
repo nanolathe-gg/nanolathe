@@ -268,7 +268,7 @@ func (s *System) InstallAirGoal(req orders.AirGoalRequest) bool {
 	if req.Target != 0 {
 		marker = s.newFollowUnitMarker(u, req.Target)
 	} else if req.Flags&airMarkerFreeze != 0 {
-		marker = s.newFrozenTerrainPointMarker(u, Vec3{X: req.X, Y: req.Y, Z: req.Z})
+		marker = s.newFrozenTerrainPointMarker(u, 0, Vec3{X: req.X, Y: req.Y, Z: req.Z})
 	} else {
 		marker = s.newPointMarker(u, Vec3{X: req.X, Y: req.Y, Z: req.Z})
 	}

@@ -8283,8 +8283,9 @@ in `hattfont12`, not `hattfont11`. The "switches to slot 1" subject is the
 kind-13 score-bar painter that RWU-19-34 re-identified in §6 — the same
 mis-subject that correction fixed there ("the side-page build count is a
 button caption ... and never passes through this routine") while leaving this
-sentence standing; whether that painter selects slot 1 is now an open item in
-"Missing and unknown".
+sentence standing; whether that painter selects slot 1 was an open item in
+"Missing and unknown" — closed 2026-09-04 (WU-19-230): it does, see the §6
+correction.
 
 ### Closed — the GAF-font pen: measure, metric, draw, wrap, and the gadget painters [R-FONT-01 §6] (2026-08-29)
 
@@ -8463,7 +8464,23 @@ window already holds. It also installs no foreground: the decimal is drawn
 with the context bytes exactly as the previously painted gadget left them.
 Its two fills take the gadget's `colorb` (inner background) and `colorf`
 (progress) bytes raw, and its bevel is the map-entry 0/17/20 frame of
-[07 R-FE-02 §4]. The side-page build count is a button caption (above) and
+[07 R-FE-02 §4].
+
+**Correction (2026-09-04, WU-19-230) to the sentence just above.** "it does
+**not** switch the window's GAF slot — it measures and draws with whatever
+slot the window already holds" is wrong; the WU-19-221 reading was right.
+Re-traced from the gadget painter's kind-13 case: the score-bar painter's
+first statement writes the window record's current-GAF-font word from
+**slot 1** (`hattfont11`), and its last restores it from slot 0 — the same
+two writes the list and label painters make. Between them it draws the bevel,
+the two fills, and (when `showNumber` is set) the decimal through the GAF pen
+with no width limit and mode 0, measuring the width and the capital-I metric
+against slot 1. So the end-of-mission bar's number is `hattfont11`, one
+point smaller than the `hattfont12` a plain button caption draws in; the pen
+arithmetic and the fill/bevel/foreground statements above are unchanged.
+Trail `/tmp/ta-decompile/notes/wu-19-230.md`. **Established.**
+
+The side-page build count is a button caption (above) and
 never passes through this routine.
 
 ### Code page and character mapping [R-FONT-01 §7] (2026-08-29)
@@ -10103,13 +10120,6 @@ by the sharper question it turned into.
 - Malformed `hattfont` with no frame at the `I` index (undefined by
   construction) — whether any installed asset triggers it · §7.1
   [R-FONT-01 §6] · asset census over GAF fonts.
-- Whether the kind-13 score-bar painter switches the window's GAF font to
-  slot 1 for its duration · §7.1 [R-FONT-01 §5–§6] · static trace of that
-  painter's slot writes. [R-FONT-01 §6] (RWU-19-34) says it does not and
-  measures with whatever slot the window already holds; a WU-19-221 read of
-  the same painter suggests it does select slot 1 and restore slot 0. Only the
-  end-of-mission bars depend on the answer — no side-page or build-card text
-  reaches this routine (§6, correction) — so nothing else moves either way.
 - Input repeat, focus and activation rules, key-token translation, cursor
   capture, gadget hit-testing, and complete HUD/minimap palette composition
   · doc 07 · static trace.

@@ -82,13 +82,26 @@ func (s *System) newPointMarker(u *units.Unit, goal Vec3) *airMarker {
 }
 
 // newFrozenTerrainPointMarker is the **frozen terrain point** constructor:
-// flags 0xA3, goal a supplied triple [04 R-AIR-01 §4].
-func (s *System) newFrozenTerrainPointMarker(u *units.Unit, goal Vec3) *airMarker {
+// flags 0xA3, goal a supplied triple, and — corrected by [04 R-AIR-01 §4]
+// (2026-09-04, WU-19-226) — the **target** the marker is frozen about.
+//
+// The target is what the 0xA3 flags are for. The freeze bit skips the follow
+// branch of the goal update, so the goal never moves; but the follow bit and
+// the radial bit still read the target in the two methods the freeze does not
+// touch: heading supply writes `bearing(unitPos, targetPos)` while the target
+// is live, and persistence keeps the marker through arrival while it is. That
+// pair is how a `hoverattack` gunship holds its standoff facing the thing it
+// is shooting [04 R-AIR-01 §8]. Built without a target the same flags supply
+// no heading and release on arrival, which is a plain point marker with a
+// slower name — and a gunship that faces its own line of flight, firing only
+// on the ticks its turn happens to sweep the target through the drift gate.
+func (s *System) newFrozenTerrainPointMarker(u *units.Unit, target pool.Handle, goal Vec3) *airMarker {
 	return &airMarker{
-		sys:   s,
-		flags: airMarkerFollow | airMarkerRadial | airMarkerTerrainAlt | airMarkerFreeze,
-		unit:  u,
-		goal:  goal,
+		sys:    s,
+		flags:  airMarkerFollow | airMarkerRadial | airMarkerTerrainAlt | airMarkerFreeze,
+		unit:   u,
+		target: target,
+		goal:   goal,
 	}
 }
 
@@ -1120,7 +1133,7 @@ func (s *System) airOffMapRecovery(u *units.Unit, head *orders.Node, st *airOrde
 // executor's own bookkeeping, so the pump-driven executors below can run it as
 // their first act too [04 R-AIR-01 §5][04 R-AIR-01 §8] step 4.
 func (s *System) installOffMapRecoveryMarker(u *units.Unit, head *orders.Node) bool {
-	if _, linked := s.airSectorHeight(u); linked || s.Terrain == nil {
+	if !s.airOffMap(u) {
 		return false
 	}
 	centreX := numeric.Fixed(int64(s.Terrain.CellW*16/2) << 16)
@@ -1734,9 +1747,24 @@ func acquireWeaponTarget(u *units.Unit, idx int, limit uint32) (pool.Handle, boo
 	return w.Acquire(u, idx, limit)
 }
 
-func weaponEngaged(u *units.Unit, idx int) bool {
+// weaponCanEngage is the shot-admission gate of [04 R-ORD-01 §7] asked
+// through the queue's weapon adapter: may slot idx be pointed at target right
+// now. `AirToGroundHover` phase 3 counts its refusals [04 R-AIR-01 §8].
+func weaponCanEngage(u *units.Unit, target pool.Handle, idx int) bool {
 	w := orderWeapons(u)
-	return w != nil && w.Engaged != nil && w.Engaged(u, idx)
+	return w != nil && w.CanEngage != nil && target != 0 && w.CanEngage(u, target, idx)
+}
+
+// airOffMap reports whether the unit's air-sector link is the off-map sentinel
+// record [04 R-AIR-01 §5], the condition every executor's step-4 arm tests.
+// With no terrain bound there is no grid to be off, and the condition is
+// false — the same answer installOffMapRecoveryMarker gives.
+func (s *System) airOffMap(u *units.Unit) bool {
+	if s == nil || s.Terrain == nil {
+		return false
+	}
+	_, linked := s.airSectorHeight(u)
+	return !linked
 }
 
 // airDeadline is the deadline setter of [04 R-ORD-01 §1]: it stores
@@ -2355,8 +2383,25 @@ func (s *System) airJitteredApproach(u *units.Unit, n *orders.Node, sim *rng.Sim
 // The phase 1 latch and phase 2 release/fire order are issued through the queue
 // binding; combat owns the subsequent admission and fire.
 func (s *System) legAirToGround(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
-	if s.installOffMapRecoveryMarker(u, n) {
-		return 2 // step 4: `AirToGround` "takes the recovery leg" [04 R-AIR-01 §8]
+	// Step 4 of the shared entry sequence, the `AirToGround` arm: this
+	// executor "does NOT build a recovery marker: it sets the record's
+	// deadline to the current tick plus 30, forces its phase to 2, and falls
+	// through into its ordinary phase switch" [04 R-AIR-01 §5][04 R-AIR-01
+	// §8]. Phase 2 then re-aims and installs the Range-radius marker on the
+	// cached goal, so a strafer that overran the map edge on its fly-through
+	// turns straight back onto the target instead of detouring 800 world
+	// units toward the map centre.
+	//
+	// Corrected 2026-09-04 (WU-19-226): this took the six-executor recovery
+	// leg — a marker toward the map centre, gate 0xE0, hold — which the
+	// research assigns to `AirToAir` and `AirToGroundHover` and denies to
+	// this one. With a fly-through of three weapon ranges beyond the target
+	// [04 R-AIR-01 §8] a fighter leaves most maps on most runs, and each
+	// detour was several hundred ticks in which it neither faced nor fired
+	// at the target; the play-test read it as "won't attack the ground".
+	if s.airOffMap(u) {
+		airDeadline(n, tick, 30)
+		n.Phase = 2
 	}
 	sim := s.simRNG(u)
 	switch n.Phase {
@@ -2496,7 +2541,13 @@ func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32)
 			return airLegUnbound(n, tick)
 		}
 		rangeUnits := int64(firstWeaponRange(u))
-		if !weaponEngaged(u, 0) {
+		// "Ask the weapon layer whether the unit can engage the target"
+		// [04 R-AIR-01 §8]: the question is the unit-to-unit shot-admission
+		// gate of [06 §3.1] — the one the attack and guard handlers ask
+		// before binding a slot [04 R-ORD-01 §7] — put to the RECORD's target
+		// on slot 0. It is not a planar range test on whatever the slot
+		// happens to hold. Corrected 2026-09-04 (WU-19-226).
+		if !weaponCanEngage(u, n.Target, 0) {
 			n.Param2++
 		}
 		if n.Param2 > 1 {
@@ -2519,7 +2570,12 @@ func (s *System) legAirToGroundHover(u *units.Unit, n *orders.Node, tick uint32)
 			n.Param1 = 0
 		}
 		ox, oz := offsetAtBearing(side, numeric.Fixed((rangeUnits*2/3)<<16))
-		m := s.newFrozenTerrainPointMarker(u, Vec3{X: targetX + ox, Y: targetY, Z: targetZ + oz})
+		// The marker is frozen ABOUT THE TARGET: while the target lives it
+		// supplies `bearing(unit, target)` as the command heading inside the
+		// producer's 320-world-unit consultation range and persists through
+		// arrival [04 R-AIR-01 §4], which is what keeps the gunship facing
+		// the target as it slides between its two standoff points.
+		m := s.newFrozenTerrainPointMarker(u, n.Target, Vec3{X: targetX + ox, Y: targetY, Z: targetZ + oz})
 		if u.Def != nil {
 			m.setAltitudeOffset(int16(u.Def.CruiseAlt))
 		}

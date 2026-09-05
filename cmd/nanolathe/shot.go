@@ -11,6 +11,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
 // startCPUProfile begins host-side CPU sampling and returns the stop function.
@@ -205,6 +206,18 @@ func runShot(opts Options, cs *contentSet) error {
 		}
 		millis.step = uint32(opts.ShotTicks) + 2
 		b.viewerStep(tickSeconds, cl)
+	}
+
+	// `--shot-space` composes the frame Space has been held through: the
+	// bottom slide strip's offset is put at its fully raised detent, the
+	// state a held Space converges to after eighteen host frames of the
+	// 15 ms-throttled ease [07 §6][07 R-HUD-04 §4]. The capture path has no
+	// held keys, so the detent is written rather than stepped to; the strip
+	// is presentation state and the simulation is unchanged [I6].
+	if opts.ShotSpace {
+		if state := b.battleState(); state != nil {
+			state.PanelOffset, state.PanelTarget = ui.PanelParked, ui.PanelParked
+		}
 	}
 
 	// Zoom is presentation-only [F-P1-008]; it is applied after the ticks so
