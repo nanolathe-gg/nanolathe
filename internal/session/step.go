@@ -660,6 +660,16 @@ func (s *Session) stepUnitPhase(tick uint32) {
 func (s *Session) stepProjectilePhase(tick uint32) {
 	// 3 projectile integration and collision + pool compactor [01 §4.4][06 §5][06 §11.2]
 	// Interceptor guidance pre-step before motion [06 §11.2]
+	//
+	// TODO(T25): nothing in this build LAUNCHES an interceptor. The two steps
+	// below are the post-launch halves of [06 §11.2] C29 — guidance retargets a
+	// live interceptor at its linked candidate, the detonation sweep clears
+	// projectiles inside the blast — and both are reached only for a projectile
+	// whose weapon carries `interceptor`, which only the automatic launch scan
+	// or combat's unbound `InterceptorRescan` port can create. An unreachable
+	// launch scan used to sit in stockpile.go beside them and was deleted by
+	// CL-5 rather than left to look wired. Placeholder behavior: a vertical
+	// launcher never fires at an incoming missile.
 	s.interceptorGuidanceTick()
 	if s.Combat != nil {
 		// [06 §6.4] plumb world wind vectors into ballistic/dropped drift

@@ -41,34 +41,9 @@ func NewNodeForOrder(id ID, target pool.Handle, goalX, goalY, goalZ numeric.Fixe
 	return n
 }
 
-// NewNodeForPos builds a canonical node from a ResolvePos ground payload [04 §3.4].
-// When pos is nil the goal is zero; when target !=0 the goal may be overwritten by caller
-// to the target's current position (attack) or kept as the clicked ground (attack-ground) [P1-14].
-func NewNodeForPos(id ID, pos *ResolvePos, target pool.Handle, tick uint32, owner pool.Handle, queued bool) Node {
-	var gx, gy, gz numeric.Fixed
-	if pos != nil {
-		gx = pos.X
-		gy = pos.Y
-		gz = pos.Z
-	}
-	return NewNodeForOrder(id, target, gx, gy, gz, tick, owner, queued)
-}
-
 // NewMoveNode is a convenience for pure point moves (no target) [04 §3.4] code 2.
 func NewMoveNode(id ID, goalX, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
 	return NewNodeForOrder(id, 0, goalX, 0, goalZ, tick, owner, queued)
-}
-
-// NewBuildNode constructs a factory/mobile-build node with product identity in Param1/2 [04 §3.2].
-// defIdx is the catalog definition index (stable, 1-based, 0 sentinel) and count is remaining builds.
-// Goal carries the site world coords for mobile builds; for factory products it is ignored but
-// carried for save determinism [P0-I05]. BuildDefKey is stored as canonical string for
-// save/load remapping [P0-I05].
-func NewBuildNode(id ID, defIdx uint32, count uint32, goalX, goalZ numeric.Fixed, tick uint32, owner pool.Handle, queued bool) Node {
-	n := NewNodeForOrder(id, 0, goalX, 0, goalZ, tick, owner, queued)
-	n.Param1 = defIdx
-	n.Param2 = count
-	return n
 }
 
 // NewFactoryBuildNode constructs a factory product node with catalog-index payload [05 "Factory production lifecycle"][P0-I05].
@@ -78,10 +53,10 @@ func NewBuildNode(id ID, defIdx uint32, count uint32, goalX, goalZ numeric.Fixed
 func NewFactoryBuildNode(cat *content.Catalog, defKey string, count uint32, tick uint32, owner pool.Handle, queued bool) Node {
 	ck := content.CanonicalKey(defKey)
 	idx, _ := catalogIndex(cat, ck)
+	// `BuildingBuild` or nothing: the two build rows are separate descriptors
+	// with separate bodies [04 §3.1][04 R-ORD-01 §5], so substituting the
+	// mobile row would hand a factory product to the site-bound machine.
 	id := Lookup("BuildingBuild")
-	if id == 0 {
-		id = Lookup("MobileBuild")
-	}
 	n := NewNodeForOrder(id, 0, 0, 0, 0, tick, owner, queued)
 	n.BuildDefKey = ck
 	n.Param1 = idx
@@ -122,15 +97,6 @@ func NewMobileBuildNodeWithID(id ID, cat *content.Catalog, defKey string, siteX,
 	return n
 }
 
-// NewAssistNode constructs an assist/repair/reclaim/capture/resurrection node [05].
-// Target identity is stored in Target, operation-specific progress in Param2/3.
-// For assist, Param1 may hold catalog index of product being assisted (if any).
-func NewAssistNode(id ID, target pool.Handle, progress uint32, tick uint32, owner pool.Handle, queued bool) Node {
-	n := NewNodeForOrder(id, target, 0, 0, 0, tick, owner, queued)
-	n.Param2 = progress
-	return n
-}
-
 // catalogIndex maps a canonical key to a stable catalog index [P0-I05][02 §5].
 // A missing catalog or unknown key retains the catalog's zero reject sentinel;
 // no runtime identity is invented for an unresolved definition.
@@ -145,21 +111,6 @@ func catalogIndex(cat *content.Catalog, canonicalKey string) (uint32, bool) {
 	}
 	return 0, false
 }
-
-// RemapBuildIndices remaps a node's catalog index from its BuildDefKey via the current catalog [P0-I05].
-// At load, saved definition names are mapped to current indices via the established catalog table;
-// the string plus index are kept for save/load stability [P0-I05].
-func RemapBuildIndices(cat *content.Catalog, n *Node) {
-	if n == nil || n.BuildDefKey == "" || cat == nil {
-		return
-	}
-	if idx, ok := cat.UnitDefIndex(n.BuildDefKey); ok {
-		n.Param1 = idx
-	}
-}
-
-// IsFactoryBuild reports whether id is a factory product handler [P0-I05][04 §3.1].
-func IsFactoryBuild(id ID) bool { return DescriptorFor(id).Name == "BuildingBuild" }
 
 // IsMobileBuild reports whether id is a mobile build handler [P0-I05][04 §3.1].
 func IsMobileBuild(id ID) bool {

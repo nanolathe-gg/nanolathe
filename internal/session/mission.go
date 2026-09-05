@@ -31,16 +31,6 @@ const (
 	sessionKindSkirmish = 2
 )
 
-// NewMission loads a campaign mission by VFS logical path and difficulty per
-// [08 "Mission type dispatch"], [08 "Schema choice"] and prepares the battle
-// session. It is the plan API entry point [PLAN_14 Public API] C3 and is
-// retained as the canonical constructor that later phases compile against.
-// The VFS and catalog are taken from the default process state when nil; tests
-// should call NewMissionWithFS for injection.
-func NewMission(path string, difficulty int) (*Session, error) {
-	return NewMissionWithFS(nil, nil, path, difficulty)
-}
-
 // NewMissionWithFS is the strict production constructor. It never fabricates
 // nil terrain, empty catalog, or missing service. [02 §5][03 §2.2][P0-16]
 func NewMissionWithFS(fs vfs.FSOps, cat *content.Catalog, path string, difficulty int) (*Session, error) {
@@ -393,22 +383,6 @@ func RouteForGametype(s *Session, gametype int) error {
 		return fmt.Errorf("session: nil session")
 	}
 	return s.SelectForGametype(gametype)
-}
-
-// BattleEntry performs the single-player battle-entry order per [08
-// "Placement and battle entry"] C9: place features → reconstruct units →
-// grant starting resources DIRECTLY to live stock outside the ledger
-// (economy.CreditSpawn, [05 "Authoritative settlement order"]).
-func BattleEntry(s *Session, m *mission.Mission) error {
-	if err := battleEntryPlacement(s, m); err != nil {
-		return err
-	}
-	if err := grantResourcesStrict(s, m); err != nil {
-		return err
-	}
-	// Initialize sharing thresholds once from rebuilt capacity after units exist [P1-06] [P1-I04].
-	s.InitShareThresholds()
-	return nil
 }
 
 // battleEntryPlacement is the campaign placement half used by the production

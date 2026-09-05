@@ -47,12 +47,18 @@ type Result struct {
 // It is the exported form of teamForOwner for presentation (I6) and tests.
 func (s *Session) TeamForOwner(owner int) int { return s.teamForOwner(owner) }
 
-// teamForOwner maps an owner slot to its team identifier using
-// SkirmishConfig.Players[].AllyGroup with fallback per-owner teams.
-// AllyGroup 5 is the unassigned sentinel [08 "Skirmish configuration"]
-// [GAP T14]; when it appears we treat each owner as its own hostile team
-// (100+owner) so that default skirmishes are FFA. Explicit non-sentinel
-// groups share a team.
+// teamForOwner maps an owner slot to its team identifier: the lowest slot in
+// the owner's alliance, offset by 100 so the identifier is never confused with
+// a slot index. A slot allied with nobody is its own team, which is what makes
+// a default skirmish free-for-all.
+//
+// The alliance comes off the player record's first alliance row, not the setup
+// row's ally-group ordinal. Battle entry converts the groups into that row once
+// [08 R-SKIR-01 §2], the row is the last item of each `Player%i` account and
+// survives a load, and the ally-group ordinal does not — a restored battle's
+// setup rows read back as group 0 for every slot, which used to fold two allies
+// into one arbitrary team and, on a group-5 default, split an allied pair into
+// two. See player_record.go.
 //
 // This grouping is Nanolathe presentation only [I6], and the marker that used
 // to stand here — asking how retail reduces a non-local aggregate to the one
@@ -67,14 +73,12 @@ func (s *Session) teamForOwner(owner int) int {
 	if owner < 0 || owner >= 10 {
 		return owner
 	}
-	if s.Skirmish.NumPlayers == 0 {
-		return 100 + owner
+	for j := 0; j < owner; j++ {
+		if s.ownersAllied(owner, j) {
+			return 100 + j
+		}
 	}
-	ag := s.Skirmish.Players[owner].AllyGroup
-	if ag == SkirmishDefaultAllyGroup {
-		return 100 + owner
-	}
-	return ag
+	return 100 + owner
 }
 
 // GetResult returns the authoritative latched result (zero if not yet ended).
@@ -163,19 +167,14 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 		energyWasted := int(p.Waste[1])
 		metalWasted := int(p.Waste[0])
 		score := s.resultScore(kills)
-		name := p.Name
-		logo := int(p.Logo)
-		if s.Skirmish.NumPlayers > 0 && i < len(s.Skirmish.Players) {
-			sp := s.Skirmish.Players[i]
-			if name == "" {
-				name = sp.Nickname
-			}
-			if logo == 0 {
-				logo = sp.Color
-			}
-		}
+		// The name and the colour are the player record's. The board copies a
+		// 30-byte name out of the record and the row's colour gadget indexes
+		// the record's logo byte [08 R-CAMP-01 §7]; both are written by the
+		// row-to-player conversion and persisted by the `Player%i` account,
+		// while the setup row this used to fall back to is gone after a load.
+		logo, _ := s.colourForOwner(i)
 		out = append(out, frame.ResultScore{
-			Player: i, Team: team, Name: name, Logo: uint8(logo),
+			Player: i, Team: team, Name: p.Name, Logo: logo,
 			Kills: kills, Losses: losses,
 			EnergyProduced: energyProduced, MetalProduced: metalProduced,
 			EnergyConsumed: energyConsumed, MetalConsumed: metalConsumed,
@@ -187,10 +186,18 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 	return out
 }
 
-// resultScoreRowEligible is the ENDMSN row gate. Skirmish setup metadata is
-// authoritative when present; otherwise the runtime player record supplies the
-// controller/side fields. Watchers and rejected records never receive a row,
-// while the established auxiliary-word escape is retained [08 R-CAMP-01 §7].
+// resultScoreRowEligible is the ENDMSN row gate, and every term of it is a
+// player-record read [08 R-CAMP-01 §7]: "a slot gets a row when its record
+// exists, its controller is 1, 2 or 3 ..., its side is not the neutral 10 and
+// its lobby record's watcher bit (0x40) is clear — or when the slot's auxiliary
+// word is non-zero ... and, in either case, its rejection-reason byte is 0".
+//
+// The setup-row override this gate used to apply first is gone. The setup
+// record is a pre-battle mirror a load does not rebuild [08 R-SKIR-01 §2]
+// "Save persistence", so after a load it answered controller 0 / side 0 for
+// every slot — and, because the override was preferred whenever NumPlayers was
+// non-zero, a restored observer slot was classified as an ordinary human and
+// took a row. See player_record.go.
 func (s *Session) resultScoreRowEligible(i int, p economy.Player) bool {
 	if i < 0 || i >= 10 || !p.Exists || p.RejectionReason != 0 {
 		return false
@@ -198,30 +205,18 @@ func (s *Session) resultScoreRowEligible(i int, p economy.Player) bool {
 	if p.ResultAuxiliary != 0 {
 		return true
 	}
-	controller := p.ControllerState
-	side := int(p.Side)
-	watcher := p.Watcher
-	if s.Skirmish.NumPlayers > 0 && i < len(s.Skirmish.Players) {
-		sp := s.Skirmish.Players[i]
-		if sp.IsObserver() {
-			return false
-		}
-		if sp.Controller == SkirmishControllerHuman {
-			controller = 1
-		} else if sp.Controller == SkirmishControllerObserver {
-			controller = 3
-		} else {
-			controller = 2
-		}
-		side = sp.Side
-	}
-	if controller != 1 && controller != 2 && controller != 3 {
+	if p.ControllerState != 1 && p.ControllerState != 2 && p.ControllerState != 3 {
 		return false
 	}
-	if side == 10 || watcher {
+	if p.Side == neutralSideIndex {
 		return false
 	}
-	return true
+	// The gate's last term is the lobby record's watcher bit. This build
+	// carries the multiplayer bit (`Watcher`, no writer outside a network
+	// lobby) and the observer byte battle entry writes (`IsObserver`,
+	// [05 "Authoritative settlement order"]) as separate fields, and either one
+	// set means the slot is watching rather than playing.
+	return !p.IsObserver && !p.Watcher
 }
 
 // resultScore reads authored kill/time multipliers from the selected mission
@@ -542,35 +537,28 @@ func (s *Session) resultTeams(victory bool) (int, []int) {
 			allTeamCount++
 		}
 	}
-	if s.Skirmish.NumPlayers > 0 {
-		n := s.Skirmish.NumPlayers
-		if n > 10 {
-			n = 10
-		}
-		for i := 0; i < n; i++ {
-			if !s.resultOwnerEligible(i) {
-				continue
-			}
+	// Registered slots in slot order [I1]. The participating set is the player
+	// record's, so this walk is the same before and after a load; the count the
+	// setup record carries is not restored [08 R-SKIR-01 §2] "Save
+	// persistence".
+	for i := 0; i < 10; i++ {
+		if s.resultOwnerEligible(i) {
 			addTeam(s.teamForOwner(i))
 		}
-	} else {
+	}
+	if allTeamCount == 0 {
+		// An unwired composition with no player table at all: name the teams
+		// the live units imply, and failing that every slot.
 		for _, u := range s.Units.IterSliced() {
 			if u == nil {
 				continue
 			}
 			addTeam(s.teamForOwner(int(u.Owner)))
 		}
-		if s.Econ != nil {
-			for i := 0; i < 10; i++ {
-				if s.resultOwnerEligible(i) {
-					addTeam(s.teamForOwner(i))
-				}
-			}
-		}
-		if allTeamCount == 0 {
-			for i := 0; i < 10; i++ {
-				addTeam(100 + i)
-			}
+	}
+	if allTeamCount == 0 {
+		for i := 0; i < 10; i++ {
+			addTeam(100 + i)
 		}
 	}
 	winner := -1
@@ -653,22 +641,24 @@ func (s *Session) ownerEliminated(owner int) bool {
 	return economy.PlayerEliminated(s.Units, owner)
 }
 
+// resultOwnerEligible is the participating-player test the result sweep and the
+// team walk share: a registered, non-observing slot whose controller is human
+// or computer [08 R-SKIR-01 §3].
+//
+// It reads the player record. The setup-row branch that used to run first —
+// preferred whenever NumPlayers was non-zero — is gone: a load restores only
+// the five rule words and the map name into the setup record
+// [08 R-SKIR-01 §2] "Save persistence", so every restored row read back as
+// controller 0, which is a human, and a restored observer slot was counted as a
+// participant. See player_record.go.
 func (s *Session) resultOwnerEligible(owner int) bool {
-	if s == nil || owner < 0 || owner >= 10 {
-		return false
+	p := s.playerRecord(owner)
+	if p == nil {
+		// No player table at all: an unwired composition, where the setup row
+		// is the only thing left to read (sideForOwner ends the same way).
+		return owner >= 0 && owner < len(s.Skirmish.Players) && !s.Skirmish.Players[owner].IsObserver()
 	}
-	if s.Skirmish.NumPlayers > 0 && owner < s.Skirmish.NumPlayers {
-		// Skirmish setup rows are the participating-player authority. The
-		// economy controller byte is a runtime binding and may still be its
-		// zero fixture value when a result is evaluated directly [08
-		// R-SKIR-01 §3].
-		return !s.Skirmish.Players[owner].IsObserver()
-	}
-	if s.Econ != nil {
-		p := s.Econ.Players[owner]
-		return p.Exists && !p.IsObserver && (p.ControllerState == 1 || p.ControllerState == 2)
-	}
-	return !s.Skirmish.Players[owner].IsObserver()
+	return p.Exists && !p.IsObserver && (p.ControllerState == 1 || p.ControllerState == 2)
 }
 
 // GetResultArmedTick returns the tick when the result was armed (milestone).

@@ -74,16 +74,11 @@ Missing core resources are reported through a fatal content-error path. The
 known hard requirements are `MOVEINFO.TDF` and `SIDEDATA.TDF`; a missing
 `gamedata\` directory is fatal as well. **`GAMEDATA.TDF` as a file is not a
 hard requirement**: the reference install contains no `gamedata.tdf` anywhere
-and boots (see `docs/SPEC_CONFLICTS.md` SC2 — an earlier revision of this
-document listed `GAMEDATA.TDF` as fatal; the fatal resource is the
-`gamedata\` directory). **Correction (2026-08-29, RWU-02-3,
-`[R-MALF-01 §5]`).** The parenthesis previously ended "and the 'Can't load
-GAMEDATA.TDF' diagnostic is pushed from the side-data loader region but its
-branch is unreachable when the directory exists without the file". The
-branch is reachable: it is the failure branch of the `gamedata\sidedata.tdf`
-load, so the box that reads `Can't load GAMEDATA.TDF` is raised by a missing
-or unreadable **`SIDEDATA.TDF`**; no file named `gamedata.tdf` is ever
-opened. The translation table
+and boots (see `docs/SPEC_CONFLICTS.md` SC2; the fatal resource is the
+`gamedata\` directory). The box that reads `Can't load GAMEDATA.TDF` is the
+failure branch of the `gamedata\sidedata.tdf` load, so it is raised by a
+missing or unreadable **`SIDEDATA.TDF`**; no file named `gamedata.tdf` is ever
+opened (`[R-MALF-01 §5]`). The translation table
 `gamedata\translate.tdf` is **not** a hard requirement: missing data leaves an
 empty table and lookup returns the source string unchanged (byte-exact
 compare). Optional animation, sound, and presentation resources can degrade
@@ -127,20 +122,6 @@ nothing in the command-line path alters the content root. Directory fallback
 on `GetModuleFileNameA`/`SetCurrentDirectoryA` failure is not a deliberate
 retail fallback.
 
-### Unknown
-
-Open items only; the decider follows each.
-
-- Data contract of `ONLLoadConfigFile` · not decidable from the retail
-  executable: the function is defined by `online.dll`.
-- Exact bit consumers of the lobby flag words · static trace (document 08
-  owns the consumers).
-- Fatal-versus-recoverable classification for the resource families not
-  classified in this document; `MOVEINFO.TDF` and `SIDEDATA.TDF` are fatal,
-  the translation table is optional, and `GAMEDATA.TDF` as a file is not fatal
-  (SC2) · static trace.
-
-
 ## 2. Virtual file system and provider precedence
 
 ### Established fact
@@ -159,11 +140,10 @@ observed mount/search sequence, established by the mount append order, is:
    of a given pass is not even attempted in that pass. The budget is
    per-invocation: the mount orchestrator runs at several call sites, each
    restarting the budget, and already-mounted archives never consume it, so
-   repeated invocations converge to every valid local HPI mounted. This
-   reconciles the earlier "eleventh successful local HPI is not mounted"
-   reading with the 13-HPI reference install (`docs/SPEC_CONFLICTS.md` SC1):
-   the cap is real but per-pass, not a global limit; mounting every local HPI
-   in one pass reproduces the converged retail state.
+   repeated invocations converge to every valid local HPI mounted. The cap is
+   real but per-pass, not a global limit, which is how the 13-HPI reference
+   install of `docs/SPEC_CONFLICTS.md` SC1 comes to be fully mounted; mounting
+   every local HPI in one pass reproduces the converged retail state.
 6. `*.hpi` discovered on each `DRIVE_CDROM` drive with flag 0.
 
 The exact mounted revision and base archive names are installation-dependent
@@ -194,8 +174,7 @@ its letter feeds the `%c:\%s` content paths (retried once), a missing
 file/section/zero value advances to the next CD-ROM drive. The sequencing
 question is therefore settled structurally: the identity gate is not part of
 the mount loop — it gates which drive serves CD content, while the mount
-loop's CD tier mounts `%c:\*.hpi` from every CD-ROM drive it finds. This
-upgrades the earlier supported inference to established fact.
+loop's CD tier mounts `%c:\*.hpi` from every CD-ROM drive it finds.
 
 The VFS supports both single-file reads and union enumeration. Enumeration
 is used for catalogs, maps, campaigns, GUI files, save slots, and sound
@@ -321,13 +300,8 @@ stays inside it, so sequential reads decompress each chunk once. A chunk whose
 stored length does not read back completely aborts the read with the
 all-ones failure value **silently**; a chunk whose decompression fails is
 **fatal** — the diagnostic naming the failure code, chunk index, chunk count,
-archive, length and file goes to the fatal channel (`[R-MALF-01 §1]`).
-**Correction (2026-08-29, RWU-02-3).** This sentence previously read "A
-chunk whose stored length does not read back completely, or whose
-decompression fails, aborts the read with the all-ones failure value after
-reporting a diagnostic naming the chunk index, chunk count, length, and
-file" — it merged two paths: the short read has no diagnostic and the decode
-failure does not return.
+archive, length and file goes to the fatal channel, and the read never
+returns (`[R-MALF-01 §1]`).
 
 **Chunk wire format (`SQSH`, 19-byte header + payload):**
 
@@ -370,7 +344,7 @@ Every one of the 30 installed root archives must pass the safe reader; synthetic
 out-of-range offsets, cycles, integer overflow, short metadata, oversized chunks,
 and unterminated names must fail without memory-unsafe access.
 
-### Closed — wildcard matching, the union enumerator's record and order, and how "first backing wins" is enforced [R-CAT-01 §1] (2026-08-29)
+### Wildcard matching, the union enumerator, and how "first backing wins" is enforced [R-CAT-01 §1]
 
 **Established fact — the wildcard matcher.** Enumeration patterns are
 matched by one routine used for loose and archive entries alike. Both the
@@ -463,25 +437,6 @@ The provider identity should be part of a content manifest. A logical path
 alone is insufficient for multiplayer or deterministic save identity because
 two installations can resolve the same path to different archive bytes.
 
-### Unknown
-
-Open items only; the decider follows each. The container, its cipher, its
-directory shape, its duplicate and separator rules, its absence of traversal
-handling, the mount append order, the keep-open flag semantics, the footer
-four-byte wildcard, and the recovery behavior for a structurally malformed but
-header-valid archive are established above. Enumeration order within one
-wildcard group is not an executable property at all — it is the host directory
-listing, which retail does not sort.
-
-- Entry flag bits other than the subdirectory bit and the mutable
-  enumeration-visibility bit (bit 1, mask `0x02`, recursively cleared before
-  union rebuild), for synthetic values · static trace. Bounded-negative today:
-  no other bit is tested by any mount, validate, or enumerate path, so
-  synthetic values are inert.
-- Whether any shipped archive variant outside the installed corpus departs
-  from the container contract above · asset census.
-
-
 ## 3. Registry configuration, language, and localization
 
 ### Established fact
@@ -500,6 +455,8 @@ success.
 Startup reads each setting, and **when a setting is absent it installs the
 default below and immediately writes it back**, so the registry becomes fully
 populated on first run.
+
+#### Settings: the persisted values and their defaults
 
 **Scalar settings and their defaults**
 
@@ -522,8 +479,8 @@ populated on first run.
 | `fxvol` | 27 |
 | `musicvol` | 32 |
 | `cdmode` | 4 |
-| `MixingBuffers` | 8 (`[R-SND-01 §2]`; this row read "no scalar default installed" until 2026-08-29) |
-| `Sound Mode` | 1, held in bits 0–2 of the sound flags byte (`[R-SND-01 §2]`; formerly listed here as having no default) |
+| `MixingBuffers` | 8 (`[R-SND-01 §2]`) |
+| `Sound Mode` | 1, held in bits 0–2 of the sound flags byte (`[R-SND-01 §2]`) |
 | `CDAudioVolume`, `WaveOutVolume` | read only when `RestoreVolume` is set; no default installed |
 | `SingleCommanderDeath`, `SingleMapping`, `SingleLineOfSight`, `SingleLOSType` | 1 |
 | `MultiCommanderDeath`, `MultiMapping`, `MultiLineOfSight`, `MultiLOSType` | 1 |
@@ -531,7 +488,7 @@ populated on first run.
 | `PlayMovie` | 1 |
 | `NumSkirmishPlayers` | 4 |
 | `Nickname`, `Game Name`, `Password` (17-byte buffers), `Image Output Directory` | empty |
-| `side` | 0 — the last chosen player side; omitted from this list until 2026-08-29, see `[R-KEYS-01 §3]` |
+| `side` | 0 — the last chosen player side (`[R-KEYS-01 §3]`) |
 
 **Flag settings.** Several options are bits of packed option words rather than
 independent values. Their installed defaults are: anti-aliasing, shadows,
@@ -542,23 +499,18 @@ acknowledgement effects, build effects, and speech effects **on**; music mode
 The sound word's bit map, its consumers, and which of these values the
 loader actually writes back are in `[R-SND-01 §2]` below.
 
-**Skirmish settings**, under the skirmish subkey: `SkirmishMap`,
-`SkirmishLocation`, `SkirmishDifficulty`, `SkirmishLOSType`,
-`SkirmishLineOfSight`, `SkirmishMapping`, `SkirmishCommanderDeath`, and the
-per-slot values `Player%dController`, `Player%dSide`, `Player%dColor`,
-`Player%dAllyGroup`, `Player%dMetal`, `Player%dEnergy`, where the format is
-filled with the slot index. Absent per-slot values install these defaults:
-controller 0, ally group 5, metal and energy 1000, color the slot index
-itself, and side the slot index masked to parity (slot & 1).
-
-**Correction (2026-08-29, RWU-02-1, `[R-KEYS-01 §3]`).** The paragraph above
-places the scalar `Skirmish…` values under the skirmish subkey; the loader
-reads all seven of them — and `SkirmishMap`, a 256-byte string — under the
-main `Total Annihilation` key. Only the per-slot `Player%d…` values live
-under `Total Annihilation\\Skirmish`. The defaults are unchanged.
-`FixedLocations` (the RWU-02-1 question) is emitted by the settings writer
-and read by nothing: the loader has no read of it, so it is write-only
-legacy — inert.
+**Skirmish settings.** The seven scalar values — `SkirmishMap` (a 256-byte
+string), `SkirmishLocation`, `SkirmishDifficulty`, `SkirmishLOSType`,
+`SkirmishLineOfSight`, `SkirmishMapping` and `SkirmishCommanderDeath` — are
+read under the main `Total Annihilation` key. Only the per-slot values
+`Player%dController`, `Player%dSide`, `Player%dColor`, `Player%dAllyGroup`,
+`Player%dMetal` and `Player%dEnergy` live under
+`Total Annihilation\\Skirmish`, where the format is filled with the slot
+index. Absent per-slot values install these defaults: controller 0, ally
+group 5, metal and energy 1000, color the slot index itself, and side the
+slot index masked to parity (slot & 1). `FixedLocations` is emitted by the
+settings writer and read by nothing — the loader has no read of it, so it is
+write-only legacy, inert (`[R-KEYS-01 §3]`).
 
 The scalar skirmish preferences are also defaulted by the same loader when
 absent: `SkirmishDifficulty=1` (Medium), `SkirmishLocation=1` (pre-determined
@@ -586,10 +538,10 @@ Other named values include `Games` and `AllMissions` (campaign progress
 gating), and `user_images`, which participates in building the image output
 path with the pattern `<directory>\\<name>`.
 
-**Unit limit (R-CONTENT-03, opener).** The previous text said only "a unit
-limit of 250 is applied before clamping elsewhere in the startup path"; the
-source is now traced. **Established:** at startup the executable reads the
-limit from the Windows profile file `<executable directory>\totala.ini`,
+#### Unit limit [R-CONTENT-03]
+
+**Established.** At startup the executable reads the limit from the Windows
+profile file `<executable directory>\totala.ini`,
 section `[Preferences]`, key `UnitLimit`, through the integer-profile accessor
 with default **250**, clamps the result into **20..500** (below 20 becomes 20,
 above 500 becomes 500), and stores it as a 16-bit configured limit. It also
@@ -617,7 +569,9 @@ The language setting is read as a string. An empty value selects English.
 The language string is kept in one global buffer and drives two distinct
 mechanisms.
 
-**Translation table.** The translation loader takes a TDF path and the language
+#### Translation table
+
+The translation loader takes a TDF path and the language
 name. If the requested name equals the current one, case-insensitively, it does
 nothing. Otherwise it releases the existing table, allocates a new one, stores
 the new language name, and parses `gamedata\\translate.tdf` with the generic
@@ -643,14 +597,11 @@ key, so English content needs no special case.
 
 The unit catalog reads its display name and description through this accessor,
 so localized unit names and descriptions authored in the unit record **are**
-honored. This corrects an earlier reading that localization was handled only by
-the translation table.
+honored.
 
-### Closed — the audio preference values: names, defaults, bit map, write-back, and what is not registry [R-SND-01 §2] (2026-08-29)
+### The audio preference values: names, defaults, bit map, write-back, and what is not registry [R-SND-01 §2]
 
-This section records the registry-side facts handed over from
-`[03 R-AUD-01 §2]` and re-verified against the settings loader and saver;
-the consumers are doc 03's and are only cited here.
+The consumers of these values are document 03's and are only cited here.
 
 **Established fact — the packed sound flags byte.** The second packed
 option word this section calls the "sound option word" is one byte, loaded
@@ -682,20 +633,17 @@ after the scalar settings above (absent → the in-memory ring is zeroed), and
 written back on the disc-change path and at shutdown. What the ring means
 and how a disc is matched is `[03 R-AUD-01 §4]`.
 
-**Correction (Established) — write-back.** "Established fact" above says
-that when a setting is absent the loader "installs the default below and
-immediately writes it back". For the audio values that is true of **`Sound
-Mode` only**. `MixingBuffers`, `RestoreVolume`, `musicmode`, `cdmode`,
+**Established fact — write-back.** The write-back-on-absence rule this
+chapter opens with is per value. For the audio values it holds for **`Sound
+Mode` only**: `MixingBuffers`, `RestoreVolume`, `musicmode`, `cdmode`,
 `ackfx`, `buildfx`, `speechfx`, `fxvol` and `musicvol` install their
 defaults in memory without a write; they reach the registry only through
 the settings saver, which writes every audio value unconditionally
 (`WaveOutVolume`/`CDAudioVolume` only when bit 3 is set, from the *current*
-device levels). The write-back-on-absence behaviour is per value: a bounded
-census of the loader finds exactly thirty names written back, and none of
-the audio names except `Sound Mode` is among them. The other twenty-nine
-are display, LOS/mapping, skirmish-scalar and interface values whose
-individual rows are not re-audited here (RWU-02-x owners; the census is in
-the raw trail).
+device levels). A bounded census of the loader finds exactly thirty names
+written back, and none of the audio names except `Sound Mode` is among
+them; the other twenty-nine are display, LOS/mapping, skirmish-scalar and
+interface values.
 
 **Established fact (bounded negative) — not registry.** `NoDirectSound` and
 `UseWindowsSound` are **not** registry values. They are integers read from
@@ -704,7 +652,7 @@ default 0, the same profile accessor the unit limit uses (`R-CONTENT-03`
 above); the image contains no registry read of either name. Their effect is
 `[03 R-AUD-01 §1]`.
 
-### Closed — the registry primitive's access masks, and the image-output directory default [R-CAT-01 §2] (2026-08-29)
+### The registry primitive's access masks, and the image-output directory default [R-CAT-01 §2]
 
 **Established fact — the shared helper.** Every registry access opens the
 three levels `Software` → `Cavedog Entertainment` → `<subkey>` under the
@@ -718,15 +666,14 @@ the API filled it; every other failure reports failure. Handles are closed
 in reverse order. The typed wrappers (integer, string, binary) sit on this
 one helper.
 
-**Correction (Established) — `Image Output Directory`.** The scalar table
-above lists `Image Output Directory` among the values whose default is
-"empty". The loader's default is not empty: when the value is absent it
-builds `user_images\<name>` where `<name>` is the Windows account name
-returned by `GetUserNameA` (256-byte buffer), or the literal `user_images`
-again when that call fails or returns an empty name — so the fallback path
-is `user_images\user_images`. The row's "empty" applies to the three 17-byte
+**Established fact — `Image Output Directory`.** Its default is not empty:
+when the value is absent the loader builds `user_images\<name>` where
+`<name>` is the Windows account name returned by `GetUserNameA` (256-byte
+buffer), or the literal `user_images` again when that call fails or returns
+an empty name — so the fallback path is `user_images\user_images`. The
+"empty" default in the scalar table above applies to the three 17-byte
 strings only. This default is installed in memory; whether the settings
-saver writes it back is not re-audited by this unit.
+saver writes it back is Unknown (tail).
 
 ### Supported inference
 
@@ -740,23 +687,6 @@ are present in this corpus. The installed translation table spells `french`,
 `german`, `italian`, `piglatin`, and `spanish`; four `japanesename` prefixes
 appear in FBI records with no corresponding translation-table key in this
 corpus. Neither is a claim about every edition.
-
-### Unknown
-
-Open items only; the decider follows each. The registry hive, key path, value
-names, defaults, write-back, missing-translation fallback, duplicate policy,
-and the command-line/registry/English language precedence are established
-above.
-
-- The language-selection interface — how a language is chosen at runtime ·
-  static trace.
-- Code-page behavior for high bytes · static trace. Marked `TODO(T23)`.
-- Language-specific font fallback beyond the installed-corpus census · asset
-  census.
-- Which runtime messages pass through the translation lookup · static trace.
-- Precedence among registry, INI, and command line for non-language
-  configuration · static trace (doc 01 §3.1 owns the scalar half).
-
 
 ## 4. Generic TDF grammar and semantics
 
@@ -811,13 +741,7 @@ returned. The detail suffix is ` - name = '<section>' from file <path>`
 at the top level — then the logical path). What *is* recoverable is a
 **missing or empty file**: the loader returns no tree, typed reads return
 their defaults, and the resource family decides whether that is fatal
-(`[R-MALF-01 §4]`). **Correction (2026-08-29, RWU-02-3).** This paragraph
-previously read "A failed load never terminates at the parser: the caller
-receives a valid-but-empty tree, so subsequent typed reads return their
-defaults. The caller decides whether that state is fatal for its resource
-family", and gave the detail shape as ` - <name> = '<value>' from file
-<file>`. Both were wrong: the parser's only error exit is the fatal channel,
-and the quoted placeholder is the section name, not a value.
+(`[R-MALF-01 §4]`).
 
 ### Typed accessors
 
@@ -857,7 +781,7 @@ is necessary to distinguish missing, empty, valid, malformed, defaulted, and
 derived values even though retail runtime structures often collapse those
 states.
 
-### Closed — key, value and section-name trimming [R-CAT-01 §3] (2026-08-29)
+### Key, value and section-name trimming [R-CAT-01 §3]
 
 **Established fact.** The parser hands every section name (the text between
 `[` and `]`), every key (the text before `=`) and every value (the text
@@ -876,17 +800,6 @@ authored value.
 The parser should expose both a lossless tree and typed convenience accessors.
 The lossless tree must retain duplicate sections and case-variant keys even
 if a compatibility accessor follows retail first/last behavior.
-
-### Unknown
-
-Open items only; the decider follows each.
-
-- Caller-specific duplicate-section merging policies · static trace. The
-  first-match section accessor, the enumerator behavior, the duplicate-key
-  winner mechanism, the parse-diagnostics set with its prefix and fatal
-  failure policy (`[R-MALF-01 §4]`), and comment-blanking offset preservation are all established
-  above, as is the floating accessor's CRT `atof` behavior and the absence of
-  any tokenizer line limit.
 
 ## 5. Catalog construction and linking
 
@@ -913,7 +826,7 @@ key the executable reads, its accessor, and its default. "Fixed" means the
 16.16 accessor, so the authored value is multiplied by 65,536 and truncated,
 and the stated default is already in 16.16 units.
 
-**Identity and presentation**
+#### Unit record: identity and presentation
 
 | Key | Accessor | Default | Notes |
 |---|---|---|---|
@@ -939,10 +852,9 @@ and the winning candidate's `side` string is then compared byte-for-byte —
 case-sensitively — against the acting unit's own; any mismatch rejects the
 pick. The enclosing routines are the strategic-AI build passes: the periodic
 AI planner and a companion builder-refresh pass both iterate builder units,
-run the roulette, and index the unit-definition table with the pick result —
-the classification as AI-side is now established.
+run the roulette, and index the unit-definition table with the pick result.
 
-**Economy**
+#### Unit record: economy
 
 | Key | Accessor | Default |
 |---|---|---|
@@ -956,7 +868,7 @@ the classification as AI-side is now established.
 | `cloakcost` | integer, stored as floating | 0 |
 | `cloakcostmoving` | integer, stored as floating | the value just read for `cloakcost` |
 
-**Movement and geometry**
+#### Unit record: movement and geometry
 
 | Key | Accessor | Default |
 |---|---|---|
@@ -971,7 +883,7 @@ the classification as AI-side is now established.
 | `buildangle`, `builddistance`, `sortbias` | integer | 0 |
 | `maneuverleashlength`, `attackrunlength`, `kamikazedistance` | integer | 0 |
 
-**Runtime units of the locomotion fields (Established, 2026-08-28, RWU-04-1).**
+**Runtime units of the locomotion fields — Established.**
 Because `maxvelocity`, `brakerate`, `acceleration`, `moverate1` and `moverate2`
 take the **fixed-point** accessor, the compiled field is the authored decimal
 multiplied by 65,536 and truncated toward zero, and the ground mover consumes
@@ -988,7 +900,7 @@ value is taken modulo 65,536; it is angle units per tick. `brakerate` and
 the compiled default of 0 is a fault for any unit that actually moves
 [04 §8.1 R-MOV-01 §4].
 
-**Combat and sensors**
+#### Unit record: combat and sensors
 
 | Key | Accessor | Default |
 |---|---|---|
@@ -1010,7 +922,7 @@ default to 2:
 `cancapture`, `candgun`, `kamikaze`, `norestrict`, `showplayername`,
 `commander`, `cantbetransported`.
 
-**Definition-flag mapping correction (Established).** The unit parser reads
+**Definition-flag mapping — Established.** The unit parser reads
 the `onoffable` integer and packs its boolean value into bit 2 (`0x04`) of the
 definition flags word. This bit is not an authored unit `noradar` field and is
 not derived from runtime cloak or hidden state. The unit parser has no
@@ -1037,8 +949,8 @@ the rest of the session.
 `selfdestructcountdown` is read with the raw accessor, so the record can tell
 an authored value from an absent key.
 
-**The runtime *compatible* / *creatable* bit is not a key (Established,
-2026-09-02, RWU-19-32).** Bit 23 of the record's first definition-flags
+**The runtime *compatible* / *creatable* bit is not a key — Established.**
+Bit 23 of the record's first definition-flags
 word is written only by the executable: set for the `None` sentinel and for
 every FBI whose `Version`, `Copyright` and loose-file gates pass
 ([R-CAT-01 §4]); carried with the record by the compaction moves
@@ -1050,9 +962,9 @@ Its readers are the two compactions and the unit allocator ([05 R-SHARE-01
 
 ### Building heading field audit [R-P28-ANG-01R §1]
 
-**Established — authored values.** An asset-backed read with
-`NANOLATHE_TA_ROOT=/path/to/home/TotalAnnihilation` resolved the stock unit
-records through the normal VFS and preserved these source values:
+**Established — authored values.** An asset-backed read of the reference
+install resolved the stock unit records through the normal VFS and preserved
+these source values:
 
 | Unit record | `FootprintX` × `FootprintZ` | `YardMap` | `buildangle` | `Ovradjust` |
 |---|---:|---|---:|---:|
@@ -1068,8 +980,7 @@ as an unsigned bound. On each successful unit allocation, the unit
 initialization path invokes the global simulation random sampler once with
 that bound and uses the result to initialize the unit heading. The allocator
 does not read `Ovradjust`/`ovradjust`; the bounded executable census found no
-other reader for that field. Thus `buildangle` is no longer an untyped or
-readerless candidate, while `ovradjust` remains a retained unknown source
+other reader for that field. `ovradjust` remains a retained unknown source
 field with no behavior assigned.
 
 The sampler's exact heading arithmetic and lifecycle are owned by [04
@@ -1091,16 +1002,12 @@ live per-type limit array is populated only by the ai/ profile parser's
 
 ### Build-menu catalog keys
 
-Build menus are assembled from catalog data, not side data. Per-unit numbered
-pages derive from `CANBUILD %s` sections and numbered `canbuild%d` keys,
-enumerated from 1 upward; a gap yields a missing page rather than terminating
-the loop. **Correction (2026-08-29, RWU-02-5, `[R-CAT-01 §5]`).** The
-previous sentence is imprecise on two points: the per-builder lists live in
-**`gamedata\sidedata.tdf`** as a top-level `[CANBUILD]` section whose child
-sections are named by unit name (`CANBUILD %s` is the *allocation tag*, not a
-section name), and the numbered `canbuild<n>` keys are read from 1 upward
-**until the first absent key**, so a gap ends the list rather than yielding a
-missing entry. The executable's key vocabulary also names `MENU`, `UNITMENU`,
+Build menus are assembled from catalog data, not side data. The per-builder
+lists live in **`gamedata\sidedata.tdf`** as a top-level `[CANBUILD]` section
+whose child sections are named by unit name (`CANBUILD %s` is the *allocation
+tag*, not a section name), and the numbered `canbuild<n>` keys are read from 1
+upward **until the first absent key**, so a gap ends the list
+(`[R-CAT-01 §5]`). The executable's key vocabulary also names `MENU`, `UNITMENU`,
 `DOWNLOADMENU`, and `BUTTON` sections consumed while assembling build and
 order menus; the download tier additionally keys off the unit `downloadable`
 flag (enforcement rule above). Wiring of those sections beyond this presence
@@ -1116,15 +1023,15 @@ does not abort; each reference family has its own failure outcome:
 | Weapon (`weapon1..3`, `explodeas`, `selfdestructas`) | the name lookup against the weapon record table misses and the slot is filled with a reference to record 0 — the inactive sentinel (R-CONTENT-02); no abort | no | direct |
 | Corpse (`corpse`) | the `0xFFFF` no-corpse sentinel; the unit leaves no wreck | no | direct |
 | Movement class (`movementclass`) | the unit compiler falls back to a scratch record — 255 slopes, depth limits ±10000 — parsed from the unit's own FBI keys (see "Movement class record"); a null profile otherwise | no (degraded) | direct |
-| Model (`objectname`) | **fatal**: the model loader's null result is passed to the fatal channel with the path `objects3d\<objectname>.3DO` as the whole message (`[R-MALF-01 §5]`; the same holds for a weapon `model` and a feature `object`). **Correction (2026-08-29, RWU-02-3):** this row previously read "the model cache slot stays empty; rendering degrades (no model) — no (degraded) — supported inference"; the compile path never tolerates a missing model. | yes | direct |
+| Model (`objectname`) | **fatal**: the model loader's null result is passed to the fatal channel with the path `objects3d\<objectname>.3DO` as the whole message (`[R-MALF-01 §5]`; the same holds for a weapon `model` and a feature `object`). The compile path never tolerates a missing model. | yes | direct |
 | Side (`side`) | the build-pick filter compares the authored string; a mismatch rejects the pick — an empty side mismatches every acting side | no, but affects AI builds | direct |
-| Sound category (`soundcategory`) | **absent key → category index 0** (the first section of `sound.tdf`); **present but matching no category name → the decimal conversion of the authored text** (0 for non-numeric text, so again the first category; an authored number selects that ordinal directly, unbounded). **Correction (2026-08-29, RWU-02-5, `[R-CAT-01 §5]`):** this row previously read "the category index falls back to a muted placeholder; playback is skipped — no (muted) — supported inference"; there is no placeholder record: the index is 0 or the parsed number. | no | direct |
+| Sound category (`soundcategory`) | **absent key → category index 0** (the first section of `sound.tdf`); **present but matching no category name → the decimal conversion of the authored text** (0 for non-numeric text, so again the first category; an authored number selects that ordinal directly, unbounded). There is no placeholder record: the index is 0 or the parsed number (`[R-CAT-01 §5]`). | no | direct |
 
 The feature-record equivalent is different: a feature name found in no parsed
 feature node raises the fatal diagnostic `Record "%s" missing from feature
 files` (§5 above).
 
-### Closed — unit catalog discovery: enumeration, the sentinel record, the per-file reads, and the three drop gates [R-CAT-01 §4] (2026-08-29)
+### Unit catalog discovery: enumeration, the sentinel record, the per-file reads, and the three drop gates [R-CAT-01 §4]
 
 This is the first of the two stages §5 opens with, as the executable runs
 it. The second stage is `[R-CAT-01 §5]`. Everything is **Established** by
@@ -1188,7 +1095,7 @@ record's index word is provisionally *i*):
    a mounted archive. The community rule that units "must be packed" is thus
    the executable's rule, not a packaging convention.
 9. One four-byte field of the record is set to −1 (its reader is not traced
-   by this unit), and the file, bank and tree are released.
+   here), and the file, bank and tree are released.
 
 **After the loop.** The weapon trees are released. Then records are
 compacted from the end: for *i* from *count − 1* down to 1, a record whose
@@ -1199,7 +1106,7 @@ dropped and the suppress flag is clear, the translated `Incompatible units
 found.  They will be ignored.  Please download the latest version of the
 game.` is shown through the non-fatal `Error` box.
 
-### Closed — the catalog compiler: order of work, name sort and unit indices, build-menu pages, scripts, and the side `CANBUILD` lists [R-CAT-01 §5] (2026-08-29)
+### The catalog compiler: order of work, name sort and unit indices, build-menu pages, scripts, and the side `CANBUILD` lists [R-CAT-01 §5]
 
 The compiler runs once at startup after `[R-CAT-01 §4]` and again at every
 battle entry (§8). **Established** throughout unless marked.
@@ -1266,8 +1173,7 @@ battle entry (§8). **Established** throughout unless marked.
    count 0 but still receives the 60-byte copy.
 7. The progress byte is set to 100 and the catalog-ready flag to 1.
 
-**`soundcategory` resolution (correction of the cross-reference table
-above).** The unit-record compiler reads `soundcategory` (100 bytes). Absent
+**`soundcategory` resolution.** The unit-record compiler reads `soundcategory` (100 bytes). Absent
 → index 0. Present → linear scan of the loaded category records (352-byte
 stride) with the case-insensitive comparison; the first match's ordinal is
 stored; **no match → the C-runtime decimal conversion of the authored text**
@@ -1303,7 +1209,7 @@ and when the cloak-capable bit (`cloakcost > 0`) is set and
 `selfdestructcountdown`: absent → 5 in the 3-bit field (bits 20–22 of the
 second flags word); present → its decimal value masked to 3 bits.
 
-### Closed — the download-menu compile and the per-builder list extension [R-CAT-01 §8] (2026-08-29)
+### The download-menu compile and the per-builder list extension [R-CAT-01 §8]
 
 Runs at battle entry after the catalog compiler (`[08 R-ENTRY-01 §3]`).
 **Established** throughout.
@@ -1350,21 +1256,18 @@ section name is then stored into that record as the weapon's catalog name, and
 `name` is read separately as a 64-byte display string. A weapon section without
 an authored `ID` therefore selects the slot before the table.
 
-#### R-CONTENT-02 — Weapon-family discovery and same-ID merge (closed)
+#### Weapon-family discovery and same-ID merge [R-CONTENT-02]
 
-**Correction.** PLAN_02's post-review amendment recorded — and earlier
-revisions of this document implied — that `gamedata\weapons.tdf` parses before
-the `weapons\` directory, so referenced names survive a stock ID 36 collision
-between `[earthquake]` there and `[cormine2]` in `weapons/cormine2_weapon.tdf`.
-That premise is **wrong**: the executable never parses `gamedata\weapons.tdf`.
-The correction is behavioral, not speculative: the only weapon-family pattern
-in the executable's string vocabulary is `Weapons\*.tdf`, pushed at exactly two
+**The family is `Weapons\*.tdf` alone — Established.** The executable never
+parses `gamedata\weapons.tdf`. The only weapon-family pattern in the
+executable's string vocabulary is `Weapons\*.tdf`, pushed at exactly two
 sites (the weapon-record compiler and the unit-catalog loader below), and the
 bounded census of every `gamedata\` path-building site accounts for version,
 sidedata (twice), moveinfo, sound, allsound, los, help, meteor, category, and
 the full-path `gamedata\translate.tdf` literal — none name a weapons file.
-The stock "ID 36 collision" is between a file retail never reads and the
-parsed family; retail never sees it. **Established.**
+The stock "ID 36 collision" (`[earthquake]` in `gamedata\weapons.tdf` against
+`[cormine2]` in `weapons/cormine2_weapon.tdf`) is between a file retail never
+reads and the parsed family; retail never sees it.
 
 **Discovery order — Established.** The weapon family is exactly the union
 enumeration of `Weapons\*.tdf`: provider mount precedence first, then the
@@ -1395,14 +1298,13 @@ with the same ID therefore does not sparse-merge with the earlier one: it
 **replaces** every parser-owned field of the record (authored-or-default) and
 rewrites the catalog name. The surviving catalog name is the **later**
 section's name; the record's slot-number byte is never rewritten by the
-parser. **Correction (2026-08-29, RWU-02-1, per `[06 R-DMG-01 §1]`):** the
-sentence "replaces every parser-owned field" overstated one field. The
+parser. One field escapes the replace-whole rule (`[06 R-DMG-01 §1]`): the
 catalog initializer clears each record's name byte and stamps its slot
 number but does **not** clear the `[DAMAGE]` override-table pointer, so a
 later section with the same `ID` **appends** its per-name damage entries
 into the earlier record's table (same-spelling keys overwrite in place,
 case-variant keys insert) instead of starting a fresh table; `default` and
-every scalar field still follow the replace-whole rule. Stock has no same-ID
+every scalar field still replace whole. Stock has no same-ID
 pair, so this is a third-party-content edge only. Record 0 is special: consumers treat a weapon reference as inactive
 when it points at record 0 (recognized by its zero slot-number byte), and the
 stock corpus fills it with `[noweapon]` (`ID=0` in `weapons/weapons.tdf`).
@@ -1412,10 +1314,8 @@ scan of the record table from slot 0 upward, comparing case-insensitively
 against each record's catalog name; the **first** matching slot wins. A name
 that matches no record returns not-found. When the FBI compiler resolves
 `weapon1..3`, `explodeas`, or `selfdestructas`, a miss is replaced by a
-reference to **record 0** — the inactive sentinel — not by an error. This
-corrects the cross-reference table below, whose previous text said the
-unresolved weapon id was an all-ones sentinel; the sentinel is record 0
-identified by its zero slot-number byte.
+reference to **record 0** — the inactive sentinel — not by an error. The
+sentinel is record 0, identified by its zero slot-number byte.
 
 **Unit identity contribution — Established accumulator, Supported inference
 for its role.** While resolving the five weapon-name keys, the unit-catalog
@@ -1508,16 +1408,11 @@ once, as the parser literal). Since the TDF accessors take the key as a string
 literal, no key means no field: these six are never read, never stored on the
 weapon record, and cannot have a reader anywhere in the image. That is stronger
 than the bounded "no reader was found in the recovered function set", which is
-all a caller census can establish and all the previous text claimed. Authoring
-any of the six in a weapon section has no effect of any kind, and they occupy
+all a caller census can establish. Authoring any of the six in a weapon section has no effect of any kind, and they occupy
 no record byte, so they cannot even be preserved as inert data — unlike, for
 example, `accuracy` and `tolerance`, which are parsed into the record and do
 have consumers `[06 §3.3]`.
 
-**Correction.** This paragraph previously read, in full, "`aimrate` and
-`startfire` have no reader in this executable." It was right about those two
-but understated the evidence — a missing reader, where the truth is a missing
-key — and omitted four further keys in exactly the same position.
 `movingaccuracy`, `noselfdamage`, `impulsefactor` and `impulseboost` circulate
 in third-party weapon-key documentation; they are not retail keys, and neither
 this document nor `[fmt tdf]` should be read as implying that the engine merely
@@ -1602,15 +1497,14 @@ on a loop byte carried from the GAF.
 Movement classes come from `CLASS` sections in the movement catalog. The
 loader scans `CLASS0` through `CLASS31` — the loop is bounded by the 32-slot
 pool, **not** by section presence: a missing section skips that index without
-terminating the loop (this corrects the earlier "until a gap" reading; stock
-content happens to author `CLASS0..CLASS14` contiguously, which is why the two
-readings coincide there). Each parsed class reads eight keys **in this parse
-order**, and defaults chain off values read earlier in the same record, so
+terminating the loop (stock content authors `CLASS0..CLASS14` contiguously,
+which is why an "until a gap" reading coincides there). Each parsed class
+reads eight keys **in this parse order**, and defaults chain off values read earlier in the same record, so
 order is contract:
 
 1. `FootPrintX` — integer, default 0, stored as 16-bit.
 2. `FootPrintZ` — integer, default 0, stored as 16-bit.
-3. `MaxWaterDepth` — integer, default the record's own prior value (preserved; zero on the first parse).
+3. `MaxWaterDepth` — integer, default the record's own prior value (preserved; the startup template value on the first parse).
 4. `MinWaterDepth` — integer, default the record's own prior value (preserved).
 5. `MaxSlope` — integer, default the record's own prior value (preserved), stored as a byte.
 6. `BadSlope` — integer, default **half (`>>1`) of the `MaxSlope` value just read**.
@@ -1623,64 +1517,42 @@ Three clamps then run **unconditionally on every class**, in order:
 * if the resulting MaxSlope is below BadSlope, BadSlope becomes MaxSlope;
 * if MaxWaterSlope is below BadWaterSlope, BadWaterSlope becomes MaxWaterSlope.
 
-**Established fact:** The comparisons are unsigned byte comparisons with no authored gate; the three checks execute for every class regardless of which keys were authored.
+**Established fact:** The comparisons are unsigned byte comparisons with no
+authored gate; the three checks execute for every class regardless of which
+keys were authored. No clamp is conditional on key presence, and none can be:
+the parser reads every field through the integer accessor, which cannot
+distinguish an absent key from an authored zero (§4), so a key-presence gate
+is not expressible with the accessor retail uses here.
 
-#### R-CONTENT-01 — Movement-profile template initialization (closed)
+#### Movement-profile template initialization [R-CONTENT-01]
 
-**SUPERSEDED 2026-08-27 by `[04 §6.1 R-DOC04-A]`.** Everything between this
-note and the "Consequence" note at the section tail — the falsification of
-the template hypothesis, the "all eight fields zero" initial values, and the
-zero-prior reading of the preserved defaults — was derived from a writer
-census that missed a startup initializer registered in the CRT
-function-pointer table, which pre-fills all 32 records (through the pool base
-plus a small offset) with `MaxSlope` = `BadSlope` = `MaxWaterSlope` =
-`BadWaterSlope` = 255, `MaxWaterDepth` = 10000, `MinWaterDepth` = −10000
-before the first parse. The corrected, authoritative contract — startup
-template pre-fill, no reset between classes, unconditional clamps, and the
-consumer-side layer classifier — is `[04 §6.1 R-DOC04-A]` and `[R-DOC04-B]`
-in document 04. The text below is retained unmodified for the audit trail;
-read it as history, not contract.
+**Established.** A startup initializer registered in the C-runtime
+function-pointer table pre-fills all 32 movement-class records with
+`MaxSlope` = `BadSlope` = `MaxWaterSlope` = `BadWaterSlope` = 255,
+`MaxWaterDepth` = 10000 and `MinWaterDepth` = −10000 **before the first class
+parses**. A class that omits a key therefore keeps the template value, the
+three unconditional clamps above are identity for it, and every stock class
+compiles to its authored slope limits.
 
-**Correction.** The previous text carried a standing `TODO(question)` whose
-working escape hatch was a profile template pre-filling each record (with
-`MaxWaterSlope ≈ 255`) before the first class parses, so that an absent
-`maxwaterslope` would preserve a large value and the clamps would be identity.
-That hypothesis is **falsified**: it was written when the pool's initial bytes
-were unproven; the executable-layout verification (against the PE
-section table) shows the pool is zero-filled at load, and the bounded writer
-census shows the `CLASS` loop is the pool's only writer. There is no template
-write before the first parse. **Established.**
+**Established — no reset between classes.** Each `CLASS%d` index owns one
+record slot, and each slot is parsed at most once per compile. The
+"prior value" defaults read that record's **own** prior bytes — the template
+on the first parse, and the previous parse's values on the battle-entry
+rebuild (§8), which for stock content is bit-identical.
 
-The initialization contract, settled:
+**Established — record fields.** Each 32-byte record holds the interned
+authored `name` value in its head (a missing `name` key yields the empty
+string, still interned) followed by the eight parsed fields; the remaining
+bytes are never written by the parser.
 
-* **Initial values — Established.** The class pool (32 records × 32 bytes)
-  lives in the executable's data section beyond the raw-data extent, so the PE
-  loader zero-fills it; the loader's prologue performs no fill and no template
-  copy, and a bounded census over the whole text segment finds the `CLASS`
-  loop as the pool's only writer. Every record therefore starts with a null
-  name slot and all eight fields **zero** before the first parse.
-* **Reset between classes — Established: none.** Each `CLASS%d` index owns one
-  record slot, and each slot is parsed at most once per compile. The "prior
-  value" defaults read the record's **own** prior bytes — not the previous
-  class's values and not a shared template. Because the pool starts zeroed
-  and nothing else writes it, a later class that omits `maxwaterslope` holds
-  **zero** (its own zero prior). The battle-entry catalog rebuild (§8)
-  re-parses the same pool in place, so on a re-parse an omitted key defaults
-  to that record's own previous-parse value; for stock content the re-parse
-  result is bit-identical.
-* **Clamp conditionality — Established: none.** All three clamps are unsigned
-  byte comparisons and run on every class. No clamp is conditional on key
-  presence, and none can be: the parser reads every field through the integer
-  accessor, which cannot distinguish an absent key from an authored zero (§4),
-  so a key-presence gate is not expressible with the accessor retail uses
-  here. The bounded search found no authored-flag storage beside the record.
-* **Record fields — Established.** Each 32-byte record holds the interned
-  authored `name` value in its head (a missing `name` key yields the empty
-  string, still interned) followed by the eight parsed fields; the remaining
-  bytes are never written and stay zero.
+The full contract — template pre-fill, no reset, unconditional clamps, the
+per-cell layer classifier, and A\* blocking only on layer 0 — is
+`[04 §6.1 R-DOC04-A]` and `[04 R-DOC04-B]`.
 
-**Per-field conversion — Established.** Every field goes through the integer
-accessor: optional sign, decimal digits, trailing junk ignored, 32-bit result
+#### Per-field conversion
+
+**Established.** Every field goes through the integer accessor: optional
+sign, decimal digits, trailing junk ignored, 32-bit result
 — and then stores with truncation to the field width. There is no scaling and
 no range clamp on the authored value itself.
 
@@ -1692,44 +1564,15 @@ no range clamp on the authored value itself.
 | `badslope` default | — | 8-bit | `(maxslope just read & 0xFF) >> 1` — logical shift, 0..127 |
 | `badwaterslope` default | — | 8-bit | `(maxwaterslope just read & 0xFF) >> 1` |
 
-**Consequence and remaining paradox — RESOLVED (superseded by
-`[04 §6.1 R-DOC04-A]`, 2026-08-27).** The paragraph below this note was
-wrong: its writer census missed a startup initializer registered in the CRT
-function-pointer table that pre-fills all 32 class records (through the pool
-base plus a small offset) with `MaxSlope` = `BadSlope` = `MaxWaterSlope` =
-`BadWaterSlope` = 255, `MaxWaterDepth` = 10000, `MinWaterDepth` = −10000
-before any parse. The "all eight fields zero" initialization claim and the
-"zero-filled pool" correction earlier in this section are therefore
-superseded: omitted keys carry the TEMPLATE values, the unconditional clamps
-are identity for them, every stock class compiles to its authored slope
-limits, and there is no paradox. The prior text is retained below for the
-audit trail; the authoritative statement — template pre-fill, unconditional
-clamps, the per-cell layer classifier, and A* blocking only on layer 0 — is
-`[04 §6.1 R-DOC04-A]`/`[R-DOC04-B]`. Nanolathe's SC5 gated clamps are
-closed out: delete them and initialize from the template.
-
-**Superseded reading (2026-08-27, earlier the same day).** The arithmetic is forced:
-every class that omits `MaxWaterSlope` computes `MaxSlope = 0` after the
-unconditional first clamp, and the stock catalog's thirteen omitting classes
-(only `TANKDH3` and the two hover classes author `MaxWaterSlope`) compile to
-`MaxSlope = 0` — while the movement classifier below hard-blocks every land
-cell whose slope exceeds `MaxSlope`. All writers and comparisons are
-enumerated and byte-verified; the contradiction with assumed stock playability
-is a genuine bounded unknown whose decider is a runtime trace of the compiled
-pool or of a unit definition's slope copy, not further static analysis.
-Nanolathe's gated clamps (clamps 1 and 3 gated on whether `MaxWaterSlope` was
-authored, per `docs/SPEC_CONFLICTS.md` SC5) remain the install-compatible
-divergence.
-
 **Record identity and FBI resolution.** Each parsed record's head is the
 interned value of the section's authored `name` key (string accessor, 100
 bytes, default empty) — not the `CLASS%d` section name. The FBI compiler
 resolves its `movementclass` string by a linear scan of the 32 records with
 the case-insensitive comparison against that interned name value; records with
-a null name slot are skipped; a miss yields the null profile. This closes the
-question of whether `MovementClass=TANKSH2` resolves against `CLASS%d` names
-or the authored `Name`: it resolves against the authored `Name` value, exactly
-as `research/formats/tdf.md` states.
+a null name slot are skipped; a miss yields the null profile. A
+`MovementClass=TANKSH2` reference therefore resolves against the authored
+`Name` value, not against the `CLASS%d` section name, exactly as `[fmt tdf]`
+states.
 
 **Fallback template for an unresolvable movement class.** When the FBI
 movement-class lookup fails, the unit's compiler initializes a scratch record
@@ -1767,9 +1610,25 @@ limits, `MaxSlope`, and `MaxWaterSlope`.
   terrain-slope test; with the stock clamped values it degenerates to the pure
   `MaxWaterDepth` limit.
 
-**Established:** Slope is derived from a 2×2 height neighbourhood. The plot expansion computes per-cell derived `MinHeight` and `MaxHeight` as the minimum and maximum of up to four height bytes (cell, east, south, southeast, with edge guards) — these derived values are the slope inputs, not a single height sample. Height queries use bilinear interpolation of the four corner heights with low-four-bit fractions and signed-bias correction. Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle. Passability comparisons are strict `<` for the hard blocks (`slope == limit` passes) and `≤` for the clear/steep boundary. Land-vs-water slope selection happens per cell in the movement classifier (`hmin` below sea level switches to the water pair) and in the mobile-movement wrapper; the structure validator's slope gate always uses the land pair.
-
-**Corrected by [04 R-SLOPE-01] (2026-09-01).** The sentence "Validation aggregates `min of mins` and `max of maxes` across the footprint rectangle" is true only of the structure placement validator ([04 R-P0-08]) and the spawner height probe ([08 R-ENTRY-02 §1]). The movement classifiers — the per-class layer stamp, the rectangle restamp and both commit validators — evaluate **each cell on its own derived pair** (slope = that cell's `MaxHeight − MinHeight`, 8-bit) and combine a footprint by taking the **minimum tier** over its cells; a 2×2 class is never judged on the 3×3 corner window. The height byte itself reaches the plot verbatim — no scaling or shift between the TNT record and the derived pair. The rest of the paragraph stands.
+**Established:** Slope is derived from a 2×2 height neighbourhood. The plot
+expansion computes per-cell derived `MinHeight` and `MaxHeight` as the minimum
+and maximum of up to four height bytes (cell, east, south, southeast, with edge
+guards) — these derived values are the slope inputs, not a single height
+sample. The height byte itself reaches the plot verbatim: there is no scaling
+or shift between the TNT record and the derived pair. Height queries use
+bilinear interpolation of the four corner heights with low-four-bit fractions
+and signed-bias correction. The structure placement validator
+(`[04 R-P0-08]`) and the spawner height probe (`[08 R-ENTRY-02 §1]`) aggregate
+`min of mins` and `max of maxes` across the footprint rectangle; the movement
+classifiers — the per-class layer stamp, the rectangle restamp and both commit
+validators — instead evaluate **each cell on its own derived pair** (slope =
+that cell's `MaxHeight − MinHeight`, 8-bit) and combine a footprint by taking
+the **minimum tier** over its cells, so a 2×2 class is never judged on the 3×3
+corner window (`[04 R-SLOPE-01]`). Passability comparisons are strict `<` for
+the hard blocks (`slope == limit` passes) and `≤` for the clear/steep boundary.
+Land-vs-water slope selection happens per cell in the movement classifier
+(`hmin` below sea level switches to the water pair) and in the mobile-movement
+wrapper; the structure validator's slope gate always uses the land pair.
 
 ### Sound aliases
 
@@ -1782,7 +1641,7 @@ Alias-cache eviction is bounded-negative (no eviction site found in the
 census) `TODO(question)`; sample precedence follows the VFS mount order
 established in §2.
 
-### Closed — the alias catalog file and its per-section read [R-CAT-01 §6] (2026-08-29)
+### The alias catalog file and its per-section read [R-CAT-01 §6]
 
 **Established fact.** The alias catalog is `gamedata\allsound.tdf`, built
 through the ordinary path builder and parsed with the generic TDF parser. The
@@ -1852,17 +1711,6 @@ captions, plus the count. The bare read and the numbered loop are
 **independent**: a missing bare key contributes nothing and the numbered
 loop still runs from index 1 [R-SND-01 §1].
 
-**Correction (SC7, 2026-08-29, `[R-SND-01 §1]`).** Until 2026-08-29 this
-section said "an event key that is absent for the bare form contributes no
-variants at all, because the bare read is what gates the numbered loop",
-and carried an untraced install-compatibility note that the gate must be
-wrong because stock `sound.tdf` authors `select1`, `ok1`, `cant1` and
-`arrived1` with no bare form. The executable has now been re-read: the
-loader discards the result of the bare read and unconditionally starts the
-numbered loop at 1. The earlier sentence was a mis-reading of the loop
-structure — the only tested result is that of each numbered read. The
-install observation is thereby explained, not merely tolerated.
-
 **What the reference install actually authors [I14].** Counted over the 120
 categories of the reference `sound.tdf`, so that a future silence bug is not
 mistaken for a compilation or VFS failure. Every category authors exactly one
@@ -1882,7 +1730,7 @@ against the table and 11 do not (`none` six times, plus `core_kbot`,
 sounds are a different family and are healthy: 198 weapon definitions supply
 62 distinct `soundstart`/`soundhit`/`soundwater` names and all 62 resolve.
 
-### Closed — the sound-category loader: file, record, bare and numbered keys, captions [R-SND-01 §1] (2026-08-29)
+### The sound-category loader: file, record, bare and numbered keys, captions [R-SND-01 §1]
 
 Everything here is the content layer; the reader side (queue, draw, gates)
 is `[03 §8.3]` and `[03 R-AUD-01 §3]`.
@@ -1940,27 +1788,22 @@ and which from numbered keys.
 with no bare forms (SC7's observation) is therefore exactly what the loader
 expects; no compatibility divergence is needed.
 
-### R-P0-03 — Category token registry and membership-bitset compilation
+### Category token registry and membership-bitset compilation [R-P0-03]
 
-Addendum R-P0-03 is folded into this subsection; the consumption of these
-bitsets by weapon and order masks is owned by document 06 §3.1.
+The consumption of these bitsets by weapon and order masks is owned by
+document 06 §3.1.
 
-#### §1 — Result
+#### Result [R-P0-03 §1]
 
 **Established.** Retail does **not** assign one bit per category token by
 hashing the token. A category token is a case-insensitive registry key whose
 value is a bitset of unit definition IDs. Compiling a unit's `category` string
 sets that unit's ID bit in the bitset for every token named by the string.
 Weapon and order masks then refer to those token bitsets and test candidate
-unit IDs.
+unit IDs. Category bits are membership sets indexed by unit ID, never token
+ordinals or hash buckets.
 
-An earlier reading — one bit per token derived by hashing the token name
-(`FNV(token) % 32`) — is the wrong contract: it would make category bits token
-ordinals or hash buckets, while retail makes them membership sets indexed by
-unit ID. The hash reading was tried and is rejected by the recovered static
-path; this paragraph records the reversal so it stays auditable.
-
-#### §2 — Registry construction
+#### Registry construction [R-P0-03 §2]
 
 The category registry is a sorted vector of entries, each holding a name
 pointer and a bitset pointer. Lookup uses a case-insensitive comparison. If a
@@ -1985,7 +1828,7 @@ The compiler sets `registry[token][word] |= mask`. The same unit ID can be set
 in many token bitsets. Downstream, a bad-target/no-chase mask for token T is
 effectively tested as `T.bitset[unitID >> 5] & (1 << (unitID & 31))` [06 §3.1].
 
-#### §3 — Category-string compilation
+#### Category-string compilation [R-P0-03 §3]
 
 The `category` value is scanned as a whitespace-separated sequence (a `%s`-style
 token scan that also reports the consumed-character count). Each token is
@@ -1996,11 +1839,10 @@ After the token loop, the compiler also looks up the registry entry named
 by the literal token `ALL` and sets the current unit ID bit in that bitset.
 `ALL` membership is mandatory and unconditional: every compiled unit is a
 member of the `ALL` category regardless of its authored tokens, and an
-authored `ALL` token is a no-op duplicate. This corrects the earlier reading
-of an "empty/sentinel entry with no established spelling": the entry is the
-ordinary token `ALL`, and it is consumed through the ordinary registry
-lookup — a mask built from the name `ALL` (for example an authored
-`noChaseCategory=ALL`) matches every unit. The `ALL` literal also appears in
+authored `ALL` token is a no-op duplicate. The entry is the ordinary token
+`ALL`, consumed through the ordinary registry lookup — a mask built from the
+name `ALL` (for example an authored `noChaseCategory=ALL`) matches every
+unit. The `ALL` literal also appears in
 the campaign-side selector (a `campaignside` value of `ALL` matches any
 side), which is a separate consumer.
 
@@ -2011,7 +1853,7 @@ fields (`wpri_badTargetCategory`, `wsec_badTargetCategory`, and
 like any other token, so its mask is empty unless an authored unit is actually
 compiled into that token [06 §3.1].
 
-#### §4 — Unknown and duplicate handling
+#### Unknown and duplicate handling [R-P0-03 §4]
 
 | Input case | Retail behavior | Confidence |
 | --- | --- | --- |
@@ -2027,7 +1869,7 @@ error path. A later definition can populate an already-created empty bitset,
 which is why registry construction must not discard unknown names during the
 first pass.
 
-#### §5 — Related mask lookup
+#### Related mask lookup [R-P0-03 §5]
 
 The mask helper first resolves a name against the unit-name index. If the name
 is a unit name, it sets that one unit ID bit; otherwise it ORs the whole
@@ -2035,7 +1877,7 @@ category bitset into the output mask. This preserves the distinction between a
 direct unit target and a category target and further rules out a
 token-to-single-bit model [06 §3.1].
 
-#### §6 — Algorithm and ordering contract
+#### Algorithm and ordering contract [R-P0-03 §6]
 
 ```text
 build unit catalog
@@ -2045,7 +1887,7 @@ build unit catalog
 for each unit in stable ID order
   for token in whitespace_tokens(unit.category)
     set category_registry[casefold(token)][unit.id] = 1
-  set category_registry[empty_sentinel][unit.id] = 1
+  set category_registry["ALL"][unit.id] = 1
 
 compile authored bad-target/no-chase category names
   resolve one case-insensitive registry entry per name
@@ -2058,7 +1900,7 @@ the same case-insensitive catalog order must be used before setting bits.
 Registry allocation and membership are integer operations; no FNV, modulo, or
 floating-point step participates.
 
-#### §7 — Evidence and confidence
+#### Evidence and confidence [R-P0-03 §7]
 
 - Unit category fields, defaults, two-stage catalog loading, and retained
   unknown keys: §5 above.
@@ -2069,10 +1911,9 @@ floating-point step participates.
   repository.
 
 Confidence is high for registry identity, bitset layout, unknown/duplicate
-behavior, unit-ID indexing, and the `ALL` sentinel token; the earlier
-"empty/sentinel entry with unknown spelling" reading is retracted.
+behavior, unit-ID indexing, and the `ALL` token.
 
-#### §8 — Implementation guidance and unresolved question
+#### Implementation guidance [R-P0-03 §8]
 
 Compile a registry entry to a mutable/immutable 512-bit unit-membership mask,
 not to a token ordinal. Casefold names using the retail-compatible
@@ -2083,16 +1924,15 @@ as a normal token default unless content analysis proves an authored special
 case. Set every unit's ID bit in the `ALL` entry as the mandatory membership.
 
 
-### Key consumer table [R-KEYS-01] (generated 2026-08-29)
+### Key consumer table [R-KEYS-01]
 
-Status: **Established** for the enumeration (every row is a typed-accessor
+**Established** for the enumeration (every row is a typed-accessor
 read found in one of the retail parsers — the unit-definition compiler and
 the unit-catalog loader, the weapon-record parser, the feature parser, the
 movement-class parser, the mission loader, the placed-object compiler, the
 trigger builder, the side loader, the sound-category loader and the
 preferences loader); the consumer column carries its own evidence level per
-row. This closes RWU-02-1 and is the vocabulary exit criterion of
-`docs/PLAN_RESEARCH_COMPLETION.md` §8.
+row.
 
 **How to read it.** One row per key the executable reads. *Accessor* is the
 typed accessor of §4 "Typed accessors" (`integer`, `floating`, `fixed`,
@@ -2106,7 +1946,7 @@ load of the stored field, or `unknown:` with the decider. Rows whose
 consumer is `[02 R-KEYS-01 §n]` are stated in the numbered notes below;
 every other citation points at the owning document.
 
-**Exit-criterion numbers (2026-08-29).** 398 keys enumerated; 372 with a
+**Census.** 398 keys enumerated; 372 with a
 consumer citation, 11 inert by reader census, 15 Unknown (one side key,
 fourteen presentation-only registry values whose readers no document has
 traced yet — all named with their decider in the table). Keys with no
@@ -2123,7 +1963,7 @@ record's table. Do not hand-edit rows — change the generator's data and
 regenerate, so the table and the raw trail
 (`/tmp/ta-decompile/notes/content/rwu-02-1.md`) stay in step.
 
-#### §1 — Unit-record consumers not stated elsewhere [R-KEYS-01 §1]
+#### Unit-record consumers not stated elsewhere [R-KEYS-01 §1]
 
 * **`defaultmissiontype` — Established.** The 100-byte string is converted
   through the mission-type vocabulary (the same name table the `InitialMission`
@@ -2144,12 +1984,12 @@ regenerate, so the table and the raw trail
 * **`canreclamate` and capability bit 9 — Established.** The parser stores
   `canreclamate` in capability-word bit 10, and while storing `canresurrect`
   (bit 11) it also writes **bit 9 as a copy of bit 10**. There is no key for
-  bit 9; it is derived. Readers of bit 9 versus bit 10 are not separated by
-  this unit (the doc 04/05 reclaim gates cite the capability, not the bit) —
+  bit 9; it is derived. Readers of bit 9 versus bit 10 are not separated here
+  (the doc 04/05 reclaim gates cite the capability, not the bit) —
   *decider:* a bit-9 reader census, which matters only if a reader tests bit
   9 alone.
 
-#### §2 — Weapon-record consumers not stated elsewhere [R-KEYS-01 §2]
+#### Weapon-record consumers not stated elsewhere [R-KEYS-01 §2]
 
 * **`toairweapon` — Supported inference for the gate, Established for the
   readers.** Flag bit 17 of the weapon record has two readers: the
@@ -2157,10 +1997,10 @@ regenerate, so the table and the raw trail
   records whether the chosen slot's weapon is *not* to-air, which selects the
   resolver's return code) and the fire-order handler's weapon-slot pick,
   which skips a slot flagged to-air unless the target's airborne state bits
-  read 2. **Closed 2026-08-31 by `[06 R-WPN-05 §1]`:** the operand is the
-  target's *committed mover mode* — the low two bits of its state word,
+  read 2. `[06 R-WPN-05 §1]` settles the operand: it is the target's
+  *committed mover mode* — the low two bits of its state word,
   `[04 R-MOV-01 §8]` — which must read exactly 2. The same gate is the order
-  side's shot-admission test, so the row is now Established throughout.
+  side's shot-admission test, so the row is Established throughout.
 * **`shellweapon` — inert (reader census: none).** Flag bit 2 is stored and
   never loaded, in any of the decompiler's renderings (dword mask,
   shift-and-and, byte-narrowed mask). Bounded by the export, like every
@@ -2175,22 +2015,14 @@ regenerate, so the table and the raw trail
   `[06 §10]` (plus the shared target search's paralysed-target skip,
   `[06 §3.2]`) and `[06 §7.3]` respectively.
 
-#### §3 — Registry values §3 omitted, and a subkey correction [R-KEYS-01 §3]
+#### Registry values not listed above [R-KEYS-01 §3]
 
 * **`side` — Established read, Supported inference for meaning.** The
   preferences loader reads a DWORD value named `side` under the
   `Total Annihilation` key, installs 0 when absent, and stores it in a
   session global. Its readers are the campaign briefing screens and the
   save-account restore, i.e. it is the last chosen player side (0/1) that
-  the campaign-side filter of `[08 R-CAMP-01 §2]` compares against. §3's
-  value list above did not include it.
-* **Correction — subkey placement.** §3 above says the skirmish settings
-  `SkirmishMap`, `SkirmishLocation`, `SkirmishDifficulty`, `SkirmishLOSType`,
-  `SkirmishLineOfSight`, `SkirmishMapping` and `SkirmishCommanderDeath` live
-  "under the skirmish subkey". They do not: every one of them is read under
-  the main `Total Annihilation` key (`SkirmishMap` as a 256-byte string, the
-  rest as DWORDs). Only the per-slot `Player%d…` values are read under
-  `Total Annihilation\\Skirmish`. The defaults §3 lists are right.
+  the campaign-side filter of `[08 R-CAMP-01 §2]` compares against.
 * **`Games` and the session option word — Established.** The loader reads
   `NumSkirmishPlayers`; when it is exactly 256 it also reads `Games`, and
   when that is 1 it sets bit 1 of the 16-bit *session option word*; any other
@@ -2199,7 +2031,7 @@ regenerate, so the table and the raw trail
   and 9 of the same word. This word is distinct from the two packed display
   and sound option words §3 describes.
 
-#### §4 — The `shootme` option bit: writer census (closes the RWU-02-1 decider) [R-KEYS-01 §4]
+#### The `shootme` option bit: writer census [R-KEYS-01 §4]
 
 `[04 R-SPEC-01 §5]` left open which setting produces the session option bit
 that admits any target to a human player's autonomous target search. That
@@ -2212,6 +2044,33 @@ stays **Unknown**, narrowed: a writer would have to reach the word through a
 pointer the decompiler lost (a block copy from a save or lobby record) —
 *decider:* a runtime watch on the word while loading a save and joining a
 lobby, or a trace of every block copy into the session globals.
+
+#### `burstrate`, `duration` and `smokedelay` are unsigned 16-bit tick words [R-KEYS-01 §6]
+
+**Established — the store.** The weapon loader converts each of the three
+keys as `trunc(authored × 30)` and stores the low sixteen bits of the result,
+exactly as it does for `weapontimer`, `randomdecay` and `flighttime`
+(the "floating · 16-bit" rows of the table below carry that width).
+
+**Established — the widening.** Every reader of the three words zero-extends
+them: the loads are plain sixteen-bit moves into a register that was cleared
+first (or masked to sixteen bits immediately after), never a sign-extending
+load, and the consumer arithmetic is unsigned. The readers are all in the
+projectile update — the burst scheduler for `burstrate`, the beam latch for
+`duration`, the trail-smoke deadline for `smokedelay` — and doc 06 states
+each one in [06 R-WPN-05 §12]. There is no other reader of any of the three
+words anywhere in the image (bounded negative: a whole-image search for
+sixteen-bit accesses at the three record offsets finds only the loader's
+stores and the projectile update's loads).
+
+**Consequence for the compiled value.** The value a Nanolathe consumer must
+see is `uint16(trunc(authored × 30))` widened to a non-negative integer:
+`0..65535` ticks. A negative authored value does not produce a negative
+interval — `burstrate=-1` is `65506` ticks — and a value at or above
+`65536/30 ≈ 2184.53` seconds wraps (`2184.6` → `2` ticks). No stock weapon
+authors any of the three outside `0..32767/30` seconds, so nothing shipped
+distinguishes the widening; third-party content can.
+
 
 #### The table [R-KEYS-01 §5]
 
@@ -2500,8 +2359,8 @@ lobby, or a trace of every block copy into the session globals.
 | `nosealeveltrigger` | integer · 32-bit | 0 | `[06 §8.2]`, `[04 R-COB-04 §2]` | Established |
 | `waterdoesdamage` | integer · 32-bit | 0 | `[04 §9.2]` | Established |
 | `waterdamage` | integer · 32-bit | 0 | `[04 §9.2]` | Established |
-| `killmul` | floating · single float | 0.0 | read by the end-of-battle score helper `[08 R-CAMP-01 §7]` (correction, `[08 R-CAMP-01 §11]`: this row previously read "inert (reader census: none) — `[02 R-MAP-01 §3]`"; that census missed the score helper, which multiplies by both keys) | Established |
-| `timemul` | floating · single float | 0.0 | read by the end-of-battle score helper `[08 R-CAMP-01 §7]` (correction, `[08 R-CAMP-01 §11]`: this row previously read "inert (reader census: none) — `[02 R-MAP-01 §3]`"; that census missed the score helper, which multiplies by both keys) | Established |
+| `killmul` | floating · single float | 0.0 | read by the end-of-battle score helper `[08 R-CAMP-01 §7]` | Established |
+| `timemul` | floating · single float | 0.0 | read by the end-of-battle score helper `[08 R-CAMP-01 §7]` | Established |
 | `HumanMetal` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
 | `HumanEnergy` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
 | `ComputerMetal` | integer · single float | 0 | `[08 R-SKIR-01 §5]` | Established |
@@ -2818,21 +2677,6 @@ reads, the section it must sit in, the accessor and width, the default, where
 the value is stored and who reads it — is `[R-MAP-01 §3]` (global keys) and
 `[R-MAP-01 §5]` (schema keys) below.
 
-**Correction (2026-08-29, `[R-MAP-01]`).** The table that stood here listed
-`missionname` as a language-prefixed string read "from the map's global
-section", `missionfile` as a map key, `maxunits` as "integer, default 200"
-without qualification, and mixed the `[Schema N]` keys (`HumanMetal` …
-`MeteorInterval`, `SurfaceMetal`, `aiprofile`) into the global list. All four
-were wrong or misleading: the OTA's own `missionname` is never read (both
-readers of that key read the campaign file's `MISSION%d` section);
-`missionfile` is a campaign-file key naming the OTA, not an OTA key;
-`maxunits` is read from the OTA only on the campaign path (skirmish and
-multiplayer take the unit limit from the setup record, `[08 R-SKIR-01 §6]`);
-and the accessors never walk from a schema to its parent, so a schema key
-authored at global level (or vice versa) is invisible. The typed defaults it
-listed (integers 0, floats 0.0, description `No description available`) were
-right and are carried into the new table.
-
 **Meteor merge and enable contract.** The map-global keys feed a storm record
 committed to the mission globals. An empty `MeteorWeapon` is the only disable
 predicate: it disables the shower and loads the defaults. With a nonempty
@@ -2843,15 +2687,14 @@ parameters substitute rather than disable, and the enable step is reached on
 both the authored and substituted paths. A map authoring nonzero parameters
 with no weapon key is disabled with its parameters discarded.
 
-**Contradiction (recorded 2026-08-27, open):** document 06 §6.5 states the
-per-field reading — each zero parameter substitutes ITS corresponding
-default — while this section states the all-or-nothing reading above. The
-two disagree whenever a map authors only SOME parameters as zero. Nanolathe
-currently implements the per-field ([06 §6.5]) reading
-(`combat.EffectiveMeteor*`). Decider: one probe — a mission authoring, say,
-radius nonzero and density zero, then trace which values reach the spawned
-storm. Until probed, treat the substitution granularity as
-`TODO(question)`; nothing else in either contract depends on it.
+**Unknown — substitution granularity.** Document 06 §6.5 states a per-field
+reading — each zero parameter substitutes its corresponding default — while
+this section states the all-or-nothing reading above; the two disagree
+whenever a map authors only some parameters as zero. Decider: one probe — a
+mission authoring, say, radius nonzero and density zero, then trace which
+values reach the spawned storm. Until probed, treat the substitution
+granularity as `TODO(question)`; nothing else in either contract depends on
+it.
 
 Stock content authors `[Default]` as weapon `Meteor`, radius 300, density 2,
 duration 5, interval 60. If that record itself carries an empty weapon name
@@ -2905,8 +2748,7 @@ converts authored degrees onto the engine's 65,536-per-turn angle scale by a
 fixed-point magic multiply with truncation toward zero (see document 08, which
 owns the exact equivalence domain: identical to `trunc(degrees × 65536 /
 360)` for non-negative degrees below the 32-bit wrap, plus one unit for
-negative degrees, wrapping correctly through 360..65535; an earlier reading
-held the exact rounding chain as supported inference — superseded). `BuildPriority`,
+negative degrees, wrapping correctly through 360..65535). `BuildPriority`,
 `HealthPercentage` (default **100**), and `CreationCountdown` fill dedicated
 fields; `Player` defaults 0 with negatives clamped to 0; the four flags
 `MissionCriticalUnit`, `AiIgnore`, `AiPriorityTarget`, and `Immunity` pack as
@@ -2924,9 +2766,10 @@ coordinates are cleared before stamping.
 OTA features are added through the same feature stamping path used by the
 terrain file.
 
-**Mission-file diagnostics.** The mission open path owns six exact strings
-(five previously recorded; the sixth was missing from the census). Five
-report through the status pane:
+#### Mission-file diagnostics
+
+The mission open path owns six exact strings. Five report through the status
+pane:
 
 * `The requested mission file, %s, does not exist.` — a campaign-mission
   request whose `MISSION%d` section is absent from the campaign file;
@@ -2949,7 +2792,9 @@ diagnostic: the loader retries through the alias probe and returns silently.
 Campaign loads own the sibling `The requested campaign file, %s, does not
 exist.`.
 
-**Terrain file.** The terrain loader accepts exactly two version words and
+#### Terrain file
+
+The terrain loader accepts exactly two version words and
 rejects anything else with a diagnostic naming the value. Both versions share
 the leading header fields — version, cell width, cell height, a tile-map
 offset, an attribute-array offset, a tile-graphics offset, a tile count, a
@@ -3030,16 +2875,6 @@ recomputed for the full map and after feature placement. It performs:
   … down to row `Height-8`, voided when row `Height-7`'s height is below 32.
   The traced statement is `[03 R-TERR-01 §2]`.
 
-  **Correction (2026-08-29, `[R-MAP-01 §10]`).** This bullet previously
-  read: "an empty-or-fringe cell at row z is set to `0xFFFD` when `z*16 −
-  (height >> 1) > PlayBottom` … The last row voids heights < 224, `Height-2`
-  < 192, `Height-3` < 160, `Height-4` < 128, `Height-5` < 96, `Height-6` <
-  64, `Height-7` < 32, `Height-8` never." The predicate was right; the
-  voided cell was wrong by one row. The loader steps its cell pointer back
-  one row stride *before* it reads and writes the feature word, so the row
-  whose height is tested and the row that is voided differ, and the bottom
-  row is untouched. An implementation of the old text voids one extra row
-  on every map and voids the bottom row, which retail never does.
 * **Lava-world flood:** when the mission `lavaworld` flag is set, a bulk sweep
   sets `0xFFFD` for every cell where `hmin ≤ SeaLevel` and the feature word is
   `0xFFFF` or `0xFFFE`, turning the entire low basin into void.
@@ -3057,11 +2892,11 @@ above.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-### Closed — the map-load pipeline: entry points, order, and the resource-path slots [R-MAP-01 §1] (2026-08-29)
+### The map-load pipeline: entry points, order, and the resource-path slots [R-MAP-01 §1]
 
-Status: **Established** (direct static trace of the mission loader, its four
+**Established** (direct static trace of the mission loader, its four
 front-end entry points, the battle-entry orchestrator and the session-start
-sequence). This unit owns the *load pipeline* and the key/consumer tables;
+sequence). This section owns the *load pipeline* and the key/consumer tables;
 what the loaded cells mean to the simulation is `[03 R-TERR-01 §1–§8]`,
 feature stamping is `[05 R-FEAT-01 §2/§3/§7]`, mission objects and triggers
 are `[08 R-TRIG-01]`, the skirmish setup record is `[08 R-SKIR-01]`.
@@ -3127,9 +2962,9 @@ directory therefore yields `\<glamour>.PCX`. Slot 1 additionally records the
 TNT's file size (0 when the file is absent). The slot accessor returns "no
 path" for an empty slot.
 
-### Closed — opening the OTA: paths, the alias retry, and every diagnostic [R-MAP-01 §2] (2026-08-29)
+### Opening the OTA: paths, the alias retry, and every diagnostic [R-MAP-01 §2]
 
-Status: **Established** (strings verbatim from the image; channels traced).
+**Established** (strings verbatim from the image; channels traced).
 
 **Path.** `Maps\<name>.OTA` is built by the same directory/name/extension
 helper as the slots (language-directory variant first, plain second), so a
@@ -3173,9 +3008,9 @@ application title, then process exit with code 1; when the fatal channel is
 handed a null string it shows nothing and exits. The terrain loader's
 failures (§6) use (c) only.
 
-### Closed — `[GlobalHeader]` keys: level, accessor, default, store, consumer [R-MAP-01 §3] (2026-08-29)
+### `[GlobalHeader]` keys: level, accessor, default, store, consumer [R-MAP-01 §3]
 
-Status: **Established** (loader trace for every read; reader census over the
+**Established** (loader trace for every read; reader census over the
 decompiled corpus for every stored value; asset census over the 275 retail
 OTAs for the "authored" column).
 
@@ -3184,8 +3019,7 @@ typed accessors of §4 "Typed accessors" search **only the current section's
 own key vector**; there is no walk to the parent section or into children.
 The loader reads global keys with `GlobalHeader` current and schema keys with
 the selected `[Schema N]` current, so a key authored at the other level is
-simply absent and takes its default. (`[fmt ota]` previously said the engine
-"appears to read several environment keys at either level"; it does not.)
+simply absent and takes its default.
 
 **Read order and table.** The keys are read in exactly this order; nothing
 between them depends on an earlier key except as noted.
@@ -3216,8 +3050,8 @@ between them depends on an earlier key except as noted.
 | 20 | `waterdoesdamage` | integer | 0 | water damage gate `[04 §9.2]` (both flag and amount must be non-zero) | 183 |
 | 21 | `waterdamage` | integer | 0 | water damage amount, same site | 183 |
 | — | trigger keys | see `[08 R-TRIG-01 §2]` | — | the trigger builder runs here, between `waterdamage` and `killmul` | — |
-| 22 | `killmul` | floating (single) | 0.0 | mission record — **inert** (no reader; the score screen does not read it) | 275 |
-| 23 | `timemul` | floating (single) | 0.0 | mission record — **inert** (no reader) | 275 |
+| 22 | `killmul` | floating (single) | 0.0 | mission record; read by the end-of-battle score helper `[08 R-CAMP-01 §7]` | 275 |
+| 23 | `timemul` | floating (single) | 0.0 | mission record; read by the end-of-battle score helper `[08 R-CAMP-01 §7]` | 275 |
 | — | `maxunits` | integer | 200 | read **before** this table on the campaign path only (§2); unit-limit global, readers in doc 05 | 184 |
 | — | `missionname`, `size`, `SCHEMACOUNT`, `solarstrength` | — | — | **inert**: `missionname` has no OTA reader (both readers read the campaign file's `MISSION<n>` section); the other three have no string in the image | 275 each |
 
@@ -3227,9 +3061,9 @@ between them depends on an earlier key except as noted.
 authored zeros for both wind keys and for tidal strength, and `timemul=-1`
 on three campaign maps (inert).
 
-### Closed — schema selection, exactly [R-MAP-01 §4] (2026-08-29)
+### Schema selection, exactly [R-MAP-01 §4]
 
-Status: **Established** (direct static trace of the selector and its two
+**Established** (direct static trace of the selector and its two
 callers).
 
 **Vocabulary.** Seven type strings, compared case-insensitively against the
@@ -3283,9 +3117,9 @@ unreachable from the loader, which checks first.
 The selected schema's section name (`Schema <i>`) is handed to the mission
 object compiler, which re-finds `globalheader` and that schema by name.
 
-### Closed — `[Schema N]` keys and the schema-level reads [R-MAP-01 §5] (2026-08-29)
+### `[Schema N]` keys and the schema-level reads [R-MAP-01 §5]
 
-Status: **Established**. Read with the chosen schema current, in this order:
+**Established**. Read with the chosen schema current, in this order:
 
 | # | Key | Accessor, width | Default | Stored / consumer | Authored (635 schemas) |
 |---|---|---|---|---|---|
@@ -3305,9 +3139,9 @@ The `Human*`/`Computer*` values are read as integers and widened to single
 floats at the store — the fractional part of an authored value is lost
 before it is ever a float.
 
-### Closed — terrain load: open, version gate, the map-global block with its real defaults, and the fatal set [R-MAP-01 §6] (2026-08-29)
+### Terrain load: open, version gate, the map-global block, and the fatal set [R-MAP-01 §6]
 
-Status: **Established** (direct static trace). Cell semantics are cited, not
+**Established** (direct static trace). Cell semantics are cited, not
 restated.
 
 **Open and read.** Session start asks the mission record for slot 1. The
@@ -3340,11 +3174,9 @@ in this order, before any plot memory exists:
 So the "fallback" branches (100 / 2000 / `0x1FDB` / 0.5) are reached in
 exactly three cases: a legacy terrain file, an authored **negative** value,
 or a session whose OTA parse never reached a `GlobalHeader` (the prologue
-sentinels of §1 are −1 / −1.0). `[03 R-TERR-01 §6]`'s phrase "a canonical
-map whose OTA omits or negates `gravity` behaves as `gravity=112`" is right
-for "negates" and wrong for "omits"; doc 03 owns that sentence and is asked
-to correct it. Every retail OTA authors all four keys, so no shipped map
-exercises the omitted-key case.
+sentinels of §1 are −1 / −1.0). An omitted key is not one of them. Every
+retail OTA authors all four keys, so no shipped map exercises the
+omitted-key case.
 
 **Per-cell work, in order** (all cited): minimap picture (§7); tile map
 copy (§7); plot allocation and per-cell initialization `[03 R-TERR-01 §1]`;
@@ -3359,9 +3191,9 @@ R-TERR-01 §7]`; the render sort lists (§7); metal-deposit seeding `[05
 R-FEAT-01 §7]`; the eyeball buffer; the feature reproduction cursor reset;
 progress byte 100.
 
-### Closed — which stages are presentation only [R-MAP-01 §7] (2026-08-29)
+### Which stages are presentation only [R-MAP-01 §7]
 
-Status: **Established**. These allocations happen inside the terrain loader
+**Established**. These allocations happen inside the terrain loader
 but nothing in the simulation reads them; a headless Nanolathe may skip
 them without changing a tick:
 
@@ -3395,9 +3227,9 @@ them without changing a tick:
 * **Loading-progress byte** — written by the TNT reader (9…90) and set to
   100 at the end; the progress bar reads it.
 
-### Closed — feature-name resolution and the miss policy [R-MAP-01 §8] (2026-08-29)
+### Feature-name resolution and the miss policy [R-MAP-01 §8]
 
-Status: **Established**.
+**Established**.
 
 * **TNT name table.** Every record of the terrain file's feature-name table
   is compiled, in table order, by the feature parser as the catalog is built
@@ -3418,9 +3250,9 @@ Status: **Established**.
 * Matching is case-insensitive at both sites; the name is the TDF section
   name.
 
-### Closed — the map browser: enumeration and acceptance [R-MAP-01 §9] (2026-08-29)
+### The map browser: enumeration and acceptance [R-MAP-01 §9]
 
-Status: **Established** (skirmish/multiplayer map list builder).
+**Established** (skirmish/multiplayer map list builder).
 
 The list is built once per front-end session and cached (tag `MULTI MAPS`).
 The VFS is enumerated for `Maps\*.ota` (union enumeration order, `[02 §2]`;
@@ -3434,26 +3266,6 @@ translation table; if the lookup returns the lower-cased name unchanged the
 Names are stored NUL-separated in enumeration order; the skirmish fallback
 (no remembered map) picks the first entry. In a multiplayer session the
 network drain runs once per enumerated file (out of scope).
-
-### Corrections and cross-document needs [R-MAP-01 §10] (2026-08-29)
-
-* Doc 02 §6 south-edge void bullet — corrected in place above (row-above
-  rule; the bottom row is never voided).
-* Doc 02 §6 "Map-global keys" table — replaced by §3/§5 above; the old
-  table's four errors are quoted in the correction paragraph that replaced
-  it.
-* `[fmt ota]` "the engine appears to read several environment keys at either
-  level" — withdrawn (§3 scoping rule); `[fmt ota]` is corrected in this
-  unit.
-* `[03 R-TERR-01 §6]` "omits or negates `gravity` behaves as `gravity=112`"
-  and its wind row "on every canonical map with a negative or unparsed
-  value" — "omits"/"unparsed" is wrong for a parsed `GlobalHeader` (§6);
-  needs a doc 03 edit (not this unit's file).
-* The RWU-02-1 question "a numbered text-table resource reader (`TABLE%d`,
-  `numlines`, `line%d`)" — answered in §7: `gamedata\LOS.TDF`, consumed by
-  the sight-shape builder; the orchestrator should close the question.
-* The tail item "Map schema fallback selection and the complete map
-  content-hash input set" is closed by §4 and §3 row 0.
 
 ### Animation archive (GAF)
 
@@ -3489,16 +3301,13 @@ every source pixel equal to it), a compression flag byte (0 = raw pixels,
 byte is read** (`[R-MALF-01 §6]`; the high byte selects the table-remapped
 composition path for a subframe), a 4-byte zero field, a 32-bit data
 offset, and a trailing reserved word. The data offset is always biased by the
-file base. (This corrects an earlier description that summed to a 21-byte
-header with a "reserved" byte at offset 8 and a one-byte subframe count: the
-byte at +8 is the color key, the subframe count is a 16-bit value at +10, and
-the header is 24 bytes; see `research/formats/gaf.md` [fmt gaf].)
+file base. `[fmt gaf]` carries the byte-level layout.
 
 **Raw frame payload.** When the compression flag is clear, the data offset
 points directly at `width × height` bytes, row-major, one palette index per
 pixel. Raw frames carry no skip runs: their only transparency is the frame's
-own color key, so palette index 0 is opaque on this path. (This path was
-missing from earlier revisions; 6,068 of the 48,519 retail frames are raw.)
+own color key, so palette index 0 is opaque on this path. 6,068 of the
+48,519 retail frames are raw.
 
 **Compressed frame payload.** When the compression flag is set, the data
 offset points at a row table: one 16-bit stored byte count per row followed by
@@ -3510,8 +3319,7 @@ that row's command stream. Each command is a **byte** read as:
 * otherwise bit 1 set — repeat the following byte `(command >> 2) + 1` times;
 * otherwise — copy `(command >> 2) + 1` literal bytes.
 
-(The earlier "16-bit word" command reading is wrong — commands are bytes;
-a word-width decoder mis-decodes every RLE row.)
+Commands are bytes; a word-width decoder mis-decodes every RLE row.
 
 Rows decode left to right until the row width is covered, then the next row's
 count and stream follow. A zero width or height still allocates its header but
@@ -3586,7 +3394,9 @@ Draw order within a piece is therefore fixed at load time, not recomputed per
 frame, and an implementation that sorts at draw time will not reproduce the
 retail order for ties.
 
-**Mirroring.** A separate recursive pass negates the first and third
+#### Mirroring
+
+A separate recursive pass negates the first and third
 coordinates of every vertex and the first and third parent translations of
 every object in a hierarchy, which is a half-turn about the vertical axis
 applied to a whole model.
@@ -3595,7 +3405,7 @@ Model references are resolved from unit and feature model names. The
 primitive's colour, texture-name, and flag interpretation at draw time belongs
 to document 03.
 
-### Closed — the unit model's height word and the catalog-time texture bind [R-CAT-01 §7] (2026-08-29)
+### The unit model's height word and the catalog-time texture bind [R-CAT-01 §7]
 
 **Established fact — height word.** After a unit's model is loaded,
 relocated and mirrored (in that order — mirroring runs before the height is
@@ -3617,17 +3427,14 @@ extents `maxX − minX`, `maxZ − minZ` and a "radius" word
 compiler. Consumers (selection box, picking, the composition image key) are
 documents 03 and 07 and are not enumerated here.
 
-**Established fact — there is no min-Y walk, and who reads the height word
-(2026-09-04, WU-19-140).** The paragraph above already implies this; it is
-stated outright here because two behavioral sections had been reading the
-definition's minimum-Y word as a derived "model bottom". The height walk above
-is the **only** bound retail derives from model geometry. The minimum-Y word is
-written exactly once — the zero store immediately before the walk — and no
-second walk with an inverted comparison exists: the height helper has a single
-caller (this compiler), and the rest of the bounding record is footprint-derived.
-So every unit definition in the corpus has minimum-Y zero, and any contract that
-appears to want a model bottom is either reading that zero or reading the
-maximum-Y word instead. [07 R-REV-01 §7] traces the same pass independently from
+**Established fact — there is no min-Y walk, and who reads the height word.**
+The height walk above is the **only** bound retail derives from model
+geometry. The minimum-Y word is written exactly once — the zero store
+immediately before the walk — and no second walk with an inverted comparison
+exists: the height helper has a single caller (this compiler), and the rest of
+the bounding record is footprint-derived. Every unit definition in the corpus
+therefore has minimum-Y zero, and any contract that appears to want a model
+bottom is either reading that zero or reading the maximum-Y word instead. [07 R-REV-01 §7] traces the same pass independently from
 the hover-reduction side and agrees.
 
 The maximum-Y dword's **high half** is the height in whole world units, and it
@@ -3692,7 +3499,7 @@ interface file whose name begins with the unit name in the interface
 directory, the checksum of the unit's downloadable data file when one exists,
 and one further definition word.
 
-An override path accompanies that hash and is now fully traced: for each unit
+An override path accompanies that hash: for each unit
 definition, the loader builds the logical path `units\<unitname>.OVR` and
 opens it as a HapiBank with the account filter `TA Unit Override`; if an
 account named `Compatability` exists, the bank's integer item named by the
@@ -3764,12 +3571,7 @@ DIGI metadata reads its sample-rate word at byte 22 of `HSHD`: a rate of
 11,000 is remapped to 11,025, and the payload is **everything from byte 40
 to the end of the file** (`size − 40`; the `SDAT` size field is never read);
 the sample is treated as 8-bit mono thereafter. Raw samples default to
-11,025 Hz mono 8-bit. **Correction (2026-08-29, RWU-02-3, `[R-MALF-01
-§10]`).** This paragraph previously said the walk "honors odd-size
-padding", that it "extracts PCM format … block alignment", and that "the
-SDAT payload is trimmed by ten bytes"; the chunk stride is exactly
-`size + 8`, the format tag and block-align words are not read, and the DIGI
-payload starts at byte 40 and runs to end of file.
+11,025 Hz mono 8-bit.
 
 Decoding serves three allocation modes: a plain memory blob (raw fallback
 fixed at 11,025 Hz mono 8-bit), a preloaded DirectSound buffer, and a
@@ -3793,7 +3595,7 @@ than sample data.
   are fixed up in a second pass.
 * OTA/TNT map data and catalog records are retained for the lifetime of the
   active mission/session and are rebuilt when a new map or save is loaded.
-  The rebuild is now traced: the battle-entry path calls the same catalog
+  The rebuild works this way: the battle-entry path calls the same catalog
   compiler that serves startup (unit definitions, movement classes, models,
   scripts, build-menu pages, and side data) immediately after the terrain
   loader and meteor/wind initialization, so each battle entry recompiles the
@@ -3811,12 +3613,12 @@ include logical path, winning provider identity, and relevant decode mode.
 This matches retail's reuse while preventing stale data after an overlay or
 save/load transition.
 
-### Closed — the loader malformed-input matrix [R-MALF-01 §1] (2026-08-29)
+### The loader malformed-input matrix [R-MALF-01 §1]
 
-Status: **Established** (direct static trace of every reader and validator
+**Established** (direct static trace of every reader and validator
 named below; asset census over the 958 retail GAFs for §6) unless a cell
-says otherwise. This unit (RWU-02-3) states, for every file type retail
-loads, what a malformed input turns into. Byte-level *what the check reads*
+says otherwise. For every file type retail loads, this section states what a
+malformed input turns into. Byte-level *what the check reads*
 lives in the format docs; this block owns *what the outcome is*. Doc 04 owns
 what a running COB does with bad operands, doc 08 owns the save-file layout;
 both are cited, not restated.
@@ -3864,19 +3666,15 @@ routines, and their edge behaviour recurs in every row:
   a chunk whose `SQSH` decode fails is **fatal** — the message is
   `[HAPI_readfromfile] Decompression Error: <SQUASHERR name>` on one line and
   `block <n> of <count>`, `base name '<archive>'`, `length = <n>`,
-  `name = '<file>'` on the following lines. **Correction (2026-08-29).** §2
-  "Compression" said the failing chunk "aborts the read with the all-ones
-  failure value after reporting a diagnostic"; the two failures are distinct
-  — a short chunk read is silent all-ones, a decode failure is the fatal
-  box. The sentence is corrected in place.
+  `name = '<file>'` on the following lines. The two failures are distinct: a
+  short chunk read is silent all-ones, a decode failure is the fatal box.
 * *TDF load* — its own loader: a missing file or a size of 0 or less yields
   **no tree** (typed reads then return defaults and the resource family
   decides whether that is fatal); a parse error is **fatal** (§4).
 
 #### The matrix [R-MALF-01 §2]
 
-Columns are the seven malformed-input classes of
-`docs/PLAN_RESEARCH_COMPLETION.md` §6. Each cell names the outcome and the
+Columns are seven malformed-input classes. Each cell names the outcome and the
 check that decides it; "no check" means the reader walks on. Details and
 the exact comparisons are in the numbered sections that follow.
 
@@ -3884,7 +3682,7 @@ the exact comparisons are in the numbered sections that follow.
 |---|---|---|---|---|---|---|---|
 | **HPI / UFO / CCX / GP3** (§3) | *garbage or fault*: the 20-byte header, 36-byte footer and directory-blob reads ignore their counts — a cut inside the blob leaves heap bytes that the relocation pass biases and writes back; a cut inside a stored record is a short read passed to the caller; a cut inside a chunk is silent all-ones | *garbage or fault*: blob size beyond the file → as truncated; record size beyond the file → short read; chunk stored length beyond the file → silent all-ones; chunk **decompressed** length above 65,536 → the LZ77 and zlib decoders write past the 64 KiB chunk buffer (heap overrun) and then report `SQUASHERR_BADUNPACKSIZE` fatally if the produced length differs | *skip* at mount: tag ≠ `HAPI`, version bytes ≠ `00 00 01 00`, or normalized footer ≠ template → not mounted, no message. *fault (fatal box)* at read: chunk marker ≠ `SQSH` → `SQUASHERR_BADHEADER`; method byte `> 3` → `SQUASHERR_BADUNPACKTYPE` (methods 0 and 3 pass the test, decode nothing and fail as `BADUNPACKSIZE`); byte-sum mismatch → `SQUASHERR_BADCHECKSUM` | *accept*: within one directory the **later** entry wins (backward scan, §2 "Lookup"); across archives the first provider wins (§2) | *fault*: an entry offset outside the blob is biased and written back at mount (write to a wild address); a subdirectory chain that loops recurses without a visited set (stack overflow); no check on any of them | *skip*: an empty archive file fails the tag test; an empty stored record is null to every whole-file consumer (size < 1) | *fault (out of memory)*: blob size or chunk stored length ≥ the address space fails allocation; a blob size below 20 skips the decipher loop (signed test) and relocates through bytes beyond the block; an entry count with the top bit set is treated as **no entries** (signed loop bound); chunk index is `position >> 16`, never bounded against the table |
 | **TDF text** — FBI, OTA, weapon, feature, movement, side, sound, GUI, campaign, `translate`, `version`, `los` (§4) | *fault (fatal box)*: `Parse error in .TDF File! End of file - nextblock not zero` when the cut is inside a section; `Data field - '=' not found` / `Data field - ';' not found` inside a field; a cut between complete top-level items is accepted | n/a (text) | none: any bytes are text; a binary file reaches `Data field - '=' not found` (fatal) at its first non-blank byte, unless that byte is `[` or `}` | *accept*: repeated sections are all retained, the first-match accessor returns the earliest; an identical key spelling replaces the value (last wins); a case-variant spelling coexists as a second sorted entry (§4) | per family, §5 and the §5 cross-reference table; the generic parser has no references | *default*: a file of size 0 or less is treated as absent — no tree, every typed read returns its default; the family decides whether absent is fatal (§5) | *accept*: the integer accessor's conversion has **no overflow test** and wraps modulo 2³²; the fixed-point accessor's `× 65,536` then truncation stores the x87 indefinite integer `0x80000000` for any magnitude ≥ 2¹⁵ authored units; the floating accessor returns whatever the C-runtime decimal conversion produced |
-| **FBI unit record** (§5) | as TDF | n/a | *skip*: the catalog loader reads `Version` and `Copyright` from every unit section; a version newer than the executable's (3.1) or a copyright line that does not match the template drops the unit from the catalog — with the `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` for the version case, silently for the copyright case | as TDF | weapon miss → record 0 (inactive); corpse miss → no wreck; movement class miss → scratch record; **model miss → fatal, the box shows the path `objects3d\<objectname>.3DO`** (corrects the cross-reference table's "slot stays empty"); script miss → null script, crash at the first creation `[04 R-COB-04 §8]`; sound category miss → muted placeholder | as TDF (an empty FBI compiles a unit with every default and no name) | as TDF |
+| **FBI unit record** (§5) | as TDF | n/a | *skip*: the catalog loader reads `Version` and `Copyright` from every unit section; a version newer than the executable's (3.1) or a copyright line that does not match the template drops the unit from the catalog — with the `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` for the version case, silently for the copyright case | as TDF | weapon miss → record 0 (inactive); corpse miss → no wreck; movement class miss → scratch record; **model miss → fatal, the box shows the path `objects3d\<objectname>.3DO`** (corrects the cross-reference table's "slot stays empty"); script miss → null script, crash at the first creation `[04 R-COB-04 §8]`; sound category miss → index 0, or the decimal value of the authored text (`[R-CAT-01 §5]`) | as TDF (an empty FBI compiles a unit with every default and no name) | as TDF |
 | **OTA map / mission** (§5, `[R-MAP-01]`) | as TDF | n/a | no magic; a parsed file without `GlobalHeader` → status-pane message and failure (`[R-MAP-01 §2]`), battle entry proceeds on the prologue sentinels | as TDF; `Schema <n>` probed by index, a gap ends the probe (`[R-MAP-01 §4]`) | `[units]` name that is no unit → *skip* (slot 0, nothing spawned); `Player` outside 1..10 or a slot without a controller → **fatal** `Player number %d invalid for unit %s`; `[features]` name → **fatal** `Record "%s" missing from feature files`; the TNT named by the OTA missing → **fatal** (path as message); `aiprofile` miss → `ai\default.txt` (`[R-MAP-01 §5]`) | as TDF | as TDF |
 | **Catalog TDFs** — weapons, features, `moveinfo`, `sidedata`, `sound`, `meteor` (§5) | as TDF | n/a | `moveinfo.tdf` absent → **fatal** `Can't load MOVEINFO.TDF`; `sidedata.tdf` absent → **fatal**, and the box reads `Can't load GAMEDATA.TDF` (the text names the wrong file; nothing named `gamedata.tdf` is ever opened — this settles `docs/SPEC_CONFLICTS.md` SC2); `sound.tdf` absent → no categories, silent; `meteor.tdf` absent or without `[Default]` → record untouched (§6) | weapon: a second section with the same `ID` replaces the record (R-CONTENT-02); `CLASS<n>` gaps skipped; feature duplicates: first parsed document wins the name scan | weapon `ID` is **not range-checked**: `table + ID × 277` for any ID, so an ID above 255 or below −1 writes outside the 256-record table (*accept-with-garbage*, into neighbouring session state); weapon `model` miss → **fatal** (path); feature `object` miss → **fatal** (path); feature `filename` GAF miss → null root, every sequence null, silent; `seqname*` entry absent from the GAF → null sequence, silent; side `font` miss → **fatal**; side anchor subsection miss → **fatal** (§6) | as TDF | as TDF |
 | **GUI panel** (§5) | as TDF | n/a | none; a file that is not a panel yields gadgets with default fields | sections are visited **by index in file order**, whatever their names; `totalgadgets` is read and then **overwritten** by the section census (inert) | `[COMMON]` absent → the gadget's common fields are **not written** (whatever the window record held); a kind byte other than 0–8 and 10 reads only `[COMMON]`; art names that resolve to no GAF entry follow the fallback chain of §6 | as TDF (loader returns 0 to its caller; doc 07 owns what a screen does without its panel) | *accept-with-garbage*: gadget records (347 bytes) are written into a fixed 69,463-byte window record with **no count check**; a panel with more than about 199 gadget sections writes past it |
@@ -3943,22 +3741,16 @@ check can reject it. (`[fmt hpi]` carries the same facts in byte terms.)
 
 #### TDF: a parse error is fatal, and the exact message [R-MALF-01 §4]
 
-**Correction (2026-08-29).** §4 "Malformed input and failure behavior"
-said: "A failed load never terminates at the parser: the caller receives a
-valid-but-empty tree, so subsequent typed reads return their defaults. The
-caller decides whether that state is fatal for its resource family." That is
-true only of a **missing or empty file**. A **syntax error** is fatal: every
-one of the five diagnostics is formatted into one buffer and handed to the
-fatal channel — system-modal box, application title, then `exit(1)`. There
-is no error return from the parser and no partially-filled tree survives.
-The paragraph is corrected in place.
+**Established.** A missing or empty file yields no tree, and every typed read
+then returns its default. A **syntax error** is fatal: each of the five
+diagnostics is formatted into one buffer and handed to the fatal channel —
+system-modal box, application title, then `exit(1)`. There is no error return
+from the parser and no partially-filled tree survives.
 
 The message is one line: `Parse error in .TDF File! ` (trailing space),
 then the diagnostic, then ` - name = '<section>' from file <path>` — the
 literal word `name`, the **section name** the parser was inside (the
 top-level call passes `root`), and the logical path the loader was given.
-§4's earlier shape ` - <name> = '<value>' from file <file>` is corrected:
-the second placeholder is the section name, not a value.
 
 The parser's decisions, in order, on each non-blank byte: `[` → the closing
 `]` must exist somewhere after it (`Sub-record - closing ']' not found`),
@@ -4004,23 +3796,17 @@ the infinity step, which is C-runtime behaviour, not game code).
   sets a suppress flag and drops **silently**. `[fmt fbi]`'s "community
   lore" that units without the exact copyright line fail to load is thereby
   established, with the mechanism: the unit is not rejected by the parser,
-  it is compacted out of the catalog after parsing. `[R-KEYS-01 §5]`'s
-  generated table does not list these two keys; the generator's parser set
-  should gain the catalog loader (cross-doc note for the orchestrator).
+  it is compacted out of the catalog after parsing.
 * **Weapon `ID` (Established).** The record parser indexes
   `table + ID × 277` with **no range check**; R-CONTENT-02's "scratch slot
   before record 0" for the default −1 is the only sanctioned out-of-table
   case. Any other ID outside 0..255 writes a 277-byte record into whatever
   session state neighbours the table.
-* **Unit and weapon models (Established, corrects the cross-reference
-  table).** `objectname` and weapon `model` are loaded at compile time
-  through the shared model loader; a null result is passed to the fatal
-  channel with the **path** (`objects3d\<name>.3DO`) as the entire message.
-  The cross-reference table's row "Model (objectname) — the model cache slot
-  stays empty; rendering degrades — supported inference" is wrong and is
-  corrected in place.
-* **Feature GAF references (Established; closes the tail item "malformed or
-  missing burn sequences").** A feature that names a `filename` GAF which
+* **Unit and weapon models (Established).** `objectname` and weapon `model`
+  are loaded at compile time through the shared model loader; a null result is
+  passed to the fatal channel with the **path** (`objects3d\<name>.3DO`) as
+  the entire message.
+* **Feature GAF references (Established).** A feature that names a `filename` GAF which
   does not exist gets a null root and no diagnostic (this loader, unlike
   the anims cache used for effects, does not treat a missing file as
   fatal); every `seqname*` lookup against a null root, or against a root
@@ -4032,10 +3818,8 @@ the infinity step, which is C-runtime behaviour, not game code).
   catalog compiler loads `gamedata\moveinfo.tdf` and stops with
   `Can't load MOVEINFO.TDF` when that fails, and later loads
   `gamedata\sidedata.tdf` and stops with `Can't load GAMEDATA.TDF` when
-  **that** fails. No file named `gamedata.tdf` is opened anywhere. §1's
-  sentence that the diagnostic's "branch is unreachable when the directory
-  exists without the file" is replaced: the branch is reachable, and it
-  guards the side-data file.
+  **that** fails. No file named `gamedata.tdf` is opened anywhere; the
+  branch is reachable and it guards the side-data file.
 * **GUI panels (Established).** The panel loader parses `guis\<name>.gui`
   with the shared TDF loader (a missing file returns 0 to the screen; a
   syntax error is fatal as §4) and then walks the top-level sections **by
@@ -4060,19 +3844,17 @@ many subframe pointers and each subframe's data offset. Every bias is
 written back; nothing is bounded, so a truncated or corrupt GAF faults during
 load, not during draw. The version word is never read.
 
-**Correction (2026-08-29).** §6 "Frame header, 24 bytes" (and `[fmt gaf]`)
-describe the subframe count as "a 16-bit subframe count" at offset 10. The
-field is two bytes wide in the file, but **the executable reads only the low
-byte** — in the loader's relocation loop and in the blitter's composition
-loop alike — so a count of 256 composes nothing and 300 composes 44. The
-high byte (frame offset 11) has a separate meaning on a **subframe**: when
-it is nonzero the compositor draws that subframe through the
-light-table-remapped blit path instead of the plain one, and that path draws
-only when the destination window's remap flag is set. Retail data never
-exercises either edge: a census over the 958 GAFs of the reference install
-(123,294 frames including subframes) finds a maximum subframe count of 12
-and no nonzero high byte. The doc 02 sentence stands corrected; `[fmt gaf]`
-carries the byte-level statement.
+**The subframe count is one byte.** The field at frame offset 10 is two bytes
+wide in the file, but **the executable reads only the low byte** — in the
+loader's relocation loop and in the blitter's composition loop alike — so a
+count of 256 composes nothing and 300 composes 44. The high byte (frame
+offset 11) has a separate meaning on a **subframe**: when it is nonzero the
+compositor draws that subframe through the light-table-remapped blit path
+instead of the plain one, and that path draws only when the destination
+window's remap flag is set. Retail data never exercises either edge: a census
+over the 958 GAFs of the reference install (123,294 frames including
+subframes) finds a maximum subframe count of 12 and no nonzero high byte.
+`[fmt gaf]` carries the byte-level statement.
 
 The RLE blitter decodes each row until it has produced `width` pixels: a
 skip, repeat or literal run that would overshoot is **clamped to the
@@ -4125,8 +3907,7 @@ the 0x0C marker**, seeks back to 128 and decodes rows of exactly `width`
 pixels: a run is `byte & 0x3F` pixels of the next byte, clamped so the row
 never overflows; a literal is one pixel; **`bytes_per_line` is never read**,
 so a file whose scan lines are padded decodes each row from the previous
-row's padding (visible shear, no failure) — this closes `[fmt pcx]`'s
-"untested" caveat. Each command byte is read through the shared VFS read into
+row's padding (visible shear, no failure). Each command byte is read through the shared VFS read into
 the same one-byte buffer; at end of file the read returns 0 and leaves the
 previous byte, so a truncated body replays its last byte as every remaining
 command and value: a stale literal fills the rest with that index, a stale
@@ -4146,9 +3927,8 @@ ignored) and deletes the host files `palettes\PALETTE.ALP`,
 derived tables are rebuilt. When the `.PAL` exists it is loaded whole with
 no size check, and the consumer reads 1,024 bytes: a 768-byte three-byte
 palette is read as 256 four-byte entries — the first 192 entries wrong by
-one byte per entry and the last 64 taken from beyond the block. That closes
-`[fmt pal]`'s "whether the engine ever consults 768-byte palettes":
-it does not; it misreads them.
+one byte per entry and the last 64 taken from beyond the block. The engine
+never consults a 768-byte palette as such; it misreads it.
 
 **FNT.** Loaded whole (`[03 R-FONT-01 §1]`), no header or table validation;
 the two startup fonts and every side font are fatal when missing (path as
@@ -4160,16 +3940,16 @@ rasterizer reads whatever follows.
 The classifier seeks to 0 and reads four bytes, then — **each time into the
 same buffer, so a failed read keeps the previous bytes** — tests `DIGI` at
 0, `HSHD` at 8 and `SDAT` at 32 (legacy), else `RIFF` at 0 and `WAVE` at 8,
-else raw. **Correction (2026-08-29)** to §7 "WAV", three points: (1) the
-legacy payload is not "trimmed by ten bytes" — the loader seeks to byte 40
-and takes **file size − 40** bytes as the sample, i.e. everything after the
-8-byte `SDAT` chunk header, whose size field is never read; the rate is the
-32-bit word at 22, remapped 11,000 → 11,025; (2) the RIFF chunk walk does
-**not** honour odd-size padding — the next chunk is at `offset + 8 + size`
-exactly; (3) the format tag and block-align words of `fmt ` are **never
-read** — only channels (+2), sample rate (+4) and bits per sample (+14) are
-taken, and block align is recomputed as `(bits >> 3) × channels`, so a
-compressed-format file is decoded as PCM of the declared width. The walk
+else raw. Three details behind §7 "WAV": (1) the legacy payload is the
+loader's seek to byte 40 and **file size − 40** bytes as the sample, i.e.
+everything after the 8-byte `SDAT` chunk header, whose size field is never
+read; the rate is the 32-bit word at 22, remapped 11,000 → 11,025; (2) the
+RIFF chunk walk does **not** honour odd-size padding — the next chunk is at
+`offset + 8 + size` exactly; (3) the format tag and block-align words of
+`fmt ` are **never read** — only channels (+2), sample rate (+4) and bits per
+sample (+14) are taken, and block align is recomputed as
+`(bits >> 3) × channels`, so a compressed-format file is decoded as PCM of
+the declared width. The walk
 stops when the next chunk offset reaches the RIFF size + 8; a `fmt ` chunk
 shorter than 16 bytes or a `data` size of zero or less returns null. The
 buffer creator then reads `data size` bytes and requires the count to reach
@@ -4192,96 +3972,10 @@ Error: %s` or `[HapiBank::LoadAccount] Decompression Error: %s` plus
 their declared counts with no bound (garbage or fault when corrupt); a
 missing or type-mismatched item returns the caller's default.
 
-#### Corrections made by this unit, and cross-document needs [R-MALF-01 §12]
-
-Corrected in place in this document: §2 chunk-failure sentence (§1 above);
-§4 malformed-input paragraph and its ` - <name> = '<value>' ` shape (§4
-above); §4 "### Unknown" block's "empty-tree failure policy"; §5
-cross-reference table's model row (§5 above); §1's `GAMEDATA.TDF` sentence
-(§5 above); §6 GAF frame-header subframe count (§6 above); §7 WAV (§10
-above). Format docs corrected: `[fmt hpi]` (validation section added, the
-BANK caveat pointed at doc 08), `[fmt tdf]` (parse errors fatal; duplicate
-rules defined), `[fmt gaf]` (subframe byte, RLE edges), `[fmt tnt]` (bounds),
-`[fmt 3do]`, `[fmt cob]` (version unread), `[fmt fbi]` (`Version`/`Copyright`
-gate established), `[fmt pcx]` (stride caveat closed, truncation), `[fmt pal]`
-(derivation and write-back, 768-byte caveat closed), `[fmt fnt]`, `[fmt gui]`,
-`[fmt wav]`, `[fmt tad]` (not a retail input).
-
-Cross-document needs (not this unit's files): `docs/SPEC_CONFLICTS.md` SC2
-should record the misnamed box (the file is `sidedata.tdf`); `[R-KEYS-01
-§5]`'s generator should add the catalog loader's `Version` and `Copyright`
-reads; `[04 §4]` may cite §8 for the unread COB version word; doc 07 owns
-what a screen does when its panel file is missing (§5 GUI); doc 03 may cite
-§6 for the subframe high-byte remap path. Implementation note for the
-reconciliation pass: Nanolathe's loaders are **stricter** than retail in
-every "garbage or fault" cell (bounded offsets, cycle detection, chunk output
-limits, PCX/GAF row checks, 16 MiB frame limits) and **more lenient** in
-every "fatal" cell (a TDF syntax error, a missing model, a missing side font
-and a bad TNT version are returned as errors, not process exits); neither is
-a research edit.
-
-Remaining Unknowns from this unit (also in the tail): the zero-length WAV
-outcome (§10, decider above); the exact GUI gadget capacity (§5, decider
-above); the C-runtime decimal conversion's overflow result feeding the
-fixed accessor (§4, decider: static check of the runtime's `strtod` overflow
-path).
-
-#### §6 — `burstrate`, `duration` and `smokedelay` are unsigned 16-bit tick words [R-KEYS-01 §6] (2026-09-04, RWU-19-198)
-
-**Established — the store.** The weapon loader converts each of the three
-keys as `trunc(authored × 30)` and stores the low sixteen bits of the result,
-exactly as it does for `weapontimer`, `randomdecay` and `flighttime`
-(the "floating · 16-bit" rows of the table above were right about the width).
-
-**Established — the widening.** Every reader of the three words zero-extends
-them: the loads are plain sixteen-bit moves into a register that was cleared
-first (or masked to sixteen bits immediately after), never a sign-extending
-load, and the consumer arithmetic is unsigned. The readers are all in the
-projectile update — the burst scheduler for `burstrate`, the beam latch for
-`duration`, the trail-smoke deadline for `smokedelay` — and doc 06 states
-each one in [06 R-WPN-05 §12]. There is no other reader of any of the three
-words anywhere in the image (bounded negative: a whole-image search for
-sixteen-bit accesses at the three record offsets finds only the loader's
-stores and the projectile update's loads).
-
-**Consequence for the compiled value.** The value a Nanolathe consumer must
-see is `uint16(trunc(authored × 30))` widened to a non-negative integer:
-`0..65535` ticks. A negative authored value does not produce a negative
-interval — `burstrate=-1` is `65506` ticks — and a value at or above
-`65536/30 ≈ 2184.53` seconds wraps (`2184.6` → `2` ticks). No stock weapon
-authors any of the three outside `0..32767/30` seconds (the WU-19-167 census),
-so nothing shipped distinguishes the widening; third-party content can.
-
-**Correction.** The `TODO(question)` markers on the compiled record said
-"16-bit store established, reader extension is not" for all three keys.
-They were honest at the time — [06 §4.3] wrote the burst deadline's sum as
-unsigned without saying how the addend widened, and [06 §6.10] and [06 §7.3]
-did not mention the width at all. Nothing previously written was wrong; the
-gap is closed and the three fields now carry the same unsigned wrap as
-`weapontimer`.
-
-
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
-and the decider that would close it. Findings that closed an item live in the
-body — several under `R-<id>` headings — and are not restated here.
-
-**Correction (2026-08-29, RWU-02-3).** Two bullets were removed: "Fatal-
-versus-recoverable classification for the resource families not classified
-in §8" (closed by the matrix, `[R-MALF-01 §2]`) and "Behavior for malformed
-or missing burn sequences on non-filename features" (closed in
-`[R-MALF-01 §5]`: a missing GAF or entry is a silent null sequence). Three
-bullets were added for the unit's residual Unknowns.
-
-**Correction (2026-08-28, RWU-00-5).** This tail previously opened with a
-~70-line recital of everything the document had closed, followed by a "Still
-open" list whose bullets also mixed closures into their prose (the category
-`ALL` sentinel, the movement-class slope paradox, the meteor contract). One
-bullet was worse than redundant: it still described the movement-class pool as
-zero-filled with no template, a reading superseded on 2026-08-27 by
-`[04 §6.1 R-DOC04-A]`. The closure narratives are deleted here only; every
-finding they recited remains in the body sections that own it.
+and the decider that would close it.
 
 * Data contract of `ONLLoadConfigFile` · §1 · not decidable from the retail
   executable — the function is defined by `online.dll`. The executable side
@@ -4298,6 +3992,8 @@ finding they recited remains in the body sections that own it.
 * Caller-specific duplicate-section merging policies · §4 · static trace. The
   first-match section accessor, the enumerator, and the duplicate-key winner
   are established.
+* Precedence among registry, INI, and command line for non-language
+  configuration · §3 · static trace (doc 01 §3.1 owns the scalar half).
 * Sound alias-cache eviction policy and the DirectSound streaming flags · §5
   "Sound aliases" · static trace. Eviction is bounded-negative (no eviction
   site in the census); both are marked `TODO(question)` at the site.
@@ -4361,9 +4057,6 @@ finding they recited remains in the body sections that own it.
   `mousespeed`, `gamespeed`, `unitchat`, `unitchattext`) · §5
   `[R-KEYS-01 §5]` · static trace of each stored global's readers (docs
   01/03/07 own the consumers; the loader side is closed).
-* ~~The airborne-state operand of the `toairweapon` slot-skip.~~ **Closed
-  2026-08-31 by `[06 R-WPN-05 §1]`:** the target's committed mover mode must
-  read 2.
 * Whether any reader tests unit capability bit 9 (the derived copy of
   `canreclamate`) separately from bit 10 · §5 `[R-KEYS-01 §1]` · bit-9
   reader census.

@@ -121,12 +121,14 @@ func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 	if _, err := w.Create(def, 1, numeric.Fixed(1<<16), 0, 0); err != nil {
 		t.Fatalf("create other-owner unit: %v", err)
 	}
+	// The palette is the player record's logo byte, which battle entry writes
+	// and the save persists [08 R-SKIR-01 §2]; see player_record.go.
 	s := &Session{
 		Snapshot: frame.NewBuffer(), Units: w, LocalOwner: 0,
-		Skirmish: SkirmishConfig{NumPlayers: 2},
+		Econ: &economy.Service{},
 	}
-	s.Skirmish.Players[0].Color = 0
-	s.Skirmish.Players[1].Color = 7
+	s.Econ.Players[0].Exists, s.Econ.Players[0].Logo = true, 0
+	s.Econ.Players[1].Exists, s.Econ.Players[1].Logo = true, 7
 	s.publishSnapshot(1)
 	cur := s.Snapshot.Current()
 	if cur == nil || len(cur.Radar.Contacts) != 2 {
@@ -141,7 +143,7 @@ func TestPublishSnapshotCarriesRadarOwnerPalettes(t *testing.T) {
 	}
 	// Publication owns the palette selector; changing the live player record
 	// after publication must not alter the committed contact.
-	s.Skirmish.Players[1].Color = 3
+	s.Econ.Players[1].Logo = 3
 	if cur.Radar.Contacts[1].Palette != 7 {
 		t.Fatal("mutating live player color changed committed radar palette")
 	}

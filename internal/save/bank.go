@@ -1,4 +1,4 @@
-// Package save implements the retail HAPIBANK bank container used by battle
+// The retail HAPIBANK bank container used by battle
 // saves [08 "Location and representation"].
 //
 // Byte layout is the contract here (I13 exception): the 34-byte header and
@@ -8,6 +8,7 @@
 // C13 divergence: header offsets and the tag offset are not range-checked
 // before use in retail. We bound them (mirroring PLAN_01 archive hardening;
 // sanctioned exception to I11) and reject out-of-range banks with ErrFormat.
+
 package save
 
 import (
@@ -24,11 +25,16 @@ const (
 	BankHeaderSize    = 0x22 // 34 bytes [08 "Location and representation"]
 	AccountHeaderSize = 32   // 32 bytes [08 "Location and representation"]
 	bankVersion       = uint32(1)
-	RetailTag         = "Total Annihilation 3.0"
+	// RetailTag is the container tag every retail save carries, compared
+	// case-insensitively after the pool loads [08 "Location and representation"].
+	RetailTag = "Total Annihilation 3.0"
 )
 
 var bankMagic = []byte("HAPIBANK")
 
+// The four container rejections, in the order retail applies them: magic,
+// version, tag — and ErrFormat for a body this reader will not accept
+// [08 "Location and representation"].
 var (
 	ErrMagic   = errors.New("save: not a HAPIBANK container")
 	ErrVersion = errors.New("save: unsupported bank version")
@@ -41,26 +47,32 @@ const (
 	diagAccountDecompress = "HapiBank::LoadAccount::Decompression failed"
 )
 
+// IntItem is one 32-bit named item of an account [08 "Save-file organization"].
 type IntItem struct {
 	Name  string
 	Value int32
 }
 
+// DoubleItem is one named double item of an account.
 type DoubleItem struct {
 	Name  string
 	Value float64
 }
 
+// StringItem is one named string item of an account; the value lives in the
+// bank's string pool.
 type StringItem struct {
 	Name, Value string
 }
 
+// Box is an account's opaque byte payload, addressed by name or by number.
 type Box struct {
 	Name   string
 	Number int32
 	Data   []byte
 }
 
+// Account is one named record of a bank: its scalar items and its boxes.
 type Account struct {
 	Name    string
 	Ints    []IntItem
@@ -94,6 +106,7 @@ func mergeAccount(dst, src *Account) {
 	}
 }
 
+// SetInt writes a named 32-bit item, replacing any item of that name.
 func (a *Account) SetInt(name string, value int32) {
 	for i := range a.Ints {
 		if a.Ints[i].Name == name {
@@ -104,6 +117,7 @@ func (a *Account) SetInt(name string, value int32) {
 	a.Ints = append(a.Ints, IntItem{Name: name, Value: value})
 }
 
+// SetDouble writes a named double item, replacing any item of that name.
 func (a *Account) SetDouble(name string, value float64) {
 	for i := range a.Doubles {
 		if a.Doubles[i].Name == name {
@@ -114,6 +128,7 @@ func (a *Account) SetDouble(name string, value float64) {
 	a.Doubles = append(a.Doubles, DoubleItem{Name: name, Value: value})
 }
 
+// SetString writes a named string item, replacing any item of that name.
 func (a *Account) SetString(name, value string) {
 	for i := range a.Strings {
 		if a.Strings[i].Name == name {
@@ -124,6 +139,7 @@ func (a *Account) SetString(name, value string) {
 	a.Strings = append(a.Strings, StringItem{Name: name, Value: value})
 }
 
+// AppendBox appends a box to the account in emission order.
 func (a *Account) AppendBox(name string, number int32, data []byte) {
 	for _, box := range a.Boxes {
 		if box.Name == name && box.Number == number {
@@ -134,6 +150,7 @@ func (a *Account) AppendBox(name string, number int32, data []byte) {
 	a.Boxes = append(a.Boxes, &Box{Name: name, Number: number, Data: append([]byte(nil), data...)})
 }
 
+// Int reads a named 32-bit item, reporting whether the account carries one.
 func (a *Account) Int(name string) (int32, bool) {
 	for _, item := range a.Ints {
 		if item.Name == name {
@@ -143,6 +160,7 @@ func (a *Account) Int(name string) (int32, bool) {
 	return 0, false
 }
 
+// Double reads a named double item, reporting whether the account carries one.
 func (a *Account) Double(name string) (float64, bool) {
 	for _, item := range a.Doubles {
 		if item.Name == name {
@@ -152,6 +170,7 @@ func (a *Account) Double(name string) (float64, bool) {
 	return 0, false
 }
 
+// Str reads a named string item, reporting whether the account carries one.
 func (a *Account) Str(name string) (string, bool) {
 	for _, item := range a.Strings {
 		if item.Name == name {
@@ -161,6 +180,7 @@ func (a *Account) Str(name string) (string, bool) {
 	return "", false
 }
 
+// BoxData reads a box by name, reporting whether the account carries one.
 func (a *Account) BoxData(name string, number int32) ([]byte, bool) {
 	found := false
 	var out []byte
@@ -195,6 +215,9 @@ func newBuilderWithTag(tag string) *Builder {
 	return b
 }
 
+// PoolOffset interns a string in the bank's string pool and returns its byte
+// offset, which is what the account items reference [08 "Location and
+// representation"].
 func (b *Builder) PoolOffset(value string) uint32 {
 	if offset, ok := b.pool[value]; ok {
 		return offset
@@ -208,6 +231,8 @@ func (b *Builder) PoolOffset(value string) uint32 {
 	return offset
 }
 
+// Add appends a named account to the bank under construction, in emission
+// order.
 func (b *Builder) Add(name string) *Account {
 	account := &Account{Name: name}
 	b.Accounts = append(b.Accounts, account)
@@ -243,9 +268,6 @@ func (b *Bank) Account(name string) (*Account, bool) {
 
 // Count returns number of accounts.
 func (b *Bank) Count() int { return len(b.accounts) }
-
-// PoolString resolves a logical pool offset to a string (NUL terminated).
-func (b *Bank) PoolString(offset uint32) string { return readPoolString(b.Pool, offset) }
 
 // Open reads a bank from a file path. Wrong magic/version/tag closes the
 // file and returns zero (nil bank + error) per [08 "Location and representation"] C12.
@@ -535,31 +557,4 @@ func WriteFile(path string, payload []byte) error {
 	_, _ = file.Write(payload)
 	_ = file.Close()
 	return nil
-}
-
-// Dump renders the audit listing shape: account count, per-account name, each
-// box's name or number and byte count, and each item's name with its value.
-func (b *Bank) Dump() string {
-	var out strings.Builder
-	fmt.Fprintf(&out, "accounts=%d\n", len(b.accounts))
-	for _, account := range b.accounts {
-		fmt.Fprintf(&out, "[%s]\n", account.Name)
-		for _, item := range account.Ints {
-			fmt.Fprintf(&out, "  %s = %d\n", item.Name, item.Value)
-		}
-		for _, item := range account.Doubles {
-			fmt.Fprintf(&out, "  %s = %v\n", item.Name, item.Value)
-		}
-		for _, item := range account.Strings {
-			fmt.Fprintf(&out, "  %s = \"%s\"\n", item.Name, item.Value)
-		}
-		for _, box := range account.Boxes {
-			label := box.Name
-			if label == "" {
-				label = fmt.Sprintf("#%d", box.Number)
-			}
-			fmt.Fprintf(&out, "  box %s (%d bytes)\n", label, len(box.Data))
-		}
-	}
-	return out.String()
 }

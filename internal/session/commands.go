@@ -67,8 +67,6 @@ type HumanFactoryBuildCommand struct {
 	Builder pool.Handle
 	Product string
 	Count   int
-	// Queued remains for old callers that only supplied the pre-count command.
-	Queued bool
 }
 
 // HumanStanceCommand is one press of the side panel's MOVEORD or FIREORD
@@ -668,8 +666,8 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			s.Build.RecordCommandRejection(tick, u.Handle, c.FactoryBuild.Product, count, err)
 		}
 		if err == nil && count > 0 {
-			// Counted factory nodes are no-purge commands. The old boolean is
-			// retained only for source compatibility with pre-count callers.
+			// A counted factory node is a no-purge command: the count IS the
+			// queue modifier, so this producer never issues a Replace.
 			stampHumanBuild(u, beforeFactory, c.FactoryBuild.Product, tick, false, 0)
 		}
 	case HumanCancelProduction:

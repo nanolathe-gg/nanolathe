@@ -78,9 +78,6 @@ func CanTransition(from, to State) bool {
 	return transitionMatrix[from][to]
 }
 
-// ValidState reports whether s is one of the eight defined states [08 "Session states"].
-func ValidState(s State) bool { return s <= StatePostBattle }
-
 // AdmissionMaskForState returns the single bit that admits the given state
 // per [08 "Admission masks"] C4: bit0 admits states other than 5 and 6, bit1
 // admits state 5, bit2 admits state 6.

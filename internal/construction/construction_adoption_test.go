@@ -171,7 +171,9 @@ func TestNoOtherStartBuildingFlagWriterInConstruction(t *testing.T) {
 			headingSites[name] = true
 		}
 	}
-	for _, want := range []string{"factory.go", "reclaim.go"} {
+	// states.go is where the factory's nanolathe site lives since CL-5 split
+	// factory.go by concern; the site itself is unchanged.
+	for _, want := range []string{"states.go", "reclaim.go"} {
 		if !emitSites[want] {
 			t.Errorf("%s does not adopt orders.EmitStartBuilding for its nanolathe/assist site [R-ORDER-02 §2]", want)
 		}

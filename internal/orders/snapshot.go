@@ -56,8 +56,8 @@ type SnapshotQueue struct {
 const (
 	// These are presentation bounds only. Retail queue storage remains dynamic;
 	// the bound protects the snapshot hand-off from malformed input [SC17].
-	MaxSnapshotOrdersPerList = 4096
-	MaxSnapshotRoutePoints   = 4096
+	MaxSnapshotOrdersPerList = 4096 // records copied per segment
+	MaxSnapshotRoutePoints   = 4096 // route points copied per record
 )
 
 // RouteProvider returns the currently authoritative route for node. It may

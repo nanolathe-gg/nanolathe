@@ -319,7 +319,7 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 	var terrain *world.Terrain
 	if t, err := world.Load(fs, cat, cfg.MapName); err == nil {
 		terrain = t
-		if cat.Maps != nil && len(cat.Maps) > 0 {
+		if len(cat.Maps) > 0 {
 			if err := applySchemaStrict(terrain, cat, m); err != nil {
 				_ = terrain.ApplySchema(nil, 0)
 			}
@@ -389,15 +389,10 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 			ctrlState = 1 // human local [08][PLAN_14 C8]
 		case SkirmishControllerObserver:
 			ctrlState = 1
-			p.IsObserver = true
 		default:
 			ctrlState = 2 // computer [08]
 		}
-		if cfg.Players[i].Controller == SkirmishControllerObserver {
-			p.IsObserver = true
-		} else {
-			p.IsObserver = false
-		}
+		p.IsObserver = cfg.Players[i].Controller == SkirmishControllerObserver
 		p.ControllerState = ctrlState
 		// The row→player conversion's colour and side, as battle entry writes
 		// them [08 R-SKIR-01 §2]; the commander-identity test reads the side
@@ -405,6 +400,7 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		// resolve every slot to side 0.
 		p.Side = playerRecordByte(cfg.Players[i].Side)
 		p.Logo = playerRecordByte(cfg.Players[i].Color)
+		p.Name = skirmishSlotName(ctrlState, int(p.Side))
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

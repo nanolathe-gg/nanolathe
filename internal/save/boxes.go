@@ -1,14 +1,5 @@
-// Package save — save contents (boxes) per [08 "Save-file organization"].
-//
-// This file implements the established retail account helpers C14–C16 of PLAN_14:
-//
-//	C14 non-transactional load policy; .SAV normalization strips after last
-//	dot; writes truncate-open directly, post-open errors ignored returning 1
-//	[08 "File naming and write policy"] [GAP T9].
-//	C15 28-byte game-time box round-trip (PLAN_03 C14) [08 "Scheduler and random
-//	state in saves"] [01 §7.3].
-//	C16 Alliances box exactly 11 bytes with forced self-alliance 1 [08 "Player
-//	records"] [GAP T9].
+// Save contents (boxes) [08 "Save-file organization"].
+
 package save
 
 import (
@@ -173,6 +164,8 @@ func WriteSummary(b *Builder, s Summary) {
 	// only spans still opaque are those [08 R-SAVE-02 §13] does not name.
 }
 
+// The account and box names this package writes and reads by name
+// [08 "Account inventory"].
 const (
 	SummaryAccount    = "Summary"
 	CameraAccount     = "Camera"

@@ -1,4 +1,4 @@
-// Package orders — the VTOL work twins [04 R-ORD-01 §7]: `VTOL_HelpBuild`,
+// The VTOL work twins [04 R-ORD-01 §7]: `VTOL_HelpBuild`,
 // `VTOL_RepairUnit`, `VTOL_Reclaim` and `VTOL_RepairPatrol`.
 //
 // The air forms of the work orders are separate handler bodies, not the ground
@@ -42,6 +42,7 @@
 // run alongside these rows — the takeoff preamble, the approach leg and the
 // 150-tick construction orbit of [04 §10.3] — so a leg named in a row below
 // and absent from its body is there, one layer down, not missing.
+
 package orders
 
 import (
@@ -285,10 +286,10 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 		// The work step, quantum `workertime/30` [05 R-WORK-01 §1]. Corrected
 		// with the ground twin (PT3-04): this arm used to admit no work at all,
 		// which made an air builder's assistance a no-op.
-		if ok, bound := boundAssist(QueueForUnit(u), u, n, tick); !bound {
+		// An admission refusal leaves the order armed for the next visit, so
+		// only the binding result is read here [05 R-WORK-01 §1].
+		if _, bound := boundAssist(QueueForUnit(u), u, n, tick); !bound {
 			return 7
-		} else if !ok {
-			// Admission refusal leaves the order armed for the next visit.
 		}
 		if target.Remaining != 0 {
 			n.DynamicGate |= gateWorkRetry

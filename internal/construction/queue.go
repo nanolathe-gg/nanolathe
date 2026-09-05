@@ -1,11 +1,12 @@
-// Package construction implements factory and mobile build requests and queue [PLAN_08 WU-08-4][05][P0-I05].
+// Factory and mobile build requests, and the queue insertion and subtraction
+// they go through [05 "Queue insertion"][05 "Queue subtraction"].
+
 package construction
 
 import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -37,15 +38,20 @@ import (
 const FactoryBuildOrder = "BuildingBuild"
 
 // Mobile build descriptors [04 §3.1].
+// GetBuiltOrder is the product-side lifecycle row of [04 R-FAC-02 §4].
+const GetBuiltOrder = "GetBuilt"
+
+// The two mobile build rows: a ground builder takes the first, a `canfly`
+// builder the second [04 §3.1][04 R-ORD-01 §7].
 const MobileBuildOrder = "MobileBuild"
 const VTOLMobileBuildOrder = "VTOL_MobileBuild"
-
-const fallbackBuildOrder = "MobileBuild"
 
 // ErrLimitMessage is the verbatim exhaustion message produced at nanoframe allocation
 // when per-def limits or pool exhaustion refuses creation [05 "Unit creation and limits"].
 const ErrLimitMessage = "Unable to create any more units"
 
+// The command-boundary rejections. They are returned to the producer that
+// asked for a build; none of them is a retail diagnostic.
 var (
 	ErrNilFactory             = errors.New("construction: nil factory")
 	ErrEmptyDef               = errors.New("construction: empty defKey")
@@ -54,52 +60,52 @@ var (
 	ErrNoBuildOrder           = errors.New("construction: build order descriptor not found")
 	ErrUnknownProduct         = errors.New("construction: product definition unavailable")
 	ErrMissingMovementProfile = errors.New("construction: product movement profile unavailable")
-	ErrLimit                  = errors.New(ErrLimitMessage)
+	// The exhaustion sentinel carries retail's verbatim text
+	// [05 "Unit creation and limits"][05 C18].
+	//lint:ignore ST1005 retail text
+	ErrLimit = errors.New(ErrLimitMessage)
 )
 
 // P0-I16: LimitChecker moved onto Service as authoritative session-owned hook.
 // See Service.LimitChecker and Service.CheckLimit.
 
 // ExhaustionError returns the verbatim limit exhaustion error [05 "Unit creation and limits"].
-func ExhaustionError() error { return errors.New(ErrLimitMessage) }
+func ExhaustionError() error {
+	//lint:ignore ST1005 retail text: `Unable to create any more units` is reproduced verbatim [05 C18].
+	return errors.New(ErrLimitMessage)
+}
 
-// defIndex maps defKey to stable catalog index [P0-I05][02 §5].
-// Uses catalog when available, otherwise a collision-free sequential fallback (not FNV hash).
-var (
-	fallbackIndexMap         = make(map[string]uint32)
-	fallbackNextIndex uint32 = 100000 // high to avoid overlapping real 1..N
-	fallbackMu        sync.Mutex
-)
-
+// defIndex maps defKey to the stable catalog index the build record carries in
+// its first parameter [P0-I05][02 §5]. A missing catalog or an unknown key
+// keeps the catalog's zero reject sentinel — the same rule orders.NewNodeForOrder's
+// payload constructors follow, and for the same reason: no runtime identity is
+// invented for an unresolved definition.
+//
+// This used to hand out synthetic indices from a package-global counter and map
+// (base 100000, guarded by a mutex) whenever the catalog could not answer. They
+// were a second product identity: an index minted that way could never equal
+// the catalog index a queued record actually carries, which is what the two
+// cancel paths' index-then-key double pass existed to paper over. Every
+// production caller has the session catalog, and the record's canonical
+// BuildDefKey is the identity everything else compares.
 func defIndex(cat *content.Catalog, defKey string) uint32 {
 	ck := content.CanonicalKey(defKey)
-	if ck == "" {
+	if ck == "" || cat == nil {
 		return 0
 	}
-	if cat != nil {
-		if idx, ok := cat.UnitDefIndex(ck); ok {
-			return idx
-		}
+	if idx, ok := cat.UnitDefIndex(ck); ok {
+		return idx
 	}
-	fallbackMu.Lock()
-	defer fallbackMu.Unlock()
-	if id, ok := fallbackIndexMap[ck]; ok {
-		return id
-	}
-	id := fallbackNextIndex
-	fallbackNextIndex++
-	fallbackIndexMap[ck] = id
-	return id
+	return 0
 }
 
 // buildOrderID resolves the primary build descriptor for factory products [04 §3.1][GAP T3].
-func buildOrderID() orders.ID {
-	id := orders.Lookup(FactoryBuildOrder)
-	if id != 0 {
-		return id
-	}
-	return orders.Lookup(fallbackBuildOrder)
-}
+// A missing descriptor is a missing descriptor: the caller returns
+// ErrNoBuildOrder rather than substituting a different handler. `BuildingBuild`
+// and `MobileBuild` are separate rows of the descriptor table with separate
+// bodies [04 §3.1][04 R-ORD-01 §5], so a factory product driven by the mobile
+// row would take the site-bound machine instead of the factory one.
+func buildOrderID() orders.ID { return orders.Lookup(FactoryBuildOrder) }
 
 // mobileBuildOrderID resolves the mobile build descriptor for the builder [04 §3.1][P0-I05].
 // VTOL builders use VTOL_MobileBuild, others use MobileBuild [04 §3.4] code 14.
@@ -109,10 +115,7 @@ func mobileBuildOrderID(builder *units.Unit) orders.ID {
 			return id
 		}
 	}
-	if id := orders.Lookup(MobileBuildOrder); id != 0 {
-		return id
-	}
-	return buildOrderID()
+	return orders.Lookup(MobileBuildOrder)
 }
 
 // QueueFactoryBuild enqueues count copies of defKey on factory's PRIMARY queue [C15][C20][C23][P0-I05].
@@ -141,21 +144,12 @@ func QueueFactoryBuild(factory *units.Unit, defKey string, count int, cat *conte
 	if bid == 0 {
 		return ErrNoBuildOrder
 	}
-	prim := q.Primary()
-	if len(prim) > 0 {
-		tail := prim[len(prim)-1]
-		if tail.ID == bid && tail.Param1 == pid && tail.BuildDefKey == ck {
-			// Tail-only coalesce [05 "Queue insertion"].
-			q.CoalesceTail(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
-			// CoalesceTail compares Param1 only; ensure BuildDefKey also matches by re-checking last tail after?
-			// Since fallback indices are unique per ck, Param1 equality already implies same product.
-			return nil
-		}
-	} else {
-		q.CoalesceTail(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
-		return nil
-	}
-	q.Push(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
+	// Positive insertion, once: CoalesceTail owns both halves of
+	// [05 "Queue insertion"] — add to a matching tail, otherwise construct and
+	// insert through the producer path. The three call sites this replaced
+	// (matching tail, empty list, everything else) each reached a different
+	// helper, and the empty-list one reached a private tail append.
+	q.CoalesceTail(bid, orders.Node{Owner: factory.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck})
 	return nil
 }
 
@@ -163,8 +157,9 @@ func QueueFactoryBuild(factory *units.Unit, defKey string, count int, cat *conte
 // have a catalog. Fixed definitions and canfly aircraft do not need a ground
 // movement profile. Other mobile products must resolve one before entering a
 // queue, preventing permanent content failures from becoming state-2 retries
-// [04 §6.4][05 "Unit creation and limits"]. A nil catalog remains the legacy
-// AI/test adapter and defers resolution to the handler.
+// [04 §6.4][05 "Unit creation and limits"]. Both production callers pass the
+// session catalog; a nil catalog is a fixture that has none, and defers
+// resolution to the handler.
 func validateFactoryProduct(cat *content.Catalog, key string) error {
 	if cat == nil {
 		return nil
@@ -233,32 +228,11 @@ func QueueMobileBuild(builder *units.Unit, defKey string, siteX, siteZ numeric.F
 	if bid == 0 {
 		return ErrNoBuildOrder
 	}
-	// Mobile builds do not coalesce across different sites; tail-only coalesce requires
-	// same product AND same site (GoalX/Z). Distinct sites remain separate orders [P0-I05].
-	prim := q.Primary()
-	if len(prim) > 0 {
-		tail := prim[len(prim)-1]
-		if tail.ID == bid && tail.Param1 == pid && tail.BuildDefKey == ck && tail.GoalX == siteX && tail.GoalZ == siteZ {
-			q.CoalesceTail(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
-			return nil
-		}
-	} else {
-		// Empty: use CoalesceTail path for uniform FlagActive handling, but need to set Goal after
-		// since CoalesceTail creates node with Goal. Push with Goal directly instead.
-		q.Push(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
-		return nil
-	}
-	q.Push(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
+	// Mobile builds do not coalesce across different sites: the tail must carry
+	// the same product AND the same site, which is CoalesceTail's rule
+	// [05 "Queue insertion"][P0-I05].
+	q.CoalesceTail(bid, orders.Node{Owner: builder.Handle, Param1: pid, Param2: uint32(count), BuildDefKey: ck, GoalX: siteX, GoalZ: siteZ})
 	return nil
-}
-
-// QueueBuild is the legacy factory entry for AI compatibility [P0-I16][P0-I05].
-// It enqueues factory products via BuildingBuild using a nil-catalog fallback index.
-// New code should use QueueFactoryBuild (with catalog) or QueueMobileBuild (with site).
-// This wrapper preserves the original signature so AI's Manager.QueueBuild closure
-// continues to compile without modifying internal/ai/* [P0-I16].
-func QueueBuild(factory *units.Unit, defKey string, count int) error {
-	return QueueFactoryBuild(factory, defKey, count, nil)
 }
 
 // CancelTailMost cancels the tail-most matching factory build for defKey [C20][P0-I05].
@@ -270,8 +244,6 @@ func CancelTailMost(factory *units.Unit, defKey string) error {
 		return ErrEmptyDef
 	}
 	ck := content.CanonicalKey(defKey)
-	// Use generic pid for comparison that includes fallback mapping consistent with QueueFactoryBuild nil-cat path.
-	pid := defIndex(nil, defKey)
 	q := orders.QueueForUnit(factory)
 	if q == nil {
 		return ErrNoQueue
@@ -280,19 +252,15 @@ func CancelTailMost(factory *units.Unit, defKey string) error {
 	if bid == 0 {
 		return ErrNoBuildOrder
 	}
-	matched := q.CancelTailMost(func(n orders.Node) bool {
-		// Compare both index and BuildDefKey for fallback safety (index 0 case).
-		return n.ID == bid && n.Param1 == pid && (n.BuildDefKey == "" || n.BuildDefKey == ck)
-	})
-	if !matched {
-		// Try with catalog-aware pid? If factory build was enqueued with catalog-provided index,
-		// pid from nil fallback differs. Fall back to BuildDefKey string match alone.
-		matched = q.CancelTailMost(func(n orders.Node) bool {
-			return n.ID == bid && n.BuildDefKey == ck
-		})
-		if !matched {
-			return fmt.Errorf("construction: no matching build %q to cancel", defKey)
-		}
+	// "Find the last (tail-most) node matching operation byte and product
+	// type" [05 "Queue subtraction"]. The operation byte is the descriptor and
+	// the product type is the record's canonical key, which every insertion
+	// path writes from the same catalog. This used to run twice — once
+	// comparing a synthetic index that could not match, then again on the key
+	// alone — which made the first pass dead weight and the second pass the
+	// only one that ever cancelled anything.
+	if !q.CancelTailMost(func(n orders.Node) bool { return n.ID == bid && n.BuildDefKey == ck }) {
+		return fmt.Errorf("construction: no matching build %q to cancel", defKey)
 	}
 	return nil
 }
@@ -326,7 +294,6 @@ func CancelMobileTailMost(builder *units.Unit, defKey string, siteX, siteZ numer
 		return ErrEmptyDef
 	}
 	ck := content.CanonicalKey(defKey)
-	pid := defIndex(nil, defKey)
 	q := orders.QueueForUnit(builder)
 	if q == nil {
 		return ErrNoQueue
@@ -335,16 +302,12 @@ func CancelMobileTailMost(builder *units.Unit, defKey string, siteX, siteZ numer
 	if bid == 0 {
 		return ErrNoBuildOrder
 	}
-	matched := q.CancelTailMost(func(n orders.Node) bool {
-		return n.ID == bid && n.Param1 == pid && n.BuildDefKey == ck && n.GoalX == siteX && n.GoalZ == siteZ
-	})
-	if !matched {
-		matched = q.CancelTailMost(func(n orders.Node) bool {
-			return n.ID == bid && n.BuildDefKey == ck && n.GoalX == siteX && n.GoalZ == siteZ
-		})
-		if !matched {
-			return fmt.Errorf("construction: no matching mobile build %q to cancel", defKey)
-		}
+	// The mobile row's product type carries its site too: distinct sites are
+	// distinct orders [P0-I05]. One comparison, for the reason above.
+	if !q.CancelTailMost(func(n orders.Node) bool {
+		return n.ID == bid && n.BuildDefKey == ck && n.GoalX == siteX && n.GoalZ == siteZ
+	}) {
+		return fmt.Errorf("construction: no matching mobile build %q to cancel", defKey)
 	}
 	return nil
 }

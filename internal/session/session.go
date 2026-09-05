@@ -310,6 +310,18 @@ type Session struct {
 	// Frame.Radar.
 	visStatus map[int]uint32
 
+	// Per-tick scratch for the sensor pass and the interceptor steps. These
+	// are reused buffers, never state: every one is truncated or overwritten
+	// before it is read, so the tick that follows cannot observe the tick
+	// before it. They exist because the phases that use them run every tick
+	// over the whole pool, and rebuilding their buffers was several kilobytes
+	// of garbage per tick each.
+	sensorUnitScratch   []visibility.SensorUnit
+	sensorStatusScratch []uint32 // indexed by unit handle, parallel to the pool
+	sensorHolders       []int32  // handles staged this tick, in pool order (I1)
+	primaryMaskScratch  []uint16 // indexed by unit handle
+	interceptorExploded []interceptorExplosion
+
 	// DebugDisplayMode is the world composer's debug display mode byte
 	// [03 §3.12]. Its writers are now traced and there are exactly three: the
 	// battle interface initializer zeroes it, film mode's `m` key cycles it
@@ -690,22 +702,6 @@ func (s *Session) ValidateComposition() error {
 	return nil
 }
 
-// humanCount returns the number of human players (ControllerState==1)
-// among economy slots [P1-01 §7.2] for the no-human post-loop path.
-func (s *Session) humanCount() int {
-	if s.Econ == nil {
-		return 0
-	}
-	n := 0
-	for i := 0; i < 10; i++ {
-		p := &s.Econ.Players[i]
-		if p.Exists && !p.IsObserver && p.ControllerState == 1 {
-			n++
-		}
-	}
-	return n
-}
-
 // activePlayerCount returns the number of active players (Exists && !IsObserver) [03 §3.4] P0-11.
 // The sensor phase runs only when more than one player is active (activePlayers>1 via CMP 1 JBE skip).
 func (s *Session) activePlayerCount() int {
@@ -935,54 +931,36 @@ func (s *Session) RegisterAll() {
 		// Derive actual local/enemy identities from session state if not yet set
 		// [P0-I13]. Skirmish stores them from SkirmishConfig, mission from
 		// economy player slots and controller states [08 "Established AI-facing data"].
-		if s.LocalOwner == 0 && s.EnemyOwner == 0 {
-			// Try SkirmishConfig first
-			foundLocal := false
-			foundEnemy := false
-			var local, enemy uint8
-			if s.Skirmish.NumPlayers > 0 {
-				for i := 0; i < 10; i++ {
-					ctrl := s.Skirmish.Players[i].Controller
-					if !foundLocal && ctrl == 0 && i < s.Skirmish.NumPlayers {
-						local = uint8(i)
-						foundLocal = true
-					}
-					if !foundEnemy && ctrl != 0 && i < s.Skirmish.NumPlayers {
-						enemy = uint8(i)
-						foundEnemy = true
-					}
+		if s.LocalOwner == 0 && s.EnemyOwner == 0 && s.Econ != nil {
+			// The control byte is the player record's: 1 a locally controlled
+			// human, 2 a computer [05 R-SHARE-01 §1][08 "Established AI-facing
+			// data"]. The setup-row walk that used to run first asked the same
+			// question of the pre-battle mirror, which a load does not rebuild
+			// [08 R-SKIR-01 §2] "Save persistence", and which reads controller 0
+			// — a human — for every slot afterwards. It also could not tell an
+			// observing slot from a playing one, because battle entry registers
+			// an observer as a human and marks the record's observer byte.
+			var l, e uint8
+			foundL, foundE := false, false
+			for i := 0; i < 10; i++ {
+				p := s.Econ.Players[i]
+				if !p.Exists {
+					continue
 				}
-				if foundLocal {
-					s.LocalOwner = local
+				if !foundL && p.ControllerState == 1 && !p.IsObserver {
+					l = uint8(i)
+					foundL = true
 				}
-				if foundEnemy {
-					s.EnemyOwner = enemy
+				if !foundE && p.ControllerState == 2 {
+					e = uint8(i)
+					foundE = true
 				}
 			}
-			if s.LocalOwner == 0 && s.EnemyOwner == 0 && s.Econ != nil {
-				// Derive from economy controller states 1/2 [08 "Established AI-facing data"]
-				var l, e uint8
-				foundL, foundE := false, false
-				for i := 0; i < 10; i++ {
-					p := s.Econ.Players[i]
-					if !p.Exists {
-						continue
-					}
-					if !foundL && p.ControllerState == 1 {
-						l = uint8(i)
-						foundL = true
-					}
-					if !foundE && p.ControllerState == 2 {
-						e = uint8(i)
-						foundE = true
-					}
-				}
-				if foundL {
-					s.LocalOwner = l
-				}
-				if foundE {
-					s.EnemyOwner = e
-				}
+			if foundL {
+				s.LocalOwner = l
+			}
+			if foundE {
+				s.EnemyOwner = e
 			}
 		}
 		// The status-cue seam is installed on every unit that already exists;

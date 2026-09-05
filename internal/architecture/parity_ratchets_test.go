@@ -254,16 +254,21 @@ var float64ExemptFiles = map[string]string{
 // fixes the world as 16.16 fixed point with an exhaustive float allowlist;
 // new float64 sites outside that list are parity drift.
 var float64Baseline = map[string]int{
-	"internal/ai/placement.go":              1,
-	"internal/ai/selection.go":              2,
-	"internal/ai/strategic.go":              5,
-	"internal/cob/ports.go":                 6,
-	"internal/combat/meteor.go":             10,
-	"internal/combat/motion.go":             4,
-	"internal/combat/service.go":            2,
-	"internal/combat/stockpile.go":          5,
+	"internal/ai/placement.go":     1,
+	"internal/ai/selection.go":     2,
+	"internal/ai/strategic.go":     5,
+	"internal/cob/ports.go":        6,
+	"internal/combat/meteor.go":    10,
+	"internal/combat/motion.go":    4,
+	"internal/combat/service.go":   2,
+	"internal/combat/stockpile.go": 5,
+	// CL-5 split factory.go by concern. Its float64 sites are the construction
+	// arithmetic of [05 "Construction arithmetic"] and [05 R-WORK-01 §3] and
+	// the cancel-current refund's two halves of [05 R-ECO-01 §11]; they moved
+	// to the files those concerns went to, unchanged and in the same number.
+	"internal/construction/arithmetic.go":   16,
 	"internal/construction/capture.go":      5,
-	"internal/construction/factory.go":      18,
+	"internal/construction/inheritance.go":  2,
 	"internal/construction/resurrection.go": 3,
 	"internal/construction/reverse.go":      4,
 	"internal/economy/tick.go":              2,
@@ -271,7 +276,6 @@ var float64Baseline = map[string]int{
 	"internal/mission/mission_globals.go":   6,
 	"internal/mission/placement.go":         7,
 	"internal/movement/altitude.go":         6,
-	"internal/orders/pump.go":               4,
 	// WU-18-2, the work handlers. Two sites, both retail's own floating point
 	// and both narrowed immediately to the integer the record stores: the
 	// capture budget's three float32 constants

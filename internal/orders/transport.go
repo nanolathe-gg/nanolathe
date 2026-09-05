@@ -1,29 +1,5 @@
-// Package orders — the transport order handlers [04 §10.2][04 R-AIR-01 §9].
-//
-// There are two load executors and two unload executors, split by carrier
-// locomotion rather than by order family name [04 R-AIR-01 §9]:
-//
-//	VTOL_Pickup / VTOL_Unload      the air pair of [04 §10.2]. Every command
-//	                               their phase tables queue is an air path
-//	                               marker of [04 R-AIR-01 §4], which is
-//	                               internal/movement's family, so the legs live
-//	                               there and reach the pump through the runner
-//	                               seam of vtolair.go — the same arrangement
-//	                               the seven other pump-driven air executors
-//	                               already use.
-//	Ground_Pickup / Ground_Unload  a separate machine that never moves the
-//	                               cargo itself: it fires a COB callback and
-//	                               waits for the SCRIPT to perform the
-//	                               attachment or the drop through the COB
-//	                               transport opcodes [04 R-COB-03 §5]. Its
-//	                               whole body is here, because it installs
-//	                               ground goal handles rather than air markers.
-//
-//	BeCarried                      the cargo's own two-phase carried wait
-//	                               [04 R-ORD-01 §2].
-//
-// The two families are selected by order identity at command resolution and
-// never both run for one record [04 R-AIR-01 §9].
+// The transport order handlers [04 §10.2][04 R-AIR-01 §9].
+
 package orders
 
 import (

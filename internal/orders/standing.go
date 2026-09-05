@@ -86,9 +86,11 @@ func drawBelow(u *units.Unit, bound uint32) uint32 {
 	return sim.Uint32n(bound)
 }
 
-// releaseWeaponSlot, inhibitWeaponSlot and their `k = 3` forms are *release
-// slot k* and *inhibit slot k* of [04 R-ORD-01 §1]. They are thin names over
-// combat.go's pair, which is this package's single implementation.
+// releaseAllWeaponSlots and inhibitAllWeaponSlots are the `k = 3` forms of
+// *release slot k* and *inhibit slot k* of [04 R-ORD-01 §1]. They are thin
+// names over combat.go's pair, which is this package's single implementation.
+// The per-slot names beside them had no caller left and are gone; callers that
+// want one slot call releaseSlot/inhibitSlot directly.
 //
 // Corrected 2026-08-31 [04 R-ORD-01 §7]. These were a second, divergent
 // implementation: they wrote the control byte and cleared the target
@@ -99,20 +101,9 @@ func drawBelow(u *units.Unit, bound uint32) uint32 {
 // at once — the guard is evaluated first and a rejected slot is left entirely
 // alone, both bits belong to one byte, and bit 1 means *the slot is enabled* —
 // so the two helper pairs the old comment asked to fold are now one.
-func releaseWeaponSlot(u *units.Unit, slot int) { releaseSlot(u, slot) }
-
-func inhibitWeaponSlot(u *units.Unit, slot int) { inhibitSlot(u, slot) }
-
 func releaseAllWeaponSlots(u *units.Unit) { releaseSlot(u, slotAll) }
 
 func inhibitAllWeaponSlots(u *units.Unit) { inhibitSlot(u, slotAll) }
-
-func slotAt(u *units.Unit, slot int) *units.Slot {
-	if u == nil {
-		return nil
-	}
-	return u.SlotAt(slot)
-}
 
 // releaseGoalPayload is the fourth goal installer of [04 R-ORD-01 §1] — the
 // payload release. It is the record-level install/release helper called with no

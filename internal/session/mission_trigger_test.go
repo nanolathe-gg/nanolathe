@@ -3,7 +3,6 @@ package session
 import (
 	"testing"
 
-	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -12,19 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
-
-func minimalWorld() *world.Terrain {
-	attrs := make([]formats.TNTAttribute, 32*32)
-	for i := range attrs {
-		attrs[i] = formats.TNTAttribute{Height: 10, Feature: world.PlotFeatureNone}
-	}
-	plot := world.ExpandPlot(attrs, 32, 32)
-	ter := &world.Terrain{CellW: 32, CellH: 32, Plot: plot, Version: 0x2000, SeaLevel: 0, WindMin: 100, WindMax: 2000}
-	_ = ter.ApplySchema(nil, 0)
-	return ter
-}
 
 func TestKillUnitTypeOnlyOnDeath(t *testing.T) {
 	// KillUnitType should not advance from poll alone, only on death notification.

@@ -500,9 +500,5 @@ func accountName(i int) string {
 	return "Acct" + string(rune('A'+i))
 }
 
-func binaryU32(data []byte, offset int) uint32 {
-	return binary.LittleEndian.Uint32(data[offset:])
-}
-
 // Ensure math import is used (for Double round-trip in earlier tests).
 var _ = math.Float64bits

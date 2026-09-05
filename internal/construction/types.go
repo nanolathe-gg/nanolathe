@@ -1,4 +1,5 @@
-// Package construction typed payloads for P0-I05 [05][P0-I05].
+// Typed construction payloads [P0-I05].
+
 package construction
 
 import "github.com/nanolathe/nanolathe/internal/sim/numeric"

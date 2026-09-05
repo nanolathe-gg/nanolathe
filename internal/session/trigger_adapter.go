@@ -1,10 +1,7 @@
 package session
 
 import (
-	"strings"
-
 	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -63,27 +60,13 @@ func (s *Session) missionTriggerContext(tick uint32) triggers.PollContext {
 			AudioAudible: true,
 		})
 	}
-	c.IsCommander = func(u *units.Unit) bool {
-		if u == nil || u.Def == nil || s.Catalog == nil || s.Econ == nil || int(u.Owner) >= len(s.Econ.Players) {
-			return false
-		}
-		side := -1
-		if int(u.Owner) < s.Skirmish.NumPlayers {
-			side = s.Skirmish.Players[u.Owner].Side
-		} else if s.Mission != nil && s.Mission.Type == mission.TypeCampaign && s.campaignPlayerSideKnown[u.Owner] {
-			side = int(s.campaignPlayerSide[u.Owner])
-		} else {
-			// The campaign player table is written at construction and again by a
-			// retail restore (see Session.campaignPlayerSide). A slot neither
-			// writer supplied has no authored side, and the identity fails closed
-			// rather than being inferred from owner parity, commander type, or
-			// side name [08 R-TRIG-01 §3].
-			return false
-		}
-		if side < 0 || side >= len(s.Catalog.Sides) || s.Catalog.Sides[side] == nil {
-			return false
-		}
-		return strings.EqualFold(u.Def.UnitName, s.Catalog.Sides[side].Commander)
-	}
+	// The trigger adapter's commander identity is the same test the kill record
+	// files [08 R-TRIG-01 §3][08 R-SKIR-01 §3]: the dead definition's name
+	// against the commander named on the owner's side record. It used to be a
+	// second copy of that comparison with its own side lookup, which read the
+	// skirmish SETUP row — empty after a load [08 R-SKIR-01 §2] "Save
+	// persistence" — before falling through to the campaign player table.
+	// sideForOwner is now the one side reader; see player_record.go.
+	c.IsCommander = s.isCommanderForOwner
 	return c
 }

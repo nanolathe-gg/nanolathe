@@ -78,13 +78,6 @@ func PreflightRetailLoad(bank *save.Bank) (RetailLoadResult, error) {
 	return RetailLoadResult{Summary: summary, Route: route}, nil
 }
 
-// LoadRetailSave fully prepares the detached battle candidate or authored
-// continuation. No live Session or presentation state is touched; callers
-// that only need route validation should use PreflightRetailLoad.
-func LoadRetailSave(bank *save.Bank, deps RetailLoadDeps) (RetailLoadResult, error) {
-	return LoadRetailSaveWithDeps(bank, deps)
-}
-
 // LoadRetailSaveWithDeps prepares a complete detached load result. Branching
 // is strictly on Summary.BetweenMissions == 1: every other value is an
 // in-battle restoration [08 R-SAVE-02 §11].
@@ -129,16 +122,6 @@ func LoadRetailSavePath(path string, deps RetailLoadDeps) (RetailLoadResult, err
 	bank, err := save.Open(path)
 	if err != nil {
 		return RetailLoadResult{}, fmt.Errorf("session: open retail save %q: %w", path, err)
-	}
-	return LoadRetailSaveWithDeps(bank, deps)
-}
-
-// LoadRetailSaveBytes is the equivalent production entrypoint for callers
-// that already own the file bytes (for example, a platform file dialog).
-func LoadRetailSaveBytes(data []byte, deps RetailLoadDeps) (RetailLoadResult, error) {
-	bank, err := save.OpenBytes(data)
-	if err != nil {
-		return RetailLoadResult{}, fmt.Errorf("session: open retail save bytes: %w", err)
 	}
 	return LoadRetailSaveWithDeps(bank, deps)
 }

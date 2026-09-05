@@ -4,115 +4,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/sim/numeric"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
-
-// interceptorFireTick performs automatic interceptor launches per [06 §11.2] C29.
-// It runs in PhaseUnitsScripts after the ordinary weapon tick (launch-before-
-// production preserved) and scans each interceptor-capable stockpile slot with
-// nonzero Ammo for the first unclaimed enemy-owned targetable projectile whose
-// stored aim point lies within the inclusive coverage square. The slot stores
-// the candidate's current position, the spawner rescans immediately before
-// firing, and the authoritative reservation link is written at spawn per
-// [06 §11.2]. Pool-full leaves the shot pending with no ammo mutation, and
-// target-death (candidate dead between scans) is handled by skipping dead
-// candidates on the rescan [06 §11.2] Unknown.
-//
-// Determinism: stable player 0..9, slots 0..2 asc, projectile prefix asc, first
-// unclaimed wins not nearest (I1) [06 §11.2].
-func (s *Session) interceptorFireTick(tick uint32) {
-	if s == nil || s.Combat == nil || s.Units == nil || s.Catalog == nil {
-		return
-	}
-	// Build weapon map for targetable checks [06 §9.2] binary search not needed
-	// here – direct ID map is deterministic iteration for the scan, not for
-	// damage lookup.
-	weaponsByID := make(map[int32]*content.WeaponDef, len(s.Catalog.Weapons))
-	for _, w := range s.Catalog.Weapons {
-		if w != nil {
-			weaponsByID[w.ID] = w
-		}
-	}
-	// The map's per-tick gravity global, the ballistic creator's launch
-	// pre-decrement operand [06 §6.4]. It is read once here for the same
-	// reason the ordinary fire path reads it once per slot visit.
-	var gravity numeric.Fixed
-	if s.World != nil {
-		gravity = s.World.Gravity
-	}
-	// Stable order: players 0..9 asc, slots asc (I1) [06 §1.2] C1.
-	var unitList []*units.Unit
-	if s.Units.IsSliced() {
-		unitList = s.Units.IterSliced()
-	} else {
-		unitList = s.Units.Iter()
-	}
-	for _, u := range unitList {
-		if u == nil || !u.Alive || u.Dying {
-			continue
-		}
-		for idx := 0; idx < units.NumSlots; idx++ {
-			slot := u.SlotAt(idx)
-			if slot == nil || slot.Weapon == nil {
-				continue
-			}
-			w := slot.Weapon
-			if !w.Interceptor {
-				continue
-			}
-			// Interceptor stockpile weapons require nonzero Ammo [06 §11.2];
-			// non-stockpile interceptors would use Reload, but TA's anti-nukes
-			// are stockpile, so gate on Ammo.
-			if w.Stockpile && slot.Ammo <= 0 {
-				continue
-			}
-			if !w.Stockpile && slot.Reload > 0 {
-				continue
-			}
-			// Coverage is the interceptor's separate scalar, not ordinary range
-			// [06 §11.1][06 §11.2] C29. Zero coverage cannot acquire.
-			cov := w.Coverage
-			// Muzzle position for spawn: unit's current position. Retail queries
-			// muzzle piece synchronously before init [06 §4.1] C3; we use unit pos
-			// as fallback when piece lookup not threaded here.
-			muzzle := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
-			interceptorPos := combat.Vec3{X: u.X, Y: u.Y, Z: u.Z}
-			// Translate units.Slot to combat.Slot for the helper's Ammo mutation.
-			// DistanceWord travels with it: a weapon authored both `vertical`
-			// and `ballistic` reaches the ballistic creator, whose `T0` divides
-			// that word [06 §6.2][06 §6.4].
-			cs := &combat.Slot{Weapon: w, Ammo: slot.Ammo, MuzzlePiece: slot.MuzzlePiece, DistanceWord: slot.DistanceWord, Flags: slot.Flags, DesiredYaw: slot.DesiredYaw, DesiredPitch: slot.DesiredPitch, Reload: slot.Reload, Aim: slot.Aim, Target: combat.Target{}}
-			// The launching silo reaches the spawner the way it reaches
-			// TryFire: the shooter reference and its side byte for the common
-			// initializer's real-shooter branch [06 §4.1], and the map's
-			// per-tick gravity for the ballistic creator's pre-decrement
-			// [06 §6.4]. The side byte is also the scan's owner-side operand
-			// [06 §11.2]. Origin is the silo's own point, the muzzle a shot
-			// falls back to when no piece resolves [06 §4.1] C3.
-			ports := combat.FirePorts{
-				ShooterSide: uint8(u.Owner),
-				Shooter:     u,
-				Origin:      muzzle,
-				Gravity:     gravity,
-			}
-			// Map units.Target to combat.Target for launch, though interceptor
-			// helpers use the coverage scan rather than ground target. Keep empty.
-			_, _, ok := combat.AcquireInterceptorTargetForSpawn(s.Combat, interceptorPos, cov, w, cs, muzzle, tick, weaponsByID, ports)
-			if ok {
-				// Copy back Ammo after successful spawn (decremented with wrap).
-				slot.Ammo = cs.Ammo
-				// Copy back other slot fields that may have been mutated (flags).
-				slot.Flags = cs.Flags
-				// Mark that this slot fired this tick so a second slot on same
-				// unit does not scan the same candidate that was just claimed
-				// by the first slot's projectile link (IsProjectileClaimed uses
-				// the newly written link). The next slot's scan will see the
-				// claim and skip it, preserving first-unclaimed order [06 §11.2].
-			}
-		}
-	}
-}
 
 // interceptorGuidanceTick updates interceptor projectiles' stored target point
 // to the linked candidate's current position each tick before motion per
@@ -122,14 +14,8 @@ func (s *Session) interceptorGuidanceTick() {
 	if s == nil || s.Combat == nil {
 		return
 	}
-	// Build weapon map for interceptor check.
-	weaponsByID := make(map[int32]*content.WeaponDef)
-	if s.Catalog != nil {
-		for _, w := range s.Catalog.Weapons {
-			if w != nil {
-				weaponsByID[w.ID] = w
-			}
-		}
+	if s.Catalog == nil {
+		return
 	}
 	cnt := s.Combat.Count()
 	for i := 0; i < cnt; i++ {
@@ -138,8 +24,12 @@ func (s *Session) interceptorGuidanceTick() {
 			continue
 		}
 		rec := &s.Combat.Records[i]
-		w := weaponsByID[rec.WeaponID]
-		if w == nil || !w.Interceptor {
+		// The catalog's once-compiled slot index, not a per-tick map built by
+		// ranging the weapon table: the index resolves colliding ids in the
+		// documented order [02 "Weapon record"] where a map range resolved them
+		// in Go's randomised one (I1), and it allocates nothing.
+		w, ok := s.Catalog.WeaponByID(rec.WeaponID)
+		if !ok || w == nil || !w.Interceptor {
 			continue
 		}
 		if rec.TargetProjectile == 0 {
@@ -169,6 +59,14 @@ func (s *Session) interceptorGuidanceTick() {
 // reloads live count so appended clones are reachable. Victim signatures are
 // published for exact-match removal, but the minimal blast-radius sweep is
 // sufficient for the vertical slice.
+// interceptorExplosion is one dead interceptor staged for the sweep below: the
+// record's handle, the point it died at, and its weapon.
+type interceptorExplosion struct {
+	h   pool.Handle
+	pos combat.Vec3
+	w   *content.WeaponDef
+}
+
 func (s *Session) interceptorDetonationTick() {
 	if s == nil || s.Combat == nil {
 		return
@@ -185,19 +83,11 @@ func (s *Session) interceptorDetonationTick() {
 	if s.Catalog == nil {
 		return
 	}
-	weaponsByID := make(map[int32]*content.WeaponDef)
-	for _, w := range s.Catalog.Weapons {
-		if w != nil {
-			weaponsByID[w.ID] = w
-		}
-	}
 	cnt := s.Combat.Count()
-	// Collect dead interceptor exploders first to avoid mutating while scanning.
-	var exploders []struct {
-		h   pool.Handle
-		pos combat.Vec3
-		w   *content.WeaponDef
-	}
+	// Collect dead interceptor exploders first to avoid mutating while
+	// scanning. The staging slice is reused across ticks and truncated here;
+	// the sweep below consumes it within this call.
+	exploders := s.interceptorExploded[:0]
 	for i := 0; i < cnt; i++ {
 		h := pool.Handle(i + 1)
 		if s.Combat.Alive(h) {
@@ -212,8 +102,9 @@ func (s *Session) interceptorDetonationTick() {
 		if rec.WeaponID == 0 {
 			continue
 		}
-		w := weaponsByID[rec.WeaponID]
-		if w == nil || !w.Interceptor {
+		// The catalog's once-compiled slot index; see interceptorGuidanceTick.
+		w, ok := s.Catalog.WeaponByID(rec.WeaponID)
+		if !ok || w == nil || !w.Interceptor {
 			continue
 		}
 		// Consider only recent exploders: they must have been marked dead this
@@ -224,11 +115,7 @@ func (s *Session) interceptorDetonationTick() {
 		// long-dead interceptors, we could check that rec.CreationTick+some window,
 		// but for the vertical slice where nuke is close, scanning all dead
 		// interceptors each tick is acceptable and deterministic (I1).
-		exploders = append(exploders, struct {
-			h   pool.Handle
-			pos combat.Vec3
-			w   *content.WeaponDef
-		}{h: h, pos: rec.Pos, w: w})
+		exploders = append(exploders, interceptorExplosion{h: h, pos: rec.Pos, w: w})
 		if len(exploders) > 10 {
 			break // cap to avoid unbounded work
 		}
@@ -246,14 +133,5 @@ func (s *Session) interceptorDetonationTick() {
 			s.Combat.MarkDead(vh)
 		}
 	}
+	s.interceptorExploded = exploders[:0]
 }
-
-// vec3FromFixed creates a combat.Vec3 from 16.16 fixed components.
-func vec3FromFixed(x, y, z numeric.Fixed) combat.Vec3 {
-	return combat.Vec3{X: x, Y: y, Z: z}
-}
-
-// ensure numeric import is used.
-var _ = numeric.Fixed(0)
-var _ = pool.Handle(0)
-var _ = combat.Vec3{}

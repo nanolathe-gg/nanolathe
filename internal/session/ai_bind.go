@@ -4,6 +4,7 @@
 // QueueMobileBuild; factory products queue on the factory path. The AI never
 // receives privileged world mutation — this is the same command surface the
 // human order path reaches.
+
 package session
 
 import (

@@ -583,8 +583,13 @@ func RetailBattleSummary(s *Session, description, gameID string) save.Summary {
 		summary.LineOfSight = int32(s.Skirmish.LineOfSight)
 		summary.LineOfSightType = int32(s.Skirmish.LOSType)
 	}
-	if int(s.LocalOwner) < len(s.Skirmish.Players) {
-		summary.Side = int32(s.Skirmish.Players[s.LocalOwner].Side)
+	// The Summary's `Side` is the local slot's side [08 R-SKIR-01 §2] "Save
+	// persistence", read off the player record like every other post-entry
+	// side read: a battle that was itself restored has no setup rows to read
+	// (see player_record.go), so writing them back would zero the item on the
+	// second save of a chain.
+	if side, ok := s.sideForOwner(int(s.LocalOwner)); ok {
+		summary.Side = int32(side)
 	}
 	// The `Radar Image` box is a presentation preview the load dispatcher never
 	// restores [08 "Account inventory"]. This build has no producer for it, so

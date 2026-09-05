@@ -150,9 +150,8 @@ func TestSessionVisibility(t *testing.T) {
 	s.visStatus[int(u1.Handle)] = 0
 	terrain.SeaLevel = 20
 	u1.Y = numeric.Fixed(10 * 65536) // below sea 20
-	cx = world.WorldToCell(u1.X) / 2
-	cz = world.WorldToCell(u1.Z) / 2
-	// Keep inside LOS coverage already.
+	// The unit has not moved, so the observer stays where line 117 refreshed
+	// it: the cell pair is not recomputed here.
 	if s.IsUnitVisible(0, u1) {
 		t.Fatalf("underwater enemy without 0x200 should be rejected even inside LOS")
 	}

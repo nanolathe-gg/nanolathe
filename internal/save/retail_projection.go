@@ -136,9 +136,6 @@ func (p RetailProjection) Bytes() ([]byte, error) {
 	return b.Bytes(), nil
 }
 
-// WriteRetailProjection is the package-level writer entry point.
-func WriteRetailProjection(p RetailProjection) ([]byte, error) { return p.Bytes() }
-
 func writeUnitImage(b *Builder, image UnitImage) error {
 	ac := builderAccount(b, UnitsAccount)
 	if len(image.Records) == 0 && (len(image.TypeNames) != 0 || len(image.Orders) != 0 || len(image.Scripts) != 0 || len(image.Other) != 0) {

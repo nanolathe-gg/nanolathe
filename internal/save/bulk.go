@@ -1,6 +1,6 @@
-// Package save contains established raw bulk helpers layered on HAPIBANK.
-// Unresolved unit, script, feature, and trigger bodies have no serializer
-// here [08 "Unit and script records"].
+// Established raw bulk helpers layered on HAPIBANK
+// [08 "Unit and script records"].
+
 package save
 
 import (
@@ -29,10 +29,6 @@ const (
 // [08 "Unit and script records"].
 func ValidateUnitBoxSize(sz int) bool { return sz == UnitBoxSize || sz == UnitBoxCompatSize }
 
-// ValidateOrderBoxSize accepts the established raw order-box length
-// [08 "Unit and script records"].
-func ValidateOrderBoxSize(sz int) bool { return sz == OrderBoxSize }
-
 // ValidateSubtypeSize accepts an established order subtype length
 // [08 "Unit and script records"].
 func ValidateSubtypeSize(code, sz int) bool {
@@ -54,6 +50,7 @@ func ValidateSubtypeSize(code, sz int) bool {
 
 // Units account helpers [P1-13 §3.4].
 
+// UnitsAccount holds the unit and script records [08 "Unit and script records"].
 const UnitsAccount = "Units"
 
 // WriteUnitsHeader writes the Units account Version and Number of Units
@@ -149,15 +146,10 @@ func WriteOrderBox(b *Builder, parentStableID uint16, seq int, payload []byte) e
 // body interpretation is intentionally unsupported [08 "Unit and script records"].
 func ScriptBoxName(enumIdx int) string { return fmt.Sprintf("Script%d", enumIdx) }
 
-// ValidateScriptBoxSize checks only the established aggregate raw size; it
-// does not decode script state [08 "Unit and script records"].
-func ValidateScriptBoxSize(total, stackWords, pieceCount int) bool {
-	expected := ScriptSnapshotSize + stackWords*4 + pieceCount*ScriptPieceSize
-	return total == expected
-}
-
+// FeaturesAccount holds the feature records [08 "Feature records"].
 const FeaturesAccount = "Features"
 
+// FeatureTypeNamesBox is the padded feature-name table inside FeaturesAccount.
 const FeatureTypeNamesBox = "Feature Type Names"
 
 // WriteFeatureTypeNames writes the established padded feature-name table.

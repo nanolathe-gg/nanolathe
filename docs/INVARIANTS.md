@@ -1,8 +1,9 @@
 # Invariants
 
-Rules that apply to every phase. A diff that violates one of these is rejected
-even if its tests pass. Each rule states what it is, why retail forces it, and
-how a reviewer checks it.
+The fourteen rules every diff is reviewed against. They apply to every phase,
+and a diff that violates one is rejected even if its tests pass. Each rule
+states what it is, why retail forces it, and how a reviewer checks it. Code
+cites them as `[I4]`; there is no I15 or I16.
 
 ## I1 — Deterministic iteration
 
@@ -85,8 +86,7 @@ toward zero. The asymmetry is the hardware's, not a choice.
 The multiply's rounding is Established, not inferred: `[04 §7.2]` forms the
 A* heuristic scale as a full signed 64-bit product arithmetically shifted, and
 `[04 R-MOV-01 §3]`, `[04 R-MOV-01 §4]` and `[04 §10.1]` write the same shape.
-The `TODO(question)` that once stood at `numeric.Fixed.Mul` was retired by
-WU-19-155 (2026-09-04).
+`numeric.Fixed.Mul` carries no open question about it.
 
 | Operation | Rule | Helper |
 |---|---|---|
@@ -146,12 +146,11 @@ current committed tick by the renderer. The active runtime has one Ebitengine
 window path; there is no alternate headless entry, previous-frame
 interpolation, or render `alpha`.
 
-**Why.** The previous wording incorrectly documented interpolation as a
-deliberate divergence. Retail's draw path samples the accumulators exactly as
-committed at the current tick; no interpolation between updates exists
-`[03 §2.4]`. The frame boundary remains immutable for presentation, while the
-simulation continues to publish only after the complete phase sequence
-`[01 §4.4]`.
+**Why.** Retail's draw path samples the accumulators exactly as committed at
+the current tick; no interpolation between updates exists `[03 §2.4]`.
+Interpolation is therefore not a divergence to be reintroduced: the frame
+boundary is immutable for presentation, and the simulation publishes only after
+the complete phase sequence `[01 §4.4]`.
 
 **Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. The production frame path has no `Lerp`, `alpha`, or previous-frame read.
 

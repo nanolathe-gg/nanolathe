@@ -1,21 +1,5 @@
-// Package orders — BuildWeapon stockpile handler per [06 §11] C29.
-//
-// WU-09-9 owns this file. It connects the secondary BUILDWEAPON queue nodes to
-// slot state, resource admission, UI counts, launch-before-production ordering,
-// and save state. The stockpile weapon builds as a stockpiled missile: cost is
-// paid over time via TickStockpile's truncated cumulative deltas, count increments
-// on completion, launch consumes one stock, and interceptor reserves incoming
-// nuke via the combat stockpile helpers.
-//
-// Queue encoding on Node (86-byte retail identity [04 §3.2] I13, [06 §11.1]):
-//
-//	Param1 = SlotIdx (0..2), Param2 = remainingCount, Param3 = progress [06 §11.1].
-//
-// The slot's Ammo byte holds completed rounds [06 §11.1].
-// BuildTime is Weapon.ReloadTime [06 §11.1] (compile-time reload*30).
-//
-// Determinism: stable iteration, no map iteration (I1), fixed-point 16.16 (I2),
-// truncation toward zero (I3), pool is sole authority (I5) but not used here.
+// The BuildWeapon stockpile handler [06 §11].
+
 package orders
 
 import (

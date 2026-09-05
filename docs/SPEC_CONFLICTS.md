@@ -1,690 +1,537 @@
 # Spec conflicts observed against the reference install
 
-`research/retail-executable-spec` is the behavior authority, but it was derived
-from static analysis of one executable and a few of its statements are
-contradicted by a real, working retail install. This file records those, with the
-evidence, so nobody "fixes" the code back toward the spec later.
-
-It also records the rarer case where two research documents contradict **each
-other** (SC6). Those are not install measurements, but this is where an
-implementer looks.
+`research/retail-executable-spec` is the behavior authority, but a few of its
+statements are contradicted by a real, working retail install, and a few
+contradict each other. This file records those, with the evidence and the
+decision, so nobody "fixes" the code back toward the disproved claim later.
 
 Reference install: `~/TotalAnnihilation` — base + Core Contingency + Battle
-Tactics + patch 3.1. Probed through this repo's `vfs` package.
+Tactics + patch 3.1, probed through this repo's `vfs` package.
 
-Every entry carries a **Status** line directly under its heading, added
-2026-08-28 by RWU-00-5: `closed by <citation> (date)` when a later finding or
-census settled it, or `open — decider: …` when it has not been settled. A
-status line never changes an entry's Decision; where a closure implies work in
-the code, the status names that action. There are no SC11–SC13 entries; the
-numbering has always skipped them.
+Each entry is one statement: what the spec said, what the install or the
+executable shows, the decision, and where the contract lives now — a research
+section and the design document that owns it. **Status** is one word. *Closed*
+means the resolution is settled and the contract is written down; *Open* means
+it is not, and the entry names what would settle it. No entry gates work.
 
-No entry gates work. **SC16** closed 2026-09-01: its `0x20` active-state half
-went with WU-19-37, when the flag-word collision it recorded turned out no
-longer to exist, and its empty-current-task half with WU-19-45, when
-`[07 R-WGT-01 §10]` identified the compared word as the remaining-build
-fraction and the order-guard float this build had invented was removed.
-**SC7** closed 2026-08-29 (`[02 R-SND-01 §1]`). **SC5** is closed but its
-divergence is still in the code.
+**How to add one.** One entry per disproved claim, numbered from the highest
+number in use. Numbers are never reused and never renumbered: code cites them
+as `SC7` and `docs/SPEC_CONFLICTS.md SC7`, and the design documents cite them
+by number too. Evidence must be reproducible — a probe or a test against
+`~/TotalAnnihilation` that another agent can rerun. The numbering skips
+SC11–SC13; it always has.
 
 ---
 
 ## SC1 — There is no ten-archive cap we can honor
 
-**Status:** closed by `[02 §2]`'s per-pass mount budget (2026-08-26). The cap is real but per-invocation, so mounting every local HPI reproduces the converged retail state.
+**Status:** Closed.
 
-**Spec** `[02 §2]`: "Local `*.HPI` with flag 0, up to ten successfully mounted
-archives (the eleventh successful local HPI is not mounted)."
+**Spec** `[02 §2]` stated a cap of ten successfully mounted local `*.HPI`
+archives, the eleventh not mounted.
 
-**Observed:** the install has **13** local HPI archives — `tactics1..8.hpi`,
-`totala1..4.hpi`, `worlds.hpi` — plus five `.ccx`, eleven `.ufo`, and one
-`.gp3`, and it plays. A ten-archive cap must drop three of them. In our lexical
-tier order it would drop `totala3.hpi`, `totala4.hpi` (152 `camps/` files and
-100 maps) and `worlds.hpi` (837 map `sections/`), which would remove the
-campaign and most maps. Under any other enumeration order it drops a different,
-equally load-bearing three.
+**Observed:** the reference install has 13 local HPI archives —
+`tactics1..8.hpi`, `totala1..4.hpi`, `worlds.hpi` — plus five `.ccx`, eleven
+`.ufo` and one `.gp3`, and it plays. A global cap of ten must drop three of
+them; in lexical tier order it drops `totala3.hpi`, `totala4.hpi` and
+`worlds.hpi`, removing the campaign and most maps, and under any other
+enumeration order it drops a different, equally load-bearing three. Any install
+with base, both expansions and a handful of downloaded units exceeds ten.
 
-Any install with base + both expansions + a handful of downloadable units
-exceeds ten. The cap as stated cannot be a general truth about how retail
-resolves content.
+The cap is real but per-invocation. The mount loop carries a ten-valued budget
+that decrements only when a candidate is *newly* mounted — validation passed and
+the full path not already mounted — and abandons the enumeration when the budget
+reaches zero. The orchestrator runs at several call sites, each restarting the
+budget, and an already-mounted archive never consumes it, so repeated
+invocations converge to every valid local archive mounted.
 
-**Decision:** mount every local HPI. If more than ten are present, emit one
-diagnostic naming them, so the discrepancy stays visible. The spec's cap is
-recorded here rather than implemented.
+**Decision:** mount every local HPI, which reproduces the converged retail
+state, and record the archive count as a mount note so the discrepancy stays
+visible.
 
-**Update (2026-08-26):** the conflict is resolved by decompilation. The mount
-loop carries a ten-valued budget that decrements only when a candidate is
-*newly mounted* (validation passed and the full path not already mounted) and
-abandons the enumeration when the budget hits zero; the budget is
-per-invocation — the mount orchestrator runs at several call sites, each
-restarting the budget, and already-mounted archives never consume it, so
-repeated invocations converge to every valid local HPI mounted. The cap is
-real but per-pass, not a global limit; mounting every local HPI reproduces the
-converged retail state. See [02 §2] and the mount-orchestrator note in the
-raw corpus.
-
-**Falsifies:** the earlier PLAN_01 contract C2. Do not reintroduce it.
+**Contract:** `[02 §2]`; DESIGN_CONTENT_VFS §5.
 
 ---
 
 ## SC2 — `GAMEDATA.TDF` does not exist
 
-**Status:** closed by asset census of the reference install (2026-08-26). `[02 §1]`'s hard requirement reads as the `gamedata/` directory, not a file of that name. Mechanism settled by `[02 R-MALF-01 §5]` (2026-08-29): no `gamedata.tdf` is ever opened; the `Can't load GAMEDATA.TDF` box is raised by a missing `SIDEDATA.TDF` — the message text is simply misnamed.
+**Status:** Closed.
 
-**Spec** `[02 §1]`: "The known hard requirements include `MOVEINFO.TDF` and
-`GAMEDATA.TDF`."
+**Spec** `[02 §1]` listed `MOVEINFO.TDF` and `GAMEDATA.TDF` among the hard
+requirements.
 
-**Observed:** no file named `gamedata.tdf` exists anywhere in the 31 mounted
+**Observed:** no file named `gamedata.tdf` exists in any of the 31 mounted
 providers. `gamedata/` contains exactly 13 files: `allsound.tdf`,
 `buildinfo.tdf`, `category.tdf`, `help.tdf`, `los.tdf`, `meteor.tdf`,
 `moveinfo.tdf`, `sidedata.tdf`, `sound.tdf`, `translate.tdf`, `unitview.tdf`,
-`version.tdf`, `weapons.tdf`.
+`version.tdf`, `weapons.tdf`. The hard requirement is the `gamedata/`
+**directory**. The mechanism behind the misleading name is separately
+established: no `gamedata.tdf` is ever opened, and the `Can't load
+GAMEDATA.TDF` box is raised by a missing `SIDEDATA.TDF` — the message text is
+simply misnamed `[02 R-MALF-01 §5]`.
 
-The most likely reading is that the spec means the `gamedata\` **directory**,
-whose absence is indeed fatal.
+**Decision:** a missing `gamedata/` directory, `MOVEINFO.TDF` or `SIDEDATA.TDF`
+is fatal; `translate.tdf` is optional; a missing `GAMEDATA.TDF` is not fatal,
+because making it fatal would refuse to boot on a genuine retail install. The
+retail diagnostic text is reproduced verbatim for the case that really raises
+it.
 
-**Decision:** `MOVEINFO.TDF` and `SIDEDATA.TDF` missing are fatal; a missing
-`gamedata/` directory is fatal; a missing `GAMEDATA.TDF` is **not**, because
-making it fatal would refuse to boot on a genuine retail install.
+**Contract:** `[02 §1]`, `[02 R-MALF-01 §5]`; DESIGN_CONTENT_VFS §5.
 
 ---
 
 ## SC3 — Intra-tier ordering barely matters, and we can measure it
 
-**Status:** closed — the divergence is measured and accepted; `[02 §2]` says retail's intra-tier order is the host's, not the executable's, so there is nothing to reproduce.
+**Status:** Closed.
 
-Retail resolves same-tier archives in `FindFirstFileA` order, which `[02 §2]`
-itself calls "not a portable executable-defined order". We sort lexically inside
-a tier (PLAN_01 divergence D1).
+**Spec** `[02 §2]` says retail resolves same-tier archives in host enumeration
+order, and calls that "not a portable executable-defined order".
 
 **Observed:** 323 logical paths exist in more than one same-tier provider —
-231 `ccdata.ccx` vs `btdata.ccx`, 85 `totala2.hpi` vs `totala1.hpi`, 7 others.
-Of those 323, **only 2 differ in size**: `anims/armhp1.gaf` (75,272 vs 68,136
-bytes, ccdata vs btdata) and `installres/install.inf` (not game content).
+231 `ccdata.ccx` versus `btdata.ccx`, 85 `totala2.hpi` versus `totala1.hpi`,
+7 others. Of those 323 only two differ in size: `anims/armhp1.gaf` (75,272
+versus 68,136 bytes) and `installres/install.inf`, which is not game content.
+The blast radius of choosing a different winner is one art file.
 
-So the divergence has essentially one observable consequence in the whole
-install, and the manifest names the winner. Acceptable; keep the deterministic
-lexical rule.
+**Decision:** sort lexically inside a tier, which is deterministic, and record
+every shadowed provider in the manifest so a differing winner can be named.
+There is nothing of retail's to reproduce here, only a measured divergence to
+accept.
+
+**Contract:** `[02 §2]`; DESIGN_CONTENT_VFS §5 and §7.
 
 ---
 
 ## SC4 — `vfs.EntryInfo.Name` is a base name, not a path
 
-**Status:** closed — a repo API note, not a spec conflict; kept here because it is the same class of trap.
+**Status:** Closed.
 
-Not a spec conflict but the same class of trap. `EntryInfo.Path` is the logical
-path; `EntryInfo.Name` is the base name; `FS.Entries()` returns one entry **per
-mount** and is not deduplicated by logical path. Code that groups by `Name`, or
-that treats `Entries()` as the unique file set, silently produces nonsense (a
-first pass at the probe above "found" 8,246 unique paths and top-level
-directories named `battleroom.pcx`).
+**Spec:** none. This is a repository API trap of the same class, kept here
+because it is where an implementer looks.
 
-`FS.Manifest()` (PLAN_01 WU-01-2) is the deduplicated view; use it.
+**Observed:** `EntryInfo.Path` is the logical path and `EntryInfo.Name` is the
+base name; `FS.Entries()` returns one entry **per mount** and is not
+deduplicated by logical path. Code that groups by `Name`, or treats `Entries()`
+as the unique file set, silently produces nonsense — a first pass at the
+archive census "found" 8,246 unique paths and top-level directories named
+`battleroom.pcx`.
 
----
+**Decision:** `FS.Manifest()` is the deduplicated view; use it for any census.
 
-## Reproducing these measurements
-
-Every number above came from a throwaway program against the real install. To
-rerun (adjust for whatever the `vfs` API looks like by then):
-
-```go
-fs := vfs.New()
-fs.MountGameDirectory(filepath.Join(os.Getenv("HOME"), "TotalAnnihilation"))
-fmt.Println("mounts:", fs.MountCount())
-for _, e := range fs.Entries() {          // one record PER MOUNT, see SC4
-    if e.IsDir { continue }
-    if srcs := fs.Sources(e.Path); len(srcs) > 1 {
-        // srcs[0] is the winner; compare Source.Priority for same-tier peers
-    }
-}
-```
-
-Keep such programs in a scratch directory, not in the repo — the reusable form
-is PLAN_01's `WU-01-5` coverage test.
+**Contract:** DESIGN_CONTENT_VFS §5.
 
 ---
 
 ## SC5 — The three movement clamps cannot run unconditionally
 
-**Status:** closed by `[04 §6.1 R-DOC04-A]` (2026-08-27). One action outstanding: delete the gated-clamp divergence in `internal/content` and initialize the profile from the startup template.
+**Status:** Closed.
 
 **Spec** `[02 "Movement class record"]`: eight keys are read in order, then
-"Three clamps then run, in order: if `maxwaterslope` is below `maxslope`,
-`maxslope` becomes `maxwaterslope`; …". Keys 3, 4, 5 and 7 default to "the
-profile's current value".
+three clamps run unconditionally — `maxwaterslope` caps `maxslope`, the
+resulting `maxslope` caps `badslope`, and `maxwaterslope` caps `badwaterslope`.
+Keys 3, 4, 5 and 7 default to "the profile's current value".
 
-**Observed:** 12 of the install's 15 `CLASS` sections omit `maxwaterslope`
-entirely. Compiling them with a zero default and running clamp 1
-unconditionally sets `maxslope = 0` for `kbotsf2`, `kbotss2`, `tankbh3`,
-`tankds2`, `tanksh2` and `tanksh3` — every land movement class that authored a
-real slope limit. No land unit could climb anything.
+**Observed:** 12 of the install's 15 `CLASS` sections omit `maxwaterslope`.
+Compiling them with a zero default and running the first clamp unconditionally
+sets `maxslope = 0` for `kbotsf2`, `kbotss2`, `tankbh3`, `tankds2`, `tanksh2`
+and `tanksh3` — every land movement class that authored a real slope limit — so
+no land unit could climb anything. The zero default was the error: a startup
+initializer registered in the CRT function-pointer table pre-fills all 32 class
+records before any parse, with `MaxSlope`, `BadSlope`, `MaxWaterSlope` and
+`BadWaterSlope` all 255, `MaxWaterDepth` 10000 and `MinWaterDepth` −10000. An
+omitted key therefore carries the template value, not zero and not the previous
+class's value; the clamps are the identity for a class that omits
+`maxwaterslope`; and stock compiles to the authored slope limits
+`[04 §6.1 R-DOC04-A]`.
 
-Measured with `content.CompileMovementSorted` against the reference install:
+**Decision:** initialize the profile from the startup template and run all
+three clamps unconditionally, with no key-presence gate. The gated-clamp
+divergence this entry once recorded is gone from `internal/content`.
 
-```
-kbotss2   maxslope=32 badslope=16 maxwslope=0    <- would clamp to maxslope=0
-tankdh3   maxslope=15 badslope=7  maxwslope=30   <- authored, clamps correctly
-tankhover3 maxslope=12 badslope=12 maxwslope=255 <- authored
-```
-
-**Decision:** clamps 1 and 3 are gated on whether `maxwaterslope` was authored,
-using the string accessor to tell an absent key from an authored zero.
-
-This is a stand-in for a different unknown, not a reading of the spec. The
-defaults chain off "the profile's current value", and we initialize that value
-to zero. If a fresh profile actually carries a large `maxwaterslope`, all three
-clamps run unconditionally and reproduce retail with no branch — which is the
-shape to aim for. The open question is recorded as a `TODO(question)` at
-`internal/content/compile_movement.go`.
-
-**Update (2026-08-26):** decompilation falsified the "template pre-fill 255"
-escape. The class pool is a zero-filled BSS tail (verified against the PE
-section table); the loader parses `CLASS0` first with no template write; the
-parser defaults every depth/slope field to the record's own prior value and
-runs the three clamps unconditionally; the movement classifier hard-blocks
-land cells with `slope > maxslope` (strict). The stock file omits
-`maxwaterslope` in `CLASS0..2` (which parse first) and authors 255 only in the
-last classes (`CLASS13/14`), so the traced arithmetic really does compile the
-first land classes to `maxslope = 0` — a bounded paradox with stock
-playability. Decider: a runtime trace of the compiled pool or a unit
-definition's slope copy; until then the gated clamps remain the
-install-compatible divergence. See `research/formats/tdf.md` (MOVEINFO caveat),
-`[02 §5 "Movement class record"]`, `[04 §6.1]`, and the raw-corpus note
-`moveinfo-maxslope-paradox.md`.
-
-**Resolved (2026-08-27, `[04 §6.1 R-DOC04-A]`):** the 2026-08-26 update above
-is superseded — its writer census missed a startup initializer registered in
-the CRT function-pointer table, which pre-fills all 32 class records through
-the pool base plus a small offset before any parse: `MaxSlope` = `BadSlope` =
-`MaxWaterSlope` = `BadWaterSlope` = 255, `MaxWaterDepth` = 10000,
-`MinWaterDepth` = −10000. Omitted keys therefore carry the TEMPLATE values
-(not zero, not the previous class's values), the unconditional clamps are
-identity for them, and stock compiles to the authored slope limits. There is
-no paradox and no key-presence gate: retail is template pre-fill plus
-unconditional clamps, exactly the shape the original "Decision" aimed for.
-SC5 is closed: delete the gated-clamp divergence and initialize the profile
-from the template. The consumer contract (per-cell 2-bit layer stamping,
-A* blocking only on layer 0) is in `[04 §6.1 R-DOC04-B]`.
-
-**Falsifies:** nothing yet. It defers PLAN_02 C6's "then apply the three clamps
-in order" until the profile's initial value is known.
+**Contract:** `[04 §6.1 R-DOC04-A]`, `[02 §5]`, `[02 "Movement class record"]`,
+`[fmt tdf]`; DESIGN_MOVEMENT_PATH §5. The consumer contract — per-cell 2-bit
+layer stamping, A* blocking only on layer 0 — is `[04 §6.1 R-DOC04-B]`.
 
 ---
 
 ## SC6 — The two documents disagree on the fringe-anchor encoding
 
-**Status:** closed by `[03 §2.2]`'s stamp-time fringe writer contract (2026-08-28) — signed offsets, last-stamp-wins on overlap. The argument below is from map dimensions; the trace is what closed it.
+**Status:** Closed.
 
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
-**Spec B** `[04 §6.2]`: "the multi-cell successor sentinel follows the successor
-hop — the cell stores **target-cell coordinates** and the resolver re-reads that
-cell's feature identifier before classifying."
+**Observed:** the field is two bytes, and absolute cell coordinates cannot
+address a map wider than 256 cells per axis. The reference install's maps run
+to 402×408 (`pincushion`) and 384×480 (`Comet Catcher`), so only the offset
+reading can be literally true at those widths. The stamp-time fringe writer
+contract confirms it: signed offsets, last stamp wins on overlap `[03 §2.2]`.
 
-Signed offsets and absolute coordinates are different encodings of the same two
-bytes, and only one can be right.
+**Decision:** implement the signed-offset reading. Both readings stay exposed
+as named accessors on `PlotCell` with the conflict spelled out, and
+`ResolveFeature` is the single resolver every consumer hops through — reclaim,
+damage, burning, area candidates and the impact ladder alike.
 
-**Observed:** the field is two bytes. Absolute cell coordinates cannot address a
-map wider than 256 cells in one byte per axis, and the reference install's maps
-run to 402×408 (`pincushion`) and 384×480 (`Comet Catcher`). The offset reading
-is the only one that can be literally true at those widths.
-
-**Decision:** implement the signed-offset reading, which is also the one its own
-document hedges on. Both readings are exposed as named accessors on `PlotCell`
-with the conflict spelled out, and the resolver is the single `ResolveFeature`.
-
-Note this is our argument from map dimensions, not a measurement of retail. A
-probe could still show the resolver does something else — for instance storing
-coordinates relative to a tile origin rather than to the cell.
-
-**Falsifies:** neither document; it picks between them. PLAN_04's explicit
-unknowns already asked for both readings to be exposed.
+**Contract:** `[03 §2.2]`, `[fmt tnt]`, `[05 R-FEAT-01 §8]`;
+DESIGN_WORLD_VISIBILITY §4 owns it, DESIGN_ECONOMY_CONSTRUCTION and
+DESIGN_WEAPONS_PROJECTILES consume the resolver.
 
 ---
 
 ## SC7 — Sound variants are gathered even when the bare event key is absent
 
-**Status:** closed by `[02 R-SND-01 §1]` (2026-08-29) — the executable's sound-category loader reads the bare key, discards the result, and unconditionally gathers `K1, K2, …` until the first absent index. The spec's bare-gate sentence was a mis-reading of the loop and has been corrected in `[02 "Sound category record"]`. The compiler's "gather regardless of the bare key" behaviour is retail, not a divergence; the compile site's `TODO(question)` is removed and cites `[02 R-SND-01 §1]`. Contracts the site honours: the bare variant (if present) is index 0 and numbered variants follow; numbering is contiguous from 1; `<key>text` supplies each caption; a present-but-empty value counts as a variant.
+**Status:** Closed.
 
-**Spec** `[02 "Sound category record"]`: "An event key that is absent for the
-bare form contributes no variants at all, because the bare read is what gates
-the numbered loop."
+**Spec** `[02 "Sound category record"]` said an event key absent in its bare
+form contributes no variants, because the bare read gates the numbered loop.
 
 **Observed:** stock `gamedata/sound.tdf` authors `select1` (120 occurrences),
-`ok1` (76), `cant1` (76) and `arrived1` (63) with **no bare form** anywhere.
-Following the spec letter would mute selection, move-fail and arrival voices
-for every unit on a working retail install — clearly not what the executable
-does.
+`ok1` (76), `cant1` (76) and `arrived1` (63) with no bare form anywhere.
+Following the letter would mute selection, move-fail and arrival voices for
+every unit on a working install. The loader in fact reads the bare key,
+discards the result, and unconditionally gathers `K1, K2, …` until the first
+absent index; the bare-gate sentence was a mis-reading of the loop
+`[02 R-SND-01 §1]`.
 
-**Decision:** gather `K1, K2…` regardless of the bare key's presence. The
-compile site formerly carried a `TODO(question)` on what the executable really
-gates; that marker is closed by `[02 R-SND-01 §1]` above, and this entry
-records why the spec letter is not implementable as written.
+**Decision:** gather the numbered keys regardless of the bare key. The bare
+variant, when present, is index 0 and the numbered variants follow; numbering
+is contiguous from 1; `<key>text` supplies each caption; a present-but-empty
+value counts as a variant. This is retail, not a divergence.
 
-**Falsifies:** the bare-gate sentence of `[02 "Sound category record"]`. Do
-not "fix" the compiler back to the letter without re-reading the executable.
+**Contract:** `[02 R-SND-01 §1]`, `[02 "Sound category record"]`;
+DESIGN_CONTENT_VFS §5.
 
 ---
 
-## SC8 — The two documents disagree on the code-9 re-arm jitter — resolved to distinct arms
+## SC8 — The two documents disagree on the code-9 re-arm jitter
 
-**Status:** closed by `[R-P0-01]` — the two arms use distinct random bounds over the same 30-tick base.
+**Status:** Closed.
 
-**Spec A** `[04 §3.3]`, result-code 9: if the record is last, "reset its phase
-and set **the same randomized deadline**" — i.e. the code-3 formula, global
-tick + 30 + a random value below 15.
+**Spec A** `[04 §3.3]`, result code 9: if the record is last, reset its phase
+and set "the same randomized deadline" as code 3 — global tick + 30 + a draw
+below 15. **Spec B** `[05 "Queue pumping and result codes"]`, result code 9:
+"restarts at state 0 with a randomized 30-plus-random-30 retry when no
+successor exists". Same field, different jitter bounds.
 
-**Spec B** `[05 "Queue pumping and result codes"]`, result-code 9: "restarts at
-state 0 with a randomized **30-plus-random-30** retry when no successor
-exists".
+**Observed:** the two arms are distinct, and each document is right about its
+own. Retail adds the same 30-tick base through two paths with different bounds:
+code 3 draws below 15, and code 9 on the last record draws below 30. The
+earlier analysis missed the second arm because it reaches the shared deadline
+calculation through an indirect branch `[04 R-P0-01]`.
 
-Same field, different jitter bounds (rand < 15 vs rand < 30).
+**Decision:** implement both arms — code 3 is `tick + 30 + RNG(15)`, code 9 on
+the last record is `tick + 30 + RNG(30)` — with the primary and secondary pumps
+using the same split. It is observable only as the re-arm cadence of a
+completed last order.
 
-**Observed:** the two retail arms use distinct random bounds while adding the
-same 30-tick base delay. Result code 3 draws below 15; result code 9 on the last
-record draws below 30 [R-P0-01]. The earlier analysis missed the latter arm
-because it reaches the shared deadline calculation through an indirect branch.
-
-**Decision:** implement distinct arms: code 3 → `tick+30+RNG(15)` and code 9
-last → `tick+30+RNG(30)` per [R-P0-01].
-`internal/orders/pump.go` has `randBelow15` for code 3 and `randBelow30` for
-code 9 last; both primary and secondary pumps use the same split. Observable
-only as the re-arm cadence of a completed last order.
-
-**Falsifies:** the earlier SC8 reading that both arms shared `RNG(15)`; [04 §3.3]
-row is correct for code 3 and [05] is correct for code 9 last.
+**Contract:** `[04 R-P0-01]`, `[04 §3.3]`,
+`[05 "Queue pumping and result codes"]`; DESIGN_UNITS_ORDERS_COB §5.
 
 ---
 
 ## SC9 — `LOS.TDF` declares nine tables and supplies twelve
 
-**Status:** closed by asset census plus the declared-count reading; `[03 §3.2]` was silent and this entry records which silence was resolved and how.
+**Status:** Closed.
 
 **Spec** `[03 §3.2]` clamps the terrain-ray group index "into the parsed
 LOS.TDF table range" without saying which count defines that range.
 
-**Observed** in the reference install: `gamedata/los.tdf` has
-`[TABLEINFO] { numtables=9 }` and then `[TABLE1]` through `[TABLE12]` — three
-more sections than it declares. Reproduce with:
+**Observed:** `gamedata/los.tdf` has `[TABLEINFO] { numtables=9 }` and then
+`[TABLE1]` through `[TABLE12]` — three more sections than it declares.
+Reproduce with `go test ./internal/content -run TestCompileLOSTables -v`, which
+asserts both numbers against the install.
 
-```
-go test ./internal/content -run TestCompileLOSTables -v
-```
-
-which asserts both numbers against the install.
-
-**Decision:** the clamp uses the **declared** `numtables`, not the discovered
+**Decision:** the clamp uses the **declared** `numtables`, never the discovered
 section count. The declared value is what the engine's table object reports,
 and the three undeclared tables are unreachable authoring residue — the largest
-declared table already saturates every stock `sightdistance` (the biggest,
-450, quantizes to 14 and clamps to 8). `Catalog.LOS` keeps all twelve parsed
-sections so nothing is lost and a probe can change the decision in one line;
-`internal/visibility` reads `NumTables` for the clamp and never
-`len(Tables)`.
+declared table already saturates every stock `sightdistance` (the biggest, 450,
+quantizes to 14 and clamps to 8). `Catalog.LOS` keeps all twelve parsed
+sections so nothing is lost, and `internal/visibility` reads `NumTables` and
+never `len(Tables)`. The sprite-mask path keeps its own, unrelated count from
+the ten frames of the visibility-mask GAF; the two counts must not be shared.
 
-**Falsifies:** nothing — the spec is silent, and this records which silence we
-resolved and how.
-
-**Note:** the sprite-mask path has its own count from a different source (the
-ten frames of the visibility-mask GAF, `[03 §3.2]`). The two counts are not
-required to agree and must not be shared.
+**Contract:** `[03 §3.2]`, `[03 R-COMP-02 §1]`; DESIGN_WORLD_VISIBILITY §4.
 
 ---
 
-## SC10 — Trailing -Z is Z-Y/2 shear, not a second model-space NEG (H_A vs H_C)
+## SC10 — The trailing `-Z` is the projection shear, not a second model-space negation
 
-**Status:** closed by `[03 §2.4]` / `[03 §2.5]` (2026-08-25) — the trailing `-Z` belongs to projection, not to source conversion.
+**Status:** Closed.
 
-**Spec** `[03 §2.4/2.5]` prior to 2026-08-25: load-time half-turn `-X,-Z` was established, but whether screen helpers' `-Z` was a second conversion (`H_C` net `-X`) vs shear (`H_A` net `-X,-Z`) was an open question or supported inference.
+**Spec** `[03 §2.4]` and `[03 §2.5]` established the load-time half-turn
+`-X,-Z`, but left open whether the screen helpers' trailing `-Z` was a second
+source conversion (net `-X`) or part of the projection (net `-X,-Z`).
 
-**Observed:** the screen helpers negate only the transient projected Z value,
-then compute the established `Z - Y/2` shear. They do not store that negation
-back into model data. The muzzle query likewise consumes the vectors produced
-by the one load-time half-turn without applying a second sign change. Therefore
-the trailing `-Z` belongs to projection, not source conversion.
+**Observed:** the screen helpers negate only the transient projected Z value
+and then compute the established `Z − Y/2` shear; they never store that
+negation back into model data. The muzzle query likewise consumes the vectors
+produced by the one load-time half-turn with no second sign change. The
+trailing `-Z` therefore belongs to projection, not to source conversion.
 
-**Decision:** implement `H_A` sole load-time conversion; reject `H_C` (rr-06_addendum, direct-static). Flare/muzzle world at `(2,1,-30)` is `(-2,1,+30)` plus unit origin.
+**Decision:** the load-time half-turn is the sole source conversion. Model
+space is mirrored in Z against world space, which is why `ModelVertexToScreen`
+and `ModelProjectToScreen` are two names and not one; a flare or muzzle
+authored at model `(2,1,-30)` is world `(-2,1,+30)` plus the unit origin.
 
-**Falsifies:** `H_C` reading; no prior SC.
+**Contract:** `[03 §2.4]`, `[03 §2.5]`; DESIGN_PRESENTATION_CLIENT §5.
 
 ---
 
-## SC14 — Flare/muzzle per-vertex reuse vs second NEG
+## SC14 — The muzzle query reuses the pristine post-load vectors
 
-**Status:** closed by `[03 §2.4]` (2026-08-25) — the muzzle query reuses the pristine post-load vectors.
+**Status:** Closed.
 
-**Spec** `[03 §2.4]` / `research/formats/3do.md` "Model facing is −Z": piece translations converted at load, but muzzle query path could have re-applied `NEG`.
+**Spec** `[03 §2.4]` and `[fmt 3do]` establish that piece translations are
+converted at load, but left open whether the muzzle query path re-applies the
+negation per vertex.
 
 **Observed:** the piece transform rotates and translates the already-converted
-piece and center vectors. `COB.QueryPrimary` uses the same vectors without an
-extra sign change.
+piece and center vectors, and the primary-muzzle query uses those same vectors
+with no extra sign change.
 
-**Decision:** muzzle query reuses pristine post-load vectors; no second sign fixup (rr-06_addendum, direct-static). Same evidence as SC10; separated because SC10 is about projection shear vs conversion and SC14 is about per-vertex flare reuse.
+**Decision:** the muzzle query reuses the pristine post-load vectors; there is
+no second sign fixup at query time. Same evidence as SC10, kept separate
+because SC10 is about the projection shear and SC14 about per-vertex flare
+reuse.
 
-**Falsifies:** second-NEG-at-query reading.
+**Contract:** `[03 §2.4]`, `[fmt 3do]`; DESIGN_PRESENTATION_CLIENT §5.
 
 ---
 
 ## SC15 — The cursor index table was off by one from slot 10
 
-**Status:** closed by `[07 §8]`'s corrected 0..21 cursor table plus the asset census of `anims/cursors.gaf`.
+**Status:** Closed.
 
-**Spec** `[07 §8]` (before this entry): "The cursor index table is closed …
-index 1 `cursorattack` … 9 `cursorteleport`, 10 `cursorreclamate`,
-11 `cursorload`, 12 `cursorunload`, 13 `cursormove`, 14 `cursorselect`,
-15 `cursorfindsite`, 16 `cursorred`, 17 `cursorgrn`, 18 `cursornormal`,
-19 `cursorhourglass`, 20 `pathicon`."
+**Spec** `[07 §8]` published a closed twenty-entry cursor table running index 1
+`cursorattack` through index 20 `pathicon`, with `cursorreclamate` at 10.
 
 **Observed:** `anims/cursors.gaf` in the reference install holds **22** named
-entries, two more than that table's twenty. Reproduce with the asset-guarded
-`TestGafCursorAssetGuarded` in `internal/render`, or by listing the GAF's
-entries directly:
-
-```
-cursormove cursorgrn cursorselect cursorred cursorload cursorrevive
-cursordefend cursorpatrol cursorprotect cursorrepair cursorattack
-cursornormal cursorpickup cursorairstrike cursorteleport cursorreclamate
-cursorfindsite cursorcapture cursorunload cursorhourglass cursortoofar
-pathicon
-```
-
-`cursorrevive` is missing from the spec table entirely and `cursorprotect` is
-never referenced by the executable (its name does not appear in the binary's
-string data at all — it is unused art).
-
-The handle array has twenty-two slots and the init sequence fills slot 10 with
-`cursorrevive` **last**, after slot 21, breaking the otherwise ascending order.
-Transcribing the sequence rather than the slot offsets drops slot 10 and shifts
+entries — two more than that table — including `cursorrevive`, which the table
+omits entirely, and `cursorprotect`, which the executable never references at
+all. The handle array has 22 slots and the init sequence fills slot 10 with
+`cursorrevive` **last**, after slot 21, breaking the otherwise ascending order;
+transcribing the sequence rather than the slot offsets drops slot 10 and shifts
 `cursorreclamate` through `pathicon` down by one. Three independent readers
-confirm the corrected numbering: the idle default the pointer update falls back
-to is index 19, which must be `cursornormal` and is `cursorhourglass` under the
-old table; the front end installs index 20 across blocking transitions, which
-must be `cursorhourglass` and is `pathicon` under the old table; and the shape
-chooser returns 7 for PATROL, 6 for REPAIR, 5 for FOLLOW, 11 for RECLAIM, 14 for
-MOVE and 16 for MOBILEBUILD, every one of which names the right art only under
-the corrected table.
+confirm the corrected numbering: the idle fallback is index 19, which must be
+`cursornormal`; the front end installs index 20 across blocking transitions,
+which must be `cursorhourglass`; and the shape chooser returns 7 for PATROL, 6
+for REPAIR, 5 for FOLLOW, 11 for RECLAIM, 14 for MOVE and 16 for MOBILEBUILD,
+every one of which names the right art only under the corrected table.
+Reproduce with the asset-guarded `TestGafCursorAssetGuarded` in
+`internal/render`.
 
-**Decision:** the table is 0..21 with slot 10 `cursorrevive`; every index from
-`cursorreclamate` up shifts by one. `research/retail-executable-spec`
-`[07 §8]` and `internal/render/gaf_cursor.go` carry the corrected table, and
-`render.CursorAttack`…`render.CursorPathIcon` are the named constants.
-`cursorprotect` is deliberately absent from the table: retail never resolves it.
+**Decision:** the table is 0..21 with slot 10 `cursorrevive`, and every index
+from `cursorreclamate` up shifts by one. `internal/render/gaf_cursor.go`
+carries it and `render.CursorAttack`…`render.CursorPathIcon` are the named
+constants. `cursorprotect` is deliberately absent: retail never resolves it.
 
-**Falsifies:** the previous "closed" twenty-entry table, and the
-`cursorfindsite` = 15 / `cursorgrn` = 17 constants that PLAN_12 C12 quoted.
+**Contract:** `[07 §8]`; DESIGN_INTERFACE_HUD_INPUT §5 and
+DESIGN_PRESENTATION_CLIENT §5.
 
 ---
 
-## SC16 — the active-state `0x20` bit and the empty-current-task field (closed)
+## SC16 — The active-state `0x20` bit and the empty current-task field
 
-**Status: closed** (WU-19-45, 2026-09-01). Both halves are resolved and the
-entry gates no further work. The active-state half closed 2026-09-01
-(WU-19-37); the empty-current-task half closed when RWU-19-14 traced the
-compared word.
+**Status:** Closed.
 
 **Spec** `[07 §9]`: the shared selection eligibility predicate, and the
-own-unit inspect predicate behind `cursorselect` in `[07 §8]`, test "the
-active-state bit `0x20` of unit runtime flags" and an empty current-task field.
+own-unit inspect predicate behind `cursorselect` in `[07 §8]`, test the
+active-state bit `0x20` of the unit runtime flags and an empty current-task
+field. This entry originally held that neither test had an implementable
+counterpart here — that `0x20` was already claimed by an in-build-stance flag,
+and that the only candidate for the current-task field was a per-unit order
+guard that is nonzero for every idle unit — so gating on either would make
+`cursorselect` and rectangle selection unreachable.
 
-**Observed (superseded, first block).** This entry originally read: "in this
-repo bit `0x20` of `units.Unit.Flags` is already claimed by
-`construction.FlagInBuildStance` (`1 << 5`, COB port 5 `INBUILDSTANCE`,
-`[04 §4.4]`), and no code path sets an active-state bit. Gating on `0x20` would
-make the inspect predicate permanently false and would make the `cursorselect`
-shape unreachable." Its decision was "`hud.isInspectable` gates on ownership
-plus completed construction only … Do not 'fix' it by testing `0x20` until the
-runtime flag word is reconciled with `[07 §9]`".
+**Observed:** both halves of that reading are wrong. Bit `0x20` of the runtime
+flag word is the classifier-eligibility bit: written by the allocator
+initializer, cleared by death finalization, cleared for a scripted unit by the
+`InitialMission` postlude, and set again by `MakeSelectable`. Nothing collides
+with it — the COB port's `INBUILDSTANCE` is a separate byte — and it is set on
+every live unit `[04 §3.6]` `[08 R-TRIG-01 §3]`. The "empty current-task field"
+is the **remaining-build fraction**: the word the construction step drives from
+`1.0` toward `0.0` `[05 R-WORK-01 §1]`, that the constructor seeds
+`[04 R-COB-03 §4]`, and that COB port 17 reads. A whole-executable census of
+every load and every store of that word finds **no routine of the order
+subsystem storing to it** — not the record constructor, either pump, the
+return-code epilogue, cancel-all, the expiry helper or the idle-queue refill
+`[07 R-WGT-01 §10]`. The per-unit order guard this build had invented was
+imitating the construction step's own clamp; the entry's own "rectangle
+selection would then select nothing" argument is the proof that no such gate
+exists in retail.
 
-Both halves of that observation are now wrong. `construction.FlagInBuildStance`
-no longer exists: the COB port's INBUILDSTANCE is the separate
-`units.Unit.InBuildStance` byte. Bit `0x20` of `units.Unit.Flags` is
-`units.ClassifierEligibleStatus`, written by the allocator initializer, cleared
-by death finalization, cleared for a scripted unit by the InitialMission
-postlude and set again by `MakeSelectable`
-(`[R-P0-04 "Runtime eligibility bit lifecycle"]`, `[04 §3.6]`,
-`[08 R-TRIG-01 §3]`). Nothing collides, the bit is set on every live unit, and
-a capture on Coast to Coast confirms `cursorselect` resolves over an own idle
-unit and falls back to `cursornormal` with the bit cleared.
+**Decision:** the invented order guard and both pump writers are removed. The
+eligibility predicate is the selectable status bit `0x20` plus a
+remaining-build fraction of exactly `0.0`, and reads no order state at all; the
+inspect predicate's existing "construction complete" test *is* the
+empty-current-task gate. Rectangle selection uses the same predicate, walking
+the local player's slice in ascending slot order into an inclusive rectangle
+test. Two clauses stay unmodelled and carry a `TODO(question)` rather than an
+entry here: the post-capture grace counter, always zero without a remote
+controller, and the carrier's cargo-selectable bit 30.
 
-**Observed (superseded, second block).** The remaining half previously read:
-"`units.Unit.OrderGuard` is this build's per-unit order-guard float, and
-`internal/orders/pump.go` writes it `1.0` whenever the primary queue is
-non-empty. An idle unit's primary queue holds a `Standby` node, so the guard is
-nonzero for every idle unit. Gating `hud.isInspectable` on it therefore makes
-`cursorselect` unreachable — the same failure this entry originally warned
-about for the bit. Note the wider consequence: `[07 §9]` gives the *rectangle
-selection* the same compare-to-`0.0`, so if the guard's writer were right,
-retail's bulk selection would select nothing either. `units.Unit.Eligible`
-reduces bit + guard together and, before WU-19-37, had no production caller at
-all, which is why the contradiction had not surfaced." Its decision was
-"`hud.isInspectable` … does **not** gate on `OrderGuard`; a `TODO(question)` at
-the site records why. Do not add that clause until either the guard's writer is
-reconciled with `[07 §9]` … or the current-task field is identified as a
-different word."
-
-That observation was reasoning about a field that does not exist in retail.
-`[07 R-WGT-01 §10]` settles it on a whole-executable census of every load and
-every store of the compared word: **the empty current-task field is the
-remaining-build fraction** — the word the construction step drives from `1.0`
-toward `0.0` `[05 R-WORK-01 §1]`, the constructor seeds `[04 R-COB-03 §4]`, and
-COB port 17 reads `[04 R-COB-03 §2]`. **No routine of the order subsystem
-stores to it**: not the record constructor, not either pump, not the
-return-code epilogue, not cancel-all, not the expiry helper, not the
-idle-queue refill. The "clamped `0..1` ratio while an order is being processed"
-that this build's guard imitated is the construction step's own clamp, and the
-"order completion" that zeroes it is the *build* order completing on its
-product. `[07 §8]` and `[07 §9]` are both corrected inline to say so.
-
-So the observation's own conclusion was right for the wrong reason: gating on
-`OrderGuard` would indeed have made `cursorselect` unreachable, because the
-field was invented — not because retail has a gate we could not satisfy. The
-"wider consequence" it flagged for rectangle selection is the proof: a
-predicate that excluded every idle unit could not be what retail's bulk
-selection runs.
-
-**Decision:** `units.Unit.OrderGuard` and both pump writers are **removed**
-(WU-19-45). `units.Unit.Eligible` is `E(u)` of `[07 R-WGT-01 §10]`: the
-selectable status bit `0x20` and the remaining-build fraction exactly `0.0`.
-`hud.isInspectable` needs no new clause — its existing `Remaining != 0` test
-*is* the empty-current-task gate — and the `TODO(question)` at that site is
-retired. Rectangle selection gates on the same predicate: only `E(u)` units
-enter the inclusive rectangle test, walking the local player's slice in
-ascending slot order. The two clauses still unmodelled — the post-capture grace
-counter (always zero without a remote controller) and the carrier's
-cargo-selectable bit 30 — remain a `TODO(question)` on `Eligible`, not a spec
-conflict.
-
-**Falsifies:** its own earlier "Observed" and "Decision" blocks, quoted above.
-Nothing in the spec.
+**Contract:** `[07 R-WGT-01 §10]`, `[04 §3.6]`, `[08 R-TRIG-01 §3]`,
+`[07 §8]`, `[07 §9]`; DESIGN_UNITS_ORDERS_COB §5.
 
 ---
 
 ## SC17 — Order queue caps 64/32 were inside stock-reachable behavior [P1-I09]
 
-**Status:** closed by corpus census (`internal/orders/corpus_caps_test.go` `TestCorpusQueueCaps_Retail`) — the 64/32 caps were inside stock-reachable behavior and are replaced by dynamic storage.
+**Status:** Closed.
 
-**Spec** `[P2-03]` fallback caps `MaxPrimaryQueue=64` / `MaxSecondaryQueue=32`
-with diagnostic drop (I11 divergence) for queue overflow, plus pump
-iteration cap `200` for handler loops via 0/1/2 without blocking (NEGATIVE-BOUNDED
-no cap).
+**Spec** `[P2-03]` gave fallback caps `MaxPrimaryQueue = 64` and
+`MaxSecondaryQueue = 32` with a diagnostic drop on overflow, plus a pump
+iteration cap of 200.
 
-**Observed:** corpus measurement over the reference install (278 units, 275
-maps, 175 campaign missions, 13 campaigns) via
-`internal/orders/corpus_caps_test.go` `TestCorpusQueueCaps_Retail` finds:
+**Observed:** a corpus census over the reference install (278 units, 275 maps,
+175 campaign missions, 13 campaigns) finds stock `InitialMission` scripts well
+past the primary cap — `ARMCARRY carry1` in `Silent Slayers.ota` produces 105
+raw tokens and `fighting under fire.ota` produces 138 — so the 64 cap truncated
+a retail mission. The secondary maximum in the whole corpus is 1, and pump
+iterations for those queues stay below 200, so neither of the other two bounds
+is stock-reachable. Reproduce with
+`go test -tags retail -run Corpus ./internal/orders`.
 
-* `Silent Slayers.ota` `ARMCARRY carry1` raw InitialMission tokens `105` and
-  `fighting under fire.ota` raw `138`, both >64. With the 64 cap the run
-  truncated to 64 in `TestCorpusQueueCaps_Retail`'s capped-era probe
-  (`meas_main.go` 2026-08-25: `maxPrimary=64` capped vs `138` raw). Uncapped,
-  that unit would require >64 primary nodes (plus `MakeSelectable` postlude).
-* Secondary max in corpus is `1` (`bw 2` in `exp1ac12.ota` `CORFMD`), well
-  below 32.
-* Pump iterations for those queues are `<138 <200`, so the 200 guard is
-  outside stock.
+**Decision:** replace both caps with dynamic growth matching retail's
+heap-linked list, which has no located cap. The only remaining bounds are an
+out-of-memory guard far outside anything stock or any plausible player
+shift-queue, and the pump's iteration guard, which the census proves
+unreachable; both are the sanctioned bounds-check exception to [I11].
+`internal/orders/corpus_caps_test.go` locks the measurement, so a corpus that
+grows past a guard fails the test rather than silently truncating.
 
-Therefore the 64 cap was inside stock-reachable behavior and changed a
-retail mission. The 32 cap was outside stock but an arbitrary divergence
-with no retail capacity, and the pump 200 guard is outside stock.
-
-**Decision:** replace primary/secondary caps with dynamic slice growth
-matching retail's heap-linked list (no located cap). The only remaining
-I11 divergence is an OOM guard at `10000` (`OOMGuardQueue` in
-`internal/orders/pump.go`), which is `>>138` and `>>` any reasonable
-player shift-queue (hundreds) while still bounding hostile input. The
-previous constants `64`/`32` are retained as deprecated for test
-compatibility but no longer gate `Push`/`CoalesceTail`. The pump guard
-`200` is retained with corpus proof that it is outside stock.
-`internal/orders/corpus_caps_test.go` locks the measurement; if corpus
-grows beyond the guard the test fails and the guard must be revisited.
-`go test -tags retail -run Corpus ./internal/orders` reproduces.
-
-**Falsifies:** the `P2-03` fallback-cap values `64`/`32` as stock-safe;
-they are replaced by dynamic storage per `P1-I09`.
+**Contract:** `[04 §3.3]`, `[05 "Queue pumping and result codes"]`;
+DESIGN_UNITS_ORDERS_COB §5.
 
 ---
 
-## SC18 — Allocator zero-fill byte count and COB malformed-save policy are narrow open items [P1-I09]
+## SC18 — The allocator's zero-fill byte count [P1-I09]
 
-**Status:** open — decider: static trace of the allocator's exact memset length and of the COB abort path. Marked `TODO(T23)` at the allocation sites; see doc 01's and doc 04's "Missing and unknown" items.
+**Status:** Open.
 
-**Correction audit (current boundary):** An earlier revision of this section
-described a Nanolathe-specific `StateV1` save codec and directed callers to
-keep its fatal-on-truncation policy. That codec has been removed. The active
-save boundary is retail HAPIBANK account parsing: campaign continuation exposes
-Summary metadata, while in-battle restoration returns an explicit unsupported
-result `[08 "Save-file organization"]` `[GAP T9]`. The StateV1 wording below is
-retained only as historical audit evidence and is not an implementation
-instruction; do not reintroduce that codec.
+**Spec** `[01 §6.1]` and `[GAP T13]` leave the allocator's backing
+implementation, arena boundaries and zero-fill policy untraced; `[04 §4.1]` and
+`[GAP T15]` leave the COB loader's allocation and its exact failure behavior on
+a bad allocation or a corrupted piece index unresolved — retail may abort
+through its allocator where a clean implementation should terminate the
+affected script deterministically.
 
-**Spec** `[01 §6.1]`/`[GAP T13]` note the allocator's backing implementation,
-arena boundaries and zero-fill policy remain `TODO(T23)`; `[04 §4.1]`/`[GAP
-T15]` note COB loader allocation and the exact failure behavior of allocation
-or corrupted piece indexes remain unresolved — retail may abort through its
-allocator where a clean implementation should terminate the affected script
-deterministically. `[08 "Save-file organization"]` documents the
-non-transactional partial-load policy.
+**Observed:** retail's exact fill length for the 280-byte unit record, the
+107-byte projectile record and the 86-byte order node is not established, and
+no stock input distinguishes the candidates: the whole-install format walk
+parses every stock file without reaching a fault guard, and the order-queue
+census reaches no queue guard. Go zero-initializes all three records, so the
+fill length is unobservable here.
 
-**Historical observation (superseded):** `internal/orders/pump.go`,
-`internal/combat/pool.go`, `internal/units/units.go` and
-`internal/save/bulk.go` zero-initialize Go structs (Go zero value). Retail's
-exact `memset` byte count for the 86-byte order node, 300×107-byte projectile
-records, 280-byte unit records etc. is not traced, but observable effect is
-zeroed. An earlier implementation's `internal/save/boxes.go`
-`UnmarshalStateV1` rejected truncated COB blobs, while retail bulk COB boxes
-(`0x528`+`stack*4`+`pieces*0x6C`) were handled by the bulk loader's partial-load
-skips per `[08]` (missing account created empty, each subsystem's defaults
-govern). This records the evidence that led to the removed StateV1 abstraction;
-the current save package has no such codec.
+**Decision:** keep Go zero-initialization with `TODO(T23)` at each allocation
+site citing the open byte count. The COB loader bounds-checks its header
+offsets and reports a diagnostic where retail does not, which is the
+[I11]-sanctioned exception. Revisit only with executable evidence that the fill
+length or the COB abort path is observable.
 
-**Decision (current):** keep Go zero-initialization with `TODO(T23)` at the
-allocation site (`internal/orders/pump.go` newNode, `internal/combat/pool.go`
-Reserve, `internal/units/units.go` Create) citing the open byte count. Save
-callers use the retail account parser and the explicit unsupported in-battle
-restoration result; no StateV1 fatal-on-truncation policy or alternate
-continuation format remains. No stock corpus hits either historical guard:
-`formats/coverage_test.go`
-`TestFormatCoverage` parses all stock files without hitting TDF/Gaf/Pcx/Wav
-fault guards, and `TestCorpusQueueCaps_Retail` shows no queue guard hit
-after the fix. Revisit only with executable evidence that retail's exact
-memset length or COB abort path is observable.
+**What would settle it:** a static trace of the allocator's fill length and of
+the COB abort path.
 
-**Falsifies:** nothing; it records the two `P1-I09` narrow open items as
-explicit `TODO(T23)`/`TODO(question)` placeholders.
+**Superseded half:** this entry once also covered a Nanolathe-specific save
+codec with a fatal-on-truncation policy, and an in-battle restoration that
+returned "unsupported". That codec is gone. The save boundary is retail
+HAPIBANK account parsing, with staged battle restoration implemented against
+it, so nothing about save truncation remains open here and the codec must not
+be reintroduced `[08 "Save-file organization"]`.
+
+**Contract:** `[01 §6.1]`, `[04 §4.1]`, `[08 "Save-file organization"]`;
+DESIGN_RUNTIME_DETERMINISM §5 and §7 own the open half,
+DESIGN_SESSIONS_AI_SAVE §5 records the superseded one.
 
 ---
 
 ## SC19 — Yard-map parsing is not one-to-one, and bits 5/6 read the wrong flags
 
-**Status:** closed by asset census plus the character-loop trace; `[05 "Geothermal requirement"]` carries the corrected parse and flag identities.
+**Status:** Closed.
 
-**Spec said:** `[05 "Geothermal requirement"]` described yard-map characters as
-mapping "one-to-one into a row-major buffer sized by the packed footprint
-extents", and named bit 6 a test for "a specific non-reclaimable flag". Bit 5
-was described only as "free of blocking features", which `internal/world`
+**Spec** `[05 "Geothermal requirement"]` described yard-map characters as
+mapping one-to-one into a row-major buffer sized by the packed footprint
+extents, named bit 6 a test for "a specific non-reclaimable flag", and
+described bit 5 only as "free of blocking features", which `internal/world`
 implemented as any feature at all.
 
 **Observed:** three separate disagreements with the shipped data and with the
 definition compiler's character loop.
 
 1. **Length.** Forty-six of the 126 stock yard-mapped definitions disagree with
-   their own footprint. `ARMSOLAR` authors 27 characters for a 5×5 footprint,
-   `ARMESTOR` authors one for 4×4, `ARMSILO` nine for 5×5, `CORSOLAR` sixteen for
-   5×5. Reproduce with a catalog compiled from `~/TotalAnnihilation`, comparing
-   `len(strings.Fields-stripped YardMap)` against `FootprintX*FootprintZ` over
-   `Catalog.SortedUnitKeys()`. Rejecting the mismatch — which `ParseYardMap` did
-   — left every one of those buildings permanently unplaceable; the reported
-   symptom was "I cannot build a solar collector at all". The compiler instead
-   skips table-absent characters without consuming a cell, parks on the final
-   character so it repeats for unfilled cells, and never reads past the last
-   cell.
+   their own footprint — `ARMSOLAR` authors 27 characters for a 5×5 footprint,
+   `ARMESTOR` one for 4×4, `ARMSILO` nine for 5×5, `CORSOLAR` sixteen for 5×5.
+   Rejecting the mismatch left every one of those buildings permanently
+   unplaceable; the reported symptom was "I cannot build a solar collector at
+   all". Retail's loop skips a table-absent character without consuming a cell,
+   parks on the final character so it repeats for unfilled cells, and never
+   reads past the last cell. Reproduce by comparing the whitespace-stripped
+   yard-map length against `FootprintX × FootprintZ` over
+   `Catalog.SortedUnitKeys()` on a catalog compiled from the install.
 2. **Bit 5.** Metal patches are 3×3 features authored `blocking=0`,
-   `reclaimable=0`, `indestructible=1` (`archmetal*`, `drymetal*`, `moonmetal*`,
-   `marsmetal*`, `*aquaore*` — 3-tier sets in every world's feature TDF).
-   `ARMMEX` authors an all-`o` yard map and `o` carries bit 5, so blocking on
-   presence rather than on the definition's authored `blocking` flag makes the
-   metal extractor unplaceable on its own deposit — the reported symptom. Trees
-   and rock clutter do carry `blocking=1` and still block.
-3. **Bit 6.** The validator reads bit 1 of the flag word's **high** byte, which
-   is word bit 9 — `indestructible` (mask 0x0200). `reclaimable` is word bit 7 of
-   the same byte-pair and is never read by the validator.
+   `reclaimable=0`, `indestructible=1` (`archmetal*`, `drymetal*`,
+   `moonmetal*`, `marsmetal*`, `*aquaore*`). `ARMMEX` authors an all-`o` yard
+   map and `o` carries bit 5, so blocking on presence rather than on the
+   authored `blocking` flag makes the metal extractor unplaceable on its own
+   deposit. Trees and rock clutter do author `blocking=1` and still block.
+3. **Bit 6.** The validator reads the indestructible flag, not the reclaimable
+   one; `reclaimable` is never read by the validator at all.
 
-**Decision:** `ParseYardMap` fills the footprint by retail's rules and no longer
-returns a length or unknown-character error; `ValidatePlacement` reads
-`FeatureDef.Blocking` for bit 5 and `FeatureDef.Indestructible` for bit 6, and
-counts a geothermal match only on cells whose own yard byte carries bit 7. A
-fringe cell whose anchor hop finds nothing is not blocking. `[05 "Geothermal
-requirement"]` is updated to match.
+**Decision:** `ParseYardMap` fills the footprint by retail's character loop and
+returns neither a length nor an unknown-character error; `ValidatePlacement`
+reads the feature definition's authored blocking flag for bit 5 and its
+indestructible flag for bit 6, and counts a geothermal match only on cells
+whose own yard byte carries bit 7. A fringe cell whose anchor hop finds nothing
+is not blocking. The control-byte table, the bit roles and the geothermal rule
+itself are unchanged.
 
-**Falsifies:** the one-to-one parse contract and the bit-6 flag identity in
-`[05 "Geothermal requirement"]`. It does not change the control-byte table, the
-bit roles, or the geothermal rule itself.
+**Contract:** `[05 "Geothermal requirement"]`, `[fmt fbi]`;
+DESIGN_WORLD_VISIBILITY §4, consumed by DESIGN_ECONOMY_CONSTRUCTION.
 
 ---
 
 ## SC20 — Cursor-to-ground is a search along Z, not an inverse projection
 
-**Status:** closed by `[07 §8]`'s cursor-to-ground resolver (bounded search along Z, then bracket and interpolate).
+**Status:** Closed.
 
-**Spec said:** `[07 §8]` said only that "world space, unit, feature, and
-terrain/radar tests use the camera transform", which `internal/camera`
-implemented as the algebraic inverse of `WorldToScreen` at height zero.
+**Spec** `[07 §8]` said only that world-space, unit, feature and terrain/radar
+tests use the camera transform, which `internal/camera` implemented as the
+algebraic inverse of `WorldToScreen` at height zero.
 
 **Observed:** that inverse is wrong wherever the ground is above zero, and
 visibly so. Terrain tiles are presented flat while world objects carry the
-half-height shear `screenRow = Z − (height >> 1)` `[03 §2.5]`, so an order given
-at a pixel put the unit half the terrain height north of it — the reported
-symptom was a commander moving to a space above the click. Retail resolves the
-pointer with a bounded search instead: clamp into the map rectangle, start eight
-cells south of the clicked row, walk north up to nine cells comparing each
-candidate's `max(height, seaLevel)` projection against the clicked row, then
-bracket and interpolate. Reproduce by sweeping every map pixel of a stock map
-through `Terrain.CursorToWorld` and projecting the result back: exact on flat
-ground, within a few pixels on steep slopes (retail's own linear-interpolation
-residue), against an error of half the terrain height for the algebraic inverse.
+half-height shear `screenRow = Z − (height >> 1)` `[03 §2.5]`, so an order
+given at a pixel put the unit half the terrain height north of it — the
+reported symptom was a commander moving to a space above the click. Retail
+resolves the pointer with a bounded search instead: clamp into the map
+rectangle, start eight cells south of the clicked row, walk north up to nine
+cells comparing each candidate's `max(height, seaLevel)` projection against the
+clicked row, then bracket and interpolate. Reproduce by sweeping every map
+pixel of a stock map through `Terrain.CursorToWorld` and projecting the result
+back — exact on flat ground, within a few pixels on steep slopes (retail's own
+interpolation residue), against an error of half the terrain height for the
+algebraic inverse.
 
 **Decision:** `Terrain.CursorToWorld` implements the search and is the single
-cursor-to-ground conversion the battle screen uses, through
-`battleSession.cursorWorld`. `Camera.ScreenToWorld` keeps its pixel-level
-meaning and is no longer used directly for ground orders. `[07 §8]` is updated
-with the full resolver.
+cursor-to-ground conversion the battle screen uses; `Camera.ScreenToWorld`
+keeps its pixel-level meaning and is no longer used for ground orders. The
+map-rectangle clamp is a behavioral consequence worth knowing: a pointer past
+the map edge resolves to the edge, so an off-map build ghost is legal rather
+than out of bounds.
 
-**Falsifies:** nothing written down; it closes a gap `[07 §8]` had left
-unstated. The map-rectangle clamp is a behavioral consequence worth noting: a
-pointer past the map edge resolves to the edge, so an off-map build ghost is
-legal rather than out of bounds.
+**Contract:** `[07 §8]`, `[03 §2.5]`; DESIGN_INTERFACE_HUD_INPUT §5.
 
-## SC21 — `BMcode` marks structures, not factories, and `CanMove` does not separate factories from mobile builders
+---
 
-**Status:** closed by asset census of the 278 stock definitions; `[fmt fbi]`'s `BMcode` row is corrected and `[07 §9]` carries the product-BMcode branch.
+## SC21 — `BMcode` marks structures, not factories
 
-**Spec said:** `research/formats/fbi.md` gave `BMcode` as "`0` for stationary
-factories ('build-machine'), `1` for everything else — distinguishes pad
-factories from mobile builders". That reading is a community guess, and the
-document flagged it as one.
+**Status:** Closed.
 
-**Observed:** a census of the compiled catalog over `~/TotalAnnihilation`
-partitions the 278 unit definitions into exactly five buckets:
+**Spec** `[fmt fbi]` gave `BMcode` as "`0` for stationary factories
+('build-machine'), `1` for everything else — distinguishes pad factories from
+mobile builders", and flagged it as a community guess.
+
+**Observed:** a census of the compiled catalog partitions the 278 stock unit
+definitions into exactly five buckets:
 
 ```
 BMcode=0 yard=yes canmove=no  builder=no   103
@@ -694,191 +541,148 @@ BMcode=1 yard=no  canmove=yes builder=no   122
 BMcode=1 yard=no  canmove=yes builder=yes   30
 ```
 
-`BMcode == 0` and "has a yard map" are the same set, with no exception. That is
+`BMcode == 0` and "has a yard map" are the same set with no exception: that is
 the structure class, and it is what `[04 §6.2]` already meant when it said the
-yard map is parsed only when BMcode is zero. `ARMSOLAR` and `ARMMEX` author `0`;
-`ARMFAV`, `ARMCOM` and `ARMCK` author `1`.
+yard map is parsed only when BMcode is zero. The census also disproves a second
+assumption this repo held independently of any document: **stock factories
+author `CanMove = 1`** (`ARMVP`, `ARMLAB` and `ARMHP` are all `BMcode=0,
+CanMove=1, Builder=1`), so a `Builder && !CanMove` factory test failed every
+stock factory — clicking a vehicle in a factory's build menu armed a placement
+ghost instead of queueing it.
 
-The census also disproves a second assumption this repo held independently of
-any document: **stock factories author `CanMove=1`**. `ARMVP`, `ARMLAB` and
-`ARMHP` are all `BMcode=0, CanMove=1, Builder=1`. Only two definitions in the
-whole corpus are `Builder=1, CanMove=0`.
+**Decision:** the building-class status bit is set from the authored `BMcode`
+at creation, and the placement-versus-queue branch keys on the **product's**
+`BMcode`, which is what retail's build-button handler tests: it arms the
+MOBILEBUILD latch and stores the product id only when the product's BMcode byte
+is zero, and otherwise falls through to the immediate queue path. The
+mobility-keyed helpers survive only as the fallback for a product the catalog
+cannot resolve.
 
-**Consequence in code:** `hud.IsFactoryBuilder` was `Builder && !CanMove`, so
-every stock factory failed it and passed `IsMobileBuilder` instead. Clicking a
-vehicle in a factory's build menu armed a placement ghost rather than queueing
-the vehicle.
-
-**Decision:** the factory-versus-placement branch keys on the **product's**
-`BMcode`, via `hud.ProductArmsPlacement`, which is what retail's build-button
-handler tests — it arms the MOBILEBUILD latch and stores the product id only
-when the product's BMcode byte is zero, and otherwise falls through to the
-immediate queue path `[07 §9]`. `IsFactoryBuilder`/`IsMobileBuilder` survive only
-as the fallback for a product the catalog cannot resolve.
-
-**Falsifies:** the `BMcode` row of `research/formats/fbi.md`, now corrected.
-`[07 §9]` gains the product-BMcode branch. Nothing in `[04 §6.2]` changes; its
-BMcode-zero gate was right all along.
+**Contract:** `[04 §6.2]`, `[07 §9]`, `[fmt fbi]` (its `BMcode` row corrected);
+DESIGN_ECONOMY_CONSTRUCTION §5, with the interface half in
+DESIGN_INTERFACE_HUD_INPUT and the order half in DESIGN_UNITS_ORDERS_COB.
 
 ---
 
----
+## SC22 — Static-layer path search and the dynamic-block policy [OW-3-O]
 
-## SC22 — Static-layer path search and Nanolathe dynamic-block / retry policy [OW-3-O]
+**Status:** Closed.
 
-**Status:** closed by `[R-MOV-01 §7]` (2026-08-28) and the P0-03
-reconciliation (2026-08-31). Retail re-arms a path request when a route is
-installed and the mover is blocked or has fewer than two points, throttled to
-one request per 60 ticks with no retry ceiling. The search-versus-commit split
-itself is closed by `[R-MOV-02A]`.
+**Spec** `[04 §8.2]`: mobile units are not permanent A* walls in the map-load
+layer; path search uses the static terrain, feature and yard/building layers,
+while final mobile contention is arbitrated at commit, where mobile units are
+hard blockers even though their projected motion never enters the expansion
+heap.
 
-**Spec** `[04 §8.2]` (static and mobile collision): mobile units are not
-permanent A* walls in the map-load layer; path search uses the static terrain,
-feature, and yard/building layers, while a request-initialization revision may
-temporarily re-stamp recent mobile footprints and apply the occupant-age gate
-described in `[04 §6.1 R-DOC04-B]`. Final mobile contention is arbitrated at
-commit `[04 §8.2]`; mobile units are hard blockers there even though their
-projected motion is not inserted into the expansion heap.
+**Observed:** the search predicate checked the occupancy grid for every
+neighbor and rejected occupied cells, turning transient traffic into static
+obstacles and feeding an invented retry-and-removal policy. The opposite
+blanket claim — that mobile occupancy is simply ignored at search time — is also
+wrong, because it omits the request-initialization revision pass. A whole-image
+census additionally found no yield or sidestep owner anywhere: the commit
+validator never reads the class layer or the occupant age, so the age gate is
+search-only `[04 R-COLL-01 §7]`.
 
-**Observed:** `internal/movement/integrate.go:searchFunc` previously checked
-`OccupancyGrid.OccupantAt` for every neighbor and rejected occupied cells,
-turning transient traffic into static obstacles and feeding an invented
-retry/removal policy. `OccupancyGrid.Revision/Bump`
-(`internal/movement/collision.go:Revision/Bump/BumpRevision`) had no explicit
-consumer beyond diagnostics; search already rechecks `isPassable` lazily at
-expansion, so an explicit revision guard is unnecessary, but `Stamp`/`Clear`
-correctly bump `rev` per `[04 §7.4]` C18 and tests lock the bump. The obsolete
-30-tick/one-retry path-failure policy and its session-side removal branch are
-deleted; follower state is now the sole retry owner.
+**Decision:** the search predicate holds no direct occupancy lookup; it reads
+the request's movement-class layer. At request initialization that layer's
+watermark is armed at `max(tick, 30) − 30`, recently committed mobile
+footprints are re-stamped, and the occupant-age gate lets a recent occupant
+through while making an older one block its re-stamped cells. Existing heap
+entries are not purged; expansion rechecks passability lazily as each entry
+opens. The scheduler and the expansion receive no blocker identity, velocity or
+projected destination, and no collision-triggered replan exists — there is no
+lower-slot priority, no avoidance cadence and no replan submission after a
+rejected commit. Mover-versus-mover contention stays authoritative at commit
+through the row-major footprint validator, the half-speed clamp response and
+the synchronous clear/commit/stamp sequence. Building and yard occupancy remain
+static inputs. The liveness mechanism is the age gate itself: a blocked unit
+stops advancing its last-stamp tick, becomes a hard search block for others
+after 30 ticks, and its own repath — re-armed when a route is installed and the
+mover is blocked or has fewer than two points, throttled to one request per 60
+ticks with no retry ceiling — routes around. The separate occupancy revision
+counter is diagnostic and must not be conflated with the class-layer watermark.
+Outer yield/replan and ordinary open-group liveness remain **Unknown**.
 
-**Correction history [R-MOV-02A]:** The previous Decision said that mobile
-occupancy was "ignored at search time" without qualification. That sentence
-correctly described the direct `searchFunc.isPassable` predicate, but was
-overbroad as a retail contract because it omitted the request-initialization
-revision pass. It is superseded by the bounded rule below; the `[04 §8.2]`
-commit behavior is unchanged.
-
-**Decision:** Keep `searchFunc.isPassable` free of a direct
-`OccupancyGrid` lookup, but bind it to the request's movement-class layer.
-At request initialization, that layer's watermark is armed as
-`max(currentTick, 30) − 30`, recently committed mobile footprints are
-re-stamped, and the occupant-age gate allows recent occupants while making an
-older occupant block its re-stamped cells. Existing heap entries are not
-eagerly purged; expansion
-rechecks passability lazily when each entry is opened. Thus the search layer is
-static at map load but can have this bounded, temporary mobile revision
-interaction. The scheduler and expansion do not receive blocker identity,
-velocity, or projected destination, and no collision-triggered replan is
-established. Mover-vs-mover contention remains authoritative at commit via the
-row-major footprint validator `[04 §8.2]`, the half-speed/clamp response, and
-the synchronous clear/commit/stamp sequence. `OccupancyGrid.Revision/Bump` is
-retained for its separate diagnostic/revision role; it must not be conflated
-with the class-layer watermark and request-init restamp. Building/yard
-occupancy remains part of the static/profile inputs.
-
-The former collision-triggered Nanolathe avoidance policy has been removed
-under `[R-MOV-02A]`: there is no lower-slot priority, `avoidNext` cadence, or
-`ReplanMove` submission after a rejected mobile commit. The bounded final
-commit response is therefore the sole implemented collision response; outer
-yield/replan and ordinary open-group liveness remain **Unknown** as stated in
-`[R-MOV-02A]`.
-
-**Falsifies:** the previous mobile-as-wall search behavior and the blanket
-claim that mobile occupancy is always ignored at search time. It does not
-turn mobile occupancy into a permanent static wall, and it does not establish
-that the separate `OccupancyGrid.Revision` counter has an expansion consumer.
+**Contract:** `[04 §8.2]`, `[04 §6.1 R-DOC04-B]`, `[04 R-MOV-02A]`,
+`[04 R-COLL-01 §7]`, `[04 R-MOV-01 §7]`; DESIGN_MOVEMENT_PATH §5.
 
 ---
 
-**Refinement (2026-08-29, [04 R-COLL-01 §7]):** a whole-image census found no
-yield/sidestep owner. The commit validator never reads the class layer or the
-occupant age; the age gate is search-only. A blocked unit stops advancing its
-last-stamp tick, so after more than 30 ticks it becomes a hard search block
-for others, and its own 60-tick repath finds a route around. That mechanism —
-not a retry counter — is what the reconciliation pass should reproduce.
+## SC23 — `gravity = 0` maps cancel every `AirStrike` order
 
-## SC23 — `gravity = 0` maps cancel every `AirStrike` order (retail-sanctioned bound)
+**Status:** Closed.
 
-**Spec:** [04 §10.2 R-AIR-01 §8] (Established, static trace): the bombing
-run's release-point leg computes the release lead as
-`t = sqrt((2 · cruisealt) / gravity)`; before dividing it reads the map's
-`gravity` word and, **if it is zero, returns the cancel-all code (7)**, which
-empties the bomber's whole order queue. There is no fallback gravity.
+**Spec** `[04 R-AIR-01 §8]` (Established): the bombing run's release-point leg
+computes the release lead as `t = sqrt((2 · cruisealt) / gravity)`, and before
+dividing it reads the map's `gravity` word and, if it is zero, returns the
+cancel-all code, emptying the bomber's whole order queue. There is no fallback
+gravity.
 
-**Observation (2026-09-01, asset census):** 275 stock maps enumerated, none
-authors or defaults to gravity 0; the bound is unreachable on stock content.
-Every map's `[GlobalHeader]` authors the `gravity` key explicitly (none
-omitted, none negative); the minimum authored value seen is `8` (word
-`582`), the maximum `445` (word `32421`), and 192 of 275 author `112` (word
-`8155`), matching the census already on file in `research/formats/ota.md`.
-A map whose `gravity` key is absent or `0` would still make bombers
-un-orderable to attack in retail per the spec above; a reimplementation that
-substitutes a default gravity here would invent behavior — but no stock map
-authors one.
+**Observed:** an asset census of the 275 stock maps finds none that authors,
+omits or defaults the key to zero. Every `[GlobalHeader]` authors `gravity`
+explicitly, none negative; the minimum authored value is 8, the maximum 445,
+and 192 of 275 author 112. The bound is therefore unreachable on shipped
+content — but a map that did author zero would make bombers un-orderable to
+attack in retail, and substituting a default gravity would invent behavior.
 
-**Decision:** clone retail — cancel-all on zero gravity. If any retail map
-in `~/TotalAnnihilation` carries `gravity = 0`, a probe under `probes/`
-should confirm the cancellation visibly (orders drop, bomber idles) before
-this entry is promoted from "sanctioned bound" to "observed". Manual retail
-observation is the decider; do not automate the executable.
+**Decision:** clone retail and cancel all orders on zero gravity. The terrain
+loader tests the parsed value, not key presence: an omitted key takes the OTA
+parser's integer default of 0 and passes the non-negative test, which is what
+`[03 §2.2]` requires. Wind and `tidalstrength` carried the same
+presence-versus-value inversion and were corrected with it. If a map carrying
+`gravity = 0` ever turns up, a probe under `probes/` should show the
+cancellation visibly before this entry is promoted from a sanctioned bound to
+an observation; manual retail observation is the decider, and the executable is
+not to be automated.
 
-**Contract changed:** none in Nanolathe today; guards the air-order executor
-against a plausible-looking default. Status (2026-09-01): closed-unreachable-on-stock
-— the RWU-19-8 asset census found no `gravity = 0` (or omitted-key, or
-negative) stock map, so retail's cancel-all bound cannot be observed on
-shipped content; the Decision above still stands as the clone-retail
-contract for any future or modded map that does author `gravity = 0`.
-WU-19-16 (2026-09-01) removed the last thing standing between such a map and
-that contract: `internal/world/terrain.go` tested key PRESENCE, so an OMITTED
-`gravity` took the 0x1FDB fallback — reading an omission like a negative, where
-[03 §2.2] C4's correction against [02 R-MAP-01] says an omitted key gets the OTA
-parser's integer default `0`, which passes the `>= 0` test. Wind and
-`tidalstrength` had the same inversion and were corrected with it.
+**Contract:** `[04 R-AIR-01 §8]`, `[03 §2.2]`, `[fmt ota]`;
+DESIGN_MOVEMENT_PATH §5, consumed by DESIGN_WEAPONS_PROJECTILES.
+
+---
 
 ## SC24 — Retail never compiles loose `units\*.FBI` or parses loose `weapons\*.tdf`
 
-**Spec:** [02 R-CAT-01 §4] (Established, static trace): the unit catalog
-loader's gate drops every FBI that does not come from an archive — silently,
-with the definition's archive bit cleared — and never parses a loose
-`weapons\*.tdf`; the switch that would enable loose files is a constant `1`
-in the shipped image with no writer. The community "units must be packed"
-rule is the executable's own.
+**Status:** Closed.
 
-**Observation:** Nanolathe's `CompileUnits` compiles every `units/*.fbi` the
-VFS enumerates regardless of provider (`internal/content/compile_unit.go`),
-and every `testdata/` fixture and probe under `probes/` relies on loose
-authored FBIs being compiled.
+**Spec** `[02 R-CAT-01 §4]` (Established): the unit catalog loader's gate drops
+every FBI that does not come from an archive — silently, with the definition's
+archive bit cleared — and never parses a loose `weapons\*.tdf`. The switch that
+would enable loose files is a constant in the shipped image with no writer. The
+community "units must be packed" rule is the executable's own.
 
-**Decision:** keep the divergence, documented here: loose definitions are
-accepted. It is a superset of retail (a stock install has no loose FBIs, so
-behaviour on retail content is identical) and it is what makes authored
-fixtures and probes loadable without packing. Nothing in the simulation
-reads the archive bit. Status (2026-08-29): open — closes if a mod-loading
-contract ever requires the retail gate, in which case the gate belongs in the
-catalog loader keyed on the entry's provider kind, with fixtures packed.
+**Observed:** `CompileUnits` compiles every `units/*.fbi` the overlay
+enumerates regardless of provider, and every `testdata/` fixture and every
+probe under `probes/` depends on loose authored FBIs being compiled.
 
-**Contract changed:** none; records why `CompileUnits` is more permissive
-than [02 R-CAT-01 §4].
+**Decision:** keep the divergence. It is a superset of retail — a stock install
+has no loose FBIs, so behavior on retail content is identical — and it is what
+makes authored fixtures and probes loadable without packing them. Nothing in
+the simulation reads the archive bit. It reopens only if a mod-loading contract
+needs retail's gate, at which point the gate belongs in the catalog loader
+keyed on the entry's provider kind and the fixtures get packed; that is where
+DESIGN_CONTENT_VFS §7 keeps it as a standing open question.
 
-## SC25 — Stock `loadgame.gui` authors fewer gadgets than `[08 R-SAVE-02 §1]` lists
+**Contract:** `[02 R-CAT-01 §4]`; DESIGN_CONTENT_VFS §5 and §7.
+
+---
+
+## SC25 — Stock `loadgame.gui` authors fewer gadgets than the section lists
+
+**Status:** Open.
 
 **Spec** `[08 R-SAVE-02 §1]` names the save/load screen's gadget vocabulary
 including `TITLE`, `CAMPAIGN`, `CAMPTEXT` and `LoadGame`.
 
-**Observed** (WU-19-11, 2026-09-01): the reference install's `guis/loadgame.gui`
-(4130 bytes) authors `HEADER GAMES LOAD CANCEL SLIDER GAMENAME GAMETYPE MISSION
-TIME SIDE RADAR DIFF DELETE SaveGame` — none of the four above. The screen
-code sets those four by name, so the writes are inert rather than wrong.
+**Observed:** the reference install's `guis/loadgame.gui` (4,130 bytes) authors
+`HEADER GAMES LOAD CANCEL SLIDER GAMENAME GAMETYPE MISSION TIME SIDE RADAR DIFF
+DELETE SaveGame` — none of the four above. The screen code sets those four by
+name, so the writes are inert rather than wrong.
 
-**Decision:** keep the writes (a mod or a later patch may author them); treat
-the four as optional gadgets. The section's list is a superset of stock
-content, not a contract that stock content satisfies.
+**Decision:** keep the writes and treat the four as optional gadgets. The
+section's list is a superset of stock content, not a contract stock content
+satisfies; a mod or a later patch may author them.
 
-**Status:** open — a census of the other language/patch archives' copies
-would settle whether any stock variant authors them.
+**What would settle it:** a census of the other language and patch archives'
+copies of the layout, showing whether any stock variant authors the four.
 
-## How to add to this file
-
-One section per conflict: what the spec says, what was observed and how, the
-decision, and which contract it changes. Evidence must be reproducible — a probe
-against `~/TotalAnnihilation` that another agent can rerun.
+**Contract:** `[08 R-SAVE-02 §1]`; DESIGN_SESSIONS_AI_SAVE §5 and §7.

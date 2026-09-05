@@ -503,7 +503,9 @@ func TestLiveTargetRectangleOriginIsTheFootprintSnap(t *testing.T) {
 	if got := footprintAnchorCell(pos, 2); got != 10 {
 		t.Fatalf("off-centre 2x2 target snapped to %d, want the committed anchor 10 [04 R-ORD-01 §1]", got)
 	}
-	if old := world.WorldToCell(pos) - 2/2; old != 9 {
+	// The retired derivation subtracted half the footprint — the literal is
+	// written out rather than as `2/2` so the intent survives a reader.
+	if old := world.WorldToCell(pos) - 1; old != 9 {
 		t.Fatalf("the retired derivation is assumed to answer 9 here; it answered %d", old)
 	}
 	// A footprint below one cell is read as one rather than dividing by zero

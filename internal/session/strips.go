@@ -1337,11 +1337,6 @@ const (
 	// that call site's init parameters.
 	flameContainerLifetime int32 = 30
 	flameSegmentInterval   int32 = 10
-
-	// trailSegmentHold is the flame-stream trail's phase modulus. Every
-	// researched site passes 1, so the frame advances every tick
-	// [03 R-FX-01 §3][03 R-FX-02 §6].
-	trailSegmentHold int32 = 1
 )
 
 // appendStripViews mirrors every live strip sub-record into the committed

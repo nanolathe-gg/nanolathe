@@ -1,4 +1,5 @@
-// Package orders implements the 68-order descriptor table [04 §3.1][R-DOC04-C] [PLAN_06 WU-06-2].
+// The 68-order descriptor table [04 §3.1][R-DOC04-C].
+
 package orders
 
 import (

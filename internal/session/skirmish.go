@@ -33,6 +33,7 @@ import (
 // from, which is this build's shape for a fatal that retail answers with a
 // modal and an exit.
 func errStartPositionMissing(stored int) error {
+	//lint:ignore ST1005 retail text: reproduced verbatim [08 R-ENTRY-01 §5].
 	return fmt.Errorf("Error: Could not find start position number %d on the map!", stored)
 }
 
@@ -295,6 +296,21 @@ func playerRecordByte(v int) uint8 {
 	return uint8(v)
 }
 
+// skirmishSlotName is the name the row-to-player conversion gives a registered
+// skirmish slot: `Player` for a human, and for a computer the side literal
+// `Arm` when its side is 0 and `Core` otherwise [08 R-SKIR-01 §2]. The literals
+// are the conversion's, not the side-data table's names, and the setup row's
+// nickname does not reach the record.
+func skirmishSlotName(controller uint8, side int) string {
+	if controller != 2 {
+		return "Player"
+	}
+	if side == 0 {
+		return "Arm"
+	}
+	return "Core"
+}
+
 // Validate checks NumPlayers 2..10 and non-empty map per [GAP T14] C8.
 // Retail validation stores the supplied player count unchanged in this path;
 // the player-count range branch is a compiled no-op [P0-05]. We preserve that as no-op for NumPlayers range
@@ -490,12 +506,6 @@ func (c SkirmishConfig) NormalizedBytes() []byte {
 	return b
 }
 
-// NewSkirmish is the plan API entry point per PLAN_14 Public API C8.
-// It builds a live skirmish session from the VFS and the supplied config.
-func NewSkirmish(cfg SkirmishConfig) (*Session, error) {
-	return NewSkirmishWithFS(nil, nil, cfg)
-}
-
 // NewSkirmishWithFS is the strict production constructor. It never fabricates
 // an empty catalog, nil terrain, or invented commander. Missing retail content
 // aborts with a diagnostic.
@@ -637,15 +647,10 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 			ctrlState = 1 // human local [08][PLAN_14 C8]
 		case SkirmishControllerObserver:
 			ctrlState = 1
-			p.IsObserver = true
 		default:
 			ctrlState = 2 // computer [08]
 		}
-		if cfg.Players[i].Controller == SkirmishControllerObserver {
-			p.IsObserver = true
-		} else {
-			p.IsObserver = false
-		}
+		p.IsObserver = cfg.Players[i].Controller == SkirmishControllerObserver
 		p.ControllerState = ctrlState
 		// [08 R-SKIR-01 §2] "Row-to-player conversion": a live row "copies
 		// colour and side into the player's lobby record" before registering
@@ -664,6 +669,15 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		// no storage-bonus clear, no owner sweep, no elimination.
 		p.Side = playerRecordByte(cfg.Players[i].Side)
 		p.Logo = playerRecordByte(cfg.Players[i].Color)
+		// Registration also "names the slot `Player` for a human or
+		// `Arm`/`Core` for a computer by side (`side == 0` → `Arm`)", skirmish
+		// only [08 R-SKIR-01 §2]. That name is the 30-byte copy each row of the
+		// post-battle board carries [08 R-CAMP-01 §7], and it belongs to the
+		// record: the setup row's nickname is lobby text and the conversion
+		// does not copy it. Nothing wrote this field before, which is why the
+		// result rows carried a nickname fallback the setup row stopped
+		// answering after a load.
+		p.Name = skirmishSlotName(ctrlState, int(p.Side))
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

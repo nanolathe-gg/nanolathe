@@ -1,9 +1,9 @@
-// Package construction implements capture, resurrection and reverse per [P0-15].
+// Capture, resurrection and reverse [05 R-WORK-01 §6].
+
 package construction
 
 import (
 	"math"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -20,11 +20,10 @@ const CaptureDeathCause uint8 = 4
 // Base 150 +0.015*energyCost +0.2142857142857*metalCost, clamp 0..1800,
 // truncated toward zero.
 const (
-	captureBaseTicks    = 150
-	captureEnergyCoeff  = 0.015
-	captureMetalCoeff   = 0.21428571428571427 // 3/14
-	captureClampMax     = 1800
-	captureProgressStep = 2 // +2 per 2-tick visit [05 R-WORK-01 §6]
+	captureBaseTicks   = 150
+	captureEnergyCoeff = 0.015
+	captureMetalCoeff  = 0.21428571428571427 // 3/14
+	captureClampMax    = 1800
 )
 
 // CaptureTimer computes capture timer per [05 R-WORK-01 §6].
@@ -54,21 +53,6 @@ func CaptureTimer(energyCost, metalCost float32, health int32, maxDamage int32, 
 		timer = 0
 	}
 	return timer
-}
-
-// CaptureState holds per-capture node progress [05 R-WORK-01 §6].
-// Progress accumulates +2 per visit with 2-tick deadline until >= timer.
-type CaptureState struct {
-	Timer    int   // computed timer threshold
-	Progress int   // progress accumulator
-	Deadline int32 // wake tick
-}
-
-// AdvanceCaptureProgress increments progress by 2 [05 R-WORK-01 §6].
-func AdvanceCaptureProgress(cs *CaptureState) {
-	if cs != nil {
-		cs.Progress += captureProgressStep
-	}
 }
 
 // CaptureEligible is the capture executor's phase-0 admission ladder
@@ -282,26 +266,6 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 // CaptureTickRate is 2 ticks per progress step: the progress phase
 // reschedules itself 2 ticks later on every qualifying visit [05 R-WORK-01 §6].
 const CaptureTickRate = 2
-
-// IsCaptureComplete tests the first-lethal gate: has the victim already been
-// marked dying? Retail latches this on the ownership-transfer kill so a second
-// captor's node cannot re-trigger it, and the transfer's own entry gate reads
-// the same latch [05 R-WORK-01 §15]; Dying is that latch here
-// [05 "Capture", "Established fact — ownership transfer"].
-func IsCaptureComplete(victim *units.Unit) bool {
-	return victim != nil && victim.Dying
-}
-
-// FeatureNameTruncForResurrection implements the corpse-name-to-unit-name
-// truncation [05 "Resurrection", "Established fact — no ledger cost, only
-// delay and name handling"]. Copies feature name and truncates at the first
-// underscore.
-func FeatureNameTruncForResurrection(featureName string) string {
-	if idx := strings.IndexByte(featureName, '_'); idx >= 0 {
-		return featureName[:idx]
-	}
-	return featureName
-}
 
 // UnitLimitUnlimited is the sentinel -1 the definition parser writes for no
 // limit [05 R-SHARE-01 §9].

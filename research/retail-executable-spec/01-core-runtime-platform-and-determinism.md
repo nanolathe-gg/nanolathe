@@ -103,11 +103,10 @@ singleton, title/class, default size, CWD, window-before-mount order, CRT seed
 before command-line, and timebase after window creation; medium for the exact
 ordering of all media initialization and registry restoration.
 
-### Closed — process static initialisation and the engine block [R-PLAT-02 §1] (2026-08-29)
+### Process static initialisation and the engine block [R-PLAT-02 §1]
 
-Established by RWU-01-3 from the C-runtime initializer table, the game
-constructors it names, and the engine-block allocator called by the process
-entry.
+The evidence is the C-runtime initializer table, the game constructors it
+names, and the engine-block allocator called by the process entry.
 
 **Static initialisers (Established).** Before the process entry runs, the C
 runtime walks a seventeen-entry table of game constructors in table order.
@@ -220,9 +219,8 @@ mode work:
   have elapsed since the previous one, exactly one media-keepalive call that
   walks the audio/media channel arrays (eight then thirty-two object slots,
   invoking each live object's keepalive virtual and clearing dead slots).
-  *Established 2026-08-29 by [03 R-AUD-02 §2]:* this walk is the audio reaper
-  (eight transient + thirty-two voice slots, then the narration-stream poll);
-  the earlier "keepalive reading is an inference" caveat is withdrawn. That
+  That walk is the audio reaper — eight transient plus thirty-two voice slots,
+  then the narration-stream poll ([03 R-AUD-02 §2], Established). That
   ≥99 ms gate drives only this keepalive. The network/game dispatcher itself
   runs every busy iteration; it tail-dispatches the session callback, which
   evaluates the fixed wall-clock budget each time. The loop does not use a
@@ -235,14 +233,12 @@ mode work:
 - Audio/CD status is polled from this same application activity. Media playback
   is not proven to have a general-purpose audio worker owned by the game.
 
-**Correction (2026-08-29, RWU-01-2).** The previous bullet said the busy
-path runs when "the windowed/network condition holds (display-mode flag set
-or networked session)". The word the pump tests is not a display-mode flag:
-it is the **window activation word** that the window procedure writes on
-`WM_ACTIVATE` (low word of `wParam` nonzero → 1, else 0). The busy path runs
-while the window is active or the session is networked; an inactive
-single-player window blocks in `GetMessageA` and neither the budget nor the
-housekeeping runs. The full pump is [R-PLAT-01 §1] below.
+The word the pump tests for the busy path is the **window activation word**
+that the window procedure writes on `WM_ACTIVATE` (low word of `wParam`
+nonzero → 1, else 0), not a display-mode flag. The busy path runs while the
+window is active or the session is networked; an inactive single-player window
+blocks in `GetMessageA` and neither the budget nor the housekeeping runs. The
+full pump is [R-PLAT-01 §1] below.
 
 Lobby, synchronization, and commander-placement barriers may call `Sleep(50)`
 while waiting. This sleep is a wait policy for a barrier, not the simulation
@@ -255,10 +251,10 @@ implementation should make each resource’s ownership explicit and preserve
 the observed failure paths rather than assuming process termination is the
 only cleanup.
 
-### Closed — the application pump, activation gating, and the battle host pump [R-PLAT-01 §1] (2026-08-29)
+### The application pump, activation gating, and the battle host pump [R-PLAT-01 §1]
 
-Established by RWU-01-2 from a direct read of the process entry, the window
-procedure, the pump housekeeping helper and the battle host pump.
+The evidence is a direct read of the process entry, the window procedure, the
+pump housekeeping helper and the battle host pump.
 
 **Startup order, exactly (Established; refines §2.1).** Diagnostic init with
 argument 8 (filter and FPU setup on, helper thread off — §9 [R-PLAT-01 §8]);
@@ -269,11 +265,9 @@ thread's** CRT block — the only seed that block ever receives, see
 [R-PLAT-01 §2]); display defaults 640×480 and the display flags word (see
 below); window creation (failure returns 0); the 30-unit timebase; mounts;
 language resolution; translation table; audio device; settings; the AudioCD
-shell swap; then the pump. On exit: when the display flags mark a cursor
-thread, stop it and release its surfaces; restore the AudioCD value; tear
-down the display. (**Correction, 2026-08-29, RWU-01-3:** the flag tested on
-exit is the quit-requested bit, not the cursor-thread mark, and the branch
-also runs the whole game-state teardown — [R-PLAT-02 §2].)
+shell swap; then the pump. On exit: when the **quit-requested bit** is set,
+stop the cursor thread, release its surfaces and run the whole game-state
+teardown; restore the AudioCD value; tear down the display ([R-PLAT-02 §2]).
 
 **The display flags word.** Startup sets bit 0 of the display flags word to
 the complement of the display mode chosen by `-D`/`-Df` (bit 0 = `~mode & 1`,
@@ -310,9 +304,8 @@ scaled-time anchor to the current scaled clock** (the reset §4.3 records) —
 these three peeks are [07 R-CAM-01 §1]'s "input ordering"; pop one button
 record (or copy the motion slot — [R-PLAT-01 §6]); run the sound service;
 copy the record into the canonical pointer record; then call the current
-mode's frame function unless the display object's "presenting" bit is set
-(**correction, 2026-08-29, RWU-01-3:** the bit is the *quit-requested* bit —
-[R-PLAT-02 §2]; it is set only by the quit-request routine).
+mode's frame function unless the display object's **quit-requested** bit is
+set ([R-PLAT-02 §2]; it is set only by the quit-request routine).
 
 **Battle host pump (Established; the mode frame function while in battle).**
 
@@ -345,23 +338,19 @@ minimum frame word gives `lag = tick − min`. The pending-speed bit is set when
 the active speed is below the requested one. Nothing in the re-read changes
 the arithmetic already recorded.
 
-### Closed — the quit request, the exit path, and the shutdown sequence [R-PLAT-02 §2] (2026-08-29)
+### The quit request, the exit path, and the shutdown sequence [R-PLAT-02 §2]
 
-Established by RWU-01-3 from the quit-request routine, the window creator,
-the exit tail of the process entry, the game-state teardown and the display
-teardown.
+The evidence is the quit-request routine, the window creator, the exit tail of
+the process entry, the game-state teardown and the display teardown.
 
-**Correction to [R-PLAT-01 §1] — which bit the pump and the exit test.** The
-housekeeping paragraph said the helper calls the mode frame function "unless
-the display object's 'presenting' bit is set", and the startup paragraph said
-"On exit: when the display flags mark a cursor thread, stop it and release
-its surfaces". Both read the same bit of the display object's flags word, and
-it is neither a presenting bit nor the cursor-thread mark: it is the
+**Which bit the pump and the exit test (Established).** The housekeeping
+helper's gate on the mode frame function and the exit tail's gate on the
+game-state teardown read the same bit of the display object's flags word: the
 **quit-requested bit**, written by exactly one routine (below). The
 cursor-thread mark is the *adjacent lower* bit, which the window creator
-copies from bit 9 of the display-flags configuration word ([R-PLAT-01 §4]
-is otherwise unchanged: the thread is always created). The window creator
-also clears the quit-requested bit, so it starts clear in every run.
+copies from bit 9 of the display-flags configuration word (the cursor thread
+is always created, [R-PLAT-01 §4]). The window creator also clears the
+quit-requested bit, so it starts clear in every run.
 
 **The quit request (Established).** Every process quit goes through one
 routine (the front end's `EXIT` [07 R-FE-01 §3] through the router, the
@@ -431,10 +420,10 @@ DirectDraw object through their COM `Release` entries; delete the memory DC,
 the DIB section and the logical palette; restore `SystemParametersInfoA`
 action `0x5D` with the value saved at window creation (§2.2).
 
-### Closed — window-creation residue: defaults, the lookup tables, the recorded directory, the custom-message callback [R-PLAT-02 §3] (2026-08-29)
+### Window-creation residue: defaults, the lookup tables, the recorded directory, the custom-message callback [R-PLAT-02 §3]
 
-Established by RWU-01-3 from the display-defaults routine, the window
-creator and its helpers, and the callback setter.
+The evidence is the display-defaults routine, the window creator and its
+helpers, and the callback setter.
 
 **Display defaults (Established; refines [R-PLAT-01 §1]).** Before the entry
 computes the display-flags configuration word it calls the defaults routine,
@@ -501,23 +490,20 @@ that the helper *creates* the key path even on a read, and that a missing value
 is written back with its default at startup.
 
 The executable also refers to an INI path ending in `totala.ini` and uses
-`GetPrivateProfileIntA`. **Correction (2026-08-29, RWU-01-2):** the previous
-text said the INI imports were "confined to the diagnostics helpers — no INI
-read exists on the startup, front-end, or battle configuration path". That
-was wrong: the integer-profile accessor (`<module directory>\totala.ini`,
-section `[Preferences]`) has exactly two callers, both on the startup path —
-the settings loader reads `UnitLimit` (default 250, clamped to 20..500; doc
-02 R-CONTENT-03 owns it) and the sound initializer reads `NoDirectSound` and
-`UseWindowsSound` ([R-PLAT-01 §2]). The earlier bounded search stopped at the
-WinMain body and missed the accessor's callers. The registry settings loader runs at front-end entry
-with default-and-write-back for every value; the command-line parser runs in
+`GetPrivateProfileIntA`. The integer-profile accessor (`<module
+directory>\totala.ini`, section `[Preferences]`) has exactly two callers, both
+on the startup path: the settings loader reads `UnitLimit` (default 250,
+clamped to 20..500; doc 02 R-CONTENT-03 owns it) and the sound initializer
+reads `NoDirectSound` and `UseWindowsSound` ([R-PLAT-01 §2]).
+
+The registry settings loader runs at front-end entry with
+default-and-write-back for every value; the command-line parser runs in
 WinMain before display initialization and sets its own switch bits and scalar
 slots. Precedence for the overlapping scalars is therefore defaults, then
 registry, then command line. The scalar command-line slots have **no**
 registry twins: `-T` (peer timeout) and `-E` (an unread value) write
 engine-block words that no registry value writes, and `-P` writes the packet
-pacing block ([R-PLAT-01 §2]); the earlier `TODO(question)` on their
-interaction is closed by that census. Language precedence is command line,
+pacing block ([R-PLAT-01 §2]). Language precedence is command line,
 then registry, then English fallback.
 
 Startup temporarily mutates a machine AudioCD registry shell value, then
@@ -530,11 +516,10 @@ high confidence for key names, registry API family, and the narrowed
 defaults < registry < command-line precedence; medium only for the two
 unmapped scalar command-line slots.
 
-### Closed — the command-line census and the profile-file reads [R-PLAT-01 §2] (2026-08-29)
+### The command-line census and the profile-file reads [R-PLAT-01 §2]
 
-Established by RWU-01-2 from the game's parser, the debug library's option
-scanner, and every reader of each written slot (bounded to the recovered
-image).
+The evidence is the game's parser, the debug library's option scanner, and
+every reader of each written slot (bounded to the recovered image).
 
 **Tokenizer.** The command line is split on space and tab. Before parsing,
 the peer timeout word is preset to 30, the `-E` word to 0, and the
@@ -584,17 +569,16 @@ recognised switches and their defaults:
 | `-memorystatus`, `-performancestatus` | off | read only inside the helper-thread body, which normal startup never creates |
 | `-debughelper[=n]` | off | `LoadLibrary("DebugHelper.dll")` and call its `DebugFunc1(n)`; failures print a diagnostic |
 
-**`-fpufussy`, exactly (correction to §8).** The FPU setup helper **always
-runs** from the diagnostic initializer (its gate bit is clear in the normal
-argument). It calls the C-runtime control-word setter with the *invalid* and
+**`-fpufussy`, exactly (Established; refines §8).** The FPU setup helper
+**always runs** from the diagnostic initializer (its gate bit is clear in the
+normal argument); the switch changes the helper's *argument*, not whether it
+runs. It calls the C-runtime control-word setter with the *invalid* and
 *zero-divide* exception-mask bits: with the switch off (default) it sets both
 mask bits (`set(0x18, mask 0x18)` in the runtime's abstract encoding — both
 exceptions stay masked, which is the C-runtime default, so the control word is
 unchanged); with the switch on it clears both (`set(0, mask 0x18)`), so
-invalid operations and divisions by zero trap. The earlier §8 sentence
-"`-fpufussy`/`-fpunofussy` can change whether the setup helper runs" was
-wrong: the switch changes the helper's *argument*, not whether it runs.
-Precision and rounding are never touched; [R-DET-01 §3] stands.
+invalid operations and divisions by zero trap. Precision and rounding are
+never touched ([R-DET-01 §3]).
 
 ### 3.2 Virtual filesystem boundary
 
@@ -603,12 +587,9 @@ is attempted first. If it fails, providers are searched linearly and the first
 matching provider supplies the file. The module directory is made the initial
 current directory before mounting. Document 02 §2 owns the complete mount
 order, per-invocation local-HPI budget, duplicate suppression, keep-open
-semantics, and validation pass.
-
-**Correction (2026-08-29).** The previous summary said startup mounted at most
-ten successful local HPI files and rejected the eleventh globally. That was
-wrong: the ten-entry budget applies to newly mounted local HPIs in one mount
-invocation, and the mount driver invokes that path repeatedly; see [02 §2].
+semantics, and validation pass. The ten-entry budget applies to newly mounted
+local HPIs in **one** mount invocation, and the mount driver invokes that path
+repeatedly; there is no global ten-archive limit ([02 §2]).
 
 HPI loading validates the HAPI header/footer, decodes the rolling-XOR directory,
 and supports stored and compressed blocks through a bounded 64-KiB decompression
@@ -640,10 +621,10 @@ to the budget and is also used for profiling. The 30-Hz interpretation is
 confirmed by the timebase initialization, the one-second cadence constants, and
 multiple tick modulo/capture paths.
 
-### Closed — the scaled-clock timer table [R-PLAT-02 §4] (2026-08-29)
+### The scaled-clock timer table [R-PLAT-02 §4]
 
-Established by RWU-01-3 from the timebase installer, the timer service in
-the housekeeping helper, and the registration and removal routines' callers.
+The evidence is the timebase installer, the timer service in the housekeeping
+helper, and the registration and removal routines' callers.
 
 **Shape.** Ten slots of four words: callback, argument, period, remaining.
 A slot is armed when its period is non-negative; the timebase installer
@@ -738,8 +719,7 @@ bit from the value byte, any other sub-type applies the speed through the
 common setter with the rebroadcast flag cleared — recipients apply without
 rebroadcasting. The send-side layout of the pause packet is
 `{0x19, 0, newPauseBit}` and the speed packet is the common setter's own
-broadcast of `{0x19, 1, speed}` — both in [R-PLAT-01 §3] below (the earlier
-`TODO(question)` on the pause send is closed).
+broadcast of `{0x19, 1, speed}` — both in [R-PLAT-01 §3] below.
 
 Pause asymmetry between the dispatch paths is established. The dispatcher
 branches on the session's network flag:
@@ -761,7 +741,7 @@ Movie capture and the screenshot hotkey both reset the scaled-time anchor to
 the current scaled clock after performing their capture, so capture cadences
 do not accumulate as elapsed gameplay time.
 
-### Closed — pause-send framing and the speed clamp [R-PLAT-01 §3] (2026-08-29)
+### Pause-send framing and the speed clamp [R-PLAT-01 §3]
 
 **The pause toggle (Established).** The pause token (`0xF8`, the Pause key —
 [07 §2]) reaches the battle hotkey dispatcher, which:
@@ -872,20 +852,16 @@ twelve-phase order is:
 
 At the tail of every sub-tick, when networked and the transport flag is set,
 the engine runs resource sharing (60-tick and 450-tick cadences) and flushes
-the packet transport. This sharing block is inside the sub-tick loop, after
-phase 12 — an earlier reading placed it after the loop. After the loop the
-executor runs three empty barrier functions, then the 30-entry message-ring
-retire (**corrected 2026-09-04, [R-PLAT-02 §8]:** this text called it "a
-30-entry deadline-ring slide ... beside the network receive queue and most
-plausibly the receive-frame window — supported inference, `TODO(question)`
-for the record owner"; it is the in-battle text-scroll ring doc 07 owns, and
-the retire is the one [R-PLAT-02 §7] describes), then
-the missile/interceptor pending-list compaction (expired records invoke their
-expiry callback and are removed in place) — **corrected 2026-08-29:** the list
-is the temporary-sight ("eyeball") observer list, 36-byte records, empty in
-single player ([R-PLAT-02 §5]). The projectile-pool compactor does
-**not** run here; it runs at the projectile-phase tail (phase 3) and from the
-unit-owner projectile purge (see §6.1).
+the packet transport. This sharing block is **inside** the sub-tick loop,
+after phase 12. After the loop the executor runs a three-step tail: three
+empty barrier functions; the 30-entry in-battle message-ring retire (the
+text-scroll ring doc 07 owns — [R-PLAT-02 §8]; the retire is the one
+[R-PLAT-02 §7] describes); then the expiry pass over the temporary-sight
+("eyeball") observer list of 36-byte records, whose expired entries invoke
+their expiry callback and are removed in place ([R-PLAT-02 §5]). The
+projectile-pool compactor does **not** run here; it runs at the
+projectile-phase tail (phase 3) and from the unit-owner projectile purge
+(see §6.1).
 
 **Established fact — event visibility across phases [P0-09]:**
 
@@ -907,19 +883,16 @@ unit-owner projectile purge (see §6.1).
   map iteration and no generation-tagged handles for simulation identities
   [P0-09][P1-14].
 
-### 4.4.1 R-CORE-01 closure — phase 9 identity, phase 10 shake arithmetic, phase 11 object family, and the visibility publication seam [R-CORE-01]
+### 4.4.1 Phase 9 identity, phase 10 shake arithmetic, phase 11 object family, and the visibility publication seam [R-CORE-01]
 
-**Phase 9 is the meteor shower, not a "wind field" (correction).** The
-previous text (here and in §7.3) called phase 9 the "wind-field update"
-producing a "wind-field projectile". That family label is wrong: the phase's
-state block is saved and restored under the section name **"Meteor"** with the
-keys `Enabled`, `Active`, `Next Strike Time`, `Time Strike Ends`,
-`Next Hit Time`, `Origin X/Z`, `Target X/Z`; its configuration is written by
-the mission/OTA loader from the `MeteorWeapon`, `MeteorRadius`,
-`MeteorDensity`, `MeteorDuration`, and `MeteorInterval` keys; and its
-mechanics match doc 06 §6.5 exactly. The earlier "wind-field" label was an
-inference from the phase's position after the wind change; the save-section
-vocabulary and the OTA key chain disprove it. Established.
+**Phase 9 is the meteor shower (Established).** The phase's state block is
+saved and restored under the section name **"Meteor"** with the keys
+`Enabled`, `Active`, `Next Strike Time`, `Time Strike Ends`, `Next Hit Time`,
+`Origin X/Z`, `Target X/Z`; its configuration is written by the mission/OTA
+loader from the `MeteorWeapon`, `MeteorRadius`, `MeteorDensity`,
+`MeteorDuration`, and `MeteorInterval` keys; and its mechanics match doc 06
+§6.5 exactly. It is not a wind-field update, despite sitting immediately after
+the wind change in the phase order.
 
 **Phase 9 mechanics (Established).** All draws are CRT; the simulation stream
 is never touched by this phase. When the next-strike deadline passes (a
@@ -947,18 +920,17 @@ non-strict comparison against the global tick):
    pool is full (no retry, no event; the hit timer has already advanced).
    When networked it broadcasts the field data as a packet.
 
-**Phase 10 shake (Established; extends the previous one-line description).**
-A shake request arrives from the authoritative impact dispatcher with one
+**Phase 10 shake (Established).** A shake request arrives from the authoritative impact dispatcher with one
 amplitude value applied to both axes and one duration taken from the
 impacting weapon's definition. If no shake is active the two amplitude
 accumulators are cleared; the new duration is
 `trunc((requested + current) / 2)` blended with any current duration, the
 remaining counter is set to it, the amplitudes accumulate, and the active
 flag is set when the duration is positive. An options bit can make requests
-return untouched — closed 2026-09-02 (RWU-19-42): the bit is bit 4 of the
-session preference word, whose only toggle is the typed `NoShake` command
-([03 R-FX-01 §7], [07 §11 "Mask 1"]); no `.ini`/registry key and no
-option-panel control drives it. Each sub-tick with an active shake and a positive counter
+return untouched: it is bit 4 of the session preference word, whose only
+toggle is the typed `NoShake` command ([03 R-FX-01 §7], [07 §11 "Mask 1"]);
+no `.ini`/registry key and no option-panel control drives it. Each sub-tick
+with an active shake and a positive counter
 consumes **exactly two CRT draws** (one per axis) and steps the camera
 origin by
 
@@ -972,19 +944,16 @@ the counter reaches zero clears the active flag and consumes **no draws**.
 The jitter lands in the authoritative camera origin; the final view clamp
 holds it inside the map.
 
-**Phase 11 object family (correction + closure).** The previous text said
-"each object's update virtual runs, and objects returning zero are destroyed
-and removed" and left the family unidentified. Both halves are superseded by
-direct reads of the sweep: the evaluated virtual is a **removal verdict
-evaluated before the update work** — a **positive** verdict destroys (calling
-the object's destructor entry with argument 1) and removes the object with
-stable left compaction, while a **zero** verdict runs a second virtual (the
-update work) and keeps the object. The polarity matters: doc 03's strip
-lifecycle ("destroying and stably compacting on a positive verdict") is the
-correct reading and always was; the inverted phrasing came from an earlier
-note. Established. The family is closed as **the ten effect strips of the
-rendering contract**: the table holds ten vector descriptors (each a tag
-byte, a zeroed word, and begin/end pointers), allocated at battle entry and
+**Phase 11 object family (Established).** The virtual the sweep evaluates
+first is a **removal verdict, evaluated before the update work** — a
+**positive** verdict destroys the object (calling its destructor entry with
+argument 1) and removes it with stable left compaction, while a **zero**
+verdict runs a second virtual (the update work) and keeps the object. The
+polarity matters, and it agrees with doc 03's strip lifecycle ("destroying and
+stably compacting on a positive verdict"). The family is **the ten effect
+strips of the rendering contract**: the table holds ten vector descriptors
+(each a tag byte, a zeroed word, and begin/end pointers), allocated at battle
+entry and
 freed at battle exit with every object destroyed; producers append at the
 vector end chosen by a literal strip index (doc 03's producer census), with
 the pre-insert count above 400 destroying the oldest object first; strips are
@@ -1007,11 +976,7 @@ or the post-loop tail: the phase-5 sweep is the final publisher, and phases
 6 and later read the same-tick updated coverage for every player already
 processed (ascending order).
 
-#### R-CORE-03 closure — phase 12 radar blink cadence [R-CORE-03][CRD-008]
-
-This addendum supersedes the earlier one-line phase-12 description. That
-description correctly identified an every-eight-sub-tick cadence flip, but did
-not identify its state, reset, consumers, persistence, or publication order.
+#### Phase 12 radar blink cadence [R-CORE-03][CRD-008]
 
 **State and ownership (Established).** Phase 12 owns two pieces of radar
 presentation state. `radarBlinkCountdown` is a signed 16-bit countdown, whose
@@ -1068,8 +1033,9 @@ global tick and from the radar surface rebuild/dirty handling described in doc
 sub-tick after the phase-11 strip sweep. The per-sub-tick transport/resource
 sharing and packet flush run after phase 12. Nanolathe cleanup/result handling
 and snapshot publication follow that sharing block, so a committed snapshot
-observes the post-phase-12 blink bit. The three outer barriers, deadline-ring
-slide, and missile/interceptor pending-list compaction run only after all
+observes the post-phase-12 blink bit. The executor's three-step tail — the
+three empty barriers, the message-ring retire and the temporary-sight expiry
+pass ([R-PLAT-02 §7]) — runs only after all
 runnable sub-ticks and cannot interpose a pre-flip publication. The host-frame
 renderer samples the committed presentation state; it does not own or advance
 the cadence.
@@ -1091,21 +1057,14 @@ entry state and has no phase-12 invocation yet.
 The vectors make the strict comparison and the reset-before-toggle ordering
 observable: ticks 8 and 16 toggle, while ticks 7 and 15 only reach zero.
 
-### Closed — the post-loop list is the temporary-sight list; the stub census; the control byte; the start barrier [R-PLAT-02 §5] (2026-08-29)
+### The post-loop list is the temporary-sight list; the stub census; the control byte; the start barrier [R-PLAT-02 §5]
 
-Established by RWU-01-3 from the sub-tick executor's tail, the list's
-allocator, its single producer and its expiry pass, the empty routines the
-executor and the pump call, the control-byte sender, and the start-barrier
-routine's sole gate.
+The evidence is the sub-tick executor's tail, the list's allocator, its single
+producer and its expiry pass, the empty routines the executor and the pump
+call, the control-byte sender, and the start-barrier routine's sole gate.
 
-**Correction — the post-loop compaction is not a missile/interceptor list.**
-§4.4 said the tail runs "the missile/interceptor pending-list compaction
-(expired records invoke their expiry callback and are removed in place)",
-§6.2 called it "the missile/interceptor pending list (24-byte-stride records
-with deadline fields)", and §10 repeated the label. The family label was an
-inference from the records' deadline field; the stride was a hexadecimal
-`0x24` read as decimal. Direct reads of the allocator, the producer and the
-expiry callback settle it:
+**The post-loop list (Established).** The list the post-loop pass compacts is
+a temporary-sight observer list, not a missile or interceptor structure:
 
 - The block is allocated at battle entry under the label `EYEBALL_MEMORY`
   as **20 records of 36 bytes** (720 bytes) and freed at battle exit; the
@@ -1121,15 +1080,12 @@ expiry callback settle it:
   an expiring record is doc 03's contract.
 - **The producer is the central unit-death handler**: it appends when the
   victim is owned by the local slot, LOS mode bit 1 is set (`Circular` or
-  `True`) and the count is below 20 (silently dropped at 20). **Correction
-  (2026-08-29, RWU-08-9):** this text previously said the only producer was
-  the handler of a received network packet and concluded that in single
-  player the list is always empty and the post-loop pass a no-op. That was
-  wrong: the packet handler *is* the central death handler, which the local
-  death path calls directly after building the death record networking
-  would send, so the list is populated in every session kind and the
-  post-loop expiry pass does real work ([08 R-SESS-01 §3], Established); the
-  pass itself is stated in [03 R-COMP-02 §2].
+  `True`) and the count is below 20 (silently dropped at 20). The handler of
+  a received network death packet *is* that same central death handler, and
+  the local death path calls it directly after building the death record
+  networking would send, so the list is populated in **every** session kind
+  and the post-loop expiry pass does real work ([08 R-SESS-01 §3]); the pass
+  itself is stated in [03 R-COMP-02 §2].
 
 The pass itself, for completeness (Established): for every record whose
 expiry is **strictly below** the global tick (unsigned), call the refresh
@@ -1147,7 +1103,7 @@ image, are called on the paths named, and do nothing:
 |---|---|
 | process entry, after the audio device | one empty routine |
 | process entry, before the timebase | one routine returning 0 |
-| sub-tick executor, after the loop | the "three empty barrier functions" of §4.4 — three empty routines, before the deadline-ring slide |
+| sub-tick executor, after the loop | the "three empty barrier functions" of §4.4 — three empty routines, before the message-ring retire |
 | battle host pump, networked branch (§4.3 / [R-PLAT-01 §1] step 3) | three routines returning 1, then the start barrier, then three empty routines |
 | display teardown, first call | one empty routine |
 
@@ -1171,25 +1127,20 @@ and exchanges packets — therefore never runs in campaign or skirmish and is
 out of scope ([08 R-OOS-01]); its main-thread CRT draws do not enter the
 single-player stream census of [R-PLAT-01 §7].
 
-### Closed — the sub-tick executor's tail runs unconditionally, including on a zero-runnable pump [R-PLAT-02 §7] (2026-09-02)
+### The sub-tick executor's tail runs unconditionally, including on a zero-runnable pump [R-PLAT-02 §7]
 
-**Established (direct trace of the executor, RWU-19-28).** §4.4's account of
-the post-loop tail describes what runs after the sub-tick loop but not
-*whether* it runs when the loop body never executed. It does. The tail is not
-inside the loop and is not guarded by the runnable count: a pump that
-advances zero sub-ticks — a paused session, a budget that rounded to nothing,
-a frame that arrived early — still falls through the loop and runs the same
-tail.
+**Established.** The post-loop tail is not inside the loop and is not guarded
+by the runnable count: a pump that advances zero sub-ticks — a paused session,
+a budget that rounded to nothing, a frame that arrived early — still falls
+through the loop and runs the same tail.
 
 The tail, in order, is:
 
 1. the **three empty barrier routines** of [R-PLAT-02 §5]'s stub census — they
    read and write nothing, and a re-implementation omits them;
 2. the **text-scroll retire** — the in-battle message ring of 30 entries
-   (doc 07's object). **Corrected 2026-09-04 ([R-PLAT-02 §8]):** this list
-   carried "the deadline-ring slide of §4.4" as its own step 2 and the retire
-   as step 3; they are one routine, so the tail has three steps, not four. At most one entry is retired per call: the entry at the
-   display index is retired when the tick it was posted, plus
+   (doc 07's object; [R-PLAT-02 §8]). At most one entry is retired per call:
+   the entry at the display index is retired when the tick it was posted, plus
    `(the text-scroll interface option + 1) × 30` ticks, is below the current
    tick. That option is `TXTSCROL`, in seconds, default 10
    ([07 R-CAM-01 §7]), so the term is that many seconds converted to ticks.
@@ -1214,6 +1165,41 @@ runnable sub-ticks or none, and rely on the tail's own predicates rather than
 on a "did we tick" flag. The zero-tick non-mutation property holds because
 each step is separately inert, not because the tail is skipped.
 
+### The post-loop ring is the in-battle message ring, and the tail has three steps [R-PLAT-02 §8]
+
+**Established** by direct read of the executor tail, the retire, the poster,
+the two index resets and the two drawers.
+
+- **The ring is the in-battle message ring** — the text-scroll ring doc 07
+  owns ([07 R-CAM-01 §7] `textscroll`, [07 R-HUD-03 §14.3], [07 R-HUD-03
+  §14.4]). Its 30 records of 72 bytes are each a 64-byte text line with a
+  forced terminator, the **global tick at which the line was posted**, the
+  source unit's id (16-bit), a silence byte (`'\n'` suppresses the
+  `MessageArrived` cue) and a class nibble. Two 16-bit indices address it: a
+  **producer index** the poster advances and a **display index** the retire
+  advances, both modulo 30.
+- **Advancing the ring and retiring a line are one routine.** The executor's
+  tail is: the three empty barrier routines; the message-ring retire; the
+  temporary-sight expiry pass. There is no fourth call. The retire is exactly
+  the rule [R-PLAT-02 §7] states: when the ring is non-empty (producer ≠
+  display) and `postTick + (textscroll + 1) × 30 < currentTick` (unsigned) for
+  the line at the display index, the display index advances one slot, wrapping
+  at 30; at most one line per call.
+- **What indexes it.** The poster ([07 R-HUD-03 §14.4]'s producers — chat,
+  order acknowledgements, elimination lines, cheat and save cues) writes at
+  the producer index and stamps the current tick; the retire and the two
+  drawers read from the display index toward the producer. Both indices are
+  reset to zero by three routines: the skirmish/multiplayer battle-entry
+  path, one further set-up routine, and the battle state's own exit path;
+  the F12 key clears them in play ([07 R-CAM-01 §2]).
+- **No network path touches it.** The send helper, the receive dispatch and
+  the receive-frame window never read or write the ring or its indices
+  (bounded negative over the recovered export).
+
+The ring is presentation state, retired once per host pump whether or not a
+sub-tick ran ([R-PLAT-02 §7]), and is never serialized; no simulation state
+depends on it.
+
 ## 5. Threads, TLS, locks, and synchronization
 
 ### 5.1 Threads
@@ -1234,15 +1220,14 @@ startup from local/system time and time-zone conversion at one-second
 resolution, and reseeded at battle entry from the same helper; §7.2). Each
 thread obtains the block lazily with `TlsGetValue`; missing
 state is allocated, initialized, and installed with `TlsSetValue`. There is no
-worker *pool*, but the earlier sentence "no gameplay worker is established"
-was incomplete: the thread census below finds a loading thread that runs the
+worker *pool*; the thread census below finds a loading thread that runs the
 whole battle-entry orchestrator and a cursor-redraw thread that always exists
 ([R-PLAT-01 §4]).
 
-### Closed — the thread census: the loading thread and the cursor thread [R-PLAT-01 §4] (2026-08-29)
+### The thread census: the loading thread and the cursor thread [R-PLAT-01 §4]
 
-Established by RWU-01-2 from every caller of the engine's thread starter and
-of the C-runtime `_beginthread` beneath it.
+The evidence is every caller of the engine's thread starter and of the
+C-runtime `_beginthread` beneath it.
 
 **The thread starter.** `_beginthread(fn, stackSize, arg)`: the runtime
 `calloc`s a fresh 116-byte per-thread block (so its `rand` state starts at
@@ -1266,10 +1251,9 @@ machine). Consequences:
   function — and therefore **continues the front-end's stream**, including
   every menu, briefing and sound-variant draw made since process start. The
   worker's draws (the skirmish slot shuffle, the explosion-frame builder) come
-  from the freshly seeded thread block and die with the thread. This corrects
-  [R-CORE-02] and [R-DET-01 §4]; the per-thread consumer census is
-  [R-PLAT-01 §7] and doc 08's statement of the same fact is
-  [08 R-ENTRY-01 §2].
+  from the freshly seeded thread block and die with the thread. The
+  per-thread consumer census is [R-PLAT-01 §7]; doc 08's statement of the same
+  fact is [08 R-ENTRY-01 §2].
 - The simulation stream is a process global, so its battle-entry seed is
   thread-independent; nothing above changes §7.1.
 - The main thread keeps pumping messages while the loading thread runs; the
@@ -1319,21 +1303,18 @@ the only presentation serialization.
 
 The behavior is pool-oriented rather than garbage-collected. Allocation helpers
 take human-readable subsystem labels, and callers initialize the blocks they
-receive; the allocator itself **does not** zero or pattern-fill by default
-(**correction**, 2026-08-29: the previous sentence said the helpers "tag
-blocks … zero or initialize them" — the label is dropped before the
-allocation and no fill happens unless the `-memset` diagnostic switch is
-present; [R-PLAT-01 §5]). Vectors are sometimes grown by reallocation.
+receive; the label is dropped before the allocation and the allocator itself
+**does not** zero or pattern-fill unless the `-memset` diagnostic switch is
+present ([R-PLAT-01 §5]). Vectors are sometimes grown by reallocation.
 Immediate slot reuse and linear scan order are observable and therefore
 deterministic.
 
 ### 6.1 Established fixed pools
 
-A direct reread of
-all projectile count writers, allocation sequences, the projectile-phase loop,
-and the compaction routine resolves the older projectile-lifecycle conflict in
-favor of append allocation and stable tail compaction. The following contracts
-are established:
+The evidence for the projectile rows is a read of all projectile count
+writers, allocation sequences, the projectile-phase loop, and the compaction
+routine: allocation is append and compaction is stable at the tail. The
+following contracts are Established.
 
 | Pool | Capacity/record contract | Allocation and retirement |
 | --- | --- | --- |
@@ -1343,7 +1324,7 @@ are established:
 | Live features | A 48-byte live record plus a 13-byte plot cell per map attribute cell | Plot cells point to feature anchors; removal returns the cell to the free sentinel and releases the live record. Map-row order is deterministic. |
 | COB threads | Eight 164-byte thread records per unit | Lowest clear thread-mask bit is selected. Ending/sleeping a thread clears its active bit; the scan is fixed order. |
 | Construction nodes | A 86-byte node; factories use separate tail/head links selected by a flag | Nodes append to a per-factory chain, coalesce matching build types where applicable, and are freed on cancellation/completion. |
-| Effect/sequence strips | Variable vectors of segment records, with a global cap of about 400 for the nanolathe/effect family | Append in event order; a compaction/drain pass moves/removes old entries. Exact ownership of every strip is not yet proven. **Corrected 2026-09-02:** the containers come from one process-lifetime pool of **1000 slots × 76 bytes**, built by a static constructor and never grown; each strip additionally evicts its oldest object when its pre-insert count exceeds 400. Ownership is proven: every producer call site is enumerated by strip literal in doc 03 [R-FX-02 §5] (strips 0, 1, 3 and 8 have none). |
+| Effect/sequence strips | Variable vectors of segment records drawn from one process-lifetime pool of **1000 slots × 76 bytes**, built by a static constructor and never grown | Append in event order; a compaction/drain pass moves/removes old entries, and each strip evicts its oldest object when its pre-insert count exceeds 400. Every producer call site is enumerated by strip literal in doc 03 [R-FX-02 §5] (strips 0, 1, 3 and 8 have none). |
 
 The unit maximum is the game value described above, not a universal
 500 constant. The 300-projectile capacity, packed record size, append
@@ -1368,26 +1349,20 @@ later occupant after reuse.
 - Path requests are per-player linked queues. A search drains at most 100 nodes
   per pass; a 150-tick deadline is also recorded. Duplicate goals can overwrite
   an existing request.
-- The post-loop ring is a 30-entry circular window of 72-byte deadline
-  records: after the tick body, while the head entry's deadline (record value
-  plus the current window offset times thirty ticks) has passed, the head
-  advances one slot with wraparound. **Correction (2026-09-04, RWU-19-199,
-  [R-PLAT-02 §8]):** this bullet went on to say the ring "sits beside the
-  network receive queue and matches the 30-frame future window, so it is
-  most plausibly the receive-frame window (supported inference)". That was a
-  layout guess: the ring is the in-battle **message ring** — the 72-byte
-  record is a 64-byte text line plus its post tick, source unit, silence
-  byte and class nibble, and the "window offset" is the `textscroll`
-  option in seconds. It is presentation state and no network path touches
-  it. It is not a generic timer queue. A separate post-loop pass compacts the missile/interceptor pending
-  list (24-byte-stride records with deadline fields), invoking each expired
-  record's expiry callback and removing it in place — this is the "deferred
-  compaction" of earlier notes, distinct from the projectile-pool compactor
-  of §6.1. **Correction (2026-08-29, RWU-01-3):** the records are 36 bytes
-  (the earlier "24" read a hexadecimal stride as decimal) and the list is
-  the temporary-sight observer list of [R-PLAT-02 §5], not a missile or
-  interceptor structure; its producer is the central unit-death handler,
-  reached directly in single player ([08 R-SESS-01 §3]).
+- The post-loop ring is the in-battle **message ring**: a 30-entry circular
+  window of 72-byte records, each a 64-byte text line plus its post tick,
+  source unit, silence byte and class nibble. After the tick body, while the
+  head entry's deadline — its post tick plus `(textscroll + 1) × 30` ticks,
+  `textscroll` being the interface option in seconds — has passed, the head
+  advances one slot with wraparound.
+  It is presentation state, no network path touches it, and it is not a
+  generic timer queue ([R-PLAT-02 §8]).
+- A separate post-loop pass compacts the temporary-sight observer list of
+  [R-PLAT-02 §5] — 36-byte records with expiry fields — invoking each expired
+  record's expiry callback and removing it in place; its producer is the
+  central unit-death handler, reached directly in single player
+  ([08 R-SESS-01 §3]). It is distinct from the projectile-pool compactor of
+  §6.1.
 - Delayed status events use deadlines of `globalTick + 30 + random(300 or
   900)`, with the choice depending on the event family.
 - Audio arbitration uses an eight-slot channel ring, described in document 03.
@@ -1409,15 +1384,15 @@ The direct evidence establishes graceful failure for a failed HPI or media
 resource, a failed optional GAF lookup, and a failed projectile reservation.
 Projectile allocation failure emits no corresponding start sound/COB/fire
 event. Network buffer exhaustion can produce a fatal receive/allocation path;
-the exact user-facing action is not uniform. General heap failure is closed in
-[R-PLAT-01 §5] (the allocation-failure hook: `ErrorLog.txt` line, modal, and
-process termination); vector growth failure and archive decompression failure
-are not exhaustively traced.
+the exact user-facing action is not uniform. General heap failure is the
+allocation-failure hook of [R-PLAT-01 §5]: an `ErrorLog.txt` line, a modal,
+and process termination. Vector growth failure and archive decompression
+failure are not exhaustively traced.
 
-### Closed — the tagged allocator, its fill policy, and its failure path [R-PLAT-01 §5] (2026-08-29)
+### The tagged allocator, its fill policy, and its failure path [R-PLAT-01 §5]
 
-Established by RWU-01-2 from the two allocation wrappers, the shared body,
-the C-runtime `malloc` beneath it, and the allocation-failure hook.
+The evidence is the two allocation wrappers, the shared body, the C-runtime
+`malloc` beneath it, and the allocation-failure hook.
 
 **One allocator.** The labelled wrapper (`alloc(label, size)`) and the plain
 wrapper (`alloc(size)`) both reach the same body; the label is **discarded**
@@ -1432,10 +1407,8 @@ before the body runs (it is not stored in or beside the block). The body:
    multiple of 16; requests at or below the runtime's small-block threshold go
    to the runtime's small-block heap under its own lock, larger ones to
    `HeapAlloc(crtHeap, 0, size)` — **no zero flag**, and the small-block heap
-   does not clear either. (The earlier tail item "the allocator itself is
-   established as `HeapCreate`/`HeapAlloc` wrappers with tagged blocks" was
-   half right: the runtime heap is the backing store for large requests, but
-   the tag never reaches it.)
+   does not clear either. The runtime heap is the backing store for large
+   requests, but the tag never reaches it;
 4. on success updates two byte/count statistics; on a null result calls the
    allocation-failure hook (if installed) and retries while the hook remains
    installed — in retail the hook never returns (below), so the retry loop is
@@ -1469,10 +1442,10 @@ flags `0x41010`), raises `SIGABRT`, and — should the signal return — calls
 `exit(3)`. Heap exhaustion therefore always terminates the process; no
 fallback path exists.
 
-### Closed — input queue capacities and overflow [R-PLAT-01 §6] (2026-08-29)
+### Input queue capacities and overflow [R-PLAT-01 §6]
 
-Established by RWU-01-2; the record formats and the producer-side refusal are
-[07 §2]'s, restated here only for the capacities and the consumer side.
+The record formats and the producer-side refusal are [07 §2]'s, restated here
+only for the capacities and the consumer side.
 
 | Queue | Capacity | Producer full | Consumer empty |
 |---|---|---|---|
@@ -1502,12 +1475,10 @@ For a positive bound of at least 2, update the state with the Lehmer recurrence,
 add the modulus when the intermediate value is nonpositive, then return the
 unsigned remainder modulo the bound. The bound test is a **signed** 32-bit
 compare: a bound below 2 — which includes every bound whose top bit is set —
-returns zero **without advancing the state** (Established; the earlier text
-"bounds below 2 return zero without a useful draw" was correct but did not say
-that the state is untouched, and callers pass computed bounds such as
-`max − min` or a candidate count that can legitimately be 0 or 1, so the
-no-advance property is load-bearing for every draw census in this document —
-see [R-DET-01 §4]). The Lehmer step itself is computed in wrapping 32-bit
+returns zero **without advancing the state**. Callers pass computed bounds
+such as `max − min` or a candidate count that can legitimately be 0 or 1, so
+the no-advance property is load-bearing for every draw census in this
+document (see [R-DET-01 §4]). The Lehmer step itself is computed in wrapping 32-bit
 arithmetic as `s × 16807 − (s ÷ 127773) × 2147483647`, which is the Schrage
 form and never leaves the signed range, so the "add the modulus when
 nonpositive" branch is the only correction needed. Startup seeds this stream from the sum of the low and high parts
@@ -1532,18 +1503,10 @@ from local/system time and time-zone conversion, at effectively one-second
 resolution, and **battle entry reseeds it again** from the same time-of-day
 helper: the seed helper has exactly two call sites in the recovered image,
 process startup and the battle-entry orchestrator. The battle-entry seed
-writes the calling thread's block — the main thread whose state every
-gameplay draw reads — so battle entry references and replaces the same
-stream state; no copy of "process CRT state" is taken. **Correction
-(2026-08-29, RWU-01-2):** the preceding sentence and the next one previously
-said the battle-entry seed writes "the calling thread's block — the main
-thread whose state every gameplay draw reads". The calling thread is the
-**loading thread** ([R-PLAT-01 §4]): battle entry runs on a thread the loading
-state creates, so its `srand` seeds that thread's fresh block and the main
-thread's block — the one every tick-side draw reads — keeps the state it has
-carried since process startup. The two-call-site fact stands; the "same
-stream" conclusion was wrong because the earlier trace did not notice the
-thread boundary between the front-end state machine and the orchestrator.
+writes the **loading thread's** block ([R-PLAT-01 §4]): battle entry runs on a
+thread the loading state creates, so its `srand` seeds that thread's fresh
+block, while the main thread's block — the one every tick-side draw reads —
+keeps the state it has carried since process startup.
 The stream supplies the meteor-shower draws, the
 wind-change interval jitter, and UI/media variants, and is also consumed by
 the camera-shake driver inside the tick (two draws per shake step while a
@@ -1554,8 +1517,8 @@ the image, including the sound-variant picker, the elimination-message picker,
 the victory-timer arm, the effect strips, the lightning renderer and the
 startup explosion frames — is §7.6 [R-DET-01 §5].
 
-**The widening sampler — Established (2026-09-04, WU-19-155).** Every CRT
-sample whose bound may exceed 32,767 goes through one inlined sampler:
+**The widening sampler (Established).** Every CRT sample whose bound may
+exceed 32,767 goes through one inlined sampler:
 
 1. set the mask to `0x7FFF` and take **exactly one** draw, `rand() & 0x7FFF`,
    as the result;
@@ -1571,38 +1534,25 @@ bound**, and above 32,767 the sample's low fifteen bits are always all ones —
 only its top bits vary with the stream. A bound of 1 still consumes its draw
 and yields 0; a bound of 0 reaches the divide and faults.
 
-**Correction (2026-09-04, WU-19-155).** The preceding paragraph previously read:
-"starting with mask and result both `0x7FFF`, while the mask is below the needed
-bound, shift both left by 15 bits, OR the mask with `0x7FFF` again, and OR
-another fresh `rand() & 0x7FFF` draw into the result". Two halves were wrong.
-The result does not start at the constant — it starts as a fresh fifteen-bit
-draw, which is why bounds at or below 32,767 sample the stream at all rather
-than returning `0x7FFF % bound`. And the loop's second operand is the **same
-constant** as the mask's, not a draw, so the draw count is one per call and not
-one per iteration. The old reading would consume an extra draw for every wide
-sample and shift every later CRT consumer. Both of the sampler's two inline
-sites carry the identical shape (both are Fisher–Yates shuffles whose bound is
-the growing prefix length, so the widening loop is not reached on any stock
-array); the reading is confirmed at instruction level, not from decompiler
-output alone.
+Both of the sampler's two inline sites carry the identical shape (both are
+Fisher–Yates shuffles whose bound is the growing prefix length, so the
+widening loop is not reached on any stock array); the reading is confirmed at
+instruction level, not from decompiler output alone.
 
 ### 7.3 Sampling, wind draws, and save implications
 
 Placement draws X then Y from the global simulation stream. Wind consumption
 spans both streams and is fully recovered:
 
-- (Corrected) At briefing-screen entry the CRT stream draws
+- At briefing-screen entry the CRT stream draws
   `rand() % (maxWind − minWind + 1) + minWind` from the mission's parsed
-  minimum/maximum bounds and then `rand() & 0x3F`. The earlier text presented
-  these as the battle's initial wind values; they are **front-end display
-  state only** — the two values are stored in briefing-screen globals whose
-  only readers are the briefing/front-end region itself, and no battle-side
-  reader exists in the recovered image. The battle's actual initial wind is
-  drawn by the wind-change routine at tick 1 (see below).
-  **Correction (2026-09-02, RWU-19-39) — the second value is not a
-  direction.** Earlier revisions (and the census row below) called the
-  `& 0x3F` draw a "six-bit direction". It is an **update countdown**: the
-  briefing screen's per-update routine decrements it, and when it reaches
+  minimum/maximum bounds and then `rand() & 0x3F`. These are **front-end
+  display state only** — the two values are stored in briefing-screen globals
+  whose only readers are the briefing/front-end region itself, and no
+  battle-side reader exists in the recovered image. The battle's actual
+  initial wind is drawn by the wind-change routine at tick 1 (see below).
+  The `& 0x3F` value is an **update countdown**, not a direction: the briefing
+  screen's per-update routine decrements it, and when it reaches
   zero (`< 1`) it drifts the displayed speed by `−2 + rand() % 5` (−2..+2),
   clamps the result to `[minWind, maxWind]`, and re-arms the countdown with
   `rand() % 63` (0..62). Its only readers are the entry routine and that
@@ -1611,9 +1561,9 @@ spans both streams and is fully recovered:
   entry routine draws exactly twice; it arms no interval deadline. Established
   (the cadence of the per-update routine — once per briefing-screen update
   call — is what a screen redraw is; its frame rate is not traced).
-  **Addendum (2026-09-04, WU-19-171) — the remainder is signed, and a
-  malformed range is not clamped.** Both the entry draw and the per-update
-  drift use a signed 32-bit divide, not an unsigned one: the span
+  **The remainder is signed, and a malformed range is not clamped
+  (Established).** Both the entry draw and the per-update drift use a signed
+  32-bit divide, not an unsigned one: the span
   `max − min + 1` is formed as a signed subtract and the draw is sign-extended
   before the divide, so the remainder takes the sign of the draw and is never
   negative. Nothing in either routine tests the bounds for sanity. A mission
@@ -1635,7 +1585,7 @@ spans both streams and is fully recovered:
   `simRand(maxWind − minWind) + minWind`. The new heading is a simulation draw
   of `simRand(0x10000)` truncated to 16 bits, taken only when the speed is
   nonzero; the direction vector pair is computed as **−2 × the fixed-point
-  trig** of the heading (the −2 factor was omitted from earlier revisions).
+  trig** of the heading.
   Battle entry itself initializes the wind by zeroing the deadline and
   calling the wind-change routine — but with the global tick still zero the
   strict gate does not fire, so that call consumes **no draws**; the first
@@ -1645,9 +1595,9 @@ spans both streams and is fully recovered:
   is a fixed constant written once at battle entry — stored as a 32-bit float
   and clamped from above at exactly 1.0 (overflow stores the float bit
   pattern for 1.0).
-- (Corrected) The second deadline gates the **meteor-shower strike
-  scheduler** (see §4.4.1 [R-CORE-01] and doc 06 §6.5), not a wind-field
-  update. Its draws are all CRT and in a fixed order: four scheduling draws
+- The second deadline gates the **meteor-shower strike
+  scheduler** (see §4.4.1 [R-CORE-01] and doc 06 §6.5). Its draws are all CRT
+  and in a fixed order: four scheduling draws
   on every due evaluation even when the storm is disabled (map-depth-scaled
   then map-width-scaled target draws, then a depth-axis and a width-axis
   origin offset), then per hit a radius draw and an angle draw
@@ -1664,7 +1614,7 @@ match is expected to continue the exact pre-save stream.
 The fixed-step scheduler block is **saved** (see below). RNG state is not part
 of that block.
 
-#### R-CORE-02 closure — battle RNG seeding and a chronological draw census [R-CORE-02]
+#### Battle RNG seeding and a chronological draw census [R-CORE-02]
 
 **Seeding (Established).** At battle entry the orchestrator seeds both
 streams before any battle setup runs: the simulation stream is seeded from
@@ -1673,25 +1623,24 @@ constant, forced odd), and the CRT stream is reseeded from the time-of-day
 helper (local time with time-zone and daylight handling, one-second
 resolution). The CRT seed helper has exactly two call sites — process startup
 and battle entry — and the simulation seed setter exactly one (battle entry).
-The simulation seed lands in the process global. **Correction (2026-08-29,
-RWU-01-2):** this paragraph previously continued "both writes land in the
-calling (main) thread's state … every draw made before battle entry is wiped
-from the streams' state — pre-battle consumption cannot influence battle
-determinism". That is true of the simulation stream only. The CRT `srand` at
-battle entry writes the **loading thread's** TLS block ([R-PLAT-01 §4],
-[08 R-ENTRY-01 §2]); the main thread's CRT state is seeded once at process
-start and every tick-side CRT draw continues it, so front-end CRT consumption
-**does** shift the battle's wind-interval, meteor and victory-timer draws.
-Only the worker-side draws (skirmish shuffle, explosion frames) start from the
-battle-entry seed.
+
+The simulation seed lands in the process global, so every simulation draw made
+before battle entry is wiped and pre-battle consumption cannot influence
+battle determinism. The CRT stream behaves differently: the `srand` at battle
+entry writes the **loading thread's** TLS block ([R-PLAT-01 §4],
+[08 R-ENTRY-01 §2]), while the main thread's CRT state is seeded once at
+process start and every tick-side CRT draw continues it, so front-end CRT
+consumption **does** shift the battle's wind-interval, meteor and
+victory-timer draws. Only the worker-side draws (skirmish shuffle, explosion
+frames) start from the battle-entry seed.
 
 **Chronological draw census (process start through early battle ticks):**
 
 | When | Stream | Draws | Consumer |
 |---|---|---|---|
 | Process startup | CRT (main thread) | 0 (seed only) | main-thread TLS state ← time-of-day helper — the only seed that block ever receives |
-| Menu/front-end screens | CRT (main thread) | unbounded (variant paths) | UI/media random variants; not censused exhaustively; **these draws carry into the battle** (correction 2026-08-29, [R-PLAT-01 §4]) |
-| Briefing-screen entry | CRT | 2 | wind display: speed `% (max−min+1) + min`, then the display-jitter countdown `& 0x3F` (not a direction — corrected 2026-09-02, §7.3) — front-end display globals, no battle-side reader; each later briefing update whose countdown expires draws 2 more (speed drift `% 5`, countdown `% 63`) |
+| Menu/front-end screens | CRT (main thread) | unbounded (variant paths) | UI/media random variants; not censused exhaustively; **these draws carry into the battle** ([R-PLAT-01 §4]) |
+| Briefing-screen entry | CRT | 2 | wind display: speed `% (max−min+1) + min`, then the display-jitter countdown `& 0x3F` (not a direction; §7.3) — front-end display globals, no battle-side reader; each later briefing update whose countdown expires draws 2 more (speed drift `% 5`, countdown `% 63`) |
 | Battle entry (loading thread) | both | 0 (reseeds only) | simulation ← QPC sum; **loading-thread** CRT ← time-of-day; global tick ← 0 |
 | Battle entry, skirmish setup | CRT (loading thread) | count−1 (Fisher-Yates swap draws), plus one 50/50 gate draw when fewer than three qualifying players | player-slot assignment shuffle (skirmish start positions; skipped entirely when a saved game is being loaded); consumed from the worker's block, which dies with the thread |
 | Battle entry, networked setup | sim | 2 per placed commander (one per axis of the start point) | commander start placement |
@@ -1705,18 +1654,15 @@ battle-entry seed.
 Front-end draws between startup and battle entry are real CRT consumption on
 the main thread's block, which battle entry does **not** reseed; they advance
 the state the tick-side CRT consumers (wind interval, meteor, victory timer)
-will read (correction 2026-08-29 — the earlier text said they "carry no
-battle consequence because battle entry reseeds both streams";
-[R-PLAT-01 §4], [R-PLAT-01 §7]).
+will read ([R-PLAT-01 §4], [R-PLAT-01 §7]).
 
-**Save/load (Established; wording corrected).** Loading re-enters the
+**Save/load (Established).** Loading re-enters the
 battle-entry orchestrator, so the simulation stream and the loading thread's
-CRT block are reseeded unconditionally **before** the saved state is read
-(the main thread's CRT block is not; [R-PLAT-01 §4]): the earlier wording "reseeded from
-`QueryPerformanceCounter` and `time(NULL)`" named the mechanism imprecisely —
-the CRT source is the same time-of-day helper as at startup, not the C
-library `time()` directly, and the reseed is a consequence of load re-running
-the battle-entry path rather than a separate loader step. The first post-load
+CRT block are reseeded unconditionally **before** the saved state is read (the
+main thread's CRT block is not; [R-PLAT-01 §4]). The CRT source is the same
+time-of-day helper as at startup, not the C library `time()` directly, and the
+reseed is a consequence of load re-running the battle-entry path rather than a
+separate loader step. The first post-load
 draws are the battle-entry setup draws appropriate to the mode (the
 skirmish shuffle is skipped when a save is present), then the tick-1 wind
 chain — the wind deadline is re-zeroed unconditionally by battle entry, so
@@ -1743,9 +1689,9 @@ sequence bit-identically. The meteor-scheduling state, by contrast, is saved
 and restored in its own box. Replay formats are not covered by this save-box
 contract.
 
-### 7.4 A wall-clock leak into authoritative state (2026-08-28)
+### 7.4 A wall-clock leak into authoritative state
 
-Established by RWU-04-1 from the ground-mover trace of `[04 §8.1 R-MOV-01 §5]`.
+The evidence is the ground-mover trace of `[04 §8.1 R-MOV-01 §5]`.
 Sections 7.1 and 7.2 establish the two deterministic streams and section 4.1
 the tick counter. Those are not the whole determinism boundary: one
 authoritative write is driven by a **wall-clock** counter instead.
@@ -1773,26 +1719,23 @@ unit's committed height a function of elapsed real time.
 **Unknown.** The writer and configured value of the rate field that scales
 `GetTickCount()` here · §7.4, `[04 §9.1]` · static trace.
 
-**Closed (2026-08-31).** Whether the two-unit perturbation can carry a hovering
-unit's height across one of the three thresholds that read it was this
-section's and document 04's open item. It can: `[04 R-MOV-01 §5b]` settles it
-by exhaustive enumeration. Two of the three readers named above — the
-below-water half-speed branch and the water damage — turn out to exempt
-`canhover` outright, so the exposure is the medium-band classifier alone; but
-that classifier's band-2 test is an equality against sea level, and 10 of the
-13 `canhover` definitions in this install author `waterline` 0, which puts them
-exactly on it. The perturbed word therefore alternates those units between
-bands 2 and 1 with elapsed real time. The leak is real and script-visible, not
-merely theoretical.
+**Established — the perturbation does cross a threshold.** Two of the three
+readers named above — the below-water half-speed branch and the water damage —
+exempt `canhover` outright, so the exposure is the medium-band classifier
+alone; but that classifier's band-2 test is an equality against sea level, and
+10 of the 13 `canhover` definitions in this install author `waterline` 0,
+which puts them exactly on it. The perturbed word therefore alternates those
+units between bands 2 and 1 with elapsed real time, by exhaustive enumeration
+in `[04 R-MOV-01 §5b]`. The leak is script-visible, not merely theoretical.
 
-### 7.5 Closed — the per-phase random draw table [R-DET-01 §4] (2026-08-29)
+### 7.5 The per-phase random draw table [R-DET-01 §4]
 
-Established by RWU-01-1 from a whole-image census: every call site of the
-simulation sampler (143 static sites in 59 functions) and of the CRT draw
-(66 sites in 29 functions) was read and placed in the phase order of §4.4.
-This is the one table every lane's "draws N" claim is checked against; the
-lane closures cited in the right-hand column own the surrounding arithmetic
-and are not restated here. Cross-lane disagreements are in [R-DET-01 §6].
+**Established** by a whole-image census: every call site of the simulation
+sampler (143 static sites in 59 functions) and of the CRT draw (66 sites in 29
+functions) was read and placed in the phase order of §4.4. This is the one
+table every lane's "draws N" claim is checked against; the sections cited in
+the right-hand column own the surrounding arithmetic and are not restated
+here. The cross-check against them is [R-DET-01 §6].
 
 **Conventions.** `sim(b)` is the bounded simulation draw of §7.1 — remember
 that `b < 2` (signed) returns 0 **without advancing**; `crt()` is one CRT
@@ -1804,7 +1747,7 @@ phase-2 pump; a handler that returns before the draw consumes nothing.
 
 | When | Stream | Draws | Consumer and anchor |
 |---|---|---|---|
-| Battle entry, world rebuild (loading thread) | CRT (loading thread) | 391,606 (lane 06's count; this census confirms one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips, and did not recount) | procedural explosion frames [06 R-WFX-01 §6]. Correction 2026-08-29: this row said "Process startup … wiped by the battle-entry reseed"; the builder's only caller is the orchestrator on the loading thread, whose block is discarded with the thread ([R-PLAT-01 §4]) |
+| Battle entry, world rebuild (loading thread) | CRT (loading thread) | 391,606 — one draw per generated pixel, `trunc((crt()·10)/32768)`, over three strips (doc 06's count; the strips were not recounted here) | procedural explosion frames [06 R-WFX-01 §6]; the builder's only caller is the orchestrator on the loading thread, whose block is discarded with the thread ([R-PLAT-01 §4]) |
 | Front end | CRT (main thread) | unbounded | main-menu spark shimmer (`crt() mod 640` and companions), briefing wind display (2), sound variants, CD track choice — see [R-DET-01 §5]. **Not wiped**: the main-thread block is never reseeded ([R-PLAT-01 §4]) |
 | Battle entry | sim; loading-thread CRT | reseed only | [R-CORE-02] |
 | Battle entry, skirmish | CRT (loading thread) | `count − 1` swap draws, plus one 50/50 gate when fewer than three qualifying players | slot shuffle [08 R-SKIR-01 §2] |
@@ -1837,7 +1780,7 @@ phase-2 pump; a handler that returns before the draw consumes nothing.
 | 5 — commander respawn (commander-death rule 2) | sim | per trial `sim(W − 2·(W ÷ 10))`, `sim(D − 2·(D ÷ 10))`, up to 9999 trials | [08 R-SKIR-01 §3] |
 | 5 — AI tasks | sim | build roulette `sim(cumulative)` per positive-score candidate; extractor selector `sim(255)`; scatter per trial `sim(radius)`, `sim(65536)`, then the two map-fraction draws; construction repositioning `sim(65536)` per branch taken; explore `sim(900)` then `sim(2)` and the leg/map-edge draws; rally `sim(150)`, `sim(10)`, `sim(65536)`, `sim(incumbentScore)`, `sim(challengerScore)`; eco toggle `sim(5)` per candidate maker; the AI's own order dispatch reaches the acquisition draws of phase 2 | [08 R-AI-01 §2–§8], [05 R-PROD-01 §5, §6] |
 | 6 features | sim | reproduction: `sim(100)` gate, then `sim(b)`, `sim(b)` with `b` the definition's reproduction-range byte; burn spread: `sim(100)` per neighbouring cell tested against the flammability byte (strict `<`) | [05 R-FEAT-01 §10–§13] |
-| 6 features | CRT | 3 per burning-feature smoke emission, in order: horizontal jitter, vertical jitter, then the puff's last frame inside the producer (corrected 2026-09-02 — this row said "2 per fire-effect emission (position jitter)" and cited §12: it counted the call site only; the producer's constructor draw is taken at the phase-6 call, not in phase 11) | [05 R-FEAT-01 §10, §16] |
+| 6 features | CRT | 3 per burning-feature smoke emission, in order: horizontal jitter, vertical jitter, then the puff's last frame inside the producer (the producer's constructor draw is taken at the phase-6 call, not in phase 11) | [05 R-FEAT-01 §10, §16] |
 | 7 sequences | — | 0 | [R-CORE-01] |
 | 8 wind, when due | CRT, then sim | `crt()` (interval), `sim(max − min)` (0 without advance when `max − min < 2`), `sim(65536)` only when the rolled speed is non-zero | [05 R-PROD-01 §3] |
 | 9 meteor, when due | CRT | 4, then 2 per hit | [R-CORE-01], [06 §6.5] |
@@ -1854,7 +1797,7 @@ scheduler and its projectiles (phase 9), and the skirmish victory-timer arm
 CRT stream reproduces every unit, order, projectile, feature and economy
 outcome except wind timing, meteor strikes and the victory-timer instant.
 
-### 7.6 Closed — the CRT stream's other consumers, exhaustively [R-DET-01 §5] (2026-08-29)
+### 7.6 The CRT stream's other consumers, exhaustively [R-DET-01 §5]
 
 **Established.** The CRT seed helper has exactly two callers (process
 startup and battle entry, [R-CORE-02]). The CRT draw has 29 calling
@@ -1862,7 +1805,7 @@ functions; the ones not already placed in the tick table above are:
 
 | Consumer | Draws | Note |
 |---|---|---|
-| procedural explosion frames | one per pixel, at startup | [06 R-WFX-01 §6]; all wiped by the battle-entry reseed |
+| procedural explosion frames | one per generated pixel, on the loading thread at battle entry | [06 R-WFX-01 §6]; the block is discarded with the thread ([R-PLAT-01 §4]) |
 | main-menu spark shimmer | several per spark per frame (`crt() mod 640` position, lifetime, drift) | front end only |
 | briefing wind display | 2 | [R-CORE-02] |
 | sound-variant picker | `(crt() · variantCount) ÷ 32768` per play, gated by the sound-category record's variant count and the options flags | doc 03 §8 / doc 02 sound category |
@@ -1884,10 +1827,10 @@ or a message-string choice. Nanolathe therefore needs a CRT-compatible
 stream only for those three consumers' *positions in the tick*, not for the
 front end.
 
-### Closed — which thread's CRT block each consumer reads [R-PLAT-01 §7] (2026-08-29)
+### Which thread's CRT block each consumer reads [R-PLAT-01 §7]
 
-Established by RWU-01-2 by walking each of the 29 CRT-draw callers of §7.6
-up to its thread root.
+**Established** by walking each of the 29 CRT-draw callers of §7.6 up to its
+thread root.
 
 | Thread | Consumers | Seed history of the block they read |
 |---|---|---|
@@ -1904,47 +1847,34 @@ any case, and the useful contract is the *position* of each draw in the tick,
 as §7.6 already concluded. The worker-side draws need a separate stream
 seeded at battle entry.
 
-**Item (b) verified — the elimination announcement.** The skirmish
+**The elimination announcement (Established).** The skirmish
 elimination line is chosen by `crt() mod 3` inside a helper reached from the
 unit-death handler (phase 2, slot-end death handling) when the victim's owner
 has no live units left; the helper formats `"%s %s"` from the translated line
 and posts a class-4 status message with the player's colour byte. It is a
-main-thread CRT draw inside the tick, as [R-DET-01 §4] and [08 R-CAMP-01 §9]
-state; nothing to correct.
+main-thread CRT draw inside the tick ([R-DET-01 §4], [08 R-CAMP-01 §9]).
 
-### 7.7 Closed — lane draw claims re-checked against the census [R-DET-01 §6] (2026-08-29)
+### 7.7 Lane draw claims checked against the census [R-DET-01 §6]
 
-Confirmed by the census (draw expression and order match the cited text):
-[04 R-COB-01 §2] (random/explode), [04 R-COB-04 §3] (eight per fragment),
-[04 R-PATH-01 §11] and [04 R-MOV-01] (none), [04 R-AIR-01 §7, §8] including
-the conditional `8192` orbit draw, [05 R-PROD-01 §3, §8] (wind), [05 R-FEAT-01
-§9, §11] (ignition bound `sparkTicks ÷ 2`, burn `sim(100)`), [06 §3.1] (gate
-30), [06 §3.2], [06 §4.3] (randomdecay before sprayangle), [06 R-WPN-03 §4],
-[06 R-WFX-01 §6] (lightning 6 per point per frame; startup site and per-pixel
-rule), [08 R-AI-01] (constructor order 10, 3, widths, 20, 3, widths; task
-bounds), [08 R-SKIR-01 §2, §3], [08 R-TRIG-01 §6], [08 R-CAMP-01 §9] (the
-skirmish `mod 3` draw is inside the tick on the death path).
+**Established.** The census of §7.5 was compared, draw expression by draw
+expression and in order, against the sections that own each consumer. These
+agree with it: [04 R-COB-01 §2] (random/explode), [04 R-COB-04 §3] (eight per
+fragment), [04 R-PATH-01 §11] and [04 R-MOV-01] (none), [04 R-AIR-01 §7, §8]
+including the conditional `8192` orbit draw, [05 R-PROD-01 §3, §8] (wind),
+[05 R-FEAT-01 §9, §11] (ignition bound `sparkTicks ÷ 2`, burn `sim(100)`),
+[06 §3.1] (gate 30), [06 §3.2], [06 §4.3] (randomdecay before sprayangle),
+[06 R-WPN-03 §4], [06 R-WFX-01 §6] (lightning 6 per point per frame; startup
+site and per-pixel rule), [08 R-AI-01] (constructor order 10, 3, widths, 20,
+3, widths; task bounds), [08 R-SKIR-01 §2, §3], [08 R-TRIG-01 §6],
+[08 R-CAMP-01 §9] (the skirmish `mod 3` draw is inside the tick on the death
+path).
 
-Contradicted — reported to the owning lanes, not edited here:
-
-1. **[05 R-WORK-01 §8] "RepairPatrol: 1 draw" and
-   [04 R-ORD-01 §4] "two simulation draws at most per visit".** The old
-   wording incorrectly put two three-pick tournaments in the repair-unit
-   gather, and therefore described up to six draws before the unit pick. The
-   corrected contract has one ordered unit gather and one bounded pick; only
-   the later sampled feature-pairing helper makes three energy picks and three
-   metal picks when those lists are nonempty. This correction is recorded here
-   after the verified scan-visitor review (2026-08-31).
-2. **[08 R-CAMP-01 §9] "the eight-entry table … has no reference in the
-   image — dead data".** The eight-entry table is read by the multiplayer
-   (session kind 3) elimination path of the same death handler: when the local
-   slot is not a plain watcher it draws `crt() & 7`, formats `"%s %s"` and posts
-   a class-4 status line locally. Out of implementation scope, but not dead;
-   the single-player claim (skirmish draws `mod 3`) stands.
-3. **§7.1 of this document** said "bounds below 2 return zero" without the
-   no-advance property and without the signed compare; corrected in place.
-4. **§7.2 of this document** listed the CRT consumers as "meteor, wind
-   jitter, UI/media variants, camera shake"; the full set is §7.6.
+Where a lane's own wording disagreed with the census, the census row of §7.5
+is this document's statement: the `RepairPatrol` gather is one ordered
+candidate gather and one bounded pick, with three energy-list and three
+metal-list draws only once the handler reaches feature pairing; and the
+multiplayer elimination path draws `crt() & 7` from an eight-entry table that
+is live, not dead data.
 
 ## 8. x87 floating point and integer conversion
 
@@ -1952,9 +1882,8 @@ The executable uses x87 arithmetic; no SSE simulation path is established.
 The default control word is the Microsoft/CRT 53-bit precision, round-to-nearest,
 masked-exception environment. The FPU setup helper always runs at startup;
 with `-fpufussy` absent it re-masks the invalid and zero-divide exceptions
-(no change from the runtime default), with it present it unmasks them
-(**correction**, 2026-08-29: the earlier sentence said the switches "change
-whether the setup helper runs"; they change its argument — [R-PLAT-01 §2]).
+(no change from the runtime default), with it present it unmasks them; the
+switch changes the helper's argument, not whether it runs ([R-PLAT-01 §2]).
 
 Authoritative code mixes integer/fixed-point, 32-bit float, and 64-bit double:
 
@@ -1984,13 +1913,13 @@ A recurring confusion must be resolved explicitly: the scaled-clock factor
 timebase installer and read by the scaled clock and by the window procedure's
 input timestamps. The value 0x27F is the default x87 control word asserted by
 the C-runtime floating-point helpers (they check-and-restore it before FP
-operations). The two values are not the same field; earlier corpus notes read
-both into one display-context field, which is wrong.
+operations). The two values are not the same field and must not be read into
+one.
 
-### Closed — the float→int conversion census [R-DET-01 §1] (2026-08-29)
+### The float→int conversion census [R-DET-01 §1]
 
-Established by RWU-01-1 from a whole-image scan of every x87 integer-store
-instruction and every call of the truncating helper.
+**Established** by a whole-image scan of every x87 integer-store instruction
+and every call of the truncating helper.
 
 **The helper, exactly.** The compiler's truncating helper saves the control
 word, ORs the round-control field to *toward zero* (both bits set), loads the
@@ -2033,15 +1962,30 @@ anchor that owns the arithmetic. Presentation-only clusters are summarised.
 | AI: strategic constructor, score table, weight clamp (`weight · value` then clamp ≥ 0), candidate score, construction task, extractor placement, distance helper | 21 | score and region terms | [08 R-AI-01 §3, §8, §12] |
 | Tick budget clamp | 1 | the string-to-double budget value | §4.2 |
 | Battle entry: starting stock, metal seeding (8-bit per footprint cell), gravity install, meteor parameters (seconds × 30), mission spawner coordinates (`%f` fields) | 20 | as named | [05 R-ECO-01 §4], [05 R-FEAT-01 §7], [03 R-TERR-01 §1, §6], [R-CORE-01], doc 08 |
-| Definition parsers: weapon TDF (velocity, start velocity, acceleration 32-bit; reloadtime, weapontimer, turnrate, burstrate, duration, randomdecay, smokedelay, flighttime, holdtime and companions **16-bit**), FBI (one key), feature TDF (`sparktime × 30`, 16-bit), catalog `Version` (`int(v)`, `int((v − int(v)) · 10)`), 3DO table, TDF float-getter integer form | 22 | as named | [06 R-WFX-01 §1], [06 R-DMG-01 §1], [05 R-PROD-01 §1], [05 R-FEAT-01 §1], [02 R-CONTENT-01, R-CONTENT-02], [fmt tdf] |
+| Definition parsers (enumerated below) | 22 | as named | [06 R-WFX-01 §1], [06 R-DMG-01 §1], [05 R-PROD-01 §1], [05 R-FEAT-01 §1], [02 R-CONTENT-01, R-CONTENT-02], [fmt tdf] |
 | Presentation and front end (HUD resource bar, renderer, model bounds, range rings, palette bytes (8-bit), audio tables (clamped to 255), option sliders, score and statistics screens, window placement, startup explosion frames) | ~120 | not authoritative | docs 03, 07, 08 |
 
 **Bounded negative (Established).** No other float→int conversion mechanism
 exists in game code: there is no `fisttp`, no 16-bit integer store, and no
-inlined copy of the helper. The two round-to-nearest sites are §8's next
-closure.
+inlined copy of the helper.
 
-### Closed — the two round-to-nearest sites [R-DET-01 §2] (2026-08-29)
+#### Definition parsers
+
+Twenty-two of the sites are in definition parsers. Each truncates, and several
+store narrower than 32 bits — a width an implementation must reproduce,
+because the wrap is observable:
+
+- weapon TDF: velocity, start velocity and acceleration are **32-bit**;
+  `reloadtime`, `weapontimer`, `turnrate`, `burstrate`, `duration`,
+  `randomdecay`, `smokedelay`, `flighttime`, `holdtime` and their companions
+  are **16-bit** ([06 R-WFX-01 §1], [06 R-DMG-01 §1]);
+- FBI: one key ([05 R-PROD-01 §1]);
+- feature TDF: `sparktime × 30`, **16-bit** ([05 R-FEAT-01 §1]);
+- the catalog `Version` pair, `int(v)` and `int((v − int(v)) · 10)`
+  ([02 R-CONTENT-01, R-CONTENT-02]);
+- the 3DO table, and the TDF float-getter's integer form ([fmt tdf]).
+
+### The two round-to-nearest sites [R-DET-01 §2]
 
 **Established.** Exactly two game routines store an x87 value to an integer
 directly, under the default control word (round to nearest, ties to even),
@@ -2054,8 +1998,7 @@ into a **32-bit** slot:
    the ground steering, the per-unit tick, the shared order-handler bearing,
    the turret and line-of-sight slot executors, the weapon impact dispatch,
    the projectile tick, four weapon-update helpers, the battle-entry unit
-   placement, one multiplayer helper and one dead helper. This is the
-   round-to-nearest site lane 04's callback trail noted.
+   placement, one multiplayer helper and one dead helper.
 2. **The vector-rotate helper.** Given a 16-bit angle `a` and a pair of
    32-bit integers `(x, y)`: when `a = 0` nothing is written; otherwise
    `θ = a · 2π ÷ 65536` (double constant 9.5874e−05), `x' = round(x·cos θ −
@@ -2067,7 +2010,7 @@ A third direct integer store lives in the C runtime's floating-point
 exception raiser (it stores an out-of-range constant to raise *invalid*); it
 is library code with no game caller.
 
-### Closed — control-word mutations reachable from the simulation [R-DET-01 §3] (2026-08-29)
+### Control-word mutations reachable from the simulation [R-DET-01 §3]
 
 **Established (bounded by a whole-image instruction scan: 53 control-word
 load/store instructions).** The control word is written by:
@@ -2087,8 +2030,8 @@ load/store instructions).** The control word is written by:
   instruction, and the remainder lie in the unrecovered runtime region between
   the mask helper and the power/exponential family.
 
-So the answer to the tail's standing question is: non-default control words
-are reachable from the simulation **only transiently inside a runtime call**
+Non-default control words are therefore reachable from the simulation **only
+transiently inside a runtime call**
 (`hypot`, string-to-double), and every such call restores the word before
 returning. No game routine changes precision or rounding and leaves it
 changed; the default (53-bit, nearest) holds at every game instruction, and
@@ -2122,7 +2065,7 @@ chat command (handler inferred).
 An internal code-checksum routine returns zero unconditionally in retail,
 leaving its guarded code-segment-checksum-error diagnostic branch dead;
 self-checks run only when switching front-end states, never per tick. The
-front-end/game-mode state machine (the "orchestrator" of earlier notes) is
+front-end/game-mode state machine is
 recovered: it switches between game modes over a router state byte with
 sub-states, runs the checksum self-check between every state transition, and
 loads the numbered `1.zrb`..`5.zrb` list files from the `Data` directory at
@@ -2140,17 +2083,16 @@ failure, movie setup/open/pixel-format failure, and archive/resource failure.
 The exact distinction between recoverable fallback and fatal termination is
 subsystem-specific.
 
-### Closed — the exception filter, `ErrorLog.txt`, and out-of-memory [R-PLAT-01 §8] (2026-08-29)
+### The exception filter, `ErrorLog.txt`, and out-of-memory [R-PLAT-01 §8]
 
-Established by RWU-01-2 from the diagnostic initializer, the filter body, the
-symbol helper and the allocation-failure hook. **Correction:** the tail
-previously listed "exception-filter reporting and the minidump/debug-helper
-protocol, which engage only behind the enable switches" as unknown-and-
-optional. The filter is installed on the normal path (the initializer's
-argument 8 leaves the filter bit clear) and the symbolised stack walk is
-**enabled by default** (`-disableimagehlp` turns it off); only
-`DebugHelper.dll` is switch-gated. No minidump is written — `MiniDumpWriteDump`
-is not imported.
+The evidence is the diagnostic initializer, the filter body, the symbol helper
+and the allocation-failure hook.
+
+**What is on by default (Established).** The filter is installed on the normal
+path (the initializer's argument 8 leaves the filter bit clear) and the
+symbolised stack walk is **enabled by default** (`-disableimagehlp` turns it
+off); only `DebugHelper.dll` is switch-gated. No minidump is written —
+`MiniDumpWriteDump` is not imported.
 
 **The filter (Established).** `SetUnhandledExceptionFilter` installs a
 trampoline to the report writer. The writer:
@@ -2194,11 +2136,11 @@ blank line, then a breakpoint) exists but has **no caller** in the recovered
 image. The generic fatal modal (message box then exit code 1 — [08 R-ENTRY-01
 §1]) does not write the file.
 
-### Closed — the developer console: `DebugBreak`, `debugdat` scripts, and the `~` key [R-PLAT-01 §9] (2026-08-29)
+### The developer console: `DebugBreak`, `debugdat` scripts, and the `~` key [R-PLAT-01 §9]
 
-Established by RWU-01-2; the console vocabulary itself is [07 R-CAM-01 §6]
-and the developer bit's writers are [07 R-CAM-01 §9] (the registry `Games`
-value at settings load, and the five-word `Now` phrase).
+The console vocabulary itself is [07 R-CAM-01 §6] and the developer bit's
+writers are [07 R-CAM-01 §9] (the registry `Games` value at settings load, and
+the five-word `Now` phrase).
 
 **`DebugBreak [1|2|3]`** — requires the developer bit **and** film mode:
 
@@ -2222,22 +2164,21 @@ line runner: each line up to `\n` — **including a final unterminated line**
 — is tokenised and dispatched through the same `+` dispatcher with every
 handler mask enabled, so a script can invoke handlers the console masks out;
 the developer's spawn pointer words are saved before and restored after the
-run. Whether the tokeniser strips a trailing `\r` from CR-LF files is
-**Unknown** (decider: read of the line tokeniser). No `debugdat` directory
-ships with the retail install, so the path is inert in stock configurations.
+run. The tokeniser treats a trailing `\r` of a CR-LF line as whitespace and
+strips it ([R-PLAT-02 §6]). No `debugdat` directory ships with the retail
+install, so the path is inert in stock configurations.
 
 **The `~` key.** With the developer bit set, the housekeeping helper pops the
 `0x7E` token before the dispatcher sees it and restores the desktop display
 mode ([R-PLAT-01 §1]); without the bit the token reaches the battle dispatcher
 as one of the "label every unit" toggles ([07 R-CAM-01 §2]).
 
-### Closed — the directive tokeniser and the screenshot writer [R-PLAT-02 §6] (2026-08-29)
+### The directive tokeniser and the screenshot writer [R-PLAT-02 §6]
 
-Established by RWU-01-3 from the tokeniser, its argument-substitution and
-reset helpers, the line runner, the screenshot routine and the PCX encoder.
+The evidence is the tokeniser, its argument-substitution and reset helpers,
+the line runner, the screenshot routine and the PCX encoder.
 
-**The directive tokeniser (Established; closes the `\r` Unknown of
-[R-PLAT-01 §9]).** One tokeniser serves the developer console's `+`
+**The directive tokeniser (Established).** One tokeniser serves the developer console's `+`
 commands ([07 R-CAM-01 §6]), the `debugdat` script runner ([R-PLAT-01 §9])
 and the AI profile parser ([08 R-AI-01 §12]). Given a text span (or a
 NUL-terminated string when no end is given):
@@ -2255,7 +2196,7 @@ NUL-terminated string when no end is given):
    buffer is exhausted, then NUL-terminate; the next argument continues
    after the terminator.
 
-**`%N` substitution (Established; RWU-08-8's row).** After tokenising, an
+**`%N` substitution (Established).** After tokenising, an
 argument whose first character is `%` and whose remainder converts (`atoi`)
 to an index `N` with `0 ≤ N < callerArgumentCount` is replaced by the
 caller's argument `N` (a pointer copy into the callee's argument list); any
@@ -2355,10 +2296,13 @@ byte `0x0C` and the 768-byte palette.
   game-state teardown runs only on a requested quit ([R-PLAT-02 §1], §2).
 - A ten-slot scaled-clock timer table is serviced once per busy pump
   iteration; only the CD-audio fades register in it ([R-PLAT-02 §4]).
-- The post-loop deadline list is the 20 × 36-byte temporary-sight list,
-  fed only by a network packet, so empty in single player; the control
-  keepalive byte is type 6; the start barrier is network-only
-  ([R-PLAT-02 §5]).
+- The post-loop expiry list is the 20 × 36-byte temporary-sight ("eyeball")
+  observer list, fed by the central unit-death handler and therefore populated
+  in every session kind; the control keepalive byte is type 6; the start
+  barrier is network-only ([R-PLAT-02 §5]).
+- The post-loop ring is the in-battle message ring doc 07 owns, retired by the
+  `textscroll` rule; the executor's tail has three steps
+  ([R-PLAT-02 §7], [R-PLAT-02 §8]).
 - The directive tokeniser splits on C `isspace` (so CR-LF is safe), keeps
   20 arguments in 126 bytes, and substitutes `%N`; screenshots are
   `<prefix>%04i.pcx` with the highest existing number plus one, RLE-encoded
@@ -2378,154 +2322,23 @@ byte `0x0C` and the 768-byte palette.
 - Most fixed pools are intentionally chosen to make insertion/retirement order
   deterministic, not merely as performance optimizations.
 
-### Important contradictions or confidence limits
+### Confidence limits
 
-- Some older notes called the sequence phase LOS and the ten-vtable pass a
-  renderer; current corrected notes retract both labels.
-- Phase 10 was previously labelled "ledger and death cleanup"; it is the
-  camera/scroll position update with camera shake (a CRT consumer). The dying
-  latch and finalization belong to phase 2's slot-end death handling.
-- Phase 11 was previously kept as a T23 placeholder no-op registration point, then
-  described as "a real per-object update sweep over ten vtable-backed object
-  lists (removal and destruction on zero return)" with the object family
-  unidentified. Both refinements are superseded: the sweep evaluates a
-  removal verdict **before** the update work and destroys on a **positive**
-  verdict (the zero-return-destruction wording was inverted), and the family
-  is now identified as the ten effect strips of doc 03's rendering contract
-  (§4.4.1 [R-CORE-01]).
-- Phase 9 was described as a "wind-field update" spawning a "wind-field
-  projectile". The family label is retracted: the state block is the meteor
-  shower — saved under the section name "Meteor", configured from the
-  mission's `Meteor*` keys, and mechanically identical to doc 06 §6.5
-  (§4.4.1 [R-CORE-01]). The mechanical descriptions (deadlines, draws, pool
-  append, silent drop) were correct and stand.
-- §7.3 previously presented the briefing-screen wind draws as the battle's
-  initial wind values "before the simulation consumes either value". They
-  are front-end display state with no battle-side reader; the battle's
-  initial wind is drawn by phase 8 at tick 1, and battle entry's own
-  wind-change call consumes nothing because its deadline gate is strict and
-  both sides are zero (§7.3 [R-CORE-02]).
-- The AI coordinator dispatch before the settlement deadline (phase 5) was a
-  supported inference from a shared entry; it is now direct: the per-player
-  coordinator tick runs every tick for every eligible player ahead of the
-  deadline compare, with a 30-tick internal cadence.
-- Projectile-pool compaction runs at the projectile-phase tail (and on the
-  unit-owner projectile purge), not in the post-loop tail; the post-loop
-  compactor is the missile/interceptor pending list, and the post-loop "timer
-  dispatch" is a 30-entry deadline-ring slide beside the network receive
-  queue (owner inferred). The "missile/interceptor" label of that post-loop
-  compactor is itself retracted: the list is the temporary-sight observer
-  list, 36-byte records, network-fed only ([R-PLAT-02 §5]).
-- The keyboard speed range is the full 1..20, not 2..19.
-- The multiplayer sharing block runs at the tail of every sub-tick (inside
-  the loop), not after it.
-- The display-context field at the scaled-clock factor offset holds 30; the
-  0x27F control word belongs to the C-runtime FP helpers and is a different
-  site.
-- The scheduler anchor, raw delta, and float carry were previously interchanged;
-  the current wall-clock note is authoritative for their roles.
-- Earlier revisions described the window as overlapped-style and left style bits
-  open; the popup style `0x90080000`/`0x00040000` and `CS_DBLCLKS` are now
-  established, as is the WndProc dispatch list above.
-- Earlier revisions stated normal startup creates a watchdog thread; the thread
-  implementation is conditional and disabled in the normal path.
-- [R-CORE-02] and [R-DET-01 §4] said battle entry reseeds "the main thread's"
-  CRT block and that pre-battle CRT draws are wiped. Battle entry runs on the
-  loading thread, so its `srand` seeds that thread's block; the main thread's
-  block — the one every tick-side draw reads — is seeded once at process start
-  and carries every front-end draw into the battle ([R-PLAT-01 §4], §7;
-  [08 R-ENTRY-01 §2]).
-- §2.3 called the pump's busy-path gate a "display-mode flag"; it is the
-  `WM_ACTIVATE` activation word ([R-PLAT-01 §1]).
-- §3.1 said no INI read exists on the startup path; the `UnitLimit`,
-  `NoDirectSound` and `UseWindowsSound` reads are on it ([R-PLAT-01 §2]).
-- §6 said allocation helpers zero or initialise blocks and the tail called the
-  allocator a tagged `HeapAlloc` wrapper; the label is dropped and nothing is
-  filled by default ([R-PLAT-01 §5]).
-- §8 said `-fpufussy` changes whether the FPU setup runs; it changes the mask
-  argument ([R-PLAT-01 §2]).
-- The tail said the crash filter engages only behind enable switches; it is
-  installed on the normal path with symbolised walking on by default
-  ([R-PLAT-01 §8]).
-- [R-PLAT-01 §1] called the bit that gates the mode frame function a
-  "presenting" bit and the bit tested on exit the cursor-thread mark; both
-  are the quit-requested bit, and the exit branch runs the full game-state
-  teardown ([R-PLAT-02 §2]).
-- Earlier revisions listed scheduler persistence as unknown; the 28-byte
-  `Players/GameTime` block is now established as saved, while RNG persistence
-  remains absent and replay coverage remains separate (the post-loop deadline
-  ring is the network frame window, not a timer queue).
-- Earlier revisions described periodic peer hash packets as abort-on-mismatch
-  checks; receivers provably copy pushed state without any comparison, and the
-  internal code-checksum stub makes its error branch unreachable in retail.
-  The earlier hedge that left single-player/multiplayer pause carry behavior
-  open is also closed by the asymmetry described in section 4.3.
-- Function-boundary recovery is incomplete, so absence claims are bounded by
-  the current import/decompile census rather than proof over every byte.
-- Network and replay save coverage remains incomplete (no timer queue exists
-  on the tick path; the post-loop message ring of [R-PLAT-02 §8] is
-  presentation state and is not serialized).
-
-### Closed — the post-loop "deadline ring" is the in-battle message ring, and the tail has three steps [R-PLAT-02 §8] (2026-09-04)
-
-**Established (RWU-19-199, direct read of the executor tail, the retire, the
-poster, the two index resets and the two drawers).** §4.4, §6.2 and
-[R-PLAT-02 §7] described a "30-entry deadline ring of 72-byte records" whose
-record owner was open, marked `TODO(question)`, and read as "most plausibly
-the network receive-frame window" because the ring's globals sit near the
-receive queue's. The owner is settled, and the reading was wrong in both
-halves:
-
-- **The ring is the in-battle message ring** — the text-scroll ring doc 07
-  owns ([07 R-CAM-01 §7] `textscroll`, [07 R-HUD-03 §14.3], [07 R-HUD-03
-  §14.4]). Its 30 records of 72 bytes are each a 64-byte text line with a
-  forced terminator, the **global tick at which the line was posted**, the
-  source unit's id (16-bit), a silence byte (`'\n'` suppresses the
-  `MessageArrived` cue) and a class nibble. Two 16-bit indices address it: a
-  **producer index** the poster advances and a **display index** the retire
-  advances, both modulo 30.
-- **The "deadline-ring slide" and the "text-scroll retire" are one routine.**
-  The executor's tail is: the three empty barrier routines; the message-ring
-  retire; the temporary-sight expiry pass. There is no fourth call. The
-  retire is exactly the rule [R-PLAT-02 §7] already stated: when the ring is
-  non-empty (producer ≠ display) and `postTick + (textscroll + 1) × 30 <
-  currentTick` (unsigned) for the line at the display index, the display
-  index advances one slot, wrapping at 30; at most one line per call. The
-  "record value plus the current window offset times thirty ticks" of §6.2
-  was this expression with the option unnamed.
-- **What indexes it.** The poster ([07 R-HUD-03 §14.4]'s producers — chat,
-  order acknowledgements, elimination lines, cheat and save cues) writes at
-  the producer index and stamps the current tick; the retire and the two
-  drawers read from the display index toward the producer. Both indices are
-  reset to zero by three routines: the skirmish/multiplayer battle-entry
-  path, one further set-up routine this unit did not identify, and the
-  battle state's own exit path; the F12 key clears them in play
-  ([07 R-CAM-01 §2]).
-- **No network path touches it.** The send helper, the receive dispatch and
-  the receive-frame window never read or write the ring or its indices
-  (bounded negative over the recovered export). The "receive-frame window"
-  reading rested on address adjacency alone.
-
-For an implementation this changes nothing in simulation: the ring is
-presentation state, retired once per host pump whether or not a sub-tick
-ran ([R-PLAT-02 §7]), and never serialized. The `SlideDeadlineRing` seam an
-implementation may have kept for the network reading has no simulation
-payload to carry.
+- Function-boundary recovery is incomplete, so every absence claim in this
+  document is bounded by the current import/decompile census rather than
+  proved over every byte of the image.
+- Network and replay coverage remains incomplete. No timer queue exists on the
+  tick path; the post-loop message ring of [R-PLAT-02 §8] is presentation
+  state and is not serialized; the network future-frame window, its overflow
+  policy and any replay format are outside what this document establishes.
+- The scaled-clock factor (30) and the default x87 control word `0x27F` occupy
+  different fields; conflating them misreads both §4.1 and §8.
 
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
-and the decider that would close it. Findings that closed an item live in the
-body under their `R-<id>` headings and are not restated here.
-
-**Correction (2026-08-28, RWU-00-5).** This list previously mixed open items
-with closure narratives — bullets that began "is closed", "is narrowed", or
-"is resolved" and then recited a finding already written in the body. That
-made the tail unusable as a work list: a reader could not tell which bullets
-were still open. The closures were duplicates of body text (§4.4.1
-[R-CORE-01], §7.3 [R-CORE-02], §4.4.1's meteor-spawner identity, §6.1's pool
-cap) and have been deleted from the tail only; no finding was removed from the
-document.
+and the decider that would close it. Everything this document establishes is
+stated in the body, not here.
 
 ### Process and platform
 
@@ -2538,14 +2351,13 @@ document.
 - Shutdown ordering after an exceptional failure: the crash filter returns
   continue-search without releasing anything ([R-PLAT-01 §8]), so the
   singleton semaphore, display mode and audio device are left to the operating
-  system's process teardown; whether the semaphore's kernel object outlives a
+  system's process teardown. Whether the semaphore's kernel object outlives a
   crashed process long enough to block an immediate relaunch is an OS
   question, not an executable one · §2.3 · manual test on the reference
   install.
-- What the throttled LOS refresh publishes or removes when the post-loop
-  pass hands it an **expiring** temporary-sight record, and which packet
-  produces those records (network-only; the single-player list is empty)
-  · §4.4 [R-PLAT-02 §5], doc 03 [R-VIS-01 §2], doc 08 · static trace.
+- What the throttled LOS refresh publishes or removes when the post-loop pass
+  hands it an **expiring** temporary-sight record · §4.4 [R-PLAT-02 §5],
+  doc 03 [R-VIS-01 §2] · static trace.
 - Whether a writer of the display object's frame-presented word exists
   beyond the two found (present sets it, surface restore clears it) · §2.2
   [R-PLAT-02 §6] · static trace over the unrecovered regions.
@@ -2553,7 +2365,7 @@ document.
   three save-under surfaces' roles) — presentation only · §5.1 [R-PLAT-01 §4],
   doc 07 · static trace.
 - The purpose of the ten `-B` words that the parser compares and never acts on
-  (`deathends` … `watching`) — dead options in retail; recorded once, no
+  (`deathends` … `watching`); they are inert in retail and have no
   implementation impact · §3.1 [R-PLAT-01 §2] · none needed.
 - TLS destructor and `DeleteCriticalSection` callsites: the thread and lock
   census is bounded by the recovered function window, and these sites fall
@@ -2565,46 +2377,41 @@ document.
 
 ### Clock, network, and determinism
 
-- ~~Record owner of the 30-entry post-loop deadline ring; the receive-frame-
-  window reading is a supported inference · §4.4 · static trace. Marked
-  `TODO(question)` at the site.~~ **Closed 2026-09-04:** the ring is the
-  in-battle message ring doc 07 owns, retired by the text-scroll rule; the
-  network reading was a layout guess [R-PLAT-02 §8].
 - Network future-frame overflow policy, retransmission wrap, and late-join
-  resynchronization · §4.3 · static trace. Out of Nanolathe's implementation
-  scope (no multiplayer), recorded so the spec stays exhaustive.
+  resynchronization · §4.3 · static trace. Multiplayer-only; recorded so the
+  spec stays exhaustive.
 - Whether network transport state and any replay format are serialized; the
   RNG stream is established as not saved and the scheduler block as saved
   · §7.3 · static trace.
 - Positions of the camera-shake magnitude and duration fields in doc 06's
   compiled weapon-record field map; the behavior, the authored keys
-  `shakemagnitude` / `shakeduration`, and the duration × 30 compile-time
+  `shakemagnitude` / `shakeduration` and the duration × 30 compile-time
   conversion are established · §4.4.1, doc 06 · static trace.
 - Whether the briefing wind-display globals have any reader outside the
   front-end region; bounded absence in the recovered image only · §7.3 ·
   static trace over the unrecovered regions.
+- Which battle-entry set-up routine, besides the skirmish/multiplayer entry
+  path and the battle state's exit path, resets the in-battle message ring's
+  two indices · §4.4 [R-PLAT-02 §8], doc 07 · static trace of the ring's
+  index writers.
 - Whether the networked-mode commander placement loop also runs when a saved
   networked game is loaded; the loop is not gated on the save box · §4.4 ·
-  static trace. Multiplayer-only, out of implementation scope.
+  static trace. Multiplayer-only.
 - The converted quantity at the truncation sites [R-DET-01 §1] marks as
   "value not named": a few order-handler, unit-creation and weapon-helper
-  sites whose operand the owning lane's section does not yet spell out (the
-  site list is complete; each operand is a lane question) · §8, docs 04 and
-  06 · static trace of the x87 stack at each site.
+  sites whose operand the owning document does not spell out; the site list
+  itself is complete · §8, docs 04 and 06 · static trace of the x87 stack at
+  each site.
 - The exact per-object CRT draw count of the effect-strip objects and of the
-  fire-effect spawn's fourth draw (lane 03 owns the object bodies; this census
-  records the sites) · §7.5, §7.6 [R-DET-01 §5], doc 03 · static trace.
-- Whether the 391,606 startup CRT draws of the procedural explosion frames
-  ([06 R-WFX-01 §6]) are exact; this census confirms the site and the
-  one-draw-per-pixel rule but did not recount the three strips · §7.5 ·
-  static recount of the strip parameter sets.
+  fire-effect spawn's fourth draw; doc 03 owns the object bodies, this census
+  records the sites · §7.5, §7.6 [R-DET-01 §5], doc 03 · static trace.
+- Whether the 391,606 battle-entry CRT draws of the procedural explosion
+  frames ([06 R-WFX-01 §6]) are exact; the site and the one-draw-per-pixel
+  rule are established, the three strips were not recounted · §7.5 · static
+  recount of the strip parameter sets.
 - Writer and configured value of the rate field scaling the `GetTickCount()`
   animation counter that reaches the authoritative height word of `canhover`
-  units · §7.4, doc 04 §9.1 · static trace. The read itself and its write path
-  into authoritative state are established ([R-MOV-01 §5]), and the
-  consequence is now closed too ([R-MOV-01 §5b]): the leak does change a
-  script-visible band for most stock hovercraft. Only the rate value itself
-  remains open, and no closure depends on it.
+  units · §7.4, doc 04 §9.1 · static trace.
 
 ### Memory and queues
 
@@ -2620,10 +2427,10 @@ document.
   layouts · §6.1, doc 03 · static trace.
 - Overflow and linked-list cycle defence of the **simulation** queue families
   (order chains, path requests, the network window), and whether same-tick
-  inserts are drained immediately or deferred, per family; the two input rings
-  are closed ([R-PLAT-01 §6]) · §6.2, §6.3, docs 04 and 08 · static trace.
-- Remaining save box-level field maps; order/task nodes, feature records,
-  stockpile state, meteor globals, and player economy stock are already
+  inserts are drained immediately or deferred, per family · §6.2, §6.3,
+  docs 04 and 08 · static trace.
+- Remaining save box-level field maps beyond the order/task nodes, feature
+  records, stockpile state, meteor globals and player economy stock already
   established as serialized · §7.3 "Scheduler persistence", doc 08 · static
   trace.
 

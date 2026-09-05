@@ -235,14 +235,6 @@ type Registry struct {
 	NumSkirmishPlayers int // no-op validation: both branches store raw [P0-05]
 }
 
-// ValidateNumSkirmishPlayers is retail no-op: both branches store raw
-// val unchanged [P0-05] SPEC_CONFLICTS.
-func (r *Registry) ValidateNumSkirmishPlayers(val int) int {
-	// No clamping, store raw even if out of 2..10
-	r.NumSkirmishPlayers = val
-	return val
-}
-
 // BankProgress holds BetweenMissions and allied persistence via HAPIBANK
 // Summary/BetweenMissions=1 and Players/Alliances/W/L boxes [P0-05][P1-01].
 // BetweenMissions 1 selects campaign continuation while the other route

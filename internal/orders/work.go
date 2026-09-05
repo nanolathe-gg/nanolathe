@@ -1,4 +1,4 @@
-// Package orders — the work family [04 R-ORD-01 §5]: `Capture`, `Reclaim`,
+// The work family [04 R-ORD-01 §5]: `Capture`, `Reclaim`,
 // `Resurrect`, `HelpBuild`, `RepairUnit`, `RepairUnitNoMove` and `SelfRepair`
 // (the last is tabled with the trivial handlers, [04 R-ORD-01 §2], but its
 // body is a work body and lives here with its siblings).
@@ -37,6 +37,7 @@
 // pretending to a missing seam. (The work adapter carries an unused `Refresh`
 // port from an earlier reading; it is not wired, because a repaint hint has no
 // consumer here.)
+
 package orders
 
 import (
@@ -456,53 +457,6 @@ func inBuildStanceWait(u *units.Unit, n *Node, extra uint32, _ uint32) Code {
 		n.DynamicGate = extra | gateBuildStance
 	}
 	return 2
-}
-
-// workerQuantum is the construction quantum [05 R-WORK-01 §3]. Production
-// handlers receive it through the session-owned Work adapter.
-//
-//	if ((int32)def.maxdamage <= (int32)(int16)target.health) return notCommitted
-//	healTerm     = trunc(1 + (maxdamage       · worker - 1) / buildtime)
-//	resourceTerm = trunc(1 + (buildcostenergy · worker - 1) / buildtime)
-//	each term clamped DOWN to exactly 1 whenever it is at least 1
-//	if (!admitOneResourceEnergy(builder, resourceTerm)) return notCommitted
-//	damagePacket(builder, target, healTerm, kind 10)
-//
-// The admission is the one-resource helper against the BUILDER's buckets, and
-// the heal is the kind-10 early healing path [06 §9.1]. The first compare reads
-// the target's health as a signed 16-bit quantity, which is the retail field
-// width; a target already at or above full health is refused.
-//
-// The two terms are repairTerms below rather than economy.RepairResourceTerm.
-// That helper predates §3 and disagrees with it twice, in the direction that
-// matters: it clamps a term UP to one when the term is below one and leaves a
-// large term alone, where §3's compare is `>= 1` on the already-integerised
-// term ("clamp to exactly 1 whenever positive ... 0 and negative values survive
-// unchanged"), and it returns 1 for a zero `buildtime` where §3 gives 0 ("only
-// eax of the conversion is consumed, so buildtime = 0 yields terms of 0 rather
-// than a large magnitude"). Under the old reading a workertime-300 builder
-// heals ten points a visit instead of §3's "one health point and one energy
-// unit per accepted repair call". The helper has no other caller; WU-18-2
-// reports it for correction or retirement rather than editing a package it does
-// not own.
-//
-// The builder is the unit billed and the target the unit healed — `SelfRepair`
-// passes them the other way round, which is the whole of its difference
-// [05 R-WORK-01 §3].
-//
-// The kind-10 packet is formed at combat's packet boundary. Packet ordering is
-// still owned by the caller's normal combat window [06 §5.1][06 §9.1].
-// repairTerms forms the helper's two terms exactly as [05 R-WORK-01 §3] gives
-// them: widen, multiply by the worker, subtract one, divide by the build time,
-// add one, truncate — then replace the term by exactly one whenever it is at
-// least one, leaving zero and negative terms unchanged. A zero build time makes
-// both terms zero, so the visit requests no energy, is admitted whenever energy
-// carry is non-positive, and applies a zero-magnitude heal [01 §7].
-func workerQuantum(u *units.Unit) int32 {
-	if u == nil || u.Def == nil {
-		return 0
-	}
-	return u.Def.WorkerTime / 30
 }
 
 // The ordinary construction step is owned by internal/construction and reached

@@ -104,3 +104,44 @@ func TestPurgeAndAutoDropWriteNoActiveMarker(t *testing.T) {
 		t.Fatal("the leading-auto drop marked the new head; the drop has no marker write [04 R-ORD-01 §13]")
 	}
 }
+
+// The shared tail append of [04 R-ORD-02 §4] — the patrol-chain setup's
+// return-to-start waypoint and `VTOL_Follow`'s seek-guard hand-off — inherits
+// no flag and writes no marker, on an empty segment as much as on a full one.
+// It used to hand the marker to the record it created when the primary segment
+// had been empty, which made it a second writer of bit 12 and put the next
+// Shift-queued order in front of the waypoint it had just planted.
+func TestTailAppendWritesNoActiveMarker(t *testing.T) {
+	patrolID := Lookup("Patrol")
+	moveID := Lookup("Move_Ground")
+	if patrolID == 0 || moveID == 0 {
+		t.Fatal("descriptor lookup failed")
+	}
+	q := &Queue{}
+
+	// Empty segment: the waypoint lands unmarked, so the segment stays unmarked.
+	first := q.appendTail(patrolID, Node{Param1: 1})
+	if first == nil || len(q.primary) != 1 {
+		t.Fatalf("append left %d records", len(q.primary))
+	}
+	if first.Flags&FlagActive != 0 {
+		t.Fatal("the tail append marked the record it created on an empty segment; the marker has one writer [04 R-ORD-01 §13][04 R-ORD-02 §4]")
+	}
+
+	// And the producer insertion that follows therefore appends at the TAIL,
+	// behind the waypoint, rather than displacing it [04 §3.1].
+	q.Push(moveID, Node{Param1: 2})
+	if len(q.primary) != 2 || q.primary[1].Param1 != 2 {
+		t.Fatalf("insertion after the tail append landed at index %d, want the tail [04 §3.1]", len(q.primary)-1)
+	}
+
+	// A marked segment keeps its marker where it was.
+	marked := q.primary[1]
+	if marked.Flags&FlagActive == 0 {
+		t.Fatal("the producer insertion did not take the marker [04 R-ORD-01 §13]")
+	}
+	q.appendTail(patrolID, Node{Param1: 3})
+	if q.primary[2].Flags&FlagActive != 0 || marked.Flags&FlagActive == 0 {
+		t.Fatal("the tail append moved the active marker [04 R-ORD-02 §4]")
+	}
+}

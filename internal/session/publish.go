@@ -905,18 +905,11 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 		if s.Units != nil {
 			row.LiveUnits = s.Units.LiveCountForPlayer(i)
 		}
-		// The name and the logo byte live on the lobby record; the same
-		// fallback the result rows use applies here, so the panel and the
-		// report screen name a player identically [08 R-CAMP-01 §7].
-		if s.Skirmish.NumPlayers > 0 && i < len(s.Skirmish.Players) {
-			sp := s.Skirmish.Players[i]
-			if row.Name == "" {
-				row.Name = sp.Nickname
-			}
-			if row.Logo == 0 && sp.Color >= 0 && sp.Color < 256 {
-				row.Logo = uint8(sp.Color)
-			}
-		}
+		// The name and the logo byte are the lobby record's, and this build
+		// writes both at registration [08 R-SKIR-01 §2]. The setup-row
+		// fallback that used to stand here answered nothing after a load,
+		// where only the five rule words and the map name come back into
+		// the setup record [08 R-SKIR-01 §2] "Save persistence".
 		published.Players[i] = row
 	}
 }
@@ -1022,11 +1015,10 @@ func radarOwnerPalette(s *Session, owner uint8, ownerKnown bool) (uint8, bool) {
 	if s == nil || !ownerKnown || owner >= 10 {
 		return 0, false
 	}
-	color := s.Skirmish.Players[owner].Color
-	if color < 0 || color > 255 {
-		return 0, false
-	}
-	return uint8(color), true
+	// The colour is the player record's logo byte, which battle entry writes
+	// and the `Player%i` account persists; the setup row this used to read is
+	// empty after a load [08 R-SKIR-01 §2]. See player_record.go.
+	return s.colourForOwner(int(owner))
 }
 
 // featureOwnerSelector reads the plot placer nibble. Selector 10 identifies a

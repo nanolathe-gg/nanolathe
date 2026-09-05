@@ -246,9 +246,12 @@ func TestResult_AlliedPairVsEnemy(t *testing.T) {
 		t.Fatalf("the allied peer must still be alive when victory latches")
 	}
 	res := s.GetResult()
-	// Winner should be team 1 (the surviving local owner's allied group).
-	if res.WinnerTeam != 1 {
-		t.Fatalf("allied pair winner want 1 got %d", res.WinnerTeam)
+	// The winner is the surviving local owner's team, and the ally shares it:
+	// a team is named by the lowest slot in the alliance ROW the row-to-player
+	// conversion built, not by the setup row's ally-group ordinal, which does
+	// not survive a load [08 R-SKIR-01 §2].
+	if res.WinnerTeam != s.teamForOwner(0) || s.teamForOwner(1) != s.teamForOwner(0) {
+		t.Fatalf("allied pair winner want %d (shared with the ally at %d) got %d", s.teamForOwner(0), s.teamForOwner(1), res.WinnerTeam)
 	}
 	if res.Draw {
 		t.Fatalf("expected win not draw")

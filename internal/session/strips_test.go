@@ -378,7 +378,7 @@ func TestSmokeFamilySweepDrawsAndDrift(t *testing.T) {
 	// world unit — and its whole-unit position does not change at all. This
 	// assertion previously read the drift as whole units and so locked a puff
 	// that crossed the map in seconds.
-	if wantX, wantZ := int64(100)<<16|0, int64(200)<<16; p.x.Raw() != wantX+3*8*8 || p.z.Raw() != wantZ+(-2)*8*8 {
+	if wantX, wantZ := int64(100)<<16, int64(200)<<16; p.x.Raw() != wantX+3*8*8 || p.z.Raw() != wantZ+(-2)*8*8 {
 		t.Fatalf("wind drift raw (%d,%d), want (%d,%d)", p.x.Raw(), p.z.Raw(), wantX+3*8*8, wantZ+(-2)*8*8)
 	}
 	if dx, dz := p.x.Raw()-(int64(100)<<16), p.z.Raw()-(int64(200)<<16); dx >= 65536 || dx <= -65536 || dz >= 65536 || dz <= -65536 {

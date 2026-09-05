@@ -157,7 +157,7 @@ func TestHumanBuildMetadataIsStampedAtInputBoundary(t *testing.T) {
 	hf, _ := w.Create(fdef, 0, 0, 0, 0)
 	s := &Session{Units: w, Catalog: cat, LocalOwner: 0}
 	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanMobileBuild, MobileBuild: HumanMobileBuildCommand{Builder: hb, Product: "product", WX: 2 << 16, WY: 7 << 16, WZ: 3 << 16, Queued: true}})
-	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanFactoryBuild, FactoryBuild: HumanFactoryBuildCommand{Builder: hf, Product: "product", Queued: true}})
+	_ = s.EnqueueHumanCommand(HumanCommand{Kind: HumanFactoryBuild, FactoryBuild: HumanFactoryBuildCommand{Builder: hf, Product: "product"}})
 	s.applyHumanCommands(42)
 	// Purge survivorship is the descriptor's static gate bit 2, not the queue
 	// modifier [04 §3.3][04 R-MOV-03 §6]. MobileBuild does not carry it;

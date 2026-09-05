@@ -766,7 +766,7 @@ divergence belongs to [DESIGN_CONTENT_VFS](DESIGN_CONTENT_VFS.md).
 | The presentation random-draw census | `[06 R-WFX-01 §6]` |
 | Where combat's events land in the effect pool and its strips | `[03 R-FX-01 §1]`, `[03 R-FX-02 §1]` |
 | What presentation may read of a projectile, and its shadow anchor | `[03 §5.4]`, `[03 §2.4]` |
-| Evidence basis and correction boundaries for this category | `[06 §14]` |
+| Evidence basis for this category | `[06 §14]` |
 
 ## 7. Not implemented and open
 

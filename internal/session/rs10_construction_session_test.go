@@ -6,18 +6,11 @@ import (
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
-	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
-
-func newRS10Movement(terrain *world.Terrain) *movement.System {
-	grid := movement.NewOccupancyGrid()
-	fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
-	return movement.NewSystem(terrain, fallback, grid)
-}
 
 // Ensure human and AI can construct via ordinary commands after save.
 // This smoke check uses the authored mobile-build queue for both producers.
