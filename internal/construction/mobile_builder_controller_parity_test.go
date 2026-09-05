@@ -56,12 +56,12 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 	// With no published route yet, that same tick's movement visit must not
 	// change the transform; phase 5 publishes the route afterwards [01 §4.4]
 	// [04 §7.3].
-	svc.Pump(builder, 0)
+	pumpApproach(svc, builder, 0)
 	if node.Target != 0 {
 		t.Fatalf("controller %d allocated product %d before approach completed", controller, node.Target)
 	}
-	if node.Phase != uint8(State2) || node.MoveState != orders.MoveEnRoute {
-		t.Fatalf("controller %d approach state=(phase %d, move %d), want state2/en-route", controller, node.Phase, node.MoveState)
+	if node.Phase != uint8(State1) || node.MoveState != orders.MoveEnRoute {
+		t.Fatalf("controller %d approach state=(phase %d, move %d), want the approach phase State1/en-route", controller, node.Phase, node.MoveState)
 	}
 	if !svc.Movement.HasPathRequest(builder.Handle) {
 		t.Fatalf("controller %d did not bind an out-of-range MobileBuild to path search", controller)
@@ -110,7 +110,7 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 	for tick := uint32(1); tick < 2000; tick++ {
 		// Construction runs before movement. Every visit before the mover reaches
 		// the shared range gate must remain product-free [04 R-ORD-01 §5].
-		svc.Pump(builder, tick)
+		pumpApproach(svc, builder, tick)
 		if node.Target != 0 {
 			startTick = int32(tick)
 			if reachedTick < 0 || startTick <= reachedTick {
@@ -141,7 +141,7 @@ func runMobileApproachControllerCase(t *testing.T, controller uint8) mobileAppro
 		if node.Target != 0 {
 			break
 		}
-		if node.Phase != uint8(State2) || node.MoveState != orders.MoveEnRoute {
+		if node.Phase != uint8(State1) || node.MoveState != orders.MoveEnRoute {
 			t.Fatalf("controller %d left approach without a product at tick %d: phase=%d move=%d", controller, tick, node.Phase, node.MoveState)
 		}
 	}
@@ -211,7 +211,7 @@ func TestMobileBuilderInclusiveRangeGate(t *testing.T) {
 		// the limit passes the inclusive compare, retires the approach and
 		// allocates in the same visit.
 		node.Satisfied |= 0x40
-		svc.Pump(builder, 0)
+		pumpApproach(svc, builder, 0)
 		if node.Target == 0 {
 			t.Fatalf("controller %d did not allocate at the inclusive range equality", controller)
 		}
@@ -249,7 +249,7 @@ func TestComputerMobileBuilderObstructionKeepsRetry(t *testing.T) {
 	// [05 R-WORK-01 §13]. The blocked-area budget the test locks is what the
 	// validator's rejection then runs [R-ORDER-02 §1].
 	node.Satisfied |= 0x40
-	svc.Pump(builder, 40)
+	pumpApproach(svc, builder, 40)
 	if node.Target != 0 {
 		t.Fatalf("blocked computer MobileBuild allocated product %d", node.Target)
 	}

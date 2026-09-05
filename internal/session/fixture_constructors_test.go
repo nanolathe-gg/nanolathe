@@ -399,6 +399,12 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 			p.IsObserver = false
 		}
 		p.ControllerState = ctrlState
+		// The row→player conversion's colour and side, as battle entry writes
+		// them [08 R-SKIR-01 §2]; the commander-identity test reads the side
+		// off the player record, so a fixture that skipped this write would
+		// resolve every slot to side 0.
+		p.Side = playerRecordByte(cfg.Players[i].Side)
+		p.Logo = playerRecordByte(cfg.Players[i].Color)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

@@ -214,22 +214,34 @@ func (s *Service) unitFootprintAnchor(u *units.Unit, x, z numeric.Fixed) (cellX,
 // reach [04 §7.2][04 R-PATH-01 §12] — and the work phase has no range test at
 // all. There is no other range term in the row.
 //
-// needsApproach below is therefore no longer the reach expression: it is the
-// approach PHASE. It answers "is this record still waiting on a movement
-// outcome", and it runs the reach expression on exactly one visit of the
-// record's life — the first that delivers `0x40`. Its three arms are §13's
-// three: no outcome yet (keep waiting, the goal is installed and the follower
-// re-requests at its own cadence [04 R-MOV-01 §7]); `0x40` (measure, and on a
-// failure keep the record out of reach so the caller runs the row's abandon arm
-// — status 7 `I can't reach the construction site`); `0x20`/`0x80` (retire, no
-// distance test). ApproachRetired makes that one-shot: once phase 1 has consumed
-// an outcome the reach is never asked again, which is what "the work phase has
-// no range test at all" means for a machine that is visited per tick.
+// needsApproach below is therefore no longer the reach expression, and no
+// longer a wake consumer either: it is the question "is this record still IN
+// the approach phase", and the record's own phase byte is the answer.
 //
-// The wake reaches this file through orders.DeliverApproachWake, called at the
-// activation boundary that drives StepUnit; the seam's own comment records why
-// the pump's OwnedHandler argument could not carry it while the approach parks
-// on a private wake bit instead of `0xE0`.
+// WU-19-225 collapsed the seam that stood between those two sentences. The
+// approach used to park the record on a private wake bit with a one-tick
+// deadline and pull the movement outcome out of the accumulating words through
+// an orders.DeliverApproachWake helper, keeping the "phase 1 has already run"
+// mark in a Go-only Node.ApproachRetired field. Both are gone:
+//
+//   - the approach phase arms `0xE0` on the record's own dynamic gate, so the
+//     pump's step 3 computes the satisfied set, clears the delivered bits out of
+//     both words and hands them to this package's registered handler as the
+//     ordinary `satisfied` argument [04 §3.3][05 R-WORK-01 §13];
+//   - the retirement is a PHASE ADVANCE, State1 to State2, exactly as retail's
+//     phase 0 to phase 1 to work is. That is where retail keeps it and where
+//     the save box carries it: byte `0x09` of the 58-byte order record is the
+//     "handler-private phase/state byte ... handlers own its interpretation"
+//     [08 R-SAVE-ORDER-01]. A builder saved mid-approach now restores at
+//     State1 and re-installs its goal; one saved past the approach restores at
+//     State2 and does not walk again.
+//
+// The three arms of [05 R-WORK-01 §13] live in mobileBuildWakeVisit below, and
+// the phase they advance is this predicate's whole state. The reach expression
+// is consulted on exactly one visit of the record's life — the first `0x40`
+// that reaches State1 — because every later visit is at State2, which is what
+// "the work phase has no range test at all" means for a machine visited per
+// tick [05 R-WORK-01 §12] point 2.
 //
 // Standing on the site is a separate question answered by mustClearSite below.
 // Folding it in here made the state-2 handler ("a true result means return now,
@@ -238,66 +250,140 @@ func (s *Service) unitFootprintAnchor(u *units.Unit, x, z numeric.Fixed) (cellX,
 // falling through to the validator, whose rejection runs the bounded
 // blocked-area budget of [R-ORDER-02 §1].
 func (s *Service) needsApproach(builder *units.Unit, node *orders.Node) bool {
+	if !s.approachArmed(builder, node) {
+		return false
+	}
+	// State0 counts as approaching. It is the mobile row's pre-approach phase —
+	// handleState0 turns it into State1 on the record's first construction visit
+	// and nothing else lives there — so a record that has just been issued, or
+	// one the stop interrupt has restarted, is in its approach from the tick it
+	// reaches the head, not from the tick after. The session's activation
+	// boundary reads this predicate BEFORE that first construction visit, so
+	// excluding State0 would deactivate the mover for exactly one tick and delay
+	// every mobile build by that tick.
+	return State(node.Phase) < State2
+}
+
+// approachArmed reports whether this builder and record carry an approach phase
+// at all — the precondition for arming `0xE0` and for consulting the reach
+// expression [05 R-WORK-01 §13].
+//
+// A construction aircraft has no approach term. [04 R-ORD-02 §2] closes the
+// VTOL_MobileBuild work body with "there is no nanolathe-active stamp and no
+// reach test after arrival: an aircraft that reached its builddistance marker
+// builds from wherever the 150-tick orbit leaves it." Arrival is the air leg's
+// own marker, installed in the order's phase 1 at radius builddistance; the
+// orbit of [04 §10.3] then keeps moving the aircraft, and every station it flies
+// to is a legal place to build from.
+//
+// Applying the ground reach test to an aircraft answered yes on nearly every
+// visit — the orbit sits AT builddistance and swings beyond it between stations,
+// and the builder is a cruise altitude above the site besides — so the record
+// parked in its approach, never created its product, and was abandoned by the
+// blocked-area budget about 400 ticks later. It also submitted a GROUND path
+// request for an aircraft.
+func (s *Service) approachArmed(builder *units.Unit, node *orders.Node) bool {
 	if s == nil || s.Movement == nil || builder == nil || node == nil {
 		return false
 	}
 	if builder.Def == nil || builder.Def.BuildDistance == 0 {
 		return false
 	}
-	// A construction aircraft has no approach term at all. [04 R-ORD-02 §2]
-	// closes the VTOL_MobileBuild work body with "there is no nanolathe-active
-	// stamp and no reach test after arrival: an aircraft that reached its
-	// builddistance marker builds from wherever the 150-tick orbit leaves it."
-	// Arrival is the air leg's own marker, installed in the order's phase 1 at
-	// radius builddistance; the orbit of [04 §10.3] then keeps moving the
-	// aircraft, and every station it flies to is a legal place to build from.
-	//
-	// Applying the ground reach test here answered yes on nearly every visit —
-	// the orbit sits AT builddistance and swings beyond it between stations, and
-	// the builder is a cruise altitude above the site besides. State 2 treats a
-	// true result as "return now, validate nothing", so the record parked at
-	// phase 2, never created its product, and was abandoned by the blocked-area
-	// budget about 400 ticks later. It also called ensureWalk, submitting a
-	// GROUND path request for an aircraft.
-	if builder.Def.CanFly {
-		return false
+	return !builder.Def.CanFly
+}
+
+// handleMobileApproach is the mobile-build row's approach phase, State1
+// [04 R-PATH-01 §13][05 R-WORK-01 §13]. It is what the file header describes:
+// install the rectangle goal on the product footprint, arm the record's dynamic
+// gate to `0xE0`, and wait. There is no deadline — the three movement outcomes
+// are the only thing that dispatches phase 1, and the follower owns the
+// re-request cadence with no retry ceiling [04 R-MOV-01 §7].
+//
+// A builder with no approach term (an aircraft, or a definition with no
+// `builddistance`) advances into the placement phase in this same visit, which
+// is the timing the machine had when State0 wired straight to State2.
+//
+// What the gate replaces is worth naming, because it is the one observable
+// change WU-19-225 makes to a running game: the approach used to arm this
+// build's own `WakeBit2` (`0x4`) with a one-tick deadline. `0x4` is not a free
+// bit — it is the SCRIPT-TOUCHED MARKER of [04 R-ORD-01 §0]
+// (units.PendingScriptTouched, wired by WU-19-148) — so a builder walking to a
+// site swallowed that notification out of its own pending word on every visit,
+// and the expiring deadline left bit 0 standing in the record's satisfied word.
+// Arming `0xE0` leaves both alone. Mobile-build timing is unchanged: a 24000-tick
+// skirmish stamps the same products on the same ticks.
+func (s *Service) handleMobileApproach(builder *units.Unit, node *orders.Node, tick uint32) {
+	if s == nil || builder == nil || node == nil {
+		return
 	}
-	if node.ApproachRetired {
-		// Phase 1 already consumed a movement outcome. "The work phase has no
-		// range test at all — a builder that has started work keeps working at
-		// any distance" [05 R-WORK-01 §12] point 2. The record's wake is dropped
-		// rather than delivered: a later `0x40` belongs to whatever goal the
-		// clear-the-site walk installed, and no phase past the approach reads it.
-		node.ApproachWake = 0
-		return false
+	if !isMobileBuilder(builder) || !s.approachArmed(builder, node) {
+		node.Phase = uint8(State2)
+		node.DynamicGate = 0
+		node.Deadline = -1
+		s.handleMobileState2(builder, node, tick)
+		return
 	}
-	// Delivering the wake here, and only here, is what makes it a VISIT: this
-	// predicate is the single gate the walk submission and the state-2 handler
-	// share, so both see the same outcome and the bits are consumed exactly once
-	// per tick [04 §3.3].
-	switch wake := orders.DeliverApproachWake(builder, node); {
-	case wake&approachWakeNoRoute != 0:
-		// The one and only consultation of the reach expression
-		// [05 R-WORK-01 §13]. Out of reach leaves the record in the approach so
-		// the caller can run the row's abandon arm; in reach retires it.
-		if s.outOfReach(builder, node) {
-			return true
+	s.ensureWalk(builder, node)
+	node.DynamicGate = orders.ApproachWakeGate
+	node.Deadline = -1
+	node.MoveState = orders.MoveEnRoute
+}
+
+// mobileBuildWakeVisit is the row's phase-1 body, dispatched by the order pump
+// through this service's OwnedHandler registration (factory.go,
+// RegisterOrderHandlers). Its `satisfied` argument is the set the pump computed
+// and consumed for this visit [04 §3.3], which for a record parked on `0xE0` is
+// one or more of the three movement outcomes of [04 R-ORD-01 §0].
+//
+// The three arms are [05 R-WORK-01 §13]'s three:
+//
+//   - `0x40` — "an empty route was published away from the goal". This is the
+//     ONE consultation of the reach expression. Out of reach is status 7
+//     `I can't reach the construction site` and abandon (code 8: the pump
+//     unlinks and frees the record and continues its walk [04 §3.3]); in reach
+//     retires the approach.
+//   - `0x20`/`0x80` — arrival at the rectangle border, or a released goal
+//     object. Retire with NO distance test: standing on the footprint's border
+//     IS the reach [04 §7.2][04 R-PATH-01 §12]. This is the border case a
+//     per-visit reach test got wrong — the builder is flush against the site
+//     while the centre-minus-pads value may still exceed `builddistance` for a
+//     large product.
+//   - nothing gated — the record is not dispatched at all; the pump stalls on
+//     the armed gate and this body never runs.
+//
+// It reports `(0, false)` on every arm but the abandon: this service advances
+// its build records from its own per-unit step, and a result code applied to
+// such a record would overwrite the deadline that step owns (OwnedHandler's
+// second form).
+func (s *Service) mobileBuildWakeVisit(builder *units.Unit, node *orders.Node, satisfied uint32, tick uint32) (orders.Code, bool) {
+	if s == nil || builder == nil || node == nil || State(node.Phase) != State1 {
+		return 0, false
+	}
+	if !isMobileBuilder(builder) || !s.approachArmed(builder, node) {
+		return 0, false
+	}
+	wake := satisfied & orders.ApproachWakeGate
+	if wake == 0 {
+		return 0, false
+	}
+	if wake&approachWakeNoRoute != 0 {
+		// The row's abandon arm, with its own two halves: the VISIT's `0x40` and
+		// the reach verdict [04 R-ORD-01 §5][05 R-WORK-01 §2].
+		if text, code := orders.MobileBuildUnreachableVisit(wake, s.outOfReach(builder, node)); code == 8 {
+			s.raiseStatus(builder, statusCant, text)
+			return code, true
 		}
-		node.ApproachRetired = true
-		return false
-	case wake&(approachWakeArrived|approachWakeReleased) != 0:
-		// An arrival at the rectangle border retires the approach with NO
-		// distance test [05 R-WORK-01 §12 point 2][05 R-WORK-01 §13]. This is
-		// the border case the per-visit consultation used to get wrong: the
-		// builder is flush against the site, and the centre-minus-pads value may
-		// still exceed `builddistance` for a large product.
-		node.ApproachRetired = true
-		return false
 	}
-	// No movement outcome yet. The goal is installed and the follower owns the
-	// re-request cadence [04 R-MOV-01 §7]; phase 1 is not dispatched until one
-	// of the three bits arrives [05 R-WORK-01 §13].
-	return true
+	node.Phase = uint8(State2)
+	node.DynamicGate = 0
+	node.Deadline = -1
+	return 0, false
+}
+
+// MobileBuildWakeVisitPublic exposes the phase-1 wake body for the approach
+// regression tests and for session diagnostics [05 R-WORK-01 §13].
+func (s *Service) MobileBuildWakeVisitPublic(builder *units.Unit, node *orders.Node, satisfied uint32, tick uint32) (orders.Code, bool) {
+	return s.mobileBuildWakeVisit(builder, node, satisfied, tick)
 }
 
 // The three movement outcomes of [04 R-ORD-01 §0], named locally so the arms

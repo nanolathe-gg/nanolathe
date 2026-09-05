@@ -48,7 +48,12 @@ func TestWalkToSite(t *testing.T) {
 	}
 	q := orders.QueueForUnit(builder)
 	node := q.Primary()[0]
-	node.Phase = uint8(State2)
+	// State1 is the mobile row's APPROACH phase, parked on retail's `0xE0`
+	// gate; the placement phase is reached by the phase advance the movement
+	// outcome drives [05 R-WORK-01 §13].
+	node.Phase = uint8(State1)
+	node.DynamicGate = orders.ApproachWakeGate
+	node.Deadline = -1
 	grid := movement.NewOccupancyGrid()
 	fallback := movement.Profile{FootPrintX: 1, FootPrintZ: 1}
 	sys := movement.NewSystem(terrain, fallback, grid)
@@ -59,7 +64,7 @@ func TestWalkToSite(t *testing.T) {
 	svc.Movement = sys
 
 	for tick := uint32(0); tick < 500; tick++ {
-		svc.Pump(builder, tick)
+		pumpApproach(svc, builder, tick)
 		if sys.Scheduler != nil {
 			sys.Scheduler.Tick(tick)
 		}

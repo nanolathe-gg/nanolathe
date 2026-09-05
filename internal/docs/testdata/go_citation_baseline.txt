@@ -1,0 +1,51 @@
+# Research citations in Go comments that did not resolve when
+# TestGoCommentCitationsResolve was introduced. One bracket body per line,
+# exactly as it appears between the brackets. The test fails on a citation
+# that is dangling and NOT listed here; it logs entries here that no longer
+# dangle so they can be removed. Fix the comment (or restore the heading the
+# comment cites) and delete the line — this file only shrinks.
+01 "Definition parsers"
+02 "Mirroring"
+02 "Mission-file diagnostics"
+02 "Settings"
+02 "Terrain file"
+02 "Translation table"
+02 "unit limit"
+02 "Unit limit"
+02 "Unit record"
+02 §6.2
+03 "Fixed effect pool"
+03 "Strip storage and lifecycle"
+04 "barriers and flush points"
+04 "unit sweep"
+05 §...
+05 "Cancellation boundaries"
+05 "Capture", "Established fact — ownership transfer"
+05 "control-byte bit roles in the footprint validator"
+05 "Feature sinking"
+05 "R-P0-06 §5 addendum"
+05 "Resurrection", "Established — cost and randomness"
+05 "Resurrection", "Established fact — delay"
+05 "Reverse and deconstruction"
+05 "Silent blocked revalidation before allocation"
+05 "the build-order caption census"
+05 "Weapon per-shot cost"
+05 "which units can request cloak at all"
+07 "in-flight camera move"
+07 "Tab options menu and manual exit"
+08 "AI group vectors"
+08 "Argument parsing..."
+08 "battle versus campaign continuations and timing"
+08 "Campaign camera"
+08 "Common tail (all kinds)"
+08 "Counters"
+08 "Enumeration of campaigns"
+08 "Established AI-facing data"
+08 "Mission list"
+08 "Mission loader, campaign branch (kind 1)"
+08 "Mission-unit creation..."
+08 "Opening a campaign"
+08 "Session kinds"
+08 "The setup record"
+08 §3
+08 §8

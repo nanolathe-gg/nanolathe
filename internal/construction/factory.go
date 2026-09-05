@@ -297,6 +297,15 @@ func (s *Service) RegisterOrderHandlers(q *orders.Queue) {
 	for _, name := range buildRowsDrivenByStepUnit {
 		q.SetExternallyDrivenHandler(orders.Lookup(name))
 	}
+	// The two mobile-build rows have one thing the pump, and only the pump, can
+	// do for them: deliver the approach phase's movement outcome. Their approach
+	// parks on retail's `0xE0` gate, so the pump's satisfied set IS the wake and
+	// it arrives as the ordinary handler argument [04 §3.3][05 R-WORK-01 §13].
+	// The body still reports that it did not advance the record on every arm but
+	// the row's abandon, so StepUnit keeps owning the rest of the machine.
+	for _, name := range []string{MobileBuildOrder, VTOLMobileBuildOrder} {
+		q.SetOwnedHandler(orders.Lookup(name), s.mobileBuildWakeVisit)
+	}
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -2694,8 +2703,13 @@ func (s *Service) handleStop(factory *units.Unit, node *orders.Node, tick uint32
 func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint32) {
 	// Mobile builds skip presentation clear of Goal (site is authoritative) [P0-I05]
 	if isMobileBuild(node.ID) {
-		// Mobile builds go directly to state2 placement, bypassing activate/yard-door [P0-I05]
-		node.Phase = uint8(State2)
+		// Mobile builds bypass the activate/yard-door handshake [P0-I05] and
+		// enter their APPROACH phase, State1. That phase installs the rectangle
+		// goal and arms `0xE0`; the placement phase, State2, is reached by the
+		// phase advance the movement outcome drives [05 R-WORK-01 §13]. Carrying
+		// the approach in the phase byte is what makes it save state: byte `0x09`
+		// of the order record is the handler-private phase [08 R-SAVE-ORDER-01].
+		node.Phase = uint8(State1)
 		node.DynamicGate = 0
 		node.Deadline = -1
 		// The handler's setup path zeroes the blocked-area retry counter on
@@ -2771,13 +2785,10 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 // handleState1 advances only when script has set in-build-stance bit, otherwise waits with wake bit 2 [05].
 func (s *Service) handleState1(factory *units.Unit, node *orders.Node, tick uint32) {
 	if isMobileBuild(node.ID) {
-		// Mobile builds skip yard-door handshake [P0-I05]
-		node.Phase = uint8(State2)
-		node.DynamicGate = 0
-		node.Deadline = -1
-		// The handler's setup path zeroes the blocked-area retry counter on
-		// every (re)arm [04 §3.2][R-ORDER-02 §1].
-		node.Param3 = 0
+		// Mobile builds skip the yard-door handshake [P0-I05]: State1 is their
+		// APPROACH phase instead (approach.go). A builder with no approach term
+		// falls straight through into State2 in this same visit.
+		s.handleMobileApproach(factory, node, tick)
 		return
 	}
 	// State 1 is deliberately a level test with no timeout [05][R-P0-10].
@@ -2983,21 +2994,14 @@ func (s *Service) handleMobileState2(builder *units.Unit, node *orders.Node, tic
 		node.DynamicGate = 0
 		node.Deadline = -1
 	}
-	// Walk-to-site for mobile builders [04 §3.4][05][R-P0-06].
-	// A MOBILE builder ordered to build at a site out of nano range first walks
-	// toward the site until within nanolathe range, then enters state 2.
-	// Range is builder BuildDistance pixels [fmt fbi] via nanoReach; distance is
-	// from QueryNanoPiece piece world pos (or builder pos fallback) to the site
-	// GoalX/Z anchor [R-P0-06]. Factory-class builders (CanMove==false && CanFly==false)
-	// are their own yard and are unaffected.
+	// The approach is behind this phase, not inside it. State1 owns the walk and
+	// the `0xE0` wait; a record only reaches State2 once the movement outcome has
+	// retired it [05 R-WORK-01 §13] (approach.go). What survives here is the
+	// clear-the-site term, which is a placement question rather than a reach one:
+	// the builder's own footprint may still cover a cell of the site it is about
+	// to stamp [04 R-COLL-01 §2]. Factory-class builders are their own yard and
+	// are unaffected.
 	if isMobileBuilder(builder) && s.Movement != nil && builder.Def != nil && builder.Def.BuildDistance != 0 {
-		if s.needsApproach(builder, node) {
-			s.ensureWalk(builder, node)
-			node.DynamicGate = WakeBit2
-			node.Deadline = int32(tick + 1)
-			node.MoveState = orders.MoveEnRoute
-			return
-		}
 		if !s.mustClearSite(builder, node) {
 			// Only stop moving once the builder's own footprint no longer
 			// covers the site; otherwise the walk installed above stays live

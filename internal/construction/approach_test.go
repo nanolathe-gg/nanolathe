@@ -7,6 +7,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/path"
+	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -81,7 +83,14 @@ func approachFixtureAt(t *testing.T, siteCellX, siteCellZ int32, startX, startZ 
 	binding := &orders.QueueBinding{SimRNG: rng.Global.Sim, Lookup: w.Unit}
 	orders.QueueForUnit(builder).SetBinding(binding)
 	node := orders.QueueForUnit(builder).Primary()[0]
-	node.Phase = uint8(State2)
+	// The record is left in the state the approach phase's own first visit
+	// leaves it in: phase State1 — the mobile row's approach — parked on retail's
+	// `0xE0` gate with no deadline [05 R-WORK-01 §13]. Arming the gate here is
+	// what lets a test raise one of the three movement outcomes and have the
+	// ORDER pump deliver it, which since WU-19-225 is the only delivery path.
+	node.Phase = uint8(State1)
+	node.DynamicGate = orders.ApproachWakeGate
+	node.Deadline = -1
 
 	sys := movement.NewSystem(terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
 	sys.SetClasses(cat.Movement)
@@ -91,6 +100,20 @@ func approachFixtureAt(t *testing.T, siteCellX, siteCellZ int32, startX, startZ 
 	svc := NewService(terrain, cat, w, nil)
 	svc.Movement = sys
 	return svc, builder, node
+}
+
+// pumpApproach runs one tick of the two pumps in the session's own order
+// (internal/session/step.go): the ORDER pump first, then this service's per-unit
+// step. The order matters and is the whole point of the pair — a record parked
+// on `0xE0` receives its movement outcome as the registered handler's satisfied
+// argument, and only the order pump computes that set [04 §3.3]
+// [05 R-WORK-01 §13].
+func pumpApproach(svc *Service, builder *units.Unit, tick uint32) {
+	if q := orders.QueueOfUnit(builder); q != nil {
+		svc.RegisterOrderHandlers(q)
+		q.Pump(builder, tick)
+	}
+	svc.Pump(builder, tick)
 }
 
 // TestApproachInstallsTheRectangleGoal locks [04 R-PATH-01 §13]: the approach
@@ -291,34 +314,40 @@ func TestApproachGoalRebindsOverARestoredRoute(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// WU-19-218: where the reach expression is consulted.
+// WU-19-218 / WU-19-225: where the reach expression is consulted, and how the
+// visit that consults it is delivered.
 // ---------------------------------------------------------------------------
 
-// TestReachIsConsultedOnTheNoRouteWakeAlone is the predicate-level lock for
+// TestReachIsConsultedOnTheNoRouteWakeAlone is the body-level lock for
 // [05 R-WORK-01 §12] point 2 and [05 R-WORK-01 §13]: the mobile-build row's
 // phase 1 is dispatched only on `0x20`/`0x40`/`0x80` (gate `0xE0`), the reach
 // expression sits under `satisfied & 0x40`, and there is no other range term in
 // the row. A visit carrying `0x20` or `0x80` without `0x40` skips the expression
 // entirely — standing on the footprint's border IS the reach [04 §7.2].
 //
-// The first case is the one the retired per-visit consultation could not
-// express: a builder comfortably inside `builddistance` is STILL approaching
-// while no movement outcome has been delivered, because retail's phase 1 has
-// not been dispatched at all.
+// The first case is the one a per-visit consultation could not express: a
+// builder comfortably inside `builddistance` is STILL approaching while no
+// movement outcome has been delivered, because retail's phase 1 has not been
+// dispatched at all.
+//
+// The record's PHASE is the state under test, because that is where retail
+// keeps the approach's progress and where the save box carries it (byte `0x09`,
+// [08 R-SAVE-ORDER-01]): State1 is the approach, State2 is placement.
 func TestReachIsConsultedOnTheNoRouteWakeAlone(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		wake    uint32
-		inReach bool
-		want    bool
-		why     string
+		name        string
+		wake        uint32
+		inReach     bool
+		approaching bool
+		abandon     bool
+		why         string
 	}{
-		{"no wake, in reach", 0, true, true, "phase 1 is not dispatched without a movement outcome"},
-		{"no wake, out of reach", 0, false, true, "same: the expression is not what keeps it walking"},
-		{"0x40, out of reach", 0x40, false, true, "the one consultation, and it fails"},
-		{"0x40, in reach", 0x40, true, false, "the one consultation, and it passes"},
-		{"0x20, out of reach", 0x20, false, false, "an arrival retires the approach with NO distance test"},
-		{"0x80, out of reach", 0x80, false, false, "a released goal object likewise carries no distance test"},
+		{"no wake, in reach", 0, true, true, false, "phase 1 is not dispatched without a movement outcome"},
+		{"no wake, out of reach", 0, false, true, false, "same: the expression is not what keeps it walking"},
+		{"0x40, out of reach", 0x40, false, true, true, "the one consultation, and it fails: status 7 and abandon"},
+		{"0x40, in reach", 0x40, true, false, false, "the one consultation, and it passes"},
+		{"0x20, out of reach", 0x20, false, false, false, "an arrival retires the approach with NO distance test"},
+		{"0x80, out of reach", 0x80, false, false, false, "a released goal object likewise carries no distance test"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, builder, node := approachFixture(t, 10, 10)
@@ -334,23 +363,60 @@ func TestReachIsConsultedOnTheNoRouteWakeAlone(t *testing.T) {
 			if got := svc.OutOfReachPublic(builder, node); got == tc.inReach {
 				t.Fatalf("fixture reach = out %v, want in %v", got, tc.inReach)
 			}
-			node.Satisfied |= tc.wake
-			if got := svc.needsApproach(builder, node); got != tc.want {
-				t.Fatalf("needsApproach = %v, want %v (%s)", got, tc.want, tc.why)
+			code, ran := svc.MobileBuildWakeVisitPublic(builder, node, tc.wake, 0)
+			if tc.abandon {
+				if !ran || code != 8 {
+					t.Fatalf("abandon arm = (%d, %v), want (8, true) (%s) [04 R-ORD-01 §5]", code, ran, tc.why)
+				}
+			} else if ran || code != 0 {
+				t.Fatalf("visit = (%d, %v), want (0, false): this row is advanced by its owner's step (%s)", code, ran, tc.why)
 			}
-			// The wake is a visit, not a level: it is consumed out of the
-			// record exactly as the pump consumes a dispatched record's
-			// [04 §3.3], and is left on the record for the row's abandon arm.
-			if node.Satisfied&orders.ApproachWakeGate != 0 {
-				t.Fatalf("wake bits survived the visit: satisfied = %#x", node.Satisfied)
+			if got := svc.needsApproach(builder, node); got != tc.approaching {
+				t.Fatalf("needsApproach = %v, want %v (%s)", got, tc.approaching, tc.why)
 			}
-			if node.ApproachWake != tc.wake {
-				t.Fatalf("delivered wake = %#x, want %#x", node.ApproachWake, tc.wake)
+			wantPhase := State2
+			if tc.approaching {
+				wantPhase = State1
 			}
-			if node.ApproachRetired == tc.want {
-				t.Fatalf("ApproachRetired = %v with needsApproach %v", node.ApproachRetired, tc.want)
+			if State(node.Phase) != wantPhase {
+				t.Fatalf("phase after the visit = %d, want %d (%s) [05 R-WORK-01 §13]", node.Phase, wantPhase, tc.why)
 			}
 		})
+	}
+}
+
+// TestApproachWakeArrivesThroughTheOrderPump is the wiring half of the same
+// contract, and the lock on the seam WU-19-225 removed: nothing in
+// internal/construction reads the accumulating satisfied word. The approach
+// arms `0xE0`, the ORDER pump computes `(record.satisfied | unit.pending) &
+// gate`, consumes the bits out of both words and hands them to this service's
+// registered handler [04 §3.3][05 R-WORK-01 §13].
+func TestApproachWakeArrivesThroughTheOrderPump(t *testing.T) {
+	svc, builder, node := approachFixture(t, 10, 10)
+	cx, cz, fx, fz, ok := svc.SiteCentrePublic(node)
+	if !ok {
+		t.Fatal("queued MobileBuild site has no footprint centre")
+	}
+	limit := int64(builder.Def.BuildDistance) + int64(nanoFootprintPad(builder.Def.FootprintX, builder.Def.FootprintZ)) + int64(nanoFootprintPad(fx, fz))
+	builder.X = cx - numeric.Fixed((limit-10)<<16)
+	builder.Z = cz
+
+	if node.DynamicGate != orders.ApproachWakeGate {
+		t.Fatalf("approach gate = %#x, want 0xE0 [05 R-WORK-01 §13]", node.DynamicGate)
+	}
+	node.Satisfied |= 0x40
+	q := orders.QueueOfUnit(builder)
+	svc.RegisterOrderHandlers(q)
+	q.Pump(builder, 0)
+
+	if State(node.Phase) != State2 {
+		t.Fatalf("phase %d after the pump delivered `0x40` in reach, want State2", node.Phase)
+	}
+	if node.Satisfied&orders.ApproachWakeGate != 0 {
+		t.Fatalf("wake bits survived the dispatch: satisfied = %#x [04 §3.3]", node.Satisfied)
+	}
+	if node.DynamicGate != 0 {
+		t.Fatalf("dispatched record kept gate %#x, want the pump's clear [04 §3.3]", node.DynamicGate)
 	}
 }
 
@@ -404,8 +470,8 @@ func TestBorderArrivalBeginsWorkWithNoDistanceTest(t *testing.T) {
 	}
 
 	node.Satisfied |= 0x20 // the follower's arrival [04 R-PATH-01 §8]
-	svc.Pump(builder, 0)
-	if !node.ApproachRetired {
+	pumpApproach(svc, builder, 0)
+	if State(node.Phase) == State1 {
 		t.Fatal("an arrival at the border must retire the approach [05 R-WORK-01 §13]")
 	}
 	if node.Target == 0 {
@@ -432,8 +498,8 @@ func TestNoRouteWakeInReachBeginsWork(t *testing.T) {
 	}
 
 	node.Satisfied |= 0x40
-	svc.Pump(builder, 0)
-	if !node.ApproachRetired {
+	pumpApproach(svc, builder, 0)
+	if State(node.Phase) == State1 {
 		t.Fatal("a passing reach test on the `0x40` wake retires the approach [05 R-WORK-01 §13]")
 	}
 	if node.Target == 0 {
@@ -441,30 +507,43 @@ func TestNoRouteWakeInReachBeginsWork(t *testing.T) {
 	}
 }
 
-// TestNoRouteWakeOutOfReachReapproaches is the failing half. Construction keeps
-// the record in its approach and leaves the wake on the record; the row's
-// abandon arm — status 7 `I can't reach the construction site` — belongs to the
-// caller that drives this step, and reads exactly those two halves
-// [04 R-ORD-01 §5][05 R-WORK-01 §13].
-func TestNoRouteWakeOutOfReachReapproaches(t *testing.T) {
+// TestNoRouteWakeOutOfReachAbandons is the failing half, and it is the row's own
+// arm: `0x40` with the reach test failing is status 7 `I can't reach the
+// construction site` and code 8 — the pump unlinks and frees the record
+// [04 R-ORD-01 §5][05 R-WORK-01 §13]. Before WU-19-225 this arm lived at the
+// session boundary and read a wake delivered through a seam; it now runs inside
+// the phase-1 body the pump dispatches, so the whole abandon is observable from
+// one pump visit.
+func TestNoRouteWakeOutOfReachAbandons(t *testing.T) {
 	svc, builder, node := approachFixture(t, 10, 10)
 	if !svc.OutOfReachPublic(builder, node) {
 		t.Fatal("fixture must stand outside the reach limit")
 	}
-
-	node.Satisfied |= 0x40
-	svc.Pump(builder, 0)
-	if node.ApproachRetired {
-		t.Fatal("a failing reach test must not retire the approach [05 R-WORK-01 §13]")
+	type caption struct {
+		kind uint8
+		text string
 	}
+	var captions []caption
+	q := orders.QueueOfUnit(builder)
+	binding := q.Binding()
+	binding.Presentation = &orders.PresentationAdapter{
+		Status: func(_ *units.Unit, kind uint8, text string) bool {
+			captions = append(captions, caption{kind: kind, text: text})
+			return true
+		},
+	}
+	q.SetBinding(binding)
+	node.Satisfied |= 0x40
+	pumpApproach(svc, builder, 0)
+
 	if node.Target != 0 {
 		t.Fatal("an out-of-reach builder must not create a product")
 	}
-	if node.ApproachWake&0x40 == 0 {
-		t.Fatalf("the visit's `0x40` must survive on the record for the row's abandon arm: %#x", node.ApproachWake)
+	if q.LenPrimary() != 0 {
+		t.Fatalf("the abandoned record is still queued: %d primary records, want the pump's unlink [04 §3.3]", q.LenPrimary())
 	}
-	if text, code := orders.MobileBuildUnreachableVisit(node.ApproachWake, svc.OutOfReachPublic(builder, node)); code != 8 || text != orders.MobileBuildUnreachableText {
-		t.Fatalf("abandon arm = %q/%d, want %q/8 [04 R-ORD-01 §5]", text, code, orders.MobileBuildUnreachableText)
+	if len(captions) != 1 || captions[0].kind != 7 || captions[0].text != orders.MobileBuildUnreachableText {
+		t.Fatalf("abandon captions = %+v, want one status 7 %q [04 R-ORD-01 §5]", captions, orders.MobileBuildUnreachableText)
 	}
 }
 
@@ -516,7 +595,7 @@ func TestBuilderAlreadyOnTheBorderStartsAtOnce(t *testing.T) {
 
 	const budget = 8
 	for tick := uint32(0); tick < budget; tick++ {
-		svc.Pump(builder, tick)
+		pumpApproach(svc, builder, tick)
 		if sys.Scheduler != nil {
 			sys.Scheduler.Tick(tick)
 		}
@@ -527,6 +606,64 @@ func TestBuilderAlreadyOnTheBorderStartsAtOnce(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("a builder already on the rectangle border did not start within %d ticks: retired=%v wake=%#x satisfied=%#x",
-		budget, node.ApproachRetired, node.ApproachWake, node.Satisfied)
+	t.Fatalf("a builder already on the rectangle border did not start within %d ticks: phase=%d gate=%#x satisfied=%#x",
+		budget, node.Phase, node.DynamicGate, node.Satisfied)
+}
+
+// TestApproachPhaseSurvivesTheSaveRoundTrip is the save half of WU-19-225, and
+// the reason the approach's progress is a PHASE rather than a Go-only field on
+// the record. [08 R-SAVE-ORDER-01] gives the 58-byte order record twelve words
+// and one phase byte — `0x09`, "handler-private phase/state byte ... handlers
+// own its interpretation" — and nothing else. A mark kept beside that record
+// does not survive a save; the phase does.
+//
+// The defect this locks out: a builder saved mid-approach came back with its
+// approach mark cleared and walked its whole route again.
+func TestApproachPhaseSurvivesTheSaveRoundTrip(t *testing.T) {
+	svc, builder, node := approachFixture(t, 10, 10)
+	builder.X, builder.Z = world.CellToWorld(1), world.CellToWorld(1)
+	if !svc.NeedsWalk(builder, node) {
+		t.Fatal("fixture must start inside the approach phase")
+	}
+
+	stable := map[pool.Handle]uint16{builder.Handle: 9}
+	resolve := func(h pool.Handle) (uint16, bool) { id, ok := stable[h]; return id, ok }
+	roundTrip := func() *orders.Node {
+		t.Helper()
+		images, err := orders.RetailOrderImages(builder, resolve)
+		if err != nil {
+			t.Fatalf("project orders: %v", err)
+		}
+		records := make([]save.OrderRecord, len(images))
+		for i, image := range images {
+			records[i] = save.OrderRecord{
+				ParentStableID: image.ParentStableID, Sequence: image.Sequence, Secondary: image.Secondary,
+				Main: image.Main, SubtypeCode: image.SubtypeCode, Subtype: image.Subtype,
+				DescriptorName: image.DescriptorName, BuildTypeName: image.BuildTypeName,
+			}
+		}
+		if err := orders.RetailRestoreOrders(builder, records, map[uint16]pool.Handle{9: builder.Handle}, nil); err != nil {
+			t.Fatalf("restore orders: %v", err)
+		}
+		return orders.QueueOfUnit(builder).Primary()[0]
+	}
+
+	restored := roundTrip()
+	if State(restored.Phase) != State1 {
+		t.Fatalf("restored phase = %d, want the approach phase State1 [08 R-SAVE-ORDER-01]", restored.Phase)
+	}
+	if !svc.NeedsWalk(builder, restored) {
+		t.Fatal("a builder saved mid-approach must resume its walk [04 R-PATH-01 §13]")
+	}
+
+	// A record whose approach has already retired restores past it and does not
+	// walk again: "the work phase has no range test at all" [05 R-WORK-01 §12].
+	restored.Phase = uint8(State2)
+	again := roundTrip()
+	if State(again.Phase) != State2 {
+		t.Fatalf("restored phase = %d, want the placement phase State2", again.Phase)
+	}
+	if svc.needsApproach(builder, again) {
+		t.Fatal("a record saved past its approach must not restart the walk")
+	}
 }

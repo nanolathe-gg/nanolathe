@@ -7,7 +7,7 @@
 // citation mechanically so that never happens silently.
 //
 // The four citation forms are the ones PHASES.md §"Citation convention"
-// defines: `[04 §7.2]` numbered section, `[05 "Heading"]` heading text,
+// defines: `[04 §7.2]` numbered section, `[05 "Player slot"]` heading text,
 // `[08 R-AI-01 §3]` inline addendum anchor, and `[fmt tnt]` format document.
 package docs
 

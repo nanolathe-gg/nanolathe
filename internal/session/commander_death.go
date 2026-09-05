@@ -16,26 +16,49 @@ const (
 	deathmatchCandidateLimit = 9999 // [08 R-SKIR-01 §3]
 )
 
+// sideForOwner is the slot's side as the runtime PLAYER RECORD carries it.
+//
+// [08 R-SKIR-01 §2] "Row-to-player conversion" copies colour and side out of
+// the setup row into the player's lobby record at battle entry, and the
+// placement stamp copies both again; [08 "Player records"] persists the side
+// byte with the rest of the record. The setup record is a pre-battle mirror
+// that a load does NOT rebuild — "Load restores the five [rule words] into the
+// setup record and the map name", and nothing else — so a restored battle's
+// setup rows read back as side 0 for every slot while the player records still
+// carry the truth. Reading the side off the setup row is therefore correct
+// only until the first save/load; the record is the operand.
+func (s *Session) sideForOwner(owner int) (int, bool) {
+	if s == nil || owner < 0 || owner >= 10 {
+		return 0, false
+	}
+	if s.Econ != nil && owner < len(s.Econ.Players) && s.Econ.Players[owner].Exists {
+		return int(s.Econ.Players[owner].Side), true
+	}
+	// A battle always has a player table; a session without one is an unwired
+	// composition, so the setup row is the only thing left to read.
+	if owner < len(s.Skirmish.Players) {
+		return s.Skirmish.Players[owner].Side, true
+	}
+	return 0, false
+}
+
 // isCommanderForOwner applies the retail identity check: the dead definition
 // name must equal the commander's name on the owner's side record. The
 // authored Commander bit is not a substitute for that side identity
 // [08 R-SKIR-01 §3].
 func (s *Session) isCommanderForOwner(u *units.Unit) bool {
-	if s == nil || u == nil || u.Def == nil {
+	if s == nil || u == nil || u.Def == nil || s.Catalog == nil {
 		return false
 	}
-	owner := int(u.Owner)
-	if owner >= 0 && owner < len(s.Skirmish.Players) && s.Catalog != nil {
-		side := s.Skirmish.Players[owner].Side
-		if side >= 0 && side < len(s.Catalog.Sides) && s.Catalog.Sides[side] != nil {
-			name := strings.TrimSpace(s.Catalog.Sides[side].Commander)
-			if name == "" {
-				return false
-			}
-			return strings.EqualFold(strings.TrimSpace(u.Def.UnitName), name)
-		}
+	side, ok := s.sideForOwner(int(u.Owner))
+	if !ok || side < 0 || side >= len(s.Catalog.Sides) || s.Catalog.Sides[side] == nil {
+		return false
 	}
-	return false
+	name := strings.TrimSpace(s.Catalog.Sides[side].Commander)
+	if name == "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(u.Def.UnitName), name)
 }
 
 // processPendingCommanderDeaths is called only after the unit finalizer has
@@ -127,7 +150,14 @@ func (s *Session) respawnLocalCommander() bool {
 			return true // a duplicate death event cannot create a second commander
 		}
 	}
-	def, err := skirmishCommander(s.Catalog, s.Skirmish.Players[owner].Side, owner)
+	// The respawn creates "the side's commander" for the local slot, and the
+	// side is the player record's for the same reason the identity test above
+	// reads it there [08 R-SKIR-01 §3][08 R-SKIR-01 §2].
+	side, ok := s.sideForOwner(owner)
+	if !ok {
+		return false
+	}
+	def, err := skirmishCommander(s.Catalog, side, owner)
 	if err != nil {
 		return false
 	}

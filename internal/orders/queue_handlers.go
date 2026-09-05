@@ -124,42 +124,18 @@ func externallyDriven(*units.Unit, *Node, uint32, uint32) (Code, bool) { return 
 // get there"), `0x80` a goal object was released. [05 R-WORK-01 §13] states it
 // for `MobileBuild` by name: phase 0 arms `0xE0`, so phase 1 is dispatched on
 // those three bits and on nothing else.
+//
+// The gate is the WHOLE delivery mechanism, and the owning subsystem arms it on
+// its own record. The pump's step 3 then computes `(record.satisfied |
+// unit.pending) & record.gate`, clears the delivered bits out of both
+// accumulating words and hands the set to the registered handler as its
+// `satisfied` argument [04 §3.3] — the same argument `GetBuilt`'s phase-2 body
+// reads. A handler that reports it did not advance the record (OwnedHandler's
+// second form) still receives that argument, so a state machine stepped from
+// its owner's per-unit pass gets its wake here and nowhere else.
+//
+// Retired with WU-19-225: a `DeliverApproachWake` helper stood below, repeating
+// the pump's own step for a caller because the mobile-build approach parked on
+// a private wake bit with a one-tick deadline instead of on retail's `0xE0`.
+// The approach arms `0xE0` now, so the detour has no reason to exist.
 const ApproachWakeGate uint32 = 0x20 | 0x40 | 0x80
-
-// DeliverApproachWake hands one visit's approach outcome to a record whose body
-// the owning subsystem advances from its own per-unit step, and is the half the
-// externally-driven registration above cannot supply.
-//
-// An OwnedHandler already carries the satisfied set, which is how `GetBuilt`'s
-// phase-2 body chooses its arm, and delivering the mobile-build wake that way
-// would need no new seam at all. The pump reaches an owned registration only
-// through the gate test, though: it computes `(record.satisfied | unit.pending)
-// & record.gate`, and a head whose gate is armed with nothing satisfied stalls
-// before any handler runs [04 §3.3]. This build's mobile-build approach parks
-// the record on its own wake bit with a one-tick deadline rather than on
-// retail's `0xE0`, so the `0x20`/`0x40`/`0x80` a mover raises are never inside
-// that record's satisfied set and the registration is never reached with them.
-// Until the state machine arms `0xE0` itself, the computation is performed here,
-// for the record's real visit boundary, by the caller that drives that machine.
-//
-// What it performs is the pump's own step, restricted to the approach gate: the
-// set is `(record.satisfied | unit.pending) & 0xE0` and the delivered bits are
-// cleared out of BOTH accumulating words, so a wake is consumed once and a level
-// never masquerades as an edge [04 §3.3]. The result is stored on the record for
-// the step that follows in the same slot and returned for the caller's own use.
-func DeliverApproachWake(u *units.Unit, n *Node) uint32 {
-	if n == nil {
-		return 0
-	}
-	var pending uint32
-	if u != nil {
-		pending = u.Pending
-	}
-	wake := (n.Satisfied | pending) & ApproachWakeGate
-	n.Satisfied &^= wake
-	if u != nil {
-		u.Pending &^= wake
-	}
-	n.ApproachWake = wake
-	return wake
-}

@@ -100,24 +100,41 @@ func TestMobileBuildUnreachableVisit(t *testing.T) {
 	}
 }
 
-// TestDeliverApproachWakeIsTheSatisfiedSetComputationAndClear locks the seam
-// that hands a work approach's movement outcome to a state machine running
-// outside this pump. It performs the pump's own step of [04 §3.3] restricted to
-// the approach gate: the set is `(record.satisfied | unit.pending) & 0xE0`, the
-// delivered bits are cleared out of BOTH words, and the result is stored on the
-// record for the step that follows in the same slot.
-func TestDeliverApproachWakeIsTheSatisfiedSetComputationAndClear(t *testing.T) {
+// TestApproachGateDeliversTheWakeThroughTheHandlerArgument locks the delivery
+// path a work approach uses now that its record parks on retail's own gate
+// [05 R-WORK-01 §13]: the owning subsystem arms `0xE0`, and the pump's step 3
+// computes `(record.satisfied | unit.pending) & gate`, clears the delivered bits
+// out of BOTH accumulating words and hands the set to the registered handler as
+// its `satisfied` argument [04 §3.3]. A handler that reports it did not advance
+// the record still receives that argument — that is what retires the seam this
+// test replaces (a `DeliverApproachWake` helper that repeated the computation
+// for a caller outside the pump).
+func TestApproachGateDeliversTheWakeThroughTheHandlerArgument(t *testing.T) {
 	if ApproachWakeGate != 0x20|0x40|0x80 {
 		t.Fatalf("approach gate = %#x, want 0xE0 [05 R-WORK-01 §13]", ApproachWakeGate)
 	}
-	u := &units.Unit{Pending: 0x80 | 0x2}
-	n := &Node{Satisfied: 0x40 | 0x1, Deadline: -1}
-
-	if got := DeliverApproachWake(u, n); got != 0x40|0x80 {
-		t.Fatalf("delivered wake = %#x, want 0xc0", got)
+	id := Lookup("MobileBuild")
+	if id == 0 {
+		t.Fatal("MobileBuild descriptor missing")
 	}
-	if n.ApproachWake != 0x40|0x80 {
-		t.Fatalf("record wake = %#x, want 0xc0", n.ApproachWake)
+	u := &units.Unit{Pending: 0x80 | 0x2}
+	n := &Node{ID: id, Deadline: -1, DynamicGate: ApproachWakeGate, Satisfied: 0x40 | 0x1}
+	q := NewQueueWith([]*Node{n}, nil)
+
+	visits := 0
+	var seen uint32
+	q.SetOwnedHandler(id, func(_ *units.Unit, _ *Node, satisfied uint32, _ uint32) (Code, bool) {
+		visits++
+		seen = satisfied
+		return 0, false
+	})
+
+	q.Pump(u, 7)
+	if visits != 1 {
+		t.Fatalf("armed record was dispatched %d times, want exactly one visit", visits)
+	}
+	if seen != 0x40|0x80 {
+		t.Fatalf("handler satisfied argument = %#x, want 0xc0", seen)
 	}
 	// Bits outside the gate are untouched; delivered bits are consumed, so a
 	// second visit sees an empty set rather than the same edge again.
@@ -127,10 +144,15 @@ func TestDeliverApproachWakeIsTheSatisfiedSetComputationAndClear(t *testing.T) {
 	if u.Pending != 0x2 {
 		t.Fatalf("unit pending = %#x, want the ungated bit 0x2 alone", u.Pending)
 	}
-	if got := DeliverApproachWake(u, n); got != 0 || n.ApproachWake != 0 {
-		t.Fatalf("second visit delivered %#x (record %#x), want 0", got, n.ApproachWake)
+	// The pump clears the dispatched record's gate; a handler that advanced
+	// nothing leaves the record where it was, so the owner re-arms on its own
+	// next step and an unsatisfied gate stalls the head [04 §3.3].
+	if n.DynamicGate != 0 {
+		t.Fatalf("dispatched record kept gate %#x, want the pump's clear", n.DynamicGate)
 	}
-	if DeliverApproachWake(u, nil) != 0 {
-		t.Fatal("a nil record delivers nothing")
+	n.DynamicGate = ApproachWakeGate
+	q.Pump(u, 8)
+	if visits != 1 {
+		t.Fatalf("a re-armed record with nothing satisfied was dispatched again (%d visits)", visits)
 	}
 }

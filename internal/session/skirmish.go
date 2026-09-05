@@ -284,6 +284,17 @@ func (c *SkirmishConfig) ApplyDefaults() {
 	}
 }
 
+// playerRecordByte narrows a setup row's side or colour ordinal to the low byte
+// the player record carries [08 "Player records"]. Both are small ordinals; the
+// guard exists so a hand-built configuration cannot write a negative value into
+// an unsigned field.
+func playerRecordByte(v int) uint8 {
+	if v < 0 || v > 255 {
+		return 0
+	}
+	return uint8(v)
+}
+
 // Validate checks NumPlayers 2..10 and non-empty map per [GAP T14] C8.
 // Retail validation stores the supplied player count unchanged in this path;
 // the player-count range branch is a compiled no-op [P0-05]. We preserve that as no-op for NumPlayers range
@@ -636,6 +647,23 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 			p.IsObserver = false
 		}
 		p.ControllerState = ctrlState
+		// [08 R-SKIR-01 §2] "Row-to-player conversion": a live row "copies
+		// colour and side into the player's lobby record" before registering
+		// the slot, and the placement stamp helper "copies side and colour
+		// again". The PLAYER RECORD, not the setup record, is what the runtime
+		// reads a slot's side from — which is why the save's `Player%i` account
+		// persists the side and logo bytes [08 "Player records"] while a load
+		// restores only the five rule words and the map name into the setup
+		// record [08 R-SKIR-01 §2] "Save persistence".
+		//
+		// This write was missing, so every player record read side 0 / colour
+		// 0. Nothing noticed while the setup record was alive beside it, but a
+		// restored battle has no setup rows: the commander-identity test of
+		// [08 R-SKIR-01 §3] then compared every dead unit against side 0's
+		// commander name, and a CORE player's commander death raised nothing —
+		// no storage-bonus clear, no owner sweep, no elimination.
+		p.Side = playerRecordByte(cfg.Players[i].Side)
+		p.Logo = playerRecordByte(cfg.Players[i].Color)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 	}

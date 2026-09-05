@@ -557,40 +557,24 @@ func (s *Session) stepUnitPhase(tick uint32) {
 						isWalk = true
 					}
 					if isWalk {
-						// [04 R-ORD-01 §5], the `MobileBuild` row's phase 1:
-						// with `0x40` in the satisfied set and the reach test
-						// failing, the approach is over — retail emits status 7
-						// `I can't reach the construction site` and abandons the
-						// record. Without this arm the record re-polled its own
-						// one-tick deadline forever while the follower
-						// re-requested an impossible path every 60 ticks
-						// [04 R-MOV-01 §7], which idled the whole builder.
+						// A mobile builder that still needs to walk — because its
+						// record has not yet retired its approach phase, or
+						// because its own footprint still covers the site — keeps
+						// its goal installed and its mover activated
+						// [04 R-PATH-01 §13][04 R-COLL-01 §2].
 						//
-						// Corrected (WU-19-218). The two halves used to be the
-						// record's ACCUMULATED satisfied word and the constant
-						// true, with `isWalk` standing in for "the reach test
-						// failed". `isWalk` is not that: it is also raised by the
-						// clear-the-site term, which would have abandoned a
-						// builder that had arrived in reach but still covered a
-						// cell of its own site. The halves are now the row's own
-						// two — the VISIT's `0x40` and the reach expression's
-						// verdict [04 R-ORD-01 §5][05 R-WORK-01 §2]. NeedsWalk
-						// above is what delivered that visit: it consumes the
-						// record's `0x20`/`0x40`/`0x80` through
-						// orders.DeliverApproachWake, whose own comment records
-						// why the pump cannot hand the word over here
-						// [04 §3.3][05 R-WORK-01 §13].
-						text, code := orders.MobileBuildUnreachableVisit(active.ApproachWake, s.Build.OutOfReachPublic(u, active))
-						if code == 8 {
-							orders.NotifyStatus(u, 7, text)
-							if q := orders.QueueOfUnit(u); q != nil {
-								q.RemoveHead()
-							}
-							s.Movement.DeactivateMove(h)
-						} else {
-							s.Build.EnsureWalkPublic(u, active)
-							active.MoveState = orders.MoveEnRoute
-						}
+						// Corrected (WU-19-225). The row's abandon arm used to
+						// stand here, reading a wake this boundary had itself
+						// delivered through a seam of its own. It belongs to the
+						// row's phase 1, which the order pump above now
+						// dispatches on gate `0xE0`: status 7 `I can't reach the
+						// construction site` and result code 8 are emitted from
+						// internal/construction's registered handler, so by the
+						// time this boundary runs the record is already unlinked
+						// and `active` is its successor [04 R-ORD-01 §5]
+						// [05 R-WORK-01 §13][04 §3.3].
+						s.Build.EnsureWalkPublic(u, active)
+						active.MoveState = orders.MoveEnRoute
 					} else if activeMove || activeWork || activeGoal {
 						if activeMove && active.Target != 0 {
 							var target *units.Unit
