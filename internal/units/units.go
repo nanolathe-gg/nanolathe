@@ -1778,19 +1778,20 @@ func WriteSlotDistanceWords(u *Unit, binding *cob.Binding) {
 // origin. A negative identity is the "script answered no piece" case
 // [04 §5.3], which the caller reads as a coincident point.
 //
-// Correction (WU-19-138). This returned the composed Z straight out of the
-// piece composer, which is MODEL space — mirrored in Z against world space, so
-// a piece mounted forward of the unit's origin composes to a NEGATIVE model Z
-// [03 R-RAST-01 §2]. Every other consumer that turns a composed offset into a
-// world point already subtracts it: the muzzle world-position resolver in
-// combat, the build plate and nano emitter queries [03 §5.5], the hover hull,
-// the selection quad. This site did not, so the whole distance word came out
-// with its sign inverted — and because the ballistic `T0` divide is UNSIGNED
-// [06 §6.4], the inverted word became a `T0` of some eleven thousand ticks and
-// the launch's `T0 × gravity` pre-decrement drove the shell about 1400 world
-// units straight down on its first tick. A stock tank's shell exploded
-// underground at its own muzzle on the tick it was born, which is why no tank
-// shot was ever seen in flight.
+// Correction (WU-19-138, re-expressed WU-19-213). This read the composed Z as
+// if it were already world Z. It is not: the composition is MODEL space,
+// mirrored in Z against world space, so a piece mounted forward of the unit's
+// origin composes to a NEGATIVE model Z [03 R-RAST-01 §2]. With the sign
+// inverted the whole distance word came out backwards — and because the
+// ballistic `T0` divide is UNSIGNED [06 §6.4], the inverted word became a `T0`
+// of some eleven thousand ticks and the launch's `T0 × gravity` pre-decrement
+// drove the shell about 1400 world units straight down on its first tick. A
+// stock tank's shell exploded underground at its own muzzle on the tick it was
+// born, which is why no tank shot was ever seen in flight.
+//
+// The mirror now lives in the locator, which returns the world offset
+// `(x, y, −z)` [03 R-RAST-01 §8]; this site adds it like every other consumer.
+// The world point is the same one WU-19-138 established.
 func composedPieceZ(u *Unit, binding *cob.Binding, piece int32) (numeric.Fixed, bool) {
 	if piece < 0 {
 		return 0, false
@@ -1799,11 +1800,11 @@ func composedPieceZ(u *Unit, binding *cob.Binding, piece int32) (numeric.Fixed, 
 	if !ok {
 		return 0, false
 	}
-	// World Z = unit Z − composed model Z, the same conversion the muzzle
-	// resolver performs [03 R-RAST-01 §2]. The unit term cancels in the caller's
-	// difference; it is kept here so this reads as the one world point retail
-	// builds, not as a bare offset.
-	return u.Z.Sub(origin[2]), true
+	// World Z = unit Z + the locator's Z word, the same addition the muzzle
+	// resolver performs [03 R-RAST-01 §8]. The unit term cancels in the
+	// caller's difference; it is kept here so this reads as the one world point
+	// retail builds, not as a bare offset.
+	return u.Z.Add(origin[2]), true
 }
 
 // CreateWithForcedSlot allocates a unit at the exact forcedSlot for save

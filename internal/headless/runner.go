@@ -226,6 +226,14 @@ func normalizeFreshBattleRequest(request FreshBattleRequest) (ScenarioKind, stri
 		}
 		cfg.MapName = mapName
 		cfg.ApplyDefaults()
+		// ApplyDefaults installs the missing-value default (Medium) on its
+		// first call, then locks the scalar defaults so later callers may
+		// cycle them explicitly [session.SkirmishConfig.ApplyDefaults]. The
+		// requested difficulty is the caller's explicit choice, so it is
+		// written after defaults land, exactly like the two RNG seeds below —
+		// this is the same word the campaign path already threads through
+		// unconditionally via NewMissionWithProgressSeeds.
+		cfg.Difficulty = request.Difficulty
 		cfg.RNGSimSeed = request.SimulationSeed
 		cfg.RNGCrtSeed = request.CRTSeed
 		return kind, mapName, cfg, nil

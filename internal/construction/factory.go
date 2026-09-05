@@ -1552,27 +1552,26 @@ func (s *Service) queryBuildPiecePosition(factory *units.Unit, m *model.Model) (
 	} else {
 		return -1, world.ModelWorldPosition{}, false
 	}
-	// Composed coordinates are MODEL space, and model space is mirrored in Z
-	// against world space: the projection narrows a model-relative vertex as
-	// hi16(-vz) while a unit's own position enters the blit unnegated
-	// [03 R-RAST-01 §2]. A consumer that adds a composed offset to a unit's
-	// world position therefore owes the Z negation, which model.Transform's
-	// note records and leaves to each call site.
+	// ComposePiece is retail's piece locator and hands back the WORLD offset
+	// `(x, y, −z)`; the build plate is that triple added to the factory's own
+	// position with no further sign change [03 R-RAST-01 §8]. The model/world
+	// Z mirror [03 R-RAST-01 §2] is applied once inside the locator, where it
+	// used to be applied per call site.
 	//
-	// That note holds the heading-zero nose mapping as a supported inference
-	// with a probe still pending, and asks not to flip a sign on the note
-	// alone. This site is settled by authored data instead. The exit footprint
-	// has to land on cells the yard releases when it opens — the 'c'/'C'
-	// region, stamped only while closed [04 R-COLL-01 §4] — because the state-2
-	// area test runs with a null self identity and any non-zero ground word
-	// blocks it [04 R-FAC-02 §5]. Measured over the six stock factories at
-	// their authored build angles: unnegated, ARMAP, CORVP and CORAP put the
-	// exit footprint on always-stamped `o` cells, where no product could ever
-	// validate; negated, all six land inside their own released corridor. Only
-	// one sign choice lets the stock models and the stock yard maps agree.
+	// The authored data settles the same sense independently, and the check is
+	// worth keeping: the exit footprint has to land on cells the yard releases
+	// when it opens — the 'c'/'C' region, stamped only while closed
+	// [04 R-COLL-01 §4] — because the state-2 area test runs with a null self
+	// identity and any non-zero ground word blocks it [04 R-FAC-02 §5].
+	// Measured over the six stock factories at their authored build angles:
+	// with the mirror dropped, ARMAP, CORVP and CORAP put the exit footprint
+	// on always-stamped `o` cells, where no product could ever validate; with
+	// it applied, all six land inside their own released corridor. Only one
+	// sign choice lets the stock models and the stock yard maps agree, and it
+	// is the locator's.
 	worldX := factory.X.Add(pos[0])
 	worldY := factory.Y.Add(pos[1])
-	worldZ := factory.Z.Sub(pos[2])
+	worldZ := factory.Z.Add(pos[2])
 	return int(pieceIdx), world.NewModelWorldPosition(worldX, worldY, worldZ), true
 }
 
@@ -1674,26 +1673,23 @@ func (s *Service) QueryNanoPiece(builder *units.Unit) (int32, world.ModelWorldPo
 	} else {
 		return piece, world.ModelWorldPosition{}, false
 	}
-	// Composed coordinates are MODEL space, and model space is mirrored in Z
-	// against world space: the projection narrows a model-relative vertex as
-	// hi16(-vz) while a unit's own position enters the blit unnegated
-	// [03 R-RAST-01 §2]. A consumer that turns a composed offset into a world
-	// point therefore owes the Z negation, exactly as the build-plate query
-	// above already does.
+	// The spray source is the locator's world offset added to the builder's own
+	// position, with no further sign change — the nano case of
+	// [03 R-RAST-01 §8], which closed [03 §5.5]'s Supported inference at the
+	// submission site. ComposePiece applies the model/world Z mirror once, on
+	// its output, exactly as the build-plate query above receives it.
 	//
-	// This site previously added the composed Z. That mirrored the emitter
-	// about the builder's own centre, and because the screen ordinate is
-	// `Z - Y/2`, a Z error of twice the piece's depth offset moves the spray
-	// origin by that many whole pixels down the screen — for the Arm aircraft
-	// plant's beam pieces roughly seventy, which is how a nano piece authored
-	// on top of the building came out spraying from the ground. The negated
-	// form is the only one that puts the origin where the model pass actually
-	// draws that piece: the model path composes the same offset and emits it at
-	// `hi16(-vz)` relative to the unit's blit anchor, and
-	// `WorldToScreen(unit + (x, y, -z))` is precisely that pixel [03 §2.4]
+	// The sense is worth stating in pixels, because an inverted one is visible:
+	// mirroring the emitter about the builder's own centre moves the spray
+	// origin down the screen by twice the piece's depth offset — the screen
+	// ordinate is `Z - Y/2`, so for the Arm aircraft plant's beam pieces that
+	// is roughly seventy whole pixels, and a nano piece authored on top of the
+	// building sprays from the ground. `unit + (x, y, −z)` is the pixel the
+	// model pass actually draws the piece at: it composes the same offset and
+	// emits it at `hi16(-vz)` relative to the unit's blit anchor [03 §2.4]
 	// [03 §2.5]. It also agrees with the build-plate sign that the stock yard
 	// maps settled independently.
-	return piece, world.NewModelWorldPosition(builder.X.Add(pos[0]), builder.Y.Add(pos[1]), builder.Z.Sub(pos[2])), true
+	return piece, world.NewModelWorldPosition(builder.X.Add(pos[0]), builder.Y.Add(pos[1]), builder.Z.Add(pos[2])), true
 }
 
 func (s *Service) emitAcceptedNano(tick uint32, builder, product *units.Unit) {

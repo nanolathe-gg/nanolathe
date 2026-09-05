@@ -196,10 +196,28 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 	return &Binding{Program: program, VM: vm, Model: req.Model, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, CreateInvoked: bridge.CreateInvoked(), Callbacks: bridge, SimulationRNG: req.SimulationRNG, SFXSink: req.SFXSink, SFXVisible: req.SFXVisible, PresentationSink: req.PresentationSink}, nil
 }
 
-// ComposePiece returns the current world-local origin for one COB piece. COB
-// piece indices are not model indices: PieceMap is the link produced by the
-// strict binder. The VM's current piece states are remapped into the immutable
-// model before hierarchy composition [03 §2.4] C21 [04 §4.1].
+// ComposePiece is retail's piece locator [03 R-RAST-01 §8]: the one routine
+// every simulation consumer of a piece position goes through. COB piece
+// indices are not model indices: PieceMap is the link produced by the strict
+// binder. The VM's current piece states are remapped into the immutable model
+// before hierarchy composition [03 §2.4] C21 [04 §4.1].
+//
+// The returned triple is the WORLD offset, `(x, y, −z)` of the model-space
+// composition. Model space is mirrored in Z against world space
+// [03 R-RAST-01 §2], and the locator negates the composed Z once, on output,
+// after the whole chain (the unit's own heading, pitch and bank included) has
+// been composed. A caller forming a world point therefore adds the triple to
+// the unit position with NO further sign change — the weapon muzzle for all
+// three slots [06 §4.1], the nano spray source [03 §5.5], the factory build
+// plate, the carried-cargo hang point and the piece-position COB ports
+// [04 R-COB-03 §2] all do exactly that.
+//
+// The negation lives here and only here. Before WU-19-213 each consumer
+// subtracted the composed Z for itself, which produced the same world points
+// but left five copies of one rule and one caller (the transport hang offset,
+// which reads the Y word alone) exempt for reasons that had to be re-derived
+// at every site. [03 R-RAST-01 §8]'s implementation rule is explicit: compose,
+// negate once, then add.
 func (b *Binding) ComposePiece(cobPiece int, heading, pitch, bank uint16) ([3]numeric.Fixed, bool) {
 	if b == nil || b.Model == nil || b.VM == nil || cobPiece < 0 || cobPiece >= len(b.PieceMap) {
 		return [3]numeric.Fixed{}, false
@@ -215,7 +233,7 @@ func (b *Binding) ComposePiece(cobPiece int, heading, pitch, bank uint16) ([3]nu
 		}
 	}
 	model.FoldRootAngles(states, b.Model.Root, heading, pitch, bank)
-	return model.Compose(b.Model, states, modelPiece).Origin, true
+	return model.Compose(b.Model, states, modelPiece).WorldOffset(), true
 }
 
 // SetSimulationRNG binds a session-owned stream to the production VM and all

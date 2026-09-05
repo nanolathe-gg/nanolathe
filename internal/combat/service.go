@@ -1575,17 +1575,17 @@ func muzzleWorldPosResolved(u *units.Unit, piece int32) (Vec3, bool) {
 		if !ok {
 			return Vec3{}, false
 		}
-		// Composed piece coordinates are model space, which is mirrored in Z
-		// against world space: the model pass narrows a model-relative vertex
-		// as hi16(-vz) while the unit's own position enters the blit
-		// unnegated [03 R-RAST-01 §2]. Every other consumer that turns a
-		// composed offset into a world point already subtracts — the build
-		// plate and nano emitter queries [03 §5.5], the hover hull, and the
-		// selection quad. This site added it, so a muzzle authored forward of
-		// the unit's origin was reflected to the same distance behind it,
-		// which moves both the spawn point and the aim delta the pitch and
-		// yaw solvers are handed [06 §3.3].
-		return Vec3{X: u.X.Add(origin[0]), Y: u.Y.Add(origin[1]), Z: u.Z.Sub(origin[2])}, true
+		// ComposePiece is retail's piece locator: its triple is already the
+		// WORLD offset `(x, y, −z)`, and the muzzle is that triple added to
+		// the unit's own position with no further sign change
+		// [03 R-RAST-01 §8] [06 §4.1]. The model/world Z mirror
+		// [03 R-RAST-01 §2] is the locator's, applied once on its output;
+		// this site used to apply it here instead, and the world point is
+		// unchanged by moving it there. Getting the sense wrong reflects a
+		// muzzle authored forward of the unit's origin to the same distance
+		// behind it, which moves both the spawn point and the aim delta the
+		// pitch and yaw solvers are handed [06 §3.3].
+		return Vec3{X: u.X.Add(origin[0]), Y: u.Y.Add(origin[1]), Z: u.Z.Add(origin[2])}, true
 	}
 	return Vec3{}, false
 }

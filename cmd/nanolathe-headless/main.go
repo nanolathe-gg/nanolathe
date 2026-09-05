@@ -128,7 +128,7 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	flags.StringVar(&request.Root, "root", defaultRoot(), "retail install root (or $NANOLATHE_TA_ROOT)")
 	flags.StringVar(&request.Map, "map", "", "map name without extension")
 	flags.StringVar(&request.Mission, "mission", "", "campaign selector, e.g. camps/Arm Campaign.tdf:MISSION0")
-	flags.IntVar(&request.Difficulty, "difficulty", 1, "campaign difficulty")
+	flags.IntVar(&request.Difficulty, "difficulty", 1, "battle difficulty: 0 easy, 1 medium, 2 hard (skirmish and campaign)")
 	flags.Int64Var(&seed, "seed", -1, "seed for both deterministic streams; negative derives a pair from the clock")
 	flags.Int64Var(&ticks, "ticks", 0, "authoritative tick limit (0 = 18000)")
 	flags.StringVar(&reportPath, "report", "", "JSON report path (default stdout)")
@@ -139,6 +139,9 @@ func parse(args []string, output io.Writer) (headless.Request, string, profileOp
 	}
 	if ticks < 0 || uint64(ticks) > uint64(^uint32(0)) {
 		return request, reportPath, profiles, fmt.Errorf("nanolathe: tick limit is outside the non-negative 32-bit battle boundary")
+	}
+	if request.Difficulty < 0 || request.Difficulty > 2 {
+		return request, reportPath, profiles, fmt.Errorf("nanolathe: difficulty %d is outside the 0..2 battle vocabulary: logical path <command line>, providers searched [none], expected 0 easy, 1 medium, or 2 hard", request.Difficulty)
 	}
 	if seed < 0 {
 		now := time.Now()

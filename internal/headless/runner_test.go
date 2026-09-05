@@ -95,6 +95,31 @@ func syntheticSession(request Request) *session.Session {
 	return sess
 }
 
+// TestSkirmishRequestThreadsDifficultyIntoTheSessionWord locks WU-19-217: a
+// displayless request's Difficulty must reach the battle's difficulty word
+// (`sess.Skirmish.Difficulty`, read by `sessionDifficultyWord` for both the AI
+// profile's plan gate [08 R-AI-01 §12] and the computer player's production
+// discount [05 R-ECO-01 §3]), not only the campaign path's
+// NewMissionWithProgressSeeds call. Skipped when retail assets are absent.
+func TestSkirmishRequestThreadsDifficultyIntoTheSessionWord(t *testing.T) {
+	fs := vfs.New()
+	if err := fs.MountGameDirectory(testsupport.RetailRoot(t)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+
+	battle, err := ComposeFreshBattle(FreshBattleRequest{
+		Kind: ScenarioDirectOTA, Map: "ashap plateau", Difficulty: 2,
+		LocalOwner: -1, SimulationSeed: 7, CRTSeed: 7, FS: fs,
+	})
+	if err != nil {
+		t.Fatalf("ComposeFreshBattle: %v", err)
+	}
+	if battle.Session.Skirmish.Difficulty != 2 {
+		t.Fatalf("session difficulty word = %d, want 2", battle.Session.Skirmish.Difficulty)
+	}
+}
+
 func TestRequestRequiresExactlyOneScenario(t *testing.T) {
 	for _, request := range []Request{{}, {Map: "a", Mission: "b"}} {
 		if _, _, err := scenario(request); err == nil {

@@ -301,6 +301,11 @@ func (s *System) transportFootprintX(target *units.Unit) int16 {
 // The model frame is the unrotated one, so the carrier's own heading, pitch and
 // bank are deliberately not applied. A negative piece index is the root-piece
 // fallback and hangs nothing.
+//
+// This is the one locator caller that never forms a world point: it reads the
+// Y word alone, so the locator's Z negation [03 R-RAST-01 §8] never reaches
+// it and the second negation below is the section's own hang-altitude sign,
+// not the model/world mirror.
 func (s *System) transportHangOffset(u *units.Unit, piece int32) int16 {
 	if piece < 0 {
 		return 0

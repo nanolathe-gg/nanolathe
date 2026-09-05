@@ -121,27 +121,29 @@ func (s *cobPresentationSink) SetCOBPieceMap(pieceMap []int) {
 	s.pieceMap = append(s.pieceMap[:0], pieceMap...)
 }
 
-// effectWorldPoint turns one composed model-space triple into the world point
-// the effect opcode passes to its constructors: the unit's position plus the
+// effectWorldPoint turns one MODEL-space triple into the world point the
+// effect opcode passes to its constructors: the unit's position plus the
 // triple, with the THIRD component subtracted rather than added — the
-// model-Z-versus-world-Z inversion the piece transform applies
-// [04 R-COB-03 §6]. Both clauses of that section use it: the vector types on
-// each transformed vertex, the point types on the piece's cached offset.
+// model-Z-versus-world-Z inversion [03 R-RAST-01 §2] that the effect opcode
+// applies to each of its geometry sources [04 R-COB-03 §6].
 //
-// This is the effect opcode's own traced rule, not model.go's standing
-// ComposePiece question. The other consumers of a composed offset (weapon
-// muzzles, cargo attach, the factory build plate) still add Z unnegated and
-// stay on that open probe; nothing here changes them.
+// Its one caller is now the VECTOR clause of that section, which transforms
+// the piece's own vertices and so holds genuine model-space points. The POINT
+// clause takes the piece origin from the locator, which already applies this
+// same negation once on its own output [03 R-RAST-01 §8], and therefore adds:
+// see pieceWorldPos. The two clauses produce the same world points they did
+// before WU-19-213 — one mirror, applied once, wherever it is applied.
 func effectWorldPoint(u *units.Unit, v [3]numeric.Fixed) [3]numeric.Fixed {
 	return [3]numeric.Fixed{u.X.Add(v[0]), u.Y.Add(v[1]), u.Z.Sub(v[2])}
 }
 
 // pieceWorldPos resolves the world point one COB piece of the sink's source
-// unit contributes to the emit-sfx POINT types — the piece's composed offset
-// carried into world space by effectWorldPoint [04 R-COB-03 §6]
-// [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. Unresolvable pieces (dangling unit,
-// unresolved binding) report false and the caller drops the strip append
-// rather than inventing a position [I9].
+// unit contributes to the emit-sfx POINT types — the piece locator's world
+// offset added to the unit's position [04 R-COB-03 §6] [03 R-RAST-01 §8]
+// [R-STRIP-01 §1 strips 2/7/9][04 §4.4]. The addition carries no sign of its
+// own: ComposePiece returns `(x, y, −z)` already. Unresolvable pieces
+// (dangling unit, unresolved binding) report false and the caller drops the
+// strip append rather than inventing a position [I9].
 func (s *cobPresentationSink) pieceWorldPos(cobPiece int) ([3]numeric.Fixed, bool) {
 	var zero [3]numeric.Fixed
 	if s == nil || s.session == nil || s.session.Units == nil {
@@ -155,7 +157,7 @@ func (s *cobPresentationSink) pieceWorldPos(cobPiece int) ([3]numeric.Fixed, boo
 	if !ok {
 		return zero, false
 	}
-	return effectWorldPoint(u, origin), true
+	return [3]numeric.Fixed{u.X.Add(origin[0]), u.Y.Add(origin[1]), u.Z.Add(origin[2])}, true
 }
 
 // pieceEffectPoints resolves the two world points the emit-sfx VECTOR types

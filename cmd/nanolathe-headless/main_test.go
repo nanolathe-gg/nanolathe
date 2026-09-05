@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/headless"
@@ -18,6 +19,23 @@ func TestParseBuildsExplicitSeedPair(t *testing.T) {
 	}
 	if request.SimulationSeed != 23 || request.CRTSeed != 23 || request.TickLimit != 7 {
 		t.Fatalf("request = %+v", request)
+	}
+}
+
+// TestParseRejectsDifficultyOutsideTheVocabulary locks the flag's range check:
+// the battle difficulty word is 0 easy, 1 medium, 2 hard, and nothing else
+// [08 R-AI-01 §12][05 R-ECO-01 §3], so a value outside that range must fail
+// parse with a nanolathe-shaped diagnostic rather than reach the session.
+func TestParseRejectsDifficultyOutsideTheVocabulary(t *testing.T) {
+	for _, difficulty := range []string{"-1", "3"} {
+		if _, _, _, err := parse([]string{"-map", "test", "-difficulty", difficulty}, &bytes.Buffer{}); err == nil {
+			t.Fatalf("parse with -difficulty %s unexpectedly succeeded", difficulty)
+		} else if !strings.HasPrefix(err.Error(), "nanolathe: ") {
+			t.Fatalf("parse with -difficulty %s error = %q, want a nanolathe-shaped diagnostic", difficulty, err)
+		}
+	}
+	if _, _, _, err := parse([]string{"-map", "test", "-difficulty", "2"}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("parse with -difficulty 2 = %v, want no error", err)
 	}
 }
 

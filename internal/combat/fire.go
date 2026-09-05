@@ -90,6 +90,14 @@ type FirePorts struct {
 
 	// MuzzleWorld resolves a piece index to its world point. When it declines,
 	// the shot falls back to Origin.
+	//
+	// The world point is the firing unit's position plus the piece locator's
+	// offset `(x, y, −z)`, added with no further sign change — the muzzle case
+	// of [03 R-RAST-01 §8], which closed [06 §4.1]'s Unknown on the sense. The
+	// burst re-query of [06 §4.3] goes through the same port and inherits it.
+	// A port that mirrors the muzzle in Z moves the projectile's spawn point
+	// AND the aim delta the yaw and pitch solvers are handed [06 §3.3], so the
+	// convention is stated here rather than left to each implementation.
 	MuzzleWorld func(piece int32) (Vec3, bool)
 
 	// TargetWorld resolves a live unit target's world point at creation time.

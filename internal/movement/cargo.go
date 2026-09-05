@@ -294,17 +294,20 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 		if piece := cargo.Attachment.AttachPiece; piece >= 0 {
 			if binding := carrier.COBBinding(); binding != nil {
 				if origin, ok := binding.ComposePiece(piece, carrier.Move.Heading, carrier.Move.Pitch, carrier.Move.Bank); ok {
+					// ComposePiece returns the locator's world offset
+					// `(x, y, −z)`, so the hang point is a plain addition
+					// [03 R-RAST-01 §8]. The model/world Z mirror
+					// [03 R-RAST-01 §2] is applied once inside the locator; it
+					// used to be applied here. The factory build plate resolves
+					// its exit through the same locator, measured against the
+					// stock yard maps (construction.queryBuildPiecePosition),
+					// and the carried branch rewrites the product's position
+					// from the carrier every tick [04 R-FAC-02 §2] — a hang
+					// point on the wrong side of the carrier would drag every
+					// nanoframe straight back off its pad.
 					hangX = hangX.Add(origin[0])
-					// Composed coordinates are model space, which is mirrored in
-					// Z against world space [03 R-RAST-01 §2]; the world hang
-					// point owes that negation. The factory build plate resolves
-					// its exit with the same negation, measured against the stock
-					// yard maps (construction.queryBuildPiecePosition), and the
-					// carried branch rewrites the product's position from the
-					// carrier every tick [04 R-FAC-02 §2] — an unnegated hang here
-					// would drag every nanoframe straight back off its pad.
 					hangY = hangY.Add(origin[1])
-					hangZ = hangZ.Sub(origin[2])
+					hangZ = hangZ.Add(origin[2])
 				}
 				if binding.VM != nil && piece < len(binding.VM.Pieces) {
 					state := binding.VM.Pieces[piece]
