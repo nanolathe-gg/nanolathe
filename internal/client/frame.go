@@ -216,6 +216,73 @@ func (c *Client) drawEffects(cur *frame.Frame) {
 	c.drawEffectStrip(cur, int8(frame.StripBeam))
 }
 
+// fogFillSolid, fogFillGray and fogFillChecker are the fog composite's three
+// direct writers. Their rectangle is already clipped to the surface by the
+// caller: x0 and y0 are inclusive, x1 and y1 exclusive.
+//
+// Each takes the row as a slice rather than indexing the framebuffer per pixel,
+// so a full-screen fog composite pays one bounds check per row instead of one
+// per pixel. That is the whole of the difference — the pixels covered and the
+// bytes written are the ones the per-pixel walk wrote [03 §3.3].
+//
+// They are methods rather than inline loops so the test that compares them
+// against that per-pixel walk drives the composer's own code instead of a copy
+// of it that can drift.
+func (c *Client) fogFillSolid(x0, y0, x1, y1 int32) {
+	w := c.width
+	for py := y0; py < y1; py++ {
+		base := int(py) * w
+		row := c.indexed[base+int(x0) : base+int(x1)]
+		for i := range row {
+			row[i] = render.FogDarkPaletteIndex
+		}
+	}
+}
+
+// fogFillGray remaps what is already on the surface through the GRAY TABLE. The
+// table is addressed through a pointer so its 256 bytes are not copied out of
+// the palette on every pixel.
+func (c *Client) fogFillGray(x0, y0, x1, y1 int32) {
+	if c.pal == nil {
+		return
+	}
+	w := c.width
+	gray := &c.pal.Gray
+	for py := y0; py < y1; py++ {
+		base := int(py) * w
+		row := c.indexed[base+int(x0) : base+int(x1)]
+		for i := range row {
+			row[i] = gray[row[i]]
+		}
+	}
+}
+
+// fogFillChecker writes the dark index at the checker positions of
+// [R-RR16-A §2]: screen column x and row y are written when
+// (x + y + parity) & 1 == 1.
+//
+// The row is stepped two columns at a time from the first column that satisfies
+// that test instead of testing every column. Column x0+i is written when
+// (x0 + i + py + parity) & 1 == 1, so the run starts at i = 0 when
+// (x0 + py + parity) is already odd and at i = 1 otherwise. The phase is taken
+// from the absolute screen column x0, not from the offset inside the row, so
+// abutting fog cells share one continuous checker rather than restarting it at
+// every cell boundary.
+func (c *Client) fogFillChecker(x0, y0, x1, y1, parity int32) {
+	w := c.width
+	for py := y0; py < y1; py++ {
+		base := int(py) * w
+		row := c.indexed[base+int(x0) : base+int(x1)]
+		first := 0
+		if (x0+py+parity)&1 != 1 {
+			first = 1
+		}
+		for i := first; i < len(row); i += 2 {
+			row[i] = render.FogDarkPaletteIndex
+		}
+	}
+}
+
 func (c *Client) drawFog(cur *frame.Frame) {
 	ok := cur != nil
 	w := c.width
@@ -238,7 +305,10 @@ func (c *Client) drawFog(cur *frame.Frame) {
 			return
 		}
 		c.ensureFogGAF()
-		c.fogOps = render.BuildFogOpsInto(c.fogOps, c.fogCache, c.cam, c.cam.ViewW, c.cam.ViewH, cur.Fog.W, cur.Fog.H, c.pal, c.ditheredFog)
+		// The window is the composed surface, which is what the per-operation
+		// clip below measures against; a cell outside it clips to nothing, so
+		// leaving it unbuilt paints the same pixels [03 §3.3].
+		c.fogOps = render.BuildFogOpsWindowInto(c.fogOps, c.fogCache, c.cam, int32(w), int32(h), c.pal, c.ditheredFog)
 		ops := c.fogOps
 		for _, op := range ops {
 			x0, y0, x1, y1 := op.ScreenX0, op.ScreenY0, op.ScreenX1, op.ScreenY1
@@ -268,27 +338,14 @@ func (c *Client) drawFog(cur *frame.Frame) {
 			switch op.Kind {
 			case render.FogKindSolidDark:
 				// lo==15 short-circuit: fill the clipped cell with black [03 §3.3].
-				for py := y0; py < y1; py++ {
-					base := int(py)*w + int(x0)
-					for px := x0; px < x1; px++ {
-						c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
-					}
-				}
+				c.fogFillSolid(x0, y0, x1, y1)
 			case render.FogKindGrayRemap:
 				// hi==15 fogged-but-explored: remap existing pixels through the
 				// gray-table LUT; terrain texture is preserved and desaturated
 				// [03 §3.3][03 §4.3.3]. Retail applies the LUT to physical
 				// screen indices; c.indexed holds logical indices and Logical is
 				// identity until animated, so the direct application matches.
-				if c.pal != nil {
-					for py := y0; py < y1; py++ {
-						base := int(py)*w + int(x0)
-						for px := x0; px < x1; px++ {
-							i := base + int(px-x0)
-							c.indexed[i] = c.pal.Gray[c.indexed[i]]
-						}
-					}
-				}
+				c.fogFillGray(x0, y0, x1, y1)
 			case render.FogKindPatterned:
 				// hi==15 dithered checker uses parity (camX+camZ)&1 [03 §3.3].
 				// Retail writes literal palette index 0 (black) at checker
@@ -298,15 +355,7 @@ func (c *Client) drawFog(cur *frame.Frame) {
 				if c.cam != nil {
 					parity = (c.cam.X + c.cam.Z) & 1
 				}
-				for py := y0; py < y1; py++ {
-					base := int(py)*w + int(x0)
-					for px := x0; px < x1; px++ {
-						if (px+py+parity)&1 != 1 {
-							continue
-						}
-						c.indexed[base+int(px-x0)] = render.FogDarkPaletteIndex
-					}
-				}
+				c.fogFillChecker(x0, y0, x1, y1, parity)
 			case render.FogKindGAFCh1:
 				// hi 1..14: Gray family GAF, plain or patterned [03 §3.3].
 				if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
@@ -402,8 +451,23 @@ func (c *Client) convertIndexedToRGBA() {
 		}
 		lut[i] = uint32(e[0]) | uint32(e[1])<<8 | uint32(e[2])<<16 | uint32(a)<<24
 	}
+	// Four source pixels are packed into two 64-bit stores per iteration, with
+	// both slices walked rather than indexed, so the loop halves the store count
+	// and drops the bounds check and the index multiply from every pixel. Under
+	// little-endian packing a 64-bit store of a | b<<32 lays down exactly the
+	// bytes the two 32-bit stores did, in the same order; the tail runs the
+	// single-pixel form for a surface whose pixel count is not a multiple of
+	// four. This is the only full-screen pass on every presented frame, so it is
+	// worth the shape.
 	dst := c.rgba
-	for i, idx := range c.indexed {
+	src := c.indexed
+	for len(src) >= 4 && len(dst) >= 16 {
+		binary.LittleEndian.PutUint64(dst[0:8:8], uint64(lut[src[0]])|uint64(lut[src[1]])<<32)
+		binary.LittleEndian.PutUint64(dst[8:16:16], uint64(lut[src[2]])|uint64(lut[src[3]])<<32)
+		src = src[4:]
+		dst = dst[16:]
+	}
+	for i, idx := range src {
 		binary.LittleEndian.PutUint32(dst[i*4:i*4+4:i*4+4], lut[idx])
 	}
 }

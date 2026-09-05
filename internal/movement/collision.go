@@ -1,4 +1,4 @@
-// Package movement — collision and occupancy [04 §8.2] C18 C22–C25 [P0-12].
+// Collision and occupancy [04 §8.2] C18 C22–C25 [P0-12].
 //
 // # The occupancy authority [04 R-COLL-01 §4][03 §2.2]
 //
@@ -82,6 +82,7 @@
 //	Blocked              mover blocked bit 2 at mover+? [04 §8.2] C23 C24 rewritten by validator result
 //	Dirty                transform dirty at +? [04 §8.2] C23 C24 — marks transform/visibility dirty
 //	HalfBias             packed half-cell bias per instance [04 §8.2] C23 — quantize with signed arithmetic (floorDiv)
+
 package movement
 
 import (

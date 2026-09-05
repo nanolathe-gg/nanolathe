@@ -1,4 +1,4 @@
-// Package cob implements the COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob].
+// The COB VM [04 §4.2] [04 §4.3] [04 §4.6] [fmt cob].
 //
 // Contracts C10–C14 plus the drain/signal piece surface are owned here.
 // Engine ports and callbacks (C15–C19) live in ports.go (WU-06-7); this file
@@ -7,6 +7,7 @@
 // shadow writes, the four-word bounds check around the reserved pop form, and
 // deterministic Go termination for malformed stack/piece access. The unassigned
 // Killed query variant remains an explicit zero-valued divergence in bridge.go.
+
 package cob
 
 import (

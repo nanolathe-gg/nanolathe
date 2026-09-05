@@ -33,11 +33,11 @@ const (
 //
 // The key is also the *whole* height, not half of it; the halved reading came
 // from the anti-aliased vertex path, which doubles the vertex before dividing
-// [03 R-REN-03A §2 "Correction to the key formula"]. The one live key builder
-// is `modelHeightKey` in the client's model composer, which applies this base,
-// the Digger term, and the floor narrowing together; a second, divergent copy
-// of the formula used to live here and has been removed rather than repaired,
-// so there is one site (I11).
+// [03 R-REN-03A §2]. The one live key builder is `modelHeightKey` in the
+// client's model composer, which applies this base, the Digger term, and the
+// floor narrowing together; a second, divergent copy of the formula used to
+// live here and has been removed rather than repaired, so there is one site
+// (I11).
 const NanoframeHeightBias = 50
 
 // NanoframePulse returns the two nanoframe pulse colours for one unit at one

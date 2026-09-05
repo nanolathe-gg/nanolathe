@@ -10,7 +10,7 @@ import "testing"
 // inert Unknown bag like any other unrecognised key, and the byte that
 // actually bounds the resurrection order's one simulation-RNG draw is the
 // feature's ordinary, already-typed `height` field
-// [05 R-FEAT-01 §1][05 "Resurrection", "Established — cost and randomness"].
+// [05 R-FEAT-01 §1][05 "Resurrection"].
 func TestFeatureResurrectionSpreadKeyDoesNotExist(t *testing.T) {
 	body := `[armflash_heap]
 {

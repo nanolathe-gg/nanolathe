@@ -202,9 +202,10 @@ func featureLine(out *Footer, cat *content.Catalog, key string, overlay bool) {
 	// and a feature with both reads "Rock  M:50 E:20". The doubling is
 	// emergent here, which is why the section annotates it only on the build
 	// card, where the same two spaces are visible in that literal
-	// "%s  M:%d E:%d". docs/PLAN_16_PLAYTEST_FIXES.md C5 restates this line
-	// with a single space; research owns behavior and the plan's restatement
-	// is the imprecise one, so do not "fix" this back to one space.
+	// "%s  M:%d E:%d". A retired play-test plan restated this line with a single
+	// space; research owns behavior and that restatement was the imprecise one,
+	// so do not "fix" this back to one space. The composer itself is
+	// DESIGN_INTERFACE_HUD_INPUT "The footer".
 	if !def.Indestructible {
 		metalField, energyField := "", ""
 		if def.Metal != 0 {

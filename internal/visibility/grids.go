@@ -1,5 +1,5 @@
-// Package visibility implements blocky 32-pixel-authoritative LOS [03 §3] [PLAN_05].
 // This file implements C1, C4, C7: grid allocation, bit set, refcount inc/dec, rebuild fills.
+
 package visibility
 
 import (

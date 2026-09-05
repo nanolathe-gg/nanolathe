@@ -1,4 +1,4 @@
-// Package movement — flight integrator [04 §10.1] C26–C30.
+// Flight integrator [04 §10.1] C26–C30.
 //
 // FlightState is the explicit integration surface that retail scatters across
 // the unit record. The orchestrator will unify this with units.Unit once that
@@ -24,6 +24,7 @@
 //	TargetX/Z            command XZ 16.16 [04 §10.1] horizontal accel
 //	TargetVX/VZ          command VXZ 16.16 [04 §10.1]
 //	Dirty                transform-dirty bit set by heading integration when err != 0 [04 §10.1] C30
+
 package movement
 
 import (
@@ -157,9 +158,14 @@ func rotateLeanPair(x, z int32, heading uint16) (int32, int32) {
 // this tick's velocity delta is added, the horizontal pair is rotated by the
 // unit's heading, and each scaled term is divided against the gravity term
 // L = (gravity << 16) / 3277 through atan2, scaled to the 16-bit angle circle
-// and rounded to nearest. Bank takes the negated rotated X, pitch the negated
-// rotated Z. There is no zero guard on L: a map whose gravity word is zero puts
-// the whole quarter turn on the angle, which is what retail computes.
+// and rounded to nearest. BOTH bank and pitch take the negated FIRST rotated
+// component: retail feeds the same rotated X into the two angle calls, and the
+// second rotated component is computed by the shared rotation but never read
+// before the routine returns [04 R-AIR-01 §2]. An earlier version of this
+// routine derived the pitch term from the negated rotated Z; that was wrong,
+// and latent on stock content only because `pitchscale` defaults to 0. There is
+// no zero guard on L: a map whose gravity word is zero puts the whole quarter
+// turn on the angle, which is what retail computes.
 func (s *FlightState) ApplyLean(dvx, dvy, dvz int32) {
 	if s == nil {
 		return
@@ -171,10 +177,12 @@ func (s *FlightState) ApplyLean(dvx, dvy, dvz int32) {
 	s.LeanY += dvy
 	s.LeanZ += dvz
 
-	px, pz := rotateLeanPair(s.LeanX, s.LeanZ, s.Heading)
+	// The second rotated component is computed by the shared rotation and
+	// discarded unread, exactly as retail does [04 R-AIR-01 §2].
+	px, _ := rotateLeanPair(s.LeanX, s.LeanZ, s.Heading)
 	l := (int64(s.Gravity) << 16) / leanGravityDivisor // 64-bit signed divide, truncating [I3]
 	bankTerm := (int64(s.BankScale) * int64(-px)) >> 16
-	pitchTerm := (int64(s.PitchScale) * int64(-pz)) >> 16
+	pitchTerm := (int64(s.PitchScale) * int64(-px)) >> 16
 	s.Bank = numeric.AngleFromAtan2(bankTerm, l).Raw()
 	s.Pitch = numeric.AngleFromAtan2(pitchTerm, l).Raw()
 	if s.Unit != nil {

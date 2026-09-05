@@ -1,4 +1,5 @@
-// Package construction tests for factory lifecycle [PLAN_08 WU-08-5] C16–C19, C21, C22, C24.
+// Factory lifecycle tests [PLAN_08 WU-08-5] C16–C19, C21, C22, C24.
+
 package construction
 
 import (

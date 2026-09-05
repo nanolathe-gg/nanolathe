@@ -9,23 +9,22 @@ import (
 // NotHandled is the result ParseButtonLatch returns when the button name
 // matches none of the chain's eleven tests. Retail writes no latch and plays
 // no cue in that case — the click falls through to whatever the panel
-// handler tries next [07 §9 "Corrected and completed"]. It is the latch
-// byte's zero value, which the dispatcher table never assigns to a matched
-// arm, so `!NotHandled.IsValid()` also holds.
+// handler tries next [07 §9]. It is the latch byte's zero value, which the
+// dispatcher table never assigns to a matched arm, so `!NotHandled.IsValid()`
+// also holds.
 const NotHandled input.Latch = 0
 
 // ParseButtonLatch parses a GUI order-button name into the armed latch byte
 // via the retail button parse chain [07 §9] with gate gating [GAP T22].
 //
 // Chain order is **MOVE → STOP → ATTACK → BLAST → DEFEND → REPAIR → PATROL →
-// RECLAIM → CAPTURE → UNLOAD → LOAD** [07 §9 "Corrected and completed"].
-// MOVE is the first test, not a trailing default, and there is no default at
-// all: a name matching none of the eleven returns NotHandled. The name is
-// matched case-insensitively by substring containment. Writing the parsed
-// value occurs only when gate != 0; otherwise the latch is forced to normal
-// (1) [07 §9]. There is no `PICKUP` compare in retail — only `LOAD` — so a
-// button literally named `PICKUP` (and nothing else in the chain) is
-// NotHandled, not Pickup.
+// RECLAIM → CAPTURE → UNLOAD → LOAD** [07 §9]. MOVE is the first test, not a
+// trailing default, and there is no default at all: a name matching none of
+// the eleven returns NotHandled. The name is matched case-insensitively by
+// substring containment. Writing the parsed value occurs only when gate != 0;
+// otherwise the latch is forced to normal (1) [07 §9]. There is no `PICKUP`
+// compare in retail — only `LOAD` — so a button literally named `PICKUP` (and
+// nothing else in the chain) is NotHandled, not Pickup.
 //
 // Latches 0xB (TELEPORT) and 0xE (MOBILEBUILD) are armed by paths other than
 // the button chain [07 §9] — MOBILEBUILD by the battle-HUD build-button handler

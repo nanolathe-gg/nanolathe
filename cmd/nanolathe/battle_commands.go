@@ -67,7 +67,7 @@ func (b *battleSession) handleHudOrderButton(name string) {
 		b.playUICue(nil, orderButtonCue(latch))
 	}
 	// A name matching none of the chain's tests is not handled: no latch
-	// write, no cue [07 §9 "Corrected and completed"].
+	// write, no cue [07 §9].
 }
 
 func containsStop(s string) bool {

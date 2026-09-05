@@ -168,9 +168,8 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	// byte (already read above) during the order's approach phase, and it is
 	// an approach-point draw, not a placement draw — the earlier "placement
 	// jitter" framing named the wrong phase entirely
-	// [05 "Resurrection", "Established — cost and randomness"][05 R-WORK-01
-	// §7]. Nanolathe therefore carries no `ResurrectSpread` field; `Height`
-	// is the byte that mattered all along.
+	// [05 "Resurrection"][05 R-WORK-01 §7]. Nanolathe therefore carries no
+	// `ResurrectSpread` field; `Height` is the byte that mattered all along.
 
 	// Behaviour flags — integer accessor default 0 consumed as bool, except autoreclaimable defaults 1 [02 "Feature record"].
 	flamable := section.BoolValue("flamable", false)

@@ -10,20 +10,19 @@ import (
 // reference reproduction. It must not silently substitute the repository's
 // convenient retail smoke scenario for the match shown in the two captures.
 //
-// TODO(T25): the reference pair named in docs/P28_OTA_PARITY_LEDGER.md
-// "Pinned baseline" (`Screenshot 2026-08-28 at 15.27.24.png`, retail, and
-// `Screenshot 2026-08-28 at 15.24.35.png`, Nanolathe) does not record the
-// scenario that produced it. Re-examined against the captures themselves on
-// 2026-09-04 (WU-19-174): the two images are demonstrably the *same* scene —
-// the same green map region, the same tree and metal-patch layout, the same
-// 10150 storage ceiling and metal stocks within ~150 of each other — so the
-// operator did drive both engines on one map. But an image records none of
-// the authoritative inputs: the map file, the skirmish/mission configuration,
-// the player rows, the start positions, the RNG seeds and the command
-// sequence are all absent, and the last three cannot in principle be
-// recovered from a picture. Identifying the map from its terrain would
-// therefore still leave this test unable to create the same match state, so
-// this is not a map-matching exercise.
+// TODO(T25): the reference pair the retired P28 parity ledger pinned
+// (`Screenshot 2026-08-28 at 15.27.24.png`, retail, and `Screenshot 2026-08-28
+// at 15.24.35.png`, Nanolathe) does not record the scenario that produced it.
+// Re-examined against the captures themselves on 2026-09-04 (WU-19-174): the
+// two images are demonstrably the *same* scene — the same green map region,
+// the same tree and metal-patch layout, the same 10150 storage ceiling and
+// metal stocks within ~150 of each other — so the operator did drive both
+// engines on one map. But an image records none of the authoritative inputs:
+// the map file, the skirmish/mission configuration, the player rows, the start
+// positions, the RNG seeds and the command sequence are all absent, and the
+// last three cannot in principle be recovered from a picture. Identifying the
+// map from its terrain would therefore still leave this test unable to create
+// the same match state, so this is not a map-matching exercise.
 //
 // What would settle it: one re-recorded reference run whose producer writes
 // the map, the lobby rows, the start positions, the seed and the command log

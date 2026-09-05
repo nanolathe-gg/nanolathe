@@ -1,5 +1,3 @@
-// Package camera implements the orthographic camera and minimap conversions
-// for the Nanolathe client shell [03 §2.5][07 §10].
 package camera
 
 import (
@@ -370,11 +368,10 @@ func NewFromTerrain(terrainWpix, terrainHpix, playRight, playBottom, viewW, view
 //
 // rawDelta is the scroll pass's raw wall-clock delta: thirtieths of a second
 // elapsed since the previous host frame, the same delta the tick budget
-// consumes [07 §10 "Correction — the raw delta is thirtieths of a second"]
-// [01 §4.1]. It is NOT milliseconds; at the default setting byte 32 a delta of
-// 1 is 32 map pixels and the sustained rate is 32*30 = 960 map pixels per
-// second at any frame rate. The 128 cap is a low-frame-rate limiter, not the
-// normal case.
+// consumes [07 §10] [01 §4.1]. It is NOT milliseconds; at the default setting
+// byte 32 a delta of 1 is 32 map pixels and the sustained rate is 32*30 = 960
+// map pixels per second at any frame rate. The 128 cap is a low-frame-rate
+// limiter, not the normal case.
 //
 // The cap is a signed comparison and there is no absolute value: a negative
 // rawDelta (a wrapped host tick count) keeps its sign and scrolls the opposite

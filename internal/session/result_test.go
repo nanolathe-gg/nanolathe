@@ -77,7 +77,8 @@ func TestResult_TwoPlayerHostileCommanderDeath(t *testing.T) {
 	if result := s.Units.FinalizeDeath(poolHandle(h), 0); !result.Freed {
 		t.Fatal("enemy commander was not finalized")
 	}
-	// Evaluate until latched [RS-05][RR-04] 4→-1 over ~150 ticks (once per 30)
+	// Evaluate until latched [RS-05][08 R-TRIG-01 §6] 4→-1 over ~150 ticks
+	// (once per 30)
 	var latched bool
 	for tick := uint32(0); tick < 200; tick++ {
 		if s.EvaluateResult(tick) {

@@ -1,9 +1,10 @@
-// Package combat — stockpile and interceptors per [06 §11] C29.
+// Stockpile and interceptors per [06 §11] C29.
 //
 // WU-09-9 owns stockpile.go. Other combat files own pool, slots, fire, etc.
 // Determinism: stable pool order, no map iteration (I1), fixed-point 16.16 (I2),
 // truncation toward zero where retail does (I3), pool.Projectiles is sole
 // count/dead authority (I5).
+
 package combat
 
 import (
@@ -378,8 +379,9 @@ func IsProjectileClaimed(svc *Service, candidate pool.Handle) bool {
 //
 // The slot store written at acquisition packs the candidate's current position
 // into the interceptor unit's fixed target words [06 §11.2]; rescanning immediately
-// before firing and storing the authoritative reservation link at spawn is handled
-// by AcquireInterceptorTargetForSpawn [06 §11.2].
+// before firing and storing the authoritative reservation link at spawn is the
+// vertical-launch executor's, through TryFire's InterceptorRescan port
+// [06 §11.2][06 §6.6].
 //
 // Returns the candidate handle, its current position (to be stored in slot's
 // fixed target words), and whether a candidate was found.
@@ -428,131 +430,6 @@ func findInterceptorTarget(svc *Service, interceptorPos Vec3, interceptorSide ui
 		return h, curPos, true
 	}
 	return 0, Vec3{}, false
-}
-
-// AcquireInterceptorTargetForSpawn rescans immediately before firing and reserves
-// the authoritative link per [06 §11.2].
-// The interceptor spawner rescans immediately before firing; the final candidate's
-// record pointer stored in the new interceptor's reservation-link field at spawn
-// time is the authoritative reservation, and that store is what later scans test
-// when rejecting candidates already claimed [06 §11.2].
-//
-// On success, it reserves a new interceptor projectile, runs the creation
-// dispatch, writes the reservation link to the candidate, and returns the new
-// handle and candidate handle. If no candidate found, it performs no
-// ammunition/reload/resource mutation per [06 §11.2] C29 (pending shot, no mutation).
-//
-// The record goes through the ordinary creation dispatch of [06 §6.2] rather
-// than a hand-written subset. Which creator that is, is Established for this
-// site by [06 §6.6]: the vertical-launch creator is the one that "retains the
-// unit target and, when the interceptor rescan supplied one, the
-// matched-projectile link", so the interceptor's own missile is a vertical
-// launch. The reference install agrees (I14): all four interceptor-flagged
-// weapons in the retail corpus author `vlaunch` and none authors `ballistic`.
-// The link itself is written after the dispatch, because the common
-// initializer clears it first [06 §4.1].
-//
-// This used to write seven fields by hand and leave the rest of the record to
-// a zero-fill in Service.Reserve, which is gone (WU-19-164): a reservation
-// clears only the dead bit and the retained unit target [06 §4.1]. A partial
-// fill here would have inherited the previous occupant's velocity, angles,
-// expiry, shooter and burst-remaining count — and a stale burst count keeps a
-// record out of the motion dispatch entirely [06 §6.2], so the anti-nuke would
-// never leave the launcher.
-// ports carries the firing unit exactly as it reaches TryFire: the shooter
-// reference and its side byte for the common initializer's real-shooter branch
-// [06 §4.1], and the map's per-tick gravity for the ballistic creator's launch
-// pre-decrement [06 §6.4]. The scan's owner-side operand is that same side byte
-// [06 §11.2] — one launcher, one set of ports.
-func AcquireInterceptorTargetForSpawn(svc *Service, interceptorPos Vec3, coverage int32, interceptorWeapon *content.WeaponDef, slot *Slot, muzzlePos Vec3, tick uint32, weapons map[int32]*content.WeaponDef, ports FirePorts) (newHandle pool.Handle, candidate pool.Handle, ok bool) {
-	if svc == nil || interceptorWeapon == nil || slot == nil {
-		return 0, 0, false
-	}
-	interceptorSide := ports.ShooterSide
-	if !interceptorWeapon.Interceptor {
-		return 0, 0, false // only interceptor-flagged weapon spawner does this rescan [06 §11.2]
-	}
-	if slot.Ammo <= 0 {
-		return 0, 0, false // requires nonzero slot ammunition [06 §11.2]
-	}
-	// A weapon matching none of the six creation predicates makes no projectile
-	// [06 §6.2] C15, and deciding before the reservation keeps the pool
-	// untouched — the same order the ordinary fire path uses.
-	if CreationFamilyForWeapon(interceptorWeapon) == CreationNone {
-		return 0, 0, false
-	}
-	// Rescan immediately before firing [06 §11.2]
-	candHandle, candCurPos, found := FindInterceptorTarget(svc, interceptorPos, interceptorSide, coverage, weapons)
-	if !found {
-		// No candidate before firing leaves shot pending; no ammo/reload/resource mutation [06 §11.2] C29
-		return 0, 0, false
-	}
-	// Reserve interceptor projectile at tail [06 §5.1] [06 §11.2]
-	h, okReserve := svc.Reserve()
-	if !okReserve {
-		// Pool-full: no candidate reservation, no mutation per [06 §11.2] C29 and [06 §4.1] C4
-		return 0, 0, false
-	}
-	idx := int(h) - 1
-	p := &svc.Records[idx]
-
-	// Ownership is read back by the family initializer through InitCommon, so
-	// it is set before dispatch [06 §4.1], [06 §6.1]. The side byte is the
-	// caller's — the interceptor scan's own owner-side operand [06 §11.2].
-	//
-	// The shooter reference beside it, and the shooter's "fired recently"
-	// deadline at `tick + 600`, are the rest of the common initializer's
-	// real-shooter branch [06 §4.1], written here for the same reason TryFire
-	// writes them: the section places both inside the initializer, ahead of the
-	// start sound. Without the reference an interceptor kill was credited to
-	// nobody. A null shooter takes the initializer's other arm — the neutral
-	// side byte 10 and a null reference [06 §4.1] — which is what a fixture
-	// with no unit behind the silo gets.
-	if ports.Shooter != nil {
-		p.Shooter = ports.Shooter.Handle
-		p.ShooterSide = interceptorSide
-		ports.Shooter.RevealDeadline = tick + 600
-	} else {
-		p.Shooter = 0
-		p.ShooterSide = NeutralSide
-	}
-
-	// The aim point is the candidate's CURRENT position — the same value the
-	// acquisition packs into the interceptor unit's fixed target words, which
-	// [06 §11.2] distinguishes from the scan metric (the candidate's stored aim
-	// point). Guidance then tracks the link rather than this point [06 §11.2].
-	aim := candCurPos
-	// Creation dispatch [06 §6.2] C15; the yaw/pitch arguments are the
-	// ballistic creator's alone [06 §6.4], and so is the gravity the ports now
-	// carry — an interceptor authored `ballistic` would take its `T0 × gravity`
-	// launch pre-decrement from the map global rather than from zero
-	// [06 §6.4]. No interceptor-flagged weapon in the retail corpus authors it
-	// (I14), so the operand is threaded for correctness rather than for a shot
-	// that exists today. The dropped creator's two operands are zero for the
-	// same reason: an interceptor is never a dropped weapon [06 §6.2].
-	InitProjectile(p, interceptorWeapon, tick, muzzlePos, aim, 0, 0, 0, nil, slot.DistanceWord, ports.Gravity, 0, 0)
-
-	// The matched-projectile link is stored by the creator AFTER the common
-	// initializer clears it [06 §6.6], [06 §4.1]; it is the authoritative
-	// reservation later scans test [06 §11.2].
-	p.TargetProjectile = candHandle
-	// Stockpile interceptor weapons may also be stockpile-flagged; interceptor launch still decrements ammo and skips reload per stockpile path [06 §11.1]?
-	// If interceptor is stockpile, decrement ammo only on successful spawn per [06 §11.1] C29
-	if interceptorWeapon.Stockpile {
-		slot.Ammo-- // [06 §11.1] only successful spawn decrements ammunition
-		if slot.Ammo < 0 {
-			slot.Ammo = 0
-		}
-	}
-	// The two markers that used to stand here are closed. Dead-candidate
-	// behavior between the aim scan and this rescan is not a question: neither
-	// scan tests the dead bit, so the scans cannot distinguish a dead candidate
-	// from a live one, and "both dead" prevents a shot only through the
-	// coverage and claim state [06 §11.2][06 R-WPN-05 §10]. The
-	// index-versus-pointer anomaly belongs to the multiplayer reconstruction
-	// path, which Nanolathe does not implement; it stays Unknown in the
-	// research and out of scope here [06 §11.2][06 R-WPN-05 §10].
-	return h, candHandle, true
 }
 
 // ---------------------------------------------------------------------------

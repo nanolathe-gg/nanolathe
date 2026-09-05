@@ -1,9 +1,5 @@
-// Package combat is the weapon and projectile pipeline: weapon slots and
-// targeting, aiming and the ballistic solver, the projectile pool and its
-// motion families, impact, damage and death causes, stockpiles and meteors
-// [06 §1] [06 §3] [06 §4] [06 §5] [06 §6] [06 §9] [06 §12].
-//
 // This file: the per-unit weapon service and the projectile phase.
+
 package combat
 
 import (
@@ -1853,12 +1849,28 @@ const DamageFlashTicks int32 = 16
 
 // TickProjectiles is the projectile phase [06 §5]. It advances burst anchors,
 // integrates each motion family, resolves the collision ladder and its impact,
-// and compacts the pool at the tail. The active span is captured at entry, so
-// records appended during the pass wait for the next tick [06 §5.1] [I1].
+// and compacts the pool at the tail. The active span is captured at entry —
+// before the burst advance, not after it — so records appended during the pass,
+// burst clones included, wait for the next tick [06 §4.3] [06 §5.1] [I1]. The
+// tail compactor is the exception: it reads the CURRENT count and so does
+// include them [06 §5.1].
 func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Terrain, windState *world.Wind, featSvc *features.Service, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, simRNG *rng.Simulation, crtRNG *rng.CRT) {
 	if s == nil {
 		return
 	}
+	// The phase's active span is captured ONCE, before anything in the phase
+	// runs, and it bounds BOTH halves of the pass. Retail's phase is a single
+	// ascending walk over that captured count in which each record takes
+	// either the burst branch or the motion branch; splitting it into a burst
+	// pass and a motion pass is only sound while both walk the same span. A
+	// clone appended by the burst advance therefore lands beyond the span and
+	// does not move until the next tick — including the zero-interval case,
+	// where the root emits a clone during its own creation tick and the
+	// captured span still holds that clone still `[06 §4.3]` `[06 §5.1]`
+	// `[01 §6.2]` C11 [I1]. Re-reading the count after the burst advance
+	// stepped every clone one tick early, which shifted each pellet's whole
+	// flight — and its impact — a tick ahead of the contract.
+	entry := s.Count()
 	// DET-01: no global fallback; session must inject simRNG.
 	// ON-04 stable lookup: use once-compiled catalog index, not per-tick map rebuild
 	// A burst anchor is parked at its shooter's muzzle and re-runs the
@@ -1908,7 +1920,6 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		}
 		_ = windState.Scalar // scalar published to wind generators [01 §7.3] I2 allowlist
 	}
-	entry := s.Count()
 	for i := 0; i < entry; i++ {
 		h := pool.Handle(i + 1)
 		p := &s.Records[i]

@@ -1,5 +1,6 @@
-// Package movement implements movement profiles and per-medium passability
-// predicates over the world terrain lattice [04 §6.1][04 §9.1][fmt tnt].
+// Movement profiles and the per-medium passability predicates over the world
+// terrain lattice [04 §6.1][04 §9.1][fmt tnt].
+
 package movement
 
 import (

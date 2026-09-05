@@ -335,7 +335,7 @@ func (c *PostBattleController) Handle(control PostBattleControl, now uint32) boo
 		c.routed = true
 	case PostBattleControlLoadGame, PostBattleControlSaveGame:
 		// The adapter owns the dialog and sends a later typed control. Keeping
-		// the state unchanged matches the modal SAVE UNDER path [08 §8].
+		// the state unchanged matches the modal SAVE UNDER path [08 R-CAMP-01 §8].
 		_ = now
 	}
 	return true

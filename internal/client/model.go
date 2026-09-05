@@ -274,7 +274,7 @@ func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
 // path, which doubles the vertex two steps earlier and divides by two only to
 // undo it; the plain path adds the undivided height. Halving threw away half
 // the depth resolution and roughly doubled how often two faces tie
-// [R-REN-03A §2 "Correction to the key formula"].
+// [03 R-REN-03A §2].
 //
 // The narrowing floors rather than truncating toward zero: retail extracts the
 // high word of the model-relative 16.16 value with an arithmetic shift, not

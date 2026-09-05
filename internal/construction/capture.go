@@ -173,7 +173,7 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 		// captors: each captor runs its own node and timer, and the first to
 		// reach lethal progress transfers; the second arrives to find the latch
 		// its own kill packet set and is refused here
-		// [05 "Capture", "Established fact — ownership transfer"].
+		// [05 "Capture"].
 		return nil, false
 	}
 	if lim, ok := perDefLimit(victim.Def); ok {
@@ -294,7 +294,7 @@ func CheckPerDefLimit(w *units.World, owner uint8, def *content.UnitDef) bool {
 // Capture uses no decay/no cost [05 R-WORK-01 §6]: timer above, progress +2
 // per 2 ticks, first-lethal gate above.
 // Multiple captors run independent nodes; the first to reach lethal progress
-// wins the transfer [05 "Capture", "Established fact — ownership transfer"]
+// wins the transfer [05 "Capture"]
 // — handled by TransferOwnership's Dying check.
 
 // Ensure pool handle type imported for future use.

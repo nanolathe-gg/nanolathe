@@ -41,29 +41,32 @@ func defP1(name string, footX, footZ int32, obj, filename string) *content.Featu
 	return fd
 }
 
-// TestAllocationFailurePolicy locks 0x100 catalog, 0x800 anim slots, WH*0xD grid silent fail [P1-10][P1-15] [P1-I05]
+// TestAllocationFailurePolicy locks the 0x800 anim slots and the WH*0xD grid
+// silent fail [P1-10][P1-15] [P1-I05]. The catalog is NOT one of the pools that
+// can refuse: it is reallocated per record with no fixed cap, and "catalog
+// exhaustion" is not a retail failure mode [05 R-FEAT-01 §1]. This test used to
+// fill 256 records and demand a refusal; CL-6 removed the guard it locked.
 func TestAllocationFailurePolicy(t *testing.T) {
 	w, h := 4, 4
 	terrain := newTestTerrainP1(w, h)
 	sim := rng.SimulationFromState(1)
 	svc := NewService(terrain, &sim, nil, nil)
 
-	// Catalog pool 0x100 silent fail: fill FeatureDefs to 256
-	for i := 0; i < FeatureCatalogLimit; i++ {
+	// A definition past 256 records is admitted, not refused [05 R-FEAT-01 §1].
+	for i := 0; i < 0x100; i++ {
 		fd := defP1("feat"+string(rune('a'+i%26)), 1, 1, "", "")
 		fd.CanonicalKey = content.CanonicalKey("catalog" + string(rune(i)))
 		terrain.FeatureDefs = append(terrain.FeatureDefs, fd)
 	}
-	if len(terrain.FeatureDefs) != FeatureCatalogLimit {
-		t.Fatalf("setup: catalog not filled")
-	}
 	extra := defP1("extra", 1, 1, "", "")
 	extra.CanonicalKey = content.CanonicalKey("extra")
-	// Should fail silent when def not in catalog and catalog full
-	if inst := svc.spawnFeatureAt(0, 0, extra); inst != nil {
-		t.Fatalf("catalog pool exhaustion should silent fail [P1-10][P1-15] 0x100")
+	if inst := svc.spawnFeatureAt(0, 0, extra); inst == nil {
+		t.Fatalf("a 257th definition must be admitted; the catalog has no cap [05 R-FEAT-01 §1]")
 	}
-	// Clear catalog for anim test
+	// Clear catalog and instances for the anim-slot arm.
+	svc.instances = make(map[int]*Instance)
+	terrain.Plot[0].SetFeature(world.PlotFeatureNone)
+	terrain.Plot[0].SetFlagByte(0)
 	terrain.FeatureDefs = []*content.FeatureDef{}
 	// Anim pool 0x800 silent fail: fill instances map to 2048
 	for i := 0; i < FeatureAnimSlots; i++ {

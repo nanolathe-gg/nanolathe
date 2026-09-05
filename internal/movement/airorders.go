@@ -1,4 +1,4 @@
-// Package movement — the air path marker and the air executors that install it
+// The air path marker and the air executors that install it
 // [04 R-AIR-01 §4][04 R-AIR-01 §6][04 R-AIR-01 §7][04 §10.2][04 R-ORD-02 §2].
 //
 // [04 R-AIR-01 §1] establishes that there is exactly one command supply shared
@@ -7,6 +7,7 @@
 // [04 R-AIR-01 §4] — and the executor legs that build one. The producer that
 // consumes it is flightcommand.go; the integrator that consumes the producer's
 // output is flight.go. Neither reads an order record.
+
 package movement
 
 import (

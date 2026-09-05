@@ -473,10 +473,15 @@ the active-span tail and never fills a hole; retirement marks a record dead
 without changing the count `[06 §5.1]` `[01 §6.1]` [I5] [I13].
 
 **C11 — the phase captures its span once.** The projectile phase captures the
-span count once at entry, so a clone appended during the scan waits for the
-next phase; the tail compactor reads the **current** count and therefore does
-include it `[06 §4.3]` `[06 §5.1]` `[01 §6.2]`. See §7 — the phase's capture
-point currently sits after the burst advance, which is an open divergence.
+span count once at entry — **before** the burst advance runs, not after it —
+and that one count bounds both the burst pass and the motion pass, because
+retail's phase is a single ascending walk over the captured span in which each
+record takes either the burst branch or the motion branch. So a clone appended
+during the scan waits for the next phase: it is created on tick *n* and first
+integrates its velocity on tick *n+1*, including the zero-interval case where
+the root emits a clone during its own creation tick. The tail compactor is the
+exception — it reads the **current** count and therefore does include the clone
+`[06 §4.3]` `[06 §5.1]` `[01 §6.2]`.
 
 **C12 — compaction repairs exactly what retail repairs.** `Compact` writes each
 original record's old pool index into its marker field before any copy;
@@ -781,11 +786,15 @@ byte count is expected; the file does not carry one.
 
 Open items the contracts above carry:
 
-* **The projectile phase steps a clone in the tick that created it.** The phase
-  advances burst anchors first and captures its span count afterwards, so a
-  clone appended by that advance falls inside the span and is stepped in the
-  same tick, where C11 and `[06 §4.3]` hold it to the next tick. This is an
-  open divergence from the contract, not a settled reading of it.
+* ~~**The projectile phase steps a clone in the tick that created it.**~~
+  **Closed.** The phase advanced burst anchors first and captured its span
+  count afterwards, so a clone appended by that advance fell inside the span
+  and was stepped in the same tick, where C11 and `[06 §4.3]` hold it to the
+  next tick. The capture now happens before the burst advance and bounds both
+  passes, so a clone spawned in tick *n* first moves in tick *n+1*; the
+  contract text at C11 was the correct reading all along. This changed the
+  simulation hash — every pellet's flight, and so its impact, had been running
+  one tick early.
 * **An out-of-range movement-state operand reaching the reload formula.** The
   health half of the reload plan's original question is closed — health is a
   signed 16-bit field, the heal kind clamps unsigned to the definition's 32-bit

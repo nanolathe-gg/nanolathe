@@ -242,7 +242,7 @@ func (b *battleSession) primeScrollSetting() {
 // simulation timebase of [01 §4.1]. Feeding milliseconds here multiplies the
 // scroll rate by thirty at the source and then pins every frame to the 128-pixel
 // cap, which is defect PT3-11
-// [07 §10 "Correction — the raw delta is thirtieths of a second"].
+// [07 §10].
 //
 // Because the reading is integral, most frames at 60 Hz return 0 and scroll
 // nothing; the sustained rate is scrollByte*30 map pixels per second at any

@@ -4,12 +4,5 @@
 # that is dangling and NOT listed here; it logs entries here that no longer
 # dangle so they can be removed. Fix the comment (or restore the heading the
 # comment cites) and delete the line — this file only shrinks.
-02 §6.2
-05 §...
-05 "Capture", "Established fact — ownership transfer"
-05 "Feature sinking"
-05 "Resurrection", "Established — cost and randomness"
-05 "Resurrection", "Established fact — delay"
-08 "Established AI-facing data"
-08 §3
-08 §8
+#
+# Empty: every research citation in a Go comment resolves (CL-6).

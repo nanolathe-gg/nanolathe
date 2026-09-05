@@ -1,11 +1,6 @@
-// Package features owns live feature instances — the wreckage, rocks, trees
-// and vents that occupy terrain cells — together with their reclaim, burning,
-// reproduction and death-successor behavior [05 "Feature instance and terrain
-// cell"]. Definitions come from internal/content; the plot grid they occupy
-// belongs to internal/world.
-//
 // This file implements the service: instance lifetime, cell occupancy and the
 // per-tick step.
+
 package features
 
 import (
@@ -83,9 +78,16 @@ type BurnWeaponEvent struct {
 	X, Y, Z numeric.Fixed
 }
 
-// Pool limits per [P1-10][P1-15]: catalog 0x100, anim slots 0x800, plot cell 0xD stride.
+// Pool limits per [P1-10][P1-15]: anim slots 0x800, plot cell 0xD stride.
+//
+// There is no catalog limit. A `FeatureCatalogLimit = 0x100` used to stand
+// here, refusing a definition the map did not author once the terrain held 256
+// records. It read doc 05's per-entry RECORD SIZE as a record COUNT; the
+// parser trace states the opposite as Established: "the catalog is a
+// reallocated array — there is no fixed catalog cap; 'catalog exhaustion' is
+// not a retail failure mode" [05 R-FEAT-01 §1]. The real bound is the
+// live-instance arena below.
 const (
-	FeatureCatalogLimit = 0x100 // 256 entries max [P1-10][P1-15]
 	// FeatureAnimSlots is the live-instance arena of [05 R-FEAT-01 §2]: 2048
 	// slots allocated once at map load, handed out by a free list. It is NOT a
 	// cap on how many features a map may carry. Its occupants are exactly two
@@ -744,10 +746,9 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 			return nil
 		}
 	}
-	// Pools 0x100/0x800 silent fail [P1-10][P1-15]: catalog 256, anim slots 2048.
-	if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit && s.featureIndexForDef(def) == world.PlotFeatureNone {
-		return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
-	}
+	// The one pool that can silently refuse a placement is the live-instance
+	// arena of 2048 slots [05 R-FEAT-01 §2]; the catalog itself has no cap
+	// [05 R-FEAT-01 §1].
 	w := int(s.Terrain.CellW)
 	h := int(s.Terrain.CellH)
 	if cx < 0 || cx >= w || cz < 0 || cz >= h {
@@ -759,8 +760,9 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 		// A definition the map did not author is admitted into the terrain's
 		// own record list and takes the next index — the same admission
 		// stampFeatureDef performs, so a successor the map never names can
-		// still be placed [05 R-FEAT-01 §2]. Refusing at FeatureCatalogLimit is
-		// this build's existing behavior and is left exactly as it was.
+		// still be placed [05 R-FEAT-01 §2]. The admission cannot fail: the
+		// catalog is a reallocated array with no fixed cap, and "catalog
+		// exhaustion" is not a retail failure mode [05 R-FEAT-01 §1].
 		//
 		// Two arms stood here, one for an empty record list and one for a
 		// non-empty one. They computed the same index — appending to an empty
@@ -769,21 +771,9 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 		// read as a second, non-retail admission rule where there is only one.
 		// Collapsing them changes no index and no refusal.
 		//
-		// TODO(question): whether FeatureCatalogLimit (0x100) is a retail cap
-		// at all. It was written from doc 05's statement that "feature catalog
-		// entries are 0x100 bytes each ... exhausting the 0x100 catalog ...
-		// causes a silent failure", which reads the per-entry SIZE as a count.
-		// The research-05 pass now on main restates the same finding as: the
-		// live-instance arena holds 2048 slots and "the feature catalog is
-		// reallocated per record with no fixed cap" [05 R-FEAT-01 §1]. If that
-		// correction stands, this refusal and the identical one in
-		// stampFeatureDef are guards against a limit retail does not have.
-		// What would settle it: the catalog allocator's growth behavior, and
-		// which of the two pools the silent placement failure belongs to.
-		// CL-4 is a test cleanup and does not get to decide it.
-		if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit {
-			return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
-		}
+		// CL-4 filed a TODO(question) here asking whether the 0x100 refusal was
+		// a retail cap at all; [05 R-FEAT-01 §1] answers it as Established —
+		// it is not — so the refusal is gone.
 		s.Terrain.FeatureDefs = append(s.Terrain.FeatureDefs, def)
 		featIdx = uint16(len(s.Terrain.FeatureDefs) - 1)
 	}
@@ -1438,9 +1428,8 @@ func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef) bool
 	}
 	idx := featureIndexIn(t, def)
 	if idx == world.PlotFeatureNone {
-		if len(t.FeatureDefs) >= FeatureCatalogLimit {
-			return false // catalog pool 0x100 silent fail [P1-10][P1-15]
-		}
+		// The catalog has no cap: it is reallocated per record and "catalog
+		// exhaustion" is not a retail failure mode [05 R-FEAT-01 §1].
 		t.FeatureDefs = append(t.FeatureDefs, def)
 		idx = uint16(len(t.FeatureDefs) - 1)
 	}

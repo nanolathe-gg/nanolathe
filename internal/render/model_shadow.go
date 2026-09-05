@@ -74,10 +74,10 @@ func ShadowScreenVertex(world [3]numeric.Fixed, groundY numeric.Fixed, camX, cam
 // The comment here previously called this "the established inclusive depth
 // comparison … equal heights coalesce rather than darkening twice [03 §5.3]",
 // attributing it to the shadow blitter. That was the misattribution [03 §5.3]
-// itself records under "Correction": the shadow blitter performs no depth test
-// at all — it blends every non-transparent source pixel through ALP
-// [03 R-REN-03D §4]. The comparison is real, but it belongs to the body/shadow
-// image rasterization, not to the blit.
+// itself records: the shadow blitter performs no depth test at all — it blends
+// every non-transparent source pixel through ALP [03 R-REN-03D §4]. The
+// comparison is real, but it belongs to the body/shadow image rasterization,
+// not to the blit.
 func ShadowDepthVisible(dstDepth, srcDepth, bias int32) bool { return dstDepth <= srcDepth+bias }
 
 // ShadowClipInclusive intersects an integer shadow rectangle with the target
@@ -116,6 +116,6 @@ func ShadowClipInclusive(minX, minY, maxX, maxY, width, height int32) (int32, in
 //     `dst = ALP[0*256 + dst]`, snapping each ground pixel halfway to black. The
 //     SHD darken that the old text was chasing belongs to the submerged-hull
 //     tint, which itself reads a 256-entry BLUE TABLE and not SHD
-//     [03 §5.3 "Correction"][03 R-REN-03A §8][03 R-REN-03D §4].
+//     [03 §5.3][03 R-REN-03A §8][03 R-REN-03D §4].
 //
 // The live tinted blit is the client shadow pass's `tintedCommit`.

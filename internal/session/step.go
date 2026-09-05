@@ -434,7 +434,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			if !visit {
 				return
 			}
-			// unit pre-update (StepPreUpdate) [04 "unit sweep"]
+			// unit pre-update (StepPreUpdate) [04 R-MOV-03 §1]
 			s.Units.StepPreUpdate(h, tick)
 			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04].
 			// Step 3 of [04 R-MOV-03 §1] runs "for an owner of controller 1 or
@@ -729,7 +729,7 @@ func (s *Session) stepPlayerPhase(tick uint32) {
 
 // stepFeatureLifecyclePhase is phase 6 of the authoritative tick [01 §4.4].
 func (s *Session) stepFeatureLifecyclePhase(tick uint32) {
-	// 6 feature lifecycle and reclaim or death processing (burn, wind probes, successor hops; reclaim credits become visible at the next settlement) [01 §4.4][05 "Feature burning"][05 "Feature sinking"][06 §13.1]
+	// 6 feature lifecycle and reclaim or death processing (burn, wind probes, successor hops; reclaim credits become visible at the next settlement) [01 §4.4][05 "Feature burning"][05 "Feature sinking and water interaction"][06 §13.1]
 	if s.Features != nil {
 		s.Features.TickLifecycle(tick)
 	}

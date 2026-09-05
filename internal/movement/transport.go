@@ -1,4 +1,4 @@
-// Package movement — the two air transport executors, `VTOL_Pickup` and
+// The two air transport executors, `VTOL_Pickup` and
 // `VTOL_Unload` [04 §10.2][04 R-AIR-01 §9][04 R-UNIT-06 §3].
 //
 // Both are pump-driven legs in the sense of airorders.go's "pump-driven air
@@ -20,6 +20,7 @@
 // the `becarried` re-arm's purge — is closed by [04 R-AIR-01 §10], which also
 // corrects §10.2's load phase-4 row: that climb-away marker is built and never
 // installed.
+
 package movement
 
 import (

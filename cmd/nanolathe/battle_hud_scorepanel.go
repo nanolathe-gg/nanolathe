@@ -89,7 +89,7 @@ func (h *retailBattleHUD) drawScorePanel(c *client.Client, b *battleSession, cur
 // interface bit is set** — with the bit clear the finalize skips the arm and
 // both arrays stay zero, so a Space-held panel shows steady numbers. That gate
 // is the F4 bit's second visible effect, and it is why nothing armed these
-// arrays before [07 R-HUD-04 §1 "Correction (2026-09-02)"][07 R-CAM-01 §14].
+// arrays before [07 R-HUD-04 §1][07 R-CAM-01 §14].
 //
 // The finalize's own writes are the per-slot kill and loss counters the
 // committed frame carries, so an increment between two committed ticks is one

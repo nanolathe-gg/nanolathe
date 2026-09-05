@@ -149,8 +149,8 @@ type retailBattleHUD struct {
 	// per-slot counters. The kill-credit finalize is the arming site in retail;
 	// the counters it writes are what the committed frame carries, so an
 	// increment between two committed ticks is that finalize having run
-	// [07 R-HUD-04 §1 "Correction (2026-09-02)"][I6]. scoreCountersOK guards
-	// the first frame, whose counters are a baseline and not a kill.
+	// [07 R-HUD-04 §1][I6]. scoreCountersOK guards the first frame, whose
+	// counters are a baseline and not a kill.
 	scorePrevKills  [frame.PlayerRowSlots]int
 	scorePrevLosses [frame.PlayerRowSlots]int
 	scoreCountersOK bool

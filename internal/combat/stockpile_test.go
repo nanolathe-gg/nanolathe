@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func fixedI(v int) numeric.Fixed { return numeric.Fixed(int64(v) * 65536) }
@@ -626,14 +627,16 @@ func TestStockpileVerticalSlice(t *testing.T) {
 	if storedPos.X.Raw() != fixedI(0).Raw() && storedPos.Z.Raw() != fixedI(0).Raw() {
 		// storedPos is candidate's current pos (0,0) [06 §11.2]
 	}
-	// Acquire and launch interceptor: rescans and writes reservation link.
-	muzzle := interceptorPos
-	hAnti, cand, ok := AcquireInterceptorTargetForSpawn(&svc, interceptorPos, antiWeapon.Coverage, antiWeapon, antiSlot, muzzle, 301, weapons, FirePorts{})
+	// Launch the interceptor through the live chain: the per-slot pipeline over
+	// TryFire, with the fire-time rescan bound as the vertical-launch
+	// executor's port [06 §4.4][06 §11.2].
+	cat := interceptorTestCatalog(t, nukeWeapon, antiWeapon)
+	silo := &units.Unit{Owner: 0, X: interceptorPos.X, Z: interceptorPos.Z}
+	hAnti, ok := launchStockpileRound(&svc, antiSlot, 0,
+		Target{Kind: TargetPoint, X: interceptorPos.X, Z: interceptorPos.Z}, 301,
+		FirePorts{Origin: interceptorPos, InterceptorRescan: interceptorRescanPort(&svc, silo, antiWeapon, cat)})
 	if !ok {
-		t.Fatalf("acquire interceptor should succeed [06 §11.2]")
-	}
-	if cand != hNuke {
-		t.Fatalf("acquired candidate %d want nuke %d", cand, hNuke)
+		t.Fatalf("the interceptor launch should succeed [06 §11.2]")
 	}
 	if antiSlot.Ammo != 0 {
 		t.Fatalf("interceptor launch decrements stockpile ammo [06 §11.1], got %d", antiSlot.Ammo)
@@ -710,8 +713,12 @@ func TestStockpilePoolFullCases(t *testing.T) {
 	for svc2.Count() < ProjectileCapacity {
 		svc2.Reserve()
 	}
-	// Now interceptor acquire should fail due to pool-full reservation.
-	_, _, ok2 := AcquireInterceptorTargetForSpawn(&svc2, Vec3{X: fixedI(5), Z: fixedI(5)}, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 500, map[int32]*content.WeaponDef{weaponTargetable.ID: weaponTargetable, interceptor.ID: interceptor}, FirePorts{})
+	// Now the interceptor launch should fail on the pool-full reservation.
+	cat2 := interceptorTestCatalog(t, weaponTargetable, interceptor)
+	silo2 := &units.Unit{Owner: 0, X: fixedI(5), Z: fixedI(5)}
+	_, ok2 := launchStockpileRound(&svc2, interceptorSlot, 0,
+		Target{Kind: TargetPoint, X: fixedI(5), Z: fixedI(5)}, 500,
+		FirePorts{Origin: Vec3{X: fixedI(5), Z: fixedI(5)}, InterceptorRescan: interceptorRescanPort(&svc2, silo2, interceptor, cat2)})
 	if ok2 {
 		t.Fatalf("interceptor pool-full should fail [06 §11.2]")
 	}
@@ -739,9 +746,16 @@ func TestInterceptorTargetDeath(t *testing.T) {
 		t.Fatalf("dead-but-uncompacted nuke must still be selected, got %d ok %v [06 R-WPN-05 §10]", got, ok)
 	}
 	interceptorSlot := &Slot{Weapon: interceptor, Ammo: 1}
-	_, cand, ok2 := AcquireInterceptorTargetForSpawn(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 600, weapons, FirePorts{})
-	if !ok2 || cand != hNuke {
-		t.Fatalf("the fire-time rescan must also reach the dead candidate, got %d ok %v [06 R-WPN-05 §10]", cand, ok2)
+	cat := interceptorTestCatalog(t, nukeWeapon, interceptor)
+	silo := &units.Unit{Owner: 0, X: fixedI(5), Z: fixedI(5)}
+	hAnti, ok2 := launchStockpileRound(&svc, interceptorSlot, 0,
+		Target{Kind: TargetPoint, X: fixedI(5), Z: fixedI(5)}, 600,
+		FirePorts{Origin: Vec3{X: fixedI(5), Z: fixedI(5)}, InterceptorRescan: interceptorRescanPort(&svc, silo, interceptor, cat)})
+	if !ok2 {
+		t.Fatalf("the fire-time rescan must also reach the dead candidate [06 R-WPN-05 §10]")
+	}
+	if cand := svc.Records[int(hAnti)-1].TargetProjectile; cand != hNuke {
+		t.Fatalf("the interceptor's reservation link is %d, want the dead candidate %d [06 R-WPN-05 §10]", cand, hNuke)
 	}
 	// A shot that finds no candidate is the only path that leaves the slot
 	// untouched; here one was found, and the interceptor is stockpile-flagged,

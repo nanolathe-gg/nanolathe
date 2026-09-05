@@ -50,7 +50,8 @@ type OwnedHandler func(u *units.Unit, n *Node, satisfied uint32, tick uint32) (C
 // replacing any previous registration. A zero or out-of-range id is the reject
 // sentinel and registers nothing; a nil handler clears the row.
 //
-// Registration is per queue and carries no process-wide dispatch state [I16].
+// Registration is per queue and carries no process-wide dispatch state
+// [P0-I16].
 // An owning subsystem installs it wherever it binds a queue, which is the same
 // place it installs the session binding.
 func (q *Queue) SetOwnedHandler(id ID, handler OwnedHandler) {

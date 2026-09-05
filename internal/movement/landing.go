@@ -1,4 +1,4 @@
-// Package movement — landing pads [04 §10.2].
+// Landing pads [04 §10.2].
 //
 // Landing pads: QueryLandingPad is a synchronous four-output query on the
 // target's script; the four cells are seeded −1, walked 0..3, and the first
@@ -12,6 +12,7 @@
 // lander it attaches [04 R-AIR-01 §6]. Nothing in this file heals.
 //
 // IsAirBase via definition bit isairbase [02 "Unit record"][04 §10.2].
+
 package movement
 
 import (

@@ -38,7 +38,7 @@ type MinimapServiceConfig struct {
 	// reads here is the palette-install gray table — the same grayscale-nearest
 	// LUT the main-view fog overlay uses, which desaturates fogged terrain
 	// while preserving its texture — and not the GUI colour-field lookup
-	// [03 §3.8 correction of 2026-08-30][03 §3.3].
+	// [03 §3.8][03 §3.3].
 	GUIRemap []byte
 }
 

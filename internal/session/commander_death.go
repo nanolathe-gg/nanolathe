@@ -81,7 +81,7 @@ func (s *Session) sweepOwnerAfterCommanderDeath(owner int, tick uint32) {
 		controlled = p.Exists && !p.IsObserver && (p.ControllerState == 1 || p.ControllerState == 2)
 	}
 	// IterSliced is player/slot ordered; this loop only mutates death marks,
-	// leaving finalization to the normal phase-2 sweep [01 §6.2][08 §3].
+	// leaving finalization to the normal phase-2 sweep [01 §6.2][08 R-SKIR-01 §3].
 	for _, u := range s.Units.IterSliced() {
 		if u == nil || !u.Alive || u.Dying || int(u.Owner) != owner {
 			continue

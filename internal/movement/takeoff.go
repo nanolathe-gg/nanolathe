@@ -1,10 +1,11 @@
-// Package movement — the mover-mode setter and the shared air takeoff preamble
+// The mover-mode setter and the shared air takeoff preamble
 // [04 R-AIR-01 §3][04 R-AIR-01 §6][04 R-AIR-02].
 //
 // The mover mode is the occupancy *plane*, not a moving/stopped flag: mode 1 is
 // grounded, mode 2 airborne, mode 0 attached/parked [04 R-AIR-01 §3]. Only the
 // air executors and the save-restore path change it, and only through the one
 // setter reproduced here.
+
 package movement
 
 import (

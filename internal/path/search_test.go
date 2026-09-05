@@ -937,3 +937,143 @@ func TestRayWalkValueSemantics(t *testing.T) {
 		t.Fatalf("ray must stop on blocked (0) cells [04 §6.1 R-DOC04-B]")
 	}
 }
+
+// twoCellGoal is a test goal with two acceptable cells and the inflated
+// octile heuristic to whichever of them is nearer.
+type twoCellGoal struct{ near, far Cell }
+
+func (g *twoCellGoal) H(c Cell) int32 {
+	hn := octInflated(abs32(c.X-g.near.X), abs32(c.Z-g.near.Z))
+	hf := octInflated(abs32(c.X-g.far.X), abs32(c.Z-g.far.Z))
+	if hf < hn {
+		return hf
+	}
+	return hn
+}
+
+func (g *twoCellGoal) Enumerate(out []Cell) []Cell {
+	return append(out[:0], g.near, g.far)
+}
+
+func (g *twoCellGoal) StartSatisfied(Cell) bool { return false }
+
+// TestRayVisitedBlockedCellPaysSteepTier locks the terrain term for the one
+// case where the search costs a cell the class layer calls blocked: a cell the
+// pre-search ray had already marked. The term is driven by the saved probe
+// value, and the borrow yields 30 for a value of 0 or 1 — so such a cell pays
+// the steep tier, not nothing [04 R-PATH-01 §3].
+//
+// Fixture: an open field with two goal cells. The ray walks to the near one
+// and marks it ray-visited; the class layer then blocks it, as a revision
+// spanning a multi-tick search can. Two NE steps reach the near goal for
+// 40+22+22 = 84 and three NW steps reach the far one for 40+22+22+22 = 106,
+// so the 30 is exactly what flips the published route from near to far.
+func TestRayVisitedBlockedCellPaysSteepTier(t *testing.T) {
+	near, far := Cell{X: 2, Z: -2}, Cell{X: -3, Z: -3}
+	blocked := map[Cell]bool{}
+	cfg := SearchConfig{
+		Start:     Cell{X: 0, Z: 0},
+		StartDir:  DirN,
+		Goal:      &twoCellGoal{near: near, far: far},
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    Rect{Min: Cell{X: -8, Z: -8}, Max: Cell{X: 8, Z: 8}},
+		PassableValue: func(c Cell) uint8 {
+			if blocked[c] {
+				return 0
+			}
+			return 3
+		},
+	}
+	s := NewSession(cfg)
+	if !s.Seeded() {
+		t.Fatal("fixture search must seed")
+	}
+	if s.entries[near].status&8 == 0 {
+		t.Fatalf("fixture: the pre-search ray must mark %v ray-visited [04 R-PATH-01 §5]", near)
+	}
+	blocked[near] = true
+
+	points, status, done := s.Resume(1 << 20)
+	if !done || status != 0 || len(points) == 0 {
+		t.Fatalf("fixture search must publish a route: done=%v status=%d points=%d", done, status, len(points))
+	}
+
+	nearID, ok := s.ns.Find(near)
+	if !ok {
+		t.Fatal("a blocked cell carrying the ray-visited bit is still costed as a neighbour [04 R-PATH-01 §3]")
+	}
+	nearNode := s.ns.Get(nearID)
+	wantNear := TurnPenalty(DirN, DirNE) + DiagonalCost + DiagonalCost + SteepCost
+	if nearNode.G != wantNear {
+		t.Errorf("blocked ray-visited cell G want %d got %d — the probe value of 0 earns the steep tier [04 R-PATH-01 §3]", wantNear, nearNode.G)
+	}
+	if nearNode.TerrainTerm != uint16(SteepCost) {
+		t.Errorf("stored terrain term want %d got %d [04 R-PATH-01 §3]", SteepCost, nearNode.TerrainTerm)
+	}
+
+	farID, ok := s.ns.Find(far)
+	if !ok {
+		t.Fatal("fixture: the far goal cell must be reached")
+	}
+	if got, want := s.ns.Get(farID).G, TurnPenalty(DirN, DirNW)+3*DiagonalCost; got != want {
+		t.Errorf("far branch G want %d got %d", want, got)
+	}
+
+	// Route selection in cost terms: both goal cells score h = 0, so the two
+	// branches are ordered by g alone. Without the steep tier the near branch
+	// is 84 against the far branch's 106 and is preferred; with it the near
+	// branch is 114 and the far branch wins.
+	if s.ns.Get(nearID).F <= s.ns.Get(farID).F {
+		t.Errorf("steep tier must order the near branch (%d) behind the far branch (%d) [04 R-PATH-01 §3]",
+			s.ns.Get(nearID).F, s.ns.Get(farID).F)
+	}
+	// The published route ends at the far goal either way today, because the
+	// open-time status write clears the ray-visited bit — see the
+	// TODO(question) in search.go's neighbour loop.
+	if got, want := points[len(points)-1], worldPoint(far, routeFootPrint(cfg)); got != want {
+		t.Errorf("fixture route must end at the far goal %v got %v", want, got)
+	}
+}
+
+// TestSeededStartRunCounter locks the seeded start node's straight-run
+// counter. The start is allocated with run 100, and that alone is what keeps
+// the short-run 75 off the first step: there is no parent-identity test
+// [04 R-PATH-01 §4] step 11.
+func TestSeededStartRunCounter(t *testing.T) {
+	if StartRun != 100 {
+		t.Fatalf("StartRun want 100 got %d [04 R-PATH-01 §4] step 11", StartRun)
+	}
+	if StartRun < ShortRunLimit {
+		t.Fatalf("StartRun %d must exceed ShortRunLimit %d [04 R-PATH-01 §4] step 11", StartRun, ShortRunLimit)
+	}
+	cfg := SearchConfig{
+		Start:         Cell{X: 0, Z: 0},
+		StartDir:      DirN,
+		Goal:          PointGoal(Cell{X: 6, Z: 0}, 0),
+		Scale:         65536,
+		HasBounds:     true,
+		Bounds:        Rect{Min: Cell{X: -8, Z: -8}, Max: Cell{X: 8, Z: 8}},
+		PassableValue: func(Cell) uint8 { return 3 },
+	}
+	s := NewSession(cfg)
+	startID, ok := s.ns.Find(cfg.Start)
+	if !ok {
+		t.Fatal("start node must be seeded")
+	}
+	if got := s.ns.Get(startID).Run; got != StartRun {
+		t.Fatalf("seeded start run want %d got %d [04 R-PATH-01 §4] step 11", StartRun, got)
+	}
+	if _, _, done := s.Resume(1); done {
+		t.Fatal("fixture search must survive its first expansion")
+	}
+	// A turning first step pays turn plus step and nothing else: the run of
+	// 100 keeps the 75 off it.
+	id, ok := s.ns.Find(Cell{X: 1, Z: 0})
+	if !ok {
+		t.Fatal("first expansion must open the eastward neighbour")
+	}
+	if got, want := s.ns.Get(id).G, TurnPenalty(DirN, DirE)+CardinalCost; got != want {
+		t.Fatalf("turning first step G want %d got %d — the seeded run must suppress the short-run %d [04 R-PATH-01 §4] step 11", want, got, ShortRunPenalty)
+	}
+}

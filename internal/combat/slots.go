@@ -1,8 +1,9 @@
-// Package combat implements weapon slots and targeting per [06].
+// Weapon slots and targeting per [06].
 //
 // WU-09-1 owns slots.go (C1, C9) and target.go ([06 §3]).
 // Other combat work units own pool.go, fire.go, aim.go, motion.go, etc.
 // Do not import or mutate pool.Projectiles allocation state here; pool.go owns it.
+
 package combat
 
 import (

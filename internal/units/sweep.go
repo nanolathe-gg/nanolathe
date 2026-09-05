@@ -1,4 +1,4 @@
-// Package units — deterministic slot traversal and death finalization [01 §4.4][04 "unit sweep"].
+// Deterministic slot traversal and death finalization [01 §4.4][04 R-MOV-03 §1].
 //
 // This file provides the central loop one deterministic active-slot traversal API
 // with explicit unit-local stages, plus exact once-only death finalization.
@@ -13,7 +13,7 @@
 // projectile processing retains state and final deletion is deferred to
 // slot-end death handling; explicit TeardownCleanup is teardown-only [01 §4.4].
 //
-// Per-unit micro-order within one visit [04 "unit sweep"][01 §4.4]:
+// Per-unit micro-order within one visit [04 R-MOV-03 §1][01 §4.4]:
 //  1. general unit update (StepPreUpdate) — exposed as boundary
 //  2. weapon update (reload, target acquisition, Aim latch) — between boundaries
 //  3. COB drain (delta 1, eight threads then one piece pass) — between
@@ -35,9 +35,10 @@
 //	})
 //
 // A live death-marked unit is still stepped by normal stages; only the final
-// slot-end call retires it [04 "unit sweep"]. A freed slot cannot be stepped.
+// slot-end call retires it [04 R-MOV-03 §1]. A freed slot cannot be stepped.
 // Death hooks and pool free happen exactly once via FinalizeDeath; second
 // call is a no-op [01 §4.4].
+
 package units
 
 import (
@@ -103,7 +104,7 @@ func (w *World) VisitActiveSlots(fn func(SlotVisit)) {
 }
 
 // StepPreUpdate executes the per-unit pre-update/status work for the given
-// handle [04 "unit sweep"][01 §4.4]. It is the explicit first boundary call
+// handle [04 R-MOV-03 §1][01 §4.4]. It is the explicit first boundary call
 // that the central loop runs inside VisitActiveSlots before weapon/COB/
 // orders/movement stages. A freed slot cannot be stepped; a live Dying unit
 // still reaches the normal stage sequence [04 §5.4].
@@ -127,7 +128,7 @@ func (w *World) StepPreUpdate(handle pool.Handle, tick uint32) {
 
 // NeedsDeathFinalization reports whether the handle's unit is latched Dying
 // and still Alive, needing slot-end death handling finalization
-// [01 §4.4][04 "unit sweep"]. After FinalizeDeath it returns false because the
+// [01 §4.4][04 R-MOV-03 §1]. After FinalizeDeath it returns false because the
 // slot is freed [P0-16 §3.4].
 func (w *World) NeedsDeathFinalization(handle pool.Handle) bool {
 	if w == nil || w.pool == nil || handle == 0 {
@@ -148,7 +149,7 @@ func (w *World) NeedsDeathFinalization(handle pool.Handle) bool {
 }
 
 // FinalizeDeath performs slot-end death handling and ledger cleanup finalization
-// for the given handle [01 §4.4][04 "unit sweep"]. It fires OnDeath exactly
+// for the given handle [01 §4.4][04 R-MOV-03 §1]. It fires OnDeath exactly
 // once and frees the pool slot exactly once; a second call is a no-op [01
 // §4.4]. The tick argument is the current global tick for hook context. Free
 // retains the stored slot index stale [P0-16 §3.4] and decrements per-player

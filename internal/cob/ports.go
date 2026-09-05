@@ -1,4 +1,4 @@
-// Package cob — engine ports and callbacks [04 §4.4] [04 §5] [GAP T15] [03 §2.4].
+// Engine ports and callbacks [04 §4.4] [04 §5] [GAP T15] [03 §2.4].
 //
 // Contracts C15–C19, C25, C26 live here. This file owns the verbatim port
 // table (1–20), the callback arithmetic that uses fixed-point trig (RockUnit /
@@ -8,6 +8,7 @@
 // kind damage packet ordering of C26. Model draw trig remains floating point
 // per [03 §2.4] and is not used for callback arguments, which go through the
 // 512-entry table via numeric.Sin/Cos and rounded products [04 §5.1] C25 (I2).
+
 package cob
 
 import (
@@ -736,7 +737,7 @@ func HypotPort(first, second int32) int32 {
 
 // BuildPercentLeft computes port 17 read [04 §4.4] C15: from remaining-build
 // fraction f (1→0): zero when f exactly zero, otherwise 1 - trunc(f * -99.0).
-// I2 allowlist: construction remaining fraction is float32 [05 §...].
+// I2 allowlist: construction remaining fraction is float32 [05 "Construction arithmetic"].
 func BuildPercentLeft(f float32) int32 {
 	if f == 0.0 {
 		return 0 // [04 §4.4] C15

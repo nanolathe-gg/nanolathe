@@ -10,7 +10,7 @@ import (
 
 // TestSessionBootPopulatesCommanders verifies that a configured battle starts
 // with authored commander definitions, ownership, placement, COB bindings,
-// and weapon slots [08 "Skirmish configuration"][02 §6.2].
+// and weapon slots [08 "Skirmish configuration"][02 §6].
 func TestSessionBootPopulatesCommanders(t *testing.T) {
 	rng.SeedGlobal(1, 2)
 	cat := strictMinimalCatalog()

@@ -4,10 +4,9 @@ import "testing"
 
 // The scroll magnitude is setting * rawDelta capped at 128 map pixels, where
 // rawDelta counts thirtieths of a second elapsed since the previous host frame
-// [07 §10 "Correction — the raw delta is thirtieths of a second"]. The cap is a
-// signed comparison with no absolute value, so a negative delta (a wrapped host
-// tick count) scrolls the opposite way for one frame instead of being folded
-// back to a positive magnitude.
+// [07 §10]. The cap is a signed comparison with no absolute value, so a
+// negative delta (a wrapped host tick count) scrolls the opposite way for one
+// frame instead of being folded back to a positive magnitude.
 func TestScrollMagnitudeIsSignedAndCapped(t *testing.T) {
 	newCam := func() *Camera {
 		return &Camera{X: 2000, Z: 2000, ViewW: 640, ViewH: 480, MapW: 8192, MapH: 8192}

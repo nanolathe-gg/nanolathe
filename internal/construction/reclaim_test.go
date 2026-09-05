@@ -153,7 +153,7 @@ func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 	if !target.Dying || target.Health >= 0 {
 		t.Fatalf("fatal reclaim did not latch target: dying=%v health=%d", target.Dying, target.Health)
 	}
-	// Death hooks are deferred until slot-end finalization [04 "unit sweep"].
+	// Death hooks are deferred until slot-end finalization [04 R-MOV-03 §1].
 	if deaths != 0 || extras != 0 {
 		t.Fatalf("death observers ran before finalization primary=%d extra=%d want 0/0", deaths, extras)
 	}

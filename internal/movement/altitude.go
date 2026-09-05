@@ -1,10 +1,11 @@
-// Package movement — cruise altitude, flight levels, and wake/SFX [04 §10.1][04 §9.1].
+// Cruise altitude, flight levels, and wake/SFX [04 §10.1][04 §9.1].
 //
 // CruiseAltitude for point and follow commands is targetY = (max(sea level, terrain height at target XZ) + signed offset) ×65536
 // capped at 0x1FF0000 (about 511 world units), where terrain height is the bilinear four-corner query and the
 // offset is cruisealt (full altitude) or cruisealt/2 for initial climb, or negated attach-piece world Y for hanging cargo [04 §10.1].
 // Sea level is terrain header byte; terrain height sampled at cursor or at followed unit's piece world position; no lower clamp [04 §10.1].
 // Arrival radii horizontal and strict: explicit air arrivals test hypot(dx,dz) < radius with radii 48/128/320 depending on order [04 §10.1], default dx²+dz² ≤0.25 [04 §10.1].
+
 package movement
 
 import (

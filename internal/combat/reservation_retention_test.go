@@ -334,16 +334,25 @@ func TestInterceptorSpawnIntoADirtySlotStillFlies(t *testing.T) {
 
 	// The anti-nuke silo reaches the spawner the way a shooter reaches TryFire
 	// [06 §4.1]: the reference beside the side byte, so an interception is
-	// credited to the launcher rather than to nobody.
-	silo := &units.Unit{Handle: 4, Owner: 0, Def: &content.UnitDef{}}
-	newH, cand, ok := AcquireInterceptorTargetForSpawn(&s, interceptorPos, anti.Coverage, anti, slot, interceptorPos, now,
-		map[int32]*content.WeaponDef{threatWeapon.ID: threatWeapon, anti.ID: anti},
-		FirePorts{ShooterSide: 0, Shooter: silo})
+	// credited to the launcher rather than to nobody. The launch itself is the
+	// live chain — the per-slot pipeline over TryFire, with the fire-time
+	// rescan bound as the vertical-launch executor's port [06 §4.4][06 §11.2].
+	silo := &units.Unit{Handle: 4, Owner: 0, X: interceptorPos.X, Z: interceptorPos.Z, Def: &content.UnitDef{}}
+	cat := interceptorTestCatalog(t, threatWeapon, anti)
+	ports := FirePorts{
+		ShooterSide:       0,
+		Shooter:           silo,
+		Origin:            interceptorPos,
+		InterceptorRescan: interceptorRescanPort(&s, silo, anti, cat),
+	}
+	newH, ok := launchStockpileRound(&s, slot, 0,
+		Target{Kind: TargetPoint, X: interceptorPos.X, Z: interceptorPos.Z}, now, ports)
 	if !ok {
 		t.Fatalf("interceptor spawn failed")
 	}
-	if newH != 2 || cand != 1 {
-		t.Fatalf("spawn got handle %d candidate %d, want the recycled slot 2 and threat 1", newH, cand)
+	cand := h1
+	if newH != 2 {
+		t.Fatalf("spawn got handle %d, want the recycled slot 2", newH)
 	}
 	p := &s.Records[1]
 

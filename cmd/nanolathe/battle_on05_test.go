@@ -260,8 +260,8 @@ func TestBattleCameraIgnoresWASD(t *testing.T) {
 	// The scroll pass consumes a scaled 30-per-second delta, so a frame has to
 	// cost wall-clock time before it can scroll at all: three back-to-back
 	// viewerStep calls inside the same thirtieth of a second scroll nothing
-	// [07 §10 "Correction — the raw delta is thirtieths of a second"]. Drive a
-	// deterministic host clock and advance it a full unit per frame.
+	// [07 §10]. Drive a deterministic host clock and advance it a full unit per
+	// frame.
 	millis := &fakeMillisSource{}
 	b.millisSource = millis
 	advance := func() { millis.ms += 34 }

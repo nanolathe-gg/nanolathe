@@ -1,4 +1,4 @@
-// Package movement — ON-03 per-unit stepping contract tests [04 §8.1][04 §8.2][04 §10.1][04 §7.3].
+// ON-03 per-unit stepping contract tests [04 §8.1][04 §8.2][04 §10.1][04 §7.3].
 //
 // Required contracts for ON-03:
 //
@@ -7,6 +7,7 @@
 //	func (s *System) EndTick(tick uint32)
 //
 // With ground, air, transport still working and arrival via goal tolerance.
+
 package movement
 
 import (

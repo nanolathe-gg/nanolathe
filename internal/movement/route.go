@@ -1,9 +1,10 @@
-// Package movement implements ground route publication and storage.
+// Ground route publication and storage.
 //
 // Research: [04 §7.3] scheduler budget, publication, route storage, pruning,
 // save form, and export helper; [04 §7.1] lattice and half-footprint bias.
 // Invariants I10 (citations), I13 (route save is the explicit-layout
 // exception).
+
 package movement
 
 import (

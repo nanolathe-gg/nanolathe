@@ -6,7 +6,7 @@ package units
 // package-wide World.Tick sweep. The authoritative sweep is the session's
 // phase-2 entry point: VisitActiveSlots with StepPreUpdate at the front and
 // FinalizeDeath at slot-end, with weapon/COB/orders/movement work between
-// those boundaries [01 §4.4][04 "unit sweep"]. Package tests drive the same
+// those boundaries [01 §4.4][04 R-MOV-03 §1]. Package tests drive the same
 // traversal shape through runPhase2Sweep, which composes the stage helpers
 // below in the established per-unit order. They live in this test-only file
 // so no production code can bypass the authoritative entry point.

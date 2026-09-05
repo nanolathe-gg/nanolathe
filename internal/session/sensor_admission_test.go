@@ -75,7 +75,7 @@ func TestEnemyMinimapAdmissionRequiresSensorCoverage(t *testing.T) {
 	// authors `activatewhenbuilt`, or by an Activate order [04 R-UNIT-06 §2].
 	// Raise it the way production does rather than assigning the field, because
 	// the emitters of pass 2 and the circle gate both test this bit
-	// [R-VIS-01 §4][03 §3.4 "Sensor callback gate correction"].
+	// [R-VIS-01 §4][03 §3.4].
 	own.SetActivationEdge(true)
 	if !own.Activated {
 		t.Fatal("the shared edge setter did not raise the activation bit")
@@ -179,7 +179,7 @@ func TestEnemyInLineOfSightIsAdmittedWithoutRadar(t *testing.T) {
 // activation edge and the sensor phase's emitters. "Active" in the sensor phase
 // means the unit instance's activation/on-state bit is set: a live unit whose
 // radar or sonar distance is nonzero queries its contact callback only after
-// that test [03 §3.4 "Sensor callback gate correction"][R-VIS-01 §4] pass 2.
+// that test [03 §3.4][R-VIS-01 §4] pass 2.
 //
 // Every unit is created inactive and the bit is raised only through the shared
 // edge setter [04 R-UNIT-06 §2] — at completion for a definition that authors

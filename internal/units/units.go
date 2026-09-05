@@ -1,4 +1,5 @@
-// Package units implements unit pools and lifecycle [04 §2] [PLAN_06 WU-06-1] [P0-16].
+// Unit pools and lifecycle [04 §2] [PLAN_06 WU-06-1] [P0-16].
+
 package units
 
 import (
@@ -395,7 +396,7 @@ type Unit struct {
 	// phase-2 slot finalizer frees the slot.
 	Dying               bool
 	DeathCause          DeathCause
-	deathHookFired      bool // internal: ensures OnDeath fires exactly once at FinalizeDeath [01 §4.4][04 "unit sweep"]
+	deathHookFired      bool // internal: ensures OnDeath fires exactly once at FinalizeDeath [01 §4.4][04 R-MOV-03 §1]
 	deathExtraHookFired bool // internal composition observer deduplication
 	// Build progress remaining 1→0 [04 §2.3] C3. float32 per the I2 allowlist
 	// row "Construction remaining fraction" [05 "Construction target state"].
@@ -1508,7 +1509,7 @@ func (w *World) defIDClaimed(id uint16) bool {
 // This matters beyond movement: the frame composer's two unit passes select on
 // this mirror, and a unit left at `0` sorts into the pass that runs after the
 // nanolathe strip, which hid every construction spray behind the building it
-// was completing [03 R-RAST-01 §7, correction of 2026-08-30].
+// was completing [03 R-RAST-01 §7].
 const CreatedMoverMode uint8 = 1
 
 // NeutralAttackerSide is the value unit spawn writes into the attacker-side
@@ -1599,7 +1600,7 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 	//
 	// The ordering is load-bearing, not tidiness. `Create` is a wake callback:
 	// its drain runs all eight thread slots inline at the creation site
-	// [04 R-CB-01 §2][04 "barriers and flush points"], so a thread that `Create`
+	// [04 R-CB-01 §2][04 R-COB-02 §2], so a thread that `Create`
 	// starts reads these two ports before the creation call has returned. The
 	// stock damage-smoke helper (`scripts/SMOKEUNIT.H`, started from `Create` by
 	// most unit scripts) is exactly such a thread, and it waits on
@@ -1928,7 +1929,7 @@ func (w *World) NotifyCapture(h pool.Handle, oldOwner, newOwner uint8) {
 // Destroy marks death; the slot stays alive and visible until the next phase-2
 // slot finalizer [04 §2.3][04 §2.4] C2. Death callbacks are deferred to that
 // finalizer so later phases can observe the marked unit without running
-// destruction side effects [01 §4.4][04 "unit sweep"].
+// destruction side effects [01 §4.4][04 R-MOV-03 §1].
 //
 // This is the arm for a death that carries no damage packet — a reclaimed
 // unit, a cancelled factory product, a captured victim's old record. The

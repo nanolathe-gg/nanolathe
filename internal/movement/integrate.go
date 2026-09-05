@@ -1,4 +1,4 @@
-// Package movement — per-unit integration glue [04 §8.1][04 §8.2][04 §10.1][04 §7.1][04 §7.3].
+// Per-unit integration glue [04 §8.1][04 §8.2][04 §10.1][04 §7.1][04 §7.3].
 //
 // Integrate.go is the per-unit integration glue that owns FlightState/SteerState/CollisionState
 // surfaces for gate-2 and later phases. It bridges units.World, orders queues, the path.Scheduler,
@@ -14,6 +14,7 @@
 //   - On publication: order node carries Route (Route.Publish); per tick follow it: Prune, SteerState.UpdateHeading + Integrate, CollisionState.TryFastPath/ApplyBlocked against OccupancyGrid.
 //
 // Citations: [04 §7.1] C1 lattice, [04 §7.2] C8 point goal, [04 §7.3] C14–C15, [04 §8.1] C20 C21, [04 §8.2] C23 C24.
+
 package movement
 
 import (

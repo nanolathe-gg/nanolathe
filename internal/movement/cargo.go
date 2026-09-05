@@ -1,4 +1,4 @@
-// Package movement — cargo attachment, carried motion, and death/capture [04 §10.2].
+// Cargo attachment, carried motion, and death/capture [04 §10.2].
 //
 // Attachment model [04 §4.4][04 §10.2]:
 // each Unit.Attachment holds Carrier pool.Handle (0 if not carried) and Cargo []Handle.
@@ -11,6 +11,7 @@
 // clamp from cargo's waterline and sea level, and returns before ordinary
 // footprint validation. On a cell/mode change it still clears and stamps the
 // footprint through the carried-position setter [04 R-FAC-02 §2].
+
 package movement
 
 import (

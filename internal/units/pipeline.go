@@ -1,18 +1,9 @@
-// Package units owns the unit pool and the per-unit record: creation, the
-// definition identity, the COB and model bindings a live unit carries, the
-// per-unit pre-update stage of the authoritative sweep, and death
-// finalization [01 §6.1] [04 §1.1] [04 R-UNIT-06].
-//
-// It is the record every later simulation package writes through. The sweep
-// itself is driven by internal/session; this package supplies the traversal
-// and the stage boundaries.
-//
 // This file: the pre-update stage [04 §1.1][04 §5.1][01 §4.4].
 //
 // The authoritative phase-2 unit sweep is the explicit traversal API in
 // sweep.go, driven by the session: VisitActiveSlots with StepPreUpdate at the
 // front and FinalizeDeath at slot-end, with weapon/COB/orders/movement work
-// between those boundaries [01 §4.4][04 "unit sweep"]. This file owns the
+// between those boundaries [01 §4.4][04 R-MOV-03 §1]. This file owns the
 // pre-update stage that StepPreUpdate exposes; the remaining per-unit stage
 // helpers (weapon-slot update, COB drain, slot-end death latch) are
 // test-only fixtures in pipeline_test.go that drive the same traversal shape
@@ -20,6 +11,7 @@
 //
 // Construction Remaining is owned exclusively by construction.Service [05
 // "Construction target state"]; no stage here reads or writes it.
+
 package units
 
 import (

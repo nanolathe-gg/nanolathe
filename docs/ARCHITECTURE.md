@@ -394,18 +394,18 @@ interface/input/camera/front end, `08` sessions/campaign/AI/save.
 ### Citation routing
 
 Go comments also carry token families whose definition lives outside the
-research tree, or nowhere. This table is the definition of record for each;
-a token marked **orphan** has no consistent meaning in the comments that use
-it and is to be rewritten at its sites, not defined here.
+research tree. This table is the definition of record for each. It carries no
+orphan rows any more: `[I16]`, `[R-P1-11]` and `[RR-04]` were the last three,
+and CL-6 rewrote their sites to `[P0-I16]`, `[04 R-PATH-01 §3]` and
+`[08 R-TRIG-01 §6]` respectively. A token that cannot be routed is rewritten
+at its sites, never defined here.
 
 | Token | Resolves to |
 |---|---|
 | `[0N §x]`, `[0N "Heading"]`, `[0N R-XXX-nn §k]`, `[fmt <name>]` | research, as above; checked by `internal/docs` |
 | `[In]`, `INVARIANTS In` | [INVARIANTS.md](INVARIANTS.md) I1–I14 |
-| `[I16]` | **orphan** — no I15 or I16 exists. Both sites (`internal/orders`) describe per-queue handler registration with no process-wide state, which is the multi-session isolation concern of `[P0-I16]` below; rewrite as that or as `[I6]` |
 | `SCn`, `docs/SPEC_CONFLICTS.md SCn` | [SPEC_CONFLICTS.md](SPEC_CONFLICTS.md) entry `n` |
 | `[P0-nn]`, `[P1-nn]` | retired research packets; routed by `research/retail-executable-spec/README.md` §"Legacy packet citation routing". A packet-local `§` suffix describes the packet outline, not a section of the destination |
-| `[R-P1-11]` | **orphan** — a packet id written as an anchor; one site (`internal/movement`, the movement-class hover cost). Cite the owning section of document 04 directly |
 | `[GAP Tn]` | closed gap task; `research/retail-executable-spec/README.md` §"Gap disposition" names the section each task's content was promoted to |
 | `[P0-Inn]`, `[P1-Inn]` | early integration anchors; see the table below |
 | `[PLAN 11 Cn]` | contract `n` of the computer-player contract list, carried under the same numbers (C4–C9) by DESIGN_SESSIONS_AI_SAVE |
@@ -422,7 +422,6 @@ it and is to be rewritten at its sites, not defined here.
 | `DET-06` | the visibility publication seam lives inside phase 5: the path scheduler first, then per player ascending the orders and work pump, then that player's dirty-checked stamp sweep; it is not a phase of its own |
 | `PROC-03` | the shrink-only parity-drift ratchets in `internal/architecture` (authoritative `map` iteration and `float64` counts per file may only decrease). The plan heading its comment names no longer exists; the definition is this row |
 | `[OW-3-P]` | goal-family wiring between orders and path search: which order produces which goal family (`[04 §7.2]` `[04 §7.4]` `[04 §3.5]`) — point goals by default, the annulus where retail establishes a stand-off, the rectangle perimeter for the work orders that approach a footprint, and the air-goal chaining for patrol deliberately unwired because no established producer exists. DESIGN_MOVEMENT_PATH. (`[OW-3-O]` is the SC22 heading) |
-| `[RR-04]` | **orphan** — a "mutual destruction draw" rule that no research section carries; two tests record its withdrawal and one still cites it. Retail's kind-2 end has no draw: defeat is evaluated first `[08 R-TRIG-01 §6]`. Rewrite the remaining site as that citation |
 | `CRD-005`, `CRD-006`, `CRD-008` | research anchors: `[03 R-CRD-005 §1]`, `[07 R-CRD-006 §1]`, and `CRD-008` in the heading of `[01 R-CORE-03]` |
 
 The early integration anchors:

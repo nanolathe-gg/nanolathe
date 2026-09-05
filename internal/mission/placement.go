@@ -281,7 +281,7 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 		u.MissionCriticalUnit = true
 	}
 	if sec.IntValue("AiIgnore", 0) != 0 {
-		flags |= 1 << 5 // bit5 [08 "Established AI-facing data"] [C7]
+		flags |= 1 << 5 // bit5 [08 "Established AI-facing data and rooted planner"] [C7]
 		u.AiIgnore = true
 	}
 	if sec.IntValue("AiPriorityTarget", 0) != 0 {

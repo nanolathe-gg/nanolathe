@@ -87,8 +87,10 @@ func (p Profile) classifyCell(t *world.Terrain, cx, cz int32) CellClass {
 	if slope > int32(maxSlope) {
 		return ClassBlocked
 	}
-	// Exact HOT cost and forward-speed factor remain unknown [R-P1-11].
-	// Preserve the soft terrain state without inventing a multiplier.
+	// The steep tier is not a movement multiplier here: its whole cost lives
+	// in the path search, where a step onto a steep-tier cell costs 30 more
+	// than a step onto a clear or unexplored one [04 R-PATH-01 §3]. This
+	// classifier only reports the tier.
 	return ClassSteep
 }
 

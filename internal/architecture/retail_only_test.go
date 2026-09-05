@@ -1,8 +1,9 @@
-// Package architecture contains repository-level guards for the retail runtime.
+// Repository-level guards for the retail runtime.
 //
 // These tests deliberately inspect production source instead of importing the
 // packages under test.  That keeps the guard independent of runtime wiring and
 // lets it catch an architectural dependency before a new feature exercises it.
+
 package architecture
 
 import (

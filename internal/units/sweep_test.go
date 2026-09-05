@@ -314,7 +314,7 @@ func TestFinalizeDeathExactlyOnce(t *testing.T) {
 }
 
 // TestDeadUnitNotStepped verifies dead unit cannot be stepped by later stages
-// after finalization [04 "unit sweep"].
+// after finalization [04 R-MOV-03 §1].
 func TestDeadUnitNotStepped(t *testing.T) {
 	world := newFixtureWorld(10, nil)
 	def := &content.UnitDef{UnitName: "sweep-dead", MaxDamage: 100}

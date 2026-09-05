@@ -129,9 +129,9 @@ func TestFooterNonVisibleEnemyIsUnidentified(t *testing.T) {
 // arguments are " M:%d" and " E:%d", so the format's space and the argument's
 // space add up. The build card's "%s  M:%d E:%d" in the same section carries
 // the two spaces visibly in its literal; here the doubling is emergent, which
-// is why only the card is annotated. docs/PLAN_16_PLAYTEST_FIXES.md C5
-// restates the feature line with a single space — research owns behavior and
-// that restatement is the imprecise one. This case exists so the next reader
+// is why only the card is annotated. A retired play-test plan restated the
+// feature line with a single space — research owns behavior and that
+// restatement was the imprecise one. This case exists so the next reader
 // does not "correct" the second space away.
 func TestFooterFeatureLineSeparatorIsTwoSpaces(t *testing.T) {
 	cat := footerCatalog()

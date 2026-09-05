@@ -1,10 +1,11 @@
-// Package combat — targeting and acquisition per [06 §3] P0-10 (WU-09-1).
+// Targeting and acquisition per [06 §3] P0-10 (WU-09-1).
 //
 // Acquisition scan rules, range vs coverage distinction, candidate selection
 // order, and hysteresis are established per [06 §3] P0-10. Coverage drives overlay
 // only [06 §3.3]; engagement uses Range. Candidate traversal excludes features
 // because they are in a separate system [06 §3.1]. Iteration is deterministic
 // (pool slot asc) [06 §1.2] (I1); no map iteration.
+
 package combat
 
 import (

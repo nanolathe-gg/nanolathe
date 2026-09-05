@@ -72,10 +72,10 @@ func TestParseButtonLatchChain(t *testing.T) {
 		{"UNLOAD", 1, input.LatchUnload},
 		{"LOAD", 1, input.LatchPickup},
 		// Retail has no PICKUP compare, only LOAD: a name that only contains
-		// PICKUP is not handled [07 §9 "Corrected and completed"].
+		// PICKUP is not handled [07 §9].
 		{"pickup", 1, NotHandled},
 		// No default at all: an unmatched name is not handled — no latch
-		// write, no cue [07 §9 "Corrected and completed"].
+		// write, no cue [07 §9].
 		{"BUILD_ARM", 1, NotHandled},
 		{"", 1, NotHandled},
 		// Gate zero forces Normal regardless of name [07 §9].

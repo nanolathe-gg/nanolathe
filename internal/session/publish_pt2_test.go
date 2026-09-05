@@ -45,7 +45,7 @@ func TestPublishSnapshotCarriesCommittedMoverMode(t *testing.T) {
 // construction spray paints over the unit being built. Retail's spawn writes
 // `1` into the flags word's low two bits for every unit, a building included,
 // and nothing rewrites it for a unit that owns no mover
-// [03 R-RAST-01 §7, correction of 2026-08-30][04 R-MOV-01 §8].
+// [03 R-RAST-01 §7][04 R-MOV-01 §8].
 //
 // This test previously asserted 0 and was named ...GivesStructuresNoMoverMode,
 // on the retracted reading that the composer reads the mover object rather than

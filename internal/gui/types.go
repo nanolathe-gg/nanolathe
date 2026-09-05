@@ -37,11 +37,11 @@ func (k Kind) RuntimeFamily() uint8 {
 	case KindTextBox:
 		return 3 // focusable text editor [07 §4]
 	case KindScrollBar:
-		return 4 // scrollbar/slider update [07 §4 correction][07 R-WGT-01 §5]
+		return 4 // scrollbar/slider update [07 §4][07 R-WGT-01 §5]
 	case KindLabel:
-		return 5 // link redirection [07 §4 correction][07 R-WGT-01 §7]
+		return 5 // link redirection [07 §4][07 R-WGT-01 §7]
 	case KindSurface:
-		return 6 // per-pass callback and hotornot click [07 §4 correction][07 R-WGT-01 §8]
+		return 6 // per-pass callback and hotornot click [07 §4][07 R-WGT-01 §8]
 	case KindPicture:
 		return 12 // repeating/decrementing [07 §4]
 	case KindScoreBar:

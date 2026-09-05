@@ -930,7 +930,7 @@ func (s *Session) RegisterAll() {
 	if s.Units != nil {
 		// Derive actual local/enemy identities from session state if not yet set
 		// [P0-I13]. Skirmish stores them from SkirmishConfig, mission from
-		// economy player slots and controller states [08 "Established AI-facing data"].
+		// economy player slots and controller states [08 "Established AI-facing data and rooted planner"].
 		if s.LocalOwner == 0 && s.EnemyOwner == 0 && s.Econ != nil {
 			// The control byte is the player record's: 1 a locally controlled
 			// human, 2 a computer [05 R-SHARE-01 §1][08 "Established AI-facing

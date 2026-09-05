@@ -206,7 +206,7 @@ type Queue struct {
 	// handlers a subsystem outside this package installs for the rows whose
 	// bodies it owns. Keeping them on the queue preserves the ordinary ordered
 	// primary walk without introducing package-global session state
-	// [04 R-FAC-02 §4][I16].
+	// [04 R-FAC-02 §4][P0-I16].
 	ownedHandlers []OwnedHandler
 }
 

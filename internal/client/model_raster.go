@@ -371,6 +371,15 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 	// Step 5. The composition span writers run only where xr > xl. The
 	// per-pixel attribute step divides by the UNCLAMPED width, and only then is
 	// the span clamped into the image.
+	//
+	// The accumulator pair lives outside the row loop only so it is allocated
+	// once per face instead of once per painted row: `span` takes it by
+	// pointer, so a declaration inside the loop escapes and every scanline of
+	// every primitive of every unit costs two heap objects. Both lanes are
+	// fully rewritten from the two edge tables at the top of each iteration
+	// below, so nothing carries across rows and the values handed to the span
+	// writer are the ones an in-loop declaration produced.
+	var a, da [spanAttrs]int64
 	for r := yStart; r < yEnd; r++ {
 		i := int(r - yStart)
 		l, rt := &leftTab[i], &rightTab[i]
@@ -378,7 +387,6 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 			continue // step 7's cull, evaluated per scanline
 		}
 		width := int64(rt.x - l.x)
-		var a, da [spanAttrs]int64
 		for k := 0; k < spanAttrs; k++ {
 			a[k] = l.a[k]
 			da[k] = (rt.a[k] - l.a[k]) / width

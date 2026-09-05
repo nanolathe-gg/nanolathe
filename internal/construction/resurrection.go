@@ -14,7 +14,7 @@ import (
 // Resurrection delay uses the sole 0.3 constant in the executable: a stored
 // double belonging to this state alone, not a general construction-speed,
 // repair, reclaim, or capture multiplier
-// [05 "Resurrection", "Established fact — delay"][05 R-WORK-01 §7].
+// [05 "Resurrection"][05 R-WORK-01 §7].
 // delay = trunc(buildTime*0.3 / floor(workTime/30)) — plus underscore
 // truncation of the corpse name. The order's sole simulation-RNG draw is not
 // a placement jitter: it is phase 1's approach-point vertical term, bounded
@@ -68,11 +68,11 @@ func FeatureNameToDefName(featureName string) string {
 // placement jitter: it is the approach phase's vertical walk-target term,
 // bounded by the feature's ordinary `height` byte, and it happens before
 // this package's Resurrect (which implements only phase 5 "create")
-// [05 "Resurrection", "Established — cost and randomness"][05 R-WORK-01
-// §7 phase 1]. This helper models the draw's shape — a single bounded pull,
-// skipped without advancing the stream when the bound is below two — for
-// whichever call site ends up owning the approach phase; `bound` is the
-// feature's height byte there, not a spread byte.
+// [05 "Resurrection"][05 R-WORK-01 §7 phase 1]. This helper models the
+// draw's shape — a single bounded pull, skipped without advancing the
+// stream when the bound is below two — for whichever call site ends up
+// owning the approach phase; `bound` is the feature's height byte there,
+// not a spread byte.
 func ResurrectionJitter(sim *rng.Simulation, bound uint8) int {
 	if sim == nil {
 		return 0
@@ -94,9 +94,9 @@ func ResurrectionJitter(sim *rng.Simulation, bound uint8) int {
 // key exists in retail [05 R-FEAT-01 §1], and the order's one simulation
 // draw belongs to phase 1's approach step, not phase 5's create step which
 // this function implements — phase 5 draws no randomness at all
-// [05 "Resurrection", "Established — cost and randomness"]. The `sim`
-// parameter is kept for call-site stability (phase 1's approach draw is a
-// separate, not-yet-wired concern) but this function no longer uses it.
+// [05 "Resurrection"]. The `sim` parameter is kept for call-site
+// stability (phase 1's approach draw is a separate, not-yet-wired concern)
+// but this function no longer uses it.
 func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, def *content.UnitDef, posX, posY, posZ numeric.Fixed, sim *rng.Simulation) (*units.Unit, error) {
 	if s == nil || s.World == nil || builder == nil || def == nil {
 		return nil, nil

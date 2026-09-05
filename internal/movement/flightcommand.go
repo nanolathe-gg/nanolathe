@@ -1,4 +1,4 @@
-// Package movement — the flight command block, its per-tick producer, the air
+// The flight command block, its per-tick producer, the air
 // sector grid that producer reads, and the lean accumulator that writes bank
 // and pitch [04 R-AIR-01 §1][04 R-AIR-01 §2][04 R-AIR-01 §5].
 //
@@ -7,6 +7,7 @@
 // hook below from whatever goal payload the active air order installed. There is
 // exactly one such supply, shared by every air order; the orders differ only in
 // which payload they install [04 R-AIR-01 §1].
+
 package movement
 
 import (

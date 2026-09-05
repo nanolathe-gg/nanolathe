@@ -245,17 +245,35 @@ func runShot(opts Options, cs *contentSet) error {
 			return err
 		}
 		frames := opts.ProfileSeconds * 30
+		// The two halves are timed apart because the loop's total says nothing
+		// about which one to optimise: the viewer step is the authoritative
+		// sub-tick and Present is the whole presentation compose, and on this
+		// scene they are not the same order of magnitude. Sampling profiles
+		// mis-attribute the split badly on some hosts — the allocator's page
+		// syscalls swallow the stack — so the split is measured directly here
+		// rather than inferred. Reading the clock twice per frame is host-side
+		// instrumentation outside the session; it neither enters the sub-tick
+		// nor changes what is drawn [I6][I11].
+		var stepTotal, presentTotal time.Duration
 		started := time.Now()
 		for i := 0; i < frames; i++ {
 			millis.step = uint32(opts.ShotTicks) + uint32(i) + 2
+			mark := time.Now()
 			b.viewerStep(tickSeconds, cl)
+			mid := time.Now()
 			cl.Present()
+			done := time.Now()
+			stepTotal += mid.Sub(mark)
+			presentTotal += done.Sub(mid)
 		}
 		elapsed := time.Since(started)
-		fmt.Fprintf(os.Stderr, "nanolathe: %d frames in %s (%.2f ms/frame, %.1f fps)\n",
+		per := func(d time.Duration) float64 {
+			return float64(d.Microseconds()) / float64(frames) / 1000
+		}
+		fmt.Fprintf(os.Stderr, "nanolathe: %d frames in %s (%.2f ms/frame, %.1f fps; step %.2f ms, present %.2f ms)\n",
 			frames, elapsed.Round(time.Millisecond),
-			float64(elapsed.Microseconds())/float64(frames)/1000,
-			float64(frames)/elapsed.Seconds())
+			per(elapsed), float64(frames)/elapsed.Seconds(),
+			per(stepTotal), per(presentTotal))
 	}
 
 	img := cl.ComposeFrame()

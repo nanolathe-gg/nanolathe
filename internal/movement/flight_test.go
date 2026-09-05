@@ -3,6 +3,8 @@ package movement
 import (
 	"math"
 	"testing"
+
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // TestFlightVerticalClamp locks C29: the three dy branches plus the sentinel
@@ -549,5 +551,83 @@ func TestFlightScalarSpeed(t *testing.T) {
 	want2 := int32(math.Sqrt(float64(2) * float64(65536) * float64(65536))) // trunc
 	if s.Speed != want2 {
 		t.Fatalf("speed sqrt2 want %d got %d", want2, s.Speed)
+	}
+}
+
+// TestLeanPitchReadsFirstRotatedComponent pins the lean accumulator's pitch
+// operand and its sign [04 R-AIR-01 §2]. Retail feeds the NEGATED FIRST rotated
+// component to both angle calls; the second rotated component is computed by
+// the shared coordinate-pair rotation and never read. This routine derived the
+// pitch term from the negated second component until AU-4, which was latent on
+// stock content only because `pitchscale` defaults to 0.
+//
+// The case is chosen so the two candidate operands disagree in both magnitude
+// and sign: heading 0 makes the rotation the identity, so the first rotated
+// component is the decayed lean X and the second the decayed lean Z, and the
+// two are given opposite signs.
+func TestLeanPitchReadsFirstRotatedComponent(t *testing.T) {
+	const gravity = 0x1FDB // OTA gravity default [04 R-AIR-01 §2]
+	s := &FlightState{
+		LeanX:      3 << 16,
+		LeanZ:      -5 << 16,
+		Heading:    0,
+		Gravity:    gravity,
+		BankScale:  0x8000,  // 0.5
+		PitchScale: 0x10000, // 1.0 — a definition that authors pitchscale
+	}
+	s.ApplyLean(0, 0, 0)
+
+	// Recompute the contract independently: decay, identity rotation, the
+	// gravity denominator, then each scaled term through atan2.
+	px := int32((int64(3<<16) * leanDecay) >> 16)
+	pz := int32((int64(-5<<16) * leanDecay) >> 16)
+	if px == pz || px == -pz {
+		t.Fatalf("test setup: the two rotated components must disagree, got px=%d pz=%d", px, pz)
+	}
+	l := (int64(gravity) << 16) / leanGravityDivisor
+	wantPitch := numeric.AngleFromAtan2((int64(0x10000)*int64(-px))>>16, l).Raw()
+	wantBank := numeric.AngleFromAtan2((int64(0x8000)*int64(-px))>>16, l).Raw()
+	wrongPitch := numeric.AngleFromAtan2((int64(0x10000)*int64(-pz))>>16, l).Raw()
+
+	if s.Pitch != wantPitch {
+		t.Fatalf("pitch = %d, want %d (negated FIRST rotated component) [04 R-AIR-01 §2]", s.Pitch, wantPitch)
+	}
+	if s.Pitch == wrongPitch {
+		t.Fatalf("pitch = %d matches the SECOND rotated component; retail reads the first [04 R-AIR-01 §2]", s.Pitch)
+	}
+	if s.Bank != wantBank {
+		t.Fatalf("bank = %d, want %d [04 R-AIR-01 §2]", s.Bank, wantBank)
+	}
+	// The first rotated component is positive here, so both negated terms are
+	// negative and both angles sit in the fourth quadrant of the 16-bit circle.
+	if int16(s.Pitch) >= 0 || int16(s.Bank) >= 0 {
+		t.Fatalf("sign: pitch=%d bank=%d, both must be negative for a positive first rotated component", int16(s.Pitch), int16(s.Bank))
+	}
+
+	// With equal scales the two words are identical, because they consume the
+	// same operand [04 R-AIR-01 §2].
+	e := &FlightState{LeanX: 3 << 16, LeanZ: -5 << 16, Gravity: gravity, BankScale: 0x10000, PitchScale: 0x10000}
+	e.ApplyLean(0, 0, 0)
+	if e.Pitch != e.Bank {
+		t.Fatalf("equal scales: pitch %d != bank %d, so the two angle calls do not share an operand", e.Pitch, e.Bank)
+	}
+
+	// A heading-rotated case where the second component is zero: any reader of
+	// it would produce a zero pitch, and the correct reader does not.
+	r := &FlightState{LeanX: 0, LeanZ: 4 << 16, Heading: 16384, Gravity: gravity, BankScale: 0x10000, PitchScale: 0x10000}
+	r.ApplyLean(0, 0, 0)
+	if r.Pitch == 0 {
+		t.Fatalf("rotated case: pitch = 0, i.e. it read the (zero) second rotated component [04 R-AIR-01 §2]")
+	}
+	if r.Pitch != r.Bank {
+		t.Fatalf("rotated case: pitch %d != bank %d", r.Pitch, r.Bank)
+	}
+
+	// The default `pitchscale` of 0 keeps pitch at zero whatever the lean is,
+	// which is why the wrong operand was latent on stock content.
+	d := &FlightState{LeanX: 3 << 16, LeanZ: -5 << 16, Gravity: gravity, BankScale: 0x10000, PitchScale: 0}
+	d.ApplyLean(0, 0, 0)
+	if d.Pitch != 0 {
+		t.Fatalf("pitchscale 0: pitch = %d, want 0 [02 \"Unit record\"]", d.Pitch)
 	}
 }

@@ -10,6 +10,10 @@ const (
 	SteepCost       int32 = 30 // [04 R-PATH-01 §3]
 	ShortRunPenalty int32 = 75 // [04 R-PATH-01 §3]
 	ShortRunLimit         = 5  // [04 R-PATH-01 §3]
+	// StartRun is the straight-run counter the seeded start node carries. It
+	// is above ShortRunLimit, which is the whole mechanism that keeps the
+	// short-run penalty off the first step [04 R-PATH-01 §4] step 11.
+	StartRun uint16 = 100
 )
 
 var TurnPenaltyTable = [8]int32{0, 40, 60, 80, 100, 80, 60, 40} // [04 §7.2]
@@ -402,8 +406,12 @@ func (s *Session) init() {
 	if startDir > 7 {
 		startDir = DirN
 	}
+	// g = 0, f = the start's scaled heuristic, run = 100. The stored terrain
+	// term is deliberately left zero: the start cell is closed at its own pop
+	// before any relaxation can reach it, so the field is never read
+	// [04 R-PATH-01 §4] step 11.
 	startID := s.ns.Alloc(s.cfg.Start, 0, startH, invalidNodeID, startDir)
-	s.ns.Get(startID).Run = 100
+	s.ns.Get(startID).Run = StartRun
 	s.ns.SetOpen(startID, true)
 	s.touch(s.cfg.Start, entry{status: 1, dir: startDir, node: startID})
 	s.heap.Push(startID, s.ns.Get(startID).F)
@@ -487,18 +495,24 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			e := s.entries[c]
 			value := s.passValue(c)
 			state := e.status & 3
-			if value == 0 {
-				if e.status&8 == 0 {
-					e.status = (e.status &^ 3) | 3
-					s.touch(c, e)
-					continue
-				}
-				value = 3
+			// A blocked cell is skipped unless the pre-search ray already
+			// stepped onto it. One that carries the ray-visited bit is costed
+			// like any other neighbour, keeping its probe value of 0: the
+			// terrain term below is driven by the probe result itself, so a
+			// blocked-but-ray-visited cell pays the steep tier, not nothing
+			// [04 R-PATH-01 §3].
+			if value == 0 && e.status&8 == 0 {
+				e.status = (e.status &^ 3) | 3
+				s.touch(c, e)
+				continue
 			}
 			if state != 0 && state != 1 {
 				continue
 			}
 			turn, step := TurnPenalty(n.Dir, d), StepCost(d)
+			// terrainTerm = (passability > 1) ? 0 : 30 — blocked (0) and steep
+			// (1) both pay 30; unexplored (2) and clear (3) pay nothing
+			// [04 R-PATH-01 §3].
 			terrain := int32(0)
 			if value <= 1 {
 				terrain = SteepCost
@@ -507,8 +521,12 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			if d == n.Dir {
 				run = n.Run + 1
 			}
+			// The short-run 75 is gated by the parent's straight-run counter
+			// alone. No parent-identity test guards it: the start node is
+			// seeded with run 100, which is what keeps the 75 off the first
+			// step [04 R-PATH-01 §4] step 11.
 			short := int32(0)
-			if d != n.Dir && n.Parent != invalidNodeID && n.Run < ShortRunLimit {
+			if d != n.Dir && n.Run < ShortRunLimit {
 				short = ShortRunPenalty
 			}
 			gNew := n.G + turn + step + terrain + short
@@ -529,6 +547,18 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			node := s.ns.Get(nid)
 			node.Run, node.TerrainTerm, node.Open = run, uint16(terrain), true
 			s.heap.Push(nid, node.F)
+			// TODO(question): opening a cell writes the whole status byte, so
+			// the ray-visited bit does not survive into the node's own pop.
+			// [04 R-PATH-01 §1] states that the *pop* writes the whole byte 2
+			// "which also clears bits 2 and 3", and names bit 3's one consumer
+			// as the expansion's blocked-cell arm; it does not say whether the
+			// open is likewise a whole-byte write or an OR. Today the
+			// difference is visible: a blocked-but-ray-visited cell is opened
+			// and costed here, but the revised-layer re-test at its own pop
+			// then closes it as blocked, so no route ever ends on or passes
+			// through one. Settled by reading what the expansion writes into
+			// the status byte when it opens a cell, and whether the pop-time
+			// re-test consults bit 3 at all.
 			e = entry{status: 1, dir: d, node: nid}
 			hs := ScaledHeuristic(node.H, s.scale)
 			if s.hasTolerance && hs <= s.tolerance {

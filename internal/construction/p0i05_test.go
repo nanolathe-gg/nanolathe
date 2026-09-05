@@ -1,4 +1,5 @@
-// Package construction P0-I05 gate tests: authoritative site, progress, slot order, no hash, distinct handlers [P0-I05].
+// P0-I05 gate tests: authoritative site, progress, slot order, no hash, distinct handlers [P0-I05].
+
 package construction
 
 import (

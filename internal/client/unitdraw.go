@@ -157,28 +157,58 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 // before that surface is copied to the framebuffer, so tiled backgrounds,
 // oversized picture gadgets, and glyph overhang cannot escape the window
 // rectangle [07 §4]. Presentation only [I6].
+//
+// Every piece of chrome the battle shell draws comes through here, so the
+// per-pixel work is what the HUD stage costs. The clip is therefore resolved
+// into a row and column range once per call rather than re-tested per pixel,
+// and the source and destination rows are taken as slices so the transparency
+// test and the store are the only per-pixel work left. GAFFrame.At is not
+// called: its two guards are exactly the ranges computed here, so inlining
+// them keeps the same pixels — including a frame whose pixel or transparency
+// arrays are shorter than its declared size, where At skips the missing tail
+// and the per-row limit below skips the same tail.
 func (c *Client) UIBlitClipped(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
 	if f == nil {
 		return
 	}
 	minX, minY := max(clipX, 0), max(clipY, 0)
 	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
-	for row := 0; row < int(f.Height); row++ {
-		py := y + row
-		if py < minY || py >= maxY {
+	if len(c.indexed) < c.width*c.height {
+		return
+	}
+	fw, fh := int(f.Width), int(f.Height)
+	// Source row and column ranges: destination pixel (x+col, y+row) is written
+	// when it is inside the clip, so col runs over [minX-x, maxX-x) intersected
+	// with the frame's own [0, fw), and likewise for row.
+	col0, col1 := max(0, minX-x), min(fw, maxX-x)
+	row0, row1 := max(0, minY-y), min(fh, maxY-y)
+	if col0 >= col1 || row0 >= row1 {
+		return
+	}
+	// A short Pixels or Transparent array truncates the frame; At returned
+	// "absent" past either end, so the walk stops at the same pixel.
+	avail := len(f.Pixels)
+	if len(f.Transparent) < avail {
+		avail = len(f.Transparent)
+	}
+	for row := row0; row < row1; row++ {
+		base := row * fw
+		hi := col1
+		if base+hi > avail {
+			hi = avail - base
+		}
+		if hi <= col0 {
 			continue
 		}
-		for col := 0; col < int(f.Width); col++ {
-			px := x + col
-			if px < minX || px >= maxX {
+		src := f.Pixels[base+col0 : base+hi]
+		blank := f.Transparent[base+col0 : base+hi]
+		dstBase := (y+row)*c.width + x + col0
+		dst := c.indexed[dstBase : dstBase+len(src)]
+		for i, b := range src {
+			if blank[i] {
 				continue
 			}
-			b, ok := f.At(col, row)
-			if !ok {
-				continue
-			}
-			index := py*c.width + px
-			c.indexed[index] = b
+			dst[i] = b
 		}
 	}
 }

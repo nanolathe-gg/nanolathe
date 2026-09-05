@@ -1,4 +1,4 @@
-// Package movement — ground steering [04 §8.1] C20, C21.
+// Ground steering [04 §8.1] C20, C21.
 //
 // SteerState is the explicit integration surface that retail scatters across
 // the unit record. The orchestrator will unify this with units.Unit once that
@@ -31,6 +31,7 @@
 //	                     [02 "Unit record"][04 R-MOV-01 §1][04 R-MOV-01 §4]
 //	ResidualX/Y/Z        the flight lean accumulator's three components,
 //	                     flight only [04 R-AIR-01 §2]
+
 package movement
 
 import (

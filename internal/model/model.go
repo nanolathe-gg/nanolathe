@@ -1,10 +1,3 @@
-// Package model implements the 3DO piece hierarchy and transform composition [03 §2.4] [PLAN_06 WU-06-8].
-//
-// Contracts C20–C24 plus the model portion of the Public API block are owned here.
-// Load-time primitive reordering (selection swap + mean-Y bubble sort) is already
-// applied by formats.ThreeDO per [GAP 02-A6] — see formats/three_do.go primitive
-// reordering loop — and is NOT redone here. This package owns the recursive
-// half-turn negation pass and the world transform composition.
 package model
 
 import (
@@ -281,7 +274,7 @@ func (t Transform) WorldOffset() [3]numeric.Fixed {
 //
 //   - Primitive reordering (selection swap + mean-Y bubble sort) is already
 //     applied by formats.LoadThreeDO per [GAP 02-A6]; cited here and NOT redone
-//     per the ownership note in docs/PLAN_06_UNITS_ORDERS_COB.md WU-06-8.
+//     per the ownership note in DESIGN_UNITS_ORDERS_COB §2.4 `internal/model`.
 //   - The recursive half-turn pass negating first and third vertex coordinates
 //     and first and third parent translations of every object is applied HERE
 //     per [03 §2.4] C20.

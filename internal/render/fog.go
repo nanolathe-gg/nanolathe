@@ -258,3 +258,60 @@ func BuildFogOpsInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera
 	}
 	return out
 }
+
+// BuildFogOpsWindowInto is BuildFogOpsInto restricted to the cells that can
+// land on a surface of surfW x surfH pixels.
+//
+// The fog cache is map-sized, so BuildFogOpsInto emits one operation for every
+// fogged cell of the whole map -- better than seventeen thousand of them on a
+// stock map -- and the composer then clips all but the few hundred that touch
+// the viewport. Building and discarding the rest is pure waste: the composer's
+// clip already reduces an off-surface operation to nothing, so not emitting it
+// paints exactly the same pixels.
+//
+// The surface rectangle is the composer's, not the camera's: the composer
+// rebases every operation off the retail viewport origin before clipping, and
+// FogScreenRect adds that same origin, so the two cancel and a cell's rebased
+// rect is [gx*32 + 16 - camX, +32) by [gy*32 + 16 - camZ, +32). A cell survives
+// exactly when that rect overlaps [0, surfW) x [0, surfH) -- the same test the
+// composer's clip applies -- and the survivors keep their row-major order, so
+// the paint sequence is unchanged [03 §3.3][I1].
+//
+// BuildFogOpsInto is left alone: it is the unwindowed contract the render tests
+// drive, several of which pass a zero viewport.
+func BuildFogOpsWindowInto(out []FogOp, cache *visibility.FogCache, cam *camera.Camera, surfW, surfH int32, tables *palette.Tables, dither bool) []FogOp {
+	out = out[:0]
+	if cache == nil || surfW <= 0 || surfH <= 0 {
+		return out
+	}
+	ox, oz := cache.Origin()
+	w, h := cache.Dimensions()
+	if w <= 0 || h <= 0 {
+		return out
+	}
+	var camX, camZ int32
+	if cam != nil {
+		camX, camZ = cam.X, cam.Z
+	}
+	for row := int32(0); row < h; row++ {
+		// The row test is hoisted out of the column walk: a fog grid is far
+		// taller than a viewport, so most rows are rejected by one comparison
+		// instead of by one per cell.
+		y0 := (oz+row)*FogTilePixels + FogTilePixels/2 - camZ
+		if y0+FogTilePixels <= 0 || y0 >= surfH {
+			continue
+		}
+		for col := int32(0); col < w; col++ {
+			x0 := (ox+col)*FogTilePixels + FogTilePixels/2 - camX
+			if x0+FogTilePixels <= 0 || x0 >= surfW {
+				continue
+			}
+			c0, c1 := cache.Channel(col, row)
+			if c0 == 0 && c1 == 0 {
+				continue
+			}
+			out = cellOpsInto(out, ox+col, oz+row, c0, c1, cam, tables, dither)
+		}
+	}
+	return out
+}

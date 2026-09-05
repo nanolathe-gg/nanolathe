@@ -1,4 +1,4 @@
-// Package movement — per-class stamped passability layers [04 §6.1 R-DOC04-B].
+// Per-class stamped passability layers [04 §6.1 R-DOC04-B].
 //
 // One packed 2-bit-per-cell layer is stamped per movement class over the whole
 // map (not per unit): the class's classifier chain runs per attribute cell at
@@ -22,6 +22,7 @@
 // SC22 static-layer contract: mobile occupancy is not an A* wall; the dynamic
 // channel into the layer is the occupant-age gate plus the revision pass
 // [docs/SPEC_CONFLICTS SC22][04 §8.2 R-DOC04-D].
+
 package movement
 
 import (
@@ -52,9 +53,8 @@ const (
 // wipe-and-rebuild and the phase-5 per-player LOS stamp — and NO
 // occupancy-commit writer, so a movement-side copy would stay all-zero forever
 // and the search's bit-miss value would never occur [04 R-PATH-01 §14]
-// [03 R-LAYER §1 "Confirmation (2026-09-02, RWU-19-30)"]. The class layer
-// therefore holds a VIEW of the publisher's array through this port, never an
-// array of its own.
+// [03 R-LAYER §1]. The class layer therefore holds a VIEW of the publisher's
+// array through this port, never an array of its own.
 type MappingWordSource func(tileX, tileZ int32) (uint16, bool)
 
 // ClassLayer is one movement class's stamped layer: the class record (the

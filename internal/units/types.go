@@ -1,4 +1,4 @@
-// Package units — typed per-unit state [04 §2][04 §4][04 §5][06][GAP T15].
+// Typed per-unit state [04 §2][04 §4][04 §5][06][GAP T15].
 //
 // This file defines the typed fields and side tables that the real per-unit
 // pipeline owns. Construction Remaining is owned exclusively by
@@ -12,6 +12,7 @@
 // units) [04 §8.1][04 §9.1]; attachments/cargo live here for future
 // transport wiring [04 §4.4]. Orders remain opaque any holding *orders.Queue to
 // avoid the orders→units import cycle [04 §3.2][04 §3.3].
+
 package units
 
 import (
@@ -224,7 +225,7 @@ const NumSlots = 3 // [06 §1.2] primary, secondary, tertiary
 // 65536, with angles unsigned 16-bit at 65536 per circle [04 §8.1]
 // [04 R-MOV-01 §4] (I2).
 type MoveState struct {
-	Mode    uint8         // low two bits of the flags-word mode mirror: 1 grounded/surface (every structure too), 2 airborne, 0 attached/parked, 3 save-installed [04 R-MOV-01 §8]; seeded to 1 at creation. The older "0 none, 1 stopped/parked, 2 active locomotion" reading is retracted [03 R-RAST-01 §7 correction].
+	Mode    uint8         // low two bits of the flags-word mode mirror: 1 grounded/surface (every structure too), 2 airborne, 0 attached/parked, 3 save-installed [04 R-MOV-01 §8]; seeded to 1 at creation. The older "0 none, 1 stopped/parked, 2 active locomotion" reading is retracted [03 R-RAST-01 §7].
 	Heading uint16        // 0..65535 per circle [04 §5.1] C25 (I2) [03 §2.4] C24 bank→Z heading→Y pitch→X
 	Pitch   uint16        // authoritative ground-conform or flight-lean pitch [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
 	Bank    uint16        // authoritative ground-conform or flight-lean bank [03 §2.4] C24 [04 R-MOV-01 §5a][04 R-AIR-01 §2]
