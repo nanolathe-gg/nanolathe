@@ -10,34 +10,48 @@ import (
 // Visibility publication lives INSIDE phase 5 [R-CORE-01 §4.4.1] DET-06:
 // after the path scheduler and each player's orders/work, that player's unit
 // slice is swept stamping coverage per in-game unit. The stamp is
-// dirty-checked — a unit's coverage is re-rasterized only when its stored
-// stamp cell or sight range changed (a unit that moved in phase 2 is
-// re-stamped in the same tick's phase 5; an unchanged unit writes nothing).
-// Bulk wipe-and-rebuild happens ONLY at battle entry
+// dirty-checked — but the dirty check is the visibility service's refresh
+// throttle [03 R-VIS-01 §2], not a session-side cache, so a unit that moved in
+// phase 2 is re-stamped in the same tick's phase 5 and an unchanged unit
+// writes nothing. Bulk wipe-and-rebuild happens ONLY at battle entry
 // (publishVisibilityForAll) and in the phase-5 commander spawn/defeat
 // branches — never per tick. There is no post-phase-12 visibility pass: the
 // phase-5 sweep is the final publisher.
 
-// visStamp is the dirty-check key of a unit's last-published stamp
-// [R-CORE-01 §4.4.1]: stamp cell (CX, CZ) and sight range. Accessed only by
-// handle key — never ranged (I1).
+// visStamp records the cell and sight range last handed to the visibility
+// service for one unit. It is diagnostic and save-restore state, NOT a
+// throttle: the throttle compares against the last actual publication and owns
+// inputs this key does not carry [03 R-VIS-01 §2]. Accessed only by handle key
+// — never ranged (I1).
 type visStamp struct {
 	cx, cz int32
 	radius int32
 }
 
-// heightByteAt derives the observer emitter from the sea-level-clamped world
-// height and the immutable model-top extent [03 §3.2, §3.5].
-func heightByteAt(u *units.Unit, seaLevel uint8) uint8 {
+// raisedHeightWord is the observer record's Y [03 R-VIS-01 §2] "The observer
+// record": the unit's world height raised to at least (SeaLevel + 1) << 16 and
+// narrowed to the signed high word. The raise happens in the record, so BOTH
+// rasters see the raised value — neither branch re-derives it.
+func raisedHeightWord(u *units.Unit, seaLevel uint8) int32 {
 	if u == nil {
 		return 0
 	}
 	y := u.Y
-	floor := numeric.Fixed(int64(seaLevel)+1) << 16
-	if y < floor {
+	if floor := numeric.Fixed(int64(seaLevel)+1) << 16; y < floor {
 		y = floor
 	}
-	h := int32(int16(int64(y) >> 16))
+	return int32(int16(int64(y) >> 16))
+}
+
+// heightByteAt derives the observer emitter from the sea-level-clamped world
+// height and the immutable model-top extent [03 §3.2, §3.5]. It is the
+// terrain-ray branch's stored coverage byte; the sprite-mask branch stores the
+// quantized shape index instead [03 R-VIS-01 §2].
+func heightByteAt(u *units.Unit, seaLevel uint8) uint8 {
+	if u == nil {
+		return 0
+	}
+	h := raisedHeightWord(u, seaLevel)
 	if u.Def != nil {
 		h += u.Def.ModelTop
 	}
@@ -49,8 +63,10 @@ func heightByteAt(u *units.Unit, seaLevel uint8) uint8 {
 	return uint8(h)
 }
 
-// observerTile applies the half-height beam shear before converting to the
-// 32-pixel coverage grid [03 §3.2, §3.5].
+// observerTile is the TERRAIN-RAY branch's observer cell [03 R-VIS-01 §2]
+// "Terrain-ray branch": one floor of (worldZ_high − emitter/2) after the
+// half-height beam shear, converted to the 32-pixel coverage grid. The stored
+// tile is the observer cell itself.
 func observerTile(u *units.Unit, emitter uint8) (cx, cz int32) {
 	if u == nil {
 		return 0, 0
@@ -60,6 +76,44 @@ func observerTile(u *units.Unit, emitter uint8) (cx, cz int32) {
 	return px >> 5, pz >> 5
 }
 
+// spriteObserverTile is the SPRITE-MASK (Circular) branch's observer cell
+// [03 R-VIS-01 §2] "Sprite-mask branch". The two branches do NOT compute the
+// same shear, and the difference is authoritative sight, not displayed fog:
+//
+//   - the ray branch takes ONE floor of (worldZ_high − emitter/2);
+//   - the sprite branch takes TWO independent floors,
+//     floorDiv(worldZ, 2^21) − floorDiv(worldY_high, 64), which is not the
+//     floor of the combined expression;
+//   - the sprite branch does NOT add the model top — only the raised Y enters.
+//
+// Retail then subtracts the authored vismask frame's own signed offsets to
+// reach the raster origin. Nanolathe's raster does that itself from the shape
+// anchor (visibility.walkSpriteMask), so the offsets are applied exactly once
+// and this function returns the observer cell, not the footprint corner. The
+// refresh throttle is unaffected by which of the two it compares: the offsets
+// are constant for a shape index, and the index is part of the same key.
+func spriteObserverTile(u *units.Unit, seaLevel uint8) (cx, cz int32) {
+	if u == nil {
+		return 0, 0
+	}
+	// Arithmetic shifts are the floor divisions of [I3]: >>5 on the signed
+	// high word is floorDiv(world, 2^21); >>6 is floorDiv(worldY_high, 64).
+	px := int32(int16(int64(u.X) >> 16))
+	pz := int32(int16(int64(u.Z) >> 16))
+	return px >> 5, (pz >> 5) - (raisedHeightWord(u, seaLevel) >> 6)
+}
+
+// observerCell derives the observer cell with the raster the mode word's bit 2
+// selects [03 R-VIS-01 §2]. Both publishers — the battle-entry bulk publish and
+// the per-tick phase-5 sweep — must ask through here; applying the ray shear in
+// Circular mode moves what units can see.
+func observerCell(s *Session, u *units.Unit, emitter uint8) (cx, cz int32) {
+	if s != nil && s.Vis != nil && !s.Vis.TerrainRay() {
+		return spriteObserverTile(u, seaLevelFor(s))
+	}
+	return observerTile(u, emitter)
+}
+
 func radiusFor(u *units.Unit) int32 {
 	if u != nil && u.Def != nil && u.Def.SightDistance > 0 {
 		return int32(u.Def.SightDistance)
@@ -67,16 +121,24 @@ func radiusFor(u *units.Unit) int32 {
 	return 32
 }
 
-// publishOne synchronously refreshes one unit's stored observer footprint and
-// records its dirty-check key. Event-driven callers (battle entry, capture,
-// construction complete, death) publish immediately; the per-tick phase-5
-// sweep uses stampPlayerSlice's dirty check instead.
+// publishOne hands one unit's observer record to the throttled refresh. Every
+// publisher goes through it — battle entry, capture, construction complete,
+// death, and the per-tick phase-5 sweep — because the decision to recompute is
+// the visibility service's, not the session's [03 R-VIS-01 §2].
+//
+// The session must NOT pre-filter on its own key. The throttle's inputs differ
+// from anything the caller can see from one sweep to the next: the terrain-ray
+// branch refreshes when the emitter moved more than five from the LAST
+// PUBLISHED byte, so six one-unit climbs must refresh even though no single
+// sweep changed the cell; the sprite branch keys on the quantized shape index,
+// not the raw sight radius; and both key on the owner, which a capture changes
+// without moving the unit.
 func publishOne(s *Session, u *units.Unit) {
 	if s == nil || s.Vis == nil || u == nil || !u.Alive {
 		return
 	}
 	hb := heightByteAt(u, seaLevelFor(s))
-	cx, cz := observerTile(u, hb)
+	cx, cz := observerCell(s, u, hb)
 	r := radiusFor(u)
 	s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{
 		Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz,
@@ -138,21 +200,11 @@ func stampPlayerSlice(s *Session, player int) {
 		if u == nil || !u.Alive || int(u.Owner) != player {
 			continue
 		}
-		hb := heightByteAt(u, seaLevelFor(s))
-		cx, cz := observerTile(u, hb)
-		r := radiusFor(u)
-		if st, seen := s.visStamps[int(u.Handle)]; seen &&
-			st.cx == cx && st.cz == cz && st.radius == r {
-			continue // unchanged unit writes nothing [R-CORE-01 §4.4.1]
-		}
-		s.Vis.Refresh(visibility.ObserverID(u.Handle), visibility.Observer{
-			Owner: visibility.PlayerID(u.Owner), CX: cx, CZ: cz,
-			HeightByte: hb, Radius: r,
-		})
-		if s.visStamps == nil {
-			s.visStamps = make(map[int]visStamp)
-		}
-		s.visStamps[int(u.Handle)] = visStamp{cx: cx, cz: cz, radius: r}
+		// The throttle lives in visibility.Refresh, which compares against the
+		// LAST PUBLICATION rather than against the previous sweep. Skipping the
+		// call here on an unchanged cell hid the terrain-ray height test
+		// entirely [03 R-VIS-01 §2] "Terrain-ray branch"; see publishOne.
+		publishOne(s, u)
 	}
 }
 

@@ -72,10 +72,6 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	if err != nil {
 		return nil, fmt.Errorf("session: retail mission resolution: %w", err)
 	}
-	terrain, err := loadTerrainStrict(deps.FS, cat, m)
-	if err != nil {
-		return nil, fmt.Errorf("session: retail map resolution: %w", err)
-	}
 	// The pool's player-slice order only consults the peer-identity sort key
 	// in session kind 3 (multiplayer); kinds 1 (campaign) and 2 (skirmish)
 	// both order by slot regardless of that word [08 R-SESS-01 §7]. A loaded
@@ -103,6 +99,32 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	poolRecords := int(campaignUnitLimit(m))
 	if sessionKind == sessionKindSkirmish {
 		poolRecords = ClampUnitLimit(deps.UnitLimit)
+	}
+	// A restored campaign runs under the same unit restriction a fresh one
+	// does. Battle entry's unit-restriction loader is kind 1 only, and it runs
+	// in §2 step 4 — before the world rebuild's catalog compile compacts the
+	// cleared records out, so the restriction manifests as catalog removal,
+	// re-sorting and renumbering rather than as an allocator refusal
+	// [08 R-ENTRY-01 §2 step 4] [05 R-SHARE-01 §8]. The load path runs "§3
+	// world rebuild in full" [08 R-ENTRY-01 §8 "Load path summary"], so the
+	// same step precedes it here: the restriction is resolved after the
+	// mission and applied before the terrain, the pool and every unit, which
+	// is what makes the restored definition index space the one the save was
+	// written against.
+	//
+	// The restriction lasts exactly one battle, so it is applied to a detached
+	// clone; deps.Catalog is a caller-shared compiled catalog and must not be
+	// mutated. The pool count is read above, from the session unit limit and
+	// never from the definition count [05 R-SHARE-01 §7].
+	if sessionKind == sessionKindCampaign {
+		cat, err = applyUseOnlyRestriction(deps.FS, cat, m.UseOnlyPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	terrain, err := loadTerrainStrict(deps.FS, cat, m)
+	if err != nil {
+		return nil, fmt.Errorf("session: retail map resolution: %w", err)
 	}
 	unitsWorld, err := newBattleSlicedWorldWithCOBSized(cat, deps.FS, sessionKind, [pool.PlayerCount]uint32{}, poolRecords)
 	if err != nil {

@@ -122,24 +122,29 @@ const (
 )
 
 // CallbackBridge is the only typed production surface for engine-to-COB
-// callbacks. It owns mode dispatch and receiver polling; downstream systems
-// should not call VM.Start for researched callbacks [04 §4.2][04 §5.1].
+// callbacks. It owns mode dispatch and the callback's identity; the VM owns the
+// completion receiver and invokes it at the explicit-return opcode, so a
+// signalled, killed, or displaced callback can never be answered by whatever
+// took its slot next. Downstream systems should not call VM.Start for
+// researched callbacks [04 §4.2][04 §5.1][04 §5.3].
 type CallbackBridge struct {
 	VM *VM
 
 	createInvoked    bool
-	pending          [8]pendingCallback
 	lifecyclePending [8]pendingCallback
 	lifecycle        LifecycleSink
 	lifecycleTick    uint32
 	lifecycleSrc     uint16
 }
 
+// pendingCallback is the bridge's record of one outstanding callback. identity
+// is the VM allocation it names — the slot index alone is not enough, because
+// the slot can be freed and refilled inside a single drain [04 §4.2].
 type pendingCallback struct {
 	active   bool
 	name     string
 	mode     CallbackMode
-	receiver CallbackReceiver
+	identity uint64
 }
 
 // NewCallbackBridge returns a bridge for vm. A nil VM is retained as an
@@ -167,6 +172,42 @@ func (b *CallbackBridge) lifecycleEvent(name string, mode CallbackMode, thread i
 	}
 }
 
+// arm records the callback against the allocation the VM actually made and, if
+// there is anything to deliver, installs the completion receiver on THAT
+// allocation. Ownership then follows the thread's real lifecycle: a signal, an
+// invalid-opcode kill, or a reuse of the slot by any other start drops the
+// receiver with the allocation, and only this callback's own explicit return
+// can invoke it [04 §4.2][04 §4.3][04 §5.3].
+func (b *CallbackBridge) arm(thread int, name string, mode CallbackMode, receiver CallbackReceiver) uint64 {
+	if thread < 0 || thread >= len(b.lifecyclePending) {
+		return 0
+	}
+	identity := b.VM.ThreadIdentity(thread)
+	b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: mode, identity: identity}
+	if receiver == nil && b.lifecycle == nil {
+		// Nothing to deliver and nothing to observe: no closure is built, so
+		// the ordinary bridge start stays allocation-free [04 §4.2].
+		return identity
+	}
+	b.VM.SetThreadCompletion(thread, identity, func(value int32) {
+		b.complete(thread, identity, name, mode, receiver, value)
+	})
+	return identity
+}
+
+// complete runs at the callback's own explicit return, inside the VM, before
+// the slot is released [04 §4.2]. It is the only delivery path for an explicit
+// return value.
+func (b *CallbackBridge) complete(thread int, identity uint64, name string, mode CallbackMode, receiver CallbackReceiver, value int32) {
+	if p := &b.lifecyclePending[thread]; p.active && p.identity == identity {
+		*p = pendingCallback{}
+	}
+	b.lifecycleEvent(name, mode, thread, "finish")
+	if receiver != nil {
+		receiver(CallbackReturn{Name: name, Mode: mode, Thread: thread, Value: value, Explicit: true})
+	}
+}
+
 // Create invokes Create exactly once as a deferred start with wake=1. A
 // second call is rejected and does not schedule another callback [R-CB-01 §2].
 func (b *CallbackBridge) Create() CallbackResult {
@@ -185,15 +226,18 @@ func (b *CallbackBridge) Create() CallbackResult {
 		// callback that was never attempted [04 §4.2].
 		b.lifecycleEvent("Create", ModeDeferred, -1, "start-failed")
 	}
+	var identity uint64
 	if ok && thread >= 0 && thread < len(b.lifecyclePending) {
 		b.lifecycleEvent("Create", ModeDeferred, thread, "start")
-		b.lifecyclePending[thread] = pendingCallback{active: true, name: "Create", mode: ModeDeferred}
+		identity = b.arm(thread, "Create", ModeDeferred, nil)
 	}
 	if ok {
 		b.VM.Drain(0)
 	}
 	b.collectReturns()
-	completed := ok && (thread < 0 || !b.VM.IsThreadAlive(thread))
+	// Completion is asked of Create's own allocation, not of the slot it
+	// happened to take [04 §4.2].
+	completed := ok && (thread < 0 || !b.VM.ThreadAliveAs(thread, identity))
 	return CallbackResult{Name: "Create", Mode: ModeDeferred, Wake: ok, Started: ok, Completed: completed, Thread: thread}
 }
 
@@ -232,12 +276,7 @@ func (b *CallbackBridge) Deferred(name string, args []int32, receiver CallbackRe
 	thread := b.VM.LastStartedThread()
 	result.Started, result.Thread = true, thread
 	b.lifecycleEvent(name, ModeDeferred, thread, "start")
-	if thread >= 0 && thread < len(b.lifecyclePending) {
-		b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred}
-	}
-	if receiver != nil && thread >= 0 && thread < len(b.pending) {
-		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred, receiver: receiver}
-	}
+	b.arm(thread, name, ModeDeferred, receiver)
 	return result
 }
 
@@ -264,15 +303,14 @@ func (b *CallbackBridge) DeferredWake(name string, args []int32, receiver Callba
 	thread := b.VM.LastStartedThread()
 	result.Started, result.Wake, result.Thread = true, true, thread
 	b.lifecycleEvent(name, ModeDeferred, thread, "start")
-	if thread >= 0 && thread < len(b.lifecyclePending) {
-		b.lifecyclePending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred}
-	}
-	if receiver != nil && thread >= 0 && thread < len(b.pending) {
-		b.pending[thread] = pendingCallback{active: true, name: name, mode: ModeDeferred, receiver: receiver}
-	}
+	identity := b.arm(thread, name, ModeDeferred, receiver)
 	b.VM.Drain(0)
 	b.collectReturns()
-	result.Completed = !b.VM.IsThreadAlive(thread)
+	// Completion is asked of the allocation that was started, not of the slot:
+	// the wake barrier can end this callback and hand the slot to a child in
+	// the same pass, and that child is not this callback still running
+	// [04 §4.2].
+	result.Completed = !b.VM.ThreadAliveAs(thread, identity)
 	return result
 }
 
@@ -280,10 +318,10 @@ func (b *CallbackBridge) DeferredWake(name string, args []int32, receiver Callba
 // seeds. Missing entries/full pools leave values untouched. A sleeping/waiting
 // callback returns partial values and remains active, while an explicit return
 // reports Completed=true; no interpolation or receiver is involved [04 §4.2].
-// The query forces the allocated slot's completion receiver to none [R-COB-01
-// §1]: any stale pending receiver registered against the reused slot is
-// dropped, so a blocked query that later resumes can never revise the values
-// the host already copied back.
+// The query's allocation carries no completion receiver [R-COB-01 §1]: claiming
+// the slot clears whatever the previous occupant left there, so a blocked query
+// that later resumes can never revise the values the host already copied back,
+// and no earlier callback can be answered through the slot the query took.
 func (b *CallbackBridge) Query(name string, seeds [4]int32) CallbackResult {
 	result := CallbackResult{Name: name, Mode: ModeQuery, Thread: -1, Values: seeds}
 	if b == nil || b.VM == nil {
@@ -297,10 +335,6 @@ func (b *CallbackBridge) Query(name string, seeds [4]int32) CallbackResult {
 	started, completed := b.VM.CallQuery(pc, values[:])
 	result.Started, result.Completed = started, completed
 	result.Values = values
-	if started && b.VM.lastQueryThread >= 0 && b.VM.lastQueryThread < len(b.pending) {
-		// Receiver forced none for the synchronous query [R-COB-01 §1].
-		b.pending[b.VM.lastQueryThread] = pendingCallback{}
-	}
 	return result
 }
 
@@ -496,40 +530,28 @@ func weaponCallbackName(slot WeaponSlot, prefix string) (string, bool) {
 	return prefix + names[slot], true
 }
 
+// collectReturns retires the bridge records of allocations that are over.
+// Explicit return values are delivered by the VM at the return opcode itself,
+// so nothing is delivered here: what this sweep finds is a callback whose
+// allocation ended without one — signalled, killed by an invalid opcode, or
+// displaced by a reuse of its slot — and none of those may answer a receiver
+// [04 §4.2][04 §4.3][04 §5.3]. It also emits the observation-only finish event
+// for a callback that outlived the sink being installed.
 func (b *CallbackBridge) collectReturns() {
 	if b == nil || b.VM == nil {
 		return
 	}
 	for i := 0; i < len(b.lifecyclePending); i++ {
 		p := &b.lifecyclePending[i]
-		if !p.active {
+		if !p.active || b.VM.ThreadAliveAs(i, p.identity) {
 			continue
 		}
-		if b.VM.HasReturn(i) {
-			b.lifecycleEvent(p.name, p.mode, i, "finish")
-			*p = pendingCallback{}
-		} else if !b.VM.IsThreadAlive(i) {
-			b.lifecycleEvent(p.name, p.mode, i, "finish-abnormal")
-			*p = pendingCallback{}
+		phase := "finish-abnormal"
+		if b.VM.ReturnedAs(i, p.identity) {
+			phase = "finish"
 		}
-	}
-	for i := 0; i < len(b.pending); i++ {
-		p := &b.pending[i]
-		if !p.active {
-			continue
-		}
-		if b.VM.HasReturn(i) {
-			value, _ := b.VM.ConsumeReturn(i)
-			if p.receiver != nil {
-				p.receiver(CallbackReturn{Name: p.name, Mode: p.mode, Thread: i, Value: value, Explicit: true})
-			}
-			*p = pendingCallback{}
-			continue
-		}
-		if !b.VM.IsThreadAlive(i) {
-			// Signal/abnormal termination has no receiver callback [04 §5.3].
-			*p = pendingCallback{}
-		}
+		b.lifecycleEvent(p.name, p.mode, i, phase)
+		*p = pendingCallback{}
 	}
 }
 

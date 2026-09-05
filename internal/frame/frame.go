@@ -1018,6 +1018,14 @@ type Buffer struct {
 	writing   bool
 	lastTick  uint32
 	published bool
+	// Retained committed events, drained by the presentation consumer. See
+	// event_retention.go: the two slots carry current STATE, which the next
+	// publication legitimately supersedes, while events are one-shot
+	// occurrences that must survive until they are applied
+	// [03 R-AUD-01 §7][03 §2.4][I6].
+	pendingEvents   []EventView
+	pendingDropped  uint64
+	pendingOverflow bool
 }
 
 // NewBuffer constructs a two-slot buffer and reserves the requested top-level
@@ -1063,6 +1071,11 @@ func (b *Buffer) Publish(tick uint32) error {
 	}
 	f := &b.slots[b.writeSlot]
 	f.Tick = tick
+	// Every committed tick's events join the retained queue exactly once, in
+	// raise order, before the slot becomes readable. A publication cadence
+	// faster than the presentation drain therefore supersedes state but never
+	// discards an occurrence [03 R-AUD-01 §7][I6].
+	b.retainCommittedEvents(f.Events)
 	b.committed.Store(uint32(b.writeSlot) + 1)
 	b.lastTick = tick
 	b.published = true

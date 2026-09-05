@@ -210,8 +210,11 @@ type Client struct {
 	// [07 R-HUD-03 §14][I6].
 	messages          frame.MessageRing
 	messageEventsTick uint32
-	messageEventsSeen bool
-	screenChat        uint8
+	// committedEvents is the scratch destination for the retained committed
+	// events drained once per rendered frame. Reusing it keeps the drain
+	// allocation-free after the first busy frame [03 R-AUD-01 §7][I6].
+	committedEvents []frame.EventView
+	screenChat      uint8
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated

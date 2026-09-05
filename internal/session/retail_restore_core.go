@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/binary"
 	"fmt"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
@@ -293,6 +294,22 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			return err
 		}
 	}
+	// Terrain follows the features it is stamped under, which is retail's own
+	// account order — Features, then Metal, then PlayerFeatures, then Mapping
+	// [08 R-SAVE-02 §11] [08 "Account inventory"]. Both boxes are exact-size
+	// gated by the world restorers themselves: `Metal`/`Plotmap` is one byte
+	// per plot cell and `PlayerFeatures`/`Plotmap` is half that, each byte
+	// packing two consecutive cells' placer nibbles [08 R-SAVE-02 §12]. A save
+	// whose map does not match the terrain this stage resolved therefore fails
+	// the load rather than half-applying a grid.
+	if s.World != nil {
+		if err := s.World.RestoreRetailMetal(image.Metal); err != nil {
+			return fmt.Errorf("session: retail restore: %w", err)
+		}
+		if err := s.World.RestoreRetailPlayerFeatures(image.PlayerFeatures); err != nil {
+			return fmt.Errorf("session: retail restore: %w", err)
+		}
+	}
 	// The AI group index is the one base-record word with a side effect beyond
 	// a field copy: the reader moves the unit out of whatever group it holds
 	// and into the saved one [08 R-SAVE-02 §6]. That is two writes — the unit's
@@ -318,6 +335,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			mgr.RestoreGroupsFromUnits(s.Units)
 		}
 	}
+	// The shower sits between the units and the trigger records in retail's
+	// account order [08 R-SAVE-02 §11].
+	restoreRetailMeteor(s, image.Meteor)
 	// Camera target/glide words and option-bit names are not part of the staged
 	// session API; the presentation-side restore seam remains owned by D4
 	// [08 R-SAVE-02 §12].
@@ -332,9 +352,90 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	// path without advancing the clock [03 §3.2, §3.3].
 	if s.Vis != nil {
 		s.Vis.RebuildAll(nil)
+		// The `Mapping` box is the explored-memory word grid verbatim — the
+		// same grid the share screen's merge walks, one sixteen-bit word per
+		// four terrain cells with ten usable player bits
+		// [08 R-SAVE-02 §12] [05 R-SHARE-01 §6]. It carries *history*, which
+		// no observer can regenerate, so it is installed on top of the fills
+		// the rebuild just wrote and underneath the observer publication that
+		// follows. Retail restores it before the units exist and lets their
+		// allocation-time sight registrations OR current coverage in
+		// [08 R-ENTRY-01 §7] step 3; here the units are already restored, so
+		// the same two writes happen in the same relative order with the
+		// derived pass last. The byte grids — current coverage, which *is*
+		// derived — are what publishVisibilityForAll rebuilds
+		// [08 R-SAVE-02 §11].
+		if err := restoreRetailMapping(s, image.Mapping); err != nil {
+			return err
+		}
 		s.visStamps = make(map[int]visStamp)
 		s.visStatus = make(map[int]uint32)
 		publishVisibilityForAll(s)
+	}
+	return nil
+}
+
+// restoreRetailMeteor installs the shower's authored parameters and then
+// applies the nine saved scalars over them.
+//
+// The `Meteor` account carries nine integer items and no weapon identity: "the
+// weapon is resolved at load from the authored mission configuration"
+// [08 "Meteor showers"], and the fix-up list names "the meteor shower's
+// authored parameters (reinstalled from the map)" among the derived state a
+// load rebuilds [08 R-SAVE-02 §11]. Retail's own order is the same: the world
+// rebuild's meteor step resolves the weapon by name and installs the authored
+// next-strike value before the restoration dispatcher runs at all
+// [08 R-ENTRY-01 §3 step 22]. Without the first half a restored shower has no
+// weapon, no radius and no density; without the second it restarts its
+// schedule.
+//
+// A missing or wrong-typed item decodes as `0`, "so an absent `Meteor` account
+// silently disables and de-activates the shower rather than failing the load"
+// [08 "Account inventory"] — which is why this returns no error.
+func restoreRetailMeteor(s *Session, m save.MeteorScalars) {
+	if s == nil {
+		return
+	}
+	s.initMeteor()
+	s.Meteor.Enabled = m.Enabled != 0
+	s.Meteor.Active = m.Active != 0
+	s.Meteor.NextStrike = uint32(m.NextStrikeTime)
+	s.Meteor.StrikeEnds = uint32(m.TimeStrikeEnds)
+	s.Meteor.NextHit = uint32(m.NextHitTime)
+	// The four coordinates are sixteen-bit globals the writer sign-extends and
+	// the reader truncates back to sixteen bits [08 "Account inventory"].
+	s.Meteor.OriginX = int32(int16(m.OriginX))
+	s.Meteor.OriginZ = int32(int16(m.OriginZ))
+	s.Meteor.TargetX = int32(int16(m.TargetX))
+	s.Meteor.TargetZ = int32(int16(m.TargetZ))
+}
+
+// restoreRetailMapping installs the saved explored-memory word grid, gated on
+// the exact size the terrain this stage resolved implies. The box is
+// `(cell width × cell height) >> 1` bytes, one little-endian word per four
+// cells [08 R-SAVE-02 §12] [05 R-SHARE-01 §6].
+func restoreRetailMapping(s *Session, data []byte) error {
+	if s == nil || s.Vis == nil || s.World == nil {
+		return fmt.Errorf("session: retail restore: Mapping target is unavailable: logical path session/restore/Mapping, providers searched [Session.Vis, Session.World], expected the explored-memory word grid")
+	}
+	words := s.Vis.WordMask()
+	cells := int64(s.World.CellW) * int64(s.World.CellH)
+	want := cells >> 2
+	if want <= 0 || int64(len(words)) != want {
+		return fmt.Errorf("session: retail restore: Mapping grid has %d words, expected %d", len(words), want)
+	}
+	return applyRetailMappingWords(words, data)
+}
+
+// applyRetailMappingWords copies the box into the word grid in its in-memory
+// little-endian order. The size gate is exact, as it is for the two Plotmap
+// boxes [08 R-SAVE-02 §12].
+func applyRetailMappingWords(words []uint16, data []byte) error {
+	if len(data) != len(words)*2 {
+		return fmt.Errorf("session: retail restore: Mapping box has %d bytes, expected %d", len(data), len(words)*2)
+	}
+	for i := range words {
+		words[i] = binary.LittleEndian.Uint16(data[i*2:])
 	}
 	return nil
 }

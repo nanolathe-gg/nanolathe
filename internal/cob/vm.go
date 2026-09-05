@@ -118,6 +118,33 @@ type VM struct {
 	lastReturnValue [8]int32 // last explicit return value per thread [04 §5.3] ON-04
 	lastReturnValid [8]bool  // true if lastReturnValue holds an explicit return not yet consumed ON-04
 
+	// A thread slot is reused the instant it goes idle, so a slot index alone
+	// cannot name one execution of one callback: a signal can free slot k and a
+	// child start can take slot k back inside the same drain [04 §4.2][04 §4.3].
+	// threadIdentity stamps every allocation with a value that is never issued
+	// twice, so a holder of a stale identity is provably not the current
+	// occupant. Identity 0 is the never-allocated sentinel.
+	//
+	// This is not the pool generation tag I5 forbids. Allocation stays
+	// lowest-free with immediate reuse and no tag on the slot index; the slot
+	// index remains the only thing thread state, the save image, and every
+	// consumer address, and stale 16-bit unit/projectile handles still alias
+	// after reuse exactly as before. The identity is private to this VM and
+	// answers the one question the slot index cannot: is this still the same
+	// execution. Retail answers it by keeping the completion receiver inside the
+	// thread record — which is why the save image declines to restore that word.
+	threadIdentity     [8]uint64
+	nextIdentity       uint64
+	lastReturnIdentity [8]uint64 // the allocation that produced lastReturnValue [04 §5.3]
+
+	// onReturn is the thread record's completion receiver. Retail keeps that
+	// receiver in the thread record; a new root or child thread begins with
+	// none; the explicit-return opcode is the only thing that invokes it; and
+	// signal or invalid-opcode termination never does [04 §4.2][04 §4.3]
+	// [04 §5.3]. Owning it here rather than in a slot-indexed table outside the
+	// VM is what makes those three rules survive a reallocation.
+	onReturn [8]func(int32)
+
 	// tickDenom is latched once at VM construction from the engine's fixed
 	// 30-tick configuration and is immutable afterwards; it is not re-derived
 	// per tick from wall-clock or game-speed budget [04 §4.6]. All four
@@ -357,6 +384,12 @@ func (v *VM) SetProgram(prog *Program) {
 	for i := range v.lastReturnValid {
 		v.lastReturnValid[i] = false
 		v.lastReturnValue[i] = 0
+		v.lastReturnIdentity[i] = 0
+		// Rebinding a program retires every allocation the old program made:
+		// the identities go back to the never-allocated sentinel so no holder
+		// can match one, and the receivers go with them [04 §4.2].
+		v.threadIdentity[i] = 0
+		v.onReturn[i] = nil
 	}
 }
 
@@ -610,11 +643,78 @@ func (v *VM) HasReturn(threadIdx int) bool {
 }
 
 // IsThreadAlive reports whether thread idx is not idle (running/sleeping/waiting) ON-04.
+// It answers about the SLOT, not about any particular allocation of it: a slot
+// freed and immediately refilled inside one drain reads alive again. A caller
+// that started a callback and wants to know whether THAT callback is still
+// running must use ThreadAliveAs [04 §4.2].
 func (v *VM) IsThreadAlive(threadIdx int) bool {
 	if v == nil || threadIdx < 0 || threadIdx >= 8 {
 		return false
 	}
 	return v.Threads[threadIdx].Status != ThreadIdle
+}
+
+// ThreadIdentity returns the allocation identity currently occupying thread
+// idx, or 0 when the slot has never been allocated by this program [04 §4.2].
+// A caller reads it immediately after a successful start and presents it later;
+// only that one execution of that one callback answers to it.
+func (v *VM) ThreadIdentity(threadIdx int) uint64 {
+	if v == nil || threadIdx < 0 || threadIdx >= 8 {
+		return 0
+	}
+	return v.threadIdentity[threadIdx]
+}
+
+// ThreadAliveAs reports whether the allocation named by identity still occupies
+// thread idx. A signal, an invalid-opcode kill, an explicit return, or a reuse
+// of the slot by any other start all make it false [04 §4.2][04 §4.3].
+func (v *VM) ThreadAliveAs(threadIdx int, identity uint64) bool {
+	if v == nil || identity == 0 || threadIdx < 0 || threadIdx >= 8 {
+		return false
+	}
+	return v.threadIdentity[threadIdx] == identity && v.Threads[threadIdx].Status != ThreadIdle
+}
+
+// ReturnedAs reports whether the allocation named by identity ended with the
+// explicit-return opcode. Signal and abnormal termination never record one
+// [04 §4.3][04 §5.3].
+func (v *VM) ReturnedAs(threadIdx int, identity uint64) bool {
+	if v == nil || identity == 0 || threadIdx < 0 || threadIdx >= 8 {
+		return false
+	}
+	return v.lastReturnIdentity[threadIdx] == identity
+}
+
+// SetThreadCompletion installs the completion receiver on the allocation named
+// by identity. It fails, changing nothing, when that allocation no longer owns
+// the slot — a callback that has already been signalled, killed, or displaced
+// by a reuse cannot acquire a receiver after the fact [04 §4.2][04 §5.3].
+// The receiver is invoked by the explicit-return opcode and by nothing else.
+func (v *VM) SetThreadCompletion(threadIdx int, identity uint64, fn func(int32)) bool {
+	if v == nil || identity == 0 || threadIdx < 0 || threadIdx >= 8 {
+		return false
+	}
+	if v.threadIdentity[threadIdx] != identity {
+		return false
+	}
+	v.onReturn[threadIdx] = fn
+	return true
+}
+
+// claimThread stamps a fresh allocation identity on slot idx and clears
+// everything the previous occupant owned there: its completion receiver, which
+// a new root or child thread never inherits, and its unconsumed explicit
+// return, which belongs to an execution that is over [04 §4.2][04 §5.3].
+// Every one of the four allocation sites — the two adapter starters and the two
+// interpreter start forms — goes through it.
+func (v *VM) claimThread(idx int) uint64 {
+	v.nextIdentity++
+	v.threadIdentity[idx] = v.nextIdentity
+	v.onReturn[idx] = nil
+	v.lastReturnValid[idx] = false
+	v.lastReturnValue[idx] = 0
+	v.lastReturnIdentity[idx] = 0
+	return v.nextIdentity
 }
 
 // Start starts script at prog word index with args asynchronously [04 §4.2] [04 §4.3].
@@ -661,6 +761,7 @@ func (v *VM) Start(script int, args []int32) bool {
 	if !ok {
 		return false // pool full, no consume [04 §4.3] C14
 	}
+	v.claimThread(idx)
 	t := &v.Threads[idx]
 	t.Status = ThreadRunning
 	v.activeThreadCount++
@@ -694,9 +795,9 @@ func (v *VM) Start(script int, args []int32) bool {
 			t.SP = 10
 		}
 	}
-	v.lastStarted = idx            // ON-04 Aim dispatch records thread relationship [06 §3.3]
-	v.lastReturnValid[idx] = false // clear stale return for this slot ON-04
-	v.lastReturnValue[idx] = 0
+	// ON-04 Aim dispatch records thread relationship [06 §3.3]. The stale
+	// return and receiver for this slot were cleared by claimThread above.
+	v.lastStarted = idx
 	return true
 }
 
@@ -741,13 +842,14 @@ func (v *VM) CallQuery(script int, args []int32) (started, returned bool) {
 		return false, false // full pool returns failure and leaves outputs untouched [04 §4.3]
 	}
 	v.lastQueryThread = idx
+	// Claiming the slot clears the stale explicit-return marker and the stale
+	// completion receiver left by a prior callback: the current Q result must
+	// observe only this invocation, and a query never carries a receiver of its
+	// own, so a blocked query that later resumes can revise nothing [04 §4.2].
+	v.claimThread(idx)
 	t := &v.Threads[idx]
 	t.Status = ThreadRunning
 	v.activeThreadCount++
-	// Clear a stale explicit-return marker if this slot was reused after a
-	// prior callback. The current Q result must only observe this invocation.
-	v.lastReturnValid[idx] = false
-	v.lastReturnValue[idx] = 0
 	t.PC = script
 	// Synchronous engine-created roots use the same signal mask seed as
 	// asynchronous roots [R-P0-10].
@@ -914,6 +1016,11 @@ func (v *VM) killThread(idx int) {
 	t.Sleep = 0
 	t.WaitPiece = -1
 	t.WaitAxis = -1
+	// Termination ends the allocation's completion ownership. Signal and the
+	// invalid-opcode kill both land here and neither invokes a receiver; the
+	// explicit-return opcode has already taken and invoked its own before
+	// calling in [04 §4.3][04 §5.3].
+	v.onReturn[idx] = nil
 	// Do not clear SignalMask? Retail leaves it? We'll keep but idle threads ignore.
 	// Wake transitively: any WaitCall that waited on idx flips to Running
 	// immediately and could be running later this same Drain scan [04 §4.2].
@@ -1934,6 +2041,11 @@ func (v *VM) runThread(idx int) {
 			// here [04 §4.3][R-COB-01 §1]. The compiled alloc-local prologue
 			// raises the depth over the placed words, so local addressing is
 			// identical for both start forms [04 §4.3].
+			// The child is a new allocation: it inherits its parent's signal
+			// mask and nothing else. In particular it never inherits the
+			// completion receiver or the unconsumed return of whatever last
+			// occupied this slot [04 §4.2][04 §4.3].
+			v.claimThread(newIdx)
 			nt := &v.Threads[newIdx]
 			nt.Status = ThreadRunning
 			v.activeThreadCount++
@@ -1982,6 +2094,9 @@ func (v *VM) runThread(idx int) {
 				val, _ := t.stackPop()
 				args[i] = val
 			}
+			// A called script is a new allocation on the same terms as a started
+			// one: mask inherited, receiver and pending return not [04 §4.3].
+			v.claimThread(newIdx)
 			nt := &v.Threads[newIdx]
 			nt.Status = ThreadRunning
 			v.activeThreadCount++
@@ -2036,6 +2151,19 @@ func (v *VM) runThread(idx int) {
 			// ON-04: store explicit return value for Aim handshake; signal/abnormal termination never sets it [04 §5.3]
 			v.lastReturnValue[idx] = ret
 			v.lastReturnValid[idx] = true
+			v.lastReturnIdentity[idx] = v.threadIdentity[idx]
+			// The return opcode "pops the top value, delivers it to the
+			// thread's completion receiver when one is set, releases the slot,
+			// and wakes threads waiting for that slot" [04 §4.2]. Delivering
+			// here, from the allocation that actually returned, is the whole of
+			// the ownership rule: nothing that happens to this slot afterwards —
+			// a reuse in this same drain included — can reach this receiver, and
+			// no later occupant inherits it.
+			fn := v.onReturn[idx]
+			v.onReturn[idx] = nil
+			if fn != nil {
+				fn(ret)
+			}
 			// Free thread and wake blocked callers [04 §4.2]
 			v.killThread(idx)
 			return

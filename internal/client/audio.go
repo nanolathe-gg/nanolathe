@@ -79,21 +79,34 @@ func (c *Client) AudioViewport() audio.Viewport {
 // It also ticks the music controller via the MCI poll [03 §8.4].
 // The queue's OnPlay variant draw [03 §8.3] C17 is played via PCM with
 // volume/pan from the positional math [03 §8.3].
+//
+// The committed events it applies are the RETAINED ones, not the current
+// slot's. Session.Step publishes one frame per sub-tick and can run several
+// before a rendered frame arrives — a frame hitch, or the 2x/3x speed setting
+// — and reading only the current slot dropped every superseded tick's cues and
+// status requests, making delivery depend on render cadence. [03 R-AUD-01 §7]
+// allows the raise to cross the publication boundary only when each committed
+// tick's events are applied exactly once in raise order, which is what the
+// buffer's retained queue provides [03 §2.4][I6].
 func (c *Client) TickAudio() {
 	if c == nil {
 		return
 	}
 	var committedTick uint32
-	var events []frame.EventView
 	if c.buffer != nil {
 		if current := c.buffer.Current(); current != nil {
 			committedTick = current.Tick
-			events = current.Events
 		}
+		// Drain even with no audio owner bound: those events have no consumer
+		// either way, and leaving them queued would only grow the retention.
+		c.committedEvents = c.buffer.DrainCommittedEvents(c.committedEvents)
 	}
 	if c.audioService != nil {
-		c.enqueueStatusEvents(committedTick, events)
-		c.audioService.DrainEvents(c.audioService.Frame()+1, committedTick, events)
+		c.enqueueStatusEvents(committedTick, c.committedEvents)
+		// One drain per rendered frame keeps the queue's single pop and the MCI
+		// poll on the presentation cadence [03 §8.3] C18 [03 §8.4]; the
+		// accumulated positional cues are played inside it, in raise order.
+		c.audioService.DrainEvents(c.audioService.Frame()+1, committedTick, c.committedEvents)
 		c.messages.Expire(committedTick)
 	}
 }
@@ -102,21 +115,28 @@ func (c *Client) TickAudio() {
 // queue. Caption composition and all UNITCHAT/cooldown gates therefore remain
 // in one resolver; only its OnCaption callback writes the client ring [03
 // §8.3][07 R-HUD-03 §14.1–§14.3].
-func (c *Client) enqueueStatusEvents(tick uint32, events []frame.EventView) {
+//
+// Each request is inserted against ITS OWN raise tick, which is the global
+// tick counter the queue's cooldown and duplicate-slot rules are expressed in
+// [03 §8.3]. Stamping a whole accumulated batch with the drain's tick would
+// move an earlier tick's cue forward past its slot's next-allowed frame and
+// silently rewrite the arbitration [03 R-AUD-01 §7]. ringTick is a separate
+// thing: the ageing origin for the caption line the resolve produces, which
+// starts when the line is drawn, not when the request was raised
+// [07 R-HUD-03 §14.3].
+func (c *Client) enqueueStatusEvents(ringTick uint32, events []frame.EventView) {
 	if c == nil {
-		return
-	}
-	if c.messageEventsSeen && c.messageEventsTick == tick {
 		return
 	}
 	for _, event := range events {
 		if event.Kind != frame.EventKindStatus {
 			continue
 		}
-		_ = c.audioService.Emit(tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
+		// A unit torn down in its raise tick had its slot zeroed before
+		// publication; Emit refuses slot 0, which is that purge [03 R-AUD-01 §7].
+		_ = c.audioService.Emit(event.Tick, audio.Slot(event.StatusKind), event.Source, event.StatusText)
 	}
-	c.messageEventsTick = tick
-	c.messageEventsSeen = true
+	c.messageEventsTick = ringTick
 }
 
 // ConfigureMessageLines installs the authored ring controls. textlines is the
