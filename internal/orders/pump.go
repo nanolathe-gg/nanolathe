@@ -990,12 +990,12 @@ const staticPurgeSurvivor uint32 = 0x4
 // `Cloak_Off`, `Standing_MoveOrder`, `Standing_FireOrder`, `Paralyze`,
 // `GetBuilt`, `BeCarried` and `Guard_NoMove` [04 §3.1].
 //
-// TODO(question): [04 R-ORD-01 §13]'s prose list of the bit-5 carriers also
-// names `SelfRepair` and `WaitForAttack`, whose static masks in §3.1's
-// byte-exact descriptor table (0x1000204 and 0x204, reproduced in table.go)
-// carry no bit 5. The branch here reads the record's own mask, so the table
-// decides and those two take the after-marker path. What would settle it: a
-// re-read of the two descriptor templates' mask words against §3.1's audit.
+// Closed (RWU-19-197, [04 R-ORD-01 §16]): the template arrays were re-read
+// row by row and the mask column is exactly the ten above. [04 R-ORD-01 §13]'s
+// prose list also named `SelfRepair` and `WaitForAttack`; that list was wrong
+// and is corrected in place — their words are 0x1000204 and 0x204 (table.go),
+// so a producer-inserted record of either takes the after-marker path. The
+// branch below reads the record's own mask, which was right all along.
 const staticHeadInsert uint32 = 0x20
 
 // staticRearSegment is bit 18: "marks a record that belongs in the rear queue

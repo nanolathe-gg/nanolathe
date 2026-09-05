@@ -234,21 +234,18 @@ func vtolHelpBuildHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32)
 	}
 	switch n.Phase {
 	case 0:
-		// TODO(question): [04 R-ORD-01 §7] adds "the definition's
-		// builder-specific script slot must be present (else cancel-all)" to
-		// this phase and does not say what that slot is. Re-checked against the
-		// whole spec (WU-19-168): the phrase appears exactly once, in that row,
-		// and no section defines a per-definition script slot of any kind — the
-		// only other "script slot" in the corpus is a COB THREAD slot
-		// [05 R-FAC-01R], which is per-unit runtime state and cannot be a
-		// definition precondition. This build's UnitDef carries the whole
-		// compiled program (`Script`, rejected at catalog link when missing) but
-		// no cached per-function index, so there is nothing here that could be
-		// absent for a definition that loaded at all. The clause is left
-		// unevaluated: skipping an EXTRA precondition admits records retail also
-		// admits, where guessing it and cancelling would kill every air assist.
-		// Decider: read the row's phase-0 gate and name the definition word it
-		// tests and which script function that word caches [04 R-ORD-01 §7].
+		// Three preconditions precede every side effect of the preamble, each
+		// failing to cancel-all with no caption [04 R-ORD-01 §17]: a live mover
+		// and `canfly` — the preamble's own pair — and a NON-EMPTY BUILD LIST,
+		// the same compiled CANBUILD test command code 14 makes
+		// [04 R-ORD-02 §1]. [04 R-ORD-01 §7]'s row called the third "the
+		// definition's builder-specific script slot"; no such slot exists, the
+		// word retail tests is the build-list head. The ground `HelpBuild`
+		// makes none of the three. The three refusals are order-free: none has
+		// a side effect.
+		if !hasBuildList(u) {
+			return 7 // cancel-all
+		}
 		return airWorkPreamble(u, n, "Building")
 	case 1:
 		n.Param3 = 0

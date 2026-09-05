@@ -6901,6 +6901,68 @@ preserve these invariants:
   every tick; burn ends only when the burn animation pointer clears; shipped
   burns are finite and immune to reclaim and further blast while burning.
 
+## RWU-19-197 — two construction residuals re-read (2026-09-04)
+
+Static re-reads closing two markers in `internal/construction` and
+`internal/session`; the four companion closures for the same unit are in doc
+04 ([04 R-ORD-01 §16] to [04 R-ORD-01 §18], [04 R-FAC-02 §9]).
+
+#### R-WORK-01 §13 — The reach consultation is gated on the satisfied word's `0x40` alone, re-confirmed at the site [R-WORK-01] (2026-09-04)
+
+**Established (direct read of the `MobileBuild` handler's phase-1 body;
+RWU-19-197).** [R-WORK-01 §12] point 2 stated where the reach test runs; the
+implementation asked for the gate word it tests, and this names it. The
+handler receives three arguments — the unit, the record and the **satisfied
+set** the pump computed for this visit (`(record.satisfied | unit.pending) &
+record.gate`, [04 §3.3]). Phase 0 arms the record's dynamic gate to `0xE0`,
+so phase 1 is dispatched only on a visit whose satisfied set holds `0x20`
+(the follower reached the rectangle goal), `0x40` (an empty route was
+published away from the goal — "cannot get there") or `0x80` (a previous goal
+object was released) — the three movement outcomes of [04 R-ORD-01 §0]. The
+phase-1 body tests **that argument for `0x40`** and only under it forms the
+centre-to-centre distance with the two half-diagonal pads and compares it to
+`builddistance`; a fail is status 7 `I can't reach the construction site` and
+abandon. A visit carrying `0x20` or `0x80` without `0x40` skips the expression
+entirely and falls straight into the placement validator and the creator. The
+consultation is therefore neither per tick nor per visit: it happens on the
+arrival-failure wake and nowhere else, and there is no other range term in
+the row.
+
+What this settles for an implementation that steps its construction machine
+per tick rather than per wake: consulting the reach expression on every visit
+is the approximation, and its only observable difference is a builder that
+reaches the rectangle border while the centre-minus-pads value still exceeds
+`builddistance` — retail starts building there; a per-visit reach test keeps
+it walking. Removing the approximation needs the `0x20`/`0x40`/`0x80` wake
+delivered to the construction step, not a second reach rule.
+
+#### R-WORK-01 §14 — The capture transfer's local branch moves neither the group word nor the selected bit [R-WORK-01] (2026-09-04)
+
+**Established (direct read of the transfer routine's local branch, the unit
+constructor's group assignment and its state-word initialization;
+RWU-19-197).** [R-WORK-01 §11]'s copy list is exhaustive; this closes the two
+fields the implementation asked about by name. The replacement is created
+through the ordinary creator, whose unit-state initializer (a) initializes the
+state word with a mask that **clears bit 4, the selected bit** ([07 R-SEL-02A]
+reads that bit for selection), and (b) ends by calling the group assigner
+with group **0**: the assigner unlinks the record from any previous group's
+member vector (a slot reused from a dead unit may still name one), pushes it
+onto group 0's vector, and writes the record's group word to 0. The transfer's
+local branch then applies its copy list — health, remaining fraction,
+orientation triple, the gated per-slot stockpile bytes — and the operational
+edge replay, and **never reads the victim's group word or its selected bit**
+(the only status bits it carries over are the two movement-mode bits passed
+to the creator, and it clears bits 18–21 afterwards). The captor's replacement
+therefore starts in group 0 and unselected, whatever the victim was in. The
+remote-peer branch ([R-WORK-01 §11]) is the only place the selected bit is
+touched, and there it is cleared on the **victim** before the kill packet, not
+moved.
+
+For Nanolathe: selection is presentation state the simulation record does not
+carry, and a fresh replacement starts in group 0 like any other new unit, so
+no copy is owed at the transfer seam. Nothing remains open here.
+
+
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,

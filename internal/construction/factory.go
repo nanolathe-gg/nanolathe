@@ -670,12 +670,14 @@ func (s *Service) rejectPermanent(factory *units.Unit, node *orders.Node, tick u
 	// blocked-area budget of [R-ORDER-02 §1]) and the allocation refusal
 	// (`Unable to create any more units`, deadline 300) — neither is this case.
 	//
-	// TODO(question): whether the build handlers bounds-check that index before
-	// they load the definition, and what they do when the load yields nothing.
-	// Decider: a static read of the index-to-definition load in the two build
-	// handler bodies of [04 R-ORD-01 §5]. Until then the diagnostic-only
-	// retention stands, and this must not grow a status caption or a queue
-	// transition invented to fill the gap.
+	// Closed (RWU-19-197, [04 R-ORD-01 §18]): neither handler bounds-checks
+	// the index. The definition is formed as table base + index × record size
+	// and used at once, so the load cannot yield nothing; the only "nothing"
+	// the rows handle is the CREATOR's null (per-type limit reached, or no free
+	// slot), which is the `Unable to create any more units` arm — deadline
+	// 300, hold. A missing or unresolvable definition is therefore a guard
+	// retail lacks, with no retail caption or queue transition to borrow: the
+	// diagnostic-only retention is the whole of it and must not grow either.
 }
 
 // notifyStatus surfaces a verbatim order-handler notification through the
@@ -1038,18 +1040,17 @@ func (s *Service) YardOpenTransaction(u *units.Unit, requested bool) bool {
 		// mobile's restamp cannot differ, and the occupancy this service keeps
 		// is identical on both arms of the question.
 		//
-		// TODO(question): what remains is the admission's own verdict, one step
-		// earlier. The predicate walks the cells the requested state SELECTS,
-		// which it reads from the compiled yard map — and the yard map is
-		// allocated only for the structure class ([fmt fbi] `BMcode`: the
-		// engine "reads it back for yard-map allocation"; all 152 stock mobile
-		// definitions author no `YardMap`). Whether the predicate then admits
-		// vacuously, refuses, or reads through a null map is not traced.
-		// Decider: a static read of the yard-map pointer in the yard-occupancy
-		// admission predicate of [04 §4.7 port 18], for a unit whose structure-
-		// class bit is clear. The verdict is observable only through the level a
-		// script polls back after `set YARD_OPEN`, since the stamp is the same
-		// either way. Fail closed meanwhile — that is a choice, not a trace.
+		// Closed (RWU-19-197, [04 R-FAC-02 §9]): the admission predicate reads
+		// the per-cell yard byte through the definition's yard-map pointer with
+		// no null test and no structure-class test, and the compiler allocates
+		// that map only for `bmcode == 0` ([fmt fbi] `BMcode`; all 152 stock
+		// mobile definitions author no `YardMap`). A mobile unit that writes the
+		// port passes the cached-pair test and reads the bytes at process
+		// addresses 0..footprintX×footprintZ−1 — retail defines no verdict for
+		// that read, and no stock mobile script writes the port. Refusing here
+		// is Nanolathe's stated choice over an undefined read, not a trace: it
+		// is the one verdict that cannot be wrong for a unit that owns no yard
+		// cells, and it stays fail-closed.
 		return false
 	}
 	yard, err := buildingYard(record.def, record.rect)

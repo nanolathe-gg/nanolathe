@@ -8,9 +8,10 @@ import "testing"
 // order to the other end of the queue; this is the cheap guard against that.
 //
 // `SelfRepair` and `WaitForAttack` are deliberately absent. [04 R-ORD-01 §13]'s
-// prose names them among the bit-5 carriers, but §3.1's byte-exact descriptor
-// table gives them `0x1000204` and `0x204`, neither carrying bit 5 — the
-// open-question marker at staticHeadInsert holds that conflict open.
+// prose once named them among the bit-5 carriers; §3.1's byte-exact descriptor
+// table gives them `0x1000204` and `0x204`, neither carrying bit 5, and the
+// row-by-row re-read of the template arrays in [04 R-ORD-01 §16] confirmed the
+// table and corrected the prose.
 func TestStaticHeadInsertCensus(t *testing.T) {
 	wantHead := map[string]bool{
 		"Activate": true, "Deactivate": true,

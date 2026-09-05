@@ -1003,16 +1003,17 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				if s.Units != nil {
 					s.Units.NotifyCapture(target.Handle, preTransferOwner, captor.Owner)
 				}
-				// TODO(question): retail's local-branch copy list does not
-				// mention the selected bit or any task-group record for the
-				// captor's replacement [05 R-WORK-01 §11] — only the remote
-				// peer branch (out of scope) clears a selected bit. Selection
-				// is presentation state Nanolathe does not carry in the sim
-				// unit record, and a fresh replacement starts in group 0 like
-				// any other newly created unit, so no further action is taken
-				// here; if a later trace finds retail moves the victim's task
-				// group or a local selection set onto the replacement, this is
-				// the seam that needs it.
+				// Closed (RWU-19-197, [05 R-WORK-01 §14]): the local branch
+				// moves neither the victim's group word nor its selected bit.
+				// The replacement comes out of the ordinary creator, whose
+				// state-word initialization clears the selected bit and whose
+				// closing group assignment puts it in group 0, and the copy
+				// list [05 R-WORK-01 §11] never reads either field of the
+				// victim; only the remote-peer branch (out of scope) touches
+				// the selected bit, and there it clears it on the VICTIM.
+				// Selection is presentation state Nanolathe does not carry in
+				// the sim unit record and a fresh replacement starts in group
+				// 0 like any other new unit, so nothing is owed here.
 				return true
 			},
 			Resurrect: func(builder *units.Unit, n *orders.Node, _ uint32) bool {

@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -154,31 +155,25 @@ func (s *Session) EmitCancelDestruct(unit pool.Handle) bool {
 }
 
 // IsAudibleAt reports the retail audience gate for a world position
-// [03 §8.3] presentation. It quantizes with sign-corrected floor division to visibility
-// tiles (pos>>20) and tests the mode-selected grid: explored byte grid when
-// mode &2 !=0 else LOS word mask at local player bit only (no ally OR)
-// [03 §3.1]. Off-map is silent. Presentation-only, uses no Sim RNG [I4].
+// [03 §8.3] "audience gating". The gate is the visibility service's one-point
+// predicate at the local viewing player's slot: the point is projected with
+// the half-height shear and tested against the mode-selected grid — the
+// explored byte grid when the mode word's bit 1 is set, otherwise the LOS word
+// mask at the local player's bit alone, never an ally OR [03 §3.1]. Off-map is
+// silent. Presentation-only, uses no Sim RNG [I4].
+//
+// Correction: this quantized X and Z alone, dropping the shear, so an elevated
+// source was gated at the ground cell beneath it rather than the cell it
+// occupies on screen — audible when the ground was seen and the aircraft was
+// not, and silent in the converse case. It also copied the whole word mask and
+// all ten player byte grids per query to read one cell; the service answers
+// with a scalar instead [03 §3.2] step 4.
 func (s *Session) IsAudibleAt(pos [3]numeric.Fixed) bool {
 	if s == nil || s.Vis == nil {
 		return false // positional audio requires the session visibility service [03 §8.3]
 	}
-	cx, cz := audio.CellFromWorld2D(pos)
-	w, h := s.Vis.GridDimensions()
-	if w <= 0 || h <= 0 {
-		return false
-	}
-	wordMask, byteGrids := s.Vis.GridSnapshot()
 	local := localPlayerForSession(s)
-	mode := audio.VisibilityMode(s.Vis.Mode() & 0x02) // bit1 chooses byte vs word [03 §3.1][03 §8.3]
-	gridLen := int(w) * int(h)
-	if mode&audio.ModeExplored != 0 {
-		if local < 0 || local >= len(byteGrids) || len(byteGrids[local]) != gridLen {
-			return false
-		}
-	} else if len(wordMask) != gridLen {
-		return false
-	}
-	return audio.IsAudible(cx, cz, local, mode, wordMask, byteGrids, int(w), int(h))
+	return s.Vis.AudiblePoint(visibility.PlayerID(local), pos[0], pos[1], pos[2])
 }
 
 // PositionalPan returns the retail viewport-relative pan for a world pos

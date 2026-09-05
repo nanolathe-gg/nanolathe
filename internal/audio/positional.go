@@ -91,72 +91,10 @@ func Attenuate(pos [3]numeric.Fixed, v Viewport) int32 {
 	return VolOffScreen
 }
 
-// VisibilityMode selects the audience gate source. When ModeExplored is set
-// the per-player explored byte grid is tested; otherwise the LOS word mask is
-// tested at the local player bit only (no ally OR) [03 §3.1].
-type VisibilityMode uint32
-
-const (
-	ModeExplored VisibilityMode = 1 << 1 // 0x02 byte-vs-word [P0-18] [03 §3.1]
-)
-
-// IsAudible decides the local audience gate for a world position.
-// It quantizes the position to a visibility cell, rejects off-map positions,
-// then checks the mode-selected grid [03 §3.1].
-//
-// cellX, cellY are already quantized to 32-pixel visibility tiles (pos>>20,
-// a signed floor-like shift with a sign correction for negative world
-// coordinates rather than a toward-zero truncation [03 §2.1]). w,h are grid
-// dims from Service.W/H.
-//
-// wordMask is []uint16 length w*h, ten usable bits per cell [03 §3.1].
-// byteGrids is [10][]uint8 per-player explored counts, each length w*h.
-// localSlot is the local player slot (0..9). mode chooses source.
-// Off-grid returns false (off-map silent).
-// Ally vision is never OR'd — only the local slot's bit/count is tested.
-func IsAudible(cellX, cellY int, localSlot int, mode VisibilityMode, wordMask []uint16, byteGrids [10][]uint8, w, h int) bool {
-	if cellX < 0 || cellY < 0 || cellX >= w || cellY >= h {
-		return false
-	}
-	idx := cellY*w + cellX
-	if mode&ModeExplored != 0 {
-		if localSlot < 0 || localSlot >= len(byteGrids) || byteGrids[localSlot] == nil {
-			return false
-		}
-		if idx >= len(byteGrids[localSlot]) {
-			return false
-		}
-		return byteGrids[localSlot][idx] != 0
-	}
-	if idx >= len(wordMask) {
-		return false
-	}
-	if localSlot < 0 || localSlot >= 10 {
-		return false
-	}
-	bit := uint16(1 << localSlot)
-	return wordMask[idx]&bit != 0
-}
-
-// CellFromWorld converts a 16.16 world position to a visibility plot cell —
-// the audience gate's cell of [03 §8.3]. A plot cell is one 32-pixel tile
-// (two terrain cells), which is why the visibility grid is half the terrain
-// grid in each axis [03 §3.1], so the divisor is 32 x 65,536 world units
-// [03 §2.1]. The division floors with an explicit sign correction rather than
-// truncating, matching retail's arithmetic shift on the map's west and north
-// edges [I3]; it is world.WorldToTile's arithmetic, restated here because the
-// presentation audio package holds no authoritative world dependency.
-func CellFromWorld(p numeric.Fixed) int {
-	raw := int64(p)
-	const tile = 32 * 65536
-	q := raw / tile
-	if raw < 0 && raw%tile != 0 {
-		q--
-	}
-	return int(q)
-}
-
-// CellFromWorld2D returns tile X,Z for a 3-component pos (ignores Y).
-func CellFromWorld2D(pos [3]numeric.Fixed) (int, int) {
-	return CellFromWorld(pos[0]), CellFromWorld(pos[2])
-}
+// The audience gate that decides whether a positional cue is heard is NOT
+// here. It is the visibility service's point query [03 §8.3] "audience
+// gating", which projects the source with the half-height shear and tests the
+// mode-selected grid at the local player's slot [03 §3.2] step 4. This package
+// previously carried an IsAudible/CellFromWorld pair that quantized X and Z
+// alone and took copies of the grids; both were wrong for any elevated source
+// and are gone, so nothing can reach for the approximation again.

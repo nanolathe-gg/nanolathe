@@ -2682,7 +2682,9 @@ appends to the destination vector, removes from the source by replacement with
 the last element, and has no gameplay member cap. See R-P0-04 §3 and §4 below for the complete
 writer and direct-store census. Transport, naval, air, or special scouting
 tasks with distinct tables are not found among the six unique virtual tables
-that cover the nine slots. The empty slot's null task is intentionally inert.
+that cover the nine slots (corrected by [R-AI-04 §1]: the run holds **seven**
+tables — the null class has its own — and is complete). The empty slot's null
+task is intentionally inert.
 [P0-02] [R-P0-04]
 
 The earlier helper-only callback census (`6a3f9c5`) remains valid for its
@@ -4009,7 +4011,13 @@ for the direct writer and the six classifier destinations; no additional
 distinct writer is located in the whole-image direct-store/xref census. No
 capture-specific caller of the direct manager-group writer was found. AI
 transport geometry and any distinct naval or air expansion policy beyond the
-generic move orders are not in this lane and remain unknown. The x87
+generic move orders are **closed** by [R-AI-04] (2026-09-04, RWU-19-200): no
+transport producer exists and the computer player never builds a `canload`
+definition ([R-AI-04 §2]); the naval policy is the three `MinWaterDepth`
+tests of [R-AI-04 §3] and the air policy the classifier's flyer row plus the
+resolver's air twins of [R-AI-04 §4]; repair and reclaim are carried by the
+patrol orders alone ([R-AI-04 §5]). *Previous text:* "are not in this lane
+and remain unknown". The x87
 control-word edge beyond the established narrowing to float32 at every helper
 invocation boundary remains an unknown of platform residual class; the default
 rounding mode is assumed.
@@ -7513,6 +7521,265 @@ blocker; and the strategic state's initialization vector adds its 40 for
 `bmcode == 0` ([R-P0-05 §9]). Stock content authors `bmcode=0` on buildings
 and `bmcode=1` on mobile units.
 
+## R-AI-04 — Computer player: transport, naval, air, repair, reclaim and scouting policy (2026-09-04)
+
+Traced RWU-19-200 (static). Method: the task-class virtual-table run was
+dumped and matched against the manager constructor; the transitive callee
+set of the live manager dispatcher, the seven task bodies, the classifier,
+the weapon-maintenance sweep, the 30-tick strategic refresh and its two
+dispatchers, the class routine, the strategic-state constructor, the profile
+passes and the metal-spot builder was computed down to the order-service
+boundary (the shared command resolver and order submitter of
+[04 R-ORD-02 §1], the activation toggle and the factory-product producer);
+every resolver and submitter call inside that set was read with its literal
+command code and target arguments; every reader of the definition's water,
+flight and capability words and of the map's sea level, extents and cell
+counts inside the set was listed; and, image-wide, every caller of the
+resolver was read for the literal code it passes and every test of "owner's
+control byte is the computer value" was classified. The question this
+closes is the one [R-P0-02]'s "What remains not established" left open:
+whether the computer player has a transport, naval, air, repair, reclaim or
+scouting policy distinct from the generic orders the task bodies of
+[R-AI-01] issue. It has none as a separate mechanism; what it does have is
+three definition-word tests and one resolver consequence, spelled out below
+so an implementation neither invents a policy nor omits the tests.
+
+### R-AI-04 §1 — The task-class run is complete: seven classes and nothing else — Established [R-AI-04]
+
+The virtual tables of the task classes are one contiguous run of seven
+two-entry tables followed by a zero word: null, attack wave, regroup,
+explore/gather, random-walk rally, construction/positioning,
+resource/queue. The manager constructor assigns exactly those seven to its
+nine slots (two waves, two regroups), and the run has no eighth table
+([R-AI-01 §1] already counted seven; [08 "Eco toggle and group-vector
+population"] says "six unique virtual tables", which under-counts by one —
+the null class has its own table — and is corrected here). The only
+dispatcher with a caller is the live one of [R-AI-01 §1]; the alternate
+dispatcher and one further routine labelled as an order dispatch in the
+recovered function set are unreferenced. So "a transport, naval, air, repair,
+reclaim or scouting task class" is not a bounded absence any more: the run
+is complete, and none exists.
+
+### R-AI-04 §2 — Transport: no producer exists, and the computer player does not build carriers — Established (negative) [R-AI-04]
+
+**Every order the computer player issues goes through the shared command
+resolver and submitter, or through the factory-product producer**, and the
+resolver's command codes used across the whole computer-player closure are
+exactly `2` (move), `3` (attack), `9` (patrol) and `14` (mobile build) —
+the four [R-AI-01] names — plus the factory product click producer of
+[R-AI-01 §2]. Codes `5` (unload), `6` (pick up), `7` (guard), `8`
+(assist/repair), `12` (reclaim/resurrect) and `13` (capture) are never
+passed. Further, **every code-2 call passes no target unit** (the wave
+gather, the regroup move, the explore legs and the construction
+repositioning all resolve against a position), so the target-dependent
+arms of code 2 in [04 R-ORD-02 §1] — `Capture`, `ReclaimUnit`, `HelpBuild`,
+`RepairUnit`, `VTOL_Landing`, the pickup pair and the follow pair — are
+unreachable; and every code-3 call from the rally task passes a position
+only, so it resolves to the position-attack forms. There is therefore no
+producer of `Ground_Pickup`, `VTOL_Pickup`, `Ground_Unload`, `VTOL_Unload`,
+`VTOL_Landing` or `BeCarried` anywhere in the computer player: no pickup
+point, no drop point, no carried set, no timing. Nothing exists to
+implement.
+
+**Image-wide bound.** Of the resolver's sixteen callers, the only one that
+passes the literal unload code is the mission `InitialMission` interpreter's
+`u x,y` verb ([04 §3.6]), which is authored per placed unit and runs once at
+battle entry; no caller passes the literal pickup code; the remaining
+callers pass a code copied from a command packet (the human and network
+command path of [07 "UI order producers (R-P0-11)"]) or a fixed
+non-transport code inside an order handler. No routine names a transport
+row by its canonical string. So a computer-controlled unit carries a
+transport order only when the mission authored it or the engine attached
+one itself (a factory product of an `isairbase` carrier, [04 R-FAC-02 §1]),
+and the handlers then run exactly as for a human owner (§6).
+
+**Carriers are not built either.** The class routine zeroes the other-mix
+coefficient for every definition with `canload` ([R-P0-05 §5]); the metal
+coefficient is `clamp(100·extractsMetal − 0.02·buildCostMetal − 25·makesMetal)`
+and the energy coefficient `clamp(−0.0025·buildCostEnergy − 5·Classify)`,
+so for a `canload` definition that does not extract metal and whose
+classification is not negative all three coefficients are at or below zero,
+the candidate score of [R-P0-05 §4] is at or below zero for every economy
+mix, and [R-AI-01 §8] skips it **without drawing**. A profile `weight`
+cannot rescue it: the weight multiplies a non-positive score. The computer
+player therefore never queues a transport of its own accord; the only
+transports it owns are mission-placed or captured ones.
+
+**What a transport it owns anyway does.** The classifier of [R-P0-04 §3]
+files it by the ordinary rows: a flying carrier goes to the explore record
+and patrols (§4); a water-class carrier (`MinWaterDepth ≥ 1`) goes to
+regroup B and follows wave B's gather moves but, being unarmed, is rejected
+by code 3 (no `canattack`, no `kamikaze`) and never attacks; an unarmed
+land carrier fails every row and **stays ungrouped for the whole game** —
+the last row requires the armed bit — receiving nothing but the standing-
+order rewrite of [R-AI-01 §10] and the engine's own return-fire. Cargo it
+carries is untouched by the manager.
+
+### R-AI-04 §3 — Naval policy: three `MinWaterDepth` tests, no map-level input — Established [R-AI-04]
+
+The only definition word the computer player reads that separates water
+units and structures from land ones is **`MinWaterDepth`** — the movement-
+class value the FBI compile copies onto the definition, or, for a building
+with no movement class, the value the class reader takes from the unit's
+own section ([fmt fbi]); a class or section that omits it carries the
+template value **−10000** ([04 §6.1]), so every sign test below selects
+exactly the definitions that author a non-negative (or positive) depth —
+in stock content the ship classes and the shipyards. `MaxWaterDepth`, the
+`Floater`/`amphibious` keys, the water weapon flags and the hover flag are
+never read by the computer player. The three tests, all previously
+Established in their own sections and gathered here as the whole naval
+policy:
+
+1. **Grouping and attack.** The classifier row `MinWaterDepth ≥ 1 →
+   regroup B` ([R-P0-04 §3], corrected label [R-AI-03 §6]) precedes the
+   armed test, so **every** non-builder, non-flying water-class mobile,
+   armed or not, enters regroup B, and wave B is the naval wave: threshold
+   50,000 against wave A's 20,000 (the shed and collect comparisons of
+   [08 "Wave merge"] are `distance² ≥/< threshold × count`, so a naval wave
+   holds together over a radius about 1.58 times wider), the same minimum
+   three and maximum six, the same gather destinations (the armed-building,
+   unarmed-building and builder centroids, which lie on land — the move
+   handler decides what a ship does with a land goal, [04 R-ORD-01 §4]),
+   and the same target: the **nearest hostile unit of any medium** to the
+   wave's centroid ([R-AI-01 §4], [R-AI-01 §9]). No submerged/surfaced,
+   water-weapon or reachability test enters the choice; the per-member
+   resolver applies its own code-3 target-class rejects
+   ([04 R-ORD-02 §1]), so a ship without a water weapon ordered at a
+   submerged target simply gets no order that run. Land mobiles (template
+   −10000) fall through to the armed row and wave A. There is no naval
+   rally, patrol or escort.
+2. **Production bias.** In the class routine the other-mix accumulator is
+   multiplied by three when `MinWaterDepth ≥ 0` ([R-P0-05 §5], corrected
+   label [R-AI-03 §6]), after the completed-count multipliers and before the
+   `canload` / `isfeature` / wind zeroing. That is the only production term
+   that distinguishes a ship or shipyard from a land unit; the reservoir,
+   gates and economy mixes of [R-P0-05 §3–§4] are otherwise identical.
+3. **Placement.** A shipyard is a building (`bmcode 0`) and takes the
+   ordinary root of [R-AI-03 §2]: origin stepped from the builder toward
+   the strategic centre, radius grown by 160 per failed attempt, and — being
+   a non-extractor — the statistical scatter helper directly. Its
+   `MinWaterDepth ≥ 0` selects the helper's **second region set** (the wider
+   cells and the margin of 6 drawn at state construction, [R-AI-03 §4]);
+   and the placement validator's yard path applies the waterline band to
+   every footprint cell: reject when the cell's low height is below
+   `waterline − MaxWaterDepth`, reject when `waterline − MinWaterDepth` is
+   below the cell's high height ([R-AI-03 §4]). For an authored
+   `MinWaterDepth = N` that is "the whole footprint at least N below the
+   waterline"; for a land building with the template values neither test
+   can fire. There is no coast search, no water census and no fallback:
+   when the thirty trials around the origin find no cell in the band the
+   attempt fails, the radius stays grown, and the next attempt ninety ticks
+   later tries again wider ([R-AI-03 §5]).
+
+**Water starts and water-only maps change nothing else.** No routine in the
+computer-player closure reads a start position's medium, a water-cell
+count, the sea level (outside the two shared placement validators and the
+shared shot-time and visibility gates), or any per-map water statistic; the
+only map words read are the world extents and cell counts that size the
+explore and placement draws. On a map whose start neighbourhood is all
+water a land factory is still selected — the reservoir draw is spent in
+selection, before placement ([R-AI-01 §8]) — and its placement fails trial
+by trial while the radius grows; on an all-land map a shipyard does the
+same. That is the retail behavior, not a gap.
+
+### R-AI-04 §4 — Air policy: the explore record, the resolver's air twins, and one addend — Established [R-AI-04]
+
+1. **Every non-builder aircraft is a scout and nothing else.** The
+   classifier's `canfly → explore` row ([R-P0-04 §3]) precedes both the
+   water row and the armed row, so an armed aircraft never reaches a
+   regroup record and **no attack wave ever contains one**. The explore
+   record holds only such aircraft (no other row sends anything there), and
+   its body ([R-AI-01 §6]) issues code 2 and code 9, which the resolver
+   turns into `VTOL_Move` and `VTOL_Patrol` for a `canfly` actor
+   ([04 R-ORD-02 §1]): with fewer than five aircraft, a two- or three-leg
+   patrol inside an eighth of the map around the strategic centre (or, with
+   no centre, a patrol at the nearest hostile's position); with five or
+   more, a patrol to a random map edge. The computer player never issues an
+   aircraft an attack order; its aircraft fight only through the
+   `VTOL_Patrol` handler's own engagement, the return-fire path of
+   [R-AI-01 §11] and the weapon-maintenance acquisition of [R-AI-01 §15].
+2. **Construction aircraft are builders first.** The builder row precedes
+   the flyer row, so an air builder is in the construction record: pass 1
+   gives it `VTOL_MobileBuild`, pass 2 `VTOL_RepairPatrol` (§5).
+3. **Air factories and aircraft production have no special case.** An air
+   factory is a `bmcode 0` building and takes the ordinary placement root;
+   an aircraft candidate receives `+40` in the class routine's other-mix
+   accumulator for `canfly` ([R-P0-05 §5]) and nothing else air-specific.
+4. **Pads.** The strategic refresh's third vector — own active units that
+   are both `builder` and `isairbase` — is the target registry's third list
+   ([06 §3.1]), consumed by the engine's damaged-aircraft pad search
+   ([04 R-AIR-01 §11]) inside the VTOL handlers. The manager never reads
+   it; a computer-owned aircraft lands on a pad exactly when a human-owned
+   one would.
+5. **No air rally or patrol point.** The rally task would resolve code 3 at
+   its best point for a `canfly` member (an `AirStrike`/`AirToGround` run),
+   but record 9 has no producer ([R-P0-04 §5]).
+
+### R-AI-04 §5 — Repair, reclaim, scouting, guard and capture — Established [R-AI-04]
+
+* **Patrol is the carrier of repair and reclaim.** The manager issues code 9
+  from two bodies: the construction task's repositioning pass for every
+  member of the construction record ([R-AI-01 §3] — a `cancapture` builder
+  gets a move then a queued patrol at the strategic centre; any other
+  builder a patrol toward a point up to 320 world units short of the
+  centre) and the explore task's legs and edge run. The resolver turns code
+  9 into `RepairPatrol` / `VTOL_RepairPatrol` when the actor's definition
+  carries the `canreclamate` mirror bit and into `Patrol` / `VTOL_Patrol`
+  otherwise ([04 R-ORD-02 §1]). So every builder that authors
+  `canreclamate` — in stock content the commander and the construction
+  units and aircraft — spends its idle time on a repair patrol, and the
+  **whole** of the computer player's repair and reclaim is what that handler
+  does on its own: repair a randomly drawn damaged or unfinished friendly
+  within `sightdistance` when energy is at least 20 % of storage, and
+  reclaim features sampled on a 48-unit lattice when metal or energy is
+  below 20 % ([04 R-ORD-01 §4], [04 R-ORD-01 §7]). The manager never passes
+  code 8 or code 12, never chooses a repair or reclaim target, and never
+  orders a unit reclaimed. What the handler reclaims is credited through the
+  difficulty discount like every other computer-player income
+  ([05 R-ECO-01 §11]).
+* **Guard and capture: never.** Code 7 is passed only by the `VTOL_Follow`
+  hand-off and the `InitialMission` interpreter; code 13 by nothing in the
+  image; and the computer player's code-2 calls carry no target, so the
+  contextual `Capture` arm is unreachable. A `cancapture` unit owned by the
+  computer player is used for its build list and its `maneuver` standing
+  order ([R-AI-01 §10]), never for capturing.
+* **Scouting is the explore task, and only aircraft do it.** §4 gives the
+  record's membership; a computer player that owns no non-builder aircraft
+  never issues an exploration order to anything, and no ground unit is ever
+  sent to an unexplored point. The rally task's probe walk is the only
+  other map-exploring behaviour and has no producer.
+
+### R-AI-04 §6 — Corrections, cross-document note, and what remains — Established [R-AI-04]
+
+**Corrections.** (a) [08 "What remains not established"] read "AI transport
+geometry and any distinct naval or air expansion policy beyond the generic
+move orders are not in this lane and remain unknown"; both halves are now
+closed above — the geometry does not exist and the naval/air policy is
+§3–§4. (b) The "Missing and unknown" bullets "Transport-selection policy
+beyond generic move orders, and any distinct naval or air placement
+geometry" and "Transport, naval, air, repair, reclaim and scouting policies
+as distinct task classes" are struck with closure notes. (c) [08 "Eco toggle
+and group-vector population"]'s "six unique virtual tables" is seven (§1).
+
+**Cross-document note (Established, owned elsewhere).** The image-wide
+census of "owner is a computer player" tests finds, outside the manager and
+its already-documented sites (the damage throttle [R-AI-01 §11], the profile
+passes [R-AI-01 §12], the dead status dump [R-AI-02 §2], the nearest-hostile
+helper's controller test [R-AI-01 §9]), only two families: the difficulty
+economy ladder of [05 R-ECO-01 §3] and [05 R-ECO-01 §11] (settlement, build
+credit, construction arithmetic, feature-reclaim credit) and the
+acquisition helper's admission relaxation for a computer shooter, already
+in [06 §3.1]. **No order handler branches on the owner being a computer
+player**: a transport, patrol, repair or attack order runs identically for
+both, which is why §2–§5 can hand the handler contracts to doc 04 without
+a computer-player variant.
+
+**What remains.** Nothing in this lane. The one item an implementer might
+still ask — what a ship does with a wave gather aimed at a land centroid, or
+what a mission-authored unload does on a computer-owned carrier — is the
+owner-independent handler contract of [04 R-ORD-01 §4] and [04 §10.2], not a
+computer-player question.
+
 ## Required implementation invariants
 
 A conforming clean-room implementation must preserve these established
@@ -7532,7 +7799,7 @@ properties:
 - Victory/defeat trigger queues are built for every session kind but polled only in the campaign kind, in the local player's once-per-30-tick block: victory first (AND) then defeat (OR). Skirmish and multiplayer never poll a trigger queue; their end conditions are the live-unit-count predicates of [R-SKIR-01 §3] and [R-TRIG-01 §6]. Removal and capture notifications reach every built record in every kind. No trigger consults an alliance row; the skirmish victory sweep does [R-TRIG-01 §1] [R-TRIG-01 §6].
 - The simulation random stream is never synchronized across peers: each process reseeds Park–Miller from its own `QueryPerformanceCounter` sample (per doc 01 §7.1) and the CRT stream from its own clock at battle entry; no packet carries or writes a seed.
 - Scenario unit reconstruction is a load path, not the strategic AI.
-- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established (the metal score is the footprint per-cell metal-byte sum; water legality is the yard path's waterline band); the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); the class routine's weapon reads are the `DAMAGE/default` word divided by 40 and the `range` word divided by 100; any additional distinct group writer or transport geometry remain bounded negative or inference. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05]
+- Computer-player strategic construction selection, profile `plan`/`weight`/`limit` handling, economy-mixed weighted reservoir choice, per-type class-vector recomputation with outer gate bound 30 and x87 truncation, full manager deadline graph and dispatch gates, direct manager-group writer/classifier for six destinations, eco toggle with eighty percent gate, and placement origin step, radius, selector, and two helper contracts are established (the metal score is the footprint per-cell metal-byte sum; water legality is the yard path's waterline band); the AI score inputs (player economy aggregates and strategic class vectors), hard gates, pressure arithmetic, three-way mix, cumulative weighted reservoir selection, profile plan/weight/limit defaults, and manager-before-refresh-before-ledger update order are established (R-P0-05); the manager task-vector slot order, direct group-writer semantics, classifier branch order, and wave merge strictness are established (R-P0-04); the class routine's weapon reads are the `DAMAGE/default` word divided by 40 and the `range` word divided by 100; any additional distinct group writer remains bounded negative; transport geometry is closed as non-existent, and the naval, air, repair, reclaim and scouting policies are the `MinWaterDepth` tests, the flyer classifier row and the patrol-carried repair of [R-AI-04]. [P0-01] [P0-02] [P0-03] [R-P0-04] [R-P0-05] [R-AI-04]
 - Multiplayer transport is DirectPlay in the retail process.
 - Packet dispatch starts with a one-byte type and uses a fixed handler table.
 - Network input is consumed before the rest of an authoritative tick.
@@ -7609,9 +7876,13 @@ finding. The recitals are deleted here only; the body sections and the
   records"; neither names a commander counter, and the only place in the image
   that spells `Commanders Killed` / `Commanders Lost` is [R-CAMP-01 §10]'s
   statistics score board, which no save path touches.
-- Transport-selection policy beyond generic move orders, and any distinct
-  naval or air placement geometry · "Placement root and search helpers"
-  [P0-04] · static trace.
+- ~~Transport-selection policy beyond generic move orders, and any distinct
+  naval or air placement geometry~~ · **closed 2026-09-04** (RWU-19-200,
+  [R-AI-04 §2], [R-AI-04 §3], [R-AI-04 §4]): no transport producer exists
+  in the computer-player closure and none of the resolver's sixteen callers
+  passes the pickup code; naval and air placement use the ordinary root, the
+  only water term being the scatter helper's `MinWaterDepth` region select
+  and the validator's waterline band, and there is no air term at all.
 - The reader, if any, of the placement record's `InitialGroup` nibble ·
   [R-TRIG-01 §11] · static trace from the flag byte's low-nibble mask.
 - Which per-slot flag the start barrier's `player(s) ready` count reads ·
@@ -7681,10 +7952,15 @@ finding. The recitals are deleted here only; the body sections and the
 - Whether the attack wave's engaged latch and the rally task's best point,
   drift and best score are serialized · [R-AI-01 §4], [R-AI-01 §7],
   "Save-file organization" · static trace.
-- Transport, naval, air, repair, reclaim and scouting policies as distinct
-  task classes · "Strategy manager and its task graph" · bounded negative over
-  the complete vtable run; only a manual retail observation could contradict
-  it.
+- ~~Transport, naval, air, repair, reclaim and scouting policies as distinct
+  task classes~~ · **closed 2026-09-04** (RWU-19-200, [R-AI-04 §1]–[R-AI-04
+  §5]): the virtual-table run is complete at seven classes; the whole
+  computer-player closure passes only command codes 2, 3, 9 and 14 (never
+  unload, pick up, guard, repair, reclaim or capture), always without a
+  target unit for code 2; naval policy is three `MinWaterDepth` tests, air
+  policy is the classifier's flyer row into the explore record, and repair
+  and reclaim happen only inside the `RepairPatrol` handlers the patrol
+  orders resolve to.
 
 ### Networking
 

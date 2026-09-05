@@ -1008,14 +1008,12 @@ func captureHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code 
 		// package imports this one — so it goes out through the work adapter's
 		// Capture port, the same seam shape assist, repair and resurrect use.
 		//
-		// TODO(question): the port is declared but the session binds no
-		// implementation for it, so a captured unit still keeps its owner in a
-		// live battle. Nothing further is needed on this side: the call, the
-		// order and the silent-refusal shape are all the row's. What settles it
-		// is one binding in session composition — `Capture:` alongside
+		// The port is bound by session composition (WU-19-177): the work
+		// adapter in internal/session/composition.go sets `Capture:` alongside
 		// `Assist:`/`Repair:`/`Resurrect:`, resolving the record's target and
-		// calling TransferOwnership with the captor's owner. Reported upward by
-		// WU-19-168; the file that needs it is outside this unit's ownership.
+		// calling TransferOwnership with the captor's owner. Nothing further is
+		// needed on this side: the call, the order and the silent-refusal shape
+		// are all the row's [05 R-WORK-01 §11][05 R-WORK-01 §14].
 		boundCapture(QueueForUnit(u), u, n, tick)
 		workStatus(u, statusCapture, "")
 		return 5 // complete

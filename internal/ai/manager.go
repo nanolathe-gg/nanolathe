@@ -40,16 +40,39 @@ const (
 	waveMax        = 6
 )
 
-// TODO(T25): AI transport geometry, and any naval or air expansion policy
-// beyond the generic move orders, is unknown — still stated as such by doc 08
-// itself ("AI transport geometry and any distinct naval or air expansion policy
-// beyond the generic move orders are not in this lane and remain unknown",
-// [08 "What remains not established"]), which is why this is an accepted
-// blocked item and not a gap to fill here. The planner below issues only the
-// generic orders it has contracts for; nothing invents a loading, beaching or
-// carrier-assignment rule. Decider: a trace of the computer player's task
-// bodies for a transport-class producer, in the AI lane that owns doc 08.
-// No new T25 beyond this.
+// Transport, naval, air, repair, reclaim and scouting policy — closed by
+// [08 R-AI-04] (RWU-19-200, 2026-09-04); the former TODO(T25) here is retired.
+// Established, and what this file does about it today:
+//
+//   - Transport: no producer exists. The computer player passes only command
+//     codes 2, 3, 9 and 14 and never a target unit with code 2, so no
+//     pickup/unload/landing/follow/capture row can be produced, and the class
+//     routine's `canload` zeroing makes every non-extracting carrier score at
+//     or below zero, skipped without a draw [08 R-AI-04 §2]. Nothing to add.
+//   - Naval: exactly three `MinWaterDepth` tests — classifier row to regroup B
+//     (wave B is the naval wave, threshold 50,000), the class routine's ×3 for
+//     a non-negative depth, and the scatter helper's region select plus the
+//     validator's waterline band for shipyards; no map-level water input
+//     [08 R-AI-04 §3]. The first two are implemented (classifyGroups,
+//     Strategic.recomputeClassVectors); the placement side is
+//     internal/ai/placement.go's [08 R-AI-03 §4] contract.
+//   - Air: the classifier's `canfly` row (implemented) sends every non-builder
+//     aircraft to the explore record and nowhere else; the resolver's air
+//     twins are internal/orders'; `+40` for `canfly` in the class routine is
+//     implemented [08 R-AI-04 §4]. No air wave, rally or pad logic exists.
+//   - Repair/reclaim/guard/capture: never ordered directly. Repair and reclaim
+//     happen only inside the RepairPatrol/VTOL_RepairPatrol handlers that the
+//     construction repositioning and explore patrol orders resolve to when the
+//     builder authors `canreclamate` [08 R-AI-04 §5]. Already carried: this
+//     file resolves intent 9 through orders.Resolve (resolveAIIntent), whose
+//     code-9 rule picks RepairPatrol/VTOL_RepairPatrol [04 R-ORD-02 §1], and
+//     internal/orders implements both handlers.
+//
+// Unknown: nothing in this lane. Nothing Established by R-AI-04 is missing
+// from the code; what an implementation unit can still add is tests that lock
+// the medium split (water-class mobiles to regroup B, land to regroup A) and
+// the explore record's aircraft-only membership. This unit changed no
+// behavior.
 
 // Manager is the per-player AI manager [PLAN_11 Public API] [08 "Established AI-facing data and rooted planner"].
 // It is session-owned and dispatched inside kernel phase 5's per-player coordinator

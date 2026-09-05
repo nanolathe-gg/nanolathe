@@ -49,8 +49,11 @@ func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 	// carries. One stock-shaped tree stands on the builder's own cell.
 	tree, _ := retailShapedTree()
 	q := &Queue{binding: &QueueBinding{
-		SimRNG:  rng.Global.Sim,
-		Economy: &economy.Service{Terrain: reclaimFixtureTerrain([]*content.FeatureDef{tree}, 4, 5)},
+		SimRNG: rng.Global.Sim,
+		// `VTOL_HelpBuild` phase 0 refuses a builder whose build list is empty
+		// [04 R-ORD-01 §17]; the fixture's builder has one.
+		BuildList: func(*content.UnitDef) bool { return true },
+		Economy:   &economy.Service{Terrain: reclaimFixtureTerrain([]*content.FeatureDef{tree}, 4, 5)},
 		Lookup: func(h pool.Handle) *units.Unit {
 			switch h {
 			case target.Handle:
@@ -366,5 +369,27 @@ func TestRepairWaterClause(t *testing.T) {
 	tgt.Move.Mode = 1
 	if !nanoReach(loose, tgt) {
 		t.Fatalf("unbound queue should not fail the water clause")
+	}
+}
+
+// TestVTOLHelpBuildPhaseZeroRequiresABuildList locks [04 R-ORD-01 §17]: the air
+// help-build row's third phase-0 precondition is the definition's non-empty
+// build list — command code 14's test [04 R-ORD-02 §1], not a script slot —
+// and a failure is cancel-all before the preamble has any side effect.
+func TestVTOLHelpBuildPhaseZeroRequiresABuildList(t *testing.T) {
+	_, builder, target := vtolWorkFixture()
+	setTestBuildList(builder, func(*content.UnitDef) bool { return false })
+	n := &Node{ID: Lookup("VTOL_HelpBuild"), Owner: builder.Handle, Target: target.Handle, Deadline: -1}
+	if code := vtolHelpBuildHandler(builder, n, 0, 700); code != 7 {
+		t.Fatalf("phase 0 without a build list returned %d, want cancel-all (7)", code)
+	}
+	if builder.Move.Mode&0x3 != 1 || n.DynamicGate != 0 {
+		t.Fatalf("the refusal must precede the preamble: mode %d, gate %#x", builder.Move.Mode&0x3, n.DynamicGate)
+	}
+
+	setTestBuildList(builder, func(*content.UnitDef) bool { return true })
+	n = &Node{ID: Lookup("VTOL_HelpBuild"), Owner: builder.Handle, Target: target.Handle, Deadline: -1}
+	if code := vtolHelpBuildHandler(builder, n, 0, 700); code != 1 {
+		t.Fatalf("phase 0 with a build list returned %d, want advance (1)", code)
 	}
 }

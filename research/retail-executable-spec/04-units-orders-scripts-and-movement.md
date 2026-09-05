@@ -4627,10 +4627,11 @@ insertion shapes exist and they divide as follows.
    [R-ORD-01 §2]'s "later paralyzer hits add to p1 of the waiting head record"
    reachable at all. This closes §3.1's "bit 5" entry in the unnamed-static-bit
    census: bit 5 selects the head-insert branch of the producer insertion.
-   (**Two names in that list are suspect**, 2026-09-04: §3.1's byte-exact
-   descriptor table gives `SelfRepair` `0x1000204` and `WaitForAttack` `0x204`,
-   neither carrying bit 5. The branch reads the mask, so the table decides —
-   see [R-ORD-01 §15]'s Unknown. The other ten names agree with the table.)
+   (**Corrected 2026-09-04, [R-ORD-01 §16]:** `SelfRepair` and
+   `WaitForAttack` do not belong in that list. A row-by-row read of the
+   template arrays' static-mask words gives `SelfRepair` `0x1000204` and
+   `WaitForAttack` `0x204`, neither carrying bit 5, and confirms the other
+   ten; the two take the after-marker path.)
 2. **Handler head insert** (§1's spawn). It writes the link, the owner and the
    inherited bit 14 and **nothing else** — it never reads or writes bit 12. The
    marker stays exactly where it was, including "nowhere": a spawn into an
@@ -4815,13 +4816,15 @@ insertion, and a building-class product is never attached, so its queue is
    visit, not by a 300-tick wait — which is the retail-observable half of this
    finding.
 
-**Unknown — §13's prose list of the bit-5 carriers.** §13 names `SelfRepair`
+~~**Unknown — §13's prose list of the bit-5 carriers.** §13 names `SelfRepair`
 and `WaitForAttack` among the descriptors carrying bit 5. §3.1's byte-exact
 descriptor table gives their static masks as `0x1000204` and `0x204`, neither
 of which has bit 5. The branch reads the record's own mask, so the table
 decides and those two take the after-marker path; the prose list is the
 suspect half. Decider: a re-read of those two descriptor templates' mask words
-against §3.1's audit.
+against §3.1's audit.~~ **Closed (2026-09-04, RWU-19-197, [R-ORD-01 §16]):**
+the template arrays were re-read row by row; the table is right and §13's
+prose list is corrected in place.
 
 
 ### Closed — command resolution, exactly [R-ORD-02 §1] (2026-08-29)
@@ -14547,6 +14550,136 @@ The movement and script sections above were derived only from these areas of the
 
 Function identities that a later re-derivation corrected — in particular the mistaken strategic-planner, visibility-writer, and construction-helper identifications — are not used as evidence.
 
+## RWU-19-197 — six orders and construction residuals re-read (2026-09-04)
+
+Static re-reads of the descriptor templates, the air help-build row, the two
+build handler bodies and the yard-open admission predicate, closing four
+markers in `internal/orders` and `internal/construction`. Each subsection names
+what the earlier text said where it corrects it. The companion closures for the
+mobile-build reach wake and the capture transfer's group and selection state
+are in doc 05 ([05 R-WORK-01 §13], [05 R-WORK-01 §14]).
+
+### Closed — the static bit-5 column, row by row: ten carriers, and §13's prose list corrected [R-ORD-01 §16] (2026-09-04)
+
+**Established (direct read of every row's static-mask word in the three
+descriptor template arrays plus the appended `Ready` row, compared with §3.1's
+table; RWU-19-197).** The 68-row descriptor registry is built from three static
+template arrays and one appended row (§3.1). Reading the static-mask word of
+every row, bit 5 (`0x20`) is set in exactly ten: `Activate`, `Deactivate`,
+`Cloak_On`, `Cloak_Off`, `Standing_MoveOrder`, `Standing_FireOrder` (each
+`0x10060`), `Paralyze` (`0x24`), `GetBuilt` (`0x224`), `BeCarried` (`0x24`) and
+`Guard_NoMove` (`0x20`). `SelfRepair`'s word is `0x1000204` and
+`WaitForAttack`'s is `0x204`: **neither carries bit 5**. Every other row's word
+agrees with §3.1's table, so the table is byte-exact and its bit-5 census
+paragraph ("bit 5 (0x20 — the cloak/standing family, `Guard_NoMove`,
+`Paralyze`, `BeCarried`, `GetBuilt`)") was right all along.
+
+**Correction to [R-ORD-01 §13].** Its producer-insertion paragraph said "Bit 5
+is carried statically by `Paralyze`, `BeCarried`, `GetBuilt`, `SelfRepair`,
+`WaitForAttack`, `Guard_NoMove`, `Cloak_On`/`Cloak_Off`,
+`Activate`/`Deactivate` and the two standing-order descriptors". The two names
+`SelfRepair` and `WaitForAttack` were wrong; the list is the ten above. The
+branch itself was never in doubt — it reads the record's static-mask copy and
+head-inserts when bit 5 or bit 18 is set — so a `SelfRepair` or
+`WaitForAttack` record inserted by a producer takes the **after-marker** path
+(bit 12 handed to it), not the head insert. [R-ORD-01 §15]'s Unknown on this
+point is closed; the descriptor table in the implementation, which already
+carried the traced words, needs no change.
+
+### Closed — `VTOL_HelpBuild` phase 0's third precondition is the definition's build list, not a script slot [R-ORD-01 §17] (2026-09-04)
+
+**Established (direct read of the air help-build handler's phase-0 arm;
+RWU-19-197).** Before the preamble does anything, phase 0 makes three tests,
+each failing to **cancel-all** with no caption:
+
+1. the unit has a live mover (the unit record's mover pointer is non-null —
+   the same "live mover" the command resolver's code 14 requires, [R-ORD-02
+   §1]);
+2. the definition's `canfly` capability bit is set;
+3. the definition's **build list is non-empty** — the compiled per-definition
+   `CANBUILD` list head ([02 R-CAT-01 §5]), the identical word the resolver's
+   code 14 tests ("the definition's build list is non-empty and a live mover
+   exists", [R-ORD-02 §1]) and the queue overlay's builder-context gate reads
+   ([07 R-P0-11 §3]).
+
+Only then does the row write the `Building` caption, release the three weapon
+slots, drop from a carrier, raise the activation edge and, for a grounded
+mover, install the half-`cruisealt` takeoff marker and arm gate `0xE0` — the
+preamble of [R-ORD-01 §7]. The ground `HelpBuild`'s phase 0 makes none of the
+three tests; its body is the footprint-reach computation and the annulus goal
+of [R-ORD-01 §5] and [R-ORD-01 §12].
+
+**Correction to [R-ORD-01 §7].** Its `VTOL_HelpBuild` row said "plus the
+definition's builder-specific script slot must be present (else cancel-all)".
+There is no script slot: the word tested is the build-list head, a catalog
+list pointer that no script function caches. The first two tests are the
+preamble's own (they are what "preamble" abbreviates in every air twin's row)
+and are not extra; the third is the one the row was gesturing at.
+
+### Closed — the two build handlers load the product definition by unchecked index; "nothing" can only come from the creator [R-ORD-01 §18] (2026-09-04)
+
+**Established (direct read of the `MobileBuild` phase-0/phase-1 and
+`BuildingBuild` phase-2 bodies and the unit creator's refusal arms;
+RWU-19-197).** Both handlers of [R-ORD-01 §5] form the product definition as
+**table base + p1 × record size** and use it at once — `MobileBuild` in phase 0
+for the footprint snap and in phase 1 for the reach pads and the placement
+validator, `BuildingBuild` in phase 2 for the footprint snap and the validator.
+Neither compares p1 against the definition count and neither tests the result:
+the load is pointer arithmetic and cannot "yield nothing". An out-of-range
+index would read whatever lies past the table; no producer can put one there
+(the command resolver, the build-page click and the mission `b` verb all
+resolve a catalog name to an index first, and an unknown name is rejected
+before any record is inserted — [R-ORD-02 §1], [07 R-P0-11 §1], §3.6).
+
+The only "nothing" either row handles is the **creator's** null: the unit
+creator refuses when the product's per-type limit is reached (definitions
+carrying the limit capability, count over the owner's live units against the
+definition's limit word, `-1` meaning unlimited) or when the owner's slot
+range has no free slot. Both rows then raise status 7 `Unable to create any
+more units`, set deadline 300 and hold (`BuildingBuild` also ORs gate bit 1),
+exactly as [R-ORD-01 §5] states. There is no caption, no queue transition and
+no other arm for a missing definition, because retail has no such step: an
+implementation that validates the product definition before the handlers run
+is adding a guard retail lacks, and it has no retail caption to borrow for it.
+
+### Closed — the yard-open admission has no yard-map null test: a definition without a yard map reads through the null pointer [R-FAC-02 §9] (2026-09-04)
+
+**Established (direct read of the yard-occupancy admission predicate and of
+the unit-definition compiler's yard-map allocation; RWU-19-197).** The
+predicate of §4.7 port 18 — inputs and cell walk as [R-CB-01 §4] and the
+"port 18 is admission-gated" paragraphs of §4.7 state — reads its per-cell
+yard byte through the **definition's yard-map pointer with no null test and
+no structure-class test**: after the cached-pair and map-bound tests it walks
+the footprint rows and columns, and for each cell fetches
+`yardMap[ordinal]`, masks it with the requested state's selector (open:
+bit 1; close: bit 2), and refuses when the bit is set, the cell's ground
+word is non-zero and that word is not the unit's own id. Nothing in the
+predicate or in the port-18 arm that calls it reads the unit's structure-class
+bit or the definition's `bmcode`.
+
+The compiler zeroes the yard-map pointer for every definition and allocates a
+`footprintZ × footprintX` yard map **only when `bmcode` is 0** ([fmt fbi]
+`BMcode`, [02 R-CAT-01 §5]); a mobile definition keeps the null pointer. The
+unit-state initializer writes the cached footprint-origin pair for both
+classes ([R-CB-01 §4]), so a mobile unit whose script writes `YARD_OPEN`
+passes the pair test and reaches the walk, where the predicate reads the
+`footprintX × footprintZ` bytes at process addresses `0 .. footprintX ×
+footprintZ − 1`. What those bytes hold is a property of the host process, not
+of the executable: retail defines no verdict for this case. The stock content
+never reaches it — all 152 stock mobile definitions author no `YardMap` and no
+stock mobile script writes the port ([R-FAC-02 §8] census) — and a
+reimplementation is free to refuse the write outright, which is the one
+verdict that cannot be wrong for a unit that owns no yard cells.
+Nanolathe's `YardOpenTransaction` refuses (fail-closed); that is a stated
+choice over an undefined retail read, not a traced contract, and it stays.
+
+**What the earlier text said.** The marker at the refusal asked whether the
+predicate "admits vacuously, refuses, or reads through a null map"; it reads
+through the null map. The **Unknown** at §4.7 ("yard-character class matrix
+inside the yard-open admission gate") is a different question — which yard
+characters compile to which selector bits — and stays open.
+
+
 ## Missing and unknown
 
 Open items only. Each bullet states what is unknown, the section that owns it,
@@ -14580,13 +14713,17 @@ replacement bullet is needed because the ground path has no vertical term.
 
 - Out-of-map and mode behavior of the placement validator outside the
   production path · §6.4 · static trace. Marked `TODO(question)`.
-- `VTOL_HelpBuild` phase 0's extra precondition, "the definition's
+- ~~`VTOL_HelpBuild` phase 0's extra precondition, "the definition's
   builder-specific script slot must be present (else cancel-all)" ·
   [R-ORD-01 §7] · static read of that phase's gate, naming the definition word
   it tests and which script function that word caches. The phrase occurs once
   in the whole corpus and nothing else defines a per-definition script slot;
   Nanolathe leaves the clause unevaluated (an unevaluated EXTRA precondition
-  admits what retail admits) and marks the site `TODO(question)`.
+  admits what retail admits) and marks the site `TODO(question)`.~~ **Closed
+  (2026-09-04, RWU-19-197, [R-ORD-01 §17]):** the word is the definition's
+  build-list head — the same non-empty-build-list test as command code 14 —
+  and the row's other two phase-0 tests are the preamble's mover and `canfly`
+  tests. No script slot exists.
 - Allocator and slot-reuse cleanup when a dead factory slot is reused · §3.8 ·
   static trace. Marked `TODO(question)`; reclamation and inheritance must not
   be invented.

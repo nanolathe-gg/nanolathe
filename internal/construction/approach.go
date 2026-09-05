@@ -212,10 +212,16 @@ func (s *Service) unitFootprintAnchor(u *units.Unit, x, z numeric.Fixed) (cellX,
 // exceeds `builddistance` — which the rectangle's geometry makes rare rather
 // than impossible.
 //
-// TODO(question): moving this consultation onto the `0x40` wake alone, so an
-// arrival at the rectangle border retires the approach without a distance test
-// [05 R-WORK-01 §12] point 2, needs a wake this handler can read. It cannot
-// read the record's own satisfied word: the pump computes the satisfied set as
+// TODO(T25): the consultation runs per visit where retail runs it on the
+// `0x40` wake alone. Re-confirmed at the site by [05 R-WORK-01 §13]: the
+// handler's third argument is the visit's satisfied set, phase 1 is dispatched
+// only on `0x20`/`0x40`/`0x80` (gate `0xE0`), and the reach expression sits
+// under `satisfied & 0x40` — an arrival at the rectangle border retires the
+// approach with no distance test, and there is no other range term in the row.
+// Placeholder: keep consulting the expression here; the only observable
+// difference is the border case above. Moving it onto the wake needs a wake
+// this handler can read, and it cannot read the record's own satisfied word:
+// the pump computes the satisfied set as
 // `(record.satisfied | unit.pending) & record.gate` and then CLEARS the
 // delivered bits from the record [04 §3.3], so by the time internal/session
 // drives StepUnit the `0x40` is already consumed — construction sees a word
