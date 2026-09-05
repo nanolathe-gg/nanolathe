@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 const (
@@ -24,6 +25,8 @@ const (
 	hpiChunkSize        = 64 * 1024
 )
 
+// ErrMalformedArchive reports an archive whose header, directory blob or
+// chunk stream does not decode.
 var ErrMalformedArchive = errors.New("vfs: malformed HPI archive")
 
 // ArchiveOptions controls defensive limits while indexing and decoding an
@@ -106,6 +109,8 @@ func NewArchive(name string, reader io.ReaderAt, size int64, options ArchiveOpti
 	return a, nil
 }
 
+// Close releases the archive's file handle when the archive opened one.
+// An archive built over a caller-supplied ReaderAt owns nothing to close.
 func (a *Archive) Close() error {
 	if a.closer == nil {
 		return nil
@@ -163,29 +168,25 @@ func (a *Archive) index() error {
 	if version != 0x00010000 && !(a.options.AllowBank && version == 0x4B4E4142) {
 		return fmt.Errorf("%w: unsupported version 0x%08x", ErrMalformedArchive, version)
 	}
-	// Footer: retail seeks to end and requires trailing "Copyright ... Cavedog Entertainment".
-	// Retail normalizes the footer's four edition bytes before comparing the
-	// surrounding copyright text [02 §2].
+	// Footer: retail seeks to the end of the file, reads the 36 trailing
+	// bytes, overwrites the four edition bytes with literal "0000", and
+	// requires the normalized footer to equal the template. The accepted shape
+	// is therefore "Copyright <any four bytes> Cavedog Entertainment" with no
+	// digit check, and a mismatch rejects the archive before it enters the
+	// mount list [02 §2].
 	if version == 0x00010000 {
-		const footerSuffix = "Cavedog Entertainment"
-		const footerPrefix = "Copyright"
-		footerCheckLen := 64
-		if int64(footerCheckLen) > a.size {
-			footerCheckLen = int(a.size)
+		const footerTemplate = "Copyright 0000 Cavedog Entertainment"
+		const editionStart, editionEnd = 10, 14
+		if a.size < int64(len(footerTemplate)) {
+			return fmt.Errorf("%w: missing footer %q", ErrMalformedArchive, footerTemplate)
 		}
-		tail := make([]byte, footerCheckLen)
-		if err := readAtFull(a.reader, a.size-int64(footerCheckLen), tail); err != nil {
+		tail := make([]byte, len(footerTemplate))
+		if err := readAtFull(a.reader, a.size-int64(len(footerTemplate)), tail); err != nil {
 			return fmt.Errorf("%w: footer: %v", ErrMalformedArchive, err)
 		}
-		tailStr := string(tail)
-		if !strings.HasSuffix(strings.TrimRight(tailStr, "\x00"), footerSuffix) {
-			// Fallback: check any suffix match within tail window
-			if !strings.Contains(tailStr, footerSuffix) {
-				return fmt.Errorf("%w: missing footer %q", ErrMalformedArchive, footerSuffix)
-			}
-		}
-		if !strings.Contains(tailStr, footerPrefix) {
-			return fmt.Errorf("%w: missing footer %q", ErrMalformedArchive, footerPrefix)
+		copy(tail[editionStart:editionEnd], "0000")
+		if string(tail) != footerTemplate {
+			return fmt.Errorf("%w: missing footer %q", ErrMalformedArchive, footerTemplate)
 		}
 	}
 	blobSize := uint64(binary.LittleEndian.Uint32(header[8:12]))
@@ -388,7 +389,9 @@ func (a *Archive) openRecord(record hpiRecord, info EntryInfo) (File, error) {
 		return nil, err
 	}
 	reader := bytes.NewReader(data)
-	return &fileHandle{reader: reader, readerAt: reader, closeFn: func() error { return nil }, info: info}, nil
+	// data was decoded for this open alone, so the handle can hand it to a
+	// whole-file reader without a second copy [vfs.WholeFile].
+	return &fileHandle{reader: reader, readerAt: reader, closeFn: func() error { return nil }, info: info, whole: data}, nil
 }
 
 func (a *Archive) readRecord(record hpiRecord) ([]byte, error) {
@@ -555,22 +558,56 @@ func decrypt(data []byte, absoluteOffset uint64, key uint32) {
 	}
 }
 
+// resettableReader is what compress/zlib's reader satisfies: it can be
+// pointed at a new stream without reallocating its history window.
+type resettableReader interface {
+	io.ReadCloser
+	zlib.Resetter
+}
+
+// zlibReaders keeps decoded-out readers for reuse. Each fresh zlib reader
+// allocates a 32 KiB flate history window, and a compressed record is decoded
+// one chunk at a time, so a reader per chunk was the single largest
+// allocation in a whole-install catalog compile.
+var zlibReaders sync.Pool
+
 func decodeZlib(payload []byte, expected uint64) ([]byte, error) {
 	if expected > uint64(math.MaxInt) {
 		return nil, errors.New("zlib output is too large")
 	}
-	reader, err := zlib.NewReader(bytes.NewReader(payload))
-	if err != nil {
+	source := bytes.NewReader(payload)
+	reader, _ := zlibReaders.Get().(resettableReader)
+	if reader == nil {
+		fresh, err := zlib.NewReader(source)
+		if err != nil {
+			return nil, err
+		}
+		var ok bool
+		if reader, ok = fresh.(resettableReader); !ok {
+			return nil, errors.New("zlib reader is not resettable")
+		}
+	} else if err := reader.Reset(source, nil); err != nil {
 		return nil, err
 	}
-	defer reader.Close()
-	limited := io.LimitReader(reader, int64(expected)+1)
-	data, err := io.ReadAll(limited)
-	if err != nil {
+	defer zlibReaders.Put(reader)
+	// The chunk header states the decompressed size, so the output buffer is
+	// exact [02 §2] — io.ReadAll would allocate roughly twice this while
+	// doubling its way there.
+	data := make([]byte, int(expected))
+	if _, err := io.ReadFull(reader, data); err != nil {
+		if err == io.ErrUnexpectedEOF || err == io.EOF {
+			return nil, fmt.Errorf("zlib produced fewer than %d bytes", expected)
+		}
 		return nil, err
 	}
-	if uint64(len(data)) != expected {
-		return nil, fmt.Errorf("zlib produced %d bytes, expected %d", len(data), expected)
+	// The stream must be exhausted: more bytes than the header declared is a
+	// malformed chunk, not a truncation this reader may silently accept.
+	var extra [1]byte
+	switch n, err := reader.Read(extra[:]); {
+	case n != 0:
+		return nil, fmt.Errorf("zlib produced more than %d bytes", expected)
+	case err != nil && err != io.EOF:
+		return nil, err
 	}
 	return data, nil
 }

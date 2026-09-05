@@ -2,6 +2,7 @@ package content
 
 import (
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -10,7 +11,10 @@ import (
 
 func compileMobilityFixture(t *testing.T, body string) *UnitDef {
 	t.Helper()
-	doc, err := formats.ParseTDF([]byte("[UNITINFO]{\n" + body + "\n}"))
+	// Each assignment is terminated: a TDF value runs to the next ';' found by
+	// a forward scan, so an unterminated one swallows the following lines
+	// [02 R-MALF-01 §4].
+	doc, err := formats.ParseTDF([]byte("[UNITINFO]{\n" + strings.ReplaceAll(body, "\n", ";\n") + ";\n}"))
 	if err != nil {
 		t.Fatal(err)
 	}

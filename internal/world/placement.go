@@ -1,7 +1,8 @@
-// Package world provides placement validation and yard-map handling.
+// Placement validation and yard-map handling.
 //
 // Yard-map control bytes and geothermal/metal contracts are per
 // [04 §6.2], [05 "Terrain metal extraction"], [05 "Geothermal requirement"] and [GAP T15].
+
 package world
 
 import (
@@ -64,7 +65,10 @@ func checkedPlacementArea(width, depth int32) (int, error) {
 	return int(area), nil
 }
 
+// Width is the extent's cell width.
 func (e FootprintExtent) Width() int32 { return e.width }
+
+// Depth is the extent's cell depth.
 func (e FootprintExtent) Depth() int32 { return e.depth }
 
 // FootprintAnchor is the snapped north-west origin of a footprint rectangle,
@@ -82,9 +86,14 @@ func NewFootprintAnchor(cellX, cellZ int32) FootprintAnchor {
 	return FootprintAnchor{cellX: cellX, cellZ: cellZ}
 }
 
+// CellX is the anchor's cell X.
 func (a FootprintAnchor) CellX() int32 { return a.cellX }
+
+// CellZ is the anchor's cell Z.
 func (a FootprintAnchor) CellZ() int32 { return a.cellZ }
-func (a FootprintAnchor) Cell() Cell   { return Cell{X: a.cellX, Z: a.cellZ} }
+
+// Cell is the anchor as a lattice coordinate.
+func (a FootprintAnchor) Cell() Cell { return Cell{X: a.cellX, Z: a.cellZ} }
 
 // FootprintRect is a validated half-open rectangle [MinX,MaxX) ×
 // [MinZ,MaxZ) in map cells. The endpoint check prevents anchor+extent from
@@ -110,14 +119,29 @@ func NewFootprintRect(anchor FootprintAnchor, extent FootprintExtent) (Footprint
 	return FootprintRect{anchor: anchor, extent: extent, maxX: int32(maxX), maxZ: int32(maxZ)}, nil
 }
 
+// Anchor is the rectangle's snapped top-left cell.
 func (r FootprintRect) Anchor() FootprintAnchor { return r.anchor }
+
+// Extent is the rectangle's cell width and depth.
 func (r FootprintRect) Extent() FootprintExtent { return r.extent }
-func (r FootprintRect) MinX() int32             { return r.anchor.cellX }
-func (r FootprintRect) MinZ() int32             { return r.anchor.cellZ }
-func (r FootprintRect) MaxX() int32             { return r.maxX }
-func (r FootprintRect) MaxZ() int32             { return r.maxZ }
-func (r FootprintRect) Width() int32            { return r.extent.width }
-func (r FootprintRect) Depth() int32            { return r.extent.depth }
+
+// MinX is the rectangle's first cell column.
+func (r FootprintRect) MinX() int32 { return r.anchor.cellX }
+
+// MinZ is the rectangle's first cell row.
+func (r FootprintRect) MinZ() int32 { return r.anchor.cellZ }
+
+// MaxX is the rectangle's last cell column, inclusive.
+func (r FootprintRect) MaxX() int32 { return r.maxX }
+
+// MaxZ is the rectangle's last cell row, inclusive.
+func (r FootprintRect) MaxZ() int32 { return r.maxZ }
+
+// Width is the rectangle's cell width.
+func (r FootprintRect) Width() int32 { return r.extent.width }
+
+// Depth is the rectangle's cell depth.
+func (r FootprintRect) Depth() int32 { return r.extent.depth }
 
 // Contains reports whether a cell lies in this rectangle's half-open bounds.
 func (r FootprintRect) Contains(cellX, cellZ int32) bool {
@@ -141,8 +165,13 @@ func NewModelWorldPosition(x, y, z numeric.Fixed) ModelWorldPosition {
 	return ModelWorldPosition{x: x, y: y, z: z}
 }
 
+// X is the position's world X.
 func (p ModelWorldPosition) X() numeric.Fixed { return p.x }
+
+// Y is the position's world Y.
 func (p ModelWorldPosition) Y() numeric.Fixed { return p.y }
+
+// Z is the position's world Z.
 func (p ModelWorldPosition) Z() numeric.Fixed { return p.z }
 
 // MobilePlacement carries all coordinate products of a mobile picked point:
@@ -154,8 +183,10 @@ type MobilePlacement struct {
 	model  ModelWorldPosition
 }
 
-func (p MobilePlacement) Anchor() FootprintAnchor           { return p.anchor }
-func (p MobilePlacement) Rect() FootprintRect               { return p.rect }
+// Rect is the placement's validation rectangle.
+func (p MobilePlacement) Rect() FootprintRect { return p.rect }
+
+// ModelPosition is the footprint midpoint used as the unit position.
 func (p MobilePlacement) ModelPosition() ModelWorldPosition { return p.model }
 
 // FactoryPlacement carries the two intentionally independent factory
@@ -167,8 +198,13 @@ type FactoryPlacement struct {
 	model  ModelWorldPosition
 }
 
-func (p FactoryPlacement) Anchor() FootprintAnchor           { return p.anchor }
-func (p FactoryPlacement) Rect() FootprintRect               { return p.rect }
+// Anchor is the placement's snapped top-left cell.
+func (p FactoryPlacement) Anchor() FootprintAnchor { return p.anchor }
+
+// Rect is the placement's validation rectangle.
+func (p FactoryPlacement) Rect() FootprintRect { return p.rect }
+
+// ModelPosition is the QueryBuildInfo transform the placement was built from.
 func (p FactoryPlacement) ModelPosition() ModelWorldPosition { return p.model }
 
 // snapPlacementCell implements retail's signed arithmetic-shift formula:
@@ -267,12 +303,6 @@ func SnapFactoryPlacement(queryBuildInfo ModelWorldPosition, extent FootprintExt
 		return FactoryPlacement{}, err
 	}
 	return FactoryPlacement{anchor: anchor, rect: rect, model: queryBuildInfo}, nil
-}
-
-// FactoryPlacementFromQueryBuildInfo constructs a factory placement from all
-// three authored QueryBuildInfo world coordinates.
-func FactoryPlacementFromQueryBuildInfo(x, y, z numeric.Fixed, extent FootprintExtent) (FactoryPlacement, error) {
-	return SnapFactoryPlacement(NewModelWorldPosition(x, y, z), extent)
 }
 
 // YardCell is a yard-map control byte per [04 §6.2] C10 [GAP T15].

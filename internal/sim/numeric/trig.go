@@ -1,10 +1,11 @@
-// Package numeric — fixed-point trig shared by all simulation code [04 §5.1].
+// Fixed-point trig shared by all simulation code [04 §5.1].
 //
 // One 512-entry sine table serves all simulation trig: entry i is
 // round(8192*sin(i*2π/512)), cosine reads the same table a quarter turn
 // ahead (128 entries), and products round to nearest before truncation
 // [04 §5.1]. It lives in numeric and is the only trig any sim package calls.
 // Renderer model trig is separate floating point [03 §2.4].
+
 package numeric
 
 import "math"

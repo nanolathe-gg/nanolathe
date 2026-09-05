@@ -1,4 +1,5 @@
-// Package vfs provides the logical content namespace used by OpenTA.
+// Package vfs provides Nanolathe's logical content namespace: an overlay of
+// loose directories and HPI-family archives resolved by mount order [02 §2].
 //
 // Mounting indexes names and metadata only. Archive payloads are read and
 // decompressed when the corresponding file is opened, which keeps startup
@@ -167,10 +168,12 @@ func (f *FS) Notes() []string { return append([]string(nil), f.notes...) }
 
 // MountTier is an explicit content-overlay tier. Higher tiers win. Retail
 // checks loose files first, then scans archive groups in GP3, CCX, UFO, HPI
-// order. Files within one group remain lexically ordered below as an OpenTA
+// order. Files within one group remain lexically ordered below as a Nanolathe
 // determinism policy; retail inherits host directory enumeration order.
 type MountTier uint8
 
+// MountPlan is the per-extension mount tier policy: the tier each archive
+// family joins, and the revision string that identifies the policy itself.
 type MountPlan struct {
 	Revision    string
 	Provisional bool
@@ -182,14 +185,15 @@ type MountPlan struct {
 // DefaultRetailMountPlan is a deliberate catalog policy difference, not a
 // reproduction of retail's loader. Retail mounts loose data, then rev*.GP3,
 // CCX, UFO, HPI and the CD HPI, and resolves a lookup against Windows
-// directory enumeration order. OpenTA sorts archives lexically inside each tier
-// so the equal-tier winner is stable across filesystems, and every shadowed
+// directory enumeration order. Nanolathe sorts archives lexically inside each
+// tier so the equal-tier winner is stable across filesystems, and every shadowed
 // mount is recorded in manifest identity (content.ManifestRecord.Shadowed) so a
 // differing winner can be named rather than silently used.
 func DefaultRetailMountPlan() MountPlan {
 	return MountPlan{Revision: "retail-binary-tiers-openta-lexical-1", HPI: 1, UFO: 2, CCX: 3, GP3: 4, Loose: 10}
 }
 
+// Validate reports a plan that leaves any tier or the revision unset.
 func (p MountPlan) Validate() error {
 	if p.Revision == "" || p.HPI == 0 || p.CCX == 0 || p.GP3 == 0 || p.UFO == 0 || p.Loose == 0 {
 		return errors.New("vfs: invalid mount plan")
@@ -247,9 +251,13 @@ func (f *FS) Pinned(index int) *PinnedMount {
 	return &PinnedMount{fs: f, index: index}
 }
 
+// Open opens a name in the pinned mount alone, never falling through to a
+// lower mount.
 func (p *PinnedMount) Open(name string) (File, error) {
 	return p.fs.OpenMount(p.index, name)
 }
+
+// ReadFileLimit reads at most max bytes of a name from the pinned mount.
 func (p *PinnedMount) ReadFileLimit(name string, max int64) ([]byte, error) {
 	file, err := p.fs.OpenMount(p.index, name)
 	if err != nil {
@@ -258,9 +266,15 @@ func (p *PinnedMount) ReadFileLimit(name string, max int64) ([]byte, error) {
 	defer file.Close()
 	return io.ReadAll(io.LimitReader(file, max))
 }
+
+// ReadDir lists a directory across the whole overlay: a pinned mount shadows
+// file lookups, not directory enumeration.
 func (p *PinnedMount) ReadDir(name string) ([]EntryInfo, error) {
 	return p.fs.ReadDir(name)
 }
+
+// Stat describes a name as the pinned mount holds it, falling back to the
+// overlay when the pinned mount does not carry it.
 func (p *PinnedMount) Stat(name string) (EntryInfo, error) {
 	if file, err := p.fs.OpenMount(p.index, name); err == nil {
 		info := file.Info()
@@ -269,6 +283,8 @@ func (p *PinnedMount) Stat(name string) (EntryInfo, error) {
 	}
 	return p.fs.Stat(name)
 }
+
+// CacheStamp returns the identity stamp of the pinned mount's copy of a name.
 func (p *PinnedMount) CacheStamp(name string) (string, error) {
 	if info, err := p.Stat(name); err == nil {
 		return p.fs.stampFor(info), nil
@@ -325,6 +341,7 @@ func (f *FS) stampFor(info EntryInfo) string {
 	return stamp
 }
 
+// New returns an empty overlay with no mounts.
 func New() *FS { return &FS{} }
 
 // MountDirectory indexes a loose directory's names and metadata. It does not
@@ -403,6 +420,8 @@ func (f *FS) alreadyMounted(name string) bool {
 	return false
 }
 
+// MountGameDirectoryWithPlan mounts an installation directory under an
+// explicit tier policy. MountGameDirectory is this with the default plan.
 func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 	if err := plan.Validate(); err != nil {
 		return err
@@ -422,7 +441,7 @@ func (f *FS) MountGameDirectoryWithPlan(root string, plan MountPlan) error {
 		}
 	}
 	sort.Slice(archives, func(i, j int) bool {
-		// Retail consumes Windows directory enumeration order. OpenTA sorts
+		// Retail consumes Windows directory enumeration order. Nanolathe sorts
 		// explicitly so the equal-tier winner is stable across filesystems.
 		// Equal-priority mounts added later win, so lexically later archive
 		// names take precedence within one tier.
@@ -497,6 +516,7 @@ func (f *FS) insertMount(m mountedProvider) {
 // that order; it is not copied, so callers must only read it.
 func (f *FS) orderedMounts() []mountedProvider { return f.mounts }
 
+// Open returns the winning provider's file for a logical name.
 func (f *FS) Open(name string) (File, error) {
 	logical, err := cleanPath(name)
 	if err != nil {
@@ -515,13 +535,34 @@ func (f *FS) Open(name string) (File, error) {
 	return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
 }
 
+// WholeFile is the optional capability a File exposes when opening it already
+// produced the entire file — an archive record is decoded in one piece, so
+// reading it whole need not copy it a second time. The returned slice belongs
+// to the caller; a provider that cannot hand over an exclusive buffer does not
+// implement this.
+type WholeFile interface {
+	Whole() ([]byte, bool)
+}
+
+// WholeBytes returns a file's complete contents, taking the WholeFile buffer
+// when the provider offers one and falling back to a streaming read.
+func WholeBytes(file File) ([]byte, error) {
+	if w, ok := file.(WholeFile); ok {
+		if data, ok := w.Whole(); ok {
+			return data, nil
+		}
+	}
+	return io.ReadAll(file)
+}
+
+// ReadFile returns the complete contents of the winning file.
 func (f *FS) ReadFile(name string) ([]byte, error) {
 	h, err := f.Open(name)
 	if err != nil {
 		return nil, err
 	}
 	defer h.Close()
-	return io.ReadAll(h)
+	return WholeBytes(h)
 }
 
 // ReadFileLimit reads at most max bytes from a winning logical file. The
@@ -538,9 +579,18 @@ func (f *FS) ReadFileLimit(name string, max int64) ([]byte, error) {
 	if info := h.Info(); info.Size >= 0 && info.Size > max {
 		return nil, fmt.Errorf("%w: %s is %d bytes (limit %d)", ErrTooLarge, name, info.Size, max)
 	}
-	data, err := io.ReadAll(io.LimitReader(h, max+1))
-	if err != nil {
-		return nil, err
+	var data []byte
+	if w, ok := h.(WholeFile); ok {
+		if whole, ok := w.Whole(); ok {
+			data = whole
+		}
+	}
+	if data == nil {
+		read, err := io.ReadAll(io.LimitReader(h, max+1))
+		if err != nil {
+			return nil, err
+		}
+		data = read
 	}
 	if int64(len(data)) > max {
 		return nil, fmt.Errorf("%w: %s exceeds %d bytes", ErrTooLarge, name, max)
@@ -595,6 +645,7 @@ func (f *FS) ReadFileRange(name string, offset int64, length int) ([]byte, error
 	return data, nil
 }
 
+// Stat describes the winning entry for a logical name.
 func (f *FS) Stat(name string) (EntryInfo, error) {
 	logical, err := cleanPath(name)
 	if err != nil {
@@ -718,6 +769,10 @@ type fileHandle struct {
 	readerAt io.ReaderAt
 	closeFn  func() error
 	info     EntryInfo
+	// whole is the complete file when the provider materialized it to open
+	// the handle. Only a provider that hands over an exclusive buffer sets
+	// it; see WholeFile.
+	whole []byte
 }
 
 func (h *fileHandle) Read(p []byte) (int, error)                { return h.reader.Read(p) }
@@ -725,6 +780,15 @@ func (h *fileHandle) ReadAt(p []byte, off int64) (int, error)   { return h.reade
 func (h *fileHandle) Seek(off int64, whence int) (int64, error) { return h.reader.Seek(off, whence) }
 func (h *fileHandle) Close() error                              { return h.closeFn() }
 func (h *fileHandle) Info() EntryInfo                           { return h.info }
+
+// Whole implements WholeFile for a provider that decoded the file in one
+// piece. It reports false for a handle streaming from the host filesystem.
+func (h *fileHandle) Whole() ([]byte, bool) {
+	if h.whole == nil {
+		return nil, false
+	}
+	return h.whole, true
+}
 
 func newOSFile(filename string, info EntryInfo) (File, error) {
 	file, err := os.Open(filename)

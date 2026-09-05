@@ -1,5 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the weapon class compiler [02 "Weapon record"].
+// The weapon compiler.
+
 package content
 
 import (
@@ -477,30 +477,22 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	return wd
 }
 
-// CompileWeapons compiles weapons from the VFS. The weapon family is exactly
+// CompileWeaponsWithDuplicates compiles weapons from the VFS and returns the
+// collision diagnostics alongside the catalog. The weapon family is exactly
 // Weapons/*.tdf — retail never parses gamedata/weapons.tdf, which is inert
 // [02 §5 R-CONTENT-02] — one weapon per top-level section across all files.
-// It returns a map keyed by CanonicalKey(section name) [02 §5]. The helper
-// uses only typed accessors from formats/tdf_typed.go [02 §4].
+// It returns a map keyed by CanonicalKey(section name) [02 §5] and uses only
+// typed accessors from formats/tdf_typed.go [02 §4].
 //
 // Record identity is by ID [02 "Weapon record"]: the parser reads ID first
 // with default -1 and uses it to select the record it fills, then stores the
-// section name as the record's catalog name. Sections are processed in
-// discovery order and a later section sharing an ID REPLACES the record —
-// whole-record, authored-or-default per field, catalog name included; there
-// is no sparse merge [02 §5 R-CONTENT-02]. ID-less sections are inert (they
-// fill one unreachable scratch slot and never enter the catalog map)
-// [02 §5 R-CONTENT-02]. Measured stock: the parsed family has unique IDs —
-// ID 36 is [cormine2] (weapons/cormine2_weapon.tdf) alone and [earthquake] is
-// weapons/earthquake.tdf at ID 227 [02 §5 R-CONTENT-02]. Determinism comes
-// from deterministic discovery order (I1).
-func CompileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
-	m, _, err := CompileWeaponsWithDuplicates(fs)
-	return m, err
-}
-
-// CompileWeaponsWithDuplicates is the stable implementation that also returns
-// duplicate diagnostics. Discovery is the union enumeration of Weapons/*.tdf:
+// section name as the record's catalog name. Measured stock: the parsed
+// family has unique IDs — ID 36 is [cormine2] (weapons/cormine2_weapon.tdf)
+// alone and [earthquake] is weapons/earthquake.tdf at ID 227
+// [02 §5 R-CONTENT-02]. Determinism comes from deterministic discovery order
+// (I1).
+//
+// Discovery is the union enumeration of Weapons/*.tdf:
 // provider mount precedence first, then host directory order within one
 // provider — which Nanolathe realizes as first-provider-wins dedup in mount
 // order followed by sorted logical paths, the documented lexical divergence
@@ -607,11 +599,6 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 	return result, duplicates, nil
 }
 
-// compileWeapons is an unexported alias for Catalog integration [02 §5] C1 two-stage discover → parse → link.
-func compileWeapons(fs vfs.FSOps) (map[string]*WeaponDef, error) {
-	return CompileWeapons(fs)
-}
-
 // WeaponByID selects the record occupying the given slot. A compiled map has
 // exactly one record per nonnegative ID — same-ID sections replaced each other
 // whole, and ID-less sections never enter the map [02 §5 R-CONTENT-02] — so
@@ -637,18 +624,4 @@ func WeaponByID(weapons map[string]*WeaponDef, id int32) (*WeaponDef, bool) {
 		}
 	}
 	return found, ok
-}
-
-// CompileWeaponsSorted returns weapons sorted by canonical key for hash-stable iteration (I1) [02 §5] C12.
-func CompileWeaponsSorted(fs vfs.FSOps) ([]*WeaponDef, error) {
-	m, err := CompileWeapons(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*WeaponDef, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
 }

@@ -1,3 +1,13 @@
+// Package economy owns the per-player and per-unit resource ledgers and the
+// two-stage settlement that retail runs once per tick: producers accumulate
+// into their buckets, then admission distributes what the stores can pay
+// [05 "Authoritative settlement order"].
+//
+// Bucket amounts are float32 because retail's are; the allowlist in
+// docs/INVARIANTS.md I2 names this package for that reason.
+//
+// This file implements the ledger itself: the buckets, the storage bonus and
+// the settlement arithmetic.
 package economy
 
 import (
@@ -262,6 +272,8 @@ func (s *Service) DeclaresAlliance(from, toward uint8) bool {
 	return s.Players[from].Allies[toward]
 }
 
+// UnitBuckets returns a unit's metal and energy buckets, allocating the
+// unit's storage on first use. It returns nil for the null handle.
 func (s *Service) UnitBuckets(handle pool.Handle) *[2]Bucket {
 	if s == nil || handle == 0 {
 		return nil
@@ -367,14 +379,6 @@ func AddProduction(b *Bucket, amount float32) {
 		return
 	}
 	b.Production += amount
-}
-
-// AddRequested verbatim accumulates requested consumption per [05 "Unit instance economy state"].
-func AddRequested(b *Bucket, amount float32) {
-	if b == nil {
-		return
-	}
-	b.Requested += amount
 }
 
 // InstallStorageBonus installs the retail storage bonus [05 "Storage capacity"]

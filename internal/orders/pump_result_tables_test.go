@@ -276,8 +276,15 @@ func TestPumpResultCodeTables(t *testing.T) {
 			if a.Flags&FlagTombstone != 0 {
 				t.Fatalf("code6: tail-rotated record must not be tombstoned")
 			}
-			if activeMarkerCount(q) != 1 {
-				t.Fatalf("code6: active markers %d, want exactly one", activeMarkerCount(q))
+			// Updated by WU-19-232. This used to assert only "exactly one
+			// marker", which the old arm satisfied by clearing the rotated
+			// record's marker and handing it to the new head. The rotate is a
+			// link move: [04 §3.3]'s code-6 row names no flag, and
+			// [04 R-ORD-01 §13] gives bit 12 exactly one writer, the producer
+			// insertion's after-marker branch. The second Push took the marker,
+			// so after the rotate it is still on Param1 == 2.
+			if activeMarkerCount(q) != 1 || q.primary[0].Flags&FlagActive == 0 {
+				t.Fatalf("code6: the rotate moved the active marker; markers %d, head param %d", activeMarkerCount(q), q.primary[0].Param1)
 			}
 			if d := sim.Draws() - before; d != 0 {
 				t.Fatalf("code6: draw delta %d, want 0", d)

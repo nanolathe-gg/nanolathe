@@ -1,4 +1,5 @@
-// Package visibility fog implements C13, C14, C15 [PLAN_05 WU-05-5].
+// Fog presentation: C13, C14, C15 [PLAN_05 WU-05-5].
+
 package visibility
 
 // FogCache is presentation-only fog [03 §3.3] C13. Its validity is solely
@@ -61,13 +62,6 @@ func (f *FogCache) Channels() ([]uint8, []uint8) {
 	copy(f.out0, f.ch0)
 	copy(f.out1, f.ch1)
 	return f.out0, f.out1
-}
-
-// NewFogCacheFromChannels creates a detached presentation FogCache from
-// snapshot channels [03 §3.3] (I6). It has no validity state; callers that
-// need validity read the owning Service mode bit.
-func NewFogCacheFromChannels(w, h int32, ch0, ch1 []uint8) *FogCache {
-	return NewFogCacheFromChannelsAt(w, h, 0, 0, ch0, ch1)
 }
 
 // NewFogCacheFromChannelsAt reconstructs the detached cache with its

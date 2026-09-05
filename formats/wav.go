@@ -24,6 +24,7 @@ type WAV struct {
 	DataSize      uint32
 }
 
+// LoadWAV decodes PCM metadata and samples from a RIFF/WAVE file.
 func LoadWAV(data []byte) (*WAV, error) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
 		return nil, fmt.Errorf("wav: missing RIFF/WAVE header")
@@ -156,6 +157,7 @@ func EncodeWAV(data []byte, w *WAV) ([]byte, error) {
 	return out, nil
 }
 
+// Duration returns the playing time implied by the sample count and rate.
 func (w *WAV) Duration() time.Duration {
 	if w == nil || w.ByteRate == 0 {
 		return 0
@@ -163,6 +165,7 @@ func (w *WAV) Duration() time.Duration {
 	return time.Duration(uint64(w.DataSize) * uint64(time.Second) / uint64(w.ByteRate))
 }
 
+// LoadWAVFile reads and decodes a WAVE file from the VFS.
 func LoadWAVFile(fs *vfs.FS, name string) (*WAV, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {

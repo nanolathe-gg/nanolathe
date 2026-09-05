@@ -9,6 +9,8 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// GUI is a decoded panel definition: its header gadget and the gadgets that
+// follow it [fmt gui].
 type GUI struct {
 	Gadgets []Gadget
 	Header  GUIHeader
@@ -22,6 +24,7 @@ type GUI struct {
 	Document *Document
 }
 
+// GUIHeader is the panel-wide record the first gadget carries.
 type GUIHeader struct {
 	TotalGadgets int
 	Panel        string
@@ -34,6 +37,8 @@ type GUIHeader struct {
 	HasVersion   bool
 }
 
+// Gadget is one control of a panel: the common record every gadget has plus
+// the per-kind fields the file authored.
 type Gadget struct {
 	SourceName string
 	Common     CommonGadget
@@ -41,6 +46,7 @@ type Gadget struct {
 	Section    *SectionView
 }
 
+// CommonGadget is the record every gadget begins with [fmt gui].
 type CommonGadget struct {
 	ID, Assoc                        int
 	Name                             string
@@ -61,6 +67,7 @@ type SectionView struct {
 	Child  []*SectionView
 }
 
+// LoadGUI decodes a panel definition from its bytes [fmt gui].
 func LoadGUI(data []byte) (*GUI, error) {
 	document, err := ParseTDF(data)
 	if err != nil && isBinaryGUI(data) {
@@ -235,6 +242,7 @@ func min(a, b int) int {
 	return b
 }
 
+// LoadGUIFile reads and decodes a panel definition from the VFS.
 func LoadGUIFile(fs vfs.FSOps, name string) (*GUI, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {

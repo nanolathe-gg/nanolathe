@@ -1,10 +1,9 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the movement class compiler [02 §5 "Movement class record"].
+// The movement class compiler.
+
 package content
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -170,24 +169,4 @@ func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 		result[key] = mc
 	}
 	return result, nil
-}
-
-// compileMovement is an unexported alias for future Catalog integration.
-func compileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
-	return CompileMovement(fs)
-}
-
-// CompileMovementSorted returns the movement classes sorted by canonical key.
-// This helper is useful for hash-stable iteration and tests (I1).
-func CompileMovementSorted(fs vfs.FSOps) ([]*MovementClass, error) {
-	m, err := CompileMovement(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*MovementClass, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
 }

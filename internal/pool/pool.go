@@ -438,54 +438,6 @@ func (p *Units) TotalRecords() int {
 	return len(p.alive)
 }
 
-// CobThreads models the per-unit COB VM thread mask. Each live unit has eight
-// 164-byte thread records [01 §6.1]; allocation picks the lowest clear mask
-// bit and clearing the bit frees the thread [04 §5.x]. This helper is the
-// deterministic mask primitive; the full VM lives in internal/cob.
-type CobThreads struct {
-	mask uint8 // bit set = active
-}
-
-// AllocThread returns the lowest free thread index 0..7, or -1 when full.
-// It sets the bit, matching retail's lowest-clear-bit scan [01 §6.1].
-func (c *CobThreads) AllocThread() (int, bool) {
-	if c == nil {
-		return -1, false
-	}
-	for i := 0; i < 8; i++ {
-		bit := uint8(1 << uint(i))
-		if c.mask&bit == 0 {
-			c.mask |= bit
-			return i, true
-		}
-	}
-	return -1, false
-}
-
-// FreeThread clears the bit for idx 0..7. Out-of-range indices are ignored.
-func (c *CobThreads) FreeThread(idx int) {
-	if c == nil || idx < 0 || idx >= 8 {
-		return
-	}
-	c.mask &^= uint8(1 << uint(idx))
-}
-
-// ActiveMask returns the raw thread mask for debugging.
-func (c *CobThreads) ActiveMask() uint8 {
-	if c == nil {
-		return 0
-	}
-	return c.mask
-}
-
-// Active reports whether thread idx is active.
-func (c *CobThreads) Active(idx int) bool {
-	if c == nil || idx < 0 || idx >= 8 {
-		return false
-	}
-	return c.mask&(1<<uint(idx)) != 0
-}
-
 // ---------------------------------------------------------------------------
 // Projectiles
 // ---------------------------------------------------------------------------

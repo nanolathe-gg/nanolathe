@@ -8,12 +8,15 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// FNT is a decoded bitmap font: one glyph per byte code, all of the font's
+// own height. A code the file does not author has a nil glyph [fmt fnt].
 type FNT struct {
 	Height  uint16
 	Unknown uint16
 	Glyphs  [256]*FNTGlyph
 }
 
+// FNTGlyph is one glyph's bitmap, Width by Height bits packed row by row.
 type FNTGlyph struct {
 	Width  uint8
 	Height uint16
@@ -22,6 +25,7 @@ type FNTGlyph struct {
 
 const maxFNTGlyphBits = 16 << 20
 
+// LoadFNT decodes a font from its bytes [fmt fnt].
 func LoadFNT(data []byte) (*FNT, error) {
 	if len(data) < 516 {
 		return nil, fmt.Errorf("fnt: file is too small")
@@ -56,6 +60,7 @@ func LoadFNT(data []byte) (*FNT, error) {
 	return fnt, nil
 }
 
+// LoadFNTFile reads and decodes a font from the VFS.
 func LoadFNTFile(fs vfs.FSOps, name string) (*FNT, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {
@@ -64,6 +69,8 @@ func LoadFNTFile(fs vfs.FSOps, name string) (*FNT, error) {
 	return LoadFNT(data)
 }
 
+// On reports whether the bit at (x, y) of the glyph is set. Coordinates
+// outside the glyph read as clear.
 func (g *FNTGlyph) On(x, y int) bool {
 	if g == nil {
 		return false

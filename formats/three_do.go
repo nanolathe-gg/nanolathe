@@ -9,17 +9,23 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// ThreeDOLimits bounds the object, vertex and primitive counts one model may
+// declare.
 type ThreeDOLimits struct {
 	MaxDepth, MaxObjects, MaxVertices, MaxPrimitives, MaxPolygonVertices uint32
 	MaxStringBytes                                                       uint32
 }
 
+// DefaultThreeDOLimits returns the decode bounds used when a caller states none.
 func DefaultThreeDOLimits() ThreeDOLimits {
 	return ThreeDOLimits{MaxDepth: 64, MaxObjects: 1 << 16, MaxVertices: 1 << 22, MaxPrimitives: 1 << 22, MaxPolygonVertices: 1 << 16, MaxStringBytes: 1 << 20}
 }
 
+// ThreeDOVertex is one model-space vertex in the file's own integer units.
 type ThreeDOVertex struct{ X, Y, Z int32 }
 
+// ThreeDOPrimitive is one face: its vertex indices, its texture name and the
+// per-face words the file carries [fmt 3do].
 type ThreeDOPrimitive struct {
 	ColorIndex         uint32
 	VertexIndices      []uint16
@@ -46,6 +52,8 @@ type ThreeDOObject struct {
 	NextSibling  int32
 }
 
+// ThreeDO is a decoded model: the piece hierarchy with each piece's
+// vertices, primitives and pivot [fmt 3do].
 type ThreeDO struct {
 	ContentHash [32]byte
 	// Raw owns the one immutable source backing store used during parsing.
@@ -56,14 +64,16 @@ type ThreeDO struct {
 	Objects []ThreeDOObject
 }
 
+// ThreeDOModel is an alias kept for readers that name the whole model rather
+// than the format.
 type ThreeDOModel = ThreeDO
 
+// LoadThreeDO decodes a model under the default limits [fmt 3do].
 func LoadThreeDO(data []byte) (*ThreeDO, error) {
 	return LoadThreeDOWithLimits(data, DefaultThreeDOLimits())
 }
 
-func Load3DO(data []byte) (*ThreeDO, error) { return LoadThreeDO(data) }
-
+// LoadThreeDOWithLimits decodes a model under explicit bounds [fmt 3do].
 func LoadThreeDOWithLimits(data []byte, limits ThreeDOLimits) (*ThreeDO, error) {
 	if len(data) < 52 {
 		return nil, fmt.Errorf("3do: root object is truncated")
@@ -270,6 +280,7 @@ func threeDOString(data []byte, off int32, max uint32) (string, error) {
 	return "", fmt.Errorf("unterminated string at 0x%x", off)
 }
 
+// LoadThreeDOFile reads and decodes a model from the VFS.
 func LoadThreeDOFile(fs vfs.FSOps, name string) (*ThreeDO, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {
@@ -277,8 +288,6 @@ func LoadThreeDOFile(fs vfs.FSOps, name string) (*ThreeDO, error) {
 	}
 	return LoadThreeDO(data)
 }
-
-func Load3DOFile(fs vfs.FSOps, name string) (*ThreeDO, error) { return LoadThreeDOFile(fs, name) }
 
 // ModelTop returns the model's top extent in 16.16 world units, matching the
 // retail loader helper whose result the unit definition stores for

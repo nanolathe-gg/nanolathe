@@ -89,7 +89,16 @@ func RetailRestoreOrdersAtTick(u *units.Unit, records []save.OrderRecord, stable
 		}
 	}
 	q := NewQueueWith(front, rear)
-	q.ensureSingleActive()
+	// No marker repair. The saved order box carries the record's whole
+	// static-mask copy, and the active marker is bit 12 of that word
+	// [04 R-ORD-01 §13] — the loop above restores it verbatim along with the
+	// tombstone, auto-op and caption bits. A repair here would invent a marker
+	// for a saved queue that genuinely carried none, which is a state retail
+	// reaches whenever the marked record was freed ("with no marked record it
+	// appends at the tail", [04 §3.1]).
+	//
+	// Correction (WU-19-232). This used to call ensureSingleActive, whose head
+	// fallback did exactly that. It was the last caller; the helper is gone.
 	q.SetBinding(binding)
 	BindQueue(u, q)
 	return nil

@@ -137,18 +137,3 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 func (s *Service) RetailSaveImage() (RetailFeatureImage, error) {
 	return s.RetailFeatureImage()
 }
-
-// RetailFeatureRecordFamilySize returns the established payload size for one
-// feature family, or zero for an unknown family [08 R-SAVE-FEATURE-01].
-func RetailFeatureRecordFamilySize(family int) int {
-	switch family {
-	case 0:
-		return RetailNormalFeatureSize
-	case 1:
-		return RetailAnimatingFeatureSize
-	case 2:
-		return RetailThreeDFeatureSize
-	default:
-		return 0
-	}
-}

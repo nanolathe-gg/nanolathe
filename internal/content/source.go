@@ -1,6 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file carries the identity primitives every compiled definition shares;
-// the family compilers land in phase 2.
+// The identity primitives every compiled definition shares.
+
 package content
 
 import (
@@ -93,6 +92,17 @@ func discoverArchiveContent(fs vfs.FSOps, directory, suffix string) ([]archiveCo
 }
 
 func readArchiveFile(file vfs.File, max int64) ([]byte, error) {
+	// Every caller here reads an archive record, which the provider already
+	// decoded in one piece, so the whole-file path avoids copying it again
+	// [vfs.WholeFile].
+	if w, ok := file.(vfs.WholeFile); ok {
+		if data, ok := w.Whole(); ok {
+			if max >= 0 && int64(len(data)) > max {
+				return nil, fmt.Errorf("content: archive entry exceeds read limit")
+			}
+			return data, nil
+		}
+	}
 	if max < 0 {
 		return io.ReadAll(file)
 	}

@@ -92,16 +92,6 @@ func (c *PresentationCatalog) Frame(id AssetID) (formats.GAFFrame, bool) {
 	return f, true
 }
 
-// FrameMeta returns stable dimensions, placement, color-key, and authored
-// duration without exposing decoded pixel storage.
-func (c *PresentationCatalog) FrameMeta(id AssetID) (PresentationFrame, bool) {
-	if c == nil {
-		return PresentationFrame{}, false
-	}
-	v, ok := c.frames[id]
-	return v, ok
-}
-
 // Font returns a detached FNT value by stable logical ID.
 func (c *PresentationCatalog) Font(id AssetID) (*formats.FNT, bool) {
 	if c == nil {
@@ -192,16 +182,6 @@ func (c *PresentationCatalog) loadFonts(fs vfs.FSOps) {
 		}
 		c.fonts[AssetID(logical)] = font
 	}
-}
-
-// BuildPresentationAssets is the narrow helper used by session setup when it
-// only needs the merged Assets interface.
-func BuildPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (Assets, error) {
-	c, err := LoadPresentationAssets(fs, defs...)
-	if err != nil {
-		return nil, err
-	}
-	return c.Assets(), nil
 }
 
 type loadedGAF struct {

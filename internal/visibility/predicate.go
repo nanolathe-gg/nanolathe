@@ -1,4 +1,5 @@
-// Package visibility predicate implements C8, C9, C10 [PLAN_05 WU-05-3] P0-11.
+// The visibility predicate: C8, C9, C10 [PLAN_05 WU-05-3] P0-11.
+
 package visibility
 
 import (

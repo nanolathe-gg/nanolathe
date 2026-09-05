@@ -1,6 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the AI profile compiler [08 "Computer-controlled players"]
-// with the plan any/easy/medium/hard gate [PLAN 11 C4] and the weight/limit grammar.
+// The AI profile compiler.
+
 package content
 
 import (
@@ -557,26 +556,6 @@ func CompileAIProfiles(fs vfs.FSOps) (map[string]*AIProfile, error) {
 		return nil, fmt.Errorf("content: ai/default.txt: not found (missing selected AI profile fallback) [P0-07]")
 	}
 	return result, nil
-}
-
-// compileAIProfiles is an unexported alias for Catalog integration [02 §5] C1 two-stage.
-func compileAIProfiles(fs vfs.FSOps) (map[string]*AIProfile, error) {
-	return CompileAIProfiles(fs)
-}
-
-// CompileAIProfilesSorted returns AI profiles sorted by canonical key for
-// hash-stable iteration and tests (I1).
-func CompileAIProfilesSorted(fs vfs.FSOps) ([]*AIProfile, error) {
-	m, err := CompileAIProfiles(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*AIProfile, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
 }
 
 // baseNameWithoutExtAI extracts the basename without extension from a path,

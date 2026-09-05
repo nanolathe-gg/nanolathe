@@ -1,5 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the side (battle interface) compiler [02 §6 "SIDE and battle interface data"] [GAP T14].
+// The side (battle interface) compiler.
+
 package content
 
 import (
@@ -207,22 +207,4 @@ func CompileSides(fs vfs.FSOps) ([]*SideDef, error) {
 		sides = append(sides, sd)
 	}
 	return sides, nil
-}
-
-// compileSides is an unexported alias for Catalog integration [02 §5] C1 two-stage.
-func compileSides(fs vfs.FSOps) ([]*SideDef, error) {
-	return CompileSides(fs)
-}
-
-// CompileSidesMap returns sides keyed by CanonicalKey(SIDE ordinal name) for map consumers.
-func CompileSidesMap(fs vfs.FSOps) (map[string]*SideDef, error) {
-	sides, err := CompileSides(fs)
-	if err != nil {
-		return nil, err
-	}
-	m := make(map[string]*SideDef, len(sides))
-	for _, s := range sides {
-		m[s.CanonicalKey] = s
-	}
-	return m, nil
 }

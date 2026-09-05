@@ -1,5 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the feature compiler [02 "Feature record"].
+// The feature compiler.
+
 package content
 
 import (
@@ -297,6 +297,7 @@ func LinkFeatureSuccessors(features map[string]*FeatureDef) error {
 			if target, ok := features[ck]; ok {
 				fd.FeatureDeadDef = target
 			} else {
+				//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [02 "Feature record"]
 				return fmt.Errorf(`Record "%s" missing from feature files`, fd.FeatureDead)
 			}
 		}
@@ -305,6 +306,7 @@ func LinkFeatureSuccessors(features map[string]*FeatureDef) error {
 			if target, ok := features[ck]; ok {
 				fd.FeatureReclamateDef = target
 			} else {
+				//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [02 "Feature record"]
 				return fmt.Errorf(`Record "%s" missing from feature files`, fd.FeatureReclamate)
 			}
 		}
@@ -313,6 +315,7 @@ func LinkFeatureSuccessors(features map[string]*FeatureDef) error {
 			if target, ok := features[ck]; ok {
 				fd.FeatureBurntDef = target
 			} else {
+				//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [02 "Feature record"]
 				return fmt.Errorf(`Record "%s" missing from feature files`, fd.FeatureBurnt)
 			}
 		}
@@ -389,24 +392,4 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 		return nil, err
 	}
 	return result, nil
-}
-
-// compileFeatures is an unexported alias for Catalog integration [02 §5] C1 two-stage.
-func compileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
-	return CompileFeatures(fs)
-}
-
-// CompileFeaturesSorted returns the features sorted by canonical key.
-// This helper is useful for hash-stable iteration and tests (I1).
-func CompileFeaturesSorted(fs vfs.FSOps) ([]*FeatureDef, error) {
-	m, err := CompileFeatures(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*FeatureDef, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
 }

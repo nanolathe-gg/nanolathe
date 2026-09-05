@@ -49,11 +49,12 @@ type Section struct {
 	Column       int
 	Items        []Item
 
-	// resolved is the sorted, duplicate-resolved assignment vector. It is
-	// built eagerly by the parser and lazily (single-threaded) for
-	// hand-constructed sections; Items never change after either point.
+	// resolved is the sorted, duplicate-resolved assignment vector, holding
+	// indices into Items. It is built eagerly by the parser and lazily
+	// (single-threaded) for hand-constructed sections; Items never change
+	// after either point, so an index stays valid.
 	resolvedBuilt bool
-	resolved      []Item
+	resolved      []int32
 }
 
 // Document is the parsed TDF syntax tree.
@@ -72,6 +73,7 @@ type TDFLimits struct {
 	MaxNameBytes  int
 }
 
+// DefaultTDFLimits returns the parse bounds used when a caller states none.
 func DefaultTDFLimits() TDFLimits {
 	return TDFLimits{
 		MaxBytes: 16 << 20, MaxDepth: 256, MaxItems: 1 << 18,
@@ -79,10 +81,12 @@ func DefaultTDFLimits() TDFLimits {
 	}
 }
 
+// ParseTDF parses a TDF document under the default limits [fmt tdf].
 func ParseTDF(data []byte) (*Document, error) {
 	return ParseTDFWithLimits(data, DefaultTDFLimits())
 }
 
+// ParseTDFWithLimits parses a TDF document under explicit bounds [fmt tdf].
 func ParseTDFWithLimits(data []byte, limits TDFLimits) (*Document, error) {
 	if limits.MaxBytes <= 0 || limits.MaxDepth <= 0 || limits.MaxItems <= 0 || limits.MaxValueBytes <= 0 || limits.MaxNameBytes <= 0 {
 		return nil, fmt.Errorf("tdf: invalid parse limits")
@@ -118,46 +122,60 @@ func resolveDocument(s *Section) {
 
 // ensureResolved builds the section's sorted assignment vector when it has
 // not been built yet. See the Section type comment for the policy.
+//
+// The vector holds indices into Items rather than copies of them. A section's
+// Items never change after the parse, so an index addresses the same
+// assignment forever, and a whole-install catalog compile resolves roughly a
+// million assignments — at four bytes each instead of a whole Item, this is
+// the difference between tens and hundreds of megabytes.
 func (s *Section) ensureResolved() {
 	if s.resolvedBuilt {
 		return
 	}
-	type entry struct {
-		item Item
-		src  int // source position for last-wins among identical spellings
+	s.resolvedBuilt = true
+	// order is the sort scratch: a folded key beside its source position, so
+	// the comparison never re-folds and the Items themselves never move.
+	type ordered struct {
+		fold string
+		src  int32
 	}
-	entries := make([]entry, 0, len(s.Items))
-	for i, item := range s.Items {
-		if item.Kind == Assignment {
-			entries = append(entries, entry{item: item, src: i})
+	order := make([]ordered, 0, len(s.Items))
+	for i := range s.Items {
+		if s.Items[i].Kind == Assignment {
+			order = append(order, ordered{fold: foldName(s.Items[i].Key), src: int32(i)})
 		}
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		fi, fj := foldName(entries[i].item.Key), foldName(entries[j].item.Key)
-		if fi != fj {
-			return fi < fj
+	if len(order) == 0 {
+		s.resolved = nil
+		return
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		if order[i].fold != order[j].fold {
+			return order[i].fold < order[j].fold
 		}
-		oi, oj := entries[i].item.OriginalKey, entries[j].item.OriginalKey
+		oi, oj := s.Items[order[i].src].OriginalKey, s.Items[order[j].src].OriginalKey
 		if oi != oj {
 			return oi < oj
 		}
-		return entries[i].src < entries[j].src
+		return order[i].src < order[j].src
 	})
 	// Collapse identical spellings to their last source occurrence; distinct
 	// case variants each survive as one sorted entry [02 §4].
-	s.resolved = s.resolved[:0]
-	for k := 0; k < len(entries); k++ {
+	s.resolved = make([]int32, 0, len(order))
+	for k := 0; k < len(order); k++ {
 		last := k
-		for last+1 < len(entries) &&
-			foldName(entries[last+1].item.Key) == foldName(entries[k].item.Key) &&
-			entries[last+1].item.OriginalKey == entries[k].item.OriginalKey {
+		for last+1 < len(order) &&
+			order[last+1].fold == order[k].fold &&
+			s.Items[order[last+1].src].OriginalKey == s.Items[order[k].src].OriginalKey {
 			last++
 		}
-		s.resolved = append(s.resolved, entries[last].item)
+		s.resolved = append(s.resolved, order[last].src)
 		k = last
 	}
-	s.resolvedBuilt = true
 }
+
+// resolvedItem returns the assignment the resolved vector holds at rank i.
+func (s *Section) resolvedItem(i int) Item { return s.Items[s.resolved[i]] }
 
 // lookupResolved binary-searches the resolved vector for the lower bound of
 // the fold run of key and returns that entry — the first variant in
@@ -166,14 +184,15 @@ func (s *Section) lookupResolved(key string) (Item, bool) {
 	s.ensureResolved()
 	fold := foldName(key)
 	lo := sort.Search(len(s.resolved), func(i int) bool {
-		return foldName(s.resolved[i].Key) >= fold
+		return foldName(s.resolvedItem(i).Key) >= fold
 	})
-	if lo < len(s.resolved) && foldName(s.resolved[lo].Key) == fold {
-		return s.resolved[lo], true
+	if lo < len(s.resolved) && foldName(s.resolvedItem(lo).Key) == fold {
+		return s.resolvedItem(lo), true
 	}
 	return Item{}, false
 }
 
+// LoadTDF reads and parses a TDF document from the VFS.
 func LoadTDF(fs vfs.FSOps, name string) (*Document, error) {
 	data, err := readVFSWithLimit(fs, name, int64(DefaultTDFLimits().MaxBytes))
 	if err != nil {
@@ -184,6 +203,7 @@ func LoadTDF(fs vfs.FSOps, name string) (*Document, error) {
 
 func foldName(name string) string { return strings.ToLower(name) }
 
+// Sections returns the section's nested sections in source order.
 func (s *Section) Sections() []*Section {
 	result := make([]*Section, 0)
 	for i := range s.Items {
@@ -194,6 +214,8 @@ func (s *Section) Sections() []*Section {
 	return result
 }
 
+// Assignments returns the section's assignments in source order, duplicates
+// included. Use the typed accessors for the resolved view [02 §4].
 func (s *Section) Assignments() []Item {
 	result := make([]Item, 0)
 	for _, item := range s.Items {
@@ -211,8 +233,8 @@ func (s *Section) Values(key string) []string {
 	s.ensureResolved()
 	key = foldName(key)
 	result := make([]string, 0)
-	for _, item := range s.resolved {
-		if foldName(item.Key) == key {
+	for i := range s.resolved {
+		if item := s.resolvedItem(i); foldName(item.Key) == key {
 			result = append(result, item.Value)
 		}
 	}
@@ -237,8 +259,8 @@ func (s *Section) LastValue(key string) (string, bool) {
 	s.ensureResolved()
 	fold := foldName(key)
 	hi := -1
-	for i, item := range s.resolved {
-		if foldName(item.Key) == fold {
+	for i := range s.resolved {
+		if foldName(s.resolvedItem(i).Key) == fold {
 			hi = i
 			continue
 		}
@@ -249,9 +271,11 @@ func (s *Section) LastValue(key string) (string, bool) {
 	if hi < 0 {
 		return "", false
 	}
-	return s.resolved[hi].Value, true
+	return s.resolvedItem(hi).Value, true
 }
 
+// Section returns the first nested section with the given name, compared
+// case-insensitively, or nil.
 func (s *Section) Section(name string) *Section {
 	name = foldName(name)
 	for i := range s.Items {
@@ -263,6 +287,8 @@ func (s *Section) Section(name string) *Section {
 	return nil
 }
 
+// SectionsNamed returns every nested section with the given name in source
+// order: retail retains duplicate sibling sections [02 §4].
 func (s *Section) SectionsNamed(name string) []*Section {
 	name = foldName(name)
 	result := make([]*Section, 0)
@@ -285,6 +311,8 @@ func (s *Section) Int(key string) (int64, bool, error) {
 	return int64(ParseTDFInteger(value)), true, nil
 }
 
+// Float returns a key's value through the floating accessor, whether the key
+// was present, and a conversion error.
 func (s *Section) Float(key string) (float64, bool, error) {
 	value, ok := s.FirstValue(key)
 	if !ok {
@@ -297,6 +325,8 @@ func (s *Section) Float(key string) (float64, bool, error) {
 	return n, true, nil
 }
 
+// Bool returns a key's value through the integer accessor consumed as a
+// flag, whether the key was present, and a conversion error.
 func (s *Section) Bool(key string) (bool, bool, error) {
 	value, ok := s.FirstValue(key)
 	if !ok {
@@ -348,9 +378,28 @@ type tdfParser struct {
 	depth  int
 	items  int
 	limits TDFLimits
+	// scratch is the item stack shared by every section in one parse. A
+	// section's items are contiguous at the top of it while that section is
+	// open, so each section can be given an exactly sized Items slice on
+	// close instead of growing its own by doubling. Over a whole-install
+	// catalog compile that halves the parser's allocation.
+	scratch []Item
 }
 
 func (p *tdfParser) parseBlock(section *Section, untilClose bool) error {
+	base := len(p.scratch)
+	if err := p.parseItems(section, untilClose); err != nil {
+		return err
+	}
+	if n := len(p.scratch) - base; n > 0 {
+		section.Items = make([]Item, n)
+		copy(section.Items, p.scratch[base:])
+	}
+	p.scratch = p.scratch[:base]
+	return nil
+}
+
+func (p *tdfParser) parseItems(section *Section, untilClose bool) error {
 	for {
 		p.skipSpaceAndComments()
 		if p.pos >= len(p.data) {
@@ -371,7 +420,7 @@ func (p *tdfParser) parseBlock(section *Section, untilClose bool) error {
 			if err != nil {
 				return err
 			}
-			if err := p.appendItem(section, Item{Kind: NestedSection, Section: child, Line: child.Line, Column: child.Column}); err != nil {
+			if err := p.appendItem(Item{Kind: NestedSection, Section: child, Line: child.Line, Column: child.Column}); err != nil {
 				return err
 			}
 			continue
@@ -380,18 +429,20 @@ func (p *tdfParser) parseBlock(section *Section, untilClose bool) error {
 		if err != nil {
 			return err
 		}
-		if err := p.appendItem(section, item); err != nil {
+		if err := p.appendItem(item); err != nil {
 			return err
 		}
 	}
 }
 
-func (p *tdfParser) appendItem(section *Section, item Item) error {
+// appendItem pushes one item onto the shared stack. parseBlock copies the
+// section's region off the stack when the section closes.
+func (p *tdfParser) appendItem(item Item) error {
 	if p.items >= p.limits.MaxItems {
 		return p.errorf("document item count exceeds limit %d", p.limits.MaxItems)
 	}
 	p.items++
-	section.Items = append(section.Items, item)
+	p.scratch = append(p.scratch, item)
 	return nil
 }
 
@@ -463,18 +514,15 @@ func (p *tdfParser) parseAssignment() (Item, error) {
 	return Item{Kind: Assignment, Key: foldName(originalKey), OriginalKey: originalKey, Value: value, Line: line, Column: column}, nil
 }
 
+// readValue reads a field value. The terminator is the next ';' found by a
+// forward scan to the end of the text — a newline is not a terminator, so a
+// field whose ';' is missing swallows every following line into its value and
+// the fields those lines would have declared never exist [02 R-MALF-01 §4]
+// [fmt tdf]. Only exhausting the text without finding a ';' is the fatal
+// `Data field - ';' not found`.
 func (p *tdfParser) readValue() (string, error) {
 	var value strings.Builder
 	for p.pos < len(p.data) {
-		// A number of retail TDF/FBI tables omit the semicolon before the
-		// next assignment. Newline is not a general value terminator, so only
-		// accept this compatibility form when the following non-space bytes
-		// unambiguously begin another key, section, or closing brace.
-		if p.data[p.pos] == '\n' || p.data[p.pos] == '\r' {
-			if p.implicitValueBoundary(p.pos) {
-				return strings.TrimSpace(value.String()), nil
-			}
-		}
 		if p.data[p.pos] == ';' {
 			p.advance()
 			return value.String(), nil
@@ -512,24 +560,6 @@ func (p *tdfParser) readValue() (string, error) {
 		p.advance()
 	}
 	return "", p.diag(DiagSemicolonMissing, "", strings.TrimSpace(value.String()))
-}
-
-func (p *tdfParser) implicitValueBoundary(pos int) bool {
-	i := pos
-	for i < len(p.data) && (p.data[i] == '\n' || p.data[i] == '\r' || p.data[i] == ' ' || p.data[i] == '\t') {
-		i++
-	}
-	if i >= len(p.data) || p.data[i] == '}' || p.data[i] == '[' {
-		return true
-	}
-	start := i
-	for i < len(p.data) && (p.data[i] == '_' || p.data[i] == '-' || p.data[i] >= '0' && p.data[i] <= '9' || p.data[i] >= 'A' && p.data[i] <= 'Z' || p.data[i] >= 'a' && p.data[i] <= 'z') {
-		i++
-	}
-	for i < len(p.data) && (p.data[i] == ' ' || p.data[i] == '\t') {
-		i++
-	}
-	return i > start && i < len(p.data) && p.data[i] == '='
 }
 
 func (p *tdfParser) skipSpaceAndComments() {

@@ -9,6 +9,8 @@ import (
 // [R-PROD-01 §5].
 func MakerStall(energyCarry float32) bool { return energyCarry > 0 }
 
+// ExtractorProduction is an extractor's per-pass metal: its sampled spot
+// yield, or nothing while the maker stall gate holds [R-PROD-01 §5].
 func ExtractorProduction(spotMetal, energyCarry float32) float32 {
 	if MakerStall(energyCarry) {
 		return 0
@@ -55,6 +57,8 @@ func InitShareThresholds(p *Player) {
 	p.EnergyShareThreshold = 0
 }
 
+// WindScalar is the published wind strength generators multiply by, zero
+// when no wind field is bound.
 func (s *Service) WindScalar() float32 {
 	if s == nil || s.Wind == nil {
 		return 0
@@ -62,6 +66,8 @@ func (s *Service) WindScalar() float32 {
 	return s.Wind.Scalar
 }
 
+// TidalScalar is the map's tidal strength as a scalar, zero when no terrain
+// is bound.
 func (s *Service) TidalScalar() float32 {
 	if s == nil || s.Terrain == nil {
 		return 0
@@ -158,6 +164,8 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 	})
 }
 
+// SetEconomySelector installs the economy selector the settlement reads,
+// allocating it on first use.
 func (s *Service) SetEconomySelector(v int) {
 	if s == nil {
 		return
@@ -168,6 +176,8 @@ func (s *Service) SetEconomySelector(v int) {
 	*s.EconomySelector = v
 }
 
+// RepairResourceTerm returns the per-tick heal step and its energy cost for
+// one repairing worker.
 func RepairResourceTerm(maxDamage, buildCostEnergy, worker, buildTime int32) (healTerm, resourceTerm int32) {
 	if buildTime <= 0 {
 		return 1, 1
@@ -185,6 +195,8 @@ func RepairResourceTerm(maxDamage, buildCostEnergy, worker, buildTime int32) (he
 	return
 }
 
+// AdmitRepair charges one repair tick against the builder's buckets and
+// reports whether the charge was admitted.
 func (s *Service) AdmitRepair(builderHandle pool.Handle, targetMaxDamage, targetBuildCostEnergy, worker, buildTime int32) bool {
 	if s == nil || builderHandle == 0 {
 		return false
@@ -313,15 +325,8 @@ func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemain
 	creditReclaimedMaterial(s, b, refund, killerController == 2)
 }
 
-func StockpileCostDeltaForTick(oldProg, newProg int32, cost float64, buildTime int32) float32 {
-	if buildTime <= 0 {
-		return float32(cost)
-	}
-	oldTrunc := int32(float64(oldProg) * cost / float64(buildTime))
-	newTrunc := int32(float64(newProg) * cost / float64(buildTime))
-	return float32(newTrunc - oldTrunc)
-}
-
+// AdmitStockpile charges one stockpile tick against the builder's buckets
+// and reports whether the charge was admitted.
 func (s *Service) AdmitStockpile(builderHandle pool.Handle, energyDelta, metalDelta float32) bool {
 	if s == nil || builderHandle == 0 {
 		return false

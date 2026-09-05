@@ -36,6 +36,7 @@ type ParseError struct {
 	Column     int
 }
 
+// Error renders the retail parse-failure line verbatim [02 §4].
 func (e *ParseError) Error() string {
 	return fmt.Sprintf("%s %s", ParseErrorTitle, e.Detail())
 }

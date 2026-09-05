@@ -1,6 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the map header compiler [02 "Map files"] [fmt ota] [fmt tnt]
-// and the paired OTA/TNT discovery contract [PLAN 02 Discovery].
+// The map header compiler.
+
 package content
 
 import (
@@ -399,24 +398,4 @@ func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHead
 		result[key] = mh
 	}
 	return result, nil
-}
-
-// compileMaps is an unexported alias for Catalog integration [02 §5] C1 two-stage.
-func compileMaps(fs vfs.FSOps) (map[string]*MapHeader, error) {
-	return CompileMaps(fs)
-}
-
-// CompileMapsSorted returns map headers sorted by canonical key for
-// hash-stable iteration and tests (I1).
-func CompileMapsSorted(fs vfs.FSOps) ([]*MapHeader, error) {
-	m, err := CompileMaps(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*MapHeader, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
 }

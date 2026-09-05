@@ -1,6 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file compiles download/*.tdf menu placements and extends the builder
-// lists established by gamedata/sidedata.tdf [02 R-CAT-01 §8].
+// The download-menu placement compiler.
+
 package content
 
 import (

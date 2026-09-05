@@ -1,4 +1,5 @@
-// Package world — Cell is the lattice coordinate for factory exit-spot snapping [05 "Factory production lifecycle"] I3.
+// Cell is the lattice coordinate for factory exit-spot snapping [05 "Factory production lifecycle"] I3.
+
 package world
 
 // Cell is a lattice coordinate on the attribute-cell grid [03 §2.1] [04 §7.1].

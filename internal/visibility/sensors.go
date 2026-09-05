@@ -1,4 +1,5 @@
-// Package visibility sensors implements C11, C12 [PLAN_05 WU-05-4] P0-11 [03 §3.4].
+// Sensor sweep and blip state: C11, C12 [PLAN_05 WU-05-4] P0-11 [03 §3.4].
+
 package visibility
 
 import (
@@ -373,14 +374,5 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		if u.Alive && u.Status != nil {
 			s.sensorInputs = append(s.sensorInputs, SensorInput{ID: u.ID, Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden, Stealth: u.Stealth, Active: u.Active, OnOffable: u.OnOffable})
 		}
-	}
-}
-
-// ClearSeen drops a unit's seen marker. The phase's own first pass is the
-// clear writer [R-VIS-01 §4]; this helper exists for callers that retire a
-// unit outside the phase.
-func ClearSeen(status *uint32) {
-	if status != nil {
-		*status &^= SeenBit
 	}
 }

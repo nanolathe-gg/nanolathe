@@ -25,11 +25,15 @@ const (
 // Fixed is signed 16.16 fixed point, backed by int64.
 type Fixed int64
 
+// FixedOne is the 16.16 representation of 1.
 const FixedOne Fixed = Fixed(FractionOne)
 
+// FixedFromRaw wraps a raw 16.16 word. Raw is its inverse.
 func FixedFromRaw(raw int64) Fixed { return Fixed(raw) }
 func (v Fixed) Raw() int64         { return int64(v) }
-func FixedFromInt(v int64) Fixed   { return Fixed(v * FractionOne) }
+
+// FixedFromInt converts a whole number to 16.16.
+func FixedFromInt(v int64) Fixed { return Fixed(v * FractionOne) }
 
 // Int narrows to whole units, truncating toward zero — the __ftol rule
 // [01 §8], I3. This is NOT the conversion to use for a cell or tile index:
@@ -40,6 +44,7 @@ func (v Fixed) Int() int64 { return int64(v) / FractionOne }
 // arithmetic-shift behaviour rather than __ftol truncation [03 §2.1], I3.
 func (v Fixed) Floor() int64 { return int64(v) >> FractionBits }
 
+// Add, Sub and Neg are the exact 16.16 additive operations.
 func (v Fixed) Add(other Fixed) Fixed { return v + other }
 func (v Fixed) Sub(other Fixed) Fixed { return v - other }
 func (v Fixed) Neg() Fixed            { return -v }
@@ -77,6 +82,7 @@ func (v Fixed) Div(other Fixed) (Fixed, bool) {
 	return Fixed((int64(v) * FractionOne) / int64(other)), true
 }
 
+// Clamp bounds v to the inclusive range.
 func (v Fixed) Clamp(minimum, maximum Fixed) Fixed {
 	if v < minimum {
 		return minimum
@@ -90,7 +96,7 @@ func (v Fixed) Clamp(minimum, maximum Fixed) Fixed {
 // Angle is a full-turn 16-bit angle, 65,536 per circle [04 §5.1].
 type Angle uint16
 
-func AngleFromRaw(raw uint16) Angle   { return Angle(raw) }
+// Raw is the angle's word; Add and Sub wrap around the circle [04 §5.1].
 func (a Angle) Raw() uint16           { return uint16(a) }
 func (a Angle) Add(other Angle) Angle { return Angle(uint16(a + other)) }
 func (a Angle) Sub(other Angle) Angle { return Angle(uint16(a - other)) }

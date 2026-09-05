@@ -38,6 +38,9 @@ func TestBurnSmokeJitterAddends(t *testing.T) {
 			frame: burnFrameGeometry{W: 20, H: 12, XOff: 7, YOff: 5},
 			drawX: 0, drawY: 32767,
 			wantDX: 0 - 7 + 5,
+			// The 5-5 is the arithmetic, not a typo: yoff is 5 and the scaled
+			// half-height term also truncates to 5 at maximum draw.
+			//lint:ignore SA4000 the identical operands are the traced arithmetic
 			wantDY: 2*(5-5) - 2*3,
 		},
 		{

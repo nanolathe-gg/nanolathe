@@ -1,4 +1,4 @@
-// Package content owns data-driven definitions, cross-reference resolution,
+// Optional OVR data and the cross-reference miss policy.
 // sound aliases, and content identity. Optional OVR data participates only in
 // the documented definition-hash replacement path; it is not a fallback source
 // for normal catalog records [02 "Content checksum"].
@@ -9,6 +9,7 @@
 // Sound variants gather numbered keys even when the bare key is absent [02
 // "Sound category record"][03 §8.3][docs/SPEC_CONFLICTS.md SC7]. VFS tier
 // precedence and alias limits follow [02 §2] and [02 "Sound aliases"].
+
 package content
 
 // OVR data is addressed through units/<unit>.OVR as a HapiBank account filtered

@@ -168,18 +168,15 @@ func (s *Service) SetMode(m Mode) {
 	s.mode &^= ModeFogCacheValid
 }
 
-// The helpers keep mode tests at call sites explicit and prevent higher bits
-// from becoming accidental second meanings [03 §3.1].
-func HistoryEnabled(m Mode) bool { return m.HistoryEnabled() }
-func CurrentEnabled(m Mode) bool { return m.CurrentEnabled() }
-func TerrainRay(m Mode) bool     { return m.TerrainRay() }
-func FogCacheValid(m Mode) bool  { return m.FogCacheValid() }
-
+// The mode predicates keep bit tests explicit at call sites and prevent
+// higher bits from becoming accidental second meanings [03 §3.1].
 func (m Mode) HistoryEnabled() bool { return m&ModeHistoryEnabled != 0 }
 func (m Mode) CurrentEnabled() bool { return m&ModeCurrentEnabled != 0 }
 func (m Mode) TerrainRay() bool     { return m&ModeTerrainRay != 0 }
 func (m Mode) FogCacheValid() bool  { return m&ModeFogCacheValid != 0 }
 
+// The service predicates report the same bits of the service's own mode
+// word, nil-safe for callers holding no service.
 func (s *Service) HistoryEnabled() bool { return s != nil && s.mode.HistoryEnabled() }
 func (s *Service) CurrentEnabled() bool { return s != nil && s.mode.CurrentEnabled() }
 func (s *Service) TerrainRay() bool     { return s != nil && s.mode.TerrainRay() }
@@ -268,11 +265,3 @@ type Observer struct {
 
 // GridDimensions returns the visibility grid dimensions (W,H) as per C1.
 func (s *Service) GridDimensions() (int32, int32) { return s.W, s.H }
-
-// OpaqueLiquidGatesCollision reports the opaque-liquid mode, the global that
-// gates collision water impact and splash but never ORs into the LOS word mask
-// [P1-07 §2.4][03 §3.2]. Jammer circles are presentation-only on the minimap
-// final surface and never affect the authoritative word mask [R-VIS-01 §5];
-// this mode is separate from LOS and is the liquid forced dead|2 that overrides
-// noexplode [P1-07 §2.4][06 §13.2] C28.
-func OpaqueLiquidGatesCollision(opaqueMode bool) bool { return opaqueMode } // [P1-07 §2.4]

@@ -1,5 +1,5 @@
-// Package content compiles battle tables [02 §6] [PLAN_02 C15].
-// This file implements the LOS and meteor compilers for WU-02-8.
+// The LOS and meteor battle-table compilers [02 §6] [PLAN_02 C15].
+
 package content
 
 import (
@@ -233,9 +233,3 @@ func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
 	md.Hash = HashDefinition([]byte(b.String()))
 	return md, nil
 }
-
-// compileLOSTables is the unexported alias for Catalog integration [02 §5] C1.
-func compileLOSTables(fs vfs.FSOps) (*LOSTables, error) { return CompileLOSTables(fs) }
-
-// compileMeteor is the unexported alias for Catalog integration [02 §5] C1.
-func compileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) { return CompileMeteor(fs) }

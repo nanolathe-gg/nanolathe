@@ -1,4 +1,5 @@
-// Package content hash implements Catalog.Hash [02 §5] C12 (I1).
+// Catalog.Hash, the compiled-catalog identity [02 §5] C12 (I1).
+
 package content
 
 import (

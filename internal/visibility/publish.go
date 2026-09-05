@@ -1,4 +1,5 @@
-// Package visibility publish implements C2, C3, C5, C6 [PLAN_05 WU-05-2].
+// Observer publication and retirement: C2, C3, C5, C6 [PLAN_05 WU-05-2].
+
 package visibility
 
 // Publish publishes an observer's footprint [03 §3.2] C2-C6.

@@ -404,8 +404,7 @@ func Compose(m *Model, st []PieceState, piece int) Transform {
 	}
 	nodes := make([]xformNode, len(chain))
 	for i, idx := range chain {
-		var t [3]numeric.Fixed
-		t = m.Pieces[idx].Translate
+		t := m.Pieces[idx].Translate
 		var ax, ay, az uint16
 		if idx >= 0 && idx < len(st) {
 			ax = st[idx].RotX

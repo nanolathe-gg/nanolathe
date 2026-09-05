@@ -1,7 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file compiles the build-menu catalog from gamedata/sidedata.tdf
-// [02 "Build-menu catalog keys"], which the downloadable enforcement walks
-// [02 "Unit record"].
+// The build-menu catalog compiler.
+
 package content
 
 import (

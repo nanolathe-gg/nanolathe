@@ -9,6 +9,8 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// GAF is a decoded animation bank: named entries, each a sequence of frames
+// [fmt gaf].
 type GAF struct {
 	Version    uint32
 	EntryCount uint32
@@ -17,6 +19,7 @@ type GAF struct {
 	byName     map[string]int
 }
 
+// GAFEntry is one named sequence within a bank.
 type GAFEntry struct {
 	Name       string
 	FrameCount uint16
@@ -25,6 +28,8 @@ type GAFEntry struct {
 	Frames     []GAFFrameRef
 }
 
+// GAFFrameRef is one frame slot of an entry: the source offset it was read
+// from, the authored word beside it, and the decoded frame.
 type GAFFrameRef struct {
 	Offset uint32
 	Value  uint32
@@ -55,6 +60,7 @@ type GAFFrame struct {
 
 const maxGAFFramePixels = 16 << 20
 
+// LoadGAF decodes an animation bank from its bytes [fmt gaf].
 func LoadGAF(data []byte) (*GAF, error) {
 	if len(data) < 12 {
 		return nil, fmt.Errorf("gaf: file is too small")
@@ -119,6 +125,7 @@ func LoadGAF(data []byte) (*GAF, error) {
 	return gaf, nil
 }
 
+// LoadGAFFile reads and decodes an animation bank from the VFS.
 func LoadGAFFile(fs vfs.FSOps, name string) (*GAF, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {
@@ -127,16 +134,7 @@ func LoadGAFFile(fs vfs.FSOps, name string) (*GAF, error) {
 	return LoadGAF(data)
 }
 
-// LoadGAFFileWithLimit bounds the archive backing store before decoding it.
-// Callers that inspect user-installed content should prefer this variant.
-func LoadGAFFileWithLimit(fs vfs.FSOps, name string, maxBytes int64) (*GAF, error) {
-	data, err := readVFSWithLimit(fs, name, maxBytes)
-	if err != nil {
-		return nil, err
-	}
-	return LoadGAF(data)
-}
-
+// Find returns the entry with the given name, compared case-insensitively.
 func (g *GAF) Find(name string) (*GAFEntry, bool) {
 	index, ok := g.byName[strings.ToLower(name)]
 	if !ok {
@@ -145,6 +143,8 @@ func (g *GAF) Find(name string) (*GAFEntry, bool) {
 	return &g.Entries[index], true
 }
 
+// At returns the palette index at (x, y) and whether that pixel is opaque.
+// A coordinate outside the frame reads as transparent.
 func (f *GAFFrame) At(x, y int) (byte, bool) {
 	if x < 0 || y < 0 || x >= int(f.Width) || y >= int(f.Height) {
 		return 0, false

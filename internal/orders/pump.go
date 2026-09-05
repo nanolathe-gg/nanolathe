@@ -936,34 +936,23 @@ func findActive(q *Queue) int {
 	return -1
 }
 
-// ensureSingleActive keeps the active-marker invariant: exactly one primary
-// node carries FlagActive [04 §3.3]. When none does the head takes it; when
-// several do (possible while the marker travels) later duplicates are cleared.
-// Insertion moves the mark to the inserted node [04 §3.3][05 "Queue
-// insertion"].
+// The active marker has ONE writer: the producer insertion's after-marker
+// branch in Push, which sets bit 12 on the record it creates and clears it on
+// the record that held it [04 R-ORD-01 §13]. Nothing else in the traced code
+// writes the bit — not a removal, not the tail rotate, not the Replace purge,
+// not the leading-auto drop, not the save restore.
 //
-// The head fallback is a repair for the paths that reshuffle a segment
-// wholesale (the leading-auto drop, the Replace purge, the tail rotate, the
-// save/load restore). It is NOT what a removal does: see
-// releaseMarkerOnRemoval, which every removal routine calls instead.
-func (q *Queue) ensureSingleActive() {
-	if q == nil || len(q.primary) == 0 {
-		return
-	}
-	first := -1
-	for i, n := range q.primary {
-		if n.Flags&FlagActive != 0 {
-			if first == -1 {
-				first = i
-			} else {
-				n.Flags &^= FlagActive
-			}
-		}
-	}
-	if first == -1 {
-		q.primary[0].Flags |= FlagActive
-	}
-}
+// There used to be an `ensureSingleActive` helper here whose head fallback
+// handed the marker to primary[0] whenever no record carried one, called from
+// each of those paths. Its four remaining callers were removed by WU-19-227
+// (the removals) and WU-19-232 (the rotate, the purge, the drop and the
+// restore), because "no record carries the marker" is a state retail reaches
+// and relies on: [04 §3.1]'s insertion rule reads "with no marked record it
+// appends at the tail". Inventing a marker there moved the insertion point to
+// index 1 and put the next Shift-queued order at the FRONT of the queue.
+//
+// Only its other half survives, in releaseMarkerOnRemoval below: a duplicate
+// marker is cleared.
 
 // releaseMarkerOnRemoval is what a removal does to the active marker: it lets
 // it go.
@@ -1254,19 +1243,30 @@ func (q *Queue) PurgeUnprotected() {
 		}
 	}
 	q.primary = kept
-	if len(q.primary) > 0 {
-		q.primary[0].Flags |= FlagActive
-		for i := 1; i < len(q.primary); i++ {
-			q.primary[i].Flags &^= FlagActive
-		}
-	}
+	// No marker write. The purge helper "removes every front-chain record whose
+	// static-mask copy lacks bit 2 … every removal tombstones unless the record
+	// is the front head, runs the cleanup, and frees" [04 R-MOV-03 §6] — that is
+	// the whole helper, and [04 R-ORD-01 §13]'s runtime-bit census gives the
+	// active marker one writer, the producer insertion's after-marker branch.
+	//
+	// Correction (WU-19-232). This used to end by moving the marker onto
+	// primary[0]. When the purge freed the marked record the segment is simply
+	// left unmarked, and [04 §3.1]'s insertion rule then takes its other arm
+	// ("with no marked record it appends at the tail") — which is what a
+	// Replace wants: the single new record lands behind whatever survivors the
+	// purge kept, not in front of them. Same defect shape as WU-19-227's.
+	//
+	// [04 R-ORD-01 §15] names the exact queue this used to corrupt: a factory
+	// product's is `[GetBuilt, BeCarried]` — both purge survivors — "with
+	// neither record carrying the active marker". A non-queued order issued to
+	// such a unit therefore appends behind both; the invented head marker put
+	// it between them.
 }
 
 // hasLeadingAutoOp reports whether either segment leads with an auto/default
-// record. Push tests it first because DropLeadingAutoOps ends by moving the
-// active marker back to the front record, which is only correct when the drop
-// actually removed the record the marker sat on; an unconditional call would
-// reset the insertion point of every ordinary queued add [04 §3.3].
+// record. It is only a fast path for Push: since WU-19-232 the drop writes no
+// active marker, so calling it on a queue that leads with no auto record is a
+// no-op either way [04 R-ORD-01 §13].
 func (q *Queue) hasLeadingAutoOp() bool {
 	if q == nil {
 		return false
@@ -1293,12 +1293,13 @@ func (q *Queue) DropLeadingAutoOps() {
 		q.cleanupNode(n)
 		q.secondary = q.secondary[1:]
 	}
-	if len(q.primary) > 0 {
-		q.primary[0].Flags |= FlagActive
-		for i := 1; i < len(q.primary); i++ {
-			q.primary[i].Flags &^= FlagActive
-		}
-	}
+	// No marker write, for the same reason PurgeUnprotected has none. The drop
+	// is a step *inside* the producer insertion — "after the purge and the
+	// leading-auto drop it sets bit 0, conditionally sets bit 13, and then
+	// branches" [04 R-ORD-01 §13] — and the marker is written only by the
+	// branch that follows, on the record the producer is inserting. Dropping a
+	// leading auto record that happened to carry the marker leaves the segment
+	// unmarked, and the insertion then appends at the tail (WU-19-232).
 }
 
 // Push is the producer-side insertion — the one helper the HUD, the AI, COB,
@@ -2047,9 +2048,23 @@ func (q *Queue) applyPrimaryResultCode(n *Node, code Code, tick uint32) bool {
 		}
 		copy(q.primary[idx:], q.primary[idx+1:])
 		q.primary = q.primary[:len(q.primary)-1]
-		n.Flags &^= FlagActive
 		q.primary = append(q.primary, n) // move to segment tail and continue [04 §3.3]
-		q.ensureSingleActive()           // exactly one marker remains
+		// The rotate is a link move and nothing else. [04 §3.3]'s code-6 row
+		// says "move the record to the tail of its segment and continue" — no
+		// flag is named — and [04 R-ORD-01 §13]'s census of the static-mask
+		// copy gives the active marker (bit 12) exactly one writer, the
+		// producer insertion's after-marker branch. So the rotated record keeps
+		// its own bits, including the marker when it held it, and no other
+		// record gains one.
+		//
+		// Correction (WU-19-232). This arm used to clear the marker on the
+		// rotated record and then call ensureSingleActive, which handed the
+		// marker to the new head. That is the same invented marker write
+		// WU-19-227 removed from the removal paths: a `QMove`/`QPatrol` record
+		// (whose whole body is a 60-tick delayed rotate, [04 §3.3]) would have
+		// moved the queue's insertion point every time it came round, so a
+		// Shift-queued order issued after a rotate landed at index 1 instead of
+		// at the tail.
 	case 7:
 		q.cancelAll() // [04 §3.3] free every record on both segments and return; whole-queue cancel is exclusively primary code 7
 		return false

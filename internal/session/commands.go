@@ -433,13 +433,27 @@ func mobileBuildKind(builder *units.Unit) orders.ID {
 	return orders.Lookup(construction.MobileBuildOrder)
 }
 
-// removeQueuedOrderAtPoint is retail's queued-order duplicate test
-// [07 R-P0-11 §6]: walk the unit's primary queue from the front and remove the
-// first node whose order kind matches and whose goal lies within one map cell
-// of the issued point on X and on Z independently. It reports whether a node
-// went, in which case the caller issues nothing at all.
+// removeQueuedWorldOrder is retail's queued-order duplicate test
+// [07 R-P0-11 §6]. It is the FIRST act of the one producer every world order
+// the interface issues goes through, and it runs only when the click's queue
+// flag (the Shift bit) is set: walk the acting unit's primary queue from the
+// front and remove the first node for which all of
 //
-// Three properties are deliberate and are locked by tests, because each is the
+//   - the node's order kind equals the kind being issued;
+//   - the issued target handle is absent (zero) or equals the node's target;
+//   - the issued goal lies within one map cell of the node's goal on X and on
+//     Z independently
+//
+// hold. It reports whether a node went, in which case the caller issues
+// nothing at all — a repeat Shift-click is a toggle that removes exactly one
+// queued order, front-most match first, and produces no order of its own.
+//
+// One shared path, deliberately: retail has one producer, so a per-kind copy
+// of this test would be a second contract to keep in step. Both world-click
+// boundaries — the mobile-build placement click and the resolved order click
+// — call this.
+//
+// Four properties are deliberate and are locked by tests, because each is the
 // kind of thing a later reader would "correct":
 //
 //   - The product is not part of the match. Retail passes the product
@@ -449,11 +463,34 @@ func mobileBuildKind(builder *units.Unit) orders.ID {
 //   - The tolerance is a whole cell, inclusive, per axis — a square, not a
 //     radius. Sites one cell apart are within tolerance of each other.
 //   - Y is not compared. The site height plays no part.
-func removeQueuedOrderAtPoint(builder *units.Unit, kind orders.ID, wx, wz numeric.Fixed) bool {
-	if builder == nil || kind == 0 {
+//   - The kinds are compared as resolved identities, so `MOBILEBUILD` and
+//     `VTOL_MOBILEBUILD` — and equally the ground and air forms of a move or
+//     an attack — are distinct and do not match each other.
+//
+// TODO(question): whether the world-click producer receives a goal point
+// alongside a target handle. [07 R-P0-11 §6] states the match rule with both
+// arguments optional but does not say which the click supplies for a
+// target-click order; [07 §9] step 3 says the click issues "at the pointer's
+// world point", so this boundary supplies both and the goal term therefore
+// participates in a target-click match. If retail passes no goal there, a
+// repeat Shift-attack-click on a target that has moved more than one cell
+// since the order was queued would remove it where this build re-queues.
+// Deciding it needs a trace of the world-click handler's call into the
+// producer.
+//
+// TODO(question): whether the interface's non-world-click queued issues share
+// this producer. [07 R-P0-11 §6] scopes the test to "every world order the
+// interface issues", and the two world-click boundaries are the only callers
+// here. The side panel's own buttons — Stop, the activation toggle, stockpile,
+// Ctrl+D self-destruct, the two stance gadgets — issue no world point, and the
+// section does not say whether a Shift-held press of one of them runs the test
+// (which would make a second Shift-press cancel the first). Deciding it needs
+// a trace of those button handlers' call into the producer.
+func removeQueuedWorldOrder(actor *units.Unit, kind orders.ID, target pool.Handle, wx, wz numeric.Fixed) bool {
+	if actor == nil || kind == 0 {
 		return false
 	}
-	q := orders.QueueForUnit(builder)
+	q := orders.QueueForUnit(actor)
 	if q == nil {
 		return false
 	}
@@ -465,7 +502,13 @@ func removeQueuedOrderAtPoint(builder *units.Unit, kind orders.ID, wx, wz numeri
 		return d <= queuedPointTolerance // inclusive at the boundary [07 R-P0-11 §6]
 	}
 	return q.CancelFrontMost(func(n orders.Node) bool {
-		return n.ID == kind && within(n.GoalX, wx) && within(n.GoalZ, wz)
+		if n.ID != kind {
+			return false
+		}
+		if target != 0 && n.Target != target {
+			return false
+		}
+		return within(n.GoalX, wx) && within(n.GoalZ, wz)
 	})
 }
 
@@ -588,7 +631,7 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			// this kind removes that order and issues nothing [07 R-P0-11 §6].
 			// The test runs only in queued mode; a non-queued click purges and
 			// re-issues as before.
-			if removeQueuedOrderAtPoint(u, mobileBuildKind(u), c.MobileBuild.WX, c.MobileBuild.WZ) {
+			if removeQueuedWorldOrder(u, mobileBuildKind(u), 0, c.MobileBuild.WX, c.MobileBuild.WZ) {
 				return
 			}
 		} else {
@@ -743,7 +786,16 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			if q == nil {
 				continue
 			}
-			if !c.Order.Queued {
+			if c.Order.Queued {
+				// The producer's first act, once per acting unit: a queued
+				// click that repeats an already-queued order of this kind at
+				// (or within one cell of) the same point removes it and issues
+				// nothing [07 R-P0-11 §6]. It runs ONLY in queued mode; a plain
+				// click falls through to the Replace below without testing.
+				if removeQueuedWorldOrder(u, id, c.Order.Target, gx, gz) {
+					continue
+				}
+			} else {
 				q.PurgeUnprotected()
 				q.DropLeadingAutoOps()
 			}

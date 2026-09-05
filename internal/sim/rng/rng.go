@@ -184,12 +184,3 @@ func SeedGlobal(simSeed, crtSeed uint32) {
 	Global.Sim = &sim
 	Global.Crt = &crt
 }
-
-// SeedGlobalIfUnset seeds both streams only when the global simulation stream
-// is nil, so library-embedded battle entry always has streams without
-// disturbing callers that seed explicitly [01 §7]. Deterministic default.
-func SeedGlobalIfUnset(simSeed, crtSeed uint32) {
-	if Global.Sim == nil {
-		SeedGlobal(simSeed, crtSeed)
-	}
-}

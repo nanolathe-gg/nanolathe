@@ -61,6 +61,8 @@ type PlayerTrace struct {
 	StorageBonus         [2]float32
 }
 
+// TraceSnapshot is a copy of every unit and player economy record, taken in
+// slot order for parity capture.
 type TraceSnapshot struct {
 	Units   []UnitTrace
 	Players [10]PlayerTrace

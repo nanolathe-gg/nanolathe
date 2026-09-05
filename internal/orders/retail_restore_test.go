@@ -34,8 +34,25 @@ func TestRetailRestoreOrdersKeepsFrontRearSequence(t *testing.T) {
 	if q.Primary()[0].ID != ID(main(0, false)[8]) || q.Secondary()[0].ID != ID(main(1, true)[8]) {
 		t.Fatal("saved front/rear records were not retained")
 	}
-	if q.Primary()[0].Flags&FlagActive == 0 {
-		t.Fatal("restored primary queue has no active marker")
+	// The marker is whatever the save held. Updated by WU-19-232: this used to
+	// assert that restore always leaves primary[0] marked, which was the
+	// invented head fallback of the deleted ensureSingleActive. The active
+	// marker is bit 12 of the record's static-mask copy and the save carries
+	// that whole word [04 R-ORD-01 §13], so an unmarked saved queue restores
+	// unmarked — the state [04 §3.1]'s "with no marked record it appends at the
+	// tail" arm exists for.
+	if q.Primary()[0].Flags&FlagActive != 0 {
+		t.Fatal("restore invented an active marker the save did not carry [04 R-ORD-01 §13]")
+	}
+
+	marked := main(0, false)
+	binary.LittleEndian.PutUint32(marked[0x32:], uint32(FlagActive))
+	u2 := &units.Unit{Handle: pool.Handle(101), Alive: true}
+	if err := RetailRestoreOrders(u2, []save.OrderRecord{{ParentStableID: 9, Sequence: 0, Main: marked}}, map[uint16]pool.Handle{9: 101}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if q2 := QueueOfUnit(u2); q2 == nil || q2.LenPrimary() != 1 || q2.Primary()[0].Flags&FlagActive == 0 {
+		t.Fatal("a saved active marker was not restored")
 	}
 }
 

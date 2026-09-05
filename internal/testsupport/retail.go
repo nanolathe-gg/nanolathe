@@ -62,13 +62,3 @@ func RetailRoot(t *testing.T) string {
 	t.Fatalf("%s=%q holds no HPI archives", RetailAssetsEnv, root)
 	return ""
 }
-
-// RetailRootIfPresent is RetailRoot's non-testing form for helpers that must
-// decide without a *testing.T. It reports the root and whether the run opted in.
-func RetailRootIfPresent() (string, bool) {
-	root := os.Getenv(RetailAssetsEnv)
-	if root == "" {
-		root = os.Getenv(RetailAssetsEnvLegacy)
-	}
-	return root, root != ""
-}

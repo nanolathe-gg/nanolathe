@@ -1,5 +1,5 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the unit (FBI) compiler [02 "Unit record (.fbi)"].
+// The unit (FBI) compiler.
+
 package content
 
 import (
@@ -821,14 +821,14 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 			return nil, fmt.Errorf("content: %s: %w", e.Path, err)
 		}
 		// Each unit file contributes one UNITINFO section [02 "Unit record"].
+		// A file without one aborts the whole discovery stage: the loader
+		// fails at once and every file after it in enumeration order stays an
+		// unparsed record that the compiler compacts out, so the catalog is
+		// exactly the files that preceded it [02 R-CAT-01 §4]. The stock
+		// corpus has no such file.
 		unitSection := doc.Root.Section("UNITINFO")
 		if unitSection == nil {
-			// Fallback: first section if name mismatched (should not happen in retail)
-			sections := doc.Root.Sections()
-			if len(sections) == 0 {
-				continue
-			}
-			unitSection = sections[0]
+			break
 		}
 		u := compileUnitSection(unitSection, e.Path, language, prov)
 		// Catalog construction is case-insensitive for names [02 §5].
@@ -837,25 +837,6 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 		result[key] = u
 	}
 	return result, nil
-}
-
-// compileUnits is an unexported alias for Catalog integration [02 §5] C1 two-stage discover → parse → link.
-func compileUnits(fs vfs.FSOps) (map[string]*UnitDef, error) {
-	return CompileUnits(fs)
-}
-
-// CompileUnitsSorted returns units sorted by canonical key for hash-stable iteration (I1) [02 §5] C12.
-func CompileUnitsSorted(fs vfs.FSOps) ([]*UnitDef, error) {
-	m, err := CompileUnits(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*UnitDef, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
 }
 
 // LinkUnitWeapons resolves weapon1..3 (and explodeas/selfdestructas) after all weapons compile

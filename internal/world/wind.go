@@ -1,4 +1,4 @@
-// Package world — wind field.
+// The wind field.
 //
 // Wind state is owned by the battle session and advanced by its two RNG
 // streams. The session's phase 8 performs the complete scheduled redraw
@@ -23,6 +23,7 @@
 //   - The change takes effect instantly with no interpolation, the world X/Z
 //     vectors are recomputed, and the scalar published to generators is
 //     `(float)speed / (float)5000` clamped from above at exactly 1.0.
+
 package world
 
 import (

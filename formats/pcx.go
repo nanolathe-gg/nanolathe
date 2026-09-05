@@ -8,6 +8,8 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// PCX is a decoded PCX image: indexed pixels and the palette they index
+// [fmt pcx].
 type PCX struct {
 	Width, Height          uint16
 	XMin, YMin, XMax, YMax uint16
@@ -18,6 +20,7 @@ type PCX struct {
 
 const maxPCXPixels = 16 << 20
 
+// LoadPCX decodes a PCX image from its bytes [fmt pcx].
 func LoadPCX(data []byte) (*PCX, error) {
 	if len(data) < 128+769 {
 		return nil, fmt.Errorf("pcx: file is too small")
@@ -91,6 +94,7 @@ func LoadPCX(data []byte) (*PCX, error) {
 	return pcx, nil
 }
 
+// LoadPCXFile reads and decodes a PCX image from the VFS.
 func LoadPCXFile(fs vfs.FSOps, name string) (*PCX, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {
@@ -99,6 +103,8 @@ func LoadPCXFile(fs vfs.FSOps, name string) (*PCX, error) {
 	return LoadPCX(data)
 }
 
+// At returns the palette index and resolved color at (x, y), and whether the
+// coordinate lies inside the image.
 func (p *PCX) At(x, y int) (byte, color.RGBA, bool) {
 	if x < 0 || y < 0 || x >= int(p.Width) || y >= int(p.Height) {
 		return 0, color.RGBA{}, false

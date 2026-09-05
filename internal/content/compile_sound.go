@@ -1,11 +1,9 @@
-// Package content compiles retail's authored data into immutable definitions.
-// This file implements the sound category and alias compilers
-// [02 "Sound category record"] [02 "Sound aliases"] [03 §8.3] [GAP T14].
+// The sound category and alias compilers.
+
 package content
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -80,15 +78,6 @@ var soundSlotStatic = [24]struct {
 	21: {"count1", "one", 10, 0},                              // [03 §8.3]
 	22: {"count0", "zero", 10, 0},                             // [03 §8.3]
 	23: {"canceldestruct", "Self destruct terminated", 10, 0}, // [03 §8.3]
-}
-
-// SoundSlotStatic returns the static table entry for a slot index (0..23) [03 §8.3].
-func SoundSlotStatic(slot int) (key, speech string, priority, cooldown int32, ok bool) {
-	if slot < 0 || slot >= len(soundSlotStatic) {
-		return "", "", 0, 0, false
-	}
-	e := soundSlotStatic[slot]
-	return e.Key, e.Speech, e.Priority, e.Cooldown, true
 }
 
 // gatherVariants collects variants for an event key K as K, K1, K2… stopping
@@ -238,36 +227,6 @@ func CompileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
 	return result, nil
 }
 
-// compileSoundCategories is an unexported alias for Catalog integration [02 §5] C1.
-func compileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
-	return CompileSoundCategories(fs)
-}
-
-// CompileSoundCategoriesSorted returns categories sorted by canonical key for
-// hash-stable iteration (I1).
-func CompileSoundCategoriesSorted(fs vfs.FSOps) ([]*SoundCategory, error) {
-	m, err := CompileSoundCategories(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*SoundCategory, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
-}
-
-// CompileSoundAliases compiles alias registrations from gamedata/allsound.tdf
-// [02 "Sound aliases"]. Each top-level section is one alias; its `sound` key
-// names the sample. Registration is capped at 255 entries, each holding a
-// 32-byte alias name [02 "Sound aliases"].
-// It returns a map keyed by CanonicalKey(alias name).
-func CompileSoundAliases(fs vfs.FSOps) (map[string]*SoundAlias, error) {
-	result, _, err := compileSoundAliasesOrdered(fs)
-	return result, err
-}
-
 // CompileSoundAliasesOrdered returns the alias map and the same registrations
 // in authored section order. The order is consumed by the session registry;
 // the map remains for existing catalog lookup callers.
@@ -339,25 +298,6 @@ func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundA
 	return result, ordered, nil
 }
 
-// compileSoundAliases is an unexported alias for Catalog integration.
-func compileSoundAliases(fs vfs.FSOps) (map[string]*SoundAlias, error) {
-	return CompileSoundAliases(fs)
-}
-
-// CompileSoundAliasesSorted returns aliases sorted by canonical key (I1).
-func CompileSoundAliasesSorted(fs vfs.FSOps) ([]*SoundAlias, error) {
-	m, err := CompileSoundAliases(fs)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*SoundAlias, 0, len(m))
-	for _, v := range m {
-		out = append(out, v)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CanonicalKey < out[j].CanonicalKey })
-	return out, nil
-}
-
 // SoundData aggregates categories and aliases as discovered from
 // gamedata/sound.tdf and gamedata/allsound.tdf [02 "Sound category record"] [02 "Sound aliases"].
 type SoundData struct {
@@ -378,9 +318,4 @@ func CompileSounds(fs vfs.FSOps) (*SoundData, error) {
 		return nil, err
 	}
 	return &SoundData{Categories: cats, Aliases: aliases, AliasOrder: aliasOrder}, nil
-}
-
-// compileSounds is an unexported alias for Catalog integration.
-func compileSounds(fs vfs.FSOps) (*SoundData, error) {
-	return CompileSounds(fs)
 }

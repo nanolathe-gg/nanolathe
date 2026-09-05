@@ -20,6 +20,7 @@ import (
 	"strings"
 )
 
+// Handle is one unit slot's identity in a capture.
 type Handle struct {
 	Slot          uint16 `json:"slot"`
 	DefinitionKey string `json:"definition_key"`
@@ -27,6 +28,8 @@ type Handle struct {
 	Alive         bool   `json:"alive"`
 }
 
+// Economy is one unit's economy record in a capture: its metal and energy
+// buckets and the extraction state that feeds them.
 type Economy struct {
 	Slot             uint16  `json:"slot"`
 	DefinitionKey    string  `json:"definition_key"`
@@ -43,6 +46,7 @@ type Economy struct {
 	EnergyCarry      float32 `json:"energy_carry"`
 }
 
+// Callback is one script callback observed during a capture.
 type Callback struct {
 	Tick   uint32 `json:"tick"`
 	Source uint16 `json:"source"`
@@ -51,6 +55,7 @@ type Callback struct {
 	Value  int32  `json:"value"`
 }
 
+// Movement is one unit's position, goal and request state at a tick.
 type Movement struct {
 	Tick             uint32   `json:"tick"`
 	Slot             uint16   `json:"slot"`
@@ -67,6 +72,8 @@ type Movement struct {
 	CollisionHistory []string `json:"collision_history,omitempty"`
 }
 
+// Winner is one pick-buffer decision: the candidate written, the heights
+// compared and whether the write was admitted.
 type Winner struct {
 	Tick           uint32 `json:"tick"`
 	X              int32  `json:"x"`
@@ -102,6 +109,8 @@ type Crop struct {
 	Pixels      []byte `json:"-"`
 }
 
+// Capture is one labelled frame of evidence: the authoritative and
+// framebuffer hashes plus whichever record families the caller supplied.
 type Capture struct {
 	Label              string     `json:"label"`
 	Width              int        `json:"width"`
@@ -123,6 +132,8 @@ type Capture struct {
 	RGBAFormat         string     `json:"rgba_format,omitempty"`
 }
 
+// Bundle is a run's evidence: the build and content identity it was taken
+// against, and the captures in the order they were taken.
 type Bundle struct {
 	WorkID      string    `json:"work_id"`
 	MainSHA     string    `json:"main_sha"`
@@ -132,6 +143,8 @@ type Bundle struct {
 	Captures    []Capture `json:"captures"`
 }
 
+// Input is what a caller hands Bundle.Capture. The framebuffers and record
+// slices are copied, so the caller may reuse its own buffers.
 type Input struct {
 	Label              string
 	Tick               uint32
@@ -150,6 +163,7 @@ type Input struct {
 	Height             int
 }
 
+// NewBundle starts an empty evidence bundle for one run.
 func NewBundle(workID, mainSHA, contentHash, mapName string, seed uint32) *Bundle {
 	return &Bundle{WorkID: workID, MainSHA: mainSHA, ContentHash: contentHash, Map: mapName, Seed: seed}
 }
@@ -222,6 +236,8 @@ func cloneCrops(in []Crop) []Crop {
 	return out
 }
 
+// Capture appends one labelled capture, copying every buffer the caller
+// supplied and hashing the framebuffers.
 func (b *Bundle) Capture(in Input) error {
 	if b == nil {
 		return fmt.Errorf("parity: nil bundle")
@@ -377,6 +393,7 @@ func (b *Bundle) outputPlan() ([]evidenceFile, error) {
 	return files, nil
 }
 
+// WriteDir writes the bundle and its framebuffer dumps into a directory.
 func (b *Bundle) WriteDir(dir string) error {
 	if dir == "" {
 		return fmt.Errorf("parity: empty evidence directory")
@@ -405,6 +422,8 @@ func (b *Bundle) WriteDir(dir string) error {
 	return nil
 }
 
+// FramebufferHash is the evidence digest of a framebuffer: the first sixteen
+// bytes of its SHA-256, hex encoded.
 func FramebufferHash(pixels []byte) string {
 	s := sha256.Sum256(pixels)
 	return hex.EncodeToString(s[:16])
@@ -419,6 +438,8 @@ func CropRGBA(name string, rgba []byte, width, height, x, y, w, h int) Crop {
 	return c
 }
 
+// CropRGBAExact copies a named RGBA window and returns the error a bad
+// rectangle produced. CropRGBA is this without the error return.
 func CropRGBAExact(name string, rgba []byte, width, height, x, y, w, h int) (Crop, error) {
 	c := Crop{Name: name, X: x, Y: y, W: w, H: h, Format: "rgba8-row-major"}
 	expected, dimErr := framebufferBytes(width, height, 4)

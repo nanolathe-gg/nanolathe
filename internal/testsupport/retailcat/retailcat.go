@@ -66,20 +66,3 @@ func Shared(t *testing.T) (*content.Catalog, *vfs.FS) {
 	}
 	return cat, fsys
 }
-
-// Fresh builds a NEW catalog for a test that mutates it. Prefer Shared
-// wherever the test only reads: this pays the full compile cost again.
-func Fresh(t *testing.T) (*content.Catalog, *vfs.FS) {
-	t.Helper()
-	root := testsupport.RetailRoot(t)
-	f := vfs.New()
-	if mountErr := f.MountGameDirectory(root); mountErr != nil {
-		t.Fatalf("mount retail %q: %v", root, mountErr)
-	}
-	t.Cleanup(func() { _ = f.Close() })
-	c, compileErr := content.Compile(f)
-	if compileErr != nil {
-		t.Fatalf("compile retail catalog: %v", compileErr)
-	}
-	return c, f
-}

@@ -180,12 +180,6 @@ func PreflightSkirmish(fs vfs.FSOps, catalog *Catalog, mapName string, side int)
 	return result, result.Error()
 }
 
-// Preflight is a concise alias for callers that already use content's other
-// compile helpers and want the package-level operation name.
-func Preflight(fs vfs.FSOps, catalog *Catalog, mapName string, side int) (*SkirmishManifest, error) {
-	return PreflightSkirmish(fs, catalog, mapName, side)
-}
-
 type skirmishPreflight struct {
 	fs       vfs.FSOps
 	catalog  *Catalog

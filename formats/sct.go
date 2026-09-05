@@ -3,8 +3,6 @@ package formats
 import (
 	"encoding/binary"
 	"fmt"
-
-	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // SCTLimits bounds allocations and validated views while decoding editor
@@ -17,6 +15,7 @@ type SCTLimits struct {
 	MaxPreviewPixels    uint64
 }
 
+// DefaultSCTLimits returns the decode bounds used when a caller states none.
 func DefaultSCTLimits() SCTLimits {
 	return SCTLimits{
 		MaxWidth: 2048, MaxHeight: 2048, MaxGridCells: 1 << 20,
@@ -45,10 +44,12 @@ type SCT struct {
 	SectionPreview []byte
 }
 
+// LoadSCT decodes an editor section file under the default limits.
 func LoadSCT(data []byte) (*SCT, error) {
 	return LoadSCTWithLimits(data, DefaultSCTLimits())
 }
 
+// LoadSCTWithLimits decodes an editor section file under explicit bounds.
 func LoadSCTWithLimits(data []byte, limits SCTLimits) (*SCT, error) {
 	const headerSize = 28
 
@@ -151,12 +152,4 @@ func LoadSCTWithLimits(data []byte, limits SCTLimits) (*SCT, error) {
 		result.AttributeData = data[int(metadataStart):int(metadataEnd)]
 	}
 	return result, nil
-}
-
-func LoadSCTFile(fs vfs.FSOps, name string) (*SCT, error) {
-	data, err := readVFS(fs, name)
-	if err != nil {
-		return nil, err
-	}
-	return LoadSCT(data)
 }

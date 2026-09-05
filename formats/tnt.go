@@ -38,6 +38,7 @@ type TNTLimits struct {
 	MaxMinimapPixels    uint64
 }
 
+// DefaultTNTLimits returns the decode bounds used when a caller states none.
 func DefaultTNTLimits() TNTLimits {
 	return TNTLimits{
 		MaxWidth: 8192, MaxHeight: 8192, MaxCells: 16 << 20, MaxTiles: 1 << 20,
@@ -62,6 +63,8 @@ type TNTAttribute struct {
 	Metal   byte // legacy byte 6: per-cell metal seed; zero on canonical [02 "Terrain file"]
 }
 
+// TNTFeatureRecord is one entry of a terrain file's feature-name table
+// [fmt tnt].
 type TNTFeatureRecord struct {
 	Index uint32
 	Name  string
@@ -119,10 +122,12 @@ type TNT struct {
 	Minimap       []byte
 }
 
+// LoadTNT decodes a terrain file under the default limits [fmt tnt].
 func LoadTNT(data []byte) (*TNT, error) {
 	return LoadTNTWithLimits(data, DefaultTNTLimits())
 }
 
+// LoadTNTWithLimits decodes a terrain file under explicit bounds [fmt tnt].
 func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 	// Mandatory TNT version 0x2000/0x1020 fatal, other versions fatal diagnostic [P1-02 §2.2][fmt tnt][03 §2.2].
 	if len(data) < 0x40 {
@@ -299,6 +304,7 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 	return result, nil
 }
 
+// LoadTNTFile reads and decodes a terrain file from the VFS.
 func LoadTNTFile(fs *vfs.FS, name string) (*TNT, error) {
 	data, err := readVFS(fs, name)
 	if err != nil {

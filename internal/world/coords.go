@@ -1,5 +1,5 @@
-// Package world provides authoritative world geometry and coordinate helpers.
-// Coordinate conversions are centralized here per [03 §2.1] and INVARIANTS I3.
+// Coordinate conversions, centralized here per [03 §2.1] and INVARIANTS I3.
+
 package world
 
 import "github.com/nanolathe/nanolathe/internal/sim/numeric"

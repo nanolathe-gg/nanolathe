@@ -20,6 +20,9 @@ type OTA struct {
 	Schemas            []OTASchema
 }
 
+// OTASchema is one `Schema N` section of a map or mission: the per-difficulty
+// starting resources and AI profile, with the parsed section kept for the
+// keys the loader reads later [fmt ota].
 type OTASchema struct {
 	Name           string
 	Type           string
@@ -31,6 +34,8 @@ type OTASchema struct {
 	Section        *Section
 }
 
+// LoadOTA parses a map or mission definition. A file without a GlobalHeader
+// section is an error [fmt ota].
 func LoadOTA(data []byte) (*OTA, error) {
 	document, err := ParseTDF(data)
 	if err != nil {
@@ -75,6 +80,7 @@ func languageValue(section *Section, key string) string {
 	return strings.TrimSpace(value)
 }
 
+// LoadOTAFile reads and parses a map or mission definition from the VFS.
 func LoadOTAFile(fs vfs.FSOps, name string) (*OTA, error) {
 	data, err := readVFSWithLimit(fs, name, int64(DefaultTDFLimits().MaxBytes))
 	if err != nil {
@@ -83,6 +89,7 @@ func LoadOTAFile(fs vfs.FSOps, name string) (*OTA, error) {
 	return LoadOTA(data)
 }
 
+// HasNetworkSchema reports whether any schema declares a network type.
 func (o *OTA) HasNetworkSchema() bool {
 	if o == nil {
 		return false

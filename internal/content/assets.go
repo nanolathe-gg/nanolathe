@@ -16,6 +16,8 @@ type AssetSequence struct {
 	Loop      bool
 }
 
+// FeatureAsset is one feature's art: its body and shadow sequences and, for
+// a three-dimensional feature, its model.
 type FeatureAsset struct {
 	ID     AssetID
 	Body   AssetSequence
@@ -34,11 +36,14 @@ type TextureSet struct {
 	Durations []uint32
 }
 
+// ModelAsset is one model's texture set.
 type ModelAsset struct {
 	ID       AssetID
 	Textures TextureSet
 }
 
+// ProjectileAsset is one projectile's art: its sprite or model, the
+// selector sequence and the palette indices it draws with.
 type ProjectileAsset struct {
 	ID        AssetID
 	Graphic   AssetID
@@ -47,6 +52,8 @@ type ProjectileAsset struct {
 	Colors    []uint8
 }
 
+// EffectAsset is one effect family's art: the animation sequence plus the
+// muzzle flash, wake, splash and construction pieces that go with it.
 type EffectAsset struct {
 	ID           AssetID
 	Sequence     AssetSequence
@@ -56,6 +63,8 @@ type EffectAsset struct {
 	Construction AssetID
 }
 
+// FogAsset is the fog art: the current-visibility and history sequences and
+// the fully transparent entry.
 type FogAsset struct {
 	ID          AssetID
 	Current     AssetSequence
@@ -63,6 +72,7 @@ type FogAsset struct {
 	Transparent AssetID
 }
 
+// MinimapAsset is the minimap overlay art.
 type MinimapAsset struct {
 	ID        AssetID
 	Blip      AssetID
@@ -72,6 +82,7 @@ type MinimapAsset struct {
 	Circle    AssetID
 }
 
+// CursorAsset is one cursor's frame sequence and its hotspot.
 type CursorAsset struct {
 	ID       AssetID
 	Frames   AssetSequence
@@ -116,6 +127,7 @@ func NewAssets(spec ...AssetCatalog) *AssetCatalogService {
 	return &AssetCatalogService{data: cloneAssetCatalog(src)}
 }
 
+// Feature returns a feature's art by stable asset ID.
 func (c *AssetCatalogService) Feature(id AssetID) (FeatureAsset, bool) {
 	if c == nil {
 		return FeatureAsset{}, false
@@ -123,6 +135,8 @@ func (c *AssetCatalogService) Feature(id AssetID) (FeatureAsset, bool) {
 	v, ok := c.data.Features[id]
 	return cloneAssetFeature(v), ok
 }
+
+// Model returns a model's art by stable asset ID.
 func (c *AssetCatalogService) Model(id AssetID) (ModelAsset, bool) {
 	if c == nil {
 		return ModelAsset{}, false
@@ -130,6 +144,8 @@ func (c *AssetCatalogService) Model(id AssetID) (ModelAsset, bool) {
 	v, ok := c.data.Models[id]
 	return cloneAssetModel(v), ok
 }
+
+// Projectile returns a projectile's art by stable asset ID.
 func (c *AssetCatalogService) Projectile(id AssetID) (ProjectileAsset, bool) {
 	if c == nil {
 		return ProjectileAsset{}, false
@@ -137,6 +153,8 @@ func (c *AssetCatalogService) Projectile(id AssetID) (ProjectileAsset, bool) {
 	v, ok := c.data.Projectiles[id]
 	return cloneAssetProjectile(v), ok
 }
+
+// Effect returns an effect family's art by stable asset ID.
 func (c *AssetCatalogService) Effect(id AssetID) (EffectAsset, bool) {
 	if c == nil {
 		return EffectAsset{}, false
@@ -144,6 +162,8 @@ func (c *AssetCatalogService) Effect(id AssetID) (EffectAsset, bool) {
 	v, ok := c.data.Effects[id]
 	return cloneAssetEffect(v), ok
 }
+
+// Fog returns the fog art by stable asset ID.
 func (c *AssetCatalogService) Fog(id AssetID) (FogAsset, bool) {
 	if c == nil {
 		return FogAsset{}, false
@@ -151,6 +171,8 @@ func (c *AssetCatalogService) Fog(id AssetID) (FogAsset, bool) {
 	v, ok := c.data.Fog[id]
 	return cloneAssetFog(v), ok
 }
+
+// Minimap returns the minimap overlay art by stable asset ID.
 func (c *AssetCatalogService) Minimap(id AssetID) (MinimapAsset, bool) {
 	if c == nil {
 		return MinimapAsset{}, false
@@ -158,6 +180,8 @@ func (c *AssetCatalogService) Minimap(id AssetID) (MinimapAsset, bool) {
 	v, ok := c.data.Minimap[id]
 	return v, ok
 }
+
+// Cursor returns a cursor's art by stable asset ID.
 func (c *AssetCatalogService) Cursor(id AssetID) (CursorAsset, bool) {
 	if c == nil {
 		return CursorAsset{}, false
