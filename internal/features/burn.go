@@ -479,9 +479,12 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if existing == nil && cell.Occupied() {
 		return false // an attachment this service does not track
 	}
-	// Pools 0x100/0x800/0xD silent fail, successors 0xFFFF [P1-10][P1-15]; burning anim slots 0x800 [P1-10][P1-15].
-	if len(s.instances) >= FeatureAnimSlots {
-		return false // anim pool 0x800 silent fail [P1-10][P1-15]
+	// Ignition is one of the two arena allocations a sprite feature can make
+	// [05 R-FEAT-01 §2][§9]: a resting anchor holds no slot, so the record this
+	// attaches needs one popped. An instance that already occupies a slot is
+	// not charged twice.
+	if !arenaOccupies(existing) && s.arenaOccupants() >= FeatureAnimSlots {
+		return false // free list empty: the ignition silently does not happen
 	}
 	// On success: bind the cell to the slot, start the burn animation and, when
 	// named, the burn shadow, mark the instance burning, record the tile, play

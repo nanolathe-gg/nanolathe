@@ -5825,10 +5825,10 @@ save-record positions.
 | `0x9F..0xA2` | **AI group index**, `−1` for none: the index of the owner's group record the unit is enrolled in. On load the reader moves the unit out of whatever group it holds and into this one (group-vector append, allocating when full), so this is the one base-record word with a side effect beyond a field copy. | [R-P0-04 §2] group records |
 | `0xA3..0xA6` | **Reveal deadline tick**: the absolute tick until which the unit is exposed to sensors (the sensor phase writes `tick + 90`, a script port `tick + 300`). | [03 sensor phase], doc 04 port census |
 | `0xAB` | **Death-cause byte**: the cause code recorded by the last damage packet and passed to the `Killed` script query. | [06 §9.2] damage packet, [R-COB-04] |
-| `0xAC`, `0xAD` | A current/previous byte pair rotated once per unit tick. Semantic name **Unknown** — decider: trace of the unit tick's byte rotation and its reader. Preserve exactly. | writer/reader copy; unit tick |
+| `0xAC`, `0xAD` | A current/previous byte pair rotated once per unit tick. Semantic name **Unknown** — decider: trace of the unit tick's byte rotation and its reader. Preserve exactly. **Named 2026-09-04 by [R-SAVE-02 §14]:** the current and previous health-percentage samples of the tick-30 roll. | writer/reader copy; unit tick |
 | `0xAE..0xAF` | Order pending-gate mask (the word the order pump masks with `0x83FF`). | [R-ORD-01 §1] |
 | `0xB0` | Stored line-of-sight byte (emitter height in ray mode, shape index in sprite mode). | [R-VIS-01] |
-| `0xB1` | A countdown byte decremented once per unit tick while nonzero. Semantic name **Unknown** — decider: trace of the two readers in the unit tick. Preserve exactly. | writer/reader copy |
+| `0xB1` | A countdown byte decremented once per unit tick while nonzero. Semantic name **Unknown** — decider: trace of the two readers in the unit tick. Preserve exactly. **Named 2026-09-04 by [R-SAVE-02 §14]:** the damage-flash (minimap blink) byte of [06 R-WPN-04 §2]. | writer/reader copy |
 | `0xB2..0xB3` | The state byte zero-extended to a `u16`: bit 0 activated, bit 1 armored, bit 2 cloaked, bit 3 building; `0xB3` is always `0` on write and ignored on read. | [04 §2.4] |
 
 **Established — the packed status word at `0xB4..0xB7`, exactly.** With
@@ -6200,6 +6200,46 @@ per-slot item list is the full "Player records" table plus `Logo` and
    but under-specified: it is numbered by box index, not stable slot (§6).
 8. The brief's premise that `expected %d units, got %d` is a load
    diagnostic: it is lounge text (§2).
+
+### Closed — the `0xAC`/`0xAD` sample pair and the `0xB1` countdown byte, named [R-SAVE-02 §14] (2026-09-04)
+
+Status: **Established** (the save writer's source field and the save reader's
+destination field for each byte, both read directly; the per-unit tick
+refresh read for the two behaviors; raw disassembly of the countdown step).
+
+Three rows of the §6 table were left opaque — "preserve exactly" — and the
+"Missing and unknown" bullet below narrowed the `0xB1` row (WU-19-188) to two
+candidates: the minimap damage-flash byte of `[06 R-WPN-04 §2]`, or the
+post-capture grace counter of `[04 R-MOV-03 §1]` step 6. The writer and the
+reader settle all three rows, and the same trace closes the grace-counter
+alternative:
+
+| Save bytes | Named meaning | Evidence |
+|---|---|---|
+| `0xAC` | **Current health sample**: the unit's health as a whole percentage of its definition's maximum, clamped to `0..100`, rewritten on every tick whose global tick count is a multiple of 30. | writer copies the unit's current-sample byte; reader restores it; the tick-30 roll of `[04 §5.1]` writes it |
+| `0xAD` | **Previous health sample**: the value `0xAC` held before the most recent roll — the roll shifts current into previous before storing the new percentage, and the death path's severity reads this byte (`[06 §12.1]`). | same roll, the shifted byte |
+| `0xB1` | **Damage-flash byte** — the minimap blink of `[06 R-WPN-04 §2]`: written to 240 by every accepted non-heal damage packet, decremented by one per unit visit while nonzero (`[06 R-WPN-04 §4]`), read by the minimap contacts pass. | writer copies the flash byte; reader restores it; the same tick-refresh step that decrements it is the one the §6 row described |
+
+**The grace counter is not in the record.** The post-capture grace counter
+is a 32-bit word decremented in the same per-unit refresh, immediately after
+the flash byte's step, and it is the counter the contextual resolver and the
+selection predicates read. Neither the unit writer nor the unit reader
+touches it: a loaded unit's grace counter is whatever the allocator left,
+which is zero. So the "two readers in the unit tick" decider in the old
+`0xB1` row described the grace counter's readers, but the byte the row
+names is the flash byte — the row conflated the two adjacent countdowns.
+**Established** (bounded over the writer's and reader's field lists).
+
+**What this corrects.** The §6 rows for `0xAC`/`0xAD` ("a current/previous
+byte pair rotated once per unit tick. Semantic name Unknown") and `0xB1` ("a
+countdown byte decremented once per unit tick while nonzero. Semantic name
+Unknown") stand as descriptions of the mechanics and are superseded as to
+the names by this table; the rotation is per tick-30 roll, not per tick.
+`[06 R-WPN-04 §2]`'s "carried in the unit save record" now has its offset.
+For Nanolathe: the unit codec reads and writes `CurrentSample`,
+`PriorSample` and `BlinkSuppress` at these offsets, so a loaded unit resumes
+its blink and its death-severity history; the grace counter stays
+unpersisted, as retail leaves it.
 
 ### Closed — the bank writer's compression policy and the typed-item primitives [R-ENTRY-02 §3] (2026-08-29)
 
@@ -8015,21 +8055,16 @@ a single-player implementation.
 - Remaining semantic mappings inside the bulk binary boxes: the two
   path-marker words (code-2 payload `0x22` and `0x32`), the code-3 record's
   handler identity and word names, the unit record's relation byte (`0x8E`),
-  current/previous byte pair (`0xAC`/`0xAD`) and countdown byte (`0xB1`), and
-  the per-word layout of the `u%04xacc` resource account (doc 05) ·
+  and the per-word layout of the `u%04xacc` resource account (doc 05) ·
   "Save-file organization" [R-SAVE-02 §6] [R-SAVE-02 §7] [R-SAVE-02 §10] ·
   static trace (field-isolation of each reader). Everything else in the unit,
   mover, script, order, feature and player records is named. *Narrowed
-  2026-09-04 (WU-19-188):* the two per-unit countdowns the sweep steps — the
-  minimap blink byte, which [06 R-WPN-04 §2] states is carried in the save
-  record, and the post-capture grace counter of [04 R-MOV-03 §1] step 6 — are
-  the two candidates for `0xB1`, and only one of them can hold it. That row's
-  own decider ("the two readers in the unit tick") fits the grace counter,
-  whose readers are the contextual resolver's own-unit reject and the selection
-  predicates, rather than the blink byte, whose only reader is the minimap dot
-  pass. The blink byte's offset is therefore **Unknown**; a trace of the save
-  writer's source field for it would settle both rows at once. Until then this
-  build persists neither, and a loaded unit starts unblinked.
+  2026-09-04 (WU-19-188)* to two candidates for `0xB1`; **closed 2026-09-04
+  (RWU-19-196)** by [R-SAVE-02 §14]: `0xB1` is the minimap damage-flash byte
+  and `0xAC`/`0xAD` are the two health-percentage samples, by the writer's
+  source and the reader's destination fields; the post-capture grace counter
+  is not in the record at all. The unit codec now persists all three and the
+  `TODO(question)` on `BlinkSuppress` is retired.
 - The *value* of the script writer's two residue dwords (24 and 25 of each
   piece record). Which getter is lost is now Established — the show/hide and
   cache getters both store into dword 23 and are overwritten, leaving only the

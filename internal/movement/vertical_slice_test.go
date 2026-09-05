@@ -643,18 +643,21 @@ func TestVerticalSlice_GunshipTakeoffMoveLand(t *testing.T) {
 	if gun.Move.Mode != 1 {
 		t.Fatalf("after land mode 1 parked [04 §9.1]")
 	}
-	// Damage gunship and test air repair [04 §10.2] VTOL_GetRepaired pad heals
+	// Sitting on the pad heals nothing by itself. This block used to assert the
+	// opposite, against the movement `EndTick` proximity lane WU-19-206 retired:
+	// the mover tick carries no healing producer, and `Land` above is the bare
+	// touchdown surface, not the `VTOL_Landing` machine whose phase 6 pushes the
+	// `SelfRepair` record that does the healing [04 R-AIR-01 §6][05 R-WORK-01 §3].
 	gun.Health = 100
 	gun.MaxHealth = 400
 	pad2 := w.Unit(ph)
 	pad2.X = pad.X
 	pad2.Z = pad.Z
-	// Tick repair
 	for i := 0; i < 10; i++ {
 		runMovementTick(sys, uint32(100+i), w)
 	}
-	if gun.Health <= 100 {
-		t.Fatalf("air repair should heal on pad [04 §10.2] pad heals, got %d", gun.Health)
+	if gun.Health != 100 {
+		t.Fatalf("parking on a pad healed %d points: the mover tick has no healing producer [04 R-AIR-01 §6][05 R-WORK-01 §3]", gun.Health-100)
 	}
 	// Verify boarding range for fighter/bomber still 16 fallback
 	fighter := defForFighter("arm_fig")

@@ -45,16 +45,14 @@ func (w *World) unitPreUpdate(u *Unit, tick uint32) {
 		return
 	}
 	// Step 5: the damage-flash byte of [06 R-WPN-04 §2]. The damage dispatcher
-	// writes 240; the sweep "decrements it as a signed byte once per unit visit
-	// while it is nonzero — 240 reads as -16, so it reaches zero after sixteen
-	// visits". Sixteen visits from 0xF0 to 0x00 is one STEP TOWARD ZERO per
-	// visit: what decrements is the magnitude of the negative count, |-16| to
-	// |-15| to ... The byte value itself rises. Subtracting one instead would
-	// walk -16 away from zero and the blink would never end; decrementing 240 as
-	// an unsigned byte would take 240 visits, eight seconds of blink for one hit.
-	// The guard is the "while it is nonzero" clause and is also the floor.
+	// writes 240; the sweep decrements it by ONE per visit while it is nonzero,
+	// so it reaches zero after 240 visits [06 R-WPN-04 §4] — a plain byte
+	// decrement, signedness immaterial. The "sixteen visits, rising toward
+	// zero" reading this step used to implement was inferred from a mis-stated
+	// observable and is retracted there. The guard is the "while it is nonzero"
+	// clause and is also the floor.
 	if u.BlinkSuppress != 0 {
-		u.BlinkSuppress++
+		u.BlinkSuppress--
 	}
 	// Step 6: the post-capture grace counter. Inert in single-player — see the
 	// doc comment. No field, no decrement, no placeholder value.

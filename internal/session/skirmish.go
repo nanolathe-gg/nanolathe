@@ -844,8 +844,13 @@ func skirmishBattleEntry(s *Session, cfg SkirmishConfig, m *mission.Mission) err
 	if err := requireCOBForSession(s); err != nil {
 		return err
 	}
-	// Wire cargo from i-verb if any scenario units carry attachments (reuses mission helper)
-	wireMissionCargo(s, m)
+	// No cargo pass runs here. A skirmish never reaches the InitialMission
+	// interpreter at all — it runs "for mission-type-1 games and BetweenMissions
+	// restores only; no other start path reaches it" [04 §3.6] — so a skirmish
+	// map's `i name` verbs attach nothing. This call site used to run battle
+	// entry's own re-reading of those verbs, whose two units were the wrong way
+	// round; it is deleted along with that helper (WU-19-205, review finding
+	// R09).
 	skirmishGrantResourcesDirect(s, cfg)
 	// Zero the two sharing thresholds once, after units exist [P1-06] [P1-I04].
 	//
@@ -912,9 +917,12 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 	// tests", which silently re-ranked such a pair by coordinate; the decode
 	// order is already deterministic (TDF enumeration order, [I1]) and is the
 	// order retail scans, so the sort is removed rather than made stabler.
-	// Retail stores the number as the authored suffix minus one; this build's
-	// decode keeps the 1-based suffix in Special.ID, so the two differ by one
-	// throughout and the conversion happens at the single call site below.
+	// Special.ID is the STORED number — the authored suffix minus one, the same
+	// number this lookup and the fatal diagnostic use [08 R-TRIG-01 §9]. It
+	// used to hold the authored label instead, with a +1 applied at the call
+	// site below, which decoded every alphabetic label as a number no slot ever
+	// asks for and rejected `StartPos0` outright (WU-19-205, review finding
+	// R10).
 	var starts []mission.Special
 	for _, sp := range m.Specials {
 		if sp.Kind == 1 {
@@ -1067,10 +1075,12 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 			// retail's verbatim one.
 			return fmt.Errorf("nanolathe: skirmish placement has no assigned start position: slot %d, eligible slots %v, expected one assignment per eligible slot [08 R-ENTRY-01 §5]", playerIdx, eligible)
 		}
-		// `perm` is the stored, zero-based position number; the authored label
-		// is one greater, so slot i under identity placement takes StartPos<i+1>
-		// [08 R-ENTRY-01 §5] step 3.
-		sp := findSpecial(perm + 1)
+		// `perm` and the decoded record both carry the stored, zero-based
+		// number, so the scan compares them directly: slot i under identity
+		// placement takes stored number i, whose authored label is StartPos<i+1>
+		// — or StartPos0, which stores 0 as well [08 R-ENTRY-01 §5] step 3,
+		// [08 R-TRIG-01 §9].
+		sp := findSpecial(perm)
 		if sp == nil {
 			return errStartPositionMissing(perm)
 		}

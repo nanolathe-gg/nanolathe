@@ -3568,7 +3568,10 @@ each hit, re-armed by every hit. It is zeroed at spawn and carried in the unit
 save record. Presentation only; doc 07 owns the dot pass.
 
 **Correction (2026-09-04, WU-19-188) — the per-visit act steps the magnitude
-toward zero, not the value down.** The paragraph above says the sweep
+toward zero, not the value down.** *(Retracted 2026-09-04 by [R-WPN-04 §4]:
+the step is a plain byte decrement and the span is 240 visits; the "sixteen
+visits" this paragraph took as the observable was itself a misreading. Kept
+for the audit trail.)* The paragraph above says the sweep
 "**decrements** it as a signed byte once per unit visit while it is nonzero"
 and, in the same sentence, that "240 reads as −16, so it reaches zero after
 sixteen visits". Those two clauses cannot both be obeyed. Subtracting one from
@@ -4165,6 +4168,49 @@ products formed as the 80-bit register value times its own double-precision
 store and the Z product plain — the identical form §9.3 gives for units — so
 the two branches share one rounding; the caller narrows both to the signed
 16-bit whole-unit value and applies the same strict `< R` test.
+
+### Closed — the flash byte's per-visit step is a plain byte decrement: 240 visits, not sixteen [R-WPN-04 §4] (2026-09-04)
+
+Status: **Established** (raw instruction read of the per-unit tick refresh's
+step; caller cadence read; writer and reader census of the byte).
+
+`[R-WPN-04 §2]` above says the damage-flash byte, written to 240, is
+"decremented … as a signed byte once per unit visit while it is nonzero —
+240 reads as −16, so it reaches zero after sixteen visits", and the WU-19-188
+correction beneath it, reading the two clauses as contradictory, kept the
+"sixteen visits" span as the observable and re-derived the arithmetic from
+it: the value *rises* by one per visit. Both readings are wrong, and the
+second is the kind of inference rule 1 forbids — an observable that was itself
+only a reading of the first sentence.
+
+**The step.** The per-unit tick refresh loads the byte, tests it for zero,
+and when nonzero stores the byte **decremented by one** — the single-byte
+decrement instruction, no sign extension, no widening. Signedness is
+immaterial to a decrement: from `0xF0` the byte passes `0xEF`, `0xEE`, …,
+`0x01`, `0x00`, which is **240 visits**. The routine runs once per tick from
+the per-player unit walk, for every live unit; the only modulus in it (`tick
+mod 30`) guards the health-sample roll further down, not this step. So a hit
+blinks the unit on the minimap for **240 ticks — eight seconds** — re-armed
+to 240 by every hit, and zero is a floor because the nonzero test precedes
+the store. The "−16 … sixteen visits" clause of §2 was a misreading of the
+byte's signed appearance; there was never a sixteen-visit observable to
+derive from.
+
+**Readers, re-censused.** The byte's only reader is the minimap contacts
+pass (`[03 §3.9]`: `blinkSuppressByte == 0 || blinkPhase`). Three other
+routines feed a byte at the same position of a different record to the
+simulation RNG as a bound, but that record is a **feature definition**
+reached through the feature table, not the unit; they are not readers of it. The
+post-capture grace counter, a 32-bit word decremented in the same refresh
+immediately after this step, is a separate field (`[04 R-MOV-03 §1]` step
+6) and is not carried in the save record (`[08 R-SAVE-02 §14]`), whereas
+this byte is — at `0xB1`.
+
+**For Nanolathe.** The pre-update step decrements the byte; a carrier of
+either signedness is correct provided it wraps as a byte. The previous
+implementation incremented it and stopped after sixteen visits — a blink
+fifteen times too short. The §2 sentence "carried in the unit save record"
+now resolves to `[08 R-SAVE-02 §14]`.
 
 ### 9.4 Impulse and pushing absence
 
@@ -5229,6 +5275,81 @@ query) is §12.1's. For Nanolathe: an `isfeature` completion and a finished
 `isfeature` creation are the only cause-7 writers, the death resolution reads
 the stored kind byte, and there is no "an ordinary kill of an `isfeature`
 unit becomes cause 7" rule.
+
+### Closed — the collision cache's cell pair is never reset: reuse inherits the last occupant's pair [R-DMG-01 §13] (2026-09-04)
+
+Status: **Established** (direct static read of the collision gate's feature
+step; a whole-image store census of the record's two cached-cell words; the
+reservation and common-initializer field lists of every creator; the pool's
+one allocation-time clear).
+
+**The question.** §8.1's feature step compares the record's cached cell pair
+against the current point's quantized cell and, when both match, cancels the
+feature's impact without touching the cache. §4.1 and §6.1 enumerate what
+the reservation and the common initializer write, and neither lists the
+pair — so a fresh record's first feature test could read a pair a previous
+occupant of the slot left, and the question was whether some reset the
+enumerations omitted exists.
+
+**None does.** The only stores to the two cached-cell words anywhere in the
+image are the two in the collision gate's feature step — written together,
+only when a feature resolves for the cell **and** the height test
+`(int16)point.Yword < featureDefinition.heightByte + cell.minHeightByte`
+has passed, and only when the pair did not already match. The reservation
+of every creator (ordinary, ballistic, vertical-launch, dropped, meteor and
+the burst-clone path) writes exactly the dead bit and the retained unit
+target, as §4.1 says; the common initializer writes the fields §4.1 lists
+and nothing else; no specialized creator writes the pair. The pool itself
+is zero-filled **once**, when the 300-record array is allocated at battle
+start, and never again; compaction copies survivors downward and leaves the
+tail records' bytes where they were (§5.2).
+
+**Consequences, exactly.**
+
+1. A slot used for the first time in a battle starts with pair `(0, 0)` —
+   the north-west corner cell, which is in-map, so a feature there can be
+   suppressed for a brand-new record on its first contact.
+2. A reused slot starts with whatever pair the slot's last occupant wrote —
+   its last feature-contact cell — or `(0, 0)` if no occupant ever
+   contacted a feature. A shell fired at the same tree cell that the slot's
+   previous occupant last hit has its first contact **suppressed**, and the
+   terrain/water ladder of the same call runs instead.
+3. The pair is a *last-feature-cell* memory, not a *last-tick* memory: it is
+   not written on featureless cells or on cells whose feature fails the
+   height test, so it survives any number of ticks and, per 2, any number of
+   reuses.
+
+**For Nanolathe.** The record's `CacheCellX`/`CacheCellZ` are retained
+across `InitCommon` (the clear that stood there as a placeholder is removed),
+and the gate consults the pair only inside a resolved, height-passing
+feature branch — this build used to compare and overwrite the pair on every
+in-map tick before looking for a feature, which reduced it to a one-tick
+memory and could never suppress across a gap. The pool's compaction already
+copies survivors down without clearing the tail.
+
+### Closed — where the gate writes the floor scratch: after the in-map test, before the unit slots [R-DMG-01 §14] (2026-09-04)
+
+Status: **Established** (direct static read of the collision gate).
+
+§8.1 step 2 already states the value — `(cell.maxHeight + cell.minHeight) /
+2`, an unsigned division of the plot cell's neighbourhood-maximum and
+neighbourhood-minimum bytes — and that the projectile draw pass is its only
+reader. This closure fixes the write's position for an implementer whose
+gate and publisher are separate: the gate first resolves the post-motion
+point's plot cell and, when there is none (off-map), freezes the follow
+camera, marks the record dead and returns **without** writing the scratch;
+then runs the projectile-link proximity step, which never returns; then
+writes the scratch; then the two unit slots, the units-only return, the
+feature, terrain and water steps. So the scratch is rewritten on every
+in-map tick regardless of what the ladder selects, an off-map record
+retires with its previous value, and a record the phase has not yet visited
+— a burst clone appended after the iteration count was captured (§5.1) —
+carries its slot's previous value into presentation, exactly as retail's
+draw pass reads it.
+
+**For Nanolathe.** The combat gate writes the record's `CachedFloorHeight`
+at that point and the publisher copies it into the committed view rather
+than recomputing it; the `TODO(T25)` that stood on the recompute is retired.
 
 ### Closed — `hitdensity` does not exist, and what is doc 05's [R-DMG-01 §6] (2026-08-29)
 

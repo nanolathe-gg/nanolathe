@@ -544,9 +544,11 @@ func watcherBattleStartCamera(cam *camera.Camera) {
 
 // campaignStartPosition returns the start-position special the campaign camera
 // jumps to: the first special in authored record order that is a start position
-// and whose stored number is 0. Retail stores the number as the authored suffix
-// minus one, so StartPos1 is stored number 0; mission.Special keeps the suffix
-// itself, hence the comparison against 1 [08 "Campaign camera"] [fmt ota].
+// and whose stored number is 0. mission.Special.ID is that stored number — the
+// authored suffix minus one, so both StartPos1 and StartPos0 store 0
+// [08 "Campaign camera"] [08 R-TRIG-01 §9] [fmt ota]. It held the authored
+// label until WU-19-205, when the decoder was corrected; the comparison here
+// moved with it (review finding R10).
 // Record order is the OTA enumeration order and is deliberately not sorted:
 // "first" is a scan, not a minimum.
 func campaignStartPosition(m *mission.Mission) (mission.Special, bool) {
@@ -554,7 +556,7 @@ func campaignStartPosition(m *mission.Mission) (mission.Special, bool) {
 		return mission.Special{}, false
 	}
 	for _, sp := range m.Specials {
-		if sp.Kind == 1 && sp.ID == 1 {
+		if sp.Kind == 1 && sp.ID == 0 {
 			return sp, true
 		}
 	}

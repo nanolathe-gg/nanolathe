@@ -54,8 +54,10 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	u.FootprintSizeX = int16(binary.LittleEndian.Uint16(data[0x9B:]))
 	u.FootprintSizeZ = int16(binary.LittleEndian.Uint16(data[0x9D:]))
 	u.RevealDeadline = binary.LittleEndian.Uint32(data[0xA3:])
-	u.UnknownByteAC, u.UnknownByteAD = data[0xAC], data[0xAD]
-	u.LOSByte, u.UnknownCountdownByte = data[0xB0], data[0xB1]
+	// 0xAC/0xAD are the current/previous health samples the tick-30 roll
+	// rotates and 0xB1 the damage-flash byte [08 R-SAVE-02 §14].
+	u.CurrentSample, u.PriorSample = data[0xAC], data[0xAD]
+	u.LOSByte, u.BlinkSuppress = data[0xB0], int8(data[0xB1])
 	// The allocator supplies identity and Alive. Invert only the established
 	// persisted portions of the packed status word. Flags 12 and 26..31 are
 	// not serialized and retain allocator state [08 R-SAVE-02 §6].

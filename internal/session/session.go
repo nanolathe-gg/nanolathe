@@ -19,6 +19,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/triggers"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -1234,7 +1235,14 @@ func (s *Session) RegisterAll() {
 						}
 					}
 					if corpseDef != nil {
-						_ = s.Features.PlaceCorpse(u.X, u.Z, corpseDef, u.Def.IsFeature)
+						// The corpse stamper takes the dying unit's EXACT
+						// position triple, not just its footprint cell
+						// [05 R-FEAT-01 §13 "The corpse creator's chain and
+						// stamp"][05 R-FEAT-01 §3 step 4]. The Y is the half
+						// that matters: a surface ship's wreck must start at
+						// the surface and descend, and handing over only X and
+						// Z put every wreck on the seabed at birth.
+						_ = s.Features.PlaceCorpse([3]numeric.Fixed{u.X, u.Y, u.Z}, corpseDef, u.Def.IsFeature)
 					}
 				}
 			}

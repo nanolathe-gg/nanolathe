@@ -449,10 +449,15 @@ type airOrderState struct {
 	// [04 R-AIR-01 §6]. It is a separate field here because Go gains nothing
 	// from the overlay and a reader gains the distinction.
 	padPiece uint16
-	low      uint8 // the low bit of the drawn bearing, the second scratch word
-	goal     Vec3  // the record's cached goal
-	post     Vec3  // VTOL_Standby's recorded post
-	done     bool  // the executor reported completion
+	// repairPad is `VTOL_Landing` phase 6's decision, held until the pump asks
+	// for the machine's outcome: the pad handle the spawned `SelfRepair` record
+	// must name as its repairer, or 0 for a touchdown that earns no repair
+	// [04 R-AIR-01 §6][05 R-WORK-01 §3].
+	repairPad pool.Handle
+	low       uint8 // the low bit of the drawn bearing, the second scratch word
+	goal      Vec3  // the record's cached goal
+	post      Vec3  // VTOL_Standby's recorded post
+	done      bool  // the executor reported completion
 }
 
 // airStateFor returns the executor state for the unit's current head record,
@@ -1052,8 +1057,47 @@ func (s *System) execVTOLLanding(u *units.Unit, head *orders.Node, st *airOrderS
 		if fl := s.Flights[u.Handle]; fl != nil {
 			fl.Mode = 0
 		}
+		// The empty lander's repair arm, the ONE producer of pad repair: with
+		// the lander below its definition's `MaxDamage`, the pad owner's
+		// definition carrying both `isairbase` and `builder`, and the pad owner
+		// not under construction, the goal payload is cleared (above) and a
+		// `SelfRepair` record is pushed on the lander [04 R-AIR-01 §6] phase 6.
+		//
+		// The record is only *decided* here. Retail's phase 6 is itself the
+		// pump's dispatch, so its head insert and its "complete" both land in
+		// one visit and the landing record is unlinked out from behind the
+		// spawned one. This engine splits the two — the executor runs in the
+		// mover tick and reportAirMachineOutcome answers the pump — so the
+		// insert has to wait for that answer, or the landing record would be
+		// stranded behind a head it never dispatches from and would restart
+		// its whole machine when the repair finished.
+		if padRepairsLander(u, pad) {
+			st.repairPad = head.Target
+		}
 		st.done = true
 	}
+}
+
+// padRepairsLander is `VTOL_Landing` phase 6's three-clause repair test
+// [04 R-AIR-01 §6]: the lander is below its definition's `MaxDamage`, the pad
+// owner's definition carries both `isairbase` and `builder`, and the pad owner
+// is not under construction.
+//
+// The health compare is the definition word against the unit's own health, the
+// same pairing every other pad-side test in [04 R-AIR-01 §11] makes; a lander
+// already at or above full health gets no record, and the repair helper would
+// refuse it anyway on its own first compare [05 R-WORK-01 §3].
+func padRepairsLander(lander, pad *units.Unit) bool {
+	if lander == nil || lander.Def == nil || pad == nil || pad.Def == nil {
+		return false
+	}
+	if int32(lander.Health) >= lander.Def.MaxDamage {
+		return false
+	}
+	if !pad.Def.IsAirBase || !pad.Def.Builder {
+		return false
+	}
+	return pad.Remaining == 0 // not under construction [05 "Construction target state"]
 }
 
 // airOffMapRecovery is the shared off-map recovery leg six air executors run
@@ -1550,6 +1594,17 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 func (s *System) reportAirMachineOutcome(u *units.Unit, n *orders.Node, tick uint32) orders.Code {
 	st := s.airOrders[u.Handle]
 	if st != nil && st.order == n && st.done {
+		// `VTOL_Landing` phase 6's repair spawn, deferred to here so it lands in
+		// the same pump visit that unlinks this record [04 R-AIR-01 §6]. The
+		// head insert puts the `SelfRepair` record in front, the code-5 unlink
+		// below takes this record out by identity from behind it, and the walk
+		// reloads the head — retail's single-visit ordering, reassembled across
+		// the mover-tick/pump split.
+		if st.repairPad != 0 {
+			pad := st.repairPad
+			st.repairPad = 0
+			airSpawnAtHead(u, "SelfRepair", pad, Vec3{X: u.X, Y: u.Y, Z: u.Z}, tick)
+		}
 		return 5 // *complete* [04 R-ORD-01 §1]
 	}
 	airDeadline(n, tick, 1)

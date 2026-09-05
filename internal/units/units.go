@@ -454,13 +454,15 @@ type Unit struct {
 	// `currentTick >= RevealDeadline` (inclusive) [05 R-ECO-01 §9]
 	// [03 R-VIS-01 §6], and presentation's work highlight. Per I13 the two
 	// clean-room contracts that name it resolve to this one Go field.
-	RevealDeadline       uint32
-	UnknownByteAC        uint8
-	UnknownByteAD        uint8
-	LOSByte              uint8
-	UnknownCountdownByte uint8
-	Orders               any     // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
-	Script               *cob.VM // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
+	RevealDeadline uint32
+	// LOSByte is the stored line-of-sight byte the save record carries at
+	// `0xB0` [08 R-SAVE-02 §6]. The bytes that used to sit beside it here as
+	// `UnknownByteAC`, `UnknownByteAD` and `UnknownCountdownByte` are named
+	// by [08 R-SAVE-02 §14]: `0xAC`/`0xAD` are CurrentSample/PriorSample and
+	// `0xB1` is BlinkSuppress, so the codec reads and writes those fields.
+	LOSByte uint8
+	Orders  any     // [04 §3.2] front/rear segment anchors on the unit (stored as *orders.Queue via opaque to avoid import cycle)
+	Script  *cob.VM // typed COB VM per-unit [04 §4.2][P1-I01] — not any, typed per acceptance
 	// RenderPieceFlags is the per-unit render-piece record [04 §"Piece flag polarity"] [R-COB-01 §1].
 	// One flags byte per piece in a separate array from the script's piece-animation state.
 	// Allocation is zero-filled then the fill pass sets bit 1 (0x02 cache) and bit 2 (0x04 shade)
@@ -538,28 +540,17 @@ type Unit struct {
 	// BlinkSuppress is the damage-flash byte — the minimap blink of
 	// [06 R-WPN-04 §2]. Every damage packet the dispatcher accepts other than a
 	// heal (paralyze included) writes 240 here, *before* the reaction step; the
-	// per-unit pre-update decrements it as a SIGNED byte while it is nonzero, so
-	// 240 read as -16 climbs back to zero after sixteen unit visits. Hence the
-	// signed Go type: an unsigned byte would count 240 visits down instead of
-	// sixteen up.
+	// per-unit pre-update DECREMENTS it by one per visit while it is nonzero,
+	// so 240 reaches zero after 240 visits — eight seconds of blink per hit,
+	// re-armed by every hit [06 R-WPN-04 §4]. The Go type is int8 only because
+	// the dispatcher's constant is written as the signed reading of 0xF0;
+	// a decrement is the same bit pattern either way, and the wrap through
+	// -128 is retail's own byte wrap, not a sign effect.
 	//
 	// It is authoritative unit state with no simulation reader. Its one reader is
 	// the minimap contacts pass, which draws a unit's blip only when
-	// `BlinkSuppress == 0 || blinkPhase` [03 §3.9] — so a unit under fire flashes
-	// on the minimap for sixteen ticks after each hit, re-armed by every hit.
-	// Zeroed at spawn (the zero value) [06 R-WPN-04 §2].
-	//
-	// TODO(question): [06 R-WPN-04 §2] states the byte is carried in the unit
-	// save record but does not name its offset, and the 184-byte record of
-	// [08 R-SAVE-02 §6] has no byte named for it: `0xAC`/`0xAD` are the
-	// current/previous pair the tick-30 health roll rotates, and `0xB1`'s
-	// "countdown byte decremented once per unit tick" carries a two-reader
-	// decider that matches the post-capture grace counter (read by the
-	// contextual resolver's own-unit reject and by the selection predicates,
-	// [04 R-MOV-03 §1] step 6), not this byte, whose only reader is the minimap.
-	// A trace of the save writer's source field for the flash byte would settle
-	// it; until then the flash is not persisted, and a loaded unit starts
-	// unblinked rather than being written over a traced field on a guess.
+	// `BlinkSuppress == 0 || blinkPhase` [03 §3.9]. Zeroed at spawn (the zero
+	// value) and carried at `0xB1` of the unit save record [08 R-SAVE-02 §14].
 	BlinkSuppress int8
 	// Placement linkage for P0-04/P0-06 sparse created[] semantics [P0-04][P0-06].
 	// Retail maintains created[placementIdx] sparse array and scans it in

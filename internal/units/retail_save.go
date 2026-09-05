@@ -96,9 +96,11 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 	binary.LittleEndian.PutUint32(data[0xa3:], u.RevealDeadline)
 	binary.LittleEndian.PutUint32(data[0xa7:], math.Float32bits(u.Remaining))
 	data[0xab] = u.LastDamageCause
-	data[0xac], data[0xad] = u.UnknownByteAC, u.UnknownByteAD
+	// 0xAC/0xAD are the current/previous 30-tick-window health samples and
+	// 0xB1 the damage-flash byte [08 R-SAVE-02 §14].
+	data[0xac], data[0xad] = u.CurrentSample, u.PriorSample
 	binary.LittleEndian.PutUint16(data[0xae:], uint16(u.Pending))
-	data[0xb0], data[0xb1] = u.LOSByte, u.UnknownCountdownByte
+	data[0xb0], data[0xb1] = u.LOSByte, uint8(u.BlinkSuppress)
 	var state uint16
 	if u.Activated {
 		state |= 1

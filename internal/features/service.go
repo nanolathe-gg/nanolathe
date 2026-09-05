@@ -77,8 +77,17 @@ type BurnWeaponEvent struct {
 
 // Pool limits per [P1-10][P1-15]: catalog 0x100, anim slots 0x800, plot cell 0xD stride.
 const (
-	FeatureCatalogLimit  = 0x100  // 256 entries max [P1-10][P1-15]
-	FeatureAnimSlots     = 0x800  // 2048 burning anim slots [P1-10][P1-15]
+	FeatureCatalogLimit = 0x100 // 256 entries max [P1-10][P1-15]
+	// FeatureAnimSlots is the live-instance arena of [05 R-FEAT-01 §2]: 2048
+	// slots allocated once at map load, handed out by a free list. It is NOT a
+	// cap on how many features a map may carry. Its occupants are exactly two
+	// kinds [05 R-FEAT-01 §3 steps 4-5]: every 3D definition (flag bit 0
+	// clear), which pops a slot at the stamp and holds it until teardown, and
+	// every ACTIVE sprite event record — an ignition [§9], or a die/reclaim
+	// animation [§5 step 5]. A resting sprite feature takes no slot at all:
+	// step 5 writes the anchor's ordinal, a zero in the slot word and a cleared
+	// instance bit. See arenaOccupies.
+	FeatureAnimSlots     = 0x800  // 2048 live-instance arena slots [05 R-FEAT-01 §2]
 	PlotCellStride       = 0x0D   // 13 bytes per cell [P1-15]
 	FeatureSuccessorNone = 0xFFFF // sentinel no successor [P1-10][P1-15]
 )
@@ -334,17 +343,33 @@ func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Ins
 	return s.PlaceAt(cx, cz, def)
 }
 
-// PlaceCorpse stamps a corpse feature for a dying unit at its world position
-// and initiates sinking when submerged [05 "Feature sinking and water interaction"].
+// PlaceCorpse stamps a corpse feature for a dying unit and initiates sinking
+// when submerged [05 "Feature sinking and water interaction"].
+//
+// `pos` is the dying unit's EXACT position triple, and the two things it feeds
+// are deliberately separate [05 R-FEAT-01 §13 "The corpse creator's chain and
+// stamp"]: the corpse is stamped at the unit's plot cell, derived from X and Z
+// by the floor-corrected cell conversion [03 §2.1] I3, while the instance's
+// stored position is the triple verbatim — not the footprint centre, and not
+// the terrain floor under it, which is what the null-position stamp of
+// [05 R-FEAT-01 §3] step 4 computes instead.
+//
+// The Y is what makes a sinking wreck a wreck. Handing this helper only X and
+// Z left every corpse starting at the coarse floor, so a surface ship's wreck
+// was already resting on the seabed on its first lifecycle visit — settled,
+// never descending — and its horizontal position jumped to the cell centre.
+//
 // fromIsFeature is the dying unit's IsFeature flag; isfeature corpses never
-// descend. Chain depth is already resolved by caller from the Killed-variant
-// low nibble [04 §5.1][06 §12.1] C23, replacing the constant-switch placeholder;
-// this helper just stamps the resolved def. Returns the corpse instance or nil.
-func (s *Service) PlaceCorpse(x, z numeric.Fixed, def *content.FeatureDef, fromIsFeature bool) *Instance {
+// descend. Chain depth is already resolved by the caller from the Killed-variant
+// low nibble [04 §5.1][06 §12.1] C23; this helper just stamps the resolved def.
+// Returns the corpse instance or nil.
+func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, def *content.FeatureDef, fromIsFeature bool) *Instance {
 	if def == nil || s.Terrain == nil {
 		return nil
 	}
-	inst := s.PlaceAtWorld(x, z, def)
+	cx := int(world.WorldToCell(pos[0]))
+	cz := int(world.WorldToCell(pos[2]))
+	inst := s.stampFeature(cx, cz, def, &pos)
 	if inst == nil {
 		return nil
 	}
@@ -371,9 +396,11 @@ func (s *Service) SetAnimationTicks(fn func(def *content.FeatureDef, selector ui
 
 // transitionFeatureAt is the transition of [05 R-FEAT-01 §5]: what damage
 // death, the reclaim payout, the multiplayer state commands and save reload
-// call. It reports whether it attached an event animation, in which case the
-// caller must NOT replace — the feature phase drives the record to completion
-// and runs the replacement itself [05 R-FEAT-01 §10] pass 3.
+// call. It reports whether the caller must NOT replace: either because it
+// attached an event animation — the feature phase then drives the record to
+// completion and runs the replacement itself [05 R-FEAT-01 §10] pass 3 — or
+// because the cause was dropped outright (step 4's existing record, or step
+// 5's empty arena), which leaves the feature standing.
 //
 // The steps are the section's own, in order:
 //
@@ -431,6 +458,13 @@ func (s *Service) transitionFeatureAt(cx, cz int, def *content.FeatureDef, isRec
 	}
 	if inst.IsBurning || inst.IsAnimating {
 		return true // step 4: dropped, and the caller must not replace either
+	}
+	// Step 5 opens by popping an arena slot, and "empty pool ⇒ return, no
+	// effect — the feature simply stays" [05 R-FEAT-01 §5 step 5]. That is a
+	// DROPPED death or reclaim, not a fall-through to step 3's replacement, so
+	// it reports the same "do not replace" the step-4 drop does.
+	if !arenaOccupies(inst) && s.arenaOccupants() >= FeatureAnimSlots {
+		return true
 	}
 	// Step 5.
 	inst.IsBurning = false
@@ -664,11 +698,22 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 	}
 }
 
-// spawnFeatureAt stamps a feature through the common placement helper with no
-// position/velocity override and neutral side [06 §13.1] [P1-10][P1-15].
+// spawnFeatureAt stamps a feature with NO position override, which is what
+// every source but the corpse creator passes [05 R-FEAT-01 §3 step 4]: the
+// terrain file, the mission file, a successor, the reproduction walk and the
+// reload all hand the stamp a null position and get the footprint centre with
+// the terrain height snapped under it.
 // Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail, successors 0xFFFF [P1-10][P1-15].
 // Malformed/custom: zero/negative footprints are normalized to 1x1, nil canonical keys handled, and unknown successors are sentinel 0xFFFF [P1-I05][02 "Feature record"].
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
+	return s.stampFeature(cx, cz, def, nil)
+}
+
+// stampFeature is the one stamp routine of [05 R-FEAT-01 §3], taking the
+// anchor cell, the definition and an OPTIONAL position triple. A non-nil
+// position is stored on the instance verbatim (step 4); a nil one is the
+// snapped footprint centre. Only the corpse creator supplies one.
+func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]numeric.Fixed) *Instance {
 	if s == nil {
 		return nil
 	}
@@ -695,19 +740,12 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 	if len(s.Terrain.FeatureDefs) >= FeatureCatalogLimit && s.featureIndexForDef(def) == world.PlotFeatureNone {
 		return nil // catalog pool 0x100 silent fail [P1-10][P1-15]
 	}
-	if len(s.instances) >= FeatureAnimSlots {
-		return nil // anim pool 0x800 silent fail [P1-10][P1-15]
-	}
 	w := int(s.Terrain.CellW)
 	h := int(s.Terrain.CellH)
 	if cx < 0 || cx >= w || cz < 0 || cz >= h {
 		return nil
 	}
 	idx := cz*w + cx
-	// Target must be in-bounds and free [06 §13.1]. Caller already checked, but double-check.
-	if !s.Terrain.Plot[idx].IsEmpty() {
-		return nil
-	}
 	featIdx := s.featureIndexForDef(def)
 	if featIdx == world.PlotFeatureNone {
 		// Def not in terrain's FeatureDefs; for tests with synthetic terrain
@@ -739,16 +777,49 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 	if footZ <= 0 {
 		footZ = 1
 	}
-	// Plot grid WH*0xD already allocated. The terrain stamper owns all feature
-	// words and signed fringe deltas; placement retains silent failure when the
-	// validated rectangle cannot be stamped [03 §5.1.2].
-	if err := s.Terrain.StampFeatureRect(int32(cx), int32(cz), featIdx, footX, footZ); err != nil {
+	// Step 3, the dense-pack rule [05 R-FEAT-01 §3][§3-A]. There is no
+	// "already occupied" refusal: the stamp tears down every non-indestructible
+	// feature its footprint covers — anchors and fringe cells alike, a fringe
+	// walking back to its anchor and taking that whole footprint with it — and
+	// only an indestructible definition, a void cell or a stale fringe vetoes
+	// it. A veto leaves the cells torn so far torn. The teardown itself lives
+	// in world.StampFeatureRect, which owns the plot words; what this has to do
+	// is reconcile the animation side against it, in the same call, so no
+	// instance outlives the grid entry it describes and the slots the teardown
+	// released are back on the free list before step 4 pops one.
+	//
+	// Refusing a nonempty anchor here instead — which this did — meant a unit
+	// dying over a tree left no wreck and no reclaim value at all, while the
+	// same geometry with the overlap one cell off the anchor replaced the tree
+	// normally.
+	torn := s.coveredAnchors(cx, cz, footX, footZ)
+	stampErr := s.Terrain.StampFeatureRect(int32(cx), int32(cz), featIdx, footX, footZ)
+	tornAway := s.releaseTornInstances(torn)
+	if stampErr != nil {
+		if tornAway {
+			// A partial teardown still changed the static layer even though the
+			// stamp never wrote its own anchor.
+			s.Terrain.BumpStaticObstacleRevision()
+		}
+		return nil
+	}
+	// Step 4's slot pop, and it is deliberately AFTER the teardown: a 3D
+	// feature torn down just above pushed its slot back on the free list, so a
+	// full arena can still admit its replacement. An empty free list returns 0
+	// with the cells left torn [05 R-FEAT-01 §3 step 4], which is what undoing
+	// the footprint write reproduces — retail writes the anchor inside step 4,
+	// after the pop, so a refused stamp never leaves its own ordinal behind.
+	// A sprite definition takes no slot (step 5) and is never refused here.
+	if !isSpriteDef(def) && s.arenaOccupants() >= FeatureAnimSlots {
+		s.clearFootprintNoRevision(cx, cz, def)
+		s.Terrain.BumpStaticObstacleRevision()
 		return nil
 	}
 	placed = true
-	if def.Blocking {
-		s.Terrain.BumpStaticObstacleRevision()
-	} else if matchesPending {
+	// One bump for the whole stamp. `tornAway` joins the two existing arms
+	// because a footprint that replaced a blocking tree with a non-blocking
+	// smudge changed the static layer just as much as a blocking stamp does.
+	if def.Blocking || tornAway || matchesPending {
 		s.Terrain.BumpStaticObstacleRevision()
 	}
 	s.Terrain.Plot[idx].SetFlagByte(0)
@@ -785,11 +856,18 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 		FootprintX: footX,
 		FootprintZ: footZ,
 	}
-	// Initial Y at sampled floor (average of derived pair) [05 "Feature sinking and water interaction"].
-	inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
-	// X/Z world centre of footprint.
-	inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
-	inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+	// Step 4's position: "the supplied triple verbatim, or when null the
+	// footprint centre with the terrain height snapped under it"
+	// [05 R-FEAT-01 §3]. The corpse creator is the only source that supplies
+	// one, and it supplies the dying unit's exact position — including its Y,
+	// which is what a wreck sinks FROM.
+	if pos != nil {
+		inst.X, inst.Y, inst.Z = pos[0], pos[1], pos[2]
+	} else {
+		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
+		inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
+		inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+	}
 	s.setInstance(idx, inst)
 	// Service-owned flags remain separate from the shared feature/delta writer.
 	for dz := 0; dz < int(footZ); dz++ {
@@ -816,6 +894,88 @@ func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance 
 		s.GeothermalSteam(inst.X, inst.Y, inst.Z)
 	}
 	return inst
+}
+
+// coveredAnchors lists, in the stamp's own row-major order, the distinct anchor
+// cells the dense-pack teardown of [05 R-FEAT-01 §3] step 3 will visit for a
+// footprint: every covered cell whose feature word is not empty, with a fringe
+// cell hopped back to its anchor through the two stored signed offset bytes
+// [05 R-FEAT-01 §3-A]. It reads the plot and writes nothing; the teardown is
+// world's.
+//
+// The result is the reconciliation set for the animation side. It is normally
+// empty (a stamp onto clear ground) and never larger than the footprint, so the
+// small linear dedupe below beats a map both in cost and in determinism (I1).
+func (s *Service) coveredAnchors(cx, cz int, footX, footZ int32) []int {
+	if s == nil || s.Terrain == nil {
+		return nil
+	}
+	w := int(s.Terrain.CellW)
+	var anchors []int
+	for dz := int32(0); dz < footZ; dz++ {
+		for dx := int32(0); dx < footX; dx++ {
+			px, pz := cx+int(dx), cz+int(dz)
+			cell := s.Terrain.PlotAt(int32(px), int32(pz))
+			if cell == nil || cell.Feature() == world.PlotFeatureNone {
+				continue
+			}
+			if cell.IsFringe() {
+				px += int(cell.AnchorDXSigned())
+				pz += int(cell.AnchorDZSigned())
+				if s.Terrain.PlotAt(int32(px), int32(pz)) == nil {
+					continue
+				}
+			}
+			anchorIdx := pz*w + px
+			seen := false
+			for _, have := range anchors {
+				if have == anchorIdx {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				anchors = append(anchors, anchorIdx)
+			}
+		}
+	}
+	return anchors
+}
+
+// releaseTornInstances is the animation-side half of the dense-pack teardown.
+// The grid is authoritative for what stands on a cell [05 R-FEAT-01 §3, §5], so
+// an instance whose anchor no longer carries its own definition is the record
+// of a feature the teardown just removed: its slot goes back to the free list
+// [05 R-FEAT-01 §4 step 4] and its Instance goes away, synchronously, before
+// the stamp pops a slot of its own.
+//
+// It reports whether anything was released, which is what tells the caller the
+// static obstacle layer moved. Running it after a VETOED stamp is the point of
+// the "leaving already-torn cells torn" rule: the cells that were torn before
+// the veto stay torn on both sides.
+func (s *Service) releaseTornInstances(anchors []int) bool {
+	if s == nil || len(anchors) == 0 || s.Terrain == nil {
+		return false
+	}
+	w := int(s.Terrain.CellW)
+	released := false
+	for _, idx := range anchors {
+		inst := s.instances[idx]
+		if inst == nil {
+			continue
+		}
+		cell := s.Terrain.PlotAt(int32(idx%w), int32(idx/w))
+		if cell != nil && cell.IsRealFeature() {
+			if def, bound := s.Terrain.FeatureDefAt(cell.Feature()); bound && def != nil {
+				if def == inst.Def || (inst.Def != nil && def.CanonicalKey == inst.Def.CanonicalKey) {
+					continue // still standing: this anchor was not torn down
+				}
+			}
+		}
+		s.deleteInstance(idx)
+		released = true
+	}
+	return released
 }
 
 func (s *Service) featureIndexForDef(def *content.FeatureDef) uint16 {
@@ -878,6 +1038,43 @@ func (s *Service) deleteInstance(idx int) {
 		s.instanceKeysStale = true
 	}
 	delete(s.instances, idx)
+}
+
+// arenaOccupies reports whether an instance holds one of the 2048 live-arena
+// slots of [05 R-FEAT-01 §2]. The discriminator is the definition's flag bit 0
+// — "sprite (filename-based) definition" [05 R-FEAT-01 §15] — exactly as the
+// stamp reads it: bit 0 CLEAR takes a slot at the stamp (§3 step 4), bit 0 SET
+// takes none (§3 step 5) and acquires one only when an event record actually
+// attaches: ignition [§9] or a die/reclaim animation [§5 step 5].
+//
+// So a map's resting trees are free, however many of them there are, and the
+// arena is spent only on wrecks, rocks, vents and burning/dying/reclaiming
+// sprites. This build keeps an Instance for a resting sprite anyway — it is
+// what publication draws from — but that record is not an arena occupant, and
+// billing it against the arena is what used to make a 3,754-tree map refuse
+// every wreck after its 2,048th anchor.
+func arenaOccupies(inst *Instance) bool {
+	if inst == nil || inst.Def == nil {
+		return false
+	}
+	if !isSpriteDef(inst.Def) {
+		return true // flag bit 0 clear: the stamp pops a slot [05 R-FEAT-01 §3 step 4]
+	}
+	return inst.IsBurning || inst.IsAnimating
+}
+
+// arenaOccupants counts the live-arena slots currently held. The walk is over
+// the service's sorted key list, which the tick already builds, so this costs
+// one pass over the instance map and no allocation; the free-list head test it
+// stands in for is a placement-time question, not a per-unit one.
+func (s *Service) arenaOccupants() int {
+	n := 0
+	for _, idx := range s.sortedInstanceKeys() {
+		if arenaOccupies(s.instances[idx]) {
+			n++
+		}
+	}
+	return n
 }
 
 // resetInstances empties the map.
@@ -972,6 +1169,11 @@ func (s *Service) PopulateFromTerrain() int {
 		return 0
 	}
 	n := 0
+	// The arena is charged only by the anchors the stamp allocates a slot for
+	// [05 R-FEAT-01 §3 steps 4-5]; a map's resting sprite anchors are free.
+	// The running count starts from what the service already holds, because
+	// this pass is idempotent and may run again after a load.
+	arena := s.arenaOccupants()
 	for cz := 0; cz < h; cz++ {
 		for cx := 0; cx < w; cx++ {
 			idx := cz*w + cx
@@ -1003,9 +1205,14 @@ func (s *Service) PopulateFromTerrain() int {
 			if footZ <= 0 {
 				footZ = 1
 			}
-			// Respect pool caps silently [P1-10][P1-15]
-			if len(s.instances) >= FeatureAnimSlots {
-				return n
+			// A 3D anchor pops an arena slot; an empty free list means the
+			// stamp produced no live record for it [05 R-FEAT-01 §3 step 4].
+			// The walk CONTINUES rather than stopping: retail's loader stamps
+			// every remaining cell, and the sprite anchors after this one still
+			// need no slot.
+			billed := !isSpriteDef(def)
+			if billed && arena >= FeatureAnimSlots {
+				continue
 			}
 			inst := &Instance{
 				Def:        def,
@@ -1021,6 +1228,9 @@ func (s *Service) PopulateFromTerrain() int {
 			inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
 			s.setInstance(idx, inst)
+			if billed {
+				arena++
+			}
 			// A map-authored vent reaches its instance here rather than through
 			// spawnFeatureAt, because the map loader writes the plot grid
 			// directly and this walk builds the animation side from it. Retail

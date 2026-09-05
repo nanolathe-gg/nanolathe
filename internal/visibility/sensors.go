@@ -164,19 +164,17 @@ func (s *Service) SensorTick(tick uint32, playerCount int, allied func(a, b Play
 	// circle below, only after that test [03 §3.4 "Sensor callback gate
 	// correction"].
 	//
-	// TODO(question): five stock definitions author a sensor distance that
-	// this gate can never admit, because no writer of the activation bit
-	// reaches them — ARMANNI, ARMSS, CORSS, ARMACSUB and CORACSUB author
-	// neither `activatewhenbuilt` nor `onoffable`, and are neither aircraft
-	// nor factories. The remaining channel, the COB ACTIVATION port
-	// ([04 §4.7] port 1, named as a writer by [05 R-PROD-01 §2]), was censused
-	// over all 278 stock scripts by WU-19-158 and does not reach them either:
-	// exactly nine scripts write that port and none is one of the five
-	// [03 §3.4 "Sensor callback gate correction"]. So every named writer is now
-	// eliminated and their authored range is dead data. What stays open is only
-	// whether that is retail's intent. Do not widen this gate to "fix" it:
-	// doing so asserts a writer that does not exist. Decider, now the only one
-	// left: a manual retail observation of a stealth sub's sonar contact.
+	// Five stock definitions author a sensor distance this gate never admits —
+	// ARMANNI (radar 1200), ARMSS and CORSS (sonar 489), ARMACSUB and CORACSUB
+	// (sonar 400 and 500) — and that is retail's behavior, not a gap
+	// [R-VIS-01 §9]: the activation bit has a closed writer census (creation
+	// and completion behind `activatewhenbuilt`, the Activate/Deactivate
+	// handlers behind `onoffable`, the COB ACTIVATION port, the factory pump,
+	// the computer player's metal-maker toggle, the air executors' takeoff
+	// prologue, and the capture, save-load and network copies of an existing
+	// byte), no writer consults cloak, submersion or a sensor field, and radar
+	// and sonar are admitted by ONE read of that bit. Their authored range is
+	// dead data in retail too. Do not widen this gate.
 	for i := range units {
 		e := &units[i]
 		if !e.Alive || e.Owner != s.local || !e.Active {

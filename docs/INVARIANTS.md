@@ -39,6 +39,7 @@ Allowed floating point, exhaustively:
 | Clock budget product `delta × speed + carry` | `float64` product, `float32` carry | `[01 §4.2]` |
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |
 | Area-damage range `sqrt` (radial falloff distance, truncated toward zero to `int32`) | `float64` transient, never stored | `[06 §9.3]` |
+| Area-damage amount product `trunc((double)base × falloff)` — the promoted base damage times the **stored** single-precision falloff, truncated toward zero before attacker veterancy | `float64` transient, never stored; the falloff keeps its `float32` store | `[06 §9.2]` |
 | Flight brake integration temporaries (`hypot`, `h`, `b`, ratio) | `float64`, narrowed at the named fixed-point stores | `[04 §10.1]` |
 | Flight command producer's goal distance `hypot` and the shared air `bearing` `atan2` with its `65536/2π` scale | `float64` transient, narrowed at the `__ftol` truncation and the `uint16` angle store | `[04 R-AIR-01 §1]` |
 | AirStrike release lead `sqrt((2·cruisealt)/gravity) · 30 · speedInteger` | `float64` transient, narrowed by truncation toward zero to the marker's integer radius | `[04 R-AIR-01 §8]` |

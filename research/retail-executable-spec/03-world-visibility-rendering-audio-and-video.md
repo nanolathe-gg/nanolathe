@@ -4004,6 +4004,78 @@ distinct sensor state: there is no "radar-only contact" or "jammed contact"
 presentation state, and the seen/sonar/jammed bits are not consulted by the
 caption at all. Doc 07 owns the caption's placement.
 
+#### R-VIS-01 §9 — the five dead sensor definitions are retail's: the activation bit's complete writer census (2026-09-04)
+
+Status: **Established** (direct static read of the sensor phase's gate; a
+whole-image census of every store to the unit's first state byte, direct and
+through the shared edge setter; an asset census of the five definitions).
+
+**The question.** `ARMANNI` (`radardistance` 1200), `ARMSS` and `CORSS`
+(`sonardistance` 489) and `ARMACSUB` and `CORACSUB` (`sonardistance` 400 and
+500) author a sensor range but no traced writer of the activation bit reaches
+them, so under §3.4's "Sensor callback gate correction" they never emit. The
+"Missing and unknown" bullet left open only whether a writer had been missed,
+or whether sonar was gated on a different bit than radar. Both are closed.
+
+**One bit, one read, for radar and sonar alike.** Pass 2 of `[R-VIS-01 §4]`
+admits a unit with one compound test — alive, not death-latched, **activation
+bit set**, and `radardistance` or `sonardistance` nonzero — and the jam pass
+reads the same bit through the same byte. There is no sonar-specific
+activation state; a submerged, cloaked or stealthy unit is not exempted from
+the test and the cloak/hidden bit is not consulted by it.
+
+**The complete writer set of the activation bit.** The bit is bit 0 of the
+unit's first state byte. Three routines store that byte directly: the unit
+constructor (zero), the save-game unit reader (the saved byte, `0xB2` of the
+184-byte record, `[08 R-SAVE-02 §6]`), and the shared **edge setter** — the
+mask-and-set/clear service whose rising edge runs `Activate` and whose
+falling edge runs `Deactivate` (`[04 R-SPEC-01 §12]`). Every caller of the
+edge setter whose mask includes bit 0, exhaustively:
+
+1. **Creation with the already-built argument** and **build completion**,
+   both behind the definition's `activatewhenbuilt` (`[04 R-SPEC-01 §12]`).
+2. The **`Activate` / `Deactivate` order handlers**, both behind
+   `onoffable` (`[04 R-SPEC-01 §11]`, `[05 R-PROD-01 §2]`).
+3. The **COB `ACTIVATION` port** (port 1 of `[04 §4.7]`), written only by a
+   unit's own script.
+4. The **factory production pump** (`BuildingBuild` phase 0): a
+   building-class unit is set active while its queue count is positive and
+   cleared when it is empty (`[05 "Factory production lifecycle"]`).
+5. The **computer player's metal-maker toggle**: for units whose definition's
+   makes-metal byte is nonzero only, cleared when the owner's energy stock is
+   at or below twice its storage-derived threshold, otherwise set with a
+   four-in-five chance per visit (`[08 R-AI-01 §16]` owns the planner).
+6. The **mover-mode setter** — mode 2 (airborne) sets, mode 1 (landed)
+   clears (`[04 R-AIR-01 §1]`) — and the **air order executors** of the
+   third static descriptor array (`VTOL_*` and `Air*`, `[04 §3.1]`), whose
+   shared prologue sets the bit unconditionally and then takes off when the
+   mover is landed; `VTOL_Landing` clears it on touchdown.
+7. Three **copies of an existing byte**: the capture/ownership transfer
+   (the new record receives the old record's byte, set bits then clear
+   bits), the save-game reader's state-byte apply, and the network
+   unit-state event that the edge setter itself emits to remote peers.
+
+No writer reads the cloak bit, the submerged state, a sonar or radar field,
+or a weapon state. Every other caller of the edge setter carries a mask
+without bit 0 (cloak, building, the two interface bits).
+
+**Applied to the five.** Each authors neither `activatewhenbuilt` nor
+`onoffable`, has no build list (so never receives `BuildingBuild`), authors
+`makesmetal 0`, is not `canfly` (so never runs an air executor or the
+mover-mode setter's airborne arm), and its script writes no port 1
+(`[R-VIS-01 §4]`'s census of all 278 stock scripts, WU-19-158). Writer 7
+only propagates a byte another writer produced. So for their entire life the
+bit holds the constructor's zero, the sensor gate rejects them every tick,
+and their authored range is dead data **in retail**. This is the behavior
+Nanolathe reproduces; widening the gate for them would assert a writer that
+does not exist. **Established.**
+
+**What this corrects.** The "Missing and unknown" bullet below recorded the
+same conclusion as *Supported inference* with a manual observation as the
+only remaining decider. The observation is no longer needed: the writer set
+is closed by census, and the sonar-versus-radar alternative is excluded by
+the gate's single read. The bullet is struck.
+
 ### Closed — the LOS table accessors are one-based: the raster reads table `g − 1` [R-COMP-02 §1] (2026-08-29)
 
 Status: **Established** (instruction-level read of the six table accessors,
@@ -9745,46 +9817,16 @@ by the sharper question it turned into.
   (two-human-ally skirmish probe in which only one ally has radar coverage of
   a third player's unit). Until it lands, the bounded behavior — no allied
   sensor sharing on any channel — is what Nanolathe implements.
-- Whether the five stock definitions that author a sensor distance but that no
-  traced edge can ever activate are meant to emit at all. `ARMANNI`
-  (`radardistance` 1200), `ARMSS` and `CORSS` (`sonardistance` 489), and
-  `ARMACSUB` and `CORACSUB` (`sonardistance` 400 and 500) author neither
-  `activatewhenbuilt` nor `onoffable`, are not aircraft and are not factories,
-  so not one of the traced writers of the activation bit reaches them:
-  pre-built creation and build completion, the Activate/Deactivate handlers,
-  the factory production pump, and the aircraft mover-mode setter.
-  **The one channel that list omitted is now censused too (2026-09-04,
-  WU-19-158).** `[05 R-PROD-01 §2]` and `[04 §4.7]` both name a further writer
-  this bullet did not: the COB `ACTIVATION` port (port 1), which a unit's own
-  script can write. A census of all 278 stock `.cob` files in the reference
-  install — scanning for the compiled `set` shape of `[fmt cob]`, a
-  push-constant `1` followed by a value push and the set-unit-value opcode —
-  finds exactly **nine** scripts writing that port: `armarad`, `armason`,
-  `armmmkr`, `armsolar`, `armtarg`, `cordoom`, `cormmkr`, `corsolar`,
-  `cortarg`. None of the five is among them; `ARMACSUB` and `CORACSUB` write
-  only port 5 (in build stance) and `ARMANNI`, `ARMSS` and `CORSS` write no
-  engine port at all. So the script channel is eliminated as well, and the
-  static arm of the decider below is spent. Under
-  §3.4's emitter gate — "active" is the instance activation bit — their
-  authored range is therefore dead data. **Supported inference** that they
-  never emit; **Unknown** whether that is retail's intent. The reading is
-  self-consistent rather than obviously wrong, which is why it must not be
-  "fixed" on sight: doc 05's `[R-PROD-01 §2]` says a definition omitting both
-  keys "never activates and never runs any generator", and the emitter gate
-  and the economy branch gate read the same engine-state byte through one edge
-  machine, so restoring emission means asserting a further writer nobody has
-  found. It stays open because "retail's Annihilator offers no radar and
-  retail's stealth subs no sonar" is an inference from that shared bit, not an
-  observation · §3.4 `[R-VIS-01 §4]` pass 2 and the "Sensor callback gate
-  correction" above · decider, and now the **only** one left: a manual retail
-  observation — park a stealth sub within `sonardistance` of an enemy unit that
-  no other sensor and no line of sight covers, and watch for the contact. The
-  alternative arm this bullet used to offer, "failing that, a static trace for
-  a further writer of the activation bit", is spent: every named writer,
-  script channel included, has now been checked. Definition counts are
-  checked against the reference install — 278 definitions, 52 authoring a
-  sensor distance, 37 of them `activatewhenbuilt` [I14]. Marked
-  `TODO(question)`.
+- ~~Whether the five stock definitions that author a sensor distance but that
+  no traced edge can ever activate are meant to emit at all (`ARMANNI`,
+  `ARMSS`, `CORSS`, `ARMACSUB`, `CORACSUB`)~~ — **closed 2026-09-04
+  (RWU-19-196)** by `[R-VIS-01 §9]`: the activation bit's writer census is
+  complete (creation/completion, the order handlers, the COB port, the factory
+  pump, the computer player's maker toggle, the air executors and mover-mode
+  setter, and three byte copies), none reaches the five, and the sensor gate
+  admits radar and sonar through one read of that bit. They never emit in
+  retail; Established, no observation required. The `TODO(question)` in
+  `internal/visibility/sensors.go` is retired.
 - What the 450-tick allied radar/sensor share command carries on the receiving
   side; nothing in the recovered visibility or sensor path consumes an
   incoming share · doc 05 "Sensor sharing", doc 08 · static trace of the

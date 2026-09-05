@@ -1978,6 +1978,14 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			isOffMap = true
 			return
 		}
+		// Step 2 [06 §8.1]: the cached average floor height, written on every
+		// in-map tick before the unit-slot tests and after the in-map test —
+		// an off-map record retires above without sampling a cell
+		// [R-DMG-01 §14]. Unsigned division of the cell's two height bytes; no
+		// later test in this ladder reads it, the draw pass does [03 §5.4].
+		if cell := terrain.PlotAt(cx, cz); cell != nil {
+			p.CachedFloorHeight = int16((uint16(cell.MaxHeight()) + uint16(cell.MinHeight())) / 2)
+		}
 		// Steps 3 and 4 of the ladder run BEFORE feature, terrain and water
 		// [06 §8.1]: the two unit slots of the projectile's own cell, then
 		// "units-only early return", and only then feature resolution. This
@@ -1996,27 +2004,36 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 		// precede those steps; wiring it needs a "kept flying" result the
 		// caller's own terrain fallback also honours, which is a change to
 		// TickProjectiles' contract rather than to this ladder.
-		cache := [2]int32{p.CacheCellX, p.CacheCellZ}
-		suppressed := FeatureCacheSuppressed(&cache, int32(cx), int32(cz))
-		p.CacheCellX, p.CacheCellZ = cache[0], cache[1]
-		if suppressed {
-		} else {
-			if featSvc != nil {
-				if inst := featSvc.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
-					top := inst.Y.Add(numeric.Fixed(int64(16) * 65536))
-					if p.Pos.Y.Raw() < top.Raw() {
-						hitFeature = inst
-						return
-					}
+		// Step 6 [06 §8.1]: feature resolution. The cached cell pair is
+		// consulted ONLY once a feature resolves and its height test passes
+		// [R-DMG-01 §13]: a matching pair cancels this feature's impact and
+		// leaves the cache alone, otherwise the pair is overwritten and the
+		// feature is hit. Nothing writes the pair on a featureless cell, so it
+		// survives across ticks — and across record reuse, since no creator
+		// clears it. This build used to compare and overwrite the pair on every
+		// in-map tick before looking for a feature, which made the cache a
+		// one-tick memory instead of retail's last-feature-cell memory.
+		featureContact := func() bool {
+			cache := [2]int32{p.CacheCellX, p.CacheCellZ}
+			suppressed := FeatureCacheSuppressed(&cache, int32(cx), int32(cz))
+			p.CacheCellX, p.CacheCellZ = cache[0], cache[1]
+			return !suppressed
+		}
+		if featSvc != nil {
+			if inst := featSvc.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
+				top := inst.Y.Add(numeric.Fixed(int64(16) * 65536))
+				if p.Pos.Y.Raw() < top.Raw() && featureContact() {
+					hitFeature = inst
+					return
 				}
-			} else if terrain != nil {
-				if featIdx := terrain.Plot[int(cz)*int(terrain.CellW)+int(cx)].Feature(); featIdx < 0xFFFF && featIdx != 0xFFFE {
-					base := terrain.CoarseHeightAt(cx, cz)
-					top := base.Add(numeric.Fixed(int64(16) * 65536))
-					if p.Pos.Y.Raw() < top.Raw() {
-						hitFeature = &features.Instance{CX: int(cx), CZ: int(cz)}
-						return
-					}
+			}
+		} else if terrain != nil {
+			if featIdx := terrain.Plot[int(cz)*int(terrain.CellW)+int(cx)].Feature(); featIdx < 0xFFFF && featIdx != 0xFFFE {
+				base := terrain.CoarseHeightAt(cx, cz)
+				top := base.Add(numeric.Fixed(int64(16) * 65536))
+				if p.Pos.Y.Raw() < top.Raw() && featureContact() {
+					hitFeature = &features.Instance{CX: int(cx), CZ: int(cz)}
+					return
 				}
 			}
 		}
@@ -2220,7 +2237,8 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 
 // ExplodeWeaponAt is the shared authoritative area-damage entry point for
 // projectile splash and death explosions [06 §9.3][06 §12.1] C22–C25.
-// It performs EnumerateArea → DistanceToBox (fixed-point box, Y+16) → Falloff (float32) →
+// It performs EnumerateArea → DistanceToBox (the definition's bounding record
+// translated by the unit position) → Falloff (float32) →
 // SelectBaseDamage → ComputeScaledAmount → ApplyDamage→Destroy exactly as TickProjectiles
 // does, deterministically (pool asc via Iter, I1) and without new float64 sites
 // (I2 allowlist: Falloff float32 only). Collect-then-apply avoids double-processing
@@ -2253,59 +2271,97 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 	// R-FEAT-01 §8], and needs the feature runtime the session installs.
 	featureWalk := !weapon.UnitsOnly && s != nil && s.Features != nil
 	var featDedup FeatureDedup
+	// The twenty-entry unit memory of [06 §9.3] spans the whole sweep, not one
+	// cell: a unit standing on nine cells of the blast rectangle is a candidate
+	// nine times and must be damaged once.
+	var unitDedup UnitDedup
 	EnumerateArea(impact, radius, mapW, mapH, func(cx, cz int32) {
-		for _, u := range w.Iter() { // deterministic pool asc (I1)
-			if u == nil || !u.Alive || u.Dying {
-				continue
-			}
-			// A unit candidate must be nonzero and must NOT be the record's
-			// shooter: the shooter is unconditionally excluded from every
-			// blast, and that exclusion is the whole of retail's self-damage
-			// policy [06 §9.3][06 R-DMG-01 §9]. There is no `noselfdamage` key
-			// and no owner or alliance test here — a shooter's own OTHER units
-			// take full damage, and the shooter itself still takes full damage
-			// from a different record's blast.
-			//
-			// A null shooter matches nobody [06 R-DMG-01 §9], which is what
-			// makes a meteor or a death explosion damage every side alike.
-			//
-			// Before this reader existed the shooter enumerated itself, took
-			// its own splash, and had its last-damage provenance overwritten
-			// with its own owner below — so a commander that died inside its
-			// own blast credited the kill to itself instead of to the player
-			// whose shot actually killed it [06 §12.1].
-			if shooter != 0 && u.Handle == shooter {
-				continue
-			}
-			ucx := world.WorldToCell(u.X)
-			ucz := world.WorldToCell(u.Z)
-			if ucx != cx || ucz != cz {
-				continue
-			}
-			footX := int32(1)
-			footZ := int32(1)
-			if u.Def != nil {
-				if u.Def.FootprintX > 0 {
-					footX = u.Def.FootprintX
+		// "Within each cell the order is unit slot zero, unit slot one, then
+		// the feature/terrain candidate" [06 §9.3]. The two unit slots are the
+		// plot cell's two occupancy words — the ground plane first and the air
+		// plane second [03 §2.2][04 R-COLL-01 §4] — exactly as the projectile
+		// contact ladder reads them [06 R-DMG-01 §7].
+		//
+		// The candidate set is therefore the footprint rectangle the occupancy
+		// stamper wrote, not the units whose CENTRE falls in the cell. Before
+		// this reader the sweep rebuilt the whole live-unit slice per cell and
+		// admitted a unit only when its centre cell matched, so a blast landing
+		// inside a large unit's footprint but outside the rectangle its centre
+		// sits in did nothing at all, and the cell ordering, the ground-before-
+		// air ordering and the bounded deduplication were all unobservable.
+		if cell := terrain.PlotAt(cx, cz); cell != nil {
+			for _, word := range [2]int16{cell.OccupantA(), cell.OccupantB()} {
+				// A unit candidate must be nonzero and must NOT be the record's
+				// shooter: the shooter is unconditionally excluded from every
+				// blast, and that exclusion is the whole of retail's
+				// self-damage policy [06 §9.3][06 R-DMG-01 §9]. There is no
+				// `noselfdamage` key and no owner or alliance test here — a
+				// shooter's own OTHER units take full damage, and the shooter
+				// itself still takes full damage from a different record's
+				// blast.
+				//
+				// A null shooter matches nobody [06 R-DMG-01 §9], which is what
+				// makes a meteor or a death explosion damage every side alike.
+				//
+				// Before this reader existed the shooter enumerated itself,
+				// took its own splash, and had its last-damage provenance
+				// overwritten with its own owner below — so a commander that
+				// died inside its own blast credited the kill to itself instead
+				// of to the player whose shot actually killed it [06 §12.1].
+				if word <= 0 {
+					continue // the free sentinel; slot zero is never an occupant [I5]
 				}
-				if u.Def.FootprintZ > 0 {
-					footZ = u.Def.FootprintZ
+				h := pool.Handle(word)
+				if shooter != 0 && h == shooter {
+					continue
 				}
+				// "Unit deduplication happens BEFORE the radius test, against a
+				// memory of at most 20 unit pointers … a candidate encountered
+				// when the memory is full is still processed but not remembered,
+				// so a later occurrence is processed again. An out-of-radius
+				// first sighting therefore consumes a memory entry" [06 §9.3].
+				if unitDedup.SeenUnit(h) {
+					continue
+				}
+				u := w.Unit(h)
+				if u == nil || !u.Alive || u.Dying {
+					continue // a word naming a freed slot names no candidate
+				}
+				// "lo = unit.pos.axis + definition.boundsMin.axis; hi =
+				// unit.pos.axis + definition.boundsMax.axis" [06 §9.3]: the
+				// box is the definition's whole bounding record translated by
+				// the unit's own position, on all three axes. That record is
+				// footprint-derived in X and Z and the model-top walk in Y over
+				// a minimum Y of zero — the walk is the only bound retail takes
+				// from model geometry [02 R-CAT-01 §7] — and BoundingExtents is
+				// exactly that record.
+				//
+				// The Y bound used to be a flat sixteen world units above the
+				// unit's position, which is no retail quantity at all: a tall
+				// target took nothing from an impact inside its own body, and a
+				// flat one took damage from an impact above it.
+				boundsMin, boundsMax := u.Def.BoundingExtents()
+				min := Vec3{
+					X: u.X.Add(numeric.Fixed(boundsMin[0])),
+					Y: u.Y.Add(numeric.Fixed(boundsMin[1])),
+					Z: u.Z.Add(numeric.Fixed(boundsMin[2])),
+				}
+				max := Vec3{
+					X: u.X.Add(numeric.Fixed(boundsMax[0])),
+					Y: u.Y.Add(numeric.Fixed(boundsMax[1])),
+					Z: u.Z.Add(numeric.Fixed(boundsMax[2])),
+				}
+				uv := UnitForArea{Handle: u.Handle, Pos: Vec3{X: u.X, Y: u.Y, Z: u.Z}, Min: min, Max: max}
+				dist := DistanceToBox(impact, uv) // integer [06 §9.3]
+				if dist >= radius {
+					continue // strict < radius [06 §9.3]
+				}
+				falloff := float32(1)
+				if dist != 0 {
+					falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
+				}
+				victims = append(victims, victim{h: u.Handle, u: u, dist: dist, falloff: falloff})
 			}
-			halfX := numeric.Fixed(int64(footX) * 1048576 / 2)
-			halfZ := numeric.Fixed(int64(footZ) * 1048576 / 2)
-			min := Vec3{X: u.X.Sub(halfX), Y: u.Y, Z: u.Z.Sub(halfZ)}
-			max := Vec3{X: u.X.Add(halfX), Y: u.Y.Add(numeric.Fixed(int64(16) * 65536)), Z: u.Z.Add(halfZ)}
-			uv := UnitForArea{Handle: u.Handle, Pos: Vec3{X: u.X, Y: u.Y, Z: u.Z}, Min: min, Max: max}
-			dist := DistanceToBox(impact, uv) // integer [06 §9.3]
-			if dist >= radius {
-				continue // strict < radius [06 §9.3]
-			}
-			falloff := float32(1)
-			if dist != 0 {
-				falloff = Falloff(float32(dist), float32(radius), float32(weapon.EdgeEffectiveness)) // [06 §9.3] float32
-			}
-			victims = append(victims, victim{h: u.Handle, u: u, dist: dist, falloff: falloff})
 		}
 		// "Within each cell the order is unit slot zero, unit slot one, then
 		// the feature/terrain candidate" [06 §9.3]. The feature therefore joins

@@ -1,4 +1,4 @@
-// Package movement — landing pads and air repair [04 §10.2].
+// Package movement — landing pads [04 §10.2].
 //
 // Landing pads: QueryLandingPad is a synchronous four-output query on the
 // target's script; the four cells are seeded −1, walked 0..3, and the first
@@ -7,8 +7,9 @@
 // [04 §10.2][04 R-AIR-01 §6]. With no free piece the machine loiters about the
 // pad and re-runs the query when it arrives; [04 R-AIR-01 §6]'s phase table
 // gives no separate delayed retry, which supersedes §10.2's "30+rand(15)"
-// prose. The machine itself is execVTOLLanding in airorders.go.
-// Air repair (pad heals) when VTOL on pad.
+// prose. The machine itself is execVTOLLanding in airorders.go, and its phase 6
+// is the only producer of pad repair — it pushes a `SelfRepair` record on the
+// lander it attaches [04 R-AIR-01 §6]. Nothing in this file heals.
 //
 // IsAirBase via definition bit isairbase [02 "Unit record"][04 §10.2].
 package movement
@@ -165,36 +166,16 @@ func (s *System) Land(w *units.World, vtolHandle pool.Handle, pad *units.Unit) b
 	return true
 }
 
-// AirRepair heals VTOL on pad [04 §10.2] VTOL_GetRepaired.
-// Called each tick while VTOL is landed on IsAirBase pad; heals at heal rate.
-// healRate default 5 per tick if Healtime? Use Def.HealTime? But for aircraft, heal maybe fixed.
-// We use maxHealth/100 per tick approach? Simplify: + healAmount per tick capped at MaxHealth.
-func AirRepair(w *units.World, vtolHandle pool.Handle, pad *units.Unit, amount int32) bool {
-	if w == nil || pad == nil {
-		return false
-	}
-	vtol := w.Unit(vtolHandle)
-	if vtol == nil || pad == nil {
-		return false
-	}
-	if !IsLandingPad(pad) {
-		return false
-	}
-	// Check landed proximity
-	dx := int64(vtol.X) - int64(pad.X)
-	dz := int64(vtol.Z) - int64(pad.Z)
-	if dx*dx+dz*dz > int64(32*65536)*int64(32*65536) {
-		return false
-	}
-	if vtol.Health >= vtol.MaxHealth {
-		return false
-	}
-	vtol.Health += amount
-	if vtol.Health > vtol.MaxHealth {
-		vtol.Health = vtol.MaxHealth
-	}
-	return true
-}
+// There is no pad-side healing helper here. The `AirRepair` routine retired at
+// this site (WU-19-206) took an `amount` its caller supplied as a bare 5 with
+// no citation and added it straight to a nearby aircraft's health. Retail has
+// no healing producer of that shape at all: `VTOL_Landing` phase 6 pushes a
+// `SelfRepair` record on the lander it attaches [04 R-AIR-01 §6], and every
+// health point after that comes from the shared repair helper's kind-10 packet,
+// one per admitted work visit, after the pad owner's one-resource energy
+// admission accepts the visit's `buildcostenergy` term [05 R-WORK-01 §3]. The
+// producer lives in execVTOLLanding; the work lives in internal/orders and
+// internal/construction.
 
 // LandingFailedMessage verbatim for no free pad [04 §10.2] distinct from "Landing aborted - all pads are occupied".
 const LandingFailedMessage = "Landing failed"

@@ -540,7 +540,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			// The cached average floor height the ground shadow is anchored
 			// against [06 §8.1][03 §5.4].
-			publishProjectileFloorHeight(&pv, s.World)
+			publishProjectileFloorHeight(&pv, &s.Combat.Records[i])
 			published.Projectiles = append(published.Projectiles, pv)
 		}
 	}
@@ -1222,30 +1222,21 @@ func publishedSeaLevel(ter *world.Terrain) numeric.Fixed {
 	return ter.SeaLevelWorld()
 }
 
-// publishProjectileFloorHeight fills the committed copy of the projectile
-// record's cached average floor height [06 §8.1] step 2: over the plot cell of
-// the record's post-motion point, `(cell.maxHeight + cell.minHeight) / 2` as an
-// unsigned division of two height bytes. The projectile draw pass is its only
-// reader — it anchors the shared ground `shadow` sprite at half this height
-// instead of the projectile's own Y [03 §5.4].
-//
-// TODO(T25): retail's writer is the collision gate, which caches the value on
-// the record on every in-map tick. The record type carries that scratch but
-// nothing in internal/combat writes it yet, and that package is not this unit's
-// to change. The publisher therefore evaluates the gate's own arithmetic at the
-// same post-motion point over the same plot cell, so the two agree for every
-// in-map record; once the gate writes the scratch this should copy it rather
-// than recompute it.
-func publishProjectileFloorHeight(pv *frame.ProjectileView, ter *world.Terrain) {
-	if pv == nil || ter == nil {
+// publishProjectileFloorHeight copies the record's cached average floor height
+// into the committed view. The collision gate writes the scratch on every
+// in-map tick — after the in-map test, before the unit-slot tests — as
+// `(cell.maxHeight + cell.minHeight) / 2` over the plot cell of the post-motion
+// point [06 §8.1] step 2, [R-DMG-01 §14]; an off-map record retires without
+// sampling and is compacted away before publication. The projectile draw pass
+// is its only reader, anchoring the shared ground `shadow` sprite at half this
+// height instead of the projectile's own Y [03 §5.4]. A record the gate has not
+// visited yet — a burst clone appended after the phase captured its count
+// [06 §5.1] — publishes whatever its slot last held, which is what retail's
+// draw pass reads for it too.
+func publishProjectileFloorHeight(pv *frame.ProjectileView, p *combat.Projectile) {
+	if pv == nil || p == nil {
 		return
 	}
-	cell := ter.PlotAt(world.WorldToCell(pv.X), world.WorldToCell(pv.Z))
-	if cell == nil {
-		// Off-map: the gate retires the record without sampling a cell, so no
-		// floor is cached and the draw pass has no shadow anchor.
-		return
-	}
-	pv.FloorHeight = int16((uint16(cell.MaxHeight()) + uint16(cell.MinHeight())) / 2)
+	pv.FloorHeight = p.CachedFloorHeight
 	pv.FloorHeightValid = true
 }

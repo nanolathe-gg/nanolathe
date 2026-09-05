@@ -298,9 +298,15 @@ func decodeUnitSection(sec *formats.Section) UnitPlacement {
 	return u
 }
 
+// startPosPrefix is the eight-character, case-insensitive prefix that makes a
+// special a start position; everything else in a `[specials]` block is dropped
+// by retail and carries no start-position number [08 R-TRIG-01 §9].
+const startPosPrefix = "startpos"
+
 // DecodeSpecials decodes 12-byte special records from the selected schema's
-// [specials] section. Kind 1 is StartPos; ID parsed from numeric suffix.
-// [GAP T14] [02 "Map files"] [fmt ota]
+// [specials] section in authored order. Kind 1 is StartPos; ID is the STORED
+// start-position number, which is one less than the authored label
+// [08 R-TRIG-01 §9] [fmt ota].
 func DecodeSpecials(schema *formats.Section) []Special {
 	if schema == nil {
 		return nil
@@ -310,53 +316,67 @@ func DecodeSpecials(schema *formats.Section) []Special {
 		return nil
 	}
 	var out []Special
+	// The counter runs over the start-position records in file order and is
+	// what a record with no digit after `StartPos` takes instead of a suffix
+	// [08 R-TRIG-01 §9], so it lives here rather than in the per-record decode.
+	counter := int32(0)
 	for _, sec := range specialsSec.Sections() {
-		s := decodeSpecialSection(sec)
+		s := decodeSpecialSection(sec, &counter)
 		out = append(out, s)
 	}
 	return out
 }
 
-func decodeSpecialSection(sec *formats.Section) Special {
+func decodeSpecialSection(sec *formats.Section, counter *int32) Special {
 	var s Special
 	sw, _ := sec.StringValue("specialwhat", "")
 	s.Name = sw
-	lower := strings.ToLower(strings.TrimSpace(sw))
-	if strings.HasPrefix(lower, "startpos") {
-		s.Kind = 1 // 1=StartPos [GAP T14]
-	} else {
-		s.Kind = 0
+	trimmed := strings.TrimSpace(sw)
+	if strings.HasPrefix(strings.ToLower(trimmed), startPosPrefix) {
+		s.Kind = 1 // 1=StartPos [08 R-TRIG-01 §9]
+		*counter++
+		s.ID = startPosStoredNumber(trimmed[len(startPosPrefix):], *counter)
 	}
-	s.ID = parseSpecialID(sw) // [GAP T14] [02 "Map files"]
+	// A record that is not a start position keeps its authored coordinates for
+	// diagnostics but carries no number: retail keeps no such record at all, so
+	// nothing downstream may key on one [08 R-TRIG-01 §9].
 	s.X = int16(sec.IntValue("XPos", 0))
 	s.Z = int16(sec.IntValue("ZPos", 0))
 	return s
 }
 
-func parseSpecialID(specialwhat string) int32 {
-	trimmed := strings.TrimSpace(specialwhat)
-	if trimmed == "" {
-		return 0
+// startPosStoredNumber turns the text after `StartPos` into the number the
+// specials array stores [08 R-TRIG-01 §9]: the suffix is parsed as an integer
+// when its first character is a digit, otherwise the record takes the running
+// counter; the stored number is that value minus one when it is positive, and
+// the value itself otherwise. `StartPos0` and `StartPos1` therefore both name
+// stored position zero, and slot i under identity placement takes
+// `StartPos<i+1>` [08 R-ENTRY-01 §5].
+//
+// Before WU-19-205 this extracted a trailing digit run, gave every alphabetic
+// suffix zero, and kept the authored label rather than the stored number. Both
+// halves were wrong in the same direction: `StartPosA`/`StartPosB` collided on
+// a number no consumer ever asks for, and `StartPos0` was rejected as missing
+// (review finding R10).
+//
+// TODO(question): when a file mixes numeric and non-numeric labels, does the
+// counter advance on every start-position record — so `StartPos5, StartPosA`
+// gives the second record 2 — or only on the records that consume it, giving
+// it 1? [08 R-TRIG-01 §9] and [fmt ota] both say "a running counter starting
+// at 1 in file order" without separating the two, and no stock map authors a
+// non-numeric label, so nothing in the corpus decides it. Implemented as the
+// first reading, which is the one that cannot collide with an authored
+// numeric label. A static trace of the specials reader's counter increment
+// would settle it.
+func startPosStoredNumber(suffix string, counter int32) int32 {
+	value := counter
+	if len(suffix) > 0 && suffix[0] >= '0' && suffix[0] <= '9' {
+		value = formats.ParseTDFInteger(suffix)
 	}
-	// Find trailing numeric suffix. Alphabetic suffixes distinguished from integer ones [02 "Map files"] [GAP T14].
-	// If the trailing run is purely alphabetic, return 0 (distinguished).
-	i := len(trimmed)
-	for i > 0 && trimmed[i-1] >= '0' && trimmed[i-1] <= '9' {
-		i--
+	if value > 0 {
+		return value - 1
 	}
-	if i == len(trimmed) {
-		// No trailing digits -> alphabetic suffix or no id
-		return 0
-	}
-	if i == 0 {
-		// Entire string is digits (unlikely for specialwhat, but handle)
-		val := formats.ParseTDFInteger(trimmed)
-		return val
-	}
-	// There is a digit suffix starting at i; ensure the char before suffix is not a digit? Already.
-	suffix := trimmed[i:]
-	val := formats.ParseTDFInteger(suffix)
-	return val
+	return value
 }
 
 // DecodeFeaturePlacements decodes 136-byte feature records from the selected

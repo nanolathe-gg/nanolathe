@@ -148,9 +148,14 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 //	                  whatever the reused pool slot last held" [06 §6.5].
 //	                  Presentation only [06 §6.1].
 //	MeteorPitch       RETAINED on purpose, same sentence [06 §6.5].
-//	CacheCellX/Z      see the open-question marker at the clear below.
-//	Scratch5E         write-only scratch with no simulation reader [06 §5.1];
-//	                  retention is unobservable.
+//	CacheCellX/Z      RETAINED on purpose [R-DMG-01 §13]: the collision
+//	                  gate's feature step is the pair's only writer, and a
+//	                  reused record keeps its last occupant's pair, so a
+//	                  fresh record's first contact with that same feature
+//	                  cell is suppressed exactly as retail suppresses it.
+//	CachedFloorHeight write-only presentation scratch the gate rewrites on
+//	                  every in-map tick [R-DMG-01 §14]; retention is what
+//	                  the draw pass sees for a not-yet-gated clone.
 //	OldMarker         compaction writes it for every record in the span before
 //	                  any copy and reads it only within that same pass
 //	                  [06 §5.2]; retention is unobservable.
@@ -194,18 +199,9 @@ func InitCommon(p *Projectile, now uint32, muzzle Vec3, aim *Vec3, targetUnit po
 	p.Shooter = shooter // [06 §4.1] the shooter reference, or a null one
 	p.ShooterSide = shooterSide
 	p.MuzzlePiece = muzzlePiece
-	// TODO(question): does retail clear the collision cache's quantized cell
-	// pair at reservation or at common initialization? [06 §4.1] and [06 §5.1]
-	// enumerate neither, yet [06 §5.1] has the pair "read only by the same test
-	// on a later tick to suppress a repeated contact with the same feature
-	// cell" — a read that reaches a fresh record before any write. Retaining it
-	// would let a new projectile skip its first feature contact when the
-	// previous occupant's last selected cell matches. Placeholder: clear it,
-	// the only arm that cannot suppress a contact that retail delivers. Settled
-	// by tracing the reservation's writes, or by a manual retail observation of
-	// two successive shots into the same tree cell.
-	p.CacheCellX = 0
-	p.CacheCellZ = 0
+	// The collision cache's quantized cell pair is NOT cleared: neither the
+	// reservation nor this initializer nor any specialized creator writes it
+	// [06 §4.1], [R-DMG-01 §13]. See the retention table above.
 }
 
 // VelocityFromAngles recomputes velocity components from scalar speed, yaw, pitch

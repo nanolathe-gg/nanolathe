@@ -212,8 +212,9 @@ func NewSyntheticMissionForTest(fs vfs.FSOps, cat *content.Catalog, path string,
 		return nil, err
 	}
 	initCOBForSession(s)
+	// The interpreter owns `i name`; nothing re-reads those verbs afterwards
+	// [04 §3.6] (WU-19-205, review finding R09).
 	mission.RunInitialMissionsWithCatalog(m, s.Units, s.Catalog)
-	wireMissionCargo(s, m)
 	grantResourcesDirect(s, m)
 	if s.World != nil && s.Movement == nil {
 		grid := movement.NewOccupancyGrid()
@@ -242,7 +243,10 @@ func reconstructUnitsFixture(s *Session, m *mission.Mission) error {
 		if owner > 9 {
 			owner = 9
 		}
-		h, err := s.Units.Create(def, owner, numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
+		// The spawner's position fixup, as production runs it: a structure is
+		// snapped and re-seated, a mobile record is untouched [08 R-ENTRY-01 §6].
+		px, py, pz := missionPlacementPosition(s.World, def, up)
+		h, err := s.Units.Create(def, owner, px, py, pz)
 		if err != nil {
 			continue
 		}
@@ -499,7 +503,8 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		return nil, err
 	}
 	initCOBForSession(s)
-	wireMissionCargo(s, m)
+	// A skirmish never reaches the InitialMission interpreter [04 §3.6], so no
+	// attach pass runs here either (WU-19-205, review finding R09).
 	if s.Econ != nil {
 		for p := 0; p < cfg.NumPlayers && p < len(s.Econ.Players); p++ {
 			if s.Econ.Players[p].Exists {

@@ -317,10 +317,19 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 // [06 §9.2] per C20.
 func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32, defenderKills int32, isArmored bool, damageModifier int32, isHealing bool, globalDouble bool, globalHalf bool) uint16 {
 	// Step 1 already applied: baseDamage is selected override or default [06 §9.2] C19.
-	// Step 2: multiply by area falloff, truncate toward zero [01 §8] (I3) [06 §9.2].
-	// Base damage is int32; falloff is single-precision float truncated.
-	// Go's int32(float32) truncates toward zero per [01 §8] I3.
-	amount := int32(float32(baseDamage) * falloff) // truncate toward zero [01 §8] [06 §9.2] step 2
+	// Step 2: `amount = trunc((double)base * falloff)` [06 §9.2]. The base is
+	// promoted to double and multiplied by the STORED single-precision falloff
+	// of [06 §9.3] in double precision; only the conversion back to an integer
+	// narrows, and it truncates toward zero [01 §8] (I3).
+	//
+	// The product used to be formed and stored at single precision, which
+	// rounds where retail does not: a base of 100 against the float32 nearest
+	// 0.7 (about 0.6999999881) rounds up to exactly 70.0f and yields 70, while
+	// the promoted product is about 69.99999881 and truncates to 69. Twenty-odd
+	// stock default-damage and distance combinations differ by one because of
+	// it. The falloff's own single-precision store is untouched: it is the
+	// boundary [06 §9.3] names, and this step reads across it.
+	amount := int32(float64(baseDamage) * float64(falloff)) // [06 §9.2] step 2
 
 	// Step 3: apply attacker veterancy 6% per tier, tier=min(kills/5,5), truncate [06 §9.2] [01 §8].
 	tierA := veteranTier(attackerKills)

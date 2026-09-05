@@ -15,6 +15,9 @@ import (
 func TestDamagePathArmsTheMinimapBlink(t *testing.T) {
 	f := newReactionFixture(t)
 	terrain := &world.Terrain{CellW: 100, CellH: 100, Plot: make([]world.PlotCell, 100*100)}
+	// The sweep's candidates are the plot cells' occupancy words [06 §9.3], and
+	// a combat fixture has no movement system to fill them.
+	stampGroundOccupancy(t, terrain, f.victim)
 	if f.victim.BlinkSuppress != 0 {
 		t.Fatalf("victim spawned with blink byte %d, want 0 [06 R-WPN-04 §2]", f.victim.BlinkSuppress)
 	}

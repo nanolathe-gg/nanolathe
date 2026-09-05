@@ -28,8 +28,8 @@ func TestCampaignCameraJumpsToStartPos1(t *testing.T) {
 	cam := battleStartCameraFixture()
 	sess := campaignSession(
 		mission.Special{Kind: 0, ID: 3, Name: "SomethingElse3", X: 10, Z: 10},
-		mission.Special{Kind: 1, ID: 2, Name: "StartPos2", X: 4000, Z: 4000},
-		mission.Special{Kind: 1, ID: 1, Name: "StartPos1", X: 1229, Z: 2432},
+		mission.Special{Kind: 1, ID: 1, Name: "StartPos2", X: 4000, Z: 4000},
+		mission.Special{Kind: 1, ID: 0, Name: "StartPos1", X: 1229, Z: 2432},
 	)
 	centerBattleStartCamera(sess, cam)
 	// 1229 - 128 - 512/2 = 845 ; 2432 - 32 - 416/2 = 2192.
@@ -47,13 +47,14 @@ func TestCampaignCameraJumpsToStartPos1(t *testing.T) {
 
 // "First" is a scan of the authored records, not a minimum: a later StartPos1
 // never displaces an earlier one, and a non-start-position special with the
-// same stored number is not a candidate [08 "Campaign camera"].
+// same stored number is not a candidate [08 "Campaign camera"]. Special.ID is
+// the STORED number, one less than the authored label [08 R-TRIG-01 §9].
 func TestCampaignCameraTakesTheFirstStartPos1InRecordOrder(t *testing.T) {
 	cam := battleStartCameraFixture()
 	sess := campaignSession(
-		mission.Special{Kind: 0, ID: 1, Name: "NotAStart1", X: 3000, Z: 3000},
-		mission.Special{Kind: 1, ID: 1, Name: "StartPos1", X: 1000, Z: 900},
-		mission.Special{Kind: 1, ID: 1, Name: "StartPos1", X: 2000, Z: 1900},
+		mission.Special{Kind: 0, ID: 0, Name: "NotAStart1", X: 3000, Z: 3000},
+		mission.Special{Kind: 1, ID: 0, Name: "StartPos1", X: 1000, Z: 900},
+		mission.Special{Kind: 1, ID: 0, Name: "StartPos1", X: 2000, Z: 1900},
 	)
 	centerBattleStartCamera(sess, cam)
 	if cam.X != 1000-384 || cam.Z != 900-240 {
@@ -72,11 +73,11 @@ func TestCampaignCameraWithoutStartPos1KeepsTheResetPosition(t *testing.T) {
 	}{
 		{"no specials at all", nil},
 		{"only higher-numbered start positions", []mission.Special{
-			{Kind: 1, ID: 2, Name: "StartPos2", X: 2000, Z: 2000},
-			{Kind: 1, ID: 3, Name: "StartPos3", X: 3000, Z: 3000},
+			{Kind: 1, ID: 1, Name: "StartPos2", X: 2000, Z: 2000},
+			{Kind: 1, ID: 2, Name: "StartPos3", X: 3000, Z: 3000},
 		}},
-		{"a non-start-position special numbered 1", []mission.Special{
-			{Kind: 0, ID: 1, Name: "Whatever1", X: 2000, Z: 2000},
+		{"a non-start-position special with stored number 0", []mission.Special{
+			{Kind: 0, ID: 0, Name: "Whatever1", X: 2000, Z: 2000},
 		}},
 	} {
 		cam := battleStartCameraFixture()
@@ -93,7 +94,7 @@ func TestCampaignCameraWithoutStartPos1KeepsTheResetPosition(t *testing.T) {
 // not even built still lands on StartPos1 [08 "Campaign camera"].
 func TestCampaignCameraDoesNotTouchUnits(t *testing.T) {
 	cam := battleStartCameraFixture()
-	sess := campaignSession(mission.Special{Kind: 1, ID: 1, Name: "StartPos1", X: 1000, Z: 900})
+	sess := campaignSession(mission.Special{Kind: 1, ID: 0, Name: "StartPos1", X: 1000, Z: 900})
 	if sess.Units != nil {
 		t.Fatal("fixture should have no unit world")
 	}

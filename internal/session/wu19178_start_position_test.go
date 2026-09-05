@@ -31,6 +31,8 @@ func wu19178Config() SkirmishConfig {
 }
 
 // wu19178Mission returns a synthetic map carrying the named start positions.
+// Special.ID is the STORED number, one less than the authored label: StartPos1
+// is stored 0 [08 R-TRIG-01 §9].
 func wu19178Mission(specials ...mission.Special) *mission.Mission {
 	m := strictSyntheticMission()
 	m.Specials = specials
@@ -60,8 +62,8 @@ func TestSkirmishPlacementTakesNoSimulationDraw(t *testing.T) {
 
 	s := strictNewSessionWithUnits(t, 0, 7, 11)
 	m := wu19178Mission(
-		mission.Special{Kind: 1, ID: 1, X: 12, Z: 20, Name: "StartPos1"},
-		mission.Special{Kind: 1, ID: 2, X: 24, Z: 28, Name: "StartPos2"},
+		mission.Special{Kind: 1, ID: 0, X: 12, Z: 20, Name: "StartPos1"},
+		mission.Special{Kind: 1, ID: 1, X: 24, Z: 28, Name: "StartPos2"},
 	)
 	beforeSim := s.SimRNG().Draws()
 	beforeCrt := s.CrtRNG().Draws()
@@ -113,7 +115,7 @@ func TestSkirmishPlacementTakesNoSimulationDraw(t *testing.T) {
 // [08 R-ENTRY-01 §5] step 4.
 func TestSkirmishMissingStartPositionIsFatal(t *testing.T) {
 	s := strictNewSessionWithUnits(t, 0, 7, 11)
-	m := wu19178Mission(mission.Special{Kind: 1, ID: 1, X: 12, Z: 20, Name: "StartPos1"})
+	m := wu19178Mission(mission.Special{Kind: 1, ID: 0, X: 12, Z: 20, Name: "StartPos1"})
 	err := skirmishReconstructUnits(s, wu19178Config(), m)
 	if err == nil {
 		t.Fatal("a missing StartPos placed a commander anyway; the kind-2 miss is fatal [08 R-ENTRY-01 §5]")
@@ -125,18 +127,45 @@ func TestSkirmishMissingStartPositionIsFatal(t *testing.T) {
 }
 
 // TestSkirmishFirstStartPosLabelIsSlotZero pins the off-by-one that separates
-// the stored number from the authored label: slot 0 takes StartPos1, and a map
-// whose only record is StartPos0 therefore misses on stored number 0
-// [08 R-ENTRY-01 §5] step 3.
+// the stored number from the authored label, and the alias it creates: slot 0
+// looks for stored number 0, which `StartPos1` and `StartPos0` both carry
+// ("a suffix of 0 stays 0", [08 R-TRIG-01 §9]), while `StartPos2` is stored 1
+// and belongs to slot 1.
+//
+// Until WU-19-205 the decoder kept the authored label and this lookup added one
+// to it, so a map whose first record was `StartPos0` failed with the fatal
+// diagnostic. This test locked that rejection in; it asserts the alias now
+// (review finding R10).
 func TestSkirmishFirstStartPosLabelIsSlotZero(t *testing.T) {
 	s := strictNewSessionWithUnits(t, 0, 7, 11)
-	m := wu19178Mission(mission.Special{Kind: 1, ID: 0, X: 12, Z: 20, Name: "StartPos0"})
-	err := skirmishReconstructUnits(s, wu19178Config(), m)
-	if err == nil {
-		t.Fatal("StartPos0 satisfied slot 0; the label is one greater than the stored number [08 R-ENTRY-01 §5]")
+	m := wu19178Mission(
+		mission.Special{Kind: 1, ID: 0, X: 12, Z: 20, Name: "StartPos0"},
+		mission.Special{Kind: 1, ID: 1, X: 24, Z: 28, Name: "StartPos2"},
+	)
+	if err := skirmishReconstructUnits(s, wu19178Config(), m); err != nil {
+		t.Fatalf("StartPos0 was rejected for slot 0; it stores the same number as StartPos1 [08 R-TRIG-01 §9]: %v", err)
 	}
-	const want = "Error: Could not find start position number 0 on the map!"
-	if err.Error() != want {
-		t.Fatalf("diagnostic %q, want the verbatim %q [08 R-ENTRY-01 §5]", err.Error(), want)
+	created := s.Units.Iter()
+	if len(created) != 2 {
+		t.Fatalf("placed %d commanders, want one per eligible slot", len(created))
+	}
+	for _, want := range []struct {
+		owner uint8
+		x, z  int32
+	}{{0, 12, 20}, {1, 24, 28}} {
+		found := false
+		for _, u := range created {
+			if u == nil || u.Owner != want.owner {
+				continue
+			}
+			found = true
+			wx, wz := numeric.Fixed(want.x*65536), numeric.Fixed(want.z*65536)
+			if u.X != wx || u.Z != wz {
+				t.Fatalf("slot %d commander at (%v, %v), want (%v, %v) [08 R-ENTRY-01 §5]", want.owner, u.X, u.Z, wx, wz)
+			}
+		}
+		if !found {
+			t.Fatalf("slot %d has no commander", want.owner)
+		}
 	}
 }

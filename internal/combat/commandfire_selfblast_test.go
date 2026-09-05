@@ -252,9 +252,13 @@ func TestCommandFireGateRemovesTheScanDraws(t *testing.T) {
 // The blast's shooter exclusion [06 §9.3]
 // ---------------------------------------------------------------------------
 
-// blastFixture places a shooter and a neighbour on the same spot so both are
+// blastFixture places a shooter and a neighbour one cell apart, both well
 // inside a radius the blast certainly covers, and gives each a distinct owner
 // so the provenance stamp is legible.
+//
+// They occupy different cells because the sweep's candidates are the plot
+// cells' occupancy words [06 §9.3][03 §2.2], and one plane of one cell holds
+// one occupant: two ground units never share a cell in the first place.
 func blastFixture(t *testing.T) (*Service, *units.World, *world.Terrain, *units.Unit, *units.Unit) {
 	t.Helper()
 	w := newCombatFixtureWorld(10, nil)
@@ -270,10 +274,11 @@ func blastFixture(t *testing.T) (*Service, *units.World, *world.Terrain, *units.
 		u.Y = numeric.FixedFromInt(10)
 		u.Health = 5000
 		u.MaxHealth = 5000
+		stampGroundOccupancy(t, terrain, u)
 		return u
 	}
 	shooter := at(3, 40)   // owner 3 so the stamp cannot be confused with slot 0
-	neighbour := at(1, 44) // four world units away, well inside the blast
+	neighbour := at(1, 56) // the next cell east, sixteen world units away and well inside the blast
 	svc := &Service{ControlByte: func(uint8) uint8 { return ControlByteHuman }}
 	return svc, w, terrain, shooter, neighbour
 }

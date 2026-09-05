@@ -80,15 +80,24 @@ type Projectile struct {
 	PropellerYaw numeric.Angle // visual propeller orientation [06 §6.1]
 	MeteorPitch  numeric.Angle // meteor visual pitch accumulator, advanced with yaw [06 §6.5]
 
-	// Collision cache [06 §5.1] "collision cache values" — quantized cell pair suppressing repeated feature contact [06 §8.1].
+	// Collision cache [06 §5.1] "collision cache values" — the quantized cell
+	// pair that suppresses a repeated feature contact [06 §8.1]. Its ONLY writer
+	// is the collision gate's feature step; no reservation, creator or common
+	// initializer touches it, the pool is zero-filled once at battle start, and
+	// compaction copies survivors downward, so a reused record carries its last
+	// occupant's pair until this record's first feature contact overwrites it
+	// [R-DMG-01 §13].
 	CacheCellX int32
 	CacheCellZ int32
 
-	// Scratch height cache [P1-08 §2.5]: written at projectile point
-	// collision after linked test as average of two cell height bytes; no reader
-	// found in bounded 1326 TU (NEGATIVE-BOUNDED) — preserve write for parity
-	// but no gameplay effect [P1-08 §2.5].
-	Scratch5E int16 // scratch height cache, write-only [P1-08 §2.5]
+	// CachedFloorHeight is the record's cached average floor height in whole
+	// world units, `(cell.maxHeight + cell.minHeight) / 2` over the plot cell of
+	// the post-motion point, written by the collision gate on every in-map tick
+	// after the in-map test and before the unit-slot tests [06 §8.1] step 2,
+	// [R-DMG-01 §14]. No gameplay test reads it; the projectile draw pass
+	// anchors the ground shadow against half of it [03 §5.4], through the
+	// committed frame's copy.
+	CachedFloorHeight int16
 
 	// State byte [P1-08 §2.8]: bit1 0x02 dead, bit0 0x01 beamLatch,
 	// bits 0x30 (0x10|0x20) two-phase state [P1-08 §2.8] [06 §6.6]. Go bool fields

@@ -2723,39 +2723,28 @@ func (s *System) AirBaseList(allyGroup uint8) []pool.Handle {
 	return s.airBases.List(allyGroup)
 }
 
-// EndTick clears per-tick shared indexing and performs post-sweep work that
-// must happen once after all carriers have moved: cargo slaving and air-pad
-// repair [04 §10.2]. It must be called after the per-unit StepUnit loop.
+// EndTick clears per-tick shared indexing and performs the one piece of
+// post-sweep work that must happen once after all carriers have moved: cargo
+// slaving [04 §10.2]. It must be called after the per-unit StepUnit loop.
+//
+// It does no healing. The lane retired here (WU-19-206) swept every grounded
+// `canfly` unit against every `isairbase` definition within 16 world units and
+// added a flat five health a tick — 150 a simulation second — with no
+// attachment, no order record, no completed or activated repairer, no
+// friendliness test, no worker quantum and no energy admission. No such
+// producer exists. Pad repair has exactly one producer: `VTOL_Landing` phase 6
+// pushes a `SelfRepair` record on the lander it has just attached
+// [04 R-AIR-01 §6], and that record's work visits run the shared repair helper
+// — the pad's `workertime/30` quantum, the pad owner's one-resource energy
+// admission, one health point per admitted visit through a kind-10 packet
+// [05 R-WORK-01 §3]. `VTOL_GetRepaired` is a two-phase wait that never calls
+// the helper [04 R-AIR-01 §6][05 R-WORK-01 §3].
 func (s *System) EndTick(tick uint32) {
 	if s == nil {
 		return
 	}
-	_ = tick
-	w := s.world
-	if w != nil {
+	if w := s.world; w != nil {
 		s.SyncCarriedMotion(w) // [04 §10.2] cargo slaved to carrier, no occupancy stamp
-		// Air repair on pads for landed VTOLs [04 §10.2] VTOL_GetRepaired
-		for _, u := range w.IterSliced() {
-			if u == nil || !u.Alive {
-				continue
-			}
-			if u.Def != nil && u.Def.CanFly && u.Move.Mode == 1 {
-				for _, pad := range w.IterSliced() {
-					if pad == nil || pad == u {
-						continue
-					}
-					if !IsLandingPad(pad) {
-						continue
-					}
-					dx := int64(u.X) - int64(pad.X)
-					dz := int64(u.Z) - int64(pad.Z)
-					if dx*dx+dz*dz <= int64(16*65536)*int64(16*65536) {
-						AirRepair(w, u.Handle, pad, 5)
-						break
-					}
-				}
-			}
-		}
 	}
 	s.recordCollisionHistory(tick)
 	s.tickCarried = nil

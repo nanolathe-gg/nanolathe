@@ -663,3 +663,32 @@ func TestParalyzerHitCreditsTheStunTaskAndTouchesNothingElse(t *testing.T) {
 		t.Fatalf("absent-row pushes = %+v, want none [06 §10]", pushes)
 	}
 }
+
+// TestFalloffProductIsFormedInDoublePrecision locks step 2 of [06 §9.2]:
+// `amount = trunc((double)base * falloff)`. The falloff keeps the
+// single-precision store [06 §9.3] gives it, and the product is formed after
+// promoting both — only the conversion back to an integer narrows.
+//
+// Forming and storing the product at single precision instead rounds where
+// retail truncates, and the rounding is not rare: it moves twenty-odd stock
+// default-damage and distance combinations by one point.
+func TestFalloffProductIsFormedInDoublePrecision(t *testing.T) {
+	// The float32 nearest 0.7 is a shade below it, so the exact product is a
+	// shade below seventy. A single-precision product rounds that back up to
+	// exactly seventy and yields 70.
+	if got := ComputeScaledAmount(100, float32(0.7), 0, 0, false, 65536, false, false, false); got != 69 {
+		t.Fatalf("100 × float32(0.7) = %d, want 69: the product is formed in double and truncated [06 §9.2]", got)
+	}
+	// A Bertha-shaped case: default damage 2000 two world units from the centre
+	// of a radius-forty blast with no edge effectiveness, whose falloff is the
+	// float32 nearest 0.9025. The exact product is a hair under 1805.
+	falloff := Falloff(2, 40, 0)
+	if got := ComputeScaledAmount(2000, falloff, 0, 0, false, 65536, false, false, false); got != 1804 {
+		t.Fatalf("2000 × falloff(d=2, R=40, edge=0) = %d, want 1804 [06 §9.2][06 §9.3]", got)
+	}
+	// A falloff of exactly one is exact at both precisions, so the boundary
+	// above is the arithmetic and not a change of the zero-distance contract.
+	if got := ComputeScaledAmount(100, 1, 0, 0, false, 65536, false, false, false); got != 100 {
+		t.Fatalf("zero-distance damage = %d, want the base 100 [06 §9.3]", got)
+	}
+}

@@ -149,16 +149,18 @@ func TestSpecialRecordIdentity(t *testing.T) {
 	if len(specials) != 3 {
 		t.Fatalf("expected 3 specials, got %d", len(specials))
 	}
-	// First: StartPos1 -> Kind 1, ID 1 [GAP T14]
-	if specials[0].Kind != 1 || specials[0].ID != 1 || specials[0].X != 560 || specials[0].Z != 240 {
+	// The decoded ID is the STORED number, one less than the authored label
+	// [08 R-TRIG-01 §9]: StartPos1 stores 0 and StartPos10 stores 9.
+	if specials[0].Kind != 1 || specials[0].ID != 0 || specials[0].X != 560 || specials[0].Z != 240 {
 		t.Fatalf("special0: %+v", specials[0])
 	}
-	if specials[1].ID != 10 {
-		t.Fatalf("special1 ID: got %d want 10", specials[1].ID)
+	if specials[1].ID != 9 {
+		t.Fatalf("special1 ID: got %d want 9", specials[1].ID)
 	}
-	// Alphabetic suffix distinguished -> ID 0 [02 "Map files"] [GAP T14]
-	if specials[2].ID != 0 {
-		t.Fatalf("alphabetic suffix should give ID 0, got %d", specials[2].ID)
+	// A non-numeric suffix takes the running counter — this is the third
+	// start-position record, so 3, stored as 2 [08 R-TRIG-01 §9].
+	if specials[2].Kind != 1 || specials[2].ID != 2 {
+		t.Fatalf("alphabetic suffix: %+v, want Kind 1 and stored number 2", specials[2])
 	}
 	// 12-byte binary round-trip [C6]
 	rec := MarshalSpecial(specials[0])
@@ -465,5 +467,64 @@ func TestHeadingFromDegreesEquivalenceDomain(t *testing.T) {
 	// An authored 65535 wraps to the same word as -1.
 	if HeadingFromDegrees(65535) != HeadingFromDegrees(-1) {
 		t.Fatal("65535 deg must land on the same heading word as -1 deg")
+	}
+}
+
+// The start-position identity in full [08 R-TRIG-01 §9]: only an eight-character
+// `StartPos` prefix is a start position (case-insensitively); a suffix whose
+// first character is a digit is parsed as an integer, anything else takes the
+// running counter; and the stored number is that value minus one when positive.
+// Both `StartPos0` and `StartPos1` therefore store 0.
+//
+// Before WU-19-205 the decoder took a trailing digit run and gave every
+// non-numeric suffix zero, so `StartPosA` and `StartPosB` collided on a number
+// no consumer asks for and `StartPos0` was indistinguishable from them (review
+// finding R10).
+func TestStartPosStoredNumbers(t *testing.T) {
+	tdf := `
+[GlobalHeader]
+{
+  [Schema 0]
+  {
+    Type=Network 1;
+    [specials]
+    {
+      [special0] { specialwhat=StartPos0; XPos=1; ZPos=1; }
+      [special1] { specialwhat=startpos2; XPos=2; ZPos=2; }
+      [special2] { specialwhat=StartPosA; XPos=3; ZPos=3; }
+      [special3] { specialwhat=StartPosB; XPos=4; ZPos=4; }
+      [special4] { specialwhat=StartPos1; XPos=5; ZPos=5; }
+      [special5] { specialwhat=NotAStartPos7; XPos=6; ZPos=6; }
+      [special6] { specialwhat=StartPos12x; XPos=7; ZPos=7; }
+    }
+  }
+}
+`
+	specials := DecodeSpecials(mustParseTDF(t, tdf).Section("GlobalHeader").Section("Schema 0"))
+	if len(specials) != 7 {
+		t.Fatalf("decoded %d specials, want 7", len(specials))
+	}
+	for i, want := range []struct {
+		kind int32
+		id   int32
+	}{
+		{1, 0},  // StartPos0: a suffix of 0 stays 0
+		{1, 1},  // startpos2: the prefix match is case-insensitive
+		{1, 2},  // StartPosA: third start-position record, counter 3
+		{1, 3},  // StartPosB: fourth, counter 4
+		{1, 0},  // StartPos1: the same stored number as StartPos0
+		{0, 0},  // not a start position at all
+		{1, 11}, // the integer parse stops at the first non-digit
+	} {
+		if specials[i].Kind != want.kind || specials[i].ID != want.id {
+			t.Fatalf("special%d %q decoded Kind %d ID %d, want Kind %d ID %d [08 R-TRIG-01 §9]",
+				i, specials[i].Name, specials[i].Kind, specials[i].ID, want.kind, want.id)
+		}
+	}
+	// Duplicate stored numbers are kept in authored order; the consumer's scan
+	// takes the first, so the decoder must not sort or de-duplicate
+	// [08 R-ENTRY-01 §5] step 3.
+	if specials[0].X != 1 || specials[4].X != 5 {
+		t.Fatalf("the two records storing number 0 were reordered: %+v, %+v", specials[0], specials[4])
 	}
 }

@@ -172,6 +172,13 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 
 	hNbr, _ := s.Units.Create(nbrDef, 1, world.CellToWorld(11), 0, world.CellToWorld(10))
 	uNbr := s.Units.Unit(hNbr)
+	// The spawn step every session path runs after Create [session skirmish
+	// spawn]: it is what stamps the unit's footprint into the plot's occupancy
+	// words, and those words are the blast's candidate set [06 §9.3]
+	// [04 R-COLL-01 §4].
+	if s.Movement != nil {
+		s.Movement.EnsureUnit(uNbr)
+	}
 	uNbr.Health = 100
 	uNbr.MaxHealth = 200
 	uNbr.PriorSample = 0
@@ -196,6 +203,9 @@ func TestDeathExplosionDamagesNeighbor(t *testing.T) {
 	}
 	hNbr2, _ := s.Units.Create(nbrDef, 1, world.CellToWorld(12), 0, world.CellToWorld(10))
 	uNbr2 := s.Units.Unit(hNbr2)
+	if s.Movement != nil {
+		s.Movement.EnsureUnit(uNbr2) // stamp the occupancy words the blast reads [06 §9.3]
+	}
 	uNbr2.Health = 10
 	uNbr2.MaxHealth = 200
 	uNbr2.SetScript(vmNbr)
@@ -284,6 +294,12 @@ func TestDeathExplosionCreditsNoOwner(t *testing.T) {
 
 	hNbr, _ := s.Units.Create(nbrDef, 1, world.CellToWorld(11), 0, world.CellToWorld(10))
 	uNbr := s.Units.Unit(hNbr)
+	// The spawn step every session path runs after Create: it stamps the
+	// footprint into the plot's occupancy words, the blast's candidate set
+	// [06 §9.3][04 R-COLL-01 §4].
+	if s.Movement != nil {
+		s.Movement.EnsureUnit(uNbr)
+	}
 	uNbr.Health = 1
 	uNbr.MaxHealth = 200
 	uNbr.PriorSample = 0

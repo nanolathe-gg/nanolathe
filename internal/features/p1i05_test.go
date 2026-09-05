@@ -91,15 +91,21 @@ func TestAllocationFailurePolicy(t *testing.T) {
 	if inst := svc.spawnFeatureAt(1, 0, fd2); inst != nil {
 		t.Fatalf("anim pool 0x800 exhaustion should silent fail [P1-10][P1-15]")
 	}
-	// WH*0xD grid silent fail: out-of-bounds and occupied
-	// Reset map to empty for grid test
+	// WH*0xD grid silent fail: out-of-bounds only. An occupied cell is NOT a
+	// failure — the dense-pack rule replaces a destructible feature standing
+	// where the new one lands, and "there is no 'already occupied' failure"
+	// other than indestructible, void and stale-fringe [05 R-FEAT-01 §3 step 3].
+	// This assertion used to demand the opposite and was the defect R12 names.
 	svc.instances = make(map[int]*Instance)
 	terrain.Plot[0].SetFeature(0) // occupies 0,0
 	terrain.FeatureDefs = []*content.FeatureDef{defP1("gridTest", 1, 1, "", "")}
 	terrain.FeatureDefs[0].CanonicalKey = content.CanonicalKey("gridTest")
-	if inst := svc.spawnFeatureAt(0, 0, terrain.FeatureDefs[0]); inst != nil {
-		t.Fatalf("occupied cell should silent fail, not overwrite")
+	if inst := svc.spawnFeatureAt(0, 0, terrain.FeatureDefs[0]); inst == nil {
+		t.Fatalf("occupied destructible cell should be replaced, not refused [05 R-FEAT-01 §3 step 3]")
 	}
+	svc.instances = make(map[int]*Instance)
+	terrain.Plot[0].SetFeature(world.PlotFeatureNone)
+	terrain.Plot[0].SetFlagByte(0)
 	if inst := svc.spawnFeatureAt(-1, 0, terrain.FeatureDefs[0]); inst != nil {
 		t.Fatalf("out-of-bounds should silent fail [P1-15] WH*0xD grid")
 	}

@@ -460,8 +460,17 @@ func battleEntryPlacement(s *Session, m *mission.Mission) error {
 	// or resolve it; this is the same concrete context retained by construction
 	// for product queues and queue replacement [04 §3.3][04 §3.5][06 §11.1].
 	s.bindExistingOrderQueues()
-	// Wire cargo/transport from i-verb immediate attach [04 §3.6] P0-04.
-	wireMissionCargo(s, m)
+	// No cargo pass runs here. The `i name` verb is the interpreter's, and the
+	// interpreter applies it: the acting unit boards ITSELF into the named
+	// carrier through the shared cargo representation [04 §3.6]. Battle entry
+	// used to re-read the same verbs afterwards with the roles reversed —
+	// treating the acting unit as the carrier and the named one as its cargo —
+	// which left the interpreter's link in place and added the opposite one, so
+	// a stock `i TRANSPORT5` produced a two-way cycle that broke attachment
+	// movement, unloading and save-load cycle validation (WU-19-205, review
+	// finding R09). There is no separate attachment pass in retail either:
+	// "no delayed queue, cargo loop, or separate attachment pass exists beyond
+	// the immediate attach verb" [08 R-TRIG-01 §9].
 	return nil
 }
 
@@ -537,7 +546,12 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 			ownerIdx = 9
 		}
 		owner := uint8(ownerIdx)
-		h, err := s.Units.Create(def, owner, numeric.Fixed(int64(up.X)), numeric.Fixed(int64(up.Y)), numeric.Fixed(int64(up.Z)))
+		// The position fixup runs between the eligibility check and the
+		// allocator: a non-mobile definition is snapped to the footprint grid
+		// and re-seated on the terrain, a mobile one keeps its authored triple
+		// [08 R-ENTRY-01 §6].
+		x, y, z := missionPlacementPosition(s.World, def, up)
+		h, err := s.Units.Create(def, owner, x, y, z)
 		if err != nil {
 			continue // allocation failure → sparse NULL
 		}
@@ -564,6 +578,78 @@ func reconstructUnits(s *Session, m *mission.Mission) error {
 		}
 	}
 	return nil
+}
+
+// missionPlacementPosition is the spawner's position fixup helper
+// [08 R-ENTRY-01 §6]. A **mobile** definition keeps the authored `x, y, z`
+// triple exactly as the OTA record carried it. A **non-mobile** one — the
+// structure class, which is `BMcode == 0` and nothing else (`CanMove` does not
+// separate the two: stock factories author `CanMove=1`, see SC21) — has its
+// `x` and `z` snapped to the centre of a footprint-aligned 16-unit cell and its
+// `y` replaced by the spawner's terrain probe at that cell.
+//
+// The snap is the same pair of expressions the build-site anchor uses
+// [07 §9], so it is taken from the world package rather than rewritten:
+//
+//	cell  = (coord − footprint·2^19 + 2^19) >> 20   world.PlacementAnchor
+//	coord = (footprint + 2·cell) << 19              world.PlacementCenter
+//
+// Before this helper existed, every campaign definition was allocated at its
+// authored coordinates, so an authored building sat off the occupancy grid and
+// at whatever `YPos` the map wrote (WU-19-205, review finding R08); the stock
+// corpus needs the correction on the great majority of its structure records —
+// `maps/a shortage of water.ota`'s 5×5 ARMMOHO at (5696, 6544) belongs at
+// (5704, 6552).
+func missionPlacementPosition(t *world.Terrain, def *content.UnitDef, up mission.UnitPlacement) (x, y, z numeric.Fixed) {
+	x = numeric.Fixed(int64(up.X))
+	y = numeric.Fixed(int64(up.Y))
+	z = numeric.Fixed(int64(up.Z))
+	if def == nil || def.BMCode {
+		return x, y, z // a mobile definition is untouched [08 R-ENTRY-01 §6]
+	}
+	cellX, cellZ := world.PlacementAnchor(x, z, def.FootprintX, def.FootprintZ)
+	x, z = world.PlacementCenter(cellX, cellZ, def.FootprintX, def.FootprintZ)
+	return x, missionSpawnHeight(t, def, cellX, cellZ), z
+}
+
+// missionSpawnHeight is the spawner's terrain height probe, exactly
+// [08 R-ENTRY-02 §1]. It shares its aggregate walk with the build-placement
+// site height — the minimum low height and maximum high height over the
+// footprint cells whose yard byte carries bit 3, falling back to
+// `SeaLevel − waterline` when no cell carried it — and adds two things that
+// belong to the spawner alone:
+//
+//   - the bounds guard. Outside `cx > 0`, `cz >= 1`, `cx + fw < cellW` and
+//     `cz + fh < cellH` the probe returns 0 and the unit is spawned at y = 0
+//     with no diagnostic. It is not clamped to the edge and it is not an error.
+//   - the fallback's 8-bit subtraction. `SeaLevel − waterline` is formed as a
+//     byte and wraps; `Terrain.SiteHeight` returns the same difference widened,
+//     so the result is narrowed here. A `minLow` result is already a height
+//     byte, so the narrowing is a no-op on that branch.
+//
+// The caller shifts the byte left by 16: the spawned y is the height byte in
+// whole world units. None of the placement validator's gates apply — the
+// spawner never rejects a position for slope, depth or a missing geothermal
+// cell [08 R-ENTRY-02 §1].
+func missionSpawnHeight(t *world.Terrain, def *content.UnitDef, cellX, cellZ int32) numeric.Fixed {
+	if t == nil || def == nil {
+		return 0
+	}
+	footX, footZ := def.FootprintX, def.FootprintZ
+	if cellX <= 0 || cellZ < 1 || cellX+footX >= t.CellW || cellZ+footZ >= t.CellH {
+		return 0 // outside the guard: y = 0, no diagnostic [08 R-ENTRY-02 §1]
+	}
+	if footX <= 0 || footZ <= 0 {
+		// A degenerate footprint walks no cells, so no cell can carry bit 3 and
+		// the probe takes its no-bit-3 result [08 R-ENTRY-02 §1].
+		return numeric.Fixed(int64(uint8(int32(t.SeaLevel)-def.Waterline)) << 16)
+	}
+	yard, err := world.ParseYardMap(def.YardMap, int(footX), int(footZ))
+	if err != nil {
+		return numeric.Fixed(int64(uint8(int32(t.SeaLevel)-def.Waterline)) << 16)
+	}
+	height := t.SiteHeight(cellX, cellZ, yard, int(footX), int(footZ), def.Waterline)
+	return numeric.Fixed(int64(uint8(height)) << 16)
 }
 
 func grantResourcesStrict(s *Session, m *mission.Mission) error {
@@ -627,117 +713,6 @@ func requireCOBForSession(s *Session) error {
 		return fmt.Errorf("session: unit %d has no COB binding before InitialMission [04 §4.1]", u.Handle)
 	}
 	return nil
-}
-
-// wireMissionCargo wires immediate attach i-verb cargo from InitialMission [04 §3.6] P0-04.
-// It scans placements for i tokens and attaches the named target unit as cargo on the carrier.
-// The sparse created[] array is reconstructed via PlacementIdx to match retail's first-occurrence scan [P0-04][P0-06].
-func wireMissionCargo(s *Session, m *mission.Mission) {
-	if s == nil || s.Units == nil || m == nil || len(m.Units) == 0 {
-		return
-	}
-	// Reconstruct sparse created[placementIdx] -> *units.Unit
-	createdSparse := make([]*units.Unit, len(m.Units))
-	for _, u := range s.Units.IterSliced() {
-		if u == nil {
-			continue
-		}
-		if u.PlacementIdx >= 0 && u.PlacementIdx < len(createdSparse) {
-			createdSparse[u.PlacementIdx] = u
-		}
-	}
-	// Build ident/unitname maps for first-occurrence scan skipping NULL gaps [P0-06].
-	identMap := make(map[string]int)
-	unitNameMap := make(map[string]int)
-	for i, pl := range m.Units {
-		if createdSparse[i] == nil {
-			continue
-		}
-		if pl.Ident != "" {
-			lower := strings.ToLower(pl.Ident)
-			if _, ok := identMap[lower]; !ok {
-				identMap[lower] = i
-			}
-		}
-		if pl.UnitName != "" {
-			lower := strings.ToLower(pl.UnitName)
-			if _, ok := unitNameMap[lower]; !ok {
-				unitNameMap[lower] = i
-			}
-		}
-	}
-	lookup := func(name string) int {
-		lower := strings.ToLower(strings.TrimSpace(name))
-		if idx, ok := identMap[lower]; ok {
-			return idx
-		}
-		if idx, ok := unitNameMap[lower]; ok {
-			return idx
-		}
-		return -1
-	}
-	for idx, pl := range m.Units {
-		carrier := createdSparse[idx]
-		if carrier == nil {
-			continue
-		}
-		script := strings.TrimSpace(pl.InitialMission)
-		if script == "" {
-			continue
-		}
-		// Tokenize on commas as retail does (_strcspn ","), then dispatch [04 §3.6].
-		tokens := strings.Split(script, ",")
-		for _, tok := range tokens {
-			tok = strings.TrimSpace(tok)
-			if tok == "" {
-				continue
-			}
-			if len(tok) > 255 {
-				tok = tok[:255]
-			}
-			first := tok[0]
-			if first >= 'A' && first <= 'Z' {
-				first = first + 'a' - 'A'
-			}
-			if first != 'i' {
-				continue
-			}
-			// Distinguish i vs other? 'i' alone is attach, "i <name>"
-			rest := strings.TrimSpace(tok[1:])
-			if rest == "" {
-				continue
-			}
-			// splitArgs equivalent: replace commas with spaces then fields
-			rest = strings.ReplaceAll(rest, ",", " ")
-			fields := strings.Fields(rest)
-			if len(fields) == 0 {
-				continue
-			}
-			name := fields[0]
-			targetIdx := lookup(name)
-			if targetIdx < 0 || targetIdx >= len(createdSparse) {
-				continue
-			}
-			target := createdSparse[targetIdx]
-			if target == nil || target == carrier {
-				continue
-			}
-			// Wire attachment: target's carrier is carrier, carrier's cargo appends target
-			target.Attachment.Carrier = carrier.Handle
-			target.Attachment.AttachPiece = -1
-			// Avoid duplicate cargo entries
-			found := false
-			for _, h := range carrier.Attachment.Cargo {
-				if h == target.Handle {
-					found = true
-					break
-				}
-			}
-			if !found {
-				carrier.Attachment.Cargo = append(carrier.Attachment.Cargo, target.Handle)
-			}
-		}
-	}
 }
 
 // Ensure imports are used for vet.

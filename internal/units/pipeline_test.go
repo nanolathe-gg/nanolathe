@@ -220,13 +220,12 @@ func (w *World) slotEndDeathHandling(u *Unit, tick uint32) {
 	}
 }
 
-// TestBlinkByteReachesZeroInSixteenVisits locks the direction and the length of
-// the pre-update's step-5 countdown [04 R-MOV-03 §1 step 5][06 R-WPN-04 §2]. The
-// damage dispatcher writes 240; the sweep reads that byte SIGNED as -16 and
-// steps it one toward zero per visit, so the blink lasts exactly sixteen visits.
-// Subtracting one instead would walk away from zero and never end; an unsigned
-// decrement of 240 would blink for eight seconds instead of half of one.
-func TestBlinkByteReachesZeroInSixteenVisits(t *testing.T) {
+// TestBlinkByteDecrementsToZeroIn240Visits locks step 5 of the per-unit visit
+// [06 R-WPN-04 §4]: the damage-flash byte the dispatcher writes as 240 is
+// decremented by one per visit while nonzero — a plain byte decrement — so the
+// blink lasts exactly 240 visits, and zero is a floor, not a wrap. The int8
+// carrier passes through -128 → 127 on the way, which is the byte's own wrap.
+func TestBlinkByteDecrementsToZeroIn240Visits(t *testing.T) {
 	world := newFixtureWorld(2, nil)
 	def := &content.UnitDef{UnitName: "blink-unit", MaxDamage: 100, Limit: -1}
 	h, err := world.Create(def, 0, 0, 0, 0)
@@ -239,19 +238,19 @@ func TestBlinkByteReachesZeroInSixteenVisits(t *testing.T) {
 		t.Fatalf("spawn blink byte = %d, want 0 [06 R-WPN-04 §2]", u.BlinkSuppress)
 	}
 	u.BlinkSuppress = int8(-16) // the byte retail writes as 240
-	for visit := 1; visit <= 16; visit++ {
+	for visit := 1; visit <= 240; visit++ {
 		world.StepPreUpdate(h, uint32(visit))
-		want := int8(-16 + visit) // one step toward zero per visit
+		want := int8(uint8(240 - visit)) // one decrement per visit, byte arithmetic
 		if u.BlinkSuppress != want {
 			t.Fatalf("visit %d: blink byte = %d, want %d", visit, u.BlinkSuppress, want)
 		}
 	}
 	if u.BlinkSuppress != 0 {
-		t.Fatalf("blink byte after sixteen visits = %d, want 0", u.BlinkSuppress)
+		t.Fatalf("blink byte after 240 visits = %d, want 0", u.BlinkSuppress)
 	}
-	// Zero is a floor, not a wrap: a seventeenth visit must not restart the
-	// countdown at -1 (which unsigned would read as another 255-visit blink).
-	world.StepPreUpdate(h, 17)
+	// Zero is a floor, not a wrap: a further visit must not restart the
+	// countdown at 255.
+	world.StepPreUpdate(h, 241)
 	if u.BlinkSuppress != 0 {
 		t.Fatalf("blink byte after the zero floor = %d, want 0", u.BlinkSuppress)
 	}
