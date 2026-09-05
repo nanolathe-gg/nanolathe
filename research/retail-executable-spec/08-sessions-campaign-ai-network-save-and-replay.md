@@ -2001,7 +2001,8 @@ are matched case-insensitively against the feature catalog at placement.
 values beginning with `StartPos` (case-insensitive, eight characters) are
 kept, with `XPos` and `ZPos` as 16-bit values. The suffix after `StartPos`
 is parsed as an integer when its first character is a digit, else it is a
-running counter starting at 1 in file order; the stored index is
+running counter starting at 1 in file order (advanced only by the records
+that take it — sharpened in [R-TRIG-01 §12]); the stored index is
 `value − 1` when `value > 0`, else `value` — so `StartPos0` and `StartPos1`
 both store 0. **Established — a missing start position is fatal.** When
 the commander creator cannot find the assigned `StartPos` it formats
@@ -2074,6 +2075,45 @@ owns the contract.
   `SIDEDATA` commander differs from the `Commander`-flagged unit is
   reachable in stock content is a bounded residual (stock agrees); the
   table is the authority. Decider: asset census over non-stock content.
+
+### Closed — the `StartPos` running counter, exactly [R-TRIG-01 §12] (2026-09-04)
+
+Static trace of the placement builder's `[specials]` loop (RWU-19-219),
+settling the `TODO(question)` left by WU-19-205.
+
+**Established — the counter advances only when it is taken.** The
+placement builder keeps one counter, a local of the builder reset to 0
+every time a schema's objects are read (never a global, never carried
+between schemas or sessions). For each `[specialN]` whose `specialwhat`
+begins with the eight characters `StartPos` (case-insensitive compare of
+exactly eight bytes; the value is read into a 256-byte buffer), the builder
+looks at the **single byte immediately after the prefix**:
+
+- if the C runtime's `isdigit` says it is a decimal digit, the number is
+  the C runtime's `atoi` of the text from that byte onward (a decimal digit
+  run, stopping at the first non-digit — `StartPos12x` is 12), and **the
+  counter is not touched**;
+- otherwise (letter, space, punctuation, or the end of the value) the
+  counter is incremented first and the number is the incremented value —
+  the first such record sees 1, the second 2, regardless of how many
+  numeric labels sit between or around them.
+
+The stored number is then `value − 1` when `value > 0`, else `value`,
+exactly as §9 says. So `StartPos5, StartPosA, StartPos0, StartPosB` store
+4, 0, 0, 1: the two lettered labels take stored numbers 0 and 1 and
+collide with `StartPos0`/`StartPos1`/`StartPos2` if those are also
+authored. The digit test is `isdigit` on that one byte, **not** an
+integer parse whose zero result falls back to the counter — `StartPos0`
+goes down the numeric path, stores 0, and leaves the counter alone.
+
+**What the earlier text said.** §9 and [fmt ota] said "a running counter
+starting at 1 in file order" without stating which records advance it;
+WU-19-205 implemented the reading in which every start-position record
+advances it (so `StartPos5, StartPosA` would store 4, 1). That reading is
+retracted: only the records with a non-digit first suffix byte advance
+the counter. No stock map authors a non-numeric label, so no shipped
+content distinguishes the two; the rule matters only for authored
+content.
 
 ## Skirmish configuration
 
@@ -7561,7 +7601,15 @@ for "`bmcode == 1`"; the validator sends `bmcode == 0` to the yard-map
 blocker; and the strategic state's initialization vector adds its 40 for
 `bmcode == 0` ([R-P0-05 §9]). Stock content authors `bmcode=0` on buildings
 and `bmcode=1` on mobile units.
-### R-AI-01 §19 — The `weight` factor is read by the C runtime's `atof`; the tokenizer and its comment rule — Established [R-AI-01]
+
+### R-AI-01 §20 — The `weight` factor is read by the C runtime's `atof`; the tokenizer and its comment rule — Established [R-AI-01]
+
+**Renumbering (2026-09-04, WU-19-216).** RWU-19-198 first published this
+section as "R-AI-01 §19", which collided with the older rally-admission
+[R-AI-01 §19] above; two headings carried the same anchor, so a citation of
+either was ambiguous. The rally section keeps §19 and none of its citations
+change; this section is §20, and the citations that pointed here — all of
+them in `internal/content` — moved with it.
 
 [§12] gave the `weight` directive's second argument as "a float, defaulting
 to `0.0`" without naming the conversion, which left `0.5`, `.5`, `1e0`,

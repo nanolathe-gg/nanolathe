@@ -197,10 +197,12 @@ parsed but has no reader, so it does not protect the unit).
 Ten start positions exist, `StartPos1` … `StartPos10`, placed in the
 multiplayer schema. The engine keeps only `specialwhat` values whose first
 eight characters are `StartPos` (case-insensitive); the suffix is parsed as
-an integer when it starts with a digit, otherwise it is a running counter
-(1, 2, … in file order), and the stored index is the value minus one when
-positive — so `StartPos0` and `StartPos1` collide on index 0
-[08 R-TRIG-01 §9]:
+an integer (a decimal digit run) when its first character is a digit,
+otherwise it takes a running counter that starts at 1 and advances only on
+the non-numeric labels, in file order (`StartPos5, StartPosA, StartPosB`
+gives the lettered labels 1 and 2). The stored index is the value minus one
+when positive — so `StartPos0` and `StartPos1` collide on index 0, and
+`StartPosA` collides with both [08 R-TRIG-01 §9] [08 R-TRIG-01 §12]:
 
 ```c
 [special0]

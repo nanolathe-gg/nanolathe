@@ -316,9 +316,10 @@ func DecodeSpecials(schema *formats.Section) []Special {
 		return nil
 	}
 	var out []Special
-	// The counter runs over the start-position records in file order and is
-	// what a record with no digit after `StartPos` takes instead of a suffix
-	// [08 R-TRIG-01 §9], so it lives here rather than in the per-record decode.
+	// The counter is what a start-position record with no digit after
+	// `StartPos` takes instead of a suffix; it starts at 0 per schema and is
+	// advanced only by the records that take it [08 R-TRIG-01 §12], so it lives
+	// here rather than in the per-record decode.
 	counter := int32(0)
 	for _, sec := range specialsSec.Sections() {
 		s := decodeSpecialSection(sec, &counter)
@@ -334,8 +335,7 @@ func decodeSpecialSection(sec *formats.Section, counter *int32) Special {
 	trimmed := strings.TrimSpace(sw)
 	if strings.HasPrefix(strings.ToLower(trimmed), startPosPrefix) {
 		s.Kind = 1 // 1=StartPos [08 R-TRIG-01 §9]
-		*counter++
-		s.ID = startPosStoredNumber(trimmed[len(startPosPrefix):], *counter)
+		s.ID = startPosStoredNumber(trimmed[len(startPosPrefix):], counter)
 	}
 	// A record that is not a start position keeps its authored coordinates for
 	// diagnostics but carries no number: retail keeps no such record at all, so
@@ -346,32 +346,31 @@ func decodeSpecialSection(sec *formats.Section, counter *int32) Special {
 }
 
 // startPosStoredNumber turns the text after `StartPos` into the number the
-// specials array stores [08 R-TRIG-01 §9]: the suffix is parsed as an integer
-// when its first character is a digit, otherwise the record takes the running
-// counter; the stored number is that value minus one when it is positive, and
-// the value itself otherwise. `StartPos0` and `StartPos1` therefore both name
-// stored position zero, and slot i under identity placement takes
-// `StartPos<i+1>` [08 R-ENTRY-01 §5].
+// specials array stores [08 R-TRIG-01 §9] [08 R-TRIG-01 §12]: when the first
+// character of the suffix is a decimal digit the suffix is parsed as an
+// integer (a digit run, stopping at the first non-digit) and the counter is
+// left alone; otherwise the counter is incremented first and the record takes
+// the incremented value. The stored number is that value minus one when it is
+// positive, and the value itself otherwise. `StartPos0` and `StartPos1`
+// therefore both name stored position zero, the first lettered label does
+// too, and slot i under identity placement takes `StartPos<i+1>`
+// [08 R-ENTRY-01 §5].
 //
 // Before WU-19-205 this extracted a trailing digit run, gave every alphabetic
 // suffix zero, and kept the authored label rather than the stored number. Both
 // halves were wrong in the same direction: `StartPosA`/`StartPosB` collided on
 // a number no consumer ever asks for, and `StartPos0` was rejected as missing
-// (review finding R10).
-//
-// TODO(question): when a file mixes numeric and non-numeric labels, does the
-// counter advance on every start-position record — so `StartPos5, StartPosA`
-// gives the second record 2 — or only on the records that consume it, giving
-// it 1? [08 R-TRIG-01 §9] and [fmt ota] both say "a running counter starting
-// at 1 in file order" without separating the two, and no stock map authors a
-// non-numeric label, so nothing in the corpus decides it. Implemented as the
-// first reading, which is the one that cannot collide with an authored
-// numeric label. A static trace of the specials reader's counter increment
-// would settle it.
-func startPosStoredNumber(suffix string, counter int32) int32 {
-	value := counter
+// (review finding R10). WU-19-205 then advanced the counter on every
+// start-position record, numeric or not, so `StartPos5, StartPosA` gave the
+// second record 1; the traced rule (RWU-19-219) advances it only on the
+// records that take it, giving 0 [08 R-TRIG-01 §12].
+func startPosStoredNumber(suffix string, counter *int32) int32 {
+	var value int32
 	if len(suffix) > 0 && suffix[0] >= '0' && suffix[0] <= '9' {
 		value = formats.ParseTDFInteger(suffix)
+	} else {
+		*counter++
+		value = *counter
 	}
 	if value > 0 {
 		return value - 1

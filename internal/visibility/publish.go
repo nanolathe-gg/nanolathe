@@ -225,10 +225,11 @@ func (s *Service) walkTerrainRay(cx, cz int32, heightByte uint8, radius int32, v
 // observer height byte moved by MORE than 5. Sprite-mask mode substitutes a
 // changed quantized-radius byte for the height test.
 //
-// On a refresh the old footprint is removed first (only when current coverage
-// is enabled and the old height byte was nonzero), the new origin is stored,
-// an out-of-bounds new origin stores an empty footprint and returns, and only
-// then does the new raster publish.
+// On a refresh the old footprint is removed first — current coverage must be
+// enabled, and, ray branch only, the old height byte must have been nonzero;
+// the sprite branch carries no such guard [03 R-VIS-01 §2] — the new origin is
+// stored, an out-of-bounds new origin stores an empty footprint and returns,
+// and only then does the new raster publish.
 //
 // Publish and Unpublish remain the unconditional primitives underneath; this is
 // the state machine that decides whether to call them.
@@ -301,9 +302,29 @@ func (s *Service) RetireObserver(id ObserverID) bool {
 	return dirty
 }
 
+// removeFootprint decides the removal by branch, because the stored coverage
+// byte means something different in each [03 R-VIS-01 §2] "The stored coverage
+// byte carries two different quantities":
+//
+//   - ray branch: heightByte is the emitter height byte, and retail guards its
+//     removal call on storedByte != 0 — kept below.
+//   - sprite branch: the "stored coverage byte" retail guards nothing on is
+//     the quantized SHAPE INDEX, which this footprint keeps in `quantized`, not
+//     `heightByte`; index 0 is a legitimate published shape (any sightdistance
+//     below 192 clamps to it), so gating removal on `heightByte == 0` — a field
+//     that is not even the sprite branch's stored byte — leaked coverage for
+//     every such unit that moved. Retail's sprite removal call carries NO
+//     nonzero guard at all [03 R-VIS-01 §2] "Retail edge, stated as a
+//     contract"; `old.live` (already required above) is what bounds retail's
+//     own unbalanced first-refresh decrement — a record that was never
+//     actually published is never removed here, without reproducing that
+//     decrement itself.
 func (s *Service) removeFootprint(old footprint) bool {
-	if s == nil || !old.live || !s.mode.CurrentEnabled() || old.heightByte == 0 {
+	if s == nil || !old.live || !s.mode.CurrentEnabled() {
 		return false
+	}
+	if s.mode&ModeTerrainRay != 0 && old.heightByte == 0 {
+		return false // ray branch's storedByte != 0 guard [03 R-VIS-01 §2]
 	}
 	changed := s.Unpublish(old.owner, old.cx, old.cz, old.heightByte, old.radius)
 	return old.owner == s.local && changed

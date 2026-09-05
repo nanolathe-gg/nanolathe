@@ -275,3 +275,39 @@ func TestKrogothGateRegression(t *testing.T) {
 		t.Fatalf("krogoth ARM easy got %d want 20", got)
 	}
 }
+
+// TestWeightFactorAppliesWhateverTheConversionYields locks the `weight`
+// directive's store in the catalog-aware applier [08 R-AI-01 §12]
+// [08 R-AI-01 §20]. The factor is read by the C runtime's atof and the
+// directive applies with whatever that produced — nothing conditions the write
+// on the token converting — so a token with no digit and an absent argument are
+// both the established default 0.0 and ZERO the weight rather than leaving it
+// alone. A product the runtime's float-to-integer routine cannot represent is
+// its integer-indefinite value, which the clamp stores as 0, not 100.
+//
+// This used to be wrong here: applyWeight took the conversion flag as an
+// admission test and returned when it was false, so `weight ARMFLASH abc` left
+// the weight at 100.
+func TestWeightFactorAppliesWhateverTheConversionYields(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want int32
+	}{
+		{"no digits", "plan any\nweight ARMFLASH abc\n", 0},
+		{"overflowing exponent", "plan any\nweight ARMFLASH 1e10\n", 0},
+		{"plain decimal", "plan any\nweight ARMFLASH 0.5\n", 50},
+		{"absent factor", "plan any\nweight ARMFLASH\n", 0},
+		// The product is formed at the width of the runtime's conversion, not
+		// narrowed to single precision first: 100 x 0.29 is just under 29 and
+		// truncates to 28, where a float32 product would round up to exactly 29
+		// and truncate to 29. This case is the two widths' first disagreement.
+		{"width of the product", "plan any\nweight ARMFLASH 0.29\n", 28},
+	} {
+		profile := grammarProfile(tc.text, DifficultyAny)
+		profile.ApplyUnitDefinitions(grammarCatalog(t, nil))
+		if got := profile.WeightFor("ARMFLASH"); got != tc.want {
+			t.Fatalf("%s: %q gives weight %d, want %d [08 R-AI-01 §20]", tc.name, tc.text, got, tc.want)
+		}
+	}
+}

@@ -209,8 +209,8 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	// dead data in retail too. Do not widen this gate.
 	for i := range units {
 		e := &units[i]
-		if !e.Alive || e.Owner != s.local || !e.Active {
-			continue
+		if !e.Alive || e.Dying || e.Owner != s.local || !e.Active {
+			continue // alive, own, active, and not death-latched [R-VIS-01 §4] pass 2
 		}
 		if e.RadarDistance == 0 && e.SonarDistance == 0 {
 			continue

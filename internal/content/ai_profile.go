@@ -90,7 +90,7 @@ func ParseAIDirectives(data []byte) []AIDirective {
 }
 
 // ParseAIWeightFactor reads a `weight` directive's second argument the way the
-// C runtime's atof does [08 R-AI-01 §19]: the longest decimal prefix converts
+// C runtime's atof does [08 R-AI-01 §20]: the longest decimal prefix converts
 // (`0.5`, `.5`, `1e0`, `1d0`, `2x` → 0.5, 0.5, 1, 1, 2) and a token with no
 // digit — `abc`, `0x10`, or an absent argument — is the established default
 // 0.0 [08 R-AI-01 §12], so the returned value is usable whatever the flag
@@ -99,6 +99,26 @@ func ParseAIDirectives(data []byte) []AIDirective {
 // admission test is diverging from the grammar.
 func ParseAIWeightFactor(value string) (float64, bool) {
 	return parseAIWeightFactor(value)
+}
+
+// ApplyAIWeightFactor applies one `weight` directive's factor token to a
+// running per-type weight and returns the stored result
+// [08 R-AI-01 §12] [08 R-AI-01 §20]: the token is read by the runtime's atof
+// (an absent argument is ""), the product of the running weight and the factor
+// is truncated toward zero by the runtime's float-to-integer routine, and the
+// clamp is "at or below zero becomes zero, at or above 100 becomes 100". A
+// product outside the signed 32-bit range or not a number is that routine's
+// integer-indefinite value, which the clamp stores as 0.
+//
+// This is the whole store — token in, stored weight out — because the profile
+// grammar has two readers, ParseAIProfile here and the catalog-aware applier in
+// internal/ai, and neither may keep its own copy of the conversion, the
+// product's width or the clamp. The directive applies with whatever atof
+// produced; nothing conditions the write on the token converting, so a caller
+// must not gate on ParseAIWeightFactor's flag.
+func ApplyAIWeightFactor(current int32, factorToken string) int32 {
+	factor, _ := parseAIWeightFactor(factorToken)
+	return aiWeightStore(current, factor)
 }
 
 // ParseAILimitValue reads a `limit` directive's second argument through the
@@ -179,13 +199,13 @@ func ParseAIWeight(data []byte) *AIWeightPlan {
 	return plan
 }
 
-// parseAIWeightFactor is the runtime `atof` read of [08 R-AI-01 §19]; the
+// parseAIWeightFactor is the runtime `atof` read of [08 R-AI-01 §20]; the
 // flag reports whether the token contributed at least one digit.
 func parseAIWeightFactor(value string) (float64, bool) {
 	return crtAtof(value)
 }
 
-// crtAtof converts s the way the C runtime's atof does [08 R-AI-01 §19]:
+// crtAtof converts s the way the C runtime's atof does [08 R-AI-01 §20]:
 // leading whitespace is skipped, then the longest prefix of the form
 // `[+-]digits[.digits][(e|E|d|D)[+-]digits]` is converted and everything
 // after it is ignored. A prefix with no digit (including an empty string)
@@ -247,7 +267,7 @@ func crtAtof(s string) (float64, bool) {
 }
 
 // aiWeightStore is the `weight` directive's store [08 R-AI-01 §12]
-// [08 R-AI-01 §19]: the product of the running weight and the factor is
+// [08 R-AI-01 §20]: the product of the running weight and the factor is
 // truncated toward zero by the runtime's float-to-integer routine, and the
 // clamp is "at or below zero becomes zero, at or above 100 becomes 100". That
 // routine returns the integer-indefinite value (-2^31) for a product outside
@@ -270,7 +290,7 @@ func aiWeightStore(cur int32, factor float64) int32 {
 }
 
 // aiLineTokens splits one profile line the way retail's directive tokenizer
-// does [08 R-AI-01 §19]: a `#` ends the line (whether it starts a token or
+// does [08 R-AI-01 §20]: a `#` ends the line (whether it starts a token or
 // sits inside one), tokens are separated by runtime whitespace, and at most
 // twenty tokens are kept. `//` is not a comment introducer.
 func aiLineTokens(line string) []string {
@@ -444,7 +464,7 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 		// tokenizer knows only `#` as a comment introducer; `//` is an
 		// ordinary token, so a line starting with it is an unknown keyword
 		// (ignored whole) and a `//` between a name and its factor IS the
-		// factor [08 R-AI-01 §19]. Stock profiles are indifferent — a trailing
+		// factor [08 R-AI-01 §20]. Stock profiles are indifferent — a trailing
 		// `// note` after the factor is beyond the two read arguments either way.
 		parts := aiLineTokens(line)
 		if len(parts) == 0 {
@@ -475,7 +495,7 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			// through the C runtime's atof — the longest decimal prefix of the
 			// token, junk ignored, no digits → 0.0 — and the directive applies
 			// with whatever that yields; nothing in the grammar conditions the
-			// write on the token converting [08 R-AI-01 §19]. This used to skip
+			// write on the token converting [08 R-AI-01 §20]. This used to skip
 			// the directive when the factor was absent or unconvertible, which
 			// is the one arm research rules out: retail writes
 			// clamp(trunc(current * 0.0)) = 0 rather than leaving the weight
@@ -488,7 +508,6 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 			if !ok {
 				continue
 			}
-			factor, _ := parseAIWeightFactor(factorStr)
 			ck := CanonicalKey(typeName)
 			for _, name := range currentPlans {
 				pl := profile.Plans[name]
@@ -500,7 +519,7 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 				if v, ok := pl.Weights[ck]; ok {
 					cur = v
 				}
-				pl.Weights[ck] = aiWeightStore(cur, factor)
+				pl.Weights[ck] = ApplyAIWeightFactor(cur, factorStr)
 			}
 		case "limit":
 			if len(currentPlans) == 0 {

@@ -53,7 +53,11 @@ func heightByteAt(u *units.Unit, seaLevel uint8) uint8 {
 	}
 	h := raisedHeightWord(u, seaLevel)
 	if u.Def != nil {
-		h += u.Def.ModelTop
+		// The model top reaches the emitter as the LOW BYTE of the definition's
+		// reference-height word: a model whose top exceeds 255 whole world units
+		// wraps here, before the clamp below, rather than saturating
+		// [03 R-VIS-01 §2] "The observer record".
+		h += int32(uint8(u.Def.ModelTop))
 	}
 	if h < 0 {
 		h = 0

@@ -86,6 +86,32 @@ func TestSensorEmissionRequiresTheActivationBit(t *testing.T) {
 	}
 }
 
+// TestSensorEmissionExcludesDeathLatchedEmitters locks the emitter-side gate
+// added by WU-19-215: pass 2 admits an emitter only if it is alive, own,
+// active, AND not death-latched [R-VIS-01 §4] pass 2 ("not death-latched").
+// SensorUnit.Dying already gated pass 4's proximity source; this is the same
+// bit doing the same job for the radar/sonar emitter.
+func TestSensorEmissionExcludesDeathLatchedEmitters(t *testing.T) {
+	s := newTestService(&world.Terrain{CellW: 128, CellH: 128}, ModeHistoryEnabled|ModeCurrentEnabled)
+	s.SetLocal(1)
+	var mine, theirs uint32
+	units := []SensorUnit{
+		{ID: 1, Owner: 1, Status: &mine, Alive: true, Active: true, Dying: true,
+			X: tileWorld(2), Z: tileWorld(2), RadarDistance: 900},
+		{ID: 2, Owner: 0, Status: &theirs, Alive: true, Hidden: true,
+			X: tileWorld(6), Z: tileWorld(6)},
+	}
+	s.SensorTick(4, 2, units)
+	if theirs&SeenBit != 0 {
+		t.Fatalf("a DEATH-LATCHED emitter detected an enemy: status %#x [R-VIS-01 §4] pass 2", theirs)
+	}
+	units[0].Dying = false
+	s.SensorTick(5, 2, units)
+	if theirs&SeenBit == 0 {
+		t.Fatalf("a LIVE emitter missed an enemy inside its authored range: status %#x", theirs)
+	}
+}
+
 func TestSensorSeenBitClearsAtFrameStart(t *testing.T) {
 	s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
 	var status uint32 = SeenBit

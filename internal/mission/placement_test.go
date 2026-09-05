@@ -157,10 +157,11 @@ func TestSpecialRecordIdentity(t *testing.T) {
 	if specials[1].ID != 9 {
 		t.Fatalf("special1 ID: got %d want 9", specials[1].ID)
 	}
-	// A non-numeric suffix takes the running counter — this is the third
-	// start-position record, so 3, stored as 2 [08 R-TRIG-01 §9].
-	if specials[2].Kind != 1 || specials[2].ID != 2 {
-		t.Fatalf("alphabetic suffix: %+v, want Kind 1 and stored number 2", specials[2])
+	// A non-numeric suffix takes the running counter, which the numeric
+	// records before it did not advance — this is the first record to take
+	// it, so 1, stored as 0 [08 R-TRIG-01 §12].
+	if specials[2].Kind != 1 || specials[2].ID != 0 {
+		t.Fatalf("alphabetic suffix: %+v, want Kind 1 and stored number 0", specials[2])
 	}
 	// 12-byte binary round-trip [C6]
 	rec := MarshalSpecial(specials[0])
@@ -470,11 +471,13 @@ func TestHeadingFromDegreesEquivalenceDomain(t *testing.T) {
 	}
 }
 
-// The start-position identity in full [08 R-TRIG-01 §9]: only an eight-character
-// `StartPos` prefix is a start position (case-insensitively); a suffix whose
-// first character is a digit is parsed as an integer, anything else takes the
-// running counter; and the stored number is that value minus one when positive.
-// Both `StartPos0` and `StartPos1` therefore store 0.
+// The start-position identity in full [08 R-TRIG-01 §9] [08 R-TRIG-01 §12]:
+// only an eight-character `StartPos` prefix is a start position
+// (case-insensitively); a suffix whose first character is a digit is parsed
+// as an integer, anything else takes the running counter, which only those
+// records advance; and the stored number is that value minus one when
+// positive. Both `StartPos0` and `StartPos1` therefore store 0, and so does
+// the first lettered label.
 //
 // Before WU-19-205 the decoder took a trailing digit run and gave every
 // non-numeric suffix zero, so `StartPosA` and `StartPosB` collided on a number
@@ -510,8 +513,8 @@ func TestStartPosStoredNumbers(t *testing.T) {
 	}{
 		{1, 0},  // StartPos0: a suffix of 0 stays 0
 		{1, 1},  // startpos2: the prefix match is case-insensitive
-		{1, 2},  // StartPosA: third start-position record, counter 3
-		{1, 3},  // StartPosB: fourth, counter 4
+		{1, 0},  // StartPosA: first record to take the counter, 1, stored 0
+		{1, 1},  // StartPosB: second, 2, stored 1
 		{1, 0},  // StartPos1: the same stored number as StartPos0
 		{0, 0},  // not a start position at all
 		{1, 11}, // the integer parse stops at the first non-digit
@@ -526,5 +529,39 @@ func TestStartPosStoredNumbers(t *testing.T) {
 	// [08 R-ENTRY-01 §5] step 3.
 	if specials[0].X != 1 || specials[4].X != 5 {
 		t.Fatalf("the two records storing number 0 were reordered: %+v, %+v", specials[0], specials[4])
+	}
+}
+
+// The counter that a non-numeric `StartPos` label takes advances only on the
+// records that take it; numeric labels between them do not move it, and a
+// numeric label never falls back to it (`StartPos0` stores 0 through the
+// integer path) [08 R-TRIG-01 §12]. Before RWU-19-219 the decoder advanced
+// it on every start-position record, which would give 4, 1, 0, 3 here.
+func TestStartPosCounterAdvancesOnlyOnNonNumericLabels(t *testing.T) {
+	tdf := `
+[GlobalHeader]
+{
+  [Schema 0]
+  {
+    Type=Network 1;
+    [specials]
+    {
+      [special0] { specialwhat=StartPos5; XPos=1; ZPos=1; }
+      [special1] { specialwhat=StartPosA; XPos=2; ZPos=2; }
+      [special2] { specialwhat=StartPos0; XPos=3; ZPos=3; }
+      [special3] { specialwhat=StartPosB; XPos=4; ZPos=4; }
+    }
+  }
+}
+`
+	specials := DecodeSpecials(mustParseTDF(t, tdf).Section("GlobalHeader").Section("Schema 0"))
+	if len(specials) != 4 {
+		t.Fatalf("decoded %d specials, want 4", len(specials))
+	}
+	for i, want := range []int32{4, 0, 0, 1} {
+		if specials[i].Kind != 1 || specials[i].ID != want {
+			t.Fatalf("special%d %q decoded Kind %d ID %d, want Kind 1 ID %d [08 R-TRIG-01 §12]",
+				i, specials[i].Name, specials[i].Kind, specials[i].ID, want)
+		}
 	}
 }

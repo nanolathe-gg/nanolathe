@@ -275,14 +275,17 @@ func (a *profileApply) applyWeight(args []string) {
 	if len(args) == 0 {
 		return
 	}
-	// The second argument is a float defaulting to 0.0 [08 R-AI-01 §12].
-	value := float32(0)
+	// The second argument is a float defaulting to 0.0 [08 R-AI-01 §12], read
+	// by the C runtime's atof — longest decimal prefix, trailing junk ignored,
+	// no digit consumed means 0.0 [08 R-AI-01 §20]. The directive then applies
+	// with whatever that yielded: nothing in the grammar conditions the write on
+	// the token converting, so `weight ARMCK abc` zeroes the weight rather than
+	// leaving it alone. This used to take the conversion flag as an admission
+	// test and return when it was false, which is the one arm research rules
+	// out. An absent argument is the same default, spelled "".
+	factorToken := ""
 	if len(args) > 1 {
-		parsed, ok := content.ParseAIWeightFactor(args[1])
-		if !ok {
-			return
-		}
-		value = float32(parsed)
+		factorToken = args[1]
 	}
 	types, exact := a.match(args[0])
 	for _, ck := range types {
@@ -293,16 +296,12 @@ func (a *profileApply) applyWeight(args []string) {
 		if prior, ok := a.weights[ck]; ok {
 			current = prior
 		}
-		// The running product narrows to float32 before the __ftol-style
-		// truncation toward zero, and the clamp is "at or below zero becomes
-		// zero, at or above 100 becomes 100" [08 R-AI-01 §12] [I2 AI rows] [I3].
-		updated := int32(float32(current) * value)
-		if updated < 0 {
-			updated = 0
-		} else if updated > 100 {
-			updated = 100
-		}
-		a.weights[ck] = updated
+		// One store for both readers of the grammar: content owns the
+		// conversion, the truncation toward zero and the [0,100] clamp,
+		// including the out-of-range product that the runtime's float-to-integer
+		// routine turns into 0 rather than 100 [08 R-AI-01 §20] [I3]. Keeping
+		// the arithmetic there also keeps the float out of this package (I2).
+		a.weights[ck] = content.ApplyAIWeightFactor(current, factorToken)
 	}
 	if exact {
 		for _, ck := range types {

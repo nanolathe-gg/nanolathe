@@ -29,11 +29,15 @@ func TestObserverEmitterHeight(t *testing.T) {
 	if got := heightByteAt(u, 200); got != 240 {
 		t.Fatalf("sea-clamped emitter = %d, want 201+39 = 240", got)
 	}
-	// The byte saturates rather than wrapping [03 §3.2].
-	tall := &units.Unit{Def: &content.UnitDef{ModelTop: 200}}
+	// The model top reaches the emitter as the LOW BYTE of the definition's
+	// reference-height word, so a top exceeding 255 whole world units WRAPS,
+	// rather than saturating, before the clamp [03 R-VIS-01 §2] "The observer
+	// record". ModelTop 300's low byte is 300-256 = 44, so the sum is 100+44 =
+	// 144 — well short of the 255 clamp a saturating add would have produced.
+	tall := &units.Unit{Def: &content.UnitDef{ModelTop: 300}}
 	tall.Y = 100 << 16
-	if got := heightByteAt(tall, 0); got != 255 {
-		t.Fatalf("emitter = %d, want the 255 clamp", got)
+	if got := heightByteAt(tall, 0); got != 144 {
+		t.Fatalf("emitter = %d, want the wrapped 100+44 = 144, not a saturated 255", got)
 	}
 
 	cx, cz := observerTile(u, 125)

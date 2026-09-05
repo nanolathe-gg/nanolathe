@@ -10,7 +10,7 @@ import (
 // profile grammar shares between an ai/*.txt file and a definition's ai_weight
 // fragment: only the three keywords survive, arguments keep their authored
 // order and spelling, and a `#` comment is not an argument [08 R-AI-01 §12]
-// [08 R-AI-01 §19]. Correction (RWU-19-198): this test used to lock `//` as
+// [08 R-AI-01 §20]. Correction (RWU-19-198): this test used to lock `//` as
 // the comment introducer; retail's tokenizer knows only `#`, and `//` is an
 // ordinary token — a line starting with it is an unknown keyword, a `//`
 // inside a directive is an argument.
@@ -107,7 +107,7 @@ func TestAIPlanTableNamesDropsUnknownWords(t *testing.T) {
 }
 
 // TestAIWeightFactorReadsLikeTheRuntimeAtof locks the `weight` factor's
-// conversion [08 R-AI-01 §19]: the C runtime's atof converts the longest
+// conversion [08 R-AI-01 §20]: the C runtime's atof converts the longest
 // decimal prefix of the token, accepts d/D as exponent letters, ignores what
 // follows, has no hexadecimal form, and yields 0.0 for a token with no digit.
 // The store is locked with it: a product outside the signed 32-bit range is
@@ -127,7 +127,7 @@ func TestAIWeightFactorReadsLikeTheRuntimeAtof(t *testing.T) {
 	for _, c := range cases {
 		got, ok := ParseAIWeightFactor(c.in)
 		if got != c.want || ok != c.ok {
-			t.Fatalf("ParseAIWeightFactor(%q) = (%v, %v), want (%v, %v) [08 R-AI-01 §19]", c.in, got, ok, c.want, c.ok)
+			t.Fatalf("ParseAIWeightFactor(%q) = (%v, %v), want (%v, %v) [08 R-AI-01 §20]", c.in, got, ok, c.want, c.ok)
 		}
 	}
 	// `0x10` converts its leading zero and stops at the x: factor 0, digit consumed.
@@ -145,7 +145,7 @@ func TestAIWeightFactorReadsLikeTheRuntimeAtof(t *testing.T) {
 	}
 	for _, s := range stores {
 		if got := aiWeightStore(s.cur, s.factor); got != s.want {
-			t.Fatalf("aiWeightStore(%d, %v) = %d, want %d [08 R-AI-01 §19]", s.cur, s.factor, got, s.want)
+			t.Fatalf("aiWeightStore(%d, %v) = %d, want %d [08 R-AI-01 §20]", s.cur, s.factor, got, s.want)
 		}
 	}
 	// End to end: the profile applies the runtime's reading, and a `#` ends the line.
