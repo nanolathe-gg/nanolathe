@@ -316,9 +316,24 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		ports.Shooter.RevealDeadline = tick + 600
 	}
 
+	// The dropped creator's two operands: the dropping unit's heading and its
+	// DEFINITION's maximum velocity, which together are the whole launch state
+	// of a bomb [06 §6.4]. They come from the shooter because there is nowhere
+	// else they exist — no weapon field carries either. A shooterless path
+	// (the meteor creator, [06 §6.5]) reaches no dropped weapon, so zeros here
+	// are unreachable rather than a placeholder.
+	var dropperHeading numeric.Angle
+	var dropperMaxVelocity numeric.Fixed
+	if ports.Shooter != nil {
+		dropperHeading = numeric.Angle(ports.Shooter.Move.Heading)
+		if def := ports.Shooter.Def; def != nil {
+			dropperMaxVelocity = numeric.Fixed(int64(def.MaxVelocity))
+		}
+	}
+
 	// Family dispatch [06 §6.2] C15: this is what gives the record its
 	// position, yaw, pitch, scalar speed, velocity and family expiry.
-	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity)
+	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity, dropperHeading, dropperMaxVelocity)
 
 	// Apply the retained spread to the aimed trajectory, recomputing the
 	// velocity components from the perturbed angles through the fixed-point

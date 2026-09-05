@@ -676,6 +676,39 @@ func (s *System) noteFootprintClear(h pool.Handle, anchor Cell, footX, footZ int
 	}
 }
 
+// NoteStructureStamp is the STAMP half of the same class-layer maintenance,
+// for the one stamp class that runs it: "for the building class the
+// derived-height recompute over the grown rectangle and a reclassification of
+// the rectangle in every active class layer follow" [04 R-COLL-01 §4]. It is
+// the exported entry a building stamp needs, because that stamp is written by
+// internal/construction — the yard map decides which cells of the rectangle
+// the occupant word takes, and that selection lives with the placement record,
+// not with the mover state this package keeps.
+//
+// Two things are deliberate. It runs over EVERY active layer with no watermark
+// gate: the gate on the clear side is the occupant-age comparison, and a
+// building has no mover to compare, which is the same reason it hard-blocks
+// unconditionally in classifyCell [04 R-PATH-01 §14] — noteFootprintClear
+// reaches the same arm through its hasMover=false path. And it writes no
+// commit tick: the stamp's tick write is the mover's word, and a building's
+// never advances after creation.
+//
+// The caller runs it AFTER its cell writes, which is where §4 puts it — the
+// classifier reads the occupant word back out of the grid, so a reclassify
+// that ran first would bake the pre-stamp verdict in. Without this call the
+// cells a building's yard newly claims or releases keep whatever a layer baked
+// in until something else reclassifies them, and nothing else does: the
+// request revision pass walks live units through the occupant-age window and a
+// building never enters it.
+func (s *System) NoteStructureStamp(anchor Cell, footX, footZ int16) {
+	if s == nil || s.layerRegistry == nil {
+		return
+	}
+	s.layerRegistry.forEachLayer(func(l *ClassLayer) {
+		l.restampOccupantRect(anchor, footX, footZ)
+	})
+}
+
 // noteRequestRelease is the request release's re-wall [04 R-PATH-01 §14
 // correction]. The release runs when a search ends by ANY route — a published
 // route, the empty publication of heap exhaustion, and every early exit of

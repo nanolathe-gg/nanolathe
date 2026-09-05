@@ -570,7 +570,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 	target := Vec3{X: fix(655360), Y: fix(0), Z: fix(0)} // 10 units
 	wOrd := &content.WeaponDef{ID: 1, LineOfSight: true, WeaponVelocity: 65536, WeaponTimer: 50, Range: 10}
 	var p Projectile
-	fam := InitProjectile(&p, wOrd, now, muzzle, target, 0, 0, 0, nil, 0, 0)
+	fam := InitProjectile(&p, wOrd, now, muzzle, target, 0, 0, 0, nil, 0, 0, 0, 0)
 	if fam != CreationOrdinary {
 		t.Fatalf("init ordinary fam got %v want ordinary", fam)
 	}
@@ -586,7 +586,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 
 	// ballistic init with burnBlow false uses timer
 	wBal := &content.WeaponDef{ID: 2, Ballistic: true, WeaponTimer: 30, BurnBlow: false, WeaponVelocity: 65536}
-	fam = InitProjectile(&p, wBal, now, muzzle, target, 0, numeric.Angle(0), numeric.Angle(0), nil, 0, 0)
+	fam = InitProjectile(&p, wBal, now, muzzle, target, 0, numeric.Angle(0), numeric.Angle(0), nil, 0, 0, 0, 0)
 	if fam != CreationBallistic {
 		t.Fatalf("ballistic fam")
 	}
@@ -596,7 +596,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 
 	// vertical
 	wV := &content.WeaponDef{ID: 3, VLaunch: true, WeaponVelocity: 65536, Range: 10, WeaponAcceleration: 0, StartVelocity: 0}
-	fam = InitProjectile(&p, wV, now, muzzle, target, 0, 0, 0, nil, 0, 0)
+	fam = InitProjectile(&p, wV, now, muzzle, target, 0, 0, 0, nil, 0, 0, 0, 0)
 	if fam != CreationVertical {
 		t.Fatalf("vertical fam")
 	}
@@ -614,7 +614,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 	wMet := &content.WeaponDef{ID: 4, Meteor: true}
 	vel := Vec3{X: fix(1000), Y: fix(-983040), Z: fix(0)}
 	retainedExpiry := p.ExpiryTick
-	fam = InitProjectile(&p, wMet, now, muzzle, target, 0, 0, 0, &vel, 0, 0)
+	fam = InitProjectile(&p, wMet, now, muzzle, target, 0, 0, 0, &vel, 0, 0, 0, 0)
 	if fam != CreationMeteor {
 		t.Fatalf("meteor fam")
 	}
@@ -629,7 +629,7 @@ func TestInitProjectileDispatchSetsExpiry(t *testing.T) {
 	// no pitch", so the expiry word is retained here too.
 	wDrop := &content.WeaponDef{ID: 5, Dropped: true}
 	retainedExpiry = p.ExpiryTick
-	fam = InitProjectile(&p, wDrop, now, muzzle, target, 0, 0, 0, nil, 0, 0)
+	fam = InitProjectile(&p, wDrop, now, muzzle, target, 0, 0, 0, nil, 0, 0, 0, 0)
 	if fam != CreationDropped {
 		t.Fatalf("dropped fam")
 	}
@@ -745,5 +745,70 @@ func TestMeteorLeavesStateByteAlone(t *testing.T) {
 	}
 	if p.State69 != 0x33 {
 		t.Fatalf("meteor tick must not touch the state byte, got %#x want 0x33", p.State69)
+	}
+}
+
+// TestDroppedLaunchIsTheDroppingUnitsRun locks the dropped creator's launch
+// state [06 §6.4]: the record's yaw is the DROPPING UNIT's heading and the
+// horizontal velocity is that heading at the unit DEFINITION's maximum
+// velocity, with the vertical component and the scalar speed at zero.
+//
+// The check is directional, not a restatement of the expression: a bomb leaves
+// the bay carrying exactly the bomber's own forward run, so its velocity must
+// equal the position step the ground mover takes for the same heading and the
+// same maxvelocity — `-sin(heading)·v`, `-cos(heading)·v` [04 R-MOV-01 §4].
+// A unit at heading 0 travels toward -Z, one at a quarter turn toward -X.
+func TestDroppedLaunchIsTheDroppingUnitsRun(t *testing.T) {
+	w := &content.WeaponDef{ID: 9, Dropped: true}
+	const v = numeric.Fixed(3 * 65536) // the definition's maxvelocity, 16.16 per tick
+
+	cases := []struct {
+		name    string
+		heading numeric.Angle
+		wantX   numeric.Fixed
+		wantZ   numeric.Fixed
+	}{
+		{name: "heading 0 runs toward -Z", heading: 0, wantX: 0, wantZ: -v},
+		{name: "quarter turn runs toward -X", heading: 0x4000, wantX: -v, wantZ: 0},
+		{name: "half turn runs toward +Z", heading: 0x8000, wantX: 0, wantZ: v},
+		{name: "three quarters runs toward +X", heading: 0xC000, wantX: v, wantZ: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A dirty slot, so a retained word cannot pass for a written one.
+			p := Projectile{
+				Yaw:      numeric.Angle(31000),
+				Velocity: Vec3{X: numeric.FixedFromInt(40), Y: numeric.FixedFromInt(9), Z: numeric.FixedFromInt(-7)},
+				Speed:    numeric.FixedFromInt(40),
+			}
+			if fam := InitProjectile(&p, w, 100, Vec3{}, Vec3{}, 0, 0, 0, nil, 0, 0, tc.heading, v); fam != CreationDropped {
+				t.Fatalf("creation family %v, want dropped [06 §6.2]", fam)
+			}
+			if p.Velocity.X != tc.wantX || p.Velocity.Z != tc.wantZ {
+				t.Fatalf("velocity XZ (%v,%v), want (%v,%v) — the dropping unit's own run [06 §6.4]",
+					p.Velocity.X, p.Velocity.Z, tc.wantX, tc.wantZ)
+			}
+			if p.Velocity.Y != 0 {
+				t.Fatalf("vertical velocity %v, want zero [06 §6.4]", p.Velocity.Y)
+			}
+			if p.Speed != 0 {
+				t.Fatalf("scalar speed %v, want zero [06 §6.4]", p.Speed)
+			}
+			// The stored word carries this build's half-turn offset; published
+			// in retail's numbering it is the dropping unit's heading exactly
+			// [06 §6.4] [06 R-WPN-05 §11].
+			if got := RetailYaw(p.Yaw); got != uint16(tc.heading) {
+				t.Fatalf("published yaw %d, want the dropping unit's heading %d [06 §6.4]", got, uint16(tc.heading))
+			}
+		})
+	}
+
+	// A stationary dropper (maxvelocity zero, or a unit definition that never
+	// moves) drops straight down: the horizontal pair is the heading scaled by
+	// zero, and no gravity has been applied yet [06 §6.4].
+	p := Projectile{Velocity: Vec3{X: numeric.FixedFromInt(40)}}
+	InitProjectile(&p, w, 100, Vec3{}, Vec3{}, 0, 0, 0, nil, 0, 0, 0x2000, 0)
+	if p.Velocity != (Vec3{}) {
+		t.Fatalf("velocity %+v, want all three components zero at zero maxvelocity [06 §6.4]", p.Velocity)
 	}
 }

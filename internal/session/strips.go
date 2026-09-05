@@ -116,9 +116,10 @@ const (
 	// stripFamilyFlame is the strip-5 flame-stream object that lays one
 	// animated segment every 10 ticks over a 30-tick window [R-STRIP-01
 	// §1 strip 5] — four segments per container, at ticks 0, 10, 20 and 30
-	// [03 R-FX-02 §2]. Its one producer is the teleport order handler, which
-	// this build does not reach yet; the family's arithmetic below is complete
-	// so that producer has nothing left to decide.
+	// [03 R-FX-02 §2]. Its one producer is the teleport order handler
+	// [03 R-LAYER §4], wired as `appendStripFlameStream` in composition.go and
+	// bound to `PresentationAdapter.Teleport`; the family's arithmetic below
+	// is what that producer calls into.
 	stripFamilyFlame
 
 	// stripFamilyFlameTrail is the strip-7 flame-stream trail: one animated
@@ -829,6 +830,21 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 		// [03 R-FX-02 §2][03 R-FX-02 §6]. And the travel law is not untraced:
 		// it is `(B − A) / segLife` per axis, signed truncating.
 		segLife := flameSegLife(o.src, o.dst)
+		// TODO(T23): retail computes this segment's per-axis step and its
+		// expiry by dividing by segLife, and a span under five world units —
+		// including the degenerate from==to teleport — makes segLife 0, which
+		// is an integer divide by zero retail itself faults on
+		// [03 R-FX-02 §2 "flame segment travel law"]; there is no retail
+		// behavior here to clone. Placeholder: treat a sub-minimum span as the
+		// family's minimum life of one tick, so the segment still lays (with a
+		// zero or near-zero step), expires the tick after this spawn, and the
+		// container — whose removal verdict is "no live particles" — dies with
+		// it instead of going immortal. The start-frame draw above is spent
+		// either way, so a degenerate teleport still costs exactly one CRT
+		// draw like any other segment [I4].
+		if segLife <= 0 {
+			segLife = 1
+		}
 		p := stripParticle{
 			x: o.src[0], y: o.src[1], z: o.src[2],
 			frame: flameStartFrame(o.frameCountBase, crt.Rand()),
@@ -836,9 +852,7 @@ func (o *stripObject) spawnOnce(tick uint32, crt *rng.CRT) {
 			vy:    divByTicks(o.dst[1].Sub(o.src[1]), segLife),
 			vz:    divByTicks(o.dst[2].Sub(o.src[2]), segLife),
 		}
-		if segLife > 0 {
-			p.expiry = tick + uint32(segLife)
-		}
+		p.expiry = tick + uint32(segLife) // segLife is at least 1, so this always sets a deadline
 		o.particles = append(o.particles, p)
 	case stripFamilyFlameTrail:
 		// One animated segment per tick; the strip-7 trail spends no draws
@@ -939,8 +953,10 @@ func sprinkleStep(a, b [3]numeric.Fixed) (sx, sy, sz numeric.Fixed) {
 //
 // Retail's edge case is again a fault: a span shorter than five world units
 // gives segLife 0 and the per-axis division raises an integer divide exception
-// (teleport destinations closer than that to a unit reach it). Nanolathe
-// returns 0 and divByTicks yields a zero step rather than crashing.
+// (teleport destinations closer than that to a unit reach it). This function
+// still returns 0 for that span — the floor is the researched arithmetic —
+// but spawnOnce's TODO(T23) marker substitutes a one-tick placeholder life
+// before dividing, so no caller feeds 0 to divByTicks.
 func flameSegLife(a, b [3]numeric.Fixed) int32 {
 	dx := b[0].Raw() - a[0].Raw()
 	dy := b[1].Raw() - a[1].Raw()
@@ -1315,9 +1331,10 @@ const (
 	// The strip-5 flame container's two site literals: the teleport handler
 	// builds a 30-tick container that lays one segment every 10 ticks — four
 	// segments in all [03 R-FX-02 §2][03 R-FX-02 §6]. The segment life is not a
-	// literal: it is floor(spanUnits/5), see flameSegLife. No producer reaches
-	// this family yet (the teleport order handler is unwired), so these name
-	// the site's parameters for the one that will.
+	// literal: it is floor(spanUnits/5), see flameSegLife. The producer is
+	// `appendStripFlameStream` in composition.go, called from
+	// `PresentationAdapter.Teleport` [03 R-LAYER §4]; these two constants name
+	// that call site's init parameters.
 	flameContainerLifetime int32 = 30
 	flameSegmentInterval   int32 = 10
 

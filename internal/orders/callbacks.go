@@ -172,3 +172,28 @@ func EmitStartBuilding(u *units.Unit, n *Node) {
 	arrangeDeferred(callbackBridgeFor(u), "StartBuilding", []int32{int32(arg)})
 	n.Flags |= FlagStopBuildingPending
 }
+
+// EmitStopBuilding is the MID-LIFE StopBuilding emission — the counterpart a
+// work handler emits itself when its own arm breaks the nanolathe link before
+// the record is removed. [04 R-ORD-01 §5] gives three such arms: `RepairUnit`
+// phase 3 and `Capture` phase 4 (the target started moving) and `ReclaimUnit`
+// phase 5 (the reach test or the admission test failed). All three emit
+// `StopBuilding`, arm a deadline and *restart* the record, and the restart is
+// what re-runs the in-reach phase and so re-emits `StartBuilding` — "not per
+// visit, only per restart" [04 R-ORD-01 §5, settling the open question in
+// R-ORDER-02 §2].
+//
+// It is the same emission as the cleanup-side one, with the same
+// pending-flag gate, so a record that never armed StartBuilding emits nothing:
+// the out-of-reach arm of a handler that has not yet reached its target is
+// silent, and a handler that HAS is not. Reporting whether it fired is what
+// lets a caller in another package hang the rest of its restart on the
+// transition without reading the flag word itself — the flag has exactly one
+// writer, this file's EmitStartBuilding [R-ORDER-02 §2].
+func EmitStopBuilding(u *units.Unit, n *Node) bool {
+	if n == nil || n.Flags&FlagStopBuildingPending == 0 {
+		return false
+	}
+	emitStopBuilding(u, n)
+	return true
+}

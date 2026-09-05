@@ -11,6 +11,12 @@ import (
 const (
 	reclaimCadenceStep    uint32 = 2  // [05 "Unit reclaim"]
 	reclaimPulseThreshold uint32 = 14 // [05 "Unit reclaim"]
+	// reclaimRestartDelay is the wait the `ReclaimUnit` row arms together with
+	// its mid-life `StopBuilding` when the reach or admission test fails:
+	// "either fails → deadline 15, `StopBuilding`, *restart*" [04 R-ORD-01 §5].
+	// The same fifteen ticks are what retail's phase 1 holds for on the way
+	// back in, so a re-entering reclaimer waits it out once, not twice.
+	reclaimRestartDelay uint32 = 15
 )
 
 // UnitReclaimPulse computes the one-time pulse stored on a ReclaimUnit order.
@@ -227,6 +233,28 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 		// what installing the payload here makes this record. Until it was
 		// installed, a reclaimer ordered onto a unit further away than its
 		// `builddistance` stood still and re-polled forever.
+		//
+		// WU-19-193 — the restart arm. `ReclaimUnit` phase 5 is "either fails →
+		// deadline 15, `StopBuilding`, *restart*" [04 R-ORD-01 §5], and the
+		// restart is exactly what makes the record pass its in-reach phase
+		// again and emit `StartBuilding` a second time on re-entry: the emitter
+		// runs "not per visit, only per restart" [04 R-ORD-01 §5, settling
+		// R-ORDER-02 §2]. This condensed executor has no phase word to rewind,
+		// so the restart is expressed as what a rewind through retail's phase 1
+		// would rewrite — p1 = the work-amount seed and p2 = 0, both re-derived
+		// on the next in-reach visit — and the emitter is the mid-life one,
+		// which is silent for a record that never armed StartBuilding. That
+		// pending-flag gate is what separates the two callers of this branch:
+		// the walk out to a target that was never in reach emits nothing, and
+		// a builder pushed or ordered out of reach mid-bite emits the
+		// counterpart its script is waiting for. Without it a reclaimer that
+		// lost reach left StartBuilding running until the record was removed,
+		// and re-entry never re-armed it.
+		if orders.EmitStopBuilding(builder, node) {
+			node.Param1 = 0
+			node.Param2 = 0
+			node.Deadline = int32(tick + reclaimRestartDelay)
+		}
 		s.installReclaimApproachGoal(builder, node, target)
 		return res
 	}

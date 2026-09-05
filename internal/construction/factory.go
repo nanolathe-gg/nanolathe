@@ -909,30 +909,38 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 	// overlap scan and restamp — now runs inside the occupancy layer for this
 	// stamp exactly as it does for a mover [04 R-COLL-01 §4].
 	//
-	// REWRITTEN (WU-19-166): the two tails this write pair still does not run
-	// are Established, not open, so the marker that stood here as a
-	// open-question marker was asking a settled question. [04 R-COLL-01 §4] gives
-	// both, on the stamp side — "for the building class the derived-height
-	// recompute over the grown rectangle and a reclassification of the
-	// rectangle in every active class layer follow" — and on the clear side,
-	// where the recompute runs "over the rectangle grown by one cell on every
-	// side (the loader's derivation, [03 §1])". What is missing is not the
-	// contract but two seams in packages this unit does not own:
+	// [04 R-COLL-01 §4] gives two tails after the cell loop, on the stamp side
+	// — "for the building class the derived-height recompute over the grown
+	// rectangle and a reclassification of the rectangle in every active class
+	// layer follow". WU-19-166 identified both as seams in other packages;
+	// WU-19-193 closes the second one.
 	//
-	//   * internal/world: the loader's derived min/max floor heights are read
-	//     through PlotCell.MinHeight/MaxHeight and written by nothing after the
-	//     map loads, so there is no rectangle recompute to call. In THIS build
-	//     that tail is a no-op either way — no runtime path mutates the height
-	//     map — so its absence is unobservable until one does.
-	//   * internal/movement: the class-layer reclassification exists
-	//     (noteFootprintClear runs it for a mover's clear) but is unexported,
-	//     and a building stamp reaching it needs an exported entry taking the
-	//     stamped rectangle. Its absence IS observable: cells a building's yard
-	//     newly claims or releases keep whatever a class layer baked in until
-	//     something else reclassifies them [04 R-PATH-01 §14].
+	// The class-layer reclassification runs HERE, after the complete
+	// clear-then-stamp pass and not between them, because the classifier reads
+	// the occupant word back out of the grid: a reclassify placed inside the
+	// pair would bake in a rectangle that is half released and half claimed. It
+	// covers every path into this function — the nanoframe placement stamp, the
+	// completion restamp, and the accepted port-18 yard transition, which is
+	// retail's third restamp caller and reclassifies "the rectangle in every
+	// layer" for the same reason ([04 R-COLL-01 §4] "the yard-open port write").
+	// Without it the cells a factory's yard releases to let a product out, and
+	// the cells a finished building newly claims, kept whatever a class layer
+	// had baked in — a wall where the door opened, and an open door where the
+	// wall went up — for the rest of the battle, since the request revision pass
+	// walks live units through the occupant-age window and a building never
+	// enters it [04 R-PATH-01 §14].
 	//
-	// Report the seams upstream rather than writing a second, private copy of
-	// either walk here.
+	// The first tail stays a no-op: internal/world's derived min/max floor
+	// heights are read through PlotCell.MinHeight/MaxHeight and written by
+	// nothing after the map loads, so there is no rectangle recompute to call.
+	// In THIS build that is unobservable until some path mutates the height map.
+	if s.Movement != nil {
+		s.Movement.NoteStructureStamp(
+			movement.Cell{X: record.rect.MinX(), Z: record.rect.MinZ()},
+			int16(record.rect.Width()),
+			int16(record.rect.Depth()),
+		)
+	}
 }
 
 // RegisterBuildingPlacement records and stamps a building at the exact

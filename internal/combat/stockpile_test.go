@@ -35,6 +35,34 @@ func weaponForStockpile(id int32, reload int32, area int32, coverage int32, stoc
 	}
 }
 
+// launchStockpileRound fires one completed round the way production does.
+//
+// There is no separate stockpile launcher. For a stockpile weapon the slot's
+// fire gate reads "slot byte nonzero" IN PLACE OF the per-shot cost test and
+// otherwise runs the SAME executor [06 §11.1][06 R-WPN-05 §2], so a launch is
+// the per-slot pipeline of [06 §4.1] C1 composed over the real spawner. The
+// ammo gate, the post-spawn decrement of the slot byte and the skipped reload
+// store are the PIPELINE's steps [06 §4.2] C7 [06 §11.1]; TryFire only
+// validates, allocates, initializes and notifies. Composing the two — rather
+// than stubbing either — is the only shape that catches both layers owning the
+// same mutation, which is how a launch once consumed two rounds.
+func launchStockpileRound(svc *Service, slot *Slot, idx int, tgt Target, tick uint32, ports FirePorts) (pool.Handle, bool) {
+	slot.Target = tgt
+	// A vertical-launch weapon gates on the aim result and tests no latch
+	// [06 §3.3]; a silo holding a finished round has had its answer already.
+	slot.Aim.Ready = true
+	var h pool.Handle
+	env := PipelineEnv{TryFire: func(i int, s *Slot) bool {
+		var ok bool
+		h, ok = TryFire(svc, s, i, tgt, tick, ports)
+		return ok
+	}}
+	if !TickSlot(slot, idx, tick, nil, env, 100, 100, 0) {
+		return 0, false
+	}
+	return h, true
+}
+
 // ---------------------------------------------------------------------------
 // Stockpile count lifecycle fixture [06 §11.1] C29
 // ---------------------------------------------------------------------------
@@ -185,7 +213,7 @@ func TestStockpileCountLifecycle(t *testing.T) {
 	var svc Service
 	slotLaunch := &Slot{Weapon: w, Ammo: 1, MuzzlePiece: 5}
 	// First launch check before production at same tick
-	h, ok := TryStockpileLaunch(&svc, slotLaunch, 0, Target{Kind: TargetPoint, X: fixedI(10)}, 700)
+	h, ok := launchStockpileRound(&svc, slotLaunch, 0, Target{Kind: TargetPoint, X: fixedI(10)}, 700, FirePorts{})
 	if !ok || h == 0 {
 		t.Fatalf("launch with ammo 1 should succeed [06 §11.1]")
 	}
@@ -197,7 +225,7 @@ func TestStockpileCountLifecycle(t *testing.T) {
 		svc.Reserve()
 	}
 	slotLaunch2 := &Slot{Weapon: w, Ammo: 1}
-	h2, ok2 := TryStockpileLaunch(&svc, slotLaunch2, 0, Target{Kind: TargetPoint}, 701)
+	h2, ok2 := launchStockpileRound(&svc, slotLaunch2, 0, Target{Kind: TargetPoint}, 701, FirePorts{})
 	if ok2 || h2 != 0 {
 		t.Fatalf("pool full should fail launch [06 §11.1] C29")
 	}
@@ -207,7 +235,7 @@ func TestStockpileCountLifecycle(t *testing.T) {
 	// Empty ammo prevents allocation [06 §11.1]
 	var svc2 Service
 	slotEmpty := &Slot{Weapon: w, Ammo: 0}
-	h3, ok3 := TryStockpileLaunch(&svc2, slotEmpty, 0, Target{Kind: TargetPoint}, 702)
+	h3, ok3 := launchStockpileRound(&svc2, slotEmpty, 0, Target{Kind: TargetPoint}, 702, FirePorts{})
 	if ok3 || h3 != 0 {
 		t.Fatalf("empty ammo should prevent projectile allocation [06 §11.1]")
 	}
@@ -573,7 +601,7 @@ func TestStockpileVerticalSlice(t *testing.T) {
 	// Launch nuke before next production tick [06 §11.1] launch-before-production.
 	// Nuke target is ground point 100,0 where anti covers.
 	nukeTarget := Target{Kind: TargetPoint, X: fixedI(100), Z: fixedI(100)}
-	hNuke, ok := TryStockpileLaunch(&svc, nukeSlot, 0, nukeTarget, 300)
+	hNuke, ok := launchStockpileRound(&svc, nukeSlot, 0, nukeTarget, 300, FirePorts{})
 	if !ok {
 		t.Fatalf("nuke launch should succeed with ammo 1 [06 §11.1]")
 	}
@@ -600,7 +628,7 @@ func TestStockpileVerticalSlice(t *testing.T) {
 	}
 	// Acquire and launch interceptor: rescans and writes reservation link.
 	muzzle := interceptorPos
-	hAnti, cand, ok := AcquireInterceptorTargetForSpawn(&svc, interceptorPos, 0, antiWeapon.Coverage, antiWeapon, antiSlot, muzzle, 301, weapons)
+	hAnti, cand, ok := AcquireInterceptorTargetForSpawn(&svc, interceptorPos, antiWeapon.Coverage, antiWeapon, antiSlot, muzzle, 301, weapons, FirePorts{})
 	if !ok {
 		t.Fatalf("acquire interceptor should succeed [06 §11.2]")
 	}
@@ -658,7 +686,7 @@ func TestStockpilePoolFullCases(t *testing.T) {
 		svc.Reserve()
 	}
 	// Stockpile launch should fail with pool full and not consume ammo [06 §4.1] C4 [06 §11.1].
-	h, ok := TryStockpileLaunch(&svc, slot, 0, Target{Kind: TargetPoint, X: fixedI(10)}, 400)
+	h, ok := launchStockpileRound(&svc, slot, 0, Target{Kind: TargetPoint, X: fixedI(10)}, 400, FirePorts{})
 	if ok || h != 0 {
 		t.Fatalf("pool-full launch should fail [06 §4.1] C4")
 	}
@@ -683,7 +711,7 @@ func TestStockpilePoolFullCases(t *testing.T) {
 		svc2.Reserve()
 	}
 	// Now interceptor acquire should fail due to pool-full reservation.
-	_, _, ok2 := AcquireInterceptorTargetForSpawn(&svc2, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 500, map[int32]*content.WeaponDef{weaponTargetable.ID: weaponTargetable, interceptor.ID: interceptor})
+	_, _, ok2 := AcquireInterceptorTargetForSpawn(&svc2, Vec3{X: fixedI(5), Z: fixedI(5)}, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 500, map[int32]*content.WeaponDef{weaponTargetable.ID: weaponTargetable, interceptor.ID: interceptor}, FirePorts{})
 	if ok2 {
 		t.Fatalf("interceptor pool-full should fail [06 §11.2]")
 	}
@@ -711,7 +739,7 @@ func TestInterceptorTargetDeath(t *testing.T) {
 		t.Fatalf("dead-but-uncompacted nuke must still be selected, got %d ok %v [06 R-WPN-05 §10]", got, ok)
 	}
 	interceptorSlot := &Slot{Weapon: interceptor, Ammo: 1}
-	_, cand, ok2 := AcquireInterceptorTargetForSpawn(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, 0, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 600, weapons)
+	_, cand, ok2 := AcquireInterceptorTargetForSpawn(&svc, Vec3{X: fixedI(5), Z: fixedI(5)}, interceptor.Coverage, interceptor, interceptorSlot, Vec3{X: fixedI(5), Z: fixedI(5)}, 600, weapons, FirePorts{})
 	if !ok2 || cand != hNuke {
 		t.Fatalf("the fire-time rescan must also reach the dead candidate, got %d ok %v [06 R-WPN-05 §10]", cand, ok2)
 	}
@@ -745,15 +773,21 @@ func TestStockpileCancelAndReload(t *testing.T) {
 	// Note: avoid import cycle, use the orders queue construction via minimal unit.
 	// We test stockpile reload special: stockpile launch does not write reload.
 	weaponStock := weaponForStockpile(5000, 30, 0, 0, true, false, false, 10, 10, 0)
-	slotStock := &Slot{Weapon: weaponStock, Ammo: 5, Reload: 99}
-	// Simulate TryStockpileLaunch path via combat tick: reload should remain 99 after launch.
+	// The reload countdown still gates admission for a stockpile weapon — only
+	// the reload STORE is skipped [06 §4.2] C7 — so the slot has to be off
+	// cooldown to fire at all. What the launch must not do is write the word
+	// afterwards: an ordinary weapon of this reload time would leave 30 here.
+	slotStock := &Slot{Weapon: weaponStock, Ammo: 5, Reload: 0}
 	var svc Service
-	h, ok := TryStockpileLaunch(&svc, slotStock, 0, Target{Kind: TargetPoint, X: fixedI(10)}, 700)
+	h, ok := launchStockpileRound(&svc, slotStock, 0, Target{Kind: TargetPoint, X: fixedI(10)}, 700, FirePorts{})
 	if !ok || h == 0 {
 		t.Fatalf("stockpile launch should succeed")
 	}
-	if slotStock.Reload != 99 {
-		t.Fatalf("stockpile launch must not write reload [06 §4.2] C7, got %d want 99", slotStock.Reload)
+	if slotStock.Reload != 0 || slotStock.PendingReload != 0 {
+		t.Fatalf("stockpile launch must not write reload [06 §4.2] C7, got %d/%d want 0/0", slotStock.Reload, slotStock.PendingReload)
+	}
+	if want := ComputeStoredReload(100, 100, 0, weaponStock.ReloadTime); want == 0 {
+		t.Fatalf("fixture is vacuous: an ordinary weapon would have stored %d", want)
 	}
 	if slotStock.Ammo != 4 {
 		t.Fatalf("stockpile launch decrements ammo [06 §11.1], got %d want 4", slotStock.Ammo)

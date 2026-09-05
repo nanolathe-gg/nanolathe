@@ -34,6 +34,13 @@ func (s *Session) interceptorFireTick(tick uint32) {
 			weaponsByID[w.ID] = w
 		}
 	}
+	// The map's per-tick gravity global, the ballistic creator's launch
+	// pre-decrement operand [06 §6.4]. It is read once here for the same
+	// reason the ordinary fire path reads it once per slot visit.
+	var gravity numeric.Fixed
+	if s.World != nil {
+		gravity = s.World.Gravity
+	}
 	// Stable order: players 0..9 asc, slots asc (I1) [06 §1.2] C1.
 	var unitList []*units.Unit
 	if s.Units.IsSliced() {
@@ -76,9 +83,22 @@ func (s *Session) interceptorFireTick(tick uint32) {
 			// and `ballistic` reaches the ballistic creator, whose `T0` divides
 			// that word [06 §6.2][06 §6.4].
 			cs := &combat.Slot{Weapon: w, Ammo: slot.Ammo, MuzzlePiece: slot.MuzzlePiece, DistanceWord: slot.DistanceWord, Flags: slot.Flags, DesiredYaw: slot.DesiredYaw, DesiredPitch: slot.DesiredPitch, Reload: slot.Reload, Aim: slot.Aim, Target: combat.Target{}}
+			// The launching silo reaches the spawner the way it reaches
+			// TryFire: the shooter reference and its side byte for the common
+			// initializer's real-shooter branch [06 §4.1], and the map's
+			// per-tick gravity for the ballistic creator's pre-decrement
+			// [06 §6.4]. The side byte is also the scan's owner-side operand
+			// [06 §11.2]. Origin is the silo's own point, the muzzle a shot
+			// falls back to when no piece resolves [06 §4.1] C3.
+			ports := combat.FirePorts{
+				ShooterSide: uint8(u.Owner),
+				Shooter:     u,
+				Origin:      muzzle,
+				Gravity:     gravity,
+			}
 			// Map units.Target to combat.Target for launch, though interceptor
 			// helpers use the coverage scan rather than ground target. Keep empty.
-			_, _, ok := combat.AcquireInterceptorTargetForSpawn(s.Combat, interceptorPos, uint8(u.Owner), cov, w, cs, muzzle, tick, weaponsByID)
+			_, _, ok := combat.AcquireInterceptorTargetForSpawn(s.Combat, interceptorPos, cov, w, cs, muzzle, tick, weaponsByID, ports)
 			if ok {
 				// Copy back Ammo after successful spawn (decremented with wrap).
 				slot.Ammo = cs.Ammo

@@ -1270,6 +1270,75 @@ func TestFlameSegmentTravelAndLife(t *testing.T) {
 	}
 }
 
+// TestFlameSegmentDegenerateTeleportIsBoundedNotImmortal locks the TODO(T23)
+// placeholder in spawnOnce's stripFamilyFlame case: retail's segment life is
+// `floor(spanUnits/5)`, and a span under five world units — the from==to
+// teleport here is the limit of that, span zero — makes retail divide by
+// zero [03 R-FX-02 §2 "flame segment travel law"]. There is no retail
+// behavior to clone, so Nanolathe substitutes the family's one-tick minimum
+// life instead of leaving the segment's expiry at 0 (which expireParticles
+// reads as no deadline at all).
+//
+// The one-tick life bounds the object, but it does not reach the family's
+// four-segments-per-container cadence: the container's OWN removal verdict
+// is already established as "the segment list is empty", with no window
+// term [R-STRIP-01 §2][03 R-FX-02 §2 "container verdict"], and a one-tick
+// segment expires long before the next scheduled lay ten ticks later. That
+// is not a new defect this placeholder introduces — the same gap empties an
+// ordinary (non-degenerate) container whose real span comes in under fifty
+// world units, so its segLife (1..9) is also short of the ten-tick spawn
+// interval; a from==to teleport is simply the most extreme case of it. So
+// the degenerate container here lays and draws exactly its one segment, and
+// is destroyed promptly afterward rather than sitting immortal — "bounded
+// and drawn-once", not "reaches its fourth segment".
+func TestFlameSegmentDegenerateTeleportIsBoundedNotImmortal(t *testing.T) {
+	s, crt := newStripTestSession(35, 35)
+	s.Clock.GlobalTick = 0
+
+	point := [3]numeric.Fixed{numeric.FixedFromInt(50), numeric.FixedFromInt(10), numeric.FixedFromInt(-4)}
+	o := stripObject{
+		family:        stripFamilyFlame,
+		src:           point,
+		dst:           point, // from == to: the degenerate teleport
+		windowEnd:     uint32(flameContainerLifetime),
+		spawnInterval: flameSegmentInterval,
+		nextSpawn:     uint32(flameSegmentInterval),
+	}
+	draws0 := crt.Draws()
+	o.spawnOnce(0, crt) // the constructor's own first segment
+	s.strips.append(stripTeleportFlame, o)
+
+	if got := len(s.strips.strips[stripTeleportFlame][0].particles); got != 1 {
+		t.Fatalf("constructor laid %d segments, want exactly 1", got)
+	}
+	if got := crt.Draws() - draws0; got != 1 {
+		t.Fatalf("constructor spent %d CRT draws, want 1 (the same one draw any segment costs) [I4]", got)
+	}
+
+	const observeTicks = uint32(flameContainerLifetime) + 5
+	destroyedAt := uint32(0)
+	for tick := uint32(1); tick <= observeTicks; tick++ {
+		s.Clock.GlobalTick = tick
+		s.phaseObjectSweeps(tick)
+		if len(s.strips.strips[stripTeleportFlame]) == 0 {
+			destroyedAt = tick
+			break
+		}
+	}
+	if destroyedAt == 0 {
+		t.Fatalf("degenerate container is still alive %d ticks after spawn; the T23 placeholder must bound it, not leave it immortal", observeTicks)
+	}
+	// The one-tick segment expires at tick 1 (removed once tick > 1) and the
+	// container's own verdict fires the tick after that: destroyed at tick 3,
+	// long before the 10-tick cadence would lay a second segment.
+	if destroyedAt != 3 {
+		t.Fatalf("degenerate container destroyed at tick %d, want tick 3 (one-tick segment, removed the tick after its expiry passes)", destroyedAt)
+	}
+	if got := crt.Draws() - draws0; got != 1 {
+		t.Fatalf("container's whole life spent %d CRT draws, want 1 — it never reaches a second scheduled lay", got)
+	}
+}
+
 // TestStripPoolCapIsGlobalAndPrecedesTheStripCap locks [03 R-FX-02 §4]: one
 // live-container count across all TEN strips, capped at 1000, tested BEFORE the
 // per-strip 401 rule; a producer at the cap drops its object silently, spending

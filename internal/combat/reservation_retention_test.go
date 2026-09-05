@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // recycleSlotOne fills projectile slot 1 with the given record, retires it and
@@ -117,7 +118,7 @@ func TestNullAimPointCreatorsKeepThePreviousTargetPoint(t *testing.T) {
 				t.Fatalf("reservation erased the previous stored target point %+v", p.TargetPos)
 			}
 
-			InitProjectile(p, tc.weapon, now, muzzle, aim, 0, 0, 0, tc.meteor, 0, 0)
+			InitProjectile(p, tc.weapon, now, muzzle, aim, 0, 0, 0, tc.meteor, 0, 0, 0, 0)
 
 			if tc.wantKept {
 				if p.TargetPos != previous {
@@ -216,8 +217,12 @@ func TestStockpileLaunchIntoADirtySlotStillFlies(t *testing.T) {
 	}
 	slot := &Slot{Weapon: w, Ammo: 1, MuzzlePiece: 3}
 	target := Target{Kind: TargetPoint, X: numeric.FixedFromInt(500), Z: numeric.FixedFromInt(500)}
+	// The silo itself, threaded the way every shot threads it [06 §4.1]: the
+	// launch is credited to the launching unit, not to whoever the recycled
+	// record used to belong to.
+	silo := &units.Unit{Handle: 9, Owner: 1, Def: &content.UnitDef{}}
 
-	h, ok := TryStockpileLaunch(&s, slot, 0, target, now)
+	h, ok := launchStockpileRound(&s, slot, 0, target, now, FirePorts{ShooterSide: 1, Shooter: silo})
 	if !ok || h != 1 {
 		t.Fatalf("launch got handle %d ok=%v, want the recycled slot 1", h, ok)
 	}
@@ -236,8 +241,12 @@ func TestStockpileLaunchIntoADirtySlotStillFlies(t *testing.T) {
 	if p.WeaponID != w.ID {
 		t.Fatalf("weapon id %d, want the launched weapon %d [06 §4.1]", p.WeaponID, w.ID)
 	}
-	if p.Shooter != 0 || p.TargetProjectile != 0 || p.BeamLatch {
-		t.Fatalf("launch inherited shooter/link/latch state from the previous occupant [06 §4.1]")
+	if p.Shooter != silo.Handle || p.ShooterSide != 1 {
+		t.Fatalf("launch shooter %d side %d, want the launching silo %d side 1 — not the previous occupant's [06 §4.1]",
+			p.Shooter, p.ShooterSide, silo.Handle)
+	}
+	if p.TargetProjectile != 0 || p.BeamLatch {
+		t.Fatalf("launch inherited link/latch state from the previous occupant [06 §4.1]")
 	}
 	if p.ExpiryTick <= now {
 		t.Fatalf("expiry %d is not in the future of %d — the retained deadline survived [06 §6.3]", p.ExpiryTick, now)
@@ -323,8 +332,13 @@ func TestInterceptorSpawnIntoADirtySlotStillFlies(t *testing.T) {
 	interceptorPos := Vec3{X: numeric.FixedFromInt(50), Z: numeric.FixedFromInt(50)}
 	const now = uint32(1200)
 
-	newH, cand, ok := AcquireInterceptorTargetForSpawn(&s, interceptorPos, 0, anti.Coverage, anti, slot, interceptorPos, now,
-		map[int32]*content.WeaponDef{threatWeapon.ID: threatWeapon, anti.ID: anti})
+	// The anti-nuke silo reaches the spawner the way a shooter reaches TryFire
+	// [06 §4.1]: the reference beside the side byte, so an interception is
+	// credited to the launcher rather than to nobody.
+	silo := &units.Unit{Handle: 4, Owner: 0, Def: &content.UnitDef{}}
+	newH, cand, ok := AcquireInterceptorTargetForSpawn(&s, interceptorPos, anti.Coverage, anti, slot, interceptorPos, now,
+		map[int32]*content.WeaponDef{threatWeapon.ID: threatWeapon, anti.ID: anti},
+		FirePorts{ShooterSide: 0, Shooter: silo})
 	if !ok {
 		t.Fatalf("interceptor spawn failed")
 	}
@@ -339,8 +353,11 @@ func TestInterceptorSpawnIntoADirtySlotStillFlies(t *testing.T) {
 	if p.Velocity != (Vec3{}) || p.Speed != 0 {
 		t.Fatalf("vertical launch starts at rest [06 §6.6]; got velocity %+v speed %v", p.Velocity, p.Speed)
 	}
-	if p.Shooter != 0 {
-		t.Fatalf("interceptor inherited the previous occupant's shooter %d [06 §4.1]", p.Shooter)
+	if p.Shooter != silo.Handle {
+		t.Fatalf("interceptor shooter %d, want the launching silo %d — not the previous occupant's [06 §4.1]", p.Shooter, silo.Handle)
+	}
+	if want := now + 600; silo.RevealDeadline != want {
+		t.Fatalf("silo reveal deadline %d, want %d — the real-shooter branch stamps it [06 §4.1]", silo.RevealDeadline, want)
 	}
 	if p.TargetProjectile != cand {
 		t.Fatalf("reservation link %d, want the candidate %d [06 §11.2] [06 §6.6]", p.TargetProjectile, cand)
