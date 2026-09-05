@@ -88,53 +88,51 @@ type Descriptor struct {
 	// Presentation is the descriptor's goal-resolution presentation-helper
 	// identity, one of the four PresentationHelper values [04 §3.1][R-DOC04-C].
 	Presentation PresentationHelper
-	// Driver names what advances a record of this descriptor when Handler is
-	// nil. Retail compiles a handler into every static descriptor, so this
-	// field describes Nanolathe's build, not retail: it is how a record whose
-	// machine lives in another package is distinguished from one that is
-	// simply unimplemented.
+	// Driver names what advances a record of this descriptor when it carries
+	// neither a Handler nor an owning subsystem's queue registration
+	// (queue_handlers.go). Retail compiles a handler into every static
+	// descriptor, so this field describes Nanolathe's build, not retail: it is
+	// how a record the movement scheduler's route lifecycle advances is
+	// distinguished from one that is simply unimplemented.
 	//
-	// It replaces two by-name string lists in the pump — a move-family switch
-	// and a handlerlessButDriven whitelist — that decided the same thing from
-	// the descriptor's spelling. The routing fact belongs on the descriptor,
-	// beside the handler it stands in for.
+	// It replaces a by-name move-family switch in the pump that decided the
+	// same thing from the descriptor's spelling. The routing fact belongs on
+	// the descriptor, beside the handler it stands in for.
 	Driver Driver
 }
 
-// Driver identifies what advances an order record that carries no descriptor
-// handler.
+// Driver identifies what advances an order record that carries neither a
+// descriptor handler nor an owning subsystem's queue registration
+// (queue_handlers.go).
 type Driver uint8
 
 const (
 	// DriverPump is the ordinary case: the descriptor's own Handler runs the
-	// record, and a nil Handler means the order is unimplemented in this
-	// build.
+	// record, and a nil Handler with no queue registration means the order is
+	// unimplemented in this build.
 	DriverPump Driver = iota
 	// DriverMovementRoute marks the path-backed move family. The movement
 	// scheduler owns the route lifecycle [04 §7], so the pump parks the record
 	// with the contract's wait and is re-dispatched after 30+rand15
 	// [04 §3.3] C3 while path-submit and movement-integrate drive the route.
 	DriverMovementRoute
-	// DriverExternalMachine marks a record another subsystem runs from its own
-	// per-unit step, reading and writing the record's phase, dynamic gate and
-	// deadline as its state machine: the factory and mobile-build lifecycle
-	// and the unit-reclaim machine in internal/construction
-	// ([05 "Factory production lifecycle"][04 R-FAC-02 §4][05 "Unit reclaim"]),
-	// and the air executors in internal/movement ([04 R-AIR-01 §6, §7]).
-	//
-	// The pump must leave every one of those fields alone: a result code
-	// applied here overwrites the driver's own deadline, and a factory record
-	// parked for 30 to 44 ticks mid-build is precisely the "the plant will not
-	// build another" stall of PLAN 17 §0 row 3. Such a record is also not
-	// diagnosed — a driven record is not a missing handler.
-	//
-	// TODO(T25): the durable shape is the one GetBuilt already uses — the
-	// owning subsystem registers its handler on the queue
-	// (Queue.SetGetBuiltHandler), so the pump stays the sole dispatcher and
-	// this value disappears. Doing that for the remaining six is a
-	// cross-package change no single unit here owns.
-	DriverExternalMachine
 )
+
+// Retired (WU-19-191): a third value, DriverExternalMachine, stood here for the
+// six rows another subsystem advances from its own per-unit step — the factory
+// and mobile-build lifecycle and the unit-reclaim machine in
+// internal/construction ([05 "Factory production lifecycle"][04 R-FAC-02 §4]
+// [05 "Unit reclaim"]), and the air executors in internal/movement
+// ([04 R-AIR-01 §6, §7]). The pump special-cased it by table lookup so it would
+// not write over a live state machine's phase, gate and deadline.
+//
+// It is replaced by the shape `GetBuilt` already used: the owning subsystem
+// registers the row's handler on the queue (Queue.SetExternallyDrivenHandler in
+// queue_handlers.go), so the routing fact is the owner's own statement rather
+// than a value in this table, and the pump reads one seam instead of two. The
+// rows are BuildingBuild, MobileBuild, VTOL_MobileBuild, ReclaimUnit and
+// VTOL_ReclaimUnit (internal/construction) and VTOL_Standby
+// (internal/movement).
 
 // StaticGate census [04 §3.1][R-DOC04-C]. Named readers: bit 9 (0x200) is
 // cleared when the order is constructed without a target unit; bit 10 (0x400)
@@ -163,7 +161,7 @@ var batch1 = []Descriptor{
 	{Name: "Cloak_Off", StateLabel: "Decloaking", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
 	{Name: "Standing_MoveOrder", StateLabel: "Acknowledged", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
 	{Name: "Standing_FireOrder", StateLabel: "Acknowledged", Class: 0x00, AckGroup: 19, StaticGate: 0x10060, Presentation: HelperNone},
-	{Name: "BuildingBuild", StateLabel: "Nanolathing", Class: 0x00, AckGroup: 19, StaticGate: 0x10010c, Presentation: HelperNone, Driver: DriverExternalMachine},
+	{Name: "BuildingBuild", StateLabel: "Nanolathing", Class: 0x00, AckGroup: 19, StaticGate: 0x10010c, Presentation: HelperNone},
 	{Name: "BuildWeapon", StateLabel: "Nanolathing", Class: 0x00, AckGroup: 19, StaticGate: 0xc0140, Presentation: HelperNone},
 	{Name: "SelfDestruct", StateLabel: "SELF DESTRUCT ENGAGED", Class: 0x00, AckGroup: 19, StaticGate: 0x40040, Presentation: HelperNone},
 	{Name: "SelfDestructFG", StateLabel: "SELF DESTRUCT ENGAGED", Class: 0x00, AckGroup: 19, StaticGate: 0x0, Presentation: HelperNone},
@@ -195,20 +193,20 @@ var batch2 = []Descriptor{
 	{Name: "Ground_Pickup", StateLabel: "Loading", Class: 0x08, AckGroup: 12, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "Ground_Unload", StateLabel: "Unloading", Class: 0x08, AckGroup: 13, StaticGate: 0x400, Presentation: HelperGoalResolveAck},
 	{Name: "Teleport", StateLabel: "Teleporting", Class: 0x08, AckGroup: 9, StaticGate: 0x600, Presentation: HelperGoalResolveAck},
-	{Name: "MobileBuild", StateLabel: "Nanolathing", Class: 0x13, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint, Driver: DriverExternalMachine},
+	{Name: "MobileBuild", StateLabel: "Nanolathing", Class: 0x13, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint},
 	{Name: "HelpBuild", StateLabel: "Nanolathing", Class: 0x18, AckGroup: 6, StaticGate: 0x100208, Presentation: HelperGoalResolveAck},
 	{Name: "RepairPatrol", StateLabel: "Repair patrol", Class: 0x12, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "RepairUnit", StateLabel: "Repairing", Class: 0x12, AckGroup: 6, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "Capture", StateLabel: "Capturing", Class: 0x08, AckGroup: 4, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "Resurrect", StateLabel: "Resurrecting", Class: 0x12, AckGroup: 11, StaticGate: 0x200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "Reclaim", StateLabel: "Reclaiming", Class: 0x12, AckGroup: 11, StaticGate: 0x100800, Presentation: HelperGoalResolveAckPathMarkers},
-	{Name: "ReclaimUnit", StateLabel: "Reclaiming", Class: 0x12, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverExternalMachine},
+	{Name: "ReclaimUnit", StateLabel: "Reclaiming", Class: 0x12, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "RepairUnitNoMove", StateLabel: "Repairing", Class: 0x18, AckGroup: 6, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 }
 
 // batch3 is registration batch 3: 22 records [R-DOC04-C].
 var batch3 = []Descriptor{
-	{Name: "VTOL_Standby", StateLabel: "Standby", Class: 0x00, AckGroup: 15, StaticGate: 0x20000, Presentation: HelperNone, Driver: DriverExternalMachine},
+	{Name: "VTOL_Standby", StateLabel: "Standby", Class: 0x00, AckGroup: 15, StaticGate: 0x20000, Presentation: HelperNone},
 	{Name: "VTOL_Move", StateLabel: "Moving", Class: 0x02, AckGroup: 14, StaticGate: 0x402, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "VTOL_Landing", StateLabel: "Landing", Class: 0x08, AckGroup: 14, StaticGate: 0x600, Presentation: HelperGoalResolveAck},
 	{Name: "VTOL_Pickup", StateLabel: "Loading", Class: 0x08, AckGroup: 8, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
@@ -219,12 +217,12 @@ var batch3 = []Descriptor{
 	{Name: "AirToAir", StateLabel: "Engaging target", Class: 0x08, AckGroup: 1, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "AirToGround", StateLabel: "Engaging target", Class: 0x08, AckGroup: 1, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
 	{Name: "AirToGroundHover", StateLabel: "Engaging target", Class: 0x08, AckGroup: 1, StaticGate: 0x200, Presentation: HelperGoalResolveAck},
-	{Name: "VTOL_MobileBuild", StateLabel: "Nanolathing", Class: 0x03, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint, Driver: DriverExternalMachine},
+	{Name: "VTOL_MobileBuild", StateLabel: "Nanolathing", Class: 0x03, AckGroup: 0, StaticGate: 0x100508, Presentation: HelperBuildFootprint},
 	{Name: "VTOL_HelpBuild", StateLabel: "Nanolathing", Class: 0x08, AckGroup: 6, StaticGate: 0x100208, Presentation: HelperGoalResolveAck},
 	{Name: "VTOL_RepairPatrol", StateLabel: "Repair patrol", Class: 0x02, AckGroup: 7, StaticGate: 0x412, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverMovementRoute},
 	{Name: "VTOL_RepairUnit", StateLabel: "Repairing", Class: 0x02, AckGroup: 6, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "VTOL_Reclaim", StateLabel: "Reclaiming", Class: 0x02, AckGroup: 11, StaticGate: 0x100800, Presentation: HelperGoalResolveAckPathMarkers},
-	{Name: "VTOL_ReclaimUnit", StateLabel: "Reclaiming", Class: 0x02, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers, Driver: DriverExternalMachine},
+	{Name: "VTOL_ReclaimUnit", StateLabel: "Reclaiming", Class: 0x02, AckGroup: 11, StaticGate: 0x100200, Presentation: HelperGoalResolveAckPathMarkers},
 	{Name: "VTOL_Evade", StateLabel: "Evading", Class: 0x00, AckGroup: 19, StaticGate: 0x0, Presentation: HelperNone},
 	{Name: "VTOL_SeekAttack", StateLabel: "Seeking to attack", Class: 0x00, AckGroup: 19, StaticGate: 0x600, Presentation: HelperNone},
 	{Name: "VTOL_SeekGuard", StateLabel: "Seeking to guard", Class: 0x00, AckGroup: 19, StaticGate: 0x600, Presentation: HelperNone},
@@ -303,7 +301,8 @@ func buildTable() {
 		sort.Slice(all, func(i, j int) bool { return foldCompare(all[i].Name, all[j].Name) < 0 })
 	}
 	table = all
-	installHandlers() // the table is not finished until its handlers are on it
+	getBuiltID = Lookup("GetBuilt") // the row whose owner registers per queue
+	installHandlers()               // the table is not finished until its handlers are on it
 }
 
 // handlerInstallers is the ordered list of per-family handler installers — the
@@ -342,11 +341,11 @@ var handlerInstallers = []func(){
 // it so the table is complete before the first pump, and the pump's walk calls
 // it again, which is what restores a handler a fixture cleared.
 //
-// Handlers a subsystem owns rather than this package are not installed here:
-// `GetBuilt`'s lifecycle belongs to the construction service and binds per
-// queue through Queue.SetGetBuiltHandler [04 R-FAC-02 §4], and the seven
-// handler-less records another package drives from its own per-unit step are
-// listed at handlerlessButDriven in pump.go.
+// Handlers a subsystem owns rather than this package are not installed here.
+// They bind per queue through the registration seam in queue_handlers.go:
+// `GetBuilt`'s lifecycle belongs to the construction service
+// [04 R-FAC-02 §4], and the six rows another package advances from its own
+// per-unit step are registered by that package where it binds the queue.
 func installHandlers() {
 	for _, install := range handlerInstallers {
 		install()

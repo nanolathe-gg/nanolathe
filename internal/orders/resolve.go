@@ -1648,11 +1648,30 @@ func wardHasBuildOrder(ward *units.Unit) bool {
 // ward whose definition can fly removes the order (code 8 — a ground guard
 // follows only ground wards); a phase byte beyond 1 cancels all (code 7).
 //
-// Phase 0 is the admit of [04 R-ORD-01 §8 points 1 and 2]; phase 1 is the
-// assist evaluation of [04 R-UNIT-06 §1], whose fall-through is the follow
-// maintenance of [04 R-ORD-01 §8 points 3 and 4].
+// Phase 0 is the admit of [04 R-ORD-01 §8 points 1 and 2]; the GROUND row's
+// phase 1 is the assist evaluation of [04 R-UNIT-06 §1], whose fall-through is
+// the follow maintenance of [04 R-ORD-01 §8 points 3 and 4].
+//
+// The AIR row has one more phase than the ground row [04 R-ORD-02 §3]: its
+// phase 1 is a separate "inhibit all three slots; advance" step, so its leg
+// evaluation is phase 2 and its cancel-all boundary is a phase byte beyond 2.
+// The ground row's two-phase shape is unchanged. guardLegPhase below is that
+// fork, named once so the phase gate and the dispatch cannot drift apart.
 func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
-	if n == nil || n.Target == 0 {
+	if n == nil {
+		return Code(5)
+	}
+	air := unitCanFly(u)
+	// The air twin's first entry step, which the ground row does not have:
+	// "target null or satisfied ∩ `0x48` → … complete either way"
+	// [04 R-ORD-02 §3]. It subsumes the ground row's plain "a missing ward
+	// completes the order", because for an air guard the hand-off has to run
+	// before the completion.
+	if air {
+		if code, done := vtolFollowHandOff(u, n, satisfied); done {
+			return code
+		}
+	} else if n.Target == 0 {
 		return Code(5) // no ward → *complete* [04 R-UNIT-06 §1]
 	}
 	ward := getLookupForWard(n, u)
@@ -1667,25 +1686,44 @@ func guardHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	// air twin's additions and does not repeat it, so it is applied on the same
 	// canfly fork the command resolver uses to pick between the two names
 	// [04 R-ORD-02 §1] rather than to both.
-	if !unitCanFly(u) && unitCanFly(ward) {
+	if !air && unitCanFly(ward) {
 		return Code(8) // *abandon* — the order is removed [04 R-UNIT-06 §1]
 	}
-	if n.Phase > 1 {
-		return Code(7) // *cancel-all* [04 R-UNIT-06 §1]
+	// The air twin's second entry step, before the phase switch and returning
+	// from it immediately: the off-map recovery of [04 R-AIR-01 §5], whose
+	// marker is the movement package's, so it is reached through the air leg
+	// seam [04 R-ORD-02 §3].
+	if air {
+		if code, done := vtolFollowOffMap(u, n, satisfied, tick); done {
+			return code
+		}
 	}
-	// The air twin's entry carries one step the ground row does not: "every
-	// visit then copies the target's position into the record goal"
+	if int(n.Phase) > guardLegPhase(air) {
+		return Code(7) // *cancel-all* [04 R-UNIT-06 §1][04 R-ORD-02 §3]
+	}
+	// The air twin's third entry step, which the ground row does not have:
+	// "every visit then copies the target's position into the record goal"
 	// [04 R-ORD-02 §3]. A `VTOL_Follow` record's goal triple is therefore the
 	// ward's POSITION, where `Follow_Ground`'s is the anchor OFFSET
 	// [04 R-ORD-01 §8 point 2] — the two rows keep different things in the same
 	// three fields, which is why the orbit leg below reads the ward directly and
 	// why GuardFollowPoint is never asked about an air record
 	// (internal/movement/goals.go names `Follow_Ground` alone).
-	if unitCanFly(u) {
+	if air {
 		n.GoalX, n.GoalY, n.GoalZ = ward.X, ward.Y, ward.Z
 	}
 	if n.Phase == 0 {
 		return guardAdmit(u, n, ward)
+	}
+	// The air row's own phase 1, which the ground row does not have: "inhibit
+	// all three slots; advance" [04 R-ORD-02 §3]. It is the same verb over the
+	// same three slots the ground row runs inside its ADMIT phase
+	// [04 R-UNIT-06 §1], moved into a phase of its own — so an air guard hands
+	// its slots back to autonomous acquisition one dispatch later than a ground
+	// guard does, and its leg evaluation starts at phase 2.
+	if air && n.Phase == 1 {
+		inhibitSlot(u, slotAll) // k = 3 is slots 0, 1, 2 in order [04 R-ORD-01 §1]
+		return Code(1)          // *advance* — the same pump cascade re-enters phase 2
 	}
 	// slot 0 is null [01 §6.1] — a live unit never has Handle 0; the assist
 	// legs cannot address such a guard, so it falls straight to maintenance.
@@ -1875,7 +1913,9 @@ func guardAdmit(u *units.Unit, n *Node, ward *units.Unit) Code {
 // The air twin's maintenance is a different leg with a different marker family:
 // airspace circling with the `0x80` arrival radius [04 R-UNIT-06 §1], written
 // out in full as leg 4 of [04 R-ORD-02 §3]. It is vtolFollowOrbit below; the
-// ground body here is unchanged.
+// ground body here is unchanged. The air twin also holds with its phase left at
+// 2 rather than 1, since its legs run one phase later [04 R-ORD-02 §3]; neither
+// body writes the phase, so that follows from the caller.
 func guardFollowMaintenance(u *units.Unit, n *Node, ward *units.Unit, satisfied uint32, tick uint32) Code {
 	if unitCanFly(u) {
 		return vtolFollowOrbit(u, n, ward, satisfied, tick)
@@ -1914,7 +1954,115 @@ const (
 	// movement outcomes plus the guard's own two re-arm bits.
 	airFollowArrivalBits uint32 = 0xE0
 	airFollowOrbitGate   uint32 = 0xF8
+	// airFollowHandOffBits is the `satisfied ∩ 0x48` of the air row's entry
+	// pre-check [04 R-ORD-02 §3]: `0x08` *target removed* [04 R-ORD-01 §6] and
+	// `0x40` the cannot-get-there signal [04 R-ORD-01 §0] — the same pair
+	// `VTOL_RepairPatrol`'s pre-check reads, and the second of them is the whole
+	// entry test of the two seek states (pendNoRoute in vtolair.go).
+	airFollowHandOffBits uint32 = 0x48
 )
+
+// guardLegPhase is the phase byte at which the follow guard's four legs run:
+// 1 for `Follow_Ground` [04 R-UNIT-06 §1], 2 for `VTOL_Follow`, whose phase 1
+// is the separate slot-inhibit step [04 R-ORD-02 §3]. It doubles as the
+// cancel-all boundary — "a phase byte beyond 1 cancels all" for the ground row,
+// "other phase: cancel-all" for the air one.
+func guardLegPhase(air bool) int {
+	if air {
+		return 2
+	}
+	return 1
+}
+
+// vtolFollowHandOff is the air row's entry pre-check and its hand-off
+// [04 R-ORD-02 §3]:
+//
+//	target null or satisfied ∩ `0x48` → if this record has no successor,
+//	allocate `VTOL_SeekGuard` with this record's target (null when the target is
+//	gone) and goal and tail-append it; complete either way.
+//
+// Four things the wording pins down and this body reproduces:
+//
+//   - "complete either way" is code 5 whether or not the hand-off record was
+//     allocated, so the reported code does not depend on the queue's shape;
+//   - "no successor" is the record's next link being null, which is
+//     hasSuccessor's question asked the other way round. It is why a guard that
+//     still has orders queued behind it does NOT plant a seeker in front of
+//     them: the pre-check just ends the guard and the queue moves on;
+//   - "tail-append" is [04 R-ORD-02 §4]'s helper — walk the segment the
+//     record's rear-segment flag selects to its last link and append, inheriting
+//     no flag — which is Queue.appendTail, routing on the same static bit 18
+//     Push routes on. No new insert is written here;
+//   - "this record's target (null when the target is gone)" is the record's own
+//     target handle, zeroed when it no longer resolves to a live unit. Both
+//     halves of the trigger can leave a stale handle behind — `0x08` is raised
+//     precisely BECAUSE the target went away — so the resolve is what decides,
+//     not the handle's being non-zero.
+//
+// The goal triple copied across is the record's, which the previous visit's
+// entry step set to the ward's last known position: the seeker therefore starts
+// its orbit about the place the ward was, which is what `VTOL_SeekGuard`'s own
+// fall-through leg circles when it finds nothing to guard [04 R-ORD-02 §3].
+func vtolFollowHandOff(u *units.Unit, n *Node, satisfied uint32) (Code, bool) {
+	if n.Target != 0 && satisfied&airFollowHandOffBits == 0 {
+		return 0, false
+	}
+	// QueueOfUnit, not QueueForUnit: the record being dispatched already lives
+	// in a queue, and a guard with none has nothing to append to — ending an
+	// order must not create one as a side effect. It is also the accessor
+	// hasSuccessor reads, so the two cannot disagree about which queue.
+	if q := QueueOfUnit(u); q != nil && !hasSuccessor(u, n) {
+		if id := Lookup("VTOL_SeekGuard"); id != 0 {
+			target := n.Target
+			if getLookupForWard(n, u) == nil {
+				target = 0 // "null when the target is gone"
+			}
+			owner := n.Owner
+			if u != nil {
+				owner = u.Handle // "the record's owner is set" [04 R-ORD-02 §4]
+			}
+			q.appendTail(id, Node{
+				Owner:        owner,
+				Target:       target,
+				GoalX:        n.GoalX,
+				GoalY:        n.GoalY,
+				GoalZ:        n.GoalZ,
+				CreationTick: n.CreationTick,
+			})
+		}
+	}
+	return Code(5), true // *complete* either way [04 R-ORD-02 §3]
+}
+
+// vtolFollowOffMap is the off-map recovery leg [04 R-AIR-01 §5] that six air
+// executors, `VTOL_Follow` among them, run before their phase switch and return
+// from immediately: a point marker at `unitPos + offset`, `offset` the negated
+// sine/cosine pair of `bearing(unitPos, mapCentre)` at 800 world units, arrival
+// radius `0x80`, gate `|= 0xE0`, result code 2.
+//
+// The marker is one of the air path-marker family of [04 R-AIR-01 §4], which
+// internal/movement owns, and the sentinel test reads the air sector grid,
+// which internal/movement also owns — neither is reachable from this package
+// (the dependency runs the other way). So the leg is reached through the
+// existing air seam, `MovementGoalAdapter.RunAir`, exactly as the five other
+// executors that carry this step reach their legs. This is airHandOff without
+// its no-runner fallback: a `VTOL_Follow` record must NOT be parked on a
+// one-tick deadline when no runner is bound, because unlike those five its
+// remaining phases live here and run perfectly well without one.
+//
+// The runner declines (false) whenever the guard is on the map, so the ordinary
+// path costs one seam call and no allocation.
+func vtolFollowOffMap(u *units.Unit, n *Node, satisfied uint32, tick uint32) (Code, bool) {
+	q := QueueForUnit(u)
+	if q == nil {
+		return 0, false
+	}
+	b := q.Binding()
+	if b == nil || b.Movement == nil || b.Movement.RunAir == nil {
+		return 0, false
+	}
+	return b.Movement.RunAir(u, n, satisfied, tick)
+}
 
 // vtolFollowAdmit is `VTOL_Follow`'s phase 0 [04 R-ORD-02 §3]:
 //
@@ -1933,16 +2081,12 @@ const (
 // draw, so forking the two admits does not move the simulation stream for any
 // guard already in flight (I4).
 //
-// TODO(T25): three further air-twin differences [04 R-UNIT-06 §1] and
-// [04 R-ORD-02 §3] state are still unwired, all of them entry-side rather than
-// maintenance-side: the interrupt pre-check that fails the order on satisfied
-// `0x48` and hands the record to a tail-appended `VTOL_SeekGuard`, the
-// sentinel-sector diversion to the off-map loiter path of [04 R-AIR-01 §5], and
-// §3's separate phase 1 ("inhibit all three slots; advance") which shifts the
-// leg evaluation to phase 2. Placeholder: the shared two-phase shape of the
-// ground row, whose phase 1 runs the same four legs in the same order — §1 has
-// the air handler repeating branches 1-4 byte-equivalently, so only the phase
-// NUMBER differs and no leg is skipped.
+// The three entry-side differences this comment used to carry as a T25 marker —
+// the satisfied-`0x48` pre-check with its tail-appended `VTOL_SeekGuard`
+// hand-off, the sentinel-sector diversion to the off-map loiter path of
+// [04 R-AIR-01 §5], and §3's separate phase 1 — are wired: vtolFollowHandOff,
+// vtolFollowOffMap and guardLegPhase above, all three read by guardHandler's
+// entry in §3's own order.
 func vtolFollowAdmit(u *units.Unit, n *Node) Code {
 	if code := airWorkPreamble(u, n, "Guarding"); code != Code(1) {
 		return code
@@ -2004,7 +2148,7 @@ func vtolFollowOrbit(u *units.Unit, n *Node, ward *units.Unit, satisfied uint32,
 	}
 	armDeadline(n, tick, 30) // deadline 30; the setter ORs gate bit 0x01
 	n.DynamicGate |= airFollowOrbitGate
-	return Code(2) // *hold*, phase left at 1
+	return Code(2) // *hold*, phase left where it was (2 for the air row)
 }
 
 func unitCanFly(u *units.Unit) bool {

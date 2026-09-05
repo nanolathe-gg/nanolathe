@@ -259,7 +259,44 @@ func (s *Service) queueForUnit(u *units.Unit) *orders.Queue {
 	if q != nil && s != nil {
 		q.SetGetBuiltHandler(s.handleGetBuiltOrder)
 	}
+	s.RegisterOrderHandlers(q)
 	return q
+}
+
+// buildRowsDrivenByStepUnit are the order rows this service advances from its
+// own per-unit step (StepUnit) rather than from the order pump: the factory and
+// mobile-build lifecycle [05 "Factory production lifecycle"][04 R-FAC-02 §4]
+// and the unit-reclaim machine [05 "Unit reclaim"]. This service reads and
+// writes each record's phase, dynamic gate and deadline as its state machine,
+// so the pump must write none of them.
+//
+// The slice is fixed and ordered, never a map: registration walks it in source
+// order (I1).
+var buildRowsDrivenByStepUnit = []string{
+	FactoryBuildOrder,    // BuildingBuild
+	MobileBuildOrder,     // MobileBuild
+	VTOLMobileBuildOrder, // VTOL_MobileBuild
+	"ReclaimUnit",
+	"VTOL_ReclaimUnit",
+}
+
+// RegisterOrderHandlers declares this service's ownership of the build rows on
+// q, through the order package's per-queue registration seam. It is the
+// statement that replaced the descriptor table's DriverExternalMachine value:
+// the pump stays the sole dispatcher and learns from the owner, not from a
+// table lookup, that it must not write a result code over a live state machine
+// [04 §3.3].
+//
+// It is called wherever this service binds a queue, and the session composition
+// calls it for queues that reach the pump without passing through here. It is
+// idempotent: the registration is a fixed function value per row.
+func (s *Service) RegisterOrderHandlers(q *orders.Queue) {
+	if s == nil || q == nil {
+		return
+	}
+	for _, name := range buildRowsDrivenByStepUnit {
+		q.SetExternallyDrivenHandler(orders.Lookup(name))
+	}
 }
 
 // TickContext carries per-tick shared services for unit-local stepping (ON-02).
@@ -2054,6 +2091,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 		if beCarriedID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)
 			pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
+			s.RegisterOrderHandlers(pq)
 			// `BeCarried` is not a producer insertion: it is a side effect of
 			// the attach commit, which flushes the cargo's primary queue of
 			// records lacking static bit 2 and HEAD-INSERTS the record
@@ -2076,6 +2114,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	if getBuiltID != 0 {
 		pq := orders.BindQueueBinding(product, s.OrderBinding)
 		pq.SetGetBuiltHandler(s.handleGetBuiltOrder)
+		s.RegisterOrderHandlers(pq)
 		// Queued, count zero [05 C18].
 		pq.Push(getBuiltID, productRecord(product, tick, orders.Node{Param2: 0, QueuedIssue: true}))
 	}

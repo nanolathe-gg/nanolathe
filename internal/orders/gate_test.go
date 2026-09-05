@@ -195,10 +195,13 @@ func TestUnwiredStaticMaskedRecordReachesTheDiagnosticArm(t *testing.T) {
 	}
 }
 
-// drivenDescriptors are the handler-less records another package runs from its
-// own per-unit step, reading and writing the record's phase, dynamic gate and
-// deadline as its state machine (handlerlessButDriven, pump.go). The list is a
-// fixed slice, not a map, so the assertions run in one order (I1).
+// drivenDescriptors are the records another package runs from its own per-unit
+// step, reading and writing the record's phase, dynamic gate and deadline as
+// its state machine. The owning package declares each of them on the queue
+// through the registration seam of queue_handlers.go; this list mirrors those
+// registrations (construction's buildRowsDrivenByStepUnit and movement's
+// airRowsDrivenByMoverTick). It is a fixed slice, not a map, so the assertions
+// run in one order (I1).
 //
 // `VTOL_LandIfCan` left this list on 2026-08-31 and the count went from seven
 // to six. It is still driven from the mover tick, but a machine that finishes
@@ -223,6 +226,10 @@ var drivenDescriptors = []string{
 // Two shapes are checked per descriptor, because the owning package produces
 // both: a record its driver has parked on a wake bit and a deadline, and a
 // record its driver has left ready (gate 0) between states.
+//
+// The fixture registers the row the way its owner does, because that
+// registration IS the contract under test: the pump learns from the owner, not
+// from a value in the descriptor table, that the record is not its to write.
 func TestDrivenRecordsKeepTheirOwnersScheduling(t *testing.T) {
 	for _, name := range drivenDescriptors {
 		id := Lookup(name)
@@ -230,12 +237,13 @@ func TestDrivenRecordsKeepTheirOwnersScheduling(t *testing.T) {
 			t.Fatalf("%s is not in the descriptor table", name)
 		}
 		if DescriptorFor(id).Handler != nil {
-			t.Fatalf("%s has acquired a descriptor handler; handlerlessButDriven must be revisited", name)
+			t.Fatalf("%s has acquired a descriptor handler; its owner's registration must be revisited", name)
 		}
 
 		// Birth: the driver's own writes are the only scheduling the record
 		// ever carries, so it must not be born waiting on insertion metadata.
 		q, u := gateFixture()
+		q.SetExternallyDrivenHandler(id)
 		q.Push(id, Node{Owner: u.Handle})
 		fresh := q.Primary()[0]
 		if fresh.DynamicGate != 0 || fresh.Deadline != -1 {
@@ -256,9 +264,11 @@ func TestDrivenRecordsKeepTheirOwnersScheduling(t *testing.T) {
 		}
 
 		// Ready between states: gate cleared by its driver, no deadline. The
-		// pump reaches the dispatch point, finds no handler, and must leave
+		// pump reaches the dispatch point, dispatches the owner's registration,
+		// is told the owner advances the record elsewhere, and must leave
 		// without parking it — a park here is the 30..44 tick stall.
 		q2, u2 := gateFixture()
+		q2.SetExternallyDrivenHandler(id)
 		q2.Push(id, Node{Owner: u2.Handle})
 		ready := q2.Primary()[0]
 		ready.Phase = 3
@@ -286,21 +296,34 @@ func TestDrivenRecordsKeepTheirOwnersScheduling(t *testing.T) {
 // the real contract, which is that the table is complete before play begins —
 // retail compiles the handler into each static descriptor.
 func TestHandlersAreInstalledBeforeTheFirstPump(t *testing.T) {
+	registeredByAnOwner := func(name string) bool {
+		if name == "GetBuilt" {
+			// The construction service binds this one per queue
+			// [04 R-FAC-02 §4].
+			return true
+		}
+		for _, driven := range drivenDescriptors {
+			if driven == name {
+				return true
+			}
+		}
+		return false
+	}
 	for id, desc := range Table() {
 		switch {
 		case desc.Name == "":
 			continue // the reject sentinel has no handler
-		case desc.Name == "GetBuilt":
-			// The construction service binds this one per queue
-			// [04 R-FAC-02 §4].
+		case registeredByAnOwner(desc.Name):
+			// The owning subsystem registers this row on the queue
+			// (queue_handlers.go), so the descriptor carries no handler.
 			continue
 		case desc.Driver != DriverPump:
-			// Another subsystem advances the record from its own per-unit
-			// step; see the Driver field.
+			// The movement scheduler owns the route lifecycle; see the Driver
+			// field.
 			continue
 		}
 		if desc.Handler == nil {
-			t.Errorf("descriptor %d %q has no handler and no other driver", id, desc.Name)
+			t.Errorf("descriptor %d %q has no handler, no owner registration and no other driver", id, desc.Name)
 		}
 	}
 }

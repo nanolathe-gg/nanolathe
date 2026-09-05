@@ -1315,7 +1315,26 @@ func (s *Session) bindOrderQueue(u *units.Unit) {
 	if s.Build.OrderBinding == nil {
 		s.Build.OrderBinding = s.newOrderBinding()
 	}
-	orders.BindQueueBinding(u, s.Build.OrderBinding)
+	s.registerOwnedOrderRows(orders.BindQueueBinding(u, s.Build.OrderBinding))
+}
+
+// registerOwnedOrderRows lets the subsystems that advance an order row from
+// their own per-unit step declare that ownership on q, through the order
+// package's per-queue registration seam (internal/orders/queue_handlers.go).
+// Without it the pump would find no handler for those rows and park them for
+// 30 to 44 ticks, which for a build row is the "the plant will not build
+// another" stall of PLAN 17 §0 row 3.
+//
+// The session is one of the registration sites because it owns the queues that
+// reach the pump without passing through either subsystem's own binding path:
+// a unit whose queue a producer created directly, and the aircraft whose
+// `VTOL_Standby` record the pump's idle refill creates [04 §3.3].
+func (s *Session) registerOwnedOrderRows(q *orders.Queue) {
+	if s == nil || q == nil {
+		return
+	}
+	s.Build.RegisterOrderHandlers(q)
+	s.Movement.RegisterOrderHandlers(q)
 }
 
 // bindExistingOrderQueue transfers the session-owned binding only when a
@@ -1328,6 +1347,7 @@ func (s *Session) bindExistingOrderQueue(u *units.Unit) {
 	}
 	if q := orders.QueueOfUnit(u); q != nil {
 		q.SetBinding(s.Build.OrderBinding)
+		s.registerOwnedOrderRows(q)
 	}
 }
 
@@ -1345,6 +1365,7 @@ func (s *Session) bindExistingOrderQueues() {
 		}
 		if q, ok := u.Orders.(*orders.Queue); ok && q != nil {
 			q.SetBinding(s.Build.OrderBinding)
+			s.registerOwnedOrderRows(q)
 		}
 	}
 }

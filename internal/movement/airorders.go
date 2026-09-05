@@ -1428,6 +1428,38 @@ func (s *System) BindAirOrderLegs() {
 			binding.Movement = &orders.MovementGoalAdapter{}
 		}
 		binding.Movement.RunAir = runner
+		s.RegisterOrderHandlers(q)
+	}
+}
+
+// airRowsDrivenByMoverTick are the order rows this system advances from its own
+// per-unit step — runAirExecutor, inside the mover tick — rather than from the
+// order pump. `VTOL_Standby` is the survivor of that arrangement: its executor
+// reads and writes the record's phase, dynamic gate and deadline as its state
+// machine [04 R-AIR-01 §7], so the pump must write none of them.
+//
+// `VTOL_Move` and `VTOL_LandIfCan` run from the same mover tick but are not
+// listed: both carry a descriptor handler that hands off to the air runner and
+// reports the executor's outcome, which is the faithful arrangement the header
+// above describes. The slice is fixed and ordered, never a map (I1).
+var airRowsDrivenByMoverTick = []string{"VTOL_Standby"}
+
+// RegisterOrderHandlers declares this system's ownership of those rows on q,
+// through the order package's per-queue registration seam. It is the statement
+// that replaced the descriptor table's DriverExternalMachine value: the pump
+// stays the sole dispatcher and learns from the owner, not from a table lookup,
+// that it must not write a result code over a live state machine [04 §3.3].
+//
+// It is called wherever this system binds a queue, and the session composition
+// calls it for queues that reach the pump without passing through here — an
+// idle aircraft's `VTOL_Standby` record is created by the pump's own refill
+// [04 §3.3], so the registration cannot wait for a producer to install one.
+func (s *System) RegisterOrderHandlers(q *orders.Queue) {
+	if s == nil || q == nil {
+		return
+	}
+	for _, name := range airRowsDrivenByMoverTick {
+		q.SetExternallyDrivenHandler(orders.Lookup(name))
 	}
 }
 
@@ -1456,6 +1488,19 @@ func (s *System) runAirOrderLeg(u *units.Unit, n *orders.Node, satisfied uint32,
 		return s.legVTOLSeekAttack(u, n, satisfied, tick), true
 	case "VTOL_SeekGuard":
 		return s.legVTOLSeekGuard(u, n, satisfied, tick), true
+	case "VTOL_Follow":
+		// The air guard is the one executor of the six that carries the off-map
+		// recovery of [04 R-AIR-01 §5] whose remaining phases do NOT live here:
+		// [04 R-ORD-02 §3]'s phases are the order package's guard handler, which
+		// shares its four legs with `Follow_Ground`. Only the recovery marker
+		// belongs to this package, so this case runs that leg alone and
+		// otherwise DECLINES, letting the handler carry on with its own phase
+		// switch — which is what "run it before the phase switch and return
+		// from it immediately" needs and nothing more.
+		if s.installOffMapRecoveryMarker(u, n) {
+			return 2, true // *hold* — result code 2 [04 R-AIR-01 §5]
+		}
+		return 0, false
 	case "AirStrike":
 		return s.legAirStrike(u, n, satisfied, tick), true
 	case "AirToGround":

@@ -138,8 +138,17 @@ func TestVTOLFollowOrbitsAMovingWard(t *testing.T) {
 	}
 	bearing := n.Param1
 	// *advance* is the pump's to apply; the fixture dispatches the handler
-	// directly, so the phase is stepped here.
+	// directly, so the phase is stepped here. The air row has a phase 1 of its
+	// own — "inhibit all three slots; advance" [04 R-ORD-02 §3] — so the legs
+	// are reached at phase 2.
 	n.Phase = 1
+	if code := guardHandler(f.guard, n, 0, 150); code != Code(1) {
+		t.Fatalf("air phase 1 want *advance* (1), got %d [04 R-ORD-02 §3]", code)
+	}
+	if len(f.air) != 0 {
+		t.Fatalf("the slot-inhibit phase installs no marker, got %d", len(f.air))
+	}
+	n.Phase = 2
 
 	// Visit one, no arrival bits: the leg installs, takes no draw, and holds.
 	n.DynamicGate = 0
@@ -174,12 +183,18 @@ func TestVTOLFollowOrbitsAMovingWard(t *testing.T) {
 	if n.DynamicGate != 0xF8|1 {
 		t.Fatalf("gate = %#x, want 0xF8 plus the deadline setter's bit 0 [04 R-ORD-02 §3][04 R-ORD-01 §1]", n.DynamicGate)
 	}
-	if n.Phase != 1 {
+	if n.Phase != 2 {
 		t.Fatalf("the orbit holds with the phase left where it was, got %d", n.Phase)
 	}
 
 	// The ward moves and the marker's arrival lands: the bearing steps
 	// subtractively by 0x4000 + RNG(0x2000) and the marker follows the ward.
+	//
+	// The satisfied word here is `0x20` — *arrived* — and not the whole `0xE0`
+	// the leg's own gate names, because the entry pre-check of [04 R-ORD-02 §3]
+	// ends the order on `0x48`, and `0x40` is in both sets: the cannot-get-there
+	// signal hands the record to `VTOL_SeekGuard` before leg 4 is ever reached.
+	// So of `0xE0`'s three bits only `0x20` and `0x80` can reach the orbit step.
 	f.ward.X = numeric.Fixed(900 << 16)
 	f.ward.Z = numeric.Fixed(120 << 16)
 	shadow := rng.NewSimulation(7)
@@ -188,7 +203,7 @@ func TestVTOLFollowOrbitsAMovingWard(t *testing.T) {
 
 	n.DynamicGate = 0
 	before = f.sim.Draws()
-	if code := guardHandler(f.guard, n, 0xE0, 230); code != Code(2) {
+	if code := guardHandler(f.guard, n, 0x20, 230); code != Code(2) {
 		t.Fatalf("second orbit visit want *hold* (2), got %d", code)
 	}
 	if got := f.sim.Draws() - before; got != 1 {
@@ -234,6 +249,10 @@ func TestVTOLFollowOrbitRadiusReadsTheArmedBit(t *testing.T) {
 		t.Fatalf("air admit want *advance* (1), got %d", code)
 	}
 	n.Phase = 1
+	if code := guardHandler(f.guard, n, 0, 150); code != Code(1) {
+		t.Fatalf("air phase 1 want *advance* (1), got %d [04 R-ORD-02 §3]", code)
+	}
+	n.Phase = 2
 	n.DynamicGate = 0
 	if code := guardHandler(f.guard, n, 0, 200); code != Code(2) {
 		t.Fatalf("orbit want *hold* (2), got %d", code)
@@ -258,5 +277,214 @@ func TestVTOLFollowOrbitRadiusReadsTheArmedBit(t *testing.T) {
 	wantX, wantZ = wantOrbitPoint(n.Param1, 320, f.ward)
 	if len(f.air) != 1 || f.air[0].X != wantX || f.air[0].Z != wantZ {
 		t.Fatalf("unarmed marker must fall back to the flat 320 [04 R-ORD-02 §3]")
+	}
+}
+
+// TestVTOLFollowSlotInhibitPhase locks §3's separate phase 1 — "inhibit all
+// three slots; advance" — and the phase renumbering it forces
+// [04 R-ORD-02 §3]. The ground row keeps its two-phase shape
+// [04 R-UNIT-06 §1], which is what the last assertion checks.
+func TestVTOLFollowSlotInhibitPhase(t *testing.T) {
+	f := newAirGuardFixture(t)
+	for idx := 0; idx < units.NumSlots; idx++ {
+		f.guard.InstallWeapon(idx, &content.WeaponDef{Name: "cannon", Range: 400})
+		// *release* the slot, so the inhibit below has something to do: bit 4
+		// SET means the slot belongs to autonomous acquisition, and *inhibit*
+		// hands it back [04 R-UNIT-06 §5 part 3].
+		f.guard.Slots[idx].Flags &^= units.SlotFlagAutonomous
+	}
+	n := airGuardNode(f)
+	if code := guardHandler(f.guard, n, 0, 100); code != Code(1) {
+		t.Fatalf("air admit want *advance* (1), got %d", code)
+	}
+	// Phase 0 does NOT inhibit for the air row: the ground row runs the walk
+	// inside its admit, the air row in a phase of its own [04 R-ORD-02 §3].
+	for idx := 0; idx < units.NumSlots; idx++ {
+		if f.guard.Slots[idx].Flags&units.SlotFlagAutonomous != 0 {
+			t.Fatalf("slot %d was inhibited by the air ADMIT phase [04 R-ORD-02 §3]", idx)
+		}
+	}
+
+	n.Phase = 1
+	before := f.sim.Draws()
+	if code := guardHandler(f.guard, n, 0, 150); code != Code(1) {
+		t.Fatalf("air phase 1 want *advance* (1), got %d [04 R-ORD-02 §3]", code)
+	}
+	if got := f.sim.Draws() - before; got != 0 {
+		t.Fatalf("the slot-inhibit phase draws %d times, want 0 [I4]", got)
+	}
+	for idx := 0; idx < units.NumSlots; idx++ {
+		if f.guard.Slots[idx].Flags&units.SlotFlagAutonomous == 0 {
+			t.Fatalf("slot %d not inhibited by air phase 1 [04 R-ORD-02 §3]", idx)
+		}
+	}
+	if len(f.air) != 0 {
+		t.Fatalf("the slot-inhibit phase installs no marker, got %d", len(f.air))
+	}
+
+	// Phase 2 is where the legs are, and phase 3 is "other phase: cancel-all".
+	n.Phase = 2
+	n.DynamicGate = 0
+	if code := guardHandler(f.guard, n, 0, 200); code != Code(2) {
+		t.Fatalf("air phase 2 want the orbit's *hold* (2), got %d", code)
+	}
+	n.Phase = 3
+	if code := guardHandler(f.guard, n, 0, 230); code != Code(7) {
+		t.Fatalf("air phase 3 want *cancel-all* (7), got %d [04 R-ORD-02 §3]", code)
+	}
+
+	// The ground row is untouched: its legs are still phase 1 and a phase byte
+	// beyond 1 still cancels all [04 R-UNIT-06 §1].
+	ground := &units.Unit{
+		Handle: 3,
+		Def:    &content.UnitDef{UnitName: "tank", CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 100},
+		Alive:  true,
+	}
+	ground.MaxHealth, ground.Health = 100, 100
+	gq := QueueForUnit(ground)
+	gq.SetBinding(QueueForUnit(f.guard).Binding())
+	gn := &Node{ID: Lookup("Follow_Ground"), Owner: ground.Handle, Target: f.ward.Handle, Deadline: -1}
+	if code := guardHandler(ground, gn, 0, 100); code != Code(1) {
+		t.Fatalf("ground admit want *advance* (1), got %d", code)
+	}
+	gn.Phase = 2
+	if code := guardHandler(ground, gn, 0, 130); code != Code(7) {
+		t.Fatalf("ground phase 2 want *cancel-all* (7), got %d [04 R-UNIT-06 §1]", code)
+	}
+}
+
+// TestVTOLFollowHandsOffToSeekGuard locks the entry pre-check and its hand-off
+// [04 R-ORD-02 §3]: "target null or satisfied ∩ 0x48 → if this record has no
+// successor, allocate `VTOL_SeekGuard` with this record's target (null when the
+// target is gone) and goal and tail-append it; complete either way."
+func TestVTOLFollowHandsOffToSeekGuard(t *testing.T) {
+	seekID := Lookup("VTOL_SeekGuard")
+	if seekID == 0 {
+		t.Skip("VTOL_SeekGuard descriptor absent")
+	}
+
+	// Case 1: `0x40` (the cannot-get-there signal) on the tail record. The
+	// hand-off is appended and the guard completes.
+	f := newAirGuardFixture(t)
+	q := QueueForUnit(f.guard)
+	n := q.PushHead(Lookup("VTOL_Follow"), Node{Owner: f.guard.Handle, Target: f.ward.Handle, Deadline: -1})
+	n.GoalX, n.GoalY, n.GoalZ = f.ward.X, f.ward.Y, f.ward.Z
+	if code := guardHandler(f.guard, n, 0x40, 100); code != Code(5) {
+		t.Fatalf("satisfied 0x40 want *complete* (5), got %d [04 R-ORD-02 §3]", code)
+	}
+	prim := q.Primary()
+	if len(prim) != 2 || prim[0] != n {
+		t.Fatalf("the hand-off must be a TAIL append behind the guard record, got %d records", len(prim))
+	}
+	seek := prim[1]
+	if seek.ID != seekID {
+		t.Fatalf("appended %q, want VTOL_SeekGuard [04 R-ORD-02 §3]", DescriptorFor(seek.ID).Name)
+	}
+	if seek.Owner != f.guard.Handle {
+		t.Fatalf("the tail append sets the record's owner [04 R-ORD-02 §4], got %d", seek.Owner)
+	}
+	if seek.Target != f.ward.Handle {
+		t.Fatalf("hand-off target = %d, want the guard record's own target %d", seek.Target, f.ward.Handle)
+	}
+	if seek.GoalX != n.GoalX || seek.GoalY != n.GoalY || seek.GoalZ != n.GoalZ {
+		t.Fatalf("hand-off goal = (%v,%v,%v), want the guard record's goal", seek.GoalX, seek.GoalY, seek.GoalZ)
+	}
+	// "no flag is inherited" [04 R-ORD-02 §4]: the append never takes the head's
+	// active marker away from it.
+	if seek.Flags&FlagActive != 0 {
+		t.Fatalf("the tail append must not take the active marker [04 R-ORD-02 §4]")
+	}
+
+	// Case 2: the same trigger, but the record HAS a successor — no hand-off.
+	f2 := newAirGuardFixture(t)
+	q2 := QueueForUnit(f2.guard)
+	q2.PushHead(Lookup("Stop"), Node{Owner: f2.guard.Handle})
+	n2 := q2.PushHead(Lookup("VTOL_Follow"), Node{Owner: f2.guard.Handle, Target: f2.ward.Handle, Deadline: -1})
+	if code := guardHandler(f2.guard, n2, 0x08, 100); code != Code(5) {
+		t.Fatalf("satisfied 0x08 want *complete* (5), got %d [04 R-ORD-02 §3]", code)
+	}
+	for _, rec := range q2.Primary() {
+		if rec.ID == seekID {
+			t.Fatalf("a record WITH a successor must not plant a seeker [04 R-ORD-02 §3]")
+		}
+	}
+
+	// Case 3: a null target. The pre-check still fires, and the appended record
+	// carries a null target — "null when the target is gone".
+	f3 := newAirGuardFixture(t)
+	q3 := QueueForUnit(f3.guard)
+	n3 := q3.PushHead(Lookup("VTOL_Follow"), Node{Owner: f3.guard.Handle, Deadline: -1})
+	n3.GoalX, n3.GoalY, n3.GoalZ = f3.ward.X, f3.ward.Y, f3.ward.Z
+	if code := guardHandler(f3.guard, n3, 0, 100); code != Code(5) {
+		t.Fatalf("a null target wants *complete* (5), got %d [04 R-ORD-02 §3]", code)
+	}
+	prim3 := q3.Primary()
+	if len(prim3) != 2 || prim3[1].ID != seekID {
+		t.Fatalf("a null target still hands off [04 R-ORD-02 §3]")
+	}
+	if prim3[1].Target != 0 {
+		t.Fatalf("hand-off target = %d, want null when the target is gone", prim3[1].Target)
+	}
+	if prim3[1].GoalX != n3.GoalX || prim3[1].GoalZ != n3.GoalZ {
+		t.Fatalf("the goal still travels across when the target does not")
+	}
+
+	// Case 4: a live guard with neither bit and a live ward runs on — the
+	// pre-check is not a blanket exit.
+	f4 := newAirGuardFixture(t)
+	n4 := airGuardNode(f4)
+	if code := guardHandler(f4.guard, n4, 0, 100); code != Code(1) {
+		t.Fatalf("a satisfied word outside 0x48 must reach the phase switch, got %d", code)
+	}
+}
+
+// TestVTOLFollowDivertsToTheOffMapLoiter locks the sentinel-sector diversion
+// [04 R-AIR-01 §5][04 R-ORD-02 §3]: it runs BEFORE the phase switch, returns
+// from it immediately with result code 2, and reaches the recovery marker
+// through the air leg seam because the marker family and the sector grid both
+// belong to internal/movement.
+func TestVTOLFollowDivertsToTheOffMapLoiter(t *testing.T) {
+	f := newAirGuardFixture(t)
+	offMap := true
+	calls := 0
+	binding := QueueForUnit(f.guard).Binding()
+	binding.Movement.RunAir = func(u *units.Unit, n *Node, satisfied uint32, tick uint32) (Code, bool) {
+		calls++
+		if DescriptorFor(n.ID).Name != "VTOL_Follow" {
+			t.Fatalf("the seam saw %q", DescriptorFor(n.ID).Name)
+		}
+		if !offMap {
+			return 0, false // on the map: the runner declines and the handler carries on
+		}
+		n.DynamicGate |= 0xE0 // the recovery leg's gate [04 R-AIR-01 §5]
+		return Code(2), true
+	}
+
+	n := airGuardNode(f)
+	before := f.sim.Draws()
+	if code := guardHandler(f.guard, n, 0, 100); code != Code(2) {
+		t.Fatalf("an off-map air guard wants the recovery's *hold* (2), got %d [04 R-AIR-01 §5]", code)
+	}
+	if calls != 1 {
+		t.Fatalf("the seam was called %d times, want once per visit", calls)
+	}
+	if n.Phase != 0 || n.Param1 != 0 {
+		t.Fatalf("the recovery returns BEFORE the phase switch: phase %d, p1 %d [04 R-ORD-02 §3]", n.Phase, n.Param1)
+	}
+	if got := f.sim.Draws() - before; got != 0 {
+		t.Fatalf("the recovery draws %d times, want 0 — the admit's draw is not reached [I4]", got)
+	}
+	if n.DynamicGate&0xE0 != 0xE0 {
+		t.Fatalf("gate = %#x, want the recovery's 0xE0 [04 R-AIR-01 §5]", n.DynamicGate)
+	}
+
+	// Back over the map: the runner declines and the ordinary admit runs.
+	offMap = false
+	n.DynamicGate = 0
+	if code := guardHandler(f.guard, n, 0, 130); code != Code(1) {
+		t.Fatalf("an on-map air guard wants the admit's *advance* (1), got %d", code)
+	}
+	if n.Param1 == 0 {
+		t.Fatalf("the admit's orbit bearing was not drawn once the runner declined")
 	}
 }

@@ -180,22 +180,12 @@ type Queue struct {
 	// writing it from the primary walk would destroy that transfer.
 	lastPumpTick uint32
 
-	// getBuiltHandler is supplied by the construction service that owns the
-	// product lifecycle. Keeping it on the queue preserves the ordinary ordered
+	// ownedHandlers is the per-row registration seam of queue_handlers.go: the
+	// handlers a subsystem outside this package installs for the rows whose
+	// bodies it owns. Keeping them on the queue preserves the ordinary ordered
 	// primary walk without introducing package-global session state
-	// [04 R-FAC-02 §4][I16]. Its signature is the descriptor Handler's: the
-	// satisfied set is an argument because `GetBuilt`'s phase-2 body reads it —
-	// the `0x8000` arm holds, the bit-0 arm decays [04 R-ORD-01 §11].
-	getBuiltHandler func(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code
-}
-
-// SetGetBuiltHandler binds the construction-owned GetBuilt lifecycle to this
-// queue. The queue pump remains the sole dispatcher and therefore preserves
-// BeCarried/GetBuilt composition timing [04 R-FAC-02 §4].
-func (q *Queue) SetGetBuiltHandler(handler func(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code) {
-	if q != nil {
-		q.getBuiltHandler = handler
-	}
+	// [04 R-FAC-02 §4][I16].
+	ownedHandlers []OwnedHandler
 }
 
 // QueueBinding is the concrete session-owned context every authoritative
@@ -1773,7 +1763,8 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 		u.Pending &^= satisfied
 		n.DynamicGate = 0
 		handler := desc.Handler
-		if (desc.Name != "GetBuilt" && handler == nil) || (desc.Name == "GetBuilt" && q.getBuiltHandler == nil) {
+		owned := q.OwnedHandlerFor(n.ID)
+		if handler == nil && owned == nil {
 			// What advances a handler-less record is the descriptor's own
 			// Driver field, not its spelling.
 			switch desc.Driver {
@@ -1786,20 +1777,15 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 				n.Deadline = int32(tick + 30 + q.randBelow15()) // [04 §3.3][I4]
 				n.MoveState = MoveEnRoute
 				return
-			case DriverExternalMachine:
-				// Another subsystem runs this record from its own per-unit step
-				// and owns its phase, gate and deadline. The pump must leave
-				// every one of those fields alone: writing a result code over
-				// them is writing over a live state machine.
-				return
 			}
 			// Retired (WU-19-4): this arm carried an accepted-blocked marker for descriptors
 			// that had no handler and no driver. The census is now zero —
 			// TestHandlersAreInstalledBeforeTheFirstPump walks the whole table
-			// and fails on any named descriptor that is neither `GetBuilt`
-			// (bound per queue by the construction service, [04 R-FAC-02 §4])
-			// nor driven by another subsystem — so this is a guard against a
-			// table that regresses, not a placeholder for behavior we owe.
+			// and fails on any named descriptor that carries neither a
+			// descriptor handler nor an owning subsystem's queue registration
+			// ([04 R-FAC-02 §4], queue_handlers.go) — so this is a guard
+			// against a table that regresses, not a placeholder for behavior
+			// we owe.
 			//
 			// It stays because the alternative to a guard is a jam. Retail has
 			// a handler for every named descriptor, so there is no retail
@@ -1818,16 +1804,26 @@ func (q *Queue) pumpPrimary(u *units.Unit, tick uint32) {
 			return
 		}
 		var code Code
-		if desc.Name == "GetBuilt" && q.getBuiltHandler != nil {
-			// GetBuilt is not a descriptor handler: the construction service
-			// that owns the product lifecycle binds it per queue
-			// [04 R-FAC-02 §4]. Its signature is the descriptor Handler's, and
-			// the satisfied set it receives is the same one computed above —
-			// `GetBuilt`'s gate is `0x8001` and its phase-2 body reads the set
-			// to choose its arm: `0x8000` holds for another 30 ticks, bit 0
-			// alone decays [04 R-ORD-01 §11]. The result-code handling below is
-			// its own, so this stays a named case.
-			code = q.getBuiltHandler(u, n, satisfied, tick)
+		if owned != nil {
+			// A row whose body belongs to a package this one cannot import:
+			// the owning subsystem registered it on this queue and the pump
+			// dispatches it exactly as it dispatches a descriptor handler
+			// (queue_handlers.go). `GetBuilt` is one of them — the construction
+			// service that owns the product lifecycle binds it per queue
+			// [04 R-FAC-02 §4] — and the satisfied set it receives is the same
+			// one computed above: `GetBuilt`'s gate is `0x8001` and its phase-2
+			// body reads the set to choose its arm, `0x8000` holds for another
+			// 30 ticks, bit 0 alone decays [04 R-ORD-01 §11].
+			//
+			// A registration that reports it did not advance the record is the
+			// owner saying its own per-unit step does, and that it owns the
+			// record's phase, gate and deadline. The pump must leave every one
+			// of those fields alone: writing a result code over them is writing
+			// over a live state machine.
+			ran := false
+			if code, ran = owned(u, n, satisfied, tick); !ran {
+				return
+			}
 		} else {
 			// Removed (WU-18-7): three by-name cases stood here, calling
 			// `beCarriedHandlerAtTick`, `stopHandlerAtTick` and
@@ -2313,6 +2309,17 @@ func BindQueue(u *units.Unit, q *Queue) {
 		// concrete binding explicitly [P0-00 A.1][04 §3.3].
 		if prior := QueueOfUnit(u); prior != nil && prior.binding != nil {
 			q.SetBinding(prior.binding)
+		}
+	}
+	if q != nil && q.ownedHandlers == nil {
+		// The owned-row registrations of queue_handlers.go transfer across the
+		// same lifecycle boundary, for the same reason the binding does: they
+		// are the owning subsystems' statement about the unit, not about the
+		// queue object, and a replacement that arrived without them would put
+		// the pump back to writing result codes over a live state machine
+		// until the next bind.
+		if prior := QueueOfUnit(u); prior != nil && prior.ownedHandlers != nil {
+			q.ownedHandlers = append([]OwnedHandler(nil), prior.ownedHandlers...)
 		}
 	}
 	u.Orders = q

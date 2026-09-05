@@ -471,6 +471,10 @@ func TestFourGroundProductsEachLeaveTheYard(t *testing.T) {
 		t.Fatal("no placement record for the lab")
 	}
 	q := orders.QueueForUnit(factory)
+	// This fixture builds the queue directly rather than through the service's
+	// own admission point, so it must make the registration the session makes
+	// for it: the build rows are advanced by StepUnit, not by the pump.
+	svc.RegisterOrderHandlers(q)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param1: prodIdx(cat, prodDef.CanonicalKey), Param2: productCount, Phase: uint8(State2), Deadline: -1})
 	q.Primary()[0].Phase = uint8(State2)
 
