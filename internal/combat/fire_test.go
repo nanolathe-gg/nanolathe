@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 func weaponForFire(id int32, reload int32, spray int32, burst int32, burstRate int32, stockpile bool, dropped bool, meteor bool, startSmoke bool, soundStart string, energy float64, metal float64) *content.WeaponDef {
@@ -703,5 +704,82 @@ func weaponMapLookup(m map[int32]*content.WeaponDef) func(id int32) (*content.We
 	return func(id int32) (*content.WeaponDef, bool) {
 		w, ok := m[id]
 		return w, ok
+	}
+}
+
+// TestDroppedBombInheritsCarrierVelocity is the play-test contract for a
+// bomber's payload [06 §6.4]: a `dropped` weapon fired from a moving carrier
+// leaves with the carrier's own horizontal velocity — the mover's CURRENT
+// scalar speed word at the carrier's heading, with no forward launch
+// component of its own — and then falls under the map's gravity.
+//
+// The regression this locks: the spawner used to take the magnitude from the
+// unit DEFINITION's `maxvelocity`. A mover only approaches `maxvelocity`
+// asymptotically and sheds speed in every turn, so a bomb dropped at half
+// throttle outran its bomber and appeared to be thrown forward past the nose.
+func TestDroppedBombInheritsCarrierVelocity(t *testing.T) {
+	var svc Service
+	w := weaponForFire(80, 10, 0, 0, 0, false, true, false, false, "", 0, 0)
+	slot := &Slot{Weapon: w}
+	r := rng.NewSimulation(1)
+
+	// A bomber running at a quarter turn (toward -X) at 6.0 world units per
+	// tick, whose definition maximum is a very different 9.0: the two are far
+	// enough apart that either operand is unmistakable in the result.
+	const speed = numeric.Fixed(6 * 65536)
+	carrier := &units.Unit{
+		Handle: 7, Alive: true, Activated: true,
+		Def: &content.UnitDef{MaxVelocity: int32(9 * 65536)},
+	}
+	carrier.Move.Heading = 0x4000
+	carrier.Move.Speed = speed
+
+	// The mover's own step for this tick, built from the same two operands
+	// [04 R-MOV-01 §4]. This is the vector the bomb must match.
+	yaw := numeric.Angle(carrier.Move.Heading)
+	moverStepX := numeric.Fixed(int64(-numeric.MulRound(numeric.Sin(yaw), int32(speed.Raw()))))
+	moverStepZ := numeric.Fixed(int64(-numeric.MulRound(numeric.Cos(yaw), int32(speed.Raw()))))
+
+	gravity := numeric.Fixed(0x1FDB) // the runtime gravity default [03 §2.2]
+	h, ok := TryFire(&svc, slot, 0, Target{Kind: TargetPoint, X: numeric.FixedFromInt(-400)}, 0,
+		FirePorts{RNG: &r, Shooter: carrier, Gravity: gravity})
+	if !ok || h == 0 {
+		t.Fatalf("the dropped weapon did not fire [06 §6.4]")
+	}
+	p := &svc.Records[int(h)-1]
+
+	if p.Velocity.X != moverStepX || p.Velocity.Z != moverStepZ {
+		t.Fatalf("bomb velocity XZ (%v,%v), want the carrier's own step (%v,%v): a dropped weapon carries the mover's live speed word, not the definition's maxvelocity [06 §6.4]",
+			p.Velocity.X, p.Velocity.Z, moverStepX, moverStepZ)
+	}
+	if p.Velocity.Y != 0 {
+		t.Fatalf("bomb vertical velocity %v, want zero at release [06 §6.4]", p.Velocity.Y)
+	}
+	if p.Speed != 0 {
+		t.Fatalf("bomb scalar speed %v, want zero [06 §6.4]", p.Speed)
+	}
+	// Not the definition maximum: that would be 9.0 along -X.
+	if p.Velocity.X == numeric.Fixed(-9*65536) {
+		t.Fatalf("bomb velocity is the definition's maxvelocity, not the mover's speed [06 §6.4]")
+	}
+
+	// Dropped motion: add velocity, add wind, subtract gravity from the
+	// vertical velocity, every tick, forever [06 §6.4]. Two ticks of free
+	// fall put the bomb two mover steps downrange and one gravity step per
+	// tick lower, so it stays exactly under the carrier's line of flight.
+	start := p.Pos
+	for i := 0; i < 2; i++ {
+		if got := AdvanceDropped(p, w, uint32(i+1), Vec3{}, gravity); got != AdvanceAlive {
+			t.Fatalf("dropped motion result %v at tick %d, want alive (no expiry test) [06 §6.4]", got, i)
+		}
+	}
+	if want := start.X.Add(moverStepX).Add(moverStepX); p.Pos.X != want {
+		t.Fatalf("after two ticks X = %v, want %v (two carrier steps) [06 §6.4]", p.Pos.X, want)
+	}
+	if want := -gravity - gravity; p.Velocity.Y != want {
+		t.Fatalf("after two ticks vertical velocity = %v, want %v (gravity subtracted each tick) [06 §6.4]", p.Velocity.Y, want)
+	}
+	if p.Pos.Y != start.Y.Sub(gravity) {
+		t.Fatalf("after two ticks Y = %v, want %v: the first tick moves before the first gravity step [06 §6.4]", p.Pos.Y, start.Y.Sub(gravity))
 	}
 }

@@ -338,3 +338,49 @@ func TestResultPresentationUsesStrictDeadlinesAndInclusiveFill(t *testing.T) {
 		t.Fatalf("exact target hit state = current %d animating %t, want 2,true", exact.resultState.current[0][0], exact.resultState.animating[0][0])
 	}
 }
+
+// TestDrawResultStatsUsesPostBattleClockNotFrozenScrollAnchor is the
+// regression for the play-test report that ENDMSN's kill/loss/economy
+// columns never showed the true counts. viewerStep stops calling
+// refreshScrollDelta the instant the result overlay takes the frame
+// [07 §10] ("End-mission presentation takes ownership of the frame once the
+// authoritative result is latched"), so scrollAnchor is frozen at whatever
+// value the last battle frame left it for the rest of the results sequence.
+// drawResultStats used to feed that frozen value to the strict due
+// comparisons of [07 R-HUD-03 §11], which admit at most one reveal and one
+// bar step before every later comparison finds the due already in the past
+// and stops — Kills stuck at its first one-unit climb, and every other
+// authored column (Losses, EProduced, MProduced, EWasted, MWasted, Score)
+// never revealed at all. b.postBattleNow() is the same 30-Hz counter the
+// post-battle controller itself steps on and keeps advancing for as long as
+// ENDMSN is drawn.
+func TestDrawResultStatsUsesPostBattleClockNotFrozenScrollAnchor(t *testing.T) {
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &retailBattleHUD{}
+	// A large, never-updated value stands in for the frozen post-battle
+	// scroll clock; the test fails if drawResultStats ever depends on it
+	// moving.
+	b := &battleSession{scrollAnchor: 999999}
+	frozenScrollAnchor := b.scrollAnchor
+	row := frame.ResultScore{Kills: 5, Losses: 3, EnergyProduced: 20, MetalProduced: 15, EnergyWasted: 2, MetalWasted: 1, Score: 12}
+	view := frame.ResultView{Ended: true, Kind: "defeat", Tick: 100, Scores: []frame.ResultScore{row}, ColumnMaxima: [7]int{10, 10, 100, 100, 100, 100, 100}}
+	for unit := 1; unit <= 200; unit++ {
+		b.postBattleClock = float64(unit)
+		h.drawResultStats(cl, b, view)
+	}
+	if b.scrollAnchor != frozenScrollAnchor {
+		t.Fatalf("test scaffold moved the frozen scroll clock: %d -> %d", frozenScrollAnchor, b.scrollAnchor)
+	}
+	if h.resultState.group != len(resultBars)-1 {
+		t.Fatalf("reveal stalled at group %d, want all %d groups revealed", h.resultState.group, len(resultBars))
+	}
+	for column := 0; column < len(resultBars); column++ {
+		want := resultBarValue(row, column)
+		if got := h.resultState.current[0][column]; got != want {
+			t.Fatalf("column %d (%s) settled at %d, want the true value %d", column, resultBars[column].Label, got, want)
+		}
+	}
+}

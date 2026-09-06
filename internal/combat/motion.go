@@ -465,10 +465,12 @@ func InitVertical(p *Projectile, w *content.WeaponDef, now uint32, muzzle, targe
 
 // InitDropped initializes a dropped projectile per [06 §6.4].
 //
-// dropperHeading and dropperMaxVelocity are the DROPPING UNIT's own state: its
-// heading word and its unit definition's `maxvelocity` in 16.16 per tick — not
-// any weapon field and not any aim solution [06 §6.4].
-func InitDropped(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, dropperHeading numeric.Angle, dropperMaxVelocity numeric.Fixed) {
+// dropperHeading and dropperSpeed are the DROPPING UNIT's own live motion
+// state: its heading word and its mover's CURRENT scalar speed word in 16.16
+// per tick — the same two operands the mover itself multiplies to build its own
+// velocity [04 R-MOV-01 §4] — not any weapon field, not the definition's
+// `maxvelocity`, and not any aim solution [06 §6.4].
+func InitDropped(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, dropperHeading numeric.Angle, dropperSpeed numeric.Fixed) {
 	if p == nil || w == nil {
 		return
 	}
@@ -485,11 +487,18 @@ func InitDropped(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target
 	// The launch state is the dropping unit's, not an aim solution [06 §6.4]:
 	//
 	//	yaw       = unitHeading
-	//	velocityX = -sin(unitHeading, unitMaxVelocity)
-	//	velocityZ = -cos(unitHeading, unitMaxVelocity)
+	//	velocityX = -sin(unitHeading, moverSpeed)
+	//	velocityZ = -cos(unitHeading, moverSpeed)
 	//	velocityY = 0
 	//
-	// so a bomb leaves the bay already carrying the bomber's own forward run.
+	// so a bomb leaves the bay carrying EXACTLY the carrier's own horizontal
+	// velocity: same heading, same scalar speed word. It therefore keeps pace
+	// with the aircraft and falls away beneath it under gravity alone, instead
+	// of being launched forward past the nose. That is also the only reading
+	// under which the bombing run's release lead is a physical lead: phase 4
+	// sizes the release radius as `moverSpeed · 30 · sqrt(2·cruisealt/gravity)`
+	// [04 R-AIR-01 §8], the horizontal distance a bomb moving at the mover's
+	// speed covers while it falls from cruise altitude.
 	//
 	// The stored yaw is that heading advanced by half a turn, because a
 	// projectile yaw in this build carries retail's `+ 0x8000` offset: our
@@ -500,10 +509,10 @@ func InitDropped(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target
 	// convention every other creator here writes.
 	yaw := dropperHeading.Add(0x8000)
 	p.Yaw = yaw
-	// The horizontal magnitude is the definition's maximum velocity outright:
-	// there is no cos(pitch) term, since the dropped creator writes no pitch
-	// and no vertical component [06 §6.4].
-	mag := int32(dropperMaxVelocity.Raw())
+	// The horizontal magnitude is the mover's scalar speed outright: there is
+	// no cos(pitch) term, since the dropped creator writes no pitch and no
+	// vertical component [06 §6.4].
+	mag := int32(dropperSpeed.Raw())
 	p.Velocity = Vec3{
 		X: numeric.Fixed(int64(numeric.MulRound(numeric.Sin(yaw), mag))), // [04 §5.1] (table*mag+4096)>>13
 		Y: 0,                                                             // [06 §6.4] vertical velocity zero
@@ -535,9 +544,9 @@ func InitMeteor(p *Projectile, w *content.WeaponDef, now uint32, pos, vel Vec3) 
 // InitProjectile dispatches creation and initializes p per [06 §6.2] C15.
 // Returns the creation family used; nil weapon returns CreationNone.
 // slotDistance and gravity are the ballistic creator's two extra operands, and
-// dropperHeading/dropperMaxVelocity are the dropped creator's two; each pair is
+// dropperHeading/dropperSpeed are the dropped creator's two; each pair is
 // ignored by every other family [06 §6.4].
-func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed, dropperHeading numeric.Angle, dropperMaxVelocity numeric.Fixed) CreationFamily {
+func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, target Vec3, targetUnit pool.Handle, yaw, pitch numeric.Angle, meteorVel *Vec3, slotDistance int32, gravity numeric.Fixed, dropperHeading numeric.Angle, dropperSpeed numeric.Fixed) CreationFamily {
 	fam := CreationFamilyForWeapon(w)
 	switch fam {
 	case CreationMeteor:
@@ -553,7 +562,7 @@ func InitProjectile(p *Projectile, w *content.WeaponDef, now uint32, muzzle, tar
 	case CreationOrdinary:
 		InitOrdinary(p, w, now, muzzle, target, targetUnit)
 	case CreationDropped:
-		InitDropped(p, w, now, muzzle, target, targetUnit, dropperHeading, dropperMaxVelocity)
+		InitDropped(p, w, now, muzzle, target, targetUnit, dropperHeading, dropperSpeed)
 	default:
 	}
 	return fam

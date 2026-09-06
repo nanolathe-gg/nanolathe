@@ -1,5 +1,7 @@
 package camera
 
+import "github.com/nanolathe/nanolathe/internal/pool"
+
 // TargetPoint is a map-pixel point used by the phase-10 follow writer. Y is
 // the vertical/shear component, not a screen coordinate [01 §4.4][07 §10].
 type TargetPoint struct {
@@ -38,6 +40,44 @@ func (c *Camera) DesiredOrigin(target TargetPoint) Origin {
 		X: clampAxis(x, c.MapW, spanW, leadX),
 		Z: clampAxis(z, c.MapH, spanH, leadZ),
 	}
+}
+
+// LatchTracked captures the currently tracked object for this presentation
+// frame's follow application and returns it. Retail runs phase 10 (follow and
+// shake) once per completed sub-tick, strictly *before* that same host
+// frame's hotkey dispatch step — so a `t`/`T` or Ctrl+C press only changes
+// which object phase 10 chases starting with the *next* frame's pass, never
+// the frame the key was pressed on [07 R-CAM-01 §1 steps 3-4][07 R-CAM-01
+// §12 "Ctrl+C and t/T do not move the camera themselves"].
+//
+// Nanolathe's camera is presentation-only and does not interleave with
+// simulation phases the way retail's phase 10 does [I6]; instead a frame's
+// follow work is split across the presentation frame's own tick boundary:
+// LatchTracked runs before this build's hotkey dispatch (preserving the
+// next-frame timing above), and the caller applies the latch, via
+// LatchedTracked, only after this frame's own simulation tick has published
+// — so the position used is the one the frame's composer is about to draw,
+// not the previous publish (defect PT6-01: reading the previous publish's
+// position here made a followed unit's screen position swing by a
+// tick's worth of its own motion every frame, reading as shake, sharpest
+// whenever the frame's tick count varied, which the fixed presentation
+// cadence of the "Run presentation work at 30 Hz" change did not by itself
+// prevent — the two reads were still on either side of that frame's own
+// publish).
+func (c *Camera) LatchTracked() pool.Handle {
+	if c == nil {
+		return 0
+	}
+	c.Follow.latched = c.Follow.Tracked
+	return c.Follow.latched
+}
+
+// LatchedTracked returns the object most recently captured by LatchTracked.
+func (c *Camera) LatchedTracked() pool.Handle {
+	if c == nil {
+		return 0
+	}
+	return c.Follow.latched
 }
 
 // FollowTo steps the current camera origin toward target and returns the

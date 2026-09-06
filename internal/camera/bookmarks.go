@@ -30,6 +30,14 @@ type FollowState struct {
 	Gliding   bool
 	Tracked   pool.Handle
 	Bookmarks [BookmarkSlots]Bookmark
+
+	// latched is Nanolathe's own sequencing aid, not a retail structure
+	// member: it is the tracked object captured by LatchTracked, before this
+	// build's hotkey dispatch can change Tracked, so the follow application
+	// that runs later in the same presentation frame still acts on the
+	// object retail's phase 10 would have seen (see LatchTracked) [07
+	// R-CAM-01 §12].
+	latched pool.Handle
 }
 
 // SetTracked latches the follow camera's tracked object. Retail's `t`/`T` and

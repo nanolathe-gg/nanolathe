@@ -6,6 +6,8 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
+	presentationrender "github.com/nanolathe/nanolathe/internal/render"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // spanU..spanRow index the attributes the two-chain edge walk carries beside
@@ -471,6 +473,59 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 			dst[row+int(sx)] = t.color[i]
 		}
 	}
+}
+
+// tintAtOrBelow recolours every pixel whose height key is at or below the
+// threshold through the 256-entry BLUE TABLE. It is the second arm of retail's
+// waterline pass — the one that runs for a subject the viewer owns or holds on
+// sonar, and for every 3DO feature — so the submerged part of a hull is tinted
+// rather than cut off [R-REN-03A §8][R-WATER-01 §2][R-RAST-01 §4].
+//
+// Two details separate it from eraseAtOrBelow beyond the table lookup. It skips
+// pixels already equal to the image's transparent index, so the background
+// inside the image box is not painted a blue that the final blit would then
+// stamp over the terrain; and it leaves coverage alone, because a tinted pixel
+// is still a drawn pixel. The comparison is inclusive on the key, like every
+// other consumer of the height plane.
+func (t *modelTarget) tintAtOrBelow(threshold uint8, blue *[256]byte) {
+	if t == nil || t.height == nil || blue == nil {
+		return
+	}
+	for i := range t.color {
+		if t.height[i] > threshold || t.color[i] == t.transparent {
+			continue
+		}
+		t.color[i] = blue[t.color[i]]
+	}
+}
+
+// waterlineThreshold is the waterline pass's key threshold, or false when the
+// pass does not run. With `t = seaLevel - hi16(unitY)` the pass runs only when
+// `t > 0` — some part of the subject is below the water surface — and selects
+// every pixel with `key <= t + 50 [+75 when the definition authors Digger]`,
+// the same base the height key itself carries [R-REN-03A §8][R-WATER-01 §2].
+//
+// Both narrowings floor: retail extracts the high word of a 16.16 value with an
+// arithmetic shift, so a unit a fraction below an integer height rounds down.
+//
+// The clamp at 255 is not a choice. The key plane is a byte, so no stored key
+// can exceed 255; a deeper threshold selects every pixel either way, which is
+// exactly what a byte key compared against a wider threshold does. Clamping
+// keeps that behaviour instead of wrapping it into a small number that would
+// spare the deepest geometry.
+func waterlineThreshold(seaLevel, unitY numeric.Fixed, digger bool) (uint8, bool) {
+	depth := int32(seaLevel.Floor()) - int32(unitY.Floor())
+	if depth <= 0 {
+		return 0, false
+	}
+	threshold := depth + presentationrender.NanoframeHeightBias
+	if digger {
+		threshold += diggerKeyBias
+	}
+	if threshold > 255 {
+		threshold = 255
+	}
+	return uint8(threshold), true
 }
 
 // spanShadeRow narrows an interpolated SHD row. The rows the model path carries

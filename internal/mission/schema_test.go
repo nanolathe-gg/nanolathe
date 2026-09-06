@@ -499,3 +499,62 @@ func TestUnifiedSelectSchema(t *testing.T) {
 		t.Fatalf("unified case-insensitive: %v %q", err, s.Name)
 	}
 }
+
+// TestStartingResourcesComeFromSelectedSchema locks [02 R-MAP-01 §5]: the four
+// starting-resource words are read with the chosen schema current, so the
+// difficulty the campaign selected decides the treasury. Reading them from the
+// [GlobalHeader] returned zero for every stock mission — Arm campaign mission 2
+// authors HumanMetal=1000 per schema and started with nothing.
+func TestStartingResourcesComeFromSelectedSchema(t *testing.T) {
+	src := `
+[GlobalHeader]
+{
+    HumanMetal=7;
+    HumanEnergy=7;
+    ComputerMetal=7;
+    ComputerEnergy=7;
+    [Schema 0] { Type=Easy;   HumanMetal=1000; HumanEnergy=1100; ComputerMetal=100; ComputerEnergy=200; }
+    [Schema 1] { Type=Medium; HumanMetal=500;  HumanEnergy=600;  ComputerMetal=300; ComputerEnergy=400; }
+}
+`
+	ota := mustLoadOTA(t, src)
+	for _, tc := range []struct {
+		difficulty int
+		want       StartingResources
+	}{
+		{0, StartingResources{HumanMetal: 1000, HumanEnergy: 1100, ComputerMetal: 100, ComputerEnergy: 200}},
+		{1, StartingResources{HumanMetal: 500, HumanEnergy: 600, ComputerMetal: 300, ComputerEnergy: 400}},
+	} {
+		schema, err := SelectCampaignSchema(ota, tc.difficulty)
+		if err != nil {
+			t.Fatalf("SelectCampaignSchema(%d): %v", tc.difficulty, err)
+		}
+		m := &Mission{OTA: ota, Schema: schema}
+		if got := m.StartingResources(); got != tc.want {
+			t.Fatalf("difficulty %d selected %q and read %+v, want %+v [02 R-MAP-01 §5]",
+				tc.difficulty, schema.Name, got, tc.want)
+		}
+	}
+}
+
+// A schema that does not author a key falls back to a GlobalHeader-authored
+// one; a key absent from both is the accessor default of zero.
+func TestStartingResourcesFallBackToGlobalHeader(t *testing.T) {
+	src := `
+[GlobalHeader]
+{
+    HumanMetal=250;
+    [Schema 0] { Type=Easy; HumanEnergy=900; }
+}
+`
+	ota := mustLoadOTA(t, src)
+	schema, err := SelectCampaignSchema(ota, 0)
+	if err != nil {
+		t.Fatalf("SelectCampaignSchema: %v", err)
+	}
+	m := &Mission{OTA: ota, Schema: schema}
+	want := StartingResources{HumanMetal: 250, HumanEnergy: 900}
+	if got := m.StartingResources(); got != want {
+		t.Fatalf("mixed placement read %+v, want %+v", got, want)
+	}
+}

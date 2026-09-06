@@ -250,7 +250,20 @@ func QueueOverlay(f *frame.Frame, opt QueueOverlayOptions) []QueuePrimitive {
 						out = append(out, QueuePrimitive{Kind: QueuePrimitiveDash, Unit: q.Unit, List: uint8(list), Index: order.Index, OrderKind: order.Kind, Mask: orderMask, Selected: isSelected, A: prev, B: p, WorldA: prevWorld, WorldB: world[i], DashAge: age(opt.Tick, order.CreationTick)})
 						prev, prevWorld = p, world[i]
 					}
-				} else {
+				} else if orderMask&QueueIconMask != 0 {
+					// The icon helper is also the anchor getter, and it is the
+					// ONLY other helper that resolves and advances the running
+					// point [R-P0-11 §3 "The dash chain's artwork, and the anchor
+					// getter that doubles as the icon"]. An order whose mask sets
+					// neither bit 2 nor bit 8 never calls it in retail, so the
+					// running anchor must stay put. The idle-queue refill's
+					// Standby/Standby_Mine head record is the reachable case:
+					// mask 0x10 (range rings only) and "no target, goal, or
+					// parameters" [04 "The idle-queue refill from
+					// `defaultmissiontype`"] — advancing the anchor to that
+					// record's zero-valued goal made the next queued order's dash
+					// chain run from world origin instead of from wherever the
+					// anchor actually was.
 					prev, prevWorld = points[len(points)-1], world[len(world)-1]
 				}
 				if orderMask&QueueCircleMask != 0 && opt.Circle != nil {

@@ -280,6 +280,15 @@ type UnitDraw struct {
 	// DiggerClip erases everything at or below the model origin, which is the
 	// buried half of a pop-up defence [R-REN-03A §8].
 	DiggerClip bool
+	// SonarContact is the sensor phase's sonar-contact bit for this subject —
+	// the same runtime bit the direct-visibility predicate consults to accept a
+	// fully submerged unit [R-VIS-01 §4][R-VIS-01 §5]. It is one half of the
+	// waterline pass's erase-versus-tint choice: a submerged unit the viewer
+	// neither owns nor holds on sonar is cut off at the surface, while one it
+	// owns or has on sonar is recoloured through the BLUE TABLE instead
+	// [R-RAST-01 §4]. The other half is ownership, which the composer resolves
+	// because it is the side that knows the viewing player.
+	SonarContact bool
 }
 
 // BuildPieceDraws produces per-piece draw lists with world transforms and primitive lists in load-fixed order [03 §2.4] C20 [03 §5.2] presentation only (I6).
@@ -503,6 +512,10 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 		Pieces:       pieces,
 		WorldPos:     worldPos,
 		NeedsRebuild: needsRebuild,
+		// The published sonar/underwater-exemption bit is the waterline pass's
+		// erase-versus-tint selector [R-RAST-01 §4]; it rides the committed unit
+		// view, so nothing here reads live sensor state [I6].
+		SonarContact: current.UnderwaterExempt,
 	}
 }
 

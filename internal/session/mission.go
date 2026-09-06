@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -264,10 +265,92 @@ func applyUseOnlyRestriction(fs vfs.FSOps, cat *content.Catalog, useOnlyPath str
 		return cat, nil
 	}
 	restricted := cat.Clone()
+	// The build menus are rebuilt against the compacted table, not carried
+	// across it. Retail's restriction takes effect before the battle-entry
+	// catalog compile, and that compile re-resolves every authored `canbuild<n>`
+	// name through the by-name search over the surviving records: a name that is
+	// no unit yields index 0 and is *skipped, not stored*
+	// [02 R-CAT-01 §5 step 6], as is a download item whose UNITNAME no longer
+	// resolves [02 R-CAT-01 §8 step 4]. Pruning before RestrictToCreatable keeps
+	// the catalog digest — which covers the menus — consistent with what the
+	// battle actually offers.
+	pruneRestrictedBuildMenus(restricted, names)
 	if err := restricted.RestrictToCreatable(names); err != nil {
 		return nil, fmt.Errorf("nanolathe: unit restriction failed: logical path %s, providers searched [vfs], expected a compacted unit catalog: %w", useOnlyPath, err)
 	}
 	return restricted, nil
+}
+
+// pruneRestrictedBuildMenus drops from every compiled build menu the products
+// the restriction removes, and drops the menu of a builder the restriction
+// removes outright. It is the menu half of the catalog compaction described on
+// applyUseOnlyRestriction: only names that still resolve to a surviving
+// definition are stored [02 R-CAT-01 §5 step 6][02 R-CAT-01 §8 step 4].
+//
+// The surviving set is the restriction file's names intersected with the
+// catalog, exactly as RestrictToCreatable computes it — a `[name]` section
+// naming no definition permits nothing.
+func pruneRestrictedBuildMenus(cat *content.Catalog, names []string) {
+	if cat == nil {
+		return
+	}
+	keep := make(map[string]struct{}, len(names))
+	for _, n := range names {
+		key := content.CanonicalKey(n)
+		if key == "" {
+			continue
+		}
+		if _, ok := cat.Units[key]; ok {
+			keep[key] = struct{}{}
+		}
+	}
+	if cat.BuildMenus != nil {
+		// Deterministic iteration: the map is rewritten in sorted key order so
+		// a restricted catalog is byte-identical across runs [I1].
+		builders := make([]string, 0, len(cat.BuildMenus))
+		for k := range cat.BuildMenus {
+			builders = append(builders, k)
+		}
+		sort.Strings(builders)
+		for _, builder := range builders {
+			page := cat.BuildMenus[builder]
+			if page == nil {
+				continue
+			}
+			if _, ok := keep[content.CanonicalKey(page.Builder)]; !ok {
+				// The builder itself is gone from the table, so it has no
+				// record to hold a list.
+				delete(cat.BuildMenus, builder)
+				continue
+			}
+			base := 0
+			kept := page.Buttons[:0:0]
+			for i, button := range page.Buttons {
+				if _, ok := keep[content.CanonicalKey(button)]; !ok {
+					continue
+				}
+				kept = append(kept, button)
+				if i < page.BaseButtonCount {
+					base++
+				}
+			}
+			page.Buttons = kept
+			page.BaseButtonCount = base
+		}
+	}
+	if len(cat.DownloadPlacements) > 0 {
+		placements := cat.DownloadPlacements[:0:0]
+		for _, placement := range cat.DownloadPlacements {
+			if _, ok := keep[content.CanonicalKey(placement.Builder)]; !ok {
+				continue
+			}
+			if _, ok := keep[content.CanonicalKey(placement.Product)]; !ok {
+				continue
+			}
+			placements = append(placements, placement)
+		}
+		cat.DownloadPlacements = placements
+	}
 }
 
 func applyCampaignPlayerTableSides(s *Session, fs vfs.FSOps, m *mission.Mission) {
@@ -632,41 +715,61 @@ func grantResourcesStrict(s *Session, m *mission.Mission) error {
 	}
 	// Starting resources are credited DIRECTLY to live stock outside the ledger
 	// [08 "Placement and battle entry"] via economy.CreditSpawn per C9. No
-	// Mirror, Accepted or Carry bucket is touched. Amounts are the authored
-	// HumanMetal/HumanEnergy vs ComputerMetal/ComputerEnergy from the OTA
-	// GlobalHeader per [P1-02 §2.1] (authored; decode default 0 per [02 map-global keys]).
-	// Using CreditSpawn preserves I2's float32 stock identity.
+	// Mirror, Accepted or Carry bucket is touched. Using CreditSpawn preserves
+	// I2's float32 stock identity.
+	//
+	// The amounts are the selected schema's HumanMetal/HumanEnergy for a human
+	// slot and ComputerMetal/ComputerEnergy for a computer one. They are
+	// `[Schema N]` keys read with the chosen schema current [02 R-MAP-01 §5],
+	// which is why they are resolved through mission.StartingResources rather
+	// than through the GlobalHeader census: every stock mission authors them in
+	// its schemas only, so a GlobalHeader read returned zero for the whole
+	// corpus and Arm mission 2 opened with nothing to build with.
+	//
+	// This grant is the one that survives the tick-0 settlement, and on the
+	// mission kind it writes the stocks *and* the storage bonus
+	// [08 R-ENTRY-01 §8 step 5][05 R-ECO-01 §4]: the bonus setter takes the
+	// same two words, floors each operand at 200 and sets the enable flag, and
+	// the settlement adds the bonus to capacity once per pass. Without it the
+	// opening stock exceeds capacity — the commander's own storage is far under
+	// 1000 — and the post-settlement clamp claws it straight back.
 	if m == nil || m.OTA == nil || m.OTA.Global == nil {
 		return fmt.Errorf("session: mission has no GlobalHeader for starting resources [08 \"Placement and battle entry\"]")
 	}
-	mg := mission.DecodeMissionGlobals(m.OTA.Global) // [P1-02 §2.1]; decode defaults per [02 map-global keys]
+	res := m.StartingResources() // [02 R-MAP-01 §5]
 	for p := 0; p < 10; p++ {
 		if !s.Econ.Players[p].Exists {
 			continue
 		}
-		var metal, energy float32
+		var metal, energy int32
 		switch s.Econ.Players[p].ControllerState {
 		case 1: // human local
-			metal = float32(mg.HumanMetal)
-			energy = float32(mg.HumanEnergy)
+			metal, energy = res.HumanMetal, res.HumanEnergy
 		case 2, 3: // computer
-			metal = float32(mg.ComputerMetal)
-			energy = float32(mg.ComputerEnergy)
+			metal, energy = res.ComputerMetal, res.ComputerEnergy
 		default:
 			if p == 0 {
-				metal = float32(mg.HumanMetal)
-				energy = float32(mg.HumanEnergy)
+				metal, energy = res.HumanMetal, res.HumanEnergy
 			} else {
-				metal = float32(mg.ComputerMetal)
-				energy = float32(mg.ComputerEnergy)
+				metal, energy = res.ComputerMetal, res.ComputerEnergy
 			}
 		}
+		// The bonus is installed before the credit so a capacity rebuild that
+		// observes the new stock also observes the capacity that holds it.
+		s.Econ.Players[p].InstallStorageBonus(int(metal), int(energy))
 		if metal != 0 {
-			economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, metal)
+			economy.CreditSpawn(&s.Econ.Players[p], economy.Metal, float32(metal))
 		}
 		if energy != 0 {
-			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, energy)
+			economy.CreditSpawn(&s.Econ.Players[p], economy.Energy, float32(energy))
 		}
+	}
+	// The grant runs after the tick-0 player phase, which rebuilt capacity from
+	// the unit sum alone. Rebuild once here so the bonus reaches capacity now
+	// rather than at the first 30-tick settlement, matching what the skirmish
+	// grant does for the same reason [05 R-ECO-01 §4].
+	if s.Units != nil {
+		economy.RebuildCapacity(s.Econ, s.Units)
 	}
 	return nil
 }

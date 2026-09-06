@@ -5684,7 +5684,10 @@ gadget instead of writing its status word. Stock gadget names are
 `ARM`/`COR` prefixed with quick keys `f` (fire) and `v` (move); the labels are
 button artwork, not `text=` fields. The unit-side fields, their two-bit masks,
 the acceptance flags, and the simulation consumers are
-[04 §3.4a][R-STANCE-01 §1][R-STANCE-01 §2].
+[04 §3.4a][R-STANCE-01 §1][R-STANCE-01 §2]. The `CLOAK` link of the same chain
+runs the same four steps over the two-bit cloak pair, transmitting `CLOAK_ON`
+only from a pair of `0` and `CLOAK_OFF` from every other value; it is spelled
+out in [04 R-STANCE-01 §2].
 
 **Established — the battle-panel handler's own chain, and where the two
 dispatchers above sit inside it.** One callback receives

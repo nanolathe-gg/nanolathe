@@ -153,10 +153,16 @@ func localCommanderUnit(sess *session.Session) (*units.Unit, bool) {
 	return nil, false
 }
 
-// applyCommittedShake transfers the cumulative phase-10 displacement from the
-// current committed frame to the one camera used by input and rendering. It
-// lives with battle camera ownership rather than Client so repainting the same
-// frame cannot mutate camera state or consume another random value [03 §5.6].
+// applyCommittedShake is battle.go's one post-tick camera hook: it runs after
+// BattleController.Step, once this frame's simulation tick (if any ran) has
+// published. It does two phase-10 jobs at that point, both of which need this
+// frame's fresh publish rather than the previous one: applyFollowCamera closes
+// the follow step toward the latched tracked object's current position
+// (defect PT6-01), and the code below transfers the cumulative phase-10 shake
+// displacement from the current committed frame to the one camera used by
+// input and rendering. Shake lives with battle camera ownership rather than
+// Client so repainting the same frame cannot mutate camera state or consume
+// another random value [03 §5.6].
 func (b *battleSession) applyCommittedShake() {
 	if b == nil || b.cam == nil || b.sess == nil || b.sess.Snapshot == nil {
 		return
@@ -165,6 +171,7 @@ func (b *battleSession) applyCommittedShake() {
 	if cur == nil {
 		return
 	}
+	b.applyFollowCamera()
 	dx := cur.ShakeOffsetX - b.appliedShakeX
 	dy := cur.ShakeOffsetY - b.appliedShakeY
 	if dx != 0 || dy != 0 {
@@ -478,17 +485,38 @@ func (b *battleSession) glideToMessageSource() {
 	b.cam.GlideTo(ox, oz)
 }
 
-// stepFollowCamera is the follow half of phase 10 [01 §4.4][07 R-CAM-01 §12]:
-// a live tracked object recomputes the desired origin every pass and the
-// current origin closes the gap; a tracked object that has died clears the
-// follow triple; with no tracked object a glide left by `n` or F3 continues.
+// stepFollowCamera is the pre-tick half of phase 10's follow step
+// [01 §4.4][07 R-CAM-01 §12]. It runs before this frame's hotkey dispatch and
+// simulation tick (battle.go calls it before BattleController.Step), so it
+// only does the parts that must not see this frame's own updates yet:
+// latching which object phase 10 chases (Camera.LatchTracked — see that
+// method for why the timing matters) and continuing an untracked `n`/F3
+// glide, whose target is a fixed point recorded when the glide started and so
+// has no same-frame staleness to avoid. The tracked-object position lookup
+// itself is deferred to applyCommittedShake, which runs after this frame's
+// tick has published (defect PT6-01, see LatchTracked's doc comment).
 func (b *battleSession) stepFollowCamera() {
 	if b == nil || b.cam == nil {
 		return
 	}
-	tracked := b.cam.Tracked()
-	if tracked == 0 {
+	if b.cam.LatchTracked() == 0 {
 		b.cam.StepGlide()
+	}
+}
+
+// applyFollowCamera is the post-tick half of phase 10's follow step: the
+// object latched by stepFollowCamera's LatchTracked call is looked up in
+// *this* frame's freshly committed snapshot — the same one the composer is
+// about to draw — so the camera closes toward where the unit actually is on
+// screen this frame, not where it was a publish ago [07 R-CAM-01 §12]. See
+// LatchTracked's doc comment for why the object is latched pre-tick while the
+// position is read post-tick (defect PT6-01).
+func (b *battleSession) applyFollowCamera() {
+	if b == nil || b.cam == nil {
+		return
+	}
+	tracked := b.cam.LatchedTracked()
+	if tracked == 0 {
 		return
 	}
 	f, ok := b.currentSnapshot()

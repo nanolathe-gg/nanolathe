@@ -459,9 +459,20 @@ func (h *retailBattleHUD) drawResultStats(c *client.Client, b *battleSession, vi
 		return
 	}
 	h.ensureResultPresentation(view, b)
+	// The reveal/climb deadlines below are presentation units of the ENDMSN
+	// sequence's own clock [08 R-CAMP-01 §7][07 R-HUD-03 §11], not the battle
+	// camera's scroll-pass clock. viewerStep stops driving the scroll pass
+	// (and therefore stops advancing scrollAnchor) the moment the result
+	// overlay takes the frame [07 §10], so a draw call reached only through
+	// that overlay must not read scrollAnchor: it is frozen at whatever value
+	// the last battle frame left it, which starves every strict `now`
+	// comparison below after the one reveal/step that frozen value happens to
+	// admit. b.postBattleNow() is the same 30-Hz unit counter the post-battle
+	// controller itself steps on (stepPostBattle), so it keeps advancing for
+	// as long as ENDMSN is being drawn.
 	now := uint32(0)
 	if b != nil {
-		now = uint32(b.scrollAnchor)
+		now = b.postBattleNow()
 	}
 	h.advanceResultReveal(now, c, b)
 	h.advanceResultBars(now)

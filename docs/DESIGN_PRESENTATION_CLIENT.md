@@ -19,9 +19,9 @@ Presentation answers one question: **what did the world look like at the tick
 the simulation last committed?** Not "what does it look like now", and not
 "what will it look like part-way to the next tick". Retail draws the committed
 state and nothing else — there is no previous frame, no timing fraction, and no
-interpolation seam anywhere in the draw path `[03 §2.4]` [I6]. A 60 Hz window
-presenting a 30 Hz simulation draws each committed tick twice, identically; a
-paused simulation presents the same pixels indefinitely.
+interpolation seam anywhere in the draw path `[03 §2.4]` [I6]. The window's
+presentation cadence is 30 Hz, matching the simulation timebase; a paused
+simulation retains the same pixels indefinitely.
 
 That gives the boundary its shape, and the shape is a one-way valve.
 
@@ -76,17 +76,21 @@ producers, not by any draw here; `[03 R-WIND-01]` belongs to
 
 ### 2.1 `internal/platform/ebitenapp` — the window
 
-`app` adapts `client.Client` to Ebitengine. `Update` runs at `ebiten.TPS()`
-(60/s): it syncs the window to the client's logical size, polls device input
-into the client's input state, records focus, and calls `Client.Step(1/TPS)` —
-the injected session step, which owns the clock, the sub-ticks and the frame
-publication. Wall-clock time never crosses into the simulation; the session
-converts the fixed delta with its own accumulator [I6].
+`app` adapts `client.Client` to Ebitengine. `Run` sets Ebitengine's update rate
+to 30/s. Each `Update` syncs the window to the client's logical size, polls
+device input into the client's input state, records focus, and calls
+`Client.Step(1/30)` — the injected session step, which owns the clock, the
+sub-ticks and the frame publication. Wall-clock time never crosses into the
+simulation; the session converts the fixed delta with its own accumulator
+[I6].
 
-`Draw` asks the client for its expanded bytes and does one `WritePixels` into a
-device image recreated only when the logical size changes. `Layout` pins the
-logical resolution, so Ebitengine letterboxes a resized window without moving
-authored HUD coordinates.
+`Draw` consumes at most one pending presentation per update. VSync callbacks
+between 30 Hz updates leave Ebitengine's retained screen untouched, avoiding
+client composition, pixel conversion, upload, and device drawing. A consumed
+presentation asks the client for its expanded bytes and does one `WritePixels`
+into a device image recreated only when the logical size changes. `Layout`
+pins the logical resolution, so Ebitengine letterboxes a resized window without
+moving authored HUD coordinates.
 
 `Run` installs the PCM device once for the life of the process, before the
 window is shown, and calls `Backend.WarmUp` — see §5. It hides the window

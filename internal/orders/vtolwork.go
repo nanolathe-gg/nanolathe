@@ -474,7 +474,23 @@ func vtolReclaimHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) C
 		// the ground row's nanolathe-active stamp, unlike `VTOL_RepairUnit`
 		// and `VTOL_ReclaimUnit`, which emit none [04 R-ORD-01 §7].
 		stampNanolatheActive(u, tick, nanolatheStampBuild)
-		// work > 30 draws the spray twice, where the ground row's gate is 15.
+		// "p1 > 30 -> spray twice to the feature box" [04 R-ORD-01 §7]. This
+		// mirrors the ground row's own two-segment guard in work.go, moved up
+		// to the air row's higher seed (30 instead of 15): the bound adapter
+		// is the two-segment producer, so one call per qualifying visit is the
+		// air twin's own share of [05 R-WORK-01 §8]'s census.
+		//
+		// Fixed play-test pt6-airreclaim: this stamped nanolathe-active but
+		// never called the emitter, so an air reclaimer's nanolathe-active
+		// window opened with no spray behind it — a construction aircraft
+		// reclaiming a wreck showed no nanospray at all, unlike the ground
+		// twin two lines above it in the file (work.go's reclaimHandler),
+		// which already had the call.
+		if work > 30 {
+			if feature, ok := featureViewAtGoal(u, n); ok {
+				emitFeatureNanolathe(u, n, feature, tick)
+			}
+		}
 		return code
 	case 4:
 		finishFeatureReclaim(u, cx, cz)

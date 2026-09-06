@@ -9,6 +9,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/client"
 )
 
+const presentationTPS = 30
+
 // app adapts a client.Client to Ebitengine's game loop. Update steps the
 // client's injected callback (clock/sub-ticks/publish, C9) after refreshing
 // input; Draw asks the client to compose its expanded framebuffer and uploads
@@ -24,16 +26,21 @@ type app struct {
 	// load transition's Client.Resize moves the window on the next update
 	// without the shell ever reaching a device [07 R-FE-01 §11][I6].
 	windowW, windowH int
+	// presentPending is set by the 30 Hz update and consumed by Draw. Draw can
+	// still be called at the monitor's refresh rate, so the retained-screen
+	// mode configured by Run lets those extra calls leave the frame untouched.
+	presentPending bool
 }
 
-// Update runs at ebiten.TPS (60/s). Delta is the fixed 1/TPS period: stable
+// Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
 // input pacing for menus and camera, and the session converts to sim ticks via
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *app) Update() error {
 	a.syncWindowSize()
 	pollInput(a.c.Input())
 	a.c.SetFocused(ebiten.IsFocused())
-	a.c.Step(1.0 / float64(ebiten.TPS()))
+	a.c.Step(1.0 / float64(presentationTPS))
+	a.presentPending = true
 	if a.c.ExitRequested() {
 		return ebiten.Termination
 	}
@@ -43,12 +50,23 @@ func (a *app) Update() error {
 // Draw presents one composed frame. The image is recreated only when the
 // logical size changes; WritePixels replaces its contents wholesale.
 func (a *app) Draw(screen *ebiten.Image) {
+	if !a.consumePresentation() {
+		return
+	}
 	width, height := a.c.Size()
 	if a.img == nil || a.img.Bounds().Dx() != width || a.img.Bounds().Dy() != height {
 		a.img = ebiten.NewImage(width, height)
 	}
 	a.img.WritePixels(a.c.Present())
 	screen.DrawImage(a.img, &ebiten.DrawImageOptions{})
+}
+
+func (a *app) consumePresentation() bool {
+	if !a.presentPending {
+		return false
+	}
+	a.presentPending = false
+	return true
 }
 
 // syncWindowSize pushes a logical size change out to the window system. It is
@@ -116,5 +134,10 @@ func Run(c *client.Client) error {
 	// A software cursor is installed, so hide the window system's pointer and
 	// leave the drawn one as the only visible pointer [07 §8].
 	ebiten.SetCursorMode(ebiten.CursorModeHidden)
+	// Draw remains VSync-driven even when TPS is lower. Retain the screen so
+	// calls between updates can skip composition, upload, and drawing without
+	// clearing the last presented frame.
+	ebiten.SetScreenClearedEveryFrame(false)
+	ebiten.SetTPS(presentationTPS)
 	return ebiten.RunGame(&app{c: c, windowW: width, windowH: height})
 }

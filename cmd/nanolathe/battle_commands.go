@@ -143,6 +143,35 @@ func (b *battleSession) cycleStance(fire bool) {
 	b.playUICue(nil, cue)
 }
 
+// toggleCloakSelected is one press of the side panel's CLOAK gadget — the cloak
+// arm of the same battle-panel handler as the two stance gadgets, in the order
+// [04 R-STANCE-01 §2] gives it: read the published two-bit cloak pair, resolve
+// the direction from it, transmit the descriptor through the selection
+// broadcast, then play `specialorders`.
+//
+// The direction test is the pair against zero, not a comparison with 1: only a
+// pair of 0 (every cloak-capable selected unit is visible) sends `Cloak_On`, and
+// 1 (cloaked) and 2 (mixed) both send `Cloak_Off` [04 R-STANCE-01 §2]. The
+// not-applicable value 3 greys the gadget [07 R-HUD-03 §6], so a press never
+// reaches here carrying it; it would take the same off arm if it did.
+//
+// The local write-back into the panel word is display only and has no place
+// here — this build recomputes the aggregate from the selection at every
+// publication boundary [I6], the same refresh that overwrites retail's.
+func (b *battleSession) toggleCloakSelected() {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return
+	}
+	on := f.CommandPage.CloakState == 0
+	if err := b.enqueueHumanCommand(session.HumanCommand{
+		Kind: session.HumanCloak, Cloak: session.HumanCloakCommand{Cloak: on},
+	}); err != nil {
+		return
+	}
+	b.playUICue(nil, cueSpecialOrders)
+}
+
 // stockpileSelected queues one BuildWeapon round for stockpile weapons [06 §11.1].
 // Stockpile launch requires BuildWeapon descriptor (rear segment 0x40000) with count.
 func (b *battleSession) stockpileSelected(queued bool) {

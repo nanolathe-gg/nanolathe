@@ -145,6 +145,79 @@ func SelectNetworkSchema(o *formats.OTA, playerCount int) (Schema, error) {
 	return Schema{}, ErrNoSuitableSchema
 }
 
+// StartingResources are the four starting-resource words of the schema the
+// mission actually runs under [02 R-MAP-01 §5]. They are read with the chosen
+// schema current — as integers, widened to single floats at the store, so an
+// authored fraction is lost before it is ever a float — and they feed the
+// battle-entry grant that writes both the live stocks and the storage bonus on
+// the mission kind [08 R-ENTRY-01 §8 step 5][05 R-ECO-01 §4].
+type StartingResources struct {
+	HumanMetal     int32
+	HumanEnergy    int32
+	ComputerMetal  int32
+	ComputerEnergy int32
+}
+
+// SchemaSection returns the OTA section of the schema this mission selected,
+// or nil when the mission carries no OTA or the selected name names no section.
+func (m *Mission) SchemaSection() *formats.Section {
+	if m == nil || m.OTA == nil {
+		return nil
+	}
+	for i := range m.OTA.Schemas {
+		if strings.EqualFold(strings.TrimSpace(m.OTA.Schemas[i].Name), strings.TrimSpace(m.Schema.Name)) {
+			return m.OTA.Schemas[i].Section
+		}
+	}
+	// A mission whose selected name matches no section is still unambiguous
+	// when the file authors exactly one schema: that is the schema the
+	// placements and the terrain metal seed came from.
+	if len(m.OTA.Schemas) == 1 {
+		return m.OTA.Schemas[0].Section
+	}
+	return nil
+}
+
+// StartingResources resolves the mission's four starting-resource words.
+//
+// The keys are `[Schema N]` keys, not `[GlobalHeader]` keys: every one of the
+// reference install's 635 schemas authors all four and the executable reads
+// them with the chosen schema current [02 R-MAP-01 §5]. Reading them from the
+// GlobalHeader returns the accessor default of zero for every stock mission —
+// the same defect class as the AI's SurfaceMetal binding [08 R-AI-03 §4-A],
+// and the reason Arm mission 2 opened with an empty treasury despite authoring
+// `HumanMetal=1000;` in all three of its schemas.
+//
+// A GlobalHeader-authored word is still honoured, but only when the selected
+// schema does not author the key and the GlobalHeader does: doc 02's combined
+// OTA key table lists the four under one heading with both placements, so a
+// hand-written mission that authors them globally is not a miss [02 §7]. A key
+// absent from both is the accessor default, zero.
+func (m *Mission) StartingResources() StartingResources {
+	schema := m.SchemaSection()
+	var global *formats.Section
+	if m != nil && m.OTA != nil {
+		global = m.OTA.Global
+	}
+	read := func(key string) int32 {
+		if schema != nil {
+			if _, ok := schema.FirstValue(key); ok {
+				return schema.IntValue(key, 0)
+			}
+		}
+		if global != nil {
+			return global.IntValue(key, 0)
+		}
+		return 0
+	}
+	return StartingResources{
+		HumanMetal:     read("HumanMetal"),
+		HumanEnergy:    read("HumanEnergy"),
+		ComputerMetal:  read("ComputerMetal"),
+		ComputerEnergy: read("ComputerEnergy"),
+	}
+}
+
 func findSchemaByType(o *formats.OTA, typ string) *formats.OTASchema {
 	for i := range o.Schemas {
 		if strings.EqualFold(strings.TrimSpace(o.Schemas[i].Type), typ) {

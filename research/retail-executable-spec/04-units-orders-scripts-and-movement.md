@@ -1480,6 +1480,38 @@ aggregate refresh recomputes that word from the selection
 [R-STANCE-01 §1]. Every change to a unit's field goes through the order
 handler in step 2.
 
+**Established — the cloak arm of the same handler, in the same four steps.**
+The `CLOAK` link of the chain runs the identical shape with a two-value field
+instead of a three-value cycle. It reads the panel's **cloak pair** (the
+two-bit field of [07 R-HUD-03 §13]) and branches on a single test — *is the
+pair exactly zero?*:
+
+* pair `0` (every cloak-capable selected unit is visible) — transmit the
+  canonical name `CLOAK_ON` through the same selection broadcast
+  [R-STANCE-01 §5], then write the pair back as `1`;
+* **any other pair value** — transmit `CLOAK_OFF` and write the pair back as
+  `0`.
+
+The test is against zero, not a comparison with `1`, so the mixed value `2`
+takes the off arm: one press on a selection where some units are cloaked and
+some are not decloaks all of them rather than cloaking the rest. The
+not-applicable value `3` would take the same off arm, but the repaint greys the
+gadget at `3` [07 R-HUD-03 §6], so no press ever reaches the arm carrying it.
+
+The command's general parameter is `0` for both names — the arm carries no
+value the way the stance arm carries its new stance — and the arm makes no
+Shift query, so a cloak press is never a queued record. Step 3's write-back is
+display only here for the same reason it is for the stance arm, and step 4
+plays `specialorders`.
+
+Neither the broadcast's leader exclusion nor its centroid arm is active: both
+cloak descriptors carry static gate mask `0x10060`, which has no
+target-required bit, and the command carries no ground position. The broadcast
+applies **no definition gate of its own** to these two names — [R-STANCE-01 §5]'s
+skip tests name only the two standing descriptors — so every selected unit
+receives the record and the can-cloak capability test is the order handler's,
+[R-ORD-01 §2].
+
 **Established — the two order handlers.** `Standing_MoveOrder` and
 `Standing_FireOrder` are ordinary descriptors (state label `Acknowledged`,
 class `0x00`, acknowledgement group 19, static gate mask `0x10060` — see

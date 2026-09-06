@@ -60,10 +60,22 @@ type CensusEntry struct {
 var MissionGlobalCensus = []CensusEntry{
 	// Authoritative — change simulation setup [P1-02 §2.1].
 	{Key: "numplayers", VA: "", Offset: "presentation string slot", Type: "string", Default: "empty", Clamp: "80-byte string slot; recommended counts, comma list [fmt ota]", Consumer: "presentation only — schema selection uses lobby occupancy, no numeric consumer [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "HumanMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass seeds each side's starting resource stores [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "HumanEnergy", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass, as HumanMetal [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "ComputerMetal", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass (computer side) [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "ComputerEnergy", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "—", Consumer: "spawn-credit pass (computer side) [02 map-global keys]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	// CORRECTION: these four rows previously read Offset "" and named the
+	// spawn-credit pass alone, filing them with the [GlobalHeader] keys around
+	// them. That placement is wrong, and wrong the same way SurfaceMetal below
+	// was: the executable reads all four **with the chosen schema current**
+	// [02 R-MAP-01 §5], and all 635 schemas of the reference install author
+	// them, none of the 275 [GlobalHeader] blocks. Decoding them from the
+	// global section therefore yields the accessor default of zero for every
+	// stock mission — Arm campaign mission 2 authors HumanMetal=1000 in each of
+	// its three schemas and opened with an empty treasury. Battle setup must
+	// resolve them through Mission.StartingResources, which reads the selected
+	// schema and falls back to a GlobalHeader-authored word only when the
+	// schema does not author the key.
+	{Key: "HumanMetal", VA: "", Offset: "per-schema key, NOT [GlobalHeader]", Type: "int", Default: "0", Clamp: "—", Consumer: "battle setup must read the SELECTED SCHEMA's word [02 R-MAP-01 §5] via Mission.StartingResources: the surviving grant writes the human slots' live stock and their storage bonus [08 R-ENTRY-01 §8 step 5][05 R-ECO-01 §4]. The GlobalHeader decode below is retained for a mission file that does author one there, and is the accessor default otherwise", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "HumanEnergy", VA: "", Offset: "per-schema key, NOT [GlobalHeader]", Type: "int", Default: "0", Clamp: "—", Consumer: "as HumanMetal, for energy [02 R-MAP-01 §5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "ComputerMetal", VA: "", Offset: "per-schema key, NOT [GlobalHeader]", Type: "int", Default: "0", Clamp: "—", Consumer: "as HumanMetal, for the computer slots [02 R-MAP-01 §5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "ComputerEnergy", VA: "", Offset: "per-schema key, NOT [GlobalHeader]", Type: "int", Default: "0", Clamp: "—", Consumer: "as HumanMetal, for the computer slots' energy [02 R-MAP-01 §5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	// CORRECTION: this row previously read Offset "" and a Consumer that named
 	// only the seeding and the extractor-helper draw, filing SurfaceMetal with
 	// the [GlobalHeader] keys around it. That placement is wrong. The key is

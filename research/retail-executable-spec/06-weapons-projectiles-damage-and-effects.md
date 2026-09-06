@@ -2454,13 +2454,44 @@ the pool reservation it sets scalar speed to zero, the record yaw to the
 **dropping unit's heading**, the vertical velocity to zero, and
 
 ```
-velocityX = -sin(unitHeading, unitMaxVelocity)
-velocityZ = -cos(unitHeading, unitMaxVelocity)
+velocityX = -sin(unitHeading, moverSpeed)
+velocityZ = -cos(unitHeading, moverSpeed)
 ```
 
-where `unitMaxVelocity` is the **dropping unit definition's maximum velocity**
-in 16.16 per tick, not any weapon field. It writes no expiry, no burst count and
-no pitch, emits no Fire and no RockUnit callback, and emits no start smoke.
+where `moverSpeed` is the **dropping unit's mover's current scalar speed**
+in 16.16 per tick — the live motion word, not a weapon field and not the unit
+definition's `maxvelocity`. It writes no expiry, no burst count and no pitch,
+emits no Fire and no RockUnit callback, and emits no start smoke.
+
+**Established (direct-static) — the magnitude is the mover's live speed, and
+which word that is.** The creator reaches the magnitude through the unit
+record's mover reference, and takes the mover word that the **mover's own
+velocity build** reads: the same word the mover clamps against its terrain-
+scaled speed cap and then multiplies by `-sin(heading)` and `-cos(heading)` to
+produce its own three velocity components (`[04 R-MOV-01 §4]`). Creator and
+mover therefore multiply *the same two operands*, so a released bomb carries
+exactly the carrier's horizontal velocity at the release tick and separates
+under gravity alone — it stays with the aircraft and sinks beneath it, and is
+never launched forward past the nose. Three sites share this inline allocator
+verbatim — the dropped executor, the dropped arm of the burst-clone
+dispatcher, and the third dropped-family entry — and all three read the same
+mover word; none of them reads the definition.
+
+This **corrects** the earlier text of this paragraph, which named the operand
+`unitMaxVelocity` and glossed it as "the dropping unit definition's maximum
+velocity". The definition's `maxvelocity` is read by other code through the
+definition reference hanging off the unit record (the `AirToAir` legs of
+`[04 R-AIR-01 §8]` are one such reader); the dropped creator does not read it.
+The two are easy to conflate and the difference is visible in play: a mover
+approaches `maxvelocity` only asymptotically and sheds speed on every turn, so
+under the old reading every bomb outran its bomber. The corrected reading is
+also the only one that makes the bombing run's release lead physical:
+`AirStrike` phase 4 sizes the release radius as
+`moverSpeed · 30 · sqrt(2·cruisealt/gravity)` from that same mover speed word
+`[04 R-AIR-01 §8]`, which is the horizontal distance a bomb travelling at the
+mover's speed covers during the fall from cruise altitude. Sizing the lead from
+the live speed while launching the bomb at the definition maximum would make
+the lead wrong by construction.
 
 ### 6.5 Meteor creation, scheduling, and motion
 

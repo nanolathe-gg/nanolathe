@@ -6,10 +6,12 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/features"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // vtolWorkFixture is workFixture's air counterpart: a `canfly` builder with
@@ -265,6 +267,62 @@ func TestVTOLReclaimCountdownUsesThirty(t *testing.T) {
 	}
 	if got, want := visits(groundSeed), 8; got != want {
 		t.Fatalf("the ground seed of 15 takes %d visits, want %d — the air row's extra fifteen ticks are seven more visits", got, want)
+	}
+}
+
+// TestVTOLReclaimEmitsTheNanolatheSpray locks the play-test fix (pt6-airreclaim):
+// [04 R-ORD-01 §7]'s "p1 > 30 -> spray twice to the feature box" is the air
+// row's own copy of the ground `Reclaim` row's "p1 > 15 -> spray twice"
+// [04 R-ORD-01 §5]. The air handler already wrote the nanolathe-active stamp
+// on every qualifying visit, but never called the presentation adapter that
+// publishes the spray — a construction aircraft reclaiming a feature stamped
+// itself reveal/cloak-active with no nanospray drawn behind it, unlike the
+// ground twin two phases over in work.go's reclaimHandler.
+func TestVTOLReclaimEmitsTheNanolatheSpray(t *testing.T) {
+	q, builder, _ := vtolWorkFixture()
+	terrain := q.Binding().Economy.(*economy.Service).Terrain
+	q.Binding().World = &WorldQueryAdapter{
+		LookupFeature: func(cellX, cellZ int32) (FeatureView, bool) {
+			def, ax, az, ok := features.FeatureAt(terrain, world.CellToWorld(cellX), world.CellToWorld(cellZ))
+			if !ok {
+				return FeatureView{}, false
+			}
+			return FeatureView{
+				CX: int32(ax), CZ: int32(az),
+				FootprintX: def.FootprintX, FootprintZ: def.FootprintZ, Height: def.Height,
+				DefinitionKey: def.CanonicalKey,
+				Metal:         def.Metal, Energy: def.Energy, Reclaimable: def.Reclaimable,
+			}, true
+		},
+	}
+	segments := 0
+	q.Binding().Presentation = &PresentationAdapter{
+		NanolatheFeature: func(*units.Unit, *Node, FeatureView, uint32) bool { segments++; return true },
+	}
+
+	// Phase 3, seed 40: one visit takes the countdown from 40 to 38, which
+	// clears the row's own `work > 30` gate and must fire exactly one call —
+	// the bound adapter is the two-segment producer, not this handler
+	// [05 R-WORK-01 §8].
+	n := &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: 40, Deadline: -1,
+		GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
+	if code := vtolReclaimHandler(builder, n, 0, 1); code == 8 {
+		t.Fatalf("the visit abandoned instead of holding on its countdown")
+	}
+	if segments != 1 {
+		t.Fatalf("phase 3 with work 38 (> 30) published %d nanolathe segments, want exactly 1 [04 R-ORD-01 §7]", segments)
+	}
+
+	// A visit that leaves the countdown at or below 30 must stay silent, same
+	// as the ground row's own `<= 15` visits.
+	segments = 0
+	n = &Node{ID: Lookup("VTOL_Reclaim"), Owner: builder.Handle, Phase: 3, Param1: 32, Deadline: -1,
+		GoalX: numeric.Fixed(70 << 16), GoalZ: numeric.Fixed(90 << 16)}
+	if code := vtolReclaimHandler(builder, n, 0, 1); code == 8 {
+		t.Fatalf("the visit abandoned instead of holding on its countdown")
+	}
+	if segments != 0 {
+		t.Fatalf("phase 3 with work 30 (not > 30) published %d nanolathe segments, want 0", segments)
 	}
 }
 

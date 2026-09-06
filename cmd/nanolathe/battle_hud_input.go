@@ -325,6 +325,18 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		// the stage and grey pass uses, so ARMMOVEORD reaches the stance arm
 		// and never the MOVE substring arm below [04 R-STANCE-01 §2].
 		switch commandButtonName(gad.Name) {
+		case "CLOAK":
+			// The cloak arm of the same handler as the two stance gadgets, and
+			// resolved by the same longest-suffix table, so ARMCLOAK reaches it
+			// [04 R-STANCE-01 §2]. It sits ahead of the order-button chain
+			// below for the same reason MOVEORD and FIREORD do [07 §9]. The arm
+			// plays `specialorders`, which toggleCloakSelected raises after the
+			// transmit, and takes no Shift argument.
+			if rightClick {
+				return true
+			}
+			b.toggleCloakSelected()
+			return true
 		case "MOVEORD":
 			if rightClick {
 				return true

@@ -124,3 +124,37 @@ func TestGrayTableUsesSumWindowAndStableTie(t *testing.T) {
 		t.Fatalf("gray exact entry 101 = %d, want 101", got)
 	}
 }
+
+// TestBlueTableTargetsTheHalvedBluerColour locks the blue table's target colour
+// [03 R-WATER-01 §2]: for each palette entry the search looks for the nearest
+// entry to (r>>1, g>>1, (b>>1)+50), which is the entry halved and pushed toward
+// blue. That formula is the whole of retail's submerged tint, so an arithmetic
+// slip here is a wrong colour on every underwater hull and nothing else.
+//
+// The fixture plants the exact target as its own palette entry, so the search
+// can only land on it if the target was computed as written; the surrounding
+// ramp gives the sum window something to walk. The two halving shifts and the
+// +50 are asserted separately from the guard, which can never fire —
+// (255>>1)+60 is 187, so the 255 arm of retail's blue clamp is dead code and
+// the target is exactly (r>>1, g>>1, (b>>1)+50).
+func TestBlueTableTargetsTheHalvedBluerColour(t *testing.T) {
+	var tables Tables
+	for i := range tables.Base {
+		v := byte(i)
+		tables.Base[i] = [4]byte{v, v, v, 255}
+	}
+	// Entry 200 is (80, 40, 60): its target is (40, 20, 80).
+	tables.Base[200] = [4]byte{80, 40, 60, 255}
+	tables.Base[201] = [4]byte{40, 20, 80, 255}
+	buildBlueTable(&tables)
+	if got := tables.Blue[200]; got != 201 {
+		e := tables.Base[got]
+		t.Fatalf("blue[200] = %d (%d,%d,%d), want 201, the planted (40,20,80)", got, e[0], e[1], e[2])
+	}
+	// The tint is a darkening as well as a bluing: a mid grey resolves to an
+	// entry no brighter than itself in red and green.
+	src, dst := tables.Base[150], tables.Base[tables.Blue[150]]
+	if dst[0] > src[0] || dst[1] > src[1] {
+		t.Fatalf("blue[150] = (%d,%d,%d) is not darker than (%d,%d,%d) in red and green", dst[0], dst[1], dst[2], src[0], src[1], src[2])
+	}
+}

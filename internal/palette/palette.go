@@ -40,6 +40,14 @@ type Tables struct {
 	// It holds physical (Base) indices on both sides; apply after the
 	// logical→physical lookup when the Logical map is animated.
 	Gray [256]byte
+	// Blue is the retail "BLUE TABLE": the fifth and last table the renderer
+	// installs, allocated beside the gray table at session initialisation and
+	// built from PALETTE.PAL by the same nearest-colour search. Its one and
+	// only consumer is the submerged-hull recolour of the model waterline
+	// pass — the blue cast retail puts on the part of a unit below the water
+	// surface [03 R-WATER-01 §2][03 R-REN-03A §8].
+	// Physical (Base) indices on both sides, like Gray.
+	Blue [256]byte
 }
 
 // Load loads all palette tables from the VFS.
@@ -86,6 +94,7 @@ func Load(fs vfs.FSOps) (*Tables, error) {
 		copy(t.Shade[row][:], shd[row*256:(row+1)*256])
 	}
 	buildGrayTable(t)
+	buildBlueTable(t)
 	t.BuildLogicalMap() // GUI bootstrap [03 §4.3]
 	return t, nil
 }
@@ -164,6 +173,26 @@ func buildGrayTable(t *Tables) {
 		e := t.Base[i]
 		avg := (int(e[0]) + int(e[1]) + int(e[2])) / 3
 		t.Gray[i] = nearestBySum(t, sums, perm, avg, avg, avg)
+	}
+}
+
+// buildBlueTable constructs the retail blue-table LUT [03 R-WATER-01 §2]. It is
+// the gray table's build with one difference: the target colour is not the
+// entry's own grey but the entry halved and pushed toward blue —
+// (r>>1, g>>1, (b>>1)+50) — so every palette entry resolves to the nearest
+// darker, bluer entry. That is the whole of retail's submerged tint: the
+// waterline pass rewrites each below-surface pixel through this table, which is
+// why a submarine reads as a blue silhouette rather than a shaded hull.
+//
+// Retail guards the blue channel with `(b>>1)+60 < 256 else 255`. The guard can
+// never fire — (255>>1)+60 is 187 — so the target is exactly as written and the
+// 255 arm is dead. The +50 is the target, the +60 only the guard's test; they
+// are deliberately different numbers.
+func buildBlueTable(t *Tables) {
+	sums, perm := sortPaletteBySum(t)
+	for i := 0; i < 256; i++ {
+		e := t.Base[i]
+		t.Blue[i] = nearestBySum(t, sums, perm, int(e[0])>>1, int(e[1])>>1, int(e[2])>>1+50)
 	}
 }
 

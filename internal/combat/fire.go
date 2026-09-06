@@ -350,24 +350,30 @@ func TryFire(svc *Service, slot *Slot, slotIdx int, tgt Target, tick uint32, por
 		ports.Shooter.RevealDeadline = tick + 600
 	}
 
-	// The dropped creator's two operands: the dropping unit's heading and its
-	// DEFINITION's maximum velocity, which together are the whole launch state
-	// of a bomb [06 §6.4]. They come from the shooter because there is nowhere
-	// else they exist — no weapon field carries either. A shooterless path
-	// (the meteor creator, [06 §6.5]) reaches no dropped weapon, so zeros here
-	// are unreachable rather than a placeholder.
+	// The dropped creator's two operands: the dropping unit's heading and the
+	// CURRENT scalar speed word of its mover, which together are the whole
+	// launch state of a bomb [06 §6.4]. They come from the shooter because
+	// there is nowhere else they exist — no weapon field carries either. A
+	// shooterless path (the meteor creator, [06 §6.5]) reaches no dropped
+	// weapon, so zeros here are unreachable rather than a placeholder.
+	//
+	// Correction (pt6-bomber): this read the DEFINITION's `maxvelocity`, on
+	// [06 §6.4]'s earlier wording. The magnitude is the mover's live speed
+	// word — the same word the mover multiplies by the same heading for its
+	// own velocity [04 R-MOV-01 §4] — so a bomb inherits the carrier's actual
+	// motion. An aircraft only approaches `maxvelocity` asymptotically and
+	// bleeds speed on every turn, so the definition value made every bomb
+	// outrun its bomber and land well ahead of the aim point.
 	var dropperHeading numeric.Angle
-	var dropperMaxVelocity numeric.Fixed
+	var dropperSpeed numeric.Fixed
 	if ports.Shooter != nil {
 		dropperHeading = numeric.Angle(ports.Shooter.Move.Heading)
-		if def := ports.Shooter.Def; def != nil {
-			dropperMaxVelocity = numeric.Fixed(int64(def.MaxVelocity))
-		}
+		dropperSpeed = ports.Shooter.Move.Speed
 	}
 
 	// Family dispatch [06 §6.2] C15: this is what gives the record its
 	// position, yaw, pitch, scalar speed, velocity and family expiry.
-	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity, dropperHeading, dropperMaxVelocity)
+	InitProjectile(p, w, tick, muzzle, target, tgt.Unit, solvedYaw, solvedPitch, nil, slot.DistanceWord, ports.Gravity, dropperHeading, dropperSpeed)
 
 	// The matched-projectile link is stored AFTER the family dispatch, because
 	// the common initializer clears it first [06 §4.1]; the vertical creator

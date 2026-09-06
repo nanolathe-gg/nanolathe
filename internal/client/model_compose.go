@@ -381,6 +381,11 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id
 		// the image the reveal reads, at 1x.
 		c.outlineModelInto(target, raster, draw, outline)
 	}
+	// The waterline runs before the Digger erase, and both before the blit
+	// [R-WATER-01 §2]. It acts on the image the reveal and the outline have
+	// just written into, so a nanoframe rising under water is tinted like any
+	// other submerged geometry [R-COMP-01 §3].
+	c.waterlinePass(target, draw, owner, kind)
 	if draw.DiggerClip {
 		// A Digger definition raises every key by 75; erasing at or below 125
 		// therefore removes exactly the geometry at or below the model origin,
@@ -388,6 +393,83 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id
 		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
 	}
 	return composedModel{image: target, raster: raster, draw: draw}, true
+}
+
+// waterlinePass is retail's underwater presentation, both arms of it
+// [R-REN-03A §8][R-WATER-01 §2][R-RAST-01 §4].
+//
+// With `t = seaLevel - hi16(unitY)` positive, part of the subject sits below
+// the water surface, and every pixel whose height key is at or below
+// `t + 50 [+75 for a Digger]` is that part. What happens to those pixels is an
+// ownership question, not a geometry one:
+//
+//   - a submerged subject the viewer neither owns nor holds on sonar is
+//     ERASED below the surface — an enemy submarine simply is not drawn;
+//   - a subject the viewer owns, or has on sonar, is RECOLOURED through the
+//     BLUE TABLE, which is why your own submarine reads as a blue hull instead
+//     of vanishing, and why a submerged nanoframe goes up blue.
+//
+// A 3DO feature takes the tint always: the feature-backed pseudo-unit sets the
+// contact bit permanently at construction, so a wreck under water is tinted,
+// never cut [R-RAST-01 §4, §6].
+//
+// The pass needs a key plane to have anything to compare, so a ZBuffer=0
+// definition is never cut at the waterline and never tinted — retail's own
+// no-key-plane present skips the waterline and digger passes outright
+// [R-RAST-01 §4].
+//
+// This runs on the subject's own composition image rather than on a carrier's
+// staging image, which is where the section places it. The two differ only for
+// a carrier: each carried child is tinted at its own depth instead of at the
+// carrier's. The Digger erase beside it already sits the same way, and moving
+// either is a staging-path change, not a waterline one.
+func (c *Client) waterlinePass(target *modelTarget, draw *presentationrender.UnitDraw, owner, kind uint8) {
+	if c == nil || target == nil || draw == nil || target.height == nil {
+		return
+	}
+	threshold, submerged := waterlineThreshold(c.seaLevel(), draw.WorldPos[1], draw.DiggerClip)
+	if !submerged {
+		return
+	}
+	if !c.waterlineTints(draw, owner, kind) {
+		target.eraseAtOrBelow(threshold)
+		return
+	}
+	if c.pal == nil {
+		return
+	}
+	target.tintAtOrBelow(threshold, &c.pal.Blue)
+}
+
+// waterlineTints resolves the erase-versus-tint bit of [R-RAST-01 §4]: the
+// sonar-contact bit the sensor phase publishes, OR the subject belonging to the
+// viewing player. The two are genuinely separate — the sensor sweep skips the
+// viewer's own units when it sets the contact bit, so ownership is not implied
+// by it. A 3DO feature carries the bit permanently [R-RAST-01 §6].
+func (c *Client) waterlineTints(draw *presentationrender.UnitDraw, owner, kind uint8) bool {
+	if kind == modelCursorFeature {
+		return true
+	}
+	if draw.SonarContact {
+		return true
+	}
+	cur := c.buffer.Current()
+	return cur != nil && cur.Selection.LocalPlayer < 10 && owner == cur.Selection.LocalPlayer
+}
+
+// seaLevel is the committed map sea level in world units. It is the map
+// header's byte scaled to 16.16 and published on the visibility view, never
+// read from the mutable terrain [03 §2.2][I6]. Without a committed frame there
+// is no map and no waterline.
+func (c *Client) seaLevel() numeric.Fixed {
+	if c == nil {
+		return 0
+	}
+	cur := c.buffer.Current()
+	if cur == nil {
+		return 0
+	}
+	return cur.Visibility.SeaLevel
 }
 
 // finishModel is everything that happens once a composed image is final: the

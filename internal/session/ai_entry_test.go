@@ -97,7 +97,21 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 	}
 }
 
-func TestCampaignSecondGrantOverwritesStocksOnly(t *testing.T) {
+// TestCampaignSecondGrantWritesStocksAndStorageBonus locks the surviving grant
+// at the campaign battle-entry boundary [08 R-ENTRY-01 §8 step 5]: on the
+// mission kind it writes "stocks and bonus from the mission's authored words",
+// and nothing else — ledgers, capacity and history fields stay as the tick-zero
+// settlement left them.
+//
+// It previously asserted "stocks only". That read [08 R-ENTRY-01 §8 step 5]'s
+// "overwrites whatever the tick-0 settlement produced" as covering the stocks
+// alone and missed the same sentence's "and bonus", which [05 R-ECO-01 §4]
+// states outright: the battle-initialisation starting-resource writer walks the
+// ten slots and, on the mission kind, calls the bonus setter before writing the
+// stocks. Without the bonus the opening stock has no capacity to sit in and the
+// post-settlement clamp takes it straight back — Arm mission 2's empty
+// treasury.
+func TestCampaignSecondGrantWritesStocksAndStorageBonus(t *testing.T) {
 	ota, err := formats.LoadOTA([]byte(`
 [GlobalHeader]
 {
@@ -126,10 +140,17 @@ func TestCampaignSecondGrantOverwritesStocksOnly(t *testing.T) {
 	computer.TotalProduced = [2]float64{51, 52}
 	computer.PassConsumed = [2]float32{61, 62}
 
+	// The bonus setter floors each operand at 200 [05 R-ECO-01 §4], so the
+	// human's 100/200 both store 200 and the computer's 300/400 store as
+	// authored.
 	wantHuman := *human
 	wantHuman.Stock = [2]float32{100, 200}
+	wantHuman.StorageBonusEnabled = true
+	wantHuman.StorageBonus = [2]float32{200, 200}
 	wantComputer := *computer
 	wantComputer.Stock = [2]float32{300, 400}
+	wantComputer.StorageBonusEnabled = true
+	wantComputer.StorageBonus = [2]float32{300, 400}
 	if err := overwriteCampaignResources(s, &mission.Mission{OTA: ota}); err != nil {
 		t.Fatalf("overwriteCampaignResources: %v", err)
 	}

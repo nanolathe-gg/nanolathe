@@ -415,3 +415,51 @@ func TestQueueOverlayPrivilegedSourcesGetTheFullMask(t *testing.T) {
 		t.Errorf("a nil Builder callback admitted a non-privileged unit [R-P0-11 §3]")
 	}
 }
+
+// TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal locks a
+// play-test regression: the first queued move's dash chain appeared to
+// originate from a corner of the map instead of from the unit.
+//
+// The idle-queue refill constructs its Standby/Standby_Mine head record with
+// "no target, goal, or parameters" [04 "The idle-queue refill from
+// `defaultmissiontype`"] — GoalX/Y/Z are legitimately zero — and that record's
+// draw mask (`0x10`, range rings only) sets neither the dash bit nor the icon
+// bit. Per [R-P0-11 §3 "The dash chain's artwork, and the anchor getter that
+// doubles as the icon"], the icon helper IS the anchor getter, and only the
+// dash helper (by calling it) or the icon helper itself ever resolves and
+// advances the running anchor; an order whose mask carries neither bit is
+// never visited by it, so the anchor must stay wherever it was. A once-idle
+// unit's queue is exactly `[Standby, <the first shift-queued move>]` once the
+// player queues a move, so the running anchor has to survive that Standby head
+// untouched and still be the unit's position when the dash chain for the
+// actual queued move is built.
+func TestQueueOverlayFirstDashOriginatesAtUnitNotAStandbyHeadsZeroGoal(t *testing.T) {
+	const unitX, unitZ = 500, 700
+	f := &frame.Frame{
+		Tick:      20,
+		Units:     []frame.UnitView{{Slot: 1, Owner: 0, X: numeric.Fixed(unitX << 16), Z: numeric.Fixed(unitZ << 16), Health: 100, MaxHealth: 100}},
+		Selection: frame.SelectionView{LocalPlayer: 0, Handles: []pool.Handle{1}},
+		OrderQueues: []frame.OrderQueueView{{Unit: 1, Primary: []frame.OrderView{
+			// The auto idle-refill head: no goal at all, matching retail's
+			// record constructor.
+			{Unit: 1, Index: 0, Kind: "Standby", CreationTick: 10},
+			// The first order the player actually queued with Shift.
+			{Unit: 1, Index: 1, Kind: "Move_Ground", GoalX: numeric.Fixed(600 << 16), GoalZ: numeric.Fixed(800 << 16), CreationTick: 18},
+		}}},
+	}
+	ops := QueueOverlay(f, QueueOverlayOptions{Tick: 20, ShiftHeld: true, LocalOwner: 0, Project: queueTestProject})
+	var sawDash bool
+	for _, op := range ops {
+		if op.Kind != QueuePrimitiveDash {
+			continue
+		}
+		sawDash = true
+		if op.WorldA.X != numeric.Fixed(unitX<<16) || op.WorldA.Z != numeric.Fixed(unitZ<<16) {
+			t.Fatalf("first dash WorldA = %+v, want the unit's own position (%d,_,%d), not the Standby head's zero goal", op.WorldA, unitX, unitZ)
+		}
+		break
+	}
+	if !sawDash {
+		t.Fatal("no dash primitive produced for the queued move")
+	}
+}

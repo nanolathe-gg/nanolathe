@@ -31,6 +31,12 @@ const (
 	HumanGroupAssign
 	HumanGroupRecall
 	HumanStance
+	// HumanCloak is the side rail's CLOAK gadget [04 R-STANCE-01 §2]. It needs
+	// its own kind because the cloak arm is a selection broadcast of one of two
+	// named descriptors, not a per-unit toggle the way HumanActivation is: one
+	// press resolves `Cloak_On` or `Cloak_Off` from the published panel pair and
+	// sends that one descriptor to the whole selection.
+	HumanCloak
 	// HumanSelfDestruct is the Ctrl+D row of [07 R-CAM-01 §2]. It needs its own
 	// kind because that row's action is "resolve the SELFDESTRUCT order
 	// descriptor" by name, which HumanOrder cannot express: its 1..14 codes are
@@ -81,6 +87,16 @@ type HumanStanceCommand struct {
 	Value int32
 }
 
+// HumanCloakCommand is one press of the side panel's CLOAK gadget
+// [04 R-STANCE-01 §2]. Presentation reads the published two-bit cloak pair and
+// decides the direction with that section's test; this boundary owns the
+// broadcast. There is no queue flag: the arm takes no Shift argument, exactly
+// as the stance arm beside it does not.
+type HumanCloakCommand struct {
+	// Cloak selects `Cloak_On`; otherwise `Cloak_Off`.
+	Cloak bool
+}
+
 type HumanCancelProductionCommand struct{ Unit pool.Handle }
 type HumanStockpileCommand struct {
 	Unit   pool.Handle
@@ -127,6 +143,7 @@ type HumanCommand struct {
 	BuildPage        HumanBuildPageCommand
 	Group            HumanGroupCommand
 	Stance           HumanStanceCommand
+	Cloak            HumanCloakCommand
 	SelfDestruct     HumanSelfDestructCommand
 }
 
@@ -617,6 +634,47 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			node := orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false)
 			node.Param1 = uint32(c.Stance.Value)
 			q.PushHead(id, node)
+		}
+	case HumanCloak:
+		// The cloak arm of the same battle-panel handler as the two stance
+		// gadgets [04 R-STANCE-01 §2]: it resolves one of the two named
+		// descriptors and transmits it through the ordinary selection broadcast
+		// [04 R-STANCE-01 §5], with the general parameter left at zero.
+		//
+		// Unlike the stance arm, the broadcast applies no definition gate of its
+		// own here — §5's skip tests name only the two standing descriptors — so
+		// every selected unit receives the record and the capability test is the
+		// order handler's own: `Cloak_On`/`Cloak_Off` set or clear the
+		// cloak-requested bit only when the definition is cloak-capable, derived
+		// as `cloakcost > 0`, and complete either way [04 R-ORD-01 §2].
+		//
+		// Neither the leader exclusion nor the centroid arm applies: both cloak
+		// descriptors carry static gate mask 0x10060, which has no
+		// target-required bit, and the command carries no ground position.
+		name := "Cloak_Off"
+		if c.Cloak.Cloak {
+			name = "Cloak_On"
+		}
+		id := orders.Lookup(name)
+		if id == 0 {
+			return
+		}
+		for _, h := range s.selectedHumanHandles() {
+			u := s.humanUnit(h)
+			if u == nil || u.Def == nil {
+				continue
+			}
+			s.bindOrderQueue(u)
+			q := orders.QueueForUnit(u)
+			if q == nil {
+				continue
+			}
+			// The handler returns code 5, so the record is consumed on its
+			// single visit and the displaced head resumes behind it
+			// [04 R-ORD-01 §2]. A cloak toggle is not a new mission and must
+			// not purge the queue the way Stop does — the same reading the
+			// stance arm above applies.
+			q.PushHead(id, orders.NewNodeForOrder(id, 0, 0, 0, 0, tick, u.Handle, false))
 		}
 	case HumanMobileBuild:
 		u := s.humanUnit(c.MobileBuild.Builder)

@@ -750,17 +750,18 @@ func TestMeteorLeavesStateByteAlone(t *testing.T) {
 
 // TestDroppedLaunchIsTheDroppingUnitsRun locks the dropped creator's launch
 // state [06 §6.4]: the record's yaw is the DROPPING UNIT's heading and the
-// horizontal velocity is that heading at the unit DEFINITION's maximum
-// velocity, with the vertical component and the scalar speed at zero.
+// horizontal velocity is that heading at the MOVER'S CURRENT SCALAR SPEED,
+// with the vertical component and the scalar speed at zero.
 //
 // The check is directional, not a restatement of the expression: a bomb leaves
 // the bay carrying exactly the bomber's own forward run, so its velocity must
-// equal the position step the ground mover takes for the same heading and the
-// same maxvelocity — `-sin(heading)·v`, `-cos(heading)·v` [04 R-MOV-01 §4].
-// A unit at heading 0 travels toward -Z, one at a quarter turn toward -X.
+// equal the position step the mover takes on the same tick for the same
+// heading and the same speed word — `-sin(heading)·v`, `-cos(heading)·v`
+// [04 R-MOV-01 §4]. A unit at heading 0 travels toward -Z, one at a quarter
+// turn toward -X.
 func TestDroppedLaunchIsTheDroppingUnitsRun(t *testing.T) {
 	w := &content.WeaponDef{ID: 9, Dropped: true}
-	const v = numeric.Fixed(3 * 65536) // the definition's maxvelocity, 16.16 per tick
+	const v = numeric.Fixed(3 * 65536) // the mover's scalar speed, 16.16 per tick
 
 	cases := []struct {
 		name    string
@@ -803,12 +804,13 @@ func TestDroppedLaunchIsTheDroppingUnitsRun(t *testing.T) {
 		})
 	}
 
-	// A stationary dropper (maxvelocity zero, or a unit definition that never
-	// moves) drops straight down: the horizontal pair is the heading scaled by
-	// zero, and no gravity has been applied yet [06 §6.4].
+	// A dropper that is standing still — a parked aircraft, or any unit whose
+	// mover speed word is zero — drops straight down: the horizontal pair is
+	// the heading scaled by zero, and no gravity has been applied yet
+	// [06 §6.4].
 	p := Projectile{Velocity: Vec3{X: numeric.FixedFromInt(40)}}
 	InitProjectile(&p, w, 100, Vec3{}, Vec3{}, 0, 0, 0, nil, 0, 0, 0x2000, 0)
 	if p.Velocity != (Vec3{}) {
-		t.Fatalf("velocity %+v, want all three components zero at zero maxvelocity [06 §6.4]", p.Velocity)
+		t.Fatalf("velocity %+v, want all three components zero at zero mover speed [06 §6.4]", p.Velocity)
 	}
 }
