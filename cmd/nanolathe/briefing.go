@@ -161,7 +161,7 @@ type campaignBriefingController struct {
 // NewCampaignBriefingController opens one briefing and consumes the two
 // entry CRT draws in their authored order [08 R-CAMP-01 §2][01 §7.3].
 func NewCampaignBriefingController(m *mission.Mission, localSide int, crt briefingRandom, request func() (freshBattleRequest, error)) *campaignBriefingController {
-	b := &campaignBriefingController{mission: m, localSide: localSide, crt: crt, request: request, state: BriefingOpen}
+	b := &campaignBriefingController{mission: m, localSide: localSide, crt: crt, request: request, state: BriefingOpen, rotateNextMS: -1}
 	if m != nil {
 		b.minWind, b.maxWind = m.WindBounds.Min, m.WindBounds.Max
 		if m.OTA != nil && m.OTA.Global != nil {
@@ -235,25 +235,49 @@ func (b *campaignBriefingController) Update(nowMS, tick int64) {
 	if b.countdown < 1 {
 		b.changeWind()
 	}
-	// Panorama selection is sampled on every draw from the scaled presentation
-	// clock. It is independent of the slower planet-rotation wall gate [08
-	// R-CAMP-01 §2].
+	// The panorama gadget's frame word is sampled on every draw from the
+	// scaled presentation clock, independently of the slower planet-rotation
+	// wall gate. It is *not* the strip's tiling origin — the scroller tiles
+	// from frame 0 and fetches this frame only to null-test it — so it moves
+	// nothing on screen; keeping it is what makes that guard reachable
+	// [08 R-CAMP-01 §2].
 	if b.panoramaCount > 0 {
 		b.panoramaFrame = int((tick / 3) % int64(b.panoramaCount))
 	}
-	// The planet rotator's whole body sits behind one wall-clock gate: it runs
-	// when the current tick count has reached its deadline and then sets the
-	// deadline 25 ms ahead. Each pass takes exactly one sequence step, and a
-	// step only changes the frame once the frame's own duration countdown has
-	// run out, so the rotation rate is the authored duration, not the gate
-	// [08 R-CAMP-01 §2][03 §4.4].
-	if nowMS >= b.rotateNextMS {
-		b.rotateNextMS = nowMS + briefingRotationGateMS
+	// The planet rotator's whole body sits behind one wall-clock gate: retail
+	// draws far more often than 40 Hz, so its single "has the deadline
+	// passed" check is, in effect, a catch-up loop already — no draw is ever
+	// more than a slice of a millisecond late. Nanolathe's own presentation
+	// host is deliberately fixed at 30 Hz [ARCHITECTURE.md "clock, rng,
+	// pool"], slower than the 40 Hz this gate must clear, so a single check
+	// per call would cap the rotator at the host's own rate instead of the
+	// authored one. The loop below is the wall-clock-exact replacement: it
+	// consumes every 25 ms boundary nowMS has crossed since the previous
+	// sample, however many that is, so the rotation rate is governed by
+	// elapsed wall time alone, never by how often this method happens to be
+	// called [08 R-CAMP-01 §2][03 §4.4]. The first sample after a bind takes
+	// exactly one step regardless of nowMS's value, establishing that
+	// instant as the phase origin the subsequent boundaries count from.
+	if b.rotateNextMS < 0 {
 		b.rotate.Step()
 		b.rotateSteps++
+		b.rotateNextMS = nowMS + briefingRotationGateMS
+	} else {
+		for nowMS >= b.rotateNextMS {
+			b.rotate.Step()
+			b.rotateSteps++
+			b.rotateNextMS += briefingRotationGateMS
+		}
 	}
 	b.stepBlinkWords(tick)
+	// One pixel of strip scroll per three presentation ticks: the pass steps
+	// when the clock is strictly past the deadline and then re-sets the
+	// deadline to `now + 2`, so the next step needs `tick >= deadline + 1`.
+	// Retail's scroll and deadline are statics nothing resets at screen entry,
+	// which leaves the deadline of the *first* draw of a briefing always in
+	// the past — so that draw always takes one step [08 R-CAMP-01 §2].
 	if !b.scrollStarted {
+		b.scroll++
 		b.scrollDeadline = tick + 2
 		b.scrollStarted = true
 	} else if tick > b.scrollDeadline {
@@ -351,7 +375,10 @@ func (b *campaignBriefingController) SetRotationSequence(entry *formats.GAFEntry
 	}
 	b.rotateEntry = entry
 	b.rotate.Bind(entry, 0, entry != nil && entry.Unknown1 != 0)
-	b.rotateNextMS = 0
+	// -1 is never a valid deadline, so it marks the phase as unestablished:
+	// Update's next sample, whatever its nowMS, takes the bootstrap step and
+	// becomes the new phase origin [08 R-CAMP-01 §2].
+	b.rotateNextMS = -1
 }
 
 // SetTextRegion installs the authored slot-2 text into the pager. `width` and

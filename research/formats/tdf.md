@@ -39,15 +39,60 @@ Rules established by the retail corpus and community documentation:
 - `/* ... */` block comments also appear in retail data
   (`weapons/WEAPONS.TDF`: `rendertype=4;	/* 2D bitmap */`), including
   inline after assignments; `//` comments may follow values on a line.
-- Duplicate keys with identical spelling resolve last-write-wins (one entry);
-  case-variant spellings coexist as separate sorted entries and typed lookups
-  return the lower-bound variant (deterministic, not last-wins). Duplicate
-  sibling section names are kept as separate nodes; a first-match section
-  accessor returns the first. Retail data avoids duplicates, so these rules
-  matter only for third-party content.
+- Duplicate keys are governed by "Duplicate keys" below. Duplicate sibling
+  section names are kept as separate nodes; a first-match section accessor
+  returns the first.
 - Files are ASCII/Windows-1252; localized strings carry high-byte
   characters (`GermanDescription=Überschwerer...`). No BOM, no NULs.
 - Line endings are CRLF in retail data; accept any.
+
+### Duplicate keys
+
+**Established.** A section's key store is a vector kept in case-insensitive
+order, and the parser builds it by **insertion in source order**, not by
+sorting. Per assignment:
+
+1. take the case-insensitive **lower bound** of the key over the vector — the
+   first entry at or after the whole run of entries that fold-compare equal;
+2. compare the new spelling **byte for byte against the entry at that position
+   only** — the head of the fold-equal run, never the rest of it;
+3. equal spelling: the value is **replaced in place**, so the entry keeps the
+   position the first occurrence gave it;
+4. any other outcome: the entry is **inserted at the lower bound**, i.e. in
+   front of every fold-equal entry already present.
+
+Typed accessors take the same case-insensitive lower bound and read the entry
+there, so **the variant an accessor returns is the last one parsed**. Two
+consequences follow from step 2's narrow comparison:
+
+- repeating one spelling with nothing in between is ordinary last-write-wins,
+  one entry;
+- but a spelling that a later case variant has pushed behind the run head is no
+  longer what step 2 compares against, so a further assignment with that
+  spelling is inserted rather than folded — **one spelling can hold two
+  entries**.
+
+**Stock content depends on this, and the earlier reading inverted it.** This
+section previously said accessors return "the first variant in case-insensitive
+sort order … deterministic, not last-wins", added that the mechanism still
+needed black-box confirmation, and concluded "retail data avoids duplicates, so
+these rules matter only for third-party content". All three claims were wrong.
+Twelve stock unit records author two spellings of one movement key inside a
+single `[UNITINFO]` — `MaxWaterDepth=0` early and `maxwaterdepth=255` at the
+end: `ARMFIG`, `ARMLANCE`, `ARMSEAP`, `ARMSEHAK`, `ARMSFIG`, `Armcsa`,
+`CORHUNT`, `CORSEAP`, `CORSFIG`, `CORTITAN`, `CORVENG`, `Corcsa`. They are the
+only key runs anywhere in a 438-file sweep of `units/`, `weapons/`, `features/`,
+`gamedata/` and `guis/` that carry two spellings with different values, so this
+rule's entire observable effect in stock data is those twelve aircraft. Retail
+reads **255** for them. A byte-ordered reading picks the capital spelling
+(`M` sorts below `m`) and yields 0, which would make
+`[04 R-AIR-01 §6a]`'s aircraft water rule — "if the water floor is below sea
+level **and** the definition is `canfly` and not `amphibious`, raise the floor
+to sea level" — unreachable for every aircraft in the game, since a floor
+computed from a maximum depth of 0 already is sea level. Under the correct
+reading the rule is exactly what separates the eight `amphibious` seaplanes,
+which keep a floor 255 below sea level and may set down on water, from every
+other aircraft, which may not.
 
 ## Schema families
 
@@ -496,9 +541,10 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
   treat that semicolon as part of the section terminator. The edge cases that
   look undefined (duplicate keys, `;` in values, comments opened inside
   values) are defined by the executable: duplicate
-  sections are all retained (first-match accessor), an identical key
-  spelling replaces the value (last wins), a case-variant key coexists as a
-  second entry, comments are blanked to spaces before parsing wherever they
+  sections are all retained (first-match accessor), duplicate keys follow
+  "Duplicate keys" above (identical spelling replaces in place, a case variant
+  is inserted ahead of the run so the last variant parsed is the one read),
+  comments are blanked to spaces before parsing wherever they
   appear (so a `//` inside a value blanks the rest of the line, and a value
   containing `;` ends at its first `;`); and a syntax error is **fatal** —
   see "How the engine parses it" below and `[02 R-MALF-01 §4]`.

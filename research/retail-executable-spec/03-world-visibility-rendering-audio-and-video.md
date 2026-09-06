@@ -6074,6 +6074,41 @@ effect, and the fog overlay is applied later to the whole surface
 **RNG.** No draw from either stream anywhere in the bucket build, the two
 passes, the present, or the fillers ([R-RAST-01 §1]).
 
+#### The per-unit present is a no-op for a unit that has a carrier [R-RAST-01 §7-A]
+
+§7's bucket build applies **no carrier filter** — a carried unit is enumerated
+on the on-screen unit list, bucketed on its own world-Z row and walked by pass
+B like any other mode-`0` record — and yet retail never paints a carried unit
+twice. **Established (direct-static):** the per-unit present's entire body is
+guarded by a single test on the unit record's **carrier link**. A unit that has
+a carrier returns immediately: before the orientation-cache comparison, before
+the piece-chain rebuild, before its own attached-children walk and before the
+draw entry of [R-REN-03A §4]. Everything a carried unit contributes to the
+frame therefore arrives through the children step of its **carrier's** present,
+composed into its own two-plane image and composited into the carrier's staging
+image under the key test ([R-REN-03A §4] step 2).
+
+Consequences an implementer must keep:
+
+- **The per-pixel occlusion between a carrier and its cargo is final.** There
+  is no later unconditional blit of the cargo to undo the key test. A
+  reimplementation that presents a carried unit from its own bucket entry as
+  well hands the last word to whichever of the two the in-row rule enumerates
+  second — ascending unit slot — so a transport built before the unit it lifts
+  gets its cargo painted over its hull and one built after it does not. That
+  asymmetry is the tell; retail has neither case.
+- **The carrier link alone is the test; the hang piece is not part of it.** A
+  unit carried on the no-piece sentinel is skipped by its own present (it has a
+  carrier) *and* skipped by its carrier's children walk (§7,
+  [04 R-UNIT-06 §3]), so it is drawn nowhere at all.
+- **A carried unit whose carrier is not on the on-screen list is not drawn.**
+  Nothing else presents it, and the present does not check whether the carrier
+  was reached this frame.
+- **The selected-unit footprint quad is not inside the present.** Both passes
+  draw the quad ([R-WATER-01 §1]) and then call the present, so a selected unit
+  riding a transport still gets its quad while its model comes from the
+  carrier.
+
 ### 5.3 Projected shadows and feature shadows
 
 Options distinguish master shadows, feature shadows, vehicle shadows, and a

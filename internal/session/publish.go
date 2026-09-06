@@ -338,29 +338,62 @@ func (s *Session) publishSnapshot(tick uint32) {
 		published.Selection.LocalPlayer = s.LocalOwner
 		published.Selection.Count = uint16(len(published.Selection.Handles))
 		publishSelectionAggregate(s, published.Selection.Handles, &published.CommandPage)
-		// Command-page state is authored by the selected builder's CANBUILD
-		// page. Shift/input latches are presentation-owned and therefore remain
-		// at their zero value until a typed input state is introduced [07 §9].
+		// Command-page state belongs to the single selected unit whose
+		// definition authors page windows. Shift/input latches are
+		// presentation-owned and therefore remain at their zero value until a
+		// typed input state is introduced [07 §9].
 		if published.Selection.Count == 1 && published.Selection.Primary != 0 && s.Catalog != nil {
-			// A command page is a single-selected-builder surface. Do not
-			// promote one builder from a mixed or multi-builder selection to
-			// the page owner; aggregate command state is distinct [07 §9].
-			if u := s.Units.Unit(published.Selection.Primary); u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 && u.Def != nil && u.Def.Builder {
+			// A command page is a single-selection surface. Do not promote one
+			// unit from a mixed or multi-unit selection to the page owner;
+			// aggregate command state is distinct [07 §9].
+			if u := s.Units.Unit(published.Selection.Primary); u != nil && u.Alive && u.Owner == s.LocalOwner && u.Flags&0x10 != 0 && u.Def != nil {
+				// The single selected unit owns the command page whatever it is.
+				// The window the switch then opens is chosen by that unit's own
+				// page-shown bit and page field, and which windows exist is the
+				// definition's page-count byte — the catalog compiler's probe of
+				// guis/<internal name>N.GUI [07 R-HUD-03 §6]
+				// [02 R-CAT-01 §5 step 5]. A count of 0 is a valid state, not an
+				// absent page: the switch opens the side's "%sGEN.GUI" and the
+				// stage/grey table greys BUILD and ORDERS on its own count-0 arm.
+				//
+				// Neither the FBI `Builder` word nor CANBUILD membership is part
+				// of that test, and gating on both here was what hid the
+				// stockpile launchers' pages. Exactly eight reference-install
+				// definitions author a page window without the builder word —
+				// ARMSILO/CORSILO, ARMAMD/CORFMD, ARMSCAB/CORMABM and
+				// ARMEMP/CORTRON, the eight that carry a `stockpile` weapon —
+				// and each one's page holds a single MAKENUKE/MAKEANTI toy
+				// [06 §11.1]. With the page suppressed a Retaliator could never
+				// be told to build a round.
+				pageCount := hud.BuilderPageCount(u.Def)
+				published.CommandPage.Builder = u.Handle
+				const buttonsPerPage = hud.RetailBuildButtonsPerPage // authored build rail page [07 §9]
+				// Page 0 is the orders state, not a build page: the count is
+				// the definition's page-count byte, compiled from the
+				// authored page windows [02 R-CAT-01 §5 step 5], page N
+				// carries the authored entries (N-1)*6..N*6-1, and page 0
+				// carries none [07 R-HUD-03 §6]. The page number itself is
+				// the unit's own state — the page-shown bit and the page
+				// field of [07 §9] — copied out here, never derived from the
+				// renderer.
+				published.CommandPage.PageCount = uint16(pageCount)
+				pageNumber := hud.ClampPage(hud.DecodePage(u.Flags), pageCount)
+				published.CommandPage.Page = uint16(pageNumber)
+				// The held-round byte the MAKENUKE/MAKEANTI toy prints
+				// [07 R-P0-11 §2]. The order alias's build type is always zero
+				// and every shipped stockpile weapon sits in slot 0, so slot 0's
+				// completed-round remainder is the byte [06 §11.1]
+				// [06 R-WPN-05 §2]. The pending half of the label comes from the
+				// committed order queues, which already carry the secondary
+				// BUILDWEAPON nodes.
+				if slot := u.SlotAt(0); slot != nil {
+					published.CommandPage.Stockpile = slot.Ammo
+				}
+				published.CommandPage.ProductKeys = published.CommandPage.ProductKeys[:0]
+				// A page window with no CANBUILD list behind it publishes no
+				// products; its authored toys are its own. Only a unit that
+				// authors a build menu has product membership to place.
 				if page := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]; page != nil {
-					published.CommandPage.Builder = u.Handle
-					const buttonsPerPage = hud.RetailBuildButtonsPerPage // authored build rail page [07 §9]
-					// Page 0 is the orders state, not a build page: the count is
-					// the definition's page-count byte, compiled from the
-					// authored page windows [02 R-CAT-01 §5 step 5], page N
-					// carries the authored entries (N-1)*6..N*6-1, and page 0
-					// carries none [07 R-HUD-03 §6]. The page number itself is
-					// the builder's own state — the page-shown bit and the page
-					// field of [07 §9] — copied out here, never derived from the
-					// renderer.
-					pageCount := hud.BuilderPageCount(u.Def)
-					published.CommandPage.PageCount = uint16(pageCount)
-					pageNumber := hud.ClampPage(hud.DecodePage(u.Flags), pageCount)
-					published.CommandPage.Page = uint16(pageNumber)
 					// Base CANBUILD membership keeps its canonical page order. The
 					// download-menu tail on BuildMenuPage.Buttons is an extension of
 					// authoritative membership, not a flat continuation whose slice
@@ -375,7 +408,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 						baseButtons = page.Buttons
 					}
 					baseProducts := hud.ProductsForPage(baseButtons, pageNumber, buttonsPerPage)
-					published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys[:0], baseProducts...)
+					published.CommandPage.ProductKeys = append(published.CommandPage.ProductKeys, baseProducts...)
 					for _, placement := range s.Catalog.DownloadPlacementsForPage(u.Def.CanonicalKey, pageNumber) {
 						published.CommandPage.GeneratedProducts = append(published.CommandPage.GeneratedProducts, frame.GeneratedProductPlacement{
 							ProductKey: placement.Product,

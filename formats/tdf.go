@@ -38,10 +38,9 @@ type Item struct {
 // built once per section [02 §4]. The resolution applies retail's duplicate
 // policy — an identical spelling replaces the value in place (last write
 // wins, one entry); a case-variant spelling coexists as a second distinct
-// entry ordered by (case-insensitive fold, original bytes) — and typed
-// lookups return the lower-bound entry, the first variant of the run
-// (MEDIUM confidence: the mechanism is directly visible; accessor return
-// among variants still needs black-box confirmation).
+// entry, inserted at the lower bound and therefore ahead of the variants
+// already there — and typed lookups return the lower-bound entry, which is
+// consequently the LAST variant parsed [fmt tdf "Duplicate keys"].
 type Section struct {
 	Name         string
 	OriginalName string
@@ -120,7 +119,7 @@ func resolveDocument(s *Section) {
 	}
 }
 
-// ensureResolved builds the section's sorted assignment vector when it has
+// ensureResolved builds the section's resolved assignment vector when it has
 // not been built yet. See the Section type comment for the policy.
 //
 // The vector holds indices into Items rather than copies of them. A section's
@@ -128,49 +127,48 @@ func resolveDocument(s *Section) {
 // assignment forever, and a whole-install catalog compile resolves roughly a
 // million assignments — at four bytes each instead of a whole Item, this is
 // the difference between tens and hundreds of megabytes.
+//
+// It is built by INSERTION in source order, not by sorting, because that is
+// what retail's parser does and the two disagree on case variants [02 §4].
+// Each assignment locates its place with a case-insensitive lower bound; a
+// byte-for-byte comparison against the entry AT THAT POSITION — the head of
+// the fold-equal run, not the whole run — decides what happens next. An
+// identical spelling replaces the value in place, so identical spellings are
+// last-write-wins and keep the position of the first occurrence. Anything else
+// is inserted at the lower bound, which puts a later case variant at the FRONT
+// of the run, ahead of the earlier one. Since lookupResolved below reads that
+// same front, the variant a typed accessor returns is the LAST one parsed.
+//
+// Corrected (pt6-airwater). This used to sort, breaking fold ties by the
+// original spelling's byte order, so `MaxWaterDepth` (capital M, byte 0x4D)
+// resolved ahead of `maxwaterdepth` (0x6D) and the FIRST variant won. Twelve
+// stock aircraft records author both spellings — `MaxWaterDepth=0` early in
+// `[UNITINFO]` and `maxwaterdepth=255` at the end — so every aircraft compiled
+// to a water depth of zero, which is the reason no seaplane in this build could
+// set down on water [fmt tdf "Duplicate keys"][04 R-AIR-01 §6a].
 func (s *Section) ensureResolved() {
 	if s.resolvedBuilt {
 		return
 	}
 	s.resolvedBuilt = true
-	// order is the sort scratch: a folded key beside its source position, so
-	// the comparison never re-folds and the Items themselves never move.
-	type ordered struct {
-		fold string
-		src  int32
-	}
-	order := make([]ordered, 0, len(s.Items))
+	s.resolved = nil
 	for i := range s.Items {
-		if s.Items[i].Kind == Assignment {
-			order = append(order, ordered{fold: foldName(s.Items[i].Key), src: int32(i)})
+		if s.Items[i].Kind != Assignment {
+			continue
 		}
-	}
-	if len(order) == 0 {
-		s.resolved = nil
-		return
-	}
-	sort.SliceStable(order, func(i, j int) bool {
-		if order[i].fold != order[j].fold {
-			return order[i].fold < order[j].fold
+		fold := foldName(s.Items[i].Key)
+		lo := sort.Search(len(s.resolved), func(j int) bool {
+			return foldName(s.Items[s.resolved[j]].Key) >= fold
+		})
+		if lo < len(s.resolved) {
+			if at := s.Items[s.resolved[lo]]; foldName(at.Key) == fold && at.OriginalKey == s.Items[i].OriginalKey {
+				s.resolved[lo] = int32(i) // identical spelling: replaced in place
+				continue
+			}
 		}
-		oi, oj := s.Items[order[i].src].OriginalKey, s.Items[order[j].src].OriginalKey
-		if oi != oj {
-			return oi < oj
-		}
-		return order[i].src < order[j].src
-	})
-	// Collapse identical spellings to their last source occurrence; distinct
-	// case variants each survive as one sorted entry [02 §4].
-	s.resolved = make([]int32, 0, len(order))
-	for k := 0; k < len(order); k++ {
-		last := k
-		for last+1 < len(order) &&
-			order[last+1].fold == order[k].fold &&
-			s.Items[order[last+1].src].OriginalKey == s.Items[order[k].src].OriginalKey {
-			last++
-		}
-		s.resolved = append(s.resolved, order[last].src)
-		k = last
+		s.resolved = append(s.resolved, 0)
+		copy(s.resolved[lo+1:], s.resolved[lo:])
+		s.resolved[lo] = int32(i)
 	}
 }
 
@@ -178,8 +176,9 @@ func (s *Section) ensureResolved() {
 func (s *Section) resolvedItem(i int) Item { return s.Items[s.resolved[i]] }
 
 // lookupResolved binary-searches the resolved vector for the lower bound of
-// the fold run of key and returns that entry — the first variant in
-// case-insensitive sort order [02 §4].
+// the fold run of key and returns that entry — the head of the run, which
+// ensureResolved's insertion order makes the LAST case variant parsed
+// [02 §4][fmt tdf "Duplicate keys"].
 func (s *Section) lookupResolved(key string) (Item, bool) {
 	s.ensureResolved()
 	fold := foldName(key)

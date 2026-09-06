@@ -525,6 +525,33 @@ func (s *System) runAirExecutor(u *units.Unit, head *orders.Node, st *airOrderSt
 	case "VTOL_LandIfCan":
 		s.execVTOLLandIfCan(u, head, st)
 	case "VTOL_Standby":
+		// The record's deadline is this executor's own wait, and it must be
+		// honoured here. `VTOL_Standby` phase 2's loaded arm arms
+		// `tick + 30 + random below 15` and retail does not revisit the record
+		// before it: its idle circle is "a fresh uniformly random bearing and
+		// an 8-to-39 world-unit radius about a fixed post, redrawn every 30 to
+		// 44 ticks" [04 R-AIR-01 §7]. Every other row reaches its executor
+		// through the order pump, which applies that gate before it dispatches;
+		// this row is registered as externally driven (airRowsDrivenByMoverTick
+		// below), so the pump writes none of its words and the mover tick is the
+		// only place the wait can be applied.
+		//
+		// Without it phase 1 (acquire, which fails) and phase 2 (three draws, a
+		// fresh point marker) ran on alternate ticks forever: a loaded transport
+		// was yanked to a new random bearing every SECOND tick, which swings the
+		// command heading, rocks the bank word and — the loiter point moves, so
+		// the cruise altitude is sampled over different terrain — sawtooths the
+		// committed height by a whole world unit per tick. That was the play-test
+		// report of a hovering Atlas jiggling. It also drew three simulation
+		// randoms every two ticks instead of every 30 to 44 [01 §8].
+		//
+		// `VTOL_Standby` is the only mover-tick-driven row that writes a
+		// deadline, so the gate is stated on its case rather than at the top of
+		// this dispatch, where it would silently cover rows whose wait is the
+		// arrival gate above instead.
+		if head.Deadline != -1 && s.tick < uint32(head.Deadline) {
+			return
+		}
 		s.execVTOLStandby(u, head, st)
 	case "VTOL_Landing":
 		s.execVTOLLanding(u, head, st)

@@ -46,8 +46,9 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 	if b == nil || f == nil || len(f.Selection.Handles) == 0 {
 		return nil, nil, nil
 	}
-	// A multiple selection, or a single non-builder selection, formats and opens
-	// <prefix>GEN.GUI; a single builder opens its authored page below [07 §6].
+	// A multiple selection names no page owner and opens <prefix>GEN.GUI; a
+	// single selected unit opens the window its own page state names below
+	// [07 §6][07 R-HUD-03 §6].
 	if f.CommandPage.Builder == 0 {
 		window, page := h.loadWindow(name)
 		return window, page, nil
@@ -64,14 +65,23 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 		// [07 R-HUD-03 §6] — not an absent panel. Eight stock builders
 		// (ARMASP/CORASP, ARMCARRY/CORCARRY, ARMDECOM/CORDECOM, ARMFARK,
 		// CORNECRO) reach this, and returning no window left them showing
-		// neither a build page nor an order palette.
+		// neither a build page nor an order palette. Every other unit with no
+		// authored page window reaches it too, and takes the same orders state.
 		window, page := h.loadWindow(name)
 		return window, page, nil
 	}
 	// The committed CommandPage identifies both the builder and page. No live
 	// unit selection or synthesized view participates in GUI selection [I6].
+	// The committed page's own identity is the whole test: a live unit the local
+	// player owns. The definition-level builder predicate that used to stand
+	// beside it was a second, disagreeing answer to a question the publisher has
+	// already settled, and it re-derived from the catalog what the frame carries
+	// as PageCount [I6][07 R-HUD-03 §6]. It also silently swallowed the page of
+	// every unit that authors a page window without carrying the FBI `Builder`
+	// word — the eight stockpile launchers, whose one toy is the
+	// MAKENUKE/MAKEANTI button [06 §11.1].
 	view, found := snapshotUnitByHandle(f, f.CommandPage.Builder)
-	if !found || view.Owner != h.owner || !b.snapshotBuilder(view) {
+	if !found || view.Owner != h.owner {
 		// A non-empty command-page identity is not an empty selection. Do not
 		// display GEN for stale/malformed builder state [07 §9].
 		return nil, nil, nil
@@ -85,8 +95,10 @@ func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*
 	// page. Before that count landed the orders state had no slot of its own and
 	// this switch opened a page for every builder, which is why ORDERS drew
 	// selected over a build page.
+	// The page window is composed from the definition's internal name and the
+	// page number; the FBI `Builder` word takes no part [07 R-HUD-03 §6].
 	def, ok := h.defFor(&view)
-	if !ok || def == nil || !def.Builder {
+	if !ok || def == nil {
 		return nil, nil, nil
 	}
 	// Page 0 can also compose a page window, when the definition's word A bit 31

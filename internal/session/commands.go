@@ -278,15 +278,15 @@ func (s *Session) selectedHumanBuilder(h pool.Handle) *units.Unit {
 		if u == nil || !u.Alive || u.Owner != s.LocalOwner || u.Flags&0x10 == 0 {
 			continue
 		}
-		// The retail page state is keyed by the single selected-builder
-		// identity. A builder mixed with another selected unit has aggregate
-		// command state, not a builder page [07 §9].
+		// The retail page state is keyed by the single selected unit's
+		// identity. A unit mixed with another selected one has aggregate
+		// command state, not a page [07 §9].
 		if selected != nil {
 			return nil
 		}
 		selected = u
 	}
-	if selected == nil || selected.Handle != h || selected.Def == nil || !selected.Def.Builder {
+	if selected == nil || selected.Handle != h || selected.Def == nil {
 		return nil
 	}
 	return selected
@@ -297,11 +297,16 @@ func (s *Session) applyHumanBuildPage(c HumanBuildPageCommand) {
 	if u == nil || s.Catalog == nil {
 		return
 	}
-	menu := s.Catalog.BuildMenus[content.CanonicalKey(u.Def.CanonicalKey)]
-	if menu == nil || len(menu.Buttons) == 0 {
+	// Which pages exist is the definition's page-count byte and nothing else
+	// [07 R-HUD-03 §6][02 R-CAT-01 §5 step 5]. The CANBUILD membership test
+	// that used to stand here, beside selectedHumanBuilder's FBI `Builder`
+	// word, refused the ORDERS/BUILD toggle and the page keys on the eight
+	// stockpile launchers — the units that author a page window and build
+	// nothing [06 §11.1]. SetBuildPage below carries the count guard.
+	pageCount := hud.BuilderPageCount(u.Def)
+	if pageCount == 0 {
 		return
 	}
-	pageCount := hud.BuilderPageCount(u.Def)
 	defID, ok := s.Catalog.UnitDefIndex(u.Def.CanonicalKey)
 	if !ok || defID == 0 || defID > 0xffff {
 		return

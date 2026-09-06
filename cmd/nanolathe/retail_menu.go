@@ -115,20 +115,25 @@ func (g *gameShell) panelBackground() *formats.PCX {
 	if g.frontend.Mode != modeMenuMission || g.assets == nil {
 		return p.background
 	}
-	if g.missionAny {
-		return g.assets.missionAny
-	}
-	if len(g.campaigns) > 2 {
-		return g.assets.missionCampaign
-	}
-	return g.assets.missionSmall
+	// NEWGAME.GUI's opener takes a layout flag: 0 selects a campaign-only
+	// layout (background newcampaign4/newcampaign4x, mission list hidden)
+	// and 1 selects the play-any layout (background playanygame4, both
+	// lists shown). Every reachable call site — both `NewCamp` and `AnyMsn`
+	// on SINGLE.GUI — passes 1; the flag-0 layout is authored but its only
+	// caller is unreachable, so newcampaign4/newcampaign4x are never
+	// installed in a real session [07 §4 "SINGLE, NEWGAME and the briefing
+	// screens" (R-FE-01 §4)]. Nanolathe therefore always uses the play-any
+	// background regardless of which button opened this screen.
+	return g.assets.missionAny
 }
 
-// applyRetailMissionLayout is the small but visible runtime mutation in
-// the retail implementation. The same NEWGAME.GUI window is used for New Campaign and Play
-// Any Game; Play Any compresses the campaign and mission list controls rather
-// than loading a custom panel. These are local GUI coordinates (the panel's
-// header is at the origin in this retail resource).
+// applyRetailMissionLayout compresses the campaign and mission list
+// gadgets to the play-any layout's rectangles. Retail's NEWGAME.GUI opener
+// only ever runs with its layout flag set to 1 in this executable — the
+// flag-0 (campaign-only, mission list hidden) call site is unreachable
+// [07 §4 (R-FE-01 §4)] — so both `NewCamp` and `AnyMsn` apply this same
+// compressed layout; the field that used to select between them controlled
+// nothing retail ever exercises.
 func (g *gameShell) applyRetailMissionLayout() {
 	if g == nil || g.assets == nil {
 		return
@@ -146,15 +151,9 @@ func (g *gameShell) applyRetailMissionLayout() {
 			}
 		}
 	}
-	if g.missionAny {
-		setRect("Campaign", 308, 48)
-		setRect("CampaignKnob", 308, 48)
-		setRect("Missions", 386, 62)
-		return
-	}
-	setRect("Campaign", 314, 142)
-	setRect("CampaignKnob", 314, 136)
-	setRect("Missions", 386, 78)
+	setRect("Campaign", 308, 48)
+	setRect("CampaignKnob", 308, 48)
+	setRect("Missions", 386, 62)
 }
 
 func (g *gameShell) refreshRetailPanel() {
@@ -210,13 +209,13 @@ func (g *gameShell) refreshMissionPanel() {
 			g.campaigns = campaigns
 		}
 	}
-	// the retail implementation rebuilds the campaign-name array from camps/*.tdf and
-	// retains only records whose HEADER campaignside matches the selected
-	// side, plus the literal ALL. When the retail campaign count is <=2,
-	// the retail implementation hides the list and the retail implementation selects the authored
-	// "Arm Campaign"/"Core Campaign" filename directly instead.
-	showCampaign := g.missionAny || len(g.campaigns) > 2
-	g.campaignOptions = g.retailCampaignOptions(showCampaign)
+	// The retail implementation rebuilds the campaign-name array from
+	// camps/*.tdf and retains only records whose HEADER campaignside
+	// matches the selected side, plus the literal ALL. The campaign-only
+	// layout that would instead hide this list and select "Arm Campaign"/
+	// "Core Campaign" directly is never reached by any live call site
+	// [07 §4 (R-FE-01 §4)], so the campaign list is always built and shown.
+	g.campaignOptions = g.retailCampaignOptions()
 	if len(g.campaignOptions) != 0 {
 		if g.campaignIdx < 0 {
 			g.campaignIdx = 0
@@ -250,12 +249,12 @@ func (g *gameShell) refreshMissionPanel() {
 	}
 	g.setListItems("Missions", missions, g.missionIdx)
 
-	// NEWGAME's setup routine enables the lists according to the same
-	// campaign-count/Play-Any branch as the retail implementation.
-	p.SetActive("Campaign", showCampaign)
-	p.SetActive("CampaignKnob", showCampaign)
-	p.SetActive("Missions", g.missionAny)
-	p.SetActive("MissionsKnob", g.missionAny)
+	// NEWGAME's play-any layout — the only one any reachable call site
+	// installs — always shows both lists [07 §4 (R-FE-01 §4)].
+	p.SetActive("Campaign", true)
+	p.SetActive("CampaignKnob", true)
+	p.SetActive("Missions", true)
+	p.SetActive("MissionsKnob", true)
 	p.SetStatus("Difficulty", clampMenuStage(g.missionDifficultyValue, 3))
 	if g.missionSide&1 == 0 {
 		p.SetStatus("Side0", 1)
@@ -280,20 +279,14 @@ func retailCampaignSide(c mission.Campaign) string {
 	return strings.ToUpper(strings.TrimSpace(side))
 }
 
-func (g *gameShell) retailCampaignOptions(showCampaign bool) []mission.Campaign {
+// retailCampaignOptions rebuilds the campaign list for the selected side,
+// admitting only records whose HEADER campaignside matches the selected
+// side or the literal ALL [08 "Enumeration of campaigns"]. The campaign-only
+// layout that instead selects "Arm Campaign"/"Core Campaign" directly and
+// hides this list has no reachable caller [07 §4 (R-FE-01 §4)], so this is
+// unconditional.
+func (g *gameShell) retailCampaignOptions() []mission.Campaign {
 	if g == nil {
-		return nil
-	}
-	if !showCampaign {
-		name := "Arm Campaign"
-		if g.missionSide&1 != 0 {
-			name = "Core Campaign"
-		}
-		for _, c := range g.campaigns {
-			if strings.EqualFold(c.Name, name) {
-				return []mission.Campaign{c}
-			}
-		}
 		return nil
 	}
 	want := "ARM"

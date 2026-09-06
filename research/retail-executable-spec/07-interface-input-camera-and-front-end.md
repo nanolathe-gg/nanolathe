@@ -2823,12 +2823,28 @@ the line's text in the gadget's own text field. They are appended before the
 panel is resized, and the widening pass afterwards sets every kind-5 gadget's
 width to the finished panel width and re-stamps attribute 2.
 
-*`titleHeight` is the second gadget record's height field.* The opener addresses
-it as a fixed displacement from the start of the window's gadget array, and with
-the array's uniform record stride that displacement lands on gadget 1's height —
-for `MSGBOX.GUI` the `OK` button, so the term is 42 and the height is
-`lines × 25 + 82`. There is no title gadget in the file; the name is descriptive
-only.
+*`titleHeight` is the second gadget record's height field, read after art
+resolution, not the authored byte.* The opener addresses it as a fixed
+displacement from the start of the window's gadget array, landing on gadget
+1's height — for `MSGBOX.GUI` the `OK` button. This document previously took
+that height to be the file's authored 42 (giving `lines × 25 + 82`), reading
+the term as the raw record field. It is not: the generic window builder that
+resolves every button's art and **replaces** its width/height with the
+resolved frame's size (`"Buttons: art resolution..."` above, [R-WGT-01 §3])
+runs before the MSGBOX opener's own code, so by the time this height field is
+read it already holds that resolved value. `OK`'s name matches no entry in
+any GAF MSGBOX has access to, so it falls to the generic BUTTONS0 best fit for
+its authored 80×42 rectangle — the stock `commongui.gaf` on the reference
+install resolves that to an 80×20 frame — giving `titleHeight = 20` and
+`lines × 25 + 60` for the stock file, not 42 and `+82`. A retail capture of
+the empty-save-list box (`OTA_Menu_Skirmish`, the "There are no saved games to
+choose from" dialog) shows a box and an `OK` button both visibly shorter than
+the `+82`/height-42 reading predicts, and matching the resolved `+60`/height-20
+one; `okW`/`okH` in the position formula above are the same already-resolved
+gadget-1 dimensions, so `OK` sits flush 15px from the resolved box's edges,
+not 15px short of a box sized for the unresolved 42. There is no title gadget
+in the file; the name is descriptive only. **Correction, capture + [R-WGT-01
+§3] order of operations; supersedes the earlier "42"/"+82" reading.**
 
 *`fontHeight` is the FNT's, not the GAF font's.* The line advance comes from the
 active FNT's height byte even though the same routine measures the line

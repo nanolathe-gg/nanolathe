@@ -10248,7 +10248,10 @@ if (unit.flags & transform-dirty) != 0 or definition has canhover:
 
 Mode `1` is the grounded mode (see [R-MOV-01 §8]), so every ground unit passes
 the mode test for its whole life; a unit in flight (mode `2`) is skipped
-entirely and its Y is owned by the flight integrator. A `canhover` definition
+entirely and its Y is owned by the flight integrator. A landed aircraft passes
+the gate exactly once, on its touchdown tick, because the commit's mode/mirror
+mismatch raises the dirty bit there and nothing raises it again while the
+aircraft sits ([R-AIR-01 §6] "Touchdown"). A `canhover` definition
 forces the branch every tick even when nothing moved, which is what animates
 the hover bob below while parked.
 
@@ -11719,7 +11722,9 @@ else:               vy = -yLimit
 Takeoff, climb, and descend are therefore velocity-limited, never Y
 teleportation; the limit floor is one 16.16 world unit while the middle-branch
 snap can be sub-unit; rising and descending share one rule; none of the air
-service radii participates here.
+service radii participates here. The block reads no sea-level term and no
+definition flag: descent is to the commanded Y wherever it lies, below the
+water surface included ([R-AIR-01 §6] "Touchdown").
 
 **Established fact:** Heading integration is independent of the vertical
 block: `err = (int16)(targetHeading − heading)`; a zero error zeroes the turn
@@ -12418,6 +12423,58 @@ three-phase machine is the one an idle aircraft with nowhere to park runs.
 * Phase 2: if the satisfied set does not contain the movement-arrival bit `0x20`, return 8; otherwise
   call the mover-mode setter with mode `1`, which zeroes the velocity and the
   scalar speed and levels bank and pitch ([R-AIR-01 §3]), and return 5.
+
+**Touchdown: where a landed aircraft rests — Established.** The resting Y is
+written once, on the touchdown tick, by the post-move correction of
+[R-MOV-01 §5], and it is the raw terrain height under the ground plate —
+over water, the seabed. The chain, in sweep order ([R-MOV-03 §1] step 9):
+
+1. The pump runs phase 2 above, so the mover's own mode word is already `1`
+   when the mover tick runs. The flight integrator then assigns the zero
+   velocity triple and returns without a vertical update (§10.1: any mode
+   other than `2` does no flight step).
+2. The position commit enters when any velocity component is non-zero **or**
+   the mover's mode word differs from the unit-side mode mirror
+   ([R-MOV-01 §8]). The velocity is zero, so the mismatch — mover `1`, mirror
+   still the airborne `2` from the takeoff commit — is the only thing that
+   makes the touchdown tick commit at all. The commit writes X/Y/Z unchanged,
+   rewrites the mirror to `1`, stamps the ground plane and raises the
+   transform-dirty bit.
+3. The post-move correction's gate (dirty bit set, mover present, mirror
+   `1`) passes. Its branches test `upright`, `floater` and `canhover` only —
+   neither `canfly` nor `amphibious` is read anywhere in it — and no stock
+   `canfly` definition authors any of the three ([R-AIR-01 §6a] asset
+   census), so every landed aircraft takes the four-corner conform: the
+   integer height word becomes the pairwise average of the four raw terrain
+   bytes interpolated under the rotated selection plate, and pitch and roll
+   are written from the plate's slope. Sea level is read on that path only
+   inside the `canhover` floor-and-bob arm.
+4. Every later tick the velocity is zero and the mirror agrees, so the commit
+   does not enter, the dirty bit stays clear, and Y is never written again
+   until the next takeoff. A landed aircraft therefore keeps the conform's
+   integer height with the fraction bits its descent left.
+
+For a seaplane that set down on water this composes to the **seabed**: the
+water leg of phase 1 commands the terrain height, the descent reaches it
+(§10.1's vertical control carries no sea-level term), and the conform
+confirms it from the same raw bytes. On every stock naval map the open-water
+bed is height byte 0, 65 to 85 world units under the sea byte, against
+seaplane models 4 to 16 world units tall, so the landed seaplane is wholly
+submerged. **Bounded negative:** of the 49 recovered readers of the sea-level
+byte, none floors an aircraft's Y — the readers that touch a unit's height
+are the band classifier, the ground speed update's half-speed test, the
+carried floater arm of the commit, the hover arm of the conform, the marker
+altitude setter and per-tick producer, the LOS emitter's observer height
+(`max(Y, seaLevel + 1)`, sight only) and the radar/sonar contact bits — and
+of the recovered writers of a unit's Y, only the commit, the correction, the
+carried-position setter, the constructor and the save/network restores
+exist. The surface is not presentation either: the unit compositor blits at
+the raw unit Y and its waterline pass tints an owned submerged hull and erases
+an enemy's ([03 R-REN-03A §8]), so retail draws a landed seaplane exactly as
+it draws a submarine — blue-tinted, radar-invisible (`Y + modelTop < seaLevel`)
+and sonar-visible. A play-test recollection that a landed seaplane visibly
+floats has no producer in the executable; only a retail capture on a naval
+map could reopen this.
 
 **Established — `VTOL_GetRepaired` is a two-phase wait.** With a null target it
 emits status cue slot 7 `Repair aborted.` and returns 8. Phase 0 returns 1 as

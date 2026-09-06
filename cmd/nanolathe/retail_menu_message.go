@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
@@ -86,6 +87,28 @@ func (g *gameShell) buildRetailMessageWindow(authored *gui.Window, message strin
 		Header: authored.Header,
 	}
 	built.Gadgets = append(built.Gadgets, authored.Gadgets...)
+
+	// The generic window builder resolves every button's art and replaces
+	// its authored width/height with the resolved frame's size before any
+	// screen-specific opener code runs [07 R-WGT-01 §3]. MSGBOX.GUI's `OK`
+	// (authored 80x42) has no name match in any GAF, so it falls to the
+	// generic BUTTONS0 best-fit frame, an 80x20 button — not the authored
+	// 80x42 rectangle. The MSGBOX opener's own height and OK-position math
+	// below reads gadget 1's size *after* that resolution, so it must run
+	// here too: building the box from the unresolved 42 leaves the box
+	// taller than retail's and strands OK above the bottom margin instead
+	// of flush with it — the "wrong background, misaligned OK" a no-saves
+	// dialog capture shows as a visible gap of bare plate under the button.
+	for i := range built.Gadgets {
+		if built.Gadgets[i].Kind != gui.KindButton {
+			continue
+		}
+		if frame := g.messageButtonFrame(built.Gadgets[i]); frame != nil && frame.Width != 0 && frame.Height != 0 {
+			built.Gadgets[i].Rect.W = int32(frame.Width)
+			built.Gadgets[i].Rect.H = int32(frame.Height)
+		}
+	}
+
 	for i, line := range lines {
 		built.Gadgets = append(built.Gadgets, gui.Gadget{
 			Kind:       gui.KindLabel,
@@ -110,8 +133,12 @@ func (g *gameShell) buildRetailMessageWindow(authored *gui.Window, message strin
 	}
 	width := int32(widest + 20)
 	height := int32(len(lines)*25 + 40)
-	if len(authored.Gadgets) > 1 {
-		height += authored.Gadgets[1].Rect.H
+	if len(built.Gadgets) > 1 {
+		// titleHeight is gadget 1's height field read at the point the
+		// opener runs — after the builder's art-size resolution above, so
+		// this is the (possibly resolved) runtime value, not necessarily
+		// the raw authored one [07 R-FE-01 §9].
+		height += built.Gadgets[1].Rect.H
 	}
 	built.Rect.W, built.Rect.H = width, height
 	built.Rect.X = (retailScreenW - width) / 2
@@ -130,6 +157,29 @@ func (g *gameShell) buildRetailMessageWindow(authored *gui.Window, message strin
 		}
 	}
 	return built
+}
+
+// messageButtonFrame resolves a MSGBOX.GUI button's art the way the generic
+// window builder does: the window's own GAF first, then the common
+// interface GAF by name, and only when both miss the generic BUTTONS0/
+// stagebuttn best-fit fallback [07 R-WGT-01 §3]. MSGBOX.GUI carries no
+// window-owned GAF, so the first hop is always a miss here; the common-GAF
+// name lookup is still tried before falling back, since a future stock file
+// could add a named "OK" entry.
+func (g *gameShell) messageButtonFrame(gad gui.Gadget) *formats.GAFFrame {
+	if g == nil || g.assets == nil {
+		return nil
+	}
+	artName := gad.Art
+	if artName == "" {
+		artName = gad.Name
+	}
+	if g.assets.common != nil {
+		if e, ok := g.assets.common.Find(artName); ok && len(e.Frames) != 0 {
+			return e.Frames[0].Frame
+		}
+	}
+	return g.retailButtonFrame(gad, 0, false)
 }
 
 // retailMessageLineStep is the message box's line advance: the active FNT's

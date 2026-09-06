@@ -450,6 +450,18 @@ type CommandPageView struct {
 	CloakState uint8
 	OnOffState uint8
 
+	// Stockpile is the held-round byte the count-label writer's `commonattribs`
+	// bit 0x08 branch prints on a MAKENUKE/MAKEANTI toy: "a byte on the builder
+	// unit — the stockpile count", cleared and unprinted when zero, with the
+	// pending BUILDWEAPON total appended after it [07 R-P0-11 §2]. It is the
+	// page unit's slot-0 completed-round remainder, which is where the order
+	// alias's build type of zero puts every round and where every shipped
+	// stockpile weapon lives [06 §11.1][06 R-WPN-05 §2].
+	//
+	// The pending half is not published beside it: the committed order queues
+	// already carry the secondary BUILDWEAPON nodes the writer sums.
+	Stockpile int32
+
 	// The capability aggregates the stage/grey table of [07 R-HUD-03 §6]
 	// reads: each button is greyed when its aggregate bit is clear.  Every
 	// selected unit contributes its definition's authored capability key

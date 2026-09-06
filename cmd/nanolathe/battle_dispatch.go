@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -27,6 +29,51 @@ func (b *battleSession) snapshotBuilder(v frame.UnitView) bool {
 	}
 	def, ok := b.cat.Unit(v.DefName)
 	return ok && def != nil && def.Builder
+}
+
+// StockpileGadget reports whether an authored side-panel gadget is the
+// MAKENUKE/MAKEANTI stockpile toy, the only producer of a BUILDWEAPON round in
+// shipped content [06 §11.1][07 R-CAM-01 §14 item 3]. The count-label writer
+// identifies the same toys by `commonattribs` bit 0x08 [07 R-P0-11 §2], which
+// stock content authors on exactly the eight stockpile buttons and on nothing
+// else, so that bit is the test; the name suffix is the fallback for a page
+// whose byte is unset.
+func StockpileGadget(gad gui.Gadget) bool {
+	if gad.Kind != gui.KindButton {
+		return false
+	}
+	if gad.CommonAttribs&guiAttribStockpileToy != 0 {
+		return true
+	}
+	upper := strings.ToUpper(gad.Name)
+	return strings.HasSuffix(upper, "MAKENUKE") || strings.HasSuffix(upper, "MAKEANTI")
+}
+
+// guiAttribStockpileToy is the `commonattribs` bit the count-label writer tests
+// after 0x04 to format a stockpile button's caption [07 R-P0-11 §2].
+const guiAttribStockpileToy = 0x08
+
+// DispatchStockpileGadget is the click body of a MAKENUKE/MAKEANTI toy: it
+// queues one BUILDWEAPON round on the unit the committed command page names.
+// The alias supplies slot 0 and the session's enqueue guard refuses a slot that
+// holds no `stockpile` weapon [06 §11.1][06 R-WPN-05 §2].
+//
+// The order alias is the button's whole behavior — there is no placement, no
+// latch and no hotkey — so the caller needs only to recognise the gadget and
+// call this [07 R-CAM-01 §14 item 3].
+func (b *battleSession) DispatchStockpileGadget(queued bool) error {
+	f, ok := b.currentSnapshot()
+	if !ok {
+		return fmt.Errorf("nanolathe: stockpile round not dispatched: no committed frame")
+	}
+	unit := f.CommandPage.Builder
+	if v, found := snapshotUnitByHandle(f, unit); !found || b.sess == nil || v.Owner != b.sess.LocalOwner {
+		unit = 0
+	}
+	if unit == 0 {
+		return fmt.Errorf("nanolathe: stockpile round not dispatched: the committed command page names no unit the local player owns")
+	}
+	return b.DispatchStockpile(unit, queued)
 }
 
 // enqueueHumanCommand is the only battle-to-session mutation path. The UI

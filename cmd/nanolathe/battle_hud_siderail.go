@@ -95,9 +95,6 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			// Stock content authors 0x04 on all 480 build-product buttons and
 			// 0x08 on the eight stockpile buttons; every other side-panel button
 			// authors 0 (asset census over the reference install's guis/*.gui).
-			// The 0x08 half is not written here: the committed frame carries no
-			// stockpile count for the selected builder, only the hovered unit's
-			// percentage, so there is nothing to format yet.
 			//
 			// This replaces a gate of `gad.Text != ""` that appended " N" to an
 			// authored caption. Every build-product button authors an empty
@@ -105,6 +102,8 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			// carry one.
 			if f != nil && gad.CommonAttribs&0x04 != 0 {
 				text = productQueueCountLabel(f, gad.Name)
+			} else if f != nil && gad.CommonAttribs&0x08 != 0 {
+				text = stockpileCountLabel(f)
 			}
 			if text != "" {
 				// The button painter first selects the FNT the toy's
@@ -162,6 +161,49 @@ func productQueueCountLabel(f *frame.Frame, product string) string {
 		return ""
 	}
 	return fmt.Sprintf("+%d", total)
+}
+
+// stockpileCountLabel is the bit-0x08 format of the count-label writer
+// [07 R-P0-11 §2], the one the eight MAKENUKE/MAKEANTI toys author. Its two
+// numbers are two different quantities, not one total split in two: "%d" of a
+// byte on the builder unit — the held stockpile count, published on the
+// committed command page — and then " +%d" of the count query run with id 0,
+// which is the pending BUILDWEAPON total the stockpile button itself enqueues.
+// So the toy reads "held +pending".
+//
+// A quantity of zero clears its own half, which is the writer's stated rule for
+// a zero total and is what §2 says explicitly of the held byte ("printing
+// nothing when that byte is zero"); a toy with nothing held and nothing pending
+// therefore draws no caption at all, like an empty product slot.
+func stockpileCountLabel(f *frame.Frame) string {
+	if f == nil || f.CommandPage.Builder == 0 {
+		return ""
+	}
+	held := f.CommandPage.Stockpile
+	// The second number is the BUILDWEAPON queue, not the secondary order list
+	// as a whole [07 R-P0-11 §2]. Stockpile nodes live in the page unit's
+	// secondary segment [06 §11.1], and the node's own count is what the query
+	// sums.
+	pending := uint32(0)
+	for i := range f.OrderQueues {
+		q := &f.OrderQueues[i]
+		if q.Unit != f.CommandPage.Builder {
+			continue
+		}
+		for _, o := range q.Secondary {
+			if o.Kind == "BuildWeapon" {
+				pending += o.BuildCount
+			}
+		}
+	}
+	label := ""
+	if held != 0 {
+		label = fmt.Sprintf("%d", held)
+	}
+	if pending != 0 {
+		label += fmt.Sprintf(" +%d", pending)
+	}
+	return strings.TrimSpace(label)
 }
 
 // queueCountLabelPen is the retail button painter's pen arithmetic

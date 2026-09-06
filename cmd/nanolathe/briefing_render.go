@@ -274,18 +274,35 @@ func (g *gameShell) briefingInput(cl *client.Client) {
 		return
 	}
 	if in.Mouse.Pressed(input.MouseButtonLeft) && g.briefingPanel != nil && g.briefingPanel.Window != nil {
+		window := g.briefingPanel.Window
+		x, y := int32(in.Mouse.X), int32(in.Mouse.Y)
 		// A press takes the capture, and a greyed gadget never captures
 		// [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13].
-		if idx := g.briefingPanel.PressTest(int32(in.Mouse.X), int32(in.Mouse.Y)); idx >= 0 {
-			name := g.briefingPanel.Window.Gadgets[idx].Name
-			switch menuKey(name) {
+		if idx := g.briefingPanel.PressTest(x, y); idx >= 0 {
+			switch menuKey(window.Gadgets[idx].Name) {
 			case "start":
 				g.dispatchBriefing(BriefingActionStart)
 			case "prevmenu":
 				g.dispatchBriefing(BriefingActionPrev)
 			case "shutup":
 				g.dispatchBriefing(BriefingActionShutup)
-			case "morebar", "more":
+			}
+			return
+		}
+		// MSNBRIEF's stock `TextRegion` and `MOREBAR` are authored as inert
+		// kind-5 labels (attribute 0x10, no quickkey), so the generic
+		// label/button capture above never selects them [07 R-WGT-01 §7] — a
+		// click there is *never* a fired gadget in the shared sense. The
+		// transition table nonetheless lists a click on either one as its own
+		// row, paging the text same as MOREBAR alone [07 R-FE-01 §2
+		// "TextRegion / MOREBAR"][07 R-HUD-03 §10]: MSNBRIEF's own paging
+		// routine hit-tests both gadget rectangles directly. Window.HitTest
+		// only gates on Active/hidden, not on the per-kind press-handler
+		// eligibility PressTest requires, so it is the direct stand-in for
+		// that dedicated hit test.
+		if idx := window.HitTest(x, y); idx >= 0 {
+			switch menuKey(window.Gadgets[idx].Name) {
+			case "morebar", "more", "textregion":
 				g.dispatchBriefing(BriefingActionMore)
 			}
 		}
@@ -426,6 +443,30 @@ func (g *gameShell) drawBriefingGadget(c *client.Client, p *ui.Panel, index int,
 	g.drawRetailTextState(c, p, index, gad, r)
 }
 
+// panoramaStrip lays the panorama scroller's tiling: the pen starts at
+// `gadget.x - scroll` and the frame index starts at **0**, each blit advancing
+// the pen by its own frame's width. Retail runs the loop counter from 0 to the
+// frame count inclusive — one blit more than there are frames, the index taken
+// modulo the count — and lets the gadget clip discard whatever falls outside;
+// with the stock 4-frame 2440-pixel sequence in a 550-pixel gadget that count
+// covers the gadget for every value of `scroll`, so stopping at the right edge
+// paints the same visible pixels [08 R-CAMP-01 §2].
+func panoramaStrip(frames int, widthAt func(int) int, scroll, rectX, rectW int, blit func(index, x int)) {
+	if frames <= 0 || widthAt == nil || blit == nil {
+		return
+	}
+	x := rectX - scroll
+	for n := 0; n <= frames && x < rectX+rectW; n++ {
+		index := n % frames
+		w := widthAt(index)
+		if w <= 0 {
+			return
+		}
+		blit(index, x)
+		x += w
+	}
+}
+
 func (g *gameShell) drawBriefingPanorama(c *client.Client, b *campaignBriefingController, r gui.Rect) {
 	if g.assets == nil || g.assets.briefing == nil || g.assets.briefing.art == nil {
 		return
@@ -436,20 +477,34 @@ func (g *gameShell) drawBriefingPanorama(c *client.Client, b *campaignBriefingCo
 	}
 	total := 0
 	for _, ref := range e.Frames {
-		total += int(ref.Frame.Width)
+		if ref.Frame != nil {
+			total += int(ref.Frame.Width)
+		}
 	}
 	if total > 0 {
 		b.scroll %= total
 	}
-	x := int(r.X) - b.scroll
-	for n := 0; x < int(r.X+r.W); n++ {
-		f := e.Frames[(b.panoramaFrame+n)%len(e.Frames)].Frame
-		if f == nil || f.Width == 0 {
-			break
-		}
-		blitRetailFrame(c, f, x, int(r.Y))
-		x += int(f.Width)
+	// The gadget's frame word — `(now / 3) mod frameCount`, kept by the
+	// controller — selects nothing that is drawn: retail fetches that frame
+	// only to test the pointer against null before painting the strip and the
+	// mask. Tiling from it instead of from 0 would shift the whole strip by a
+	// frame width (640 px in stock content) every three presentation ticks
+	// [08 R-CAMP-01 §2].
+	if e.Frames[b.PanoramaFrame()%len(e.Frames)].Frame == nil {
+		return
 	}
+	panoramaStrip(len(e.Frames), func(i int) int {
+		if e.Frames[i].Frame == nil {
+			return 0
+		}
+		return int(e.Frames[i].Frame.Width)
+	},
+		b.scroll, int(r.X), int(r.W), func(index, x int) {
+			// The strip is clipped to the PANORAMA rectangle: stock frames are
+			// 640 px wide in a 550 px gadget, so the tail hangs outside it
+			// [08 R-CAMP-01 §2].
+			c.UIBlitClipped(e.Frames[index].Frame, x, int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
+		})
 	if mask := briefingFrame(g.assets.briefing.art, "Panmask", b.localSide); mask != nil {
 		blitRetailFrame(c, mask, 0, 0)
 	}

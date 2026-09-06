@@ -239,10 +239,15 @@ func (g *gameShell) adjustFocusedList(up bool) {
 	case modeMenuMap:
 		name = "MAPNAMES"
 	case modeMenuMission:
-		if g.missionAny {
-			name = "Missions"
-		} else {
-			name = "Campaign"
+		// Both lists are always live in the play-any layout [07 §4
+		// (R-FE-01 §4)], so prefer whichever list the player actually
+		// focused (by clicking into it); retail's stated initial focus for
+		// this layout is "Missions", which is also the default here.
+		name = "Missions"
+		if gad, ok := g.currentGadget(p.Focused()); ok {
+			if strings.EqualFold(gad.Name, "Campaign") {
+				name = "Campaign"
+			}
 		}
 	}
 	l := p.ListFor(name)

@@ -2,9 +2,14 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -101,8 +106,11 @@ func TestBriefingWindDrawOrderAndStartRequest(t *testing.T) {
 	if b.RotationSteps() != 1 {
 		t.Fatalf("first eligible rotator pass = %d, want 1", b.RotationSteps())
 	}
-	if b.scroll != 0 {
-		t.Fatalf("scroll advanced at deadline setup = %d", b.scroll)
+	// Retail's scroll and its deadline are statics that nothing resets at
+	// screen entry, so the deadline is always already in the past on a
+	// briefing's first draw and that draw takes one step [08 R-CAMP-01 §2].
+	if b.scroll != 1 {
+		t.Fatalf("scroll after the first draw = %d, want 1", b.scroll)
 	}
 	// A later draw inside the 25 ms rotation gate still advances panorama
 	// selection from (tick/3)%count.
@@ -238,8 +246,213 @@ func TestBriefingPagerLinesAndCaption(t *testing.T) {
 	}
 }
 
+// TestBriefingTextRegionClickPagesText is the regression for the play-test
+// report that the briefing description "cannot be scrolled" although it says
+// "more": stock MSNBRIEF.GUI authors both `TextRegion` and `MOREBAR` as inert
+// kind-5 labels (attribute 0x10, no quickkey), so Panel.PressTest's generic
+// label/button capture never selects either one [07 R-WGT-01 §7] — a click
+// on the caption, or on the text region itself, used to be silently
+// swallowed. The single-player transition table lists a click on either
+// gadget as one row with one effect, paging the text
+// [07 R-FE-01 §2 "TextRegion / MOREBAR"][07 R-HUD-03 §10]. Retail assets are
+// opt-in (see internal/testsupport.RetailRoot); this test skips without
+// $NANOLATHE_RETAIL_ASSETS.
+func TestBriefingTextRegionClickPagesText(t *testing.T) {
+	root := probeRetail(t)
+	opts := Options{Root: root}
+	cs, err := openContent(opts)
+	if err != nil {
+		t.Skipf("retail assets unavailable: %v", err)
+	}
+	defer cs.Close()
+	shell, err := newGameShell(opts, cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell.missionSide = 0
+	shell.openMenu(modeMenuMission)
+	found := false
+	for i := range shell.campaignOptions {
+		if shell.campaignOptions[i].Path == "camps/arm campaign.tdf" {
+			shell.campaignIdx, found = i, true
+		}
+	}
+	if !found {
+		t.Skip("the Arm campaign is not in this install")
+	}
+	shell.missionIdx = 0
+	shell.openCampaignBriefing()
+	if shell.briefing == nil || shell.briefingPanel == nil || shell.briefingPanel.Window == nil {
+		t.Fatal("the briefing did not open")
+	}
+
+	// Force a multi-page text regardless of the authored brief's own length,
+	// so a page turn is unambiguous evidence of the click reaching the pager.
+	shell.briefing.SetTextRegion(strings.Repeat("line\n", 20), 200, 20, 8, func(s string) int { return len(s) * 6 })
+	if shell.briefing.Page() != 0 || shell.briefing.pageCount < 2 {
+		t.Fatalf("test setup: page=%d pageCount=%d, want page 0 of at least 2 pages", shell.briefing.Page(), shell.briefing.pageCount)
+	}
+
+	idx := -1
+	for i, gad := range shell.briefingPanel.Window.Gadgets {
+		if gui.Name16Equal(gad.Name, "TextRegion") {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("MSNBRIEF.GUI has no TextRegion gadget")
+	}
+	rect := shell.briefingPanel.Window.PlacedRect(idx)
+
+	mouse := cl.Input().Mouse
+	mouse.SetPosition(float32(rect.X+rect.W/2), float32(rect.Y+rect.H/2))
+	mouse.SetButton(input.MouseButtonLeft, true)
+	shell.briefingInput(cl)
+
+	if shell.briefing.Page() != 1 {
+		t.Fatalf("a click on TextRegion did not page the text: page=%d, want 1", shell.briefing.Page())
+	}
+}
+
+// TestBriefingRotationCadenceIsWallClockNotSampleRate locks the planet
+// rotator to the retail rate of 40/duration frames a second regardless of how
+// often the presentation host happens to sample Update — the play-test
+// defect this guards against. Nanolathe's own host is fixed at 30 Hz
+// [internal/platform/ebitenapp], slower than the rotator's 40 Hz gate, so a
+// single check per call structurally cannot reach 40 Hz: it would forever cap
+// the rotation at the host's own rate. Driving the same span of simulated
+// wall-clock time at three different sampling rates must land on the
+// identical frame and gate-pass count [08 R-CAMP-01 §2][03 §4.4].
+func TestBriefingRotationCadenceIsWallClockNotSampleRate(t *testing.T) {
+	newEntry := func() *formats.GAFEntry {
+		e := &formats.GAFEntry{Name: "rotate", FrameCount: 36, Unknown1: 1, Frames: make([]formats.GAFFrameRef, 36)}
+		for i := range e.Frames {
+			e.Frames[i].Value = 3 // authored duration in whole ticks, stock rotation entries [08 R-CAMP-01 §2]
+		}
+		return e
+	}
+
+	drive := func(sampleMS int64, totalMS int64) (frame, steps int) {
+		b := NewCampaignBriefingController(briefingMission(t, "Lava"), 0, &countingRand{}, nil)
+		b.SetRotationSequence(newEntry())
+		now := int64(0)
+		b.Update(now, briefingPresentationTick(now)) // the bootstrap sample; establishes the phase origin
+		for now < totalMS {
+			now += sampleMS
+			if now > totalMS {
+				// However coarse the sampling, the last sample always lands
+				// exactly on totalMS: the invariant under test is that the
+				// pass count depends on elapsed wall time, not on how the
+				// intervening calls happened to be chunked.
+				now = totalMS
+			}
+			b.Update(now, briefingPresentationTick(now))
+		}
+		return b.RotationFrame(), b.RotationSteps()
+	}
+
+	// One bootstrap step plus every 25 ms boundary crossed by 2700 ms of wall
+	// time: 1 + 2700/25 = 109 gate passes. At 3 ticks/frame that is 36 full
+	// frame advances (108 passes) plus one tick into the 37th, i.e. exactly
+	// one full 36-frame loop (2.7 s per rotation, stock content
+	// [08 R-CAMP-01 §2]) back to frame 0.
+	const totalMS = 2700
+	const wantSteps = 109
+	frame30, steps30 := drive(33, totalMS) // ~30 Hz, Nanolathe's fixed presentation TPS
+	frame60, steps60 := drive(16, totalMS) // ~60 Hz, a faster host
+	frame11, steps11 := drive(90, totalMS) // ~11 Hz, a slower/lagging host
+
+	if steps30 != wantSteps || steps60 != wantSteps || steps11 != wantSteps {
+		t.Fatalf("gate passes over %d ms of wall time depend on sampling rate: 30Hz=%d 60Hz=%d 11Hz=%d, want %d every time", totalMS, steps30, steps60, steps11, wantSteps)
+	}
+	if frame30 != 0 || frame60 != 0 || frame11 != 0 {
+		t.Fatalf("rotation frame after one full loop depends on sampling rate: 30Hz=%d 60Hz=%d 11Hz=%d, want 0 every time", frame30, frame60, frame11)
+	}
+}
+
 // countingRand is a CRT stand-in for controllers whose draws are not the
 // subject of the test.
 type countingRand struct{ n int32 }
 
 func (c *countingRand) Rand() int32 { c.n++; return c.n }
+
+// TestBriefingPanoramaTilesFromFrameZeroAtTheScrollRate is the regression for
+// the play-test report that the animation above the briefing description runs
+// "way too fast". The strip used to be tiled starting at the gadget's frame
+// word, `(now / 3) mod frameCount`, which shifted the whole panorama by a full
+// frame width — 640 px in every stock `<x>brief.gaf` pan sequence — ten times
+// a second. Retail writes that frame word and then uses it only to null-test a
+// frame pointer; the tiling starts at index 0 and `scroll` alone moves the
+// strip, one pixel every three presentation ticks [08 R-CAMP-01 §2].
+func TestBriefingPanoramaTilesFromFrameZeroAtTheScrollRate(t *testing.T) {
+	// Stock geometry: every anims/<x>brief.gaf pan sequence is four frames of
+	// 640/640/640/520 (2440 px total) and MSNBRIEF.GUI places PANORAMA at
+	// (45,130) 550x123 [08 R-CAMP-01 §2].
+	widths := []int{640, 640, 640, 520}
+	const total = 2440
+	const rectX, rectW = 45, 550
+	widthAt := func(i int) int { return widths[i] }
+
+	b := NewCampaignBriefingController(briefingMission(t, "Lava"), 0, &countingRand{}, nil)
+	b.SetPanoramaFrameCount(len(widths))
+
+	origin := func() (index, x int) {
+		index, x = -1, 0
+		first := true
+		panoramaStrip(len(widths), widthAt, b.scroll, rectX, rectW, func(i, px int) {
+			if first {
+				index, x, first = i, px, false
+			}
+		})
+		return index, x
+	}
+
+	const ticks = 90 // three seconds of the fixed 30 Hz presentation host
+	words := map[int]bool{}
+	_, prevX := 0, 0
+	for tick := int64(0); tick < ticks; tick++ {
+		b.Update(tick*1000/30, tick)
+		words[b.PanoramaFrame()] = true
+		index, x := origin()
+		if index != 0 {
+			t.Fatalf("tick %d: the strip is tiled from frame %d, want frame 0 — the frame word is not the tiling origin", tick, index)
+		}
+		if tick > 0 {
+			if d := prevX - x; d != 0 && d != 1 {
+				t.Fatalf("tick %d: the strip origin jumped %d px in one tick, want 0 or 1", tick, d)
+			}
+		}
+		prevX = x
+	}
+	if len(words) < 2 {
+		t.Fatalf("the gadget frame word never changed over %d ticks (%v); the test cannot distinguish the two tiling origins", ticks, words)
+	}
+	// One bootstrap step (retail's carried-over deadline is always in the
+	// past on a screen's first draw) plus one step every three ticks
+	// thereafter: 1 + 89/3 = 30 px of motion across the three seconds, i.e.
+	// the traced ten pixels a second [08 R-CAMP-01 §2].
+	if b.scroll != 30 {
+		t.Fatalf("scroll after %d ticks = %d px, want 30 (1 px per 3 presentation ticks)", ticks, b.scroll)
+	}
+	if got := rectX - b.scroll; got != prevX {
+		t.Fatalf("strip origin = %d, want gadget.x - scroll = %d", prevX, got)
+	}
+
+	// The blit count is retail's covering count, not a fill test: for every
+	// value of scroll the strip must still reach the gadget's right edge
+	// [08 R-CAMP-01 §2].
+	for scroll := 0; scroll < total; scroll++ {
+		right := 0
+		panoramaStrip(len(widths), widthAt, scroll, rectX, rectW, func(i, px int) {
+			right = px + widths[i]
+		})
+		if right < rectX+rectW {
+			t.Fatalf("scroll %d: the strip ends at %d, short of the gadget's right edge %d", scroll, right, rectX+rectW)
+		}
+	}
+}

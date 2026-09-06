@@ -48,6 +48,42 @@ func BuildProductsFor(cat *content.Catalog, builderKey string) []string {
 	return nil
 }
 
+// BuildProductForSlot resolves the product authored at one build page's Nth
+// button gadget: page is the 1-based authored page number (`<unit>1.GUI` is
+// page 1, matching ProductsForPage/BuilderPageCount) and slotOrdinal is the
+// zero-based position of the gadget among the page's build-product buttons,
+// counted in gadget file order after paging and order-control gadgets are
+// excluded — never the gadget's own authored `name` field.
+//
+// Per-unit `<unit>N.GUI` panels are hand-authored templates, and their build
+// gadgets keep whatever unit name the panel artist typed while laying out the
+// slot; the engine does not read that name for identity. Retail's product-page
+// assembly "matches the builder definition and page, then patches the product
+// into the named gadget slot" from the authored CANBUILD sequence, which "maps
+// entries 1-6 to page one, 7-12 to page two, and so on" [07 §9 "Product-page
+// assembly is closed"]. Measured directly against the patched reference
+// install, `guis/armplat1.gui`'s first build gadget is authored `name=ARMCSA`
+// while `sidedata.tdf` authors `canbuild1=ARMCA` for the same builder — a
+// resolver keyed on the gadget's name drops that button (no product answers
+// to "ARMCSA"), and worse, `guis/armplat1.gui`'s fourth build gadget is
+// authored `name=ARMSFIG`, which collides with `canbuild3` instead of the
+// slot's own `canbuild4=ARMHAWK`, binding the wrong product to a live button.
+// Ordinal position is the field the two authoring passes cannot disagree on.
+//
+// A slot beyond the authored list (a short final page) or an unresolved
+// builder returns "", false: the caller must not invent a product for an
+// unfilled button [R-P0-03].
+func BuildProductForSlot(cat *content.Catalog, builderKey string, page, slotOrdinal int) (string, bool) {
+	if slotOrdinal < 0 {
+		return "", false
+	}
+	products := ProductsForPage(BuildProductsFor(cat, builderKey), page, RetailBuildButtonsPerPage)
+	if slotOrdinal >= len(products) || products[slotOrdinal] == "" {
+		return "", false
+	}
+	return products[slotOrdinal], true
+}
+
 // ValidateBuildProduct reports whether product is in the builder's authored list [R-P0-03].
 func ValidateBuildProduct(cat *content.Catalog, builderKey, product string) bool {
 	if cat == nil {

@@ -161,6 +161,53 @@ func TestShowRetailMessageBuildsRuntimeLabels(t *testing.T) {
 	}
 }
 
+// TestLoadScreenEmptyListMessageBoxMatchesRetailCapture locks the "no saved
+// games" message box's own geometry against a retail screen-capture
+// measurement, not just the synthetic-font contract above. MSGBOX.GUI's `OK`
+// button (authored 80x42) has no name match in any GAF, so the generic
+// window builder falls it back to BUTTONS0's best-fit frame — 80x20, not the
+// authored 80x42 — before the MSGBOX opener's own height and OK-position
+// math runs [07 R-WGT-01 §3][07 R-FE-01 §9]. Before this, Nanolathe built the
+// box from the unresolved 42, leaving it visibly taller than retail's with
+// OK stranded above the 15px bottom margin instead of flush with it — the
+// "wrong background, misaligned OK" a retail capture of this exact dialog
+// (OTA_Menu_Skirmish, ~00:01:12) shows as a gap of bare BackTile plate below
+// the button.
+func TestLoadScreenEmptyListMessageBoxMatchesRetailCapture(t *testing.T) {
+	resetSaveLoadScreenState(t)
+	shell, _ := retailShellForTest(t)
+	if err := shell.openSaveLoadScreen(loadScreenMode, saveLoadFromFrontend); err != nil {
+		t.Fatalf("open load screen: %v", err)
+	}
+	modal := shell.frontend.Panels.Modal()
+	if modal == nil || modal.Window == nil || len(modal.Window.Gadgets) < 2 {
+		t.Fatal("no modal (or no OK gadget) was opened for the empty save list")
+	}
+	ok := modal.Window.Gadgets[1]
+	if !strings.EqualFold(ok.Name, "OK") {
+		t.Fatalf("gadget 1 is %q, want OK", ok.Name)
+	}
+	// BUTTONS0's best fit for the authored 80x42 OK rectangle is the 80x20
+	// frame family (asset census via the retail install), not the authored
+	// height.
+	if ok.Rect.W != 80 || ok.Rect.H != 20 {
+		t.Fatalf("OK resolved size = %dx%d, want 80x20 (BUTTONS0's best fit, not the authored 80x42)", ok.Rect.W, ok.Rect.H)
+	}
+	// OK sits flush 15px from the resolved panel's right and bottom edges
+	// [07 R-FE-01 §9], not 15px short of a box sized for the unresolved 42.
+	if want := modal.Window.Rect.W - ok.Rect.W - 15; ok.Rect.X != want {
+		t.Fatalf("OK x=%d, want %d (15px from the right edge)", ok.Rect.X, want)
+	}
+	if want := modal.Window.Rect.H - ok.Rect.H - 15; ok.Rect.Y != want {
+		t.Fatalf("OK y=%d, want %d (15px from the bottom edge)", ok.Rect.Y, want)
+	}
+	// Panel height is lines*25 + 40 + the *resolved* gadget-1 height (20),
+	// not the authored 42 [07 R-FE-01 §9].
+	if want := int32(1*25+40) + ok.Rect.H; modal.Window.Rect.H != want {
+		t.Fatalf("panel height=%d, want %d (built from the resolved OK height)", modal.Window.Rect.H, want)
+	}
+}
+
 // TestRetailMessageWrapBreaksAtSeparators locks the message box's wrapper
 // [07 R-FE-01 §9]: it measures a line only when the next character is a space,
 // a newline or a hyphen, breaks when the line has reached the wrap width, and

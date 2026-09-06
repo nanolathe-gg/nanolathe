@@ -586,12 +586,33 @@ pointer is set to the rotation-column sequence (frame index 0) with the
 frame-advance timer. A missing sequence leaves that gadget without animation.
 
 **Panorama scroller** (per draw): a horizontal strip is drawn by tiling the
-panorama sequence's frames left-to-right starting at `x = gadget.x − scroll`
-and continuing while frame index ≤ frame count (indices wrap modulo the
-count), where `scroll` advances by 1 pixel every time the presentation clock
-passes a deadline of `now + 2` presentation units and wraps to 0 when it
-reaches the sum of all frame widths. The gadget's frame word is set to
-`(now / 3) mod frameCount` before drawing. After the strip, frame
+panorama sequence's frames left-to-right from a pen that starts at
+`x = gadget.x − scroll`. The **tiling always starts at frame index 0**: the
+loop counter runs `0, 1, … , frameCount` inclusive — `frameCount + 1` blits,
+the index taken modulo the count so the last blit repeats frame 0 — and each
+blit advances the pen by that frame's own width, with the frame's authored
+x/y offsets zeroed first. The strip is clipped to the gadget rectangle, so
+the fixed blit count is a covering count rather than a fill test: the stock
+550-pixel-wide `PANORAMA` gadget against a 2440-pixel sequence whose first
+frame is 640 wide is covered for every value of `scroll`, and a
+`while pen < gadget.right` bound paints the same visible pixels.
+
+`scroll` is the **only** thing that moves the strip. It advances by 1 pixel
+whenever the presentation clock is strictly past a deadline that the same pass
+then re-sets to `now + 2` presentation units — so one pixel every three units,
+ten pixels a second at a 30-unit presentation rate — and wraps to 0 when it
+reaches the sum of all frame widths. `scroll` and its deadline are statics
+that nothing resets at screen entry: a fresh briefing continues the previous
+briefing's scroll, and because the carried-over deadline is always in the past
+the first draw of a briefing always takes one step.
+
+The gadget's frame word is set to `(now / 3) mod frameCount` before drawing,
+and that value is then used **only** to fetch a frame pointer that is tested
+against null and otherwise discarded — the guard that skips the strip and the
+mask when the sequence cannot produce a frame. It is not the tiling origin,
+and it selects nothing that is drawn. (A scroller that started its tiling at
+the frame word would shift the whole strip by a frame width — 640 pixels in
+stock content — every three units, which is not retail's motion.) After the strip, frame
 `localSide` (0 Arm, 1 Core) of the sequence named **`Panmask`** in the same
 GAF is drawn at the window origin (0, 0) — `Panmask` is the per-side
 foreground overlay, which answers its role. The presentation clock is
@@ -608,7 +629,11 @@ deadline 25 ms ahead): when the narration has stopped playing and the
 changes the frame only once the frame's own authored duration countdown has
 run out, and it wraps according to the entry's loop word: the rotation rate
 is `40 / duration` frames a second, not 40. Stock rotation entries are 35–36
-frames at duration 3, so a planet turns once every 2.6–2.7 seconds. (The
+frames at duration 3, so a planet turns once every 2.6–2.7 seconds. The
+deadline is taken from the current tick count rather than accumulated from the
+previous deadline, so the pass rate is `min(drawRate, 40 Hz)` — retail's draw
+loop runs far above 40 Hz, which is why the observed rate is the authored one.
+(The
 step also sits behind a test of the scaled clock against a remembered value,
 but nothing ever writes that value, so the test always passes and it is not
 a second gate.)

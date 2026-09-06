@@ -139,10 +139,17 @@ type gameShell struct {
 	// `LEFTCLICK` two-stage button writes [07 R-CAM-01 §5].
 	interfaceType int
 
-	campaigns              []mission.Campaign
-	campaignOptions        []mission.Campaign
-	campaignIdx            int
-	missionIdx             int
+	campaigns       []mission.Campaign
+	campaignOptions []mission.Campaign
+	campaignIdx     int
+	missionIdx      int
+	// missionAny records which SINGLE.GUI button opened NEWGAME.GUI
+	// (`NewCamp` or `AnyMsn`). Retail's only reachable NEWGAME.GUI layout
+	// shows and fills both the campaign and mission lists regardless of
+	// which button was pressed — the flag that would instead hide the
+	// mission list has no live caller [07 §4 (R-FE-01 §4)] — so this no
+	// longer selects a layout; it is kept only in case a future cue/
+	// substate distinction needs it.
 	missionAny             bool
 	missionSide            int
 	missionDifficultyValue int

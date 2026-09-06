@@ -712,15 +712,37 @@ Repeated sections remain separate nodes. A first-match section accessor is
 common — it linear-scans and returns the first matching sibling, duplicates
 retained — while explicit enumerators can visit every section.
 
-Key insertion binary-searches the section's sorted key vector with the
-case-insensitive comparison; on a fold-equal hit, a second byte-for-byte
-case-sensitive compare decides. Identical spelling replaces the value in
-place: last write wins, one entry. A case-variant spelling is inserted as a
-second distinct sorted entry, so variants coexist. Typed lookups return the
-lower-bound entry — the first variant in case-insensitive sort order — which
-is deterministic but not last-wins (supported inference: the mechanism is
-directly visible; accessor return among variants still needs black-box
-confirmation). Stock content does not rely on that edge case.
+**Key insertion and the duplicate-key rule — Established.** The section's key
+vector is never sorted; it is built by insertion, one assignment at a time, in
+file order. Each insertion binary-searches the vector for the **lower bound** of
+the key under the case-insensitive comparison, then compares byte for byte
+against the entry **at that position only** — the head of the run of entries
+that fold-compare equal, and no other member of that run. An identical spelling
+assigns the value in place, so it is last-write-wins with one entry that keeps
+its original position. Any other outcome inserts the new entry **at the lower
+bound**, in front of every fold-equal entry already present. The typed
+accessors take the same case-insensitive lower bound and read the entry there,
+so **the case variant a typed lookup returns is the last one parsed.** Because
+the byte comparison sees only the run head, a spelling that a later variant has
+pushed behind the head is inserted again rather than assigned, and one spelling
+can hold two entries.
+
+This replaces the previous text, which said accessors return "the first variant
+in case-insensitive sort order — deterministic but not last-wins", marked that a
+supported inference needing black-box confirmation, and added "stock content does
+not rely on that edge case". The ordering claim was inverted and the last
+sentence was false. Twelve stock unit records author two spellings of one
+movement key inside one `[UNITINFO]` — `MaxWaterDepth=0` early and
+`maxwaterdepth=255` at the end (`ARMFIG`, `ARMLANCE`, `ARMSEAP`, `ARMSEHAK`,
+`ARMSFIG`, `Armcsa`, `CORHUNT`, `CORSEAP`, `CORSFIG`, `CORTITAN`, `CORVENG`,
+`Corcsa`), and they are the only two-spelling, two-value key runs in a 438-file
+sweep of `units/`, `weapons/`, `features/`, `gamedata/` and `guis/`. Retail
+therefore resolves their maximum water depth to 255. The inverted reading gave
+0, which makes `[04 R-AIR-01 §6a]`'s aircraft water rule dead code for every
+aircraft — a floor derived from a maximum depth of 0 already sits at sea level,
+so its "raise the floor to sea level" arm can never fire — and which is why no
+seaplane could treat water as landable ground. `[fmt tdf "Duplicate keys"]`
+carries the same rule for format readers.
 
 **Malformed input and failure behavior.** The tokenizer reports parse errors
 with the exact prefix `Parse error in .TDF File! ` (trailing space; the

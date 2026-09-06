@@ -12,6 +12,32 @@
 // lander it attaches [04 R-AIR-01 §6]. Nothing in this file heals.
 //
 // IsAirBase via definition bit isairbase [02 "Unit record"][04 §10.2].
+//
+// Water landing, and where a landed seaplane rests. Ground landing is
+// `VTOL_LandIfCan` (execVTOLLandIfCan in airorders.go); which cells it will
+// accept is the landing-legality predicate of [04 R-AIR-01 §6a], whose aircraft
+// water rule raises the water floor to sea level for a `canfly` definition that
+// is NOT `amphibious`. The eight stock seaplanes are exactly the `amphibious`
+// aircraft, so water is landable ground for them and for nothing else that
+// flies. That much is settled and is what this package implements.
+//
+// Where a landed seaplane rests is settled [04 R-AIR-01 §6 "Touchdown"]: on
+// the seabed. Phase 1 commands the terrain height over water, the flight
+// integrator's vertical control descends to the commanded Y with no sea-level
+// term [04 §10.1], and on the touchdown tick the position commit — entered by
+// the mode/mirror mismatch the mode setter just created, not by any position
+// delta — raises the transform-dirty bit, so the post-move correction of
+// [04 R-MOV-01 §5] runs once and its fourth branch conforms the integer
+// height, pitch and roll to the raw terrain bytes under the ground plate. Sea
+// level is read on that path only inside the `canhover` arm, which no aircraft
+// takes. The question this comment used to carry — whether some producer puts
+// the seaplane back on the surface — closed as a bounded negative over every
+// reader of the sea-level byte and every writer of a unit's Y: there is none.
+// The surface look is not presentation either: the compositor blits at the raw
+// unit Y and the waterline pass of [03 R-REN-03A §8] tints (own) or erases
+// (enemy without sonar) everything below the surface, so retail draws a landed
+// seaplane the way it draws a submarine. The rule lives in applyAirPostMove in
+// integrate.go, after the flight branch of the mover tick.
 
 package movement
 

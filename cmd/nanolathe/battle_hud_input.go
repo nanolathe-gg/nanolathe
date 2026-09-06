@@ -144,6 +144,16 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		}
 	}
 	paged := commandPageIsPaged(f)
+	// buildSlotOrdinals[i] is window.Gadgets[i]'s ordinal position among the
+	// page's build-product slots (-1 for every other gadget), computed once
+	// per click over the whole gadget list rather than as a running counter
+	// inside the loop below: the loop's own rect hit test (`guiRectContains`)
+	// `continue`s past every gadget except the one under the pointer, so a
+	// counter incremented only inside the build-product branch never sees the
+	// gadgets that preceded the struck one on the same click. See the
+	// build-product branch's own comment [07 §9 "Product-page assembly is
+	// closed"].
+	buildSlotOrdinals := buildProductSlotOrdinals(window, f, paged)
 	for i, gad := range window.Gadgets {
 		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
 			continue
@@ -245,33 +255,44 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				return true
 			}
 		}
-		// Build product binding data-driven [R-P0-03][02 "Build-menu catalog keys"].
-		// GUI may not invent products absent from authored build list.
-		if selectedDef != nil && b.cat != nil {
-			candidates := []string{gad.Name, gad.Text}
-			candidates = append(candidates, gad.Labels...)
-			for _, cand := range candidates {
-				if cand == "" {
-					continue
-				}
-				// Direct canonical match or case-insensitive
-				var pageProductKey string
-				for _, key := range snapshotProducts {
-					if strings.EqualFold(content.CanonicalKey(key), content.CanonicalKey(cand)) {
-						pageProductKey = key
-						break
-					}
-				}
-				if pageProductKey == "" {
-					continue
-				}
-				// Resolve canonical product name for dispatch
-				prodKey := cand
-				if pageProductKey != "" {
-					// Production uses the immutable page key as identity; do not
-					// recover an alias by consulting the live catalog menu.
-					prodKey = pageProductKey
-				}
+		// The MAKENUKE/MAKEANTI stockpile toy is the only producer of a
+		// BUILDWEAPON round in shipped content: one click queues one round
+		// against the unit the committed page names, with no placement, no
+		// latch and no hotkey [06 §11.1][07 R-CAM-01 §14 item 3]. Shift is the
+		// ordinary queue modifier, which only decides whether the insertion is
+		// silent [04 R-ORD-01 §13].
+		if StockpileGadget(gad) {
+			if rightClick {
+				return true
+			}
+			if err := b.DispatchStockpileGadget(b.battleState().Input.ShiftHeld); err != nil {
+				h.dispatchErr = err
+			}
+			return true
+		}
+		// Build product binding is ORDINAL, not name-keyed [07 §9 "Product-page
+		// assembly is closed"]: retail's own assembly "matches the builder
+		// definition and page, then patches the product into the named gadget
+		// slot" from the authored CANBUILD sequence, which "maps entries 1-6 to
+		// page one, 7-12 to page two, and so on" — position, never the panel's
+		// authored gadget name. Per-unit `<unit>N.GUI` panels are hand-authored
+		// templates whose build gadgets keep whatever unit name the panel
+		// artist typed while laying out the slot; the engine does not read that
+		// name for identity. Measured against the patched reference install,
+		// `guis/armplat1.gui`'s first build gadget is authored `name=ARMCSA`
+		// while `sidedata.tdf`'s `canbuild1` for the same builder is `ARMCA` —
+		// matching by name dropped that button outright — and the panel's
+		// fourth build gadget (authored `ARMSFIG`) collided with `canbuild3`
+		// instead of its own `canbuild4` (`ARMHAWK`), binding the wrong product
+		// to a live button. `snapshotProducts` (`f.CommandPage.ProductKeys`) is
+		// already the page-local, ordinal-indexed CANBUILD slice a session
+		// publish assembled for this exact builder and page [R-P0-03];
+		// buildSlotOrdinals[i] is this gadget's position among the page's
+		// build-product slots in authored file order, paging/order/stockpile
+		// controls excluded, precomputed above this loop.
+		if slot := buildSlotOrdinals[i]; selectedDef != nil && b.cat != nil && slot >= 0 {
+			if slot < len(snapshotProducts) && snapshotProducts[slot] != "" {
+				prodKey := snapshotProducts[slot]
 				prodDef, _ := b.cat.Unit(prodKey)
 				if prodDef == nil {
 					// The committed page is the sole product identity source. An
@@ -363,6 +384,61 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 		return true
 	}
 	return false
+}
+
+// buildProductSlotOrdinals returns, for every gadget in window, its ordinal
+// position among the page's build-product slots (-1 for a gadget that is not
+// one) — the resolution consumeClickDelta's build-product branch looks up by
+// the clicked gadget's own index rather than a per-click running counter,
+// because that loop's rect hit test (`guiRectContains`) `continue`s past
+// every gadget except the one struck, so a counter incremented inside the
+// branch would only ever see the single gadget the pointer landed on.
+//
+// The predicate is positional over button gadgets: one that is neither a
+// recognized command button (`commandGadgetVerdict`'s stage/grey table names
+// ORDERS, BUILD, the order buttons, ONOFF, CLOAK, and the two stance
+// gadgets — never a build product or NEXT/PREV [07 R-HUD-03 §6]), nor a
+// NEXT/PREV paging gadget (matched by name substring, since the stage/grey
+// table does not cover them either), nor the MAKENUKE/MAKEANTI stockpile toy
+// (consumed ahead of the build-product branch [06 §11.1]). Ordinal position,
+// not the gadget's own authored name, is what a build-page slot's product
+// identity comes from [07 §9 "Product-page assembly is closed"] — see the
+// build-product branch's own citation for the measured `guis/armplat1.gui`
+// mismatch this replaces.
+func buildProductSlotOrdinals(window *gui.Window, f *frame.Frame, paged bool) []int {
+	ordinals := make([]int, len(window.Gadgets))
+	next := 0
+	for i, gad := range window.Gadgets {
+		// Positional: an inactive or greyed slot still occupies its ordinal,
+		// because retail patches product N into slot N of the authored page
+		// whatever that slot's own state is [07 §9]; the click loop above
+		// refuses the press on such a gadget on its own.
+		if i == 0 || gad.Kind != gui.KindButton {
+			ordinals[i] = -1
+			continue
+		}
+		if _, isCommand := commandGadgetVerdict(gad, f, paged); isCommand {
+			ordinals[i] = -1
+			continue
+		}
+		upperName := strings.ToUpper(gad.Name)
+		upperText := strings.ToUpper(gad.Text)
+		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") ||
+			strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
+			ordinals[i] = -1
+			continue
+		}
+		// The MAKENUKE/MAKEANTI stockpile toy is consumed ahead of the
+		// build-product branch in the loop above and never reaches it
+		// [06 §11.1][07 R-CAM-01 §14 item 3].
+		if StockpileGadget(gad) {
+			ordinals[i] = -1
+			continue
+		}
+		ordinals[i] = next
+		next++
+	}
+	return ordinals
 }
 
 // hitTestFor is the session-aware hit test used by battleSession handleInput [F-P0-003].

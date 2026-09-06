@@ -240,7 +240,7 @@ func (b *worldBuckets) indexChildren(units []frame.UnitView) {
 	}
 	for i := range units {
 		u := &units[i]
-		if u.Carrier == 0 || u.Carrier == u.Slot || u.CarriedPiece < 0 {
+		if !isCarried(*u) || u.CarriedPiece < 0 {
 			continue
 		}
 		carrier := int(u.Carrier)
@@ -582,10 +582,47 @@ func (c *Client) drawWorldPassB(cur *frame.Frame, ok bool) {
 // [04 R-MOV-01 §8][03 R-RAST-01 §7].
 const moverModeGrounded uint8 = 1
 
+// isCarried reports whether this unit record holds a carrier link. It is the
+// first test the per-unit present makes, and the whole of it: a unit with a
+// carrier is presented by that carrier and never on its own
+// [03 R-RAST-01 §7-A].
+//
+// The hang piece is deliberately not part of the test. The present's check is
+// the carrier link alone, while the carrier's children walk is the one that
+// skips a piece-less carry, so a unit carried on the no-piece sentinel is drawn
+// by neither and appears nowhere — retail's behavior, not an omission here
+// [03 R-RAST-01 §7][04 R-UNIT-06 §3][04 R-FAC-02 §1].
+//
+// A record naming itself as its carrier is not a link, the same self-reference
+// indexChildren rejects.
+func isCarried(v frame.UnitView) bool {
+	return v.Carrier != 0 && v.Carrier != v.Slot
+}
+
 // presentUnit runs the per-unit steps both passes share, in order: the
 // selected-unit footprint quad when the unit's selected bit is set, and then
 // the model present, which carries the unit's attached children with it
 // [03 R-RAST-01 §7].
+//
+// **A unit that has a carrier is not presented here.** The per-unit present is
+// a no-op for a carried unit: it tests the unit record's carrier link first and
+// returns before any of its own work, so a carried unit reaches the screen only
+// through the children step of its CARRIER's present, inside the carrier's
+// staging image and under the key test [03 R-RAST-01 §7-A][R-REN-03A §4]. The
+// bucket build applies no carrier filter, so cargo is still bucketed and still
+// walked by pass B; what the pass finds is a present that does nothing.
+//
+// This is the play-test defect the unit fixes. Cargo hangs at the carrier's
+// attach piece, so it lands in the same 16-pixel plot row as its carrier, where
+// in-row order is ascending unit slot. An Atlas built before the unit it lifts
+// therefore had its cargo painted a second time, straight to the framebuffer,
+// after the carrier's staging blit — which is exactly the per-pixel occlusion
+// [R-REN-03A §4] exists to produce, undone one blit later. The reverse slot
+// order hid the bug rather than fixing it.
+//
+// The selected-unit footprint quad is NOT inside the present and is still drawn
+// for a carried unit: both passes draw the quad and then call the present, so
+// the carrier check gates only the model [03 R-RAST-01 §7].
 func (c *Client) presentUnit(d worldDrawable) {
 	u := *d.unit
 	// The selected-unit footprint quad occupies this unit's own depth slot and
@@ -594,6 +631,9 @@ func (c *Client) presentUnit(d worldDrawable) {
 	// [03 R-WATER-01 §1].
 	if u.Flags&hud.SelectionFlag != 0 {
 		c.drawSelectionQuad(u)
+	}
+	if isCarried(u) {
+		return
 	}
 	if u.Model == "" {
 		// A carrier with no model of its own still presents its children.

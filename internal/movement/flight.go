@@ -87,6 +87,16 @@ type FlightState struct {
 
 	Dirty bool // transform-dirty set when heading delta non-zero [04 §10.1] C30
 
+	// ModeMirror is the unit-side copy of the committed mover mode that the
+	// position commit compares against the mover's own mode word and rewrites
+	// on a full commit [04 R-MOV-01 §8]. The commit enters when any velocity
+	// component is non-zero OR the two disagree, and a landed aircraft has a
+	// zero velocity triple, so the mismatch is the one thing that makes the
+	// touchdown tick commit at all — and that commit's transform-dirty bit is
+	// what lets the post-move correction write the resting Y once
+	// [04 R-AIR-01 §6 "Touchdown"]. Initialised to the allocation mode.
+	ModeMirror uint8
+
 	// Command is the mover's one motion controller: the flight command block a
 	// can-fly mover allocates instead of the ground route follower
 	// [04 R-AIR-01 §1]. The integrator reads the command words copied out of it,

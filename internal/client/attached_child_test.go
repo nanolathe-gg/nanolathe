@@ -177,12 +177,15 @@ func TestFactoryNanoframeIsPresentedWithItsFactory(t *testing.T) {
 		t.Fatalf("the nanoframe's plot row %d is not earlier than the lab's %d, so this fixture no longer reproduces the occlusion it exists to lock", productRow, labRow)
 	}
 
-	// The product's own silhouette, composed alone.
-	alone := c.composeUnits(t, cur, []frame.UnitView{*product})
-	// The published frame, and the same frame with the carrier link cut.
-	full := c.composeUnits(t, cur, []frame.UnitView{*labView, *product})
 	orphan := *product
 	orphan.Carrier = 0
+	// The product's own silhouette, composed alone. It is composed from the
+	// ORPHAN copy: the per-unit present is a no-op for a unit that holds a
+	// carrier link, so a carried product with its carrier absent from the frame
+	// draws nothing at all [03 R-RAST-01 §7-A].
+	alone := c.composeUnits(t, cur, []frame.UnitView{orphan})
+	// The published frame, and the same frame with the carrier link cut.
+	full := c.composeUnits(t, cur, []frame.UnitView{*labView, *product})
 	cut := c.composeUnits(t, cur, []frame.UnitView{*labView, orphan})
 
 	fullSurvivors, cutSurvivors, silhouette := 0, 0, 0

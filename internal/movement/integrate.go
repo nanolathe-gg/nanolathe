@@ -805,6 +805,66 @@ func applyGroundPostMove(t *world.Terrain, u *units.Unit, dirty bool, mode uint8
 	applyGroundConform(t, u, bob)
 }
 
+// applyAirPostMove is the sweep's post-move correction for a can-fly mover
+// [04 R-MOV-01 §5], run after the mover tick exactly as it is for a ground
+// mover [04 R-MOV-03 §1] step 9. The gate does not test `canfly`: it tests the
+// transform-dirty bit (or `canhover`) and then the grounded mode mirror, so an
+// aircraft in flight is skipped and a landed one is corrected whenever its
+// commit raised the bit.
+//
+// When that happens is the whole contract for where a landed aircraft rests
+// [04 R-AIR-01 §6 "Touchdown"]. The flight integrator zeroes the velocity
+// triple outside mode 2, so a landed aircraft's commit has no position delta to
+// enter on; it enters on the touchdown tick alone, because the mode setter has
+// just written mode 1 while the unit-side mirror still holds the airborne 2.
+// That commit rewrites the mirror and raises the dirty bit, this correction
+// takes the fourth branch — no stock aircraft authors `upright`, `floater` or
+// `canhover` — and the four-corner conform writes the integer height, pitch
+// and roll from the raw terrain bytes under the ground plate. Over water the
+// raw terrain is the seabed: sea level enters neither the integrator nor this
+// branch, and a landed seaplane rests on the bottom, not the surface. Every
+// later tick has a zero velocity and an equal mirror, so nothing writes Y
+// again until the next takeoff.
+//
+// The commit's blocked arm — the validator refusing the touchdown cells, which
+// leaves the mirror airborne and skips the branch — is not modelled: the
+// landing-legality test of [04 R-AIR-01 §6a] has already refused any cell
+// another unit occupies, and this engine's mode setter stamps the ground plane
+// without a second validation [04 R-COLL-01 §4].
+func (s *System) applyAirPostMove(u *units.Unit, res StepResult, tick uint32) {
+	if s == nil || u == nil || u.Def == nil {
+		return
+	}
+	fl := s.Flights[u.Handle]
+	if fl == nil {
+		return
+	}
+	mode := u.Move.Mode & 0x3
+	// The commit's entry condition, then its dirty bit: any position delta or
+	// a mode/mirror mismatch [04 R-MOV-01 §8]; the heading integration's own
+	// dirty bit is the same flag [04 §10.1].
+	dirty := u.Flags&unitTransformDirty != 0 || fl.Dirty || res.Moved || mode != fl.ModeMirror
+	fl.ModeMirror = mode
+	if !dirty && !u.Def.CanHover {
+		return
+	}
+	var lastProposal uint32
+	coll := s.Collisions[u.Handle]
+	if coll != nil {
+		lastProposal = coll.LastProposalTick
+	}
+	applyGroundPostMove(s.Terrain, u, dirty, mode, newHoverBob(u, fl.Speed, tick, lastProposal))
+	fl.Dirty = false
+	u.Flags &^= unitTransformDirty
+	// The correction wrote the unit's Y directly; the integrator's and the
+	// collision cache's copies follow it so the next tick's descent test and
+	// stamp read the resting height, not the commanded one.
+	fl.Y = int32(u.Y.Raw())
+	if coll != nil {
+		coll.Y = fl.Y
+	}
+}
+
 // hoverAnimationRate is the animation counter's advance per simulation tick.
 //
 // Retail forms that counter as GetTickCount() scaled by a configured rate and
@@ -1596,6 +1656,9 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			TargetY:       int32(u.Y.Raw()),
 			OffMap:        false,
 			Dirty:         false,
+			// The allocator hands every unit its initial mode and the mirror
+			// starts equal to it [04 R-FAC-02 §5][04 R-MOV-01 §8].
+			ModeMirror: u.Move.Mode & 0x3,
 		}
 		// Authored zeros stay zero. The previous 65536/16384/65536 substitutes
 		// were invented constants on an authoritative path (I6): a unit whose
@@ -1752,6 +1815,29 @@ func isPrimaryHead(u *units.Unit, head *orders.Node) bool {
 // order boundary; a path request never captures a mutable *units.Unit.
 func (s *System) ActivateMove(u *units.Unit, head *orders.Node) bool {
 	if s == nil || u == nil || head == nil || s.Scheduler == nil {
+		return false
+	}
+	// "Established — aircraft never enter this scheduler": the air route
+	// follower is a separate class whose repath poll returns zero
+	// unconditionally, flight steering consumes the goal point directly, and
+	// no A* runs for it [04 R-PATH-01 §8]. An aircraft's only motion input is
+	// the flight command block, fed by the air marker its executor installs
+	// [04 R-AIR-01 §1].
+	//
+	// Corrected (pt6-airwater). This guard was missing, so the session's move
+	// boundary submitted a ground path request for every `VTOL_Move` record.
+	// The search's own notifications land on the record that owns the goal —
+	// `0x100`/`0x200` at request setup and `0x40` (the "cannot get there"
+	// empty publication) from the publisher [04 R-ORD-01 §0][04 R-PATH-01 §9] —
+	// and `VTOL_Move`'s gate is exactly `0xE0`, which `0x40` intersects. An air
+	// move whose ground search failed therefore completed on the very tick it
+	// was issued, before the executor had installed a marker: the aircraft
+	// stayed on its previous leg and the pump refilled `VTOL_Standby`, which
+	// respawned `VTOL_LandIfCan`. That is the reported "a plane hunting for a
+	// landing spot refuses new move orders" — the order was accepted, resolved,
+	// and then thrown away by a search that must never have run. Over water the
+	// ground search always fails, which is why it only showed there.
+	if u.Def != nil && u.Def.CanFly {
 		return false
 	}
 	if !isPrimaryHead(u, head) {
@@ -2816,6 +2902,9 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		// [04 R-COLL-01 §1] step (4) [04 R-COLL-01 §4]. A rectangle that left
 		// the map writes no cell.
 		s.syncMoverStamp(u)
+		// The sweep runs the post-move correction after the mover tick for
+		// every mover, aircraft included [04 R-MOV-03 §1] step 9.
+		s.applyAirPostMove(u, res, tick)
 		return res
 	}
 	// The queue selects the STEERING TARGET; it does not gate the mover tick.
