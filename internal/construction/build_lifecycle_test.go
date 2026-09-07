@@ -602,7 +602,7 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	factory, product := w.Unit(fh), w.Unit(ph)
 	product.Remaining, product.MaxHealth, product.Health = 0.5, 100, 30
 	factory.Activated = true
-	factory.Flags = FlagStartBuilding
+	factory.BuildingState = true
 	q := orders.QueueForUnit(factory)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3), Target: ph})
 	node := q.Primary()[0]
@@ -634,8 +634,8 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	// The cancel latches Dying; the record stays Alive for the session's
 	// phase-2 finalizer, which frees the slot and decrements the owner's
 	// live-unit counter [01 §4.4].
-	if factory.Activated || factory.Flags&FlagStartBuilding != 0 || !product.Dying {
-		t.Fatalf("cancel edges/death ordering wrong: factory activated=%t flags=%x dying=%t", factory.Activated, factory.Flags, product.Dying)
+	if factory.Activated || factory.BuildingState || !product.Dying {
+		t.Fatalf("cancel edges/death ordering wrong: factory activated=%t building=%t dying=%t", factory.Activated, factory.BuildingState, product.Dying)
 	}
 	if node.Param2 != 2 {
 		t.Fatalf("cancel decremented queued count to %d", node.Param2)

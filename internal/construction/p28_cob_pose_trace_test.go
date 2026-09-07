@@ -123,10 +123,10 @@ func TestP28COB01RFactoryProductUsesIndependentStrictARMCKBinding(t *testing.T) 
 	if !reflect.DeepEqual(productBinding.PieceMap, directBinding.PieceMap) || !reflect.DeepEqual(productBinding.VM.Pieces, directBinding.VM.Pieces) || !reflect.DeepEqual(product.RenderPieceFlags, direct.RenderPieceFlags) {
 		t.Fatal("direct and factory ARMCK differ immediately after strict Create")
 	}
-	if product.InBuildStance || product.Busy || product.Flags&FlagStartBuilding != 0 {
-		t.Fatalf("factory product inherited factory lifecycle state: stance=%t busy=%t start=%t", product.InBuildStance, product.Busy, product.Flags&FlagStartBuilding != 0)
+	if product.InBuildStance || product.Busy || product.BuildingState {
+		t.Fatalf("factory product inherited factory lifecycle state: stance=%t busy=%t start=%t", product.InBuildStance, product.Busy, product.BuildingState)
 	}
-	if factory.Flags&FlagStartBuilding == 0 {
+	if !factory.BuildingState {
 		t.Fatal("factory did not receive its own StartBuilding edge")
 	}
 	before := productBinding.VM.Pieces[0]

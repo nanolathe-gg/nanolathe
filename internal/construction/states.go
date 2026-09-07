@@ -75,19 +75,6 @@ func (s *Service) handleState0(factory *units.Unit, node *orders.Node, tick uint
 		// first product, and already suppressed on the same-pass restart from
 		// state 4, which is what retail does [04 R-UNIT-06 §2].
 		//
-		// The clear below is consequently dead on every path a factory reaches
-		// here through. It was a workaround for a creation-time pinning in
-		// units.InitEconomyState that set the bit true for any definition
-		// authoring neither key and so swallowed this raise; that pinning has
-		// been removed. The clear is retained only because
-		// TestStateZeroActivateIsARealEdge constructs the pinned state by hand
-		// and would fail without it. It is also a second writer of the
-		// engine-state bit, which retail does not have — the edge machine is
-		// the only writer [04 R-UNIT-06 §2]. Deleting both this clear and that
-		// test's `factory.Activated = true` setup line is the follow-up.
-		if !factory.InBuildStance {
-			factory.Activated = false
-		}
 		s.activate(factory)
 		node.Phase = uint8(State1)
 		node.DynamicGate = 0

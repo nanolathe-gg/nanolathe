@@ -709,16 +709,13 @@ Direct-OTA loads read `maps/<name>.ota` and, on a read or parse miss, take
 exactly one translated-name retry through the reverse translation table before
 failing `[08 "Mission type dispatch"]` `[08 R-CAMP-01 §11]`.
 
-**C3 — schema selection.** Seek the global header — its absence emits `Very bad
-news! No MSG!` verbatim — then read each `Schema %i`'s type and match it
-case-insensitively against a literal candidate list chosen by the mode.
-Campaign tries the three difficulty literals in a difficulty-dependent
-permutation and fails on any other difficulty value. Skirmish and direct-OTA
-try `Network 1` through `Network 4`, each candidate counting its `StartPos`
-records and accepted when that count equals the player count, or the counted
-player count is zero, or — as a fallback while no exact match has been found —
-this candidate's count is the largest seen. Failure emits `No suitable schema
-type...` `[08 "Schema choice"]`.
+**C3 — schema selection.** The format layer supplies one contiguous,
+first-match schema projection to metadata compilation, browser admission and
+mission selection. Network types share the exact vocabulary in
+`formats.NetworkSchemaRank`. Runtime selection follows all candidate visits
+and the StartPos acceptance/overwrite rule in `[02 R-MAP-01 §4]`; browser
+admission uses the same types without the runtime StartPos requirement.
+Campaign selection follows that section's difficulty preference order.
 
 **C4 — selection precedes instantiation.** The schema name is resolved before
 any placement record is built, and is what the placement builder is fed

@@ -104,6 +104,16 @@ func TestCommanderCapturesEnemyUnit(t *testing.T) {
 	victimX, victimZ := victim.X, victim.Z
 	s.Movement.EnsureUnit(captor)
 	s.Movement.EnsureUnit(victim)
+	// The replacement creator must receive the current mover mode, and capture
+	// later replays operational edges. CompleteUnit only registers movement and
+	// publishes; it must not replace either transferred state with construction
+	// defaults [05 R-WORK-01 §15].
+	if !s.Movement.SetMoverMode(victim, 2) {
+		t.Fatal("fixture could not enter airborne mode")
+	}
+	victim.Hidden = true
+	victim.IsCloaked = true
+	victim.Flags |= (uint32(3) << units.StandingMoveShift) | (uint32(1) << units.StandingFireShift)
 
 	// The fixture script never runs the deferred StartBuilding body, so the
 	// build-stance byte is set here — the same fixture accommodation
@@ -141,6 +151,19 @@ func TestCommanderCapturesEnemyUnit(t *testing.T) {
 	}
 	if repl.X != victimX || repl.Z != victimZ {
 		t.Fatalf("replacement position = (%v,%v), want the victim's original position (%v,%v) [05 R-WORK-01 §15]", repl.X, repl.Z, victimX, victimZ)
+	}
+	if repl.Move.Mode != 2 || !repl.Activated || !repl.Hidden {
+		t.Fatalf("completion overwrote capture state: mode=%d active=%t hidden=%t [05 R-WORK-01 §15]",
+			repl.Move.Mode, repl.Activated, repl.Hidden)
+	}
+	if repl.IsCloaked {
+		t.Fatal("completion copied the old cloak request; capture replays only instance cloak [05 R-WORK-01 §15]")
+	}
+	if got := (repl.Flags >> units.StandingMoveShift) & units.StandingFieldMask; got != 0 {
+		t.Fatalf("completion restored standing move field %d after capture cleared it [05 R-WORK-01 §15]", got)
+	}
+	if got := (repl.Flags >> units.StandingFireShift) & units.StandingFieldMask; got != 0 {
+		t.Fatalf("completion restored standing fire field %d after capture cleared it [05 R-WORK-01 §15]", got)
 	}
 	if victim.Alive && !victim.Dying {
 		t.Fatal("the old record is still alive and not even marked dying after the transfer")

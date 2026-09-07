@@ -161,9 +161,11 @@ interpolation, or render `alpha`.
 
 **Why.** Retail's draw path samples the accumulators exactly as committed at
 the current tick; no interpolation between updates exists `[03 §2.4]`.
-Interpolation is therefore not a divergence to be reintroduced: the frame
-boundary is immutable for presentation, and the simulation publishes only after
-the complete phase sequence `[01 §4.4]`.
+Original and GPU Classic preserve that sampling. A future Enhanced-only
+interpolation design is authorized by DESIGN_GPU_RENDERER §5.3, using immutable
+committed snapshots with no simulation feedback. It is not implemented by the
+GPU prototype milestone; the simulation still publishes only after the complete
+phase sequence [01 §4.4].
 
 **Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. The production frame path has no `Lerp`, `alpha`, or previous-frame read.
 
@@ -225,12 +227,15 @@ stale pointer after compaction), reproduce it and cite it; do not defend against
 it. Bounds checks that reject data retail would accept are the one exception and
 must be noted in the plan's Divergences.
 
-One presentation switch is sanctioned and it is the only one: the renderer,
-classic or modern, of [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md). Both
-executors replay the same recorded frame; the switch changes how pixels are
-produced, never which frame is read or what the simulation does. Modern
-mode's departures from classic are listed in that document's Divergences and
-nowhere else.
+The renderer is the sanctioned presentation switch of
+[DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md): currently classic or modern,
+with all GPU prototypes behind `--renderer=modern` and classic the default.
+The planned labels are Original, GPU Classic and Enhanced, sharing two executors.
+GPU Classic permits visually reviewed raster approximations; Enhanced may add
+separately designed zoom, lighting, glow, antialiasing and optional interpolation.
+These choices never change authoritative state. Departures from classic are
+listed in that design document's Divergences. New public modes and interpolation
+are deferred beyond the prototype human-review gate.
 
 ## I12 — Standard library first
 

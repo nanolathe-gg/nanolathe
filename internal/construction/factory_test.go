@@ -552,7 +552,7 @@ func TestNanoframeCreationValues(t *testing.T) {
 		t.Fatalf("standing order bits not copied %b", prod2.Flags)
 	}
 	// Start-building edge raised
-	if factory2.Flags&FlagStartBuilding == 0 {
+	if !factory2.BuildingState {
 		t.Fatalf("start-building edge not raised")
 	}
 	// Allocator-refusal path: test 300 tick retry
@@ -899,7 +899,7 @@ func TestKind9Kill(t *testing.T) {
 	factory := w.Unit(h)
 	factory.Def = facDef
 	factory.Activated = true
-	factory.Flags = FlagStartBuilding
+	factory.BuildingState = true
 	q := orders.QueueForUnit(factory)
 	bid := orders.Lookup("BuildingBuild")
 	if bid == 0 {
@@ -925,8 +925,8 @@ func TestKind9Kill(t *testing.T) {
 	if !svc.LastKill().NoCorpse {
 		t.Fatalf("expected no corpse for cause-9")
 	}
-	if factory.Activated || factory.Flags&FlagStartBuilding != 0 {
-		t.Fatalf("deactivate+start-building bits not lowered together, activated=%t flags %b", factory.Activated, factory.Flags)
+	if factory.Activated || factory.BuildingState {
+		t.Fatalf("deactivate+start-building bits not lowered together, activated=%t building=%t", factory.Activated, factory.BuildingState)
 	}
 	// Node should be dropped without decrementing remaining count (2 stays 2? But node removed)
 	if q2 := orders.QueueForUnit(factory); q2.LenPrimary() != 0 {
@@ -942,7 +942,7 @@ func TestKind9Kill(t *testing.T) {
 	factory2 := w2.Unit(h2)
 	factory2.Def = facDef
 	factory2.Activated = true
-	factory2.Flags = FlagStartBuilding
+	factory2.BuildingState = true
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: prodIdx(nil, "armflash"), Param2: 1, Phase: uint8(State2), Target: 0})
 	head2 := q2.Primary()[0]

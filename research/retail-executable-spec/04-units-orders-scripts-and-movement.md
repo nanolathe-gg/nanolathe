@@ -2860,11 +2860,14 @@ takeoff state. The climb's first-goal geometry for the zero-length move is
 **Established — the state-2 validator receives mode 1.** The factory handler
 passes its own flags-word mode mirror as the validator's mode argument
 ([R-ORD-01 §5]). The allocator sets that mirror from its seventh argument and
-**every** allocation call site in the export (eleven) passes the literal 1
-— the build handlers, the mission spawner, the commander respawn, the unload
-and transfer paths — except the save loader, which passes the saved mode bits
-(doc 08). A building-class unit never
-owns a mover (the allocator constructs one only for `bmcode 1`), and every
+the ordinary allocation call sites pass the literal 1 — the build handlers,
+the mission spawner, the commander respawn and the unload path — while
+ownership transfer is the documented exception: it supplies the old unit's
+movement-mode bits. In that exception, common initialization and `Create` run
+with the grounded default before the wrapper installs its supplied mode
+argument. The save loader passes the saved mode bits (doc 08). A
+building-class unit never owns a mover (the allocator constructs one only for
+`bmcode 1`), and every
 other writer of the mirror is a mover-side path, so a factory's mirror stays
 at 1 for its whole life. The validator's mode-1 arm is therefore the one that
 runs at the exit ([R-COLL-01 §2]): the per-cell ground-word test with self

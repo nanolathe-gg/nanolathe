@@ -1077,6 +1077,7 @@ func (s *Session) RegisterAll() {
 			if s.Movement != nil && s.Units != nil && u != nil {
 				s.Movement.HandleDeath(s.Units, h, u.EngagementTarget)
 			}
+			s.finalizeReclaimRefund(u)
 			// Audio: death does not map to a queued voice directly, but an
 			// under-attack cue for nearby allies could be queued elsewhere.
 			// For now, no death voice; weapon hit already queues via impact sink.

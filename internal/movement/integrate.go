@@ -1519,6 +1519,15 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	if s.Terrain != nil {
 		steer.SeaLevel = s.Terrain.SeaLevel
 	}
+	// The ordinary creator supplies grounded mode 1. A restored record and a
+	// capture replacement instead arrive with an authoritative mode that must
+	// reach every initial mover record and its first occupancy stamp
+	// [08 R-SAVE-02 §6][05 R-WORK-01 §15][04 R-MOV-01 §8].
+	initialMode := uint8(1)
+	if u.RestoredMoveMode {
+		initialMode = u.Move.Mode & 3
+	}
+	u.Move.Mode = initialMode
 	// Derive flags from unit def
 	var flags uint32
 	if u.Def.CanHover {
@@ -1580,7 +1589,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		MaxVelocity: int32(u.Def.MaxVelocity),
 		FootPrintX:  footX,
 		FootPrintZ:  footZ,
-		Mode:        1,
+		Mode:        initialMode,
 		Blocked:     false,
 		Dirty:       false,
 		BlockerID:   -1,
@@ -1598,7 +1607,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// ProposedAnchor adds VX,VZ (0) then quantizes, so it's current cell
 	coll.CachedAnchor = anchor
 	coll.OldAnchor = anchor
-	coll.CachedMode = 1
+	coll.CachedMode = initialMode
 	s.Collisions[h] = coll
 	if s.Grid != nil {
 		// Every successful stamp writes the occupant-age clock first, and unit
@@ -1614,8 +1623,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			stamped = s.stampBuildingGrid(anchor, footX, footZ, coll.Yard, coll.YardOpen, coll.ID)
 		} else {
 			// Creation is one of the stamp's writers and it stamps the plane of
-			// the mover's mode — 1 here, so the ground word of every cell of the
-			// rectangle [04 §2.3][04 R-COLL-01 §4].
+			// the admitted mover mode [04 §2.3][04 R-COLL-01 §4].
 			plane, stamps := planeForMode(coll.Mode)
 			if stamps {
 				stamped = s.Grid.StampPlane(plane, anchor, footX, footZ, coll.ID)
@@ -1628,17 +1636,10 @@ func (s *System) EnsureUnit(u *units.Unit) {
 			s.noteOccupancyCommit(h, s.tick)
 		}
 	}
-	// Init move mode to parked [04 §9.1] 1 stopped/parked; a retail restore
-	// already copied the unit-side packed mirror and it must survive this
-	// bootstrap allocation until the mover pass applies its own state [08
-	// R-SAVE-02 §6].
-	if !u.RestoredMoveMode {
-		u.Move.Mode = 1
-	}
 	// FlightState for can-fly units
 	if u.Def.CanFly {
 		flight := &FlightState{
-			Mode:          1,
+			Mode:          initialMode,
 			X:             int32(u.X.Raw()),
 			Y:             int32(u.Y.Raw()),
 			Z:             int32(u.Z.Raw()),

@@ -13,6 +13,13 @@ every diff is reviewed against are in [INVARIANTS.md](INVARIANTS.md); places
 where the reference install disproves the written contract are in
 [SPEC_CONFLICTS.md](SPEC_CONFLICTS.md).
 
+The CPU/Original contracts below remain the retail reference. GPU Classic may
+use visually reviewed raster approximations; Enhanced is planned to add strategic
+zoom and optional interpolation under [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md)
+§5. All prototypes remain behind `--renderer=modern`; this milestone changes
+neither the default CPU path nor cadence. A future 60 fps presentation target is
+separate from the authoritative 30 Hz tick.
+
 ## 1. Purpose and boundary
 
 Presentation answers one question: **what did the world look like at the tick

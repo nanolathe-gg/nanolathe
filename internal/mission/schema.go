@@ -101,7 +101,7 @@ func SelectCampaignSchema(o *formats.OTA, difficulty int) (Schema, error) {
 	}
 	for _, cand := range order {
 		for _, sch := range o.Schemas {
-			if strings.EqualFold(strings.TrimSpace(sch.Type), cand) {
+			if strings.EqualFold(sch.Type, cand) {
 				return Schema{Name: sch.Name, StartPositions: countStartPositions(sch.Section)}, nil
 			}
 		}
@@ -109,37 +109,27 @@ func SelectCampaignSchema(o *formats.OTA, difficulty int) (Schema, error) {
 	return Schema{}, ErrNoSuitableSchema
 }
 
-// SelectNetworkSchema selects a Network 1..4 schema by StartPos count [08 "Schema choice"].
-// Candidates are tried in fixed order Network 1..4. Each candidate counts its StartPos
-// special records [fmt ota]. Accepted when count == playerCount (nonzero lobby entries)
-// OR playerCount is zero OR — as fallback while no exact match found — candidate's
-// count is the largest seen so far. First accepted name is returned; failure yields
-// ErrNoSuitableSchema. Type comparison is case-insensitive. Missing GlobalHeader
-// yields ErrNoGlobalHeader.
+// SelectNetworkSchema selects across every contiguous schema in network type
+// preference order. Later exact matches replace earlier ones; fallback ties
+// retain the first candidate. Browser admission omits this StartPos gate
+// [02 R-MAP-01 §4].
 func SelectNetworkSchema(o *formats.OTA, playerCount int) (Schema, error) {
 	if o == nil || o.Global == nil {
 		return Schema{}, ErrNoGlobalHeader
 	}
-	candidates := []string{"Network 1", "Network 2", "Network 3", "Network 4"} // [08 "Schema choice"]
 	var best Schema
-	best.StartPositions = -1
-	for _, cand := range candidates {
-		sch := findSchemaByType(o, cand)
-		if sch == nil {
-			continue
-		}
-		cnt := countStartPositions(sch.Section) // [fmt ota] specials StartPos; [08 "Schema choice"] StartPos counting
-		if playerCount == 0 {
-			return Schema{Name: sch.Name, StartPositions: cnt}, nil
-		}
-		if cnt == playerCount {
-			return Schema{Name: sch.Name, StartPositions: cnt}, nil
-		}
-		if cnt > best.StartPositions {
-			best = Schema{Name: sch.Name, StartPositions: cnt}
+	for rank := 1; rank <= 4; rank++ {
+		for _, sch := range o.Schemas {
+			if formats.NetworkSchemaRank(sch.Type) != rank {
+				continue
+			}
+			count := countStartPositions(sch.Section)
+			if count != 0 && (count == playerCount || playerCount == 0 || (best.StartPositions < count && best.StartPositions != playerCount)) {
+				best = Schema{Name: sch.Name, StartPositions: count}
+			}
 		}
 	}
-	if best.StartPositions >= 0 {
+	if best.StartPositions != 0 {
 		return best, nil
 	}
 	return Schema{}, ErrNoSuitableSchema
@@ -218,23 +208,15 @@ func (m *Mission) StartingResources() StartingResources {
 	}
 }
 
-func findSchemaByType(o *formats.OTA, typ string) *formats.OTASchema {
-	for i := range o.Schemas {
-		if strings.EqualFold(strings.TrimSpace(o.Schemas[i].Type), typ) {
-			return &o.Schemas[i]
-		}
-	}
-	return nil
-}
-
 func detectKinds(o *formats.OTA) (hasCampaign, hasNetwork bool) {
 	for _, s := range o.Schemas {
-		t := strings.ToLower(strings.TrimSpace(s.Type))
+		if formats.NetworkSchemaRank(s.Type) != 0 {
+			hasNetwork = true
+		}
+		t := strings.ToLower(s.Type)
 		switch t {
 		case "easy", "medium", "hard":
 			hasCampaign = true
-		case "network 1", "network 2", "network 3", "network 4":
-			hasNetwork = true
 		}
 	}
 	return
@@ -250,8 +232,8 @@ func countStartPositions(sec *formats.Section) int {
 	}
 	n := 0
 	for _, sub := range specials.Sections() {
-		if v, ok := sub.FirstValue("specialwhat"); ok {
-			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "startpos") {
+		if v, ok := sub.StringValue("specialwhat", ""); ok {
+			if strings.HasPrefix(strings.ToLower(v), "startpos") {
 				n++
 			}
 		}

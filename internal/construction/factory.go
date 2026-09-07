@@ -99,7 +99,8 @@ const (
 	StandingFireMask uint32 = 0x00300000 // bits 20-21 [05]
 )
 
-// Flags on units.Unit.Flags for COB edges [04 §4.4] [05].
+// FlagCompleted belongs to units.Unit.Flags [R-P0-09]. Operational callbacks
+// use Unit's one-byte state-edge service [05 R-ECO-01 §8].
 const (
 	// The activation edge has no flag here. Bits 0 and 1 of this word were a
 	// placeholder second copy of the activated bit that drifted from the
@@ -113,8 +114,7 @@ const (
 	// transition's capability-bit-24 arm. Bit 24 is `isfeature` and bit 14 is
 	// the death latch, not a cloak posture [04 R-SPEC-01 §12][03 R-VIS-01 §6];
 	// the constant and its write are gone (RWU-19-26).
-	FlagCompleted     uint32 = 0x00002000 // completion marker in the instance flag word [R-P0-09]
-	FlagStartBuilding uint32 = 1 << 2     // start-building edge [05]
+	FlagCompleted uint32 = 0x00002000 // completion marker in the instance flag word [R-P0-09]
 )
 
 // Damage constants [05 "Cancel-current and stop interrupts"] C21.

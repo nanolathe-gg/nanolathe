@@ -59,3 +59,17 @@ func TestMapSchemaProbeStopsAtFirstGapAndIgnoresInertGlobalFields(t *testing.T) 
 		t.Fatalf("inert schema field entered map record: %d", m.Schemas[0].MohoMetal)
 	}
 }
+
+func TestMapSchemaProjectionUsesResolvedType(t *testing.T) {
+	ota, err := formats.LoadOTA([]byte(`[GlobalHeader] {
+ [Schema 0] { Type=Easy; type=Network 2; }
+ [Schema 2] { Type=Network 4; }
+ }`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := compileMapHeader("maps/test.ota", "maps/test.tnt", Provenance{}, Provenance{}, ota, tntHeaderLite{})
+	if len(m.Schemas) != 1 || m.Schemas[0].Type != "Network 2" || m.Schemas[0].Type != ota.Schemas[0].Type {
+		t.Fatalf("compiled projection: %+v", m.Schemas)
+	}
+}

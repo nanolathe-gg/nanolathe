@@ -2,7 +2,6 @@ package formats
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -54,9 +53,12 @@ func LoadOTA(data []byte) (*OTA, error) {
 		NumPlayers:         otaValue(global, "numplayers"),
 		Size:               otaValue(global, "size"),
 	}
-	for _, section := range global.Sections() {
-		if !strings.HasPrefix(strings.ToLower(section.Name), "schema ") {
-			continue
+	// The semantic projection stops at the first missing index; the document
+	// retains every raw section for tooling [02 R-MAP-01 §4].
+	for i := 0; ; i++ {
+		section := global.Section(fmt.Sprintf("Schema %d", i))
+		if section == nil {
+			break
 		}
 		result.Schemas = append(result.Schemas, OTASchema{
 			Name:           section.OriginalName,
@@ -77,7 +79,7 @@ func languageValue(section *Section, key string) string {
 		return ""
 	}
 	value, _ := section.LanguageString("", key, "")
-	return strings.TrimSpace(value)
+	return value
 }
 
 // LoadOTAFile reads and parses a map or mission definition from the VFS.
@@ -95,7 +97,7 @@ func (o *OTA) HasNetworkSchema() bool {
 		return false
 	}
 	for _, schema := range o.Schemas {
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(schema.Type)), "network") {
+		if NetworkSchemaRank(schema.Type) != 0 {
 			return true
 		}
 	}
@@ -106,6 +108,24 @@ func otaValue(section *Section, key string) string {
 	if section == nil {
 		return ""
 	}
-	value, _ := section.LastValue(key)
-	return strings.TrimSpace(value)
+	value, _ := section.StringValue(key, "")
+	return value
+}
+
+// NetworkSchemaRank returns the exact type's preference rank, or zero for an
+// unrecognized type. Input is an already resolved OTA string; extra whitespace
+// is not removed here [02 R-MAP-01 §4].
+func NetworkSchemaRank(typ string) int {
+	switch asciiFold(typ) {
+	case "network 1":
+		return 1
+	case "network 2":
+		return 2
+	case "network 3":
+		return 3
+	case "network 4":
+		return 4
+	default:
+		return 0
+	}
 }

@@ -217,7 +217,7 @@ func (s *Service) SetEconomySelector(v int) {
 //     would be cloning something the sites do not have;
 //   - a selector this build has not been given is the undiscounted path, which
 //     is also what the traced ladder does for any selector above one (hard).
-func creditReclaimedMaterial(s *Service, b *Bucket, contribution float32, discounted bool) {
+func creditReclaimedMaterial(s *Service, b *Bucket, contribution float64, discounted bool) {
 	if b == nil {
 		return
 	}
@@ -228,14 +228,14 @@ func creditReclaimedMaterial(s *Service, b *Bucket, contribution float32, discou
 	if discounted {
 		switch selector {
 		case 0:
-			b.Production = float32(float64(b.Production) - float64(contribution)*-0.5)
+			b.Production = float32(float64(b.Production) - contribution*-0.5)
 			return
 		case 1:
-			b.Production = float32(float64(b.Production) - float64(contribution)*-0.7)
+			b.Production = float32(float64(b.Production) - contribution*-0.7)
 			return
 		}
 	}
-	b.Production = float32(float64(b.Production) + float64(contribution))
+	b.Production = float32(float64(b.Production) + contribution)
 }
 
 // specialPlayerSlot reports whether a player slot takes the difficulty-scaled
@@ -283,8 +283,8 @@ func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner u
 	s.ensureUnitBuckets(builderHandle)
 	b := &s.unitBuckets[builderHandle].Buckets
 	discounted := s.specialPlayerSlot(builderOwner)
-	creditReclaimedMaterial(s, &b[Energy], energy, discounted)
-	creditReclaimedMaterial(s, &b[Metal], metal, discounted)
+	creditReclaimedMaterial(s, &b[Energy], float64(energy), discounted)
+	creditReclaimedMaterial(s, &b[Metal], float64(metal), discounted)
 }
 
 // CreditUnitReclaimRefund is the death-side metal refund of a lethal cause-5
@@ -292,19 +292,15 @@ func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner u
 // build cost`, paid to the killing builder's metal production accumulator, with
 // no energy counterpart.
 //
-// Correction (PT3-05 follow-up). The discount is unchanged in substance — the
-// gate is the killer's control byte 2 and the pairing is selector 0 to a half,
-// selector 1 to seven tenths, which the trace confirms is NOT inverted here —
-// but the arithmetic was not the traced one. It scaled the refund into a
-// float32 and then added that, narrowing twice; the site subtracts
-// `contribution x K` from the accumulator in one expression and stores once.
-// Both reclaim payouts now share that single form.
+// Remaining and cost are stored single floats, but subtraction, multiplication,
+// discount and accumulation stay at working precision until the final bucket
+// store [05 R-WORK-01 §4].
 func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal float32, killerController uint8) {
 	if s == nil || killerHandle == 0 {
 		return
 	}
 	s.ensureUnitBuckets(killerHandle)
-	refund := float32((1 - victimRemaining) * victimBuildCostMetal)
+	refund := (1 - float64(victimRemaining)) * float64(victimBuildCostMetal)
 	b := &s.unitBuckets[killerHandle].Buckets[Metal]
 	creditReclaimedMaterial(s, b, refund, killerController == 2)
 }

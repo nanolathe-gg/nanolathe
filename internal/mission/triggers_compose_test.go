@@ -32,6 +32,7 @@ const bothSchemaOTA = `[GlobalHeader]
 	[Schema 1]
 		{
 		Type=Network 1;
+		[specials] { [special0] { specialwhat=StartPos1; } }
 		[units]
 			{
 			[unit0]
@@ -99,6 +100,7 @@ func TestMissionWithNoAuthoredConditionsGetsDefaults(t *testing.T) {
 	[Schema 0]
 		{
 		Type=Network 1;
+		[specials] { [special0] { specialwhat=StartPos1; } }
 		}
 	}
 `

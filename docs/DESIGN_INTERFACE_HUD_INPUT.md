@@ -903,6 +903,14 @@ by a simulation phase, and is not saved [I6].
   through `SetScaleAbout`. `SetScaleAbout` keeps the world point under a given
   screen position fixed and then clamps.
 
+The next-generation Enhanced camera is planned in DESIGN_GPU_RENDERER §5.2:
+dynamic 1×–2× detail with remastered resources, then zoom out to a full-screen
+strategic view with player-known unit markers. It must share camera anchoring,
+selection/order picking and fog/radar transforms while keeping HUD sizing separate.
+This does not alter the existing [F-P1-008] implementation. The current GPU
+prototype milestone exposes only `--renderer=modern`; the three-mode runtime
+selector and the Enhanced camera are deferred until human review.
+
 ### 3.9 Not implemented
 
 * **Chat.** `TALK.GUI` and `TALK2.GUI`, the recipient modes, the `+`-command

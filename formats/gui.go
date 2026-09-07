@@ -41,9 +41,14 @@ type GUIHeader struct {
 // the per-kind fields the file authored.
 type Gadget struct {
 	SourceName string
-	Common     CommonGadget
-	Fields     map[string]string
-	Section    *SectionView
+	// HasCommon distinguishes an omitted [COMMON] subsection from one whose
+	// fields all take their documented defaults. The panel parser retains either
+	// section; its caller owns the initialized-record policy for the omitted
+	// case [02 R-MALF-01 §5].
+	HasCommon bool
+	Common    CommonGadget
+	Fields    map[string]string
+	Section   *SectionView
 }
 
 // CommonGadget is the record every gadget begins with [fmt gui].
@@ -56,6 +61,7 @@ type CommonGadget struct {
 	ColorForeground, ColorBackground int
 	TextureNumber, FontNumber        int
 	Active, CommonAttributes         int
+	GAFFile                          int
 	Help                             string
 }
 
@@ -96,17 +102,17 @@ func LoadGUI(data []byte) (*GUI, error) {
 	for _, section := range document.Root.Sections() {
 		gadget := Gadget{SourceName: section.OriginalName, Fields: map[string]string{}, Section: makeSectionView(section)}
 		common := section.Section("common")
-		if common == nil {
-			return nil, fmt.Errorf("gui: gadget %q has no COMMON section", section.OriginalName)
-		}
 		for _, item := range section.Assignments() {
 			gadget.Fields[item.Key] = item.Value
 		}
-		for _, item := range common.Assignments() {
-			gadget.Fields["common."+item.Key] = item.Value
-		}
-		if err := fillCommon(&gadget.Common, common); err != nil {
-			return nil, fmt.Errorf("gui: gadget %q: %w", section.OriginalName, err)
+		if common != nil {
+			gadget.HasCommon = true
+			for _, item := range common.Assignments() {
+				gadget.Fields["common."+item.Key] = item.Value
+			}
+			if err := fillCommon(&gadget.Common, common); err != nil {
+				return nil, fmt.Errorf("gui: gadget %q: %w", section.OriginalName, err)
+			}
 		}
 		// Preserve version subsection if present on this gadget (typically GADGET0).
 		if version := section.Section("version"); version != nil {
@@ -196,6 +202,7 @@ func loadBinaryGUI(data []byte) *GUI {
 		}
 		gui.Gadgets = append(gui.Gadgets, Gadget{
 			SourceName: fmt.Sprintf("BINARY%d", index),
+			HasCommon:  true,
 			Common:     CommonGadget{ID: id, Name: label, X: 32, Y: 24 + index*24, Width: 576, Height: 20, Active: 1},
 			Fields:     fields,
 		})
@@ -253,8 +260,10 @@ func LoadGUIFile(fs vfs.FSOps, name string) (*GUI, error) {
 
 func fillCommon(out *CommonGadget, section *Section) error {
 	var err error
-	out.Name, _ = section.LastValue("name")
-	out.Help, _ = section.LastValue("help")
+	// Strings use the same resolved lower-bound lookup as every typed field.
+	// In particular, this selects the last parsed case variant [02 §4].
+	out.Name, _ = section.StringValue("name", "")
+	out.Help, _ = section.StringValue("help", "")
 	if out.ID, err = guiInt(section, "id"); err != nil {
 		return err
 	}
@@ -303,6 +312,10 @@ func fillCommon(out *CommonGadget, section *Section) error {
 		return err
 	}
 	out.CommonAttributes, err = guiInt(section, "commonattribs")
+	if err != nil {
+		return err
+	}
+	out.GAFFile, err = guiInt(section, "gaffile")
 	if err != nil {
 		return err
 	}

@@ -21,7 +21,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_INTERFACE_HUD_INPUT](DESIGN_INTERFACE_HUD_INPUT.md) | GUI files and screens, the battle HUD, input, camera, selection and command dispatch |
 | [DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md) | session states, campaign and mission loading, triggers, the computer player, saves, the headless runner |
 | [DESIGN_PRESENTATION_CLIENT](DESIGN_PRESENTATION_CLIENT.md) | window and frame loop, the frame composer, model rasterizer, effects, palette, audio |
-| [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, parity gates |
+| [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, visual parity policy and prototype gates |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
 places where the reference install disproves the written contract are in
@@ -38,11 +38,13 @@ damage, the COB script machine, features and fire, the skirmish planner, the
 GUI and HUD, camera and minimap, audio, effects, and save/load of a
 single-player battle.
 
-There is one behavior, retail's. Where retail's behavior is a fault, the fault
-is reproduced and cited; the only sanctioned departures are bounds that reject
-data retail would accept, and those are recorded as divergences
-[[INVARIANTS.md](INVARIANTS.md) I11]. The runtime carries no compatibility
-flags and no alternate code paths.
+Authoritative behavior follows retail, including documented faults. Bounds
+rejection and the renderer presentation policies of DESIGN_GPU_RENDERER are the
+sanctioned departures under [INVARIANTS.md](INVARIANTS.md) I11. Original preserves
+the retail raster reference; GPU Classic permits visually reviewed raster
+approximations, and Enhanced has separately designed visual features. These
+presentation choices never select alternate simulation behavior. Current
+prototypes remain behind `--renderer=modern`.
 
 ### Deliberately out of scope
 
@@ -139,8 +141,8 @@ package implements.
 | `internal/audio` | The eight-slot cue queue, sample decode and cache, positional attenuation, music, briefing speech | DESIGN_PRESENTATION_CLIENT |
 | `internal/audiobackend` | The desktop PCM device boundary behind `internal/audio` | DESIGN_PRESENTATION_CLIENT |
 | `internal/platform/ebitenapp` | The Ebitengine adapter: window and loop lifecycle, device input polling, framebuffer upload, the classic/modern executor switch | DESIGN_PRESENTATION_CLIENT |
-| `internal/drawlist` | The recorded committed-frame draw list: command families carrying physical palette indices, the `Sink` executor interface, ordered replay (planned) | DESIGN_GPU_RENDERER |
-| `internal/platform/gpurender` | The modern executor: replays a draw list through Ebitengine in palette-index space, table textures, atlases, the two-pass height key, expansion to RGB (planned) | DESIGN_GPU_RENDERER |
+| `internal/drawlist` | The recorded committed-frame draw list: command families carrying physical palette indices, the `Sink` executor interface, ordered replay and model packet boundary | DESIGN_GPU_RENDERER |
+| `internal/platform/gpurender` | The modern executor: replays a draw list through Ebitengine in palette-index space, table textures, atlases, per-subject GPU model prototypes, expansion to RGB | DESIGN_GPU_RENDERER |
 
 ### Commands
 

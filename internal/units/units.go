@@ -416,9 +416,10 @@ type Unit struct {
 	RestoredAIGroup int32 // saved owner-group index, -1 means none [08 R-SAVE-02 §6]
 	HasMover        bool  // has-mover flag as stored in the unit save image [08 R-SAVE-02 §6]
 	// RestoredMoveMode marks the packed unit-side mover mirror as authoritative
-	// during the restore bootstrap. EnsureUnit normally initializes this mirror
-	// for newly created units, but must preserve the saved value while the
-	// mover-side record is applied [08 R-SAVE-02 §6].
+	// during movement bootstrap. Restore supplies it from the save image, and
+	// capture supplies it through the ordinary creator's mode argument; both
+	// must survive EnsureUnit's initial collision/flight records [08 R-SAVE-02
+	// §6][05 R-WORK-01 §15].
 	RestoredMoveMode bool
 	// Pending is the unit's ORDER-EVENT WORD: the 16-bit word the order pump
 	// merges with each record's own pending word before intersecting the
@@ -677,6 +678,83 @@ func (u *Unit) EconomyOperational() bool {
 	return u.EconomyActive()
 }
 
+const (
+	operationalActivated uint8 = 1 << iota
+	operationalArmored
+	operationalCloaked
+	operationalBuilding
+	operationalMask = operationalActivated | operationalArmored | operationalCloaked | operationalBuilding
+)
+
+// OperationalState returns the modeled four-bit operational byte. The request
+// to cloak is a separate status bit and is intentionally absent [05 R-ECO-01
+// §8][05 R-ECO-01 §9].
+func (u *Unit) OperationalState() uint8 {
+	if u == nil {
+		return 0
+	}
+	var state uint8
+	if u.Activated {
+		state |= operationalActivated
+	}
+	if u.Armored {
+		state |= operationalArmored
+	}
+	if u.Hidden {
+		state |= operationalCloaked
+	}
+	if u.BuildingState {
+		state |= operationalBuilding
+	}
+	return state
+}
+
+// applyOperationalTransition changes selected bits of the operational byte.
+// It writes every modeled bit before dispatching any edge, so each callback and
+// cue observes the complete result of this transition [05 R-ECO-01 §8].
+func (u *Unit) applyOperationalTransition(mask uint8, set bool, vm *cob.VM) {
+	if u == nil {
+		return
+	}
+	before := u.OperationalState()
+	mask &= operationalMask
+	after := before
+	if set {
+		after |= mask
+	} else {
+		after &^= mask
+	}
+	u.Activated = after&operationalActivated != 0
+	u.Armored = after&operationalArmored != 0
+	u.Hidden = after&operationalCloaked != 0
+	u.BuildingState = after&operationalBuilding != 0
+	if after == before {
+		return
+	}
+	newlySet := ^before & after
+	newlyCleared := before &^ after
+	if newlySet&operationalActivated != 0 {
+		u.runActivationCallback(true, vm)
+		u.raiseStatusCue(StatusCueActivate)
+	}
+	if newlyCleared&operationalActivated != 0 {
+		u.runActivationCallback(false, vm)
+		u.raiseStatusCue(StatusCueDeactivate)
+	}
+	if newlySet&operationalBuilding != 0 {
+		u.runBuildingCallback(true)
+	}
+	if newlyCleared&operationalBuilding != 0 {
+		u.runBuildingCallback(false)
+	}
+	if newlySet&operationalCloaked != 0 {
+		u.raiseStatusCue(StatusCueCloak)
+	}
+	if newlyCleared&operationalCloaked != 0 {
+		u.raiseStatusCue(StatusCueUncloak)
+	}
+}
+
 // SetActivationEdge is the single writer of the unit's activation state — bit
 // 0 of retail's one engine-state byte [04 R-UNIT-06 §2]. The state is written
 // FIRST and only an actual change is an edge; producer-side suppression of an
@@ -698,25 +776,7 @@ func (u *Unit) SetActivationEdge(on bool) {
 // arm, which is installed before the strict binding is attached and therefore
 // has a live VM the unit record cannot yet reach [04 §4.1][04 §4.7].
 func (u *Unit) setActivationEdge(on bool, vm *cob.VM) {
-	if u == nil || on == u.Activated {
-		return
-	}
-	u.Activated = on
-	// Retired (WU-19-99): this carried an open-question marker saying the
-	// notification codes were dropped because "this build has nowhere to put
-	// them" and that the consumer was unknown. [03 R-AUD-01 §7] names the consumer: the codes
-	// ARE the §8.3 status-cue slot indices, and every producer reaches one raise
-	// helper. Codes 3/4 are slots 3 `activate` and 4 `deactivate`, whose static
-	// default caption is empty.
-	//
-	// The COB callback runs BEFORE the cue on both edges [05 R-ECO-01 §8]
-	// [03 R-AUD-01 §7].
-	u.runActivationCallback(on, vm)
-	if on {
-		u.raiseStatusCue(StatusCueActivate)
-		return
-	}
-	u.raiseStatusCue(StatusCueDeactivate)
+	u.applyOperationalTransition(operationalActivated, on, vm)
 }
 
 // runActivationCallback starts the COB `Activate` / `Deactivate` callback for
@@ -743,6 +803,28 @@ func (u *Unit) runActivationCallback(on bool, vm *cob.VM) {
 		return
 	}
 	_ = callbackVM.StartByName("Deactivate", nil)
+}
+
+func (u *Unit) runBuildingCallback(on bool) {
+	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
+		if on {
+			binding.Callbacks.StartBuilding()
+			return
+		}
+		binding.Callbacks.StopBuilding()
+	}
+}
+
+// SetBuildingEdge routes the building operational bit through the common
+// transition service. It is the StartBuilding/StopBuilding edge of bit 3
+// [05 R-ECO-01 §8].
+func (u *Unit) SetBuildingEdge(on bool) {
+	u.applyOperationalTransition(operationalBuilding, on, nil)
+}
+
+// SetArmored writes bit 1 through the common operational-byte transition.
+func (u *Unit) SetArmored(on bool) {
+	u.applyOperationalTransition(operationalArmored, on, nil)
 }
 
 // SetActivated toggles activation for OnOffable units [05] [P1-I04]. It is a
@@ -789,15 +871,21 @@ func (u *Unit) SetCloaked(on bool) {
 // the session through the one sink installed here; the sink applies §7's gate
 // and owns the observer walk, because this package cannot see order records.
 func (u *Unit) SetCloakedInstance(on bool) {
-	if u == nil || u.Hidden == on {
-		return
-	}
-	u.Hidden = on
-	if on {
-		u.raiseStatusCue(StatusCueCloak)
-		return
-	}
-	u.raiseStatusCue(StatusCueUncloak)
+	u.applyOperationalTransition(operationalCloaked, on, nil)
+}
+
+// ReplayOperationalState re-applies the captured unit's whole modeled
+// operational byte through the state-edge service [05 R-WORK-01 §15]. The
+// first transition sets every bit present in oldState; the second clears every
+// bit absent from it. This gives the replacement a complete byte before each
+// ordered notification pass [05 R-ECO-01 §8][05 R-ECO-01 §9].
+//
+// CloakRequested is deliberately absent. Capture transfers the instance cloak
+// bit, not the player's request that the settlement service consumes.
+func (u *Unit) ReplayOperationalState(oldState uint8) {
+	oldState &= operationalMask
+	u.applyOperationalTransition(oldState, true, nil)
+	u.applyOperationalTransition(^oldState, false, nil)
 }
 
 // Engine status-cue codes. The integer the edge machine passes as a "status
@@ -1511,16 +1599,16 @@ func (w *World) defIDClaimed(id uint16) bool {
 // CreatedMoverMode is the mover-mode mirror every newly created unit record
 // carries. Retail's creation service forces the flags word's low two bits to
 // `1` before it has tested the definition's class at all, and the spawn
-// wrapper that calls it then rewrites those bits from its own mode argument —
-// which every spawn call site in the image passes as the literal `1`: the
-// order handler that lays a building nanoframe, the mobile build handlers, the
-// map-start placer, commander respawn and the campaign placer alike. The mover
-// constructor writes `1` too, so a mobile unit's two words agree.
+// wrapper that calls it then rewrites those bits from its own mode argument.
+// Ordinary placement callers provide the literal `1`; the ownership-transfer
+// caller is the exception and provides the replaced unit's two mode bits
+// [05 R-WORK-01 §15]. The mover constructor writes `1` too, so a normally
+// created mobile unit's two words agree.
 //
-// The mirror therefore starts at `1` for every unit, including a building that
-// will never own a mover, and only the air setter ever moves it off `1` —
-// to `2` on takeoff, back to `1` on landing, and to `0` for a unit attached to
-// a carrier or parked on a pad [04 R-MOV-01 §8].
+// The mirror therefore starts at `1` for an ordinary creation, including a
+// building that will never own a mover. Air movement later changes its mobile
+// records to `2` on takeoff, `1` on landing, and `0` when attached to a carrier
+// or parked on a pad [04 R-MOV-01 §8].
 //
 // This matters beyond movement: the frame composer's two unit passes select on
 // this mirror, and a unit left at `0` sorts into the pass that runs after the
@@ -1554,7 +1642,17 @@ const NeutralAttackerSide uint8 = 10
 // `Activate` script. Callers building an unfinished frame must therefore say so
 // up front, through CreateNanoframe.
 func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
-	return w.create(def, owner, x, y, z, true)
+	return w.create(def, owner, x, y, z, true, CreatedMoverMode)
+}
+
+// CreateWithMoverMode is the already-built creator with its caller-supplied
+// two-bit mover mode. Capture is the only current caller. Like the retail
+// wrapper, it binds and runs COB Create with the ordinary default first, then
+// installs the supplied mirror before the creator's activation edge. Ordinary
+// placement remains Create and therefore retains the grounded input
+// [05 R-WORK-01 §15].
+func (w *World) CreateWithMoverMode(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, moverMode uint8) (pool.Handle, error) {
+	return w.create(def, owner, x, y, z, true, moverMode)
 }
 
 // CreateNanoframe allocates a unit record that is NOT created already-built:
@@ -1567,10 +1665,10 @@ func (w *World) Create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed)
 // The caller still demotes the record's construction state (remaining fraction
 // and health); this entry point owns only the activation half.
 func (w *World) CreateNanoframe(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed) (pool.Handle, error) {
-	return w.create(def, owner, x, y, z, false)
+	return w.create(def, owner, x, y, z, false, CreatedMoverMode)
 }
 
-func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, alreadyBuilt bool) (pool.Handle, error) {
+func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed, alreadyBuilt bool, moverMode uint8) (pool.Handle, error) {
 	if w == nil || w.pool == nil {
 		return 0, fmt.Errorf("units: nil world")
 	}
@@ -1662,6 +1760,12 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
+	// The ordinary common initializer and COB Create see grounded mode first.
+	// The wrapper then writes its two-bit mode argument; capture supplies the
+	// replaced unit's mode through that argument [05 R-WORK-01 §15]. Mark a
+	// non-default result as authoritative for the deferred movement bootstrap.
+	u.Move.Mode = moverMode & 3
+	u.RestoredMoveMode = u.Move.Mode != CreatedMoverMode
 	// Site 1 of `activatewhenbuilt` [04 R-SPEC-01 §12]: "the unit creation
 	// service, WHEN CALLED WITH ITS ALREADY BUILT ARGUMENT ... activatewhenbuilt
 	// → raise bit 0", after placement and before the unit is counted. The raise

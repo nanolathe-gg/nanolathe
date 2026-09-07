@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -106,13 +108,32 @@ func TestTransferOwnershipCopyList(t *testing.T) {
 	victim.Remaining = 0
 	victim.Kills = 9
 	victim.SpotMetal = 4.5
+	victim.Move.Mode = 2 // airborne is supplied to the replacement creator.
 	victim.Move.Bank, victim.Move.Heading, victim.Move.Pitch = 111, 222, 333
+	victim.Flags |= (uint32(3) << units.StandingMoveShift) | (uint32(1) << units.StandingFireShift)
+	victim.Activated = true
+	victim.Armored = true
+	victim.BuildingState = true
+	victim.Hidden = true
+	victim.IsCloaked = true // request is deliberately not one of the copied fields.
 	victim.Slots[0].Ammo = 5
 	victim.Slots[1].Ammo = 7
 	// Slot 2 has no weapon, so the initializer left its enabled bit clear
 	// [06 R-WPN-05 §3]; a value parked there must not travel.
 	victim.Slots[2].Ammo = 11
 
+	var cues []uint8
+	svc.World.OnCreate = func(_ pool.Handle, u *units.Unit) {
+		if u.Owner != 0 {
+			return
+		}
+		u.SetStatusCueSink(func(_ *units.Unit, code uint8) {
+			if !victim.Dying {
+				t.Fatal("operational replay ran before the old record's cause-4 death [05 R-WORK-01 §15]")
+			}
+			cues = append(cues, code)
+		})
+	}
 	repl, ok := svc.TransferOwnership(victim, 0)
 	if !ok || repl == nil {
 		t.Fatalf("transfer of a live, differently owned, unlatched victim was refused")
@@ -126,6 +147,25 @@ func TestTransferOwnershipCopyList(t *testing.T) {
 	if repl.Move.Bank != 111 || repl.Move.Heading != 222 || repl.Move.Pitch != 333 {
 		t.Fatalf("orientation triple = (%d,%d,%d), want (111,222,333) [05 R-WORK-01 §15]",
 			repl.Move.Bank, repl.Move.Heading, repl.Move.Pitch)
+	}
+	if repl.Move.Mode != 2 {
+		t.Fatalf("replacement mover mode = %d, want captured airborne mode 2 at creation [05 R-WORK-01 §15]", repl.Move.Mode)
+	}
+	if got := (repl.Flags >> units.StandingMoveShift) & units.StandingFieldMask; got != 0 {
+		t.Fatalf("replacement standing-move field = %d, want cleared [05 R-WORK-01 §15]", got)
+	}
+	if got := (repl.Flags >> units.StandingFireShift) & units.StandingFieldMask; got != 0 {
+		t.Fatalf("replacement standing-fire field = %d, want cleared [05 R-WORK-01 §15]", got)
+	}
+	if !repl.Activated || !repl.Armored || !repl.Hidden || !repl.BuildingState {
+		t.Fatalf("replacement operational state = active %t armored %t hidden %t building %t, want all replayed [05 R-WORK-01 §15]",
+			repl.Activated, repl.Armored, repl.Hidden, repl.BuildingState)
+	}
+	if repl.IsCloaked {
+		t.Fatal("capture copied the cloak request; only the instance cloak is replayed [05 R-WORK-01 §15]")
+	}
+	if len(cues) != 2 || cues[0] != units.StatusCueActivate || cues[1] != units.StatusCueCloak {
+		t.Fatalf("operational replay cues = %v, want [activate cloak] in edge-machine order [05 R-ECO-01 §8]", cues)
 	}
 	// The stockpile follows the unit, slot by slot, wherever the new record has
 	// that slot enabled.
@@ -150,6 +190,69 @@ func TestTransferOwnershipCopyList(t *testing.T) {
 	if !victim.Dying || victim.LastDamageCause != CaptureDeathCause || victim.LastDamageSide != units.NeutralAttackerSide {
 		t.Fatalf("victim teardown = dying %v cause %d side %d, want dying/4/neutral [06 §12.1]",
 			victim.Dying, victim.LastDamageCause, victim.LastDamageSide)
+	}
+}
+
+// TestTransferOwnershipReplaysExtractorActivation proves the active byte is
+// transferred into the actual building-production branch. The extractor rate
+// is deliberately supplied after transfer: SpotMetal is creator-sampled and
+// excluded from capture's copy list [05 R-WORK-01 §15][05 R-ECO-01 §2].
+func TestTransferOwnershipReplaysExtractorActivation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		active bool
+		want   float32
+	}{
+		{name: "activated extractor remains productive", active: true, want: 5},
+		{name: "deactivated extractor remains stopped", active: false, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, victim := captureTransferFixture(t)
+			victim.Def.ExtractsMetal = 1
+			victim.Def.EnergyUse = 0
+			victim.Def.ActivateWhenBuilt = true
+			victim.Activated = tc.active
+
+			repl, ok := svc.TransferOwnership(victim, 0)
+			if !ok || repl == nil {
+				t.Fatal("transfer refused")
+			}
+			repl.SpotMetal = 5
+			econ := &economy.Service{}
+			econ.Players[0].Exists = true
+			econ.Players[0].ControllerState = 1
+			econ.PerUnitProductionFills(0, svc.World)
+			if got := econ.UnitBuckets(repl.Handle)[economy.Metal].Production; got != tc.want {
+				t.Fatalf("captured extractor production = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTransferOwnershipReplaysDeactivatedState checks the complementary
+// operational edge. The ordinary creator first raises activatewhenbuilt, then
+// capture kills the old record and lowers the replacement through the normal
+// setter [05 R-WORK-01 §15][05 R-ECO-01 §8].
+func TestTransferOwnershipReplaysDeactivatedState(t *testing.T) {
+	svc, victim := captureTransferFixture(t)
+	victim.Def.ActivateWhenBuilt = true
+	victim.Activated = false
+	var cues []uint8
+	svc.World.OnCreate = func(_ pool.Handle, u *units.Unit) {
+		if u.Owner == 0 {
+			u.SetStatusCueSink(func(_ *units.Unit, code uint8) { cues = append(cues, code) })
+		}
+	}
+
+	repl, ok := svc.TransferOwnership(victim, 0)
+	if !ok || repl == nil {
+		t.Fatal("transfer refused")
+	}
+	if repl.Activated {
+		t.Fatal("deactivated victim produced an active replacement [05 R-WORK-01 §15]")
+	}
+	if len(cues) != 1 || cues[0] != units.StatusCueDeactivate {
+		t.Fatalf("capture replay cues = %v, want [deactivate] after creator activation [05 R-ECO-01 §8]", cues)
 	}
 }
 

@@ -72,6 +72,19 @@ Cavedog files fill unused fields with the sentinel `-51` (and `52685` =
 0xCDCD, both uninitialized-memory patterns from their editor) — treat any
 out-of-range value as "unset".
 
+### Missing `[COMMON]` subsection
+
+**Established.** The panel loader retains every top-level section in file
+order and reads common fields only when that subsection exists
+`[02 R-MALF-01 §5]`. A missing subsection therefore does not make an otherwise
+parseable panel fail.
+
+**Nanolathe deterministic policy.** `formats.LoadGUI` preserves the raw
+section and marks that it has no common record. `internal/gui.Load` starts the
+compiled record zero-initialized and skips every common-field store in that
+case. This deliberately does not claim a value for retail's uninitialized
+record bytes.
+
 ### Header gadget (`id=0`) extra fields
 
 | Field | Meaning |

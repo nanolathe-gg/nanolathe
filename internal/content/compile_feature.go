@@ -147,9 +147,9 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	spreadchance := section.IntValue("spreadchance", 0)
 	reproduce := section.IntValue("reproduce", 0)
 	reproducearea := section.IntValue("reproducearea", 0)
-	animating := section.IntValue("animating", 0)
-	animtrans := section.IntValue("animtrans", 0)
-	shadtrans := section.IntValue("shadtrans", 0)
+	animating := section.IntValue("animating", 0) & 1
+	animtrans := section.IntValue("animtrans", 0) & 1
+	shadtrans := section.IntValue("shadtrans", 0) & 1
 
 	// sparktime is the signed 16-bit seconds-to-ticks store [05 R-FEAT-01 §1].
 	sparktimeFloat := section.FloatValue("sparktime", 0)
@@ -172,15 +172,16 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	// [05 "Resurrection"][05 R-WORK-01 §7]. Nanolathe therefore carries no
 	// `ResurrectSpread` field; `Height` is the byte that mattered all along.
 
-	// Behaviour flags — integer accessor default 0 consumed as bool, except autoreclaimable defaults 1 [02 "Feature record"].
-	flamable := section.BoolValue("flamable", false)
-	geothermal := section.BoolValue("geothermal", false)
-	blocking := section.BoolValue("blocking", false)
-	reclaimable := section.BoolValue("reclaimable", false)
-	autoreclaimable := section.BoolValue("autoreclaimable", true)
-	indestructible := section.BoolValue("indestructible", false)
-	nodisplayinfo := section.BoolValue("nodisplayinfo", false)
-	nodrawundergray := section.BoolValue("nodrawundergray", false)
+	// Stored flag bits retain only the parsed low bit; autoreclaimable defaults
+	// to one [02 R-KEYS-01 §5][05 R-FEAT-01 §1].
+	flamable := storedFlag(section, "flamable", false)
+	geothermal := storedFlag(section, "geothermal", false)
+	blocking := storedFlag(section, "blocking", false)
+	reclaimable := storedFlag(section, "reclaimable", false)
+	autoreclaimable := storedFlag(section, "autoreclaimable", true)
+	indestructible := storedFlag(section, "indestructible", false)
+	nodisplayinfo := storedFlag(section, "nodisplayinfo", false)
+	nodrawundergray := storedFlag(section, "nodrawundergray", false)
 
 	// Successor hops — string default empty [02 "Feature record"] [GAP T14].
 	//

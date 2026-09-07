@@ -180,7 +180,7 @@ func TestSkirmishVisibilityModeStillComesFromTheSetupRecord(t *testing.T) {
 	// A kind-2 load selects from the `Network N` schema family [08 "Schema
 	// choice"], so this fixture authors one beside the same two OTA keys.
 	fs := fsWithMap(t, "[GlobalHeader]\n{\nmapping=1;\nlineofsight=1;\n"+
-		"[Schema 0]\n{\nType=Network 1;\n[units]\n{\n}\n[specials]\n{\n}\n[features]\n{\n}\n}\n}\n")
+		"[Schema 0]\n{\nType=Network 1;\n[units]\n{\n}\n[specials]\n{\n[special0] { specialwhat=StartPos1; }\n}\n[features]\n{\n}\n}\n}\n")
 	m, err := mission.LoadWithType(fs, mission.TypeSkirmish, "test", 0, 2, nil)
 	if err != nil {
 		t.Fatalf("skirmish map load: %v", err)

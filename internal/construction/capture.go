@@ -154,8 +154,10 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 			return nil, false
 		}
 	}
-	// Pool check: try alloc via World.Create at victim pos.
-	h, err := s.World.Create(victim.Def, newOwner, victim.X, victim.Y, victim.Z)
+	// The ordinary creator receives the victim's original two-bit mover mode.
+	// Its wrapper runs COB Create with the grounded default, then installs this
+	// argument before its activation edge [05 R-WORK-01 §15].
+	h, err := s.World.CreateWithMoverMode(victim.Def, newOwner, victim.X, victim.Y, victim.Z, victim.Move.Mode)
 	if err != nil {
 		return nil, false
 	}
@@ -163,6 +165,11 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	if repl == nil {
 		return nil, false
 	}
+	// The replacement begins with neither definition-seeded standing order.
+	// Capture clears both complete two-bit fields after the ordinary creator
+	// initializes them [05 R-WORK-01 §15][04 R-STANCE-01 §6].
+	repl.Flags &^= (units.StandingFieldMask << units.StandingMoveShift) |
+		(units.StandingFieldMask << units.StandingFireShift)
 	// THE COPY LIST, in [05 R-WORK-01 §15]'s order and nothing beyond it: the
 	// 16-bit health, the remaining fraction, the orientation triple (bank,
 	// heading, pitch), and — per weapon slot, only where the REPLACEMENT's slot
@@ -220,9 +227,17 @@ func (s *Service) TransferOwnership(victim *units.Unit, newOwner uint8) (*units.
 	//
 	// The kill is unconditional here because the entry gate above already
 	// refused a latched victim, which is where the first-lethal rule now lives.
+	operationalState := victim.OperationalState()
 	victim.LastDamageCause = uint8(CaptureDeathCause)
 	victim.LastDamageSide = units.NeutralAttackerSide
 	s.World.Destroy(victim.Handle, units.DeathKilled) // null attacker [06 §12.1]
+	// The capture transfer replays the old operational edge byte only after the
+	// old record has died. This is deliberately not a field copy: the state-edge
+	// service replays the whole modeled operational byte in its set then clear
+	// passes, retaining callback, cue, and visibility side effects. The request
+	// bit is not operational and is not transferred [05 R-WORK-01 §15]
+	// [05 R-ECO-01 §8][05 R-ECO-01 §9].
+	repl.ReplayOperationalState(operationalState)
 	// New unit's building flag etc already via Create; remaining already copied.
 	// Note: victim's queues leak on capture, same as on death [05 "Factory
 	// product heading", "Established fact — link lifetime and completion

@@ -89,10 +89,32 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 	// Preserve file order [07 §4]; numeric suffix in GADGETn is cosmetic — order matters.
 	gadgets := make([]Gadget, 0, len(fGui.Gadgets))
 	for idx, fg := range fGui.Gadgets {
-		// `id` is read as an integer and stored as one byte — the low eight
-		// bits — so the byte the builder and the service pass dispatch on is
-		// `id mod 256` [07 R-WGT-01 §11].
-		kind := Kind(fg.Common.ID & 0xFF)
+		// A missing [COMMON] leaves retail's record bytes unspecified. The Go
+		// compiler starts from its deterministic zero record and applies common
+		// fields only when the subsection exists [02 R-MALF-01 §5][fmt gui
+		// "COMMON"].
+		g := Gadget{SourceName: fg.SourceName}
+		kind := Kind(0)
+		if fg.HasCommon {
+			// `id` is read as an integer and stored as one byte — the low eight
+			// bits — so the byte the builder and the service pass dispatch on is
+			// `id mod 256` [07 R-WGT-01 §11].
+			kind = Kind(fg.Common.ID & 0xFF)
+			g = Gadget{
+				Kind:          kind,
+				Name:          fg.Common.Name,
+				Assoc:         int32(fg.Common.Assoc),
+				Attribs:       uint32(fg.Common.Attributes),
+				ColorF:        uint16(fg.Common.ColorForeground & 0xFFFF), // masked to 16 bits [02 §6]
+				ColorB:        uint16(fg.Common.ColorBackground & 0xFFFF),
+				TextureNumber: uint8(fg.Common.TextureNumber & 0xFF), // stored as byte [02 §6]
+				FontNumber:    uint8(fg.Common.FontNumber & 0xFF),
+				Active:        uint8(fg.Common.Active & 0xFF), // byte [02 §6]
+				CommonAttribs: uint8(fg.Common.CommonAttributes & 0xFF),
+				Help:          fg.Common.Help,
+				SourceName:    fg.SourceName,
+			}
+		}
 
 		// No record is ever dropped. The parser rejects no kind: an unknown
 		// kind keeps its [COMMON] fields [07 R-WGT-01 §11], and the builder's
@@ -104,25 +126,9 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		// callback and kind 10's line painter need nothing built — and are
 		// still serviced by the pass as usual.
 
-		g := Gadget{
-			Kind:          kind,
-			Name:          fg.Common.Name,
-			Assoc:         int32(fg.Common.Assoc),
-			Attribs:       uint32(fg.Common.Attributes),
-			ColorF:        uint16(fg.Common.ColorForeground & 0xFFFF), // masked to 16 bits [02 §6]
-			ColorB:        uint16(fg.Common.ColorBackground & 0xFFFF),
-			TextureNumber: uint8(fg.Common.TextureNumber & 0xFF), // stored as byte [02 §6]
-			FontNumber:    uint8(fg.Common.FontNumber & 0xFF),
-			Active:        uint8(fg.Common.Active & 0xFF), // byte [02 §6]
-			CommonAttribs: uint8(fg.Common.CommonAttributes & 0xFF),
-			Help:          fg.Common.Help,
-			SourceName:    fg.SourceName,
-		}
-		// gaffile is in COMMON but not parsed by formats.fillCommon; read from Fields map if present.
-		if v, ok := fg.Fields["common.gaffile"]; ok {
-			g.GAFFile = int16(formats.ParseTDFInteger(v))
-		} else if v, ok := fg.Fields["gaffile"]; ok {
-			g.GAFFile = int16(formats.ParseTDFInteger(v))
+		// gaffile belongs to COMMON; no common subsection means no store.
+		if fg.HasCommon {
+			g.GAFFile = int16(fg.Common.GAFFile)
 		}
 
 		// The name field is 16 bytes for every kind; the 127-byte cap doc 07 §4
@@ -130,50 +136,55 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		// ([07 R-WGT-01 §12] correction to §4). Names are retained in full here
 		// for diagnostics; every retail comparison is the 16-byte one.
 
-		// Rect: xpos,ypos,width,height stored as int16 [02 §6]; stored widths honored [PLAN_12].
-		rawX := int32(fg.Common.X)
-		rawY := int32(fg.Common.Y)
-		rawW := int32(fg.Common.Width)
-		rawH := int32(fg.Common.Height)
-		g.Rect.RawX = rawX
-		g.Rect.RawY = rawY
-		g.Rect.W = rawW
-		g.Rect.H = rawH
-		x, y := rawX, rawY
-		// Position sentinels -1 centres, -2 anchors to far edge [02 §6][07 §4].
-		if x == -1 {
-			x = (logicalWidth - rawW) / 2
-		} else if x == -2 {
-			x = logicalWidth - rawW
-		}
-		if y == -1 {
-			y = (logicalHeight - rawH) / 2
-		} else if y == -2 {
-			y = logicalHeight - rawH
-		}
-		// First gadget (header) is clamped so interface stays on-screen [02 §6].
-		if idx == 0 {
-			if x < 0 {
-				x = 0
-			}
-			if y < 0 {
-				y = 0
-			}
-			if rawW > 0 && x+rawW > logicalWidth {
+		if fg.HasCommon {
+			// Rect: xpos,ypos,width,height stored as int16 [02 §6]; stored widths honored [PLAN_12].
+			// The record stores all four values as signed 16-bit values before
+			// testing position sentinels, so authored 65535 becomes -1 and 65537
+			// becomes 1 [02 §6].
+			rawX := int32(int16(fg.Common.X))
+			rawY := int32(int16(fg.Common.Y))
+			rawW := int32(int16(fg.Common.Width))
+			rawH := int32(int16(fg.Common.Height))
+			g.Rect.RawX = rawX
+			g.Rect.RawY = rawY
+			g.Rect.W = rawW
+			g.Rect.H = rawH
+			x, y := rawX, rawY
+			// Position sentinels -1 centres, -2 anchors to far edge [02 §6][07 §4].
+			if x == -1 {
+				x = (logicalWidth - rawW) / 2
+			} else if x == -2 {
 				x = logicalWidth - rawW
+			}
+			if y == -1 {
+				y = (logicalHeight - rawH) / 2
+			} else if y == -2 {
+				y = logicalHeight - rawH
+			}
+			// First gadget (header) is clamped so interface stays on-screen [02 §6].
+			if idx == 0 {
 				if x < 0 {
 					x = 0
 				}
-			}
-			if rawH > 0 && y+rawH > logicalHeight {
-				y = logicalHeight - rawH
 				if y < 0 {
 					y = 0
 				}
+				if rawW > 0 && x+rawW > logicalWidth {
+					x = logicalWidth - rawW
+					if x < 0 {
+						x = 0
+					}
+				}
+				if rawH > 0 && y+rawH > logicalHeight {
+					y = logicalHeight - rawH
+					if y < 0 {
+						y = 0
+					}
+				}
 			}
+			g.Rect.X = x
+			g.Rect.Y = y
 		}
-		g.Rect.X = x
-		g.Rect.Y = y
 
 		// Art resolution order: own named GAF entry first, then side-specific interface GAF, then built-in fallback [07 §4][02 §6].
 		// Own entry is Name; panel header also uses Panel.

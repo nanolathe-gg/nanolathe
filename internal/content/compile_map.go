@@ -166,17 +166,13 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 		mh.MaxUnits = global.IntValue("maxunits", 200)                 // [02 "Map files"] default 200
 	}
 
-	// Compile schemas by probing Schema 0, Schema 1, ... and stop at the first
-	// missing section [fmt ota]. This preserves retail's gap-terminating scan.
+	// Reuse the format layer's contiguous first-match projection [02 R-MAP-01 §4].
 	if global != nil {
-		for i := 0; ; i++ {
-			sec := global.Section(fmt.Sprintf("Schema %d", i))
-			if sec == nil {
-				break
-			}
+		for _, schema := range ota.Schemas {
+			sec := schema.Section
 			sch := MapSchema{
-				Name: sec.OriginalName,
-				Type: func() string { v, _ := sec.StringValue("type", ""); return v }(),
+				Name: schema.Name,
+				Type: schema.Type,
 			}
 			// Use typed accessors only [02 §4].
 			sch.AIProfile, _ = sec.StringValue("aiprofile", "")

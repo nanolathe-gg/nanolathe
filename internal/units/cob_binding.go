@@ -139,7 +139,7 @@ func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 		return cob.BuildPercentLeft(u.Remaining)
 	}}
 	bindFlag(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
-	bindFlag(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })
+	bindFlag(cob.Port(20), func() bool { return u.Armored }, u.SetArmored)
 	ports[cob.Port(1)] = cob.PortBinding{
 		Read: func([4]int32) int32 {
 			if u.Activated {

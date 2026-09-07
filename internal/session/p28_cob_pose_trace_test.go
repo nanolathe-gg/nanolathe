@@ -4,7 +4,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
@@ -64,8 +63,8 @@ func TestP28COB01RScenarioARMCKPublishesStrictCreateState(t *testing.T) {
 	if !binding.CreateInvoked || !binding.Callbacks.CreateInvoked() || binding.VM.DrainCalls != 1 {
 		t.Fatalf("scenario Create invoked=%t bridge=%t drains=%d", binding.CreateInvoked, binding.Callbacks.CreateInvoked(), binding.VM.DrainCalls)
 	}
-	if u.InBuildStance || u.Busy || u.Flags&construction.FlagStartBuilding != 0 {
-		t.Fatalf("scenario ARMCK has construction callback state before publication: stance=%t busy=%t start=%t", u.InBuildStance, u.Busy, u.Flags&construction.FlagStartBuilding != 0)
+	if u.InBuildStance || u.Busy || u.BuildingState {
+		t.Fatalf("scenario ARMCK has construction callback state before publication: stance=%t busy=%t start=%t", u.InBuildStance, u.Busy, u.BuildingState)
 	}
 	s.publishSnapshot(1)
 	committed := s.Snapshot.Current()

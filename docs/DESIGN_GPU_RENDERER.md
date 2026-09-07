@@ -2,11 +2,15 @@
 
 `internal/drawlist` (new), `internal/platform/gpurender` (new), and the
 recording side of `internal/client`. One committed-frame walk records one
-ordered list of draw commands; two executors replay it. The **classic**
-executor is today's software composer writing palette indices into a byte
-surface. The **modern** executor replays the same list through Ebitengine
-onto the GPU, in palette-index space, and expands to RGB once at the end. The
-user picks one; the simulation cannot tell which.
+ordered list of draw commands; two executors replay it. The **classic** executor is the software composer writing palette indices into
+a byte surface. The **modern** executor replays through Ebitengine in palette
+index space, with conventional GPU model rasterization permitted by the visual
+acceptance policy below. Original, GPU Classic, and Enhanced are the intended
+three user-facing modes, backed by one CPU and one shared GPU implementation.
+For this experimental milestone the only public choices remain
+`--renderer=classic|modern`, default classic. All new rendering is behind
+`--renderer=modern`; no Enhanced flag or runtime options entry is added yet.
+The simulation cannot tell which executor is selected.
 
 This document is listed by [ARCHITECTURE.md](ARCHITECTURE.md), which owns
 package boundaries. [DESIGN_PRESENTATION_CLIENT.md](DESIGN_PRESENTATION_CLIENT.md)
@@ -17,38 +21,35 @@ sanctioned presentation switch is this one.
 
 ## 1. Purpose and boundary
 
-Three goals, in priority order, and the order is a rule:
+These are implementation decisions approved by the user, not retail findings.
+Retail evidence remains in the owning research document.
 
-1. **Parity.** Modern mode paints the same pixels classic mode paints. Until
-   it does, on the capture matrix in §6, no enhancement is started.
-2. **One walk.** There is exactly one committed-frame ordering in the tree,
-   `drawCommittedFrame` `[03 §1]`. It is not duplicated for the GPU. It
-   records; executors replay.
-3. **Room to grow.** Once parity holds, modern mode is where zoom that scales
-   the world rather than the pixels, supersampling for every object,
-   emissive glow, and lit materials are built. Each is a recorded divergence
-   of modern mode (§5), never a change to what classic paints.
+1. **Original** targets established retail behavior and preserves the software
+   rasterizer. Existing research gaps remain explicit; this is not a claim that
+   every current pixel has been verified against retail. Rasterization and CPU
+   captures need no GPU; the current interactive Ebitengine window still does.
+   A GPU-free window backend is separate, deferred platform work.
+2. **GPU Classic** targets the original appearance and composition rules with
+   modern GPU techniques. Small, visually unobtrusive differences in coverage,
+   interpolation, texture sampling, and shade/key quantization are permitted.
+   Exact retail raster arithmetic is not a requirement for this mode. Differences
+   are measured and reviewed visually, including in motion; a pixel threshold
+   alone is never approval. This mode remains an enhancement-disabled reference.
+3. **Enhanced** shares the GPU executor and adds explicitly designed presentation
+   changes (§5). Lighting and glow are deferred designs, not prerequisites for
+   the model prototypes. No enhancement changes authoritative simulation.
 
-The boundary inherits everything from the presentation design's one-way
-valve. Neither executor holds a pointer into a live pool, reads the
-simulation RNG, or writes authoritative state [I6]. The GPU executor goes
-one step further: it never reads the committed frame at all. Its only input
-is the recorded list. That is what makes "replay the same list through both
-executors and compare" a complete parity test rather than a sample of one.
+One committed-frame ordering remains `drawCommittedFrame` [03 §1]. Neither
+executor reads live pools or simulation RNG or writes authoritative state [I6].
+A reusable frame packet owns transient model/command data and shares only
+immutable resources. Temporary same-frame CPU model references in Phase 2 are
+an implementation bridge, not the final recording contract.
 
-Two things this design is not:
-
-* **Not a perspective renderer.** Retail's projection is integer
-  orthographic with a half-height shear `[03 §2.5]`, and the look of the game
-  is that projection. Modern mode keeps it. Camera zoom, when it comes, scales
-  the composed world image, not the projection.
-* **Not a true-colour pipeline.** Retail's shading rows, its alpha table, its
-  light table, and its fog gray table are index-to-index remaps, not
-  arithmetic on colour `[03 §4.3]`. Reproducing them in RGB changes the look
-  (flashes wash toward pink, fogged terrain goes coarse) and costs the same as
-  reproducing them exactly: one table texel per pixel. Modern mode therefore
-  stays in index space through the whole retail composite and touches RGB
-  only in the expansion pass and in the enhancement stage after it.
+The projection remains orthographic with the retail half-height shear
+[03 §2.5]. GPU Classic stays in palette index space through the retail composite:
+ALP, LHT, SHD, Gray and Blue remain table operations, not approximate RGB blends
+[03 §4.3]. Enhanced may add auxiliary material/emission data and RGB passes;
+material lighting cannot be reconstructed from the expanded image alone.
 
 ## 2. Packages, files and key types
 
@@ -58,7 +59,7 @@ Pure Go, no Ebitengine, no device. Imported by `internal/client` (recorder and
 classic executor) and by `internal/platform/gpurender` (modern executor).
 
 * `List` — one frame's commands in record order, with reusable backing slices
-  so a steady-state frame allocates nothing. `Reset()` between frames.
+  with allocation and upload costs measured after warm-up. `Reset()` between frames.
 * `Sink` — the executor interface, one method per command family (§3 C-G3).
   `List.Replay(Sink)` calls them in record order.
 * Command families, each a plain struct carrying **physical palette indices**
@@ -93,8 +94,7 @@ classic executor) and by `internal/platform/gpurender` (modern executor).
 `drawCommittedFrame` keeps its ten barriers and every gate it has today. Each
 place that writes into `c.indexed` becomes a record into `c.list`, and the
 byte-writing code moves behind `classicSink`, a `Sink` implementation in the
-same package whose methods are the existing blitters. `Frame` therefore
-becomes: record, replay through the classic sink, cursor, expand. The parity
+same package whose methods are the existing blitters. `Frame` records and replays through the classic sink, including cursor and expansion commands. The parity
 fixtures that digest the indexed surface see nothing change.
 
 The recorder never batches, reorders or culls beyond what the walk already
@@ -108,7 +108,7 @@ which is what the diff tool replays through the GPU executor.
 Imports Ebitengine; joins `internal/platform/ebitenapp`, `internal/audiobackend`
 and `cmd/nanolathe` in the architecture test's Ebitengine allowlist. Exposes:
 
-* `New(pal *palette.Tables, opts Options) *Renderer` — uploads the tables
+* `New(pal *palette.Tables, w, h int) *Renderer` — uploads the tables
   once: `PAL` as 256×1 RGBA, `ALP` as 256×256, `SHD` and `LHT` as 256×32,
   `Gray` and `Blue` as 256×1, each storing indices in the red channel.
 * `(*Renderer).Execute(list *drawlist.List, w, h int) *ebiten.Image` — the
@@ -122,12 +122,12 @@ The indexed offscreen is an RGBA8 image whose red channel holds the palette
 index. Every shader runs in Kage pixel mode and samples with nearest
 filtering, so `index = int(r * 255 + 0.5)` recovers the byte exactly.
 
-The executor groups consecutive commands of one family into one Ebitengine
-draw where that is order-preserving (C-G3). The families that read the
+The batching target is to group consecutive commands of one family into one
+Ebitengine draw where that is order-preserving (C-G3). Current destination
+operations use per-command snapshots; batching is not yet implemented. The families that read the
 destination pixel — `Tinted`, `Lit`, `LitRect`, `ShadeRect`, the gray and
 checker fog fills, the model shadow commit and the waterline tint — cannot be
-fixed-function blends because they are table lookups on the destination. They
-run as **layers**: a run of same-family commands whose screen rectangles are
+fixed-function blends because they are table lookups on the destination. The planned batching uses **layers**: a run of same-family commands whose screen rectangles are
 pairwise disjoint is drawn into a scratch overlay, then one table pass folds
 the overlay into the world image over the union rectangle. A command that
 overlaps an earlier member of the run closes the layer and opens the next.
@@ -139,9 +139,9 @@ the byte writers do `[03 R-COMP-01 §2]` `[03 R-FX-02 §3]`.
 The adapter owns one `client.Client` and, lazily, one `gpurender.Renderer`.
 `Draw` asks the client for the frame's list and either uploads the classic
 bytes as today or executes the list. The active executor is `Options.Renderer`
-at start and may be changed at run time through the client's display options;
-both executors keep their own caches, so a switch costs one frame of atlas
-warm-up and nothing else. There is exactly one such switch in the program.
+at startup. Runtime selection, persistence, and the eventual three labels are
+deferred until prototypes receive human visual review. Cache warm-up is measured,
+not promised to fit one frame. Graphics-device recovery is not a prototype gate.
 
 ### 2.5 `cmd/nanolathe` — flags and capture
 
@@ -176,26 +176,26 @@ writes both and the diff. The diff itself is `tools/framediff` (§6).
   operation is an integer texel fetch on the uploaded table. There is no
   linear filtering, no blending arithmetic on indices, and no float
   intermediate that can land between two entries.
-* **C-G5 Height key on the GPU.** Retail admits a model pixel when the stored
-  key is at most the incoming key, so the pixel's final owner is the **last
-  drawn face whose key equals the maximum key at that pixel**
-  `[03 R-REN-03A §2]` `[03 R-REN-03A §3]`. Modern mode draws every keyed
-  subject in two passes over a per-frame slot atlas: pass one writes each
-  face's key into the slot with `max` blending; pass two draws the faces in the
-  same order, samples the slot's key, and discards any pixel whose key is
-  below the stored maximum. Keys are bytes on both sides. Attached children
-  add their height delta before the compare and store the wrapped low byte
-  `[03 R-REN-03A §4]`. A subject without a key plane skips pass one and is
-  pure painter order. Until Phase 3 of the plan, modern mode obtains a
-  subject's image from the classic rasterizer instead and uploads it; the
-  record is the same either way.
-* **C-G6 Supersample in index space.** A structure under `Anti_Alias` is
-  rasterized at twice the size and resolved two-by-two through `ALP` — top
-  pair, bottom pair, then the two results — including the background index,
-  which is the retail fringe defect and is kept `[03 R-REN-03A §6]`
-  `[03 R-REN-03A §7]`. Mobile units are never supersampled.
-* **C-G7 Fog is one pass.** The recorded fog ops are converted to a per-tile
-  grid texture (kind, variant, frame, pattern parity) and applied by one
+* **C-G5 GPU model composition.** Ordinary face pixels use a per-subject
+  maximum-byte-key pass and a color pass in original face order, so ties retain
+  the later face [03 R-REN-03A §2–§3]. Conventional triangle interpolation is an
+  intentional GPU approximation (§5); tests isolate key admission from that
+  approximation. No scene-wide depth buffer may replace subject painter order.
+  Texture key-colored texels still participate in face ownership; composition
+  transparency is applied at the image boundary [03 R-REN-03A §5].
+  Cached body, live pieces, and attached children are separate stages. Render
+  each child independently, then composite children sequentially using the full
+  signed shifted-key comparison and wrapped-byte store [03 R-REN-03A §4]. Never
+  flatten children into one maximum reduction. Waterline, digger, reveal and
+  outline retain their established stage order. The first prototype may use
+  explicitly reported CPU fallback for unsupported subjects; no silent omission.
+* **C-G6 Structure supersample.** Preserve the cached/all versus live gate,
+  pre-shear doubled projection, ordered ALP color resolve, and top-left key
+  resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
+  Mobile units are not supersampled in GPU Classic. A full subject-wide MSAA
+  or SSAA replacement belongs to Enhanced and needs a separate design.
+* **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
+  grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
   shader over the world image: solid fills write the dark index, gray fills
   write `Gray[dst]`, patterned fills test the same `(x + y + parity) & 1` the
   byte writer tests, and fog GAF frames sample their frame `[03 §3.3]`
@@ -214,14 +214,15 @@ writes both and the diff. The diff itself is `tools/framediff` (§6).
 * **C-G10 No device in tests.** `internal/drawlist` and the recorder are
   covered by ordinary tests with no window. GPU parity runs in the retail
   tier, through `--shot-renderer both` and `tools/framediff`, because CI has
-  no GPU. A GPU behaviour that cannot be checked by replaying a recorded list
-  has been designed wrong.
+  no GPU. Small authored GPU fixtures may run on a device-equipped host without retail
+  assets. Backend compilation and pixel execution require real device validation.
 * **C-G11 Classic is the reference.** Where modern differs from classic, the
-  difference is either a defect against this document or an entry in §5. A
+  difference must be diagnosed as a defect or an intentional approximation or
+  enhancement in §5, with reproducible visual evidence. A
   divergence in §5 names the classic behaviour it replaces and cites the
   research the classic behaviour implements. Retail parity remains classic
-  mode's contract, owned by the presentation design; modern mode's contract
-  is parity with classic.
+  mode's contract, owned by the presentation design; GPU Classic follows the visual-fidelity policy of §1/§5.1, and Enhanced
+  follows its separately designed presentation divergences.
 
 ## 4. Retail behaviour that is not a bug
 
@@ -239,50 +240,92 @@ because a GPU habit would "fix" them:
 
 ## 5. Divergences
 
-Modern mode has none while the plan is in its parity phases. Enhancements
-land here, one entry each, in the shape `what modern does — what classic does
-and cites — why`. The candidates, in the order they are expected:
+### 5.1 GPU Classic raster approximation (approved scope, visual approval pending)
 
-* **World-space zoom.** Compose at native scale into an offscreen sized to the
-  effective view and scale that image to the viewport, instead of the classic
-  path's per-object scaling under `Camera.Scale` `[F-P1-008]`.
-* **Supersampling for every subject.** The 2× raster and `ALP` resolve of
-  C-G6 applied to mobile units and sprites as well as structures.
-* **Emissive glow.** Beams, flashes, nanolathe and authored effect frames
-  drawn a second time into an emissive layer after expansion, blurred, and
-  added in RGB. Eight-bit only; there is no float target in Ebitengine.
-* **Lit materials.** Per-pixel lighting on models from face normals and
-  authored or remastered material maps, replacing the unshaded texel write
-  and the shaded `SHD` row walk `[03 §2.4.1]` for the subjects that opt in.
+GPU model faces may be triangulated and attributes interpolated by the graphics
+backend instead of the classic authored-polygon fixed-point edge/span walk
+[03 R-RAST-01 §1]. This can change face interiors as well as edges. The reason
+is to use conventional GPU rasterization while preserving the original look.
+Large occlusion errors, missing subjects, incorrect stage ordering, and unstable
+seams are defects, not covered by this allowance. Human review of captures and
+motion is the acceptance gate; keep approved recipes and measured differences.
+
+### 5.2 Enhanced zoom and strategic view (planned)
+
+One continuous camera scale should support native 1× through detailed 2× zoom,
+using remastered terrain/features when available and model geometry rasterized
+at output scale. Below 1×, reduce detail progressively until units become readable
+dots or icons in a full-screen strategic battlefield view. Render the visible
+world directly into a bounded viewport target, not a huge native-scale whole-map
+image. The remaster work remains independently owned; do not alter its assets
+or branches as part of these prototypes.
+
+Camera anchoring, cursor-to-ground, selection, orders, fog, radar contacts, and
+minimap mapping must share the view transform. HUD/cursor scale is independent.
+Strategic markers show only player-known information. Marker thresholds, asset
+selection/fallback, icon aggregation, and filtering need design and human review
+before implementation. Classic zoom [F-P1-008] is unchanged by this milestone.
+
+### 5.3 Enhanced interpolation (planned, not implemented)
+
+Target at least 60 presented frames/s (16.7 ms frame budget) while retaining the
+30 Hz authoritative simulation. Rendering more often without interpolation repeats
+committed poses. Optional Enhanced interpolation may use two immutable committed
+snapshots; it must never write interpolated values back or consume simulation RNG.
+Before implementation define object identity across slot reuse, spawn/death,
+teleportation, child attachment changes, piece animation, input latency and pause
+behavior. Original/GPU Classic retain committed-tick sampling. I6 permits this
+future design only; this milestone changes neither cadence nor frame publication.
+
+### 5.4 Lighting, glow and antialiasing (deferred)
+
+Lighting may be palette/tint based or use model geometry/material information;
+no technique is selected. Preserve resolved asset and geometry identity rather
+than inventing material values. Glow's initial intended sources are known lights,
+lasers and missile exhaust. A later design must define masks, visibility,
+occlusion, blur and color behavior. Enhanced MSAA/SSAA likewise needs its own
+resource/performance and compositing design. None blocks the model prototype.
 
 ## 6. Verification
 
-**Capture matrix.** The parity gate is a fixed list of `--shot` invocations
-kept in the plan and, once stable, in `tools/check-retail`: at least two maps,
-one early and one mid-battle tick count, `640x480` and `1024x768`, the side
-rail open (`--shot-select`), one modal, `Shading` and `Anti_Alias` on and
-off, and `DitheredFog` on and off. Zoom stays at 1 in the matrix; classic
-zoom is not a parity target.
+Three independent gates replace the old single tolerance gate:
 
-**Two gates.**
+1. **Classic regression:** compare current classic against a baseline from the
+   same simulation/content revision. Renderer-only work must preserve classic
+   bytes and equal-tick simulation fingerprints. Attribute upstream baseline
+   changes before refreshing; never hide them in a tolerance.
+2. **GPU comparison:** replay equivalent committed state through classic and
+   modern, save both images and a diff, report changed pixels/clusters, and fail
+   on execution/capture errors. Test the tool rejects a deliberately wrong image.
+   Exact non-model fixtures remain exact; GPU model approximations use explicit
+   per-scene thresholds only after visual review. No rule that merely connects a
+   difference cluster to an edge, and no threshold derived as automatic approval.
+3. **Performance:** repeated device-backed execution after warm-up. Separate
+   recording, submission and a synchronized render/readback diagnostic, label
+   readback overhead, and report distribution (median/p95/p99). A synchronous
+   readback is not normal presentation and its timing is not an isolated GPU
+   timer. Existing headless `--profile-seconds` measures classic CPU composition
+   only. Record hardware/backend, resolution, frames and scene. No universal
+   60 fps claim from one idle scene or submission time alone.
 
-1. *Recording refactor* (plan Phase 1): the classic capture of every matrix
-   entry is byte-identical to its pre-refactor baseline, and the parity
-   fixtures' digests do not move.
-2. *Modern executor* (plan Phase 2): `tools/framediff` reports **zero**
-   differing pixels between classic and modern for every matrix entry. Phase
-   3, which moves rasterization onto the GPU, is allowed a stated tolerance
-   in the plan because triangle fill rules differ from the 16.16 edge walk; the
-   tolerance is measured, not assumed, and confined to face edges.
+The existing matrix is useful history, not exhaustive coverage: its script does
+not vary DitheredFog and Ring Atoll does not ensure digger or submerged-hull
+pixels. Add authored focused fixtures plus model-rich captures: flat/textured,
+shaded/unshaded, equal keys, painter order, cached/live structure parts, children,
+waterline/digger, reveal/outline, shadows and overlapping effects. The activated, open ARMSOLAR is a mandatory human-review scene: its
+light-colored base must be visible around and between the intersecting panels.
+That ownership relationship is a hard correctness gate, not an allowed raster
+approximation. This scene must exercise GPU model rasterization and report that
+path was used; a CPU-fallback-only capture cannot pass the solar gate. Capture closed and activated/open poses, a close crop and an
+ordinary gameplay-scale view, using a reproducible authored pose or session setup.
+The solar/lab ownership experiment [03 R-REN-03A §3] isolates this composition
+behavior but proves no texture interpolation contract. Inspect sequential frames, resize, clipping and cache
+reuse. Backend coverage is reported honestly; one host is not cross-platform proof.
 
-**Ordering evidence for C-G5.** The geometry-only ownership experiment in
-`[03 R-REN-03A §3]` (`ARMSOLAR` rest and dishes open, `ARMLAB` rest) is
-repeated against the GPU key pass; the piece that owns each pixel must agree
-with the classic rasterizer except on face-edge pixels.
-
-**Performance.** `--profile-seconds` reports classic and modern side by side.
-Modern must not present slower than classic at `1024x768`, and the design's
-reason to exist is measured at `1600x1200` and above.
+Capture recipes, command settings, revision metadata and policies are versioned;
+retail images/assets stay local and uncommitted. Preserve the exact Phase 2
+composition path as the fallback while GPU subject coverage grows. Unsupported
+prototype cases must be listed in the handoff, not described as full GPU parity.
 
 ## 7. Research map
 
@@ -304,16 +347,46 @@ reason to exist is measured at `1600x1200` and above.
 | FNT text | `[03 §7.1]` |
 | Software cursor | `[07 §8]` |
 
-## 8. Not implemented and open
+## 8. Prototype work sequence and public API contract
 
-* Everything in this document is design until the plan's phases land; the
-  plan (`PLAN_GPU.md`, kept out of the tree) tracks which phase is current.
-* Ebitengine is pinned at `v2.10.0-rc.3`, the first version whose macOS and
-  Linux window and Metal paths build with `CGO_ENABLED=0`. Move to the final
-  2.10 when it ships; nothing here depends on a release-candidate API.
-* The run-time renderer switch needs a home in the battle options screen. The
-  flag comes first; the option entry is interface work owned by
-  [DESIGN_INTERFACE_HUD_INPUT.md](DESIGN_INTERFACE_HUD_INPUT.md).
-* Classic zoom's known faults (fog not scaling with the world, the map-edge
-  band) are not parity targets and are not fixed by this design; world-space
-  zoom in modern mode is the intended replacement.
+User-approved milestone: reviewed GPU raster prototypes behind `--renderer=modern`
+and a local human-review capture bundle. No new public renderer modes, zoom,
+lighting, glow, interpolation, or runtime switch in this milestone. Luna/Terra
+implementation units run one at a time in separate worktrees; Sol reviews each;
+the orchestrator independently verifies and merges reviewed commits.
+
+| Unit | Scope | Gate |
+|---|---|---|
+| P0 | Design and invariant alignment | Sol review; existing checks |
+| P1 | Reproducible classic/modern comparison and device timing tooling | Actual GPU captures, injected mismatch rejected, exact Phase 2 scenes |
+| P2 | Additive immutable model geometry packet; retain classic execution | Classic byte parity; packet lifetime and face ordering fixtures |
+| P3 | Conventional GPU model raster prototype, explicit fallback | Real models and focused fixtures rendered; diffs and timing; Sol review |
+| Human gate | Review paired images and moving scenes | User decides whether approximations are unobtrusive |
+
+P2 owns the additive `internal/drawlist` model API and client producer. GPU code
+must consume that published API without modifying the producer. The packet is
+plain Go: subject-local projected ordered polygon vertices with integer X/Y,
+key, texture U/V and shade row; resolved immutable texture frame, physical flat
+color, shade selector; target dimensions, origin/anchor, key-plane flag and
+supersample scale. Preserve polygon order and arity; triangulation is GPU-owned.
+Retain per-corner pre-shear information if needed to reproduce structure scaling.
+The geometry packet owns its vertex and face slices and survives the next frame.
+No client pointer, live camera, or simulation pool is permitted in it. Give the
+CPU bridge neutral pixel-plane data rather than making drawlist import client.
+
+The first packet may describe a safely bounded subset (ordinary completed model
+bodies) and mark other subjects ineligible. Explicit eligibility must exclude
+any unrepresented child/staging, reveal/outline, live-piece or supersample stage;
+those continue through existing CPU composition under modern. P3 must prove it
+actually takes the GPU path for review scenes and report GPU/fallback counts.
+Classic uses its existing raster arithmetic unchanged. A full all-subject
+recording/execution split follows the prototype decision; do not claim the bridge
+or its recording-time CPU work has been eliminated before that is measured.
+
+P1 adds a separate `tools/gpu-compare` runner rather than changing the meaning of
+historical `tools/gpu-parity`. It uses `--renderer=modern --shot-renderer=both`
+and the existing `--shot-renderer-max` acceptance argument. Device timing stays
+opt-in to capture/profiling and must not alter normal simulation or presentation.
+P3's visual difference report mode is not acceptance; human-approved thresholds
+are recorded after review. Build/vet/test and classic regression apply to every
+unit. Graphics device recovery and backend replacement are deferred.

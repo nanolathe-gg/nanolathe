@@ -320,7 +320,6 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	// gives "one nano segment per qualifying work visit ... a one-segment /
 	// two-tick presentation cadence, distinct from the damage-pulse gate" — so
 	// seven of every eight visits drew no nanolathe at all.
-	var oldRemaining float32
 	fired := false
 	if node.Param2 > reclaimPulseThreshold {
 		node.Param2 = 0
@@ -328,12 +327,10 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 		if pulse < 1 {
 			pulse = 1
 		}
-		oldRemaining = target.Remaining
 		target.LastDamageSide = builder.Owner
 		target.LastDamageCause = 5
-		// Route the pulse through the world's ordinary damage receiver. Besides
-		// preserving the packet boundary, this clamps lethal health to zero
-		// before the cause-5 death latch [05 "Unit reclaim"][06 §9.1].
+		// This legacy subtraction remains for EC-04 phase 3 migration to the
+		// common accepted damage intake [06 §9.1].
 		s.World.ApplyDamage(target.Handle, pulse)
 		fired = true
 	}
@@ -351,19 +348,9 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 		node.Deadline = int32(tick + reclaimCadenceStep)
 		return res
 	}
-	// Cause-5 is a no-corpse/no-explosion death path. Capture remaining before
-	// any death-side hook can mutate it; the metal-only payment follows the
-	// cause-5 death latch [05 "Unit reclaim"][06 §12.1].
-	s.World.Destroy(target.Handle, units.DeathReclaimed)
-	if s.Economy != nil {
-		var controller uint8
-		if int(builder.Owner) < len(s.Economy.Players) {
-			controller = s.Economy.Players[builder.Owner].ControllerState
-		}
-		// The cause-5 latch is established before its death-side metal payment;
-		// no pulse-level resource credit is made [05 "Unit reclaim"][06 §12.1].
-		s.Economy.CreditUnitReclaimRefund(builder.Handle, oldRemaining, target.Def.BuildCostMetal, controller)
-	}
+	// Preserve the fatal pulse's raw attacker for the victim's later death
+	// finalizer. That visit owns the metal refund [05 R-WORK-01 §4].
+	s.World.DestroyBy(target.Handle, units.DeathReclaimed, builder.Handle)
 	// Release only construction-owned derived state. Session death observers
 	// may call the same idempotent helper; the second call is a no-op and cannot
 	// duplicate occupancy clearing or link cleanup [R-P0-09].

@@ -385,30 +385,14 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 // orders.EmitStartBuilding, the order-record emitter, stays the only writer of
 // the StopBuilding-pending flag [R-ORDER-02 §2].
 func (s *Service) startBuilding(u *units.Unit) {
-	if u == nil || u.Flags&FlagStartBuilding != 0 {
-		return
-	}
-	u.Flags |= FlagStartBuilding
-	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
-		// The argument-less deferred edge form. Corrected (2026-09-02): this
-		// called the argument-carrying variant with `Move.Heading & 0xffff`,
-		// on §3.8's earlier "carries the producer heading". That sentence is
-		// withdrawn — the argument-carrying form is the order-record emission
-		// helper of the nine mobile work handlers and its one argument is the
-		// relative bearing from builder to work target; no variant carries a
-		// producer's own heading, and the factory uses only this edge form
-		// [04 §3.8 correction 2026-09-02][04 R-CB-01 §3].
-		binding.Callbacks.StartBuilding()
+	if u != nil {
+		u.SetBuildingEdge(true)
 	}
 }
 
 func (s *Service) stopBuilding(u *units.Unit) {
-	if u == nil || u.Flags&FlagStartBuilding == 0 {
-		return
-	}
-	u.Flags &^= FlagStartBuilding
-	if binding := u.COBBinding(); binding != nil && binding.Callbacks != nil {
-		binding.Callbacks.StopBuilding()
+	if u != nil {
+		u.SetBuildingEdge(false)
 	}
 }
 

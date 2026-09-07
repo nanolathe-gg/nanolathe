@@ -162,7 +162,7 @@ func TestUnitReclaimStampsSharedRevealDeadline(t *testing.T) {
 	}
 }
 
-func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
+func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 1, 10)
 	builder.Def.WorkerTime = 300 // pulse 15, exercising ordinary lethal health clamp
 	target.Remaining = 0.25
@@ -194,12 +194,15 @@ func TestUnitReclaimCadenceAndFatalRefundCleanup(t *testing.T) {
 	if !target.Dying || target.Health >= 0 {
 		t.Fatalf("fatal reclaim did not latch target: dying=%v health=%d", target.Dying, target.Health)
 	}
+	if target.EngagementTarget != builder.Handle {
+		t.Fatal("fatal reclaim lost its raw attacker")
+	}
 	// Death hooks are deferred until slot-end finalization [04 R-MOV-03 §1].
 	if deaths != 0 || extras != 0 {
 		t.Fatalf("death observers ran before finalization primary=%d extra=%d want 0/0", deaths, extras)
 	}
-	if got := s.Economy.UnitBuckets(builder.Handle); got == nil || (*got)[economy.Metal].Production != 75 {
-		t.Fatalf("metal refund=%v want 75", got)
+	if got := s.Economy.UnitBuckets(builder.Handle); got == nil || (*got)[economy.Metal].Production != 0 {
+		t.Fatalf("premature metal refund=%v, want zero before the session finalizer", got)
 	}
 	if _, ok := s.BuilderLink(target.Handle); ok {
 		t.Fatal("builder link survived reclaim")

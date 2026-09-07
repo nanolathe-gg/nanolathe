@@ -5260,28 +5260,32 @@ ordinary creator as a **finished** unit with the old unit's definition,
 position and movement-mode bits and the new owner's side; clears state bits
 18–21 (both standing-order pairs, so the replacement starts with neither
 stance rather than the definition defaults the creator had just written);
-then copies, in order: the 16-bit health, the remaining fraction, the
-orientation triple (bank, heading, pitch), and — for each of the three weapon
-slots, **only when the replacement's slot control byte has its enabled bit**
-— the slot's **stockpiled-round byte** (the completed-ammunition byte of
-"Stockpile production" above). That gated per-slot byte is the whole of the
-"cargo copied conditionally": stockpiled rounds follow the unit, slot by
-slot, wherever the new record has that slot enabled. **Nothing else is
-copied. The kill count is not** — the replacement is a fresh record with zero
-kills, so "veteran experience" is not carried and the next capture's kills
-factor restarts from zero; the transported-cargo list, alliances, orders and
-groups are not carried either. The old unit is then killed with a cause-4
-packet and a null attacker ([06 §12.1]), and the replacement's operational
-edge bits (activated, cloaked, …) are replayed from the old unit's
-operational byte — the bits it had are set, the bits it lacked cleared —
-through the state-edge setter, so an activated or cloaked unit stays so
-across the transfer. The other branch (old owner control 1 or 2, **new owner
-control 3 — a remote peer** by [R-SHARE-01 §1]) creates nothing locally: it
-writes the 150-tick post-capture countdown, clears the selected bit, emits
-the transfer packet (the same fields, the three stockpile bytes gated on slot
-0's enabled bit alone) and kills the old unit with the same cause-4 packet;
-the replacement is the peer's. That branch is multiplayer transport and out
-of Nanolathe's scope.
+the shared creator begins in grounded mode and runs its `Create` callback
+before its wrapper writes the supplied movement-mode argument, which is still
+before the creation-time activation edge; then copies, in order: the 16-bit
+health, the remaining fraction, the orientation triple (bank, heading,
+pitch), and — for each of the three weapon slots, **only when the
+replacement's slot control byte has its enabled bit** — the slot's
+**stockpiled-round byte** (the completed-ammunition byte of "Stockpile
+production" above). That gated per-slot byte is the whole of the "cargo copied
+conditionally": stockpiled rounds follow the unit, slot by slot, wherever the
+new record has that slot enabled. **Nothing else is copied. The kill count is
+not** — the replacement is a fresh record with zero kills, so "veteran
+experience" is not carried and the next capture's kills factor restarts from
+zero; the transported-cargo list, alliances, orders and groups are not carried
+either. The old unit is then killed with a cause-4 packet and a null attacker
+([06 §12.1]), and the replacement's full modeled operational byte
+(activated, armored, instance-cloaked and building) is replayed through two
+state-edge calls: first set every bit that the old byte has, then clear the
+complement. Each call writes its whole resulting byte before its fixed
+activation, building and cloak edge notifications run, so a replacement's
+callbacks and visibility effects observe the resulting byte. The other branch
+(old owner control 1 or 2, **new owner control 3 — a remote peer** by
+[R-SHARE-01 §1]) creates nothing locally: it writes the 150-tick
+post-capture countdown, clears the selected bit, emits the transfer packet
+(the same fields, the three stockpile bytes gated on slot 0's enabled bit
+alone) and kills the old unit with the same cause-4 packet; the replacement is
+the peer's. That branch is multiplayer transport and out of Nanolathe's scope.
 
 #### The capture transfer's local branch moves neither the group word nor the selected bit [R-WORK-01 §14]
 

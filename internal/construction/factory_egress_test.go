@@ -109,11 +109,7 @@ func anyThreadAlive(vm *cob.VM) bool {
 // TestStateZeroActivateIsARealEdge locks the state-0 raise of [05 "Factory
 // production lifecycle"]. The yard-door handshake is entirely script-owned —
 // the engine raises Activate and waits, and nothing but the script writes the
-// in-build-stance bit state 1 tests — so the raise has to start the script.
-// Nanolathe pins the activation bit true at creation for every definition
-// authoring neither `onoffable` nor `activatewhenbuilt` (units.InitEconomyState,
-// the economy's stand-in for [05 R-PROD-01 §2]); every stock factory is one, so
-// the raise was swallowed and the node waited in state 1 forever.
+// in-build-stance bit state 1 tests — so the edge has to start the script.
 func TestStateZeroActivateIsARealEdge(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	facDef := newFactoryDef("edgelab", 4, 4, 300)
@@ -128,8 +124,6 @@ func TestStateZeroActivateIsARealEdge(t *testing.T) {
 	binding := &cob.Binding{VM: vm, Model: trivialModel(1, nil), PieceMap: []int{0}, Callbacks: cob.NewCallbackBridge(vm)}
 	factory.Script = vm
 	factory.ScriptState = &units.ScriptState{VM: vm, Binding: binding}
-	// The pinned state a stock factory reaches its first product in.
-	factory.Activated = true
 	factory.InBuildStance = false
 	if anyThreadAlive(vm) {
 		t.Fatal("fixture starts with a live thread")

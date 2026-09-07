@@ -247,16 +247,16 @@ func TestNetworkZeroCountAcceptance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zero: %v", err)
 	}
-	if s.Name != "Schema 0" {
-		t.Fatalf("zero: want Schema 0 (first candidate) got %q", s.Name)
+	if s.Name != "Schema 1" {
+		t.Fatalf("zero: want Schema 1 (last accepted candidate) got %q", s.Name)
 	}
 	// Also via unified SelectSchema with network map
 	s, err = SelectSchema(ota, -1, 0)
 	if err != nil {
 		t.Fatalf("unified zero: %v", err)
 	}
-	if s.Name != "Schema 0" {
-		t.Fatalf("unified zero: want Schema 0 got %q", s.Name)
+	if s.Name != "Schema 1" {
+		t.Fatalf("unified zero: want Schema 1 got %q", s.Name)
 	}
 }
 
