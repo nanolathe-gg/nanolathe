@@ -109,8 +109,10 @@ func (a *Service) installPlayback() {
 		if sample == nil {
 			return
 		}
+		// Mode-1 voices use the same base attenuation as interface cues
+		// [03 R-AUD-01 §1]; FX gain is applied once by the backend.
 		if output := GlobalOutput(); output != nil {
-			_ = output.PlaySample(sample, 1.0, 0)
+			_ = output.PlaySample(sample, VolumeFromCentibel(VolInView), 0)
 		}
 	})
 	a.Queue.OnSpeech(func(string) {})
@@ -296,7 +298,8 @@ func (a *Service) playAdmittedPositional(alias string, pos [3]numeric.Fixed) (Pa
 	return pan, volume, true
 }
 
-// PlayUICue resolves and plays an unpositioned authored alias at unity.
+// PlayUICue resolves an unpositioned authored alias at the ordinary cue
+// attenuation [03 R-AUD-01 §1]. The backend applies the FX gain separately.
 func (a *Service) PlayUICue(alias string) bool {
 	if a == nil || strings.TrimSpace(alias) == "" {
 		return false
@@ -306,7 +309,7 @@ func (a *Service) PlayUICue(alias string) bool {
 		return false
 	}
 	if output := GlobalOutput(); output != nil {
-		_ = output.PlaySample(sample, 1.0, 0)
+		_ = output.PlaySample(sample, VolumeFromCentibel(VolInView), 0)
 	}
 	return true
 }

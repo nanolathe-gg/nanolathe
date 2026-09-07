@@ -531,19 +531,27 @@ func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 			}
 		}
 	}
+	return acquireFilteredTarget(filtered, a)
+}
 
+// acquireFilteredTarget samples an already materialized query population. Its
+// caller owns candidates: swap-last removal deliberately mutates the slice,
+// while the public AcquireTarget entry keeps its input unchanged. Service
+// builds this short-lived snapshot per attempt and passes it directly here
+// [06 §3.1][06 §3.2].
+func acquireFilteredTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
 	// The two score minima are independent, but draws follow pick order,
 	// including fallback scores when a preferred winner already exists.
 	best := [2]pool.Handle{}
 	bestScore := [2]uint32{0x7fffffff, 0x7fffffff}
-	for picked := 0; picked < 50 && len(filtered) > 0; picked++ {
+	for picked := 0; picked < 50 && len(candidates) > 0; picked++ {
 		index := 0
 		if a.RNG != nil {
-			index = int(a.RNG.Uint32n(uint32(len(filtered))))
+			index = int(a.RNG.Uint32n(uint32(len(candidates))))
 		}
-		c := filtered[index]
-		filtered[index] = filtered[len(filtered)-1]
-		filtered = filtered[:len(filtered)-1]
+		c := candidates[index]
+		candidates[index] = candidates[len(candidates)-1]
+		candidates = candidates[:len(candidates)-1]
 		// Rejected picks still spent their sampling draw and count toward
 		// the fifty-pick limit. They cannot open secondary fallback.
 		if !a.admits(c) || a.rejectsStunned(c) {

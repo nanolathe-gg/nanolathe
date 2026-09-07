@@ -144,15 +144,15 @@ piece drawn as the unit's selection rectangle/footprint. A survey of all
 
 - a **direct primitive index** into the root's primitive array
   (361 models, values 1 and up);
-- `0` (300 models) — ambiguous between "primitive index 0" and "none";
+- `0` (300 models) — primitive index 0;
 - `-1` (100 models) — none.
 
 The community 3DO note describes the field as a *file offset* to the
 primitive record, but **no retail model uses the offset form** — every
-positive value is a plain index. Value `0` is ambiguous in the general file
-format between index zero and no selection. The unit-model census below
-settles how shipped unit assets author it; accepting the historical offset
-form is an implementation compatibility policy, not retail-format evidence.
+positive value is a plain index. **Established by the retail loader:** all-ones
+is the sole no-selection sentinel and zero designates primitive index zero.
+Accepting the historical offset form is an implementation compatibility policy,
+not retail-format evidence.
 
 The engine's load-time normalization and draw/picking treatment of this field
 are runtime behavior and live in [03 §2.4] and [03 §2.4.1].
@@ -263,8 +263,11 @@ Retail performs relocation without aggregate geometry or index budgets and
 follows sibling pointers recursively `[02 R-MALF-01 §8]`. Nanolathe applies
 explicit host-safety budgets to decoded polygon indexes as well as object and
 geometry counts. Its sibling-list walk is iterative while child depth remains
-bounded. These are implementation limits, not recovered retail behavior or
-file-format restrictions.
+bounded. Retail also does not check the selection index or a face's vertex
+indexes before the ordering pass, and a zero-index face compared by that pass
+reaches signed division by zero. A checked decoder may reject these malformed
+inputs rather than reproduce unsafe memory access. These are implementation
+limits, not recovered retail behavior or file-format restrictions.
 
 ## How the engine loads it
 
@@ -276,6 +279,12 @@ and no cycle check, and each primitive's three offsets; nothing is bounded,
 so a truncated model faults during relocation. A texture name that no
 texture GAF holds turns the primitive into flat colour index 209
 (`[03 §2.4]`). Full outcome table: `[02 R-MALF-01 §2]`.
+
+Primitive compilation is behavioral rather than a byte-layout transformation.
+`[02 "Model archive (3DO)"]` owns selection normalization, stable ordering,
+exact arithmetic and malformed-input reachability; `[03 §2.4]` owns the
+compiled order's consumers. A lossless parser retains authored order and the
+selection field; the runtime model compiler creates the ordered view.
 
 ### The one bound measured from the geometry: the model-top walk
 

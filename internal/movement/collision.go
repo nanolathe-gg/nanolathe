@@ -28,11 +28,11 @@
 // 3 nothing [04 R-COLL-01 §4]. `Stamp`/`Clear` without a plane are the ground
 // plane, which is what the building class and every pre-existing caller mean.
 //
-// CollisionState and OccupancyGrid are the explicit synchronous-commit surfaces
-// that retail scatters across the unit/mover/terrain records. The orchestrator
-// will unify these with units.Unit / world.Terrain once those types grow the
-// necessary fields. Retail offsets are noted where established so the unification
-// is mechanical (I13).
+// CollisionState and OccupancyGrid are movement's synchronous commit surfaces.
+// CollisionState holds the committed mover transform, velocity, cache and stamp
+// state; its persisted words are the mover-save source. OccupancyGrid owns the
+// ground and air plot-cell writes [04 R-COLL-01 §1][04 R-COLL-01 §4]
+// [08 R-SAVE-02 §8].
 //
 // P0-12 [ground collision, pushing, blocked arrival, repath — substantially closed]:
 //
@@ -66,23 +66,6 @@
 // and mode 1 runs the per-cell scan. There is no other reader of the byte on
 // the commit path. That dispatch lives at the placement caller — this package
 // reaches it through world.Terrain.CheckPlacement's Mobile arm — not here.
-//
-// Mapping to retail [04 §8.2][04 §9.1][02 "Movement class record"][03 §2.1] (I13: offsets are identity, not layout):
-//
-//	X,Z                  world position 16.16 at unit +? (X/Z pair, Fixed) [04 §8.2] C22 C24
-//	VX,VZ                horizontal velocity 16.16 at mover +? [04 §8.2] C24 recomputed at blocked
-//	Speed                scalar speed word Fixed 16.16 at mover +? [04 §8.2] C24 capped at MaxVelocity/2
-//	Heading              heading uint16 0..65535 per circle at +? [04 §5.1][04 §8.2] C24
-//	MaxVelocity          definition MaxVelocity Fixed 16.16 [02 "Unit record"] [04 §8.2] C24 via compile_movement
-//	FootPrintX/Z         footprint dimensions int16 at moveinfo +? [02 "Movement class record"][04 §6.2][04 §8.2] C25
-//	Mode                 low 2 bits of the mover mode word, mirrored into the unit's own mode field [04 §9.1] C23 C24
-//	CachedAnchor         committed cached anchor cell pair at mover+? [04 §8.2] C23 same-cell fast path
-//	CachedMode           committed mode at mover+? [04 §8.2] C23
-//	OldAnchor            old footprint anchor at mover+? [04 §8.2] C24 clamp reference (centre ±0x7FFFF)
-//	Blocked              mover blocked bit 2 at mover+? [04 §8.2] C23 C24 rewritten by validator result
-//	Dirty                transform dirty at +? [04 §8.2] C23 C24 — marks transform/visibility dirty
-//	HalfBias             packed half-cell bias per instance [04 §8.2] C23 — quantize with signed arithmetic (floorDiv)
-
 package movement
 
 import (
@@ -1093,9 +1076,9 @@ func ValidateFootprint(anchor Cell, fx, fz int16, perCell func(Cell) bool, aggre
 	return true
 }
 
-// CollisionState holds the mutable collision/movement commit state.
-// See package comment for retail offset mapping. All fixed values are raw
-// 16.16 int32 words unless noted. Angles are uint16 0..65535 per circle [04 §5.1].
+// CollisionState holds the mutable collision/movement commit state. All fixed
+// values are raw 16.16 int32 words unless noted. Angles are uint16 0..65535
+// per circle [04 §5.1].
 type CollisionState struct {
 	ID int // pool slot asc [01 §6.2] I1 I5
 

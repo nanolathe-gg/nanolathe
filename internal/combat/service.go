@@ -1077,43 +1077,29 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
-	candidates := s.primaryCandidates(u, w, seaLevel, vis, econ, catalog)
 	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
+	candidates := s.primaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.Range)
 	// The registry's secondary-list gate and its secondary list [06 §3.1].
 	// Both belong to the SCANNING PLAYER — the registry is per side and is the
 	// same for every slot of every unit that player owns — so they are read
 	// here, by owner, and never from the shooter's own definition.
 	acq.HasUpgrade = s.targetingUpgradeGateFor(u.Owner)
-	if acq.HasUpgrade {
-		acq.Secondary = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog)
+	if len(candidates) == 0 && acq.HasUpgrade {
+		candidates = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog, acq.Range)
 	}
-	h, ok := AcquireTarget(candidates, acq)
-	return h, ok
+	return acquireFilteredTarget(candidates, acq)
 }
 
-// primaryCandidates materializes the cached primary registry in its stored
-// order. Only liveness is refreshed here; distance is checked by AcquireTarget.
-// Hostility and visibility remain those of the last rebuild [06 §3.1].
-func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog) []Candidate {
+// primaryCandidates materializes the cached primary registry's preliminary
+// query in stored order. It refreshes liveness and applies the planar range
+// query before allocating its local candidate snapshot; physical admission and
+// the second, ordered range gate still run per sampled pick. Hostility and
+// visibility remain those of the last rebuild [06 §3.1].
+func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, rangeLimit int32) []Candidate {
 	if s == nil || u == nil || w == nil {
 		return nil
 	}
-	list := s.targets.primaryList(u.Owner)
-	if len(list) == 0 {
-		return nil
-	}
-	out := make([]Candidate, 0, len(list))
-	for _, h := range list {
-		cand := w.Unit(h)
-		if cand == nil || cand.Handle == u.Handle {
-			continue
-		}
-		if !cand.Alive || cand.Dying {
-			continue // alive bit set, death latch clear [06 §3.1]
-		}
-		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
-	}
-	return out
+	return s.materializeCandidatesInRange(u, w, s.targets.primaryList(u.Owner), seaLevel, vis, econ, catalog, rangeLimit)
 }
 
 // secondaryCandidates materializes the scanning player's secondary list into
@@ -1125,15 +1111,22 @@ func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel nume
 // and NOTHING else is: no visibility, category, sensor, medium or alliance test
 // touches the list again, and the distance test is the one AcquireTarget's
 // shared gate applies to both lists.
-func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog) []Candidate {
+func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, rangeLimit int32) []Candidate {
 	if s == nil || u == nil || w == nil {
 		return nil
 	}
-	list := s.targets.secondaryList(u.Owner)
+	return s.materializeCandidatesInRange(u, w, s.targets.secondaryList(u.Owner), seaLevel, vis, econ, catalog, rangeLimit)
+}
+
+// materializeCandidatesInRange forms one attempt-local snapshot from a registry
+// list. The sampler consumes this local buffer directly, avoiding a second
+// filtered copy. One allocation remains for a nonempty selected population,
+// proportional to the registry list; there is no new unit cap [06 §3.1][06 §3.2].
+func (s *Service) materializeCandidatesInRange(u *units.Unit, w *units.World, list []pool.Handle, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog, rangeLimit int32) []Candidate {
 	if len(list) == 0 {
 		return nil
 	}
-	out := make([]Candidate, 0, len(list))
+	var out []Candidate
 	for _, h := range list {
 		cand := w.Unit(h)
 		if cand == nil || cand.Handle == u.Handle {
@@ -1141,6 +1134,12 @@ func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel nu
 		}
 		if !cand.Alive || cand.Dying {
 			continue // alive bit set, death latch clear [06 §3.1]
+		}
+		if !WithinRange(u.X, u.Z, cand.X, cand.Z, rangeLimit) {
+			continue
+		}
+		if out == nil {
+			out = make([]Candidate, 0, len(list))
 		}
 		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
 	}

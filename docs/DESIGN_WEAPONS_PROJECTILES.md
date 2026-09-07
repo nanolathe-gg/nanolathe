@@ -132,6 +132,16 @@ paralyzer rejection before its score, with preferred and fallback minima
 updated in pick order `[06 §3.1]` `[06 §3.2]`. The shot-time physical gate has
 its own ordered clauses below `[06 R-WPN-05 §9]`.
 
+The service builds one attempt-local candidate snapshot only after its
+range-and-liveness query has found an entry. That snapshot is the sampler's
+swap-removal storage, so the public query can retain an unmodified input while
+the service avoids a second filtered copy. Secondary entries are materialized
+only after the empty primary preliminary query selects them. This change retains attempt-local storage rather than adding a retained
+service buffer. It removes the redundant copy and unused secondary snapshot;
+one allocation remains for a nonempty selected population. Capacity follows
+the selected registry list, with no inferred unit cap `[06 §3.1]`
+`[06 §3.2]`.
+
 Direct visibility consumes the completed sensor phase's runtime status word:
 the sonar bit permits a below-surface hull probe, while an alliance row cannot
 stand in for that contact. Its four probes begin at the candidate definition's

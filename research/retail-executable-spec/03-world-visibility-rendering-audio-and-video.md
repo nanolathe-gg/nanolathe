@@ -891,11 +891,16 @@ piece/type identity independent of provider enumeration order. N-gon primitives
 are expanded into triangles by a fan-like operation. Leaf pieces with a vertex
 but no primitive are valid attachment/emit points.
 
-After relocation and before any draw, each object reorders its primitives at load
-time: if the object declares a selection primitive, that primitive record is
-swapped with primitive zero and the selection index is rewritten to zero; the
-remaining primitives from index one upward are then bubble-sorted into ascending
-order of the integer mean of their vertices' second coordinate. A separate
+**Established (direct static trace).** After relocation and before any draw,
+each object reorders its primitives once at load time. An authored selection
+index other than the all-ones sentinel exchanges that primitive with primitive
+zero and is rewritten to zero. Primitive zero is excluded from ordering even
+when no selection primitive exists. Indexes one through the end are stably
+ordered by ascending signed mean of their vertices' second coordinate: each
+coordinate is accumulated in a wrapping signed 32-bit sum, the signed division
+truncates toward zero, and adjacent records exchange only for strict less-than.
+Ties therefore retain their post-selection-swap order. `[02 "Model archive
+(3DO)"]` owns the arithmetic and malformed-input boundary. A separate
 recursive pass then negates the first and third vertex coordinates and the first
 and third parent translations of every object in the hierarchy, a half-turn about
 the vertical axis applied to the whole model. The trailing sign on Z seen in projection helpers is the `Z - Y/2` orthographic shear — the high word of Z is transiently negated in place, then half of Y is subtracted, with the `+32` viewport bias, and the result is never stored back (the hover-pick projection in [07 R-REV-01 §3] writes that same negation explicitly as `(unitZ - cameraZ) - z`) — not a second model-space sign fixup; the load-time half-turn (negating X and Z of each vertex and each parent translation) is the sole persistent conversion (net `-X,-Z` established by store-path data-flow; a net `-X`-only conversion and a second store are both rejected, the latter bounded-negative). Child `flare` and piece translations queried at muzzle reuse the pristine post-load vectors without a second negation: a flare authored at `(2,1,-30)` is stored as `(-2,1,+30)` in model space, and the piece locator of [R-RAST-01 §8] hands a simulation consumer the world offset `(-2, 1, -30)` — model-space `(x, y, z)` maps to world `(x, y, −z)` on every consumer path. Which authored axis is the nose at heading zero remains
@@ -1186,14 +1191,16 @@ implementation that omits it reproduces retail for two units out of 278.
 
 The renderer walks the piece list **from the last piece to the first**. Within
 a piece, primitives are drawn in the load-fixed order established in
-[03 §2.4] — the selection primitive swapped to index 0 and skipped, the rest
-bubble-sorted ascending by the integer mean of their vertices' second
-coordinate.
+[03 §2.4] — the selection primitive swapped to index 0 and skipped, primitive
+zero otherwise retained as the first unsorted face, and indexes one onward
+stably ordered by the signed 32-bit mean key.
 
 Because the key test admits equal keys, draw order is the tie-break, and the
 reversed piece walk therefore means **piece 0 wins every tie against every
-later piece**, while inside a piece the higher-mean-Y primitive wins. A
-forward piece walk inverts every one of those tie-breaks. This is not a
+later piece**, while inside a piece the higher-mean-Y primitive wins. Equal-mean
+faces retain their post-selection-swap order, so the later face in that stable
+sequence wins an equal-key pixel. A forward piece walk inverts every one of the
+inter-piece tie-breaks. This is not a
 cosmetic detail: on stock models whole regions of the silhouette change owner.
 
 **Established (composition experiment against stock geometry).**

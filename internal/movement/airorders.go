@@ -1452,9 +1452,9 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	oldX, oldZ := int64(u.X), int64(u.Z)
 	IntegrateFlight(fl) // [04 §10.1] C26–C30
 
-	// Call 3 — the commit. An airborne mover holds no ground cells, so there is
-	// no occupancy stamp here; the mode setter moved the stamp when the aircraft
-	// left the ground and puts it back when it lands [04 R-COLL-01 §4].
+	// Call 3 — publish the flight commit. StepUnit reconciles this mover's
+	// current occupancy plane immediately after stepAir returns; the mode setter
+	// also reconciles it at a mode transition [04 R-COLL-01 §1][04 R-COLL-01 §4].
 	s.commitFlightState(u, fl)
 	// The mover's VELOCITY TRIPLE [04 R-MOV-01 §1]. The flight integrator owns
 	// all three components on this path — the decay, the brake shaping, the

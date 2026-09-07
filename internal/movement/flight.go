@@ -1,29 +1,10 @@
-// Flight integrator [04 §10.1] C26–C30.
+// Flight integrator [04 §10.1].
 //
-// FlightState is the explicit integration surface that retail scatters across
-// the unit record. The orchestrator will unify this with units.Unit once that
-// type grows velocity/heading/speed fields. Retail offsets are noted where
-// established so the unification is mechanical.
-//
-// Mapping to retail [04 §10.1] (I13: offsets are identity, not layout):
-//
-//	Mode                 low 2 bits of mover mode word, mirrored into unit [04 §9.1]
-//	                     2 == active locomotion, 1 == stopped/parked, 0/3 preserved but no producer
-//	X,Y,Z                world position 16.16; the Y high word is the signed height [04 §8.1]
-//	VX,VY,VZ             velocity components, 32-bit 16.16 words [04 §10.1] C27
-//	Speed                scalar speed word, 32-bit (full 3-D magnitude) [04 §10.1]
-//	Heading              uint16 heading 0..65535 per circle at +? [04 §5.1]
-//	TargetHeading        command heading (desired heading)
-//	TurnResidual         16-bit turn residual word [04 §10.1] C30
-//	MaxVelocity          definition MaxVelocity, fixed 16.16 [02 "Unit record"]
-//	Acceleration         definition Acceleration, fixed 16.16 [02 "Unit record"]
-//	BrakeRate            definition BrakeRate, fixed 16.16 [02 "Unit record"]
-//	TurnRate             definition TurnRate, integer [02 "Unit record"]
-//	TargetY              command altitude, 16.16 (targetY) [04 §10.1] C29
-//	OffMap               the unit's air-sector link is the off-map sector record [04 R-AIR-01 §5][04 R-AIR-01 §15]
-//	TargetX/Z            command XZ 16.16 [04 §10.1] horizontal accel
-//	TargetVX/VZ          command VXZ 16.16 [04 §10.1]
-//	Dirty                transform-dirty bit set by heading integration when err != 0 [04 §10.1] C30
+// FlightState is the flight integrator's mutable state. commitFlightState
+// publishes the committed pose, heading, velocity triple and scalar speed to
+// the unit and CollisionState; the collision record additionally retains the
+// flight residual and lean words for save readers [04 R-AIR-01 §1]
+// [08 R-SAVE-02 §8].
 
 package movement
 
@@ -34,11 +15,13 @@ import (
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
-// FlightState holds the mutable flight integrator state. See package comment
-// for retail offset mapping. All fixed values are raw 16.16 int32 words unless
-// noted. Angles are uint16 0..65535 per circle.
+// FlightState holds the mutable flight integrator state. All fixed values are
+// raw 16.16 int32 words unless noted. Angles are uint16 0..65535 per circle.
 type FlightState struct {
-	Mode uint8 // low 2 bits; 2 == active [04 §9.1] C26
+	// Mode is the mover's low two bits: 1 grounded, 2 airborne, 0 attached or
+	// parked, and 3 accepted from save data. Ordinary gameplay's mode-3 writer
+	// remains unknown [04 R-MOV-01 §8][04 R-AIR-01 §3].
+	Mode uint8
 
 	X, Y, Z    int32 // position 16.16 [04 §2.3]; the Y high word is the signed height
 	VX, VY, VZ int32 // velocity 16.16 [04 §10.1] C27

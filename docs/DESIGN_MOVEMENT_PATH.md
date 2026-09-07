@@ -196,8 +196,10 @@ triple, zeroing when the carrier has no mover `[04 R-FAC-02 §2]`. Every one of
 those sites publishes the triple onto `units.MoveState`, which is how it leaves
 this package: its one reader elsewhere is the pre-fire lead of `[06 §3.3]`,
 which multiplies the **target's** triple by the scaled flight time. The retail
-mover save record carries the triple at its first three words, so
-`RestoreMover` republishes it `[08 R-SAVE-02 §8]`.
+mover save record instead reads the collision mirror, so the carried branch
+writes all three copied words to `CollisionState` as well as `units.MoveState`;
+an attached aircraft's `FlightState` receives the same triple. `RestoreMover`
+republishes the saved triple `[08 R-SAVE-02 §8]`.
 
 **Collision and occupancy** (`collision.go`, `place.go`, `forget.go`).
 `OccupancyGrid` is the mover store and the writer of the plot cell's two
@@ -228,9 +230,10 @@ carriers after every carrier has moved. `StepUnit` refuses to run outside that
 transaction rather than reconstructing a snapshot of its own. The per-unit body
 is: the carried early exit, then either the air path or the ground path; on the
 ground path the follower's per-tick service answers arrival first, then the
-route is consulted, then steering, then the post-move Y, pitch and roll
-correction, then the occupancy commit and the movement-rate and occupancy-band
-callbacks `[04 R-MOV-03 §1]` `[04 R-MOV-01 §3]` `[04 R-MOV-01 §5]`.
+route is consulted, then steering, occupancy commit, movement-rate callbacks
+and occupancy-band classification. The post-move Y, pitch and roll correction
+runs after the whole mover tick `[04 R-MOV-03 §1]` `[04 R-MOV-01 §1]`
+`[04 R-MOV-01 §3]` `[04 R-MOV-01 §5]`.
 
 `moveGoal` is the per-mover movement-goal handle, deliberately distinct from
 the order record's stored position: a mobile-build record stores the

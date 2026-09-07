@@ -3425,19 +3425,48 @@ relocated: one optional offset, the always-present offset of the vertex-index
 array, and the optional offset of the texture name. The remaining fields carry
 the colour index, the vertex-index count, and three further values.
 
-**Load-time primitive reordering.** After relocation, and before the model is
-ever drawn, each object is reordered:
+**Load-time primitive reordering — Established (direct static trace).** After
+relocation, and before the model is ever drawn, each object is compiled in
+place:
 
-1. If the object declares a selection primitive, that primitive record is
-   swapped with primitive zero and the selection index field is rewritten
-   to zero.
-2. The remaining primitives, from index one upward, are bubble-sorted into
-   ascending order of the **mean of their vertices' second coordinate**,
-   using integer division by the primitive's vertex-index count.
+1. The all-ones selection word is the sole no-selection sentinel. When the
+   selection word is any other value and the signed primitive count is
+   positive, the selected primitive is exchanged with primitive zero and
+   the selection word is rewritten to zero. Thus authored selection index zero
+   is a real selection primitive, and a positive authored index moves that
+   primitive to zero while moving authored primitive zero to the selected
+   index.
+2. Primitive zero is excluded from ordering whether or not the object declares
+   a selection primitive. For three or more primitives, repeated adjacent
+   passes cover indexes one through the last index. A pair is exchanged only
+   when the right key is strictly less than the left key. The result is stable
+   ascending order: equal keys retain their order after the selection exchange.
+   Objects with zero, one, or two primitives perform no ordering comparisons.
+3. A primitive's key is the signed integer mean of its indexed vertices'
+   second coordinates. Each unsigned 16-bit vertex index selects one signed
+   32-bit coordinate. The sum is a signed 32-bit accumulator whose additions
+   wrap modulo 2^32; signed 32-bit division by the signed vertex-index count
+   then truncates toward zero. The signed 32-bit quotient is compared directly,
+   with no wider intermediate and no subsequent narrowing.
 
-Draw order within a piece is therefore fixed at load time, not recomputed per
-frame, and an implementation that sorts at draw time will not reproduce the
-retail order for ties.
+Two boundary examples distinguish this arithmetic. Coordinates
+`[2147483647, 1]` wrap their sum to `-2147483648` and produce the key
+`-1073741824`; a widened sum would instead produce `1073741824` and can reverse
+the face's order against a zero-key face. Coordinates `[-3, 0]` produce `-1`,
+not the floor quotient `-2`. Equal quotients do not exchange records.
+
+The pass has no malformed-data recovery. A compared primitive with a zero
+vertex-index count reaches signed division by zero. An out-of-range vertex
+index reads beyond the object's declared vertex array. Any selection value
+other than all-ones is used as a primitive index when the primitive count is
+positive, without an index bound. These cases can fault or consume unrelated
+loaded bytes and define no portable fallback; a checked host decoder rejects
+them `[02 R-MALF-01 §8]`.
+
+Draw order within a piece is therefore fixed once at load, not recomputed per
+frame. The renderer skips primitive zero only when the object declares a
+selection primitive; with the all-ones sentinel, primitive zero remains the
+unsorted first drawn face. Draw consumption is `[03 §2.4]` and `[03 §2.4.1]`.
 
 #### Mirroring
 

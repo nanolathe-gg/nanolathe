@@ -7,7 +7,7 @@
 //
 // Carried-unit branch at top of occupancy commit slaves cargo each tick to the
 // named attach piece's world transform, copies piece heading/pitch and carrier
-// velocity/speed (zeroed if carrier has no mover), applies floater deck-height
+// velocity triple/speed (zeroed if carrier has no mover), applies floater deck-height
 // clamp from cargo's waterline and sea level, and returns before ordinary
 // footprint validation. On a cell/mode change it still clears and stamps the
 // footprint through the carried-position setter [04 R-FAC-02 §2].
@@ -324,7 +324,7 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 		if fl := s.Flights[carrier.Handle]; fl != nil {
 			carrierVX, carrierVY, carrierVZ, carrierSpeed = fl.VX, fl.VY, fl.VZ, fl.Speed
 		} else if coll := s.Collisions[carrier.Handle]; coll != nil {
-			carrierVX, carrierVZ, carrierSpeed = coll.VX, coll.VZ, coll.Speed
+			carrierVX, carrierVY, carrierVZ, carrierSpeed = coll.VX, coll.VY, coll.VZ, coll.Speed
 		}
 		cargo.Move.Speed = numeric.Fixed(carrierSpeed)
 		// The mover's VELOCITY TRIPLE follows the same copy as the scalar: the
@@ -337,7 +337,8 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 		cargo.Move.VelX = numeric.Fixed(int64(carrierVX))
 		cargo.Move.VelY = numeric.Fixed(int64(carrierVY))
 		cargo.Move.VelZ = numeric.Fixed(int64(carrierVZ))
-		// Also sync FlightState for cargo if it has one? Cargo's own flight velocities should be slaved, not integrated.
+		// A carried flight state is a mirror of the carrier's committed motion;
+		// its integrator must not advance the cargo independently [04 R-FAC-02 §2].
 		if flCargo, ok := s.Flights[cargo.Handle]; ok {
 			flCargo.X = int32(cargo.X.Raw())
 			flCargo.Y = int32(cargo.Y.Raw())
@@ -360,6 +361,11 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			collCargo.Y = int32(cargo.Y.Raw())
 			collCargo.Heading = cargo.Move.Heading
 			collCargo.VX = carrierVX
+			// The collision record is also the mover-save source, so it receives
+			// the full carried triple alongside Unit.Move and FlightState. Omitting
+			// VY loses a climbing carrier's motion at the save boundary
+			// [04 R-FAC-02 §2][08 R-SAVE-02 §8].
+			collCargo.VY = carrierVY
 			collCargo.VZ = carrierVZ
 			collCargo.Speed = carrierSpeed
 			collCargo.Dirty = true
