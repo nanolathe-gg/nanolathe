@@ -1,6 +1,9 @@
 package features
 
-import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+import (
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/world"
+)
 
 // sinkVelocity is the fixed vertical velocity for submerged wrecks [05 "Feature sinking and water interaction"].
 // -11468 fixed-point = -0.175 world units per tick, constant descent 5.25 world units per second at 30 Hz.
@@ -32,7 +35,7 @@ func (s *Service) integrateSink(inst *Instance) {
 	// The derived floor pair (PlotCell MinHeight/MaxHeight) averages to
 	// the sampled floor height [02 "Terrain file"].
 	// We use CoarseHeightAt which returns (Min+Max)/2 *65536 [03 §2.3].
-	floor := s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
+	floor := s.Terrain.CoarseHeightAt(world.WorldToCell(inst.X), world.WorldToCell(inst.Z))
 	sea := s.Terrain.SeaLevelWorld()
 
 	// While strictly above sampled floor and strictly below water plane the
@@ -81,7 +84,7 @@ func (s *Service) StartSinking(inst *Instance, fromIsFeature bool) {
 	if fromIsFeature {
 		return // isfeature corpses never descend [05 "Feature sinking and water interaction"]
 	}
-	floor := s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
+	floor := s.Terrain.HeightAt(inst.X, inst.Z)
 	sea := s.Terrain.SeaLevelWorld()
 	// Medium classification uses interpolated terrain height under victim
 	// against sea-level byte — never unit's own elevation [05 ...].

@@ -250,6 +250,30 @@ Large occlusion errors, missing subjects, incorrect stage ordering, and unstable
 seams are defects, not covered by this allowance. Human review of captures and
 motion is the acceptance gate; keep approved recipes and measured differences.
 
+P3a uses two GPU-owned preparation paths. Simple clockwise projected rings use
+conventional triangles. A folded projected ring is prepared as one-pixel-high
+quads from the same ordered decreasing-index left chain and increasing-index
+right chain as the established span walk; only rows whose right edge is strictly
+right of the left edge become strips. The strips carry interpolated key, UV and
+shade lanes to the GPU, which still performs the fragment key reduction and
+colour write. This preserves the positive-span topology without uploading a CPU
+body image. It is a prototype preparation cost and not a claim of exact
+inside-face interpolation parity.
+
+P3b keeps folded-row attributes in private float32 preparation vertices until
+the device fragment stage. Each row uses the last applicable edge on the
+ordered left and right chains, ceilings both fractional X intersections,
+emits a one-pixel-high positive span, and keeps key, UV and shade lanes
+constant through that row. A folded ring with no positive span is valid empty
+input and is skipped; it does not force a CPU fallback. Folded faces still
+require their SHD and resolved texture resources before GPU admission. The
+shared GAF upload retains red for transparent-marked texels so model ownership
+can see the physical texture index while keyed sprite families continue to use
+their green coverage flag. The GPU model commit follows the researched
+composition key for index 1; the current CPU model coverage path may retain a
+covered index 1. Such pixels are a documented comparison exception pending a
+classic coverage reconciliation, and are not accepted as visual parity.
+
 ### 5.2 Enhanced zoom and strategic view (planned)
 
 One continuous camera scale should support native 1× through detailed 2× zoom,
@@ -424,3 +448,33 @@ opt-in to capture/profiling and must not alter normal simulation or presentation
 P3's visual difference report mode is not acceptance; human-approved thresholds
 are recorded after review. Build/vet/test and classic regression apply to every
 unit. Graphics device recovery and backend replacement are deferred.
+
+**P3b status.** The core raster path now preserves fractional folded-row
+attributes through device preparation, validates folded materials, and treats
+empty folded rings as correctly culled input. `--shot-renderer=modern` and
+`--shot-renderer=both` require `--renderer=modern`; the classic default remains
+unchanged. Isolated model preview resolves the selected unit's ObjectName,
+BMCode structure class, and ZBuffer from the compiled catalog, rejecting an
+arbitrary unclassified 3DO. The open ARMSOLAR command route remains a named
+synthetic PieceView pose; `--shot-model-pose=activated` separately loads the
+compiled ARMSOLAR UnitDef, binds its stock COB through the production unit
+port path, settles Create, raises the activation edge, and snapshots the VM
+piece lanes. No dish angle is hardcoded. The preview fails clearly if an
+unsupported model would require a CPU fallback without a ModelSource. The
+opt-in authored device fixture is `NANOLATHE_GPU_DEVICE_TEST=1 go test
+./internal/platform/gpurender -run '^TestModelDeviceFixtures$'`; ordinary tests
+skip it; its `TestMain` keeps the optional Ebiten loop on the process main
+goroutine for macOS. The fixture uses separate spatial regions for equal-key,
+transparent texture, wrapped-key interpolation, keyless painter, folded-span,
+transparent keyed Sprite, and explicit CPU-fallback/missing-source checks. A
+repeatable paired capture matrix is provided by
+`tools/gpu-model-preview /private/tmp/nanolathe-gpu-review/p3-final-model`.
+Each row writes `<id>.png`, `<id>.modern.png`, `<id>.diff.png`, and `<id>.log`;
+the logs include GPU and CPU-fallback counters and separate closed,
+synthetic-open, and production-activated ARMSOLAR rows. Device execution and
+human review of synthetic and actual activated captures remain acceptance
+gates.
+
+The isolated model matrix uses 320×240 surfaces so the activated solar panels
+fit at 2x. `--shot-gpu-profile-frames` profiles frozen battle captures only;
+model preview captures reject it explicitly instead of silently ignoring it.

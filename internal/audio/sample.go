@@ -1,10 +1,10 @@
 package audio
 
 import (
-	"encoding/binary"
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -54,227 +54,53 @@ func (s *Sample) Samples() int {
 	return len(s.Data) / int(s.BlockAlign)
 }
 
-// Decode decodes a WAV-family blob for the given alias [fmt wav] [03 §8.2].
-// It accepts RIFF/WAVE PCM, the retail DIGI/HSHD/SDAT container, and raw 8-bit
-// mono 11,025 Hz PCM. The ten-byte DIGI wrapper is trimmed when present per
-// C20; the 11,000→11,025 Hz remap is applied. RIFF fmt/data chunks honor
-// observed odd-byte padding. Raw input defaults to 11,025 Hz mono 8-bit.
+// Decode owns a PCM copy from the canonical WAV-family parser [fmt wav].
+// Unsupported codecs/widths and unsafe metadata return errors as a deliberate
+// host policy; retail does not inspect the format tag [02 R-MALF-01 §10].
 func Decode(alias string, data []byte) (*Sample, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("audio: empty sample %q", alias)
-	}
-	if len(data) > 1<<24 {
-		// guard against absurd allocations; retail files are far smaller.
-		// This is a divergence for safety; retail would attempt the alloc.
-		return nil, fmt.Errorf("audio: sample too large %q (%d bytes)", alias, len(data))
-	}
-	kind := detectContainer(data)
-	switch kind {
-	case containerDIGI:
-		return decodeDIGI(alias, data)
-	case containerRIFF:
-		return decodeRIFF(alias, data)
-	default:
-		return decodeRaw(alias, data)
-	}
+	return decodeSample(alias, data, vfs.Provenance{})
 }
 
-const (
-	containerRaw  = 0
-	containerDIGI = 1
-	containerRIFF = 2
-)
-
-// detectContainer checks the fixed legacy markers before RIFF/WAVE [fmt wav]
-// [03 §8.2]. 0 raw, 1 DIGI, 2 RIFF/WAVE.
-func detectContainer(data []byte) int {
-	// The legacy detector is deliberately positional.  In particular, a file
-	// beginning with DIGI but carrying a damaged HSHD/SDAT header is classified
-	// as raw only when one of these fixed markers is absent; this keeps malformed
-	// recognized containers on their decode/error path.
-	if len(data) >= 36 && string(data[0:4]) == "DIGI" &&
-		string(data[8:12]) == "HSHD" && string(data[32:36]) == "SDAT" {
-		return containerDIGI
+func decodeSample(alias string, data []byte, prov vfs.Provenance) (*Sample, error) {
+	logical := prov.LogicalPath
+	if logical == "" {
+		logical = alias
 	}
-	if len(data) >= 12 && string(data[0:4]) == "RIFF" && string(data[8:12]) == "WAVE" {
-		return containerRIFF
+	fail := func(cause error) (*Sample, error) {
+		return nil, fmt.Errorf("nanolathe: decode sample: logical path %s, providers searched [%s], expected supported PCM: %w", logical, prov.ProviderID(), cause)
 	}
-	return containerRaw
-}
-
-// decodeRaw treats the blob as unsigned 8-bit mono 11,025 Hz [fmt wav] [03 §8.2] C20.
-func decodeRaw(alias string, data []byte) (*Sample, error) {
-	dup := make([]byte, len(data))
-	copy(dup, data)
+	if len(data) == 0 || len(data) > 1<<24 {
+		// TODO(question): settle zero-length buffer creation at the retail
+		// backend [02 R-MALF-01 §10]. Reject empty input until then; the upper
+		// bound is a separate host-safety allocation limit.
+		return fail(fmt.Errorf("empty or oversized sample (%d bytes)", len(data)))
+	}
+	w, err := formats.LoadAudio(data)
+	if err != nil {
+		return fail(err)
+	}
+	if w.DataSize == 0 {
+		return fail(fmt.Errorf("empty PCM payload"))
+	}
+	if w.AudioFormat != 1 || (w.BitsPerSample != 8 && w.BitsPerSample != 16) || w.Channels == 0 || w.SampleRate == 0 {
+		return fail(fmt.Errorf("unsupported PCM metadata: format %d, channels %d, rate %d, bits %d", w.AudioFormat, w.Channels, w.SampleRate, w.BitsPerSample))
+	}
+	// Retail derives these values instead of reading the authored fmt words.
+	// Keep the parser lossless and apply that playback rule here [02 §7].
+	align := uint64(w.BitsPerSample>>3) * uint64(w.Channels)
+	rate := align * uint64(w.SampleRate)
+	if align > uint64(^uint16(0)) || rate > uint64(^uint32(0)) {
+		return fail(fmt.Errorf("PCM frame size or byte rate is too large"))
+	}
+	pcm := data[uint64(w.DataOffset) : uint64(w.DataOffset)+uint64(w.DataSize)]
+	// The format parser retains every declared byte. Playback exposes complete
+	// frames, leaving a partial final frame unused [03 §8.2].
+	pcm = pcm[:len(pcm)-len(pcm)%int(align)]
 	return &Sample{
-		Alias:         alias,
-		Container:     "raw",
-		AudioFormat:   1,
-		Channels:      1,
-		SampleRate:    11025, // [fmt wav] raw default [03 §8.2] C20
-		ByteRate:      11025,
-		BlockAlign:    1,
-		BitsPerSample: 8,
-		Data:          dup,
-	}, nil
-}
-
-// decodeRIFF parses RIFF/WAVE PCM with odd padding [fmt wav] [03 §8.2] C20.
-// It walks chunks from offset 12, handling size+8 stride plus pad when size is odd.
-func decodeRIFF(alias string, data []byte) (*Sample, error) {
-	if len(data) < 12 {
-		return nil, fmt.Errorf("audio: riff too small %q", alias)
-	}
-	if string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
-		return nil, fmt.Errorf("audio: missing RIFF/WAVE %q", alias)
-	}
-	var (
-		haveFmt       bool
-		haveData      bool
-		audioFormat   uint16
-		channels      uint16
-		sampleRate    uint32
-		byteRate      uint32
-		blockAlign    uint16
-		bitsPerSample uint16
-		dataOff       int
-		dataSize      int
-	)
-	// Walk chunks starting at 12 [fmt wav] odd pad.
-	for off := 12; off+8 <= len(data); {
-		chunkID := string(data[off : off+4])
-		chunkSize := binary.LittleEndian.Uint32(data[off+4 : off+8])
-		payload := off + 8
-		if uint64(chunkSize) > uint64(len(data))-uint64(payload) {
-			return nil, fmt.Errorf("audio: %s chunk truncated %q", chunkID, alias)
-		}
-		switch chunkID {
-		case "fmt ":
-			if chunkSize < 16 {
-				return nil, fmt.Errorf("audio: fmt too small %q", alias)
-			}
-			audioFormat = binary.LittleEndian.Uint16(data[payload : payload+2])
-			channels = binary.LittleEndian.Uint16(data[payload+2 : payload+4])
-			sampleRate = binary.LittleEndian.Uint32(data[payload+4 : payload+8])
-			byteRate = binary.LittleEndian.Uint32(data[payload+8 : payload+12])
-			blockAlign = binary.LittleEndian.Uint16(data[payload+12 : payload+14])
-			bitsPerSample = binary.LittleEndian.Uint16(data[payload+14 : payload+16])
-			haveFmt = true
-		case "data":
-			dataOff = payload
-			dataSize = int(chunkSize)
-			haveData = true
-		}
-		// odd size padded to even [fmt wav] [03 §8.2] C20
-		size := chunkSize
-		if size&1 != 0 {
-			size++
-		}
-		next := payload + int(size)
-		if next > len(data) {
-			return nil, fmt.Errorf("audio: %s chunk padding truncated %q", chunkID, alias)
-		}
-		off = next
-	}
-	if !haveFmt || !haveData || dataSize == 0 {
-		return nil, fmt.Errorf("audio: missing fmt or data %q", alias)
-	}
-	if audioFormat == 0 || channels == 0 || sampleRate == 0 || blockAlign == 0 {
-		return nil, fmt.Errorf("audio: invalid fmt %q", alias)
-	}
-	if audioFormat != 1 {
-		// retail corpus is PCM only; reject compressed codecs [fmt wav] unknown
-		return nil, fmt.Errorf("audio: unsupported format %d %q", audioFormat, alias)
-	}
-	if dataOff+dataSize > len(data) {
-		return nil, fmt.Errorf("audio: data out of range %q", alias)
-	}
-	// Validate block align / byte rate for known retail profiles but do not reject
-	// mismatched authoring; preserve header as authored.
-	if bitsPerSample != 8 && bitsPerSample != 16 {
-		return nil, fmt.Errorf("audio: unsupported bits %d %q", bitsPerSample, alias)
-	}
-	expectedAlign := uint16(channels) * bitsPerSample / 8
-	if expectedAlign != blockAlign {
-		// divergences from retail authoring are not fatal; keep header value
-		// but ensure payload alignment will be checked below
-	}
-	dup := make([]byte, dataSize)
-	copy(dup, data[dataOff:dataOff+dataSize])
-	// Retail submits the declared data bytes to the device and truncates a
-	// partial final frame.  A misaligned payload is therefore playable rather
-	// than a malformed-container failure.
-	if rem := len(dup) % int(blockAlign); rem != 0 {
-		dup = dup[:len(dup)-rem]
-	}
-	return &Sample{
-		Alias:         alias,
-		Container:     "RIFF",
-		AudioFormat:   audioFormat,
-		Channels:      channels,
-		SampleRate:    sampleRate,
-		ByteRate:      byteRate,
-		BlockAlign:    blockAlign,
-		BitsPerSample: bitsPerSample,
-		Data:          dup,
-	}, nil
-}
-
-// decodeDIGI parses the big-endian HSHD+SDAT wrapper [fmt wav] [03 §8.2] C20.
-// It remaps 11,000→11,025 Hz and trims the established ten-byte wrapper.
-// Provenance of the wrapper/rate location is [00_fnt_pcx_wav.md §3.4] and C20.
-func decodeDIGI(alias string, data []byte) (*Sample, error) {
-	if len(data) < 32 {
-		return nil, fmt.Errorf("audio: digi too small %q", alias)
-	}
-	if string(data[8:12]) != "HSHD" {
-		return nil, fmt.Errorf("audio: digi missing HSHD %q", alias)
-	}
-	hsz := int(binary.BigEndian.Uint32(data[12:16]))
-	if hsz < 8 || 8+hsz > len(data) {
-		return nil, fmt.Errorf("audio: digi HSHD out of range %q", alias)
-	}
-	sdatOff := 8 + hsz
-	if sdatOff+8 > len(data) || string(data[sdatOff:sdatOff+4]) != "SDAT" {
-		return nil, fmt.Errorf("audio: digi missing SDAT %q", alias)
-	}
-	sdatSize := int(binary.BigEndian.Uint32(data[sdatOff+4 : sdatOff+8]))
-	if sdatSize < 8 || sdatOff+8+sdatSize-8 > len(data) {
-		return nil, fmt.Errorf("audio: digi SDAT out of range %q", alias)
-	}
-	payloadOff := sdatOff + 8
-	payloadSize := sdatSize - 8
-
-	// The fixed rate word is at file offset 22 [03 §8.2]. It is little-endian.
-	var rate uint32 = 11025 // default per retail
-	if len(data) >= 26 {
-		rate = binary.LittleEndian.Uint32(data[22:26])
-	}
-	// [03 §8.2] C20 remap 11,000→11,025 [fmt wav] [GAP T14]
-	if rate == 11000 {
-		rate = 11025
-	}
-	// The SDAT payload includes a fixed ten-byte wrapper [03 §8.2].
-	if payloadSize < 10 {
-		return nil, fmt.Errorf("audio: digi payload negative %q", alias)
-	}
-	payloadOff += 10
-	payloadSize -= 10
-	if payloadOff+payloadSize > len(data) {
-		return nil, fmt.Errorf("audio: digi payload out of range %q", alias)
-	}
-	dup := make([]byte, payloadSize)
-	copy(dup, data[payloadOff:payloadOff+payloadSize])
-	return &Sample{
-		Alias:         alias,
-		Container:     "DIGI",
-		AudioFormat:   1,
-		Channels:      1,
-		SampleRate:    rate,
-		ByteRate:      rate, // mono 8-bit: byteRate == sampleRate [fmt wav]
-		BlockAlign:    1,
-		BitsPerSample: 8,
-		Data:          dup,
+		Alias: alias, Container: w.Container, AudioFormat: w.AudioFormat,
+		Channels: w.Channels, SampleRate: w.SampleRate, ByteRate: uint32(rate),
+		BlockAlign: uint16(align), BitsPerSample: w.BitsPerSample,
+		Data: append([]byte(nil), pcm...), Provenance: prov,
 	}, nil
 }
 
@@ -331,7 +157,7 @@ func (c *SampleCache) Get(alias string) (*Sample, bool) {
 	return s, ok
 }
 
-// Put decodes data and inserts it under alias, evicting oldest if at capacity.
+// Put decodes data and inserts it under alias.
 // It is deterministic and stable-ordered (I1).
 func (c *SampleCache) Put(alias string, data []byte) (*Sample, error) {
 	if c == nil {
@@ -380,11 +206,10 @@ func (c *SampleCache) Load(alias string) (*Sample, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := Decode(alias, data)
+	s, err := decodeSample(alias, data, prov)
 	if err != nil {
 		return nil, err
 	}
-	s.Provenance = prov
 	c.putSample(alias, s)
 	return s, nil
 }
@@ -410,11 +235,10 @@ func (c *SampleCache) LoadPath(path string) (*Sample, error) {
 	if err != nil {
 		return nil, err
 	}
-	s, err := Decode(path, data)
+	s, err := decodeSample(path, data, prov)
 	if err != nil {
 		return nil, err
 	}
-	s.Provenance = prov
 	c.putSample(path, s)
 	return s, nil
 }
@@ -436,11 +260,10 @@ func (c *SampleCache) loadCandidates(alias string, candidates []string) (*Sample
 	if err != nil {
 		return nil, err
 	}
-	s, err := Decode(alias, data)
+	s, err := decodeSample(alias, data, prov)
 	if err != nil {
 		return nil, err
 	}
-	s.Provenance = prov
 	c.putSample(alias, s)
 	return s, nil
 }

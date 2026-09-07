@@ -262,7 +262,7 @@ func (s *Service) emitBurnSmoke(inst *Instance) {
 	// (footprintz + 2z)·8)` [05 R-FEAT-01 §11 step 3].
 	px := footprintCentreWorld(inst.CX, inst.FootprintX)
 	pz := footprintCentreWorld(inst.CZ, inst.FootprintZ)
-	py := s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
+	py := s.Terrain.HeightAt(px, pz) // sample before jitter [05 R-FEAT-01 §16]
 	if s.BurnFrameGeometry != nil {
 		// The frame the cursor is on, asked for by the first visit of that
 		// frame so the resolver's cadence walk lands on it exactly.

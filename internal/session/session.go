@@ -156,8 +156,12 @@ type Session struct {
 	Snapshot *frame.Buffer
 
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
-	postLoop    *postLoopState    // once-per-pump executor tail; owned by the session goroutine [01 §4.4]
-	phase7      Phase7Service     // presentation-owned model-texture cadence [R-CRD-005 §1][I6]
+	// featurePublicationScratch is reused only while copying feature values.
+	// Entries are cleared before publication returns, so retired records are not retained.
+	featurePublicationScratch []*features.Instance
+
+	postLoop *postLoopState // once-per-pump executor tail; owned by the session goroutine [01 §4.4]
+	phase7   Phase7Service  // presentation-owned model-texture cadence [R-CRD-005 §1][I6]
 	// P28 parity tracing is nil/no-op until explicitly enabled. Selection is a
 	// sorted handle list, not a map, so it cannot affect simulation iteration.
 	parityTraceEnabled bool

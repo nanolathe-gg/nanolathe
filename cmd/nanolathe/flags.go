@@ -44,6 +44,12 @@ type Options struct {
 	ShotRenderer         string // --shot executor: "classic", "modern" or "both"
 	ShotRendererMax      int    // with "both", exit non-zero when the diff exceeds this
 	ShotGPUProfileFrames int    // repeated modern capture frames to time after warm-up
+	// ShotModel is an opt-in, isolated P3 model capture. It is deliberately
+	// separate from battle --shot so the prototype never changes runtime cadence.
+	ShotModel        string
+	ShotModelPose    string
+	ShotModelHeading uint
+	ShotModelScale   float64
 
 	// Host-side profiling. None of these reach the session: a profiled run
 	// draws the same numbers in the same order as an unprofiled one, so the
@@ -96,6 +102,10 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.ShotRenderer, "shot-renderer", "classic", "which executor --shot captures through: \"classic\" (software), \"modern\" (GPU, hidden one-frame loop) or \"both\" (classic + modern + diff)")
 	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")
 	set.IntVar(&opts.ShotGPUProfileFrames, "shot-gpu-profile-frames", 0, "with --shot-renderer modern or both, time this many frozen-scene GPU frames after warm-up")
+	set.StringVar(&opts.ShotModel, "shot-model", "", "isolated model name for an opt-in GPU preview capture (requires --renderer=modern and --shot)")
+	set.StringVar(&opts.ShotModelPose, "shot-model-pose", "", "isolated model pose: \"open\" synthetic ARMSOLAR, \"activated\" production COB pose")
+	set.UintVar(&opts.ShotModelHeading, "shot-model-heading", 0, "isolated model preview heading (0..65535)")
+	set.Float64Var(&opts.ShotModelScale, "shot-model-scale", 2, "isolated model preview scale (0.25..4)")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")
@@ -107,7 +117,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 		return opts, err
 	}
-	if opts.Shot != "" {
+	if opts.Shot != "" || opts.ShotModel != "" {
 		if err := validateShotOptions(opts); err != nil {
 			return opts, err
 		}

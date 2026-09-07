@@ -8076,30 +8076,22 @@ bytesPerSample · 2` belongs to the streaming path of [R-AUD-02 §1].
 
 ### 8.2 WAV decoding and cache
 
-**Container detection.** The loader reads magic words at fixed file offsets and
-classifies each sample as one of three kinds:
+**Established — container detection and sample bytes.** The fixed-signature
+classifier, DIGI sample-rate conversion and complete payload, RIFF first-chunk
+selection and unpadded stride, and raw fallback are owned by `[fmt wav]`,
+`[02 §7]` and `[02 R-MALF-01 §10]`. DIGI retains its complete PCM
+payload without discarding any sample prefix. RIFF's authored format tag, byte rate and alignment are
+not playback inputs: retail derives alignment from the declared channels and
+bit width. A partial final PCM frame is not played.
 
-1. **DIGI** — when the DIGI magic words are present at file offsets 0, 8, and
-   32. The rate word is read at file offset 22; a rate of 11,000 is remapped to
-   11,025. The sample payload is the file size minus the 10-byte wrapper, read
-   from the SDAT region; the format is 8-bit mono.
-2. **RIFF/WAVE** — when the RIFF and WAVE magics are present at file offsets 0
-   and 8. The chunk walk starts at file offset 12 and advances chunk to chunk
-   by the 8-byte header plus the chunk size, with odd chunk sizes padded to
-   even (one pad byte), bounded by the chunk-list end. The `fmt ` chunk must
-   carry at least 16 bytes or the decode fails; its fields are little-endian:
-   format tag at offset 0, channels at offset 2, sample rate at offset 4, byte
-   rate at offset 8, block align at offset 12, bits per sample at offset 14. A
-   matching walk locates the `data` chunk; a missing or empty `data` chunk
-   fails the decode. A data size that is not a multiple of the block align is
-   not validated — retail still plays, truncated.
-3. **Raw** — any file matching neither detector plays as unsigned 8-bit mono
-   audio at 11,025 Hz; a malformed RIFF with a bad magic therefore decodes as
-   raw noise rather than failing.
-
-Every failure path (unreadable file, undersized `fmt `, missing `data`,
-truncated chunks) closes the handle and returns silence — a failed decode never
-crashes.
+**Established — failure at playback.** Unreadable samples and failed container
+reads return a null sample and silence. Nanolathe's checked parser and supported
+PCM adapter use explicit errors at their loading boundary; the optional audio
+caller suppresses playback on failure. Rejecting unsupported codecs, invalid
+PCM widths/rates and unsafe allocations is a host-safety policy, not retail
+format-tag validation `[fmt wav "Nanolathe parser and playback policy"]`.
+The zero-length device-buffer result remains **Unknown** and is tracked at
+`[02 R-MALF-01 §10]`; Nanolathe rejects empty input pending that trace.
 
 **Allocation modes.** Each decoded sample is dispatched by a mode chosen by
 the *caller*, never by an authored field ([R-AUD-01 §1]): mode 0 creates the
@@ -8111,9 +8103,8 @@ three dispatch sites and the fail-to-silence rule are established.
 **Caching.** Samples are cached at the alias level: one static buffer per
 alias, retained for the life of the session and duplicated on demand for up
 to four simultaneous instances ([R-AUD-01 §1]), with no eviction beyond the
-alias cap of 8.3; there is no pool or LRU. (A FIFO-255 presentation
-sample cache in Nanolathe is a documented divergence, not retail
-secondary-buffer eviction.)
+alias cap of 8.3; there is no pool or LRU. Nanolathe's alias cache likewise
+retains entries until explicitly released; it has no FIFO capacity eviction.
 
 ### 8.3 Sound categories and eight-slot arbitration
 
@@ -9376,6 +9367,17 @@ body — most under `R-<id>` headings — and are not restated here.
   (contacts overwrite markers) is supported inference. Marked `TODO(question)`.
 
 ### Renderer
+
+- **Implementation reconciliation (Unknown):** the normal-scale CPU model
+  target currently commits pixels using a separate coverage plane, including
+  covered colour index 1. The researched opaque body blit keys out the image's
+  transparent index ([R-RAST-01 §7], “Tinted bodies”). The experimental GPU
+  model path follows that researched keying contract; its comparisons may
+  therefore differ at these pixels. Determine why the CPU coverage path was
+  introduced and reconcile it with the keyed-blit contract before treating
+  this case as a CPU parity oracle. This records an implementation discrepancy,
+  not a revision to the established retail contract. Marked `TODO(question)`
+  at the GPU composition site.
 
 - The unit of the terrain-record word that sizes the composition memory
   cache (read as the map height in 16.16; `n = trunc(v / 2^20) + 1`) ·

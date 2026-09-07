@@ -1,12 +1,15 @@
 package audio
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/binary"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -73,16 +76,15 @@ func TestDecode_RIFFVariants(t *testing.T) {
 	}
 }
 
-func TestDecode_RIFF_OddPadding(t *testing.T) {
-	// JUNK chunk size 3 odd + pad, then fmt/data [fmt wav] odd pad
+func TestDecode_RIFF_UnpaddedOddChunks(t *testing.T) {
+	// Retail advances by size + 8 without rounding odd chunks [fmt wav].
 	pcm := []byte{0x80, 0x81, 0x82, 0x83, 0x84} // 5 odd
 	junk := []byte("JUNK")
 	// Build manual riff with JUNK odd
-	extra := make([]byte, 8+3+1)
+	extra := make([]byte, 8+3)
 	copy(extra[0:4], "JUNK")
 	binary.LittleEndian.PutUint32(extra[4:8], 3)
 	copy(extra[8:11], junk[:3])
-	extra[11] = 0 // pad
 	fmtSize := 16
 	fmtPayload := make([]byte, 16)
 	binary.LittleEndian.PutUint16(fmtPayload[0:2], 1)
@@ -176,8 +178,8 @@ func TestDecode_DIGI_Remap(t *testing.T) {
 	if s.SampleRate != 11025 {
 		t.Fatalf("remap got %d want 11025", s.SampleRate)
 	}
-	if len(s.Data) != 10 {
-		t.Fatalf("digi len %d want 10 after SDAT wrapper trim", len(s.Data))
+	if !bytes.Equal(s.Data, pcm) {
+		t.Fatalf("DIGI lost PCM bytes: got %x, want %x", s.Data, pcm)
 	}
 	data11025 := buildDIGI(11025, pcm)
 	s2, err := Decode("digi11025", data11025)
@@ -243,18 +245,14 @@ func TestDecode_FixturesFromTestdata(t *testing.T) {
 			t.Fatalf("%s bits %d want %d", tc.path, s.BitsPerSample, tc.bits)
 		}
 	}
-	// oddpad fixture
-	for _, p := range []string{"testdata/oddpad.wav", "testdata/mono11025_8.wav"} {
-		data, err := os.ReadFile(filepath.Join("testdata", filepath.Base(p)))
-		if err != nil {
-			data, err = os.ReadFile(p)
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-		if _, err := Decode(p, data); err != nil {
-			t.Fatalf("oddpad decode %v", err)
-		}
+	// This authored standard-RIFF padding fixture is intentionally incompatible
+	// with retail's unpadded chunk walk [fmt wav].
+	data, err := os.ReadFile("testdata/oddpad.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Decode("testdata/oddpad.wav", data); err == nil {
+		t.Fatal("accepted padded odd chunk as a retail chunk walk")
 	}
 }
 
@@ -473,5 +471,126 @@ func TestInstallSoundsRelationships(t *testing.T) {
 		if int(s.SampleRate) != k.rate || int(s.Channels) != k.ch || int(s.BitsPerSample) != k.bits {
 			t.Fatalf("%s got %d %d %d want %d %d %d", k.logical, s.SampleRate, s.Channels, s.BitsPerSample, k.rate, k.ch, k.bits)
 		}
+	}
+}
+
+// Both public readers preserve the same fixed DIGI payload, even when its
+// advertised sizes lie. The first ten bytes are samples [fmt wav].
+func TestDecodeDIGIPreservesPayloadAndOwnership(t *testing.T) {
+	pcm := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 80, 90}
+	data := buildDIGI(11000, pcm)
+	binary.BigEndian.PutUint32(data[12:16], 0)
+	binary.BigEndian.PutUint32(data[36:40], ^uint32(0))
+	w, err := formats.LoadAudio(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Decode("authored-digi", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.DataOffset != 40 || w.DataSize != uint32(len(pcm)) || w.SampleRate != 11025 || !bytes.Equal(s.Data, pcm) {
+		t.Fatalf("DIGI metadata=%+v, samples=%x", w, s.Data)
+	}
+	data[40] = 255
+	if !bytes.Equal(s.Data, pcm) {
+		t.Fatal("sample aliases source bytes")
+	}
+}
+
+func TestDecodeRIFFKeepsAuthoredMetadataSeparateFromPlayback(t *testing.T) {
+	data := buildRIFF(1, 11025, 16, []byte{1, 2, 3})
+	binary.LittleEndian.PutUint16(data[32:34], 99)
+	binary.LittleEndian.PutUint32(data[28:32], 1)
+	w, err := formats.LoadWAV(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := Decode("alignment", data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.BlockAlign != 99 || w.ByteRate != 1 || w.DataSize != 3 {
+		t.Fatalf("parser changed authored metadata: %+v", w)
+	}
+	if s.BlockAlign != 2 || s.ByteRate != 22050 || !bytes.Equal(s.Data, []byte{1, 2}) {
+		t.Fatalf("playback did not derive complete PCM frames: %+v", s)
+	}
+	binary.LittleEndian.PutUint16(data[20:22], 7)
+	if _, err := formats.LoadWAV(data); err != nil {
+		t.Fatal("lossless parser rejected format tag", err)
+	}
+	if _, err := Decode("compressed", data); err == nil {
+		t.Fatal("playback accepted unsupported codec")
+	}
+}
+
+func TestInstalledWAVPayloadsUseCanonicalParser(t *testing.T) {
+	fs := vfs.New()
+	if err := fs.MountGameDirectory(testsupport.RetailRoot(t)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	manifest, err := fs.Manifest(vfs.ManifestOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := make(map[string]bool)
+	checked := 0
+	for _, rec := range manifest {
+		path := strings.ToLower(rec.LogicalPath)
+		if filepath.Ext(path) != ".wav" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		data, err := fs.ReadFileLimit(path, 16<<20)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		w, err := formats.LoadAudio(data)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		s, err := Decode(path, data)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		pcm := data[uint64(w.DataOffset) : uint64(w.DataOffset)+uint64(w.DataSize)]
+		pcm = pcm[:len(pcm)-len(pcm)%int(s.BlockAlign)]
+		if !bytes.Equal(s.Data, pcm) {
+			t.Fatalf("%s: PCM changed", path)
+		}
+		if path == "sounds/sing.wav" {
+			if w.DataOffset != 40 || !bytes.Equal(s.Data, data[40:]) {
+				t.Fatal("stock DIGI payload changed")
+			}
+			t.Logf("%s: %d bytes, sha256 %x", path, len(s.Data), sha256.Sum256(s.Data))
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no WAV files found")
+	}
+	t.Logf("decoded %d unique winning WAV files", checked)
+}
+
+func TestSampleDecodeFailureKeepsProvider(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "sounds"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := buildRIFF(1, 11025, 8, []byte{128})
+	binary.LittleEndian.PutUint16(data[20:22], 7)
+	if err := os.WriteFile(filepath.Join(root, "sounds", "broken.wav"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = fs.Close() })
+	_, err := NewCache(fs).Load("broken")
+	if err == nil || !strings.Contains(err.Error(), "logical path sounds/broken.wav, providers searched [sounds/broken.wav], expected supported PCM") {
+		t.Fatalf("decode error lost VFS provenance: %v", err)
 	}
 }

@@ -1,0 +1,108 @@
+#!/bin/sh
+# Capture the reviewed isolated-model matrix. This is a device diagnostic: the
+# classic image is written at each command path, the modern image and diff are
+# written beside it, and stderr logs retain GPU/CPU route counters.
+#
+#   tools/gpu-model-preview OUTDIR
+#   NANOLATHE_TA_ROOT=/path/to/TotalAnnihilation tools/gpu-model-preview OUTDIR
+#
+# The open ARMSOLAR rows use the named synthetic PieceView pose. Activated
+# ARMSOLAR rows run the compiled UnitDef through the production unit binding and
+# snapshot the settled COB Activate result; the two pose families stay separate.
+set -u
+
+usage() {
+	echo "usage: tools/gpu-model-preview OUTDIR" >&2
+}
+
+if [ "$#" -ne 1 ]; then
+	usage
+	exit 2
+fi
+out=$1
+if [ -e "$out" ]; then
+	if [ ! -d "$out" ]; then
+		echo "gpu-model-preview: output path is not a directory: $out" >&2
+		exit 2
+	fi
+	if find "$out" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+		echo "gpu-model-preview: output directory must be empty: $out" >&2
+		exit 2
+	fi
+else
+	mkdir -p "$out" || exit 2
+fi
+
+root=$(git rev-parse --show-toplevel) || exit 2
+cd "$root" || exit 2
+printf '%s\n' "$(git rev-parse HEAD)" >"$out/REVISION"
+git status --short >"$out/WORKTREE"
+cat >"$out/COMMANDS" <<'EOF'
+# Each command uses --renderer=modern --shot-renderer=both. The command's
+# classic output is <id>.png, modern output is <id>.modern.png, and the
+# diagnostic difference is <id>.diff.png.
+EOF
+: >"$out/FAILURES"
+
+export NANOLATHE_RETAIL_ASSETS="${NANOLATHE_RETAIL_ASSETS:-${NANOLATHE_TA_ROOT:-$HOME/TotalAnnihilation}}"
+build_dir=$(mktemp -d -t nanolathe-gpu-model.XXXXXX)
+trap 'rm -rf "$build_dir"' EXIT
+if ! go build -o "$build_dir/nanolathe" ./cmd/nanolathe >"$out/build.log" 2>&1; then
+	echo "gpu-model-preview: build failed; see $out/build.log" >&2
+	exit 1
+fi
+
+failed=0
+run_capture() {
+	id=$1
+	model=$2
+	pose=$3
+	heading=$4
+	scale=$5
+	shot="$out/$id.png"
+	log="$out/$id.log"
+	posearg=
+	if [ "$pose" = open ]; then
+		posearg="--shot-model-pose=open"
+	elif [ "$pose" = activated ]; then
+		posearg="--shot-model-pose=activated"
+	fi
+	printf '%s\n' "NANOLATHE_TA_ROOT=\"$NANOLATHE_RETAIL_ASSETS\" go run ./cmd/nanolathe --root=\"$NANOLATHE_RETAIL_ASSETS\" --shot-model=$model --shot-model-heading=$heading --shot-model-scale=$scale --shot-size=320x240 --renderer=modern --shot-renderer=both --shot-renderer-max=2147483647 $posearg --shot=\"$shot\"" >>"$out/COMMANDS"
+	if [ "$pose" = open ] || [ "$pose" = activated ]; then
+		if NANOLATHE_TA_ROOT="$NANOLATHE_RETAIL_ASSETS" "$build_dir/nanolathe" --root="$NANOLATHE_RETAIL_ASSETS" --shot-model="$model" --shot-model-heading="$heading" --shot-model-scale="$scale" --shot-size=320x240 --renderer=modern --shot-renderer=both --shot-renderer-max=2147483647 $posearg --shot="$shot" >"$log" 2>&1; then
+			printf '%s: capture complete\n' "$id"
+			return
+		fi
+	else
+		if NANOLATHE_TA_ROOT="$NANOLATHE_RETAIL_ASSETS" "$build_dir/nanolathe" --root="$NANOLATHE_RETAIL_ASSETS" --shot-model="$model" --shot-model-heading="$heading" --shot-model-scale="$scale" --shot-size=320x240 --renderer=modern --shot-renderer=both --shot-renderer-max=2147483647 --shot="$shot" >"$log" 2>&1; then
+			printf '%s: capture complete\n' "$id"
+			return
+		fi
+	fi
+	printf '%s\n' "$id" >>"$out/FAILURES"
+	echo "$id: capture failed; see $log" >&2
+	failed=$((failed + 1))
+}
+
+# Headings exercise the native projected rings at quarter turns. Scale 2 is a
+# diagnostic enlarged view; it remains the same fixed-size preview surface.
+for pose in closed open activated; do
+	for heading in 0 16384 32768 49152; do
+		for scale in 1 2; do
+			id="armsolar-${pose}-h${heading}-x${scale}"
+			run_capture "$id" armsolar "$pose" "$heading" "$scale"
+		done
+	done
+done
+for heading in 0 16384 32768 49152; do
+	for scale in 1 2; do
+		id="armcom-closed-h${heading}-x${scale}"
+		run_capture "$id" armcom closed "$heading" "$scale"
+	done
+done
+
+if [ "$failed" -ne 0 ]; then
+	echo "gpu-model-preview: $failed capture(s) failed; outputs in $out" >&2
+	exit 1
+fi
+echo "gpu-model-preview: captures complete; inspect paired PNGs and route logs in $out"

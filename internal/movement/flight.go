@@ -68,16 +68,10 @@ type FlightState struct {
 	// "vertical-hold sentinel" described the effect; [04 R-AIR-01 §15] gives
 	// the role, which is off-map.
 	//
-	// This has no production writer, and that is correct rather than missing.
-	// Retail's only writers are on the footprint stamp — an out-of-bounds stamp
-	// links the off-map record, any other stamp links a real sector. An
-	// airborne mover holds no ground cells and performs no stamp (see the
-	// commit note in airorders.go), so it carries whatever its takeoff stamp
-	// wrote, and a takeoff always happens inside the map. The field is
-	// therefore false for every reachable case in this build, which is the
-	// value retail would also hold. Give it a writer only alongside an
-	// occupancy model that can stamp out of bounds; until then a writer would
-	// be inventing the transition.
+	// syncStampedAirSector updates this mirror after footprint reconciliation.
+	// CollisionState owns the canonical sector identity for both airborne and
+	// grounded consumers; an out-of-bounds stamp selects the sentinel, and an
+	// in-bounds stamp selects a grid sector [04 R-COLL-01 §4][04 R-AIR-01 §5].
 	OffMap bool
 
 	TargetX  int32 // command X 16.16 [04 §10.1] horizontal accel

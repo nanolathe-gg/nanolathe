@@ -27,8 +27,11 @@ import (
 // sampling recovers both bytes (C-G4). Opacity is baked from the frame's own
 // Transparent mask, the same signal every classic byte writer tests — the raw
 // color key, the RLE skip runs and the composite coverage all reduce to it
-// [fmt gaf]. A texel past the decoded pixel length is transparent, matching the
-// byte writers' short-array skip.
+// [fmt gaf]. Red is retained even for a transparent-marked texel: model faces
+// use the raw resolved texture index for ownership, while ordinary keyed
+// blitters use green to skip it. A texel past the decoded pixel length is
+// transparent and remains index zero, matching the byte writers' short-array
+// skip.
 func buildGAFFrameImage(f *formats.GAFFrame) *ebiten.Image {
 	fw, fh := int(f.Width), int(f.Height)
 	if fw <= 0 || fh <= 0 {
@@ -40,9 +43,11 @@ func buildGAFFrameImage(f *formats.GAFFrame) *ebiten.Image {
 	for i := 0; i < fw*fh; i++ {
 		// Opaque iff the pixel exists and is not flagged transparent — the same
 		// admission blitGAFFrame and uiBlitClippedRaw make per pixel [03 §4.4].
+		if i < np {
+			buf[i*4+0] = f.Pixels[i]
+		}
 		opaque := i < np && (i >= nt || !f.Transparent[i])
 		if opaque {
-			buf[i*4+0] = f.Pixels[i]
 			buf[i*4+1] = 255
 		}
 		buf[i*4+3] = 255

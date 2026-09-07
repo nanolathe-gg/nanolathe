@@ -94,11 +94,14 @@ func (s *shotMillisSource) Millis32() uint32 {
 // pixel comes from the production composer, and the session is stepped through
 // the ordinary viewer step so the frame captured is a genuinely committed one.
 func runShot(opts Options, cs *contentSet) error {
-	if opts.Shot == "" {
-		return fmt.Errorf("nanolathe: shot: no output path: logical path <command line>, providers searched [none], expected --shot <file.png>")
-	}
 	if err := validateShotOptions(opts); err != nil {
 		return err
+	}
+	if opts.ShotModel != "" {
+		return runModelShot(opts, cs)
+	}
+	if opts.Shot == "" {
+		return fmt.Errorf("nanolathe: shot: no output path: logical path <command line>, providers searched [none], expected --shot <file.png>")
 	}
 	request, _, err := headlessFreshBattleRequest(opts, cs, newBattleSeedSource(opts))
 	if err != nil {
@@ -318,11 +321,34 @@ func runShot(opts Options, cs *contentSet) error {
 }
 
 func validateShotOptions(opts Options) error {
+	if opts.ShotModel != "" {
+		if opts.Shot == "" {
+			return fmt.Errorf("nanolathe: shot model: requires --shot <file.png>")
+		}
+		if opts.Renderer != "modern" {
+			return fmt.Errorf("nanolathe: shot model: requires --renderer=modern, got %q", opts.Renderer)
+		}
+		if opts.ShotGPUProfileFrames > 0 {
+			return fmt.Errorf("nanolathe: shot model: --shot-gpu-profile-frames is supported by battle captures only; omit --shot-model to profile a committed scene")
+		}
+		if opts.ShotModelHeading > 65535 {
+			return fmt.Errorf("nanolathe: shot model: --shot-model-heading must be 0..65535, got %d", opts.ShotModelHeading)
+		}
+		if !(opts.ShotModelScale >= 0.25 && opts.ShotModelScale <= 4) {
+			return fmt.Errorf("nanolathe: shot model: --shot-model-scale must be 0.25..4, got %.3g", opts.ShotModelScale)
+		}
+		if opts.ShotModelPose != "" && opts.ShotModelPose != "open" && opts.ShotModelPose != "activated" {
+			return fmt.Errorf("nanolathe: shot model: --shot-model-pose wants \"open\" or \"activated\", got %q", opts.ShotModelPose)
+		}
+	}
 	if opts.ShotGPUProfileFrames < 0 {
 		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames must be nonnegative, got %d", opts.ShotGPUProfileFrames)
 	}
 	if opts.ShotGPUProfileFrames > 0 && opts.Renderer != "modern" {
 		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --renderer=modern, got %q", opts.Renderer)
+	}
+	if (opts.ShotRenderer == "modern" || opts.ShotRenderer == "both") && opts.Renderer != "modern" {
+		return fmt.Errorf("nanolathe: shot: --shot-renderer=%s requires --renderer=modern, got %q", opts.ShotRenderer, opts.Renderer)
 	}
 	if opts.ShotGPUProfileFrames > 0 && opts.ShotRenderer != "modern" && opts.ShotRenderer != "both" {
 		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --shot-renderer modern or both, got %q", opts.ShotRenderer)

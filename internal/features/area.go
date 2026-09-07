@@ -61,7 +61,13 @@ func (s *Service) AreaCandidateAt(cx, cz int) (AreaCandidate, bool) {
 		return AreaCandidate{}, false
 	}
 	cand := AreaCandidate{CX: ax, CZ: az}
-	if inst, live := s.instances[az*w+ax]; live && inst != nil {
+	// A resting sprite's convenience record is not an attached instance.
+	// The anchor bit selects the stored-position branch [06 R-WPN-04 §3].
+	if s.Terrain.Plot[az*w+ax].Occupied() {
+		inst := s.instances[az*w+ax]
+		if inst == nil {
+			return AreaCandidate{}, false // no record available for the attached slot
+		}
 		cand.X, cand.Y, cand.Z = inst.X, inst.Y, inst.Z
 		return cand, true
 	}

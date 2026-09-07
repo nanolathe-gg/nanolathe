@@ -54,6 +54,7 @@ func TestLoadAudioNormalizesRetailLegacyContainers(t *testing.T) {
 	copy(digi[0:4], "DIGI")
 	copy(digi[8:12], "HSHD")
 	binary.BigEndian.PutUint32(digi[12:16], 24)
+	binary.LittleEndian.PutUint32(digi[22:26], 11000)
 	copy(digi[32:36], "SDAT")
 	binary.BigEndian.PutUint32(digi[36:40], 11)
 	copy(digi[40:], raw)
@@ -91,5 +92,83 @@ func TestLoadAudioNormalizesRetailLegacyContainers(t *testing.T) {
 	bad.ByteRate = 0
 	if _, err := EncodeWAV(raw, &bad); err == nil {
 		t.Fatal("invalid PCM metadata was encoded")
+	}
+}
+
+func authoredWAVChunk(name string, payload []byte) []byte {
+	chunk := append([]byte(name), binary.LittleEndian.AppendUint32(nil, uint32(len(payload)))...)
+	return append(chunk, payload...)
+}
+
+func authoredRIFF(chunks ...[]byte) []byte {
+	data := make([]byte, 12)
+	copy(data, "RIFF")
+	copy(data[8:], "WAVE")
+	for _, chunk := range chunks {
+		data = append(data, chunk...)
+	}
+	binary.LittleEndian.PutUint32(data[4:8], uint32(len(data)-8))
+	return data
+}
+
+func TestWAVFirstChunksAndDeclaredSpan(t *testing.T) {
+	fmtBody := make([]byte, 16)
+	binary.LittleEndian.PutUint16(fmtBody, 1)
+	binary.LittleEndian.PutUint16(fmtBody[2:], 1)
+	binary.LittleEndian.PutUint32(fmtBody[4:], 11025)
+	binary.LittleEndian.PutUint16(fmtBody[14:], 8)
+	firstFmt := authoredWAVChunk("fmt ", fmtBody)
+	binary.LittleEndian.PutUint32(fmtBody[4:], 22050)
+	secondFmt := authoredWAVChunk("fmt ", fmtBody)
+	firstData := authoredWAVChunk("data", []byte{1, 2, 3})
+	secondData := authoredWAVChunk("data", []byte{9})
+	for _, chunks := range [][][]byte{
+		{authoredWAVChunk("JUNK", []byte{8, 7, 6}), firstFmt, secondFmt, firstData, secondData},
+		{firstData, secondData, firstFmt, secondFmt},
+	} {
+		data := authoredRIFF(chunks...)
+		w, err := LoadWAV(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.SampleRate != 11025 || w.DataSize != 3 || string(data[w.DataOffset:uint64(w.DataOffset)+uint64(w.DataSize)]) != string([]byte{1, 2, 3}) {
+			t.Fatalf("first chunk selection = %+v", w)
+		}
+	}
+	data := authoredRIFF(firstFmt)
+	data = append(data, firstData...)
+	if _, err := LoadWAV(data); err == nil {
+		t.Fatal("accepted data chunk beyond declared RIFF span")
+	}
+	data = authoredRIFF(firstFmt, firstData)
+	data = append(data, []byte("unparsed outside span")...)
+	if _, err := LoadWAV(data); err != nil {
+		t.Fatal("trailing bytes changed selected records", err)
+	}
+	for _, payload := range [][]byte{nil, {1, 2}} {
+		data = authoredRIFF(firstFmt, authoredWAVChunk("data", payload))
+		binary.LittleEndian.PutUint32(data[len(data)-len(payload)-4:], 10)
+		if _, err := LoadWAV(data); err == nil {
+			t.Fatal("accepted short data read")
+		}
+	}
+}
+
+func TestWAVFixedSignatureFallbackAndEmptyData(t *testing.T) {
+	data := make([]byte, 40)
+	copy(data, "DIGI")
+	copy(data[8:], "HSHD")
+	// A missing fixed SDAT marker selects raw, even with a DIGI prefix.
+	w, err := LoadAudio(data)
+	if err != nil || w.Container != "raw" || w.DataOffset != 0 {
+		t.Fatalf("fallback = %+v, %v", w, err)
+	}
+	copy(data[32:], "SDAT")
+	if _, err := LoadAudio(data[:36]); err == nil {
+		t.Fatal("accepted truncated recognized DIGI")
+	}
+	fmtBody := make([]byte, 16)
+	if _, err := LoadWAV(authoredRIFF(authoredWAVChunk("fmt ", fmtBody), authoredWAVChunk("data", nil))); err == nil {
+		t.Fatal("accepted zero-length RIFF data")
 	}
 }

@@ -6384,13 +6384,14 @@ authored order: identifier, then argument one through four. The write opcode
 pops the value first and the identifier second and passes identifier-then-value
 — confirmed at the interpreter site as well as at the compiler (§4.7).
 
-**Established — two further read opcodes exist that `[fmt cob]` does not
-list.** Beside the two value-reading opcodes, the interpreter binds a
+**Established — two further read opcodes are listed in `[fmt cob]`.** Beside
+the two value-reading opcodes, the interpreter binds a
 one-argument opcode that routes to the cargo-membership query and a
 zero-argument opcode that routes to the carrier-identity query (both described
 in §4.4). They are ordinary stack opcodes: the first pops one value and pushes
 one, the second pops nothing and pushes one. Neither is emitted by shipped
-content, which is why the format document's opcode table has no row for them.
+content; the format table identifies both as engine-read slots without an
+attested BOS spelling.
 
 ### Port read arithmetic [R-COB-03 §2]
 
@@ -10871,8 +10872,8 @@ building class; the same byte that selects the yard-map parse and sets flags
 bit 29 at creation) is validated by the yard-map placement validator of
 [R-P0-08] with self identity 0 and no profile, whatever the mode. Otherwise a
 mode other than `1` returns **1 (legal) without scanning a cell**: airborne
-units, and the load-only modes 0 and 3, are never blocked by occupancy,
-features or terrain once inside the map.
+units, attached/parked mode 0, and save-restored mode 3 are never blocked by
+occupancy, features or terrain once inside the map.
 
 **Established — the mode-1 scan.** Rows Z outer, columns X inner over the
 `fz × fx` rectangle; the first failing test returns 0 and every test is
@@ -11514,9 +11515,10 @@ mirrored into the unit, not a static family: `1` is **grounded** — on the
 ground or on the surface, moving or not (the setter that writes `1` zeroes
 velocity and runs one lean-decay step) — and `2` is **airborne** (the flight
 integrator runs only for `2` and the pickup validator rejects candidates
-whose mode is `2`) — [R-MOV-01 §8]. Modes `0` and `3` are preserved through
-save and load but have no ordinary bounded gameplay producer and are used only
-as `0`-mappings in the classifier below.
+whose mode is `2`) — [R-MOV-01 §8]. Mode `0` is the ordinary
+attached/parked state [R-AIR-01 §3]. Mode `3` is preserved by save/load but
+its ordinary gameplay producer remains **Unknown**. Both map to band `0`
+in the classifier below.
 
 **Established fact:** `setSFXoccupy` is a five-value classifier with sequential overwrite and edge-triggered caching. It is computed from the committed mover-mode mirror, signed integer height `wy` (the signed high word of 16.16 Y, same domain as the sea-level byte `wt`), authored waterline byte `wl`, the definition's signed 16-bit **model-top** word `mt` — the high half of the model total-height dword ([R-MOV-01 §8b]) — and the cached prior band. All comparisons are signed integers in height-byte units, not 16.16 world units:
 
@@ -11536,35 +11538,25 @@ The three underwater tests are ordered overwrites `1→2→3` — `3` wins if bo
 
 ### Mover modes are grounded and airborne, not stopped and moving [R-MOV-01 §8]
 
-**Established by a census of every runtime mode writer:**
+**Established:** the constructor starts a mover at mode `1`. The air-order
+setter writes `2` on takeoff and `1` on landing: `2` raises activation and
+emits `Activate`; `1` clears activation, zeroes velocity and scalar speed,
+and runs one zero-delta lean-decay step [R-AIR-01 §3]. These are not the
+only mode writers: the shared attachment commit writes mode `0` for ordinary
+attachment, including transport cargo and parked aircraft, and accepts the
+request's low two mode bits [R-COB-03 §5][R-UNIT-06 §3].
 
-* The mover constructor writes mode `1`. Every unit, ground or air, starts at
-  `1`.
-* The only runtime mode writer is one two-valued setter, and its only callers
-  are the **air** order executors, which pass `2` on takeoff (gated on the
-  current mode being `1`) and `1` on landing. No ground order handler writes a
-  mode at all.
-* Writing `2` raises the unit's activation bit and emits `Activate`; writing
-  `1` clears it and emits `Deactivate`, after zeroing velocity and speed and
-  running one zero-delta lean-decay step.
+**Established contract:** mode `1` is grounded, including surface movement;
+mode `2` is airborne; mode `0` is attached/parked. Ground locomotion does not
+switch modes merely because a unit starts or stops moving. The post-move
+height/orientation correction runs for mode `1`; the flight integrator runs
+for mode `2` and zeroes motion for the other modes. Transport pickup rejects
+an airborne candidate rather than a moving grounded candidate.
 
-**The contract.** Mode `1` is **on the ground or on the
-surface** and mode `2` is **airborne**. A ground unit is in mode `1` for its
-entire life, moving or not; a `canfly` unit is in mode `1` while landed and `2`
-while flying. This is what makes the rest of the machinery coherent: the
-post-move Y/orientation correction of `[R-MOV-01 §5]` runs only for mode `1`,
-so it owns the height of everything that is not flying and never fights the
-flight integrator; the flight integrator zeroes all velocity for any mode but
-`2`, which is how a landed aircraft sits still on its pad; and the transport
-pickup rejects mode `2` because it will not pick up an **airborne** candidate,
-not because it will not pick up a moving one (section 10.2's transport
-reject 6).
-
-The band classifier of §9.1 is consistent: its `mode not in {1,2}` guard
-means "not grounded and not airborne", which in practice means only the
-save-installed modes `0` and `3`. Those two are producerless in ordinary
-gameplay — the constructor cannot write them and the setter is two-valued —
-and reach a unit only through a save file.
+The band classifier of §9.1 maps modes outside `{1,2}` to band `0`. Ordinary
+attached/parked mode `0` reaches this arm. Mode `3` also reaches it after a
+save restore, but its ordinary gameplay producer remains **Unknown**; the
+writer census and settling trace are retained in [R-AIR-01 §3].
 
 ### Where the band classifier sits, and hover locomotion [R-MOV-01 §8a]
 
@@ -13711,6 +13703,12 @@ and the decider that would close it.
 
 ### COB
 
+- **Unknown:** why the stock ARMCK lifecycle diagnostic reports
+  `Create:finish-abnormal` after the deferred-start wake/drain boundary rather
+  than a normal return · [R-P28-COB-01R], §4.2, §4.3, §5.3 · trace the callback
+  identity through signal, interpreter termination and slot reuse, then compare
+  the diagnostic's expectation. The current test retains `TODO(question)`
+  after checking the known pose and StartBuilding/StopBuilding phases.
 - The first committed retail ARMCK pose, and whether its authored waiting
   `Create` work advances before that publication · [R-P28-COB-01R] · manual
   retail observation (the paired settling probe).
@@ -13752,6 +13750,11 @@ and the decider that would close it.
 
 ### Terrain and pathfinding
 
+- **Unknown:** whether opening a ray-visited blocked cell preserves its status
+  bit 3, and whether the pop-time blocked re-test consults that bit ·
+  [R-PATH-01 §1] · trace both the open write and pop re-test. Nanolathe currently
+  replaces the status byte on open, so that bit is lost; `search.go` retains
+  `TODO(question)` instead of treating this choice as a traced contract.
 - Full static feature and yard-map interaction with the class layer's feature
   gate · §7.1 [R-DOC04-B] · static trace.
 - Which of the two last-row anchor counts retail's own class layer holds on
@@ -13773,6 +13776,12 @@ and the decider that would close it.
 
 ### Ground movement
 
+- **Unknown implementation connection:** which maintained ground/flight turn
+  residual reaches callback classification at the commit boundary · §5.2,
+  [R-MOV-01 §6] · trace each steering writer through the classifier read.
+  Nanolathe currently reads the collision record's zero/restored value while
+  flight maintains a separate residual; `integrate.go` marks this gap with
+  `TODO(question)`.
 - The emergent head-on deadlock timing — first divergent route between 30
   and 60 ticks after the block — is a Supported inference from two
   Established mechanisms · §8.2 [R-COLL-01 §7] · manual retail observation
@@ -13780,6 +13789,10 @@ and the decider that would close it.
 
 ### Hover and VTOL
 
+- **Unknown:** runtime meaning of the code-3 air-velocity save marker's
+  auxiliary and trailing padding words · [08 R-SAVE-02 §8] · trace constructor,
+  save and execution readers. Nanolathe preserves the staged words without
+  inventing live fields; `retail_restore.go` retains `TODO(question)`.
 - Ordinary gameplay producer of mover mode `3` · §9.1 [R-AIR-01 §3] · static
   trace of the save/network stream writer that supplies the reduced flight
   controller's 2-bit mode field. Modes `0` (attached/parked), `1` (grounded)

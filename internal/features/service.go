@@ -997,9 +997,9 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	if pos != nil {
 		inst.X, inst.Y, inst.Z = pos[0], pos[1], pos[2]
 	} else {
-		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 		inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 		inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+		inst.Y = s.Terrain.HeightAt(inst.X, inst.Z) // centre sample [05 R-FEAT-01 §3]
 	}
 	// The second optional pointer, read the same way: the supplied triple
 	// verbatim, or three zeros [05 "Feature instance and terrain cell"].
@@ -1286,16 +1286,23 @@ func (s *Service) InstanceAt(cx, cz int) *Instance {
 	return s.instances[idx]
 }
 
-// Instances returns all live instances in deterministic order.
-func (s *Service) Instances() []*Instance {
-	keys := s.sortedInstanceKeys()
-	out := make([]*Instance, 0, len(keys))
-	for _, k := range keys {
-		if inst, ok := s.instances[k]; ok && inst != nil {
-			out = append(out, inst)
+// AppendInstances appends live records in ascending row/anchor order to dst.
+// The caller owns the slice; records remain borrowed from the service. This
+// read-only lookup order is separate from the active simulation list
+// [05 "Feature instance and terrain cell"][I1].
+func (s *Service) AppendInstances(dst []*Instance) []*Instance {
+	for _, key := range s.sortedInstanceKeys() {
+		if inst := s.instances[key]; inst != nil {
+			dst = append(dst, inst)
 		}
 	}
-	return out
+	return dst
+}
+
+// Instances returns a pointer snapshot in deterministic row/anchor order.
+// Callers that reuse storage can use AppendInstances instead.
+func (s *Service) Instances() []*Instance {
+	return s.AppendInstances(make([]*Instance, 0, len(s.instances)))
 }
 
 // PopulateFromTerrain scans the terrain plot and creates live instances for every
@@ -1373,9 +1380,9 @@ func (s *Service) PopulateFromTerrain() int {
 				FootprintX: footX,
 				FootprintZ: footZ,
 			}
-			inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 			inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+			inst.Y = s.Terrain.HeightAt(inst.X, inst.Z) // map stamp [05 R-FEAT-01 §3]
 			s.setInstance(idx, inst)
 			// A map-authored vent reaches its instance here rather than through
 			// spawnFeatureAt, because the map loader writes the plot grid
@@ -1661,9 +1668,9 @@ func (s *Service) newInstanceAt(cx, cz int, def *content.FeatureDef) *Instance {
 		FootprintX: footX,
 		FootprintZ: footZ,
 	}
-	inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 	inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 	inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+	inst.Y = s.Terrain.HeightAt(inst.X, inst.Z) // reconstructed stamp [05 R-FEAT-01 §3]
 	return inst
 }
 

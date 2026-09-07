@@ -456,11 +456,12 @@ document carries them.
   `[03 R-AUD-02 §2]`.
 * **C19 No feedback.** Audio state never enters the simulation and no audio path
   draws from the simulation RNG [I4] [I6].
-* **C20 Samples.** WAV loading accepts raw audio, the retail
-  `DIGI`/`HSHD`/`SDAT` containers, and RIFF WAVE; RIFF `fmt ` and `data` chunks
-  honour the observed odd-byte padding; raw input defaults to 11,025 Hz mono
-  8-bit; the DIGI path remaps 11,000 Hz to 11,025 Hz and trims the established
-  ten-byte wrapper. Samples resolve through VFS provenance and cache by alias.
+* **C20 Samples.** `formats.LoadAudio` owns detection, metadata and payload
+  bounds for raw PCM, DIGI and RIFF under `[fmt wav]`. `internal/audio.Decode`
+  takes an owned PCM copy, derives playback frame alignment from channels and
+  bit width, and applies the documented host-safety policy for unsupported or
+  malformed PCM. No second decoder walks chunks or trims a DIGI prefix.
+  Samples resolve through VFS provenance and cache by alias.
   There is **no eviction at all** — one decoded blob per alias, retained for the
   life of the session; the 255-alias cap is the registry's, not a cache size
   `[03 §8.2]` `[02 "Sound aliases"]` `[fmt wav]`.

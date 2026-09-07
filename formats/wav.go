@@ -24,23 +24,30 @@ type WAV struct {
 	DataSize      uint32
 }
 
-// LoadWAV decodes PCM metadata and samples from a RIFF/WAVE file.
+// LoadWAV reads the first fmt/data records using retail's unpadded chunk
+// stride and declared RIFF span [fmt wav][02 R-MALF-01 §10]. Metadata retains
+// authored format/alignment words; playback policy belongs to internal/audio.
 func LoadWAV(data []byte) (*WAV, error) {
 	if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
 		return nil, fmt.Errorf("wav: missing RIFF/WAVE header")
 	}
 	result := &WAV{Container: "RIFF"}
 	var haveFormat, haveData bool
-	for offset := uint64(12); offset+8 <= uint64(len(data)); {
+	span := uint64(binary.LittleEndian.Uint32(data[4:8])) + 8
+	for offset := uint64(12); offset < span; {
+		if offset+8 > uint64(len(data)) {
+			return nil, fmt.Errorf("wav: chunk header is truncated")
+		}
 		chunkID := string(data[offset : offset+4])
 		chunkSize := uint64(binary.LittleEndian.Uint32(data[offset+4 : offset+8]))
 		payload := offset + 8
+		// Checked slices are a host-safety policy for malformed containers.
 		if chunkSize > uint64(len(data))-payload {
 			return nil, fmt.Errorf("wav: %s chunk is truncated", chunkID)
 		}
-		switch chunkID {
-		case "fmt ":
-			if chunkSize < 16 {
+		switch {
+		case chunkID == "fmt " && !haveFormat:
+			if int32(chunkSize) < 16 {
 				return nil, fmt.Errorf("wav: fmt chunk is too small")
 			}
 			result.AudioFormat = binary.LittleEndian.Uint16(data[payload:])
@@ -50,38 +57,32 @@ func LoadWAV(data []byte) (*WAV, error) {
 			result.BlockAlign = binary.LittleEndian.Uint16(data[payload+12:])
 			result.BitsPerSample = binary.LittleEndian.Uint16(data[payload+14:])
 			haveFormat = true
-		case "data":
-			if chunkSize > uint64(^uint32(0)) || payload > uint64(^uint32(0)) {
-				return nil, fmt.Errorf("wav: data chunk is too large")
+		case chunkID == "data" && !haveData:
+			if int32(chunkSize) <= 0 || payload > uint64(^uint32(0)) {
+				return nil, fmt.Errorf("wav: invalid data chunk size")
 			}
 			result.DataOffset = uint32(payload)
 			result.DataSize = uint32(chunkSize)
 			haveData = true
 		}
-		if chunkSize&1 != 0 {
-			chunkSize++
+		if haveFormat && haveData {
+			return result, nil
 		}
 		offset = payload + chunkSize
 	}
-	if !haveFormat || !haveData {
-		return nil, fmt.Errorf("wav: missing fmt or data chunk")
-	}
-	if result.AudioFormat == 0 || result.Channels == 0 || result.SampleRate == 0 || result.BlockAlign == 0 {
-		return nil, fmt.Errorf("wav: invalid audio format")
-	}
-	return result, nil
+	return nil, fmt.Errorf("wav: missing fmt or data chunk")
 }
 
-// LoadAudio accepts the RIFF/WAVE files plus the two legacy raw containers
-// present in the retail sound directory: unsigned 8-bit mono PCM stored with
-// a .WAV extension, and Humongous-style DIGI/HSHD/SDAT chunks used by a small
-// set of stock sounds. The viewer can normalize both legacy forms to RIFF.
+// LoadAudio is the canonical WAV-family classifier and lossless payload
+// locator [fmt wav]. Unrecognized fixed signatures select raw PCM, including
+// a damaged DIGI signature. Recognized but truncated headers return an error.
 func LoadAudio(data []byte) (*WAV, error) {
+	if len(data) >= 36 && string(data[:4]) == "DIGI" &&
+		string(data[8:12]) == "HSHD" && string(data[32:36]) == "SDAT" {
+		return loadDIGI(data)
+	}
 	if len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WAVE" {
 		return LoadWAV(data)
-	}
-	if len(data) >= 16 && string(data[:4]) == "DIGI" {
-		return loadDIGI(data)
 	}
 	if len(data) == 0 || uint64(len(data)) > uint64(^uint32(0)) {
 		return nil, fmt.Errorf("wav: raw audio is empty or too large")
@@ -90,26 +91,15 @@ func LoadAudio(data []byte) (*WAV, error) {
 }
 
 func loadDIGI(data []byte) (*WAV, error) {
-	if len(data) < 32 || string(data[8:12]) != "HSHD" {
-		return nil, fmt.Errorf("wav: invalid DIGI/HSHD header")
+	if len(data) < 40 || uint64(len(data)-40) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("wav: DIGI sample is truncated or too large")
 	}
-	hshdSize := uint64(binary.BigEndian.Uint32(data[12:16]))
-	if hshdSize < 8 || hshdSize > uint64(len(data))-8 {
-		return nil, fmt.Errorf("wav: DIGI HSHD chunk is outside file")
+	// Fixed positions, independent of all advertised chunk sizes [fmt wav].
+	rate := binary.LittleEndian.Uint32(data[22:26])
+	if rate == 11000 {
+		rate = 11025
 	}
-	sdatOffset := 8 + hshdSize
-	if sdatOffset+8 > uint64(len(data)) || string(data[sdatOffset:sdatOffset+4]) != "SDAT" {
-		return nil, fmt.Errorf("wav: DIGI SDAT chunk is missing")
-	}
-	sdatSize := uint64(binary.BigEndian.Uint32(data[sdatOffset+4 : sdatOffset+8]))
-	if sdatSize < 8 || sdatSize-8 > uint64(len(data))-(sdatOffset+8) {
-		return nil, fmt.Errorf("wav: DIGI SDAT chunk is outside file")
-	}
-	dataOffset := sdatOffset + 8
-	if dataOffset > uint64(^uint32(0)) || sdatSize-8 > uint64(^uint32(0)) {
-		return nil, fmt.Errorf("wav: DIGI audio data is too large")
-	}
-	return &WAV{Container: "DIGI", AudioFormat: 1, Channels: 1, SampleRate: 11025, ByteRate: 11025, BlockAlign: 1, BitsPerSample: 8, DataOffset: uint32(dataOffset), DataSize: uint32(sdatSize - 8)}, nil
+	return &WAV{Container: "DIGI", AudioFormat: 1, Channels: 1, SampleRate: rate, ByteRate: rate, BlockAlign: 1, BitsPerSample: 8, DataOffset: 40, DataSize: uint32(len(data) - 40)}, nil
 }
 
 // EncodeWAV returns a canonical PCM RIFF/WAVE wrapper around the source

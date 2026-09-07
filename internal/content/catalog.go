@@ -268,7 +268,9 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
-	fillModelTops(fs, units)
+	if err := validateRequiredModels(fs, units, weapons, features); err != nil {
+		return nil, err
+	}
 	// The page-count byte is a per-record probe of the authored page windows,
 	// step 5 of the compiler's own order [02 R-CAT-01 §5].
 	fillBuildPages(fs, units)
@@ -1302,47 +1304,103 @@ func manifestHashFor(fs vfs.FSOps) (string, error) {
 	return "", nil
 }
 
-// modelTopPair is one model's top extent in both the forms the definition
-// carries: the full 16.16 dword and its whole-unit high word [06 R-DMG-01 §7].
-type modelTopPair struct {
-	fixed int32 // full 16.16 extent, floored at zero [06 R-DMG-01 §7]
-	whole int32 // the byte-masked whole-unit high word the LOS writer reads [03 §3.2]
-}
-
-// fillModelTops resolves each unit's ModelTop from its 3DO, reading every
-// distinct objects3d/<ObjectName>.3do once [03 §3.2].
-//
-// Retail computes this at model load as a 16.16 model extent and writes it as
-// the definition's upper Y bound; the LOS writer consumes only its whole-unit
-// component as the observer height addend [03 §3.2], while the projectile
-// contact test's vertical band needs the whole dword [06 R-DMG-01 §7]. Both
-// forms are stored, from one walk. A missing or unparsable model leaves both
-// zero.
-func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
-	if fs == nil || len(units) == 0 {
-		return
+// validateRequiredModels reads each distinct named model once in logical-path
+// order. A named unit objectname, weapon model, or feature object cannot
+// degrade to an empty geometry record: retail sends its model-load failure to
+// the fatal channel [02 "Cross-reference failure policy"][02 R-CAT-01 §5].
+// Empty model fields remain their record family's distinct authored policy.
+// Feature animation sequences are deliberately absent here; their GAF lookup
+// has a separate silent-null recovery [02 R-MALF-01 §5].
+func validateRequiredModels(fs vfs.FSOps, units map[string]*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) error {
+	models := requiredModelPaths(units, weapons, features)
+	if len(models) == 0 {
+		return nil
 	}
-	tops := make(map[string]modelTopPair)
+
+	loaded := make(map[string]*formats.ThreeDO, len(models))
+	for _, logical := range models {
+		info, err := fs.Stat(logical)
+		if err != nil || info.IsDir {
+			if err == nil {
+				err = fmt.Errorf("path is a directory")
+			}
+			return requiredContentError(fs, logical, "valid 3DO model", err)
+		}
+		data, err := fs.ReadFileLimit(logical, 1<<22)
+		if err != nil {
+			return requiredContentError(fs, logical, "valid 3DO model", err)
+		}
+		threeDO, err := formats.LoadThreeDO(data)
+		if err != nil {
+			return requiredContentError(fs, logical, "valid 3DO model", err)
+		}
+		loaded[logical] = threeDO
+	}
+
+	// Do not publish a partly updated set of unit heights: all required model
+	// reads and parses above complete before one definition changes [02 §5].
 	for _, u := range units {
-		name := CanonicalKey(u.ObjectName)
-		if name == "" {
+		if u == nil {
 			continue
 		}
-		top, done := tops[name]
-		if !done {
-			if data, err := fs.ReadFileLimit("objects3d/"+name+".3do", 1<<22); err == nil {
-				if model, perr := formats.LoadThreeDO(data); perr == nil {
-					raw := model.ModelTop() // 16.16, floored at zero [fmt 3do]
-					top.fixed = raw
-					// Convert the model's 16.16 extent to whole world units.
-					top.whole = (raw >> 16) & 0xFF
-				}
-			}
-			tops[name] = top
+		logical := requiredModelPath(u.ObjectName)
+		if logical == "" {
+			continue
 		}
-		u.ModelTop = top.whole
-		u.ModelTopFixed = top.fixed
+		raw := loaded[logical].ModelTop() // 16.16, floored at zero [fmt 3do]
+		u.ModelTopFixed = raw
+		// Preserve retail's whole-word masking rather than a signed conversion.
+		u.ModelTop = (raw >> 16) & 0xFF
 	}
+	return nil
+}
+
+// requiredModelPaths collects the union across all model-owning definition
+// families. The sort chooses one deterministic first failure and the map
+// makes each parsed geometry result shared by every reference to its path.
+func requiredModelPaths(units map[string]*UnitDef, weapons map[string]*WeaponDef, features map[string]*FeatureDef) []string {
+	paths := make(map[string]struct{})
+	for _, u := range units {
+		if u == nil {
+			continue
+		}
+		if logical := requiredModelPath(u.ObjectName); logical != "" {
+			paths[logical] = struct{}{}
+		}
+	}
+	for _, w := range weapons {
+		if w == nil {
+			continue
+		}
+		if logical := requiredModelPath(w.Model); logical != "" {
+			paths[logical] = struct{}{}
+		}
+	}
+	for _, f := range features {
+		if f == nil {
+			continue
+		}
+		if logical := requiredModelPath(f.Object); logical != "" {
+			paths[logical] = struct{}{}
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	logical := make([]string, 0, len(paths))
+	for path := range paths {
+		logical = append(logical, path)
+	}
+	sort.Strings(logical)
+	return logical
+}
+
+func requiredModelPath(name string) string {
+	name = CanonicalKey(name)
+	if name == "" {
+		return ""
+	}
+	return "objects3d/" + name + ".3do"
 }
 
 // fillUnitScripts resolves every unit's required compiled COB program at

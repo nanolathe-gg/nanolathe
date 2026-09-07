@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -52,6 +53,21 @@ func minimalCOB(t *testing.T) []byte {
 	return buf
 }
 
+// minimalThreeDO authors the smallest valid 3DO for the strict catalog
+// fixture. It is intentionally geometry-only: this test exercises COB
+// publication, while the named object still must satisfy catalog validation.
+func minimalThreeDO(t *testing.T) []byte {
+	t.Helper()
+	data, err := formats.EncodeThreeDO(&formats.ThreeDO{Root: 0, Objects: []formats.ThreeDOObject{{
+		Version: 1, Name: "root", Selection: -1, Parent: -1, FirstChild: -1, NextSibling: -1,
+		Vertices: []formats.ThreeDOVertex{{}},
+	}}})
+	if err != nil {
+		t.Fatalf("EncodeThreeDO: %v", err)
+	}
+	return data
+}
+
 // compileFixtureCatalog runs the real content compile over a minimal authored
 // install with a loadable COB for every unit definition.
 func compileFixtureCatalog(t *testing.T) *content.Catalog {
@@ -71,6 +87,9 @@ func compileFixtureCatalog(t *testing.T) *content.Catalog {
 	write("units/armtest.fbi", strings.ReplaceAll(fbi, "%s", "armtest"))
 	write("units/armless.fbi", strings.ReplaceAll(fbi, "%s", "armless"))
 	write("units/armnone.fbi", strings.ReplaceAll(fbi, "%s", "armnone"))
+	for _, name := range []string{"armtest", "armless", "armnone"} {
+		write("objects3d/"+name+".3do", string(minimalThreeDO(t)))
+	}
 	write("gamedata/moveinfo.tdf", "[MOVER]\n{\n}\n")
 	// content.Compile requires authored sight/LOS resources (retail semantic
 	// coverage); author the minimal one-table form the compiler accepts.

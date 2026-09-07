@@ -448,8 +448,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	published.Features = published.Features[:0]
 	if s.Features != nil {
-		insts := s.Features.Instances()
-		for _, inst := range insts {
+		s.featurePublicationScratch = s.Features.AppendInstances(s.featurePublicationScratch[:0])
+		for _, inst := range s.featurePublicationScratch {
 			if inst == nil || inst.Def == nil {
 				continue
 			}
@@ -507,6 +507,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			published.Features = append(published.Features, fv)
 		}
+		// The committed frame owns values; release the borrowed live pointers
+		// while retaining only the scratch capacity for the next publication [I6].
+		clear(s.featurePublicationScratch)
 	}
 	published.Projectiles = published.Projectiles[:0]
 	if s.Combat != nil {

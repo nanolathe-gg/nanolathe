@@ -106,7 +106,7 @@ func TestNullPositionStampKeepsTheSnappedCentre(t *testing.T) {
 	if inst.X != wantX || inst.Z != wantZ {
 		t.Fatalf("centre (%d,%d), want (%d,%d)", inst.X.Raw(), inst.Z.Raw(), wantX.Raw(), wantZ.Raw())
 	}
-	if inst.Y != terrain.CoarseHeightAt(3, 4) {
-		t.Fatalf("Y %d, want the snapped floor %d", inst.Y.Raw(), terrain.CoarseHeightAt(3, 4).Raw())
+	if inst.Y != terrain.HeightAt(wantX, wantZ) {
+		t.Fatalf("Y %d, want the snapped floor %d", inst.Y.Raw(), terrain.HeightAt(wantX, wantZ).Raw())
 	}
 }

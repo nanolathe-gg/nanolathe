@@ -39,9 +39,10 @@ func ValidateProgram(prog *Program) error {
 // Code is the opcode word array. Scripts maps script name to word index into
 // Code (word index relative to start of code section, not byte offset).
 // Pieces is the ordered piece name table. Statics is the count of static
-// variables the unit needs [fmt cob] "NumberOfStatics" — zero-initialized by
-// the engine [fmt cob] [04 §4.2]; carried on the immutable Program to avoid
-// reparse in the VM.
+// variables the unit needs [fmt cob] "NumberOfStatics", carried on the
+// immutable Program to avoid reparse in the VM. Nanolathe initializes them
+// to zero deterministically; retail leaves the allocation uninitialized
+// [04 R-COB-01 §1][04 R-COB-04 §7].
 // ScriptsByID is the script code index array in table order 0..numScripts-1,
 // preserved for the VM's script-id operand (E shape) [04 §4.3] C12.
 type Program struct {
@@ -84,7 +85,7 @@ func Load(data []byte) (*Program, error) {
 	numScripts := readU32(0x04) // NumberOfScripts [fmt cob]
 	numPieces := readU32(0x08)  // NumberOfPieces [fmt cob]
 	codeLen := readU32(0x0C)    // CodeLength [fmt cob] "Length of the code section in u32 words"
-	numStatics := readU32(0x10) // NumberOfStatics [fmt cob] — carried as Program.Statics, zero-initialized by engine [fmt cob] [04 §4.2]
+	numStatics := readU32(0x10) // NumberOfStatics [fmt cob] — allocation policy is documented on Program.Statics
 	// Word 0x14 is the record count for the trailing 8-byte record table whose
 	// pointer is word 0x28 — it is NOT a reserved word, and 0x28 is NOT a
 	// separate "first script name" offset. The retail loader relocates five

@@ -213,13 +213,14 @@ All are pure stack operations `( a b -- result )` unless noted.
 | `0x10032000` | subtract | | `0x10052000` | less-or-equal |
 | `0x10033000` | multiply | | `0x10053000` | greater |
 | `0x10034000` | divide | | `0x10054000` | greater-or-equal |
-| `0x10035000` | bitwise AND *(conventional label, unconfirmed — see below)* | | `0x10055000` | equal |
+| `0x10035000` | bitwise AND [04 §4.3] | | `0x10055000` | equal |
 | `0x10036000` | bitwise OR | | `0x10056000` | not-equal |
-| `0x10037000` | bitwise XOR *(conventional label, unconfirmed — see below)* | | `0x10057000` | logical AND |
-| `0x10038000` | bitwise NOT `( a -- ~a )` *(conventional label, unconfirmed — see below)* | | `0x10058000` | logical OR |
+| `0x10037000` | bitwise XOR [04 §4.3] | | `0x10057000` | logical AND |
+| `0x10038000` | bitwise NOT `( a -- ~a )` [04 §4.3] | | `0x10058000` | logical OR |
+| | | | `0x10059000` | word exclusive-or [04 §4.3] |
 | | | | `0x1005A000` | logical NOT `( a -- !a )` |
 
-### Reserved / unassigned slots
+### Compiler emission and reserved slots
 
 Cavedog's own Scriptor compiler (`Compiler.cfg`) and decompiler (`Decompiler.cfg`,
 `Defs.h`) — recovered from the *Scriptor v1 (RC1)* source release, the actual
@@ -228,10 +229,10 @@ operator their compiler can emit. Cross-checked against those files:
 
 | Opcode | Status |
 | --- | --- |
-| `0x10035000` | In the operator table as bare `"?"`, priority 20 — the same tier as bitwise OR (`0x10036000`) and adjacent to it numerically. Never given a real BOS keyword by Cavedog (no script, including their own retail corpus, can compile to it), but its grouping strongly favors a bitwise-family binary op (AND, per a common cross-engine convention) over modulo. |
-| `0x10037000`, `0x10038000` | **Absent from both `Compiler.cfg` and `Decompiler.cfg` entirely** — not even a placeholder token. Cavedog's own compiler cannot emit these opcodes under any BOS syntax; the decompiler falls back to printing `"UK"` if it ever sees them. Community engines' "bitwise XOR" / "bitwise NOT" labels for these are conventions, not attested by Cavedog's own tools. |
-| `0x10039000`, `0x1003A000`, `0x1003B000` | Present in the operator table only as placeholder tokens `"??"`, `"???"`, `"????"` — priority 5 (lower than logical AND/OR). Confirmed reserved-but-unused opcode slots. |
-| `0x10059000` | **Does not appear anywhere in Cavedog's Scriptor source** (not in `Defs.h`, not in either `.cfg`). The "logical XOR" label that community opcode tables give it is an unverified guess with no corroboration — treat as unconfirmed. |
+| `0x10035000` | **Established compiler limitation:** the operator table has only a bare `"?"` at priority 20, with no ordinary BOS keyword. Retail's interpreter nevertheless implements bitwise AND [04 §4.3]. |
+| `0x10037000`, `0x10038000` | **Established compiler limitation:** absent from `Compiler.cfg` and `Decompiler.cfg`; the decompiler prints `"UK"`. Retail's interpreter implements word XOR and bitwise NOT respectively [04 §4.3]. |
+| `0x10039000`, `0x1003A000`, `0x1003B000` | Present in the compiler operator table only as placeholder tokens `"??"`, `"???"`, `"????"`, priority 5. This establishes compiler placeholders, not runtime semantics. |
+| `0x10059000` | **Established compiler limitation:** absent from Scriptor's opcode definitions and both configuration tables. Retail implements word exclusive-or, not a normalized boolean XOR [04 §4.3]. |
 
 `0x10063000`, historically claimed as `call-script`'s opcode by the 1998
 community note, is in fact `CMD_FAKE_JUMP` — an internal marker the
@@ -478,26 +479,17 @@ A full decode of every COB in the retail archives (835 scripts across
 - **Opcode disagreements among the community notes — resolved against
   Cavedog's own tools.** The 1998 command note assigns `call-script` to
   `0x10063000`; that value is actually `CMD_FAKE_JUMP`, a decompiler-internal
-  marker, never a real bytecode opcode (see "Reserved / unassigned slots" above). Real
+  marker, never a real bytecode opcode (see "Compiler emission and reserved slots" above). Real
   `call-script` is `0x10062000` (`0x10061000` = start-script), confirmed by
   both retail bytecode and Scriptor's own `Defs.h`. The note also labels
   `0x1005A000` "bitwise NOT"; Scriptor's compiler config confirms it is the
   *logical* NOT (`!`/`NOT`, unary prefix, highest priority) — stock control
   flow (busy-wait on `!ready`) only works under that reading. `0x10038000`
-  has no confirmed role at all (see below).
-- **Modulo vs. bitwise AND at `0x10035000`:** more than a community guess,
-  but still unsettled. Scriptor's own operator table places it, unnamed except
-  for a bare `"?"` placeholder, at the same priority tier as bitwise OR —
-  grouping that
-  favors a bitwise-family op (AND, matching a common cross-engine
-  convention) over modulo, though Cavedog never wired a real keyword to it
-  either way.
-- **`0x10037000`, `0x10038000`, `0x10059000`:** unlike the slots above,
-  these have *zero* footprint in Cavedog's own Scriptor source — no opcode
-  name, no operator-table entry, nothing. Retail data never exercises them
-  either. Their conventional "XOR" / "bitwise NOT" / "logical XOR" labels
-  are unverified conventions borrowed from other engines' opcode tables, not
-  attested by any Cavedog source seen so far.
+  is the separate bitwise-NOT opcode [04 §4.3].
+- **Established runtime, limited compiler emission.** AND, both word-XOR
+  slots and bitwise NOT are traced interpreter operations [04 §4.3]. Their
+  absence or placeholder spelling in Scriptor does not make their runtime
+  behavior unknown; the compiler limitations are listed above.
 - **`attach-unit` / `drop-unit` stack shapes** are established from retail
   bytecode (see the instruction table): all 48 retail call sites are uniform,
   including the `piece = -1` idiom, and the compiler-supplied third value is
@@ -506,8 +498,11 @@ A full decode of every COB in the retail archives (835 scripts across
   `1` grounded, `2` airborne) — `[04 R-COB-03 §5]`.
 - **Sleep and wait runtime behavior** is established in [04 §4.2] and
   [04 §4.6]. This file retains only the opcode and authored-duration encoding.
-- The header word at 0x28 (first-script-name pointer) has no known runtime
-  purpose.
+- **Established header layout:** file word `0x28` points to the trailing
+  record table counted by word `0x14`; it is not a first-script-name pointer.
+  The record meaning and any runtime reader remain **Unknown**, as described
+  in "The trailing record table" above; a nonempty authored table or a traced
+  reader would settle that residual.
 - **Loader edges.** The file is read whole; a
   missing or zero-length script is a null script pointer and the first unit
   created from the definition crashes (`[04 R-COB-04 §8]`). The five table

@@ -739,18 +739,15 @@ func (s *Service) reactionUnderAttackNotice(victim *units.Unit) {
 	r.UnderAttackNotice(victim)
 }
 
-// ApplyHealing performs the early healing path [06 §9.1]: adds packet's
-// unsigned 16-bit amount to signed current health in 32-bit arithmetic,
-// compares against maximum health as unsigned, clamps when required. Healing
-// produces no flash/reaction/attacker assignment/callbacks [06 §9.1].
+// ApplyHealing implements the early heal arm's signed-word read/store and
+// unsigned maximum clamp [06 §9.1][06 R-DMG-01 §4]. No damage-side effects
+// belong to this arm.
 func ApplyHealing(currentHealth int32, maxHealth int32, amount uint16) int32 {
-	// Add unsigned 16-bit amount to signed current health in 32-bit arithmetic [06 §9.1].
-	newHealth := int32(int64(currentHealth) + int64(amount)) // 32-bit add
-	// Compare against maximum health as unsigned, clamp when required [06 §9.1].
-	if uint32(newHealth) > uint32(maxHealth) {
-		newHealth = maxHealth
+	h := int32(int16(currentHealth)) + int32(amount)
+	if uint32(maxHealth) <= uint32(h) {
+		h = maxHealth
 	}
-	return newHealth
+	return int32(int16(h))
 }
 
 // DispatchHealingPacket adapts the legacy wire entry to the common kind-10

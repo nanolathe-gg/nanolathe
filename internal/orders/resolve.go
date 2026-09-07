@@ -604,9 +604,9 @@ const (
 // default and nothing in this build writes it yet: `internal/settings` carries
 // no `Interface Type` field, so the option page cannot produce the other value.
 //
-// TODO(T23): bind this to the interface options page when that page exists —
-// the page brings the writer with it, which is why there is none here. The
-// researched source is the registry word named above — it must not become a
+// TODO(T23): bind the settings load/save and interface options control to
+// this shared word; until then retain the researched registry default. The
+// source is the registry word named above — it must not become a
 // build flag or a per-call parameter, because retail reads one word for both
 // the click dispatch and the cursor resolver [07 R-CAM-01 §5].
 var interfaceType = InterfaceTypeLeftClick

@@ -481,7 +481,7 @@ func TestBurnSmokeEmitsAtTheFootprintCentre(t *testing.T) {
 	}
 	wantX := numeric.FixedFromInt(3*16 + 8)
 	wantZ := numeric.FixedFromInt(4*16 + 8)
-	wantY := svc.Terrain.CoarseHeightAt(3, 4)
+	wantY := svc.Terrain.HeightAt(wantX, wantZ)
 	if got[0][0] != wantX || got[0][2] != wantZ || got[0][1] != wantY {
 		t.Fatalf("puff at %v, want the footprint centre (%v, %v, %v) [05 R-FEAT-01 §11 step 3]", got[0], wantX, wantY, wantZ)
 	}
@@ -661,8 +661,8 @@ func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 
 	ref := rng.CRTFromState(0xabcdef)
 	baseX := numeric.FixedFromInt(2*16 + 8)
-	baseY := svc.Terrain.CoarseHeightAt(2, 2)
 	baseZ := numeric.FixedFromInt(2*16 + 8)
+	baseY := svc.Terrain.HeightAt(baseX, baseZ)
 	// The sequence is 3 + max(0, 1) + 2 = 6 visits, so the burn ends on tick 5
 	// and the gated ticks that smoke are 0 and 3.
 	for tick := uint32(0); tick < 6; tick++ {

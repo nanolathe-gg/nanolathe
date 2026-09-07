@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/combat"
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -126,5 +128,67 @@ func TestFatalReclaimSettlementUsesRawAttackerAtVictimFinalization(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+// The live construction entry delivers the pulse through the combat service
+// installed by composition; payment waits for the victim visit [05 R-WORK-01 §4].
+func TestComposedReclaimProducerDefersRefundUntilVictimVisit(t *testing.T) {
+	root := t.TempDir()
+	writeCompositionModel(t, root, "fixture", 1)
+	writeCompositionCOB(t, root, "testunit", []string{"modelroot", "modelchild"})
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 10); err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 100, Limit: -1, BMCode: 1, CanReclamate: true, WorkerTime: 300, BuildDistance: 10, DamageModifier: 65536}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w, err := newSlicedWorldWithCOB(cat, fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Catalog: cat, World: minimalTerrain(), Mission: syntheticMission(), Units: w, Econ: &economy.Service{}}
+	s.InitBattleWindForSession()
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatal(err)
+	}
+	s.RegisterAll()
+	def.BuildCostMetal = 100
+	builderHandle, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	victimHandle, err := w.Create(def, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	builder, victim := w.Unit(builderHandle), w.Unit(victimHandle)
+	victim.Health, victim.Remaining = 1, 0.25
+	s.Econ.Players[0] = economy.Player{Exists: true, ControllerState: combat.ControlByteHuman}
+	s.Econ.Players[1] = economy.Player{Exists: true, ControllerState: combat.ControlByteHuman}
+	q := orders.QueueForUnit(builder)
+	q.PurgeUnprotected()
+	q.Push(orders.Lookup("ReclaimUnit"), orders.Node{Owner: builderHandle, Target: victimHandle, Param1: 15, Param2: 16, Deadline: -1})
+	node := q.Head()
+	result := s.Build.StepUnit(construction.TickContext{Tick: 3}, builderHandle)
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	if !victim.Dying || victim.Health != -14 || victim.LastDamageCause != uint8(combat.CauseReclaim) || victim.EngagementTarget != builderHandle || uint8(victim.BlinkSuppress) != 240 {
+		t.Fatalf("composed pulse failed: health %d dying %v cause %d attacker %d flash %d", victim.Health, victim.Dying, victim.LastDamageCause, victim.EngagementTarget, uint8(victim.BlinkSuppress))
+	}
+	if node.Param2 != 2 || node.Deadline != 5 {
+		t.Fatal("fatal producer omitted its cadence epilogue")
+	}
+	if got := s.Econ.UnitBuckets(builderHandle)[economy.Metal].Production; got != 0 {
+		t.Fatalf("producer paid before victim visit: %v", got)
+	}
+	s.stepUnitPhase(4)
+	if w.Unit(victimHandle) != nil {
+		t.Fatal("victim visit did not finalize")
+	}
+	if got := s.Econ.UnitBuckets(builderHandle)[economy.Metal].Production; got != 75 {
+		t.Fatalf("victim visit refund=%v, want 75", got)
 	}
 }

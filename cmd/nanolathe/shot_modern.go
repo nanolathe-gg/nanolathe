@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"image"
+	"os"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -63,6 +64,8 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 	if game.out == nil {
 		return nil, fmt.Errorf("nanolathe: shot: modern capture produced no frame")
 	}
+	ms := game.modelStats
+	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d cpu-fallback=%d shadows=%d missing-source=%d no-body=%d unsupported-geometry=%d unsupported-face=%d missing-texture=%d folded-faces=%d folded-strips=%d\n", mapName, ms.GPU, ms.CPUFallback, ms.Shadows, ms.MissingSource, ms.NoBody, ms.UnsupportedGeometry, ms.UnsupportedFace, ms.MissingTexture, ms.FoldedFaces, ms.FoldedStrips)
 	if game.profileFrames > 0 {
 		got := 0
 		if game.profileStats != nil {
@@ -85,6 +88,7 @@ type modernShotGame struct {
 	w, h int
 
 	gpu              *gpurender.Renderer
+	modelStats       gpurender.ModelStats
 	out              *image.RGBA
 	err              error
 	done             bool
@@ -143,6 +147,7 @@ func (g *modernShotGame) Draw(screen *ebiten.Image) {
 		g.done = true
 		return
 	}
+	g.modelStats = g.gpu.ModelStats()
 	if g.profileFrames > 0 {
 		// ReadPixels is intentionally inside the timed region. It synchronizes
 		// deferred device work, so this is a diagnostic of Execute plus the

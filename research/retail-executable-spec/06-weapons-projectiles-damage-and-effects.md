@@ -4892,8 +4892,9 @@ locally-owned victim (the negative value is preserved for the severity
 computation of §12.1) and a clamp to exactly **0** for a victim whose owner is
 absent or remote, which then continues to the callbacks with health zero and
 never dies through this path; (c) the paralyze kind, which never writes
-health. Construction and repair writes are doc 05's and do not pass through
-the dispatcher.
+health. Construction's direct progress-health writes are owned by doc 05.
+Repair computes its terms there and delivers a kind-10 packet through this
+early heal arm [05 R-WORK-01 §3].
 
 **Established — damage on a nanoframe.** The dispatcher has no
 build-fraction test: a unit under construction takes damage exactly like a

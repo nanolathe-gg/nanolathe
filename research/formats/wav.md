@@ -55,6 +55,26 @@ full or the sample is null. Raw: the whole file, header included, as 8-bit
 mono 11,025 Hz. A null sample is silent (the alias plays nothing, no
 message).
 
+## Nanolathe parser and playback policy
+
+`formats.LoadAudio` is the single container parser used by the viewer and
+`internal/audio`. For RIFF it retains the authored format tag, byte rate and
+block alignment alongside the channel/rate/width fields and the complete
+payload span. It checks file bounds before reading and rejects truncated
+recognized containers; it does not require PCM metadata to normalize those
+authored fields. Chunk-start enumeration stops at the declared RIFF span.
+
+The audio adapter accepts PCM with 8- or 16-bit samples, positive channel count
+and sample rate, and representable frame size/byte rate. It derives playback
+alignment from the channel count and bit width, copies complete frames and
+preserves VFS provenance. Rejecting unsupported codecs and unsafe metadata,
+rejecting empty input, and the 16 MiB direct-decode allocation limit are
+**Nanolathe host-safety policies**. They do not establish retail validation of
+fields it never reads. The parser retains any partial final frame bytes even
+though playback excludes that incomplete frame. Zero-length device-buffer
+creation remains **Unknown** `[02 R-MALF-01 §10]`; trace the backend's zero-size
+creation result before changing the empty-input policy.
+
 ## Unknowns and caveats
 
 - The engine never reads the format tag, so formats beyond the table above
@@ -70,4 +90,4 @@ message).
 - *WAV*, TA Design Guide — usage locations:
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/wavdesc.htm>
 - Verified against `sounds/BUTTON12.WAV` from `totala1.hpi`;
-  OpenTA parser: `formats/wav.go`.
+  Nanolathe parser: `formats/wav.go`.

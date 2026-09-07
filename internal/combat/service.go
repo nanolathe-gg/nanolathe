@@ -2749,8 +2749,7 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 		// The heal arm reads its low word unsigned and stores the result as a
 		// signed 16-bit health word before any damage-side effects [06 §9.1].
 		amount := uint16(in.Nominal)
-		healed := ApplyHealing(int32(int16(victim.Health)), victim.MaxHealth, amount)
-		victim.Health = int32(int16(healed))
+		victim.Health = ApplyHealing(victim.Health, victim.MaxHealth, amount)
 		return DamageResult{Accepted: true, Amount: amount}
 	}
 

@@ -354,7 +354,7 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 		// position the stamp gave it — ignition does not move a feature.
 		inst.X = footprintCentreWorld(cx, inst.FootprintX)
 		inst.Z = footprintCentreWorld(cz, inst.FootprintZ)
-		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
+		inst.Y = s.Terrain.HeightAt(inst.X, inst.Z)
 	}
 	s.setInstance(idx, inst)
 	s.attachEventRecord(inst)

@@ -29,14 +29,11 @@ func TestModelTopFixedIsTheSameWalkAsModelTop(t *testing.T) {
 		"corcom":   {ObjectName: "corcom"},
 		"armpw":    {ObjectName: "armpw"},
 	}
-	fillModelTops(fs, defs)
+	if err := validateRequiredModels(fs, defs, nil, nil); err != nil {
+		t.Fatalf("validateRequiredModels: %v", err)
+	}
 
-	resolved := 0
 	for name, def := range defs {
-		if def.ModelTopFixed == 0 && def.ModelTop == 0 {
-			continue // model absent from this install
-		}
-		resolved++
 		if def.ModelTopFixed < 0 {
 			t.Fatalf("%s: the walk is floored at zero, got %d", name, def.ModelTopFixed)
 		}
@@ -44,9 +41,6 @@ func TestModelTopFixedIsTheSameWalkAsModelTop(t *testing.T) {
 			t.Fatalf("%s: ModelTop = %d, want the high word %d of ModelTopFixed %d",
 				name, def.ModelTop, want, def.ModelTopFixed)
 		}
-	}
-	if resolved == 0 {
-		t.Skip("no stock model resolved from this install")
 	}
 }
 

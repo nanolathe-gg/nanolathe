@@ -10,6 +10,7 @@ package construction
 import (
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -108,11 +109,10 @@ func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, 
 }
 
 func repairTerms(maxDamage int32, energyCost float32, worker, buildTime int32) (int32, int32) {
-	if buildTime == 0 {
-		return 0, 0
-	}
-	heal := int32(1 + (float64(maxDamage)*float64(worker)-1)/float64(buildTime))
-	energy := int32(1 + (float64(energyCost)*float64(worker)-1)/float64(buildTime))
+	// The shared low-word conversion also handles zero build time and other
+	// exceptional results [05 R-WORK-01 §3][01 R-DET-01 §1].
+	heal := numeric.TruncateFloat64ToLow32(1 + (float64(maxDamage)*float64(worker)-1)/float64(buildTime))
+	energy := numeric.TruncateFloat64ToLow32(1 + (float64(energyCost)*float64(worker)-1)/float64(buildTime))
 	if heal >= 1 {
 		heal = 1
 	}
@@ -275,9 +275,6 @@ func (s *Service) Repair(builder, target *units.Unit, worker int32) bool {
 	economy.AdmitOneResource(buckets, float32(energy))
 	if !admitted {
 		return false
-	}
-	if heal < 0 {
-		heal = 0
 	}
 	if s.Combat == nil || s.World == nil {
 		return false

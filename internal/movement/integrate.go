@@ -2686,10 +2686,12 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	// inside its own cell [04 R-COLL-01 §5][04 R-MOV-01 §6].
 	blocked := false
 	// The adjacent word tested with the scalar speed is the signed 16-bit turn
-	// residual, not a second speed component [04 §5.2][04 R-MOV-01 §6]. The
-	// ground steering step does not yet drive a turn residual word, so this reads
-	// zero except after a save restore; the flight branch keeps its residual on
-	// the flight state and never mirrors it here.
+	// residual, not a second speed component [04 §5.2][04 R-MOV-01 §6].
+	// TODO(question): this collision-record value has no live steering writer;
+	// it stays zero or at its restored value, while flight maintains a separate
+	// residual. Trace both steering writers through the callback boundary to
+	// establish which maintained value must reach this classifier. Keep the
+	// existing zero/restored value until that connection is established.
 	turnResidual := int32(0)
 	if coll := s.Collisions[u.Handle]; coll != nil {
 		blocked = coll.Blocked

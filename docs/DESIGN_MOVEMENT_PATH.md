@@ -763,9 +763,23 @@ waterline of zero `[04 R-MOV-01 §5b]` `[04 R-MOV-01 §5c]` `[04 §9.1]` [I2].
 
 ## 7. Not implemented and open
 
-No `TODO(question)`, `TODO(T23)` or `TODO(T25)` marker remains in these three
-packages. The questions the contracts above still carry are these, each with the
-observation that would settle it.
+The code retains the following `TODO(question)` markers. Each names the
+current behavior and the evidence needed before changing it:
+
+* `internal/path/search.go`: opening a cell replaces its status byte and drops
+  the ray-visited bit. Trace the open write and the pop-time blocked re-test to
+  decide whether that bit must survive `[04 R-PATH-01 §1]`.
+* `internal/movement/retail_restore.go`: the code-3 air-velocity marker retains
+  its auxiliary and padding words without assigning new runtime meanings.
+  Trace their constructor, save and execution readers before interpreting them
+  `[08 R-SAVE-02 §8]` [04 "Missing and unknown"].
+* `internal/movement/integrate.go`: callback classification reads the collision
+  record's turn residual, which currently has no live steering update. Trace
+  the ground and flight writers through the callback boundary before choosing
+  the correct maintained residual; the current zero/restored value remains an
+  implementation gap `[04 §5.2]` `[04 R-MOV-01 §6]`.
+
+The contracts also carry these questions, each with its settling observation.
 
 * Which order types can produce an out-of-bounds goal. The search's own
   behaviour is established — an out-of-bounds start is a `0x200` reject and an

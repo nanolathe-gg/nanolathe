@@ -47,11 +47,14 @@ type Renderer struct {
 	// the translucent strip blit, shadow the feature shadow stencil, and destTable
 	// the shared light/shade rect and lit point pass. glyph is the keyed FNT text
 	// blit (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4).
-	litBlit   *ebiten.Shader
-	tint      *ebiten.Shader
-	shadow    *ebiten.Shader
-	destTable *ebiten.Shader
-	glyph     *ebiten.Shader
+	litBlit     *ebiten.Shader
+	tint        *ebiten.Shader
+	shadow      *ebiten.Shader
+	destTable   *ebiten.Shader
+	glyph       *ebiten.Shader
+	modelKey    *ebiten.Shader
+	modelBody   *ebiten.Shader
+	modelCommit *ebiten.Shader
 
 	// offscreen is the indexed frame surface, RGBA8 with the palette index in the
 	// red channel (C-G4). output is the expanded RGBA surface Execute returns.
@@ -70,7 +73,13 @@ type Renderer struct {
 	// dest-reading write never samples a pixel it just changed. It is full-surface
 	// and aligned 1:1 with the offscreen, recreated when the frame size changes.
 	destScratch *ebiten.Image
-	w, h        int
+	// modelKey is the subject-local maximum byte-key plane. modelCoord is a
+	// same-sized coordinate source used to address the key/table/texture inputs
+	// from one Kage source space while a face carries UVs separately.
+	modelKeyImage *ebiten.Image
+	modelColor    *ebiten.Image
+	modelCoord    *ebiten.Image
+	w, h          int
 
 	// tileAtlases caches one tile-index atlas per *world.Terrain identity, built
 	// on first Terrain draw and reused for the map's lifetime (C-G4,
@@ -111,7 +120,8 @@ type Renderer struct {
 	// the wiring layer through SetModelSource, because the client-side model table
 	// it reads is populated during recording; with no source a Model command draws
 	// nothing.
-	modelSrc ModelSource
+	modelSrc   ModelSource
+	modelStats ModelStats
 }
 
 // New builds a renderer from the installed palette tables, uploading every table
@@ -145,6 +155,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	shadow, shadowErr := newShadowShader()
 	destTable, destTableErr := newDestTableShader()
 	glyph, glyphErr := newGlyphShader()
+	modelKey, modelKeyErr := newModelKeyShader()
+	modelBody, modelBodyErr := newModelBodyShader()
+	modelCommit, modelCommitErr := newModelCommitShader()
 	r := &Renderer{
 		tables:      uploadTables(pal),
 		expand:      shader,
@@ -161,6 +174,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		shadow:      shadow,
 		destTable:   destTable,
 		glyph:       glyph,
+		modelKey:    modelKey,
+		modelBody:   modelBody,
+		modelCommit: modelCommit,
 		tileAtlases: make(map[*world.Terrain]*tileAtlas),
 		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
 		pcxImages:   make(map[*formats.PCX]*ebiten.Image),
@@ -211,6 +227,15 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	if err == nil {
 		err = glyphErr
 	}
+	if err == nil {
+		err = modelKeyErr
+	}
+	if err == nil {
+		err = modelBodyErr
+	}
+	if err == nil {
+		err = modelCommitErr
+	}
 	return r, err
 }
 
@@ -227,6 +252,9 @@ func (r *Renderer) ensureSize(w, h int) {
 	r.output = ebiten.NewImage(w, h)
 	r.grayScratch = ebiten.NewImage(w, h)
 	r.destScratch = ebiten.NewImage(w, h)
+	r.modelKeyImage = ebiten.NewImage(w, h)
+	r.modelColor = ebiten.NewImage(w, h)
+	r.modelCoord = ebiten.NewImage(w, h)
 	r.w, r.h = w, h
 }
 
@@ -246,6 +274,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	if r.offscreen == nil {
 		return nil
 	}
+	r.modelStats = ModelStats{}
 	list.Replay(r)
 	return r.output
 }

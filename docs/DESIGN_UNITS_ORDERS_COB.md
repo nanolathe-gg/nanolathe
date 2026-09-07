@@ -630,18 +630,31 @@ Notes the table cannot carry:
   the text "I can't reach the construction site" `[04 R-ORDER-02 §1]`
   `[04 R-ORD-01 §5]`.
 
-### 3.6 Not implemented
+`RepairPatrol` runs the bound repair-candidate scan and resource-gated feature
+pairing; `VTOL_Patrol` runs pad selection and its opportunity scan. These use
+the queue binding's enumerators and simulation RNG, including the no-candidate
+arms `[04 R-ORD-01 §4]` `[04 R-ORD-02 §2]` [I4]. The implementations live in
+`internal/orders/patrol.go` and the shared scan helpers. Existing
+`TestPatrolScansKeepSlotOrderAndDrawOnlyAfterGates`,
+`TestOpportunityScanIsFireAtWillOnly` and `TestVTOLPatrolSeeksAPadOnlyWhenHurt`
+lock the scan ordering, gates and pad-selection boundaries.
+
+### 3.6 Scope and remaining work
 
 * **The empty-name descriptor's handler is the reject sentinel, and nothing
   else.** Retail's row 0 has a handler; its body is not a behavior any producer
   can reach, because `Lookup` returns 0 exactly on a miss `[04 §3.1]`
   `[04 R-ORD-01 §12]`.
-* **`RepairPatrol`'s repair scan and feature pairing, and `VTOL_Patrol`'s
-  opportunity scan, take their established "none" arm.** The rows are wired and
-  the terminals are right; what is missing is not the contract but the draws
-  that belong with those candidate lists, which must come from the queue
-  binding's own enumerator and never from a process-wide stream
-  `[04 R-ORD-01 §4]` `[04 R-ORD-02 §2]` [I4].
+* **The interface-polarity setting is not bound.** `internal/orders/resolve.go`
+  retains `TODO(T23)` and the registry default, left-click orders. Retail's
+  shared setting and its writers are established `[07 R-CAM-01 §5]`; connecting
+  settings load/save and the options control to both command and cursor
+  consumers closes this implementation gap.
+* **The stock ARMCK lifecycle diagnostic has an unresolved `Create` exit.**
+  `internal/units/p28_cob_pose_trace_test.go` checks the known pose and later
+  callbacks, then records `TODO(question)` for `finish-abnormal` versus normal
+  completion. Trace the callback identity through the wake/drain boundary
+  before changing the expectation `[04 R-P28-COB-01R]` [04 "Missing and unknown"].
 * **`canstop` has no simulation reader, and `teleporter` is inert.** The
   `Teleport` order is ungated and free, and the interface latch that would arm it
   has no writer anywhere in retail — it is consumer-only `[04 R-SPEC-01 §2]`
