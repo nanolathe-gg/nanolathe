@@ -60,12 +60,12 @@ func ParseAIDirectives(data []byte) []AIDirective {
 	var out []AIDirective
 	for _, rawLine := range strings.Split(string(data), "\n") {
 		line := strings.TrimRight(rawLine, "\r")
-		line = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), ";"))
+		line = trimContentCWhitespace(strings.TrimSuffix(trimContentCWhitespace(line), ";"))
 		parts := aiLineTokens(line)
 		if len(parts) == 0 {
 			continue
 		}
-		keyword := strings.ToLower(parts[0])
+		keyword := asciiFoldContent(parts[0])
 		switch keyword {
 		case AIDirectivePlan, AIDirectiveWeight, AIDirectiveLimit:
 		default:
@@ -217,7 +217,7 @@ func aiLineTokens(line string) []string {
 	if idx := strings.IndexByte(line, '#'); idx >= 0 {
 		line = line[:idx]
 	}
-	parts := strings.Fields(line)
+	parts := contentASCIIFields(line)
 	if len(parts) > 20 {
 		parts = parts[:20]
 	}
@@ -251,7 +251,7 @@ var aiPlanNames = map[string]struct{}{
 func aiPlanTableNames(args []string) []string {
 	var names []string
 	for i, arg := range args {
-		name := strings.ToLower(strings.TrimSpace(arg))
+		name := CanonicalKey(arg)
 		if _, ok := aiPlanNames[name]; !ok {
 			continue
 		}
@@ -278,7 +278,7 @@ func (p *AIProfile) Weight(plan, typeName string) int32 {
 	if p == nil || p.Plans == nil {
 		return 100
 	}
-	pl := p.Plans[strings.ToLower(plan)]
+	pl := p.Plans[CanonicalKey(plan)]
 	if pl == nil || pl.Weights == nil {
 		return 100
 	}
@@ -294,7 +294,7 @@ func (p *AIProfile) Limit(plan, typeName string) int32 {
 	if p == nil || p.Plans == nil {
 		return -1
 	}
-	pl := p.Plans[strings.ToLower(plan)]
+	pl := p.Plans[CanonicalKey(plan)]
 	if pl == nil || pl.Limits == nil {
 		return -1
 	}
@@ -390,7 +390,7 @@ func ParseAIProfile(data []byte, name string, prov Provenance) (*AIProfile, erro
 		if len(parts) == 0 {
 			continue
 		}
-		cmd := strings.ToLower(parts[0])
+		cmd := asciiFoldContent(parts[0])
 		switch cmd {
 		case "plan":
 			// A `plan` clears the gate first and sets it only when an argument
@@ -514,12 +514,11 @@ func CompileAIProfiles(fs vfs.FSOps) (map[string]*AIProfile, error) {
 		if e.IsDir {
 			continue
 		}
-		lower := strings.ToLower(e.Path)
+		lower := asciiFoldContent(e.Path)
 		if !strings.HasSuffix(lower, ".txt") {
 			continue
 		}
-		base := strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(lower, "ai/")), ".txt")
-		base = strings.TrimSpace(base)
+		base := strings.TrimSuffix(strings.TrimPrefix(lower, "ai/"), ".txt")
 		// Preserve original display name from OriginalPath basename without ext.
 		displayName := baseNameWithoutExtAI(e.OriginalPath)
 		if displayName == "" {
@@ -565,5 +564,5 @@ func baseNameWithoutExtAI(path string) string {
 	if dot := strings.LastIndex(base, "."); dot >= 0 {
 		base = base[:dot]
 	}
-	return strings.TrimSpace(base)
+	return base
 }

@@ -682,16 +682,21 @@ The resulting raw budget is:
 raw = double(delta) * effectiveSpeed + double(fractionalCarry)
 ```
 
-Convert `raw` to an integer by truncation toward zero, store the remainder
-`raw - truncated` as a 32-bit float carry, then clamp the runnable count to
-the inclusive range 0 through 5. A raw count of 6 or more is therefore capped
+**Established.** Save `raw` as binary64, then compute `floored = floor(raw)`
+with the runtime wrapper of `[R-DET-01 §3]`. Convert that floating result
+through the signed-64 truncation helper, retaining its signed low 32 bits
+`[R-DET-01 §1]`. Store `raw - floored` as a 32-bit float carry, independently
+of any wrapping in the integer word, then clamp that word to the inclusive
+range 0 through 5. A retained count of 6 or more is therefore capped
 at 5; the excess integer work is not queued as a separate backlog. Pause
 interacts differently with the single-player and multiplayer dispatch paths
 (section 4.3).
 
-The direct notes establish that the carry is a float, the product is computed
-in x87 double precision, and conversion is the compiler’s truncating `__ftol`
-path. Relying on a platform-default rounded integer conversion is incorrect.
+The carry's single-precision store can round a remainder just below one to
+exactly one. For a negative fractional raw budget the floor is more negative
+than truncation toward zero, leaving a positive carry. The compiler's
+truncating conversion happens only after that floor wrapper; it does not
+replace the floor. Relying on a platform-default integer cast is incorrect.
 The signed interpretation of a wrapped `GetTickCount` delta is also observed:
 large wrap deltas become negative and then clamp to zero rather than being
 repaired as elapsed time.
@@ -1983,9 +1988,11 @@ inlined copy of the helper.
 
 #### Definition parsers
 
-Twenty-two of the sites are in definition parsers. Each truncates, and several
-store narrower than 32 bits — a width an implementation must reproduce,
-because the wrap is observable:
+Twenty-two of the sites are in definition parsers. Each ultimately uses the
+signed-64 truncation helper, and several store narrower than 32 bits — a width
+an implementation must reproduce, because the wrap is observable. The catalog
+`Version` pair first passes each binary64 operand through the separate
+toward-negative-infinity wrapper described in §3:
 
 - weapon TDF: velocity, start velocity and acceleration are **32-bit**;
   `reloadtime`, `weapontimer`, `turnrate`, `burstrate`, `duration`,
@@ -1996,7 +2003,8 @@ because the wrap is observable:
   65536 and then dividing is not the same floating-point operation order.
 - FBI: one key ([05 R-PROD-01 §1]);
 - feature TDF: `sparktime × 30`, **16-bit** ([05 R-FEAT-01 §1]);
-- the catalog `Version` pair, `int(v)` and `int((v − int(v)) · 10)`
+- the catalog `Version` pair, `int(floor(v))` and
+  `int(floor((v − int(floor(v))) · 10))`
   ([02 R-CONTENT-01, R-CONTENT-02]);
 - the 3DO table, and the TDF float-getter's integer form ([fmt tdf]).
 
@@ -2036,10 +2044,10 @@ load/store instructions).** The control word is written by:
   64-bit with all exceptions masked on entry and **restores the caller's word
   before returning**; its result passes through a 64-bit double memory slot
   before the return, so the caller — and the truncating helper after it —
-  sees a double, not an 80-bit value; the string-to-double converter used by
-  the content catalog loader (`Version`) and the tick budget clamp
-  (save/restore inside one call); the printf-family float formatter; the
-  runtime's own reset and math-error helpers;
+  sees a double, not an 80-bit value; the binary64 floor wrapper used by the
+  content catalog loader (`Version`) and the tick-budget clamp (save and
+  restore inside each call); the printf-family float formatter; the runtime's
+  own reset and math-error helpers;
 * an audio-decoder reset pair around the WAV decoder;
 * nothing else: one apparent site is a jump-table data word mis-decoded as an
   instruction, and the remainder lie in the unrecovered runtime region between
@@ -2047,12 +2055,12 @@ load/store instructions).** The control word is written by:
 
 Non-default control words are therefore reachable from the simulation **only
 transiently inside a runtime call**
-(`hypot`, string-to-double), and every such call restores the word before
-returning. No game routine changes precision or rounding and leaves it
-changed; the default (53-bit, nearest) holds at every game instruction, and
-the truncating helper is the only rounding-mode change at a game-visible
-store. The optional `-fpufussy`/`-fpunofussy` switches of §8 are unaffected
-by this census.
+(`hypot`, the binary64 floor wrapper), and every such call
+restores the word before returning. No game routine changes precision or
+rounding and leaves it changed; the default (53-bit, nearest) holds outside
+those helpers, and the truncating helper remains the only rounding-mode change
+at a game-visible integer store. The optional `-fpufussy`/`-fpunofussy`
+switches of §8 are unaffected by this census.
 
 ## 9. Diagnostics, anti-tamper, and error paths
 

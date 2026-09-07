@@ -144,7 +144,7 @@ func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/moveinfo.tdf: %w", formats.WithTDFFile(err, "gamedata/moveinfo.tdf"))
+		return nil, formats.WithTDFContext(fs, err, "gamedata/moveinfo.tdf")
 	}
 	// Sections are in file order; stable iteration is required for
 	// deterministic hash/canonical handling (I1). Sort the output map's
@@ -154,11 +154,11 @@ func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 	// for any downstream hash.
 	for _, section := range doc.Root.Sections() {
 		// Discovery path is gamedata/moveinfo.tdf with [CLASS*] sections.
-		if !strings.HasPrefix(strings.ToLower(section.Name), "class") {
+		if !strings.HasPrefix(CanonicalKey(section.Name), "class") {
 			continue
 		}
 		name, ok := section.StringValue("Name", "")
-		if !ok || strings.TrimSpace(name) == "" {
+		if !ok || trimTDFSemantic(name) == "" {
 			continue
 		}
 		mc := compileMovementSection(section, name, prov)

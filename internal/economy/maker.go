@@ -299,12 +299,12 @@ func (s *Service) CreditFeatureReclaim(builderHandle pool.Handle, builderOwner u
 // float32 and then added that, narrowing twice; the site subtracts
 // `contribution x K` from the accumulator in one expression and stores once.
 // Both reclaim payouts now share that single form.
-func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal int32, killerController uint8) {
+func (s *Service) CreditUnitReclaimRefund(killerHandle pool.Handle, victimRemaining float32, victimBuildCostMetal float32, killerController uint8) {
 	if s == nil || killerHandle == 0 {
 		return
 	}
 	s.ensureUnitBuckets(killerHandle)
-	refund := float32((1 - victimRemaining) * float32(victimBuildCostMetal))
+	refund := float32((1 - victimRemaining) * victimBuildCostMetal)
 	b := &s.unitBuckets[killerHandle].Buckets[Metal]
 	creditReclaimedMaterial(s, b, refund, killerController == 2)
 }

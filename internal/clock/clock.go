@@ -4,6 +4,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // ErrMalformedBox reports a scheduler image that cannot represent the defined
@@ -132,15 +134,19 @@ func (s *State) applyHysteresis(trunc int32) {
 }
 
 // budget computes raw = double(delta)*effectiveSpeed + double(carry) [01 §4.2],
-// truncates toward zero (__ftol) [01 §8], stores remainder as float32 carry,
-// and clamps the integer to 0..5. It returns the pre-clamp trunc and clamped
-// ticks. Caller updates anchor/delta and hysteresis.
+// floors the saved binary64 before signed-64/low-word narrowing, stores the
+// remainder against that floating floor as float32, and clamps the signed
+// word to 0..5 [01 R-DET-01 §3]. Caller updates anchor/delta and hysteresis.
 func (s *State) budget(delta int32, eff float64) (int32, int) {
 	// I2 allowlist: clock budget product is float64, carry is float32.
-	raw := float64(delta)*eff + float64(s.Carry) // [01 §4.2]
-	trunc := int32(raw)                          // trunc toward zero [01 §8], I3
-	rem := raw - float64(trunc)
-	s.Carry = float32(rem) // [01 §4.2] store raw - trunc as float32
+	// Explicit stores also prevent a host fused multiply-add from skipping
+	// the working-precision product rounding [01 §4.2][01 R-DET-01 §3].
+	product := float64(float64(delta) * eff)
+	raw := float64(product + float64(s.Carry))
+	floored := math.Floor(raw)
+	trunc := numeric.TruncateFloat64ToLow32(floored)
+	// Carry uses the floating result, before the integer word can wrap.
+	s.Carry = float32(raw - floored) // [01 §4.2]
 	ticks := int(trunc)
 	if ticks < 0 {
 		ticks = 0 // [01 §4.2] negative wrap delta clamps to 0, C2
@@ -289,13 +295,14 @@ func decodeBox(b [28]byte) (State, error) {
 	}
 	// The pending count is the already-clamped work for the next pump. Speed
 	// values are the common setter's inclusive 1..20 range. Carry is the
-	// remainder after truncation, necessarily in [-1, 1) for a valid sample;
-	// NaN and infinity cannot be such a remainder [01 §4.2][01 §4.3].
+	// floating floor remainder narrowed to float32; a value just below one
+	// can round to exactly one. Keep accepting the previously supported
+	// negative fractional images too [01 §4.2][01 §4.3].
 	if decoded.pending < 0 || decoded.pending > 5 ||
 		decoded.Requested < 1 || decoded.Requested > 20 ||
 		decoded.Active < 1 || decoded.Active > 20 ||
 		math.IsNaN(float64(decoded.Carry)) || math.IsInf(float64(decoded.Carry), 0) ||
-		decoded.Carry <= -1 || decoded.Carry >= 1 {
+		decoded.Carry <= -1 || decoded.Carry > 1 {
 		return State{}, ErrMalformedBox
 	}
 	decoded.Paused = decoded.flags&1 != 0

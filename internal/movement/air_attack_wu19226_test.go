@@ -117,6 +117,13 @@ func TestAirToGroundOffMapForcesPhaseTwo(t *testing.T) {
 	// Beyond the east edge: the fixture map is 256 cells wide.
 	u.X = world.CellToWorld(300)
 	u.Move.Mode = 2
+	// The executor reads the completed stamp's retained sector, not these
+	// coordinates directly. Commit and stamp this authored move before asking
+	// the off-map gate.
+	fl := sys.Flights[u.Handle]
+	fl.X, fl.Y, fl.Z = int32(u.X), int32(u.Y), int32(u.Z)
+	sys.commitFlightState(u, fl)
+	sys.syncMoverStamp(u)
 	if !sys.airOffMap(u) {
 		t.Fatal("fixture: the unit is not off the map")
 	}
@@ -135,7 +142,7 @@ func TestAirToGroundOffMapForcesPhaseTwo(t *testing.T) {
 	if n.DynamicGate != airLegGateStrike {
 		t.Fatalf("gate %#x, want phase 2's %#x — not the recovery leg's 0xE0 [04 R-AIR-01 §8]", n.DynamicGate, airLegGateStrike)
 	}
-	fl := sys.Flights[u.Handle]
+	fl = sys.Flights[u.Handle]
 	if fl == nil || fl.Command == nil {
 		t.Fatal("no flight command block")
 	}

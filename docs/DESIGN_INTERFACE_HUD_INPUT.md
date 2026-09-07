@@ -428,9 +428,12 @@ keep slot order.
 special, the skirmish commander, the watcher case), the committed shake apply,
 the scroll setting and its raw delta, the follow camera, the `t`/`T` cycle, the
 `n` next-unvisited glide and the F3 message-source glide `[07 R-CAM-01 §14]`.
-`battle_minimap.go` owns the minimap pointer paths: the right-held camera latch
-that re-jumps every host frame, the left-button order at the lens point, and the
-minimap hover unit `[07 R-CAM-01 §11]` `[07 R-CAM-01 §5]`.
+`battle_minimap.go` owns the minimap pointer paths: the admitted camera-button
+down edge sets a presentation capture that first re-jumps on the next host
+frame and continues from live pointer records through its matching up edge; the
+other polarity's order button uses the lens point, and the minimap hover unit
+shares that usable-region classifier with command and cursor consumers
+`[07 R-CAM-01 §11]` `[07 R-CAM-01 §5]` `[07 §8]`.
 `battle_placement.go` owns `cursorWorld` (the SC20 resolver), the build ghost,
 the site check and `commitBuild`. `battle_commands.go` and `battle_dispatch.go`
 are the command boundary of §3.4. `battle_menu.go` drives the modal chain and `battle_options.go` the in-battle
@@ -762,12 +765,16 @@ entry snapshot, the same way it re-applies gamma and the volumes.
 One press/release pair is routed through exactly one path, and the path is
 chosen on the **press** edge. In order:
 
-1. **Over the minimap.** Under the default `Interface Type 0` polarity, a right
-   press sets the minimap camera latch and every host frame it is held re-runs
-   the same jump from the pointer, so a right-drag pans continuously; a left
-   press issues the armed order or the world click at the lens point; a held
-   left elsewhere over the minimap suppresses world drag entirely
-   `[07 R-CAM-01 §5]` `[07 R-CAM-01 §11]`.
+1. **Over the fitted minimap lens.** Under the default `Interface Type 0`
+   polarity, a right down edge sets the minimap camera capture. The frame that
+   set it does not jump; each following host frame tests the already-set
+   capture before new clicks and re-runs the camera jump from the live pointer
+   record until the matching right up edge. The signed lens conversion runs
+   before camera clamp even after the drag leaves the lens. Left down issues
+   the armed order or world click at the lens point. `Interface Type 1` swaps
+   those two minimap buttons. The canvas letterbox bars suppress a viewport
+   drag but are not lens/world-pointer input; cursor, footer and command paths
+   share that classification `[07 R-CAM-01 §5]` `[07 R-CAM-01 §11]` `[07 §8]`.
 2. **Right button, anywhere else.** Right is deselect and cancel only: a factory
    product button is the one exception, subtracting one or five from the
    matching tail node; otherwise an armed placement disarms, then an armed latch

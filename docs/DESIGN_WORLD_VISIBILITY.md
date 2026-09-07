@@ -436,11 +436,13 @@ footprint table is replaced, so no stale record can throttle a republication
 1. owner identity bypass — the queried player record equals the unit's owner ⇒
    visible, ahead of the cloak test, so a player always sees its own cloaked
    units;
-2. the hidden/cloaked instance bit ⇒ not visible, unless the decloak status bit
-   is set;
-3. base height below sea level — the header byte in world units, not zero ⇒ not
-   visible unless the sonar status bit is set, which the sensor phase's friendly
-   pass sets on own units;
+2. the hidden/cloaked instance bit ⇒ not visible. The decloak timer is not a
+   visibility-predicate bypass;
+3. the first hull probe's height below sea level — the header byte in world
+   units, not zero ⇒ not visible unless the completed sensor phase's runtime
+   sonar status bit is set. The direct unit adapter starts that probe at the
+   definition box's min X/max Y/min Z, so a model whose top crosses the surface
+   is not rejected as fully submerged;
 4. each sample projects `u = X >> 5`, `v = (Z − (Y >> 1)) >> 5` on the signed
    map-pixel components, bounds-checked unsigned, and tests the mode-selected
    source: any nonzero byte in the queried record's grid, or the word grid at
@@ -474,7 +476,10 @@ The minimap's sensor circles are drawn by presentation `[03 §3.4]`
 one-player session the status bits keep whatever construction gave them. The
 radius visitor searches the larger of the two authored distances, unbonused,
 while the elevation bonus enters the squared radar radius only; the two contact
-comparisons are strict and the visitor's own distance test is inclusive.
+comparisons are strict and the visitor's own distance test is inclusive. It
+subtracts signed raw 16.16 coordinate words, takes each square's high 32 bits,
+and adds those two terms at signed 32-bit width; it does not truncate each axis
+before multiplying.
 Definition stealth suppresses radar and sonar outright; the proximity pass
 writes the decloak bit and a deadline ninety ticks ahead; the final pass sets the
 seen bit from the mode-selected test. The activation bit gates emission with a

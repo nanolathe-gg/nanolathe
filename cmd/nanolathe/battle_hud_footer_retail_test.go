@@ -181,7 +181,7 @@ func TestRetailFooterHoverShots(t *testing.T) {
 	}
 	footerComposeShot(t, b, cs, cam, pal, bx, by, prefix+"-build.png")
 	def, _ := b.cat.Unit(content.CanonicalKey(gadgetName))
-	t.Logf("build card gadget %q at (%d,%d): %q  M:%d E:%d / %q",
+	t.Logf("build card gadget %q at (%d,%d): %q  M:%.0f E:%.0f / %q",
 		gadgetName, bx, by, def.Name, def.BuildCostMetal, def.BuildCostEnergy, def.Description)
 
 	// (c) a metal deposit: the feature line with its authored M: amount.

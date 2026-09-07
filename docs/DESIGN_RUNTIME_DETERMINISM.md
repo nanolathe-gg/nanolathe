@@ -68,8 +68,9 @@ engine's timebase, `floor(ms × 30 / 1000)` `[01 §4.1]`. It lives here so no
 other package invents its own.
 
 `AdvanceSP(scaledNow)` is the single-player budget. It forms
-`raw = float64(delta) × activeSpeed×0.1 + float64(carry)`, truncates toward
-zero, stores `raw − trunc` back as `float32`, and clamps the integer to `0..5`
+`raw = float64(delta) × activeSpeed×0.1 + float64(carry)`, floors that binary64,
+narrows through the signed-64/low-word helper, stores `raw − floor(raw)` back
+as `float32`, and clamps the retained signed integer to `0..5`
 `[01 §4.2]`. Excess work is dropped, not queued. A wrapped host counter gives a
 negative delta, which clamps to zero rather than being repaired as elapsed
 time. The `float64` product and the `float32` carry are the I2 allowlist row
@@ -381,7 +382,8 @@ mounted products, never for `gamedata/` on disk (SC1, SC2).
 ### 3.2 Runtime core — C1…C19
 
 **C1 — the budget.** `raw = double(delta) × effectiveSpeed + double(carry)`;
-truncate toward zero; store `raw − trunc` as `float32`; clamp the integer to
+floor the saved binary64, then narrow to the signed low word; store
+`raw − floor(raw)` as `float32`; clamp the retained integer to
 `0..5`. Excess is dropped, not queued `[01 §4.2]`.
 
 **C2 — a wrapped counter clamps.** A negative delta from a wrapped host counter

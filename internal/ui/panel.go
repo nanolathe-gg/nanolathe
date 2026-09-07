@@ -91,6 +91,7 @@ type Panel struct {
 	pressed      int
 	rightPressed int
 	drag         scrollDrag
+	editor       editorState
 	message      string
 
 	// flash is the per-gadget `colorf` word held as runtime state, indexed by
@@ -261,7 +262,7 @@ func (s *PanelStack) Entries() []PanelEntry {
 // press indices and the per-gadget text, help, active, status and list maps
 // [07 §5] [07 R-WGT-01 §1].
 func NewPanel(window *gui.Window) *Panel {
-	p := &Panel{Window: window, Text: make(map[string]string), Help: make(map[string]string), Active: make(map[string]bool), Status: make(map[string]int), Lists: make(map[string]*List), Owner: make(map[string]string), focus: -1, pressed: -1, rightPressed: -1}
+	p := &Panel{Window: window, Text: make(map[string]string), Help: make(map[string]string), Active: make(map[string]bool), Status: make(map[string]int), Lists: make(map[string]*List), Owner: make(map[string]string), focus: -1, pressed: -1, rightPressed: -1, editor: editorState{captured: -1}}
 	if window == nil {
 		return p
 	}
@@ -309,8 +310,17 @@ func (p *Panel) ActiveOf(name string) bool { return p != nil && p.Active[Key(nam
 
 // SetFocus records the focused gadget index; -1 is no focus.
 func (p *Panel) SetFocus(index int) {
-	if p != nil {
-		p.focus = index
+	if p == nil {
+		return
+	}
+	if p.Window != nil && index >= 0 && index < len(p.Window.Gadgets) && p.Window.Gadgets[index].Kind == gui.KindTextBox {
+		if p.FocusEditor(index) {
+			return
+		}
+	}
+	p.focus = index
+	if p.editor.captured >= 0 && p.editor.captured != index {
+		p.editor.captured = -1
 	}
 }
 
@@ -367,7 +377,24 @@ func (p *Panel) ReleaseAction(x, y int32) Action {
 	if !ok || p == nil || p.Window == nil {
 		return Action{Kind: ActionNone, Index: -1}
 	}
-	return Action{Kind: ActionActivate, Gadget: p.Window.Gadgets[idx].Name, Index: idx}
+	gadget := p.Window.Gadgets[idx]
+	if gadget.Kind == gui.KindLabel && gadget.Link != "" {
+		for target, candidate := range p.Window.Gadgets {
+			if Key(candidate.Name) != Key(gadget.Link) || !p.ActiveOf(candidate.Name) {
+				continue
+			}
+			if candidate.Kind == gui.KindButton {
+				if candidate.GrayedOut != 0 {
+					return Action{Kind: ActionNone, Index: -1}
+				}
+				p.SetFocus(target)
+				return Action{Kind: ActionActivate, Gadget: candidate.Name, Index: target}
+			}
+			p.SetFocus(target)
+			return Action{Kind: ActionNone, Index: -1}
+		}
+	}
+	return Action{Kind: ActionActivate, Gadget: gadget.Name, Index: idx}
 }
 
 // Activate returns a semantic action for a focused authored gadget. It is used
@@ -483,8 +510,13 @@ func (p *Panel) SetStatus(name string, status int) {
 
 // SetText records the runtime text for a named control.
 func (p *Panel) SetText(name, value string) {
-	if p != nil {
-		p.Text[Key(name)] = value
+	if p == nil {
+		return
+	}
+	key := Key(name)
+	p.Text[key] = value
+	if p.editor.captured >= 0 && p.Window != nil && p.editor.captured < len(p.Window.Gadgets) && Key(p.Window.Gadgets[p.editor.captured].Name) == key {
+		p.editor.caret = len(value)
 	}
 }
 

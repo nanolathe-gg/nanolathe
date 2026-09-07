@@ -20,6 +20,17 @@ func (g *gameShell) menuInput(cl *client.Client) {
 	if cl == nil || cl.Input() == nil {
 		return
 	}
+	in := cl.Input()
+	// A kind-3 editor is the only frontend consumer that may leave the tail
+	// after Escape for its next service pass. Every ordinary menu route has
+	// serviced or ignored the token batch and retires it here, so stale text
+	// cannot reach a later save-name capture [07 §2][07 R-WGT-01 §12].
+	ordinaryTokens := true
+	defer func() {
+		if ordinaryTokens {
+			in.DiscardTokens(in.PendingTokens())
+		}
+	}()
 	if g != nil && g.briefing != nil && g.briefing.State() == BriefingOpen {
 		g.briefingInput(cl)
 		return
@@ -32,9 +43,12 @@ func (g *gameShell) menuInput(cl *client.Client) {
 	if p == nil || p.Window == nil {
 		return
 	}
-	in := cl.Input()
 	mouse := in.Mouse
 	kbd := in.Kbd
+	if fired, captured := g.applyRetailEditorTokens(p, in); fired || (captured && !kbd.KeyHeld(input.KeyAlt)) {
+		ordinaryTokens = false
+		return
+	}
 	leftPressed := mouse.Pressed(input.MouseButtonLeft)
 	leftReleased := mouse.Released(input.MouseButtonLeft)
 	rightPressed := mouse.Pressed(input.MouseButtonRight)
@@ -85,6 +99,12 @@ noRetailArrowRepeat:
 			p.SetFocus(idx)
 			gad, _ := g.currentGadget(idx)
 			p.SetPressed(idx)
+			if gad.Kind == gui.KindTextBox {
+				// A kind-3 press establishes editor capture; its release does not
+				// activate the screen action [07 R-WGT-01 §6].
+				p.FocusEditor(idx)
+				p.SetPressed(-1)
+			}
 			if gad.Kind == gui.KindScrollBar {
 				g.clickRetailScrollbar(idx, gad, p.Window.PlacedRect(idx), x, y)
 			}
@@ -115,6 +135,12 @@ noRetailArrowRepeat:
 	}
 	if rightPressed {
 		p.SetRightPressed(-1)
+		x, y := int32(mouse.X), int32(mouse.Y)
+		if idx := p.PressTest(x, y); idx >= 0 {
+			if gad, ok := g.currentGadget(idx); ok && gad.Kind == gui.KindTextBox {
+				p.FocusEditor(idx)
+			}
+		}
 		if g.frontend.Mode == modeMenuSkirmish {
 			x, y := int32(mouse.X), int32(mouse.Y)
 			if idx := p.PressTest(x, y); idx >= 0 {
@@ -151,15 +177,19 @@ noRetailArrowRepeat:
 			}
 		}
 	}
+	if fired, captured := g.applyRetailEditorTokens(p, in); fired || (captured && !kbd.KeyHeld(input.KeyAlt)) {
+		ordinaryTokens = false
+		return
+	}
 	if p == nil || p.Window == nil {
 		// A pointer callback above closed the panel.
 		return
 	}
-	if kbd.KeyDown(input.KeyEscape) {
+	if !p.EditorCaptured() && kbd.KeyDown(input.KeyEscape) {
 		g.activateEscape()
 		return
 	}
-	if kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace) {
+	if !p.EditorCaptured() && (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) {
 		name := ""
 		if idx := p.Focused(); idx >= 0 {
 			if gad, ok := g.currentGadget(idx); ok && p.ActiveOf(gad.Name) {
@@ -188,6 +218,31 @@ noRetailArrowRepeat:
 	if kbd.KeyDown(input.KeyUp) || kbd.KeyDown(input.KeyDown) {
 		g.adjustFocusedList(kbd.KeyDown(input.KeyUp))
 	}
+}
+
+// applyRetailEditorTokens gives a captured kind-3 gadget the ordered token
+// batch before default-key and quickkey handling. It returns true while the
+// editor owns capture or when Enter/Escape fired its control [07 R-WGT-01 §6].
+func (g *gameShell) applyRetailEditorTokens(p *ui.Panel, in *input.State) (fired, captured bool) {
+	if g == nil || p == nil || !p.EditorCaptured() {
+		return false, false
+	}
+	index := p.EditorIndex()
+	gadget, ok := g.currentGadget(index)
+	if !ok || gadget.Kind != gui.KindTextBox {
+		return false, false
+	}
+	measure, _ := g.retailTextMetrics(g.windowGadgetFont(p, gadget))
+	result := p.ApplyEditorTokens(in.PeekTokens(), measure)
+	in.DiscardTokens(result.Consumed)
+	if g.saveLoadPanelActive() && strings.EqualFold(gadget.Name, "GAMENAME") {
+		saveLoadUI.SetName(p.TextOf(gadget.Name))
+	}
+	if result.Action.Kind == ui.ActionActivate {
+		g.activateGadget(result.Action.Gadget)
+		return true, false
+	}
+	return false, p.EditorCaptured()
 }
 
 func (g *gameShell) modalInput(cl *client.Client) {

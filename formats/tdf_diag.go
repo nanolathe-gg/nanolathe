@@ -3,6 +3,8 @@ package formats
 import (
 	"errors"
 	"fmt"
+
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // ParseDiagnostic is one of retail's five TDF parse diagnostics [02 §4][P1-12].
@@ -59,6 +61,25 @@ func WithTDFFile(err error, file string) error {
 		return parseErr.WithFile(file)
 	}
 	return err
+}
+
+// WithTDFContext keeps the parser's verbatim diagnostic inside the loader's
+// logical path and winning-provider context. Metadata lookup does not reopen
+// or decode the authored bytes [02 §4][AGENTS.md diagnostics].
+func WithTDFContext(fs vfs.FSOps, err error, logical string) error {
+	if err == nil {
+		return nil
+	}
+	provider := ""
+	if fs != nil {
+		if info, statErr := fs.Stat(logical); statErr == nil {
+			provider = info.Source.ProviderID()
+			if provider == "" {
+				provider = "unknown"
+			}
+		}
+	}
+	return fmt.Errorf("nanolathe: TDF load failed: logical path %s, providers searched [%s], expected valid TDF document: %w", logical, provider, WithTDFFile(err, logical))
 }
 
 // blankComments overwrites comment spans with ASCII spaces, preserving every

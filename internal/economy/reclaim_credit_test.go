@@ -117,3 +117,12 @@ func TestReclaimCreditUsesTheSingleNarrowingForm(t *testing.T) {
 		}
 	}
 }
+
+func TestUnitReclaimRefundUsesStoredDefinitionCost(t *testing.T) {
+	source := int32(16777217)
+	s := reclaimCreditService(0)
+	s.CreditUnitReclaimRefund(pool.Handle(4), 0.25, float32(source), 1)
+	if got := s.UnitBuckets(pool.Handle(4))[Metal].Production; got != 12582912 {
+		t.Fatalf("refund = %v, want 12582912 from the single-float definition cost", got)
+	}
+}

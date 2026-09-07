@@ -51,11 +51,23 @@ func (s *System) SetMoverMode(u *units.Unit, mode uint8) bool {
 			fl.Speed = 0
 		}
 		u.Move.Speed = 0
+		u.Move.VelX, u.Move.VelY, u.Move.VelZ = 0, 0, 0
 		// The setter also runs the bank/pitch routine with a zero delta, which
 		// decays the lean accumulator of [04 R-AIR-01 §2] by its 0xF333 factor
 		// exactly once and recomputes bank and pitch from the decayed
 		// accumulator. They are levelled, not snapped to zero.
 		s.levelFlightLean(u)
+		if fl := s.Flights[u.Handle]; fl != nil {
+			// Deactivate is raised immediately below. Its callback can observe
+			// mover save words before another integrator visit, so publish the
+			// zero triple and this call's decayed lean first. Do not call the
+			// full flight commit here: its transform may be from the prior tick.
+			if coll := s.Collisions[u.Handle]; coll != nil {
+				coll.VX, coll.VY, coll.VZ, coll.Speed = 0, 0, 0, 0
+				coll.LeanX, coll.LeanY, coll.LeanZ = fl.LeanX, fl.LeanY, fl.LeanZ
+				coll.TurnResidual = fl.TurnResidual
+			}
+		}
 		u.SetActivationEdge(false)
 	} else {
 		u.SetActivationEdge(true)
@@ -108,11 +120,15 @@ func (s *System) applyOccupancyPlane(u *units.Unit, prev, mode uint8) {
 // air keeps a clock frozen at its takeoff, so the first classification after it
 // touches down can read cells whose occupant the watermark has already passed.
 func (s *System) syncMoverStamp(u *units.Unit) {
-	if s == nil || s.Grid == nil || u == nil {
+	if s == nil || u == nil {
 		return
 	}
 	coll := s.Collisions[u.Handle]
 	if coll == nil || coll.Building {
+		return
+	}
+	if s.Grid == nil {
+		s.syncStampedAirSector(u, coll)
 		return
 	}
 	plane, stamps := planeForMode(u.Move.Mode)
@@ -146,6 +162,7 @@ func (s *System) syncMoverStamp(u *units.Unit) {
 	if stamped {
 		s.noteOccupancyCommit(u.Handle, s.tick)
 	}
+	s.syncStampedAirSector(u, coll)
 }
 
 // takeoffPreamble is the five-step routine every air executor that must get the

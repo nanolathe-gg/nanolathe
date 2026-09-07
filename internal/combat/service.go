@@ -98,13 +98,6 @@ func isCloakedUnit(u *units.Unit) bool {
 	return u.Hidden
 }
 
-func isUnderwaterUnit(u *units.Unit, seaLevel numeric.Fixed) bool {
-	if u == nil {
-		return false
-	}
-	return u.Y.Raw() < seaLevel.Raw()
-}
-
 // callbackBridgeForUnit returns the callback bridge attached by strict unit
 // composition. A playable unit always has this binding; an unattached unit
 // cannot run weapon callbacks [04 §4.1][04 §5.3].
@@ -1265,10 +1258,6 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 	}
 	r.lastRebuild[p] = tick
 	r.refreshSeen(tick, vis)
-	var seaLevel numeric.Fixed
-	if terrain != nil {
-		seaLevel = terrain.SeaLevelWorld()
-	}
 	gate := false
 	pri := r.primary[p][:0] // both lists are cleared at every rebuild [06 §3.1]
 	sec := r.secondary[p][:0]
@@ -1285,7 +1274,7 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 		if isAllied(owner, u.Owner, econ) {
 			continue // neither hostile nor own: skipped entirely [06 §3.1]
 		}
-		if u.Flags&units.ImmunityStatus == 0 && directlyVisibleAtRebuild(owner, u, seaLevel, vis, econ) {
+		if u.Flags&units.ImmunityStatus == 0 && directlyVisibleAtRebuild(owner, u, vis) {
 			pri = append(pri, u.Handle) // unit-array order [06 §3.1] (I1)
 		}
 		if r.seenBit(u.Handle) {
@@ -1301,51 +1290,54 @@ func (s *Service) rebuildTargetRegistry(tick uint32, owner uint8, w *units.World
 // [06 §3.1], evaluated for one OBSERVING PLAYER — the registry owner — and one
 // candidate, at the rebuild and nowhere else.
 //
-// It answers in the section's order: the candidate's owner is the observer,
-// accept; the cloak bit is set, reject; the sonar bit is clear and the probe is
-// below sea level, reject; otherwise sample the definition's footprint corners
-// against the observer's visibility state. Acquisition.directlyVisible is the
-// same predicate for a candidate record the caller has already built, and both
-// read the same three candidate fields, so the two cannot drift.
+// It delegates the section's ordered owner, cloak, sonar, water and four-probe
+// checks to visibility.Target, populated from the candidate's definition box.
+// The reaction-acquisition adapter constructs that same target rather than a
+// separate center-point predicate.
 //
 // The observer is a player slot, not a shooter: the registry is per side, and
 // "in word-mask mode every probe tests the local player's bit, not the
 // observer's" is the visibility service's own business [03 §3.2].
-func directlyVisibleAtRebuild(owner uint8, cand *units.Unit, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service) bool {
-	if cand == nil {
-		return false
+func directlyVisibleAtRebuild(owner uint8, cand *units.Unit, vis *visibility.Service) bool {
+	if cand == nil || vis == nil {
+		return false // hostile list entry is visibility-gated [06 §3.1]
 	}
-	if cand.Owner == owner {
-		return true // own units are never hidden from their owner [06 §3.1]
-	}
-	cloaked := isCloakedUnit(cand)
-	if cloaked {
-		return false // the cloak bit is set — reject [06 §3.1]
-	}
-	// The underwater exemption: an undetected submerged unit is invisible
-	// regardless of line of sight. The sonar status bit reaches this build as
-	// the 0x200 alias the candidate record carries [06 §3.1][03 §3.4].
-	sonar := isAllied(owner, cand.Owner, econ)
-	if !sonar && isUnderwaterUnit(cand, seaLevel) {
-		return false
-	}
+	return vis.IsVisible(visibility.PlayerID(owner), visibilityTarget(cand, sensorStatus(vis, cand.Handle)))
+}
+
+// sensorStatus reads the completed sensor phase's runtime word for this pool
+// handle. The sonar bit is authored by that phase and can be cleared by its
+// sonar-jam callback; alliance membership is not a substitute [06 §3.1]
+// [03 R-VIS-01 §4][03 R-VIS-01 §5].
+func sensorStatus(vis *visibility.Service, h pool.Handle) uint32 {
 	if vis == nil {
-		// Hostile list entry is visibility-gated; with no service bound the
-		// predicate fails closed rather than filing every hostile unit.
-		return false
+		return 0
 	}
-	var status uint32
-	if sonar {
-		status |= 0x200
+	if status, ok := vis.SensorStatus(uint16(h)); ok {
+		return status
 	}
-	return vis.IsVisible(visibility.PlayerID(owner), visibility.Target{
-		Owner:  visibility.PlayerID(cand.Owner),
-		X:      cand.X,
-		Y:      cand.Y,
-		Z:      cand.Z,
-		Hidden: cloaked,
-		Status: status,
-	})
+	return 0
+}
+
+// visibilityTarget forms the direct-visibility probe from the definition's
+// bounding record: start at min X/max Y/min Z, then carry the three spans
+// through the visibility predicate's four probes [06 §3.1][03 §3.2].
+func visibilityTarget(cand *units.Unit, status uint32) visibility.Target {
+	if cand == nil {
+		return visibility.Target{}
+	}
+	min, max := cand.Def.BoundingExtents()
+	return visibility.Target{
+		Owner:   visibility.PlayerID(cand.Owner),
+		X:       cand.X.Add(numeric.Fixed(min[0])),
+		Y:       cand.Y.Add(numeric.Fixed(max[1])),
+		Z:       cand.Z.Add(numeric.Fixed(min[2])),
+		XExtent: numeric.Fixed(max[0] - min[0]),
+		YExtent: numeric.Fixed(max[1] - min[1]),
+		ZExtent: numeric.Fixed(max[2] - min[2]),
+		Hidden:  isCloakedUnit(cand),
+		Status:  status,
+	}
 }
 
 func (s *Service) acquireTargetForSlot(u *units.Unit, slot *units.Slot, idx int, w *units.World, vis *visibility.Service, terrain *world.Terrain, simRNG *rng.Simulation, econ *economy.Service, catalogs ...*content.Catalog) (pool.Handle, bool) {
@@ -1367,7 +1359,7 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
-	candidates := s.primaryCandidates(u, w, seaLevel, econ, catalog)
+	candidates := s.primaryCandidates(u, w, seaLevel, vis, econ, catalog)
 	acq := slotAcquisition(u, slot, idx, w, vis, terrain, simRNG, catalog, seaLevel, rangeLimit)
 	// The registry's secondary-list gate and its secondary list [06 §3.1].
 	// Both belong to the SCANNING PLAYER — the registry is per side and is the
@@ -1375,7 +1367,7 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	// here, by owner, and never from the shooter's own definition.
 	acq.HasUpgrade = s.targetingUpgradeGateFor(u.Owner)
 	if acq.HasUpgrade {
-		acq.Secondary = s.secondaryCandidates(u, w, seaLevel, econ, catalog)
+		acq.Secondary = s.secondaryCandidates(u, w, seaLevel, vis, econ, catalog)
 	}
 	h, ok := AcquireTarget(candidates, acq)
 	return h, ok
@@ -1403,7 +1395,7 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 // one — "an acquisition can therefore see a list up to thirty ticks stale" —
 // and a listed unit that has since gone dark stays acquirable for the rest of
 // the window.
-func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, econ *economy.Service, catalog *content.Catalog) []Candidate {
+func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog) []Candidate {
 	if s == nil || u == nil || w == nil {
 		return nil
 	}
@@ -1423,7 +1415,7 @@ func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel nume
 		if !isHostile(u, cand, econ) {
 			continue
 		}
-		out = append(out, acquisitionCandidate(u, cand, seaLevel, econ, catalog))
+		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
 	}
 	return out
 }
@@ -1437,7 +1429,7 @@ func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel nume
 // and NOTHING else is: no visibility, category, sensor, medium or alliance test
 // touches the list again, and the distance test is the one AcquireTarget's
 // shared gate applies to both lists.
-func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, econ *economy.Service, catalog *content.Catalog) []Candidate {
+func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog) []Candidate {
 	if s == nil || u == nil || w == nil {
 		return nil
 	}
@@ -1454,7 +1446,7 @@ func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel nu
 		if !cand.Alive || cand.Dying {
 			continue // alive bit set, death latch clear [06 §3.1]
 		}
-		out = append(out, acquisitionCandidate(u, cand, seaLevel, econ, catalog))
+		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
 	}
 	return out
 }
@@ -1463,12 +1455,14 @@ func (s *Service) secondaryCandidates(u *units.Unit, w *units.World, seaLevel nu
 // one shooter. Factored out of acquireTargetForSlotRange so the reaction
 // routine's per-slot offer tests exactly the same predicate the autonomous scan
 // does [06 §3.1][06 R-WPN-04 §2 part 3].
-func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixed, econ *economy.Service, catalog *content.Catalog) Candidate {
+func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixed, status uint32, catalog *content.Catalog) Candidate {
 	var catMask content.CategoryMask
 	if cand.Def != nil {
 		catMask = cand.Def.DefinitionMask()
 	}
 	candGate := gateEndForUnit(cand)
+	_, boundsMax := cand.Def.BoundingExtents()
+	probeY := cand.Y.Add(numeric.Fixed(boundsMax[1]))
 	return Candidate{
 		Handle:               cand.Handle,
 		X:                    cand.X,
@@ -1479,8 +1473,10 @@ func acquisitionCandidate(u *units.Unit, cand *units.Unit, seaLevel numeric.Fixe
 		Hostile:              true,
 		OwnSide:              u.Owner == cand.Owner,
 		Cloaked:              isCloakedUnit(cand),
-		Underwater:           isUnderwaterUnit(cand, seaLevel),
-		UnderwaterSeen:       isAllied(u.Owner, cand.Owner, econ),
+		// Direct visibility's water rejection reads the first hull probe, whose
+		// Y starts at the definition box's maximum extent [06 §3.1].
+		Underwater:     probeY < seaLevel,
+		UnderwaterSeen: status&visibility.SonarBit != 0,
 		// The gate's target-side operands [06 §3.1][06 R-WPN-05 §1]: the model
 		// top-height word the height clause adds, the committed mover mode the
 		// `toairweapon` clause requires to read exactly 2, and the water
@@ -1534,19 +1530,7 @@ func slotAcquisition(u *units.Unit, slot *units.Slot, idx int, w *units.World, v
 			if candUnit == nil {
 				return false
 			}
-			var status uint32
-			if c.UnderwaterSeen {
-				status |= 0x200
-			}
-			t := visibility.Target{
-				Owner:  visibility.PlayerID(candUnit.Owner),
-				X:      c.X,
-				Y:      c.Y,
-				Z:      c.Z,
-				Hidden: c.Cloaked,
-				Status: status,
-			}
-			return vis.IsVisible(visibility.PlayerID(u.Owner), t)
+			return vis.IsVisible(visibility.PlayerID(u.Owner), visibilityTarget(candUnit, sensorStatus(vis, candUnit.Handle)))
 		}
 	}
 	if weapon.Ballistic {
@@ -1604,7 +1588,7 @@ func SlotAcquisitionAdmits(u *units.Unit, idx int, cand *units.Unit, w *units.Wo
 	if terrain != nil {
 		seaLevel = terrain.SeaLevelWorld()
 	}
-	c := acquisitionCandidate(u, cand, seaLevel, econ, catalog)
+	c := acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog)
 	acq := slotAcquisition(u, slot, idx, w, vis, terrain, nil, catalog, seaLevel, -1)
 	return IsValidAcquisitionCandidate(c, acq)
 }

@@ -468,9 +468,6 @@ records the winning provider per asset, never a host path (C13).
 * **Intra-tier enumeration order** `[02 §2]`. Retail inherits the host's
   directory order, which the research itself calls non-portable; the mount
   sorts lexically inside a tier (§5).
-* **The retail archive-only gate on loose unit and weapon files**
-  `[02 R-CAT-01 §4]`. Implemented as a discovery helper in `content/source.go`
-  but not applied to the unit and weapon families, deliberately (SC24).
 * **The OVR content-checksum replacement** `[02 §6]`. The account names and
   the four-accumulator checksum shape are recorded; nothing consumes the
   replacement, because its consumer is the lobby content-identity exchange
@@ -537,13 +534,6 @@ behaviour.
   would mute those voices on a working install. The loader reads the bare key,
   discards the result and gathers the numbered keys unconditionally — which
   the executable itself does, so this is retail rather than a divergence.
-* **SC24 — loose unit and weapon files are compiled.** Retail's unit catalog
-  loader drops every FBI that does not come from an archive and never parses a
-  loose `weapons/*.tdf`. Nanolathe compiles both regardless of provider. This
-  is a superset of retail — a stock install has no loose FBIs, so behaviour on
-  retail content is identical — and it is what makes authored fixtures and
-  probes loadable without packing them. Nothing in the simulation reads the
-  archive bit. Open: it closes if a mod-loading contract ever needs the gate.
 
 Three smaller departures live only here, all recorded under [I11]:
 
@@ -562,9 +552,8 @@ Three smaller departures live only here, all recorded under [I11]:
   there to prove.
 * **Leniency that keeps odd-but-loadable mod data working.** An assignment
   followed by a newline without its terminator parses instead of raising the
-  second diagnostic; a unit file with no `[UNITINFO]` falls back to its first
-  section and an empty `unitname` to the filename stem. Stock content never
-  exercises any of the three.
+  second diagnostic, and an empty `unitname` falls back to the filename stem.
+  Stock content never exercises either case.
 
 ## 6. Research map
 

@@ -11,9 +11,6 @@ import (
 // owned and allied units via FriendlyMask 0x300 alias [03 §3.4] P0-11, which is why they never need the test.
 const underwaterExempt uint32 = 0x200
 
-// decloakBit is the decloak runtime bit 0x1000 set by proximity GT+90 [03 §3.4] P0-11.
-const decloakBit uint32 = 0x1000
-
 // Target is the gameplay visibility query [03 §3.2] C8.
 //
 // X, Y and Z are authoritative 16.16 world coordinates. The extents are the
@@ -58,8 +55,9 @@ func pixel(v numeric.Fixed) int32 {
 
 // IsVisible is the single gameplay gate [03 §3.2] C8 P0-11.
 //
-// Evaluation order: 1 owner bypass, 2 hidden with decloak GT+90, 3 below sea level with 0x200 exempt, 4 sample
-// projection against the mode-selected source with 4-point hull [03 §3.2] P0-11.
+// Evaluation order: 1 owner bypass, 2 hidden reject, 3 below sea level with
+// 0x200 exempt, 4 sample projection against the mode-selected source with a
+// four-point hull [03 §3.2] [06 §3.1].
 func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	if s == nil || !validPlayer(viewer) || !validPlayer(t.Owner) {
 		return false
@@ -69,15 +67,15 @@ func (s *Service) IsVisible(viewer PlayerID, t Target) bool {
 	if viewer == t.Owner {
 		return true
 	}
-	// 2. hidden/cloaked instance bit → false unless 0x1000 decloak set [03 §3.2] [03 §3.4].
-	// Cloak is a predicate early-out, never a mask edit [C10] P0-11; no firing decloak (NEGATIVE-BOUNDED) P0-11.
+	// 2. hidden/cloaked instance bit → false. Cloak is a predicate early-out,
+	// never a mask edit; the decloak timer does not bypass this gate [03 §3.2]
+	// [06 §3.1].
 	if t.Hidden {
-		if t.Status&decloakBit == 0 {
-			return false
-		}
-		// Decloaked within 90 ticks, fall through to height/sample test P0-11
+		return false
 	}
-	// 3. base height below sea level ⇒ not visible unless status 0x200 [C8.3].
+	// 3. the first probe's height below sea level ⇒ not visible unless status
+	// 0x200 [C8.3]. Unit callers seed the probe at min X/max Y/min Z from the
+	// definition box [06 §3.1].
 	// Sea level is the map header byte scaled to world units [03 §2.2] C9 —
 	// not zero. Comparing against zero makes every unit between world Y 0 and
 	// sea level wrongly visible on any map with a nonzero sea-level byte.

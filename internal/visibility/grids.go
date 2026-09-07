@@ -49,10 +49,20 @@ type Service struct {
 	// the contacts pass [03 §3.10] correction of 2026-08-29.
 	sensorInputs []SensorInput
 
+	// sensorStatusByID is the completed sensor phase's direct slot lookup for
+	// simulation consumers. It is rebuilt in input order beside sensorInputs;
+	// no map iteration can affect admission order [R-VIS-01 §4].
+	sensorStatusByID []sensorStatus
+
 	// viewerDefeated mirrors the viewing player's defeated/observer rule flag.
 	// It is the friendly pass's third disjunct: a defeated viewer marks every
 	// live unit friendly [R-VIS-01 §4] pass 1.
 	viewerDefeated bool
+}
+
+type sensorStatus struct {
+	status uint32
+	valid  bool
 }
 
 // ObserverID identifies one sight source across ticks — the owning unit's pool

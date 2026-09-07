@@ -47,8 +47,28 @@ func pollInput(in *input.State) {
 				down = ebiten.IsKeyPressed(ek)
 			}
 		}
+		wasDown := k.KeyDown(key)
 		k.SetKey(key, down)
+		if down && !wasDown && editorKey(key) {
+			in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: key})
+		}
 	}
+	// AppendInputChars supplies the platform's locale-translated characters.
+	// Its batch preserves character order, but Ebiten exposes no event history
+	// ordering that batch against physical polling edges; TokenRing cannot
+	// reconstruct that unavailable upstream history [07 §2].
+	for _, r := range ebiten.AppendInputChars(nil) {
+		in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
+	}
+}
+
+func editorKey(key input.Key) bool {
+	switch key {
+	case input.KeyBackspace, input.KeyDelete, input.KeyHome, input.KeyEnd,
+		input.KeyLeft, input.KeyRight, input.KeyEnter, input.KeyEscape:
+		return true
+	}
+	return false
 }
 
 func ebitenKey(k input.Key) (ebiten.Key, bool) {

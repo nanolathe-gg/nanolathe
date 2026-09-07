@@ -22,6 +22,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
@@ -231,8 +232,8 @@ func unitInfoValues(def *content.UnitDef) [8]string {
 	if def == nil {
 		return out
 	}
-	out[1] = fmt.Sprintf("%d", def.BuildCostEnergy)
-	out[2] = fmt.Sprintf("%d", def.BuildCostMetal)
+	out[1] = fmt.Sprintf("%d", numeric.TruncateFloat64ToLow32(float64(def.BuildCostEnergy)))
+	out[2] = fmt.Sprintf("%d", numeric.TruncateFloat64ToLow32(float64(def.BuildCostMetal)))
 	out[3] = fmt.Sprintf("%d", def.BuildTime)
 	if !def.BMCode {
 		out[5], out[6], out[7] = unitInfoNotApplicable, unitInfoNotApplicable, unitInfoNotApplicable

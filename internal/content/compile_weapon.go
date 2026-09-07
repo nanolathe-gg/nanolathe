@@ -139,7 +139,7 @@ func (w *WeaponDef) DamageKeysSorted() []string {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		li, lj := strings.ToLower(keys[i]), strings.ToLower(keys[j])
+		li, lj := CanonicalKey(keys[i]), CanonicalKey(keys[j])
 		if li != lj {
 			return li < lj
 		}
@@ -158,7 +158,7 @@ func (w *WeaponDef) UnknownKeysSorted() []string {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		li, lj := strings.ToLower(keys[i]), strings.ToLower(keys[j])
+		li, lj := CanonicalKey(keys[i]), CanonicalKey(keys[j])
 		if li != lj {
 			return li < lj
 		}
@@ -331,7 +331,7 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 			if item.Kind != formats.Assignment {
 				continue
 			}
-			if strings.EqualFold(item.Key, "default") {
+			if CanonicalKey(item.Key) == "default" {
 				continue
 			}
 			// Use typed accessor for integer conversion [02 §4]; enumeration preserves case.
@@ -347,7 +347,7 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 		if item.Kind != formats.Assignment {
 			continue
 		}
-		fold := strings.ToLower(item.Key)
+		fold := CanonicalKey(item.Key)
 		if _, ok := knownWeaponKeys[fold]; ok {
 			continue
 		}
@@ -522,10 +522,10 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 	processFile := func(data []byte, path string, prov Provenance) error {
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
-			return formats.WithTDFFile(err, path)
+			return formats.WithTDFContext(fs, err, path)
 		}
 		for _, section := range doc.Root.Sections() {
-			name := strings.TrimSpace(section.OriginalName)
+			name := trimTDFSemantic(section.OriginalName)
 			if name == "" {
 				continue
 			}
@@ -551,11 +551,14 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 	// then host directory order with the lexical divergence [SPEC_CONFLICTS
 	// SC3]. This iteration is the discovery order (I1).
 	for _, entry := range entries {
-		data := entry.data
 		e := entry.info
+		data, err := readContentEntry(fs, entry)
+		if err != nil {
+			return nil, nil, err
+		}
 		prov := ProvenanceFrom(e)
 		if err := processFile(data, e.Path, prov); err != nil {
-			return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)
+			return nil, nil, err
 		}
 	}
 

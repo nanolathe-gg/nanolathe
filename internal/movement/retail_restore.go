@@ -150,19 +150,18 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 		fl.Speed = c.Speed
 		fl.TurnResidual = c.TurnResidual
 		fl.LeanX, fl.LeanY, fl.LeanZ = c.LeanX, c.LeanY, c.LeanZ
+		s.commitFlightState(u, fl)
+	} else {
+		// A ground mover has no FlightState commit. The velocity triple the save
+		// carries is still live before the next mover tick, including the weapon
+		// lead reader [06 §3.3][08 R-SAVE-02 §8].
+		u.Move.VelX = numeric.Fixed(int64(c.VX))
+		u.Move.VelY = numeric.Fixed(int64(c.VY))
+		u.Move.VelZ = numeric.Fixed(int64(c.VZ))
 	}
 	if st := s.Steers[h]; st != nil {
 		st.Speed = c.Speed
 	}
-	// The velocity triple the save carries at words 0..2 [08 R-SAVE-02 §8] is
-	// the mover's, and the unit-side mirror the pre-fire lead of [06 §3.3]
-	// reads has to come back with it: without this write a restored battle
-	// leads every veteran's shot by whatever the mirror held before the
-	// restore. The first mover tick after the restore refreshes it, so the gap
-	// this write closes is the weapon phase that runs before that tick.
-	u.Move.VelX = numeric.Fixed(int64(c.VX))
-	u.Move.VelY = numeric.Fixed(int64(c.VY))
-	u.Move.VelZ = numeric.Fixed(int64(c.VZ))
 	// The saved route/follower/proposal records are not present in a standard
 	// battle save.  Ensure no pre-restore request or stale route survives.
 	s.CancelPathRequest(h)
@@ -208,5 +207,8 @@ func (s *System) RestoreOccupancy(h pool.Handle, anchorX, anchorZ int16) error {
 	c.CachedMode = c.Mode & 0x3
 	c.Dirty = false
 	s.noteOccupancyCommit(h, c.LastStampTick)
+	if s.world != nil {
+		s.syncStampedAirSector(s.world.Unit(h), c)
+	}
 	return nil
 }

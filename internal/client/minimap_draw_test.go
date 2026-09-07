@@ -85,6 +85,25 @@ func TestMinimapPointerWorldIsTheLensConversion(t *testing.T) {
 	}
 }
 
+func TestMinimapCameraCaptureIntentClampsAnAlreadyCapturedPointer(t *testing.T) {
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
+	dst := hud.Rect{X1: 200, Y1: 100, X2: 325, Y2: 225}
+	if _, ok := MinimapCameraIntent(m, dst, playW, playH, dst.X2+40, dst.Y2+50); ok {
+		t.Fatal("new camera latch admitted a pointer outside the radar")
+	}
+	got, ok := MinimapCameraCaptureIntent(m, dst, playW, playH, dst.X2+40, dst.Y2+50)
+	if !ok {
+		t.Fatal("captured camera pointer outside the radar was rejected")
+	}
+	cx := (dst.X2 + 40 - dst.X1) * camera.MinimapLongSide / 126
+	cy := (dst.Y2 + 50 - dst.Y1) * camera.MinimapLongSide / 126
+	wantX, wantZ := m.ToWorldPlay(cx, cy, playW, playH)
+	if got.X != wantX || got.Z != wantZ {
+		t.Fatalf("captured intent = %d,%d, want live-record lens %d,%d", got.X, got.Z, wantX, wantZ)
+	}
+}
+
 // TestDrawMinimapViewportRectStrokesOneRectangleOutline locks [03 R-MM-01 §1]:
 // the viewport marker is a one-pixel outline, never a fill, clipped to the
 // destination.

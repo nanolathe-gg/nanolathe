@@ -235,3 +235,14 @@ func TestUnitInfoAuthoredWindowCarriesTheGadgetsTheSectionNames(t *testing.T) {
 			window.Header.EscDefault, window.Header.CrDefault)
 	}
 }
+
+// The single-float definition value is truncated for the %d rows
+// [02 R-KEYS-01 §5][07 R-HUD-03 §8][01 R-DET-01 §1].
+func TestUnitInfoCostsUseStoredSingles(t *testing.T) {
+	source := int32(16777217)
+	def := &content.UnitDef{BuildCostEnergy: float32(source), BuildCostMetal: 2147483648}
+	got := unitInfoValues(def)
+	if got[1] != "16777216" || got[2] != "-2147483648" {
+		t.Fatalf("cost rows = %q/%q, want stored value and truncation low word", got[1], got[2])
+	}
+}

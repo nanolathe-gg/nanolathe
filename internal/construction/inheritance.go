@@ -234,7 +234,7 @@ func (s *Service) rallyInheritance(factory *units.Unit, product *units.Unit, tic
 func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, tick uint32) {
 	// Compute refund trunc((1 - remaining) * metalBuildCost) [05 C21].
 	var remaining float32 = 1 // default if no product
-	var metalCost int32
+	var metalCost float32
 	var product *units.Unit
 	if node.Target != 0 && s.World != nil {
 		// Try to resolve product via world.
@@ -251,7 +251,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 			metalCost = def.BuildCostMetal
 		}
 	}
-	refund := float32(int32((1 - remaining) * float32(metalCost))) // trunc toward zero [01 §8] I3
+	refund := float32(int32((1 - remaining) * metalCost)) // trunc toward zero [01 §8] I3
 
 	// Normally add to builder's metal bucket UNLESS special second state [05 C21].
 	// Apply via economy mirror bucket Production.

@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -80,6 +81,56 @@ func (b *battleSession) isOnRadar(x, y int32) bool {
 	return m.HitTest(cx, cy)
 }
 
+// battlePointerRegion is the pointer record's usable-region classification.
+// The minimap and viewport are the two sources that may supply a world point;
+// all chrome, including the minimap letterbox bars, is inert. Command and
+// cursor consumers call this same classifier so feedback cannot advertise a
+// different destination from a click [07 R-CAM-01 §11][07 §8].
+type battlePointerRegion uint8
+
+const (
+	battlePointerChrome battlePointerRegion = iota
+	battlePointerViewport
+	battlePointerMinimap
+)
+
+func (b *battleSession) classifyPointer(x, y int32) battlePointerRegion {
+	if b == nil {
+		return battlePointerChrome
+	}
+	// A covering battle child window owns the pointer record. In particular the
+	// unit-information window can cover the radar, so its underlying contact
+	// must not reach the cursor, footer, or command classifier [07 §3].
+	if unitInfoCovers(x, y) || b.battleState().HasOptionsLayer() {
+		return battlePointerChrome
+	}
+	if !b.battleState().Input.DragActive && b.isOnRadar(x, y) {
+		return battlePointerMinimap
+	}
+	if b.overWorld(x, y) {
+		return battlePointerViewport
+	}
+	return battlePointerChrome
+}
+
+// minimapCameraButton and minimapOrderButton read the existing persisted
+// Interface Type value through the battle shell. A direct command-line battle
+// has no shell and therefore uses the registry's absent-value default [07
+// R-CAM-01 §5]. The full world-view Type-1 drag path remains I09.
+func (b *battleSession) minimapCameraButton() input.MouseButton {
+	if b != nil && b.shell != nil && b.shell.interfaceType == settings.InterfaceTypeRightClick {
+		return input.MouseButtonLeft
+	}
+	return input.MouseButtonRight
+}
+
+func (b *battleSession) minimapOrderButton() input.MouseButton {
+	if b.minimapCameraButton() == input.MouseButtonLeft {
+		return input.MouseButtonRight
+	}
+	return input.MouseButtonLeft
+}
+
 // minimapPointerWorld is the minimap branch of step 1's pointer
 // classification: the lens conversion of [07 R-CAM-01 §11], with no
 // half-viewport term. It yields map pixels, which the ground resolver then
@@ -104,44 +155,64 @@ func (b *battleSession) minimapPointerWorld(x, y int32) (int32, int32, bool) {
 	return client.MinimapPointerWorld(m, dst, playW, playH, x, y)
 }
 
-// minimapCameraLatch is the retail minimap latch. Under the default
-// `Interface Type 0` polarity the **right** button sets it over the minimap,
-// and while it is held every host frame writes the camera origin from the
-// pointer, so a right-drag pans continuously; right up releases it
-// [07 R-CAM-01 §5][07 R-CAM-01 §11]. The clicked map point becomes the view
-// *centre*, and Camera.JumpToBattleViewCenter owns that recenter for this
-// build's framebuffer-origin camera.
-//
-// It reports whether it consumed the pointer for this frame. Presentation
-// only; no sim state is written [I6].
-func (b *battleSession) minimapCameraLatch(mx, my int32, mouse *input.MouseState) bool {
-	if b == nil || b.cam == nil || mouse == nil {
-		return false
-	}
-	if !mouse.Pressed(input.MouseButtonRight) && !mouse.Held(input.MouseButtonRight) {
+// serviceMinimapCameraLatch runs before this host frame's new clicks. The
+// admitted down edge only sets the capture, so the first camera jump is the
+// following service pass. Once captured it uses the current pointer record
+// even outside the radar rectangle; the signed lens arithmetic runs on that
+// record before the camera's normal clamp [07 R-CAM-01 §11].
+func (b *battleSession) serviceMinimapCameraLatch(mx, my int32, mouse *input.MouseState) bool {
+	if b == nil || b.cam == nil || mouse == nil || !b.minimapCameraCaptured {
 		return false
 	}
 	m, dst, ok := b.minimapLayout()
 	if !ok {
-		return false
+		if mouse.Released(b.minimapCameraCaptureButton) {
+			b.minimapCameraCaptured = false
+		}
+		return true
 	}
 	playW, playH, ok := b.sess.PlayArea()
 	if !ok {
-		return false
+		if mouse.Released(b.minimapCameraCaptureButton) {
+			b.minimapCameraCaptured = false
+		}
+		return true
 	}
-	intent, consumed := client.MinimapCameraIntent(m, dst, playW, playH, mx, my)
-	if !consumed {
-		return false
+	intent, ok := client.MinimapCameraCaptureIntent(m, dst, playW, playH, mx, my)
+	if !ok {
+		if mouse.Released(b.minimapCameraCaptureButton) {
+			b.minimapCameraCaptured = false
+		}
+		return true
 	}
 	// The minimap latch jumps, and a minimap jump cancels the follow triple
 	// [07 R-CAM-01 §12].
 	b.cam.ClearFollow()
 	b.cam.JumpToBattleViewCenter(intent.X, intent.Z)
+	// The already-set capture is serviced before this frame's queued up edge.
+	// Only that captured button's release clears it; a missing held sample is
+	// not a substitute for the event [07 R-CAM-01 §11][07 §2].
+	if mouse.Released(b.minimapCameraCaptureButton) {
+		b.minimapCameraCaptured = false
+	}
 	return true
 }
 
-// minimapClickOrder is retail's left-button path over the minimap under
-// `Interface Type 0`. The world-click handler is **region-agnostic**: with the
+// beginMinimapCameraLatch records only a qualifying down edge. It never jumps
+// on the press frame, and a held-only sample cannot acquire the capture [07
+// R-CAM-01 §5][07 R-CAM-01 §11].
+func (b *battleSession) beginMinimapCameraLatch(mx, my int32, mouse *input.MouseState) bool {
+	if b == nil || mouse == nil || !mouse.Pressed(b.minimapCameraButton()) || b.classifyPointer(mx, my) != battlePointerMinimap {
+		return false
+	}
+	b.minimapCameraCaptured = true
+	b.minimapCameraCaptureButton = b.minimapCameraButton()
+	return true
+}
+
+// minimapClickOrder is retail's minimap order-button path. Under Interface
+// Type 0 that button is left; under Type 1 it is right. The world-click
+// handler is **region-agnostic**: with the
 // armed-order latch not idle the frame handler routes a left-down to it
 // whatever the region, and with the latch idle a left-down over the minimap
 // reaches it at once — no box drag starts there. Its branches run in the order

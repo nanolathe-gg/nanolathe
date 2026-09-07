@@ -117,6 +117,7 @@ func TestVTOLLandingPushesSelfRepairOnTouchdown(t *testing.T) {
 	u.Health = 50
 	pad := spawnAirBasePadFor(t, w, sys.Terrain, "friendlypad", u.Owner,
 		u.X+numeric.Fixed(48<<16), u.Z)
+	sys.EnsureUnit(pad)
 
 	q := orderQueueOf(t, u)
 	// The repair port the spawned record works through. It refuses the visit,
@@ -192,6 +193,7 @@ func TestVTOLLandingPushesNoSelfRepairAtFullHealth(t *testing.T) {
 	u.Health = u.Def.MaxDamage
 	pad := spawnAirBasePadFor(t, w, sys.Terrain, "friendlypad", u.Owner,
 		u.X+numeric.Fixed(48<<16), u.Z)
+	sys.EnsureUnit(pad)
 
 	q := orderQueueOf(t, u)
 	q.Push(orders.Lookup("VTOL_Landing"), orders.Node{Owner: u.Handle, Target: pad.Handle})

@@ -112,6 +112,9 @@ func TestTDFDiagnosticsCarryExactReasonSectionAndLogicalFile(t *testing.T) {
 			if got := parseErr.Error(); got != want {
 				t.Fatalf("error = %q, want %q", got, want)
 			}
+			if !strings.HasPrefix(err.Error(), "nanolathe: TDF load failed:") || !strings.Contains(err.Error(), "providers searched [gamedata/authored.tdf]") {
+				t.Fatalf("loader diagnostic lost winning provider: %v", err)
+			}
 		})
 	}
 }

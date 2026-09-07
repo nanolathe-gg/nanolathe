@@ -22,11 +22,12 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	}
 	mouse := cl.Input().Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	region := b.classifyPointer(mx, my)
 	// The footer's pointer record is written by the same per-frame pointer
 	// pass, and by nothing else [07 R-HUD-03 §1].
 	b.updateFooterHover(mx, my)
 	hover := hud.CursorHover{
-		OverWorld:      b.overWorld(mx, my),
+		OverWorld:      region != battlePointerChrome,
 		Placing:        b.battleState().Input.BuildDef != "",
 		PlacementValid: b.battleState().Input.BuildOK,
 	}
@@ -124,7 +125,7 @@ func (b *battleSession) updateFooterHover(mx, my int32) {
 		return
 	}
 	switch {
-	case b.isOverMinimap(mx, my):
+	case b.classifyPointer(mx, my) == battlePointerMinimap:
 		b.footerHoverUnit = b.minimapHoverUnit(f, mx, my)
 	case b.overWorld(mx, my) && !b.battleState().Input.DragActive:
 		handle, _, _ := client.PickSnapshotUnit(f, mx, my, b.cam, b.sess.LocalOwner)

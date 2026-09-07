@@ -204,7 +204,7 @@ func (p *skirmishPreflight) diag(d SkirmishDiagnostic) {
 }
 
 func (p *skirmishPreflight) file(kind, logical string, required bool) bool {
-	logical = strings.ToLower(strings.TrimSpace(logical))
+	logical = asciiFoldContent(logical)
 	if logical == "" {
 		if required {
 			p.fatal(kind, logical, logical, "required file reference is empty")
@@ -227,7 +227,7 @@ func (p *skirmishPreflight) file(kind, logical string, required bool) bool {
 }
 
 func (p *skirmishPreflight) namedFile(kind, name string, dirs ...string) string {
-	name = strings.TrimSpace(name)
+	name = trimTDFSemantic(name)
 	if name == "" {
 		return ""
 	}
@@ -236,7 +236,7 @@ func (p *skirmishPreflight) namedFile(kind, name string, dirs ...string) string 
 		return base
 	}
 	for _, dir := range dirs {
-		path := strings.ToLower(strings.TrimSuffix(dir, "/") + "/" + base)
+		path := asciiFoldContent(strings.TrimSuffix(dir, "/") + "/" + base)
 		if !strings.Contains(path[strings.LastIndex(path, "/"):], ".") {
 			path += ".fnt"
 		}
@@ -246,7 +246,7 @@ func (p *skirmishPreflight) namedFile(kind, name string, dirs ...string) string 
 	}
 	// Return the first data-derived candidate so the resulting diagnostic says
 	// exactly which lookup was attempted; the file() call emits the failure.
-	path := strings.ToLower(strings.TrimSuffix(dirs[0], "/") + "/" + base)
+	path := asciiFoldContent(strings.TrimSuffix(dirs[0], "/") + "/" + base)
 	if !strings.Contains(path[strings.LastIndex(path, "/"):], ".") {
 		path += ".fnt"
 	}
@@ -268,7 +268,7 @@ func (p *skirmishPreflight) sideGUIPath(sd *SideDef) string {
 }
 
 func (p *skirmishPreflight) gafFile(kind, value string, required bool) string {
-	value = strings.TrimSpace(value)
+	value = trimTDFSemantic(value)
 	if value == "" {
 		if required {
 			p.fatal(kind, "", value, "required GAF reference is empty")
@@ -279,10 +279,10 @@ func (p *skirmishPreflight) gafFile(kind, value string, required bool) string {
 	if !strings.Contains(path, "/") {
 		path = "anims/" + path
 	}
-	if !strings.HasSuffix(strings.ToLower(path), ".gaf") {
+	if !strings.HasSuffix(asciiFoldContent(path), ".gaf") {
 		path += ".gaf"
 	}
-	path = strings.ToLower(path)
+	path = asciiFoldContent(path)
 	if !p.file(kind, path, required) {
 		return ""
 	}
@@ -420,7 +420,7 @@ func (p *skirmishPreflight) unit(kind string, u *UnitDef, required bool) {
 		{"selfdestructas", u.SelfDestructAs, u.SelfDestructAsDef},
 	}
 	for _, link := range weaponRefs {
-		if strings.TrimSpace(link.ref) != "" && link.def == nil {
+		if trimTDFSemantic(link.ref) != "" && link.def == nil {
 			p.diag(SkirmishDiagnostic{Code: "missing-definition", Fatal: required, Kind: kind + "." + link.name, Entry: link.ref, Message: fmt.Sprintf("weapon definition is unavailable: catalog key %s", CanonicalKey(link.ref))})
 		}
 	}
@@ -436,14 +436,14 @@ func (p *skirmishPreflight) unit(kind string, u *UnitDef, required bool) {
 }
 
 func (p *skirmishPreflight) modelAsset(kind, name string, required bool) {
-	path := strings.TrimSpace(name)
+	path := trimTDFSemantic(name)
 	if !strings.Contains(path, "/") {
 		path = "objects3d/" + path
 	}
-	if !strings.HasSuffix(strings.ToLower(path), ".3do") {
+	if !strings.HasSuffix(asciiFoldContent(path), ".3do") {
 		path += ".3do"
 	}
-	path = strings.ToLower(path)
+	path = asciiFoldContent(path)
 	if !p.file(kind, path, required) {
 		return
 	}
@@ -463,7 +463,7 @@ func (p *skirmishPreflight) modelAsset(kind, name string, required bool) {
 }
 
 func (p *skirmishPreflight) script(kind string, u *UnitDef, required bool) {
-	path := "scripts/" + strings.ToLower(u.UnitName) + ".cob"
+	path := "scripts/" + CanonicalKey(u.UnitName) + ".cob"
 	program, found, err := cob.LoadFromFS(p.fs, u.UnitName)
 	if err != nil {
 		p.diag(SkirmishDiagnostic{Code: "malformed-cob", Fatal: required, Kind: kind + ".cob", Logical: path, Message: fmt.Sprintf("cannot parse COB: %v", err)})
@@ -496,7 +496,7 @@ func (p *skirmishPreflight) script(kind string, u *UnitDef, required bool) {
 	// Verify the full COB piece table against the already parsed 3DO hierarchy
 	// [04 §4.1] [fmt cob] [03 §2.4].
 	if p.models != nil {
-		modelPath := "objects3d/" + strings.ToLower(u.ObjectName) + ".3do"
+		modelPath := "objects3d/" + CanonicalKey(u.ObjectName) + ".3do"
 		if m := p.models[modelPath]; m != nil {
 			pieces := make(map[string]struct{}, len(m.Pieces))
 			for _, piece := range m.Pieces {
@@ -520,7 +520,7 @@ func hasScript(program *cob.Program, name string) bool {
 		return false
 	}
 	for script := range program.Scripts {
-		if strings.EqualFold(script, name) {
+		if asciiFoldContent(script) == asciiFoldContent(name) {
 			return true
 		}
 	}
@@ -535,10 +535,10 @@ func (p *skirmishPreflight) weapon(kind string, w *WeaponDef, required bool) {
 		p.modelAsset(kind+".model", w.Model, required)
 	}
 	for _, pair := range [][2]string{{w.ExplosionGaf, w.ExplosionArt}, {w.WaterExplosionGaf, w.WaterExplosionArt}, {w.LavaExplosionGaf, w.LavaExplosionArt}} {
-		if strings.TrimSpace(pair[0]) == "" && strings.TrimSpace(pair[1]) == "" {
+		if trimTDFSemantic(pair[0]) == "" && trimTDFSemantic(pair[1]) == "" {
 			continue
 		}
-		if strings.TrimSpace(pair[0]) == "" || strings.TrimSpace(pair[1]) == "" {
+		if trimTDFSemantic(pair[0]) == "" || trimTDFSemantic(pair[1]) == "" {
 			p.diag(SkirmishDiagnostic{Code: "incomplete-reference", Fatal: required, Kind: kind + ".explosion", Entry: w.CanonicalKey, Message: fmt.Sprintf("weapon explosion reference has only one half: weapon %s", w.CanonicalKey)})
 			continue
 		}
@@ -548,7 +548,7 @@ func (p *skirmishPreflight) weapon(kind string, w *WeaponDef, required bool) {
 }
 
 func (p *skirmishPreflight) featureGAF(kind, entry string, required bool) bool {
-	entry = strings.TrimSpace(entry)
+	entry = trimTDFSemantic(entry)
 	if entry == "" {
 		return false
 	}
@@ -559,7 +559,7 @@ func (p *skirmishPreflight) featureGAF(kind, entry string, required bool) bool {
 	entries, err := p.fs.ReadDir("anims")
 	if err == nil {
 		for _, info := range entries {
-			path := strings.ToLower(info.Path)
+			path := asciiFoldContent(info.Path)
 			if info.IsDir || !strings.HasSuffix(path, ".gaf") {
 				continue
 			}
@@ -592,13 +592,13 @@ func (p *skirmishPreflight) feature(kind, key string, required bool, seen map[st
 		p.modelAsset(kind+".3do", f.Object, required)
 	}
 	for _, pair := range [][2]string{{f.SeqName, "sequence"}, {f.SeqNameShad, "shadow sequence"}, {f.SeqNameBurn, "burn sequence"}, {f.SeqNameBurnShad, "burn shadow sequence"}, {f.SeqNameDie, "death sequence"}, {f.SeqNameDieShad, "death shadow sequence"}, {f.SeqNameReclamate, "reclaim sequence"}, {f.SeqNameReclamateShad, "reclaim shadow sequence"}} {
-		if strings.TrimSpace(pair[0]) == "" {
+		if trimTDFSemantic(pair[0]) == "" {
 			continue
 		}
 		p.featureGAF(kind+"."+pair[1], pair[0], required)
 	}
 	for _, next := range []string{f.FeatureDead, f.FeatureReclamate, f.FeatureBurnt} {
-		if strings.TrimSpace(next) != "" {
+		if trimTDFSemantic(next) != "" {
 			p.feature(kind+".successor", next, required, seen)
 		}
 	}
@@ -607,8 +607,8 @@ func (p *skirmishPreflight) feature(kind, key string, required bool, seen map[st
 func (p *skirmishPreflight) mapAI(mh *MapHeader) {
 	profile := ""
 	for _, schema := range mh.Schemas {
-		if strings.TrimSpace(schema.AIProfile) != "" {
-			profile = strings.TrimSpace(schema.AIProfile)
+		if trimTDFSemantic(schema.AIProfile) != "" {
+			profile = trimTDFSemantic(schema.AIProfile)
 			break
 		}
 	}

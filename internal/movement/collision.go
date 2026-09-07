@@ -1166,6 +1166,14 @@ type CollisionState struct {
 	// collision record so that ForgetUnit drops it: a reused pool slot starts
 	// unfiled, which is what retail's finalisation unlink leaves behind.
 	Filing SectorFiling
+
+	// airSector is the coarse air-sector record selected by this collision
+	// record's completed footprint stamp. It is separate from Filing: Filing is
+	// optional overlap-sweep bookkeeping, while air-sector readers include
+	// grounded targets that need the canonical stamp result even when no overlap
+	// binding is installed [04 R-COLL-01 §4][04 R-AIR-01 §5].
+	airSector *airSector
+	airOffMap bool
 }
 
 // SetHalfBias overrides the packed half-cell bias [04 §8.2] C23. If not set,

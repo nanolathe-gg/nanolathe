@@ -131,10 +131,10 @@ func TestSessionVisibility(t *testing.T) {
 	if s.IsUnitVisible(0, u1) {
 		t.Fatalf("cloaked enemy should be rejected even inside LOS")
 	}
-	// With decloak bit set, should be visible again.
+	// The decloak timer does not bypass the direct cloak gate.
 	s.visStatus[int(u1.Handle)] = visibility.DecloakBit
-	if !s.IsUnitVisible(0, u1) {
-		t.Fatalf("decloaked enemy should be visible")
+	if s.IsUnitVisible(0, u1) {
+		t.Fatalf("hidden enemy with decloak timer should still be rejected")
 	}
 	// Authored stealth is NOT an input to this predicate. It is the contact
 	// callback's third reject: it suppresses radar and sonar detection

@@ -107,6 +107,11 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 // data-driven from cat.BuildMenus; input-capture latch prevents HUD presses
 // from leaking into world drag [F-P0-003][F-P1-008].
 func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
+	// Battle owns no kind-3 editor. Its translated/edit tokens are therefore
+	// fully serviced or ignored by this ordinary input pass and cannot survive
+	// into a later save/load child panel [07 §2][07 R-WGT-01 §12]. Save/load
+	// routes return through gameShell.menuInput before this method is reached.
+	defer in.DiscardTokens(in.PendingTokens())
 	kbd := in.Kbd
 	mouse := in.Mouse
 	mx, my := int32(mouse.X), int32(mouse.Y)
@@ -119,26 +124,24 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		b.battleState().Input.ShiftLatchSticky = false
 	}
 
-	// Minimap input, under the default `Interface Type 0` polarity
-	// [07 R-CAM-01 §5]: right down over the minimap sets the minimap latch, and
-	// while it is held every host frame jumps the camera from the pointer, so a
-	// right-drag pans continuously [07 R-CAM-01 §11]; left down over the minimap
-	// issues the armed order or the world click at the minimap's world point.
-	//
-	// This used to be inverted — left jumped the camera, and no button issued an
-	// order at all.
-	if b.isOverMinimap(mx, my) {
-		if b.minimapCameraLatch(mx, my, mouse) {
-			return
-		}
-		if mouse.Pressed(input.MouseButtonLeft) {
-			b.minimapClickOrder(cl, mx, my, kbd.HasShift())
-			return
-		}
-		// While over the minimap, suppress world drag/selection [07 §10].
-		if mouse.Held(input.MouseButtonLeft) {
-			return
-		}
+	// An admitted minimap camera down edge only sets a presentation capture;
+	// its first jump is serviced here on the following host frame. Capture is
+	// intentionally serviced before fresh clicks and continues outside the
+	// radar until its matching release [07 R-CAM-01 §5][07 R-CAM-01 §11].
+	if b.serviceMinimapCameraLatch(mx, my, mouse) {
+		return
+	}
+	if b.beginMinimapCameraLatch(mx, my, mouse) {
+		return
+	}
+	if b.classifyPointer(mx, my) == battlePointerMinimap && mouse.Pressed(b.minimapOrderButton()) {
+		b.minimapClickOrder(cl, mx, my, kbd.HasShift())
+		return
+	}
+	if b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
+		// The whole canvas suppresses a viewport drag; only its fitted radar
+		// rectangle admits lens input [07 R-CAM-01 §11].
+		return
 	}
 
 	// Ctrl is a held-key query made at dispatch time, and a Ctrl-composed token

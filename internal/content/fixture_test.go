@@ -33,8 +33,9 @@ func mustParseTDF(t *testing.T, body string) *formats.Document {
 
 // fixtureFile is one logical path and its bytes in a fixtureFS.
 type fixtureFile struct {
-	path string
-	data string
+	path                 string
+	data                 string
+	preserveUnitMetadata bool
 }
 
 // fixtureFS is a minimal vfs.FSOps over in-memory files. ReadDir returns
@@ -47,9 +48,37 @@ func newFixtureFS(t *testing.T, files ...fixtureFile) *fixtureFS {
 	t.Helper()
 	fs := &fixtureFS{files: make(map[string]string, len(files))}
 	for _, f := range files {
+		if strings.HasPrefix(strings.ToLower(f.path), "units/") && !f.preserveUnitMetadata {
+			f.data = fixtureCompatibleUnitMetadata(f.data)
+		}
 		fs.files[f.path] = f.data
 	}
 	return fs
+}
+
+// fixtureCompatibleUnitMetadata supplies the established compatibility fields
+// only for fixture construction. Explicit authored values and tests opting out
+// through preserveUnitMetadata reach the production compiler unchanged.
+func fixtureCompatibleUnitMetadata(data string) string {
+	lower := strings.ToLower(data)
+	if !strings.Contains(lower, "[unitinfo]") {
+		return data
+	}
+	add := ""
+	if !strings.Contains(lower, "version=") {
+		add += "\nVersion=3.1;"
+	}
+	if !strings.Contains(lower, "copyright=") {
+		add += "\nCopyright=Copyright 1997 Humongous Entertainment. All rights reserved.;"
+	}
+	if add == "" {
+		return data
+	}
+	end := strings.LastIndex(data, "}")
+	if end < 0 {
+		return data
+	}
+	return data[:end] + add + data[end:]
 }
 
 func (f *fixtureFS) Open(name string) (vfs.File, error) {

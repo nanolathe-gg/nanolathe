@@ -4,11 +4,13 @@ package content
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -88,8 +90,8 @@ type UnitDef struct {
 	UnitMask CategoryMask
 
 	// Economy [02 "Unit record"].
-	BuildCostEnergy int32   // buildcostenergy integer default 0 [02 "Unit record"]
-	BuildCostMetal  int32   // buildcostmetal integer default 0 [02 "Unit record"]
+	BuildCostEnergy float32 // integer parsed, single-float store, default 0 [02 R-KEYS-01 §5]
+	BuildCostMetal  float32 // integer parsed, single-float store, default 0 [02 R-KEYS-01 §5]
 	EnergyMake      float64 // energymake floating default 0 [02 "Unit record"]
 	EnergyUse       float64 // energyuse floating default 0 [02 "Unit record"]
 	MetalMake       float64 // metalmake floating default 0 [02 "Unit record"]
@@ -376,7 +378,7 @@ func (u *UnitDef) UnknownKeysSorted() []string {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		li, lj := strings.ToLower(keys[i]), strings.ToLower(keys[j])
+		li, lj := asciiFoldContent(keys[i]), asciiFoldContent(keys[j])
 		if li != lj {
 			return li < lj
 		}
@@ -393,7 +395,7 @@ var knownUnitKeys = map[string]struct{}{
 	"maxvelocity": {}, "brakerate": {}, "acceleration": {}, "bankscale": {}, "pitchscale": {}, "damagemodifier": {}, "moverate1": {}, "moverate2": {}, "turnrate": {}, "waterline": {}, "minwaterdepth": {}, "maxwaterdepth": {}, "maxslope": {}, "badslope": {}, "maxwaterslope": {}, "badwaterslope": {}, "cruisealt": {}, "transportsize": {}, "transportcapacity": {}, "buildangle": {}, "builddistance": {}, "sortbias": {}, "maneuverleashlength": {}, "attackrunlength": {}, "kamikazedistance": {}, "footprintx": {}, "footprintz": {},
 	"maxdamage": {}, "sightdistance": {}, "radardistance": {}, "sonardistance": {}, "radardistancejam": {}, "sonardistancejam": {}, "mincloakdistance": {},
 	"standingmoveorder": {}, "standingfireorder": {}, "init_cloaked": {}, "downloadable": {}, "builder": {}, "stealth": {}, "bmcode": {}, "zbuffer": {}, "isairbase": {}, "istargetingupgrade": {}, "teleporter": {}, "hidedamage": {}, "shootme": {}, "armoredstate": {}, "activatewhenbuilt": {}, "canfly": {}, "canhover": {}, "upright": {}, "floater": {}, "amphibious": {}, "isfeature": {}, "noshadow": {}, "immunetoparalyzer": {}, "hoverattack": {}, "antiweapons": {}, "digger": {}, "onoffable": {}, "mobilestandorders": {}, "firestandorders": {}, "canstop": {}, "canattack": {}, "canguard": {}, "canpatrol": {}, "canmove": {}, "canload": {}, "canreclamate": {}, "canresurrect": {}, "cancapture": {}, "candgun": {}, "kamikaze": {}, "norestrict": {}, "showplayername": {}, "commander": {}, "cantbetransported": {}, "wacky": {},
-	"selfdestructcountdown": {},
+	"selfdestructcountdown": {}, "version": {}, "copyright": {},
 }
 
 // compileUnitSection compiles a single UNITINFO section into a UnitDef.
@@ -406,7 +408,10 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	displayName, _ := section.LanguageString(language, "name", "")
 	description, _ := section.LanguageString(language, "description", "")
 	side, _ := section.StringValue("side", "")
-	objectName, _ := section.StringValue("objectname", "")
+	objectName, objectAuthored := section.StringValue("objectname", "")
+	if !objectAuthored {
+		objectName = unitName
+	}
 	category, _ := section.StringValue("category", "")
 	soundCategory, _ := section.StringValue("soundcategory", "")
 	corpse, _ := section.StringValue("corpse", "")
@@ -447,8 +452,8 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	aiWeight = boundedString(aiWeight, 63)
 
 	// Economy — integer/floating accessors [02 "Unit record"].
-	buildCostEnergy := section.IntValue("buildcostenergy", 0)
-	buildCostMetal := section.IntValue("buildcostmetal", 0)
+	buildCostEnergy := float32(section.IntValue("buildcostenergy", 0))
+	buildCostMetal := float32(section.IntValue("buildcostmetal", 0))
 	energyMake := section.FloatValue("energymake", 0)
 	energyUse := section.FloatValue("energyuse", 0)
 	metalMake := section.FloatValue("metalmake", 0)
@@ -567,17 +572,17 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 		if item.Kind != formats.Assignment {
 			continue
 		}
-		fold := strings.ToLower(item.Key)
+		fold := asciiFoldContent(item.Key)
 		if _, ok := knownUnitKeys[fold]; ok {
 			continue
 		}
 		// Language-prefixed variants for current language are already consumed via LanguageString — not unknown.
 		if language != "" {
-			lfold := strings.ToLower(language + "name")
+			lfold := asciiFoldContent(language + "name")
 			if fold == lfold {
 				continue
 			}
-			lfold = strings.ToLower(language + "description")
+			lfold = asciiFoldContent(language + "description")
 			if fold == lfold {
 				continue
 			}
@@ -755,7 +760,7 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|", u.MinWaterDepth, u.MaxWaterDepth, u.MaxSlope, u.BadSlope, u.MaxWaterSlope, u.BadWaterSlope)
 	fmt.Fprintf(&b, "%s|%s|%s|%s|%s|", u.DefaultMissionType, u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory)
 	fmt.Fprintf(&b, "%s|", u.AIWeight)
-	fmt.Fprintf(&b, "%d|%d|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
+	fmt.Fprintf(&b, "%.0f|%.0f|%.10f|%.10f|%.10f|%.10f|", u.BuildCostEnergy, u.BuildCostMetal, u.EnergyMake, u.EnergyUse, u.MetalMake, u.ExtractsMetal)
 	fmt.Fprintf(&b, "%.10f|%.10f|%.10f|%.10f|%d|%d|%d|%d|%d|%d|", u.WindGenerator, u.TidalGenerator, u.EnergyStorage, u.MetalStorage, u.MakesMetal, u.BuildTime, u.WorkerTime, u.HealTime, u.CloakCost, u.CloakCostMoving)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.MaxVelocity, u.BrakeRate, u.Acceleration, u.BankScale, u.PitchScale, u.DamageModifier, u.MoveRate1, u.MoveRate2, u.TurnRate, u.Waterline)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.CruiseAlt, u.TransportSize, u.TransportCapacity, u.BuildAngle, u.BuildDistance, u.SortBias, u.ManeuverLeashLength, u.AttackRunLength, u.KamikazeDistance, u.FootprintX)
@@ -797,8 +802,21 @@ func CompileUnits(fs vfs.FSOps) (map[string]*UnitDef, error) {
 // name trial [02 §3] C7. An empty language yields the base name/description; a non-empty language
 // like "German" tries "<Language>name" then "name". Missing Translate.tdf yields identity (byte-exact) [02 §3].
 func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDef, error) {
+	result, err := compileUnitsWithLanguage(fs, language)
+	if err != nil {
+		return nil, err
+	}
+	return result.units, nil
+}
+
+type unitCompileResult struct {
+	units                  map[string]*UnitDef
+	incompatibilityWarning bool
+}
+
+func compileUnitsWithLanguage(fs vfs.FSOps, language string) (unitCompileResult, error) {
 	if fs == nil {
-		return nil, fmt.Errorf("content: nil VFS")
+		return unitCompileResult{}, fmt.Errorf("content: nil VFS")
 	}
 	// Note: gamedata/translate.tdf is NOT loaded here. The unit name/
 	// description fallback (<Language>name then name) is handled by
@@ -807,19 +825,23 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 	// should load the table itself rather than re-parse or carry an unused
 	// map through the catalog.
 
-	entries, err := discoverArchiveContent(fs, "units", ".fbi")
+	entries, err := discoverUnitContent(fs)
 	if err != nil {
-		return nil, fmt.Errorf("content: units: %w", err)
+		return unitCompileResult{}, fmt.Errorf("content: units: %w", err)
 	}
 	// ReadDir already sorts by Path [vfs.ReadDir], so iteration is stable (I1).
 	result := make(map[string]*UnitDef)
+	versionDropped, suppressWarning := false, false
 	for _, entry := range entries {
-		data := entry.data
 		e := entry.info
+		data, err := readContentEntry(fs, entry)
+		if err != nil {
+			return unitCompileResult{}, err
+		}
 		prov := ProvenanceFrom(e)
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
-			return nil, fmt.Errorf("content: %s: %w", e.Path, formats.WithTDFFile(err, e.Path))
+			return unitCompileResult{}, formats.WithTDFContext(fs, err, e.Path)
 		}
 		// Each unit file contributes one UNITINFO section [02 "Unit record"].
 		// A file without one aborts the whole discovery stage: the loader
@@ -831,13 +853,49 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 		if unitSection == nil {
 			break
 		}
+		versionOK := compatibleUnitVersion(unitSection.FloatValue("version", 0))
+		copyright, _ := unitSection.StringValue("copyright", "")
+		copyrightOK := compatibleUnitCopyright(copyright)
+		if !versionOK {
+			versionDropped = true
+		}
+		if !copyrightOK || !entry.archive {
+			suppressWarning = true
+		}
+		if !versionOK || !copyrightOK || !entry.archive {
+			continue
+		}
 		u := compileUnitSection(unitSection, e.Path, language, prov)
 		// Catalog construction is case-insensitive for names [02 §5].
 		key := u.CanonicalKey
 		// Duplicate canonical keys — last wins deterministic since we iterate sorted ReadDir (I1).
 		result[key] = u
 	}
-	return result, nil
+	return unitCompileResult{units: result, incompatibilityWarning: versionDropped && !suppressWarning}, nil
+}
+
+const incompatibleUnitsWarning = "Incompatible units found.  They will be ignored.  Please download the latest version of the game."
+
+func compatibleUnitVersion(version float64) bool {
+	// The catalog saves the parsed Version as binary64, floors that saved value,
+	// then applies the shared signed-64 narrowing helper. It retains the
+	// original binary64 for the minor expression, which is itself saved and
+	// floored before narrowing [02 R-MALF-01 §5][01 R-DET-01 §3].
+	original := float64(version)
+	major := numeric.TruncateFloat64ToLow32(math.Floor(original))
+	minorInput := (original - float64(major)) * 10.0
+	minor := numeric.TruncateFloat64ToLow32(math.Floor(minorInput))
+	return major < 3 || major == 3 && minor <= 1
+}
+
+func compatibleUnitCopyright(value string) bool {
+	const template = "Copyright 0000 Humongous Entertainment. All rights reserved."
+	if len(value) != len(template) {
+		return false
+	}
+	normalized := []byte(value)
+	copy(normalized[len("Copyright "):len("Copyright ")+4], "0000")
+	return string(normalized) == template
 }
 
 // LinkUnitWeapons resolves weapon1..3 (and explodeas/selfdestructas) after all weapons compile

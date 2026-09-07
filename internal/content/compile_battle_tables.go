@@ -47,14 +47,14 @@ type MeteorDefaults struct {
 // It splits on commas, trims spaces, and uses ParseTDFInteger which tolerates
 // trailing junk and returns 0 for unparsable tokens [02 §4].
 func parseLOSLine(value string) []int32 {
-	value = strings.TrimSpace(value)
+	value = trimContentCWhitespace(value)
 	if value == "" {
 		return nil
 	}
 	parts := strings.Split(value, ",")
 	out := make([]int32, 0, len(parts))
 	for _, p := range parts {
-		p = strings.TrimSpace(p)
+		p = trimContentCWhitespace(p)
 		if p == "" {
 			continue
 		}
@@ -101,13 +101,13 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 	}
 	var raws []rawTbl
 	for _, sec := range doc.Root.Sections() {
-		lower := strings.ToLower(strings.TrimSpace(sec.Name))
+		lower := CanonicalKey(sec.Name)
 		if !strings.HasPrefix(lower, "table") {
 			continue
 		}
-		suffix := strings.TrimSpace(sec.Name[len("table"):])
+		suffix := trimTDFSemantic(sec.Name[len("table"):])
 		// TABLEINFO is handled above, not a table.
-		if strings.EqualFold(suffix, "info") {
+		if CanonicalKey(suffix) == "info" {
 			continue
 		}
 		n := int(formats.ParseTDFInteger(suffix))
@@ -134,11 +134,11 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 			if it.Kind != formats.Assignment {
 				continue
 			}
-			lk := strings.ToLower(strings.TrimSpace(it.Key))
+			lk := CanonicalKey(it.Key)
 			if !strings.HasPrefix(lk, "line") {
 				continue
 			}
-			suf := strings.TrimSpace(it.Key[len("line"):])
+			suf := trimTDFSemantic(it.Key[len("line"):])
 			idx := int(formats.ParseTDFInteger(suf))
 			if idx <= 0 {
 				continue
@@ -208,7 +208,7 @@ func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/meteor.tdf: %w", formats.WithTDFFile(err, "gamedata/meteor.tdf"))
+		return nil, formats.WithTDFContext(fs, err, "gamedata/meteor.tdf")
 	}
 	md := &MeteorDefaults{
 		DefinitionHeader: DefinitionHeader{

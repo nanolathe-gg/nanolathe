@@ -122,6 +122,12 @@ admission, walked in stable pool order; the acquisition gate is the one that
 tests visibility and category, and the shot-time gate is the one that does not
 `[06 §3.1]` `[06 R-WPN-05 §9]`.
 
+Direct visibility consumes the completed sensor phase's runtime status word:
+the sonar bit permits a below-surface hull probe, while an alliance row cannot
+stand in for that contact. Its four probes begin at the candidate definition's
+min-X/max-Y/min-Z box corner and carry its spans through the shared visibility
+predicate `[06 §3.1]` `[03 §3.2]` `[03 R-VIS-01 §5]`.
+
 ### 2.3 The shot-admission gate
 
 `CanEngageSlotTarget` is the gate the attack handlers ask, in retail's order

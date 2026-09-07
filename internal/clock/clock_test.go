@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestBudgetClampsAndDropsExcess locks C1: raw is truncated toward zero, the
+// TestBudgetClampsAndDropsExcess locks C1: raw is floored before narrowing, the
 // remainder is kept as carry, and the runnable count clamps to 0..5 with the
 // excess dropped rather than queued [01 §4.2].
 func TestBudgetClampsAndDropsExcess(t *testing.T) {
@@ -39,7 +39,7 @@ func TestBudgetCarrySurvivesBelowOneTick(t *testing.T) {
 	}
 }
 
-func TestBudgetTruncatesTowardZero(t *testing.T) {
+func TestBudgetFloorsBeforeNarrowing(t *testing.T) {
 	tests := []struct {
 		name      string
 		anchor    int32
@@ -49,7 +49,7 @@ func TestBudgetTruncatesTowardZero(t *testing.T) {
 		wantCarry float32
 	}{
 		{name: "positive fraction", anchor: 0, now: 1, wantTicks: 0, wantCarry: 0.1},
-		{name: "negative fraction", anchor: 1, now: 0, wantTicks: 0, wantCarry: -0.1},
+		{name: "negative fraction", anchor: 1, now: 0, wantTicks: 0, wantCarry: 0.9},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -61,6 +61,32 @@ func TestBudgetTruncatesTowardZero(t *testing.T) {
 				t.Fatalf("carry = %v, want %v", s.Carry, test.wantCarry)
 			}
 		})
+	}
+}
+
+func TestBudgetCarryUsesFloatingFloorBeforeWordWrap(t *testing.T) {
+	// At speed 20, this valid signed delta produces 4294967294.25. The
+	// retained signed word is -2, but carry remains .25 [01 §4.2].
+	s := State{Requested: 20, Active: 20, Carry: 0.25}
+	if got := s.AdvanceSP(math.MaxInt32); got != 0 || s.Carry != 0.25 {
+		t.Fatalf("wrapped budget = %d, carry = %v; want 0, .25", got, s.Carry)
+	}
+}
+
+func TestBudgetRoundedCarrySurvivesSave(t *testing.T) {
+	// The stored speed multiplier at three is slightly above .3. A delta
+	// of -10 therefore floors to -4 and leaves a remainder just below
+	// one, which rounds to one at the float32 store [01 §4.2].
+	s := State{ScaledAnchor: 10, Requested: 3, Active: 3}
+	if got := s.AdvanceSP(0); got != 0 || s.Carry != 1 {
+		t.Fatalf("negative budget = %d, carry = %v; want 0, 1", got, s.Carry)
+	}
+	var restored State
+	if err := restored.LoadBoxChecked(s.SaveBox()); err != nil {
+		t.Fatalf("rejecting a budget-produced scheduler image: %v", err)
+	}
+	if got, want := restored.AdvanceSP(1), s.AdvanceSP(1); got != want || restored.SaveBox() != s.SaveBox() {
+		t.Fatalf("restored next budget = %d, want %d, or scheduler image differs", got, want)
 	}
 }
 

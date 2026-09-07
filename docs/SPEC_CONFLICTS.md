@@ -650,17 +650,17 @@ archive bit cleared — and never parses a loose `weapons\*.tdf`. The switch tha
 would enable loose files is a constant in the shipped image with no writer. The
 community "units must be packed" rule is the executable's own.
 
-**Observed:** `CompileUnits` compiles every `units/*.fbi` the overlay
-enumerates regardless of provider, and every `testdata/` fixture and every
-probe under `probes/` depends on loose authored FBIs being compiled.
+**Observed:** the catalog discovery helper used to reopen a shadowed archive
+copy after the overlay selected a loose winner. That changed both the winning
+bytes and their provenance; the loose FBI also skipped the required
+parse-before-drop order.
 
-**Decision:** keep the divergence. It is a superset of retail — a stock install
-has no loose FBIs, so behavior on retail content is identical — and it is what
-makes authored fixtures and probes loadable without packing them. Nothing in
-the simulation reads the archive bit. It reopens only if a mod-loading contract
-needs retail's gate, at which point the gate belongs in the catalog loader
-keyed on the entry's provider kind and the fixtures get packed; that is where
-DESIGN_CONTENT_VFS §7 keeps it as a standing open question.
+**Decision:** follow the retail gate. Unit discovery reads and parses the VFS
+winner, then silently drops a loose FBI; a loose winner without `[UNITINFO]`
+still ends the parse stage before later entries. Weapon discovery ignores a
+loose winner before parsing and never substitutes a shadowed archive copy.
+Focused compiler fixtures declare archive provenance, so no host-fixture
+exception broadens the ordinary catalog path.
 
 **Contract:** `[02 R-CAT-01 §4]`; DESIGN_CONTENT_VFS §5 and §7.
 

@@ -84,7 +84,7 @@ func newProductDef(name string, footX, footZ int32, metalCost int32, buildTime i
 		UnitName:         name,
 		FootprintX:       footX,
 		FootprintZ:       footZ,
-		BuildCostMetal:   metalCost,
+		BuildCostMetal:   float32(metalCost),
 		BuildCostEnergy:  50,
 		BuildTime:        buildTime,
 		MaxDamage:        200,
@@ -1215,5 +1215,25 @@ func TestStateGates(t *testing.T) {
 	svc4.Pump(factory4, 11)
 	if head4.Phase != uint8(State2) {
 		t.Fatalf("state1 with in-stance should advance to state2")
+	}
+}
+
+// Costs enter the wide resource arithmetic after their definition's single
+// store [02 R-KEYS-01 §5][05 R-WORK-01 §1]. A late store changes this demand.
+func TestConstructionCostStorePrecedesMultiplication(t *testing.T) {
+	source := int32(16777217)
+	def := &content.UnitDef{BuildCostEnergy: float32(source), BuildCostMetal: float32(source)}
+	_, _, energy, metal := ConstructionStep(1, 3, 4, 100, def.BuildCostEnergy, def.BuildCostMetal)
+	if energy != 12582912 || metal != 12582912 {
+		t.Fatalf("demands = %v/%v, want stored-cost demand 12582912", energy, metal)
+	}
+	late := float32(float64(source) * 0.75)
+	if energy == late {
+		t.Fatal("fixture failed to distinguish a late single-float store")
+	}
+	// The negative term survives the repair helper's upper clamp [05 "Repair"].
+	_, repair := repairTerms(100, float32(-source), 1, 1)
+	if repair != -16777216 {
+		t.Fatalf("repair energy = %d, want -16777216", repair)
 	}
 }

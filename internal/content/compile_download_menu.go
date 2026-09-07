@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"path"
 	"sort"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -69,7 +68,7 @@ func CompileDownloadMenus(fs vfs.FSOps, units map[string]*UnitDef) ([]DownloadMe
 	placements := make([]DownloadMenuPlacement, 0, len(entries))
 	fileOrder := 0
 	for _, entry := range entries {
-		if entry.IsDir || !strings.EqualFold(path.Ext(entry.Path), ".tdf") {
+		if entry.IsDir || asciiFoldContent(path.Ext(entry.Path)) != ".tdf" {
 			continue
 		}
 		data, readErr := fs.ReadFileLimit(entry.Path, 1<<20)
@@ -78,14 +77,14 @@ func CompileDownloadMenus(fs vfs.FSOps, units map[string]*UnitDef) ([]DownloadMe
 		}
 		doc, parseErr := formats.ParseTDF(data)
 		if parseErr != nil {
-			return nil, fmt.Errorf("content: %s: %w", entry.Path, formats.WithTDFFile(parseErr, entry.Path))
+			return nil, formats.WithTDFContext(fs, parseErr, entry.Path)
 		}
 		prov := ProvenanceFrom(entry)
 		for itemOrder, section := range doc.Root.Sections() {
 			builderName, _ := section.StringValue("UNITMENU", "")
 			productName, _ := section.StringValue("UNITNAME", "")
-			builderName = boundedString(strings.TrimSpace(builderName), 31)
-			productName = boundedString(strings.TrimSpace(productName), 31)
+			builderName = boundedString(trimTDFSemantic(builderName), 31)
+			productName = boundedString(trimTDFSemantic(productName), 31)
 			builder := units[CanonicalKey(builderName)]
 			product := units[CanonicalKey(productName)]
 			if builder != nil {

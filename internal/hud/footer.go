@@ -19,6 +19,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -167,9 +168,9 @@ func buildCard(out *Footer, cat *content.Catalog, gadgetName string) {
 		return
 	}
 	// Two spaces between the display name and the costs; both costs are the
-	// authored integers, truncated toward zero at compile time [07 R-HUD-03 §3].
+	// stored singles, truncated for integer text [07 R-HUD-03 §3].
 	out.Texts = append(out.Texts,
-		FooterText{Anchor: AnchorName, Text: fmt.Sprintf("%s  M:%d E:%d", def.Name, def.BuildCostMetal, def.BuildCostEnergy), Color: rawColor(FooterTextColor)},
+		FooterText{Anchor: AnchorName, Text: fmt.Sprintf("%s  M:%d E:%d", def.Name, numeric.TruncateFloat64ToLow32(float64(def.BuildCostMetal)), numeric.TruncateFloat64ToLow32(float64(def.BuildCostEnergy))), Color: rawColor(FooterTextColor)},
 		FooterText{Anchor: AnchorDescription, Text: def.Description, Color: rawColor(FooterTextColor)},
 	)
 }

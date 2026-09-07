@@ -100,6 +100,15 @@ type battleSession struct {
 	footerHoverUnit    pool.Handle
 	footerHoverFeature string
 
+	// minimapCameraCaptured is the presentation-only minimap camera gesture.
+	// It is set by the admitted minimap down edge, served from the following
+	// host frame's pointer record, and cleared only by that button's up edge
+	// [07 R-CAM-01 §5][07 R-CAM-01 §11]. Keeping it here rather than in the
+	// transient mouse sample means a drag remains captured after it leaves the
+	// radar rectangle.
+	minimapCameraCaptured      bool
+	minimapCameraCaptureButton input.MouseButton
+
 	// cl is the presentation client installed by installBattleClient. Retail
 	// has one message ring, and the client owns the instance the composer
 	// draws and the options page configures (ConfigureMessageLines); this

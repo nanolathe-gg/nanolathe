@@ -70,7 +70,7 @@ func UnitReclaimPulse(builder, target *units.Unit) int32 {
 		return 1
 	}
 	// costM = max(buildcostmetal, 10.0f), in single precision [05 R-WORK-01 §4].
-	metalCost := float32(target.Def.BuildCostMetal)
+	metalCost := target.Def.BuildCostMetal
 	if metalCost < 10 {
 		metalCost = 10
 	}

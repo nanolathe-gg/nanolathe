@@ -1668,6 +1668,10 @@ func (s *System) EnsureUnit(u *units.Unit) {
 		// not.
 		s.Flights[h] = flight
 	}
+	// The retained air-sector link is published only after the initializer's
+	// footprint stamp has completed. FlightState receives its isolated mirror
+	// here too when this is an aircraft [04 R-COLL-01 §4][04 R-AIR-01 §5].
+	s.syncStampedAirSector(u, coll)
 }
 
 // stampBuildingGrid applies the shared yard selector to movement occupancy.
@@ -2693,15 +2697,6 @@ func (s *System) emitMovementCallbacks(u *units.Unit, speed int32) {
 	if u.Def != nil {
 		rate1 = u.Def.MoveRate1
 		rate2 = u.Def.MoveRate2
-		// Defaults: twice MaxVelocity when not authored [02 "Unit record"] [04 §5.2].
-		if rate1 == 0 && rate2 == 0 && u.Def.MaxVelocity != 0 {
-			rate1 = u.Def.MaxVelocity * 2
-			rate2 = u.Def.MaxVelocity * 2
-		} else if rate1 == 0 {
-			rate1 = rate2
-		} else if rate2 == 0 {
-			rate2 = rate1
-		}
 	}
 	cat := cob.MoveRateCategory(blocked, attached, magA, magZ, rate1, rate2) // [04 §5.2][04 R-MOV-01 §6] C18
 	// The cache update is the classifier's final write [04 §5.2], and it is

@@ -24,6 +24,13 @@ func TestSensorTickRequiresTwoPlayers(t *testing.T) {
 	if len(s.SensorInputs()) != 1 || status&FriendlyMask == 0 {
 		t.Fatalf("the sensor phase did not run with two players: inputs %d, status %#x", len(s.SensorInputs()), status)
 	}
+	if got, ok := s.SensorStatus(1); !ok || got != status {
+		t.Fatalf("sensor status lookup = %#x,%v want %#x,true", got, ok, status)
+	}
+	s.SensorTick(1, 1, units)
+	if _, ok := s.SensorStatus(1); ok {
+		t.Fatal("single-player skipped pass retained a stale completed sensor status")
+	}
 }
 
 // TestSensorPhaseNeverTouchesTheWordMask locks C11 and, since 2026-08-30, the
@@ -109,6 +116,99 @@ func TestSensorEmissionExcludesDeathLatchedEmitters(t *testing.T) {
 	s.SensorTick(5, 2, units)
 	if theirs&SeenBit == 0 {
 		t.Fatalf("a LIVE emitter missed an enemy inside its authored range: status %#x", theirs)
+	}
+}
+
+// TestSensorRadiusKeepsRawFractionBeforeSquaring locks the shared visitor
+// metric and its two different boundary gates. A 1.5-by-1.5 raw separation
+// contributes 2+2 after each square's high-word extraction; truncating both
+// axes before multiplying would contribute 1+1 and incorrectly pass the
+// strict radar callback at radius 2. At an exact radius, the visitor delivers
+// the candidate but the radar callback still rejects it, while a jammer's
+// inclusive visitor accepts it [R-VIS-01 §5].
+func TestSensorRadiusKeepsRawFractionBeforeSquaring(t *testing.T) {
+	newService := func() *Service {
+		s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+		s.SetLocal(0)
+		return s
+	}
+	unit := func(id uint16, owner PlayerID, x, z numeric.Fixed, status *uint32) SensorUnit {
+		return SensorUnit{ID: id, Owner: owner, Status: status, Alive: true, Active: true, X: x, Z: z}
+	}
+
+	if got := planarSquared(&SensorUnit{X: numeric.Fixed(3 << 15), Z: numeric.Fixed(3 << 15)}, &SensorUnit{}); got != 4 {
+		t.Fatalf("raw 1.5-by-1.5 distance squared = %d, want 4", got)
+	}
+
+	var emitterStatus, targetStatus uint32
+	s := newService()
+	emitter := unit(1, 0, 0, 0, &emitterStatus)
+	emitter.RadarDistance = 2
+	target := unit(2, 1, numeric.Fixed(3<<15), numeric.Fixed(3<<15), &targetStatus)
+	s.SensorTick(1, 2, []SensorUnit{emitter, target})
+	if targetStatus&SeenBit != 0 {
+		t.Fatalf("fractional target passed strict radius callback: status %#x", targetStatus)
+	}
+
+	// The same radius at an exact integral edge reaches a jammer because the
+	// visitor's delivery check is inclusive, even though a contact callback is
+	// strict at that edge.
+	emitterStatus, targetStatus = 0, SeenBit
+	s = newService()
+	jammer := unit(1, 1, 0, 0, &emitterStatus)
+	jammer.RadarJam = 2
+	edge := unit(2, 0, numeric.Fixed(2<<16), 0, &targetStatus)
+	s.SensorTick(2, 2, []SensorUnit{jammer, edge})
+	if targetStatus&SeenBit != 0 || targetStatus&JammedBit == 0 {
+		t.Fatalf("inclusive jammer edge status %#x, want seen clear and jammed set", targetStatus)
+	}
+}
+
+// TestSensorFractionalRadiusCallbacksUseRawSquare exercises all three radius
+// callbacks at the boundary that whole-coordinate truncation gets wrong. From
+// 31.75 to 64 the raw-square metric is strictly inside radius 33, while a
+// pre-square whole-word truncation turns it into the strict equality 33²
+// [R-VIS-01 §5]. SensorTick owns no RNG, so each assertion observes only the
+// status write from the named callback.
+func TestSensorFractionalRadiusCallbacksUseRawSquare(t *testing.T) {
+	const (
+		sourceX = numeric.Fixed(31<<16 | 3<<14) // 31.75
+		targetX = numeric.Fixed(64 << 16)
+	)
+	newService := func() *Service {
+		s := newTestService(&world.Terrain{CellW: 64, CellH: 64}, ModeHistoryEnabled|ModeCurrentEnabled)
+		s.SetLocal(0)
+		return s
+	}
+
+	var sourceStatus, targetStatus uint32
+	s := newService()
+	radar := SensorUnit{ID: 1, Owner: 0, Status: &sourceStatus, Alive: true, Active: true, X: sourceX, RadarDistance: 33}
+	target := SensorUnit{ID: 2, Owner: 1, Status: &targetStatus, Alive: true, X: targetX}
+	s.SensorTick(1, 2, []SensorUnit{radar, target})
+	if targetStatus&SeenBit == 0 {
+		t.Fatalf("fractional strict-inside radar target status %#x lacks seen", targetStatus)
+	}
+	if got, ok := s.SensorStatus(2); !ok || got != targetStatus {
+		t.Fatalf("published fractional radar status = %#x,%v want %#x,true", got, ok, targetStatus)
+	}
+
+	sourceStatus, targetStatus = 0, 0
+	s = newService()
+	cloak := SensorUnit{ID: 1, Owner: 1, Status: &sourceStatus, Alive: true, CanCloak: true, OwnerLocallySimulated: true, X: sourceX, MinCloakDistance: 33, DecloakDeadline: new(uint32)}
+	listed := SensorUnit{ID: 2, Owner: 0, Status: &targetStatus, Alive: true, X: targetX, PrimaryCandidateOf: 1 << 1}
+	s.SensorTick(2, 2, []SensorUnit{cloak, listed})
+	if sourceStatus&DecloakBit == 0 || *cloak.DecloakDeadline != 2+DecloakDeadlineAdd {
+		t.Fatalf("fractional strict-inside proximity status=%#x deadline=%d", sourceStatus, *cloak.DecloakDeadline)
+	}
+
+	sourceStatus, targetStatus = 0, SeenBit
+	s = newService()
+	jammer := SensorUnit{ID: 1, Owner: 1, Status: &sourceStatus, Alive: true, Active: true, X: sourceX, RadarJam: 33}
+	jammed := SensorUnit{ID: 2, Owner: 0, Status: &targetStatus, Alive: true, X: targetX}
+	s.SensorTick(3, 2, []SensorUnit{jammer, jammed})
+	if targetStatus&SeenBit != 0 || targetStatus&JammedBit == 0 {
+		t.Fatalf("fractional strict-inside jammer status %#x, want seen clear and jammed", targetStatus)
 	}
 }
 

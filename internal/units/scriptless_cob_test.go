@@ -67,7 +67,7 @@ func compileFixtureCatalog(t *testing.T) *content.Catalog {
 			t.Fatalf("write %s: %v", logical, err)
 		}
 	}
-	fbi := "[UNITINFO]\n{\nunitname=%s;\nobjectname=%s;\nmaxdamage=100;\n}\n"
+	fbi := "[UNITINFO]\n{\nunitname=%s;\nobjectname=%s;\nmaxdamage=100;\nVersion=3.1;\nCopyright=Copyright 1997 Humongous Entertainment. All rights reserved.;\n}\n"
 	write("units/armtest.fbi", strings.ReplaceAll(fbi, "%s", "armtest"))
 	write("units/armless.fbi", strings.ReplaceAll(fbi, "%s", "armless"))
 	write("units/armnone.fbi", strings.ReplaceAll(fbi, "%s", "armnone"))

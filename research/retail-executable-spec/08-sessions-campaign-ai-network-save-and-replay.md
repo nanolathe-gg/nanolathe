@@ -1364,9 +1364,10 @@ the §5/§6 order), then whatever the priming's AI tasks drew.
 the battle pump once. Single-player: pause bit clear → the budget routine
 of [01 §4.2] runs with `delta = now − anchor`, i.e. the wall-clock time
 between the world rebuild and the handoff (the rest of loading: spawner,
-GUI, priming, metal scan), and `ticks = trunc(delta × activeSpeed × 0.1 +
-carry)`, clamped: `< 6` keeps it (and steps the slew counter down), else
-**5** (and steps the slew up). A non-zero budget runs the tick executor
+GUI, priming, metal scan). The floor-before-narrowing budget and floating
+remainder are exactly [01 §4.2]; the retained signed count is clamped to
+`0..5`. A pre-clamp count below 6 steps the slew counter down; otherwise
+it steps the slew up. A non-zero budget runs the tick executor
 for that many consecutive sub-ticks *in the loading state's frame*; a zero
 budget (only when the remaining load took under one scaled-clock unit at
 speed 10, [01 §4.1]) defers the first tick to the battle state's first frame. Then the

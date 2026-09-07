@@ -45,7 +45,7 @@ func (p *BuildMenuPage) ButtonsSorted() []string {
 	}
 	out := append([]string(nil), p.Buttons...)
 	sort.Slice(out, func(i, j int) bool {
-		li, lj := strings.ToLower(out[i]), strings.ToLower(out[j])
+		li, lj := CanonicalKey(out[i]), CanonicalKey(out[j])
 		if li != lj {
 			return li < lj
 		}
@@ -82,7 +82,7 @@ func CompileBuildMenus(fs vfs.FSOps) (map[string]*BuildMenuPage, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/sidedata.tdf: %w", formats.WithTDFFile(err, "gamedata/sidedata.tdf"))
+		return nil, formats.WithTDFContext(fs, err, "gamedata/sidedata.tdf")
 	}
 	canbuild := doc.Root.Section("CANBUILD")
 	pages := make(map[string]*BuildMenuPage)
@@ -90,7 +90,7 @@ func CompileBuildMenus(fs vfs.FSOps) (map[string]*BuildMenuPage, error) {
 		return pages, nil
 	}
 	for _, builder := range canbuild.Sections() {
-		name := strings.TrimSpace(builder.OriginalName)
+		name := trimTDFSemantic(builder.OriginalName)
 		if name == "" {
 			continue
 		}
@@ -107,13 +107,13 @@ func CompileBuildMenus(fs vfs.FSOps) (map[string]*BuildMenuPage, error) {
 		highest := 0
 		for _, item := range builder.Assignments() {
 			var n int
-			if _, err := fmt.Sscanf(strings.ToLower(item.Key), "canbuild%d", &n); err == nil && n > highest {
+			if _, err := fmt.Sscanf(CanonicalKey(item.Key), "canbuild%d", &n); err == nil && n > highest {
 				highest = n
 			}
 		}
 		for i := 1; i <= highest; i++ {
 			button, ok := builder.StringValue(fmt.Sprintf("canbuild%d", i), "")
-			if !ok || strings.TrimSpace(button) == "" {
+			if !ok || trimTDFSemantic(button) == "" {
 				continue // gap: missing entry, enumeration continues
 			}
 			page.Buttons = append(page.Buttons, button)

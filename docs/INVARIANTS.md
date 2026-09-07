@@ -73,6 +73,11 @@ truncation; use `numeric.TruncateFloat64ToLow32`, not a direct `int32(f)`.
 Finite values in the signed-64 range wrap through the retained word; non-finite
 or out-of-range values retain zero [01 R-DET-01 §1].
 
+The catalog Version pair and scheduler budget explicitly floor their
+binary64 operands **before** this truncating conversion. Preserve that
+separate operation and its floating result where used for the budget carry
+[01 §4.2][01 R-DET-01 §3][02 R-MALF-01 §5].
+
 Cell/tile math on possibly-negative world coordinates is the opposite case: it
 needs **floor** division, because retail uses an arithmetic shift with a sign
 correction `[03 §2.1]`. Use an explicit helper, never `/`:

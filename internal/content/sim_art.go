@@ -39,7 +39,6 @@ package content
 
 import (
 	"sort"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -115,11 +114,11 @@ func CompileSimArt(fs vfs.FSOps, cat *Catalog) *SimArt {
 	banks := make(map[string]*formats.GAF)
 	for _, key := range keys {
 		def := cat.Features[key]
-		if def == nil || strings.TrimSpace(def.Filename) == "" {
+		if def == nil || trimTDFSemantic(def.Filename) == "" {
 			continue
 		}
 		for _, seq := range [...]string{def.SeqNameBurn, def.SeqNameDie, def.SeqNameReclamate} {
-			if strings.TrimSpace(seq) == "" {
+			if trimTDFSemantic(seq) == "" {
 				continue
 			}
 			art.compileFeatureSequence(fs, banks, def.Filename, seq)
@@ -130,10 +129,10 @@ func CompileSimArt(fs vfs.FSOps, cat *Catalog) *SimArt {
 
 // compileEffectBank records every entry length in one animation bank. The
 // bank's logical path is `anims/<name>.gaf`, the path retail constructs from
-// the authored bank name [06 R-WFX-01 §1]; the name is lower-cased per the VFS
+// the authored bank name [06 R-WFX-01 §1]; the name is ASCII-folded per the VFS
 // canonical rules (I1).
 func (a *SimArt) compileEffectBank(fs vfs.FSOps, name string) {
-	bank := strings.ToLower(strings.TrimSpace(name))
+	bank := CanonicalKey(name)
 	if bank == "" {
 		bank = DefaultEffectBank
 	}
@@ -159,7 +158,7 @@ func (a *SimArt) compileFeatureSequence(fs vfs.FSOps, banks map[string]*formats.
 		return
 	}
 	a.sequences[key] = nil
-	file := strings.ToLower(strings.TrimSpace(filename))
+	file := CanonicalKey(filename)
 	gaf, loaded := banks[file]
 	if !loaded {
 		// The feature sprite source is the TDF `filename` stem without an
@@ -209,7 +208,7 @@ func (a *SimArt) EffectEntryFrameCount(bank, entry string) (int, bool) {
 	if a == nil || len(a.effects) == 0 {
 		return 0, false
 	}
-	if strings.TrimSpace(entry) == "" {
+	if entry == "" {
 		return 0, false
 	}
 	n, ok := a.effects[simArtEffectKey(bank, entry)]
@@ -232,7 +231,7 @@ func (a *SimArt) FeatureSequence(filename, sequence string, visit int32) (w, h, 
 	if a == nil || len(a.sequences) == 0 {
 		return 0, 0, 0, 0, 0, false
 	}
-	if strings.TrimSpace(filename) == "" || strings.TrimSpace(sequence) == "" {
+	if trimTDFSemantic(filename) == "" || trimTDFSemantic(sequence) == "" {
 		return 0, 0, 0, 0, 0, false
 	}
 	info := a.sequences[simArtSequenceKey(filename, sequence)]
@@ -270,7 +269,7 @@ func (a *SimArt) FeatureSequenceDelays(filename, sequence string) ([]int32, bool
 	if a == nil || len(a.sequences) == 0 {
 		return nil, false
 	}
-	if strings.TrimSpace(filename) == "" || strings.TrimSpace(sequence) == "" {
+	if trimTDFSemantic(filename) == "" || trimTDFSemantic(sequence) == "" {
 		return nil, false
 	}
 	info := a.sequences[simArtSequenceKey(filename, sequence)]
@@ -286,18 +285,18 @@ func (a *SimArt) FeatureSequenceDelays(filename, sequence string) ([]int32, bool
 
 // simArtEffectKey folds a bank and entry name the way the bank cache and the
 // GAF's own name index do: the bank name is trimmed and lower-cased because it
-// becomes a path component, and the entry name is only lower-cased, because
+// becomes a path component, and the entry name is only ASCII-folded, because
 // that is exactly what an entry lookup by name compares [fmt gaf].
 func simArtEffectKey(bank, entry string) string {
-	b := strings.ToLower(strings.TrimSpace(bank))
+	b := CanonicalKey(bank)
 	if b == "" {
 		b = DefaultEffectBank
 	}
-	return b + "|" + strings.ToLower(entry)
+	return b + "|" + asciiFoldContent(entry)
 }
 
 func simArtSequenceKey(filename, sequence string) string {
-	return strings.ToLower(strings.TrimSpace(filename)) + "|" + strings.ToLower(strings.TrimSpace(sequence))
+	return CanonicalKey(filename) + "|" + CanonicalKey(sequence)
 }
 
 // simArtHoldVisits is the `max(delay, 1)` of [05 R-FEAT-01 §10]: a frame whose

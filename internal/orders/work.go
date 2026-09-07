@@ -916,11 +916,11 @@ const (
 //
 // A zero `maxdamage` divides by zero here exactly as the executable does; §6
 // states no guard, and inventing one would be inventing behavior (I11).
-func captureBudget(energyCost, metalCost, health, maxDamage, kills int32) int32 {
+func captureBudget(energyCost, metalCost float32, health, maxDamage, kills int32) int32 {
 	// Each cost term is scaled twice, the metal term is carried negative and the
 	// bias is carried negative, so both fold in through subtractions.
-	energyTerm := float64(float32(energyCost)) * float64(captureCostScale) * float64(captureEnergyUnit)
-	metalTerm := float64(float32(metalCost)) * float64(captureCostScale) * float64(captureMetalUnit)
+	energyTerm := float64(energyCost) * float64(captureCostScale) * float64(captureEnergyUnit)
+	metalTerm := float64(metalCost) * float64(captureCostScale) * float64(captureMetalUnit)
 	base := int32((energyTerm - metalTerm) - float64(captureBias)) // one truncation [01 §8]
 	if base >= captureClampMax {
 		base = captureClampMax // the only clamp: signed, upper, and `>=`

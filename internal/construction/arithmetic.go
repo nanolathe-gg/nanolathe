@@ -76,11 +76,11 @@ func HealthGain(old, newRemaining float32, maxDamage int32) int32 {
 
 // ConstructionStep performs one construction helper step [05 "Construction arithmetic"].
 // Returns newRemaining, healthGain, energyDemand, metalDemand.
-func ConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
+func ConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
 	return wideConstructionStep(old, worker, buildTime, maxDamage, energyCost, metalCost)
 }
 
-func wideConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
+func wideConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
 	return wideConstructionStepQuantum(old, float32(worker), buildTime, maxDamage, energyCost, metalCost)
 }
 
@@ -89,7 +89,7 @@ func wideConstructionStep(old float32, worker int32, buildTime int32, maxDamage 
 // float, but the decay wrapper's is not, and its infinities and NaNs have to
 // survive the division and the clamp exactly as x87 leaves them
 // [05 R-WORK-01 §1][05 R-WORK-01 §11].
-func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, maxDamage int32, energyCost, metalCost int32) (float32, int32, float32, float32) {
+func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
 	old80 := float64(old)
 	new80 := old80 - float64(quantum)/float64(buildTime)
 	if new80 <= 0 {
@@ -107,7 +107,7 @@ func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, 
 	return newStored, healthGain, energy, metal
 }
 
-func repairTerms(maxDamage, energyCost, worker, buildTime int32) (int32, int32) {
+func repairTerms(maxDamage int32, energyCost float32, worker, buildTime int32) (int32, int32) {
 	if buildTime == 0 {
 		return 0, 0
 	}

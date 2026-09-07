@@ -212,11 +212,11 @@ func CompileSoundCategories(fs vfs.FSOps) (map[string]*SoundCategory, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/sound.tdf: %w", formats.WithTDFFile(err, "gamedata/sound.tdf"))
+		return nil, formats.WithTDFContext(fs, err, "gamedata/sound.tdf")
 	}
 	result := make(map[string]*SoundCategory)
 	for _, section := range doc.Root.Sections() {
-		name := strings.TrimSpace(section.OriginalName)
+		name := trimTDFSemantic(section.OriginalName)
 		if name == "" {
 			continue
 		}
@@ -250,7 +250,7 @@ func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundA
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("content: gamedata/allsound.tdf: %w", formats.WithTDFFile(err, "gamedata/allsound.tdf"))
+		return nil, nil, formats.WithTDFContext(fs, err, "gamedata/allsound.tdf")
 	}
 	result := make(map[string]*SoundAlias)
 	ordered := make([]*SoundAlias, 0, 255)
@@ -261,7 +261,7 @@ func compileSoundAliasesOrdered(fs vfs.FSOps) (map[string]*SoundAlias, []*SoundA
 		if count >= 255 {
 			break
 		}
-		aliasName := strings.TrimSpace(section.OriginalName)
+		aliasName := trimTDFSemantic(section.OriginalName)
 		if aliasName == "" {
 			continue
 		}

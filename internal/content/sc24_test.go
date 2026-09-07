@@ -1,6 +1,7 @@
 package content
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -13,6 +14,20 @@ import (
 type topologyFixtureFS struct {
 	*fixtureFS
 	providers map[string]vfs.Provenance
+}
+
+// unreadableTopologyFixtureFS makes one visible path unreadable.  Its tests
+// distinguish a discovery gate from a later parse-and-drop decision.
+type unreadableTopologyFixtureFS struct {
+	*topologyFixtureFS
+	path string
+}
+
+func (f *unreadableTopologyFixtureFS) ReadFileLimit(name string, max int64) ([]byte, error) {
+	if asciiFoldContent(name) == asciiFoldContent(f.path) {
+		return nil, errors.New("fixture unreadable content")
+	}
+	return f.topologyFixtureFS.ReadFileLimit(name, max)
 }
 
 func (f *topologyFixtureFS) ReadDir(name string) ([]vfs.EntryInfo, error) {
@@ -79,18 +94,8 @@ func (f *shadowProviderFS) OpenMount(index int, name string) (vfs.File, error) {
 }
 
 func TestSC24ArchiveDefinitionsWinAndLooseDefinitionsAreUnobservable(t *testing.T) {
-	archiveUnit := `[UNITINFO]
-{
- unitname=SC24;
- name=ArchiveUnit;
-}
-`
-	looseUnit := `[UNITINFO]
-{
- unitname=SC24;
- name=LooseUnit;
-}
-`
+	archiveUnit := compatibleUnitFixture("unitname=SC24;\n name=ArchiveUnit;")
+	looseUnit := compatibleUnitFixture("unitname=SC24;\n name=LooseUnit;")
 	archiveWeapon := `[SC24WEAPON]
 {
  ID=24;
@@ -146,19 +151,40 @@ func TestSC24ArchiveDefinitionsWinAndLooseDefinitionsAreUnobservable(t *testing.
 	}
 }
 
-func TestSC24ShadowedLooseWinnerRecoversArchivedUnitAndWeapon(t *testing.T) {
-	looseUnit := `[UNITINFO]
+func TestSC24LooseWeaponIsFilteredBeforeItsUnreadableBytesAreOpened(t *testing.T) {
+	const archiveWeapon = `[ARCHIVE]
 {
- unitname=SHADOWED;
- name=LooseUnit;
+ ID=26;
+ name=ArchiveWeapon;
+ range=260;
 }
 `
-	archiveUnit := `[UNITINFO]
-{
- unitname=SHADOWED;
- name=ArchiveUnit;
+	const looseWeapon = "not reached"
+	fs := &unreadableTopologyFixtureFS{
+		topologyFixtureFS: &topologyFixtureFS{
+			fixtureFS: newFixtureFS(t,
+				fixtureFile{path: "weapons/archive.tdf", data: archiveWeapon},
+				fixtureFile{path: "weapons/loose.tdf", data: looseWeapon},
+			),
+			providers: map[string]vfs.Provenance{
+				"weapons/archive.tdf": {ProviderType: "hpi", SourcePath: "totala1.hpi"},
+				"weapons/loose.tdf":   {ProviderType: "directory", SourcePath: "weapons/loose.tdf"},
+			},
+		},
+		path: "weapons/loose.tdf",
+	}
+	weapons, _, err := CompileWeaponsWithDuplicates(fs)
+	if err != nil {
+		t.Fatalf("compile weapons opened filtered loose winner: %v", err)
+	}
+	if got := weapons["archive"]; got == nil || got.Range != 260 {
+		t.Fatalf("archive weapon = %#v, want the readable archive entry", got)
+	}
 }
-`
+
+func TestSC24ShadowedLooseWinnerDoesNotRecoverArchivedUnitOrWeapon(t *testing.T) {
+	looseUnit := compatibleUnitFixture("unitname=SHADOWED;\n name=LooseUnit;")
+	archiveUnit := compatibleUnitFixture("unitname=SHADOWED;\n name=ArchiveUnit;")
 	looseWeapon := `[SHADOWEDWEAPON]
 {
  ID=25;
@@ -187,18 +213,47 @@ func TestSC24ShadowedLooseWinnerRecoversArchivedUnitAndWeapon(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile shadowed unit: %v", err)
 	}
-	if got := units["shadowed"]; got == nil || got.Name != "ArchiveUnit" || got.Provenance.ProviderID != "totala1.hpi" {
-		t.Fatalf("shadowed unit = %#v, want archived bytes and provenance", got)
+	if len(units) != 0 {
+		t.Fatalf("shadowed loose winner compiled units = %#v, want no recovered archive definition", units)
 	}
 
 	weapons, duplicates, err := CompileWeaponsWithDuplicates(fs)
 	if err != nil {
 		t.Fatalf("compile shadowed weapon: %v", err)
 	}
-	if got := weapons["shadowedweapon"]; got == nil || got.Name != "ArchiveWeapon" || got.Range != 250 || got.Provenance.ProviderID != "totala1.hpi" {
-		t.Fatalf("shadowed weapon = %#v, want archived bytes and provenance", got)
+	if len(weapons) != 0 {
+		t.Fatalf("shadowed loose winner compiled weapons = %#v, want no recovered archive definition", weapons)
 	}
 	if len(duplicates) != 0 {
 		t.Fatalf("shadowed loose weapon created duplicate diagnostics: %v", duplicates)
 	}
+}
+
+func TestSC24LooseMissingUnitInfoStopsBeforeLaterUnreadableWinner(t *testing.T) {
+	fs := &unreadableTopologyFixtureFS{
+		topologyFixtureFS: &topologyFixtureFS{
+			fixtureFS: newFixtureFS(t,
+				fixtureFile{path: "units/a-good.fbi", data: compatibleUnitFixture("unitname=before;")},
+				fixtureFile{path: "units/b-loose.fbi", data: "[OTHER]{ unitname=drop; }"},
+				fixtureFile{path: "units/c-later.fbi", data: compatibleUnitFixture("unitname=after;")},
+			),
+			providers: map[string]vfs.Provenance{
+				"units/a-good.fbi":  {ProviderType: "hpi", SourcePath: "totala1.hpi"},
+				"units/b-loose.fbi": {ProviderType: "directory", SourcePath: "units/b-loose.fbi"},
+				"units/c-later.fbi": {ProviderType: "hpi", SourcePath: "totala1.hpi"},
+			},
+		},
+		path: "units/c-later.fbi",
+	}
+	units, err := CompileUnits(fs)
+	if err != nil {
+		t.Fatalf("compile units read after missing UNITINFO: %v", err)
+	}
+	if units["before"] == nil || units["after"] != nil {
+		t.Fatalf("missing UNITINFO result = %#v, want only the preceding archive winner", units)
+	}
+}
+
+func compatibleUnitFixture(body string) string {
+	return "[UNITINFO]{\n" + body + "\nVersion=3.1;\nCopyright=Copyright 1997 Humongous Entertainment. All rights reserved.;\n}\n"
 }

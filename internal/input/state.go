@@ -119,10 +119,53 @@ func (k *KeyboardState) ResetEdges() {
 type State struct {
 	Mouse *MouseState
 	Kbd   *KeyboardState
+
+	tokens TokenRing
 }
 
 // NewState returns an empty host-frame sample with both halves allocated.
 func NewState() *State { return &State{Mouse: &MouseState{}, Kbd: &KeyboardState{}} }
+
+// EnqueueToken records an ordered platform token. It does not affect held
+// state, which remains queryable through Kbd [07 §2].
+func (s *State) EnqueueToken(token Token) bool {
+	if s == nil {
+		return false
+	}
+	return s.tokens.Enqueue(token)
+}
+
+// DrainTokens takes the pending token history in producer order.
+func (s *State) DrainTokens() []Token {
+	if s == nil {
+		return nil
+	}
+	return s.tokens.Drain()
+}
+
+// PendingTokens reports how many ordered tokens await a consumer.
+func (s *State) PendingTokens() int {
+	if s == nil {
+		return 0
+	}
+	return s.tokens.Len()
+}
+
+// PeekTokens returns the pending token sequence without consuming it.
+func (s *State) PeekTokens() []Token {
+	if s == nil {
+		return nil
+	}
+	return s.tokens.Peek()
+}
+
+// DiscardTokens removes an already-serviced token prefix.
+func (s *State) DiscardTokens(n int) int {
+	if s == nil {
+		return 0
+	}
+	return s.tokens.Discard(n)
+}
 
 // MouseButtons is the three-button held state carried by a Sample.
 type MouseButtons struct{ Left, Middle, Right bool }

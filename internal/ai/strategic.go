@@ -757,13 +757,13 @@ func (s *Strategic) recomputeClassVectors() {
 		if fval < 0 {
 			acc0 += 10
 		}
-		// Apply the cost terms with float32 narrowing at each conversion [P0-01
-		// §3–§4; R-P0-05].
+		// Costs already carry the definition single-float store [02 R-KEYS-01 §5].
+		// Score operations retain their own stores [08 R-P0-05].
 		costMetal := float32(0)
 		costEnergy := float32(0)
 		if def != nil {
-			costMetal = float32(def.BuildCostMetal)
-			costEnergy = float32(def.BuildCostEnergy)
+			costMetal = def.BuildCostMetal
+			costEnergy = def.BuildCostEnergy
 		}
 		t0f := float32(acc0) + costMetal*float32(-0.01)
 		t0 := ftol(t0f) // narrow to float32 at CALL then ftol [P0-01 §4]; platform-residual control-word marker above

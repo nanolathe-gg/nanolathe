@@ -193,3 +193,25 @@ func MinimapCameraIntent(layout camera.Minimap, dst hud.Rect, playW, playH int32
 	}
 	return CameraIntent{X: wx, Z: wz}, true
 }
+
+// MinimapCameraCaptureIntent converts a pointer record owned by an already
+// captured minimap gesture. Unlike MinimapPointerWorld it deliberately does
+// not re-admit the pointer against the radar rectangle: the retail latch keeps
+// consuming its updated record until its matching button-up, including while a
+// drag has crossed the radar edge [07 R-CAM-01 §11]. Its signed lens arithmetic
+// runs before the camera's normal clamp, so it must not clamp the pointer back
+// into the fitted rectangle or canvas first.
+func MinimapCameraCaptureIntent(layout camera.Minimap, dst hud.Rect, playW, playH int32, mouseX, mouseY int32) (CameraIntent, bool) {
+	dl, dt, dr, db := dst.Ordered()
+	dw, dh := dr-dl+1, db-dt+1
+	if dw <= 0 || dh <= 0 || layout.W <= 0 || layout.H <= 0 || playW <= 0 || playH <= 0 {
+		return CameraIntent{}, false
+	}
+	// This is DisplayToCanvas's scale arithmetic without its endpoint clamp.
+	// The capture has already established that a valid radar layout exists; the
+	// current pointer record itself may now lie outside that layout.
+	cx := (mouseX - dl) * camera.MinimapLongSide / dw
+	cy := (mouseY - dt) * camera.MinimapLongSide / dh
+	wx, wz := layout.ToWorldPlay(cx, cy, playW, playH)
+	return CameraIntent{X: wx, Z: wz}, true
+}

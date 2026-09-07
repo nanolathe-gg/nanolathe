@@ -155,10 +155,10 @@ func (s *System) FlightCommandFor(h pool.Handle, u *units.Unit) *FlightCommand {
 // boundary.
 //
 // rec is the order record that installed the payload; step 6 raises its
-// satisfied bits. sectors is the air sector grid of [04 R-AIR-01 §5], built once
-// per map by the caller that owns the map, because this package's System has no
-// field for it and this unit does not own the file that declares System.
-func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, sectors *AirSectorGrid) {
+// satisfied bits. sectors remains a compatibility argument for existing
+// callers; the producer reads only the prior completed stamp retained on the
+// collision record, never a coordinate-derived grid lookup [04 R-AIR-01 §5].
+func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, _ *AirSectorGrid) {
 	if s == nil || u == nil {
 		return
 	}
@@ -180,7 +180,7 @@ func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, sectors *Air
 	}
 	c.Flags = (c.Flags &^ flightCommandModeMask) | (mode << flightCommandModeShift)
 
-	c.produce(u, rec, sectors)
+	c.produce(u, rec, s.Collisions[u.Handle])
 
 	// The integrator's single input fetch [04 R-AIR-01 §1]. The mover's command
 	// words are FlightState's Target* fields; §10.1 gives the vertical control
@@ -201,7 +201,7 @@ func (s *System) StepFlightCommand(u *units.Unit, rec *orders.Node, sectors *Air
 // order [04 R-AIR-01 §1] gives them. With a null goal payload it does nothing at
 // all: the block keeps its last values, so an aircraft whose payload was
 // released continues on its last command.
-func (c *FlightCommand) produce(u *units.Unit, rec *orders.Node, sectors *AirSectorGrid) {
+func (c *FlightCommand) produce(u *units.Unit, rec *orders.Node, coll *CollisionState) {
 	if c == nil || u == nil || c.Payload == nil {
 		return
 	}
@@ -232,10 +232,8 @@ func (c *FlightCommand) produce(u *units.Unit, rec *orders.Node, sectors *AirSec
 	// variant is the operative one and the only one reproduced. Without a grid
 	// the overwrite simply does not run: the four-corner terrain query is the
 	// wrong source for it and is not substituted here.
-	if d > cruiseRefreshRange && u.Def != nil {
-		if sectorHeight, linked := sectors.SectorHeightAt(u.X, u.Z); linked {
-			c.Pos.Y = numeric.Fixed((int64(u.Def.CruiseAlt) + int64(sectorHeight)) << 16)
-		}
+	if d > cruiseRefreshRange && u.Def != nil && coll != nil && coll.airSector != nil && !coll.airOffMap {
+		c.Pos.Y = numeric.Fixed((int64(u.Def.CruiseAlt) + int64(coll.airSector.Smoothed)) << 16)
 	}
 
 	// 5 — the heading rule. Beyond 320 world units the payload is not consulted
@@ -294,6 +292,8 @@ type airSector struct {
 type AirSectorGrid struct {
 	Columns int32
 	Rows    int32
+	cellW   int32
+	cellH   int32
 
 	records []airSector
 	// sentinel is the one extra record allocated alongside the grid, zeroed with
@@ -322,7 +322,7 @@ func NewAirSectorGrid(t *world.Terrain) *AirSectorGrid {
 	if r := count % 8; r != 0 {
 		count += 8 - r
 	}
-	g := &AirSectorGrid{Columns: cols, Rows: rows, records: make([]airSector, count)}
+	g := &AirSectorGrid{Columns: cols, Rows: rows, cellW: t.CellW, cellH: t.CellH, records: make([]airSector, count)}
 	g.sentinel = airSector{Edge: 0x1F}
 
 	// Pass 1 — every record starts zeroed; the edge bits are OR'd in the order
@@ -417,11 +417,10 @@ func NewAirSectorGrid(t *world.Terrain) *AirSectorGrid {
 // record at all. A false second result is the out-of-bounds sector record, whose
 // height bytes are zero forever [04 R-AIR-01 §5].
 //
-// Retail's link is written by the occupancy re-stamp, which indexes
-// `grid[(Z >> 23) * columns + (X >> 23)]` and tests the unit's footprint anchor
-// against the attribute grid. Nanolathe's occupancy does not yet carry that
-// link; the index here is the same expression on the unit's own position, which
-// agrees with the re-stamp for every unit whose footprint anchor is in bounds.
+// This coordinate helper remains for grid construction tests and diagnostics.
+// Live flight consumers read CollisionState's completed-stamp link instead;
+// a coordinate query cannot reproduce its footprint sentinel state
+// [04 R-COLL-01 §4][04 R-AIR-01 §5].
 func (g *AirSectorGrid) SectorHeightAt(x, z numeric.Fixed) (uint8, bool) {
 	if g == nil {
 		return 0, false
@@ -432,6 +431,47 @@ func (g *AirSectorGrid) SectorHeightAt(x, z numeric.Fixed) (uint8, bool) {
 		return g.sentinel.Smoothed, false
 	}
 	return g.records[cz*int64(g.Columns)+cx].Smoothed, true
+}
+
+// sectorForStamp returns the exact record a completed footprint stamp files.
+// Bounds are tested from the cached footprint anchor; a strict equality at
+// the right or bottom edge is outside. A valid footprint is then filed by its
+// committed centre position, whose sector may differ for a wide footprint
+// [04 R-AIR-01 §5][04 R-COLL-01 §4].
+func (g *AirSectorGrid) sectorForStamp(x, z numeric.Fixed, anchor Cell, footX, footZ int16) *airSector {
+	if g == nil || anchor.X < 0 || anchor.Z < 0 ||
+		anchor.X+int32(footX) >= g.cellW || anchor.Z+int32(footZ) >= g.cellH {
+		if g == nil {
+			return nil
+		}
+		return &g.sentinel
+	}
+	sx := int64(x) >> airSectorShift
+	sz := int64(z) >> airSectorShift
+	if sx < 0 || sz < 0 || sx >= int64(g.Columns) || sz >= int64(g.Rows) {
+		return &g.sentinel
+	}
+	return &g.records[sz*int64(g.Columns)+sx]
+}
+
+// syncStampedAirSector publishes the sector identity owned by the completed
+// footprint stamp. It runs after stamp reconciliation, so every consumer —
+// aircraft and grounded follow targets alike — reads the prior stamp rather
+// than a coordinate query [04 R-COLL-01 §4][04 R-AIR-01 §5].
+func (s *System) syncStampedAirSector(u *units.Unit, coll *CollisionState) {
+	if s == nil || u == nil || coll == nil {
+		return
+	}
+	if s.AirSectors == nil {
+		return
+	}
+	coll.airSector = s.AirSectors.sectorForStamp(u.X, u.Z, coll.CachedAnchor, coll.FootPrintX, coll.FootPrintZ)
+	coll.airOffMap = coll.airSector == &s.AirSectors.sentinel
+	if fl := s.Flights[u.Handle]; fl != nil {
+		// OffMap remains the integrator's isolated mirror. The canonical link
+		// and sentinel live on CollisionState for all stamped-unit consumers.
+		fl.OffMap = coll.airOffMap
+	}
 }
 
 // --- the lean accumulator [04 R-AIR-01 §2] ---

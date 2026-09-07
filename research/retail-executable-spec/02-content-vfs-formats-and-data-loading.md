@@ -880,7 +880,7 @@ run the roulette, and index the unit-definition table with the pick result.
 
 | Key | Accessor | Default |
 |---|---|---|
-| `buildcostenergy`, `buildcostmetal` | integer | 0 |
+| `buildcostenergy`, `buildcostmetal` | integer, stored as single float | 0 |
 | `energymake`, `energyuse`, `metalmake`, `extractsmetal` | floating | 0.0 |
 | `windgenerator`, `tidalgenerator` | floating | 0.0 |
 | `energystorage`, `metalstorage` | floating | 0.0 |
@@ -3826,8 +3826,15 @@ contract; this closure does not change intermediate floating-point stores.
   loader reads two keys from every unit section that the compiler of §5 does
   not: `Version` with the floating accessor (default 0.0) and `Copyright`
   with the string accessor (128 bytes; the default is a joke sentence that
-  cannot match). The version is split into `major = trunc(v)` and
-  `minor = trunc((v − major) × 10)` and accepted when `major < 3`, or
+  cannot match). The floating result is first saved as binary64. Before each
+  signed-64 low-word conversion, a runtime wrapper rounds its binary64 operand
+  **toward negative infinity**: `major = trunc64(floor(v)).low32`. That signed
+  low word is promoted back to the floating value while the original binary64
+  stays available for the second expression,
+  `minor = trunc64(floor((v − float64(major)) × 10)).low32`. Both conversions
+  then use the shared signed-64 truncation helper of `[01 R-DET-01 §1]`; there
+  is no signed-32 conversion or intervening decimal parse. The version is
+  accepted when `major < 3`, or
   `major = 3` and `minor ≤ 1` (the executable's own version bytes are 3, 1,
   1); the copyright is accepted when, after the four characters at the
   year position are overwritten with `0000`, it equals

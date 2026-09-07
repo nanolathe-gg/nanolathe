@@ -47,7 +47,7 @@ func LoadTranslationTable(fs vfs.FSOps, language string) (*TranslationTable, err
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, formats.WithTDFFile(err, "gamedata/translate.tdf")
+		return nil, formats.WithTDFContext(fs, err, "gamedata/translate.tdf")
 	}
 	if doc.Root == nil {
 		return nil, nil

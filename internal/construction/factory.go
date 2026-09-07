@@ -1146,7 +1146,7 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 			// `buildcostenergy > 0` guard around the decay is not retail
 			// [05 R-WORK-01 §11].
 			if product.Def != nil {
-				quantum := -(float32(product.Def.BuildTime*11) / float32(product.Def.BuildCostEnergy))
+				quantum := -(float32(product.Def.BuildTime*11) / product.Def.BuildCostEnergy)
 				// The decay is the self form: the frame is both builder and
 				// target, so the refund lands in its own owner's bucket and the
 				// clamp-kill names it as its own attacker [05 R-WORK-01 §1].

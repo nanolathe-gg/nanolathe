@@ -169,10 +169,11 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 		return nil, err
 	}
 	report.Report(FamilyWeapons, 100)
-	units, err := CompileUnits(fs)
+	unitResult, err := compileUnitsWithLanguage(fs, "")
 	if err != nil {
 		return nil, err
 	}
+	units := unitResult.units
 	report.Report(FamilyUnits, 100)
 	categories, err := CompileCategories(units)
 	if err != nil {
@@ -263,10 +264,7 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	if err != nil {
 		return nil, err
 	}
-	var warnings []string
-	if len(buildMenus) > 0 {
-		warnings = EnforceDownloadable(units, MenuButtonNames(buildMenus))
-	}
+	warnings := catalogUnitWarnings(unitResult.incompatibilityWarning, units, buildMenus)
 	// Model sorting C13: sort model catalog case-insensitively before caching per-unit-type pointer [03 §2.4].
 	report.Report(FamilyBuildMenus, 100)
 	sortedModels, modelIndex := buildModelCatalog(units)
@@ -315,6 +313,21 @@ func CompileWithProgress(fs vfs.FSOps, report Progress) (*Catalog, error) {
 	// independent of map iteration, identical across two runs (I1) [02 §5] C12.
 	c.Hash = catalogHash(c)
 	return c, nil
+}
+
+// catalogUnitWarnings preserves the catalog's two independent unit diagnostics:
+// compatibility collection precedes the build-menu downloadable enforcement
+// [02 R-MALF-01 §5][02 "Unit record"].  Keep this at the assembly seam so a
+// later warning source cannot overwrite either earlier result.
+func catalogUnitWarnings(incompatible bool, units map[string]*UnitDef, buildMenus map[string]*BuildMenuPage) []string {
+	var warnings []string
+	if incompatible {
+		warnings = append(warnings, incompatibleUnitsWarning)
+	}
+	if len(buildMenus) > 0 {
+		warnings = append(warnings, EnforceDownloadable(units, MenuButtonNames(buildMenus))...)
+	}
+	return warnings
 }
 
 // DownloadPlacementsForPage returns a copy of the resolved generated-page
@@ -405,7 +418,7 @@ func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
 	}
 	sort.Strings(unitKeys)
 	for _, k := range unitKeys {
-		name := strings.TrimSpace(units[k].ObjectName)
+		name := trimTDFSemantic(units[k].ObjectName)
 		if name == "" {
 			continue
 		}
@@ -423,7 +436,7 @@ func buildModelCatalog(units map[string]*UnitDef) ([]string, map[string]int) {
 	}
 	// Sort case-insensitively [03 §2.4] — total order via lower + tie-breaker (I1).
 	sort.Slice(sorted, func(i, j int) bool {
-		li, lj := strings.ToLower(sorted[i]), strings.ToLower(sorted[j])
+		li, lj := CanonicalKey(sorted[i]), CanonicalKey(sorted[j])
 		if li != lj {
 			return li < lj
 		}
@@ -467,7 +480,7 @@ func (c *Catalog) ModelForUnit(unitKey string) (string, int, bool) {
 	if !ok {
 		return "", 0, false
 	}
-	name := strings.TrimSpace(u.ObjectName)
+	name := trimTDFSemantic(u.ObjectName)
 	if name == "" {
 		return "", 0, false
 	}
@@ -743,17 +756,17 @@ func (c *Catalog) Clone() *Catalog {
 		sort.Strings(keys)
 		for _, k := range keys {
 			f := out.Features[k]
-			if strings.TrimSpace(f.FeatureDead) != "" {
+			if trimTDFSemantic(f.FeatureDead) != "" {
 				if target, ok := out.Features[CanonicalKey(f.FeatureDead)]; ok {
 					f.FeatureDeadDef = target
 				}
 			}
-			if strings.TrimSpace(f.FeatureReclamate) != "" {
+			if trimTDFSemantic(f.FeatureReclamate) != "" {
 				if target, ok := out.Features[CanonicalKey(f.FeatureReclamate)]; ok {
 					f.FeatureReclamateDef = target
 				}
 			}
-			if strings.TrimSpace(f.FeatureBurnt) != "" {
+			if trimTDFSemantic(f.FeatureBurnt) != "" {
 				if target, ok := out.Features[CanonicalKey(f.FeatureBurnt)]; ok {
 					f.FeatureBurntDef = target
 				}
@@ -1311,7 +1324,7 @@ func fillModelTops(fs vfs.FSOps, units map[string]*UnitDef) {
 	}
 	tops := make(map[string]modelTopPair)
 	for _, u := range units {
-		name := strings.ToLower(strings.TrimSpace(u.ObjectName))
+		name := CanonicalKey(u.ObjectName)
 		if name == "" {
 			continue
 		}
@@ -1388,7 +1401,7 @@ func fillBuildPages(fs vfs.FSOps, units map[string]*UnitDef) {
 		return err == nil && info.Size > 0
 	}
 	for _, u := range units {
-		name := strings.ToLower(strings.TrimSpace(u.UnitName))
+		name := CanonicalKey(u.UnitName)
 		if name == "" {
 			continue
 		}

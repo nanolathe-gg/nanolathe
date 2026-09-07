@@ -194,7 +194,7 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 			if specials := sec.Section("specials"); specials != nil {
 				for _, sp := range specials.Sections() {
 					if sw, ok := sp.StringValue("specialwhat", ""); ok {
-						if strings.HasPrefix(strings.ToLower(strings.TrimSpace(sw)), "startpos") {
+						if strings.HasPrefix(CanonicalKey(sw), "startpos") {
 							sch.StartPosCount++
 						}
 					}
@@ -323,7 +323,7 @@ func baseNameWithoutExt(logical string) string {
 		base = base[:dot]
 	}
 	// Preserve original spacing/case for Name, but trim spaces for canonical.
-	return strings.TrimSpace(base)
+	return base
 }
 
 // CompileMaps compiles map headers from maps/*.ota + maps/*.tnt [02 "Map files"] [fmt ota] [fmt tnt].
@@ -354,14 +354,12 @@ func compileMapsWithProgress(fs vfs.FSOps, report Progress) (map[string]*MapHead
 		if e.IsDir {
 			continue
 		}
-		lower := strings.ToLower(e.Path)
+		lower := asciiFoldContent(e.Path)
 		if strings.HasSuffix(lower, ".ota") {
-			base := strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(lower, "maps/")), ".ota")
-			base = strings.TrimSpace(base)
+			base := strings.TrimSuffix(strings.TrimPrefix(lower, "maps/"), ".ota")
 			otaByBase[base] = e
 		} else if strings.HasSuffix(lower, ".tnt") {
-			base := strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(lower, "maps/")), ".tnt")
-			base = strings.TrimSpace(base)
+			base := strings.TrimSuffix(strings.TrimPrefix(lower, "maps/"), ".tnt")
 			tntByBase[base] = e
 		}
 	}

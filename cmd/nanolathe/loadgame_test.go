@@ -3,8 +3,11 @@ package main
 import (
 	"os"
 	"testing"
+	"time"
 
+	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -102,8 +105,28 @@ func TestCampaignContinuationWalkWritesAndResumesABank(t *testing.T) {
 	if saveLoadUI == nil || saveLoadUI.Mode() != saveScreenMode {
 		t.Fatal("save screen did not open")
 	}
-	saveLoadUI.SetName("campaign slot")
-	shell.activateSaveLoadGadget("LOAD")
+	// Type through the production captured GAMENAME editor. This deliberately
+	// avoids SetName: the test must prove an empty save directory can create
+	// its first named save through ordinary input [07 R-WGT-01 §6].
+	menuClient, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 640, Height: 480})
+	if err != nil {
+		t.Fatalf("menu client: %v", err)
+	}
+	for _, r := range "campaign slot" {
+		if !menuClient.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: r}) {
+			t.Fatal("enqueue save-name token")
+		}
+	}
+	shell.menuInput(menuClient)
+	if got := saveLoadUI.Name(); got != "campaign slot" {
+		t.Fatalf("production GAMENAME edit = %q, want campaign slot", got)
+	}
+	// Enter is captured by GAMENAME and fires its authored LOAD action, which
+	// commits the name just typed above [07 R-WGT-01 §6][08 R-SAVE-02 §1].
+	if !menuClient.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEnter}) {
+		t.Fatal("enqueue GAMENAME Enter")
+	}
+	shell.menuInput(menuClient)
 
 	path := session.RetailSavePath(saveDir, "campaign slot")
 	bank, err := save.Open(path)
@@ -211,6 +234,31 @@ func TestLoadScreenRefusesAnEmptyList(t *testing.T) {
 	}
 	if modal := shell.frontend.Panels.Modal(); modal == nil || modal.Message() != retailNoSavedGamesMessage {
 		t.Fatal("the empty list did not raise the authored refusal")
+	}
+}
+
+// TestSaveScreenSelectionBindsTheAuthoredNameEditor keeps the controller's
+// selected-row copy on the same Panel text that the captured GAMENAME editor
+// presents [08 R-SAVE-02 §1][07 R-WGT-01 §6].
+func TestSaveScreenSelectionBindsTheAuthoredNameEditor(t *testing.T) {
+	resetSaveLoadScreenState(t)
+	shell, saveDir := retailShellForTest(t)
+	if err := os.MkdirAll(saveDir, 0o755); err != nil {
+		t.Fatalf("create save directory: %v", err)
+	}
+	writeContinuationSlot(t, saveDir, "selected slot", time.Unix(1_700_000_000, 0))
+	if err := shell.openSaveLoadScreen(saveScreenMode, saveLoadFromResults); err != nil {
+		t.Fatalf("open save screen: %v", err)
+	}
+	if saveLoadPanel == nil || !saveLoadPanel.EditorCaptured() {
+		t.Fatal("save GAMENAME did not receive its authored initial capture")
+	}
+	shell.selectSaveLoadRow(0)
+	if got := saveLoadUI.Name(); got != "selected slot" {
+		t.Fatalf("selected save name = %q, want selected slot", got)
+	}
+	if got := saveLoadPanel.TextOf("GAMENAME"); got != "selected slot" {
+		t.Fatalf("authored GAMENAME text = %q, want selected slot", got)
 	}
 }
 

@@ -84,7 +84,7 @@ func (f *FeatureDef) UnknownKeysSorted() []string {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		li, lj := strings.ToLower(keys[i]), strings.ToLower(keys[j])
+		li, lj := CanonicalKey(keys[i]), CanonicalKey(keys[j])
 		if li != lj {
 			return li < lj
 		}
@@ -201,7 +201,7 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 		if item.Kind != formats.Assignment {
 			continue
 		}
-		fold := strings.ToLower(item.Key)
+		fold := CanonicalKey(item.Key)
 		if _, ok := knownFeatureKeys[fold]; ok {
 			continue
 		}
@@ -249,9 +249,9 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 		Indestructible:       indestructible,
 		NoDisplayInfo:        nodisplayinfo,
 		NoDrawUnderGray:      nodrawundergray,
-		FeatureDead:          strings.TrimSpace(featuredead),
-		FeatureReclamate:     strings.TrimSpace(featurereclamate),
-		FeatureBurnt:         strings.TrimSpace(featureburnt),
+		FeatureDead:          trimTDFSemantic(featuredead),
+		FeatureReclamate:     trimTDFSemantic(featurereclamate),
+		FeatureBurnt:         trimTDFSemantic(featureburnt),
 		Unknown:              unknown,
 	}
 
@@ -292,7 +292,7 @@ func LinkFeatureSuccessors(features map[string]*FeatureDef) error {
 	sort.Strings(keys)
 	for _, k := range keys {
 		fd := features[k]
-		if strings.TrimSpace(fd.FeatureDead) != "" {
+		if trimTDFSemantic(fd.FeatureDead) != "" {
 			ck := CanonicalKey(fd.FeatureDead)
 			if target, ok := features[ck]; ok {
 				fd.FeatureDeadDef = target
@@ -301,7 +301,7 @@ func LinkFeatureSuccessors(features map[string]*FeatureDef) error {
 				return fmt.Errorf(`Record "%s" missing from feature files`, fd.FeatureDead)
 			}
 		}
-		if strings.TrimSpace(fd.FeatureReclamate) != "" {
+		if trimTDFSemantic(fd.FeatureReclamate) != "" {
 			ck := CanonicalKey(fd.FeatureReclamate)
 			if target, ok := features[ck]; ok {
 				fd.FeatureReclamateDef = target
@@ -310,7 +310,7 @@ func LinkFeatureSuccessors(features map[string]*FeatureDef) error {
 				return fmt.Errorf(`Record "%s" missing from feature files`, fd.FeatureReclamate)
 			}
 		}
-		if strings.TrimSpace(fd.FeatureBurnt) != "" {
+		if trimTDFSemantic(fd.FeatureBurnt) != "" {
 			ck := CanonicalKey(fd.FeatureBurnt)
 			if target, ok := features[ck]; ok {
 				fd.FeatureBurntDef = target
@@ -351,7 +351,7 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 				continue
 			}
 			// Filter by extension — only *.tdf are definitions.
-			if !strings.HasSuffix(strings.ToLower(e.Path), ".tdf") {
+			if !strings.HasSuffix(asciiFoldContent(e.Path), ".tdf") {
 				continue
 			}
 			data, err := fs.ReadFileLimit(e.Path, 1<<20)
@@ -361,12 +361,12 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 			prov := ProvenanceFrom(e)
 			doc, err := formats.ParseTDF(data)
 			if err != nil {
-				return fmt.Errorf("content: %s: %w", e.Path, formats.WithTDFFile(err, e.Path))
+				return formats.WithTDFContext(fs, err, e.Path)
 			}
 			for _, section := range doc.Root.Sections() {
-				name := strings.TrimSpace(section.OriginalName)
+				name := trimTDFSemantic(section.OriginalName)
 				if name == "" {
-					name = strings.TrimSpace(section.Name)
+					name = trimTDFSemantic(section.Name)
 				}
 				if name == "" {
 					continue

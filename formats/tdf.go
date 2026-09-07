@@ -196,7 +196,7 @@ func LoadTDF(fs vfs.FSOps, name string) (*Document, error) {
 		return nil, err
 	}
 	doc, err := ParseTDF(data)
-	return doc, WithTDFFile(err, name)
+	return doc, WithTDFContext(fs, err, name)
 }
 
 // foldName uses only the established byte domain. High-byte code-page folding

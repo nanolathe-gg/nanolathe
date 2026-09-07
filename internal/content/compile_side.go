@@ -117,7 +117,7 @@ func compileSideSection(section *formats.Section, ordinal int, prov Provenance, 
 
 	// [GAP T14] Missing side font is fatal — same modal/fatal diagnostic channel as missing anchor.
 	// A missing side font is a data error, not a silent fallback.
-	if !hasFont || strings.TrimSpace(font) == "" {
+	if !hasFont || trimTDFSemantic(font) == "" {
 		return nil, fmt.Errorf("content: side SIDE%d: missing font is fatal [GAP T14]", ordinal)
 	}
 
@@ -185,7 +185,7 @@ func CompileSides(fs vfs.FSOps) ([]*SideDef, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/sidedata.tdf: %w", formats.WithTDFFile(err, "gamedata/sidedata.tdf"))
+		return nil, formats.WithTDFContext(fs, err, "gamedata/sidedata.tdf")
 	}
 	// Optional [GENERAL] baseheight integer default 480 [02 §6].
 	baseHeight := int32(480)

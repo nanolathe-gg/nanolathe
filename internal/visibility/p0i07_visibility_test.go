@@ -40,14 +40,14 @@ func TestP0I07_TruthTable(t *testing.T) {
 			Status: status,
 		}
 	}
-	// 1. Cloaked reject unless decloaked bit 0x1000.
+	// 1. Cloaked reject is immediate; the decloak timer does not bypass it.
 	cloaked := at(1, 30, true, 0)
 	if s.IsVisible(0, cloaked) {
 		t.Fatalf("cloaked enemy without decloak should be rejected")
 	}
 	decloaked := at(1, 30, true, DecloakBit)
-	if !s.IsVisible(0, decloaked) {
-		t.Fatalf("cloaked enemy with decloak bit 0x1000 should be visible through predicate (within 90 ticks)")
+	if s.IsVisible(0, decloaked) {
+		t.Fatalf("cloaked enemy with decloak bit 0x1000 passed the predicate")
 	}
 	// Owner bypass sees own cloaked.
 	ownCloaked := at(0, 30, true, 0)

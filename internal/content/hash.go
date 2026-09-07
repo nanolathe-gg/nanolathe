@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-	"strings"
 )
 
 // catalogHash computes Catalog.Hash over canonical bytes including defaults,
@@ -175,7 +174,7 @@ func catalogHash(c *Catalog) string {
 	// Model catalog sorted case-insensitively [03 §2.4] C13 — already sorted in c.sortedModels.
 	if len(c.sortedModels) > 0 {
 		for i, name := range c.sortedModels {
-			fmt.Fprintf(h, "model %d %s %s\n", i, strings.ToLower(name), name)
+			fmt.Fprintf(h, "model %d %s %s\n", i, CanonicalKey(name), name)
 		}
 		// Also hash the canonical index mapping in sorted order for stability (I1).
 		// Keys of modelIndex are canonical model names; sorted for determinism.

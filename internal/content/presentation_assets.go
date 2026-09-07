@@ -132,7 +132,7 @@ func LoadPresentationAssets(fs vfs.FSOps, defs ...*Catalog) (*PresentationCatalo
 			continue
 		}
 		for _, info := range files {
-			if info.IsDir || !strings.EqualFold(path.Ext(info.Path), ".gaf") {
+			if info.IsDir || asciiFoldContent(path.Ext(info.Path)) != ".gaf" {
 				continue
 			}
 			logical := canonicalPath(info.Path)
@@ -172,7 +172,7 @@ func (c *PresentationCatalog) loadFonts(fs vfs.FSOps) {
 		return
 	}
 	for _, info := range entries {
-		if info.IsDir || !strings.EqualFold(path.Ext(info.Path), ".fnt") {
+		if info.IsDir || asciiFoldContent(path.Ext(info.Path)) != ".fnt" {
 			continue
 		}
 		logical := canonicalPath(info.Path)
@@ -312,7 +312,7 @@ func linkDefinitionAssets(spec *AssetCatalog, defs *Catalog, loaded map[string]*
 }
 
 func sequenceForName(g *loadedGAF, name string) AssetSequence {
-	if g == nil || strings.TrimSpace(name) == "" {
+	if g == nil || name == "" {
 		return AssetSequence{}
 	}
 	entry, ok := g.gaf.Find(name)
@@ -338,8 +338,8 @@ func sequenceFromEntry(id AssetID, entry *formats.GAFEntry) AssetSequence {
 }
 
 func canonicalPath(name string) string {
-	name = strings.ReplaceAll(strings.TrimSpace(name), "\\", "/")
-	return strings.ToLower(strings.TrimPrefix(path.Clean(name), "./"))
+	name = strings.ReplaceAll(name, "\\", "/")
+	return asciiFoldContent(strings.TrimPrefix(path.Clean(name), "./"))
 }
 
 func explicitGAFPath(name string) string {
@@ -357,7 +357,9 @@ func explicitGAFPath(name string) string {
 }
 
 func entryAssetID(file, entry string) AssetID {
-	return AssetID(canonicalPath(file) + "#" + CanonicalKey(entry))
+	// GAF entry names are not TDF semantic strings: lookup folds ASCII but
+	// retains every other authored byte [fmt gaf].
+	return AssetID(canonicalPath(file) + "#" + asciiFoldContent(entry))
 }
 
 func frameAssetID(entry AssetID, index int) AssetID {

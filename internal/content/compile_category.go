@@ -3,7 +3,6 @@ package content
 import (
 	"fmt"
 	"sort"
-	"strings"
 )
 
 // CategoryMaskWords is the fixed registry width from the retail category
@@ -153,7 +152,7 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 		if err := r.entries[allIdx].Membership.set(id); err != nil {
 			return nil, err
 		}
-		for _, token := range strings.Fields(u.Category) {
+		for _, token := range contentASCIIFields(u.Category) {
 			idx := r.ensure(token)
 			if err := r.entries[idx].Membership.set(id); err != nil {
 				return nil, err
@@ -169,7 +168,7 @@ func CompileCategories(units map[string]*UnitDef) (*CategoryRegistry, error) {
 			continue
 		}
 		for _, target := range []string{u.BadTargetCategoryWPRI, u.BadTargetCategoryWSEC, u.BadTargetCategoryWSPE, u.NoChaseCategory} {
-			if strings.TrimSpace(target) != "" && !hasUnit(units, target) {
+			if trimTDFSemantic(target) != "" && !hasUnit(units, target) {
 				r.ensure(target)
 			}
 		}

@@ -1,6 +1,10 @@
 package content
 
 import (
+	"bytes"
+	"errors"
+
+	"github.com/nanolathe/nanolathe/formats"
 	"os"
 	"path/filepath"
 	"strings"
@@ -127,5 +131,32 @@ func TestTranslationTableNilReceiverIsSafe(t *testing.T) {
 	}
 	if _, ok := table.Source("Anfang"); ok {
 		t.Fatalf("nil table reverse lookup must report no hit")
+	}
+}
+
+func TestTranslationParseFailureNamesWinningArchive(t *testing.T) {
+	fs := vfs.New()
+	defer fs.Close()
+	const logical = "gamedata/translate.tdf"
+	for priority, provider := range []string{"original.hpi", "patch.hpi"} {
+		body := "[valid]{German=translated;}"
+		if priority == 1 {
+			body = "[broken"
+		}
+		var archive bytes.Buffer
+		if err := vfs.WriteArchive(&archive, []vfs.ArchiveFile{{Path: logical, Data: []byte(body)}}, vfs.ArchiveWriteOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fs.MountArchiveReader(provider, bytes.NewReader(archive.Bytes()), int64(archive.Len()), priority, vfs.ArchiveOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := LoadTranslationTable(fs, "German")
+	var parseErr *formats.ParseError
+	if !errors.As(err, &parseErr) || parseErr.Diagnostic != formats.DiagClosingBracket || parseErr.File != logical {
+		t.Fatalf("winning translation error = %v, want structured closing-bracket diagnostic [02 §4]", err)
+	}
+	if !strings.Contains(err.Error(), "providers searched [patch.hpi]") || strings.Contains(err.Error(), "original.hpi") {
+		t.Fatalf("winning provider lost or shadowed provider substituted: %v", err)
 	}
 }

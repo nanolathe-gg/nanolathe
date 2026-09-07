@@ -331,7 +331,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		idx := clampMenuStage(p.StatusOf(gad.Name), len(gad.Labels))
 		text = gad.Labels[idx]
 	}
-	if text == "" {
+	if text == "" && !(gad.Kind == gui.KindTextBox && p.EditorCaptured() && p.EditorIndex() == index) {
 		return
 	}
 	// Every text painter first selects the font the gadget's `fontnumber`
@@ -351,6 +351,29 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		return
 	}
 	measure, lineStep := g.retailTextMetrics(selected)
+	if gad.Kind == gui.KindTextBox {
+		// A filled kind-3 input owns its plain background; otherwise the
+		// window background already restored by the panel draw remains visible
+		// [07 R-WGT-01 §6].
+		if gad.Attribs&1 != 0 {
+			c.UIFillRect(int(r.X), int(r.Y), int(r.W), int(r.H), 0)
+		}
+		x, y := int(r.X), int(r.Y)+3
+		color, shade := g.retailTextPen(p, index, gad)
+		if selected != nil && g.retailGAFTextFont() == nil {
+			c.UITextWidth(selected, text, x, y, int(r.W), color)
+		} else {
+			g.drawRetailStringLit(c, text, x, y, int(r.W), color, shade)
+		}
+		if p.EditorCaptured() && p.EditorIndex() == index {
+			caret := p.EditorCaret()
+			if caret > len(text) {
+				caret = len(text)
+			}
+			c.UIFillRect(x+measure(text[:caret]), y, 1, lineStep, g.guiColor(9))
+		}
+		return
+	}
 	width := measure(text)
 	pressed := retailButtonPressed(c, r)
 	x := int(r.X)

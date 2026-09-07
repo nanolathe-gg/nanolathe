@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -73,7 +74,23 @@ func (g *gameShell) openSaveLoadScreen(mode saveLoadMode, source saveLoadSource)
 	saveLoadPanel = panel
 	g.frontend.Panels.Push(panel)
 	g.refreshSaveLoadPanel()
+	g.focusSaveLoadNameEditor()
 	return nil
+}
+
+// focusSaveLoadNameEditor performs the save dialog's authored initial focus.
+// The load direction has GAMENAME hidden and therefore owns no text capture
+// [07 R-FE-01 §8][07 R-WGT-01 §6].
+func (g *gameShell) focusSaveLoadNameEditor() {
+	if !g.saveLoadPanelActive() || saveLoadUI.Mode() != saveScreenMode || saveLoadPanel.Window == nil {
+		return
+	}
+	for i, gadget := range saveLoadPanel.Window.Gadgets {
+		if gadget.Kind == gui.KindTextBox && strings.EqualFold(gadget.Name, "GAMENAME") {
+			saveLoadPanel.FocusEditor(i)
+			return
+		}
+	}
 }
 
 // openSaveLoadScreenReporting is the caller-facing form: a construction
@@ -257,6 +274,7 @@ func (g *gameShell) reopenSaveLoadPanel() {
 		saveLoadAssets.background = background
 	}
 	g.refreshSaveLoadPanel()
+	g.focusSaveLoadNameEditor()
 }
 
 // selectSaveLoadRow commits a `GAMES` list selection.

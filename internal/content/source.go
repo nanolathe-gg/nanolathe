@@ -6,28 +6,17 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// archiveMountOps is the optional source-selection surface implemented by the
-// real overlay. Catalog families use it only to recover an archive entry when
-// a loose file shadows the same logical path. Keeping this optional preserves
-// the small FSOps fixture surface; fixtures identify their entries as archive
-// content directly. [02 §2][02 R-CAT-01 §4]
-type archiveMountOps interface {
-	OpenMount(index int, name string) (vfs.File, error)
-	MountCount() int
-}
-
-// archiveContentFile is a family-discovery result after the retail archive
-// gate has been applied. The compiler must never parse a loose unit FBI or
-// weapon TDF, even when it is the overlay winner.
+// archiveContentFile preserves the union enumerator's winning entry and its
+// bytes. The unit compiler needs loose winners through its parse-before-drop
+// gate; weapon discovery filters them before parsing [02 R-CAT-01 §4].
 type archiveContentFile struct {
-	info vfs.EntryInfo
-	data []byte
+	info    vfs.EntryInfo
+	archive bool
 }
 
 func isArchiveProvider(p vfs.Provenance) bool {
@@ -37,101 +26,63 @@ func isArchiveProvider(p vfs.Provenance) bool {
 	return strings.EqualFold(p.ProviderType, "hpi")
 }
 
-// discoverArchiveContent enumerates one flat content family and applies the
-// executable's archive-only gate. If a loose winner shadows an archive entry,
-// the concrete overlay's mount surface is used to open the first archive
-// provider in precedence order. A provider without that optional surface can
-// still be used by tests when its returned EntryInfo is explicitly archive
-// provenance; loose entries are simply ignored.
+// discoverArchiveContent enumerates archive-backed winning entries only. A
+// loose winner is never replaced with a shadowed archive entry [02 R-CAT-01 §1].
 func discoverArchiveContent(fs vfs.FSOps, directory, suffix string) ([]archiveContentFile, error) {
+	entries, err := discoverEntries(fs, directory, suffix, true)
+	if err != nil {
+		return nil, err
+	}
+	result := entries[:0]
+	for _, entry := range entries {
+		if entry.archive {
+			result = append(result, entry)
+		}
+	}
+	return result, nil
+}
+
+// discoverUnitContent preserves every winning FBI so CompileUnits can parse a
+// loose winner before applying its silent compatibility drop [02 R-CAT-01 §4].
+func discoverUnitContent(fs vfs.FSOps) ([]archiveContentFile, error) {
+	return discoverEntries(fs, "units", ".fbi", false)
+}
+
+func discoverEntries(fs vfs.FSOps, directory, suffix string, archiveOnly bool) ([]archiveContentFile, error) {
 	entries, err := fs.ReadDir(directory)
 	if err != nil {
 		return nil, err
 	}
 	result := make([]archiveContentFile, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir || !strings.HasSuffix(strings.ToLower(entry.Path), suffix) {
+		if entry.IsDir || !strings.HasSuffix(asciiFoldContent(entry.Path), suffix) {
 			continue
 		}
-		if isArchiveProvider(entry.Source) {
-			data, readErr := fs.ReadFileLimit(entry.Path, 1<<20)
-			if readErr != nil {
-				continue
-			}
-			result = append(result, archiveContentFile{info: entry, data: data})
+		archive := isArchiveProvider(entry.Source)
+		if archiveOnly && !archive {
 			continue
 		}
-
-		// The overlay can expose a loose winner while the same logical path is
-		// present in an archive. Recover that archive entry without changing
-		// ordinary VFS precedence for any other family.
-		mounts, ok := fs.(archiveMountOps)
-		if !ok {
-			continue
-		}
-		for index := 0; index < mounts.MountCount(); index++ {
-			file, openErr := mounts.OpenMount(index, entry.Path)
-			if openErr != nil {
-				continue
-			}
-			info := file.Info()
-			if !isArchiveProvider(info.Source) {
-				_ = file.Close()
-				continue
-			}
-			data, readErr := readArchiveFile(file, 1<<20)
-			_ = file.Close()
-			if readErr != nil {
-				continue
-			}
-			result = append(result, archiveContentFile{info: info, data: data})
-			break
-		}
+		result = append(result, archiveContentFile{info: entry, archive: archive})
 	}
 	return result, nil
 }
 
-func readArchiveFile(file vfs.File, max int64) ([]byte, error) {
-	// Every caller here reads an archive record, which the provider already
-	// decoded in one piece, so the whole-file path avoids copying it again
-	// [vfs.WholeFile].
-	if w, ok := file.(vfs.WholeFile); ok {
-		if data, ok := w.Whole(); ok {
-			if max >= 0 && int64(len(data)) > max {
-				return nil, fmt.Errorf("content: archive entry exceeds read limit")
-			}
-			return data, nil
-		}
-	}
-	if max < 0 {
-		return io.ReadAll(file)
-	}
-	data, err := io.ReadAll(io.LimitReader(file, max+1))
+func readContentEntry(fs vfs.FSOps, entry archiveContentFile) ([]byte, error) {
+	data, err := fs.ReadFileLimit(entry.info.Path, 1<<20)
 	if err != nil {
-		return nil, err
-	}
-	if int64(len(data)) > max {
-		return nil, fmt.Errorf("content: archive entry exceeds read limit")
+		provider := entry.info.Source.ProviderID()
+		if provider == "" {
+			provider = "unknown"
+		}
+		return nil, fmt.Errorf("nanolathe: content entry read: logical path %s, providers searched [%s], expected readable content definition: %w", entry.info.Path, provider, err)
 	}
 	return data, nil
 }
 
-// CanonicalKey folds the established ASCII domain and trims only the four TDF
-// semantic whitespace bytes. Bytes at or above 0x80 remain literal until the
-// retail code-page rule is traced [02 R-CAT-01 §3].
-// TODO(question): trace retail's active code-page comparison for bytes >= 0x80.
-func CanonicalKey(name string) string {
-	start, end := 0, len(name)
-	for start < end && contentTDFSpace(name[start]) {
-		start++
-	}
-	for end > start && contentTDFSpace(name[end-1]) {
-		end--
-	}
-	name = name[start:end]
-	for i := 0; i < len(name); i++ {
-		if name[i] >= 'A' && name[i] <= 'Z' {
-			out := []byte(name)
+func asciiFoldContent(value string) string {
+	for i := 0; i < len(value); i++ {
+		if value[i] >= 'A' && value[i] <= 'Z' {
+			out := []byte(value)
 			for j := i; j < len(out); j++ {
 				if out[j] >= 'A' && out[j] <= 'Z' {
 					out[j] += 'a' - 'A'
@@ -140,10 +91,66 @@ func CanonicalKey(name string) string {
 			return string(out)
 		}
 	}
-	return name
+	return value
+}
+
+// CanonicalKey folds the established ASCII domain and trims only the four TDF
+// semantic whitespace bytes. Bytes at or above 0x80 remain literal until the
+// retail code-page rule is traced [02 R-CAT-01 §3].
+// TODO(question): trace retail's active code-page comparison for bytes >= 0x80.
+func CanonicalKey(name string) string {
+	return asciiFoldContent(trimTDFSemantic(name))
+}
+
+// trimTDFSemantic is for an authored TDF semantic value or name. It accepts
+// only the four parser whitespace bytes [02 R-CAT-01 §3].
+func trimTDFSemantic(name string) string {
+	start, end := 0, len(name)
+	for start < end && contentTDFSpace(name[start]) {
+		start++
+	}
+	for end > start && contentTDFSpace(name[end-1]) {
+		end--
+	}
+	return name[start:end]
 }
 
 func contentTDFSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\r' || b == '\n' }
+
+// contentASCIIFields is the C-runtime isspace token scan used by category and
+// AI directive grammars. Unlike TDF semantic trimming it includes form-feed
+// and vertical-tab, while preserving all high bytes [02 R-P0-03 §3][08 R-AI-01 §20].
+func contentASCIIFields(value string) []string {
+	var fields []string
+	for i := 0; i < len(value); {
+		for i < len(value) && contentCWhitespace(value[i]) {
+			i++
+		}
+		start := i
+		for i < len(value) && !contentCWhitespace(value[i]) {
+			i++
+		}
+		if start < i {
+			fields = append(fields, value[start:i])
+		}
+	}
+	return fields
+}
+
+func trimContentCWhitespace(value string) string {
+	start, end := 0, len(value)
+	for start < end && contentCWhitespace(value[start]) {
+		start++
+	}
+	for end > start && contentCWhitespace(value[end-1]) {
+		end--
+	}
+	return value[start:end]
+}
+
+func contentCWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\v' || b == '\f'
+}
 
 // boundedString models a fixed-width authored string buffer.  Retail copies
 // bytes into the destination and leaves one byte for a terminator on the

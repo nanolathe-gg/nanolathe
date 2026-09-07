@@ -122,17 +122,47 @@ func (s *Service) SensorInputs() []SensorInput {
 	return out
 }
 
-// worldUnit narrows a 16.16 coordinate to whole world units with an arithmetic
-// shift. The radius visitor and both contact callbacks square whole world
-// units, not map pixels and not fixed point [R-VIS-01 §5].
-func worldUnit(v numeric.Fixed) int64 { return int64(v) >> 16 }
+// SensorStatus returns one completed sensor-phase runtime status word by its
+// unit-pool ID. It is the simulation reader for consumers such as target
+// admission; SensorInputs remains the copied presentation snapshot
+// [R-VIS-01 §4][R-VIS-01 §5].
+func (s *Service) SensorStatus(id uint16) (uint32, bool) {
+	if s == nil || int(id) >= len(s.sensorStatusByID) {
+		return 0, false
+	}
+	entry := s.sensorStatusByID[id]
+	if !entry.valid {
+		return 0, false
+	}
+	return entry.status, true
+}
 
-// planarSquared is the visitor's metric: the sum of the squared whole-world-unit
-// axis deltas [R-VIS-01 §5].
-func planarSquared(a, b *SensorUnit) int64 {
-	dx := worldUnit(b.X) - worldUnit(a.X)
-	dz := worldUnit(b.Z) - worldUnit(a.Z)
-	return dx*dx + dz*dz
+// wholeSquare is the high 32 bits of a signed raw-16.16 square. The radius
+// visitor subtracts the raw coordinate words before multiplying; truncating
+// each coordinate first changes fractional-distance admission [R-VIS-01 §5].
+func wholeSquare(raw int32) int32 {
+	return int32((int64(raw) * int64(raw)) >> 32)
+}
+
+// radiusSquared takes the authored whole-world-unit radius through the same
+// raw-16.16 multiply as the visitor. The terms then add at signed 32-bit width
+// [R-VIS-01 §5].
+func radiusSquared(radius int32) int32 {
+	return wholeSquare(radius << 16)
+}
+
+// worldHigh is the arithmetic high word the radar elevation addend reads.
+// Numeric.Fixed.Int truncates toward zero, which differs below zero [R-VIS-01
+// §4].
+func worldHigh(v numeric.Fixed) int32 { return int32(v.Raw() >> 16) }
+
+// planarSquared is the visitor's metric: subtract signed raw-16.16 coordinate
+// words, take each product's high 32 bits, then add those terms at signed
+// 32-bit width [R-VIS-01 §5].
+func planarSquared(a, b *SensorUnit) int32 {
+	dx := int32(b.X.Sub(a.X).Raw())
+	dz := int32(b.Z.Sub(a.Z).Raw())
+	return wholeSquare(dx) + wholeSquare(dz)
 }
 
 // SensorTick runs the per-tick sensor and proximity phase [03 §3.4][R-VIS-01 §4].
@@ -169,6 +199,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		return
 	}
 	s.sensorInputs = s.sensorInputs[:0]
+	s.sensorStatusByID = s.sensorStatusByID[:0]
 	if playerCount <= 1 {
 		return // more than one player required [R-VIS-01 §4] "Gate"
 	}
@@ -223,10 +254,10 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		if e.SonarDistance > search {
 			search = e.SonarDistance
 		}
-		search2 := int64(search) * int64(search)
-		radarRadius := int64(e.RadarDistance) + 2*worldUnit(e.Y)
-		radar2 := radarRadius * radarRadius
-		sonar2 := int64(e.SonarDistance) * int64(e.SonarDistance)
+		search2 := radiusSquared(search)
+		radarRadius := e.RadarDistance + 2*worldHigh(e.Y)
+		radar2 := radiusSquared(radarRadius)
+		sonar2 := radiusSquared(e.SonarDistance)
 		for j := range units {
 			c := &units[j]
 			if !c.Alive || c.Status == nil {
@@ -261,7 +292,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 			continue
 		}
 		if e.RadarJam != 0 {
-			r2 := int64(e.RadarJam) * int64(e.RadarJam)
+			r2 := radiusSquared(e.RadarJam)
 			for j := range units {
 				c := &units[j]
 				if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
@@ -271,7 +302,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 			}
 		}
 		if e.SonarJam != 0 {
-			r2 := int64(e.SonarJam) * int64(e.SonarJam)
+			r2 := radiusSquared(e.SonarJam)
 			for j := range units {
 				c := &units[j]
 				if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
@@ -320,7 +351,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		// mincloakdistance of 0 leaves the test `d² <= 0`, which effectively
 		// never fires [R-VIS-01 §4] pass 4.
 		mc := src.MinCloakDistance
-		r2 := int64(mc * mc)
+		r2 := radiusSquared(mc)
 		member := uint16(1) << uint(src.Owner)
 		for j := range units {
 			dst := &units[j]
@@ -372,7 +403,16 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	for i := range units {
 		u := &units[i]
 		if u.Alive && u.Status != nil {
-			s.sensorInputs = append(s.sensorInputs, SensorInput{ID: u.ID, Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden, Stealth: u.Stealth, Active: u.Active, OnOffable: u.OnOffable})
+			input := SensorInput{ID: u.ID, Owner: u.Owner, X: u.X, Y: u.Y, Z: u.Z, Status: *u.Status, Hidden: u.Hidden, Stealth: u.Stealth, Active: u.Active, OnOffable: u.OnOffable}
+			s.sensorInputs = append(s.sensorInputs, input)
+			id := int(u.ID)
+			// The phase reset above exposes no entries. Append zero records until
+			// this pool slot has one, so sparse IDs retain their direct lookup
+			// while ascending slot creation grows the backing storage amortized.
+			for len(s.sensorStatusByID) <= id {
+				s.sensorStatusByID = append(s.sensorStatusByID, sensorStatus{})
+			}
+			s.sensorStatusByID[id] = sensorStatus{status: input.Status, valid: true}
 		}
 	}
 }

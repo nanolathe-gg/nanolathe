@@ -390,14 +390,17 @@ func (s *System) unitFor(h pool.Handle) *units.Unit {
 	return s.world.Unit(h)
 }
 
-// airSectorHeight is the sector-grid read every cruise-altitude rule performs,
-// and the sentinel test six air executors run [04 R-AIR-01 §5]. A false second
-// result is the out-of-bounds sector record.
+// airSectorHeight reads the sector retained by the completed footprint stamp.
+// It deliberately does not re-query the unit coordinates: all air consumers
+// observe the same prior-stamp identity and sentinel state [04 R-AIR-01 §5].
 func (s *System) airSectorHeight(u *units.Unit) (uint8, bool) {
 	if s == nil || u == nil {
 		return 0, false
 	}
-	return s.AirSectors.SectorHeightAt(u.X, u.Z)
+	if coll := s.Collisions[u.Handle]; coll != nil && coll.airSector != nil && !coll.airOffMap {
+		return coll.airSector.Smoothed, true
+	}
+	return 0, false
 }
 
 // installAirGoal installs a payload on the unit's flight command block
@@ -1441,15 +1444,9 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	fl.Z = int32(u.Z.Raw())
 	fl.Heading = u.Move.Heading
 	if u.Def != nil {
-		if fl.MaxVelocity == 0 && u.Def.MaxVelocity != 0 {
-			fl.MaxVelocity = int32(u.Def.MaxVelocity)
-		}
-		if fl.Acceleration == 0 && u.Def.Acceleration != 0 {
-			fl.Acceleration = int32(u.Def.Acceleration)
-		}
-		if fl.BrakeRate == 0 && u.Def.BrakeRate != 0 {
-			fl.BrakeRate = int32(u.Def.BrakeRate)
-		}
+		fl.MaxVelocity = int32(u.Def.MaxVelocity)
+		fl.Acceleration = int32(u.Def.Acceleration)
+		fl.BrakeRate = int32(u.Def.BrakeRate)
 		fl.TurnRate = int32(u.Def.TurnRate)
 	}
 	oldX, oldZ := int64(u.X), int64(u.Z)
@@ -1458,30 +1455,13 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 	// Call 3 — the commit. An airborne mover holds no ground cells, so there is
 	// no occupancy stamp here; the mode setter moved the stamp when the aircraft
 	// left the ground and puts it back when it lands [04 R-COLL-01 §4].
-	u.X = numeric.Fixed(int64(fl.X))
-	u.Y = numeric.Fixed(int64(fl.Y))
-	u.Z = numeric.Fixed(int64(fl.Z))
-	u.Move.Heading = fl.Heading
-	u.Move.Speed = numeric.Fixed(int64(fl.Speed))
+	s.commitFlightState(u, fl)
 	// The mover's VELOCITY TRIPLE [04 R-MOV-01 §1]. The flight integrator owns
 	// all three components on this path — the decay, the brake shaping, the
 	// vertical clamp and the horizontal acceleration each write them — and it
 	// assigns an exact zero triple for any mode other than airborne
 	// [04 §10.1][04 R-AIR-01 §1], so a landed aircraft publishes zero here on
 	// its very next tick without needing a second writer.
-	u.Move.VelX = numeric.Fixed(int64(fl.VX))
-	u.Move.VelY = numeric.Fixed(int64(fl.VY))
-	u.Move.VelZ = numeric.Fixed(int64(fl.VZ))
-	if coll := s.Collisions[handle]; coll != nil {
-		coll.X = int32(fl.X)
-		coll.Y = int32(fl.Y)
-		coll.Z = int32(fl.Z)
-		coll.Heading = fl.Heading
-		coll.Speed = fl.Speed
-		anchor := coll.ProposedAnchor(u.Move.Mode & 0x3)
-		coll.CachedAnchor = anchor
-		coll.OldAnchor = anchor
-	}
 
 	// Call 4 — the movement-rate cache [04 §5.2].
 	s.emitMovementCallbacks(u, fl.Speed)
@@ -1504,6 +1484,34 @@ func (s *System) stepAir(u *units.Unit, tick uint32) StepResult {
 		EmptyRoute: !hasRoute,
 		Moved:      int64(u.X) != oldX || int64(u.Z) != oldZ,
 		Arrived:    st.arrived,
+	}
+}
+
+// commitFlightState is the single flight commit owner for shared mover words.
+// It publishes the live integrator triple, scalar speed, residual and lean
+// record before callbacks or save readers can observe the unit [04 §10.1]
+// [04 R-AIR-01 §1][08 R-SAVE-02 §8].
+func (s *System) commitFlightState(u *units.Unit, fl *FlightState) {
+	if s == nil || u == nil || fl == nil {
+		return
+	}
+	u.X, u.Y, u.Z = numeric.Fixed(int64(fl.X)), numeric.Fixed(int64(fl.Y)), numeric.Fixed(int64(fl.Z))
+	u.Move.Heading = fl.Heading
+	u.Move.Speed = numeric.Fixed(int64(fl.Speed))
+	u.Move.VelX, u.Move.VelY, u.Move.VelZ = numeric.Fixed(int64(fl.VX)), numeric.Fixed(int64(fl.VY)), numeric.Fixed(int64(fl.VZ))
+	if coll := s.Collisions[u.Handle]; coll != nil {
+		coll.X, coll.Y, coll.Z = fl.X, fl.Y, fl.Z
+		// ProposedAnchor includes the collision velocity. Flight has already
+		// integrated its transform, so cache the committed pair before copying
+		// the newly published triple; otherwise an airborne stamp jumps a
+		// second velocity ahead.
+		coll.VX, coll.VZ = 0, 0
+		anchor := coll.ProposedAnchor(u.Move.Mode & 0x3)
+		coll.CachedAnchor, coll.OldAnchor = anchor, anchor
+		coll.VX, coll.VY, coll.VZ = fl.VX, fl.VY, fl.VZ
+		coll.Speed, coll.Heading = fl.Speed, fl.Heading
+		coll.LeanX, coll.LeanY, coll.LeanZ = fl.LeanX, fl.LeanY, fl.LeanZ
+		coll.TurnResidual = fl.TurnResidual
 	}
 }
 

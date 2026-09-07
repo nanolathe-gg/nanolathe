@@ -138,14 +138,15 @@ func (f *registryFixture) sensorTick(tick uint32) {
 			sp = new(uint32)
 			f.status[u.Handle] = sp
 		}
-		var rd int32
+		var rd, sd int32
 		if u.Def != nil {
 			rd = u.Def.RadarDistance
+			sd = u.Def.SonarDistance
 		}
 		sensorUnits = append(sensorUnits, visibility.SensorUnit{
 			ID: uint16(u.Handle), Owner: visibility.PlayerID(u.Owner), Status: sp,
 			X: u.X, Y: u.Y, Z: u.Z, Alive: true, Hidden: u.Hidden, Active: u.Activated,
-			RadarDistance: rd, DecloakDeadline: new(uint32),
+			RadarDistance: rd, SonarDistance: sd, DecloakDeadline: new(uint32),
 		})
 	}
 	f.vis.SensorTick(tick, 2, sensorUnits)
@@ -339,6 +340,147 @@ func TestPrimaryListEntryStaysAcquirableAfterItGoesDark(t *testing.T) {
 	f.enemy.Dying = true
 	if _, ok := s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ); ok {
 		t.Fatal("a death-latched entry is dropped by the per-attempt liveness test, not by the rebuild")
+	}
+}
+
+// TestRegistryUsesSensorSonarAndModelHull locks the direct-visibility adapter
+// at the actual sensor-to-registry seam. The sensor callback grants sonar to a
+// fully submerged hostile, while a hull whose model top crosses the sea plane
+// needs no sonar at all. Both cases use the definition's min/max record and
+// the completed sensor status; alliance state cannot manufacture either
+// admission [06 §3.1][03 R-VIS-01 §5].
+func TestRegistryUsesSensorSonarAndModelHull(t *testing.T) {
+	run := func(modelTop int32, sonar bool) (listed bool, status uint32) {
+		f := newRegistryFixture(t, false)
+		f.terrain.SeaLevel = 20
+		f.enemy.X = numeric.FixedFromInt(30)
+		f.enemy.Y = numeric.FixedFromInt(15)
+		f.enemy.Z = numeric.FixedFromInt(30)
+		f.enemy.Def.ModelTopFixed = modelTop << 16
+		f.enemy.Def.ModelTop = modelTop
+		if sonar {
+			f.shooter.Def.SonarDistance = 500
+		}
+		f.sensorTick(1)
+		status = *f.status[f.enemy.Handle]
+		s := &Service{}
+		rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+		for _, h := range s.targets.primaryList(0) {
+			if h == f.enemy.Handle {
+				return true, status
+			}
+		}
+		return false, status
+	}
+
+	if listed, status := run(0, false); listed || status&visibility.SonarBit != 0 {
+		t.Fatalf("fully submerged hostile without sonar listed=%v status=%#x", listed, status)
+	}
+	if listed, status := run(0, true); !listed || status&visibility.SonarBit == 0 {
+		t.Fatalf("sensor-granted sonar did not admit submerged hostile: listed=%v status=%#x", listed, status)
+	}
+	if listed, status := run(10, false); !listed || status&visibility.SonarBit != 0 {
+		t.Fatalf("hull top crossing the sea plane needs no sonar: listed=%v status=%#x", listed, status)
+	}
+
+	// The same hull admission reaches the normal per-slot acquisition path: the
+	// list is filed at rebuild and the subsequent attempt retains it rather than
+	// collapsing the target back to its centre point.
+	f := newRegistryFixture(t, false)
+	f.terrain.SeaLevel = 20
+	f.enemy.X, f.enemy.Y, f.enemy.Z = numeric.FixedFromInt(30), numeric.FixedFromInt(15), numeric.FixedFromInt(30)
+	f.enemy.Def.ModelTop, f.enemy.Def.ModelTopFixed = 10, 10<<16
+	f.shooter.InstallWeapon(0, &content.WeaponDef{ID: 99, Range: 500})
+	f.sensorTick(1)
+	s := &Service{}
+	rebuildEverySlot(s, targetRegistryPeriod, f.world, f.vis, f.terrain, f.econ)
+	if h, ok := s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ); !ok || h != f.enemy.Handle {
+		t.Fatalf("hull-admitted primary target acquisition = %d,%v want %d,true", h, ok, f.enemy.Handle)
+	}
+}
+
+// TestRegistryVisibilityUsesHullCornersAndObserverSource keeps the combat
+// adapters from reconstructing a centre-point query or silently collapsing the
+// visibility service's byte/word source choice. The target's centre and the
+// other three probes are dark; only its min-X/min-Z hull corner is lit. Its
+// bottom is exactly at sea level, so this also locks the strict underwater
+// comparison [03 §3.2][06 §3.1].
+func TestRegistryVisibilityUsesHullCornersAndObserverSource(t *testing.T) {
+	newFixture := func(mode visibility.Mode) *registryFixture {
+		f := newRegistryFixture(t, false)
+		f.vis.SetMode(mode)
+		f.terrain.SeaLevel = 0
+		f.shooter.Y = 0
+		f.enemy.X = numeric.FixedFromInt(32)
+		f.enemy.Y = 0
+		f.enemy.Z = numeric.FixedFromInt(48)
+		// The odd X and wider Z footprints make the accumulated probe walk
+		// span four distinct projection cells: (0,0), (1,0), (1,2), (0,2).
+		f.enemy.Def.FootprintX = 3
+		f.enemy.Def.FootprintZ = 5
+		for p := 0; p < 10; p++ {
+			for i := range f.vis.ByteGrid(visibility.PlayerID(p)) {
+				f.vis.ByteGrid(visibility.PlayerID(p))[i] = 0
+			}
+		}
+		for i := range f.vis.WordMask() {
+			f.vis.WordMask()[i] = 0
+		}
+		return f
+	}
+	contains := func(s *Service, owner uint8, h pool.Handle) bool {
+		for _, got := range s.targets.primaryList(owner) {
+			if got == h {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Current-coverage mode reads the queried observer's byte grid. A lit
+	// corner lets both the registry and normal weapon acquisition see the
+	// target, even though its centre is dark.
+	f := newFixture(visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled)
+	f.vis.ByteGrid(0)[0] = 1
+	f.shooter.InstallWeapon(0, &content.WeaponDef{ID: 99, Range: 1000, WaterWeapon: true})
+	f.shooter.SlotAt(0).Flags |= 0x02
+	f.sensorTick(1)
+	s := &Service{}
+	s.rebuildTargetRegistry(targetRegistryPeriod, 0, f.world, f.vis, f.terrain, f.econ)
+	if !contains(s, 0, f.enemy.Handle) {
+		t.Fatal("lit hull corner at equal sea level did not enter the primary registry")
+	}
+	if got, ok := s.acquireTargetForSlot(f.shooter, f.shooter.SlotAt(0), 0, f.world, f.vis, f.terrain, nil, f.econ); !ok || got != f.enemy.Handle {
+		t.Fatalf("corner-admitted target acquisition = %d,%v want %d,true", got, ok, f.enemy.Handle)
+	}
+
+	// Player 3 must not borrow local player 0's current-coverage byte grid.
+	// Once player 3's corresponding cell is lit, its regular registry rebuild
+	// files the same hostile.
+	f = newFixture(visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled)
+	f.vis.ByteGrid(0)[0] = 1
+	f.sensorTick(1)
+	s = &Service{}
+	s.rebuildTargetRegistry(targetRegistryPeriod, 3, f.world, f.vis, f.terrain, f.econ)
+	if contains(s, 3, f.enemy.Handle) {
+		t.Fatal("byte-grid observer 3 borrowed local player 0 coverage")
+	}
+	f.vis.ByteGrid(3)[0] = 1
+	f.sensorTick(2)
+	s.rebuildTargetRegistry(2*targetRegistryPeriod, 3, f.world, f.vis, f.terrain, f.econ)
+	if !contains(s, 3, f.enemy.Handle) {
+		t.Fatal("byte-grid observer 3 did not use its own lit coverage")
+	}
+
+	// With current coverage disabled, the predicate instead reads the local
+	// player's word bit even while the registry is rebuilding player 3.
+	f = newFixture(visibility.ModeHistoryEnabled)
+	f.vis.WordMask()[0] = 1 << 0
+	f.sensorTick(1)
+	s = &Service{}
+	s.rebuildTargetRegistry(targetRegistryPeriod, 3, f.world, f.vis, f.terrain, f.econ)
+	if !contains(s, 3, f.enemy.Handle) {
+		t.Fatal("word-grid observer 3 did not use the local player's word bit")
 	}
 }
 
