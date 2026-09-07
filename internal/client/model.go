@@ -221,17 +221,31 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 	if m == nil || m.compiled == nil || c.cam == nil {
 		return false
 	}
-	draw := presentationrender.BuildProjectileDraw(m.compiled, nil, p.Yaw, p.Pitch, [3]numeric.Fixed{p.X, p.Y, p.Z})
-	// A projectile is not a unit instance: retail draws its model through the
-	// standalone effect/projectile renderer entry, which rotates and projects
-	// the piece's vertices and hands each primitive to the FRAMEBUFFER
-	// variants of the flat filler and quad mapper. Those have no key plane, so
-	// the model is pure painter order, and the anti-alias supersample lives
-	// only in the unit composition path this entry never enters
-	// [R-COMP-02 §6][R-RAST-01 §1]. Composing into a one-plane image and
-	// blitting it is the same painter order at the same pixels.
-	draw.KeyPlane, draw.Structure = false, false
-	return c.drawModel(draw, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0)
+	now := uint32(0)
+	if c.buffer != nil {
+		if committed := c.buffer.Current(); committed != nil {
+			now = committed.Tick
+		}
+	}
+	parent, child := presentationrender.BuildProjectileModelPieces(m.compiled, p, now)
+	if parent == nil {
+		return false
+	}
+	// A projectile is not a unit instance: retail draws each standalone model
+	// piece through the unshaded effect entry. The parent is one call, and only
+	// the header child can become the second one; grandchildren are not walked
+	// [03 §5.4][03 R-COMP-02 §6].
+	parent.KeyPlane, parent.Structure = false, false
+	if !c.drawModel(parent, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0) {
+		return false
+	}
+	if child != nil {
+		child.KeyPlane, child.Structure = false, false
+		if !c.drawModel(child, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // modelLocalVertex narrows one world-space piece vertex to the composition

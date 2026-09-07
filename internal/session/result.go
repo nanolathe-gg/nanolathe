@@ -233,16 +233,7 @@ func (s *Session) resultScore(kills int) int {
 	if s != nil && s.Clock != nil {
 		tick = s.Clock.GlobalTick
 	}
-	// The source expression explicitly narrows the elapsed-tick and kill
-	// values to the authored single-precision multiplier path before each
-	// __ftol conversion [08 R-CAMP-01 §7].
-	timeTerm := int64(int32(float32(tick/60) * float32(timeMul)))
-	killTerm := int64(int32(float32(kills) * float32(killMul)))
-	total := timeTerm + killTerm
-	if total < 0 {
-		return 0
-	}
-	return int(total)
+	return Score(kills, killMul, tick, timeMul)
 }
 
 func resultColumnMaxima(rows []frame.ResultScore) [7]int {

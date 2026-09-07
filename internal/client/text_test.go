@@ -44,10 +44,24 @@ func TestFNTTextTruncatesBeforeClipping(t *testing.T) {
 	}
 }
 
+func TestFNTTextUsesCharacterCodeAfterReducedTableBias(t *testing.T) {
+	f := &formats.FNT{Height: 1, Baseline: -1, FirstCode: 32, Glyphs: [256]*formats.FNTGlyph{
+		'A': {Width: 1, Height: 1, Bits: []byte{0x80}},
+	}}
+	if got := MeasureText(f, " A"); got != 1 {
+		t.Fatalf("measurement = %d, want 1", got)
+	}
+	frame := make([]uint8, 3*3)
+	DrawText(frame, 3, 3, f, "A", 1, 0, 0, 9)
+	if frame[1+1*3] != 9 {
+		t.Fatalf("negative baseline did not place glyph below pen: %v", frame)
+	}
+}
+
 func testFont() *formats.FNT {
 	return &formats.FNT{
-		Height:  2,
-		Unknown: 1, // baseline descender
+		Height:   2,
+		Baseline: 1, // baseline descender
 		Glyphs: [256]*formats.FNTGlyph{
 			'A': {Width: 3, Height: 2, Bits: []byte{0xac}}, // 10101100
 			'B': {Width: 1, Height: 2, Bits: []byte{0xc0}},

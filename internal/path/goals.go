@@ -7,7 +7,7 @@ package path
 //
 // - Point/radius: h = max(18*max(|dx|,|dz|)+7*min(|dx|,|dz|)-R, 0)
 //   where R is the raw authored radius; arrival is a squared-distance
-//   test against a >>4-quantized radius [04 §7.2].
+//   test against a radius quantized by division by 16 toward zero [04 §7.2].
 // - Annulus: same inflated octile with V-shaped zero band inside
 //   [inner,outer] raw radii, rising as oct-outer outward and inner-oct
 //   inward; arrival uses >>4-quantized squared radii [04 §7.2], [04 §7.4].
@@ -57,16 +57,25 @@ func abs32(v int32) int32 {
 
 // pointGoal implements the point/radius family [04 §7.2].
 type pointGoal struct {
-	center Cell
-	radius int32 // raw authored radius, compared to oct [04 §7.2]
+	center   Cell
+	radius   int32 // raw authored radius, compared to oct [04 §7.2]
+	radiusSq int32 // saved arrival threshold in squared cells [08 R-SAVE-02 §10]
 }
 
 // PointGoal creates a point/radius goal [04 §7.2] C8.
 // h = max(18*max(|dx|,|dz|)+7*min(|dx|,|dz|)-R, 0).
 // Arrival (StartSatisfied) is a squared-distance test against a
-// >>4-quantized radius [04 §7.2], [04 §7.4].
+// radius quantized by division by 16 toward zero [04 §7.2], [04 §7.4].
 func PointGoal(center Cell, radius int32) Goal {
-	return &pointGoal{center: center, radius: radius}
+	return PointGoalRestored(center, radius, quantizedRadiusSquare(radius))
+}
+
+// PointGoalRestored creates a point goal from its saved radius and arrival
+// threshold. The threshold is a separately stored field in a code-4 order
+// payload, so a restore must not derive it again from radius [08 R-SAVE-02
+// §10, §11].
+func PointGoalRestored(center Cell, radius, radiusSq int32) Goal {
+	return &pointGoal{center: center, radius: radius, radiusSq: radiusSq}
 }
 
 func (g *pointGoal) H(c Cell) int32 {
@@ -91,27 +100,26 @@ func (g *pointGoal) Enumerate(out []Cell) []Cell {
 }
 
 func (g *pointGoal) StartSatisfied(start Cell) bool {
-	// Arrival is a squared-distance test against >>4-quantized radius [04 §7.2].
+	// Arrival is a squared-distance test against radius quantized by division by 16 toward zero [04 §7.2].
 	// Point arrival is "a squared-distance test against a separately stored
 	// quantized radius" while the heuristic clamps against the raw authored
 	// radius [04 §7.2 "Point/radius goals"][04 §7.4]. The two units are the
 	// established contract, not a defect.
-	q := g.radius >> 4 // [04 §7.2] >>4 quantization
-	if q < 0 {
-		q = 0
-	}
 	dx := start.X - g.center.X
 	dz := start.Z - g.center.Z
-	distSq := int64(dx)*int64(dx) + int64(dz)*int64(dz)
-	qSq := int64(q) * int64(q)
-	return distSq <= qSq
+	// Retail keeps both the threshold and the wrapped cell-domain product as
+	// signed 32-bit values [04 R-PATH-01 §9].
+	distSq := dx*dx + dz*dz
+	return distSq <= g.radiusSq
 }
 
 // annulusGoal implements the stand-off annulus family [04 §7.2].
 type annulusGoal struct {
-	center Cell
-	inner  int32 // raw authored inner radius [04 §7.2], [04 §7.4]
-	outer  int32 // raw authored outer radius
+	center  Cell
+	inner   int32 // raw authored inner radius [04 §7.2], [04 §7.4]
+	outer   int32 // raw authored outer radius
+	innerSq int32
+	outerSq int32
 }
 
 // AnnulusGoal creates an annulus (stand-off) goal [04 §7.2] C8.
@@ -122,7 +130,21 @@ type annulusGoal struct {
 // The raw-in-h, quantized-in-arrival split is the established dual-unit
 // contract of [04 §7.4], reproduced deliberately.
 func AnnulusGoal(center Cell, inner, outer int32) Goal {
-	return &annulusGoal{center: center, inner: inner, outer: outer}
+	return AnnulusGoalRestored(center, inner, outer, quantizedRadiusSquare(inner), quantizedRadiusSquare(outer))
+}
+
+// AnnulusGoalRestored creates an annulus goal from its saved raw radii and
+// squared arrival-band bounds. The latter are independently serialized in a
+// code-5 order payload and must be kept verbatim on restore [08 R-SAVE-02
+// §10, §11].
+func AnnulusGoalRestored(center Cell, inner, outer, innerSq, outerSq int32) Goal {
+	return &annulusGoal{center: center, inner: inner, outer: outer, innerSq: innerSq, outerSq: outerSq}
+}
+
+func quantizedRadiusSquare(radius int32) int32 {
+	// Division rounds toward zero and the 32-bit product is retained verbatim.
+	q := radius / 16
+	return q * q
 }
 
 func (g *annulusGoal) H(c Cell) int32 {
@@ -155,24 +177,16 @@ func (g *annulusGoal) Enumerate(out []Cell) []Cell {
 }
 
 func (g *annulusGoal) StartSatisfied(start Cell) bool {
-	// Arrival predicate uses >>4-quantized squared radii [04 §7.4].
+	// Arrival predicate uses squared radii after division by 16 toward zero [04 §7.4].
 	// The h clamp above uses raw radii and this test uses quantized ones: the
 	// dual-unit contract [04 §7.4] requires exactly that.
-	qInner := g.inner >> 4
-	qOuter := g.outer >> 4
-	if qInner < 0 {
-		qInner = 0
-	}
-	if qOuter < 0 {
-		qOuter = 0
-	}
 	dx := start.X - g.center.X
 	dz := start.Z - g.center.Z
-	distSq := int64(dx)*int64(dx) + int64(dz)*int64(dz)
-	innerSq := int64(qInner) * int64(qInner)
-	outerSq := int64(qOuter) * int64(qOuter)
+	// Both comparisons, including a wrapped product, are signed [04
+	// R-PATH-01 §9].
+	distSq := dx*dx + dz*dz
 	// Band is inclusive [innerSq, outerSq]; if inner>outer no cell satisfies (zero band empty).
-	return distSq >= innerSq && distSq <= outerSq
+	return distSq >= g.innerSq && distSq <= g.outerSq
 }
 
 // rectGoal implements the rectangle-perimeter family [04 §7.2].

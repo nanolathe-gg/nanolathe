@@ -145,6 +145,22 @@ func TestLoadStatics(t *testing.T) {
 	}
 }
 
+func TestLoadRejectsExcessiveStaticStorageBeforeVMAllocation(t *testing.T) {
+	data := makeCOBWithStatics(uint32(MaxProgramStaticBytes/4+1), []uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"})
+	if _, err := Load(data); err == nil || !strings.Contains(err.Error(), "static storage") {
+		t.Fatalf("excessive static count error = %v", err)
+	}
+	vm := NewVM(&Program{Statics: MaxProgramStaticBytes/4 + 1})
+	if vm.Program() != nil {
+		t.Fatal("VM accepted excessive external static count")
+	}
+	valid := NewVM(&Program{})
+	valid.SetProgram(&Program{Statics: MaxProgramStaticBytes/4 + 1})
+	if valid.Program() == nil || len(valid.Diagnostics()) == 0 {
+		t.Fatal("unchecked invalid external program left no diagnostic")
+	}
+}
+
 func TestLoadValidMultipleScripts(t *testing.T) {
 	// Example shaped like CORTRUCK.COB [fmt cob] "version=4, 3 scripts, 1 piece, 165 code words"
 	// but scaled down: 3 scripts at indexes 0,1,2 with piece base.

@@ -19,6 +19,7 @@ func TestTNTDecodesSimulationSourceSectionsAndSentinels(t *testing.T) {
 	put(0x20, 0x452)
 	put(0x24, 75)
 	put(0x28, 0x4d6)
+	put(0x2c, 1)
 	binary.LittleEndian.PutUint16(data[0x40:], 0)
 	data[0x42] = 17
 	binary.LittleEndian.PutUint16(data[0x43:], 0xffff)

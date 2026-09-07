@@ -159,7 +159,7 @@ func FoldPublishedPropellerSpin(st []model.PieceState, piece int, v frame.Projec
 	if !v.Propeller || now >= v.ExpiryTick {
 		return
 	}
-	FoldPropellerSpin(st, piece, v.Roll)
+	FoldPropellerSpin(st, piece, v.PropellerRoll)
 }
 
 // BuildUnitPieceStates returns a presentation copy of base with unit orientation folded into the root [03 §2.4] C24 [03 §5.2] C13.
@@ -250,7 +250,11 @@ func faceNormal(a, b, c [3]numeric.Fixed) [3]float64 {
 
 // PieceDraw is the per-piece draw list for one unit piece [03 §2.4] C21 [03 §5.2].
 type PieceDraw struct {
-	Index            int
+	Index int
+	// SourceIndex is the immutable loaded-model piece index. It normally equals
+	// Index, but bounded projectile calls retain it after selecting one piece,
+	// so parent and child animated-texture cursors do not alias [03 §5.2].
+	SourceIndex      int
 	Name             string
 	Transform        model.Transform    // [03 §2.4] C21 without world pos (position never enters piece math) [03 §5.2]
 	LocalOrigin      [3]numeric.Fixed   // transform.Origin [03 §2.4] C21
@@ -323,7 +327,7 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 			// Keep the stable piece index while suppressing all authored geometry
 			// under a hidden piece [03 §2.4.1].
 			out = append(out, PieceDraw{
-				Index: i, Name: piece.Name, Transform: tr, LocalOrigin: tr.Origin,
+				Index: i, SourceIndex: i, Name: piece.Name, Transform: tr, LocalOrigin: tr.Origin,
 				WorldOrigin: [3]numeric.Fixed{tr.Origin[0].Add(worldPos[0]), tr.Origin[1].Add(worldPos[1]), tr.Origin[2].Add(worldPos[2])}, IsDirty: dirty,
 			})
 			continue
@@ -446,6 +450,7 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 		// Keep the strict interpretation but also expose via helper EmitPoints for any piece.
 		out = append(out, PieceDraw{
 			Index:            i,
+			SourceIndex:      i,
 			Name:             piece.Name,
 			Transform:        tr,
 			LocalOrigin:      localOrigin,
@@ -544,15 +549,71 @@ func BuildUnitDrawSimple(m *model.Model, base []model.PieceState, heading, pitch
 	}
 }
 
-// BuildProjectileDraw builds a projectile draw with yaw/pitch offsets [03 §5.2] presentation only (I6).
-func BuildProjectileDraw(m *model.Model, base []model.PieceState, yaw, pitch uint16, worldPos [3]numeric.Fixed) *UnitDraw { // [03 §5.2]
-	if m == nil {
+// BuildProjectileModelPieces builds the bounded standalone model calls for a
+// projectile: type 1 draws its root then its first child while the strict
+// deadline permits it; other types draw the root only. This intentionally does not traverse grandchildren: retail's
+// effect entry receives one model piece per call, and the projectile dispatcher
+// supplies only the model header and its child slot [03 §5.4][03 R-COMP-02 §6].
+func BuildProjectileModelPieces(m *model.Model, v frame.ProjectileView, now uint32) (parent, child *UnitDraw) { // [03 §5.2][06 R-WFX-01 §4]
+	if m == nil || m.Root < 0 || m.Root >= len(m.Pieces) {
+		return nil, nil
+	}
+	pitch := v.Pitch
+	if v.Meteor {
+		pitch = v.MeteorPitch
+	}
+	modelFacing := v.RenderType != RenderTypeRecordOrientation
+	worldPos := [3]numeric.Fixed{v.X, v.Y, v.Z}
+	parent = buildProjectileStandalonePiece(m, m.Root, v.Roll, v.Yaw, pitch, modelFacing, worldPos, nil, now)
+	if v.RenderType != RenderTypeBaseSpriteModel || now >= v.ExpiryTick || len(m.Pieces[m.Root].Children) == 0 {
+		return parent, nil
+	}
+	childIndex := m.Pieces[m.Root].Children[0]
+	if childIndex < 0 || childIndex >= len(m.Pieces) {
+		return parent, nil
+	}
+	childRoll := v.Roll
+	var propeller *frame.ProjectileView
+	if v.Propeller {
+		childRoll = 0
+		propeller = &v
+	}
+	child = buildProjectileStandalonePiece(m, childIndex, childRoll, v.Yaw, pitch, modelFacing, worldPos, propeller, now)
+	return parent, child
+}
+
+// buildProjectileStandalonePiece translates the retail standalone model call
+// into one UnitDraw. The passed piece is detached from the unit hierarchy: the
+// projectile entry rotates and projects that one piece, then the conditional
+// child is a second call rather than a recursive draw [03 R-COMP-02 §6].
+func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch uint16, modelFacing bool, worldPos [3]numeric.Fixed, propeller *frame.ProjectileView, now uint32) *UnitDraw {
+	if m == nil || piece < 0 || piece >= len(m.Pieces) {
 		return nil
 	}
-	states := BuildProjectilePieceStates(m, base, yaw, pitch) // [03 §5.2] each with -32768 offset
-	pieces, transforms := buildPieceDraws(m, states, worldPos, false, true)
+	p := m.Pieces[piece]
+	p.Parent = -1
+	p.Children = nil
+	// The effect entry rotates this piece's raw vertex buffer and adds only the
+	// projectile world point. It does not compose authored object translation.
+	p.Translate = [3]numeric.Fixed{}
+	single := &model.Model{Pieces: []model.Piece{p}, Root: 0, Name: m.Name}
+	states := make([]model.PieceState, 1)
+	states[0].RotZ = roll // word 0 has no model-facing offset [03 §5.2]
+	if modelFacing {
+		FoldProjectileAngles(states, 0, yaw, pitch)
+	} else {
+		states[0].RotY += yaw
+		states[0].RotX += pitch
+	}
+	if propeller != nil {
+		FoldPublishedPropellerSpin(states, 0, *propeller, now)
+	}
+	pieces, transforms := buildPieceDraws(single, states, worldPos, false, false)
+	if len(pieces) != 0 {
+		pieces[0].SourceIndex = piece
+	}
 	return &UnitDraw{
-		Model:       m,
+		Model:       single,
 		PieceStates: states,
 		Transforms:  transforms,
 		Pieces:      pieces,

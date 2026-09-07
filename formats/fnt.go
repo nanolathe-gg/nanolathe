@@ -1,7 +1,6 @@
 package formats
 
 import (
-	"encoding/binary"
 	"fmt"
 	"math"
 
@@ -11,15 +10,17 @@ import (
 // FNT is a decoded bitmap font: one glyph per byte code, all of the font's
 // own height. A code the file does not author has a nil glyph [fmt fnt].
 type FNT struct {
-	Height  uint16
-	Unknown uint16
-	Glyphs  [256]*FNTGlyph
+	Height    uint8
+	Ignored   uint8
+	Baseline  int8
+	FirstCode uint8
+	Glyphs    [256]*FNTGlyph
 }
 
 // FNTGlyph is one glyph's bitmap, Width by Height bits packed row by row.
 type FNTGlyph struct {
 	Width  uint8
-	Height uint16
+	Height uint8
 	Bits   []byte
 }
 
@@ -27,16 +28,21 @@ const maxFNTGlyphBits = 16 << 20
 
 // LoadFNT decodes a font from its bytes [fmt fnt].
 func LoadFNT(data []byte) (*FNT, error) {
-	if len(data) < 516 {
+	if len(data) < 4 {
 		return nil, fmt.Errorf("fnt: file is too small")
 	}
-	fnt := &FNT{Height: binary.LittleEndian.Uint16(data[0:2]), Unknown: binary.LittleEndian.Uint16(data[2:4])}
+	fnt := &FNT{Height: data[0], Ignored: data[1], Baseline: int8(data[2]), FirstCode: data[3]}
 	if fnt.Height == 0 {
 		return nil, fmt.Errorf("fnt: zero glyph height")
 	}
+	tableBytes := 2 * (256 - int(fnt.FirstCode))
+	if len(data) < 4+tableBytes {
+		return nil, fmt.Errorf("fnt: glyph offset table is truncated")
+	}
 	var totalBits uint64
-	for code := 0; code < 256; code++ {
-		offset := uint64(binary.LittleEndian.Uint16(data[4+code*2 : 6+code*2]))
+	for code := int(fnt.FirstCode); code < 256; code++ {
+		tableIndex := code - int(fnt.FirstCode)
+		offset := uint64(data[4+tableIndex*2]) | uint64(data[5+tableIndex*2])<<8
 		if offset == 0 {
 			continue
 		}

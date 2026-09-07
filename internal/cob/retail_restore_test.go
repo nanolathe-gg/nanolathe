@@ -2,8 +2,16 @@ package cob
 
 import (
 	"encoding/binary"
+	"strings"
 	"testing"
 )
+
+func TestRetailScriptRestoreRejectsExcessiveExternalStaticsBeforeSizing(t *testing.T) {
+	vm := &VM{prog: &Program{Statics: MaxProgramStaticBytes/4 + 1}}
+	if err := RetailScriptRestore(vm, nil); err == nil || !strings.Contains(err.Error(), "static storage") {
+		t.Fatalf("restore excessive statics error = %v", err)
+	}
+}
 
 func TestRetailScriptRestoreSignatureAtomicAndFullState(t *testing.T) {
 	prog := &Program{Code: []uint32{0x10065000}, Scripts: map[string]int{"Create": 0}, ScriptsByID: []int{0}, Statics: 1, Pieces: []string{"base"}, SourceChecksum: 0x12345678}

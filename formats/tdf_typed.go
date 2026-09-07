@@ -3,6 +3,8 @@ package formats
 import (
 	"strconv"
 	"strings"
+
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // The typed accessor family [02 §4 "Typed accessors"]. Every typed read locates
@@ -51,7 +53,7 @@ func (s *Section) FixedValue(key string, def int32) int32 {
 // also scale (weapon velocities scale by 65536/30, for instance) must scale
 // before this truncating store, never after [02 "Weapon record"].
 func FixedFromAuthored(value float64) int32 {
-	return int32(value * 65536.0)
+	return numeric.TruncateFloat64ToLow32(value * 65536.0)
 }
 
 // StringValue reports whether the key was found. Unlike the numeric accessors,

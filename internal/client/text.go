@@ -4,18 +4,14 @@ package client
 //
 // Retail contracts implemented here [02 §7][03 §7.1][07 §7][GAP T22] C8:
 //
-//   - FNT file: 16-bit height, 16-bit control word, 256-entry offset table.
-//     Offset 0 means absent glyph, skipped in both measurement and drawing.
+//   - FNT file: four one-byte header fields, then an offset table from its
+//     first character code through 255. Offset 0 means absent glyph, skipped
+//     in both measurement and drawing.
 //     Space (code 32) has non-zero offset, width 7, all-zero bitmap — advances
 //     without drawing.
-//   - Baseline descender: glyph rows are drawn at y - *(char*)(fnt+2) [02 §7].
-//     The field at offset 2 is the low byte of the 16-bit control word
-//     (fnt.Unknown). It is interpreted as signed 8-bit.
-//   - High byte of the control word is a base-character bias applied during
-//     width measurement: measured index becomes code - bias, gated to apply only
-//     when bias <= code [02 §7]. Retail fonts store 0 (values 1–3 occupy only
-//     the low byte) so the subtraction never fires; it is implemented for
-//     completeness.
+//   - Baseline descender: glyph rows are drawn at y - the signed baseline byte.
+//     LoadFNT applies the first-character table bias once when it stores each
+//     glyph under its character code [fmt fnt][03 R-FONT-01 §1].
 //   - 0x0A (newline) terminates advance: both measurement and drawing stop at
 //     the first 0x0A or NUL [02 §7]. Bytes after the terminator are ignored for
 //     width and are not drawn.
@@ -40,43 +36,20 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 )
 
-// baselineDescender returns the signed baseline adjustment stored in the low
-// byte of the FNT control word. Glyph rows are drawn at y - descender
-// [02 §7][03 §7.1] C8.
-//
-// The control word is fnt.Unknown; the low byte at file offset 2 is
-// interpreted as signed char: *(char*)(fnt+2).
+// baselineDescender returns the signed FNT baseline adjustment. Glyph rows are
+// drawn at y - descender [03 R-FONT-01 §1].
 func baselineDescender(fnt *formats.FNT) int { // [02 §7]
 	if fnt == nil {
 		return 0
 	}
-	return int(int8(fnt.Unknown & 0xFF))
+	return int(fnt.Baseline)
 }
 
-// baseCharBias returns the high byte of the control word, used only during
-// width measurement [02 §7]. Retail fonts store 0 so it never activates.
-func baseCharBias(fnt *formats.FNT) int { // [02 §7]
-	if fnt == nil {
-		return 0
-	}
-	return int((fnt.Unknown >> 8) & 0xFF)
-}
-
-// glyphFor returns the glyph that retail would use for byte code, applying the
-// high-byte base-char bias for measurement/draw when active [02 §7]. Offset 0
-// (nil entry) means absent glyph and is skipped.
+// glyphFor returns the glyph that retail would use for byte code. LoadFNT
+// applies the first-code table bias while constructing Glyphs, so this lookup
+// uses the text byte directly [fmt fnt]. Offset 0 (nil entry) means absent.
 func glyphFor(fnt *formats.FNT, code int) *formats.FNTGlyph { // [02 §7]
 	if fnt == nil || code < 0 || code > 255 {
-		return nil
-	}
-	bias := baseCharBias(fnt)
-	if bias != 0 {
-		if code < bias {
-			return nil
-		}
-		code -= bias
-	}
-	if code < 0 || code > 255 {
 		return nil
 	}
 	return fnt.Glyphs[code]
@@ -85,9 +58,8 @@ func glyphFor(fnt *formats.FNT, code int) *formats.FNTGlyph { // [02 §7]
 // MeasureText returns the pixel advance of one line of FNT text [02 §7][03 §7.1] C8.
 //
 // It sums glyph Width for each present glyph until the first 0x0A (newline) or
-// NUL, skipping absent glyphs (offset 0). The high-byte base-char bias is
-// applied as retail does [02 §7]. Space advances 7 via its glyph width; no
-// extra kerning is added.
+// NUL, skipping absent glyphs (offset 0). Space advances 7 via its glyph
+// width; no extra kerning is added.
 func MeasureText(fnt *formats.FNT, text string) int { // [02 §7][03 §7.1]
 	if fnt == nil || len(text) == 0 {
 		return 0
@@ -147,9 +119,9 @@ func TruncateToWidth(fnt *formats.FNT, text string, maxWidth int) string { // [0
 //   - frame is row-major width×height indexed pixels (logical palette indices).
 //   - fnt is the bitmap font (*formats.FNT); nil is a no-op.
 //   - text is treated as bytes; 0x0A or NUL terminates the advance [02 §7].
-//   - x,y is the baseline origin: glyph rows are drawn at y - *(char*)(fnt+2)
-//     [02 §7][03 §7.1] (signed low byte of fnt.Unknown). curX advances by glyph
-//     Width per present glyph; absent glyphs (offset 0) are skipped [03 §7.1].
+//   - x,y is the baseline origin: glyph rows are drawn at y - the signed FNT
+//     baseline byte [03 R-FONT-01 §1]. curX advances by glyph Width per present
+//     glyph; absent glyphs (offset 0) are skipped [03 §7.1].
 //   - maxWidth > 0 enables truncate-to-width before clipping: the string is
 //     truncated via TruncateToWidth until its advance fits [07 §7][GAP T22].
 //   - color is the indexed color written where glyph bits are set (1-bit,

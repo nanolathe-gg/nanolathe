@@ -167,31 +167,6 @@ type VM struct {
 	renderFlagSet    func(piece int, mask uint8, set bool) bool
 }
 
-var pendingRenderHandlers struct {
-	get func() []uint8
-	set func(piece int, mask uint8, set bool) bool
-}
-
-// SetPendingRenderHandlers installs a one-shot render-piece handler for the next VM bind [04 §"Piece flag polarity"].
-// The production binder builds the geometry table before the VM's Create runs, so that
-// Create's flag ops target the unit record from the start [R-COB-01 §1].
-func SetPendingRenderHandlers(get func() []uint8, set func(piece int, mask uint8, set bool) bool) {
-	pendingRenderHandlers.get = get
-	pendingRenderHandlers.set = set
-}
-
-// pendingScriptTouched is the same one-shot hand-off for the script-touched
-// marker raise [04 R-COB-06]. The strict binder runs the D+wake Create
-// callback inside the bind, before its caller ever sees the VM, and Create is
-// an ordinary script that may write engine ports — so the marker raise has to
-// be installed at construction, not afterwards.
-var pendingScriptTouched func()
-
-// SetPendingScriptTouched installs a one-shot script-touched marker raise for
-// the next VM bind [04 R-COB-06]. Pass nil to clear a hand-off whose bind
-// failed before it was consumed.
-func SetPendingScriptTouched(raise func()) { pendingScriptTouched = raise }
-
 // pieceAnim holds the per-piece per-axis interpolation lanes [04 §4.6].
 type pieceAnim struct {
 	axes [3]axisAnim
@@ -301,7 +276,9 @@ func init() {
 // nil for fixture VMs that set program later via SetProgram.
 func NewVM(prog *Program) *VM {
 	v := &VM{}
-	v.SetProgram(prog)
+	if err := v.SetProgramChecked(prog); err != nil {
+		v.diagnostics = append(v.diagnostics, err.Error())
+	}
 	return v
 }
 
@@ -318,6 +295,18 @@ func NewVM(prog *Program) *VM {
 // thread allocation or thread start, so construction-time state is
 // unobservable except through the physical window words.
 func (v *VM) SetProgram(prog *Program) {
+	if err := v.SetProgramChecked(prog); err != nil {
+		v.diagnostics = append(v.diagnostics, err.Error())
+	}
+}
+
+// SetProgramChecked validates external program metadata before allocating the
+// mutable statics and piece lanes. The compatibility SetProgram wrapper keeps
+// its no-error surface for existing callers.
+func (v *VM) SetProgramChecked(prog *Program) error {
+	if err := ValidateProgram(prog); err != nil {
+		return err
+	}
 	v.prog = prog
 	if prog == nil {
 		v.statics = nil
@@ -331,7 +320,7 @@ func (v *VM) SetProgram(prog *Program) {
 		v.renderFlagsBound = false
 		v.renderFlagGet = nil
 		v.renderFlagSet = nil
-		return
+		return nil
 	}
 	// Script statics: retail's bind performs no zeroing pass; the initial bytes
 	// come from its allocator and are unspecified [R-COB-04 §7]. Nanolathe
@@ -365,25 +354,6 @@ func (v *VM) SetProgram(prog *Program) {
 	v.renderFlagsBound = false
 	v.renderFlagGet = nil
 	v.renderFlagSet = nil
-	// If a pending render-piece handler was installed before this bind (the
-	// production path builds the geometry table before the VM's Create runs
-	// [04 §"Piece flag polarity"]), install it now so Create's flag ops target
-	// the unit record from the start.
-	if pendingRenderHandlers.get != nil || pendingRenderHandlers.set != nil {
-		v.renderFlagGet = pendingRenderHandlers.get
-		v.renderFlagSet = pendingRenderHandlers.set
-		v.renderFlagsBound = true
-		pendingRenderHandlers.get = nil
-		pendingRenderHandlers.set = nil
-	}
-	// Same hand-off for the script-touched marker: Create runs inside the
-	// strict bind and may write an engine port, so the raise must already be
-	// installed [04 R-COB-06]. A re-bind with no pending hand-off keeps the
-	// binding it has — the owning unit does not change when its program does.
-	if pendingScriptTouched != nil {
-		v.scriptTouched = pendingScriptTouched
-		pendingScriptTouched = nil
-	}
 	// Construction clears only the status words; every other thread field
 	// keeps its prior content [R-COB-01 §1].
 	for i := range v.Threads {
@@ -406,6 +376,7 @@ func (v *VM) SetProgram(prog *Program) {
 		v.threadIdentity[i] = 0
 		v.onReturn[i] = nil
 	}
+	return nil
 }
 
 // Program returns the bound program, or nil if none [04 §4.1].

@@ -5,11 +5,7 @@ package session
 // This file implements latch, scoring, and registry vs bank split [P0-05]
 // and the P1-01 end-of-mission countdown/teardown [P1-01].
 
-import (
-	"math"
-
-	"github.com/nanolathe/nanolathe/internal/save"
-)
+import "github.com/nanolathe/nanolathe/internal/save"
 
 // Latch arms to 4 then decrements ~1/s before latch word bits [P0-05][P1-01].
 // Retail stores an int16 countdown starting at -1, then arms to 4 when <0
@@ -23,12 +19,11 @@ import (
 // Settlement freeze gates countdown<0 && NOT latched (countdown<0 && NOT
 // (latch&0x04)) plus UpdateTime deadline [P1-01 §2.2].
 const (
-	LatchInitial             = 4
-	LatchBitEnding    uint16 = 0x04 // [P0-05][P1-01] ending bit 0x04
-	LatchBitEndingAlt uint16 = 0x04 // deprecated alias; retail uses 0x04 only [P0-05]
-	LatchBitWin1      uint16 = 0x10 // [P1-01] win variant
-	LatchBitWin2      uint16 = 0x20 // [P1-01] extra win bit
-	LatchBitLose      uint16 = 0x40 // [P1-01] lose variant, clears win
+	LatchInitial          = 4
+	LatchBitEnding uint16 = 0x04 // [P0-05][P1-01] ending bit 0x04
+	LatchBitWin1   uint16 = 0x10 // [P1-01] win variant
+	LatchBitWin2   uint16 = 0x20 // [P1-01] extra win bit
+	LatchBitLose   uint16 = 0x40 // [P1-01] lose variant, clears win
 )
 
 // EndLatch holds countdown and win/lose bits [P0-05][P1-01].
@@ -63,48 +58,6 @@ func (l *EndLatch) IsLatched() bool { return l.IsEnding() }
 func (l *EndLatch) Arm() {
 	l.Countdown = LatchInitial
 	// Bits not set until latch transition [08 "Evaluation"][P1-01 §2.2]
-}
-
-// Tick decrements roughly once per second (~1/s) via the local deadline
-// block path. Retail decrements via wall-clock GetTickCount scaled (~60
-// scaled units per second) checked post-loop per-tick [P0-05]; for the
-// normal human path we approximate with tick%30==0 (30 ticks==1s at 30Hz)
-// for determinism [P1-01 §3]. The no-human path uses TickNoHuman which
-// decrements every tick [P1-01 §7.2].
-func (l *EndLatch) Tick(tick uint32) bool {
-	if l.Countdown <= 0 {
-		return false
-	}
-	if tick%30 != 0 {
-		return false
-	}
-	l.Countdown--
-	return l.Countdown == 0
-}
-
-// TickNoHuman decrements the countdown every tick for the
-// humanCount==0 post-loop site
-// [P1-01 §7.2]. On no-human saves the latch fires in 5 ticks, not 150.
-// When Countdown crosses below zero it writes the latch word with ending
-// plus pending win/lose bits [P1-01 §2.2][08 "Evaluation"].
-func (l *EndLatch) TickNoHuman() bool {
-	if l.Countdown < 0 {
-		return false
-	}
-	l.Countdown--
-	if l.Countdown < 0 {
-		l.Bits |= LatchBitEnding
-		if l.Pending == 1 {
-			l.Win()
-		} else if l.Pending == 2 {
-			l.Lose()
-		} else {
-			// No pending set via Advance path guard; default win not used.
-		}
-		l.Pending = 0
-		return true
-	}
-	return false
 }
 
 // AdvanceWin advances the countdown for a victory predicate. If countdown
@@ -193,13 +146,13 @@ func (l *EndLatch) IsLose() bool { return l.Bits&LatchBitLose != 0 }
 // marked killmul/timemul "inert (reader census: none)" — that census missed
 // this helper, which multiplies by both; both docs are corrected in place.
 func Score(kills int, killmul float32, ticks uint32, timemul float32) int {
-	timePart := float64(int64(ticks/60)) * float64(timemul)
-	killPart := float64(kills) * float64(killmul)
-	s := int(math.Trunc(timePart)) + int(math.Trunc(killPart))
-	if s < 0 {
-		s = 0
+	timePart := int64(int32(float32(ticks/60) * timemul))
+	killPart := int64(int32(float32(kills) * killmul))
+	total := timePart + killPart
+	if total < 0 {
+		return 0
 	}
-	return s
+	return int(total)
 }
 
 // SettlementFrozen reports whether economy settlement is frozen by the

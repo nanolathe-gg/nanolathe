@@ -37,6 +37,7 @@ func TestTickProjectilesPropellerAdvanceIsCommonEntryWork(t *testing.T) {
 					p := &svc.Records[int(h)-1]
 					p.WeaponID = weapon.ID
 					p.PropellerYaw = numeric.Angle(0xfe00)
+					p.Roll = numeric.Angle(0x1234)
 					p.ExpiryTick = family.expiry
 					svc.TickProjectiles(1, nil, nil, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
 					want := numeric.Angle(0xfe00)
@@ -67,17 +68,21 @@ func TestTickProjectilesMeteorKeepsVelocityDerivedAccumulators(t *testing.T) {
 			p := &svc.Records[int(h)-1]
 			p.WeaponID = weapon.ID
 			p.PropellerYaw = numeric.Angle(0xfe00)
+			p.Roll = numeric.Angle(0xfe00)
 			p.MeteorPitch = numeric.Angle(0x0100)
 			p.Velocity = Vec3{X: numeric.FixedFromInt(0x12), Z: numeric.FixedFromInt(-1)}
 			roll, pitch := MeteorAngularSteps(p.Velocity.X, p.Velocity.Z)
 			svc.TickProjectiles(1, nil, nil, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
-			wantRoll := numeric.Angle(0xfe00)
-			if propeller {
-				wantRoll = wantRoll.Add(1024)
-			}
-			wantRoll = numeric.Angle(uint16(int32(wantRoll) + int32(int16(roll))))
-			if got := svc.Records[int(h)-1].PropellerYaw; got != wantRoll {
+			wantRoll := numeric.Angle(uint16(int32(numeric.Angle(0xfe00)) + int32(int16(roll))))
+			if got := svc.Records[int(h)-1].Roll; got != wantRoll {
 				t.Fatalf("meteor roll = %#04x, want %#04x", uint16(got), uint16(wantRoll))
+			}
+			wantPropeller := numeric.Angle(0xfe00)
+			if propeller {
+				wantPropeller = wantPropeller.Add(1024)
+			}
+			if got := svc.Records[int(h)-1].PropellerYaw; got != wantPropeller {
+				t.Fatalf("meteor propeller angle = %#04x, want %#04x", uint16(got), uint16(wantPropeller))
 			}
 			wantPitch := numeric.Angle(uint16(int32(numeric.Angle(0x0100)) + int32(int16(pitch))))
 			if got := svc.Records[int(h)-1].MeteorPitch; got != wantPitch {

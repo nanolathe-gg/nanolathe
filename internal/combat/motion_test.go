@@ -298,6 +298,42 @@ func TestSelfPropFlightTimeUsesUnsignedWordAtRuntime(t *testing.T) {
 	}
 }
 
+// TestSelfPropWaterMediumUsesSignedHighWord keeps the medium gate at the
+// record's signed 16-bit whole-world word. numeric.Fixed is wider than that
+// storage word, so a raw fixed comparison would change wrapped authored values;
+// fractions at the sea boundary must also follow the strict word comparison
+// [06 §6.7][06 §6.9].
+func TestSelfPropWaterMediumUsesSignedHighWord(t *testing.T) {
+	w := &content.WeaponDef{SelfProp: true, WaterWeapon: true, WeaponVelocity: 65536, WeaponAcceleration: 65536}
+	run := func(t *testing.T, raw int64, eligible bool) {
+		t.Helper()
+		p := Projectile{
+			Pos:        Vec3{Y: numeric.Fixed(raw)},
+			Pitch:      numeric.Angle(123),
+			ExpiryTick: 10,
+		}
+		if got := AdvanceSelfProp(&p, w, 1, numeric.Fixed(7), numeric.FixedFromInt(1), GuidanceEnv{}); got != AdvanceAlive {
+			t.Fatalf("advance result = %v, want alive", got)
+		}
+		if eligible {
+			if p.Pitch != 123 || p.Speed != numeric.FixedFromInt(1) {
+				t.Fatalf("eligible word retained pitch/speed = %d/%d, want 123/1", p.Pitch, p.Speed)
+			}
+			return
+		}
+		if p.Pitch != 0 || p.Velocity.Y != numeric.Fixed(-7) {
+			t.Fatalf("ineligible word pitch/velocityY = %d/%d, want 0/-7", p.Pitch, p.Velocity.Y)
+		}
+	}
+	// high word wraps to zero, which is below the sea byte one even though the
+	// int64 fixed backing value is far above it.
+	run(t, int64(0x10000)<<16, true)
+	// Equality is not below; fractions on either side select their high word.
+	run(t, int64(1)<<16, false)
+	run(t, (int64(1)<<16)+1, false)
+	run(t, (int64(1)<<16)-1, true)
+}
+
 // TestSelfPropTwoPhaseTracksPreservesTargets per [06 §6.6]: when tracks set, targets not cleared.
 func TestSelfPropTwoPhaseTracksPreservesTargets(t *testing.T) {
 	w := &content.WeaponDef{SelfProp: true, TwoPhase: true, Tracks: true, FlightTime: 10, WeaponTimer: 5, BurnBlow: false}

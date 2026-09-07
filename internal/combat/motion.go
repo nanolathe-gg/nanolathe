@@ -153,9 +153,12 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 //	Dead              cleared by the reservation [06 §4.1]; Slots is the
 //	                  authority (I5).
 //	PropellerYaw      RETAINED on purpose: no creator and no initializer writes
-//	                  it, and the meteor tick's roll accumulator "starts at
-//	                  whatever the reused pool slot last held" [06 §6.5].
-//	                  Presentation only [06 §6.1].
+//	                  the propeller child's visual angle [06 §6.1].
+//	Roll              RETAINED on purpose: no creator or common initializer
+//	                  writes the base orientation-block roll. The meteor tick
+//	                  advances it from velocity [06 §6.5].
+//	                  TODO(question): census a non-meteor writer; ordinary
+//	                  models currently preserve the reused-slot placeholder.
 //	MeteorPitch       RETAINED on purpose, same sentence [06 §6.5].
 //	CacheCellX/Z      RETAINED on purpose [R-DMG-01 §13]: the collision
 //	                  gate's feature step is the pair's only writer, and a
@@ -169,11 +172,9 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 //	                  any copy and reads it only within that same pass
 //	                  [06 §5.2]; retention is unobservable.
 //
-// Two record fields [06 §6.1] enumerates have no Go field to retain: the
-// stored planar muzzle-to-aim distance "written by the ordinary creator only"
-// (fire.go derives the burst clone's expiry without it), and the renderer's
-// roll word, which AdvanceMeteor parks in PropellerYaw. Neither is a retention
-// hazard while it is absent, and both belong to their own units.
+// One record field [06 §6.1] enumerates has no Go field to retain: the stored
+// planar muzzle-to-aim distance "written by the ordinary creator only"
+// (fire.go derives the burst clone's expiry without it).
 //
 // InitCommon performs that common initializer work per [06 §4.1], [06 §5.1],
 // [06 §6.1]. aim is the OPTIONAL aim point: a nil pointer is retail's null aim
@@ -681,12 +682,12 @@ func AdvanceMeteor(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 	// advances two visual orientation accumulators by (high16(velX)<<8) into
 	// the record's ROLL word and (high16(velZ)<<8) into its PITCH word,
 	// re-derived from the velocity components each tick (no stored rate);
-	// they feed only presentation rotation, never motion. The roll word has
-	// no dedicated field here and is parked in PropellerYaw, which is the
-	// render block's first word for a non-propeller model [06 R-WFX-01 §4];
-	// no presentation path reads either yet.
+	// they feed only presentation rotation, never motion. The roll word is
+	// distinct from the propeller child's spin angle: meteor
+	// updates this first orientation word and its pitch partner from velocity
+	// [06 §6.5][06 R-WFX-01 §4].
 	rollStep, pitchStep := MeteorAngularSteps(p.Velocity.X, p.Velocity.Z)
-	p.PropellerYaw = numeric.Angle(uint16(int32(p.PropellerYaw) + int32(int16(rollStep))))
+	p.Roll = numeric.Angle(uint16(int32(p.Roll) + int32(int16(rollStep))))
 	p.MeteorPitch = numeric.Angle(uint16(int32(p.MeteorPitch) + int32(int16(pitchStep))))
 	// The state byte is deliberately NOT written here. [06 §6.5] gives the
 	// meteor tick as exactly three things — add velocity to the current point,
@@ -925,7 +926,15 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 	// Water medium check: a water weapon propels only STRICTLY below the sea
 	// plane; at or above it propulsion/guidance are disabled and gravity is
 	// applied with pitch forced to zero [06 §6.9].
-	eligible := !w.WaterWeapon || p.Pos.Y.Raw() < seaLevel.Raw()
+	// The medium gate compares signed 16-bit whole-world Y against the map's
+	// zero-extended sea byte. Do not compare int64 fixed values: records retain
+	// a signed word and numeric.Fixed intentionally has a wider backing type
+	// [06 §6.7][06 §6.9].
+	preMotionYWord := int16(p.Pos.Y.Raw() >> 16)
+	// Fixed is wider than the map's zero-extended sea byte; retain only that
+	// byte before the signed-word comparison.
+	seaLevelByte := int32(uint8(seaLevel.Raw() >> 16))
+	eligible := !w.WaterWeapon || int32(preMotionYWord) < seaLevelByte
 	if !eligible {
 		p.Pitch = 0 // [06 §6.9] forces pitch to zero above water
 		p.Velocity.Y = p.Velocity.Y.Sub(gravity)

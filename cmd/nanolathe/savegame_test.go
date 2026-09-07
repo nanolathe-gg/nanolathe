@@ -28,7 +28,7 @@ func writeContinuationSlot(t *testing.T, dir, name string, when time.Time) strin
 	return path
 }
 
-// The list is bubble-sorted ascending on the enumerator's time word, so the
+// The list is stably sorted ascending on the enumerator's time word, so the
 // oldest file is first and the newest last [08 R-SAVE-02 §1].
 func TestSaveListIsOldestFirst(t *testing.T) {
 	dir := t.TempDir()
@@ -49,6 +49,29 @@ func TestSaveListIsOldestFirst(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("list=%v, want %v", got, want)
+		}
+	}
+}
+
+func TestSaveListKeepsEqualTimestampEncounterOrder(t *testing.T) {
+	dir := t.TempDir()
+	when := time.Unix(1_700_000_000, 0)
+	writeContinuationSlot(t, dir, "alpha", when)
+	writeContinuationSlot(t, dir, "bravo", when)
+	writeContinuationSlot(t, dir, "charlie", when)
+
+	entries := enumerateRetailSaves(dir)
+	got := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		got = append(got, entry.Description)
+	}
+	want := []string{"alpha", "bravo", "charlie"}
+	if len(got) != len(want) {
+		t.Fatalf("list=%v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("equal-timestamp list=%v, want %v", got, want)
 		}
 	}
 }

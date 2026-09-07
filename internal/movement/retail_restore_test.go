@@ -4,7 +4,10 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/path"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -104,5 +107,122 @@ func TestRestoreOccupancyUsesMoverModeAndAllowsOffMap(t *testing.T) {
 	}
 	if got, ok := sys.Grid.OccupantAtPlane(PlaneGround, Cell{X: 8, Z: 8}); !ok || got != int(buildingHandle) {
 		t.Fatalf("structure restore occupant = (%d,%v), want (%d,true)", got, ok, buildingHandle)
+	}
+}
+
+func TestRestoreHeadGoalKeepsSavedPointThreshold(t *testing.T) {
+	w := units.NewSliced(2, nil)
+	h, err := w.Create(&content.UnitDef{CanMove: true, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create mover: %v", err)
+	}
+	u := w.Unit(h)
+	s := NewSystem(nil, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
+	s.BindWorld(w)
+
+	// Code 4 is centre, raw radius, saved squared threshold. The deliberately
+	// inconsistent threshold is the regression: deriving it from radius zero
+	// would reject the offset cell [08 R-SAVE-02 §10, §11].
+	head := &orders.Node{
+		Owner: h, RetailSubtypeCode: 4,
+		RetailSubtypeWords32: []uint32{0, 0, 4},
+	}
+	orders.BindQueue(u, orders.NewQueueWith([]*orders.Node{head}, nil))
+	if err := s.RestoreHeadGoal(u); err != nil {
+		t.Fatalf("RestoreHeadGoal: %v", err)
+	}
+	goal := s.moveGoalPayload(h, head)
+	if goal == nil {
+		t.Fatal("restored head has no ground payload")
+	}
+	if !goal.StartSatisfied(path.Cell{X: 2}) {
+		t.Fatal("restored follower recomputed the saved point threshold")
+	}
+}
+
+func TestRestoreHeadGoalUsesSavedAnnulusWordOrder(t *testing.T) {
+	w := units.NewSliced(2, nil)
+	h, err := w.Create(&content.UnitDef{CanMove: true, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create mover: %v", err)
+	}
+	u := w.Unit(h)
+	s := NewSystem(nil, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
+	s.BindWorld(w)
+
+	// Code 5 stores inner, outer, inner-square, outer-square. Asymmetric
+	// values distinguish the writer order from its inverse.
+	head := &orders.Node{
+		Owner: h, RetailSubtypeCode: 5,
+		RetailSubtypeWords32: []uint32{0, 64, 128, 4, 9},
+	}
+	orders.BindQueue(u, orders.NewQueueWith([]*orders.Node{head}, nil))
+	if err := s.RestoreHeadGoal(u); err != nil {
+		t.Fatalf("RestoreHeadGoal: %v", err)
+	}
+	goal := s.moveGoalPayload(h, head)
+	if goal == nil || !goal.StartSatisfied(path.Cell{X: 2}) {
+		t.Fatal("restored annulus did not preserve its asymmetric saved word order")
+	}
+	if got := goal.H(path.Cell{}); got != 64 {
+		t.Fatalf("restored annulus inner heuristic = %d, want 64", got)
+	}
+}
+
+func TestRestoreHeadGoalBindsSavedAirMarkerFields(t *testing.T) {
+	w := units.NewSliced(3, nil)
+	h, err := w.Create(&content.UnitDef{CanFly: true, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create aircraft: %v", err)
+	}
+	u := w.Unit(h)
+	s := NewSystem(nil, Profile{}, NewOccupancyGrid())
+	s.BindWorld(w)
+	s.Flights[h] = &FlightState{}
+
+	head := &orders.Node{
+		Owner: h, RetailSubtypeCode: 2,
+		RetailSubtypeWords16: []uint16{airMarkerFollow | airMarkerRadial | airMarkerExplicitHead, 0x30, 0xfff4, 0x2345, 7},
+		RetailSubtypeWords32: []uint32{1 << 16, 2 << 16, 3 << 16, 13 << 16},
+	}
+	orders.BindQueue(u, orders.NewQueueWith([]*orders.Node{head}, nil))
+	if err := s.RestoreHeadGoal(u); err != nil {
+		t.Fatalf("RestoreHeadGoal: %v", err)
+	}
+	m, ok := s.AirGoalPayload(h).(*airMarker)
+	if !ok {
+		t.Fatalf("restored payload = %T, want air marker", s.AirGoalPayload(h))
+	}
+	if m.heading != 0x2345 || m.attachPiece != 7 || m.radial != 13<<16 {
+		t.Fatalf("saved marker fields = heading %#x piece %d radial %d", m.heading, m.attachPiece, m.radial)
+	}
+}
+
+func TestRestoreHeadGoalBindsVelocitySteeringControls(t *testing.T) {
+	w := units.NewSliced(3, nil)
+	h, err := w.Create(&content.UnitDef{CanFly: true, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create aircraft: %v", err)
+	}
+	u := w.Unit(h)
+	s := NewSystem(nil, Profile{}, NewOccupancyGrid())
+	s.BindWorld(w)
+	s.Flights[h] = &FlightState{}
+
+	head := &orders.Node{
+		Owner: h, RetailSubtypeCode: 3,
+		RetailSubtypeWords16: []uint16{1, 0x1111, 0x3456, 0x7777},
+		RetailSubtypeWords32: []uint32{1 << 16, 2 << 16, 3 << 16, 4 << 16, 5 << 16, 6 << 16},
+	}
+	orders.BindQueue(u, orders.NewQueueWith([]*orders.Node{head}, nil))
+	if err := s.RestoreHeadGoal(u); err != nil {
+		t.Fatalf("RestoreHeadGoal: %v", err)
+	}
+	m, ok := s.AirGoalPayload(h).(*airVelocityMarker)
+	if !ok {
+		t.Fatalf("restored payload = %T, want velocity marker", s.AirGoalPayload(h))
+	}
+	if !m.steer || m.commanded != 0x3456 {
+		t.Fatalf("saved steering controls = (%v,%#x)", m.steer, m.commanded)
 	}
 }

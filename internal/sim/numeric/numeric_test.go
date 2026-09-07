@@ -20,6 +20,37 @@ func TestNarrowingTruncatesTowardZero(t *testing.T) {
 	}
 }
 
+func TestTruncateFloat64ToLow32(t *testing.T) {
+	tests := []struct {
+		name  string
+		input float64
+		want  int32
+	}{
+		{"positive fraction", 17.9, 17},
+		{"negative fraction", -17.9, -17},
+		{"signed32 maximum", 2147483647.9, 2147483647},
+		{"signed32 wraps negative", 2147483648, -2147483648},
+		{"signed32 negative wraps positive", -2147483649, 2147483647},
+		{"full low-word wrap", 4294967296, 0},
+		{"negative full low-word wrap", -4294967296, 0},
+		{"signed64 minimum", -0x1p63, 0},
+		{"below signed64 maximum", math.Nextafter(0x1p63, 0), -1024},
+		{"above signed64 minimum", math.Nextafter(-0x1p63, 0), 1024},
+		{"below signed64 minimum is invalid", math.Nextafter(-0x1p63, math.Inf(-1)), 0},
+		{"signed64 maximum is invalid", 0x1p63, 0},
+		{"not a number", math.NaN(), 0},
+		{"positive infinity", math.Inf(1), 0},
+		{"negative infinity", math.Inf(-1), 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := TruncateFloat64ToLow32(test.input); got != test.want {
+				t.Fatalf("TruncateFloat64ToLow32(%v) = %d, want %d", test.input, got, test.want)
+			}
+		})
+	}
+}
+
 // TestFloorIsNotTruncation locks the other half of I3: the arithmetic-shift
 // path floors, and the two disagree on exactly the negative fractions that sit
 // on the map's west and north edges [03 §2.1].

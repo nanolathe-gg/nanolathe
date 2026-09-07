@@ -41,8 +41,8 @@ func TestP28COB01RARMCKStrictBindingTrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("strict bind ARMCK: %v", err)
 	}
-	if err := u.AttachCOBBinding(binding); err != nil {
-		t.Fatalf("attach ARMCK binding: %v", err)
+	if u.COBBinding() != binding || u.GetScript() != binding.VM {
+		t.Fatal("strict ARMCK bind did not retain the pre-Create unit context")
 	}
 	if binding == nil || binding.Program == nil || binding.VM == nil || binding.Callbacks == nil {
 		t.Fatalf("incomplete ARMCK binding: %#v", binding)

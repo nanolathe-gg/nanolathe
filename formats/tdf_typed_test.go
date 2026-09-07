@@ -1,6 +1,9 @@
 package formats
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestTypedAccessors locks the accessor family's rules [02 §4].
 func TestTypedAccessors(t *testing.T) {
@@ -49,5 +52,22 @@ func TestFixedFromAuthoredTruncates(t *testing.T) {
 	}
 	if got := FixedFromAuthored(0.0000001); got != 0 {
 		t.Fatalf("sub-unit value did not truncate to zero: %d", got)
+	}
+}
+
+func TestFixedFromAuthoredRetainsSigned64LowWord(t *testing.T) {
+	tests := []struct {
+		input float64
+		want  int32
+	}{
+		{32768, -2147483648},
+		{65536, 0},
+		{-32768.5, 2147450880},
+		{math.Inf(1), 0},
+	}
+	for _, test := range tests {
+		if got := FixedFromAuthored(test.input); got != test.want {
+			t.Errorf("FixedFromAuthored(%v) = %d, want %d", test.input, got, test.want)
+		}
 	}
 }

@@ -487,9 +487,13 @@ type Unit struct {
 	// draw that follows the `buildangle` draw in the allocator's RNG call order
 	// [04 R-MOV-01 §5c][R-P28-ANG-01R §2]. Every unit gets one, hovering or
 	// not, and a save that restores the unit record restores the phase.
-	BobPhase         int16
-	Attachment       AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
-	EngagementTarget pool.Handle     // saved plain engagement link; no attachment side effect [08 R-SAVE-02 §6]
+	BobPhase   int16
+	Attachment AttachmentState // carrier/cargo linkage [04 §4.4] attach-unit
+	// EngagementTarget is the saved plain engagement link. Damage and death
+	// packets also use this same slot-valued field as LastAttacker; raw packet
+	// reconstruction deliberately does not revalidate it [04 R-UNIT-06 §5]
+	// [08 R-SAVE-02 §6].
+	EngagementTarget pool.Handle
 	// SpotMetal is the extractor yield the CREATOR samples once, for every unit
 	// it makes: Σ(cell metal byte + 1) over the stamped footprint, times the
 	// definition's `extractsmetal` [05 R-PROD-01 §6]. It is never resampled, so
@@ -524,7 +528,7 @@ type Unit struct {
 	// `init_cloaked` unit is visible until its first paid settlement pass, and
 	// a cloaked unit whose owner stalls shows again on the next pass.
 	Hidden bool
-	Kills  int32 // kill count for capture timer [P0-15]
+	Kills  int32 // low uint16 is the wrapping credited-kill word [06 R-DMG-01 §2]
 	// Paralyze state per [06 §10] paralyzer status effects [P0-I04].
 	ParalyzeExpire uint32 // absolute tick when stun ends; 0 means not paralyzed [06 §10]
 	// Stunned is a candidate mark, not a mechanism. The stun is binary — fully
@@ -942,9 +946,15 @@ type COBBinder func(*Unit) error
 // [P0-16 §3.2]; forcedSlot reconstruction verifies slice bounds and
 // occupancy [P0-16 §3.3].
 type World struct {
-	units   []*Unit
-	pool    *pool.Units
-	catalog *content.Catalog
+	units []*Unit // live records only; finalization clears this view
+	// rawUnits exposes a live record while its slot is occupied. Free replaces
+	// that reference with the packet fields retail retains at an empty slot, so
+	// the view models raw slot aliasing without keeping per-unit heaps alive.
+	// A later allocation overwrites that slot without a generation check
+	// [P0-16][06 §12.1].
+	rawUnits []*Unit
+	pool     *pool.Units
+	catalog  *content.Catalog
 
 	// iterHint and iterSlicedHint are the live-unit counts Iter and IterSliced
 	// last produced, used only to size the next allocation. They are
@@ -1030,6 +1040,7 @@ func newSlicedWorld(p *pool.Units, cat *content.Catalog) *World {
 		pool:      p,
 		catalog:   cat,
 		units:     make([]*Unit, total),
+		rawUnits:  make([]*Unit, total),
 		defMap:    make(map[*content.UnitDef]uint16),
 		nextDefID: 1,
 	}
@@ -1595,6 +1606,9 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 		newUnits := make([]*Unit, idx+1)
 		copy(newUnits, w.units)
 		w.units = newUnits
+		newRawUnits := make([]*Unit, idx+1)
+		copy(newRawUnits, w.rawUnits)
+		w.rawUnits = newRawUnits
 	}
 	// The unfinished form seeds its construction state here, before the script
 	// bind below runs `Create`: creating an unfinished unit "sets the remaining
@@ -1641,8 +1655,10 @@ func (w *World) create(def *content.UnitDef, owner uint8, x, y, z numeric.Fixed,
 	u.InitEconomyState()   // [P1-I04] on/off, cloak, activation from definition
 	w.initializeAllocationHeading(u, def)
 	w.units[idx] = u
+	w.rawUnits[idx] = u
 	if err := w.attachCOB(u); err != nil {
 		w.units[idx] = nil
+		w.rawUnits[idx] = nil
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // per-unit VM with statics/pieces, Create run [04 §4.1][P1-I01]
@@ -1863,6 +1879,9 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 		newUnits := make([]*Unit, idx+1)
 		copy(newUnits, w.units)
 		w.units = newUnits
+		newRawUnits := make([]*Unit, idx+1)
+		copy(newRawUnits, w.rawUnits)
+		w.rawUnits = newRawUnits
 	}
 	u := &Unit{
 		Handle:       h,
@@ -1888,8 +1907,10 @@ func (w *World) CreateWithForcedSlot(def *content.UnitDef, owner uint8, x, y, z 
 	u.InitEconomyState()   // [P1-I04]
 	w.initializeAllocationHeading(u, def)
 	w.units[idx] = u
+	w.rawUnits[idx] = u
 	if err := w.attachCOB(u); err != nil {
 		w.units[idx] = nil
+		w.rawUnits[idx] = nil
 		w.pool.Free(h)
 		return 0, fmt.Errorf("units: strict COB binding for %q: %w", def.UnitName, err)
 	} // [P1-I01] VM per-unit for forced slot
@@ -2017,9 +2038,10 @@ func (w *World) FreeImmediate(h pool.Handle) {
 		w.pool.Free(h)
 		return
 	}
-	// Clear unit linkage: queues, attachments, etc would be cleared here;
-	// for Nanolathe the world entry is nulled and pool occupancy cleared,
-	// but slotIndex retained stale [P0-16 §3.4].
+	// The raw empty-slot view preserves only the packet fields the death path
+	// reads. It must not keep this record's VM, order queue, or render arrays
+	// reachable after the live slot is released.
+	w.rawUnits[idx] = retainedRawRecord(u)
 	player := int(u.Owner)
 	u.Alive = false
 	u.Flags &^= ClassifierEligibleStatus
@@ -2079,6 +2101,7 @@ func (w *World) FreeNeverCreated(h pool.Handle) {
 	u.Alive = false
 	u.Flags &^= ClassifierEligibleStatus
 	w.units[idx] = nil
+	w.rawUnits[idx] = nil
 	w.pool.Free(h)
 	if player >= 0 && player < 10 {
 		if w.liveCounters[player] > 0 {
@@ -2088,6 +2111,18 @@ func (w *World) FreeNeverCreated(h pool.Handle) {
 			w.createdCounters[player]--
 		}
 	}
+}
+
+// retainedRawRecord copies the raw slot fields that survive a free and are
+// consumed by death-packet reconstruction. Keeping this small value rather
+// than the freed Unit releases its per-unit VM, order queue, and render state
+// for collection while preserving the stale slot's owner and wrapping kill
+// word [P0-16][06 R-DMG-01 §2].
+func retainedRawRecord(u *Unit) *Unit {
+	if u == nil {
+		return nil
+	}
+	return &Unit{Handle: u.Handle, Owner: u.Owner, Kills: u.Kills}
 }
 
 // unlinkAttachmentsForFree drops a record out of the carried representation
@@ -2161,6 +2196,7 @@ func (w *World) TeardownCleanup() {
 			player := int(u.Owner)
 			u.Flags &^= ClassifierEligibleStatus
 			u.Alive = false
+			w.rawUnits[i] = retainedRawRecord(u)
 			w.units[i] = nil
 			w.pool.Free(pool.Handle(i))
 			if player >= 0 && player < 10 && w.liveCounters[player] > 0 {
@@ -2189,6 +2225,23 @@ func (w *World) Unit(h pool.Handle) *Unit {
 		return nil
 	}
 	return u
+}
+
+// RawUnitRecord returns the record visible at a nonzero raw slot without
+// applying Unit's live/alive validation. A live slot returns its Unit; a freed
+// slot returns the retained slot, owner, and kill word until allocation
+// overwrites it. Thus a stale slot aliases the new occupant without a
+// generation check. Death packet reconstruction uses this view for its
+// recorded attacker [P0-16][06 §12.1].
+func (w *World) RawUnitRecord(h pool.Handle) *Unit {
+	if w == nil || h == 0 {
+		return nil
+	}
+	idx := int(h)
+	if idx < 0 || idx >= len(w.rawUnits) {
+		return nil
+	}
+	return w.rawUnits[idx]
 }
 
 // Used returns live count.

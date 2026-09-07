@@ -101,7 +101,7 @@ but readers must not assume pixel extents are uniquely owned.
 | +6 | 2 | i16 | y_offset | |
 | +8 | 1 | u8 | color_key | `9` in **all 48,519 retail frames**. On the raw path it is the transparent palette index: the frame draw passes this byte to the blitter, which skips every matching source pixel. The RLE path carries transparency in skip runs and does not consume this key. Community notes mislabel it "palette index" and list it as unknown. |
 | +9 | 1 | u8 | compressed | `0` = raw pixels, `1` = per-row RLE (only these two values occur in retail data) |
-| +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. **The executable reads only the low byte** (loader and compositor alike), so the effective count is `subframe_count & 0xFF`; on a *subframe* header a nonzero **high byte** (offset +11) makes the compositor draw that subframe through the light-table-remapped blit path, which draws only when the destination window has its remap flag set (`[02 R-MALF-01 §6]`). Retail data: maximum count 12, high byte always 0 (census of all 958 GAFs, 123,294 frames). |
+| +10 | 2 | u16 | subframe_count | if nonzero, this frame is composed of subframes (see below). Composition is common: roughly half of retail frames are composed. **The executable reads only the low byte** (loader and compositor alike), so the effective count is `subframe_count & 0xFF`; on a *subframe* header a nonzero **high byte** (offset +11) makes the compositor draw that subframe through the tinted ALP blit path, gated by the Shading option (`[02 R-MALF-01 §6]`, `[03 R-REN-03D §4]`). Retail data: maximum count 12, high byte always 0 (census of all 958 GAFs, 123,294 frames). |
 | +12 | 4 | u32 | unknown2 | `0` in all retail frames |
 | +16 | 4 | u32 | data_offset | → pixel data, or subframe pointer table when `subframe_count > 0` |
 | +20 | 4 | u32 | unknown3 | Historically called "timing" — specifically, the 1998–2001 `GAFBuilder` tool names this exact offset `FPS` and exposes it as a user-editable, save-round-tripped field — but ~27% of retail frames carry nonzero garbage here (in `ARMALAB.GAF`: mostly 0, one frame `480`, one `7025344`). Ignore; the plausible timing value lives in the frame *reference* record instead. |
@@ -173,12 +173,29 @@ untouched (transparent).
 
 When `subframe_count` is nonzero, `data_offset` points at
 `subframe_count` × u32 — absolute offsets of further frame headers.
-The frame's own image is produced by compositing the subframes in table
-order onto a `width × height` canvas: each subframe is placed at
-`(subframe.x_offset - parent.x_offset, subframe.y_offset - parent.y_offset)`
-(clipped to the canvas), later subframes overwriting earlier ones where
-opaque. Subframes can themselves be composed; cycles are malformed. Canvas
-pixels never covered by an opaque subframe pixel are transparent.
+**Established:** the general blitter draws these children in table order at
+the same pen position. Each leaf's destination origin is
+`(pen_x - leaf.x_offset, pen_y - leaf.y_offset)`. A parent-sized host canvas
+therefore places a child at `(parent.x_offset - child.x_offset,
+parent.y_offset - child.y_offset)`, but that canvas is a host representation:
+the general retail blitter clips only to its destination, not to the parent
+frame's dimensions. Alternate children use destination-dependent ALP blending,
+so flattening against a fixed background cannot preserve that operation.
+`[03 R-COMP-01 §2]` owns composition and `[03 R-REN-03D §4]` owns tinting.
+
+The drawing routines recurse into composite children, but the ordinary loader
+relocates only one child level. **Unknown:** supported nested file layouts;
+see `[02 R-MALF-01 §6]`. Cycles and excessive depth are rejected by the checked
+host reader, independently of retail's unsafe relocation.
+
+### Host decoder safety policy
+
+Retail imposes no aggregate allocation or composition-depth bound during its
+pointer relocation `[02 R-MALF-01 §6]`. Nanolathe therefore applies explicit
+host-safety budgets to decoded pixels and frame references, and bounds composed
+frame depth. These are implementation limits rather than file-format or retail
+rules. Repeated entry-table pointers share their immutable decoded reference
+table, so a repeated pointer does not consume the reference budget again.
 
 ## How the engine loads it
 

@@ -96,4 +96,7 @@ func TestFillUnitScriptsStoresProgram(t *testing.T) {
 	if defs["test"].Script == nil || len(defs["test"].Script.Code) != 1 {
 		t.Fatalf("loaded script = %#v, want one code word", defs["test"].Script)
 	}
+	if got := defs["test"].ScriptProvenance.LogicalPath; got != "scripts/test.cob" {
+		t.Fatalf("script provenance logical path = %q", got)
+	}
 }

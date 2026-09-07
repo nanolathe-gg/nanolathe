@@ -280,27 +280,29 @@ func LoadTNTWithLimits(data []byte, limits TNTLimits) (*TNT, error) {
 		}
 		result.FeatureTable[i] = TNTFeatureRecord{Index: index, Name: string(nameBytes[:end])}
 	}
-	minimapHeader, err := section("minimap header", result.MiniMapOffset, 1, 8)
-	if err != nil {
-		return nil, err
+	if result.MiniMapPresent {
+		minimapHeader, err := section("minimap header", result.MiniMapOffset, 1, 8)
+		if err != nil {
+			return nil, err
+		}
+		result.MinimapWidth = binary.LittleEndian.Uint32(minimapHeader)
+		result.MinimapHeight = binary.LittleEndian.Uint32(minimapHeader[4:])
+		pixels := uint64(result.MinimapWidth) * uint64(result.MinimapHeight)
+		if result.MinimapWidth != 0 && pixels/uint64(result.MinimapWidth) != uint64(result.MinimapHeight) {
+			return nil, fmt.Errorf("tnt: minimap dimensions overflow")
+		}
+		if pixels > limits.MaxMinimapPixels {
+			return nil, fmt.Errorf("tnt: minimap exceeds limits")
+		}
+		if result.MiniMapOffset > ^uint32(0)-8 {
+			return nil, fmt.Errorf("tnt: minimap offset overflows")
+		}
+		minimap, err := section("minimap pixels", result.MiniMapOffset+8, pixels, 1)
+		if err != nil {
+			return nil, err
+		}
+		result.Minimap = minimap
 	}
-	result.MinimapWidth = binary.LittleEndian.Uint32(minimapHeader)
-	result.MinimapHeight = binary.LittleEndian.Uint32(minimapHeader[4:])
-	pixels := uint64(result.MinimapWidth) * uint64(result.MinimapHeight)
-	if result.MinimapWidth != 0 && pixels/uint64(result.MinimapWidth) != uint64(result.MinimapHeight) {
-		return nil, fmt.Errorf("tnt: minimap dimensions overflow")
-	}
-	if pixels > limits.MaxMinimapPixels {
-		return nil, fmt.Errorf("tnt: minimap exceeds limits")
-	}
-	if result.MiniMapOffset > ^uint32(0)-8 {
-		return nil, fmt.Errorf("tnt: minimap offset overflows")
-	}
-	minimap, err := section("minimap pixels", result.MiniMapOffset+8, pixels, 1)
-	if err != nil {
-		return nil, err
-	}
-	result.Minimap = minimap
 	return result, nil
 }
 

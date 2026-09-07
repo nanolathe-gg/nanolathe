@@ -1351,11 +1351,20 @@ func fillUnitScripts(fs vfs.FSOps, units map[string]*UnitDef) error {
 			continue
 		}
 		logical := "scripts/" + CanonicalKey(u.UnitName) + ".cob"
+		info, statErr := fs.Stat(logical)
+		if statErr != nil || info.IsDir {
+			return unitScriptMissingError(fs, logical)
+		}
 		prog, found, err := cob.LoadFromFS(fs, u.UnitName)
 		if err != nil || !found || prog == nil || len(prog.Code) == 0 {
 			return unitScriptMissingError(fs, logical)
 		}
 		u.Script = prog
+		provenance := info.Source
+		if provenance.LogicalPath == "" {
+			provenance.LogicalPath = logical
+		}
+		u.ScriptProvenance = provenance
 	}
 	return nil
 }

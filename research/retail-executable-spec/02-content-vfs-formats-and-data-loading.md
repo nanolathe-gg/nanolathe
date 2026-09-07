@@ -3360,9 +3360,15 @@ than wrapped.
 array of that many 32-bit subframe-header offsets. Each is biased by the file
 base, and each subframe's own data offset is biased in turn — one level of
 nesting only. A subframe is an ordinary frame header, so a subframe may itself
-be compressed. Subframes are composed in file order onto the parent canvas at
-their own offsets relative to the parent's, and later subframes overwrite
-earlier ones wherever they are opaque.
+be compressed. **Established:** the general frame blitter draws children in
+file order with the unchanged pen position. Each leaf subtracts its own
+placement offset and clips against the destination surface; the composite
+parent's dimensions do not impose an additional clip. Plain leaves overwrite
+opaque pixels; alternate leaves blend with the existing destination through
+ALP. `[03 R-COMP-01 §2]` owns this drawing contract. Recursive drawing exists,
+but the loader does not recursively relocate nested child tables. **Unknown:**
+which nested layouts, if any, are usable through this ordinary loader; a
+recursive host representation alone does not establish retail acceptance.
 
 **Animation playback.** A playback cursor holds the current frame index, a
 countdown, a loop-or-hold flag, and the entry pointer. Binding a cursor clamps
@@ -3544,22 +3550,21 @@ installed corpus (bounded-negative), so the path is stock-inert.
 
 ### FNT
 
-The retail bitmap font format is not Windows FNT. Its file begins with a
-16-bit height, a 16-bit control word whose two halves behave differently, and
-a 256-entry table of absolute glyph offsets. Offset 0 marks a truly absent
-code and is skipped in both measurement and drawing. Space (code 32) has a
-non-zero offset entry, an advance width of 7, and an all-zero bitmap, so it
-advances without drawing. Each present glyph stores an advance width followed
-by a continuous, most-significant-bit-first bitmap.
+**Established.** The retail bitmap font format is not Windows FNT. Its
+header is four single bytes: unsigned height, an ignored byte, signed baseline
+vertical offset, and the first character code. The absolute glyph-offset table
+has one entry for every code from that first code through 255 and is indexed
+by `code - firstCode` for both measurement and drawing. This table selection
+is applied once; it is not a second adjustment to an already selected glyph
+[fmt fnt][03 R-FONT-01 §1].
 
-The control word splits by byte. The **low byte** is a baseline descender:
-glyph rows are drawn at `y` minus that byte (established arithmetic; the
-field naming is inferred). The **high byte** is a base-character bias applied
-during width measurement — the measured index becomes the code minus the
-bias, gated to apply only when the bias does not exceed the code. Retail
-fonts always store zero there (their values 1–3 occupy only the low byte), so
-the subtraction never fires; a non-zero bias would activate ragged
-base-character support.
+Offset 0 marks an absent code, skipped in both measurement and drawing.
+Stock space (code 32) has a nonzero offset, advance width 7, and an all-zero
+bitmap, so it advances without drawing. Each present glyph stores an advance
+width followed by a continuous, most-significant-bit-first bitmap. Glyph rows
+start at `penY - signedBaseline`. The first-code byte is zero in the stock
+fonts; a nonzero value shortens the offset table without changing that
+baseline arithmetic.
 
 Width measurement sums glyph advances and stops at newline (NUL also
 terminates), in both the measurer and the drawer. Drawing clips text,
@@ -3576,8 +3581,9 @@ Retail PCX is 8-bit, single-plane RLE written by a version-5 encoder. The
 decoder validates **only** the manufacturer byte `0x0A` and the version byte
 5; encoding, pixel-depth, and plane fields are unchecked (they are implied by
 the RLE logic). Image dimensions are inclusive (`xmax-xmin+1` by
-`ymax-ymin+1`) over a 128-byte header. Run-length commands take their count
-from the two high bits; every run is clamped to the remaining scanline width
+`ymax-ymin+1`) over a 128-byte header. A byte whose two high bits are set introduces a run whose count is its
+low six bits; other bytes are literal pixels. Rows consume the visible
+width, ignoring `bytes_per_line`; every run is clamped to the remaining row width
 and the excess discarded, so malformed files cannot overflow a scanline. The
 256-color palette is read by seeking to file size minus 768 — **without any
 check of the palette marker byte** the format defines. The palette expands to
@@ -3711,7 +3717,7 @@ the exact comparisons are in the numbered sections that follow.
 | File | Truncated | Oversize (declared size beyond the file) | Wrong magic / version | Duplicate keys / sections | Bad reference | Zero-length | Integer overflow of a declared size |
 |---|---|---|---|---|---|---|---|
 | **HPI / UFO / CCX / GP3** (§3) | *garbage or fault*: the 20-byte header, 36-byte footer and directory-blob reads ignore their counts — a cut inside the blob leaves heap bytes that the relocation pass biases and writes back; a cut inside a stored record is a short read passed to the caller; a cut inside a chunk is silent all-ones | *garbage or fault*: blob size beyond the file → as truncated; record size beyond the file → short read; chunk stored length beyond the file → silent all-ones; chunk **decompressed** length above 65,536 → the LZ77 and zlib decoders write past the 64 KiB chunk buffer (heap overrun) and then report `SQUASHERR_BADUNPACKSIZE` fatally if the produced length differs | *skip* at mount: tag ≠ `HAPI`, version bytes ≠ `00 00 01 00`, or normalized footer ≠ template → not mounted, no message. *fault (fatal box)* at read: chunk marker ≠ `SQSH` → `SQUASHERR_BADHEADER`; method byte `> 3` → `SQUASHERR_BADUNPACKTYPE` (methods 0 and 3 pass the test, decode nothing and fail as `BADUNPACKSIZE`); byte-sum mismatch → `SQUASHERR_BADCHECKSUM` | *accept*: within one directory the **later** entry wins (backward scan, §2 "Lookup"); across archives the first provider wins (§2) | *fault*: an entry offset outside the blob is biased and written back at mount (write to a wild address); a subdirectory chain that loops recurses without a visited set (stack overflow); no check on any of them | *skip*: an empty archive file fails the tag test; an empty stored record is null to every whole-file consumer (size < 1) | *fault (out of memory)*: blob size or chunk stored length ≥ the address space fails allocation; a blob size below 20 skips the decipher loop (signed test) and relocates through bytes beyond the block; an entry count with the top bit set is treated as **no entries** (signed loop bound); chunk index is `position >> 16`, never bounded against the table |
-| **TDF text** — FBI, OTA, weapon, feature, movement, side, sound, GUI, campaign, `translate`, `version`, `los` (§4) | *fault (fatal box)*: `Parse error in .TDF File! End of file - nextblock not zero` when the cut is inside a section; `Data field - '=' not found` / `Data field - ';' not found` inside a field; a cut between complete top-level items is accepted | n/a (text) | none: any bytes are text; a binary file reaches `Data field - '=' not found` (fatal) at its first non-blank byte, unless that byte is `[` or `}` | *accept*: repeated sections are all retained, the first-match accessor returns the earliest; an identical key spelling replaces the value (last wins); a case-variant spelling coexists as a second sorted entry (§4) | per family, §5 and the §5 cross-reference table; the generic parser has no references | *default*: a file of size 0 or less is treated as absent — no tree, every typed read returns its default; the family decides whether absent is fatal (§5) | *accept*: the integer accessor's conversion has **no overflow test** and wraps modulo 2³²; the fixed-point accessor's `× 65,536` then truncation stores the x87 indefinite integer `0x80000000` for any magnitude ≥ 2¹⁵ authored units; the floating accessor returns whatever the C-runtime decimal conversion produced |
+| **TDF text** — FBI, OTA, weapon, feature, movement, side, sound, GUI, campaign, `translate`, `version`, `los` (§4) | *fault (fatal box)*: `Parse error in .TDF File! End of file - nextblock not zero` when the cut is inside a section; `Data field - '=' not found` / `Data field - ';' not found` inside a field; a cut between complete top-level items is accepted | n/a (text) | none: any bytes are text; a binary file reaches `Data field - '=' not found` (fatal) at its first non-blank byte, unless that byte is `[` or `}` | *accept*: repeated sections are all retained, the first-match accessor returns the earliest; an identical key spelling replaces the value (last wins); a case-variant spelling coexists as a second sorted entry (§4) | per family, §5 and the §5 cross-reference table; the generic parser has no references | *default*: a file of size 0 or less is treated as absent — no tree, every typed read returns its default; the family decides whether absent is fatal (§5) | *accept*: the integer accessor's conversion has **no overflow test** and wraps modulo 2³²; the fixed-point accessor multiplies by 65,536, truncates to signed 64 bits, and retains the low 32 bits; finite overflow of the signed 32-bit range wraps, while non-finite or signed-64 overflow yields a zero low word [01 R-DET-01 §1]; the floating accessor returns whatever the C-runtime decimal conversion produced |
 | **FBI unit record** (§5) | as TDF | n/a | *skip*: the catalog loader reads `Version` and `Copyright` from every unit section; a version newer than the executable's (3.1) or a copyright line that does not match the template drops the unit from the catalog — with the `Error` box `Incompatible units found.  They will be ignored.  Please download the latest version of the game.` for the version case, silently for the copyright case | as TDF | weapon miss → record 0 (inactive); corpse miss → no wreck; movement class miss → scratch record; **model miss → fatal, the box shows the path `objects3d\<objectname>.3DO`** (corrects the cross-reference table's "slot stays empty"); script miss → null script, crash at the first creation `[04 R-COB-04 §8]`; sound category miss → index 0, or the decimal value of the authored text (`[R-CAT-01 §5]`) | as TDF (an empty FBI compiles a unit with every default and no name) | as TDF |
 | **OTA map / mission** (§5, `[R-MAP-01]`) | as TDF | n/a | no magic; a parsed file without `GlobalHeader` → status-pane message and failure (`[R-MAP-01 §2]`), battle entry proceeds on the prologue sentinels | as TDF; `Schema <n>` probed by index, a gap ends the probe (`[R-MAP-01 §4]`) | `[units]` name that is no unit → *skip* (slot 0, nothing spawned); `Player` outside 1..10 or a slot without a controller → **fatal** `Player number %d invalid for unit %s`; `[features]` name → **fatal** `Record "%s" missing from feature files`; the TNT named by the OTA missing → **fatal** (path as message); `aiprofile` miss → `ai\default.txt` (`[R-MAP-01 §5]`) | as TDF | as TDF |
 | **Catalog TDFs** — weapons, features, `moveinfo`, `sidedata`, `sound`, `meteor` (§5) | as TDF | n/a | `moveinfo.tdf` absent → **fatal** `Can't load MOVEINFO.TDF`; `sidedata.tdf` absent → **fatal**, and the box reads `Can't load GAMEDATA.TDF` (the text names the wrong file; nothing named `gamedata.tdf` is ever opened — this settles `docs/SPEC_CONFLICTS.md` SC2); `sound.tdf` absent → no categories, silent; `meteor.tdf` absent or without `[Default]` → record untouched (§6) | weapon: a second section with the same `ID` replaces the record (R-CONTENT-02); `CLASS<n>` gaps skipped; feature duplicates: first parsed document wins the name scan | weapon `ID` is **not range-checked**: `table + ID × 277` for any ID, so an ID above 255 or below −1 writes outside the 256-record table (*accept-with-garbage*, into neighbouring session state); weapon `model` miss → **fatal** (path); feature `object` miss → **fatal** (path); feature `filename` GAF miss → null root, every sequence null, silent; `seqname*` entry absent from the GAF → null sequence, silent; side `font` miss → **fatal**; side anchor subsection miss → **fatal** (§6) | as TDF | as TDF |
@@ -3799,12 +3805,20 @@ caller's buffer, forced terminator).
 Numeric edges: the integer accessor's conversion is the C-runtime decimal
 `atol` — whitespace, sign, digits, `total × 10 + digit` with **no overflow
 detection**, so an authored `4294967297` reads as 1 and `2147483648` as
-−2147483648; the fixed-point accessor multiplies the C-runtime `atof` result
-by 65,536 and truncates through the x87 store, which yields the indefinite
-integer `0x80000000` for any product outside the signed 32-bit range —
-i.e. any authored magnitude of 32,768 or more; a decimal beyond the double
-range reads as infinity and takes the same path (*Supported inference* for
-the infinity step, which is C-runtime behaviour, not game code).
+−2147483648.
+
+**Established — fixed-point and weapon conversion identity [RT-01].** The
+fixed-point accessor multiplies the present decimal value by 65,536, calls
+the shared signed-64 truncation helper, and stores the low 32 bits. The weapon
+parser uses that same helper after its own field-specific multiply, retaining
+either 32 or 16 bits. Neither path converts directly to a signed 32-bit
+integer. Finite values outside signed 32-bit range therefore wrap; NaN,
+infinity, and products outside signed 64-bit range yield zero in every retained
+32-, 16-, or 8-bit destination [01 R-DET-01 §1]. A missing fixed-point key
+returns the supplied raw fixed-point default without converting it. The
+arithmetic before this conversion remains owned by the individual field's
+contract; this closure does not change intermediate floating-point stores.
+
 
 #### Catalog-level outcomes not stated elsewhere [R-MALF-01 §5]
 
@@ -3879,9 +3893,11 @@ wide in the file, but **the executable reads only the low byte** — in the
 loader's relocation loop and in the blitter's composition loop alike — so a
 count of 256 composes nothing and 300 composes 44. The high byte (frame
 offset 11) has a separate meaning on a **subframe**: when it is nonzero the
-compositor draws that subframe through the light-table-remapped blit path
-instead of the plain one, and that path draws only when the destination
-window's remap flag is set. Retail data never exercises either edge: a census
+compositor draws that subframe through the tinted ALP blitter instead of the
+plain one. **Established:** its nontransparent pixels write
+`ALP[source * 256 + destination]`, and the whole call is gated by the Shading
+option. A tinted composite propagates the tinted operation to every descendant.
+`[03 R-REN-03D §4]` and `[03 R-COMP-01 §2]` own the drawing behavior. Retail data never exercises either edge: a census
 over the 958 GAFs of the reference install (123,294 frames including
 subframes) finds a maximum subframe count of 12 and no nonzero high byte.
 `[fmt gaf]` carries the byte-level statement.

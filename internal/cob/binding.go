@@ -16,8 +16,13 @@ import (
 // is linked against that list before a VM is made playable [02 "Model archive
 // (3DO)"][02 "Compiled script archive (COB)"][04 §4.1].
 type BindingRequest struct {
-	UnitName             string
-	ScriptPath           string
+	UnitName   string
+	ScriptPath string
+	// Program and ProgramProvenance are the catalog-linked immutable program
+	// asset. When supplied, strict binding links it directly and creates only
+	// mutable VM state for this unit [04 §4.1].
+	Program              *Program
+	ProgramProvenance    vfs.Provenance
 	Model                *model.Model
 	ModelPieces          []string
 	RequiredScripts      []string
@@ -34,6 +39,10 @@ type BindingRequest struct {
 	// writes so a read's four argument cells cannot be interpreted as a write
 	// value [04 R-COB-03 §1]. It takes precedence over PortFuncs per port.
 	PortBindings map[Port]PortBinding
+	// PreCreate receives the fully linked, mutable instance before an authored
+	// Create callback starts. It installs all unit/session context that Create
+	// can query or mutate [04 R-CB-01 §4].
+	PreCreate func(*Binding) error
 }
 
 // BindingDiagnosticCode identifies one strict binding failure. Codes are
@@ -131,8 +140,8 @@ type Binding struct {
 }
 
 // BindStrict resolves, parses, links, and initializes one production COB
-// binding. Missing files are fatal here. RequiredScripts defaults to Create
-// because every live unit is initialized through Create with wake=1 [R-CB-01 §2].
+// binding. Missing files are fatal here. Create is started with wake=1 when it
+// is authored; its absence is valid and leaves the new VM idle [R-CB-01 §2].
 // Each RequiredScriptGroups group is an explicit any-of requirement: at least
 // one named entry in each group must exist. This models established fallback
 // paths such as AimFromPrimary → QueryPrimary without assuming that every
@@ -144,31 +153,40 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 	if err != nil {
 		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{Code: BindingInvalidRequest, Logical: logical, Expected: "unit name and script path", Detail: err.Error()}}}
 	}
-	if fs == nil {
+	if fs == nil && req.Program == nil {
 		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{Code: BindingInvalidRequest, Logical: logical, Expected: "VFS", Detail: "nil VFS"}}}
 	}
 
-	info, statErr := fs.Stat(logical)
-	if statErr != nil || info.IsDir {
+	info := vfs.EntryInfo{Path: logical, Name: logical, Source: req.ProgramProvenance}
+	program := req.Program
+	if program == nil {
+		var statErr error
+		info, statErr = fs.Stat(logical)
+		if statErr != nil || info.IsDir {
+			return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
+				Code: BindingMissingCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "compiled COB file", Detail: "required COB is unavailable",
+			}}}
+		}
+		data, readErr := fs.ReadFileLimit(logical, 4<<20)
+		if readErr != nil {
+			return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
+				Code: BindingMalformedCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "readable compiled COB", Detail: readErr.Error(),
+			}}}
+		}
+		var loadErr error
+		program, loadErr = Load(data)
+		if loadErr != nil {
+			return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
+				Code: BindingMalformedCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "well-formed compiled COB", Detail: loadErr.Error(),
+			}}}
+		}
+	} else if err := ValidateProgram(program); err != nil {
 		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
-			Code: BindingMissingCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "compiled COB file", Detail: "required COB is unavailable",
-		}}}
-	}
-	data, readErr := fs.ReadFileLimit(logical, 4<<20)
-	if readErr != nil {
-		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
-			Code: BindingMalformedCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "readable compiled COB", Detail: readErr.Error(),
-		}}}
-	}
-	program, loadErr := Load(data)
-	if loadErr != nil {
-		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
-			Code: BindingMalformedCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "well-formed compiled COB", Detail: loadErr.Error(),
+			Code: BindingMalformedCOB, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "validated compiled COB", Detail: err.Error(),
 		}}}
 	}
 
-	required := append([]string{"Create"}, req.RequiredScripts...)
-	diagnostics := linkDiagnostics(program, req.ModelPieces, required, req.RequiredScriptGroups, logical, providersFor(fs, logical, info))
+	diagnostics := linkDiagnostics(program, req.ModelPieces, req.RequiredScripts, req.RequiredScriptGroups, logical, providersFor(fs, logical, info))
 	if len(diagnostics) != 0 {
 		return nil, &BindingError{Diagnostics: diagnostics}
 	}
@@ -198,16 +216,30 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 	if sink, ok := req.PresentationSink.(interface{ SetCOBPieceMap([]int) }); ok {
 		sink.SetCOBPieceMap(pieceMap)
 	}
-	// Create is a deferred callback with wake=1: start it once, then drain all
-	// eight slots with delta 0 and one piece pass [R-CB-01 §2].
-	create := bridge.Create()
-	if !create.Started {
-		return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
-			Code: BindingCreateStart, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "Create entry point runnable with wake=1", Detail: fmt.Sprintf("unit %q could not allocate its Create thread", unitName),
-		}}}
+	binding := &Binding{Program: program, VM: vm, Model: req.Model, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, Callbacks: bridge, SimulationRNG: req.SimulationRNG, SFXSink: req.SFXSink, SFXVisible: req.SFXVisible, PresentationSink: req.PresentationSink}
+	if req.PreCreate != nil {
+		if err := req.PreCreate(binding); err != nil {
+			return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
+				Code: BindingInvalidRequest, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "complete COB creation context", Detail: err.Error(),
+			}}}
+		}
 	}
 
-	return &Binding{Program: program, VM: vm, Model: req.Model, ScriptPath: logical, Provider: info.Source, PieceMap: pieceMap, CreateInvoked: bridge.CreateInvoked(), Callbacks: bridge, SimulationRNG: req.SimulationRNG, SFXSink: req.SFXSink, SFXVisible: req.SFXVisible, PresentationSink: req.PresentationSink}, nil
+	createInvoked := false
+	if _, authored := program.Scripts["Create"]; authored {
+		// Create is a deferred callback with wake=1: start it once, then drain
+		// all eight slots with delta 0 and one piece pass [R-CB-01 §2].
+		create := bridge.Create()
+		if !create.Started {
+			return nil, &BindingError{Diagnostics: []BindingDiagnostic{{
+				Code: BindingCreateStart, Logical: logical, Provider: providersFor(fs, logical, info), Expected: "Create entry point runnable with wake=1", Detail: fmt.Sprintf("unit %q could not allocate its Create thread", unitName),
+			}}}
+		}
+		createInvoked = bridge.CreateInvoked()
+	}
+
+	binding.CreateInvoked = createInvoked
+	return binding, nil
 }
 
 // ComposePiece is retail's piece locator [03 R-RAST-01 §8]: the one routine

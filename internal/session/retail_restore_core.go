@@ -21,7 +21,7 @@ import (
 // client [08 R-SAVE-02 §11].
 //
 // The order is deliberately explicit: player/account fields, alliances, base
-// bodies, depth-first references, economy, queues, one front-head pump, then
+// bodies, depth-first references, economy, queues, one front-head goal bind, then
 // exact matching COB snapshots [08 R-SAVE-02 §6, §7, §8, §9, §11].
 func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	if stage == nil || stage.Session == nil || stage.Image == nil {
@@ -183,7 +183,7 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	}
 	// Script enumeration is the writer's unit enumeration index, not a stable
 	// unit slot. Validate and stage it before the later per-unit pass so the
-	// pass can retain retail's account → mover → order → pump → script → weapon
+	// pass can retain retail's account → mover → order → head-goal → script → weapon
 	// order [08 R-SAVE-02 §6].
 	scripts := make(map[int]save.ScriptRecord, len(image.Units.Scripts))
 	for _, script := range image.Units.Scripts {
@@ -255,8 +255,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 				}
 			}
 		}
-		// Rebuild queues after the account and mover state, then bind the front
-		// head exactly once before the script snapshot [08 R-SAVE-02 §6].
+		// Rebuild queues after the account and mover state, then bind any saved
+		// goal payload on the front head before the script snapshot. This does
+		// not run an order handler or advance its queue [08 R-SAVE-02 §11].
 		orderIdx := ordersByParent[rec.StableID]
 		group := make([]save.OrderRecord, len(orderIdx))
 		for i, idx := range orderIdx {
@@ -265,10 +266,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		if err := orders.RetailRestoreOrdersAtTick(owner, group, stage.StableUnit, binding, s.Clock.GlobalTick); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d orders: %w", rec.StableID, err)
 		}
-		if q := orders.QueueOfUnit(owner); q != nil && q.LenPrimary() > 0 {
-			result := (&orders.Pump{World: s.Units}).PumpUnit(owner.Handle, s.Clock.GlobalTick)
-			if result.Err != nil {
-				return fmt.Errorf("session: retail restore: unit %d front pump: %w", rec.StableID, result.Err)
+		if s.Movement != nil {
+			if err := s.Movement.RestoreHeadGoal(owner); err != nil {
+				return fmt.Errorf("session: retail restore: unit %d head goal: %w", rec.StableID, err)
 			}
 		}
 		if script, ok := scripts[recIndex]; ok {

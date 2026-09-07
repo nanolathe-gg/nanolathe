@@ -209,10 +209,9 @@ func TestRestoreRetailBattleCoreMissingMoverBoxErrors(t *testing.T) {
 // TestRestoreRetailBattleCoreGroupsOrdersPerUnit is R06: orders interleaved
 // across units in the saved Orders slice must still land on the correct
 // unit's queue and only that unit's, in original sequence, never mixed by a
-// grouping bug. The records are queued as secondary (Secondary: true) so the
-// restore's front-queue pump — which needs an injected simulation RNG this
-// fixture does not carry — never runs; that pump is unrelated to the
-// per-unit grouping this test locks [08 R-SAVE-02 §6].
+// grouping bug. The records are queued as secondary (Secondary: true), so
+// they cannot be the restored primary head; the head-goal binding is unrelated
+// to the per-unit grouping this test locks [08 R-SAVE-02 §6, §11].
 func TestRestoreRetailBattleCoreGroupsOrdersPerUnit(t *testing.T) {
 	s, fixtures := newRestoreCoreFixture(t, 2)
 	unitA, unitB := fixtures[0], fixtures[1]
@@ -272,6 +271,45 @@ func TestRestoreRetailBattleCoreGroupsOrdersPerUnit(t *testing.T) {
 	}
 	checkGroup("unit A", unitA.handle, []int32{200, 201})
 	checkGroup("unit B", unitB.handle, []int32{100, 101})
+}
+
+// TestRestoreRetailBattleCoreBindsSavedHeadWithoutPumping locks S08 at the
+// production boundary. The saved head remains byte-for-byte queue state while
+// its pre-existing payload becomes the mover follower's active goal [08
+// R-SAVE-02 §10, §11].
+func TestRestoreRetailBattleCoreBindsSavedHeadWithoutPumping(t *testing.T) {
+	s, fixtures := newRestoreCoreFixture(t, 1)
+	u := fixtures[0]
+	s.Movement = movement.NewSystem(nil, movement.Profile{FootPrintX: 1, FootPrintZ: 1}, movement.NewOccupancyGrid())
+	main := make([]byte, save.OrderBoxSize)
+	binary.LittleEndian.PutUint16(main, u.stableID)
+	main[8] = byte(orders.Lookup("Move_Ground"))
+	main[9] = 1
+	binary.LittleEndian.PutUint32(main[0x0A:], 0xE0)
+	binary.LittleEndian.PutUint32(main[0x36:], 0x120)
+	// A code-4 ground point payload: packed cell (6,7), its saved octile
+	// radius, and its separate squared threshold.
+	subtype := make([]byte, save.OrderSubtypeCode4)
+	binary.LittleEndian.PutUint32(subtype[4:], uint32(uint16(6))|uint32(uint16(7))<<16)
+	binary.LittleEndian.PutUint32(subtype[8:], 12)
+	binary.LittleEndian.PutUint32(subtype[12:], 0)
+	stage := &RetailBattleStage{
+		Session: s, StableUnit: stableUnitMap(fixtures),
+		Image: &save.BattleImage{Units: save.UnitImage{Records: []save.UnitRecord{{StableID: u.stableID, Data: unitRecordData(false)}}, Orders: []save.OrderRecord{{ParentStableID: u.stableID, Main: main, SubtypeCode: 4, Subtype: subtype}}}},
+	}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatalf("RestoreRetailBattleCore: %v", err)
+	}
+	head := orders.QueueOfUnit(s.Units.Unit(u.handle)).Head()
+	if head == nil || head.Phase != 1 {
+		t.Fatalf("head after restore = %#v; restore must not pump it", head)
+	}
+	if head.DynamicGate != 0xE0 || head.Satisfied != 0x120 {
+		t.Fatalf("head gate/satisfaction = %#x/%#x, want saved %#x/%#x", head.DynamicGate, head.Satisfied, uint32(0xE0), uint32(0x120))
+	}
+	if !s.Movement.HasGroundGoal(u.handle, head) {
+		t.Fatal("saved point payload was not bound to the restored mover")
+	}
 }
 
 func TestRestoreRetailBattleCoreAllowsMutualAndSelfEngagementLinks(t *testing.T) {

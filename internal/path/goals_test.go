@@ -93,6 +93,66 @@ func TestAnnulusGoalHeuristic(t *testing.T) {
 	}
 }
 
+func TestRestoredGoalsKeepSavedArrivalThresholds(t *testing.T) {
+	center := Cell{}
+	// The code-4 radius is zero, which a fresh point constructor turns into a
+	// zero threshold. A saved threshold of four instead admits the cell two
+	// cells away. It proves the restore constructor does not recompute it.
+	point := PointGoalRestored(center, 0, 4)
+	if !point.StartSatisfied(Cell{X: 2}) {
+		t.Fatal("restored point goal discarded its saved squared threshold")
+	}
+	if PointGoal(center, 0).StartSatisfied(Cell{X: 2}) {
+		t.Fatal("ordinary point constructor unexpectedly accepted the saved-only threshold")
+	}
+
+	// The code-5 raw radii still control the heuristic while the saved squared
+	// band controls arrival. The intentionally inconsistent band accepts this
+	// cell even though ordinary radii would not.
+	annulus := AnnulusGoalRestored(center, 64, 128, 4, 9)
+	if !annulus.StartSatisfied(Cell{X: 2}) {
+		t.Fatal("restored annulus goal discarded its saved squared bounds")
+	}
+	if AnnulusGoal(center, 64, 128).StartSatisfied(Cell{X: 2}) {
+		t.Fatal("ordinary annulus constructor unexpectedly accepted the saved-only band")
+	}
+	if got := annulus.H(center); got != 64 {
+		t.Fatalf("restored annulus heuristic = %d, want raw inner radius 64", got)
+	}
+}
+
+func TestRestoredGoalsUseSignedWrappedThresholds(t *testing.T) {
+	center := Cell{}
+	// The saved threshold is signed: zero distance is not within a negative
+	// threshold, while a large cell delta wraps into the signed negative range.
+	point := PointGoalRestored(center, 0, -1)
+	if point.StartSatisfied(center) {
+		t.Fatal("negative saved point threshold accepted zero distance")
+	}
+	if !point.StartSatisfied(Cell{X: 50000}) {
+		t.Fatal("point arrival did not keep the signed wrapped cell product")
+	}
+
+	annulus := AnnulusGoalRestored(center, 0, 0, -1<<31, -1)
+	if annulus.StartSatisfied(center) {
+		t.Fatal("negative annulus bounds accepted zero distance")
+	}
+	if !annulus.StartSatisfied(Cell{X: 50000}) {
+		t.Fatal("annulus arrival did not keep signed wrapped bounds")
+	}
+}
+
+func TestGoalConstructorsKeepNegativeRadiusDivision(t *testing.T) {
+	// Radius division truncates toward zero before the 32-bit square; it does
+	// not clamp negative radii to zero [04 R-PATH-01 §9].
+	if !PointGoal(Cell{}, -17).StartSatisfied(Cell{X: 1}) {
+		t.Fatal("negative point radius was clamped before its stored square")
+	}
+	if !AnnulusGoal(Cell{}, -17, -17).StartSatisfied(Cell{X: 1}) {
+		t.Fatal("negative annulus radii were clamped before their stored squares")
+	}
+}
+
 func TestRectGoalHeuristic(t *testing.T) {
 	// [04 §7.2] rect: admissible 16*max+6*min outside; inside 16*min(dist to edge).
 	r := Rect{Min: Cell{0, 0}, Max: Cell{4, 4}}

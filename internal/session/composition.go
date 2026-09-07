@@ -521,29 +521,24 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		}
 		registeredPlacement = true
 	}
-	binding, err := units.BindCOBWithPortsAndVisibilityForUnit(fs, u, mdl, s.SimRNG(), sink, visible)
+	_, err = units.BindCOBWithPortsAndVisibilityAndContextForUnit(fs, u, mdl, s.SimRNG(), sink, visible, func(binding *cob.Binding) error {
+		// Every engine query and mutation binding exists before Create: the
+		// callback can read live terrain, piece and unit state, and a port-1
+		// activation edge reaches the attached callback bridge [04 R-CB-01 §4].
+		if binding == nil || binding.VM == nil {
+			return fmt.Errorf("session: incomplete pre-Create COB binding")
+		}
+		if s.World != nil {
+			binding.VM.BindPort(cob.Port(16), cob.GroundHeightPortFunc(s.World.HeightAt))
+		}
+		s.bindQueryPorts(binding, u)
+		return nil
+	})
 	if err != nil {
 		if registeredPlacement {
 			s.Build.ReleasePlacement(u.Handle)
 		}
 		return fmt.Errorf("unit %q model %q script binding: %w", u.Def.UnitName, mdl.Name, err)
-	}
-	// Port 16 (GROUND_HEIGHT) is bound here rather than in the instance port
-	// table units.unitPortHandlers builds: it is a pure world query with no
-	// per-unit state, so it needs no D+wake-ordering guarantee relative to
-	// Create the way the state-bearing ports (1/5/6/18/19/20) do [04 §4.4].
-	// The height query is the session's own terrain, matching the query
-	// s.World.HeightAt already answers for order handlers above
-	// [03 §2.3][R-COB-03 §3].
-	if binding.VM != nil && s.World != nil {
-		binding.VM.BindPort(cob.Port(16), cob.GroundHeightPortFunc(s.World.HeightAt))
-	}
-	s.bindQueryPorts(binding, u)
-	if err := u.AttachCOBBinding(binding); err != nil {
-		if registeredPlacement {
-			s.Build.ReleasePlacement(u.Handle)
-		}
-		return fmt.Errorf("unit %q attach strict COB: %w", u.Def.UnitName, err)
 	}
 	return nil
 }

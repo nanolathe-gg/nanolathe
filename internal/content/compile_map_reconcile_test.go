@@ -1,11 +1,27 @@
 package content
 
 import (
+	"encoding/binary"
 	"fmt"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
 )
+
+func TestTNTHeaderLiteSkipsAbsentMinimapPointer(t *testing.T) {
+	data := make([]byte, 0x40)
+	binary.LittleEndian.PutUint32(data[0:], 0x2000)
+	binary.LittleEndian.PutUint32(data[0x28:], ^uint32(0))
+	// Canonical slot 11 is clear, so the pointer is unrelated metadata.
+	fs := newFixtureFS(t, fixtureFile{path: "maps/no-mini.tnt", data: string(data)})
+	h, err := loadTNTHeaderLite(fs, "maps/no-mini.tnt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.MiniMapPresent || h.MinimapWidth != 0 || h.MinimapHeight != 0 {
+		t.Fatalf("absent minimap probe = %+v", h)
+	}
+}
 
 func TestMapSchemaProbeStopsAtFirstGapAndIgnoresInertGlobalFields(t *testing.T) {
 	inertSchemaKey := "mo" + "hometal"

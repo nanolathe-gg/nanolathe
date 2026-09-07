@@ -5268,11 +5268,18 @@ projectile model into a one-plane image and blits it produces the same painter
 order at the same pixels. Each call also draws **one piece**: render type 1 of
 §5.4 passes the definition's model and, under its flag and deadline, a second
 piece taken from the model header's child slot as the "secondary model"
-(**Supported inference** that the slot is the first child piece: the in-place
-relocation of [fmt 3do] leaves the header's child link at that position).
-Whether any stock projectile model carries pieces retail therefore never draws
-is `TODO(question)`: an asset census of the projectile 3DOs' piece trees would
-settle it.
+(**Established, direct-static:** the loader relocates that header child link,
+and the renderer reads that same direct child without following its sibling
+link). The standalone call rotates the selected piece's raw vertices and adds
+the projectile world point; it does not compose the selected object's authored
+translation or any parent translation.
+**Established asset census (reference install, 2026-09-07).** The render-type
+1/6 projectile records name 19 distinct 3DOs. Six roots have a header child;
+one, `advtorpedo`, has more than one direct child, and no non-root piece has a
+child. Retail's bounded parent-plus-first-child dispatch therefore leaves the
+additional `advtorpedo` direct child undisplayed; no stock projectile reaches a
+grandchild through this entry. The census is repeated by the asset-gated
+`TestRetailProjectileModelHeaderChildCensus` check.
 
 #### The composition memory cache and its composite surface, the strip pool's growth, and the container `finished` query [R-COMP-02 §7]
 
@@ -9362,10 +9369,6 @@ body — most under `R-<id>` headings — and are not restated here.
   [R-SEL-02A] · a mode/panel capture of the descriptor at the selection call;
   a retail capture with two selected units and points on each projected hull
   edge.
-- Whether any stock projectile model carries pieces retail never draws (each
-  model-projectile call draws one piece plus, under its flag and deadline,
-  the header's child slot) · [R-COMP-02 §6] · asset census of the projectile
-  3DOs' piece trees. Marked `TODO(question)`.
 - Whether stock play ever reaches the strip pool's 1000 live containers ·
   [R-FX-02 §4] · a strip-object count over a retail recording of a large
   late-game battle.

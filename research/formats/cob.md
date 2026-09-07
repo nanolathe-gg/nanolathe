@@ -57,6 +57,13 @@ version=4, 3 scripts, 1 piece, 165 code words, 0 statics, code @ 0x2C,
 index array @ 0x2C0 = `[0, 83, 86]`, script names @ 0x2CC =
 `SmokeUnit, Create, Killed`, piece names @ 0x2D8 = `base`.
 
+**Host-safety policy.** `NumberOfStatics` is not bounded by any corresponding
+on-disk static-data span. Nanolathe therefore applies an explicit per-VM
+static-storage budget before parsing publishes a program and again before a VM
+or restore accepts an externally supplied program. This is a host-safety
+policy, not a retail limit; it prevents a small header from requesting an
+unbounded allocation.
+
 ### The trailing record table
 
 **Established.** Header words `0x14` and `0x28` are a *count/pointer pair* for

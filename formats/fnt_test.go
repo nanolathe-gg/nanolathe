@@ -1,15 +1,12 @@
 package formats
 
-import (
-	"encoding/binary"
-	"testing"
-)
+import "testing"
 
 func TestFNTContinuousMSBFirstBitsAndAbsentGlyphs(t *testing.T) {
 	// Height 3, width 3: nine bits packed continuously (101 010 111).
 	data := make([]byte, 516+1+2)
-	binary.LittleEndian.PutUint16(data[0:], 3)
-	binary.LittleEndian.PutUint16(data[4+uint16('A')*2:], 516)
+	data[0] = 3
+	data[4+int('A')*2], data[5+int('A')*2] = 4, 2 // offset 516
 	data[516] = 3
 	data[517], data[518] = 0xab, 0x80 // 1010101110000000
 	f, err := LoadFNT(data)
@@ -33,14 +30,34 @@ func TestFNTContinuousMSBFirstBitsAndAbsentGlyphs(t *testing.T) {
 
 func TestFNTMalformedGlyphFailsSoft(t *testing.T) {
 	data := make([]byte, 516+1)
-	binary.LittleEndian.PutUint16(data[0:], 8)
-	binary.LittleEndian.PutUint16(data[4:], 516)
-	data[516] = 4 // needs four bitmap bytes, but only one is present
+	data[0] = 8
+	data[4], data[5] = 4, 2 // offset 516
+	data[516] = 4           // needs four bitmap bytes, but only one is present
 	if _, err := LoadFNT(data); err == nil {
 		t.Fatal("truncated glyph was accepted")
 	}
 	var g FNTGlyph
 	if g.On(0, 0) {
 		t.Fatal("short manually assembled glyph should be transparent")
+	}
+}
+
+func TestFNTReducedTablePreservesNamedHeaderBytes(t *testing.T) {
+	// First code 32 gives a 448-byte table: this 454-byte font is valid even
+	// though a full table would require 516 bytes [fmt fnt].
+	data := make([]byte, 4+2*(256-32)+2)
+	data[0], data[1], data[2], data[3] = 1, 0x7e, 0xfe, 32
+	data[4+2*int('A'-32)] = byte(len(data) - 2)
+	data[4+2*int('A'-32)+1] = byte((len(data) - 2) >> 8)
+	data[len(data)-2], data[len(data)-1] = 1, 0x80
+	f, err := LoadFNT(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Height != 1 || f.Ignored != 0x7e || f.Baseline != -2 || f.FirstCode != 32 {
+		t.Fatalf("header = %#v", f)
+	}
+	if f.Glyphs[31] != nil || f.Glyphs['A'] == nil || !f.Glyphs['A'].On(0, 0) {
+		t.Fatalf("first-code table indexing selected the wrong glyphs")
 	}
 }

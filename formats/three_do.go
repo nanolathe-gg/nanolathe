@@ -13,12 +13,13 @@ import (
 // declare.
 type ThreeDOLimits struct {
 	MaxDepth, MaxObjects, MaxVertices, MaxPrimitives, MaxPolygonVertices uint32
+	MaxIndices                                                           uint64
 	MaxStringBytes                                                       uint32
 }
 
 // DefaultThreeDOLimits returns the decode bounds used when a caller states none.
 func DefaultThreeDOLimits() ThreeDOLimits {
-	return ThreeDOLimits{MaxDepth: 64, MaxObjects: 1 << 16, MaxVertices: 1 << 22, MaxPrimitives: 1 << 22, MaxPolygonVertices: 1 << 16, MaxStringBytes: 1 << 20}
+	return ThreeDOLimits{MaxDepth: 64, MaxObjects: 1 << 16, MaxVertices: 1 << 22, MaxPrimitives: 1 << 22, MaxPolygonVertices: 1 << 16, MaxIndices: 1 << 22, MaxStringBytes: 1 << 20}
 }
 
 // ThreeDOVertex is one model-space vertex in the file's own integer units.
@@ -78,7 +79,7 @@ func LoadThreeDOWithLimits(data []byte, limits ThreeDOLimits) (*ThreeDO, error) 
 	if len(data) < 52 {
 		return nil, fmt.Errorf("3do: root object is truncated")
 	}
-	if limits.MaxDepth == 0 || limits.MaxObjects == 0 || limits.MaxVertices == 0 || limits.MaxPrimitives == 0 || limits.MaxPolygonVertices == 0 || limits.MaxStringBytes == 0 {
+	if limits.MaxDepth == 0 || limits.MaxObjects == 0 || limits.MaxVertices == 0 || limits.MaxPrimitives == 0 || limits.MaxPolygonVertices == 0 || limits.MaxIndices == 0 || limits.MaxStringBytes == 0 {
 		return nil, fmt.Errorf("3do: invalid decode limits")
 	}
 	data = append([]byte(nil), data...)
@@ -86,25 +87,27 @@ func LoadThreeDOWithLimits(data []byte, limits ThreeDOLimits) (*ThreeDO, error) 
 	active := make(map[uint32]bool)
 	seen := make(map[uint32]bool)
 	var totalVertices, totalPrimitives uint32
-	var parse func(uint32, int32, uint32) (int32, error)
-	parse = func(off uint32, parent int32, depth uint32) (int32, error) {
+	var totalIndices uint64
+	var parseObject func(uint32, int32, uint32) (int32, uint32, error)
+	var parseSiblings func(uint32, int32, uint32) (int32, error)
+	parseObject = func(off uint32, parent int32, depth uint32) (int32, uint32, error) {
 		if off == 0 && len(result.Objects) > 0 {
-			return -1, fmt.Errorf("3do: object offset 0 is reused")
+			return -1, 0, fmt.Errorf("3do: object offset 0 is reused")
 		}
 		if depth > limits.MaxDepth {
-			return -1, fmt.Errorf("3do: hierarchy depth exceeds limit")
+			return -1, 0, fmt.Errorf("3do: hierarchy depth exceeds limit")
 		}
 		if uint64(off)+52 > uint64(len(data)) {
-			return -1, fmt.Errorf("3do: object at 0x%x is outside file", off)
+			return -1, 0, fmt.Errorf("3do: object at 0x%x is outside file", off)
 		}
 		if active[off] {
-			return -1, fmt.Errorf("3do: object cycle at 0x%x", off)
+			return -1, 0, fmt.Errorf("3do: object cycle at 0x%x", off)
 		}
 		if seen[off] {
-			return -1, fmt.Errorf("3do: shared object at 0x%x", off)
+			return -1, 0, fmt.Errorf("3do: shared object at 0x%x", off)
 		}
 		if uint32(len(result.Objects)) >= limits.MaxObjects {
-			return -1, fmt.Errorf("3do: object count exceeds limit")
+			return -1, 0, fmt.Errorf("3do: object count exceeds limit")
 		}
 		active[off], seen[off] = true, true
 		defer delete(active, off)
@@ -120,22 +123,22 @@ func LoadThreeDOWithLimits(data []byte, limits ThreeDOLimits) (*ThreeDO, error) 
 		nameOffset, vertexOffset, primitiveOffset := read(28), read(36), read(40)
 		siblingOffset, childOffset := read(44), read(48)
 		if obj.Version != 1 {
-			return -1, fmt.Errorf("3do: object at 0x%x has version %d", off, obj.Version)
+			return -1, 0, fmt.Errorf("3do: object at 0x%x has version %d", off, obj.Version)
 		}
 		if vertexCount < 0 || primitiveCount < 0 {
-			return -1, fmt.Errorf("3do: negative count at 0x%x", off)
+			return -1, 0, fmt.Errorf("3do: negative count at 0x%x", off)
 		}
 		if uint64(totalVertices)+uint64(vertexCount) > uint64(limits.MaxVertices) || uint64(totalPrimitives)+uint64(primitiveCount) > uint64(limits.MaxPrimitives) {
-			return -1, fmt.Errorf("3do: geometry count exceeds limits")
+			return -1, 0, fmt.Errorf("3do: geometry count exceeds limits")
 		}
 		name, err := threeDOString(data, nameOffset, limits.MaxStringBytes)
 		if err != nil {
-			return -1, fmt.Errorf("3do: object 0x%x name: %w", off, err)
+			return -1, 0, fmt.Errorf("3do: object 0x%x name: %w", off, err)
 		}
 		obj.Name = name
 		vertexBytes, err := threeDOSlice(data, vertexOffset, uint64(vertexCount), 12)
 		if err != nil {
-			return -1, fmt.Errorf("3do: object 0x%x vertices: %w", off, err)
+			return -1, 0, fmt.Errorf("3do: object 0x%x vertices: %w", off, err)
 		}
 		obj.Vertices = make([]ThreeDOVertex, int(vertexCount))
 		for n := range obj.Vertices {
@@ -145,60 +148,81 @@ func LoadThreeDOWithLimits(data []byte, limits ThreeDOLimits) (*ThreeDO, error) 
 		totalVertices += uint32(vertexCount)
 		primitiveBytes, err := threeDOSlice(data, primitiveOffset, uint64(primitiveCount), 32)
 		if err != nil {
-			return -1, fmt.Errorf("3do: object 0x%x primitives: %w", off, err)
+			return -1, 0, fmt.Errorf("3do: object 0x%x primitives: %w", off, err)
 		}
 		obj.Primitives = make([]ThreeDOPrimitive, int(primitiveCount))
 		for n := range obj.Primitives {
 			b := primitiveBytes[n*32:]
 			count := int32(binary.LittleEndian.Uint32(b[4:]))
 			if count < 0 || uint32(count) > limits.MaxPolygonVertices {
-				return -1, fmt.Errorf("3do: primitive %d at object 0x%x has invalid vertex count %d", n, off, count)
+				return -1, 0, fmt.Errorf("3do: primitive %d at object 0x%x has invalid vertex count %d", n, off, count)
 			}
 			indices := []uint16(nil)
 			if count > 0 {
+				if uint64(count) > limits.MaxIndices-totalIndices {
+					return -1, 0, fmt.Errorf("3do: aggregate polygon indexes exceed limit")
+				}
 				indexBytes, e := threeDOSlice(data, int32(binary.LittleEndian.Uint32(b[12:])), uint64(count), 2)
 				if e != nil {
-					return -1, fmt.Errorf("3do: primitive %d indexes: %w", n, e)
+					return -1, 0, fmt.Errorf("3do: primitive %d indexes: %w", n, e)
 				}
 				indices = make([]uint16, int(count))
 				for j := range indices {
 					indices[j] = binary.LittleEndian.Uint16(indexBytes[j*2:])
 					if uint32(indices[j]) >= uint32(vertexCount) {
-						return -1, fmt.Errorf("3do: primitive %d vertex index %d exceeds vertex count %d", n, indices[j], vertexCount)
+						return -1, 0, fmt.Errorf("3do: primitive %d vertex index %d exceeds vertex count %d", n, indices[j], vertexCount)
 					}
 				}
+				totalIndices += uint64(count)
 			}
 			textureOffset := int32(binary.LittleEndian.Uint32(b[16:]))
 			texture := ""
 			if textureOffset != 0 {
 				texture, err = threeDOString(data, textureOffset, limits.MaxStringBytes)
 				if err != nil {
-					return -1, fmt.Errorf("3do: primitive %d texture: %w", n, err)
+					return -1, 0, fmt.Errorf("3do: primitive %d texture: %w", n, err)
 				}
 			}
 			obj.Primitives[n] = ThreeDOPrimitive{ColorIndex: binary.LittleEndian.Uint32(b), VertexIndices: indices, TextureName: texture, AlwaysZero: int32(binary.LittleEndian.Uint32(b[8:])), Unknown1: int32(binary.LittleEndian.Uint32(b[20:])), Unknown2: int32(binary.LittleEndian.Uint32(b[24:])), IsColored: int32(binary.LittleEndian.Uint32(b[28:])), SourceOffset: uint32(primitiveOffset) + uint32(n*32)}
 		}
 		totalPrimitives += uint32(primitiveCount)
 		if childOffset != 0 {
-			child, e := parse(uint32(childOffset), i, depth+1)
+			child, e := parseSiblings(uint32(childOffset), i, depth+1)
 			if e != nil {
-				return -1, e
+				return -1, 0, e
 			}
 			// Recursive parsing may grow result.Objects and invalidate obj.
 			result.Objects[i].FirstChild = child
 		}
-		if siblingOffset != 0 {
-			sibling, e := parse(uint32(siblingOffset), parent, depth)
-			if e != nil {
-				return -1, e
-			}
-			result.Objects[i].NextSibling = sibling
-		}
-		return i, nil
+		return i, uint32(siblingOffset), nil
 	}
-	root, err := parse(0, -1, 0)
+	parseSiblings = func(off uint32, parent int32, depth uint32) (int32, error) {
+		first, previous := int32(-1), int32(-1)
+		for off != 0 {
+			current, sibling, err := parseObject(off, parent, depth)
+			if err != nil {
+				return -1, err
+			}
+			if previous >= 0 {
+				result.Objects[previous].NextSibling = current
+			} else {
+				first = current
+			}
+			previous = current
+			off = sibling
+		}
+		return first, nil
+	}
+	root, siblingOffset, err := parseObject(0, -1, 0)
 	if err != nil {
 		return nil, err
+	}
+	if siblingOffset != 0 {
+		sibling, err := parseSiblings(siblingOffset, -1, 0)
+		if err != nil {
+			return nil, err
+		}
+		result.Objects[root].NextSibling = sibling
 	}
 	result.Root = root
 	// Retail load-time primitive reordering (02:3DO). After relocation, before

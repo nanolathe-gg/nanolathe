@@ -12,8 +12,8 @@ import (
 // exactly as internal/client drawText writes `frame[index] = color` over the set
 // bits [03 §7.1]. The layout — the truncate-to-width, the descender baseline, the
 // offset-0 absent-glyph skip, the newline/NUL terminator, the per-glyph advance
-// and the high-byte base bias — is reproduced from drawText/MeasureText/
-// TruncateToWidth so the covered pixel set matches the byte writer [02 §7][07 §7].
+// and first-character table bias — is reproduced from drawText/MeasureText/
+// TruncateToWidth so the covered pixel set matches the byte writer [fmt fnt][07 §7].
 //
 // One glyph atlas per *formats.FNT packs every present glyph in a horizontal
 // strip, the set bit flagged in green (the same opacity convention the GAF frame
@@ -24,7 +24,7 @@ import (
 // fntAtlas is one font's packed glyph strip and its per-code layout. img is a
 // total-width × height image with the set-bit flag in green; xOffset[code] is a
 // present glyph's left edge in img (-1 when the code is absent) and width[code] is
-// its advance, both indexed by the RESOLVED glyph code (after the base bias).
+// its advance, both indexed by the character code.
 type fntAtlas struct {
 	img     *ebiten.Image
 	height  int
@@ -32,33 +32,23 @@ type fntAtlas struct {
 	width   [256]int32
 }
 
-// baselineDescender returns the signed baseline adjustment stored in the low byte
-// of the FNT control word: glyph rows are drawn at y - descender [02 §7][03 §7.1].
-// It mirrors internal/client baselineDescender so the modern layout matches the
-// byte writer's.
+// baselineDescender returns the signed FNT baseline adjustment. It mirrors the
+// software rasterizer so the modern layout matches the byte writer [03 R-FONT-01 §1].
 func baselineDescender(fnt *formats.FNT) int {
 	if fnt == nil {
 		return 0
 	}
-	return int(int8(fnt.Unknown & 0xFF))
+	return int(fnt.Baseline)
 }
 
-// resolveGlyph applies the high-byte base-char bias and the offset-0 absent-glyph
-// rule, returning the resolved glyph code and whether the code is present,
-// mirroring internal/client glyphFor [02 §7]. Retail fonts store bias 0 so the
-// subtraction never fires; it is reproduced for completeness.
+// resolveGlyph applies the offset-0 absent-glyph rule, returning the character
+// code and whether the code is present. LoadFNT has already applied the
+// first-character table bias when it stored Glyphs [fmt fnt].
 func resolveGlyph(fnt *formats.FNT, code int) (int, bool) {
 	if fnt == nil || code < 0 || code > 255 {
 		return 0, false
 	}
-	bias := int((fnt.Unknown >> 8) & 0xFF)
-	if bias != 0 {
-		if code < bias {
-			return 0, false
-		}
-		code -= bias
-	}
-	if code < 0 || code > 255 || fnt.Glyphs[code] == nil {
+	if fnt.Glyphs[code] == nil {
 		return 0, false
 	}
 	return code, true

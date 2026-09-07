@@ -1,6 +1,7 @@
 package construction
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -52,7 +53,10 @@ func p28RetailFactoryWorld(t *testing.T) (*content.Catalog, *units.World, func(*
 		if err != nil {
 			return err
 		}
-		return u.AttachCOBBinding(binding)
+		if u.COBBinding() != binding || u.GetScript() != binding.VM {
+			return fmt.Errorf("factory strict binding did not retain pre-Create unit context")
+		}
+		return nil
 	})
 	return cat, w, modelFor
 }

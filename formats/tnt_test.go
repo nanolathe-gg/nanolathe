@@ -102,6 +102,28 @@ func TestLegacyTNTLoads(t *testing.T) {
 	}
 }
 
+func TestTNTAbsentMinimapDoesNotDereferenceItsPointer(t *testing.T) {
+	data := legacyFixture(t)
+	// A legacy absent-minimap pointer may name unrelated or unusable bytes.
+	binary.LittleEndian.PutUint32(data[0x38:], ^uint32(0))
+	tnt, err := LoadTNT(data)
+	if err != nil {
+		t.Fatalf("flag-clear TNT rejected: %v", err)
+	}
+	if tnt.MiniMapPresent || tnt.MinimapWidth != 0 || tnt.MinimapHeight != 0 || len(tnt.Minimap) != 0 {
+		t.Fatalf("absent minimap = present=%v %dx%d bytes=%d", tnt.MiniMapPresent, tnt.MinimapWidth, tnt.MinimapHeight, len(tnt.Minimap))
+	}
+}
+
+func TestTNTPresentMalformedMinimapStillFails(t *testing.T) {
+	data := legacyFixture(t)
+	binary.LittleEndian.PutUint32(data[0x3c:], 1)
+	binary.LittleEndian.PutUint32(data[0x38:], ^uint32(0))
+	if _, err := LoadTNT(data); err == nil {
+		t.Fatal("present malformed minimap was accepted")
+	}
+}
+
 // TestLegacyMinimapSlotIsNotSlotTen is the header half of R7. On a legacy file
 // slot 10 is the minimum wind speed and the minimap offset moves to slot 14
 // [03 §2.2]. Reading slot 10 as an offset would seek to the wind value.

@@ -2,7 +2,6 @@ package units
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -11,14 +10,11 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// RequiredCOBEntryPoints returns only callback roots that are mandatory for
-// every strict production unit. Create is always required because unit
-// initialization invokes it as a deferred start with wake=1 [R-CB-01 §2]. Weapon and builder
-// capabilities are deliberately not inferred from UnitDef fields: SC21 leaves
-// those producer/capability gates unresolved, and retail-valid scripts may
-// omit optional callbacks. Callers with an observed consumer should supply
-// exact names or alternative groups through cob.BindStrict.
-func RequiredCOBEntryPoints(_ *content.UnitDef) []string { return []string{"Create"} }
+// RequiredCOBEntryPoints returns callback roots that every strict production
+// unit must provide. There are none: Create is conditional on the program
+// containing that entry point, and weapon/builder callbacks are required only
+// by their observed consumers [R-CB-01 §2].
+func RequiredCOBEntryPoints(_ *content.UnitDef) []string { return nil }
 
 // BindCOBWithPorts is retained for the session composition test seam, whose
 // caller has no owning Unit instance. New production bindings use
@@ -26,16 +22,24 @@ func RequiredCOBEntryPoints(_ *content.UnitDef) []string { return []string{"Crea
 // before the D+wake Create callback. This seam retains the same strict
 // model/piece checks; the extra ports are supplied before Create starts.
 func BindCOBWithPorts(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink) (*cob.Binding, error) {
-	return bindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, nil, nil)
+	return bindCOBWithPortsAndVisibility(fs, def, mdl, sim, sink, nil, nil, nil)
 }
 
 // BindCOBWithPortsAndVisibilityForUnit is the production binding seam for a
 // live unit. Instance-owned engine ports are installed before Create runs.
 func BindCOBWithPortsAndVisibilityForUnit(fs vfs.FSOps, u *Unit, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool) (*cob.Binding, error) {
+	return BindCOBWithPortsAndVisibilityAndContextForUnit(fs, u, mdl, sim, sink, visible, nil)
+}
+
+// BindCOBWithPortsAndVisibilityAndContextForUnit installs the session's
+// world-query and mutation context before an authored Create body executes.
+// The context sees a complete linked binding and may bind ports but must not
+// start callbacks of its own [04 R-CB-01 §4].
+func BindCOBWithPortsAndVisibilityAndContextForUnit(fs vfs.FSOps, u *Unit, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool, preCreate func(*cob.Binding) error) (*cob.Binding, error) {
 	if u == nil {
 		return nil, fmt.Errorf("nanolathe: COB binding: nil unit")
 	}
-	return bindCOBWithPortsAndVisibility(fs, u.Def, mdl, sim, sink, visible, u)
+	return bindCOBWithPortsAndVisibility(fs, u.Def, mdl, sim, sink, visible, u, preCreate)
 }
 
 // PendingScriptTouched is the SCRIPT-TOUCHED MARKER: bit 2 of the unit's
@@ -168,7 +172,7 @@ func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
 // instance port handlers are installed before Create runs, matching retail's
 // D+wake initialization order. The exported helper above remains a generic
 // asset-binding seam for callers without an owning Unit instance.
-func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool, u *Unit) (*cob.Binding, error) {
+func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *model.Model, sim *rng.Simulation, sink cob.PresentationSink, visible func(piece int, sfxType int32) bool, u *Unit, preCreate func(*cob.Binding) error) (*cob.Binding, error) {
 	if def == nil {
 		return nil, fmt.Errorf("nanolathe: COB binding: nil unit definition")
 	}
@@ -185,109 +189,44 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 	for i := range mdl.Pieces {
 		modelPieces[i] = mdl.Pieces[i].Name
 	}
-	// Prepare pending render-piece handler so VM's Create targets the unit record
-	// from the start [04 §"Piece flag polarity"] [R-COB-01 §1]. The table is
-	// geometry-derived (model walk) and Create's flag ops must operate on it.
-	var pendingModelFlags []uint8
-	var pendingPieceMap []int
-	var pendingProg *cob.Program
-	if def.Script != nil {
-		pendingProg = def.Script
-	} else if fs != nil {
-		for _, cand := range []string{"scripts/" + strings.ToLower(def.UnitName) + ".cob", "scripts/" + strings.ToLower(def.CanonicalKey) + ".cob"} {
-			if info, err := fs.Stat(cand); err == nil && !info.IsDir {
-				if data, err := fs.ReadFileLimit(cand, 4<<20); err == nil {
-					if p, err := cob.Load(data); err == nil {
-						pendingProg = p
-						break
-					}
-				}
-			}
-		}
-	}
-	if pendingProg != nil && len(pendingProg.Pieces) > 0 {
-		pendingModelFlags = BuildRenderPieceFlags(mdl) // model-ordered [04 §"Piece flag polarity"]
-		pendingPieceMap = make([]int, len(pendingProg.Pieces))
-		for i, name := range pendingProg.Pieces {
-			idx := -1
-			for mi, mp := range modelPieces {
-				if strings.EqualFold(mp, name) {
-					idx = mi
-					break
-				}
-			}
-			pendingPieceMap[i] = idx
-		}
-		mf := pendingModelFlags
-		pm := pendingPieceMap
-		pp := pendingProg
-		cob.SetPendingRenderHandlers(
-			func() []uint8 {
-				pf := make([]uint8, len(pm))
-				for i, mi := range pm {
-					if mi >= 0 && mi < len(mf) {
-						pf[i] = mf[mi]
-					} else {
-						pf[i] = 0x06
-					}
-				}
-				_ = pp
-				return pf
-			},
-			func(piece int, mask uint8, set bool) bool {
-				if piece < 0 || piece >= len(pm) {
-					return false
-				}
-				mi := pm[piece]
-				if mi < 0 || mi >= len(mf) {
-					return false
-				}
-				if mask != 0x01 && mask != 0x02 && mask != 0x04 {
-					return false
-				}
-				if set {
-					mf[mi] |= mask
-				} else {
-					mf[mi] &^= mask
-				}
-				return true
-			},
-		)
-	}
 	req := cob.BindingRequest{
-		UnitName:         def.UnitName,
-		ScriptPath:       "scripts/" + def.UnitName + ".cob",
-		Model:            mdl,
-		ModelPieces:      modelPieces,
-		RequiredScripts:  RequiredCOBEntryPoints(def),
-		SimulationRNG:    sim,
-		SFXVisible:       visible,
-		PresentationSink: sink,
+		UnitName:          def.UnitName,
+		ScriptPath:        "scripts/" + def.UnitName + ".cob",
+		Program:           def.Script,
+		ProgramProvenance: def.ScriptProvenance,
+		Model:             mdl,
+		ModelPieces:       modelPieces,
+		RequiredScripts:   RequiredCOBEntryPoints(def),
+		SimulationRNG:     sim,
+		SFXVisible:        visible,
+		PresentationSink:  sink,
 	}
 	if u != nil {
-		// Keep the generic and instance-aware binding paths identical. The helper
-		// installs all six researched engine-write arms before Create.
-		req.PortBindings = unitPortBindings(nil, u)
-		// The script-touched marker is not one of those arms — retail raises it
-		// from the dispatch itself, fall-through included — so it rides the
-		// same pre-Create hand-off the render-piece table uses. Create is an
-		// ordinary script and may write an engine port, and the marker it
-		// raises persists on the unit until a record arms gate bit 0x4
-		// [04 R-COB-06].
-		cob.SetPendingScriptTouched(u.raiseScriptTouched)
+		req.PreCreate = func(binding *cob.Binding) error {
+			if binding == nil || binding.VM == nil || binding.Callbacks == nil {
+				return fmt.Errorf("unit creation received incomplete COB binding")
+			}
+			// Install the model-owned render state and all six write arms with the
+			// real VM before Create can issue a piece flag or port operation.
+			modelFlags := BuildRenderPieceFlags(mdl)
+			u.RenderPieceFlags = modelFlags
+			bindRenderFlags(binding, modelFlags)
+			for port, portBinding := range unitPortBindings(binding.VM, u) {
+				binding.VM.BindPortBinding(port, portBinding)
+			}
+			binding.VM.BindScriptTouched(u.raiseScriptTouched)
+			if err := u.AttachCOBBindingPreCreate(binding); err != nil {
+				return err
+			}
+			if preCreate != nil {
+				return preCreate(binding)
+			}
+			return nil
+		}
 	}
 	binding, err := cob.BindStrict(fs, req)
 	if err != nil {
-		// Clear pending on failure.
-		cob.SetPendingRenderHandlers(nil, nil)
-		cob.SetPendingScriptTouched(nil)
 		return nil, err
-	}
-	// The bind consumed the hand-off at VM construction. Re-assert it on the
-	// live VM so a caller that reaches here through a path with no pending
-	// consumption still owns a bound marker [04 R-COB-06].
-	if u != nil && binding != nil && binding.VM != nil {
-		binding.VM.BindScriptTouched(u.raiseScriptTouched)
 	}
 	// SetMaxReloadTime is issued after Create as a distinct deferred callback;
 	// its argument is the maximum of all three linked weapon reload fields
@@ -299,56 +238,42 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 		// in the build that answers both queries [06 R-WPN-05 §3].
 		WriteSlotDistanceWords(u, binding)
 	}
-	// On success, the pending handler has been consumed by the VM's SetProgram
-	// inside BindStrict, and Create has already run against the unit's model-ordered
-	// table via that handler. Capture it for the unit.
-	if pendingModelFlags != nil && u != nil {
-		u.RenderPieceFlags = pendingModelFlags
-	} else if u != nil && binding != nil && binding.VM != nil {
-		// Fallback when pending was not set (def.Script nil case where prog was loaded inside BindStrict).
-		// Build the table now and bind via handler mapping.
-		modelFlags := BuildRenderPieceFlags(mdl)
-		u.RenderPieceFlags = modelFlags
-		pieceMap := binding.PieceMap
-		prog := binding.Program
-		if binding.Callbacks != nil {
-			mf := modelFlags
-			pm := pieceMap
-			pp := prog
-			binding.Callbacks.BindRenderFlags(
-				func() []uint8 {
-					pf := make([]uint8, len(pm))
-					for i, mi := range pm {
-						if mi >= 0 && mi < len(mf) {
-							pf[i] = mf[mi]
-						} else {
-							pf[i] = 0x06
-						}
-					}
-					_ = pp
-					return pf
-				},
-				func(piece int, mask uint8, set bool) bool {
-					if piece < 0 || piece >= len(pm) {
-						return false
-					}
-					mi := pm[piece]
-					if mi < 0 || mi >= len(mf) {
-						return false
-					}
-					if set {
-						mf[mi] |= mask
-					} else {
-						mf[mi] &^= mask
-					}
-					return true
-				},
-			)
-		}
-	} else if u != nil && binding != nil && binding.VM == nil {
-		u.InitRenderPieceFlags(mdl)
-	}
 	return binding, nil
+}
+
+func bindRenderFlags(binding *cob.Binding, modelFlags []uint8) {
+	if binding == nil || binding.Callbacks == nil {
+		return
+	}
+	mf, pm := modelFlags, binding.PieceMap
+	binding.Callbacks.BindRenderFlags(
+		func() []uint8 {
+			flags := make([]uint8, len(pm))
+			for i, modelPiece := range pm {
+				if modelPiece >= 0 && modelPiece < len(mf) {
+					flags[i] = mf[modelPiece]
+				} else {
+					flags[i] = 0x06
+				}
+			}
+			return flags
+		},
+		func(piece int, mask uint8, set bool) bool {
+			if piece < 0 || piece >= len(pm) || (mask != 0x01 && mask != 0x02 && mask != 0x04) {
+				return false
+			}
+			modelPiece := pm[piece]
+			if modelPiece < 0 || modelPiece >= len(mf) {
+				return false
+			}
+			if set {
+				mf[modelPiece] |= mask
+			} else {
+				mf[modelPiece] &^= mask
+			}
+			return true
+		},
+	)
 }
 
 type creationCallbacks interface {
@@ -397,10 +322,11 @@ func initializeCreationCallbacks(u *Unit, bridge creationCallbacks, maxReload in
 	bridge.SetMaxReloadTime(maxReload)
 }
 
-// AttachCOBBinding attaches only a fully initialized strict production
-// binding. Create must already have run exactly once as a D+wake callback
-// before the unit receives a playable script [04 §4.1][R-CB-01 §2].
-func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
+// AttachCOBBindingPreCreate publishes the VM to its unit before Create runs,
+// so a synchronous engine port edge can start its callback through the same
+// bridge. The caller must finish the one Create attempt before publishing the
+// unit to other systems [04 R-CB-01 §4].
+func (u *Unit) AttachCOBBindingPreCreate(binding *cob.Binding) error {
 	if u == nil {
 		return fmt.Errorf("nanolathe: COB attachment: nil unit")
 	}
@@ -413,8 +339,8 @@ func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 	if binding.VM == nil {
 		return fmt.Errorf("nanolathe: COB attachment: binding has no VM")
 	}
-	if !binding.CreateInvoked || binding.Callbacks == nil || !binding.Callbacks.CreateInvoked() {
-		return fmt.Errorf("nanolathe: COB attachment: Create was not invoked exactly once")
+	if binding.Callbacks == nil {
+		return fmt.Errorf("nanolathe: COB attachment: binding has no callback bridge")
 	}
 	if u.GetScript() != nil {
 		return fmt.Errorf("nanolathe: COB attachment: unit already has a script")
@@ -426,6 +352,18 @@ func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
 	u.ScriptState = &ScriptState{VM: binding.VM, Binding: binding, Bridge: binding.Callbacks}
 	u.Script = binding.VM
 	return nil
+}
+
+// AttachCOBBinding retains the fully initialized attachment seam for callers
+// outside the creation barrier.
+func (u *Unit) AttachCOBBinding(binding *cob.Binding) error {
+	if binding == nil || binding.Program == nil || binding.Callbacks == nil {
+		return fmt.Errorf("nanolathe: COB attachment: missing binding program or callback bridge")
+	}
+	if _, authored := binding.Program.Scripts["Create"]; authored && (!binding.CreateInvoked || !binding.Callbacks.CreateInvoked()) {
+		return fmt.Errorf("nanolathe: COB attachment: Create was not invoked exactly once")
+	}
+	return u.AttachCOBBindingPreCreate(binding)
 }
 
 // NotifyExtractorFootprint starts the creation-time extractor `SetSpeed`

@@ -5,10 +5,15 @@ import (
 	"testing"
 )
 
-// trunc mirrors the runtime float64→int32 conversion (__ftol, I3); a plain
-// int32(...) of a constant expression is a compile-time error in Go when the
-// constant has a fraction.
-func trunc(f float64) int32 { return int32(f) }
+// inRangeTrunc supplies independently bounded expected values for ordinary
+// fixtures. Exceptional definition-parser conversion is covered by explicit
+// literal expectations below, never by this test helper.
+func inRangeTrunc(f float64) int32 {
+	if f < -2147483648.0 || f >= 2147483648.0 {
+		panic("test expected value is not a signed-32 integer")
+	}
+	return int32(f)
+}
 
 // TestWeaponConversions locks the conversion table of [02 "Weapon record"]:
 // each value is a single float expression truncated once after the multiply,
@@ -38,13 +43,13 @@ func TestWeaponConversions(t *testing.T) {
 	sec := doc.Root.Sections()[0]
 	wd := compileWeaponSection(sec, "BIGBERTHA", Provenance{})
 
-	if want := trunc(3.5 * 65536.0 / 30.0); wd.WeaponVelocity != want { // trunc(7645.86) = 7645
+	if want := inRangeTrunc(3.5 * (65536.0 / 30.0)); wd.WeaponVelocity != want { // trunc(7645.86) = 7645
 		t.Fatalf("weaponvelocity = %d, want %d", wd.WeaponVelocity, want)
 	}
-	if want := trunc(1.75 * 65536.0 / 30.0); wd.StartVelocity != want {
+	if want := inRangeTrunc(1.75 * (65536.0 / 30.0)); wd.StartVelocity != want {
 		t.Fatalf("startvelocity = %d, want %d", wd.StartVelocity, want)
 	}
-	if want := trunc(0.15 * 65536.0 / 900.0); wd.WeaponAcceleration != want {
+	if want := inRangeTrunc(0.15 * (65536.0 / 900.0)); wd.WeaponAcceleration != want {
 		t.Fatalf("weaponacceleration = %d, want %d", wd.WeaponAcceleration, want)
 	}
 	if wd.ReloadTime != 0 { // 0.02*30 = 0.6 -> 0 [02 "Weapon record"]
@@ -80,6 +85,27 @@ func TestWeaponConversions(t *testing.T) {
 	wd2 := compileWeaponSection(doc2.Root.Sections()[0], "PLAIN", Provenance{})
 	if wd2.DamageDefault != 0 || wd2.Damage != nil {
 		t.Fatalf("no-DAMAGE weapon: default=%d map=%v, want 0/nil", wd2.DamageDefault, wd2.Damage)
+	}
+}
+
+func TestWeaponDefinitionNarrowingRetainsLowWords(t *testing.T) {
+	doc := mustParseTDF(t, `[edge]
+{
+ID=1;
+weaponvelocity=1966080;
+duration=143165577;
+reloadtime=143165577;
+}
+`)
+	weapon := compileWeaponSection(doc.Root.Sections()[0], "edge", Provenance{})
+	if weapon.WeaponVelocity != 0 {
+		t.Fatalf("weaponvelocity = %d, want 0 after signed-64 low-word store", weapon.WeaponVelocity)
+	}
+	if weapon.Duration != 14 {
+		t.Fatalf("duration = %d, want 14 after low32 then uint16 store", weapon.Duration)
+	}
+	if weapon.ReloadTime != 14 {
+		t.Fatalf("reloadtime = %d, want 14 after low32 then int16 store", weapon.ReloadTime)
 	}
 }
 
@@ -142,8 +168,8 @@ func TestWeaponSameIDWholeRecordReplacement(t *testing.T) {
 	if merged.DamageDefault != 0 || merged.Damage != nil {
 		t.Fatalf("omitted DAMAGE survived the replacement as %d/%v, want 0/nil", merged.DamageDefault, merged.Damage)
 	}
-	if merged.WeaponVelocity != trunc(2.5*65536.0/30.0) {
-		t.Fatalf("weaponvelocity = %d, want the later section's %d", merged.WeaponVelocity, trunc(2.5*65536.0/30.0))
+	if merged.WeaponVelocity != inRangeTrunc(2.5*(65536.0/30.0)) {
+		t.Fatalf("weaponvelocity = %d, want the later section's %d", merged.WeaponVelocity, inRangeTrunc(2.5*(65536.0/30.0)))
 	}
 	// Exactly one record occupies the slot.
 	byID, ok := WeaponByID(weapons, 36)
@@ -252,7 +278,7 @@ func TestWeaponDuplicateDiscoveryOrderFieldOverwrite(t *testing.T) {
 	if beta.Range != 200 {
 		t.Fatalf("range=%d want 200 (later section's value)", beta.Range)
 	}
-	if want := trunc(2.0 * 65536.0 / 30.0); beta.WeaponVelocity != want {
+	if want := inRangeTrunc(2.0 * (65536.0 / 30.0)); beta.WeaponVelocity != want {
 		t.Fatalf("weaponvelocity=%d want %d (later section's value)", beta.WeaponVelocity, want)
 	}
 	if byID, ok := WeaponByID(weapons, 42); !ok || byID != beta {

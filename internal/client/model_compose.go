@@ -169,7 +169,7 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, owner uint8
 						// across every feature. Suppressed, not shared.
 						continue
 					}
-					texFrame = c.modelAnimatedFrameAt(ref, kind, id, pi, pri)
+					texFrame = c.modelAnimatedFrameAt(ref, kind, id, piece.SourceIndex, pri)
 				case texTeam:
 					if ref.entry == nil {
 						continue
@@ -202,7 +202,7 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, owner uint8
 			poly := newScreenPoly(n)
 			poly.color, poly.frame = color, texFrame
 			poly.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
-			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(polys)), pi, pri, pr.TextureName
+			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(polys)), piece.SourceIndex, pri, pr.TextureName
 			if texFrame != nil && c.rendererTraceSink != nil {
 				poly.frameState = RendererValueAvailable
 				if ref.kind == texStatic {

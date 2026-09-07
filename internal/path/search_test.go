@@ -617,6 +617,39 @@ func TestEndToEndSmallGrid(t *testing.T) {
 	}
 }
 
+func TestEqualCostDetourPinsRouteAndPopCharge(t *testing.T) {
+	// The center wall leaves north and south detours with the same ordinary
+	// costs. Their selected route and charged expansions therefore expose the
+	// heap's equal-key transaction [04 R-PATH-01 §1].
+	cfg := SearchConfig{
+		Start:     Cell{0, 0},
+		StartDir:  DirE,
+		Goal:      PointGoal(Cell{2, 0}, 0),
+		Scale:     65536,
+		HasBounds: true,
+		Bounds:    Rect{Min: Cell{-1, -1}, Max: Cell{3, 1}},
+		PassableValue: func(c Cell) uint8 {
+			if c == (Cell{1, 0}) {
+				return 0
+			}
+			return 3
+		},
+	}
+	result := Search(cfg)
+	want := []Point{{0, 0}, {16, 16}, {32, 0}}
+	if len(result.Points) != len(want) {
+		t.Fatalf("equal-cost route length = %d, want %d: %v", len(result.Points), len(want), result.Points)
+	}
+	for i := range want {
+		if result.Points[i] != want[i] {
+			t.Fatalf("equal-cost route[%d] = %v, want %v", i, result.Points[i], want[i])
+		}
+	}
+	if result.Popped != 11 {
+		t.Fatalf("equal-cost search charged %d pops, want 11", result.Popped)
+	}
+}
+
 // TestHeuristicWriteOnce verifies C7 h evaluated once per node [04 §7.2] C7 via NodeStore.
 func TestSearchHeuristicWriteOnce(t *testing.T) {
 	ns := NewNodeStore(65536)

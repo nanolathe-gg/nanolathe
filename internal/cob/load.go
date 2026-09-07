@@ -16,6 +16,25 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+// MaxProgramStaticBytes is Nanolathe's host-safety limit for one VM's static
+// storage. It is not a recovered retail limit: COB has no file-backed static
+// data with which to bound its declared count [fmt cob "Header"].
+const MaxProgramStaticBytes = 4 << 20
+
+// ValidateProgram rejects an externally supplied program whose static count
+// cannot be represented within the supported per-VM memory budget. It is
+// called before every mutable VM allocation, including restore [02 R-MALF-01
+// §8].
+func ValidateProgram(prog *Program) error {
+	if prog == nil {
+		return nil
+	}
+	if prog.Statics < 0 || uint64(prog.Statics) > uint64(MaxProgramStaticBytes/4) {
+		return fmt.Errorf("cob: static storage %d words exceeds supported %d-byte VM budget", prog.Statics, MaxProgramStaticBytes)
+	}
+	return nil
+}
+
 // Program is an immutable compiled script definition [PLAN_06 cob] [fmt cob].
 // Code is the opcode word array. Scripts maps script name to word index into
 // Code (word index relative to start of code section, not byte offset).
@@ -94,6 +113,9 @@ func Load(data []byte) (*Program, error) {
 	// Guard against overflow of count*4.
 	if numScripts > 1<<28 || numPieces > 1<<28 || codeLen > 1<<28 {
 		return nil, fmt.Errorf("cob: implausibly large counts scripts=%d pieces=%d codeLen=%d", numScripts, numPieces, codeLen)
+	}
+	if uint64(numStatics) > uint64(MaxProgramStaticBytes/4) {
+		return nil, fmt.Errorf("cob: static storage %d words exceeds supported %d-byte VM budget", numStatics, MaxProgramStaticBytes)
 	}
 	fileLen := uint32(len(data))
 
@@ -265,14 +287,18 @@ func Load(data []byte) (*Program, error) {
 		byID[i] = int(v)
 	}
 
-	return &Program{
+	prog := &Program{
 		Code:           code,
 		Scripts:        scripts,
 		Pieces:         pieces,
 		Statics:        int(numStatics),
 		ScriptsByID:    byID,
 		SourceChecksum: sourceChecksum,
-	}, nil
+	}
+	if err := ValidateProgram(prog); err != nil {
+		return nil, err
+	}
+	return prog, nil
 }
 
 // LoadFromFS loads a compiled script for unitName via VFS [fmt cob] [04 §4.1].

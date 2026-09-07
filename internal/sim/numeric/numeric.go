@@ -1,5 +1,7 @@
 package numeric
 
+import "math"
+
 const (
 	// FractionBits is the fixed-point scale: world coordinates are 16.16, so
 	// one map pixel is 65,536 world units [03 §2.1].
@@ -10,6 +12,17 @@ const (
 	// [04 §5.1].
 	AngleUnitsTurn = 1 << 16
 )
+
+// TruncateFloat64ToLow32 reproduces the definition parsers' floating-point
+// store: truncate a finite value to signed 64 bits, then retain its low word.
+// Values outside the signed-64 range and non-finite values produce the x87
+// indefinite integer's zero low word [01 R-DET-01 §1].
+func TruncateFloat64ToLow32(value float64) int32 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < -0x1p63 || value >= 0x1p63 {
+		return 0
+	}
+	return int32(uint32(int64(value)))
+}
 
 // Fixed is signed 16.16 fixed point, backed by int64.
 type Fixed int64

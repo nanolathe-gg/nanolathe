@@ -56,14 +56,40 @@ type GAFFrame struct {
 	Pixels      []byte
 	Transparent []bool
 	Subframes   []*GAFFrame
+	// compositeDepth is the maximum number of subframe links below this frame.
+	// It keeps the host composition-depth budget valid when a shared frame is
+	// returned from the decode cache.
+	compositeDepth uint32
 }
 
 const maxGAFFramePixels = 16 << 20
 
+// GAFLimits bounds aggregate host allocation while decoding an animation bank.
+// They are implementation safety limits, not retail file-format behavior.
+type GAFLimits struct {
+	MaxFrameRefs      uint64
+	MaxDecodedPixels  uint64
+	MaxCompositeDepth uint32
+}
+
+// DefaultGAFLimits returns the host-safety budget for one decoded bank.
+func DefaultGAFLimits() GAFLimits {
+	return GAFLimits{MaxFrameRefs: 1 << 20, MaxDecodedPixels: 128 << 20, MaxCompositeDepth: 64}
+}
+
 // LoadGAF decodes an animation bank from its bytes [fmt gaf].
 func LoadGAF(data []byte) (*GAF, error) {
+	return LoadGAFWithLimits(data, DefaultGAFLimits())
+}
+
+// LoadGAFWithLimits decodes an animation bank under explicit host-safety
+// budgets [fmt gaf].
+func LoadGAFWithLimits(data []byte, limits GAFLimits) (*GAF, error) {
 	if len(data) < 12 {
 		return nil, fmt.Errorf("gaf: file is too small")
+	}
+	if limits.MaxFrameRefs == 0 || limits.MaxDecodedPixels == 0 || limits.MaxCompositeDepth == 0 {
+		return nil, fmt.Errorf("gaf: invalid decode limits")
 	}
 	gaf := &GAF{
 		Version:    binary.LittleEndian.Uint32(data[0:4]),
@@ -82,10 +108,17 @@ func LoadGAF(data []byte) (*GAF, error) {
 	// malformed high bits must not turn into an unbounded allocation.
 	gaf.Entries = make([]GAFEntry, 0, int(count))
 	frameCache := make(map[uint32]*GAFFrame)
+	entryCache := make(map[uint32]GAFEntry)
+	budget := gafDecodeBudget{limits: limits}
 	for i := uint64(0); i < count; i++ {
 		offset := uint64(binary.LittleEndian.Uint32(data[12+i*4 : 16+i*4]))
 		if offset > uint64(len(data)) || uint64(len(data))-offset < 40 {
 			return nil, fmt.Errorf("gaf: entry %d points outside file", i)
+		}
+		if cached, ok := entryCache[uint32(offset)]; ok {
+			gaf.byName[strings.ToLower(cached.Name)] = len(gaf.Entries)
+			gaf.Entries = append(gaf.Entries, cached)
+			continue
 		}
 		header := data[offset : offset+40]
 		frameCount := binary.LittleEndian.Uint16(header[0:2])
@@ -105,17 +138,21 @@ func LoadGAF(data []byte) (*GAF, error) {
 		if refsStart > uint64(len(data)) || refBytes > uint64(len(data))-refsStart {
 			return nil, fmt.Errorf("gaf: entry %q frame table is truncated", entry.Name)
 		}
+		if err := budget.addRefs(uint64(frameCount)); err != nil {
+			return nil, fmt.Errorf("gaf: entry %q: %w", entry.Name, err)
+		}
 		entry.Frames = make([]GAFFrameRef, frameCount)
 		for frame := range entry.Frames {
 			ref := data[refsStart+uint64(frame)*8 : refsStart+uint64(frame+1)*8]
 			entry.Frames[frame].Offset = binary.LittleEndian.Uint32(ref[0:4])
 			entry.Frames[frame].Value = binary.LittleEndian.Uint32(ref[4:8])
-			decoded, err := decodeGAFFrame(data, entry.Frames[frame].Offset, frameCache, make(map[uint32]bool))
+			decoded, err := decodeGAFFrame(data, entry.Frames[frame].Offset, frameCache, make(map[uint32]bool), &budget, 0)
 			if err != nil {
 				return nil, fmt.Errorf("gaf: entry %q frame %d: %w", entry.Name, frame, err)
 			}
 			entry.Frames[frame].Frame = decoded
 		}
+		entryCache[uint32(offset)] = entry
 		// Names are case-insensitive. Preserve the authored table's existing
 		// last-assignment behavior for duplicate names; duplicate-name handling
 		// is outside the established retail contract.
@@ -156,11 +193,38 @@ func (f *GAFFrame) At(x, y int) (byte, bool) {
 	return f.Pixels[index], !f.Transparent[index]
 }
 
-func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stack map[uint32]bool) (*GAFFrame, error) {
+type gafDecodeBudget struct {
+	limits       GAFLimits
+	refs, pixels uint64
+}
+
+func (b *gafDecodeBudget) addRefs(n uint64) error {
+	if n > b.limits.MaxFrameRefs-b.refs {
+		return fmt.Errorf("aggregate frame references exceed limit")
+	}
+	b.refs += n
+	return nil
+}
+
+func (b *gafDecodeBudget) addPixels(n uint64) error {
+	if n > b.limits.MaxDecodedPixels-b.pixels {
+		return fmt.Errorf("aggregate decoded pixels exceed limit")
+	}
+	b.pixels += n
+	return nil
+}
+
+func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stack map[uint32]bool, budget *gafDecodeBudget, depth uint32) (*GAFFrame, error) {
 	if stack[offset] {
 		return nil, fmt.Errorf("frame cycle at 0x%x", offset)
 	}
+	if depth > budget.limits.MaxCompositeDepth {
+		return nil, fmt.Errorf("composite depth exceeds limit")
+	}
 	if frame, ok := cache[offset]; ok {
+		if frame.compositeDepth > budget.limits.MaxCompositeDepth-depth {
+			return nil, fmt.Errorf("composite depth exceeds limit")
+		}
 		return frame, nil
 	}
 	if uint64(offset) > uint64(len(data)) || uint64(len(data))-uint64(offset) < 24 {
@@ -177,6 +241,9 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 	pixelCount := uint64(width) * uint64(height)
 	if pixelCount > uint64(math.MaxInt) || pixelCount > maxGAFFramePixels {
 		return nil, fmt.Errorf("frame 0x%x is too large", offset)
+	}
+	if err := budget.addPixels(pixelCount); err != nil {
+		return nil, fmt.Errorf("frame 0x%x: %w", offset, err)
 	}
 	frame := &GAFFrame{
 		Width: width, Height: height,
@@ -203,6 +270,9 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		if dataStart > uint64(len(data)) || bytesNeeded > uint64(len(data))-dataStart {
 			return nil, fmt.Errorf("frame 0x%x subframe table is truncated", offset)
 		}
+		if err := budget.addRefs(uint64(subCount)); err != nil {
+			return nil, fmt.Errorf("frame 0x%x: %w", offset, err)
+		}
 		// A composite frame only owns the pixels its subframes cover. Everything
 		// else stays transparent instead of decoding to an opaque index zero.
 		for i := range frame.Transparent {
@@ -211,11 +281,14 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		frame.Subframes = make([]*GAFFrame, subCount)
 		for i := range frame.Subframes {
 			subOffset := binary.LittleEndian.Uint32(data[dataStart+uint64(i)*4 : dataStart+uint64(i+1)*4])
-			subframe, err := decodeGAFFrame(data, subOffset, cache, stack)
+			subframe, err := decodeGAFFrame(data, subOffset, cache, stack, budget, depth+1)
 			if err != nil {
 				return nil, err
 			}
 			frame.Subframes[i] = subframe
+			if subframe.compositeDepth == math.MaxUint32 || subframe.compositeDepth+1 > frame.compositeDepth {
+				frame.compositeDepth = subframe.compositeDepth + 1
+			}
 			// XOffset/YOffset are anchor distances: a frame's top-left corner
 			// sits that many pixels before its anchor point. A subframe shares
 			// the parent anchor, so its position inside the parent is the
@@ -243,6 +316,9 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 					frame.Transparent[index] = false
 				}
 			}
+		}
+		if frame.compositeDepth > budget.limits.MaxCompositeDepth-depth {
+			return nil, fmt.Errorf("composite depth exceeds limit")
 		}
 		cache[offset] = frame
 		return frame, nil

@@ -10,6 +10,13 @@ import (
 // snapshot and the already-resolved cause-3 alliance gate; no live-world scan
 // is performed [06 §12.1][08 R-CAMP-01 §7].
 func (s *Session) RecordDeathStatistics(in combat.DeathCreditInput) {
+	s.recordDeathStatistics(in, nil)
+}
+
+// recordDeathStatistics applies one death's player and unit accounting. The
+// finalizer supplies the raw attacker record named by the damage-time packet;
+// direct accounting callers intentionally have no such record to update.
+func (s *Session) recordDeathStatistics(in combat.DeathCreditInput, attacker *units.Unit) {
 	if s == nil || s.Econ == nil {
 		return
 	}
@@ -29,6 +36,13 @@ func (s *Session) RecordDeathStatistics(in combat.DeathCreditInput) {
 			s.Econ.Players[in.AttackerSide].RecordCommanderKill()
 		}
 		credited = true
+	}
+	if credit.AttackerKill && attacker != nil {
+		// The record is reconstructed from the packet slot without live or
+		// generation validation. Its low sixteen bits are the wrapping unit
+		// kill word; an empty slot keeps its old record until reuse replaces it
+		// [06 §12.1][06 R-DMG-01 §2][P0-16].
+		attacker.Kills = int32(uint16(attacker.Kills) + 1)
 	}
 	// The leader announcement is the handler's next step after the credit
 	// switch, inside the same slot visit [06 §12.1]. It runs "after a crediting
@@ -131,7 +145,7 @@ func (s *Session) recordFinalizedDeathStatistics(cause units.DeathCause, u *unit
 		// gate; a zero byte admits the victim loss [06 §12.1].
 		cause3LossEligible = !s.Econ.Players[s.LocalOwner].Allies[u.Owner]
 	}
-	s.RecordDeathStatistics(combat.DeathCreditInput{
+	in := combat.DeathCreditInput{
 		Cause:              c,
 		VictimOwner:        u.Owner,
 		AttackerSide:       u.LastDamageSide,
@@ -139,6 +153,11 @@ func (s *Session) recordFinalizedDeathStatistics(cause units.DeathCause, u *unit
 		VictimCommander:    s.isCommanderForOwner(u),
 		RemainingFraction:  u.Remaining,
 		Cause3LossEligible: cause3LossEligible,
-	})
+	}
+	var attacker *units.Unit
+	if s.Units != nil {
+		attacker = s.Units.RawUnitRecord(u.EngagementTarget)
+	}
+	s.recordDeathStatistics(in, attacker)
 	_ = cause // retained for the callback's lifecycle signature
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -150,9 +151,9 @@ func compileFeatureSection(section *formats.Section, featureName string, prov Pr
 	animtrans := section.IntValue("animtrans", 0)
 	shadtrans := section.IntValue("shadtrans", 0)
 
-	// sparktime floating default 0.0 *30 truncated [02 "Feature record"].
+	// sparktime is the signed 16-bit seconds-to-ticks store [05 R-FEAT-01 §1].
 	sparktimeFloat := section.FloatValue("sparktime", 0)
-	sparktime := int32(sparktimeFloat * 30)
+	sparktime := int32(int16(numeric.TruncateFloat64ToLow32(sparktimeFloat * 30)))
 
 	// Retired (WU-19-143): this used to probe `resurrectspread` then
 	// `jitterspread` as a guess ladder for "the retail FBI/TDF key spelling

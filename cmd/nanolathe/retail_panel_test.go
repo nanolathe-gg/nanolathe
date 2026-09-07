@@ -80,7 +80,7 @@ func TestShowRetailMessageReportsMissingWindow(t *testing.T) {
 // fixedWidthFont is a synthetic FNT: every printable byte advances one pixel,
 // so a measured width is the character count. Fixtures are authored here, never
 // copied from retail.
-func fixedWidthFont(height uint16) *formats.FNT {
+func fixedWidthFont(height uint8) *formats.FNT {
 	fnt := &formats.FNT{Height: height}
 	for i := 0x20; i < 0x7f; i++ {
 		fnt.Glyphs[i] = &formats.FNTGlyph{Width: 1, Height: height}

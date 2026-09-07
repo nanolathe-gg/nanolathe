@@ -19,6 +19,9 @@ func RetailScriptRestore(v *VM, image []byte) error {
 		return fmt.Errorf("cob: retail script restore: nil VM or program")
 	}
 	prog := v.Program()
+	if err := ValidateProgram(prog); err != nil {
+		return fmt.Errorf("cob: retail script restore: %w", err)
+	}
 	want := ScriptSnapshotSize + prog.Statics*4 + len(prog.Pieces)*ScriptPieceSize
 	if len(image) != want {
 		return fmt.Errorf("cob: retail script restore: image size %d, want %d", len(image), want)

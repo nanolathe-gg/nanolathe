@@ -1991,6 +1991,9 @@ because the wrap is observable:
   `reloadtime`, `weapontimer`, `turnrate`, `burstrate`, `duration`,
   `randomdecay`, `smokedelay`, `flighttime`, `holdtime` and their companions
   are **16-bit** ([06 R-WFX-01 §1], [06 R-DMG-01 §1]);
+  The velocity and acceleration readers multiply once by their stored binary64
+  scale constants `65536/30` and `65536/900`, respectively; multiplying by
+  65536 and then dividing is not the same floating-point operation order.
 - FBI: one key ([05 R-PROD-01 §1]);
 - feature TDF: `sparktime × 30`, **16-bit** ([05 R-FEAT-01 §1]);
 - the catalog `Version` pair, `int(v)` and `int((v − int(v)) · 10)`

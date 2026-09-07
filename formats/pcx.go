@@ -22,7 +22,7 @@ const maxPCXPixels = 16 << 20
 
 // LoadPCX decodes a PCX image from its bytes [fmt pcx].
 func LoadPCX(data []byte) (*PCX, error) {
-	if len(data) < 128+769 {
+	if len(data) < 128+768 {
 		return nil, fmt.Errorf("pcx: file is too small")
 	}
 	// Retail validates ONLY the manufacturer byte and the version byte;
@@ -44,25 +44,22 @@ func LoadPCX(data []byte) (*PCX, error) {
 	if width > 65535 || height > 65535 {
 		return nil, fmt.Errorf("pcx: image dimensions exceed loader limits")
 	}
-	stride := uint64(binary.LittleEndian.Uint16(data[66:68]))
-	if stride < width || stride == 0 {
-		return nil, fmt.Errorf("pcx: invalid scanline stride")
-	}
+	stride := binary.LittleEndian.Uint16(data[66:68])
 	if width*height > uint64(^uint(0)>>1) || width*height > maxPCXPixels {
 		return nil, fmt.Errorf("pcx: image is too large")
 	}
-	// The palette is read by seeking to file size minus 768, without any check
-	// of the marker byte the format defines [02 §7 "PCX"].
-	trailer := len(data) - 769
-	pcx := &PCX{Width: uint16(width), Height: uint16(height), XMin: xMin, YMin: yMin, XMax: xMax, YMax: yMax, BytesPerLine: uint16(stride), Pixels: make([]byte, int(width*height))}
+	// The palette is read from the final 768 bytes, without any marker-byte
+	// check [02 R-MALF-01 §9].
+	trailer := len(data) - 768
+	pcx := &PCX{Width: uint16(width), Height: uint16(height), XMin: xMin, YMin: yMin, XMax: xMax, YMax: yMax, BytesPerLine: stride, Pixels: make([]byte, int(width*height))}
 	for i := 0; i < 256; i++ {
-		base := trailer + 1 + i*3
+		base := trailer + i*3
 		pcx.Palette[i] = color.RGBA{R: data[base], G: data[base+1], B: data[base+2], A: 255}
 	}
 	position := 128
 	for row := 0; row < int(height); row++ {
 		decoded := 0
-		for decoded < int(stride) {
+		for decoded < int(width) {
 			if position >= trailer {
 				return nil, fmt.Errorf("pcx: scanline data is truncated")
 			}
@@ -77,16 +74,14 @@ func LoadPCX(data []byte) (*PCX, error) {
 				value = data[position]
 				position++
 			}
-			// Every run is clamped to the remaining scanline width and the
+			// Every run is clamped to the remaining visible width and the
 			// excess discarded, so malformed files cannot overflow a scanline
 			// [02 §7 "PCX"]. Retail does not fail here.
-			if decoded+run > int(stride) {
-				run = int(stride) - decoded
+			if decoded+run > int(width) {
+				run = int(width) - decoded
 			}
 			for i := 0; i < run; i++ {
-				if decoded+i < int(width) {
-					pcx.Pixels[row*int(width)+decoded+i] = value
-				}
+				pcx.Pixels[row*int(width)+decoded+i] = value
 			}
 			decoded += run
 		}

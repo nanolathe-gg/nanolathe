@@ -127,7 +127,7 @@ func TestRetailResourceConsumptionUsesAuthoredPanelMinus(t *testing.T) {
 
 			// Restrict comparison to the authored text rectangle. Other resource
 			// fields are intentionally outside this focused assertion.
-			desc := int(int8(h.console.Unknown & 0xff))
+			desc := int(h.console.Baseline)
 			r := image.Rect(int(anchor.X1), int(anchor.Y1)-desc, int(anchor.X1)+client.MeasureText(h.console, tc.text), int(anchor.Y1)-desc+int(h.console.Height))
 			r = r.Intersect(image.Rect(0, 0, 640, 480))
 			if r.Empty() {

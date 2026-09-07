@@ -12,10 +12,10 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
-// TestBindCOBForUnitRunsCreateOnceBeforeAttach checks the production unit
-// binding path: instance ports are installed, D+wake Create runs once, and
-// only then can the binding be attached to a playable unit [04 §5.1].
-func TestBindCOBForUnitRunsCreateOnceBeforeAttach(t *testing.T) {
+// TestBindCOBForUnitRunsCreateOnceWithAttachedContext checks the production
+// binding path: the complete instance context is attached before D+wake Create
+// runs, so its port edges can reach the callback bridge [04 R-CB-01 §4].
+func TestBindCOBForUnitRunsCreateOnceWithAttachedContext(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
 		t.Fatal(err)
@@ -41,9 +41,6 @@ func TestBindCOBForUnitRunsCreateOnceBeforeAttach(t *testing.T) {
 	}
 	if binding.VM.DrainCalls != 1 {
 		t.Fatalf("D+wake Create used %d VM drains, want one delta-zero barrier", binding.VM.DrainCalls)
-	}
-	if err := u.AttachCOBBinding(binding); err != nil {
-		t.Fatalf("AttachCOBBinding: %v", err)
 	}
 	if u.COBBinding() != binding || u.GetScript() != binding.VM {
 		t.Fatal("unit did not retain the initialized strict binding")

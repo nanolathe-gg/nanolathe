@@ -282,7 +282,8 @@ type UnitDef struct {
 	// unreadable, malformed, nil, or empty program [04 R-COB-04 §8]. Deliberately
 	// absent from writeUnitCanonical: the hash is the FBI record's identity, and
 	// this value comes from a different asset with its own provenance.
-	Script *cob.Program
+	Script           *cob.Program
+	ScriptProvenance vfs.Provenance
 
 	// Unknown retains inert parsed keys so a later phase can consume without re-parsing [02 §5] C14.
 	// Keys are OriginalKey preserved case; e.g., wacky, noautofire, ovradjust, steeringmode, TEDClass etc have no behavior.

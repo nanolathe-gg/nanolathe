@@ -230,15 +230,16 @@ func compileMapHeader(otaLogical, tntLogical string, otaProv, tntProv Provenance
 // tntHeaderLite is a lightweight TNT header preview [fmt tnt]. Headers only in this
 // phase — tile graphics and feature table are not retained [PLAN 02].
 type tntHeaderLite struct {
-	Version       uint32
-	Width         uint32
-	Height        uint32
-	SeaLevel      uint32
-	Tiles         uint32
-	TileAnims     uint32
-	Unknown1      uint32
-	MinimapWidth  uint32
-	MinimapHeight uint32
+	Version        uint32
+	Width          uint32
+	Height         uint32
+	SeaLevel       uint32
+	Tiles          uint32
+	TileAnims      uint32
+	Unknown1       uint32
+	MiniMapPresent bool
+	MinimapWidth   uint32
+	MinimapHeight  uint32
 }
 
 // loadTNTHeaderLite parses a TNT header without retaining tile graphics [fmt tnt].
@@ -288,17 +289,22 @@ func loadTNTHeaderLite(fs vfs.FSOps, logical string) (tntHeaderLite, error) {
 		TileAnims: u32(0x1c),
 		Unknown1:  u32(0x2c),
 	}
-	// The minimap offset is version-dependent: slot 10 on canonical files, slot
+	// The minimap offset and flag are version-dependent: slot 10 on canonical files, slot
 	// 14 on legacy ones, where slot 10 is the minimum wind speed instead
 	// [03 §2.2], [02 "Terrain file"]. Reading slot 10 unconditionally seeks into
 	// the middle of a legacy file.
 	ptrMini := u32(0x28)
+	miniMapPresent := u32(0x2c)&1 != 0
 	if h.Version == versionLegacyTNT {
 		ptrMini = u32(0x38)
+		miniMapPresent = u32(0x3c)&1 != 0
 	}
-	if mini, err := read(int64(ptrMini), 8); err == nil && len(mini) == 8 {
-		h.MinimapWidth = binary.LittleEndian.Uint32(mini)
-		h.MinimapHeight = binary.LittleEndian.Uint32(mini[4:])
+	h.MiniMapPresent = miniMapPresent
+	if h.MiniMapPresent {
+		if mini, err := read(int64(ptrMini), 8); err == nil && len(mini) == 8 {
+			h.MinimapWidth = binary.LittleEndian.Uint32(mini)
+			h.MinimapHeight = binary.LittleEndian.Uint32(mini[4:])
+		}
 	}
 	return h, nil
 }

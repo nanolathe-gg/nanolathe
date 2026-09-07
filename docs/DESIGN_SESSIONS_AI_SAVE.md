@@ -614,9 +614,10 @@ empty and each subsystem's defaults govern `[08 "File naming and write
 policy"]` `[08 "Load process"]`.
 
 **C15 — the 28-byte scheduler box and the deadlines.** The scheduler image and
-the per-player settlement deadlines round-trip as absolute ticks and are never
-re-seeded on load. Neither random stream is saved, and no Nanolathe-authored
-continuation format exists `[08 "Scheduler and random state in saves"]`
+the per-player settlement deadlines round-trip as absolute ticks. Neither
+random stream is saved; the load entry creates fresh stream seeds before the
+restore dispatcher, while the saved deadlines retain their absolute phase
+`[08 "Scheduler and random state in saves"]` `[08 R-SAVE-02 §11]`
 `[05 "Saving economy, construction, and features"]`.
 
 **C16 — the alliance row.** Eleven bytes, emitted inside the slot's own
@@ -782,12 +783,14 @@ and recognized by the boundary conditions `[08 "Victory and defeat triggers"]`.
 in the builder's probe order `[08 "Victory trigger types"]`
 `[08 "Defeat trigger types"]`.
 
-**C16 — defaults are owned records.** With no authored victory condition the
-trigger builder appends destroy-all-units to the mission's victory queue; with
-no defeat condition it appends all-units-killed to its defeat queue. The
-records therefore retain Satisfied/Celebrated state and enter save/load like
-authored records; a true destroy-all-units predicate emits `Victory Condition`
-only once for that record `[08 "Default triggers"]` `[08 R-TRIG-01 §8]`.
+**C16 — defaults are owned trigger records.** With no authored victory
+condition the builder appends destroy-all-units to the mission's victory queue;
+with no defeat condition it appends all-units-killed to its defeat queue. The
+poll-time empty-queue guard installs the same owned record, preserving
+Satisfied/Celebrated state across later polls and save/load like authored
+records; a true destroy-all-units predicate emits `Victory Condition` only
+once for that record `[08 "Default triggers"]` `[08 R-TRIG-01 §6]`
+`[08 R-TRIG-01 §8]`.
 
 **C17 — evaluators are pure polls.** A poll mutates only its own completed
 flag. The counted kill condition decrements a countdown and completes at zero
@@ -1039,10 +1042,9 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
   only the parsing half of that leniency (§2.5, "the retail bank") — applying
   a parsed image to a live session is a separate, transactional commit
   boundary (§2.1, "Save projection and restore"), not the same pass.
-* **Random state is not saved.** A restored battle continues from a stream that
-  was seeded at the original battle entry and has advanced since; nothing
-  re-seeds it on load `[08 "Scheduler and random state in saves"]`
-  `[01 R-PLAT-01 §7]`.
+* **Random state is not saved.** Load entry creates fresh seeds before the
+  restore dispatcher; save accounts do not overwrite either stream
+  `[08 "Scheduler and random state in saves"]` `[08 R-SAVE-02 §11]`.
 
 ## 5. Divergences
 

@@ -201,6 +201,10 @@ func (w *World) FinalizeDeath(handle pool.Handle, tick uint32) DeathResult {
 	player := int(u.Owner)
 	u.Flags &^= ClassifierEligibleStatus
 	u.Alive = false
+	// The host keeps only packet-visible slot fields after finalization; this
+	// releases the per-unit payload while leaving stale death reconstruction
+	// able to reach its owner and kill word [P0-16][06 §12.1].
+	w.rawUnits[idx] = retainedRawRecord(u)
 	w.units[idx] = nil
 	w.pool.Free(handle)
 	if player >= 0 && player < 10 && w.liveCounters[player] > 0 {

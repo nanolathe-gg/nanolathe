@@ -172,15 +172,18 @@ type ProjectileView struct {
 	Model          string
 	Yaw            uint16 // retail's yaw word, (-sin a, -cos a) names the direction [06 R-WPN-05 §11]
 	Pitch          uint16
-	// Roll is the first word of the model-projectile orientation block.  It is
-	// separate from yaw and pitch because meteors maintain it independently
-	// from their other orientation accumulator [06 §6.5][03 §5.2].
+	// Roll is the first word of the model-projectile orientation block. It is
+	// independent from the propeller child's substituted spin word [03 §5.2].
 	Roll uint16
+	// PropellerRoll is the separately maintained child-roll substitute, used
+	// only when Propeller is authored [06 §6.1][06 R-WFX-01 §4].
+	PropellerRoll uint16
 	// MeteorPitch is the meteor family's independently maintained pitch word;
 	// ordinary projectile pitch continues to use Pitch [06 §6.5].
 	MeteorPitch uint16
+	Meteor      bool
 	// Propeller identifies the authored child-roll substitution.  The renderer
-	// uses Roll for that child only while the expiry deadline is ahead [06 §6.1]
+	// uses PropellerRoll for that child only while the expiry deadline is ahead [06 §6.1]
 	// [06 R-WFX-01 §4].
 	Propeller                 bool
 	Flags                     uint32

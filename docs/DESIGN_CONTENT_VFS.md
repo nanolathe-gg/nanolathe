@@ -553,9 +553,13 @@ Three smaller departures live only here, all recorded under [I11]:
   unexercised, and archive-internal indexing keeps retail's rule (C7).
 * **Bounds.** Directory offsets must be in range, decompressed size is capped,
   directory cycles are detected, and each format reader carries explicit
-  limits. These reject malformed input retail would crash on — the sanctioned
-  exception to [I11]. They must not reject anything in a stock install, which
-  the whole-install format walk is there to prove.
+  limits. Format limits include aggregate decoded storage and reference/index
+  budgets, so repeated file pointers cannot multiply host allocations; traversal
+  depth is bounded and long sibling lists use iteration. These are Nanolathe
+  host-safety policy, not recovered retail limits. They reject malformed input
+  retail would crash on — the sanctioned exception to [I11] — and must not
+  reject anything in a stock install, which the whole-install format walk is
+  there to prove.
 * **Leniency that keeps odd-but-loadable mod data working.** An assignment
   followed by a newline without its terminator parses instead of raising the
   second diagnostic; a unit file with no `[UNITINFO]` falls back to its first

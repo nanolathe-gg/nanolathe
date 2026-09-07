@@ -68,7 +68,10 @@ above or is presentation-only.
 ## I3 — Truncation toward zero
 
 **Rule.** Narrowing follows retail's `__ftol`: truncate toward zero, never round,
-never floor. Go's `int32(f)` is correct; `math.Floor` and `math.Round` are not.
+never floor. Definition parsers first retain the low 32 bits of a signed-64
+truncation; use `numeric.TruncateFloat64ToLow32`, not a direct `int32(f)`.
+Finite values in the signed-64 range wrap through the retained word; non-finite
+or out-of-range values retain zero [01 R-DET-01 §1].
 
 Cell/tile math on possibly-negative world coordinates is the opposite case: it
 needs **floor** division, because retail uses an arithmetic shift with a sign
@@ -94,7 +97,8 @@ A* heuristic scale as a full signed 64-bit product arithmetically shifted, and
 
 | Operation | Rule | Helper |
 |---|---|---|
-| float → integer | truncate toward zero (`__ftol`) `[01 §8]` | `int32(f)`, `Fixed.Int` |
+| definition float → integer | signed-64 truncation, retain low 32 bits (`__ftol`) `[01 R-DET-01 §1]` | `numeric.TruncateFloat64ToLow32` |
+| in-range float → integer | truncate toward zero (`__ftol`) | `int32(f)`, `Fixed.Int` |
 | world → cell/tile | floor with sign correction `[03 §2.1]` | `world.WorldToCell` / `WorldToTile` |
 | fixed × fixed | floor (arithmetic shift) | `Fixed.Mul` |
 | fixed ÷ fixed | truncate toward zero (`idiv`) | `Fixed.Div` |

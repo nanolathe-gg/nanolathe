@@ -102,12 +102,15 @@ compares. That is two unit systems in one family; it is the established
 contract and is reproduced, not repaired `[04 §7.4]` `[04 R-PATH-01 §9]`.
 
 **The open list and node store** (`heap.go`). The heap key is `f = g + hScaled`
-and the comparison is strictly less, so equal keys preserve insertion order; a
-monotonic counter is the tiebreaker. `NodeStore` is the allocated-node table
-keyed by cell, with node 0 invalid the way pool slot 0 is `[01 §6.1]`. `H` is
-write-once per node; relaxation adjusts `f` by the `g` delta alone. Capacity is
-an ordinary Go slice: retail's heap-exhaustion policy is not traced `[04 §11]`,
-and the route caps belong to the publisher, not to the heap.
+and comparisons are signed and strict. Equal keys have no insertion-order
+tiebreaker: sift-down chooses the left equal child, while root replacement can
+move a later equal-key node ahead. An expansion keeps its root spent until the
+first new neighbour can replace it or a lowering relaxation displaces and
+removes it. `NodeStore` is the allocated-node table keyed by cell, with node 0
+invalid the way pool slot 0 is `[01 §6.1]`. `H` is write-once per node;
+relaxation adjusts `f` by the `g` delta alone. Capacity is an ordinary Go slice:
+retail's heap-exhaustion policy is not traced `[04 §11]`, and the route caps
+belong to the publisher, not to the heap `[04 R-PATH-01 §1]`.
 
 **The resumable search** (`search.go`). `SearchConfig` carries the start, the
 goal, the heuristic scale, the mover's authored footprint pair for the
@@ -334,9 +337,13 @@ applies to every live expansion; a short-run penalty of 75 applies when the
 parent chain's straight run is below five and a parent exists `[04 §7.2]`
 `[04 R-PATH-01 §3]`.
 
-**C5 — heap order.** `f = g + h`; the heap compares **strictly less**, so equal
-keys preserve insertion order, and an equal `g` does not replace an existing
-parent `[04 §7.2]`.
+**C5 — heap order.** `f = g + h`; the heap compares signed values **strictly
+less** with no sequence tie-breaker. Sift-down chooses the left child on an
+equal child pair and stops when the moved key is equal to that child. An
+expanded root remains spent until the next selection, unless the first new
+neighbour replaces it in place or a strictly improving relaxation displaces it;
+the latter removes the old root from its current heap position. Equal `g` does
+not replace an existing parent `[04 R-PATH-01 §1]`.
 
 **C6 — the weighted heuristic.** `hScaled = (h · scale) >> 16`, formed as a full
 signed 64-bit product with an arithmetic shift; there is no floating point in

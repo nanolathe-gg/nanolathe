@@ -461,8 +461,8 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 		return nil, 0, false
 	}
 	startPopped := s.popped
-	for s.heap.Len() > 0 && s.popped-startPopped < budget {
-		id, f, ok := s.heap.Pop()
+	for s.heap.HasCandidate() && s.popped-startPopped < budget {
+		id, f, ok := s.heap.BeginExpand()
 		if !ok {
 			break
 		}
@@ -546,7 +546,7 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			nid := s.ns.Alloc(c, gNew, s.cfg.Goal.H(c), id, d)
 			node := s.ns.Get(nid)
 			node.Run, node.TerrainTerm, node.Open = run, uint16(terrain), true
-			s.heap.Push(nid, node.F)
+			s.heap.Open(nid, node.F)
 			// TODO(question): opening a cell writes the whole status byte, so
 			// the ray-visited bit does not survive into the node's own pop.
 			// [04 R-PATH-01 §1] states that the *pop* writes the whole byte 2
@@ -572,7 +572,7 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			s.touch(c, e)
 		}
 	}
-	if s.heap.Len() == 0 {
+	if !s.heap.HasCandidate() {
 		s.done, s.resultStatus = true, StatusRejected
 		return nil, s.resultStatus, true
 	}

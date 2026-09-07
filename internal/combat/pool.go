@@ -78,8 +78,12 @@ type Projectile struct {
 	BeamLatch    bool          // beam latch [06 §6.1]
 	TwoPhase     bool          // two-phase state [06 §6.1]
 	Dead         bool          // dead state [06 §5.1] — shadow; authoritative flag lives in Slots (I5)
-	PropellerYaw numeric.Angle // visual propeller orientation [06 §6.1]
-	MeteorPitch  numeric.Angle // meteor visual pitch accumulator, advanced with yaw [06 §6.5]
+	PropellerYaw numeric.Angle // propeller child-roll visual [06 §6.1]
+	// Roll is the first orientation-block word. Meteors advance it from their
+	// velocity; no non-meteor writer is established, so reservation retains it.
+	// TODO(question): census non-meteor writes of this retained roll word.
+	Roll        numeric.Angle
+	MeteorPitch numeric.Angle // meteor visual pitch accumulator [06 §6.5]
 
 	// Collision cache [06 §5.1] "collision cache values" — the quantized cell
 	// pair that suppresses a repeated feature contact [06 §8.1]. Its ONLY writer

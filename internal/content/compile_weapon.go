@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -197,10 +198,10 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	displayName = boundedString(displayName, 63)
 	// Conversions exactly as tabulated, each truncated after multiply, never composed differently [02 "Weapon record"] C3
 	// Velocities *65536/30 truncated — 16.16 per tick
-	weaponVelocity := int32(section.FloatValue("weaponvelocity", 0) * 65536.0 / 30.0)
-	startVelocity := int32(section.FloatValue("startvelocity", 0) * 65536.0 / 30.0)
+	weaponVelocity := numeric.TruncateFloat64ToLow32(section.FloatValue("weaponvelocity", 0) * (65536.0 / 30.0))
+	startVelocity := numeric.TruncateFloat64ToLow32(section.FloatValue("startvelocity", 0) * (65536.0 / 30.0))
 	// Acceleration *65536/900 truncated — 16.16 per tick^2
-	weaponAcceleration := int32(section.FloatValue("weaponacceleration", 0) * 65536.0 / 900.0)
+	weaponAcceleration := numeric.TruncateFloat64ToLow32(section.FloatValue("weaponacceleration", 0) * (65536.0 / 900.0))
 	// Durations *30 truncated — whole ticks; <1/30 becomes 0 [02 "Weapon record"].
 	//
 	// Nine of these keys are additionally 16-bit stores in retail
@@ -222,17 +223,17 @@ func compileWeaponSection(section *formats.Section, sectionName string, prov Pro
 	// census of the stock weapon family (77 files, 198 sections) finds every
 	// one of the nine keys inside that range in every section, so nothing
 	// shipped distinguishes them (WU-19-167); third-party content can.
-	reloadTime := int32(int16(int32(section.FloatValue("reloadtime", 0) * 30.0)))    // signed 16-bit store [06 §4.2]
-	weaponTimer := int32(uint16(int32(section.FloatValue("weapontimer", 0) * 30.0))) // unsigned 16-bit store [06 §7.3]
-	burstRate := int32(uint16(int32(section.FloatValue("burstrate", 0) * 30.0)))     // unsigned 16-bit store, zero-extended by all three burst-scheduler loads [06 R-WPN-05 §12]
-	duration := int32(uint16(int32(section.FloatValue("duration", 0) * 30.0)))       // unsigned 16-bit store, zero-extended by the beam latch [06 R-WPN-05 §12]
-	randomDecay := int32(uint16(int32(section.FloatValue("randomdecay", 0) * 30.0))) // unsigned 16-bit store [06 §4.3] ("an unsigned 16-bit shift")
-	smokeDelay := int32(uint16(int32(section.FloatValue("smokedelay", 0) * 30.0)))   // unsigned 16-bit store, zero-extended by the trail-smoke deadline [06 R-WPN-05 §12]
-	flightTime := int32(uint16(int32(section.FloatValue("flighttime", 0) * 30.0)))   // unsigned 16-bit store [06 §6.6] ("(uint16)flighttime")
-	holdTime := int32(int16(int32(section.FloatValue("holdtime", 0) * 30.0)))        // signed 16-bit store [07 "in-flight camera move"] ("the count is signed")
-	shakeDuration := int32(section.FloatValue("shakeduration", 0) * 30.0)            // established 32-bit store [02 R-KEYS-01 §2], no further truncation
+	reloadTime := int32(int16(numeric.TruncateFloat64ToLow32(section.FloatValue("reloadtime", 0) * 30.0)))    // signed 16-bit store [06 §4.2]
+	weaponTimer := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("weapontimer", 0) * 30.0))) // unsigned 16-bit store [06 §7.3]
+	burstRate := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("burstrate", 0) * 30.0)))     // unsigned 16-bit store, zero-extended by all three burst-scheduler loads [06 R-WPN-05 §12]
+	duration := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("duration", 0) * 30.0)))       // unsigned 16-bit store, zero-extended by the beam latch [06 R-WPN-05 §12]
+	randomDecay := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("randomdecay", 0) * 30.0))) // unsigned 16-bit store [06 §4.3] ("an unsigned 16-bit shift")
+	smokeDelay := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("smokedelay", 0) * 30.0)))   // unsigned 16-bit store, zero-extended by the trail-smoke deadline [06 R-WPN-05 §12]
+	flightTime := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("flighttime", 0) * 30.0)))   // unsigned 16-bit store [06 §6.6] ("(uint16)flighttime")
+	holdTime := int32(int16(numeric.TruncateFloat64ToLow32(section.FloatValue("holdtime", 0) * 30.0)))        // signed 16-bit store [07 "in-flight camera move"] ("the count is signed")
+	shakeDuration := numeric.TruncateFloat64ToLow32(section.FloatValue("shakeduration", 0) * 30.0)            // established 32-bit store [02 R-KEYS-01 §2], no further truncation
 	// turnrate *1/30 truncated per tick, wrapped to an unsigned 16-bit store [06 §6.7] ("zero-extended from its 16-bit store")
-	turnRate := int32(uint16(int32(section.FloatValue("turnrate", 0) * (1.0 / 30.0))))
+	turnRate := int32(uint16(numeric.TruncateFloat64ToLow32(section.FloatValue("turnrate", 0) * (1.0 / 30.0))))
 	// minbarrelangle *pi/180 radians default -11.25 — composed exactly as
 	// tabulated, value times the pi/180 constant [02 "Weapon record"] C3.
 	minBarrelAngle := section.FloatValue("minbarrelangle", -11.25) * (math.Pi / 180.0)

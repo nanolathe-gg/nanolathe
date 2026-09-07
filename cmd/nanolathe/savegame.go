@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/save"
@@ -35,7 +36,7 @@ type saveGameEntry struct {
 	File        string
 	Description string
 	// TimeWord is the 32-bit time word the enumerator records per entry and
-	// bubble-sorts ascending on, so the oldest file is first
+	// stably sorts ascending on, so the oldest file is first
 	// [08 R-SAVE-02 §1].
 	TimeWord uint32
 	Summary  save.Summary
@@ -58,7 +59,7 @@ func retailSaveDir(root string) string {
 
 // enumerateRetailSaves builds the slot list exactly as the enumerator does:
 // every `*.SAV` in the directory, `.` and `..` excluded and nothing else
-// filtered by attribute; one 32-bit time word per entry; a bubble sort
+// filtered by attribute; one 32-bit time word per entry; a stable sort
 // ascending on that word; then each file's `Summary` account opened through a
 // filtered read and its `Description` taken. A file with no readable bank, no
 // `Summary`, or no `Description` is dropped from both lists, so it can be
@@ -91,16 +92,15 @@ func enumerateRetailSaves(dir string) []saveGameEntry {
 			TimeWord: word,
 		})
 	}
-	bubbleSortSaveEntries(entries)
+	sortSaveEntries(entries)
 	// The name list is compacted in place after the descriptions are read, so
 	// the surviving order is the sorted order [08 R-SAVE-02 §1].
 	surviving := entries[:0]
 	for _, entry := range entries {
-		bank, err := save.Open(entry.Path)
-		if err != nil || bank == nil {
+		summary, ok, err := save.ReadSummaryFile(entry.Path)
+		if err != nil {
 			continue
 		}
-		summary, ok := save.ReadSummary(bank)
 		if !ok || strings.TrimSpace(summary.Description) == "" {
 			continue
 		}
@@ -111,18 +111,19 @@ func enumerateRetailSaves(dir string) []saveGameEntry {
 	return surviving
 }
 
-// bubbleSortSaveEntries is the enumerator's own sort: ascending on the time
-// word, oldest first and newest last. A bubble sort is stable, so files
+// sortSaveEntries uses the standard stable sort: ascending on the time word, oldest first and newest last. Files
 // sharing a word keep the order the directory read produced
 // [08 R-SAVE-02 §1].
-func bubbleSortSaveEntries(entries []saveGameEntry) {
-	for i := 0; i < len(entries); i++ {
-		for j := 0; j+1 < len(entries)-i; j++ {
-			if entries[j+1].TimeWord < entries[j].TimeWord {
-				entries[j], entries[j+1] = entries[j+1], entries[j]
-			}
+func sortSaveEntries(entries []saveGameEntry) {
+	slices.SortStableFunc(entries, func(a, b saveGameEntry) int {
+		if a.TimeWord < b.TimeWord {
+			return -1
 		}
-	}
+		if a.TimeWord > b.TimeWord {
+			return 1
+		}
+		return 0
+	})
 }
 
 // saveLoadCommand is the concrete effect one authored control has. Routing and

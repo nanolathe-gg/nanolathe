@@ -8,6 +8,16 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+type countingBindingFS struct {
+	vfs.FSOps
+	reads int
+}
+
+func (fs *countingBindingFS) ReadFileLimit(name string, limit int64) ([]byte, error) {
+	fs.reads++
+	return fs.FSOps.ReadFileLimit(name, limit)
+}
+
 func bindingFS(t *testing.T, data []byte) *vfs.FS {
 	t.Helper()
 	root := t.TempDir()
@@ -40,6 +50,9 @@ func TestBindStrictLinksPiecesAndRunsCreateOnce(t *testing.T) {
 	if binding.ScriptPath != "scripts/testunit.cob" {
 		t.Fatalf("script path = %q", binding.ScriptPath)
 	}
+	if binding.Provider.ProviderID() == "" {
+		t.Fatal("fallback VFS binding lost the winning provider")
+	}
 	if got, want := binding.PieceMap, []int{1, 0}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("piece map = %v want %v", got, want)
 	}
@@ -48,6 +61,97 @@ func TestBindStrictLinksPiecesAndRunsCreateOnce(t *testing.T) {
 	}
 	if got := binding.VM.DrainCalls; got != 1 {
 		t.Fatalf("Create D+wake barrier made %d drains, want exactly one", got)
+	}
+}
+
+func TestBindStrictAllowsProgramWithoutCreate(t *testing.T) {
+	fs := bindingFS(t, makeCOB([]uint32{0x10065000}, []string{"Killed"}, []uint32{0}, []string{"base"}))
+	binding, err := BindStrict(fs, BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base"}})
+	if err != nil {
+		t.Fatalf("BindStrict without Create: %v", err)
+	}
+	if binding.CreateInvoked || binding.VM.ActiveThreadCount() != 0 {
+		t.Fatalf("missing Create binding invoked=%v active=%d", binding.CreateInvoked, binding.VM.ActiveThreadCount())
+	}
+}
+
+func TestBindStrictInstantiatesCatalogProgramWithoutVFSReadAndKeepsVMsIndependent(t *testing.T) {
+	data := makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"})
+	base := bindingFS(t, data)
+	fs := &countingBindingFS{FSOps: base}
+	program, err := Load(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := base.Stat("scripts/testunit.cob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base"}, Program: program, ProgramProvenance: info.Source}
+	first, err := BindStrict(fs, req)
+	if err != nil {
+		t.Fatalf("first catalog binding: %v", err)
+	}
+	second, err := BindStrict(fs, req)
+	if err != nil {
+		t.Fatalf("second catalog binding: %v", err)
+	}
+	if fs.reads != 0 {
+		t.Fatalf("catalog program binding reads = %d, want 0", fs.reads)
+	}
+	if first.Program != program || second.Program != program || first.VM == second.VM {
+		t.Fatalf("program/VM ownership first=%p second=%p program=%p", first.VM, second.VM, program)
+	}
+	first.VM.Pieces[0].Trans[0] = 77
+	if got := second.VM.Pieces[0].Trans[0]; got != 0 {
+		t.Fatalf("second VM observed first VM animation = %d", got)
+	}
+}
+
+func TestBindStrictCatalogProgramsRetainSeparateProviders(t *testing.T) {
+	dataA := makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"})
+	dataB := makeCOB([]uint32{0x10065000, 0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"})
+	fsA, fsB := bindingFS(t, dataA), bindingFS(t, dataB)
+	programA, err := Load(dataA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	programB, err := Load(dataB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoA, err := fsA.Stat("scripts/testunit.cob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	infoB, err := fsB.Stat("scripts/testunit.cob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingA, err := BindStrict(nil, BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base"}, Program: programA, ProgramProvenance: infoA.Source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingB, err := BindStrict(nil, BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base"}, Program: programB, ProgramProvenance: infoB.Source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bindingA.Program == bindingB.Program || bindingA.Provider.SourcePath == bindingB.Provider.SourcePath || len(bindingA.Program.Code) == len(bindingB.Program.Code) {
+		t.Fatalf("catalog bindings crossed providers: A=%#v B=%#v", bindingA.Provider, bindingB.Provider)
+	}
+}
+
+func BenchmarkBindStrictCatalogProgram(b *testing.B) {
+	program, err := Load(makeCOB([]uint32{0x10065000}, []string{"Create"}, []uint32{0}, []string{"base"}))
+	if err != nil {
+		b.Fatal(err)
+	}
+	req := BindingRequest{UnitName: "TestUnit", ModelPieces: []string{"base"}, Program: program}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := BindStrict(nil, req); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

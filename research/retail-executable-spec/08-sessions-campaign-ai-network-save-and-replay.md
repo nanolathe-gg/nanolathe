@@ -4088,15 +4088,17 @@ The directive then applies with whatever `atof` produced — nothing conditions
 the write on the token converting, which is why `weight ARMCK abc` zeroes the
 weight rather than leaving it alone (§12's rule, now with its grammar).
 
-**Established — the store's range.** The product `float(currentWeight) ×
-factor` is narrowed by the runtime's truncating float-to-integer routine
-before the clamp. That routine returns the integer-indefinite value
-(`−2^31`) for any product outside the signed thirty-two-bit range or not a
-number, and the clamp's "at or below zero becomes zero" arm then stores
-**0**. A factor such as `1e10` — or an exponent large enough to overflow the
-conversion — therefore sets the weight to 0, not 100. An implementation
-whose float-to-integer conversion saturates instead (as Go's does on some
-targets) must special-case the out-of-range product to 0.
+**Established — the store's precision and range.** The directive's parsed
+factor is first stored as binary32. The weight applicator multiplies the
+unsigned current-weight byte by that stored factor, without an intervening
+binary32 product store. It then uses the shared signed-64 truncation and
+retains the low signed 32 bits before clamping that integer to `0..100`
+`[01 R-DET-01 §1]`. Finite products outside signed 32-bit range therefore wrap;
+nonfinite products and signed-64 overflow yield zero in the retained low bits.
+The clamp acts after that narrowing, not on the floating product. For example,
+a current weight of 1 and factor 4,294,967,808 produce low value 512 and store
+100. A current weight of 100 and authored factor 21,474,836.48 first round the
+factor to 21,474,836, then produce 2,147,483,600 and store 100.
 
 **Which reader.** Of the three candidate readers (the runtime's decimal
 conversion, the engine's fixed-point parser, the TDF integer accessor) it is
@@ -6017,7 +6019,7 @@ other payload words are opaque subtype state until their handler defines them.
 | `2` | `0x36` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot (the owner). `0x0A..0x19`: 16-byte temporary/reference area; the reader consumes it as scratch and does not install it as a pointer. `0x1A..0x1B`: second unit stable slot (the target). `0x1C..0x25`: five little-endian `u16` payload words. `0x26..0x35`: four little-endian `u32` payload words. The class is the air work point (path marker); the word names are under [R-SAVE-02 §10]. [Established] |
 | `3` | `0x2A` | `0x00..0x07`: leaked prefix, discard. `0x08..0x09`: unit stable slot (the owner). `0x0A..0x0B`: one `u16` payload word. `0x0C..0x23`: six `u32` payload words (two 16.16 triples). `0x24..0x29`: three `u16` payload words. The class is the `AirToAir` handler's velocity marker ([R-SAVE-02 §10], [R-SESS-01 §6]). [Established] |
 | `4` | `0x10` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x0F`: three `u32` payload words. No logical reference is established. [Established] |
-| `5` | `0x18` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x17`: five `u32` payload words. No logical reference is established. [Established] |
+| `5` | `0x18` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x07`: packed signed center cell pair. `0x08..0x0B`: inner radius; `0x0C..0x0F`: outer radius; `0x10..0x13`: inner squared threshold; `0x14..0x17`: outer squared threshold. Radius and threshold words are consumed as signed 32-bit values [04 R-PATH-01 §9]. No logical reference is established. [Established] |
 | `6` | `0x14` | `0x00..0x03`: leaked prefix word, discard. `0x04..0x13`: four `u32` payload words. No logical reference is established. [Established] |
 
 The subtype classes and their constructors are named under [R-SAVE-02 §10];
@@ -6827,7 +6829,7 @@ constructors that make each class:
 
 | Code | Payload | Class | Constructed by |
 |---:|---:|---|---|
-| `2` | `0x36` | the **path marker** (air work point) — flag word, arrival radius, height offset, side word, owner and target unit links, goal X/Y/Z 16.16 ([R-PATH-01 §9] "Class-D"; [R-AIR-01]) | the VTOL move/patrol/follow order handlers |
+| `2` | `0x36` | the **path marker** (air work point) — flag word, arrival radius, height offset, explicit heading, attachment piece, owner and target unit links, goal X/Y/Z and radial offset in 16.16 ([R-PATH-01 §9] "Class-D"; [R-AIR-01]) | the VTOL move/patrol/follow order handlers |
 | `3` | `0x2A` | a two-vector work record: owner unit link, two 16.16 triples, three `u16` words | the `AirToAir` handler — its only runtime constructor ([R-SESS-01 §6]) |
 | `4` | `0x10` | the **point goal** handle (relative cell pair, radius parameter, squared threshold) | `Move_Ground`/`Patrol` goal install ([R-ORD-01 §1]) |
 | `5` | `0x18` | the **annulus goal** (outer/inner) | annulus goal install ([R-ORD-01 §1]) |
@@ -6838,12 +6840,17 @@ the marker's embedded 16-byte unit-link helper (discarded; the reader
 re-links the helper to the unit named at `0x1A`); `0x1A` target-unit stable
 slot; `0x1C` flag word (bit 3 height set, bit 4 radius set / altitude
 arrival, bit 5 compute cruise Y); `0x1E` horizontal arrival radius; `0x20`
-height offset; `0x22` one further `u16` (**Unknown** name); `0x24` side word
-(`0xFFFF` = none); `0x26`, `0x2A`, `0x2E` goal X/Y/Z 16.16; `0x32` one
-further `u32` (**Unknown** name — decider: field-isolation trace of the
-marker's arrival test). Code-3 payload: `0x08` owner-unit stable slot;
-`0x0A` `u16`; `0x0C..0x17` first triple; `0x18..0x23` second triple;
-`0x24`, `0x26`, `0x28` three `u16`. Codes 4–6 are the goal handles whose
+height offset; `0x22` explicit heading word, used when flag bit 6 is set;
+`0x24` attachment-piece index (`0xFFFF` = no piece); `0x26`, `0x2A`,
+`0x2E` goal X/Y/Z 16.16; `0x32` radial offset distance in 16.16. The
+piece-locator and radial-displacement consumers establish that the attachment
+word is not a side index. Code-3 payload: `0x08` owner-unit stable slot;
+`0x0A` flags (bit 0 enables steering); `0x0C..0x17` position triple;
+`0x18..0x23` velocity triple; `0x24` an auxiliary word zeroed by the ordinary
+constructor; `0x26` commanded heading; `0x28` a trailing word without an
+established runtime consumer. The auxiliary and trailing words remain raw
+staged state with Unknown runtime meaning; neither supplies the steering
+flag or heading. Codes 4–6 are the goal handles whose
 words [R-PATH-01 §9] defines. The name side channel is the string item
 `${box}_name`; the `UTYPENAME%4d` string is written only for
 `MobileBuild`, `VTOL_MobileBuild` and `BuildingBuild` records whose
@@ -6861,8 +6868,8 @@ rebuilds it from the code-3 box. A code-3 record in a save therefore always
 belongs to an `AirToAir` order that was in flight at save time; its first
 triple is the marker's position and the second its per-tick velocity, and
 the class code the reader matches is the marker's own class-code slot
-(`3`, [04 R-MOV-03 §9]). The three trailing `u16` words remain unnamed
-(tail).
+(`3`, [04 R-MOV-03 §9]). The steering flag and commanded heading are named in §10. The auxiliary
+and final trailing words retain Unknown runtime meaning.
 
 ### What is not saved, and the fix-up order that rebuilds it [R-SAVE-02 §11]
 
@@ -6878,7 +6885,10 @@ order queues and before reading the COB snapshot, the loader checks the front
 head. If it carries a goal payload, the loader passes that existing payload to
 the owning mover's follower installer. A missing head or payload does nothing.
 This is the same follower operation used by ordinary goal installation; it
-does not execute the order handler or advance the queue.
+does not execute the order handler or advance the queue. It also does not
+clear the restored order's satisfaction bits: that clear belongs to the
+ordinary order-level goal installer surrounding the follower operation, not
+to this load-time follower call.
 
 For a local ground follower, installation cancels an outstanding search,
 notifies the previous goal of release when present, stores the restored goal,
@@ -7911,9 +7921,9 @@ a single-player implementation.
 
 ### Save and replay
 
-- Remaining semantic mappings inside the bulk binary boxes: the two
-  path-marker words (code-2 payload `0x22` and `0x32`), the code-3 record's
-  three trailing `u16` words, the two weapon-slot payload words, and the
+- Remaining semantic mappings inside the bulk binary boxes: the code-3
+  record's auxiliary and final trailing `u16` words, the two weapon-slot
+  payload words, and the
   per-word layout of the `u%04xacc` resource account (doc 05) ·
   [R-SAVE-02 §6], [R-SAVE-02 §7], [R-SAVE-02 §10], [R-SAVE-WEAPON-01] ·
   static trace (field-isolation of each reader). Everything else in the unit,

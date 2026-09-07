@@ -95,8 +95,8 @@ func TestYardOpenTransactionIsActiveDuringStrictCreate(t *testing.T) {
 		if !requested {
 			t.Fatal("Create requested yard closed, want open")
 		}
-		if u.GetScript() != nil {
-			t.Fatal("yard admission ran after strict binding was attached")
+		if u.GetScript() == nil {
+			t.Fatal("yard admission ran without the pre-Create binding context")
 		}
 	})
 	sim := rng.NewSimulation(1)
@@ -110,8 +110,8 @@ func TestYardOpenTransactionIsActiveDuringStrictCreate(t *testing.T) {
 	if u.YardOpen {
 		t.Fatal("denied Create-time yard write committed before attachment")
 	}
-	if err := u.AttachCOBBinding(binding); err != nil {
-		t.Fatalf("attach initialized binding: %v", err)
+	if u.COBBinding() != binding {
+		t.Fatal("Create completed without retaining its pre-Create binding")
 	}
 }
 

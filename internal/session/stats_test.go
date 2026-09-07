@@ -95,3 +95,21 @@ func TestResultStatisticsAndScoreFreeze(t *testing.T) {
 		})
 	}
 }
+
+func TestResultScoreUsesRetailFloat32Boundary(t *testing.T) {
+	ota, err := formats.LoadOTA([]byte(`[GlobalHeader]
+{
+killmul=0;
+timemul=1;
+}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// tick/60 is 16,777,217. Retail narrows that integer to float32 before
+	// multiplying, which rounds it down to 16,777,216; a float64 result path
+	// would retain the extra one [08 R-CAMP-01 §7].
+	s := &Session{Clock: &clock.State{GlobalTick: 60 * 16_777_217}, Mission: &mission.Mission{OTA: ota}}
+	if got := s.resultScore(0); got != 16_777_216 {
+		t.Fatalf("production resultScore = %d, want float32-rounded 16777216", got)
+	}
+}

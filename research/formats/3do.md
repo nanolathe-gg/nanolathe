@@ -257,6 +257,15 @@ Version signature is 1 and object-level `Always_0` is 0 in every file.
 868 textured primitives carry `ColorIndex` values above 255 (garbage);
 no untextured primitive does.
 
+### Host decoder safety policy
+
+Retail performs relocation without aggregate geometry or index budgets and
+follows sibling pointers recursively `[02 R-MALF-01 §8]`. Nanolathe applies
+explicit host-safety budgets to decoded polygon indexes as well as object and
+geometry counts. Its sibling-list walk is iterative while child depth remains
+bounded. These are implementation limits, not recovered retail behavior or
+file-format restrictions.
+
 ## How the engine loads it
 
 The file is read whole (missing or zero-length → **fatal**, the box shows

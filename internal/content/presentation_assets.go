@@ -101,7 +101,7 @@ func (c *PresentationCatalog) Font(id AssetID) (*formats.FNT, bool) {
 	if !ok || f == nil {
 		return nil, false
 	}
-	out := &formats.FNT{Height: f.Height, Unknown: f.Unknown}
+	out := &formats.FNT{Height: f.Height, Ignored: f.Ignored, Baseline: f.Baseline, FirstCode: f.FirstCode}
 	for i, g := range f.Glyphs {
 		if g == nil {
 			continue

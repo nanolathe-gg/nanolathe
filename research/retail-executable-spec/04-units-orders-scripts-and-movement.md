@@ -8716,8 +8716,10 @@ A search expansion retains the root until its replacements are known:
 2. The first newly opened neighbour while the root is spent replaces that
    root in place and sifts down from the root. Clear the spent flag. Later
    new neighbours append at the heap end and sift up.
-3. A strictly improving relaxation updates the existing neighbour's cost
-   and sifts it up. If that movement displaces the spent root, clear the
+3. A relaxation is admitted only by strictly lower signed `g`. It stores
+   the new `g`, adds the wrapping 32-bit `g` delta to the existing `f`, and
+   sifts up even when that wrap makes `f` larger; there is no second `f`
+   admission comparison. If that movement displaces the spent root, clear the
    spent flag, remove that old root at its new heap position, fill the hole
    with the last entry and sift the replacement down. If the spent root
    remains at the root, keep the flag; a later new neighbour may still reuse
@@ -9120,6 +9122,17 @@ heuristic clamps against **and**, separately, the squared cell radii the arrival
 predicate compares against. Neither is derived from the other at query time.
 An implementation must carry both; "fixing" the mismatch by deriving one from
 the other changes both the heuristic shape and the arrival band [P0-13 A19].
+
+**Established — squared arrival arithmetic.** The point and annulus
+constructors divide each signed radius by 16 toward zero, square that quotient
+with a 32-bit product, and store the low 32 bits. They do not clamp negative
+radii before squaring. Arrival forms each squared cell difference and their
+sum with wrapping 32-bit arithmetic, then compares the result and stored
+thresholds as signed 32-bit values. The point comparison is inclusive; the
+annulus requires the result to be at least the inner threshold and at most
+the outer threshold, inclusively. Preserve the saved threshold words even
+when they disagree with the saved radii.
+
 
 **Established — the point class's constructor, exactly.** The ground
 goal-handle installer allocates the point class from

@@ -131,6 +131,13 @@ definition whose program is missing is rejected at catalog compile rather than
 allowed to create a scriptless unit, because retail faults at creation instead
 `[04 R-COB-04 §8]` `[04 R-COB-01 §3]`.
 
+Catalog linking retains both that immutable program and the winning COB
+provenance. Unit creation passes this asset into strict binding, which links the
+piece names and allocates fresh VM threads, statics and piece state without
+rereading or recompiling the script. A definition from another catalog or VFS
+overlay carries its own provenance and program; mutable VM state is never
+shared `[04 §4.1]`.
+
 **Save boxes** (`retail_save.go`, `retail_restore.go`). The detached unit image
 and its restore, including the fields whose consumers belong to later phases and
 the three packed status bits retail copies from its writer stack and that no
@@ -247,6 +254,10 @@ interpretation `[08 R-SAVE-ORDER-01]` `[08 R-SAVE-02 §6]`.
 opcode word array, the script-name map, the script index array in table order,
 the ordered piece-name table, the static count and the content checksum
 `[fmt cob]` `[02 "Compiled script archive (COB)"]` `[04 §4.1]`.
+The declared static count has an explicit host-safety byte budget because it is
+not backed by a file span; parser, external binding and restore validate it
+before mutable VM storage is allocated. The budget is not a retail constant
+`[fmt cob "Header"]`.
 
 **The machine** (`vm.go`). `VM` is one unit's instance: eight `Thread` records,
 the piece animation state, the statics, the bound ports and sinks. A thread

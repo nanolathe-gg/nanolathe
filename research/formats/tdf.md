@@ -530,8 +530,10 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
 - A missing file, or one of zero length, is the only recoverable failure:
   the loader returns no tree and typed reads return their defaults.
 - Numeric text: the integer accessor wraps modulo 2³² (no overflow test);
-  the fixed-point accessor stores `0x80000000` for any magnitude of 32,768
-  authored units or more; the floating accessor is the C-runtime decimal
+  the fixed-point accessor multiplies by 65,536, truncates to signed 64 bits,
+  and retains the low 32 bits. Finite signed-32 overflow wraps; non-finite
+  or signed-64 overflow produces a zero low word [01 R-DET-01 §1]
+  [02 R-MALF-01 §4, RT-01]. The floating accessor is the C-runtime decimal
   conversion.
 
 ## Unknowns and caveats

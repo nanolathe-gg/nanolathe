@@ -536,7 +536,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 				// retail's numbering already.
 				Yaw:            combat.RetailYaw(p.Yaw),
 				Pitch:          uint16(p.Pitch),
-				Roll:           uint16(p.PropellerYaw),
+				Roll:           uint16(p.Roll),
+				PropellerRoll:  uint16(p.PropellerYaw),
 				MeteorPitch:    uint16(p.MeteorPitch),
 				StartX:         p.StartPos.X,
 				StartY:         p.StartPos.Y,
@@ -568,6 +569,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 					pv.Family = int32(combat.CreationFamilyForWeapon(w))
 					pv.SmokeTrail = w.SmokeTrail
 					pv.Propeller = w.Propeller
+					pv.Meteor = w.Meteor
 					// The lifetime-scaled render type's divisor is named: render
 					// type 5 draws frame
 					// `N - ((expiry - currentTick) * N) / weapontimer`, and a zero

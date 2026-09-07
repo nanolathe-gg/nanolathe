@@ -242,6 +242,7 @@ var float64ExemptFiles = map[string]string{
 	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
 	"internal/combat/damage.go":            "I2 area-damage falloff expression, evaluated at working precision and narrowed by one store [06 §9.3], and the amount product: the promoted base damage times that stored float32 falloff, truncated toward zero [06 §9.2]",
 	"internal/construction/reclaim.go":     "I2 unit-reclaim pulse divide: the wrapped 32-bit product re-read unsigned, widened to double and divided by the single-precision max(buildcostmetal,10)×300, truncated once into the integer pulse [05 R-WORK-01 §4] (AU-7)",
+	"internal/sim/numeric/numeric.go":      "I2 immutable authored-content conversion and I3 definition-parser signed-64 truncation retained through the low 32-bit store [01 R-DET-01 §1]",
 	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
 	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
 	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
@@ -270,7 +271,7 @@ var float64Baseline = map[string]int{
 	"internal/ai/selection.go":     2,
 	"internal/ai/strategic.go":     5,
 	"internal/cob/ports.go":        6,
-	"internal/combat/meteor.go":    10,
+	"internal/combat/meteor.go":    9,
 	"internal/combat/motion.go":    4,
 	"internal/combat/service.go":   2,
 	"internal/combat/stockpile.go": 5,
@@ -283,20 +284,17 @@ var float64Baseline = map[string]int{
 	// the capture timer's base sum, which is what its float64 sites are.
 	"internal/construction/inheritance.go":  2,
 	"internal/construction/resurrection.go": 3,
-	"internal/construction/reverse.go":      4,
+	"internal/construction/reverse.go":      2,
 	"internal/economy/tick.go":              2,
 	"internal/mission/initial_mission.go":   8,
 	"internal/mission/mission_globals.go":   6,
-	"internal/mission/placement.go":         7,
 	"internal/movement/altitude.go":         6,
 	// work.go moved to float64ExemptFiles above (AU-7): both of its sites now
 	// carry an I2 row there.
-	"internal/session/progression.go": 5,
-	"internal/session/session.go":     1,
-	"internal/session/step.go":        1,
-	"internal/units/units.go":         1,
-	"internal/world/terrain.go":       1,
-	"internal/world/wind.go":          2,
+	"internal/session/session.go": 1,
+	"internal/session/step.go":    1,
+	"internal/world/terrain.go":   1,
+	"internal/world/wind.go":      2,
 }
 
 // TestAuthoritativeFloat64DoesNotGrow enforces the PROC-03 float ratchet

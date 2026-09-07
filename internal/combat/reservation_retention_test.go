@@ -42,6 +42,7 @@ func TestReserveClearsOnlyDeadBitAndRetainedUnitTarget(t *testing.T) {
 		Yaw:          numeric.Angle(1234),
 		Pitch:        numeric.Angle(4321),
 		PropellerYaw: numeric.Angle(999),
+		Roll:         numeric.Angle(777),
 		MeteorPitch:  numeric.Angle(888),
 		ExpiryTick:   4242,
 		Shooter:      pool.Handle(6),

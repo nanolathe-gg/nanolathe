@@ -5,12 +5,12 @@ package content
 import (
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -195,19 +195,12 @@ func crtAtof(s string) (float64, bool) {
 
 // aiWeightStore is the `weight` directive's store [08 R-AI-01 §12]
 // [08 R-AI-01 §20]: the product of the running weight and the factor is
-// truncated toward zero by the runtime's float-to-integer routine, and the
-// clamp is "at or below zero becomes zero, at or above 100 becomes 100". That
-// routine returns the integer-indefinite value (-2^31) for a product outside
-// the signed 32-bit range or not a number, so such a product stores 0 — a
-// factor of 1e10 zeroes the weight rather than pinning it at 100. Go's
-// float-to-int conversion is implementation-defined out of range, hence the
-// explicit test.
+// factor is first stored as float32, then the product is truncated by the
+// shared signed-64 helper. The clamp is "at or below zero becomes zero, at or
+// above 100 becomes 100" [01 R-DET-01 §1].
 func aiWeightStore(cur int32, factor float64) int32 {
-	product := float64(cur) * factor
-	if math.IsNaN(product) || product >= 2147483648.0 || product < -2147483648.0 {
-		return 0
-	}
-	newWeight := int32(product) // trunc toward zero [INVARIANTS I3]
+	product := float64(cur) * float64(float32(factor))
+	newWeight := numeric.TruncateFloat64ToLow32(product)
 	if newWeight < 0 {
 		newWeight = 0
 	} else if newWeight > 100 {

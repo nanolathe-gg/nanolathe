@@ -13,9 +13,11 @@ package save
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"strings"
@@ -28,6 +30,13 @@ const (
 	// RetailTag is the container tag every retail save carries, compared
 	// case-insensitively after the pool loads [08 "Location and representation"].
 	RetailTag = "Total Annihilation 3.0"
+	// Summary listing is an untrusted-file boundary. These are host-resource
+	// caps, not retail format limits: a list only needs its name pool and scalar
+	// Summary rows, never an attacker-sized map snapshot.
+	maxSummaryPoolBytes    = 8 << 20
+	maxSummaryStoredBytes  = 8 << 20
+	maxSummaryScalarBytes  = 1 << 20
+	maxSummaryDecodedBytes = 8 << 20
 )
 
 var bankMagic = []byte("HAPIBANK")
@@ -36,10 +45,11 @@ var bankMagic = []byte("HAPIBANK")
 // version, tag — and ErrFormat for a body this reader will not accept
 // [08 "Location and representation"].
 var (
-	ErrMagic   = errors.New("save: not a HAPIBANK container")
-	ErrVersion = errors.New("save: unsupported bank version")
-	ErrTag     = errors.New("save: unexpected bank tag")
-	ErrFormat  = errors.New("save: malformed bank")
+	ErrMagic         = errors.New("save: not a HAPIBANK container")
+	ErrVersion       = errors.New("save: unsupported bank version")
+	ErrTag           = errors.New("save: unexpected bank tag")
+	ErrFormat        = errors.New("save: malformed bank")
+	errSummaryBudget = errors.New("save: summary resource budget exceeded")
 )
 
 const (
@@ -277,6 +287,337 @@ func Open(path string) (*Bank, error) {
 		return nil, err
 	}
 	return OpenBytes(data)
+}
+
+// ReadSummaryFile reads only the Summary account needed by the save list. It
+// validates the same container header, name pool, account spans, tag, and
+// duplicate-account lookup rules as Open, but seeks past every unrelated
+// account body. For Summary it retains only the scalar prefix; boxes such as
+// the radar image are never accumulated. A compressed Summary stream is
+// still consumed to validate its complete framing. The explicit host caps
+// above reject attacker-declared pool, stored-body, decoded-body, and
+// scalar-prefix sizes rather than treating them as retail behavior [08
+// R-SAVE-02 §1].
+func ReadSummaryFile(path string) (Summary, bool, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Summary{}, false, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return Summary{}, false, err
+	}
+	length := info.Size()
+	if length < BankHeaderSize {
+		return Summary{}, false, ErrMagic
+	}
+	header := make([]byte, BankHeaderSize)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return Summary{}, false, err
+	}
+	if !bytes.Equal(header[:8], bankMagic) {
+		return Summary{}, false, ErrMagic
+	}
+	if binary.LittleEndian.Uint32(header[0x14:]) != bankVersion {
+		return Summary{}, false, ErrVersion
+	}
+	poolOffset := binary.LittleEndian.Uint32(header[0x0c:])
+	firstAccount := binary.LittleEndian.Uint32(header[0x10:])
+	tagOffset := binary.LittleEndian.Uint32(header[0x08:])
+	if poolOffset < BankHeaderSize || int64(poolOffset) > length || firstAccount < BankHeaderSize || firstAccount > poolOffset {
+		return Summary{}, false, ErrFormat
+	}
+	poolSize := length - int64(poolOffset)
+	if poolSize > maxSummaryPoolBytes {
+		return Summary{}, false, ErrFormat
+	}
+	poolRaw := make([]byte, poolSize)
+	if _, err := file.ReadAt(poolRaw, int64(poolOffset)); err != nil {
+		return Summary{}, false, err
+	}
+	pool := poolRaw
+	if header[0x18] != 0 {
+		decoded, err := decodeSummaryPool(poolRaw)
+		if err != nil {
+			// Retail records a pool-decompression diagnostic then treats the
+			// stored bytes as its raw pool. Preserve that fallback, except for
+			// this reader's explicit host-resource budget.
+			if errors.Is(err, errSummaryBudget) {
+				return Summary{}, false, ErrFormat
+			}
+		} else {
+			pool = decoded
+		}
+	}
+	if int(tagOffset) >= len(pool) {
+		return Summary{}, false, ErrFormat
+	}
+	if !strings.EqualFold(readPoolString(pool, tagOffset), RetailTag) {
+		return Summary{}, false, ErrTag
+	}
+	var summary *Account
+	cursor := int64(firstAccount)
+	poolEnd := int64(poolOffset)
+	for iter := 0; iter < 4096 && cursor+AccountHeaderSize <= poolEnd; iter++ {
+		head := make([]byte, AccountHeaderSize)
+		if _, err := file.ReadAt(head, cursor); err != nil {
+			return Summary{}, false, err
+		}
+		span := binary.LittleEndian.Uint32(head)
+		if span == 0 {
+			break
+		}
+		if span < AccountHeaderSize {
+			cursor += AccountHeaderSize
+			continue
+		}
+		if cursor+int64(span) > poolEnd {
+			break
+		}
+		nameOffset := binary.LittleEndian.Uint32(head[4:])
+		if readPoolString(pool, nameOffset) == SummaryAccount {
+			intCount := int32(binary.LittleEndian.Uint32(head[8:]))
+			doubleCount := int32(binary.LittleEndian.Uint32(head[0x0c:]))
+			stringCount := int32(binary.LittleEndian.Uint32(head[0x10:]))
+			prefix, err := summaryScalarPrefixLength(intCount, doubleCount, stringCount)
+			if err != nil {
+				return Summary{}, false, ErrFormat
+			}
+			compressed := binary.LittleEndian.Uint32(head[0x18:]) != 0
+			bodySize := int(span) - AccountHeaderSize
+			if bodySize > maxSummaryStoredBytes {
+				return Summary{}, false, ErrFormat
+			}
+			readSize := bodySize
+			if !compressed && prefix < readSize {
+				readSize = prefix
+			}
+			body := make([]byte, readSize)
+			if _, err := file.ReadAt(body, cursor+AccountHeaderSize); err != nil {
+				return Summary{}, false, err
+			}
+			if compressed {
+				body, err = decodeSummaryPrefix(body, prefix)
+				if err != nil {
+					if errors.Is(err, errSummaryBudget) {
+						return Summary{}, false, ErrFormat
+					}
+					cursor += int64(span)
+					continue
+				}
+			}
+			account := parseSummaryAccount(pool, body, span, uint32(cursor), nameOffset,
+				intCount, doubleCount, stringCount)
+			if summary == nil {
+				summary = account
+			} else {
+				mergeAccount(summary, account)
+			}
+		}
+		cursor += int64(span)
+	}
+	if summary == nil {
+		return Summary{}, false, nil
+	}
+	decoded, ok := ReadSummary(&Bank{accounts: []*Account{summary}})
+	return decoded, ok, nil
+}
+
+func summaryScalarPrefixLength(intCount, doubleCount, stringCount int32) (int, error) {
+	counts := [3]int32{intCount, doubleCount, stringCount}
+	widths := [3]int64{8, 12, 8}
+	var total int64
+	for i, count := range counts {
+		if count > 0 {
+			total += int64(count) * widths[i]
+		}
+	}
+	if total < 0 || total > maxSummaryScalarBytes {
+		return 0, ErrFormat
+	}
+	return int(total), nil
+}
+
+func decodeSummaryPool(src []byte) ([]byte, error) {
+	if len(src) < 19 || string(src[:4]) != "SQSH" {
+		return nil, ErrFormat
+	}
+	decoded := binary.LittleEndian.Uint32(src[11:])
+	if int64(decoded) > maxSummaryPoolBytes {
+		return nil, errSummaryBudget
+	}
+	return decodeSummaryPrefix(src, int(decoded))
+}
+
+// decodeSummaryPrefix validates the SQSH framing and payload checksum, then
+// retains only the scalar rows a Summary reader consumes. Its bounded output is
+// a host policy for the filtered list path; Open remains the full-image reader.
+func decodeSummaryPrefix(src []byte, want int) ([]byte, error) {
+	if len(src) < 19 || string(src[:4]) != "SQSH" || want < 0 {
+		return nil, ErrFormat
+	}
+	method, encoded := src[5], src[6]
+	packed := binary.LittleEndian.Uint32(src[7:])
+	decoded := binary.LittleEndian.Uint32(src[11:])
+	if uint64(packed) > uint64(len(src)-19) {
+		return nil, ErrFormat
+	}
+	if uint64(decoded) > maxSummaryDecodedBytes {
+		return nil, errSummaryBudget
+	}
+	// A descriptor count can overstate a truncated logical body. Full account
+	// parsing consumes the available complete scalar rows, so keep that same
+	// prefix rather than rejecting the Summary account [08 R-SAVE-02 §1].
+	if want > int(decoded) {
+		want = int(decoded)
+	}
+	payload := src[19 : 19+int(packed)]
+	if sumBytes(payload) != binary.LittleEndian.Uint32(src[15:]) {
+		return nil, ErrFormat
+	}
+	if encoded != 0 {
+		payload = append([]byte(nil), payload...)
+		for i := range payload {
+			payload[i] = byte((uint16(payload[i]) - uint16(i)) ^ uint16(i))
+		}
+	}
+	switch method {
+	case 1:
+		return decodeSummaryLZPrefix(payload, want, int(decoded))
+	case 2:
+		r, err := zlib.NewReader(bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		out, err := decodeSummaryZlibPrefix(r, want, int(decoded))
+		closeErr := r.Close()
+		if err != nil {
+			return nil, err
+		}
+		return out, closeErr
+	default:
+		return nil, ErrFormat
+	}
+}
+
+func decodeSummaryZlibPrefix(r io.Reader, want, total int) ([]byte, error) {
+	out := make([]byte, want)
+	buf := make([]byte, 32<<10)
+	produced := 0
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if produced+n > total {
+				return nil, ErrFormat
+			}
+			if produced < want {
+				copy(out[produced:min(produced+n, want)], buf[:min(n, want-produced)])
+			}
+			produced += n
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	if produced != total {
+		return nil, ErrFormat
+	}
+	return out, nil
+}
+
+func decodeSummaryLZPrefix(payload []byte, want, total int) ([]byte, error) {
+	window := make([]byte, 4096)
+	write, pos, produced := 1, 0, 0
+	out := make([]byte, 0, want)
+	terminated := false
+	for !terminated {
+		if pos >= len(payload) {
+			return nil, ErrFormat
+		}
+		tag := payload[pos]
+		pos++
+		for bit := 0; bit < 8; bit++ {
+			if tag&(1<<bit) == 0 {
+				if pos >= len(payload) {
+					return nil, ErrFormat
+				}
+				if produced >= total {
+					return nil, ErrFormat
+				}
+				v := payload[pos]
+				pos++
+				if produced < want {
+					out = append(out, v)
+				}
+				produced++
+				window[write] = v
+				write = (write + 1) & 0xfff
+				continue
+			}
+			if pos+2 > len(payload) {
+				return nil, ErrFormat
+			}
+			word := binary.LittleEndian.Uint16(payload[pos:])
+			pos += 2
+			match := int(word >> 4)
+			if match == 0 {
+				terminated = true
+				break
+			}
+			for n := int(word&0xf) + 2; n > 0; n-- {
+				if produced >= total {
+					return nil, ErrFormat
+				}
+				v := window[match]
+				match = (match + 1) & 0xfff
+				if produced < want {
+					out = append(out, v)
+				}
+				produced++
+				window[write] = v
+				write = (write + 1) & 0xfff
+			}
+		}
+	}
+	if produced != total || len(out) != want {
+		return nil, ErrFormat
+	}
+	return out, nil
+}
+
+// parseSummaryAccount decodes only scalar rows needed by ReadSummary. Boxes
+// are deliberately skipped: Summary's optional radar image is irrelevant to
+// save-list metadata and can be as large as a map [08 R-SAVE-02 §1].
+func parseSummaryAccount(pool, body []byte, span, accountOffset, nameOffset uint32, intCount, doubleCount, stringCount int32) *Account {
+	account := &Account{Name: SummaryAccount, Span: span, NameOffset: nameOffset, Offset: accountOffset}
+	if intCount < 0 {
+		intCount = 0
+	}
+	if stringCount < 0 {
+		stringCount = 0
+	}
+	if doubleCount < 0 {
+		doubleCount = 0
+	}
+	read := 0
+	for i := int32(0); i < intCount && read+8 <= len(body); i++ {
+		account.Ints = append(account.Ints, IntItem{Name: readPoolString(pool, binary.LittleEndian.Uint32(body[read:])), Value: int32(binary.LittleEndian.Uint32(body[read+4:]))})
+		read += 8
+	}
+	// Doubles precede strings. Their values are not Summary metadata, so skip
+	// their fixed-width descriptors without decoding them.
+	for i := int32(0); i < doubleCount && read+12 <= len(body); i++ {
+		read += 12
+	}
+	for i := int32(0); i < stringCount && read+8 <= len(body); i++ {
+		account.Strings = append(account.Strings, StringItem{Name: readPoolString(pool, binary.LittleEndian.Uint32(body[read:])), Value: readPoolString(pool, binary.LittleEndian.Uint32(body[read+4:]))})
+		read += 8
+	}
+	return account
 }
 
 // OpenBytes validates the container and parses every account body. The

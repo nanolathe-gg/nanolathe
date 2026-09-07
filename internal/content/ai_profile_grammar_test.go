@@ -110,8 +110,8 @@ func TestAIPlanTableNamesDropsUnknownWords(t *testing.T) {
 // conversion [08 R-AI-01 §20]: the C runtime's atof converts the longest
 // decimal prefix of the token, accepts d/D as exponent letters, ignores what
 // follows, has no hexadecimal form, and yields 0.0 for a token with no digit.
-// The store is locked with it: a product outside the signed 32-bit range is
-// the runtime's integer-indefinite value and clamps to 0, not 100.
+// The store is locked with it: the factor first narrows to float32, then the
+// product retains the shared signed-64 helper's low word before clamping.
 func TestAIWeightFactorReadsLikeTheRuntimeAtof(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -141,7 +141,7 @@ func TestAIWeightFactorReadsLikeTheRuntimeAtof(t *testing.T) {
 		want   int32
 	}{
 		{100, 0.5, 50}, {100, 0.29, 28}, {50, 2, 100}, {100, 1.5, 100}, {100, -0.5, 0},
-		{100, 1e10, 0}, {100, math.Inf(1), 0}, {0, math.Inf(1), 0}, {100, 21474836.48, 0}, {100, 21474836.0, 100},
+		{100, 1e10, 0}, {100, math.Inf(1), 0}, {0, math.Inf(1), 0}, {100, 21474836.48, 100}, {100, 21474836.0, 100},
 	}
 	for _, s := range stores {
 		if got := aiWeightStore(s.cur, s.factor); got != s.want {

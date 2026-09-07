@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -206,6 +207,47 @@ func TestCompositionCreationInitializesEconomyAccountBeforePublicationAndSlotReu
 	}
 }
 
+func TestSessionCOBCreateReceivesQueriesAndActivationContext(t *testing.T) {
+	root := t.TempDir()
+	writeCompositionModel(t, root, "fixture", 1)
+	x, z := numeric.FixedFromInt(3), numeric.FixedFromInt(4)
+	packed := uint32(uint16(int16(x>>16)))<<16 | uint32(uint16(int16(z>>16)))
+	code := []uint32{
+		0x10021001, 16, 0x10021001, packed, 0x10021001, 0, 0x10021001, 0, 0x10021001, 0, 0x10043000, 0x10023002, 1,
+		0x10021001, 5, 0x10021001, 1, 0x10082000,
+		0x10021001, 9, 0x10021001, 1, 0x10021001, 0, 0x10021001, 0, 0x10021001, 0, 0x10043000, 0x10023002, 2,
+		0x10021001, 6, 0x10021001, 1, 0x10082000,
+		0x10021001, 1, 0x10021001, 1, 0x10082000, 0x10021001, 1, 0x10021001, 0, 0x10082000, 0x10065000,
+		0x10021001, 19, 0x10021001, 1, 0x10082000, 0x10065000,
+		0x10021001, 20, 0x10021001, 1, 0x10082000, 0x10065000,
+	}
+	writeCompositionCOBProgram(t, root, "testunit", code, []string{"Create", "Activate", "Deactivate"}, []uint32{0, 47, 53}, []string{"modelroot", "modelchild"})
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 10); err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1, BMCode: true}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w, err := newSlicedWorldWithCOB(cat, fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Catalog: cat, World: minimalTerrain(), Mission: syntheticMission(), Units: w, Econ: &economy.Service{}}
+	s.InitBattleWindForSession()
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatal(err)
+	}
+	h, err := w.Create(def, 0, x, 0, z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := w.Unit(h)
+	if u == nil || !u.InBuildStance || !u.Busy || u.Activated || !u.BuggerOff || !u.Armored {
+		t.Fatalf("Create context result = %#v", u)
+	}
+}
+
 func writeCompositionModel(t *testing.T, root, name string, rootTranslate int32) {
 	t.Helper()
 	dir := filepath.Join(root, "objects3d")
@@ -218,12 +260,16 @@ func writeCompositionModel(t *testing.T, root, name string, rootTranslate int32)
 }
 
 func writeCompositionCOB(t *testing.T, root, name string, pieces []string) {
+	writeCompositionCOBProgram(t, root, name, []uint32{0x10065000}, []string{"Create"}, []uint32{0}, pieces)
+}
+
+func writeCompositionCOBProgram(t *testing.T, root, name string, code []uint32, scripts []string, indexes []uint32, pieces []string) {
 	t.Helper()
 	dir := filepath.Join(root, "scripts")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, name+".cob"), fixtureCOB(pieces), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, name+".cob"), fixtureCOBBytes(code, scripts, indexes, pieces), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -253,15 +299,17 @@ func fixture3DO(rootTranslate int32) []byte {
 	return data
 }
 
-func fixtureCOB(pieces []string) []byte {
+func fixtureCOBBytes(code []uint32, scripts []string, indexes []uint32, pieces []string) []byte {
 	const header = 44
-	code := []uint32{0x10065000}
-	nScripts, nPieces := 1, len(pieces)
+	nScripts, nPieces := len(scripts), len(pieces)
 	offScriptIndex := uint32(header + len(code)*4)
-	offScriptNames := offScriptIndex + 4
-	offPieceNames := offScriptNames + 4
+	offScriptNames := offScriptIndex + uint32(nScripts*4)
+	offPieceNames := offScriptNames + uint32(nScripts*4)
 	strStart := offPieceNames + uint32(nPieces*4)
-	stringsLen := len("Create") + 1
+	stringsLen := 0
+	for _, script := range scripts {
+		stringsLen += len(script) + 1
+	}
 	for _, piece := range pieces {
 		stringsLen += len(piece) + 1
 	}
@@ -276,12 +324,16 @@ func fixtureCOB(pieces []string) []byte {
 	put(32, offPieceNames)
 	put(36, header)
 	put(40, strStart)
-	put(44, code[0])
-	put(int(offScriptIndex), 0)
-	put(int(offScriptNames), strStart)
+	for i, word := range code {
+		put(header+i*4, word)
+	}
 	cur := strStart
-	copy(data[cur:], "Create\x00")
-	cur += uint32(len("Create") + 1)
+	for i, script := range scripts {
+		put(int(offScriptIndex)+i*4, indexes[i])
+		put(int(offScriptNames)+i*4, cur)
+		copy(data[cur:], script+"\x00")
+		cur += uint32(len(script) + 1)
+	}
 	for i, piece := range pieces {
 		put(int(offPieceNames)+i*4, cur)
 		copy(data[cur:], piece+"\x00")

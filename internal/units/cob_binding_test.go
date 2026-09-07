@@ -111,12 +111,12 @@ func TestCreationCallbackOrdering(t *testing.T) {
 	}
 }
 
-func TestRequiredCOBEntryPointsDoesNotGuessCapabilities(t *testing.T) {
-	if got := RequiredCOBEntryPoints(nil); len(got) != 1 || got[0] != "Create" {
+func TestRequiredCOBEntryPointsLeavesCreateOptional(t *testing.T) {
+	if got := RequiredCOBEntryPoints(nil); len(got) != 0 {
 		t.Fatalf("nil requirements = %v", got)
 	}
 	def := &content.UnitDef{Builder: true, BMCode: false, CanMove: true}
-	if got := RequiredCOBEntryPoints(def); len(got) != 1 || got[0] != "Create" {
+	if got := RequiredCOBEntryPoints(def); len(got) != 0 {
 		t.Fatalf("capability requirements = %v", got)
 	}
 }

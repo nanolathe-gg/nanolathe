@@ -5,8 +5,8 @@ package path
 //
 // Heap key is f = g + hScaled where hScaled = (h*scale)>>16 with a
 // signed 64-bit product and arithmetic shift [04 §7.2] C6. The heap
-// compares strictly less so equal keys preserve insertion order [04 §7.2]
-// C5. A monotonic insertion counter provides the tiebreaker.
+// compares signed f values only. Equal keys have no insertion-order
+// tiebreaker; the left child wins an equal-child sift-down [04 R-PATH-01 §1].
 //
 // NodeStore holds per-cell nodes with write-once h [04 §7.2] C7 and
 // strict less-g parent replacement [04 §7.2] C5. Relaxation adjusts f
@@ -182,19 +182,20 @@ func (ns *NodeStore) IsOpen(id NodeID) bool { return ns.nodes[id].Open }
 // IsClosed reports whether the node is closed.
 func (ns *NodeStore) IsClosed(id NodeID) bool { return ns.nodes[id].Closed }
 
-// heapEntry is a heap element keyed on F with insertion-order tiebreaker.
+// heapEntry is a heap element keyed on F.
 type heapEntry struct {
-	id  NodeID
-	f   int32
-	seq uint64
+	id NodeID
+	f  int32
 }
 
-// Heap is a binary min-heap keyed on f = g + hScaled with strict-less
-// ordering so equal keys preserve insertion order [04 §7.2] C5. The
-// monotonic seq provides the tiebreaker.
+// Heap is the binary open heap. An expansion marks its root spent but leaves
+// it in place until neighbour work decides whether to reuse or discard it
+// [04 R-PATH-01 §1]. positions lets a lowering relaxation find and remove a
+// displaced spent root without changing the node store's stable identities.
 type Heap struct {
-	entries []heapEntry
-	nextSeq uint64
+	entries   []heapEntry
+	positions map[NodeID]int
+	spent     NodeID
 }
 
 // Len returns the number of entries.
@@ -203,37 +204,70 @@ func (h *Heap) Len() int { return len(h.entries) }
 // IsEmpty reports whether the heap is empty.
 func (h *Heap) IsEmpty() bool { return len(h.entries) == 0 }
 
-// Clear removes all entries and resets the sequence counter.
-func (h *Heap) Clear() {
-	h.entries = h.entries[:0]
-	h.nextSeq = 0
+// HasCandidate reports whether an unspent node remains available to expand.
+func (h *Heap) HasCandidate() bool {
+	return len(h.entries) != 0 && !(h.spent != invalidNodeID && len(h.entries) == 1)
 }
 
-// Push inserts id with key f. Equal f values keep insertion order
-// via the monotonic seq [04 §7.2] C5. Duplicates are allowed; the
-// caller may use lazy invalidation (push a second entry for the same
-// node and skip stale pops) or decrease-key via Fix.
+// Clear removes all entries and transaction state.
+func (h *Heap) Clear() {
+	h.entries = h.entries[:0]
+	clear(h.positions)
+	h.spent = invalidNodeID
+}
+
+// Push inserts a new open node with key f. Every open node has one heap entry;
+// strictly improving paths use Fix rather than a stale duplicate.
 func (h *Heap) Push(id NodeID, f int32) {
-	e := heapEntry{id: id, f: f, seq: h.nextSeq}
-	h.nextSeq++
-	h.entries = append(h.entries, e)
-	h.up(len(h.entries) - 1)
+	h.ensurePositions()
+	h.entries = append(h.entries, heapEntry{id: id, f: f})
+	index := len(h.entries) - 1
+	h.positions[id] = index
+	h.up(index)
 }
 
 // Pop removes and returns the smallest entry. If the heap is empty
 // ok is false.
 func (h *Heap) Pop() (NodeID, int32, bool) {
+	if h.spent != invalidNodeID {
+		h.removeSpent()
+	}
 	if len(h.entries) == 0 {
 		return 0, 0, false
 	}
 	top := h.entries[0]
-	last := len(h.entries) - 1
-	h.entries[0] = h.entries[last]
-	h.entries = h.entries[:last]
-	if len(h.entries) > 0 {
-		h.down(0)
-	}
+	h.removeAtDown(0)
 	return top.id, top.f, true
+}
+
+// BeginExpand selects the current root but deliberately retains it in the
+// heap. The next newly opened neighbour can replace it in place; otherwise it
+// is removed before the following selection [04 R-PATH-01 §1].
+func (h *Heap) BeginExpand() (NodeID, int32, bool) {
+	if h.spent != invalidNodeID {
+		h.removeSpent()
+	}
+	if len(h.entries) == 0 {
+		return invalidNodeID, 0, false
+	}
+	top := h.entries[0]
+	h.spent = top.id
+	return top.id, top.f, true
+}
+
+// Open records one newly opened neighbour. The first after BeginExpand
+// replaces the spent root and sifts down; later ones append and sift up.
+func (h *Heap) Open(id NodeID, f int32) {
+	if h.spent == invalidNodeID {
+		h.Push(id, f)
+		return
+	}
+	h.ensurePositions()
+	delete(h.positions, h.spent)
+	h.entries[0] = heapEntry{id: id, f: f}
+	h.positions[id] = 0
+	h.spent = invalidNodeID
+	h.down(0)
 }
 
 // Peek returns the smallest entry without removing it.
@@ -245,44 +279,33 @@ func (h *Heap) Peek() (NodeID, int32, bool) {
 	return e.id, e.f, true
 }
 
-// Fix updates the key for an existing entry and restores heap order.
-// It implements decrease-key (or increase-key) without inserting a
-// duplicate. The entry's seq is preserved so equal-key insertion
-// order remains that of the original insertion [04 §7.2] C5.
-// If the id is not found, Fix returns false.
+// Fix records F for a relaxation that NodeStore already accepted on strictly
+// lower G. It always writes the supplied F and sifts up, including a wrapped
+// delta that makes F higher. If that sifting displaces the spent root, it
+// removes that root from its new position using retail's last-entry
+// replacement and sift-down transaction [04 R-PATH-01 §1]. If the id is not
+// open, Fix returns false.
 func (h *Heap) Fix(id NodeID, newF int32) bool {
-	for i, e := range h.entries {
-		if e.id == id {
-			oldF := e.f
-			h.entries[i].f = newF
-			if newF < oldF {
-				h.up(i)
-			} else if newF > oldF {
-				h.down(i)
-			}
-			return true
-		}
+	index, ok := h.positions[id]
+	if !ok {
+		return false
 	}
-	return false
+	h.entries[index].f = newF
+	h.up(index)
+	if h.spent != invalidNodeID && h.positions[h.spent] != 0 {
+		h.removeSpent()
+	}
+	return true
 }
 
-// Contains reports whether id is present in the heap (linear scan).
+// Contains reports whether id is present in the heap.
 func (h *Heap) Contains(id NodeID) bool {
-	for _, e := range h.entries {
-		if e.id == id {
-			return true
-		}
-	}
-	return false
+	_, ok := h.positions[id]
+	return ok
 }
 
 func (h *Heap) less(i, j int) bool {
-	a := h.entries[i]
-	b := h.entries[j]
-	if a.f != b.f {
-		return a.f < b.f // strict less [04 §7.2] C5
-	}
-	return a.seq < b.seq // insertion-order tiebreaker
+	return h.entries[i].f < h.entries[j].f
 }
 
 func (h *Heap) up(i int) {
@@ -291,7 +314,7 @@ func (h *Heap) up(i int) {
 		if !h.less(i, p) {
 			break
 		}
-		h.entries[i], h.entries[p] = h.entries[p], h.entries[i]
+		h.swap(i, p)
 		i = p
 	}
 }
@@ -301,17 +324,57 @@ func (h *Heap) down(i int) {
 	for {
 		l := 2*i + 1
 		r := l + 1
-		smallest := i
-		if l < n && h.less(l, smallest) {
-			smallest = l
-		}
-		if r < n && h.less(r, smallest) {
-			smallest = r
-		}
-		if smallest == i {
+		if l >= n {
 			break
 		}
-		h.entries[i], h.entries[smallest] = h.entries[smallest], h.entries[i]
-		i = smallest
+		child := l
+		// A right child wins only when strictly smaller; equality selects left.
+		if r < n && h.entries[r].f < h.entries[l].f {
+			child = r
+		}
+		if h.entries[i].f <= h.entries[child].f {
+			break
+		}
+		h.swap(i, child)
+		i = child
 	}
+}
+
+func (h *Heap) ensurePositions() {
+	if h.positions == nil {
+		h.positions = make(map[NodeID]int)
+	}
+}
+
+func (h *Heap) swap(i, j int) {
+	h.entries[i], h.entries[j] = h.entries[j], h.entries[i]
+	h.positions[h.entries[i].id] = i
+	h.positions[h.entries[j].id] = j
+}
+
+func (h *Heap) removeSpent() {
+	spent := h.spent
+	h.spent = invalidNodeID
+	index, ok := h.positions[spent]
+	if ok {
+		h.removeAtDown(index)
+	}
+}
+
+// removeAtDown removes one element by filling its slot from the heap tail and
+// sifting that replacement down. The spent-root transaction specifies down
+// even when the removed element was displaced below the root.
+func (h *Heap) removeAtDown(index int) {
+	last := len(h.entries) - 1
+	removed := h.entries[index]
+	delete(h.positions, removed.id)
+	if index == last {
+		h.entries = h.entries[:last]
+		return
+	}
+	replacement := h.entries[last]
+	h.entries[index] = replacement
+	h.entries = h.entries[:last]
+	h.positions[replacement.id] = index
+	h.down(index)
 }

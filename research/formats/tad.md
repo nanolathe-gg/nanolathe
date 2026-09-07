@@ -13,19 +13,18 @@ sync, resource status, combat events) rather than a player-input log.
 Replay tools work by re-feeding this traffic into a synthetic multiplayer
 session, not by deterministic re-simulation.
 
-OpenTA uses `.tad` recordings as *observational evidence* for
-classic-engine behavior (see `RECORDER.md`). They are never an
-authoritative state format; that remains `openta.replay`.
+`.tad` recordings are useful observational evidence for classic-engine
+behavior. They are not an authoritative engine state format.
 
 **Not a retail input.** The retail executable neither reads nor writes
 `.tad` files; the malformed-input matrix of `[02 R-MALF-01 §2]` lists the
 format only to say so. Everything below is a contract with third-party
 recorders, not with the engine.
 
-This document covers the file envelope, the TA wire-packet encodings
+This inherited third-party format description covers the file envelope, the TA wire-packet encodings
 (XOR/checksum, LZ77 compression), the recorder's "smartpak" re-encoding of
 unit-sync packets, and the subpacket taxonomy. It is the byte-level contract
-for the `openta-recorder` crate.
+for compatible third-party tooling.
 
 Two related identifiers appear inside recordings and must not be confused:
 
@@ -365,7 +364,7 @@ peer rather than authoritative simulation time.
 ## Corpus validation
 
 A throwaway Python reference implementation of this contract was run against
-all five private corpus recordings (see `RECORDER.md` for the corpus):
+all five private corpus recordings:
 
 | map | header | recorder | players | maxUnits | records | subpacket errors |
 | --- | --- | --- | --- | --- | ---: | --- |
@@ -414,7 +413,7 @@ than treating either as a subpacket stream.
 
 - **The remaining 0x2c body bit-packing is a crown-jewel unknown.** Health,
   buildDone, movement identity, and the common two/three-point X/Z prefix are
-  now decoded by OpenTA corpus observation. Heading, velocity/vertical state,
+now decoded by corpus observation. Heading, velocity/vertical state,
   the later point role, alternate movement shapes, and optional trailing
   fields remain undecoded. The external implementations inspected replay the
   body opaquely or read only the tick.
@@ -456,6 +455,5 @@ than treating either as a subpacket stream.
   branch): `libs/tapacket/TPacket.{h,cpp}`
   (subpacket names/sizes, bin2int, PLAYER_INFO offsets),
   `libs/tapacket/notes/`, `apps/gpgnet4ta/GameMonitor2.cpp` (tick usage).
-- Facts taken from these sources are format documentation only; OpenTA
-  implementations are written fresh from this document (no code
-  translation). See `docs/provenance.md`.
+- Facts taken from these sources are format documentation only. This project
+  does not ship a TAD reader, recorder, or replay engine.
