@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -279,5 +280,88 @@ func TestCommittedFrameDrawsStripObjectsAtTheirBarrier(t *testing.T) {
 	empty := compose()
 	if painted := stripPainted(empty); painted != 0 {
 		t.Fatalf("an empty strip channel composed %d non-background pixels", painted)
+	}
+}
+
+// TestNanolatheCommittedSnapshotDoesNotDependOnPresentationCadence verifies
+// that a strip-6 particle is a committed value, not client state. A fresh
+// client and a client that presents the same tick five times must paint the
+// same bytes; drawing must not advance, reseed, create or expire particles
+// [03 R-STRIP-01 §2][03 §5.5][I6].
+func TestNanolatheCommittedSnapshotDoesNotDependOnPresentationCadence(t *testing.T) {
+	render := func(c *Client, cur *frame.Frame) []byte {
+		clearIndexed(c)
+		c.resetListForTest()
+		c.drawEffects(cur)
+		c.replayForTest()
+		return append([]byte(nil), c.indexed...)
+	}
+
+	// The first particle is visible only in earlier committed frames. Its
+	// absence from final catches stale client-owned particle retention; the
+	// surviving particle moves and changes colour each frame.
+	snapshots := []*frame.Frame{
+		stripTestFrame(true,
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa3, X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20)},
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa6, X: numeric.FixedFromInt(28), Z: numeric.FixedFromInt(20)}),
+		stripTestFrame(true,
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa4, X: numeric.FixedFromInt(24), Z: numeric.FixedFromInt(20)},
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa7, X: numeric.FixedFromInt(32), Z: numeric.FixedFromInt(20)}),
+		stripTestFrame(true,
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa1, X: numeric.FixedFromInt(36), Z: numeric.FixedFromInt(20)}),
+		stripTestFrame(true,
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa2, X: numeric.FixedFromInt(40), Z: numeric.FixedFromInt(20)}),
+		stripTestFrame(true,
+			frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa3, X: numeric.FixedFromInt(44), Z: numeric.FixedFromInt(20)}),
+	}
+
+	// A client that presents all intervening commits ends at the same pixels as
+	// a fresh client that sees only the final commit.
+	presented := stripTestClient(t)
+	var afterSequence []byte
+	for i, cur := range snapshots {
+		cur.Tick = uint32(i + 1)
+		afterSequence = render(presented, cur)
+	}
+	fresh := render(stripTestClient(t), snapshots[len(snapshots)-1])
+	if !bytes.Equal(fresh, afterSequence) {
+		t.Fatal("a fresh client and a client that saw earlier nano snapshots painted the final commit differently")
+	}
+	if got := afterSequence[20*presented.width+20]; got != 0 {
+		t.Fatalf("a particle absent from the final snapshot remained at its old point as %#x", got)
+	}
+
+	// Re-presenting one committed tick also remains inert: presentation cadence
+	// cannot change the final snapshot.
+	repeated := stripTestClient(t)
+	var afterFive []byte
+	for i := 0; i < 5; i++ {
+		afterFive = render(repeated, snapshots[len(snapshots)-1])
+	}
+	if !bytes.Equal(fresh, afterFive) {
+		t.Fatal("the same committed nano snapshot painted differently after repeated presentation")
+	}
+	if got := stripPainted(repeated); got != stripParticleSize*stripParticleSize {
+		t.Fatalf("repeated presentation painted %d pixels, want the final committed particle only", got)
+	}
+}
+
+// TestNanolatheCommittedParticleUsesTheCoverageGate keeps the raw two-by-two
+// mark behind the particle's individual visibility test. The strip itself is
+// present in a committed frame, but an unseen particle neither writes its raw
+// palette colour nor leaks an offscreen construction effect [03 §5.5][03
+// R-STRIP-01 §2].
+func TestNanolatheCommittedParticleUsesTheCoverageGate(t *testing.T) {
+	particle := frame.StripView{
+		Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa3,
+		X: numeric.FixedFromInt(20), Z: numeric.FixedFromInt(20),
+	}
+	c := stripTestClient(t)
+	if stats := c.drawStripBarrier(stripTestFrame(false, particle), 6); stats.Gated != 1 || stats.Filled != 0 {
+		t.Fatalf("unseen nano particle drew %+v, want one gated record", stats)
+	}
+	c.replayForTest()
+	if painted := stripPainted(c); painted != 0 {
+		t.Fatalf("unseen nano particle painted %d pixels", painted)
 	}
 }

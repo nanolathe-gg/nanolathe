@@ -2212,6 +2212,13 @@ rows over the same screen area that another player's `32×32` frame covers in
 `h-1` is one larger. The frame offsets, which vary wildly across colours in
 the stock file, are inert in the model path.
 
+**Unknown (bounded static trace).** The feature draw dispatcher constructs a
+pseudo-unit from a feature's model, position and orientation, but the recovered
+initialization does not settle which player-colour selector, if any, its team
+faces carry. A feature `LOGOS` face must therefore stay absent in Nanolathe
+until that initialization or the selector reader is traced; colour zero is not
+a supported fallback.
+
 #### The option defaults, the waterline bit, the shadow gate and the punch-out offset [R-RAST-01 §4]
 
 **`Anti_Alias` shipped default.** The settings reader looks the value up under the registry key `Anti-Alias` (the
@@ -5242,10 +5249,17 @@ from 0** (the primitive count and the "first primitive is the selection
 box" marker come from the model piece). Per 32-byte primitive: gather its
 vertex indices into the point array; if the coloured flag is set, the flat
 polygon filler; else if the vertex count is exactly 4, resolve the texture
-(the resolve-at-draw-time bit → the entry's frame; the **debris** entry
-additionally honours the team bit by taking the `LOGOS` frame selected by the
-owning player's colour index) and run the textured quad mapper; else draw
+(the resolve-at-draw-time bit → the entry cursor's current frame; the **debris**
+entry additionally honours the team bit by taking the `LOGOS` frame selected by
+the owning player's colour index) and run the textured quad mapper; else draw
 nothing.
+
+**Established (direct-static).** The model binder initializes every
+multi-frame entry cursor at frame zero. It marks an exactly-ten-frame common
+entry as `LOGOS` and excludes that cursor from the advancement registry. The
+effect/projectile entry has no team-colour branch, so its ordinary resolver
+reads that still-initial frame zero; it neither creates a hole nor borrows an
+owning player's colour.
 
 The **effect/projectile entry** (3DO projectiles and the pooled explosion
 models) first rotates each vertex by the object's three angle words through
@@ -9380,6 +9394,11 @@ body — most under `R-<id>` headings — and are not restated here.
 - The name and authored source of the display-mode byte that forces every
   unit body through the tinted blitter (cleared by the film/HUD-hide key
   family) · [R-RAST-01 §7] · static trace of its writers (doc 07 owns the key).
+- The player-colour selector, if any, supplied when the feature draw dispatcher
+  constructs its pseudo-unit for a team-textured 3DO face; the bounded trace
+  resolves model, position and orientation but not that selector · [R-RAST-01
+  §3] · static trace of the pseudo-unit initialization and the renderer's team
+  selector reader.
 - The identical-model six-variant shading matrix predicted by [R-RND-02A] has
   not been run · §5 · manual retail observation.
 - Whether the palette window's blue-table feature bit can be clear in a retail

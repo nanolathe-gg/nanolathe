@@ -1,6 +1,13 @@
 package client
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/frame"
+	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+)
 
 // stagingBody builds a carrier image: `w` by `h` at the given anchor, every
 // pixel covered with one colour and one key.
@@ -161,5 +168,94 @@ func TestCompositeChildKeyStoreWraps(t *testing.T) {
 		if got := wrapKeyByte(tc.in); got != tc.want {
 			t.Fatalf("wrapKeyByte(%d) = %d, want %d", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestCarriedChildUsesItsOwnPublishedTeamColour locks the staging input rather
+// than only the primitive helper: cargo with owner slot 7 and colour 0 must use
+// its own frame even when its carrier is slot 0 with colour 7 [R-REN-03A §4]
+// [R-RAST-01 §3].
+func TestCarriedChildUsesItsOwnPublishedTeamColour(t *testing.T) {
+	c := newPieceFixtureClient(t)
+	frames := make([]formats.GAFFrameRef, 10)
+	for i := range frames {
+		frames[i].Frame = &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{byte(100 + i)}}
+	}
+	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{Frames: frames}}
+	c.models = map[string]*unitModel{"cargo": teamLogoTestModel()}
+
+	carrier := frame.UnitView{
+		InstanceID: 1, Model: "cargo", Owner: 0, OwnerColor: 7, OwnerColorKnown: true, ZBuffer: true,
+	}
+	child := frame.UnitView{
+		InstanceID: 2, Model: "cargo", Owner: 7, OwnerColor: 0, OwnerColorKnown: true, ZBuffer: true,
+	}
+	if !c.composeCarrier(carrier, 0, 0, []frame.UnitView{child}) {
+		t.Fatal("carrier with carried child did not compose")
+	}
+	c.list.Replay(c.classicSink())
+	var childPixels, carrierPixels int
+	for _, color := range c.indexed {
+		switch color {
+		case 100:
+			childPixels++
+		case 107:
+			carrierPixels++
+		}
+	}
+	if childPixels == 0 {
+		t.Fatal("carried child wrote no colour-zero pixels")
+	}
+	if carrierPixels != 0 {
+		t.Fatalf("carrier colour-seven frame remained in %d pixels after equal-key child composite", carrierPixels)
+	}
+}
+
+func teamLogoTestModel() *unitModel {
+	return &unitModel{compiled: &compiledmodel.Model{
+		Root: 0,
+		Pieces: []compiledmodel.Piece{{
+			Parent: -1,
+			Vertices: [][3]numeric.Fixed{
+				{0, 0, 0}, {8 << 16, 0, 0}, {8 << 16, 0, -8 << 16}, {0, 0, -8 << 16},
+			},
+			Primitives: []compiledmodel.Primitive{{TextureName: "logo", VertexIndices: []uint16{0, 1, 2, 3}}},
+		}},
+	}}
+}
+
+// TestTeamColourDoesNotChangeWaterlineOwnership keeps the visual selector out
+// of the gameplay visibility predicate: player zero's submerged unit remains
+// tinted/present even when its LOGOS frame is colour seven [R-RAST-01 §3, §4].
+func TestTeamColourDoesNotChangeWaterlineOwnership(t *testing.T) {
+	c := newPieceFixtureClient(t)
+	frames := make([]formats.GAFFrameRef, 10)
+	for i := range frames {
+		frames[i].Frame = &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{byte(100 + i)}}
+	}
+	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{Frames: frames}}
+	c.models = map[string]*unitModel{"sub": teamLogoTestModel()}
+	c.buffer = frame.NewBuffer()
+	w := c.buffer.BeginWrite()
+	w.Selection.LocalPlayer = 0
+	w.Visibility.SeaLevel = 1 << 16
+	if err := c.buffer.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+
+	composed, ok := c.composeUnitModel(frame.UnitView{
+		InstanceID: 3, Model: "sub", Owner: 0, OwnerColor: 7, OwnerColorKnown: true, ZBuffer: true,
+	})
+	if !ok || composed.image == nil {
+		t.Fatal("submerged owned unit did not compose")
+	}
+	covered := 0
+	for _, present := range composed.image.covered {
+		if present {
+			covered++
+		}
+	}
+	if covered == 0 {
+		t.Fatal("owner-colour selector changed waterline ownership and erased the owned unit")
 	}
 }

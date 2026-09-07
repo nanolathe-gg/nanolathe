@@ -170,10 +170,22 @@ const (
 	KindNoReaction uint8 = 11 // subtracts health but skips reaction/callbacks [06 §9.1]
 )
 
-// IsDamagePacketKind reports whether kind is one of the four damage packet
-// kinds the damage-intake handler accepts [P1-07 §2.6] [06 §9.1].
-func IsDamagePacketKind(k uint8) bool {
-	return k == KindOrdinary || k == KindParalyzer || k == KindHeal || k == KindNoReaction // [P1-07 §2.6]
+// DamageInput is a locally delivered damage packet before defender scaling.
+// Victim and Attacker are raw pool slots: the attacker is deliberately not
+// validated, while zero remains the null attacker [06 §9.1] C18.
+type DamageInput struct {
+	Victim, Attacker pool.Handle
+	Nominal          int32
+	Direction        uint8
+	Kind             uint8
+}
+
+// DamageResult reports the receiver's acceptance and packed post-defender
+// amount. A zero amount is still an accepted packet [06 §9.1] C20.
+type DamageResult struct {
+	Accepted     bool
+	Amount       uint16
+	DeathLatched bool
 }
 
 // SelectBaseDamage selects the UnitName override or default damage [06 §9.2] C19.
@@ -319,6 +331,18 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 // Amount modulo and health subtraction ordering preserves low-32-bit wrap
 // [06 §9.2] per C20.
 func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32, defenderKills int32, isArmored bool, damageModifier int32, isHealing bool, globalDouble bool, globalHalf bool) uint16 {
+	amount := weaponNominal(baseDamage, falloff, attackerKills, globalDouble, globalHalf)
+	if isHealing {
+		// Healing bypasses steps 5 and 6 [06 §9.2] C20.
+		return uint16(amount) // pack low 16 bits modulo 65,536 [06 §9.2] step 7
+	}
+	return scaleAcceptedAmount(amount, defenderKills, isArmored, damageModifier)
+}
+
+// weaponNominal is the weapon-side half of C20. It intentionally knows
+// nothing about the recipient: fixed producers have no weapon and enter the
+// receiver below with their established nominal directly [06 §9.2].
+func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, globalDouble bool, globalHalf bool) int32 {
 	// Step 1 already applied: baseDamage is selected override or default [06 §9.2] C19.
 	// Step 2: `amount = trunc((double)base * falloff)` [06 §9.2]. The base is
 	// promoted to double and multiplied by the STORED single-precision falloff
@@ -349,10 +373,14 @@ func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32,
 		amount = amount / 2 // truncate toward zero [01 §8] [06 §9.2] global half [P1-07 §2.5] options word bit8
 	}
 
-	if isHealing {
-		// Healing bypasses steps 5 and 6 [06 §9.2] C20.
-		return uint16(amount) // pack low 16 bits modulo 65,536 [06 §9.2] step 7
-	}
+	return amount
+}
+
+// scaleAcceptedAmount is C20's defender-side half: armor, defender veterancy,
+// then the packet's low-word packing. It is shared by weapon and fixed packet
+// producers, which keeps a fixed nominal from acquiring a fictitious weapon
+// lookup [06 §9.2] [06 R-DMG-01 §8].
+func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, damageModifier int32) uint16 {
 
 	// Step 5: if target is in armored state and incoming amount <30000, apply fixed-point damage modifier [06 §9.2] step 5.
 	// The modifier is definition's fixed-point scale >>16 (damageModifier is 16.16, 65536 =1.0) [02 "Unit record"].
@@ -408,15 +436,6 @@ func ValidatePacketTarget(victim pool.Handle, isAlive func(pool.Handle) bool, is
 		return false // unit status word dead latch (0x4000) must be clear [06 §9.1] [P1-07 §2.6]
 	}
 	return true
-}
-
-// ValidatePacketKind reports whether kind is admissible for the damage intake
-// per [P1-07 §2.6] — damage kinds 1/2/0xA/0xB are the four kinds the
-// damage-intake handler accepts; death causes 3..11 are cause producer codes,
-// not damage kinds.
-// This separates the two enums that share the packet byte position [06 §12.1].
-func ValidatePacketKind(kind uint8) bool {
-	return IsDamagePacketKind(kind) // [P1-07 §2.6] 1,2,10,11
 }
 
 // ReactionSeams binds the parts of the damage-intake reaction routine of
@@ -480,10 +499,9 @@ type ReactionSeams struct {
 // *inhibit* hands it back (setting it).
 
 // DamageFlashByte is the value the damage dispatcher writes into the victim's
-// minimap blink byte: retail stores 240, which the unit sweep reads back as a
-// SIGNED byte and decrements while nonzero, so -16 climbs to zero after sixteen
-// unit visits [06 R-WPN-04 §2]. The Go field is signed for that reason, so the
-// constant is written as the value the sweep actually sees.
+// minimap blink byte: retail stores 240. The Go field is signed, so it carries
+// the same byte pattern as -16; the unit sweep interprets the byte over its
+// full 240-visit lifetime [06 R-WPN-04 §2].
 const DamageFlashByte int8 = -16
 
 // SetDamageFlash arms the victim's minimap blink [06 R-WPN-04 §2]. Every packet
@@ -735,27 +753,17 @@ func ApplyHealing(currentHealth int32, maxHealth int32, amount uint16) int32 {
 	return newHealth
 }
 
-// DispatchHealingPacket is the central kind-10 intake. It resolves the victim
-// from the authoritative world and applies the same alive/death-latch gates as
-// ordinary damage intake before applying early healing [06 §9.1].
+// DispatchHealingPacket adapts the legacy wire entry to the common kind-10
+// receiver. Acceptance, unsigned healing and the signed-word store therefore
+// have one implementation [06 §9.1].
 func (s *Service) DispatchHealingPacket(w *units.World, packet Packet) bool {
-	if s == nil || w == nil || !ValidatePacketKind(packet.Kind) || packet.Victim == 0 {
+	if packet.Kind != KindHeal {
 		return false
 	}
-	victim := w.Unit(pool.Handle(packet.Victim))
-	if victim == nil || !victim.Alive || victim.Dying {
-		return false
-	}
-	switch packet.Kind {
-	case KindHeal:
-		if victim.Def == nil {
-			return false
-		}
-		victim.Health = ApplyHealing(victim.Health, victim.Def.MaxDamage, packet.Amount)
-		return true
-	default:
-		return false
-	}
+	return s.AcceptDamage(w, 0, DamageInput{
+		Victim: pool.Handle(packet.Victim), Attacker: pool.Handle(packet.Attacker),
+		Nominal: int32(packet.Amount), Direction: packet.Direction, Kind: packet.Kind,
+	}).Accepted
 }
 
 // ApplySelfDestructDamage sends the fixed self-damage packet through the
@@ -771,26 +779,18 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 	if victim == nil || !victim.Alive || victim.Dying {
 		return false
 	}
-	// The armor gate reads the runtime posture only [06 R-DMG-01 §8]; the FBI
-	// `armoredstate` flag has no reader in retail. (At 30000 the strict
-	// `amount < 30000` guard closes the gate anyway, but the operand must
-	// still be the right one.)
-	armored := UnitArmored(victim)
+	// A fixed kind-3 packet uses the strict 30000 armor boundary and defender
+	// veterancy. Kind 3 records its own provenance and emits no damage callbacks
+	// on a surviving unit [06 §9.1][06 §9.2][06 §12.1].
 	damageModifier := int32(65536)
 	if victim.Def != nil {
 		damageModifier = victim.Def.DamageModifier
 	}
-	amount := ComputeScaledAmount(30000, 1, victim.Kills, victim.Kills, armored, damageModifier, false, false, false)
+	amount := ComputeScaledAmount(30000, 1, victim.Kills, victim.Kills, UnitArmored(victim), damageModifier, false, false, false)
 	victim.LastDamageSide = victim.Owner
 	victim.LastDamageCause = uint8(CauseSelfDestruct)
 	victim.Health = ApplyDamage(victim.Health, amount)
 	if victim.Health <= 0 {
-		// The death packet here is the self-damage packet: cause 3 applies
-		// 30000 "to the unit itself ... through the standard damage funnel"
-		// [04 R-SPEC-01 §1][04 R-ORD-01 §2], so its attacker is the victim.
-		// The death handler's row writes that attacker into the
-		// recorded-attacker link [04 R-UNIT-06 §5], which therefore ends as the
-		// unit's own handle and not as whoever shot it earlier.
 		w.DestroyBy(target, units.DeathSelfDestruct, target)
 		if s.deathNotified == nil {
 			s.deathNotified = make(map[pool.Handle]*units.Unit)
@@ -799,21 +799,7 @@ func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, ti
 			s.deathNotified[target] = victim
 			s.emitEvent(Event{Kind: EventUnitKilled, Tick: tick, Source: target, Target: target, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}})
 		}
-		return true
 	}
-	// No script callbacks. The funnel starts `HitByWeapon` and `TakeDamage` from
-	// a single equality test against damage kind 1, and self-destruct is kind 3
-	// [06 §9.1 step 7][06 R-WPN-05 §11 "Every non-projectile caller passes a
-	// zero direction word"]. A survivor of its own self-destruct — only
-	// reachable where veterancy scaling leaves the 30000 short of the unit's
-	// health — therefore sees its health drop with its script never told.
-	//
-	// The open-question marker that stood here asked which direction byte to hand
-	// `HitByWeapon` on this path. The trace that answered it (every
-	// non-projectile call site pushes an immediate zero) also showed the call
-	// itself does not happen: retail reads the direction byte only inside the
-	// kind-1 branch. The marker was defending the emission while asking about
-	// its argument.
 	return true
 }
 

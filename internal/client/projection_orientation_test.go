@@ -187,7 +187,7 @@ func TestNanoframeOutlineIsTheBodysRowExtremes(t *testing.T) {
 	c := orientationClient()
 	for _, heading := range orientationHeadings {
 		draw := orientationDraw(heading)
-		body, ok := c.composeModel(draw, 0, 1, modelCursorUnit, nil, 0)
+		body, ok := c.composeModel(draw, 0, teamColor{index: 0, known: true}, 1, modelCursorUnit, nil, 0)
 		if !ok || body.image == nil {
 			t.Fatalf("heading %d: the body did not compose", heading)
 		}

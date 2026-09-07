@@ -1342,14 +1342,9 @@ const (
 // appendStripViews mirrors every live strip sub-record into the committed
 // frame, one view per sub-record, rebuilt from scratch at every publication.
 //
-// Strip objects are authoritative simulation state with no committed-frame
-// representation of their own, and they cannot reach the frame through the
-// presentation event buffer: the strip sweep is phase 11, the effect pool is
-// advanced in phase 4, and the buffer is reset at publication — so an event
-// emitted from the sweep is wiped before any effect phase reads it. A per-frame
-// copy at the publication boundary is the shape that fits: it samples committed
-// state, mutates nothing, and needs no lifetime bookkeeping of its own because
-// the strip object already owns each sub-record's life [I6].
+// Phase 11 owns every strip object and its particle lifecycle. Publication
+// copies those live particles into the immutable frame; it neither advances nor
+// retains them, so a client may skip commits without reconstructing state [I6].
 //
 // The walk order IS the composer's: strips ascending 0..9, objects in insertion
 // order, sub-records in vector order [03 §1][R-FX-02 §1][I1]. The client
@@ -1357,8 +1352,8 @@ const (
 // an implementation detail.
 //
 // Each view carries its family, its art identity as a (bank, entry) pair, its
-// own animation cursor and — for the one family that fills rather than blits —
-// its own palette byte. The per-family draw rules are the client's; nothing
+// own animation cursor and — for the filling families rather than the blitting
+// ones — its own palette byte. The per-family draw rules are the client's; nothing
 // here decides how a record is painted [03 R-FX-01 §3].
 //
 // Corrected: these records used to be mirrored as frame.EffectView values on
@@ -1366,22 +1361,13 @@ const (
 // no way for the draw to tell one family from another. Half of [R-FX-01 §3]'s
 // per-family contract cannot be expressed that way — the two puff classes blit
 // with NO coverage gate while the flame and sprinkle families gate, and the
-// sprinkle's colour byte must reach the framebuffer unremapped — so the mirror
-// has its own committed channel and its own draw.
-//
-// Strip 6 is deliberately NOT mirrored. The nanolathe spray already has a
-// presentation path of its own — the strip-6 stroke gate the composer runs on
-// published nanolathe events — and mirroring the particles beside it would draw
-// the same spray twice. Folding the two into one is the remaining half of this
-// seam and wants the event path retired first.
+// sprinkle and nanolathe colour bytes must reach the framebuffer unremapped —
+// so the mirror has its own committed channel and its own draw.
 func (s *Session) appendStripViews(out []frame.StripView) []frame.StripView {
 	if s == nil || s.strips == nil {
 		return out
 	}
 	for strip := 0; strip < stripCount; strip++ {
-		if strip == stripNanolathe {
-			continue
-		}
 		for _, o := range s.strips.strips[strip] {
 			family, bank, entry, fill := o.drawIdentity()
 			if entry == "" && fill == 0 {
@@ -1400,10 +1386,10 @@ func (s *Session) appendStripViews(out []frame.StripView) []frame.StripView {
 					Z:      p.z,
 				}
 				if entry == "" {
-					// The sprinkle family's own colour walks its ramp as the
-					// puff ages [R-STRIP-01 §1 strips 2/7][R-FX-01 §3]; the
-					// family default stands in only for a sub-record that
-					// carries none.
+					// The sprinkle and nanolathe families carry their own ramp
+					// byte as they age [R-STRIP-01 §1 strips 2/7][R-FX-01
+					// §3][03 §5.5]; the family default stands in only for a
+					// sub-record that carries none.
 					view.Fill = fill
 					if p.color != 0 {
 						view.Fill = p.color
@@ -1447,10 +1433,6 @@ func (o *stripObject) drawIdentity() (family frame.StripFamily, bank, entry stri
 }
 
 const (
-	// stripNanolathe is the strip whose spray already has its own presentation
-	// path; see appendStripViews.
-	stripNanolathe = 6
-
 	// effectBank is the bank half of every strip family's identity pair. The
 	// entries the strip families blit are rows of the engine's own fixed
 	// effect-slot table, which is bound from `fx` at startup [06 R-WFX-01 §1]

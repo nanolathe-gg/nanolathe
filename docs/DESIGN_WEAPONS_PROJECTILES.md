@@ -358,6 +358,143 @@ The paralyzer is binary: the packet scales like any other before its unsigned
 16-bit duration is credited, and the stunned bit gates a fixed set of
 behaviours rather than scaling anything `[06 §10]` `[06 R-DMG-01 §11]`.
 
+#### EC-04 — common accepted-packet intake
+
+Damage intake is session-bound through composition, while its receiver remains
+combat-owned. Producers select a nominal amount; the combat service accepts the
+packet, applies defender scaling and state effects, and records a death latch.
+The normal session death visit finalizes a latched victim later. This is one
+narrow seam, not a second damage framework `[06 §9.1]` `[06 §9.2]` `[06 §12.1]`.
+
+```go
+// DamageInput is a locally delivered packet before defender scaling.
+type DamageInput struct {
+	Victim, Attacker pool.Handle // raw slots; zero attacker is null
+	Nominal          int32       // weapon nominal or established fixed amount
+	Direction        uint8       // zero for non-projectile callers
+	Kind             uint8
+}
+
+type DamageResult struct {
+	Accepted     bool
+	Amount       uint16 // packed post-defender amount; zero is a valid packet value
+	DeathLatched bool
+}
+
+func (s *Service) AcceptDamage(
+	w *units.World, tick uint32, in DamageInput,
+) DamageResult
+```
+
+`Attacker` is a raw slot identity, not a validated live reference. At accepted
+non-heal intake, the receiver reads that slot's current raw owner and snapshots
+it beside the attacker link; a freed or reused nonzero slot therefore remains
+a provenance source. A zero attacker leaves the previous side snapshot alone.
+The later death handler always rewrites its attacker link from the death
+packet, including null. Projectile routing side remains separate: neutral side
+10 admits a null-shooter impact but is never substituted for raw attacker-side
+provenance `[06 §9.1]` `[06 R-WPN-04 §2]` `[06 R-DMG-01 §9]`.
+
+Combat owns an unexported weapon-nominal helper: exact-name weapon damage,
+falloff, attacker veterancy and global gates. It must not read defender armor,
+modifier or kills. `combat.Service.AcceptDamage` owns strict `< 30000` armored
+reduction, defender veterancy and low-16-bit packing for every non-heal kind.
+Fixed producers pass their known nominal: 30,000 for kinds 3, 6 and 9; reclaim
+pulse for kind 5; water amount for kind 11. Heal takes its early arm before
+defender scaling. This retains the armor-boundary rule without inventing a
+weapon for a non-weapon producer `[06 §9.2]` `[06 R-DMG-01 §8]`.
+
+The receiver orders its work exactly: reject only null/dead/death-latched
+victims; early-return kind 10 after unsigned healing; otherwise scale, flash
+240, run prior-provenance reaction except for kind 11, and record kind plus
+nonnull raw attacker provenance. Kind 2 then queues stun without health
+change; other kinds subtract modular signed-16 health. A local human/computer
+non-positive value latches death, preserves that value, and returns from intake;
+it does **not** synchronously run the finalizer. The normal victim/death visit
+later invokes the existing session finalizer (usually the next master tick for
+a projectile lethal). Absent/remote victims clamp to zero and continue. Kind-1
+`HitByWeapon` then `TakeDamage` callbacks run only on that continuing,
+non-death-latched branch; kinds 3, 5, 6, 9 and 11 never gain those callbacks
+`[06 §9.1]` `[06 §10]`.
+
+Consequently, kind-9 nominal 30,000 against a 25-kill victim at 29,000 health
+leaves health 5,000 and flash 240, records cause 9, and starts no kind-1
+callback. Focused acceptance must separately cover normal, paralyze, heal,
+kinds 3/5/6/9/11, stale/reused raw attacker provenance, and dead-latch
+rejection `[06 R-WPN-04 §2]`.
+
+`internal/combat` owns the public entry because it already owns
+`ReactToDamage`, callback bridging, paralyze-task admission, presentation event
+emission and its death-notification guard. Session composition supplies its
+world/tick invocation and binds the existing session death finalizer; it does
+not make session a second packet receiver. Construction, movement and orders
+already depend on combat and receive a session-installed narrow
+`func(combat.DamageInput) combat.DamageResult` binding. They must stop
+emulating a packet through direct `LastDamage*`, `Health`, `ApplyDamage` and
+`DestroyBy` writes. `internal/units` stays below both packages and supplies raw
+slot lookup, death latching and the later finalization visit. This fixed input
+and result are not a registry or event bus.
+
+**Caller audit at the contract baseline.** Projectile direct and area paths
+currently converge in `internal/combat/service.go`'s private
+`applyDamageToUnit`; `internal/combat/damage.go` has a second self-destruct
+receiver. `internal/session/step.go` writes water cause and health directly;
+`internal/construction/reclaim.go` writes kind 5 then calls
+`units.World.ApplyDamage`; `internal/construction/factory.go` and
+`internal/construction/inheritance.go` each latch kind 9 with `DestroyBy`;
+`internal/movement/cargo.go` manually scales, stamps and subtracts its kind
+3/6 packet; and `internal/orders/selfdestruct.go` repeats the self-damage arm.
+These are the actual migration sites. Capture kind 4 and feature conversion
+kind 7 are not packet producers and remain outside EC-04.
+
+The session death finalizer remains the only finalizer. It performs cause-5's
+metal-only refund after ordinary cause-5 lethal handling and before death
+explosion, corpse placement and slot release; intake neither pays reclaim nor
+stamps a corpse. Thus a builder's fatal kind-5 delivery only sets the victim's
+death latch. When the later finalizer visits that same victim slot, it computes
+and credits the cause-5 refund before releasing the slot `[05 R-WORK-01 §4]`
+`[06 §12.1]` `[06 §12.2]`. C26 remains combat's deterministic area-recipient
+walk before each intake; C27 keeps shake, sound, smoke and art before damage;
+and C28 keeps the existing noexplode/bounce/off-map decisions before any
+packet is offered. The new seam does not alter impact selection or presentation
+order.
+
+**Phased implementation and ownership.**
+
+1. `internal/combat/damage.go`, `internal/combat/service.go` and focused
+   combat tests own `DamageInput`, `DamageResult`, `AcceptDamage` and
+   projectile conversion. `internal/session/composition.go` owns installing
+   the combat-to-session finalizer binding. Gate C18--C21 plus
+   normal/paralyze/heal.
+2. `internal/session/session.go` and death-hook tests retain the existing
+   normal death visit and own cause-5 finalizer ordering; the
+   `internal/units` owner changes a minimal death callback only if necessary.
+   There is no synchronous finalizer hand-off from intake. Phase 2 uses the
+   raw attacker's owner to select the refund's controller gate: the economy
+   reference and ordinary owner share that identity through construction,
+   capture replacement and reuse `[05 R-WORK-01 §4]`. Keep the refund in the
+   existing wide economy arithmetic until the final accumulator store; remove
+   the current premature single-precision refund store. Gate C22--C25 plus
+   raw stale/reuse, null-attacker, and before/after victim-slot coverage.
+3. `internal/construction/reclaim.go`, `factory.go`, `inheritance.go`,
+   `internal/movement/cargo.go`, `internal/orders/selfdestruct.go`,
+   `internal/session/step.go`, their tests, and their composition bindings own
+   migration of kinds 3/5/6/9/11. Capture kind 4 and feature-conversion kind 7
+   remain direct, as established. Gate the fixed-30,000, reclaim-refund, water
+   and cargo cases.
+4. Remove only superseded private intake helpers after every production caller
+   migrates; retain pure arithmetic with live callers. Synchronize main, then
+   run `tools/check` and installed-assets `tools/check-retail`.
+
+Tests to replace are the ones treating direct writes as packet proof:
+construction reclaim's zero-clamped `World.ApplyDamage`, session water's
+manual cause/health store, cargo's manual provenance/subtraction, both
+self-destruct paths, and construction kind-9 `DestroyBy` sites in factory and
+inheritance. Their successors must exercise the installed binding and assert
+acceptance, health/provenance, non-kind-1 callback absence, delayed
+finalization, and finalizer order. Existing arithmetic, area and death-order
+tests remain independent.
+
 ### 2.10 Death
 
 `Cause` is the death-cause nibble; the packed death byte is cause in the high

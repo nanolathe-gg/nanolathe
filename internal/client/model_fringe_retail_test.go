@@ -44,7 +44,7 @@ func composeStockModel(t *testing.T, pal *palette.Tables, fs *vfs.FS, name strin
 			draw.Pieces[pi].Primitives[pri].ShadeRows = nil
 		}
 	}
-	if !c.drawModel(draw, 0, 1, modelCursorUnit, nil, 0) {
+	if !c.drawModel(draw, 0, teamColor{index: 0, known: true}, 1, modelCursorUnit, nil, 0) {
 		t.Fatalf("%s composed no geometry", name)
 	}
 	c.replayForTest()

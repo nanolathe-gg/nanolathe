@@ -166,6 +166,7 @@ func TestStripAppendEvictsOldestAbove400(t *testing.T) {
 // and the four-world-units-per-tick travel.
 func TestNanoEmitterProducerAndSweep(t *testing.T) {
 	s, crt := newStripTestSession(14, 14)
+	s.Snapshot = frame.NewBuffer()
 	ref := rng.NewCRT(14)
 	for i := 0; i < 30; i++ {
 		ref.Rand() // walk the reference to the post-producer state
@@ -251,6 +252,10 @@ func TestNanoEmitterProducerAndSweep(t *testing.T) {
 	strip = s.strips.strips[6]
 	if len(strip) != 1 || len(strip[0].particles) != 0 {
 		t.Fatalf("expired particles must drop: %d objects / %d particles left", len(strip), len(strip[0].particles))
+	}
+	s.publishSnapshot(104)
+	if got := len(s.Snapshot.Current().Strips); got != 0 {
+		t.Fatalf("expired nano particles remained in the committed frame: %d views", got)
 	}
 	draws2 := crt.Draws()
 	s.phaseObjectSweeps(105) // verdict: list empty → destroyed
@@ -728,10 +733,6 @@ func TestGeothermalSteamCadence(t *testing.T) {
 // [03 R-STRIP-01 §2]: each mirrored particle carries either the GAF entry its
 // family blits or the colour of the two-by-two rectangle its family fills, and
 // never both.
-//
-// Strip 6 is excluded on purpose: the nanolathe spray already has a
-// presentation path, and mirroring its particles beside it would draw the same
-// spray twice.
 func TestEveryStripFamilyMirrorsItsOwnDrawForm(t *testing.T) {
 	s, _ := newStripTestSession(22, 22)
 	s.Clock.GlobalTick = 0
@@ -788,17 +789,21 @@ func TestEveryStripFamilyMirrorsItsOwnDrawForm(t *testing.T) {
 			if v.Family != frame.StripFamilySprinkle {
 				t.Fatalf("strip %d sprinkle view carries family %d", v.Strip, v.Family)
 			}
+		case 6:
+			if v.Family != frame.StripFamilyNano {
+				t.Fatalf("strip 6 view carries family %d, want nanolathe", v.Family)
+			}
+			if v.Fill < 0xa1 || v.Fill > 0xa7 {
+				t.Fatalf("strip 6 nano fill %#x is outside the authored ramp", v.Fill)
+			}
 		default:
 			t.Fatalf("strip %d was mirrored unexpectedly", v.Strip)
 		}
 	}
-	for _, strip := range []int8{2, 4, 7, 9} {
+	for _, strip := range []int8{2, 4, 6, 7, 9} {
 		if byStrip[strip] == 0 {
 			t.Fatalf("strip %d produced particles but mirrored none", strip)
 		}
-	}
-	if byStrip[stripNanolathe] != 0 {
-		t.Fatalf("strip 6 was mirrored (%d views); the nanolathe spray already has its own presentation path and would draw twice", byStrip[stripNanolathe])
 	}
 }
 

@@ -166,6 +166,11 @@ writes both and the diff. The diff itself is `tools/framediff` (§6).
   device draw only when no merged command's pixels depend on another merged
   command's result: opaque keyed sprites merge freely; destination-reading
   families merge only while their rectangles are pairwise disjoint (§2.3).
+  A quad batch whose `uint16` index scratch reaches its 65,536-vertex domain
+  is submitted and restarted before the next quad; this executor limit never
+  drops or reorders geometry. A destination-reading run keeps its one
+  pre-run snapshot across such chunks, while an overlapping command closes
+  the run and snapshots after the earlier write.
 * **C-G4 Exact index arithmetic.** Indices live in the red channel of RGBA8
   images, sampled nearest in pixel mode, decoded by rounding. Every table
   operation is an integer texel fetch on the uploaded table. There is no

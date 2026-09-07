@@ -553,6 +553,19 @@ restart from phase 0 `[05 "Queue insertion"]` `[05 "Queue subtraction"]`.
 
 With no product attached the same epilogue runs and the node still drops.
 
+**EC-04 reclaim/deconstruction boundary.** Unit reclaim's kind-5 pulse and
+both kind-9 deconstruction paths are producers of the common combat-owned
+accepted-packet receiver, reached through the session binding described in
+`DESIGN_WEAPONS_PROJECTILES` §2.9. Construction supplies only raw
+attacker/victim slots, its fixed nominal amount and zero direction; it does not
+write health, provenance, death latch or a corpse. A fatal packet only latches
+death; the cause-5 refund remains a later normal death-finalizer action, after
+ordinary cause-5 lethal processing and before
+explosion, corpse and slot release. Its amount is `(1 - remaining) *
+BuildCostMetal`, with the compiled `BuildCostMetal` held as `float32` at this
+boundary; it credits only the reconstructed fatal attacker's metal accumulator
+and never energy `[05 R-WORK-01 §4]` `[06 §12.1]`.
+
 **C22 — construction stopped.** The other interrupt prints its message,
 decrements the node count **once**, refreshes the interface and returns result 0:
 the node **survives** and the state machine restarts

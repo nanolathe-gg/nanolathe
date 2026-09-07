@@ -32,9 +32,9 @@ const (
 	// StripFamilyFlameTrail is the strips-7/9 flame-stream trail
 	// [03 R-FX-01 §3].
 	StripFamilyFlameTrail
-	// StripFamilyNano is the strip-6 nanolathe particle. It is not mirrored
-	// today — the spray has a presentation path of its own — and the constant
-	// exists so a family can be named without being routed.
+	// StripFamilyNano is the strip-6 nanolathe particle. Its authoritative
+	// particle state is copied here at publication and painted at strip 6;
+	// presentation does not reconstruct or advance its own emitter [03 §5.5].
 	StripFamilyNano
 )
 

@@ -89,7 +89,7 @@ func TestCollectDrawPolysKeepsAuthoredArityAndCornerOrder(t *testing.T) {
 	vertices[4] = fixedVertex(1, 0, 0)
 	vertices[5] = fixedVertex(1, 0, -1)
 	vertices[6] = fixedVertex(0, 0, -1)
-	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit)
 	if len(polys) != 1 {
 		t.Fatalf("face count = %d, want 1 (no fan triangulation)", len(polys))
 	}
@@ -123,7 +123,7 @@ func TestCollectDrawPolysCarriesNoShadeRowToRaster(t *testing.T) {
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0),
 		fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}
-	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit)
 	if len(polys) != 1 {
 		t.Fatalf("face count = %d, want 1", len(polys))
 	}
@@ -150,7 +150,7 @@ func TestDefaultUVCornersAreTheFrameSizeInTexels(t *testing.T) {
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0),
 		fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
 	}
-	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit)
 	if len(polys) != 1 {
 		t.Fatalf("face count = %d, want 1", len(polys))
 	}
@@ -196,20 +196,85 @@ func TestTexturedRasterBypassesSHDOnlyForNoShadeRow(t *testing.T) {
 	}
 }
 
-func TestCollectDrawTrisSelectsTeamLogoFrame(t *testing.T) {
+func TestCollectDrawPolysUsesPublishedTeamColour(t *testing.T) {
 	c := testModelTextureClient()
 	frames := make([]formats.GAFFrameRef, 10)
 	for i := range frames {
-		frames[i].Frame = &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{byte(i)}}
+		frames[i].Frame = &formats.GAFFrame{
+			Width:  uint16(i + 1),
+			Height: uint16(i + 2),
+			Pixels: make([]byte, (i+1)*(i+2)),
+		}
 	}
 	entry := &formats.GAFEntry{Name: "logo", Frames: frames}
 	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: entry}
 	pr := presentationrender.PrimitiveDraw{TextureName: "logo", VertexIndices: []uint16{0, 1, 2, 3}}
-	polys := c.collectDrawPolys(testPrimitiveDraw(pr, [][3]numeric.Fixed{
+	draw := testPrimitiveDraw(pr, [][3]numeric.Fixed{
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
-	}), 7, 1, modelCursorUnit)
-	if len(polys) != 1 || polys[0].frame != frames[7].Frame {
-		t.Fatalf("team texture did not select owner frame")
+	})
+
+	for _, tt := range []struct {
+		name      string
+		selector  teamColor
+		wantFrame *formats.GAFFrame
+		wantUV    [4][2]int32
+	}{
+		// The player slot is deliberately absent here: both crossed pairs prove
+		// that the published colour byte, rather than the owner value, selects
+		// the LOGOS frame [R-RAST-01 §3].
+		{name: "slot zero colour seven", selector: teamColor{index: 7, known: true}, wantFrame: frames[7].Frame, wantUV: [4][2]int32{{0, 0}, {7, 0}, {7, 8}, {0, 8}}},
+		{name: "slot seven colour zero", selector: teamColor{index: 0, known: true}, wantFrame: frames[0].Frame, wantUV: [4][2]int32{{0, 0}, {0, 0}, {0, 1}, {0, 1}}},
+		{name: "unknown selector", selector: teamColor{}},
+		{name: "out of range selector", selector: teamColor{index: 10, known: true}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			polys := c.collectDrawPolys(draw, tt.selector, 1, modelCursorUnit)
+			if tt.wantFrame == nil {
+				if len(polys) != 0 {
+					t.Fatalf("team face count = %d, want no frame", len(polys))
+				}
+				return
+			}
+			if len(polys) != 1 {
+				t.Fatalf("team face count = %d, want 1", len(polys))
+			}
+			if polys[0].frame != tt.wantFrame {
+				t.Fatalf("team frame = %p, want %p", polys[0].frame, tt.wantFrame)
+			}
+			for corner, want := range tt.wantUV {
+				got := [2]int32{polys[0].attr[spanU][corner], polys[0].attr[spanV][corner]}
+				if got != want {
+					t.Fatalf("corner %d uv = %v, want %v", corner, got, want)
+				}
+			}
+		})
+	}
+
+	// An entry shorter than a selected player colour is likewise a hole. It
+	// must not wrap into a valid frame [R-RAST-01 §3].
+	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{Frames: frames[:7]}}
+	if polys := c.collectDrawPolys(draw, teamColor{index: 7, known: true}, 1, modelCursorUnit); len(polys) != 0 {
+		t.Fatalf("short team entry produced %d faces, want none", len(polys))
+	}
+}
+
+func TestProjectileLogoUsesOrdinaryFrameZero(t *testing.T) {
+	c := testModelTextureClient()
+	frames := make([]formats.GAFFrameRef, 10)
+	for i := range frames {
+		frames[i].Frame = &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{byte(100 + i)}}
+	}
+	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{Frames: frames}}
+	pr := presentationrender.PrimitiveDraw{TextureName: "logo", VertexIndices: []uint16{0, 1, 2, 3}}
+	draw := testPrimitiveDraw(pr, [][3]numeric.Fixed{
+		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
+	})
+	polys := c.collectDrawPolys(draw, teamColor{}, 1, modelCursorProjectile)
+	if len(polys) != 1 {
+		t.Fatalf("projectile LOGOS face count = %d, want 1", len(polys))
+	}
+	if polys[0].frame != frames[0].Frame {
+		t.Fatalf("projectile LOGOS frame = %p, want ordinary frame zero %p", polys[0].frame, frames[0].Frame)
 	}
 }
 
@@ -223,7 +288,7 @@ func TestCollectDrawTrisFlatOverrideWinsOverTeamLogo(t *testing.T) {
 	pr := presentationrender.PrimitiveDraw{TextureName: "logo", IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}
 	polys := c.collectDrawPolys(testPrimitiveDraw(pr, [][3]numeric.Fixed{
 		fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1),
-	}), 7, 1, modelCursorUnit)
+	}), teamColor{index: 7, known: true}, 1, modelCursorUnit)
 	if len(polys) != 1 {
 		t.Fatalf("flat team override emitted %d faces, want 1", len(polys))
 	}
@@ -268,7 +333,7 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 	}}}
 	pr := presentationrender.PrimitiveDraw{TextureName: "anim", VertexIndices: []uint16{0, 1, 2, 3}}
 	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(1, 0, -1), fixedVertex(0, 0, -1)}
-	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 0, modelCursorFeature); len(got) != 0 {
+	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{}, 0, modelCursorFeature); len(got) != 0 {
 		t.Fatalf("animated feature with missing identity emitted %d faces", len(got))
 	}
 	if got := c.animatedGAFFrame("anim", 0, c.texIndex["anim"].entry); got != nil {
@@ -281,7 +346,7 @@ func TestCollectDrawPolysUsesCameraScale(t *testing.T) {
 	c.cam.Scale = 2
 	vertices := [][3]numeric.Fixed{fixedVertex(2, 4, 6), fixedVertex(4, 4, 6), fixedVertex(2, 4, 4), fixedVertex(2, 4, 6)}
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3}}
-	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit)
+	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit)
 	if len(polys) == 0 {
 		t.Fatal("expected projected faces")
 	}
@@ -308,7 +373,7 @@ func TestCollectDrawPolysSuppressesInvalidPrimitive(t *testing.T) {
 	c := testModelTextureClient()
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 9, 2}, ShadeRows: []int{1, 2, 3, 4}}
 	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(0, 0, 1)}
-	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit); len(got) != 0 {
+	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit); len(got) != 0 {
 		t.Fatalf("invalid primitive emitted %d faces", len(got))
 	}
 }
@@ -317,7 +382,7 @@ func TestCollectDrawPolysSuppressesUnsupportedTexturedNGon(t *testing.T) {
 	c := testModelTextureClient()
 	vertices := [][3]numeric.Fixed{fixedVertex(0, 0, 0), fixedVertex(1, 0, 0), fixedVertex(2, 0, 1), fixedVertex(1, 0, 2), fixedVertex(0, 0, 1)}
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3, 4}, ShadeRows: []int{1, 2, 3, 4, 5}}
-	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), 0, 1, modelCursorUnit); len(got) != 0 {
+	if got := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit); len(got) != 0 {
 		t.Fatalf("unsupported textured n-gon emitted %d faces", len(got))
 	}
 }

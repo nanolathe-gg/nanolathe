@@ -14,6 +14,7 @@ func TestResetClearsTheStripChannel(t *testing.T) {
 	f := &Frame{}
 	f.Strips = append(f.Strips,
 		StripView{Strip: 4, Family: StripFamilyVentSteam, Bank: "fx", Entry: "smoke 1"},
+		StripView{Strip: 6, Family: StripFamilyNano, Fill: 0xa3},
 		StripView{Strip: 9, Family: StripFamilySmokePuff, Bank: "fx", Entry: "smoke 2"},
 	)
 	capacity := cap(f.Strips)
@@ -29,7 +30,7 @@ func TestResetClearsTheStripChannel(t *testing.T) {
 	// The retained backing array must not still name the old art: a later
 	// re-slice would otherwise resurrect an identity the sweep retired.
 	for _, v := range f.Strips[:capacity] {
-		if v.Entry != "" || v.Family != StripFamilyNone {
+		if v.Entry != "" || v.Family != StripFamilyNone || v.Fill != 0 {
 			t.Fatalf("Reset left %+v in the retained backing array", v)
 		}
 	}

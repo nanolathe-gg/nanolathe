@@ -60,8 +60,9 @@ func (c *Client) drawStripSlot(cur *frame.Frame, strip int8) StripDrawStats {
 //     blitting, unlike the flame and sprinkle families" [03 R-FX-02 §3];
 //   - the two flame classes blit theirs after the one-point coverage gate
 //     [03 R-FX-02 §2][03 R-FX-01 §3];
-//   - the sprinkle fills a two-by-two rectangle after that same gate, with its
-//     colour byte written raw [03 R-FX-01 §3].
+//   - the sprinkle and nanolathe families fill a two-by-two rectangle after
+//     that same gate, with their colour byte written raw [03 R-FX-01 §3]
+//     [03 §5.5].
 //
 // Both blitting families go through the tinted blitter, the ALP-blend family,
 // not the opaque keyed one [03 R-FX-02 §2][03 R-FX-02 §3][R-COMP-01 §2].
@@ -106,7 +107,7 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 				continue
 			}
 			stats.Blitted++
-		case frame.StripFamilySprinkle:
+		case frame.StripFamilySprinkle, frame.StripFamilyNano:
 			if v.Fill == 0 {
 				stats.Unresolved++
 				continue
@@ -116,8 +117,8 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 				continue
 			}
 			sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
-			// The colour byte is written raw: the sprinkle ramp, like the nano
-			// ramp, is NOT passed through the logical-to-physical remap the
+			// The colour byte is written raw: the sprinkle and nano ramps are NOT
+			// passed through the logical-to-physical remap the
 			// beam and lightning colours use [03 R-FX-01 §3]. The two-by-two mark
 			// is a plain solid rect, so it records as a FillSolid.
 			c.emitFill(drawlist.Fill{

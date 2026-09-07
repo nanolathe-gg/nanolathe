@@ -191,7 +191,7 @@ func (c *Client) drawUnitModel(v frame.UnitView, sx, sy int32) bool {
 		return false
 	}
 	reveal, outline := c.unitNanoframeReveal(v)
-	return c.drawModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal, outline)
+	return c.drawModel(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
 }
 
 // drawFeatureModel and drawProjectileModel share the same concrete traversal.
@@ -213,7 +213,11 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 	draw.Structure, draw.KeyPlane = true, true
 	// The nanoframe reveal is a construction-fraction contract; a sinking
 	// feature is not an unfinished unit and takes the ordinary model path.
-	return c.drawModel(draw, 0, featurePresentationID(f), modelCursorFeature, nil, 0)
+	// TODO(question): identify the feature pseudo-unit player-colour selector
+	// used for LOGOS faces. The observed construction supplies model, position
+	// and orientation but not a published selector, so a feature team face stays
+	// absent rather than borrowing player colour zero [03 R-RAST-01 §3].
+	return c.drawModel(draw, 0, teamColor{}, featurePresentationID(f), modelCursorFeature, nil, 0)
 }
 
 func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
@@ -234,14 +238,15 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 	// A projectile is not a unit instance: retail draws each standalone model
 	// piece through the unshaded effect entry. The parent is one call, and only
 	// the header child can become the second one; grandchildren are not walked
-	// [03 §5.4][03 R-COMP-02 §6].
+	// [03 §5.4][03 R-COMP-02 §6]. That entry has no player-colour branch;
+	// LOGOS faces use its ordinary, initial frame-zero cursor instead.
 	parent.KeyPlane, parent.Structure = false, false
-	if !c.drawModel(parent, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0) {
+	if !c.drawModel(parent, 0, teamColor{}, projectilePresentationID(p), modelCursorProjectile, nil, 0) {
 		return false
 	}
 	if child != nil {
 		child.KeyPlane, child.Structure = false, false
-		if !c.drawModel(child, 0, projectilePresentationID(p), modelCursorProjectile, nil, 0) {
+		if !c.drawModel(child, 0, teamColor{}, projectilePresentationID(p), modelCursorProjectile, nil, 0) {
 			return false
 		}
 	}

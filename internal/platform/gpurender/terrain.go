@@ -164,6 +164,15 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 
 	r.verts = r.verts[:0]
 	r.idx = r.idx[:0]
+	flush := func() {
+		if len(r.verts) == 0 {
+			return
+		}
+		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.atlas, &ebiten.DrawTrianglesShaderOptions{
+			Blend:  ebiten.BlendCopy,
+			Images: [4]*ebiten.Image{atlas.img, nil, nil, nil},
+		})
+	}
 	for ty := startTY; ty <= endTY; ty++ {
 		for tx := startTX; tx <= endTX; tx++ {
 			tileID := int(t.TileIndices[ty*tileMapW+tx])
@@ -201,19 +210,17 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 				continue
 			}
 			ax0, ay0 := atlas.atlasSrc(tileID, srcX0, srcY0)
+			if !r.quadBatchHasRoom() {
+				flush()
+				r.resetGeometry()
+			}
 			r.appendTexQuad(
 				float32(dstX0), float32(dstY0), float32(dstX1), float32(dstY1),
 				float32(ax0), float32(ay0), float32(ax0+w), float32(ay0+h),
 			)
 		}
 	}
-	if len(r.verts) == 0 {
-		return
-	}
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.atlas, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendCopy,
-		Images: [4]*ebiten.Image{atlas.img, nil, nil, nil},
-	})
+	flush()
 }
 
 // appendTexQuad appends one axis-aligned quad mapping destination rect

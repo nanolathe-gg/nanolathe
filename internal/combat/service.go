@@ -2733,183 +2733,119 @@ func pushParalyzeTask(victim *units.Unit, credit uint32, tick uint32) {
 	ParalyzeTaskPush(victim, credit, tick)
 }
 
-func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
-	if victim == nil || weapon == nil || w == nil {
-		return
+// AcceptDamage is combat's common receiver for locally delivered packets. It
+// receives a producer-selected nominal, applies only the recipient side of
+// C20, and leaves finalization to the later unit/death visit [06 §9.1][06 §9.2].
+func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) DamageResult {
+	if s == nil || w == nil || in.Victim == 0 {
+		return DamageResult{}
 	}
-	// The reaction routine needs a currently live unit, while the packet's
-	// provenance and veterancy fields read the raw pool slot. A freed slot keeps
-	// those fields until reuse, and a reused slot deliberately aliases its new
-	// occupant [06 R-WPN-04 §2].
-	shooter := w.Unit(p.Shooter)
-	rawShooter := w.RawUnitRecord(p.Shooter)
-	// [06 §9.1] step 4 runs three things in this order for every accepted
-	// non-heal packet: the damage flash, then the reaction routine, then the
-	// kind byte and the attacker fields. Keeping that order is what lets the
-	// reaction's parts 3 and 4 read the PREVIOUS packet's provenance
-	// [06 R-WPN-04 §2].
-	//
-	// The flash is one byte of the unit record written to 240, decremented as a
-	// signed byte once per unit visit, whose only reader is the minimap
-	// unit-dot pass: the blip blinks while it is nonzero, so a unit under fire
-	// flashes on the minimap for sixteen ticks after each hit [06 R-WPN-04 §2]
-	// [03 §3.9]. The byte lives on the unit record — the sweep's step-5
-	// decrement is what gives it its life ([04 R-MOV-03 §1] step 5) — and the
-	// ordered event stays beside it for the presentation layers that want the
-	// edge rather than the level.
-	SetDamageFlash(victim)
-	service.emitEvent(Event{Kind: EventDamageFlash, Tick: tick, Source: p.Shooter, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}, Duration: DamageFlashTicks})
-	service.ReactToDamage(w, victim, shooter, tick)
-	// The provenance stamp of [06 §9.1] step 4 and [06 §12.1). The kind byte is
-	// recorded on the victim UNCONDITIONALLY — "record the kind byte on the
-	// victim; WHEN THE ATTACKER IS NONZERO store the attacker pointer and its
-	// side snapshot" is two clauses, not one. Tying both to shooter presence
-	// meant a unit killed outright by a null-shooter blast (a death explosion,
-	// a meteor) reached the death finalizer with cause 0, so the credit switch
-	// of [06 §12.1] filed neither the kill it must not file NOR the victim loss
-	// it must.
-	//
-	// The credited side is always the damage-time snapshot — what the death
-	// packet's attacker-side field and the session's kill credit read back
-	// [06 §12.1]. For a real shooter it is the attacker unit's own owner byte,
-	// not the record's side byte: the side byte is the damage gate's operand
-	// and the friendly/enemy sum classifier [06 §9.1][06 §9.3].
-	//
-	// A shooter never stamps ITSELF here, because [06 §9.3] excludes the
-	// record's shooter from its own blast enumeration before this site is
-	// reached. Any later known weapon intake clears a stale reclaim bite
-	// marker, including paralyzer packets that do not reduce health [06 §9.1].
-	cause := CauseOrdinary
-	if weapon.Paralyzer {
-		cause = CauseParalyzer
+	victim := w.Unit(in.Victim)
+	if victim == nil || !victim.Alive || victim.Dying {
+		return DamageResult{}
 	}
-	victim.LastDamageCause = uint8(cause)
-	// The recorded-attacker link of [04 R-UNIT-06 §5 part 1], which §5 gives as
-	// an implementation rule: on every damage application that passes the
-	// dispatcher's gates, when the packet is not a heal and the attacker id is
-	// nonzero, store the attacker and its owner byte — after the reaction
-	// routine and before the paralyze and health arms, which is exactly here.
-	//
-	// The id is stored, not the pointer, and it is stored whether or not the
-	// slot it names is still live: §5's writer table admits "the pool slot that
-	// id names, whether or not it is live", and there is no per-tick clear and
-	// no clear when the attacker dies. Readers check liveness themselves.
-	//
-	// This is the producer WU-19-35 recorded as missing for the guard's legs 1
-	// and 2 [04 R-UNIT-06 §1]: the link is what the guard attacks and what it
-	// points its free weapon slots at, so without it a guard never joins its
-	// ward's fight. The side snapshot beside it was already written here.
-	if p.Shooter != 0 && victim.Alive && !victim.Dying {
-		victim.EngagementTarget = p.Shooter
+
+	if in.Kind == KindHeal {
+		// The heal arm reads its low word unsigned and stores the result as a
+		// signed 16-bit health word before any damage-side effects [06 §9.1].
+		amount := uint16(in.Nominal)
+		healed := ApplyHealing(int32(int16(victim.Health)), victim.MaxHealth, amount)
+		victim.Health = int32(int16(healed))
+		return DamageResult{Accepted: true, Amount: amount}
 	}
-	if p.Shooter != 0 && rawShooter != nil {
-		// The stored side comes from the raw slot, never the routing side byte.
-		// A null attacker leaves the preceding packet's attacker-side snapshot
-		// intact [06 R-WPN-04 §2].
-		victim.LastDamageSide = rawShooter.Owner
-	}
-	if weapon.Paralyzer {
-		// Stun eligibility is three tests in this order [06 §10]:
-		//
-		//  1. the alive bit set and the death latch clear, re-tested here;
-		//  2. the victim's player record exists and its controller type is 1 or
-		//     2 — the same predicate the death latch admits [06 R-DMG-01 §8];
-		//  3. the definition does not carry `immunetoparalyzer`.
-		//
-		// A victim failing any of the three keeps the preliminary side effects
-		// above and receives no stun task and no health damage.
-		if !victim.Alive || victim.Dying {
-			return
-		}
-		if !service.DeathLatchAdmitted(victim.Owner) {
-			return
-		}
-		if victim.Def != nil && victim.Def.ImmuneToParalyzer {
-			return
-		}
-		base := SelectBaseDamage(weapon, victim.Def.UnitName)
-		attackerKills := int32(0)
-		if rawShooter != nil {
-			attackerKills = rawShooter.Kills
-		}
-		// "The incoming amount is scaled exactly as ordinary damage (§9.2),
-		// including the armored-state modifier and defender veterancy, before
-		// it becomes the stun credit" [06 §10]. The credit is the damage number
-		// the weapon would have dealt, reinterpreted as ticks; only healing
-		// bypasses those scales, and this branch never subtracts health on any
-		// path. The armored pair used to be passed as (false, 0) here, which
-		// gave an armored victim the unarmored stun.
-		isArmored := UnitArmored(victim)
-		damageMod := int32(65536)
-		if victim.Def != nil {
-			damageMod = victim.Def.DamageModifier
-		}
-		// ComputeScaledAmount already packs to the packet's unsigned 16-bit
-		// amount field [06 §9.2] step 7, which is the width [06 §10] adds into
-		// the task's 32-bit credit. A zero credit is a real value, not a floor:
-		// the task's first visit sees credit 0, lowers the mark and completes.
-		// The `if dur == 0 { dur = 1 }` that stood here was invented.
-		credit := uint32(ComputeScaledAmount(base, falloff, attackerKills, victim.Kills, isArmored, damageMod, false, false, false))
-		pushParalyzeTask(victim, credit, tick)
-		return
-	}
-	base := SelectBaseDamage(weapon, victim.Def.UnitName)
-	attackerKills := int32(0)
-	if rawShooter != nil {
-		attackerKills = rawShooter.Kills
-	}
-	// The armor gate reads bit 1 of the victim's first runtime state byte — the
-	// COB `set ARMORED` posture — and nothing else [06 R-DMG-01 §8]. The FBI
-	// `armoredstate` key is parsed into a definition flag that retail never
-	// reads; ORing it in here armored every unit that authored it.
-	isArmored := UnitArmored(victim)
-	damageMod := int32(65536)
+
+	damageModifier := int32(65536)
 	if victim.Def != nil {
-		damageMod = victim.Def.DamageModifier
+		damageModifier = victim.Def.DamageModifier
 	}
-	amt := ComputeScaledAmount(base, falloff, attackerKills, victim.Kills, isArmored, damageMod, false, false, false)
-	newHealth := ApplyDamage(victim.Health, amt)
-	victim.Health = newHealth
-	if newHealth <= 0 && service.DeathLatchAdmitted(victim.Owner) {
-		// Gate 2 [06 §9.1 step 6][06 R-DMG-01 §8]: only a victim owned by a
-		// control byte of 1 or 2 latches death, and the modular health value
-		// is PRESERVED, not clamped.
-		//
-		// The death handler's row in [04 R-UNIT-06 §5]'s writer table: the
-		// recorded-attacker link takes the DEATH packet's attacker, always.
-		// This packet is that packet, so the link ends as this shooter — and
-		// as null for a shooterless killing blow (a meteor, the water gate),
-		// which the dispatcher's own write above cannot express because its
-		// row is conditional on a nonzero attacker id.
-		w.DestroyBy(victim.Handle, units.DeathKilled, p.Shooter)
-		if service != nil {
-			if service.deathNotified == nil {
-				service.deathNotified = make(map[pool.Handle]*units.Unit)
-			}
-			if service.deathNotified[victim.Handle] != victim {
-				service.deathNotified[victim.Handle] = victim
-				service.emitEvent(Event{Kind: EventUnitKilled, Tick: tick, Source: p.Shooter, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}})
-			}
-		}
-	} else {
-		if newHealth <= 0 {
-			// No record, or a remote peer: health clamps to zero, the unit does
-			// NOT die through this path, and the callbacks still run
-			// [06 §9.1 step 6][06 R-DMG-01 §8].
-			victim.Health = 0
-		}
-		dir := hitDirectionByte(p, victim)
-		// The `TakeDamage` argument carries retail's explicit `<0->0` /
-		// `>100->100` clamps [04 §5.1]; engine port 4 does not [04 R-COB-03 §2].
-		takeArg := cob.TakeDamagePercent(victim.Health, victim.MaxHealth)
-		if bridge := service.callbackBridgeForUnit(victim); bridge != nil {
-			// The two damage callbacks are independent deferred starts and retain
-			// their exact order after the HitByWeapon direction conversion
-			// [04 §5.1]. The normal VM drain belongs to the session window.
-			bridge.HitByWeapon(dir)
-			bridge.TakeDamage(takeArg)
+	amount := scaleAcceptedAmount(in.Nominal, victim.Kills, UnitArmored(victim), damageModifier)
+	result := DamageResult{Accepted: true, Amount: amount}
+
+	// These effects are deliberately before provenance rewriting: reaction
+	// observes the prior packet state [06 §9.1][06 R-WPN-04 §2].
+	SetDamageFlash(victim)
+	s.emitEvent(Event{Kind: EventDamageFlash, Tick: tick, Source: in.Attacker, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}, Duration: DamageFlashTicks})
+	if in.Kind != KindNoReaction {
+		s.ReactToDamage(w, victim, w.Unit(in.Attacker), tick)
+	}
+	victim.LastDamageCause = in.Kind
+	if in.Attacker != 0 {
+		victim.EngagementTarget = in.Attacker
+		if rawAttacker := w.RawUnitRecord(in.Attacker); rawAttacker != nil {
+			victim.LastDamageSide = rawAttacker.Owner
 		}
 	}
+
+	if in.Kind == KindParalyzer {
+		// Reaction runs above and can alter the victim's state through its
+		// session seams, so the paralyze arm repeats the packet acceptance
+		// state test immediately before task admission [06 §10].
+		if !victim.Alive || victim.Dying {
+			return result
+		}
+		if s.DeathLatchAdmitted(victim.Owner) && (victim.Def == nil || !victim.Def.ImmuneToParalyzer) {
+			pushParalyzeTask(victim, uint32(amount), tick)
+		}
+		return result
+	}
+
+	victim.Health = ApplyDamage(victim.Health, amount)
+	if victim.Health <= 0 && s.DeathLatchAdmitted(victim.Owner) {
+		// Preserve the modular signed word for the later severity calculation.
+		w.DestroyBy(victim.Handle, units.DeathCauseFromKind(in.Kind), in.Attacker)
+		result.DeathLatched = true
+		if s.deathNotified == nil {
+			s.deathNotified = make(map[pool.Handle]*units.Unit)
+		}
+		if s.deathNotified[victim.Handle] != victim {
+			s.deathNotified[victim.Handle] = victim
+			s.emitEvent(Event{Kind: EventUnitKilled, Tick: tick, Source: in.Attacker, Target: victim.Handle, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}})
+		}
+		return result
+	}
+	if victim.Health <= 0 {
+		victim.Health = 0 // absent or remote controller continues without latching
+	}
+	if in.Kind == KindOrdinary {
+		if bridge := s.callbackBridgeForUnit(victim); bridge != nil {
+			bridge.HitByWeapon(in.Direction)
+			bridge.TakeDamage(cob.TakeDamagePercent(victim.Health, victim.MaxHealth))
+		}
+	}
+	return result
+}
+
+// weaponDamageNominal keeps the weapon-side half of C20 separate from the
+// accepted-packet receiver. Fixed producers pass their established nominal to
+// AcceptDamage and never construct a dummy weapon [06 §9.2].
+func weaponDamageNominal(weapon *content.WeaponDef, victim *units.Unit, rawAttacker *units.Unit, falloff float32) int32 {
+	if weapon == nil || victim == nil {
+		return 0
+	}
+	name := ""
+	if victim.Def != nil {
+		name = victim.Def.UnitName
+	}
+	attackerKills := int32(0)
+	if rawAttacker != nil {
+		attackerKills = rawAttacker.Kills
+	}
+	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, false, false)
+}
+
+func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
+	if service == nil || victim == nil || p == nil || weapon == nil || w == nil {
+		return
+	}
+	cause := KindOrdinary
+	if weapon.Paralyzer {
+		cause = KindParalyzer
+	}
+	service.AcceptDamage(w, tick, DamageInput{
+		Victim: victim.Handle, Attacker: p.Shooter,
+		Nominal:   weaponDamageNominal(weapon, victim, w.RawUnitRecord(p.Shooter), falloff),
+		Direction: hitDirectionByte(p, victim), Kind: cause,
+	})
 	_ = distance
 }
 

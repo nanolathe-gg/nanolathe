@@ -132,6 +132,10 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 		if x < clipMinX || x > clipMaxX || y < clipMinY || y > clipMaxY {
 			return
 		}
+		if !r.quadBatchHasRoom() {
+			r.flushSolid()
+			r.resetGeometry()
+		}
 		r.appendSolidQuad(float32(x), float32(y), float32(x+1), float32(y+1), idx)
 	}
 	horizontal := func(y int) {
@@ -193,6 +197,10 @@ func (r *Renderer) Line(l drawlist.Line) {
 	err := dx - dy
 	for {
 		if x0 >= 0 && x0 < int32(r.w) && y0 >= 0 && y0 < int32(r.h) {
+			if !r.quadBatchHasRoom() {
+				r.flushSolid()
+				r.resetGeometry()
+			}
 			r.appendSolidQuad(float32(x0), float32(y0), float32(x0+1), float32(y0+1), l.Index)
 		}
 		if x0 == x1 && y0 == y1 {
@@ -235,6 +243,10 @@ func (r *Renderer) Points(p drawlist.Points) {
 		x, y := int(pt.X), int(pt.Y)
 		if x < 0 || y < 0 || x >= r.w || y >= r.h {
 			continue
+		}
+		if !r.quadBatchHasRoom() {
+			r.flushSolid()
+			r.resetGeometry()
 		}
 		r.appendSolidQuad(float32(x), float32(y), float32(x+1), float32(y+1), pt.Index)
 	}

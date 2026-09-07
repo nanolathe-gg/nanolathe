@@ -165,8 +165,10 @@ with a per-pixel **height key**, and that image is blitted. The split across
   *renderer* selection, not the flat/textured one.
 * `model_textures.go` — texture-name resolution and the per-instance sequence
   cursors. One frame is static; exactly ten frames is a `LOGOS` team texture
-  indexed by owner colour and never animated; anything else is an animated
-  sequence with per-frame holds `[03 §2.4.1]` `[03 §4.4]` `[03 R-CRD-005 §1]`.
+  indexed by a known `UnitView.OwnerColor` byte, never by its owner slot and
+  never animated; unknown or out-of-range selectors yield no frame. Anything
+  else is an animated sequence with per-frame holds `[03 §2.4.1]` `[03 §4.4]`
+  `[03 R-CRD-005 §1]`.
 * `model_outline.go` — the nanoframe wireframe: not a polyline, but the edge
   walk's per-scanline extremes written into the composition image, admitted
   against the same key plane `[03 R-P0-19-N]` `[03 R-COMP-01 §3]`.
@@ -290,7 +292,7 @@ document carries them.
   `drawCommittedFrame` is that sequence: clear; terrain, minimap and clip
   preparation; strips 0–2; the first feature pass, which owns the never-seen
   admission; strips 3–4; unit pass A interleaved with that row's deferred tall
-  features; strip 5; nanolathe and strip 6; the projectile pool; the fixed
+  features; strip 5; strip 6 (its committed nanolathe particles); the projectile pool; the fixed
   effect pool; strip 7; unit pass B; strip 8; the unit-label walk; strip 9; fog;
   selection; interface. Slots with no producer are kept as explicit no-ops so
   the barrier order survives — see C2's note on strips 0, 1, 3 and 8.
@@ -301,6 +303,13 @@ document carries them.
   HUD `[03 §1]`. Strips 0, 1, 3 and 8 have no producer anywhere in retail and
   hold no object in any session; their walks are no-ops and nothing may be
   attached to them `[03 R-FX-02 §5]`.
+* **C2.1 Nanolathe publication.** Strip-6 emitter records own their particles
+  and advance them during the phase-11 strip sweep. Publication copies every
+  live particle into `Frame.Strips`; the client paints those copies as raw
+  palette 2×2 rectangles after the per-particle coverage gate. A client does
+  not create, seed, advance, expire, or recolour nanolathe particles from
+  events, so any client renders the same committed snapshot identically
+  `[03 R-STRIP-01 §2]` `[03 R-STRIP-01 §3]` `[03 §5.5]` [I6].
 * **C3 Buckets.** The plot-cell window is a pure function of the committed
   camera and the map extent, so the feature passes and the bucket build derive
   the same window; the bucket row is measured from the unclipped window origin
@@ -703,6 +712,9 @@ behaviour is bounded rather than guessed:
   the way the compressed path does `[03 R-FONT-01 §6]`.
 * The exact PCM conversion for legacy WAV variants beyond the DIGI and raw rules
   `[03 §8.2]`.
+* The player-colour selector of a feature pseudo-unit's `LOGOS` faces. The
+  client leaves those faces absent until the pseudo-unit initialization path is
+  traced; it does not substitute colour zero `[03 R-RAST-01 §3]`.
 
 One stale comment worth naming rather than leaving to be re-derived:
 `SampleCache.Put` still says "evicting oldest if at capacity". There is no

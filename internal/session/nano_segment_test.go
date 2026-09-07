@@ -83,6 +83,72 @@ func TestBuildPresentationSpendsStripDraws(t *testing.T) {
 	}
 }
 
+// TestNanolathePublicationCopiesTheAuthoritativeParticles locks the boundary
+// between phase 11 and presentation. The strip object owns the two spawn
+// ticks, particle movement, colour walk, expiry and CRT draws; publication
+// copies the current particle records without spending a draw or creating a
+// presentation-side lifetime [03 R-STRIP-01 §2–§3][03 §5.5][I6].
+func TestNanolathePublicationCopiesTheAuthoritativeParticles(t *testing.T) {
+	s := nanoSegmentFixture(t)
+	s.Snapshot = frame.NewBuffer()
+	s.Clock.GlobalTick = 7
+	s.submitNanoSegment(buildSegmentEvent())
+
+	crt := s.CrtRNG()
+	draws := crt.Draws()
+	s.publishSnapshot(7)
+	first := s.Snapshot.Current()
+	if first == nil {
+		t.Fatal("construction tick did not publish a frame")
+	}
+	if got := len(first.Strips); got != nanoParticlesPerSpawnTick {
+		t.Fatalf("published %d nano particles on the construction tick, want %d", got, nanoParticlesPerSpawnTick)
+	}
+	particles := s.strips.strips[6][0].particles
+	for i, v := range first.Strips {
+		p := particles[i]
+		if v.Strip != 6 || v.Family != frame.StripFamilyNano || v.X != p.x || v.Y != p.y || v.Z != p.z || v.Fill != p.color {
+			t.Fatalf("published particle %d = %+v, want the authoritative record at (%v,%v,%v) colour %#x", i, v, p.x, p.y, p.z, p.color)
+		}
+	}
+	if got := crt.Draws(); got != draws {
+		t.Fatalf("publication spent %d CRT draws, want none", got-draws)
+	}
+
+	// Five phase-11 visits move the first five particles, perform the second
+	// five-particle spawn, then keep advancing the authoritative records. No
+	// intermediate publication occurs: a later client can skip every one of
+	// these frames and still receive exactly the final state.
+	for tick := uint32(8); tick <= 12; tick++ {
+		s.phaseObjectSweeps(tick)
+	}
+	if got := crt.Draws() - draws; got != nanoParticlesPerSpawnTick*nanoDrawsPerParticle {
+		t.Fatalf("second nano spawn spent %d CRT draws, want %d", got, nanoParticlesPerSpawnTick*nanoDrawsPerParticle)
+	}
+	draws = crt.Draws()
+	s.publishSnapshot(12)
+	second := s.Snapshot.Current()
+	if got := len(second.Strips); got != 2*nanoParticlesPerSpawnTick {
+		t.Fatalf("published %d nano particles after five strip ticks, want %d", got, 2*nanoParticlesPerSpawnTick)
+	}
+	particles = s.strips.strips[6][0].particles
+	for i, v := range second.Strips {
+		p := particles[i]
+		if v.Strip != 6 || v.Family != frame.StripFamilyNano || v.X != p.x || v.Y != p.y || v.Z != p.z || v.Fill != p.color {
+			t.Fatalf("final published particle %d = %+v, want the authoritative record at (%v,%v,%v) colour %#x", i, v, p.x, p.y, p.z, p.color)
+		}
+	}
+	if got := crt.Draws(); got != draws {
+		t.Fatalf("final publication spent %d CRT draws, want none", got-draws)
+	}
+	if second.Strips[0].X == first.Strips[0].X && second.Strips[0].Y == first.Strips[0].Y && second.Strips[0].Z == first.Strips[0].Z {
+		t.Fatal("the next committed frame retained the first particle's old position instead of phase-11 state")
+	}
+	if second.Strips[0].Fill == first.Strips[0].Fill {
+		t.Fatal("the next committed frame retained the first particle's old green-ramp byte")
+	}
+}
+
 // TestNanoSegmentGeometryFollowsPublishedBox locks the one mapping every
 // producer shares. [05 R-P0-06 §4] builds the endpoints from the nano piece
 // and the target grown by its footprint/model extents, and [05 R-WORK-01 §8]

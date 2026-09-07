@@ -268,15 +268,10 @@ func (c *Client) drawEffects(cur *frame.Frame) {
 	if c == nil || cur == nil || c.cam == nil {
 		return
 	}
-	// Nano segments are emitters, not sprites: they advance once per committed
-	// tick and then paint their live particles [03 §5.5].
-	c.tickNanolathe(cur)
-	c.drawNanolathe(cur)
-	// Strip 6 is the construction/reclaim barrier. Nanolathe particles are
-	// painted here, and the already-published strip records follow them; the
-	// other strips are consumed by drawCommittedFrame at their own barriers
-	// [03 §1][03 R-STRIP-01 §2].
-	c.drawEffectStrip(cur, int8(frame.StripBeam))
+	// Strip 6 is the construction/reclaim barrier. The event route remains for
+	// unrelated consumers; nanolathe pixels themselves come from the committed
+	// strip particles which follow it at this barrier [03 §1][03 §5.5][I6].
+	c.drawStripSlot(cur, int8(frame.StripBeam))
 }
 
 // fogFillSolid, fogFillGray and fogFillChecker are the fog composite's three

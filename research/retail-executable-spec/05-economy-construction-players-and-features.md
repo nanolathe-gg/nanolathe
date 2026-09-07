@@ -4726,6 +4726,34 @@ event after ordinary cause-5 lethal handling and before death explosion,
 corpse placement, and final teardown. The builder whose kind-5 packet is
 fatal supplies the recipient.
 
+**Established — selector ownership.** The difficulty gate reads the owner
+reference cached in the reconstructed attacker's economy subrecord. It is a
+distinct stored reference from the ordinary owner, but both name the same
+player for normally live units. Unit-memory setup assigns each slot permanently
+to a player range; every construction rebuilds the economy reference from that
+slot's owner index. Capture creates a replacement in the recipient's range,
+and save restore rebuilds this reference before restoring resource values.
+The gate requires a present, computer-controlled player record. The payment
+itself goes to the attacker unit's metal-production accumulator, not to the
+player record.
+
+**Established — one rounding boundary.** The subtraction and multiplication
+in the refund expression retain working precision from their single-precision
+operands. The computer arms multiply that unrounded product by the
+double-precision negative difficulty constant and subtract it from the
+accumulator; the ordinary arm adds the product. Every arm narrows only at the
+final single-precision accumulator store. Storing a single-precision refund
+before combining it with the accumulator introduces an extra rounding step.
+
+**Established — stale recipient storage.** Raw attacker-id reconstruction
+does not check liveness or generation. A freed slot retains its economy owner
+reference and accumulator until reuse. A stale payment can land in that dead
+record and be erased on reuse, or in the replacement's newly initialized
+accumulator if reuse already occurred. The permanent player range preserves
+the selected player identity. **Unknown:** whether ordinary local reclaim can
+produce such a stale recipient; static analysis of reclaim and death scheduling
+would settle reachability.
+
 **Established fact — multiple reclaimers.** Reclaim and repair events apply
 synchronously during ascending unit-slot traversal, and the damage-packet
 receiver rejects packets against already dead-latched targets, so the first
@@ -6738,6 +6766,9 @@ body and are not restated here.
 - Whether any discount site carries a positivity test between forming the
   contribution and entering the ladder; none of the sites examined does
   · [R-ECO-01 §11] · a read of each site for a compare against zero.
+- Whether ordinary local reclaim can reach a freed or reused fatal attacker
+  slot; the raw-slot payment behavior is established · [R-WORK-01 §4] · static
+  analysis of reclaim and death scheduling.
 - Whether the build-assist approach radius's summand
   `footprintX × footprintX + footprintZ + footprintZ` is a retail defect or an
   intended asymmetry; the instructions are established and reproduced, only the

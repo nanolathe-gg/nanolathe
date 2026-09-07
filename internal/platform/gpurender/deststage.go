@@ -237,17 +237,37 @@ func (r *Renderer) drawDestRect(x, y, w, h, row int, table *ebiten.Image) {
 // drawLitPoints reproduces the PointLit branch of classicSink.Points: each point
 // rewrites its destination pixel as LightLookup(pt.Index, dst) — a destination
 // read through the point's own LHT row (docs/DESIGN_GPU_RENDERER.md §2.3)
-// [03 §4.3.1][03 R-FX-01 §4]. The two PointLit producers (the LHT ground halo and
-// the calculated flash disc) each visit every screen pixel at most once, so the
-// batch's points are pairwise distinct; snapshotting the batch's bounding box once
-// and drawing every point against that snapshot therefore reads exactly the
-// pre-batch destination each byte writer reads. Each point rides its clamped LHT
-// row in the vertex colour, so one pass folds the whole batch. Points outside the
-// framebuffer are skipped, matching the producers' own clip.
+// [03 §4.3.1][03 R-FX-01 §4]. A run of pairwise-distinct points shares one
+// destination snapshot; its geometry can then split at the uint16 index bound
+// while every chunk still reads that same pre-run image. A repeated point closes
+// the run, so its next snapshot observes the earlier write in record order.
+// Points outside the framebuffer are skipped, matching the producers' own clip.
 func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	if r.destTable == nil || r.tables.light == nil || r.destScratch == nil || len(points) == 0 {
 		return
 	}
+	start := 0
+	seen := make(map[uint64]struct{}, len(points))
+	for i, pt := range points {
+		x, y := int(pt.X), int(pt.Y)
+		if x < 0 || y < 0 || x >= r.w || y >= r.h {
+			continue
+		}
+		key := uint64(uint32(x))<<32 | uint64(uint32(y))
+		if _, duplicate := seen[key]; duplicate {
+			r.drawDistinctLitPoints(points[start:i])
+			start = i
+			clear(seen)
+		}
+		seen[key] = struct{}{}
+	}
+	r.drawDistinctLitPoints(points[start:])
+}
+
+// drawDistinctLitPoints draws a record-order run whose visible points do not
+// overlap. Each chunk uses one snapshot of the entire run, so splitting the
+// uint16 geometry scratch cannot change the destination bytes it reads.
+func (r *Renderer) drawDistinctLitPoints(points []drawlist.Point) {
 	minX, minY, maxX, maxY := 0, 0, 0, 0
 	any := false
 	for _, pt := range points {
@@ -269,21 +289,28 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	r.snapshotRect(minX, minY, maxX+1, maxY+1)
 	r.verts = r.verts[:0]
 	r.idx = r.idx[:0]
+	flush := func() {
+		if len(r.verts) == 0 {
+			return
+		}
+		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.destTable, &ebiten.DrawTrianglesShaderOptions{
+			Blend:  ebiten.BlendCopy,
+			Images: [4]*ebiten.Image{r.destScratch, r.tables.light, nil, nil},
+		})
+	}
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
 		if x < 0 || y < 0 || x >= r.w || y >= r.h {
 			continue
 		}
+		if !r.quadBatchHasRoom() {
+			flush()
+			r.resetGeometry()
+		}
 		row := clampLHTRow(int(pt.Index))
 		r.appendDestTableQuad(float32(x), float32(y), float32(x+1), float32(y+1), uint8(row))
 	}
-	if len(r.verts) == 0 {
-		return
-	}
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.destTable, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendCopy,
-		Images: [4]*ebiten.Image{r.destScratch, r.tables.light, nil, nil},
-	})
+	flush()
 }
 
 // appendDestTableQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1)

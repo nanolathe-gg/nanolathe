@@ -41,7 +41,7 @@ func composeSub(t *testing.T, c *Client, fs *vfs.FS, name string, owner uint8) (
 	states := make([]compiledmodel.PieceState, len(m.Pieces))
 	draw := presentationrender.BuildUnitDrawSimple(m, states, 0, 0, 0, [3]numeric.Fixed{})
 	draw.KeyPlane = true
-	composed, ok := c.composeModel(draw, owner, 1, modelCursorUnit, nil, 0)
+	composed, ok := c.composeModel(draw, owner, teamColor{index: owner, known: true}, 1, modelCursorUnit, nil, 0)
 	if !ok {
 		t.Fatalf("%s composed no geometry", name)
 	}

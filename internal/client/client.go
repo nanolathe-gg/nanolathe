@@ -116,9 +116,7 @@ type Client struct {
 	// field. Shrink-only.
 	crt          *rng.CRT
 	crtBound     bool
-	frameTick    uint32                       // committed tick of the frame being composed
-	nano         presentationrender.NanoField // live nanolathe particle records [03 §5.5]
-	lastNanoTick uint32
+	frameTick    uint32 // committed tick of the frame being composed
 	worldBuckets worldBuckets
 	fogCache     *visibility.FogCache
 	fogOps       []presentationrender.FogOp

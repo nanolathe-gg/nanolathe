@@ -7,6 +7,7 @@ package client
 import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -116,17 +117,40 @@ func facePaints(vertices [][3]numeric.Fixed, indices []uint16, origin [3]numeric
 	return area > 0
 }
 
+// teamColor is the per-owner colour byte that selects a LOGOS frame. It is not
+// the player slot: ownership remains a separate input for waterline and other
+// presentation predicates [R-RAST-01 §3][R-REN-03A §4].
+type teamColor struct {
+	index uint8
+	known bool
+}
+
+func unitTeamColor(v frame.UnitView) teamColor {
+	return teamColor{index: v.OwnerColor, known: v.OwnerColorKnown}
+}
+
+// teamTextureFrame applies the LOGOS selector directly. A missing player
+// colour, an index beyond the entry, or an absent frame is a missing texture,
+// so the textured quad contributes no pixels; no slot or modulo fallback is
+// part of this lookup [R-RAST-01 §3].
+func teamTextureFrame(ref texRef, selector teamColor) *formats.GAFFrame {
+	if !selector.known || ref.entry == nil || int(selector.index) >= len(ref.entry.Frames) {
+		return nil
+	}
+	return ref.entry.Frames[selector.index].Frame
+}
+
 // collectDrawPolys adapts canonical render records to the indexed framebuffer.
 // It owns no hierarchy math: units, features, and projectiles all pass through
-// render.UnitDraw [03 §2.4][03 §5.2].
+// render.UnitDraw [03 §2.4][03 §5.2]. One authored primitive becomes one face
+// at its authored arity and corner order; there is no fan triangulation because
+// retail's scan converter derives its chains from the index ring. The winding
+// cull remains inside that scan conversion [R-RAST-01 §1].
 //
-// One authored primitive becomes one face, at its authored arity and in its
-// authored corner order. There is no fan triangulation: retail's scan converter
-// takes the vertex count as an argument and derives its two chains from the
-// index order, so splitting a quad into triangles would change both the chains
-// and the interpolation the section specifies [R-RAST-01 §1]. The winding cull
-// is not applied here either — it is the span comparison inside the walk.
-func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8) []screenPoly {
+// The selector is deliberately distinct from owner: model geometry does not
+// need ownership, and keeping the values separate prevents a player slot from
+// becoming a colour.
+func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8) []screenPoly {
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return nil
 	}
@@ -171,12 +195,16 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, owner uint8
 					}
 					texFrame = c.modelAnimatedFrameAt(ref, kind, id, piece.SourceIndex, pri)
 				case texTeam:
-					if ref.entry == nil {
-						continue
-					}
-					oi := int(owner) % 10
-					if oi >= 0 && oi < len(ref.entry.Frames) {
-						texFrame = ref.entry.Frames[oi].Frame
+					if kind == modelCursorProjectile {
+						// The standalone effect renderer has no player-colour
+						// branch. It reads the model binder's ordinary cursor,
+						// which remains at its initial frame zero for a LOGOS
+						// entry because those cursors are not advanced [R-COMP-02 §6].
+						if ref.entry != nil && len(ref.entry.Frames) > 0 {
+							texFrame = ref.entry.Frames[0].Frame
+						}
+					} else {
+						texFrame = teamTextureFrame(ref, selector)
 					}
 				default:
 					texFrame = ref.frame
@@ -334,8 +362,8 @@ type composedModel struct {
 // staging path copies the cached image into a staging image, composites each
 // child there with the key test, and blits once at the end. A composer that
 // blitted as it finished could never be a staging source.
-func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) (composedModel, bool) {
-	polys := c.collectDrawPolys(draw, owner, id, kind)
+func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) (composedModel, bool) {
+	polys := c.collectDrawPolys(draw, selector, id, kind)
 	if len(polys) == 0 {
 		return composedModel{}, false
 	}
@@ -517,8 +545,8 @@ func (c *Client) finishModel(m composedModel, blit *modelTarget) {
 // drawModel composes one unit and blits it once. It is composeModel followed
 // by finishModel with no staging image, which is every subject that carries
 // nothing [03 §2.4][R-REN-03A §1].
-func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
-	m, ok := c.composeModel(draw, owner, id, kind, reveal, outline)
+func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
+	m, ok := c.composeModel(draw, owner, selector, id, kind, reveal, outline)
 	if !ok {
 		return false
 	}

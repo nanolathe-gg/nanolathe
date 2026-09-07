@@ -20,7 +20,7 @@ import (
 const maxModelPreviewDimension = 8192
 
 // ModelPreviewOptions describes one isolated model view. Owner is the retail
-// player colour slot (0..9). Structure and KeyPlane are explicit because they
+// player colour byte used for its LOGOS selector. Structure and KeyPlane are explicit because they
 // are unit-definition properties, not properties stored in a 3DO [fmt 3do].
 // Heading uses the engine's uint16 full-circle representation [03 §2.4].
 // Background is a physical PALETTE.PAL index.
@@ -89,9 +89,6 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 	if strings.HasSuffix(strings.ToLower(name), ".3do") && !strings.ContainsAny(name, `/\`) {
 		renderName = "objects3d/" + name
 	}
-	if opts.Owner >= 10 {
-		return nil, fmt.Errorf("nanolathe: rendering model preview: owner colour %d outside retail slots 0..9", opts.Owner)
-	}
 	if opts.Width <= 0 || opts.Height <= 0 || opts.Width > maxModelPreviewDimension || opts.Height > maxModelPreviewDimension {
 		return nil, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
 	}
@@ -131,15 +128,20 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 		Slot:       1,
 		InstanceID: 1,
 		Owner:      opts.Owner,
-		Model:      renderName,
-		Heading:    opts.Heading,
-		Pitch:      opts.Pitch,
-		Bank:       opts.Bank,
-		X:          numeric.Fixed(anchorX << 16),
-		Z:          numeric.Fixed(anchorZ << 16),
-		BMCode:     !opts.Structure,
-		ZBuffer:    opts.KeyPlane,
-		NoShadow:   true,
+		OwnerColor: opts.Owner,
+		// A preview has an explicit colour-byte input even when it is outside
+		// the LOGOS entry. The resolver will leave those team faces empty;
+		// rejecting or wrapping it would invent a visible colour.
+		OwnerColorKnown: true,
+		Model:           renderName,
+		Heading:         opts.Heading,
+		Pitch:           opts.Pitch,
+		Bank:            opts.Bank,
+		X:               numeric.Fixed(anchorX << 16),
+		Z:               numeric.Fixed(anchorZ << 16),
+		BMCode:          !opts.Structure,
+		ZBuffer:         opts.KeyPlane,
+		NoShadow:        true,
 	}
 	for _, name := range opts.HiddenPieces {
 		if name = strings.TrimSpace(name); name != "" {

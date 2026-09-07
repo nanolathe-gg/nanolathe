@@ -4785,16 +4785,13 @@ statistics result even though the explosion damages every side alike. **Cargo
 killed by carrier death credits the carrier's killer**: the cascade applies its
 30000 damage per cargo with the attacker argument set to the carrier's killer.
 
-**Established fact:** The cause-5 bounty is
-`(1.0f - victim.remainingBuildFraction) * victimDefinition.metalCost`,
-accumulated into the attacker unit's resource-credit float. When the attacker's
-owning player is a computer controller, that increment is scaled by 0.5 on
-difficulty 0 and 0.7 on difficulty 1 and is unscaled on any other difficulty;
-a human-owned attacker is never scaled. Document 05 owns where the accumulator
-is settled. **Supported inference:** the player reference the difficulty gate
-reads is the attacker's owning player; the unit record carries a second player
-reference at that site and the two have not been proved identical. *Decider:*
-static trace of the unit record's second player reference.
+**Established fact:** The cause-5 bounty credits the reconstructed attacker
+unit's metal-production accumulator. Its difficulty gate reads the economy
+subrecord's cached owner reference, which construction rebuilds to name the
+same player as the unit's ordinary owner. Capture replaces the unit under the
+recipient rather than changing these references in place. Document 05
+[R-WORK-01 §4] owns the refund arithmetic, its single final rounding boundary,
+and the retained accumulator behavior for freed or reused raw attacker slots.
 
 **Established fact:** The unit float that gates the death explosion is the
 remaining-build-fraction/landed indicator shared with construction and flight
@@ -5798,6 +5795,9 @@ body and are not restated here.
 - A guarded error path for the unguarded unsigned divisions when maximum
   health is zero; stock never authors zero · §9.1 · static trace. Marked
   `TODO(T25)` at two sites.
+- Whether ordinary local reclaim can reach a freed or reused fatal attacker
+  slot; raw reconstruction and payment behavior are established · §12.1,
+  doc 05 [R-WORK-01 §4] · static analysis of reclaim and death scheduling.
 - Practical reachability of signed 16-bit AOE distance wrap, and of more than
   20 unique unit or 64 unique feature-cell candidates, in accepted retail maps
   · §9.3 · asset census over the map corpus (the AOE dedup map probe).

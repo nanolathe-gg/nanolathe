@@ -72,7 +72,7 @@ func TestTheWindingCullIsTheSpanComparison(t *testing.T) {
 	pr := presentationrender.PrimitiveDraw{IsColored: 1, ColorIndex: 56, VertexIndices: []uint16{0, 1, 2, 3}}
 	painted := func(indices []uint16) int {
 		pr.VertexIndices = indices
-		polys := c.collectDrawPolys(testPrimitiveDraw(pr, front), 0, 1, modelCursorUnit)
+		polys := c.collectDrawPolys(testPrimitiveDraw(pr, front), teamColor{index: 0, known: true}, 1, modelCursorUnit)
 		if len(polys) != 1 {
 			t.Fatalf("indices %v emitted %d faces, want 1: the cull is the span comparison, not a face filter", indices, len(polys))
 		}
@@ -137,7 +137,7 @@ func TestRetailFlapKeepsItsOuterSkin(t *testing.T) {
 
 	draw := presentationrender.BuildUnitDrawSimple(m.compiled, make([]compiledmodel.PieceState, len(m.compiled.Pieces)), 0, 0, 0, [3]numeric.Fixed{})
 	draw.KeyPlane = true
-	polys := c.collectDrawPolys(draw, 0, 1, modelCursorUnit)
+	polys := c.collectDrawPolys(draw, teamColor{index: 0, known: true}, 1, modelCursorUnit)
 	if len(polys) == 0 {
 		t.Fatal("ARMCK composed no faces")
 	}

@@ -83,7 +83,7 @@ func composeAtHeading(t *testing.T, c *Client, fs *vfs.FS, name string, heading 
 	draw := presentationrender.BuildUnitDrawSimple(m, states, heading, 0, 0, [3]numeric.Fixed{})
 	draw.KeyPlane, draw.DiggerClip = true, digger
 	c.resetListForTest()
-	if !c.drawModel(draw, 0, 1, modelCursorUnit, nil, 0) {
+	if !c.drawModel(draw, 0, teamColor{index: 0, known: true}, 1, modelCursorUnit, nil, 0) {
 		t.Fatalf("%s at heading %d composed no geometry", name, heading)
 	}
 	c.replayForTest()

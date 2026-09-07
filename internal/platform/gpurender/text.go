@@ -194,6 +194,15 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	col := float32(g.Color) / 255.0
 	r.verts = r.verts[:0]
 	r.idx = r.idx[:0]
+	flush := func() {
+		if len(r.verts) == 0 {
+			return
+		}
+		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.glyph, &ebiten.DrawTrianglesShaderOptions{
+			Blend:  ebiten.BlendSourceOver,
+			Images: [4]*ebiten.Image{atlas.img, nil, nil, nil},
+		})
+	}
 	for i := 0; i < len(text); i++ {
 		b := text[i]
 		if b == 0x0A || b == 0x00 { // newline / NUL terminates the advance [02 §7].
@@ -212,6 +221,10 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 			c0, c1 := maxInt(0, -curX), minInt(gw, r.w-curX)
 			r0, r1 := maxInt(0, -top), minInt(gh, r.h-top)
 			if c0 < c1 && r0 < r1 {
+				if !r.quadBatchHasRoom() {
+					flush()
+					r.resetGeometry()
+				}
 				r.appendGlyphQuad(
 					float32(curX+c0), float32(top+r0), float32(curX+c1), float32(top+r1),
 					float32(xoff+c0), float32(r0), float32(xoff+c1), float32(r1),
@@ -220,13 +233,7 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 		}
 		curX += gw // advance; space advances via its glyph width [03 §7.1].
 	}
-	if len(r.verts) == 0 {
-		return
-	}
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.glyph, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendSourceOver,
-		Images: [4]*ebiten.Image{atlas.img, nil, nil, nil},
-	})
+	flush()
 }
 
 // appendGlyphQuad appends one axis-aligned glyph quad sampling the atlas

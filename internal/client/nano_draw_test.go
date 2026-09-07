@@ -5,7 +5,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
-	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
@@ -14,14 +13,14 @@ import (
 // line, which is the defect this locks against.
 func TestNanolatheParticleMarkIsTwoByTwo(t *testing.T) {
 	c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64), cam: &camera.Camera{ViewW: 64, ViewH: 64}}
-	c.nano.Records = []render.NanoRecord{{Particles: []render.NanoParticle{
-		{X: numeric.Fixed(20) << 16, Z: numeric.Fixed(20) << 16, Color: 0xa3},
-	}}}
 	vis := frame.VisibilityView{Valid: true, W: 8, H: 8, CoverageBytes: true, Visible: make([]byte, 64)}
 	for i := range vis.Visible {
 		vis.Visible[i] = 1
 	}
-	c.drawNanolathe(&frame.Frame{Tick: 1, Visibility: vis})
+	c.drawStripBarrier(&frame.Frame{Tick: 1, Visibility: vis, Strips: []frame.StripView{{
+		Strip: 6, Family: frame.StripFamilyNano, Fill: 0xa3,
+		X: numeric.Fixed(20) << 16, Z: numeric.Fixed(20) << 16,
+	}}}, 6)
 	c.replayForTest()
 	painted := 0
 	for _, px := range c.indexed {
@@ -29,9 +28,9 @@ func TestNanolatheParticleMarkIsTwoByTwo(t *testing.T) {
 			painted++
 		}
 	}
-	if painted != render.NanoParticleSize*render.NanoParticleSize {
+	if painted != stripParticleSize*stripParticleSize {
 		t.Fatalf("one particle painted %d pixels, want %d",
-			painted, render.NanoParticleSize*render.NanoParticleSize)
+			painted, stripParticleSize*stripParticleSize)
 	}
 }
 
@@ -45,16 +44,10 @@ func fullVisibility() frame.VisibilityView {
 	return vis
 }
 
-// parkedNano pins one live particle at a world point with no velocity and an
-// expiry far past the frame under test, and closes the record's spawn window,
-// so the field survives the committed-tick advance unchanged and the frame's
-// only variable is paint order.
-func parkedNano(c *Client, x, z numeric.Fixed, colour uint8) {
-	c.nano.Records = []render.NanoRecord{{
-		EndTick:   0,
-		NextSpawn: 1,
-		Particles: []render.NanoParticle{{X: x, Z: z, Color: colour, ExpiryTick: 1 << 20}},
-	}}
+// parkedNanoView models one already-published strip-6 particle. The client
+// paints this immutable copy and owns no particle lifetime state [03 §5.5][I6].
+func parkedNanoView(x, z numeric.Fixed, colour uint8) frame.StripView {
+	return frame.StripView{Strip: 6, Family: frame.StripFamilyNano, Fill: colour, X: x, Z: z}
 }
 
 // TestNanolatheSprayPaintsOverTheUnitBeingBuilt locks the draw-order half of
@@ -81,11 +74,10 @@ func TestNanolatheSprayPaintsOverTheUnitBeingBuilt(t *testing.T) {
 		return c.indexed[y*c.width+x]
 	}
 
-	// The committed-tick advance recolours a live particle one step up the
-	// green ramp before it paints, so the spray's own pixel is any of
-	// 0xa1..0xa7 rather than the colour it was seeded with [03 §5.5].
+	// The published particle's colour is one of the raw green-ramp bytes
+	// 0xa1..0xa7 [03 §5.5].
 	onNanoRamp := func(v uint8) bool {
-		return v > render.NanoColorBase && v <= render.NanoColorBase+render.NanoColorSpan
+		return v >= 0xa1 && v <= 0xa7
 	}
 	cases := []struct {
 		name      string
@@ -109,11 +101,11 @@ func TestNanolatheSprayPaintsOverTheUnitBeingBuilt(t *testing.T) {
 				Units:      []frame.UnitView{built},
 			}
 			clearIndexed(c)
-			parkedNano(c, px(200), px(160), particleColour)
+			cur.Strips = []frame.StripView{parkedNanoView(px(200), px(160), particleColour)}
 
 			// The production order of drawCommittedFrame, with the terrain,
 			// feature and label stages left out: pass A, the projectile and
-			// effect strips (the nano field paints inside drawEffects), pass B.
+			// effect strips (the committed strip particle paints inside drawEffects), pass B.
 			c.drawWorldPass(cur, true)
 			c.drawProjectiles(cur)
 			c.drawEffects(cur)

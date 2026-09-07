@@ -137,7 +137,7 @@ func (c *Client) composeUnitModel(v frame.UnitView) (composedModel, bool) {
 		return composedModel{}, false
 	}
 	reveal, outline := c.unitNanoframeReveal(v)
-	return c.composeModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal, outline)
+	return c.composeModel(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
 }
 
 // composeChildModel composes one attached child for the staging path.
@@ -156,7 +156,7 @@ func (c *Client) composeChildModel(v frame.UnitView) (composedModel, bool) {
 	}
 	draw.KeyPlane = true
 	reveal, outline := c.unitNanoframeReveal(v)
-	m, ok := c.composeModel(draw, v.Owner, unitPresentationID(v), modelCursorUnit, reveal, outline)
+	m, ok := c.composeModel(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
 	if !ok {
 		return composedModel{}, false
 	}
