@@ -70,6 +70,29 @@ func (a *EffectAnimPlayer) Step() {
 	}
 }
 
+// live reports whether this player's layer is still to be drawn — the fact
+// SnapshotViewsInto publishes as EffectView.ActiveA/ActiveB [03 §1].
+//
+// Rendering walks the pool once per animation category, so a category draws
+// exactly while its sequence pointer is intact: Step clears the pointer at
+// termination and that category then draws nothing for this record [03 §1].
+// The record itself survives until BOTH players are inactive, which is why the
+// terminated one must be reported dead rather than left to repaint the
+// index-zero residue its cursor was reset to [03 §4.4].
+//
+// That is the whole rule — a layer with no player holds no sequence pointer and
+// draws nothing, exactly as retail's category walk would. Admission activates a
+// player only when authored timing resolved, so unresolved or malformed timing
+// stays unresolved instead of becoming a static frame 0 [I9]; every named-art
+// layer a producer publishes owns its own player, because the timing lookup is
+// per player [06 R-WFX-01 §2].
+func (a *EffectAnimPlayer) live() bool {
+	if a == nil {
+		return false
+	}
+	return a.Active
+}
+
 func (a *EffectAnimPlayer) frameDuration(idx int32) int32 {
 	if a != nil && idx >= 0 && int(idx) < len(a.Durations) {
 		if a.Durations[idx] > 0 {
@@ -210,6 +233,10 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			Mode: r.Mode, StartTick: r.StartTick,
 			Kind: r.Kind, Graphic: r.Graphic, AssetID: r.AssetID, SequenceID: r.SequenceID,
 			SeqA: r.AnimA.Idx, SeqB: r.AnimB.Idx,
+			// Liveness is published, never inferred downstream: a terminated
+			// player leaves index 0 behind, which is indistinguishable from a
+			// live first frame [03 §1][03 §4.4].
+			ActiveA: r.AnimA.live(), ActiveB: r.AnimB.live(),
 			HasCalculatedFlash: r.HasCalculatedFlash, CalculatedTable: r.CalculatedTable,
 			DurationsA: append(a[:0], r.AnimA.Durations...), DurationsB: append(b[:0], r.AnimB.Durations...),
 			LoopA: r.AnimA.Loop, LoopB: r.AnimB.Loop,

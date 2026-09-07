@@ -152,7 +152,7 @@ func TestInBattleSaveRoundTripsThroughTheLoadPath(t *testing.T) {
 	s := f.session(t)
 	stepRetail(s, 2)
 
-	summary := RetailBattleSummary(s, "battle slot", "1000")
+	summary := RetailBattleSummary(s, "battle slot", "1000", SkirmishDefaultUnitLimit)
 	if summary.BetweenMissions != 0 {
 		t.Fatalf("an in-battle save carried BetweenMissions=%d; that marker is the continuation route", summary.BetweenMissions)
 	}

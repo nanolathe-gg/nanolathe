@@ -211,9 +211,19 @@ func (s *EffectService) admit(now uint32, e Event) {
 	} else if e.Lifetime > 0 {
 		view.ExpiryTick = e.Tick + uint32(e.Lifetime)
 	}
-	if !validTiming(FrameTiming{Durations: view.DurationsA, Loop: view.LoopA}) &&
-		!validTiming(FrameTiming{Durations: view.DurationsB, Loop: view.LoopB}) &&
-		s.resolver != nil && e.Graphic != "" {
+	// The record's two players are independent [03 §1]: the PRIMARY is the
+	// event's named art and the SECONDARY is whatever generated table the
+	// producer attached, each with its own authored timing [06 R-WFX-01 §2].
+	// The primary lookup is therefore gated on the PRIMARY lacking timing and
+	// on nothing else.
+	//
+	// Corrected: this used to require that NEITHER player had timing. Every
+	// impact publishes the calculated flash's holds as the secondary timing,
+	// so the condition was never true for an impact and its named art was
+	// admitted with no player at all — art that could only ever appear as a
+	// static frame 0, for exactly as long as the flash kept the record alive.
+	if s.resolver != nil && e.Graphic != "" &&
+		!validTiming(FrameTiming{Durations: view.DurationsA, Loop: view.LoopA}) {
 		if timing, ok := s.resolver(e); ok && validTiming(timing) {
 			view.DurationsA = append([]int32(nil), timing.Durations...)
 			view.LoopA = timing.Loop
@@ -224,6 +234,12 @@ func (s *EffectService) admit(now uint32, e Event) {
 			s.noteDrop()
 		}
 	} else {
+		// The pool is the normal publisher of per-player liveness and this
+		// fixture fallback bypasses it, so mirror its admission rule here — a
+		// player is live when its authored timing resolved — rather than
+		// leaving pending views silently undrawable [03 §1][I9].
+		view.ActiveA = validDurations(view.DurationsA)
+		view.ActiveB = validDurations(view.DurationsB)
 		s.pending = append(s.pending, view)
 	}
 	_ = now // the pool advances once per call; StartTick remains event-authored.

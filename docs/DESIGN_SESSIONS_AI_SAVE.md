@@ -375,6 +375,21 @@ words. `PlayerSlot` is one `Player%i` account — the slot's scalars, its side
 and logo bytes, and, as that account's last item, its eleven-byte alliance row
 with the forced self-alliance `[08 "Summary"]` `[08 "Player records"]`.
 
+**Which limit a save persists, and which battle a load can affect.** The
+`maxunits` item is the **configured** unit-limit word — this build's copy of
+`[Preferences] UnitLimit`, held by `cmd/nanolathe`'s setup record — and never
+the battle's own session limit, which in a campaign comes from the mission OTA
+instead `[08 R-SESS-01 §9]` `[08 R-SKIR-01 §6]`. The session package holds only
+the per-battle copy, so `RetailBattleSummary` takes the configured word as a
+parameter rather than reading a setting; the continuation writer takes it on
+`ContinuationSaveMetadata`. On the way back in, `applyRestoredUnitLimit` stores
+the saved word, unclamped, into that same configured record — and only when the
+account carried the item, which is why `save.Summary` reports presence
+(`HasMaxUnits`) separately from value. The battle being restored is unaffected:
+its pool was already sized from the configured word as it stood before the
+restore (`RetailLoadDeps.UnitLimit`), so a restored limit reaches the *next*
+battle entry, not this one `[08 R-ENTRY-01 §6]`.
+
 `bulk.go` holds the established raw box sizes — the two accepted unit-box
 lengths, the order box and its five subtype lengths, the script snapshot's base
 and per-piece sizes, the feature type-name buffer, and the units-account

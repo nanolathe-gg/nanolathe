@@ -3,9 +3,11 @@ package client
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
+	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/world"
@@ -121,7 +123,7 @@ func TestExplosionArtActuallyReachesTheBlitter(t *testing.T) {
 
 	view := frame.EffectView{
 		ID: 1, Kind: frame.KindExplosion.String(), Strip: -1,
-		Graphic: "Explosion", AssetID: "fx",
+		Graphic: "Explosion", AssetID: "fx", ActiveA: true,
 		X: numeric.Fixed(160 << 16), Y: 0, Z: numeric.Fixed(160 << 16),
 	}
 	stats := c.DrawEffectViews([]frame.EffectView{view}, c.effectDrawOptions())
@@ -165,7 +167,7 @@ func TestCalculatedFlashDrawsUnderTheArt(t *testing.T) {
 	}
 	view := frame.EffectView{
 		ID: 1, Kind: frame.KindExplosion.String(), Strip: -1,
-		HasCalculatedFlash: true, CalculatedTable: 0, SeqB: 0,
+		HasCalculatedFlash: true, CalculatedTable: 0, SeqB: 0, ActiveB: true,
 		X: numeric.Fixed(160 << 16), Y: 0, Z: numeric.Fixed(160 << 16),
 	}
 
@@ -277,5 +279,114 @@ func TestStripFillParticleDraws(t *testing.T) {
 	c2 := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64), cam: &camera.Camera{}, pal: &palette.Tables{}}
 	if stats := c2.DrawEffectViews([]frame.EffectView{empty}, c2.effectDrawOptions()); stats.Sprites != 0 {
 		t.Fatalf("a view with no draw identity drew %+v", stats)
+	}
+}
+
+// TestFinishedEffectPlayerStopsDrawing is the draw half of the fixed pool's
+// per-player liveness [03 §1].
+//
+// The defect: an effect record survives until BOTH embedded animation players
+// are inactive, and a non-looping player that terminates first resets its
+// cursor to 0 [03 §4.4]. The two draw passes fired on the art name and on the
+// calculated-flash flag alone, so the finished layer was painted again at frame
+// 0 on every later tick — the explosion sprite restarting under its own fading
+// disc, or the widest disc re-lighting the ground under art that was still
+// playing. Both passes now require their own player to be live.
+//
+// The record is driven through the real pool so the test locks the published
+// contract, not a hand-written view.
+func TestFinishedEffectPlayerStopsDrawing(t *testing.T) {
+	// A 2x2 opaque frame stands in for the weapon's art: this test is about
+	// which pass runs, not about asset resolution.
+	art := &formats.GAFFrame{Width: 2, Height: 2, Pixels: []byte{7, 7, 7, 7}, Transparent: make([]bool, 4)}
+	options := EffectDrawOptions{
+		ResolveFrame:    func(frame.EffectView, int32) (*formats.GAFFrame, bool) { return art, true },
+		TerrainCoverage: func(x, y int) bool { return true },
+	}
+	newClient := func() *Client {
+		return &Client{
+			width: 256, height: 256,
+			indexed: make([]uint8, 256*256),
+			cam:     &camera.Camera{},
+			pal:     brighteningTables(),
+		}
+	}
+	// Unequal timing: two ticks of art (two frames held one tick each) against
+	// six ticks of flash (three frames held two ticks each).
+	admit := func(durationsA, durationsB []int32) *render.FixedEffectPool {
+		p := &render.FixedEffectPool{}
+		if !p.AppendView(frame.EffectView{
+			ID: 1, Kind: frame.KindExplosion.String(), Strip: -1,
+			Graphic: "Explosion", AssetID: "fx",
+			HasCalculatedFlash: true, CalculatedTable: 0,
+			DurationsA: durationsA, DurationsB: durationsB,
+			X: numeric.Fixed(160 << 16), Y: 0, Z: numeric.Fixed(160 << 16),
+		}) {
+			t.Fatal("two-player admission failed")
+		}
+		return p
+	}
+
+	// Both players live: the disc and the art both draw, disc first.
+	p := admit([]int32{1, 1}, []int32{2, 2, 2})
+	var views []frame.EffectView
+	views = p.SnapshotViewsInto(views)
+	c := newClient()
+	if stats := c.DrawEffectViews(views, options); stats.Sprites != 1 || stats.Halos != 1 || stats.Skipped != 0 {
+		t.Fatalf("a record with both players live drew %+v, want one sprite and one halo", stats)
+	}
+
+	// (a) The art finishes first. The record is still published because the
+	// flash keeps it alive, and its primary cursor is back at 0.
+	for tick := uint32(1); tick <= 2; tick++ {
+		p.Update(tick)
+	}
+	views = p.SnapshotViewsInto(views)
+	if len(views) != 1 {
+		t.Fatalf("the record retired while its flash was still running: %d", len(views))
+	}
+	c = newClient()
+	stats := c.DrawEffectViews(views, options)
+	if stats.Sprites != 0 {
+		t.Fatalf("the finished art drew again at frame 0: %+v", stats)
+	}
+	if stats.Halos != 1 {
+		t.Fatalf("the still-running flash stopped drawing: %+v", stats)
+	}
+	if stats.Skipped != 0 {
+		t.Fatalf("a finished layer is not an unresolved one: %+v", stats)
+	}
+
+	// (b) The inverse: the flash finishes first and the art plays on.
+	q := admit([]int32{2, 2, 2}, []int32{1, 1})
+	for tick := uint32(1); tick <= 2; tick++ {
+		q.Update(tick)
+	}
+	views = q.SnapshotViewsInto(views)
+	if len(views) != 1 {
+		t.Fatalf("the record retired while its art was still running: %d", len(views))
+	}
+	c = newClient()
+	stats = c.DrawEffectViews(views, options)
+	if stats.Halos != 0 {
+		t.Fatalf("the finished flash re-lit the ground: %+v", stats)
+	}
+	if stats.Sprites != 1 {
+		t.Fatalf("the still-running art stopped drawing: %+v", stats)
+	}
+
+	// (d) A layer with no player of its own draws nothing: named art whose
+	// authored timing never resolved activates no player, and neither the art
+	// name nor the record's survival stands in for one [I9]. The production
+	// impact is NOT this case — its art is resolved as the primary player
+	// beside the flash's secondary timing [06 R-WFX-01 §2], which
+	// render.TestEffectServiceResolvesPrimaryTimingBesideACalculatedFlash
+	// covers.
+	r := admit(nil, []int32{2, 2, 2})
+	r.Update(1)
+	views = r.SnapshotViewsInto(views)
+	c = newClient()
+	if stats := c.DrawEffectViews(views, options); stats.Sprites != 0 || stats.Halos != 1 {
+		t.Fatalf("a record whose art has no player drew %+v, want only its disc", stats)
 	}
 }

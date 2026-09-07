@@ -40,7 +40,7 @@ func TestEnemyCommanderDeathEndsTheMatchBeforeAndAfterALoad(t *testing.T) {
 		t.Fatalf("computer player owns %d units before the kill; the sweep needs something to sweep", live)
 	}
 
-	in, err := fresh.RetailBattleSaveInputs(RetailBattleSummary(fresh, "wu19228", "0"), save.Camera{})
+	in, err := fresh.RetailBattleSaveInputs(RetailBattleSummary(fresh, "wu19228", "0", SkirmishDefaultUnitLimit), save.Camera{})
 	if err != nil {
 		t.Fatalf("battle save inputs: %v", err)
 	}

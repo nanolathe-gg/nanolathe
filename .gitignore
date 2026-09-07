@@ -18,3 +18,7 @@ remastered/*.hpi
 
 # headless -report f output when run from the repo root
 /f
+
+# working plan and capture baselines for docs/DESIGN_GPU_RENDERER.md; local only
+/PLAN_GPU.md
+/PLAN_GPU_baseline/

@@ -130,7 +130,7 @@ var warmUpSample = &retailaudio.Sample{
 // play-test felt as "the first click takes a while to play" (WU-19-224).
 //
 // The probe itself is a single silent frame, played at zero volume and
-// closed immediately: it only needs to reach player.Play(), which is what
+// released immediately: it only needs to reach player.Play(), which is what
 // triggers the device open on the caller's behalf; nothing about it is meant
 // to be audible or to occupy a voice slot for any length of time.
 func (b *Backend) WarmUp() {
@@ -150,7 +150,7 @@ func (b *Backend) WarmUp() {
 		return
 	}
 	player.Play()
-	_ = player.Close()
+	release(player)
 }
 
 // PlaySample converts one decoded sample to the device rate at the given
@@ -185,9 +185,7 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 		// Oldest start first: the steal picks the smallest sequence number
 		// among the non-looping voices [R-AUD-01 §1 step 2]. Appends keep the
 		// slice in start order, so that voice is the front one.
-		if oldest := b.players[0]; oldest != nil {
-			_ = oldest.Close()
-		}
+		release(b.players[0])
 		b.players = append(b.players[:0], b.players[1:]...)
 	}
 	b.players = append(b.players, player)
@@ -199,6 +197,25 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 // voiceLimit is the device's `MixingBuffers` default [R-AUD-01 §2].
 const voiceLimit = 8
 
+// release frees one voice slot: the player stops producing sound at once and
+// stops reading its source, and the caller then drops its reference.
+//
+// This is the Ebitengine 2.10 idiom, not a change of behaviour. Player.Close
+// is deprecated as of 2.10 in favour of Player.PauseAndStopReading, which
+// removes the player from the audio context's playing set and blocks until any
+// read in flight finishes, so nothing further is mixed and the source is safe
+// to drop. Release of the player itself is then automatic: a Player is
+// collected once it is unreferenced *and* no longer playing, which is exactly
+// the state PauseAndStopReading leaves it in. Our sources are in-memory
+// readers over converted PCM, so there is no handle left over for the caller
+// to close.
+func release(player *audio.Player) {
+	if player == nil {
+		return
+	}
+	player.PauseAndStopReading()
+}
+
 // reapLocked drops every voice whose buffer has stopped, mirroring the
 // application pump's media keepalive walk [R-AUD-02 §2]. The caller holds
 // b.mu.
@@ -209,7 +226,7 @@ func (b *Backend) reapLocked() {
 			continue
 		}
 		if !player.IsPlaying() {
-			_ = player.Close()
+			release(player)
 			continue
 		}
 		live = append(live, player)
@@ -248,7 +265,7 @@ func (b *Backend) PlayStream(sample *retailaudio.Sample, volume float64) error {
 	return nil
 }
 
-// StopStream closes every streaming player, ending music and speech.
+// StopStream releases every streaming player, ending music and speech.
 func (b *Backend) StopStream() {
 	if b == nil {
 		return
@@ -256,9 +273,7 @@ func (b *Backend) StopStream() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, player := range b.streams {
-		if player != nil {
-			_ = player.Close()
-		}
+		release(player)
 	}
 	b.streams = nil
 }
@@ -300,14 +315,10 @@ func (b *Backend) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for _, player := range b.players {
-		if player != nil {
-			_ = player.Close()
-		}
+		release(player)
 	}
 	for _, player := range b.streams {
-		if player != nil {
-			_ = player.Close()
-		}
+		release(player)
 	}
 	b.players = nil
 	b.streams = nil

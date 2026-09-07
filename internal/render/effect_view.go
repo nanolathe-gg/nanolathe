@@ -9,12 +9,19 @@ import (
 // effect.  It intentionally retains the authored Kind/Graphic and frame
 // selectors; asset lookup belongs to the client presentation boundary.
 type EffectDraw struct {
-	ID           uint32
-	EventSeq     uint64
-	Kind         string
-	Graphic      string
-	FrameA       int32
-	FrameB       int32
+	ID       uint32
+	EventSeq uint64
+	Kind     string
+	Graphic  string
+	FrameA   int32
+	FrameB   int32
+	// ActiveA and ActiveB are the published liveness of the two embedded
+	// animation players [03 §1]: FrameA is drawn only while ActiveA holds and
+	// FrameB only while ActiveB holds. The record outlives whichever player
+	// finishes first, and a terminated player's index-zero residue is not a
+	// frame to draw [03 §4.4].
+	ActiveA      bool
+	ActiveB      bool
 	X, Y, Z      numeric.Fixed
 	Light        bool
 	PaletteRow   int16
@@ -57,6 +64,8 @@ func BuildEffectDraws(effects []frame.EffectView) []EffectDraw {
 			Graphic:            e.Graphic,
 			FrameA:             e.SeqA,
 			FrameB:             e.SeqB,
+			ActiveA:            e.ActiveA,
+			ActiveB:            e.ActiveB,
 			X:                  e.X,
 			Y:                  e.Y,
 			Z:                  e.Z,

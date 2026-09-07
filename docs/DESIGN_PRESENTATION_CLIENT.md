@@ -321,6 +321,21 @@ document carries them.
   clears non-looping sequences at termination, and removes emptied records by
   stable left compaction **within the same updater call** — unlike generic strip
   objects `[03 §1]` `[03 R-FX-02 §1]`.
+* **C5.1 Published player liveness.** A record survives until **both** players
+  are inactive, so the one that finishes first is still published every tick
+  with its cursor reset to 0 — an index indistinguishable from a live first
+  frame `[03 §4.4]`. `EffectView.ActiveA` / `ActiveB` therefore carry each
+  player's liveness explicitly, written by the pool's snapshot and by nothing
+  else; the two draw passes gate on them and never infer liveness from the
+  durations, the art name or the cursor index. The rule is the sequence pointer
+  and nothing else: a player is live until termination clears it, a layer with
+  no player draws nothing, and admission activates a player only when authored
+  timing resolved `[I9]`. Timing resolution is **per player** — the event's
+  named art is the primary and whatever generated table the producer attached
+  is the secondary, each with its own authored holds `[06 R-WFX-01 §2]` — so an
+  impact's art owns a real player instead of being a static frame 0 held on
+  screen by the calculated flash. Lifecycle stays in the pool: the client owns
+  no expiry clock and decrements nothing.
 * **C6 Render types 0–7** `[03 §5.4]` `[06 R-WFX-01 §4]`: 0 a line pair using
   the weapon's colour and secondary colour; 1 a base sprite plus a model; 2 the
   22×22 displacement frame through the lens blitter, whose failed screen-rect

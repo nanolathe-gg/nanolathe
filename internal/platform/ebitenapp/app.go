@@ -2,6 +2,7 @@ package ebitenapp
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/internal/audio"
@@ -87,16 +88,40 @@ func (a *app) Layout(outsideWidth, outsideHeight int) (int, int) {
 	return a.c.Size()
 }
 
+// windowOwned records that this process has entered the window layer: Run sets
+// it immediately before the first Ebitengine window call and it stays set for
+// the life of the process. It is the seam every query that would otherwise
+// reach the window system from outside the game loop consults first.
+//
+// It exists because the window layer is brought up lazily, inside whichever
+// window-API call happens to be first, and that bring-up needs the process's
+// own main thread — the one Run occupies. A process that owns no window (the
+// headless run, `--shot`, or a test driving the shell directly) has no such
+// thread, so the bring-up faults there rather than reporting that there is no
+// display. Asking the flag instead keeps those processes out of the window
+// layer entirely.
+var windowOwned atomic.Bool
+
 // DesktopSize reports the current monitor's size in logical pixels, or (0, 0)
-// when no monitor is available — before the loop is entered, or in a headless
-// process.
+// when this process owns no window, or owns one whose monitor cannot be
+// identified.
+//
+// (0, 0) is the headless answer, not a sentinel invented here: it is what the
+// monitor query itself reported with no display attached, and callers already
+// treat it as "no desktop metrics" — retailDisplayModes gates every optional
+// row on a minimum size, so a zero desktop offers exactly the unconditional
+// rows.
 //
 // The display-mode table the `VIDSLDR` slider indexes is gated on the desktop
 // size in retail's windowed (GDI) presentation: 640x480, 800x600 and 1024x768
 // unconditionally, then 1280x1024 only when the desktop is at least 1280x1024
 // and 1600x1200 only when the desktop is at least 1600x1200, both axes
-// inclusive [07 R-FE-02 §9]. This is the screen-metrics query that gate reads.
+// inclusive [07 R-FE-02 §9]. This is the screen-metrics query that gate reads,
+// and in the windowed build it still reads the live monitor.
 func DesktopSize() (int, int) {
+	if !windowOwned.Load() {
+		return 0, 0
+	}
 	monitor := ebiten.Monitor()
 	if monitor == nil {
 		return 0, 0
@@ -127,6 +152,10 @@ func Run(c *client.Client) error {
 		be.WarmUp()
 	}
 	width, height := c.Size()
+	// From here on this process owns a window: every window-API call below, and
+	// everything the game loop reaches through app.Update, runs on this thread
+	// with the window layer brought up. Arm the seam before the first of them.
+	windowOwned.Store(true)
 	ebiten.SetWindowSize(width, height)
 	if title := c.Title(); title != "" {
 		ebiten.SetWindowTitle(title)

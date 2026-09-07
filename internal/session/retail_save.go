@@ -552,14 +552,27 @@ func retailMeteorScalars(m MeteorState) save.MeteorScalars {
 // wall-clock seconds at the moment of saving, so both are caller-owned [08
 // R-SAVE-02 §1] [I6]. The multiplayer rule integers are emitted only for
 // game type 2 [08 "Summary"].
-func RetailBattleSummary(s *Session, description, gameID string) save.Summary {
+//
+// `configuredUnitLimit` is the fourth caller-owned value and becomes
+// `Summary.maxunits`. It is the **configured** unit-limit word — the
+// process-wide `[Preferences] UnitLimit` copy — and not the session's own
+// limit: "the save writer records the configured word (not the session word)"
+// [08 R-SESS-01 §9]. That distinction is visible in campaign, where the session
+// word comes from the mission's OTA `maxunits` and the configured word does
+// not [08 R-SKIR-01 §6], so both routes below take the caller's word. This
+// package holds only the per-battle copy, which is why the configured word
+// arrives as a parameter rather than being read here; the application's word
+// is `cmd/nanolathe`'s setup record.
+func RetailBattleSummary(s *Session, description, gameID string, configuredUnitLimit int) save.Summary {
 	if s == nil {
 		return save.Summary{}
 	}
 	summary := save.Summary{
-		// `maxunits` has no runtime owner in this build; the loader's default
-		// for a missing item is 0, which is what an omitted value means
-		// [08 "Summary"].
+		// Retail's writer always emits `maxunits` [08 "Summary"]. The word it
+		// records is the caller's configured limit; the reader's low-16-bit
+		// truncation is a read-side rule, so the word is stored whole here.
+		MaxUnits:    int32(configuredUnitLimit),
+		HasMaxUnits: true,
 		Description: description,
 		GameID:      gameID,
 		IsBattle:    true,

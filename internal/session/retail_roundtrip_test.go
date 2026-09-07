@@ -106,7 +106,7 @@ func retailEconomyCensus(s *Session) map[int]string {
 func TestRetailBattleSaveLoadRoundTripOnRealContent(t *testing.T) {
 	f, src := retailRoundTripSource(t)
 
-	summary := RetailBattleSummary(src, "roundtrip", "0")
+	summary := RetailBattleSummary(src, "roundtrip", "0", SkirmishDefaultUnitLimit)
 	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
 	if err != nil {
 		t.Fatalf("battle save inputs: %v", err)
@@ -234,7 +234,7 @@ func TestRetailBattleSaveLoadRoundTripOnRealContent(t *testing.T) {
 // reproduce, so a later unit has a measurement to work from.
 func TestRetailBattleSaveLoadContinuationReport(t *testing.T) {
 	f, src := retailRoundTripSource(t)
-	summary := RetailBattleSummary(src, "roundtrip", "0")
+	summary := RetailBattleSummary(src, "roundtrip", "0", SkirmishDefaultUnitLimit)
 	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
 	if err != nil {
 		t.Fatalf("battle save inputs: %v", err)
@@ -323,7 +323,7 @@ func retailAIActivity(s *Session, owner uint8) map[uint16]string {
 // [08 "Scheduler and random state in saves"].
 func TestRetailBattleSaveLoadComputerPlayerResumes(t *testing.T) {
 	f, src := retailRoundTripSource(t)
-	summary := RetailBattleSummary(src, "roundtrip", "0")
+	summary := RetailBattleSummary(src, "roundtrip", "0", SkirmishDefaultUnitLimit)
 	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
 	if err != nil {
 		t.Fatalf("battle save inputs: %v", err)
@@ -597,7 +597,7 @@ func TestRetailBattleSaveLoadCarriesAllianceRows(t *testing.T) {
 		t.Fatalf("slot 1 is not hostile before the save: %v", want)
 	}
 
-	summary := RetailBattleSummary(src, "alliances", "0")
+	summary := RetailBattleSummary(src, "alliances", "0", SkirmishDefaultUnitLimit)
 	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
 	if err != nil {
 		t.Fatalf("battle save inputs: %v", err)

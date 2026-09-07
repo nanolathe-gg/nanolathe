@@ -59,7 +59,7 @@ func TestRetailCampaignRestoreKeepsUseOnlyRestriction(t *testing.T) {
 	t.Logf("%s permits %d of %d definitions", src.Mission.UseOnlyPath, len(permitted), fullBefore)
 	stepRetail(src, 60)
 
-	summary := RetailBattleSummary(src, "useonly", "0")
+	summary := RetailBattleSummary(src, "useonly", "0", SkirmishDefaultUnitLimit)
 	if summary.Gametype != GametypeCampaign {
 		t.Fatalf("campaign save wrote gametype %d", summary.Gametype)
 	}

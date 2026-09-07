@@ -1647,8 +1647,11 @@ func createAndBindServices(s *Session) error {
 	// The two art-backed feature seams — BurnFrameGeometry and AnimationTicks —
 	// are bound by bindFeatureStripProducers above, against the content table
 	// installed at the top of this function.
-	// Visibility [03 §3] dimensions from terrain, mode respects SkirmishConfig
-	// Mapping 0 → history disabled (word fills all bits), LineOfSight 0 → current disabled (byte grids fill 1), LOSType 0 → sprite-mask [08 "Skirmish configuration"][03 §3.1] C2.
+	// Visibility [03 §3]: dimensions from terrain; the mode word comes from the
+	// session kind's own option source — SkirmishConfig for a skirmish, the
+	// mission's OTA keys for a campaign [03 R-VIS-01 §1][08 R-ENTRY-01 §2 step
+	// 4]. Mapping 0 → history disabled (word fills all bits), LineOfSight 0 →
+	// current disabled (byte grids fill 1), LOSType 0 → sprite-mask [03 §3.1] C2.
 	mode := visibilityModeForSession(s)
 	if s.Vis == nil {
 		s.Vis = visibility.New(s.World, mode)
@@ -2081,8 +2084,20 @@ func sessionDifficultyWord(s *Session) (int, bool) {
 	return word, true
 }
 
-// visibilityModeForSession computes the LOS mode word from SkirmishConfig [08 "Skirmish configuration"][03 §3.1] C2.
-// Mapping 0 disables history (word fills all bits), LineOfSight 0 disables current (byte grids fill 1), LOSType 0 selects sprite-mask.
+// visibilityModeForSession builds the session's three-bit visibility mode word
+// once, at battle entry. Each bit is a plain one-bit copy of an authored option
+// — no inversion — and the source is chosen by session kind
+// [03 R-VIS-01 §1][08 R-ENTRY-01 §2 step 4]. Mapping (bit 0) set means the word
+// grid starts empty and accumulates (`Unmapped`); LineOfSight (bit 1) set means
+// current-sight tracking runs; LOSType (bit 2) set selects the terrain-ray
+// raster over the sprite-mask disc [03 R-VIS-01 §1].
+//
+// CORRECTION: every non-skirmish session used to take a hard-coded
+// `Unmapped + True` word here. That is only the *registry* default, and for a
+// campaign battle the registry triple never reaches the session at all: the OTA
+// loader rewrites the single-player option globals from the mission's own
+// `[GlobalHeader]` every time an OTA is parsed [08 R-SKIR-01 §4]. A mission that
+// authors `mapping=0` or `lineofsight=0` therefore played with the wrong word.
 func visibilityModeForSession(s *Session) visibility.Mode {
 	if s == nil {
 		return visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled | visibility.ModeTerrainRay
@@ -2101,7 +2116,36 @@ func visibilityModeForSession(s *Session) visibility.Mode {
 		}
 		return m
 	}
-	// Campaign and other sessions default to fully enabled LOS [03 §3.1].
+	// A campaign battle reads the mission's own OTA keys. The OTA loader stores
+	// `mapping` (key default 0) and `lineofsight` (key default 0) into the
+	// single-player option words and *forces* the two companion words —
+	// LOSType to 1 and commander death to 0 — on every OTA it parses, so the
+	// registry `Single*` triple is read at start-up and immediately shadowed and
+	// reaches nothing [08 R-SKIR-01 §4]. Battle entry then copies the low bit of
+	// each into the mode word [08 R-ENTRY-01 §2 step 4][03 R-VIS-01 §1].
+	//
+	// Bit 2 is consequently constant 1 for every campaign battle: the authored
+	// `LOSType`/`SingleLOSType` key that mission.MissionGlobals carries is an
+	// inert diagnostic carry with no session reader, not this bit's source. With
+	// bit 2 always set, a campaign's Line of Sight state is `Permanent` when
+	// `lineofsight` is even and `True` when it is odd — `Circular` is
+	// unreachable in campaign [03 R-VIS-01 §1].
+	if s.Mission != nil && s.Mission.Type == mission.TypeCampaign &&
+		s.Mission.OTA != nil && s.Mission.OTA.Global != nil {
+		mg := mission.DecodeMissionGlobals(s.Mission.OTA.Global)
+		m := visibility.ModeTerrainRay // LOSType forced to 1 [08 R-SKIR-01 §4]
+		if mg.Mapping&1 != 0 {
+			m |= visibility.ModeHistoryEnabled
+		}
+		if mg.LineOfSight&1 != 0 {
+			m |= visibility.ModeCurrentEnabled
+		}
+		return m
+	}
+	// No parsed `[GlobalHeader]` means no OTA load ever ran, so nothing shadowed
+	// the start-up registry read: the option words still hold the three
+	// `Single*` values, each defaulting to 1 and stored back on a miss
+	// [03 R-VIS-01 §1][03 R-TERR-01 §8]. That default word is `Unmapped + True`.
 	return visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled | visibility.ModeTerrainRay
 }
 

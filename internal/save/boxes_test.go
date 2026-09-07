@@ -422,3 +422,55 @@ func TestAllianceBoxAbsenceLeavesRuntimeRow(t *testing.T) {
 		t.Fatalf("an absent box must leave the runtime row alone: %v", live.Allies)
 	}
 }
+
+// TestSummaryMaxUnitsPresenceIsDistinctFromZero locks the reader's presence
+// witness. The restore step stores `Summary.maxunits` into the configured
+// unit-limit word "only when present" and applies no clamp [08 R-SESS-01 §9],
+// so a Summary that collapses "absent" into "present with value zero" cannot
+// express the contract at all — which is what this type did before HasMaxUnits.
+func TestSummaryMaxUnitsPresenceIsDistinctFromZero(t *testing.T) {
+	read := func(t *testing.T, b *Builder) Summary {
+		t.Helper()
+		bank, err := OpenBytes(b.Bytes())
+		if err != nil {
+			t.Fatalf("OpenBytes: %v", err)
+		}
+		got, ok := ReadSummary(bank)
+		if !ok {
+			t.Fatal("ReadSummary reported no Summary account")
+		}
+		return got
+	}
+
+	// Present with value zero: the writer emits the item unconditionally, as
+	// retail's does, so the value survives as a stored zero.
+	present := NewBuilder()
+	WriteSummary(present, Summary{Gametype: 2, IsBattle: true})
+	if got := read(t, present); !got.HasMaxUnits || got.MaxUnits != 0 {
+		t.Fatalf("written zero read back as MaxUnits=%d HasMaxUnits=%v, want a present zero", got.MaxUnits, got.HasMaxUnits)
+	}
+
+	// Absent: a Summary account with no `maxunits` item at all.
+	absent := NewBuilder()
+	ac := absent.Add(SummaryAccount)
+	ac.SetInt("Gametype", 2)
+	ac.SetInt("Game Time", 7)
+	if got := read(t, absent); got.HasMaxUnits || got.MaxUnits != 0 {
+		t.Fatalf("absent item read back as MaxUnits=%d HasMaxUnits=%v, want absent", got.MaxUnits, got.HasMaxUnits)
+	}
+
+	// A stored value whose low sixteen bits are zero is still present: the
+	// truncation is a read-side rule, not an absence [08 "Summary"].
+	truncating := NewBuilder()
+	WriteSummary(truncating, Summary{MaxUnits: 0x10000, Gametype: 2, IsBattle: true})
+	if got := read(t, truncating); !got.HasMaxUnits || got.MaxUnits != 0 {
+		t.Fatalf("0x10000 read back as MaxUnits=%d HasMaxUnits=%v, want a present low-16-bit zero", got.MaxUnits, got.HasMaxUnits)
+	}
+
+	// A nondefault configured word round-trips whole.
+	carried := NewBuilder()
+	WriteSummary(carried, Summary{MaxUnits: 137, Gametype: 2, IsBattle: true})
+	if got := read(t, carried); !got.HasMaxUnits || got.MaxUnits != 137 {
+		t.Fatalf("137 read back as MaxUnits=%d HasMaxUnits=%v", got.MaxUnits, got.HasMaxUnits)
+	}
+}

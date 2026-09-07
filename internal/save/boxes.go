@@ -31,14 +31,28 @@ type Summary struct {
 	BuildDateKey string // e.g. "BUILD DATE:Aug 23 2026" — prefix BUILD DATE:
 	BuildTimeKey string // e.g. "BUILD TIME:12:00:00" — prefix BUILD TIME:
 
-	MaxUnits   int32  // low 16 bits else 0 on load missing [08 "Summary"]
-	Campaign   string // [08 "Summary"]
-	Mission    string // [08 "Summary"]
-	MapName    string // Map [08 "Summary"]
-	Difficulty int32  // default 0 [08 "Summary"]
-	Side       int32  // default 0 [08 "Summary"]
-	Players    int32
-	Gametype   int32 // 1 campaign, 2 multiplayer [08 "Summary"] [GAP T9]
+	// MaxUnits is the configured unit-limit word the writer records — the
+	// process-configured `[Preferences] UnitLimit` copy, never the battle's own
+	// session limit [08 R-SESS-01 §9]. A read takes the item's low 16 bits.
+	//
+	// HasMaxUnits is the item's presence witness, and it is not redundant with a
+	// nonzero MaxUnits: the restore step reads the word "only when present" and
+	// applies no clamp, so a present zero and an absent item are two different
+	// instructions [08 R-SESS-01 §9]. Collapsing them — which this type did
+	// until the reader gained this field — makes a save that stores zero
+	// indistinguishable from one that omits the item. ReadSummary sets it for a
+	// present item whatever its value; WriteSummary emits the item
+	// unconditionally, as retail's writer does, so a bank this package writes
+	// always reads back present.
+	MaxUnits    int32
+	HasMaxUnits bool
+	Campaign    string // [08 "Summary"]
+	Mission     string // [08 "Summary"]
+	MapName     string // Map [08 "Summary"]
+	Difficulty  int32  // default 0 [08 "Summary"]
+	Side        int32  // default 0 [08 "Summary"]
+	Players     int32
+	Gametype    int32 // 1 campaign, 2 multiplayer [08 "Summary"] [GAP T9]
 	// Retail stores Thumbs as a bounded 25-byte string. Reset/application
 	// semantics belong to the progression pass [08 R-SAVE-02 §3].
 	Thumbs string
@@ -113,6 +127,11 @@ func WriteSummary(b *Builder, s Summary) {
 	}
 	ac.SetInt(bd, 0)
 	ac.SetInt(bt, 0)
+	// The item is emitted unconditionally: retail's writer always emits
+	// `maxunits`, and every producer in this build supplies the configured
+	// unit-limit word [08 "Summary"] [08 R-SESS-01 §9]. HasMaxUnits is therefore
+	// a read-side witness only — omitting the item here would write a file
+	// retail never writes.
 	ac.SetInt("maxunits", s.MaxUnits)
 	ac.SetString("Campaign", s.Campaign)
 	ac.SetString("Mission", s.Mission)
@@ -176,8 +195,10 @@ const (
 )
 
 // ReadSummary reads the Summary account with preflight defaults [08 "Summary"].
-// Missing/mistyped handling: maxunits low 16 bits else 0; Difficulty/Side/Players
-// default 0; the five multiplayer rule fields default 1 [08 "Summary"].
+// Missing/mistyped handling: maxunits low 16 bits else 0 with HasMaxUnits
+// recording whether the item was there at all — the restore reads that word
+// only when present [08 R-SESS-01 §9]; Difficulty/Side/Players default 0; the
+// five multiplayer rule fields default 1 [08 "Summary"].
 func ReadSummary(bank *Bank) (Summary, bool) {
 	var s Summary
 	ac, ok := bank.Account(SummaryAccount)
@@ -200,8 +221,10 @@ func ReadSummary(bank *Bank) (Summary, bool) {
 	}
 	if v, ok := ac.Int("maxunits"); ok {
 		s.MaxUnits = int32(uint16(v)) // low 16 bits [08 "Summary"]
+		s.HasMaxUnits = true
 	} else {
 		s.MaxUnits = 0
+		s.HasMaxUnits = false
 	}
 	if v, ok := ac.Str("Campaign"); ok {
 		s.Campaign = v

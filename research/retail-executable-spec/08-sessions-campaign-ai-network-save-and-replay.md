@@ -6099,9 +6099,9 @@ the cell's animation-present bit select the destination box:
 
 | Box | Record size | Map |
 |---|---:|---|
-| `Normal Features` | 8 bytes | `0x00..0x01` cell X (`u16`), `0x02..0x03` cell Z (`u16`), `0x04..0x05` saved catalog ordinal (`u16`), `0x06..0x07` anchor/instance word copied from the cell (`u16`). |
-| `Animating Features` | 10 bytes | The first eight bytes are X, Z, and saved catalog ordinal as above; `0x06..0x07` is the live animation-state word, `0x08` is the live animation frame byte, and `0x09` contains the saved animation selector in its low nibble plus the live countdown's high nibble in its high nibble. |
-| `3D Features` | 26 bytes | `0x00..0x05` are X, Z, and saved catalog ordinal; `0x06..0x07` is the live animation-state word; `0x08..0x0B`, `0x0C..0x0F`, and `0x10..0x13` copy three live state words; `0x14..0x17` copies a fourth live state word; `0x18..0x19` copies a final live state halfword. |
+| `Normal Features` | 8 bytes | `0x00..0x01` cell X (`u16`), `0x02..0x03` cell Z (`u16`), `0x04..0x05` saved catalog ordinal (`u16`), `0x06..0x07` the anchor cell's accumulator word (`u16`) — for a feature with no live instance this is the running weapon-damage sum of [05 R-FEAT-01 §8] step 6. |
+| `Animating Features` | 10 bytes | The first eight bytes are X, Z, and saved catalog ordinal as above; `0x06..0x07` is the live instance's accumulator word (see below), `0x08` is the live main-cursor frame byte, and `0x09` contains the saved animation selector in its low nibble plus the live countdown's high nibble in its high nibble. |
+| `3D Features` | 26 bytes | `0x00..0x05` are X, Z, and saved catalog ordinal; `0x06..0x07` the live instance's accumulator word (`i16`, the weapon-damage sum of [05 R-FEAT-01 §8] step 7); `0x08..0x0B` position X, `0x0C..0x0F` position Y, `0x10..0x13` position Z (three `16.16` world coordinates, the instance's position triple); `0x14..0x15` bank and `0x16..0x17` heading (two `u16` angle words written as one 32-bit copy of the instance's bank/heading pair); `0x18..0x19` pitch (`u16`). The three angle words are the orientation triple of [05 "Feature instance and terrain cell"], in the unit record's bank/heading/pitch order and units. |
 
 The three count items are `Number of Normal Features`, `Number of Animating
 Features`, and `Number of 3D Features`. Their values are the number of
@@ -6111,14 +6111,54 @@ otherwise the cell animation bit distinguishes normal from animating. A
 feature footprint can cover multiple cells, but only the live anchor cell is
 eligible, so one live feature produces one record. [Established]
 
-The 3D words at `0x08..0x19` are copied losslessly, but the bounded census
-does not establish public names for them. They are live feature state consumed
-by the 3D/animation path, not coordinates that may be recomputed from X/Z or
-terrain. Keep them as opaque words in a staged image until a field-isolation
-trace identifies their semantics. The same rule applies to the animation-state
-word: its wire position and restoration are established, while its complete
-internal interpretation is not. [Established wire copy; Unknown semantic
-names]
+**The 3D record's five values, named.** The writer copies them straight out
+of the live instance record in the order the stamp service writes them:
+the position triple, then the orientation triple. [Established — writer
+trace; the same five live fields are the ones the stamp routine fills from
+its two optional pointers, the model draw copies into the drawing proxy's
+position and orientation, the blast-radius walk measures distance to, the
+sinking integrator advances, the replacement routine hands to a successor,
+and the resurrection transplant copies back ([05 R-FEAT-01 §3], [05 R-FEAT-01
+§8], [05 R-FEAT-01 §13], [05 R-WORK-01 §7]).]
+
+* **Position (`0x08..0x13`).** X, Y, Z in `16.16` world units. For a
+  map-authored or successor 3D feature these hold the stamp's own values —
+  the footprint centre (`(2·cellX + footprintx)·8` and likewise for Z, as
+  whole world units) and the bilinearly interpolated terrain height at that
+  point for Y; for a corpse they hold the dying unit's exact position; for a
+  sinking wreck Y is the current descent height, which is why it is saved.
+  [Established]
+* **Orientation (`0x14..0x19`).** Bank, heading, pitch, each `0..65535` per
+  circle. Zero for every non-corpse placement; the dying unit's triple for a
+  corpse. [Established]
+* **Accumulator (`0x06..0x07`).** The instance's damage word. For a 3D
+  instance it is the only consumer-visible "state" word besides position
+  and orientation: weapon hits add their default damage to it with 16-bit
+  wrap and the death transition fires when the definition's `damage` is
+  less than or equal to it (unsigned) — see [05 R-FEAT-01 §8] step 7. It is
+  not an animation word: 3D instances have no sprite cursor, and the feature
+  phase's 3D branch never reads it. The earlier name "animation-state word"
+  in this section was a placeholder from the bounded census. [Established]
+
+The same word is what the other two families save at `0x06..0x07`. For a
+normal record it is the anchor cell's own accumulator (the cell field that
+holds the damage sum while no instance is attached and the slot index once
+one is — the stamp zeroes it, and the reader's copy-back below restores the
+sum). For an animating record it is the sprite instance's accumulator word,
+which **no sprite path writes** (burn, die and reclaim transitions allocate
+the slot without touching it and the damage entry's sprite-with-instance
+branch is empty), so it carries whatever the slot last held; the reader
+restores it faithfully and nothing reads it for a sprite instance.
+[Established for every code site that touches the instance pool; the census
+covers all thirty pool-addressing sites and the one path that receives a
+stamped record by pointer]
+
+**What the 3D record does not carry.** The live instance's velocity triple
+(three `16.16` words immediately after the position in the live record, the
+sinking integrator's state of [05 R-FEAT-01 §13]), its per-instance model
+handle, its burn countdown byte and its mode bits are not serialized. The
+model handle is recreated by the stamp; the others are discussed under the
+reader below. [Established]
 
 **Type-name remapping.** On load, the name box is interpreted as consecutive
 128-byte names; a trailing remainder is ignored. Each saved ordinal is mapped
@@ -6159,16 +6199,50 @@ footprints and derived occupancy through the same path used by map load,
 replacement, fire, reclaim, and wreck creation. [Established; [05 "Feature
 instance and terrain cell"]]
 
-After a normal record is stamped, its saved anchor/instance word is copied
+After a normal record is stamped, its saved accumulator word is copied
 back to the anchor cell. After an animating record is stamped, the low nibble
 of its state byte selects the already-established transition family: zero
 restarts the burn sequence, one selects the death transition, and two selects
-the reclaim transition. The reader then restores the saved animation-state
+the reclaim transition. The reader then restores the saved accumulator
 word, frame byte, and countdown high nibble into the allocated live record.
 Other selector values do not establish a fourth transition and must remain
-uninterpreted. A 3D record passes its three state words, fourth state word,
-and final halfword through the placement path and then restores its animation
-state word. [Established; [05 "Feature burning"], [05 "Feature sinking"]]
+uninterpreted. [Established; [05 "Feature burning"], [05 "Feature sinking"]]
+
+**3D record restore, exactly.** The reader calls the stamp service with
+the saved position triple as its optional position pointer and the saved
+bank/heading pair plus pitch as its optional orientation pointer, so both
+are stored **verbatim**: the stamp does not recompute the footprint centre
+or re-sample the terrain height when a triple is supplied, and a wreck
+saved mid-descent comes back at its saved Y. After the stamp returns, the
+reader writes the saved accumulator word into the new instance — after,
+because the stamp zeroes that word. Nothing else is written by the reader.
+[Established]
+
+The words the record does not carry take the values of the slot the stamp
+pops. On a save load that slot is always freshly zero-filled: battle entry
+runs the terrain loader — which zero-fills the whole instance pool and, when
+a save file is pending, stamps only the void markers and **not** the map's
+own features — before it applies the save's `Features` account. So every
+loaded 3D instance starts with velocity `(0, 0, 0)`, a clear mode byte and a
+zero countdown, and the stamp recreates its model handle from the
+definition's object. Consequence for sinking: the stamp places the instance
+on the active list, and the feature phase's 3D branch retires an instance
+whose velocity is all zero to the dormant list on its first visit
+([05 R-FEAT-01 §10] pass 3), so **a wreck saved while sinking resumes
+suspended at its saved height and never descends further** — retail does
+not re-derive the −11468 latch from the height/sea-level relation on load.
+The one land-side effect of the same loss is the reverse: a corpse saved
+while still falling under gravity is frozen in the air at its saved Y.
+[Established by mechanism; not confirmed by a retail play session — a
+manual save/reload of a battle with a wreck mid-descent would confirm the
+observable]
+
+The animating record's transition selection re-runs the burn or die/reclaim
+transition, which allocates the sprite cursor fresh and (for a burn) seeds
+the countdown exactly as ignition does, simulation draw included
+([05 R-FEAT-01 §9]); the reader then overwrites the accumulator word, the
+frame byte and the countdown byte (saved high nibble, low nibble zero) with
+the saved copies. [Established]
 
 Because stamping replays the normal footprint operation, terrain and derived
 occupancy are rebuilt from the saved anchor coordinates and current feature
@@ -6209,15 +6283,19 @@ mutation order Established; transactional boundary Supported inference]
 **Closure and remaining unknowns.** The wire image is implementation-ready
 for lossless feature staging: names remap by case-insensitive identity, family
 sizes and fields are fixed, stable order is row-major within each family, and
-placement rebuilds terrain relationships and allocator state. The remaining
-unknowns are limited to the semantic names of the five 3D state values, the
-resulting retail state for out-of-range coordinates and duplicate anchors, and
-whether any unrecovered nonstandard snapshot path serializes additional
-feature state. Standard battle save/load has no such writer in the bounded
-account census. [Established closure boundary; Unknown residuals]
+placement rebuilds terrain relationships and allocator state. The five 3D
+values are named above (position triple, bank/heading pair, pitch) and the
+accumulator word's meaning is settled for all three families. The remaining
+unknowns are limited to the resulting retail state for out-of-range
+coordinates and duplicate anchors, and whether any unrecovered nonstandard
+snapshot path serializes additional feature state. Standard battle save/load
+has no such writer in the bounded account census. [Established closure
+boundary; Unknown residuals]
 
 Implementation probes should round-trip one record of each family at its exact
-size; alter each 3D word independently; reorder records within and across
+size; alter each 3D position and angle word independently and confirm the
+stamp stores it without re-sampling terrain; save a wreck mid-descent and
+confirm it reloads suspended and dormant; reorder records within and across
 families; omit, truncate, and extend the name table; use renamed and unknown
 definitions; exercise selector nibbles 0, 1, 2, and an unknown value; and
 provide duplicate or out-of-range anchors. Transactional tests should assert

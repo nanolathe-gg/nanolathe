@@ -21,6 +21,7 @@ has its own design document; this one only says where the boundaries are.
 | [DESIGN_INTERFACE_HUD_INPUT](DESIGN_INTERFACE_HUD_INPUT.md) | GUI files and screens, the battle HUD, input, camera, selection and command dispatch |
 | [DESIGN_SESSIONS_AI_SAVE](DESIGN_SESSIONS_AI_SAVE.md) | session states, campaign and mission loading, triggers, the computer player, saves, the headless runner |
 | [DESIGN_PRESENTATION_CLIENT](DESIGN_PRESENTATION_CLIENT.md) | window and frame loop, the frame composer, model rasterizer, effects, palette, audio |
+| [DESIGN_GPU_RENDERER](DESIGN_GPU_RENDERER.md) | the recorded frame draw list, the classic (software) and modern (GPU) executors, the renderer switch, parity gates |
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
 places where the reference install disproves the written contract are in
@@ -137,7 +138,9 @@ package implements.
 | `internal/palette` | Palette, SHD, ALP and LHT tables and logical→physical lookups | DESIGN_PRESENTATION_CLIENT |
 | `internal/audio` | The eight-slot cue queue, sample decode and cache, positional attenuation, music, briefing speech | DESIGN_PRESENTATION_CLIENT |
 | `internal/audiobackend` | The desktop PCM device boundary behind `internal/audio` | DESIGN_PRESENTATION_CLIENT |
-| `internal/platform/ebitenapp` | The Ebitengine adapter: window and loop lifecycle, device input polling, framebuffer upload | DESIGN_PRESENTATION_CLIENT |
+| `internal/platform/ebitenapp` | The Ebitengine adapter: window and loop lifecycle, device input polling, framebuffer upload, the classic/modern executor switch | DESIGN_PRESENTATION_CLIENT |
+| `internal/drawlist` | The recorded committed-frame draw list: command families carrying physical palette indices, the `Sink` executor interface, ordered replay (planned) | DESIGN_GPU_RENDERER |
+| `internal/platform/gpurender` | The modern executor: replays a draw list through Ebitengine in palette-index space, table textures, atlases, the two-pass height key, expansion to RGB (planned) | DESIGN_GPU_RENDERER |
 
 ### Commands
 
@@ -207,7 +210,8 @@ Three boundaries in this graph are enforced by tests in `internal/architecture`
 rather than by convention:
 
 * **Only the platform adapter reaches Ebitengine.** `internal/platform/ebitenapp`,
-  `internal/audiobackend` and `cmd/nanolathe` are the only packages whose
+  `internal/platform/gpurender` (once it exists), `internal/audiobackend` and
+  `cmd/nanolathe` are the only packages whose
   import closure (including their test binaries) may contain the Ebitengine
   modules. Every other package, and every other test, stands up with no
   window and no audio device.

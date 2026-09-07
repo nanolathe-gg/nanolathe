@@ -178,6 +178,26 @@ acquire a second meaning: history, current coverage (byte-versus-word), raster
 selection (terrain-ray versus sprite-mask), and the fog-cache-valid bit
 `[03 §3.1]` `[03 R-VIS-01 §1]`.
 
+**Where the low three bits come from** (`internal/session/composition.go`,
+`visibilityModeForSession`, called once while services are bound). The session
+kind picks the source and each bit is a plain one-bit copy — no inversion
+`[03 R-VIS-01 §1]` `[08 R-ENTRY-01 §2 step 4]`. A skirmish takes the setup
+record's `Mapping` / `LineOfSight` / `LOSType`. A **campaign takes the mission's
+own OTA `[GlobalHeader]`**: the OTA loader stores `mapping` and `lineofsight`
+(each defaulting to 0 on a missing key) into the single-player option words and
+forces the companion words — LOSType to 1, commander death to 0 — every time it
+parses a `GlobalHeader`, so the registry `Single*` triple is read at start-up and
+immediately shadowed and never reaches a battle `[08 R-SKIR-01 §4]`. Bit 2 is
+therefore constant 1 for a campaign, and `Circular` line of sight is unreachable
+there; `mission.MissionGlobals.LOSType` carries an authored key for diagnostics
+only and is not this bit's source. A session with no parsed `GlobalHeader` met
+no such writer and keeps the registry default word, `Unmapped + True`
+`[03 R-TERR-01 §8]`. A restored campaign save reloads the mission's OTA and
+binds its services through the same path, so it derives the same word; the
+save `Summary`'s `Mapping` / `LineOfSight` / `LineOfSightType` integers are
+written and re-installed on multiplayer saves only `[08 "Summary"]`
+`[08 R-SAVE-02 §11]`.
+
 **Publication** (`publish.go`, `shapes.go`). Both rasters start from the same
 quantization `q = floor(radius/32)` and both write the same word mask and the
 same byte refcount; the mode bit selects only the shape.

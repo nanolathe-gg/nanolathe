@@ -268,13 +268,19 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 // [08 R-SKIR-01 §6]; a later skirmish battle entry copies this word verbatim
 // into its own session limit.
 //
-// save.Summary represents "the item is absent" and "the item is present with
-// stored value zero" the same way — MaxUnits reads back 0 for both
-// [internal/save/boxes.go ReadSummary] — so this treats a zero as absent.
-// Retail's writer only ever records the start-up-clamped configured word
-// (20..500), so a real save never exercises that seam.
+// Presence is what the gate below tests, not a nonzero value:
+// save.Summary.HasMaxUnits records whether the item was in the account at all,
+// so a save that stores zero carries its zero through and a save that omits the
+// item changes nothing. Retail's writer only ever records the start-up-clamped
+// configured word (20..500), so a stock save never stores a zero here — that
+// case is a fidelity seam, not a path a retail bank reaches.
+//
+// The word carried in is the configured one; the battle just restored keeps the
+// pool it was given, which was sized from that word as it stood before the
+// restore (see loadRetailSavePath's RetailLoadDeps.UnitLimit above)
+// [08 R-ENTRY-01 §6] [08 R-SESS-01 §9].
 func (g *gameShell) applyRestoredUnitLimit(image *save.BattleImage) {
-	if g == nil || image == nil || image.Summary.MaxUnits == 0 {
+	if g == nil || image == nil || !image.Summary.HasMaxUnits {
 		return
 	}
 	g.setup.UnitLimit = int(image.Summary.MaxUnits)

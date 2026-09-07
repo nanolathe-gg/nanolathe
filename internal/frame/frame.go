@@ -304,6 +304,20 @@ type EffectView struct {
 	HasModel       bool
 	SeqA           int32
 	SeqB           int32
+	// ActiveA and ActiveB are the two embedded animation players' published
+	// liveness: whether this record's PRIMARY (named art) and SECONDARY
+	// (calculated flash) layer is still to be drawn [03 §1].
+	//
+	// Rendering walks the pool once per animation category, and a category
+	// whose sequence pointer was cleared at termination draws nothing for that
+	// record [03 §1]. The record outlives whichever player finishes first — it
+	// is retired only when both are inactive — so the draw pass must not infer
+	// liveness from the durations, from the art name, or from the cursor
+	// index: frame 0 is a valid live frame and is exactly the index a
+	// terminated player leaves behind [03 §4.4]. The fixed effect pool is the
+	// sole producer of these views and publishes the fact instead.
+	ActiveA bool
+	ActiveB bool
 	// HasCalculatedFlash and CalculatedTable carry the explosion pool's
 	// SECONDARY cursor over a procedurally generated disc [06 R-WFX-01 §2].
 	// SeqB is that cursor's frame; the table index selects which of the three

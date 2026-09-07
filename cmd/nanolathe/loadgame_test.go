@@ -160,23 +160,36 @@ func TestCampaignContinuationWalkWritesAndResumesABank(t *testing.T) {
 // unclamped, into the configured unit-limit word only when the save carried
 // the item at all [08 R-ENTRY-01 §6][08 R-SESS-01 §9]. Nanolathe's configured
 // word is g.setup.UnitLimit.
+//
+// "Carried the item at all" is presence, not a nonzero value; this gate read
+// `MaxUnits != 0` until save.Summary gained a presence witness, which made a
+// stored zero unreadable as a stored zero.
 func TestApplyRestoredUnitLimitCarriesSummaryMaxUnits(t *testing.T) {
 	shell := &gameShell{}
 	shell.setup.UnitLimit = 250
 
 	// A value far outside the 20..500 start-up clamp stays exactly as saved:
 	// the restore applies no clamp [08 R-SESS-01 §9].
-	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 12}})
+	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 12, HasMaxUnits: true}})
 	if shell.setup.UnitLimit != 12 {
 		t.Fatalf("configured UnitLimit = %d, want 12 unclamped", shell.setup.UnitLimit)
 	}
 
-	// A save without the item — represented as the zero value, indistinguishable
-	// here from a stored zero — leaves the configured word untouched.
-	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 0}})
+	// A save without the item leaves the configured word untouched. Absence is
+	// the account's, not the value's: the gate reads HasMaxUnits.
+	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 400}})
 	if shell.setup.UnitLimit != 12 {
 		t.Fatalf("configured UnitLimit = %d, want unchanged 12 after a missing item", shell.setup.UnitLimit)
 	}
+
+	// A present zero is carried, because "only when present" is the whole
+	// condition; a retail bank never stores one, so this is the fidelity seam
+	// rather than a stock path [08 R-SESS-01 §9].
+	shell.applyRestoredUnitLimit(&save.BattleImage{Summary: save.Summary{MaxUnits: 0, HasMaxUnits: true}})
+	if shell.setup.UnitLimit != 0 {
+		t.Fatalf("configured UnitLimit = %d, want the present zero carried through", shell.setup.UnitLimit)
+	}
+	shell.setup.UnitLimit = 12
 
 	// A nil image (defensive) is also a no-op.
 	shell.applyRestoredUnitLimit(nil)

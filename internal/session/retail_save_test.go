@@ -4,11 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -227,4 +229,74 @@ func containsAny(s string, values ...string) bool {
 		}
 	}
 	return false
+}
+
+// TestRetailBattleSummaryRecordsTheConfiguredUnitLimit locks the producer of
+// `Summary.maxunits`. The writer records the **configured** unit-limit word —
+// the process-wide `[Preferences] UnitLimit` copy — and not the session word
+// [08 R-SESS-01 §9]; the two differ exactly in campaign, where the session word
+// is the mission OTA's `maxunits` [08 R-SKIR-01 §6]. The campaign fixture below
+// therefore carries an OTA limit of 200 while the caller's configured word is
+// 137, so a producer that read the session limit would be visible immediately.
+//
+// This item had no producer before: the summary left it zero, which the reader
+// could not tell from an omitted item.
+func TestRetailBattleSummaryRecordsTheConfiguredUnitLimit(t *testing.T) {
+	const configured = 137
+
+	campaign := &Session{
+		Mission: &mission.Mission{
+			Type: mission.TypeCampaign,
+			OTA: &formats.OTA{Global: &formats.Section{
+				Name:  "GlobalHeader",
+				Items: []formats.Item{{Kind: formats.Assignment, Key: "maxunits", Value: "200"}},
+			}},
+			CampaignPath:        "camps/arm campaign.tdf",
+			CampaignMissionName: "MISSION1",
+		},
+	}
+	if got := sessionUnitLimit(campaign); got != 200 {
+		t.Fatalf("campaign session limit = %d, want the fixture's OTA 200; the test cannot tell the two words apart otherwise", got)
+	}
+
+	skirmish := &Session{}
+	skirmish.Skirmish.MapName = "Coast to Coast"
+	skirmish.Skirmish.NumPlayers = 2
+	skirmish.Skirmish.UnitLimit = 300 // a session word unequal to the configured one
+
+	for _, tc := range []struct {
+		name string
+		s    *Session
+	}{{"campaign", campaign}, {"skirmish", skirmish}} {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := RetailBattleSummary(tc.s, "limits", "0", configured)
+			if !summary.HasMaxUnits || summary.MaxUnits != configured {
+				t.Fatalf("summary MaxUnits=%d HasMaxUnits=%v, want the configured %d present", summary.MaxUnits, summary.HasMaxUnits, configured)
+			}
+			b := save.NewBuilder()
+			save.WriteSummary(b, summary)
+			bank, err := save.OpenBytes(b.Bytes())
+			if err != nil {
+				t.Fatalf("OpenBytes: %v", err)
+			}
+			ac, ok := bank.Account(save.SummaryAccount)
+			if !ok {
+				t.Fatal("no Summary account in the written bank")
+			}
+			value, ok := ac.Int("maxunits")
+			if !ok {
+				t.Fatal("the written bank carries no maxunits item")
+			}
+			if value != configured {
+				t.Fatalf("bank maxunits = %d, want the configured word %d", value, configured)
+			}
+			back, ok := save.ReadSummary(bank)
+			if !ok {
+				t.Fatal("ReadSummary reported no Summary account")
+			}
+			if !back.HasMaxUnits || back.MaxUnits != configured {
+				t.Fatalf("read back MaxUnits=%d HasMaxUnits=%v, want the configured %d present", back.MaxUnits, back.HasMaxUnits, configured)
+			}
+		})
+	}
 }

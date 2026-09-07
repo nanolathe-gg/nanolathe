@@ -216,6 +216,13 @@ stale pointer after compaction), reproduce it and cite it; do not defend against
 it. Bounds checks that reject data retail would accept are the one exception and
 must be noted in the plan's Divergences.
 
+One presentation switch is sanctioned and it is the only one: the renderer,
+classic or modern, of [DESIGN_GPU_RENDERER.md](DESIGN_GPU_RENDERER.md). Both
+executors replay the same recorded frame; the switch changes how pixels are
+produced, never which frame is read or what the simulation does. Modern
+mode's departures from classic are listed in that document's Divergences and
+nowhere else.
+
 ## I12 — Standard library first
 
 Use `sort`, `slices`, `io/fs`, `errors` shapes rather than bespoke utilities. No

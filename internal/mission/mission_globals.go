@@ -99,9 +99,9 @@ var MissionGlobalCensus = []CensusEntry{
 	{Key: "waterdamage", VA: "", Offset: "", Type: "int", Default: "0", Clamp: "amount", Consumer: "water damage tick", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "killmul", VA: "", Offset: "", Type: "float", Default: "0.0", Clamp: "—", Consumer: "score: int(kills*killmul) [02 map-global keys][08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "timemul", VA: "", Offset: "", Type: "float", Default: "0.0", Clamp: "retail campaign maps may author the signed sentinel -1 [fmt ota]", Consumer: "score: int(ticks/1800*timemul) [02 map-global keys][08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "mapping", VA: "", Offset: "mapping LOS mode", Type: "int", Default: "0", Clamp: "—", Consumer: "MapFlags bit 0 selects full vs byte-grid LOS mode; campaign-mode LOS defaults merged at battle entry [08 mission globals] [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "lineofsight", VA: "SingleLineOfSight", Offset: "LOS mode", Type: "int", Default: "0", Clamp: "—", Consumer: "visibility word vs ray [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "LOSType", VA: "SingleLOSType", Offset: "LOS type enum", Type: "int", Default: "—", Clamp: "sprite vs ray", Consumer: "anims/vismasks.gaf vs ray", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "mapping", VA: "", Offset: "mapping option word", Type: "int", Default: "0", Clamp: "—", Consumer: "the OTA loader stores it into the single-player mapping option word; campaign battle entry copies its low bit into visibility mode bit 0 — Unmapped when set [08 R-SKIR-01 §4][03 R-VIS-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "lineofsight", VA: "SingleLineOfSight", Offset: "line-of-sight option word", Type: "int", Default: "0", Clamp: "—", Consumer: "stored into the single-player line-of-sight option word; campaign battle entry copies its low bit into visibility mode bit 1 — current-sight tracking on when set, Permanent when clear [08 R-SKIR-01 §4][03 R-VIS-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "LOSType", VA: "SingleLOSType", Offset: "LOS type enum", Type: "int", Default: "—", Clamp: "sprite vs ray", Consumer: "none: the OTA loader forces the LOSType option word to 1 whenever it parses a GlobalHeader, so campaign mode bit 2 is always the terrain ray and never reads an authored key — this decode is an inert carry [08 R-SKIR-01 §4]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "commanderDeath", VA: "SingleCommanderDeath", Offset: "commanderDeath", Type: "int", Default: "1 registry default", Clamp: "—", Consumer: "lobby-value rule for the skirmish defeat gate and respawn path; no mission-level key, no injected trigger [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "MeteorWeapon", VA: "", Offset: "meteor storm record", Type: "string", Default: "empty (decode)", Clamp: "empty predicate", Consumer: "meteor scheduler + gamedata\\METEOR.TDF [Default] merge at storm resolution — only an empty weapon disables; zero parameters substitute the [Default] values [02 meteor merge][06 §6.5] [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "MeteorRadius", VA: "", Offset: "meteor storm record", Type: "int", Default: "0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] radius at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
@@ -224,9 +224,9 @@ type MissionGlobals struct {
 	Memory             string  // memory requirement, inert [P1-02 §2.1]
 	NoMovie            int32   // nomovie inert [P1-02 §2.1]
 	MissionDescription string  // menu description, fallback "No description available" [02 map-global keys]
-	Mapping            int32   // mapping LOS mode, default 0 [02 map-global keys]
-	LineOfSight        int32   // lineofsight, default 0 [02 map-global keys]
-	LOSType            int32   // authored LOSType/SingleLOSType if the OTA carries one; inert — retail's source is the registry triple [03 §3.1]
+	Mapping            int32   // mapping, default 0 [02 map-global keys]; its low bit IS the campaign visibility mode word's bit 0 [08 R-SKIR-01 §4][03 R-VIS-01 §1]
+	LineOfSight        int32   // lineofsight, default 0 [02 map-global keys]; its low bit IS the campaign visibility mode word's bit 1 [08 R-SKIR-01 §4][03 R-VIS-01 §1]
+	LOSType            int32   // authored LOSType/SingleLOSType if the OTA carries one; inert — the OTA loader forces the LOSType option word to 1, so mode bit 2 never reads this key [08 R-SKIR-01 §4]
 	MeteorWeapon       string  // MeteorWeapon empty disables [P1-02 §2.1]
 	MeteorRadius       int32   // MeteorRadius, default 0 [02 map-global keys]
 	MeteorDensity      float64 // MeteorDensity, default 0.0 [02 map-global keys]
@@ -288,7 +288,7 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 	// the literal, which is the missing-key default alone
 	// [02 R-MAP-01 §3 row 13].
 	mg.MissionDescription, _ = global.StringValue("missiondescription", "No description available")
-	mg.Mapping = global.IntValue("mapping", 0)         // 0 [02 map-global keys]; lobby/registry LOS defaults are a separate mechanism [08 mission globals]
+	mg.Mapping = global.IntValue("mapping", 0)         // 0 [02 map-global keys]; the skirmish lobby triple is a separate mechanism [08 R-SKIR-01 §4]
 	mg.LineOfSight = global.IntValue("lineofsight", 0) // 0 [02 map-global keys]
 	mg.LOSType, _ = func() (int32, bool) {             // SingleLOSType/MultiLOSType enum
 		if _, ok := global.RawValue("SingleLOSType"); ok {
@@ -299,14 +299,21 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 		}
 		return 0, false
 	}()
-	// The map-global key table carries no LOSType row because the value is not a
-	// map key at all: for a campaign/mission session, visibility mode bit 2 is
-	// copied at battle entry from the single-player LOSType global, which the
-	// loader reads from the registry triple `SingleMapping`/`SingleLineOfSight`/
-	// `SingleLOSType` — each defaulting to 1 and stored back on a miss
-	// [03 §3.1]. `internal/settings` holds that source. This decode is a
-	// lossless carry of an authored key for diagnostics only; the field has no
-	// session reader, and the mode word must not be built from it.
+	// CORRECTION: this note used to name the registry triple `SingleMapping`/
+	// `SingleLineOfSight`/`SingleLOSType` (each defaulting to 1) as the source
+	// of a campaign session's mode bit 2, and pointed at `internal/settings` as
+	// the place holding it. The registry triple is read once at start-up and
+	// then shadowed: every time the OTA loader parses a `[GlobalHeader]` it
+	// rewrites the single-player option words from `mapping` and `lineofsight`
+	// and *forces* the companion words — LOSType to 1, commander death to 0 —
+	// so for a campaign battle the `Single*` values reach nothing
+	// [08 R-SKIR-01 §4]. The mode word's bits 0 and 1 are the low bits of
+	// Mapping and LineOfSight above; bit 2 is the forced 1, not this key.
+	//
+	// The map-global key table still carries no LOSType row, and this decode
+	// stays a lossless carry of an authored key for diagnostics only: the field
+	// has no session reader, and the mode word must not be built from it
+	// [03 R-VIS-01 §1][08 R-ENTRY-01 §2 step 4].
 	// No commanderDeath decode: there is no mission-level key — the rule is a
 	// lobby value, and no defeat trigger is injected for it [08 mission globals].
 	mg.MeteorWeapon, _ = global.StringValue("MeteorWeapon", "") // empty disables [02 meteor merge]

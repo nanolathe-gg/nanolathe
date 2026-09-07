@@ -6238,9 +6238,12 @@ countdown below is 75..149 feature-phase visits, i.e. 2.5 to 5 seconds.
    (only meaningful in a multiplayer session; the send is unconditional).
 
 Save reload re-ignites a saved burning feature through this routine with
-`remote = 0`, so a reloaded burn draws a **fresh** countdown and re-sends the
-command; the saved countdown is not restored (the reload copies the saved
-accumulator word over the instance after ignition) `[R-SAVE-FEATURE-01]`.
+`remote = 0`, so a reloaded burn takes a **fresh** draw here and re-sends the
+command; the reader then overwrites that fresh countdown with the saved
+countdown's high nibble (low nibble zero — the save keeps only the high
+nibble), and copies the saved accumulator word and cursor frame byte over
+the instance `[R-SAVE-FEATURE-01]`. The draw is therefore consumed but its
+value is discarded. [Established]
 
 #### The feature phase, in order [R-FEAT-01 §10]
 
@@ -6424,6 +6427,14 @@ descent — not a gravity-driven fall**. The state machine is closed:
   reclaimable during and after descent. A destroyed or reclaimed sinking wreck
   hands its submerged position — and typically its stale downward velocity —
   to its successor, which continues descending until its own floor clamp.
+* **Save and load.** The battle save serializes a 3D instance's position
+  triple, orientation triple and accumulator word but **not** its velocity
+  triple; the loader stamps the instance at the saved position verbatim
+  into a freshly zero-filled slot, so a wreck saved mid-descent reloads
+  with zero velocity, is retired to the dormant list on its first
+  feature-phase visit, and stays suspended at its saved Y. The record map
+  and the load order are [08 R-SAVE-FEATURE-01]. [Established by mechanism;
+  the observable is unconfirmed by a retail play session]
 
 Water/lava splash art belongs to debris records and projectile water entry, not
 to sinking wrecks. There is no depth-triggered removal: a settled sunken wreck

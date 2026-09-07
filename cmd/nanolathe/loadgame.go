@@ -373,6 +373,10 @@ func (g *gameShell) betweenMissionsMetadata(description string) session.Continua
 	meta := session.ContinuationSaveMetadata{
 		Description: description,
 		GameID:      retailSaveGameID(),
+		// The `maxunits` item is the configured unit-limit word on every save
+		// the writer emits, continuation included; this shell's configured word
+		// is the setup record's [08 "Summary"] [08 R-SESS-01 §9].
+		MaxUnits: int32(g.setup.UnitLimit),
 	}
 	if sess := g.battle.sess; sess != nil {
 		meta.Players = session.RetailPlayerCount(sess)
@@ -391,7 +395,12 @@ func (g *gameShell) writeBattleSave(path, description string) error {
 		return fmt.Errorf("nanolathe: battle save: no live battle: logical path save, providers searched [shell], expected a composed battle")
 	}
 	sess := g.battle.sess
-	summary := session.RetailBattleSummary(sess, description, retailSaveGameID())
+	// The Summary's `maxunits` is the configured unit-limit word, not the
+	// battle's session limit — a campaign's session word comes from the
+	// mission's OTA and is deliberately not what a save records
+	// [08 R-SESS-01 §9] [08 R-SKIR-01 §6]. This shell's configured word is the
+	// setup record's, the same word that sizes a fresh or restored battle.
+	summary := session.RetailBattleSummary(sess, description, retailSaveGameID(), g.setup.UnitLimit)
 	camera := save.Camera{}
 	if g.cam != nil {
 		camera.XPosition = g.cam.X

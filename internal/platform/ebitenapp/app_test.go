@@ -24,3 +24,16 @@ func TestConsumePresentationOncePerUpdate(t *testing.T) {
 		t.Fatal("multiple updates did not coalesce to one presentation")
 	}
 }
+
+// A process that never entered Run owns no window, so the desktop query must
+// answer from the seam rather than reaching the window layer: the bring-up
+// wants the process's own main thread and faults on a test goroutine. (0, 0)
+// is the headless answer the display-mode gate already expects.
+func TestDesktopSizeIsHeadlessWithoutAWindow(t *testing.T) {
+	if windowOwned.Load() {
+		t.Fatal("a test process reported owning a window")
+	}
+	if w, h := DesktopSize(); w != 0 || h != 0 {
+		t.Fatalf("headless desktop size = %dx%d, want 0x0", w, h)
+	}
+}

@@ -135,7 +135,13 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 	// interleaved walk would let an early impact's art be brightened by a later
 	// impact's disc.
 	for _, d := range draws {
-		if !d.HasCalculatedFlash {
+		if !d.HasCalculatedFlash || !d.ActiveB {
+			// The disc is drawn by the SECONDARY animation walk, so it stops
+			// the moment that player's sequence pointer is cleared [03 §1] —
+			// even though the record lives on while the primary art plays. The
+			// cursor it leaves behind is index 0, the widest frame of the
+			// table, so a gate on the frame index alone would re-light the
+			// ground under a finished flash [03 §4.4][06 R-WFX-01 §2].
 			continue
 		}
 		x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
@@ -191,6 +197,15 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			if !d.Light {
 				stats.Skipped++
 			}
+			continue
+		}
+		if !d.ActiveA {
+			// The primary player finished while the calculated flash kept the
+			// record alive [03 §1]. Its cursor has been reset to 0, so drawing
+			// on the strength of the art name alone would restart the
+			// animation's first frame under the fading disc [03 §4.4]. This is
+			// not a Skipped: nothing failed to resolve, the layer is simply
+			// over.
 			continue
 		}
 		frame, ok := options.ResolveFrame(view, d.FrameA)

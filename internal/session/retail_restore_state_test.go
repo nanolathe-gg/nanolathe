@@ -80,7 +80,7 @@ func terrainExplorationShowerFixture(t *testing.T) (*retailFixture, *Session, in
 func TestRetailRestoreCarriesTerrainExplorationAndShower(t *testing.T) {
 	f, src, marked := terrainExplorationShowerFixture(t)
 
-	summary := RetailBattleSummary(src, "restore-state", "0")
+	summary := RetailBattleSummary(src, "restore-state", "0", SkirmishDefaultUnitLimit)
 	in, err := src.RetailBattleSaveInputs(summary, save.Camera{})
 	if err != nil {
 		t.Fatalf("battle save inputs: %v", err)
