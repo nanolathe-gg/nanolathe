@@ -25,27 +25,24 @@ var (
 	MeteorFallVelocityFixed = numeric.Fixed(int64(MeteorFallVelocityUnits) * 65536) // -15 wu/tick = -0xF0000 [06 §6.5]
 )
 
-// MeteorDelay returns per-hit spacing trunc(30/density) per [06 §6.5] C17.
-// Density of 31 or greater collapses to zero, attempting a spawn on every storm tick.
-// Zero density substitutes the METEOR.TDF default in the caller; this helper guards
-// division by zero and returns 0.
-// Truncation is toward zero per [01 §8] I3; Go's int32(float) matches.
+// MeteorDelay converts the single-precision source density at working precision,
+// then retains the low word of signed-64 truncation [06 §6.5][01 R-DET-01 §1].
+// There is no single-precision store of the quotient. Zero and non-finite
+// conversion results retain zero; default-block resolution belongs to the caller.
 func MeteorDelay(density float64) int32 {
-	if density == 0 {
-		return 0
-	}
-	return int32(30 / density)
+	return numeric.TruncateFloat64ToLow32(30 / float64(float32(density)))
 }
 
-// MeteorDurationTicks converts an authored MeteorDuration (seconds) to ticks
-// via trunc(duration*30) per [02 "Weapon record"] duration conversion.
+// MeteorDurationTicks preserves the authored single-precision source and the
+// working-precision multiply before integer conversion [06 §6.5][01 R-DET-01 §1].
 func MeteorDurationTicks(duration float64) int32 {
-	return int32(duration * 30)
+	return numeric.TruncateFloat64ToLow32(float64(float32(duration)) * 30)
 }
 
-// MeteorIntervalTicks converts an authored MeteorInterval to ticks.
+// MeteorIntervalTicks uses the same source/store boundaries as duration
+// [06 §6.5][01 R-DET-01 §1].
 func MeteorIntervalTicks(interval float64) int32 {
-	return int32(interval * 30)
+	return numeric.TruncateFloat64ToLow32(float64(float32(interval)) * 30)
 }
 
 // EffectiveMeteorRadius returns the effective radius substituting the

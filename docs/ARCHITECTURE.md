@@ -44,7 +44,9 @@ sanctioned departures under [INVARIANTS.md](INVARIANTS.md) I11. Original preserv
 the retail raster reference; GPU Classic permits visually reviewed raster
 approximations, and Enhanced has separately designed visual features. These
 presentation choices never select alternate simulation behavior. Current
-prototypes remain behind `--renderer=modern`.
+prototypes remain behind `--renderer=modern`. That mode uses GPU drawing only:
+software model bodies/shadows are not a fallback, and unimplemented GPU stages
+remain explicitly omitted (DESIGN_GPU_RENDERER §9).
 
 ### Deliberately out of scope
 

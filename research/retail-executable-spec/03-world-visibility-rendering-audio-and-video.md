@@ -9339,6 +9339,10 @@ body — most under `R-<id>` headings — and are not restated here.
   [R-COMP-01 §2], "the `Shading` option" in [R-REN-03D §4]) is one bit,
   making every strip sprite of [R-FX-02 §2–§3] invisible with `Shading` off ·
   [R-FX-02 §2] · decider: the palette-init request word that loads `ALP`.
+  **Implementation reconciliation (Unknown):** classic currently admits model
+  shadows with `Shading` disabled, and GPU comparison uses that same producer
+  decision. Resolve the flag identity before changing either path
+  [R-REN-03D §1, §4].
 - Reader for plot flag bit 7, and whether any unexported code writes
   placer-nibble values into it · §2.2 · static trace over the unrecovered
   regions. Marked `TODO(T23)`.

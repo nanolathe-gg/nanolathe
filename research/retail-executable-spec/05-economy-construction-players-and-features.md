@@ -777,7 +777,9 @@ structure per slot index, ascending:
    follow. The LOS sweep is not weapon/position maintenance for a type family.
 3. The deadline compare and, when due, the unconditional advance by exactly
    30.
-4. Still inside the deadline block: the settlement gate chain — all of the
+4. Still inside the deadline block, for the local reference slot only: the
+   win/lose evaluation that arms and decrements the end-of-game countdown.
+5. Still inside the deadline block: the settlement gate chain — all of the
    following must hold before the settlement entry is called: the player
    record exists; the state byte is active; the observer byte excludes
    observers; the player is not eliminated — its live-unit count is non-zero
@@ -785,10 +787,9 @@ structure per slot index, ascending:
    predicate recurs at three other player walks); the state byte is
    narrowed to one of the two settling states (the third traverses but never
    settles); the game-ended flag bit is clear; and the end-of-game countdown
-   is negative.
-5. Still inside the deadline block, for the local/human reference slot only:
-   the win/lose evaluation that arms and decrements the end-of-game countdown;
-   plus interface/view helpers for the local-view slot on the same cadence.
+   is negative. When every gate passes, settlement runs.
+6. Still inside the same deadline block, the reference/view tail runs for the
+   local reference slot.
 
 The deadline catch-up edge: because the advance is a single conditional add
 rather than a loop, a slot whose deadline fell more than 30 ticks behind the

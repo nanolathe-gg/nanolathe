@@ -98,59 +98,11 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		a.gpu = gpurender.New(a.c.PaletteTables(), width, height)
 	}
 	list := a.c.RecordFrame()
-	// The model table the source reads is populated during RecordFrame, so the
-	// source is installed after recording and before Execute (models.go, C-G5).
-	a.gpu.SetModelSource(NewModelSource(a.c))
 	img := a.gpu.Execute(list, width, height)
 	if img == nil {
 		return
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
-}
-
-// modelSource adapts a *client.Client to gpurender.ModelSource, converting the
-// client's device-free ModelImageData to gpurender.ModelImage. It lives in the
-// wiring layer because only here may both the Ebitengine-free client and the
-// Ebitengine gpurender package be imported, which is what lets the client hand
-// finished model images to the GPU executor without an import cycle and without
-// the client depending on Ebitengine (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5)[I6].
-type modelSource struct{ c *client.Client }
-
-// NewModelSource returns the gpurender model source backed by c. It is exported
-// so the modern shot path (cmd/nanolathe) installs the identical source the
-// battle app does.
-func NewModelSource(c *client.Client) gpurender.ModelSource { return modelSource{c} }
-
-func (s modelSource) ModelBody(ref int) (gpurender.ModelImage, bool) {
-	d, ok := s.c.ModelBodyImage(ref)
-	if !ok {
-		return gpurender.ModelImage{}, false
-	}
-	return toModelImage(d), true
-}
-
-func (s modelSource) ModelShadow(ref int) (gpurender.ModelImage, bool) {
-	d, ok := s.c.ModelShadowImage(ref)
-	if !ok {
-		return gpurender.ModelImage{}, false
-	}
-	return toModelImage(d), true
-}
-
-// toModelImage copies the plain bridge fields across the package boundary. The
-// two structs are field-for-field the same; the copy exists only because the
-// client type and the gpurender type may not be the same type (the client owns no
-// Ebitengine dependency).
-func toModelImage(d client.ModelImageData) gpurender.ModelImage {
-	return gpurender.ModelImage{
-		Color:       d.Color,
-		Covered:     d.Covered,
-		W:           d.W,
-		H:           d.H,
-		DX:          d.DX,
-		DY:          d.DY,
-		Transparent: d.Transparent,
-	}
 }
 
 func (a *app) consumePresentation() bool {

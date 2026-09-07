@@ -2271,8 +2271,10 @@ controller `2` copies colour and side and registers the slot as computer;
 controller `0` registers it as inactive. Registration resets the slot's
 two alliance rows to zero, sets `allied[i][i] = 1` in both, stores the
 controller byte, writes the slot's score-panel **rank byte to the slot
-index** (its initial value; only the kill-lead shift of [R-CAMP-01 §9]
-changes it afterwards, [07 R-HUD-04 §1]), and (skirmish
+index** (its initial value; the kill-lead shift of [R-CAMP-01 §9] is the
+established runtime rank writer after a credited kill, while whether load
+fixups recompute ranks from restored counters is Unknown, [07 R-HUD-04 §1]),
+and (skirmish
 only) names the slot `Player` for a human or
 `Arm`/`Core` for a computer by side (`side == 0` → `Arm`). Then, for a live
 row `i`, every row `j` (`j < NumSkirmishPlayers`) with the **same ally
@@ -7614,15 +7616,20 @@ the **CRT** stream [01 §7.2] and happens inside the tick, so a skirmish
 elimination advances the CRT stream by one draw; the simulation stream is
 untouched. Campaign sessions post nothing.
 
-**Kill lead.** After a kill is credited in a kind 2 or 3 session (the
-credited slot exists, controller 1/2/3, side ≠ 10, and its rank byte is
-non-zero): with `k` the crediting slot's kill counter — or its commander-kill
-counter when the commander-death option word is 2 — the lowest rank among
-non-watcher slots whose counter is strictly below `k` and whose rank is
-below the crediting slot's becomes the new rank; every slot whose rank lies
-in `[new, old)` is shifted down by one; when the new rank is 0 the line
-`%s has taken the lead with %d kills` (translated, then formatted) is posted
-as a status line of class 2 attributed to slot 10. Established.
+**Kill-lead update.** On an invocation in a kind 2 or 3 session, the routine
+proceeds only when the credited slot exists, has controller 1/2/3, side ≠ 10,
+and a non-zero rank byte. With `k` the crediting slot's kill counter — or its
+commander-kill counter when the commander-death option word is 2 — the lowest
+rank among non-watcher slots whose counter is strictly below `k` and whose rank
+is below the crediting slot's becomes the new rank; every slot whose rank lies
+in `[new, old)` is shifted down by one; when the new rank is 0 the line `%s has
+taken the lead with %d kills` (translated, then formatted) is posted as a
+status line of class 2 attributed to slot 10. Established.
+
+**Unknown caller condition.** The ranking algorithm above is Established.
+Whether its caller runs after every full-credit death, or only when the
+credited counter changes, is not settled. A static trace from the death credit
+switch through the caller's admission branch would settle that condition.
 
 ### The multiplayer statistics rows (`I am Winner`, `Excess …`) [R-CAMP-01 §10]
 
@@ -7780,6 +7787,14 @@ body and are not restated here.
 
 ### Sessions and campaign
 
+- Whether post-load fixups recompute score-panel ranks from the restored kill
+  counters, or leave the registration-time slot order until a later credited
+  kill shifts it · [R-SKIR-01 §2], [R-CAMP-01 §9] · static trace of the
+  post-restore fixup path.
+- Whether the kill-lead routine is called after every full-credit death or
+  only when the credited counter changes; its rank-shift algorithm is
+  Established · [R-CAMP-01 §9] · static trace from the death credit switch to
+  the caller's admission branch.
 - The AnyMsn toggle's exact listbox-selection effect — the last residual of
   the all-missions bit and of campaign progress held outside battle `.sav`
   files · "Progression" · manual retail observation.

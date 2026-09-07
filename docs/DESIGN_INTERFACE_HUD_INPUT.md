@@ -365,8 +365,9 @@ instead of its origin-add branch. The stored audio block, game speed and
 blocks, so one options session can write them whichever arm it took;
 `retail_menu_message.go` the
 `MSGBOX` layer with its word wrap `[07 R-FE-02 §6]` `[07 R-FE-01 §9]`;
-`retail_menu_draw.go` the screen painter, including the art-less bevel and the
-`BackTile` chain `[07 R-FE-02 §4]`.
+`retail_menu_draw.go` the screen painter; `window_panel.go` shares authored
+panel resolution, the clipped nine-frame fill and the art-less bevel with
+battle modals `[07 R-FE-02 §4]` `[07 R-WGT-01 §12]`.
 
 `skirmish_menu.go` is the setup rules (opponent count, line of sight, the
 resource steppers); `settings.go` reads and writes the persisted preference
@@ -1131,9 +1132,7 @@ would settle it.
   image names it. Both of its readers are closed and nothing reads a name, so
   this is a naming curiosity rather than a behavioural gap `[07 §2]`
   `[07 R-CAM-01 §14]`.
-* Whether stock `commongui.gaf` authors a `BackTile` entry. That decides which
-  arm of the fallback chain a stock dialog actually takes; it is an asset
-  question, not an engine one `[07 R-FE-02 §4]`.
+
 * The clamp's behaviour when the viewport is larger than the map — the negative
   maximum domain. The ordered form is reproduced exactly and the section still
   carries the domain as open `[07 §10]` `[07 R-CAM-01 §13]`.

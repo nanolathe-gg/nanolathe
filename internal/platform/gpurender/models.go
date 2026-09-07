@@ -25,13 +25,17 @@ type modelGPUFace struct {
 	Shaded   bool
 }
 
-// ModelStats is the per-Execute accounting for the experimental body path.
+// ModelStats is the per-Execute accounting for modern model execution.
 // It is diagnostic data for captures, never simulation state.
 type ModelStats struct {
-	GPU, CPUFallback, Shadows, MissingSource, NoBody     int
-	UnsupportedGeometry, MissingTexture, UnsupportedFace int
-	FoldedFaces, FoldedStrips                            int
-	Fallbacks                                            [7]int
+	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody int
+	UnsupportedGeometry, MissingTexture, UnsupportedFace        int
+	FoldedFaces, FoldedStrips                                   int
+	TexturedQuadFaces, TexturedQuadStrips                       int
+	ComposedGroups                                              int
+	RevealOrOutlineOmitted                                      int
+	WaterlineOrDiggerOmitted                                    int
+	StagingCommandsOmitted                                      int
 }
 
 func (r *Renderer) ModelStats() ModelStats {
@@ -41,99 +45,58 @@ func (r *Renderer) ModelStats() ModelStats {
 	return r.modelStats
 }
 
-// The composed-model family for the modern executor. Eligible P3 packets raster
-// their bodies on the device; every other body keeps the reviewed CPU bridge.
-// Shadows always retain the CPU composition image and ALP commit in this first
-// prototype [03 R-REN-03A §1–§8].
-//
-// A Model command carries only a Ref into the client-side per-frame table
-// (drawlist.Model.Ref). gpurender cannot import internal/client (the client must
-// stay Ebitengine-free), so the client hands the finished body and shadow images
-// to the wiring layer as plain data and the wiring layer adapts them to
-// ModelImage and installs a ModelSource on the renderer before each Execute. The
-// renderer resolves a Ref through that source; with no source installed, a Model
-// command draws nothing.
-
-// ModelImage is one finished model composition image — a body or a shadow — in
-// the neutral, uploadable form the GPU executor blits: the colour plane
-// (physical palette indices), the coverage mask that keys the blit (an uncovered
-// pixel is the transparent key the commit skips), the image dimensions, the
-// framebuffer top-left the image blits at, and the image's transparent index.
-//
-// DX,DY is the classic composition image's anchorX-originX / anchorY-originY: the
-// framebuffer pixel the image's own (0,0) lands on, so a keyed or tinted blit at
-// (DX,DY) reproduces modelTarget.commit / tintedCommit's screenX/screenY mapping
-// pixel for pixel [R-REN-03A §1].
-type ModelImage struct {
-	Color       []uint8
-	Covered     []bool
-	W, H        int
-	DX, DY      int
-	Transparent uint8
-}
-
-// ModelSource resolves a drawlist.Model.Ref to its finished body and shadow
-// images (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5). The wiring layer implements it
-// over the client's per-frame model table; ok is false for a Ref that records no
-// such step, matching the classic sink's own body/shadow guards so the modern
-// executor draws each half in precisely the cases the classic sink does.
-type ModelSource interface {
-	ModelBody(ref int) (ModelImage, bool)
-	ModelShadow(ref int) (ModelImage, bool)
-}
-
-// SetModelSource installs the per-frame model source. The battle app and the
-// modern shot path call it after recording the frame and before Execute, because
-// the client-side model table the source reads is populated during recording.
-func (r *Renderer) SetModelSource(src ModelSource) {
-	if r == nil {
-		return
-	}
-	r.modelSrc = src
-}
-
-// Model replays one composed model subject: the shadow first, then the body, the
-// classic sink's order for the same subject (docs/DESIGN_GPU_RENDERER.md §2.1
-// C-G5)[03 §5.3]. The classic sink's third step, the parity trace, is diagnostic
-// only — it reads the finished surface and writes event records, never a
-// framebuffer pixel — so the modern executor skips it entirely; drawing it would
-// be wrong.
+// Model replays geometry or records an explicit omission. Modern mode never
+// resolves Ref or substitutes CPU images [DESIGN_GPU_RENDERER.md §9–§10].
 func (r *Renderer) Model(cmd drawlist.Model) {
 	if r == nil || r.offscreen == nil {
 		return
 	}
-	if r.modelSrc != nil {
-		if shadow, ok := r.modelSrc.ModelShadow(cmd.Ref); ok {
-			r.blitModelShadow(shadow)
-			r.modelStats.Shadows++
-		}
+	if cmd.ShadowOmissions != 0 {
+		r.modelStats.ShadowsOmitted += cmd.ShadowOmissions
 	}
-	if g := cmd.Geometry; g != nil && g.Eligible && r.modelGeometrySupported(g) {
-		r.drawModelGeometry(g)
-		r.modelStats.GPU++
-		return
-	}
-	if cmd.Geometry != nil && int(cmd.Geometry.Fallback) < len(r.modelStats.Fallbacks) {
-		r.modelStats.Fallbacks[cmd.Geometry.Fallback]++
+	if cmd.GroupOmission {
+		r.modelStats.StagedGroups++
 	}
 	if cmd.Geometry != nil && cmd.Geometry.Fallback == drawlist.ModelFallbackNoBodyCommit {
 		r.modelStats.NoBody++
 		return
 	}
-	r.modelStats.CPUFallback++
-	if r.modelSrc == nil {
-		r.modelStats.MissingSource++
+	if cmd.ShadowOnly && cmd.Geometry != nil && cmd.Geometry.Shadow == nil {
 		return
 	}
-	if body, ok := r.modelSrc.ModelBody(cmd.Ref); ok {
-		r.blitModelBody(body)
-	} else {
-		r.modelStats.MissingSource++
+	if g := cmd.Geometry; g != nil && g.Eligible && r.modelGeometrySupported(g) {
+		r.drawModelGeometry(g, cmd.ShadowOnly)
+		if !cmd.ShadowOnly {
+			r.modelStats.GPU++
+		}
+		return
 	}
+	if cmd.Geometry != nil {
+		if cmd.Geometry.Shadow != nil {
+			r.modelStats.ShadowsOmitted++
+		}
+		switch cmd.Geometry.Fallback {
+		case drawlist.ModelFallbackRevealOrOutline:
+			r.modelStats.RevealOrOutlineOmitted++
+		case drawlist.ModelFallbackWaterlineOrDigger:
+			r.modelStats.WaterlineOrDiggerOmitted++
+		case drawlist.ModelFallbackStaging:
+			r.modelStats.StagingCommandsOmitted++
+		case drawlist.ModelFallbackNoBodyCommit:
+			r.modelStats.NoBody++
+		}
+	}
+	r.modelStats.Skipped++
 }
 
 func (r *Renderer) modelGeometrySupported(g *drawlist.ModelGeometry) bool {
 	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelKeyImage == nil || r.modelColor == nil || r.modelCoord == nil {
+		return false
+	}
+	if g.KeyPlane && (g.Waterline != drawlist.ModelWaterlineNone || g.Digger) && (r.modelClip == nil || r.modelProcessed == nil || g.Waterline == drawlist.ModelWaterlineBlue && r.tables.blue == nil) {
+		return false
+	}
+	if len(g.Children) != 0 && (!g.KeyPlane || r.modelPack == nil || r.modelChild == nil || r.modelStage == nil || r.modelStageScratch == nil) {
 		return false
 	}
 	r.modelStats.UnsupportedFace = -1
@@ -270,7 +233,35 @@ func segmentsCross(a, b, c, d drawlist.ModelVertex) bool {
 	return (ab1 > 0 && ab2 < 0 || ab1 < 0 && ab2 > 0) && (cd1 > 0 && cd2 < 0 || cd1 < 0 && cd2 > 0)
 }
 
-func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry) {
+func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool) {
+	shadow := g.Shadow != nil && g.Shadow.Eligible && r.modelShadowCommit != nil && r.modelShadowImage != nil && r.tables.alpha != nil && r.modelGeometrySupported(g.Shadow)
+	if shadow {
+		r.rasterModelGeometry(g.Shadow)
+		r.modelColor, r.modelShadowImage = r.modelShadowImage, r.modelColor
+	} else if g.Shadow != nil {
+		r.modelStats.ShadowsOmitted++
+	}
+	r.rasterModelGeometry(g)
+	if shadow {
+		r.snapshotRect(0, 0, r.w, r.h)
+		r.resetGeometry()
+		r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
+		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelShadowCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{r.modelShadowImage, r.modelColor, r.destScratch, r.tables.alpha}})
+		r.modelStats.Shadows++
+	}
+	if shadowOnly {
+		return
+	}
+	body := r.modelColor
+	if len(g.Children) != 0 {
+		body = r.composeModelChildren(g)
+	}
+	r.resetGeometry()
+	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
+	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{body, nil, nil, nil}})
+}
+
+func (r *Renderer) rasterModelGeometry(g *drawlist.ModelGeometry) {
 	r.modelColor.Fill(color.RGBA{R: 1, A: 255})
 	if g.KeyPlane {
 		r.modelKeyImage.Fill(index0Color)
@@ -281,22 +272,35 @@ func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry) {
 	for i := range g.Faces {
 		r.drawPreparedFace(g, g.Faces[i], false, g.KeyPlane)
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{r.modelColor, nil, nil, nil}})
+	r.drawModelOutline(g)
+	r.clipModel(g)
 }
 
 func (r *Renderer) drawPreparedFace(g *drawlist.ModelGeometry, f drawlist.ModelFace, key, useKey bool) {
+	// The retail textured branch is a quad scanline mapper, not two affine
+	// triangles: it interpolates U/V between the two active edge chains on each
+	// row [03 R-REN-03A §5][03 R-RAST-01 §1].  Interpolating the four corners
+	// through a GPU diagonal breaks that mapping into two planes, which makes a
+	// visible texture seam on skewed solar panels.  Keep the row preparation on
+	// the CPU, but leave coverage, key reduction, texture sampling and colour
+	// writes to the device. This is GPU Classic implementation policy, not a
+	// claim that this path duplicates every fixed-point pixel detail.
+	if f.Texture != nil && len(f.Vertices) == 4 {
+		strips := modelTextureStrips(f)
+		if !key {
+			r.modelStats.TexturedQuadFaces++
+			r.modelStats.TexturedQuadStrips += len(strips)
+		}
+		r.drawModelStripBatch(g, strips, key, useKey)
+		return
+	}
 	if polygonCrosses(f.Vertices) {
 		strips := foldedStrips(f)
 		if !key {
 			r.modelStats.FoldedFaces++
 			r.modelStats.FoldedStrips += len(strips)
 		}
-		for _, s := range strips {
-			r.drawModelFace(g, s.Vertices, s.Texture, s.Color, s.Shaded, []uint16{0, 1, 2, 0, 2, 3}, key, useKey)
-		}
+		r.drawModelStripBatch(g, strips, key, useKey)
 		return
 	}
 	if tri, paints, _ := modelFaceTriangles(f); paints {
@@ -313,6 +317,17 @@ func modelGPUVertices(v []drawlist.ModelVertex) []modelGPUVertex {
 }
 
 func foldedStrips(f drawlist.ModelFace) []modelGPUFace {
+	return modelSpanStrips(f)
+}
+
+// modelTextureStrips prepares a textured quad from the original two-chain
+// scanline mapper. Unlike the conventional triangle path, no diagonal becomes
+// an interpolation boundary: every device quad is one source scanline.
+func modelTextureStrips(f drawlist.ModelFace) []modelGPUFace {
+	return modelSpanStrips(f)
+}
+
+func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace {
 	v := f.Vertices
 	n := len(v)
 	if n < 3 {
@@ -342,6 +357,14 @@ func foldedStrips(f drawlist.ModelFace) []modelGPUFace {
 		if xr <= xl {
 			continue
 		}
+		// Device varyings are evaluated at a pixel centre, while the span writer
+		// starts each lane at its integer left column. Shift both endpoint lanes
+		// back by half a horizontal step so the first device sample is leftA and
+		// the last is leftA+(width-1)*step [03 R-RAST-01 §1].
+		l.Key, r.Key = centerSampledSpan(l.Key, r.Key, xr-xl)
+		l.U, r.U = centerSampledSpan(l.U, r.U, xr-xl)
+		l.V, r.V = centerSampledSpan(l.V, r.V, xr-xl)
+		l.Shade, r.Shade = centerSampledSpan(l.Shade, r.Shade, xr-xl)
 		l.X, r.X = xl, xr
 		l.Y, r.Y = float32(y), float32(y)
 		bottomL, bottomR := l, r
@@ -349,6 +372,11 @@ func foldedStrips(f drawlist.ModelFace) []modelGPUFace {
 		out = append(out, modelGPUFace{Vertices: []modelGPUVertex{l, r, bottomR, bottomL}, Texture: f.Texture, Color: f.Color, Shaded: f.Shaded})
 	}
 	return out
+}
+
+func centerSampledSpan(left, right, width float32) (float32, float32) {
+	step := (right - left) / width
+	return left - step*0.5, right - step*0.5
 }
 func chainAt(v []drawlist.ModelVertex, top, bot, step int, y int32) (modelGPUVertex, bool) {
 	n := len(v)
@@ -418,7 +446,42 @@ func (r *Renderer) drawModelFace(g *drawlist.ModelGeometry, vertices []modelGPUV
 	if textureFrame != nil {
 		texture = r.gafImageFor(textureFrame)
 	}
-	r.modelColor.DrawTrianglesShader(verts, idx, r.modelBody, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Uniforms: map[string]any{"UseKey": useKey}, Images: [4]*ebiten.Image{r.modelCoord, r.modelKeyImage, r.tables.shade, texture}})
+	r.modelColor.DrawTrianglesShader(verts, idx, r.modelBody, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Uniforms: modelBodyUniforms(g, useKey), Images: [4]*ebiten.Image{r.modelCoord, r.modelKeyImage, r.tables.shade, texture}})
+}
+
+// drawModelStripBatch submits every prepared row from one source face together.
+// The rows share texture, flat colour and shade state; batching them keeps the
+// scanline mapping without turning one face into two device submissions per
+// source row. The uint16 index transport bounds a submission, not model size.
+func (r *Renderer) drawModelStripBatch(g *drawlist.ModelGeometry, strips []modelGPUFace, keyPass, useKey bool) {
+	for start := 0; start < len(strips); {
+		r.resetGeometry()
+		end := start
+		dx, dy := g.AnchorX-g.OriginX, g.AnchorY-g.OriginY
+		for end < len(strips) && r.quadBatchHasRoom() {
+			s := strips[end]
+			base := uint16(len(r.verts))
+			for _, v := range s.Vertices {
+				vertex := ebiten.Vertex{DstX: float32(dx) + v.X, DstY: float32(dy) + v.Y, SrcX: float32(dx) + v.X, SrcY: float32(dy) + v.Y, ColorR: v.Key, ColorG: v.Shade, ColorB: float32(s.Color), ColorA: 1, Custom0: v.U, Custom1: v.V, Custom3: boolFloat(s.Shaded)}
+				if s.Texture != nil {
+					vertex.Custom2 = 1
+				}
+				r.verts = append(r.verts, vertex)
+			}
+			r.idx = append(r.idx, base, base+1, base+2, base, base+2, base+3)
+			end++
+		}
+		if len(r.verts) == 0 {
+			return
+		}
+		texture := r.gafImageFor(strips[start].Texture)
+		if keyPass {
+			r.modelKeyImage.DrawTrianglesShader(r.verts, r.idx, r.modelKey, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.Blend{BlendOperationRGB: ebiten.BlendOperationMax, BlendOperationAlpha: ebiten.BlendOperationMax}, Images: [4]*ebiten.Image{r.modelCoord, nil, nil, nil}})
+		} else {
+			r.modelColor.DrawTrianglesShader(r.verts, r.idx, r.modelBody, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Uniforms: modelBodyUniforms(g, useKey), Images: [4]*ebiten.Image{r.modelCoord, r.modelKeyImage, r.tables.shade, texture}})
+		}
+		start = end
+	}
 }
 
 func boolFloat(v bool) float32 {
@@ -428,101 +491,92 @@ func boolFloat(v bool) float32 {
 	return 0
 }
 
-// uploadModelImage uploads one ModelImage as an index texture: index in red,
-// coverage in green (255 covered, 0 uncovered), alpha opaque so premultiplied
-// sampling recovers both bytes (C-G4). Coverage is the classic commit's key — a
-// covered pixel is drawn, an uncovered one is the transparent key both the keyed
-// body blit and the tinted shadow commit skip — so the green flag reproduces
-// modelTarget.commit's `if !covered continue` and tintedCommit's `if !covered
-// continue` exactly [R-REN-03A §1]. A model image changes every frame, so it is
-// uploaded per draw (a per-frame upload is acceptable for parity,
-// docs/DESIGN_GPU_RENDERER.md §2.3 note under caches).
-func uploadModelImage(m ModelImage) *ebiten.Image {
-	if m.W <= 0 || m.H <= 0 {
-		return nil
+func modelBodyUniforms(g *drawlist.ModelGeometry, useKey bool) map[string]any {
+	u := map[string]any{"UseKey": useKey, "UseReveal": g.Reveal != nil}
+	if rev := g.Reveal; rev != nil {
+		u["RevealBounds"] = []float32{float32(rev.Line), float32(rev.Floor)}
+		u["RevealColors"] = []float32{float32(rev.Below), float32(rev.Band), float32(rev.Above)}
 	}
-	buf := make([]byte, m.W*m.H*4)
-	nc := len(m.Color)
-	nv := len(m.Covered)
-	for i := 0; i < m.W*m.H; i++ {
-		if i < nv && m.Covered[i] {
-			if i < nc {
-				buf[i*4+0] = m.Color[i]
-			}
-			buf[i*4+1] = 255
+	return u
+}
+
+func (r *Renderer) drawModelOutline(g *drawlist.ModelGeometry) {
+	if len(g.Outline) == 0 {
+		return
+	}
+	var points []modelGPUFace
+	for _, f := range g.Outline {
+		v := f.Vertices
+		if len(v) < 2 {
+			continue
 		}
-		buf[i*4+3] = 255
+		top, bottom := 0, 0
+		for i := range v {
+			if v[i].Y < v[top].Y {
+				top = i
+			}
+			if v[i].Y > v[bottom].Y {
+				bottom = i
+			}
+		}
+		for y := v[top].Y; y < v[bottom].Y; y++ {
+			left, a := chainAt(v, top, bottom, -1, y)
+			right, b := chainAt(v, top, bottom, 1, y)
+			if !a || !b || right.X <= left.X {
+				continue
+			}
+			for _, p := range []modelGPUVertex{left, right} {
+				// Outlines also visit rings dropped by the body material dispatch;
+				// retain the classic composition-box clip for those endpoints.
+				if g.Width > 0 && (p.X < 0 || p.X >= float32(g.Width) || p.Y < 0 || p.Y >= float32(g.Height)) {
+					continue
+				}
+				q, s, t := p, p, p
+				q.X++
+				s.X++
+				s.Y++
+				t.Y++
+				points = append(points, modelGPUFace{Vertices: []modelGPUVertex{p, q, s, t}, Color: f.Color})
+			}
+		}
 	}
-	img := ebiten.NewImage(m.W, m.H)
-	img.WritePixels(buf)
-	return img
+	outline := *g
+	outline.Reveal = nil
+	if g.KeyPlane {
+		r.drawModelStripBatch(&outline, points, true, true)
+	}
+	r.drawModelStripBatch(&outline, points, false, g.KeyPlane)
 }
 
-// blitModelBody reproduces modelTarget.commit: a keyed blit of the finished body
-// image at its framebuffer top-left (DX,DY), clipped to the framebuffer, skipping
-// uncovered (transparent-key) pixels (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5)
-// [R-REN-03A §1]. It is the keyed-blit path of C-G4: the gafKeyed shader copies a
-// covered texel's index under the source-over blend and leaves the destination
-// untouched under an uncovered one, exactly the covered-pixel set and per-pixel
-// value the byte writer's `dst[screenY*w+screenX] = color[i]` produces. The clip
-// math is commit's own: screenX = DX+ix, clamped to [0,w), and likewise in Y.
-func (r *Renderer) blitModelBody(m ModelImage) {
-	if r == nil || r.offscreen == nil || r.gafKeyed == nil {
+func (r *Renderer) clipModel(g *drawlist.ModelGeometry) {
+	if !g.KeyPlane || g.Waterline == drawlist.ModelWaterlineNone && !g.Digger {
 		return
 	}
-	img := uploadModelImage(m)
-	if img == nil {
-		return
-	}
-	x, y := m.DX, m.DY
-	col0, col1 := maxInt(0, -x), minInt(m.W, r.w-x)
-	row0, row1 := maxInt(0, -y), minInt(m.H, r.h-y)
-	if col0 >= col1 || row0 >= row1 {
-		return
-	}
-	r.drawTexQuad(img, r.gafKeyed, ebiten.BlendSourceOver,
-		float32(x+col0), float32(y+row0), float32(x+col1), float32(y+row1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
+	r.resetGeometry()
+	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
+	r.modelProcessed.DrawTrianglesShader(r.verts, r.idx, r.modelClip, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelColor, r.modelKeyImage, r.tables.blue, nil}, Uniforms: map[string]any{"WaterlineMode": float32(g.Waterline), "WaterlineKey": float32(g.WaterlineKey), "Digger": g.Digger, "DiggerKey": float32(g.DiggerKey)}})
+	r.modelColor, r.modelProcessed = r.modelProcessed, r.modelColor
 }
 
-// blitModelShadow reproduces modelTarget.tintedCommit: for every covered shadow
-// pixel it resolves the destination to ALP[color*256 + dst], the same ALP form
-// the translucent strip blit (drawTint) already runs, sourced from the shadow
-// image with NO anchor-offset subtraction because the shadow image's anchors are
-// baked into DX,DY (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5)[R-REN-03D §4]. The
-// shadow's colour plane is index 0 everywhere it is covered, so this darkens each
-// ground pixel toward black; carrying the colour through the shader rather than
-// assuming 0 keeps the commit identical to tintedCommit's `ALP[color*256+dst]`.
-//
-// It runs over a per-command snapshot of the covered rect (snapshotRect →
-// destScratch), the dest-reading pattern WU-2.6 built, so the pass reads the
-// pre-shadow destination exactly as tintedCommit reads c.indexed before the body
-// overwrites it. The geometry — source rect in image-local pixels, dest in screen
-// pixels — matches drawTint so the tint shader's destScratch addressing is the
-// verified one.
-func (r *Renderer) blitModelShadow(m ModelImage) {
-	if r == nil || r.offscreen == nil || r.tint == nil || r.tables.alpha == nil || r.destScratch == nil {
-		return
+// composeModelChildren stores color in red and the current staging key in green.
+// Each child reads the completed prior stage and writes a separate image, so the
+// full signed comparison and wrapped store remain ordered [03 R-REN-03A §4].
+func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry) *ebiten.Image {
+	r.resetGeometry()
+	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
+	r.modelStage.DrawTrianglesShader(r.verts, r.idx, r.modelPack, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelColor, r.modelKeyImage, nil, nil}})
+	for _, child := range g.Children {
+		if child.Geometry == nil || !child.Geometry.Eligible || !child.Geometry.KeyPlane || len(child.Geometry.Children) != 0 || !r.modelGeometrySupported(child.Geometry) {
+			r.modelStats.Skipped++
+			continue
+		}
+		r.rasterModelGeometry(child.Geometry)
+		r.resetGeometry()
+		r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
+		r.modelStageScratch.DrawTrianglesShader(r.verts, r.idx, r.modelChild, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelColor, r.modelKeyImage, r.modelStage, nil}, Uniforms: map[string]any{"KeyDelta": float32(child.KeyDelta)}})
+		r.modelStage, r.modelStageScratch = r.modelStageScratch, r.modelStage
+		r.modelStats.GPU++
 	}
-	img := uploadModelImage(m)
-	if img == nil {
-		return
-	}
-	x, y := m.DX, m.DY
-	col0, col1 := maxInt(0, -x), minInt(m.W, r.w-x)
-	row0, row1 := maxInt(0, -y), minInt(m.H, r.h-y)
-	if col0 >= col1 || row0 >= row1 {
-		return
-	}
-	dx0, dy0, dx1, dy1 := x+col0, y+row0, x+col1, y+row1
-	r.snapshotRect(dx0, dy0, dx1, dy1)
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(
-		float32(dx0), float32(dy0), float32(dx1), float32(dy1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.tint, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendSourceOver,
-		Images: [4]*ebiten.Image{img, r.destScratch, r.tables.alpha, nil},
-	})
+	r.modelStats.ComposedGroups++
+	return r.modelStage
 }

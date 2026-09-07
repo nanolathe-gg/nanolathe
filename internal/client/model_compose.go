@@ -371,6 +371,16 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	}
 	anchorX, anchorY := c.modelAnchor(draw)
 	width, height, originX, originY := modelExtent(polys)
+	var geometry *drawlist.ModelGeometry
+	if c.recordModelGeometry {
+		// The modern packet remains native scale even when the classic commit
+		// below performs retail's structure resolve. The two executors may
+		// differ there, but the modern path must never inherit CPU pixels.
+		native := cloneScreenPolys(polys)
+		placeFaces(native, originX, originY, 1)
+		geometry = modelGeometryPacketAt(native, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
+		c.configureModelGeometry(geometry, draw, owner, kind, reveal, outline)
+	}
 
 	scale := int32(1)
 	if c.supersampleModel(draw.Structure) {
@@ -386,17 +396,6 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	raster := target
 	if scale == 2 {
 		raster = newModelImage(2*width, 2*height, 2*originX, 2*originY, anchorX, anchorY, keyPlane, 2)
-	}
-	var geometry *drawlist.ModelGeometry
-	if c.recordModelGeometry {
-		// The scale-one target owns the output coordinates. Supersampled subjects
-		// retain CPU fallback until their resolve is represented as a packet.
-		fallback := c.geometryFallback(draw, reveal, outline, scale)
-		if scale != 1 {
-			geometry = modelGeometryPacket(nil, target, 1, fallback)
-		} else {
-			geometry = modelGeometryPacket(polys, target, scale, fallback)
-		}
 	}
 	c.attachModelTrace(raster, id)
 
@@ -434,6 +433,20 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
 	}
 	return composedModel{image: target, raster: raster, draw: draw, geometry: geometry}, true
+}
+
+func cloneScreenPolys(in []screenPoly) []screenPoly {
+	out := make([]screenPoly, len(in))
+	for i := range in {
+		out[i] = in[i]
+		out[i].x = append([]int32(nil), in[i].x...)
+		out[i].y = append([]int32(nil), in[i].y...)
+		out[i].oddHeight = append([]bool(nil), in[i].oddHeight...)
+		for lane := range in[i].attr {
+			out[i].attr[lane] = append([]int32(nil), in[i].attr[lane]...)
+		}
+	}
+	return out
 }
 
 // waterlinePass is retail's underwater presentation, both arms of it
@@ -559,11 +572,26 @@ func (c *Client) finishModel(m composedModel, blit *modelTarget) {
 // by finishModel with no staging image, which is every subject that carries
 // nothing [03 §2.4][R-REN-03A §1].
 func (c *Client) drawModel(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
+	if c.geometryOnlyModels {
+		return c.recordModelGeometryOnly(draw, owner, selector, id, kind, reveal, outline)
+	}
 	m, ok := c.composeModel(draw, owner, selector, id, kind, reveal, outline)
 	if !ok {
 		return false
 	}
 	c.finishModel(m, nil)
+	return true
+}
+
+// recordModelGeometryOnly records a native-scale GPU subject without creating
+// any CPU composition storage. Per-subject passes are carried as immutable
+// geometry metadata [DESIGN_GPU_RENDERER.md §9–§10].
+func (c *Client) recordModelGeometryOnly(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) bool {
+	g := c.prepareModelGeometry(draw, owner, selector, id, kind, reveal, outline)
+	if g == nil {
+		return false
+	}
+	c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: g})
 	return true
 }
 

@@ -29,34 +29,64 @@ type ModelFace struct {
 	Shaded   bool
 }
 
-// ModelFallbackReason says why a correct CPU-composed model body is not a P2
-// GPU candidate. Consumers use it for honest fallback counts; it is not an
-// instruction to alter the classic commit.
+// ModelFallbackReason says why modern mode omits a model subject. It is
+// diagnostic data, never permission to substitute a CPU-composed image.
 type ModelFallbackReason uint8
 
 const (
 	ModelFallbackNone ModelFallbackReason = iota
 	ModelFallbackRevealOrOutline
-	ModelFallbackSupersample
 	ModelFallbackWaterlineOrDigger
 	ModelFallbackStaging
 	ModelFallbackNoBodyCommit
 )
 
+// ModelReveal describes the resolved height bands of a construction nanoframe.
+// Verdicts -2 and -1 mean erase and keep; other values are physical indices
+// [03 §5.2]. The presentation producer owns selection of these values.
+type ModelReveal struct {
+	Line, Floor        uint8
+	Below, Band, Above int16
+}
+
+type ModelWaterline uint8
+
+const (
+	ModelWaterlineNone ModelWaterline = iota
+	ModelWaterlineErase
+	ModelWaterlineBlue
+)
+
+// ModelChild is a separately composed subject in the carrier's key space.
+// KeyDelta is compared at signed width before the resulting key byte is stored
+// [03 R-REN-03A §4]. Geometry remains in framebuffer placement coordinates.
+type ModelChild struct {
+	Geometry *ModelGeometry
+	KeyDelta int32
+}
+
 // ModelGeometry is the immutable, subject-local geometry input for the modern
 // model path. Its slices are owned by the packet and never alias the recorder's
 // scratch storage. Origin is the image pixel at model-local (0,0), and Anchor
-// is that point on the framebuffer. Scale is the raster scale used while the
-// faces were projected. P2 emits Scale==1 packets only; supersampled subjects
-// carry an explicit fallback reason until their complete resolve is represented.
+// is that point on the framebuffer. Modern recording always emits native-scale
+// geometry; a classic reference may independently use its structure resolve.
 //
-// Ineligible describes a correctly recorded CPU-composed subject for which this
-// packet intentionally has no GPU body path. It lets a consumer report fallback
-// rather than silently omitting the subject [03 R-REN-03A §4, §6–§8].
+// Ineligible describes a subject modern mode intentionally omits. It lets a
+// consumer report the reason without consulting a CPU image [03 R-REN-03A
+// §4, §6–§8].
 type ModelGeometry struct {
 	Eligible bool
 	Fallback ModelFallbackReason
 	Faces    []ModelFace
+	// Shadow is a separately projected silhouette, committed before this body.
+	Shadow       *ModelGeometry
+	Reveal       *ModelReveal
+	Outline      []ModelFace
+	Waterline    ModelWaterline
+	WaterlineKey uint8
+	Digger       bool
+	DiggerKey    uint8
+	Children     []ModelChild
 
 	Width, Height    int32
 	OriginX, OriginY int32
@@ -72,6 +102,20 @@ func (g *ModelGeometry) Clone() *ModelGeometry {
 		return nil
 	}
 	out := *g
+	out.Shadow = g.Shadow.Clone()
+	out.Children = make([]ModelChild, len(g.Children))
+	for i, ch := range g.Children {
+		out.Children[i] = ModelChild{Geometry: ch.Geometry.Clone(), KeyDelta: ch.KeyDelta}
+	}
+	if g.Reveal != nil {
+		reveal := *g.Reveal
+		out.Reveal = &reveal
+	}
+	out.Outline = make([]ModelFace, len(g.Outline))
+	for i, f := range g.Outline {
+		out.Outline[i] = f
+		out.Outline[i].Vertices = append([]ModelVertex(nil), f.Vertices...)
+	}
 	out.Faces = make([]ModelFace, len(g.Faces))
 	for i := range g.Faces {
 		out.Faces[i] = g.Faces[i]

@@ -20,7 +20,7 @@ import (
 // The destination-reading kinds — BlitTinted and BlitFeatureShadow — and the
 // source-through-LHT BlitLit are implemented in deststage.go (WU-2.6): the
 // dest-reading kinds run over a per-command snapshot of the offscreen, exactly as
-// the classic sink's counterparts read c.indexed. Only Model stays stubbed.
+// the classic sink's counterparts read c.indexed.
 
 // buildGAFFrameImage uploads one GAF frame as an index texture: index in red,
 // opacity flag in green (255 opaque, 0 transparent), alpha opaque so premultiplied

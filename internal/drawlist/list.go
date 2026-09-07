@@ -235,24 +235,28 @@ type Points struct {
 	Points []Point
 }
 
-// Model records one composed model subject — a unit, feature or projectile
-// (docs/DESIGN_GPU_RENDERER.md §2.1). internal/drawlist cannot import
-// internal/client (cycle), so the finished composition image cannot ride the
-// record directly; instead Ref indexes a per-frame, client-side table of
-// finished composed subjects that the classic executor resolves. Like
-// Terrain.Cam it is same-frame replay only — the WU-1.3..WU-1.6 transition
-// executes each record inline, so the index is never held across a frame
-// boundary [I6]. C-G5 states modern mode obtains a subject's image from the
-// classic rasterizer until Phase 3 anyway; a later unit revisits how the GPU
-// executor obtains the image [03 R-REN-03A].
+// Model records one model subject — a unit, feature or projectile
+// (docs/DESIGN_GPU_RENDERER.md §2.1). Geometry is modern mode's only body
+// input. Ref remains a same-frame classic-sink lookup and modern mode never
+// consults it [I6].
 type Model struct {
+	// ShadowOnly preserves a carried child's earlier framebuffer shadow commit;
+	// its body is composed by the later carrier command [03 R-REN-03A §4].
+	ShadowOnly bool
 	// Ref indexes the client-side table of finished composed subjects for this
 	// frame. Replaying this command runs that subject's shadow, its one body
 	// blit and its trace, in that order.
 	Ref int
-	// Geometry is the durable, device-neutral polygon packet for P3. Ref remains
-	// the classic bridge; Geometry never requires a client, camera, or pool.
+	// Geometry is the durable, device-neutral polygon packet. It never requires
+	// a client, camera, pool, or CPU image.
 	Geometry *ModelGeometry
+	// ShadowOmissions is the number of requested model-shadow stages omitted by
+	// modern mode. It is a count because one staged carrier group may contain
+	// several shadow-casting subjects.
+	ShadowOmissions int
+	// GroupOmission marks the one accounting command for a carrier/child group
+	// that modern mode omits as a whole.
+	GroupOmission bool
 }
 
 // Fog records the already-clipped fog op list the client built with

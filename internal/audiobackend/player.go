@@ -11,13 +11,38 @@ import (
 // Backend is the PCM output over Ebitengine audio [03 §8.2][03 §8.3].
 // Device construction remains lazy until the presentation edge admits a sample.
 type Backend struct {
-	sampleRate int
-	master     bool
-	effects    float64
-	mu         sync.Mutex
-	ctx        *audio.Context
-	players    []*audio.Player
-	streams    []*audio.Player
+	sampleRate   int
+	master       bool
+	effects      float64
+	mu           sync.Mutex
+	ctx          *audio.Context
+	players      []voice
+	streams      []voice
+	createPlayer func([]byte) (outputPlayer, error)
+}
+
+// outputPlayer is the device boundary; gain stays outside immutable PCM.
+type outputPlayer interface {
+	Play()
+	IsPlaying() bool
+	SetVolume(float64)
+	PauseAndStopReading()
+}
+
+type voice struct {
+	player   outputPlayer
+	baseGain float64
+}
+
+func (b *Backend) newPlayer(data []byte) (outputPlayer, error) {
+	if b.createPlayer != nil {
+		return b.createPlayer(data)
+	}
+	b.ensureContext()
+	if b.ctx == nil {
+		return nil, nil
+	}
+	return b.ctx.NewPlayerF32(bytes.NewReader(data))
 }
 
 // Capabilities describes the concrete presentation device surface.
@@ -52,29 +77,56 @@ func (b *Backend) Capabilities() Capabilities {
 // StereoCapable reports whether positional pan should be computed [03 §8.3].
 func (b *Backend) StereoCapable() bool { return b != nil }
 
-// SetMasterEnabled turns all playback on or off.
+// SetMasterEnabled controls ordinary cues. MODE Off stops the voice table;
+// streamed narration has its separate lifetime [03 R-AUD-01 §1][03 R-AUD-02 §1].
 func (b *Backend) SetMasterEnabled(enabled bool) {
-	if b != nil {
-		b.master = enabled
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.master = enabled
+	if !enabled {
+		for _, v := range b.players {
+			release(v.player)
+		}
+		b.players = nil
 	}
 }
 
-// SetEffectsVolume records the effects scale, narrowed to 0..1.
+// SetEffectsVolume applies the application-local wave-output gain to both
+// current and future cues and narration [03 R-AUD-01 §2]. Zero gain mutes
+// current buffers without restarting them when the level rises again.
 func (b *Backend) SetEffectsVolume(volume float64) {
 	if b == nil {
 		return
 	}
-	if volume < 0 {
-		volume = 0
-	}
-	if volume > 1 {
-		volume = 1
-	}
+	volume, _ = clampPlayback(volume, 0)
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.effects = volume
+	for _, v := range b.players {
+		b.applyGain(v)
+	}
+	for _, v := range b.streams {
+		b.applyGain(v)
+	}
 }
 
-// CanPlay reports whether a cue submitted now would be audible.
-func (b *Backend) CanPlay() bool { return b != nil && b.master && b.effects > 0 }
+func (b *Backend) applyGain(v voice) {
+	gain, _ := clampPlayback(v.baseGain*b.effects, 0)
+	v.player.SetVolume(gain)
+}
+
+// CanPlay reports whether an ordinary cue submitted now would be audible.
+func (b *Backend) CanPlay() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.master && b.effects > 0
+}
 
 // SampleRate is the device output rate samples are converted to.
 func (b *Backend) SampleRate() int {
@@ -137,6 +189,8 @@ func (b *Backend) WarmUp() {
 	if b == nil || !b.CanPlay() {
 		return
 	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.ensureContext()
 	if b.ctx == nil {
 		return
@@ -154,26 +208,30 @@ func (b *Backend) WarmUp() {
 }
 
 // PlaySample converts one decoded sample to the device rate at the given
-// volume and pan and submits it. It is a no-op while playback is off.
+// pan and submits it with separate base and FX gains. It is a no-op while playback is off.
 func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) error {
-	if b == nil || sample == nil || !b.CanPlay() {
-		return nil
-	}
-	volume *= b.effects
-	volume, pan = clampPlayback(volume, pan)
-	b.ensureContext()
-	if b.ctx == nil {
-		return nil
-	}
-	data := retailaudio.ConvertSample(sample, volume, pan, b.sampleRate)
-	if len(data) == 0 {
-		return nil
-	}
-	player, err := b.ctx.NewPlayerF32(bytes.NewReader(data))
-	if err != nil {
+	if b == nil || sample == nil {
 		return nil
 	}
 	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.master || !(b.effects > 0) {
+		return nil
+	}
+	_, pan = clampPlayback(volume, pan)
+	data := retailaudio.ConvertSample(sample, 1, pan, b.sampleRate)
+	if len(data) == 0 {
+		return nil
+	}
+	player, err := b.newPlayer(data)
+	if err != nil {
+		return nil
+	}
+	if player == nil {
+		return nil
+	}
+	v := voice{player: player, baseGain: volume}
+	b.applyGain(v)
 	b.reapLocked()
 	// The voice limit is compared against the voices that are still playing:
 	// retail's reaper frees every finished buffer from the application pump,
@@ -185,11 +243,10 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 		// Oldest start first: the steal picks the smallest sequence number
 		// among the non-looping voices [R-AUD-01 §1 step 2]. Appends keep the
 		// slice in start order, so that voice is the front one.
-		release(b.players[0])
+		release(b.players[0].player)
 		b.players = append(b.players[:0], b.players[1:]...)
 	}
-	b.players = append(b.players, player)
-	b.mu.Unlock()
+	b.players = append(b.players, v)
 	player.Play()
 	return nil
 }
@@ -209,7 +266,7 @@ const voiceLimit = 8
 // the state PauseAndStopReading leaves it in. Our sources are in-memory
 // readers over converted PCM, so there is no handle left over for the caller
 // to close.
-func release(player *audio.Player) {
+func release(player outputPlayer) {
 	if player == nil {
 		return
 	}
@@ -221,19 +278,14 @@ func release(player *audio.Player) {
 // b.mu.
 func (b *Backend) reapLocked() {
 	live := b.players[:0]
-	for _, player := range b.players {
-		if player == nil {
+	for _, v := range b.players {
+		if !v.player.IsPlaying() {
+			release(v.player)
 			continue
 		}
-		if !player.IsPlaying() {
-			release(player)
-			continue
-		}
-		live = append(live, player)
+		live = append(live, v)
 	}
-	for i := len(live); i < len(b.players); i++ {
-		b.players[i] = nil
-	}
+	clear(b.players[len(live):])
 	b.players = live
 }
 
@@ -241,26 +293,27 @@ func (b *Backend) reapLocked() {
 // already decoded by internal/audio; keeping a separate player list lets a
 // narration stop leave ordinary cue voices untouched [03 R-AUD-02 §1].
 func (b *Backend) PlayStream(sample *retailaudio.Sample, volume float64) error {
-	if b == nil || sample == nil || !b.CanPlay() {
-		return nil
-	}
-	volume *= b.effects
-	volume, _ = clampPlayback(volume, 0)
-	b.ensureContext()
-	if b.ctx == nil {
-		return nil
-	}
-	data := retailaudio.ConvertSample(sample, volume, 0, b.sampleRate)
-	if len(data) == 0 {
-		return nil
-	}
-	player, err := b.ctx.NewPlayerF32(bytes.NewReader(data))
-	if err != nil {
+	if b == nil || sample == nil {
 		return nil
 	}
 	b.mu.Lock()
-	b.streams = append(b.streams, player)
-	b.mu.Unlock()
+	defer b.mu.Unlock()
+	// The stream opener has no ordinary MODE/FX play gate; wave-output gain
+	// still applies to its output [03 R-AUD-02 §1][03 R-AUD-01 §2].
+	data := retailaudio.ConvertSample(sample, 1, 0, b.sampleRate)
+	if len(data) == 0 {
+		return nil
+	}
+	player, err := b.newPlayer(data)
+	if err != nil {
+		return nil
+	}
+	if player == nil {
+		return nil
+	}
+	v := voice{player: player, baseGain: volume}
+	b.applyGain(v)
+	b.streams = append(b.streams, v)
 	player.Play()
 	return nil
 }
@@ -272,14 +325,14 @@ func (b *Backend) StopStream() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, player := range b.streams {
-		release(player)
+	for _, v := range b.streams {
+		release(v.player)
 	}
 	b.streams = nil
 }
 
 // clampPlayback preserves the concrete backend's presentation boundary before
-// PCM conversion: effects scaling is narrowed to 0..1 and pan to -1..1.
+// output: effects scaling is narrowed to 0..1 and pan to -1..1.
 func clampPlayback(volume, pan float64) (float64, float64) {
 	if volume < 0 {
 		volume = 0
@@ -314,11 +367,11 @@ func (b *Backend) Close() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for _, player := range b.players {
-		release(player)
+	for _, v := range b.players {
+		release(v.player)
 	}
-	for _, player := range b.streams {
-		release(player)
+	for _, v := range b.streams {
+		release(v.player)
 	}
 	b.players = nil
 	b.streams = nil

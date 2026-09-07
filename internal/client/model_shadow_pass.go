@@ -39,6 +39,11 @@ const shadowXOffset int32 = 5
 // mobile/Digger branches it stands in for until their own silhouette-clip
 // shadows are built, so the vehicle-shadow gate still applies to those.
 //
+// TODO(question): reconcile this existing classic visibility gate with
+// [03 R-REN-03D §1, §4] and the ALP-presence ambiguity in [03 Missing and unknown].
+// A trace of the palette-init request word and tinted-blitter flag would settle
+// it. GPU parity currently consumes the same CastsShadow producer decision.
+//
 // The SHADING option is not part of any branch's gate — that reading of
 // "every tinted blit is gated on shading" was wrong. SHADING selects the
 // shaded model renderer only [R-RND-02A]; it has no effect on shadows.
@@ -147,13 +152,10 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 // buildModelShadow rasterizes one model shadow into its own finished, punched
 // composition image and returns it, or nil when the subject casts no shadow or
 // the shadow has no faces. It is the whole of the old drawModelShadow body up to
-// (but not including) the tinted commit, split out so both the classic path and
-// the modern (GPU) bridge produce the identical shadow byte planes from one
-// builder: drawModelShadow commits it through ALP on the CPU, and
-// ModelShadowImage hands the same image to the GPU executor to commit through the
-// same ALP form (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5). body is the subject's
-// finished composition image the punch-out reads to leave a hole under the hull
-// [R-REN-03D §5][R-RAST-01 §4].
+// (but not including) the tinted commit. The classic path commits it through
+// ALP; modern mode records the same projection for its own GPU shadow pass
+// [DESIGN_GPU_RENDERER.md §10]. body is the subject's finished composition image
+// the punch-out reads to leave a hole under the hull [R-REN-03D §5][R-RAST-01 §4].
 func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *modelTarget) *modelTarget {
 	if c == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
 		return nil

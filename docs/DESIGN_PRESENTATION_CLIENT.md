@@ -210,6 +210,14 @@ alias table), `SampleCache`, the music controller, the positional viewport, and
 one private CRT copy. `internal/audiobackend.Backend` is the PCM device behind
 it — keeping the Ebitengine audio import there is what lets authoritative
 packages import `internal/audio` without initialising a graphics platform [I6].
+The backend keeps base attenuation separate from its application-local FX
+output gain, so slider changes affect already-playing cues and narration.
+Zero FX mutes an existing buffer without restarting its timeline. MODE Off
+stops and clears ordinary voice slots; narration follows its separate stream
+start/stop lifetime. The stream opener has no ordinary MODE play gate
+`[03 R-AUD-01 §1]` `[03 R-AUD-01 §2]` `[03 R-AUD-02 §1]`. Ebitengine player
+gain stands in for the retail system wave-output mixer; no host-wide volume
+setting is changed.
 
 ## 3. Contracts
 

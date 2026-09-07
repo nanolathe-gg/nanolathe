@@ -47,13 +47,16 @@ func runModelShot(opts Options, cs *contentSet) error {
 	preview := client.ModelPreviewOptions{
 		Model: definition.ObjectName, Width: w, Height: h,
 		Heading: uint16(opts.ShotModelHeading), Scale: float32(opts.ShotModelScale),
-		KeyPlane: definition.ZBuffer, Structure: definition.Structure,
+		KeyPlane: definition.ZBuffer, Structure: definition.Structure, Digger: definition.Definition.Digger,
 	}
-	if definition.Structure {
-		// The GPU prototype accepts the scale-one structure subset only when
-		// anti-alias resolve is explicitly disabled. Other structure captures
-		// remain an honest CPU fallback in the production path.
+	shotRenderer := effectiveShotRenderer(opts)
+	if definition.Structure && shotRenderer == "both" {
+		// The explicit comparison normalizes the classic reference to native
+		// scale so the output isolates device geometry and texture mapping. A
+		// modern-only capture leaves this false: RecordGeometry must prove that
+		// Anti_Alias never routes a structure through CPU pixels.
 		preview.DisableAntiAlias = true
+		fmt.Fprintln(os.Stderr, "nanolathe: shot model comparison: classic structure resolve disabled for native-scale geometry comparison")
 	}
 	if opts.ShotModelPose == "open" {
 		if !strings.EqualFold(definition.ObjectName, "armsolar") {
@@ -72,7 +75,19 @@ func runModelShot(opts Options, cs *contentSet) error {
 		preview.PiecePoses = poses
 		fmt.Fprintln(os.Stderr, "nanolathe: shot model pose=activated (production UnitDef + unit-bound COB Activate; pose derived from VM)")
 	}
-	record, err := r.RecordModel(preview)
+	var record client.ModelPreviewRecord
+	if shotRenderer == "classic" {
+		record, err = r.RecordModel(preview)
+		if err != nil {
+			return err
+		}
+		return encodeShotPNG(opts.Shot, record.Image)
+	}
+	if shotRenderer == "both" {
+		record, err = r.RecordModel(preview)
+	} else {
+		record, err = r.RecordGeometry(preview)
+	}
 	if err != nil {
 		return err
 	}
@@ -80,15 +95,10 @@ func runModelShot(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
-	if stats.MissingSource > 0 {
-		return fmt.Errorf("nanolathe: shot model: modern preview encountered %d CPU fallback(s) without a ModelSource; refusing an unclaimed image", stats.MissingSource)
-	}
-	fmt.Fprintf(os.Stderr, "nanolathe: shot model route: gpu=%d cpu-fallback=%d shadows=%d missing-source=%d unsupported-geometry=%d face=%d missing-texture=%d\n", stats.GPU, stats.CPUFallback, stats.Shadows, stats.MissingSource, stats.UnsupportedGeometry, stats.UnsupportedFace, stats.MissingTexture)
-	switch opts.ShotRenderer {
-	case "", "modern":
+	fmt.Fprintf(os.Stderr, "nanolathe: shot model route: gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d no-body=%d unsupported-geometry=%d face=%d missing-texture=%d\n", stats.GPU, stats.Skipped, stats.Shadows, stats.ShadowsOmitted, stats.RevealOrOutlineOmitted, stats.WaterlineOrDiggerOmitted, stats.StagingCommandsOmitted, stats.StagedGroups, stats.ComposedGroups, stats.NoBody, stats.UnsupportedGeometry, stats.UnsupportedFace, stats.MissingTexture)
+	switch shotRenderer {
+	case "modern":
 		return encodeShotPNG(opts.Shot, modern)
-	case "classic":
-		return encodeShotPNG(opts.Shot, record.Image)
 	case "both":
 		return compareShotImages(opts.Shot, record.Image, modern, opts.ShotRendererMax)
 	default:
@@ -188,7 +198,7 @@ func resolveModelPreviewDefinition(catalog *content.Catalog, requested string) (
 			continue
 		}
 		candidate := modelPreviewDefinition{ObjectName: strings.TrimSpace(def.ObjectName), Structure: def.BMCode == 0, ZBuffer: def.ZBuffer, Definition: def}
-		if found && (candidate.Structure != resolved.Structure || candidate.ZBuffer != resolved.ZBuffer) {
+		if found && (candidate.Structure != resolved.Structure || candidate.ZBuffer != resolved.ZBuffer || candidate.Definition.Digger != resolved.Definition.Digger) {
 			return modelPreviewDefinition{}, fmt.Errorf("nanolathe: shot model: object %q has conflicting unit display properties; name a unit key", base)
 		}
 		resolved, found = candidate, true

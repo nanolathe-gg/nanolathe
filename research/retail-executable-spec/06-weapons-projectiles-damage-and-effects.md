@@ -2540,11 +2540,24 @@ neither word, both start at whatever the reused pool slot last held.
 OTA keys or from `gamedata/meteor.tdf`:
 
 ```
-radius   = MeteorRadius                      ; integer key, verbatim
-spacing  = trunc(30.0f / MeteorDensity)      ; single-precision divide, ticks
-duration = trunc(MeteorDuration * 30.0f)     ; ticks
-interval = trunc(MeteorInterval * 30.0f)     ; ticks
+radius   = MeteorRadius
+spacing  = low32(trunc64(30 / storedDensity))
+duration = low32(trunc64(storedDuration * 30))
+interval = low32(trunc64(storedInterval * 30))
 ```
+
+**Established (direct static trace) — conversion boundaries.** Density,
+duration and interval are each stored as single precision before installation.
+The divide and multiplies then run at the runtime's working precision, with
+no single-precision result store before signed-64 truncation and retention of
+the low 32 bits [01 R-DET-01 §1]. The single-precision operands do not make
+the arithmetic result single precision. Non-finite and signed-64 out-of-range
+results retain zero in that low word. For example, stored density authored as
+`0.3` is slightly greater than three tenths, so its spacing is `99`, not `100`.
+Stored duration authored as `0.7` produces a product just below `21`, so its
+integer duration is `20`. Rounding either arithmetic result to single
+precision would incorrectly produce the larger integer. A duration of
+`134217728` seconds yields the signed low-word result `-268435456`.
 
 **Established fact:** Shower resolution tolerates bad data. An **empty**
 `MeteorWeapon` name disables scheduling —
@@ -2555,9 +2568,18 @@ fields — the weapon name and all four numbers — from the `[Default]` block**
 and then enables scheduling. A single zero replaces the whole block including
 the weapon name, so a mission authoring a custom weapon, radius and duration
 but leaving the interval at zero gets the default weapon and the default radius
-too `[R-WPN-01 §5]`. If the default block itself is missing or incomplete, the
-loader emits the diagnostic `Hey, hoser!  The default meteor shower data was
-bogus!` and leaves the parameters as they were. An unresolved weapon name, or a
+too `[R-WPN-01 §5]`. **Established (direct static trace):** a missing default
+file or section returns without changing the incoming parameter block or
+emitting the bogus-data diagnostic. When the section exists but its weapon
+key is absent, the string accessor writes an empty weapon name; the loader
+emits `Hey, hoser!  The default meteor shower data was bogus!` and terminates
+with failure before reading the numeric fields. A present weapon key, including an empty
+value, admits all four numeric reads and stores; any zero numeric value then
+emits that same diagnostic and terminates with failure. The partial writes
+precede process termination; they are not installed as a recoverable storm.
+An empty present weapon value alone does not trigger the diagnostic. The enable bit was
+selected from the original mission weapon's emptiness before default loading,
+and the later parameter installation does not recompute that bit. An unresolved weapon name, or a
 resolved weapon lacking the meteor flag, still falls back to weapon index zero
 instead of disabling.
 

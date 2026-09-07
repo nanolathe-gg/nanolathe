@@ -15,10 +15,7 @@
 // The final expansion maps index→colour through PALETTE.PAL alone and forces
 // alpha opaque, matching the software convertIndexedToRGBA (C-G8).
 //
-// Scope of this unit (WU-2.1): the package skeleton, the palette-table textures,
-// the index→RGBA expansion shader, and a Sink whose only live methods are Clear
-// (fill the indexed offscreen with index 0) and Expand (run the expansion
-// shader). Every other draw family is a stub; a replayed frame is therefore
-// Clear then Expand, so the whole surface becomes PALETTE.PAL[0], the correct
-// expansion of an empty frame. Later units fill in the drawing families.
+// Terrain, sprites, UI, fog, models and their palette composites execute on the
+// device. Model stages still awaiting GPU support carry explicit omissions;
+// there is no CPU model-image fallback (DESIGN_GPU_RENDERER §9–§10).
 package gpurender

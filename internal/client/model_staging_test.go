@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
@@ -211,6 +212,78 @@ func TestCarriedChildUsesItsOwnPublishedTeamColour(t *testing.T) {
 	}
 }
 
+func TestGeometryOnlyCarrierRecordsChildComposition(t *testing.T) {
+	c := newPieceFixtureClient(t)
+	c.geometryOnlyModels = true
+	c.models = map[string]*unitModel{"cargo": teamLogoTestModel()}
+
+	carrier := frame.UnitView{InstanceID: 1, Model: "cargo", Owner: 0, OwnerColor: 7, OwnerColorKnown: true, ZBuffer: true}
+	child := frame.UnitView{InstanceID: 2, Model: "cargo", Owner: 7, OwnerColor: 0, OwnerColorKnown: true, ZBuffer: true}
+	if !c.composeCarrier(carrier, 0, 0, []frame.UnitView{child}) {
+		t.Fatal("valid staged carrier did not retain selection-chrome eligibility")
+	}
+	if got := len(c.modelCommits); got != 0 {
+		t.Fatalf("geometry-only staged carrier retained %d CPU model commits", got)
+	}
+	models := c.list.ModelCommands()
+	if len(models) != 2 || !models[0].ShadowOnly || models[1].Geometry == nil || !models[1].Geometry.Eligible || len(models[1].Geometry.Children) != 1 {
+		t.Fatalf("geometry-only staged carrier = %#v, want child shadow then carrier group", models)
+	}
+	g := models[1].Geometry
+	if !g.Children[0].Geometry.KeyPlane {
+		t.Fatal("staged child has no key plane")
+	}
+	clone := g.Clone()
+	clone.Children[0].Geometry.Faces[0].Vertices[0].X++
+	if clone.Children[0].Geometry.Faces[0].Vertices[0].X == g.Children[0].Geometry.Faces[0].Vertices[0].X {
+		t.Fatal("staged clone aliases child geometry")
+	}
+}
+
+func TestGeometryOnlyCarrierRegistersChildTextureCursors(t *testing.T) {
+	c := newPieceFixtureClient(t)
+	c.geometryOnlyModels = true
+	entry := &formats.GAFEntry{Frames: []formats.GAFFrameRef{
+		{Value: 1, Frame: &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{31}}},
+		{Value: 1, Frame: &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{32}}},
+	}}
+	c.texIndex["logo"] = texRef{kind: texAnimated, key: "fixture|logo", entry: entry}
+	c.models = map[string]*unitModel{"cargo": teamLogoTestModel()}
+
+	carrier := frame.UnitView{InstanceID: 1, Model: "cargo", Owner: 0, ZBuffer: true}
+	child := frame.UnitView{InstanceID: 2, Model: "cargo", Owner: 0, ZBuffer: true}
+	if !c.composeCarrier(carrier, 0, 0, []frame.UnitView{child}) {
+		t.Fatal("valid staged carrier did not resolve")
+	}
+	if got := len(c.modelPresentation); got != 2 {
+		t.Fatalf("registered model texture cursors = %d, want carrier and child", got)
+	}
+	if got := len(c.modelPlayers); got != 2 {
+		t.Fatalf("phase-7 model texture players = %d, want carrier and child", got)
+	}
+}
+
+func TestGeometryOnlyMissingCarrierAccountsForValidChild(t *testing.T) {
+	c := newPieceFixtureClient(t)
+	c.geometryOnlyModels = true
+	c.shadows = true
+	c.pal = &palette.Tables{}
+	c.models = map[string]*unitModel{"cargo": teamLogoTestModel()}
+
+	carrier := frame.UnitView{InstanceID: 1, Model: "missing"}
+	child := frame.UnitView{InstanceID: 2, Model: "cargo", Owner: 0, ZBuffer: true}
+	if c.composeCarrier(carrier, 0, 0, []frame.UnitView{child}) {
+		t.Fatal("missing carrier unexpectedly retained selection-chrome eligibility")
+	}
+	models := c.list.ModelCommands()
+	if len(models) != 1 || models[0].Geometry == nil || !models[0].Geometry.Eligible || models[0].ShadowOnly {
+		t.Fatalf("missing-carrier geometry = %#v, want independent child body", models)
+	}
+	if models[0].Geometry.Shadow == nil || models[0].ShadowOmissions != 0 {
+		t.Fatal("valid child's shadow was omitted")
+	}
+}
+
 func teamLogoTestModel() *unitModel {
 	return &unitModel{compiled: &compiledmodel.Model{
 		Root: 0,
@@ -257,5 +330,35 @@ func TestTeamColourDoesNotChangeWaterlineOwnership(t *testing.T) {
 	}
 	if covered == 0 {
 		t.Fatal("owner-colour selector changed waterline ownership and erased the owned unit")
+	}
+}
+
+func TestCarrierRecordingRoutesPreserveChildHeightAndPainterOrder(t *testing.T) {
+	for _, geometryOnly := range []bool{false, true} {
+		for _, keyed := range []bool{false, true} {
+			c := newPieceFixtureClient(t)
+			c.geometryOnlyModels, c.recordModelGeometry = geometryOnly, true
+			c.models = map[string]*unitModel{"cargo": teamLogoTestModel()}
+			carrier := frame.UnitView{InstanceID: 1, Model: "cargo", ZBuffer: keyed, Y: numeric.Fixed(3 << 16)}
+			child := frame.UnitView{InstanceID: 2, Model: "cargo", ZBuffer: false, Y: numeric.Fixed(-1)}
+			if !c.composeCarrier(carrier, 0, 0, []frame.UnitView{child}) {
+				t.Fatal("carrier did not record")
+			}
+			models := c.list.ModelCommands()
+			if len(models) != 2 {
+				t.Fatalf("geometry=%v keyed=%v commands=%d", geometryOnly, keyed, len(models))
+			}
+			if keyed {
+				if !models[0].ShadowOnly || !models[1].Geometry.Eligible || len(models[1].Geometry.Children) != 1 {
+					t.Fatal("keyed child order/group was lost")
+				}
+				child := models[1].Geometry.Children[0]
+				if child.KeyDelta != -4 || !child.Geometry.KeyPlane {
+					t.Fatalf("child delta/key plane=%d/%v, want -4/true", child.KeyDelta, child.Geometry.KeyPlane)
+				}
+			} else if models[0].ShadowOnly || models[1].ShadowOnly || len(models[0].Geometry.Children) != 0 || models[1].Geometry.KeyPlane {
+				t.Fatal("keyless group did not preserve independent painter order")
+			}
+		}
 	}
 }

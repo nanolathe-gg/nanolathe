@@ -34,9 +34,10 @@ type Options struct {
 	Renderer   string  // start-up presentation executor: "classic" (default) or "modern"
 
 	// ShotRenderer selects which executor --shot captures through:
-	// "classic" (default, the software composer), "modern" (the GPU executor,
+	// "classic" (explicit software composer), "modern" (the GPU executor,
 	// captured through a hidden one-frame Ebitengine loop), or "both" (classic
-	// to --shot, modern to a sibling path, plus their diff)
+	// to --shot, modern to a sibling path, plus their diff). An omitted value
+	// follows Renderer: modern only when --renderer=modern, otherwise classic.
 	// [DESIGN_GPU_RENDERER.md §2.5]. ShotRendererMax is the largest differing-
 	// pixel count "both" tolerates before the command exits non-zero. The
 	// historical default remains effectively unbounded; comparison tools opt
@@ -97,9 +98,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
-	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with --shot, run the real viewer loop headlessly for this many seconds of battle time and report ms per frame")
+	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with classic --shot, run the CPU viewer loop headlessly for this many seconds of battle time and report ms per frame")
 	set.StringVar(&opts.Renderer, "renderer", "classic", "start-up presentation renderer: \"classic\" (software) or \"modern\" (GPU); any other value is classic")
-	set.StringVar(&opts.ShotRenderer, "shot-renderer", "classic", "which executor --shot captures through: \"classic\" (software), \"modern\" (GPU, hidden one-frame loop) or \"both\" (classic + modern + diff)")
+	set.StringVar(&opts.ShotRenderer, "shot-renderer", "", "which executor --shot captures through: \"classic\", \"modern\", or \"both\"; omitted follows --renderer")
 	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")
 	set.IntVar(&opts.ShotGPUProfileFrames, "shot-gpu-profile-frames", 0, "with --shot-renderer modern or both, time this many frozen-scene GPU frames after warm-up")
 	set.StringVar(&opts.ShotModel, "shot-model", "", "isolated model name for an opt-in GPU preview capture (requires --renderer=modern and --shot)")

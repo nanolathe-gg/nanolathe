@@ -682,15 +682,14 @@ the active-span tail and never fills a hole; retirement marks a record dead
 without changing the count `[06 §5.1]` `[01 §6.1]` [I5] [I13].
 
 **C11 — the phase captures its span once.** The projectile phase captures the
-span count once at entry — **before** the burst advance runs, not after it —
-and that one count bounds both the burst pass and the motion pass, because
-retail's phase is a single ascending walk over the captured span in which each
-record takes either the burst branch or the motion branch. So a clone appended
-during the scan waits for the next phase: it is created on tick *n* and first
-integrates its velocity on tick *n+1*, including the zero-interval case where
-the root emits a clone during its own creation tick. The tail compactor is the
-exception — it reads the **current** count and therefore does include the clone
-`[06 §4.3]` `[06 §5.1]` `[01 §6.2]`.
+span count once at entry — **before** its ascending walk begins. Each record in
+that captured span takes either the burst branch or the motion branch; there
+are no separate burst and motion passes. A clone appended during the scan waits
+for the next phase: it is created on tick *n* and first integrates its velocity
+on tick *n+1*, including the zero-interval case where the root emits a clone
+during its own creation tick. The tail compactor is the exception — it reads
+the **current** count and therefore does include the clone `[06 §4.3]`
+`[06 §5.1]` `[01 §6.2]`.
 
 **C12 — compaction repairs exactly what retail repairs.** `Compact` writes each
 original record's old pool index into its marker field before any copy;
@@ -984,26 +983,18 @@ divergence belongs to [DESIGN_CONTENT_VFS](DESIGN_CONTENT_VFS.md).
 
 ## 7. Not implemented and open
 
-`internal/combat` carries no `TODO(question)`, `TODO(T23)` or `TODO(T25)`
-marker today. Two comments point at markers that no longer stand — one in
+This section lists open combat contracts; it is not a census claiming that
+`internal/combat` has no source-question markers. The retained freed-target
+state and non-meteor roll writer questions are recorded in [06 "Missing and
+unknown"]. Two comments point at markers that no longer stand — one in
 `slots.go` referring to malformed-state TODOs on the reload computation, and
 one in `damage.go` referring to a TODO on the water-damage eligibility test.
-Both sites now state their behaviour inline, and the questions those markers
-carried are listed below rather than in the source. SC18 additionally names the
+Both sites now state their behaviour inline. SC18 additionally names the
 reservation site as a place where a `TODO(T23)` for the allocator's zero-fill
 byte count is expected; the file does not carry one.
 
 Open items the contracts above carry:
 
-* ~~**The projectile phase steps a clone in the tick that created it.**~~
-  **Closed.** The phase advanced burst anchors first and captured its span
-  count afterwards, so a clone appended by that advance fell inside the span
-  and was stepped in the same tick, where C11 and `[06 §4.3]` hold it to the
-  next tick. The capture now happens before the burst advance and bounds both
-  passes, so a clone spawned in tick *n* first moves in tick *n+1*; the
-  contract text at C11 was the correct reading all along. This changed the
-  simulation hash — every pellet's flight, and so its impact, had been running
-  one tick early.
 * **An out-of-range movement-state operand reaching the reload formula.** The
   health half of the reload plan's original question is closed — health is a
   signed 16-bit field, the heal kind clamps unsigned to the definition's 32-bit

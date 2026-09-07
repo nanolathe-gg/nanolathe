@@ -174,7 +174,11 @@ func (c *Client) emitSurface(sf drawlist.Surface) {
 func (c *Client) emitModel(pending pendingModelCommit) {
 	ref := len(c.modelCommits)
 	c.modelCommits = append(c.modelCommits, pending)
-	c.list.RecordModel(drawlist.Model{Ref: ref, Geometry: geometryForCommit(pending)})
+	cmd := drawlist.Model{Ref: ref, Geometry: geometryForCommit(pending), ShadowOnly: pending.shadow && !pending.body}
+	if pending.shadow && pending.m.draw != nil && pending.m.draw.CastsShadow && (cmd.Geometry == nil || !cmd.Geometry.Eligible) {
+		cmd.ShadowOmissions = 1
+	}
+	c.list.RecordModel(cmd)
 }
 
 // Clear zeroes the indexed surface. It is the first command of every committed

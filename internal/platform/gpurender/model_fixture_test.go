@@ -20,7 +20,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("NANOLATHE_GPU_DEVICE_TEST") == "1" {
 		game := &modelFixtureGame{}
 		ebiten.SetWindowVisible(false)
-		ebiten.SetWindowSize(40, 12)
+		ebiten.SetWindowSize(80, 48)
 		deviceFixtureResult = ebiten.RunGame(game)
 		if deviceFixtureResult == nil {
 			deviceFixtureResult = game.err
@@ -59,21 +59,21 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	}
 	defer func() { g.done = true }()
 	pal := fixturePalette()
-	r, err := NewChecked(&pal, 40, 12)
+	r, err := NewChecked(&pal, 80, 48)
 	if err != nil {
 		g.err = fmt.Errorf("compile fixture shaders: %w", err)
 		return
 	}
 	list := fixtureModelList()
-	img := r.Execute(&list, 40, 12)
+	img := r.Execute(&list, 80, 48)
 	if img == nil {
 		g.err = fmt.Errorf("fixture renderer returned no image")
 		return
 	}
-	var pixels = make([]byte, 40*12*4)
+	var pixels = make([]byte, 80*48*4)
 	img.ReadPixels(pixels)
 	check := func(name string, x, y int, want byte) {
-		got := pixels[(y*40+x)*4]
+		got := pixels[(y*80+x)*4]
 		if got != want && g.err == nil {
 			g.err = fmt.Errorf("%s at (%d,%d): index %d, want %d", name, x, y, got, want)
 		}
@@ -86,20 +86,72 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	check("folded positive span", 31, 3, 6)
 	check("folded negative lobe", 27, 1, 7)
 	check("keyed sprite transparent skip", 36, 0, 7)
+	textured := false
+	for y := 0; y < 12; y++ {
+		for x := 0; x < 16; x++ {
+			left, right := pixels[(y*80+44+x)*4], pixels[(y*80+64+x)*4]
+			if left >= 32 && left <= 95 {
+				textured = true
+			}
+			if left != right && g.err == nil {
+				g.err = fmt.Errorf("cyclic textured quad at (%d,%d): index %d, rotated index %d", x, y, left, right)
+			}
+		}
+	}
+	if !textured && g.err == nil {
+		g.err = fmt.Errorf("cyclic textured quad did not draw an authored gradient texel")
+	}
+	check("shadow ALP blend", 1, 16, 11)
+	check("overlapping shadow faces blend once", 3, 16, 11)
+	check("body punches shadow", 5, 16, 13)
+	check("shadow bounds", 10, 16, 7)
+	check("reveal keeps lower body", 1, 27, 15)
+	check("reveal erases previous lower face", 5, 27, 7)
+	check("outline left endpoint", 4, 27, 21)
+	check("outline right endpoint beyond body span", 12, 27, 21)
+	check("outline does not draw horizontal polygon border", 5, 26, 7)
+	check("reveal band color", 15, 27, 18)
+	check("waterline blue inclusive threshold", 23, 27, 17)
+	check("waterline leaves higher key", 27, 27, 15)
+	check("waterline erases inclusive threshold", 33, 27, 7)
+	check("waterline erase leaves higher key", 37, 27, 15)
+	check("digger erases inclusive threshold", 43, 27, 7)
+	check("digger leaves higher key", 47, 27, 15)
+	check("keyless subject skips clipping", 53, 27, 15)
+	check("staging later child sees wrapped stored key", 1, 37, 25)
+	check("staging compares before wrapping", 3, 37, 24)
+	check("negative shifted child loses", 5, 37, 23)
+	check("equal shifted child wins", 7, 37, 26)
+	check("erased carrier retains key ownership", 13, 37, 7)
+	check("child shadow-only blend", 59, 37, 11)
+	check("child shadow-only punches own body", 61, 37, 7)
+	check("child shadow-only omits body commit", 63, 37, 7)
 	stats := r.ModelStats()
-	if stats.GPU != 5 && g.err == nil {
-		g.err = fmt.Errorf("fixture GPU count = %d, want 5", stats.GPU)
+	if stats.ComposedGroups != 2 && g.err == nil {
+		g.err = fmt.Errorf("fixture composed groups = %d, want 2", stats.ComposedGroups)
 	}
-	if stats.CPUFallback != 1 && g.err == nil {
-		g.err = fmt.Errorf("fixture CPU fallback count = %d, want 1", stats.CPUFallback)
+	if stats.Shadows != 2 && g.err == nil {
+		g.err = fmt.Errorf("fixture GPU shadow count = %d, want 2", stats.Shadows)
 	}
-	if stats.MissingSource != 1 && g.err == nil {
-		g.err = fmt.Errorf("fixture missing source count = %d, want 1", stats.MissingSource)
+	if stats.GPU != 20 && g.err == nil {
+		g.err = fmt.Errorf("fixture GPU count = %d, want 20", stats.GPU)
+	}
+	if stats.Skipped != 1 && g.err == nil {
+		g.err = fmt.Errorf("fixture omitted count = %d, want 1", stats.Skipped)
+	}
+	if stats.ShadowsOmitted != 2 && g.err == nil {
+		g.err = fmt.Errorf("fixture shadow omission count = %d, want 2", stats.ShadowsOmitted)
+	}
+	if stats.StagedGroups != 1 && g.err == nil {
+		g.err = fmt.Errorf("fixture staged group count = %d, want 1", stats.StagedGroups)
+	}
+	if stats.WaterlineOrDiggerOmitted != 1 && g.err == nil {
+		g.err = fmt.Errorf("fixture waterline omission count = %d, want 1", stats.WaterlineOrDiggerOmitted)
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
 
-func (g *modelFixtureGame) Layout(int, int) (int, int) { return 40, 12 }
+func (g *modelFixtureGame) Layout(int, int) (int, int) { return 80, 48 }
 
 func fixturePalette() palette.Tables {
 	var p palette.Tables
@@ -113,13 +165,16 @@ func fixturePalette() palette.Tables {
 			p.Shade[row][i] = byte(i)
 		}
 	}
+	p.Blue[15] = 17
+	p.Alpha[7] = 11
+	p.Alpha[11] = 12 // A repeated shadow blend must not reach this index.
 	return p
 }
 
 func fixtureModelList() drawlist.List {
 	var list drawlist.List
 	list.RecordClear()
-	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: 0, Y: 0, W: 40, H: 12}, Index: 7, Style: drawlist.FillSolid})
+	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{X: 0, Y: 0, W: 80, H: 48}, Index: 7, Style: drawlist.FillSolid})
 	texture := &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{1}, Transparent: []bool{true}}
 	// The same transparent-marked index-1 texel is also sent through the keyed
 	// sprite path. Its green admission flag must leave the background untouched.
@@ -153,9 +208,73 @@ func fixtureModelList() drawlist.List {
 	}, Color: 6})})
 	// Unsupported geometry has an explicit fallback and no model source. It
 	// contributes diagnostics without claiming a successful body image.
-	list.RecordModel(drawlist.Model{Geometry: &drawlist.ModelGeometry{Fallback: drawlist.ModelFallbackWaterlineOrDigger}})
+	list.RecordModel(drawlist.Model{Geometry: &drawlist.ModelGeometry{Fallback: drawlist.ModelFallbackWaterlineOrDigger}, ShadowOmissions: 2, GroupOmission: true})
+	// A non-parallelogram has different conventional triangle mappings under a
+	// cyclic corner rotation. The two-chain row mapper must instead produce the
+	// same device pixels in the two translated regions [03 R-RAST-01 §1].
+	gradient := &formats.GAFFrame{Width: 8, Height: 8, Pixels: fixtureGradientTexture()}
+	quad := []drawlist.ModelVertex{
+		{X: 46, Y: 1, Key: 20, U: 0, V: 0},
+		{X: 58, Y: 3, Key: 20, U: 7, V: 0},
+		{X: 55, Y: 10, Key: 20, U: 7, V: 7},
+		{X: 44, Y: 8, Key: 20, U: 0, V: 7},
+	}
+	rotated := make([]drawlist.ModelVertex, len(quad))
+	for i := range quad {
+		rotated[i] = quad[(i+1)%len(quad)]
+		rotated[i].X += 20
+	}
+	list.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true,
+		drawlist.ModelFace{Vertices: quad, Texture: gradient},
+		drawlist.ModelFace{Vertices: rotated, Texture: gradient},
+	)})
+	body := fixtureGeometry(0, true, fixtureFace(4, 14, 4, 6, 50, 13))
+	body.Shadow = fixtureGeometry(0, true, fixtureFace(0, 14, 7, 6, 25, 0), fixtureFace(2, 14, 7, 6, 35, 0))
+	list.RecordModel(drawlist.Model{Geometry: body})
+	reveal := fixtureGeometry(0, true, fixtureFace(0, 26, 12, 6, 10, 15), fixtureFace(4, 26, 8, 6, 30, 16), fixtureFace(14, 26, 4, 6, 20, 15))
+	reveal.Reveal = &drawlist.ModelReveal{Floor: 20, Line: 30, Below: -1, Band: 18, Above: -2}
+	reveal.Outline = []drawlist.ModelFace{fixtureFace(4, 26, 8, 6, 30, 21), fixtureFace(0, 26, 12, 6, 5, 22)}
+	list.RecordModel(drawlist.Model{Geometry: reveal})
+	blue := fixtureGeometry(0, true, fixtureFace(22, 26, 4, 6, 20, 15), fixtureFace(26, 26, 4, 6, 30, 15))
+	blue.Waterline, blue.WaterlineKey = drawlist.ModelWaterlineBlue, 20
+	list.RecordModel(drawlist.Model{Geometry: blue})
+	erase := fixtureGeometry(0, true, fixtureFace(32, 26, 4, 6, 20, 15), fixtureFace(36, 26, 4, 6, 30, 15))
+	erase.Waterline, erase.WaterlineKey = drawlist.ModelWaterlineErase, 20
+	list.RecordModel(drawlist.Model{Geometry: erase})
+	digger := fixtureGeometry(0, true, fixtureFace(42, 26, 4, 6, 125, 15), fixtureFace(46, 26, 4, 6, 126, 15))
+	digger.Digger, digger.DiggerKey = true, 125
+	list.RecordModel(drawlist.Model{Geometry: digger})
+	keyless := fixtureGeometry(0, false, fixtureFace(52, 26, 4, 6, 10, 15))
+	keyless.Waterline, keyless.WaterlineKey, keyless.Digger, keyless.DiggerKey = drawlist.ModelWaterlineBlue, 20, true, 125
+	list.RecordModel(drawlist.Model{Geometry: keyless})
+	carrier := fixtureGeometry(0, true, fixtureFace(0, 36, 8, 6, 200, 23))
+	carrier.Children = []drawlist.ModelChild{
+		{Geometry: fixtureGeometry(0, true, fixtureFace(0, 36, 4, 6, 250, 24)), KeyDelta: 10},
+		{Geometry: fixtureGeometry(0, true, fixtureFace(0, 36, 2, 6, 5, 25))},
+		{Geometry: fixtureGeometry(0, true, fixtureFace(4, 36, 4, 6, 10, 24)), KeyDelta: -20},
+		{Geometry: fixtureGeometry(0, true, fixtureFace(2, 36, 2, 6, 100, 1))},
+		{Geometry: fixtureGeometry(0, true, fixtureFace(6, 36, 2, 6, 200, 26))},
+	}
+	list.RecordModel(drawlist.Model{Geometry: carrier})
+	erasedCarrier := fixtureGeometry(0, true, fixtureFace(12, 36, 4, 6, 200, 23))
+	erasedCarrier.Reveal = &drawlist.ModelReveal{Above: -2, Below: -2, Band: -2}
+	erasedCarrier.Children = []drawlist.ModelChild{{Geometry: fixtureGeometry(0, true, fixtureFace(12, 36, 4, 6, 100, 24))}}
+	list.RecordModel(drawlist.Model{Geometry: erasedCarrier})
+	shadowOnly := fixtureGeometry(0, true, fixtureFace(60, 36, 4, 6, 50, 19))
+	shadowOnly.Shadow = fixtureGeometry(0, true, fixtureFace(58, 36, 4, 6, 25, 0))
+	list.RecordModel(drawlist.Model{Geometry: shadowOnly, ShadowOnly: true})
 	list.RecordExpand()
 	return list
+}
+
+func fixtureGradientTexture() []byte {
+	pixels := make([]byte, 8*8)
+	for v := 0; v < 8; v++ {
+		for u := 0; u < 8; u++ {
+			pixels[v*8+u] = uint8(32 + v*8 + u)
+		}
+	}
+	return pixels
 }
 
 func fixtureGeometry(anchor int32, keyPlane bool, faces ...drawlist.ModelFace) *drawlist.ModelGeometry {

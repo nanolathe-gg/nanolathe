@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/nanolathe/nanolathe/internal/drawlist"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -120,7 +119,8 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 		t.Fatal("open solar pose matched closed solar; dish pose was not applied")
 	}
 	// A later default preview restores the renderer's regular structure AA
-	// setting and therefore carries the supersample fallback reason.
+	// setting. Its modern packet remains native-scale geometry even while the
+	// classic reference below uses its ordinary supersample resolve.
 	defaultSolar, err := r.RecordModel(ModelPreviewOptions{
 		Model: "armsolar", Owner: 0, Width: 192, Height: 160, Scale: 2,
 		Background: 0, KeyPlane: true, Structure: true,
@@ -129,11 +129,28 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 		t.Fatalf("default solar preview: %v", err)
 	}
 	defaultModels := defaultSolar.List.ModelCommands()
-	if len(defaultModels) != 1 || defaultModels[0].Geometry == nil || defaultModels[0].Geometry.Fallback != drawlist.ModelFallbackSupersample {
-		t.Fatalf("default solar did not restore supersample path: %#v", defaultModels)
+	if len(defaultModels) != 1 || defaultModels[0].Geometry == nil || !defaultModels[0].Geometry.Eligible || defaultModels[0].Geometry.Scale != 1 {
+		t.Fatalf("default solar did not retain native modern geometry: %#v", defaultModels)
 	}
 	if !r.client.antiAlias {
 		t.Fatal("preview DisableAntiAlias leaked into the next render")
+	}
+	modernSolar, err := r.RecordGeometry(ModelPreviewOptions{
+		Model: "armsolar", Owner: 0, Width: 192, Height: 160, Scale: 2,
+		Background: 0, KeyPlane: true, Structure: true,
+	})
+	if err != nil {
+		t.Fatalf("modern solar geometry: %v", err)
+	}
+	if modernSolar.Image != nil {
+		t.Fatal("geometry-only preview returned a CPU image")
+	}
+	modernModels := modernSolar.List.ModelCommands()
+	if len(modernModels) != 1 || modernModels[0].Geometry == nil || !modernModels[0].Geometry.Eligible || modernModels[0].Geometry.Scale != 1 {
+		t.Fatalf("modern solar did not record native geometry: %#v", modernModels)
+	}
+	if got := len(r.client.modelCommits); got != 0 {
+		t.Fatalf("geometry-only preview retained %d CPU model commits", got)
 	}
 
 	loaded, err := compiledmodel.Load(fs, "objects3d/armsolar.3do")

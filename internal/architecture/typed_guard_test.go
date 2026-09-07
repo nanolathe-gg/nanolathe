@@ -587,6 +587,9 @@ var float64FieldAllowances = map[string]string{
 // names the precise retail operation that needs binary64; all other float64
 // occurrences still use the shrink-only per-file baseline.
 var float64ScopeAllowances = map[string]float64Allowance{
+	"internal/combat/meteor.go func MeteorDelay":               {2, "I2 meteor source float32, working quotient and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
+	"internal/combat/meteor.go func MeteorDurationTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
+	"internal/combat/meteor.go func MeteorIntervalTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/clock/clock.go func *State.budget":               {5, "I2 clock budget product and float32 carry [01 §4.2]"},
 	"internal/clock/clock.go func *State.effectiveSpeedLocked": {3, "I2 clock speed multiplier [01 §4.2]"},
 	"internal/clock/clock.go func lagThrottleFactor":           {6, "I2 retained multiplayer throttle expression [01 §4.2]"},

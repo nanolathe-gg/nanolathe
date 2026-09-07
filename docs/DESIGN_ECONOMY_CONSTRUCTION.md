@@ -824,9 +824,16 @@ all three are owned and closed elsewhere.
 
 ## 7. Not implemented and open
 
-No `TODO(question)`, `TODO(T23)` or `TODO(T25)` marker remains in these three
-packages. The questions the contracts above still carry are these, each with the
-observation that would settle it:
+This section lists open economy, construction and feature contracts; it is not
+a claim that the three packages contain no source-question markers or an
+inventory of every session question. Current production questions that affect
+this area are recorded by their owning research sections: whether post-load
+score-panel ranks are recomputed ([08 R-SKIR-01 §2]); what a missing GAF
+feature sequence lookup returns ([05 R-FEAT-01 §1]); the factory attachment
+and queue lifecycle for `BMCode` values above one ([04 "Missing and unknown"]);
+and whether the kill-lead routine runs after every full-credit death or only
+after a counter change ([08 R-CAMP-01 §9]). The questions the contracts above
+still carry are these, each with the observation that would settle it:
 
 * Whether the build-assist approach radius's summand is a retail defect or an
   intended asymmetry: the instructions are established and reproduced, only the

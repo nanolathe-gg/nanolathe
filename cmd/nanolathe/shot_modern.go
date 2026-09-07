@@ -9,7 +9,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"github.com/nanolathe/nanolathe/internal/platform/ebitenapp"
 	"github.com/nanolathe/nanolathe/internal/platform/gpurender"
 )
 
@@ -22,10 +21,9 @@ import (
 //
 // The client is already stepped to the captured tick and its published buffer is
 // frozen; this loop never calls Client.Step, so the simulation does not advance
-// while the frame is drawn. ComposeFrameSnapshot prepares the committed draw
-// list once, and the modern executor replays that same list (C-G1). In both
-// mode the classic image and GPU list come from that one snapshot, making the
-// comparison a genuine two-executor parity check (C-G11).
+// while the frame is drawn. Modern-only capture records geometry once and
+// replays that cloned list (C-G1). Explicit both capture passes a snapshot whose
+// classic image remains a diagnostic reference; its pixels never enter the GPU.
 func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrames int, prepared *client.ComposedFrameSnapshot, preparation time.Duration, preparationLabel string) (*image.RGBA, error) {
 	if cl == nil {
 		return nil, fmt.Errorf("nanolathe: shot: modern capture has no client")
@@ -38,10 +36,14 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 	}
 	if prepared == nil {
 		started := time.Now()
-		snapshot := cl.ComposeFrameSnapshot()
-		prepared = &snapshot
+		live := cl.RecordFrame()
+		if live == nil {
+			return nil, fmt.Errorf("nanolathe: shot: modern capture recorded no frame")
+		}
+		list := live.Clone()
+		prepared = &client.ComposedFrameSnapshot{List: list}
 		preparation = time.Since(started)
-		preparationLabel = "CPU compose+snapshot"
+		preparationLabel = "modern geometry/draw-list recording (CPU)"
 	}
 	game := &modernShotGame{cl: cl, list: &prepared.List, w: w, h: h, profileFrames: profileFrames, preparation: preparation, preparationLabel: preparationLabel}
 
@@ -52,6 +54,14 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 	// scale factor never enters the capture.
 	ebiten.SetWindowVisible(false)
 	ebiten.SetWindowSize(w, h)
+	if profileFrames > 0 {
+		// Profiling is opt-in. Remove pacing and permit a hidden window to keep
+		// drawing so the observed cadence reflects device backpressure and host
+		// scheduling rather than vsync or focus throttling.
+		ebiten.SetVsyncEnabled(false)
+		ebiten.SetTPS(ebiten.SyncWithFPS)
+		ebiten.SetRunnableOnUnfocused(true)
+	}
 	if mapName != "" {
 		ebiten.SetWindowTitle("Nanolathe — " + mapName)
 	}
@@ -65,7 +75,7 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 		return nil, fmt.Errorf("nanolathe: shot: modern capture produced no frame")
 	}
 	ms := game.modelStats
-	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d cpu-fallback=%d shadows=%d missing-source=%d no-body=%d unsupported-geometry=%d unsupported-face=%d missing-texture=%d folded-faces=%d folded-strips=%d\n", mapName, ms.GPU, ms.CPUFallback, ms.Shadows, ms.MissingSource, ms.NoBody, ms.UnsupportedGeometry, ms.UnsupportedFace, ms.MissingTexture, ms.FoldedFaces, ms.FoldedStrips)
+	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d no-body=%d unsupported-geometry=%d unsupported-face=%d missing-texture=%d folded-faces=%d folded-strips=%d\n", mapName, ms.GPU, ms.Skipped, ms.Shadows, ms.ShadowsOmitted, ms.RevealOrOutlineOmitted, ms.WaterlineOrDiggerOmitted, ms.StagingCommandsOmitted, ms.StagedGroups, ms.ComposedGroups, ms.NoBody, ms.UnsupportedGeometry, ms.UnsupportedFace, ms.MissingTexture, ms.FoldedFaces, ms.FoldedStrips)
 	if game.profileFrames > 0 {
 		got := 0
 		if game.profileStats != nil {
@@ -94,7 +104,7 @@ type modernShotGame struct {
 	done             bool
 	profileFrames    int
 	profileStats     *gpuProfileStats
-	profileFrame     int
+	profileWindow    *gpuProfileWindow
 	readback         []byte
 	preparation      time.Duration
 	preparationLabel string
@@ -110,11 +120,10 @@ func (g *modernShotGame) Update() error {
 	return nil
 }
 
-// Draw replays the prepared committed frame through the GPU executor and reads
-// the expanded RGBA back — all inside the loop, where GPU operations are valid.
-// ReadPixels returns premultiplied-alpha bytes; the expansion pass forces alpha
-// opaque (C-G8), so for these pixels premultiplied equals straight and the
-// buffer is a straight RGBA image directly comparable to the classic capture.
+// Draw replays the prepared committed frame through the GPU executor. A profile
+// deliberately does no ReadPixels during warm-up or measured draws: it times
+// Execute plus screen.DrawImage enqueue and observes draw-start cadence. One
+// final readback happens only after the cadence and submission arrays are full.
 func (g *modernShotGame) Draw(screen *ebiten.Image) {
 	if g.done {
 		return
@@ -130,50 +139,47 @@ func (g *modernShotGame) Draw(screen *ebiten.Image) {
 	}
 	if g.profileFrames > 0 && g.profileStats == nil {
 		g.profileStats = newGPUProfileStats(g.profileFrames)
+		g.profileWindow = newGPUProfileWindow(g.profileFrames)
 		g.readback = make([]byte, 4*g.w*g.h)
 	}
+	var profileMeasured bool
 	if g.profileFrames > 0 {
-		g.profileFrame++
+		drawStart := time.Now()
+		var cadence time.Duration
+		var hasCadence bool
+		profileMeasured, cadence, hasCadence = g.profileWindow.observeDraw(drawStart)
+		if hasCadence {
+			g.profileStats.addCadence(cadence)
+		}
 	}
-	// The model table was populated while the prepared snapshot was recorded, so
-	// the source is installed before every replay — the same source the battle
-	// app installs, so both modern paths draw models identically (C-G5).
-	g.gpu.SetModelSource(ebitenapp.NewModelSource(g.cl))
-	submitStart := time.Now()
+	var submitStart time.Time
+	if profileMeasured {
+		submitStart = time.Now()
+	}
 	img := g.gpu.Execute(g.list, g.w, g.h)
-	submission := time.Since(submitStart)
 	if img == nil {
 		g.err = fmt.Errorf("nanolathe: shot: modern executor returned no surface for %dx%d", g.w, g.h)
 		g.done = true
 		return
 	}
-	g.modelStats = g.gpu.ModelStats()
-	if g.profileFrames > 0 {
-		// ReadPixels is intentionally inside the timed region. It synchronizes
-		// deferred device work, so this is a diagnostic of Execute plus the
-		// readback stall, not a claim about GPU execution time [DESIGN_GPU_RENDERER.md §6].
-		if g.profileFrame > gpuProfileWarmupFrames {
-			syncStart := submitStart
-			img.ReadPixels(g.readback)
-			synchronized := time.Since(syncStart)
-			g.profileStats.add(submission, synchronized, synchronized-submission)
-		} else {
-			img.ReadPixels(g.readback)
-		}
-	} else {
-		g.readback = make([]byte, 4*g.w*g.h)
-		img.ReadPixels(g.readback)
+	screen.DrawImage(img, &ebiten.DrawImageOptions{})
+	if profileMeasured {
+		g.profileStats.addSubmission(time.Since(submitStart))
 	}
-	// Only the final frame is retained as a capture. Keeping intermediate
-	// frames device-backed avoids letting PNG-image allocations perturb later
-	// measured frames.
-	if g.profileFrames == 0 || g.profileFrame >= gpuProfileWarmupFrames+g.profileFrames {
+	g.modelStats = g.gpu.ModelStats()
+
+	profileComplete := g.profileFrames > 0 && g.profileWindow.complete() && g.profileStats.complete()
+	if g.profileFrames == 0 || profileComplete {
+		if g.readback == nil {
+			g.readback = make([]byte, 4*g.w*g.h)
+		}
+		// ReadPixels returns premultiplied-alpha bytes; expansion forces alpha
+		// opaque (C-G8), so the retained buffer is directly comparable to the
+		// classic capture. It is intentionally outside every profile sample.
+		img.ReadPixels(g.readback)
 		out := image.NewRGBA(image.Rect(0, 0, g.w, g.h))
 		copy(out.Pix, g.readback)
 		g.out = out
-	}
-	screen.DrawImage(img, &ebiten.DrawImageOptions{})
-	if g.profileFrames == 0 || g.profileFrame >= gpuProfileWarmupFrames+g.profileFrames {
 		g.done = true
 	}
 }

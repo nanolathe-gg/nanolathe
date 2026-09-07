@@ -47,14 +47,17 @@ type Renderer struct {
 	// the translucent strip blit, shadow the feature shadow stencil, and destTable
 	// the shared light/shade rect and lit point pass. glyph is the keyed FNT text
 	// blit (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4).
-	litBlit     *ebiten.Shader
-	tint        *ebiten.Shader
-	shadow      *ebiten.Shader
-	destTable   *ebiten.Shader
-	glyph       *ebiten.Shader
-	modelKey    *ebiten.Shader
-	modelBody   *ebiten.Shader
-	modelCommit *ebiten.Shader
+	litBlit               *ebiten.Shader
+	tint                  *ebiten.Shader
+	shadow                *ebiten.Shader
+	destTable             *ebiten.Shader
+	glyph                 *ebiten.Shader
+	modelKey              *ebiten.Shader
+	modelBody             *ebiten.Shader
+	modelCommit           *ebiten.Shader
+	modelShadowCommit     *ebiten.Shader
+	modelClip             *ebiten.Shader
+	modelPack, modelChild *ebiten.Shader
 
 	// offscreen is the indexed frame surface, RGBA8 with the palette index in the
 	// red channel (C-G4). output is the expanded RGBA surface Execute returns.
@@ -76,10 +79,13 @@ type Renderer struct {
 	// modelKey is the subject-local maximum byte-key plane. modelCoord is a
 	// same-sized coordinate source used to address the key/table/texture inputs
 	// from one Kage source space while a face carries UVs separately.
-	modelKeyImage *ebiten.Image
-	modelColor    *ebiten.Image
-	modelCoord    *ebiten.Image
-	w, h          int
+	modelKeyImage                 *ebiten.Image
+	modelColor                    *ebiten.Image
+	modelShadowImage              *ebiten.Image
+	modelProcessed                *ebiten.Image
+	modelStage, modelStageScratch *ebiten.Image
+	modelCoord                    *ebiten.Image
+	w, h                          int
 
 	// tileAtlases caches one tile-index atlas per *world.Terrain identity, built
 	// on first Terrain draw and reused for the map's lifetime (C-G4,
@@ -115,12 +121,6 @@ type Renderer struct {
 	verts []ebiten.Vertex
 	idx   []uint16
 
-	// modelSrc resolves a drawlist.Model.Ref to its finished body and shadow
-	// images for the current frame (C-G5, models.go). It is installed per frame by
-	// the wiring layer through SetModelSource, because the client-side model table
-	// it reads is populated during recording; with no source a Model command draws
-	// nothing.
-	modelSrc   ModelSource
 	modelStats ModelStats
 }
 
@@ -137,9 +137,9 @@ func New(pal *palette.Tables, w, h int) *Renderer {
 	return r
 }
 
-// NewChecked is New but also returns the expansion shader's compile error, if
-// any. The renderer is always usable (Clear and the stubs work); only Expand
-// depends on the shader.
+// NewChecked is New but also returns the first shader compilation error. Each
+// drawing family guards its own resources; callers report the initialization
+// error before attempting a frame.
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	shader, err := newExpandShader()
 	solid, solidErr := newSolidShader()
@@ -158,29 +158,37 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	modelKey, modelKeyErr := newModelKeyShader()
 	modelBody, modelBodyErr := newModelBodyShader()
 	modelCommit, modelCommitErr := newModelCommitShader()
+	modelShadowCommit, modelShadowCommitErr := newModelShadowCommitShader()
+	modelClip, modelClipErr := newModelClipShader()
+	modelPack, modelPackErr := newModelPackShader()
+	modelChild, modelChildErr := newModelChildShader()
 	r := &Renderer{
-		tables:      uploadTables(pal),
-		expand:      shader,
-		solid:       solid,
-		atlas:       atlas,
-		gafKeyed:    gafKeyed,
-		indexScaled: indexScaled,
-		fogGray:     fogGray,
-		fogCheck:    fogCheck,
-		fogGrayMask: fogGrayMask,
-		fogPatMask:  fogPatMask,
-		litBlit:     litBlit,
-		tint:        tint,
-		shadow:      shadow,
-		destTable:   destTable,
-		glyph:       glyph,
-		modelKey:    modelKey,
-		modelBody:   modelBody,
-		modelCommit: modelCommit,
-		tileAtlases: make(map[*world.Terrain]*tileAtlas),
-		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
-		pcxImages:   make(map[*formats.PCX]*ebiten.Image),
-		fntAtlases:  make(map[*formats.FNT]*fntAtlas),
+		tables:            uploadTables(pal),
+		expand:            shader,
+		solid:             solid,
+		atlas:             atlas,
+		gafKeyed:          gafKeyed,
+		indexScaled:       indexScaled,
+		fogGray:           fogGray,
+		fogCheck:          fogCheck,
+		fogGrayMask:       fogGrayMask,
+		fogPatMask:        fogPatMask,
+		litBlit:           litBlit,
+		tint:              tint,
+		shadow:            shadow,
+		destTable:         destTable,
+		glyph:             glyph,
+		modelKey:          modelKey,
+		modelBody:         modelBody,
+		modelCommit:       modelCommit,
+		modelShadowCommit: modelShadowCommit,
+		modelClip:         modelClip,
+		modelPack:         modelPack,
+		modelChild:        modelChild,
+		tileAtlases:       make(map[*world.Terrain]*tileAtlas),
+		gafImages:         make(map[*formats.GAFFrame]*ebiten.Image),
+		pcxImages:         make(map[*formats.PCX]*ebiten.Image),
+		fntAtlases:        make(map[*formats.FNT]*fntAtlas),
 	}
 	if w > 0 && h > 0 {
 		r.ensureSize(w, h)
@@ -236,6 +244,18 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	if err == nil {
 		err = modelCommitErr
 	}
+	if err == nil {
+		err = modelShadowCommitErr
+	}
+	if err == nil {
+		err = modelClipErr
+	}
+	if err == nil {
+		err = modelPackErr
+	}
+	if err == nil {
+		err = modelChildErr
+	}
 	return r, err
 }
 
@@ -254,15 +274,18 @@ func (r *Renderer) ensureSize(w, h int) {
 	r.destScratch = ebiten.NewImage(w, h)
 	r.modelKeyImage = ebiten.NewImage(w, h)
 	r.modelColor = ebiten.NewImage(w, h)
+	r.modelShadowImage = ebiten.NewImage(w, h)
+	r.modelProcessed = ebiten.NewImage(w, h)
+	r.modelStage = ebiten.NewImage(w, h)
+	r.modelStageScratch = ebiten.NewImage(w, h)
 	r.modelCoord = ebiten.NewImage(w, h)
 	r.w, r.h = w, h
 }
 
 // Execute replays the recorded frame list through this renderer and returns the
 // expanded RGBA surface for the adapter to present (docs/DESIGN_GPU_RENDERER.md
-// §2.3). The list is visited in exact record order (C-G3); this unit's Sink
-// routes Clear and Expand to the real passes and stubs every drawing family, so
-// a frame is Clear then Expand and the whole surface becomes PALETTE.PAL[0].
+// §2.3). The list is visited in exact record order (C-G3), ending with the
+// palette expansion after every indexed composite.
 //
 // It returns nil when the surface cannot be sized (a degenerate w/h) or when the
 // list is nil, so the adapter can fall back to leaving the screen untouched.

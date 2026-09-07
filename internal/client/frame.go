@@ -135,9 +135,12 @@ func (c *Client) Frame() {
 	// palette animation stays possible in later phases
 	// (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
 	wasRecordingGeometry := c.recordModelGeometry
+	wasGeometryOnly := c.geometryOnlyModels
 	c.recordModelGeometry = false
+	c.geometryOnlyModels = false
 	c.recordFrame()
 	c.recordModelGeometry = wasRecordingGeometry
+	c.geometryOnlyModels = wasGeometryOnly
 	c.list.Replay(c.classicSink())
 }
 
@@ -187,9 +190,12 @@ func (c *Client) RecordFrame() *drawlist.List {
 		return nil
 	}
 	wasRecordingGeometry := c.recordModelGeometry
+	wasGeometryOnly := c.geometryOnlyModels
 	c.recordModelGeometry = true
+	c.geometryOnlyModels = true
 	c.recordFrame()
 	c.recordModelGeometry = wasRecordingGeometry
+	c.geometryOnlyModels = wasGeometryOnly
 	return &c.list
 }
 

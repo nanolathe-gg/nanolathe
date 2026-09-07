@@ -72,6 +72,9 @@ type Client struct {
 	// Ordinary classic Frame composition leaves it false so normal presentation
 	// does not allocate model packets before the modern executor asks for them.
 	recordModelGeometry bool
+	// geometryOnlyModels records native-scale polygons without allocating or
+	// rasterizing CPU model images. RecordFrame selects it for modern mode.
+	geometryOnlyModels bool
 
 	// modelCommits is the per-frame client-side table drawlist.Model.Ref indexes:
 	// one entry per composed model subject in record order, holding what the
@@ -620,9 +623,12 @@ func (c *Client) ComposeFrameSnapshot() ComposedFrameSnapshot {
 		return ComposedFrameSnapshot{}
 	}
 	wasRecordingGeometry := c.recordModelGeometry
+	wasGeometryOnly := c.geometryOnlyModels
 	c.recordModelGeometry = true
+	c.geometryOnlyModels = false
 	cur := c.composeCurrentFrame()
 	c.recordModelGeometry = wasRecordingGeometry
+	c.geometryOnlyModels = wasGeometryOnly
 	snapshot := ComposedFrameSnapshot{
 		Width:     c.width,
 		Height:    c.height,

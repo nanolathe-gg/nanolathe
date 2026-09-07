@@ -10,7 +10,9 @@ three user-facing modes, backed by one CPU and one shared GPU implementation.
 For this experimental milestone the only public choices remain
 `--renderer=classic|modern`, default classic. All new rendering is behind
 `--renderer=modern`; no Enhanced flag or runtime options entry is added yet.
-The simulation cannot tell which executor is selected.
+The simulation cannot tell which executor is selected. The current GPU-only
+execution contract is §9; it supersedes the historical P1–P3 CPU model bridge
+and fallback requirements below.
 
 This document is listed by [ARCHITECTURE.md](ARCHITECTURE.md), which owns
 package boundaries. [DESIGN_PRESENTATION_CLIENT.md](DESIGN_PRESENTATION_CLIENT.md)
@@ -187,13 +189,16 @@ writes both and the diff. The diff itself is `tools/framediff` (§6).
   each child independently, then composite children sequentially using the full
   signed shifted-key comparison and wrapped-byte store [03 R-REN-03A §4]. Never
   flatten children into one maximum reduction. Waterline, digger, reveal and
-  outline retain their established stage order. The first prototype may use
-  explicitly reported CPU fallback for unsupported subjects; no silent omission.
+  outline retain their established stage order when implemented. The current
+  prototype omits unsupported stages or subjects and reports them explicitly
+  (§9); it never substitutes a CPU-rendered model image.
 * **C-G6 Structure supersample.** Preserve the cached/all versus live gate,
   pre-shear doubled projection, ordered ALP color resolve, and top-left key
   resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
   Mobile units are not supersampled in GPU Classic. A full subject-wide MSAA
   or SSAA replacement belongs to Enhanced and needs a separate design.
+  This is a future parity contract: the current GPU prototype draws ordinary
+  structures at native scale and omits this resolve stage (§9).
 * **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
   grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
   shader over the world image: solid fills write the dark index, gray fills
@@ -246,12 +251,14 @@ GPU model faces may be triangulated and attributes interpolated by the graphics
 backend instead of the classic authored-polygon fixed-point edge/span walk
 [03 R-RAST-01 §1]. This can change face interiors as well as edges. The reason
 is to use conventional GPU rasterization while preserving the original look.
-Large occlusion errors, missing subjects, incorrect stage ordering, and unstable
-seams are defects, not covered by this allowance. Human review of captures and
+Large occlusion errors, unexpected missing subjects, incorrect stage ordering,
+and unstable seams are defects, not covered by this allowance. Explicit GPU-only
+omissions under §9 are tracked separately from raster approximations. Human review of captures and
 motion is the acceptance gate; keep approved recipes and measured differences.
 
-P3a uses two GPU-owned preparation paths. Simple clockwise projected rings use
-conventional triangles. A folded projected ring is prepared as one-pixel-high
+The current prototype uses two geometry preparation paths. Simple untextured
+clockwise projected rings use conventional triangles. Textured quads and folded
+projected rings are prepared as one-pixel-high
 quads from the same ordered decreasing-index left chain and increasing-index
 right chain as the established span walk; only rows whose right edge is strictly
 right of the left edge become strips. The strips carry interpolated key, UV and
@@ -260,19 +267,25 @@ colour write. This preserves the positive-span topology without uploading a CPU
 body image. It is a prototype preparation cost and not a claim of exact
 inside-face interpolation parity.
 
-P3b keeps folded-row attributes in private float32 preparation vertices until
-the device fragment stage. Each row uses the last applicable edge on the
-ordered left and right chains, ceilings both fractional X intersections,
-emits a one-pixel-high positive span, and keeps key, UV and shade lanes
-constant through that row. A folded ring with no positive span is valid empty
-input and is skipped; it does not force a CPU fallback. Folded faces still
-require their SHD and resolved texture resources before GPU admission. The
-shared GAF upload retains red for transparent-marked texels so model ownership
-can see the physical texture index while keyed sprite families continue to use
-their green coverage flag. The GPU model commit follows the researched
-composition key for index 1; the current CPU model coverage path may retain a
-covered index 1. Such pixels are a documented comparison exception pending a
-classic coverage reconciliation, and are not accepted as visual parity.
+The texture-alignment correction extends two-chain row preparation to textured
+quads. Conventional quad triangulation created a visible internal UV bend on
+ARMSOLAR, so the original ordered polygon determines each row's endpoints.
+Rows sharing a source face are batched up to the index-transport limit. GPU
+varyings are adjusted by half a horizontal step so sampling at a pixel center
+recovers the integer-column lane, and the texture shader floors U/V before
+addressing the texel center. A 2^-20 texel guard corrects observed floating
+endpoint residue; this is a chosen GPU numerical tolerance which can also bias
+values that close to a texel boundary, not a recovered retail constant.
+
+Folded-row attributes remain private float32 preparation data until the device
+fragment stage. Each row uses the last applicable descending edge on the ordered
+chains with half-open Y bounds and the established biased fixed-point X walk.
+Empty positive-span coverage is skipped. All texture sampling, palette shading,
+key comparison and color writes remain on the device. The shared GAF upload
+retains raw color indices even for transparent-marked texels; keyed sprite
+families still use their independent coverage flag. GPU final model composition
+keys index 1 as researched. The CPU target's differing index-1 coverage remains
+a documented comparison exception, not a change to classic.
 
 ### 5.2 Enhanced zoom and strategic view (planned)
 
@@ -325,16 +338,20 @@ Three independent gates replace the old single tolerance gate:
    per-scene thresholds only after visual review. No rule that merely connects a
    difference cluster to an edge, and no threshold derived as automatic approval.
 3. **Performance:** repeated device-backed replay of one frozen list after
-   warm-up. Recording may consume private presentation RNG and drain audio, so
-   never re-record that list inside the measured loop. Report one-time preparation
-   separately (classic comparison preparation includes CPU composition and snapshot
-   copying), and submission and synchronized render/readback distributions
-   (median/p95/p99). ReadPixels includes GPU synchronization wait plus transfer;
-   it does not isolate readback overhead. A synchronous
-   readback is not normal presentation and its timing is not an isolated GPU
-   timer. Existing headless `--profile-seconds` measures classic CPU composition
-   only. Record hardware/backend, resolution, frames and scene. No universal
-   60 fps claim from one idle scene or submission time alone.
+   warm-up. Do not re-record that list in the measured loop: recording can
+   consume private presentation RNG and drain audio. Report one-time preparation
+   separately, distinguishing modern geometry recording from an explicitly
+   requested classic comparison. Screenshot readback and PNG encoding are
+   excluded from all rendering/cadence metrics. Submit repeated frames to the
+   screen without readback; capture the final PNG only after the measured
+   sequence. Report CPU submission duration and observed Draw-to-Draw cadence
+   (median/p95/p99), with pacing settings, hardware/backend, resolution, frames
+   and scene. Cadence includes device backpressure, presentation and host
+   scheduling; submission alone is not GPU time, and neither is an isolated
+   GPU timestamp. A frozen-list benchmark excludes simulation and recurring
+   preparation, so it cannot establish a universal gameplay frame-rate claim.
+   Existing headless `--profile-seconds` measures classic composition only;
+   it must not be presented as modern gameplay performance.
 
 The existing matrix is useful history, not exhaustive coverage: its script does
 not vary DitheredFog and Ring Atoll does not ensure digger or submerged-hull
@@ -351,9 +368,10 @@ behavior but proves no texture interpolation contract. Inspect sequential frames
 reuse. Backend coverage is reported honestly; one host is not cross-platform proof.
 
 Capture recipes, command settings, revision metadata and policies are versioned;
-retail images/assets stay local and uncommitted. Preserve the exact Phase 2
-composition path as the fallback while GPU subject coverage grows. Unsupported
-prototype cases must be listed in the handoff, not described as full GPU parity.
+retail images/assets stay local and uncommitted. Preserve the classic reference
+independently; §9 prohibits substituting its output for missing GPU stages.
+Unsupported prototype cases must be listed in the handoff, not described as full
+GPU parity.
 
 ## 7. Research map
 
@@ -478,3 +496,130 @@ gates.
 The isolated model matrix uses 320×240 surfaces so the activated solar panels
 fit at 2x. `--shot-gpu-profile-frames` profiles frozen battle captures only;
 model preview captures reject it explicitly instead of silently ignoring it.
+
+## 9. GPU-only modern execution (current user-approved contract)
+
+The user requires `--renderer=modern` to exercise the GPU implementation even
+when coverage is incomplete. CPU-rendered model bodies and shadows must never
+be substituted into the modern frame. Classic remains unchanged and separate.
+This instruction replaces the earlier fallback-first prototype staging policy.
+
+- `Client.RecordFrame` records geometry and the existing non-model draw
+  commands without allocating/rasterizing software model color, coverage or
+  height planes. CPU transforms, visibility/order decisions, texture decoding,
+  and GPU vertex preparation remain legitimate preparation work.
+- Ordinary completed structures emit native-scale geometry regardless of the
+  classic Anti-Alias setting. Until its GPU implementation exists, the structure
+  supersample/resolve stage is omitted, not routed through the CPU. This makes
+  live ARMSOLAR exercise the same model rasterizer as its isolated GPU preview.
+- Model shadows, nanoframe reveal/outline, waterline/digger processing, and
+  carrier/child composition now have GPU passes (§10). Unsupported geometry or
+  missing material resources remain explicit skips. Resolved subjects retain
+  selection chrome, and both recording routes preserve per-primitive texture
+  cursor registration. A missing carrier still presents valid children.
+- Remove the model-image source adapter from the live platform and modern
+  screenshot paths. The GPU executor consumes geometry; missing geometry or
+  resources records a skip rather than consulting a CPU renderer.
+- When `--shot-renderer` is omitted, screenshots follow `--renderer`, so
+  `--renderer=modern --shot=frame.png` exercises the GPU. Explicit `classic`
+  and `both` remain diagnostic choices. Reject the CPU-only `--profile-seconds`
+  path with `--renderer=modern`; use the GPU capture profiler instead.
+- An explicit `--shot-renderer=both` comparison may compose the classic
+  reference separately as diagnostic work. It does not supply pixels to the
+  modern executor. The modern geometry describes native-scale bodies even when
+  the classic reference applies its structure resolve. Preserve a single
+  presentation walk where possible so presentation RNG/audio side effects are
+  not repeated. Ordinary modern-only captures use geometry recording only.
+- Texture alignment is a correctness gate before this switch: the activated
+  and synthetic-open ARMSOLAR panel's blue/black boundary must not develop the
+  visibly bent/zig-zag mapping reported at 2x. A mapping correction is driven by
+  the original polygon and authored texture coordinates, never a unit-specific
+  UV adjustment. Keep a focused authored fixture and real-device comparisons.
+
+Verification adds an AA-enabled structure recording check with no CPU pixel
+planes, GPU skip diagnostics for unsupported stages, and real-GPU solar captures
+with the classic option enabled. The performance policy is §6: no screenshot
+readback or PNG encode time is counted toward presentation performance.
+
+### Current recording API
+
+`Client.RecordFrame()` selects geometry-only model preparation for live modern
+presentation. Its returned list remains same-frame data; callers retaining a
+frozen diagnostic list call `Clone()`. `ComposeFrameSnapshot()` additionally
+composes the classic reference and includes native-scale GPU geometry; its
+classic image is never a GPU input. `ModelPreviewRenderer.RecordGeometry()`
+returns a durable list, palette and background with a nil `Image`, while
+`RecordModel()` retains the classic preview image for explicit comparisons.
+The model-only `both` recipe disables the classic structure resolve to isolate
+native-scale texture mapping and says so in its log. Modern-only previews do
+not require disabling the classic Anti-Alias option.
+
+`gpurender.Model` consumes `Model.Geometry` and never reads `Model.Ref`; that
+reference belongs only to the classic sink. The former `ModelSource`,
+`ModelImage` and client/platform image adapters have been removed. `ModelStats`
+reports GPU bodies, GPU shadows, composed groups, skips and geometry/material
+failures. Legacy omission counters remain available for explicitly unsupported
+packets; trace-only records are not counted as missing bodies. These are
+diagnostic counts, not simulation data.
+
+## 10. Approximate visual parity before enhanced features
+
+The current implementation sequence is GPU model shadows, reveal/outline and
+waterline/digger passes, attached-unit staging, then structure resolve and a
+combat/effect capture audit. All work stays behind `--renderer=modern`. Enhanced
+lighting, glow, camera zoom and interpolation wait until this coverage is ready
+for visual review. New passes consume immutable geometry and palette tables;
+none may upload a software-rendered model image or read GPU pixels during play.
+
+### Model shadows
+
+A body packet can own a separate shadow geometry packet. The recorder reuses
+`collectShadowPolys` and `shadowAnchor`, preserving the current classic
+projection, ordering and placement without allocating software image planes.
+The GPU rasterizes the silhouette, retains it while rasterizing the body, then
+punches the body's coverage out and blends each remaining shadow pixel once
+through `ALP[src*256+dst]`. The destination is snapshotted before that commit;
+multiple faces of the same silhouette must not repeatedly darken the ground.
+The body commits afterward. Clones own both packets independently.
+
+This milestone targets the existing classic image. It inherits classic's
+explicit use of the structure rerasterization technique for mobile and Digger
+shadows; implementing the retail silhouette branches is separate work. Classic's
+shadow Shading gate also disagrees with [03 R-REN-03D §1, §4]; reuse the existing
+producer gate for comparison and retain that research conflict explicitly.
+Actual GPU shadows and omitted shadows are reported separately. The device
+fixture verifies the blend, body punch and overlapping-face behavior; paired
+battle captures verify placement against the classic output.
+
+### Reveal, outline and submerged geometry
+
+A geometry packet carries the producer's resolved nanoframe bands, complete
+outline rings, and waterline/sonar/owner decision. The body fragment applies the
+reveal after material lookup, writing the composition background when erased
+while retaining key ownership. Outline geometry consists of the two row
+endpoints from each ring, with the same subject key test; no polygon-border
+line primitive replaces that pass. The GPU applies BLUE TABLE or erasure at the
+inclusive waterline threshold, then the Digger erase. Keyless subjects skip
+both clipping passes. The final body coverage punches its shadow, as in classic.
+These passes replace the whole-subject omissions from §9. No software image
+planes are allocated during recording. [03 R-COMP-01 §3][03 R-WATER-01 §2]
+
+### Attached-unit composition
+
+A keyed carrier owns an ordered list of child geometry and signed height deltas.
+Each child keeps its own reveal, outline, waterline and Digger processing. Its
+shadow-only command remains before the carrier's shadow/body command, preserving
+classic order without uploading a CPU image. The GPU packs the carrier's color
+and key planes into red/green channels, including keys under erased pixels,
+then merges each finished child using a separate destination image. The signed
+shifted key is compared before narrowing to the stored byte. The next child
+sees that narrowed key. Finally the group commits once. The current classic
+per-subject waterline policy is retained; this work does not change classic's
+cached/live-piece or group-waterline research gaps. [03 R-REN-03A §4]
+
+A keyless carrier records independent body commands in painter order; a missing
+carrier still records each valid child independently. Both diagnostic and
+geometry-only recording preserve this behavior and texture cursor registration.
+Nested child groups are not emitted by the current presentation walk. A device
+fixture covers carrier/child occlusion, signed compare before wrapped store,
+later-child ordering, invisible key ownership, and child shadow-only commits.

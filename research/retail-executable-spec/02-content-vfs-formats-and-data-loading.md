@@ -2708,7 +2708,8 @@ reads, the section it must sit in, the accessor and width, the default, where
 the value is stored and who reads it — is `[R-MAP-01 §3]` (global keys) and
 `[R-MAP-01 §5]` (schema keys) below.
 
-**Meteor merge and enable contract.** The map-global keys feed a storm record
+**Meteor merge and enable contract — Established.** The selected schema keys
+([R-MAP-01 §5]) feed a storm record
 committed to the mission globals. An empty `MeteorWeapon` is the only disable
 predicate: it disables the shower and loads the defaults. With a nonempty
 weapon name the authored parameters are taken, and if any of radius, density,
@@ -2718,22 +2719,21 @@ parameters substitute rather than disable, and the enable step is reached on
 both the authored and substituted paths. A map authoring nonzero parameters
 with no weapon key is disabled with its parameters discarded.
 
-**Unknown — substitution granularity.** Document 06 §6.5 states a per-field
-reading — each zero parameter substitutes its corresponding default — while
-this section states the all-or-nothing reading above; the two disagree
-whenever a map authors only some parameters as zero. Decider: one probe — a
-mission authoring, say, radius nonzero and density zero, then trace which
-values reach the spawned storm. Until probed, treat the substitution
-granularity as `TODO(question)`; nothing else in either contract depends on
-it.
-
 Stock content authors `[Default]` as weapon `Meteor`, radius 300, density 2,
-duration 5, interval 60. If that record itself carries an empty weapon name
-or a zero density/duration/interval, the loader raises the exact diagnostic
-`Hey, hoser!  The default meteor shower data was bogus!` (note the double
-space after `hoser!`) and commits the partly loaded record as-is. A missing
-file or missing `[Default]` section returns early leaving the record
-untouched.
+duration 5, interval 60. **Established (direct static trace):** a missing file
+or missing `[Default]` section returns before changing the incoming record,
+without a bogus-data diagnostic. An existing section without `MeteorWeapon`
+writes an empty weapon string, emits `Hey, hoser!  The default meteor shower data was bogus!`
+(note the double space after `hoser!`), and terminates the process with failure.
+The numeric fields have not been read on that fatal branch. A present weapon key, including an empty value, admits the numeric reads:
+radius is stored as an integer, and density, duration and interval as single
+precision. Any zero among those four numbers emits the same diagnostic after
+the writes and terminates the process with failure. Those partially written
+values never reach storm installation. These are fatal branches, not a
+recoverable partial-default policy. The enable bit is chosen from the original
+mission weapon's emptiness, independently of the substituted weapon string.
+Installation converts the stored numbers using the working-precision and
+signed-64/low-word boundaries in [06 §6.5].
 
 **Meteor scheduler and geometry.** The storm scheduler runs unconditionally
 after wind jitter in the simulation tick body. Timing is integral:
@@ -4111,11 +4111,6 @@ questions do not supersede those consumer contracts.
   "Sound aliases" · a reader/lifetime trace beyond that census. DirectSound
   sample and streaming descriptors are established in [03 R-AUD-01 §1] and
   [03 R-AUD-02 §1]; those flags are not an open loader question.
-* Meteor zero-parameter substitution granularity — whole-record versus
-  per-field merge of `gamedata/METEOR.TDF [Default]` · §6 "Map files",
-  [06 §6.5] · manual retail observation (a mission authoring one nonzero and
-  one zero parameter, tracing which values reach the storm). Marked
-  `TODO(question)` at the site.
 * Zero-length WAV sample: the classifier reports raw with length 0; whether
   the DirectSound buffer creation fails (null sample) or an empty buffer
   plays nothing · §7 `[R-MALF-01 §10]` · static trace of the buffer-create

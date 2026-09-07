@@ -39,6 +39,12 @@ type ModelPreviewOptions struct {
 	Background uint8
 	Structure  bool
 	KeyPlane   bool
+	// These supplied committed presentation lanes allow isolated construction
+	// and submerged/digger review. They do not advance a simulation or COB.
+	BuildRemaining   float32
+	WorldHeight      int32
+	UnderwaterExempt bool
+	Digger           bool
 	// DisableAntiAlias suppresses only the structure 2x composition resolve for
 	// this preview invocation. Its zero value preserves the renderer's default
 	// preview behavior; it does not change the structure/shaded model path.
@@ -52,6 +58,10 @@ type ModelPreviewOptions struct {
 	// claiming to run its COB activation script [03 §2.4]. Entries are matched
 	// by name, as they are on ordinary published unit views.
 	PiecePoses []frame.PieceView
+	// Children supplies attached committed views for composition review. Their
+	// positions are relative to this preview's world origin; identities and
+	// definition-derived fields are provided explicitly by the caller.
+	Children []frame.UnitView
 }
 
 // ModelPreviewRecord is one reproducible static preview. Image is the classic
@@ -108,6 +118,17 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 // It is a static pose renderer: PiecePoses represent supplied committed lanes,
 // not COB activation or animation.
 func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPreviewRecord, error) {
+	return r.recordModel(opts, false)
+}
+
+// RecordGeometry produces a modern-only preview packet. It performs the model
+// transform and texture resolution but never allocates or rasterizes a CPU
+// composition image. Its Image is nil; callers replay List on the GPU.
+func (r *ModelPreviewRenderer) RecordGeometry(opts ModelPreviewOptions) (ModelPreviewRecord, error) {
+	return r.recordModel(opts, true)
+}
+
+func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnly bool) (ModelPreviewRecord, error) {
 	if r == nil || r.client == nil || r.palette == nil {
 		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: renderer is not initialized")
 	}
@@ -131,11 +152,18 @@ func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPrevi
 
 	c := r.client
 	previousAntiAlias := c.antiAlias
+	previousGeometryOnly := c.geometryOnlyModels
 	c.antiAlias = !opts.DisableAntiAlias
-	defer func() { c.antiAlias = previousAntiAlias }()
+	c.geometryOnlyModels = geometryOnly
+	defer func() {
+		c.antiAlias = previousAntiAlias
+		c.geometryOnlyModels = previousGeometryOnly
+	}()
 	c.width, c.height = opts.Width, opts.Height
-	c.indexed = make([]uint8, opts.Width*opts.Height)
-	c.rgba = make([]byte, opts.Width*opts.Height*4)
+	if !geometryOnly {
+		c.indexed = make([]uint8, opts.Width*opts.Height)
+		c.rgba = make([]byte, opts.Width*opts.Height*4)
+	}
 	// The preview records the model into c.list and replays it once, the same
 	// record-then-replay the committed frame uses (WU-1.8). Reset the list, point
 	// arena and model-commit table first, then paint the background directly: the
@@ -144,8 +172,10 @@ func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPrevi
 	c.list.Reset()
 	c.pointArena = c.pointArena[:0]
 	c.modelCommits = c.modelCommits[:0]
-	for i := range c.indexed {
-		c.indexed[i] = opts.Background
+	if !geometryOnly {
+		for i := range c.indexed {
+			c.indexed[i] = opts.Background
+		}
 	}
 	// World position is chosen so modelAnchor lands on the image centre. Scale
 	// magnifies the ordinary orthographic game-camera projection without
@@ -155,7 +185,7 @@ func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPrevi
 		scale = 1
 	}
 	anchorX := int64(float32(opts.Width/2) / scale)
-	anchorZ := int64(float32(opts.Height/2) / scale)
+	anchorZ := int64(float32(opts.Height/2)/scale) + int64(opts.WorldHeight>>1)
 	c.cam = &camera.Camera{
 		ViewW: int32(opts.Width), ViewH: int32(opts.Height),
 		MapW: int32(opts.Width), MapH: int32(opts.Height), Scale: scale,
@@ -168,16 +198,20 @@ func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPrevi
 		// A preview has an explicit colour-byte input even when it is outside
 		// the LOGOS entry. The resolver will leave those team faces empty;
 		// rejecting or wrapping it would invent a visible colour.
-		OwnerColorKnown: true,
-		Model:           renderName,
-		Heading:         opts.Heading,
-		Pitch:           opts.Pitch,
-		Bank:            opts.Bank,
-		X:               numeric.Fixed(anchorX << 16),
-		Z:               numeric.Fixed(anchorZ << 16),
-		BMCode:          !opts.Structure,
-		ZBuffer:         opts.KeyPlane,
-		NoShadow:        true,
+		OwnerColorKnown:  true,
+		Model:            renderName,
+		Heading:          opts.Heading,
+		Pitch:            opts.Pitch,
+		Bank:             opts.Bank,
+		X:                numeric.Fixed(anchorX << 16),
+		Z:                numeric.Fixed(anchorZ << 16),
+		BMCode:           !opts.Structure,
+		ZBuffer:          opts.KeyPlane,
+		NoShadow:         true,
+		BuildRemaining:   opts.BuildRemaining,
+		Y:                numeric.Fixed(int64(opts.WorldHeight) << 16),
+		UnderwaterExempt: opts.UnderwaterExempt,
+		Digger:           opts.Digger,
 	}
 	view.Pieces = append(view.Pieces, opts.PiecePoses...)
 	for _, name := range opts.HiddenPieces {
@@ -187,7 +221,13 @@ func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPrevi
 	}
 	wasRecordingGeometry := c.recordModelGeometry
 	c.recordModelGeometry = true
-	drawn := c.drawUnitModel(view, int32(opts.Width/2), int32(opts.Height/2))
+	children := append([]frame.UnitView(nil), opts.Children...)
+	for i := range children {
+		children[i].X += view.X
+		children[i].Y += view.Y
+		children[i].Z += view.Z
+	}
+	drawn := c.composeCarrier(view, int32(opts.Width/2), int32(opts.Height/2), children)
 	c.recordModelGeometry = wasRecordingGeometry
 	if !drawn {
 		path := renderName
@@ -195,6 +235,9 @@ func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPrevi
 			path = "objects3d/" + path + ".3do"
 		}
 		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: logical path %s, providers searched %s, expected drawable 3DO model", path, previewProviders(c.modelFS))
+	}
+	if geometryOnly {
+		return ModelPreviewRecord{List: c.list.Clone(), Background: opts.Background, Palette: r.palette}, nil
 	}
 	// Replay the recorded model commit into the indexed surface, then expand.
 	c.list.Replay(c.classicSink())

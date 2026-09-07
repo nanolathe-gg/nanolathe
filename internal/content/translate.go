@@ -82,10 +82,11 @@ func (t *TranslationTable) Translate(source string) string {
 	if t == nil {
 		return source
 	}
-	for _, e := range t.entries {
-		if e.source == source {
-			return e.translation
-		}
+	// Construction sorts the immutable source keys bytewise; lower-bound lookup
+	// preserves exact equality and the identity fallback [02 "Translation table"].
+	i := sort.Search(len(t.entries), func(i int) bool { return t.entries[i].source >= source })
+	if i < len(t.entries) && t.entries[i].source == source {
+		return t.entries[i].translation
 	}
 	return source
 }

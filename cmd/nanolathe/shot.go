@@ -291,18 +291,19 @@ func runShot(opts Options, cs *contentSet) error {
 			per(stepTotal), per(presentTotal))
 	}
 
+	shotRenderer := effectiveShotRenderer(opts)
 	// The renderer switch is the one sanctioned presentation choice [I11]: both
 	// executors replay the same committed frame, and the capture picks which one
 	// writes the --shot PNG [DESIGN_GPU_RENDERER.md §2.5]. classic is the
 	// reference (C-G11) and its output is unchanged; modern and both run the GPU
 	// executor through a hidden one-frame Ebitengine loop.
-	switch opts.ShotRenderer {
-	case "", "classic":
+	switch shotRenderer {
+	case "classic":
 		if err := encodeShotPNG(opts.Shot, cl.ComposeFrame()); err != nil {
 			return err
 		}
 	case "modern":
-		modern, err := captureModernShot(cl, shotW, shotH, opts.Map, opts.ShotGPUProfileFrames, nil, 0, "")
+		modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames, nil, 0, "")
 		if err != nil {
 			return err
 		}
@@ -320,7 +321,29 @@ func runShot(opts Options, cs *contentSet) error {
 	return writeMemProfile(opts.MemProfile)
 }
 
+// effectiveShotRenderer applies the one routing rule for battle and model
+// captures. An omitted shot renderer follows the requested presentation
+// renderer, but only the exact modern value selects the GPU path; every other
+// renderer value retains the classic default [DESIGN_GPU_RENDERER.md §9].
+func effectiveShotRenderer(opts Options) string {
+	if opts.ShotRenderer != "" {
+		return opts.ShotRenderer
+	}
+	if opts.Renderer == "modern" {
+		return "modern"
+	}
+	return "classic"
+}
+
+func shotSceneLabel(opts Options) string {
+	if opts.Map != "" {
+		return opts.Map
+	}
+	return opts.Mission
+}
+
 func validateShotOptions(opts Options) error {
+	shotRenderer := effectiveShotRenderer(opts)
 	if opts.ShotModel != "" {
 		if opts.Shot == "" {
 			return fmt.Errorf("nanolathe: shot model: requires --shot <file.png>")
@@ -347,11 +370,14 @@ func validateShotOptions(opts Options) error {
 	if opts.ShotGPUProfileFrames > 0 && opts.Renderer != "modern" {
 		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --renderer=modern, got %q", opts.Renderer)
 	}
-	if (opts.ShotRenderer == "modern" || opts.ShotRenderer == "both") && opts.Renderer != "modern" {
-		return fmt.Errorf("nanolathe: shot: --shot-renderer=%s requires --renderer=modern, got %q", opts.ShotRenderer, opts.Renderer)
+	if (shotRenderer == "modern" || shotRenderer == "both") && opts.Renderer != "modern" {
+		return fmt.Errorf("nanolathe: shot: --shot-renderer=%s requires --renderer=modern, got %q", shotRenderer, opts.Renderer)
 	}
-	if opts.ShotGPUProfileFrames > 0 && opts.ShotRenderer != "modern" && opts.ShotRenderer != "both" {
-		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --shot-renderer modern or both, got %q", opts.ShotRenderer)
+	if opts.ShotGPUProfileFrames > 0 && shotRenderer != "modern" && shotRenderer != "both" {
+		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --shot-renderer modern or both, got %q", shotRenderer)
+	}
+	if opts.ProfileSeconds > 0 && opts.Renderer == "modern" {
+		return fmt.Errorf("nanolathe: shot: --profile-seconds is CPU-only and cannot run with --renderer=modern; use --shot-gpu-profile-frames")
 	}
 	if opts.ShotRendererMax < 0 {
 		return fmt.Errorf("nanolathe: shot: --shot-renderer-max must be nonnegative, got %d", opts.ShotRendererMax)
@@ -378,7 +404,7 @@ func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
 	preparation := time.Since(started)
 	classic := image.NewRGBA(image.Rect(0, 0, snapshot.Width, snapshot.Height))
 	copy(classic.Pix, snapshot.RGBA)
-	modern, err := captureModernShot(cl, shotW, shotH, opts.Map, opts.ShotGPUProfileFrames, &snapshot, preparation, "classic compose+snapshot")
+	modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames, &snapshot, preparation, "classic compose+snapshot")
 	if err != nil {
 		return err
 	}

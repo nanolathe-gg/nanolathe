@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -44,22 +45,67 @@ func TestModelGeometryPacketPreservesFaceOrderAndArity(t *testing.T) {
 	}
 }
 
-func TestModelGeometryFallbacksKeepCPUOnlyStagesExplicit(t *testing.T) {
-	c := &Client{}
-	draw := &presentationrender.UnitDraw{WorldPos: [3]numeric.Fixed{0, numeric.Fixed(1 << 16), 0}}
-	if got := c.geometryFallback(draw, nil, 0, 1); got != drawlist.ModelFallbackNone {
-		t.Fatalf("ordinary body fallback = %v, want none", got)
-	}
-	if got := c.geometryFallback(draw, nil, 0, 2); got != drawlist.ModelFallbackSupersample {
-		t.Fatalf("supersample fallback = %v, want supersample", got)
-	}
-	if got := c.geometryFallback(draw, &presentationrender.NanoframeReveal{}, 0, 1); got != drawlist.ModelFallbackRevealOrOutline {
-		t.Fatalf("reveal fallback = %v, want reveal/outline", got)
-	}
-
+func TestModelGeometryTraceOnlyOmitsBody(t *testing.T) {
 	pending := pendingModelCommit{m: composedModel{geometry: &drawlist.ModelGeometry{Eligible: true}}}
 	packet := geometryForCommit(pending)
 	if packet.Eligible || packet.Fallback != drawlist.ModelFallbackNoBodyCommit {
 		t.Fatalf("trace/shadow-only packet = eligible=%v fallback=%v, want false/no-body", packet.Eligible, packet.Fallback)
+	}
+}
+
+func TestGeometryOnlyModelRecordsNativeStructureWithoutCPUCommit(t *testing.T) {
+	c := testModelTextureClient()
+	c.geometryOnlyModels = true
+	c.antiAlias = true
+	c.pal = &palette.Tables{}
+	draw := testPrimitiveDraw(presentationrender.PrimitiveDraw{
+		IsColored:     1,
+		ColorIndex:    7,
+		VertexIndices: []uint16{0, 1, 2, 3},
+	}, [][3]numeric.Fixed{
+		fixedVertex(0, 0, 0), fixedVertex(8, 0, 0), fixedVertex(8, 0, -8), fixedVertex(0, 0, -8),
+	})
+	draw.Structure, draw.KeyPlane, draw.CastsShadow = true, true, true
+	if !c.drawModel(draw, 0, teamColor{}, 1, modelCursorUnit, nil, 0) {
+		t.Fatal("geometry-only structure was not recorded")
+	}
+	if got := len(c.modelCommits); got != 0 {
+		t.Fatalf("geometry-only record retained %d CPU model commits", got)
+	}
+	models := c.list.ModelCommands()
+	if len(models) != 1 || models[0].Geometry == nil || !models[0].Geometry.Eligible || models[0].Geometry.Scale != 1 {
+		t.Fatalf("geometry-only record = %#v, want eligible native geometry", models)
+	}
+	g := models[0].Geometry
+	if g.Shadow == nil || !g.Shadow.Eligible || len(g.Shadow.Faces) == 0 || models[0].ShadowOmissions != 0 {
+		t.Fatal("eligible shadow was not recorded as geometry")
+	}
+	clone := g.Clone()
+	clone.Shadow.Faces[0].Vertices[0].X++
+	if clone.Shadow.Faces[0].Vertices[0].X == g.Shadow.Faces[0].Vertices[0].X {
+		t.Fatal("cloned shadow aliases source vertices")
+	}
+}
+
+func TestGeometryOnlyDiggerRecordsClipping(t *testing.T) {
+	c := testModelTextureClient()
+	c.geometryOnlyModels = true
+	draw := testPrimitiveDraw(presentationrender.PrimitiveDraw{
+		IsColored:     1,
+		ColorIndex:    7,
+		VertexIndices: []uint16{0, 1, 2, 3},
+	}, [][3]numeric.Fixed{
+		fixedVertex(0, 0, 0), fixedVertex(8, 0, 0), fixedVertex(8, 0, -8), fixedVertex(0, 0, -8),
+	})
+	draw.DiggerClip, draw.KeyPlane = true, true
+	if !c.drawModel(draw, 0, teamColor{}, 1, modelCursorUnit, nil, 0) {
+		t.Fatal("valid omitted geometry did not retain selection-chrome eligibility")
+	}
+	if got := len(c.modelCommits); got != 0 {
+		t.Fatalf("geometry-only omission retained %d CPU model commits", got)
+	}
+	models := c.list.ModelCommands()
+	if len(models) != 1 || models[0].Geometry == nil || !models[0].Geometry.Eligible || !models[0].Geometry.Digger || models[0].Geometry.DiggerKey != uint8(diggerEraseThreshold) {
+		t.Fatalf("geometry-only omission = %#v, want eligible digger clipping", models)
 	}
 }

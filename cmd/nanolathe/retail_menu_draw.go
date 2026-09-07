@@ -64,16 +64,25 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 	defer func() { g.frontend.SetMode(savedMode) }()
 
 	background := g.panelBackground()
+	var page, common *formats.GAF
+	if g.assets != nil {
+		common = g.assets.common
+	}
+	if asset := g.panelAssets(); asset != nil {
+		page = asset.art
+	}
 	if optionsAssets != nil && p == optionsPanel {
 		// The options root is a child window with its own full-screen
 		// background, and the merged page swaps it [07 R-FE-01 §6].
 		background = optionsAssets.background
+		page = optionsAssets.art
 	}
 	if saveLoadAssets != nil && p == saveLoadPanel {
 		// The save/load dialog is a child window with its own authored
 		// backdrop; it must not borrow the surface it was opened over
 		// [07 R-FE-01 §8].
 		background = saveLoadAssets.background
+		page = saveLoadAssets.art
 	}
 	if bg := background; bg != nil {
 		// the retail implementation copies the window's background bitmap into the window's
@@ -83,9 +92,7 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		r := p.Window.Rect
 		c.UIBlitPCXClipped(bg, int(r.X), int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
 	} else {
-		// the retail implementation fills a background-less window by tiling its art over
-		// the window rectangle; the stock fallback entry is BackTile.
-		g.drawPanelTile(c, p.Window.Rect)
+		drawWindowPanel(c, p.Window, page, common, g.guiColor)
 	}
 	for i, gad := range p.Window.Gadgets {
 		if i == 0 || !p.ActiveOf(gad.Name) {
@@ -121,7 +128,11 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 	if m == nil || m.Window == nil {
 		return
 	}
-	g.drawPanelTile(c, m.Window.Rect)
+	var page *formats.GAF
+	if g.assets.message != nil {
+		page = g.assets.message.art
+	}
+	drawWindowPanel(c, m.Window, page, g.assets.common, g.guiColor)
 	for i, gad := range m.Window.Gadgets {
 		if i == 0 || !m.ActiveOf(gad.Name) {
 			continue
@@ -140,22 +151,6 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 			g.drawRetailTextState(c, m, i, gad, r)
 		case gui.KindLabel:
 			g.drawRetailTextState(c, m, i, gad, r)
-		}
-	}
-}
-
-func (g *gameShell) drawPanelTile(c *client.Client, r gui.Rect) {
-	if g.assets == nil || g.assets.common == nil {
-		return
-	}
-	e, ok := g.assets.common.Find("BackTile")
-	if !ok || len(e.Frames) == 0 || e.Frames[0].Frame == nil {
-		return
-	}
-	f := e.Frames[0].Frame
-	for y := int(r.Y); y < int(r.Y+r.H); y += int(f.Height) {
-		for x := int(r.X); x < int(r.X+r.W); x += int(f.Width) {
-			blitRetailFrame(c, f, x, y)
 		}
 	}
 }

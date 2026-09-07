@@ -292,15 +292,8 @@ func modalArtResampled(kind gui.Kind, frame *formats.GAFFrame, r gui.Rect) bool 
 	return int32(frame.Width) != r.W || int32(frame.Height) != r.H
 }
 
-// drawWindowBackground paints a window's panel fill the way the initializer's
-// first paint does [07 §4]. The panel entry is resolved own GAF → common GAF →
-// the common GAF's literal `BackTile` (every frame's hotspot zeroed) and the
-// tile fill then draws it across the root rectangle [07 R-WGT-02] — see
-// nineSliceFill for the frame selection. EXITMENU.GUI authors an empty
-// `panel=` and YESORNO.GUI an unusable one, so both reach `BackTile`, whose
-// nine frames are a bevelled frame with a dark interior; this used to stamp
-// frame 0 (the top-left corner piece) over the whole window, which drew a
-// grid of corner pieces where retail shows one bordered plate.
+// drawWindowBackground delegates panel resolution and child-surface painting to
+// the common frontend/battle path [07 R-FE-02 §4][07 R-WGT-01 §12].
 func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Window, page *formats.GAF) {
 	if window == nil || window.Rect.W <= 0 || window.Rect.H <= 0 {
 		return
@@ -310,98 +303,7 @@ func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Win
 	if window == h.resultWin && h.shell != nil && h.shell.resultBackground != nil {
 		return
 	}
-	entry := h.modalPanelEntry(window.Header.Panel, page)
-	if entry == nil {
-		return
-	}
-	nineSliceFill(entry, int(window.Rect.X), int(window.Rect.Y), int(window.Rect.W), int(window.Rect.H), func(f *formats.GAFFrame, x, y int) {
-		c.UIBlitClipped(f, x, y, int(window.Rect.X), int(window.Rect.Y), int(window.Rect.W), int(window.Rect.H))
-	})
-}
-
-// modalPanelEntry resolves a window's panel entry: the window's own GAF, then
-// the common GUI GAF, then the common GAF's literal `BackTile` [07 §4]
-// [07 R-WGT-02]. A name that resolves nowhere, or an empty one, falls to
-// `BackTile`; only a common GAF without `BackTile` yields nil.
-func (h *retailBattleHUD) modalPanelEntry(name string, page *formats.GAF) *formats.GAFEntry {
-	if name != "" {
-		for _, gaf := range []*formats.GAF{page, h.common} {
-			if gaf == nil {
-				continue
-			}
-			if entry, ok := gaf.Find(name); ok && len(entry.Frames) != 0 {
-				return entry
-			}
-		}
-	}
-	if h.common != nil {
-		if entry, ok := h.common.Find("BackTile"); ok && len(entry.Frames) != 0 {
-			return entry
-		}
-	}
-	return nil
-}
-
-// nineSliceFill is the GUI tile fill for a resolved art entry over the
-// rectangle `(x0, y0)` of size `w x h` [07 R-WGT-02 "tile fill"].
-//
-// An entry with fewer than two frames is stamped once at the origin and is
-// not tiled. Otherwise frame 0's size is the tile pitch and every tile picks
-// its frame by band and column, `band + column` in 0..8:
-//
-//	band:   0 on the first row; then 6 (bottom) when the tile would overflow
-//	        the rectangle (`y + tileH > h`), else 3 (middle);
-//	column: 2 (right) when the tile reaches or passes the right edge
-//	        (`x + tileW >= w`), else 1 (middle) unless `x == 0`, then 0 (left).
-//
-// A row that overflows is pulled flush to the bottom (`y = h - tileH`) and a
-// right column flush to the right (`x = w - tileW`), overlapping the previous
-// tile rather than being clipped. The two edge tests differ in strictness — a
-// row that ends exactly on the bottom edge is a middle band, a column that
-// ends exactly on the right edge is the right column — and are kept as traced.
-func nineSliceFill(entry *formats.GAFEntry, x0, y0, w, h int, blit func(f *formats.GAFFrame, x, y int)) {
-	if entry == nil || len(entry.Frames) == 0 || w <= 0 || h <= 0 {
-		return
-	}
-	frame := func(i int) *formats.GAFFrame {
-		if i < 0 || i >= len(entry.Frames) {
-			return nil
-		}
-		return entry.Frames[i].Frame
-	}
-	first := frame(0)
-	if first == nil || first.Width == 0 || first.Height == 0 {
-		return
-	}
-	if len(entry.Frames) < 2 {
-		blit(first, x0, y0)
-		return
-	}
-	tileW, tileH := int(first.Width), int(first.Height)
-	for y := 0; y < h; y += tileH {
-		band := 0
-		if y != 0 {
-			band = 3
-			if y+tileH > h {
-				band = 6
-			}
-		}
-		if y+tileH > h {
-			y = h - tileH
-		}
-		for x := 0; x < w; x += tileW {
-			column := 0
-			if x+tileW >= w {
-				column = 2
-				x = w - tileW
-			} else if x != 0 {
-				column = 1
-			}
-			if f := frame(band + column); f != nil {
-				blit(f, x0+x, y0+y)
-			}
-		}
-	}
+	drawWindowPanel(c, window, page, h.common, h.guiColor)
 }
 
 // modalGadgetRect returns the runtime rectangle installed by the modal

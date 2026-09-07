@@ -3,6 +3,7 @@ package gpurender
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
@@ -83,9 +84,9 @@ func TestFoldedStripsKeepPositiveSpansAndFractionalAttributes(t *testing.T) {
 			t.Fatalf("strip %d vertical attributes changed: %#v", i, v)
 		}
 	}
-	// At row 3, the left D-C key/U/shade interpolation is fractional. A
-	// premature integer ModelVertex conversion would discard the .5 lanes.
-	if got := strips[0].Vertices[0]; got.Key != 300.5 || got.U != 3.5 || got.Shade != 7.5 {
+	// At row 3, the left D-C lanes remain fractional after the centre-sample
+	// shift. A premature integer ModelVertex conversion would lose this lane.
+	if got := strips[0].Vertices[0]; got.Key != 310.125 || got.U != 2.875 || got.Shade != 8.375 {
 		t.Fatalf("fractional row attributes narrowed early: key=%v u=%v shade=%v", got.Key, got.U, got.Shade)
 	}
 }
@@ -97,5 +98,73 @@ func TestBiasedEdgeXUsesOneTruncatedSignedSlope(t *testing.T) {
 		if got := biasedEdgeX(a, b, int32(y)); got != want {
 			t.Fatalf("biasedEdgeX row %d = %d, want %d", y, got, want)
 		}
+	}
+}
+
+func TestTexturedQuadStripsKeepTheTwoChainMappingAcrossEveryRow(t *testing.T) {
+	// This authored skewed quad has a texture boundary that would bend at the
+	// 0→2 triangle diagonal. The textured path must instead use exactly the
+	// two chains the scanline mapper uses, so each output row has one continuous
+	// U/V interval [03 R-REN-03A §5][03 R-RAST-01 §1].
+	f := drawlist.ModelFace{Texture: &formats.GAFFrame{Width: 8, Height: 8}, Vertices: []drawlist.ModelVertex{
+		{X: 2, Y: 1, U: 0, V: 0},
+		{X: 10, Y: 3, U: 7, V: 0},
+		{X: 7, Y: 9, U: 7, V: 7},
+		{X: 0, Y: 7, U: 0, V: 7},
+	}}
+	strips := modelTextureStrips(f)
+	if len(strips) != 7 {
+		t.Fatalf("textured strips = %d, want 7 positive rows", len(strips))
+	}
+	for i, s := range strips {
+		y := int32(i + 2) // The top row has coincident chain endpoints.
+		left, leftOK := chainAt(f.Vertices, 0, 2, -1, y)
+		right, rightOK := chainAt(f.Vertices, 0, 2, 1, y)
+		if !leftOK || !rightOK || right.X <= left.X {
+			t.Fatalf("row %d did not produce the expected positive two-chain span", y)
+		}
+		left.Key, right.Key = centerSampledSpan(left.Key, right.Key, right.X-left.X)
+		left.U, right.U = centerSampledSpan(left.U, right.U, right.X-left.X)
+		left.V, right.V = centerSampledSpan(left.V, right.V, right.X-left.X)
+		left.Shade, right.Shade = centerSampledSpan(left.Shade, right.Shade, right.X-left.X)
+		got := s.Vertices
+		if got[0] != left || got[1] != right || got[3].X != left.X || got[3].Y != left.Y+1 || got[2].X != right.X || got[2].Y != right.Y+1 {
+			t.Fatalf("row %d strip = %#v, want scanline endpoints %#v %#v", y, got, left, right)
+		}
+		if got[0].U != got[3].U || got[1].U != got[2].U || got[0].V != got[3].V || got[1].V != got[2].V {
+			t.Fatalf("row %d changed texture coordinates through its one-pixel height: %#v", y, got)
+		}
+	}
+
+	// Rotating the first authored corner changes no edge or span. This guards
+	// against accidentally choosing an internal triangulation diagonal.
+	rotated := f
+	rotated.Vertices = append(append([]drawlist.ModelVertex(nil), f.Vertices[1:]...), f.Vertices[0])
+	other := modelTextureStrips(rotated)
+	if len(other) != len(strips) {
+		t.Fatalf("rotated textured strips = %d, want %d", len(other), len(strips))
+	}
+	for i := range strips {
+		if len(other[i].Vertices) != len(strips[i].Vertices) {
+			t.Fatalf("row %d rotated vertex count differs", i)
+		}
+		for j := range strips[i].Vertices {
+			if other[i].Vertices[j] != strips[i].Vertices[j] {
+				t.Fatalf("row %d vertex %d depends on an internal diagonal: got %#v, want %#v", i, j, other[i].Vertices[j], strips[i].Vertices[j])
+			}
+		}
+	}
+}
+
+func TestCenterSampledSpanStartsAtTheCPUFirstColumn(t *testing.T) {
+	left, right := centerSampledSpan(2, 10, 4)
+	if left != 1 || right != 9 {
+		t.Fatalf("center-adjusted endpoints = (%v,%v), want (1,9)", left, right)
+	}
+	if first := left + 0.5*(right-left)/4; first != 2 {
+		t.Fatalf("first device sample = %v, want CPU left lane 2", first)
+	}
+	if last := left + 3.5*(right-left)/4; last != 8 {
+		t.Fatalf("last device sample = %v, want CPU left+3*step 8", last)
 	}
 }

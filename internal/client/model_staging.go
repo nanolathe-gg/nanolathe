@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 )
@@ -47,6 +48,9 @@ type stagingChild struct {
 func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame.UnitView) bool {
 	if c == nil {
 		return false
+	}
+	if c.geometryOnlyModels && len(children) != 0 {
+		return c.recordCarrierGeometry(v, children)
 	}
 	if len(children) == 0 {
 		return c.drawUnitModel(v, sx, sy)
@@ -95,6 +99,9 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 	staging := newStagingImage(carrier.image, staged)
 	for i := range staged {
 		staging.compositeChild(staged[i].model.image, staged[i].keyDelta)
+		if carrier.geometry != nil && staged[i].model.geometry != nil {
+			carrier.geometry.Children = append(carrier.geometry.Children, drawlist.ModelChild{Geometry: staged[i].model.geometry, KeyDelta: staged[i].keyDelta})
+		}
 	}
 	c.finishModel(carrier, staging)
 	// A child's parity trace is resolved only now: the pixels it describes are
@@ -103,6 +110,47 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		c.finishStagedChild(staged[i])
 	}
 	return true
+}
+
+// recordCarrierGeometry follows the classic preparation and shadow/body commit
+// order, retaining only geometry. Keyless or missing carriers leave children
+// in the ordinary painter path [03 R-REN-03A §4].
+func (c *Client) recordCarrierGeometry(v frame.UnitView, children []frame.UnitView) bool {
+	carrier := c.unitGeometry(v, false)
+	if carrier == nil || !carrier.KeyPlane {
+		if carrier != nil {
+			c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: carrier})
+		}
+		for _, child := range children {
+			if g := c.unitGeometry(child, false); g != nil {
+				c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: g})
+			}
+		}
+		return carrier != nil
+	}
+	for _, child := range children {
+		g := c.unitGeometry(child, true)
+		if g == nil {
+			continue
+		}
+		c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: g, ShadowOnly: true})
+		delta := int32(int64(child.Y)>>16) - int32(int64(v.Y)>>16)
+		carrier.Children = append(carrier.Children, drawlist.ModelChild{Geometry: g, KeyDelta: delta})
+	}
+	c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: carrier})
+	return true
+}
+
+func (c *Client) unitGeometry(v frame.UnitView, forceKeyPlane bool) *drawlist.ModelGeometry {
+	draw, ok := c.unitDrawFor(v)
+	if !ok {
+		return nil
+	}
+	if forceKeyPlane {
+		draw.KeyPlane = true
+	}
+	reveal, outline := c.unitNanoframeReveal(v)
+	return c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
 }
 
 // finishStagedChild resolves and emits a composited child's parity trace after
