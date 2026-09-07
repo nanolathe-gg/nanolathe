@@ -354,8 +354,19 @@ compared after the pool loads is `Total Annihilation 3.0`, case-insensitively
 Accounts begin with a 32-byte header, empty accounts are not emitted, and a
 body may be compressed as a unit. A wrong magic, version or tag closes the file
 and returns nothing; a decompression failure emits its diagnostic verbatim and
-**parsing continues** — the load path is non-transactional by contract, not by
-oversight `[08 "Account inventory"]` `[08 "Load process"]`.
+**parsing continues** — retail's bank/account decode is permissive by
+contract, not by oversight: a malformed or missing optional record is
+defaulted and the scan moves on to the next account `[08 "Account inventory"]`
+`[08 "Load process"]`. That is a parsing-boundary contract, and it is
+distinct from the application boundary this build adds on top of it. Parsing
+a bank into a `BattleImage` (`DecodeBattleImage`) follows the same
+optional-record leniency; applying a decoded image to a live session is a
+separate, later step, and that step is transactional in this build —
+`RestoreRetailBattleCore` validates and stages every pass before touching any
+live state, and the caller swaps the session in only on success (§2.1, "Save
+projection and restore"). The parsing leniency does not carry over into that
+commit: a staging failure discards the whole attempt rather than leaving a
+partially applied session.
 
 `Summary` is the account the load screen reads without constructing anything:
 the description and game identity, the gametype, the between-missions flag, the
@@ -941,11 +952,14 @@ transfer shortcut `[04 R-ORD-02 §1]` `[08 R-AI-01 §7]`.
   validation compiles to a no-op with both branches storing the raw value; the
   `2..10` range is the lobby's, not the parser's `[08 "Skirmish
   configuration"]`.
-* **A decompression failure inside a save does not abort the load.** The
+* **A decompression failure inside a save does not abort retail's load.** The
   diagnostic is emitted verbatim and parsing continues; missing accounts are
-  created empty and each subsystem's defaults govern. The load is
-  non-transactional by contract `[08 "Location and representation"]`
-  `[08 "Load process"]`.
+  created empty and each subsystem's defaults govern. Retail's bank parsing
+  and account application share one non-transactional pass by contract
+  `[08 "Location and representation"]` `[08 "Load process"]`. This build keeps
+  only the parsing half of that leniency (§2.5, "the retail bank") — applying
+  a parsed image to a live session is a separate, transactional commit
+  boundary (§2.1, "Save projection and restore"), not the same pass.
 * **Random state is not saved.** A restored battle continues from a stream that
   was seeded at the original battle entry and has advanced since; nothing
   re-seeds it on load `[08 "Scheduler and random state in saves"]`

@@ -8,22 +8,22 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 )
 
-// The feature-sequence accessor: the one place the simulation's feature phase
-// reads authored animation art.
+// The feature-sequence cache: the decoded burn/die/reclaim art the feature pass
+// blits, and the cursor cadence that picks which frame of it.
 //
-// [05 R-FEAT-01 §10] makes two simulation facts depend on a GAF entry. The
-// smoke jitter of pass 3a scales its two CRT draws by the CURRENT burn frame's
-// width and height, and a die, reclaim or burn animation ends on the visit
-// whose cursor advance clears the sequence pointer — a lifetime in visits of
-// the sum over the entry's frames of max(delay, 1). Both are asset data, and
-// the only GAF cache in this build is the presentation one below.
+// The SIMULATION does not read through here. The two authoritative facts
+// [05 R-FEAT-01 §10] derives from these entries — the burn frame's geometry the
+// pass-3a smoke jitter scales its two CRT draws by, and the die/reclaim/burn
+// lifetime in visits — come from content's own immutable metadata table
+// (content.SimArt), compiled from the VFS before the battle composes, so a
+// headless run and a windowed run time the same transitions. What is left here
+// is pixels: this cache decodes the frames and walks the IDENTICAL
+// max(delay, 1) cadence, so the frame the simulation timed a record from and
+// the frame painted for it are always the same one.
 //
-// Two properties make that safe to read from an authoritative phase. The
-// answer depends on nothing but the file's bytes, so it is identical in every
-// run over the same install (I4); and every answer is memoised per
-// "filename|sequence", including the failures, so the sim path is a map lookup
-// and never a load. WarmFeatureSequences resolves the whole catalog up front so
-// even the first visit finds its entry already compiled.
+// Every answer is memoised per "filename|sequence", including the failures, so
+// a draw is a map lookup and never a load; WarmFeatureSequences compiles the
+// whole catalog up front so even the first frame finds its entry ready.
 
 // featureSequenceFrame is one frame's contribution: the geometry pass 3a
 // scales by, and the delay that decides how many visits it holds for.
@@ -48,10 +48,14 @@ func featureSequenceKey(filename, sequence string) string {
 	return strings.ToLower(strings.TrimSpace(filename)) + "|" + strings.ToLower(strings.TrimSpace(sequence))
 }
 
-// FeatureSequence is the session's feature-sequence resolver. It reports the
-// geometry of the frame the cursor is on after `visit` visits, and the whole
-// entry's lifetime in visits; ok is false when the sequence does not resolve,
-// and the caller then has no geometry and no length.
+// FeatureSequence reports the geometry of the frame the cursor is on after
+// `visit` visits, and the whole entry's lifetime in visits; ok is false when
+// the sequence does not resolve, and the caller then has no geometry and no
+// length.
+//
+// It is presentation's own reading of the quantities content.SimArt gives the
+// simulation, and exists so a draw-side consumer and a test can check the two
+// readings agree. Nothing authoritative calls it.
 //
 // The visit index walks the same cadence the cursor does: frame i holds for
 // max(delay, 1) visits [05 R-FEAT-01 §10] pass 1. A visit at or past the
@@ -105,10 +109,10 @@ func (c *Client) featureEventFrame(filename, sequence string, visit int32) *form
 	return info.frames[len(info.frames)-1].art
 }
 
-// WarmFeatureSequences compiles every feature definition's four sequences
-// ahead of the battle, so no visit of the feature phase ever waits on a load.
-// It is called once from the shell, off the simulation path; the catalog map
-// is walked in sorted key order so a warm pass is reproducible.
+// WarmFeatureSequences decodes every feature definition's event sequences ahead
+// of the battle, so no frame of the feature DRAW pass ever waits on a load. It
+// is called once from the shell; the catalog map is walked in sorted key order
+// so a warm pass is reproducible.
 func (c *Client) WarmFeatureSequences(defs map[string]*content.FeatureDef) {
 	if c == nil || defs == nil {
 		return

@@ -31,13 +31,22 @@ That gives the boundary its shape, and the shape is a one-way valve.
   projectile, effect, strip, visibility, fog, selection and event views out of
   it `[03 §2.4]` `[03 §1]`. Nothing in these packages holds a pointer into a
   live pool, a `*Session`, or a mutable world.
-* **Nothing here writes authoritative state.** No package below imports a
-  simulation owner, and no draw, resolve or audio path mutates one. The single
-  exception is a *read* in the other direction: `Client.FeatureSequence` is
-  consulted from the feature phase for authored burn-frame geometry and
-  die/reclaim/burn lifetimes, because those are properties of a GAF entry and
-  the VFS is behind the presentation edge `[05 R-FEAT-01 §10]`. It is warmed up
-  front and memoised so a simulation visit never performs I/O.
+* **Nothing here writes authoritative state, and nothing here is read back.**
+  No package below imports a simulation owner, no draw, resolve or audio path
+  mutates one, and no authoritative phase calls into the client. The valve has
+  no exception in either direction.
+
+  The one place it used to: a burning feature's frame geometry and a
+  die/reclaim/burn lifetime in visits `[05 R-FEAT-01 §10]`, and a smoke puff's
+  last frame against its entry's frame count `[03 R-STRIP-01 §2]`, are
+  properties of a GAF entry, and the client was the only holder of a GAF cache.
+  The feature phase read them through `Client.FeatureSequence`, so a headless
+  battle — which installs no client — timed feature transitions and retired
+  smoke differently from a windowed one. That metadata now belongs to
+  `internal/content` (`content.CompileSimArt`), compiled from the VFS before the
+  session's features and strips exist and immutable thereafter; the client keeps
+  only its pixel cache, walking the identical `max(delay, 1)` cadence so the
+  frame the simulation timed a record from is the frame painted for it.
 * **Nothing here touches the simulation RNG.** Presentation randomness — the
   segmented-projectile jitter of render type 7, nanolathe particle placement,
   the audio variant pick, the music chooser — draws from a *private copy* of

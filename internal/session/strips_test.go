@@ -2,13 +2,19 @@ package session
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // newStripTestSession builds a minimal fixture for the phase-11 strip
@@ -1563,5 +1569,130 @@ func TestSprinkleStepIsHalfAWorldUnit(t *testing.T) {
 	// rather than crashing the battle (see sprinkleStep).
 	if sx, sy, sz := sprinkleStep([3]numeric.Fixed{}, [3]numeric.Fixed{}); sx|sy|sz != 0 {
 		t.Fatalf("a degenerate pair produced a step (%d,%d,%d)", sx.Raw(), sy.Raw(), sz.Raw())
+	}
+}
+
+// simArtCompositionFS authors the two animation banks a battle's authoritative
+// phases read, with no retail bytes: the default effect bank whose smoke entry
+// gives a puff its last frame [03 R-STRIP-01 §2], and one feature bank whose
+// burn and death sequences give the feature phase its geometry and its
+// lifetimes [05 R-FEAT-01 §10].
+func simArtCompositionFS(t *testing.T) *vfs.FS {
+	t.Helper()
+	frameOf := func(w, h int, xoff, yoff int16, dur uint32) formats.GAFWriteFrame {
+		p := make([]byte, w*h)
+		for i := range p {
+			p[i] = 1
+		}
+		return formats.GAFWriteFrame{Width: uint16(w), Height: uint16(h), XOffset: xoff, YOffset: yoff, Duration: dur, Pixels: p}
+	}
+	smoke := make([]formats.GAFWriteFrame, 12)
+	for i := range smoke {
+		smoke[i] = frameOf(4, 4, 0, 0, 2)
+	}
+	fx, err := formats.EncodeGAF([]formats.GAFWriteEntry{{Name: smokePuffEntry, Frames: smoke}})
+	if err != nil {
+		t.Fatalf("encode effect bank: %v", err)
+	}
+	trees, err := formats.EncodeGAF([]formats.GAFWriteEntry{
+		{Name: "treeburn", Frames: []formats.GAFWriteFrame{
+			frameOf(20, 12, 7, 5, 3), frameOf(5, 7, 2, 3, 0), frameOf(16, 24, -3, 9, 2),
+		}},
+		{Name: "treedie", Frames: []formats.GAFWriteFrame{frameOf(8, 8, 1, 1, 4)}},
+	})
+	if err != nil {
+		t.Fatalf("encode feature bank: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "anims"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "anims", "fx.gaf"), fx, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "anims", "trees.gaf"), trees, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(dir, 1); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fs.Close() })
+	return fs
+}
+
+// TestCompositionInstallsContentAnimationMetadata locks the seam this file's
+// smoke families and the feature phase both depend on: the authored animation
+// metadata is compiled by content from the battle's own VFS and installed by
+// composition, with no client in the process.
+//
+// It used to arrive only when the graphical shell attached its client, so a
+// headless battle retired no smoke puff by animation and took the immediate
+// replacement at every feature death — an authoritative difference between two
+// runs of one simulation, not a rendering one [05 R-FEAT-01 §10]
+// [03 R-STRIP-01 §2].
+func TestCompositionInstallsContentAnimationMetadata(t *testing.T) {
+	fs := simArtCompositionFS(t)
+	cat := minimalCatalogForStrict()
+	cat.Features = map[string]*content.FeatureDef{
+		"tree1": {Filename: "trees", SeqNameBurn: "treeburn", SeqNameDie: "treedie"},
+	}
+	w, err := newSlicedWorldWithCOB(cat, fs)
+	if err != nil {
+		t.Fatalf("unit pool: %v", err)
+	}
+	s := &Session{
+		Catalog: cat,
+		World:   minimalTerrain(),
+		Mission: syntheticMission(),
+		Units:   w,
+		Clock:   &clock.State{},
+		Econ:    &economy.Service{},
+	}
+	s.SeedSessionRNG(31, 31)
+	s.Econ.Players[0].Exists = true
+	s.Econ.Players[0].ControllerState = 1
+	s.Econ.SeedDeadlines(0)
+	s.InitBattleWindForSession()
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatalf("createAndBindServices: %v", err)
+	}
+
+	// The effect length the smoke families draw a last frame against.
+	if got := s.effectEntryFrameCountBase(smokePuffEntry); got != 11 {
+		t.Fatalf("smoke entry frame-count base %d, want the fixture's twelve frames less one", got)
+	}
+	// The two feature seams, bound against the same table.
+	def := cat.Features["tree1"]
+	if s.Features == nil || s.Features.AnimationTicks == nil || s.Features.BurnFrameGeometry == nil {
+		t.Fatal("composition left a feature art seam unbound")
+	}
+	if got := s.Features.AnimationTicks(def, 1); got != 4 {
+		t.Fatalf("death lifetime %d visits, want the entry's single frame held for 4", got)
+	}
+	// The reclaim sequence is unauthored, so it reports no length and the
+	// transition keeps its immediate replacement. Nothing is invented for it.
+	if got := s.Features.AnimationTicks(def, featureAnimSelectorReclaim); got != 0 {
+		t.Fatalf("unauthored reclaim sequence reported %d visits, want 0", got)
+	}
+	gw, gh, gx, gy := s.Features.BurnFrameGeometry(def, 0)
+	if gw != 20 || gh != 12 || gx != 7 || gy != 5 {
+		t.Fatalf("burn frame geometry (%d,%d,%d,%d), want the first frame's (20,12,7,5)", gw, gh, gx, gy)
+	}
+	// Visit 3 has crossed the first frame's three holds into the second, whose
+	// authored delay of zero still occupies one visit [05 R-FEAT-01 §10].
+	if gw, gh, _, _ := s.Features.BurnFrameGeometry(def, 3); gw != 5 || gh != 7 {
+		t.Fatalf("burn frame geometry at visit 3 is %dx%d, want the second frame's 5x7", gw, gh)
+	}
+
+	// And the end the whole seam exists for: a puff built after composition
+	// carries a last frame, so something retires it.
+	s.appendStripSmokePuffer(9, [3]numeric.Fixed{}, SmokePuffTrail)
+	obj := &s.strips.strips[9][0]
+	if obj.frameCountBase != 11 {
+		t.Fatalf("container frame-count base %d, want 11", obj.frameCountBase)
+	}
+	if p := obj.particles[0]; p.lastFrame < 2 || p.lastFrame > 10 {
+		t.Fatalf("puff last frame %d, want 2..10 for a twelve-frame entry", p.lastFrame)
 	}
 }

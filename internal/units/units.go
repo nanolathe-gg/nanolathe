@@ -433,14 +433,16 @@ type Unit struct {
 	Pending uint32
 	// Save-restored unit words whose consumers are owned by later phases. The
 	// names stay neutral where the retail census remains Unknown [08
-	// R-SAVE-02 §6].
-	RelationDomainByte uint8
-	CachedOccupancyX   int16
-	CachedOccupancyZ   int16
-	SightCellX         int16
-	SightCellZ         int16
-	FootprintSizeX     int16
-	FootprintSizeZ     int16
+	// R-SAVE-02 §6]. Record byte 0x8E was carried here as an opaque
+	// "relation domain" byte with no producer; it is the attacker-side
+	// snapshot and lives in LastDamageSide above [08 R-SAVE-02 §6]
+	// [06 R-WPN-04 §2].
+	CachedOccupancyX int16
+	CachedOccupancyZ int16
+	SightCellX       int16
+	SightCellZ       int16
+	FootprintSizeX   int16
+	FootprintSizeZ   int16
 	// RevealDeadline is the ONE shared reveal/cloak-suppression deadline tick.
 	// Retail has a single field here and every producer writes it outright — a
 	// later write always wins and no maximum is taken [03 R-VIS-01 §6]:

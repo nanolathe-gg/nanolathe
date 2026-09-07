@@ -81,5 +81,5 @@ state whether an asset-backed run actually executed.
 Committed prose describes what retail does in plain technical language with a
 confidence level and a document/section citation. Executable addresses,
 decompiler output, generated names, register narration, and raw analysis stay
-outside the repository in `/tmp/ta-decompile`. See `AGENTS.md` before changing
+outside the repository in `$HOME/ta-decompile`. See `AGENTS.md` before changing
 research or authoritative behavior.

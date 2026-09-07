@@ -245,27 +245,36 @@ func (q *Queue) cleanupNode(n *Node) {
 // purge-survivor bit. It writes no active marker — the producer insertion that
 // follows does [04 R-ORD-01 §13].
 func (q *Queue) PurgeUnprotected() {
-	if q == nil {
+	if q == nil || len(q.primary) == 0 {
 		return
 	}
-	// [05 "Queue insertion"] non-queued issue purges primary nodes lacking the protected flag
-	kept := q.primary[:0]
+	// [05 "Queue insertion"] non-queued issue purges primary nodes lacking the protected flag.
+	//
+	// The doomed records are chosen from a snapshot and unlinked one at a time
+	// by identity, because each cleanup re-enters the queue (see
+	// spliceOutPrimary): the segment the loop started with is not the segment
+	// that exists after the first notification. The filter-in-place form that
+	// stood here compacted survivors into the same backing array it was still
+	// reading, so its front-head test compared against a slot a survivor had
+	// already been written into, and its final assignment reinstated whatever
+	// a notification had removed.
+	doomed := make([]*Node, 0, len(q.primary))
+	head := q.primary[0]
 	for _, n := range q.primary {
-		if n.Flags&FlagPurgeSurvivor != 0 {
-			kept = append(kept, n)
-		} else {
-			if n != nil {
-				// non-head gets tombstone per [04 §3.3]; secondary always tombstoned via primary-anchor test
-				// For purge, use primary head test
-				isHead := n == q.primary[0]
-				if !isHead {
-					n.Flags |= FlagTombstone
-				}
-				q.cleanupNode(n)
-			}
+		if n != nil && n.Flags&FlagPurgeSurvivor == 0 {
+			doomed = append(doomed, n)
 		}
 	}
-	q.primary = kept
+	for _, n := range doomed {
+		// non-head gets tombstone per [04 §3.3]; the head at the moment the
+		// removal was decided is the anchor, so the test is made here and not
+		// after the cleanup has moved records around.
+		if n != head {
+			n.Flags |= FlagTombstone
+		}
+		q.cleanupNode(n)
+		q.spliceOutPrimary(n)
+	}
 	// No marker write. The purge helper "removes every front-chain record whose
 	// static-mask copy lacks bit 2 … every removal tombstones unless the record
 	// is the front head, runs the cleanup, and frees" [04 R-MOV-03 §6] — that is
@@ -309,16 +318,20 @@ func (q *Queue) DropLeadingAutoOps() {
 		return
 	}
 	// [05 "Queue insertion"] issuing any primary order drops leading auto/default-op nodes – leading RUN at front of each segment
+	// Each drop is unlinked by identity after its cleanup, for the reason
+	// spliceOutPrimary documents: the cleanup's cancel notification re-enters
+	// the queue, so re-slicing past slot 0 afterwards would drop whichever
+	// record has since taken the front — or run off an emptied segment.
 	for len(q.primary) > 0 && q.primary[0].Flags&FlagAutoOp != 0 {
 		n := q.primary[0]
-		q.cleanupNode(n) // head not tombstoned
-		q.primary = q.primary[1:]
+		q.cleanupNode(n)      // head not tombstoned
+		q.spliceOutPrimary(n) // no-op when the notification already unlinked it
 	}
 	for len(q.secondary) > 0 && q.secondary[0].Flags&FlagAutoOp != 0 {
 		n := q.secondary[0]
 		n.Flags |= FlagTombstone // secondary always tombstoned [04 §3.3]
 		q.cleanupNode(n)
-		q.secondary = q.secondary[1:]
+		q.spliceOutSecondary(n) // no-op when the notification already unlinked it
 	}
 	// No marker write, for the same reason PurgeUnprotected has none. The drop
 	// is a step *inside* the producer insertion — "after the purge and the
@@ -596,8 +609,10 @@ func (q *Queue) CancelFrontMost(match func(Node) bool) bool {
 			n.Flags |= FlagTombstone // [04 §3.3]
 		}
 		q.cleanupNode(n) // [05 "Queue subtraction"]
-		copy(q.primary[i:], q.primary[i+1:])
-		q.primary = q.primary[:len(q.primary)-1]
+		// By identity after the cleanup, never by the index taken before it:
+		// the cleanup's cancel notification re-enters the queue (see
+		// spliceOutPrimary).
+		q.spliceOutPrimary(n)
 		q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 		return true
 	}
@@ -623,8 +638,10 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 				n.Flags |= FlagTombstone // [04 §3.3]
 			}
 			q.cleanupNode(n) // [05 "Queue subtraction"]
-			copy(q.primary[i:], q.primary[i+1:])
-			q.primary = q.primary[:len(q.primary)-1]
+			// By identity after the cleanup, never by the index taken before
+			// it: the cleanup's cancel notification re-enters the queue (see
+			// spliceOutPrimary).
+			q.spliceOutPrimary(n)
 			q.releaseMarkerOnRemoval() // the marker has no removal-side writer [04 §3.3]
 			return true
 		}
@@ -638,8 +655,7 @@ func (q *Queue) CancelTailMost(match func(Node) bool) bool {
 			}
 			n.Flags |= FlagTombstone // secondary always effectively tombstoned [04 §3.3]
 			q.cleanupNode(n)
-			copy(q.secondary[i:], q.secondary[i+1:])
-			q.secondary = q.secondary[:len(q.secondary)-1]
+			q.spliceOutSecondary(n) // by identity after the cleanup
 			return true
 		}
 	}

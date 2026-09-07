@@ -43,25 +43,51 @@ func TestSpawnSeedsNeutralAttackerSide(t *testing.T) {
 	}
 }
 
-// TestRetailRestoreKeepsAttackerSideSnapshot pins the restore side of the same
-// field. The retail unit image the base adapter parses carries the last damage
-// CAUSE but no attacker-side snapshot, so the adapter must leave whatever the
-// caller restored in place rather than resetting it to the spawn seed.
-func TestRetailRestoreKeepsAttackerSideSnapshot(t *testing.T) {
-	u := &Unit{LastDamageSide: NeutralAttackerSide}
-	data := make([]byte, retailUnitRecordSize)
-	if err := RetailUnitBase(u, data); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-	if got := u.LastDamageSide; got != NeutralAttackerSide {
-		t.Fatalf("restore rewrote an unseeded snapshot to %d", got)
-	}
+// TestRetailCodecRoundTripsAttackerSideSnapshot pins the wire side of the same
+// field: record byte 0x8E IS the attacker-side snapshot, "the owner byte of the
+// last unit that damaged it (10 = no attacker)" [08 R-SAVE-02 §6]
+// [06 R-WPN-04 §2].
+//
+// This test used to assert the opposite — that the record carried no snapshot
+// and the adapter must leave the live field alone — while the codec round
+// tripped an obsolete opaque byte no producer ever set. A save therefore threw
+// the snapshot away, and every reloaded unit compared against a stale value in
+// the `Under Attack` gate.
+func TestRetailCodecRoundTripsAttackerSideSnapshot(t *testing.T) {
+	// Side 4 is neither the victim's owner (2) nor the neutral value, so a
+	// codec that dropped the field could not accidentally reproduce it.
+	for _, side := range []uint8{4, NeutralAttackerSide} {
+		u := &Unit{
+			Handle: 1, Def: &content.UnitDef{UnitName: "sidewire"}, Owner: 2, Alive: true,
+			RestoredAIGroup: -1, LastDamageSide: side,
+		}
+		resolve := func(pool.Handle) (uint16, bool) { return 7, true }
+		image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+		if err != nil {
+			t.Fatalf("save side %d: %v", side, err)
+		}
+		if image[0x8E] != side {
+			t.Fatalf("record byte 0x8E = %d, want the attacker-side snapshot %d [08 R-SAVE-02 §6]", image[0x8E], side)
+		}
+		v := &Unit{Handle: 2, LastDamageSide: 9}
+		if err := RetailUnitBase(v, image); err != nil {
+			t.Fatalf("restore side %d: %v", side, err)
+		}
+		if v.LastDamageSide != side {
+			t.Fatalf("restored snapshot = %d, want the saved %d [08 R-SAVE-02 §6]", v.LastDamageSide, side)
+		}
 
-	saved := &Unit{LastDamageSide: 4}
-	if err := RetailUnitBase(saved, data); err != nil {
-		t.Fatalf("restore: %v", err)
-	}
-	if got := saved.LastDamageSide; got != 4 {
-		t.Fatalf("restore overwrote the saved attacker-side snapshot with %d, want 4", got)
+		// The LIVE field is the writer's source: changing it and saving again
+		// must move the byte. A writer reading some other field would keep
+		// emitting the value the first save captured.
+		v.Def, v.Owner, v.Alive, v.RestoredAIGroup = u.Def, u.Owner, true, -1
+		v.LastDamageSide = 6
+		again, err := RetailUnitImage(v, 0, resolve, RetailUnitWriterScratch{})
+		if err != nil {
+			t.Fatalf("re-save side %d: %v", side, err)
+		}
+		if again[0x8E] != 6 {
+			t.Fatalf("re-saved 0x8E = %d, want the live 6 [08 R-SAVE-02 §6]", again[0x8E])
+		}
 	}
 }

@@ -27,7 +27,7 @@ func main() {
 	fmt.Println("// clean-room lint, taken with tools/cleanroom-baseline. It is a debt")
 	fmt.Println("// register, not a permission list: every entry is a comment or research")
 	fmt.Println("// line that still has to be rewritten as clean-room prose, with its")
-	fmt.Println("// address-level trail moved to /tmp/ta-decompile/notes/.")
+	fmt.Println("// address-level trail moved to $HOME/ta-decompile/notes/.")
 	fmt.Println("//")
 	fmt.Printf("// Total at baseline: %d occurrences across %d files.\n", total, len(keys))
 	fmt.Println("//")

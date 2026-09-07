@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // The unit painter's pass selector is the committed low two bits of the mover
@@ -292,5 +294,44 @@ func TestPublishedCommandPageUnionsBasePageWithExplicitDownloads(t *testing.T) {
 	cat.BuildMenus["lab"].Buttons[6] = "changed"
 	if fmt.Sprint(page.ProductKeys) != fmt.Sprint(wantKeys) || fmt.Sprint(page.GeneratedProducts) != fmt.Sprint(wantSlots) {
 		t.Fatalf("committed page aliases catalog storage: %+v", page)
+	}
+}
+
+// TestPublishSnapshotFactoryUsesTheBuildingClassBit locks review finding R08.
+// Stock factories, the kbot lab included, author CanMove=1, so a
+// CanMove/CanFly mobility heuristic misclassified every stock factory as
+// not-a-factory. The runtime building-class status bit — derived once at
+// allocation from the definition's authored bmcode, and the same bit
+// construction's own isMobileBuilder gate reads [05 "Factory production
+// lifecycle"] — is the correct input, and build-progress publication must
+// agree with it rather than inventing a second classifier.
+func TestPublishSnapshotFactoryUsesTheBuildingClassBit(t *testing.T) {
+	builderDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "lab"}, MaxDamage: 1, CanMove: true}
+	productDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "product"}, MaxDamage: 1}
+	w := newSessionFixtureWorld(4, nil)
+	builder, err := w.Create(builderDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create builder: %v", err)
+	}
+	product, err := w.Create(productDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	// The building-class bit is normally derived at allocation from the
+	// authored bmcode; this fixture's builder def carries no bmcode wiring,
+	// so the bit is stamped directly to isolate the publication contract from
+	// that derivation, per the review finding's own repro (CanMove=true with
+	// the bit set).
+	w.Unit(builder).Flags |= units.BuildingClassStatus
+	build := &construction.Service{}
+	build.SetBuilderLink(product, builder)
+	s := &Session{Units: w, Build: build, Snapshot: frame.NewBuffer(), LocalOwner: 0}
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Builds) != 1 {
+		t.Fatalf("published frame = %#v, want one build progress record", cur)
+	}
+	if !cur.Builds[0].Factory {
+		t.Fatal("builder with CanMove=true but the building-class bit set published Factory=false, want true")
 	}
 }

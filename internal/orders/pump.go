@@ -991,6 +991,20 @@ func (q *Queue) spliceOutPrimary(n *Node) bool {
 	return true
 }
 
+// spliceOutSecondary is spliceOutPrimary's rear-segment twin, and exists for
+// the same reason: the removal cleanup runs before the unlink and can re-enter
+// the queue, so an index measured before it is stale.
+func (q *Queue) spliceOutSecondary(n *Node) bool {
+	for i, m := range q.secondary {
+		if m == n {
+			copy(q.secondary[i:], q.secondary[i+1:])
+			q.secondary = q.secondary[:len(q.secondary)-1]
+			return true
+		}
+	}
+	return false // the cancel notification already unlinked it
+}
+
 // unlinkPrimary removes the dispatched record from the primary segment and
 // runs the removal cleanup [05 "Queue subtraction"]. The record is found by
 // identity rather than assumed to be at the front: a handler that head-inserts
@@ -1236,13 +1250,7 @@ func (q *Queue) applySecondaryResultCode(n *Node, code Code, tick uint32) (advan
 func (q *Queue) removeSecondaryRecord(n *Node) {
 	n.Flags |= FlagTombstone
 	q.cleanupNode(n)
-	for i, m := range q.secondary {
-		if m == n {
-			copy(q.secondary[i:], q.secondary[i+1:])
-			q.secondary = q.secondary[:len(q.secondary)-1]
-			return
-		}
-	}
+	q.spliceOutSecondary(n) // by identity after the cleanup
 }
 
 // Mobile-build blocked-area retry budget [R-ORDER-02 §1]. The record's third

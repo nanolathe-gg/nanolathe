@@ -6,7 +6,7 @@
 // the global tick. Slot placement was recovered from the mission-load and
 // battle-setup paths; key-string identities come from the out-of-tree key
 // vocabulary notes. The raw slot and address trail lives only in
-// /tmp/ta-decompile/notes/cleanroom-scrub-trail.md [P1-02 §1].
+// $HOME/ta-decompile/notes/cleanroom-scrub-trail.md [P1-02 §1].
 
 package mission
 

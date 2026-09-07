@@ -609,6 +609,13 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// one coherent tick-end view and never needs to bind callbacks or inspect
 	// mutable session services [03 §3.4][03 §3.9].
 	published.Radar.Contacts = published.Radar.Contacts[:0]
+	// The destination slot's previous contents are still live in the backing
+	// array beneath the truncated length above (Reset kept every capacity,
+	// including each contact's nested Rings backing array, truncated to
+	// length zero). Re-slicing to the full capacity recovers them so the loop
+	// below can hand a unit's contact its old ring storage back instead of
+	// growing a fresh slice every armed unit, every tick [03 §3.9] (R05).
+	existingContacts := published.Radar.Contacts[:cap(published.Radar.Contacts)]
 	// The debug display mode is session state written only by the film-mode key
 	// set [03 §3.12][07 R-CAM-01 §9]. Preserve its exact value; presentation
 	// must not manufacture a mode at the frame boundary [I6]. The frame field's
@@ -619,7 +626,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 		sensorInputs = s.Vis.SensorInputs()
 	}
 	if s.Units != nil {
-		sensorIndex := 0
+		s.buildRadarSensorIndex(sensorInputs)
 		for _, u := range s.Units.Iter() {
 			if u == nil || !u.Alive {
 				continue
@@ -646,20 +653,18 @@ func (s *Session) publishSnapshot(tick uint32) {
 				stealth = u.Def.Stealth
 				onOffable = u.Def.OnOffable
 			}
-			if si := radarSensorInput(sensorInputs, uint16(u.Handle), sensorIndex); si != nil {
-				// ID-bearing inputs are the authoritative Step seam. A zero-ID
-				// positional fallback is retained for older producers, but its zero
-				// fields are placeholders and must not erase state derived from the
-				// live unit/catalog record.
-				if si.ID != 0 {
-					status = si.Status
-					hidden = si.Hidden
-					stealth = si.Stealth
-					active = si.Active
-					onOffable = si.OnOffable
-				}
+			// The production sensor pass is the only producer of sensor inputs
+			// [visibility.Service.SensorInputs] and always stamps a nonzero ID
+			// with the pool handle, so the ID-bearing lookup is the sole path;
+			// the ordinal fallback for hypothetical zero-ID producers has been
+			// retired (R05).
+			if si := s.radarSensorInputFor(sensorInputs, uint16(u.Handle)); si != nil {
+				status = si.Status
+				hidden = si.Hidden
+				stealth = si.Stealth
+				active = si.Active
+				onOffable = si.OnOffable
 			}
-			sensorIndex++
 			selected := u.Owner == s.LocalOwner && u.Flags&0x10 != 0
 			ownerKnown := u.Owner < 10
 			palette, paletteKnown := radarOwnerPalette(s, u.Owner, ownerKnown)
@@ -670,6 +675,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 			if selected {
 				status |= 0x10
 			}
+			contactIdx := len(published.Radar.Contacts)
 			contact := frame.RadarContactView{
 				Kind: frame.RadarContactUnit, Handle: u.Handle, Owner: u.Owner, OwnerKnown: ownerKnown,
 				X: u.X, Y: u.Y, Z: u.Z, Status: status,
@@ -687,6 +693,12 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Friendly:      status&visibility.FriendlyMask != 0,
 				Visible:       u.Owner == s.LocalOwner || status&visibility.SeenBit != 0,
 				Palette:       palette, PaletteKnown: paletteKnown,
+			}
+			if contactIdx < len(existingContacts) {
+				// Reuse the slot's previous ring backing array (already
+				// truncated to zero length by Reset, capacity intact) instead
+				// of appending into a fresh nil slice [03 §3.9] (R05).
+				contact.Rings = existingContacts[contactIdx].Rings[:0]
 			}
 			if u.Def != nil {
 				contact.Commander = u.Def.Commander
@@ -769,9 +781,14 @@ func (s *Session) publishSnapshot(tick uint32) {
 				b.FootX = int8(product.Def.FootprintX)
 				b.FootZ = int8(product.Def.FootprintZ)
 			}
-			if builder.Def != nil {
-				b.Factory = !builder.Def.CanMove && !builder.Def.CanFly
-			}
+			// The runtime building-class status bit, not authored mobility:
+			// stock factories (kbot lab included) author CanMove=1, so a
+			// CanMove/CanFly heuristic misclassifies every stock factory as
+			// not-a-factory. The bit is derived once, at allocation, from the
+			// definition's authored bmcode [05 "Factory production
+			// lifecycle"] — the same source construction's isMobileBuilder
+			// reads (internal/construction/factory.go) (review finding R08).
+			b.Factory = builder.Flags&units.BuildingClassStatus != 0
 			published.Builds = append(published.Builds, b)
 		}
 	}
@@ -922,18 +939,12 @@ func publishPlayerRows(s *Session, published *frame.Frame) {
 			// deleted because it is the field both readers name — see its
 			// declaration.
 			Auxiliary: p.ResultAuxiliary,
-			// Established: the rank byte's initial value is the SLOT INDEX —
-			// the per-slot registration helper (row→player conversion, campaign
-			// seat setup, multiplayer player creation) writes it beside the
-			// controller byte, and battle entry never touches it, so before the
-			// first credited kill the ranks are 0..9 in slot order [07 R-HUD-04
-			// §1 "the rank byte's initial value"][08 R-SKIR-01 §2]. Its only
-			// other writer is the kill-lead shift of [08 R-CAMP-01 §9], which
-			// this build does not yet run (it needs rank state on the player
-			// record and the status-line poster for `%s has taken the lead with
-			// %d kills`); until it does, the published rank is the registration
-			// value for every slot.
-			Rank: uint8(i),
+			// The authoritative rank byte, copied out like every other term:
+			// registration seeds it to the slot index and the kill-lead shift is
+			// its only other writer [08 R-SKIR-01 §2][08 R-CAMP-01 §9]
+			// [07 R-HUD-04 §1]. The panel's vacated-rank compaction runs on the
+			// published copy, never back onto the record.
+			Rank: p.Rank,
 		}
 		if s.Units != nil {
 			row.LiveUnits = s.Units.LiveCountForPlayer(i)
@@ -1123,18 +1134,55 @@ func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
 	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.LocalOwner), f.X, f.Y, f.Z)
 }
 
-func radarSensorInput(inputs []visibility.SensorInput, id uint16, index int) *visibility.SensorInput {
+// buildRadarSensorIndex (re)builds the session-retained index that resolves a
+// live unit's sensor input by pool handle in O(1), replacing the whole-slice
+// scan this used to do once per live unit per tick [03 §3.9] (review finding
+// R05). The single production sensor pass (visibility.Service.SensorInputs,
+// fed by the sweep at internal/visibility sensors.go) always stamps a
+// nonzero ID with the live unit's pool handle, so a handle-keyed index is a
+// complete replacement.
+//
+// The index itself (radarSensorIndex/radarSensorIndexGen) is never cleared;
+// each call bumps the generation stamp radarSensorIndexAt and only the
+// entries this call actually writes compare equal to it, so a stale handle
+// from a unit that died since the index last held its slot reads back as
+// "not found" without a per-tick clear pass. Use radarSensorInputFor to read
+// it back; this is a plain method (not a closure-returning one) so building
+// the index allocates nothing beyond the one-time slice growth.
+func (s *Session) buildRadarSensorIndex(inputs []visibility.SensorInput) {
+	if s == nil || s.Units == nil {
+		return
+	}
+	// Handle 0 is the pool's null sentinel [01 §6.1]; live handles run
+	// 1..Capacity(), so the index needs Capacity()+1 slots.
+	need := s.Units.Capacity() + 1
+	if cap(s.radarSensorIndex) < need {
+		s.radarSensorIndex = make([]int32, need)
+		s.radarSensorIndexGen = make([]uint32, need)
+	} else {
+		s.radarSensorIndex = s.radarSensorIndex[:need]
+		s.radarSensorIndexGen = s.radarSensorIndexGen[:need]
+	}
+	s.radarSensorIndexAt++
+	gen := s.radarSensorIndexAt
+	idx := s.radarSensorIndex
+	stamps := s.radarSensorIndexGen
 	for i := range inputs {
-		if id != 0 && inputs[i].ID == id {
-			return &inputs[i]
+		id := inputs[i].ID
+		if int(id) < len(idx) {
+			idx[id] = int32(i)
+			stamps[id] = gen
 		}
 	}
-	// Older producers do not provide the optional ID. SensorTick preserves
-	// indexed live-unit order, so the ordinal is an immutable fallback.
-	if index >= 0 && index < len(inputs) && inputs[index].ID == 0 {
-		return &inputs[index]
+}
+
+// radarSensorInputFor reads back the index buildRadarSensorIndex built for
+// this same publication, keyed by pool handle [03 §3.9] (R05).
+func (s *Session) radarSensorInputFor(inputs []visibility.SensorInput, id uint16) *visibility.SensorInput {
+	if int(id) >= len(s.radarSensorIndex) || s.radarSensorIndexGen[id] != s.radarSensorIndexAt {
+		return nil
 	}
-	return nil
+	return &inputs[s.radarSensorIndex[id]]
 }
 
 // publishVisibilityView copies the local player's visibility masks into the

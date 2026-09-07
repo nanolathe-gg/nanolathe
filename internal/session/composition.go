@@ -1494,6 +1494,34 @@ func createAndBindServices(s *Session) error {
 	if (cobFS == nil) != (cobLoader == nil) {
 		return fmt.Errorf("session: incomplete COB source for service wiring [04 §4.1]")
 	}
+	// The authored animation metadata the AUTHORITATIVE phases read: a burning
+	// feature's current frame geometry and a die/reclaim/burn lifetime in visits
+	// [05 R-FEAT-01 §10], and an effect entry's frame count, which is what a
+	// smoke puff's own last frame is drawn against [03 R-STRIP-01 §2].
+	//
+	// It is compiled here, from the battle's own VFS, because this is the last
+	// point that precedes BOTH producers: the strip table below, whose
+	// geothermal containers are built while the terrain's features populate,
+	// and the feature service's two art-backed seams. Before this moved into
+	// content, the only GAF cache in the build was the graphical client's, so a
+	// headless battle timed feature transitions and retired smoke puffs
+	// differently from a windowed one — an authoritative difference, not a
+	// rendering one.
+	//
+	// A composition without a VFS (unit-test fixtures) leaves the table nil and
+	// every consumer keeps its documented "unknown" behaviour. A resolver a
+	// caller installed explicitly is never overwritten.
+	if s.simArt == nil && cobFS != nil {
+		s.simArt = content.CompileSimArt(cobFS, s.Catalog)
+	}
+	if s.simArt != nil {
+		if s.effectFrameCount == nil {
+			s.SetEffectEntryFrameCount(s.simArt.EffectEntryFrameCount)
+		}
+		if s.featureSequence == nil {
+			s.SetFeatureSequenceResolver(s.simArt.FeatureSequence)
+		}
+	}
 	// Composition is the central topology site for the session's committed-frame
 	// publication boundary [01 §4.4][03 §1]. The helper is idempotent so an
 	// existing staged event window or effect pool survives re-binding.
@@ -1616,8 +1644,9 @@ func createAndBindServices(s *Session) error {
 		s.bindFeatureStripProducers()
 		s.Features.PopulateFromTerrain()
 	}
-	// The two remaining feature seams — BurnFrameGeometry and AnimationTicks —
-	// stay unbound here; bindFeatureStripProducers says why.
+	// The two art-backed feature seams — BurnFrameGeometry and AnimationTicks —
+	// are bound by bindFeatureStripProducers above, against the content table
+	// installed at the top of this function.
 	// Visibility [03 §3] dimensions from terrain, mode respects SkirmishConfig
 	// Mapping 0 → history disabled (word fills all bits), LineOfSight 0 → current disabled (byte grids fill 1), LOSType 0 → sprite-mask [08 "Skirmish configuration"][03 §3.1] C2.
 	mode := visibilityModeForSession(s)
@@ -2363,22 +2392,22 @@ func (s *Session) bindDamageReaction() {
 // taken after the call site's two jitter draws and in the same phase
 // [05 R-FEAT-01 §16][03 R-STRIP-01 §2][01 §7.5].
 //
-// Two feature seams are deliberately left nil, because filling them needs
-// files outside this unit:
+// Two of the seams are art-backed:
 //
-//   - BurnFrameGeometry wants the burn sequence's current GAF frame. The
-//     session resolves no feature GAF at all — content.Catalog carries the
-//     definition's sequence NAMES, and the only GAF cache in the build is the
-//     client's. Filling it needs a resolver field and setter on Session (the
-//     shape of SetEffectEntryFrameCount), an accessor over the client's
-//     feature-GAF cache, and one line in the composer that binds them, exactly
-//     as the effect frame count is bound today. Until then the puff is emitted
-//     unjittered at the footprint centre, which is pass 3a's own base point.
-//   - AnimationTicks wants the death/reclaim sequence LENGTH from the same
-//     GAF entries, through the same chain. Until it is bound, the transition
-//     of [05 R-FEAT-01 §5] takes step 3's immediate replacement, which is what
-//     every removal did before the animation records existed — so a missing
-//     seam changes nothing rather than freezing a cell.
+//   - BurnFrameGeometry wants the burn sequence's current GAF frame, which
+//     pass 3a scales its two jitter draws by.
+//   - AnimationTicks wants the death/reclaim sequence LENGTH in visits, which
+//     is when the transition of [05 R-FEAT-01 §5] stamps the successor
+//     instead of taking step 3's immediate replacement.
+//
+// Both read the session's feature-sequence resolver, which createAndBindServices
+// fills from the battle's immutable content.SimArt table before it reaches this
+// binder — so the resolver is present from construction on every path, windowed
+// or headless, and both shells time the same transitions. A composition without
+// a VFS answers "unknown": zero geometry, which makes pass 3a's addends zero,
+// and zero visits, which keeps the transition on the immediate replacement
+// every removal took before the animation records existed. Nothing is invented
+// for a miss.
 func (s *Session) bindFeatureStripProducers() {
 	if s == nil || s.Features == nil {
 		return
@@ -2388,12 +2417,9 @@ func (s *Session) bindFeatureStripProducers() {
 			s.appendStripSmokePuffer(stripBurningFeatureSmoke, pos, SmokePuffTrail)
 		}
 	}
-	// The two art-backed seams read the session's feature-sequence resolver at
-	// CALL time, not at bind time: the shell installs the resolver when it
-	// attaches the client, which can happen either side of this composition.
-	// A session with no resolver answers "unknown" — zero geometry, which
-	// makes pass 3a's addends zero, and zero visits, which keeps the
-	// transition of [05 R-FEAT-01 §5] on step 3's immediate replacement.
+	// The two art-backed seams read the session's feature-sequence resolver
+	// through the session pointer, so a fixture that installs its own resolver
+	// after composition still reaches these closures.
 	if s.Features.BurnFrameGeometry == nil {
 		s.Features.BurnFrameGeometry = func(def *content.FeatureDef, visit int32) (w, h, xoff, yoff int32) {
 			if s.featureSequence == nil || def == nil || def.SeqNameBurn == "" {

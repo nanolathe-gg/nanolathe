@@ -151,6 +151,13 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 			p.ControllerState = 2
 		}
 		p.IsObserver = false
+		// The campaign seat setup is a registration path too, and registration
+		// writes the score-panel rank byte to the slot index [08 R-SKIR-01 §2]
+		// [07 R-HUD-04 §1]. A campaign mission never runs the kill-lead shift
+		// and never shows the panel, so the seed is the byte's whole life here;
+		// it exists so a slot's rank has one initial-value contract whichever
+		// path registered it.
+		p.SeedScorePanelRank(i)
 		p.GameEnded = false
 		p.EndGameCountdown = -1
 		p.Allies[i] = true

@@ -81,8 +81,10 @@ type effectFrameCountResolver func(bank, entry string) (int, bool)
 // when a die, reclaim or burn animation ends.
 //
 // It answers from the file's bytes alone, so it is identical in every run over
-// the same install (I4), and a session with no resolver (every headless run)
-// gets no geometry and no length, which leaves the transition on the immediate
+// the same install (I4). Composition fills it from the battle's immutable
+// content.SimArt table before any feature or strip exists, so a headless run
+// and a windowed run time the same transitions; a session composed without a
+// VFS answers "unknown", which leaves the transition on the immediate
 // replacement it took before the animation records existed.
 type featureSequenceResolver func(filename, sequence string, visit int32) (w, h, xoff, yoff, visits int32, ok bool)
 
@@ -122,6 +124,13 @@ func (s *Session) ensurePublicationState() *publicationState {
 type Session struct {
 	State         State
 	pendingBattle bool
+
+	// simArt is the battle's immutable authored-animation metadata, compiled
+	// from the same VFS the catalog came from before any battle service is
+	// bound. It is the one production source of the two resolvers below, which
+	// is what makes a headless battle and a windowed battle the same
+	// simulation [05 R-FEAT-01 §10][03 R-STRIP-01 §2].
+	simArt *content.SimArt
 
 	// effectFrameCount resolves an effect entry's frame count for the strip
 	// families; see SetEffectEntryFrameCount.
@@ -163,6 +172,16 @@ type Session struct {
 	// [R-CORE-03][CRD-008].
 	radarBlinkCountdown int16
 	radarBlinkPhase     uint16
+
+	// radarSensorIndex/radarSensorIndexGen resolve a live unit's committed
+	// sensor input by pool handle in O(1) rather than scanning the whole
+	// sensor input slice per live unit [03 §3.9] (review finding R05). Sized
+	// to the unit pool's capacity and grown, never shrunk, across ticks; a
+	// generation stamp (radarSensorIndexAt) lets each publication overwrite
+	// only the handles it visits instead of clearing the whole index.
+	radarSensorIndex    []int32
+	radarSensorIndexGen []uint32
+	radarSensorIndexAt  uint32
 
 	// strips is the ten effect-strip object family swept at phase 11. It is
 	// allocated at battle entry (createAndBindServices) and destroyed with
@@ -855,6 +874,9 @@ func handleLocalPreload(s *Session) {
 				p.ControllerState = 2
 			}
 			p.IsObserver = false
+			// Registration writes the score-panel rank byte to the slot index
+			// [08 R-SKIR-01 §2][07 R-HUD-04 §1].
+			p.SeedScorePanelRank(i)
 			p.GameEnded = false
 			p.EndGameCountdown = -1
 		}

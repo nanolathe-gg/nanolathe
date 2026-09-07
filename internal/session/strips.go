@@ -1510,10 +1510,10 @@ const smokePuffEntry = "smoke 1"
 // [03 R-STRIP-01 §2][06 R-WFX-01 §5].
 //
 // Retail's container reads it from the entry pointer it was initialised with;
-// the entry is presentation asset data, so this build receives it through a
-// seam the composer fills. A session with no resolver — every headless run —
-// gets zero, and its puffs then carry no last frame, which is exactly the
-// behaviour that stood before the seam existed.
+// this build reads the same length out of the battle's immutable content
+// metadata table, which composition installs before the first container can be
+// built. A session composed without a VFS gets zero, and its puffs then carry
+// no last frame — the behaviour that stood before the table existed.
 func (s *Session) smokeEntryFrameCountBase(selector uint8) int32 {
 	return s.effectEntryFrameCountBase(smokeEntryForSelector(selector))
 }
@@ -1550,15 +1550,19 @@ func smokeLastFrame(frameCountBase int32, draw int32) int32 {
 // before the frame-count seam was filled, and every puff those containers had
 // already spawned.
 //
-// The ordering this repairs is real and unavoidable: the geothermal steam
-// producer runs from the feature stamp, so a vent's container is created while
-// the map's terrain features are populated — inside the authoritative session
-// constructor, well before any composer exists to fill the seam. Those
-// containers therefore resolved a frame count of zero, their puffs got no last
-// frame, and nothing retired them: the smoke family's ONLY retirement is its
-// cursor reaching its last frame, so every vent's steam was immortal. Thirty-one
-// puffs piled at the vent and then slid downwind forever, which is what the
-// play test saw.
+// The ordering it repaired was real: the geothermal steam producer runs from
+// the feature stamp, so a vent's container is created while the map's terrain
+// features are populated, and the frame count used to arrive only when the
+// graphical shell attached its client — after that. Those containers resolved a
+// frame count of zero, their puffs got no last frame, and nothing retired them:
+// the smoke family's ONLY retirement is its cursor reaching its last frame, so
+// every vent's steam was immortal. Thirty-one puffs piled at the vent and then
+// slid downwind forever, which is what the play test saw.
+//
+// Composition now installs the content metadata table before the strip table
+// exists, so no production container is ever built without its count. This pass
+// remains as the repair for a fixture that installs a resolver by hand after
+// construction, and is a no-op on every battle path.
 //
 // No draw is taken here. Each puff already spent its own draw at spawn and
 // retained it, so the value finished now is exactly the one retail computes.
@@ -1588,13 +1592,14 @@ func (s *Session) resolveSmokeFrameCounts() {
 }
 
 // SetEffectEntryFrameCount installs the resolver the strip families ask for an
-// effect entry's frame count. It is the same shape as the effect-timing
-// resolver next door and is filled by the same composer, from the same bank
-// cache, so the frame count a puff's last frame is drawn against and the frames
-// the draw pass can actually blit can never come apart.
+// effect entry's frame count. Production has exactly one caller —
+// createAndBindServices, installing the battle's immutable content.SimArt table
+// before the strip table exists — so the count a puff's last frame is drawn
+// against and the frames the draw pass can blit are two readings of one file.
+// Fixtures use it to install a stub.
 //
 // Installing it also finishes the containers that already exist — see
-// resolveSmokeFrameCounts for why any exist at all.
+// resolveSmokeFrameCounts for why any could.
 func (s *Session) SetEffectEntryFrameCount(resolve func(bank, entry string) (int, bool)) {
 	if s == nil {
 		return
@@ -1605,16 +1610,15 @@ func (s *Session) SetEffectEntryFrameCount(resolve func(bank, entry string) (int
 
 // SetFeatureSequenceResolver installs the resolver the FEATURE phase asks for
 // a definition's animation sequence — the burn frame's geometry and the
-// die/reclaim/burn lifetime of [05 R-FEAT-01 §10]. It is the same shape as the
-// two effect resolvers above and is filled by the same composer, from the same
-// process's asset cache, so the frames the draw pass blits and the frames the
-// simulation counts can never come apart.
+// die/reclaim/burn lifetime of [05 R-FEAT-01 §10]. Like the effect resolver
+// above, production installs it once from createAndBindServices out of the
+// battle's content.SimArt table; fixtures use it to install a stub.
 //
-// Unlike the effect resolvers this one feeds AUTHORITATIVE state: the visit a
-// feature's death animation ends on is when its successor is stamped. That is
-// sound because the answer depends on nothing but the asset bytes, and it is
-// why the resolver must be installed before the battle composes rather than at
-// the first draw.
+// This one feeds AUTHORITATIVE state: the visit a feature's death animation
+// ends on is when its successor is stamped. That is sound because the answer
+// depends on nothing but the asset bytes (I4), and it is why the table is
+// compiled from content before the battle composes rather than arriving with a
+// window.
 func (s *Session) SetFeatureSequenceResolver(resolve func(filename, sequence string, visit int32) (w, h, xoff, yoff, visits int32, ok bool)) {
 	if s == nil {
 		return

@@ -46,7 +46,11 @@ func RetailUnitBase(u *Unit, data []byte) error {
 	// back as DeathReclaimed.
 	u.LastDamageCause = data[0xAB]
 	u.DeathCause = DeathCauseFromKind(data[0xAB])
-	u.RelationDomainByte = data[0x8E]
+	// 0x8E is the attacker-side snapshot, "the owner byte of the last unit that
+	// damaged it (10 = no attacker)" [08 R-SAVE-02 §6], the value the
+	// under-attack notice compares with the victim's owner byte
+	// [06 R-WPN-04 §2]. Save load is one of its established writers.
+	u.LastDamageSide = data[0x8E]
 	u.CachedOccupancyX = int16(binary.LittleEndian.Uint16(data[0x93:]))
 	u.CachedOccupancyZ = int16(binary.LittleEndian.Uint16(data[0x95:]))
 	u.SightCellX = int16(binary.LittleEndian.Uint16(data[0x97:]))
@@ -98,6 +102,10 @@ func RetailUnitBase(u *Unit, data []byte) error {
 		// that can change the enabled bit after construction. Bits 5-7 are
 		// inert and the reader discards them, as the writer does.
 		s.Flags = (s.Flags &^ SlotFlagPersisted) | (data[off+0x17] & SlotFlagPersisted)
+		// The scratch pair exists only to hand the on-disk words from this
+		// scalar pass to RetailUnitWeaponTargets, which runs once every forced
+		// slot exists. The save writer never reads it — the live Target is the
+		// authority there.
 		s.SavedTargetLow = binary.LittleEndian.Uint16(data[off:])
 		s.SavedTargetHigh = binary.LittleEndian.Uint16(data[off+2:])
 		s.SavedActiveByte = data[off+0x08]
@@ -112,8 +120,11 @@ func RetailUnitBase(u *Unit, data []byte) error {
 }
 
 // RetailUnitWeaponTargets resolves the saved unit-mode target words after all
-// stable slots have been forced-allocated. Ground pairs remain signed 16-bit
-// coordinates widened to 16.16 [08 R-SAVE-WEAPON-01].
+// stable slots have been forced-allocated. The high word is the discriminator
+// [08 R-SAVE-WEAPON-01]: the unit sentinel 0x8000 over a zero low word is the
+// empty encoding, the same sentinel over a nonzero low word is a unit target
+// named by its stable ID, and any other high word is a ground point whose
+// signed 16-bit coordinates widen to 16.16.
 func RetailUnitWeaponTargets(u *Unit, stable map[uint16]pool.Handle) error {
 	if u == nil {
 		return fmt.Errorf("units: retail restore: nil unit")
@@ -121,14 +132,20 @@ func RetailUnitWeaponTargets(u *Unit, stable map[uint16]pool.Handle) error {
 	for i := range u.Slots {
 		s := &u.Slots[i]
 		if s.SavedTargetHigh == 0x8000 {
-			if s.SavedTargetLow != 0 {
-				h, ok := stable[s.SavedTargetLow]
-				if !ok || h == 0 {
-					return fmt.Errorf("units: retail restore: unresolved weapon target %d", s.SavedTargetLow)
-				}
-				s.Target.Unit = h
+			// Index zero under the unit sentinel is the EMPTY encoding, not a
+			// unit target with a null handle: the target-point resolver reads
+			// "unit target, slot index zero" as no target and rewrites a freed
+			// target's words to exactly this pair [06 R-WPN-04 §1]. Decoding it
+			// as TargetUnit produced a target the writer could not re-serialize.
+			if s.SavedTargetLow == 0 {
+				s.Target = Target{Kind: TargetNone}
+				continue
 			}
-			s.Target.Kind = TargetUnit
+			h, ok := stable[s.SavedTargetLow]
+			if !ok || h == 0 {
+				return fmt.Errorf("units: retail restore: unresolved weapon target %d", s.SavedTargetLow)
+			}
+			s.Target = Target{Kind: TargetUnit, Unit: h}
 			continue
 		}
 		s.Target = Target{Kind: TargetGround, X: numeric.Fixed(int64(int16(s.SavedTargetLow)) << 16), Z: numeric.Fixed(int64(int16(s.SavedTargetHigh)) << 16)}

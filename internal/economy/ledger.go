@@ -64,6 +64,17 @@ type Player struct {
 	Losses          int16
 	CommanderKills  int16
 	CommanderLosses int16
+	// Rank is the slot's score-panel rank byte. Registration writes it to the
+	// slot index, and nothing in battle entry touches it afterwards; its only
+	// other writer is the kill-lead shift run after a credited kill
+	// [08 R-SKIR-01 §2][08 R-CAMP-01 §9][07 R-HUD-04 §1]. The Space-held score
+	// panel emits its rows in rank order and compacts a vacated rank as it
+	// scans, so a lower byte is a better placing.
+	//
+	// It is not a save field. The `Player%i` account is closed at nineteen
+	// scalars and names no rank [08 "Player records"], so a restored battle
+	// takes the registration value again — see the seeding site.
+	Rank uint8
 	// Lobby metadata is retained on the authoritative player record so result
 	// row eligibility and owner art do not need to inspect mutable world state.
 	Name            string

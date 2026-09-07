@@ -377,10 +377,13 @@ func (c *Client) terrainScreenCoverage(x, y int) bool {
 	return mapX >= 0 && mapZ >= 0 && mapX < int64(c.terrain.CellW)*16 && mapZ < int64(c.terrain.CellH)*16
 }
 
-// EffectEntryFrameCount reports how many frames one effect entry holds. The
-// strip families need it to draw a smoke puff's own last frame
-// [03 R-STRIP-01 §2]; it comes from the same bank cache the draw pass resolves
-// frames through, so the two can never disagree about an entry's length.
+// EffectEntryFrameCount reports how many frames one effect entry holds, out of
+// the same bank cache the draw pass resolves frames through.
+//
+// The strip families' use of this length — a smoke puff's own last frame
+// [03 R-STRIP-01 §2] — is AUTHORITATIVE and reads content.SimArt, not this
+// accessor; what remains here is presentation's copy of the same question, and
+// a test asserts the two readings agree.
 func (c *Client) EffectEntryFrameCount(bank, entry string) (int, bool) {
 	e, ok := c.effectEntry(bank, entry)
 	if !ok {

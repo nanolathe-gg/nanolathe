@@ -4,7 +4,7 @@ package cleanroom
 // clean-room lint, taken with tools/cleanroom-baseline. It is a debt
 // register, not a permission list: every entry is a comment or research
 // line that still has to be rewritten as clean-room prose, with its
-// address-level trail moved to /tmp/ta-decompile/notes/.
+// address-level trail moved to $HOME/ta-decompile/notes/.
 //
 // Total at baseline: 4 occurrences across 3 files.
 //

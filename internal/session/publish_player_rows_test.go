@@ -25,6 +25,12 @@ func publishedPlayerRows(t *testing.T, s *Session, tick uint32) [frame.PlayerRow
 // [07 R-HUD-04 §1].
 func TestPlayerRowsPublishTheRowFilterTermsEveryTick(t *testing.T) {
 	s := newLoopTestSession(t, 2)
+	// The helper builds the two player records directly rather than through a
+	// registration path, so the rank half of registration is applied here
+	// [08 R-SKIR-01 §2].
+	for i := 0; i < 2; i++ {
+		s.Econ.Players[i].SeedScorePanelRank(i)
+	}
 	for tick := uint32(1); tick <= 3; tick++ {
 		rows := publishedPlayerRows(t, s, tick)
 		if !rows[0].Present || !rows[1].Present {
@@ -38,15 +44,19 @@ func TestPlayerRowsPublishTheRowFilterTermsEveryTick(t *testing.T) {
 			t.Fatalf("tick %d: live-unit counts = %d/%d, want 1/1", tick, rows[0].LiveUnits, rows[1].LiveUnits)
 		}
 		for i := 2; i < frame.PlayerRowSlots; i++ {
-			// An unoccupied slot publishes its zero row. The rank byte is the
-			// publisher's slot-index placeholder and is written for every slot;
-			// the row scan reads it only for slots that qualify.
-			if rows[i] != (frame.PlayerRow{Rank: uint8(i)}) {
+			// An unoccupied slot publishes its zero row. It was never
+			// registered, so its rank byte is the zero its record was allocated
+			// with, not the slot index [08 R-SKIR-01 §2]; the candidate scan's
+			// present test is what keeps that zero out of the ranking
+			// [06 §12.1 R-WPN-02 §9].
+			if rows[i] != (frame.PlayerRow{}) {
 				t.Fatalf("tick %d: unoccupied slot %d published %+v, want the zero row", tick, i, rows[i])
 			}
 		}
+		// The published byte is the record's, and no kill has been credited, so
+		// it is still the registration value [08 R-SKIR-01 §2][07 R-HUD-04 §1].
 		if rows[0].Rank != 0 || rows[1].Rank != 1 {
-			t.Fatalf("tick %d: rank bytes = %d/%d, want the slot-order placeholder 0/1", tick, rows[0].Rank, rows[1].Rank)
+			t.Fatalf("tick %d: rank bytes = %d/%d, want the registration values 0/1", tick, rows[0].Rank, rows[1].Rank)
 		}
 	}
 }

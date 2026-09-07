@@ -17,15 +17,39 @@ func (s *Session) RecordDeathStatistics(in combat.DeathCreditInput) {
 	if credit.VictimLoss && int(in.VictimOwner) < len(s.Econ.Players) {
 		s.Econ.Players[in.VictimOwner].RecordUnitLoss(credit.VictimCommanderLoss)
 	}
+	credited := false
 	if credit.AttackerKill && int(in.AttackerSide) < len(s.Econ.Players) {
 		// The full path increments the ordinary kill word and, for a commander
 		// victim, the commander-kill word at the same event boundary [06 §12.1].
 		s.Econ.Players[in.AttackerSide].RecordUnitKill(in.VictimCommander)
+		credited = true
 	}
 	if credit.AttackerCommanderKill && int(in.AttackerSide) < len(s.Econ.Players) {
 		if !credit.AttackerKill {
 			s.Econ.Players[in.AttackerSide].RecordCommanderKill()
 		}
+		credited = true
+	}
+	// The leader announcement is the handler's next step after the credit
+	// switch, inside the same slot visit [06 §12.1]. It runs "after a crediting
+	// death", read here as a death that moved one of the attacker's two kill
+	// counters — which is both branches above, because the commander-only
+	// branch is precisely the event that changes the ranking in a rule-2
+	// session, where the compared counter IS the commander word
+	// [06 §12.1 R-WPN-02 §9][08 R-CAMP-01 §9].
+	//
+	// TODO(question): whether retail instead runs the leader announcement
+	// unconditionally on every full-credit death — including one where neither
+	// counter moved, because the victim's owner equalled the attacker's side or
+	// the victim was incomplete — is not settled. [06 §12.1]'s death timeline
+	// lists it as a bare step ("runs the credit switch; runs the leader
+	// announcement") carrying its own five entry gates, none of which is "a
+	// counter moved". The two readings differ only in whether an
+	// already-consistent ranking is re-evaluated with unchanged counters, which
+	// can move no rank byte and post no line, so nothing observable turns on
+	// it; tracing the announcement's call edge would settle it.
+	if credited {
+		s.applyKillLeadShift(int(in.AttackerSide))
 	}
 }
 

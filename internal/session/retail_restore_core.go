@@ -181,6 +181,19 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	if s.Movement != nil {
 		s.Movement.BindWorld(s.Units)
 	}
+	// Index the two detached per-unit box families and the order records once,
+	// rather than rescanning all of them for every unit record. Grouping by
+	// the exact key and appending in scan order preserves both encounter
+	// order and multiplicity, so the account/mover/order semantics below are
+	// unchanged from the linear scan they replace [08 R-SAVE-02 §6, §8].
+	otherByName := make(map[string][]int, len(image.Units.Other))
+	for i, raw := range image.Units.Other {
+		otherByName[raw.Name] = append(otherByName[raw.Name], i)
+	}
+	ordersByParent := make(map[uint16][]int, len(image.Units.Orders))
+	for i, order := range image.Units.Orders {
+		ordersByParent[order.ParentStableID] = append(ordersByParent[order.ParentStableID], i)
+	}
 	for recIndex, rec := range image.Units.Records {
 		if rec.Compat {
 			continue
@@ -192,11 +205,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		}
 		// Unit economy accounts are detached in UnitImage.Other. This is the
 		// first per-unit later pass [08 R-SAVE-02 §6].
-		for _, raw := range image.Units.Other {
-			if raw.Name == fmt.Sprintf("u%04xacc", rec.StableID) {
-				if err := economy.RetailUnitAccount(s.Econ, h, raw.Data); err != nil {
-					return err
-				}
+		for _, idx := range otherByName[unitBoxName(rec.StableID, "acc")] {
+			if err := economy.RetailUnitAccount(s.Econ, h, image.Units.Other[idx].Data); err != nil {
+				return err
 			}
 		}
 		// A mover box is read only inside the established HasMover branch;
@@ -211,31 +222,24 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		if s.Movement != nil && owner.Remaining == 0 {
 			s.Movement.EnsureUnit(owner)
 			if owner.HasMover {
-				var mover *save.RawBox
-				for i := range image.Units.Other {
-					raw := &image.Units.Other[i]
-					if raw.Name == fmt.Sprintf("u%04xmob", rec.StableID) {
-						if mover != nil {
-							return fmt.Errorf("session: retail restore: unit %d has duplicate mover boxes", rec.StableID)
-						}
-						mover = raw
-					}
+				moverIdx := otherByName[unitBoxName(rec.StableID, "mob")]
+				if len(moverIdx) > 1 {
+					return fmt.Errorf("session: retail restore: unit %d has duplicate mover boxes", rec.StableID)
 				}
-				if mover == nil {
+				if len(moverIdx) == 0 {
 					return fmt.Errorf("session: retail restore: unit %d has mover flag but no mover box", rec.StableID)
 				}
-				if err := s.Movement.RestoreMover(h, mover.Data); err != nil {
+				if err := s.Movement.RestoreMover(h, image.Units.Other[moverIdx[0]].Data); err != nil {
 					return fmt.Errorf("session: retail restore: unit %d mover: %w", rec.StableID, err)
 				}
 			}
 		}
 		// Rebuild queues after the account and mover state, then bind the front
 		// head exactly once before the script snapshot [08 R-SAVE-02 §6].
-		group := make([]save.OrderRecord, 0)
-		for _, order := range image.Units.Orders {
-			if order.ParentStableID == rec.StableID {
-				group = append(group, order)
-			}
+		orderIdx := ordersByParent[rec.StableID]
+		group := make([]save.OrderRecord, len(orderIdx))
+		for i, idx := range orderIdx {
+			group[i] = image.Units.Orders[idx]
 		}
 		if err := orders.RetailRestoreOrdersAtTick(owner, group, stage.StableUnit, binding, s.Clock.GlobalTick); err != nil {
 			return fmt.Errorf("session: retail restore: unit %d orders: %w", rec.StableID, err)
@@ -485,6 +489,23 @@ func restoreRetailFeatures(svc *features.Service, cat *content.Catalog, img save
 		}
 	}
 	return nil
+}
+
+// unitBoxName builds the exact detached box name a unit's account or mover
+// record carries — "u" + the stable ID as four lowercase hex digits + the
+// family suffix ("acc"/"mob") [08 R-SAVE-02 §6, §8]. Building it by hand
+// keeps the per-unit restore loop off fmt.Sprintf's reflection path; the
+// index that keys off it is built once from image.Units.Other, not per name
+// comparison.
+func unitBoxName(id uint16, suffix string) string {
+	const hexDigits = "0123456789abcdef"
+	var buf [5]byte
+	buf[0] = 'u'
+	buf[1] = hexDigits[(id>>12)&0xf]
+	buf[2] = hexDigits[(id>>8)&0xf]
+	buf[3] = hexDigits[(id>>4)&0xf]
+	buf[4] = hexDigits[id&0xf]
+	return string(buf[:]) + suffix
 }
 
 func readUnitRef(data []byte, off int) uint16 {

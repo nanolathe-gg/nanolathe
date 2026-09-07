@@ -652,6 +652,9 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		}
 		p.IsObserver = cfg.Players[i].Controller == SkirmishControllerObserver
 		p.ControllerState = ctrlState
+		// Registration writes the score-panel rank byte beside the controller
+		// byte [08 R-SKIR-01 §2].
+		p.SeedScorePanelRank(i)
 		// [08 R-SKIR-01 §2] "Row-to-player conversion": a live row "copies
 		// colour and side into the player's lobby record" before registering
 		// the slot, and the placement stamp helper "copies side and colour

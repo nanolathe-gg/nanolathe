@@ -186,6 +186,17 @@ func reclaimBeyondRangeWalksAndPays(t *testing.T, blocking bool) {
 			lastPhase = record.Phase
 			continue
 		}
+		// The record is gone. A sprite feature that names a reclaim sequence
+		// does not vanish on the payout visit: the transition attaches an
+		// animation instance and the FEATURE phase drives it to completion
+		// before the replacement stamps `smudge01` [05 R-FEAT-01 §5 step 5].
+		// The credit already landed on the visit that started it [05
+		// R-WORK-01 §5-A]. Keep stepping while that animation runs; only a
+		// departed record over a feature that is neither cleared nor
+		// animating means the approach never reached the footprint.
+		if inst := sess.Features.InstanceAt(anchorX, anchorZ); inst != nil && inst.IsAnimating {
+			continue
+		}
 		t.Fatalf("the reclaim record left the queue at phase %d after %d ticks without clearing the feature: the approach did not carry it to the footprint [04 R-ORD-01 §5]", lastPhase, i)
 	}
 

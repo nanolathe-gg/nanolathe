@@ -84,7 +84,12 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 		}
 		data[0x8d] = byte(u.Attachment.AttachPiece)
 	}
-	data[0x8e] = u.RelationDomainByte
+	// 0x8E is the attacker-side snapshot: the owner byte of the last unit that
+	// damaged this one, 10 meaning no attacker [08 R-SAVE-02 §6]
+	// [06 R-WPN-04 §2]. This used to write an obsolete opaque byte that no
+	// producer ever set, so a save discarded the snapshot the `Under Attack`
+	// notice compares against the victim's owner.
+	data[0x8e] = u.LastDamageSide
 	binary.LittleEndian.PutUint32(data[0x8f:], math.Float32bits(u.SpotMetal))
 	putI16(data[0x93:], u.CachedOccupancyX)
 	putI16(data[0x95:], u.CachedOccupancyZ)
@@ -147,11 +152,22 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 }
 
 func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error {
-	low, high := s.SavedTargetLow, s.SavedTargetHigh
+	// The LIVE target is the authority for the pair. The restore scratch
+	// (SavedTargetLow/High) is written only by the reader and is never read
+	// here: it carries the on-disk words from the scalar pass to
+	// RetailUnitWeaponTargets, and nothing keeps it in step with the ordinary
+	// order-side clear, which sets Kind to TargetNone and leaves the scratch
+	// naming whatever unit the slot used to hold.
+	var low, high uint16
 	switch s.Target.Kind {
 	case TargetNone:
-		// The wire has no third target discriminator. Preserve the raw pair held
-		// by a restored slot; a fresh zero pair is retail's point (0,0) image.
+		// The empty target encoding is index zero carrying the unit sentinel:
+		// the target-point resolver rewrites a freed target's slot words to
+		// "the empty encoding (index zero with the unit sentinel)" and reads a
+		// unit-mode pair with slot index zero as no target [06 R-WPN-04 §1].
+		// A zero pair is NOT empty — it is the real ground point (0,0)
+		// [08 R-SAVE-WEAPON-01].
+		low, high = 0, 0x8000
 	case TargetUnit:
 		var err error
 		low, err = resolveRetailStableID(stableID, s.Target.Unit, "weapon target")

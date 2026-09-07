@@ -325,19 +325,17 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	b.sess.SetEffectTimingResolver(func(e render.Event) (render.FrameTiming, bool) {
 		return cl.EffectFrameTiming(e.AssetID, e.Graphic)
 	})
-	// The strip families draw each smoke puff up to its own last frame, which
-	// is drawn against the bound entry's frame count [03 R-STRIP-01 §2] — the
-	// same asset the timing resolver above reads, through the same bank cache.
-	b.sess.SetEffectEntryFrameCount(cl.EffectEntryFrameCount)
-	// The feature phase reads two things out of a definition's GAF entries: the
-	// current burn frame's geometry, which pass 3a scales the smoke jitter by,
-	// and the die/reclaim/burn lifetime in visits, which is when an animation
-	// record's successor is stamped [05 R-FEAT-01 §10]. Both come from the
-	// client's own feature-GAF cache, so the frames the feature pass draws and
-	// the frames the simulation counts are one reading. The warm pass compiles
-	// the whole catalog here, off the simulation path, so no visit ever waits
-	// on a load.
-	b.sess.SetFeatureSequenceResolver(cl.FeatureSequence)
+	// The two AUTHORITATIVE readings of that same art — a smoke puff's last
+	// frame against its bound entry's frame count [03 R-STRIP-01 §2], and a
+	// burning feature's frame geometry and its die/reclaim/burn lifetime in
+	// visits [05 R-FEAT-01 §10] — are deliberately NOT bound here. Content
+	// compiles them from the battle's VFS and the session's own composition
+	// installs them, so a headless battle and this one are the same simulation.
+	// The shell binds presentation and nothing else.
+	//
+	// The warm pass below still belongs here: it compiles the catalog's event
+	// sequences into the client's PIXEL cache off the draw path, so the first
+	// frame of a feature's death animation never waits on a load.
 	if b.sess.Catalog != nil {
 		cl.WarmFeatureSequences(b.sess.Catalog.Features)
 	}

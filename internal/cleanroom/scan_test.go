@@ -62,7 +62,7 @@ func TestCleanRoom_Ratchet(t *testing.T) {
 			t.Errorf("%s: %d raw-forensics occurrence(s) in a file with no baseline entry (%v). "+
 				"AGENTS.md forbids committing executable addresses, decompiler-generated names, "+
 				"or executable structure offsets; describe what the algorithm does instead and "+
-				"keep the address trail in /tmp/ta-decompile/notes/.", path, got, linesFor(path))
+				"keep the address trail in $HOME/ta-decompile/notes/.", path, got, linesFor(path))
 			continue
 		}
 		if got > want {

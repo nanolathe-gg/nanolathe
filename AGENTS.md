@@ -35,7 +35,7 @@ live work.
 **3. Clone the executable's behavior, don't copy its code.** Understanding
 retail requires disassembly; shipping retail's expression of that understanding
 does not. Raw analysis — disassembly, decompiler output, addresses, register
-traces, generated symbol names — lives only in `/tmp/ta-decompile`, never in
+traces, generated symbol names — lives only in `$HOME/ta-decompile`, never in
 the repo. Clean-room description — what the algorithm *does*, in your own
 words — is what enters `research/`, code comments, and commit messages. You
 must perform the translation step.
@@ -65,7 +65,7 @@ level on every claim — **Established**, **Supported inference**, or
 **Unknown**.
 
 If you cannot describe a behavior without an address, you have not finished
-understanding it. Keep the address-level trail in `/tmp/ta-decompile/notes/`
+understanding it. Keep the address-level trail in `$HOME/ta-decompile/notes/`
 so a later agent can re-derive the finding without re-doing the search.
 
 ---
@@ -225,7 +225,7 @@ sink the presentation layer drains.
 **When research does not answer:** grep the category docs and `research/formats`
 first. If it is a T23/T25 item, write `TODO(T23)` / `TODO(T25)` with the chosen
 placeholder behavior and a one-line justification, and keep going. If it is a
-genuine gap, analyze the executable in `/tmp/ta-decompile`, then write the
+genuine gap, analyze the executable in `$HOME/ta-decompile`, then write the
 finding up clean-room in the owning doc — the translation step is part of the
 work, not a formatting chore. Otherwise stop and report. Inventing a constant
 is the one unrecoverable failure mode.
