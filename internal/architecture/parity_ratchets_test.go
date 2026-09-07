@@ -1,26 +1,16 @@
 package architecture
 
 // PROC-03 parity-drift ratchets, defined by docs/DESIGN_RUNTIME_DETERMINISM.md
-// §3.3 "Determinism tokens": two shrink-only counts over the authoritative
-// packages — type-checked map ranges [I1] and `float64` occurrences [I2] —
-// that keep existing parity drift from growing while cleanup works it off
-// incrementally. Map ranges and the I2 operations that live in formerly
-// exempt files are pinned to audited declaration-level records; the remaining
-// float sites retain their shrink-only per-file baseline. They sit here beside
-// the boundary guard that keeps the displayless command's dependency closure
-// free of the client and device packages.
+// §3.3 "Determinism tokens": type-checked map ranges [I1] and float64
+// occurrences [I2] keep existing parity drift from growing during cleanup.
+// Map traversals pin the audited range and containing function. Numeric
+// storage fields have individual allowances; existing I2 operations in
+// formerly exempt files have declaration-scoped counts. Other float sites
+// retain shrink-only per-file counts, tightened when an occurrence disappears.
 //
-// Ratchet semantics, shared by both ratchets: each guard scans non-test Go
-// files in the authoritative packages and records occurrences per file in a
-// committed baseline. Current counts may decrease freely (a decrease means the
-// baseline row should be tightened in the same commit); any increase fails and
-// names the offending file and line.
-// The per-file gate is deliberately strict: moving an occurrence between files
-// is a baseline-table change that must be reviewed, not a silent side effect.
-//
-// The guards are source-inspecting AST scans and are independent of runtime
-// wiring, like the other guards in this package. They enforce "no new debt";
-// they do not certify the existing occurrences as correct.
+// These source guards require review for new or moved occurrences. They do
+// not certify existing arithmetic or runtime wiring. The adjacent boundary
+// guard keeps displayless commands independent of client/device packages.
 
 import (
 	"fmt"

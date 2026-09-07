@@ -398,19 +398,46 @@ func fieldNames(info *types.Info, fset *token.FileSet, field *ast.Field) []named
 	return fields
 }
 
+// containsFloat64 inspects numeric storage within a field without promoting
+// another named struct's fields into this owner's allowance. Named structs
+// have their own declaration audit; signatures do not store numeric state.
 func containsFloat64(typ types.Type) bool {
-	if typ == nil {
+	seen := make(map[types.Type]bool)
+	var visit func(types.Type) bool
+	visit = func(typ types.Type) bool {
+		if typ == nil || seen[typ] {
+			return false
+		}
+		seen[typ] = true
+		typ = types.Unalias(typ)
+		if named, ok := typ.(*types.Named); ok {
+			if _, ownsFields := named.Underlying().(*types.Struct); ownsFields {
+				return false
+			}
+		}
+		switch typ := typ.Underlying().(type) {
+		case *types.Basic:
+			return typ.Kind() == types.Float64
+		case *types.Array:
+			return visit(typ.Elem())
+		case *types.Slice:
+			return visit(typ.Elem())
+		case *types.Pointer:
+			return visit(typ.Elem())
+		case *types.Map:
+			return visit(typ.Key()) || visit(typ.Elem())
+		case *types.Chan:
+			return visit(typ.Elem())
+		case *types.Struct:
+			for i := 0; i < typ.NumFields(); i++ {
+				if visit(typ.Field(i).Type()) {
+					return true
+				}
+			}
+		}
 		return false
 	}
-	switch typ := typ.Underlying().(type) {
-	case *types.Basic:
-		return typ.Kind() == types.Float64
-	case *types.Array:
-		return containsFloat64(typ.Elem())
-	case *types.Slice:
-		return containsFloat64(typ.Elem())
-	}
-	return false
+	return visit(typ)
 }
 
 // mapRangeExceptions pins every currently justified map traversal by its
@@ -529,8 +556,8 @@ type float64Allowance struct {
 	reason string
 }
 
-// float64FieldAllowances names every authoritative field whose resolved type
-// contains binary64. The key retains the declaration and authored type syntax,
+// float64FieldAllowances names the binary64 storage fields found in package-level
+// named struct declarations. The key retains the declaration and authored type syntax,
 // so grouped fields and named or aliased float types cannot hide new state.
 var float64FieldAllowances = map[string]string{
 	"internal/economy/ledger.go type Player.Waste [2]float64":                        "I2 cumulative waste counters [05 \"Stocks, counters, and waste\"]",
@@ -783,6 +810,39 @@ type record struct {
 	afterFields := typedFloat64Fields(root, []typedPackage{typedFixture(t, filepath.Join(root, "fixture.go"), after)})
 	if got := float64FieldViolations(afterFields, allowances); len(got) != 5 {
 		t.Fatalf("float field shape violations = %d, want 5: %s", len(got), strings.Join(got, "; "))
+	}
+}
+
+func TestFloat64FieldAuditChecksContainersAndTerminatesCycles(t *testing.T) {
+	root := t.TempDir()
+	const source = `package fixture
+type tree []tree
+type leaves []struct { Next leaves; Value float64 }
+type scalar float64
+type record struct {
+	Pointer *float64
+	Map map[int]scalar
+	Keys map[float64]int
+	Nested []*struct { Value float64 }
+	Channel chan scalar
+	Recursive leaves
+	Empty tree
+	Callback func(float64) float64
+}
+`
+	fields := typedFloat64Fields(root, []typedPackage{typedFixture(t, filepath.Join(root, "fixture.go"), source)})
+	violations := float64FieldViolations(fields, nil)
+	for _, name := range []string{"Pointer", "Map", "Keys", "Nested", "Channel", "Recursive"} {
+		found := false
+		for _, violation := range violations {
+			found = found || strings.Contains(violation, "record."+name+" ")
+		}
+		if !found {
+			t.Errorf("missing violation for %s: %v", name, violations)
+		}
+	}
+	if len(violations) != 6 {
+		t.Fatalf("container field violations = %v, want six numeric storage fields", violations)
 	}
 }
 

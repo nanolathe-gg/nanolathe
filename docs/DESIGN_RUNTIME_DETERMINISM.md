@@ -532,10 +532,14 @@ and normalized containing function; a changed ordering dependency or a new
 range fails until its ordering is reviewed. The I2 guard keeps the shrink-only
 per-file baseline for ordinary
 `float64` occurrences, while each existing I2 operation in a formerly exempt
-file has a declaration-scoped count and reason. Resolved float-bearing struct
-fields are separately named, so grouped, named and aliased fields cannot hide
-a new float field. A new float field or function there therefore fails instead
-of inheriting a file-wide exception. Counts may
+file has a declaration-scoped count and reason. Resolved numeric fields in package-level named struct declarations are
+separately named, including grouped and aliased scalar fields and numeric
+containers. The walk terminates recursive types and leaves other named struct
+owners to their own declaration audit. Local declarations and top-level function signatures retain declaration
+token counts. Function-valued fields and dynamically held interface values
+are outside the numeric-storage walk; this is not a semantic proof of all
+floating-point uses. New recorded fields or operations cannot
+inherit a file-wide exception. Counts may
 fall freely — a fall means the baseline or scoped record is tightened in the
 same commit — and any rise names the affected site. These ratchets enforce "no
 new debt"; they do not certify the existing occurrences as correct. They live

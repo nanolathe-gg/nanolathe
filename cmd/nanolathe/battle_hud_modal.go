@@ -54,9 +54,9 @@ func (h *retailBattleHUD) drawPausedTitle(c *client.Client) {
 		return
 	}
 	w, height := c.Size()
-	x := (w - int(h.pausedFrame.Width)) / 2
-	y := (height - int(h.pausedFrame.Height)) / 2
-	c.UIBlit(h.pausedFrame, x, y)
+	// In-game titles use the view centre as their GAF hotspot. The anchored
+	// blitter subtracts the authored offsets [07 R-HUD-05 "Centred in the view"].
+	c.UIBlitAnchor(h.pausedFrame, (w+128)/2, height/2)
 }
 
 func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {

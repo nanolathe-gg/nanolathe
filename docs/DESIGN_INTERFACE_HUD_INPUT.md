@@ -718,7 +718,8 @@ there.
 **C18 — the in-battle modal chain.** An empty selection activates the
 side-authored `<prefix>gen.gui`, not the underlying `<prefix>main.gui`. In a
 non-network battle the options window sets the single-player pause state and
-draws the centred `igtitles.gaf:igpaused` title; closing it unpauses. `EXIT`
+draws `igtitles.gaf:igpaused` at the live view centre using its authored GAF
+offsets `[07 R-HUD-05 "Centred in the view"]`; closing it unpauses. `EXIT`
 pushes `exitmenu.gui`, whose Main Menu and Exit Game choices push `yesorno.gui`
 and commit only on `CHOICE1`, with both Enter and Escape bound to `CHOICE2` and
 focus on it. The options window keeps its authored origin, while the `0x1000`

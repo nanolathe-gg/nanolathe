@@ -321,8 +321,9 @@ func (c *Client) uiBlitLitRaw(f *formats.GAFFrame, x, y int, pal *palette.Tables
 
 // UIBlitAnchor applies the GAF frame-anchor placement: x and y are caller
 // coordinates and the frame's authored offsets are subtracted before
-// pixels are written. Battle-shell callers pass the desired pixel origin plus
-// XOffset/YOffset, so those two operations cancel [fmt gaf][07 §6]. Frontend
+// pixels are written. Callers with a desired pixel origin add XOffset/YOffset
+// to cancel the subtraction [fmt gaf][07 §6]; in-game titles pass the view
+// centre directly [07 R-HUD-05 "Centred in the view"]. Frontend
 // .GUI controls deliberately use UIBlit instead: their rectangles are the
 // placement contract [07 §4].
 func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {

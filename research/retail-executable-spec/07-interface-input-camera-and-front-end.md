@@ -4725,11 +4725,10 @@ because this composer repaints the strip every frame and would otherwise show
 the 33rd-row overlap permanently rather than only on retail's repaint frames;
 and the rail band is measured from the art's authored 480 rows rather than from
 the slid panel, so the panel slide's own uncovered rows remain the 640×480
-matter they were. Not changed here, because it is not a display-mode matter
-and the 640×480 output was held byte-identical: the build centres the paused
-title on the full surface rather than the view, and its `.GUI` loader resolves
-`−1`/`−2` per axis against 640×480 — correct for every front-end screen and,
-through the composer's own placement, for the two battle modals.
+matter they were. The paused title follows the established view-centre anchor
+and subtracts its authored GAF offsets at every display size. GUI window
+placement is a separate operation; the two battle modals use the view-centred
+window placement above.
 
 
 ### Supported inference
