@@ -1,0 +1,76 @@
+// fu-playtest visibility fixture. This OTA is authored from scratch and is
+// mounted only inside the probe's overlay, where it shadows the stock
+// SHERWOOD.ota so the ordinary loader pairs it with the stock SHERWOOD.TNT by
+// base name [fmt ota]. It authors the Mapped + Permanent pair — mapping=0 and
+// lineofsight=0 — that no stock Arm/Core campaign mission authors
+// [08 R-SKIR-01 §4] [03 R-VIS-01 §1]. Unit positions sit on land the stock
+// map's own start markers occupy.
+[GlobalHeader]
+	{
+	missionname=fu-playtest visibility fixture;
+	missiondescription=Mapped and Permanent visibility probe on SHERWOOD.;
+	planet=Green planet;
+	missionhint=;
+	brief=;
+	narration=;
+	glamour=;
+	lineofsight=0;
+	mapping=0;
+	tidalstrength=0;
+	solarstrength=20;
+	lavaworld=0;
+	killmul=50;
+	timemul=0;
+	minwindspeed=100;
+	maxwindspeed=3000;
+	gravity=112;
+	numplayers=2;
+	size=7 x 7;
+	memory=16 mb;
+	SCHEMACOUNT=1;
+	[Schema 0]
+		{
+		Type=Easy;
+		aiprofile=;
+		SurfaceMetal=3;
+		MohoMetal=30;
+		HumanMetal=1000;
+		ComputerMetal=1000;
+		HumanEnergy=1000;
+		ComputerEnergy=1000;
+		MeteorWeapon=;
+		MeteorRadius=0;
+		MeteorDensity=0;
+		MeteorDuration=0;
+		MeteorInterval=0;
+		[units]
+			{
+			[unit0]
+				{
+				Unitname=ARMCOM;
+				XPos=336;
+				YPos=0;
+				ZPos=1520;
+				Player=1;
+				HealthPercentage=100;
+				Angle=0;
+				}
+			[unit1]
+				{
+				Unitname=CORAK;
+				XPos=2512;
+				YPos=0;
+				ZPos=1456;
+				Player=2;
+				HealthPercentage=100;
+				Angle=0;
+				}
+			}
+		[specials]
+			{
+			}
+		[features]
+			{
+			}
+		}
+	}

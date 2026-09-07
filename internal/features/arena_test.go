@@ -49,7 +49,7 @@ func TestRestingSpritesLeaveTheArenaFree(t *testing.T) {
 	if inst == nil {
 		t.Fatal("no instance at (0,0)")
 	}
-	inst.IsBurning = true
+	startBurning(svc, inst, longBurn(), 1000)
 	if occupants := svc.arenaOccupants(); occupants != 2 {
 		t.Fatalf("arena occupants with one burning sprite = %d, want 2", occupants)
 	}

@@ -28,19 +28,45 @@ type Instance struct {
 	// accrue on DamageAccumulator below, never on a countdown.
 	ReclaimProgress int32
 
-	// Burning state [05 "Feature burning"].
-	IsBurning        bool
-	IsAnimating      bool  // saved selector identifies a live animation record; completion is unresolved
-	BurnCountdown    int32 // countdown to burn event, decremented each tick
-	BurnTicks        int32 // elapsed animation ticks
-	BurnDuration     int32 // finite lifetimes 46–282 visits [05 "Feature burning"]
-	RemoteSuppressed bool  // multiplayer authority suppress flag
+	// The mode bits of a sprite EVENT record [05 R-FEAT-01 §5 step 5]
+	// [05 R-FEAT-01 §9 step 3]: IsBurning is the burning bit; IsAnimating
+	// marks a die/reclaim record (burning bit clear, sequence attached), with
+	// AnimationSelector below carrying the reclaim-animation bit as the save
+	// family's selector. A resting sprite has neither, and this build keeps an
+	// Instance for it anyway (see hasEventRecordAt).
+	IsBurning   bool
+	IsAnimating bool
+	// BurnCountdown is the burn event's spark countdown [05 R-FEAT-01 §9]
+	// step 4 — a byte in retail, decremented once per visit while nonzero and
+	// the remote bit is clear, firing the event once at zero. It is NOT the
+	// cursor's frame delay: the two count different things and are kept apart
+	// (the save keeps only this one's high nibble [08 R-SAVE-FEATURE-01]).
+	BurnCountdown    int32
+	RemoteSuppressed bool // the remote bit: a remotely commanded ignition never runs its burn event
 
-	// Sinking state [05 "Feature sinking and water interaction"].
+	// cursor is the record's ONE animation cursor — frame index and per-frame
+	// delay countdown — for whichever event sequence the selector names. The
+	// feature phase advances it, EventSequence publishes its frame, the save
+	// writer takes its frame byte and RestoreAt writes that byte back
+	// [05 R-FEAT-01 §10][08 R-SAVE-FEATURE-01]. There is no second progress
+	// word anywhere.
+	cursor eventCursor
+
+	// Sinking state [05 "Feature sinking and water interaction"]: the vertical
+	// velocity word of the 3D branch [05 R-FEAT-01 §13]. IsSinking mirrors
+	// "velocity nonzero" for presentation; Settled records the dormant move —
+	// the record left the active list and is not visited again until
+	// re-stamped [05 R-FEAT-01 §10] pass 3.
 	Y         numeric.Fixed // world Y
 	Vy        numeric.Fixed // vertical velocity
 	IsSinking bool
 	Settled   bool
+
+	// Active-list membership [05 R-FEAT-01 §10] pass 3 (see active.go), and
+	// whether the record holds one of the arena's 2048 slots.
+	nextActive, prevActive *Instance
+	onActive               bool
+	arenaBilled            bool
 
 	// Animation/status byte bit0 clear means GAF at rest [06 §13.1].
 	Status uint8
@@ -62,12 +88,13 @@ type Instance struct {
 	// Footprint cached from Def for removal without re-reading Def after clear.
 	FootprintX, FootprintZ int32
 
-	// Save-restored animation words.  The selector is retained as the authored
-	// burn/death/reclaim discriminator.
-	SavedAnchorWord    uint16
-	AnimationFrame     uint8
-	AnimationSelector  uint8
-	AnimationCountdown uint8
+	// SavedAnchorWord is the normal-family record's accumulator word copied
+	// back to the anchor cell on reload [08 R-SAVE-FEATURE-01].
+	SavedAnchorWord uint16
+	// AnimationSelector is the animating save family's selector: 0 burn, 1
+	// death, 2 reclaim [08 R-SAVE-FEATURE-01]. Live, it is the record's
+	// reclaim-animation bit (selector 2) that [05 R-FEAT-01 §5] step 6 reads.
+	AnimationSelector uint8
 
 	// DamageAccumulator is the record's damage word, the one value all three
 	// saved families keep at the same place [08 R-SAVE-FEATURE-01]. It is the
@@ -104,13 +131,6 @@ const (
 	CauseBurnt                // burning uses featureburnt
 )
 
-// BurnWeaponEvent records a burn weapon emission [05 "Feature burning"] [06 §13.1].
-type BurnWeaponEvent struct {
-	Weapon  string
-	CX, CZ  int
-	X, Y, Z numeric.Fixed
-}
-
 // Pool limits per [P1-10][P1-15]: anim slots 0x800, plot cell 0xD stride.
 //
 // There is no catalog limit. A `FeatureCatalogLimit = 0x100` used to stand
@@ -144,7 +164,12 @@ type Service struct {
 
 	cursor int // global cursor descending from W*H-1 with wrap-skip [06 §13.1]
 
-	instances map[int]*Instance // key = cz*W+cx, deterministic iteration via sorted keys
+	// instances is the cell-index LOOKUP: key = cz*W+cx. It holds a record for
+	// every stamped anchor — resting sprites included, as the publication and
+	// query record — and is never the source of simulation order; that is the
+	// active list below [05 R-FEAT-01 §10] pass 3. Deterministic walks over
+	// it (publication, the grid resync) use sortedInstanceKeys (I1).
+	instances map[int]*Instance
 	// instanceKeys is the sorted key list sortedInstanceKeys hands out, and
 	// instanceKeysStale says whether it still describes the map. Every writer
 	// of instances goes through setInstance/deleteInstance/resetInstances,
@@ -152,20 +177,43 @@ type Service struct {
 	instanceKeys      []int
 	instanceKeysStale bool
 
+	// activeHead is the head of the active list of [05 R-FEAT-01 §2]: LIFO,
+	// the most recently stamped or ignited record first (active.go).
+	activeHead *Instance
+	// arenaHeld counts the live-arena slots currently held — every 3D
+	// instance and every sprite event record — so the free-list-empty test
+	// of the stamp, ignition and transition is a read, not a walk.
+	arenaHeld int
+
 	// LastReproIdx is the last cell visited by the reproduction walker, -1 if
 	// the wrap-skip cell was the cursor (W*H-1 never scanned) [06 §13.1].
 	LastReproIdx int
 
-	// BurnWeaponsEmitted records burn weapon emissions for tests [05 "Feature burning"].
-	BurnWeaponsEmitted []BurnWeaponEvent
+	// SequenceFrames reports the per-frame delay words of one of a
+	// definition's three EVENT sequences — the one the selector names (0
+	// burn, 1 death, 2 reclaim; EventSequenceName) — or nil when the
+	// definition names none or the name does not resolve [fmt gaf]. It is the
+	// immutable content metadata every event cursor is built from
+	// [05 R-FEAT-01 §10]: the session binds it to the battle's content table
+	// (bindFeatureStripProducers) before any feature exists, so ignition, the
+	// death and reclaim transitions and the save reload all time their records
+	// from the same authored words. A nil seam, or a nil result, is "no
+	// sequence": the transition replaces at once [05 R-FEAT-01 §5 step 3] and
+	// ignition refuses [05 R-FEAT-01 §9 step 1]. Nothing is invented for a
+	// miss.
+	SequenceFrames func(def *content.FeatureDef, selector uint8) []int32
+	// sequences memoises SequenceFrames per definition and selector; it is
+	// read by key only.
+	sequences map[sequenceKey][]int32
 
-	// BurnAnimationTicks reports how long a definition's burn animation runs.
-	// A burning feature clears its cell when that animation finishes
-	// [05 "Feature burning"], and the animation is a presentation asset this
-	// package does not own — hence a seam rather than a constant. A nil hook
-	// (or a zero result) means no length is known and the instance burns until
-	// something else clears it. Shipped finite lifetimes forced non-looping 46-282 visits [P1-10][P1-15].
-	BurnAnimationTicks func(*content.FeatureDef) int32
+	// BurnWeapon is the ordinary weapon request the burn event fires its
+	// `burnweapon` through [05 R-FEAT-01 §11 step 3]: the weapon name and the
+	// footprint centre at the bilinear terrain height. The projectile and
+	// damage subsystem is combat's, which this package cannot import, so the
+	// session binds the request — resolving the name and pushing the impact
+	// through the shared splash entry as a null-shooter, zero-side record
+	// [06 §13.1]. A nil seam is a fixture: no weapon fires.
+	BurnWeapon func(weapon string, pos [3]numeric.Fixed)
 
 	// GeothermalSteam is the steam-strip producer of [05 R-ECO-02 §3], reached
 	// from the feature stamp and nowhere else. The stamp calls it once, with the
@@ -176,25 +224,11 @@ type Service struct {
 	// session gets.
 	GeothermalSteam func(x, y, z numeric.Fixed)
 
-	// AnimationTicks reports how long a definition's DEATH or RECLAIM sequence
-	// runs, in visits, for the animation records of [05 R-FEAT-01 §5] step 5.
-	// It is the twin of BurnAnimationTicks for the other two sequences, and the
-	// selector picks between them: 1 selects `seqnamedie`, 2 selects
-	// `seqnamereclamate` [R-SAVE-FEATURE-01]. The length is the sum over the
-	// GAF entry's frames of max(delay, 1) [05 R-FEAT-01 §10], which is asset
-	// data this package does not own — hence a seam.
-	//
-	// A nil hook, or a zero result, means the sequence cannot be run at all.
-	// The transition then takes §5 step 3's immediate replacement rather than
-	// attaching a record that would never finish: an animation with no length
-	// would freeze the cell forever, which is a worse divergence than the
-	// replacement the same section already prescribes when no sequence is
-	// named. No length is invented here.
-	AnimationTicks func(def *content.FeatureDef, selector uint8) int32
-
 	// BurnFrameGeometry reports the burn animation's CURRENT frame geometry —
 	// the GAF frame's width and height and its two authored offsets [fmt gaf] —
-	// on the visit'th visit of the burn cursor. It is what the smoke jitter of
+	// for the frame a cursor is on after `visit` visits of the max(delay, 1)
+	// cadence. The walk asks with the cursor frame's first visit, so the
+	// answer is that frame exactly. It is what the smoke jitter of
 	// [05 R-FEAT-01 §10] pass 3a scales its two CRT draws by; burnSmokeJitter
 	// in burn.go is that arithmetic. A nil hook means no geometry is known and
 	// the puff is emitted unjittered at the footprint centre, which is the
@@ -266,12 +300,16 @@ func (s *Service) TickMotion(tick uint32) {
 	s.reproduceTick()
 }
 
-// TickLifecycle advances only the lifecycle part of the feature phase which
-// belongs in phase 6 (feature lifecycle) [01 §4.4][05 "Feature burning"][05 "Feature sinking and water interaction"].
-// It runs burning (including smoke via CRT, spread via sim, successor) and then sinking.
+// TickLifecycle is pass 3 of the feature phase, phase 6 of the tick
+// [01 §4.4][05 R-FEAT-01 §10]: ONE walk of the active list, LIFO, in which a
+// moving 3D record integrates its descent (or goes dormant at zero velocity),
+// a die/reclaim record advances its cursor and replaces itself at the visit
+// its sequence ends, and a burning record smokes, advances, completes or
+// counts down to its burn event. There is no separate sinking pass and no
+// deferred completion queue: what a later record observes is what the earlier
+// visits left.
 func (s *Service) TickLifecycle(tick uint32) {
-	s.burnTick(tick)
-	s.sinkTick()
+	s.activeWalk(tick)
 }
 
 // PlaceAt stamps a feature at anchor cell (cx,cz) via the common placement
@@ -329,32 +367,59 @@ func (s *Service) RestoreAt(cx, cz int, def *content.FeatureDef, family int, dat
 		}
 		s.Terrain.Plot[idx].SetAnchorWord(inst.SavedAnchorWord)
 	case 1:
-		inst.DamageAccumulator = binary.LittleEndian.Uint16(data[6:8])
-		inst.AnimationFrame = data[8]
-		inst.AnimationSelector = data[9] & 0x0f
-		inst.AnimationCountdown = data[9] >> 4
-		// The animation selector has its own wire vocabulary: 0 burn, 1 death,
-		// 2 reclaim.  It is not the successor Cause enum above [R-SAVE-FEATURE-01].
-		inst.IsBurning = inst.AnimationSelector == 0
-		inst.IsAnimating = inst.AnimationSelector <= 2
-		// The saved countdown and frame are animation-family state. Only the
-		// established burn selector may feed the burn-specific counters; death
-		// and reclaim use distinct authored sequences whose binding is unknown.
-		if inst.IsBurning {
-			inst.BurnCountdown = int32(inst.AnimationCountdown)
-			inst.BurnTicks = int32(inst.AnimationFrame)
+		// The animating record: the low nibble of its state byte selects the
+		// already-established transition family — 0 re-runs the burn
+		// (ignition), 1 the death transition, 2 the reclaim transition — and
+		// the reader THEN overwrites the allocated record's accumulator word,
+		// cursor frame byte and countdown byte with the saved copies
+		// [08 R-SAVE-FEATURE-01]. Other selector values do not establish a
+		// fourth transition and stay uninterpreted: the feature rests.
+		//
+		// Re-running the family is what binds the sequence: ignition and the
+		// transition allocate the cursor fresh from the same content metadata
+		// a live battle uses, at frame 0 with frame 0's delay, and for a burn
+		// seed the countdown exactly as ignition does — simulation draw
+		// included [05 R-FEAT-01 §9]. The draw is consumed and its value then
+		// discarded under the saved nibble; a reload therefore advances the
+		// simulation stream by one per saved burn, as retail's does.
+		//
+		// The family's own refusals stand: no resolved `seqnameburn` and the
+		// burn never restarts (the feature rests); no `seqnamedie` or
+		// `seqnamereclamate` and the transition replaces at once
+		// [05 R-FEAT-01 §5 step 3] — the successor is what the cell holds
+		// after the load, and there is no record for the reader to write.
+		accumulator := binary.LittleEndian.Uint16(data[6:8])
+		frame := data[8]
+		selector := data[9] & 0x0f
+		nibble := data[9] >> 4
+		switch selector {
+		case featureAnimSelectorBurn:
+			s.igniteAt(cx, cz, def)
+		case featureAnimSelectorDie, featureAnimSelectorReclaim:
+			isReclaim := selector == featureAnimSelectorReclaim
+			if !s.transitionFeatureAt(cx, cz, def, isReclaim) {
+				succ := def.FeatureDeadDef
+				if isReclaim {
+					succ = def.FeatureReclamateDef
+				}
+				s.replaceFeatureAt(cx, cz, succ)
+			}
 		}
-		if inst.IsBurning && s.BurnAnimationTicks != nil {
-			inst.BurnDuration = s.BurnAnimationTicks(def)
-		}
-		// Animating records have a live instance attached even when their
-		// selector is death or reclaim; placement already stamps the footprint,
-		// but this explicit anchor write preserves the saved-instance bit [05
-		// R-FEAT-01 §15] [08 R-SAVE-FEATURE-01].
 		idx := cz*int(s.Terrain.CellW) + cx
-		if idx >= 0 && idx < len(s.Terrain.Plot) {
-			s.Terrain.Plot[idx].SetOccupied(true)
+		inst = s.instances[idx]
+		if inst == nil || !s.hasEventRecordAt(idx) || inst.Def != def {
+			return inst, nil // no record was allocated; nothing to overwrite
 		}
+		// The three overwrites, in the reader's order. The cursor's DELAY is
+		// not saved and stays at frame 0's word: the restored frame holds for
+		// that delay before the sequence continues at its own cadence — a
+		// documented save loss, not a contract to repair. The countdown byte
+		// comes back as its saved high nibble with a zero low nibble (the
+		// save keeps only the nibble), so a burn saved at 149 resumes at 144
+		// and one saved below 16 resumes at 0 — never fires its event.
+		inst.DamageAccumulator = accumulator
+		inst.cursor.frame = int32(frame)
+		inst.BurnCountdown = int32(nibble) << 4
 	case 2:
 		// The accumulator is written AFTER the stamp because the stamp zeroes
 		// it, and it is the only thing the reader writes beyond what it handed
@@ -457,21 +522,6 @@ func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, orient Orientation, def *con
 	return inst
 }
 
-// SetBurnAnimationTicks installs a GAF-backed duration hook so shipped burns
-// terminate at the GAF sequence length rather than infinite [05 "Feature burning"] [P0-I06].
-// A nil hook or zero result falls back to finite 46-282 visits [P1-10].
-func (s *Service) SetBurnAnimationTicks(fn func(*content.FeatureDef) int32) {
-	s.BurnAnimationTicks = fn
-}
-
-// SetAnimationTicks installs the death/reclaim sequence-length hook, the twin
-// of SetBurnAnimationTicks for the other two sequences [05 R-FEAT-01 §5]
-// step 5. With no hook installed the transition replaces immediately, which is
-// what every path did before the animation records existed.
-func (s *Service) SetAnimationTicks(fn func(def *content.FeatureDef, selector uint8) int32) {
-	s.AnimationTicks = fn
-}
-
 // transitionFeatureAt is the transition of [05 R-FEAT-01 §5]: what damage
 // death, the reclaim payout, the multiplayer state commands and save reload
 // call. It reports whether the caller must NOT replace: either because it
@@ -512,14 +562,11 @@ func (s *Service) transitionFeatureAt(cx, cz int, def *content.FeatureDef, isRec
 	if sequence == "" {
 		return false // step 3
 	}
-	// The sequence's length in visits is asset data behind a seam. Without it
-	// the record could never finish, so the transition falls back to step 3's
-	// replacement instead of freezing the cell (see AnimationTicks).
-	if s.AnimationTicks == nil {
-		return false
-	}
-	visits := s.AnimationTicks(def, selector)
-	if visits <= 0 {
+	// Step 2 selects a RESOLVED sequence: its per-frame delay words are the
+	// content metadata the cursor runs on. A name that does not resolve is no
+	// sequence (see sequenceDelays), which is step 3's immediate replacement.
+	delays := s.sequenceDelays(def, selector)
+	if delays == nil {
 		return false
 	}
 	idx := cz*int(s.Terrain.CellW) + cx
@@ -541,16 +588,18 @@ func (s *Service) transitionFeatureAt(cx, cz int, def *content.FeatureDef, isRec
 	// effect — the feature simply stays" [05 R-FEAT-01 §5 step 5]. That is a
 	// DROPPED death or reclaim, not a fall-through to step 3's replacement, so
 	// it reports the same "do not replace" the step-4 drop does.
-	if !arenaOccupies(inst) && s.arenaOccupants() >= FeatureAnimSlots {
+	if s.arenaOccupants() >= FeatureAnimSlots {
 		return true
 	}
-	// Step 5.
+	// Step 5: attach the record, start the sequence at frame 0 and set the
+	// mode bits — burning := 0, reclaim-animation := isReclaim (the selector).
 	inst.IsBurning = false
 	inst.IsAnimating = true
 	inst.AnimationSelector = selector
-	inst.AnimationFrame = 0
-	inst.BurnTicks = 0
-	inst.BurnDuration = visits
+	inst.BurnCountdown = 0
+	inst.RemoteSuppressed = false
+	inst.cursor.start(delays)
+	s.attachEventRecord(inst)
 	s.Terrain.Plot[idx].SetOccupied(true) // the anchor's instance-attached bit
 	return true
 }
@@ -925,8 +974,8 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	// the sprite test below. It is also what keeps the write invisible to this
 	// package's other readers of the same bit: the retail save writer selects
 	// its 3D family from `object` before it ever consults the flag byte, and the
-	// fire-spread scans reject a cell that already owns an instance, which every
-	// stamped anchor does.
+	// fire-spread scans read "has an instance" through cellHasInstance, which
+	// already answers yes for every 3D definition.
 	if is3DDef(def) {
 		s.Terrain.Plot[idx].SetOccupied(true)
 	}
@@ -1110,21 +1159,38 @@ func (s *Service) sortedInstanceKeys() []int {
 	return keys
 }
 
-// setInstance is the only way a feature instance enters the map.
+// setInstance is the only way a feature instance enters the map. A record
+// that takes an arena slot at its stamp — a 3D definition [05 R-FEAT-01 §3
+// step 4] — is billed for it and joins the active list at the head here; a
+// sprite event record built directly (fixtures) is treated the same, while a
+// resting sprite is neither billed nor listed [§3 step 5]. A different record
+// already at the cell is released first.
 func (s *Service) setInstance(idx int, inst *Instance) {
 	if s.instances == nil {
 		s.instances = make(map[int]*Instance)
 	}
-	if _, existed := s.instances[idx]; !existed {
+	old, existed := s.instances[idx]
+	if !existed {
 		s.instanceKeysStale = true
 	}
+	if old != nil && old != inst {
+		s.unlinkActive(old)
+		s.releaseArena(old)
+	}
 	s.instances[idx] = inst
+	if arenaOccupies(inst) {
+		s.attachEventRecord(inst)
+	}
 }
 
-// deleteInstance is the only way a feature instance leaves the map.
+// deleteInstance is the only way a feature instance leaves the map: the
+// teardown that pushes its slot back on the free list [05 R-FEAT-01 §4].
 func (s *Service) deleteInstance(idx int) {
-	if _, existed := s.instances[idx]; existed {
+	inst, existed := s.instances[idx]
+	if existed {
 		s.instanceKeysStale = true
+		s.unlinkActive(inst)
+		s.releaseArena(inst)
 	}
 	delete(s.instances, idx)
 }
@@ -1152,24 +1218,21 @@ func arenaOccupies(inst *Instance) bool {
 	return inst.IsBurning || inst.IsAnimating
 }
 
-// arenaOccupants counts the live-arena slots currently held. The walk is over
-// the service's sorted key list, which the tick already builds, so this costs
-// one pass over the instance map and no allocation; the free-list head test it
-// stands in for is a placement-time question, not a per-unit one.
+// arenaOccupants reports the live-arena slots currently held — the free-list
+// head test the stamp, ignition and transition stand on. It is a running
+// count kept by billArena/releaseArena, so an ignition inside a burn event
+// does not walk the whole instance map to learn whether a slot is free.
 func (s *Service) arenaOccupants() int {
-	n := 0
-	for _, idx := range s.sortedInstanceKeys() {
-		if arenaOccupies(s.instances[idx]) {
-			n++
-		}
-	}
-	return n
+	return s.arenaHeld
 }
 
-// resetInstances empties the map.
+// resetInstances empties the map, the active list and the arena — the
+// zero-fill of the whole instance pool at battle entry [08 R-SAVE-FEATURE-01].
 func (s *Service) resetInstances() {
 	s.instances = make(map[int]*Instance)
 	s.instanceKeys, s.instanceKeysStale = nil, true
+	s.activeHead = nil
+	s.arenaHeld = 0
 }
 
 // RemoveFeatureAt removes a feature at anchor cell with cause-specific successor
@@ -1260,9 +1323,9 @@ func (s *Service) PopulateFromTerrain() int {
 	n := 0
 	// The arena is charged only by the anchors the stamp allocates a slot for
 	// [05 R-FEAT-01 §3 steps 4-5]; a map's resting sprite anchors are free.
-	// The running count starts from what the service already holds, because
-	// this pass is idempotent and may run again after a load.
-	arena := s.arenaOccupants()
+	// setInstance bills a 3D record and puts it on the active list, so the
+	// count read below is live across the walk, which is idempotent and may
+	// run again after a load.
 	for cz := 0; cz < h; cz++ {
 		for cx := 0; cx < w; cx++ {
 			idx := cz*w + cx
@@ -1299,8 +1362,7 @@ func (s *Service) PopulateFromTerrain() int {
 			// The walk CONTINUES rather than stopping: retail's loader stamps
 			// every remaining cell, and the sprite anchors after this one still
 			// need no slot.
-			billed := !isSpriteDef(def)
-			if billed && arena >= FeatureAnimSlots {
+			if !isSpriteDef(def) && s.arenaOccupants() >= FeatureAnimSlots {
 				continue
 			}
 			inst := &Instance{
@@ -1315,9 +1377,6 @@ func (s *Service) PopulateFromTerrain() int {
 			inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 			inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
 			s.setInstance(idx, inst)
-			if billed {
-				arena++
-			}
 			// A map-authored vent reaches its instance here rather than through
 			// spawnFeatureAt, because the map loader writes the plot grid
 			// directly and this walk builds the animation side from it. Retail

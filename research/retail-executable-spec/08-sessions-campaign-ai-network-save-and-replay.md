@@ -1107,7 +1107,7 @@ what it allocates or writes:
 | 21 | **scheduler block** | scaled-clock anchor ← now; global tick ← 0; kind 3 only: requested speed ← 10 and active speed ← 10; fractional carry ← 0. (Kinds 1 and 2 keep whatever the speed words already hold; their writers are open in the tail.) |
 | 22 | meteor scheduler | active ← 0, next strike ← the authored value, weapon resolved by name ([01 R-CORE-01], [06 §6.5]) |
 | 23 | minimap surface | ([03], [fmt tnt]) |
-| 24 | **per-player reset** | for every slot whose controller byte is non-zero: the economy/statistics block is zeroed (stocks, incomes, expenditures, the sharing thresholds and flags — [05 R-P0-01]), the per-player timers ← global tick (0), the storage-bonus flag cleared, six selection/target words reset (four to 0, two to 0xffff), a per-player byte map of `(cellW/2)·(cellH/2)` entries (rounded up to 8) re-allocated and zeroed, the `SQUADS` table (ten 32-byte squad records) allocated; then **unless** the controller is 3 (remote), the **AI record** is constructed — the ten task records with their initial thresholds ([08 R-AI-01 §1]) and the strategic state, whose constructor makes the **eight simulation draws** of [R-DET-01 §4] ("AI player setup") — and the per-side classifier table entry is built. Humans get an AI record too; only remote peers do not. Then the AI profile is loaded from resource slot 7, falling back to `ai\default.txt` ([R-AI-01 §12]), and for every computer-controlled slot the difficulty tables are applied. |
+| 24 | **per-player reset** | for every slot whose controller byte is non-zero: the economy/statistics block is zeroed (stocks, incomes, expenditures, the sharing thresholds and flags — [05 R-P0-01]), the per-player timers ← global tick (0), the storage-bonus flag cleared (the two bonus operands sit outside the zeroed span and keep their value — on a load the `Player%i` reader overwrites both and the flag, so a restored player holds the saved bonus, ["Player records"]), six selection/target words reset (four to 0, two to 0xffff), a per-player byte map of `(cellW/2)·(cellH/2)` entries (rounded up to 8) re-allocated and zeroed, the `SQUADS` table (ten 32-byte squad records) allocated; then **unless** the controller is 3 (remote), the **AI record** is constructed — the ten task records with their initial thresholds ([08 R-AI-01 §1]) and the strategic state, whose constructor makes the **eight simulation draws** of [R-DET-01 §4] ("AI player setup") — and the per-side classifier table entry is built. Humans get an AI record too; only remote peers do not. Then the AI profile is loaded from resource slot 7, falling back to `ai\default.txt` ([R-AI-01 §12]), and for every computer-controlled slot the difficulty tables are applied. |
 | 25 | target/threat registry | the per-battle registry object (`AISearch touched mapentries` bitmap sized to the cell grid) allocated ([06 §3.1]) |
 | 26 | **explosion-frame builder** | the `CalcedExplosion` tables: table 0 = 12 frames of radius 64 down by 4; table 1 = 15 frames from radius 128 stepping `(16−128)/15 = −7`; table 2 = 15 frames from 200 stepping `(32−200)/15 = −11` (C integer division); one CRT draw per generated pixel on the **worker thread's** stream (391,606 draws, [06 R-WFX-01 §6]); the explosion pool's 300 records and 1,800 debris records (the six debris animation names cycling) are initialised ([04 R-COB-04 §4/§5]); the *Explosions* percent byte goes 20 → 50 → 100 |
 | 27 | command tables | the three battle command tables registered ([07 R-CAM-01 §6]) |
@@ -2295,9 +2295,10 @@ eligible is `((draw * 2) / 32768)` in 64-bit arithmetic, i.e. shuffle only
 when `draw >= 16384`; a gate result of zero leaves the identity order and
 takes no further draws. Eligible slots are those whose record is active,
 whose controller is human, computer or remote, and whose side is not the
-sentinel 10. The stamp helper per slot copies side and colour again, calls
-the storage-bonus setter with the row's energy and metal (each floored at
-200 and converted to single precision, bonus flag set — [05 R-ECO-01 §4]),
+sentinel 10. The stamp helper per slot copies side and colour again, makes the
+storage-bonus setter's three stores inline with the row's energy and metal
+(each floored at 200 and converted to single precision, bonus flag set — it
+does not call the helper; [05 R-ECO-01 §4] has the writer census),
 resolves `StartPos<n>` for the assigned position (diagnostic `Error: Could
 not find start position number %i on the map!` on a miss), creates the
 side's commander there, and centres the camera on the local player's.
@@ -6327,8 +6328,8 @@ type; runtime width is the destination field width:
 |---|---|---|---|
 | `Energy`, `Metal` | double | f32 (narrowed) | 0.0 |
 | `TotalEnergyProduced`, `TotalMetalProduced`, `TotalEnergyConsumed`, `TotalMetalConsumed`, `EnergyWasted`, `MetalWasted` | double | f64 | 0.0 |
-| `PlayerEnergyStorage`, `PlayerMetalStorage` | double | f32 (narrowed) | 0.0 |
-| `AddPlayerStorage` | integer | bit 0 of halfword | 0 |
+| `PlayerEnergyStorage`, `PlayerMetalStorage` | double | f32 (narrowed) — the two **storage-bonus operands** the bonus setter writes (`max(200, …)`, energy then metal), **not** the derived capacity pair the settlement zeroes and rebuilds every pass; the reader restores them into the same two operand fields | 0.0 |
+| `AddPlayerStorage` | integer | bit 0 of halfword — the **storage-bonus enable flag** the setter sets; the reader merges bit 0 and leaves bits 1–7 as they are | 0 |
 | `Kills`, `Losses` | integer | low signed 16 bits | 0 |
 | `UpdateTime` | integer | i32 | 0 |
 | `WinLoseTime` | integer | i32 | 0 |

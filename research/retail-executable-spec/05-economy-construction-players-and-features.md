@@ -960,8 +960,9 @@ keeps, and carry no separate status pair.
 
 **Established — neither counter is persisted.** The save writer's per-player
 block enumerates its keys: the two stocks, the six cumulative totals
-(produced, consumed and wasted, per resource), the two storage values and the
-storage-bonus flag, kills, losses, the three deadlines (`UpdateTime`,
+(produced, consumed and wasted, per resource), the two storage-bonus
+operands and the storage-bonus flag (not the capacities, which every pass
+rebuilds — [R-ECO-01 §4]), kills, losses, the three deadlines (`UpdateTime`,
 `WinLoseTime`, `DisplayTimer`) and the alliance block. Neither counter is among
 them, and the restore path rebuilds both through the forced-slot allocator,
 one increment of each per restored unit. A slot that had lost its last unit
@@ -1602,18 +1603,42 @@ Both bonus fields are already single precision, so the add is a plain
 single-plus-single. When the flag is clear neither add happens and capacity is
 the unit sum alone.
 
-**Established — who calls the bonus setter, and when.** Exactly two sites.
-(a) The battle-initialisation starting-resource writer, which walks the ten
-slots and branches on the session kind: on the **mission** kind it calls the
-bonus setter with two integerized floats and then writes both live stocks
-directly from the mission's own table; on the two other kinds it writes the
-live stocks only — from a per-side authored word times 100 on the skirmish
-kind — and **never sets the bonus flag**. (b) The commander-replacement branch
-inside the per-player phase, which calls it with the same per-side words times
-100 (metal word first, energy word second) alongside the replacement spawn.
-On a skirmish start the opening stocks survive the first settlement because
-the commander's own authored `energystorage`/`metalstorage` enter the capacity
-sum in the same pass, not because of a bonus.
+**Established — who writes the bonus, and when.** The setter *helper* has
+exactly two callers: (a) the battle-initialisation starting-resource writer,
+which walks the ten slots and branches on the session kind — on the
+**mission** kind it calls the setter with two integerized floats and then
+writes both live stocks directly from the mission's own table; on the
+skirmish kind it writes the live stocks from the setup row's integers
+(unscaled) and on the multiplayer kind from the lobby shorts × 100, and on
+those two kinds it does **not** call the setter; (b) the
+commander-replacement branch inside the per-player phase, which calls it
+with the per-side words × 100 (metal word first, energy word second)
+alongside the replacement spawn. But the same three stores — flag bit set,
+`float32(max(200, energy))`, `float32(max(200, metal))` — are also made
+**inline**, without the helper, by the two placement stamp helpers: the
+skirmish stamp helper from the setup row ([08 R-ENTRY-01 §5] step 2,
+[08 R-SKIR-01 §2]) and the multiplayer stamp from the lobby shorts × 100
+([08 R-ENTRY-01 §5]); both run at placement, before the first per-player
+phase. (A fifth writer — a slot walk that stores a *running maximum* of the
+rows' values — exists in the image but has no caller; it is recorded for
+completeness only.) The flag is cleared by the world rebuild's per-player
+reset ([08 R-ENTRY-01 §3] step 24, which leaves the two operands alone) and
+by the kill-record handler when a side commander dies ([08 R-SKIR-01 §3]);
+its only readers are the settlement's bonus add above and the save writer.
+The two operands and the flag are persisted as `PlayerEnergyStorage`,
+`PlayerMetalStorage` and `AddPlayerStorage` and restored into the same
+fields ([08 "Player records"]), so a loaded battle keeps its bonus.
+
+**Established — the commanders carry no storage of their own.** Neither
+`ARMCOM` nor `CORCOM` has an `energystorage` or `metalstorage` key
+(both compile to 0). On a skirmish start the opening stocks survive the first
+settlement **because of the bonus** the stamp helper installed at placement
+— capacity is the bonus alone until the first storage building completes
+([08 R-SKIR-01 §5]). The previous text here said the opposite ("exactly two
+sites", "never sets the bonus flag" on the skirmish kind, "the commander's own
+authored storage enters the capacity sum"): it counted only calls to the
+helper and missed the inlined copies, and the commander claim was never
+checked against the definitions.
 
 ### Cloak debit
 

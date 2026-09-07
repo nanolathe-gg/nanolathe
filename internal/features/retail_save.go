@@ -79,28 +79,33 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 
 			inst := s.instances[idx]
 			// Object-backed records always use the 3D family. For non-model
-			// features, the live attached/animating bit selects the animation
+			// features, the cell's animation-present bit selects the animation
 			// family; all remaining anchors are normal [08 R-SAVE-FEATURE-01].
+			// The bit is set for a sprite only by ignition and the die/reclaim
+			// transitions [05 R-FEAT-01 §15], so in this build it is "the
+			// anchor carries an event record" — a resting sprite whose cell
+			// bit is set with no record behind it has no live sequence pointer
+			// to match a family and is skipped [08 R-SESS-01 §4].
 			family := 0
 			if def.Object != "" {
 				family = 2
-			} else if cell.Occupied() || (inst != nil && inst.IsAnimating) {
+			} else if cell.Occupied() || (inst != nil && (inst.IsBurning || inst.IsAnimating)) {
 				family = 1
 			}
-			if family != 0 && inst == nil {
+			if family == 2 && inst == nil {
 				// Not a retail unknown: [08 R-SESS-01 §4] states what the
-				// record carries, and the live animation/3D side simply is not
+				// record carries, and the live 3D side simply is not
 				// recoverable from Terrain.Plot alone. Refusing is the only
 				// honest answer — a save must not fill those words with zeros.
-				// The fix is to bind the runtime instance side to this writer,
-				// which is a composition change, not a tracing one.
 				return RetailFeatureImage{}, fmt.Errorf("features: retail save: feature (%d,%d) family %d has no live instance state", cx, cz, family)
 			}
-			if family == 1 && inst.AnimationSelector > 2 {
-				// [08 R-SESS-01 §4] The writer recognizes only burn, death,
-				// and reclaim sequences. A live animation bound to another
-				// sequence is absent from the save, rather than being relabeled
-				// through a masked selector nibble.
+			if family == 1 && (inst == nil || !(inst.IsBurning || inst.IsAnimating) || !inst.cursor.running() || inst.AnimationSelector > 2) {
+				// [08 R-SESS-01 §4]: the nibble is chosen by comparing the
+				// cell's live sequence pointer against the definition's three
+				// family sequences, and a cell matching NONE is skipped
+				// entirely — no record, no count. An attached bit with no
+				// record, a record with no running cursor, and a selector
+				// outside the three families are all that case.
 				continue
 			}
 			row := RetailFeatureRecord{X: uint16(cx), Z: uint16(cz), TypeID: feature, TypeName: name}
@@ -117,9 +122,15 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 				binary.LittleEndian.PutUint16(row.Data[0:], uint16(cx))
 				binary.LittleEndian.PutUint16(row.Data[2:], uint16(cz))
 				binary.LittleEndian.PutUint16(row.Data[4:], feature)
+				// The live record's accumulator word, the live main cursor's
+				// frame byte, and the selector in the low nibble with the live
+				// countdown's HIGH nibble in the high nibble — the low nibble
+				// of the countdown is the save's documented loss
+				// [08 R-SAVE-FEATURE-01]. Both animation words are read off the
+				// authoritative cursor and countdown, never a mirror.
 				binary.LittleEndian.PutUint16(row.Data[6:], inst.DamageAccumulator)
-				row.Data[8] = inst.AnimationFrame
-				row.Data[9] = (inst.AnimationCountdown&0x0f)<<4 | (inst.AnimationSelector & 0x0f)
+				row.Data[8] = uint8(inst.cursor.frame)
+				row.Data[9] = (uint8(inst.BurnCountdown) & 0xf0) | (inst.AnimationSelector & 0x0f)
 				image.Animating = append(image.Animating, row)
 			case 2:
 				// The 3D record's five values, named [08 R-SAVE-FEATURE-01]:

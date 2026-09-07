@@ -42,14 +42,34 @@ func TestRestoreAtCopiesNormalAnchorAndAnimationState(t *testing.T) {
 		t.Fatalf("normal anchor %#x, want %#x", got, 0x4321)
 	}
 
+	// An animating record with the burn selector re-runs ignition — one
+	// simulation draw — and is then overwritten with the saved accumulator,
+	// frame byte and countdown high nibble (low nibble zero)
+	// [08 R-SAVE-FEATURE-01][05 R-FEAT-01 §9].
 	terrain = newEmptyTerrain(4, 4)
-	svc = NewService(terrain, nil, nil, nil)
+	sim := rng.SimulationFromState(5)
+	svc = NewService(terrain, &sim, nil, nil)
+	burnable := featureDef("tree", 0, 0, 10)
+	burnable.Filename = "trees"
+	burnable.SeqNameBurn = "burn"
+	burnable.SparkTime = 150
+	stubSequences(svc, []int32{3, 0, 2}, nil, nil)
 	anim := make([]byte, 10)
 	binary.LittleEndian.PutUint16(anim[6:], 0x2211)
-	anim[8], anim[9] = 7, 0xA0 // selector 0 (burn), countdown high nibble 10
-	inst, err := svc.RestoreAt(1, 2, def, 1, anim)
-	if err != nil || inst == nil || !inst.IsBurning || !inst.IsAnimating || inst.DamageAccumulator != 0x2211 || inst.AnimationFrame != 7 || inst.AnimationSelector != 0 || inst.AnimationCountdown != 10 || inst.BurnCountdown != 10 || inst.BurnTicks != 7 {
+	anim[8], anim[9] = 1, 0xA0 // frame 1, selector 0 (burn), countdown high nibble 10
+	before := sim.Draws()
+	inst, err := svc.RestoreAt(1, 2, burnable, 1, anim)
+	if err != nil || inst == nil || !inst.IsBurning || inst.IsAnimating || inst.DamageAccumulator != 0x2211 || inst.AnimationSelector != 0 {
 		t.Fatalf("anim restore: inst=%#v err=%v", inst, err)
+	}
+	if got := sim.Draws() - before; got != 1 {
+		t.Fatalf("restore consumed %d simulation draws, want ignition's one [05 R-FEAT-01 §9]", got)
+	}
+	if inst.BurnCountdown != 0xA0 {
+		t.Fatalf("restored countdown %d, want the saved high nibble back in place: 0xA0", inst.BurnCountdown)
+	}
+	if inst.cursor.frame != 1 || inst.cursor.delay != 3 || !inst.cursor.running() {
+		t.Fatalf("restored cursor frame %d delay %d, want the saved frame 1 with frame 0's delay 3 (the delay is not saved)", inst.cursor.frame, inst.cursor.delay)
 	}
 	if !terrain.PlotAt(1, 2).Occupied() {
 		t.Fatal("animating restore did not attach the anchor instance bit")
@@ -86,43 +106,110 @@ func TestRestoreAtCopiesNormalAnchorAndAnimationState(t *testing.T) {
 	}
 }
 
-func TestRestoreAnimatingSelectorsRetainStateWithoutBurnCompletion(t *testing.T) {
+// TestRestoreAnimatingSelectorsBindTheirSequences locks the reload of a death
+// or reclaim record: the selector re-runs the transition, which binds the
+// definition's OWN sequence from the content metadata at frame 0, and the
+// reader then writes the saved frame byte over it [08 R-SAVE-FEATURE-01]
+// [05 R-FEAT-01 §5 step 5]. The record therefore completes — on the visit its
+// remaining frames run out — and stamps the family's successor; it is not a
+// record that can never finish. The countdown nibble is restored too, though
+// nothing reads it for a non-burning record.
+func TestRestoreAnimatingSelectorsBindTheirSequences(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		selector  uint8
 		countdown uint8
+		want      string
 	}{
-		{name: "death", selector: 1, countdown: 11},
-		{name: "reclaim", selector: 2, countdown: 12},
+		{name: "death", selector: 1, countdown: 11, want: "dead"},
+		{name: "reclaim", selector: 2, countdown: 12, want: "reclaimed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			terrain := newEmptyTerrain(4, 4)
 			def := featureDef("source-"+tc.name, 0, 0, 10)
+			def.Filename = "trees"
+			def.SeqNameDie, def.SeqNameReclamate = "die", "reclamate"
+			def.FeatureDeadDef = featureDef("dead", 0, 0, 10)
+			def.FeatureDeadDef.Filename = "trees"
+			def.FeatureReclamateDef = featureDef("reclaimed", 0, 0, 10)
+			def.FeatureReclamateDef.Filename = "trees"
+			terrain.FeatureDefs = []*content.FeatureDef{def, def.FeatureDeadDef, def.FeatureReclamateDef}
 			svc := NewService(terrain, nil, nil, nil)
-			hookCalls := 0
-			svc.SetBurnAnimationTicks(func(*content.FeatureDef) int32 {
-				hookCalls++
-				return 1
-			})
+			// Delays 2, 5, 1: frame 1 saved. After the reload the cursor is at
+			// frame 1 but holding frame 0's delay of 2 (not saved), so the
+			// record ends after 2 + 1 = 3 visits, not the 5 + 1 a
+			// perfect continuation would take — the documented loss.
+			stubSequences(svc, nil, []int32{2, 5, 1}, []int32{2, 5, 1})
 			data := make([]byte, 10)
 			binary.LittleEndian.PutUint16(data[6:], 0x1234)
-			data[8] = 7
+			data[8] = 1
 			data[9] = tc.countdown<<4 | tc.selector
 			inst, err := svc.RestoreAt(1, 1, def, 1, data)
-			if err != nil || inst == nil || !inst.IsAnimating || inst.IsBurning || inst.DamageAccumulator != 0x1234 || inst.AnimationFrame != 7 || inst.AnimationSelector != tc.selector || inst.AnimationCountdown != tc.countdown || inst.BurnCountdown != 0 || inst.BurnTicks != 0 || inst.BurnDuration != 0 {
+			if err != nil || inst == nil || !inst.IsAnimating || inst.IsBurning || inst.DamageAccumulator != 0x1234 || inst.AnimationSelector != tc.selector {
 				t.Fatalf("restore: inst=%#v err=%v", inst, err)
+			}
+			if inst.BurnCountdown != int32(tc.countdown)<<4 {
+				t.Fatalf("restored countdown %#x, want the nibble in the high half %#x", inst.BurnCountdown, int32(tc.countdown)<<4)
+			}
+			if inst.cursor.frame != 1 || inst.cursor.delay != 2 {
+				t.Fatalf("restored cursor frame %d delay %d, want frame 1 with frame 0's delay 2", inst.cursor.frame, inst.cursor.delay)
 			}
 			if !terrain.PlotAt(1, 1).Occupied() {
 				t.Fatal("restored transition did not attach the anchor instance bit")
 			}
-			svc.TickLifecycle(0)
-			if got := svc.InstanceAt(1, 1); got != inst {
-				t.Fatalf("selector %d instance=%#v, want retained instance", tc.selector, got)
+			for visit := uint32(1); visit < 3; visit++ {
+				svc.TickLifecycle(visit)
+				if svc.InstanceAt(1, 1) != inst {
+					t.Fatalf("visit %d replaced the restored record early", visit)
+				}
 			}
-			if hookCalls != 0 {
-				t.Fatalf("selector %d invoked burn duration hook %d times", tc.selector, hookCalls)
+			svc.TickLifecycle(3)
+			got := svc.InstanceAt(1, 1)
+			if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != tc.want {
+				t.Fatalf("after the restored sequence ended the anchor holds %v, want %q [05 R-FEAT-01 §5 step 6]", got, tc.want)
+			}
+			if got.IsAnimating || got.onActive {
+				t.Fatal("the successor inherited the animation record")
 			}
 		})
+	}
+}
+
+// TestRestoreAnimatingSelectorWithoutSequenceReplacesAtOnce is the reload
+// side of [05 R-FEAT-01 §5] step 3: a saved death record whose definition
+// names no (or no resolvable) `seqnamedie` re-runs a transition that
+// replaces immediately, so the cell holds `featuredead` after the load and
+// there is no record for the reader to overwrite. A saved burn record whose
+// definition cannot ignite simply rests [05 R-FEAT-01 §9 step 1].
+func TestRestoreAnimatingSelectorWithoutSequenceReplacesAtOnce(t *testing.T) {
+	terrain := newEmptyTerrain(4, 4)
+	def := featureDef("bare", 0, 0, 10)
+	def.Filename = "trees"
+	def.SeqNameDie = "die" // named, but no metadata resolves it
+	def.FeatureDeadDef = featureDef("stump", 0, 0, 10)
+	terrain.FeatureDefs = []*content.FeatureDef{def, def.FeatureDeadDef}
+	sim := rng.SimulationFromState(9)
+	svc := NewService(terrain, &sim, nil, nil)
+	data := make([]byte, 10)
+	data[8], data[9] = 3, 0x51
+	if _, err := svc.RestoreAt(1, 1, def, 1, data); err != nil {
+		t.Fatal(err)
+	}
+	got := svc.InstanceAt(1, 1)
+	if got == nil || got.Def != def.FeatureDeadDef || got.IsAnimating {
+		t.Fatalf("anchor holds %v, want the immediate featuredead successor", got)
+	}
+	burn := make([]byte, 10)
+	burn[8], burn[9] = 3, 0x50 // selector 0, but `seqnameburn` is unnamed
+	before := sim.Draws()
+	if _, err := svc.RestoreAt(2, 2, def, 1, burn); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.InstanceAt(2, 2); got == nil || got.Def != def || got.IsBurning || got.onActive {
+		t.Fatalf("anchor holds %v, want the feature at rest", got)
+	}
+	if sim.Draws() != before {
+		t.Fatal("a refused ignition drew from the simulation stream")
 	}
 }
 
@@ -402,7 +489,7 @@ func TestSinkVelocityAndFloor(t *testing.T) {
 	inst.Settled = false
 	// One tick should integrate Y += Vy and keep Vy latched
 	prevY := inst.Y
-	svc.sinkTick()
+	svc.TickLifecycle(1)
 	if inst.Y.Raw() != prevY.Raw()-11468 {
 		t.Fatalf("per-tick descent should integrate Vy, got %d want %d", inst.Y.Raw(), prevY.Raw()-11468)
 	}
@@ -411,7 +498,7 @@ func TestSinkVelocityAndFloor(t *testing.T) {
 	}
 	// Continue until settling
 	for i := 0; i < 200; i++ {
-		svc.sinkTick()
+		svc.TickLifecycle(uint32(2 + i))
 		if inst.Settled {
 			break
 		}
@@ -432,150 +519,77 @@ func TestSinkVelocityAndFloor(t *testing.T) {
 	terrain.Plot[1+w*0].SetMinHeight(10) // already? but ensure floor 10
 	// Place at 1,0 floor 10, sea 30 => Y above sea
 	inst2.Y = numeric.Fixed(40 * 65536)
-	inst2.Vy = 0
+	// A zero velocity is the dormant move, never a fall [05 R-FEAT-01 §10]
+	// pass 3; a record already moving in the air accelerates under gravity.
+	inst2.Vy = -1
 	inst2.IsSinking = true
 	inst2.Settled = false
 	// Should accelerate with gravity (Vy becomes more negative)
 	prevVy := inst2.Vy
-	svc.sinkTick()
+	svc.TickLifecycle(300)
 	if inst2.Vy.Raw() >= prevVy.Raw() {
 		t.Fatalf("above surface gravity should accelerate downward (Vy more negative), got %d from %d", inst2.Vy.Raw(), prevVy.Raw())
 	}
 }
 
+// TestBurningDamageCoupling locks the burn event's stream use and the inert
+// burning record: the event draws once for a surviving candidate (and once
+// more for that candidate's ignition), a burning filename-based feature pays
+// no reclaim, and further blast on it is discarded [05 "Feature burning"]
+// [05 R-FEAT-01 §8 step 8][05 R-FEAT-01 §11].
 func TestBurningDamageCoupling(t *testing.T) {
 	w, h := 7, 7
 	terrain := newEmptyTerrain(w, h)
-	// Burning feature at center
 	burnDef := featureDef("treeBurn", 0, 0, 10)
-	burnDef.CanonicalKey = content.CanonicalKey("treeBurn")
+	burnDef.Filename = "trees"
 	burnDef.Flamable = true
 	burnDef.SeqNameBurn = "burnGaf"
-	burnDef.SparkTime = 120 // authored 4 (120/30): half 2 => countdown 2-3, one draw
-	burnDef.BurnWeapon = "burn_weapon"
+	burnDef.SparkTime = 120
 	burnDef.SpreadChance = 100
-	burnDef.FootprintX = 1
-	burnDef.FootprintZ = 1
-	// Candidate neighbor at (4,3) -> within 7x7 of (3,3)
 	candDef := featureDef("cand", 0, 0, 10)
-	candDef.CanonicalKey = content.CanonicalKey("cand")
+	candDef.Filename = "trees"
 	candDef.Flamable = true
 	candDef.SeqNameBurn = "burnGaf2"
 	candDef.SparkTime = 120
 	candDef.SpreadChance = 100 // always ignite when drawn [05 ...]
-	candDef.FootprintX = 1
-	candDef.FootprintZ = 1
-	candDef.Filename = "tree.s3o" // filename-based for immunity test
 	sim := rng.SimulationFromState(100)
 	crt := rng.CRTFromState(200)
-	// Wind zero for deterministic no ember draws
 	wind := world.NewWind(0, 0)
-	// Need wind dir zero: NewWind with min/max 0 gives Strength 0 and Dir zero? But we can set Dir manually.
 	wind.DirX = 0
 	wind.DirZ = 0
 	svc := NewService(terrain, &sim, &crt, wind)
-	// Place candidates
+	stubSequences(svc, longBurn(), nil, nil)
 	svc.spawnFeatureAt(3, 3, burnDef)
 	burnInst := svc.InstanceAt(3, 3)
 	if burnInst == nil {
 		t.Fatal("burnInst not placed")
 	}
-	// Make it burning with countdown 1 so next tick fires
-	burnInst.IsBurning = true
-	burnInst.BurnCountdown = 1
-	burnInst.BurnDuration = 100
-	burnInst.BurnTicks = 0
-	// Place candidate at 4,3 (dx 1, dz 0)
+	// Make it burning with countdown 1 so the next visit fires the event.
+	startBurning(svc, burnInst, longBurn(), 1)
+	// One candidate at (4,3), a cell with a feature word and no record.
 	svc.spawnFeatureAt(4, 3, candDef)
-	// Ensure candidate not burning yet
-	if svc.InstanceAt(4, 3).IsBurning {
-		t.Fatal("candidate should not be burning yet")
-	}
-	// Need terrain Plot at candidate to have feature and not occupied? spawn creates instance, but burning spread expects cell.Occupied false?
-	// Our spawn marks instance, but then burn spread skips if already has instance attached.
-	// For spread to ignite, candidate must be non-burning feature without instance? But spawn creates instance.
-	// So we need candidate to be feature without live instance? In retail, candidate is a feature cell without animation instance attached.
-	// Our test's spawn creates an instance, which would be skipped. So we need to place feature cell without instance.
-	// Instead of spawn, directly set plot feature without creating instance.
-	// Clear the instance at candidate and keep plot feature but not occupied.
-	svc.clearFootprint(4, 3, candDef) // remove instance
+	svc.clearFootprint(4, 3, candDef)
 	terrain.Plot[3*w+4].SetFeature(svc.featureIndexForDef(candDef))
-	terrain.Plot[3*w+4].SetFlagByte(0) // not occupied
-	// Ensure not in instances map
-	if _, ok := svc.instances[3*w+4]; ok {
-		t.Fatal("candidate instance should be cleared for spread test")
-	}
-	// Record sim draws before
+	terrain.Plot[3*w+4].SetFlagByte(0)
 	beforeDraws := svc.sim().Draws()
-	beforeBurnWeapons := len(svc.BurnWeaponsEmitted)
-	tickFeature(svc, 0) // tick 0 => smoke true, burn countdown 1->0 fires event
-	afterDraws := svc.sim().Draws()
-	// Fire event should have drawn at least 1 for spread candidate (100% chance) + 1 for countdown earlier? Actually countdown was preset, so fire event draws 1 for candidate
-	// Our burnTick decrements countdown and fires, drawing 1 for candidate.
-	// Plus igniteAt for candidate draws 1 for its countdown.
-	// So at least 2 draws.
-	if afterDraws <= beforeDraws {
-		t.Fatalf("burn spread should consume sim draws, before %d after %d", beforeDraws, afterDraws)
+	tickFeature(svc, 0)
+	if got := svc.sim().Draws() - beforeDraws; got != 2 {
+		t.Fatalf("the burn event drew %d times, want the candidate's spread draw plus its ignition's countdown draw", got)
 	}
-	// Check candidate now burning
-	found := false
-	for _, inst := range svc.Instances() {
-		if inst.CX == 4 && inst.CZ == 3 && inst.IsBurning {
-			found = true
-			break
-		}
-	}
-	// Alternative check via instances map
 	if svc.InstanceAt(4, 3) == nil || !svc.InstanceAt(4, 3).IsBurning {
-		// May have spawned at different location due to wind? But we forced candidate at 4,3, spread scan visits row-major, so first candidate visited is (-3,-3) etc, but 4,3 is at dx1,dz0 which is visited after many others that were empty/skipped without draws.
-		// Our candidate is at 4,3 which is 1 east, should be visited.
-		// If not found, check if any new burning instance exists.
-		// Let's check any new instance
-		if !found {
-			t.Fatalf("candidate at 4,3 should have ignited via spread [05 \"Feature burning\"]")
-		}
+		t.Fatal("candidate at 4,3 should have ignited via spread [05 \"Feature burning\"]")
 	}
-	// Check burn weapon emitted [06 §13.1]
-	if len(svc.BurnWeaponsEmitted) != beforeBurnWeapons+1 {
-		t.Fatalf("burn weapon should be emitted after both spread passes [05 \"Feature burning\"] [06 §13.1], got %d want %d", len(svc.BurnWeaponsEmitted), beforeBurnWeapons+1)
-	}
-	if svc.BurnWeaponsEmitted[len(svc.BurnWeaponsEmitted)-1].Weapon != "burn_weapon" {
-		t.Fatalf("burn weapon name mismatch")
-	}
-	// Smoke flag should not consume sim draws, only CRT.
-	// Check that smoke jitter uses CRT not sim: second tick smoke false vs true should not affect sim draws differently except for burn logic
-	simDrawsBefore := svc.sim().Draws()
-	crtDrawsBefore := svc.crt().Draws()
-	tickFeature(svc, 1) // smoke false (tick 1 %3 !=0)
-	simDrawsAfter1 := svc.sim().Draws()
-	crtDrawsAfter1 := svc.crt().Draws()
-	tickFeature(svc, 3) // smoke true (3%3==0)
-	simDrawsAfter2 := svc.sim().Draws()
-	crtDrawsAfter2 := svc.crt().Draws()
-	// CRT should have advanced more on smoke true ticks
-	if crtDrawsAfter2 <= crtDrawsAfter1 {
-		// Could be zero if no burning instances? But we have burning
-		// Allow: if burning still, smoke true should have drawn 2 CRT per instance
-	}
-	_ = simDrawsBefore
-	_ = simDrawsAfter1
-	_ = simDrawsAfter2
-	_ = crtDrawsBefore
-	_ = crtDrawsAfter1
-	_ = crtDrawsAfter2
-	// Test immunity: burning filename-based cannot be reclaimed and immune to blast
+	// A burning filename-based feature cannot be reclaimed and is immune to
+	// further blast.
 	burnInst2 := svc.InstanceAt(3, 3)
-	if burnInst2 == nil {
+	if burnInst2 == nil || !burnInst2.IsBurning {
 		t.Fatal("burnInst2 missing")
 	}
-	// Set filename to make it filename-based for immunity
-	burnInst2.Def.Filename = "tree.gaf"
 	metal, energy := svc.Reclaim(&units.Unit{}, burnInst2, 0)
 	if metal != 0 || energy != 0 {
 		t.Fatalf("burning filename-based feature should not be reclaimable [05 \"Feature burning\"], got %v %v", metal, energy)
 	}
-	didDestroy := svc.DamageFeature(3, 3, 1000)
-	if didDestroy {
+	if svc.DamageFeature(3, 3, 1000) {
 		t.Fatal("burning filename-based should be immune to blast damage [05 \"Feature burning\"]")
 	}
 }
@@ -645,6 +659,7 @@ func TestBurningSmokeOnlyGated(t *testing.T) {
 	terrain := newEmptyTerrain(w, h)
 	def := featureDef("burnSmoke", 0, 0, 10)
 	def.CanonicalKey = content.CanonicalKey("burnSmoke")
+	def.Filename = "trees"
 	def.Flamable = true
 	def.SeqNameBurn = "burn"
 	def.SparkTime = 120
@@ -654,17 +669,16 @@ func TestBurningSmokeOnlyGated(t *testing.T) {
 	svc := NewService(terrain, &sim, &crt, nil)
 	svc.spawnFeatureAt(0, 0, def)
 	inst := svc.InstanceAt(0, 0)
-	inst.IsBurning = true
-	inst.BurnCountdown = 10 // not zero, so no spread event this tick
-	inst.BurnDuration = 100
-	// Tick 0 smoke true, Tick 1 smoke false: both should advance BurnTicks and decrement countdown
+	startBurning(svc, inst, []int32{100}, 10) // countdown not zero, so no spread event this tick
+	// Tick 0 smoke true, Tick 1 smoke false: both should advance the cursor
+	// (one frame, delay 100 → 99 → 98) and decrement the countdown.
 	tickFeature(svc, 0) // smoke true
-	if inst.BurnTicks != 1 || inst.BurnCountdown != 9 {
-		t.Fatalf("burn tick 0 failed, ticks %d countdown %d", inst.BurnTicks, inst.BurnCountdown)
+	if inst.cursor.delay != 99 || inst.BurnCountdown != 9 {
+		t.Fatalf("burn tick 0 failed, delay %d countdown %d", inst.cursor.delay, inst.BurnCountdown)
 	}
 	tickFeature(svc, 1) // smoke false, but still should advance
-	if inst.BurnTicks != 2 || inst.BurnCountdown != 8 {
-		t.Fatalf("burn tick 1 (smoke gated only) should still advance animation and countdown every tick [05 \"Feature burning\"], got ticks %d countdown %d", inst.BurnTicks, inst.BurnCountdown)
+	if inst.cursor.delay != 98 || inst.BurnCountdown != 8 {
+		t.Fatalf("burn tick 1 (smoke gated only) should still advance animation and countdown every tick [05 \"Feature burning\"], got delay %d countdown %d", inst.cursor.delay, inst.BurnCountdown)
 	}
 	// Verify smoke only gates smoke emission (CRT draws), not sim draws for countdown/spread
 }
@@ -674,6 +688,7 @@ func TestWindEmbersZeroWindNoDraws(t *testing.T) {
 	terrain := newEmptyTerrain(w, h)
 	burnDef := featureDef("windBurn", 0, 0, 10)
 	burnDef.CanonicalKey = content.CanonicalKey("windBurn")
+	burnDef.Filename = "trees"
 	burnDef.Flamable = true
 	burnDef.SeqNameBurn = "burn"
 	burnDef.SparkTime = 120
@@ -685,9 +700,7 @@ func TestWindEmbersZeroWindNoDraws(t *testing.T) {
 	svcZero := NewService(terrain, &sim, nil, windZero)
 	svcZero.spawnFeatureAt(3, 3, burnDef)
 	instZero := svcZero.InstanceAt(3, 3)
-	instZero.IsBurning = true
-	instZero.BurnCountdown = 1
-	instZero.BurnDuration = 100
+	startBurning(svcZero, instZero, longBurn(), 1)
 	// Place no candidates to avoid spread draws, just test wind embers zero wind collapses to no draws [05 "Feature burning"]
 	before := svcZero.sim().Draws()
 	tickFeature(svcZero, 0) // fires burn event, wind embers with zero wind should not draw

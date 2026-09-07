@@ -11,6 +11,9 @@ import "testing"
 func TestEventSequenceReportsTheRecordsOwnSequence(t *testing.T) {
 	svc, src := transitionService(t, 4, true)
 	src.SeqNameReclamateShad = "reclamateshad"
+	// Two frames, the first held for one visit: the first visit steps the
+	// cursor onto frame 1, whose first visit index is 1.
+	stubSequences(svc, nil, []int32{1, 3}, []int32{1, 3})
 
 	// At rest the accessor reports nothing, so the rest cursor stays in charge.
 	inst := svc.InstanceAt(1, 1)
@@ -26,11 +29,11 @@ func TestEventSequenceReportsTheRecordsOwnSequence(t *testing.T) {
 		t.Fatalf("reclaim record reports (%q, %q, %d, %v), want the reclaim pair at visit 0", name, shadow, visit, ok)
 	}
 
-	// The visit index is the cursor's own count, so the drawn frame follows the
-	// simulation's cursor rather than a presentation-side timer.
+	// The visit index names the cursor's own frame, so the drawn frame follows
+	// the simulation's cursor rather than a presentation-side timer.
 	svc.TickLifecycle(1)
-	if _, _, visit, _ := inst.EventSequence(); visit != 1 {
-		t.Fatalf("after one feature-phase visit the cursor reports visit %d, want 1", visit)
+	if _, _, visit, _ := inst.EventSequence(); visit != 1 || inst.CursorFrame() != 1 {
+		t.Fatalf("after one feature-phase visit the cursor reports visit %d on frame %d, want visit 1 on frame 1", visit, inst.CursorFrame())
 	}
 
 	// The death selector picks the other pair.

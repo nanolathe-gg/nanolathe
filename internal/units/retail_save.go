@@ -67,16 +67,15 @@ func RetailUnitImage(u *Unit, orderCount uint32, stableID RetailStableID, scratc
 			return nil, fmt.Errorf("units: retail save: unit %d weapon slot %d: %w", id, i, err)
 		}
 	}
-	carrier, err := optionalRetailStableID(stableID, u.Attachment.Carrier, "carrier")
-	if err != nil {
-		return nil, err
-	}
-	engagement, err := optionalRetailStableID(stableID, u.EngagementTarget, "engagement target")
-	if err != nil {
-		return nil, err
-	}
+	// The carrier link and the engagement-target link are the two words the
+	// record may legitimately lack: each is "the stable slot, or 0 when absent
+	// or dead" [08 R-SAVE-02 §6]. A save taken on the tick a shooter kills its
+	// target therefore writes 0, not a refusal.
+	carrier := optionalRetailStableID(stableID, u.Attachment.Carrier)
 	binary.LittleEndian.PutUint16(data[0x89:], carrier)
-	binary.LittleEndian.PutUint16(data[0x8b:], engagement)
+	binary.LittleEndian.PutUint16(data[0x8b:], optionalRetailStableID(stableID, u.EngagementTarget))
+	// The attach slot byte follows the written link: 0xFF when the unit has
+	// no live carrier [08 R-SAVE-02 §6].
 	data[0x8d] = 0xff
 	if carrier != 0 {
 		if u.Attachment.AttachPiece < 0 || u.Attachment.AttachPiece > math.MaxUint8 {
@@ -212,6 +211,12 @@ func writeRetailWeaponSlot(data []byte, s *Slot, stableID RetailStableID) error 
 	return nil
 }
 
+// resolveRetailStableID is the strict form: the unit's own identity and a
+// weapon slot's unit-mode target must name a live stable slot. A weapon slot
+// holding a dead unit is a state the tick's target resolver rewrites to the
+// empty encoding before any writer sees it [06 R-WPN-04 §1], so the writer
+// copies the pair as held and refuses one it cannot resolve
+// [08 R-SAVE-WEAPON-01].
 func resolveRetailStableID(resolve RetailStableID, h pool.Handle, kind string) (uint16, error) {
 	if h == 0 || resolve == nil {
 		return 0, fmt.Errorf("units: retail save: unresolved %s handle %d", kind, h)
@@ -223,11 +228,20 @@ func resolveRetailStableID(resolve RetailStableID, h pool.Handle, kind string) (
 	return id, nil
 }
 
-func optionalRetailStableID(resolve RetailStableID, h pool.Handle, kind string) (uint16, error) {
-	if h == 0 {
-		return 0, nil
+// optionalRetailStableID is the lenient form for the carrier and
+// engagement-target links: the stable slot when the handle names a live unit,
+// otherwise 0 [08 R-SAVE-02 §6]. The resolver knows only live units, so an
+// unresolved handle is exactly the "absent or dead" case — the linked unit
+// died this tick and its slot was freed, or has already been reused.
+func optionalRetailStableID(resolve RetailStableID, h pool.Handle) uint16 {
+	if h == 0 || resolve == nil {
+		return 0
 	}
-	return resolveRetailStableID(resolve, h, kind)
+	id, ok := resolve(h)
+	if !ok {
+		return 0
+	}
+	return id
 }
 
 func fitsInt32(v int64) bool     { return v >= math.MinInt32 && v <= math.MaxInt32 }

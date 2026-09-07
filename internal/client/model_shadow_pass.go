@@ -144,17 +144,23 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 	return polys
 }
 
-// drawModelShadow composes and blits one model shadow. It runs before the body
-// for the same subject, which is the retail order [03 §5.3]. body is the
-// subject's finished composition image, which the punch-out below reads; it is
-// already rasterized at this point but not yet committed.
-func (c *Client) drawModelShadow(draw *presentationrender.UnitDraw, body *modelTarget) {
+// buildModelShadow rasterizes one model shadow into its own finished, punched
+// composition image and returns it, or nil when the subject casts no shadow or
+// the shadow has no faces. It is the whole of the old drawModelShadow body up to
+// (but not including) the tinted commit, split out so both the classic path and
+// the modern (GPU) bridge produce the identical shadow byte planes from one
+// builder: drawModelShadow commits it through ALP on the CPU, and
+// ModelShadowImage hands the same image to the GPU executor to commit through the
+// same ALP form (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5). body is the subject's
+// finished composition image the punch-out reads to leave a hole under the hull
+// [R-REN-03D §5][R-RAST-01 §4].
+func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *modelTarget) *modelTarget {
 	if c == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
-		return
+		return nil
 	}
 	polys := c.collectShadowPolys(draw)
 	if len(polys) == 0 {
-		return
+		return nil
 	}
 	width, height, originX, originY := modelExtent(polys)
 	anchorX, anchorY := c.shadowAnchor(draw)
@@ -167,6 +173,22 @@ func (c *Client) drawModelShadow(draw *presentationrender.UnitDraw, body *modelT
 		c.fillPolyTarget(img, &polys[i], shadowColorIndex, nil)
 	}
 	img.punchOut(body)
+	return img
+}
+
+// drawModelShadow composes and blits one model shadow. It runs before the body
+// for the same subject, which is the retail order [03 §5.3]. body is the
+// subject's finished composition image, which the punch-out below reads; it is
+// already rasterized at this point but not yet committed.
+//
+// The rasterize/punch half is buildModelShadow; this adds only the tinted
+// commit, so the classic byte path is byte-for-byte what it was before the
+// split.
+func (c *Client) drawModelShadow(draw *presentationrender.UnitDraw, body *modelTarget) {
+	img := c.buildModelShadow(draw, body)
+	if img == nil {
+		return
+	}
 	img.tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)
 }
 

@@ -123,11 +123,20 @@ func TestBlastOutsideRadiusLeavesTheFeatureAlone(t *testing.T) {
 // on that hit, spending exactly one simulation draw, and the countdown lands in
 // `half .. 2·half − 1` for `half = sparkTicks >> 1`.
 func TestFirestarterBlastIgnitesWithOneSimulationDraw(t *testing.T) {
-	def := &content.FeatureDef{Damage: 10, FootprintX: 1, FootprintZ: 1, Flamable: true, SparkTime: 150}
+	// A sprite definition whose burn sequence RESOLVES: ignition needs the
+	// sequence's frame words from the content metadata seam, and a 3D
+	// definition never burns [05 R-FEAT-01 §9 step 1].
+	def := &content.FeatureDef{Damage: 10, FootprintX: 1, FootprintZ: 1, Flamable: true, SparkTime: 150, Filename: "trees"}
 	def.CanonicalKey = "tree"
 	def.SeqNameBurn = "treeburn"
 	sim := rng.SimulationFromState(12345)
 	svc, feats, terrain := featureBlastFixture(t, def, 8, 8, &sim)
+	feats.SequenceFrames = func(_ *content.FeatureDef, selector uint8) []int32 {
+		if selector != 0 {
+			return nil
+		}
+		return []int32{100}
+	}
 	w := newCombatFixtureWorld(4, nil)
 
 	before := sim.Draws()

@@ -537,5 +537,5 @@ func writeFeature(w func(string, ...interface{}), f *features.Instance) {
 	if f.Def != nil {
 		key = f.Def.CanonicalKey
 	}
-	w("feature:%s:%d:%d:%d:%d:%d:%t:%d:%d:%d:%t:%d:%d:%d:%d:%t:%t:%d:%d|", key, f.CX, f.CZ, f.DamageAccumulator, f.ReclaimProgress, f.Status, f.IsBurning, f.BurnCountdown, f.BurnTicks, f.BurnDuration, f.RemoteSuppressed, f.Y.Raw(), f.Vy.Raw(), f.X.Raw(), f.Z.Raw(), f.IsSinking, f.Settled, f.FootprintX, f.FootprintZ)
+	w("feature:%s:%d:%d:%d:%d:%d:%t:%d:%d:%d:%t:%d:%d:%d:%d:%t:%t:%d:%d|", key, f.CX, f.CZ, f.DamageAccumulator, f.ReclaimProgress, f.Status, f.IsBurning, f.BurnCountdown, f.CursorFrame(), f.CursorDelay(), f.RemoteSuppressed, f.Y.Raw(), f.Vy.Raw(), f.X.Raw(), f.Z.Raw(), f.IsSinking, f.Settled, f.FootprintX, f.FootprintZ)
 }

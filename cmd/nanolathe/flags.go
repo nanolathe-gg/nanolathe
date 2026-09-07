@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 )
@@ -30,6 +31,19 @@ type Options struct {
 	ShotSize   string  // "WxH" surface size for --shot; empty composes at the authored 640x480
 	ShotModal  string  // battle modal to open before --shot captures: "options", "exit" or "confirm"
 	ShotSpace  bool    // hold Space for --shot captures, so the bottom slide strip is fully raised
+	Renderer   string  // start-up presentation executor: "classic" (default) or "modern"
+
+	// ShotRenderer selects which executor --shot captures through:
+	// "classic" (default, the software composer), "modern" (the GPU executor,
+	// captured through a hidden one-frame Ebitengine loop), or "both" (classic
+	// to --shot, modern to a sibling path, plus their diff)
+	// [DESIGN_GPU_RENDERER.md §2.5]. ShotRendererMax is the largest differing-
+	// pixel count "both" tolerates before the command exits non-zero; while the
+	// modern executor is Clear+Expand only (WU-2.1) the whole play area differs,
+	// so the default is effectively unbounded and the diff is an artifact for the
+	// reviewer, not a build failure [DESIGN_GPU_RENDERER.md §6, C-G10].
+	ShotRenderer    string // --shot executor: "classic", "modern" or "both"
+	ShotRendererMax int    // with "both", exit non-zero when the diff exceeds this
 
 	// Host-side profiling. None of these reach the session: a profiled run
 	// draws the same numbers in the same order as an unprofiled one, so the
@@ -78,6 +92,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.CPUProfile, "cpuprofile", "", "write a pprof CPU profile of the --shot compose path to this file")
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with --shot, run the real viewer loop headlessly for this many seconds of battle time and report ms per frame")
+	set.StringVar(&opts.Renderer, "renderer", "classic", "start-up presentation renderer: \"classic\" (software) or \"modern\" (GPU); any other value is classic")
+	set.StringVar(&opts.ShotRenderer, "shot-renderer", "classic", "which executor --shot captures through: \"classic\" (software), \"modern\" (GPU, hidden one-frame loop) or \"both\" (classic + modern + diff)")
+	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")
 	set.Usage = func() {
 		fmt.Fprintf(out, "nanolathe — a reimplementation of the Total Annihilation engine\n\n")
 		fmt.Fprintf(out, "usage: nanolathe [flags]\n\nflags:\n")

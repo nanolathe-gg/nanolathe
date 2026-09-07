@@ -171,6 +171,17 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 			s.Econ.Players[image.Players[i].Index].Exists = true
 		}
 	}
+	// The shared end countdown and latch are not among the persisted
+	// `Player%i` keys [05 R-ECO-01 §12], and the world rebuild's per-player
+	// reset runs before the restoration dispatcher [08 R-ENTRY-01 §8]
+	// [08 R-SAVE-02 §11], so a load resumes with the countdown unarmed exactly
+	// as a fresh entry does. Mirror the latch built above onto every record the
+	// way the live tick does: the settlement gate reads the per-player mirror
+	// and settles only while it is negative [08 R-TRIG-01 §6]
+	// [05 "Authoritative settlement order"]. Elimination needs no such write —
+	// it is derived from the two unit counters the forced-slot allocator
+	// rebuilds, never from a flag [05 R-ECO-01 §12].
+	s.publishEndCountdown()
 	s.InitBattleWindForSession()
 	if err := createAndBindServices(s); err != nil {
 		return nil, fmt.Errorf("session: retail shell composition: %w", err)

@@ -2,14 +2,17 @@ package main
 
 import (
 	"fmt"
+	"image"
 	"image/png"
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/framediff"
 	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
@@ -282,18 +285,108 @@ func runShot(opts Options, cs *contentSet) error {
 			per(stepTotal), per(presentTotal))
 	}
 
-	img := cl.ComposeFrame()
-	file, err := os.Create(opts.Shot)
-	if err != nil {
-		return fmt.Errorf("nanolathe: create shot %q: %w", opts.Shot, err)
-	}
-	if err := png.Encode(file, img); err != nil {
-		file.Close()
-		return fmt.Errorf("nanolathe: write shot %q: %w", opts.Shot, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("nanolathe: close shot %q: %w", opts.Shot, err)
+	// The renderer switch is the one sanctioned presentation choice [I11]: both
+	// executors replay the same committed frame, and the capture picks which one
+	// writes the --shot PNG [DESIGN_GPU_RENDERER.md §2.5]. classic is the
+	// reference (C-G11) and its output is unchanged; modern and both run the GPU
+	// executor through a hidden one-frame Ebitengine loop.
+	switch opts.ShotRenderer {
+	case "", "classic":
+		if err := encodeShotPNG(opts.Shot, cl.ComposeFrame()); err != nil {
+			return err
+		}
+	case "modern":
+		modern, err := captureModernShot(cl, shotW, shotH, opts.Map)
+		if err != nil {
+			return err
+		}
+		if err := encodeShotPNG(opts.Shot, modern); err != nil {
+			return err
+		}
+	case "both":
+		if err := runShotBoth(opts, cl, shotW, shotH); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("nanolathe: shot: --shot-renderer wants \"classic\", \"modern\" or \"both\", got %q", opts.ShotRenderer)
 	}
 	stopCPU()
 	return writeMemProfile(opts.MemProfile)
+}
+
+// runShotBoth captures the classic and modern frames of the same committed
+// state, writes both PNGs, and reports their difference [DESIGN_GPU_RENDERER.md
+// §2.5, §6]. The classic capture keeps the ordinary --shot output byte for byte
+// (C-G11); the modern capture goes to a sibling `.modern.png`, and the diff
+// (differing-pixel count and the largest clusters) is printed to stderr with an
+// optional `.diff.png`. It exits non-zero only when the diff exceeds
+// --shot-renderer-max: at this stage the modern executor is Clear+Expand only
+// (WU-2.1), so the whole play area differs by design — the point is the artifact,
+// not a pass/fail (C-G10).
+func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
+	classic := cl.ComposeFrame()
+	if err := encodeShotPNG(opts.Shot, classic); err != nil {
+		return err
+	}
+	modern, err := captureModernShot(cl, shotW, shotH, opts.Map)
+	if err != nil {
+		return err
+	}
+	modernPath := shotSiblingPath(opts.Shot, ".modern.png")
+	if err := encodeShotPNG(modernPath, modern); err != nil {
+		return err
+	}
+
+	res, err := framediff.Compare(classic, modern, 8)
+	if err != nil {
+		return fmt.Errorf("nanolathe: shot: compare classic and modern: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "nanolathe: shot-renderer both: %dx%d, %d differing pixels (%.4f%%); classic %s, modern %s\n",
+		res.Width, res.Height, res.Count, 100*float64(res.Count)/float64(res.Total), opts.Shot, modernPath)
+	const topClusters = 8
+	for i, c := range res.Clusters {
+		if i >= topClusters {
+			fmt.Fprintf(os.Stderr, "  ... %d more clusters\n", len(res.Clusters)-i)
+			break
+		}
+		fmt.Fprintf(os.Stderr, "  %6d px  at (%d,%d)-(%d,%d)\n", c.Count, c.X0, c.Y0, c.X1, c.Y1)
+	}
+	if res.Count > 0 {
+		diffPath := shotSiblingPath(opts.Shot, ".diff.png")
+		if err := encodeShotPNG(diffPath, framediff.DiffImage(classic, res.Differing, res.Width, res.Height)); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "  diff image %s\n", diffPath)
+	}
+	if res.Count > opts.ShotRendererMax {
+		return fmt.Errorf("nanolathe: shot: modern differs from classic by %d pixels, over --shot-renderer-max %d", res.Count, opts.ShotRendererMax)
+	}
+	return nil
+}
+
+// encodeShotPNG writes img to path as a PNG, wrapping the file operations in the
+// same diagnostic shape the classic capture used.
+func encodeShotPNG(path string, img image.Image) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("nanolathe: create shot %q: %w", path, err)
+	}
+	if err := png.Encode(file, img); err != nil {
+		file.Close()
+		return fmt.Errorf("nanolathe: write shot %q: %w", path, err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("nanolathe: close shot %q: %w", path, err)
+	}
+	return nil
+}
+
+// shotSiblingPath derives a companion capture path from the --shot path by
+// replacing a trailing ".png" with suffix (e.g. ".modern.png"), or appending
+// suffix when the path does not end in ".png".
+func shotSiblingPath(shot, suffix string) string {
+	if strings.HasSuffix(strings.ToLower(shot), ".png") {
+		return shot[:len(shot)-len(".png")] + suffix
+	}
+	return shot + suffix
 }

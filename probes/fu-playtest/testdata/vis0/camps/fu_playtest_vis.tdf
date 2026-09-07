@@ -1,0 +1,13 @@
+// fu-playtest visibility fixture campaign. Grammar per [08 "Mission list"]:
+// a [HEADER] with campaignside, then MISSION0 naming the mission OTA.
+// The missionfile pairs with the stock SHERWOOD.TNT by base name [fmt ota];
+// the OTA itself is authored in this overlay's maps/ directory.
+[HEADER]
+	{
+	campaignside=ALL;
+	}
+[MISSION0]
+	{
+	missionfile=SHERWOOD;
+	missionname=fu-playtest visibility fixture;
+	}

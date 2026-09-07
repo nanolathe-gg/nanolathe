@@ -128,6 +128,26 @@ func (c *Client) Frame() {
 	if c == nil {
 		return
 	}
+	// The recording pass fills c.list with the whole frame — Clear, all draws,
+	// Cursor, Expand — without touching c.indexed. The single classic Replay is
+	// where every byte is finally written and where indexed pixels become RGBA at
+	// present time (C7). This is the only place indexed pixels become RGBA, so
+	// palette animation stays possible in later phases
+	// (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
+	c.recordFrame()
+	c.list.Replay(c.classicSink())
+}
+
+// recordFrame runs the audio sync and the whole committed-frame recording pass
+// — the shared front half of both executors — leaving c.list holding the frame
+// in record order (Clear, all draws, Cursor, Expand) and c.indexed untouched.
+// It is record-only: no byte is written until a Sink replays the list, so the
+// classic and modern executors record identically and diverge only at replay
+// (docs/DESIGN_GPU_RENDERER.md §2.2, §2.4, C-G1).
+func (c *Client) recordFrame() {
+	if c == nil {
+		return
+	}
 	// Audio: drain queue once per rendered frame outside simulation [03 §8.3] C18.
 	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
 	cur := c.buffer.Current()
@@ -140,19 +160,31 @@ func (c *Client) Frame() {
 
 	// C9: read the committed frame only; intermediate ticks are not drawn
 	// (PLAN_03 C15). A paused simulation simply presents the same frame.
-	// The frame is recorded, then replayed once. composeIndexed records the clear
-	// and every world/interface draw without touching c.indexed; drawCursor
-	// records the software cursor after them, so it sits above world, HUD and
-	// modal overlays [07 §8]; the expansion marker is recorded last. The single
-	// Replay executes the whole list in record order — Clear, all draws, Cursor,
-	// Expand — through the classic sink, which is where every byte is finally
-	// written and where indexed pixels become RGBA at present time (C7). This is
-	// the only place indexed pixels become RGBA, so palette animation stays
-	// possible in later phases (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
+	// composeIndexed records the clear and every world/interface draw without
+	// touching c.indexed; drawCursor records the software cursor after them, so it
+	// sits above world, HUD and modal overlays [07 §8]; the expansion marker is
+	// recorded last (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
 	c.composeIndexed(cur, ok)
 	c.drawCursor()
 	c.list.RecordExpand()
-	c.list.Replay(c.classicSink())
+}
+
+// RecordFrame records one committed frame and returns the frame's draw list for
+// the modern (GPU) executor to replay through its own Sink
+// (docs/DESIGN_GPU_RENDERER.md §2.4, C-G1). It performs the same audio sync and
+// recording as Frame but no classic Replay, so c.indexed is left untouched: the
+// modern path never composes bytes, it expands the recorded list on the device.
+//
+// The returned list is same-frame use only. Its backing arrays are reused by the
+// next RecordFrame or Frame (c.list.Reset), so the caller must replay it before
+// the next frame is recorded and must not retain it (ComposeFrameSnapshot's
+// List.Clone is the durable copy).
+func (c *Client) RecordFrame() *drawlist.List {
+	if c == nil {
+		return nil
+	}
+	c.recordFrame()
+	return &c.list
 }
 
 // composeIndexed runs the one concrete committed-frame ordering and leaves the
@@ -341,8 +373,11 @@ func (c *Client) drawFog(cur *frame.Frame) {
 		// leaving it unbuilt paints the same pixels [03 §3.3].
 		c.fogOps = render.BuildFogOpsWindowInto(c.fogOps, c.fogCache, c.cam, int32(w), int32(h), c.pal, c.ditheredFog)
 		// The op-list execution — the per-op clip, the three fog fills and the
-		// fog GAF blit — moved to classicSink.Fog; building the ops stays here.
-		c.emitFog(drawlist.Fog{Ops: c.fogOps})
+		// fog GAF blit — moved to classicSink.Fog; building the ops stays here. The
+		// resolved fog GAF variant families ride the record so an executor that
+		// cannot reach the client's fog cache (the GPU executor) resolves the same
+		// frame the classic sink does; the classic sink ignores them [03 §3.3].
+		c.emitFog(drawlist.Fog{Ops: c.fogOps, Gray: c.fogGray, Black: c.fogBlack})
 	}
 	// No world stage has work outside the explicit adapters above.
 }

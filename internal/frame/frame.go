@@ -244,7 +244,6 @@ type FeatureView struct {
 	Status       uint32
 	IsBurning    bool
 	IsSinking    bool
-	BurnTicks    int32
 	FootX, FootZ int8
 	Filename     string
 	SeqName      string

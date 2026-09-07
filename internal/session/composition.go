@@ -1644,7 +1644,7 @@ func createAndBindServices(s *Session) error {
 		s.bindFeatureStripProducers()
 		s.Features.PopulateFromTerrain()
 	}
-	// The two art-backed feature seams — BurnFrameGeometry and AnimationTicks —
+	// The two art-backed feature seams — BurnFrameGeometry and SequenceFrames —
 	// are bound by bindFeatureStripProducers above, against the content table
 	// installed at the top of this function.
 	// Visibility [03 §3]: dimensions from terrain; the mode word comes from the
@@ -2461,18 +2461,22 @@ func (s *Session) bindDamageReaction() {
 //
 //   - BurnFrameGeometry wants the burn sequence's current GAF frame, which
 //     pass 3a scales its two jitter draws by.
-//   - AnimationTicks wants the death/reclaim sequence LENGTH in visits, which
-//     is when the transition of [05 R-FEAT-01 §5] stamps the successor
-//     instead of taking step 3's immediate replacement.
+//   - SequenceFrames wants the per-frame delay words of the burn, death or
+//     reclaim sequence, which every event cursor runs on [05 R-FEAT-01 §10]:
+//     the visit a record completes on — and so the visit the transition of
+//     [05 R-FEAT-01 §5] stamps its successor and the burn stamps
+//     `featureburnt` — is the sum of those words.
 //
-// Both read the session's feature-sequence resolver, which createAndBindServices
-// fills from the battle's immutable content.SimArt table before it reaches this
-// binder — so the resolver is present from construction on every path, windowed
-// or headless, and both shells time the same transitions. A composition without
-// a VFS answers "unknown": zero geometry, which makes pass 3a's addends zero,
-// and zero visits, which keeps the transition on the immediate replacement
-// every removal took before the animation records existed. Nothing is invented
-// for a miss.
+// Both read the battle's immutable content.SimArt table, which
+// createAndBindServices compiles before it reaches this binder — so the
+// metadata is present from construction on every path, windowed or headless,
+// and both shells time the same transitions. A composition without a VFS
+// answers "unknown": zero geometry, which makes pass 3a's addends zero, and
+// no sequence, which keeps the transition on its immediate replacement and
+// refuses ignition. Nothing is invented for a miss.
+//
+// The fourth seam, BurnWeapon, is not art: it is the burn event's weapon
+// request routed to combat's shared splash entry (below).
 func (s *Session) bindFeatureStripProducers() {
 	if s == nil || s.Features == nil {
 		return
@@ -2497,32 +2501,58 @@ func (s *Session) bindFeatureStripProducers() {
 			return w, h, xoff, yoff
 		}
 	}
-	if s.Features.AnimationTicks == nil {
-		s.Features.AnimationTicks = func(def *content.FeatureDef, selector uint8) int32 {
-			if s.featureSequence == nil || def == nil {
-				return 0
+	// The cursor metadata: the per-frame delay words of whichever of the
+	// definition's three event sequences the selector names, straight from
+	// the battle's immutable content table [05 R-FEAT-01 §10][fmt gaf]. This
+	// is what times every burn, death and reclaim record on every composition
+	// path, and what the save reload rebinds a restored record to. A
+	// composition without a content table answers nil: no sequence, so the
+	// transition replaces at once and nothing ignites — the contracts' own
+	// outcomes for an unresolved sequence, not a substitute lifetime.
+	if s.Features.SequenceFrames == nil {
+		s.Features.SequenceFrames = func(def *content.FeatureDef, selector uint8) []int32 {
+			if s.simArt == nil || def == nil {
+				return nil
 			}
-			sequence := def.SeqNameDie
-			if selector == featureAnimSelectorReclaim {
-				sequence = def.SeqNameReclamate
-			}
+			sequence := features.EventSequenceName(def, selector)
 			if sequence == "" {
-				return 0
+				return nil
 			}
-			_, _, _, _, visits, ok := s.featureSequence(def.Filename, sequence, 0)
+			delays, ok := s.simArt.FeatureSequenceDelays(def.Filename, sequence)
 			if !ok {
-				return 0
+				return nil
 			}
-			return visits
+			return delays
+		}
+	}
+	// The burn weapon of [05 R-FEAT-01 §11 step 3] is "the ordinary weapon
+	// request": the name resolved as a weapon handle by the feature parser
+	// [05 R-FEAT-01 §1], fired at the footprint centre at the bilinear terrain
+	// height and owned by the dummy feature unit of [05 R-FEAT-01 §2]. In this
+	// build that request is the shared splash entry combat.ExplodeWeaponAt
+	// with a null shooter — [06 §13.1]: the impact is built as a synthetic
+	// projectile-shaped record with a NULL shooter and a zeroed side byte and
+	// pushed through the ordinary area enumeration, so it awards no veterancy
+	// and no kill credit. The death explosion takes the same path for the same
+	// reason [06 R-WPN-02 §5]. The name is resolved with the catalog's link
+	// policy: a miss is record 0, the inactive sentinel, and fires nothing.
+	if s.Features.BurnWeapon == nil {
+		s.Features.BurnWeapon = func(name string, pos [3]numeric.Fixed) {
+			if s.Catalog == nil || s.Combat == nil || s.Units == nil {
+				return
+			}
+			weapon, active := s.Catalog.WeaponLink(name)
+			if !active || weapon == nil {
+				return
+			}
+			tick := uint32(0)
+			if s.Clock != nil {
+				tick = s.Clock.GlobalTick
+			}
+			s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, combat.Vec3{X: pos[0], Y: pos[1], Z: pos[2]}, 0, tick)
 		}
 	}
 }
-
-// featureAnimSelectorReclaim is the animating save selector of the reclaim
-// sequence: 0 burn, 1 death, 2 reclaim [R-SAVE-FEATURE-01]. The features
-// package keeps the same vocabulary unexported; this is the one value the
-// composer needs to pick a definition's sequence name.
-const featureAnimSelectorReclaim uint8 = 2
 
 // stripBurningFeatureSmoke is the literal strip index the burning-feature
 // producer passes [R-STRIP-01 §1 strip 5].

@@ -254,6 +254,36 @@ func (a *SimArt) FeatureSequence(filename, sequence string, visit int32) (w, h, 
 	return f.w, f.h, f.xoff, f.yoff, info.visits, true
 }
 
+// FeatureSequenceDelays reports the per-frame delay words of one compiled
+// feature event sequence, in frame order, exactly as authored [fmt gaf]. This
+// is what a live event cursor is built from: the cursor holds a frame index
+// and that frame's delay countdown, steps the frame when the countdown is
+// below two, reloads the countdown from the new frame's word, and finishes
+// when the frame index reaches the count [05 R-FEAT-01 §10] pass 1 — so the
+// simulation needs the words themselves, not only the visit total.
+//
+// ok is false when the sequence does not resolve; the caller then has no
+// sequence, which the ignition and transition contracts already define
+// [05 R-FEAT-01 §5][05 R-FEAT-01 §9]. The slice is the caller's: a fresh copy
+// each call, so the table stays immutable.
+func (a *SimArt) FeatureSequenceDelays(filename, sequence string) ([]int32, bool) {
+	if a == nil || len(a.sequences) == 0 {
+		return nil, false
+	}
+	if strings.TrimSpace(filename) == "" || strings.TrimSpace(sequence) == "" {
+		return nil, false
+	}
+	info := a.sequences[simArtSequenceKey(filename, sequence)]
+	if info == nil || len(info.frames) == 0 {
+		return nil, false
+	}
+	out := make([]int32, len(info.frames))
+	for i := range info.frames {
+		out[i] = info.frames[i].delay
+	}
+	return out, true
+}
+
 // simArtEffectKey folds a bank and entry name the way the bank cache and the
 // GAF's own name index do: the bank name is trimmed and lower-cased because it
 // becomes a path component, and the entry name is only lower-cased, because

@@ -264,14 +264,50 @@ node survive.
 
 **Instance and catalog** (`service.go`). `Instance` is one live feature: its
 immutable definition, its anchor cell, a plot reference, a 16-bit damage
-accumulator and reclaim progress, burn and animation state, and — for a 3D
-feature — a position and velocity. There is no health word: a feature never
-counts down. Retail's 48-byte record is identity, not layout; Go stores named
-fields [I13] `[05 "Feature instance and terrain cell"]`. The live-instance arena
-is 2,048 slots allocated once at map load and handed out by a free list; its
-occupants are exactly every 3D definition and every *active* sprite event
-record. A resting sprite feature takes no slot at all `[05 R-FEAT-01 §2]`
-`[05 R-FEAT-01 §3]`.
+accumulator and reclaim progress, the event record's mode bits and its **one
+animation cursor**, the burn's spark countdown, and — for a 3D feature — a
+position and velocity. There is no health word: a feature never counts down.
+Retail's 48-byte record is identity, not layout; Go stores named fields [I13]
+`[05 "Feature instance and terrain cell"]`. The live-instance arena is 2,048
+slots allocated once at map load and handed out by a free list; its occupants
+are exactly every 3D definition and every *active* sprite event record. A
+resting sprite feature takes no slot at all `[05 R-FEAT-01 §2]`
+`[05 R-FEAT-01 §3]`. This build keeps an `Instance` for every stamped anchor,
+resting sprites included, as the publication and lookup record; that
+convenience record is **not** retail's "the cell has an instance" — the
+predicate is a 3D definition or a sprite carrying an event record
+(`cellHasInstance`, `hasEventRecordAt`), and every ignition, spread and
+damage test reads it that way.
+
+**The event cursor** (`cursor.go`). A burning, dying or reclaiming sprite
+record runs one `eventCursor`: a frame index and that frame's delay countdown
+over the sequence's authored per-frame delay words `[fmt gaf]`. It starts at
+frame 0 with frame 0's word, steps the frame when the countdown is below two
+and reloads from the new frame, and finishes when the frame index reaches the
+count — the visit on which the record completes, so a lifetime in visits is the
+sum over frames of `max(delay, 1)` `[05 R-FEAT-01 §10]`. The cursor is the only
+progress state there is: the feature phase advances it, `EventSequence` hands
+presentation the frame as that frame's first visit index (an exact conversion,
+so a cadence walk lands on the same frame), the save writer takes its frame
+byte and the reload writes that byte back `[08 R-SAVE-FEATURE-01]`. The
+burn's spark countdown is a separate word and counts a different thing. The
+delay words reach the service through `SequenceFrames`, which the session
+binds to the battle's immutable `content.SimArt` table before any feature
+exists; a sequence that does not resolve there is no sequence — the
+transition replaces at once and ignition refuses — and no length is ever
+substituted `[05 R-FEAT-01 §5]` `[05 R-FEAT-01 §9]`.
+
+**The active list** (`active.go`). Simulation order is retail's active list,
+not the cell-index map: head insertion when a 3D definition is stamped, a
+sprite ignites or a death/reclaim transition attaches, so the most recent
+record is visited first; each record's next link is captured before its visit;
+a 3D record whose velocity is all zero goes dormant at its visit and is never
+visited again until re-stamped; sinking is the 3D branch of the same walk; a
+sprite record completes and stamps its successor **at** its visit, so a later
+record in the same walk scans the successor `[05 R-FEAT-01 §10]`. A record
+ignited during the walk goes to the head, behind the walk, and is first visited
+next tick. The cell-index map is a lookup only, and the save writer's row-major
+order is its own `[08 R-SAVE-FEATURE-01]`.
 
 **Placement.** `PlaceAt`, `PlaceAtWorld` and `PlaceCorpse` all reach the same
 stamp helper, which is the sole owner of terrain and plot writes: the dense-pack
@@ -279,6 +315,15 @@ teardown first, then the anchor's index and the fringe cells' signed deltas,
 then the height snap `[05 R-FEAT-01 §3]` `[05 R-FEAT-01 §3-A]`. `PopulateFromTerrain`
 is the map bootstrap; `RestoreAt` is the save path, which places through the same
 helper and then copies only the family state words `[08 R-SAVE-FEATURE-01]`.
+For an animating record the selector re-runs its family — ignition with its
+fresh simulation draw, or the death/reclaim transition — which binds the
+definition's own sequence from the same metadata a live battle uses, and the
+reader then overwrites the record's accumulator, cursor frame byte and
+countdown (the saved high nibble shifted back into place, low nibble zero).
+The cursor's delay is not saved and stays at frame 0's word: a documented loss,
+not a gap. A family whose sequence does not resolve takes the contract's own
+outcome — immediate replacement for death/reclaim, a resting feature for a burn
+`[05 R-FEAT-01 §5]` `[05 R-FEAT-01 §9]`.
 
 **Reclaim** (`service.go`, `area.go`). `Reclaim` refuses a cell already carrying
 an event record — burning, dying or reclaiming — and refuses a non-reclaimable or
@@ -303,18 +348,27 @@ subtracted: a 3D instance adds each hit's `[DAMAGE] default` word into its
 record carries, so a reloaded wreck keeps its damage `[08 R-SAVE-FEATURE-01]`;
 a feature with no instance keeps its sum in the anchor cell's word, formed in
 32 bits and compared unsigned so a sum past 16 bits always dies (step 6); a
-sprite feature with a live event record discards the hit (step 8). `burnTick`
-is the feature phase's animation pass in order: the burning branch advances the burn cursor, fires the
-one-shot burn-weapon event at the footprint centre, and on every third global
-tick emits one smoke puff jittered against the current burn frame's geometry by
-two CRT draws; the non-burning branch advances a die or reclaim animation's main
-then shadow cursor and, when the sequence pointer clears, runs the replacement
-`[05 R-FEAT-01 §10]` `[05 R-FEAT-01 §11]` `[05 R-FEAT-01 §16]`.
+sprite feature with a live event record discards the hit (step 8). The active
+walk's burning branch, in order: on every third global tick one smoke puff at
+the footprint centre jittered against the current burn frame's geometry by two
+CRT draws, then the cursor advance, then — when the sequence pointer clears —
+teardown and a bare `featureburnt` stamp, else the spark countdown's decrement
+and, at zero, the one-shot burn event; the die/reclaim branch advances its
+cursor and runs the replacement at the visit the pointer clears
+`[05 R-FEAT-01 §10]` `[05 R-FEAT-01 §16]`. The burn event scans the 7×7
+neighbourhood and the five wind probes with the retail rejection chain — cell
+exists, word below the sentinel band, no instance, `flamable`, then one draw
+against the candidate's own `spreadchance` — and then fires the definition's
+`burnweapon` at the footprint centre at the bilinear terrain height through
+the `BurnWeapon` seam, which the session binds to combat's shared splash entry
+with a null shooter: the synthetic projectile-shaped record of `[06 §13.1]`,
+no veterancy and no kill credit `[05 R-FEAT-01 §11]`.
 
 **Reproduction** (`reproduce.go`) and **sinking** (`sink.go`). The reproduction
 walker visits one cell per tick, descending a global cursor from `W×H − 1` with
-a wrap-skip that means the last cell is never scanned; the sink state machine
-integrates a constant vertical velocity against the derived floor pair and the
+a wrap-skip that means the last cell is never scanned; the sink integration is
+the active walk's 3D branch, run after the dormant test on each visit, and
+advances a constant vertical velocity against the derived floor pair and the
 water plane `[05 "Feature reproduction"]`
 `[05 "Feature sinking and water interaction"]` `[05 R-FEAT-01 §13]`.
 
@@ -539,21 +593,34 @@ passing roll the two offsets are drawn from the area and biased by half of it
 `[05 "Feature reproduction"]` `[05 R-FEAT-01 §12]` [I4].
 
 **C26 — successor replacement.** The `featuredead` → `reclamate` → `burnt` hop
-with its sentinels, played through the named sequence when one exists and taken
-immediately when none does; removal clears the whole stamped footprint and
-returns the plot cell to the free sentinel
-`[05 "Removal and successor replacement"]` `[05 R-FEAT-01 §5]`.
+with its sentinels, played through the named sequence when one **resolves** and
+taken immediately when none does; the record completes on the visit its cursor
+clears the sequence pointer — the sum over frames of `max(delay, 1)` visits —
+and replaces itself at that visit; removal clears the whole stamped footprint
+and returns the plot cell to the free sentinel
+`[05 "Removal and successor replacement"]` `[05 R-FEAT-01 §5]`
+`[05 R-FEAT-01 §10]`.
 
 **C27 — sinking.** A wreck below the water plane descends at the fixed vertical
 velocity, re-latched every tick, until it settles on the floor derived from the
-plot cell's min/max pair `[05 "Feature sinking and water interaction"]`
-`[05 R-FEAT-01 §13]`.
+plot cell's min/max pair; the dormant test precedes the integration on each
+visit, so a landed wreck is retired on the visit after it lands and a wreck at
+zero velocity never moves `[05 "Feature sinking and water interaction"]`
+`[05 R-FEAT-01 §13]` `[05 R-FEAT-01 §10]`.
 
-**C28 — burning.** Ignition, the spark countdown in ticks, the one-shot spread
-and burn-weapon event, the third-tick smoke puff with its two CRT draws and its
-frame-geometry jitter, and the animation's end clearing the cell
+**C28 — burning.** Ignition against a resolved burn sequence, the spark
+countdown in ticks, the one-shot spread and burn-weapon event with the retail
+rejection chain and the draw after it, the third-tick smoke puff with its two
+CRT draws and its frame-geometry jitter, and the burn cursor's end — the
+authored frames' own lifetime — clearing the cell and stamping `featureburnt`
 `[05 "Feature burning"]` `[05 R-FEAT-01 §9]` `[05 R-FEAT-01 §10]`
 `[05 R-FEAT-01 §11]` `[05 R-FEAT-01 §16]` `[06 §13.1]`.
+
+**C29 — active-list order.** The feature phase visits the active list from its
+head, most recently stamped or ignited first, capturing each next link before
+the visit; a record inserted by a visit is first visited next tick; two fires
+whose events fall on one tick spend the simulation stream in that order
+`[05 R-FEAT-01 §10]` [I1].
 
 ### 3.5 Not implemented
 

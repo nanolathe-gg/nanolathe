@@ -11,6 +11,7 @@ import (
 // that links them.
 var platformOnly = map[string]bool{
 	"github.com/nanolathe/nanolathe/internal/platform/ebitenapp": true,
+	"github.com/nanolathe/nanolathe/internal/platform/gpurender": true,
 	"github.com/nanolathe/nanolathe/internal/audiobackend":       true,
 	"github.com/nanolathe/nanolathe/cmd/nanolathe":               true,
 }

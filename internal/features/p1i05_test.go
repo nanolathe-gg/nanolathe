@@ -64,7 +64,7 @@ func TestAllocationFailurePolicy(t *testing.T) {
 		t.Fatalf("a 257th definition must be admitted; the catalog has no cap [05 R-FEAT-01 §1]")
 	}
 	// Clear catalog and instances for the anim-slot arm.
-	svc.instances = make(map[int]*Instance)
+	svc.resetInstances()
 	terrain.Plot[0].SetFeature(world.PlotFeatureNone)
 	terrain.Plot[0].SetFlagByte(0)
 	terrain.FeatureDefs = []*content.FeatureDef{}
@@ -72,7 +72,7 @@ func TestAllocationFailurePolicy(t *testing.T) {
 	for i := 0; i < FeatureAnimSlots; i++ {
 		// Use non-conflicting positions by wrapping? But our map key is cz*W+cx, limited to 16 cells. To fill map we need to allow many instances even on same cell? Instead directly fill map with synthetic keys beyond grid to simulate pool exhaustion
 		// For test, we directly set map size to limit
-		svc.instances[i] = &Instance{CX: i % w, CZ: i % h, Def: defP1("a", 1, 1, "", "")}
+		svc.setInstance(i, &Instance{CX: i % w, CZ: i % h, Def: defP1("a", 1, 1, "", "")})
 		if len(svc.instances) >= FeatureAnimSlots {
 			break
 		}
@@ -82,7 +82,7 @@ func TestAllocationFailurePolicy(t *testing.T) {
 		// Force to limit via manual fill with unique keys beyond grid bounds trick: bypass grid limit by directly inserting
 		for len(svc.instances) < FeatureAnimSlots {
 			k := len(svc.instances) + 10000
-			svc.instances[k] = &Instance{CX: 0, CZ: 0, Def: defP1("x", 1, 1, "", "")}
+			svc.setInstance(k, &Instance{CX: 0, CZ: 0, Def: defP1("x", 1, 1, "", "")})
 		}
 	}
 	fd2 := defP1("animTest", 1, 1, "", "")
@@ -99,14 +99,14 @@ func TestAllocationFailurePolicy(t *testing.T) {
 	// where the new one lands, and "there is no 'already occupied' failure"
 	// other than indestructible, void and stale-fringe [05 R-FEAT-01 §3 step 3].
 	// This assertion used to demand the opposite and was the defect R12 names.
-	svc.instances = make(map[int]*Instance)
+	svc.resetInstances()
 	terrain.Plot[0].SetFeature(0) // occupies 0,0
 	terrain.FeatureDefs = []*content.FeatureDef{defP1("gridTest", 1, 1, "", "")}
 	terrain.FeatureDefs[0].CanonicalKey = content.CanonicalKey("gridTest")
 	if inst := svc.spawnFeatureAt(0, 0, terrain.FeatureDefs[0]); inst == nil {
 		t.Fatalf("occupied destructible cell should be replaced, not refused [05 R-FEAT-01 §3 step 3]")
 	}
-	svc.instances = make(map[int]*Instance)
+	svc.resetInstances()
 	terrain.Plot[0].SetFeature(world.PlotFeatureNone)
 	terrain.Plot[0].SetFlagByte(0)
 	if inst := svc.spawnFeatureAt(-1, 0, terrain.FeatureDefs[0]); inst != nil {
@@ -116,7 +116,7 @@ func TestAllocationFailurePolicy(t *testing.T) {
 		t.Fatalf("out-of-bounds should silent fail")
 	}
 	// Missing successor sentinel 0xFFFF: ensure remove with no successor just frees
-	svc.instances = make(map[int]*Instance)
+	svc.resetInstances()
 	terrain.Plot[0].SetFeature(world.PlotFeatureNone)
 	terrain.Plot[0].SetFlagByte(0)
 	defNoSucc := defP1("nosucc", 1, 1, "", "")

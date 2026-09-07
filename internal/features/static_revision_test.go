@@ -96,8 +96,8 @@ func TestStaticRevisionBurnReplacementCoalescesDirectClearAndSpawn(t *testing.T)
 	if inst == nil {
 		t.Fatal("burning feature was not placed")
 	}
-	inst.IsBurning = true
-	inst.BurnDuration = 1
+	burning.Filename = "trees"
+	startBurning(svc, inst, []int32{1}, 0)
 	before := terrain.StaticObstacleRevision()
 	svc.TickLifecycle(1)
 	if got := terrain.StaticObstacleRevision(); got != before+1 {
@@ -124,8 +124,8 @@ func TestStaticRevisionBurnFailedBlockingSuccessorStillBumps(t *testing.T) {
 	if inst == nil {
 		t.Fatal("burning feature was not placed")
 	}
-	inst.IsBurning = true
-	inst.BurnDuration = 1
+	burning.Filename = "trees"
+	startBurning(svc, inst, []int32{1}, 0)
 	before := terrain.StaticObstacleRevision()
 	svc.TickLifecycle(1)
 	if got := terrain.StaticObstacleRevision(); got != before+1 {

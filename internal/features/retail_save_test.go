@@ -20,7 +20,11 @@ func TestRetailFeatureImageUsesRowMajorFamiliesAndExactWords(t *testing.T) {
 	terrain.Plot[2].SetFeature(2)
 	terrain.Plot[3].SetFeature(world.PlotFeatureNone)
 	s := NewService(terrain, nil, nil, nil)
-	s.instances[1] = &Instance{Def: anim, Terrain: terrain, CX: 1, CZ: 0, IsAnimating: true, DamageAccumulator: 0x1234, AnimationFrame: 7, AnimationSelector: 2, AnimationCountdown: 0x0b}
+	// A reclaim record on frame 7 of an eight-frame sequence, countdown 0xb3:
+	// the writer takes the cursor's frame byte and the countdown's high nibble.
+	reclaiming := &Instance{Def: anim, Terrain: terrain, CX: 1, CZ: 0, IsAnimating: true, DamageAccumulator: 0x1234, AnimationSelector: 2, BurnCountdown: 0xb3}
+	reclaiming.cursor = eventCursor{delays: []int32{1, 1, 1, 1, 1, 1, 1, 1}, frame: 7, delay: 1}
+	s.instances[1] = reclaiming
 	s.instances[2] = &Instance{
 		Def: model, Terrain: terrain, CX: 0, CZ: 1, DamageAccumulator: 0x4567,
 		X: numeric.Fixed(0x0001_0000), Y: numeric.Fixed(0x0002_0000), Z: numeric.Fixed(0x0003_0000),
@@ -121,13 +125,27 @@ func TestThreeDRecordRoundTripsAWreckMidDescent(t *testing.T) {
 	}
 }
 
-func TestRetailFeatureImageRefusesMissingAnimationState(t *testing.T) {
+// An attached bit with no live record behind it has no sequence pointer to
+// match a family, so the writer skips the cell [08 R-SESS-01 §4]; a 3D cell
+// with no live record is a fault, because its five values are not
+// recoverable from the plot.
+func TestRetailFeatureImageSkipsAttachedCellWithoutRecordAndRefusesBare3D(t *testing.T) {
 	def := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "animated"}, Filename: "x.gaf"}
 	terrain := &world.Terrain{CellW: 1, CellH: 1, Plot: make([]world.PlotCell, 1), FeatureNames: []string{"ANIMATED"}, FeatureDefs: []*content.FeatureDef{def}}
 	terrain.Plot[0].SetFeature(0)
 	terrain.Plot[0].SetOccupied(true)
-	if _, err := NewService(terrain, nil, nil, nil).RetailFeatureImage(); err == nil {
-		t.Fatal("animated feature without live state accepted")
+	image, err := NewService(terrain, nil, nil, nil).RetailFeatureImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(image.Animating) != 0 || len(image.Normal) != 0 {
+		t.Fatalf("an attached cell with no record was written: %#v", image)
+	}
+	model := &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "wreck"}, Object: "wreck.3do"}
+	terrain3 := &world.Terrain{CellW: 1, CellH: 1, Plot: make([]world.PlotCell, 1), FeatureNames: []string{"WRECK"}, FeatureDefs: []*content.FeatureDef{model}}
+	terrain3.Plot[0].SetFeature(0)
+	if _, err := NewService(terrain3, nil, nil, nil).RetailFeatureImage(); err == nil {
+		t.Fatal("3D feature without live state accepted")
 	}
 }
 
@@ -137,7 +155,9 @@ func TestRetailFeatureImageSkipsNonFamilyAnimationSequence(t *testing.T) {
 	terrain.Plot[0].SetFeature(0)
 	terrain.Plot[0].SetOccupied(true)
 	service := NewService(terrain, nil, nil, nil)
-	service.instances[0] = &Instance{Def: def, Terrain: terrain, CX: 0, CZ: 0, IsAnimating: true, AnimationSelector: 7, DamageAccumulator: 0x9999}
+	other := &Instance{Def: def, Terrain: terrain, CX: 0, CZ: 0, IsAnimating: true, AnimationSelector: 7, DamageAccumulator: 0x9999}
+	other.cursor.start([]int32{4})
+	service.instances[0] = other
 	image, err := service.RetailFeatureImage()
 	if err != nil {
 		t.Fatal(err)

@@ -317,6 +317,19 @@ func (c *Client) SetPalette(p *palette.Tables) {
 	}
 }
 
+// PaletteTables exposes the installed palette tables so the platform adapter can
+// build the modern (GPU) executor's index→RGBA lookup textures once, off the
+// client (docs/DESIGN_GPU_RENDERER.md §2.3, §2.4, C-G8). It is a read-only
+// accessor of the immutable-after-load tables; nil before SetPalette. The
+// tables never enter a sim path, so handing out the pointer keeps the device
+// resources in gpurender rather than on the client [I6].
+func (c *Client) PaletteTables() *palette.Tables {
+	if c == nil {
+		return nil
+	}
+	return c.pal
+}
+
 // SetFNT installs the shared software font used by typed UI stages [03 §7.1].
 func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 

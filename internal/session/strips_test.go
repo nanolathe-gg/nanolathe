@@ -1664,16 +1664,16 @@ func TestCompositionInstallsContentAnimationMetadata(t *testing.T) {
 	}
 	// The two feature seams, bound against the same table.
 	def := cat.Features["tree1"]
-	if s.Features == nil || s.Features.AnimationTicks == nil || s.Features.BurnFrameGeometry == nil {
+	if s.Features == nil || s.Features.SequenceFrames == nil || s.Features.BurnFrameGeometry == nil {
 		t.Fatal("composition left a feature art seam unbound")
 	}
-	if got := s.Features.AnimationTicks(def, 1); got != 4 {
-		t.Fatalf("death lifetime %d visits, want the entry's single frame held for 4", got)
+	if got := s.Features.SequenceFrames(def, 1); len(got) != 1 || got[0] != 4 {
+		t.Fatalf("death sequence delays %v, want the entry's single frame word [4]", got)
 	}
-	// The reclaim sequence is unauthored, so it reports no length and the
+	// The reclaim sequence is unauthored, so it reports no sequence and the
 	// transition keeps its immediate replacement. Nothing is invented for it.
-	if got := s.Features.AnimationTicks(def, featureAnimSelectorReclaim); got != 0 {
-		t.Fatalf("unauthored reclaim sequence reported %d visits, want 0", got)
+	if got := s.Features.SequenceFrames(def, 2); got != nil {
+		t.Fatalf("unauthored reclaim sequence reported delays %v, want none", got)
 	}
 	gw, gh, gx, gy := s.Features.BurnFrameGeometry(def, 0)
 	if gw != 20 || gh != 12 || gx != 7 || gy != 5 {

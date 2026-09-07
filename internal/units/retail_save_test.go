@@ -227,3 +227,35 @@ func TestRetailUnitImageRequiresExplicitValidScratchAndResolver(t *testing.T) {
 		t.Fatal("out-of-mask writer scratch accepted")
 	}
 }
+
+// A carrier or engagement-target link whose unit is no longer live is written
+// as 0, never refused: both words are "the stable slot, or 0 when absent or
+// dead" [08 R-SAVE-02 §6]. The weapon-slot unit target has no such clause and
+// stays strict [08 R-SAVE-WEAPON-01].
+func TestRetailUnitImageDeadOptionalLinksWriteZero(t *testing.T) {
+	u := &Unit{
+		Handle: 20, Def: &content.UnitDef{UnitName: "u"}, Alive: true,
+		Attachment: AttachmentState{Carrier: 30}, EngagementTarget: 31,
+	}
+	// Only the unit itself is live; 30 and 31 are freed slots.
+	resolve := func(h pool.Handle) (uint16, bool) {
+		if h == 20 {
+			return 1, true
+		}
+		return 0, false
+	}
+	image, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{})
+	if err != nil {
+		t.Fatalf("dead optional links refused the save: %v [08 R-SAVE-02 §6]", err)
+	}
+	if carrier, engagement := binary.LittleEndian.Uint16(image[0x89:]), binary.LittleEndian.Uint16(image[0x8b:]); carrier != 0 || engagement != 0 {
+		t.Fatalf("dead links wrote carrier=%d engagement=%d, want 0 0 [08 R-SAVE-02 §6]", carrier, engagement)
+	}
+	if image[0x8d] != 0xff {
+		t.Fatalf("attach slot byte = %#x with a dead carrier, want 0xff [08 R-SAVE-02 §6]", image[0x8d])
+	}
+	u.Slots[0] = Slot{Target: Target{Kind: TargetUnit, Unit: 32}}
+	if _, err := RetailUnitImage(u, 0, resolve, RetailUnitWriterScratch{}); err == nil {
+		t.Fatal("a weapon slot naming a dead unit target was accepted; that resolution stays strict [08 R-SAVE-WEAPON-01]")
+	}
+}

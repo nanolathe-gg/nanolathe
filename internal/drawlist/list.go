@@ -258,6 +258,17 @@ type Model struct {
 // import internal/drawlist [03 §3.3].
 type Fog struct {
 	Ops []render.FogOp
+	// Gray and Black are the resolved fog GAF variant families (anims/fog.gaf,
+	// Gray1-4 and Black1-4). A GAF fog op names its family entry by op.Variant and
+	// its frame by op.Frame; an executor resolves entry.Frames[op.Frame].Frame to
+	// the drawn frame. These are carried on the record so a destination-reading
+	// executor that cannot reach the client's fog cache (the GPU executor) resolves
+	// exactly the frame the classic sink resolves from client state [03 §3.3]. They
+	// are immutable-after-load GAF entries, so carrying the pointers introduces no
+	// ordering and no per-frame copy [I6]. The classic sink ignores them and reads
+	// its own cache, so this is purely additive.
+	Gray  [4]*formats.GAFEntry
+	Black [4]*formats.GAFEntry
 }
 
 // Surface records one indexed byte surface blit — the minimap or radar image —
@@ -501,10 +512,12 @@ func (l *List) Clone() List {
 	for i, p := range l.points {
 		c.points[i] = Points{Kind: p.Kind, Points: append([]Point(nil), p.Points...)}
 	}
-	// Fog op lists alias the client's reused fogOps buffer; copy each.
+	// Fog op lists alias the client's reused fogOps buffer; copy each. The Gray and
+	// Black variant families are immutable-after-load GAF entries, so their pointer
+	// arrays are carried by value (shared, like GAF/PCX frames above) [I6].
 	c.fog = make([]Fog, len(l.fog))
 	for i, f := range l.fog {
-		c.fog[i] = Fog{Ops: append([]render.FogOp(nil), f.Ops...)}
+		c.fog[i] = Fog{Ops: append([]render.FogOp(nil), f.Ops...), Gray: f.Gray, Black: f.Black}
 	}
 	// Surface pixels may point at a caller buffer that is reused per frame; copy.
 	c.surface = make([]Surface, len(l.surface))

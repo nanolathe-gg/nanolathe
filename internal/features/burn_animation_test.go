@@ -80,17 +80,52 @@ func burningFeatureService(t *testing.T, crt *rng.CRT, sim *rng.Simulation, cell
 	svc := NewService(terrain, sim, crt, nil)
 	def := featureDef("burnJitter", 0, 0, 10)
 	def.Flamable = true
+	def.Filename = "trees"
 	def.SeqNameBurn = "burn"
 	for _, c := range cells {
 		if svc.spawnFeatureAt(c[0], c[1], def) == nil {
 			t.Fatalf("spawn at (%d,%d) rejected", c[0], c[1])
 		}
-		inst := svc.InstanceAt(c[0], c[1])
-		inst.IsBurning = true
-		inst.BurnCountdown = 1000
-		inst.BurnDuration = 1000
+		startBurning(svc, svc.InstanceAt(c[0], c[1]), longBurn(), 1000)
 	}
 	return svc
+}
+
+// longBurn is a burn sequence whose lifetime exceeds any test's tick budget:
+// one frame held for a thousand visits.
+func longBurn() []int32 { return []int32{1000} }
+
+// startBurning attaches a burn record to a stamped sprite the way ignition's
+// step 3 does [05 R-FEAT-01 §9] — burning bit set, cursor at frame 0 of the
+// given sequence, the spark countdown as given — without ignition's draw, so
+// a fixture can pin the stream state it wants. The record joins the active
+// list at the head, as a live ignition would.
+func startBurning(svc *Service, inst *Instance, delays []int32, countdown int32) {
+	inst.IsBurning = true
+	inst.IsAnimating = false
+	inst.AnimationSelector = featureAnimSelectorBurn
+	inst.BurnCountdown = countdown
+	inst.cursor.start(delays)
+	svc.attachEventRecord(inst)
+	if svc.Terrain != nil {
+		svc.Terrain.Plot[inst.CZ*int(svc.Terrain.CellW)+inst.CX].SetOccupied(true)
+	}
+}
+
+// stubSequences binds the content-metadata seam to three authored delay
+// tables, one per selector; a nil table is an unresolved sequence.
+func stubSequences(svc *Service, burn, die, reclaim []int32) {
+	svc.SequenceFrames = func(_ *content.FeatureDef, selector uint8) []int32 {
+		switch selector {
+		case featureAnimSelectorBurn:
+			return burn
+		case featureAnimSelectorDie:
+			return die
+		case featureAnimSelectorReclaim:
+			return reclaim
+		}
+		return nil
+	}
 }
 
 // containerDraw stands for the producer the session binds: the strip-5
@@ -177,29 +212,34 @@ func TestBurnSmokeDrawsAreConsecutiveOnTheCRTStream(t *testing.T) {
 }
 
 // dieAnimationService attaches a die or reclaim animation record to a sprite
-// feature, the way [05 R-FEAT-01 §5] step 5 would once the transition entry
-// grows that branch: burning bit clear, animation-record flag set, the save
-// family's selector recording which sequence plays.
+// feature through the transition of [05 R-FEAT-01 §5] step 5: burning bit
+// clear, animation-record flag set, the save family's selector recording which
+// sequence plays, and the cursor at frame 0 of a one-frame sequence held for
+// `duration` visits.
 func dieAnimationService(t *testing.T, selector uint8, duration int32) (*Service, *content.FeatureDef, *content.FeatureDef) {
 	t.Helper()
 	terrain := newEmptyTerrain(4, 4)
 	dead := featureDef("smudgedead", 0, 0, 10)
 	reclamate := featureDef("smudgereclamate", 0, 0, 10)
 	src := featureDef("dyingTree", 0, 0, 10)
+	src.Filename = "trees"
 	src.SeqNameDie = "die"
 	src.SeqNameReclamate = "reclamate"
 	src.FeatureDeadDef = dead
 	src.FeatureReclamateDef = reclamate
 	terrain.FeatureDefs = []*content.FeatureDef{src, dead, reclamate}
 	svc := NewService(terrain, nil, nil, nil)
+	stubSequences(svc, nil, []int32{duration}, []int32{duration})
 	if svc.spawnFeatureAt(1, 1, src) == nil {
 		t.Fatal("spawn rejected")
 	}
+	if !svc.transitionFeatureAt(1, 1, src, selector == featureAnimSelectorReclaim) {
+		t.Fatal("transition did not attach the record")
+	}
 	inst := svc.InstanceAt(1, 1)
-	inst.IsBurning = false
-	inst.IsAnimating = true
-	inst.AnimationSelector = selector
-	inst.BurnDuration = duration
+	if inst == nil || !inst.IsAnimating || inst.IsBurning || inst.AnimationSelector != selector {
+		t.Fatalf("attached record %#v, want selector %d", inst, selector)
+	}
 	return svc, dead, reclamate
 }
 
@@ -228,8 +268,10 @@ func TestDieAndReclaimAnimationsRetireOnTheVisitThatEndsTheSequence(t *testing.T
 				if svc.InstanceAt(1, 1) != inst {
 					t.Fatalf("visit %d retired the record early [05 R-FEAT-01 §10 pass 3]", visit)
 				}
-				if inst.BurnTicks != visit {
-					t.Fatalf("visit %d advanced the cursor to %d, want %d", visit, inst.BurnTicks, visit)
+				// One frame held for `duration` visits: the frame stays 0 and
+				// the delay counts down one per visit [05 R-FEAT-01 §10] pass 1.
+				if inst.cursor.frame != 0 || inst.cursor.delay != duration-visit {
+					t.Fatalf("visit %d left the cursor at frame %d delay %d, want frame 0 delay %d", visit, inst.cursor.frame, inst.cursor.delay, duration-visit)
 				}
 			}
 			svc.TickLifecycle(duration)
@@ -270,22 +312,27 @@ func TestSpriteAnimationConsumesNoDraws(t *testing.T) {
 func TestRestingSpriteIsNotAnAnimationRecord(t *testing.T) {
 	terrain := newEmptyTerrain(4, 4)
 	def := featureDef("restingTree", 0, 0, 10)
+	def.Filename = "trees"
 	def.FeatureDeadDef = featureDef("stump", 0, 0, 10)
 	svc := NewService(terrain, nil, nil, nil)
 	if svc.spawnFeatureAt(2, 2, def) == nil {
 		t.Fatal("spawn rejected")
 	}
 	inst := svc.InstanceAt(2, 2)
-	// A length is present but the record is not an animation: nothing advances.
-	inst.BurnDuration = 1
+	// Sequences resolve, but the record is not an animation: nothing advances,
+	// because a resting sprite is never on the active list.
+	stubSequences(svc, []int32{1}, []int32{1}, []int32{1})
+	if inst.onActive {
+		t.Fatal("a resting sprite joined the active list at its stamp [05 R-FEAT-01 §3 step 5]")
+	}
 	for tick := uint32(0); tick < 5; tick++ {
 		svc.TickLifecycle(tick)
 	}
 	if svc.InstanceAt(2, 2) != inst {
 		t.Fatal("a resting sprite feature was replaced by the die/reclaim branch [05 R-FEAT-01 §10 pass 1]")
 	}
-	if inst.BurnTicks != 0 {
-		t.Fatalf("a resting sprite feature advanced a cursor %d times [05 R-FEAT-01 §10 pass 1]", inst.BurnTicks)
+	if inst.cursor.running() || inst.cursor.frame != 0 {
+		t.Fatalf("a resting sprite feature advanced a cursor to frame %d [05 R-FEAT-01 §10 pass 1]", inst.cursor.frame)
 	}
 }
 
@@ -298,6 +345,7 @@ func transitionService(t *testing.T, visits int32, namesSequences bool) (*Servic
 	dead := featureDef("stumpdead", 0, 0, 10)
 	reclamate := featureDef("smudgereclaim", 0, 0, 10)
 	src := featureDef("standingtree", 0, 0, 10)
+	src.Filename = "trees"
 	src.Reclaimable = true
 	if namesSequences {
 		src.SeqNameDie = "die"
@@ -308,7 +356,8 @@ func transitionService(t *testing.T, visits int32, namesSequences bool) (*Servic
 	terrain.FeatureDefs = []*content.FeatureDef{src, dead, reclamate}
 	svc := NewService(terrain, nil, nil, nil)
 	if visits > 0 {
-		svc.SetAnimationTicks(func(def *content.FeatureDef, selector uint8) int32 { return visits })
+		// One frame held for `visits` visits [05 R-FEAT-01 §10].
+		stubSequences(svc, nil, []int32{visits}, []int32{visits})
 	}
 	if svc.spawnFeatureAt(1, 1, src) == nil {
 		t.Fatal("spawn rejected")
@@ -381,10 +430,12 @@ func TestDeathRemovalPlaysTheDeathSequence(t *testing.T) {
 }
 
 // TestUnboundAnimationLengthReplacesImmediately locks the seam's absence
-// behaviour: with no length source a sequence cannot be run, so the transition
-// falls back to step 3 rather than attaching a record that could never finish.
+// behaviour: with no content metadata a named sequence does not RESOLVE, and
+// an unresolved sequence is no sequence — the transition takes step 3's
+// immediate replacement rather than attaching a record that could never
+// finish [05 R-FEAT-01 §5].
 func TestUnboundAnimationLengthReplacesImmediately(t *testing.T) {
-	svc, _ := transitionService(t, 0, true) // sequences named, no length seam
+	svc, _ := transitionService(t, 0, true) // sequences named, no metadata seam
 	svc.RemoveFeatureAt(1, 1, CauseDead)
 	got := svc.InstanceAt(1, 1)
 	if got == nil || got.Def == nil || string(got.Def.CanonicalKey) != "stumpdead" {
@@ -563,12 +614,7 @@ func TestDeathAnimationRetiresAfterTheAuthoredVisitTotal(t *testing.T) {
 		t.Fatalf("fixture lifetime %d, want 6", got)
 	}
 	svc, _ := transitionService(t, 0, true) // sequences named, seam bound below
-	svc.SetAnimationTicks(func(def *content.FeatureDef, selector uint8) int32 {
-		if selector != featureAnimSelectorDie {
-			return 0
-		}
-		return seq.visits()
-	})
+	stubSequences(svc, nil, seq.delays, nil)
 	svc.RemoveFeatureAt(1, 1, CauseDead)
 	inst := svc.InstanceAt(1, 1)
 	if inst == nil || !inst.IsAnimating {
@@ -600,6 +646,9 @@ func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 	crt := rng.CRTFromState(0xabcdef)
 	sim := rng.SimulationFromState(5)
 	svc := burningFeatureService(t, &crt, &sim, [2]int{2, 2})
+	// Rebind the burning record's cursor to the authored sequence, so the
+	// frame the walk asks geometry for is the one the cadence names.
+	svc.InstanceAt(2, 2).cursor.start(seq.delays)
 	svc.BurnFrameGeometry = func(_ *content.FeatureDef, visit int32) (int32, int32, int32, int32) {
 		f := seq.at(visit)
 		return f.W, f.H, f.XOff, f.YOff
@@ -614,9 +663,11 @@ func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 	baseX := numeric.FixedFromInt(2*16 + 8)
 	baseY := svc.Terrain.CoarseHeightAt(2, 2)
 	baseZ := numeric.FixedFromInt(2*16 + 8)
-	for tick := uint32(0); tick < 9; tick++ {
+	// The sequence is 3 + max(0, 1) + 2 = 6 visits, so the burn ends on tick 5
+	// and the gated ticks that smoke are 0 and 3.
+	for tick := uint32(0); tick < 6; tick++ {
 		before := crt.Draws()
-		visit := int32(tick) // BurnTicks is the count of completed visits
+		visit := int32(tick) // the cursor has taken `tick` visits before this one's smoke
 		svc.TickLifecycle(tick)
 		want := uint64(0)
 		if tick%3 == 0 {
@@ -636,8 +687,11 @@ func TestBurnSmokeWithAuthoredGeometryKeepsTheDrawBudget(t *testing.T) {
 			t.Fatalf("tick %d puff at %v, want %v (frame %v)", tick, last, wantPos, seq.at(visit))
 		}
 	}
-	if len(puffs) != 3 { // ticks 0, 3, 6
-		t.Fatalf("%d puffs over nine ticks, want 3", len(puffs))
+	if len(puffs) != 2 { // ticks 0 and 3
+		t.Fatalf("%d puffs over six ticks, want 2", len(puffs))
+	}
+	if got := svc.InstanceAt(2, 2); got != nil {
+		t.Fatalf("the burn did not end on the visit its 6-visit sequence finished; anchor holds %v", got)
 	}
 }
 
@@ -713,11 +767,13 @@ func TestSparkCountdownHalvesTheCompiledTicks(t *testing.T) {
 	for seed := uint32(1); seed <= 24; seed++ {
 		terrain := newEmptyTerrain(4, 4)
 		def := featureDef("torchtree", 0, 0, 10)
+		def.Filename = "trees"
 		def.Flamable = true
 		def.SeqNameBurn = "burn"
 		def.SparkTime = 150 // the shipped 5 seconds, compiled to ticks
 		sim := rng.SimulationFromState(seed)
 		svc := NewService(terrain, &sim, nil, nil)
+		stubSequences(svc, longBurn(), nil, nil)
 		if svc.spawnFeatureAt(1, 1, def) == nil {
 			t.Fatal("spawn rejected")
 		}
@@ -757,9 +813,11 @@ func TestIgniteRespectsTheCompiledFirestarterByte(t *testing.T) {
 
 	terrain := newEmptyTerrain(4, 4)
 	def := featureDef("torchtree", 0, 0, 10)
+	def.Filename = "trees"
 	def.Flamable = true
 	def.SeqNameBurn = "burn"
 	svc := NewService(terrain, nil, nil, nil)
+	stubSequences(svc, longBurn(), nil, nil)
 	if svc.spawnFeatureAt(1, 1, def) == nil {
 		t.Fatal("spawn rejected")
 	}

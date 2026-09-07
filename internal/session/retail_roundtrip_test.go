@@ -95,8 +95,15 @@ func retailEconomyCensus(s *Session) map[int]string {
 		if !p.Exists {
 			continue
 		}
-		out[i] = fmt.Sprintf("m=%.4f e=%.4f mcap=%.4f ecap=%.4f",
-			p.Stock[economy.Metal], p.Stock[economy.Energy], p.Capacity[economy.Metal], p.Capacity[economy.Energy])
+		// The persisted economy words are the two stocks, the two storage-bonus
+		// operands and the bonus flag; capacity is not in the account — retail's
+		// world-rebuild reset zeroes it before the reader runs and the first
+		// settlement pass rebuilds it from the units plus the restored bonus
+		// [08 "Player records"] [05 R-ECO-01 §4] [08 R-ENTRY-01 §3 step 24].
+		// This census used to compare capacity, which locked a restore of a
+		// word retail never restores.
+		out[i] = fmt.Sprintf("m=%.4f e=%.4f mbonus=%.4f ebonus=%.4f bonus=%t",
+			p.Stock[economy.Metal], p.Stock[economy.Energy], p.StorageBonus[economy.Metal], p.StorageBonus[economy.Energy], p.StorageBonusEnabled)
 	}
 	return out
 }

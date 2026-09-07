@@ -192,7 +192,18 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	cl.SetCursors(cursors)
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
-	return ebitenapp.Run(cl)
+	return ebitenapp.Run(cl, rendererMode(opts))
+}
+
+// rendererMode maps the --renderer flag to the platform executor selection. Any
+// value other than "modern" — including the empty string and any typo — selects
+// the classic executor, the safe default (docs/DESIGN_GPU_RENDERER.md §2.4,
+// §2.5).
+func rendererMode(opts Options) ebitenapp.RendererMode {
+	if opts.Renderer == "modern" {
+		return ebitenapp.RendererModern
+	}
+	return ebitenapp.RendererClassic
 }
 
 // composeBattleEntry is the single presentation composition for every

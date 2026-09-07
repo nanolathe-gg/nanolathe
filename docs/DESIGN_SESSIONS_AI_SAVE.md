@@ -196,7 +196,12 @@ session pointer, catalog object or presentation cache crosses the boundary
 fully detached staging result validated before anything live is touched — and
 `RestoreRetailBattleCore` commits it. `RetailLoadResult` names the route the
 `Summary` account selected and carries exactly one of a campaign continuation
-or a staged battle `[08 R-SAVE-02 §11]`.
+or a staged battle `[08 R-SAVE-02 §11]`. The unit writer resolves handles to
+stable slots strictly — its own identity and a weapon slot's unit target must
+name a live unit — except for the two links a record may legitimately lack:
+the carrier and the engagement target are written as the stable slot, or 0
+when the linked unit is absent or dead, so a save taken on the tick of a kill
+is not refused `[08 R-SAVE-02 §6]` `[08 R-SAVE-WEAPON-01]`.
 
 **The trigger adapter.** The session supplies the trigger evaluator its
 world-facing callbacks: the stamped footprint anchor a boundary condition
@@ -376,7 +381,11 @@ the description and game identity, the gametype, the between-missions flag, the
 campaign and mission identity, difficulty, side, player count and the five rule
 words. `PlayerSlot` is one `Player%i` account — the slot's scalars, its side
 and logo bytes, and, as that account's last item, its eleven-byte alliance row
-with the forced self-alliance `[08 "Summary"]` `[08 "Player records"]`.
+with the forced self-alliance `[08 "Summary"]` `[08 "Player records"]`. Its two
+storage items are the storage-bonus **operands** and its storage flag the
+bonus enable bit; the derived capacities are not persisted — a restored
+player's capacity is rebuilt from its units plus the restored bonus at its
+first settlement pass `[08 "Player records"]` `[05 R-ECO-01 §4]`.
 
 **Which limit a save persists, and which battle a load can affect.** The
 `maxunits` item is the **configured** unit-limit word — this build's copy of
@@ -417,11 +426,30 @@ do not latch the sinking velocity back on from the height/sea-level relation.
 `RestoreAt` remains the single owner of the family switch, so the session's
 restore loop is unchanged.
 
-This build's 3D damage path is a countdown from the definition's `damage`
-rather than retail's wrap-around 16-bit accumulator, so the saved word
-round-trips losslessly on its own instance field and the live damage path does
-not read it; the mismatch is a `TODO(question)` at the field rather than an
-invented conversion `[05 R-FEAT-01 §8]`.
+The saved accumulator word is the live 3D damage state: weapon hits add their
+`[DAMAGE] default` word into it with 16-bit wrap and the death transition fires
+when the definition's `damage` is at or below it, unsigned, so a reloaded wreck
+keeps its damage and the next hit continues the same sum `[05 R-FEAT-01 §8]`.
+
+**The animating record is a live cursor, not a byte copy.** The record's
+frame byte at `0x08` is the live event cursor's frame index and its state byte
+at `0x09` packs the family selector in the low nibble with the burn
+countdown's **high** nibble in the high nibble — the low nibble is the save's
+loss. On reload the selector re-runs its family through the ordinary
+ignition or death/reclaim transition, which binds the definition's own
+sequence from the battle's content metadata at frame 0 (a burn re-seeds its
+countdown with ignition's simulation draw, consumed and then discarded), and
+the reader then overwrites the accumulator, the cursor frame and the countdown
+(nibble shifted back into place). The cursor's delay is not saved and stays at
+frame 0's word, so the restored frame holds for that delay before the sequence
+continues at its own cadence; the record then completes on the visit its
+remaining frames run out and stamps the family's successor. A family whose
+sequence does not resolve takes the contract's own outcome — immediate
+replacement for death/reclaim, a resting feature for a burn — and the reader
+has no record to overwrite `[08 R-SAVE-FEATURE-01]` `[05 R-FEAT-01 §5]`
+`[05 R-FEAT-01 §9]` `[05 R-FEAT-01 §10]`. The writer skips a cell whose
+attached bit has no live record behind it, as the retail writer skips a
+sequence pointer matching no family `[08 R-SESS-01 §4]`.
 
 `compression.go` decodes the single-chunk `SQSH` framing the pools and account
 bodies use; the archive LZ77 variant is what the retail writer selects, and the
@@ -553,7 +581,13 @@ detached staging first, then core restoration, then the battle-entry tail —
 the graphical user interface, the per-player phase primed once on the restored
 world at the restored tick, no second resource grant, then the metal-spot
 lists. The tail follows the restoration dispatcher, not the other way round
-`[08 R-SAVE-02 §11]` `[08 R-SAVE-02 §11-A]` `[08 R-ENTRY-01 §8]`.
+`[08 R-SAVE-02 §11]` `[08 R-SAVE-02 §11-A]` `[08 R-ENTRY-01 §8]`. Staging
+applies each `Player%i` account onto its player record and then mirrors the
+freshly built end latch — countdown −1, no bits — onto every record, as
+battle entry's per-player reset does: neither the countdown nor the latch is a
+persisted key, and the world rebuild's reset precedes the dispatcher, so a
+load resumes unarmed and the settlement gate stays open `[05 R-ECO-01 §12]`
+`[08 R-TRIG-01 §6]` `[08 R-ENTRY-01 §8]`.
 
 **C11 — the container header.** 34 bytes: magic `HAPIBANK` compared
 case-sensitively, the tag's pool offset, the absolute pool offset, the first

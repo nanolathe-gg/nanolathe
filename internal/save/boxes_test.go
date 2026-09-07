@@ -474,3 +474,26 @@ func TestSummaryMaxUnitsPresenceIsDistinctFromZero(t *testing.T) {
 		t.Fatalf("137 read back as MaxUnits=%d HasMaxUnits=%v", got.MaxUnits, got.HasMaxUnits)
 	}
 }
+
+// The two storage items are the storage-bonus operands, not the derived
+// capacities: the writer takes them from the bonus fields and the reader puts
+// them back there, leaving capacity for the first settlement pass to rebuild
+// [08 "Player records"] [05 R-ECO-01 §4].
+func TestPlayerSlotStorageItemsAreTheBonusOperands(t *testing.T) {
+	var p economy.Player
+	p.StorageBonusEnabled = true
+	p.StorageBonus[economy.Energy], p.StorageBonus[economy.Metal] = 1000, 200
+	p.Capacity[economy.Energy], p.Capacity[economy.Metal] = 4321, 8765
+	slot := PlayerSlotFromEconomy(3, p)
+	if slot.PlayerEnergyStorage != 1000 || slot.PlayerMetalStorage != 200 || slot.AddPlayerStorage != 1 {
+		t.Fatalf("writer took %v/%v flag %d, want the bonus operands 1000/200 flag 1", slot.PlayerEnergyStorage, slot.PlayerMetalStorage, slot.AddPlayerStorage)
+	}
+	var dst economy.Player
+	slot.ApplyToEconomy(&dst)
+	if dst.StorageBonus[economy.Energy] != 1000 || dst.StorageBonus[economy.Metal] != 200 || !dst.StorageBonusEnabled {
+		t.Fatalf("reader restored bonus %v flag %v, want 1000/200 enabled", dst.StorageBonus, dst.StorageBonusEnabled)
+	}
+	if dst.Capacity[economy.Energy] != 0 || dst.Capacity[economy.Metal] != 0 {
+		t.Fatalf("reader wrote capacity %v; capacity is rebuilt at the first settlement, never restored", dst.Capacity)
+	}
+}

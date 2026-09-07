@@ -3,6 +3,7 @@ package features
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -32,205 +33,11 @@ const (
 	featureAnimSelectorReclaim uint8 = 2
 )
 
-// featureAnimEnd records one attached sprite animation that completed on this
-// visit. Completions are applied after the walk so the instance map is not
-// mutated mid-iteration; the walk order (sorted keys, I1) is carried over, so
-// burn ends and die/reclaim ends still settle in one deterministic order.
-type featureAnimEnd struct {
-	idx int
-	// burn distinguishes [05 R-FEAT-01 §10] pass 3c (teardown plus a bare
-	// `featureburnt` stamp, explicitly NOT the replacement routine) from the
-	// die/reclaim branch's §5 step 6 replacement.
-	burn bool
-}
-
-// burnTick implements the feature burning phase [05 "Feature burning"] [06 §13.1].
-// Smoke emission gated on tick%3==0, animation and countdown every tick,
-// animation-driven burn completion, one-shot spread+burnweapon event.
-
-func (s *Service) burnTick(tick uint32) {
-	// One smoke flag per call, true when global tick %3==0, shared across every
-	// burning instance [05 "Feature burning"].
-	smoke := tick%3 == 0
-
-	// Iterate deterministically (I1) over sorted keys.
-	keys := s.sortedInstanceKeys()
-	// Collect finished animations to settle after iteration to avoid map
-	// mutation during the loop.
-	var finished []featureAnimEnd
-	for _, idx := range keys {
-		inst := s.instances[idx]
-		if inst == nil {
-			continue
-		}
-		if !inst.IsBurning {
-			// [05 R-FEAT-01 §10] pass 3, the "sprite instance, burning bit
-			// clear" branch: such an attached record is a die or reclaim
-			// animation. One visit advances the main cursor and then the
-			// shadow cursor when present; the animation is complete on the
-			// visit whose advance clears the main cursor's sequence pointer,
-			// and its lifetime in visits is the sum over the sequence's frames
-			// of max(delay, 1). No sprite animation consumes a draw on any
-			// stream — only the burning branch's smoke does [01 §7.5].
-			//
-			// Retail attaches an active-list slot only for an EVENT animation:
-			// a sprite feature at rest is driven by its catalog record's rest
-			// cursor (pass 1 of the same section), which has no instance.
-			// Nanolathe attaches an Instance to every stamped anchor, so the
-			// resting majority has to be told apart here. The discriminator is
-			// the animation-record flag, set only for the animating save
-			// selectors; a resting feature never carries it.
-			if !inst.IsAnimating {
-				continue
-			}
-			// The visit counter and the animation's length in visits are the
-			// same two words the burn cursor uses below, because retail
-			// advances every sprite cursor with one routine. The records that
-			// reach here are the ones the transition of §5 steps 4-5 attaches
-			// (Service.transitionFeatureAt) plus those save restore rebuilds.
-			inst.BurnTicks++
-			if inst.BurnDuration > 0 && inst.BurnTicks >= inst.BurnDuration {
-				finished = append(finished, featureAnimEnd{idx: idx})
-			}
-			continue
-		}
-		if smoke {
-			// Emit smoke particle at footprint centre jittered by presentation
-			// stream, not simulation stream [05 "Feature burning"].
-			//
-			// This is the burning-feature strip-5 smoke producer
-			// [R-STRIP-01 §1 strip 5]: one wind-drifted smoke puff every 3rd
-			// tick, reached through the BurnSmoke seam the session binds to
-			// its strip table.
-			//
-			// [05 R-FEAT-01 §10] pass 3a gives the jitter law in full. The
-			// puff sits at the footprint centre at terrain height, and the two
-			// draws — first the horizontal one, then the vertical one, in that
-			// order — are each scaled by the CURRENT BURN FRAME's width and
-			// height, with the frame's own offsets recentring the result:
-			//
-			//	x += (draw·(w/2))/32768 - frame.xoff + w/4
-			//	y += 2·(frame.yoff - (draw·(h/2))/32768) - 2·(h/4)
-			//
-			// taking integer parts with 16-bit truncation. burnSmokeJitter
-			// below is exactly those two addends.
-			//
-			// WHICH AXES the two addends move: world X and world HEIGHT, with
-			// Z passed through at the footprint centre [05 R-FEAT-01 §16]. The
-			// reading recorded here as a Supported inference — the smoke-puff
-			// family's own position triple updates `x += windX·8`,
-			// `z += windZ·8`, `y += authoredGravity·16` [03 §5.5 "Smoke-puff
-			// family"], and the factor of two on the y term is the half-row
-			// projection shear (`screenY = worldZ − worldY/2`, [03 §2.5]) — is
-			// confirmed by trace and is now Established.
-			//
-			// THE THIRD DRAW. An emission costs THREE CRT draws, all in this
-			// phase: the horizontal jitter, the vertical jitter, then the
-			// puff's last-frame draw inside the producer, because the smoke
-			// family's init calls its spawn virtual [05 R-FEAT-01 §16]
-			// [03 R-STRIP-01 §2]. [01 §7.5]'s phase-6 row read 2 and is
-			// corrected to 3. The producer this site reaches builds a one-shot
-			// `smoke 1` container — the trail/`endsmoke` init row, lifetime 0 —
-			// so its constructor spawns the single puff and the closed window
-			// retires it; every third tick of a burn adds one puff in one fresh
-			// container.
-			//
-			// The two jitter draws are taken here unconditionally, before the
-			// seam is consulted, in the order the site takes them. The third is
-			// the producer's own and is taken only when a producer is bound;
-			// the session always binds one (bindFeatureStripProducers), and a
-			// service with no producer is a fixture, not a battle.
-			var drawX, drawY int32
-			if crt := s.crt(); crt != nil {
-				drawX = crt.Rand()
-				drawY = crt.Rand()
-			}
-			if s.BurnSmoke != nil {
-				// The base is the footprint centre at the sampled terrain
-				// height. The centre is the same one the burn weapon fires at,
-				// `((footprintx + 2x)·8, (footprintz + 2z)·8)`
-				// [05 R-FEAT-01 §11 step 3].
-				px := footprintCentreWorld(inst.CX, inst.FootprintX)
-				pz := footprintCentreWorld(inst.CZ, inst.FootprintZ)
-				py := inst.Y
-				if s.Terrain != nil {
-					py = s.Terrain.CoarseHeightAt(int32(inst.CX), int32(inst.CZ))
-				}
-				if s.BurnFrameGeometry != nil {
-					w, h, xoff, yoff := s.BurnFrameGeometry(inst.Def, inst.BurnTicks)
-					dx, dy := burnSmokeJitter(burnFrameGeometry{W: w, H: h, XOff: xoff, YOff: yoff}, drawX, drawY)
-					px = px.Add(numeric.FixedFromInt(int64(dx)))
-					py = py.Add(numeric.FixedFromInt(int64(dy)))
-				}
-				s.BurnSmoke([3]numeric.Fixed{px, py, pz})
-			}
-		}
-		// Advance burn animation and shadow when present [05 ...].
-		inst.BurnTicks++
-		// If burn animation finished, clear cell — releases instance and
-		// animations — and spawn featureburnt successor when linked [05 ...].
-		if inst.BurnDuration > 0 && inst.BurnTicks >= inst.BurnDuration {
-			finished = append(finished, featureAnimEnd{idx: idx, burn: true})
-			continue
-		}
-		// Otherwise if countdown nonzero and not remote-suppressed decrement,
-		// when it reaches zero fire burn event exactly once [05 ...].
-		if inst.BurnCountdown != 0 && !inst.RemoteSuppressed {
-			inst.BurnCountdown--
-			if inst.BurnCountdown == 0 {
-				s.fireBurnEvent(inst, idx)
-			}
-		}
-	}
-	// Settle the animations that ended on this visit, in walk order.
-	for _, end := range finished {
-		inst := s.instances[end.idx]
-		if inst == nil {
-			continue
-		}
-		cx, cz := inst.CX, inst.CZ
-		if !end.burn {
-			// [05 R-FEAT-01 §10] pass 3's die/reclaim completion runs §5
-			// step 6's replacement at the anchor with argument 0. Step 6
-			// takes `featuredead` for that argument, EXCEPT that an instance
-			// whose reclaim-animation bit is set promotes the successor to
-			// `featurereclamate` regardless of the argument — which is the
-			// whole point of carrying the bit. Selector 2 is that record.
-			// A successor word of 0xFFFF makes the stamp a no-op, i.e. final
-			// removal, which the replacement path already models as a nil
-			// successor definition.
-			//
-			// This is the REPLACEMENT, not the transition: going back through
-			// the transition entry would meet its own record at step 4 and
-			// drop the removal, leaving the finished animation on the cell
-			// forever.
-			var succ *content.FeatureDef
-			if inst.Def != nil {
-				if inst.AnimationSelector == featureAnimSelectorReclaim {
-					succ = inst.Def.FeatureReclamateDef
-				} else {
-					succ = inst.Def.FeatureDeadDef
-				}
-			}
-			s.replaceFeatureAt(cx, cz, succ)
-			continue
-		}
-		// Burn completion is pass 3c and is deliberately NOT the replacement
-		// routine: teardown at the anchor, then a bare `featureburnt` stamp at
-		// the snapped footprint centre carrying no position or orientation.
-		def := inst.Def
-		s.clearFootprint(cx, cz, def)
-		if def != nil && def.FeatureBurntDef != nil {
-			s.spawnFeatureAt(cx, cz, def.FeatureBurntDef)
-		}
-	}
-}
-
 // burnFrameGeometry is the geometry of the burn animation's CURRENT frame,
 // which is what [05 R-FEAT-01 §10] pass 3a scales the smoke jitter by: the
 // frame's width and height and its two authored offsets. The names are the
-// GAF frame fields [fmt gaf]; the values reach this package through a seam
-// that does not exist yet (see the smoke site in burnTick).
+// GAF frame fields [fmt gaf]; the values reach this package through the
+// BurnFrameGeometry seam.
 type burnFrameGeometry struct {
 	W, H       int32
 	XOff, YOff int32
@@ -245,17 +52,19 @@ type burnFrameGeometry struct {
 //	y += 2·(frame.yoff - (draw·(h/2))/32768) - 2·(h/4)
 //
 // Every division is an integer part and the result is truncated to 16 bits, as
-// the section states. The addends are returned rather than applied because the
-// space the base position lives in is the open question recorded at the call
-// site; the addends themselves are pure frame geometry and are unambiguous.
+// the section states. The addends are returned rather than applied so the
+// arithmetic can be locked on its own; emitBurnSmoke applies them to world X
+// and world height [05 R-FEAT-01 §16].
 func burnSmokeJitter(frame burnFrameGeometry, drawX, drawY int32) (dx, dy int32) {
 	dx = int32(int16(drawX*(frame.W/2)/32768 - frame.XOff + frame.W/4))
 	dy = int32(int16(2*(frame.YOff-drawY*(frame.H/2)/32768) - 2*(frame.H/4)))
 	return dx, dy
 }
 
-// fireBurnEvent runs the three passes in order [05 "Feature burning"].
-func (s *Service) fireBurnEvent(inst *Instance, idx int) {
+// fireBurnEvent is the burn event of [05 R-FEAT-01 §11], run once per burn on
+// the visit the spark countdown reaches zero: the neighbourhood pass, the wind
+// pass, then the burn weapon.
+func (s *Service) fireBurnEvent(inst *Instance) {
 	if inst == nil || s.Terrain == nil {
 		return
 	}
@@ -263,52 +72,15 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 	w := int(s.Terrain.CellW)
 	h := int(s.Terrain.CellH)
 	sim := s.sim()
-	// 1. Neighbourhood spread exactly 48 candidates in 7x7 window around origin
-	// row-major ascending skipping origin tile before any legality test [05 ...].
+	// 1. Neighbourhood: the 7x7 window around the origin, row-major ascending,
+	// skipping the origin tile before any legality test, so at most 48
+	// candidates and at most 48 draws [05 R-FEAT-01 §11 step 1].
 	for dz := -3; dz <= 3; dz++ {
 		for dx := -3; dx <= 3; dx++ {
 			if dx == 0 && dz == 0 {
 				continue
 			}
-			tx := cx + dx
-			tz := cz + dz
-			if tx < 0 || tx >= w || tz < 0 || tz >= h {
-				continue
-			}
-			targetIdx := tz*w + tx
-			cell := s.Terrain.Plot[targetIdx]
-			// Candidate skipped when off-map, empty, already has instance
-			// attached, or its definition not flammable [05 ...].
-			if cell.IsEmpty() {
-				continue
-			}
-			if cell.Occupied() {
-				continue
-			}
-			// Also skip if live instance already at that cell (attached).
-			if _, ok := s.instances[targetIdx]; ok {
-				continue
-			}
-			feat := cell.Feature()
-			if feat >= 0xFFFB { // sentinel band [GAP T14]
-				continue
-			}
-			def, ok := s.Terrain.FeatureDefAt(feat)
-			if !ok || def == nil || !def.Flamable { // flammable flag [02 "Feature record"]
-				continue
-			}
-			// Only after every cheap rejection does it draw simulationRandom(100)
-			// and ignite when draw is below candidate's own spreadchance — never
-			// the burning feature's [05 "Feature burning"] [06 §13.1].
-			if sim == nil {
-				continue
-			}
-			roll := sim.Uint32n(100) // [05 "Feature burning"] [06 §13.1]
-			if int32(roll) >= def.SpreadChance {
-				continue
-			}
-			// Ignite candidate.
-			s.igniteAt(tx, tz, def)
+			s.spreadTo(cx+dx, cz+dz, sim)
 		}
 	}
 	// 2. Wind embers, exactly five probes [05 R-FEAT-01 §11 step 2]:
@@ -324,12 +96,11 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 	// the origin rather than truncating (I3).
 	//
 	// The skip rule is "same tile as the PREVIOUS probe, the origin for the
-	// first" — §11's correction to the earlier "zero wind collapses all five
-	// probes onto the origin tile, where they are skipped". That earlier
-	// reading gave the right draw count only at still air; the general rule
-	// makes the five probes draw between zero and five times depending on wind
-	// speed, and a wind fast enough to jump a tile never tests the skipped one.
-	// An off-map probe still counts as visited: §11 puts the rejection in the
+	// first": with any wind slower than half a tile per probe the repeated
+	// tiles are skipped and draws happen only when the tile changes, so the
+	// five probes make between zero and five draws depending on wind speed,
+	// and a wind fast enough to jump a tile never tests the skipped one. An
+	// off-map probe still counts as visited: §11 puts the rejection in the
 	// cell lookup, after the same-tile test.
 	if s.Wind != nil && sim != nil {
 		dx := s.Wind.DirX
@@ -349,112 +120,162 @@ func (s *Service) fireBurnEvent(inst *Instance, idx int) {
 			if px < 0 || int(px) >= w || pz < 0 || int(pz) >= h {
 				continue // the cell lookup rejects an off-map probe [05 R-FEAT-01 §11]
 			}
-			tIdx := int(pz)*w + int(px)
-			cell := s.Terrain.Plot[tIdx]
-			if cell.IsEmpty() {
-				continue
-			}
-			if cell.Occupied() {
-				continue
-			}
-			if _, ok := s.instances[tIdx]; ok {
-				continue
-			}
-			feat := cell.Feature()
-			if feat >= 0xFFFB {
-				continue
-			}
-			def, ok := s.Terrain.FeatureDefAt(feat)
-			if !ok || def == nil || !def.Flamable {
-				continue
-			}
-			roll := sim.Uint32n(100)
-			if int32(roll) >= def.SpreadChance {
-				continue
-			}
-			s.igniteAt(int(px), int(pz), def)
+			s.spreadTo(int(px), int(pz), sim)
 		}
 	}
-	// 3. Burn weapon after both spread passes regardless of results, if definition
-	// names burnweapon fires ordinary weapon request at footprint centre at
-	// sampled terrain height [05 "Feature burning"] [06 §13.1].
-	if inst.Def != nil && inst.Def.BurnWeapon != "" {
-		ev := BurnWeaponEvent{
-			Weapon: inst.Def.BurnWeapon,
-			CX:     cx,
-			CZ:     cz,
-			X:      inst.X,
-			Y:      inst.Y,
-			Z:      inst.Z,
-		}
-		// Sample terrain height at footprint centre for Y if Y is zero? Use coarse.
-		if s.Terrain != nil {
-			ev.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
-		}
-		s.BurnWeaponsEmitted = append(s.BurnWeaponsEmitted, ev)
-		// In retail routes through ordinary projectile and area-damage subsystem [06 §13.1].
+	// 3. Burn weapon: if `burnweapon` resolved, fire it at the footprint
+	// centre `((footprintx + 2x)·8, (footprintz + 2z)·8)` at the bilinear
+	// terrain height, owned by the dummy feature unit of [05 R-FEAT-01 §2],
+	// through the ordinary weapon request — unconditional on the spread
+	// results [05 R-FEAT-01 §11 step 3]. That request builds the impact as a
+	// synthetic projectile-shaped record with a NULL shooter and a zeroed side
+	// byte and pushes it through the ordinary area enumeration, so the damage
+	// awards no veterancy and no kill credit [06 §13.1]; the seam the session
+	// binds resolves the weapon name and hands that record to the shared
+	// splash entry. The weapon itself is a seam because the projectile and
+	// damage subsystem is combat's, which this package cannot import.
+	if inst.Def != nil && inst.Def.BurnWeapon != "" && s.BurnWeapon != nil {
+		x := footprintCentreWorld(cx, inst.FootprintX)
+		z := footprintCentreWorld(cz, inst.FootprintZ)
+		// The four-corner bilinear query of [03 §2.3], raw — on the map's last
+		// row or column it is retail's −1 sentinel, and the request carries it.
+		y := s.Terrain.HeightAt(x, z)
+		s.BurnWeapon(inst.Def.BurnWeapon, [3]numeric.Fixed{x, y, z})
 	}
 }
 
+// spreadTo applies the burn event's candidate chain to one tile, in the
+// section's order [05 R-FEAT-01 §11] step 1: the cell must exist, hold a word
+// below the sentinel band (a fringe cell's 0xFFFE is rejected here, so only
+// anchor cells can catch fire), have no instance, and its definition must be
+// `flamable`; only then one simulation draw `boundedDraw(100)`, and ignition
+// when the draw is below the CANDIDATE's own `spreadchance` (signed compare of
+// the byte) — never the burning feature's. Every cheap rejection precedes the
+// draw, so the stream advances only for candidates that survive them.
+func (s *Service) spreadTo(tx, tz int, sim *rng.Simulation) {
+	w := int(s.Terrain.CellW)
+	h := int(s.Terrain.CellH)
+	if tx < 0 || tx >= w || tz < 0 || tz >= h {
+		return
+	}
+	idx := tz*w + tx
+	cell := s.Terrain.Plot[idx]
+	feat := cell.Feature()
+	if feat >= 0xFFFB { // empty, fringe, void or the reserved band [GAP T14]
+		return
+	}
+	def, ok := s.Terrain.FeatureDefAt(feat)
+	if !ok || def == nil {
+		return
+	}
+	if s.cellHasInstance(idx, def) {
+		return
+	}
+	if !def.Flamable { // flammable flag [02 "Feature record"]
+		return
+	}
+	if sim == nil {
+		return
+	}
+	roll := sim.Uint32n(100)
+	if int32(roll) >= def.SpreadChance {
+		return
+	}
+	s.igniteAt(tx, tz, def)
+}
+
+// cellHasInstance is retail's "the cell has an instance attached" read against
+// this build's records [05 R-FEAT-01 §2][05 R-FEAT-01 §3][05 R-FEAT-01 §15].
+// In retail the anchor's instance-attached bit is set by the stamp for every
+// 3D definition and by ignition and the die/reclaim transitions for a sprite
+// definition; a sprite feature AT REST owns no slot. Nanolathe keeps a
+// convenience Instance for every stamped anchor, so membership in the
+// instance map is NOT that predicate — reading it as one is what kept every
+// resting tree from ever catching fire from a neighbour. The predicate is: a
+// 3D definition (always attached), a sprite carrying an event record, or an
+// attachment this service does not track (the bit set on a cell it holds no
+// record for), which is exactly what ignition refuses on.
+func (s *Service) cellHasInstance(idx int, def *content.FeatureDef) bool {
+	if !isSpriteDef(def) {
+		return true // flag bit 0 clear: the stamp popped a slot [05 R-FEAT-01 §3 step 4]
+	}
+	if s.hasEventRecordAt(idx) {
+		return true
+	}
+	return s.instances[idx] == nil && s.Terrain.Plot[idx].Occupied()
+}
+
 // EventSequence reports the animation sequence a live EVENT record is running
-// on this instance, and how many feature-phase visits that record's cursor has
-// taken.
+// on this instance, its shadow twin, and the visit index of the frame its
+// cursor is on.
 //
 // It exists because the presentation boundary has to tell the two feature draw
 // cases apart. [03 R-RAST-01 §6] gives them: a cell with a live instance blits
 // the INSTANCE's shadow cursor frame and then its normal cursor frame, while a
 // cell with none blits `seqnameshad`/`seqname` — the definition's rest cursor.
 // This build attaches an Instance to every stamped anchor, so "live instance"
-// in the retail sense is the animation-record flag, and the sequence is chosen
-// by the record's own selector: burn, death or reclaim [05 R-FEAT-01 §10]
-// pass 3.
+// in the retail sense is an event record with a running cursor, and the
+// sequence is the one its selector names: burn, death or reclaim
+// [05 R-FEAT-01 §10] pass 3.
 //
-// A resting feature, a 3D definition and a record whose definition authors no
-// sequence for its selector all report false, which leaves the rest cursor in
-// charge — the same outcome those cells had before event records existed.
+// The visit is the cursor's own frame expressed as that frame's first visit
+// under the max(delay, 1) cadence, so a consumer that walks the cadence lands
+// on exactly the frame the simulation is on. A resting feature, a 3D
+// definition and a record whose cursor holds no sequence all report false,
+// which leaves the rest cursor in charge.
 func (i *Instance) EventSequence() (name, shadow string, visit int32, ok bool) {
-	if i == nil || i.Def == nil || !(i.IsBurning || i.IsAnimating) {
+	if i == nil || i.Def == nil || !(i.IsBurning || i.IsAnimating) || !i.cursor.running() {
 		return "", "", 0, false
 	}
-	switch i.AnimationSelector {
-	case featureAnimSelectorBurn:
-		name, shadow = i.Def.SeqNameBurn, i.Def.SeqNameBurnShad
-	case featureAnimSelectorDie:
-		name, shadow = i.Def.SeqNameDie, i.Def.SeqNameDieShad
-	case featureAnimSelectorReclaim:
-		name, shadow = i.Def.SeqNameReclamate, i.Def.SeqNameReclamateShad
-	default:
-		return "", "", 0, false
-	}
+	name = EventSequenceName(i.Def, i.AnimationSelector)
 	if name == "" {
 		return "", "", 0, false
 	}
-	// BurnTicks is the cursor's visit count for every one of the three
-	// sequences: retail advances all of them with one routine, and this build
-	// counts their visits in the same word [05 R-FEAT-01 §10] pass 3.
-	return name, shadow, i.BurnTicks, true
+	return name, eventShadowName(i.Def, i.AnimationSelector), i.cursor.visitIndex(), true
+}
+
+// CursorFrame is the live event cursor's frame index — the byte the animating
+// save record carries at offset 8 [08 R-SAVE-FEATURE-01].
+func (i *Instance) CursorFrame() int32 {
+	if i == nil {
+		return 0
+	}
+	return i.cursor.frame
+}
+
+// CursorDelay is the live event cursor's per-frame delay countdown
+// [05 R-FEAT-01 §10] pass 1. It is not persisted: a reload restarts it at
+// frame 0's word (see RestoreAt).
+func (i *Instance) CursorDelay() int32 {
+	if i == nil {
+		return 0
+	}
+	return i.cursor.delay
 }
 
 // hasEventRecordAt reports whether the anchor carries an EVENT animation
 // record — burning, dying or reclaiming. That is what retail means by "the cell
-// has an instance" [05 R-FEAT-01 §8][05 R-FEAT-01 §9]: a sprite feature at rest
-// owns no slot there, while this build attaches an Instance to every stamped
-// anchor, so every "no instance" test in the impact and ignition paths reads
-// through here.
+// has an instance" for a SPRITE definition [05 R-FEAT-01 §8][05 R-FEAT-01 §9]:
+// a sprite feature at rest owns no slot there, while this build attaches an
+// Instance to every stamped anchor, so every "no instance" test in the impact
+// and ignition paths reads through here (or through cellHasInstance, which
+// adds the 3D arm).
 func (s *Service) hasEventRecordAt(idx int) bool {
 	inst := s.instances[idx]
 	return inst != nil && (inst.IsBurning || inst.IsAnimating)
 }
 
-// igniteAt performs ignition per [05 "Feature burning"] [06 §13.1].
-// Requires burn animation sequence, refuses when cell already has instance,
-// takes slot from burning-feature free list (silent no-op if none free).
+// igniteAt is `ignite(x, z, remote = 0)` of [05 R-FEAT-01 §9]. It reports
+// whether the ignition happened.
 func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if def == nil || s.Terrain == nil {
 		return false
 	}
-	// Ignition requires definition to name burn animation sequence [05 ...].
-	if def.SeqNameBurn == "" {
+	// Step 1: the definition must have a RESOLVED `seqnameburn` — a name that
+	// resolves in the battle's content metadata — else the ignition returns
+	// silently. A 3D definition never has one, so 3D features never burn.
+	delays := s.sequenceDelays(def, featureAnimSelectorBurn)
+	if delays == nil {
 		return false
 	}
 	idx := cz*int(s.Terrain.CellW) + cx
@@ -462,16 +283,13 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 		return false
 	}
 	cell := s.Terrain.Plot[idx]
-	// "The cell must have no instance" [05 R-FEAT-01 §9 step 1] — and in retail
-	// a sprite feature AT REST has none: instances are popped for event
-	// animations only, the rest cursor living on the catalog record instead
-	// [05 R-FEAT-01 §10] pass 1. This build attaches an Instance to every
-	// stamped anchor, so the faithful translation of "no instance" is "no event
-	// record": a resting feature ignites, one already burning, dying or
-	// reclaiming refuses (which is also §5's "a second ignition refuses").
-	//
-	// Reading it as "no Instance object" is why nothing could ever catch fire
-	// once the impact path was wired: every stamped tree owns one.
+	// "The cell must have no instance" — and in retail a sprite feature AT
+	// REST has none: instances are popped for event animations only, the rest
+	// cursor living on the catalog record instead [05 R-FEAT-01 §10] pass 1.
+	// This build attaches an Instance to every stamped anchor, so the faithful
+	// translation of "no instance" is "no event record": a resting feature
+	// ignites, one already burning, dying or reclaiming refuses (which is
+	// also §5's "a second ignition refuses").
 	existing := s.instances[idx]
 	if s.hasEventRecordAt(idx) {
 		return false
@@ -479,58 +297,33 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	if existing == nil && cell.Occupied() {
 		return false // an attachment this service does not track
 	}
-	// Ignition is one of the two arena allocations a sprite feature can make
-	// [05 R-FEAT-01 §2][§9]: a resting anchor holds no slot, so the record this
-	// attaches needs one popped. An instance that already occupies a slot is
-	// not charged twice.
-	if !arenaOccupies(existing) && s.arenaOccupants() >= FeatureAnimSlots {
-		return false // free list empty: the ignition silently does not happen
+	// Step 2: pop a free slot; an empty pool is a silent return, no broadcast.
+	// A resting anchor holds no slot, so the record this attaches needs one.
+	if s.arenaOccupants() >= FeatureAnimSlots {
+		return false
 	}
-	// On success: bind the cell to the slot, start the burn animation and, when
-	// named, the burn shadow, mark the instance burning, record the tile, play
-	// the burn sound, and draw the countdown [05 "Feature burning"] [P1-10].
 	sim := s.sim()
 	if sim == nil {
 		return false
 	}
-	// The countdown, one simulation draw [05 R-FEAT-01 §9 step 4]:
+	// Step 4, the countdown, one simulation draw:
 	//
 	//	half      = sparkTicks >> 1
 	//	countdown = uint8(boundedDraw(half) + half)
 	//
-	// CORRECTION. This site read `def.SparkTime / 30` first, recovering an
-	// "authored" seconds value and halving that, on the older text's claim that
-	// the shipped spark time of 5 yields a countdown of 2 or 3. [05 R-FEAT-01
-	// §9] corrects exactly that: the parser multiplies the authored seconds by
-	// thirty and truncates, so the compiled field ALREADY holds ticks and the
-	// formula halves the ticks. The shipped 5 stores 150, and the countdown is
-	// 75..149 visits — two and a half to five seconds, not two or three visits.
-	// [06 §13.1] carries the same correction. The old reading fired the spread
-	// and burn-weapon event about thirty times too early.
-	//
+	// The compiled field ALREADY holds ticks — the parser multiplies the
+	// authored seconds by thirty and truncates — so the formula halves the
+	// ticks: the shipped 5 stores 150 and the countdown is 75..149 visits.
 	// The bound's own semantics decide whether a bound below two advances the
-	// stream (a half of 0 or 1 draws nothing and returns 0, [01 §7.3]), and that
-	// decision belongs to the stream, not to this call site. Retail stores the
-	// result as a BYTE, so a spark time whose ticks reach 512 wraps; the
-	// shipped corpus tops out at 150 ticks.
+	// stream (a half of 0 or 1 draws nothing and returns 0, [01 §7.3]). Retail
+	// stores the result as a BYTE, so a spark time whose ticks reach 512
+	// wraps; the shipped corpus tops out at 150 ticks.
 	half := def.SparkTime >> 1
 	countdown := int32(uint8(int32(sim.Uint32n(uint32(half))) + half))
 
-	// The burn ends when the burn ANIMATION finishes, not on a tick budget:
-	// "if the burn animation has finished, clear the cell" [05 "Feature
-	// burning"] [P1-10] forced non-looping finite 46-282 visits one-shot after sparktime countdown then inert.
-	// Shipped seqnameburn lifetimes forced non-looping with *(handle+2)=0 [P1-10].
-	var duration int32
-	if s.BurnAnimationTicks != nil {
-		duration = s.BurnAnimationTicks(def)
-	}
-	// If hook gives 0 (no length known), default to finite 46-282 range midpoint 100 to satisfy forced finite [P1-10][P1-15].
-	if duration == 0 {
-		duration = 100 // within 46-282 [P1-10], forced non-looping [P1-15]
-	}
-	// A resting instance is CONVERTED rather than replaced: retail pops a slot
-	// because the resting feature owns none, so the one record this build
-	// already has is the same record retail ends up with.
+	// Step 3: bind. A resting instance is CONVERTED rather than replaced:
+	// retail pops a slot because the resting feature owns none, so the one
+	// record this build already has is the same record retail ends up with.
 	inst := existing
 	if inst == nil {
 		inst = &Instance{
@@ -545,9 +338,9 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 	inst.IsBurning = true
 	inst.IsAnimating = false
 	inst.AnimationSelector = featureAnimSelectorBurn
+	inst.RemoteSuppressed = false // remote = 0: this instance runs its burn event
 	inst.BurnCountdown = countdown
-	inst.BurnDuration = duration
-	inst.BurnTicks = 0
+	inst.cursor.start(delays) // the burn cursor at frame 0
 	inst.Status = 0
 	if inst.FootprintX <= 0 {
 		inst.FootprintX = 1
@@ -556,18 +349,17 @@ func (s *Service) igniteAt(cx, cz int, def *content.FeatureDef) bool {
 		inst.FootprintZ = 1
 	}
 	if existing == nil {
-		// World position of the cell: X and Z are the cell origin, Y is the
-		// terrain height there [03 §2.1]. These were all three assigned a
-		// HEIGHT, which put every burning instance on the diagonal at
-		// height-scale coordinates. A CONVERTED record keeps the position the
-		// stamp gave it — ignition does not move a feature.
-		inst.X = world.CellToWorld(int32(cx))
-		inst.Z = world.CellToWorld(int32(cz))
+		// A record built for a cell the service held none for takes the
+		// stamp's null-position placement; a CONVERTED record keeps the
+		// position the stamp gave it — ignition does not move a feature.
+		inst.X = footprintCentreWorld(cx, inst.FootprintX)
+		inst.Z = footprintCentreWorld(cz, inst.FootprintZ)
 		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 	}
 	s.setInstance(idx, inst)
-	s.Terrain.Plot[idx].SetOccupied(true) // mark instance attached [05 ...]
-	// Record tile, play burn sound at tile's world position [05 ...] — presentation only.
+	s.attachEventRecord(inst)
+	s.Terrain.Plot[idx].SetOccupied(true) // the anchor's instance-attached bit
+	// Step 6, the `treeburn` sound at the tile corner, is presentation's.
 	return true
 }
 
@@ -622,7 +414,7 @@ func (s *Service) Ignite(cx, cz int, weaponFirestarter, weaponDamage int32) bool
 	// Ignition candidate when flammable && weapon firestarter nonzero [05 ...].
 	// There is no probability roll against firestarter — only nonzero test [05 ...][06 §13.1].
 	isCandidate := def.Flamable && weaponFirestarter != 0
-	if isCandidate && !s.hasEventRecordAt(idx) {
+	if isCandidate && !s.cellHasInstance(idx, def) {
 		// Step 5 of [05 R-FEAT-01 §8]: the entry ignites and RETURNS — the
 		// impact deals no blast damage — and it returns whether or not the
 		// ignition itself succeeded, so a flammable definition naming no

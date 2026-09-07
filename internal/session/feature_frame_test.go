@@ -53,11 +53,12 @@ func TestFeatureLifecycleBurnSinkAndReclaim(t *testing.T) {
 	if treeInstance == nil {
 		t.Fatal("tree placement failed")
 	}
-	treeInstance.IsBurning = true
-	treeInstance.BurnCountdown = 1
-	treeInstance.BurnDuration = 1
-	s.Features.SetBurnAnimationTicks(func(*content.FeatureDef) int32 { return 10 })
+	// A 3D definition never burns [05 R-FEAT-01 §9]; its first visit only
+	// retires it to the dormant list.
 	s.Features.TickLifecycle(1)
+	if treeInstance.IsBurning {
+		t.Fatal("a 3D feature reported burning")
+	}
 	unitDef := cat.Units["armcom"]
 	unitDef.Corpse = corpse.CanonicalKey
 	h, err := s.Units.Create(unitDef, 0, numeric.Fixed(8*16*65536), numeric.Fixed(2*65536), numeric.Fixed(8*16*65536))

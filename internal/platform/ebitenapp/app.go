@@ -8,9 +8,24 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/platform/gpurender"
 )
 
 const presentationTPS = 30
+
+// RendererMode selects which executor Draw presents through — the one sanctioned
+// presentation switch of docs/DESIGN_GPU_RENDERER.md §2.4 [I11]. Both executors
+// replay the same recorded frame; the simulation cannot tell which is active.
+type RendererMode int
+
+const (
+	// RendererClassic uploads the client's software-composed RGBA framebuffer, the
+	// default and the reference executor (C-G11).
+	RendererClassic RendererMode = iota
+	// RendererModern replays the recorded draw list through gpurender on the GPU
+	// (docs/DESIGN_GPU_RENDERER.md §2.3).
+	RendererModern
+)
 
 // app adapts a client.Client to Ebitengine's game loop. Update steps the
 // client's injected callback (clock/sub-ticks/publish, C9) after refreshing
@@ -22,6 +37,12 @@ const presentationTPS = 30
 type app struct {
 	c   *client.Client
 	img *ebiten.Image
+	// mode selects the executor Draw presents through. gpu is the modern
+	// executor, built lazily on the first modern Draw so its device textures and
+	// offscreen never exist in a classic run. Both live here, off the client
+	// (docs/DESIGN_GPU_RENDERER.md §2.4).
+	mode RendererMode
+	gpu  *gpurender.Renderer
 	// windowW/windowH are the size last pushed to the window system. The
 	// client owns the logical size and the adapter only follows it, so the
 	// load transition's Client.Resize moves the window on the next update
@@ -55,11 +76,81 @@ func (a *app) Draw(screen *ebiten.Image) {
 		return
 	}
 	width, height := a.c.Size()
+	if a.mode == RendererModern {
+		a.drawModern(screen, width, height)
+		return
+	}
 	if a.img == nil || a.img.Bounds().Dx() != width || a.img.Bounds().Dy() != height {
 		a.img = ebiten.NewImage(width, height)
 	}
 	a.img.WritePixels(a.c.Present())
 	screen.DrawImage(a.img, &ebiten.DrawImageOptions{})
+}
+
+// drawModern presents through the modern (GPU) executor: the client records the
+// frame, the renderer replays that list and expands it, and the expanded surface
+// is drawn to the screen. The client never composes bytes in this path — calling
+// c.Frame here would replay the list through the classic sink and double the work
+// (docs/DESIGN_GPU_RENDERER.md §2.4). The renderer is built lazily on first use
+// from the installed palette.
+func (a *app) drawModern(screen *ebiten.Image, width, height int) {
+	if a.gpu == nil {
+		a.gpu = gpurender.New(a.c.PaletteTables(), width, height)
+	}
+	list := a.c.RecordFrame()
+	// The model table the source reads is populated during RecordFrame, so the
+	// source is installed after recording and before Execute (models.go, C-G5).
+	a.gpu.SetModelSource(NewModelSource(a.c))
+	img := a.gpu.Execute(list, width, height)
+	if img == nil {
+		return
+	}
+	screen.DrawImage(img, &ebiten.DrawImageOptions{})
+}
+
+// modelSource adapts a *client.Client to gpurender.ModelSource, converting the
+// client's device-free ModelImageData to gpurender.ModelImage. It lives in the
+// wiring layer because only here may both the Ebitengine-free client and the
+// Ebitengine gpurender package be imported, which is what lets the client hand
+// finished model images to the GPU executor without an import cycle and without
+// the client depending on Ebitengine (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5)[I6].
+type modelSource struct{ c *client.Client }
+
+// NewModelSource returns the gpurender model source backed by c. It is exported
+// so the modern shot path (cmd/nanolathe) installs the identical source the
+// battle app does.
+func NewModelSource(c *client.Client) gpurender.ModelSource { return modelSource{c} }
+
+func (s modelSource) ModelBody(ref int) (gpurender.ModelImage, bool) {
+	d, ok := s.c.ModelBodyImage(ref)
+	if !ok {
+		return gpurender.ModelImage{}, false
+	}
+	return toModelImage(d), true
+}
+
+func (s modelSource) ModelShadow(ref int) (gpurender.ModelImage, bool) {
+	d, ok := s.c.ModelShadowImage(ref)
+	if !ok {
+		return gpurender.ModelImage{}, false
+	}
+	return toModelImage(d), true
+}
+
+// toModelImage copies the plain bridge fields across the package boundary. The
+// two structs are field-for-field the same; the copy exists only because the
+// client type and the gpurender type may not be the same type (the client owns no
+// Ebitengine dependency).
+func toModelImage(d client.ModelImageData) gpurender.ModelImage {
+	return gpurender.ModelImage{
+		Color:       d.Color,
+		Covered:     d.Covered,
+		W:           d.W,
+		H:           d.H,
+		DX:          d.DX,
+		DY:          d.DY,
+		Transparent: d.Transparent,
+	}
 }
 
 func (a *app) consumePresentation() bool {
@@ -130,8 +221,10 @@ func DesktopSize() (int, int) {
 }
 
 // Run starts the windowed main loop and blocks until the window closes. It
-// must be called from main after option parsing.
-func Run(c *client.Client) error {
+// must be called from main after option parsing. mode selects the start-up
+// executor (docs/DESIGN_GPU_RENDERER.md §2.4); an unrecognised value presents
+// through the classic executor.
+func Run(c *client.Client, mode RendererMode) error {
 	if c == nil {
 		return fmt.Errorf("nanolathe: run window: logical path %s, providers searched [], expected client with installed retail software cursor", client.CursorGAFPath)
 	}
@@ -168,5 +261,5 @@ func Run(c *client.Client) error {
 	// clearing the last presented frame.
 	ebiten.SetScreenClearedEveryFrame(false)
 	ebiten.SetTPS(presentationTPS)
-	return ebiten.RunGame(&app{c: c, windowW: width, windowH: height})
+	return ebiten.RunGame(&app{c: c, windowW: width, windowH: height, mode: mode})
 }

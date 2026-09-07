@@ -475,7 +475,6 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Status:    uint32(inst.Status),
 				IsBurning: inst.IsBurning,
 				IsSinking: inst.IsSinking,
-				BurnTicks: inst.BurnTicks,
 				FootX:     int8(inst.FootprintX),
 				FootZ:     int8(inst.FootprintZ),
 

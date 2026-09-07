@@ -466,11 +466,18 @@ type PlayerSlot struct {
 	EnergyWasted        float64
 	MetalWasted         float64
 
-	// Wire type double, runtime f32 narrowed [08 "Player records"]:
+	// Wire type double, runtime f32 narrowed. These are the two storage-bonus
+	// OPERANDS the bonus setter writes (max(200, v), energy then metal), not
+	// the derived capacities: capacity is zeroed and rebuilt from the unit sum
+	// plus this bonus at every settlement pass, so it is never persisted
+	// [08 "Player records"] [05 R-ECO-01 §4]. This used to carry Capacity,
+	// which left a restored player with the flag set and a zero bonus — and
+	// a capacity of nothing but its buildings' storage.
 	PlayerEnergyStorage float32
 	PlayerMetalStorage  float32
 
-	// Wire type integer, runtime bit 0 of halfword [08 "Player records"]:
+	// Wire type integer, runtime bit 0 of halfword — the storage-bonus enable
+	// flag the setter sets [08 "Player records"]:
 	AddPlayerStorage uint16 // 0/1
 
 	// Wire type integer, runtime low signed 16 bits [08 "Player records"]:
@@ -512,8 +519,9 @@ type PlayerSlot struct {
 }
 
 // PlayerSlotFromEconomy projects the established scalar/statistics fields into
-// the typed bank record. It intentionally omits live buckets and derived
-// capacities, whose existing save writers own separate persistence rules
+// the typed bank record. It intentionally omits live buckets and the derived
+// capacities — the account carries the bonus operands, and capacity is rebuilt
+// at the slot's first settlement [05 R-ECO-01 §4]
 // [05 "Saving economy, construction, and features"].
 func PlayerSlotFromEconomy(index int, p economy.Player) PlayerSlot {
 	return PlayerSlot{
@@ -522,7 +530,7 @@ func PlayerSlotFromEconomy(index int, p economy.Player) PlayerSlot {
 		TotalEnergyProduced: p.TotalProduced[economy.Energy], TotalMetalProduced: p.TotalProduced[economy.Metal],
 		TotalEnergyConsumed: p.TotalConsumed[economy.Energy], TotalMetalConsumed: p.TotalConsumed[economy.Metal],
 		EnergyWasted: p.Waste[economy.Energy], MetalWasted: p.Waste[economy.Metal],
-		PlayerEnergyStorage: p.Capacity[economy.Energy], PlayerMetalStorage: p.Capacity[economy.Metal],
+		PlayerEnergyStorage: p.StorageBonus[economy.Energy], PlayerMetalStorage: p.StorageBonus[economy.Metal],
 		AddPlayerStorage: boolWord(p.StorageBonusEnabled),
 		Kills:            p.Kills, Losses: p.Losses,
 		UpdateTime: int32(p.UpdateTime), WinLoseTime: int32(p.WinLoseTime), DisplayTimer: int32(p.DisplayTimer),
@@ -565,7 +573,12 @@ func (p PlayerSlot) ApplyToEconomy(dst *economy.Player) {
 	dst.TotalProduced[economy.Energy], dst.TotalProduced[economy.Metal] = p.TotalEnergyProduced, p.TotalMetalProduced
 	dst.TotalConsumed[economy.Energy], dst.TotalConsumed[economy.Metal] = p.TotalEnergyConsumed, p.TotalMetalConsumed
 	dst.Waste[economy.Energy], dst.Waste[economy.Metal] = p.EnergyWasted, p.MetalWasted
-	dst.Capacity[economy.Energy], dst.Capacity[economy.Metal] = p.PlayerEnergyStorage, p.PlayerMetalStorage
+	// The two storage keys are the bonus operands, restored into the operand
+	// fields; capacity is left for the first settlement pass to rebuild, as
+	// retail's world-rebuild reset zeroes it before the reader runs and the
+	// reader never writes it [08 "Player records"] [05 R-ECO-01 §4]
+	// [08 R-ENTRY-01 §3 step 24].
+	dst.StorageBonus[economy.Energy], dst.StorageBonus[economy.Metal] = p.PlayerEnergyStorage, p.PlayerMetalStorage
 	dst.StorageBonusEnabled = p.AddPlayerStorage&1 != 0
 	dst.Kills, dst.Losses = p.Kills, p.Losses
 	dst.UpdateTime, dst.WinLoseTime, dst.DisplayTimer = uint32(p.UpdateTime), uint32(p.WinLoseTime), uint32(p.DisplayTimer)
