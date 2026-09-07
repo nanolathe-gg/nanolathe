@@ -84,43 +84,17 @@ func TestEmitSFXMissingVisibilityFailsClosed(t *testing.T) {
 }
 
 func TestOpcodeDispatch(t *testing.T) {
-	// C11 exactly 57 dispatched values [04 §4.3].
-	if len(dispatchKeys) != 57 {
-		t.Fatalf("dispatchKeys len %d want 57 [04 §4.3] C11", len(dispatchKeys))
-	}
-	// Sorted check (binary search requires sorted) [04 §4.3] C11.
-	for i := 1; i < len(dispatchKeys); i++ {
-		if dispatchKeys[i] <= dispatchKeys[i-1] {
-			t.Fatalf("dispatchKeys not strictly sorted at %d: %#x <= %#x", i, dispatchKeys[i], dispatchKeys[i-1])
-		}
-	}
-	// Verify each expected key dispatches via binary search [04 §4.3] C11.
-	for _, k := range dispatchKeys {
-		pos := sort.Search(len(dispatchKeys), func(i int) bool { return dispatchKeys[i] >= k })
-		if pos >= len(dispatchKeys) || dispatchKeys[pos] != k {
-			t.Fatalf("expected key %#x not found via binary search", k)
-		}
-	}
 	// Unknown keys must take kill path [04 §4.3] C11: clear thread status, decrement active count, yield.
-	unknowns := []uint32{0x10099000, 0x100aa000, 0x100ff000, 0x10000000, 0x10100000}
+	unknowns := []uint32{0x10099000, 0x100aa000, 0x100ff000, 0x10000000, 0x10100000, 0x00005000, 0xffffffff}
 	for _, uk := range unknowns {
-		masked := uk & dispatchMask
-		pos := sort.Search(len(dispatchKeys), func(i int) bool { return dispatchKeys[i] >= masked })
-		found := pos < len(dispatchKeys) && dispatchKeys[pos] == masked
-		if found {
-			t.Fatalf("unknown key %#x masked %#x unexpectedly dispatched", uk, masked)
-		}
-		// Verify VM kill path for one unknown.
 		prog := synthProg([]uint32{uk}, []string{"base"}, 0, []int{0})
 		vm := newTestVM(prog)
-		// Manually start a thread at PC 0 (bypass isValidEntry which would reject unknown entry;
-		// for dispatch test we set thread directly).
-		vm.Threads[0].Status = ThreadRunning
-		vm.Threads[0].PC = 0
-		vm.Threads[0].SP = 0
+		if !vm.Start(0, nil) || vm.ActiveThreadCount() != 1 {
+			t.Fatalf("unknown-key fixture failed to start: %#x", uk)
+		}
 		vm.Drain(1)
-		if vm.Threads[0].Status != ThreadIdle {
-			t.Fatalf("unknown key %#x did not take kill path: status %d want idle", uk, vm.Threads[0].Status)
+		if vm.Threads[0].Status != ThreadIdle || vm.ActiveThreadCount() != 0 {
+			t.Fatalf("unknown key %#x did not take kill path: status %d, active count %d", uk, vm.Threads[0].Status, vm.ActiveThreadCount())
 		}
 	}
 	// Spot-check that dispatched keys do NOT take kill path when properly formed.
@@ -128,16 +102,19 @@ func TestOpcodeDispatch(t *testing.T) {
 	// kill path would clear the thread before the trailing return ever ran.
 	// (The runThread drain has no iteration cap — retail wedges on tight loops
 	// and so do we — so a jump-loop program must not be used here.)
-	prog2 := synthProg([]uint32{0x10005000, 0, 0x10065000}, []string{"base"}, 0, []int{0}) // show piece 0 + return
-	vm2 := newTestVM(prog2)
-	vm2.Threads[0].Status = ThreadRunning
-	vm2.Threads[0].PC = 0
-	vm2.Drain(1)
-	if vm2.Threads[0].Status == ThreadRunning {
-		t.Fatalf("dispatched program did not terminate")
-	}
-	if len(vm2.pieceFlags) == 0 || vm2.pieceFlags[0]&0x01 == 0 {
-		t.Fatalf("dispatched show opcode did not set the draw bit — kill path taken?")
+	for _, word := range []uint32{0x10005000, 0x10005fff, 0xf0f05abc} {
+		prog := synthProg([]uint32{word, 0, 0x10065000}, []string{"base"}, 0, []int{0})
+		vm := newTestVM(prog)
+		if !vm.Start(0, nil) {
+			t.Fatalf("show-key fixture failed to start: %#x", word)
+		}
+		vm.Drain(1)
+		if vm.Threads[0].Status != ThreadIdle || vm.ActiveThreadCount() != 0 {
+			t.Fatalf("show/return program did not terminate: %#x", word)
+		}
+		if len(vm.pieceFlags) == 0 || vm.pieceFlags[0]&0x01 == 0 {
+			t.Fatalf("masked show word %#x did not set the draw bit", word)
+		}
 	}
 }
 

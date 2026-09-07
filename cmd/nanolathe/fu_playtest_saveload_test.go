@@ -237,7 +237,7 @@ func TestFUPlaytestSaveLoadSequence(t *testing.T) {
 	}
 	nano := fuNanoframeOf(sess, local, lab)
 	t.Logf("%s nanoframe %d at tick %d, remaining %.3f", lab, nano.Handle, sess.Clock.GlobalTick, nano.Remaining)
-	hashA, _ := sess.ParityAuthoritativeHash()
+	hashA, _ := sess.PartialStateFingerprint()
 	pathA, err := fuTrySave(f, "construction")
 	if err != nil {
 		t.Fatalf("save during construction refused: %v", err)
@@ -256,7 +256,7 @@ func TestFUPlaytestSaveLoadSequence(t *testing.T) {
 	}
 	sess = b2.sess
 	noteA.RestoredAt = sess.Clock.GlobalTick
-	noteA.RestoreHash, _ = sess.ParityAuthoritativeHash()
+	noteA.RestoreHash, _ = sess.PartialStateFingerprint()
 	saves = append(saves, noteA)
 	if noteA.RestoredAt != noteA.Tick {
 		t.Errorf("restored battle resumes at tick %d, saved at %d", noteA.RestoredAt, noteA.Tick)
@@ -305,7 +305,7 @@ func TestFUPlaytestSaveLoadSequence(t *testing.T) {
 	t.Logf("%s complete at tick %d; commander at %d,%d", product, sess.Clock.GlobalTick, int32(commander.X>>16), int32(commander.Z>>16))
 
 	// Save again on the restored battle.
-	hashB, _ := sess.ParityAuthoritativeHash()
+	hashB, _ := sess.PartialStateFingerprint()
 	noteB := fuSaveNote{Label: "factory (restored battle)", Tick: sess.Clock.GlobalTick, Census: fuTakeCensus(sess), SavedHash: hashB}
 	pathB, err := fuTrySave(f, "factory")
 	noteB.Path = pathB
@@ -328,7 +328,7 @@ func TestFUPlaytestSaveLoadSequence(t *testing.T) {
 	if !reached {
 		t.Logf("no combat within 30000 viewer ticks; saving the battle as it stands")
 	}
-	hashC, _ := sess.ParityAuthoritativeHash()
+	hashC, _ := sess.PartialStateFingerprint()
 	pathC, err := fuTrySave(f, "combat")
 	if err != nil {
 		t.Fatalf("save during combat refused: %v", err)
@@ -345,7 +345,7 @@ func TestFUPlaytestSaveLoadSequence(t *testing.T) {
 	}
 	sess = b4.sess
 	noteC.RestoredAt = sess.Clock.GlobalTick
-	noteC.RestoreHash, _ = sess.ParityAuthoritativeHash()
+	noteC.RestoreHash, _ = sess.PartialStateFingerprint()
 	saves = append(saves, noteC)
 	if noteC.RestoredAt != noteC.Tick {
 		t.Errorf("combat restore resumes at tick %d, saved at %d", noteC.RestoredAt, noteC.Tick)

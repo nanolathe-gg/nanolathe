@@ -2917,17 +2917,15 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	// live unit that has a mover, gated on the owner's control byte and never on
 	// an order record [04 R-MOV-03 §1] step 9. The control-byte gate belongs to
 	// the session's phase-2 sweep, which owns the player and unit iteration;
-	// this function is only the per-unit body it calls. The sweep now applies
-	// that gate: the player gate admits control bytes 1, 2 and 3, and the inner
-	// block that holds the mover tick admits 1 and 2 only.
+	// this function is only the per-unit body it calls. The player gate admits
+	// control bytes 1, 2 and 3; the inner mover block admits only 1 and 2.
 	// A unit with no order, or one whose
 	// head is neither a movement record nor carries a goal, therefore still
 	// reaches the mover: it is exactly the follower's no-waypoint case, which
 	// brakes without turning and never touches the heading [04 R-MOV-01 §3], its
 	// commit takes the stationary early return or the same-cell fast path
 	// [04 R-COLL-01 §1], and the post-move correction still owns its Y
-	// [04 R-MOV-01 §5]. Before this, an orderless mover returned here and kept
-	// whatever Y and occupancy it was spawned or released with.
+	// [04 R-MOV-01 §5].
 	orderless := false
 	q := orders.QueueForUnit(u)
 	if q == nil || (q.LenPrimary() == 0 && q.Head() == nil) {
@@ -2977,9 +2975,10 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		route = s.Routes[handle]
 		serviceArrived = s.serviceGroundFollower(u, head, route, tick)
 	}
-	isAircraft := u.Def != nil && u.Def.CanFly
-	hadRoute := route != nil && route.Active && ((isAircraft && route.Count > 0) || (!isAircraft && route.Count > 1))
-	if hadRoute && (u.Def == nil || !u.Def.CanFly) && route.NeedsStaticReplan(s.staticObstacleRevision()) {
+	// Aircraft returned through the flight commit above; all remaining route
+	// handling is the ground follower [04 R-AIR-01 §1][04 R-MOV-01 §3].
+	hadRoute := route != nil && route.Active && route.Count > 1
+	if hadRoute && route.NeedsStaticReplan(s.staticObstacleRevision()) {
 		// A static mutation invalidates the published route before its next
 		// waypoint is consumed. Replanning retains the order identity; with no
 		// bound order the route remains inactive and the caller can resubmit it.
@@ -2992,9 +2991,7 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 		return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false}
 	}
 	_ = s.resolveProfile(u) // retained for profile revision side-effects if any; outer profile not needed for pitch path [M2]
-	var directGoal bool
 	var brakingOnly bool
-	var directX, directZ numeric.Fixed
 	if orderless {
 		// No payload, so no arrival test and no goal distance to consult: the
 		// no-waypoint follower zeroes its turn residual and asks the speed
@@ -3014,57 +3011,17 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 			// threshold; completion is via the arrival handle above [R-P0-01].
 			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
 		}
-		// A ground follower with no waypoint brakes without turning. Straight
-		// goal motion is created only by the route-acceptance synthetic route; budget
-		// delay, empty publication, and route exhaustion do not synthesize it
-		// here [04 R-PATH-01 §8][04 R-MOV-01 §3]. Aircraft consume their goal
-		// point directly and retain the existing direct branch.
-		if u.Def == nil || !u.Def.CanFly {
-			brakingOnly = true
-		} else if head != nil && head.MoveState != orders.MoveArrived {
-			if gx, gz, okGoal := s.moveGoalFor(handle, head); okGoal {
-				directGoal = true
-				directX = gx
-				directZ = gz
-			} else {
-				s.emitMovementCallbacks(u, 0)
-				return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
-			}
-		} else {
-			s.emitMovementCallbacks(u, 0)
-			return StepResult{Handle: handle, DistToGoal: d, HasRoute: false, EmptyRoute: true, Moved: false, Arrived: false}
-		}
+		// A ground follower with no waypoint brakes without turning. Direct
+		// goal motion comes only from the route-acceptance synthetic route
+		// [04 R-PATH-01 §8][04 R-MOV-01 §3].
+		brakingOnly = true
 	}
-	// Current waypoint or direct goal
-	var wp Point
-	var wpWorldX, wpWorldZ numeric.Fixed
+	// A braking mover has no waypoint delta [04 R-MOV-01 §3].
 	var dx, dz int64
-	if brakingOnly {
-		// A braking mover has no waypoint delta: dx and dz stay zero and the
-		// world-space waypoint is never read on this arm [04 R-MOV-01 §3].
-		wp = Point{X: int32(int64(u.X) >> 16), Z: int32(int64(u.Z) >> 16)}
-	} else if directGoal {
-		wpWorldX = directX
-		wpWorldZ = directZ
-		dx = int64(wpWorldX) - int64(u.X)
-		dz = int64(wpWorldZ) - int64(u.Z)
-		// For direct goal, keep wp as goal cell for pitch delta fallback (use goal cell)
-		wp = Point{X: world.WorldToCell(directX), Z: world.WorldToCell(directZ)}
-	} else {
-		if isAircraft {
-			if route.Count > 1 {
-				wp = route.Points[1]
-			} else {
-				wp = route.Points[0]
-			}
-			wpWorldX = numeric.Fixed(int64(wp.X) << 16)
-			wpWorldZ = numeric.Fixed(int64(wp.Z) << 16)
-		} else {
-			t1x, t1z, _, _ := routeTargets(route, int32(u.X.Raw()), int32(u.Z.Raw()))
-			wpWorldX, wpWorldZ = numeric.Fixed(t1x), numeric.Fixed(t1z)
-		}
-		dx = int64(wpWorldX) - int64(u.X)
-		dz = int64(wpWorldZ) - int64(u.Z)
+	if !brakingOnly {
+		t1x, t1z, _, _ := routeTargets(route, int32(u.X.Raw()), int32(u.Z.Raw()))
+		dx = int64(numeric.Fixed(t1x)) - int64(u.X)
+		dz = int64(numeric.Fixed(t1z)) - int64(u.Z)
 	}
 	if !brakingOnly && dx == 0 && dz == 0 {
 		d := s.distToGoal(u)
@@ -3083,187 +3040,154 @@ func (s *System) StepUnit(handle pool.Handle, tick uint32) StepResult {
 	oldZRaw := int64(u.Z)
 	var moved bool
 	var blocked bool
-	// Ground vs air branch [04 §10.1] C26. The air half of this branch is
-	// unreachable: an aircraft returns at the mover tick's flight branch, above
-	// [04 R-AIR-01 §1]. The guard remains so a future caller that arrives here
-	// with an aircraft cannot fall into the ground route follower — the exact
-	// path that left a construction aircraft's facing to the ground code and
-	// made it fly sideways.
-	if u.Def != nil && u.Def.CanFly {
-		return s.stepAir(u, tick)
-	} else {
-		// `steer` and `coll` were resolved at the mover gate above; a unit
-		// without both never reaches here.
-		steer.X = int32(u.X.Raw())
-		steer.Z = int32(u.Z.Raw())
-		steer.HeightWord = int16(u.Y.Raw() >> 16)
-		if s.Terrain != nil {
-			steer.SeaLevel = s.Terrain.SeaLevel
-		}
-		if u.Def != nil {
-			steer.MaxVelocity = int32(u.Def.MaxVelocity)
-			steer.TurnRate = int32(u.Def.TurnRate)
-			var f uint32
-			if u.Def.CanHover {
-				f |= 0x1000
-			}
-			if u.Def.Floater {
-				f |= 0x80000
-			}
-			steer.DefFlags = f
-			steer.Acceleration = int32(u.Def.Acceleration)
-			steer.BrakeRate = int32(u.Def.BrakeRate)
-		}
-		steer.UpdateHeading(desired) // [04 §8.1] C20
-		// Speed capping consumes the authoritative unit pitch word [04 R-MOV-01 §4].
-		cap := steer.SpeedCapForPitch(int16(u.Move.Pitch))
-		// The follower selects acceleration only when both strict cornering and
-		// stopping-distance gates pass [04 R-MOV-01 §4].
-		hasWaypoint := !brakingOnly
-		accelerate := false
-		if hasWaypoint {
-			t1x, t1z, t2x, t2z := routeTargets(route, int32(u.X.Raw()), int32(u.Z.Raw()))
-			accelerate = followerAccelerates(steer, desired, int32(u.X.Raw()), int32(u.Z.Raw()), t1x, t1z, t2x, t2z)
-		}
-		steer.UpdateFollowerSpeed(cap, hasWaypoint, accelerate)
-		steer.Integrate() // [04 §8.1] C20: heading commit + fixed trig position step
-		oldX := int64(u.X)
-		oldZ := int64(u.Z)
-		newX := int64(steer.X)
-		newZ := int64(steer.Z)
-		coll.X = int32(oldX)
-		coll.Z = int32(oldZ)
-		coll.Y = int32(u.Y.Raw())
-		coll.VX = int32(newX - oldX)
-		coll.VZ = int32(newZ - oldZ)
-		coll.Speed = steer.Speed
-		coll.Heading = steer.Heading
-		if u.Def != nil {
-			coll.MaxVelocity = int32(u.Def.MaxVelocity)
-		}
-		moverProfile := s.ProfileFor(handle) // [04 §6.1][04 §8.2] per-unit profile
-		proposedAnchor := coll.ProposedAnchor(coll.Mode)
-		fx, fz := coll.FootPrintX, coll.FootPrintZ
-		inBounds := commitRectInBounds(s.Terrain, proposedAnchor, fx, fz)
-		blockerID := -1
-		perCell := func(c Cell) bool {
-			if !inBounds {
-				return false
-			}
-			if s.Terrain != nil && !moverProfile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
-				return false
-			}
-			if s.Grid != nil {
-				if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
-					blockerID = occ
-					return false
-				}
-			}
-			return true
-		}
-		// The stationary early return of [04 R-COLL-01 §1]: when the proposal
-		// equals the current position on all three axes AND the proposed mode
-		// equals the committed mode mirror, the commit step returns with nothing
-		// written — no transform-dirty bit, no validator, no stamp, and the
-		// blocked flag untouched. A unit at rest never revalidates. The vertical
-		// axis is always equal here because the ground speed update writes
-		// vertical velocity as a literal zero [04 R-MOV-01 §4]. Without this,
-		// every parked mover took the same-cell fast path, which DOES set dirty,
-		// and so ran the post-move correction every tick — the very thing
-		// `canhover` alone is supposed to force [04 R-MOV-01 §5].
-		stationary := coll.VX == 0 && coll.VZ == 0 && coll.Mode&0x3 == coll.CachedMode&0x3
-		// The rectangle the success branch's step (1) releases is the one the
-		// unit holds NOW, so it has to be read before CommitOne overwrites the
-		// cached pair: "every writer stamps at the unit's cached pair"
-		// [04 R-COLL-01 §4].
-		clearedAnchor := coll.CachedAnchor
-		fastPath, isBlocked := true, false
-		if !stationary {
-			// On any non-stationary proposal the last-proposal tick is written
-			// FIRST, before the cell test and before the validator, so it records
-			// the last tick on which the unit TRIED to change position or mode —
-			// blocked ticks included [04 R-COLL-01 §1]. It is the age term the
-			// hover bob of [04 R-MOV-01 §5] reads; with no writer at all every
-			// hovercraft's bob faded to zero once the tick passed 60.
-			coll.LastProposalTick = tick
-			fastPath, isBlocked = coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
-		}
-		blocked = isBlocked
-		// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
-		// the unit's occupancy-commit tick so the request revision pass of
-		// [04 §6.1 R-DOC04-B] sees it. The same-cell fast path commits the
-		// transform without restamping occupancy [04 §8.2] C23, so it writes
-		// no commit tick.
-		// Both halves of the write-site question this site used to carry are
-		// closed by [04 R-PATH-01 §14]. (a) There is no owner/building-mask
-		// array and so no mask writer: the word the search tests is the
-		// visibility publisher's mapping grid, whose complete writer set is the
-		// map-load fill, the bulk rebuild and the phase-5 LOS stamp — the
-		// occupancy commit, the footprint stamp and clear, unit creation and
-		// building completion never reference it. searchFunc binds a view of
-		// that grid. (b) Unit creation DOES write the commit tick: the creator
-		// stamps the new unit's footprint after the initializer returns, and
-		// the footprint stamp writes the tick as its first action; EnsureUnit
-		// does the same.
-		if !isBlocked && !fastPath {
-			// Step (1) of the success branch is a footprint clear, so it owes
-			// the class-layer maintenance of [04 R-COLL-01 §4] on the rectangle
-			// it just released — the same maintenance noteFootprintClear runs
-			// for the teardown and carried clears. It must run BEFORE the
-			// commit-tick refresh below: the maintenance gate compares this
-			// layer's watermark against the tick the unit had while it stood on
-			// the released rectangle, and a refreshed tick turns it into a
-			// no-op that leaves the vacated cells walled forever.
-			//
-			// The crowded rally goal this used to be left unwired for does not
-			// settle "through the route-acceptance rule" — that claim, which
-			// stood here, was wrong. It settles through the composition in
-			// [04 R-ORDER-02 §1]: the follower's own release re-walls the
-			// parked movers (noteRequestRelease), the ray then finds no
-			// strictly-nearer passable cell, and request init publishes empty
-			// and raises 0x40 on every re-arm. Both halves are needed; this
-			// maintenance alone leaves the parked cluster passable and the
-			// follower circles it, stopped only by the commit validator.
-			s.noteFootprintClear(handle, clearedAnchor, fx, fz, !coll.Building)
-			s.noteOccupancyCommit(handle, tick)
-		}
-		coll.BlockerID = blockerID
-		u.X = numeric.Fixed(int64(coll.X))
-		u.Z = numeric.Fixed(int64(coll.Z))
-		groundDirty := u.Flags&unitTransformDirty != 0 || steer.Dirty || coll.Dirty || (u.Def != nil && u.Def.CanHover)
-		steer.X = coll.X
-		steer.Z = coll.Z
-		steer.Heading = coll.Heading
-		steer.Speed = coll.Speed
-		u.Move.Heading = coll.Heading
-		u.Move.Speed = numeric.Fixed(coll.Speed)
-		// The mover's VELOCITY TRIPLE, published beside the scalar speed it is
-		// not [04 R-MOV-01 §1]. It is read after the commit, so it carries the
-		// blocked branch's recomputed horizontal pair when the validator
-		// rejected the proposal [04 R-COLL-01 §1]. The Y component is a
-		// literal zero on the ground path: the speed update writes `vy = 0`
-		// and no gravity term exists there [04 R-MOV-01 §4].
-		u.Move.VelX = numeric.Fixed(int64(coll.VX))
-		u.Move.VelY = numeric.Fixed(int64(coll.VY))
-		u.Move.VelZ = numeric.Fixed(int64(coll.VZ))
-		// Emit StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18 via immediate barrier [GAP T15] C18.
-		// Must run after speed commit so tier reflects current capped speed [04 §5.2][GAP T15] C18.
-		// The scalar speed is passed as committed. A blocked mover retains a
-		// capped scalar speed for its next proposal [04 R-COLL-01 §5]; it reaches
-		// tier 0 through the classifier's blocked term, which now reads the
-		// persisted flag directly, so this site no longer substitutes a zero speed
-		// to force the same category.
-		s.emitMovementCallbacks(u, coll.Speed)
-		// This follows the complete mover tick, including its callbacks, and is
-		// the only ordinary ground pose writer [04 R-MOV-01 §5a].
-		applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode, newHoverBob(u, coll.Speed, s.tick, coll.LastProposalTick))
-		if groundDirty {
-			u.Flags &^= unitTransformDirty
-			steer.Dirty = false
-			coll.Dirty = false
-		}
-		moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
+	// `steer` and `coll` were resolved at the mover gate above; a unit
+	// without both never reaches here.
+	steer.X = int32(u.X.Raw())
+	steer.Z = int32(u.Z.Raw())
+	steer.HeightWord = int16(u.Y.Raw() >> 16)
+	if s.Terrain != nil {
+		steer.SeaLevel = s.Terrain.SeaLevel
 	}
+	if u.Def != nil {
+		steer.MaxVelocity = int32(u.Def.MaxVelocity)
+		steer.TurnRate = int32(u.Def.TurnRate)
+		var f uint32
+		if u.Def.CanHover {
+			f |= 0x1000
+		}
+		if u.Def.Floater {
+			f |= 0x80000
+		}
+		steer.DefFlags = f
+		steer.Acceleration = int32(u.Def.Acceleration)
+		steer.BrakeRate = int32(u.Def.BrakeRate)
+	}
+	steer.UpdateHeading(desired) // [04 §8.1] C20
+	// Speed capping consumes the authoritative unit pitch word [04 R-MOV-01 §4].
+	cap := steer.SpeedCapForPitch(int16(u.Move.Pitch))
+	// The follower selects acceleration only when both strict cornering and
+	// stopping-distance gates pass [04 R-MOV-01 §4].
+	hasWaypoint := !brakingOnly
+	accelerate := false
+	if hasWaypoint {
+		t1x, t1z, t2x, t2z := routeTargets(route, int32(u.X.Raw()), int32(u.Z.Raw()))
+		accelerate = followerAccelerates(steer, desired, int32(u.X.Raw()), int32(u.Z.Raw()), t1x, t1z, t2x, t2z)
+	}
+	steer.UpdateFollowerSpeed(cap, hasWaypoint, accelerate)
+	steer.Integrate() // [04 §8.1] C20: heading commit + fixed trig position step
+	oldX := int64(u.X)
+	oldZ := int64(u.Z)
+	newX := int64(steer.X)
+	newZ := int64(steer.Z)
+	coll.X = int32(oldX)
+	coll.Z = int32(oldZ)
+	coll.Y = int32(u.Y.Raw())
+	coll.VX = int32(newX - oldX)
+	coll.VZ = int32(newZ - oldZ)
+	coll.Speed = steer.Speed
+	coll.Heading = steer.Heading
+	if u.Def != nil {
+		coll.MaxVelocity = int32(u.Def.MaxVelocity)
+	}
+	moverProfile := s.ProfileFor(handle) // [04 §6.1][04 §8.2] per-unit profile
+	proposedAnchor := coll.ProposedAnchor(coll.Mode)
+	fx, fz := coll.FootPrintX, coll.FootPrintZ
+	inBounds := commitRectInBounds(s.Terrain, proposedAnchor, fx, fz)
+	blockerID := -1
+	perCell := func(c Cell) bool {
+		if !inBounds {
+			return false
+		}
+		if s.Terrain != nil && !moverProfile.IsPassableCommitCell(s.Terrain, c.X, c.Z) {
+			return false
+		}
+		if s.Grid != nil {
+			if occ, ok := s.Grid.OccupantAt(c); ok && occ != coll.ID {
+				blockerID = occ
+				return false
+			}
+		}
+		return true
+	}
+	// The stationary early return of [04 R-COLL-01 §1]: when the proposal
+	// equals the current position on all three axes AND the proposed mode
+	// equals the committed mode mirror, the commit step returns with nothing
+	// written — no transform-dirty bit, no validator, no stamp, and the
+	// blocked flag untouched. A unit at rest never revalidates. The vertical
+	// axis is always equal here because the ground speed update writes
+	// vertical velocity as a literal zero [04 R-MOV-01 §4].
+	stationary := coll.VX == 0 && coll.VZ == 0 && coll.Mode&0x3 == coll.CachedMode&0x3
+	// The rectangle the success branch's step (1) releases is the one the
+	// unit holds NOW, so it has to be read before CommitOne overwrites the
+	// cached pair: "every writer stamps at the unit's cached pair"
+	// [04 R-COLL-01 §4].
+	clearedAnchor := coll.CachedAnchor
+	fastPath, isBlocked := true, false
+	if !stationary {
+		// On any non-stationary proposal the last-proposal tick is written
+		// FIRST, before the cell test and before the validator, so it records
+		// the last tick on which the unit TRIED to change position or mode —
+		// blocked ticks included [04 R-COLL-01 §1]. It is the age term the
+		// hover bob of [04 R-MOV-01 §5] reads.
+		coll.LastProposalTick = tick
+		fastPath, isBlocked = coll.CommitOne(s.Grid, coll.Mode, perCell, nil) // [04 §8.2] C23 C24: sync clear-then-stamp before next slot
+	}
+	blocked = isBlocked
+	// Occupancy was committed (clear/commit/stamp, [04 §8.2] C22): record
+	// the unit's occupancy-commit tick so the request revision pass of
+	// [04 §6.1 R-DOC04-B] sees it. The same-cell fast path commits the
+	// transform without restamping occupancy [04 §8.2] C23, so it writes
+	// no commit tick.
+	// The path search reads the visibility mapping grid, whose writers are
+	// map loading, bulk rebuilding and phase-5 LOS stamping; occupancy does
+	// not write that grid [04 R-PATH-01 §14].
+	if !isBlocked && !fastPath {
+		// Step (1) of the success branch is a footprint clear, so it owes
+		// the class-layer maintenance of [04 R-COLL-01 §4] on the rectangle
+		// it just released — the same maintenance noteFootprintClear runs
+		// for the teardown and carried clears. It must run BEFORE the
+		// commit-tick refresh below: the maintenance gate compares this
+		// layer's watermark against the tick the unit had while it stood on
+		// the released rectangle, and a refreshed tick turns it into a
+		// no-op that leaves the vacated cells walled forever.
+		s.noteFootprintClear(handle, clearedAnchor, fx, fz, !coll.Building)
+		s.noteOccupancyCommit(handle, tick)
+	}
+	coll.BlockerID = blockerID
+	u.X = numeric.Fixed(int64(coll.X))
+	u.Z = numeric.Fixed(int64(coll.Z))
+	groundDirty := u.Flags&unitTransformDirty != 0 || steer.Dirty || coll.Dirty || (u.Def != nil && u.Def.CanHover)
+	steer.X = coll.X
+	steer.Z = coll.Z
+	steer.Heading = coll.Heading
+	steer.Speed = coll.Speed
+	u.Move.Heading = coll.Heading
+	u.Move.Speed = numeric.Fixed(coll.Speed)
+	// The mover's VELOCITY TRIPLE, published beside the scalar speed it is
+	// not [04 R-MOV-01 §1]. It is read after the commit, so it carries the
+	// blocked branch's recomputed horizontal pair when the validator
+	// rejected the proposal [04 R-COLL-01 §1]. The Y component is a
+	// literal zero on the ground path: the speed update writes `vy = 0`
+	// and no gravity term exists there [04 R-MOV-01 §4].
+	u.Move.VelX = numeric.Fixed(int64(coll.VX))
+	u.Move.VelY = numeric.Fixed(int64(coll.VY))
+	u.Move.VelZ = numeric.Fixed(int64(coll.VZ))
+	// Emit StartMoving/StopMoving/MoveRateN and setSFXoccupy per [04 §5.2][GAP T15] C17 C18 via immediate barrier [GAP T15] C18.
+	// Must run after speed commit so tier reflects current capped speed [04 §5.2][GAP T15] C18.
+	// The scalar speed is passed as committed. A blocked mover retains a
+	// capped scalar speed for its next proposal [04 R-COLL-01 §5]; it reaches
+	// tier 0 through the classifier's blocked term, which reads the
+	// persisted flag directly [04 §5.2].
+	s.emitMovementCallbacks(u, coll.Speed)
+	// This follows the complete mover tick, including its callbacks, and is
+	// the only ordinary ground pose writer [04 R-MOV-01 §5a].
+	applyGroundPostMove(s.Terrain, u, groundDirty, coll.Mode, newHoverBob(u, coll.Speed, s.tick, coll.LastProposalTick))
+	if groundDirty {
+		u.Flags &^= unitTransformDirty
+		steer.Dirty = false
+		coll.Dirty = false
+	}
+	moved = int64(u.X) != oldXRaw || int64(u.Z) != oldZRaw
 	// Arrival via goal tolerance, not merely route active [task]
 	d2 := s.distToGoal(u)
 	// The arrival ask is the per-tick service's, made before steering

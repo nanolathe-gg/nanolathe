@@ -44,7 +44,6 @@ type MeteorState struct {
 	OriginZ       int32
 	TargetX       int32
 	TargetZ       int32
-	Density       float64
 	Radius        int32
 	DurationTicks int32
 	IntervalTicks int32

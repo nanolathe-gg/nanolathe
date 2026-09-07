@@ -427,9 +427,26 @@ written directly to live stock **outside** the ledger. Saves persist all three
 deadlines verbatim as absolute ticks and never re-seed on load
 `[05 "Authoritative settlement order"]` `[05 "Saving economy, construction, and features"]`.
 
-**C6 — stable slot order.** Within a settled player, units are visited in slot
-order, so earlier units consume live stock before later ones are tested
-`[05 "Authoritative settlement order"]` [I1].
+**C6 — stable live-slice order.** Within a settled player, the ledger walks
+that player's fixed pool slice from its lowest slot to its highest, admitting
+the same raw live records as `IterSliced` without materializing a whole-world
+snapshot. Earlier units consume live stock before later ones are tested. The
+cursor reads each later slot live: a freed later slot is skipped, while a
+later immediate reuse can be reached; positions at or behind the cursor are
+not revisited. The runtime owner is checked at the visit point. This is a
+documented public-callback difference from the former pointer snapshot: a
+callback that frees and reuses a later slot reaches the replacement here and
+did not before. That mutation is not present in the assembled settlement
+callbacks: `CloakDue` reads request/status/deadline only; the cloak edge
+updates existing unit/order state and stages a presentation event, without a
+unit allocation, free, or transfer. The synthetic mutation test covers the
+public seam. The source defines each economy visit's alive gate and capacity
+addition `[05 R-ECO-01 §2]` `[05 R-ECO-01 §4]`, and the pass itself visits
+eligible owned units `[05 "Authoritative settlement order"]`; it does not
+separately state a callback mutation rule. The public iterator therefore
+states that rule explicitly, while the assembled settlement path avoids its
+only observable difference. These rules preserve the pool's stable fixed-slice
+and immediate-reuse semantics `[04 §1.1]` [I1].
 
 **C7 — the pass, in order.** Rebuild capacity; per-unit production fills; cloak
 upkeep; gather both resources and commit the per-pass counters; settle each

@@ -168,9 +168,9 @@ type SchedulerTraceState struct {
 	Requests      []RequestTrace
 }
 
-// TraceState returns a copy of the scheduler's diagnostic state. It is empty
-// unless EnableTrace has been called and it is read by diagnostics only; the
-// scheduler's behaviour does not depend on it.
+// TraceState returns a copy of the live scheduler fields exposed to diagnostics.
+// It is available whether or not optional history capture is enabled; observing
+// it does not advance the scheduler or retain a trace record.
 func (s *Scheduler) TraceState() SchedulerTraceState {
 	var out SchedulerTraceState
 	if s == nil {

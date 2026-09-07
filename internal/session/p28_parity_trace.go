@@ -371,16 +371,22 @@ func (s *Session) ParityMovement(tick uint32) []movement.MovementTrace {
 	return out
 }
 
-// ParityAuthoritativeHash hashes complete selected unit state plus the full
-// authoritative economy/player, movement, feature, callback, clock, and RNG
-// surfaces. It uses ordered slices and raw float bits, and does not mutate any
-// service while observing it [01 §4.4][05 "Player slot"][08 "Scheduler and random state in saves"].
-func (s *Session) ParityAuthoritativeHash() (string, error) {
+// PartialStateFingerprintVersion identifies the diagnostic serialization contract.
+// Bump it whenever the included fields or their encoding change.
+const PartialStateFingerprintVersion = "partial-v1"
+
+// PartialStateFingerprint hashes the explicitly bounded state surfaces listed in
+// docs/DESIGN_RUNTIME_DETERMINISM.md §4. It is not a complete simulation hash:
+// projectile, meteor, AI, visibility, trigger and other future-affecting state
+// remains outside this diagnostic. Ordered values and exact float bits are
+// observed without advancing simulation or consuming diagnostic trace history.
+func (s *Session) PartialStateFingerprint() (string, error) {
 	if s == nil {
-		return "", fmt.Errorf("nanolathe: parity hash: nil session")
+		return "", fmt.Errorf("nanolathe: partial fingerprint: nil session")
 	}
 	h := sha256.New()
 	w := func(format string, args ...interface{}) { _, _ = fmt.Fprintf(h, format, args...) }
+	w("schema:%s|", PartialStateFingerprintVersion)
 	w("clock-present:%t|", s.Clock != nil)
 	if s.Clock != nil {
 		w("clock:%d:%d:%d:%08x:%t|", s.Clock.GlobalTick, s.Clock.ScaledAnchor, s.Clock.Delta, math.Float32bits(s.Clock.Carry), s.Clock.Paused)
@@ -430,9 +436,13 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 		}
 	}
 	if s.Movement != nil {
+		for _, request := range s.Movement.PathRequestsSnapshot() {
+			w("provider-request:%d:%d:%d:%d:%d|", request.Unit, request.Player, request.Start.X, request.Start.Z, request.Activation)
+			writeGoal(w, path.DescribeGoal(request.Goal))
+		}
 		if s.Movement.Scheduler != nil {
 			st := s.Movement.Scheduler.TraceState()
-			w("scheduler:%d:%t:%d:%t|", st.Base, st.BaseSet, st.LastReplenish, st.HaveLast)
+			w("scheduler:%d:%t:%d:%t|", st.Base, st.BaseSet, st.CallCount, st.HaveLast)
 			for player := 0; player < 10; player++ {
 				w("scheduler-player:%d:%d:%d|", player, st.Scales[player], st.Pending[player])
 			}
@@ -442,12 +452,9 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 			}
 		}
 		if s.Units != nil {
-			for _, m := range s.Movement.ParitySnapshot(s.Units, s.parityTraceTick) {
+			for _, m := range s.Movement.ParitySnapshot(s.Units, 0) {
 				w("movement:%d:%d:%d:%d:%d:%d:%d|", m.Slot, m.X, m.Z, m.Heading, m.Speed, m.VelocityX, m.VelocityZ)
 				w("route-meta:%d:%t:%t:%d:%d|", m.Slot, m.CurrentActive, m.CurrentDirty, m.CurrentStatus, m.CurrentStaticRevision)
-				if m.PathFailure != nil {
-					w("path-failure:%d:%d:%d|", m.Slot, m.PathFailure.Status, m.PathFailure.Tick)
-				}
 				w("route-storage:%d:%d|", m.Slot, m.CurrentRouteCount)
 				for i, p := range m.CurrentRouteStorage {
 					w("route-stale:%d:%d:%d:%d|", m.Slot, i, p.X, p.Z)
@@ -456,25 +463,8 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 					c := m.Collision
 					w("collision-current:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%t:%d:%t|", m.Slot, c.ID, c.X, c.Z, c.Y, c.VX, c.VZ, c.Speed, c.Heading, c.MaxVelocity, c.FootPrintX, c.FootPrintZ, c.Mode, c.CachedMode, c.CachedAnchor.X, c.CachedAnchor.Z, c.OldAnchor.X, c.OldAnchor.Z, c.Blocked, c.BlockerID, c.Dirty)
 				}
-				if m.Pending != nil {
-					w("movement-pending:%d:%d:%d:%d:%d:%d:%d|", m.Slot, m.Pending.Unit, m.Pending.Player, m.Pending.Activation, m.Pending.Start.X, m.Pending.Start.Z, m.PendingGoal.Kind)
-					writeGoal(w, m.PendingGoal)
-				}
-				if m.Result != nil {
-					w("movement-result:%d:%d:%t:%d|", m.Slot, m.Result.Status, m.Result.Done, m.Result.Tick)
-					writeGoal(w, m.Result.Goal)
-					for _, p := range m.Result.Points {
-						w("movement-result-point:%d:%d:%d|", m.Slot, p.X, p.Z)
-					}
-				}
 				for _, p := range m.CurrentRoute {
 					w("route-current:%d:%d|", p.X, p.Z)
-				}
-				for _, p := range m.NextRoute {
-					w("route-next:%d:%d|", p.X, p.Z)
-				}
-				for _, c := range m.CollisionHistory {
-					w("collision:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%d:%t:%d:%t|", c.Tick, c.Slot, c.State.ID, c.State.X, c.State.Z, c.State.Y, c.State.VX, c.State.VZ, c.State.Speed, c.State.Heading, c.State.MaxVelocity, c.State.FootPrintX, c.State.FootPrintZ, c.State.Mode, c.State.CachedMode, c.State.CachedAnchor.X, c.State.CachedAnchor.Z, c.State.OldAnchor.X, c.State.OldAnchor.Z, c.State.Blocked, c.State.BlockerID, c.State.Dirty)
 				}
 			}
 		}
@@ -485,7 +475,7 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 		}
 	}
 	w("rng-init:%t:sim:%d:crt:%d:draws:%d:%d|", s.rngInitialized, s.rngSim.State, s.rngCrt.State, s.rngSim.Draws(), s.rngCrt.Draws())
-	return hex.EncodeToString(h.Sum(nil)[:8]), nil
+	return PartialStateFingerprintVersion + ":" + hex.EncodeToString(h.Sum(nil)[:8]), nil
 }
 
 func writeBucket(w func(string, ...interface{}), kind string, player, resource int, b economy.Bucket) {

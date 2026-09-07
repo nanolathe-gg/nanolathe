@@ -58,7 +58,7 @@ func TestRunSessionAdvancesOrdinaryStepLoop(t *testing.T) {
 		t.Fatalf("seeds = %d/%d", report.SimulationSeed, report.CRTSeed)
 	}
 	if report.StateHash == "" {
-		t.Fatal("authoritative state hash is empty")
+		t.Fatal("partial state fingerprint is empty")
 	}
 	if current := sess.Snapshot.Current(); current == nil || current.Tick != 7 {
 		t.Fatalf("committed frame = %+v, want tick 7", current)
@@ -185,8 +185,8 @@ func TestFreshBattleAdaptersHaveEqualAuthoritativeSetup(t *testing.T) {
 			if got.Identity != baseline.Identity || got.SimulationSeed != baseline.SimulationSeed || got.CRTSeed != baseline.CRTSeed || got.LocalOwner != baseline.LocalOwner || got.Watching != baseline.Watching {
 				t.Fatalf("setup identity differs: got=%+v baseline=%+v", got, baseline)
 			}
-			if got.TerrainWidth != baseline.TerrainWidth || got.TerrainHeight != baseline.TerrainHeight || got.InitialHash != baseline.InitialHash {
-				t.Fatalf("terrain/hash differs: got=(%d,%d,%s) baseline=(%d,%d,%s)", got.TerrainWidth, got.TerrainHeight, got.InitialHash, baseline.TerrainWidth, baseline.TerrainHeight, baseline.InitialHash)
+			if got.TerrainWidth != baseline.TerrainWidth || got.TerrainHeight != baseline.TerrainHeight || got.InitialFingerprint != baseline.InitialFingerprint {
+				t.Fatalf("terrain/hash differs: got=(%d,%d,%s) baseline=(%d,%d,%s)", got.TerrainWidth, got.TerrainHeight, got.InitialFingerprint, baseline.TerrainWidth, baseline.TerrainHeight, baseline.InitialFingerprint)
 			}
 			if !reflect.DeepEqual(got.Session.Skirmish, baseline.Session.Skirmish) || !reflect.DeepEqual(got.Session.Econ.Players, baseline.Session.Econ.Players) {
 				t.Fatal("equivalent adapters produced different setup/player records")
@@ -249,7 +249,7 @@ func TestFreshCampaignAdaptersHaveEqualAuthoritativeSetup(t *testing.T) {
 				baseline = got
 				return
 			}
-			if got.Identity != baseline.Identity || got.SimulationSeed != baseline.SimulationSeed || got.CRTSeed != baseline.CRTSeed || got.LocalOwner != baseline.LocalOwner || got.TerrainWidth != baseline.TerrainWidth || got.TerrainHeight != baseline.TerrainHeight || got.InitialHash != baseline.InitialHash {
+			if got.Identity != baseline.Identity || got.SimulationSeed != baseline.SimulationSeed || got.CRTSeed != baseline.CRTSeed || got.LocalOwner != baseline.LocalOwner || got.TerrainWidth != baseline.TerrainWidth || got.TerrainHeight != baseline.TerrainHeight || got.InitialFingerprint != baseline.InitialFingerprint {
 				t.Fatalf("campaign setup differs: got=%+v baseline=%+v", got, baseline)
 			}
 			if !reflect.DeepEqual(got.Session.Econ.Players, baseline.Session.Econ.Players) {

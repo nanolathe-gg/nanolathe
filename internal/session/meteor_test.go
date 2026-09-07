@@ -58,7 +58,6 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 			WeaponName:    "meteor",
 			Weapon:        w,
 			Radius:        300,
-			Density:       2,
 			DurationTicks: 150,  // 5*30
 			IntervalTicks: 1800, // 60*30
 			PerHitDelay:   15,   // 30/2

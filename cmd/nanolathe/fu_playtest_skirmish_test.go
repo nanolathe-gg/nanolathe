@@ -102,7 +102,7 @@ func fuRunSkirmishCensus(t *testing.T, name string, cfg session.SkirmishConfig, 
 	report.Tick = sess.Clock.GlobalTick
 	report.State = sess.State.String()
 	report.Result = sess.GetResult()
-	if hash, err := sess.ParityAuthoritativeHash(); err == nil {
+	if hash, err := sess.PartialStateFingerprint(); err == nil {
 		report.StateHash = hash
 	} else {
 		report.Errors = append(report.Errors, "hash: "+err.Error())

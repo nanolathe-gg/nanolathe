@@ -57,8 +57,9 @@ type PlayerReport struct {
 }
 
 // Report is a stable diagnostic surface, not additional authoritative state.
-// StateHash is produced by Session.ParityAuthoritativeHash, which walks the
-// ordered authoritative surfaces without mutating them.
+// StateHash retains its legacy JSON field name. Its version-prefixed value is
+// Session.PartialStateFingerprint, whose intentionally partial coverage is listed
+// in docs/DESIGN_RUNTIME_DETERMINISM.md §4; it is not a whole-session parity gate.
 type Report struct {
 	ScenarioKind              ScenarioKind     `json:"scenario_kind"`
 	ScenarioIdentity          string           `json:"scenario_identity"`
@@ -223,7 +224,7 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 			report.Result = "draw"
 		}
 	}
-	hash, err := sess.ParityAuthoritativeHash()
+	hash, err := sess.PartialStateFingerprint()
 	if err != nil {
 		return report, err
 	}

@@ -2463,3 +2463,39 @@ func (w *World) IterSliced() []*Unit {
 	w.iterSlicedHint = len(out)
 	return out
 }
+
+// ForEachPlayerSliceLive visits one fixed player's pool slice from its lowest
+// slot through its highest slot [04 §1.1][05 "Authoritative settlement order"]
+// [I1]. It does not allocate and deliberately uses the same raw admission as
+// IterSliced: a slot is visited when w.units holds a non-nil record whose
+// Unit.Alive bit is set. It does not additionally ask pool.Alive, because
+// IterSliced never did and the two liveness stores are not interchangeable.
+//
+// The walk is live, not a snapshot. The slice bounds are read once before the
+// first callback. A callback that frees a later slot prevents that slot's
+// visit; an allocation or immediate reuse in a later slot is visited when the
+// cursor reaches it. A change at or below the cursor is not revisited. The
+// callback receives the current record in that slot, so callers that care
+// about the runtime owner must test it themselves. This intentionally differs
+// from the old pointer-snapshot adapter for a public callback that frees then
+// reuses a later slot: the old adapter skipped the replacement, while this
+// live cursor reaches it. Production settlement callbacks do not mutate the
+// unit registry; callers that do must choose this live behavior deliberately.
+// These are the fixed-slice, ascending scan and immediate-reuse rules of the
+// unit pool [04 §1.1][P0-16 §3.1][P0-16 §3.2].
+func (w *World) ForEachPlayerSliceLive(player int, fn func(*Unit)) {
+	if w == nil || w.pool == nil || fn == nil {
+		return
+	}
+	start, end, ok := w.pool.SliceForPlayer(player)
+	if !ok {
+		return
+	}
+	for slot := start; slot <= end && slot < len(w.units); slot++ {
+		u := w.units[slot]
+		if u == nil || !u.Alive {
+			continue
+		}
+		fn(u)
+	}
+}

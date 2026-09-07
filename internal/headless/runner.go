@@ -66,20 +66,20 @@ type FreshBattleRequest struct {
 // every object derived after this boundary; no client or platform object can
 // enter Session through this value [I6].
 type FreshBattle struct {
-	Session        *session.Session
-	Kind           ScenarioKind
-	Identity       string
-	SimulationSeed uint32
-	CRTSeed        uint32
-	LocalOwner     uint8
-	Watching       bool
-	TerrainWidth   int32
-	TerrainHeight  int32
-	InitialHash    string
-	CampaignIndex  int
-	CampaignSlot   int
-	PresentationW  int32
-	PresentationH  int32
+	Session            *session.Session
+	Kind               ScenarioKind
+	Identity           string
+	SimulationSeed     uint32
+	CRTSeed            uint32
+	LocalOwner         uint8
+	Watching           bool
+	TerrainWidth       int32
+	TerrainHeight      int32
+	InitialFingerprint string // Versioned partial state fingerprint; coverage is defined in the runtime design.
+	CampaignIndex      int
+	CampaignSlot       int
+	PresentationW      int32
+	PresentationH      int32
 }
 
 // Request is the displayless battle boundary. Seeds and the tick limit are
@@ -188,16 +188,16 @@ func ComposeFreshBattle(request FreshBattleRequest) (FreshBattle, error) {
 		return FreshBattle{}, diagnostic(fmt.Sprintf("session load failed: local owner resolved to %d, request requires %d", owner, request.LocalOwner), identity, providersFromOps(request.FS), "the authored local player record")
 	}
 
-	initialHash, err := sess.ParityAuthoritativeHash()
+	initialFingerprint, err := sess.PartialStateFingerprint()
 	if err != nil {
-		return FreshBattle{}, diagnostic("session load failed: initial authoritative hash failed: "+err.Error(), identity, providersFromOps(request.FS), "a hashable authoritative session")
+		return FreshBattle{}, diagnostic("session load failed: initial partial fingerprint failed: "+err.Error(), identity, providersFromOps(request.FS), "a readable session diagnostic snapshot")
 	}
 	return FreshBattle{
 		Session: sess, Kind: kind, Identity: identity,
 		SimulationSeed: request.SimulationSeed, CRTSeed: request.CRTSeed,
 		LocalOwner: owner, Watching: watching,
 		TerrainWidth: int32(sess.World.CellW * 16), TerrainHeight: int32(sess.World.CellH * 16),
-		InitialHash: initialHash, CampaignIndex: request.CampaignIndex, CampaignSlot: request.CampaignSlot,
+		InitialFingerprint: initialFingerprint, CampaignIndex: request.CampaignIndex, CampaignSlot: request.CampaignSlot,
 		PresentationW: request.PresentationWidth, PresentationH: request.PresentationHeight,
 	}, nil
 }

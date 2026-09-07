@@ -119,25 +119,25 @@ func TestPlayerRowsAreStableAcrossTwoIdenticalRuns(t *testing.T) {
 	}
 }
 
-// Publishing the rows writes no simulation state and draws from neither RNG
-// stream [I4][I6].
-func TestPlayerRowPublicationChangesNoAuthoritativeState(t *testing.T) {
+// This checks publication against the partial fingerprint and both RNG draw
+// counts; the fingerprint does not cover every simulation owner [I4][I6].
+func TestPlayerRowPublicationPreservesPartialFingerprintAndDrawCounts(t *testing.T) {
 	s := newLoopTestSession(t, 2)
 	s.publishSnapshot(1)
-	hashBefore, err := s.ParityAuthoritativeHash()
+	hashBefore, err := s.PartialStateFingerprint()
 	if err != nil {
-		t.Fatalf("ParityAuthoritativeHash: %v", err)
+		t.Fatalf("PartialStateFingerprint: %v", err)
 	}
 	simBefore, crtBefore := s.SimRNG().Draws(), s.CrtRNG().Draws()
 	published := s.Snapshot.BeginWrite()
 	publishPlayerRows(s, published)
 	publishPlayerRows(s, published)
-	hashAfter, err := s.ParityAuthoritativeHash()
+	hashAfter, err := s.PartialStateFingerprint()
 	if err != nil {
-		t.Fatalf("ParityAuthoritativeHash: %v", err)
+		t.Fatalf("PartialStateFingerprint: %v", err)
 	}
 	if hashAfter != hashBefore {
-		t.Fatalf("authoritative hash changed across the publication: %s -> %s", hashBefore, hashAfter)
+		t.Fatalf("partial fingerprint changed across the publication: %s -> %s", hashBefore, hashAfter)
 	}
 	if s.SimRNG().Draws() != simBefore || s.CrtRNG().Draws() != crtBefore {
 		t.Fatalf("draw counts changed: sim %d->%d, crt %d->%d",

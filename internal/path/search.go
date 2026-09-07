@@ -316,7 +316,6 @@ type Session struct {
 	setupSteps   int
 	ns           *NodeStore
 	heap         Heap
-	goalFlag     map[NodeID]bool
 	expanded     bool
 }
 
@@ -399,9 +398,8 @@ func (s *Session) init() {
 			}
 		}
 	}
-	s.ns = NewNodeStore(s.scale)
+	s.ns = newSessionNodeStore(s.scale, &s.entries)
 	s.heap.Clear()
-	s.goalFlag = make(map[NodeID]bool)
 	startDir := s.cfg.StartDir
 	if startDir > 7 {
 		startDir = DirN
@@ -563,11 +561,9 @@ func (s *Session) Resume(budget int) ([]Point, Status, bool) {
 			hs := ScaledHeuristic(node.H, s.scale)
 			if s.hasTolerance && hs <= s.tolerance {
 				e.status |= 4
-				s.goalFlag[nid] = true
 			}
 			if s.isGoal(c) {
 				e.status |= 4
-				s.goalFlag[nid] = true
 			}
 			s.touch(c, e)
 		}

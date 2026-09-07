@@ -523,15 +523,23 @@ scheduler first, then per player ascending the orders and work pump, then that
 player's dirty-checked stamp sweep. It is not a phase of its own, and no
 post-phase-12 visibility pass exists `[01 R-CORE-01 §4.4.1]`.
 
-**PROC-03 — the parity-drift ratchets.** Two shrink-only counts over the
-non-test sources of the authoritative packages, held per file in a committed
-baseline: literal map-typed `range` statements (I1) and `float64` occurrences
-(I2). A count may fall freely — a fall means the baseline row is tightened in
-the same commit — and any rise fails naming the file and line. The per-file gate
-is deliberately strict, so moving an occurrence between files is a reviewed
-baseline change rather than a silent side effect. The ratchets enforce "no new
-debt"; they do not certify the existing occurrences as correct. They live in
-`internal/architecture` beside the boundary guard that keeps the displayless
+**PROC-03 — the parity-drift ratchets.** The non-test sources of the
+authoritative packages are checked in two ways. The I1 guard type-checks the
+active package graph, so a map range is detected whether its expression is a
+local, a selector, a named map type or a map-returning call. Every current map
+range is an individually reviewed record containing its package path, function
+and normalized containing function; a changed ordering dependency or a new
+range fails until its ordering is reviewed. The I2 guard keeps the shrink-only
+per-file baseline for ordinary
+`float64` occurrences, while each existing I2 operation in a formerly exempt
+file has a declaration-scoped count and reason. Resolved float-bearing struct
+fields are separately named, so grouped, named and aliased fields cannot hide
+a new float field. A new float field or function there therefore fails instead
+of inheriting a file-wide exception. Counts may
+fall freely — a fall means the baseline or scoped record is tightened in the
+same commit — and any rise names the affected site. These ratchets enforce "no
+new debt"; they do not certify the existing occurrences as correct. They live
+in `internal/architecture` beside the boundary guard that keeps the displayless
 command's dependency closure free of the client and the device packages.
 
 ### 3.4 Not implemented
@@ -558,14 +566,43 @@ command's dependency closure free of the client and the device packages.
 **The report.** The displayless runner emits one JSON document per run: the
 scenario kind and identity, both seeds and both final stream states, the
 simulation and CRT **draw counts**, the catalog and VFS manifest hashes, the
-final tick, the status, the session state and result, the authoritative
+final tick, the status, the session state and result, the deliberately partial
 `state_hash`, and per-player rows (live units, units created, orders submitted,
 kills, losses, order-intent census, first attack, and periodic task-group
-samples). The hash walks the ordered authoritative surfaces without mutating
-them: the clock's fields and its normalized 28-byte box taken on a value copy,
-each unit's state, the per-player creation counts, and the ledger's snapshot.
-Everything in the report is a read of committed state — the observer draws no
-random numbers and writes no authoritative field.
+samples). The legacy JSON key `state_hash` contains the version-prefixed result
+of `Session.PartialStateFingerprint`: `partial-v1:<digest>`. The version also
+enters the hash input; changes to the included fields or serialization require
+a version bump. The observer draws no random numbers and writes no
+authoritative field. This diagnostic is not a complete parity gate.
+
+**Fingerprint scope, version 1.** The canonical serialization is the ordered
+writer in `internal/session/p28_parity_trace.go`; numeric floats enter as exact
+bit patterns and definitions as canonical keys. It covers these bounded views:
+
+| Owner | Included values |
+| --- | --- |
+| Clock | Published clock fields and normalized save box, read on a value copy. |
+| Units | The fields serialized by `writeParityUnit`: health/status, positions, selected mover values, cargo, weapon slots, order records, thread stacks/waits, piece transforms/flags; per-player creation counts. |
+| Economy | Unit buckets and archived counters, and the player fields explicitly serialized from `ParitySnapshot`, including stocks, capacities, totals, deadlines and alliances. |
+| Movement | Provider request order and goal values; active scheduler request and exposed cadence/scale fields; collision projection (identity, position, planar velocity, speed, heading, footprint, mode and anchor values, blocked/dirty flags); serialized route flags and retained/current route points. |
+| Features | The live instance fields serialized by `writeFeature`, including position, sinking state and burn cursor. |
+| RNG | Session initialization flag, both stream states and draw counts. |
+
+**Excluded state and limits.** Projectile records and their pool order, meteor
+scheduling, AI tasks and registries, trigger/result latches, visibility and
+temporary sight, active path-search working storage and provider cursors, COB
+statics/animation scheduling, and construction service internals are not fully
+represented. Movement also omits vertical collision velocity, stamped occupancy,
+`LastProposalTick`, route `WantsRepath`/`LastRequestTick`, and scheduler work
+accumulators/cursors. All owner rows above are bounded projections, not complete
+owner snapshots. Equality therefore cannot establish equal future behavior. Use the
+owning subsystem's state/ordering tests for those contracts; a future extension
+must audit the additional state and publish a new fingerprint version.
+
+Collision history, optional path-result history, path-failure diagnostics and
+callback trace buffers are excluded. Enabling, recording, limiting and clearing
+these traces must leave the fingerprint unchanged. Pending path requests come
+from live provider/scheduler views, not opt-in trace records.
 
 **The reference run.** The regression fingerprint is a fixed map, a fixed seed
 and a fixed tick count:
@@ -574,16 +611,16 @@ and a fixed tick count:
 nanolathe-headless -map "ashap plateau" -seed 7 -ticks 6000
 ```
 
-Its hash is deliberately not written down here. The check is that two runs of
-the same command agree, and that a change to simulation code either leaves the
-hash alone or explains why it moved. The two draw counts are the second half of
-the same check: identical seeded setups must produce identical counts, and a
-count that moves without a hash move (or the reverse) localizes the change to
-either the draw order or the state that consumes it [I4].
+Its value is deliberately not written down here. Two runs of the same command
+and fingerprint version must agree. Changes to included values must explain
+the difference; changes outside the listed coverage need direct contract
+checks. Both draw counts must also agree for identical seeded setups [I4].
+Neither a matching digest nor matching draw counts certify omitted state.
 
 **Guards that read source, not runtime.** `internal/architecture` inspects the
-tree with the Go parser rather than importing it: the three DET-01 stream
-guards, the PROC-03 ratchets, the platform boundary (only the Ebitengine
+tree with the Go parser and, for map ranges, Go type information over the
+authoritative package graph: the three DET-01 stream guards, the PROC-03
+ratchets, the platform boundary (only the Ebitengine
 adapter, the audio backend and the desktop command may reach the window
 modules), the displayless command's dependency closure, and the rule that
 authoritative packages import no host clock, device or foreign random source.

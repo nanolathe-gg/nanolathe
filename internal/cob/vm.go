@@ -11,8 +11,6 @@
 package cob
 
 import (
-	"sort"
-
 	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -196,81 +194,6 @@ type axisAnim struct {
 type PortBinding struct {
 	Read  func(args [4]int32) int32
 	Write func(value int32)
-}
-
-// dispatchKeys holds the 57 dispatched values sorted ascending [04 §4.3] C11.
-// Transcribed verbatim from the [04 §4.3] tables; the binary search uses
-// these sentinels and not a jump table, per the doc's note. Keys are the
-// masked word (word & dispatchMask) [04 §4.3] C10.
-var dispatchKeys = []uint32{
-	0x10001000, // move [04 §4.3] B/C shape
-	0x10002000, // turn [04 §4.3]
-	0x10003000, // spin [04 §4.3]
-	0x10004000, // stop-spin [04 §4.3]
-	0x10005000, // show [04 §4.3]
-	0x10006000, // hide [04 §4.3]
-	0x10007000, // cache [04 §4.3]
-	0x10008000, // dont-cache [04 §4.3]
-	0x10009000, // legacy two-arg effect (no-op on units) [04 §4.3]
-	0x1000a000, // dont-shadow [04 §4.3]
-	0x1000b000, // move-now [04 §4.3]
-	0x1000c000, // turn-now [04 §4.3]
-	0x1000d000, // shade [04 §4.3]
-	0x1000e000, // dont-shade [04 §4.3]
-	0x1000f000, // emit-sfx [04 §4.3]
-	0x10011000, // wait-for-turn [04 §4.3]
-	0x10012000, // wait-for-move [04 §4.3]
-	0x10013000, // sleep [04 §4.3]
-	0x10021000, // push (modes 1,2,4) [04 §4.3] F
-	0x10022000, // alloc-local [04 §4.3]
-	0x10023000, // pop (modes 2,4) [04 §4.3] F
-	0x10024000, // discard [04 §4.3]
-	0x10031000, // add [04 §4.3]
-	0x10032000, // subtract [04 §4.3]
-	0x10033000, // multiply [04 §4.3]
-	0x10034000, // divide (unguarded) [04 §4.3] C14
-	0x10035000, // bitwise and [04 §4.3]
-	0x10036000, // bitwise or [04 §4.3]
-	0x10037000, // bitwise xor raw a^b not bool [04 §4.3][P1-11] [fmt cob]
-	0x10038000, // bitwise not [04 §4.3]
-	0x10041000, // random [04 §4.3]
-	0x10042000, // engine read 1-arg [04 §4.3]
-	0x10043000, // engine read 5-arg [04 §4.3]
-	0x10044000, // engine read single-arg port [04 §4.3]
-	0x10045000, // engine read no-arg [04 §4.3]
-	0x10051000, // less-than [04 §4.3]
-	0x10052000, // less-or-equal [04 §4.3]
-	0x10053000, // greater-than [04 §4.3]
-	0x10054000, // greater-or-equal [04 §4.3]
-	0x10055000, // equal [04 §4.3]
-	0x10056000, // not-equal [04 §4.3]
-	0x10057000, // logical and [04 §4.3]
-	0x10058000, // logical or [04 §4.3]
-	0x10059000, // word xor raw a^b (not boolean) [04 §4.3][P1-11]
-	0x1005a000, // logical not [04 §4.3]
-	0x10061000, // start-script E C14 retains args on no-slot/bad-id [P1-11] [04 §4.3]
-	0x10062000, // call-script E C14 wedges waitSlot=-1 on no-slot [P1-11] [04 §4.3]
-	0x10063000, // reserved pop-count-and-continue E: pop count discards, PC+=3, 0 producer 835 scripts [P1-11] [04 §4.3]
-	0x10064000, // jump [04 §4.3] D
-	0x10065000, // return [04 §4.3]
-	0x10066000, // jump-if-false [04 §4.3] D
-	0x10067000, // signal [04 §4.3]
-	0x10068000, // set-signal-mask [04 §4.3]
-	0x10071000, // explode [04 §4.3] [04 §4.5]
-	0x10082000, // engine write [04 §4.3]
-	0x10083000, // attach-unit [04 §4.3]
-	0x10084000, // detach-unit [04 §4.3]
-} // [04 §4.3] C11 exactly 57
-
-var sortedDispatchKeys []uint32
-
-func init() {
-	sortedDispatchKeys = make([]uint32, len(dispatchKeys))
-	copy(sortedDispatchKeys, dispatchKeys)
-	sort.Slice(sortedDispatchKeys, func(i, j int) bool { return sortedDispatchKeys[i] < sortedDispatchKeys[j] })
-	// dispatched-value table is the sorted sentinel set; dispatch uses binary
-	// search over it [04 §4.3] C11.
-	dispatchKeys = sortedDispatchKeys
 }
 
 // NewVM creates a VM bound to prog. Pieces length matches prog.Pieces and
@@ -1320,14 +1243,8 @@ func (v *VM) runThread(idx int) {
 		}
 		word := v.prog.Code[t.PC]
 		key := word & dispatchMask // [04 §4.3] C10
-		// Binary search over sorted sentinels [04 §4.3] C11.
-		pos := sort.Search(len(dispatchKeys), func(i int) bool { return dispatchKeys[i] >= key })
-		if pos >= len(dispatchKeys) || dispatchKeys[pos] != key {
-			// Kill path: clear thread status, decrement active count, yield [04 §4.3] C11
-			v.killThread(idx)
-			return
-		}
-		// Dispatch
+		// The switch owns the dispatch set; its default takes the same
+		// unmatched-key kill path [04 §4.3] C11.
 		switch key {
 		case 0x10001000: // move [04 §4.3] C shape, per-tick arithmetic [04 §4.6]
 			if t.PC+2 >= len(v.prog.Code) {
@@ -2262,7 +2179,7 @@ func (v *VM) runThread(idx int) {
 			}
 			t.PC += 1
 		default:
-			// Should be unreachable due to binary search guard, but keep kill path.
+			// Unmatched keys clear the thread and wake its waiters [04 §4.3].
 			v.killThread(idx)
 			return
 		}

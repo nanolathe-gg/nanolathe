@@ -21,12 +21,12 @@ func TestP28ParityHashIncludesCurrentHealthSample(t *testing.T) {
 	u := w.Unit(h)
 	u.CurrentSample = 37
 	a := &Session{Clock: &clock.State{}, Econ: &economy.Service{}, Units: w}
-	first, err := a.ParityAuthoritativeHash()
+	first, err := a.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
 	u.CurrentSample = 38
-	second, err := a.ParityAuthoritativeHash()
+	second, err := a.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,15 +37,15 @@ func TestP28ParityHashIncludesCurrentHealthSample(t *testing.T) {
 
 func TestP28ParityHashRepeatReadPure(t *testing.T) {
 	s := &Session{Clock: &clock.State{Requested: 10, Active: 10}, Econ: &economy.Service{}}
-	if got, err := s.ParityAuthoritativeHash(); err != nil || got == "" {
+	if got, err := s.PartialStateFingerprint(); err != nil || got == "" {
 		t.Fatalf("baseline parity hash got %q err %v", got, err)
 	}
 	s.EnableParityTrace([]pool.Handle{3, 1, 3})
-	a, err := s.ParityAuthoritativeHash()
+	a, err := s.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := s.ParityAuthoritativeHash()
+	b, err := s.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,15 +57,15 @@ func TestP28ParityHashRepeatReadPure(t *testing.T) {
 	}
 }
 
-func TestP28TracingDoesNotChangeAuthoritativeHashOrRNG(t *testing.T) {
+func TestP28TracingDoesNotChangePartialFingerprintOrRNG(t *testing.T) {
 	a := &Session{Clock: &clock.State{Requested: 10, Active: 10}, Econ: &economy.Service{}}
 	b := &Session{Clock: &clock.State{Requested: 10, Active: 10}, Econ: &economy.Service{}}
-	ha, err := a.ParityAuthoritativeHash()
+	ha, err := a.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.EnableParityTrace(nil)
-	hb, err := b.ParityAuthoritativeHash()
+	hb, err := b.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,12 +77,12 @@ func TestP28TracingDoesNotChangeAuthoritativeHashOrRNG(t *testing.T) {
 	if a.SimRNG().Uint32n(100) != b.SimRNG().Uint32n(100) || a.CrtRNG().Rand() != b.CrtRNG().Rand() {
 		t.Fatal("trace enable changed RNG behavior")
 	}
-	before, err := b.ParityAuthoritativeHash()
+	before, err := b.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.Clock.Requested++
-	after, err := b.ParityAuthoritativeHash()
+	after, err := b.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestP28TracingDoesNotChangeAuthoritativeHashOrRNG(t *testing.T) {
 	}
 	requestedHash := after
 	b.Clock.Active++
-	after, err = b.ParityAuthoritativeHash()
+	after, err = b.PartialStateFingerprint()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestP28ParityHashDoesNotMutateClock(t *testing.T) {
 			clockState.Paused = paused
 			s := &Session{Clock: clockState, Econ: &economy.Service{}}
 			before := *clockState
-			if _, err := s.ParityAuthoritativeHash(); err != nil {
+			if _, err := s.PartialStateFingerprint(); err != nil {
 				t.Fatal(err)
 			}
 			if *clockState != before {

@@ -2,11 +2,13 @@ package architecture
 
 // PROC-03 parity-drift ratchets, defined by docs/DESIGN_RUNTIME_DETERMINISM.md
 // §3.3 "Determinism tokens": two shrink-only counts over the authoritative
-// packages — literal map-typed `range` statements [I1] and `float64`
-// occurrences [I2] — that keep existing parity drift from growing while
-// cleanup works it off incrementally. They sit here beside the boundary guard
-// that keeps the displayless command's dependency closure free of the client
-// and device packages.
+// packages — type-checked map ranges [I1] and `float64` occurrences [I2] —
+// that keep existing parity drift from growing while cleanup works it off
+// incrementally. Map ranges and the I2 operations that live in formerly
+// exempt files are pinned to audited declaration-level records; the remaining
+// float sites retain their shrink-only per-file baseline. They sit here beside
+// the boundary guard that keeps the displayless command's dependency closure
+// free of the client and device packages.
 //
 // Ratchet semantics, shared by both ratchets: each guard scans non-test Go
 // files in the authoritative packages and records occurrences per file in a
@@ -140,15 +142,6 @@ func enforceRatchet(t *testing.T, guard string, baseline map[string]int, current
 	return failures
 }
 
-// failRatchet aborts the test when a guard's ratchet is exceeded.
-func failRatchet(t *testing.T, guard string, failures []string) {
-	t.Helper()
-	if len(failures) != 0 {
-		t.Fatalf("%s ratchet exceeded (PROC-03): %d offending site(s), counts may only decrease:\n%s",
-			guard, len(failures), strings.Join(failures, "\n"))
-	}
-}
-
 // siteList converts per-line sites into a sorted slice for failure messages.
 func siteList(perLine map[int]string) []occurrence {
 	lines := make([]int, 0, len(perLine))
@@ -163,102 +156,18 @@ func siteList(perLine map[int]string) []occurrence {
 	return out
 }
 
-// --- Guard 1: map iteration (INVARIANTS I1) ---
-
-// mapIterationBaseline records literal map-typed range occurrences in
-// non-test authoritative files as of the baseline commit.
-//
-// Ratchet: the count per file may decrease; any increase fails. INVARIANTS I1
-// forbids iterating a Go map in anything that can affect simulation state,
-// because map iteration order is randomized per run and retail's order is the
-// behavior. The scan is deliberately syntactic: it counts a range statement
-// whose expression is literally a map type (a map type expression, including
-// through parentheses, or a map composite literal). Ranging over a variable
-// of map type, or over a call result, is out of scope here — it is caught by
-// review against I1 and by the existing determinism wiring tests.
-//
-// Baseline is empty today: the authoritative packages currently contain no
-// literal map-typed ranges, so this is a pure forward ratchet.
-var mapIterationBaseline = map[string]int{}
-
 // TestAuthoritativeMapIterationDoesNotGrow enforces the PROC-03 map-iteration
-// ratchet (INVARIANTS I1): no new literal map-typed range may appear in the
-// authoritative packages.
+// guard (INVARIANTS I1). Go type information makes local maps, selector maps,
+// named map types and map-returning calls equally visible to the check.
 func TestAuthoritativeMapIterationDoesNotGrow(t *testing.T) {
-	current := map[string]int{}
-	sites := map[string][]occurrence{}
-	scanAuthoritativeSources(t, func(relPath string, fset *token.FileSet, file *ast.File, lineText func(int) string) {
-		perLine := map[int]string{}
-		ast.Inspect(file, func(n ast.Node) bool {
-			rangeStmt, ok := n.(*ast.RangeStmt)
-			if !ok {
-				return true
-			}
-			expr := rangeStmt.X
-			for {
-				paren, ok := expr.(*ast.ParenExpr)
-				if !ok {
-					break
-				}
-				expr = paren.X
-			}
-			literalMap := false
-			switch typed := expr.(type) {
-			case *ast.MapType:
-				literalMap = true
-			case *ast.CompositeLit:
-				_, literalMap = typed.Type.(*ast.MapType)
-			}
-			if !literalMap {
-				return true
-			}
-			line := fset.Position(rangeStmt.Pos()).Line
-			current[relPath]++
-			perLine[line] = lineText(line)
-			return true
-		})
-		if len(perLine) != 0 {
-			sites[relPath] = siteList(perLine)
-		}
-	})
-	failRatchet(t, "map iteration (I1)", enforceRatchet(t, "map iteration (I1)", mapIterationBaseline, current, sites))
+	checkAuthoritativeTypedMapRanges(t)
 }
 
 // --- Guard 2: float64 occurrences (INVARIANTS I2) ---
 
-// float64ExemptFiles mirrors the INVARIANTS I2 exhaustive float allowlist for
-// the authoritative packages: files whose float64 use is named by an I2 row.
-// Each entry carries the row it mirrors; the list only shrinks.
-var float64ExemptFiles = map[string]string{
-	"internal/clock/clock.go":              "I2 clock budget product (delta × speed + carry float64, carry float32) and clock float seconds [01 §4.2]",
-	"internal/economy/admission.go":        "I2 economy settlement working-precision intermediates narrowed at named float32 stores [05 R-ECO-01 §1][05 R-ECO-01 §5]",
-	"internal/economy/ledger.go":           "I2 economy cumulative totals and waste counters [05 \"Stocks, counters, and waste\"]",
-	"internal/economy/maker.go":            "I2 economy production contributions and difficulty discounts use double working precision before named float32 stores; authored stockpile costs narrow at their documented boundary [05 R-ECO-01 §1][05 R-ECO-01 §3][05 \"Construction arithmetic\"]",
-	"internal/economy/p28_parity_trace.go": "opt-in trace copy of ledger.go's I2 cumulative totals and waste counters (same I2 row; P28-OBS-00C)",
-	"internal/movement/airorders.go":       "I2 AirStrike release lead sqrt((2·cruisealt)/gravity) · 30 · speedInteger, narrowed by truncation toward zero [04 R-AIR-01 §8]",
-	"internal/movement/flight.go":          "I2 flight brake integration temporaries [04 §10.1], the shared air bearing [04 R-AIR-01 §1], and the lean accumulator's atan2 and rotation [04 R-AIR-01 §2] — all narrowed at the named fixed-point and uint16 angle stores",
-	"internal/movement/integrate.go":       "I2 ground follower goal-point bearing and route-distance/lookahead hypot temporaries [04 R-MOV-01 §2][04 R-MOV-01 §3][04 R-MOV-03 §2][04 R-PATH-01 §8]",
-	"internal/combat/aim.go":               "I2 ballistic discriminant, acos, sqrt [06 §3.3]",
-	"internal/combat/impact.go":            "I2 area-damage range sqrt, float64 transient truncated to int32 [06 §9.3]",
-	"internal/combat/damage.go":            "I2 area-damage falloff expression, evaluated at working precision and narrowed by one store [06 §9.3], and the amount product: the promoted base damage times that stored float32 falloff, truncated toward zero [06 §9.2]",
-	"internal/construction/reclaim.go":     "I2 unit-reclaim pulse divide: the wrapped 32-bit product re-read unsigned, widened to double and divided by the single-precision max(buildcostmetal,10)×300, truncated once into the integer pulse [05 R-WORK-01 §4] (AU-7)",
-	"internal/sim/numeric/numeric.go":      "I2 immutable authored-content conversion and I3 definition-parser signed-64 truncation retained through the low 32-bit store [01 R-DET-01 §1]",
-	"internal/sim/numeric/trig.go":         "I2 simulation trig-table construction, float64 transient [04 §5.1]",
-	"internal/save/boxes.go":               "I2/I13 save float boxes: the game-time save box and account doubles are byte-layout contracts",
-	"internal/save/bank.go":                "I13 HAPIBANK account record doubles are a byte-layout contract",
-	"internal/session/strips.go":           "I2 nanolathe particle travel distance (sqrt, truncated to the tick count), float64 temporary never stored [03 §5.5]",
-	// AU-7 moved AU-3's capture-timer row here from
-	// internal/construction/capture.go: the section had two implementations and
-	// only this one has a caller, so the dead copy — and its float64 — is gone
-	// and the row follows the arithmetic. The file's other float64 site is the
-	// resurrection delay's stored double, which WU-18-2 reported as a row the
-	// allowlist needs; both are retail's own floating point, narrowed
-	// immediately to the integer the order record stores.
-	"internal/orders/work.go": "I2 capture timer base sum: each authored cost scaled by two float32 constants, the terms combined at working precision and truncated once into the integer budget [05 R-WORK-01 §6] (AU-3, moved by AU-7); and the resurrection delay's stored double 0.3·buildtime/(workertime/30) [05 R-WORK-01 §7] (WU-18-2)",
-}
-
-// float64Baseline records float64 occurrences per remaining (non-exempt)
-// non-test authoritative file as of the baseline commit. An occurrence is a
+// float64Baseline records float64 occurrences per non-test authoritative file
+// whose sites are not separately authorized by a declaration-scoped record.
+// An occurrence is a
 // float64 type reference (var/const declaration, field, func parameter or
 // result, conversion) or a floating-point basic literal (an untyped float
 // constant defaults to float64).
@@ -279,64 +188,21 @@ var float64Baseline = map[string]int{
 	// arithmetic of [05 "Construction arithmetic"] and [05 R-WORK-01 §3] and
 	// the cancel-current refund's two halves of [05 R-ECO-01 §11]; they moved
 	// to the files those concerns went to, unchanged and in the same number.
-	"internal/construction/arithmetic.go": 16,
-	// capture.go moved to float64ExemptFiles above: AU-3 added the I2 row for
-	// the capture timer's base sum, which is what its float64 sites are.
+	"internal/construction/arithmetic.go":   16,
 	"internal/construction/inheritance.go":  2,
 	"internal/construction/resurrection.go": 3,
 	"internal/construction/reverse.go":      2,
 	"internal/economy/tick.go":              2,
 	"internal/mission/initial_mission.go":   8,
-	"internal/mission/mission_globals.go":   6,
 	"internal/movement/altitude.go":         6,
-	// work.go moved to float64ExemptFiles above (AU-7): both of its sites now
-	// carry an I2 row there.
-	"internal/session/session.go": 1,
-	"internal/session/step.go":    1,
-	"internal/world/terrain.go":   1,
-	"internal/world/wind.go":      2,
+	"internal/session/step.go":              1,
+	"internal/world/terrain.go":             1,
+	"internal/world/wind.go":                2,
 }
 
 // TestAuthoritativeFloat64DoesNotGrow enforces the PROC-03 float ratchet
-// (INVARIANTS I2): no new float64 occurrence may appear in the authoritative
-// packages outside the I2-derived file exemptions above.
+// (INVARIANTS I2). Existing I2 operations in formerly exempt files are
+// declaration-scoped, so unrelated new floating-point state cannot pass.
 func TestAuthoritativeFloat64DoesNotGrow(t *testing.T) {
-	current := map[string]int{}
-	sites := map[string][]occurrence{}
-	countExempt := map[string]int{}
-	scanAuthoritativeSources(t, func(relPath string, fset *token.FileSet, file *ast.File, lineText func(int) string) {
-		perLine := map[int]string{}
-		count := 0
-		ast.Inspect(file, func(n ast.Node) bool {
-			switch node := n.(type) {
-			case *ast.Ident:
-				if node.Name == "float64" {
-					count++
-					perLine[fset.Position(node.Pos()).Line] = lineText(fset.Position(node.Pos()).Line)
-				}
-			case *ast.BasicLit:
-				if node.Kind == token.FLOAT {
-					count++
-					perLine[fset.Position(node.Pos()).Line] = lineText(fset.Position(node.Pos()).Line)
-				}
-			}
-			return true
-		})
-		if _, exempt := float64ExemptFiles[relPath]; exempt {
-			countExempt[relPath] = count
-			return
-		}
-		if count != 0 {
-			current[relPath] = count
-			sites[relPath] = siteList(perLine)
-		}
-	})
-	for path := range float64ExemptFiles {
-		if _, seen := countExempt[path]; !seen {
-			t.Errorf("stale float64 exemption: %s is allowlisted but was not scanned", path)
-		} else if countExempt[path] == 0 {
-			t.Errorf("stale float64 exemption: %s no longer contains float64; shrink the I2 allowlist entry", path)
-		}
-	}
-	failRatchet(t, "float64 (I2)", enforceRatchet(t, "float64 (I2)", float64Baseline, current, sites))
+	checkAuthoritativeFloat64(t)
 }

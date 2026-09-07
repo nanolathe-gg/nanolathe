@@ -355,9 +355,25 @@ func PlayerEliminated(w *units.World, player int) bool {
 	return w.LiveCountForPlayer(player) == 0 && w.CreatedCountForPlayer(player) != 0
 }
 
-// ForEachUnitOrdered visits units owned by player in stable slot order
-// per [05 "Authoritative settlement order"] C6 and I1. Earlier units consume
-// live stock before later units are tested, so slot order matters.
+// ForEachUnitOrdered visits the current owner's fixed pool slice in stable
+// slot order per [05 "Authoritative settlement order"] C6 and I1. Earlier
+// units consume live stock before later units are tested, so slot order
+// matters. The World walk is live: a later unit freed by a callback is skipped
+// and a later allocation in the same slice can be reached; this is the pool's
+// fixed-slice immediate-reuse behavior [04 §1.1][P0-16 §3.2]. The economy
+// source applies its alive visit gate and capacity addition at each unit visit
+// [05 R-ECO-01 §2][05 R-ECO-01 §4], and its high-level pass is explicitly a
+// visit of eligible owned units [05 "Authoritative settlement order"]. Those
+// sources do not separately settle a callback that mutates a later slot. The
+// owner check remains at the visit point because the unit runtime record,
+// rather than the slice bounds, is authoritative for this economy pass.
+//
+// This differs from the former whole-world pointer snapshot only for an
+// external callback that frees and reuses a later slot. The assembled CloakDue
+// and cloak-edge paths read or update existing state, order notices and staged
+// presentation events; they do not allocate, free or transfer units, so the
+// production settlement trace retains the same membership [05 "Cloak debit"]
+// [05 R-ECO-01 §8][05 R-ECO-01 §9].
 func ForEachUnitOrdered(w *units.World, player int, fn func(*units.Unit)) {
 	if w == nil || fn == nil {
 		return
@@ -365,16 +381,14 @@ func ForEachUnitOrdered(w *units.World, player int, fn func(*units.Unit)) {
 	if player < 0 || player >= 10 {
 		return
 	}
-	// IterSliced expresses the player slices and slot order explicitly [I1].
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive {
-			continue
-		}
+	// The direct slice scan has the raw-unit liveness semantics of IterSliced
+	// without materializing every player's units before filtering this owner.
+	w.ForEachPlayerSliceLive(player, func(u *units.Unit) {
 		if int(u.Owner) != player {
-			continue
+			return
 		}
 		fn(u)
-	}
+	})
 }
 
 // AddProduction verbatim accumulates authored per-pass production without time conversion
@@ -436,22 +450,18 @@ func rebuildCapacityPlayer(s *Service, player int, w *units.World) {
 		}
 		return
 	}
-	for _, u := range w.IterSliced() {
-		if u == nil || !u.Alive || u.Def == nil {
-			continue
+	ForEachUnitOrdered(w, player, func(u *units.Unit) {
+		if u.Def == nil {
+			return
 		}
 		if u.Remaining != 0 {
-			continue
-		}
-		owner := int(u.Owner)
-		if owner != player {
-			continue
+			return
 		}
 		// Metal is accumulated before energy, each add re-rounded to the live
 		// single-precision capacity field [R-ECO-01 §4].
 		s.Players[player].Capacity[Metal] = float32(float64(s.Players[player].Capacity[Metal]) + float64(float32(u.Def.MetalStorage)))
 		s.Players[player].Capacity[Energy] = float32(float64(s.Players[player].Capacity[Energy]) + float64(float32(u.Def.EnergyStorage)))
-	}
+	})
 	// Optional player bonuses per [05 "Storage capacity"]: when the
 	// bonus flag is set, the stored bonus is added to the capacity sum after
 	// the unit-storage total, with integer semantics via truncation per I3.

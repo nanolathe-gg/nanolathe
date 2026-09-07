@@ -842,7 +842,6 @@ func (s *Session) initMeteor() {
 	effInterval := combat.EffectiveMeteorInterval(interval, defaults)
 	s.Meteor.WeaponName = weaponName
 	s.Meteor.Radius = effRadius
-	s.Meteor.Density = effDensity
 	s.Meteor.DurationTicks = combat.MeteorDurationTicks(effDuration)
 	s.Meteor.IntervalTicks = combat.MeteorIntervalTicks(effInterval)
 	s.Meteor.PerHitDelay = combat.MeteorDelay(effDensity)

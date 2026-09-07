@@ -65,9 +65,9 @@ func TestBattleCompositionAdaptersSnapshotEqualRequest(t *testing.T) {
 				t.Fatal(err)
 			}
 			if baseline == "" {
-				baseline = composed.InitialHash
-			} else if composed.InitialHash != baseline {
-				t.Fatalf("initial hash = %s, want %s", composed.InitialHash, baseline)
+				baseline = composed.InitialFingerprint
+			} else if composed.InitialFingerprint != baseline {
+				t.Fatalf("initial hash = %s, want %s", composed.InitialFingerprint, baseline)
 			}
 			if composed.Identity != opts.Map || composed.SimulationSeed != 37 || composed.CRTSeed != 41 || composed.LocalOwner != 0 {
 				t.Fatalf("setup identity = %+v", composed)

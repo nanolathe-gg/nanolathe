@@ -446,11 +446,11 @@ func TestEscapeDeselectsAndCancels(t *testing.T) {
 	}
 }
 
-// TestPresentationHotkeysLeaveAuthoritativeStateAlone is the I6 assertion: no
-// key that is not an order may write simulation state. Selection, group,
+// TestPresentationHotkeysPreservePartialFingerprint samples the I6 boundary
+// through the documented fingerprint subset. Selection, group,
 // speed, pause and order keys are deliberately excluded — [07 R-CAM-01 §1]
 // lists them as the inputs that *do* become simulation state.
-func TestPresentationHotkeysLeaveAuthoritativeStateAlone(t *testing.T) {
+func TestPresentationHotkeysPreservePartialFingerprint(t *testing.T) {
 	cat := hotkeyCatalog(t)
 	b := newTestBattle(cat, testWorldON05(60, 60))
 	b.sess.LocalOwner = 0
@@ -459,7 +459,7 @@ func TestPresentationHotkeysLeaveAuthoritativeStateAlone(t *testing.T) {
 	applyPendingBattleCommands(b)
 	b.messageRing().Append("line", 1, 0, 10, 1)
 
-	before, err := b.sess.ParityAuthoritativeHash()
+	before, err := b.sess.PartialStateFingerprint()
 	if err != nil {
 		t.Fatalf("parity hash: %v", err)
 	}
@@ -483,12 +483,12 @@ func TestPresentationHotkeysLeaveAuthoritativeStateAlone(t *testing.T) {
 		}
 		b.handleInput(in, nil)
 	}
-	after, err := b.sess.ParityAuthoritativeHash()
+	after, err := b.sess.PartialStateFingerprint()
 	if err != nil {
 		t.Fatalf("parity hash: %v", err)
 	}
 	if before != after {
-		t.Fatalf("a presentation-only hotkey wrote authoritative state:\n before %s\n after  %s", before, after)
+		t.Fatalf("a presentation-only hotkey changed the partial fingerprint:\n before %s\n after  %s", before, after)
 	}
 	// The camera and ring are exactly what those keys are allowed to touch.
 	if b.cam == nil {

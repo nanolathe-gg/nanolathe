@@ -160,11 +160,11 @@ func TestRetailRestoreCarriesTerrainExplorationAndShower(t *testing.T) {
 		// The authored half comes from the map, not the bank, and a restore
 		// that skipped it would leave a shower with no weapon or radius.
 		if got.WeaponName != wantShower.WeaponName || got.Radius != wantShower.Radius ||
-			got.Density != wantShower.Density || got.PerHitDelay != wantShower.PerHitDelay ||
+			got.PerHitDelay != wantShower.PerHitDelay ||
 			got.DurationTicks != wantShower.DurationTicks || got.IntervalTicks != wantShower.IntervalTicks {
-			t.Fatalf("%s: authored shower parameters restored as weapon=%q radius=%d density=%v delay=%d duration=%d interval=%d, want weapon=%q radius=%d density=%v delay=%d duration=%d interval=%d",
-				when, got.WeaponName, got.Radius, got.Density, got.PerHitDelay, got.DurationTicks, got.IntervalTicks,
-				wantShower.WeaponName, wantShower.Radius, wantShower.Density, wantShower.PerHitDelay, wantShower.DurationTicks, wantShower.IntervalTicks)
+			t.Fatalf("%s: authored shower parameters restored as weapon=%q radius=%d delay=%d duration=%d interval=%d, want weapon=%q radius=%d delay=%d duration=%d interval=%d",
+				when, got.WeaponName, got.Radius, got.PerHitDelay, got.DurationTicks, got.IntervalTicks,
+				wantShower.WeaponName, wantShower.Radius, wantShower.PerHitDelay, wantShower.DurationTicks, wantShower.IntervalTicks)
 		}
 		if (got.Weapon == nil) != (wantShower.Weapon == nil) {
 			t.Fatalf("%s: restored shower weapon resolution differs (got nil=%t)", when, got.Weapon == nil)

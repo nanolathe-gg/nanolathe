@@ -383,7 +383,7 @@ func TestParseCampaignMissionSelectorRejectsMalformedExplicitIdentity(t *testing
 	}
 }
 
-func TestEqualBattleEntryProducesEqualAIStateRNGHashAndAllocationOrder(t *testing.T) {
+func TestEqualBattleEntryMatchesSelectedAIStateRNGFingerprintAndAllocationOrder(t *testing.T) {
 	makeSession := func() *Session {
 		t.Helper()
 		cfg := DirectSkirmishConfig("test")
@@ -437,15 +437,15 @@ func TestEqualBattleEntryProducesEqualAIStateRNGHashAndAllocationOrder(t *testin
 	if aa, ba := allocationOrder(a), allocationOrder(b); !reflect.DeepEqual(aa, ba) {
 		t.Fatalf("allocation order differs: %#v / %#v", aa, ba)
 	}
-	ha, err := a.ParityAuthoritativeHash()
+	ha, err := a.PartialStateFingerprint()
 	if err != nil {
 		t.Fatalf("first hash: %v", err)
 	}
-	hb, err := b.ParityAuthoritativeHash()
+	hb, err := b.PartialStateFingerprint()
 	if err != nil {
 		t.Fatalf("second hash: %v", err)
 	}
 	if ha != hb {
-		t.Fatalf("equal initial authoritative hashes differ: %s / %s", ha, hb)
+		t.Fatalf("equal-entry partial fingerprints differ: %s / %s", ha, hb)
 	}
 }

@@ -442,7 +442,9 @@ except by push and pop, where the low three are the addressing mode `[04 §4.3]`
 **C11 — the dispatch set.** Exactly 57 dispatched values. An unmatched key takes
 the kill path: clear the thread's status, decrement the instance's active thread
 count, yield the drain. There is no default handler and no retail diagnostic
-`[04 §4.3]` `[04 R-COB-01 §1]`.
+`[04 §4.3]` `[04 R-COB-01 §1]`. Nanolathe implements this set with one
+switch whose default enters that kill path; it does not keep a second lookup
+table before executing the handler.
 
 **C12 — operand shapes.** Six shapes, and the program counter is a **word**
 index `[04 §4.3]`.

@@ -338,18 +338,21 @@ would report their targets as unused. A retail diagnostic string that trips
 `ST1005` carries `//lint:ignore ST1005 retail text` with its citation. `internal/testsupport.RetailRoot` is
 the single place a test consults those variables and skips.
 
-**Determinism fingerprint.** The headless report's `state_hash` is the
-authoritative state hash after the run; with a fixed map, seed and tick count
-it is a regression fingerprint for the whole simulation. The reference run is
+**Partial state fingerprint.** The headless report retains the JSON key
+`state_hash`; its value now starts with `partial-v1:`. This diagnostic covers
+the explicit subset in DESIGN_RUNTIME_DETERMINISM §4. Equal values do not
+establish whole-simulation equivalence: projectile, meteor, AI, visibility and
+other future-affecting state is omitted. The reference run is
 
 ```
 nanolathe-headless -map "ashap plateau" -seed 7 -ticks 6000
 ```
 
-Its hash is not written down here: the check is that two runs agree and that
-a change to simulation code either leaves the hash alone or explains why it
-moved. The report also carries the simulation and CRT draw counts, which must
-be stable for identical seeded setups [I4].
+Its value is not written down here. Identical setups must agree on this
+fingerprint and both RNG draw counts [I4], but changes outside its coverage
+need their own contract tests. A change to an included value must explain the
+difference. Compare only the same fingerprint version; changing its field set
+or encoding requires a new version.
 
 **Visual evidence.** `nanolathe --shot` renders a frame headlessly; a
 screenshot is reviewed, an assertion that it should look right is not. Retail
@@ -367,9 +370,12 @@ citation text; it only shrinks.
 
 **Hygiene guards.** `internal/architecture` inspects source without importing
 it: the platform boundary and headless dependency closure (§3), the three
-random-stream ownership guards (§3), retail-only content, and the shrink-only
-parity ratchets that count authoritative `map` iteration and `float64` use
-per file and fail on any increase. `internal/cleanroom` is the clean-room
+random-stream ownership guards (§3), retail-only content, and the parity
+ratchets. The map guard type-checks the authoritative package graph and
+requires each map range to have a reviewed enclosing-function record; the `float64`
+guard keeps its shrink-only per-file baseline, with declaration-scoped records
+for the existing I2 operations formerly hidden by file-wide exceptions.
+`internal/cleanroom` is the clean-room
 lint: a census of raw-forensics text per file in `baseline.go`, failing when a
 file exceeds its count and when a count drops without the baseline being
 regenerated (`tools/cleanroom-baseline`; `tools/cleanroom-report` lists the

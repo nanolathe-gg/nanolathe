@@ -299,7 +299,7 @@ is the kill/loss flash, armed only while the interface bit is set
 `QueueOverlay` is a pure snapshot consumer: it walks the committed order queues
 while Shift is held and returns immutable draw instructions, retaining no
 pointer into simulation state and mutating nothing, so holding Shift cannot
-move the authoritative hash `[07 R-P0-11 §3]` `[07 R-P0-11 §4]`. The walker's
+move the partial state fingerprint `[07 R-P0-11 §3]` `[07 R-P0-11 §4]`. The walker's
 privileged sources are the follow camera's tracked unit, the unit whose command
 page is open, the hovered unit, and every selected unit; all four draw the full
 five-bit mask, every other local unit draws marker-only, and the marker-only

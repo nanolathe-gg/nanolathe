@@ -24,7 +24,7 @@ func TestP28MissionAngleOverwritesAfterAllocatorDrawSequence(t *testing.T) {
 	}
 }
 
-func TestP28SameSeedProducesSameHeadingAndAuthoritativeHash(t *testing.T) {
+func TestP28SameSeedProducesSameHeadingAndPartialFingerprint(t *testing.T) {
 	makeRun := func(seed uint32) (uint16, string) {
 		s := strictNewSessionWithUnits(t, 0, seed, 19)
 		def := s.Catalog.Units["armcom"]
@@ -33,9 +33,9 @@ func TestP28SameSeedProducesSameHeadingAndAuthoritativeHash(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Create: %v", err)
 		}
-		hash, err := s.ParityAuthoritativeHash()
+		hash, err := s.PartialStateFingerprint()
 		if err != nil {
-			t.Fatalf("ParityAuthoritativeHash: %v", err)
+			t.Fatalf("PartialStateFingerprint: %v", err)
 		}
 		return s.Units.Unit(h).Move.Heading, hash
 	}
@@ -46,7 +46,7 @@ func TestP28SameSeedProducesSameHeadingAndAuthoritativeHash(t *testing.T) {
 	}
 	headingC, hashC := makeRun(30)
 	if headingA == headingC && hashA == hashC {
-		t.Fatal("different seed produced identical heading and authoritative hash")
+		t.Fatal("different seed produced identical heading and partial fingerprint")
 	}
 }
 

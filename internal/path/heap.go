@@ -48,18 +48,36 @@ type Node struct {
 // is the stable identity. Node 0 is invalid, like pool slot 0.
 type NodeStore struct {
 	nodes []Node // index by NodeID; nodes[0] is zero
-	index map[Cell]NodeID
-	scale int32 // h scale quantum for F computation (see Scale)
+	// index is the standalone store's per-cell table. A session store uses
+	// indexRef to bind this same logical table to Session.entries. Keeping the
+	// node ID in that table avoids a second Cell-keyed map for the working set.
+	index map[Cell]entry
+	// indexRef lets Reset replace a session's shared table without leaving the
+	// Session pointing at the old map.
+	indexRef *map[Cell]entry
+	scale    int32 // h scale quantum for F computation (see Scale)
 }
 
 // NewNodeStore returns an empty store with the given h scale.
 // Scale is the per-player quantum used as (h*scale)>>16 [04 §7.2] C6.
 // Pass 65536 for unweighted (1.0) when no scheduler is present.
 func NewNodeStore(scale int32) *NodeStore {
+	index := make(map[Cell]entry)
 	return &NodeStore{
 		nodes: make([]Node, 1), // reserve 0
-		index: make(map[Cell]NodeID),
+		index: index,
 		scale: scale,
+	}
+}
+
+// newSessionNodeStore binds node lookup to the search's existing per-cell
+// entry table. The table already carries status, direction and node identity,
+// so a second Cell-keyed index would duplicate every touched coordinate.
+func newSessionNodeStore(scale int32, entries *map[Cell]entry) *NodeStore {
+	return &NodeStore{
+		nodes:    make([]Node, 1),
+		indexRef: entries,
+		scale:    scale,
 	}
 }
 
@@ -74,8 +92,15 @@ func (ns *NodeStore) SetScale(scale int32) { ns.scale = scale }
 func (ns *NodeStore) Reset() {
 	ns.nodes = ns.nodes[:1]
 	// Replacing the index avoids map iteration in a simulation-visible reset
-	// while retaining the stable node identity contract [04 §7.2].
-	ns.index = make(map[Cell]NodeID)
+	// while retaining the stable node identity contract [04 §7.2]. For a
+	// session this is also the status table, so rebinding through indexRef
+	// updates the Session's sole map reference; lookup and status cannot
+	// continue against different maps after a lifecycle reset.
+	if ns.indexRef != nil {
+		*ns.indexRef = make(map[Cell]entry)
+		return
+	}
+	ns.index = make(map[Cell]entry)
 }
 
 // Len returns the number of allocated nodes (excluding invalid 0).
@@ -83,8 +108,12 @@ func (ns *NodeStore) Len() int { return len(ns.nodes) - 1 }
 
 // Find locates the NodeID for a cell.
 func (ns *NodeStore) Find(cell Cell) (NodeID, bool) {
-	id, ok := ns.index[cell]
-	return id, ok
+	index := ns.lookup()
+	e, ok := index[cell]
+	if !ok || e.node == invalidNodeID {
+		return invalidNodeID, false
+	}
+	return e.node, true
 }
 
 // Get returns the node for id. Caller must ensure id is valid.
@@ -105,8 +134,9 @@ func hScaled(h, scale int32) int32 {
 // even if goal now returns a different h — the caller can mutate
 // goal between calls to verify the write-once contract.
 func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal Goal) NodeID {
-	if id, ok := ns.index[cell]; ok {
-		return id
+	index := ns.lookup()
+	if e, ok := index[cell]; ok && e.node != invalidNodeID {
+		return e.node
 	}
 	var h int32
 	if goal != nil {
@@ -124,7 +154,9 @@ func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal G
 		Dir:    dir,
 		hSet:   true,
 	})
-	ns.index[cell] = id
+	e := index[cell]
+	e.node = id
+	index[cell] = e
 	return id
 }
 
@@ -133,8 +165,9 @@ func (ns *NodeStore) Ensure(cell Cell, g int32, parent NodeID, dir uint8, goal G
 // is returned without modifying H, G, F, or parent. Use TryRelax
 // to update G/F.
 func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) NodeID {
-	if id, ok := ns.index[cell]; ok {
-		return id
+	index := ns.lookup()
+	if e, ok := index[cell]; ok && e.node != invalidNodeID {
+		return e.node
 	}
 	hs := hScaled(h, ns.scale)
 	f := g + hs
@@ -148,8 +181,17 @@ func (ns *NodeStore) Alloc(cell Cell, g, h int32, parent NodeID, dir uint8) Node
 		Dir:    dir,
 		hSet:   true,
 	})
-	ns.index[cell] = id
+	e := index[cell]
+	e.node = id
+	index[cell] = e
 	return id
+}
+
+func (ns *NodeStore) lookup() map[Cell]entry {
+	if ns.indexRef != nil {
+		return *ns.indexRef
+	}
+	return ns.index
 }
 
 // TryRelax attempts to improve the path to id via newG/newParent.
