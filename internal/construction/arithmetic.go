@@ -271,9 +271,7 @@ func (s *Service) Repair(builder, target *units.Unit, worker int32) bool {
 		return false
 	}
 	buckets := s.Economy.UnitBuckets(builder.Handle)
-	admitted := buckets != nil && buckets[economy.Energy].Carry <= 0
-	economy.AdmitOneResource(buckets, float32(energy))
-	if !admitted {
+	if !economy.AdmitOneResource(buckets, float32(energy)) {
 		return false
 	}
 	if s.Combat == nil || s.World == nil {

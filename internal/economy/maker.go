@@ -123,7 +123,8 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 		upkeepAdmitted := false
 		if branchActive {
 			switch {
-			case def.EnergyUse < 0:
+			// The refund branch includes unordered values [05 R-ECO-01 §1].
+			case !(def.EnergyUse >= 0):
 				// The refund is the negated authored value — a single float in
 				// the record [02 "Unit record"] — entering the same ladder as
 				// every other contribution, with the accumulator store as the
@@ -136,9 +137,8 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 				addContribution(s, p, energy, -float64(float32(def.EnergyUse)))
 				// A refund never admits the unit's production branch.
 				upkeepAdmitted = false
-			case def.EnergyUse >= 0:
-				upkeepAdmitted = energy.Carry <= 0
-				AdmitOneResource(&ue.Buckets, float32(def.EnergyUse))
+			default:
+				upkeepAdmitted = AdmitOneResource(&ue.Buckets, float32(def.EnergyUse))
 			}
 		}
 

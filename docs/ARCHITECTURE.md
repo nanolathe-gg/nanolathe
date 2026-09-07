@@ -212,7 +212,7 @@ Three boundaries in this graph are enforced by tests in `internal/architecture`
 rather than by convention:
 
 * **Only the platform adapter reaches Ebitengine.** `internal/platform/ebitenapp`,
-  `internal/platform/gpurender` (once it exists), `internal/audiobackend` and
+  `internal/platform/gpurender`, `internal/audiobackend` and
   `cmd/nanolathe` are the only packages whose
   import closure (including their test binaries) may contain the Ebitengine
   modules. Every other package, and every other test, stands up with no
@@ -454,31 +454,17 @@ The early integration anchors:
 
 ## 8. Retail coverage
 
-The research corpus was completed from the executable inward, not from the
-documents' own lists of open questions. Every reachable function in the
-retail executable's game code has a row in a coverage ledger and one of six
-classifications: **covered** — a research section states its behavior at
-implementable precision and the row cites that section; **library** —
-compiler runtime, decompressor, video codec or platform shim, with the
-evidence; **dead** — no caller, no table reference, no callback registration;
-**out of scope** — the networking transport, lobby and codec internals
-excluded in §1, still named so the boundary is explicit; **partial** and
-**uncovered**, of which none remain. Functions were grouped into clusters by
-walking the call graph from known roots — the tick phase dispatcher, the order
-descriptor table, the GUI window handler table, the COB port switch, the
-front-end state table — and by string vocabulary (GUI screen names, TDF keys,
-diagnostics); each cluster maps to one research lane. A section was accepted
-as covering a row only when a fresh implementer, reading the section alone,
-could write the function without choosing anything: inputs named with units
-and defaults, arithmetic and widths spelled out, comparisons exact, edges and
-timing stated, confidence marked per claim.
+The external executable ledger maps recovered functions to research contracts
+and scope classifications. Its current check and limits are documented in
+`research/retail-executable-spec/README.md` under "How coverage of the executable
+was established". A covered row is a citation/index classification, not proof
+that all behavior is settled or implemented. The owning research sections
+state confidence and unresolved questions; REVIEW.md tracks implementation
+findings. The ledger remains outside the repository because its identifiers
+belong to raw executable analysis.
 
-The ledger itself lives outside the repository, in the raw analysis corpus,
-because its rows are keyed by executable address; it is re-checked against
-the research headings whenever a research document changes, so a rewrite that
-drops a cited section is caught there as well as by `internal/docs`. What can
-be committed is the map from cluster role to design document below — role
-names only.
+The table below maps cluster roles to design ownership. It does not certify
+implementation completion or a complete recovered-function census.
 
 | Design document | Retail clusters (role names) |
 |---|---|

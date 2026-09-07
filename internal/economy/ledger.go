@@ -634,7 +634,8 @@ func InitPlayer(p *Player) {
 }
 
 // AdmitTwoResource admits energy and metal demands as one transaction per [05 "Two-resource admission"].
-// It always records both requested amounts; it records both as accepted only if both carries are non-positive.
+// It records both requests before testing either carry. Positive carry denies;
+// unordered carry admits [05 R-ECO-01 §1][05 R-ECO-01 §7].
 // The bool is the helper's own verdict — true when the work was admitted — so a
 // caller takes the decision from here instead of repeating the gate for itself
 // [05 R-ECO-01 §7].
@@ -644,7 +645,7 @@ func AdmitTwoResource(buckets *[2]Bucket, energy, metal float32) bool {
 	}
 	buckets[Energy].Requested += energy
 	buckets[Metal].Requested += metal
-	if buckets[Energy].Carry <= 0 && buckets[Metal].Carry <= 0 {
+	if carryAdmits(buckets[Energy].Carry) && carryAdmits(buckets[Metal].Carry) {
 		buckets[Energy].Accepted += energy
 		buckets[Metal].Accepted += metal
 		return true
@@ -653,16 +654,22 @@ func AdmitTwoResource(buckets *[2]Bucket, energy, metal float32) bool {
 }
 
 // AdmitOneResource admits an energy-only demand per [05 "One-resource admission"].
-// It always adds to energy requested and adds to accepted only when energy carry is non-positive.
-func AdmitOneResource(buckets *[2]Bucket, energy float32) {
+// It returns its own admission decision, including unordered carry acceptance.
+func AdmitOneResource(buckets *[2]Bucket, energy float32) bool {
 	if buckets == nil {
-		return
+		return false
 	}
 	buckets[Energy].Requested += energy
-	if buckets[Energy].Carry <= 0 {
-		buckets[Energy].Accepted += energy
+	if !carryAdmits(buckets[Energy].Carry) {
+		return false
 	}
+	buckets[Energy].Accepted += energy
+	return true
 }
+
+// carryAdmits preserves the carry gate's unordered branch: only an ordered
+// positive value denies. Go's carry <= 0 would reject NaN [05 R-ECO-01 §1, §7].
+func carryAdmits(carry float32) bool { return !(carry > 0) }
 
 // AdmitTwoResourceToMirror is the mirror-bucket two-resource admission helper per C11.
 // Body arrives with WU-08-3 for settlement ratios; this records admission per C11.
@@ -721,7 +728,9 @@ func ImmediateDebit(p *Player, buckets *[2]Bucket, energy, metal float32) bool {
 	if p == nil {
 		return false
 	}
-	if energy > p.Stock[Energy] || metal > p.Stock[Metal] {
+	// Direct payment requires ordered inclusive comparisons, unlike carry gates
+	// [05 R-ECO-01 §7]. Neither resource changes on an unordered comparison.
+	if !(energy <= p.Stock[Energy] && metal <= p.Stock[Metal]) {
 		return false
 	}
 	if buckets == nil {

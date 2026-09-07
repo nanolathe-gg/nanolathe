@@ -112,11 +112,14 @@ feature-reclaim payout, which is where the computer player's difficulty scaling
 is applied — separately to each of the two additions, gated on the *builder's*
 record `[05 R-WORK-01 §5]` `[05 R-ECO-01 §11]`.
 
-**Admission and settlement** (`admission.go`). The five admission helpers are
+**Admission and settlement** (`ledger.go`, `admission.go`). The five admission helpers are
 `AdmitTwoResource`, `AdmitOneResource`, their two mirror twins and
 `ImmediateDebit` `[05 R-ECO-01 §7]`; the two-resource form is an all-or-nothing
 gate that always records both requests and records both as accepted only when
-both carries are non-positive `[05 "Two-resource admission"]`. `Settle` is the
+neither carry is ordered positive, so NaN carries admit work
+`[05 R-ECO-01 §1]` `[05 "Two-resource admission"]`. Both admission functions
+return the verdict consumed by their callers; direct payment separately
+requires ordered inclusive stock comparisons `[05 R-ECO-01 §7]`. `Settle` is the
 whole pass: rebuild capacity, per-unit production fills, cloak upkeep, gather
 both resources and commit the per-pass counters, settle energy and then metal
 independently, apply back to units and then the mirror, clamp against the

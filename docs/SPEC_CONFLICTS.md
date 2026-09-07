@@ -404,43 +404,34 @@ DESIGN_UNITS_ORDERS_COB §5.
 
 ---
 
-## SC18 — The allocator's zero-fill byte count [P1-I09]
+## SC18 — Constructor initialization and reuse [P1-I09]
 
-**Status:** Open.
+**Status:** Allocator policy closed; constructor residuals open.
 
-**Spec** `[01 §6.1]` and `[GAP T13]` leave the allocator's backing
-implementation, arena boundaries and zero-fill policy untraced; `[04 §4.1]` and
-`[GAP T15]` leave the COB loader's allocation and its exact failure behavior on
-a bad allocation or a corrupted piece index unresolved — retail may abort
-through its allocator where a clean implementation should terminate the
-affected script deterministically.
+**Established:** `[01 §6]` and `[01 R-PLAT-01 §5]` settle the allocator:
+ordinary allocations are not filled and contain whatever the heap held; allocation failure
+logs the retail diagnostic, shows a modal error and terminates the process.
+The old allocator questions `[GAP T13]` and `[GAP T15]` do not establish any
+blanket zero-fill length.
 
-**Observed:** retail's exact fill length for the 280-byte unit record, the
-107-byte projectile record and the 86-byte order node is not established, and
-no stock input distinguishes the candidates: the whole-install format walk
-parses every stock file without reaching a fault guard, and the order-queue
-census reaches no queue guard. Go zero-initializes all three records, so the
-fill length is unobservable here.
+**Decision:** Go's zero-initialization is a deterministic host policy.
+Constructor writes must be implemented from each record's owning contract;
+zeroed Go storage is not evidence that retail initializes the same fields.
+The COB parser's checked malformed-input handling remains a separate host
+boundary `[04 §4.1]`; it does not imply a recoverable retail allocation failure.
 
-**Decision:** keep Go zero-initialization with `TODO(T23)` at each allocation
-site citing the open byte count. The COB loader bounds-checks its header
-offsets and reports a diagnostic where retail does not, which is the
-[I11]-sanctioned exception. Revisit only with executable evidence that the fill
-length or the COB abort path is observable.
+**Unknown:** the complete constructor/slot-reuse write set and reads before
+initialization for records whose owning contract remains incomplete. Settle
+these with a per-field writer/reader census and allocation/reuse call-path
+trace in the owning category. Record an actual unanswered field question at
+its code site, rather than a generic unknown allocator fill count.
 
-**What would settle it:** a static trace of the allocator's fill length and of
-the COB abort path.
+The save boundary is retail HAPIBANK account parsing and staged battle
+restoration `[08 "Save-file organization"]`. Save truncation is not an
+allocator residual.
 
-**Superseded half:** this entry once also covered a Nanolathe-specific save
-codec with a fatal-on-truncation policy, and an in-battle restoration that
-returned "unsupported". That codec is gone. The save boundary is retail
-HAPIBANK account parsing, with staged battle restoration implemented against
-it, so nothing about save truncation remains open here and the codec must not
-be reintroduced `[08 "Save-file organization"]`.
-
-**Contract:** `[01 §6.1]`, `[04 §4.1]`, `[08 "Save-file organization"]`;
-DESIGN_RUNTIME_DETERMINISM §5 and §7 own the open half,
-DESIGN_SESSIONS_AI_SAVE §5 records the superseded one.
+**Contract:** `[01 §6]`, `[01 R-PLAT-01 §5]`, `[04 §4.1]`;
+DESIGN_RUNTIME_DETERMINISM §5 and §7 own this initialization policy.
 
 ---
 

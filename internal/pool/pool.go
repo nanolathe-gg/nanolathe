@@ -587,10 +587,10 @@ func (p *Projectiles) Compact(follow *Handle) {
 	}
 	oldCount := p.count
 
-	// Build old->new index map for survivors. Use a slice indexed by old
-	// position; -1 means the old record was dead and has no survivor.
-	oldToNew := make([]int, oldCount)
-	for i := range oldToNew {
+	// Capacity is fixed; stack scratch avoids allocating on every phase tail.
+	// Only the original span is read. A negative entry denotes a dead record.
+	var oldToNew [ProjectileCapacity]int
+	for i := 0; i < oldCount; i++ {
 		oldToNew[i] = -1
 	}
 	dest := 0

@@ -122,25 +122,28 @@ entropy. That is the behavior being cloned, not a transcription slip [I11].
 There is no `bound < 2` guard on this stream — retail's CRT sites are raw
 inline `rand() % n` expressions — so a bound of one still spends its draw.
 
-Ownership is per session. `Session.SimRNG` and `Session.CrtRNG` return the
-battle's own state for its lifetime; `SeedSessionRNG` installs a fresh pair and
-resets the global tick, which wipes every pre-battle draw from both streams'
-state `[01 R-CORE-02]`. `rng.Global` exists for process bootstrap only and is
-nil until seeded — a stream that is silently usable before it is seeded
-produces a run that looks deterministic and reproduces nothing.
+Nanolathe owns both streams per session. `Session.SimRNG` and `Session.CrtRNG`
+return that session's state; `SeedSessionRNG` installs a fresh pair and resets
+the global tick. This isolates sessions for reproducible runs. Retail resets
+the simulation stream at battle entry, but preserves the main-thread CRT
+history; the entry seed belongs to a separate, temporary loading-thread block
+`[01 R-CORE-02]` `[01 R-PLAT-01 §7]`. The per-session CRT lifetime is therefore
+an implementation divergence tracked by REVIEW RT-08. `rng.Global` exists for
+process bootstrap only and is nil until seeded.
 
 Which stream draws, and when, is a per-phase fact `[01 R-DET-01 §4]`
 `[01 R-DET-01 §5]`. Gameplay draws from the simulation stream. The CRT stream
 serves the meteor scheduler `[06 §6.5]`, the camera shake driver `[03 §5.6]`,
 audio variant selection `[03 §8.3]`, the wind next-change interval `[01 §7.3]`
-and the effect strips' own particle draws `[03 R-STRIP-01 §3]`. Every tick-side
+and the effect strips' own particle draws `[03 R-STRIP-01 §3]`. In retail every tick-side
 CRT draw continues the stream seeded at process start; battle entry's own CRT
 reseed ran on retail's loading thread and its block was discarded with that
 thread, so nothing reseeds the tick-side CRT stream `[01 R-PLAT-01 §7]`
 `[08 R-ENTRY-01 §2]`. A consumer draws the documented number of times even when
-it discards the result [I4]. Presentation never holds a session stream; where a
-presentation path needs jitter it copies the stream *state* into a private
-copy (§3.3, DET-01).
+it discards the result [I4]. Nanolathe presentation copies session stream
+state for jitter (§3.3, DET-01). That isolation does not reproduce retail's
+shared main-thread consumption; REVIEW RT-08 owns the remaining policy and
+consumer audit.
 
 ### 2.3 `internal/sim/numeric` — fixed point, angles, trig
 
@@ -257,14 +260,14 @@ invokes neither the callback nor a deadline advance
 
 **The tail.** After phase 12, inside the same sub-tick, the sharing pass runs
 (the transport tail of `[01 §4.4]`) and then the per-sub-tick result work.
-Publication follows, outside the phase registry. Once per pump, after the last
-runnable sub-tick, the executor tail runs three empty barrier routines, the
-in-battle message-ring retire — presentation state, kept in the tail only for
-its place in the order `[01 R-PLAT-02 §8]` — the pending-list compaction, and
-last the temporary-sight expiry sweep `[03 R-COMP-02 §2]` `[01 R-PLAT-02 §5]`.
-A zero-runnable pump changes nothing in that tail, so it is skipped and the
-tail's diagnostic trace stays a record of runnable pumps only
-`[01 R-PLAT-02 §7]`.
+Publication follows, outside the phase registry. Once per pump, including a
+zero-runnable pump, the executor tail runs three stages: the three empty
+barrier routines; the in-battle message-ring retire; and temporary-sight expiry
+with its own compaction. There is no separate pending-list stage
+`[01 R-PLAT-02 §7]` `[01 R-PLAT-02 §8]`. The message retire can remove at most
+one overdue line on a zero-runnable pump; sight expiry uses the unchanged
+global tick and its strict comparison. Optional diagnostic tracing records
+the tail on every pump, subject to its configured bound.
 
 **Temporary sight.** A unit a player loses keeps revealing its sight radius for
 sixty ticks. The records are twenty fixed slots carrying their own stored
@@ -421,11 +424,13 @@ value, returns zero **without advancing**. There is no chunking on this stream
 which still spends exactly one draw. There is no `bound < 2` guard: a bound of
 one consumes its draw `[01 §7.2]`.
 
-**C10 — seeding.** Absent an override the simulation stream is seeded at battle
-entry from the time source as `(t ^ 0x66e29572) | 1` while the CRT stream is
-seeded separately at process start; `--seed N` fixes both (B4). Battle entry's
-reseed wipes every earlier draw from the streams' state `[01 §7.1]`
-`[01 R-CORE-02]`.
+**C10 — seeding.** Retail seeds the simulation stream at battle entry from its
+performance-counter source; the main-thread CRT is seeded at process startup
+and continues across battle entry. Setup seeds a separate loading-thread CRT
+block, discarded with that thread `[01 §7.1]` `[01 R-CORE-02]`
+`[01 R-PLAT-01 §7]`. Nanolathe's composition supplies a fresh pair per session;
+`--seed N` fixes both (B4). The CRT lifetime and presentation isolation are
+explicit implementation divergences (§2.2), not reseed parity claims.
 
 **C11 — wind is phase 8 alone.** The complete scheduled redraw is one phase: a
 strict deadline gate, then one CRT interval draw `((crt × 10) / 0x8000 + 5) ×
@@ -609,14 +614,16 @@ initialization, whose authoritative entries are integers `[04 §5.1]`.
 
 ## 5. Divergences
 
-* **SC18 — the allocator's zero-fill byte count is untraced.** Retail's exact
-  memset length for the 280-byte unit record, the 107-byte projectile record and
-  the 86-byte order node is not established. Go zero-initialization is kept at
-  the allocation sites with the open byte count cited there; the observable
-  effect is the same zeroed record. No stock input distinguishes the two.
+* **SC18 — deterministic initialization.** Established: retail's default
+  allocator does not fill, and allocation failure terminates the process
+  `[01 R-PLAT-01 §5]`. Go zero-initialization is a host policy, not a traced
+  retail fill operation. Unknown: constructor and slot-reuse writes versus
+  reads before initialization for incompletely traced records; the decider is
+  a writer/reader census in the owning unit, projectile, order or COB contract.
 * **The dual-stream `--seed` override.** Retail has no way to fix both streams.
   Coupling them behind one flag is a debug affordance, not a runtime mode: the
-  unseeded path keeps retail's separate sources (B4, C10).
+  unseeded path uses separate sources, but the per-session CRT lifetime still
+  differs from retail (B4, C10, REVIEW RT-08).
 * **A zero bound on the CRT sampler.** Retail's unsigned divide would fault. The
   draw is still consumed — retail draws before the divide — and zero is
   returned rather than panicking (C9) [I11].
@@ -699,8 +706,11 @@ listed here because the file is here:
 
 Open questions carried by the contracts above rather than by a marker:
 
-* **The allocator's zero-fill byte count** (SC18) is untraced and no stock input
-  distinguishes the two candidate behaviors.
+* **Constructor initialization and reuse** (SC18): which fields are read before
+  a constructor or later writer initializes them, and which survive slot reuse.
+  A complete per-record writer/reader census would settle those residuals; the
+  allocator's no-fill default and fatal failure path are established
+  `[01 R-PLAT-01 §5]`.
 * **The singleton semaphore's release point** is not named by the traced
   shutdown sequence. It is a platform residual with no simulation effect, and
   Nanolathe creates no semaphore `[01 R-PLAT-02 §2]`.

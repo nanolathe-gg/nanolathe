@@ -90,7 +90,8 @@ The established startup sequence for the normal process entry is:
 
 The Park–Miller simulation random stream is **not** seeded during this process
 startup; it is seeded at battle entry from `QueryPerformanceCounter` (battle
-entry also reseeds the CRT stream there; §7.2).
+entry seeds the separate loading-thread CRT block; the main-thread CRT
+continues from startup [R-PLAT-01 §7]).
 
 The process title and registered class both identify the game as “Total
 Annihilation”. The default display dimensions are 640 by 480. The startup notes
@@ -1507,8 +1508,8 @@ return (state >> 16) & 32767
 
 The state is the four-byte field in the 116-byte TLS block. Startup seeds it
 from local/system time and time-zone conversion, at effectively one-second
-resolution, and **battle entry reseeds it again** from the same time-of-day
-helper: the seed helper has exactly two call sites in the recovered image,
+resolution. Battle entry seeds the loading thread's separate block from the
+same time-of-day helper: the seed helper has exactly two call sites in the recovered image,
 process startup and the battle-entry orchestrator. The battle-entry seed
 writes the **loading thread's** block ([R-PLAT-01 §4]): battle entry runs on a
 thread the loading state creates, so its `srand` seeds that thread's fresh
@@ -1627,10 +1628,10 @@ of that block.
 
 #### Battle RNG seeding and a chronological draw census [R-CORE-02]
 
-**Seeding (Established).** At battle entry the orchestrator seeds both
-streams before any battle setup runs: the simulation stream is seeded from
+**Seeding (Established).** At battle entry the orchestrator seeds the simulation
+stream and the loading-thread CRT block before setup: simulation is seeded from
 the `QueryPerformanceCounter` sample (low part plus high part, XOR the fixed
-constant, forced odd), and the CRT stream is reseeded from the time-of-day
+constant, forced odd), and the loading-thread CRT is seeded from the time-of-day
 helper (local time with time-zone and daylight handling, one-second
 resolution). The CRT seed helper has exactly two call sites — process startup
 and battle entry — and the simulation seed setter exactly one (battle entry).
@@ -1693,9 +1694,10 @@ fails the scheduler restore without partial application). The layout is:
 **Publication omission:** Raw-analysis detail or a retail example was omitted from this public edition. This editorial omission is not a new behavioral finding.
 
 RNG state (Park–Miller process-wide and CRT TLS state) is outside this block
-and is absent from the bounded save-writer graph; on load both streams are
-reseeded because load re-enters the battle-entry orchestrator (see
-§7.3 [R-CORE-02]), so a resumed game does not continue the pre-save random
+and is absent from the bounded save-writer graph. Load re-enters the battle-entry
+orchestrator, reseeding simulation and the loading-thread CRT block; the
+main-thread CRT continues its current process history [R-CORE-02]
+[R-PLAT-01 §7]. A resumed game therefore does not restore the pre-save random
 sequence bit-identically. The meteor-scheduling state, by contrast, is saved
 and restored in its own box. Replay formats are not covered by this save-box
 contract.
@@ -1905,7 +1907,9 @@ switch changes the helper's argument, not whether it runs ([R-PLAT-01 §2]).
 Authoritative code mixes integer/fixed-point, 32-bit float, and 64-bit double:
 
 - counters, flags, pool indices, and most map dimensions are integer;
-- persistent world positions and selected totals are double;
+- persistent world positions use signed 16.16 fixed-point words; selected
+  resource totals and intermediate calculations use double as specified by
+  their owning contracts ([04 §8.1], [05 "Two-stage settlement algorithm"]);
 - per-unit contributors, published ratios, and many definition values are
   float;
 - double-to-float stores round at the store boundary, so extended-register
@@ -2300,9 +2304,9 @@ byte `0x0C` and the 768-byte palette.
 - Fixed unit/projectile/feature/COB/construction pools and documented queue
   capacities/order where the ledger is explicit.
 - One global Park–Miller stream, one CRT TLS stream, x87 53-bit default, and
-  truncating `__ftol` conversion; both streams are seeded at battle entry
-  (simulation from the performance counter, CRT from the time-of-day helper;
-  single call sites per §7.1/§7.2), and wind draws span both streams with the
+  truncating `__ftol` conversion. Battle entry seeds simulation and the separate
+  loading-thread CRT; the main-thread CRT continues from process startup
+  ([R-PLAT-01 §7]). Wind draws span simulation and main-thread CRT with the
   exact arithmetic recovered (interval jitter, bounded speed draw, 16-bit
   heading draw, −2 vector factor, ratio over the fixed denominator 5000
   clamped at exactly 1.0) while the meteor shower consumes only the CRT
@@ -2312,7 +2316,8 @@ byte `0x0C` and the 768-byte palette.
   (`WS_EX_APPWINDOW`, `WS_POPUP|WS_VISIBLE|WS_SYSMENU`, `CS_DBLCLKS`) and popup
   semantics.
 - 28-byte `Players/GameTime` scheduler block is saved/restored with the field
-  layout above; RNG state is not saved and is reseeded on load.
+  layout above; RNG state is not saved. Load reseeds simulation and the
+  loading-thread CRT, while main-thread CRT history continues [R-CORE-02].
 - Seventeen static initialisers run before the entry; the engine block
   floats at a wall-clock skew of `(GetTickCount mod 1000) × 7` bytes; one
   quit-request routine sets the quit bit and posts `WM_DESTROY`; the

@@ -439,31 +439,31 @@ The compressed GAF decoder is **not** a gap: it is fully specified in
 
 ## How coverage of the executable was established
 
-The corpus was completed from the executable inward, not from the documents'
-own lists of open questions. Every reachable function in the retail
-executable's game code carries a row in a coverage ledger with one of six
-classifications: **covered** — a research section states its behavior at
-implementable precision and the row cites that section; **library** — compiler
-runtime, decompressor, video codec or platform shim, with the evidence;
-**dead** — no caller, no table reference, no callback registration; **out of
-scope** — the networking transport, lobby and codec internals excluded above,
-still named so the boundary is explicit; and **partial** and **uncovered**, of
-which none remain. Functions were grouped into clusters by walking the call
-graph from known roots — the tick phase dispatcher, the order descriptor
-table, the GUI window handler table, the COB port switch, the front-end state
-table — and by string vocabulary (GUI screen names, TDF keys, diagnostics);
-each cluster maps to one document. A section was accepted as covering a row
-only when a fresh implementer, reading that section alone, could write the
-function without choosing anything: inputs named with units and defaults,
-arithmetic and widths spelled out, comparisons exact, edges and timing stated,
-confidence marked per claim.
+The external function ledger classifies recovered functions as **covered**,
+**library**, **dead**, **out of scope**, **partial**, or **uncovered**. A covered
+row associates a function with a behavioral section; it is an index assertion,
+not proof that every field, edge, caller or implementation is settled. Read the
+section's claim-level confidence and its current "Missing and unknown" list.
+Implementation progress is tracked separately in REVIEW.md.
 
-The ledger itself lives outside this repository, in the raw analysis corpus,
-because its rows are keyed by executable address. It is re-checked against the
-research headings whenever a document changes, so a rewrite that drops a cited
-section is caught there as well as by `internal/docs`. What can be committed —
-the map from cluster role to design document, in role names only — is in
-`docs/ARCHITECTURE.md`.
+**Established — current ledger check:** the current external ledger has
+2,044 covered rows, all with citation text. The existing strict citation
+checker reports unresolved tokens in 81 of those rows (51 distinct tokens).
+No rows currently carry the partial or uncovered classification; one row has
+an empty classification. Those labels therefore cannot support a blanket
+completeness claim. The checker validates heading/anchor resolution within its
+supported syntax; it does not establish semantic agreement or a complete
+function-recovery census.
+
+**Unknown:** whether every recovered function's classification and citation
+still match the current behavioral contract. The decider is reconciliation of
+the unresolved rows, followed by a per-row contract review and recovery-boundary
+census. Raw row identities and analysis stay outside this repository. Citation
+checks must be run explicitly after relevant document changes; `internal/docs`
+checks repository citations but does not validate this external ledger.
+
+The role-to-design map is in `docs/ARCHITECTURE.md`. It describes ownership,
+not completion.
 
 ## Source hygiene
 

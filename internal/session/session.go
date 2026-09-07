@@ -418,12 +418,12 @@ type PhaseDrawDelta struct {
 // It is isolated per Session so two interleaved sessions do not cross-contaminate draws [RS-06].
 // DET-01: single authority — the session owns the battle's Park–Miller state
 // for its lifetime; there is no copy from rng.Global, no sync back, and no
-// reseed anywhere but here. Battle bootstrap seeds both streams fresh via
-// SeedSessionRNG (retail: sim from the QPC sum XOR constant, forced odd; CRT
-// from the time-of-day helper — so every draw before battle entry is wiped
-// from the streams' state [R-CORE-02]). The zero-value initialization below
-// exists only for bare fixture sessions; production constructors seed
-// explicitly.
+// reseed anywhere but here. Battle bootstrap seeds both per-session streams
+// through SeedSessionRNG. This is Nanolathe's isolation policy: retail resets
+// its simulation stream at entry, while its main-thread CRT retains the
+// process history and the entry seed belongs to the loading-thread block
+// [01 R-CORE-02][01 R-PLAT-01 §7]. The zero-value initialization below is for
+// bare fixtures; production constructors seed explicitly.
 func (s *Session) SimRNG() *rng.Simulation {
 	if s == nil {
 		return nil
@@ -450,11 +450,11 @@ func (s *Session) CrtRNG() *rng.CRT {
 	return &s.rngCrt
 }
 
-// SeedSessionRNG seeds both per-session streams fresh, wiping every draw made
-// before it — the Nanolathe form of retail's reseed-wipes-history property at
-// battle entry [R-CORE-02]. DET-01: explicit seeding only — it does not touch
-// rng.Global. The session is the sole authority for its lifetime; the
-// composition layer selects the pair and passes it here.
+// SeedSessionRNG installs the composition layer's seed pair and resets the
+// per-session streams. DET-01: it does not touch rng.Global. Resetting the CRT
+// here is a Nanolathe isolation policy; retail's main-thread CRT continues
+// across battle entry [01 R-CORE-02][01 R-PLAT-01 §7]. REVIEW RT-08 tracks that
+// lifetime and presentation-consumer divergence.
 func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
 	if s == nil {
 		return
@@ -1378,10 +1378,9 @@ func (s *Session) CycleDebugDisplayMode() {
 // before a battle exists — the briefing's wind and countdown values and the
 // menu-side audio owner [08 R-CAMP-01 §2][01 §7.2].
 //
-// It lives here, beside SeedSessionRNG, because the session package is the one
-// owner of retail stream construction: the front end must not stand up a
-// substitute stream of its own [INVARIANTS I4][DET-01]. The stream this
-// returns is the same CRT the battle continues from; battle entry reseeds it
-// through SeedSessionRNG, which wipes every draw made before that point
-// [R-CORE-02].
+// Session owns stream construction so front-end composition uses the same
+// recurrence [INVARIANTS I4][DET-01]. Nanolathe seeds the battle's separate
+// per-session CRT through SeedSessionRNG. Retail instead continues its
+// main-thread CRT across this boundary [01 R-PLAT-01 §7]; REVIEW RT-08 owns
+// the remaining lifetime and consumer-policy work.
 func NewFrontEndCRT(seed uint32) rng.CRT { return rng.NewCRT(seed) }

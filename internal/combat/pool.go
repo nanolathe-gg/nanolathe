@@ -419,160 +419,56 @@ func (s *Service) ProjectileLinkAt(h pool.Handle) pool.Handle {
 	return s.Records[idx].TargetProjectile // [P1-08 §2.3]
 }
 
-// Compact performs the stable tail compaction described in [06 §5.2] and
-// [01 §6.2], reproducing the retail procedure verbatim including marker table
-// rebuild order (WU-09-2 subtlest contract).
-//
-// Steps per [06 §5.2]:
-//   - writes each original record's old pool index into the old-index marker field before any copy;
-//   - scans current global count including clones appended after entry capture [01 §6.2];
-//   - finds first dead hole, copies later survivors downward preserving relative order, publishes reduced count after scan;
-//   - updates follow-camera pointer when the followed survivor moves (delegated to Slots.Compact);
-//   - for each MOVED survivor carrying a non-null projectile-to-projectile link, records moved source's new index together with target's old index;
-//   - second repair pass rewrites the moved source's link ONLY when a live record still carrying the target's old-index marker exists after compaction;
-//   - if the linked target was removed, no rewrite happens and the copied source retains the old raw pointer (stale) [06 §5.2];
-//   - sources BEFORE the first dead hole are never moved and never enter the repair table, so a link to a target that shifted left stays stale even though target survived [06 §5.2];
-//   - nothing is checked at dereference [06 §5.2], [GAP T21].
-//
-// I5: Slots stays sole alloc/dead/count authority; this method snapshots named
-// records + OLD markers, delegates stable metadata move to Slots.Compact, moves
-// parallel records identically, then repairs follower links as above.
+// Compact preserves stable record movement and the bounded link repair of
+// [06 §5.2]. Only moved sources have their projectile links repaired; a removed
+// target or an unmoved source keeps its old raw handle. Tail records retain
+// their bytes after the required old-index marker writes.
 func (s *Service) Compact(follow *pool.Handle) {
 	if s == nil {
 		return
 	}
 	oldCount := s.Slots.Count()
-	if oldCount == 0 {
-		// pool's Compact also no-ops on zero, but we handle nil follow early.
-		s.Slots.Compact(follow)
-		return
-	}
-	// [06 §5.2] Before any copy, writes each original record's old pool index into the old-index marker field.
+	// Every survivor's marker is unique and equals its old index. This fixed
+	// table therefore answers the later marker search without scanning each
+	// target's live span. A negative entry means no surviving target.
+	var oldToNew [ProjectileCapacity]int16
+	newCount := 0
 	for i := 0; i < oldCount; i++ {
 		s.Records[i].OldMarker = int16(i)
-	}
-	// Snapshot dead flags and old links before any copy [06 §5.2].
-	dead := make([]bool, oldCount)
-	for i := 0; i < oldCount; i++ {
-		dead[i] = s.Slots.IsDead(pool.Handle(i + 1))
-	}
-	oldLinks := make([]pool.Handle, oldCount)
-	for i := 0; i < oldCount; i++ {
-		oldLinks[i] = s.Records[i].TargetProjectile
-	}
-	// Find first dead hole [06 §5.2].
-	firstHole := oldCount
-	for i := 0; i < oldCount; i++ {
-		if dead[i] {
-			firstHole = i
-			break
-		}
-	}
-	// Build old->new map and newCount (stable order) [06 §5.2].
-	oldToNew := make([]int, oldCount)
-	for i := range oldToNew {
-		oldToNew[i] = -1
-	}
-	dest := 0
-	for i := 0; i < oldCount; i++ {
-		if dead[i] {
+		if s.Slots.IsDead(pool.Handle(i + 1)) {
+			oldToNew[i] = -1
 			continue
 		}
-		oldToNew[i] = dest
-		dest++
+		oldToNew[i] = int16(newCount)
+		newCount++
 	}
-	newCount := dest
-
-	// Build repair table for MOVED survivors only [06 §5.2]:
-	// "For each moved survivor carrying a non-null projectile-to-projectile link,
-	//  compaction records the moved source's index together with the target's old index"
-	// Sources BEFORE the first dead hole are never moved and never enter the table [06 §5.2].
-	type repairEntry struct {
-		srcNew int
-		tgtOld int
-	}
-	var repairs []repairEntry
-	if firstHole < oldCount {
-		for i := 0; i < oldCount; i++ {
-			if dead[i] {
-				continue
-			}
-			newIdx := oldToNew[i]
-			if newIdx == i {
-				// Unmoved (before first hole) — never enters repair table [06 §5.2].
-				continue
-			}
-			if newIdx < 0 {
-				continue
-			}
-			link := oldLinks[i]
-			if link == 0 {
-				continue
-			}
-			tgtOld := int(link) - 1
-			// Even if target index is out of oldCount range, we still record;
-			// second pass will simply fail to find a marker and leave stale [06 §5.2].
-			repairs = append(repairs, repairEntry{srcNew: newIdx, tgtOld: tgtOld})
-		}
+	if newCount == oldCount {
+		// Marker writes still occur on no-death ticks. No record moves, so
+		// neither projectile links nor the follow pointer can be repaired.
+		return
 	}
 
-	// Delegate stable metadata move to Slots, which also repairs follow-camera link [06 §5.2], [01 §6.1].
-	// This publishes reduced count only after scan [06 §5.2] and uses current global span including clones [01 §6.2].
+	// Slots owns metadata, count publication and follow-camera retirement.
+	// Its stable slide and this parallel slide use the same survivor order.
 	s.Slots.Compact(follow)
-
-	// Move parallel named records identically to Slots' stable slide [06 §5.2].
-	// Preserve survivor order [06 §5.2].
-	if newCount != oldCount {
-		// Stable copy: walk old indices ascending, copy survivors down.
-		dest = 0
-		for i := 0; i < oldCount; i++ {
-			if dead[i] {
-				continue
-			}
-			if dest != i {
-				s.Records[dest] = s.Records[i]
-			}
-			dest++
+	for old := 0; old < oldCount; old++ {
+		dest := int(oldToNew[old])
+		if dest >= 0 && dest != old {
+			s.Records[dest] = s.Records[old]
 		}
-		// The records past the new active count are deliberately left alone.
-		// [06 §5.2] describes an unrepaired link as one that "can address a
-		// different live record shifted into the old address or STALE BYTES
-		// past the new active count" — a phrase that only has a referent if
-		// the slide leaves those bytes standing. The loop that used to zero
-		// them here was an invented write, and it also emptied every slot
-		// before it could be reused: a reservation clears exactly the dead bit
-		// and the retained unit target and keeps the rest of the previous
-		// occupant's record [06 §4.1], so clearing the tail here made that
-		// retention unreachable (WU-19-164).
 	}
 
-	// Second repair pass [06 §5.2]: rewrite moved source's link ONLY when a live
-	// record still carrying the target's old-index marker exists after compaction.
-	// "If the linked target was removed, no repair write happens and the copied
-	//  source retains the old raw pointer" [06 §5.2]. Search is over current live
-	//  span (newCount) for old-index marker equality.
-	for _, e := range repairs {
-		// e.srcNew is in [0,newCount). The source record at that slot currently
-		// carries oldLink value; we will conditionally rewrite.
-		if e.srcNew < 0 || e.srcNew >= newCount {
+	// Copying downward leaves each source's original link intact until this
+	// second pass. OldMarker distinguishes moved from unmoved sources, and
+	// absent targets deliberately retain stale links [06 §5.2].
+	for dest := 0; dest < newCount; dest++ {
+		source := &s.Records[dest]
+		if int(source.OldMarker) == dest || source.TargetProjectile == 0 {
 			continue
 		}
-		tgtNew := -1
-		// Scan live records ascending (stable order) for marker == tgtOld.
-		for j := 0; j < newCount; j++ {
-			if int(s.Records[j].OldMarker) == e.tgtOld {
-				tgtNew = j
-				break
-			}
-		}
-		if tgtNew >= 0 {
-			s.Records[e.srcNew].TargetProjectile = pool.Handle(tgtNew + 1)
-		} else {
-			// Leave stale raw pointer [06 §5.2] — retains old handle which may
-			// alias a different live record shifted into old address or stale bytes past new count.
-			// Do not clear; keep s.Records[e.srcNew].TargetProjectile as oldLinks[?] value already there.
+		target := int(source.TargetProjectile) - 1
+		if target >= 0 && target < oldCount && oldToNew[target] >= 0 {
+			source.TargetProjectile = pool.Handle(oldToNew[target] + 1)
 		}
 	}
-	// Note: nothing is checked at dereference — guidance, proximity, interceptor scans
-	// never validate generations, bounds, dead bits, or weapon identity [06 §5.2].
 }
