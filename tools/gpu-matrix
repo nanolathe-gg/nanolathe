@@ -1,0 +1,82 @@
+#!/bin/sh
+# The parity capture matrix of docs/DESIGN_GPU_RENDERER.md §6, shared by
+# tools/gpu-baseline (records it) and tools/gpu-parity (checks against the
+# record). Sourced, not executed.
+#
+# Each entry is: id | antiAlias | shading | nanolathe arguments separated by
+# semicolons (map and mission names contain spaces). The two option values
+# become the settings file's display block, which is how the shot path reads
+# the Anti_Alias and Shading bits; DitheredFog has no owner in retail's
+# settings and is not varied here. Zoom is never varied: classic zoom is not
+# a parity target.
+#
+# M7 is Ring Atoll: water and shore in frame at the local start, many tree
+# features. No stock skirmish start puts a Digger-class unit or a submerged
+# hull in frame deterministically; the digger erase and the waterline tint
+# are locked by the model rasterizer's own tests instead.
+
+GPU_MATRIX='
+M1|1|1|--map=ashap plateau;--seed=7;--shot-ticks=90;--shot-size=640x480
+M2|1|1|--map=ashap plateau;--seed=7;--shot-ticks=4500;--shot-size=1024x768
+M3|1|1|--map=ashap plateau;--seed=7;--shot-ticks=4500;--shot-size=1024x768;--shot-select
+M4|1|1|--map=ashap plateau;--seed=7;--shot-ticks=4500;--shot-size=1024x768;--shot-modal=options
+M5|1|1|--map=ashap plateau;--seed=7;--shot-ticks=9000;--shot-size=1024x768
+M6|0|0|--map=ashap plateau;--seed=7;--shot-ticks=9000;--shot-size=1024x768
+M7|1|1|--map=ring atoll;--seed=11;--shot-ticks=9000;--shot-size=1024x768
+M8|1|1|--mission=camps/Arm Campaign.tdf:MISSION0;--seed=3;--shot-ticks=1800;--shot-size=800x600
+'
+
+# The headless fingerprint runs recorded beside the captures, same separator.
+# The long one is only taken and checked when GPU_MATRIX_LONG=1, because it
+# runs for minutes.
+GPU_FINGERPRINT_SHORT='-map=ashap plateau;-seed=7;-ticks=6000'
+GPU_FINGERPRINT_LONG='-map=ashap plateau;-seed=7;-ticks=54000'
+
+# gpu_matrix_run BINARY OUTDIR
+#   Runs every matrix entry with BINARY, writing OUTDIR/<id>.png. A settings
+#   file per entry carries the option bits; the retail root comes from the
+#   environment the way tools/check-retail sets it.
+gpu_matrix_run() {
+	gm_binary=$1
+	gm_outdir=$2
+	mkdir -p "$gm_outdir"
+	gm_settings=$(mktemp -t nanolathe-settings.XXXXXX)
+	printf '%s\n' "$GPU_MATRIX" | while IFS='|' read -r gm_id gm_aa gm_shading gm_args; do
+		[ -n "$gm_id" ] || continue
+		cat >"$gm_settings" <<EOF
+{"version":1,"display":{"width":640,"height":480,"antiAlias":$gm_aa,"shadows":1,"featureShadows":1,"vehicleShadows":1,"shading":$gm_shading,"gamma":10}}
+EOF
+		gpu_matrix_capture "$gm_binary" "$gm_settings" "$gm_outdir/$gm_id.png" "$gm_args"
+		echo "  $gm_id -> $gm_outdir/$gm_id.png"
+	done
+	rm -f "$gm_settings"
+}
+
+# gpu_matrix_capture BINARY SETTINGS OUT "ARGS;SEPARATED;BY;SEMICOLONS"
+gpu_matrix_capture() {
+	gc_binary=$1
+	gc_settings=$2
+	gc_out=$3
+	gc_ifs=$IFS
+	set -f
+	IFS=';'
+	# shellcheck disable=SC2086
+	set -- $4
+	IFS=$gc_ifs
+	set +f
+	NANOLATHE_SETTINGS=$gc_settings "$gc_binary" "$@" --shot="$gc_out" >/dev/null
+}
+
+# gpu_matrix_fingerprint BINARY "ARGS;SEPARATED;BY;SEMICOLONS"
+#   Prints the headless run's state hash, or nothing when the run failed.
+gpu_matrix_fingerprint() {
+	gf_binary=$1
+	gf_ifs=$IFS
+	set -f
+	IFS=';'
+	# shellcheck disable=SC2086
+	set -- $2
+	IFS=$gf_ifs
+	set +f
+	"$gf_binary" "$@" 2>/dev/null | sed -n 's/.*"state_hash": *"\([^"]*\)".*/\1/p'
+}

@@ -3,6 +3,7 @@ package client
 import (
 	"math"
 
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/render"
 )
 
@@ -232,7 +233,7 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 	if d == nil || d.Side <= 0 {
 		return false
 	}
-	drew := false
+	pts := c.pointScratch[:0]
 	for row := 0; row < d.Side; row++ {
 		py := cy + row - d.Offset
 		if py < 0 || py >= c.height {
@@ -252,12 +253,17 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 				continue
 			}
 			// b is in 0x4F..0x6E, so the row is 0..31 without a clamp; the
-			// lookup's own clamp is the only guard, as retail has none.
+			// lookup's own clamp is the only guard, as retail has none. The record
+			// carries the row and the sink folds the destination pixel through it
+			// [03 §4.3.1][03 R-FX-01 §4].
 			level := int(b) - 0x4F
-			idx := py*c.width + px
-			c.indexed[idx] = c.pal.LightLookup(level, c.indexed[idx])
-			drew = true
+			pts = append(pts, drawlist.Point{X: int32(px), Y: int32(py), Index: uint8(level)})
 		}
 	}
-	return drew
+	c.pointScratch = pts
+	if len(pts) == 0 {
+		return false
+	}
+	c.emitPoints(drawlist.Points{Kind: drawlist.PointLit, Points: pts})
+	return true
 }

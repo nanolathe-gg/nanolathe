@@ -15,6 +15,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
@@ -117,9 +118,16 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 			sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
 			// The colour byte is written raw: the sprinkle ramp, like the nano
 			// ramp, is NOT passed through the logical-to-physical remap the
-			// beam and lightning colours use [03 R-FX-01 §3].
-			c.fillIndexedRect(int(sx-camera.OriginX), int(sy-camera.OriginY),
-				stripParticleSize, stripParticleSize, v.Fill)
+			// beam and lightning colours use [03 R-FX-01 §3]. The two-by-two mark
+			// is a plain solid rect, so it records as a FillSolid.
+			c.emitFill(drawlist.Fill{
+				Rect: drawlist.Rect{
+					X: sx - camera.OriginX, Y: sy - camera.OriginY,
+					W: stripParticleSize, H: stripParticleSize,
+				},
+				Index: v.Fill,
+				Style: drawlist.FillSolid,
+			})
 			stats.Filled++
 		default:
 			// A family with no established draw draws nothing rather than
@@ -159,7 +167,18 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 		return false
 	}
 	sx, sy := c.cam.WorldToScreen(v.X, v.Y, v.Z)
-	return c.tintedBlitAnchor(art, int(sx-camera.OriginX), int(sy-camera.OriginY))
+	// Emit the translucent frame blit; the sink runs the raw tintedBlitAnchor, so
+	// this is the blit's only execution [03 R-COMP-01 §2][03 R-FX-02 §2]. The
+	// returned bool mirrors tintedBlitAnchor's own gate (ALP table and surface
+	// present): a resolved identity that could run counts Blitted even when every
+	// pixel clipped away, and only a missing table counts Unresolved.
+	c.emitSprite(drawlist.Sprite{
+		Frame: art,
+		X:     sx - camera.OriginX,
+		Y:     sy - camera.OriginY,
+		Kind:  drawlist.BlitTinted,
+	})
+	return c.pal != nil && len(c.indexed) != 0
 }
 
 // tintedBlitAnchor is retail's translucent frame blit at a frame anchor: every

@@ -8,6 +8,7 @@ package client
 import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -100,7 +101,9 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 				stats.Sprites++
 			}
 			x, y := c.cam.WorldToScreen(view.X, view.Y, view.Z)
-			c.UIBlitAnchor(d.FrameAsset, int(x-128), int(y-32))
+			// The sprite/GAF render types blit their frame keyed at the anchor
+			// [03 §5.4]; Anchored selects the offset-subtracting placement (WU-1.7b).
+			c.emitSprite(drawlist.Sprite{Frame: d.FrameAsset, X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
 			stats.Sprites++
 		}
 	}
@@ -129,7 +132,9 @@ func (c *Client) drawProjectileShadow(shadow *formats.GAFFrame, v frame.Projecti
 	}
 	floor := numeric.Fixed(int64(v.FloorHeight) << 16)
 	sx, sy := c.cam.WorldToScreen(v.X, floor, v.Z)
-	c.UIBlitAnchor(shadow, int(sx-camera.OriginX), int(sy-camera.OriginY))
+	// The ground shadow is a plain keyed frame-anchor blit [03 §5.4]; Anchored
+	// selects the offset-subtracting placement (WU-1.7b).
+	c.emitSprite(drawlist.Sprite{Frame: shadow, X: sx - camera.OriginX, Y: sy - camera.OriginY, Kind: drawlist.BlitKeyed, Anchored: true})
 	return true
 }
 
@@ -157,7 +162,9 @@ func (c *Client) drawProjectileBeam(d render.ProjectileDraw, v frame.ProjectileV
 	tx, ty := c.cam.WorldToScreen(v.TailX, v.TailY, v.TailZ)
 	strokes := render.BeamStrokes([2]int32{hx - 128, hy - 32}, [2]int32{tx - 128, ty - 32}, d.Color, d.Color2)
 	for _, stroke := range strokes {
-		c.drawIndexedLine(stroke.X0, stroke.Y0, stroke.X1, stroke.Y1, indexedColor(stroke.Color))
+		// Each beam stroke is one indexed line; the sink runs the raw Bresenham
+		// primitive [03 §5.4].
+		c.emitLine(drawlist.Line{X0: stroke.X0, Y0: stroke.Y0, X1: stroke.X1, Y1: stroke.Y1, Index: indexedColor(stroke.Color)})
 	}
 	return len(strokes)
 }
@@ -169,7 +176,7 @@ func (c *Client) drawProjectileSegments(d render.ProjectileDraw) int {
 		b := d.Segments[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.drawIndexedLine(ax-128, ay-32, bx-128, by-32, indexedColor(d.Color))
+		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color)})
 		count++
 	}
 	return count
@@ -182,7 +189,7 @@ func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
 		b := d.Segments2[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.drawIndexedLine(ax-128, ay-32, bx-128, by-32, indexedColor(d.Color2))
+		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color2)})
 		count++
 	}
 	return count

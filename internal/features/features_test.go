@@ -48,7 +48,7 @@ func TestRestoreAtCopiesNormalAnchorAndAnimationState(t *testing.T) {
 	binary.LittleEndian.PutUint16(anim[6:], 0x2211)
 	anim[8], anim[9] = 7, 0xA0 // selector 0 (burn), countdown high nibble 10
 	inst, err := svc.RestoreAt(1, 2, def, 1, anim)
-	if err != nil || inst == nil || !inst.IsBurning || !inst.IsAnimating || inst.AnimationState != 0x2211 || inst.AnimationFrame != 7 || inst.AnimationSelector != 0 || inst.AnimationCountdown != 10 || inst.BurnCountdown != 10 || inst.BurnTicks != 7 {
+	if err != nil || inst == nil || !inst.IsBurning || !inst.IsAnimating || inst.DamageAccumulator != 0x2211 || inst.AnimationFrame != 7 || inst.AnimationSelector != 0 || inst.AnimationCountdown != 10 || inst.BurnCountdown != 10 || inst.BurnTicks != 7 {
 		t.Fatalf("anim restore: inst=%#v err=%v", inst, err)
 	}
 	if !terrain.PlotAt(1, 2).Occupied() {
@@ -57,16 +57,29 @@ func TestRestoreAtCopiesNormalAnchorAndAnimationState(t *testing.T) {
 
 	terrain = newEmptyTerrain(4, 4)
 	svc = NewService(terrain, nil, nil, nil)
+	// The 3D record's five values are named [08 R-SAVE-FEATURE-01]: position at
+	// 0x08..0x13, bank/heading at 0x14..0x17, pitch at 0x18..0x19, and the
+	// damage accumulator at 0x06..0x07 with the other two families.
 	threeD := make([]byte, 26)
 	binary.LittleEndian.PutUint16(threeD[6:], 0xBEEF)
-	var opaque [18]byte
-	for i := range opaque {
-		opaque[i] = byte(i + 1)
-		threeD[8+i] = opaque[i]
-	}
+	wantPos := [3]numeric.Fixed{numeric.Fixed(0x0012_3456), numeric.Fixed(-0x0004_8000), numeric.Fixed(0x0078_9abc)}
+	binary.LittleEndian.PutUint32(threeD[0x08:], uint32(int32(wantPos[0])))
+	binary.LittleEndian.PutUint32(threeD[0x0c:], uint32(int32(wantPos[1])))
+	binary.LittleEndian.PutUint32(threeD[0x10:], uint32(int32(wantPos[2])))
+	binary.LittleEndian.PutUint16(threeD[0x14:], 0x1111)
+	binary.LittleEndian.PutUint16(threeD[0x16:], 0x2222)
+	binary.LittleEndian.PutUint16(threeD[0x18:], 0x3333)
 	threeDInst, err := svc.RestoreAt(2, 1, def, 2, threeD)
-	if err != nil || threeDInst == nil || threeDInst.AnimationState != 0xBEEF || threeDInst.OpaqueState != opaque {
+	if err != nil || threeDInst == nil || threeDInst.DamageAccumulator != 0xBEEF {
 		t.Fatalf("3D restore state: inst=%#v err=%v", threeDInst, err)
+	}
+	if threeDInst.X != wantPos[0] || threeDInst.Y != wantPos[1] || threeDInst.Z != wantPos[2] {
+		t.Fatalf("3D restore position (%d,%d,%d), want the saved triple verbatim (%d,%d,%d)",
+			threeDInst.X.Raw(), threeDInst.Y.Raw(), threeDInst.Z.Raw(),
+			wantPos[0].Raw(), wantPos[1].Raw(), wantPos[2].Raw())
+	}
+	if (threeDInst.Orientation != Orientation{Bank: 0x1111, Heading: 0x2222, Pitch: 0x3333}) {
+		t.Fatalf("3D restore orientation %+v, want the saved triple verbatim", threeDInst.Orientation)
 	}
 	if !terrain.PlotAt(2, 1).Occupied() {
 		t.Fatal("3D restore did not attach the anchor instance bit")
@@ -96,7 +109,7 @@ func TestRestoreAnimatingSelectorsRetainStateWithoutBurnCompletion(t *testing.T)
 			data[8] = 7
 			data[9] = tc.countdown<<4 | tc.selector
 			inst, err := svc.RestoreAt(1, 1, def, 1, data)
-			if err != nil || inst == nil || !inst.IsAnimating || inst.IsBurning || inst.AnimationState != 0x1234 || inst.AnimationFrame != 7 || inst.AnimationSelector != tc.selector || inst.AnimationCountdown != tc.countdown || inst.BurnCountdown != 0 || inst.BurnTicks != 0 || inst.BurnDuration != 0 {
+			if err != nil || inst == nil || !inst.IsAnimating || inst.IsBurning || inst.DamageAccumulator != 0x1234 || inst.AnimationFrame != 7 || inst.AnimationSelector != tc.selector || inst.AnimationCountdown != tc.countdown || inst.BurnCountdown != 0 || inst.BurnTicks != 0 || inst.BurnDuration != 0 {
 				t.Fatalf("restore: inst=%#v err=%v", inst, err)
 			}
 			if !terrain.PlotAt(1, 1).Occupied() {

@@ -1195,8 +1195,21 @@ func (g *gameShell) applyRetailVisualOptions(cl *client.Client) {
 	if g == nil || cl == nil {
 		return
 	}
-	cl.SetAntiAlias(g.display.AntiAlias != 0)
-	cl.SetShadowOptions(g.display.Shadows != 0, g.display.VehicleShadows != 0, g.display.Shading != 0)
+	applyVisualOptions(cl, g.display)
+}
+
+// applyVisualOptions is the one place the three display-option bits reach a
+// client. The windowed shell calls it from the VISUALS page and at start-up;
+// the --shot capture calls it with the stored block so a capture composes
+// under the same Anti_Alias and Shading bits the window would, which is what
+// lets a settings file drive the parity matrix of docs/DESIGN_GPU_RENDERER.md
+// §6 [07 R-FE-01 §6][03 §5.3].
+func applyVisualOptions(cl *client.Client, d settings.Display) {
+	if cl == nil {
+		return
+	}
+	cl.SetAntiAlias(d.AntiAlias != 0)
+	cl.SetShadowOptions(d.Shadows != 0, d.VehicleShadows != 0, d.Shading != 0)
 }
 
 // setRetailShadowBits is the `BSHADOWS` write: bit 4 takes the stage, bit 3

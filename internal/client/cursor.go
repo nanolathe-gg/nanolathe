@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -175,5 +176,7 @@ func (c *Client) drawCursor() {
 		return
 	}
 	x, y := render.CursorHotspot(f, int(c.in.Mouse.X), int(c.in.Mouse.Y))
-	c.UIBlit(f, x, y)
+	// Record then execute inline: classicSink.Cursor runs the same UIBlit at the
+	// hotspot-resolved origin this used to call directly [07 §8].
+	c.emitCursor(drawlist.Cursor{Frame: f, HotX: int32(x), HotY: int32(y)})
 }

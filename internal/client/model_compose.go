@@ -472,6 +472,17 @@ func (c *Client) seaLevel() numeric.Fixed {
 	return cur.Visibility.SeaLevel
 }
 
+// pendingModelCommit is one composed subject held in the client-side table
+// drawlist.Model.Ref indexes: everything the classic executor needs to run the
+// two writes into the indexed surface that finish a model — the shadow and the
+// body blit — plus the trace that reads the surface afterwards. Composition is
+// already complete; this carries no geometry, only the finished images and the
+// image actually blitted (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5).
+type pendingModelCommit struct {
+	m    composedModel
+	blit *modelTarget
+}
+
 // finishModel is everything that happens once a composed image is final: the
 // shadow, the one blit, and the trace emit. The nanoframe outline is not here:
 // it is part of the composed image [R-COMP-01 §3].
@@ -479,25 +490,20 @@ func (c *Client) seaLevel() numeric.Fixed {
 // blit is the image actually put on screen. It is the composed image for an
 // ordinary unit and the staging image for a carrier, which is the one place
 // the two differ [R-REN-03A §4].
+//
+// The two writes into c.indexed and the trace that follows them are recorded as
+// one drawlist.Model command and executed through the classic sink. emitModel
+// runs the record inline, so c.indexed is written by the time this returns and
+// every caller behaves exactly as it did before the model commit joined the
+// list (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) finishModel(m composedModel, blit *modelTarget) {
 	if m.image == nil {
-		return
+		return // a subject with no composition image records nothing
 	}
 	if blit == nil {
 		blit = m.image
 	}
-	// The shadow is composed and blitted before the body for the same subject
-	// [03 §5.3]. It reads the finished body image to punch the body's own
-	// silhouette out of itself [R-REN-03D §5][R-RAST-01 §4], which is why it
-	// runs after the raster and the anti-alias resolve rather than first. The
-	// punch reads the body, not the staging image: the hole is the carrier's
-	// own silhouette.
-	c.drawModelShadow(m.draw, m.image)
-	blit.commit(c.indexed, c.width, c.height)
-	if m.raster != nil && m.raster.trace != nil {
-		m.raster.trace.resolve(m.raster, c.indexed, c.width, c.height)
-		m.raster.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
-	}
+	c.emitModel(pendingModelCommit{m: m, blit: blit})
 }
 
 // drawModel composes one unit and blits it once. It is composeModel followed

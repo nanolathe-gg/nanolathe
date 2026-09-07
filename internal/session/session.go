@@ -1242,7 +1242,18 @@ func (s *Session) RegisterAll() {
 						// that matters: a surface ship's wreck must start at
 						// the surface and descend, and handing over only X and
 						// Z put every wreck on the seabed at birth.
-						_ = s.Features.PlaceCorpse([3]numeric.Fixed{u.X, u.Y, u.Z}, corpseDef, u.Def.IsFeature)
+						//
+						// The second triple is the dying unit's ORIENTATION —
+						// bank, heading, pitch — and the corpse placement is
+						// the only source that supplies one [05 "Feature
+						// instance and terrain cell"]. It is what makes a wreck
+						// lie the way its unit fell, and it is what the
+						// resurrection transplant copies back into the
+						// replacement unit [05 R-WORK-01 §7].
+						_ = s.Features.PlaceCorpse(
+							[3]numeric.Fixed{u.X, u.Y, u.Z},
+							features.Orientation{Bank: u.Move.Bank, Heading: u.Move.Heading, Pitch: u.Move.Pitch},
+							corpseDef, u.Def.IsFeature)
 					}
 				}
 			}

@@ -1,0 +1,72 @@
+#!/bin/sh
+# Checks the current tree against the recorded parity baseline
+# (tools/gpu-baseline): every matrix entry is captured again and compared
+# with tools/framediff, and the headless fingerprint is compared by value.
+#
+#   tools/gpu-parity                    classic captures, zero tolerance
+#   GPU_PARITY_MAX=N tools/gpu-parity   allow N differing pixels per entry
+#   GPU_MATRIX_LONG=1 tools/gpu-parity  also check the 54000-tick fingerprint
+#
+# Diff images for failing entries are left in the reported directory.
+set -u
+cd "$(git rev-parse --show-toplevel)"
+. tools/gpu-matrix
+
+export NANOLATHE_RETAIL_ASSETS="${NANOLATHE_RETAIL_ASSETS:-${NANOLATHE_TA_ROOT:-$HOME/TotalAnnihilation}}"
+base=PLAN_GPU_baseline
+if [ ! -f "$base/SHA256SUMS" ]; then
+	echo "gpu-parity: no baseline at $base; run tools/gpu-baseline first" >&2
+	exit 2
+fi
+
+work=$(mktemp -d -t nanolathe-gpu-parity.XXXXXX)
+echo "==> go build"
+go build -o "$work/nanolathe" ./cmd/nanolathe || exit 2
+go build -o "$work/nanolathe-headless" ./cmd/nanolathe-headless || exit 2
+go build -o "$work/framediff" ./tools/framediff || exit 2
+
+echo "==> captures -> $work"
+gpu_matrix_run "$work/nanolathe" "$work/captures"
+
+failed=0
+echo "==> compare (max ${GPU_PARITY_MAX:-0} differing pixels per entry)"
+printf '%s\n' "$GPU_MATRIX" | while IFS='|' read -r id aa shading args; do
+	[ -n "$id" ] || continue
+	printf '%s: ' "$id"
+	if "$work/framediff" -max "${GPU_PARITY_MAX:-0}" -out "$work/$id.diff.png" "$base/$id.png" "$work/captures/$id.png"; then
+		rm -f "$work/$id.diff.png"
+	else
+		echo "  FAIL $id: diff image $work/$id.diff.png"
+		echo "$id" >>"$work/failed"
+	fi
+done
+if [ -f "$work/failed" ]; then
+	failed=$(wc -l <"$work/failed" | tr -d ' ')
+fi
+
+echo "==> fingerprints"
+got=$(gpu_matrix_fingerprint "$work/nanolathe-headless" "$GPU_FINGERPRINT_SHORT")
+want=$(awk '$1=="short"{print $2}' "$base/fingerprints.txt")
+if [ "$got" = "$want" ]; then
+	echo "short fingerprint $got OK"
+else
+	echo "  FAIL short fingerprint: baseline $want, now $got"
+	failed=$((failed + 1))
+fi
+if [ "${GPU_MATRIX_LONG:-0}" = "1" ]; then
+	got=$(gpu_matrix_fingerprint "$work/nanolathe-headless" "$GPU_FINGERPRINT_LONG")
+	want=$(awk '$1=="long"{print $2}' "$base/fingerprints.txt")
+	if [ "$got" = "$want" ]; then
+		echo "long fingerprint $got OK"
+	else
+		echo "  FAIL long fingerprint: baseline $want, now $got"
+		failed=$((failed + 1))
+	fi
+fi
+
+if [ "$failed" -ne 0 ]; then
+	echo "FAIL: $failed check(s) differ from the baseline at $(cat "$base/COMMIT"); outputs in $work"
+	exit 1
+fi
+rm -rf "$work"
+echo "OK: parity with baseline $(cat "$base/COMMIT")"

@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/palette"
@@ -62,6 +63,35 @@ type Client struct {
 	indexed       []uint8
 	rgba          []byte
 
+	// list is the recorded committed-frame draw list, reset and re-recorded
+	// each frame then replayed through classicSink (docs/DESIGN_GPU_RENDERER.md
+	// §2.2, C-G1). Its zero value is a usable empty list; a warm frame reuses
+	// its backing arrays and allocates nothing.
+	list drawlist.List
+
+	// uiRectPal carries the palette a converted UILightRect/UIShadeRect resolves
+	// against from the emit site to the classic sink. drawlist.Fill cannot hold a
+	// *palette.Tables (its additive change is Fill.Level only), and every caller
+	// passes the palette SetPalette installed, so the emit records the geometry
+	// and level and the sink reads the palette here. Like the emitPoints scratch
+	// slice this is safe ONLY because the WU-1.3..WU-1.6 transition executes each
+	// record inline: the field is written immediately before emitFill and read by
+	// the sink before the next lit/shade emit overwrites it, so a deferred Replay
+	// never observes a stale value (docs/DESIGN_GPU_RENDERER.md §2.2).
+	// TODO(question): a standalone Replay of a list holding several lit/shade
+	// fills with differing palettes cannot use one scratch field; WU-1.6+ must
+	// carry the palette per record (a client-side table like modelCommits, or a
+	// dedicated record field) — settled once the list is replayed off-frame.
+	uiRectPal *palette.Tables
+
+	// modelCommits is the per-frame client-side table drawlist.Model.Ref indexes:
+	// one entry per composed model subject in record order, holding what the
+	// classic executor needs to run that subject's shadow, body blit and trace.
+	// Reset in lockstep with list at the top of composeIndexed, it is same-frame
+	// only and never held across a frame boundary (docs/DESIGN_GPU_RENDERER.md
+	// §2.1 C-G5) [I6].
+	modelCommits []pendingModelCommit
+
 	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
 
@@ -99,14 +129,20 @@ type Client struct {
 	// Nanolathe isolates the copy so render cadence cannot desync the sim.
 	// Next wave: move segment resolution to sim-published values and drop this
 	// field. Shrink-only.
-	crt             *rng.CRT
-	crtBound        bool
-	frameTick       uint32                       // committed tick of the frame being composed
-	nano            presentationrender.NanoField // live nanolathe particle records [03 §5.5]
-	lastNanoTick    uint32
-	worldBuckets    worldBuckets
-	fogCache        *visibility.FogCache
-	fogOps          []presentationrender.FogOp
+	crt          *rng.CRT
+	crtBound     bool
+	frameTick    uint32                       // committed tick of the frame being composed
+	nano         presentationrender.NanoField // live nanolathe particle records [03 §5.5]
+	lastNanoTick uint32
+	worldBuckets worldBuckets
+	fogCache     *visibility.FogCache
+	fogOps       []presentationrender.FogOp
+	// pointScratch is the reused backing slice for one emitted Points batch (the
+	// LHT halo and the calculated flash disc). Reusing it across emits is safe
+	// only because the transition executes each record inline, so a later batch's
+	// overwrite is never observed by a deferred Replay [PLAN_GPU "Transition
+	// mechanism"].
+	pointScratch    []drawlist.Point
 	selectionChrome []selectionChrome
 	selectionDrag   SelectionDrag
 	// rendererTraceSink is nil for the normal presentation path. When enabled,
@@ -543,7 +579,10 @@ func (c *Client) composeCurrentFrame() *frame.Frame {
 	cur := c.buffer.Current()
 	c.composeIndexed(cur, cur != nil)
 	c.drawCursor() // cursor last, over the composed surface [07 §8]
-	c.convertIndexedToRGBA()
+	// During the WU-1.3..WU-1.6 transition each converted family emits (records
+	// + executes inline); the expansion is the last such emit and there is no
+	// standalone Replay (docs/DESIGN_GPU_RENDERER.md §2.2, C-G8).
+	c.emitExpand()
 	return cur
 }
 

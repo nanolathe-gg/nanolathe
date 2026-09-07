@@ -15,6 +15,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 )
 
@@ -132,7 +133,11 @@ func (c *Client) drawHealthBar(sx, y, health, maxDamage int32) {
 	if hp <= 0 { // death hides the bar the same frame [03 R-FX-01 §6]
 		return
 	}
-	c.fillRectInclusive(sx-healthBarOuterHalfW, y-healthBarOuterHalfH,
+	// Record then execute inline: classicSink.Fill's FillSolidInclusive style
+	// runs the same inclusive-bounds filler fillRectInclusive this used to call
+	// directly. The rect is carried in extent form; the sink reconstructs the
+	// inclusive right/bottom [03 R-FX-01 §6].
+	c.emitFillInclusive(sx-healthBarOuterHalfW, y-healthBarOuterHalfH,
 		sx+healthBarOuterHalfW, y+healthBarOuterHalfH, c.paletteIndex(healthBarOuterLogical))
 	if maxDamage <= 0 {
 		// Retail's two divisions are unguarded and would fault on a zero or
@@ -149,7 +154,7 @@ func (c *Client) drawHealthBar(sx, y, health, maxDamage int32) {
 	case hp > third:
 		fill = c.paletteIndex(14)
 	}
-	c.fillRectInclusive(sx-healthBarInnerLeft, y-healthBarInnerHalfH,
+	c.emitFillInclusive(sx-healthBarInnerLeft, y-healthBarInnerHalfH,
 		sx-healthBarInnerLeft+w, y+healthBarInnerHalfH, fill)
 }
 
@@ -169,8 +174,16 @@ func (c *Client) drawGroupDigit(sx, y int32, group uint8) {
 	// (foreground = entry 15, background = the skip colour) once, immediately
 	// before the strip walks and so before this walk, and none of the strip
 	// drawers between installs another [03 R-FX-01 §6A][03 R-FONT-01 §6].
-	drawText(c.indexed, c.width, c.height, c.fnt, string([]byte{'0' + group}),
-		int(sx), int(y), 0, c.paletteIndex(15), nil)
+	// Record then execute inline: classicSink.Glyphs runs the same drawText
+	// rasterizer with the same pen and no foreground install of its own, exactly
+	// as this call did directly [03 R-FX-01 §6A][03 §7.1].
+	c.emitGlyphs(drawlist.Glyphs{
+		Font:  c.fnt,
+		Text:  string([]byte{'0' + group}),
+		X:     sx,
+		Y:     y,
+		Color: c.paletteIndex(15),
+	})
 }
 
 // fillRectInclusive is retail's solid rectangle fill: both boundaries are

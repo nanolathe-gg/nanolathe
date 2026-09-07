@@ -4,6 +4,8 @@ package client
 // selection state. It is composed after world/fog and before the UI stage
 // [03 §1][R-SEL-02A].
 
+import "github.com/nanolathe/nanolathe/internal/drawlist"
+
 // SelectionDrag is the current input-owned drag gesture in logical framebuffer
 // coordinates. The caller supplies the latch state because the renderer does
 // not own input latches.
@@ -110,11 +112,25 @@ func (c *Client) drawSelectionDrag() {
 	outer := c.paletteIndex(logicalOuter)
 	inner := c.paletteIndex(0)
 	clip := c.selectionClip()
-	drawIndexedFrameInclusive(c.indexed, c.width, c.height, r, outer, clip)
+	// Record then execute inline: classicSink.Fill's FillFrameInclusive style
+	// runs the same drawIndexedFrameInclusive writer with the same inclusive clip
+	// this used to call directly. Both the frame rect and the clip are carried in
+	// the Fill family's extent form; the sink reconstructs the inclusive bounds
+	// [R-SEL-02A].
+	clipExt := inclusiveToExtent(clip)
+	c.emitFill(drawlist.Fill{Rect: inclusiveToExtent(r), Index: outer, Style: drawlist.FillFrameInclusive, Clip: clipExt})
 	inset := Rect{MinX: r.MinX + 1, MinY: r.MinY + 1, MaxX: r.MaxX - 1, MaxY: r.MaxY - 1}
 	if inset.MinX <= inset.MaxX && inset.MinY <= inset.MaxY {
-		drawIndexedFrameInclusive(c.indexed, c.width, c.height, inset, inner, clip)
+		c.emitFill(drawlist.Fill{Rect: inclusiveToExtent(inset), Index: inner, Style: drawlist.FillFrameInclusive, Clip: clipExt})
 	}
+}
+
+// inclusiveToExtent converts a client inclusive rectangle (MinX..MaxX,
+// MinY..MaxY) into the drawlist Fill family's extent form. The covered pixel set
+// is preserved: [X, X+W) x [Y, Y+H) is exactly [MinX..MaxX] x [MinY..MaxY], so
+// the executor recovers the original inclusive bounds as X+W-1 / Y+H-1 [C-G2].
+func inclusiveToExtent(r Rect) drawlist.Rect {
+	return drawlist.Rect{X: r.MinX, Y: r.MinY, W: r.MaxX - r.MinX + 1, H: r.MaxY - r.MinY + 1}
 }
 
 // drawIndexedFrameInclusive writes a one-pixel solid frame through both

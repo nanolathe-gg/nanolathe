@@ -49,17 +49,60 @@ type Instance struct {
 	// World position derived from anchor cell (centre)
 	X, Z numeric.Fixed
 
+	// Orientation is the live record's angle triple [05 "Feature instance and
+	// terrain cell"]: three 16-bit words in the unit record's own order and
+	// units (65536 per circle). The stamp takes an OPTIONAL source triple
+	// exactly as it takes an optional position — the corpse placement passes
+	// the dying unit's bank/heading/pitch, so a wreck keeps the orientation its
+	// unit died in, and every other placement (map-authored, successor,
+	// mission, reproduction, a restore with no saved triple) passes none and
+	// stores three zeros. The resurrection transplant copies the triple back
+	// into the replacement unit [05 R-WORK-01 §7].
+	Orientation
+
 	// Footprint cached from Def for removal without re-reading Def after clear.
 	FootprintX, FootprintZ int32
 
 	// Save-restored animation words.  The selector is retained as the authored
-	// burn/death/reclaim discriminator; opaque 3D words are not interpreted.
+	// burn/death/reclaim discriminator.
 	SavedAnchorWord    uint16
-	AnimationState     uint16
 	AnimationFrame     uint8
 	AnimationSelector  uint8
 	AnimationCountdown uint8
-	OpaqueState        [18]byte
+
+	// DamageAccumulator is the record's damage word, the one value all three
+	// saved families keep at the same place [08 R-SAVE-FEATURE-01]. Retail's 3D
+	// instance accumulates weapon hits into it with 16-bit wrap and fires the
+	// death transition when the definition's `damage` is at or below it,
+	// unsigned [05 R-FEAT-01 §8] step 7; a sprite instance's copy is written by
+	// no path at all and read by none; a feature with no instance keeps the
+	// same sum in its anchor cell instead (step 6). It is NOT an animation
+	// word — the name "animation-state word" it carried here was that section's
+	// own placeholder before the census closed, and 3D instances have no sprite
+	// cursor for it to belong to.
+	//
+	// TODO(question): this build's 3D damage path is a COUNTDOWN — the stamp
+	// seeds Health from the definition's `damage` and DamageFeature subtracts
+	// each hit, killing at zero or below (burn.go) — so it has no wrap-around
+	// 16-bit accumulator for this word to be. The two are related by
+	// `accumulator = damage - health` only while neither wraps, and retail's
+	// unsigned at-or-above comparison after a wrap is a different predicate, so
+	// no conversion is written here: the word round-trips losslessly on its own
+	// field and the live damage path does not read it. What would settle it is
+	// a trace of whether the 3D branch's subtraction/compare can be restated as
+	// this accumulator without changing which hit kills the wreck.
+	DamageAccumulator uint16
+}
+
+// Orientation is the feature record's angle triple: bank, heading and pitch,
+// each 0..65535 per circle, in the same order and units as the unit record's
+// triple [05 "Feature instance and terrain cell"]. It is a value type so a
+// placement can hand the stamp one by pointer (supplied) or nil (three zeros),
+// which is the same optional shape the position triple already has.
+type Orientation struct {
+	Bank    uint16
+	Heading uint16
+	Pitch   uint16
 }
 
 // Cause selects the successor hop [05 "Removal and successor replacement"].
@@ -250,15 +293,40 @@ func (s *Service) PlaceAt(cx, cz int, def *content.FeatureDef) *Instance {
 	return s.spawnFeatureAt(cx, cz, def)
 }
 
-// RestoreAt places a saved feature through PlaceAt and then copies only the
-// family state words defined by the battle-save format.  The placement helper
-// remains the sole owner of terrain/plot writes [08 R-SAVE-02 §11].
+// RestoreAt places a saved feature through the ordinary stamp and then copies
+// only the family state words defined by the battle-save format.  The placement
+// helper remains the sole owner of terrain/plot writes [08 R-SAVE-02 §11].
+//
+// The 3D family is the one that hands the stamp its two optional pointers: the
+// saved position triple and the saved orientation triple go in verbatim, so the
+// stamp neither recomputes the footprint centre nor re-samples the terrain
+// height, and a wreck saved mid-descent comes back at its saved Y
+// [08 R-SAVE-FEATURE-01 "3D record restore, exactly"]. Velocity is not
+// serialized and is not re-derived: the restored instance starts at zero and
+// the lifecycle pass retires it, so such a wreck resumes SUSPENDED and never
+// descends further. That is retail's behavior, not an omission — do not latch
+// the sinking velocity back on here from the height/sea-level relation.
 func (s *Service) RestoreAt(cx, cz int, def *content.FeatureDef, family int, data []byte) (*Instance, error) {
 	want := RetailRestorePayloadSize(family)
 	if want == 0 || len(data) != want {
 		return nil, fmt.Errorf("features: retail restore: family %d payload size %d", family, len(data))
 	}
-	inst := s.PlaceAt(cx, cz, def)
+	var pos *[3]numeric.Fixed
+	var orient *Orientation
+	if family == 2 {
+		p := [3]numeric.Fixed{
+			fixedFromWire(data[0x08:]),
+			fixedFromWire(data[0x0c:]),
+			fixedFromWire(data[0x10:]),
+		}
+		o := Orientation{
+			Bank:    binary.LittleEndian.Uint16(data[0x14:]),
+			Heading: binary.LittleEndian.Uint16(data[0x16:]),
+			Pitch:   binary.LittleEndian.Uint16(data[0x18:]),
+		}
+		pos, orient = &p, &o
+	}
+	inst := s.stampFeature(cx, cz, def, pos, orient)
 	if inst == nil {
 		return nil, fmt.Errorf("features: retail restore: placement rejected at (%d,%d)", cx, cz)
 	}
@@ -271,7 +339,7 @@ func (s *Service) RestoreAt(cx, cz int, def *content.FeatureDef, family int, dat
 		}
 		s.Terrain.Plot[idx].SetAnchorWord(inst.SavedAnchorWord)
 	case 1:
-		inst.AnimationState = binary.LittleEndian.Uint16(data[6:8])
+		inst.DamageAccumulator = binary.LittleEndian.Uint16(data[6:8])
 		inst.AnimationFrame = data[8]
 		inst.AnimationSelector = data[9] & 0x0f
 		inst.AnimationCountdown = data[9] >> 4
@@ -298,8 +366,11 @@ func (s *Service) RestoreAt(cx, cz int, def *content.FeatureDef, family int, dat
 			s.Terrain.Plot[idx].SetOccupied(true)
 		}
 	case 2:
-		inst.AnimationState = binary.LittleEndian.Uint16(data[6:8])
-		copy(inst.OpaqueState[:], data[8:])
+		// The accumulator is written AFTER the stamp because the stamp zeroes
+		// it, and it is the only thing the reader writes beyond what it handed
+		// the stamp [08 R-SAVE-FEATURE-01 "3D record restore, exactly"]. The
+		// position and orientation are already in place, verbatim.
+		inst.DamageAccumulator = binary.LittleEndian.Uint16(data[6:8])
 		idx := cz*int(s.Terrain.CellW) + cx
 		if idx >= 0 && idx < len(s.Terrain.Plot) {
 			s.Terrain.Plot[idx].SetOccupied(true)
@@ -369,17 +440,24 @@ func (s *Service) PlaceAtWorld(x, z numeric.Fixed, def *content.FeatureDef) *Ins
 // was already resting on the seabed on its first lifecycle visit — settled,
 // never descending — and its horizontal position jumped to the cell centre.
 //
+// `orient` is the dying unit's own bank/heading/pitch, the second optional
+// pointer the stamp takes [05 "Feature instance and terrain cell"]. The corpse
+// placement is the ONLY source that supplies one, which is why a wreck stands
+// the way its unit fell while a map-authored or successor feature is at three
+// zeros, and it is the triple the resurrection transplant copies back into the
+// replacement unit [05 R-WORK-01 §7].
+//
 // fromIsFeature is the dying unit's IsFeature flag; isfeature corpses never
 // descend. Chain depth is already resolved by the caller from the Killed-variant
 // low nibble [04 §5.1][06 §12.1] C23; this helper just stamps the resolved def.
 // Returns the corpse instance or nil.
-func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, def *content.FeatureDef, fromIsFeature bool) *Instance {
+func (s *Service) PlaceCorpse(pos [3]numeric.Fixed, orient Orientation, def *content.FeatureDef, fromIsFeature bool) *Instance {
 	if def == nil || s.Terrain == nil {
 		return nil
 	}
 	cx := int(world.WorldToCell(pos[0]))
 	cz := int(world.WorldToCell(pos[2]))
-	inst := s.stampFeature(cx, cz, def, &pos)
+	inst := s.stampFeature(cx, cz, def, &pos, &orient)
 	if inst == nil {
 		return nil
 	}
@@ -715,15 +793,23 @@ func (s *Service) clearFootprintNoRevision(cx, cz int, def *content.FeatureDef) 
 // the terrain height snapped under it.
 // Pools 0x100 catalog / 0x800 anim slots / WH*0xD grid silent fail, successors 0xFFFF [P1-10][P1-15].
 // Malformed/custom: zero/negative footprints are normalized to 1x1, nil canonical keys handled, and unknown successors are sentinel 0xFFFF [P1-I05][02 "Feature record"].
+// The successor hop passes through here too, and that is the point: a
+// `featuredead`/`featureburnt`/`featurereclamate` replacement is not a corpse
+// placement, so it supplies neither pointer and its orientation is three zeros
+// [05 "Feature instance and terrain cell"]. A wreck's triple does not survive
+// into whatever it decays into.
 func (s *Service) spawnFeatureAt(cx, cz int, def *content.FeatureDef) *Instance {
-	return s.stampFeature(cx, cz, def, nil)
+	return s.stampFeature(cx, cz, def, nil, nil)
 }
 
 // stampFeature is the one stamp routine of [05 R-FEAT-01 §3], taking the
-// anchor cell, the definition and an OPTIONAL position triple. A non-nil
-// position is stored on the instance verbatim (step 4); a nil one is the
-// snapped footprint centre. Only the corpse creator supplies one.
-func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]numeric.Fixed) *Instance {
+// anchor cell, the definition and TWO optional triples — a position and an
+// orientation. A non-nil position is stored on the instance verbatim (step 4);
+// a nil one is the snapped footprint centre. A non-nil orientation is stored
+// verbatim; a nil one is three zeros. The corpse creator supplies both; the
+// saved-game 3D restore supplies both from the record it read; every other
+// source supplies neither.
+func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]numeric.Fixed, orient *Orientation) *Instance {
 	if s == nil {
 		return nil
 	}
@@ -877,6 +963,11 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 		inst.Y = s.Terrain.CoarseHeightAt(int32(cx), int32(cz))
 		inst.X = world.CellToWorld(int32(cx)).Add(numeric.Fixed(int64(footX) * 1048576 / 2))
 		inst.Z = world.CellToWorld(int32(cz)).Add(numeric.Fixed(int64(footZ) * 1048576 / 2))
+	}
+	// The second optional pointer, read the same way: the supplied triple
+	// verbatim, or three zeros [05 "Feature instance and terrain cell"].
+	if orient != nil {
+		inst.Orientation = *orient
 	}
 	s.setInstance(idx, inst)
 	// Service-owned flags remain separate from the shared feature/delta writer.

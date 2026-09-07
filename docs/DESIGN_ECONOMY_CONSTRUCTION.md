@@ -238,6 +238,22 @@ approach-point vertical term, not a placement jitter `[05 R-WORK-01 §7]`;
 `reverse.go` holds only the refund selector ladder that `sharedStep`'s reverse
 arm calls.
 
+**The resurrection transplant.** Phase 5 copies the live feature record's
+ORIENTATION triple — bank, heading and pitch — into the replacement unit's own
+three words, overwriting whatever the allocator seeded; no position is copied,
+the unit having been allocated at the feature's recorded position in the same
+step `[05 R-WORK-01 §7]`. The triple's producer is the corpse placement, the
+only placement that supplies one `[05 "Feature instance and terrain cell"]`, so
+a resurrected unit stands exactly as its predecessor fell while a resurrection
+of a map-authored or successor feature faces heading 0 with no bank or pitch.
+The transplant lives in `internal/session`'s `resurrectStep` because the triple
+is on the `internal/features` instance rather than on the `orders.FeatureView`
+the row hands across, it reads that instance **before** `Resurrect` removes the
+feature, and it writes the unit **before** `CompleteUnit`: that hook calls
+movement's `EnsureUnit`, which seeds the mover's steering records from the
+unit's heading, so a later transplant would leave the mover holding the
+allocator's facing and the first movement step would commit it straight back.
+
 **Cancellation.** `handleCancelCurrent` is the highest-priority interrupt:
 refund, credit, completion transition, the ordinary kill packet, then the paired
 callback edges and the node drop `[05 "Cancel-current and stop interrupts"]`.

@@ -32,7 +32,7 @@ func TestCorpseKeepsTheVictimsPositionAndSinks(t *testing.T) {
 		numeric.Fixed(seaByte * 65536),
 		world.CellToWorld(4).Add(numeric.Fixed(7 * 65536)),
 	}
-	inst := svc.PlaceCorpse(victim, corpse, false)
+	inst := svc.PlaceCorpse(victim, Orientation{}, corpse, false)
 	if inst == nil {
 		t.Fatal("corpse refused")
 	}

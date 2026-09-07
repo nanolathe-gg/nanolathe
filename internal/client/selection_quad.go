@@ -15,6 +15,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -132,6 +133,8 @@ func (c *Client) drawSelectionQuad(v frame.UnitView) {
 	color := c.paletteIndex(selectionQuadLogicalColor) // resolved once [03 R-WATER-01 §1]
 	for i := 0; i < 4; i++ {
 		a, b := points[i], points[(i+1)%4]
-		c.drawIndexedLine(a[0], a[1], b[0], b[1], color)
+		// Record then execute inline: classicSink.Line runs the same Bresenham
+		// primitive drawIndexedLine this used to call directly [03 R-WATER-01 §1].
+		c.emitLine(drawlist.Line{X0: a[0], Y0: a[1], X1: b[0], Y1: b[1], Index: color})
 	}
 }

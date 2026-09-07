@@ -3,7 +3,7 @@ package client
 import (
 	"encoding/binary"
 
-	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/visibility"
@@ -147,8 +147,11 @@ func (c *Client) Frame() {
 
 	// Convert to RGBA through logical→base at present time only (C7). This is
 	// the only point where indexed pixels become RGBA so palette animation
-	// stays possible in later phases.
-	c.convertIndexedToRGBA()
+	// stays possible in later phases. During the WU-1.3..WU-1.6 transition each
+	// converted family emits (records + executes inline); the expansion is the
+	// last such emit and there is no standalone Replay
+	// (docs/DESIGN_GPU_RENDERER.md §2.2, C-G8).
+	c.emitExpand()
 }
 
 // composeIndexed runs the one concrete committed-frame ordering and leaves the
@@ -157,6 +160,16 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	if c == nil || len(c.indexed) != c.width*c.height {
 		return
 	}
+	// Reset the draw list before recording so it holds exactly this frame's
+	// commands after drawCommittedFrame; the emit helpers append to it as each
+	// converted call site records-then-executes (PLAN_GPU "Transition
+	// mechanism"). It stays under the surface-size guard so a degenerate surface
+	// behaves as before.
+	c.list.Reset()
+	// The model commit table drawlist.Model.Ref indexes is reset here, in
+	// lockstep with the list, so a re-recorded frame's refs line up with fresh
+	// entries and no entry survives into the next frame (C-G5) [I6].
+	c.modelCommits = c.modelCommits[:0]
 	c.selectionChrome = c.selectionChrome[:0]
 	c.drawCommittedFrame(cur, ok)
 }
@@ -176,7 +189,17 @@ func (c *Client) drawTerrainPrep() {
 		return
 	}
 	if c.cam != nil && c.terrain != nil {
-		BlitTerrain(c.indexed, c.width, c.height, c.terrain, c.cam)
+		// OriginX/OriginY describe the record from the shell viewport origin 0,0
+		// (a tile at world pixel px lands at px-camX): the classic sink projects
+		// through Cam, and a later unit's GPU sink uses these fields instead.
+		c.emitTerrain(drawlist.Terrain{
+			Terrain: c.terrain,
+			Cam:     c.cam,
+			OriginX: c.cam.X,
+			OriginY: c.cam.Z,
+			DstW:    int32(c.width),
+			DstH:    int32(c.height),
+		})
 	}
 	// A frontend without terrain remains the cleared indexed surface. Retail
 	// does not define a synthetic gradient fallback [I9].
@@ -309,89 +332,9 @@ func (c *Client) drawFog(cur *frame.Frame) {
 		// clip below measures against; a cell outside it clips to nothing, so
 		// leaving it unbuilt paints the same pixels [03 §3.3].
 		c.fogOps = render.BuildFogOpsWindowInto(c.fogOps, c.fogCache, c.cam, int32(w), int32(h), c.pal, c.ditheredFog)
-		ops := c.fogOps
-		for _, op := range ops {
-			x0, y0, x1, y1 := op.ScreenX0, op.ScreenY0, op.ScreenX1, op.ScreenY1
-			// Rebase from retail viewport origin (128,32) to Nanolathe full-window shell origin (0,0)
-			// so fog aligns with terrain blitted via BlitTerrainOrigin 0,0 [03 §2.5][PLAN_04A C1].
-			if c.cam != nil {
-				x0 -= camera.OriginX
-				y0 -= camera.OriginY
-				x1 -= camera.OriginX
-				y1 -= camera.OriginY
-			}
-			if x0 < 0 {
-				x0 = 0
-			}
-			if y0 < 0 {
-				y0 = 0
-			}
-			if x1 > int32(w) {
-				x1 = int32(w)
-			}
-			if y1 > int32(h) {
-				y1 = int32(h)
-			}
-			if x0 >= x1 || y0 >= y1 {
-				continue
-			}
-			switch op.Kind {
-			case render.FogKindSolidDark:
-				// lo==15 short-circuit: fill the clipped cell with black [03 §3.3].
-				c.fogFillSolid(x0, y0, x1, y1)
-			case render.FogKindGrayRemap:
-				// hi==15 fogged-but-explored: remap existing pixels through the
-				// gray-table LUT; terrain texture is preserved and desaturated
-				// [03 §3.3][03 §4.3.3]. Retail applies the LUT to physical
-				// screen indices; c.indexed holds logical indices and Logical is
-				// identity until animated, so the direct application matches.
-				c.fogFillGray(x0, y0, x1, y1)
-			case render.FogKindPatterned:
-				// hi==15 dithered checker uses parity (camX+camZ)&1 [03 §3.3].
-				// Retail writes literal palette index 0 (black) at checker
-				// positions (x+y+parity)&1==1 and leaves the rest untouched
-				// [R-RR16-A §2].
-				parity := int32(0)
-				if c.cam != nil {
-					parity = (c.cam.X + c.cam.Z) & 1
-				}
-				c.fogFillChecker(x0, y0, x1, y1, parity)
-			case render.FogKindGAFCh1:
-				// hi 1..14: Gray family GAF, plain or patterned [03 §3.3].
-				if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
-					entry := c.fogGray[op.Variant]
-					if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
-						frame := entry.Frames[op.Frame].Frame
-						if op.Patterned {
-							c.blitFogGAF(frame, int(x0), int(y0), fogBlitPatterned)
-						} else {
-							// Plain Gray family is a masked GRAY TABLE remap of the
-							// destination, not a copy of the source art [R-RR16-A §1].
-							c.blitFogGAF(frame, int(x0), int(y0), fogBlitGray)
-						}
-						continue
-					}
-				}
-				// Missing GAF entry/frame: retail skips the blit and the cell
-				// keeps the underlying tile [03 §3.3].
-				continue
-			case render.FogKindGAFCh0:
-				// lo 1..14: Black family is always plain [03 §3.3].
-				if c.fogGAF != nil && op.Variant >= 0 && op.Variant < 4 && op.Frame >= 0 {
-					entry := c.fogBlack[op.Variant]
-					if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
-						frame := entry.Frames[op.Frame].Frame
-						c.blitFogGAF(frame, int(x0), int(y0), fogBlitBlack)
-						continue
-					}
-				}
-				// Missing GAF: skip, cell keeps underlying tile [03 §3.3].
-				continue
-			default:
-				// Visible cells produce no ops; nothing to draw.
-				continue
-			}
-		}
+		// The op-list execution — the per-op clip, the three fog fills and the
+		// fog GAF blit — moved to classicSink.Fog; building the ops stays here.
+		c.emitFog(drawlist.Fog{Ops: c.fogOps})
 	}
 	// No world stage has work outside the explicit adapters above.
 }

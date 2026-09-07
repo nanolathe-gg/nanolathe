@@ -129,6 +129,12 @@ func runShot(opts Options, cs *contentSet) error {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
 	cl.SetModelFS(cs.fs)
+	// A capture reads the same stored display block the windowed shell
+	// installs, so `Anti_Alias` and `Shading` come from the settings file
+	// (NANOLATHE_SETTINGS selects it) rather than from the client's built-in
+	// defaults. Without this a capture could never show a structure composed
+	// at 1x or a model drawn unshaded [07 R-FE-01 §6].
+	applyVisualOptions(cl, loadedSettings().Display)
 	b, err = composeBattleEntry(sess, authoritative.Session.Catalog, cs, cl, nil)
 	if err != nil {
 		return err

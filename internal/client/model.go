@@ -200,7 +200,13 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 	if m == nil || m.compiled == nil || c.cam == nil {
 		return false
 	}
-	draw := presentationrender.BuildUnitDrawSimple(m.compiled, nil, 0, 0, 0, [3]numeric.Fixed{f.X, f.Y, f.Z})
+	// The pseudo-unit is filled with "model pointer, position and the slot's
+	// orientation words" [03 R-RAST-01 §6], so the committed record's triple
+	// goes in exactly where drawUnitModel puts a unit's — heading, pitch, bank.
+	// It is zero for every placement but a corpse, so map-authored 3DO features
+	// draw as before and a wreck now lies the way its unit fell
+	// [05 "Feature instance and terrain cell"].
+	draw := presentationrender.BuildUnitDrawSimple(m.compiled, nil, f.Heading, f.Pitch, f.Bank, [3]numeric.Fixed{f.X, f.Y, f.Z})
 	// The feature-backed pseudo-unit has no FBI to read and sets both the
 	// structure class bit and the height-plane bit unconditionally at
 	// construction, so 3DO wrecks anti-alias like buildings [R-REN-03A §2].

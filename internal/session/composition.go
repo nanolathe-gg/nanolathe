@@ -2303,6 +2303,20 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		if cell == nil {
 			return false
 		}
+		// The transplant's source, read BEFORE the feature leaves: phase 5
+		// "copies the live feature record's orientation triple into the new
+		// unit" [05 R-WORK-01 §7 "Established — the transplant"], and Resurrect
+		// below removes the feature. orders.FeatureView carries identity,
+		// geometry and reclaim values but no orientation, so the triple is
+		// taken from the live instance the same anchor cell owns. An absent
+		// instance leaves it zero, which is what every non-corpse placement
+		// stores anyway [05 "Feature instance and terrain cell"].
+		var orient features.Orientation
+		if s.Features != nil {
+			if inst := s.Features.InstanceAt(int(view.CX), int(view.CZ)); inst != nil {
+				orient = inst.Orientation
+			}
+		}
 		// The executor's ONLY simulation draw is phase 1's approach-point draw,
 		// which internal/orders takes [05 R-WORK-01 §7]; the construction
 		// service's own optional jitter draw is therefore passed no stream, so
@@ -2311,6 +2325,22 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		if err != nil || product == nil {
 			return false
 		}
+		// The transplant itself: bank and heading (retail's one 32-bit copy)
+		// and pitch (a 16-bit copy) overwrite whatever the allocator seeded; no
+		// position is copied, the unit having been allocated at the feature's
+		// recorded position just above [05 R-WORK-01 §7 "Established — the
+		// transplant"][05 "Feature instance and terrain cell"][04 R-ORD-01 §5].
+		// So a resurrected unit stands exactly as its predecessor fell, while a
+		// map-authored or successor feature (triple zero) faces heading 0.
+		//
+		// It runs BEFORE CompleteUnit deliberately: that hook calls movement's
+		// EnsureUnit, which seeds the mover's steering records from the unit's
+		// heading. Transplanting afterwards would leave the mover holding the
+		// allocator's facing while the unit record held the wreck's, and the
+		// first movement step would commit the mover's copy back over it.
+		product.Move.Bank = orient.Bank
+		product.Move.Heading = orient.Heading
+		product.Move.Pitch = orient.Pitch
 		// The feature's blocking footprint has just left the grid, so the
 		// pathfinder's cached static obstacles are stale until the revision
 		// moves; the reclaim transition bumps it for the same reason
@@ -2324,21 +2354,6 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// the way any completed product does: movement state and a visibility
 		// publish [01 §6.1][03 §3].
 		s.CompleteUnit(product.Handle)
-		// Settled (2026-09-02): the two fields phase 5 copies are the live
-		// feature record's ORIENTATION triple — bank and heading as one 32-bit
-		// copy, pitch as a 16-bit copy — written into the new unit's bank,
-		// heading and pitch words; no position is copied. The corpse placement
-		// stores that triple from the dying unit, and every other placement
-		// stores zeros [05 R-WORK-01 §7 "the two copied fields"][05 "Feature
-		// instance and terrain cell"][04 R-ORD-01 §5].
-		//
-		// TODO: not yet implemented here — features.Instance carries no
-		// orientation, so PlaceCorpse (internal/features) has nowhere to keep
-		// the dying unit's Bank/Heading/Pitch and this transplant has nothing to
-		// copy; the resurrected unit keeps the allocator's own facing. The
-		// follow-up is: add the triple to features.Instance (zero for every
-		// non-corpse placement), have the death path hand PlaceCorpse the
-		// unit's triple, and copy it onto `product` here after CompleteUnit.
 		return true
 	}
 	return false

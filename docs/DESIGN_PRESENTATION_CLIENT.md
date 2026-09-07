@@ -308,6 +308,13 @@ document carries them.
   units of each window row; pass B draws the units whose committed mode mirror
   is not "grounded" — airborne aircraft, attached cargo, save-installed — at the
   end of strip 7 `[03 R-RAST-01 §6]` `[03 R-RAST-01 §7]`.
+* **C3.1 A 3DO feature draws as a pseudo-unit.** The per-cell dispatcher fills
+  it with "model pointer, position and the slot's orientation words" and hands
+  it to the ordinary per-unit present `[03 R-RAST-01 §6]`, so `drawFeatureModel`
+  passes the committed record's bank/heading/pitch into the same model build
+  `drawUnitModel` uses for a unit. Only a corpse carries a nonzero triple
+  `[05 "Feature instance and terrain cell"]`, so a wreck lies the way its unit
+  fell and every map-authored 3DO feature draws at three zeros as before.
 * **C4 Strip lifecycle.** The update dispatcher evaluates removal **before**
   update for every object and stably compacts on a positive verdict, so
   survivors keep order; a terminal condition created during an update is noticed

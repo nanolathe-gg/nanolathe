@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
@@ -114,15 +115,27 @@ func (c *Client) frameIndexedRect(x, y, w, h int, idx uint8) {
 // that wrote it (AGENTS.md rule 1), so it is removed rather than left.
 
 // UIFillRect fills a clipped rectangle in the indexed framebuffer. idx is an
-// active PALETTE.PAL index, matching retail's indexed primitive writers.
+// active PALETTE.PAL index, matching retail's indexed primitive writers. It
+// records the fill and the classic sink runs fillIndexedRect inline, so the HUD
+// and menu draws land in exact per-frame order under the committed-frame list
+// (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIFillRect(x, y, w, h int, idx uint8) {
-	c.fillIndexedRect(x, y, w, h, idx)
+	c.emitFill(drawlist.Fill{
+		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
+		Index: idx,
+		Style: drawlist.FillSolid,
+	})
 }
 
 // UIFrameRect outlines a clipped rectangle in the indexed framebuffer. idx is
-// an active PALETTE.PAL index.
+// an active PALETTE.PAL index. It emits; the classic sink runs frameIndexedRect
+// (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIFrameRect(x, y, w, h int, idx uint8) {
-	c.frameIndexedRect(x, y, w, h, idx)
+	c.emitFill(drawlist.Fill{
+		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
+		Index: idx,
+		Style: drawlist.FillOutline,
+	})
 }
 
 // UIText draws FNT text into the indexed framebuffer when a font is loaded.
@@ -132,12 +145,22 @@ func (c *Client) UIText(fnt *formats.FNT, text string, x, y int, color byte) {
 
 // UITextWidth draws FNT text with an explicit retail control width. The
 // frontend uses this so authored labels truncate before clipping to their
-// gadget rectangle rather than running into neighboring controls.
+// gadget rectangle rather than running into neighboring controls. It records
+// the run and the classic sink runs the FNT rasterizer inline with the same
+// pen, control width and no per-glyph callback, so the text lands in per-frame
+// order (docs/DESIGN_GPU_RENDERER.md §2.2)[07 §7][03 §7.1].
 func (c *Client) UITextWidth(fnt *formats.FNT, text string, x, y, maxWidth int, color byte) {
 	if c.fnt == nil || fnt == nil {
 		return
 	}
-	drawText(c.indexed, c.width, c.height, fnt, text, x, y, maxWidth, color, nil)
+	c.emitGlyphs(drawlist.Glyphs{
+		Font:     fnt,
+		Text:     text,
+		X:        int32(x),
+		Y:        int32(y),
+		Color:    color,
+		MaxWidth: int32(maxWidth),
+	})
 }
 
 // WorldToScreenPx exposes the camera projection for overlay geometry.
@@ -146,8 +169,12 @@ func (c *Client) WorldToScreenPx(x, y, z numeric.Fixed) (int32, int32) {
 }
 
 // UIBlit stamps a decoded GAF frame into the indexed framebuffer at (x, y),
-// honoring GAF transparency and clipping to the framebuffer [fmt gaf].
-// Presentation only [I6].
+// honoring GAF transparency and clipping to the framebuffer [fmt gaf]. This is
+// the plain keyed placement — the rectangle is the contract, no authored offset
+// is subtracted, unlike UIBlitAnchor [07 §4]. It records a non-anchored keyed
+// Sprite clipped to the framebuffer and the classic sink runs the byte writer
+// inline, so the blit lands in per-frame order (docs/DESIGN_GPU_RENDERER.md
+// §2.2). Presentation only [I6].
 func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 	c.UIBlitClipped(f, x, y, 0, 0, c.width, c.height)
 }
@@ -158,6 +185,28 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 // oversized picture gadgets, and glyph overhang cannot escape the window
 // rectangle [07 §4]. Presentation only [I6].
 //
+// It records a non-anchored keyed Sprite carrying the clip and the classic sink
+// runs uiBlitClippedRaw inline, so the chrome lands in per-frame order; a nil
+// frame records nothing exactly as the direct call drew nothing
+// (docs/DESIGN_GPU_RENDERER.md §2.2).
+func (c *Client) UIBlitClipped(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
+	if f == nil {
+		return
+	}
+	c.emitSprite(drawlist.Sprite{
+		Frame:   f,
+		X:       int32(x),
+		Y:       int32(y),
+		Kind:    drawlist.BlitKeyed,
+		HasClip: true,
+		Clip:    drawlist.Rect{X: int32(clipX), Y: int32(clipY), W: int32(clipW), H: int32(clipH)},
+	})
+}
+
+// uiBlitClippedRaw is the byte writer of UIBlitClipped. It is reached only
+// through the classic sink for the converted keyed/cursor paths, so it is never
+// executed twice.
+//
 // Every piece of chrome the battle shell draws comes through here, so the
 // per-pixel work is what the HUD stage costs. The clip is therefore resolved
 // into a row and column range once per call rather than re-tested per pixel,
@@ -167,7 +216,7 @@ func (c *Client) UIBlit(f *formats.GAFFrame, x, y int) {
 // them keeps the same pixels — including a frame whose pixel or transparency
 // arrays are shorter than its declared size, where At skips the missing tail
 // and the per-row limit below skips the same tail.
-func (c *Client) UIBlitClipped(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
+func (c *Client) uiBlitClippedRaw(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
 	if f == nil {
 		return
 	}
@@ -224,7 +273,32 @@ func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, l
 		return
 	}
 	if pal == nil || level <= 0 {
+		// Level 0 (and the no-palette case) is exactly UIBlit, so it emits the
+		// plain keyed record [03 §4.3.1].
 		c.UIBlit(f, x, y)
+		return
+	}
+	// The palette rides the client scratch field to the sink; emitSprite runs the
+	// sink inline, so it is consumed before any later lit emit overwrites it, as
+	// UILightRect does (docs/DESIGN_GPU_RENDERER.md §2.2). The LHT level is an
+	// LHT-table row (LightLookup clamps to 0..31); it rides LightRow.
+	c.uiRectPal = pal
+	c.emitSprite(drawlist.Sprite{
+		Frame:    f,
+		X:        int32(x),
+		Y:        int32(y),
+		Kind:     drawlist.BlitLit,
+		LightRow: uint8(level),
+	})
+}
+
+// uiBlitLitRaw is the byte writer of UIBlitLit's lit path. It is reached only
+// through the classic sink for the converted lit-blit path, so it is never
+// executed twice; the loop, clip and per-pixel LHT lookup are unchanged from the
+// direct call [03 §4.3.1]. The caller (the sink) guarantees pal is non-nil and
+// level > 0, exactly the branch UIBlitLit routes here.
+func (c *Client) uiBlitLitRaw(f *formats.GAFFrame, x, y int, pal *palette.Tables, level int) {
+	if f == nil || pal == nil {
 		return
 	}
 	for row := 0; row < int(f.Height); row++ {
@@ -256,7 +330,29 @@ func (c *Client) UIBlitAnchor(f *formats.GAFFrame, x, y int) {
 	if f == nil {
 		return
 	}
-	c.UIBlit(f, x-int(f.XOffset), y-int(f.YOffset))
+	// The offset subtraction is deferred to the sink so the record carries the
+	// caller coordinates: it emits an ANCHORED keyed Sprite and the classic sink
+	// runs uiBlitAnchorRaw inline, distinct from UIBlit's non-anchored record
+	// (docs/DESIGN_GPU_RENDERER.md §2.2)[fmt gaf][07 §6].
+	c.emitSprite(drawlist.Sprite{
+		Frame:    f,
+		X:        int32(x),
+		Y:        int32(y),
+		Kind:     drawlist.BlitKeyed,
+		Anchored: true,
+	})
+}
+
+// uiBlitAnchorRaw is the byte writer of UIBlitAnchor: it subtracts the frame's
+// authored offsets and defers to uiBlitClippedRaw over the full framebuffer,
+// exactly as the direct UIBlitAnchor→UIBlit call did [fmt gaf][07 §6]. It is
+// reached only through the classic sink's anchored keyed branch, so it is never
+// executed twice.
+func (c *Client) uiBlitAnchorRaw(f *formats.GAFFrame, x, y int) {
+	if f == nil {
+		return
+	}
+	c.uiBlitClippedRaw(f, x-int(f.XOffset), y-int(f.YOffset), 0, 0, c.width, c.height)
 }
 
 // UIBlitFrameScaled stretches a decoded GAF frame across a destination
@@ -285,7 +381,30 @@ func (c *Client) UIBlitFrameScaledClipped(f *formats.GAFFrame, x, y, w, h, clipX
 // across a destination rectangle. ENDMSN's PlayerColor surface uses the
 // interior source `(1,1)..(frameWidth-1,frameHeight-1)` rather than sampling
 // the logo frame's outer border [07 R-HUD-03 §11].
+//
+// It records a scaled Sprite carrying the source sub-rect in Src, the
+// destination in Dst and the clip in Clip, and the classic sink runs the byte
+// writer inline; the guard is kept here so a degenerate call records nothing,
+// exactly as the direct call drew nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIBlitFrameSourceRectScaledClipped(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y, w, h, clipX, clipY, clipW, clipH int) {
+	if f == nil || w <= 0 || h <= 0 || srcW <= 0 || srcH <= 0 || f.Width == 0 || f.Height == 0 {
+		return
+	}
+	c.emitSprite(drawlist.Sprite{
+		Frame:   f,
+		Kind:    drawlist.BlitScaled,
+		Src:     drawlist.Rect{X: int32(srcX), Y: int32(srcY), W: int32(srcW), H: int32(srcH)},
+		Dst:     drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
+		HasClip: true,
+		Clip:    drawlist.Rect{X: int32(clipX), Y: int32(clipY), W: int32(clipW), H: int32(clipH)},
+	})
+}
+
+// uiBlitFrameSourceRectScaledClippedRaw is the byte writer of the scaled blit,
+// reached only through the classic sink's BlitScaled branch, so it is never
+// executed twice; the sampling, clip and per-pixel store are unchanged from the
+// direct call [07 R-HUD-03 §11].
+func (c *Client) uiBlitFrameSourceRectScaledClippedRaw(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y, w, h, clipX, clipY, clipW, clipH int) {
 	if f == nil || w <= 0 || h <= 0 || srcW <= 0 || srcH <= 0 || f.Width == 0 || f.Height == 0 {
 		return
 	}
@@ -343,7 +462,29 @@ func (c *Client) UIBlitPCX(p *formats.PCX, x, y int) {
 // unaffected; SELMAP.GUI is the case that needs the clip, because
 // bitmaps/dselectmap2.pcx is a 640x480 file whose panel art occupies just the
 // top-left 494x420 [07 §4]. Presentation only [I6].
+//
+// A PCX cannot ride Sprite.Frame (which holds a GAF frame), so it records a
+// Sprite whose additive PCX field carries the source; the classic sink routes
+// any Sprite with a non-nil PCX to uiBlitPCXClippedRaw, honoring the clip in
+// Clip. A nil image records nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIBlitPCXClipped(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int) {
+	if p == nil {
+		return
+	}
+	c.emitSprite(drawlist.Sprite{
+		PCX:     p,
+		X:       int32(x),
+		Y:       int32(y),
+		HasClip: true,
+		Clip:    drawlist.Rect{X: int32(clipX), Y: int32(clipY), W: int32(clipW), H: int32(clipH)},
+	})
+}
+
+// uiBlitPCXClippedRaw is the byte writer of UIBlitPCXClipped, reached only
+// through the classic sink's PCX branch, so it is never executed twice; the
+// clip and per-pixel copy are unchanged from the direct call
+// [fmt pcx][07 "Retail palette contract"].
+func (c *Client) uiBlitPCXClippedRaw(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int) {
 	if p == nil {
 		return
 	}
@@ -371,7 +512,31 @@ func (c *Client) UIBlitPCXClipped(p *formats.PCX, x, y, clipX, clipY, clipW, cli
 // rewrites the destination in place, so it lifts whatever is already there
 // instead of painting a color. The GUI uses it for the selected list row
 // [03 §4.3.1]. Presentation only [I6].
+//
+// It records the op and the classic sink runs uiLightRectRaw inline against the
+// passed palette (carried to the sink on the client scratch field), so the light
+// rect lands in per-frame order; the guard on the passed pal is preserved here
+// so a nil palette records nothing exactly as the direct call drew nothing
+// (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UILightRect(pal *palette.Tables, x, y, w, h, level int) {
+	if pal == nil || w <= 0 || h <= 0 {
+		return
+	}
+	// The palette rides the client scratch field to the sink; emitFill runs the
+	// sink inline, so it is consumed before any later lit/shade emit overwrites it.
+	c.uiRectPal = pal
+	c.emitFill(drawlist.Fill{
+		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
+		Style: drawlist.FillLitRect,
+		Level: int32(level),
+	})
+}
+
+// uiLightRectRaw is the byte writer of UILightRect. It is reached only through
+// the classic sink for the converted light-rect path, so it is never executed
+// twice; the loop, clip and in-place LHT lookup are unchanged from the direct
+// call [03 §4.3.1].
+func (c *Client) uiLightRectRaw(pal *palette.Tables, x, y, w, h, level int) {
 	if pal == nil || w <= 0 || h <= 0 {
 		return
 	}
@@ -395,7 +560,31 @@ func (c *Client) UILightRect(pal *palette.Tables, x, y, w, h, level int) {
 // Negative levels address SHD row level+32 after clamping at -32; nonnegative
 // levels use the brighten-only LHT row. This is the two-table signed shader
 // contract, not a single-table approximation [03 R-COMP-02 §5].
+//
+// It records the op with the signed level and the classic sink runs
+// uiShadeRectRaw inline against the passed palette (carried to the sink on the
+// client scratch field), so the shade rect lands in per-frame order. The guard
+// on the passed pal is preserved so a nil palette records nothing, as the direct
+// call drew nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIShadeRect(pal *palette.Tables, x, y, w, h, level int) {
+	if c == nil || pal == nil || w <= 0 || h <= 0 {
+		return
+	}
+	// The palette rides the client scratch field to the sink; emitFill runs the
+	// sink inline, so it is consumed before any later lit/shade emit overwrites it.
+	c.uiRectPal = pal
+	c.emitFill(drawlist.Fill{
+		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
+		Style: drawlist.FillShadeRect,
+		Level: int32(level),
+	})
+}
+
+// uiShadeRectRaw is the byte writer of UIShadeRect. It is reached only through
+// the classic sink for the converted shade-rect path, so it is never executed
+// twice; the signed-level row selection, clamps, clip and in-place SHD/LHT
+// lookup are unchanged from the direct call [03 R-COMP-02 §5].
+func (c *Client) uiShadeRectRaw(pal *palette.Tables, x, y, w, h, level int) {
 	if c == nil || pal == nil || w <= 0 || h <= 0 {
 		return
 	}
@@ -437,7 +626,26 @@ func (c *Client) UIShadeRect(pal *palette.Tables, x, y, w, h, level int) {
 // It is used by retail surface gadgets such as SELMAP's MAPPIC, whose pixels
 // are supplied by the selected TNT minimap. The source bytes already address
 // PALETTE.PAL, like every other indexed image path.
+//
+// It records a Surface carrying the source bytes and the destination rectangle
+// in Dst, and the classic sink runs uiBlitIndexedRaw inline; the guard is kept
+// here so a degenerate call records nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
+	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
+		return
+	}
+	c.emitSurface(drawlist.Surface{
+		Pixels: src,
+		SrcW:   int32(srcW),
+		SrcH:   int32(srcH),
+		Dst:    drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
+	})
+}
+
+// uiBlitIndexedRaw is the byte writer of UIBlitIndexed, reached only through the
+// classic sink's Surface branch, so it is never executed twice; the sampling,
+// clip and per-pixel store are unchanged from the direct call.
+func (c *Client) uiBlitIndexedRaw(src []byte, srcW, srcH, x, y, w, h int) {
 	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
 		return
 	}

@@ -11,6 +11,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -119,8 +120,18 @@ func (c *Client) drawNanolathe(cur *frame.Frame) {
 				continue
 			}
 			sx, sy := c.cam.WorldToScreen(p.X, p.Y, p.Z)
-			c.fillIndexedRect(int(sx-camera.OriginX), int(sy-camera.OriginY),
-				render.NanoParticleSize, render.NanoParticleSize, p.Color)
+			// One particle is a plain solid FillSolid rectangle [03 §5.5]; it
+			// reads nothing from the destination, so it converts in this unit.
+			c.emitFill(drawlist.Fill{
+				Rect: drawlist.Rect{
+					X: sx - camera.OriginX,
+					Y: sy - camera.OriginY,
+					W: render.NanoParticleSize,
+					H: render.NanoParticleSize,
+				},
+				Index: p.Color,
+				Style: drawlist.FillSolid,
+			})
 		}
 	}
 }

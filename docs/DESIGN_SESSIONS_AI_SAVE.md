@@ -399,6 +399,27 @@ records"]` `[08 "Feature records"]` `[08 R-SAVE-02 §6]` `[08 R-SAVE-02 §7]`
 record maps live in `[08 R-SAVE-UNIT-01]`, `[08 R-SAVE-WEAPON-01]`,
 `[08 R-SAVE-ORDER-01]` and `[08 R-SAVE-FEATURE-01]`.
 
+**The 3D feature record's five values are named.** `internal/features` writes
+and reads them as named instance fields rather than as an opaque blob: the
+position triple at `0x08..0x13` as three 16.16 world coordinates, then bank at
+`0x14..0x15`, heading at `0x16..0x17` and pitch at `0x18..0x19`, with the damage
+accumulator at `0x06..0x07` shared with the other two families
+`[08 R-SAVE-FEATURE-01]`. The reader hands the position and orientation to the
+ordinary stamp as its two optional pointers, so both are stored **verbatim** —
+no footprint centre, no terrain re-sample — and writes the accumulator
+afterwards, because the stamp zeroes it. Velocity is not serialized and is not
+re-derived: a wreck saved mid-descent reloads at its saved Y with zero velocity
+and stays **suspended** there. That is retail's behavior, not a gap to patch —
+do not latch the sinking velocity back on from the height/sea-level relation.
+`RestoreAt` remains the single owner of the family switch, so the session's
+restore loop is unchanged.
+
+This build's 3D damage path is a countdown from the definition's `damage`
+rather than retail's wrap-around 16-bit accumulator, so the saved word
+round-trips losslessly on its own instance field and the live damage path does
+not read it; the mismatch is a `TODO(question)` at the field rather than an
+invented conversion `[05 R-FEAT-01 §8]`.
+
 `compression.go` decodes the single-chunk `SQSH` framing the pools and account
 bodies use; the archive LZ77 variant is what the retail writer selects, and the
 zlib method is accepted as a format-level variant `[fmt hpi]`

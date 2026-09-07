@@ -1,0 +1,46 @@
+#!/bin/sh
+# Records the parity baseline of docs/DESIGN_GPU_RENDERER.md §6: one classic
+# capture per matrix entry plus the headless fingerprints, into
+# PLAN_GPU_baseline/ at the repository root (untracked). tools/gpu-parity
+# checks a later build against this record.
+#
+#   tools/gpu-baseline            captures M1..M8 and the short fingerprint
+#   GPU_MATRIX_LONG=1 tools/gpu-baseline   also the 54000-tick fingerprint
+#
+# Re-running overwrites the record; do that only when the classic output is
+# meant to change, and say so in the plan's status table.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+. tools/gpu-matrix
+
+export NANOLATHE_RETAIL_ASSETS="${NANOLATHE_RETAIL_ASSETS:-${NANOLATHE_TA_ROOT:-$HOME/TotalAnnihilation}}"
+if [ ! -d "$NANOLATHE_RETAIL_ASSETS" ]; then
+	echo "gpu-baseline: retail assets not found at $NANOLATHE_RETAIL_ASSETS" >&2
+	exit 1
+fi
+
+out=PLAN_GPU_baseline
+bin=$(mktemp -d -t nanolathe-gpu-baseline.XXXXXX)
+trap 'rm -rf "$bin"' EXIT
+
+echo "==> go build"
+go build -o "$bin/nanolathe" ./cmd/nanolathe
+go build -o "$bin/nanolathe-headless" ./cmd/nanolathe-headless
+
+echo "==> captures -> $out"
+mkdir -p "$out"
+gpu_matrix_run "$bin/nanolathe" "$out"
+
+echo "==> checksums"
+(cd "$out" && shasum -a 256 M*.png >SHA256SUMS && cat SHA256SUMS)
+
+echo "==> fingerprints"
+fp="$out/fingerprints.txt"
+: >"$fp"
+printf 'short %s %s\n' "$(gpu_matrix_fingerprint "$bin/nanolathe-headless" "$GPU_FINGERPRINT_SHORT")" "$GPU_FINGERPRINT_SHORT" >>"$fp"
+if [ "${GPU_MATRIX_LONG:-0}" = "1" ]; then
+	printf 'long %s %s\n' "$(gpu_matrix_fingerprint "$bin/nanolathe-headless" "$GPU_FINGERPRINT_LONG")" "$GPU_FINGERPRINT_LONG" >>"$fp"
+fi
+cat "$fp"
+git rev-parse HEAD >"$out/COMMIT"
+echo "OK: baseline recorded at $(cat "$out/COMMIT")"

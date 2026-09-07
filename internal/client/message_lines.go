@@ -1,6 +1,9 @@
 package client
 
-import "github.com/nanolathe/nanolathe/internal/frame"
+import (
+	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe/nanolathe/internal/frame"
+)
 
 // MessageRing returns the client's shared caption/chat ring [07 R-HUD-03
 // §14]. Retail has one ring, fed by unit captions, chat and the game-speed
@@ -34,6 +37,17 @@ func (c *Client) drawMessageLines() {
 			continue
 		}
 		y := 52 + i*int(c.fnt.Height)
-		DrawText(c.indexed, c.width, c.height, c.fnt, line.Text, 138, y, 0, line.LogicalColor())
+		// Record then execute inline: the classic sink runs the same FNT
+		// rasterizer with the same pen and max-width 0 (the zero value of
+		// Glyphs.MaxWidth), exactly as the direct DrawText call did, so the
+		// message column lands in per-frame order under the committed-frame list
+		// (docs/DESIGN_GPU_RENDERER.md §2.2)[07 R-HUD-03 §14.4][03 §7.1].
+		c.emitGlyphs(drawlist.Glyphs{
+			Font:  c.fnt,
+			Text:  line.Text,
+			X:     138,
+			Y:     int32(y),
+			Color: line.LogicalColor(),
+		})
 	}
 }

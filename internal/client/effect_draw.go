@@ -6,6 +6,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 )
@@ -214,7 +215,9 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			continue
 		}
 		x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
-		c.UIBlitAnchor(frame, int(x-128), int(y-32))
+		// The named effect art is a plain keyed frame-anchor blit [03 §1]; Anchored
+		// selects the offset-subtracting UIBlitAnchor placement (WU-1.7b).
+		c.emitSprite(drawlist.Sprite{Frame: frame, X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
 		stats.Sprites++
 	}
 	return stats
@@ -231,6 +234,14 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 	if terrainCoverage == nil {
 		return
 	}
+	// The halo is a single LHT level applied to every covered pixel in the disc.
+	// LightLookup clamps the level to 0..31, so clamping the recorded row here is
+	// byte-identical and keeps the operand inside Point.Index [03 §4.3.1].
+	row := level
+	if row > 31 {
+		row = 31
+	}
+	pts := c.pointScratch[:0]
 	r2 := radius * radius
 	for dy := -radius; dy <= radius; dy++ {
 		py := cy + dy
@@ -248,10 +259,16 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 			if !terrainCoverage(px, py) {
 				continue
 			}
-			idx := py*c.width + px
-			c.indexed[idx] = c.pal.LightLookup(level, c.indexed[idx])
+			pts = append(pts, drawlist.Point{X: int32(px), Y: int32(py), Index: uint8(row)})
 		}
 	}
+	c.pointScratch = pts
+	if len(pts) == 0 {
+		return
+	}
+	// The disc brightens the terrain already composed under it; record the level
+	// and let the sink fold each pixel through the LHT row [03 §4.3.1].
+	c.emitPoints(drawlist.Points{Kind: drawlist.PointLit, Points: pts})
 }
 
 // fillStripParticle draws one strip sub-record of a filling family: the
@@ -266,20 +283,30 @@ func (c *Client) fillStripParticle(x, y int, color uint8) bool {
 	if c == nil || len(c.indexed) == 0 || color == 0 {
 		return false
 	}
+	// The two-by-two mark is the same clipped solid rectangle fillIndexedRect
+	// writes; drew reports whether any of its pixels land on the surface, which
+	// is exactly whether the rect clips to a non-empty span [03 R-STRIP-01 §2].
 	drew := false
-	for dy := 0; dy < 2; dy++ {
+	for dy := 0; dy < stripParticleSize && !drew; dy++ {
 		py := y + dy
 		if py < 0 || py >= c.height {
 			continue
 		}
-		for dx := 0; dx < 2; dx++ {
+		for dx := 0; dx < stripParticleSize; dx++ {
 			px := x + dx
-			if px < 0 || px >= c.width {
-				continue
+			if px >= 0 && px < c.width {
+				drew = true
+				break
 			}
-			c.indexed[py*c.width+px] = color
-			drew = true
 		}
 	}
-	return drew
+	if !drew {
+		return false
+	}
+	c.emitFill(drawlist.Fill{
+		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: stripParticleSize, H: stripParticleSize},
+		Index: color,
+		Style: drawlist.FillSolid,
+	})
+	return true
 }

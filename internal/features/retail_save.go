@@ -3,6 +3,8 @@ package features
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // RetailFeatureRecord is one detached feature record in the exact wire shape
@@ -115,22 +117,46 @@ func (s *Service) RetailFeatureImage() (RetailFeatureImage, error) {
 				binary.LittleEndian.PutUint16(row.Data[0:], uint16(cx))
 				binary.LittleEndian.PutUint16(row.Data[2:], uint16(cz))
 				binary.LittleEndian.PutUint16(row.Data[4:], feature)
-				binary.LittleEndian.PutUint16(row.Data[6:], inst.AnimationState)
+				binary.LittleEndian.PutUint16(row.Data[6:], inst.DamageAccumulator)
 				row.Data[8] = inst.AnimationFrame
 				row.Data[9] = (inst.AnimationCountdown&0x0f)<<4 | (inst.AnimationSelector & 0x0f)
 				image.Animating = append(image.Animating, row)
 			case 2:
+				// The 3D record's five values, named [08 R-SAVE-FEATURE-01]:
+				// the instance's position triple at 0x08..0x13 as three 16.16
+				// world coordinates, then its orientation — bank and heading at
+				// 0x14..0x17 (retail's one 32-bit copy of the pair) and pitch at
+				// 0x18..0x19 — with the damage accumulator sharing 0x06..0x07
+				// with the other two families. Y is the instance's CURRENT
+				// height, which is why a sinking wreck's descent is saved.
 				row.Data = make([]byte, RetailThreeDFeatureSize)
 				binary.LittleEndian.PutUint16(row.Data[0:], uint16(cx))
 				binary.LittleEndian.PutUint16(row.Data[2:], uint16(cz))
 				binary.LittleEndian.PutUint16(row.Data[4:], feature)
-				binary.LittleEndian.PutUint16(row.Data[6:], inst.AnimationState)
-				copy(row.Data[8:], inst.OpaqueState[:])
+				binary.LittleEndian.PutUint16(row.Data[6:], inst.DamageAccumulator)
+				putFixedWire(row.Data[0x08:], inst.X)
+				putFixedWire(row.Data[0x0c:], inst.Y)
+				putFixedWire(row.Data[0x10:], inst.Z)
+				binary.LittleEndian.PutUint16(row.Data[0x14:], inst.Bank)
+				binary.LittleEndian.PutUint16(row.Data[0x16:], inst.Heading)
+				binary.LittleEndian.PutUint16(row.Data[0x18:], inst.Pitch)
 				image.ThreeD = append(image.ThreeD, row)
 			}
 		}
 	}
 	return image, nil
+}
+
+// putFixedWire writes one world coordinate as the save's 32-bit 16.16 word, and
+// fixedFromWire reads it back sign-extended. The live value's backing width is
+// wider than the wire's, which is the narrowing every save-boundary coordinate
+// takes [08 R-SAVE-FEATURE-01][I13].
+func putFixedWire(dst []byte, v numeric.Fixed) {
+	binary.LittleEndian.PutUint32(dst, uint32(int32(v.Raw())))
+}
+
+func fixedFromWire(src []byte) numeric.Fixed {
+	return numeric.Fixed(int32(binary.LittleEndian.Uint32(src)))
 }
 
 // RetailSaveImage is an alias named for callers assembling a complete save.

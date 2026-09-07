@@ -225,10 +225,20 @@ type FeatureView struct {
 	// Owner is the plot's placer selector. Map-authored features use the
 	// non-player selector 10; corpse/runtime features carry their owner's
 	// player slot [03 §3.3][03 §3.9].
-	Owner        uint8
-	OwnerKnown   bool
-	CX, CZ       int32
-	X, Y, Z      numeric.Fixed
+	Owner      uint8
+	OwnerKnown bool
+	CX, CZ     int32
+	X, Y, Z    numeric.Fixed
+	// Bank, Heading and Pitch are the live record's orientation triple, in the
+	// unit record's own order and units (65536 per circle) [05 "Feature
+	// instance and terrain cell"]. Retail draws a 3DO feature as a pseudo-unit
+	// filled with the model pointer, the position and the slot's orientation
+	// words [03 R-RAST-01 §6], so the feature model pass needs them exactly as
+	// the unit pass needs a unit's. They are zero for every placement but a
+	// corpse.
+	Bank         uint16
+	Heading      uint16
+	Pitch        uint16
 	DefName      string
 	Model        string
 	Health       int32
