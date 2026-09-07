@@ -116,11 +116,34 @@ func readArchiveFile(file vfs.File, max int64) ([]byte, error) {
 	return data, nil
 }
 
-// CanonicalKey folds a name the way retail's catalogs compare them:
-// case-insensitively [02 §5]. It is the one key rule — every catalog map, every
-// cross-reference and every hash input goes through it, so that lookups cannot
-// disagree with sort order.
-func CanonicalKey(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+// CanonicalKey folds the established ASCII domain and trims only the four TDF
+// semantic whitespace bytes. Bytes at or above 0x80 remain literal until the
+// retail code-page rule is traced [02 R-CAT-01 §3].
+// TODO(question): trace retail's active code-page comparison for bytes >= 0x80.
+func CanonicalKey(name string) string {
+	start, end := 0, len(name)
+	for start < end && contentTDFSpace(name[start]) {
+		start++
+	}
+	for end > start && contentTDFSpace(name[end-1]) {
+		end--
+	}
+	name = name[start:end]
+	for i := 0; i < len(name); i++ {
+		if name[i] >= 'A' && name[i] <= 'Z' {
+			out := []byte(name)
+			for j := i; j < len(out); j++ {
+				if out[j] >= 'A' && out[j] <= 'Z' {
+					out[j] += 'a' - 'A'
+				}
+			}
+			return string(out)
+		}
+	}
+	return name
+}
+
+func contentTDFSpace(b byte) bool { return b == ' ' || b == '\t' || b == '\r' || b == '\n' }
 
 // boundedString models a fixed-width authored string buffer.  Retail copies
 // bytes into the destination and leaves one byte for a terminator on the

@@ -3,9 +3,7 @@ package formats
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -197,10 +195,49 @@ func LoadTDF(fs vfs.FSOps, name string) (*Document, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseTDF(data)
+	doc, err := ParseTDF(data)
+	return doc, WithTDFFile(err, name)
 }
 
-func foldName(name string) string { return strings.ToLower(name) }
+// foldName uses only the established byte domain. High-byte code-page folding
+// remains untraced, so those bytes intentionally compare literally.
+// TODO(question): trace retail's active code-page comparison for bytes >= 0x80.
+func foldName(name string) string { return asciiFold(trimTDFSemantic(name)) }
+
+func trimTDFSemantic(value string) string {
+	start, end := 0, len(value)
+	for start < end && isTDFSemanticSpace(value[start]) {
+		start++
+	}
+	for end > start && isTDFSemanticSpace(value[end-1]) {
+		end--
+	}
+	return value[start:end]
+}
+
+func isTDFSemanticSpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\r', '\n':
+		return true
+	default:
+		return false
+	}
+}
+
+func asciiFold(value string) string {
+	for i := 0; i < len(value); i++ {
+		if value[i] >= 'A' && value[i] <= 'Z' {
+			out := []byte(value)
+			for j := i; j < len(out); j++ {
+				if out[j] >= 'A' && out[j] <= 'Z' {
+					out[j] += 'a' - 'A'
+				}
+			}
+			return string(out)
+		}
+	}
+	return value
+}
 
 // Sections returns the section's nested sections in source order.
 func (s *Section) Sections() []*Section {
@@ -311,17 +348,14 @@ func (s *Section) Int(key string) (int64, bool, error) {
 }
 
 // Float returns a key's value through the floating accessor, whether the key
-// was present, and a conversion error.
+// was present, and a conversion error. The retail conversion does not reject
+// malformed trailing text, so a present value always has a result.
 func (s *Section) Float(key string) (float64, bool, error) {
 	value, ok := s.FirstValue(key)
 	if !ok {
 		return 0, false, nil
 	}
-	n, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-	if err != nil {
-		return 0, true, fmt.Errorf("tdf: %s=%q: %w", key, value, err)
-	}
-	return n, true, nil
+	return parseTDFFloat(value), true, nil
 }
 
 // Bool returns a key's value through the integer accessor consumed as a
@@ -403,19 +437,20 @@ func (p *tdfParser) parseItems(section *Section, untilClose bool) error {
 		p.skipSpaceAndComments()
 		if p.pos >= len(p.data) {
 			if untilClose {
-				return p.diag(DiagNextBlock, section.OriginalName, "")
+				return p.diag(DiagNextBlock, section)
 			}
 			return nil
 		}
 		if p.data[p.pos] == '}' {
 			if !untilClose {
-				return p.diag(DiagNextBlock, section.OriginalName, "")
+				p.advance()
+				return nil
 			}
 			p.advance()
 			return nil
 		}
 		if p.data[p.pos] == '[' {
-			child, err := p.parseSection()
+			child, err := p.parseSection(section)
 			if err != nil {
 				return err
 			}
@@ -424,7 +459,7 @@ func (p *tdfParser) parseItems(section *Section, untilClose bool) error {
 			}
 			continue
 		}
-		item, err := p.parseAssignment()
+		item, err := p.parseAssignment(section)
 		if err != nil {
 			return err
 		}
@@ -445,7 +480,7 @@ func (p *tdfParser) appendItem(item Item) error {
 	return nil
 }
 
-func (p *tdfParser) parseSection() (*Section, error) {
+func (p *tdfParser) parseSection(parent *Section) (*Section, error) {
 	if p.depth >= p.limits.MaxDepth {
 		return nil, p.errorf("section nesting exceeds limit %d", p.limits.MaxDepth)
 	}
@@ -453,22 +488,19 @@ func (p *tdfParser) parseSection() (*Section, error) {
 	p.advance() // '['
 	start := p.pos
 	for p.pos < len(p.data) && p.data[p.pos] != ']' {
-		if p.data[p.pos] == '\n' || p.data[p.pos] == '\r' {
-			return nil, p.diag(DiagClosingBracket, strings.TrimSpace(string(p.data[start:p.pos])), "")
-		}
 		p.advance()
 	}
 	if p.pos >= len(p.data) {
-		return nil, p.diag(DiagClosingBracket, strings.TrimSpace(string(p.data[start:p.pos])), "")
+		return nil, p.diag(DiagClosingBracket, parent)
 	}
-	original := strings.TrimSpace(string(p.data[start:p.pos]))
+	original := trimTDFSemantic(string(p.data[start:p.pos]))
 	if p.pos-start > p.limits.MaxNameBytes {
 		return nil, p.errorf("section name exceeds limit %d", p.limits.MaxNameBytes)
 	}
 	p.advance() // ']'
 	p.skipSpaceAndComments()
 	if p.pos >= len(p.data) || p.data[p.pos] != '{' {
-		return nil, p.diag(DiagOpeningBrace, original, "")
+		return nil, p.diag(DiagOpeningBrace, parent)
 	}
 	p.advance()
 	section := &Section{Name: foldName(original), OriginalName: original, Line: line, Column: column}
@@ -486,27 +518,21 @@ func (p *tdfParser) parseSection() (*Section, error) {
 	return section, nil
 }
 
-func (p *tdfParser) parseAssignment() (Item, error) {
+func (p *tdfParser) parseAssignment(section *Section) (Item, error) {
 	line, column := p.line, p.column
 	start := p.pos
 	for p.pos < len(p.data) && p.data[p.pos] != '=' {
-		if p.data[p.pos] == '[' || p.data[p.pos] == '}' || p.data[p.pos] == ';' {
-			return Item{}, p.diag(DiagEqualsNotFound, strings.TrimSpace(string(p.data[start:p.pos])), "")
-		}
 		p.advance()
 	}
 	if p.pos >= len(p.data) {
-		return Item{}, p.diag(DiagEqualsNotFound, strings.TrimSpace(string(p.data[start:p.pos])), "")
+		return Item{}, p.diag(DiagEqualsNotFound, section)
 	}
-	originalKey := strings.TrimSpace(string(p.data[start:p.pos]))
+	originalKey := trimTDFSemantic(string(p.data[start:p.pos]))
 	if p.pos-start > p.limits.MaxNameBytes {
 		return Item{}, p.errorf("assignment key exceeds limit %d", p.limits.MaxNameBytes)
 	}
-	if originalKey == "" {
-		return Item{}, p.errorf("empty assignment key")
-	}
 	p.advance() // '='
-	value, err := p.readValue()
+	value, err := p.readValue(section)
 	if err != nil {
 		return Item{}, err
 	}
@@ -519,12 +545,12 @@ func (p *tdfParser) parseAssignment() (Item, error) {
 // the fields those lines would have declared never exist [02 R-MALF-01 §4]
 // [fmt tdf]. Only exhausting the text without finding a ';' is the fatal
 // `Data field - ';' not found`.
-func (p *tdfParser) readValue() (string, error) {
+func (p *tdfParser) readValue(section *Section) (string, error) {
 	var value strings.Builder
 	for p.pos < len(p.data) {
 		if p.data[p.pos] == ';' {
 			p.advance()
-			return value.String(), nil
+			return trimTDFSemantic(value.String()), nil
 		}
 		if p.data[p.pos] == '/' && p.pos+1 < len(p.data) && p.data[p.pos+1] == '/' {
 			p.advance()
@@ -558,12 +584,12 @@ func (p *tdfParser) readValue() (string, error) {
 		value.WriteByte(p.data[p.pos])
 		p.advance()
 	}
-	return "", p.diag(DiagSemicolonMissing, "", strings.TrimSpace(value.String()))
+	return "", p.diag(DiagSemicolonMissing, section)
 }
 
 func (p *tdfParser) skipSpaceAndComments() {
 	for p.pos < len(p.data) {
-		if unicode.IsSpace(rune(p.data[p.pos])) {
+		if isTDFSemanticSpace(p.data[p.pos]) {
 			p.advance()
 			continue
 		}
@@ -614,11 +640,15 @@ func (p *tdfParser) errorf(format string, args ...any) error {
 	return fmt.Errorf("tdf: line %d column %d: %s", p.line, p.column, fmt.Sprintf(format, args...))
 }
 
-// diag returns one of retail's five verbatim parse diagnostics [02 §4],
-// carrying the position and the partial name/value the tokenizer had scanned.
-func (p *tdfParser) diag(d ParseDiagnostic, name, value string) error {
+// diag returns one of retail's five verbatim parse diagnostics [02 §4]. The
+// detail names the section active at the point of failure, or `root`.
+func (p *tdfParser) diag(d ParseDiagnostic, section *Section) error {
+	name := "root"
+	if section != nil && section.OriginalName != "" {
+		name = section.OriginalName
+	}
 	return &ParseError{
-		Diagnostic: d, Name: name, Value: value,
+		Diagnostic: d, Name: "name", Value: name,
 		Offset: p.pos, Line: p.line, Column: p.column,
 	}
 }

@@ -185,7 +185,7 @@ func CompileSides(fs vfs.FSOps) ([]*SideDef, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/sidedata.tdf: %w", err)
+		return nil, fmt.Errorf("content: gamedata/sidedata.tdf: %w", formats.WithTDFFile(err, "gamedata/sidedata.tdf"))
 	}
 	// Optional [GENERAL] baseheight integer default 480 [02 §6].
 	baseHeight := int32(480)

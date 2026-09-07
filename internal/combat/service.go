@@ -2323,6 +2323,37 @@ func impactProjectile(s *Service, h pool.Handle, p *Projectile, weapon *content.
 	handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, wind, simRNG, directUnit)
 }
 
+// StackImpactRecord is the nonpooled shape the death handler passes to the
+// central impact path. The two point fields, null identities, and owner-side
+// byte are the complete initialized stack record [06 §12.2][06 R-WPN-02 §5].
+// Velocity and state fields do not belong here: the central path never reads
+// them for this record shape.
+type StackImpactRecord struct {
+	Weapon      *content.WeaponDef
+	Point       Vec3
+	SecondPoint Vec3
+	Shooter     pool.Handle
+	ShooterSide uint8
+	DirectUnit  pool.Handle
+}
+
+// ImpactStackRecord runs central impact for an unpooled stack record. It does
+// not apply pooled-record retirement; all presentation and damage branches are
+// shared with ordinary projectile impact [06 §12.2][06 R-WFX-01 §§2–3].
+func (s *Service) ImpactStackRecord(record StackImpactRecord, w *units.World, terrain *world.Terrain, catalog *content.Catalog, tick uint32) {
+	if record.Weapon == nil {
+		return
+	}
+	p := Projectile{
+		Pos:         record.Point,
+		StartPos:    record.SecondPoint,
+		Shooter:     record.Shooter,
+		ShooterSide: record.ShooterSide,
+		TargetUnit:  record.DirectUnit,
+	}
+	handleProjectileImpact(s, 0, &p, record.Weapon, w, terrain, nil, nil, catalog, tick, Vec3{}, nil, record.DirectUnit)
+}
+
 func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, wind Vec3, simRNG *rng.Simulation, directUnit pool.Handle) {
 	if weapon == nil {
 		return
@@ -2330,7 +2361,9 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 	hasDirectTarget := directUnit != 0
 	isWaterTerrain := impactCellIsWater(terrain, p.Pos)
 	if s != nil && s.OpaqueLiquidMode && isWaterTerrain && !hasDirectTarget {
-		s.MarkDead(h)
+		if h != 0 {
+			s.MarkDead(h)
+		}
 		return
 	}
 	// Impact presentation is part of the concrete projectile path. Keep the
@@ -2409,8 +2442,8 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	// damage gate is a property of the PROJECTILE's own side, not of the
 	// victim, and it skips damage ONLY for an occupied row whose control byte
 	// is 3. An unoccupied row passes — including the never-occupied eleventh
-	// row that a null-shooter record's neutral side byte selects, which is why
-	// a meteor or a death explosion damages every side and credits nobody.
+	// row selected by a meteor's neutral side byte. A death record instead
+	// carries its dying owner's side and must pass that owner's routing gate.
 	// When it does skip, the camera shake, the impact sound and the impact art
 	// of [06 §9.1] steps 4 and 5 have already been emitted by the caller and
 	// are unaffected.
@@ -2435,7 +2468,7 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	}
 	// Shared area splash: EnumerateArea→DistanceToBox→Falloff→ApplyDamage [06 §9.3]
 	// Extracted to ExplodeWeaponAt for death DoExplosion reuse [06 §12.1] C22–C25 (I1, I2)
-	service.ExplodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, tick)
+	service.explodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, p.ShooterSide, tick)
 }
 
 // impactCellIsWater uses the contacted plot's neighbourhood maximum byte, the
@@ -2473,6 +2506,18 @@ func emitWaterCrossing(s *Service, h pool.Handle, p *Projectile, weapon *content
 // (I2 allowlist: Falloff float32 only). Collect-then-apply avoids double-processing
 // victims when nested deaths chain-explode [01 §4.4].
 func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, tick uint32) {
+	shooterSide := NeutralSide
+	if attacker := w.Unit(shooter); attacker != nil {
+		shooterSide = attacker.Owner
+	}
+	s.explodeWeaponAt(w, terrain, weapon, impact, shooter, shooterSide, tick)
+}
+
+// explodeWeaponAt is the shared area recipient walk. The central impact
+// record carries the shooter-side byte separately from the shooter identity,
+// so a stack death record can route with its dying owner's side while retaining
+// its null shooter provenance [06 §12.2][06 §9.1].
+func (s *Service) explodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, shooterSide uint8, tick uint32) {
 	if w == nil || weapon == nil {
 		return
 	}
@@ -2668,10 +2713,7 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		if cand == nil || !cand.Alive || cand.Dying {
 			continue
 		}
-		p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: NeutralSide} // synthetic projectile for damage pipeline [06 §9.1]
-		if attacker := w.Unit(shooter); attacker != nil {
-			p.ShooterSide = attacker.Owner
-		}
+		p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: shooterSide} // synthetic projectile for damage pipeline [06 §9.1]
 		applyDamageToUnit(s, cand, p, weapon, vi.falloff, vi.dist, w, tick)
 	}
 }
@@ -2711,7 +2753,12 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	if victim == nil || weapon == nil || w == nil {
 		return
 	}
+	// The reaction routine needs a currently live unit, while the packet's
+	// provenance and veterancy fields read the raw pool slot. A freed slot keeps
+	// those fields until reuse, and a reused slot deliberately aliases its new
+	// occupant [06 R-WPN-04 §2].
 	shooter := w.Unit(p.Shooter)
+	rawShooter := w.RawUnitRecord(p.Shooter)
 	// [06 §9.1] step 4 runs three things in this order for every accepted
 	// non-heal packet: the damage flash, then the reaction routine, then the
 	// kind byte and the attacker fields. Keeping that order is what lets the
@@ -2771,17 +2818,11 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	if p.Shooter != 0 && victim.Alive && !victim.Dying {
 		victim.EngagementTarget = p.Shooter
 	}
-	if p.Shooter != 0 {
-		// The serialized attacker id is authoritative even when its slot is
-		// stale; a null attacker leaves both provenance fields untouched.
-		// TODO(question): units.World needs RawUnitAt(pool.Handle), a backing-
-		// slot lookup that does not apply Unit's alive filter, so this owner
-		// read matches the recorded-attacker path after an attacker has died.
-		// EC-03 must define how a released backing slot is represented.
-		victim.LastDamageSide = p.ShooterSide
-		if shooter != nil {
-			victim.LastDamageSide = shooter.Owner
-		}
+	if p.Shooter != 0 && rawShooter != nil {
+		// The stored side comes from the raw slot, never the routing side byte.
+		// A null attacker leaves the preceding packet's attacker-side snapshot
+		// intact [06 R-WPN-04 §2].
+		victim.LastDamageSide = rawShooter.Owner
 	}
 	if weapon.Paralyzer {
 		// Stun eligibility is three tests in this order [06 §10]:
@@ -2804,8 +2845,8 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 		}
 		base := SelectBaseDamage(weapon, victim.Def.UnitName)
 		attackerKills := int32(0)
-		if shooter != nil {
-			attackerKills = shooter.Kills
+		if rawShooter != nil {
+			attackerKills = rawShooter.Kills
 		}
 		// "The incoming amount is scaled exactly as ordinary damage (§9.2),
 		// including the armored-state modifier and defender veterancy, before
@@ -2830,8 +2871,8 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	}
 	base := SelectBaseDamage(weapon, victim.Def.UnitName)
 	attackerKills := int32(0)
-	if shooter := w.Unit(p.Shooter); shooter != nil {
-		attackerKills = shooter.Kills
+	if rawShooter != nil {
+		attackerKills = rawShooter.Kills
 	}
 	// The armor gate reads bit 1 of the victim's first runtime state byte — the
 	// COB `set ARMORED` posture — and nothing else [06 R-DMG-01 §8]. The FBI

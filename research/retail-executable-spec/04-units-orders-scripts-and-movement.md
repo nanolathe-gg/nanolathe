@@ -5295,7 +5295,7 @@ read it.
 
 **Established fact:** A compiled script file is read whole into one allocation and relocated in place; its header, tables, and record layout are specified in document 02. The loader binds one compiled script object to each unit definition, caches it by file, and stamps it with the content checksum that save/load validation later compares.
 
-**Established fact:** Each live unit receives a COB VM instance. The VM has eight execution threads, per-thread status/PC/stack/sleep/wait/caller/signal state, static variables, and per-piece animation state. Each thread record physically carries 32 window words, while authored opcode stack/local operations enforce a separate ten-value semantic limit; save/load restores the complete physical window.
+**Established fact:** Each live unit receives a COB VM instance. The VM has eight execution threads, per-thread status/PC/stack/sleep/wait/caller/signal state, static variables, and per-piece animation state. Each thread record carries 32 window words used by authored stack/local operations and restored by save/load; the interpreter has no separate ten-value semantic limit.
 
 **Established fact:** The loader allocates script statics and piece states when binding. Save/load validates the expected blob size and a cache/signature value. Static variables and piece animation state are represented in the save payload. Fractional movement deltas are not saved; the next tick resumes from integer state.
 
@@ -5311,7 +5311,7 @@ field that save restoration clears rather than reconstructs
 
 **Established fact:** The engine reaches scripts through four adapter roots: the zero-argument name-form start, the argument-carrying name-form start, the argument-carrying slot-form start, and the name-form synchronous four-cell query (direct-static: the name-form roots resolve through the shared name-lookup helper and the slot-form roots through the shared slot-lookup helper). The zero-argument name-form start is a name-based zero-argument start (15 direct call sites); the argument-carrying name-form start is name-based, taking up to four arguments, resolving the name, then forwarding to the argument-carrying slot-form start (21 direct call sites); the argument-carrying slot-form start is slot-based, writing four physical cells then setting the logical top to `arity−1` (5 direct call sites: four producers outside the adapter roots plus the argument-carrying name-form forwarding); and the name-form synchronous query forwards to the query interpreter (14 direct call sites). A bounded call census over the code sections counts 55 direct calls to those four roots; one is the internal argument-carrying name-form→slot-form forwarding, so 54 are producer call sites outside the four roots. The adjacent slot-based zero-argument helper has no direct caller in the bounded census (negative-bounded). The fixed-name producer census yields 40 distinct case-sensitive callback names; the packet path `0x0E` (section 5.3) can additionally start an authored slot by index and is not limited to those 40 names.
 
-**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. A thread record contains 32 physical window words even though authored stack/local operations enforce a ten-value semantic limit. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3).
+**Established fact:** Each VM has eight thread slots of `0xA4` bytes. Allocation takes the first inactive slot in ascending order. A new root thread begins runnable at the selected function entry with logical stack top `−1`, no completion receiver, and signal mask `1`; child script starts inherit their parent's current mask. A thread record contains 32 physical window words; authored stack/local operations use this complete window. There is no name-level or producer-level duplicate suppression in the adapters — repeated successful starts occupy independent slots, and any repeat suppression lives in the producers' own state caches. Invalid identity (name lookup `−1` or slot out of range) and a full eight-slot pool are the same allocation failure to the adapters: the zero-argument name-form start and the slot-based zero-argument helper return false without notifying a supplied receiver, while the argument-carrying slot-form start and the argument-carrying name-form start return false and, if a receiver is supplied, invoke it with `0`. `HitByWeapon` and `TakeDamage` are independent argument-carrying name-form starts and can fail separately; `Aim*` failures also deliver `0` via that path and therefore leave aim-ready clear (section 5.3).
 
 **Established fact:** Entry modes are D, I, and Q. D (deferred) allocates and initializes a thread then returns without interpreting it. I (immediate) after allocation interprets all eight slots once with delta `0` in slot order, then runs one piece pass with delta `0` — a VM-wide drain, not a drain of only the new callback. Q (synchronous query) interprets only the newly allocated slot with delta `0`, snapshots up to four cells, and returns; it does not scan the other seven slots and does not run a piece pass. The zero-argument name-form start takes zero logical arguments; the argument-carrying slot-form start always writes four physical values to cells `0..3` then sets logical top to `arity−1`; the synchronous query roots treat null cell pointers as seeded zero and excluded from copy-back, while non-null cells are logically exposed. A Q callback is not guaranteed to have returned when the host snapshots it: if it sleeps, waits for move/turn, or waits for another script, the one-slot interpretation stops and the host copies the current four cells immediately; the blocked thread remains active and may resume in a later VM-wide or normal drain, but it has no completion receiver that can revise the already returned host values, so callers must pre-initialize outputs and handle partial results.
 
@@ -5430,7 +5430,7 @@ have a stack effect of -1, except the final unary form.
 
 | Opcode | Operation | Stack effect | PC advance | Suspends |
 |---|---|---|---|---|
-| `0x10061000` | start a script on a new thread; the script index and argument count are operand words; arguments are copied from the caller's stack into the new thread in reverse and the caller's signal mask is inherited | minus the argument count | +3 | no |
+| `0x10061000` | start a script on a new thread; the script index and argument count are operand words; arguments are popped into descending child window indexes, preserving their original push order, and the caller's signal mask is inherited | minus the argument count | +3 | no |
 | `0x10062000` | call a script and block until it returns | minus the argument count | +3, then blocks | **yes** |
 | `0x10063000` | reserved: pops a count of values into a discarded temporary | minus the operand count | +3 | no |
 | `0x10064000` | jump; the target word index is the operand | 0 | set to target | no |
@@ -5441,6 +5441,25 @@ have a stack effect of -1, except the final unary form.
 | `0x10082000` | engine write: pops a value and a value identifier | -2 | +1 | no |
 | `0x10083000` | attach a unit to a piece | -3 | +1 | no |
 | `0x10084000` | detach a unit | -1 | +1 | no |
+
+**Established — stack and local window.** Push increments the logical top and
+writes that word; alloc-local increments it without initializing the word.
+Neither operation checks a ten-word limit. Local reads and writes also use
+the complete 32-word thread window without an index guard. Stock hover
+transport crane calculations require at least eleven simultaneously exposed
+words: five locals, an existing arithmetic operand and the five words of an
+engine-port expression. Access beyond the physical window reaches unrelated
+native state, so its outcome is **Unknown**, not a defined overflow response.
+Nanolathe may reject such access at its host bounds-check boundary [I11].
+
+**Established — nested script argument order.** Both start-script and
+call-script pop the caller's top argument into child word `count-1`, then
+continue toward child word zero. Therefore pushing A followed by B supplies
+child locals zero=A and one=B; the descending copy does not reverse the
+resulting argument order. The child begins with empty logical depth and its
+alloc-local prologue exposes those already populated words. The stock hover
+transport uses this distinction to pass packed cargo position followed by
+cargo height into its crane-reach calculation.
 
 #### Piece flag polarity
 

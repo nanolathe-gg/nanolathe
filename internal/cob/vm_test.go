@@ -203,11 +203,10 @@ func TestStackUnderflowOverflow(t *testing.T) {
 		t.Fatalf("underflow add result %d want 0", vm2.getStatic(0))
 	}
 
-	// Overflow: push 11 constants, stack depth 10 cap [04 §4.2] C13
-	// Retail kills thread on overflow (status cleared) [P1-11] §2.4, not discard.
-	// 11th push should kill thread before pop-static, leaving statics 0.
-	code := make([]uint32, 0, 24)
-	for i := 0; i < 11; i++ {
+	// Overflow: the host stops at the physical record boundary. Native behavior
+	// past that storage is unknown; this test locks only the host safeguard.
+	code := make([]uint32, 0, 2*threadWindowWords+4)
+	for i := 0; i <= threadWindowWords; i++ {
 		code = append(code, 0x10021001, uint32(i+1))
 	}
 	code = append(code, 0x10023004, 0) // pop-static 0
@@ -218,10 +217,10 @@ func TestStackUnderflowOverflow(t *testing.T) {
 	vm3.Threads[0].PC = 0
 	vm3.Drain(1)
 	if vm3.Threads[0].Status != ThreadIdle {
-		t.Fatalf("overflow should kill thread (status cleared) [P1-11] §2.4, got %d want idle", vm3.Threads[0].Status)
+		t.Fatalf("overflow should stop thread, got %d want idle", vm3.Threads[0].Status)
 	}
 	if vm3.getStatic(0) != 0 {
-		t.Fatalf("overflow kill should not write static, got %d want 0 [P1-11]", vm3.getStatic(0))
+		t.Fatalf("overflow stop should not write static, got %d want 0", vm3.getStatic(0))
 	}
 	// Under overflow kill, stack is cleared via killThread (SP=0). Verify.
 	if vm3.Threads[0].SP != 0 {
@@ -666,3 +665,59 @@ func TestVMGroundHeightPortRoundTrip(t *testing.T) {
 }
 
 var _ sort.Interface = sort.StringSlice{}
+
+func TestTransportMutationOpcodesDeliverStackOperands(t *testing.T) {
+	prog := synthProg([]uint32{
+		0x10021001, 17, // cargo identity
+		0x10021001, ^uint32(0), // piece -1
+		0x10021001, 6, // third operand; mover mode uses its low two bits
+		0x10083000,     // attach-unit
+		0x10021001, 17, // cargo identity
+		0x10084000, // detach-unit
+		0x10065000, // return
+	}, nil, 0, []int{0})
+	vm := newTestVM(prog)
+	var calls []struct {
+		kind               string
+		cargo, piece, mode int32
+	}
+	vm.BindTransportMutations(
+		func(cargo, piece, mode int32) {
+			calls = append(calls, struct {
+				kind               string
+				cargo, piece, mode int32
+			}{"attach", cargo, piece, mode})
+		},
+		func(cargo int32) {
+			calls = append(calls, struct {
+				kind               string
+				cargo, piece, mode int32
+			}{kind: "drop", cargo: cargo})
+		},
+	)
+	if !vm.StartByName("A", nil) {
+		t.Fatal("start transport fixture")
+	}
+	vm.Drain(0)
+	if len(calls) != 2 || calls[0].kind != "attach" || calls[0].cargo != 17 || calls[0].piece != -1 || calls[0].mode != 6 || calls[1].kind != "drop" || calls[1].cargo != 17 {
+		t.Fatalf("transport callback sequence = %#v, want attach(17,-1,6), drop(17) [04 R-COB-03 §5]", calls)
+	}
+}
+
+func TestNestedScriptArgumentsPreservePushOrder(t *testing.T) {
+	for _, opcode := range []uint32{0x10061000, 0x10062000} {
+		prog := synthProg([]uint32{
+			0x10021001, 17, 0x10021001, 29, opcode, 1, 2, 0x10021001, 0, 0x10065000,
+			0x10022000, 0x10022000, 0x10021002, 0, 0x10023004, 0,
+			0x10021002, 1, 0x10023004, 1, 0x10021001, 0, 0x10065000,
+		}, nil, 2, []int{0, 10})
+		vm := newTestVM(prog)
+		if !vm.StartByName("A", nil) {
+			t.Fatal("start fixture")
+		}
+		vm.Drain(0)
+		if vm.statics[0] != 17 || vm.statics[1] != 29 {
+			t.Fatalf("opcode %x child arguments=%v, want [17 29] [04 §4.3]", opcode, vm.statics)
+		}
+	}
+}

@@ -819,7 +819,7 @@ func CompileUnitsWithLanguage(fs vfs.FSOps, language string) (map[string]*UnitDe
 		prov := ProvenanceFrom(e)
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
-			return nil, fmt.Errorf("content: %s: %w", e.Path, err)
+			return nil, fmt.Errorf("content: %s: %w", e.Path, formats.WithTDFFile(err, e.Path))
 		}
 		// Each unit file contributes one UNITINFO section [02 "Unit record"].
 		// A file without one aborts the whole discovery stage: the loader

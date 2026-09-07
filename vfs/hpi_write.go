@@ -45,7 +45,7 @@ func WriteArchive(w io.Writer, files []ArchiveFile, opts ArchiveWriteOptions) er
 			if part == "" || part == "." || part == ".." {
 				return fmt.Errorf("hpi write: invalid path %q", file.Path)
 			}
-			key := strings.ToLower(part)
+			key := foldLogicalName(part)
 			next, ok := dir.children[key]
 			if !ok {
 				next = &writeDir{name: part, children: map[string]*writeDir{}, files: map[string]*writeFile{}}
@@ -54,7 +54,7 @@ func WriteArchive(w io.Writer, files []ArchiveFile, opts ArchiveWriteOptions) er
 			dir = next
 		}
 		leaf := parts[len(parts)-1]
-		key := strings.ToLower(leaf)
+		key := foldLogicalName(leaf)
 		if _, dup := dir.files[key]; dup || dir.children[key] != nil {
 			return fmt.Errorf("hpi write: duplicate entry %q", file.Path)
 		}

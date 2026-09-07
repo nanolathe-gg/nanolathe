@@ -532,6 +532,23 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 			binding.VM.BindPort(cob.Port(16), cob.GroundHeightPortFunc(s.World.HeightAt))
 		}
 		s.bindQueryPorts(binding, u)
+		// COB attach/drop carry a 16-bit unit identity. Bind this before Create
+		// so a Create callback sees the same carrier-owned mutation surface as
+		// later transport callbacks [04 R-COB-03 §5][R-CB-01 §4].
+		binding.VM.BindTransportMutations(
+			func(cargo, piece, mode int32) {
+				if s.Movement == nil || s.Units == nil {
+					return
+				}
+				s.Movement.ScriptAttachCargo(s.Units, u.Handle, pool.Handle(uint16(cargo)), int(piece), int(mode))
+			},
+			func(cargo int32) {
+				if s.Movement == nil || s.Units == nil {
+					return
+				}
+				s.Movement.ScriptDropCargo(s.Units, u.Handle, pool.Handle(uint16(cargo)))
+			},
+		)
 		return nil
 	})
 	if err != nil {
@@ -2337,6 +2354,10 @@ func (s *Session) resurrectStep(builder *units.Unit, n *orders.Node, lookupFeatu
 		// which internal/orders takes [05 R-WORK-01 §7]; the construction
 		// service's own optional jitter draw is therefore passed no stream, so
 		// the seed advances exactly once per resurrection (I4).
+		// TODO(question): phase 5's post-allocation terrain reread is known to
+		// reject an absent feature. Whether it also identifies a same-tick
+		// successor/replacement feature is unresolved [06 R-DMG-01 §4]; do not
+		// infer an identity gate from this pre-allocation view.
 		product, err := s.Build.Resurrect(builder, cell, def, view.X, view.Y, view.Z, nil)
 		if err != nil || product == nil {
 			return false

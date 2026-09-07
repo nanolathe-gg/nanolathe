@@ -45,11 +45,10 @@ const (
 
 // Thread is one of the eight 164-byte retail records [01 §6.1] C13, [04 §4.2] (I13).
 // Go stores named fields; byte size is not reproduced, but capacities and
-// scan order are. The wire image carries 32 physical window words; authored
-// script operations still enforce their established depth-10 limit [04 §4.2] C13.
-// Overflow kills thread
-// (status cleared, active count --, drain yields) per [P1-11] §2.4 — same as
-// illegal opcode kill path. Bad piece index (<0 or >=pieceCount) also kills
+// scan order are. The wire image carries 32 physical window words. Nanolathe
+// stops a malformed script before a push or local allocation would escape that
+// storage; retail's behavior beyond its physical record is unknown. Bad piece
+// index (<0 or >=pieceCount) also kills
 // Corrupt COB/save: header offset bounds-checked vs retail no-check —
 // Nanolathe rejects with diagnostic and fallback empty VM (I11 divergence)
 // [P2-03]. Cycle detection via visited set, queue overflow via diagnostic drop
@@ -58,14 +57,16 @@ const (
 type Thread struct {
 	Status     int       // one of Thread* constants [04 §4.2]
 	PC         int       // word index into Program.Code [04 §4.3] C12
-	Stack      [32]int32 // complete wire window; authored VM uses the first ten as stack/locals
-	SP         int       // logical stack count; authored operations cap pushes at 10 [04 §4.2] C13
+	Stack      [32]int32 // complete physical argument/local/expression window
+	SP         int       // logical stack count within Stack
 	Sleep      int32
 	WaitPiece  int
 	WaitAxis   int
 	WaitThread int   // -1 leaked wait [04 §4.3] C14 [P1-11] call-script wedges -1
 	SignalMask int32 // per-thread signal mask [04 §4.3]
 }
+
+const threadWindowWords = len((Thread{}).Stack)
 
 // Port is an engine port identifier 1..20 [04 §4.4] C15.
 // Binding surface lives in WU-06-7; this type is defined here so vm.go can
@@ -99,6 +100,8 @@ type VM struct {
 	// empty-list and not-carried ones.
 	cargoContains   func(id int32) bool // membership in this unit's own cargo list
 	carrierIdentity func() int32        // this unit's carrier identifier, 0 when not carried
+	transportAttach func(cargo, piece, mode int32)
+	transportDrop   func(cargo int32)
 
 	// scriptTouched raises the owning unit's SCRIPT-TOUCHED MARKER: bit 2 of
 	// the unit's 16-bit order-event word, which is order gate bit 0x4
@@ -487,6 +490,19 @@ func (v *VM) BindTransportQueries(inCargo func(id int32) bool, carrier func() in
 	v.carrierIdentity = carrier
 }
 
+// BindTransportMutations installs the executing unit's attach and drop
+// adapters. Attach receives the COB stack's cargo identity, piece, and third
+// operand; drop receives its cargo identity. The VM owns neither unit records
+// nor occupancy, so a session binding must perform the shared transport commit
+// [04 R-COB-03 §5][04 R-UNIT-06 §3]. Nil callbacks make the opcodes no-ops.
+func (v *VM) BindTransportMutations(attach func(cargo, piece, mode int32), drop func(cargo int32)) {
+	if v == nil {
+		return
+	}
+	v.transportAttach = attach
+	v.transportDrop = drop
+}
+
 // BindRenderFlags attaches the unit-owned render-piece record [04 §"Piece flag polarity"].
 // When bound, show/hide (bit 0), cache/dont-cache (bit 1), shade/dont-shade (bit 2) write
 // into the unit's storage via the bridge, not the VM-local array [R-COB-01 §1].
@@ -755,6 +771,11 @@ func (v *VM) Start(script int, args []int32) bool {
 	if v.prog == nil {
 		return false
 	}
+	// The native thread record has a fixed physical window. This is a host
+	// boundary for malformed callers, not a claim about native overflow.
+	if len(args) > threadWindowWords {
+		return false
+	}
 	if script < 0 || script >= len(v.prog.Code) {
 		return false // bad script id [04 §4.3] C14
 	}
@@ -801,20 +822,17 @@ func (v *VM) Start(script int, args []int32) bool {
 	if n := len(args); n > 0 {
 		// Four unconditional physical writes, producer filler zeros beyond the
 		// arity [R-COB-01 §1]. Engine producers pass at most four arguments;
-		// a longer slice (fixtures only) copies the surplus as before.
+		// an authored fixture can fill the remaining physical window.
 		for i := 0; i < 4 && i < n; i++ {
 			t.Stack[i] = args[i]
 		}
 		for i := n; i < 4; i++ {
 			t.Stack[i] = 0 // traced producers' zero fillers [R-COB-01 §1]
 		}
-		for i := 4; i < n && i < 10; i++ {
+		for i := 4; i < n; i++ {
 			t.Stack[i] = args[i]
 		}
 		t.SP = n
-		if t.SP > 10 {
-			t.SP = 10
-		}
 	}
 	// ON-04 Aim dispatch records thread relationship [06 §3.3]. The stale
 	// return and receiver for this slot were cleared by claimThread above.
@@ -1637,8 +1655,8 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			// Stack overflow kills thread (status cleared) [P1-11] §2.4.
-			if t.SP >= 10 {
+			// Keep malformed bytecode inside the host's physical window.
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1660,8 +1678,8 @@ func (v *VM) runThread(idx int) {
 			}
 			t.PC += 2
 		case 0x10022000: // alloc-local [04 §4.3]
-			// Overflow kills thread [P1-11] §2.4 (divergence: prior code discarded).
-			if t.SP >= 10 {
+			// Keep malformed bytecode inside the host's physical window.
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1692,7 +1710,7 @@ func (v *VM) runThread(idx int) {
 		case 0x10031000: // add [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if t.SP >= 10 { // overflow kills [P1-11] §2.4
+			if t.SP >= len(t.Stack) { // overflow kills [P1-11] §2.4
 				v.killThread(idx)
 				return
 			}
@@ -1701,7 +1719,7 @@ func (v *VM) runThread(idx int) {
 		case 0x10032000: // subtract second-popped minus top [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1710,7 +1728,7 @@ func (v *VM) runThread(idx int) {
 		case 0x10033000: // multiply [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1735,7 +1753,7 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1744,7 +1762,7 @@ func (v *VM) runThread(idx int) {
 		case 0x10035000: // and [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1753,7 +1771,7 @@ func (v *VM) runThread(idx int) {
 		case 0x10036000: // or [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1762,7 +1780,7 @@ func (v *VM) runThread(idx int) {
 		case 0x10037000: // xor [04 §4.3]
 			b, _ := t.stackPop()
 			a, _ := t.stackPop()
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1782,7 +1800,7 @@ func (v *VM) runThread(idx int) {
 			// unconditional here and the stream decides.
 			bound := uint32(int64(high) - int64(low) + 1)
 			res := low + int32(v.simRandN(bound))
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1796,7 +1814,7 @@ func (v *VM) runThread(idx int) {
 			//
 			id, _ := t.stackPop()
 			out := v.readPort(id, [4]int32{})
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1811,7 +1829,7 @@ func (v *VM) runThread(idx int) {
 			}
 			// vals[0] is id (first pushed), vals[1..4] are args
 			out := v.readPort(vals[0], [4]int32{vals[1], vals[2], vals[3], vals[4]})
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1835,7 +1853,7 @@ func (v *VM) runThread(idx int) {
 			if v.cargoContains != nil && v.cargoContains(cargoID) {
 				carried = 1
 			}
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1855,7 +1873,7 @@ func (v *VM) runThread(idx int) {
 			if v.carrierIdentity != nil {
 				carrier = v.carrierIdentity()
 			}
-			if t.SP >= 10 {
+			if t.SP >= len(t.Stack) {
 				v.killThread(idx)
 				return
 			}
@@ -1974,14 +1992,20 @@ func (v *VM) runThread(idx int) {
 				t.PC += 3
 				continue
 			}
+			// The native record has no semantic arity cap. Avoid an out-of-window
+			// host write for malformed bytecode; native overflow is unknown.
+			if argc < 0 || argc > threadWindowWords {
+				v.killThread(idx)
+				return
+			}
 			// Pop argc args from caller [04 §4.3]
 			args := make([]int32, argc)
 			for i := argc - 1; i >= 0; i-- {
 				val, _ := t.stackPop()
 				args[i] = val
 			}
-			// Copy into new thread: last popped lands highest (window word
-			// argc−1), and the child starts at an EMPTY logical depth (SP 0)
+			// Copy into new thread: first popped lands highest (window word
+			// argc−1), preserving push order. The child starts at an EMPTY logical depth (SP 0)
 			// with the arguments physically in window words 0..argc−1 — the
 			// engine starter's depth=arity−1 shape is deliberately not used
 			// here [04 §4.3][R-COB-01 §1]. The compiled alloc-local prologue
@@ -2002,9 +2026,8 @@ func (v *VM) runThread(idx int) {
 			nt.WaitAxis = -1
 			nt.Sleep = 0
 			nt.SP = 0 // empty logical depth [04 §4.3]
-			for i := 0; i < argc && i < 10; i++ {
-				// Reverse: last popped highest => args[0] -> high index
-				nt.Stack[i] = args[argc-1-i]
+			for i := 0; i < argc && i < len(nt.Stack); i++ {
+				nt.Stack[i] = args[i]
 			}
 			// Caller continues
 			t.PC += 3
@@ -2032,6 +2055,12 @@ func (v *VM) runThread(idx int) {
 				t.PC += 3
 				return // leak
 			}
+			// Keep malformed bytecode inside the host's physical window; native
+			// behavior beyond that record is unknown.
+			if argc < 0 || argc > threadWindowWords {
+				v.killThread(idx)
+				return
+			}
 			args := make([]int32, argc)
 			for i := argc - 1; i >= 0; i-- {
 				val, _ := t.stackPop()
@@ -2050,8 +2079,8 @@ func (v *VM) runThread(idx int) {
 			nt.WaitAxis = -1
 			nt.Sleep = 0
 			nt.SP = 0 // empty logical depth; args sit in window words 0..argc−1 [04 §4.3]
-			for i := 0; i < argc && i < 10; i++ {
-				nt.Stack[i] = args[argc-1-i]
+			for i := 0; i < argc && i < len(nt.Stack); i++ {
+				nt.Stack[i] = args[i]
 			}
 			// Block caller [04 §4.2]
 			t.WaitThread = newIdx
@@ -2222,13 +2251,15 @@ func (v *VM) runThread(idx int) {
 			extra, _ := t.stackPop()
 			piece, _ := t.stackPop()
 			unit, _ := t.stackPop()
-			_ = extra
-			_ = piece
-			_ = unit
-			// Requires candidate carrier field empty etc [04 §4.4]; presentation deferred.
+			if v.transportAttach != nil {
+				v.transportAttach(unit, piece, extra)
+			}
 			t.PC += 1
 		case 0x10084000: // detach-unit [04 §4.3]
-			t.stackPop()
+			unit, _ := t.stackPop()
+			if v.transportDrop != nil {
+				v.transportDrop(unit)
+			}
 			t.PC += 1
 		default:
 			// Should be unreachable due to binary search guard, but keep kill path.
@@ -2289,11 +2320,11 @@ func codeIndexForID(prog *Program, id int) int {
 	return prog.ScriptsByID[id]
 }
 
-// stack helpers per thread [04 §4.2] C13 stack depth 10.
+// stack helpers operate on the complete physical thread window.
 
 func (t *Thread) stackPush(val int32) {
-	if t.SP >= 10 { // [04 §4.2] C13 stack depth 10
-		return // overflow: lose push deterministically; no kill
+	if t.SP >= len(t.Stack) {
+		return // direct opcode paths stop the thread before reaching this host guard
 	}
 	t.Stack[t.SP] = val
 	t.SP++
@@ -2302,8 +2333,8 @@ func (t *Thread) stackPush(val int32) {
 // stackPushScratch advances SP without writing so the slot's stale frame
 // contents surface on the next pop [04 §4.3] C14 "uninitialized scratch".
 func (t *Thread) stackPushScratch() {
-	if t.SP >= 10 { // [04 §4.2] C13 stack depth 10
-		return // overflow: lose push deterministically; no kill
+	if t.SP >= len(t.Stack) {
+		return // direct opcode paths stop the thread before reaching this host guard
 	}
 	t.SP++
 }
@@ -2317,7 +2348,7 @@ func (t *Thread) stackPop() (int32, bool) {
 }
 
 func (t *Thread) getLocal(idx int) int32 {
-	if idx < 0 || idx >= 10 {
+	if idx < 0 || idx >= len(t.Stack) {
 		return 0
 	}
 	// Window word idx [04 §4.3] "local i is window word i"
@@ -2325,7 +2356,7 @@ func (t *Thread) getLocal(idx int) int32 {
 }
 
 func (t *Thread) setLocal(idx int, val int32) {
-	if idx < 0 || idx >= 10 {
+	if idx < 0 || idx >= len(t.Stack) {
 		return
 	}
 	t.Stack[idx] = val

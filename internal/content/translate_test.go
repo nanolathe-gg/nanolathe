@@ -3,6 +3,7 @@ package content
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/vfs"
@@ -89,6 +90,31 @@ func TestLoadTranslationTableMissingFileIsOptional(t *testing.T) {
 	}
 	if table != nil {
 		t.Fatalf("want a nil table when translate.tdf is absent, got %+v", table)
+	}
+}
+
+func TestLoadTranslationTableReturnsPresentParseFailure(t *testing.T) {
+	fs := translateFS(t, map[string]string{
+		"gamedata/translate.tdf": "[Alpha]{ German=Anfang",
+	})
+	_, err := LoadTranslationTable(fs, "German")
+	if err == nil {
+		t.Fatal("malformed present translation table was accepted")
+	}
+	for _, want := range []string{"Parse error in .TDF File!", "Data field - ';' not found", "from file gamedata/translate.tdf"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("translation error %q does not contain %q", err, want)
+		}
+	}
+}
+
+func TestTranslationReverseFoldPreservesHighBytes(t *testing.T) {
+	table := &TranslationTable{entries: []translationEntry{{source: "A", translation: "\xc0"}, {source: "B", translation: "\xe0"}}}
+	if source, ok := table.Source("\xc0"); !ok || source != "A" {
+		t.Fatalf("first high-byte translation = (%q, %t), want (A, true)", source, ok)
+	}
+	if source, ok := table.Source("\xe0"); !ok || source != "B" {
+		t.Fatalf("second high-byte translation = (%q, %t), want (B, true)", source, ok)
 	}
 }
 

@@ -82,7 +82,7 @@ func CompileBuildMenus(fs vfs.FSOps) (map[string]*BuildMenuPage, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/sidedata.tdf: %w", err)
+		return nil, fmt.Errorf("content: gamedata/sidedata.tdf: %w", formats.WithTDFFile(err, "gamedata/sidedata.tdf"))
 	}
 	canbuild := doc.Root.Section("CANBUILD")
 	pages := make(map[string]*BuildMenuPage)

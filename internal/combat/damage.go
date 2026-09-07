@@ -126,12 +126,10 @@ func (s *Service) PlayerControlByteFor(owner uint8) uint8 {
 // reports an unoccupied row as ControlByteAbsent, which is never
 // ControlByteRemote.
 //
-// The absent-row branch is the one an earlier reading inverted ("the row must
-// exist"). Under that reading every meteor, death explosion and routed burn
-// weapon — records that carry the neutral side byte or a zeroed one and no
-// shooter — would have been harmless, contradicting §12.1's "the explosion
-// damages every side alike" [06 R-DMG-01 §9]. Such a record damages, and can
-// kill, every unit of every side within its radius, and credits nobody.
+// An absent row admits a meteor's neutral side. A death explosion instead
+// carries the dying unit's owner side through this same test [06 §12.2].
+// Shooter identity is independent: a null shooter suppresses attacker
+// veterancy and does not overwrite the victim's preceding attacker snapshot.
 //
 // When it does skip, no damage is routed at all — the shake, the sound and the
 // art of [06 §9.1] steps 4 and 5 have already happened.

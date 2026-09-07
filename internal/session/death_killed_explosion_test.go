@@ -401,3 +401,90 @@ func init() {
 	_ = world.CellToWorld
 	_ = combat.BlastRadius
 }
+
+// TestDeathHookBuildsTheCentralStackImpactRecord keeps the session boundary
+// honest: a death explosion reaches combat's central impact stream before the
+// corpse is placed, with the stack record's null shooter and direct recipient.
+func TestDeathHookBuildsTheCentralStackImpactRecord(t *testing.T) {
+	cat := strictMinimalCatalog()
+	weapon := &content.WeaponDef{
+		ID: 99, DamageDefault: 100, AreaOfEffect: 64,
+		ExplosionGaf: "death.gaf", ExplosionArt: "death",
+	}
+	cat.Weapons = map[string]*content.WeaponDef{"death": weapon}
+	cat.RebuildWeaponIndex()
+	corpse := &content.FeatureDef{FootprintX: 1, FootprintZ: 1, Damage: 100}
+	corpse.CanonicalKey = content.CanonicalKey("deathheap")
+	cat.Features["deathheap"] = corpse
+
+	s := &Session{Catalog: cat, World: strictMinimalTerrain(), Mission: strictSyntheticMission()}
+	w, err := newSlicedWorld(cat)
+	if err != nil {
+		t.Fatalf("world: %v", err)
+	}
+	s.Units = w
+	s.Econ = strictEconomyForTest()
+	for i := 0; i < 2; i++ {
+		s.Econ.Players[i].Exists = true
+		s.Econ.Players[i].ControllerState = uint8(i + 1)
+	}
+	s.Econ.SeedDeadlines(0)
+	s.InitBattleWindForSession()
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	s.RegisterAll()
+	s.State = StateBattle
+	s.Clock = &clock.State{Requested: 10, Active: 10, GlobalTick: 23}
+
+	def := cat.Units["armcom"]
+	def.MaxDamage = 100
+	def.Corpse = "deathheap"
+	def.ExplodeAsDef = weapon
+	h, err := s.Units.Create(def, 0, world.CellToWorld(10), 0, world.CellToWorld(10))
+	if err != nil {
+		t.Fatalf("create dying unit: %v", err)
+	}
+	u := s.Units.Unit(h)
+	u.Health = -10
+	u.MaxHealth = 100
+	u.PriorSample = 80
+	u.Remaining = 0
+	u.SetScript(cob.NewVM(makeKilledProg(1)))
+
+	if s.Features.PlaceAt(11, 10, corpse) == nil {
+		t.Fatal("place bystanding feature")
+	}
+
+	originalEvents := s.Combat.Events
+	var events []combat.Event
+	corpsesAtImpact := -1
+	s.Combat.Events = func(ev combat.Event) {
+		events = append(events, ev)
+		if ev.Kind == combat.EventProjectileImpact {
+			corpsesAtImpact = len(s.Features.Instances())
+		}
+		originalEvents(ev)
+	}
+	s.Units.Destroy(h, units.DeathKilled)
+	s.Units.FinalizeDeath(h, s.Clock.GlobalTick)
+
+	if corpsesAtImpact != 1 {
+		t.Fatalf("features at central impact = %d, want only the bystander: explosion precedes corpse [06 §12.1]", corpsesAtImpact)
+	}
+	if len(s.Features.Instances()) != 1 || s.Features.Instances()[0].Def != corpse {
+		t.Fatalf("death corpse = %#v, want the corpse after central impact", s.Features.Instances())
+	}
+	if s.Features.InstanceAt(11, 10) != nil {
+		t.Fatal("central death blast did not destroy the bystanding feature [06 §13.1]")
+	}
+	want := []combat.EventKind{combat.EventExplosion, combat.EventProjectileImpact}
+	if len(events) != len(want) {
+		t.Fatalf("combat events = %#v, want central explosion and impact [06 §12.2]", events)
+	}
+	for i, kind := range want {
+		if events[i].Kind != kind || events[i].Source != 0 || events[i].Target != 0 || events[i].Position.X != u.X || events[i].Position.Y != u.Y || events[i].Position.Z != u.Z {
+			t.Fatalf("event %d = %#v, want %v from null stack identities at death point [06 §12.2]", i, events[i], kind)
+		}
+	}
+}

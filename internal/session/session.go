@@ -1128,59 +1128,19 @@ func (s *Session) RegisterAll() {
 						if s.Clock != nil {
 							tick = s.Clock.GlobalTick
 						}
-						// The death explosion record carries NO shooter
-						// [06 R-WPN-02 §5]: it is a stack structure holding
-						// the selected weapon, the victim's position as both
-						// points, a null target, a null shooter and the
-						// victim's owning-player byte — the null shooter is
-						// load-bearing, since it forces the area path
-						// regardless of areaofeffect and SUPPRESSES ATTACKER
-						// VETERANCY. Passing the dying unit's own handle `h`
-						// here (as an earlier revision did) makes it resolve
-						// as a live shooter for the rest of this tick — Dying
-						// is set but Alive is not cleared until FinalizeDeath,
-						// which runs later — so the explosion's damage was
-						// scaled by the dying unit's own veterancy and every
-						// victim's provenance was stamped with the dying
-						// unit's owner, crediting kills to the wrong side
-						// [06 R-DMG-01 §9] (the null shooter is what makes a
-						// meteor or a death explosion credit nobody).
-						// ExplodeWeaponAt has no separate parameter for the
-						// record's side byte (the victim's owning-player byte
-						// per [06 R-WPN-02 §5], distinct from the shooter);
-						// that byte only gates §9.1's routing test and §9.3's
-						// friendly/enemy sum, neither of which this call path
-						// exercises, so shooter 0 alone reproduces the
-						// observable contract here.
-						//
-						// Retired (WU-19-26): this carried an open-question marker
-						// saying applyDamageToUnit stamped LastDamageSide and
-						// LastDamageCause together inside one shooter-presence
-						// gate, so a unit killed outright by a null-shooter
-						// blast reached the death finalizer with cause 0 and
-						// was filed as neither a kill nor a loss. §9.1 step 4's
-						// two clauses are now separate there: the kind byte is
-						// recorded unconditionally, and the side snapshot takes
-						// the record's neutral side byte 10 when there is no
-						// attacker, so cause 1's full path files the victim's
-						// loss and credits nobody [06 §12.1].
-						s.Combat.ExplodeWeaponAt(s.Units, s.World, weapon, impact, 0, tick) // [06 R-WPN-02 §5][06 R-DMG-01 §9] null-shooter record, shared splash path [06 §9.3]
-						if s.publication != nil && s.publication.events != nil {
-							// The death explosion draws the weapon's LAND art:
-							// both keys or nothing, the bank and the entry
-							// carried separately [06 R-WFX-01 §1]. This used to
-							// publish the bank name as the whole identity and
-							// admit an event whenever EITHER key was authored,
-							// so the view named a GAF file where a composer
-							// expects an entry and could resolve nothing.
-							if weapon.ExplosionGaf != "" && weapon.ExplosionArt != "" {
-								pe := frame.Event{
-									Tick: tick, Source: h, X: u.X, Y: u.Y, Z: u.Z,
-									Graphic: weapon.ExplosionArt, AssetID: weapon.ExplosionGaf,
-								}
-								s.publication.events.EmitExplosion(pe) // [06 §13.2] C27
-							}
-						}
+						// The death record is not pooled. Both point operands carry
+						// the dying unit's exact position; shooter and direct recipient
+						// are null, while routing carries the dying owner's side
+						// [06 §12.2][06 R-WPN-02 §5]. The central impact path owns
+						// all effect and damage publication, including record zero.
+						s.Combat.ImpactStackRecord(combat.StackImpactRecord{
+							Weapon:      weapon,
+							Point:       impact,
+							SecondPoint: impact,
+							Shooter:     0,
+							ShooterSide: u.Owner,
+							DirectUnit:  0,
+						}, s.Units, s.World, s.Catalog, tick)
 					}
 				}
 				// ORDER. The central handler runs the death explosion and only

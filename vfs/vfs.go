@@ -137,7 +137,7 @@ func (f *FS) Providers() []ProviderInfo {
 					// to lower case and so cannot be compared byte-for-byte.
 					host := filepath.ToSlash(entry.Source.SourcePath)
 					if n := len(host) - len(entry.Path); n > 0 &&
-						strings.EqualFold(host[n:], entry.Path) {
+						foldLogicalName(host[n:]) == entry.Path {
 						info.ID = strings.TrimSuffix(host[:n], "/")
 					} else {
 						info.ID = host
@@ -753,7 +753,7 @@ func (f *FS) RetailReadDir(name string) ([]EntryInfo, error) {
 			if rest == "" || strings.Contains(rest, "/") {
 				continue
 			}
-			key := strings.ToLower(info.Path)
+			key := foldLogicalName(info.Path)
 			if seen[key] {
 				continue
 			}

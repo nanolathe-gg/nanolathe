@@ -449,8 +449,7 @@ index `[04 §4.3]`.
 
 **C13 — threads.** Eight thread records per unit; the lowest clear thread-mask
 bit is selected and the scan order is fixed. Each record carries 32 physical
-window words for save and restore, while authored opcode stack and local
-operations enforce a separate ten-value semantic limit. A `sleep 0` still costs
+window words shared by authored stack/local operations and save/restore. A `sleep 0` still costs
 one tick: the sleep occupies its truncated tick count plus one guard decrement
 `[01 §6.1]` `[04 §4.2]` `[04 §4.6]`.
 
@@ -741,10 +740,10 @@ Notes the table cannot carry:
   length is unobservable here; the COB loader bounds-checks its header offsets and
   reports a diagnostic where retail does not [I11].
 * **The interpreter bounds-checks the authored stack.** Pushes, pops and local
-  indices are checked against the ten-value authored semantic limit instead of
-  writing past it the way retail's unchecked frame arithmetic does. A Go slice
-  write cannot reproduce memory unsafety, so an overflow deterministically loses
-  the operation. This is the I11-sanctioned bounds-check exception, and thread-kill
+  indices are checked against the 32-word physical thread window instead of
+  writing outside it the way retail's unchecked frame arithmetic does. A Go slice
+  write cannot reproduce memory unsafety. This is the I11-sanctioned bounds-check
+  exception, and thread-kill
   recovery is not claimed as retail behavior `[04 §4.3]` `[04 R-COB-01 §1]`.
 * **Two divides retail leaves unguarded are clamped.** The death-severity query
   and the health-percentage read divide by the definition's maximum-damage field

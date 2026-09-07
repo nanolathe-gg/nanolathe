@@ -440,7 +440,13 @@ func resolveOTAWithFallback(fs vfs.FSOps, language, requestedName string, sink S
 	}
 	// Read/parse miss: exactly one retry through the reverse translation
 	// lookup [08 R-CAMP-01 §11 point 1].
-	table, _ := content.LoadTranslationTable(fs, language)
+	table, err := content.LoadTranslationTable(fs, language)
+	if err != nil {
+		if sink != nil {
+			sink.Report(err.Error())
+		}
+		return nil, "", err
+	}
 	if source, hit := table.Source(requestedName); hit {
 		retryLogical := buildOTAPath(source)
 		ota2, terrKey2, noGlobal2, miss2 := tryLoadOTA(fs, retryLogical)

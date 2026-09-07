@@ -10,11 +10,14 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/movement"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -112,6 +115,107 @@ func TestCOBPresentationSinkMapsPieceIdentity(t *testing.T) {
 	events := s.publication.events.Events()
 	if len(events) != 1 || events[0].Piece != 1 {
 		t.Fatalf("mapped presentation events = %#v, want one model piece 1", events)
+	}
+}
+
+func TestGroundScriptedTransportRunsThroughPreCreateBinding(t *testing.T) {
+	root := t.TempDir()
+	writeCompositionModel(t, root, "fixture", 1)
+	const noPiece = ^uint32(0)
+	carrierCode := []uint32{
+		0x10065000, // Create
+		// TransportPickup(cargo): attach once, then reattach to no-piece.
+		0x10021002, 0, 0x10021001, 0, 0x10021001, 6, 0x10083000,
+		0x10021002, 0, 0x10021001, noPiece, 0x10021001, 6, 0x10083000,
+		0x10065000,
+		// TransportDrop(cargo): drop at the current carried position.
+		0x10021002, 0, 0x10084000, 0x10065000,
+	}
+	writeCompositionCOBProgram(t, root, "carrier", carrierCode,
+		[]string{"Create", "TransportPickup", "TransportDrop"}, []uint32{0, 1, 16}, []string{"modelroot", "modelchild"})
+	writeCompositionCOB(t, root, "cargo", []string{"modelroot", "modelchild"})
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 10); err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	carrierDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "carrier"}, UnitName: "carrier", ObjectName: "fixture", BMCode: true, CanMove: true, CanLoad: true, TransportSize: 2, FootprintX: 1, FootprintZ: 1, MaxDamage: 10, Limit: -1}
+	cargoDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cargo"}, UnitName: "cargo", ObjectName: "fixture", BMCode: true, CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 10, Limit: -1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 255}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"carrier": carrierDef, "cargo": cargoDef}}
+	terrain := minimalTerrain()
+	sim := rng.NewSimulation(77)
+	s := &Session{Catalog: cat, World: terrain, rngSim: sim, rngCrt: rng.NewCRT(9), rngInitialized: true, publication: newPublicationState(frame.NewEventBuffer(frame.Limits{}))}
+	w := units.NewSliced(4, cat)
+	s.Units = w
+	s.Movement = movement.NewSystem(terrain, movement.Profile{FootPrintX: 1, FootPrintZ: 1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 255}, movement.NewOccupancyGrid())
+	s.Movement.BindWorld(w)
+	w.SetCOBSource(fs, globalCobLoader)
+	w.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(fs, u) })
+	x, z := world.CellToWorld(8), world.CellToWorld(8)
+	carrierHandle, err := w.Create(carrierDef, 0, x, terrain.HeightAt(x, z), z)
+	if err != nil {
+		t.Fatalf("create carrier: %v", err)
+	}
+	cargoHandle, err := w.Create(cargoDef, 0, world.CellToWorld(12), terrain.HeightAt(x, z), z)
+	if err != nil {
+		t.Fatalf("create cargo: %v", err)
+	}
+	carrier, cargo := w.Unit(carrierHandle), w.Unit(cargoHandle)
+	type statusState struct {
+		kind    uint8
+		carried bool
+	}
+	var statuses []statusState
+	binding := &orders.QueueBinding{SimRNG: s.SimRNG(), Lookup: w.Unit, Presentation: &orders.PresentationAdapter{Ready: func() bool { return true }, Status: func(_ *units.Unit, kind uint8, _ string) bool {
+		statuses = append(statuses, statusState{kind, cargo.Attachment.Carrier == carrier.Handle})
+		return true
+	}}}
+	orders.QueueForUnit(carrier).SetBinding(binding)
+	orders.QueueForUnit(cargo).SetBinding(binding)
+	beforeState, beforeDraws := s.SimRNG().State, s.SimRNG().Draws()
+	pickupID := orders.Lookup("Ground_Pickup")
+	orders.QueueForUnit(carrier).Push(pickupID, orders.NewNodeForOrder(pickupID, cargoHandle, 0, 0, 0, 0, carrierHandle, false))
+	pump := &orders.Pump{World: w}
+	for tick := uint32(0); tick < 24 && orders.QueueForUnit(carrier).LenPrimary() != 0; tick++ {
+		pump.PumpUnit(carrierHandle, tick)
+	}
+	if orders.QueueForUnit(carrier).LenPrimary() != 0 {
+		t.Fatal("Ground_Pickup queue did not finish after the scripted attach")
+	}
+	if cargo.Attachment.Carrier != carrierHandle || cargo.Attachment.AttachPiece != -1 || len(carrier.Attachment.Cargo) != 1 {
+		t.Fatalf("pickup linkage = carrier %d piece %d list %v, want reattached no-piece head [04 R-COB-03 §5]", cargo.Attachment.Carrier, cargo.Attachment.AttachPiece, carrier.Attachment.Cargo)
+	}
+	if cargo.Move.Mode != 2 {
+		t.Fatalf("pickup mode = %d, want attach third operand low bits 2", cargo.Move.Mode)
+	}
+	// Drop validates this carried point. It is intentionally independent of
+	// Ground_Unload's packed requested destination.
+	carrier.X, carrier.Z = world.CellToWorld(16), world.CellToWorld(16)
+	s.Movement.SyncCarriedMotion(w)
+	unloadID := orders.Lookup("Ground_Unload")
+	orders.QueueForUnit(carrier).Push(unloadID, orders.NewNodeForOrder(unloadID, 0, world.CellToWorld(22), 0, world.CellToWorld(22), 0, carrierHandle, false))
+	for tick := uint32(24); tick < 48 && orders.QueueForUnit(carrier).LenPrimary() != 0; tick++ {
+		pump.PumpUnit(carrierHandle, tick)
+	}
+	if orders.QueueForUnit(carrier).LenPrimary() != 0 {
+		t.Fatal("Ground_Unload queue did not finish after the scripted drop")
+	}
+	if cargo.Attachment.Carrier != 0 || cargo.Move.Mode != 1 {
+		t.Fatalf("drop linkage/mode = carrier %d mode %d, want detached grounded", cargo.Attachment.Carrier, cargo.Move.Mode)
+	}
+	var events []uint8
+	var eventCarried []bool
+	for _, status := range statuses {
+		if status.kind == movement.TransportEventAttach || status.kind == movement.TransportEventDetach {
+			events = append(events, status.kind)
+			eventCarried = append(eventCarried, status.carried)
+		}
+	}
+	if len(events) != 2 || events[0] != movement.TransportEventAttach || events[1] != movement.TransportEventDetach || !eventCarried[0] || eventCarried[1] {
+		t.Fatalf("callback/event state = kinds %v carried %v, want attach(true), drop(false) [04 R-AIR-01 §9]", events, eventCarried)
+	}
+	if s.SimRNG().State != beforeState || s.SimRNG().Draws() != beforeDraws {
+		t.Fatalf("scripted transport consumed simulation RNG: state %d/%d draws %d/%d", s.SimRNG().State, beforeState, s.SimRNG().Draws(), beforeDraws)
 	}
 }
 

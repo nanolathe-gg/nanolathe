@@ -1,14 +1,13 @@
 package formats
 
 import (
+	"errors"
 	"fmt"
-	"strings"
 )
 
 // ParseDiagnostic is one of retail's five TDF parse diagnostics [02 §4][P1-12].
 // The strings are reproduced verbatim; the title and the detail line shape
-// belong to the same message-box family. Failed load yields valid-but-empty
-// tree so caller decides fatal vs optional [P1-12][02 §4].
+// belong to the same message-box family [02 §4].
 type ParseDiagnostic string
 
 const (
@@ -23,13 +22,10 @@ const (
 const ParseErrorTitle = "Parse error in .TDF File!"
 
 // ParseError carries a diagnostic plus the context retail prints with it.
-// A failed load yields a valid-but-empty tree rather than terminating, so
-// callers decide whether the failure is fatal for their resource family
-// [02 §4].
 type ParseError struct {
 	Diagnostic ParseDiagnostic
-	Name       string // the record or key being read when the parse failed
-	Value      string // the partial value, when one had been scanned
+	Name       string // retail's literal `name`
+	Value      string // section active when the parse failed
 	File       string // logical path, filled in by the loader
 	Offset     int    // byte offset into the (comment-blanked) source
 	Line       int
@@ -38,19 +34,12 @@ type ParseError struct {
 
 // Error renders the retail parse-failure line verbatim [02 §4].
 func (e *ParseError) Error() string {
-	return fmt.Sprintf("%s %s", ParseErrorTitle, e.Detail())
+	return fmt.Sprintf("%s %s%s", ParseErrorTitle, e.Diagnostic, e.Detail())
 }
 
-// Detail renders retail's detail line: ` - <name> = '<value>' from file <file>`.
+// Detail renders retail's detail line: ` - name = '<section>' from file <file>`.
 func (e *ParseError) Detail() string {
-	var b strings.Builder
-	b.WriteString(" - ")
-	b.WriteString(e.Name)
-	b.WriteString(" = '")
-	b.WriteString(e.Value)
-	b.WriteString("' from file ")
-	b.WriteString(e.File)
-	return b.String()
+	return fmt.Sprintf(" - %s = '%s' from file %s", e.Name, e.Value, e.File)
 }
 
 // WithFile returns a copy naming the logical path. Loaders call this because
@@ -59,6 +48,17 @@ func (e *ParseError) WithFile(file string) *ParseError {
 	clone := *e
 	clone.File = file
 	return &clone
+}
+
+// WithTDFFile attaches a logical filename to a parser diagnostic while
+// preserving non-parser errors unchanged. Content loaders use this one route
+// before adding their provider-bearing outer context [02 §4].
+func WithTDFFile(err error, file string) error {
+	var parseErr *ParseError
+	if errors.As(err, &parseErr) {
+		return parseErr.WithFile(file)
+	}
+	return err
 }
 
 // blankComments overwrites comment spans with ASCII spaces, preserving every

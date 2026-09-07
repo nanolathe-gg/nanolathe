@@ -20,8 +20,8 @@ const (
 	argMarker    = 0x777
 )
 
-// loadFrameProg authors a three-script COB: a polluter that fills its ten
-// window words with markers and exits, an arity-1 probe that copies window
+// loadFrameProg authors a three-script COB: a polluter that fills its first
+// ten window words with markers and exits, an arity-1 probe that copies window
 // words 0,1,2,4 into statics 3,0,1,2 and returns window word 0, and a
 // zero-arg probe that copies window word 0 into static 4 and returns.
 func loadFrameProg(t *testing.T) *Program {
@@ -63,7 +63,7 @@ func loadFrameProg(t *testing.T) *Program {
 func TestVMConstructionClearsOnlyStatusWords(t *testing.T) {
 	// Construction clears each thread's status word and the active-thread
 	// count and latches the tick denominator; PC, depth, timer, mask, wait
-	// words and the ten window words keep their prior content [R-COB-01 §1].
+	// words and the 32 physical window words keep their prior content [R-COB-01 §1].
 	prog := loadFrameProg(t)
 	vm := NewVM(prog)
 	if vm.tickDenom != 30 {
@@ -97,7 +97,7 @@ func TestVMConstructionClearsOnlyStatusWords(t *testing.T) {
 
 func TestThreadAllocationLeavesWindowStale(t *testing.T) {
 	// A new allocation takes the lowest idle slot and seeds status/PC/top/
-	// mask but does NOT clear the ten window words — the next tenant of a
+	// mask but does NOT clear the 32 physical window words — the next tenant of a
 	// slot reads the previous tenant's bytes [R-COB-01 §1].
 	prog := loadFrameProg(t)
 	vm := NewVM(prog)
@@ -239,12 +239,13 @@ func TestStartScriptChildEmptyDepth(t *testing.T) {
 		t.Fatal("caller start failed")
 	}
 	vm.Drain(1)
-	// Pop order: 200 first, 100 last. Last popped lands highest (word 1).
-	if got := vm.getStatic(0); got != 200 {
-		t.Fatalf("child local 0 = %d want 200 (first popped lands lowest) [04 §4.3]", got)
+	// The child copies arguments into ascending window words, preserving the
+	// caller's original push order despite popping from the caller's top.
+	if got := vm.getStatic(0); got != 100 {
+		t.Fatalf("child local 0 = %d want 100 (first pushed stays word 0) [04 §4.3]", got)
 	}
-	if got := vm.getStatic(1); got != 100 {
-		t.Fatalf("child local 1 = %d want 100 (last popped lands highest) [04 §4.3]", got)
+	if got := vm.getStatic(1); got != 200 {
+		t.Fatalf("child local 1 = %d want 200 (caller top stays word 1) [04 §4.3]", got)
 	}
 	if vm.Threads[1].Status != ThreadIdle {
 		t.Fatalf("child should have completed")

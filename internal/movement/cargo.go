@@ -74,29 +74,32 @@ func AttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece i
 // velocity, never levels bank and pitch, and never raises `Activate` or
 // `Deactivate` [04 R-AIR-01 §3].
 func AttachCargoMode(w *units.World, carrierHandle, cargoHandle pool.Handle, piece, mode int) bool {
-	if w == nil {
+	if w == nil || carrierHandle == 0 || cargoHandle == 0 || carrierHandle == cargoHandle {
 		return false
 	}
 	carrier := w.Unit(carrierHandle)
 	cargo := w.Unit(cargoHandle)
-	if carrier == nil || cargo == nil {
+	if carrier == nil || cargo == nil || !carrier.Alive || !cargo.Alive || cargo.Dying {
 		return false
 	}
-	if cargo.Attachment.Carrier != 0 {
-		return false // already carried
+	// The shared commit accepts an empty carrier field and the same carrier
+	// only. A carrier that is itself cargo and a cargo that carries another
+	// unit are rejected before the relink event is applied [04 R-COB-03 §5].
+	if carrier.Attachment.Carrier != 0 || len(cargo.Attachment.Cargo) != 0 ||
+		(cargo.Attachment.Carrier != 0 && cargo.Attachment.Carrier != carrierHandle) {
+		return false
 	}
-	// Avoid duplicate cargo entry
+
+	// Reattaching to the same carrier is a relink, so remove the existing
+	// entry before the prescribed head insertion. This retains one list entry
+	// and makes its new piece/mode visible at the head [04 R-COB-03 §5].
+	linked := carrier.Attachment.Cargo[:0]
 	for _, h := range carrier.Attachment.Cargo {
-		if h == cargoHandle {
-			return false
+		if h != cargoHandle {
+			linked = append(linked, h)
 		}
 	}
-	// Detach carrier from ITS own parent when carried [04 §10.2] phase 0 side-effect.
-	// If carrier itself is cargo, detach it first? Phase 0 says detach carrier from its parent when carried.
-	// We implement that check here for completeness.
-	if carrier.Attachment.Carrier != 0 {
-		DetachCargo(w, carrierHandle)
-	}
+	carrier.Attachment.Cargo = linked
 	cargo.Attachment.Carrier = carrierHandle
 	// The event stores one byte and the carried-side locator sign-extends it
 	// [04 R-FAC-02 §1].
@@ -361,7 +364,9 @@ func (s *System) SyncCarriedMotion(w *units.World) {
 			collCargo.Speed = carrierSpeed
 			collCargo.Dirty = true
 			newAnchor := collCargo.ProposedAnchor(cargo.Move.Mode)
-			if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode {
+			stampedPlane, stamps := planeForMode(cargo.Move.Mode)
+			stampMismatch := collCargo.HasStamp && (!stamps || collCargo.StampedPlane != stampedPlane)
+			if newAnchor != collCargo.OldAnchor || collCargo.Mode != cargo.Move.Mode || stampMismatch {
 				// Carried motion bypasses validation, but the carried-position
 				// setter still clears and stamps on a cell/mode change, in the
 				// plane its mode names: a mode-1 nanoframe holds the ground word
@@ -755,4 +760,37 @@ func IsCarried(w *units.World, h pool.Handle) bool {
 	}
 	u := w.Unit(h)
 	return u != nil && u.Attachment.Carrier != 0
+}
+
+// ScriptAttachCargo applies a COB attach opcode through the canonical cargo
+// commit. The adapter supplies the executing carrier identity; its three
+// operands are narrowed by the session before this method is called
+// [04 R-COB-03 §5].
+func (s *System) ScriptAttachCargo(w *units.World, carrierHandle, cargoHandle pool.Handle, piece, mode int) bool {
+	// Narrow before the shared helper so a script value of -1 cannot name
+	// its host-only unchanged-mode sentinel [04 R-COB-03 §5].
+	return s != nil && AttachCargoMode(w, carrierHandle, cargoHandle, piece, mode&3)
+}
+
+// ScriptDropCargo applies a COB drop opcode. The release validates the cargo's
+// current carried position, then commits the reserved no-piece/mode-1 relink.
+// It does not invoke EndTransport: that callback belongs solely to the air
+// unload executor [04 R-COB-03 §5][04 R-AIR-01 §10].
+func (s *System) ScriptDropCargo(w *units.World, carrierHandle, cargoHandle pool.Handle) bool {
+	if s == nil || w == nil || carrierHandle == 0 || cargoHandle == 0 {
+		return false
+	}
+	carrier := w.Unit(carrierHandle)
+	cargo := w.Unit(cargoHandle)
+	if carrier == nil || cargo == nil || cargo.Dying || len(cargo.Attachment.Cargo) != 0 || cargo.Attachment.Carrier != carrierHandle {
+		return false
+	}
+	if !s.ValidateUnloadSite(w, cargoHandle, cargo.X, cargo.Z, s.Terrain) {
+		return false
+	}
+	if _, ok := DetachCargoMode(w, cargoHandle, 1); !ok {
+		return false
+	}
+	s.syncMoverStamp(cargo)
+	return true
 }

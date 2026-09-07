@@ -331,6 +331,25 @@ func TestTranslatedNameFallback(t *testing.T) {
 			t.Fatalf("silent failure must not report to the sink: %v", sink.Messages)
 		}
 	})
+	t.Run("malformed table reaches the mission loader", func(t *testing.T) {
+		fs := fsFromMapLoad(t, map[string]string{
+			"maps/Alpha.ota":         alphaOTA,
+			"gamedata/translate.tdf": "[Alpha]{ German=Anfang",
+		})
+		sink := &CollectSink{}
+		_, _, err := resolveOTAWithFallback(fs, "German", "Anfang", sink)
+		if err == nil {
+			t.Fatal("malformed translation table was accepted")
+		}
+		for _, want := range []string{"Parse error in .TDF File!", "Data field - ';' not found", "from file gamedata/translate.tdf"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("mission translation error %q does not contain %q", err, want)
+			}
+		}
+		if len(sink.Messages) != 1 || sink.Messages[0] != err.Error() {
+			t.Fatalf("mission sink = %v, want the returned parse diagnostic", sink.Messages)
+		}
+	})
 	t.Run("second miss fails silently", func(t *testing.T) {
 		fs := fsFromMapLoad(t, map[string]string{
 			"gamedata/translate.tdf": "[Alpha]\n{\n    German=Anfang;\n}\n",

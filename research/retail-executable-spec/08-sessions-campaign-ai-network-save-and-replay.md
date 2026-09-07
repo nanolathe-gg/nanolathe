@@ -6767,9 +6767,8 @@ state.
    `top + 1`, so an empty window has `SP=0`. The receiver at record offset
    `0x20` is deliberately zeroed by the writer and is cleared rather than
    reconstructed by the reader; it is not a window word. The 32 window words
-   occupy `0x24..0xA0`, and all are restored, while authored opcode pushes and
-   locals retain their separate depth-10 semantic limit [04 §4.2] [R-COB-01
-   §1]. `0x524..0x527`: the active-thread count. The reader copies all eight
+   occupy `0x24..0xA0`, and all are restored and available to authored opcode
+   pushes and locals [04 §4.2] [04 §4.3] [R-COB-01 §1]. `0x524..0x527`: the active-thread count. The reader copies all eight
    records back in place and restores the count.
 2. **Statics, `4·S` bytes**: the script statics array verbatim.
 3. **Piece states, `0x6C·P` bytes**, one record per piece: 24 words of

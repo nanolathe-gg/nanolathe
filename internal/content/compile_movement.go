@@ -144,7 +144,7 @@ func CompileMovement(fs vfs.FSOps) (map[string]*MovementClass, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/moveinfo.tdf: %w", err)
+		return nil, fmt.Errorf("content: gamedata/moveinfo.tdf: %w", formats.WithTDFFile(err, "gamedata/moveinfo.tdf"))
 	}
 	// Sections are in file order; stable iteration is required for
 	// deterministic hash/canonical handling (I1). Sort the output map's

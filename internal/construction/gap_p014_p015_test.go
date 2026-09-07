@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -55,8 +56,9 @@ func TestResurrectionDelay_Sole03(t *testing.T) {
 	}
 }
 
-// TestFeatureBeforeAlive locks feature removal BEFORE unit alive [P0-15].
-func TestFeatureBeforeAlive(t *testing.T) {
+// TestResurrectionRemovesFeatureAfterAllocation locks phase 5's successful
+// allocation before its destructive feature transition [05 R-WORK-01 §7].
+func TestResurrectionRemovesFeatureAfterAllocation(t *testing.T) {
 	w := newConstructionFixtureWorld(10, nil)
 	cat := content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := &content.UnitDef{UnitName: "armck", BuildTime: 3000, BuildCostMetal: 100, BuildCostEnergy: 100, MaxDamage: 750}
@@ -89,14 +91,66 @@ func TestFeatureBeforeAlive(t *testing.T) {
 	if prod == nil || prod.Remaining != 0 || prod.Health != 1 {
 		t.Fatalf("resurrect product remaining %v health %d want 0/1", prod.Remaining, prod.Health)
 	}
-	// The feature must be removed BEFORE the new unit is made alive
-	// [05 "Resurrection", "Established fact — no ledger cost, only delay and
-	// name handling"].
+	// The feature is removed only after the successful allocation, before the
+	// new product is returned to the caller [05 R-WORK-01 §7].
 	if got := terrain.Plot[5*10+5].Feature(); got != world.PlotFeatureNone {
-		t.Fatalf("feature not cleared before alive: Plot[5,5].Feature=0x%04x want 0xFFFF", got)
+		t.Fatalf("feature not cleared after successful allocation: Plot[5,5].Feature=0x%04x want 0xFFFF", got)
 	}
 	if aw := terrain.Plot[5*10+5].AnchorWord(); aw != 0 {
 		t.Fatalf("feature anchor not cleared: AnchorWord=0x%04x want 0", aw)
+	}
+}
+
+// TestResurrectionRefusalLeavesTheCorpseFootprintUntouched is the failure half
+// of phase 5. A refused allocation does not consume even the anchor cell, so
+// its 300-tick order retry receives the identical feature [05 R-WORK-01 §7].
+func TestResurrectionRefusalLeavesTheCorpseFootprintUntouched(t *testing.T) {
+	productDef := &content.UnitDef{UnitName: "retryunit", MaxDamage: 100, UnitLimit: -1}
+	productDef.CanonicalKey = content.CanonicalKey(productDef.UnitName)
+	builderDef := &content.UnitDef{UnitName: "retrybuilder", MaxDamage: 100, UnitLimit: -1, CanResurrect: true}
+	builderDef.CanonicalKey = content.CanonicalKey(builderDef.UnitName)
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{
+		productDef.CanonicalKey: productDef,
+		builderDef.CanonicalKey: builderDef,
+	}}
+	w := newConstructionFixtureWorld(2, cat)
+	h, err := w.Create(builderDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create builder: %v", err)
+	}
+	builder := w.Unit(h)
+
+	terrain := &world.Terrain{CellW: 4, CellH: 4, Plot: make([]world.PlotCell, 16)}
+	for i := range terrain.Plot {
+		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	corpseDef := &content.FeatureDef{FootprintX: 2, FootprintZ: 2}
+	terrain.FeatureDefs = []*content.FeatureDef{corpseDef}
+	for z := int32(1); z < 3; z++ {
+		for x := int32(1); x < 3; x++ {
+			cell := terrain.PlotAt(x, z)
+			if x == 1 && z == 1 {
+				cell.SetFeature(0)
+			} else {
+				cell.SetFeature(world.PlotFeatureFringe)
+			}
+		}
+	}
+	before := append([]world.PlotCell(nil), terrain.Plot...)
+	svc := NewService(terrain, cat, w, nil)
+	// A nil product is the allocator's common pool/per-definition refusal
+	// shape. The service turns it into ErrLimit without mutating the plot.
+	svc.Allocator = func(uint8, *content.UnitDef, numeric.Fixed, numeric.Fixed, numeric.Fixed) (*units.Unit, error) {
+		return nil, nil
+	}
+	product, err := svc.Resurrect(builder, terrain.PlotAt(1, 1), productDef, world.CellToWorld(1), 0, world.CellToWorld(1), nil)
+	if err != ErrLimit || product != nil {
+		t.Fatalf("refused resurrect = (%v, %v), want (nil, ErrLimit)", product, err)
+	}
+	for i := range terrain.Plot {
+		if terrain.Plot[i] != before[i] {
+			t.Fatalf("refused resurrection changed plot cell %d: got %#v want %#v", i, terrain.Plot[i], before[i])
+		}
 	}
 }
 

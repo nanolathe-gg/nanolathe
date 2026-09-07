@@ -87,7 +87,7 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, requiredContentError(fs, "gamedata/los.tdf", "retail LOS.TDF terrain-ray tables", err)
+		return nil, requiredContentError(fs, "gamedata/los.tdf", "retail LOS.TDF terrain-ray tables", formats.WithTDFFile(err, "gamedata/los.tdf"))
 	}
 	var numTables int32
 	if sec := doc.Root.Section("TABLEINFO"); sec != nil {
@@ -208,7 +208,7 @@ func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
 	}
 	doc, err := formats.ParseTDF(data)
 	if err != nil {
-		return nil, fmt.Errorf("content: gamedata/meteor.tdf: %w", err)
+		return nil, fmt.Errorf("content: gamedata/meteor.tdf: %w", formats.WithTDFFile(err, "gamedata/meteor.tdf"))
 	}
 	md := &MeteorDefaults{
 		DefinitionHeader: DefinitionHeader{

@@ -519,10 +519,10 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 	// their names never enter the catalog [02 §5 R-CONTENT-02].
 	var scratchKeys []string
 
-	processFile := func(data []byte, prov Provenance) error {
+	processFile := func(data []byte, path string, prov Provenance) error {
 		doc, err := formats.ParseTDF(data)
 		if err != nil {
-			return err
+			return formats.WithTDFFile(err, path)
 		}
 		for _, section := range doc.Root.Sections() {
 			name := strings.TrimSpace(section.OriginalName)
@@ -554,7 +554,7 @@ func CompileWeaponsWithDuplicates(fs vfs.FSOps) (map[string]*WeaponDef, []Weapon
 		data := entry.data
 		e := entry.info
 		prov := ProvenanceFrom(e)
-		if err := processFile(data, prov); err != nil {
+		if err := processFile(data, e.Path, prov); err != nil {
 			return nil, nil, fmt.Errorf("content: %s: %w", e.Path, err)
 		}
 	}

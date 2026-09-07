@@ -35,7 +35,7 @@ func cleanPath(name string) (string, error) {
 			parts = append(parts, part)
 		}
 	}
-	return strings.ToLower(strings.Join(parts, "/")), nil
+	return foldLogicalName(strings.Join(parts, "/")), nil
 }
 
 func joinPath(parent, child string) (string, error) {
@@ -50,4 +50,23 @@ func originalJoin(parent, child string) string {
 		return child
 	}
 	return parent + "/" + child
+}
+
+// foldLogicalName preserves authored path bytes while folding the established
+// ASCII domain [02 §2]. TODO(question): trace the retail code-page mapping for
+// bytes above ASCII; retaining them avoids inventing Unicode equivalence.
+func foldLogicalName(name string) string {
+	var folded []byte
+	for i := 0; i < len(name); i++ {
+		if name[i] >= 'A' && name[i] <= 'Z' {
+			if folded == nil {
+				folded = []byte(name)
+			}
+			folded[i] = name[i] + ('a' - 'A')
+		}
+	}
+	if folded == nil {
+		return name
+	}
+	return string(folded)
 }

@@ -242,8 +242,12 @@ arm calls.
 ORIENTATION triple — bank, heading and pitch — into the replacement unit's own
 three words, overwriting whatever the allocator seeded; no position is copied,
 the unit having been allocated at the feature's recorded position in the same
-step `[05 R-WORK-01 §7]`. The triple's producer is the corpse placement, the
-only placement that supplies one `[05 "Feature instance and terrain cell"]`, so
+step `[05 R-WORK-01 §7]`. Allocation is the transaction's first irreversible
+gate: a refused owner-slice or per-definition allocation leaves the feature
+anchor and its complete stamped footprint untouched for the row's exact
+300-tick retry. Only a successful allocation consumes the feature. The
+triple's producer is the corpse placement, the only placement that supplies
+one `[05 "Feature instance and terrain cell"]`, so
 a resurrected unit stands exactly as its predecessor fell while a resurrection
 of a map-authored or successor feature faces heading 0 with no bank or pitch.
 The transplant lives in `internal/session`'s `resurrectStep` because the triple

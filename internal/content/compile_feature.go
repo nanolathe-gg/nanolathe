@@ -361,7 +361,7 @@ func CompileFeatures(fs vfs.FSOps) (map[string]*FeatureDef, error) {
 			prov := ProvenanceFrom(e)
 			doc, err := formats.ParseTDF(data)
 			if err != nil {
-				return fmt.Errorf("content: %s: %w", e.Path, err)
+				return fmt.Errorf("content: %s: %w", e.Path, formats.WithTDFFile(err, e.Path))
 			}
 			for _, section := range doc.Root.Sections() {
 				name := strings.TrimSpace(section.OriginalName)

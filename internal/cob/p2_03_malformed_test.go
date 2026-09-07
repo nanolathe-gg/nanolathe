@@ -2,12 +2,12 @@ package cob
 
 import "testing"
 
-func TestStackOverflowKillsThread(t *testing.T) {
-	// P2-03 stack overflow: depth 10 kills thread per [04 §4.2] C13 [P1-11] §2.4
-	// 11 pushes should kill the thread, not grow stack beyond 10, diagnostic recorded
-	// Synth prog: 11× push constant 1 (mode 1) then return
-	code := make([]uint32, 0, 30)
-	for i := 0; i < 11; i++ {
+func TestStackOverflowAtPhysicalWindowKillsThread(t *testing.T) {
+	// The host must stop malformed code at the 32-word record boundary. The
+	// native consequence beyond that record is unknown, so this locks only the
+	// safe host boundary.
+	code := make([]uint32, 0, 2*threadWindowWords+3)
+	for i := 0; i <= threadWindowWords; i++ {
 		code = append(code, 0x10021001, 1)
 	}
 	code = append(code, 0x10065000)
@@ -19,8 +19,8 @@ func TestStackOverflowKillsThread(t *testing.T) {
 	if vm.Threads[0].Status != ThreadIdle {
 		t.Fatalf("stack overflow should kill thread, status %d", vm.Threads[0].Status)
 	}
-	if vm.Threads[0].SP > 10 {
-		t.Fatalf("SP overflow %d >10", vm.Threads[0].SP)
+	if vm.Threads[0].SP > threadWindowWords {
+		t.Fatalf("SP overflow %d >%d", vm.Threads[0].SP, threadWindowWords)
 	}
 }
 

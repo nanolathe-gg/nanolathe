@@ -78,7 +78,7 @@ func CompileDownloadMenus(fs vfs.FSOps, units map[string]*UnitDef) ([]DownloadMe
 		}
 		doc, parseErr := formats.ParseTDF(data)
 		if parseErr != nil {
-			return nil, fmt.Errorf("content: %s: %w", entry.Path, parseErr)
+			return nil, fmt.Errorf("content: %s: %w", entry.Path, formats.WithTDFFile(parseErr, entry.Path))
 		}
 		prov := ProvenanceFrom(entry)
 		for itemOrder, section := range doc.Root.Sections() {

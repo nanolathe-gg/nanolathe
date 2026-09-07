@@ -1,8 +1,8 @@
 package content
 
 import (
+	"errors"
 	"sort"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -29,21 +29,27 @@ type translationEntry struct {
 
 // LoadTranslationTable parses gamedata/translate.tdf for the given language
 // string (an empty string selects English) [02 "Translation table"].
-// translate.tdf is optional content [02 §1]; a missing or unparsable file,
-// or a language with no matching key in any section (English: the internal
-// language string is empty, and no authored key is ever named "", so the
-// table comes back empty), yields a nil table. Every lookup treats a nil
-// table as "no table loaded."
+// translate.tdf is optional content [02 §1]. Only a missing file yields no
+// table; a present file that cannot be read or parsed is authored corruption
+// and its diagnostic reaches the loader. A language with no matching key in
+// any section yields a nil table. Every lookup treats a nil table as "no table
+// loaded."
 func LoadTranslationTable(fs vfs.FSOps, language string) (*TranslationTable, error) {
 	if fs == nil {
 		return nil, nil
 	}
 	data, err := fs.ReadFileLimit("gamedata/translate.tdf", 1<<20)
 	if err != nil {
-		return nil, nil // optional file [02 §1][02 "Translation table"]
+		if errors.Is(err, vfs.ErrNotFound) {
+			return nil, nil // optional file [02 §1][02 "Translation table"]
+		}
+		return nil, err
 	}
 	doc, err := formats.ParseTDF(data)
-	if err != nil || doc.Root == nil {
+	if err != nil {
+		return nil, formats.WithTDFFile(err, "gamedata/translate.tdf")
+	}
+	if doc.Root == nil {
 		return nil, nil
 	}
 	index := make(map[string]int)
@@ -95,9 +101,32 @@ func (t *TranslationTable) Source(translated string) (string, bool) {
 		return "", false
 	}
 	for _, e := range t.entries {
-		if strings.EqualFold(e.translation, translated) {
+		if asciiEqualFold(e.translation, translated) {
 			return e.source, true
 		}
 	}
 	return "", false
+}
+
+// asciiEqualFold preserves high bytes until retail's code-page comparison is
+// traced. Translation forward lookup stays byte-exact; this is only its
+// documented reverse case-insensitive comparison.
+// TODO(question): trace retail's active code-page comparison for bytes >= 0x80.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ac, bc := a[i], b[i]
+		if ac >= 'A' && ac <= 'Z' {
+			ac += 'a' - 'A'
+		}
+		if bc >= 'A' && bc <= 'Z' {
+			bc += 'a' - 'A'
+		}
+		if ac != bc {
+			return false
+		}
+	}
+	return true
 }

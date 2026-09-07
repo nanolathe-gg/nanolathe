@@ -81,9 +81,10 @@ func ResurrectionJitter(sim *rng.Simulation, bound uint8) int {
 }
 
 // Resurrect performs resurrection allocation [05 R-WORK-01 §7 phase 5
-// "create"]. Steps: allocate the new unit at the feature's position, remove
-// the feature BEFORE the new unit is marked alive, set its remaining
-// fraction to 0 and health to 1, no ledger cost, delay via ResurrectionDelay.
+// "create"]. It first allocates the new unit at the feature's position; only
+// a successful allocation may remove the feature. It then sets the product's
+// remaining fraction to 0 and health to 1. There is no ledger cost, and delay
+// is computed by ResurrectionDelay.
 // Per-def limit -1 sentinel unlimited; pool fail returns the same 300-tick
 // retry with "Unable to create any more units".
 //
@@ -104,29 +105,29 @@ func (s *Service) Resurrect(builder *units.Unit, featureCell *world.PlotCell, de
 	if !CheckPerDefLimit(s.World, builder.Owner, def) {
 		return nil, ErrLimit
 	}
-	// Feature removal runs BEFORE the new unit's alive word is written: the
-	// resurrection state's fifth step calls the feature-removal helper first
-	// [P0-15]. The caller supplies a pointer into Terrain.Plot; removeFeature
-	// below is that helper.
-	if featureCell != nil {
-		s.removeFeature(featureCell)
-	}
+	var prod *units.Unit
 	if s.Allocator != nil {
-		prod, err := s.Allocator(builder.Owner, def, posX, posY, posZ)
-		if err != nil || prod == nil {
+		allocated, err := s.Allocator(builder.Owner, def, posX, posY, posZ)
+		if err != nil || allocated == nil {
 			return nil, ErrLimit
 		}
-		prod.Remaining = 0
-		prod.Health = 1
-		return prod, nil
+		prod = allocated
+	} else {
+		h, err := s.World.Create(def, builder.Owner, posX, posY, posZ)
+		if err != nil {
+			return nil, ErrLimit
+		}
+		prod = s.World.Unit(h)
+		if prod == nil {
+			return nil, ErrLimit
+		}
 	}
-	h, err := s.World.Create(def, builder.Owner, posX, posY, posZ)
-	if err != nil {
-		return nil, ErrLimit
-	}
-	prod := s.World.Unit(h)
-	if prod == nil {
-		return nil, ErrLimit
+	// Phase 5 removes the corpse only after allocation succeeds. A slot or
+	// per-definition refusal must leave its anchor and complete footprint for
+	// the row's 300-tick retry [05 R-WORK-01 §7]. The separate same-tick
+	// replacement identity question remains open in [06 R-DMG-01 §4].
+	if featureCell != nil {
+		s.removeFeature(featureCell)
 	}
 	prod.Remaining = 0 // finished [05 R-WORK-01 §7 "Established — the transplant"]
 	prod.Health = 1    // one hit point, not max [05 R-WORK-01 §7 "Established — the transplant"]
