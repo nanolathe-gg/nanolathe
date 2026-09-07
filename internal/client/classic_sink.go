@@ -25,24 +25,29 @@ type classicSink struct {
 // nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) classicSink() drawlist.Sink { return classicSink{c} }
 
-// The emit* helpers are the WU-1.3..WU-1.6 transition mechanism (PLAN_GPU
-// "Transition mechanism"): a converted call site records the command into
-// c.list and then runs it inline through the classic sink, so a partially
-// converted frame paints in exact record order against the families that still
-// write bytes directly. WU-1.6 flips these to record-only and replays the whole
-// list once; until then there is no standalone Replay and the list is not
-// double-executed.
+// The emit* helpers record one command each into c.list and nothing more
+// (WU-1.8). The recording pass writes nothing to c.indexed; the frame is
+// executed by one c.list.Replay(c.classicSink()) after the whole frame — clear,
+// world, interface, cursor, expand — has been recorded in order. Every record is
+// self-contained: destination-reading families carry their palette on the record
+// and Points batches own an immutable arena sub-slice, so a deferred replay
+// observes no client scratch state (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1).
 
-// emitTerrain records one terrain blit and executes it inline.
-func (c *Client) emitTerrain(t drawlist.Terrain) {
-	c.list.RecordTerrain(t)
-	classicSink{c}.Terrain(t)
+// emitClear records the frame clear, which zeroes the indexed surface. It is the
+// first command drawCommittedFrame records, so replaying the list clears before
+// any draw (WU-1.8).
+func (c *Client) emitClear() {
+	c.list.RecordClear()
 }
 
-// emitFill records one indexed rectangle and executes it inline.
+// emitTerrain records one terrain blit.
+func (c *Client) emitTerrain(t drawlist.Terrain) {
+	c.list.RecordTerrain(t)
+}
+
+// emitFill records one indexed rectangle.
 func (c *Client) emitFill(f drawlist.Fill) {
 	c.list.RecordFill(f)
-	classicSink{c}.Fill(f)
 }
 
 // emitFillInclusive records one inclusive-bounds solid rectangle and executes
@@ -59,72 +64,76 @@ func (c *Client) emitFillInclusive(left, top, right, bottom int32, idx uint8) {
 	})
 }
 
-// emitFog records one clipped fog op list and executes it inline.
+// emitFog records one clipped fog op list.
 func (c *Client) emitFog(fg drawlist.Fog) {
 	c.list.RecordFog(fg)
-	classicSink{c}.Fog(fg)
 }
 
-// emitSprite records one GAF-frame blit and executes it inline. The strip and
-// projectile call sites use the keyed and ALP-tinted kinds (WU-1.4).
+// emitSprite records one GAF-frame blit. The strip and projectile call sites use
+// the keyed and ALP-tinted kinds (WU-1.4).
 func (c *Client) emitSprite(sp drawlist.Sprite) {
 	c.list.RecordSprite(sp)
-	classicSink{c}.Sprite(sp)
 }
 
-// emitLine records one indexed line and executes it inline (beam and segment
-// strokes, WU-1.4).
+// emitLine records one indexed line (beam and segment strokes, WU-1.4).
 func (c *Client) emitLine(l drawlist.Line) {
 	c.list.RecordLine(l)
-	classicSink{c}.Line(l)
 }
 
-// emitPoints records one batch of single-pixel writes and executes it inline
-// (the LHT halo and calculated flash disc, WU-1.4). The batch may alias a reused
-// Client scratch slice: that is safe only because the transition executes each
-// record inline, so a later batch's overwrite of the same backing array is never
-// observed by a deferred Replay [PLAN_GPU "Transition mechanism"].
-func (c *Client) emitPoints(p drawlist.Points) {
-	c.list.RecordPoints(p)
-	classicSink{c}.Points(p)
+// emitPoints records the batch of single-pixel writes appended to the point
+// arena since off (the LHT halo, the calculated flash disc, the minimap surface
+// and its viewport rectangle). The record carries a three-index sub-slice
+// arena[off:end:end]: the capped bound forces a later append to reallocate rather
+// than overwrite this batch's region, so the batch is immutable for the life of
+// the frame and safe under deferred replay (WU-1.8). An empty batch records
+// nothing.
+func (c *Client) emitPoints(off int, kind drawlist.PointKind) {
+	if off < 0 || off >= len(c.pointArena) {
+		return
+	}
+	rec := c.pointArena[off:len(c.pointArena):len(c.pointArena)]
+	c.list.RecordPoints(drawlist.Points{Kind: kind, Points: rec})
 }
 
-// emitGlyphs records one FNT text run and executes it inline (the health-bar
-// walk's control-group digit, WU-1.5).
+// emitGlyphs records one FNT text run (the health-bar walk's control-group
+// digit, WU-1.5).
 func (c *Client) emitGlyphs(g drawlist.Glyphs) {
 	c.list.RecordGlyphs(g)
-	classicSink{c}.Glyphs(g)
 }
 
-// emitCursor records the software-cursor blit and executes it inline (WU-1.5).
+// emitCursor records the software-cursor blit (WU-1.5).
 func (c *Client) emitCursor(cu drawlist.Cursor) {
 	c.list.RecordCursor(cu)
-	classicSink{c}.Cursor(cu)
 }
 
 // emitSurface records one indexed byte-surface blit (the SELMAP MAPPIC gadget,
-// WU-1.7b) and executes it inline.
+// WU-1.7b).
 func (c *Client) emitSurface(sf drawlist.Surface) {
 	c.list.RecordSurface(sf)
-	classicSink{c}.Surface(sf)
 }
 
-// emitModel records one composed model subject and executes its commit inline
-// (WU-1.6). The finished composition itself is not on the list — C-G5 keeps a
-// subject's image on the classic side until Phase 3 — so the record carries only
-// an index into c.modelCommits, appended here in lockstep with the command
+// emitModel records one composed model subject's commit (WU-1.6). The finished
+// composition itself is not on the list — C-G5 keeps a subject's image on the
+// classic side until Phase 3 — so the record carries only an index into
+// c.modelCommits, appended here in lockstep with the command. The pending record
+// names which of the three commit steps the classic sink runs (the shadow, the
+// one body blit, the trace), so a carrier's staged child can record its own
+// framebuffer shadow before the carrier and its parity trace after, each in its
+// own list position rather than as a direct write during recording
 // (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5).
 func (c *Client) emitModel(pending pendingModelCommit) {
 	ref := len(c.modelCommits)
 	c.modelCommits = append(c.modelCommits, pending)
 	c.list.RecordModel(drawlist.Model{Ref: ref})
-	classicSink{c}.Model(drawlist.Model{Ref: ref})
 }
 
-// emitExpand records the index-to-RGBA expansion marker and executes it inline.
-func (c *Client) emitExpand() {
-	c.list.RecordExpand()
-	classicSink{c}.Expand()
+// Clear zeroes the indexed surface. It is the first command of every committed
+// frame, replayed before any draw, and writes exactly the bytes the direct clear
+// loop did (WU-1.8) [C-G1].
+func (s classicSink) Clear() {
+	// clear zeroes exactly the bytes the direct `for i := range c.indexed` loop
+	// wrote — the whole indexed slice.
+	clear(s.c.indexed)
 }
 
 // Terrain replays one terrain blit into the indexed surface. The record carries
@@ -138,8 +147,9 @@ func (s classicSink) Terrain(t drawlist.Terrain) {
 // Sprite replays one GAF-frame or PCX blit. It routes each recorded blit to its
 // raw byte writer and this is that writer's only execution: the keyed
 // effect/projectile/HUD blits (anchored or plain), the ALP-tinted strip blit,
-// the LHT-lit glyph blit, the scaled surface-gadget blit and the opaque PCX
-// background blit [03 R-COMP-01 §2][03 R-FX-02 §3][07 §4].
+// the LHT-lit glyph blit, the scaled surface-gadget blit, the 2D feature GAF
+// sprite copy and its shadow stencil, and the opaque PCX background blit
+// [03 R-COMP-01 §2][03 R-FX-02 §3][03 §4.4][07 §4].
 func (s classicSink) Sprite(sp drawlist.Sprite) {
 	c := s.c
 	// A non-nil PCX carries an opaque frontend background; it cannot ride
@@ -170,10 +180,10 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 		c.tintedBlitAnchor(sp.Frame, int(sp.X), int(sp.Y))
 	case drawlist.BlitLit:
 		// The shaded glyph blit: every opaque pixel is remapped through one LHT
-		// row selected by LightRow. The palette rides s.c.uiRectPal — set
-		// immediately before this inline emit — as the light/shade rects do
+		// row selected by LightRow. The palette rides the record (sp.Pal), so the
+		// deferred replay resolves against exactly the palette the caller installed
 		// [03 §4.3.1].
-		c.uiBlitLitRaw(sp.Frame, int(sp.X), int(sp.Y), c.uiRectPal, int(sp.LightRow))
+		c.uiBlitLitRaw(sp.Frame, int(sp.X), int(sp.Y), sp.Pal, int(sp.LightRow))
 	case drawlist.BlitScaled:
 		// The surface-gadget blit: sample the source sub-rect Src across the
 		// destination Dst, clipped to Clip [07 R-HUD-03 §11].
@@ -182,6 +192,19 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 			int(sp.Src.X), int(sp.Src.Y), int(sp.Src.W), int(sp.Src.H),
 			int(sp.Dst.X), int(sp.Dst.Y), int(sp.Dst.W), int(sp.Dst.H),
 			clipX, clipY, clipW, clipH)
+	case drawlist.BlitFeatureNormal:
+		// The 2D feature GAF sprite copy (trees, rocks, sprite-form wrecks). The
+		// destination is already the final top-left — drawFeature subtracted the
+		// frame's XOffset/YOffset before recording — so no offset is applied here;
+		// blitGAFFrame is the raw byte writer and drawFeature's site emits, so this
+		// is its only execution [03 §4.4][fmt gaf].
+		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y), false, sp.Trans)
+	case drawlist.BlitFeatureShadow:
+		// The feature GAF shadow pass: blitGAFFrame with isShadow=true darkens the
+		// destination through PALETTE.SHD where the shadow frame is opaque, a
+		// destination-reading stencil. Trans carries the authored translucent flag
+		// (ShadTrans) exactly as the direct call did [03 §4.4].
+		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y), true, sp.Trans)
 	}
 }
 
@@ -236,16 +259,15 @@ func (s classicSink) Fill(f drawlist.Fill) {
 		// The UI light rect brightens each destination pixel through one LHT row
 		// selected by the level; uiLightRectRaw is the byte writer and the light
 		// rect's call site emits, so this is its only execution. The palette the
-		// caller passed rides s.c.uiRectPal — set immediately before this inline
-		// emit — so the lookup is against exactly the palette the direct call used
-		// [03 §4.3.1].
-		s.c.uiLightRectRaw(s.c.uiRectPal, int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), int(f.Level))
+		// caller passed rides the record (f.Pal), so the lookup is against exactly
+		// the palette the direct call used, even under deferred replay [03 §4.3.1].
+		s.c.uiLightRectRaw(f.Pal, int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), int(f.Level))
 	case drawlist.FillShadeRect:
 		// The UI shade rect folds each destination pixel through the signed fade
 		// table — SHD for a negative level, LHT otherwise — via uiShadeRectRaw,
 		// the byte writer the shade rect's call site emits into. The caller's
-		// palette rides s.c.uiRectPal as for FillLitRect [03 R-COMP-02 §5].
-		s.c.uiShadeRectRaw(s.c.uiRectPal, int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), int(f.Level))
+		// palette rides the record (f.Pal) as for FillLitRect [03 R-COMP-02 §5].
+		s.c.uiShadeRectRaw(f.Pal, int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), int(f.Level))
 	}
 }
 
@@ -298,9 +320,13 @@ func (s classicSink) Model(m drawlist.Model) {
 		return
 	}
 	pending := c.modelCommits[m.Ref]
-	c.drawModelShadow(pending.m.draw, pending.m.image)
-	pending.blit.commit(c.indexed, c.width, c.height)
-	if pending.m.raster != nil && pending.m.raster.trace != nil {
+	if pending.shadow {
+		c.drawModelShadow(pending.m.draw, pending.m.image)
+	}
+	if pending.body && pending.blit != nil {
+		pending.blit.commit(c.indexed, c.width, c.height)
+	}
+	if pending.trace && pending.m.raster != nil && pending.m.raster.trace != nil {
 		pending.m.raster.trace.resolve(pending.m.raster, c.indexed, c.width, c.height)
 		pending.m.raster.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
 	}

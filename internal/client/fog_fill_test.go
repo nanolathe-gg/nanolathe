@@ -202,6 +202,7 @@ func TestFogFillsDriveTheComposer(t *testing.T) {
 		c.indexed[i] = 77
 	}
 	c.drawFog(cur)
+	c.replayForTest()
 	// The grid's first cell starts half a tile in and is then rebased off the
 	// retail viewport origin, so the covered area begins at (16, 16)
 	// [03 §2.5][03 §3.3]: (20, 20) is inside it and (10, 10) is not.

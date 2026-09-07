@@ -23,10 +23,9 @@ type Instance struct {
 	Terrain *world.Terrain      // plot reference [01 §6.1]
 	CX, CZ  int                 // anchor cell coordinates
 
-	// Health and reclaim progress. Damage value of the definition is the
-	// completion threshold for reclaim [05 "Feature reclaim"].
-	Health          int32
-	MaxHealth       int32
+	// Reclaim progress; the definition's `damage` is the completion threshold
+	// for reclaim [05 "Feature reclaim"]. There is no health word: weapon hits
+	// accrue on DamageAccumulator below, never on a countdown.
 	ReclaimProgress int32
 
 	// Burning state [05 "Feature burning"].
@@ -71,26 +70,17 @@ type Instance struct {
 	AnimationCountdown uint8
 
 	// DamageAccumulator is the record's damage word, the one value all three
-	// saved families keep at the same place [08 R-SAVE-FEATURE-01]. Retail's 3D
-	// instance accumulates weapon hits into it with 16-bit wrap and fires the
-	// death transition when the definition's `damage` is at or below it,
-	// unsigned [05 R-FEAT-01 §8] step 7; a sprite instance's copy is written by
-	// no path at all and read by none; a feature with no instance keeps the
-	// same sum in its anchor cell instead (step 6). It is NOT an animation
-	// word — the name "animation-state word" it carried here was that section's
-	// own placeholder before the census closed, and 3D instances have no sprite
-	// cursor for it to belong to.
-	//
-	// TODO(question): this build's 3D damage path is a COUNTDOWN — the stamp
-	// seeds Health from the definition's `damage` and DamageFeature subtracts
-	// each hit, killing at zero or below (burn.go) — so it has no wrap-around
-	// 16-bit accumulator for this word to be. The two are related by
-	// `accumulator = damage - health` only while neither wraps, and retail's
-	// unsigned at-or-above comparison after a wrap is a different predicate, so
-	// no conversion is written here: the word round-trips losslessly on its own
-	// field and the live damage path does not read it. What would settle it is
-	// a trace of whether the 3D branch's subtraction/compare can be restated as
-	// this accumulator without changing which hit kills the wreck.
+	// saved families keep at the same place [08 R-SAVE-FEATURE-01]. It is the
+	// live 3D damage state and the only such state: DamageFeature adds each
+	// weapon hit's `[DAMAGE] default` word (int16 as stored) into it with
+	// 16-bit wrap and fires the death transition when the definition's 16-bit
+	// `damage` is at or below it, compared unsigned [05 R-FEAT-01 §8] step 7.
+	// The stamp zeroes it, so a fresh wreck starts at 0 and `damage = 0` dies
+	// on its first hit of any strength. A sprite instance's copy is written by
+	// no path and read by none (the sprite entry has no accumulating branch,
+	// step 8); a feature with no instance keeps its running sum in the anchor
+	// cell's word instead (step 6). It is NOT an animation word — 3D instances
+	// have no sprite cursor for it to belong to.
 	DamageAccumulator uint16
 }
 
@@ -946,8 +936,6 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 		Terrain:    s.Terrain,
 		CX:         cx,
 		CZ:         cz,
-		MaxHealth:  def.Damage,
-		Health:     def.Damage,
 		Status:     0,
 		FootprintX: footX,
 		FootprintZ: footZ,
@@ -1320,8 +1308,6 @@ func (s *Service) PopulateFromTerrain() int {
 				Terrain:    s.Terrain,
 				CX:         cx,
 				CZ:         cz,
-				MaxHealth:  def.Damage,
-				Health:     def.Damage,
 				FootprintX: footX,
 				FootprintZ: footZ,
 			}
@@ -1613,8 +1599,6 @@ func (s *Service) newInstanceAt(cx, cz int, def *content.FeatureDef) *Instance {
 		Terrain:    s.Terrain,
 		CX:         cx,
 		CZ:         cz,
-		MaxHealth:  def.Damage,
-		Health:     def.Damage,
 		FootprintX: footX,
 		FootprintZ: footZ,
 	}

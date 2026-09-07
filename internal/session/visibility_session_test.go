@@ -29,6 +29,10 @@ func TestVisibilityModeRespectsSkirmishConfig(t *testing.T) {
 		{"los off", SkirmishConfig{MapName: "test", NumPlayers: 2, Mapping: 1, LineOfSight: 0, LOSType: 1}, true, false, true},
 		{"lostype off", SkirmishConfig{MapName: "test", NumPlayers: 2, Mapping: 1, LineOfSight: 1, LOSType: 0}, true, true, false},
 		{"all off", SkirmishConfig{MapName: "test", NumPlayers: 2, Mapping: 0, LineOfSight: 0, LOSType: 0}, false, false, false},
+		// Battle entry takes the LOW BIT of each field, not a non-zero test
+		// [08 R-SKIR-01 §2]; no lobby toggle stores 2, so this locks the
+		// traced form rather than a reachable difference.
+		{"low bit only", SkirmishConfig{MapName: "test", NumPlayers: 2, Mapping: 2, LineOfSight: 3, LOSType: 2}, false, true, false},
 	}
 	for _, tc := range cases {
 		// Need to bypass ApplyDefaults which would set defaults 1; set rulesDefaultsApplied true to keep explicit zeros.

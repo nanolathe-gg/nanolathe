@@ -3,6 +3,7 @@ package drawlist
 import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -32,6 +33,18 @@ const (
 	BlitLit
 	// BlitScaled samples Sprite.Src into Sprite.Dst, the scaled GAF blit.
 	BlitScaled
+	// BlitFeatureNormal is the 2D feature GAF sprite copy (trees, rocks and
+	// sprite-form wrecks): a keyed copy of the frame's opaque pixels at the
+	// already-offset destination top-left, routed to the feature blitter rather
+	// than the plain keyed writer because the feature path is its own raw writer
+	// [03 §4.4][fmt gaf]. Sprite.Trans carries the authored translucent flag.
+	BlitFeatureNormal
+	// BlitFeatureShadow is the feature GAF sprite's shadow pass: instead of
+	// copying source pixels, each opaque source pixel darkens the destination
+	// (ground) through PALETTE.SHD — a destination-reading stencil darken. It is
+	// emitted before BlitFeatureNormal for the same feature, in the order the
+	// direct draw ran [03 §4.4]. Sprite.Trans selects the shadow's darken row.
+	BlitFeatureShadow
 )
 
 // Sprite records one GAF-frame blit (docs/DESIGN_GPU_RENDERER.md §2.1). The
@@ -71,6 +84,20 @@ type Sprite struct {
 	Src, Dst Rect
 	// Key is the transparent index the keyed path skips [03 R-RAST-01 §6].
 	Key uint8
+	// Trans is the authored translucent flag for the feature GAF blitter, used
+	// when Kind is BlitFeatureNormal or BlitFeatureShadow (WU-1.7c). It is the
+	// per-feature ShadTrans (shadow pass) or AnimTrans (normal pass) value the
+	// direct blitGAFFrame call carried, selecting the translucent versus opaque
+	// route for the shadow darken; it is ignored for the other kinds [03 §4.4].
+	Trans bool
+	// Pal is the palette a BlitLit sprite resolves its LHT row against; nil for
+	// every other kind (WU-1.8). Carrying it on the record makes the lit glyph
+	// blit self-contained under deferred replay: the classic sink reads Pal here
+	// instead of a client scratch field, so a list holding several lit blits with
+	// differing palettes replays each against the palette its caller installed
+	// [03 §4.3.1]. It is a pointer to immutable-after-load palette tables, so the
+	// struct stays comparable [C-G2].
+	Pal *palette.Tables
 }
 
 // Glyphs records one run of FNT text (docs/DESIGN_GPU_RENDERER.md §2.1). The
@@ -152,6 +179,15 @@ type Fill struct {
 	// inclusive clip bounds are recovered as [X, X+W-1] x [Y, Y+H-1]. Other
 	// styles ignore it (its zero value).
 	Clip Rect
+	// Pal is the palette a FillLitRect or FillShadeRect resolves its LHT/SHD row
+	// against; nil for the destination-independent styles (WU-1.8). Carrying it on
+	// the record makes the UI light/shade rect self-contained under deferred
+	// replay: the classic sink reads Pal here instead of a client scratch field,
+	// so a list holding several lit/shade fills with differing palettes replays
+	// each against the palette its caller installed [03 §4.3.1][03 R-COMP-02 §5].
+	// It is a pointer to immutable-after-load palette tables, so the struct stays
+	// comparable [C-G2].
+	Pal *palette.Tables
 }
 
 // Line records one indexed line (docs/DESIGN_GPU_RENDERER.md §2.1), replayed as
@@ -275,7 +311,8 @@ type Cursor struct {
 type family uint8
 
 const (
-	familyTerrain family = iota
+	familyClear family = iota
+	familyTerrain
 	familySprite
 	familyGlyphs
 	familyFill
@@ -289,7 +326,7 @@ const (
 )
 
 // tag is one ordering entry: which family, and which element of that family's
-// backing slice. familyExpand carries no element (idx is unused).
+// backing slice. familyClear and familyExpand carry no element (idx is unused).
 type tag struct {
 	fam family
 	idx int
@@ -311,6 +348,15 @@ type List struct {
 	fog     []Fog
 	surface []Surface
 	cursor  []Cursor
+}
+
+// RecordClear appends the frame-clear marker in record order. It carries no
+// data; it fixes where the indexed surface is zeroed, which is the first command
+// of every committed frame (WU-1.8). Recording the clear rather than doing it
+// inline is what lets the whole frame — clear included — replay once through the
+// sink after a record-only pass [C-G1].
+func (l *List) RecordClear() {
+	l.order = append(l.order, tag{familyClear, 0})
 }
 
 // RecordTerrain appends one terrain command in record order.
@@ -401,6 +447,8 @@ func (l *List) Reset() {
 func (l *List) Replay(s Sink) {
 	for _, t := range l.order {
 		switch t.fam {
+		case familyClear:
+			s.Clear()
 		case familyTerrain:
 			s.Terrain(l.terrain[t.idx])
 		case familySprite:
@@ -425,4 +473,48 @@ func (l *List) Replay(s Sink) {
 			s.Expand()
 		}
 	}
+}
+
+// Clone returns a deep copy of the list that stays valid after the source list
+// is Reset and re-recorded (WU-1.8). ComposeFrameSnapshot hands the copy to a
+// caller who replays it through another sink after the client has moved on to
+// the next frame, so it must not alias any array the client reuses per frame:
+// the per-family backing slices, the point batches those slices' Points records
+// sub-slice out of the client's point arena, the fog op lists, and the surface
+// pixel buffers are all copied here. Immutable-after-load references a record
+// carries by pointer — GAF/PCX frames, palette tables, terrain — are shared, as
+// is the same-frame-only Model.Ref table and Terrain.Cam (C-G5): a durable
+// replay of those follows the classic path's own lifetime, not this copy's.
+func (l *List) Clone() List {
+	var c List
+	c.order = append([]tag(nil), l.order...)
+	c.terrain = append([]Terrain(nil), l.terrain...)
+	c.sprite = append([]Sprite(nil), l.sprite...)
+	c.glyphs = append([]Glyphs(nil), l.glyphs...)
+	c.fill = append([]Fill(nil), l.fill...)
+	c.line = append([]Line(nil), l.line...)
+	c.model = append([]Model(nil), l.model...)
+	c.cursor = append([]Cursor(nil), l.cursor...)
+	// Points records sub-slice the client's reusable point arena; give each its
+	// own array so the copy survives the next frame's arena reuse.
+	c.points = make([]Points, len(l.points))
+	for i, p := range l.points {
+		c.points[i] = Points{Kind: p.Kind, Points: append([]Point(nil), p.Points...)}
+	}
+	// Fog op lists alias the client's reused fogOps buffer; copy each.
+	c.fog = make([]Fog, len(l.fog))
+	for i, f := range l.fog {
+		c.fog[i] = Fog{Ops: append([]render.FogOp(nil), f.Ops...)}
+	}
+	// Surface pixels may point at a caller buffer that is reused per frame; copy.
+	c.surface = make([]Surface, len(l.surface))
+	for i, sf := range l.surface {
+		c.surface[i] = Surface{
+			Pixels: append([]byte(nil), sf.Pixels...),
+			SrcW:   sf.SrcW,
+			SrcH:   sf.SrcH,
+			Dst:    sf.Dst,
+		}
+	}
+	return c
 }

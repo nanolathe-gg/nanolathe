@@ -92,6 +92,7 @@ func TestDrawMinimapViewportRectStrokesOneRectangleOutline(t *testing.T) {
 	c := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64)}
 	dst := hud.Rect{X1: 0, Y1: 0, X2: 31, Y2: 31}
 	c.DrawMinimapViewportRect(dst, hud.Rect{X1: 4, Y1: 6, X2: 12, Y2: 14}, 9)
+	c.replayForTest()
 	for y := int32(0); y < 64; y++ {
 		for x := int32(0); x < 64; x++ {
 			onEdge := (x >= 4 && x <= 12 && (y == 6 || y == 14)) || (y >= 6 && y <= 14 && (x == 4 || x == 12))
@@ -107,6 +108,7 @@ func TestDrawMinimapViewportRectStrokesOneRectangleOutline(t *testing.T) {
 	// Clipping is to the destination, not to the framebuffer.
 	c2 := &Client{width: 64, height: 64, indexed: make([]uint8, 64*64)}
 	c2.DrawMinimapViewportRect(dst, hud.Rect{X1: -10, Y1: -10, X2: 40, Y2: 40}, 9)
+	c2.replayForTest()
 	for y := int32(0); y < 64; y++ {
 		for x := int32(0); x < 64; x++ {
 			if c2.indexed[int(y)*c2.width+int(x)] != 0 {
@@ -154,6 +156,7 @@ func TestDrawMinimapLayoutDrawsPictureOnly(t *testing.T) {
 	c := &Client{width: 160, height: 170, indexed: make([]uint8, 160*170)}
 	surf := &render.RadarSurface{W: 1, H: 1, Pitch: 4, Bits: []byte{7}}
 	c.DrawMinimapLayout(surf, dst, layout)
+	c.replayForTest()
 	centerX, centerY := layout.PadX+layout.W/2, layout.PadY+layout.H/2
 	dx, dy, ok := layout.CanvasToDisplay(centerX, centerY, dst.X1, dst.Y1, 126, 126)
 	if !ok || c.indexed[int(dy)*c.width+int(dx)] != 7 {
@@ -278,6 +281,7 @@ func TestMinimapMappedFollowsExploredMaskEachTick(t *testing.T) {
 		indexed: make([]uint8, camera.MinimapLongSide*camera.MinimapLongSide)}
 	dst := hud.Rect{X1: 0, Y1: 0, X2: camera.MinimapLongSide - 1, Y2: camera.MinimapLongSide - 1}
 	c.DrawMinimapLayout(final, dst, layout)
+	c.replayForTest()
 	seen := map[uint8]bool{}
 	for _, v := range c.indexed {
 		seen[v] = true

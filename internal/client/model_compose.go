@@ -481,6 +481,15 @@ func (c *Client) seaLevel() numeric.Fixed {
 type pendingModelCommit struct {
 	m    composedModel
 	blit *modelTarget
+	// shadow, body and trace select which of the three commit steps classicSink
+	// runs, in that order (WU-1.8). An ordinary unit or carrier records all three
+	// in one command; a carrier's staged child records its framebuffer shadow as a
+	// shadow-only command before the carrier, and its parity trace as a trace-only
+	// command after, so each direct write moves to its own list position and the
+	// recording pass touches c.indexed nowhere [C-G1].
+	shadow bool
+	body   bool
+	trace  bool
 }
 
 // finishModel is everything that happens once a composed image is final: the
@@ -492,10 +501,9 @@ type pendingModelCommit struct {
 // the two differ [R-REN-03A §4].
 //
 // The two writes into c.indexed and the trace that follows them are recorded as
-// one drawlist.Model command and executed through the classic sink. emitModel
-// runs the record inline, so c.indexed is written by the time this returns and
-// every caller behaves exactly as it did before the model commit joined the
-// list (docs/DESIGN_GPU_RENDERER.md §2.2).
+// one drawlist.Model command that runs all three commit steps — shadow, body
+// blit, trace — when the frame is replayed once through the classic sink
+// (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) finishModel(m composedModel, blit *modelTarget) {
 	if m.image == nil {
 		return // a subject with no composition image records nothing
@@ -503,7 +511,7 @@ func (c *Client) finishModel(m composedModel, blit *modelTarget) {
 	if blit == nil {
 		blit = m.image
 	}
-	c.emitModel(pendingModelCommit{m: m, blit: blit})
+	c.emitModel(pendingModelCommit{m: m, blit: blit, shadow: true, body: true, trace: true})
 }
 
 // drawModel composes one unit and blits it once. It is composeModel followed

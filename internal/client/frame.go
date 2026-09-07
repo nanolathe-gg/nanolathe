@@ -140,36 +140,44 @@ func (c *Client) Frame() {
 
 	// C9: read the committed frame only; intermediate ticks are not drawn
 	// (PLAN_03 C15). A paused simulation simply presents the same frame.
+	// The frame is recorded, then replayed once. composeIndexed records the clear
+	// and every world/interface draw without touching c.indexed; drawCursor
+	// records the software cursor after them, so it sits above world, HUD and
+	// modal overlays [07 §8]; the expansion marker is recorded last. The single
+	// Replay executes the whole list in record order — Clear, all draws, Cursor,
+	// Expand — through the classic sink, which is where every byte is finally
+	// written and where indexed pixels become RGBA at present time (C7). This is
+	// the only place indexed pixels become RGBA, so palette animation stays
+	// possible in later phases (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
 	c.composeIndexed(cur, ok)
-	// The software cursor is drawn after the offscreen battle/front-end surface
-	// is prepared, so it sits above world, HUD, and modal overlays [07 §8].
 	c.drawCursor()
-
-	// Convert to RGBA through logical→base at present time only (C7). This is
-	// the only point where indexed pixels become RGBA so palette animation
-	// stays possible in later phases. During the WU-1.3..WU-1.6 transition each
-	// converted family emits (records + executes inline); the expansion is the
-	// last such emit and there is no standalone Replay
-	// (docs/DESIGN_GPU_RENDERER.md §2.2, C-G8).
-	c.emitExpand()
+	c.list.RecordExpand()
+	c.list.Replay(c.classicSink())
 }
 
 // composeIndexed runs the one concrete committed-frame ordering and leaves the
 // indexed surface ready for cursor and palette presentation [03 §1][I6].
 func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
-	if c == nil || len(c.indexed) != c.width*c.height {
+	if c == nil {
 		return
 	}
 	// Reset the draw list before recording so it holds exactly this frame's
-	// commands after drawCommittedFrame; the emit helpers append to it as each
-	// converted call site records-then-executes (PLAN_GPU "Transition
-	// mechanism"). It stays under the surface-size guard so a degenerate surface
-	// behaves as before.
+	// commands after drawCommittedFrame records them; the emit helpers record only
+	// and the caller replays the list once (WU-1.8). Reset before the surface-size
+	// guard so a degenerate surface, which skips drawCommittedFrame, leaves an
+	// empty list rather than replaying the previous frame's commands.
 	c.list.Reset()
+	// The point arena backs this frame's Points batches; it is truncated in
+	// lockstep with the list so a batch recorded as a sub-slice of it lines up
+	// with fresh data and no batch survives into the next frame (WU-1.8).
+	c.pointArena = c.pointArena[:0]
 	// The model commit table drawlist.Model.Ref indexes is reset here, in
 	// lockstep with the list, so a re-recorded frame's refs line up with fresh
 	// entries and no entry survives into the next frame (C-G5) [I6].
 	c.modelCommits = c.modelCommits[:0]
+	if len(c.indexed) != c.width*c.height {
+		return
+	}
 	c.selectionChrome = c.selectionChrome[:0]
 	c.drawCommittedFrame(cur, ok)
 }

@@ -6175,13 +6175,16 @@ called with the **anchor** cell and anchor coordinates. A weapon with
    byte's only reader; no roll). If true and the cell has **no instance**:
    ignite `(x, z, remote = 0)` and return — no damage is dealt. If true but
    an instance is attached, fall through to step 7.
-6. **Not an ignition, no instance:** `sum := uint32(weapon.default) +
-   uint32(cell.word)` where `cell.word` is the anchor's accumulator (the
-   same 16-bit field that holds the slot index when an instance is attached;
-   the stamp zeroes it). If `sum < damage` (unsigned 16-bit compare) store
-   `uint16(sum)`; else death transition `(x, z, 0)`, code `0xFD`. `damage = 0`
-   therefore dies on the first hit of any strength, including a zero-damage
-   weapon; return.
+6. **Not an ignition, no instance:** `sum := uint32(uint16(weapon.default))
+   + uint32(cell.word)` — both operands zero-extended 16-bit words, the sum
+   held in 32 bits — where `cell.word` is the anchor's accumulator (the same
+   16-bit field that holds the slot index when an instance is attached; the
+   stamp zeroes it). If `sum < uint32(damage)` (a 32-bit unsigned compare
+   against the zero-extended 16-bit `damage`) store `uint16(sum)`; else
+   death transition `(x, z, 0)`, code `0xFD`. So this branch never wraps: a
+   sum past 65535 always dies, and a negative `default` counts as its
+   unsigned word. `damage = 0` therefore dies on the first hit of any
+   strength, including a zero-damage weapon; return.
 7. **3D definition (an instance is always attached):** if the instance's
    recorded anchor differs from `(x, z)` return (a sanity guard — callers
    always pass the anchor); `instance.accumulator (int16) += weapon.default`

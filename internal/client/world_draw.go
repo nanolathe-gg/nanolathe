@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -331,10 +332,10 @@ func (c *Client) drawCommittedFrame(cur *frame.Frame, ok bool) {
 		c.frameTick = cur.Tick
 	}
 	// A missing terrain source is an empty indexed surface. No synthetic art is
-	// emitted when the frontend has no world attachment [I9].
-	for i := range c.indexed {
-		c.indexed[i] = 0
-	}
+	// emitted when the frontend has no world attachment [I9]. The clear is the
+	// first recorded command of the frame, so replaying the list zeroes the
+	// surface before any draw and the whole frame executes once (WU-1.8) [C-G1].
+	c.emitClear()
 	// Terrain/static preparation, radar preparation, and viewport clipping are
 	// unconditional. Radar and clip have no concrete frame input yet.
 	c.drawTerrainPrep()
@@ -696,10 +697,26 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 	}
 	shadowFrame := c.featureFrameFor(*f, true)
 	normalFrame := c.featureFrameFor(*f, false)
+	// Record the shadow then the normal frame through the committed-frame draw
+	// list, in the same order the direct blits ran. drawFeature subtracts the
+	// frame's XOffset/YOffset here, so the recorded X/Y are the final top-left
+	// (not the anchored path); the sink routes both to blitGAFFrame [03 §4.4].
 	if shadowFrame != nil {
-		c.blitGAFFrame(shadowFrame, int(sx)-int(shadowFrame.XOffset), int(sy)-int(shadowFrame.YOffset), true, f.ShadTrans)
+		c.emitSprite(drawlist.Sprite{
+			Frame: shadowFrame,
+			X:     sx - int32(shadowFrame.XOffset),
+			Y:     sy - int32(shadowFrame.YOffset),
+			Kind:  drawlist.BlitFeatureShadow,
+			Trans: f.ShadTrans,
+		})
 	}
 	if normalFrame != nil {
-		c.blitGAFFrame(normalFrame, int(sx)-int(normalFrame.XOffset), int(sy)-int(normalFrame.YOffset), false, f.AnimTrans)
+		c.emitSprite(drawlist.Sprite{
+			Frame: normalFrame,
+			X:     sx - int32(normalFrame.XOffset),
+			Y:     sy - int32(normalFrame.YOffset),
+			Kind:  drawlist.BlitFeatureNormal,
+			Trans: f.AnimTrans,
+		})
 	}
 }

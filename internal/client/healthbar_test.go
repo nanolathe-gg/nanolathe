@@ -34,7 +34,9 @@ func countRow(c *Client, y int32, idx uint8) int {
 // endpoint behaviour: [sx−17 .. sx+17] × [y−2 .. y+2] [03 R-FX-01 §6].
 func TestHealthBarOuterIsThirtyFiveByFive(t *testing.T) {
 	c := newLabelClient(80, 40)
+	c.resetListForTest()
 	c.drawHealthBar(40, 20, 0 /* hp <= 0 draws nothing */, 100)
+	c.replayForTest()
 	for i, v := range c.indexed {
 		if v != 0 {
 			t.Fatalf("hp = 0 wrote pixel %d = %d, want an untouched surface [03 R-FX-01 §6]", i, v)
@@ -43,7 +45,9 @@ func TestHealthBarOuterIsThirtyFiveByFive(t *testing.T) {
 	// A nonzero outer entry makes the outer fill observable against the zeroed
 	// surface; the raster asks for dcb[0], which the identity table maps to 0.
 	c.pal.Logical[0] = 200
+	c.resetListForTest()
 	c.drawHealthBar(40, 20, 1, 3000)
+	c.replayForTest()
 	rows := 0
 	for y := int32(0); y < 40; y++ {
 		if n := countRow(c, y, 200); n > 0 {
@@ -83,6 +87,7 @@ func TestHealthBarInnerFillWidth(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newLabelClient(80, 40)
 			c.drawHealthBar(40, 20, tc.hp, tc.max)
+			c.replayForTest()
 			if got := countRow(c, 20, tc.wantColor); got != tc.wantWidth {
 				t.Fatalf("inner fill = %d px of entry %d, want %d [03 R-FX-01 §6]", got, tc.wantColor, tc.wantWidth)
 			}
@@ -122,6 +127,7 @@ func TestHealthBarThresholdsAreStrictAndSigned(t *testing.T) {
 	} {
 		c := newLabelClient(80, 40)
 		c.drawHealthBar(40, 20, tc.hp, 100)
+		c.replayForTest()
 		if got := c.indexed[20*80+24]; got != tc.want {
 			t.Fatalf("hp %d of 100 filled with entry %d, want %d [03 R-FX-01 §6]", tc.hp, got, tc.want)
 		}
@@ -152,7 +158,9 @@ func TestLabelWalkDrawsOnlyForTheViewingPlayer(t *testing.T) {
 	c := newLabelClient(200, 120)
 	c.cam = cam
 	SetDamageBars(false)
+	c.resetListForTest()
 	c.drawUnitLabels(cur, true)
+	c.replayForTest()
 	for i, v := range c.indexed {
 		if v != 0 {
 			t.Fatalf("bit clear still drew pixel %d = %d [07 R-HUD-03 §7]", i, v)
@@ -160,7 +168,9 @@ func TestLabelWalkDrawsOnlyForTheViewingPlayer(t *testing.T) {
 	}
 
 	SetDamageBars(true)
+	c.resetListForTest()
 	c.drawUnitLabels(cur, true)
+	c.replayForTest()
 	if got := countRow(c, 20, 10); got != 33 {
 		t.Fatalf("own unit's bar = %d px on row 20, want 33 [03 R-FX-01 §6]", got)
 	}
@@ -180,6 +190,7 @@ func TestLabelWalkDrawsOnlyForTheViewingPlayer(t *testing.T) {
 	enemyOnly := &frame.Frame{Units: []frame.UnitView{{Owner: 1, X: world(40), Z: world(10), Health: 100, MaxHealth: 100, Group: 3}}}
 	enemyOnly.Selection.LocalPlayer = 0
 	c2.drawUnitLabels(enemyOnly, true)
+	c2.replayForTest()
 	for i, v := range c2.indexed {
 		if v != 0 {
 			t.Fatalf("another player's unit drew pixel %d = %d, want nothing [03 R-FX-01 §6]", i, v)

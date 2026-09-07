@@ -77,6 +77,7 @@ func TestUnitRowKeyIsWorldZNotScreenY(t *testing.T) {
 	c.drawProjectiles(cur)
 	c.drawEffects(cur)
 	c.drawWorldPassB(cur, true)
+	c.replayForTest()
 
 	want := []pool.Handle{1, 2, 3}
 	if len(c.selectionChrome) != len(want) {
@@ -128,6 +129,7 @@ func TestFeatureRowsInterleaveWithGroundedUnits(t *testing.T) {
 	clearIndexed(c)
 	c.drawFeaturePass(cur, true)
 	c.drawWorldPass(cur, true)
+	c.replayForTest()
 
 	if got := c.indexed[165*c.width+432]; got != 40 {
 		t.Fatalf("grounded unit over short feature: pixel = %d, want the unit's 40", got)
@@ -220,6 +222,7 @@ func TestFeaturePassesDoNotReadFog(t *testing.T) {
 	clearIndexed(c)
 	c.drawFeaturePass(cur, true)
 	c.drawWorldPass(cur, true)
+	c.replayForTest()
 
 	if got := c.indexed[165*c.width+432]; got != 50 {
 		t.Fatalf("short feature on a never-seen cell: pixel = %d, want the feature's 50", got)
@@ -258,6 +261,7 @@ func TestFeatureWindowAdmitsSpriteOverhang(t *testing.T) {
 	}
 	clearIndexed(c)
 	c.drawFeaturePass(cur, true)
+	c.replayForTest()
 
 	painted := 0
 	for i := range c.indexed {

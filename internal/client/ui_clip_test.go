@@ -16,6 +16,7 @@ func TestUIBlitClippedConfinesGAFToWindowSurface(t *testing.T) {
 	}
 	c := &Client{width: 8, height: 8, indexed: make([]byte, 64)}
 	c.UIBlitClipped(frame, 2, 2, 3, 3, 2, 2)
+	c.replayForTest()
 
 	for y := 0; y < c.height; y++ {
 		for x := 0; x < c.width; x++ {

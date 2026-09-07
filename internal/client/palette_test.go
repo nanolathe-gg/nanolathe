@@ -49,17 +49,23 @@ func TestUIShadeRectUsesSignedTables(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.indexed[0] = 7
+	c.resetListForTest()
 	c.UIShadeRect(tables, 0, 0, 1, 1, 5)
+	c.replayForTest()
 	if c.indexed[0] != 11 {
 		t.Fatalf("positive signed level used index %d, want LHT result 11", c.indexed[0])
 	}
 	c.indexed[0] = 7
+	c.resetListForTest()
 	c.UIShadeRect(tables, 0, 0, 1, 1, -19)
+	c.replayForTest()
 	if c.indexed[0] != 12 {
 		t.Fatalf("negative signed level used index %d, want SHD row 13 result 12", c.indexed[0])
 	}
 	c.indexed[0] = 7
+	c.resetListForTest()
 	c.UIShadeRect(tables, 0, 0, 1, 1, -33)
+	c.replayForTest()
 	if c.indexed[0] != 13 {
 		t.Fatalf("clamped negative level used index %d, want SHD row 0 result 13", c.indexed[0])
 	}

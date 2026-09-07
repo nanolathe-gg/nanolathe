@@ -472,8 +472,6 @@ func (s *Session) publishSnapshot(tick uint32) {
 				Pitch:     inst.Pitch,
 				DefName:   inst.Def.CanonicalKey,
 				Model:     inst.Def.Object,
-				Health:    inst.Health,
-				MaxHealth: inst.MaxHealth,
 				Status:    uint32(inst.Status),
 				IsBurning: inst.IsBurning,
 				IsSinking: inst.IsSinking,

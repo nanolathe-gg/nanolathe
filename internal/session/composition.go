@@ -2009,11 +2009,12 @@ func sessionUnitLimit(s *Session) int32 {
 	if s != nil && s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
 		return campaignUnitLimit(s.Mission)
 	}
-	// Skirmish battle entry copies the clamped configured `[Preferences]
-	// UnitLimit` over the session word [08 R-SKIR-01 §6]. It reaches the
-	// session on the setup record, whose Normalize applied the clamp; a
+	// Skirmish battle entry copies the configured `[Preferences] UnitLimit`
+	// over the session word verbatim — the entry copy has no clamp; the
+	// 20..500 clamp is the start-up profile read's alone [08 R-SKIR-01 §6]
+	// [08 R-SESS-01 §9]. It reaches the session on the setup record; a
 	// session composed without one (a fixture) reads the missing-value
-	// default through the same clamp.
+	// default.
 	//
 	// Closed (WU-19-214): the restored `Summary.maxunits` now reaches a
 	// second battle in one process. Retail's destination is traced exactly
@@ -2031,9 +2032,9 @@ func sessionUnitLimit(s *Session) int32 {
 	// `loadRetailSavePath` right after the save is staged and restored, so it
 	// lands before the setup record can feed a second battle entry.
 	if s == nil {
-		return int32(ClampUnitLimit(0))
+		return int32(unitLimitOrDefault(0))
 	}
-	return int32(ClampUnitLimit(s.Skirmish.UnitLimit))
+	return int32(unitLimitOrDefault(s.Skirmish.UnitLimit))
 }
 
 func sessionPathUnitLimit(s *Session) int32 {
@@ -2102,16 +2103,21 @@ func visibilityModeForSession(s *Session) visibility.Mode {
 	if s == nil {
 		return visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled | visibility.ModeTerrainRay
 	}
-	// Skirmish sessions honor the lobby mapping/LOS/LOSType fields.
+	// Skirmish battle entry writes the word's bits from the setup record's
+	// three fields as `0 = Mapping & 1`, `1 = LineOfSight & 1`,
+	// `2 = LineOfSightType & 1` — the low bit of each, not a non-zero test
+	// [08 R-SKIR-01 §2]. The lobby toggles only ever store 0 or 1, so the two
+	// readings differ for no reachable setup record; the low-bit form is
+	// kept because it is the traced one.
 	if s.Mission != nil && s.Mission.Type == mission.TypeSkirmish {
 		var m visibility.Mode
-		if s.Skirmish.Mapping != 0 {
+		if s.Skirmish.Mapping&1 != 0 {
 			m |= visibility.ModeHistoryEnabled
 		}
-		if s.Skirmish.LineOfSight != 0 {
+		if s.Skirmish.LineOfSight&1 != 0 {
 			m |= visibility.ModeCurrentEnabled
 		}
-		if s.Skirmish.LOSType != 0 {
+		if s.Skirmish.LOSType&1 != 0 {
 			m |= visibility.ModeTerrainRay
 		}
 		return m

@@ -31,6 +31,7 @@ func TestUIBlitAnchorCancelsBattleCallSiteOffset(t *testing.T) {
 	// TotalA's battle shell adds the authored offsets at the call site. Its raw
 	// rasterizer subtracts them, leaving the decoded pixel at the final origin.
 	c.UIBlitAnchor(frame, originX+int(frame.XOffset), originY+int(frame.YOffset))
+	c.replayForTest()
 
 	if got := c.indexed[originY*width+originX]; got != pixel {
 		t.Fatalf("pixel at final origin = %d, want %d", got, pixel)

@@ -13,15 +13,17 @@ func PlaySizeForMinimap(t *world.Terrain) (int32, int32) {
 	return hud.PlaySizeForMinimap(t)
 }
 
-// appendMinimapPoint records one framebuffer-clipped single-pixel write into the
-// batch, applying the same [0,width)x[0,height) guard the former putIndexed
+// appendMinimapPoint appends one framebuffer-clipped single-pixel write to the
+// point arena, applying the same [0,width)x[0,height) guard the former putIndexed
 // writer did: the PointPlain sink writes each recorded point unconditionally, so
-// out-of-bounds points must be dropped here to stay byte-identical (WU-1.7b).
-func (c *Client) appendMinimapPoint(pts []drawlist.Point, x, y int32, value byte) []drawlist.Point {
+// out-of-bounds points must be dropped here to stay byte-identical (WU-1.7b). The
+// batch is closed and recorded by emitPoints as a self-owned arena sub-slice
+// (WU-1.8).
+func (c *Client) appendMinimapPoint(x, y int32, value byte) {
 	if x < 0 || y < 0 || x >= int32(c.width) || y >= int32(c.height) {
-		return pts
+		return
 	}
-	return append(pts, drawlist.Point{X: x, Y: y, Index: value})
+	c.pointArena = append(c.pointArena, drawlist.Point{X: x, Y: y, Index: value})
 }
 
 // DrawMinimapLayout draws a radar surface through the canonical 126-pixel
@@ -47,13 +49,12 @@ func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 	if dw <= 0 || dh <= 0 {
 		return
 	}
-	// The radar surface is recorded as one plain single-pixel batch and executed
-	// inline through the classic sink, so it lands in per-frame order under the
-	// committed-frame list; the sampling and clip are unchanged from the direct
-	// putIndexed loop (docs/DESIGN_GPU_RENDERER.md §2.2)[03 R-MM-01 §1]. The batch
-	// reuses the shared point scratch, which is safe only because the transition
-	// executes each record inline.
-	pts := c.pointScratch[:0]
+	// The radar surface is recorded as one plain single-pixel batch that replays
+	// under the committed-frame list in per-frame order; the sampling and clip are
+	// unchanged from the direct putIndexed loop (docs/DESIGN_GPU_RENDERER.md
+	// §2.2)[03 R-MM-01 §1]. The batch is a self-owned sub-slice of the point arena,
+	// immutable for the frame (WU-1.8).
+	off := len(c.pointArena)
 	for y := int32(0); y < dh; y++ {
 		canvasY := y * camera.MinimapLongSide / dh
 		if canvasY < layout.PadY || canvasY > layout.Bottom() {
@@ -70,15 +71,11 @@ func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 			}
 			sx := (canvasX - layout.PadX) * int32(surf.W) / layout.W
 			if sx >= 0 && sx < int32(surf.W) {
-				pts = c.appendMinimapPoint(pts, dl+x, dt+y, surf.Bits[int(sy)*surf.W+int(sx)])
+				c.appendMinimapPoint(dl+x, dt+y, surf.Bits[int(sy)*surf.W+int(sx)])
 			}
 		}
 	}
-	c.pointScratch = pts
-	if len(pts) == 0 {
-		return
-	}
-	c.emitPoints(drawlist.Points{Kind: drawlist.PointPlain, Points: pts})
+	c.emitPoints(off, drawlist.PointPlain)
 }
 
 // DrawMinimapViewportRect strokes the camera-to-radar rectangle as a one-pixel
@@ -98,22 +95,22 @@ func (c *Client) DrawMinimapViewportRect(dst hud.Rect, marker hud.Rect, color by
 	if mr < dl || ml > dr || mb < dt || mt > db {
 		return
 	}
-	// The four inclusive edges are recorded as one plain single-pixel batch and
-	// executed inline, so the outline lands in per-frame order after the radar
-	// surface, exactly as retail strokes the rectangle over the copied surface
-	// (docs/DESIGN_GPU_RENDERER.md §2.2)[03 R-MM-01 §1]. Horizontal runs at top
-	// and bottom, vertical runs at left and right; the spans are inclusive and
-	// every pixel is clipped to the destination.
-	pts := c.pointScratch[:0]
+	// The four inclusive edges are recorded as one plain single-pixel batch that
+	// replays after the radar surface, exactly as retail strokes the rectangle over
+	// the copied surface (docs/DESIGN_GPU_RENDERER.md §2.2)[03 R-MM-01 §1].
+	// Horizontal runs at top and bottom, vertical runs at left and right; the spans
+	// are inclusive and every pixel is clipped to the destination. The batch is a
+	// self-owned sub-slice of the point arena, immutable for the frame (WU-1.8).
+	off := len(c.pointArena)
 	for x := ml; x <= mr; x++ {
 		if x < dl || x > dr {
 			continue
 		}
 		if mt >= dt && mt <= db {
-			pts = c.appendMinimapPoint(pts, x, mt, color)
+			c.appendMinimapPoint(x, mt, color)
 		}
 		if mb >= dt && mb <= db {
-			pts = c.appendMinimapPoint(pts, x, mb, color)
+			c.appendMinimapPoint(x, mb, color)
 		}
 	}
 	for y := mt; y <= mb; y++ {
@@ -121,17 +118,13 @@ func (c *Client) DrawMinimapViewportRect(dst hud.Rect, marker hud.Rect, color by
 			continue
 		}
 		if ml >= dl && ml <= dr {
-			pts = c.appendMinimapPoint(pts, ml, y, color)
+			c.appendMinimapPoint(ml, y, color)
 		}
 		if mr >= dl && mr <= dr {
-			pts = c.appendMinimapPoint(pts, mr, y, color)
+			c.appendMinimapPoint(mr, y, color)
 		}
 	}
-	c.pointScratch = pts
-	if len(pts) == 0 {
-		return
-	}
-	c.emitPoints(drawlist.Points{Kind: drawlist.PointPlain, Points: pts})
+	c.emitPoints(off, drawlist.PointPlain)
 }
 
 // CameraIntent is a presentation-only camera target. The client computes the

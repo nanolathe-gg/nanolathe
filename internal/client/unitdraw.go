@@ -278,17 +278,16 @@ func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, l
 		c.UIBlit(f, x, y)
 		return
 	}
-	// The palette rides the client scratch field to the sink; emitSprite runs the
-	// sink inline, so it is consumed before any later lit emit overwrites it, as
-	// UILightRect does (docs/DESIGN_GPU_RENDERER.md §2.2). The LHT level is an
+	// The palette rides the record (Sprite.Pal), so the deferred replay resolves
+	// the lit blit against exactly this palette (WU-1.8). The LHT level is an
 	// LHT-table row (LightLookup clamps to 0..31); it rides LightRow.
-	c.uiRectPal = pal
 	c.emitSprite(drawlist.Sprite{
 		Frame:    f,
 		X:        int32(x),
 		Y:        int32(y),
 		Kind:     drawlist.BlitLit,
 		LightRow: uint8(level),
+		Pal:      pal,
 	})
 }
 
@@ -522,13 +521,13 @@ func (c *Client) UILightRect(pal *palette.Tables, x, y, w, h, level int) {
 	if pal == nil || w <= 0 || h <= 0 {
 		return
 	}
-	// The palette rides the client scratch field to the sink; emitFill runs the
-	// sink inline, so it is consumed before any later lit/shade emit overwrites it.
-	c.uiRectPal = pal
+	// The palette rides the record (Fill.Pal), so the deferred replay resolves the
+	// light rect against exactly this palette (WU-1.8).
 	c.emitFill(drawlist.Fill{
 		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
 		Style: drawlist.FillLitRect,
 		Level: int32(level),
+		Pal:   pal,
 	})
 }
 
@@ -570,13 +569,13 @@ func (c *Client) UIShadeRect(pal *palette.Tables, x, y, w, h, level int) {
 	if c == nil || pal == nil || w <= 0 || h <= 0 {
 		return
 	}
-	// The palette rides the client scratch field to the sink; emitFill runs the
-	// sink inline, so it is consumed before any later lit/shade emit overwrites it.
-	c.uiRectPal = pal
+	// The palette rides the record (Fill.Pal), so the deferred replay resolves the
+	// shade rect against exactly this palette (WU-1.8).
 	c.emitFill(drawlist.Fill{
 		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)},
 		Style: drawlist.FillShadeRect,
 		Level: int32(level),
+		Pal:   pal,
 	})
 }
 

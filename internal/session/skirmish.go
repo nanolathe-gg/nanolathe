@@ -70,25 +70,30 @@ const (
 // configured limit over the session's unit-limit word, so a skirmish never
 // sees a map's `maxunits`; only a campaign keeps the OTA value
 // [08 R-SKIR-01 §6][05 R-SHARE-01 §7].
-const (
-	SkirmishDefaultUnitLimit = 250 // missing `UnitLimit` [08 R-SKIR-01 §6]
-	SkirmishMinUnitLimit     = 20  // below 20 becomes 20 [08 R-SKIR-01 §6]
-	SkirmishMaxUnitLimit     = 500 // above 500 becomes 500 [08 R-SKIR-01 §6]
-)
+//
+// The 20..500 clamp is the profile read's alone and lives with it, in
+// internal/settings (`MinUnitLimit`, `MaxUnitLimit`); this package sees the
+// word only after that read and copies it verbatim.
+const SkirmishDefaultUnitLimit = 250 // missing `UnitLimit` [08 R-SKIR-01 §6]
 
-// ClampUnitLimit applies retail's start-up clamp to a configured unit limit.
-// Zero is the missing-value sentinel — the legal range starts at 20, so no
-// stored choice can collide with it — and installs the default 250
-// [08 R-SKIR-01 §6].
-func ClampUnitLimit(v int) int {
+// unitLimitOrDefault is the copy every stage after the start-up read makes of
+// the configured unit limit: verbatim, no clamp. Retail clamps the word once,
+// when the profile file is read; skirmish battle entry then copies the
+// configured word into the session limit as it stands, and the save restore
+// that overwrites the configured word from `Summary.maxunits` applies no clamp
+// either, so a restored out-of-range value sizes the next battle's pool at
+// exactly that value [08 R-SESS-01 §9][08 R-SKIR-01 §6]. Only zero is
+// rewritten, and only because it is this build's missing-value sentinel for a
+// setup record composed without a profile (a fixture, the displayless
+// runner): the legal range starts at 20, so no stored choice collides with
+// it, and a retail-written save never carries 0 [08 R-SESS-01 §9].
+//
+// Correction: the two normalization entry points and the session copy used to
+// re-apply the start-up clamp here, so a restored value outside 20..500 was
+// pulled to the bound on its way into the second battle.
+func unitLimitOrDefault(v int) int {
 	if v == 0 {
 		return SkirmishDefaultUnitLimit
-	}
-	if v < SkirmishMinUnitLimit {
-		return SkirmishMinUnitLimit
-	}
-	if v > SkirmishMaxUnitLimit {
-		return SkirmishMaxUnitLimit
 	}
 	return v
 }
@@ -181,9 +186,11 @@ type SkirmishConfig struct {
 	// the unit pool — `limit × 10 + 1` records, exactly `limit` per slot
 	// [05 R-SHARE-01 §7] — and is read again by the AI's half-capacity term
 	// [08 R-AI-01 §13]. Zero means the value was absent; ApplyDefaults and
-	// Normalize install the default and the 20..500 clamp. No skirmish gadget
-	// edits it — it comes from the profile file, not the lobby screen
-	// [08 R-SKIR-01 §6].
+	// Normalize install the default and otherwise carry the value verbatim —
+	// the 20..500 clamp is applied once, when the profile file is read, and a
+	// restored save may legitimately carry a value outside it into the next
+	// battle [08 R-SESS-01 §9]. No skirmish gadget edits it — it comes from
+	// the profile file, not the lobby screen [08 R-SKIR-01 §6].
 	UnitLimit int
 
 	// Explicit battle RNG seeds [R-CORE-02] DET-01. Retail derives the sim
@@ -246,8 +253,9 @@ func (c *SkirmishConfig) ApplyDefaults() {
 	// The unit limit sits outside the rules-defaults guard on purpose: unlike
 	// the six scalars above, zero is not a choice a player can make — the
 	// legal range is 20..500 — so it is the missing-value sentinel on every
-	// call, and the clamp is idempotent [08 R-SKIR-01 §6].
-	c.UnitLimit = ClampUnitLimit(c.UnitLimit)
+	// call. The value itself is carried verbatim: the 20..500 clamp is the
+	// profile read's, not battle entry's [08 R-SKIR-01 §6][08 R-SESS-01 §9].
+	c.UnitLimit = unitLimitOrDefault(c.UnitLimit)
 	c.MapName = strings.TrimSpace(c.MapName)
 	n := c.NumPlayers
 	if n < 0 {
@@ -347,9 +355,10 @@ func (c *SkirmishConfig) Normalize() error {
 		n = 10
 	}
 	c.NumPlayers = n
-	// The configured unit limit and its 20..500 clamp; zero is the
-	// missing-value sentinel, never a choice [08 R-SKIR-01 §6].
-	c.UnitLimit = ClampUnitLimit(c.UnitLimit)
+	// The configured unit limit, verbatim; zero is the missing-value
+	// sentinel, never a choice, and the 20..500 clamp is the profile read's
+	// alone [08 R-SKIR-01 §6][08 R-SESS-01 §9].
+	c.UnitLimit = unitLimitOrDefault(c.UnitLimit)
 	// Clear inactive rows beyond NumPlayers to ensure inactive cannot affect result [GAP T14].
 	for i := n; i < 10; i++ {
 		c.Players[i] = SkirmishPlayer{}

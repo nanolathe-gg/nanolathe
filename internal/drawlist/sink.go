@@ -14,6 +14,9 @@ package drawlist
 // while their rectangles stay pairwise disjoint (C-G3, docs §2.3). It must not
 // reorder across families or cull beyond what the recorded walk already did.
 type Sink interface {
+	// Clear zeroes the indexed surface. It is the first command of every
+	// committed frame (WU-1.8).
+	Clear()
 	// Terrain replays one terrain blit.
 	Terrain(Terrain)
 	// Sprite replays one GAF-frame blit.

@@ -120,8 +120,12 @@ func (c *Client) finishStagedChild(child stagingChild) {
 		return
 	}
 	if child.model.raster != nil && child.model.raster.trace != nil {
-		child.model.raster.trace.resolve(child.model.raster, c.indexed, c.width, c.height)
-		child.model.raster.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
+		// The trace reads c.indexed after the staging body reaches the framebuffer,
+		// so it is recorded as a trace-only model command after the carrier's own
+		// command; replaying resolves it against the committed pixels exactly as the
+		// inline resolve did, without a direct read during the recording pass
+		// (WU-1.8).
+		c.emitModel(pendingModelCommit{m: child.model, trace: true})
 	}
 }
 
@@ -158,8 +162,13 @@ func (c *Client) composeChildModel(v frame.UnitView) (composedModel, bool) {
 	}
 	// A carried child's own shadow is still its own subject's business, and it
 	// is blitted to the framebuffer rather than into the staging image
-	// [R-REN-03D §1].
-	c.drawModelShadow(draw, m.image)
+	// [R-REN-03D §1]. It is recorded as a shadow-only model command here, before
+	// the carrier's own command, so replaying the frame writes the child shadows
+	// under the carrier body in the order the direct blits ran and the recording
+	// pass touches c.indexed nowhere (WU-1.8). The shadow reads the child's
+	// finished image, which the staging composite only reads and never mutates, so
+	// a deferred replay sees the same pixels the inline blit did.
+	c.emitModel(pendingModelCommit{m: m, shadow: true})
 	return m, true
 }
 

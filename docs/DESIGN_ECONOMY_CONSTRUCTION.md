@@ -263,9 +263,10 @@ node survive.
 ### 2.3 `internal/features`
 
 **Instance and catalog** (`service.go`). `Instance` is one live feature: its
-immutable definition, its anchor cell, a plot reference, health and reclaim
-progress, burn and animation state, and — for a 3D feature — a position and
-velocity. Retail's 48-byte record is identity, not layout; Go stores named
+immutable definition, its anchor cell, a plot reference, a 16-bit damage
+accumulator and reclaim progress, burn and animation state, and — for a 3D
+feature — a position and velocity. There is no health word: a feature never
+counts down. Retail's 48-byte record is identity, not layout; Go stores named
 fields [I13] `[05 "Feature instance and terrain cell"]`. The live-instance arena
 is 2,048 slots allocated once at map load and handed out by a free list; its
 occupants are exactly every 3D definition and every *active* sprite event
@@ -295,8 +296,15 @@ to the free sentinel `[05 "Removal and successor replacement"]`
 
 **Fire** (`burn.go`). `Ignite` is the ignition entry with its firestarter and
 damage gates and its countdown in ticks; `DamageFeature` is the damage entry
-`[05 R-FEAT-01 §8]` `[05 R-FEAT-01 §9]`. `burnTick` is the feature phase's
-animation pass in order: the burning branch advances the burn cursor, fires the
+`[05 R-FEAT-01 §8]` `[05 R-FEAT-01 §9]`. Damage is accumulated, never
+subtracted: a 3D instance adds each hit's `[DAMAGE] default` word into its
+`DamageAccumulator` with 16-bit wrap and dies when the definition's 16-bit
+`damage` is at or below it, unsigned (step 7) — the same word the 3D save
+record carries, so a reloaded wreck keeps its damage `[08 R-SAVE-FEATURE-01]`;
+a feature with no instance keeps its sum in the anchor cell's word, formed in
+32 bits and compared unsigned so a sum past 16 bits always dies (step 6); a
+sprite feature with a live event record discards the hit (step 8). `burnTick`
+is the feature phase's animation pass in order: the burning branch advances the burn cursor, fires the
 one-shot burn-weapon event at the footprint centre, and on every third global
 tick emits one smoke puff jittered against the current burn frame's geometry by
 two CRT draws; the non-burning branch advances a die or reclaim animation's main

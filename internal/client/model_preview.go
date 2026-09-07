@@ -103,6 +103,14 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 	c.width, c.height = opts.Width, opts.Height
 	c.indexed = make([]uint8, opts.Width*opts.Height)
 	c.rgba = make([]byte, opts.Width*opts.Height*4)
+	// The preview records the model into c.list and replays it once, the same
+	// record-then-replay the committed frame uses (WU-1.8). Reset the list, point
+	// arena and model-commit table first, then paint the background directly: the
+	// model command carries no clear, so the replay composes the model over the
+	// background exactly as the former inline drawUnitModel did.
+	c.list.Reset()
+	c.pointArena = c.pointArena[:0]
+	c.modelCommits = c.modelCommits[:0]
 	for i := range c.indexed {
 		c.indexed[i] = opts.Background
 	}
@@ -145,6 +153,8 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 		}
 		return nil, fmt.Errorf("nanolathe: rendering model preview: logical path %s, providers searched %s, expected drawable 3DO model", path, previewProviders(c.modelFS))
 	}
+	// Replay the recorded model commit into the indexed surface, then expand.
+	c.list.Replay(c.classicSink())
 	c.convertIndexedToRGBA()
 	out := image.NewRGBA(image.Rect(0, 0, opts.Width, opts.Height))
 	copy(out.Pix, c.rgba)

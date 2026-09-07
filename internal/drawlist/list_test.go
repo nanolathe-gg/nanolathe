@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/render"
 )
 
 // recorder is a Sink stub that appends a tag per call plus the last-seen values
@@ -14,6 +15,7 @@ type recorder struct {
 	lastFill   Fill
 }
 
+func (r *recorder) Clear()          { r.tags = append(r.tags, "clear") }
 func (r *recorder) Terrain(Terrain) { r.tags = append(r.tags, "terrain") }
 func (r *recorder) Sprite(c Sprite) { r.tags = append(r.tags, "sprite"); r.lastSprite = c }
 func (r *recorder) Glyphs(Glyphs)   { r.tags = append(r.tags, "glyphs") }
@@ -91,6 +93,55 @@ func TestResetKeepsCapacity(t *testing.T) {
 	}
 	if got := cap(l.fill); got != fillCap {
 		t.Fatalf("fill cap changed across Reset: got %d, want %d", got, fillCap)
+	}
+}
+
+// TestCloneDeepCopiesReusedArrays locks the WU-1.8 snapshot contract: Clone
+// must not alias any array the client reuses each frame — the point batches a
+// Points record sub-slices out of the client's point arena, the fog op lists,
+// and the surface pixel buffers. A ComposeFrameSnapshot hands the clone to a
+// caller who replays it after the client has moved on to the next frame and
+// overwritten those arrays, so a shallow copy would silently corrupt it.
+func TestCloneDeepCopiesReusedArrays(t *testing.T) {
+	// arena stands in for the client's reusable point arena; the Points record
+	// carries a three-index sub-slice of it, exactly as emitPoints records.
+	arena := []Point{{X: 1}, {X: 2}, {X: 3}}
+	var l List
+	l.RecordClear()
+	l.RecordPoints(Points{Kind: PointLit, Points: arena[0:2:2]})
+	l.RecordFog(Fog{Ops: []render.FogOp{{ScreenX0: 5}}})
+	l.RecordSurface(Surface{Pixels: []byte{9, 8, 7}, SrcW: 3, SrcH: 1})
+
+	clone := l.Clone()
+
+	// Overwrite every reused source the way the next frame's recording would.
+	arena[0].X = 99
+	l.fog[0].Ops[0].ScreenX0 = 99
+	l.surface[0].Pixels[0] = 42
+
+	if clone.points[0].Points[0].X != 1 {
+		t.Fatalf("clone point batch aliases the source arena: X=%d, want 1", clone.points[0].Points[0].X)
+	}
+	if clone.fog[0].Ops[0].ScreenX0 != 5 {
+		t.Fatalf("clone fog ops alias the source: ScreenX0=%d, want 5", clone.fog[0].Ops[0].ScreenX0)
+	}
+	if clone.surface[0].Pixels[0] != 9 {
+		t.Fatalf("clone surface pixels alias the source: [0]=%d, want 9", clone.surface[0].Pixels[0])
+	}
+	if len(clone.order) != len(l.order) {
+		t.Fatalf("clone order length = %d, want %d", len(clone.order), len(l.order))
+	}
+	// The clone replays the same command sequence.
+	var r recorder
+	clone.Replay(&r)
+	want := []string{"clear", "points", "fog", "surface"}
+	if len(r.tags) != len(want) {
+		t.Fatalf("clone replayed %v, want %v", r.tags, want)
+	}
+	for i := range want {
+		if r.tags[i] != want[i] {
+			t.Fatalf("clone command %d = %q, want %q", i, r.tags[i], want[i])
+		}
 	}
 }
 

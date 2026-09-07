@@ -237,6 +237,12 @@ is the one unrecoverable failure mode.
 - Modern Go, standard library first. Rendering/graphics/audio/window:
   [ebitengine](https://github.com/hajimehoshi/ebiten). Original assets live in
   `~/TotalAnnihilation` — use for development/testing, never commit.
+  Ebitengine ships its own agent skills at
+  [`hajimehoshi/ebiten/skills`](https://github.com/hajimehoshi/ebiten/tree/main/skills)
+  — `run-ebitengine-app-headless` and `writing-kage-shaders`. Read the
+  relevant one before headless-running the window build or writing a Kage
+  shader (both come up in the GPU renderer work,
+  [docs/DESIGN_GPU_RENDERER.md](docs/DESIGN_GPU_RENDERER.md)).
 - **Implement:** skirmish and mission/campaign (single-player): economy,
   construction, movement+pathfinding, visibility/LOS, weapons/projectiles/
   damage, COB VM, features/fire, AI (skirmish planner), GUI/HUD,

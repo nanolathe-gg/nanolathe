@@ -14,7 +14,6 @@ import (
 )
 
 type frameOrderUIStage struct {
-	seen  *byte
 	value byte
 }
 
@@ -28,10 +27,11 @@ func (s *frameAudioOutputSpy) PlaySample(_ *audio.Sample, volume, _ float64) err
 }
 
 func (s frameOrderUIStage) DrawUI(c *Client, _ UIFrame) {
-	if s.seen != nil {
-		*s.seen = c.indexed[0]
-	}
-	c.indexed[0] = s.value
+	// Record a one-pixel fill the way a production UI stage records its draws; the
+	// single deferred replay lands it after the fog composite, which is the [03 §1]
+	// ordering this test locks (WU-1.8). A UI stage no longer reads composed pixels
+	// during the recording pass — destination reads happen in the sink at replay.
+	c.UIFillRect(0, 0, 1, 1, s.value)
 }
 
 func TestFrameRefreshesAudioViewportBeforeDrain(t *testing.T) {
@@ -177,28 +177,49 @@ func TestCommittedFrameFogGateAndInterfacePrecedence(t *testing.T) {
 	if err := buf.Publish(1); err != nil {
 		t.Fatal(err)
 	}
-	c, err := New(Options{Buffer: buf, Width: 4, Height: 4})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Center the one fog cell at the shell origin: FogScreenRect places its
 	// rebased rectangle at (16-cam.X, 16-cam.Z) [03 §3.3].
-	c.SetCamera(&camera.Camera{X: 16, Z: 16, ViewW: 4, ViewH: 4, MapW: 16, MapH: 16})
-	c.pal = &palette.Tables{}
-	c.pal.Gray[0] = 123
-	seenByInterface := byte(0)
-	c.SetUIStage(frameOrderUIStage{seen: &seenByInterface, value: 77})
-	c.drawCommittedFrame(write, true)
-	if seenByInterface != 123 {
-		t.Fatalf("interface observed %d, want fog remap 123 before interface", seenByInterface)
+	newClient := func() *Client {
+		c, err := New(Options{Buffer: buf, Width: 4, Height: 4})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetCamera(&camera.Camera{X: 16, Z: 16, ViewW: 4, ViewH: 4, MapW: 16, MapH: 16})
+		c.pal = &palette.Tables{}
+		c.pal.Gray[0] = 123
+		return c
 	}
-	if got := c.indexed[0]; got != 77 {
-		t.Fatalf("interface pixel = %d, want 77 after fog/selection [03 §1]", got)
-	}
-	seenByInterface = 0
+
+	// [03 §1] item 10: fog is composited after the ten strips and before the
+	// interface. With no interface stage the never-explored viewport pixel keeps
+	// the fog gray remap of 0 -> Gray[0] = 123. Recording writes nothing; the
+	// single replay executes the whole frame (WU-1.8).
+	c := newClient()
 	c.drawCommittedFrame(write, true)
-	if seenByInterface != 123 {
-		t.Fatalf("interface did not observe fog pixel on every committed frame: %d", seenByInterface)
+	c.replayForTest()
+	if got := c.indexed[0]; got != 123 {
+		t.Fatalf("fog gray remap = %d, want 123 composited after the strips [03 §1]", got)
+	}
+
+	// The interface stage records its draws after the fog composite, so where it
+	// overlaps the fog its pixel wins. Had the interface drawn before the fog, the
+	// gray remap would have folded 77 through Gray[77] (0 here), not left it 77 —
+	// so 77 proves the fog-then-interface order of [03 §1].
+	c2 := newClient()
+	c2.SetUIStage(frameOrderUIStage{value: 77})
+	c2.drawCommittedFrame(write, true)
+	c2.replayForTest()
+	if got := c2.indexed[0]; got != 77 {
+		t.Fatalf("interface pixel = %d, want 77 drawn after the fog composite [03 §1]", got)
+	}
+
+	// Every committed frame reruns the composite: a repeat re-lands the fog and
+	// then the interface, not a stale surface.
+	c2.resetListForTest()
+	c2.drawCommittedFrame(write, true)
+	c2.replayForTest()
+	if got := c2.indexed[0]; got != 77 {
+		t.Fatalf("second committed frame interface pixel = %d, want 77 [03 §1]", got)
 	}
 }
 
@@ -209,11 +230,16 @@ func TestSelectionChromeKeepsFogWhenNoUnitBracketIsEmitted(t *testing.T) {
 	c.pal.Gray[0] = 123
 	f := &frame.Frame{Fog: frame.FogView{Valid: true, W: 1, H: 1, Ch0: []byte{0}, Ch1: []byte{15}}}
 	c.drawFog(f)
+	c.replayForTest()
 	if c.indexed[0] != 123 {
 		t.Fatalf("fog pixel = %d, want 123 before selection", c.indexed[0])
 	}
+	// Reset before the selection stage so its replay executes only that stage over
+	// the fogged surface, not the fog op a second time (WU-1.8).
+	c.resetListForTest()
 	c.selectionChrome = []selectionChrome{{view: frame.UnitView{Flags: hud.SelectionFlag, FootX: 1, FootZ: 1}, screenX: 8, screenY: 8}}
 	c.drawSelectionStage()
+	c.replayForTest()
 	if c.indexed[0] != 123 {
 		t.Fatalf("selection stage emitted an unsupported unit bracket over fog: got %d", c.indexed[0])
 	}

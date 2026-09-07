@@ -98,6 +98,7 @@ func TestCursorHotspotBlit(t *testing.T) {
 	}
 	c.in.Mouse.SetPosition(32, 32)
 	c.drawCursor()
+	c.replayForTest()
 	minX, minY, maxX, maxY := 64, 64, -1, -1
 	for y := 0; y < 64; y++ {
 		for x := 0; x < 64; x++ {
@@ -130,7 +131,9 @@ func TestCursorHotspotBlit(t *testing.T) {
 		c.indexed[i] = 0
 	}
 	cs.Hidden = true
+	c.resetListForTest()
 	c.drawCursor()
+	c.replayForTest()
 	for _, v := range c.indexed {
 		if v != 0 {
 			t.Fatal("hidden cursor still painted")

@@ -16,9 +16,11 @@ type snapshotUIStage struct {
 
 func (s *snapshotUIStage) DrawUI(c *Client, _ UIFrame) {
 	s.called++
-	for i := range c.indexed {
-		c.indexed[i] = s.fill
-	}
+	// Record a full-surface fill the way a production UI stage records its draws;
+	// the committed-frame replay lands it as the former direct write did (WU-1.8).
+	// A UI stage that wrote c.indexed directly here would be wiped by the frame
+	// clear at replay, which is exactly what the record-only flip forbids.
+	c.UIFillRect(0, 0, c.width, c.height, s.fill)
 }
 
 func snapshotCursor(index uint8) *Cursors {

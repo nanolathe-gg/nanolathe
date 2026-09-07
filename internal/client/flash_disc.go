@@ -233,7 +233,7 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 	if d == nil || d.Side <= 0 {
 		return false
 	}
-	pts := c.pointScratch[:0]
+	off := len(c.pointArena)
 	for row := 0; row < d.Side; row++ {
 		py := cy + row - d.Offset
 		if py < 0 || py >= c.height {
@@ -257,13 +257,13 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 			// carries the row and the sink folds the destination pixel through it
 			// [03 §4.3.1][03 R-FX-01 §4].
 			level := int(b) - 0x4F
-			pts = append(pts, drawlist.Point{X: int32(px), Y: int32(py), Index: uint8(level)})
+			c.pointArena = append(c.pointArena, drawlist.Point{X: int32(px), Y: int32(py), Index: uint8(level)})
 		}
 	}
-	c.pointScratch = pts
-	if len(pts) == 0 {
+	if len(c.pointArena) == off {
 		return false
 	}
-	c.emitPoints(drawlist.Points{Kind: drawlist.PointLit, Points: pts})
+	// The batch is a self-owned arena sub-slice, immutable for the frame (WU-1.8).
+	c.emitPoints(off, drawlist.PointLit)
 	return true
 }

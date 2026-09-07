@@ -47,6 +47,7 @@ func composeStockModel(t *testing.T, pal *palette.Tables, fs *vfs.FS, name strin
 	if !c.drawModel(draw, 0, 1, modelCursorUnit, nil, 0) {
 		t.Fatalf("%s composed no geometry", name)
 	}
+	c.replayForTest()
 	return c.indexed, w, h
 }
 

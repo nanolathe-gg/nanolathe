@@ -182,6 +182,7 @@ func TestCalculatedFlashDrawsUnderTheArt(t *testing.T) {
 	if stats.Sprites != 0 {
 		t.Fatalf("an impact with no art drew a sprite: %+v", stats)
 	}
+	c.replayForTest()
 	touched := 0
 	for _, p := range c.indexed {
 		if p != 0 {
@@ -260,6 +261,7 @@ func TestStripFillParticleDraws(t *testing.T) {
 		X:         numeric.Fixed(20 << 16), Y: 0, Z: numeric.Fixed(20 << 16),
 	}
 	stats := c.DrawEffectViews([]frame.EffectView{view}, c.effectDrawOptions())
+	c.replayForTest()
 	if stats.Sprites != 1 || stats.Skipped != 0 {
 		t.Fatalf("a filling strip particle drew %+v, want one sprite", stats)
 	}

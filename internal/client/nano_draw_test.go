@@ -22,6 +22,7 @@ func TestNanolatheParticleMarkIsTwoByTwo(t *testing.T) {
 		vis.Visible[i] = 1
 	}
 	c.drawNanolathe(&frame.Frame{Tick: 1, Visibility: vis})
+	c.replayForTest()
 	painted := 0
 	for _, px := range c.indexed {
 		if px == 0xa3 {
@@ -117,6 +118,7 @@ func TestNanolatheSprayPaintsOverTheUnitBeingBuilt(t *testing.T) {
 			c.drawProjectiles(cur)
 			c.drawEffects(cur)
 			c.drawWorldPassB(cur, true)
+			c.replayForTest() // one recording pass, one replay, in production order (WU-1.8)
 
 			got := probe(c)
 			if onNanoRamp(got) != tc.wantSpray {

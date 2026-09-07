@@ -56,7 +56,6 @@ func TestFeatureLifecycleBurnSinkAndReclaim(t *testing.T) {
 	treeInstance.IsBurning = true
 	treeInstance.BurnCountdown = 1
 	treeInstance.BurnDuration = 1
-	treeInstance.Health = tree.Damage
 	s.Features.SetBurnAnimationTicks(func(*content.FeatureDef) int32 { return 10 })
 	s.Features.TickLifecycle(1)
 	unitDef := cat.Units["armcom"]

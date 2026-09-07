@@ -9,24 +9,26 @@ import (
 )
 
 // TestSkirmishConfigUnitLimitDefaults locks the configured limit's
-// missing-value default and retail's start-up clamp [08 R-SKIR-01 §6]. Zero is
-// the absent sentinel: the legal range starts at 20, so no stored choice can
-// collide with it.
+// missing-value default and the verbatim copy every stage after the start-up
+// read makes of it [08 R-SKIR-01 §6][08 R-SESS-01 §9]. Zero is the absent
+// sentinel: the legal range starts at 20, so no stored choice can collide
+// with it. The 20..500 clamp is the profile read's and is locked in
+// internal/settings.
 func TestSkirmishConfigUnitLimitDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		in, want int
 	}{
 		{0, SkirmishDefaultUnitLimit},
-		{-5, SkirmishMinUnitLimit},
-		{19, SkirmishMinUnitLimit},
+		{-5, -5},
+		{19, 19},
 		{20, 20},
 		{250, 250},
 		{500, 500},
-		{501, SkirmishMaxUnitLimit},
-		{100000, SkirmishMaxUnitLimit},
+		{501, 501},
+		{100000, 100000},
 	} {
-		if got := ClampUnitLimit(tc.in); got != tc.want {
-			t.Errorf("ClampUnitLimit(%d) = %d, want %d", tc.in, got, tc.want)
+		if got := unitLimitOrDefault(tc.in); got != tc.want {
+			t.Errorf("unitLimitOrDefault(%d) = %d, want %d", tc.in, got, tc.want)
 		}
 	}
 
@@ -47,13 +49,27 @@ func TestSkirmishConfigUnitLimitDefaults(t *testing.T) {
 		t.Fatalf("DirectSkirmishConfig UnitLimit = %d, want %d", direct.UnitLimit, SkirmishDefaultUnitLimit)
 	}
 
-	clamped := DirectSkirmishConfig("m")
-	clamped.UnitLimit = 9000
-	if err := clamped.Normalize(); err != nil {
+	// Past the start-up read the word is copied verbatim: neither
+	// normalization entry point nor the session copy re-applies the clamp,
+	// so a restored `Summary.maxunits` outside 20..500 reaches the next
+	// battle as it stands [08 R-SESS-01 §9].
+	carried := DirectSkirmishConfig("m")
+	carried.UnitLimit = 9000
+	if err := carried.Normalize(); err != nil {
 		t.Fatalf("Normalize: %v", err)
 	}
-	if clamped.UnitLimit != SkirmishMaxUnitLimit {
-		t.Fatalf("Normalize UnitLimit = %d, want %d", clamped.UnitLimit, SkirmishMaxUnitLimit)
+	if carried.UnitLimit != 9000 {
+		t.Fatalf("Normalize UnitLimit = %d, want the verbatim 9000", carried.UnitLimit)
+	}
+	carried.ApplyDefaults()
+	if carried.UnitLimit != 9000 {
+		t.Fatalf("ApplyDefaults UnitLimit = %d, want the verbatim 9000", carried.UnitLimit)
+	}
+	if got := sessionUnitLimit(&Session{Skirmish: carried}); got != 9000 {
+		t.Fatalf("sessionUnitLimit = %d, want the verbatim 9000", got)
+	}
+	if got := sessionUnitLimit(&Session{}); got != SkirmishDefaultUnitLimit {
+		t.Fatalf("sessionUnitLimit(absent) = %d, want %d", got, SkirmishDefaultUnitLimit)
 	}
 }
 

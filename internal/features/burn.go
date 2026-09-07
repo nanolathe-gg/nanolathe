@@ -689,21 +689,43 @@ func (s *Service) DamageFeature(cx, cz int, damage int32) bool {
 	if def.Indestructible {
 		return false
 	}
-	// If cell has instance attached and object-based, damage accumulates on instance.
+	// Both accumulating branches take the weapon's `[DAMAGE] default` as the
+	// 16-bit word retail stores it in [02 "Weapon record"]; the compiled int32
+	// is that word sign-extended, so uint16(damage) is the stored word exactly.
+	// The definition's `damage` is likewise a stored 16-bit word [02 "Feature
+	// record"], and every compare below is unsigned against it.
+	hit := uint16(damage)
+	threshold := uint16(def.Damage)
+
+	// Step 7 of [05 R-FEAT-01 §8]: a 3D definition always carries an instance,
+	// and the hit accrues on the instance's own accumulator with 16-bit wrap;
+	// the death transition fires when `damage <= accumulator`, unsigned. It is
+	// an ACCUMULATOR, not a countdown: the stamp zeroes it, so `damage = 0`
+	// dies on the first hit of any strength, a negative default is added as its
+	// wrapped word, and a sum that wraps past 65535 keeps only the low 16 bits
+	// and may fall back below the threshold. The save carries this word at
+	// 0x06..0x07 and restores it after the stamp [08 R-SAVE-FEATURE-01], which
+	// is why a partly damaged wreck reloads partly damaged.
 	if inst, ok := s.instances[idx]; ok && inst != nil {
 		if inst.Def != nil && inst.Def.Object != "" {
-			inst.Health -= damage
-			if inst.Health <= 0 {
+			inst.DamageAccumulator += hit
+			if threshold <= inst.DamageAccumulator {
 				s.RemoveFeatureAt(cx, cz, CauseDead)
 				return true
 			}
 			return false
 		}
 	}
-	// Otherwise damage accumulates on cell's AnchorWord [02 "Terrain file"].
-	// Attachment clears accumulator role, so two never simultaneous.
-	acc := int32(cell.AnchorWord()) + damage
-	if acc >= def.Damage {
+	// Step 6 of [05 R-FEAT-01 §8]: no instance, so the running sum lives in
+	// the anchor cell's word [02 "Terrain file"] (attachment repurposes that
+	// word as the slot index, so the two are never live together). The sum is
+	// formed in 32 bits from the two zero-extended 16-bit words and compared
+	// unsigned against the definition's 16-bit `damage`: only a sum strictly
+	// below the threshold is stored back (truncated to the word), so a sum
+	// that exceeds 16 bits always dies — unlike the instance branch, this one
+	// never wraps — and a negative default counts as its unsigned word.
+	sum := uint32(hit) + uint32(cell.AnchorWord())
+	if sum >= uint32(threshold) {
 		s.RemoveFeatureAt(cx, cz, CauseDead)
 		return true
 	}
@@ -724,6 +746,6 @@ func (s *Service) DamageFeature(cx, cz int, damage int32) bool {
 	if anchorIdx < 0 || anchorIdx >= len(s.Terrain.Plot) {
 		return false
 	}
-	s.Terrain.Plot[anchorIdx].SetAnchorWord(uint16(acc))
+	s.Terrain.Plot[anchorIdx].SetAnchorWord(uint16(sum))
 	return false
 }

@@ -15,6 +15,7 @@ func TestUIBlitFrameSourceRectScaledUsesInclusiveInterior(t *testing.T) {
 	}
 	c := &Client{width: 3, height: 1, indexed: make([]byte, 3)}
 	c.UIBlitFrameSourceRectScaledClipped(frame, 1, 1, 3, 1, 0, 0, 3, 1, 0, 0, 3, 1)
+	c.replayForTest()
 
 	for x, want := range []byte{11, 12, 13} {
 		if got := c.indexed[x]; got != want {

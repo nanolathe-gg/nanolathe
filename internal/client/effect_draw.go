@@ -241,7 +241,7 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 	if row > 31 {
 		row = 31
 	}
-	pts := c.pointScratch[:0]
+	off := len(c.pointArena)
 	r2 := radius * radius
 	for dy := -radius; dy <= radius; dy++ {
 		py := cy + dy
@@ -259,16 +259,13 @@ func (c *Client) drawLHTHalo(cx, cy, radius, level int, terrainCoverage func(x, 
 			if !terrainCoverage(px, py) {
 				continue
 			}
-			pts = append(pts, drawlist.Point{X: int32(px), Y: int32(py), Index: uint8(row)})
+			c.pointArena = append(c.pointArena, drawlist.Point{X: int32(px), Y: int32(py), Index: uint8(row)})
 		}
 	}
-	c.pointScratch = pts
-	if len(pts) == 0 {
-		return
-	}
 	// The disc brightens the terrain already composed under it; record the level
-	// and let the sink fold each pixel through the LHT row [03 §4.3.1].
-	c.emitPoints(drawlist.Points{Kind: drawlist.PointLit, Points: pts})
+	// and let the sink fold each pixel through the LHT row [03 §4.3.1]. The batch
+	// is a self-owned arena sub-slice, immutable for the frame (WU-1.8).
+	c.emitPoints(off, drawlist.PointLit)
 }
 
 // fillStripParticle draws one strip sub-record of a filling family: the

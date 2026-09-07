@@ -101,6 +101,7 @@ func TestStripBarrierDrawsBothFormsAtTheirOwnSlot(t *testing.T) {
 	if stats := c.drawStripBarrier(cur, 2); stats.Filled != 1 || stats.Blitted != 0 || stats.Unresolved != 0 {
 		t.Fatalf("strip 2 drew %+v, want one filled record", stats)
 	}
+	c.replayForTest()
 	filled := 0
 	for _, p := range c.indexed {
 		if p == 0x67 {
@@ -117,10 +118,14 @@ func TestStripBarrierDrawsBothFormsAtTheirOwnSlot(t *testing.T) {
 		t.Fatal("strip 2 drew a record belonging to another barrier")
 	}
 
-	// The puff's barrier: the tinted blit writes the frame's own indices.
+	// The puff's barrier: the tinted blit writes the frame's own indices. Reset
+	// the list first so the replay executes only this barrier's record over the
+	// surface the strip-2 replay already composed.
+	c.resetListForTest()
 	if stats := c.drawStripBarrier(cur, 9); stats.Blitted != 1 || stats.Filled != 0 || stats.Unresolved != 0 {
 		t.Fatalf("strip 9 drew %+v, want one blitted record", stats)
 	}
+	c.replayForTest()
 	if got := c.indexed[20*c.width+20]; got != 0x41 {
 		t.Fatalf("the puff's first frame put %#x at its projected point, want the frame's own pixel", got)
 	}
@@ -130,6 +135,7 @@ func TestStripBarrierDrawsBothFormsAtTheirOwnSlot(t *testing.T) {
 	advanced.Frame = 1
 	c2 := stripTestClient(t)
 	c2.drawStripBarrier(stripTestFrame(true, advanced), 9)
+	c2.replayForTest()
 	if got := c2.indexed[20*c2.width+20]; got != 0x51 {
 		t.Fatalf("cursor 1 drew %#x, want the entry's second frame", got)
 	}
@@ -139,6 +145,7 @@ func TestStripBarrierDrawsBothFormsAtTheirOwnSlot(t *testing.T) {
 	if stats := c3.drawStripBarrier(stripTestFrame(true), 9); stats != (StripDrawStats{}) {
 		t.Fatalf("an empty strip channel drew %+v", stats)
 	}
+	c3.replayForTest()
 	if stripPainted(c3) != 0 {
 		t.Fatal("an empty strip channel painted pixels")
 	}
@@ -250,6 +257,7 @@ func TestCommittedFrameDrawsStripObjectsAtTheirBarrier(t *testing.T) {
 		c := stripTestClient(t)
 		c.buffer = buf
 		c.drawCommittedFrame(write, true)
+		c.replayForTest() // drawCommittedFrame records; the replay is the single execution (WU-1.8)
 		return c
 	}
 

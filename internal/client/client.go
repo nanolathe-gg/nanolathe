@@ -69,21 +69,6 @@ type Client struct {
 	// its backing arrays and allocates nothing.
 	list drawlist.List
 
-	// uiRectPal carries the palette a converted UILightRect/UIShadeRect resolves
-	// against from the emit site to the classic sink. drawlist.Fill cannot hold a
-	// *palette.Tables (its additive change is Fill.Level only), and every caller
-	// passes the palette SetPalette installed, so the emit records the geometry
-	// and level and the sink reads the palette here. Like the emitPoints scratch
-	// slice this is safe ONLY because the WU-1.3..WU-1.6 transition executes each
-	// record inline: the field is written immediately before emitFill and read by
-	// the sink before the next lit/shade emit overwrites it, so a deferred Replay
-	// never observes a stale value (docs/DESIGN_GPU_RENDERER.md §2.2).
-	// TODO(question): a standalone Replay of a list holding several lit/shade
-	// fills with differing palettes cannot use one scratch field; WU-1.6+ must
-	// carry the palette per record (a client-side table like modelCommits, or a
-	// dedicated record field) — settled once the list is replayed off-frame.
-	uiRectPal *palette.Tables
-
 	// modelCommits is the per-frame client-side table drawlist.Model.Ref indexes:
 	// one entry per composed model subject in record order, holding what the
 	// classic executor needs to run that subject's shadow, body blit and trace.
@@ -137,12 +122,16 @@ type Client struct {
 	worldBuckets worldBuckets
 	fogCache     *visibility.FogCache
 	fogOps       []presentationrender.FogOp
-	// pointScratch is the reused backing slice for one emitted Points batch (the
-	// LHT halo and the calculated flash disc). Reusing it across emits is safe
-	// only because the transition executes each record inline, so a later batch's
-	// overwrite is never observed by a deferred Replay [PLAN_GPU "Transition
-	// mechanism"].
-	pointScratch    []drawlist.Point
+	// pointArena is this frame's backing store for every recorded Points batch
+	// (the LHT halo, the calculated flash disc, the minimap surface and its
+	// viewport rectangle). Each emitPoints batch is appended here and recorded as
+	// a three-index sub-slice arena[off:end:end]; the capped bound forces any
+	// later append to reallocate rather than overwrite an already-recorded batch,
+	// so every batch is immutable for the life of the frame and safe under
+	// deferred replay (WU-1.8). It is reset to [:0] in lockstep with c.list at the
+	// top of composeIndexed, and its capacity is retained so a warm frame
+	// allocates nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
+	pointArena      []drawlist.Point
 	selectionChrome []selectionChrome
 	selectionDrag   SelectionDrag
 	// rendererTraceSink is nil for the normal presentation path. When enabled,
@@ -569,6 +558,14 @@ type ComposedFrameSnapshot struct {
 	Tick          uint32
 	Indexed       []uint8
 	RGBA          []byte
+	// List is a deep copy of the committed-frame draw list this composition
+	// recorded, in the order Clear, all draws, Cursor, Expand (WU-1.8). It is the
+	// same list the classic sink just replayed into Indexed/RGBA, so a caller can
+	// replay it through another sink (the GPU executor and tools/framediff) and
+	// compare. The copy owns its arrays — the client reuses the live list's
+	// backing store each frame — so it stays valid after the next composition
+	// [C-G1][03 §2.4].
+	List drawlist.List
 }
 
 // composeCurrentFrame runs the same one-pass committed-frame composition used
@@ -577,12 +574,15 @@ type ComposedFrameSnapshot struct {
 // documented Buffer.Current reader lifetime [03 §2.4][I6].
 func (c *Client) composeCurrentFrame() *frame.Frame {
 	cur := c.buffer.Current()
+	// The recording pass writes nothing to c.indexed: composeIndexed records the
+	// clear and every world/interface draw, drawCursor records the cursor, and
+	// the expansion marker is recorded last. Replaying the whole list once through
+	// the classic sink is the single execution — Clear, all draws, Cursor, Expand
+	// in record order (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
 	c.composeIndexed(cur, cur != nil)
 	c.drawCursor() // cursor last, over the composed surface [07 §8]
-	// During the WU-1.3..WU-1.6 transition each converted family emits (records
-	// + executes inline); the expansion is the last such emit and there is no
-	// standalone Replay (docs/DESIGN_GPU_RENDERER.md §2.2, C-G8).
-	c.emitExpand()
+	c.list.RecordExpand()
+	c.list.Replay(c.classicSink())
 	return cur
 }
 
@@ -611,6 +611,9 @@ func (c *Client) ComposeFrameSnapshot() ComposedFrameSnapshot {
 		Committed: cur != nil,
 		Indexed:   append([]uint8(nil), c.indexed...),
 		RGBA:      append([]byte(nil), c.rgba...),
+		// A deep copy so the caller's list survives the next composition, which
+		// reuses the live list's backing arrays (WU-1.8).
+		List: c.list.Clone(),
 	}
 	if cur != nil {
 		snapshot.Tick = cur.Tick

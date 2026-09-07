@@ -40,6 +40,7 @@ func TestProjectileShadowUsesCachedFloorNotProjectileHeight(t *testing.T) {
 	if !c.drawProjectileShadow(shadowSprite(77), v) {
 		t.Fatal("shadow was not drawn for a record with a cached floor height")
 	}
+	c.replayForTest()
 
 	// The expected pen is the ordinary projection with the floor standing in
 	// for the height: X = 100, row = 100 - (40>>1) = 80.

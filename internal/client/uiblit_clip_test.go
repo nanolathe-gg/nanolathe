@@ -63,6 +63,7 @@ func TestUIBlitClippedMatchesPerPixelWalk(t *testing.T) {
 				got := newUIBlitClient(t)
 				uiBlitClippedReference(want, f, p[0], p[1], clip[0], clip[1], clip[2], clip[3])
 				got.UIBlitClipped(f, p[0], p[1], clip[0], clip[1], clip[2], clip[3])
+				got.replayForTest()
 				for i := range want.indexed {
 					if want.indexed[i] != got.indexed[i] {
 						t.Fatalf("frame %s at (%d,%d) clip %v: pixel (%d,%d) = %d, per-pixel walk wrote %d",
@@ -127,6 +128,7 @@ func TestUIBlitClippedShortArraysStopAtTheData(t *testing.T) {
 	c := newUIBlitClient(t)
 	base := append([]uint8(nil), c.indexed...)
 	c.UIBlitClipped(f, 10, 10, 0, 0, 64, 64)
+	c.replayForTest()
 	for row := 0; row < 6; row++ {
 		for col := 0; col < 4; col++ {
 			i := row*4 + col

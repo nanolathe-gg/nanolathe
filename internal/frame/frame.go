@@ -241,8 +241,6 @@ type FeatureView struct {
 	Pitch        uint16
 	DefName      string
 	Model        string
-	Health       int32
-	MaxHealth    int32
 	Status       uint32
 	IsBurning    bool
 	IsSinking    bool

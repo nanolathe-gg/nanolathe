@@ -12,6 +12,7 @@ func TestSelectionDragUsesNormalizedInclusiveFramesAndPaletteMap(t *testing.T) {
 	c.pal.Logical[0] = 99
 	c.SetSelectionDrag(SelectionDrag{Active: true, VisiblePanel: true, StartX: 132, StartY: 36, EndX: 130, EndY: 34})
 	c.drawSelectionStage()
+	c.replayForTest()
 
 	// Endpoints are sorted per axis, and both endpoints are written. The
 	// inset is [131,35]..[131,35], so the single inner pixel is deliberate.
@@ -51,6 +52,7 @@ func TestSelectionDragOuterEntryFollowsTheArmedLatch(t *testing.T) {
 			d.StartX, d.StartY, d.EndX, d.EndY = 140, 40, 144, 44
 			c.SetSelectionDrag(d)
 			c.drawSelectionStage()
+			c.replayForTest()
 			if got := c.indexed[40*c.width+140]; got != tc.want {
 				t.Fatalf("outer edge = %d, want mapped logical %d -> %d", got, tc.outer, tc.want)
 			}
@@ -67,6 +69,7 @@ func TestSelectionDragClipsToVisiblePanelAndClearsBetweenFrames(t *testing.T) {
 	c.pal.Logical[0] = 0
 	c.SetSelectionDrag(SelectionDrag{Active: true, VisiblePanel: true, StartX: 120, StartY: 20, EndX: 132, EndY: 40})
 	c.drawSelectionStage()
+	c.replayForTest()
 	if got := c.indexed[32*c.width+127]; got != 0 {
 		t.Fatalf("pixel outside visible-panel clip changed to %d", got)
 	}
@@ -82,6 +85,7 @@ func TestSelectionDragClipsToVisiblePanelAndClearsBetweenFrames(t *testing.T) {
 
 	c.SetSelectionDrag(SelectionDrag{})
 	c.composeIndexed(nil, false)
+	c.replayForTest() // composeIndexed records the clear; the replay executes it
 	if got := c.indexed[32*c.width+128]; got != 0 {
 		t.Fatalf("stale drag pixel after inactive frame = %d, want cleared", got)
 	}
@@ -93,6 +97,7 @@ func TestSelectionDragDegenerateInnerWritesNoInnerFrame(t *testing.T) {
 	c.pal.Logical[0] = 9
 	c.SetSelectionDrag(SelectionDrag{Active: true, VisiblePanel: true, StartX: 140, StartY: 40, EndX: 141, EndY: 41})
 	c.drawSelectionStage()
+	c.replayForTest()
 	for _, p := range [][2]int{{140, 40}, {141, 40}, {140, 41}, {141, 41}} {
 		if got := c.indexed[p[1]*c.width+p[0]]; got != 4 {
 			t.Fatalf("degenerate inner changed edge %v to %d, want outer 4", p, got)
@@ -115,12 +120,15 @@ func TestSelectionDragDrawsWithThePanelAwayFromItsVisibleDetent(t *testing.T) {
 	}
 	c.SetSelectionDrag(SelectionDrag{Active: true, StartX: 140, StartY: 40, EndX: 144, EndY: 44})
 	c.drawSelectionStage()
+	c.replayForTest()
 	if got := c.indexed[40*c.width+140]; got != 4 {
 		t.Fatalf("drag with the panel off its detent emitted pixel %d, want outer entry 15 -> physical 4", got)
 	}
 	// The clip is unchanged too: a pixel left of column 128 stays untouched.
+	c.resetListForTest()
 	c.SetSelectionDrag(SelectionDrag{Active: true, StartX: 120, StartY: 40, EndX: 124, EndY: 44})
 	c.drawSelectionStage()
+	c.replayForTest()
 	if got := c.indexed[40*c.width+120]; got != 77 {
 		t.Fatalf("drag left of the viewport clip wrote pixel %d, want the clip to reject it", got)
 	}

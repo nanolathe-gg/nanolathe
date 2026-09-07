@@ -167,7 +167,7 @@ func TestPieceParentChildComposition(t *testing.T) {
 	// drawUnitModel projects around unit position; we expect child's triangle to be drawn offset.
 	// Instead of trusting sx,sy, we call drawUnitModel with lerped view at 0,0.
 	// Unit at 0,0 => screen origin is camera.OriginX/Y.
-	if !c.drawUnitModel(view, sx, sy) {
+	if !c.drawUnitModelReplay(view, sx, sy) {
 		t.Fatalf("drawUnitModel failed")
 	}
 	// Expected model-space position of the child's local origin after
@@ -196,13 +196,13 @@ func TestPieceParentChildComposition(t *testing.T) {
 		},
 	}
 	sx2, sy2 := c.cam.WorldToScreen(view2.X, view2.Y, view2.Z)
-	if !c.drawUnitModel(view2, sx2, sy2) {
+	if !c.drawUnitModelReplay(view2, sx2, sy2) {
 		t.Fatalf("drawUnitModel second failed")
 	}
 	h1 := hashIndexed(c) // after second draw with 0 script
 	// Need first hash again: redraw first.
 	clearIndexed(c)
-	c.drawUnitModel(view, sx, sy)
+	c.drawUnitModelReplay(view, sx, sy)
 	hScript := hashIndexed(c)
 	if hScript == h1 {
 		t.Fatalf("parent-child translation via script lane did not change framebuffer: hashes equal %d", hScript)
@@ -210,7 +210,7 @@ func TestPieceParentChildComposition(t *testing.T) {
 	// Also verify authored translation alone is present: with zero script the
 	// triangle sits at model (10,0,5), screen offset (+10,-5) from the anchor.
 	clearIndexed(c)
-	c.drawUnitModel(view2, sx2, sy2)
+	c.drawUnitModelReplay(view2, sx2, sy2)
 	found2 := false
 	for _, b := range c.indexed {
 		if b == 42 {
@@ -244,7 +244,7 @@ func TestHiddenPieceAbsent(t *testing.T) {
 	}
 	clearIndexed(c)
 	sx, sy := c.cam.WorldToScreen(view.X, view.Y, view.Z)
-	c.drawUnitModel(view, sx, sy)
+	c.drawUnitModelReplay(view, sx, sy)
 	// Count colors.
 	count11, count22, total := 0, 0, 0
 	for _, b := range c.indexed {
@@ -276,7 +276,7 @@ func TestHiddenPieceAbsent(t *testing.T) {
 		},
 	}
 	clearIndexed(c)
-	c.drawUnitModel(view2, sx, sy)
+	c.drawUnitModelReplay(view2, sx, sy)
 	count11, count22 = 0, 0
 	for _, b := range c.indexed {
 		if b == 11 {
@@ -314,7 +314,7 @@ func TestFlareFlashPolicy(t *testing.T) {
 	}
 	clearIndexed(c)
 	sx, sy := c.cam.WorldToScreen(viewVisible.X, viewVisible.Y, viewVisible.Z)
-	c.drawUnitModel(viewVisible, sx, sy)
+	c.drawUnitModelReplay(viewVisible, sx, sy)
 	hasFlare := false
 	for _, b := range c.indexed {
 		if b == 44 {
@@ -333,7 +333,7 @@ func TestFlareFlashPolicy(t *testing.T) {
 		},
 	}
 	clearIndexed(c)
-	c.drawUnitModel(viewHidden, sx, sy)
+	c.drawUnitModelReplay(viewHidden, sx, sy)
 	hasFlare = false
 	for _, b := range c.indexed {
 		if b == 44 {
@@ -376,13 +376,13 @@ func TestTurretRotationChangesPixels(t *testing.T) {
 	}
 	clearIndexed(c)
 	sx, sy := c.cam.WorldToScreen(view0.X, view0.Y, view0.Z)
-	c.drawUnitModel(view0, sx, sy)
+	c.drawUnitModelReplay(view0, sx, sy)
 	hash0 := hashIndexed(c)
 	// also capture sha for debugging
 	sha0 := sha256.Sum256(c.indexed)
 	clearIndexed(c)
 	sx2, sy2 := c.cam.WorldToScreen(view90.X, view90.Y, view90.Z)
-	c.drawUnitModel(view90, sx2, sy2)
+	c.drawUnitModelReplay(view90, sx2, sy2)
 	hash90 := hashIndexed(c)
 	sha90 := sha256.Sum256(c.indexed)
 	if hash0 == hash90 {
@@ -413,12 +413,12 @@ func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
 	// Draw with c1
 	clearIndexed(c1)
 	sx, sy := c1.cam.WorldToScreen(view.X, view.Y, view.Z)
-	c1.drawUnitModel(view, sx, sy)
+	c1.drawUnitModelReplay(view, sx, sy)
 	hash1 := hashIndexed(c1)
 	// Draw with c2
 	clearIndexed(c2)
 	sx2, sy2 := c2.cam.WorldToScreen(view.X, view.Y, view.Z)
-	c2.drawUnitModel(view, sx2, sy2)
+	c2.drawUnitModelReplay(view, sx2, sy2)
 	hash2 := hashIndexed(c2)
 	if hash1 != hash2 {
 		t.Fatalf("same snapshot should yield identical framebuffer: %d vs %d", hash1, hash2)
@@ -428,7 +428,7 @@ func TestSameSnapshotIdenticalFramebuffer(t *testing.T) {
 	}
 	// Also draw again on c1 after clear should be identical.
 	clearIndexed(c1)
-	c1.drawUnitModel(view, sx, sy)
+	c1.drawUnitModelReplay(view, sx, sy)
 	hash1b := hashIndexed(c1)
 	if hash1 != hash1b {
 		t.Fatalf("second draw on same client should be identical: %d vs %d", hash1, hash1b)

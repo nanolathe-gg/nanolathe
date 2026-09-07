@@ -98,7 +98,10 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// [08 R-ENTRY-01 §6].
 	poolRecords := int(campaignUnitLimit(m))
 	if sessionKind == sessionKindSkirmish {
-		poolRecords = ClampUnitLimit(deps.UnitLimit)
+		// Verbatim: the configured word was clamped when the profile was
+		// read, and a value a previous restore carried into it is used as it
+		// stands [08 R-SESS-01 §9].
+		poolRecords = unitLimitOrDefault(deps.UnitLimit)
 	}
 	// A restored campaign runs under the same unit restriction a fresh one
 	// does. Battle entry's unit-restriction loader is kind 1 only, and it runs

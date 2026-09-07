@@ -253,8 +253,10 @@ func (c *Client) composeUnits(t *testing.T, base *frame.Frame, units []frame.Uni
 	for i := range c.indexed {
 		c.indexed[i] = 0
 	}
+	c.resetListForTest()
 	c.drawWorldPass(one, true)
 	c.drawWorldPassB(one, true)
+	c.replayForTest()
 	return append([]uint8(nil), c.indexed...)
 }
 
