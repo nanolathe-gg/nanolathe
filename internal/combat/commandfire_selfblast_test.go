@@ -331,13 +331,10 @@ func TestNullShooterBlastMatchesNobody(t *testing.T) {
 		t.Fatalf("a null-shooter blast spared a unit: shooter %d neighbour %d; null matches nobody [06 R-DMG-01 §9]",
 			shooter.Health, neighbour.Health)
 	}
-	// The record has no attacker, so its side byte is the neutral value 10 —
-	// the never-occupied eleventh row [06 §9.1][06 §6.5] — and the kind byte is
-	// recorded regardless. Cause 1 with attacker side 10 is exactly the
-	// combination that files the victim's loss and credits nobody: every kill
-	// clause of [06 §12.1] requires a side that is not 10.
-	if shooter.LastDamageSide != NeutralSide {
-		t.Fatalf("a null-shooter record stamped side %d, want the neutral side %d; it credits nobody [06 R-DMG-01 §9][06 §12.1]", shooter.LastDamageSide, NeutralSide)
+	// A null attacker leaves the prior side snapshot untouched; only the kind
+	// byte is unconditional [06 §9.1][06 R-WPN-04 §2].
+	if shooter.LastDamageSide != 9 {
+		t.Fatalf("a null-shooter record rewrote side %d, want prior side 9 [06 R-WPN-04 §2]", shooter.LastDamageSide)
 	}
 	if Cause(shooter.LastDamageCause) != CauseOrdinary {
 		t.Fatalf("a null-shooter record left cause %d; the kind byte is recorded unconditionally [06 §9.1]", shooter.LastDamageCause)
@@ -348,12 +345,12 @@ func TestNullShooterBlastMatchesNobody(t *testing.T) {
 		AttackerSide: shooter.LastDamageSide,
 		// The finalizer supplies AttackerPresent from the cause; the side is
 		// what decides credit here [06 §12.1].
-		AttackerPresent: true,
+		AttackerPresent: false,
 	})
 	if !credit.VictimLoss {
 		t.Fatal("a null-shooter kill filed no victim loss; cause 1 takes the full path [06 §12.1]")
 	}
 	if credit.AttackerKill || credit.AttackerCommanderKill {
-		t.Fatal("a null-shooter kill credited an attacker; side 10 fails every kill clause [06 §12.1]")
+		t.Fatal("a null-shooter packet must not synthesize attacker credit [06 R-WPN-04 §2]")
 	}
 }

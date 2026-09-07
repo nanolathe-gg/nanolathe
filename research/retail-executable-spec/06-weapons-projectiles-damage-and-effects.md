@@ -2894,9 +2894,11 @@ simulation RNG. This is feature-fire spread, not beam or lightning chaining.
 
 **Established fact:** The projectile phase runs once per simulation tick, after
 the unit phase and before the meteor scheduler `[01 §4.4]`. It walks the pool in
-ascending index order from index 0 to the live count minus one, re-reading the
-live count each iteration, and finishes by running the compaction pass of §5.2
-exactly once. A record whose remaining burst count is nonzero takes the
+ascending index order over the active count captured once at phase entry.
+Each visit consumes one position in that captured span; appending a projectile
+does not extend the current pass. The phase finishes by running the compaction
+pass of §5.2 exactly once over the then-current count, including new records.
+A record whose remaining burst count is nonzero takes the
 burst-expansion path of §4.3 *instead of* motion; only a record with a zero
 remaining burst count is on the ordinary motion path.
 

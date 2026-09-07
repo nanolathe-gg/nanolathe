@@ -13,6 +13,7 @@ type Cause uint8 // [06 §12.1]
 
 const (
 	CauseOrdinary          Cause = 1  // ordinary weapon damage [06 §12.1]
+	CauseParalyzer         Cause = 2  // paralyzer packet [06 §10]
 	CauseSelfDestruct      Cause = 3  // self-destruct countdown [06 §12.1]
 	CauseCapture           Cause = 4  // capture/owner replacement [06 §12.1]
 	CauseReclaim           Cause = 5  // reclaim/build-complete pulse [06 §12.1]

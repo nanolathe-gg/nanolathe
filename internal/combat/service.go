@@ -1958,7 +1958,6 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		return muzzleWorldPosResolved(su, int32(piece))
 	}
 	// ON-04 stable lookup for burst params: use once-compiled index deterministically
-	s.AdvanceBursts(tick, simRNG, s.weaponLookupFor(catalog), muzzleForBurst)
 	// [06 §6.4] ballistic/dropped drift: adds all three global wind values directly to position
 	var windVec Vec3
 	var gravity numeric.Fixed
@@ -1995,7 +1994,7 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	guidance := GuidanceEnv{
 		Projectile: func(h pool.Handle) *Projectile {
 			idx := int(h) - 1
-			if idx < 0 || idx >= len(s.Records) || idx >= s.Slots.Count() {
+			if idx < 0 || idx >= len(s.Records) {
 				return nil
 			}
 			return &s.Records[idx]
@@ -2013,8 +2012,8 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	for i := 0; i < entry; i++ {
 		h := pool.Handle(i + 1)
 		p := &s.Records[i]
-		isDead := s.Slots.IsDead(h)
 		if p.BurstRemaining > 0 {
+			s.advanceBurstAt(i, tick, simRNG, s.weaponLookupFor(catalog), muzzleForBurst)
 			continue
 		}
 		var weapon *content.WeaponDef
@@ -2024,14 +2023,12 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			}
 		}
 		if weapon == nil {
-			if !isDead {
-				s.MarkDead(h)
-			}
+			s.MarkDead(h)
 			continue
 		}
-		if isDead {
-			continue
-		}
+		// [06 §5.1] has no top-of-visit dead filter. A record retired earlier
+		// in this tick still takes its ordinary branch before tail compaction.
+		preMotionY := int16(p.Pos.Y.Raw() >> 16)
 		var res AdvanceResult
 		switch MotionFamilyForWeapon(weapon) {
 		case MotionDirect:
@@ -2055,24 +2052,31 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			// the projectile phase's impact branch]. Only the expiry
 			// retirement puffs: steering-failure and nil-record retires
 			// never reach their expiry deadline.
-			if !weapon.BurnBlow && tick >= p.ExpiryTick {
+			if MotionFamilyForWeapon(weapon) == MotionBallistic && !weapon.BurnBlow && tick >= p.ExpiryTick {
 				s.emitEvent(Event{Kind: EventTrailSmoke, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos})
 			}
 			s.MarkDead(h)
 			continue
 		}
 		if res == AdvanceImpact {
-			handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, false)
-			s.MarkDead(h)
+			var direct pool.Handle
+			if terrain != nil {
+				cx, cz := world.WorldToCell(p.Pos.X), world.WorldToCell(p.Pos.Z)
+				direct = contactUnitInCell(p, w, terrain, cx, cz)
+			}
+			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, direct)
 			continue
 		}
 		if res == AdvancePhaseTransition {
 			continue
 		}
-		hitUnit, hitFeature, isWaterTerrain, isOffMap, bounce := checkCollision(p, weapon, w, terrain, featSvc)
-		if bounce {
-			continue
+		// The linked-projectile test is the first contact-ladder operation.
+		// Its impact may retire records and append effects, so run it before
+		// inspecting the cell contacts that follow [06 §8.1][06 §11.2].
+		if projectileProximityContact(s, p, weapon) {
+			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, 0)
 		}
+		hitUnit, hitFeature, isWaterTerrain, isOffMap, terrainContact, _ := checkCollision(p, weapon, w, terrain, featSvc)
 		if isOffMap {
 			s.MarkDead(h)
 			continue
@@ -2086,24 +2090,13 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			needImpact = true
 		} else if isWaterTerrain {
 			needImpact = true
+		} else if terrainContact {
+			needImpact = true
 		} else {
-			if terrain != nil {
-				cellX := world.WorldToCell(p.Pos.X)
-				cellZ := world.WorldToCell(p.Pos.Z)
-				if cellX >= 0 && cellZ >= 0 && cellX < terrain.CellW && cellZ < terrain.CellH {
-					th := terrain.HeightAt(p.Pos.X, p.Pos.Z)
-					if th.Raw() != -1 && p.Pos.Y.Raw() < th.Raw() {
-						needImpact = true
-					}
-				}
-			}
 		}
 		if needImpact {
-			isWater := isWaterTerrain && directTarget == 0
-			handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, isWater)
-			if NoExplodeRetirement(weapon.NoExplode, true, isOffMap, false) {
-				s.MarkDead(h)
-			}
+			_ = isWaterTerrain // central impact classifies the contacted cell.
+			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, directTarget)
 		}
 		// Trail puffs: the smoke-trail flag plus smoke delay, ALIVE records
 		// only, never burst parents, past the next-trail deadline. The
@@ -2112,9 +2105,12 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		// [06 §13.2][R-STRIP-01 §1 strip 9, the projectile phase's
 		// trail-window branch]. A visit that just impacted marked the
 		// record dead, which skips the puff.
-		if weapon.SmokeTrail && p.BurstRemaining == 0 && !s.Slots.IsDead(h) && tick >= p.SmokeDeadline {
+		if weapon.SmokeTrail && p.BurstRemaining == 0 && !s.Slots.IsDead(h) && tick < p.ExpiryTick && p.SmokeDeadline < tick {
 			s.emitEvent(Event{Kind: EventTrailSmoke, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos})
 			p.SmokeDeadline += uint32(weapon.SmokeDelay)
+		}
+		if !s.Slots.IsDead(h) {
+			emitWaterCrossing(s, h, p, weapon, terrain, tick, preMotionY)
 		}
 		_ = directTarget
 		_ = hitFeature
@@ -2122,7 +2118,17 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 	s.Compact(nil)
 }
 
-func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, bounce bool) {
+func projectileProximityContact(s *Service, p *Projectile, weapon *content.WeaponDef) bool {
+	if s == nil || p == nil || weapon == nil || p.TargetProjectile == 0 {
+		return false
+	}
+	// Guidance links address the raw backing arena. They are neither active
+	// pool handles nor targetability references [06 §5.2][06 §8.1].
+	idx := int(p.TargetProjectile) - 1
+	return idx >= 0 && idx < len(s.Records) && ProjectileInInterceptorBlast(p.Pos, s.Records[idx].Pos, weapon.AreaOfEffect)
+}
+
+func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, terrainContact bool, bounce bool) {
 	if terrain != nil {
 		cx := world.WorldToCell(p.Pos.X)
 		cz := world.WorldToCell(p.Pos.Z)
@@ -2148,14 +2154,11 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			hitUnit = hit
 			return
 		}
-		// Step 5 of the ladder, the units-only early return, has no reader
-		// here: `WeaponDef.UnitsOnly` is compiled but nothing consults it, so a
-		// `unitsonly` weapon that misses both unit slots still falls through to
-		// feature, terrain, bounce and water below, where [06 §8.1] would have
-		// it return. The gate only becomes expressible now that the unit slots
-		// precede those steps; wiring it needs a "kept flying" result the
-		// caller's own terrain fallback also honours, which is a change to
-		// TickProjectiles' contract rather than to this ladder.
+		// A units-only miss leaves the projectile flying. It must not continue
+		// into feature, ground, bounce, or water handling [06 §8.1].
+		if weapon != nil && weapon.UnitsOnly {
+			return
+		}
 		// Step 6 [06 §8.1]: feature resolution. The cached cell pair is
 		// consulted ONLY once a feature resolves and its height test passes
 		// [R-DMG-01 §13]: a matching pair cancels this feature's impact and
@@ -2171,35 +2174,39 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 			p.CacheCellX, p.CacheCellZ = cache[0], cache[1]
 			return !suppressed
 		}
-		if featSvc != nil {
-			if inst := featSvc.InstanceAt(int(cx), int(cz)); inst != nil && inst.Def != nil {
-				top := inst.Y.Add(numeric.Fixed(int64(16) * 65536))
-				if p.Pos.Y.Raw() < top.Raw() && featureContact() {
-					hitFeature = inst
-					return
-				}
+		if cell := terrain.PlotAt(cx, cz); cell != nil && !cell.IsEmpty() {
+			ax, az := int(cx), int(cz)
+			if cell.IsFringe() {
+				ax += int(cell.AnchorDXSigned())
+				az += int(cell.AnchorDZSigned())
 			}
-		} else if terrain != nil {
-			if featIdx := terrain.Plot[int(cz)*int(terrain.CellW)+int(cx)].Feature(); featIdx < 0xFFFF && featIdx != 0xFFFE {
-				base := terrain.CoarseHeightAt(cx, cz)
-				top := base.Add(numeric.Fixed(int64(16) * 65536))
-				if p.Pos.Y.Raw() < top.Raw() && featureContact() {
-					hitFeature = &features.Instance{CX: int(cx), CZ: int(cz)}
-					return
+			if defIdx, ok := world.ResolveFeature(terrain.Plot, int(terrain.CellW), int(terrain.CellH), ax, az); ok {
+				if def, ok := terrain.FeatureDefAt(defIdx); ok && def != nil {
+					top := int16(int32(cell.MinHeight()) + int32(uint8(def.Height)))
+					if int16(p.Pos.Y.Raw()>>16) < top && featureContact() {
+						if featSvc != nil {
+							hitFeature = featSvc.InstanceAt(ax, az)
+						}
+						if hitFeature == nil {
+							hitFeature = &features.Instance{CX: ax, CZ: az, Def: def}
+						}
+						return
+					}
 				}
 			}
 		}
-		th := terrain.HeightAt(p.Pos.X, p.Pos.Z)
-		if th.Raw() != -1 && p.Pos.Y.Raw() < th.Raw() {
+		cell := terrain.PlotAt(cx, cz)
+		if cell != nil && int16(p.Pos.Y.Raw()>>16) < int16(cell.MinHeight()) {
 			if weapon != nil && weapon.GroundBounce {
 				p.Velocity.Y = numeric.Fixed(int64(-(p.Velocity.Y.Raw() >> 2)))
 				bounce = true
 				return
 			}
+			terrainContact = true
 			return
 		}
-		sea := terrain.SeaLevelWorld()
-		if p.Pos.Y.Raw() < sea.Raw() {
+		sea := int16(terrain.SeaLevel)
+		if int16(p.Pos.Y.Raw()>>16) < sea {
 			if weapon != nil && !weapon.WaterWeapon {
 				isWaterTerrain = true
 				return
@@ -2286,11 +2293,28 @@ func contactBand(u *units.Unit) (lower, upper int32) {
 	return lower, lower + top
 }
 
-func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, wind Vec3, simRNG *rng.Simulation, isWaterTerrain bool) {
+// impactProjectile is the live central-impact boundary. The direct recipient is
+// a collision result, not the projectile's retained guidance reference.
+func impactProjectile(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, wind Vec3, simRNG *rng.Simulation, directUnit pool.Handle) {
+	// Central impact sets the ordinary dead bit before effects and the
+	// interceptor sweep. That makes a nested interceptor scan observe this
+	// exploder as retired, rather than recursively selecting it again.
+	if weapon != nil && NoExplodeRetirement(weapon.NoExplode, true, false, false) {
+		s.MarkDead(h)
+	}
+	handleProjectileImpact(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, wind, simRNG, directUnit)
+}
+
+func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, econ *economy.Service, catalog *content.Catalog, tick uint32, wind Vec3, simRNG *rng.Simulation, directUnit pool.Handle) {
 	if weapon == nil {
 		return
 	}
-	hasDirectTarget := p.TargetUnit != 0
+	hasDirectTarget := directUnit != 0
+	isWaterTerrain := impactCellIsWater(terrain, p.Pos)
+	if s != nil && s.OpaqueLiquidMode && isWaterTerrain && !hasDirectTarget {
+		s.MarkDead(h)
+		return
+	}
 	// Impact presentation is part of the concrete projectile path. Keep the
 	// researched order visible here: shake, impact sound, end smoke or
 	// explosion, then the impact event and authoritative damage [06 §13.2].
@@ -2335,12 +2359,31 @@ func handleProjectileImpact(s *Service, h pool.Handle, p *Projectile, weapon *co
 			})
 		}
 	}
-	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: p.TargetUnit, Position: p.Pos})
-	applyProjectileDamage(s, p, weapon, w, terrain, tick, hasDirectTarget)
+	s.emitEvent(Event{Kind: EventProjectileImpact, Tick: tick, Source: p.Shooter, Target: directUnit, Position: p.Pos})
+	applyProjectileDamage(s, p, weapon, w, terrain, tick, directUnit)
+	// Projectile victims are swept after ordinary area recipients, before tail
+	// compaction, and each takes this same central selector [06 §11.2].
+	if weapon.Interceptor && catalog != nil {
+		// This scan deliberately observes the live pool on each iteration.
+		// A nested central impact can retire a later victim or append another
+		// record, both of which affect the remainder of this sweep [06 §11.2].
+		for i := 0; i < s.Count(); i++ {
+			victim := pool.Handle(i + 1)
+			if victim == h || !s.Alive(victim) || !ProjectileInInterceptorBlast(s.Records[i].Pos, p.Pos, weapon.AreaOfEffect) {
+				continue
+			}
+			vw, ok := catalog.WeaponByID(s.Records[i].WeaponID)
+			if !ok || vw == nil {
+				s.MarkDead(victim)
+				continue
+			}
+			impactProjectile(s, victim, &s.Records[i], vw, w, terrain, featSvc, econ, catalog, tick, wind, simRNG, 0)
+		}
+	}
 	_ = wind
 }
 
-func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, tick uint32, hasDirectTarget bool) {
+func applyProjectileDamage(service *Service, p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, tick uint32, directUnit pool.Handle) {
 	if w == nil || weapon == nil {
 		return
 	}
@@ -2356,8 +2399,8 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	if !service.DamageRoutingAdmitted(p.ShooterSide) {
 		return
 	}
-	if hasDirectTarget && weapon.AreaOfEffect <= 16 && p.TargetUnit != 0 {
-		victim := w.Unit(p.TargetUnit)
+	if directUnit != 0 && weapon.AreaOfEffect <= 16 {
+		victim := w.Unit(directUnit)
 		if victim != nil {
 			applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
 		}
@@ -2365,8 +2408,8 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	}
 	radius := BlastRadius(weapon.AreaOfEffect)
 	if radius <= 0 {
-		if hasDirectTarget && p.TargetUnit != 0 {
-			if victim := w.Unit(p.TargetUnit); victim != nil {
+		if directUnit != 0 {
+			if victim := w.Unit(directUnit); victim != nil {
 				applyDamageToUnit(service, victim, p, weapon, 1.0, 0, w, tick)
 			}
 		}
@@ -2375,6 +2418,32 @@ func applyProjectileDamage(service *Service, p *Projectile, weapon *content.Weap
 	// Shared area splash: EnumerateArea→DistanceToBox→Falloff→ApplyDamage [06 §9.3]
 	// Extracted to ExplodeWeaponAt for death DoExplosion reuse [06 §12.1] C22–C25 (I1, I2)
 	service.ExplodeWeaponAt(w, terrain, weapon, p.Pos, p.Shooter, tick)
+}
+
+// impactCellIsWater uses the contacted plot's neighbourhood maximum byte, the
+// same classification central impact and the crossing effect share [06 §9.1].
+func impactCellIsWater(terrain *world.Terrain, pos Vec3) bool {
+	if terrain == nil {
+		return false
+	}
+	cx, cz := world.WorldToCell(pos.X), world.WorldToCell(pos.Z)
+	cell := terrain.PlotAt(cx, cz)
+	return cell != nil && cell.MaxHeight() < terrain.SeaLevel
+}
+
+// emitWaterCrossing is presentation-only: a live projectile crossing down
+// through sea can show water art but never sound, damage, or retires [06 §7.3].
+func emitWaterCrossing(s *Service, h pool.Handle, p *Projectile, weapon *content.WeaponDef, terrain *world.Terrain, tick uint32, preY int16) {
+	if s == nil || p == nil || weapon == nil || terrain == nil || s.OpaqueLiquidMode {
+		return
+	}
+	postY := int16(p.Pos.Y.Raw() >> 16)
+	sea := int16(terrain.SeaLevel)
+	if preY <= sea || postY > sea || !impactCellIsWater(terrain, p.Pos) {
+		return
+	}
+	bank, graphic := impactArt(weapon, true, terrain)
+	s.emitEvent(Event{Kind: EventWaterExplosion, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos, Graphic: graphic, Bank: bank, HasCalculatedFlash: true, CalculatedTable: impactFlashTable, Smoke: weapon.StartSmoke})
 }
 
 // ExplodeWeaponAt is the shared authoritative area-damage entry point for
@@ -2581,7 +2650,10 @@ func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon
 		if cand == nil || !cand.Alive || cand.Dying {
 			continue
 		}
-		p := &Projectile{Pos: impact, Shooter: shooter} // synthetic projectile for damage pipeline [06 §9.1]
+		p := &Projectile{Pos: impact, Shooter: shooter, ShooterSide: NeutralSide} // synthetic projectile for damage pipeline [06 §9.1]
+		if attacker := w.Unit(shooter); attacker != nil {
+			p.ShooterSide = attacker.Owner
+		}
 		applyDamageToUnit(s, cand, p, weapon, vi.falloff, vi.dist, w, tick)
 	}
 }
@@ -2658,7 +2730,11 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	// record's shooter from its own blast enumeration before this site is
 	// reached. Any later known weapon intake clears a stale reclaim bite
 	// marker, including paralyzer packets that do not reduce health [06 §9.1].
-	victim.LastDamageCause = uint8(CauseOrdinary)
+	cause := CauseOrdinary
+	if weapon.Paralyzer {
+		cause = CauseParalyzer
+	}
+	victim.LastDamageCause = uint8(cause)
 	// The recorded-attacker link of [04 R-UNIT-06 §5 part 1], which §5 gives as
 	// an implementation rule: on every damage application that passes the
 	// dispatcher's gates, when the packet is not a heal and the attacker id is
@@ -2677,21 +2753,17 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	if p.Shooter != 0 && victim.Alive && !victim.Dying {
 		victim.EngagementTarget = p.Shooter
 	}
-	if shooter != nil {
-		victim.LastDamageSide = shooter.Owner
-	} else {
-		// A null-shooter record's side byte IS the neutral value 10 — the
-		// never-occupied eleventh row [06 §9.1][06 §6.5] — and cause 1's full
-		// credit path then files the victim's loss and credits nobody, because
-		// every kill clause of [06 §12.1] requires an attacker side that is not
-		// 10. Retail reaches the same state by leaving the field alone and
-		// relying on the spawn seed of neutral 10 [06 R-WPN-04 §2]; this build's
-		// unit records seed it to zero (internal/units, outside this unit's
-		// files), which would credit player 0 for every meteor kill, so the
-		// record's own side byte is written here instead. The two differ only
-		// for a victim that had already taken a real hit before the
-		// null-shooter one, where retail keeps the stale snapshot.
-		victim.LastDamageSide = NeutralSide
+	if p.Shooter != 0 {
+		// The serialized attacker id is authoritative even when its slot is
+		// stale; a null attacker leaves both provenance fields untouched.
+		// TODO(question): units.World needs RawUnitAt(pool.Handle), a backing-
+		// slot lookup that does not apply Unit's alive filter, so this owner
+		// read matches the recorded-attacker path after an attacker has died.
+		// EC-03 must define how a released backing slot is represented.
+		victim.LastDamageSide = p.ShooterSide
+		if shooter != nil {
+			victim.LastDamageSide = shooter.Owner
+		}
 	}
 	if weapon.Paralyzer {
 		// Stun eligibility is three tests in this order [06 §10]:

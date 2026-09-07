@@ -2859,7 +2859,7 @@ The exhaustive patch helper scans a precomputed metal-patch record vector within
 
 Water legality is per cell, with the definition's own depth fields: the footprint blocker — used by the exhaustive helper and by the validator's building branch — applies the waterline band to the footprint's yard-bit heights, and the validator's mobile branch tests every cell's low and high height against the same band ([R-AI-03 §3], [R-AI-03 §4]). There is no water-only extractor filter.
 
-Failed exhaustive helper does not fall through to the scatter helper; it returns failure for the entire placement attempt. Success requires the yard and occupancy validator to report placeable; missing yard data is not treated as permissive. The scatter helper's limit check is established as the product above, and the exhaustive helper contributes no random draws while the scatter helper contributes only the draws counted per trial. The selector's single draw is the only random draw on the extractor path when the candidate is non-extractor. [P0-03] [lane 08 placement score and water]
+Failed exhaustive helper does not fall through to the scatter helper; it returns failure for the entire placement attempt. Success requires the yard and occupancy validator to report placeable; missing yard data is not treated as permissive. The scatter helper's limit check is established as the product above, and the exhaustive helper contributes no random draws while the scatter helper contributes only the draws counted per trial. Candidate selection consumes the per-positive-option draws of [R-AI-01 §8]. The separate extractor/scatter choice and each scatter trial consume their own draws as described above. [P0-03] [lane 08 placement score and water]
 
 RNG sites for AI planning are the outer 30 gate, the cumulative weighted reservoir, the extractor selector with bound 255, the positioning scatter with bounds up to the current radius and 65536, the unit-loss throttle (deadline is current tick plus 30 plus a draw bounded 300), the strategic-state constructor (eight draws at setup, in order: 10, 3, then the two land-set offset draws bounded by the drawn region widths, then 20, 3, then the two water-set offset draws — these seed the region and offset words the scatter helper later reads, [R-AI-03 §4]), the eco toggle with bound five, the explore task (deadline draw bounded 900, plus body draws bounded 2 and the map-dimension fractions), and the rally task (deadline draw bounded 150, drift-seed gate bounded 10, two drift draws bounded 65536, and score-comparison draws bounded by the score values). The wave, regroup, and merge bodies draw nothing; the throttle, constructor, and task-body draws above complete the inventory. Separately, the session package's skirmish commander-respawn path (commander-death rule value two) draws twice per placement trial (map-width and map-height bounds) with up to 9999 trials. [P0-01] [P0-02] [P0-03] [lane 08 RNG inventory]
 
@@ -2938,7 +2938,7 @@ score = trunc((other * otherMix
              + energy * energyMix) * weight / 10000)
 ```
 
-Scores at or below zero are excluded **without drawing**. The remaining positive scores are selected in authored build-option order by cumulative weighted reservoir selection using one simulation-random draw bounded by the running positive total.
+Scores at or below zero are excluded **without drawing**. For each positive score in authored build-option order, add it to the running total and invoke the simulation-random helper with that bound. Replace the selected candidate when the returned signed value is strictly less than the current candidate score. Bounds below two do not advance the stream [01 §7.1].
 
 A post-selection filter then compares the **selected** definition's authored `side` string against the **builder's own `side`** string and discards the whole selection when they differ, with no re-draw and no runner-up; the full contract, including the wasted draw a cross-side build list causes, is in [R-AI-01 §8]. [08 "Placement root and search helpers"]
 
@@ -3514,19 +3514,26 @@ for unit in group vector order:
         submit it with queue modifier 0
 ```
 
-* `probeIsOnKnownGround` has two forms selected by a global option word. When
-  the option's second bit is set, the probe's map cell — `cellX = (probe.x >> 16) >> 5`
-  and `cellZ = ((probe.z >> 16) - ((probe.y >> 16) >> 1)) >> 5`, each taken from
-  the coordinate's signed high half, with the usual height-shear projection
-  [03 §2.1] — is bounds-checked against the **owning player's** explored-terrain
-  grid and accepted when that cell's byte is non-zero. Otherwise the same cell
-  index is looked up in the **global per-cell visibility word** and accepted when
-  the bit for the **local viewing slot** is set. The second form makes the
-  computer player's rally search depend on the local viewer, which is a
-  determinism hazard in a networked session; single-player is unaffected because
-  the local slot is the only human. The identity of the global option bit is
-  recorded as **Supported inference** (it is the same word doc 03 reads for the
-  mapping/fog option) and named as an open item in §17.
+* **Established — rally knowledge selector [S09].** `probeIsOnKnownGround`
+  reads the session visibility mode's **LineOfSight bit** ([03 R-VIS-01 §1]).
+  When set, it samples the **owning player's current-sight byte grid**;
+  when clear (Permanent LOS), it samples the **mapping word grid's local
+  viewing-slot bit**. These are the same stores and option polarity used by
+  the ordinary visibility predicate, not a separate AI option. The former
+  description's “explored” byte grid and “current visibility” word grid were
+  reversed. Both branches first form
+  `cellX = (probe.x >> 16) >> 5` and
+  `cellZ = ((probe.z >> 16) - ((probe.y >> 16) >> 1)) >> 5`
+  from the signed coordinate high halves and reject cells outside the owning
+  player's grid dimensions. The byte branch accepts a nonzero cell; the word
+  branch accepts the bit for the local viewing slot, even when that slot is
+  different from the AI owner. Battle entry copies the authored option's low
+  bit without inversion: campaign uses the mission-loaded single-player
+  option, skirmish uses the setup option, and a restored skirmish first reads
+  `Summary.LineOfSight` into that setup option. Restored campaigns follow the
+  same mission-option path as fresh campaigns. The multiplayer option has
+  the same polarity, so its Permanent setting also reaches the local-viewer
+  branch; networking remains outside Nanolathe's current scope.
 * `probeScore` sums the **single per-type strategic coefficient** ([R-P0-05 §5])
   over the members of the strategic state's **first vector** — the non-allied
   live units the 30-tick refresh collected [R-P0-04 §3] — whose planar distance
@@ -3943,10 +3950,6 @@ the first-rebuild tick and the exclusion bit's full census are in
 * The semantic name of the order gate-mask bits the construction task tests —
   bit 3 in pass 1 and bit 14 in pass 2 [04 "Order descriptor table"] · doc 04
   owns the mask · static trace over the descriptor table's consumers.
-* Which global option bit selects the rally task's two probe-validation forms,
-  and therefore whether the local-viewer-dependent form is reachable in a
-  networked session · §7 · static trace from the skirmish option word into the
-  world flags word.
 * Whether the wave's `engaged` latch and the rally task's best point, drift
   and best score are serialized; no AI account and no task-record item exists
   in the save inventory ([R-SAVE-02 §11-A]), so the bounded reading is that
@@ -6696,8 +6699,8 @@ relation byte; spot metal; the three cell pairs; the AI group move; reveal
 deadline; construction remaining; the five bytes, the gate mask, the state
 byte; the packed word; the `u%04xacc` box; the `u%04xmob` box when
 `0x27` is nonzero; the order boxes in sequence order into the front or rear
-list by descriptor flag `0x40000`, then the front head is pumped once for
-activation; the `Script%i` box; the three weapon-slot records; and, when the
+list by descriptor flag `0x40000`, then any front-head goal payload is
+installed on the mover follower (§11); the `Script%i` box; the three weapon-slot records; and, when the
 second state byte's yard-open bit is set, the yard re-stamp
 ([R-COLL-01 §4]). A record whose stable slot is already live is skipped
 without reading.
@@ -6869,6 +6872,25 @@ scalars, alliances) → Camera → Features → Metal → PlayerFeatures → Map
 → Units (per unit: the §6 sequence) → Meteor → trigger records; then the
 battle-loading worker proceeds as for a fresh battle. Nanolathe's own
 staged/transactional order is the one under R-SAVE-UNIT-01.
+
+**Established — restored head goal binding [S08].** After rebuilding both
+order queues and before reading the COB snapshot, the loader checks the front
+head. If it carries a goal payload, the loader passes that existing payload to
+the owning mover's follower installer. A missing head or payload does nothing.
+This is the same follower operation used by ordinary goal installation; it
+does not execute the order handler or advance the queue.
+
+For a local ground follower, installation cancels an outstanding search,
+notifies the previous goal of release when present, stores the restored goal,
+and applies the existing route-adoption and repath bookkeeping contract
+[04 R-PATH-01 §8]. The freshly constructed follower starts with no previous
+goal or route. The local air follower releases any old payload, stores the
+restored marker, and raises its command-dirty flag [04 R-AIR-01 §1][04 R-AIR-01
+§4]. The remote ground and air follower variants only release the old payload
+and store the new one; their network service remains outside single-player
+scope. The saved payload's subtype selects its goal or marker implementation
+(§10), not an order-execution callback. No generic queue pump belongs at this
+restore boundary.
 
 **Established — derived state Nanolathe must rebuild, because retail does.**
 The following is absent from every account and is regenerated by the
@@ -7831,10 +7853,6 @@ body and are not restated here.
 - Semantic names of the order gate-mask bits the construction task tests
   (bit 3 in its build pass, bit 14 in its repositioning pass) · [R-AI-01 §3],
   doc 04 "Order descriptor table" · static trace.
-- Which global option bit selects between the rally probe's two validation
-  forms, and therefore whether the form that reads the local viewing slot's
-  visibility bit is reachable in a networked session · [R-AI-01 §7] · static
-  trace from the skirmish option word into the world flags word.
 - Whether the attack wave's engaged latch and the rally task's best point,
   drift and best score are serialized; the account inventory holds no AI
   item for them · [R-AI-01 §4], [R-AI-01 §7], [R-SAVE-02 §11-A] · static
@@ -7908,10 +7926,6 @@ a single-player implementation.
 - The `GAMENAME` edit gadget's admitted character set and length, and the
   code page of the file name · [R-SAVE-02 §1], doc 07 · static trace of the
   GUI edit-control key filter.
-- Which descriptor-class virtual the unit loader invokes on the restored
-  head order's sub-object after both queue segments are rebuilt (it is
-  called only when the head record carries a sub-object) · [R-SAVE-02 §11],
-  [R-SAVE-02 §10] · static trace of the descriptor class vtable slot.
 - Framing, initial snapshot, command timing, random state, seek behavior,
   version checks, and UI of a replay path, should one ever be found; the
   whole-image sweep covering dynamically built names, debug modes, and

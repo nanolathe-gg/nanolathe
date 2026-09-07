@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"bufio"
 	"bytes"
 	"compress/zlib"
 	"encoding/binary"
@@ -244,7 +245,9 @@ type hpiDirectoryView struct {
 }
 
 func (v hpiDirectoryView) offset(pos uint64, length uint64) (int, error) {
-	if pos < v.start || length > v.end-pos {
+	// Check the upper endpoint before subtracting it. Otherwise a pointer past
+	// the directory wraps the unsigned subtraction and can reach a slice below.
+	if pos < v.start || pos > v.end || length > v.end-pos {
 		return 0, fmt.Errorf("%w: directory pointer 0x%x length %d", ErrMalformedArchive, pos, length)
 	}
 	index := pos - v.start
@@ -455,7 +458,11 @@ func (a *Archive) readRecordRange(record hpiRecord, offset int64, length int) ([
 			return nil, fmt.Errorf("%w: invalid chunk %d size", ErrMalformedArchive, chunk)
 		}
 		chunkStart := chunk * hpiChunkSize
-		decoded, err := a.decodeChunk(chunk, position, storedSize, record.size-chunkStart)
+		expectedSize := uint64(hpiChunkSize)
+		if remaining := record.size - chunkStart; remaining < expectedSize {
+			expectedSize = remaining
+		}
+		decoded, err := a.decodeChunk(chunk, position, storedSize, expectedSize)
 		if err != nil {
 			return nil, err
 		}
@@ -476,45 +483,44 @@ func (a *Archive) readRecordRange(record hpiRecord, offset int64, length int) ([
 	return result, nil
 }
 
-// decodeChunk reads and decodes one SQSH chunk. maxOutput is the most the
-// chunk may decode to, which is what is left of the record from this chunk's
-// own decompressed offset.
-func (a *Archive) decodeChunk(index, position, storedSize, maxOutput uint64) ([]byte, error) {
-	encoded := make([]byte, int(storedSize))
-	if err := a.readArchiveBytes(position, encoded); err != nil {
+// decodeChunk reads and decodes one SQSH chunk. expectedOutput is the record
+// chunk span: 64 KiB for every non-final chunk and the record remainder for
+// the final chunk [02 §2]. Reading the fixed header first validates the
+// payload metadata before its file-backed bytes are streamed.
+func (a *Archive) decodeChunk(index, position, storedSize, expectedOutput uint64) ([]byte, error) {
+	if storedSize < hpiChunkHeaderSize {
+		return nil, fmt.Errorf("%w: chunk %d size", ErrMalformedArchive, index)
+	}
+	header := make([]byte, hpiChunkHeaderSize)
+	if err := a.readArchiveBytes(position, header); err != nil {
 		return nil, err
 	}
-	if string(encoded[0:4]) != "SQSH" {
+	if string(header[0:4]) != "SQSH" {
 		return nil, fmt.Errorf("%w: chunk %d marker", ErrMalformedArchive, index)
 	}
-	method := encoded[5]
+	method := header[5]
 	// [02 §2]: the chunk header selects the actual decoder and retail does
 	// not require the two method numbers to match, so no equality check
 	// against the record's compression byte — dispatch on the chunk alone.
-	payloadSize := uint64(binary.LittleEndian.Uint32(encoded[7:11]))
-	decompressedSize := uint64(binary.LittleEndian.Uint32(encoded[11:15]))
-	checksum := binary.LittleEndian.Uint32(encoded[15:19])
-	if payloadSize+hpiChunkHeaderSize != storedSize || decompressedSize > maxOutput {
+	payloadSize := uint64(binary.LittleEndian.Uint32(header[7:11]))
+	decompressedSize := uint64(binary.LittleEndian.Uint32(header[11:15]))
+	checksum := binary.LittleEndian.Uint32(header[15:19])
+	if payloadSize != storedSize-hpiChunkHeaderSize || decompressedSize != expectedOutput {
 		return nil, fmt.Errorf("%w: chunk %d size fields", ErrMalformedArchive, index)
 	}
-	payload := encoded[hpiChunkHeaderSize:]
-	var sum uint32
-	for _, value := range payload {
-		sum += uint32(value)
+	payloadOffset := position + hpiChunkHeaderSize
+	sum, err := a.checksumPayload(payloadOffset, payloadSize)
+	if err != nil {
+		return nil, fmt.Errorf("%w: chunk %d checksum payload: %v", ErrMalformedArchive, index, err)
 	}
 	if a.options.VerifyChecksums && sum != checksum {
 		return nil, fmt.Errorf("%w: chunk %d checksum", ErrMalformedArchive, index)
 	}
-	if encoded[6] != 0 {
-		for i := range payload {
-			payload[i] = byte(uint16(payload[i])-uint16(i)) ^ byte(i)
-		}
-	}
+	payload := &archivePayloadReader{archive: a, offset: payloadOffset, remaining: payloadSize, encoded: header[6] != 0}
 	var decoded []byte
-	var err error
 	switch method {
 	case 1:
-		decoded, err = decodeLZ77(payload, decompressedSize)
+		decoded, err = decodeLZ77(bufio.NewReader(payload), decompressedSize)
 	case 2:
 		decoded, err = decodeZlib(payload, decompressedSize)
 	}
@@ -525,6 +531,60 @@ func (a *Archive) decodeChunk(index, position, storedSize, maxOutput uint64) ([]
 		return nil, fmt.Errorf("%w: chunk %d output size", ErrMalformedArchive, index)
 	}
 	return decoded, nil
+}
+
+// archivePayloadReader reads a chunk payload in bounded pieces. The checksum
+// is deliberately taken before the encoded-payload transform, matching the
+// SQSH wire ordering [02 §2].
+type archivePayloadReader struct {
+	archive   *Archive
+	offset    uint64
+	remaining uint64
+	index     uint64
+	encoded   bool
+}
+
+func (r *archivePayloadReader) Read(data []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	if uint64(len(data)) > r.remaining {
+		data = data[:int(r.remaining)]
+	}
+	if err := r.archive.readArchiveBytes(r.offset, data); err != nil {
+		return 0, err
+	}
+	if r.encoded {
+		for i := range data {
+			position := r.index + uint64(i)
+			data[i] = byte(uint16(data[i])-uint16(position)) ^ byte(position)
+		}
+	}
+	r.offset += uint64(len(data))
+	r.remaining -= uint64(len(data))
+	r.index += uint64(len(data))
+	if r.remaining == 0 {
+		return len(data), io.EOF
+	}
+	return len(data), nil
+}
+
+func (a *Archive) checksumPayload(offset, size uint64) (uint32, error) {
+	reader := archivePayloadReader{archive: a, offset: offset, remaining: size}
+	var buffer [32 << 10]byte
+	var sum uint32
+	for {
+		count, err := reader.Read(buffer[:])
+		for _, value := range buffer[:count] {
+			sum += uint32(value)
+		}
+		if err == io.EOF {
+			return sum, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
 }
 
 func (a *Archive) readArchiveBytes(offset uint64, data []byte) error {
@@ -571,11 +631,10 @@ type resettableReader interface {
 // allocation in a whole-install catalog compile.
 var zlibReaders sync.Pool
 
-func decodeZlib(payload []byte, expected uint64) ([]byte, error) {
+func decodeZlib(source io.Reader, expected uint64) ([]byte, error) {
 	if expected > uint64(math.MaxInt) {
 		return nil, errors.New("zlib output is too large")
 	}
-	source := bytes.NewReader(payload)
 	reader, _ := zlibReaders.Get().(resettableReader)
 	if reader == nil {
 		fresh, err := zlib.NewReader(source)
@@ -612,36 +671,38 @@ func decodeZlib(payload []byte, expected uint64) ([]byte, error) {
 	return data, nil
 }
 
-func decodeLZ77(payload []byte, expected uint64) ([]byte, error) {
+func decodeLZ77(source io.ByteReader, expected uint64) ([]byte, error) {
 	if expected > uint64(math.MaxInt) {
 		return nil, errors.New("LZ77 output is too large")
 	}
 	output := make([]byte, 0, int(expected))
 	var window [4096]byte
 	write := 1
-	position := 0
 	for uint64(len(output)) < expected {
-		if position >= len(payload) {
+		tag, err := source.ReadByte()
+		if err != nil {
 			return nil, errors.New("LZ77 tag is truncated")
 		}
-		tag := payload[position]
-		position++
 		for bit := 0; bit < 8 && uint64(len(output)) < expected; bit++ {
 			if tag&(1<<bit) == 0 {
-				if position >= len(payload) {
+				value, err := source.ReadByte()
+				if err != nil {
 					return nil, errors.New("LZ77 literal is truncated")
 				}
-				if err := lzAppend(&output, &window, &write, payload[position], expected); err != nil {
+				if err := lzAppend(&output, &window, &write, value, expected); err != nil {
 					return nil, err
 				}
-				position++
 				continue
 			}
-			if position+1 >= len(payload) {
+			low, err := source.ReadByte()
+			if err != nil {
 				return nil, errors.New("LZ77 match is truncated")
 			}
-			word := binary.LittleEndian.Uint16(payload[position : position+2])
-			position += 2
+			high, err := source.ReadByte()
+			if err != nil {
+				return nil, errors.New("LZ77 match is truncated")
+			}
+			word := uint16(low) | uint16(high)<<8
 			match := int(word >> 4)
 			length := int(word&0x0f) + 2
 			if match == 0 {

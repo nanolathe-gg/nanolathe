@@ -44,6 +44,19 @@ func TestRetailUnitBaseRestoresEstablishedFields(t *testing.T) {
 	}
 }
 
+func TestRetailUnitReferencesAllowsSelfEngagementButRejectsSelfCarrier(t *testing.T) {
+	u := &Unit{Handle: 7}
+	if err := RetailUnitReferences(u, 0, u.Handle, 0xff); err != nil {
+		t.Fatalf("self engagement reference: %v", err)
+	}
+	if u.EngagementTarget != u.Handle || u.Attachment.Carrier != 0 || u.Attachment.AttachPiece != -1 {
+		t.Fatalf("self engagement restore = %+v", u.Attachment)
+	}
+	if err := RetailUnitReferences(u, u.Handle, 0, 0); err == nil {
+		t.Fatal("self carrier reference accepted")
+	}
+}
+
 // TestDeathCauseFromKind locks the derivation of the coarse label from retail's
 // damage-kind enumeration [06 §12.1]. The two numberings coincide only at 3;
 // every other coincidence the raw cast produced was an accident.

@@ -73,9 +73,9 @@ func (s *System) RestoreMover(h pool.Handle, data []byte) error {
 	return nil
 }
 
-// RestoreOccupancy re-anchors a mover using the normal clear/stamp paths.
-// Raw grid writes are intentionally unavailable to the restore caller
-// [08 R-SAVE-02 §11].
+// RestoreOccupancy re-anchors a mover using the saved mover mode. The unit's
+// packed status mirror is deliberately not consulted: it is a separate saved
+// word, while the mover byte decides the occupancy plane [08 R-SAVE-02 §8].
 func (s *System) RestoreOccupancy(h pool.Handle, anchorX, anchorZ int16) error {
 	if s == nil || s.Grid == nil {
 		return fmt.Errorf("movement: retail restore occupancy: no grid")
@@ -84,18 +84,24 @@ func (s *System) RestoreOccupancy(h pool.Handle, anchorX, anchorZ int16) error {
 	if c == nil {
 		return fmt.Errorf("movement: retail restore occupancy: unit %d has no collision state", h)
 	}
-	s.Grid.Clear(c.CachedAnchor, c.FootPrintX, c.FootPrintZ, c.ID)
 	anchor := Cell{X: int32(anchorX), Z: int32(anchorZ)}
-	var stamped bool
 	if c.Building {
-		stamped = s.stampBuildingGrid(anchor, c.FootPrintX, c.FootPrintZ, c.Yard, c.YardOpen, c.ID)
+		s.clearBuildingGrid(c.CachedAnchor, c.FootPrintX, c.FootPrintZ, c.Yard, c.YardOpen, c.ID)
+		s.stampBuildingGrid(anchor, c.FootPrintX, c.FootPrintZ, c.Yard, c.YardOpen, c.ID)
 	} else {
-		stamped = s.Grid.Stamp(anchor, c.FootPrintX, c.FootPrintZ, c.ID)
-	}
-	if !stamped {
-		return fmt.Errorf("movement: retail restore occupancy: unit %d anchor (%d,%d) rejected", h, anchorX, anchorZ)
+		plane, stamps := planeForMode(c.Mode)
+		if c.HasStamp {
+			s.Grid.ClearPlane(c.StampedPlane, c.StampedAnchor, c.FootPrintX, c.FootPrintZ, c.ID)
+			c.HasStamp = false
+		}
+		if stamps {
+			s.Grid.StampPlane(plane, anchor, c.FootPrintX, c.FootPrintZ, c.ID)
+			c.StampedAnchor, c.StampedPlane = anchor, plane
+			c.HasStamp = s.Grid.RectOnMap(anchor, c.FootPrintX, c.FootPrintZ)
+		}
 	}
 	c.CachedAnchor, c.OldAnchor = anchor, anchor
+	c.CachedMode = c.Mode & 0x3
 	c.Dirty = false
 	s.noteOccupancyCommit(h, c.LastStampTick)
 	return nil

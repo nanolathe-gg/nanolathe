@@ -8698,22 +8698,45 @@ with a free list (`-1` sentinel) and a high-water mark; when the pool is full
 it grows to `capacity + capacity/2 + 16` and both the pool and the heap array
 are reallocated and re-pointed.
 
-**Established — tie order.** Sift-up moves a child above its parent only on
-strict `<`, and stops as soon as the parent's key is `<=` the moved node's.
-Sift-down picks the **left** child when the two children's keys are equal
-(the right child is chosen only on strict `<`) and stops when the moved node's
-key is `<=` the chosen child's. Equal `f` therefore never reorders an existing
-heap, so ties resolve to insertion order, which is the fan order of §7.1.
+**Established — key comparisons and expansion transaction [U14].** The
+heap compares signed `f` values only. Sift-up moves a node only while its key
+is strictly less than its parent's. Sift-down chooses the left child when
+both children have equal keys and stops when the moved key is less than or
+equal to the chosen child's. These rules do **not** provide insertion-order
+ties: root replacement can move a later equal-key node ahead of earlier
+ones. There is no sequence-number tie-breaker.
 
-**Established — the popped-node recycle.** A pop does not immediately free its
-node. The scheduler copies the root's fields into locals, sets a *root is
-spent* flag, and expands. The first neighbour that is newly opened during that
-expansion **overwrites the spent root's record in place** and sifts it down
-from index 0, clearing the flag; a relaxation that displaces the spent root
-from index 0 instead frees it and compacts the heap. If neither happens, the
-next pop frees it first and then reads the new root. One consequence matters
-for the exhaustion test: the scheduler treats **heap size equal to the
-spent-root flag** (0/0 or 1/1) as "no route", not heap size zero.
+A search expansion retains the root until its replacements are known:
+
+1. If the previous expansion left a spent root, remove it first: fill its
+   heap position with the last entry, reduce the count and sift that
+   replacement down. Then copy the current root's cell and cost state for
+   this expansion and mark the root spent. The copied state remains the
+   expansion's source even if its old record is subsequently reused.
+2. The first newly opened neighbour while the root is spent replaces that
+   root in place and sifts down from the root. Clear the spent flag. Later
+   new neighbours append at the heap end and sift up.
+3. A strictly improving relaxation updates the existing neighbour's cost
+   and sifts it up. If that movement displaces the spent root, clear the
+   spent flag, remove that old root at its new heap position, fill the hole
+   with the last entry and sift the replacement down. If the spent root
+   remains at the root, keep the flag; a later new neighbour may still reuse
+   it. An equal cost never reparents or relaxes.
+4. If no new neighbour reuses the spent root and no relaxation displaces it,
+   leave it there for step 1 of the next expansion. A heap containing only
+   that spent record is exhausted: heap count equal to the spent flag
+   (`0 == 0` or `1 == 1`) means no open candidate remains.
+
+**Established by composition — authored operation examples.** Each row starts
+from the listed valid heap array; letters name distinct cells and numbers are
+`f` keys. Expand `A` first. Arrays show heap order, not sorted order.
+
+| Initial heap | Neighbour work while expanding A | Result before next selection | Next cell |
+|---|---|---|---|
+| `[A1, B2, C2, D2]` | none | Remove spent A at next selection; last D replaces it and stops on equality: `[D2, B2, C2]` | D |
+| `[A1, B2, C2, D2]` | open E with key 2 | E reuses A and stops on equality: `[E2, B2, C2, D2]` | E |
+| `[A1, B2, C2, D3]` | none | Last D replaces A; equal children select B: `[B2, D3, C2]` | B |
+| `[A5, B10, C11, D12]` | relax D to key 4, then open E with key 4 | D rises and displaces A; removing A yields `[D4, B10, C11]`; ordinary insertion of E yields `[D4, E4, C11, B10]` | D |
 
 ### The coarse word the search tests is mapping memory, not a building mask [R-PATH-01 §2]
 
@@ -8778,7 +8801,7 @@ footprint larger than 1×1.
 
 ### 7.2 A* state and costs
 
-**Established fact:** The search maintains open/closed status, parent direction, a heap, and a packed coordinate per node. The heap key is `f = g + h`. Equal keys preserve insertion order because the heap compares strictly less, not less-or-equal. Equal `g` values do not replace an existing parent.
+**Established fact:** The search maintains open/closed status, parent direction, a heap, and a packed coordinate per node. The heap key is `f = g + h`. Equal-key order follows the strict comparisons and retained-root expansion transaction of [R-PATH-01 §1], with no insertion-order guarantee. Equal `g` values do not replace an existing parent.
 
 **Established fact:** Cardinal steps cost 16 and diagonal steps cost 22. A direction-change table adds turn penalties of 0, 40, 60, 80, 100, 80, 60, and 40 indexed by the raw fan offset — equivalently `(candidate − current) & 7` — so the table IS a turn-difference table, not a terrain-state table. A per-neighbour terrain term of 30 (on the steep tier only) and a short-run penalty of 75 also apply; their exact conditions are in [R-PATH-01 §3].
 

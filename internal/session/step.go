@@ -699,12 +699,10 @@ func (s *Session) stepProjectilePhase(tick uint32) {
 	// content, by TestRetailAntiNukeIntercept: an ARM Protector holding one
 	// stockpiled round engages a nuclear missile aimed at the ground it stands
 	// on, and the missile does not arrive.
-	s.interceptorGuidanceTick()
 	if s.Combat != nil {
 		// [06 §6.4] plumb world wind vectors into ballistic/dropped drift
 		s.Combat.TickProjectiles(tick, s.Units, s.World, s.Wind, s.Features, s.Vis, s.Econ, s.Catalog, s.SimRNG(), s.CrtRNG())
 	}
-	s.interceptorDetonationTick()
 }
 
 // stepEffectPhase is phase 4 of the authoritative tick [01 §4.4].

@@ -161,8 +161,8 @@ func RetailUnitReferences(u *Unit, carrier, engagement pool.Handle, attachPiece 
 	if u == nil {
 		return fmt.Errorf("units: retail restore: nil unit")
 	}
-	if (carrier != 0 && carrier == u.Handle) || (engagement != 0 && engagement == u.Handle) {
-		return fmt.Errorf("units: retail restore: self reference %d", u.Handle)
+	if carrier != 0 && carrier == u.Handle {
+		return fmt.Errorf("units: retail restore: self carrier reference %d", u.Handle)
 	}
 	u.Attachment.Carrier = carrier
 	u.EngagementTarget = engagement

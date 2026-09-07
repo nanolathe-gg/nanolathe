@@ -420,7 +420,7 @@ func TestArmorGateReadsRuntimeBitOnly(t *testing.T) {
 		target.Armored = runtimeArmored
 		p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
 			TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
-		handleProjectileImpact(&svc, 1, p, wu1913Weapon(40), w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+		handleProjectileImpact(&svc, 1, p, wu1913Weapon(40), w, terrain, nil, nil, nil, 4, Vec3{}, nil, p.TargetUnit)
 		return target.Health
 	}
 	if got := run(t, false, false); got != 60 {
@@ -491,7 +491,7 @@ func TestDamageGateOnProjectileSide(t *testing.T) {
 			if tc.nullShooter {
 				p.Shooter = 0 // a meteor keeps a null shooter reference [06 §6.5]
 			}
-			handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+			handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, p.TargetUnit)
 			if target.Health != tc.wantHealth {
 				t.Fatalf("health = %d, want %d [06 R-DMG-01 §9] gate 1", target.Health, tc.wantHealth)
 			}
@@ -533,7 +533,7 @@ func TestDeathLatchOnVictimControlByte(t *testing.T) {
 			target.MaxHealth = 10
 			p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
 				TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
-			handleProjectileImpact(&svc, 1, p, wu1913Weapon(100), w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+			handleProjectileImpact(&svc, 1, p, wu1913Weapon(100), w, terrain, nil, nil, nil, 4, Vec3{}, nil, p.TargetUnit)
 			if target.Dying != tc.wantDying {
 				t.Fatalf("dying = %v, want %v [06 R-DMG-01 §8] gate 2", target.Dying, tc.wantDying)
 			}
@@ -558,7 +558,7 @@ func TestDamageIntakeDrawsNoRandomness(t *testing.T) {
 	before, beforeCRT := sim.Draws(), crt.Draws()
 	p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
 		TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
-	handleProjectileImpact(&svc, 1, p, wu1913Weapon(40), w, terrain, nil, nil, nil, 4, Vec3{}, &sim, false)
+	handleProjectileImpact(&svc, 1, p, wu1913Weapon(40), w, terrain, nil, nil, nil, 4, Vec3{}, &sim, p.TargetUnit)
 	if sim.Draws() != before || crt.Draws() != beforeCRT {
 		t.Fatalf("draws sim %d->%d crt %d->%d, want none (I4)", before, sim.Draws(), beforeCRT, crt.Draws())
 	}
@@ -611,7 +611,7 @@ func TestParalyzerHitCreditsTheStunTaskAndTouchesNothingElse(t *testing.T) {
 		weapon.Paralyzer = true
 		p := &Projectile{Shooter: shooter.Handle, ShooterSide: shooter.Owner,
 			TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
-		handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 7, Vec3{}, nil, false)
+		handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 7, Vec3{}, nil, p.TargetUnit)
 		return pushes, target.Health, target.Stunned
 	}
 

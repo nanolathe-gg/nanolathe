@@ -329,7 +329,7 @@ type Session struct {
 	// Frame.Radar.
 	visStatus map[int]uint32
 
-	// Per-tick scratch for the sensor pass and the interceptor steps. These
+	// Per-tick scratch for the sensor pass. These
 	// are reused buffers, never state: every one is truncated or overwritten
 	// before it is read, so the tick that follows cannot observe the tick
 	// before it. They exist because the phases that use them run every tick
@@ -339,7 +339,6 @@ type Session struct {
 	sensorStatusScratch []uint32 // indexed by unit handle, parallel to the pool
 	sensorHolders       []int32  // handles staged this tick, in pool order (I1)
 	primaryMaskScratch  []uint16 // indexed by unit handle
-	interceptorExploded []interceptorExplosion
 
 	// DebugDisplayMode is the world composer's debug display mode byte
 	// [03 §3.12]. Its writers are now traced and there are exactly three: the

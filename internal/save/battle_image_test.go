@@ -87,7 +87,7 @@ func TestDecodeBattleImageRejectsDuplicateUnitIDs(t *testing.T) {
 	}
 }
 
-func TestDecodeBattleImageRejectsZeroIDAndUnitReferenceCycle(t *testing.T) {
+func TestDecodeBattleImageSeparatesCarrierContainmentFromEngagementReferences(t *testing.T) {
 	b := minimalBattleBuilder()
 	WriteUnitsHeader(b, 1)
 	units := builderAccount(b, UnitsAccount)
@@ -96,6 +96,8 @@ func TestDecodeBattleImageRejectsZeroIDAndUnitReferenceCycle(t *testing.T) {
 		t.Fatal("zero stable ID accepted")
 	}
 
+	// A carrier edge and the reverse engagement edge are not a containment
+	// cycle. The same is true of mutual and self engagement records.
 	b2 := minimalBattleBuilder()
 	WriteUnitsHeader(b2, 2)
 	units2 := builderAccount(b2, UnitsAccount)
@@ -107,8 +109,23 @@ func TestDecodeBattleImageRejectsZeroIDAndUnitReferenceCycle(t *testing.T) {
 	binary.LittleEndian.PutUint16(second[0x8b:], 1)
 	units2.AppendBox("", 0, first)
 	units2.AppendBox("", 1, second)
-	if _, err := DecodeBattleImage(openImageBank(t, b2)); err == nil {
-		t.Fatal("cyclic unit references accepted")
+	if _, err := DecodeBattleImage(openImageBank(t, b2)); err != nil {
+		t.Fatalf("ordinary carrier/engagement references rejected: %v", err)
+	}
+
+	b3 := minimalBattleBuilder()
+	WriteUnitsHeader(b3, 2)
+	units3 := builderAccount(b3, UnitsAccount)
+	third := make([]byte, UnitBoxSize)
+	fourth := make([]byte, UnitBoxSize)
+	binary.LittleEndian.PutUint16(third[0x21:], 1)
+	binary.LittleEndian.PutUint16(fourth[0x21:], 2)
+	binary.LittleEndian.PutUint16(third[0x89:], 2)
+	binary.LittleEndian.PutUint16(fourth[0x89:], 1)
+	units3.AppendBox("", 0, third)
+	units3.AppendBox("", 1, fourth)
+	if _, err := DecodeBattleImage(openImageBank(t, b3)); err == nil {
+		t.Fatal("cyclic carrier containment accepted")
 	}
 }
 

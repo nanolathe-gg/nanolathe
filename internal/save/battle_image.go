@@ -303,7 +303,7 @@ func decodeUnits(bank *Bank, image *UnitImage) error {
 			}
 		}
 	}
-	if err := validateUnitReferenceGraph(image.Records, ids); err != nil {
+	if err := validateCarrierReferenceGraph(image.Records, ids); err != nil {
 		return err
 	}
 
@@ -457,19 +457,18 @@ func decodeScripts(ac *Account, image *UnitImage) error {
 	return nil
 }
 
-func validateUnitReferenceGraph(records []UnitRecord, ids map[uint16]struct{}) error {
+// validateCarrierReferenceGraph accepts the engagement-target link as the
+// ordinary cross-unit reference that it is. Only carrier links describe
+// containment, so only that graph has an acyclic shape [08 R-SAVE-02 §6].
+func validateCarrierReferenceGraph(records []UnitRecord, ids map[uint16]struct{}) error {
 	graph := make(map[uint16][]uint16, len(ids))
 	for _, record := range records {
 		if record.Compat {
 			continue
 		}
-		refs := make([]uint16, 0, 2)
-		for _, offset := range []int{0x89, 0x8B} {
-			if ref := binary.LittleEndian.Uint16(record.Data[offset:]); ref != 0 {
-				refs = append(refs, ref)
-			}
+		if carrier := binary.LittleEndian.Uint16(record.Data[0x89:]); carrier != 0 {
+			graph[record.StableID] = []uint16{carrier}
 		}
-		graph[record.StableID] = refs
 	}
 	const (
 		unvisited = uint8(iota)
@@ -481,7 +480,7 @@ func validateUnitReferenceGraph(records []UnitRecord, ids map[uint16]struct{}) e
 	visit = func(id uint16) error {
 		switch state[id] {
 		case visiting:
-			return battleImageError("cyclic unit reference", "acyclic established cross-unit references")
+			return battleImageError("cyclic carrier reference", "acyclic carrier containment references")
 		case visited:
 			return nil
 		}

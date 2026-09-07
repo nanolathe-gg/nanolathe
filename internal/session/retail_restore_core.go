@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
+	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/triggers"
@@ -105,20 +106,24 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 			return fmt.Errorf("session: retail restore: unit %d base: %w", rec.StableID, err)
 		}
 	}
-	// Resolve references depth-first even though D1 has reserved all bodies;
-	// this preserves the retail fix-up order and makes the relationship edge
-	// explicit rather than depending on numbered-box order.
-	visiting := make(map[uint16]bool, len(image.Units.Records))
+	// Resolve carrier containment depth-first even though D1 has reserved all
+	// bodies. Engagement links are ordinary references, not ownership edges:
+	// they may point at this unit or form a cycle [08 R-SAVE-02 §6].
+	processing := make(map[uint16]bool, len(image.Units.Records))
+	carrierPath := make(map[uint16]bool, len(image.Units.Records))
 	visited := make(map[uint16]bool, len(image.Units.Records))
 	var restoreRefs func(uint16) error
 	restoreRefs = func(id uint16) error {
 		if visited[id] {
 			return nil
 		}
-		if visiting[id] {
-			return fmt.Errorf("session: retail restore: cyclic unit reference %d", id)
+		// The retail reader reserves a stable slot before it follows either
+		// link. A reference back to a record currently being read is therefore
+		// already live and is skipped, rather than forming an ownership cycle.
+		if processing[id] {
+			return nil
 		}
-		visiting[id] = true
+		processing[id] = true
 		rec, ok := retailUnitRecord(image.Units.Records, id)
 		if !ok {
 			return fmt.Errorf("session: retail restore: unit reference %d missing", id)
@@ -126,26 +131,42 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 		carrier := readUnitRef(rec.Data, 0x89)
 		engagement := readUnitRef(rec.Data, 0x8B)
 		if carrier != 0 {
+			if carrierPath[carrier] {
+				return fmt.Errorf("session: retail restore: cyclic carrier reference %d", carrier)
+			}
+			carrierPath[id] = true
 			if err := restoreRefs(carrier); err != nil {
 				return err
 			}
+			carrierPath[id] = false
 		}
+		h := stage.StableUnit[id]
+		u := s.Units.Unit(h)
+		engagementHandle := stage.StableUnit[engagement]
+		if engagement != 0 && engagementHandle == 0 {
+			return fmt.Errorf("session: retail restore: engagement reference %d missing", engagement)
+		}
+		if err := units.RetailUnitReferences(u, 0, engagementHandle, rec.Data[0x8D]); err != nil {
+			return err
+		}
+		if carrier != 0 {
+			// The restore reader applies the same head-inserting attachment
+			// operation as a live attach, with the saved mode and piece. The
+			// unit-side mode mirror is the source here; the mover-side byte is
+			// restored later and remains a separate saved word [08 R-SAVE-02 §6].
+			if !movement.AttachCargoMode(s.Units, stage.StableUnit[carrier], h, int(rec.Data[0x8D]), int(u.Move.Mode)) {
+				return fmt.Errorf("session: retail restore: attach unit %d to carrier %d", id, carrier)
+			}
+		}
+		// The engagement reference follows the current record's local attach.
+		// That order is observable because a referenced child can attach to the
+		// same carrier and inserts at its cargo head [08 R-SAVE-02 §6].
 		if engagement != 0 {
 			if err := restoreRefs(engagement); err != nil {
 				return err
 			}
 		}
-		h := stage.StableUnit[id]
-		if err := units.RetailUnitReferences(s.Units.Unit(h), stage.StableUnit[carrier], stage.StableUnit[engagement], rec.Data[0x8D]); err != nil {
-			return err
-		}
-		if carrier != 0 {
-			carrierUnit := s.Units.Unit(stage.StableUnit[carrier])
-			if carrierUnit != nil {
-				carrierUnit.Attachment.Cargo = append(carrierUnit.Attachment.Cargo, h)
-			}
-		}
-		visiting[id] = false
+		processing[id] = false
 		visited[id] = true
 		return nil
 	}

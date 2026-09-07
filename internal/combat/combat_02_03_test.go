@@ -46,7 +46,7 @@ func TestImpactEventOrderAndKilledDedup(t *testing.T) {
 		DamageDefault:  100,
 	}
 	p := &Projectile{Shooter: shooter.Handle, TargetUnit: target.Handle, Pos: Vec3{X: target.X, Y: target.Y, Z: target.Z}}
-	handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+	handleProjectileImpact(&svc, 1, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, p.TargetUnit)
 	// The damage flash sits between the impact event and the lethal
 	// notification: [06 §9.1] step 4 writes it for every accepted non-heal
 	// packet, before the reaction step [06 R-WPN-04 §2].
@@ -73,7 +73,7 @@ func TestImpactEventOrderAndKilledDedup(t *testing.T) {
 	newTarget := w.Unit(newHandle)
 	newTarget.Health, newTarget.MaxHealth = 10, 10
 	p.TargetUnit = newHandle
-	handleProjectileImpact(&svc, 2, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, false)
+	handleProjectileImpact(&svc, 2, p, weapon, w, terrain, nil, nil, nil, 4, Vec3{}, nil, p.TargetUnit)
 	kills := 0
 	for _, kind := range got {
 		if kind == EventUnitKilled {

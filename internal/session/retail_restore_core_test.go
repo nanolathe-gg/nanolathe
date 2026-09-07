@@ -9,6 +9,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/features"
@@ -271,6 +272,154 @@ func TestRestoreRetailBattleCoreGroupsOrdersPerUnit(t *testing.T) {
 	}
 	checkGroup("unit A", unitA.handle, []int32{200, 201})
 	checkGroup("unit B", unitB.handle, []int32{100, 101})
+}
+
+func TestRestoreRetailBattleCoreAllowsMutualAndSelfEngagementLinks(t *testing.T) {
+	s, fixtures := newRestoreCoreFixture(t, 2)
+	first, second := fixtures[0], fixtures[1]
+	firstData := unitRecordData(false)
+	secondData := unitRecordData(false)
+	binary.LittleEndian.PutUint16(firstData[0x8B:], second.stableID)
+	binary.LittleEndian.PutUint16(secondData[0x8B:], second.stableID)
+	stage := &RetailBattleStage{
+		Session:    s,
+		StableUnit: stableUnitMap(fixtures),
+		Image: &save.BattleImage{Units: save.UnitImage{Records: []save.UnitRecord{
+			{StableID: first.stableID, Data: firstData},
+			{StableID: second.stableID, Data: secondData},
+		}}},
+	}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatalf("RestoreRetailBattleCore engagement links: %v", err)
+	}
+	if got := s.Units.Unit(first.handle).EngagementTarget; got != second.handle {
+		t.Fatalf("first engagement target = %d, want %d", got, second.handle)
+	}
+	if got := s.Units.Unit(second.handle).EngagementTarget; got != second.handle {
+		t.Fatalf("self engagement target = %d, want %d", got, second.handle)
+	}
+}
+
+func TestDamageExchangeWritesAndRestoresMutualEngagementLinks(t *testing.T) {
+	src, fixtures := newRestoreCoreFixture(t, 2)
+	first, second := fixtures[0], fixtures[1]
+	combatService := &combat.Service{}
+	weapon := &content.WeaponDef{AreaOfEffect: 10, DamageDefault: 1, UnitsOnly: true}
+	// The shared area-damage entry is the production writer of the recorded
+	// attacker link. With no terrain it uses its established pool sweep; each
+	// blast excludes its own shooter and records the surviving other unit.
+	combatService.ExplodeWeaponAt(src.Units, nil, weapon, combat.Vec3{}, first.handle, 10)
+	combatService.ExplodeWeaponAt(src.Units, nil, weapon, combat.Vec3{}, second.handle, 11)
+
+	inputs := RetailSaveInputs{
+		StableIDs: map[pool.Handle]uint16{first.handle: first.stableID, second.handle: second.stableID},
+		UnitWriterScratch: map[pool.Handle]units.RetailUnitWriterScratch{
+			first.handle: {}, second.handle: {},
+		},
+		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{
+			first.handle: {}, second.handle: {},
+		},
+	}
+	unitsImage, err := projectUnitImage(src.Units, src.Econ, nil, inputs)
+	if err != nil {
+		t.Fatalf("production unit save projection: %v", err)
+	}
+	bytes, err := (save.RetailProjection{
+		Summary: save.Summary{Gametype: 1}, Units: unitsImage,
+		Metal: []byte{0}, PlayerFeatures: []byte{0}, Mapping: []byte{0},
+	}).Bytes()
+	if err != nil {
+		t.Fatalf("production save bank: %v", err)
+	}
+	bank, err := save.OpenBytes(bytes)
+	if err != nil {
+		t.Fatalf("open production save bank: %v", err)
+	}
+	image, err := save.DecodeBattleImage(bank)
+	if err != nil {
+		t.Fatalf("decode mutual-attacker save: %v", err)
+	}
+	dst, destination := newRestoreCoreFixture(t, 2)
+	stage := &RetailBattleStage{Session: dst, StableUnit: stableUnitMap(destination), Image: image}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatalf("restore mutual-attacker save: %v", err)
+	}
+	if got := dst.Units.Unit(destination[0].handle).EngagementTarget; got != destination[1].handle {
+		t.Fatalf("first restored attacker = %d, want %d", got, destination[1].handle)
+	}
+	if got := dst.Units.Unit(destination[1].handle).EngagementTarget; got != destination[0].handle {
+		t.Fatalf("second restored attacker = %d, want %d", got, destination[0].handle)
+	}
+	for i, source := range fixtures {
+		if got, want := dst.Units.Unit(destination[i].handle).LastDamageSide, src.Units.Unit(source.handle).LastDamageSide; got != want {
+			t.Fatalf("unit %d restored attacker-side snapshot = %d, want %d", i, got, want)
+		}
+	}
+}
+
+func TestRestoreRetailBattleCoreRestoresCargoAtAttachmentHead(t *testing.T) {
+	s, fixtures := newRestoreCoreFixture(t, 3)
+	childA, childB, carrier := fixtures[0], fixtures[1], fixtures[2]
+	childRecord := func(piece byte) []byte {
+		data := unitRecordData(false)
+		binary.LittleEndian.PutUint16(data[0x89:], carrier.stableID)
+		data[0x8D] = piece
+		binary.LittleEndian.PutUint32(data[0xB4:], 2<<4)
+		return data
+	}
+	stage := &RetailBattleStage{
+		Session:    s,
+		StableUnit: stableUnitMap(fixtures),
+		Image: &save.BattleImage{Units: save.UnitImage{Records: []save.UnitRecord{
+			{StableID: childA.stableID, Data: childRecord(2)},
+			{StableID: childB.stableID, Data: childRecord(5)},
+			{StableID: carrier.stableID, Data: unitRecordData(false)},
+		}}},
+	}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatalf("RestoreRetailBattleCore cargo: %v", err)
+	}
+	cargo := s.Units.Unit(carrier.handle).Attachment.Cargo
+	if len(cargo) != 2 || cargo[0] != childB.handle || cargo[1] != childA.handle {
+		t.Fatalf("carrier cargo = %v, want [%d %d]", cargo, childB.handle, childA.handle)
+	}
+	if got := s.Units.Unit(childB.handle).Attachment.AttachPiece; got != 5 {
+		t.Fatalf("child B attach piece = %d, want 5", got)
+	}
+	if got := s.Units.Unit(childA.handle).Move.Mode; got != 2 {
+		t.Fatalf("child A attachment mode = %d, want saved unit mirror 2", got)
+	}
+}
+
+func TestRestoreRetailBattleCoreAttachesBeforeEngagementReference(t *testing.T) {
+	s, fixtures := newRestoreCoreFixture(t, 3)
+	childA, childB, carrier := fixtures[0], fixtures[1], fixtures[2]
+	childRecord := func(piece byte, engagement uint16) []byte {
+		data := unitRecordData(false)
+		binary.LittleEndian.PutUint16(data[0x89:], carrier.stableID)
+		binary.LittleEndian.PutUint16(data[0x8B:], engagement)
+		data[0x8D] = piece
+		return data
+	}
+	stage := &RetailBattleStage{
+		Session:    s,
+		StableUnit: stableUnitMap(fixtures),
+		Image: &save.BattleImage{Units: save.UnitImage{Records: []save.UnitRecord{
+			{StableID: childA.stableID, Data: childRecord(2, childB.stableID)},
+			{StableID: childB.stableID, Data: childRecord(5, 0)},
+			{StableID: carrier.stableID, Data: unitRecordData(false)},
+		}}},
+	}
+	if err := RestoreRetailBattleCore(stage); err != nil {
+		t.Fatalf("RestoreRetailBattleCore recursive reference ordering: %v", err)
+	}
+	// Restoring child A first returns from its carrier and attaches A before
+	// following A's engagement link. Child B then attaches at the carrier
+	// head. Moving engagement traversal before A's attach reverses this list.
+	cargo := s.Units.Unit(carrier.handle).Attachment.Cargo
+	if len(cargo) != 2 || cargo[0] != childB.handle || cargo[1] != childA.handle {
+		t.Fatalf("carrier cargo after recursive engagement = %v, want [%d %d]", cargo, childB.handle, childA.handle)
+	}
 }
 
 func TestRestoreRetailBattleCoreRejectsIncompleteStage(t *testing.T) {

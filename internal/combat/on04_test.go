@@ -83,7 +83,7 @@ func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Un
 	// [04 R-STANCE-01 §1]. The autonomous scan visits a unit only at that value
 	// [06 §3.2], so a fixture built from a literal definition (field zero, HOLD
 	// FIRE) would never scan.
-	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1, StandingFireOrder: 2}
+	def := &content.UnitDef{UnitName: "combatfixture", MaxDamage: 100, Limit: -1, StandingFireOrder: 2, ModelTopFixed: 16 << 16}
 	shooterH, err := w.Create(def, 0, numeric.FixedFromInt(10), numeric.FixedFromInt(10), numeric.FixedFromInt(10))
 	if err != nil {
 		t.Fatalf("create shooter: %v", err)
@@ -108,6 +108,11 @@ func newTestWorldAndUnits(t *testing.T) (*units.World, *world.Terrain, *units.Un
 	// Set Y above sea level
 	shooter.Y = numeric.FixedFromInt(10)
 	target.Y = numeric.FixedFromInt(10)
+	// Projectile contact is driven by the terrain occupancy cell, not by a
+	// retained guidance target. Stamp this fixture's target as battle setup.
+	if cell := terrain.PlotAt(world.WorldToCell(target.X), world.WorldToCell(target.Z)); cell != nil {
+		cell.SetOccupantA(int16(target.Handle))
+	}
 	return w, terrain, shooter, target
 }
 

@@ -18,7 +18,7 @@ func TestExplosionEventCarriesStartSmokeFlag(t *testing.T) {
 	svc := &Service{}
 	svc.Events = func(ev Event) { events = append(events, ev) }
 	p := &Projectile{Pos: Vec3{X: numeric.FixedFromInt(1), Y: numeric.FixedFromInt(2), Z: numeric.FixedFromInt(3)}}
-	handleProjectileImpact(svc, 1, p, weapon, nil, nil, nil, nil, nil, 5, Vec3{}, nil, false)
+	handleProjectileImpact(svc, 1, p, weapon, nil, nil, nil, nil, nil, 5, Vec3{}, nil, 0)
 
 	found := false
 	for _, ev := range events {
@@ -39,7 +39,7 @@ func TestExplosionEventCarriesStartSmokeFlag(t *testing.T) {
 	// Without the flag the payload stays clear — the session must not append.
 	events = nil
 	weapon.StartSmoke = false
-	handleProjectileImpact(svc, 1, p, weapon, nil, nil, nil, nil, nil, 5, Vec3{}, nil, false)
+	handleProjectileImpact(svc, 1, p, weapon, nil, nil, nil, nil, nil, 5, Vec3{}, nil, 0)
 	for _, ev := range events {
 		if ev.Kind == EventExplosion && ev.Smoke {
 			t.Fatal("smoke flag set on a weapon without startsmoke")
@@ -75,10 +75,9 @@ func TestTrailPuffAdditiveDeadlineAndExpiryPuff(t *testing.T) {
 		svc.TickProjectiles(tick, nil, nil, nil, nil, nil, nil, cat, &sim, nil)
 	}
 
-	// Deadline 5 with delay 3: trail puffs on ticks 5 and 8 (5+3, the
-	// additive advance). The record expires on tick 9: one expiry puff
-	// there, then silence — no puff on a dead record afterwards.
-	want := map[uint32]int{5: 1, 8: 1, 9: 1}
+	// Deadline 5 with delay 3: strict deadline puffs on ticks 6 and 9 (6+3,
+	// additive advance). This direct record expires silently on tick 9.
+	want := map[uint32]int{6: 1}
 	got := map[uint32]int{}
 	for _, ev := range events {
 		if ev.Kind != EventTrailSmoke {

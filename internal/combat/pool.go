@@ -224,6 +224,11 @@ type Service struct {
 	// what every fixture that does not compose a session gets.
 	Features *features.Service `json:"-"`
 
+	// OpaqueLiquidMode is the mission's nonzero `nosealeveltrigger` mode.
+	// It suppresses terrain-water impacts and downward crossing art when there
+	// is no direct unit [06 §8.2][06 §9.1].
+	OpaqueLiquidMode bool `json:"-"`
+
 	// weaponByID is the catalog's per-identifier weapon lookup, bound once per
 	// catalog. Binding a method value allocates, and the projectile phase needs
 	// the lookup every tick, so the bound value and the catalog it came from
@@ -404,7 +409,7 @@ func (s *Service) ProjectileLinkAt(h pool.Handle) pool.Handle {
 		return 0
 	}
 	idx := int(h) - 1
-	if idx < 0 || idx >= len(s.Records) || idx >= s.Slots.Count() {
+	if idx < 0 || idx >= len(s.Records) {
 		return 0
 	}
 	return s.Records[idx].TargetProjectile // [P1-08 §2.3]

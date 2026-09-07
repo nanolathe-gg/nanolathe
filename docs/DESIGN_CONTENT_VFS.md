@@ -66,7 +66,7 @@ size of the install.
 | `Archive` | One opened HPI-family container. `OpenArchive` and `NewArchive` build one; `ArchiveOptions` carries the defensive limits |
 | `ManifestRecord`, `ManifestOptions` | The deduplicated identity view: one record per logical path with its winner, its shadowed providers, and optionally the hash of the winning bytes |
 | `ProviderInfo` | One mounted provider in precedence order — the unit a diagnostic names |
-| `PinnedMount` | A read view that resolves `Open`/`Stat` against one mount while `ReadDir`/`ReadFileLimit` keep resolving through the overlay, so a shadowed copy parses with its own bytes and still finds its dependencies |
+| `PinnedMount` | An inspection view for one mount: `Open`, `ReadFileLimit`, `Stat`, and `CacheStamp` all resolve against that provider alone, so a missing or unreadable pinned copy cannot acquire a winning overlay provider's bytes or identity. `ReadDir` remains the overlay's directory-enumeration view. |
 
 Reads: `Open`, `ReadFile`, `ReadFileLimit`, `ReadFileRange` (which decodes only
 the chunks a byte range needs), `Stat`, `ReadDir` (sorted, the canonical

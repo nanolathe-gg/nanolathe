@@ -1772,6 +1772,13 @@ func createAndBindServices(s *Session) error {
 	// and Combat does not exist yet there; with none bound a blast reaches
 	// units only.
 	s.Combat.Features = s.Features
+	// The mission-global water gate is sampled at battle composition with the
+	// other immutable combat inputs. A nonzero `nosealeveltrigger` suppresses
+	// terrain-only water impacts and crossing art [06 §8.2][06 §9.1].
+	s.Combat.OpaqueLiquidMode = false
+	if s.Mission != nil && s.Mission.OTA != nil {
+		s.Combat.OpaqueLiquidMode = mission.DecodeMissionGlobals(s.Mission.OTA.Global).NoSeaLevelTrigger != 0
+	}
 	s.Build.World = s.Units
 	// The damage funnel's three control-byte gates read the player slot's
 	// control byte, never the unit's own owner byte [06 R-DMG-01 §8]. The byte

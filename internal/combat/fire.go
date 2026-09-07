@@ -519,9 +519,22 @@ func (s *Service) AdvanceBursts(tick uint32, simRNG *rng.Simulation, weaponByID 
 	if s == nil {
 		return 0
 	}
-	entry := s.Count() // capture once at entry [01 §6.2] [06 §5.1] I1
+	return s.advanceBurstsRange(0, s.Count(), tick, simRNG, weaponByID, muzzlePos)
+}
+
+// advanceBurstAt is the one-record scheduler branch of the phase dispatcher.
+// The caller's captured span decides which records are reached; a successful
+// clone is appended beyond that span and waits for the next tick [06 §5.1].
+func (s *Service) advanceBurstAt(index int, tick uint32, simRNG *rng.Simulation, weaponByID func(id int32) (*content.WeaponDef, bool), muzzlePos func(shooter pool.Handle, piece int16) (Vec3, bool)) int {
+	return s.advanceBurstsRange(index, index+1, tick, simRNG, weaponByID, muzzlePos)
+}
+
+func (s *Service) advanceBurstsRange(start, entry int, tick uint32, simRNG *rng.Simulation, weaponByID func(id int32) (*content.WeaponDef, bool), muzzlePos func(shooter pool.Handle, piece int16) (Vec3, bool)) int {
+	if s == nil {
+		return 0
+	}
 	clones := 0
-	for i := 0; i < entry; i++ {
+	for i := start; i < entry; i++ {
 		h := pool.Handle(i + 1)
 		// [06 §5.1] the updater does NOT test the dead flag at the top of its
 		// captured-span loop: a record marked dead before its turn still takes

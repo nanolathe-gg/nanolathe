@@ -241,7 +241,13 @@ func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.Uni
 	// Validate every mandatory identity before the first allocation, so a bad
 	// image cannot expose a partially reserved result even inside the stage.
 	for _, rec := range records {
-		if rec.Compat || len(rec.Data) != save.UnitBoxSize {
+		// Compatibility records are null results. They retain their writer
+		// enumeration position for ScriptN indexing but have no identity or
+		// allocation pass [08 R-SAVE-UNIT-01] [08 R-SAVE-02 §6].
+		if rec.Compat {
+			continue
+		}
+		if len(rec.Data) != save.UnitBoxSize {
 			return nil, fmt.Errorf("session: retail unit %d is not a standard 0xB8 record", rec.Number)
 		}
 		if rec.StableID == 0 {
@@ -265,6 +271,9 @@ func reserveRetailUnits(w *units.World, cat *content.Catalog, records []save.Uni
 	}
 	stable := make(map[uint16]pool.Handle, len(records))
 	for _, rec := range records {
+		if rec.Compat {
+			continue
+		}
 		nameBytes := rec.Data[:0x20]
 		if n := bytes.IndexByte(nameBytes, 0); n >= 0 {
 			nameBytes = nameBytes[:n]

@@ -48,10 +48,16 @@ func runImpactPresentation(w *content.WeaponDef, directTarget, water bool) *reco
 		}
 	}
 	p := &Projectile{Pos: Vec3{}}
+	var terrain *world.Terrain
+	if water {
+		terrain = &world.Terrain{CellW: 1, CellH: 1, SeaLevel: 1, Plot: make([]world.PlotCell, 1)}
+	}
+	var direct pool.Handle
 	if directTarget {
 		p.TargetUnit = 1
+		direct = p.TargetUnit
 	}
-	handleProjectileImpact(&svc, 1, p, w, nil, nil, nil, nil, nil, 0, Vec3{}, nil, water)
+	handleProjectileImpact(&svc, 1, p, w, nil, terrain, nil, nil, nil, 0, Vec3{}, nil, direct)
 	return sink
 }
 

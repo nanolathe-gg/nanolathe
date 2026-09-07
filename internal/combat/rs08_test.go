@@ -348,7 +348,7 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	terrain.Plot = make([]world.PlotCell, 100*100)
 	terrain.SeaLevel = 0
 	defShooter := &content.UnitDef{UnitName: "shooter", MaxDamage: 100, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1}
-	defTarget := &content.UnitDef{UnitName: "target", MaxDamage: 10, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1}
+	defTarget := &content.UnitDef{UnitName: "target", MaxDamage: 10, Category: "ARM", Limit: -1, FootprintX: 1, FootprintZ: 1, ModelTopFixed: 16 << 16}
 	shooterH, _ := w.Create(defShooter, 0, numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(10)))
 	targetH, _ := w.Create(defTarget, 1, numeric.FixedFromInt(int64(20)), numeric.FixedFromInt(int64(10)), numeric.FixedFromInt(int64(20)))
 	target := w.Unit(targetH)
@@ -357,6 +357,9 @@ func TestRS08_NaturalFireImpactDeath(t *testing.T) {
 	shooter := w.Unit(shooterH)
 	shooter.Y = numeric.FixedFromInt(int64(10))
 	target.Y = numeric.FixedFromInt(int64(10))
+	if cell := terrain.PlotAt(world.WorldToCell(target.X), world.WorldToCell(target.Z)); cell != nil {
+		cell.SetOccupantA(int16(target.Handle))
+	}
 	attachTestCOB(shooter, cob.NewVM(&cob.Program{Pieces: []string{"base"}}))
 	// Weapon with high damage, direct, non-turret for simplicity (no Aim)
 	wdef := &content.WeaponDef{ID: 500, Range: 1000, WeaponVelocity: 200 * 65536 / 30, ReloadTime: 0, DamageDefault: 100, LineOfSight: true, Turret: false, Tolerance: wideDriftTolerance}

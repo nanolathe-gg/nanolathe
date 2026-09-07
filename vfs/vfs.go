@@ -216,6 +216,14 @@ func (f *FS) MountCount() int {
 // order (0 = the winning mount). It reports ErrNotFound when that mount
 // does not provide the path.
 func (f *FS) OpenMount(index int, name string) (File, error) {
+	entry, err := f.mountEntry(index, name)
+	if err != nil {
+		return nil, err
+	}
+	return openEntry(entry, name)
+}
+
+func (f *FS) mountEntry(index int, name string) (*providerEntry, error) {
 	logical, err := cleanPath(name)
 	if err != nil {
 		return nil, err
@@ -228,13 +236,19 @@ func (f *FS) OpenMount(index int, name string) (File, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
 	}
+	return entry, nil
+}
+
+func openEntry(entry *providerEntry, name string) (File, error) {
+	if entry.info.IsDir {
+		return nil, fmt.Errorf("%w: %s", ErrIsDir, name)
+	}
 	return entry.open()
 }
 
-// PinnedMount is a read view that resolves Open/Stat/CacheStamp against one
-// mount while ReadDir/ReadFileLimit keep resolving through the overlay, so a
-// shadowed copy parses with its own bytes but still resolves its cross-asset
-// dependencies normally.
+// PinnedMount is a read view for one mount. Its file and metadata operations
+// keep the inspected provider's identity; ReadDir remains the overlay's
+// directory-enumeration view.
 type PinnedMount struct {
 	fs    *FS
 	index int
@@ -253,12 +267,7 @@ func (p *PinnedMount) Open(name string) (File, error) {
 
 // ReadFileLimit reads at most max bytes of a name from the pinned mount.
 func (p *PinnedMount) ReadFileLimit(name string, max int64) ([]byte, error) {
-	file, err := p.fs.OpenMount(p.index, name)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	return io.ReadAll(io.LimitReader(file, max))
+	return readFileLimit(p.Open, p.Stat, name, max)
 }
 
 // ReadDir lists a directory across the whole overlay: a pinned mount shadows
@@ -267,23 +276,23 @@ func (p *PinnedMount) ReadDir(name string) ([]EntryInfo, error) {
 	return p.fs.ReadDir(name)
 }
 
-// Stat describes a name as the pinned mount holds it, falling back to the
-// overlay when the pinned mount does not carry it.
+// Stat describes a name as the pinned mount holds it. Pinned views inspect one
+// provider, so a missing pinned file does not acquire an overlay identity.
 func (p *PinnedMount) Stat(name string) (EntryInfo, error) {
-	if file, err := p.fs.OpenMount(p.index, name); err == nil {
-		info := file.Info()
-		file.Close()
-		return info, nil
+	entry, err := p.fs.mountEntry(p.index, name)
+	if err != nil {
+		return EntryInfo{}, err
 	}
-	return p.fs.Stat(name)
+	return entry.info, nil
 }
 
 // CacheStamp returns the identity stamp of the pinned mount's copy of a name.
 func (p *PinnedMount) CacheStamp(name string) (string, error) {
-	if info, err := p.Stat(name); err == nil {
-		return p.fs.stampFor(info), nil
+	info, err := p.Stat(name)
+	if err != nil {
+		return "", err
 	}
-	return p.fs.CacheStamp(name)
+	return p.fs.stampFor(info), nil
 }
 
 var _ FSOps = (*PinnedMount)(nil)
@@ -521,10 +530,7 @@ func (f *FS) Open(name string) (File, error) {
 		if !ok {
 			continue
 		}
-		if entry.info.IsDir {
-			return nil, fmt.Errorf("%w: %s", ErrIsDir, name)
-		}
-		return entry.open()
+		return openEntry(entry, name)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrNotFound, name)
 }
@@ -562,17 +568,31 @@ func (f *FS) ReadFile(name string) ([]byte, error) {
 // ReadFileLimit reads at most max bytes from a winning logical file. The
 // extra byte distinguishes an exactly-full file from a truncated result.
 func (f *FS) ReadFileLimit(name string, max int64) ([]byte, error) {
+	return readFileLimit(f.Open, f.Stat, name, max)
+}
+
+// readFileLimit checks indexed metadata before opening a provider. Archive
+// opens decode their whole record, so this preserves a caller's budget before
+// compressed payload allocation begins [02 §2].
+func readFileLimit(open func(string) (File, error), stat func(string) (EntryInfo, error), name string, max int64) ([]byte, error) {
 	if max <= 0 {
 		return nil, fmt.Errorf("%w: invalid limit %d", ErrTooLarge, max)
 	}
-	h, err := f.Open(name)
+	info, err := stat(name)
+	if err != nil {
+		return nil, err
+	}
+	if info.IsDir {
+		return nil, fmt.Errorf("%w: %s", ErrIsDir, name)
+	}
+	if info.Size >= 0 && info.Size > max {
+		return nil, fmt.Errorf("%w: %s is %d bytes (limit %d)", ErrTooLarge, name, info.Size, max)
+	}
+	h, err := open(name)
 	if err != nil {
 		return nil, err
 	}
 	defer h.Close()
-	if info := h.Info(); info.Size >= 0 && info.Size > max {
-		return nil, fmt.Errorf("%w: %s is %d bytes (limit %d)", ErrTooLarge, name, info.Size, max)
-	}
 	var data []byte
 	if w, ok := h.(WholeFile); ok {
 		if whole, ok := w.Whole(); ok {
@@ -580,7 +600,11 @@ func (f *FS) ReadFileLimit(name string, max int64) ([]byte, error) {
 		}
 	}
 	if data == nil {
-		read, err := io.ReadAll(io.LimitReader(h, max+1))
+		limit := max
+		if max < int64(^uint64(0)>>1) {
+			limit++
+		}
+		read, err := io.ReadAll(io.LimitReader(h, limit))
 		if err != nil {
 			return nil, err
 		}
