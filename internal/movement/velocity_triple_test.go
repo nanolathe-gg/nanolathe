@@ -25,7 +25,7 @@ import (
 func TestGroundCommitPublishesVelocityTriple(t *testing.T) {
 	def := &content.UnitDef{
 		UnitName: "velocity-triple-test", FootprintX: 1, FootprintZ: 1,
-		MaxVelocity: 3, Acceleration: 3, BrakeRate: 3, TurnRate: 65535, BMCode: true,
+		MaxVelocity: 3, Acceleration: 3, BrakeRate: 3, TurnRate: 65535, BMCode: 1,
 	}
 	system, w, h := proposalFixture(t, def, true)
 	u := w.Unit(h)
@@ -69,8 +69,8 @@ func TestCarriedBranchCopiesCarrierVelocityTriple(t *testing.T) {
 		FootPrintX: 1, FootPrintZ: 1, MinWaterDepth: -10000, MaxSlope: 255,
 	}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(4)
-	carrierDef := &content.UnitDef{UnitName: "carrier", FootprintX: 1, FootprintZ: 1, BMCode: true, MaxVelocity: 32}
-	cargoDef := &content.UnitDef{UnitName: "cargo", FootprintX: 1, FootprintZ: 1, BMCode: true, MaxVelocity: 32}
+	carrierDef := &content.UnitDef{UnitName: "carrier", FootprintX: 1, FootprintZ: 1, BMCode: 1, MaxVelocity: 32}
+	cargoDef := &content.UnitDef{UnitName: "cargo", FootprintX: 1, FootprintZ: 1, BMCode: 1, MaxVelocity: 32}
 	carrier, err := w.Create(carrierDef, 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
 		t.Fatalf("create carrier: %v", err)

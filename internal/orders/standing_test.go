@@ -75,7 +75,12 @@ func TestStandingFamilyDispatchesOnItsFirstVisitAndNeverParks(t *testing.T) {
 		if DescriptorFor(id).Handler == nil {
 			t.Fatalf("%s has no handler after installation [04 §3.1]", row.name)
 		}
-		q, u := standingFixture(&content.UnitDef{BMCode: row.mobile})
+		q, u := standingFixture(&content.UnitDef{BMCode: func() uint8 {
+			if row.mobile {
+				return 1
+			}
+			return 0
+		}()})
 		if row.building {
 			u.Flags |= units.BuildingClassStatus
 		}
@@ -334,14 +339,14 @@ func TestWaitScanVariantDrainsItsBudgetAndCompletes(t *testing.T) {
 // `bmcode == 0` — so a build that ran both would cancel every stock mine's
 // queue on its first visit and no mine could ever detonate.
 func TestStandbyNeedsAMoverAndStandbyMineTheBuildingClassBit(t *testing.T) {
-	q, u := standingFixture(&content.UnitDef{BMCode: false})
+	q, u := standingFixture(&content.UnitDef{BMCode: 0})
 	q.Push(Lookup("Standby"), Node{Owner: u.Handle})
 	q.Pump(u, 0)
 	if q.LenPrimary() != 0 || q.LenSecondary() != 0 {
 		t.Fatalf("Standby without a mover must cancel the whole queue [04 R-ORD-01 §2]; got %d/%d", q.LenPrimary(), q.LenSecondary())
 	}
 
-	q2, u2 := standingFixture(&content.UnitDef{BMCode: true})
+	q2, u2 := standingFixture(&content.UnitDef{BMCode: 1})
 	q2.Push(Lookup("Standby"), Node{Owner: u2.Handle})
 	q2.Pump(u2, 0)
 	if q2.LenPrimary() != 1 {

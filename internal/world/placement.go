@@ -472,7 +472,7 @@ func PlacementRulesForUnit(cat *content.Catalog, def *content.UnitDef) (Placemen
 	// compiled field. Derive only the established class split as an adapter;
 	// compiled definitions always carry the value above [04 §6.4].
 	if domain == content.MobilityUnknown {
-		if !def.BMCode {
+		if def.BMCode == 0 {
 			domain = content.MobilityFixed
 		} else if def.CanFly {
 			domain = content.MobilityAircraft

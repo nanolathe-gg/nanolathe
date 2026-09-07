@@ -28,7 +28,7 @@ func TestCarrierDeathCascadeIgnoresAttackerVeterancy(t *testing.T) {
 	for _, kills := range []int32{0, 5, 10, 25, 100} {
 		w, system, carrier, cargo, killer := newCarrierWithCargo(t)
 		killer.Kills = kills
-		system.HandleDeath(w, carrier.Handle, killer.Handle)
+		system.HandleDeath(w, carrier.Handle, killer.Handle, 0)
 		if !cargo.Dying || cargo.Health > 0 {
 			t.Fatalf("killer with %d kills: cargo survived the cascade with health %d; the 30000 packet "+
 				"must not be scaled by attacker veterancy [06 §12.1][06 §9.1][06 §9.2]", kills, cargo.Health)

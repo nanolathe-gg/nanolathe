@@ -391,7 +391,7 @@ func (s *Strategic) InitClassVectors() {
 		// BMCode is withdrawn by that section. So a plain building initializes
 		// to 40, a factory or construction building to 60, a mobile unit to 0
 		// or 20 (a mobile builder).
-		if def := s.lookupDef(ck); def != nil && !def.BMCode {
+		if def := s.lookupDef(ck); def != nil && def.BMCode == 0 {
 			c += 40
 		}
 		// A non-empty authored build menu contributes 20 [P0-01].

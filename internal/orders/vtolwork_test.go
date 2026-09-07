@@ -22,7 +22,7 @@ import (
 func vtolWorkFixture() (*Queue, *units.Unit, *units.Unit) {
 	rng.SeedGlobal(1, 0)
 	builderDef := &content.UnitDef{
-		BMCode: true, Builder: true, CanFly: true,
+		BMCode: 1, Builder: true, CanFly: true,
 		CanCapture: true, CanReclamate: true, CanResurrect: true,
 		WorkerTime: 300, BuildDistance: 1000, BuildTime: 100, CruiseAlt: 200,
 		FootprintX: 2, FootprintZ: 2, MaxDamage: 100,

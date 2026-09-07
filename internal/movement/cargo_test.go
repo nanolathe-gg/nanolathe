@@ -16,9 +16,9 @@ func TestScriptCargoCommitRelinksSameCarrierAndDropsAtCurrentPosition(t *testing
 	sys.SetClasses(map[string]*content.MovementClass{content.CanonicalKey("kbot2x2"): class})
 	w := newMovementFixtureWorld(8)
 	carrierDef := defForTransport("arm_atlas")
-	carrierDef.BMCode = true
+	carrierDef.BMCode = 1
 	cargoDef := defForCargo("armflea", 1)
-	cargoDef.BMCode = true
+	cargoDef.BMCode = 1
 	cargoDef.MovementClass = "kbot2x2"
 	x, z := world.CellToWorld(8), world.CellToWorld(8)
 	carrierHandle, _ := w.Create(carrierDef, 0, x, terrain.HeightAt(x, z), z)

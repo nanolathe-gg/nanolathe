@@ -353,20 +353,7 @@ func (s *Session) stepWaterDamage(u *units.Unit, tick uint32) {
 	if !combat.IsWaterDamageEligible(u, s.World) { // canhover exemption and height <= sea level [04 §9.2]
 		return
 	}
-	damageMod := int32(65536) // 1.0 [02 "Unit record"] default
-	if u.Def != nil {
-		damageMod = u.Def.DamageModifier
-	}
-	amount := combat.ComputeWaterDamageScaledAmount(s.World.WaterDamage, u.Kills, combat.UnitArmored(u), damageMod)
-	u.LastDamageCause = uint8(combat.CauseWaterDamage) // [06 §12.1] cause 11
-	u.Health = combat.ApplyDamage(u.Health, amount)    // [06 §9.1] 16-bit modular subtraction
-	if u.Health <= 0 && s.Units != nil {
-		// The owner's control byte is 1 or 2 by the caller's gate, which is
-		// also gate 2 of [06 §9.1] step 6, so the latch is admitted. Water has
-		// no attacker: the recorded-attacker link is written null by the plain
-		// Destroy arm [04 R-UNIT-06 §5].
-		s.Units.Destroy(u.Handle, units.DeathKilled) // [04 §2.4] marks Dying; step 10 finalizes it
-	}
+	s.acceptDamage(tick, combat.DamageInput{Victim: u.Handle, Nominal: s.World.WaterDamage, Kind: combat.KindNoReaction})
 }
 
 // stepHealTimeSelfRepair is the `healtime` self-repair act, the second act of

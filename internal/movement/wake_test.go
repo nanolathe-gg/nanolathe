@@ -48,7 +48,7 @@ func TestFactoryExitColumnAllProductsLeave(t *testing.T) {
 	def := &content.UnitDef{
 		UnitName: "wakeprod", FootprintX: 2, FootprintZ: 2,
 		MaxVelocity: 2 * 65536, Acceleration: 65536 / 2, BrakeRate: 65536 / 2, TurnRate: 1000,
-		MinWaterDepth: -10000, MaxDamage: 100, BMCode: true,
+		MinWaterDepth: -10000, MaxDamage: 100, BMCode: 1,
 	}
 	parkID := orders.Lookup("Park")
 	if parkID == 0 {
@@ -116,7 +116,7 @@ func TestActivateMoveBindsOnlyThePrimaryHead(t *testing.T) {
 	def := &content.UnitDef{
 		UnitName: "wakehead", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 65536, Acceleration: 65536, BrakeRate: 65536, TurnRate: 65535,
-		MinWaterDepth: -10000, BMCode: true,
+		MinWaterDepth: -10000, BMCode: 1,
 	}
 	h, err := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
@@ -189,7 +189,7 @@ func TestHelpBuildInstallsAnnulusAndArrivesBesideTarget(t *testing.T) {
 	builderDef := &content.UnitDef{
 		UnitName: "wakeassist", FootprintX: 2, FootprintZ: 2, BuildDistance: 60, Builder: true,
 		MaxVelocity: 65536, Acceleration: 65536, BrakeRate: 65536, TurnRate: 65535,
-		MinWaterDepth: -10000, BMCode: true,
+		MinWaterDepth: -10000, BMCode: 1,
 	}
 	siteDef := &content.UnitDef{UnitName: "wakesite", FootprintX: 4, FootprintZ: 4, MaxDamage: 100}
 

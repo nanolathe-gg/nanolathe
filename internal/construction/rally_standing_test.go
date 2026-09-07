@@ -14,7 +14,7 @@ func standingFixture(t *testing.T, controlByte uint8) (*Service, *units.Unit, *u
 	t.Helper()
 	facDef := newProductDef("armfac", 1, 1, 100, 100)
 	prodDef := newProductDef("armflash", 1, 1, 100, 100)
-	prodDef.BMCode = true
+	prodDef.BMCode = 1
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{
 		facDef.CanonicalKey:  facDef,
 		prodDef.CanonicalKey: prodDef,

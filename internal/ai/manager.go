@@ -659,7 +659,7 @@ func (m *Manager) constructionPlacePass(tick uint32, w *units.World, econ *econo
 		}
 		if cat != nil {
 			if def, ok := cat.Unit(cand.DefKey); ok && def != nil {
-				isTargetMobile = def.BMCode
+				isTargetMobile = def.BMCode != 0
 			}
 		}
 		if isFactoryBuilder && isTargetMobile {
@@ -1445,12 +1445,12 @@ func (m *Manager) doRally(tick uint32, w *units.World, econ *economy.Service) {
 		}
 		// Only a member with no mover is gated, and the gate is the slot-1
 		// shot-time physical check against `best` [08 R-AI-01 §19]. The creator
-		// allocates a mover for `bmcode == 1` alone, so "no mover" is "this
-		// member is a building"; a mobile member is never gated. A building
+		// allocates a mover for `bmcode == 1` alone; only byte one bypasses
+		// this gate [08 R-AI-03 §7.4]. A building
 		// whose first slot cannot reach `best` is skipped without resolving
 		// anything, and one with no weapon in slot 1 reads the sentinel
 		// record's zero range and is likewise skipped.
-		if !u.Def.BMCode {
+		if u.Def.BMCode != 1 {
 			if m.RallyShotTimeAdmits == nil || !m.RallyShotTimeAdmits(u, m.rallyBestX, m.rallyBestY, m.rallyBestZ) {
 				continue
 			}

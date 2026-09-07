@@ -25,7 +25,7 @@ func TestFatalReclaimSettlementUsesRawAttackerAtVictimFinalization(t *testing.T)
 				t.Fatal(err)
 			}
 			defer fs.Close()
-			def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 100, Limit: -1, BMCode: true}
+			def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 100, Limit: -1, BMCode: 1}
 			cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
 			w, err := newSlicedWorldWithCOB(cat, fs)
 			if err != nil {

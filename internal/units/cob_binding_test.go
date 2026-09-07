@@ -115,7 +115,7 @@ func TestRequiredCOBEntryPointsLeavesCreateOptional(t *testing.T) {
 	if got := RequiredCOBEntryPoints(nil); len(got) != 0 {
 		t.Fatalf("nil requirements = %v", got)
 	}
-	def := &content.UnitDef{Builder: true, BMCode: false, CanMove: true}
+	def := &content.UnitDef{Builder: true, BMCode: 0, CanMove: true}
 	if got := RequiredCOBEntryPoints(def); len(got) != 0 {
 		t.Fatalf("capability requirements = %v", got)
 	}

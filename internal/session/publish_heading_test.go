@@ -28,7 +28,7 @@ func TestPublishedHeadingIsTheUnitRecordsOwnWord(t *testing.T) {
 	unitsPool := newSessionFixtureWorld(4, nil)
 	def := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "flier"},
-		MaxDamage:        1, CanFly: true, BMCode: true, MaxVelocity: 65536, TurnRate: 500,
+		MaxDamage:        1, CanFly: true, BMCode: 1, MaxVelocity: 65536, TurnRate: 500,
 	}
 	h, err := unitsPool.Create(def, 0, 0, 0, 0)
 	if err != nil {

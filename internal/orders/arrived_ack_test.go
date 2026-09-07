@@ -163,7 +163,7 @@ func TestVTOLMoveLastOnSegmentRaisesTheArrivedAcknowledgement(t *testing.T) {
 		{"a queued successor stays silent", 1, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			q, u, spy := arrivedFixture(&content.UnitDef{BMCode: true, CanFly: true})
+			q, u, spy := arrivedFixture(&content.UnitDef{BMCode: 1, CanFly: true})
 			q.Push(id, Node{Owner: u.Handle, Phase: 2, GoalX: u.X, GoalZ: u.Z})
 			for i := 0; i < tc.successors; i++ {
 				q.Push(id, Node{Owner: u.Handle, GoalX: u.X, GoalZ: u.Z})

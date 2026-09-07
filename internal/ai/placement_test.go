@@ -204,7 +204,7 @@ func TestPlacementRejectsMissingDependencies(t *testing.T) {
 		t.Fatalf("invalid footprint must reject explicitly: %+v", res)
 	}
 	missingRules := placementCatalog("armsolar", "oooo", 0)
-	missingRules.Units["armsolar"].BMCode = true
+	missingRules.Units["armsolar"].BMCode = 1
 	m = makePlacementManager(missingRules, ter, 0)
 	res = PlaceWithResult(m, "armsolar", ter)
 	if res.Valid || res.Reason != ReasonMissingDefinition || res.Proof == nil {

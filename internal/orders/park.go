@@ -114,7 +114,7 @@ func parkHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) Code {
 	case 0:
 		// A building-class definition owns no mover: the allocator constructs
 		// one only for bmcode 1 [04 R-FAC-02 §5].
-		if u.Def == nil || !u.Def.BMCode {
+		if u.Def == nil || u.Def.BMCode != 1 {
 			return 7
 		}
 		if u.Def.CanFly {

@@ -138,7 +138,7 @@ func AttachFactoryProduct(w *units.World, carrierHandle, productHandle pool.Hand
 	carrier := w.Unit(carrierHandle)
 	product := w.Unit(productHandle)
 	if carrier == nil || product == nil || !carrier.Alive || !product.Alive || carrier.Dying || product.Dying ||
-		product.Def == nil || !product.Def.BMCode || product.Flags&units.BuildingClassStatus != 0 {
+		product.Def == nil || product.Def.BMCode == 0 || product.Flags&units.BuildingClassStatus != 0 {
 		return false
 	}
 	if carrier.Attachment.Carrier != 0 || product.Attachment.Carrier != 0 || len(product.Attachment.Cargo) != 0 {
@@ -440,7 +440,7 @@ func cargoCascadeCause(carrier *units.Unit) combat.Cause {
 // this build's equivalent of the position [06 §12.1] gives the cascade inside
 // the central death handler: after the fixed teardown helpers and before the
 // death explosion and corpse placement.
-func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHandle pool.Handle) {
+func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHandle pool.Handle, tick uint32) {
 	if s == nil || w == nil {
 		return
 	}
@@ -455,93 +455,14 @@ func (s *System) HandleDeath(w *units.World, dyingHandle pool.Handle, killerHand
 	// If dying is carrier, cascade to cargo
 	if len(dying.Attachment.Cargo) > 0 {
 		cascadeCause := cargoCascadeCause(dying)
-		// The cascade's packets carry the CARRIER's killer as their attacker,
-		// not the carrier [06 §12.1]: "cargo killed by carrier death credits
-		// the carrier's killer ... the cascade applies its 30000 damage per
-		// cargo with the attacker argument set to the carrier's killer". The
-		// attacker-side snapshot beside it follows the ordinary intake of
-		// [06 §9.1] step 4, which the cascade uses ("through the ordinary
-		// builder"): the attacker unit's own owner byte, or the neutral side
-		// 10 when the packet has no attacker at all [06 R-WPN-04 §2].
-		attackerSide := units.NeutralAttackerSide
-		if killer := w.Unit(killerHandle); killer != nil {
-			attackerSide = killer.Owner
-		}
-		// Copy list for deterministic iteration (slot asc already)
+		// Preserve cargo-list order. Each packet carries the carrier's raw killer
+		// and fixed nominal; the shared receiver owns all scaling and guards
+		// [06 §12.1][06 §9.1]. Detachment follows each delivery, including a
+		// surviving or rejected cargo packet.
 		cargos := append([]pool.Handle(nil), dying.Attachment.Cargo...)
-		// Sort for determinism [I1] player asc not needed but slot asc
-		// cargos already append order is attach time, which is deterministic.
-		// But spec says for each cargo head it applies damage; order is cargo list order.
 		for _, cargoHandle := range cargos {
-			cargo := w.Unit(cargoHandle)
-			if cargo == nil {
-				continue
-			}
-			if cargo.Health > 0 {
-				// [06 §12.1]: "Each cargo unit receives a 30,000 damage packet
-				// through the ordinary builder — so it is scaled by defender
-				// veterancy but not by the armored-state modifier, whose gate
-				// is a strict `< 30,000`". The ordinary builder is the C20
-				// step order of [06 §9.2], so the armor gate is handed the
-				// real posture operand and closes itself on the amount, rather
-				// than being skipped here.
-				//
-				// The marker retired here asked whether the cascade also takes
-				// step 3, the ATTACKER veterancy multiplier, and passed the
-				// killer's kill count on the reading that it might. It does
-				// not, and the research says so from two sides. [06 §9.1]:
-				// the amount "is computed by one shared routine (§9.2) and
-				// handed to the packet builder, WHICH APPLIES THE
-				// DEFENDER-SIDE SCALES"; §9.2's own listing puts the attacker
-				// tier above its `-- packet builder, defender side --` line
-				// and gates it on `record.shooter != null` — a damage record
-				// the cascade never builds. §9.2 then calls this one of "the
-				// FIXED 30,000 self-damage, cargo-cascade and refund packets",
-				// which is only true if nothing scales it before the gate.
-				// So the attacker argument names the credit, not a multiplier,
-				// and the amount entering the builder is exactly 30000.
-				//
-				// This was not a cosmetic difference. The packet amount is
-				// truncated to sixteen bits [06 §9.2] step 7 and applied as a
-				// modular subtraction read back as signed [06 §9.1], so a
-				// killer at tier 2 (ten kills) would have produced 33,600 —
-				// negative as an int16 — and HEALED the cargo it was supposed
-				// to destroy.
-				damageModifier := int32(65536)
-				if cargo.Def != nil {
-					damageModifier = cargo.Def.DamageModifier
-				}
-				amount := combat.ComputeScaledAmount(30000, 1, 0, cargo.Kills,
-					combat.UnitArmored(cargo), damageModifier, false, false, false)
-				// The packet's provenance pair, written where the ordinary
-				// intake writes it — on the application, before the health arm
-				// [06 §9.1] step 4. The kind byte is what the death handler's
-				// cause-gated credit switch reads back [06 §12.1]: cause 6
-				// shares cause 1's full path, cause 3 takes the partial
-				// loss-only path.
-				cargo.LastDamageCause = uint8(cascadeCause)
-				cargo.LastDamageSide = attackerSide
-				// The health arm is the ordinary one: modular 16-bit
-				// subtraction read back as signed [06 §9.1].
-				cargo.Health = combat.ApplyDamage(cargo.Health, amount)
-				if cargo.Health <= 0 {
-					cargo.Health = 0
-					// The recorded-attacker link takes the same attacker
-					// [04 R-UNIT-06 §5], and it is what the kill credit reads.
-					// A carrier that dies with no killer behind it — a
-					// packetless finalisation — passes the null through, which
-					// is the same row's "may be null".
-					//
-					// The coarse death-cause enum carries the 3-versus-6
-					// distinction into the finalizer: internal/session maps
-					// DeathSelfDestruct back to combat.CauseSelfDestruct and
-					// everything else to the full-credit path.
-					deathCause := units.DeathKilled
-					if cascadeCause == combat.CauseSelfDestruct {
-						deathCause = units.DeathSelfDestruct
-					}
-					w.DestroyBy(cargoHandle, deathCause, killerHandle) // will trigger recursive detach
-				}
+			if s.Damage != nil {
+				s.Damage(tick, combat.DamageInput{Victim: cargoHandle, Attacker: killerHandle, Nominal: 30000, Kind: uint8(cascadeCause)})
 			}
 			DetachCargo(w, cargoHandle)
 		}

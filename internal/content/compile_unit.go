@@ -208,7 +208,7 @@ type UnitDef struct {
 	Downloadable       bool  // downloadable [02 "Unit record"] C10
 	Builder            bool  // builder [02 "Unit record"]
 	Stealth            bool  // stealth [02 "Unit record"]
-	BMCode             bool  // bmcode [02 "Unit record"]
+	BMCode             uint8 // bmcode [02 "Unit record"]
 	ZBuffer            bool  // zbuffer [02 "Unit record"]
 	IsAirBase          bool  // isairbase [02 "Unit record"]
 	IsTargetingUpgrade bool  // istargetingupgrade [02 "Unit record"]
@@ -522,7 +522,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	downloadable := storedFlag(section, "downloadable", false)
 	builder := storedFlag(section, "builder", false)
 	stealth := storedFlag(section, "stealth", false)
-	bmcode := section.BoolValue("bmcode", false)
+	bmcode := uint8(section.IntValue("bmcode", 0))
 	zbuffer := storedFlag(section, "zbuffer", false)
 	isAirBase := storedFlag(section, "isairbase", false)
 	isTargetingUpgrade := storedFlag(section, "istargetingupgrade", false)
@@ -564,7 +564,7 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 
 	// Raw accessor for selfdestructcountdown so we can tell authored vs absent [02 "Unit record"].
 	selfDestructCountdown, selfDestructCountdownPresent := section.RawValue("selfdestructcountdown")
-	mobilityDomain := deriveMobilityDomain(bmcode, canFly, movementClass)
+	mobilityDomain := deriveMobilityDomain(bmcode != 0, canFly, movementClass)
 
 	// Unknown inert keys retained [02 §5] C14.
 	unknown := make(map[string]string)
@@ -594,7 +594,9 @@ func compileUnitSection(section *formats.Section, logicalPath string, language s
 	}
 
 	// Canonical key is the lowercased unitname per retail case-insensitive catalog [02 §5].
-	// Fallback to logical filename stem when unitname is empty (should not happen in retail, but keep deterministic).
+	// TODO(question): establish empty-name catalog finalization and secondary
+	// file lookup [02 §5]. Retain the existing filename-stem compatibility
+	// fallback until that path is traced; the retail string store itself is empty.
 	canonical := CanonicalKey(unitName)
 	if canonical == "" {
 		base := logicalPath
@@ -766,14 +768,19 @@ func writeUnitCanonical(u *UnitDef) []byte {
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|%d|%d|%d|", u.CruiseAlt, u.TransportSize, u.TransportCapacity, u.BuildAngle, u.BuildDistance, u.SortBias, u.ManeuverLeashLength, u.AttackRunLength, u.KamikazeDistance, u.FootprintX)
 	fmt.Fprintf(&b, "%d|%d|%d|%d|%d|%d|%d|", u.FootprintZ, u.MaxDamage, u.SightDistance, u.RadarDistance, u.SonarDistance, u.RadarDistanceJam, u.SonarDistanceJam)
 	fmt.Fprintf(&b, "%d|%d|%d|", u.MinCloakDistance, u.StandingMoveOrder, u.StandingFireOrder)
-	flags := []bool{u.InitCloaked, u.Downloadable, u.Builder, u.Stealth, u.BMCode, u.ZBuffer, u.IsAirBase, u.IsTargetingUpgrade, u.Teleporter, u.HideDamage, u.ShootMe, u.ArmoredState, u.ActivateWhenBuilt, u.CanFly, u.CanHover, u.Upright, u.Floater, u.Amphibious, u.IsFeature, u.NoShadow, u.ImmuneToParalyzer, u.HoverAttack, u.AntiWeapons, u.Digger, u.OnOffable, u.MobileStandOrders, u.FireStandOrders, u.CanStop, u.CanAttack, u.CanGuard, u.CanPatrol, u.CanMove, u.CanLoad, u.CanReclamate, u.CanResurrect, u.CanCapture, u.CanDGun, u.Kamikaze, u.NoRestrict, u.ShowPlayerName, u.Commander, u.CantBeTransported, u.Wacky}
-	for _, f := range flags {
-		if f {
-			b.WriteString("1|")
-		} else {
-			b.WriteString("0|")
+	writeFlags := func(flags ...bool) {
+		for _, f := range flags {
+			if f {
+				b.WriteString("1|")
+			} else {
+				b.WriteString("0|")
+			}
 		}
 	}
+	writeFlags(u.InitCloaked, u.Downloadable, u.Builder, u.Stealth)
+	// Preserve the byte in its existing canonical position; stock 0/1 hashes stay unchanged.
+	fmt.Fprintf(&b, "%d|", u.BMCode)
+	writeFlags(u.ZBuffer, u.IsAirBase, u.IsTargetingUpgrade, u.Teleporter, u.HideDamage, u.ShootMe, u.ArmoredState, u.ActivateWhenBuilt, u.CanFly, u.CanHover, u.Upright, u.Floater, u.Amphibious, u.IsFeature, u.NoShadow, u.ImmuneToParalyzer, u.HoverAttack, u.AntiWeapons, u.Digger, u.OnOffable, u.MobileStandOrders, u.FireStandOrders, u.CanStop, u.CanAttack, u.CanGuard, u.CanPatrol, u.CanMove, u.CanLoad, u.CanReclamate, u.CanResurrect, u.CanCapture, u.CanDGun, u.Kamikaze, u.NoRestrict, u.ShowPlayerName, u.Commander, u.CantBeTransported, u.Wacky)
 	fmt.Fprintf(&b, "%s|%t|", u.SelfDestructCountdown, u.SelfDestructCountdownPresent)
 	fmt.Fprintf(&b, "catmasks|")
 	for _, m := range []CategoryMask{u.UnitMask, u.BadTargetCategoryWPRIMask, u.BadTargetCategoryWSECMask, u.BadTargetCategoryWSPEMask, u.NoChaseCategoryMask} {

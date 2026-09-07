@@ -197,6 +197,22 @@ frame depth. These are implementation limits rather than file-format or retail
 rules. Repeated entry-table pointers share their immutable decoded reference
 table, so a repeated pointer does not consume the reference budget again.
 
+## Nanolathe metadata index
+
+**Established (Nanolathe host-boundary policy).** `LoadGAFMetadata` and its
+VFS form retain the file/entry fields, every frame-reference pointer and delay
+word, each frame's geometry and signed origin, and the complete composite
+child graph including the low-byte child count and high-byte alternate-blitter
+selector. They allocate no decoded pixel or transparency planes. `LoadGAF`
+uses that same validated index before it materializes pixels, so metadata and
+pixel consumers have one signed entry-count rule, first-match lookup, alias,
+malformed-payload, aggregate reference/pixel-geometry and composite-depth
+policy. In particular, a malformed raw or RLE payload rejects the whole bank
+for both readers; metadata does not turn a presentation failure into a
+simulation-only success. The pixel-geometry budget remains an acceptance bound
+for the metadata reader even though it has no pixel allocation, keeping the
+two readers on one corrupt-content policy.
+
 ## How the engine loads it
 
 `[02 §6]` and `[02 R-MALF-01 §6]` own the behaviour. Byte-level facts: the

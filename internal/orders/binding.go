@@ -7,6 +7,7 @@ package orders
 import (
 	"fmt"
 
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -27,6 +28,8 @@ type QueueBinding struct {
 	Hostility   func(actor *units.Unit, target *units.Unit) bool
 	SimRNG      *rng.Simulation
 	CurrentTick func() uint32
+	// Damage delivers locally produced packets to the session's common intake [06 §9.1].
+	Damage func(uint32, combat.DamageInput) combat.DamageResult
 
 	// The following adapters are the session-owned runtime seam for the order
 	// families. They are deliberately data-shaped rather than package globals:
@@ -351,6 +354,9 @@ func (b *QueueBinding) Validate() error {
 	// the carriable test [04 R-ORD-02 §1][04 §10.2]. Both fail closed when
 	// absent, so a battle that started without them would silently refuse
 	// mobile build and every pickup.
+	if b.Damage == nil {
+		return fmt.Errorf("orders: incomplete damage intake service")
+	}
 	if b.BuildList == nil || b.TransportAdmission == nil {
 		return fmt.Errorf("orders: incomplete command resolution service")
 	}

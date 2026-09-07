@@ -36,7 +36,7 @@ func padRepairFixture(t *testing.T) (*units.World, *economy.Service, *units.Unit
 	landerDef := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("padlander")},
 		UnitName:         "padlander",
-		CanFly:           true, CanMove: true, BMCode: true,
+		CanFly:           true, CanMove: true, BMCode: 1,
 		BuildTime: 100, BuildCostEnergy: 600,
 		MaxDamage: 100, FootprintX: 1, FootprintZ: 1,
 	}

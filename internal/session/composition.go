@@ -508,7 +508,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		return s.IsUnitVisible(localPlayerForSession(s), u)
 	}
 	registeredPlacement := false
-	if !u.Def.BMCode && s.Build != nil {
+	if u.Def.BMCode == 0 && s.Build != nil {
 		// Port 18 may run synchronously from COB Create. Install the transaction
 		// and the exact unit-creation stamp before strict binding starts Create;
 		// the callback therefore observes the cached placement and can commit the
@@ -769,6 +769,15 @@ func ensureCOBForAll(s *Session, fs vfs.FSOps) error {
 	return nil
 }
 
+// acceptDamage is the shared session seam for non-projectile packet producers.
+// It resolves live services at delivery, including during restored queue work.
+func (s *Session) acceptDamage(tick uint32, input combat.DamageInput) combat.DamageResult {
+	if s == nil {
+		return combat.DamageResult{}
+	}
+	return s.Combat.AcceptDamage(s.Units, tick, input)
+}
+
 func (s *Session) newOrderBinding() *orders.QueueBinding {
 	if s == nil {
 		return nil
@@ -961,6 +970,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 		}
 	}
 	return &orders.QueueBinding{
+		Damage:    s.acceptDamage,
 		Economy:   s.Econ,
 		Lookup:    worldQueries.LookupUnit,
 		Hostility: worldQueries.Hostile,
@@ -1719,6 +1729,7 @@ func createAndBindServices(s *Session) error {
 	}
 	// Bind movement classes explicitly [02 "Movement class record"]
 	s.Movement.SetClasses(s.Catalog.Movement)
+	s.Movement.Damage = s.acceptDamage
 	// The air build approach's product-footprint resolver
 	// [04 R-ORD-02 §2][04 R-PATH-01 §13]: internal/movement holds no catalog
 	// handle of its own, so it asks this session-bound closure for the

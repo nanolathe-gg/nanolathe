@@ -41,6 +41,8 @@ import (
 // of per-unit movement state for that world.
 type System struct {
 	Terrain *world.Terrain
+	// Damage delivers cargo-cascade packets through the session intake [06 §12.1].
+	Damage func(uint32, combat.DamageInput) combat.DamageResult
 
 	// Fallback is retained for callers that ask for a handle before its unit
 	// surface exists. Initialized units always use either their resolved class
@@ -1483,6 +1485,11 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	if s == nil || u == nil || u.Def == nil {
 		return
 	}
+	// Only byte 1 allocates a mover; byte 0 uses building placement support.
+	// Other nonzero classes have neither surface [08 R-AI-03 §7.4].
+	if u.Def.BMCode > 1 {
+		return
+	}
 	h := u.Handle
 	if _, ok := s.Routes[h]; ok {
 		return
@@ -1542,7 +1549,7 @@ func (s *System) EnsureUnit(u *units.Unit) {
 	// CollisionState. Building-class units use their authored FBI rectangle and
 	// yard bytes; mobile units retain the resolved movement-class rectangle and
 	// full rectangular stamp [04 R-COLL-01 §4].
-	building := !u.Def.BMCode
+	building := u.Def.BMCode == 0
 	var yard []world.YardCell
 	footX := profile.FootPrintX
 	footZ := profile.FootPrintZ

@@ -1,0 +1,118 @@
+#!/bin/sh
+# Compare classic and modern captures over the shared GPU matrix. This is a
+# separate P1 diagnostic from tools/gpu-parity: the latter keeps its historical
+# classic-baseline semantics.
+#
+#   tools/gpu-compare OUTDIR              exact comparison (default max 0)
+#   tools/gpu-compare --report-only OUTDIR report differences without acceptance
+#
+# Every entry's PNGs and log are kept in OUTDIR, together with revision and
+# command metadata. A report-only run is explicitly diagnostic and never calls
+# its successful command an acceptance pass.
+set -u
+
+usage() {
+	echo "usage: tools/gpu-compare [--report-only] [--max N] OUTDIR" >&2
+}
+
+mode=exact
+max_diff=0
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	--report-only) mode=report-only; shift ;;
+	--max)
+		if [ "$#" -lt 2 ]; then usage; exit 2; fi
+		max_diff=$2
+		shift 2
+		;;
+	--max=*) max_diff=${1#--max=}; shift ;;
+	-h|--help) usage; exit 0 ;;
+	-*) echo "gpu-compare: unknown option $1" >&2; usage; exit 2 ;;
+	*) break ;;
+	esac
+done
+
+if [ "$#" -ne 1 ]; then usage; exit 2; fi
+out=$1
+case "$max_diff" in
+''|*[!0-9]*) echo "gpu-compare: --max wants a nonnegative integer, got $max_diff" >&2; exit 2 ;;
+esac
+
+root=$(git rev-parse --show-toplevel) || exit 2
+cd "$root" || exit 2
+. tools/gpu-matrix
+
+if [ -e "$out" ]; then
+	if [ ! -d "$out" ]; then
+		echo "gpu-compare: output path is not a directory: $out" >&2
+		exit 2
+	fi
+	if find "$out" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+		echo "gpu-compare: output directory must be empty: $out" >&2
+		exit 2
+	fi
+else
+	mkdir -p "$out" || exit 2
+fi
+printf '%s\n' "$(git rev-parse HEAD)" >"$out/REVISION"
+git status --short >"$out/WORKTREE"
+printf '%s\n' "$mode" >"$out/MODE"
+cp tools/gpu-matrix "$out/gpu-matrix" || exit 2
+
+export NANOLATHE_RETAIL_ASSETS="${NANOLATHE_RETAIL_ASSETS:-${NANOLATHE_TA_ROOT:-$HOME/TotalAnnihilation}}"
+build_dir=$(mktemp -d -t nanolathe-gpu-compare.XXXXXX)
+trap 'rm -rf "$build_dir"' EXIT
+if ! go build -o "$build_dir/nanolathe" ./cmd/nanolathe >"$out/build.log" 2>&1; then
+	echo "gpu-compare: build failed; see $out/build.log" >&2
+	exit 1
+fi
+
+# Report-only uses the largest command-line threshold so a difference does not
+# turn the capture itself into a misleading 'pass'. Execution and capture
+# errors still produce a non-zero result.
+shot_max=$max_diff
+if [ "$mode" = report-only ]; then shot_max=2147483647; fi
+printf '%s\n' "--renderer=modern --shot-renderer=both --shot-renderer-max=$shot_max" >"$out/COMMAND"
+: >"$out/FAILURES"
+
+printf '%s\n' "$GPU_MATRIX" | while IFS='|' read -r id aa shading args; do
+	[ -n "$id" ] || continue
+	settings="$out/$id.settings.json"
+	printf '%s\n' "{\"version\":1,\"display\":{\"width\":640,\"height\":480,\"antiAlias\":$aa,\"shadows\":1,\"featureShadows\":1,\"vehicleShadows\":1,\"shading\":$shading,\"gamma\":10}}" >"$settings"
+	log="$out/$id.log"
+	outpng="$out/$id.png"
+	ifs=$IFS
+	set -f
+	IFS=';'
+	# shellcheck disable=SC2086
+	set -- $args
+	IFS=$ifs
+	set +f
+	if NANOLATHE_SETTINGS="$settings" "$build_dir/nanolathe" "$@" --renderer=modern --shot-renderer=both --shot-renderer-max="$shot_max" --shot="$outpng" >"$log" 2>&1; then
+		if [ "$mode" = report-only ]; then
+			echo "$id: REPORT-ONLY capture complete; inspect $log"
+		elif [ "$max_diff" -eq 0 ]; then
+			echo "$id: exact comparison within max 0"
+		else
+			echo "$id: threshold comparison within max $max_diff"
+		fi
+	else
+		echo "$id" >>"$out/FAILURES"
+		echo "$id: comparison/capture failed; see $log" >&2
+	fi
+done
+
+failed=$(wc -l <"$out/FAILURES" | tr -d ' ')
+if [ "$mode" = report-only ]; then
+	if [ "$failed" -ne 0 ]; then
+		echo "REPORT-ONLY: $failed capture(s) failed; no parity acceptance was asserted" >&2
+		exit 1
+	fi
+	echo "REPORT-ONLY: captures complete; differences are diagnostic and no parity pass/fail was asserted"
+	exit 0
+fi
+if [ "$failed" -ne 0 ]; then
+	echo "FAIL: $failed exact comparison(s) exceeded max $max_diff or failed to capture; outputs in $out" >&2
+	exit 1
+fi
+echo "OK: exact classic/modern comparison within max $max_diff; outputs in $out"

@@ -27,7 +27,7 @@ func buildRestoreBenchStage(b *testing.B, n int) *RetailBattleStage {
 	def := &content.UnitDef{
 		UnitName:  "benchfixture",
 		MaxDamage: 100,
-		BMCode:    true, // mobile: EnsureUnit takes the rectangle-stamp path
+		BMCode:    1, // mobile: EnsureUnit takes the rectangle-stamp path
 		Script:    &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}},
 	}
 	// Player 0's slice is [1, maxDefs]; size it to exactly the stable ID range

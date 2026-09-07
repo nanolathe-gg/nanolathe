@@ -149,7 +149,7 @@ func (f *pt4Fixture) legalSite(t *testing.T, key string, x, z numeric.Fixed) (nu
 				if err != nil {
 					continue
 				}
-				if _, err := f.s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Mobile: def.BMCode}); err == nil {
+				if _, err := f.s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Mobile: def.BMCode != 0}); err == nil {
 					return cx, cz
 				}
 			}

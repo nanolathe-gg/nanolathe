@@ -120,7 +120,7 @@ func TestSelectionThenImplicitOrderAndStopUsesCurrentSelection(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	// A mobile unit authors bmcode 1; the resolver's live-mover test reads the
 	// building-class status bit that creation derives from it [04 R-ORD-02 §1].
-	def := &content.UnitDef{UnitName: "scout", BMCode: true, CanMove: true, MaxDamage: 100}
+	def := &content.UnitDef{UnitName: "scout", BMCode: 1, CanMove: true, MaxDamage: 100}
 	def.CanonicalKey = "scout"
 	cat.Units[def.CanonicalKey] = def
 	w := newSessionFixtureWorld(8, cat)

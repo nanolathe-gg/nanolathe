@@ -18,7 +18,7 @@ func moveGoalFixture() (*Queue, *units.Unit, *[]PointGoalRequest, *[]*Node) {
 	u := &units.Unit{
 		Handle: 1,
 		Alive:  true,
-		Def:    &content.UnitDef{UnitName: "mover", BMCode: true},
+		Def:    &content.UnitDef{UnitName: "mover", BMCode: 1},
 		X:      numeric.Fixed(70 << 16),
 		Y:      numeric.Fixed(40 << 16),
 		Z:      numeric.Fixed(90 << 16),

@@ -139,8 +139,8 @@ func TestGroundScriptedTransportRunsThroughPreCreateBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	carrierDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "carrier"}, UnitName: "carrier", ObjectName: "fixture", BMCode: true, CanMove: true, CanLoad: true, TransportSize: 2, FootprintX: 1, FootprintZ: 1, MaxDamage: 10, Limit: -1}
-	cargoDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cargo"}, UnitName: "cargo", ObjectName: "fixture", BMCode: true, CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 10, Limit: -1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 255}
+	carrierDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "carrier"}, UnitName: "carrier", ObjectName: "fixture", BMCode: 1, CanMove: true, CanLoad: true, TransportSize: 2, FootprintX: 1, FootprintZ: 1, MaxDamage: 10, Limit: -1}
+	cargoDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cargo"}, UnitName: "cargo", ObjectName: "fixture", BMCode: 1, CanMove: true, FootprintX: 1, FootprintZ: 1, MaxDamage: 10, Limit: -1, MaxWaterDepth: 12, MinWaterDepth: -10000, MaxSlope: 50, MaxWaterSlope: 255}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"carrier": carrierDef, "cargo": cargoDef}}
 	terrain := minimalTerrain()
 	sim := rng.NewSimulation(77)
@@ -266,7 +266,7 @@ func TestCompositionCreationInitializesEconomyAccountBeforePublicationAndSlotReu
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1, BMCode: true}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1, BMCode: 1}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
 	w, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestSessionCOBCreateReceivesQueriesAndActivationContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1, BMCode: true}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1, BMCode: 1}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
 	w, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {

@@ -145,65 +145,19 @@ func selfDestructHandler(u *units.Unit, n *Node, satisfied uint32, tick uint32) 
 		}
 		return Code(5) // cancelled: *complete* without damage [04 R-ORD-01 §2]
 	}
-	applySelfDestructDamage(u)
+	applySelfDestructDamage(u, tick)
 	return Code(5) // *complete* [04 R-ORD-01 §2]
 }
 
-// applySelfDestructDamage applies the row's 30000 damage to the unit itself
-// through the standard damage funnel [04 R-SPEC-01 §1][06 §9.2]: the
-// armored-state reduction is skipped because it applies only to amounts
-// strictly below 30000 — and the amount is still 30000 when step 5 tests it,
-// because the defender veterancy of step 6 has not run yet — and the defender
-// veterancy scale applies as for any
-// packet, so the amount is 30000 at zero kills and never less than 24000 at the
-// top kill tier. The attacker term is not taken — the row's arithmetic is the
-// defender factor alone.
-//
-// The death latch is the three death fields the world's own destroy entry
-// writes [04 §2.3][04 §2.4][04 R-UNIT-06 §5]: the unit stays visible to later
-// phases and is retired by the next phase-2 slot finalizer, which fires the
-// death hooks and resolves `selfdestructas` for cause 3 [R-DMG-01 §5]. A
-// handler cannot reach the world to call that entry, so it calls that entry's
-// own field writer, `units.MarkDeath`; the two must not drift, and before
-// WU-19-49 this site latched two of the three fields.
-//
-// The third is the recorded-attacker link, whose death row takes the death
-// packet's attacker [04 R-UNIT-06 §5]. Cause 3 applies its damage "to the unit
-// itself", so that attacker is this unit and the link ends as its own handle —
-// not as whoever shot it before it was told to self-destruct.
-//
-// The funnel's two global double/half gates [06 §9.2] are not on this path,
-// which is why nothing here consults them. The row enters at the PACKET BUILDER
-// — attacker and victim both this unit, amount 30000, kind 3 [04 R-ORD-01 §14]
-// [06 R-WPN-05 §11] — and §9.2 applies those two bits in the per-recipient
-// routine ABOVE the builder, alongside the area falloff and the attacker
-// veterancy this row equally does not take. §9.2's own whole-image census
-// independently finds no writer for either bit, so both are stock-inert as
-// well; either fact alone settles the site.
-func applySelfDestructDamage(u *units.Unit) {
-	if u == nil || u.Def == nil {
+// applySelfDestructDamage sends the fixed kind-3 packet to the common intake.
+// Attacker identity is self; only defender scaling applies [04 R-ORD-01 §14]
+// [06 §9.2]. The intake owns flash, reaction, provenance and death admission.
+func applySelfDestructDamage(u *units.Unit, tick uint32) {
+	if u == nil {
 		return
 	}
-	amount := combat.ComputeScaledAmount(
-		selfDestructDamage,
-		1, // no area falloff: the amount is applied directly to the unit itself
-		0, // attacker veterancy is not taken [04 R-SPEC-01 §1]
-		u.Kills,
-		// The armor gate's operand is the RUNTIME armored posture — bit 1 of
-		// the unit's first state byte, the `set ARMORED` port — never the FBI
-		// `armoredstate` key, which is parsed into a definition flag no retail
-		// path reads [06 R-DMG-01 §8]. Passing the definition flag here made
-		// every unit authored `armoredstate=1` permanently armored at this
-		// call site. It is inert at amount 30000, but it was the wrong operand.
-		combat.UnitArmored(u),
-		u.Def.DamageModifier,
-		false, false, false,
-	)
-	u.LastDamageSide = u.Owner
-	u.LastDamageCause = uint8(combat.CauseSelfDestruct)
-	u.Health = combat.ApplyDamage(u.Health, amount)
-	if u.Health <= 0 && !u.Dying {
-		units.MarkDeath(u, units.DeathSelfDestruct, u.Handle) // damage cause 3 [06 §12.1]
+	if binding := bindingFor(u); binding != nil && binding.Damage != nil {
+		binding.Damage(tick, combat.DamageInput{Victim: u.Handle, Attacker: u.Handle, Nominal: selfDestructDamage, Kind: uint8(combat.CauseSelfDestruct)})
 	}
 }
 

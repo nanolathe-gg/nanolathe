@@ -19,9 +19,9 @@ func TestCarriedCargoReleasesGroundCells(t *testing.T) {
 	w := newMovementFixtureWorld(100)
 
 	transDef := defForTransport("arm_atlas")
-	transDef.BMCode = true
+	transDef.BMCode = 1
 	cargoDef := defForCargo("armflea", 1)
-	cargoDef.BMCode = true
+	cargoDef.BMCode = 1
 	cargoDef.MovementClass = "kbot2x2"
 
 	tx, tz := world.CellToWorld(5), world.CellToWorld(5)

@@ -133,7 +133,7 @@ func TestAssistedProductStillCompletesTheFactoryNode(t *testing.T) {
 func TestAssistRunsTheCompletionTransitionAfterEveryExit(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	helperDef := newFactoryDef("assistexithelper", 1, 1, 30)
-	helperDef.BMCode = true
+	helperDef.BMCode = 1
 	helperDef.CanMove = true
 	prodDef := newProductDef("assistexitprod", 1, 1, 1, 100)
 	cat.Units[helperDef.CanonicalKey] = helperDef

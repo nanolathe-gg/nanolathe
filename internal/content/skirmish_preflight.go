@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -113,9 +114,7 @@ func PreflightSkirmish(fs vfs.FSOps, catalog *Catalog, mapName string, side int)
 	}}
 	p.file("map.ota", mh.LogicalOTA, true)
 	p.file("map.tnt", mh.LogicalTNT, true)
-	for _, name := range []string{"palette.pal", "palette.lht", "palette.shd", "palette.alp"} {
-		p.file("palette", "palettes/"+name, true)
-	}
+	p.paletteBundle()
 	p.file("cursor.gaf", "anims/cursors.gaf", true)
 	p.file("gui.common", "anims/commongui.gaf", true)
 
@@ -224,6 +223,33 @@ func (p *skirmishPreflight) file(kind, logical string, required bool) bool {
 	asset := SkirmishAsset{Kind: kind, Logical: logical, Provider: info.Source.ProviderID()}
 	p.assets[strings.Join([]string{kind, logical}, "\x00")] = asset
 	return true
+}
+
+// paletteBundle shares the live loader's recovery policy, so a recoverable
+// PCX installation is not rejected by an existence-only PAL preflight [02 R-MALF-01 §9].
+func (p *skirmishPreflight) paletteBundle() {
+	if _, err := palette.Load(p.fs); err != nil {
+		p.fatal("palette", "palettes/palette.pal", "", err.Error())
+		return
+	}
+	recovered := false
+	for _, stem := range []string{"palette", "guipal"} {
+		name := "palettes/" + stem + ".pal"
+		info, err := p.fs.Stat(name)
+		if err != nil || info.Size == 0 {
+			name = "palettes/" + stem + ".pcx"
+			recovered = true
+		}
+		p.file("palette", name, true)
+	}
+	if !recovered {
+		for _, ext := range []string{"alp", "lht", "shd"} {
+			name := "palettes/palette." + ext
+			if info, err := p.fs.Stat(name); err == nil && info.Size != 0 {
+				p.file("palette", name, true)
+			}
+		}
+	}
 }
 
 func (p *skirmishPreflight) namedFile(kind, name string, dirs ...string) string {
@@ -486,7 +512,7 @@ func (p *skirmishPreflight) script(kind string, u *UnitDef, required bool) {
 			}
 		}
 	}
-	if u.Builder && !u.BMCode {
+	if u.Builder && u.BMCode == 0 {
 		for _, entry := range []string{"QueryNanoPiece", "QueryBuildInfo"} {
 			if !hasScript(program, entry) {
 				p.diag(SkirmishDiagnostic{Code: "missing-callback", Fatal: required, Kind: kind + ".cob", Logical: path, Entry: entry, Message: fmt.Sprintf("required COB entry point is unavailable: logical path %s, expected %s", path, entry)})

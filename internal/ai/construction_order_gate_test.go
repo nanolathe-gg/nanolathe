@@ -19,7 +19,7 @@ func constructionOrderGateFixture(t *testing.T) (*Manager, *units.World, *units.
 		UnitName:         "gate-builder",
 		Side:             "ARM",
 		Builder:          true,
-		BMCode:           true,
+		BMCode:           1,
 		CanMove:          true,
 		MaxDamage:        100,
 	}

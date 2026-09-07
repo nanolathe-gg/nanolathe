@@ -132,7 +132,7 @@ func resolveRetailPlacementDef(m *Manager, defKey string) (retailPlacementDef, P
 		return retailPlacementDef{}, placementFailure(HelperNone, ReasonInvalidFootprint, err.Error())
 	}
 	var yard []world.YardCell
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		if strings.TrimSpace(def.YardMap) == "" {
 			return retailPlacementDef{}, placementFailure(HelperNone, ReasonMissingDefinition, fmt.Sprintf("unit %q has no placement yard", defKey))
 		}
@@ -197,7 +197,7 @@ func validateRetailAICandidate(terrain *world.Terrain, pd retailPlacementDef, x,
 	// first written and were corrected 2026-09-02, and [08 R-AI-03 §7.4] lists
 	// the four readers that agree. Mobile=true selects the plain branch of the
 	// repository's one canonical world validator.
-	yard, plainFootprint := pd.yard, pd.def.BMCode
+	yard, plainFootprint := pd.yard, pd.def.BMCode != 0
 	_, err = terrain.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: pd.rules, Self: 0, Mobile: plainFootprint})
 	if err != nil {
 		return rect, 0, ReasonBlocked, err

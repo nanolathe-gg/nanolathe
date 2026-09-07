@@ -39,6 +39,12 @@ func waterDamageFixture(t *testing.T, waterDoesDamage, waterDamage int32) (*Sess
 		World:   ter,
 		Econ:    &economy.Service{},
 	}
+	s.Combat = &combat.Service{ControlByte: func(owner uint8) uint8 {
+		if int(owner) >= len(s.Econ.Players) || !s.Econ.Players[owner].Exists {
+			return combat.ControlByteAbsent
+		}
+		return s.Econ.Players[owner].ControllerState
+	}}
 	s.Econ.Players[0] = economy.Player{Exists: true, ControllerState: combat.ControlByteHuman}
 	return s, def
 }

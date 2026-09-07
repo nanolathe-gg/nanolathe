@@ -94,7 +94,7 @@ func TestBoundGoalShapesReplaceAndReleaseByNode(t *testing.T) {
 
 func TestAirGoalUsesExistingFlightPayloadAndReleasesOnce(t *testing.T) {
 	w := units.NewSliced(2, nil)
-	h, err := w.Create(&content.UnitDef{CanFly: true, BMCode: true, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
+	h, err := w.Create(&content.UnitDef{CanFly: true, BMCode: 1, MaxDamage: 10, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}, Pieces: []string{"base"}}}, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatalf("create aircraft: %v", err)
 	}

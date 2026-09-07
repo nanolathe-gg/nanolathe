@@ -321,14 +321,23 @@ install reads about a gigabyte.
 ### 3.4 Catalog contracts (C1–C15)
 
 **C1 — two stages.** Discover and parse every family into typed records, then
-link. A unit's weapon slots resolve only after every weapon compiles, so
-enumeration order cannot leak into identity `[02 §5]`.
+link. A unit's weapon slots resolve after weapon compilation. Discovery order
+still determines same-ID replacement and the point where a missing `UNITINFO`
+ends unit parsing `[02 R-CONTENT-02]` `[02 R-CAT-01 §4]`.
+
+The VFS winner is retained throughout discovery (SC24): loose FBI winners are
+parsed before the archive gate drops them; loose weapon winners are skipped
+before parsing. A shadowed archive is never substituted. Unit files require
+`UNITINFO`; there is no first-section fallback. An absent `UNITINFO` ends the
+stage, leaving later enumerated files unparsed `[02 R-CAT-01 §4]`.
 
 **C2 — weapon identity.** The `ID` key is read **first**, as an integer with
 default −1, and selects the record; the section name becomes the catalog name
 and `name` is a separate display string. A later section with the same ID
-replaces every parser-owned field — including fields whose keys the later
-section omits — and its section name becomes the surviving catalog name. The
+replaces the ordinary parser-owned fields — including fields whose keys the
+later section omits — and its section name becomes the surviving catalog name.
+The existing damage-override table is the documented exception: a same-ID
+parse contributes to that table `[06 R-DMG-01 §1]`. The
 superseded name then matches no record `[02 R-CONTENT-02]`. Sections without
 an ID share one scratch slot the runtime name scan never reaches, so they are
 inert. Duplicates are retained as `WeaponDuplicate` diagnostics in discovery
@@ -535,7 +544,7 @@ behaviour.
   discards the result and gathers the numbered keys unconditionally — which
   the executable itself does, so this is retail rather than a divergence.
 
-Three smaller departures live only here, all recorded under [I11]:
+Host limits and compatibility boundaries are recorded under [I11]:
 
 * **Path ergonomics.** The overlay accepts both slash styles, folds `.` and
   rejects `..`; retail splits on backslash only and gives `.`/`..` no meaning.
@@ -550,10 +559,12 @@ Three smaller departures live only here, all recorded under [I11]:
   retail would crash on — the sanctioned exception to [I11] — and must not
   reject anything in a stock install, which the whole-install format walk is
   there to prove.
-* **Leniency that keeps odd-but-loadable mod data working.** An assignment
-  followed by a newline without its terminator parses instead of raising the
-  second diagnostic, and an empty `unitname` falls back to the filename stem.
-  Stock content never exercises either case.
+* **Text terminators and empty unit names.** The parser scans forward to the
+  next semicolon across newlines; reaching EOF without one is a fatal syntax
+  error `[02 R-MALF-01 §4]`. The compiler currently substitutes the filename
+  stem for an empty `unitname`. This is a recorded compatibility gap, not an
+  established retail fallback: the string accessor stores an empty name, and
+  the downstream empty-identity policy remains Unknown in doc 02 §5.
 
 ## 6. Research map
 
@@ -598,25 +609,22 @@ Three smaller departures live only here, all recorded under [I11]:
 
 ## 7. Not implemented, and open questions
 
-No `TODO(question)`, `TODO(T23)` or `TODO(T25)` marker remains in `vfs`,
-`formats`, `internal/content` or `internal/settings`: every question these
-packages once carried was settled by a traced finding, and each is now a
-contract above. What remains open is recorded here.
+Open questions are maintained at their code sites and in the owning research
+category's "Missing and unknown" list. A package-wide absence of markers is
+not a completion claim. Current examples include high-byte locale comparison
+in the VFS, TDF/GAF readers and content lookup, GAF nested/alternate raster
+consumers, and empty unit-name finalization. These are distinct from the
+established contracts above.
 
-* **The archive-only gate on unit and weapon discovery** is deliberately not
-  applied (SC24, §3.6). It closes if mod loading ever needs retail's gate, at
-  which point the gate belongs in the catalog loader keyed on the entry's
-  provider kind and the fixtures get packed.
-* **The override content checksum has no consumer** (§3.6). The comparison
-  that would read a replaced definition hash lives in the lobby's
-  content-identity exchange `[08 R-OOS-01 §2]`, which is out of scope; the
-  path is stock-inert because `.OVR` is not a mounted provider extension.
-  Settling it needs a trace of the lobby metadata comparison, and single
-  player does not need it.
-* **Intra-tier ordering cannot be reproduced**, only measured (SC3). The
-  manifest names the winner so a disagreement is nameable rather than silent.
-* **Retail's own leniencies are unexercised windows.** The parse leniency and
-  the two unit-section fallbacks (§5) have no stock input that reaches them,
-  so no observation can confirm or refute what retail does there. They stay
-  documented rather than tightened, because tightening them would reject data
-  that loads today.
+* **Host-specific enumeration order** remains an explicit deterministic
+  substitute (SC3). The manifest identifies the winning provider.
+* **Excluded platform/session work** includes the CD-ROM discovery tier and
+  multiplayer OVR checksum exchange (§3.6); neither is required for supported
+  single-player startup.
+* **Behavior owned elsewhere** stays at its owner: model/GAF rendering and
+  sound in doc 03; GUI callbacks and localization presentation in doc 07;
+  limits and build admission in doc 05. Consult those closures before treating
+  an older loader-side question as unresolved.
+* **Format follow-ups** remain separate review units: U18 owns the COB trailing
+  header wording, and REND-11 owns the WAV wrapper/chunk discrepancy. `[fmt cob]` and `[fmt wav]` own byte layout;
+  this design does not restate it.

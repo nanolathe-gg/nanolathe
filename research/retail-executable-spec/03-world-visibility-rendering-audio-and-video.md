@@ -4904,15 +4904,50 @@ by the palette-install builder:
 
 - For each palette index `i` with RGB `(r,g,b)` (1024-byte PALETTE.PAL,
   stride 4): `avg = (r+g+b)/3` truncated toward zero.
-- Target color is `(avg,avg,avg)`. The builder scans candidate indices `0..255`
-  in order, restricted to entries whose RGB sum lies in `[3*avg−40, 3*avg+40]`
-  (below the window: skip; above: stop the scan entirely), keeping the strictly
-  smaller squared RGB distance `dr²+dg²+db²`; ties keep the lowest index. If no
-  candidate fell inside the window, the exit loop counter is kept.
+- Target color is `(avg,avg,avg)`. The builder uses the sum-sorted nearest-color
+  search described in §4.3.4 and [R-WATER-01 §2]; ties preserve the earliest
+  sorted position, not necessarily the lowest original palette index.
 - The result is stored as `grayTable[i]`.
 
 Net effect: fogged-but-explored tiles show their terrain desaturated through
 the nearest gray palette entries; texture is preserved (see §3.3 [R-RR16-A]).
+
+#### 4.3.4 Missing palette and derived-table recovery [R-PAL-RECOVERY §1]
+
+**Established.** Missing or empty PAL files recover through the corresponding
+PCX, as specified by [02 R-MALF-01 §9]. That recovery invalidates all three
+derived tables. Independently, each missing or empty ALP, LHT or SHD invokes
+its own builder; a nonempty file is loaded instead. These are load-time tables
+with no RNG consumption.
+
+All three builders use the same nearest-color search as gray/blue generation.
+Initialize a palette-index permutation and RGB sums, then for each position
+compare every later position and exchange both arrays on a strictly smaller
+sum. Equal sums are not directly exchanged, but intervening swaps can change
+their order. Scan this permutation, skipping sums below target sum minus 40
+and stopping above target sum plus 40. Keep only strictly smaller squared RGB
+distance. If no candidate qualifies, use the scan's exit position modulo 256.
+Return the original palette index at the selected permutation position.
+
+- **ALP:** for distinct source indices, target each channel at the integer
+  floor of their channel sum divided by two. A diagonal entry preserves its
+  own index directly, even when the palette contains duplicate colors.
+- **LHT:** for each row 0 through 31, first multiply the row by the stored
+  binary64 constant `-0.03333333333333333`, then subtract that product from
+  binary64 `1.0`. Each operation rounds separately under the default precision
+  [01 §8]. Multiply each source byte by the stored factor, truncate toward
+  zero, and clamp results greater than 255 before the nearest-color search.
+- **SHD:** start a stored binary64 factor at zero. Compute each channel by
+  multiplication, truncation toward zero, and a clamp when the unsigned low
+  word exceeds 255. After each row, subtract the stored binary64 constant
+  `-0.06875` and store the next factor. Do not replace these successive rounded
+  updates with multiplication by the row. In these 32 rows every channel
+  product is nonnegative and below 544, so the word comparison is equivalent
+  to clamping a nonnegative integer at 255.
+
+The builders ignore each palette entry's reserved fourth byte. Their output
+is separate from the policy of trusting an existing authored table: a shipped
+or modded table need not be regenerated merely because a builder exists.
 
 ### 4.4 GAF sprites and animation
 

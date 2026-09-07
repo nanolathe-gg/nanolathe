@@ -130,7 +130,7 @@ func TestFactoryProductionEndToEndRetail(t *testing.T) {
 	}
 	productKey := ""
 	for _, b := range menu.Buttons {
-		if d, okD := cat.Unit(b); okD && d.BMCode {
+		if d, okD := cat.Unit(b); okD && d.BMCode != 0 {
 			productKey = d.CanonicalKey
 			break
 		}

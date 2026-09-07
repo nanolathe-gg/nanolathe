@@ -76,7 +76,7 @@ func TestOrderlessMoversAreSweptAndCorrected(t *testing.T) {
 		if u == nil || !u.Alive || u.Owner != sess.LocalOwner || u.Def == nil {
 			continue
 		}
-		if !u.Def.BMCode || u.Def.CanFly || u.Attachment.Carrier != 0 {
+		if u.Def.BMCode == 0 || u.Def.CanFly || u.Attachment.Carrier != 0 {
 			continue
 		}
 		if q := orders.QueueOfUnit(u); q != nil && q.Head() != nil {

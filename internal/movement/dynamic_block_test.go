@@ -21,7 +21,7 @@ func TestStepUnitBlockedCommitKeepsOrderAndRequest(t *testing.T) {
 		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535,
 		// A mover, not a building: the sweep runs the mover tick only for a unit
 		// that has one [04 R-MOV-03 §1] step 9.
-		BMCode: true,
+		BMCode: 1,
 	}
 	// The mover accelerates to two cells on its first tick. The final-commit
 	// validator checks the proposed footprint, not every intermediate cell, so

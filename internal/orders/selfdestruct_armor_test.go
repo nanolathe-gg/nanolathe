@@ -5,7 +5,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
-	"github.com/nanolathe/nanolathe/internal/units"
 )
 
 // TestSelfDestructArmorGateReadsTheRuntimeBit locks the operand of the damage
@@ -27,8 +26,9 @@ func TestSelfDestructArmorGateReadsTheRuntimeBit(t *testing.T) {
 
 	loss := func(authored, runtime bool) int32 {
 		def := &content.UnitDef{ArmoredState: authored, DamageModifier: halfIn1616}
-		u := &units.Unit{Handle: 1, Def: def, Alive: true, Health: 40000, MaxHealth: 40000, Armored: runtime}
-		applySelfDestructDamage(u)
+		_, u := selfDestructFixture(t, def)
+		u.Health, u.MaxHealth, u.Armored = 40000, 40000, runtime
+		applySelfDestructDamage(u, 0)
 		return 40000 - u.Health
 	}
 

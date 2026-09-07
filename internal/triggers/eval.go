@@ -274,7 +274,7 @@ func countMatching(c PollContext, owner int, mobile bool, t *Trigger, bothPrimar
 		} else if int(u.Owner) != owner {
 			return true
 		}
-		if mobile && (u.Def == nil || !u.Def.BMCode) {
+		if mobile && (u.Def == nil || u.Def.BMCode != 1) {
 			return true
 		}
 		if t != nil && !t.matchesType(u, false) {
@@ -300,7 +300,7 @@ func (t *Trigger) Notify(c PollContext, ev NotifyEvent, u *units.Unit) bool {
 			t.complete(c, true)
 		}
 	case KindKillAllMobileUnits:
-		if !t.Completed && ev == NotifyUnitDied && owner == 1 && u.Def.BMCode && countMatching(c, 1, true, nil, false) < 2 {
+		if !t.Completed && ev == NotifyUnitDied && owner == 1 && u.Def.BMCode == 1 && countMatching(c, 1, true, nil, false) < 2 {
 			t.complete(c, true)
 		}
 	case KindCaptureUnitType:

@@ -17,7 +17,7 @@ func killCreditFixture(t *testing.T) (*Session, *units.Unit, *content.UnitDef) {
 	def := &content.UnitDef{
 		UnitName:  "credit-victim",
 		MaxDamage: 100,
-		BMCode:    true,
+		BMCode:    1,
 		Script:    fixtureCOBProgram(),
 	}
 	def.CanonicalKey = content.CanonicalKey(def.UnitName)
@@ -45,7 +45,7 @@ func finalizeCreditVictim(t *testing.T, s *Session, def *content.UnitDef, cause 
 
 func TestSessionDeathsAdvanceUnitVeterancyAtFiveSixAndTwentyFive(t *testing.T) {
 	s, attacker, def := killCreditFixture(t)
-	target := &units.Unit{Def: &content.UnitDef{BMCode: true}}
+	target := &units.Unit{Def: &content.UnitDef{BMCode: 1}}
 	slot := &units.Slot{Flags: units.SlotFlagEnabled}
 	weapon := &content.WeaponDef{WeaponVelocity: 1}
 

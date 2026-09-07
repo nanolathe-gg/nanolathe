@@ -29,7 +29,7 @@ func exitTerrain(w, h int32) *world.Terrain {
 
 func exitMobileDef(name string, fx, fz int32) *content.UnitDef {
 	d := newProductDef(name, fx, fz, 50, 100)
-	d.BMCode = true
+	d.BMCode = 1
 	d.MovementClass = "exitmove"
 	return d
 }
@@ -55,6 +55,7 @@ func exitCatalog(defs ...*content.UnitDef) *content.Catalog {
 func exitService(t *testing.T, terrain *world.Terrain, cat *content.Catalog) (*Service, *units.World) {
 	t.Helper()
 	svc := NewService(terrain, cat, newConstructionFixtureWorld(64, cat), &economy.Service{})
+	bindConstructionCombat(svc)
 	if svc == nil {
 		t.Fatal("nil service")
 	}
@@ -134,7 +135,7 @@ func TestFactoryExitValidatesInsideOwnCompletedYard(t *testing.T) {
 	lab.MinWaterDepth = -10000 // established land-profile template [04 §6.1]
 	comDef := newProductDef("exitcom", 1, 1, 10, 10)
 	comDef.WorkerTime = 300
-	comDef.BMCode = true // mobile commander-class fixture
+	comDef.BMCode = 1 // mobile commander-class fixture
 	gate := newProductDef("exitgate", 3, 3, 50, 100)
 	mob := exitMobileDef("exitmob", 2, 2)
 	cat := exitCatalog(lab, comDef, gate, mob)

@@ -250,6 +250,9 @@ type Model struct {
 	// frame. Replaying this command runs that subject's shadow, its one body
 	// blit and its trace, in that order.
 	Ref int
+	// Geometry is the durable, device-neutral polygon packet for P3. Ref remains
+	// the classic bridge; Geometry never requires a client, camera, or pool.
+	Geometry *ModelGeometry
 }
 
 // Fog records the already-clipped fog op list the client built with
@@ -412,6 +415,19 @@ func (l *List) RecordModel(c Model) {
 	l.model = append(l.model, c)
 }
 
+// ModelCommands returns durable copies of the recorded model commands in their
+// model-family order. It is for diagnostic consumers such as static previews;
+// executors preserve global order by using Replay. Geometry is cloned so a
+// caller cannot mutate a recorded frame's packet.
+func (l *List) ModelCommands() []Model {
+	out := make([]Model, len(l.model))
+	for i, m := range l.model {
+		out[i] = m
+		out[i].Geometry = m.Geometry.Clone()
+	}
+	return out
+}
+
 // RecordFog appends one fog command in record order.
 func (l *List) RecordFog(c Fog) {
 	l.order = append(l.order, tag{familyFog, len(l.fog)})
@@ -504,7 +520,11 @@ func (l *List) Clone() List {
 	c.glyphs = append([]Glyphs(nil), l.glyphs...)
 	c.fill = append([]Fill(nil), l.fill...)
 	c.line = append([]Line(nil), l.line...)
-	c.model = append([]Model(nil), l.model...)
+	c.model = make([]Model, len(l.model))
+	for i, m := range l.model {
+		c.model[i] = m
+		c.model[i].Geometry = m.Geometry.Clone()
+	}
 	c.cursor = append([]Cursor(nil), l.cursor...)
 	// Points records sub-slice the client's reusable point arena; give each its
 	// own array so the copy survives the next frame's arena reuse.

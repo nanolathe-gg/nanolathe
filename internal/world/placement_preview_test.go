@@ -23,7 +23,7 @@ func TestFootprintForUnitMatchesMovementProfile(t *testing.T) {
 		FootprintX:       2,
 		FootprintZ:       2,
 		MovementClass:    "tank2x2",
-		BMCode:           false,
+		BMCode:           0,
 	}
 	cat := &content.Catalog{Movement: movement}
 	fx, fz := FootprintForUnit(cat, defAuthored)
@@ -36,7 +36,7 @@ func TestFootprintForUnitMatchesMovementProfile(t *testing.T) {
 		UnitName:         "corlab",
 		FootprintX:       5,
 		FootprintZ:       5,
-		BMCode:           false,
+		BMCode:           0,
 	}
 	fx, fz = FootprintForUnit(cat, defNoMC)
 	if fx != 5 || fz != 5 {
@@ -53,7 +53,7 @@ func TestFootprintForUnitMatchesMovementProfile(t *testing.T) {
 		FootprintX:       2,
 		FootprintZ:       2,
 		MovementClass:    "kbot0",
-		BMCode:           false,
+		BMCode:           0,
 	}
 	fx, fz = FootprintForUnit(cat2, defZero)
 	if fx != 2 || fz != 2 {
@@ -121,13 +121,13 @@ func previewPlacement(ter *Terrain, cat *content.Catalog, def *content.UnitDef, 
 		return err
 	}
 	var yard []YardCell
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		yard, err = ParseYardMap(def.YardMap, int(footX), int(footZ))
 		if err != nil {
 			return err
 		}
 	}
-	_, err = ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode})
+	_, err = ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode != 0})
 	return err
 }
 
@@ -147,13 +147,13 @@ func simPlacement(ter *Terrain, cat *content.Catalog, def *content.UnitDef, cx, 
 		return err
 	}
 	var yard []YardCell
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		yard, err = ParseYardMap(def.YardMap, int(footX), int(footZ))
 		if err != nil {
 			return err
 		}
 	}
-	_, err = ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode})
+	_, err = ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: self, Mobile: def.BMCode != 0})
 	return err
 }
 
@@ -163,14 +163,14 @@ func simPlacement(ter *Terrain, cat *content.Catalog, def *content.UnitDef, cx, 
 func legacyValidatePlacement(ter *Terrain, cat *content.Catalog, def *content.UnitDef, cx, cz int32, self uint16) error {
 	footX, footZ := FootprintForUnit(cat, def)
 	var yard []YardCell
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		y, _ := ParseYardMap(def.YardMap, int(footX), int(footZ))
 		yard = y
 	}
 	// Zero-value Rules: ProfileResolved false so aggregate gates are skipped.
 	extent, _ := NewFootprintExtent(footX, footZ)
 	rect, _ := NewFootprintRect(NewFootprintAnchor(cx, cz), extent)
-	_, err := ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Rules: PlacementRules{}, Self: self, Mobile: def.BMCode})
+	_, err := ter.CheckPlacement(PlacementQuery{Rect: rect, Yard: yard, Rules: PlacementRules{}, Self: self, Mobile: def.BMCode != 0})
 	return err
 }
 
@@ -189,7 +189,7 @@ func TestGhostPreviewMatchesSimAcrossSyntheticSweep(t *testing.T) {
 			FootprintZ:       1, // authored 1x1 but movement overrides to 2x2
 			YardMap:          "oooo",
 			MovementClass:    "tank2x2",
-			BMCode:           false,
+			BMCode:           0,
 			Waterline:        0,
 		},
 		{
@@ -199,7 +199,7 @@ func TestGhostPreviewMatchesSimAcrossSyntheticSweep(t *testing.T) {
 			FootprintZ:       2,
 			YardMap:          "ooooooooo",
 			MovementClass:    "kbot3x3",
-			BMCode:           false,
+			BMCode:           0,
 			Waterline:        0,
 		},
 		{
@@ -209,7 +209,7 @@ func TestGhostPreviewMatchesSimAcrossSyntheticSweep(t *testing.T) {
 			FootprintZ:       2,
 			YardMap:          "oo",
 			MovementClass:    "",
-			BMCode:           false,
+			BMCode:           0,
 			Waterline:        0,
 			MaxSlope:         15,
 			MaxWaterDepth:    30,
@@ -269,7 +269,7 @@ func TestGhostPreviewFootprintSweepMatchesSim(t *testing.T) {
 		FootprintZ:       2,
 		YardMap:          "ooooooooo",
 		MovementClass:    "hover3x3",
-		BMCode:           false,
+		BMCode:           0,
 	}
 	cat := &content.Catalog{Movement: movement}
 	ter := syntheticTerrainForSweep(t)
@@ -377,7 +377,7 @@ func TestPreviewRulesAreResolved(t *testing.T) {
 		FootprintZ:       2,
 		YardMap:          "oooo",
 		MovementClass:    "bot2x2",
-		BMCode:           false,
+		BMCode:           0,
 	}
 	cat := &content.Catalog{Movement: movement}
 	rules, err := PlacementRulesForUnit(cat, def)

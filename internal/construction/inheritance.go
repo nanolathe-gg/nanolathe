@@ -320,31 +320,25 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 		s.applyCompletionPosture(product)
 	}
 
-	// Send ordinary kill packet — kind-9 damage exactly 30000 unscaled because scaling requires damage <30000 [05 C21][06 §9.1].
-	// Note cause-9 deaths skip killed-severity query entirely (severity zero, no explosion, no corpse) [04 §5.1][05 C21].
+	// Send the ordinary fixed-nominal kind-9 packet. Armor applies only below
+	// 30000, while defender veterancy still scales this packet [05 C21][06 §9.2].
+	// A cause-9 result that is accepted and lethal skips the killed-severity
+	// query (severity zero, no explosion, no corpse) [04 §5.1][05 C21].
 	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true} // severity zero [05 C21]
 	if product != nil {
-		// Apply death: Alive false, but no corpse/explosion.
+		// Cancel-current carries the factory as the raw attacker. The common
+		// receiver owns health, provenance, reaction, and delayed death marking
+		// [05 "Cancel-current and stop interrupts"][06 §9.1][06 §9.2].
 		if s.World != nil {
-			stampKind9Death(product)
-			// Corrected (2026-09-02, this unit): the packet cancel-current sends
-			// is `damage(attacker = the factory, victim = the product, 30000,
-			// kind 9, flag 0)` — the FACTORY is the attacker. The self form
-			// belongs to the shared step's reverse arm alone; same kind and
-			// amount, not the same packet. Nothing on the credit side turns on
-			// it (cause 9 has no credit branch), but the recorded-attacker link
-			// and the death row hold the factory's identity for a cancelled
-			// product [05 "Cancel-current and stop interrupts"][06 §12.1].
-			s.World.DestroyBy(product.Handle, units.DeathKilled, factory.Handle)
+			s.Combat.AcceptDamage(s.World, tick, combat.DamageInput{
+				Victim: product.Handle, Attacker: factory.Handle, Nominal: Kind9Damage,
+				Kind: Kind9Cause,
+			})
 		}
-		// Release after the cause-9 death mark. Completion posture intentionally
-		// precedes the kill, so releasing before Destroy would look like a live
-		// completed product and retain its reservation. The record stays Alive:
-		// DestroyBy latched Dying, and the phase-2 finalizer only visits records
-		// that are both Dying and Alive [01 §4.4]. Clearing the bit here skipped
-		// OnDeath and the pool free, so the slot leaked and the owner's live-unit
-		// counter — what the skirmish end condition reads [08 R-SKIR-01 §3] —
-		// stayed one high forever.
+		// Completion posture intentionally precedes the packet. If common intake
+		// latches this local victim Dying, phase 2 later owns OnDeath and the pool
+		// free; defender-veteran survivors and remote-controller results do not
+		// acquire that latch [01 §4.4][06 §9.2].
 		s.ReleasePlacement(product.Handle)
 		// Deterministically clear builder/product link after nanoframe (ON-02):
 		// before nanoframe builderLinks not yet set, so no-op; after nanoframe it must be cleared
@@ -402,7 +396,7 @@ func (s *Service) applyCompletionPosture(product *units.Unit) {
 	// performs no position write or re-stamp. The mode-less form that stood here
 	// left the product on whatever mode the builder link had written, which is
 	// the same value today but is not the contract.
-	if product.Def != nil && product.Def.BMCode && product.Attachment.Carrier != 0 {
+	if product.Def != nil && product.Def.BMCode != 0 && product.Attachment.Carrier != 0 {
 		movement.DetachFactoryProduct(s.World, product.Handle)
 	}
 	if product.Def != nil && product.Def.ActivateWhenBuilt {

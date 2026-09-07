@@ -45,7 +45,7 @@ func newFeatureWorkFixture(t *testing.T, defs []*content.FeatureDef, cx, cz int)
 	t.Helper()
 	f := &featureWorkFixture{}
 	builderDef := &content.UnitDef{
-		BMCode: true, Builder: true,
+		BMCode: 1, Builder: true,
 		CanReclamate: true, CanResurrect: true,
 		WorkerTime: 300, BuildDistance: 1, BuildTime: 100,
 		FootprintX: 1, FootprintZ: 1, MaxDamage: 100,

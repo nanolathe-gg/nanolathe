@@ -32,7 +32,7 @@ func TestMissionPlacementSnapsStockGeothermalPlant(t *testing.T) {
 	if !ok || def == nil {
 		t.Skipf("retail fixture unit %q is absent", wu19205MohoKey)
 	}
-	if def.BMCode {
+	if def.BMCode != 0 {
 		t.Fatalf("%s authors BMcode=1; the stock structure census makes it 0 [SC21]", wu19205MohoKey)
 	}
 	if def.FootprintX != 5 || def.FootprintZ != 5 {

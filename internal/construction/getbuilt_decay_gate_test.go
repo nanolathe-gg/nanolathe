@@ -127,6 +127,7 @@ func TestMalformedBuildNumbersThroughTheDecayWrapper(t *testing.T) {
 		product := w.Unit(h)
 		product.Remaining, product.MaxHealth, product.Health = 0.25, 100, 75
 		svc := NewService(nil, cat, w, &economy.Service{})
+		bindConstructionCombat(svc)
 		node := &orders.Node{Phase: uint8(State2)}
 
 		svc.handleGetBuiltOrder(product, node, 0, 10)
@@ -134,8 +135,8 @@ func TestMalformedBuildNumbersThroughTheDecayWrapper(t *testing.T) {
 		if product.Remaining != 1 {
 			t.Fatalf("remaining=%v, want the clamp to 1.0", product.Remaining)
 		}
-		if product.Health != 0 {
-			t.Fatalf("health=%d, want the floor at zero", product.Health)
+		if product.Health >= 0 {
+			t.Fatalf("health=%d, want the kind-9 packet's signed modular remainder", product.Health)
 		}
 		if !product.Dying {
 			t.Fatalf("a zero-energy-cost frame is removed on its first decay visit")

@@ -4020,8 +4020,9 @@ first word of the unit record, the pointer to the unit's mover. The creator
 allocates a mover only when the definition's `bmcode` is 1 and stores the
 pointer there; a building never gets one, and the command resolver, the
 standby handler and the height snap all treat a null there as "no mover"
-[04 R-SPEC-01 §1]. So `hasNoLocomotion` is "the member is a building". For
-such a member the task calls the **shot-time physical admission gate** of
+[04 R-SPEC-01 §1]. Thus `hasNoLocomotion` includes every definition whose
+stored byte is not 1, including non-building values above 1. For such a member
+the task calls the **shot-time physical admission gate** of
 [06 §3.3] with the member's own position as the shooter position, `best` as
 the target position, and **weapon slot 1** (the first slot): the gate passes
 when the slot's weapon range squared is at least the planar distance squared

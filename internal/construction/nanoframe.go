@@ -63,7 +63,7 @@ func (s *Service) validatePlacement(self pool.Handle, rect world.FootprintRect, 
 		Yard:                  yard,
 		Rules:                 rules,
 		Self:                  0,
-		Mobile:                def != nil && def.BMCode,
+		Mobile:                def != nil && def.BMCode != 0,
 		SkipTerrainAggregates: skipAggregates,
 	})
 }
@@ -270,7 +270,10 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// factory/product publication. Failure is therefore an explicit rejected
 	// allocation, never a live partially accepted factory state
 	// [04 R-FAC-02 §1].
-	if product.Def != nil && product.Def.BMCode {
+	// TODO(question): trace the full factory attachment/queue lifecycle for
+	// authored BMCode values above 1. Keep the established nonzero class
+	// branch; do not manufacture a mover for these values [08 R-AI-03 §7.4].
+	if product.Def != nil && product.Def.BMCode != 0 {
 		if !movement.AttachFactoryProduct(s.World, factory.Handle, product.Handle, buildPiece) {
 			return fmt.Errorf("construction: factory product attachment gates rejected allocation")
 		}
@@ -312,7 +315,7 @@ func (s *Service) successEpilogue(factory *units.Unit, node *orders.Node, produc
 	// A mobile factory product is attached in the allocation visit. The shared
 	// cargo representation is the only carried-state authority; structure-class
 	// products remain standing at the allocated position [04 R-FAC-02 §1].
-	if product.Def != nil && product.Def.BMCode {
+	if product.Def != nil && product.Def.BMCode != 0 {
 		beCarriedID := orders.Lookup("BeCarried")
 		if beCarriedID != 0 {
 			pq := orders.BindQueueBinding(product, s.OrderBinding)

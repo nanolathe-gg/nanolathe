@@ -163,9 +163,10 @@ retail file has 15 classes and four further keys:
 | `BadSlope` | 2 | Hover classes only, `12`. **Established:** the movement classifier reads it as the clear-vs-steep boundary — slopes at or below `BadSlope` are clear, slopes between `BadSlope` and `MaxSlope` are the passable-but-penalized steep tier, slopes above `MaxSlope` are hard-blocked. |
 | `BadWaterSlope` | 2 | Hover classes only, `255`. Same mechanism over water. |
 
-OpenTA compiles all four into `MovementDef` and applies `MaxWaterSlope` to
-any footprint touching water. `BadSlope`/`BadWaterSlope` are preserved as
-source facts only, pending evidence for their exact effect.
+**Established:** all four slope thresholds are live. The ordered reads and
+clamps are `[04 §6.1 R-DOC04-A]`; classification and the clear/steep/blocked
+outcomes are owned by doc 04's movement contracts. Nanolathe compiles them into
+`content.MovementClass` and consumes them through `movement.Profile`.
 
 **SOUND.TDF** — sound categories referenced by FBI `SoundCategory=`. Each
 section maps event slots to WAV basenames (no extension) in `sounds/`:
@@ -206,9 +207,11 @@ the F1 help screen (the `|` separates key from description).
 **TRANSLATE.TDF** — one section per English string, keys are language names
 (`German=`, `French=`, `piglatin=`…).
 
-**LOS.TDF** — line-of-sight ray tables (`[TABLE0]`…, `numlines=`,
-`line1=2, 0, 1, 0, 2;`); semantics only partially understood by the
-community.
+**LOS.TDF — Established:** `[TABLEINFO] numtables` selects `TABLE0` through
+`TABLE<numtables-1>`. Each table's `numlines` selects `line0` onward; a line
+stores a point count followed by that many coordinate pairs. `[03 R-VIS-01 §3]`
+owns quadrant expansion, table selection and the ray walk. The declared count,
+not the number of shipped sections, bounds selection.
 
 **CATEGORY.TDF** — category names with `description=`; informational only
 (categories used in FBI files do not need to appear here).
@@ -299,17 +302,12 @@ Weapon sections are referenced by name from FBI `Weapon1..3=` and from OTA
 `MeteorWeapon=`. Retail data spreads them over `weapons/*.tdf` (WEAPONS,
 LASERS, CANNONS, MISSILES, ROCKETS, UNITS, FIRES, METEORS…).
 
-**The retail corpus documents this schema itself.** `gamedata/WEAPONS.TDF`
-opens with roughly 90 lines of Cavedog's own field-by-field commentary —
-`coverage`, `noautorange`, `randomdecay`, `aimrate`, `minbarrelangle`,
-`firestarter`, `turret`, `energy`, `metal`, `tolerance`, `accuracy`,
-`propeller` and the smoke, sound and rendering keys are all defined there. It
-is the primary source for the table below, and it takes precedence over
-community documentation where the two disagree. The file is otherwise a
-legacy duplicate: all 33 of its sections also appear under `weapons/`, which
-is the authoritative copy. OpenTA compiles it only as a fallback for keys no
-`weapons/` file defines, and emits `WEAPON-GAMEDATA-TABLE-SHADOWED` for each
-section the directory already covers.
+**Historical asset commentary.** `gamedata/WEAPONS.TDF` contains Cavedog's
+field descriptions, but is not a compiled weapon-family input. **Established:**
+retail and Nanolathe compile only the selected archive winners under
+`weapons/*.tdf`; there is no gamedata fallback `[02 R-CONTENT-02]`. The
+commentary is useful authoring context, while executable-owned field contracts
+and the generated key table determine which keys are read and what they do.
 
 Real example — the ARM Flash's gun from `weapons/WEAPONS.TDF`:
 
@@ -416,7 +414,7 @@ and velocity.
 | `sprayangle` | Random spread (angular units) for burst weapons |
 | `areaofeffect` | Splash diameter in pixels |
 | `edgeeffectiveness` | Damage fraction at splash edge (0–1) |
-| `energypershot`, `metalpershot` | Firing cost. The bare `energy`/`metal` keys are the same thing in an older spelling — the shipped file documents them as "amount of energy needed" / "amount of metal needed" — and OpenTA accepts either. |
+| `energypershot`, `metalpershot` | **Established:** firing costs `[02 §5]`. The historical asset commentary mentions bare `energy`/`metal`; Nanolathe does not treat them as aliases for these parsed fields. |
 | `commandfire` | Requires explicit user fire order (D-gun, nukes) |
 | `toairweapon` | Weapon only engages air targets (anti-air missiles; retail key, undocumented historically) |
 | `holdtime` | Follow-camera hold, in whole simulation ticks (authored in seconds, multiplied by 30 and truncated with the other time-valued weapon keys). When the projectile the camera is following retires, the camera freezes on that projectile's last point and stays there for `holdtime` ticks before resuming ordinary following. It has no projectile-motion effect at all: every reader is a projectile-retirement path that loads the camera hold counter, not motion code. Established; the engine side is `[06 §7.3]`, the camera side `[07 §10]`. |
@@ -439,19 +437,12 @@ and velocity.
 | `meteor` | Marks the meteor weapon |
 | `[DAMAGE]` | Subsection: `default=` damage per hit, plus per-unit-name overrides (`corkrog=2460;`) |
 
-OpenTA preserves `rendertype`, `color`, `smoketrail`, `startsmoke`, and
-`endsmoke` as presentation data rather than discarding them after combat-policy
-classification. The stock `EMG` pair `rendertype=4,color=2` is the file's
-explicit "bitmap shell" case; the corresponding shipped `FX.GAF` entry is
-`cannonshell` (10 indexed frames, source frame-reference value 10). That
-runtime selection is tracked as `WEAPON-VISUAL-EMG-CANNONSHELL-001`. Matched
-retail frames show that the stock packet retains the entry's first 4-by-4 frame
-throughout flight rather than looping through all ten frames; generic sprite
-projectiles still use their authored sequences. Controlled retail probes also
-show that `smoketrail`, `startsmoke`, and `endsmoke` do not gate the ordinary
-land-impact `Smoke 1` pass: it begins at impact age zero beneath the explosion.
-`noexplode` remains the chain-wide suppression
-(`WEAPON-VISUAL-IMPACT-SMOKE-001`).
+**Established:** render fields remain compiled data. Projectile sprite selection
+and frame progression belong to `[03 §5.4]` and `[06 R-WFX-01 §1]`; impact
+smoke belongs to `[03 §5.5]`. This format document does not prescribe a second
+EMG frame-selection or impact-smoke rule. The older
+`WEAPON-VISUAL-EMG-CANNONSHELL-001` and `WEAPON-VISUAL-IMPACT-SMOKE-001` labels
+are historical references, superseded by those owning contracts.
 
 ### `download/` — build-menu placement
 
@@ -564,13 +555,14 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
   The third-party controller keys `pivotturn`, `reverse`, `arcturn`,
   `minturnradius` and `minturnspeed` have no strings in the executable.
 - Retail authors `featurereclamamate` (a typo for `featurereclamate`) ten
-  times in `features/acid/acidplants.tdf`. OpenTA accepts both spellings; the
-  original engine reads only `featurereclamate`, so those ten records lose
-  their reclaim successor.
-- `[CANBUILD]`'s exact relationship to the download-menu system (which one
-  the engine consults when both exist) is not fully established.
-- `LOS.TDF` table values are only partially understood; the file declares
-  `numtables=9` while containing 12 tables.
+  times in `features/acid/acidplants.tdf`. **Established:** retail and
+  Nanolathe read only `featurereclamate`; the typo is retained as inert source
+  data and those records receive no reclaim successor from it `[02 §5]`.
+- **Established:** side `CANBUILD` lists are populated first, then resolved
+  download-menu items append under the count gate `[02 R-CAT-01 §5]`
+  `[02 R-CAT-01 §8]`.
+- **Established:** `LOS.TDF` declares `numtables=9` while containing 12 table
+  sections; only the declared range is selected `[03 R-VIS-01 §3]`.
 
 - The "which keys the engine reads" tables in this document are a whole-string
   census of `TotalA.exe` (GOG build, MD5 `8e74a1dffa1f5988624c52048f5b20cd`).
@@ -595,5 +587,6 @@ Owned by `[02 §4]` and `[02 R-MALF-01 §4]`; the byte-level facts:
   `gamedata/MOVEINFO.TDF`, `gamedata/SOUND.TDF`,
   `features/corpses/arm_corpses.tdf`, `weapons/WEAPONS.TDF` from
   `totala1.hpi` and `download/ARMAMB.TDF` from `CCDATA.CCX`.
-- OpenTA parser: `formats/tdf.go` (tokenizer/parser),
-  `weapon.rs`, `feature.rs`, `sound.rs`, `movement.rs`, `side.rs`.
+- Nanolathe implementation: `formats/tdf.go` and `formats/tdf_typed.go`
+  parse text; `internal/content/compile_*.go` compiles the family records.
+  Behavioral precedence remains with `research/retail-executable-spec`.

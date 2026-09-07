@@ -55,7 +55,7 @@ func TestTeleportReleasesTheVacatedFootprintCells(t *testing.T) {
 	rider := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "rider"},
 		MaxDamage:        1, FootprintX: 2, FootprintZ: 2,
-		BMCode: true, MobilityDomain: content.MobilityGround,
+		BMCode: 1, MobilityDomain: content.MobilityGround,
 		MaxVelocity: 65536, MaxSlope: 255, MaxWaterDepth: 10000, MinWaterDepth: -10000,
 	}
 

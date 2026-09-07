@@ -4048,6 +4048,16 @@ missing or type-mismatched item returns the caller's default.
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
+Fixed-point overflow is closed by [01 R-DET-01 §1] and [R-MALF-01 §4].
+Unit-limit admission is established by [05 R-SHARE-01 §§7–10]; loader-side
+questions do not supersede those consumer contracts.
+
+* Empty `unitname` finalization · §5 "Unit record" · trace catalog sorting,
+  name lookup and secondary file loading for an empty parsed name. The string
+  store itself is Established and defaults to empty. Nanolathe currently
+  substitutes the filename stem in `compileUnitSection`; that compatibility
+  fallback is not established retail behavior.
+
 * GAF nested child layouts supported by ordinary relocation, and alternate
   child behavior in scaled/light-table/feature/fog/model raster consumers ·
   [R-MALF-01 §6] · static trace of each consuming blitter and loader.
@@ -4068,9 +4078,10 @@ and the decider that would close it.
   are established.
 * Precedence among registry, INI, and command line for non-language
   configuration · §3 · static trace (doc 01 §3.1 owns the scalar half).
-* Sound alias-cache eviction policy and the DirectSound streaming flags · §5
-  "Sound aliases" · static trace. Eviction is bounded-negative (no eviction
-  site in the census); both are marked `TODO(question)` at the site.
+* Sound alias-cache eviction outside the bounded negative census · §5
+  "Sound aliases" · a reader/lifetime trace beyond that census. DirectSound
+  sample and streaming descriptors are established in [03 R-AUD-01 §1] and
+  [03 R-AUD-02 §1]; those flags are not an open loader question.
 * Meteor zero-parameter substitution granularity — whole-record versus
   per-field merge of `gamedata/METEOR.TDF [Default]` · §6 "Map files",
   [06 §6.5] · manual retail observation (a mission authoring one nonzero and
@@ -4084,9 +4095,6 @@ and the decider that would close it.
   allocation size and record stride; the loader checks no count) · §6
   `[R-MALF-01 §5]` · static trace of the gadget array's base offset in the
   window record.
-* Overflow result of the C-runtime decimal conversion feeding the fixed-point
-  accessor (infinity → indefinite integer is the expected chain) · §4
-  `[R-MALF-01 §4]` · static check of the runtime `strtod` overflow path.
 * Reader for plot-mask bit 7 · §6 "Map files" · static trace over the
   unrecovered regions. Marked `TODO(T23)` at the site; the mask preserves the
   bit and no isolated reader exists in the bounded census.
@@ -4109,10 +4117,6 @@ and the decider that would close it.
 * GUI widget callback map · doc 07 · static trace. The parser-side
   control-kind mapping and the optional `[VERSION]` subsection are established
   in §6 "Interface panel files (`.gui`)".
-* Runtime consumers of the unit limit — which active-limit read sites gate
-  construction, AI production, and the lobby display, and the per-player
-  versus global counter split · doc 05 · static trace. §5 establishes only the
-  writer side and the key vocabulary.
 * Whether the unit-limit mode flag is read by unrecovered code · §5 · static
   trace over the unrecovered regions. Bounded-negative in the recovered
   corpus, so it is retained-and-inert.
@@ -4125,12 +4129,11 @@ and the decider that would close it.
   it.
 * Reader of the side record's `nameprefix` field · §5 `[R-KEYS-01 §5]` ·
   reader census on the 4-byte prefix field of the side record.
-* Readers of fourteen presentation-only registry values (`DisplaymodeWidth`,
-  `DisplaymodeHeight`, `DisplaymodeDepth`, `screenchat`, `MixingBuffers`,
-  `DitheredFog`, `Gamma`, `SwitchAlt`, `textlines`, `textscroll`,
-  `mousespeed`, `gamespeed`, `unitchat`, `unitchattext`) · §5
-  `[R-KEYS-01 §5]` · static trace of each stored global's readers (docs
-  01/03/07 own the consumers; the loader side is closed).
+* Remaining presentation-setting reader gaps marked **Unknown** in
+  [R-KEYS-01 §5] · docs 01/03/07 · trace the particular stored value's reader.
+  The list is not a claim that all registry consumers remain open: for
+  example, [03 R-AUD-01 §2] establishes `MixingBuffers`, and doc 07 owns the
+  preferences and display/input consumers.
 * Whether any reader tests unit capability bit 9 (the derived copy of
   `canreclamate`) separately from bit 10 · §5 `[R-KEYS-01 §1]` · bit-9
   reader census.

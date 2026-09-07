@@ -18,7 +18,7 @@ func TestFactoryCargoFollowsPieceAndKeepsGroundStamp(t *testing.T) {
 	system := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1}, grid)
 	w := newMovementFixtureWorld(8)
 	factoryDef := &content.UnitDef{UnitName: "armlab", FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
-	productDef := &content.UnitDef{UnitName: "armflash", FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true}
+	productDef := &content.UnitDef{UnitName: "armflash", FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: 1}
 	fh, _ := w.Create(factoryDef, 0, world.CellToWorld(6), numeric.FixedFromInt(10), world.CellToWorld(7))
 	ph, _ := w.Create(productDef, 0, world.CellToWorld(1), 0, world.CellToWorld(1))
 	factory, product := w.Unit(fh), w.Unit(ph)
@@ -87,7 +87,7 @@ func TestFactoryCargoFollowsPieceAndKeepsGroundStamp(t *testing.T) {
 func TestAttachFactoryProductRejectsEstablishedGates(t *testing.T) {
 	w := newMovementFixtureWorld(8)
 	factoryDef := &content.UnitDef{UnitName: "armlab", MaxDamage: 100}
-	productDef := &content.UnitDef{UnitName: "armflash", MaxDamage: 100, BMCode: true}
+	productDef := &content.UnitDef{UnitName: "armflash", MaxDamage: 100, BMCode: 1}
 	fh, _ := w.Create(factoryDef, 0, 0, 0, 0)
 	ph, _ := w.Create(productDef, 0, 0, 0, 0)
 	other, _ := w.Create(productDef, 0, 0, 0, 0)

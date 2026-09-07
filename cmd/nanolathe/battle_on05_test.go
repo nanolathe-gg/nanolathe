@@ -27,7 +27,7 @@ func testCatalogON05() *content.Catalog {
 	// building-class status bit creation derives from that byte, so a mobile
 	// fixture must author it or it resolves as an immobile builder
 	// [04 R-ORD-02 §1][04 R-COLL-01 §2].
-	b1 := &content.UnitDef{UnitName: "armcons", ObjectName: "armcons", Builder: true, BMCode: true, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
+	b1 := &content.UnitDef{UnitName: "armcons", ObjectName: "armcons", Builder: true, BMCode: 1, CanMove: true, FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
 	b1.CanonicalKey = content.CanonicalKey(b1.UnitName)
 	b1.DefinitionHeader.CanonicalKey = b1.CanonicalKey
 	p1 := &content.UnitDef{UnitName: "armsolar", ObjectName: "armsolar", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100}
@@ -36,7 +36,7 @@ func testCatalogON05() *content.Catalog {
 	// armfav is a vehicle: authored BMcode 1 and no yard map, like every stock
 	// mobile unit. That is what makes it a factory product rather than a
 	// placement one [07 §9].
-	p2 := &content.UnitDef{UnitName: "armfav", ObjectName: "armfav", BMCode: true, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
+	p2 := &content.UnitDef{UnitName: "armfav", ObjectName: "armfav", BMCode: 1, FootprintX: 2, FootprintZ: 2, MaxDamage: 100}
 	p2.CanonicalKey = content.CanonicalKey(p2.UnitName)
 	p2.DefinitionHeader.CanonicalKey = p2.CanonicalKey
 	fac := &content.UnitDef{UnitName: "armfac", ObjectName: "armfac", Builder: true, CanMove: false, FootprintX: 3, FootprintZ: 3, YardMap: "ooooooooo", MaxDamage: 500}

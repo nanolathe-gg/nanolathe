@@ -1,6 +1,7 @@
 package content
 
 import (
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -142,6 +143,65 @@ func TestSimArtReportsUnknownRatherThanAFallback(t *testing.T) {
 	}
 	if _, ok := nilArt.EffectEntryFrameCount("", "smoke 1"); ok {
 		t.Fatal("a nil table resolved an effect entry")
+	}
+}
+
+// TestSimArtSuppressesAValidSequenceWhenAnotherEntryIsCorrupt locks the
+// whole-bank policy at the content boundary. Metadata has no pixel planes, but
+// it still validates every frame payload, so it cannot let one requested entry
+// silently bypass an unrelated malformed raw frame [fmt gaf].
+func TestSimArtSuppressesAValidSequenceWhenAnotherEntryIsCorrupt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		unrelated formats.GAFWriteFrame
+		corrupt   func([]byte, uint32)
+	}{
+		{
+			name:      "raw",
+			unrelated: formats.GAFWriteFrame{Width: 1, Height: 1, Pixels: []byte{3}},
+			corrupt: func(bank []byte, frameOffset uint32) {
+				binary.LittleEndian.PutUint32(bank[frameOffset+16:frameOffset+20], uint32(len(bank)))
+			},
+		},
+		{
+			name:      "rle",
+			unrelated: formats.GAFWriteFrame{Width: 1, Height: 1, Pixels: []byte{3}, Transparent: []bool{true}},
+			corrupt: func(bank []byte, frameOffset uint32) {
+				dataOffset := binary.LittleEndian.Uint32(bank[frameOffset+16 : frameOffset+20])
+				bank[dataOffset+2] = 1 // a zero-length RLE skip run
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bank, err := formats.EncodeGAF([]formats.GAFWriteEntry{
+				{Name: "treeburn", Frames: []formats.GAFWriteFrame{{Width: 2, Height: 1, XOffset: 3, YOffset: -4, Duration: 7, Pixels: []byte{1, 2}}}},
+				{Name: "unrelated", Frames: []formats.GAFWriteFrame{tc.unrelated}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			entryOffset := binary.LittleEndian.Uint32(bank[16:20])
+			frameOffset := binary.LittleEndian.Uint32(bank[entryOffset+40 : entryOffset+44])
+			tc.corrupt(bank, frameOffset)
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "anims"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "anims", "trees.gaf"), bank, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fs := vfs.New()
+			if err := fs.MountDirectory(dir, 1); err != nil {
+				t.Fatal(err)
+			}
+			defer fs.Close()
+			art := CompileSimArt(fs, &Catalog{Features: map[string]*FeatureDef{
+				"tree": {Filename: "trees", SeqNameBurn: "treeburn"},
+			}})
+			if _, _, _, _, _, ok := art.FeatureSequence("trees", "treeburn", 0); ok {
+				t.Fatal("valid sequence survived an unrelated corrupt entry")
+			}
+		})
 	}
 }
 

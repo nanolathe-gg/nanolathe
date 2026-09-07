@@ -25,13 +25,13 @@ func TestTakeoffPreambleDetachesCarriedAircraftToMode2(t *testing.T) {
 
 	carrierDef := defForTransport("arm_atlas")
 	carrierDef.CanFly = false
-	carrierDef.BMCode = true
+	carrierDef.BMCode = 1
 	cargoDef := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("carriedscout")},
 		UnitName:         "carriedscout",
 		CanFly:           true,
 		CanMove:          true,
-		BMCode:           true,
+		BMCode:           1,
 		FootprintX:       1,
 		FootprintZ:       1,
 		MaxDamage:        100,

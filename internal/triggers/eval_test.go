@@ -454,7 +454,7 @@ func TestNotificationSubjectIncludedCounts(t *testing.T) {
 	t.Run("mobile", func(t *testing.T) {
 		w := triggerWorld(t)
 		subject := spawn(t, w, "CORAK", 1, 0, 0)
-		subject.Def.BMCode = true
+		subject.Def.BMCode = 1
 		tr := New(KindKillAllMobileUnits, "")
 		if !tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
 			t.Fatal("sole occupied mobile subject should complete")
@@ -462,9 +462,9 @@ func TestNotificationSubjectIncludedCounts(t *testing.T) {
 
 		w = triggerWorld(t)
 		subject = spawn(t, w, "CORAK", 1, 0, 0)
-		subject.Def.BMCode = true
+		subject.Def.BMCode = 1
 		other := spawn(t, w, "CORFAV", 1, 0, 0)
-		other.Def.BMCode = true
+		other.Def.BMCode = 1
 		tr = New(KindKillAllMobileUnits, "")
 		if tr.Notify(pollCtx(w, 0), NotifyUnitDied, subject) {
 			t.Fatal("second occupied mobile enemy was not counted")

@@ -47,7 +47,7 @@ func TestRallyInheritanceResolvesAgainstTheProduct(t *testing.T) {
 		facDef.CanMove = true
 		cat.Units[content.CanonicalKey("armvp")] = facDef
 		prodDef := newProductDef("armflash", 2, 2, 100, 100)
-		prodDef.BMCode = true
+		prodDef.BMCode = 1
 		prodDef.CanMove = true
 		prodDef.CanPatrol = true
 		prodDef.CanFly = canFly

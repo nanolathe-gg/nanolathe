@@ -118,8 +118,8 @@ func (s *Service) PerUnitProductionFills(player int, w *units.World) {
 		// branch. Buildings require activation; mobile upkeep runs while
 		// activated or moving, but mobile units never reach a generator arm
 		// [R-ECO-01 §2].
-		buildingActive := !def.BMCode && u.Activated
-		branchActive := buildingActive || (def.BMCode && (u.Activated || u.Move.Mode != 0))
+		buildingActive := def.BMCode == 0 && u.Activated
+		branchActive := buildingActive || (def.BMCode != 0 && (u.Activated || u.Move.Mode != 0))
 		upkeepAdmitted := false
 		if branchActive {
 			switch {

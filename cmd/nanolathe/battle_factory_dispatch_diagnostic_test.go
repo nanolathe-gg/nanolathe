@@ -28,7 +28,7 @@ func factoryClickFixture(t *testing.T) (*retailBattleHUD, *battleSession, string
 	product := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "peewee"},
 		UnitName:         "peewee",
-		BMCode:           true,
+		BMCode:           1,
 	}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{
 		factory.CanonicalKey: factory,

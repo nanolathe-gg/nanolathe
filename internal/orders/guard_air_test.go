@@ -34,7 +34,7 @@ func newAirGuardFixture(t *testing.T) *airGuardFixture {
 	f.guard = &units.Unit{
 		Handle: 1,
 		Def: &content.UnitDef{
-			UnitName: "fighter", CanFly: true, CanMove: true, BMCode: true,
+			UnitName: "fighter", CanFly: true, CanMove: true, BMCode: 1,
 			FootprintX: 1, FootprintZ: 1, MaxDamage: 100, CruiseAlt: 120,
 		},
 		Alive: true,

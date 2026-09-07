@@ -1075,7 +1075,11 @@ func (s *Session) RegisterAll() {
 			// Each cargo is only MARKED here; its own finalizer runs on the
 			// next slot sweep, so this hook does not re-enter [04 §2.3].
 			if s.Movement != nil && s.Units != nil && u != nil {
-				s.Movement.HandleDeath(s.Units, h, u.EngagementTarget)
+				tick := uint32(0)
+				if s.Clock != nil {
+					tick = s.Clock.GlobalTick
+				}
+				s.Movement.HandleDeath(s.Units, h, u.EngagementTarget, tick)
 			}
 			s.finalizeReclaimRefund(u)
 			// Audio: death does not map to a queued voice directly, but an

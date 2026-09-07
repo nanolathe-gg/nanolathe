@@ -67,6 +67,7 @@ func TestStepUnit_Isolation(t *testing.T) {
 	qB.Primary()[0].Target = prodBHandle
 
 	svc := NewService(nil, cat, w, &economy.Service{})
+	bindConstructionCombat(svc)
 	// Ensure economy buckets allow admission (carry <=0)
 	BucketsA := svc.Economy.UnitBuckets(builderA.Handle)
 	if BucketsA != nil {
@@ -102,7 +103,7 @@ func TestStepUnit_Isolation(t *testing.T) {
 
 func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	builderDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BMCode: true, BuildTime: 100}
+	builderDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BMCode: 1, BuildTime: 100}
 	builderDef.CanonicalKey = content.CanonicalKey("armck")
 	prodDef := &content.UnitDef{UnitName: "armllt", FootprintX: 2, FootprintZ: 2, YardMap: "oooo", MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100, BuildCostEnergy: 100}
 	prodDef.CanonicalKey = content.CanonicalKey("armllt")
@@ -193,7 +194,7 @@ func TestStepUnit_MobileSiteSurvives(t *testing.T) {
 
 func TestStepUnit_DistinctDescriptors(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
-	mobileDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BMCode: true}
+	mobileDef := &content.UnitDef{UnitName: "armck", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, MaxDamage: 100, WorkerTime: 30, CanMove: true, BMCode: 1}
 	mobileDef.CanonicalKey = content.CanonicalKey("armck")
 	factoryDef := &content.UnitDef{UnitName: "armfac", FootprintX: 4, FootprintZ: 4, YardMap: "o", Builder: true, MaxDamage: 200, WorkerTime: 30}
 	factoryDef.CanonicalKey = content.CanonicalKey("armfac")
@@ -233,6 +234,7 @@ func TestStepUnit_DistinctDescriptors(t *testing.T) {
 	q2 := orders.QueueForUnit(factory)
 	q2.Push(mobileID, orders.Node{BuildDefKey: "armllt", Param1: 1, Param2: 1, Phase: uint8(State0), GoalX: world.CellToWorld(5), GoalZ: world.CellToWorld(5)})
 	svc2 := NewService(exitTerrain(12, 12), cat, w2, &economy.Service{})
+	bindConstructionCombat(svc2)
 	res2 := svc2.StepUnit(TickContext{Tick: 0, World: w2, Economy: svc2.Economy, Catalog: cat}, hf)
 	if res2.Err == nil {
 		t.Fatalf("factory + mobile descriptor should error")
@@ -361,6 +363,7 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 	factory := w.Unit(hf)
 	factory.Def = facDef
 	svc := NewService(nil, cat, w, &economy.Service{})
+	bindConstructionCombat(svc)
 	bid := orders.Lookup("BuildingBuild")
 	if bid == 0 {
 		bid = orders.Lookup("MobileBuild")
@@ -391,6 +394,7 @@ func TestStepUnit_CancelBeforeAndAfterNanoframe(t *testing.T) {
 	factory2.Def = facDef
 	bindConstructionFixture(factory2, trivialModel(1, nil), true)
 	svc2 := NewService(exitTerrain(12, 12), cat, w2, &economy.Service{})
+	bindConstructionCombat(svc2)
 	q2 := orders.QueueForUnit(factory2)
 	q2.Push(bid, orders.Node{BuildDefKey: "armflash", Param1: 1, Param2: 1, Phase: uint8(State2)})
 	head2 := q2.Primary()[0]

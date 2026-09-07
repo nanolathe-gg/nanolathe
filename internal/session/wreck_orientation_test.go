@@ -24,7 +24,7 @@ func wreckOrientationSession(t *testing.T) *Session {
 		d := &content.UnitDef{
 			UnitName: name, ObjectName: name, MaxDamage: 100, Limit: -1,
 			SightDistance: 64, MovementClass: "testmove",
-			FootprintX: 1, FootprintZ: 1, BMCode: true, CanMove: true,
+			FootprintX: 1, FootprintZ: 1, BMCode: 1, CanMove: true,
 			MaxVelocity: 1 << 16, TurnRate: 100, Acceleration: 1 << 10, BrakeRate: 1 << 10,
 		}
 		f(d)

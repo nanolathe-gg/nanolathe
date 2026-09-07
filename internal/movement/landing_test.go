@@ -303,7 +303,7 @@ func waterAirFixtureFor(t *testing.T, amphibious bool, maxWaterDepth int32) (*Sy
 		CanFly:           true,
 		CanMove:          true,
 		Amphibious:       amphibious,
-		BMCode:           true,
+		BMCode:           1,
 		FootprintX:       1,
 		FootprintZ:       1,
 		MaxDamage:        100,

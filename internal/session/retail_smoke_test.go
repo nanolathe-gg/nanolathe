@@ -242,7 +242,7 @@ func retailBuildSite(t *testing.T, s *Session, cat *content.Catalog, builder *un
 				if err != nil {
 					continue
 				}
-				if _, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(builder.Handle), Mobile: def.BMCode}); err == nil {
+				if _, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(builder.Handle), Mobile: def.BMCode != 0}); err == nil {
 					return x, z
 				}
 			}

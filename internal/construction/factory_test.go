@@ -258,7 +258,7 @@ func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
 	}
 	prod := newProductDef("dispatch", 1, 1, 1, 1)
 	prod.MovementClass = "test"
-	prod.BMCode = true // factory-produced mobile product
+	prod.BMCode = 1 // factory-produced mobile product
 	cat.Units[prod.CanonicalKey] = prod
 	svc := NewService(terrain, cat, nil, nil)
 	extent, _ := world.NewFootprintExtent(1, 1)
@@ -267,7 +267,7 @@ func TestPlacementDispatchUsesProducedDefinitionClass(t *testing.T) {
 		t.Fatal("factory mobile product used building yard path and ignored occupancy")
 	}
 
-	prod.BMCode = false // mobile-builder path placing a building product
+	prod.BMCode = 0 // mobile-builder path placing a building product
 	if _, err := svc.validatePlacement(0, rect, prod, []world.YardCell{0}, false); err != nil {
 		t.Fatalf("building product did not use yard path: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestClasslessAircraftFactoryAdmission(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	factoryDef := newFactoryDef("armlab", 2, 2, 300)
 	airDef := newProductDef("armfig", 1, 1, 10, 30)
-	airDef.BMCode = true
+	airDef.BMCode = 1
 	airDef.CanFly = true
 	airDef.MovementClass = ""
 	airDef.YardMap = ""
@@ -312,7 +312,7 @@ func TestClasslessAircraftFactoryAdmission(t *testing.T) {
 func TestAircraftFactoryAdmissionIgnoresUnresolvedGroundClass(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{}}
 	airDef := newProductDef("airwithclass", 1, 1, 10, 30)
-	airDef.BMCode = true
+	airDef.BMCode = 1
 	airDef.CanFly = true
 	airDef.MovementClass = "missing-ground-class"
 	airDef.MobilityDomain = content.MobilityAircraft
@@ -327,7 +327,7 @@ func TestClasslessGroundFactoryRejectedBeforeQueue(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{}}
 	factoryDef := newFactoryDef("armlab", 2, 2, 300)
 	broken := newProductDef("broken", 1, 1, 10, 30)
-	broken.BMCode = true
+	broken.BMCode = 1
 	broken.CanFly = false
 	broken.MovementClass = ""
 	cat.Units[factoryDef.CanonicalKey] = factoryDef
@@ -590,7 +590,7 @@ func TestFactoryProductUsesCarriedQueueAndDetachHandoff(t *testing.T) {
 			cat := &content.Catalog{Units: map[string]*content.UnitDef{}, Movement: map[string]*content.MovementClass{}}
 			factoryDef := newFactoryDef("armlab", 4, 4, 300)
 			productDef := newProductDef("armprod", 2, 2, 100, 100)
-			productDef.BMCode = true
+			productDef.BMCode = 1
 			productDef.YardMap = ""
 			productDef.CanFly = canFly
 			if !canFly {
@@ -658,7 +658,7 @@ func TestRallyInheritanceOrdering(t *testing.T) {
 	// runs only for a product that has one [04 R-FAC-02 §4][04 R-FAC-02 §5];
 	// a bmcode-0 product is building-class and its command-2 resolution is the
 	// queued marker, not a move [04 R-ORD-02 §1].
-	prodDef.BMCode = true
+	prodDef.BMCode = 1
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	w := newTestWorld(20)
 	h, _ := w.Create(facDef, 0, 0, 0, 0)
@@ -843,6 +843,7 @@ func TestRefundArithmetic(t *testing.T) {
 		// Set special state func
 		svcIsSpecial := func(owner uint8) bool { return special }
 		svc := NewService(nil, cat, w, econ)
+		bindConstructionCombat(svc)
 		svc.IsSpecialSecondState = svcIsSpecial
 		svc.ModeSelector = mode
 		svc.OnRefresh = func(u *units.Unit) {}
@@ -914,6 +915,7 @@ func TestKind9Kill(t *testing.T) {
 	head := q.Primary()[0]
 	head.Target = prod.Handle
 	svc := NewService(nil, cat, w, econ)
+	bindConstructionCombat(svc)
 	svc.OnRefresh = func(u *units.Unit) {}
 	svc.handleCancelCurrent(factory, head, 100)
 	if svc.LastKill().Damage != 30000 {
@@ -948,6 +950,7 @@ func TestKind9Kill(t *testing.T) {
 	head2 := q2.Primary()[0]
 	head2.Target = 0
 	svc2 := NewService(nil, cat, w2, econ)
+	bindConstructionCombat(svc2)
 	svc2.OnRefresh = func(u *units.Unit) {}
 	svc2.handleCancelCurrent(factory2, head2, 100)
 	if svc2.LastKill().Damage != 30000 {

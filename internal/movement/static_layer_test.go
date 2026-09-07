@@ -20,9 +20,9 @@ func TestClassLayerAvoidsStaleMover(t *testing.T) {
 	sys := NewSystem(terrain, profile, grid)
 	w := newMovementFixtureWorld(100)
 	sys.BindWorld(w)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: 1, CanMove: true}
 	setScratchMovement(def, profile)
-	def2 := &content.UnitDef{UnitName: "armflea2", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
+	def2 := &content.UnitDef{UnitName: "armflea2", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: 1, CanMove: true}
 	setScratchMovement(def2, profile)
 	// Transient mover occupying (5,5)
 	moverX := world.CellToWorld(5)
@@ -122,7 +122,7 @@ func TestStaticLayerDeterministicFixture(t *testing.T) {
 		sys := NewSystem(terrain, profile, grid)
 		w := newMovementFixtureWorld(100)
 		sys.BindWorld(w)
-		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
+		def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 2 * 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: 1, CanMove: true}
 		setScratchMovement(def, profile)
 		moverX := world.CellToWorld(5)
 		moverZ := world.CellToWorld(5)
@@ -164,7 +164,7 @@ func TestStaticLayerCommitStillBlocks(t *testing.T) {
 	sys := NewSystem(terrain, profile, grid)
 	w := newMovementFixtureWorld(100)
 	sys.BindWorld(w)
-	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: true, CanMove: true}
+	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 65536, TurnRate: 500, FootprintX: 1, FootprintZ: 1, MaxDamage: 100, BMCode: 1, CanMove: true}
 	setScratchMovement(def, profile)
 	// Mover at (2,0)
 	hMover, _ := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(0))

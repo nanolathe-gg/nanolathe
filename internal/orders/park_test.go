@@ -16,7 +16,7 @@ func parkTestUnit(t *testing.T, footX int32, minWaterDepth int32, canFly bool) (
 		FootprintX:       footX,
 		FootprintZ:       footX,
 		MaxDamage:        100,
-		BMCode:           true,
+		BMCode:           1,
 		CanFly:           canFly,
 		MinWaterDepth:    minWaterDepth,
 	}

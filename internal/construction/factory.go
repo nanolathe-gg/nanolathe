@@ -119,7 +119,9 @@ const (
 
 // Damage constants [05 "Cancel-current and stop interrupts"] C21.
 const (
-	Kind9Damage int32 = 30000 // unscaled, scaling requires damage <30000 [05 C21]
+	// The fixed nominal bypasses the armor branch, whose comparison is strictly
+	// below 30000. Defender veterancy still scales the accepted packet [06 §9.2].
+	Kind9Damage int32 = 30000
 	// Kind9Cause is the damage-kind byte the two refund paths' packet carries
 	// [06 §12.1]: "cause 9 — construction-fraction deconstruction/refund:
 	// packet builder invoked with 30000 from the two refund paths. Credit
@@ -130,26 +132,6 @@ const (
 	// [04 §5.1][05 C21].
 	Kind9Cause uint8 = 9
 )
-
-// stampKind9Death writes the provenance pair the cause-9 packet carries,
-// on both refund paths [06 §12.1].
-//
-// The two packets are not the same packet, and the closure of that question is
-// [05 "Cancel-current and stop interrupts"]'s 2026-09-02 correction: the
-// reverse arm's last line is `selfKill(target, target, 30000, kind 9)`
-// [05 R-WORK-01 §1], while cancel-current sends `damage(attacker = the factory,
-// victim = the product, 30000, kind 9, flag 0)`. Only the attacker HANDLE
-// differs, and each call site passes its own; what this helper stamps is the
-// side snapshot the ordinary intake stores beside the kind byte [06 §9.1] step
-// 4, and a factory and its product always share an owner, so the side is the
-// product's owner on both paths.
-func stampKind9Death(product *units.Unit) {
-	if product == nil {
-		return
-	}
-	product.LastDamageCause = Kind9Cause
-	product.LastDamageSide = product.Owner
-}
 
 // The mode selector and the special-second-state predicate were package-level
 // vars; they are per-session configuration, so they live on Service
@@ -1150,7 +1132,7 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 				// The decay is the self form: the frame is both builder and
 				// target, so the refund lands in its own owner's bucket and the
 				// clamp-kill names it as its own attacker [05 R-WORK-01 §1].
-				s.sharedStep(product, product, quantum)
+				s.sharedStep(product, product, quantum, tick)
 			}
 			node.Phase = uint8(State2)
 			node.DynamicGate = 0x8001
@@ -1174,7 +1156,7 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 			if s.OnRefresh != nil {
 				s.OnRefresh(builder)
 			}
-			if product.Def != nil && product.Def.BMCode {
+			if product.Def != nil && product.Def.BMCode != 0 {
 				s.rallyInheritance(builder, product, tick)
 			}
 		}
@@ -1184,9 +1166,12 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 }
 
 // killDecayedNanoframe sends the reverse arm's termination packet for a frame
-// whose remaining fraction the decay has just clamped to one: kind-9 damage of
-// exactly 30000, severity zero, no corpse and no explosion
-// [05 "Reverse and deconstruction"][05 C21]. It is the same packet
+// whose remaining fraction the decay has just clamped to one: a kind-9 packet
+// with nominal damage exactly 30000 [05 "Reverse and deconstruction"][05 C21].
+// A locally controlled lethal result takes the severity-zero, no-corpse,
+// no-explosion path. The shared receiver may instead leave a veteran survivor
+// or a remotely controlled zero-health unit, so this helper does not assume a
+// death latch. It is the same packet
 // cancel-current sends, minus cancel-current's refund and completion
 // transition — the reverse arm has already paid its own metal back through
 // ReverseRefund, and the completion transition runs only on a remaining
@@ -1194,18 +1179,24 @@ func (s *Service) handleGetBuiltOrder(product *units.Unit, node *orders.Node, sa
 //
 // Releasing the placement here is what unblocks whatever the frame was sitting
 // on. The frame is not a completed building, so it keeps no reservation.
-func (s *Service) killDecayedNanoframe(product *units.Unit) {
+func (s *Service) killDecayedNanoframe(product *units.Unit, tick uint32) {
 	if s == nil || product == nil || !product.Alive {
 		return
 	}
 	s.lastKill = KillInfo{Damage: Kind9Damage, Severity: 0, NoCorpse: true}
 	if s.World != nil && s.World.Unit(product.Handle) != nil {
-		stampKind9Death(product)
-		s.World.DestroyBy(product.Handle, units.DeathKilled, product.Handle)
+		// Reverse construction is the self form: target is also the raw attacker.
+		// The receiver owns health, provenance, reaction, and delayed death marking
+		// [05 R-WORK-01 §1][06 §9.1][06 §9.2].
+		s.Combat.AcceptDamage(s.World, tick, combat.DamageInput{
+			Victim: product.Handle, Attacker: product.Handle, Nominal: Kind9Damage,
+			Kind: Kind9Cause,
+		})
 	}
-	// The record stays Alive for the phase-2 finalizer, as in the cancel path
-	// (handleCancelCurrent): DestroyBy latched Dying, and the finalizer does
-	// the OnDeath, the pool free and the live-unit decrement [01 §4.4].
+	// If the common intake latches death, the record stays Alive for the phase-2
+	// finalizer, which performs OnDeath, pool free, and the live-unit decrement
+	// [01 §4.4]. Survivors and remote-controller results retain their ordinary
+	// combat state.
 	s.ReleasePlacement(product.Handle)
 	delete(s.builderLinks, product.Handle)
 	delete(s.getBuiltLinks, product.Handle)

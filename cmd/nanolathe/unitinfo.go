@@ -235,7 +235,7 @@ func unitInfoValues(def *content.UnitDef) [8]string {
 	out[1] = fmt.Sprintf("%d", numeric.TruncateFloat64ToLow32(float64(def.BuildCostEnergy)))
 	out[2] = fmt.Sprintf("%d", numeric.TruncateFloat64ToLow32(float64(def.BuildCostMetal)))
 	out[3] = fmt.Sprintf("%d", def.BuildTime)
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		out[5], out[6], out[7] = unitInfoNotApplicable, unitInfoNotApplicable, unitInfoNotApplicable
 		return out
 	}

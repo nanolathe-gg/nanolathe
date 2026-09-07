@@ -29,6 +29,7 @@ func newCarrierWithCargo(t *testing.T) (*units.World, *System, *units.Unit, *uni
 	}
 	carrier, cargo, killer := at(0, 2, 2), at(0, 3, 3), at(1, 5, 5)
 	system.BindWorld(w)
+	bindCargoDamageFixture(system, w)
 	if !AttachCargo(w, carrier.Handle, cargo.Handle, 0) {
 		t.Fatal("attach failed")
 	}
@@ -71,7 +72,7 @@ func TestCarrierDeathCascadeCause(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w, system, carrier, cargo, killer := newCarrierWithCargo(t)
 			carrier.LastDamageCause = uint8(tc.carrier)
-			system.HandleDeath(w, carrier.Handle, killer.Handle)
+			system.HandleDeath(w, carrier.Handle, killer.Handle, 0)
 			if !cargo.Dying {
 				t.Fatalf("the cascade's 30000 did not kill the cargo: health %d", cargo.Health)
 			}
@@ -106,7 +107,7 @@ func TestCarrierDeathCascadeCause(t *testing.T) {
 func TestCarrierDeathCascadeNeutralSideWithoutKiller(t *testing.T) {
 	w, system, carrier, cargo, _ := newCarrierWithCargo(t)
 	carrier.LastDamageCause = uint8(combat.CauseOrdinary)
-	system.HandleDeath(w, carrier.Handle, 0)
+	system.HandleDeath(w, carrier.Handle, 0, 0)
 	if cargo.LastDamageSide != units.NeutralAttackerSide {
 		t.Fatalf("cargo attacker-side snapshot = %d after a killerless carrier death, want the neutral side %d [06 R-WPN-04 §2]",
 			cargo.LastDamageSide, units.NeutralAttackerSide)
@@ -129,7 +130,7 @@ func TestCarrierDeathCascadeCreditsTheCarriersKiller(t *testing.T) {
 	t.Run("KillerIsCredited", func(t *testing.T) {
 		w, system, carrier, cargo, killer := newCarrierWithCargo(t)
 		carrier.LastDamageCause = uint8(combat.CauseOrdinary)
-		system.HandleDeath(w, carrier.Handle, killer.Handle)
+		system.HandleDeath(w, carrier.Handle, killer.Handle, 0)
 		if !cargo.Dying {
 			t.Fatalf("the cascade's 30000 did not kill the cargo: health %d", cargo.Health)
 		}
@@ -146,7 +147,7 @@ func TestCarrierDeathCascadeCreditsTheCarriersKiller(t *testing.T) {
 		w, system, carrier, cargo, killer := newCarrierWithCargo(t)
 		cargo.EngagementTarget = killer.Handle // an earlier attacker of the cargo itself
 		carrier.LastDamageCause = uint8(combat.CauseOrdinary)
-		system.HandleDeath(w, carrier.Handle, 0)
+		system.HandleDeath(w, carrier.Handle, 0, 0)
 		if !cargo.Dying {
 			t.Fatalf("the cascade's 30000 did not kill the cargo: health %d", cargo.Health)
 		}
@@ -155,4 +156,12 @@ func TestCarrierDeathCascadeCreditsTheCarriersKiller(t *testing.T) {
 				cargo.EngagementTarget)
 		}
 	})
+}
+
+func bindCargoDamageFixture(system *System, w *units.World) *combat.Service {
+	service := &combat.Service{ControlByte: func(uint8) uint8 { return combat.ControlByteHuman }}
+	system.Damage = func(tick uint32, input combat.DamageInput) combat.DamageResult {
+		return service.AcceptDamage(w, tick, input)
+	}
+	return service
 }

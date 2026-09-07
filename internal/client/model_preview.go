@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -38,10 +39,30 @@ type ModelPreviewOptions struct {
 	Background uint8
 	Structure  bool
 	KeyPlane   bool
+	// DisableAntiAlias suppresses only the structure 2x composition resolve for
+	// this preview invocation. Its zero value preserves the renderer's default
+	// preview behavior; it does not change the structure/shaded model path.
+	DisableAntiAlias bool
 	// HiddenPieces is an explicit tooling pose override. It lets a contact
 	// sheet omit script-driven flash/locator geometry without claiming an
 	// initial COB state or changing the authored model.
 	HiddenPieces []string
+	// PiecePoses is an explicit static presentation pose. It uses the committed
+	// PieceView lanes so a tool can reproduce a researched model pose without
+	// claiming to run its COB activation script [03 §2.4]. Entries are matched
+	// by name, as they are on ordinary published unit views.
+	PiecePoses []frame.PieceView
+}
+
+// ModelPreviewRecord is one reproducible static preview. Image is the classic
+// reference render; List contains the same model command with its durable
+// geometry packet for a device consumer. Background and Palette supply the
+// neutral pixel plane required to replay a model-only list.
+type ModelPreviewRecord struct {
+	Image      *image.RGBA
+	List       drawlist.List
+	Background uint8
+	Palette    *palette.Tables
 }
 
 // ModelPreviewRenderer retains the production model and texture caches while
@@ -75,12 +96,24 @@ func NewModelPreviewRenderer(fs *vfs.FS) (*ModelPreviewRenderer, error) {
 // hierarchy and raster path. Every call starts with the requested palette
 // background and centers the unit origin in an identically sized frame.
 func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGBA, error) {
+	record, err := r.RecordModel(opts)
+	if err != nil {
+		return nil, err
+	}
+	return record.Image, nil
+}
+
+// RecordModel produces both the classic reference image and the immutable
+// model packet which P3 can replay without a client, camera or model cache.
+// It is a static pose renderer: PiecePoses represent supplied committed lanes,
+// not COB activation or animation.
+func (r *ModelPreviewRenderer) RecordModel(opts ModelPreviewOptions) (ModelPreviewRecord, error) {
 	if r == nil || r.client == nil || r.palette == nil {
-		return nil, fmt.Errorf("nanolathe: rendering model preview: renderer is not initialized")
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: renderer is not initialized")
 	}
 	name := strings.TrimSpace(opts.Model)
 	if name == "" {
-		return nil, fmt.Errorf("nanolathe: rendering model preview: logical path objects3d, providers searched %s, expected model name", previewProviders(r.client.modelFS))
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: logical path objects3d, providers searched %s, expected model name", previewProviders(r.client.modelFS))
 	}
 	// The production loader accepts either a bare model name or a complete
 	// logical path. Make the command's documented "armcom.3do" shorthand a
@@ -90,13 +123,16 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 		renderName = "objects3d/" + name
 	}
 	if opts.Width <= 0 || opts.Height <= 0 || opts.Width > maxModelPreviewDimension || opts.Height > maxModelPreviewDimension {
-		return nil, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
 	}
 	if opts.Scale < 0 || opts.Scale > 4 || (opts.Scale > 0 && opts.Scale < 0.25) {
-		return nil, fmt.Errorf("nanolathe: rendering model preview: scale %.3g outside 0.25..4", opts.Scale)
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g outside 0.25..4", opts.Scale)
 	}
 
 	c := r.client
+	previousAntiAlias := c.antiAlias
+	c.antiAlias = !opts.DisableAntiAlias
+	defer func() { c.antiAlias = previousAntiAlias }()
 	c.width, c.height = opts.Width, opts.Height
 	c.indexed = make([]uint8, opts.Width*opts.Height)
 	c.rgba = make([]byte, opts.Width*opts.Height*4)
@@ -143,24 +179,45 @@ func (r *ModelPreviewRenderer) RenderModel(opts ModelPreviewOptions) (*image.RGB
 		ZBuffer:         opts.KeyPlane,
 		NoShadow:        true,
 	}
+	view.Pieces = append(view.Pieces, opts.PiecePoses...)
 	for _, name := range opts.HiddenPieces {
 		if name = strings.TrimSpace(name); name != "" {
 			view.Pieces = append(view.Pieces, frame.PieceView{Name: name, Hidden: true})
 		}
 	}
-	if !c.drawUnitModel(view, int32(opts.Width/2), int32(opts.Height/2)) {
+	wasRecordingGeometry := c.recordModelGeometry
+	c.recordModelGeometry = true
+	drawn := c.drawUnitModel(view, int32(opts.Width/2), int32(opts.Height/2))
+	c.recordModelGeometry = wasRecordingGeometry
+	if !drawn {
 		path := renderName
 		if !strings.HasSuffix(strings.ToLower(path), ".3do") {
 			path = "objects3d/" + path + ".3do"
 		}
-		return nil, fmt.Errorf("nanolathe: rendering model preview: logical path %s, providers searched %s, expected drawable 3DO model", path, previewProviders(c.modelFS))
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: logical path %s, providers searched %s, expected drawable 3DO model", path, previewProviders(c.modelFS))
 	}
 	// Replay the recorded model commit into the indexed surface, then expand.
 	c.list.Replay(c.classicSink())
 	c.convertIndexedToRGBA()
 	out := image.NewRGBA(image.Rect(0, 0, opts.Width, opts.Height))
 	copy(out.Pix, c.rgba)
-	return out, nil
+	return ModelPreviewRecord{
+		Image: out, List: c.list.Clone(), Background: opts.Background, Palette: r.palette,
+	}, nil
+}
+
+// ARMSOLAROpenPreviewPose is the geometry-only open-dish recipe used for
+// renderer review. The stock model's four dishes are named dish1 through dish4.
+// Retail composition evidence rotates each by 135 degrees about its Z
+// accumulator [03 R-REN-03A §3]. This helper does not emulate COB activation;
+// callers must label output as a static pose.
+func ARMSOLAROpenPreviewPose() []frame.PieceView {
+	return []frame.PieceView{
+		{Name: "dish1", RotZ: 24576},
+		{Name: "dish2", RotZ: 24576},
+		{Name: "dish3", RotZ: 24576},
+		{Name: "dish4", RotZ: 24576},
+	}
 }
 
 func previewProviders(fs *vfs.FS) string {

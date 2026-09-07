@@ -174,7 +174,7 @@ func validateFactoryProduct(cat *content.Catalog, key string) error {
 	// once present, the compiled domain is authoritative for admission.
 	if domain == content.MobilityUnknown {
 		switch {
-		case !def.BMCode:
+		case def.BMCode == 0:
 			domain = content.MobilityFixed
 		case def.CanFly:
 			domain = content.MobilityAircraft

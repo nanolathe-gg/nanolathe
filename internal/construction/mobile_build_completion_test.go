@@ -14,7 +14,7 @@ func mobileBuildCompletionFixture(t *testing.T, count uint32) (*Service, *units.
 	t.Helper()
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	builderDef := newFactoryDef("mobile_builder", 1, 1, 30)
-	builderDef.BMCode = true
+	builderDef.BMCode = 1
 	builderDef.CanMove = true
 	productDef := newProductDef("mobile_product", 1, 1, 1, 1)
 	cat.Units[builderDef.CanonicalKey] = builderDef

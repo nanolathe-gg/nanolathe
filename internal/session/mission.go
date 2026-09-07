@@ -668,7 +668,7 @@ func missionPlacementPosition(t *world.Terrain, def *content.UnitDef, up mission
 	x = numeric.Fixed(int64(up.X))
 	y = numeric.Fixed(int64(up.Y))
 	z = numeric.Fixed(int64(up.Z))
-	if def == nil || def.BMCode {
+	if def == nil || def.BMCode != 0 {
 		return x, y, z // a mobile definition is untouched [08 R-ENTRY-01 §6]
 	}
 	cellX, cellZ := world.PlacementAnchor(x, z, def.FootprintX, def.FootprintZ)

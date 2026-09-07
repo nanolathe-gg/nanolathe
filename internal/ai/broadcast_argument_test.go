@@ -20,7 +20,7 @@ import (
 // per-member coordinate transform: every member is submitted at the supplied
 // point.
 func TestBroadcastForwardsSpacingIntoTheArgumentWord(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: true, MaxDamage: 100}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: 1, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def}}
 
 	x := numeric.FixedFromInt(300)

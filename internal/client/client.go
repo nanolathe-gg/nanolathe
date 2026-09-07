@@ -68,6 +68,10 @@ type Client struct {
 	// §2.2, C-G1). Its zero value is a usable empty list; a warm frame reuses
 	// its backing arrays and allocates nothing.
 	list drawlist.List
+	// recordModelGeometry is enabled only for durable recording consumers.
+	// Ordinary classic Frame composition leaves it false so normal presentation
+	// does not allocate model packets before the modern executor asks for them.
+	recordModelGeometry bool
 
 	// modelCommits is the per-frame client-side table drawlist.Model.Ref indexes:
 	// one entry per composed model subject in record order, holding what the
@@ -615,7 +619,10 @@ func (c *Client) ComposeFrameSnapshot() ComposedFrameSnapshot {
 	if c == nil {
 		return ComposedFrameSnapshot{}
 	}
+	wasRecordingGeometry := c.recordModelGeometry
+	c.recordModelGeometry = true
 	cur := c.composeCurrentFrame()
+	c.recordModelGeometry = wasRecordingGeometry
 	snapshot := ComposedFrameSnapshot{
 		Width:     c.width,
 		Height:    c.height,

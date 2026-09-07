@@ -30,8 +30,8 @@ const (
 // armed slot and a weapon, all satisfying the five gates of [06 §3.3] unless
 // the caller breaks one.
 func leadFixture(kills int32) (*units.Unit, *units.Unit, *units.Slot, *content.WeaponDef, Vec3) {
-	shooter := &units.Unit{Alive: true, Kills: kills, Def: &content.UnitDef{UnitName: "shooter", BMCode: true}}
-	target := &units.Unit{Alive: true, Def: &content.UnitDef{UnitName: "target", BMCode: true}}
+	shooter := &units.Unit{Alive: true, Kills: kills, Def: &content.UnitDef{UnitName: "shooter", BMCode: 1}}
+	target := &units.Unit{Alive: true, Def: &content.UnitDef{UnitName: "target", BMCode: 1}}
 	// One world unit per tick east, two per tick north; no vertical motion.
 	target.Move.VelX = numeric.Fixed(65536)
 	target.Move.VelY = 0
@@ -112,7 +112,14 @@ func TestPreFireLeadGates(t *testing.T) {
 	})
 	t.Run("target has no movement record", func(t *testing.T) {
 		shooter, target, slot, weapon, point := leadFixture(6)
-		target.Def.BMCode = false // a building has no mover [04 R-COLL-01 §1]
+		target.Def.BMCode = 0 // a building has no mover [04 R-COLL-01 §1]
+		if got := PreFireLeadPoint(shooter, target, slot, weapon, point); got != point {
+			t.Fatalf("point = %v, want the unled point for a target with no mover [06 §3.3]", got)
+		}
+	})
+	t.Run("non-building target has no mover", func(t *testing.T) {
+		shooter, target, slot, weapon, point := leadFixture(6)
+		target.Def.BMCode = 2 // non-building byte two still has no mover [08 R-AI-03 §7.4]
 		if got := PreFireLeadPoint(shooter, target, slot, weapon, point); got != point {
 			t.Fatalf("point = %v, want the unled point for a target with no mover [06 §3.3]", got)
 		}

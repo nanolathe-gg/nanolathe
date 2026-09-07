@@ -772,35 +772,7 @@ func (s *Service) DispatchHealingPacket(w *units.World, packet Packet) bool {
 // is marked with cause 3 so the normal death finalizer performs callbacks and
 // death effects [08 R-SKIR-01 §3][06 §9.1][06 §12.1].
 func (s *Service) ApplySelfDestructDamage(w *units.World, target pool.Handle, tick uint32) bool {
-	if s == nil || w == nil || target == 0 {
-		return false
-	}
-	victim := w.Unit(target)
-	if victim == nil || !victim.Alive || victim.Dying {
-		return false
-	}
-	// A fixed kind-3 packet uses the strict 30000 armor boundary and defender
-	// veterancy. Kind 3 records its own provenance and emits no damage callbacks
-	// on a surviving unit [06 §9.1][06 §9.2][06 §12.1].
-	damageModifier := int32(65536)
-	if victim.Def != nil {
-		damageModifier = victim.Def.DamageModifier
-	}
-	amount := ComputeScaledAmount(30000, 1, victim.Kills, victim.Kills, UnitArmored(victim), damageModifier, false, false, false)
-	victim.LastDamageSide = victim.Owner
-	victim.LastDamageCause = uint8(CauseSelfDestruct)
-	victim.Health = ApplyDamage(victim.Health, amount)
-	if victim.Health <= 0 {
-		w.DestroyBy(target, units.DeathSelfDestruct, target)
-		if s.deathNotified == nil {
-			s.deathNotified = make(map[pool.Handle]*units.Unit)
-		}
-		if s.deathNotified[target] != victim {
-			s.deathNotified[target] = victim
-			s.emitEvent(Event{Kind: EventUnitKilled, Tick: tick, Source: target, Target: target, Position: Vec3{X: victim.X, Y: victim.Y, Z: victim.Z}})
-		}
-	}
-	return true
+	return s.AcceptDamage(w, tick, DamageInput{Victim: target, Attacker: target, Nominal: 30000, Kind: uint8(CauseSelfDestruct)}).Accepted
 }
 
 // ApplyDamage performs exact 16-bit modular subtraction from health [06 §9.1].
@@ -877,13 +849,13 @@ func IsWaterDamageEligible(u *units.Unit, terrain *world.Terrain) bool {
 
 // ComputeWaterDamageScaledAmount computes the scaled water-damage amount for
 // victim per [04 §9.2][06 §9.2] C20.
-// It is ComputeScaledAmount with falloff 1.0 (non-AOE multiplier [04 §9.2]),
-// attacker 0 (null), and non-heal path so armor/veteran (defender) reductions apply.
+// Water enters the packet builder directly, so only armor and defender
+// veterancy scale its established nominal [04 §9.2][06 §9.2].
 // isArmored is the victim's runtime armored posture — bit 1 of its first state
 // byte, nothing else [06 R-DMG-01 §8]; damageModifier is def.DamageModifier
 // 16.16; defenderKills is the victim's credited-kill counter.
 func ComputeWaterDamageScaledAmount(baseDamage int32, defenderKills int32, isArmored bool, damageModifier int32) uint16 {
-	return ComputeScaledAmount(baseDamage, float32(1), 0, defenderKills, isArmored, damageModifier, false, false, false) // [04 §9.2] multiplier 1.0 for non-AOE, [06 §9.2] steps 5-6 defender vet reduction
+	return scaleAcceptedAmount(baseDamage, defenderKills, isArmored, damageModifier)
 }
 
 // WaterDamagePacketForTest builds the would-be water-damage packet for inspection per [04 §9.2][06 §9.1].
@@ -900,7 +872,8 @@ func WaterDamagePacketForTest(victim pool.Handle, baseDamage int32, defenderKill
 }
 
 // TickWaterDamage applies retail water damage for one global tick [04 §9.2][06 §12.1] cause 11.
-// It is the authoritative per-tick water-damage sweep evaluated per unit before movement [04 §9.2].
+// This standalone sweep supports isolated callers. The live session delivers
+// each packet inside its phase-2 unit visit [04 §9.2].
 // Deterministic iteration: players 0..9 ascending, slots ascending within each player's slice (I1) [01 §4.4][04 §9.2].
 // No map range, no float64 outside I2 allowlist, no time.Now, no per-entity RNG (I1,I2,I4).
 // Returns the number of units damaged this tick.
@@ -930,6 +903,7 @@ func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterD
 	// Sea-level byte from terrain header [03 §2.2] C9, used via IsInWaterForDamage [04 §9.2].
 	// If terrain nil, no unit can be determined in-water, so no damage (see IsWaterDamageEligible TODO).
 	applied := 0
+	service := &Service{ControlByte: getControlByte}
 	// Deterministic traversal: players 0..9 ascending, slots ascending (I1) [01 §4.4][04 §9.2].
 	// Use VisitActiveSlots which already enforces that order [01 §4.4].
 	w.VisitActiveSlots(func(v units.SlotVisit) {
@@ -951,36 +925,9 @@ func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterD
 		if !IsWaterDamageEligible(u, terrain) { // [04 §9.2] canhover exclusion and Y <= seaLevel
 			return
 		}
-		// Funnel arithmetic per [04 §9.2][06 §9.2] C20 via ComputeScaledAmount with falloff 1.0 [04 §9.2] non-AOE multiplier.
-		// The armor gate is bit 1 of the victim's first runtime state byte —
-		// the COB port 20 posture — and nothing else [06 R-DMG-01 §8]. The
-		// definition's `armoredstate` flag has no reader in retail.
-		isArmored := UnitArmored(u)
-		damageMod := int32(65536) // 1.0 [02 "Unit record"] default
-		if u.Def != nil {
-			damageMod = u.Def.DamageModifier
+		if service.AcceptDamage(w, tick, DamageInput{Victim: u.Handle, Nominal: waterDamage, Kind: KindNoReaction}).Accepted {
+			applied++
 		}
-		scaled := ComputeWaterDamageScaledAmount(waterDamage, u.Kills, isArmored, damageMod) // [04 §9.2][06 §9.2] veteran victim REDUCED
-		// Apply through standard damage funnel without callbacks [04 §9.2] type 0xB skips HitByWeapon/TakeDamage and feature effects.
-		// Use 16-bit modular subtraction per [06 §9.1] ApplyDamage, then death latch via world.Destroy for lethal [04 §9.2][06 §12.1] cause 11 normal death-pending.
-		// No packet construction needed for health path, but kind is 11 for citation.
-		_ = KindNoReaction // 0xB [04 §9.2][06 §9.1]
-		u.LastDamageCause = uint8(CauseWaterDamage)
-		// Water has no attacking unit; its side byte remains the prior known
-		// source. Cause 11 is sufficient to clear the repair-patrol cause-5 gate.
-		newHealth := ApplyDamage(u.Health, scaled) // [06 §9.1] exact 16-bit modular subtraction
-		u.Health = newHealth
-		if newHealth <= 0 {
-			// Lethal 0xB sets normal death-pending state [04 §9.2][06 §12.1] — same latch as ordinary, no callbacks.
-			// Use the generic DeathKilled cause for units layer (cause 11 maps to that latch in combat death.go CauseWaterDamage).
-			//
-			// Water has no attacking unit, so the death packet's attacker is
-			// null and the recorded-attacker link is written null here — the
-			// plain Destroy arm. A drowning unit therefore loses the link to
-			// whoever shot it before it walked into the sea [04 R-UNIT-06 §5].
-			w.Destroy(u.Handle, units.DeathKilled) // [04 §2.4] marks Dying, firing OnDeath exactly once; slot freed at FinalizeDeath
-		}
-		applied++
 	})
 	return applied
 }

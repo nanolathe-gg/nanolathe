@@ -35,7 +35,7 @@ func completedOccupancyRect(t *testing.T, x, z, w, h int32) world.FootprintRect 
 
 func TestCompletedAllOYardRetainsCanonicalGroundWordsUntilRelease(t *testing.T) {
 	terrain := completedOccupancyTerrain(12, 12)
-	def := &content.UnitDef{UnitName: "extractor", FootprintX: 3, FootprintZ: 3, YardMap: "o", BMCode: false}
+	def := &content.UnitDef{UnitName: "extractor", FootprintX: 3, FootprintZ: 3, YardMap: "o", BMCode: 0}
 	rect := completedOccupancyRect(t, 3, 4, 3, 3)
 	u := &units.Unit{Handle: pool.Handle(7), Def: def, Alive: true}
 	svc := NewService(terrain, nil, nil, nil)
@@ -85,7 +85,7 @@ func TestCompletedAllOYardRetainsCanonicalGroundWordsUntilRelease(t *testing.T) 
 
 func TestCompletedMobileStillReleasesPlacement(t *testing.T) {
 	terrain := completedOccupancyTerrain(8, 8)
-	def := &content.UnitDef{UnitName: "mobile", FootprintX: 2, FootprintZ: 2, BMCode: true}
+	def := &content.UnitDef{UnitName: "mobile", FootprintX: 2, FootprintZ: 2, BMCode: 1}
 	rect := completedOccupancyRect(t, 2, 2, 2, 2)
 	u := &units.Unit{Handle: pool.Handle(9), Def: def, Alive: true}
 	svc := NewService(terrain, nil, nil, nil)
@@ -108,7 +108,7 @@ func TestCompletedMobileStillReleasesPlacement(t *testing.T) {
 
 func TestEmptyBuildingYardUsesDefaultOccupiedParserBuffer(t *testing.T) {
 	terrain := completedOccupancyTerrain(8, 8)
-	def := &content.UnitDef{UnitName: "emptyyard", FootprintX: 2, FootprintZ: 2, BMCode: false}
+	def := &content.UnitDef{UnitName: "emptyyard", FootprintX: 2, FootprintZ: 2, BMCode: 0}
 	rect := completedOccupancyRect(t, 2, 3, 2, 2)
 	yard, err := buildingYard(def, rect)
 	if err != nil {
@@ -138,7 +138,7 @@ func TestEmptyBuildingYardUsesDefaultOccupiedParserBuffer(t *testing.T) {
 
 func TestYardOpenTransactionPreflightsBeforeBitAndRestamp(t *testing.T) {
 	terrain := completedOccupancyTerrain(10, 10)
-	def := &content.UnitDef{UnitName: "factory", FootprintX: 3, FootprintZ: 1, YardMap: "cCc", BMCode: false}
+	def := &content.UnitDef{UnitName: "factory", FootprintX: 3, FootprintZ: 1, YardMap: "cCc", BMCode: 0}
 	rect := completedOccupancyRect(t, 3, 3, 3, 1)
 	u := &units.Unit{Handle: pool.Handle(11), Def: def, Alive: true}
 	svc := NewService(terrain, nil, nil, nil)
@@ -179,7 +179,7 @@ func TestYardOpenTransactionPreflightsBeforeBitAndRestamp(t *testing.T) {
 
 func TestReleasePlacementPreservesForeignGroundWord(t *testing.T) {
 	terrain := completedOccupancyTerrain(8, 8)
-	def := &content.UnitDef{UnitName: "factory", FootprintX: 2, FootprintZ: 1, YardMap: "oo", BMCode: false}
+	def := &content.UnitDef{UnitName: "factory", FootprintX: 2, FootprintZ: 1, YardMap: "oo", BMCode: 0}
 	rect := completedOccupancyRect(t, 2, 2, 2, 1)
 	u := &units.Unit{Handle: pool.Handle(13), Def: def, Alive: true}
 	svc := NewService(terrain, nil, nil, nil)

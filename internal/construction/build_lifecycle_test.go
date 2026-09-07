@@ -166,7 +166,7 @@ func TestGetBuiltDeadlineRaisesOnlyOrdinaryBit(t *testing.T) {
 func TestFactoryCarriedGetBuiltRunsAtTheHead(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := newProductDef("armflash", 1, 1, 100, 100)
-	def.BMCode = true
+	def.BMCode = 1
 	def.BuildCostEnergy = 55
 	cat.Units[def.CanonicalKey] = def
 	w := newConstructionFixtureWorld(8, cat)
@@ -285,7 +285,7 @@ func TestBuildingClassGetBuiltCompletesWithoutRallyOrPark(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	factoryDef := newFactoryDef("armfac", 1, 1, 30)
 	buildingDef := newProductDef("armsolar", 2, 2, 100, 100)
-	buildingDef.BMCode = false
+	buildingDef.BMCode = 0
 	cat.Units[factoryDef.CanonicalKey] = factoryDef
 	cat.Units[buildingDef.CanonicalKey] = buildingDef
 	w := newConstructionFixtureWorld(8, cat)
@@ -427,7 +427,7 @@ func TestReservePlacementYardGatesOccupancy(t *testing.T) {
 	// 3x2 product with yard "yoy/ooo": the top-left 'y' cell is open (no bits
 	// 1-2), every other cell ('o') requires occupancy clearance. Non-square
 	// dimensions lock the row-major (dz*fx+dx) yard indexing.
-	def := &content.UnitDef{UnitName: "tst", FootprintX: 3, FootprintZ: 2, YardMap: "yoy ooo", BMCode: false}
+	def := &content.UnitDef{UnitName: "tst", FootprintX: 3, FootprintZ: 2, YardMap: "yoy ooo", BMCode: 0}
 	def.CanonicalKey = content.CanonicalKey("tst")
 	rect, err := world.NewFootprintRect(world.NewFootprintAnchor(1, 1), mustExtent(3, 2))
 	if err != nil {
@@ -540,7 +540,7 @@ func TestFactoryAttachGateFailureRollsBackAllocation(t *testing.T) {
 	}}
 	facDef := newFactoryDef("armfac", 1, 1, 30)
 	prodDef := newProductDef("armflash", 1, 1, 100, 100)
-	prodDef.BMCode = true
+	prodDef.BMCode = 1
 	prodDef.MovementClass = "testground"
 	cat.Units[facDef.CanonicalKey] = facDef
 	cat.Units[prodDef.CanonicalKey] = prodDef
@@ -607,6 +607,7 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3), Target: ph})
 	node := q.Primary()[0]
 	svc := NewService(nil, cat, w, nil)
+	bindConstructionCombat(svc)
 	svc.Terrain = &world.Terrain{CellW: 2, CellH: 2, Plot: make([]world.PlotCell, 4)}
 	for i := range svc.Terrain.Plot {
 		svc.Terrain.Plot[i].SetFeature(world.PlotFeatureNone)
@@ -622,7 +623,7 @@ func TestCancelCurrentRunsCompletionPostureBeforeCause9(t *testing.T) {
 	svc.SetBuilderLink(ph, fh)
 	svc.getBuiltLinks[ph] = fh
 	svc.handleCancelCurrent(factory, node, 4)
-	if product.Remaining != 0 || product.Health != product.MaxHealth || product.Flags&FlagCompleted == 0 {
+	if product.Remaining != 0 || product.Health >= 0 || product.Flags&FlagCompleted == 0 {
 		t.Fatalf("cancel completion posture missing: remaining=%v health=%d flags=%x", product.Remaining, product.Health, product.Flags)
 	}
 	// The transition must not raise bit 14 of the instance flag word: the old

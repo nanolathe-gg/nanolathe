@@ -35,7 +35,7 @@ func setScratchMovement(def *content.UnitDef, p Profile) *content.UnitDef {
 	// correction for it every tick [04 R-MOV-03 §1] step 9. Compiled content
 	// authors `bmcode` for exactly these definitions; the fixtures omitted it,
 	// which made every scratch mover a building-class record.
-	def.BMCode = true
+	def.BMCode = 1
 	def.FootprintX = int32(p.FootPrintX)
 	def.FootprintZ = int32(p.FootPrintZ)
 	def.MaxWaterDepth = p.MaxWaterDepth

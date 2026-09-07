@@ -100,27 +100,10 @@ func (s *System) CanTransport(carrierHandle, candidateHandle pool.Handle, w *uni
 	if int32(candidateFootX) > carrierSize {
 		return AdmissionResult{Allowed: false, Reason: "too heavy"}
 	}
-	// 5) candidate has no mover [04 §10.2]
-	hasMover := false
-	if _, ok := s.Collisions[candidateHandle]; ok {
-		hasMover = true
-	}
-	if _, ok := s.Steers[candidateHandle]; ok {
-		hasMover = true
-	}
-	if _, ok := s.Flights[candidateHandle]; ok {
-		hasMover = true
-	}
-	// Also consider MoveState: if unit has CanMove or CanFly etc but still mover.
-	// If none of the system maps have it but unit is considered mobile, still treat as having mover for fixtures.
-	// For headless tests where EnsureUnit was called, maps will be populated.
-	if !hasMover {
-		// Fallback: if unit's def has movement class or canmove/canfly, consider it has mover
-		if candidate.Def.MovementClass != "" || candidate.Def.CanMove || candidate.Def.CanFly {
-			hasMover = true
-		}
-	}
-	if !hasMover {
+	// A pickup candidate must own a mover. Definition capabilities are not
+	// substitutes for the creator's exactly-one byte gate [04 §10.2]
+	// [08 R-AI-03 §7.4].
+	if candidate.Def.BMCode != 1 || !s.HasMover(candidateHandle) {
 		return AdmissionResult{Allowed: false, Reason: "no mover"}
 	}
 	// 6) candidate committed mover mode is active locomotion (mode 2) [04 §10.2]

@@ -57,7 +57,7 @@ func TestCommitStampsLastProposalTickBeforeValidation(t *testing.T) {
 	def := &content.UnitDef{
 		UnitName: "proposal-stamp-test", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
-		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535, BMCode: true,
+		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535, BMCode: 1,
 	}
 
 	t.Run("moving proposal stamps", func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestHoverBobKeepsAmplitudeWhileMoving(t *testing.T) {
 	def := &content.UnitDef{
 		UnitName: "hover-proposal-test", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
-		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535, BMCode: true,
+		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535, BMCode: 1,
 		CanHover: true,
 	}
 	system, w, h := proposalFixture(t, def, true)

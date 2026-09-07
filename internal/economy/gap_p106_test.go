@@ -109,7 +109,7 @@ func TestGeneratorAndMobileBranchGates(t *testing.T) {
 		t.Fatalf("wind should ignore upkeep admission, got %v", b[Energy].Production)
 	}
 
-	def.BMCode = true
+	def.BMCode = 1
 	b[Energy] = Bucket{}
 	u.Move.Mode = 1
 	svc.PerUnitProductionFills(0, w)

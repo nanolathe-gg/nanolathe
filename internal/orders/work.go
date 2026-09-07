@@ -168,7 +168,7 @@ func stampNanolatheActive(u *units.Unit, tick, ticks uint32) {
 // mover only for a bmcode-1 definition [04 R-FAC-02 §5], which is the same
 // reading `Park`'s phase 0 uses.
 func hasMover(u *units.Unit) bool {
-	return u != nil && u.Def != nil && u.Def.BMCode
+	return u != nil && u.Def != nil && u.Def.BMCode == 1
 }
 
 // isqrt64 is the floor of the square root of a non-negative value. Retail forms

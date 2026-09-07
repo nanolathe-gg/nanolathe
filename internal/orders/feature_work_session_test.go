@@ -77,7 +77,7 @@ func reclaimBeyondRangeWalksAndPays(t *testing.T, blocking bool) {
 		if u == nil || !u.Alive || u.Def == nil {
 			continue
 		}
-		if u.Owner == composed.LocalOwner && u.Def.BMCode && u.Def.CanReclamate && !u.Def.CanFly {
+		if u.Owner == composed.LocalOwner && u.Def.BMCode != 0 && u.Def.CanReclamate && !u.Def.CanFly {
 			builder = u
 			break
 		}

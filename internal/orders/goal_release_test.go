@@ -24,7 +24,7 @@ func TestReleaseGoalPayloadReachesTheMoverPort(t *testing.T) {
 	rng.SeedGlobal(1, 0)
 	u := &units.Unit{
 		Handle:    1,
-		Def:       &content.UnitDef{BMCode: true},
+		Def:       &content.UnitDef{BMCode: 1},
 		Alive:     true,
 		X:         numeric.Fixed(70 << 16),
 		Z:         numeric.Fixed(90 << 16),
@@ -61,7 +61,7 @@ func TestReleaseGoalPayloadReachesTheMoverPort(t *testing.T) {
 // owner's mover can actually be seen [04 R-ORD-01 §1].
 func TestReleaseGoalPayloadWithNoMoverPortIsSilent(t *testing.T) {
 	rng.SeedGlobal(1, 0)
-	u := &units.Unit{Handle: 1, Def: &content.UnitDef{BMCode: true}, Alive: true, Health: 10, MaxHealth: 10}
+	u := &units.Unit{Handle: 1, Def: &content.UnitDef{BMCode: 1}, Alive: true, Health: 10, MaxHealth: 10}
 	q := &Queue{binding: &QueueBinding{SimRNG: rng.Global.Sim}}
 	BindQueue(u, q)
 

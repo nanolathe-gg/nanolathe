@@ -3,6 +3,7 @@ package orders
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -35,7 +36,7 @@ func TestSelfDestructFGDispatchesOnSightAndDestroysTheUnit(t *testing.T) {
 	if DescriptorFor(id).Handler == nil {
 		t.Fatal("SelfDestructFG has no handler after installation [04 §3.1]")
 	}
-	q, u := standingFixture(nil) // no authored countdown: the field defaults to 5
+	q, u := selfDestructFixture(t, nil) // no authored countdown: the field defaults to 5
 
 	const firstTick = 7
 	q.Push(id, Node{Owner: u.Handle})
@@ -106,7 +107,7 @@ func TestSelfDestructFGDispatchesOnSightAndDestroysTheUnit(t *testing.T) {
 // and `Standby_Mine` reach by spawning the record with p1 = 1.
 func TestSelfDestructWithNoCountdownFieldFiresOnItsFirstVisit(t *testing.T) {
 	def := &content.UnitDef{SelfDestructCountdown: "0", SelfDestructCountdownPresent: true}
-	q, u := standingFixture(def)
+	q, u := selfDestructFixture(t, def)
 	q.Push(Lookup("SelfDestructFG"), Node{Owner: u.Handle})
 	q.Pump(u, 0)
 	if q.LenPrimary() != 0 || !u.Dying {
@@ -114,7 +115,7 @@ func TestSelfDestructWithNoCountdownFieldFiresOnItsFirstVisit(t *testing.T) {
 	}
 
 	// p1 = 1 is the spawned form; it skips the countdown regardless of the field.
-	q2, u2 := standingFixture(nil)
+	q2, u2 := selfDestructFixture(t, nil)
 	q2.Push(Lookup("SelfDestructFG"), Node{Owner: u2.Handle, Param1: 1})
 	q2.Pump(u2, 0)
 	if q2.LenPrimary() != 0 || !u2.Dying {
@@ -129,7 +130,7 @@ func TestSelfDestructWithNoCountdownFieldFiresOnItsFirstVisit(t *testing.T) {
 // [04 R-ORD-01 §0][R-ORDER-02 §2]. Arming it on every counting visit is what
 // makes a re-issue or a purge terminate the countdown instead of detonating.
 func TestSelfDestructCancelNotificationCompletesWithoutDamage(t *testing.T) {
-	q, u := standingFixture(nil)
+	q, u := selfDestructFixture(t, nil)
 	q.Push(Lookup("SelfDestructFG"), Node{Owner: u.Handle})
 	q.Pump(u, 0)
 	if q.Primary()[0].DynamicGate&gateCancelBit == 0 {
@@ -186,7 +187,7 @@ func TestSelfDestructRearRecordRunsOnTheSecondarySegment(t *testing.T) {
 		t.Fatal("both self-destruct descriptors must carry the shared handler")
 	}
 
-	q, u := standingFixture(nil)
+	q, u := selfDestructFixture(t, nil)
 	q.PushSecondary(rear, Node{Owner: u.Handle, Param1: 1}) // p1 = 1: fire on sight
 	q.Pump(u, 0)
 	if q.LenSecondary() != 0 {
@@ -210,7 +211,7 @@ func TestSelfDestructRearRecordRunsOnTheSecondarySegment(t *testing.T) {
 // field writer. This test is what catches the two drifting apart again.
 func TestSelfDestructLatchesTheRecordedAttackerAsItself(t *testing.T) {
 	def := &content.UnitDef{SelfDestructCountdown: "0", SelfDestructCountdownPresent: true}
-	q, u := standingFixture(def)
+	q, u := selfDestructFixture(t, def)
 	u.EngagementTarget = 77 // an earlier attacker, which the death row must overwrite
 	q.Push(Lookup("SelfDestructFG"), Node{Owner: u.Handle})
 	q.Pump(u, 0)
@@ -220,4 +221,25 @@ func TestSelfDestructLatchesTheRecordedAttackerAsItself(t *testing.T) {
 	if u.EngagementTarget != u.Handle {
 		t.Fatalf("recorded attacker = %d, want the unit's own handle %d [04 R-UNIT-06 §5]", u.EngagementTarget, u.Handle)
 	}
+}
+
+// selfDestructFixture binds the actual packet intake to the order's unit pool.
+func selfDestructFixture(t *testing.T, def *content.UnitDef) (*Queue, *units.Unit) {
+	t.Helper()
+	q, original := standingFixture(def)
+	w := newOrdersFixtureWorld(4, nil)
+	createDef := &content.UnitDef{UnitName: "selfdestruct", MaxDamage: 3000, Limit: -1}
+	h, err := w.Create(createDef, 0, original.X, original.Y, original.Z)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := w.Unit(h)
+	u.Def = original.Def
+	u.Health, u.MaxHealth = original.Health, original.MaxHealth
+	service := &combat.Service{ControlByte: func(uint8) uint8 { return combat.ControlByteHuman }}
+	q.binding.Damage = func(tick uint32, input combat.DamageInput) combat.DamageResult {
+		return service.AcceptDamage(w, tick, input)
+	}
+	BindQueue(u, q)
+	return q, u
 }

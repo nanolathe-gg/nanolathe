@@ -159,7 +159,7 @@ func TestCarriedProductDecaysWhenUnworked(t *testing.T) {
 	// below 1.0 after every visit in the measured window and each visit is
 	// visible as a change.
 	def := newProductDef("armflash", 1, 1, 850, 7240)
-	def.BMCode = true
+	def.BMCode = 1
 	def.BuildCostEnergy = 1370
 	cat.Units[def.CanonicalKey] = def
 	w := newConstructionFixtureWorld(8, cat)

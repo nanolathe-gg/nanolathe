@@ -116,7 +116,7 @@ func TestMissionPlacementLeavesMobileRecordsAlone(t *testing.T) {
 	const w = 1 << 16
 	ter := wu19205Terrain(64, 64, 10, 0)
 	def := wu19205Structure("mover", 2, 2)
-	def.BMCode = true
+	def.BMCode = 1
 	def.CanMove = true
 	up := mission.UnitPlacement{UnitName: "mover", X: 25 * w, Y: 900 * w, Z: 43 * w}
 	x, y, z := missionPlacementPosition(ter, def, up)

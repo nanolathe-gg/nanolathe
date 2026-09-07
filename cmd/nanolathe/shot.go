@@ -97,6 +97,9 @@ func runShot(opts Options, cs *contentSet) error {
 	if opts.Shot == "" {
 		return fmt.Errorf("nanolathe: shot: no output path: logical path <command line>, providers searched [none], expected --shot <file.png>")
 	}
+	if err := validateShotOptions(opts); err != nil {
+		return err
+	}
 	request, _, err := headlessFreshBattleRequest(opts, cs, newBattleSeedSource(opts))
 	if err != nil {
 		return err
@@ -296,7 +299,7 @@ func runShot(opts Options, cs *contentSet) error {
 			return err
 		}
 	case "modern":
-		modern, err := captureModernShot(cl, shotW, shotH, opts.Map)
+		modern, err := captureModernShot(cl, shotW, shotH, opts.Map, opts.ShotGPUProfileFrames, nil, 0, "")
 		if err != nil {
 			return err
 		}
@@ -314,35 +317,62 @@ func runShot(opts Options, cs *contentSet) error {
 	return writeMemProfile(opts.MemProfile)
 }
 
+func validateShotOptions(opts Options) error {
+	if opts.ShotGPUProfileFrames < 0 {
+		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames must be nonnegative, got %d", opts.ShotGPUProfileFrames)
+	}
+	if opts.ShotGPUProfileFrames > 0 && opts.Renderer != "modern" {
+		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --renderer=modern, got %q", opts.Renderer)
+	}
+	if opts.ShotGPUProfileFrames > 0 && opts.ShotRenderer != "modern" && opts.ShotRenderer != "both" {
+		return fmt.Errorf("nanolathe: shot: --shot-gpu-profile-frames requires --shot-renderer modern or both, got %q", opts.ShotRenderer)
+	}
+	if opts.ShotRendererMax < 0 {
+		return fmt.Errorf("nanolathe: shot: --shot-renderer-max must be nonnegative, got %d", opts.ShotRendererMax)
+	}
+	switch opts.ShotRenderer {
+	case "", "classic", "modern", "both":
+		return nil
+	default:
+		return fmt.Errorf("nanolathe: shot: --shot-renderer wants \"classic\", \"modern\" or \"both\", got %q", opts.ShotRenderer)
+	}
+}
+
 // runShotBoth captures the classic and modern frames of the same committed
 // state, writes both PNGs, and reports their difference [DESIGN_GPU_RENDERER.md
 // §2.5, §6]. The classic capture keeps the ordinary --shot output byte for byte
 // (C-G11); the modern capture goes to a sibling `.modern.png`, and the diff
 // (differing-pixel count and the largest clusters) is printed to stderr with an
 // optional `.diff.png`. It exits non-zero only when the diff exceeds
-// --shot-renderer-max: at this stage the modern executor is Clear+Expand only
-// (WU-2.1), so the whole play area differs by design — the point is the artifact,
-// not a pass/fail (C-G10).
+// --shot-renderer-max controls the explicit comparison acceptance threshold;
+// the default remains effectively unbounded for historical capture callers.
 func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
-	classic := cl.ComposeFrame()
-	if err := encodeShotPNG(opts.Shot, classic); err != nil {
-		return err
-	}
-	modern, err := captureModernShot(cl, shotW, shotH, opts.Map)
+	started := time.Now()
+	snapshot := cl.ComposeFrameSnapshot()
+	preparation := time.Since(started)
+	classic := image.NewRGBA(image.Rect(0, 0, snapshot.Width, snapshot.Height))
+	copy(classic.Pix, snapshot.RGBA)
+	modern, err := captureModernShot(cl, shotW, shotH, opts.Map, opts.ShotGPUProfileFrames, &snapshot, preparation, "classic compose+snapshot")
 	if err != nil {
 		return err
 	}
-	modernPath := shotSiblingPath(opts.Shot, ".modern.png")
+	return compareShotImages(opts.Shot, classic, modern, opts.ShotRendererMax)
+}
+
+func compareShotImages(classicPath string, classic, modern image.Image, maxDiff int) error {
+	if err := encodeShotPNG(classicPath, classic); err != nil {
+		return err
+	}
+	modernPath := shotSiblingPath(classicPath, ".modern.png")
 	if err := encodeShotPNG(modernPath, modern); err != nil {
 		return err
 	}
-
 	res, err := framediff.Compare(classic, modern, 8)
 	if err != nil {
 		return fmt.Errorf("nanolathe: shot: compare classic and modern: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: shot-renderer both: %dx%d, %d differing pixels (%.4f%%); classic %s, modern %s\n",
-		res.Width, res.Height, res.Count, 100*float64(res.Count)/float64(res.Total), opts.Shot, modernPath)
+		res.Width, res.Height, res.Count, 100*float64(res.Count)/float64(res.Total), classicPath, modernPath)
 	const topClusters = 8
 	for i, c := range res.Clusters {
 		if i >= topClusters {
@@ -352,14 +382,14 @@ func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
 		fmt.Fprintf(os.Stderr, "  %6d px  at (%d,%d)-(%d,%d)\n", c.Count, c.X0, c.Y0, c.X1, c.Y1)
 	}
 	if res.Count > 0 {
-		diffPath := shotSiblingPath(opts.Shot, ".diff.png")
+		diffPath := shotSiblingPath(classicPath, ".diff.png")
 		if err := encodeShotPNG(diffPath, framediff.DiffImage(classic, res.Differing, res.Width, res.Height)); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "  diff image %s\n", diffPath)
 	}
-	if res.Count > opts.ShotRendererMax {
-		return fmt.Errorf("nanolathe: shot: modern differs from classic by %d pixels, over --shot-renderer-max %d", res.Count, opts.ShotRendererMax)
+	if res.Count > maxDiff {
+		return fmt.Errorf("nanolathe: shot: modern differs from classic by %d pixels, over --shot-renderer-max %d", res.Count, maxDiff)
 	}
 	return nil
 }

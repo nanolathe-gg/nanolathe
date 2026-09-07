@@ -117,8 +117,8 @@ func strictMinimalCatalog() *content.Catalog {
 			// modelling a commander must too, or the runtime building-class
 			// status bit sends it down the structure branches
 			// [08 "Classifier eligibility, destinations, and order"].
-			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true, BMCode: true},
-			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true, BMCode: true},
+			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true, BMCode: 1},
+			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, BuildTime: 100, WorkerTime: 30, CanMove: true, MaxVelocity: 2000, TurnRate: 1000, Builder: true, BMCode: 1},
 		},
 		Movement: mv,
 		Sides: []*content.SideDef{

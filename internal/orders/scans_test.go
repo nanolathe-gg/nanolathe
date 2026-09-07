@@ -206,7 +206,7 @@ func TestLiveUnitEnumeratorAnswersTheStopQuestion(t *testing.T) {
 // units with `candidate.Owner != u.Owner` could express neither.
 func TestPatrolPadSeekOffersAlliedPads(t *testing.T) {
 	padDef := &content.UnitDef{MaxDamage: 100, Builder: true, IsAirBase: true}
-	flierDef := &content.UnitDef{MaxDamage: 100, CanFly: true, BMCode: true}
+	flierDef := &content.UnitDef{MaxDamage: 100, CanFly: true, BMCode: 1}
 	flier := &units.Unit{Handle: 1, Owner: 0, Def: flierDef, Alive: true, Health: 50}
 
 	own := &units.Unit{Handle: 5, Owner: 0, Def: padDef, Alive: true, Activated: true}

@@ -18,7 +18,7 @@ func orderlessMoverDef(name string) *content.UnitDef {
 	return &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey(name)},
 		UnitName:         name,
-		BMCode:           true,
+		BMCode:           1,
 		CanMove:          true,
 		MaxDamage:        100,
 		FootprintX:       1,
@@ -227,7 +227,7 @@ func TestOrderlessMoverTickDrawsNoRandomValues(t *testing.T) {
 func TestBuildingHasNoMoverTick(t *testing.T) {
 	sys, w := orderlessMoverSystem(t, 4)
 	def := orderlessMoverDef("orderless-building")
-	def.BMCode = false
+	def.BMCode = 0
 	def.YardMap = "o"
 	x, z := world.CellToWorld(5), world.CellToWorld(5)
 	h, err := w.Create(def, 0, x, numeric.Fixed(99<<16), z)

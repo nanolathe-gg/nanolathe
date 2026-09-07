@@ -1,6 +1,7 @@
 package construction
 
 import (
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
@@ -320,19 +321,20 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	// gives "one nano segment per qualifying work visit ... a one-segment /
 	// two-tick presentation cadence, distinct from the damage-pulse gate" — so
 	// seven of every eight visits drew no nanolathe at all.
-	fired := false
 	if node.Param2 > reclaimPulseThreshold {
 		node.Param2 = 0
 		pulse := int32(node.Param1)
 		if pulse < 1 {
 			pulse = 1
 		}
-		target.LastDamageSide = builder.Owner
-		target.LastDamageCause = 5
-		// This legacy subtraction remains for EC-04 phase 3 migration to the
-		// common accepted damage intake [06 §9.1].
-		s.World.ApplyDamage(target.Handle, pulse)
-		fired = true
+		// A reclaim pulse is an ordinary locally delivered kind-5 packet. The
+		// combat receiver applies defender-side scaling, records provenance, and
+		// latches a lethal result for the later death finalizer [05 R-WORK-01
+		// §4][06 §9.1][06 §9.2].
+		s.Combat.AcceptDamage(s.World, tick, combat.DamageInput{
+			Victim: target.Handle, Attacker: builder.Handle, Nominal: pulse,
+			Kind: uint8(combat.CauseReclaim),
+		})
 	}
 	// "both pass → ... stamp `tick + 900`; spray" — one of the ten reveal-stamp
 	// handler sites [04 R-ORD-01 §5 "The reveal stamp"]. The write is an
@@ -343,25 +345,12 @@ func (s *Service) stepUnitReclaim(builder *units.Unit, node *orders.Node, tick u
 	if s.Presentation != nil {
 		s.emitReclaimNano(tick, builder, target)
 	}
-	if !fired || target.Health > 0 {
-		node.Param2 += reclaimCadenceStep
-		node.Deadline = int32(tick + reclaimCadenceStep)
-		return res
-	}
-	// Preserve the fatal pulse's raw attacker for the victim's later death
-	// finalizer. That visit owns the metal refund [05 R-WORK-01 §4].
-	s.World.DestroyBy(target.Handle, units.DeathReclaimed, builder.Handle)
-	// Release only construction-owned derived state. Session death observers
-	// may call the same idempotent helper; the second call is a no-op and cannot
-	// duplicate occupancy clearing or link cleanup [R-P0-09].
-	s.ReleasePlacement(target.Handle)
-	delete(s.builderLinks, target.Handle)
-	delete(s.getBuiltLinks, target.Handle)
-	if q := orders.QueueForUnit(builder); q != nil && q.Head() == node {
-		q.RemoveHead()
-	}
-	res.Product = 0
-	res.Completed = true
+	// The pulse does not own fatal cleanup. Even after a lethal packet, this
+	// visit completes its cloak, presentation, reschedule, and counter update;
+	// phase 2 later finalizes the death and its cause-5 refund [05 R-WORK-01
+	// §4][06 §12.1].
+	node.Param2 += reclaimCadenceStep
+	node.Deadline = int32(tick + reclaimCadenceStep)
 	return res
 }
 

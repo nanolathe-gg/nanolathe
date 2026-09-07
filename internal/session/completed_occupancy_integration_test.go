@@ -31,7 +31,7 @@ func completedOccupancyBuildingDef(name string, footX, footZ int32, yard string)
 	return &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey(name)},
 		UnitName:         name, ObjectName: name, MaxDamage: 100, Limit: -1,
-		FootprintX: footX, FootprintZ: footZ, YardMap: yard, BMCode: false,
+		FootprintX: footX, FootprintZ: footZ, YardMap: yard, BMCode: 0,
 		MobilityDomain: content.MobilityFixed, MaxSlope: 255,
 		MaxWaterDepth: 10000, MinWaterDepth: -10000,
 	}

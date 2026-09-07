@@ -61,7 +61,7 @@ func newRestoreCoreFixture(t *testing.T, n int) (*Session, []restoreCoreFixtureU
 	def := &content.UnitDef{
 		UnitName:  "fixture",
 		MaxDamage: 100,
-		BMCode:    true, // mobile: EnsureUnit takes the rectangle-stamp path, not the yard-map one
+		BMCode:    1, // mobile: EnsureUnit takes the rectangle-stamp path, not the yard-map one
 		Script:    &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}},
 	}
 	// Player 0's slice runs [1, maxDefs]; size it well past the stable IDs

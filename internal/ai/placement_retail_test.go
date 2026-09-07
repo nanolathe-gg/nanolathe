@@ -165,7 +165,7 @@ func TestPlacementValidatorDispatchesOnBMCodeInBothModes(t *testing.T) {
 	// A mobile definition walks the plain footprint in both modes: no yard
 	// bytes, so the same site is legal.
 	mobileCat := placementCatalog("armpw", "GGGG", 0)
-	mobileCat.Units["armpw"].BMCode = true
+	mobileCat.Units["armpw"].BMCode = 1
 	mobileCat.Units["armpw"].CanFly = true // any compiled mobility domain; the yard is what is under test
 	mm := makePlacementManager(mobileCat, terrain, 0)
 	mpd, mfailure := resolveRetailPlacementDef(mm, "armpw")
@@ -366,17 +366,17 @@ func TestPlacementRepresentativeRetailAssetsGuarded(t *testing.T) {
 	reps := map[string]string{}
 	for _, key := range cat.SortedUnitKeys() {
 		def := cat.Units[key]
-		if def == nil || (!def.BMCode && def.YardMap == "") {
+		if def == nil || (def.BMCode == 0 && def.YardMap == "") {
 			continue
 		}
 		rules, err := world.PlacementRulesForUnit(cat, def)
 		if err != nil {
 			continue
 		}
-		if !def.BMCode && def.ExtractsMetal != 0 && reps["extractor"] == "" {
+		if def.BMCode == 0 && def.ExtractsMetal != 0 && reps["extractor"] == "" {
 			reps["extractor"] = key
 		}
-		if !def.BMCode && def.ExtractsMetal == 0 && reps["non-extractor"] == "" {
+		if def.BMCode == 0 && def.ExtractsMetal == 0 && reps["non-extractor"] == "" {
 			reps["non-extractor"] = key
 		}
 		if rules.MinWaterDepth < 0 && reps["land"] == "" {

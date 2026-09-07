@@ -99,7 +99,7 @@ func TestCreationStampWritesTheCommitTick(t *testing.T) {
 	// A building's creation stamp writes the tick too; it is simply never
 	// what makes the building block [04 R-PATH-01 §14].
 	sys.BeginTick(42)
-	def := &content.UnitDef{UnitName: "stationary", MaxDamage: 100, BMCode: false, FootprintX: 2, FootprintZ: 2}
+	def := &content.UnitDef{UnitName: "stationary", MaxDamage: 100, BMCode: 0, FootprintX: 2, FootprintZ: 2}
 	at2 := world.CellToWorld(12)
 	hb, err := w.Create(def, 0, at2, terrain.HeightAt(at2, at2), at2)
 	if err != nil {

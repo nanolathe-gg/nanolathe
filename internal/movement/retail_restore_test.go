@@ -17,7 +17,7 @@ func TestRestoreMoverCopiesStateWithoutUnitMirrorOverwrite(t *testing.T) {
 	terrain := syntheticTerrainForIntegrate()
 	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	w := newMovementFixtureWorld(4)
-	def := &content.UnitDef{UnitName: "air", CanFly: true, BMCode: true, FootprintX: 1, FootprintZ: 1, MaxVelocity: 4 << 16}
+	def := &content.UnitDef{UnitName: "air", CanFly: true, BMCode: 1, FootprintX: 1, FootprintZ: 1, MaxVelocity: 4 << 16}
 	h, err := w.Create(def, 0, world.CellToWorld(2), numeric.Fixed(10<<16), world.CellToWorld(2))
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestRestoreOccupancyUsesMoverModeAndAllowsOffMap(t *testing.T) {
 	sys := NewSystem(terrain, Profile{FootPrintX: 1, FootPrintZ: 1}, NewOccupancyGrid())
 	sys.Grid.AttachPlot(terrain)
 	w := newMovementFixtureWorld(8)
-	def := &content.UnitDef{UnitName: "restore-mode", BMCode: true, FootprintX: 1, FootprintZ: 1}
+	def := &content.UnitDef{UnitName: "restore-mode", BMCode: 1, FootprintX: 1, FootprintZ: 1}
 	h, err := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(2))
 	if err != nil {
 		t.Fatal(err)

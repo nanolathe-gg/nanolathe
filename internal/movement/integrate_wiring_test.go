@@ -14,7 +14,7 @@ import (
 // wiringDef is a minimal movable ground unit for the wiring tests.
 func wiringDef() *content.UnitDef {
 	return setScratchMovement(&content.UnitDef{
-		UnitName: "armflea", MaxDamage: 100, BMCode: true, CanMove: true,
+		UnitName: "armflea", MaxDamage: 100, BMCode: 1, CanMove: true,
 		MaxVelocity: 8 * 65536, Acceleration: 8 * 65536, BrakeRate: 8 * 65536, TurnRate: 500,
 	}, wiringProfile)
 }
@@ -344,7 +344,7 @@ func TestEnsureUnitStampFeedsClassLayerRevision(t *testing.T) {
 	wantRoute := Route{Count: 2, Active: true, Points: [20]Point{{X: 32, Z: 32}, {X: 64, Z: 32}}}
 	*sys.Routes[requester] = wantRoute
 
-	buildingDef := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: false, FootprintX: 1, FootprintZ: 1}
+	buildingDef := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: 0, FootprintX: 1, FootprintZ: 1}
 	building, err := w.Create(buildingDef, 0, world.CellToWorld(8), terrain.HeightAt(world.CellToWorld(8), world.CellToWorld(8)), world.CellToWorld(8))
 	if err != nil {
 		t.Fatalf("create building: %v", err)
@@ -405,7 +405,7 @@ func TestEnsureUnitFailedStampDoesNotPublishCommitTick(t *testing.T) {
 	if !grid.Stamp(anchor, 1, 1, 999) {
 		t.Fatal("fixture blocker stamp failed")
 	}
-	def := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: false, FootprintX: 1, FootprintZ: 1}
+	def := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: 0, FootprintX: 1, FootprintZ: 1}
 	h, err := w.Create(def, 0, world.CellToWorld(anchor.X), terrain.HeightAt(world.CellToWorld(anchor.X), world.CellToWorld(anchor.Z)), world.CellToWorld(anchor.Z))
 	if err != nil {
 		t.Fatalf("create blocked building: %v", err)
@@ -440,7 +440,7 @@ func TestBindWorldRefreshesPreallocatedClassLayerRegistry(t *testing.T) {
 	if registry.world != w {
 		t.Fatalf("BindWorld did not refresh preallocated registry: got %p want %p", registry.world, w)
 	}
-	def := &content.UnitDef{UnitName: "stationary-blocker", MaxDamage: 100, BMCode: false, FootprintX: 2, FootprintZ: 2}
+	def := &content.UnitDef{UnitName: "stationary-blocker", MaxDamage: 100, BMCode: 0, FootprintX: 2, FootprintZ: 2}
 	hOwner1, err := w.Create(def, 1, world.CellToWorld(8), terrain.HeightAt(world.CellToWorld(8), world.CellToWorld(8)), world.CellToWorld(8))
 	if err != nil {
 		t.Fatalf("create owner-1 blocker: %v", err)

@@ -31,7 +31,7 @@ const RetailBuildButtonsPerPage = 6
 // build mobile units and mobile builders build structures, but it is not the
 // contract.
 func ProductArmsPlacement(def *content.UnitDef) bool {
-	return def != nil && !def.BMCode
+	return def != nil && def.BMCode == 0
 }
 
 // BuildProductsFor returns the authored build list for a builder key [02 "Build-menu catalog keys"].

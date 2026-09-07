@@ -91,7 +91,7 @@ func TestStaticRevisionInvalidatesGroundRouteAndPublishesCurrentRevision(t *test
 		FootprintX:   1,
 		FootprintZ:   1,
 		MaxDamage:    100,
-		BMCode:       true,
+		BMCode:       1,
 		CanMove:      true,
 	}
 	setScratchMovement(def, profile)

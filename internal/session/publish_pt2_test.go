@@ -15,10 +15,10 @@ import (
 // The unit painter's pass selector is the committed low two bits of the mover
 // mode word: mode 2 is airborne and belongs to pass B, which paints after the
 // projectile and effect strips [03 R-RAST-01 §7][04 R-MOV-01 §8]. `bmcode`
-// non-zero is the mobile class, the one the allocator gives a mover
+// exactly one is the class for which the allocator creates a mover
 // [04 R-FAC-02 §5].
 func TestPublishSnapshotCarriesCommittedMoverMode(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "flyer"}, MaxDamage: 1, BMCode: true}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "flyer"}, MaxDamage: 1, BMCode: 1}
 	w := newSessionFixtureWorld(2, nil)
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {

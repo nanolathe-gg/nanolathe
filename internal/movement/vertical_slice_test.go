@@ -85,7 +85,7 @@ func defForCargo(name string, footprint int32) *content.UnitDef {
 		// as the building class, and a building has no mover, so the cargo
 		// would neither be swept as a mover nor release its cells when a
 		// transport lifts it [04 R-COLL-01 §1][04 R-PATH-01 §14].
-		BMCode:        true,
+		BMCode:        1,
 		CanMove:       true,
 		MovementClass: "kbot2x2",
 		FootprintX:    footprint,
@@ -171,7 +171,7 @@ func defForShip(name string) *content.UnitDef {
 		// EnsureUnit reads !BMCode as building-class, and a building has no
 		// mover, so the occupant-age gate blocks its cells unconditionally
 		// [04 R-PATH-01 §14][04 R-COLL-01 §4]. A mobile fixture must author it.
-		BMCode:        true,
+		BMCode:        1,
 		MovementClass: "BOAT4x4",
 		FootprintX:    4,
 		FootprintZ:    4,
@@ -512,7 +512,8 @@ func TestVerticalSlice_TransportLoadMoveUnload(t *testing.T) {
 	// Death/capture interactions: kill carrier should cascade 30000 damage to cargo? But cargo already detached, so no.
 	// Test death cascade by attaching again and killing carrier.
 	AttachCargo(w, th, ch, 1)
-	sys.HandleDeath(w, th, 0) // carrier kind nibble 0 → the default cargo cascade, cause 6 [06 §12.1]
+	bindCargoDamageFixture(sys, w)
+	sys.HandleDeath(w, th, 0, 0) // carrier kind nibble 0 → the default cargo cascade, cause 6 [06 §12.1]
 	if w.Unit(ch).Health != 0 {
 		// cargo should have taken 30000 and died (health 100 -30000 => 0)
 		if w.Unit(ch).Health > 0 {

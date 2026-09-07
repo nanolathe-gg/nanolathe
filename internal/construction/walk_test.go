@@ -16,9 +16,9 @@ func TestWalkToSite(t *testing.T) {
 			"kb": {FootprintX: 2, FootprintZ: 2, MaxSlope: 10, MaxWaterDepth: 10, MaxWaterSlope: 10},
 		},
 	}
-	builderDef := &content.UnitDef{UnitName: "corcom", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, CanMove: true, BMCode: true, MaxDamage: 100, WorkerTime: 60, BuildTime: 100, BuildDistance: 60, MovementClass: "kb", MaxVelocity: 65536, Acceleration: 10000, TurnRate: 500, SightDistance: 300}
+	builderDef := &content.UnitDef{UnitName: "corcom", FootprintX: 2, FootprintZ: 2, YardMap: "o", Builder: true, CanMove: true, BMCode: 1, MaxDamage: 100, WorkerTime: 60, BuildTime: 100, BuildDistance: 60, MovementClass: "kb", MaxVelocity: 65536, Acceleration: 10000, TurnRate: 500, SightDistance: 300}
 	builderDef.CanonicalKey = content.CanonicalKey("corcom")
-	prodDef := &content.UnitDef{UnitName: "corlab", FootprintX: 6, FootprintZ: 6, YardMap: "oooooo oooooo oooooo oooooo oooooo oooooo", BMCode: false, MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100, BuildCostEnergy: 100}
+	prodDef := &content.UnitDef{UnitName: "corlab", FootprintX: 6, FootprintZ: 6, YardMap: "oooooo oooooo oooooo oooooo oooooo oooooo", BMCode: 0, MaxDamage: 100, BuildTime: 100, BuildCostMetal: 100, BuildCostEnergy: 100}
 	prodDef.CanonicalKey = content.CanonicalKey("corlab")
 	cat.Units[content.CanonicalKey("corcom")] = builderDef
 	cat.Units[content.CanonicalKey("corlab")] = prodDef

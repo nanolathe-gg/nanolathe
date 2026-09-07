@@ -141,6 +141,7 @@ func TestCarriableLadderIsTheNineRejectsInOrder(t *testing.T) {
 		{4, "too heavy", func() { carrier.Def.TransportSize = 4 }},
 		{5, "no mover", func() {
 			candidate.Def.MovementClass = "ship3x3"
+			candidate.Def.BMCode = 1
 			sys.EnsureUnit(candidate)
 			candidate.Move.Mode = 2 // reject 6 next
 		}},

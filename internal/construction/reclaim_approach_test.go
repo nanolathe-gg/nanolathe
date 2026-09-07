@@ -69,13 +69,13 @@ func TestUnitReclaimOutOfRangeInstallsTheTargetRectangleGoal(t *testing.T) {
 		Movement: map[string]*content.MovementClass{"kb": {FootprintX: 2, FootprintZ: 2, MaxSlope: 10, MaxWaterDepth: 10, MaxWaterSlope: 10}},
 	}
 	builderDef := &content.UnitDef{
-		UnitName: "corck", FootprintX: 2, FootprintZ: 2, BMCode: true, CanMove: true,
+		UnitName: "corck", FootprintX: 2, FootprintZ: 2, BMCode: 1, CanMove: true,
 		CanReclamate: true, WorkerTime: 60, BuildDistance: 60, MaxDamage: 100,
 		MovementClass: "kb", MaxVelocity: 65536, Acceleration: 10000, TurnRate: 500,
 	}
 	builderDef.CanonicalKey = content.CanonicalKey("corck")
 	targetDef := &content.UnitDef{
-		UnitName: "corlab", FootprintX: 6, FootprintZ: 6, BMCode: false,
+		UnitName: "corlab", FootprintX: 6, FootprintZ: 6, BMCode: 0,
 		MaxDamage: 100, BuildTime: 300, BuildCostMetal: 100,
 	}
 	targetDef.CanonicalKey = content.CanonicalKey("corlab")

@@ -11,7 +11,7 @@ func TestPlacementRulesClasslessAircraftDoesNotNeedGroundProfile(t *testing.T) {
 	def := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "armfig"},
 		UnitName:         "armfig",
-		BMCode:           true,
+		BMCode:           1,
 		CanFly:           true,
 	}
 	rules, err := PlacementRulesForUnit(&content.Catalog{Movement: map[string]*content.MovementClass{}}, def)
@@ -27,7 +27,7 @@ func TestPlacementRulesClasslessGroundIsPermanentError(t *testing.T) {
 	def := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "broken"},
 		UnitName:         "broken",
-		BMCode:           true,
+		BMCode:           1,
 	}
 	_, err := PlacementRulesForUnit(&content.Catalog{Movement: map[string]*content.MovementClass{}}, def)
 	if !errors.Is(err, ErrUnclassifiedMobile) {

@@ -155,7 +155,7 @@ func TestInstallGoalClearsMovementBitsAndAppliesAcceptance(t *testing.T) {
 // [04 R-FAC-02 §5] and which carries status-word bit 29 for it [04 §3.4] — is a
 // no-op: nothing released, nothing raised.
 func TestReleaseGoalPayloadIsNoOpForAMoverlessUnit(t *testing.T) {
-	def := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: false, FootprintX: 1, FootprintZ: 1}
+	def := &content.UnitDef{UnitName: "armmex", MaxDamage: 100, BMCode: 0, FootprintX: 1, FootprintZ: 1}
 	sys, w, h := releaseFixture(t, def, 4)
 	if w.Unit(h).Flags&units.BuildingClassStatus == 0 {
 		t.Fatal("fixture building is not building class")

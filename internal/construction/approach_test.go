@@ -41,7 +41,7 @@ func approachFixtureAt(t *testing.T, siteCellX, siteCellZ int32, startX, startZ 
 	}
 	builderDef := &content.UnitDef{
 		UnitName: "corcom", FootprintX: 2, FootprintZ: 2, YardMap: "o",
-		Builder: true, CanMove: true, BMCode: true, MaxDamage: 100,
+		Builder: true, CanMove: true, BMCode: 1, MaxDamage: 100,
 		WorkerTime: 60, BuildTime: 100, BuildDistance: 60, MovementClass: "kb",
 		MaxVelocity: 65536, Acceleration: 10000, TurnRate: 500, SightDistance: 300,
 	}
@@ -49,7 +49,7 @@ func approachFixtureAt(t *testing.T, siteCellX, siteCellZ int32, startX, startZ 
 	prodDef := &content.UnitDef{
 		UnitName: "corlab", FootprintX: 6, FootprintZ: 6,
 		YardMap: "oooooo oooooo oooooo oooooo oooooo oooooo",
-		BMCode:  false, MaxDamage: 100, BuildTime: 100,
+		BMCode:  0, MaxDamage: 100, BuildTime: 100,
 		BuildCostMetal: 100, BuildCostEnergy: 100,
 	}
 	prodDef.CanonicalKey = content.CanonicalKey("corlab")

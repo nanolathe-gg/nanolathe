@@ -126,13 +126,13 @@ func (s *Session) previewPlacement(cx, cz int32, def *content.UnitDef, footX, fo
 		return world.PlacementResult{}, err
 	}
 	var yard []world.YardCell
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		yard, err = world.ParseYardMap(def.YardMap, int(footX), int(footZ))
 		if err != nil {
 			return world.PlacementResult{}, err
 		}
 	}
-	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode, Viewer: viewer})
+	result, err := s.World.CheckPlacement(world.PlacementQuery{Rect: rect, Yard: yard, Rules: rules, Self: uint16(self), Mobile: def.BMCode != 0, Viewer: viewer})
 	if err != nil {
 		result = world.PlacementResult{Rect: rect, SiteHeight: s.World.SiteHeight(cx, cz, yard, int(footX), int(footZ), def.Waterline)}
 	}
@@ -242,8 +242,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 				v.Model = u.Def.ObjectName
 				v.FootX = int8(u.Def.FootprintX)
 				v.FootZ = int8(u.Def.FootprintZ)
-				v.BMCode = u.Def.BMCode   // model-shading class gate [R-RND-02A]
-				v.ZBuffer = u.Def.ZBuffer // composition height plane [R-REN-03A §2]
+				v.BMCode = u.Def.BMCode != 0 // model-shading class gate [R-RND-02A]
+				v.ZBuffer = u.Def.ZBuffer    // composition height plane [R-REN-03A §2]
 				// Model shadow gate and digger clip [R-REN-03D §1][R-REN-03A §8].
 				v.NoShadow = u.Def.NoShadow
 				v.CanHover = u.Def.CanHover

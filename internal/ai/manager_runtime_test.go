@@ -267,9 +267,9 @@ func TestWaveGatherEngageHysteresisAndNearestStableTie(t *testing.T) {
 	// resolver falls through to the kamikaze test and rejects, so a wave of
 	// `canattack` units with no weapon would queue nothing at all.
 	attackerWeapon := &content.WeaponDef{ID: 1, Name: "attackergun", Range: 180}
-	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", BMCode: true, CanMove: true, CanAttack: true, MaxDamage: 100, Weapon1: "attackergun", Weapon1Def: attackerWeapon}
+	attackerDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", BMCode: 1, CanMove: true, CanAttack: true, MaxDamage: 100, Weapon1: "attackergun", Weapon1Def: attackerWeapon}
 	baseDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "base"}, UnitName: "base", MaxDamage: 100}
-	enemyDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "enemy"}, UnitName: "enemy", BMCode: true, CanMove: true, MaxDamage: 100}
+	enemyDef := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "enemy"}, UnitName: "enemy", BMCode: 1, CanMove: true, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": attackerDef, "base": baseDef, "enemy": enemyDef}}
 	w := newAIFixtureWorld(12, cat)
 	var wave []pool.Handle
@@ -395,7 +395,7 @@ func TestNearestHostileAndRallyScoreUseSignedPositionWordDeltas(t *testing.T) {
 }
 
 func TestExploreMovePatrolSequenceAndEdgeDraws(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", BMCode: true, CanMove: true, CanPatrol: true, MaxDamage: 100}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", BMCode: 1, CanMove: true, CanPatrol: true, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}
 	terrain := &world.Terrain{CellW: 31, CellH: 25}
 	w := newAIFixtureWorld(8, cat)
@@ -549,20 +549,19 @@ func TestExploreTargetsRemainSignedPositionWords(t *testing.T) {
 }
 
 // The member gate of [08 R-AI-01 §19]: the rally task reads the member's mover
-// pointer, which the creator allocates only for `bmcode == 1`, so a MOBILE
-// member is never gated and a BUILDING faces the slot-1 shot-time physical
-// gate. The binding here refuses every building, so the mobile member is the
-// only one that submits.
+// pointer, which the creator allocates only for `bmcode == 1`. A non-building
+// byte-two member still faces the slot-1 shot-time physical gate. The binding
+// refuses that member, so only the member with a mover submits.
 func TestRallyConstructorOffMapProbeAndPerMemberAdmission(t *testing.T) {
-	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: true, MaxDamage: 100}
-	building := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "turret"}, UnitName: "turret", CanAttack: true, MaxDamage: 100}
-	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def, "turret": building}}
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: 1, MaxDamage: 100}
+	moverless := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "turret"}, UnitName: "turret", CanAttack: true, MaxDamage: 100, BMCode: 2}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def, "turret": moverless}}
 	w := newAIFixtureWorld(4, cat)
 	mobile, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	immobile, err := w.Create(building, 0, 0, 0, 0)
+	immobile, err := w.Create(moverless, 0, 0, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +727,7 @@ func TestRestoredRallyGroupUsesKnowledgeBeforeSubmittingOrders(t *testing.T) {
 		{name: "unknown cell", known: false, wantDraws: 1, adoptsBest: false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: true, MaxDamage: 100}
+			def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: 1, MaxDamage: 100}
 			cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def}}
 			w := newAIFixtureWorld(8, cat)
 			first, err := w.Create(def, 0, 0, 0, 0)

@@ -195,7 +195,7 @@ func initialStatusFlags(def *content.UnitDef) uint32 {
 	}
 	// Building class is the authored bmcode being zero, not a yard-map,
 	// footprint or immobility heuristic.
-	if !def.BMCode {
+	if def.BMCode == 0 {
 		flags |= BuildingClassStatus
 	}
 	// Armed means at least one active weapon link; the record-0 inactive

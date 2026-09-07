@@ -1,8 +1,13 @@
 package palette
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"path"
+	"strings"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -74,24 +79,34 @@ func Load(fs vfs.FSOps) (*Tables, error) {
 	for i := 0; i < 256; i++ {
 		t.Logical[i] = byte(i)
 	}
-	if err := loadPAL(fs, "palettes/palette.pal", &t.Base); err != nil {
-		return nil, err
-	}
-	if err := loadPAL(fs, "palettes/guipal.pal", &t.GUI); err != nil {
-		return nil, err
-	}
-	if err := loadRaw(fs, "palettes/palette.alp", t.Alpha[:], 65536); err != nil {
-		return nil, err
-	}
-	if err := loadRaw(fs, "palettes/palette.lht", t.Light[:], 8192); err != nil {
-		return nil, err
-	}
-	shd, err := loadRawTable(fs, "palettes/palette.shd", 8192)
+	baseRecovered, err := loadPAL(fs, "palettes/palette.pal", &t.Base)
 	if err != nil {
 		return nil, err
 	}
-	for row := 0; row < 32; row++ {
-		copy(t.Shade[row][:], shd[row*256:(row+1)*256])
+	guiRecovered, err := loadPAL(fs, "palettes/guipal.pal", &t.GUI)
+	if err != nil {
+		return nil, err
+	}
+	// Recovery invalidates all three derived files [02 R-MALF-01 §9]. This
+	// loader rebuilds in memory, keeping the authored installation read-only.
+	recovered := baseRecovered || guiRecovered
+	if err := loadOrBuildTable(fs, "palettes/palette.alp", t.Alpha[:], recovered, func() { buildAlphaTable(t) }); err != nil {
+		return nil, err
+	}
+	if err := loadOrBuildTable(fs, "palettes/palette.lht", t.Light[:], recovered, func() { buildLightTable(t) }); err != nil {
+		return nil, err
+	}
+	var shade [8192]byte
+	if err := loadOrBuildTable(fs, "palettes/palette.shd", shade[:], recovered, func() {
+		buildShadeTable(t)
+		for row := range t.Shade {
+			copy(shade[row*256:(row+1)*256], t.Shade[row][:])
+		}
+	}); err != nil {
+		return nil, err
+	}
+	for row := range t.Shade {
+		copy(t.Shade[row][:], shade[row*256:(row+1)*256])
 	}
 	buildGrayTable(t)
 	buildBlueTable(t)
@@ -349,49 +364,62 @@ func absPaletteDistance(a, b byte) int {
 	return int(b - a)
 }
 
-func loadPAL(fs vfs.FSOps, name string, dst *[256][4]byte) error {
-	// PAL files are raw 768 or 1024 bytes [fmt pal]; retail ships 1024 [03 §4.3].
-	data, err := fs.ReadFileLimit(name, 1<<20)
-	if err != nil {
-		return fmt.Errorf("palette: %s: %w", name, err)
+func paletteLoadError(files vfs.FSOps, name, expected string, err error) error {
+	var providers []string
+	if source, ok := files.(interface{ Providers() []vfs.ProviderInfo }); ok {
+		for _, provider := range source.Providers() {
+			providers = append(providers, provider.ID)
+		}
 	}
-	if len(data) != 768 && len(data) != 1024 {
-		return fmt.Errorf("palette: %s: expected 768 or 1024 bytes, got %d", name, len(data))
-	}
-	stride := 3
-	if len(data) == 1024 {
-		stride = 4
-	}
-	for i := 0; i < 256; i++ {
-		dst[i][0] = data[i*stride]
-		dst[i][1] = data[i*stride+1]
-		dst[i][2] = data[i*stride+2]
-		dst[i][3] = 255 // opaque; file pad byte is zero [fmt pal]
-	}
-	return nil
+	return fmt.Errorf("nanolathe: palette load failed: logical path %s, providers searched [%s], expected %s: %w", name, strings.Join(providers, ", "), expected, err)
 }
 
-func loadRaw(fs vfs.FSOps, name string, dst []byte, want int) error {
-	data, err := fs.ReadFileLimit(name, 1<<20)
-	if err != nil {
-		return fmt.Errorf("palette: %s: %w", name, err)
+func missingPaletteFile(err error) bool {
+	return errors.Is(err, vfs.ErrNotFound) || errors.Is(err, fs.ErrNotExist)
+}
+
+func loadPAL(files vfs.FSOps, name string, dst *[256][4]byte) (bool, error) {
+	data, err := files.ReadFileLimit(name, 1<<20)
+	recovered := missingPaletteFile(err) || (err == nil && len(data) == 0)
+	var pal *formats.Palette
+	if recovered {
+		pcxName := strings.TrimSuffix(name, path.Ext(name)) + ".pcx"
+		pcx, pcxErr := formats.LoadPCXFile(files, pcxName)
+		if pcxErr != nil {
+			return false, paletteLoadError(files, pcxName, "PCX recovery palette", pcxErr)
+		}
+		pal = &formats.Palette{Colors: pcx.Palette}
+	} else {
+		if err != nil {
+			return false, paletteLoadError(files, name, "PAL palette", err)
+		}
+		pal, err = formats.LoadPAL(data)
+		if err != nil {
+			return false, paletteLoadError(files, name, "PAL palette", err)
+		}
 	}
-	if len(data) != want {
-		return fmt.Errorf("palette: %s: expected %d bytes, got %d", name, want, len(data))
+	for i, c := range pal.Colors {
+		dst[i] = [4]byte{c.R, c.G, c.B, c.A}
+	}
+	return recovered, nil
+}
+
+func loadOrBuildTable(files vfs.FSOps, name string, dst []byte, invalidated bool, build func()) error {
+	if invalidated {
+		build()
+		return nil
+	}
+	data, err := files.ReadFileLimit(name, 1<<20)
+	if missingPaletteFile(err) || (err == nil && len(data) == 0) {
+		build()
+		return nil
+	}
+	if err != nil {
+		return paletteLoadError(files, name, "derived palette table", err)
+	}
+	if len(data) != len(dst) {
+		return paletteLoadError(files, name, fmt.Sprintf("%d-byte palette table", len(dst)), fmt.Errorf("got %d bytes", len(data)))
 	}
 	copy(dst, data)
 	return nil
-}
-
-func loadRawTable(fs vfs.FSOps, name string, want int) ([]byte, error) {
-	data, err := fs.ReadFileLimit(name, 1<<20)
-	if err != nil {
-		return nil, fmt.Errorf("palette: %s: %w", name, err)
-	}
-	if len(data) != want {
-		return nil, fmt.Errorf("palette: %s: expected %d bytes, got %d", name, want, len(data))
-	}
-	out := make([]byte, want)
-	copy(out, data)
-	return out, nil
 }

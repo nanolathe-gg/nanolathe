@@ -412,7 +412,7 @@ func actingUnitIsBuilding(ctx *interpCtx) bool {
 	if ctx == nil || ctx.unit == nil || ctx.unit.Def == nil {
 		return false
 	}
-	return !ctx.unit.Def.BMCode
+	return ctx.unit.Def.BMCode == 0
 }
 
 func (ctx *interpCtx) lookupIdentOrUnitName(name string) int {

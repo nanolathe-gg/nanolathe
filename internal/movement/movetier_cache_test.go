@@ -21,7 +21,7 @@ func moveTierFixture(t *testing.T) (*System, *units.Unit, *CollisionState) {
 	def := &content.UnitDef{
 		UnitName: "move-tier-test", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 4 * int32(worldUnitsPerCell), Acceleration: int32(worldUnitsPerCell),
-		BrakeRate: int32(worldUnitsPerCell), TurnRate: 65535, BMCode: true,
+		BrakeRate: int32(worldUnitsPerCell), TurnRate: 65535, BMCode: 1,
 		MoveRate1: int32(worldUnitsPerCell), MoveRate2: 2 * int32(worldUnitsPerCell),
 	}
 	w := newMovementFixtureWorld(4)
@@ -114,7 +114,7 @@ func TestMoveTierCacheHoldsStaleVerdictUntilNextCrossCellProposal(t *testing.T) 
 	def := &content.UnitDef{
 		UnitName: "stale-tier-test", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 2 * int32(worldUnitsPerCell), Acceleration: 2 * int32(worldUnitsPerCell),
-		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535, BMCode: true,
+		BrakeRate: 2 * int32(worldUnitsPerCell), TurnRate: 65535, BMCode: 1,
 	}
 	blockerHandle, err := w.Create(def, 0, world.CellToWorld(2), 0, world.CellToWorld(0))
 	if err != nil {

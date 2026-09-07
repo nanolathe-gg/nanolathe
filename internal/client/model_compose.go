@@ -7,6 +7,7 @@ package client
 import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -346,9 +347,10 @@ func (c *Client) supersampleModel(structure bool) bool {
 // doubled scratch while anti-aliasing, which is what the outline and the trace
 // read) and the draw record itself.
 type composedModel struct {
-	image  *modelTarget
-	raster *modelTarget
-	draw   *presentationrender.UnitDraw
+	image    *modelTarget
+	raster   *modelTarget
+	draw     *presentationrender.UnitDraw
+	geometry *drawlist.ModelGeometry
 }
 
 // composeModel composes one unit into its own image and returns it
@@ -385,6 +387,17 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	if scale == 2 {
 		raster = newModelImage(2*width, 2*height, 2*originX, 2*originY, anchorX, anchorY, keyPlane, 2)
 	}
+	var geometry *drawlist.ModelGeometry
+	if c.recordModelGeometry {
+		// The scale-one target owns the output coordinates. Supersampled subjects
+		// retain CPU fallback until their resolve is represented as a packet.
+		fallback := c.geometryFallback(draw, reveal, outline, scale)
+		if scale != 1 {
+			geometry = modelGeometryPacket(nil, target, 1, fallback)
+		} else {
+			geometry = modelGeometryPacket(polys, target, scale, fallback)
+		}
+	}
 	c.attachModelTrace(raster, id)
 
 	for i := range polys {
@@ -420,7 +433,7 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 		// which is the buried half of a pop-up defence [R-REN-03A §8].
 		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
 	}
-	return composedModel{image: target, raster: raster, draw: draw}, true
+	return composedModel{image: target, raster: raster, draw: draw, geometry: geometry}, true
 }
 
 // waterlinePass is retail's underwater presentation, both arms of it

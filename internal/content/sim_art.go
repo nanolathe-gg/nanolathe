@@ -109,9 +109,9 @@ func CompileSimArt(fs vfs.FSOps, cat *Catalog) *SimArt {
 	// Sorted, so the order files are opened in — and therefore anything that
 	// could observe that order — is the same in every run (I4).
 	sort.Strings(keys)
-	// banks memoises one GAF per feature filename for the duration of the
+	// banks memoises one validated metadata index per feature filename for the
 	// compile, including the failures: a nil value means "tried, absent".
-	banks := make(map[string]*formats.GAF)
+	banks := make(map[string]*formats.GAFMetadata)
 	for _, key := range keys {
 		def := cat.Features[key]
 		if def == nil || trimTDFSemantic(def.Filename) == "" {
@@ -136,7 +136,7 @@ func (a *SimArt) compileEffectBank(fs vfs.FSOps, name string) {
 	if bank == "" {
 		bank = DefaultEffectBank
 	}
-	gaf, err := formats.LoadGAFFile(fs, "anims/"+bank+".gaf")
+	gaf, err := formats.LoadGAFMetadataFile(fs, "anims/"+bank+".gaf")
 	if err != nil || gaf == nil {
 		return
 	}
@@ -152,7 +152,7 @@ func (a *SimArt) compileEffectBank(fs vfs.FSOps, name string) {
 // compileFeatureSequence compiles one named sequence out of one feature GAF,
 // recording both hits and misses so the sim path never has to distinguish
 // "not compiled" from "does not exist".
-func (a *SimArt) compileFeatureSequence(fs vfs.FSOps, banks map[string]*formats.GAF, filename, sequence string) {
+func (a *SimArt) compileFeatureSequence(fs vfs.FSOps, banks map[string]*formats.GAFMetadata, filename, sequence string) {
 	key := simArtSequenceKey(filename, sequence)
 	if _, seen := a.sequences[key]; seen {
 		return
@@ -164,7 +164,7 @@ func (a *SimArt) compileFeatureSequence(fs vfs.FSOps, banks map[string]*formats.
 		// The feature sprite source is the TDF `filename` stem without an
 		// extension [02 "Feature record"]; the path is lower-cased per the VFS
 		// canonical rules (I1).
-		g, err := formats.LoadGAFFile(fs, "anims/"+file+".gaf")
+		g, err := formats.LoadGAFMetadataFile(fs, "anims/"+file+".gaf")
 		if err != nil {
 			g = nil
 		}

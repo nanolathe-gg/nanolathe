@@ -77,8 +77,8 @@ func assertStockAircraft(t *testing.T, cat *Catalog, key, side string, footX, fo
 	if !ok || def == nil {
 		t.Fatalf("stock %s %s aircraft missing", side, key)
 	}
-	if CanonicalKey(def.Side) != CanonicalKey(side) || !def.BMCode || !def.CanFly || !def.CanMove || def.MovementClass != "" {
-		t.Fatalf("stock %s fields side=%s bmcode=%t canfly=%t canmove=%t movementclass=%q; want %s/1/1/1/empty", key, def.Side, def.BMCode, def.CanFly, def.CanMove, def.MovementClass, side)
+	if CanonicalKey(def.Side) != CanonicalKey(side) || def.BMCode == 0 || !def.CanFly || !def.CanMove || def.MovementClass != "" {
+		t.Fatalf("stock %s fields side=%s bmcode=%d canfly=%t canmove=%t movementclass=%q; want %s/1/1/1/empty", key, def.Side, def.BMCode, def.CanFly, def.CanMove, def.MovementClass, side)
 	}
 	if def.FootprintX != footX || def.FootprintZ != footZ {
 		t.Fatalf("stock %s footprint=%dx%d, want %dx%d", key, def.FootprintX, def.FootprintZ, footX, footZ)

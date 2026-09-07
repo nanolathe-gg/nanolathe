@@ -13632,6 +13632,11 @@ executable answers.
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
+- **Unknown:** the complete factory attachment and queue lifecycle for authored
+  `bmcode` values above 1. The stored byte, nonzero class branch and absence of a
+  mover are established [08 R-AI-03 §7.4]; tracing the factory path for such a
+  definition would settle its remaining lifecycle effects.
+
 ### Simulation and identity
 
 - Out-of-map and mode behavior of the placement validator outside the

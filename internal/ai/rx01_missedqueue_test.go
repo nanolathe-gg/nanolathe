@@ -40,7 +40,7 @@ func TestUnboundMobileSitePathReportsMissingQueue(t *testing.T) {
 func TestUnboundFactoryQueuePathReportsMissingQueue(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{
 		content.CanonicalKey("armfactory"): {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armfactory")}, UnitName: "armfactory", FootprintX: 4, FootprintZ: 4, YardMap: "oooo oooo oooo oooo", Builder: true, CanMove: false, MaxDamage: 100},
-		content.CanonicalKey("armflea"):    {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflea")}, UnitName: "armflea", FootprintX: 1, FootprintZ: 1, BMCode: true, CanMove: true, MaxVelocity: 30, MaxDamage: 50},
+		content.CanonicalKey("armflea"):    {DefinitionHeader: content.DefinitionHeader{CanonicalKey: content.CanonicalKey("armflea")}, UnitName: "armflea", FootprintX: 1, FootprintZ: 1, BMCode: 1, CanMove: true, MaxVelocity: 30, MaxDamage: 50},
 	}}
 	w := newAIFixtureWorld(16, cat)
 	h, err := w.Create(cat.Units[content.CanonicalKey("armfactory")], 0, world.CellToWorld(2), 0, world.CellToWorld(2))

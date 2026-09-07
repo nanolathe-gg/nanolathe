@@ -294,15 +294,19 @@ Three independent gates replace the old single tolerance gate:
    same simulation/content revision. Renderer-only work must preserve classic
    bytes and equal-tick simulation fingerprints. Attribute upstream baseline
    changes before refreshing; never hide them in a tolerance.
-2. **GPU comparison:** replay equivalent committed state through classic and
+2. **GPU comparison:** record once and replay the same ordered list through classic and
    modern, save both images and a diff, report changed pixels/clusters, and fail
    on execution/capture errors. Test the tool rejects a deliberately wrong image.
    Exact non-model fixtures remain exact; GPU model approximations use explicit
    per-scene thresholds only after visual review. No rule that merely connects a
    difference cluster to an edge, and no threshold derived as automatic approval.
-3. **Performance:** repeated device-backed execution after warm-up. Separate
-   recording, submission and a synchronized render/readback diagnostic, label
-   readback overhead, and report distribution (median/p95/p99). A synchronous
+3. **Performance:** repeated device-backed replay of one frozen list after
+   warm-up. Recording may consume private presentation RNG and drain audio, so
+   never re-record that list inside the measured loop. Report one-time preparation
+   separately (classic comparison preparation includes CPU composition and snapshot
+   copying), and submission and synchronized render/readback distributions
+   (median/p95/p99). ReadPixels includes GPU synchronization wait plus transfer;
+   it does not isolate readback overhead. A synchronous
    readback is not normal presentation and its timing is not an isolated GPU
    timer. Existing headless `--profile-seconds` measures classic CPU composition
    only. Record hardware/backend, resolution, frames and scene. No universal
@@ -373,6 +377,36 @@ Retain per-corner pre-shear information if needed to reproduce structure scaling
 The geometry packet owns its vertex and face slices and survives the next frame.
 No client pointer, live camera, or simulation pool is permitted in it. Give the
 CPU bridge neutral pixel-plane data rather than making drawlist import client.
+
+**P2 published API.** `drawlist.Model` retains its classic same-frame `Ref` and
+adds `Geometry *drawlist.ModelGeometry`. `ModelGeometry` owns ordered
+`[]ModelFace`, each owning its ordered `[]ModelVertex`; a vertex holds projected
+`X`, `Y`, signed pre-interpolation `Key`, integer texel `U`/`V`, and physical
+`Shade` row. A face holds its immutable resolved `*formats.GAFFrame` (or nil),
+physical flat `Color`, and `Shaded` selector. The packet carries `Width`,
+`Height`, `OriginX/Y`, `AnchorX/Y`, `Scale`, and `KeyPlane`. A GPU consumer
+interpolates `Key` before narrowing for its subject-local maximum-key pass; it
+must never narrow vertex keys early. `Geometry.Eligible` selects the P2 body
+subset. An ineligible packet carries `ModelFallbackReason` (`RevealOrOutline`,
+`Supersample`, `WaterlineOrDigger`, `Staging`, or `NoBodyCommit`) so P3 can
+report an explicit CPU fallback. Shadows remain CPU fallback in P2. The packet
+is emitted only by `RecordFrame`, `ComposeFrameSnapshot`, and
+`ModelPreviewRenderer.RecordModel`; ordinary classic `Frame` does not allocate
+it. The preview record supplies the classic reference image, model-only list,
+physical background index, and palette for a neutral replay plane. Its
+`PiecePoses []frame.PieceView` is a static supplied pose, not COB playback;
+`ARMSOLAROpenPreviewPose` names stock `dish1`–`dish4` and applies the researched
+135-degree Z pose. `ModelPreviewOptions.DisableAntiAlias` suppresses only the
+structure's 2x resolve for one preview call and restores the renderer setting
+afterward; it leaves the structure/shaded path active. The anti-aliased
+structure path remains supersample fallback; a structure preview with this
+explicit control is the scale-one solar geometry review subset.
+
+The packet keeps every projected primitive ring that the CPU collector hands to
+its span walker. P3 must apply the same winding admission before triangle
+rasterization: a ring whose CPU two-chain walk has no positive span contributes
+no pixels. It must not reinterpret retained back-facing rings as visible
+triangles.
 
 The first packet may describe a safely bounded subset (ordinary completed model
 bodies) and mark other subjects ineligible. Explicit eligibility must exclude

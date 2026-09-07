@@ -150,16 +150,16 @@ func (s *Service) Assist(builder, target *units.Unit, tick uint32) bool {
 // the integer worker quantum from the builder's own definition and hands it to
 // sharedStep as a float32 [05 "Construction arithmetic"][05 R-WORK-01 §1].
 //
-// The tick is no longer read: the decay suppression is the pending word's
-// `0x8000`, not a tick stamp the step had to compute [04 R-ORD-01 §11]. It
-// stays in the signature because the callers' own contract carries it.
-func (s *Service) applyWorkStep(builder, target *units.Unit, _ uint32) bool {
+// The tick is carried through to the reverse arm's terminal packet. Decay
+// suppression itself is the pending word's `0x8000`, not a tick stamp the step
+// computes [04 R-ORD-01 §11].
+func (s *Service) applyWorkStep(builder, target *units.Unit, tick uint32) bool {
 	if s == nil || builder == nil || builder.Def == nil {
 		return false
 	}
 	// `(uint16)workertime / 30` is an integer division performed BEFORE the
 	// conversion to float [05 "Construction arithmetic"].
-	return s.sharedStep(builder, target, float32(WorkerQuantum(builder.Def.WorkerTime)))
+	return s.sharedStep(builder, target, float32(WorkerQuantum(builder.Def.WorkerTime)), tick)
 }
 
 // sharedStep is the one construction helper every build, assist, factory-
@@ -180,7 +180,7 @@ func (s *Service) applyWorkStep(builder, target *units.Unit, _ uint32) bool {
 // I2 allows the float32: the row is "Construction remaining fraction and its
 // proportional cost/health intermediates" [05 "Construction arithmetic"], and
 // §11 establishes that the quantum itself is single precision in retail.
-func (s *Service) sharedStep(builder, target *units.Unit, quantum float32) bool {
+func (s *Service) sharedStep(builder, target *units.Unit, quantum float32, tick uint32) bool {
 	if s == nil || target == nil || target.Def == nil {
 		return false
 	}
@@ -250,7 +250,7 @@ func (s *Service) sharedStep(builder, target *units.Unit, quantum float32) bool 
 		// `selfKill(target, target, 30000, kind 9)` — the reverse arm's own
 		// last line, and the only thing that removes an abandoned frame
 		// [05 R-WORK-01 §1][05 R-WORK-01 §9].
-		s.killDecayedNanoframe(target)
+		s.killDecayedNanoframe(target, tick)
 	}
 	return true
 }

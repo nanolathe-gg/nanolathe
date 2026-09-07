@@ -155,8 +155,8 @@ func minimalCatalogForStrict() *content.Catalog {
 			// Commanders are mobile in the corpus and author BMcode=1; the
 			// building-class status bit is derived from that byte [08 "Classifier
 			// eligibility, destinations, and order"].
-			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, Commander: true, BMCode: true},
-			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, Commander: true, BMCode: true},
+			"armcom": {UnitName: "armcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, Commander: true, BMCode: 1},
+			"corcom": {UnitName: "corcom", MaxDamage: 3000, SightDistance: 128, MovementClass: "testmove", FootprintX: 1, FootprintZ: 1, Commander: true, BMCode: 1},
 		},
 		Movement: mv,
 		Sides: []*content.SideDef{

@@ -27,7 +27,7 @@ func giveStockpileSlot(u *units.Unit) *units.Unit {
 func testDef(name string) *content.UnitDef {
 	return &content.UnitDef{
 		UnitName:   name,
-		BMCode:     true,
+		BMCode:     1,
 		CanMove:    true,
 		CanAttack:  true,
 		CanGuard:   true,
@@ -42,7 +42,7 @@ func testDef(name string) *content.UnitDef {
 // testBuildingDef is a mover-less builder (a factory): BMCode clear.
 func testBuildingDef(name string) *content.UnitDef {
 	d := testDef(name)
-	d.BMCode = false
+	d.BMCode = 0
 	d.CanMove = false
 	return d
 }

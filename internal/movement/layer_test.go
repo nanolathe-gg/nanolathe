@@ -286,7 +286,7 @@ func TestLayerRevisionPass(t *testing.T) {
 	tr := layerTerrain(32, 32, 20)
 	grid := NewOccupancyGrid()
 	w := newMovementFixtureWorld(16)
-	def := &content.UnitDef{UnitName: "armflea", MaxDamage: 100, CanMove: true, BMCode: true}
+	def := &content.UnitDef{UnitName: "armflea", MaxDamage: 100, CanMove: true, BMCode: 1}
 	hReq, err := w.Create(def, 0, world.CellToWorld(2), 30*65536, world.CellToWorld(2))
 	if err != nil {
 		t.Fatalf("create requester: %v", err)
@@ -367,7 +367,7 @@ func TestLayerRevisionRestampsEveryOverlappingRequesterAnchor(t *testing.T) {
 	tr := layerTerrain(24, 24, 20)
 	grid := NewOccupancyGrid()
 	w := newMovementFixtureWorld(8)
-	def := &content.UnitDef{UnitName: "asymmetric-blocker", MaxDamage: 100, BMCode: false}
+	def := &content.UnitDef{UnitName: "asymmetric-blocker", MaxDamage: 100, BMCode: 0}
 	h, err := w.Create(def, 1, world.CellToWorld(8), 30*65536, world.CellToWorld(9))
 	if err != nil {
 		t.Fatalf("create occupant: %v", err)
@@ -436,7 +436,7 @@ func TestLayerRevisionCommitAtWatermarkRemainsNonblocking(t *testing.T) {
 	tr := layerTerrain(24, 24, 20)
 	grid := NewOccupancyGrid()
 	w := newMovementFixtureWorld(8)
-	def := &content.UnitDef{UnitName: "watermark-blocker", MaxDamage: 100, BMCode: false}
+	def := &content.UnitDef{UnitName: "watermark-blocker", MaxDamage: 100, BMCode: 0}
 	h, err := w.Create(def, 0, world.CellToWorld(8), 30*65536, world.CellToWorld(9))
 	if err != nil {
 		t.Fatalf("create occupant: %v", err)

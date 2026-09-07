@@ -46,7 +46,7 @@ func TestFactoryMoveOrderInstallsRallyAndKeepsProduction(t *testing.T) {
 	facDef.CanMove = true
 	cat.Units[content.CanonicalKey("armvp")] = facDef
 	prodDef := newProductDef("armflash", 2, 2, 100, 100)
-	prodDef.BMCode = true // a vehicle product: bmcode 1 and a ground class
+	prodDef.BMCode = 1 // a vehicle product: bmcode 1 and a ground class
 	prodDef.MovementClass = "tank2"
 	cat.Units[content.CanonicalKey("armflash")] = prodDef
 	cat.Movement = map[string]*content.MovementClass{

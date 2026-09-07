@@ -595,7 +595,7 @@ func standbyHandler(u *units.Unit, n *Node, _ uint32, tick uint32) Code {
 	}
 	switch n.Phase {
 	case 0:
-		if u.Def == nil || !u.Def.BMCode {
+		if u.Def == nil || u.Def.BMCode != 1 {
 			return Code(7) // *cancel-all* — no mover reference [04 R-ORD-01 §2]
 		}
 		inhibitAllWeaponSlots(u)

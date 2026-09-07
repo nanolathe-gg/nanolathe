@@ -47,7 +47,7 @@ func TestFreshFactoryProductStanceCascadesFromCommander(t *testing.T) {
 		UnitName:         "armcom",
 		FootprintX:       2, FootprintZ: 2,
 		MaxDamage: 100,
-		BMCode:    true,
+		BMCode:    1,
 		Builder:   true,
 		CanMove:   true,
 		// Authored values traced from the retail asset census: the commander

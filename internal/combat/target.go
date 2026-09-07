@@ -108,7 +108,7 @@ func PreFireLeadGate(shooter, target *units.Unit, slot *units.Slot, w *content.W
 	if w.Cruise {
 		return false // `cruise` suppresses the lead [06 §3.3][06 §6.7]
 	}
-	if target.Def == nil || !target.Def.BMCode {
+	if target.Def == nil || target.Def.BMCode != 1 {
 		return false // no movement record [06 §3.3][04 R-COLL-01 §1]
 	}
 	// Unsigned, strict [06 §3.3][06 R-DMG-01 §8]. The field is a 16-bit

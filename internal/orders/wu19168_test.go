@@ -133,7 +133,7 @@ func TestStopClearsTargetsWithoutTouchingTheControlByte(t *testing.T) {
 // takeoff arm below it — "only when the mover is grounded (mode 1)" — does not
 // fire for it.
 func TestAirWorkPreambleDropCommitsAirborneMode(t *testing.T) {
-	def := &content.UnitDef{UnitName: "airworker", CanFly: true, BMCode: true, CruiseAlt: 100}
+	def := &content.UnitDef{UnitName: "airworker", CanFly: true, BMCode: 1, CruiseAlt: 100}
 	q, u := standingFixture(def)
 	carrier := &units.Unit{Handle: 2, Def: &content.UnitDef{UnitName: "carrier"}, Alive: true}
 	BindQueue(carrier, q)

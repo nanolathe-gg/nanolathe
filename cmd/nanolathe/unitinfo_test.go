@@ -29,7 +29,7 @@ func unitInfoTestCatalog() *content.Catalog {
 		BuildCostEnergy:  1000,
 		BuildCostMetal:   200,
 		BuildTime:        3000,
-		BMCode:           true,
+		BMCode:           1,
 		MaxVelocity:      1 << 16, // 1.0 world units per tick
 		Acceleration:     1 << 14, // 0.25
 		TurnRate:         600,

@@ -223,7 +223,7 @@ func TestFactoryRepeatThroughDispatchRetail(t *testing.T) {
 	// live catalog lookup [07 §9].
 	productKey := ""
 	for _, key := range f.CommandPage.ProductKeys {
-		if d, ok := cat.Unit(key); ok && d != nil && d.BMCode {
+		if d, ok := cat.Unit(key); ok && d != nil && d.BMCode != 0 {
 			productKey = d.CanonicalKey
 			break
 		}

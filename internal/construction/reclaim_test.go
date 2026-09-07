@@ -50,7 +50,9 @@ func reclaimFixture(t *testing.T, targetHealth int32, buildDistance int32) (*Ser
 	q.Push(id, orders.Node{Owner: builder.Handle, Target: target.Handle, DynamicGate: 0, Deadline: -1})
 	node := q.Head()
 	node.DynamicGate = 0
-	return NewService(nil, cat, w, &economy.Service{}), builder, target, node
+	svc := NewService(nil, cat, w, &economy.Service{})
+	bindConstructionCombat(svc)
+	return svc, builder, target, node
 }
 
 func reclaimVisits(s *Service, builder *units.Unit, n *orders.Node, ticks ...uint32) {
@@ -166,8 +168,20 @@ func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	s, builder, target, node := reclaimFixture(t, 1, 10)
 	builder.Def.WorkerTime = 300 // pulse 15, exercising ordinary lethal health clamp
 	target.Remaining = 0.25
-	s.SetBuilderLink(target.Handle, builder.Handle)
-	s.getBuiltLinks[target.Handle] = builder.Handle
+	// The target is also a factory's in-progress product. Reclaim retains that
+	// reference until the phase-2 death finalizer walks it, where the session
+	// composition delivers the target-removed interrupt [04 R-ORD-01 §6].
+	factoryDef := newFactoryDef("reclaim_observer", 1, 1, 30)
+	s.Catalog.Units[factoryDef.CanonicalKey] = factoryDef
+	factoryHandle, err := s.World.Create(factoryDef, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create observing factory: %v", err)
+	}
+	factory := s.World.Unit(factoryHandle)
+	factoryQueue := orders.QueueForUnit(factory)
+	factoryQueue.Push(orders.Lookup(FactoryBuildOrder), orders.Node{Target: target.Handle, Phase: uint8(State3)})
+	factoryNode := factoryQueue.Primary()[0]
+	s.SetBuilderLink(target.Handle, factory.Handle)
 	var deaths, extras int
 	s.World.OnDeath = func(_ pool.Handle, cause units.DeathCause, _ *units.Unit) {
 		deaths++
@@ -180,6 +194,10 @@ func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 		if cause != units.DeathReclaimed {
 			t.Errorf("extra death cause=%d want reclaimed", cause)
 		}
+		if !s.NotifyProductRemoved(target.Handle) {
+			t.Error("death finalizer did not release the factory product reference")
+		}
+		s.ReleasePlacement(target.Handle)
 	}
 	// Nine admitted visits are required. [05 R-WORK-01 §4] tests the counter
 	// BEFORE raising it, so the pre-check values are 0, 2, ... 16 and the pulse
@@ -204,14 +222,11 @@ func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	if got := s.Economy.UnitBuckets(builder.Handle); got == nil || (*got)[economy.Metal].Production != 0 {
 		t.Fatalf("premature metal refund=%v, want zero before the session finalizer", got)
 	}
-	if _, ok := s.BuilderLink(target.Handle); ok {
-		t.Fatal("builder link survived reclaim")
+	if node.Param2 != reclaimCadenceStep || node.Deadline != 18 {
+		t.Fatalf("fatal visit cadence = counter %d deadline %d, want 2/18 [05 R-WORK-01 §4]", node.Param2, node.Deadline)
 	}
-	if _, ok := s.getBuiltLinks[target.Handle]; ok {
-		t.Fatal("get-built link survived reclaim")
-	}
-	if orders.QueueForUnit(builder).LenPrimary() != 0 {
-		t.Fatal("reclaim node survived fatal completion")
+	if orders.QueueForUnit(builder).LenPrimary() != 1 {
+		t.Fatal("fatal reclaim packet eagerly removed its order record")
 	}
 	// Finalization is the only free point and must not duplicate either hook.
 	if got := s.World.FinalizeDeath(target.Handle, 20); !got.Freed {
@@ -219,6 +234,9 @@ func TestUnitReclaimCadenceDefersFatalRefund(t *testing.T) {
 	}
 	if deaths != 1 || extras != 1 {
 		t.Fatalf("death observers duplicated at finalization primary=%d extra=%d", deaths, extras)
+	}
+	if factory.Pending&InterruptStop == 0 || factoryNode.Target != 0 {
+		t.Fatalf("finalizer target release pending/target=%#x/%d, want stop interrupt and null target", factory.Pending, factoryNode.Target)
 	}
 }
 

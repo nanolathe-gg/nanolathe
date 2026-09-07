@@ -23,7 +23,7 @@ const nanoframeDecayRearm = 11
 func workFixture() (*Queue, *units.Unit, *units.Unit) {
 	rng.SeedGlobal(1, 0)
 	builderDef := &content.UnitDef{
-		BMCode: true, Builder: true,
+		BMCode: 1, Builder: true,
 		CanCapture: true, CanReclamate: true, CanResurrect: true,
 		WorkerTime: 300, BuildDistance: 1000, BuildTime: 100,
 		FootprintX: 2, FootprintZ: 2, MaxDamage: 100,
@@ -364,7 +364,7 @@ func assistFixture(quanta ...int32) (*economy.Service, []*units.Unit, *units.Uni
 	}
 	for i, quantum := range quanta {
 		def := &content.UnitDef{
-			BMCode: true, Builder: true,
+			BMCode: 1, Builder: true,
 			// The `canreclamate` mirror bit is one of nano-reach's four terms
 			// [04 R-ORD-01 §7], and nano-reach is the admission every
 			// assist/repair resolution passes through [04 R-ORD-02 §1]. Stock

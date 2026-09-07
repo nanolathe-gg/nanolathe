@@ -21,6 +21,14 @@ behavior. They are not an authoritative engine state format.
 format only to say so. Everything below is a contract with third-party
 recorders, not with the engine.
 
+**Scope:** single-player saves use the retail save-bank contract in doc 08,
+not this format. Nanolathe contains no TAD parser, recorder or replay engine.
+References below to a corpus analyzer (including its Rust implementation) and
+private recording measurements describe inherited external analysis; they are
+not repository packages, commands or checks available in this Go engine.
+Corpus observations can support an inference about retail behavior; they do
+not establish a simulation contract. Undecoded fields remain **Unknown**.
+
 This inherited third-party format description covers the file envelope, the TA wire-packet encodings
 (XOR/checksum, LZ77 compression), the recorder's "smartpak" re-encoding of
 unit-sync packets, and the subpacket taxonomy. It is the byte-level contract
@@ -351,7 +359,7 @@ same sender exist in the same uninterrupted clock and speed segments. The
 inclusive `[previous, next]` range is capture-order evidence, not an assertion
 that the event happened at either endpoint or at a particular engine tick.
 
-The Rust analyzer's bounded Theil–Sen fits, separated by sender, clock
+The historical external analyzer's bounded Theil–Sen fits, separated by sender, clock
 continuity segment, and 0x19 segment, put the dominant natural-play segments
 near 30 reconstructed ticks per recorder wall second in all five corpus files.
 Painted Desert contains late mode-1 steps through signed speeds +1 to +10; its

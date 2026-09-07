@@ -118,8 +118,9 @@ func TestReclaimEmitsStartBuildingThroughOrders(t *testing.T) {
 	if liveThreads(vm) != 1 {
 		t.Fatalf("StartBuilding arrangements %d, want exactly one deferred start", liveThreads(vm))
 	}
-	// Eight more admitted visits exceed the cadence gate and reclaim fatally;
-	// the removal emits the StopBuilding counterpart through cleanup. The
+	// Eight more admitted visits exceed the cadence gate and reclaim fatally. The
+	// packet receiver latches death, but this work visit still completes its
+	// cadence update; the later death/order passes own cleanup. The
 	// eighth was added with the PT3-05 cadence correction: [05 R-WORK-01 §4]
 	// tests the counter before raising it, so the pulse fires on the visit that
 	// sees 16 rather than on the one that raises the counter to 16.
@@ -127,14 +128,14 @@ func TestReclaimEmitsStartBuildingThroughOrders(t *testing.T) {
 	if !target.Dying {
 		t.Fatal("reclaim did not complete fatally")
 	}
-	if orders.QueueForUnit(builder).LenPrimary() != 0 {
-		t.Fatal("reclaim record survived fatal completion")
+	if orders.QueueForUnit(builder).LenPrimary() != 1 || node.Param2 != reclaimCadenceStep || node.Deadline != 18 {
+		t.Fatalf("fatal packet bypassed reclaim visit epilogue: queue=%d counter=%d deadline=%d", orders.QueueForUnit(builder).LenPrimary(), node.Param2, node.Deadline)
 	}
-	if node.Flags&orders.FlagStopBuildingPending != 0 {
-		t.Fatal("cleanup did not clear the StopBuilding-pending flag")
+	if node.Flags&orders.FlagStopBuildingPending == 0 {
+		t.Fatal("fatal packet eagerly cleaned up the reclaim record")
 	}
-	if liveThreads(vm) != 2 {
-		t.Fatalf("StopBuilding counterpart missing: threads %d, want 2", liveThreads(vm))
+	if liveThreads(vm) != 1 {
+		t.Fatalf("fatal packet emitted cleanup callback early: threads %d, want 1", liveThreads(vm))
 	}
 }
 
@@ -210,7 +211,7 @@ func assistFixture(t *testing.T, factoryWorkerTime int32, assistantQuanta ...int
 	assistDefs := make([]*content.UnitDef, len(assistantQuanta))
 	for i, quantum := range assistantQuanta {
 		d := newFactoryDef(fmt.Sprintf("assist_helper_%d", i), 1, 1, 30*quantum)
-		d.BMCode = true
+		d.BMCode = 1
 		d.CanMove = true
 		d.BuildDistance = 1000
 		assistDefs[i] = d

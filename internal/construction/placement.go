@@ -71,7 +71,7 @@ func (s *Service) reservePlacement(product pool.Handle, def *content.UnitDef, re
 		return fmt.Errorf("construction: placement identity %d exceeds occupancy identity range", product)
 	}
 	id := int16(product)
-	building := def != nil && !def.BMCode
+	building := def != nil && def.BMCode == 0
 	var yard []world.YardCell
 	if building {
 		var err error
@@ -132,7 +132,7 @@ func (s *Service) retirePlacement(product pool.Handle) {
 	if !ok {
 		return
 	}
-	if record.def == nil || record.def.BMCode {
+	if record.def == nil || record.def.BMCode != 0 {
 		s.ReleasePlacement(product)
 		return
 	}
@@ -150,7 +150,7 @@ func buildingYard(def *content.UnitDef, rect world.FootprintRect) ([]world.YardC
 	if w <= 0 || d <= 0 {
 		return nil, fmt.Errorf("construction: invalid building footprint %dx%d", w, d)
 	}
-	if def == nil || def.BMCode {
+	if def == nil || def.BMCode != 0 {
 		return nil, fmt.Errorf("construction: building yard unavailable")
 	}
 	yard, err := world.ParseYardMap(def.YardMap, w, d)
@@ -287,7 +287,7 @@ func (s *Service) stampBuilding(product pool.Handle, record placementRecord, ope
 // the unit-creation stamp writer of [04 R-COLL-01 §4], not a reservation or a
 // whole-rectangle approximation.
 func (s *Service) RegisterBuildingPlacement(u *units.Unit) error {
-	if s == nil || u == nil || u.Def == nil || u.Def.BMCode {
+	if s == nil || u == nil || u.Def == nil || u.Def.BMCode != 0 {
 		return nil
 	}
 	extent, err := world.NewFootprintExtent(int32(u.Def.FootprintX), int32(u.Def.FootprintZ))
@@ -425,7 +425,7 @@ func (s *Service) releaseFrameStamps(product pool.Handle) bool {
 		}
 		gridID := int(product)
 		var yard []world.YardCell
-		if record.def != nil && !record.def.BMCode {
+		if record.def != nil && record.def.BMCode == 0 {
 			yard, _ = buildingYard(record.def, record.rect)
 		}
 		for z := record.rect.MinZ(); z < record.rect.MaxZ(); z++ {

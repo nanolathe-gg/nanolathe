@@ -35,6 +35,7 @@ func TestCancelCurrentStampsCauseNine(t *testing.T) {
 	q := orders.QueueForUnit(factory)
 	q.Push(orders.Lookup("BuildingBuild"), orders.Node{BuildDefKey: prodDef.CanonicalKey, Param2: 2, Phase: uint8(State3), Target: ph})
 	svc := NewService(nil, cat, w, nil)
+	bindConstructionCombat(svc)
 
 	svc.handleCancelCurrent(factory, q.Primary()[0], 4)
 
@@ -64,6 +65,7 @@ func TestDecayClampStampsCauseNine(t *testing.T) {
 	cat := exitCatalog(def)
 	terrain := exitTerrain(16, 16)
 	svc, w := exitService(t, terrain, cat)
+	bindConstructionCombat(svc)
 
 	h, err := w.Create(def, 3, world.CellToWorld(6), 0, world.CellToWorld(6))
 	if err != nil {

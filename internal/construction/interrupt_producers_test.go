@@ -50,6 +50,7 @@ func factoryWithAttachedProduct(t *testing.T) (svc *Service, factory, product *u
 	node.DynamicGate = WakeBit1 | WakeBit3
 
 	svc = NewService(nil, cat, w, &economy.Service{})
+	bindConstructionCombat(svc)
 	svc.SetBuilderLink(product.Handle, factory.Handle)
 	return svc, factory, product, node
 }

@@ -19,7 +19,7 @@ func TestHumanFactoryCommandRetainsPermanentQueueRejection(t *testing.T) {
 	broken := &content.UnitDef{
 		DefinitionHeader: content.DefinitionHeader{CanonicalKey: "broken"},
 		UnitName:         "broken",
-		BMCode:           true,
+		BMCode:           1,
 		FootprintX:       1,
 		FootprintZ:       1,
 	}

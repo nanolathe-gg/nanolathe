@@ -46,8 +46,10 @@ order:
 
 Channels are full 8-bit values (0–255), **not** 6-bit VGA values —
 `PALETTE.PAL` entry 255 is `(255, 255, 255, 0)`. Community-authored
-palettes in plain 768-byte RGB-triplet form also exist in the wild; accept
-by file size.
+palettes in plain 768-byte RGB-triplet form are accepted by Nanolathe as an
+intentional import extension. This is not the retail byte contract. The
+shared parser retains the source bytes, including the reserved fourth bytes,
+while its resolved colors are opaque.
 
 Real example — the first 8 entries of `palettes/PALETTE.PAL`
 (`totala1.hpi`), which are the classic Windows/VGA primaries:
@@ -237,13 +239,15 @@ deletes the host files `palettes\PALETTE.ALP`, `.LHT` and `.SHD` so the
 derived tables are regenerated. An existing `.PAL` is read whole with no
 size or content check.
 
+Nanolathe performs recovery in memory and rebuilds derived tables through
+[03 §4.3.4]; it does not write to or delete original asset files. Ordinary
+nonempty authored tables remain authoritative. Missing and empty derived
+tables are built individually.
+
 ## Unknowns and caveats
 
 - The fourth PAL byte's intended meaning (flags?) is unknown; it is zero in
   all retail data.
-- `ALP` blend semantics and any `ALP` runtime consumer beyond the tag
-  `ALPHA TABLE` remain presentation-only unknowns — no consumer is proven in
-  the bounded renderer search.
 - The exact `discByte → LHT level` mapping for the explosion flash and any
   multi-tick fading envelope are presentation tuning; the disc shape and the
   single-consumer binding are established, the level arithmetic is not.
@@ -258,6 +262,6 @@ size or content check.
   <https://units.tauniverse.com/tutorials/tadesign/tadesign/paldesc.htm>
 - Table shapes and channel ranges verified directly against
   `palettes/PALETTE.PAL`, `PALETTE.ALP`, `PALETTE.LHT`, `PALETTE.SHD` from
-  `totala1.hpi`. OpenTA parser: `formats/pal.go`.
+  `totala1.hpi`. Nanolathe parser: `formats/pal.go`.
 - The 3DO format note (`ta-3do-fmtV2.txt`) embeds the full default palette
   as C source, matching `PALETTE.PAL`.

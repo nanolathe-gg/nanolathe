@@ -147,9 +147,9 @@ func TestInitVectorCategoryFlagIsBMCode(t *testing.T) {
 	building := o6Def("building")
 	factory := o6Def("factory")
 	mobile := o6Def("mobile")
-	mobile.BMCode = true
+	mobile.BMCode = 1
 	mobileBuilder := o6Def("mobilebuilder")
-	mobileBuilder.BMCode = true
+	mobileBuilder.BMCode = 1
 	cat := &content.Catalog{
 		Units: map[string]*content.UnitDef{
 			"building": building, "factory": factory, "mobile": mobile, "mobilebuilder": mobileBuilder,

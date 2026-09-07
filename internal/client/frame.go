@@ -134,7 +134,10 @@ func (c *Client) Frame() {
 	// present time (C7). This is the only place indexed pixels become RGBA, so
 	// palette animation stays possible in later phases
 	// (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
+	wasRecordingGeometry := c.recordModelGeometry
+	c.recordModelGeometry = false
 	c.recordFrame()
+	c.recordModelGeometry = wasRecordingGeometry
 	c.list.Replay(c.classicSink())
 }
 
@@ -183,7 +186,10 @@ func (c *Client) RecordFrame() *drawlist.List {
 	if c == nil {
 		return nil
 	}
+	wasRecordingGeometry := c.recordModelGeometry
+	c.recordModelGeometry = true
 	c.recordFrame()
+	c.recordModelGeometry = wasRecordingGeometry
 	return &c.list
 }
 

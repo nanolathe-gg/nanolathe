@@ -456,6 +456,12 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		if s.Combat == nil {
 			s.Combat = &combat.Service{}
 		}
+		s.Combat.ControlByte = func(owner uint8) uint8 {
+			if s.Econ == nil || int(owner) >= len(s.Econ.Players) || !s.Econ.Players[owner].Exists {
+				return combat.ControlByteAbsent
+			}
+			return s.Econ.Players[owner].ControllerState
+		}
 		if s.Features == nil {
 			s.Features = &features.Service{}
 		}

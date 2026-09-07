@@ -35,7 +35,7 @@ func TestBeCarriedUsesExactTenTickWaitWithoutRNG(t *testing.T) {
 	sim := rng.NewSimulation(12345)
 	w := newOrdersFixtureWorld(8, &content.Catalog{})
 	carrierDef := &content.UnitDef{UnitName: "armlab", MaxDamage: 100}
-	cargoDef := &content.UnitDef{UnitName: "armflash", MaxDamage: 100, BMCode: true}
+	cargoDef := &content.UnitDef{UnitName: "armflash", MaxDamage: 100, BMCode: 1}
 	carrierH, _ := w.Create(carrierDef, 0, 0, 0, 0)
 	cargoH, _ := w.Create(cargoDef, 0, 0, 0, 0)
 	carrier, cargo := w.Unit(carrierH), w.Unit(cargoH)

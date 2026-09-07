@@ -39,7 +39,7 @@ func TestRetailMorningChainPlacementProfiles(t *testing.T) {
 		}
 		rules, err := placementRules(&Service{Catalog: catalog}, def)
 		if err != nil {
-			blockers = append(blockers, fmt.Sprintf("%s (%s): %v; movementclass=%q bmcode=%t waterline=%d minwater=%d maxwater=%d maxslope=%q unknown=%v", key, def.UnitName, err, def.MovementClass, def.BMCode, def.Waterline, def.MinWaterDepth, def.MaxWaterDepth, def.Unknown["MaxSlope"], def.UnknownKeysSorted()))
+			blockers = append(blockers, fmt.Sprintf("%s (%s): %v; movementclass=%q bmcode=%d waterline=%d minwater=%d maxwater=%d maxslope=%q unknown=%v", key, def.UnitName, err, def.MovementClass, def.BMCode, def.Waterline, def.MinWaterDepth, def.MaxWaterDepth, def.Unknown["MaxSlope"], def.UnknownKeysSorted()))
 			continue
 		}
 		if !rules.ProfileResolved {
