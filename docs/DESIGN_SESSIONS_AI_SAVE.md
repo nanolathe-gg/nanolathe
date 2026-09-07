@@ -782,11 +782,12 @@ and recognized by the boundary conditions `[08 "Victory and defeat triggers"]`.
 in the builder's probe order `[08 "Victory trigger types"]`
 `[08 "Defeat trigger types"]`.
 
-**C16 — defaults are injected at poll time, not at load.** With no authored
-victory condition the evaluator injects destroy-all-units; with no defeat
-condition, all-units-killed. Injection happens inside the kind-1 predicate on
-each poll, so the mission object's queues are not rewritten
-`[08 "Default triggers"]` `[08 R-TRIG-01 §6]`.
+**C16 — defaults are owned records.** With no authored victory condition the
+trigger builder appends destroy-all-units to the mission's victory queue; with
+no defeat condition it appends all-units-killed to its defeat queue. The
+records therefore retain Satisfied/Celebrated state and enter save/load like
+authored records; a true destroy-all-units predicate emits `Victory Condition`
+only once for that record `[08 "Default triggers"]` `[08 R-TRIG-01 §8]`.
 
 **C17 — evaluators are pure polls.** A poll mutates only its own completed
 flag. The counted kill condition decrements a countdown and completes at zero
@@ -866,7 +867,9 @@ fragment with kinds unfiltered, folding into the types the file did not lock
 a metal stock below 25, the per-definition gate bit, and the profile limit —
 which rejects type index zero and any index at or above the catalog count
 before it reads the limit vector. A third hard gate rejects a downloadable
-candidate under the campaign session mode. The **post-selection** filter
+candidate when the manager received authoritative session kind one at battle
+construction; fresh and restored construction pass that kind explicitly. The
+**post-selection** filter
 compares the *selected* definition's authored side string against the builder's
 own, byte for byte and case-sensitively, and discards the whole selection on a
 mismatch: no re-draw, no runner-up, and the draw is still spent
@@ -894,10 +897,13 @@ tidal strength, so a gated recompute observes the current wind rather than a
 copy `[08 R-P0-05 §1]` `[08 R-P0-05 §4]` `[05 R-PROD-01 §1]`
 `[08 "Established AI-facing data and rooted planner"]` [I2].
 
-**C7 — one draw per selection.** Positive scores enter a cumulative weighted
-reservoir and the choice is a single draw on the global simulation stream
-against the running total. One draw per selection, not one per candidate and
-not one per builder `[08 R-P0-05 §4]` [I4].
+**C7 — one draw per positive candidate.** In authored build-option order, each
+positive score is added to the signed running total and immediately takes one
+global-simulation draw bounded by that total. The candidate replaces the
+selection when the returned signed value is strictly below its own score.
+Nonpositive scores draw nothing; bounds below two do not advance the stream.
+This is the repeated running-total reservoir, not one final draw
+`[08 R-AI-01 §8]` `[08 R-P0-05 §4]` [I4].
 
 **C8 — placement.** The search origin steps toward the strategic centre in
 16.16: the builder-to-centre distance is a square root over the loaded

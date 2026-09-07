@@ -301,7 +301,7 @@ func TestContactLadderRunsUnitSlotsBeforeFeatures(t *testing.T) {
 	stampGroundRect(ter, cx, cz, 1, 1, h)
 
 	p := &Projectile{ShooterSide: 0, Pos: Vec3{X: cellCentre(cx), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz)}}
-	hitUnit, hitFeature, isWater, isOffMap, _, bounce := checkCollision(p, wu1913Weapon(10), w, ter, nil)
+	hitUnit, hitFeature, isWater, isOffMap, _, bounce := checkCollision(p, wu1913Weapon(10), w, ter, nil, false)
 	if hitUnit != h {
 		t.Fatalf("unit on a feature cell: hitUnit = %d, want %d", hitUnit, h)
 	}
@@ -314,7 +314,7 @@ func TestContactLadderRunsUnitSlotsBeforeFeatures(t *testing.T) {
 	// an ordering.
 	ter.PlotAt(cx, cz).SetOccupantA(0)
 	p2 := &Projectile{ShooterSide: 0, Pos: Vec3{X: cellCentre(cx), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz)}}
-	if _, feature, _, _, _, _ := checkCollision(p2, wu1913Weapon(10), w, ter, nil); feature == nil {
+	if _, feature, _, _, _, _ := checkCollision(p2, wu1913Weapon(10), w, ter, nil, false); feature == nil {
 		t.Fatal("with the cell unoccupied the feature step must resolve the cell's feature")
 	}
 }
@@ -334,7 +334,7 @@ func TestContactDrawsNoRandomness(t *testing.T) {
 	crt := rng.NewCRT(1)
 	before, beforeCRT := sim.Draws(), crt.Draws()
 	p := &Projectile{ShooterSide: 0, Pos: Vec3{X: cellCentre(cx), Y: 0, Z: cellCentre(cz)}}
-	if got, _, _, _, _, _ := checkCollision(p, wu1913Weapon(10), w, ter, nil); got != h {
+	if got, _, _, _, _, _ := checkCollision(p, wu1913Weapon(10), w, ter, nil, false); got != h {
 		t.Fatalf("fixture did not contact: %d", got)
 	}
 	if sim.Draws() != before || crt.Draws() != beforeCRT {

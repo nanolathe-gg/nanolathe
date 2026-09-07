@@ -30,6 +30,10 @@ type BindingRequest struct {
 	// unit bindings use this for instance-owned engine-port state such as
 	// INBUILDSTANCE; leaving it nil preserves the existing default no-op ports.
 	PortFuncs map[Port]func(args []int32) int32
+	// PortBindings is the explicit production surface. It separates reads from
+	// writes so a read's four argument cells cannot be interpreted as a write
+	// value [04 R-COB-03 §1]. It takes precedence over PortFuncs per port.
+	PortBindings map[Port]PortBinding
 }
 
 // BindingDiagnosticCode identifies one strict binding failure. Codes are
@@ -174,6 +178,9 @@ func BindStrict(fs vfs.FSOps, req BindingRequest) (*Binding, error) {
 		if fn != nil {
 			vm.BindPort(port, fn)
 		}
+	}
+	for port, binding := range req.PortBindings {
+		vm.BindPortBinding(port, binding)
 	}
 	bridge := NewCallbackBridge(vm)
 	bridge.SetSimulationRNG(req.SimulationRNG)

@@ -337,10 +337,11 @@ func (t *Trigger) Notify(c PollContext, ev NotifyEvent, u *units.Unit) bool {
 	return t.Completed
 }
 
-// Evaluate owns the canonical kind-1 queue combination. It injects defaults
-// again at poll time, evaluates victory as AND with first-false stop, and only
-// when victory is false evaluates defeat as OR with first-true stop [08
-// R-TRIG-01 §6]. The caller owns the kind gate, cadence and end latch.
+// Evaluate evaluates detached trigger queues. Production mission polling uses
+// EvaluateOwned so an empty queue receives a persistent default record. This
+// value-slice form retains the historical detached fallback for isolated
+// condition consumers that cannot install a record on their owner [08
+// "Default triggers"] [08 R-TRIG-01 §6].
 func Evaluate(victory, defeat []*Trigger, c PollContext) (victoryDone, defeatDone bool) {
 	if !c.MissionArmed {
 		return false, false
@@ -351,6 +352,25 @@ func Evaluate(victory, defeat []*Trigger, c PollContext) (victoryDone, defeatDon
 	if len(defeat) == 0 {
 		defeat = []*Trigger{DefaultDefeat()}
 	}
+	return evaluateQueues(victory, defeat, c)
+}
+
+// EvaluateOwned evaluates a mission's trigger queues. Its empty-queue fallback
+// appends defaults to the supplied owner before polling, preserving each
+// record's satisfied and celebrated state for subsequent polls and saves [08
+// "Default triggers"] [08 R-TRIG-01 §8].
+func EvaluateOwned(victory, defeat *[]*Trigger, c PollContext) (victoryDone, defeatDone bool) {
+	if victory == nil || defeat == nil {
+		return false, false
+	}
+	*victory, *defeat = EnsureDefaults(*victory, *defeat)
+	if !c.MissionArmed {
+		return false, false
+	}
+	return evaluateQueues(*victory, *defeat, c)
+}
+
+func evaluateQueues(victory, defeat []*Trigger, c PollContext) (victoryDone, defeatDone bool) {
 	victoryDone = true
 	for _, t := range victory {
 		if t == nil || !t.Poll(c) {

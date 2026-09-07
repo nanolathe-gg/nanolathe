@@ -116,3 +116,13 @@ func TestMissionWithNoAuthoredConditionsGetsDefaults(t *testing.T) {
 		t.Fatalf("default defeat %+v, want AllUnitsKilled", m.Defeat)
 	}
 }
+
+func TestDecodeTriggersOwnsDefaultsForEmptyHeader(t *testing.T) {
+	victory, defeat := DecodeTriggers(nil)
+	if len(victory) != 1 || victory[0].Kind != triggers.KindDestroyAllUnits {
+		t.Fatalf("default victory = %+v", victory)
+	}
+	if len(defeat) != 1 || defeat[0].Kind != triggers.KindAllUnitsKilled {
+		t.Fatalf("default defeat = %+v", defeat)
+	}
+}

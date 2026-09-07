@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 // initializeBattleAI constructs the session-owned manager state before any
@@ -17,7 +18,7 @@ import (
 // manager operation which consumes the shared simulation stream: it takes the
 // established eight draws for each AI-owning slot in ascending player order
 // [08 R-ENTRY-01 §3 step 24][08 R-AI-01 §9].
-func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
+func initializeBattleAI(s *Session, player uint8, profile *ai.Profile, sessionKind int) error {
 	if s == nil || s.World == nil || s.Catalog == nil || s.Econ == nil || profile == nil {
 		return fmt.Errorf("session: incomplete AI battle binding for player %d", player)
 	}
@@ -29,12 +30,13 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 		return err
 	}
 	mgr := &ai.Manager{
-		Player:       player,
-		Profile:      profile,
-		RNG:          s.SimRNG(),
-		Terrain:      s.World,
-		Catalog:      s.Catalog,
-		SurfaceMetal: surfaceMetal,
+		Player:          player,
+		Profile:         profile,
+		RNG:             s.SimRNG(),
+		Terrain:         s.World,
+		Catalog:         s.Catalog,
+		SurfaceMetal:    surfaceMetal,
+		MissionGateFlag: int32(sessionKind),
 	}
 	// Bind before Strategic.Init so the construction-time class vectors and
 	// every later gated refresh use the same live battle inputs. At battle
@@ -89,10 +91,7 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 			}
 			return s.IsUnitVisible(int(viewer), target)
 		},
-		// Unknown: bind ProbeKnown only after the session option bit selecting
-		// explored/current knowledge is traced; that writer/reader pair is the
-		// decider [08 R-AI-01 §7, §17]. A nil value must remain fail-closed.
-		ProbeKnown: nil,
+		ProbeKnown: rallyProbeKnowledge(s),
 		// [08 R-AI-01 §19]: the rally task's member gate for a unit with no
 		// mover is the slot-1 shot-time PHYSICAL gate of [06 §3.3] from the
 		// member's own position to the rally point — range², the shooter-side
@@ -111,6 +110,21 @@ func initializeBattleAI(s *Session, player uint8, profile *ai.Profile) error {
 	bindAIQueue(mgr, s)
 	s.AI[player] = mgr
 	return nil
+}
+
+// rallyProbeKnowledge binds the rally task to the visibility mode's LineOfSight
+// bit through the service's one-point predicate. With LOS enabled that predicate
+// samples the AI owner's current-sight byte grid; with Permanent LOS it samples
+// the mapping word at the local viewing slot's bit. Its projection performs the
+// signed high-half height shear and rejects out-of-bounds cells [08 R-AI-01 §7]
+// [03 R-VIS-01 §1].
+func rallyProbeKnowledge(s *Session) func(owner uint8, x, y, z numeric.Fixed) bool {
+	return func(owner uint8, x, y, z numeric.Fixed) bool {
+		if s == nil || s.Vis == nil {
+			return false
+		}
+		return s.Vis.VisiblePoint(visibility.PlayerID(owner), x, y, z)
+	}
 }
 
 // battleSurfaceMetal is the selected mission/session SurfaceMetal word used by

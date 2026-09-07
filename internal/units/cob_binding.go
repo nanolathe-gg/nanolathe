@@ -70,71 +70,80 @@ func (u *Unit) raiseScriptTouched() {
 }
 
 func unitPortHandlers(vm *cob.VM, u *Unit) map[cob.Port]func([]int32) int32 {
+	bindings := unitPortBindings(vm, u)
+	ports := make(map[cob.Port]func([]int32) int32, len(bindings))
+	for port, binding := range bindings {
+		binding := binding
+		ports[port] = func(args []int32) int32 {
+			if len(args) >= 2 && binding.Write != nil {
+				binding.Write(args[1])
+				return 0
+			}
+			if binding.Read == nil {
+				return 0
+			}
+			var cells [4]int32
+			copy(cells[:], args[1:])
+			return binding.Read(cells)
+		}
+	}
+	return ports
+}
+
+// unitPortBindings is the production port surface. It preserves the legacy
+// handler helper above for callers that still exercise it directly, but makes
+// the two COB dispatches explicit: reads always receive four cells and cannot
+// invoke a state write [04 R-COB-03 §1][04 R-COB-03 §4].
+func unitPortBindings(vm *cob.VM, u *Unit) map[cob.Port]cob.PortBinding {
 	if u == nil {
 		return nil
 	}
-	ports := make(map[cob.Port]func([]int32) int32, 8)
-	bindUnitPort := func(port cob.Port, get func() bool, set func(bool)) {
-		ports[port] = func(args []int32) int32 {
-			if len(args) >= 2 {
-				set(args[1]&1 != 0)
+	ports := make(map[cob.Port]cob.PortBinding, 8)
+	bindFlag := func(port cob.Port, get func() bool, set func(bool)) {
+		ports[port] = cob.PortBinding{
+			Read: func([4]int32) int32 {
+				if get() {
+					return 1
+				}
 				return 0
-			}
-			if get() {
+			},
+			Write: func(value int32) { set(value&1 != 0) },
+		}
+	}
+	bindFlag(cob.Port(5), func() bool { return u.InBuildStance }, func(v bool) { u.InBuildStance = v })
+	bindFlag(cob.Port(6), func() bool { return u.Busy }, func(v bool) { u.Busy = v })
+	ports[cob.Port(18)] = cob.PortBinding{
+		Read: func([4]int32) int32 {
+			if u.YardOpen {
 				return 1
 			}
 			return 0
-		}
-	}
-	bindUnitPort(cob.Port(5), func() bool { return u.InBuildStance }, func(v bool) { u.InBuildStance = v })
-	bindUnitPort(cob.Port(6), func() bool { return u.Busy }, func(v bool) { u.Busy = v })
-	ports[cob.Port(18)] = func(args []int32) int32 {
-		if len(args) >= 2 {
-			requested := args[1]&1 != 0
-			// The installed callback owns admission, the authoritative bit commit,
-			// and the later restamp as one ordered transaction. Fixtures without a
-			// callback retain the direct-write path [04 §4.7 port 18][04 R-COLL-01 §4].
+		},
+		Write: func(value int32) {
+			requested := value&1 != 0
 			if u.yardTransaction != nil {
 				u.yardTransaction(requested)
 			} else {
 				u.YardOpen = requested
 			}
+		},
+	}
+	ports[cob.Port(4)] = cob.PortBinding{Read: func([4]int32) int32 {
+		return cob.HealthPercent(u.Health, u.MaxHealth)
+	}}
+	ports[cob.Port(17)] = cob.PortBinding{Read: func([4]int32) int32 {
+		return cob.BuildPercentLeft(u.Remaining)
+	}}
+	bindFlag(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
+	bindFlag(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })
+	ports[cob.Port(1)] = cob.PortBinding{
+		Read: func([4]int32) int32 {
+			if u.Activated {
+				return 1
+			}
 			return 0
-		}
-		if u.YardOpen {
-			return 1
-		}
-		return 0
-	}
-	// Port 4 (health) and port 17 (build percent left) are read-only engine
-	// ports [04 §4.4]. They must be bound on the instance: an unbound port
-	// reads zero, and zero is a meaningful — and wrong — answer to both. The
-	// stock damage-smoke helper shipped in the retail archive
-	// (`scripts/SMOKEUNIT.H`, included by most unit scripts) waits on
-	// `while (get BUILD_PERCENT_LEFT) sleep 400;` and then puffs smoke
-	// whenever `get HEALTH` is below 66, so a pair of zero reads walks every
-	// nanoframe straight past the "wait until the unit is actually built"
-	// loop and into a permanent smoke plume at full health.
-	ports[cob.Port(4)] = func([]int32) int32 {
-		return cob.HealthPercent(u.Health, u.MaxHealth) // [04 §4.4] port 4
-	}
-	ports[cob.Port(17)] = func([]int32) int32 {
-		return cob.BuildPercentLeft(u.Remaining) // [04 §4.4] port 17
-	}
-	bindUnitPort(cob.Port(19), func() bool { return u.BuggerOff }, func(v bool) { u.BuggerOff = v })
-	bindUnitPort(cob.Port(20), func() bool { return u.Armored }, func(v bool) { u.Armored = v })
-	// Port 1 is the activation edge input. The write arm shares one edge
-	// semantics with every engine-side producer, so it defers to the single
-	// edge setter instead of writing the bit itself [04 R-UNIT-06 §2].
-	ports[cob.Port(1)] = func(args []int32) int32 {
-		if len(args) >= 2 {
-			u.setActivationEdge(args[1]&1 != 0, vm)
-			return 0
-		}
-		if u.Activated {
-			return 1
-		}
-		return 0
+		},
+		Write: func(value int32) { u.setActivationEdge(value&1 != 0, vm) },
 	}
 	return ports
 }
@@ -143,8 +152,8 @@ func bindUnitPortHandlers(vm *cob.VM, u *Unit) {
 	if vm == nil {
 		return
 	}
-	for port, fn := range unitPortHandlers(vm, u) {
-		vm.BindPort(port, fn)
+	for port, binding := range unitPortBindings(vm, u) {
+		vm.BindPortBinding(port, binding)
 	}
 	// The marker is not a port handler and must not be attached to one: retail
 	// raises it from every arm of the engine-write dispatch, including the
@@ -258,7 +267,7 @@ func bindCOBWithPortsAndVisibility(fs vfs.FSOps, def *content.UnitDef, mdl *mode
 	if u != nil {
 		// Keep the generic and instance-aware binding paths identical. The helper
 		// installs all six researched engine-write arms before Create.
-		req.PortFuncs = unitPortHandlers(nil, u)
+		req.PortBindings = unitPortBindings(nil, u)
 		// The script-touched marker is not one of those arms — retail raises it
 		// from the dispatch itself, fall-through included — so it rides the
 		// same pre-Create hand-off the render-piece table uses. Create is an

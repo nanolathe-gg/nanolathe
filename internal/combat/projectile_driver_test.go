@@ -4,7 +4,11 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // driverWeapon is a complete projectile fixture definition for the live
@@ -156,5 +160,392 @@ func TestTickProjectilesProximityImpactSweepsLiveVictims(t *testing.T) {
 	}
 	if len(impacts) != 2 {
 		t.Fatalf("central proximity impact plus live victim sweep emitted %d impacts, want 2", len(impacts))
+	}
+}
+
+// TestTickProjectilesOpaqueLiquidStopsOnlyTheWaterLadder verifies the two
+// opaque-liquid paths through the live driver. A water-cell miss stays live;
+// an actual unit contact above the same cell remains a direct impact, and
+// noexplode retains that contacted record after its packet [06 §8.2][06 §13.2].
+func TestTickProjectilesOpaqueLiquidStopsOnlyTheWaterLadder(t *testing.T) {
+	newWater := func(t *testing.T) (*units.World, *world.Terrain, int32, int32) {
+		t.Helper()
+		w, terrain := newContactFixture(t)
+		const cx, cz = 15, 15
+		terrain.SeaLevel = 20
+		terrain.PlotAt(cx, cz).SetMinHeight(0)
+		terrain.PlotAt(cx, cz).SetMaxHeight(0)
+		return w, terrain, cx, cz
+	}
+	run := func(t *testing.T, withUnit, noExplode bool) (int, int32, []Event) {
+		t.Helper()
+		var svc Service
+		bindFixtureControlBytes(&svc)
+		svc.OpaqueLiquidMode = true
+		w, terrain, cx, cz := newWater(t)
+		var health int32
+		var targetHandle pool.Handle
+		if withUnit {
+			h, err := w.Create(contactDef(contactModelTop), 1, cellCentre(cx), numeric.FixedFromInt(10), cellCentre(cz))
+			if err != nil {
+				t.Fatal(err)
+			}
+			stampGroundRect(terrain, cx, cz, 1, 1, h)
+			health = w.Unit(h).Health
+			targetHandle = h
+		}
+		weapon := driverWeapon(false)
+		weapon.NoExplode = noExplode
+		h, ok := svc.Reserve()
+		if !ok {
+			t.Fatal("reserve projectile")
+		}
+		p := &svc.Records[int(h)-1]
+		p.WeaponID = weapon.ID
+		p.ShooterSide = 0
+		p.Pos = Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(10), Z: cellCentre(cz)}
+		p.ExpiryTick = 10
+		var events []Event
+		svc.Events = func(ev Event) { events = append(events, ev) }
+		svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+		if withUnit {
+			health = w.Unit(targetHandle).Health
+		}
+		return svc.Count(), health, events
+	}
+
+	if count, _, events := run(t, false, false); count != 1 || len(events) != 0 {
+		t.Fatalf("opaque water miss: count=%d events=%#v, want a live quiet projectile", count, events)
+	}
+	if count, health, _ := run(t, true, false); count != 0 || health >= 100 {
+		t.Fatalf("opaque water direct contact: count=%d health=%d, want retirement after unit damage", count, health)
+	}
+	if count, health, events := run(t, true, true); count != 1 || health >= 100 || len(events) == 0 {
+		t.Fatalf("opaque water noexplode direct contact: count=%d health=%d events=%#v, want retained damaged contact", count, health, events)
+	}
+}
+
+// TestTickProjectilesExpiryImpactHasNoInventedDirectUnit leaves an occupancy
+// candidate under a burn-blow expiry. The motion path enters central impact
+// with a null direct recipient, so the small-area direct shortcut cannot
+// damage that unrelated contact [06 §6.4][06 §9.1].
+func TestTickProjectilesExpiryImpactHasNoInventedDirectUnit(t *testing.T) {
+	var svc Service
+	bindFixtureControlBytes(&svc)
+	w, terrain := newContactFixture(t)
+	const cx, cz = 18, 18
+	hAccidental, err := w.Create(contactDef(contactModelTop), 1, cellCentre(cx), numeric.FixedFromInt(10), cellCentre(cz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stampGroundRect(terrain, cx, cz, 1, 1, hAccidental)
+	accidental := w.Unit(hAccidental)
+	weapon := driverWeapon(false)
+	weapon.LineOfSight = false
+	weapon.WeaponTimer = 1
+	weapon.BurnBlow = true
+	weapon.AreaOfEffect = 0 // direct-only threshold, so null direct means no damage.
+	h, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve projectile")
+	}
+	p := &svc.Records[int(h)-1]
+	p.WeaponID = weapon.ID
+	p.ShooterSide = 0
+	p.TargetUnit = hAccidental // retained guidance is not a direct contact.
+	p.Pos = Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(10), Z: cellCentre(cz)}
+	p.ExpiryTick = 1
+	svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+	if accidental.Health != accidental.MaxHealth {
+		t.Fatalf("expiry impact invented direct damage for occupancy handle %d: health=%d", hAccidental, accidental.Health)
+	}
+}
+
+// TestTickProjectilesMixedBurstUsesCapturedSpanAfterOrdinaryImpact puts an
+// ordinary terrain impact before a due burst anchor in the same captured span.
+// The impact observes no burst draws, then the successful anchor attempt uses
+// its two researched draws and leaves its clone beyond this tick's motion walk
+// [06 §7.1][06 §4.3][06 §5.1].
+func TestTickProjectilesMixedBurstUsesCapturedSpanAfterOrdinaryImpact(t *testing.T) {
+	var svc Service
+	w, terrain := newContactFixture(t)
+	const cx, cz = 22, 22
+	terrain.PlotAt(cx, cz).SetMinHeight(20)
+	terrain.PlotAt(cx, cz).SetMaxHeight(20)
+	ordinary := driverWeapon(false)
+	ordinary.ID = 93
+	burst := driverWeapon(false)
+	burst.ID = 94
+	burst.SprayAngle = 2
+	burst.RandomDecay = 3
+	burst.BurstRate = 1
+	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{
+		"ordinary": ordinary,
+		"burst":    burst,
+	}}
+	cat.RebuildWeaponIndex()
+	hOrdinary, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve ordinary projectile")
+	}
+	pOrdinary := &svc.Records[int(hOrdinary)-1]
+	pOrdinary.WeaponID = ordinary.ID
+	pOrdinary.Pos = Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(21), Z: cellCentre(cz)}
+	pOrdinary.Velocity.Y = numeric.FixedFromInt(-2)
+	pOrdinary.ExpiryTick = 10
+	hBurst, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve burst anchor")
+	}
+	anchorPos := Vec3{X: cellCentre(cx + 2), Y: numeric.FixedFromInt(30), Z: cellCentre(cz)}
+	pBurst := &svc.Records[int(hBurst)-1]
+	pBurst.WeaponID = burst.ID
+	pBurst.Pos = anchorPos
+	pBurst.StartPos = anchorPos
+	pBurst.Velocity = Vec3{X: numeric.FixedFromInt(2)}
+	pBurst.BurstRemaining = 1
+	pBurst.BurstDeadline = 1
+	pBurst.ExpiryTick = 10
+	sim := rng.NewSimulation(7)
+	drawsAtImpact := uint64(^uint64(0))
+	svc.Events = func(ev Event) {
+		if ev.Kind == EventProjectileImpact {
+			drawsAtImpact = sim.Draws()
+		}
+	}
+
+	svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, cat, &sim, nil)
+	if drawsAtImpact != 0 {
+		t.Fatalf("ordinary impact observed %d burst draws, want zero: ascending captured span runs it first", drawsAtImpact)
+	}
+	if sim.Draws() != 2 {
+		t.Fatalf("due successful burst used %d RNG draws, want decay then spray", sim.Draws())
+	}
+	if svc.Count() != 1 || svc.Records[0].Pos != anchorPos {
+		t.Fatalf("same-tick burst clone was stepped: count=%d record=%+v, want stationary clone at %+v", svc.Count(), svc.Records[0], anchorPos)
+	}
+}
+
+// TestTickProjectilesFeatureFringeUsesContactedCellHeightAndCache uses authored
+// short and tall feature records on one fringe cell. The height comparison
+// uses that fringe cell's ground word, then a retained noexplode record keeps
+// its feature-cell cache and suppresses a repeat contact [06 §8.2].
+func TestTickProjectilesFeatureFringeUsesContactedCellHeightAndCache(t *testing.T) {
+	run := func(t *testing.T, height int32) (int, int) {
+		t.Helper()
+		var svc Service
+		w, terrain := newContactFixture(t)
+		const ax, az = 25, 25
+		terrain.FeatureDefs = []*content.FeatureDef{{Height: height}}
+		terrain.PlotAt(ax, az).SetFeature(0)
+		terrain.PlotAt(ax, az).SetMinHeight(10)
+		fringe := terrain.PlotAt(ax+1, az)
+		fringe.SetFeature(world.PlotFeatureFringe)
+		fringe.SetAnchorSigned(-1, 0)
+		fringe.SetMinHeight(30)
+		fringe.SetMaxHeight(30)
+		weapon := driverWeapon(false)
+		weapon.NoExplode = true
+		h, ok := svc.Reserve()
+		if !ok {
+			t.Fatal("reserve projectile")
+		}
+		p := &svc.Records[int(h)-1]
+		p.WeaponID = weapon.ID
+		p.Pos = Vec3{X: cellCentre(ax + 1), Y: numeric.FixedFromInt(35), Z: cellCentre(az)}
+		p.ExpiryTick = 10
+		impacts := 0
+		svc.Events = func(ev Event) {
+			if ev.Kind == EventProjectileImpact {
+				impacts++
+			}
+		}
+		cat := driverCatalog(weapon)
+		svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, cat, nil, nil)
+		svc.TickProjectiles(2, w, terrain, nil, nil, nil, nil, cat, nil, nil)
+		return impacts, svc.Count()
+	}
+	if impacts, count := run(t, 4); impacts != 0 || count != 1 {
+		t.Fatalf("short fringe feature: impacts=%d count=%d, want no contact and live projectile", impacts, count)
+	}
+	if impacts, count := run(t, 10); impacts != 1 || count != 1 {
+		t.Fatalf("tall fringe feature: impacts=%d count=%d, want one cached retained contact", impacts, count)
+	}
+}
+
+// TestTickProjectilesGuidanceReadsStaleTailSlotNextTick first compacts a dead
+// linked tail, then on the following tick reads the preserved bytes beyond the
+// active count. Guidance selects that raw point over the stored fallback
+// [06 §5.2][06 §6.5].
+func TestTickProjectilesGuidanceReadsStaleTailSlotNextTick(t *testing.T) {
+	var svc Service
+	weapon := &content.WeaponDef{ID: 95, SelfProp: true, Guidance: true, TurnRate: 32767, WeaponVelocity: 65536, WeaponAcceleration: 65536}
+	tailWeapon := driverWeapon(false)
+	tailWeapon.ID = 96
+	cat := &content.Catalog{Weapons: map[string]*content.WeaponDef{"guided": weapon, "tail": tailWeapon}}
+	cat.RebuildWeaponIndex()
+	source, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve source")
+	}
+	tail, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve tail")
+	}
+	linkedPos := Vec3{X: numeric.FixedFromInt(100), Z: numeric.FixedFromInt(0)}
+	pSource := &svc.Records[int(source)-1]
+	pSource.WeaponID = weapon.ID
+	pSource.TargetProjectile = tail
+	pSource.TargetPos = Vec3{X: numeric.FixedFromInt(0), Z: numeric.FixedFromInt(100)}
+	pSource.ExpiryTick = 10
+	pTail := &svc.Records[int(tail)-1]
+	pTail.WeaponID = tailWeapon.ID
+	pTail.Pos = linkedPos
+	pTail.ExpiryTick = 0
+	svc.MarkDead(tail)
+
+	svc.TickProjectiles(1, nil, nil, nil, nil, nil, nil, cat, nil, nil)
+	if svc.Count() != 1 {
+		t.Fatalf("tail compaction count=%d, want source survivor", svc.Count())
+	}
+	if int(tail) <= svc.Count() || int(tail) > len(svc.Records) {
+		t.Fatalf("stale target handle %d must be beyond count %d but within backing arena %d", tail, svc.Count(), len(svc.Records))
+	}
+	stalePoint := svc.Records[int(tail)-1].Pos
+	stored := svc.Records[0].TargetPos
+	before := svc.Records[0].Pos
+	svc.TickProjectiles(2, nil, nil, nil, nil, nil, nil, cat, nil, nil)
+	if want := YawFromDelta(stalePoint.X.Sub(before.X), stalePoint.Z.Sub(before.Z)); svc.Records[0].Yaw != want {
+		fallback := YawFromDelta(stored.X.Sub(before.X), stored.Z.Sub(before.Z))
+		t.Fatalf("tick-2 guided source yaw=%d, want stale tail yaw=%d; stored fallback yaw=%d", svc.Records[0].Yaw, want, fallback)
+	}
+}
+
+// TestTickProjectilesSelfPropImpactContinuesAfterCentralImpact locks the
+// self-propelled burn-blow ordering: central impact sees the pre-motion point,
+// then the same dead-or-retained visit advances and runs the next-cell contact
+// [06 §6.6][06 §7.1].
+func TestTickProjectilesSelfPropImpactContinuesAfterCentralImpact(t *testing.T) {
+	for _, noExplode := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retires", true: "retains"}[noExplode], func(t *testing.T) {
+			var svc Service
+			bindFixtureControlBytes(&svc)
+			w, terrain := newContactFixture(t)
+			const cx, cz = 4, 4
+			targetH, err := w.Create(contactDef(contactModelTop), 1, cellCentre(cx+1), numeric.FixedFromInt(10), cellCentre(cz))
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := w.Unit(targetH)
+			stampGroundRect(terrain, cx+1, cz, 1, 1, targetH)
+			weapon := &content.WeaponDef{ID: 97, SelfProp: true, BurnBlow: true, NoExplode: noExplode, AreaOfEffect: 0, DamageDefault: 20}
+			h, ok := svc.Reserve()
+			if !ok {
+				t.Fatal("reserve projectile")
+			}
+			p := &svc.Records[int(h)-1]
+			p.WeaponID = weapon.ID
+			p.ShooterSide = 0
+			p.Pos = Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(10), Z: cellCentre(cz)}
+			p.Velocity.X = numeric.FixedFromInt(16)
+			p.ExpiryTick = 1
+			var impacts []Vec3
+			svc.Events = func(ev Event) {
+				if ev.Kind == EventProjectileImpact {
+					impacts = append(impacts, ev.Position)
+				}
+			}
+
+			svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+			if len(impacts) != 2 || impacts[0] != (Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(10), Z: cellCentre(cz)}) || impacts[1].X != cellCentre(cx+1) {
+				t.Fatalf("self-propelled impact positions=%#v, want pre-motion central then post-motion collision", impacts)
+			}
+			if target.Health >= target.MaxHealth {
+				t.Fatalf("post-impact self-propelled collision did not damage target: health=%d", target.Health)
+			}
+			wantCount := 0
+			if noExplode {
+				wantCount = 1
+			}
+			if svc.Count() != wantCount {
+				t.Fatalf("NoExplode=%v left count %d, want %d", noExplode, svc.Count(), wantCount)
+			}
+		})
+	}
+}
+
+// TestTickProjectilesTwoPhaseTransitionStillCollides verifies the first
+// two-phase expiry transition does not skip the collision and common tail
+// after its gravity-and-position continuation [06 §6.6][06 §7.1].
+func TestTickProjectilesTwoPhaseTransitionStillCollides(t *testing.T) {
+	var svc Service
+	bindFixtureControlBytes(&svc)
+	w, terrain := newContactFixture(t)
+	const cx, cz = 7, 7
+	targetH, err := w.Create(contactDef(contactModelTop), 1, cellCentre(cx+1), numeric.FixedFromInt(10), cellCentre(cz))
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := w.Unit(targetH)
+	stampGroundRect(terrain, cx+1, cz, 1, 1, targetH)
+	weapon := &content.WeaponDef{ID: 98, SelfProp: true, TwoPhase: true, FlightTime: 2, AreaOfEffect: 0, DamageDefault: 20}
+	h, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve projectile")
+	}
+	p := &svc.Records[int(h)-1]
+	p.WeaponID = weapon.ID
+	p.ShooterSide = 0
+	p.Pos = Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(10), Z: cellCentre(cz)}
+	p.Velocity.X = numeric.FixedFromInt(16)
+	p.ExpiryTick = 1
+
+	svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+	if !svc.Records[0].TwoPhase || svc.Records[0].ExpiryTick != 3 {
+		t.Fatalf("phase transition state=%+v, want first phase with expiry 3", svc.Records[0])
+	}
+	if target.Health >= target.MaxHealth {
+		t.Fatalf("two-phase transition skipped post-motion collision: health=%d", target.Health)
+	}
+}
+
+// TestTickProjectilesSteeringFailureRebuildsAfterImpact makes the impact
+// callback observe the inherited velocity, then verifies the failed guidance
+// visit rebuilds velocity before its same-visit motion [06 §6.7].
+func TestTickProjectilesSteeringFailureRebuildsAfterImpact(t *testing.T) {
+	var svc Service
+	weapon := &content.WeaponDef{
+		ID: 99, SelfProp: true, Guidance: true, BurnBlow: true,
+		NoExplode: true, TurnRate: 1, WeaponVelocity: 65536,
+		AreaOfEffect: 0,
+	}
+	h, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve projectile")
+	}
+	p := &svc.Records[int(h)-1]
+	p.WeaponID = weapon.ID
+	p.Speed = numeric.FixedFromInt(1)
+	p.Velocity = Vec3{X: numeric.FixedFromInt(3)}
+	p.TargetPos = Vec3{X: numeric.FixedFromInt(-100)}
+	p.Yaw = 16384
+	p.ExpiryTick = 10
+	if desired := YawFromDelta(p.TargetPos.X, p.TargetPos.Z); absU16(uint16(int16(desired-p.Yaw))) <= 27000 {
+		t.Fatalf("fixture target yaw %d does not take the established burn-blow steering-failure branch", desired)
+	}
+	oldVelocity := p.Velocity
+	seenVelocity := Vec3{}
+	svc.Events = func(ev Event) {
+		if ev.Kind == EventProjectileImpact {
+			seenVelocity = svc.Records[int(h)-1].Velocity
+		}
+	}
+
+	svc.TickProjectiles(1, nil, nil, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+	if seenVelocity != oldVelocity {
+		t.Fatalf("central impact saw velocity %v, want inherited pre-rebuild %v", seenVelocity, oldVelocity)
+	}
+	if svc.Records[0].Velocity == oldVelocity || svc.Records[0].Pos == (Vec3{}) {
+		t.Fatalf("steering failure did not rebuild then move: velocity=%v position=%v", svc.Records[0].Velocity, svc.Records[0].Pos)
 	}
 }

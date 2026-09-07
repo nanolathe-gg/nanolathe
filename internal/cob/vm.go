@@ -80,16 +80,17 @@ type VM struct {
 	Threads [8]Thread
 	Pieces  []model.PieceState // len == len(Program.Pieces) [04 §4.1]
 
-	prog        *Program
-	statics     []int32
-	anims       []pieceAnim // per-piece per-axis animation state [04 §4.6]
-	pieceBusy   []bool      // per-piece animation dirty/busy reduction [04 §4.6]
-	pieceFlags  []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3] — fallback for fixture VMs; production flags live on units.Unit.RenderPieceFlags [04 §"Piece flag polarity"]
-	simRng      *rng.Simulation
-	portFuncs   map[Port]func(args []int32) int32   // minimal hook for WU-06-7; nil means default 0 [04 §4.4]
-	sfxSink     SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
-	sfxVisible  func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
-	diagnostics []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
+	prog         *Program
+	statics      []int32
+	anims        []pieceAnim // per-piece per-axis animation state [04 §4.6]
+	pieceBusy    []bool      // per-piece animation dirty/busy reduction [04 §4.6]
+	pieceFlags   []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3] — fallback for fixture VMs; production flags live on units.Unit.RenderPieceFlags [04 §"Piece flag polarity"]
+	simRng       *rng.Simulation
+	portFuncs    map[Port]func(args []int32) int32   // legacy combined hook; nil means default 0 [04 §4.4]
+	portBindings map[Port]PortBinding                // explicit read/write hooks [04 R-COB-03 §1]
+	sfxSink      SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
+	sfxVisible   func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
+	diagnostics  []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
 
 	// The two transport query opcodes read the owning unit's cargo linkage
 	// [04 §4.4][04 R-COB-03 §5]. They are not engine ports and carry no port
@@ -208,6 +209,15 @@ type axisAnim struct {
 	spinTarget int32
 	spinAccel  int32
 	spinActive bool
+}
+
+// PortBinding keeps a port read distinct from its write arm. Both engine-read
+// opcodes pass exactly four authored argument cells to Read; only the engine
+// write opcode calls Write. This prevents the read's zero fillers from being
+// mistaken for a write value [04 R-COB-03 §1][04 R-COB-03 §4].
+type PortBinding struct {
+	Read  func(args [4]int32) int32
+	Write func(value int32)
 }
 
 // dispatchKeys holds the 57 dispatched values sorted ascending [04 §4.3] C11.
@@ -428,6 +438,41 @@ func (v *VM) BindPort(p Port, fn func(args []int32) int32) {
 		v.portFuncs = make(map[Port]func(args []int32) int32)
 	}
 	v.portFuncs[p] = fn
+}
+
+// BindPortBinding registers an explicit engine-port read/write pair. It takes
+// precedence over the legacy BindPort hook; BindPort remains for existing
+// query-only adapters and test seams.
+func (v *VM) BindPortBinding(p Port, binding PortBinding) {
+	if v == nil {
+		return
+	}
+	if v.portBindings == nil {
+		v.portBindings = make(map[Port]PortBinding)
+	}
+	v.portBindings[p] = binding
+}
+
+func (v *VM) readPort(id int32, args [4]int32) int32 {
+	if binding, ok := v.portBindings[Port(id)]; ok && binding.Read != nil {
+		return binding.Read(args)
+	}
+	if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
+		return fn([]int32{id, args[0], args[1], args[2], args[3]})
+	}
+	return v.readPortDefault(id, args[:])
+}
+
+func (v *VM) writePort(id, value int32) {
+	if binding, ok := v.portBindings[Port(id)]; ok && binding.Write != nil {
+		binding.Write(value)
+		return
+	}
+	if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
+		_ = fn([]int32{id, value})
+		return
+	}
+	v.writePortDefault(id, value)
 }
 
 // BindScriptTouched attaches the owning unit's script-touched marker raise
@@ -1138,38 +1183,38 @@ func (v *VM) interpolate(delta int) {
 				if anim.moveSpeed == 0 {
 					// Zero per-tick step: no motion, clear busy so wait wakes; dirty still implied for one tick via the issuing handler [04 §4.6].
 					anim.moveBusy = false
-					continue
-				}
-				cur := int64(v.Pieces[p].Trans[axis].Raw())  // [03 §2.4] C21
-				target := int64(anim.moveTarget)             // compiled [fmt cob]
-				step := int64(anim.moveSpeed) * int64(delta) // already perTick = trunc(raw/30) [04 §4.6]
-				diff := target - cur
-				if diff == 0 {
-					anim.moveBusy = false
-					anim.moveSpeed = 0
-					continue
-				}
-				var mag int64
-				if step < 0 {
-					mag = -step
 				} else {
-					mag = step
-				}
-				if diff > 0 {
-					if diff <= mag {
-						v.Pieces[p].SetTrans(axis, fixedFromRaw(target)) // snap on inclusive arrival [04 §4.6]
+					cur := int64(v.Pieces[p].Trans[axis].Raw())  // [03 §2.4] C21
+					target := int64(anim.moveTarget)             // compiled [fmt cob]
+					step := int64(anim.moveSpeed) * int64(delta) // already perTick = trunc(raw/30) [04 §4.6]
+					diff := target - cur
+					if diff == 0 {
 						anim.moveBusy = false
 						anim.moveSpeed = 0
 					} else {
-						v.Pieces[p].SetTrans(axis, fixedFromRaw(cur+mag))
-					}
-				} else {
-					if -diff <= mag {
-						v.Pieces[p].SetTrans(axis, fixedFromRaw(target))
-						anim.moveBusy = false
-						anim.moveSpeed = 0
-					} else {
-						v.Pieces[p].SetTrans(axis, fixedFromRaw(cur-mag))
+						var mag int64
+						if step < 0 {
+							mag = -step
+						} else {
+							mag = step
+						}
+						if diff > 0 {
+							if diff <= mag {
+								v.Pieces[p].SetTrans(axis, fixedFromRaw(target)) // snap on inclusive arrival [04 §4.6]
+								anim.moveBusy = false
+								anim.moveSpeed = 0
+							} else {
+								v.Pieces[p].SetTrans(axis, fixedFromRaw(cur+mag))
+							}
+						} else {
+							if -diff <= mag {
+								v.Pieces[p].SetTrans(axis, fixedFromRaw(target))
+								anim.moveBusy = false
+								anim.moveSpeed = 0
+							} else {
+								v.Pieces[p].SetTrans(axis, fixedFromRaw(cur-mag))
+							}
+						}
 					}
 				}
 			}
@@ -1177,40 +1222,17 @@ func (v *VM) interpolate(delta int) {
 			// third [04 §4.6], with inclusive clamping on reaching or crossing
 			// the target.
 			if anim.spinActive {
-				// Spin speed converges on its target by the acceleration magnitude and clamps on reaching or crossing it [04 §4.6].
-				// Acceleration sign is not direction of travel — direction is whichever way target lies; inclusive snap.
-				if anim.spinSpeed != anim.spinTarget {
-					// Acceleration was already divided by the tick denominator when the spin was issued (accel/30, truncated) [04 §4.6].
-					accStep := int64(anim.spinAccel)
-					if accStep < 0 {
-						accStep = -accStep
-					}
-					step := accStep * int64(delta)
-					if step == 0 {
-						anim.spinSpeed = anim.spinTarget // sub-tick immediate: a zero per-tick acceleration snaps straight to the target [04 §4.6]
-						// The acceleration word is cleared once the target is
-						// reached, whether by this immediate snap or by the
-						// inclusive clamp below [04 §4.6].
+				// The signed acceleration is added directly. Its sign selects the
+				// inclusive clamp direction; it is not an approach magnitude [04 §4.6].
+				if anim.spinAccel != 0 {
+					// Ramp adds one signed stored-word acceleration per pass. The
+					// word narrows before its signed inclusive clamp [04 §4.6].
+					next := anim.spinSpeed + anim.spinAccel
+					if (anim.spinAccel < 0 && next <= anim.spinTarget) || (anim.spinAccel > 0 && next >= anim.spinTarget) {
+						anim.spinSpeed = anim.spinTarget
 						anim.spinAccel = 0
 					} else {
-						cur := int64(anim.spinSpeed)
-						tgt := int64(anim.spinTarget)
-						if diff := tgt - cur; diff > 0 {
-							if diff <= step {
-								cur = tgt // clamp inclusive on reaching or crossing [04 §4.6]
-								anim.spinAccel = 0
-							} else {
-								cur += step
-							}
-						} else {
-							if -diff <= step {
-								cur = tgt
-								anim.spinAccel = 0
-							} else {
-								cur -= step
-							}
-						}
-						anim.spinSpeed = int32(cur)
+						anim.spinSpeed = next
 					}
 				}
 				// The angle increment is already perTick * delta [04 §4.6]; a per-tick speed truncating to zero still leaves the piece dirty for one tick, and a wait wakes immediately [04 §4.6].
@@ -1226,44 +1248,37 @@ func (v *VM) interpolate(delta int) {
 				// Turn uses the already-divided per-tick speed [04 §4.6]; a shortest-arc tie at exactly the half-circle boundary keeps the script's sign rather than flipping it [04 §4.6].
 				if anim.turnSpeed == 0 {
 					anim.turnBusy = false
-					continue // zero per-tick keeps busy false so a wait wakes immediately [04 §4.6]
-				}
-				cur := v.Pieces[p].GetAngle(axis) // [03 §2.4] C21 uint16
-				target := anim.turnTarget
-				if cur == target {
-					anim.turnBusy = false
-					anim.turnSpeed = 0
-					continue
-				}
-				step := int64(anim.turnSpeed) * int64(delta) // already perTick [04 §4.6]
-				var mag int64
-				if step < 0 {
-					mag = -step
 				} else {
-					mag = step
-				}
-				// Turn chooses direction by shortest arc: the signed 16-bit
-				// wrapped difference, sign-extended [04 §4.6].
-				diff := int64(int16(target - cur)) // -32768..32767
-				if diff == 0 {
-					anim.turnBusy = false
-					anim.turnSpeed = 0
-					continue
-				}
-				var diffAbs int64
-				if diff < 0 {
-					diffAbs = -diff
-				} else {
-					diffAbs = diff
-				}
-				if diffAbs <= mag {
-					v.Pieces[p].SetAngle(axis, target) // snap on inclusive arrival [04 §4.6]
-					anim.turnBusy = false
-					anim.turnSpeed = 0
-				} else if diff > 0 {
-					v.Pieces[p].SetAngle(axis, uint16(int64(cur)+mag))
-				} else {
-					v.Pieces[p].SetAngle(axis, uint16(int64(cur)-mag))
+					cur := v.Pieces[p].GetAngle(axis) // [03 §2.4] C21 uint16
+					target := anim.turnTarget
+					if cur == target {
+						anim.turnBusy = false
+						anim.turnSpeed = 0
+					} else {
+						step := int64(anim.turnSpeed) * int64(delta) // already perTick [04 §4.6]
+						mag := step
+						if mag < 0 {
+							mag = -mag
+						}
+						// The issued signed step selects the arc. In particular, a
+						// 0x8000 tie retains script direction instead of becoming the
+						// negative int16 difference [04 §4.6].
+						var remaining int64
+						if anim.turnSpeed > 0 {
+							remaining = int64(uint16(target - cur))
+						} else {
+							remaining = int64(uint16(cur - target))
+						}
+						if remaining <= mag {
+							v.Pieces[p].SetAngle(axis, target) // snap on inclusive arrival [04 §4.6]
+							anim.turnBusy = false
+							anim.turnSpeed = 0
+						} else if anim.turnSpeed > 0 {
+							v.Pieces[p].SetAngle(axis, uint16(int64(cur)+mag))
+						} else {
+							v.Pieces[p].SetAngle(axis, uint16(int64(cur)-mag))
+						}
+					}
 				}
 			}
 		}
@@ -1350,7 +1365,6 @@ func (v *VM) runThread(idx int) {
 			anim.moveSpeed = perTick     // the axis's move-speed word [04 §4.6]
 			anim.moveBusy = perTick != 0 // a per-tick speed truncating to zero wakes a wait immediately [04 §4.6]
 			v.markAnimationDirty(piece)  // move dirties the piece and global flag, including zero-speed issue [04 §4.6]
-			anim.spinActive = false      // move cancels spin on same axis? Last writer wins [03 §2.4] C22
 			t.PC += 3
 		case 0x10002000: // turn [04 §4.3][04 §4.6], per-tick arithmetic and shortest-arc sign
 			if t.PC+2 >= len(v.prog.Code) {
@@ -1372,17 +1386,17 @@ func (v *VM) runThread(idx int) {
 			// perTick = trunc(speedRaw/30), then the shortest-arc sign choice below [04 §4.6].
 			perTick := int32(int64(speed) / int64(v.tickDenom)) // latched denominator [04 §4.6]; trunc toward zero per I3.
 			curAng := v.Pieces[piece].GetAngle(axis)            // [03 §2.4] C21 via GetAng
-			// Raw difference as signed 32 of uint16 values (0..65535) before wrap; a strict abs > half-circle flips the sign for the shortest arc [04 §4.6].
+			// The signed raw target delta and strict half-circle comparison select
+			// the issued direction [04 §4.6].
 			delta := int64(tgt) - int64(curAng) // -65535..65535, not int16-wrapped; >0x8000 triggers shortest-arc flip
 			if delta == 0 {
 				perTick = 0
 			} else {
-				// The strict > half-circle test keeps the script's sign on an exact-opposite tie rather than flipping it [04 §4.6].
 				absDelta := delta
 				if absDelta < 0 {
 					absDelta = -absDelta
 				}
-				if absDelta > 0x8000 {
+				if (absDelta > 0x8000) != (delta < 0) {
 					perTick = -perTick
 				}
 			}
@@ -1536,15 +1550,11 @@ func (v *VM) runThread(idx int) {
 			if piece < len(v.anims) {
 				anim := &v.anims[piece].axes[axis]
 				anim.moveTarget = target // the axis's move-target word [04 §4.6]
-				// Zeroes the move-speed, turn-speed and spin-acceleration
-				// busy words and commits immediately via the model
-				// adapter's set-position; does NOT set dirty [04 §4.6].
+				// Move-now owns only translation: it clears the move-speed word
+				// and commits via the model adapter without setting dirty. The
+				// turn and spin lanes remain live [04 §4.6].
 				anim.moveBusy = false
 				anim.moveSpeed = 0
-				anim.turnBusy = false
-				anim.turnSpeed = 0
-				anim.spinAccel = 0
-				anim.spinActive = false
 			}
 			t.PC += 3
 		case 0x1000c000: // turn-now [04 §4.3][04 §4.6], immediate commit
@@ -1813,22 +1823,8 @@ func (v *VM) runThread(idx int) {
 			// reader sees the identifier followed by four zeros — the same
 			// shape the five-argument form builds.
 			//
-			// We pass the identifier alone, deliberately. The port-handler
-			// convention in internal/units uses the argument COUNT to tell a
-			// read from a write on the dual-purpose ports (1 activation, 18
-			// yard state): two or more elements means "write args[1]", one
-			// means "read". Zero-filling to five here turns every read of those
-			// ports into a write of zero. Making the shape exact requires the
-			// binding contract to carry read-versus-write explicitly first;
-			// until then the observable answer is identical, because no port
-			// handler reads an argument slot the authored script did not push.
 			id, _ := t.stackPop()
-			var out int32
-			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
-				out = fn([]int32{id})
-			} else {
-				out = v.readPortDefault(id, []int32{id})
-			}
+			out := v.readPort(id, [4]int32{})
 			if t.SP >= 10 {
 				v.killThread(idx)
 				return
@@ -1843,13 +1839,7 @@ func (v *VM) runThread(idx int) {
 				vals[4-i] = vv // reverse to push order: first popped is last pushed (top)
 			}
 			// vals[0] is id (first pushed), vals[1..4] are args
-			var out int32
-			// Port id is vals[0]
-			if fn, ok := v.portFuncs[Port(vals[0])]; ok && fn != nil {
-				out = fn(vals)
-			} else {
-				out = v.readPortDefault(vals[0], vals)
-			}
+			out := v.readPort(vals[0], [4]int32{vals[1], vals[2], vals[3], vals[4]})
 			if t.SP >= 10 {
 				v.killThread(idx)
 				return
@@ -2213,6 +2203,13 @@ func (v *VM) runThread(idx int) {
 			// by the sixth — and the dead draw is still made [04 §4.5][R-COB-01 §2].
 			// No opcode execution may touch the CRT stream [R-COB-01 §2].
 			if flags&0x20 == 0 {
+				piece := int(v.prog.Code[t.PC+1])
+				// A physical spawner hides its source before any allocation;
+				// bitmap-only leaves it visible [04 R-COB-04 §1].
+				if !v.setRenderFlag(piece, 0x01, false) {
+					v.killThread(idx)
+					return
+				}
 				v.simRandN(3000)
 				v.simRandN(3000)
 				v.simRandN(3000)
@@ -2248,11 +2245,7 @@ func (v *VM) runThread(idx int) {
 			// pump merging `u.Pending` is its one consumer [04 §3.3].
 			v.raiseScriptTouched()
 			// If id has no write arm only sets script-touched marker [04 §4.4]; we treat as no-op beyond hook.
-			if fn, ok := v.portFuncs[Port(id)]; ok && fn != nil {
-				_ = fn([]int32{id, val})
-			} else {
-				v.writePortDefault(id, val)
-			}
+			v.writePort(id, val)
 			t.PC += 1
 		case 0x10083000: // attach-unit [04 §4.3]
 			extra, _ := t.stackPop()

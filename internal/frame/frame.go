@@ -162,16 +162,27 @@ type UnitView struct {
 // [06 §5.1].  Projectile allocation and lifetime authority remains in the
 // simulation pool; this value is only a read-only draw input.
 type ProjectileView struct {
-	PresentationID            uint64
-	Handle                    pool.Handle
-	Owner                     uint8
-	OwnerKnown                bool
-	X, Y, Z                   numeric.Fixed
-	WeaponID                  int32
-	Shooter                   pool.Handle
-	Model                     string
-	Yaw                       uint16 // retail's yaw word, (-sin a, -cos a) names the direction [06 R-WPN-05 §11]
-	Pitch                     uint16
+	PresentationID uint64
+	Handle         pool.Handle
+	Owner          uint8
+	OwnerKnown     bool
+	X, Y, Z        numeric.Fixed
+	WeaponID       int32
+	Shooter        pool.Handle
+	Model          string
+	Yaw            uint16 // retail's yaw word, (-sin a, -cos a) names the direction [06 R-WPN-05 §11]
+	Pitch          uint16
+	// Roll is the first word of the model-projectile orientation block.  It is
+	// separate from yaw and pitch because meteors maintain it independently
+	// from their other orientation accumulator [06 §6.5][03 §5.2].
+	Roll uint16
+	// MeteorPitch is the meteor family's independently maintained pitch word;
+	// ordinary projectile pitch continues to use Pitch [06 §6.5].
+	MeteorPitch uint16
+	// Propeller identifies the authored child-roll substitution.  The renderer
+	// uses Roll for that child only while the expiry deadline is ahead [06 §6.1]
+	// [06 R-WFX-01 §4].
+	Propeller                 bool
 	Flags                     uint32
 	Family                    int32
 	RenderType                int32

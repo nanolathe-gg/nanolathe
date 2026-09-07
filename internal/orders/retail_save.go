@@ -12,6 +12,13 @@ import (
 // RetailStableID resolves live unit handles to save-stable logical IDs.
 type RetailStableID func(pool.Handle) (uint16, bool)
 
+// RetailTargetLive reports whether a main-order target still names a live
+// unit at save time. A nil callback preserves the strict detached-writer
+// behavior: every nonzero target must resolve through RetailStableID. Session
+// projection supplies its live unit table so a stale target serializes as the
+// established wire null [08 R-SAVE-ORDER-01].
+type RetailTargetLive func(pool.Handle) bool
+
 // RetailOrderImage is a detached writer view. The session save assembler owns
 // box naming and catalog type-name de-duplication [08 R-SAVE-ORDER-01].
 type RetailOrderImage struct {
@@ -28,7 +35,7 @@ type RetailOrderImage struct {
 // RetailOrderImages walks the primary segment then the secondary segment,
 // preserving traversal order and continuing sequence numbers across both
 // [08 R-SAVE-02 §6; R-SAVE-ORDER-01].
-func RetailOrderImages(u *units.Unit, stableID RetailStableID) ([]RetailOrderImage, error) {
+func RetailOrderImages(u *units.Unit, stableID RetailStableID, targetLive ...RetailTargetLive) ([]RetailOrderImage, error) {
 	if u == nil {
 		return nil, fmt.Errorf("orders: retail save: nil owner")
 	}
@@ -50,7 +57,7 @@ func RetailOrderImages(u *units.Unit, stableID RetailStableID) ([]RetailOrderIma
 			if len(out) == int(^uint32(0)) {
 				return fmt.Errorf("orders: retail save: owner %d queue exceeds sequence range", ownerID)
 			}
-			image, err := retailOrderImage(n, ownerID, uint32(len(out)), rear, stableID)
+			image, err := retailOrderImage(n, ownerID, uint32(len(out)), rear, stableID, firstRetailTargetLive(targetLive))
 			if err != nil {
 				return err
 			}
@@ -67,7 +74,14 @@ func RetailOrderImages(u *units.Unit, stableID RetailStableID) ([]RetailOrderIma
 	return out, nil
 }
 
-func retailOrderImage(n *Node, ownerID uint16, sequence uint32, rear bool, stableID RetailStableID) (RetailOrderImage, error) {
+func firstRetailTargetLive(live []RetailTargetLive) RetailTargetLive {
+	if len(live) == 0 {
+		return nil
+	}
+	return live[0]
+}
+
+func retailOrderImage(n *Node, ownerID uint16, sequence uint32, rear bool, stableID RetailStableID, targetLive RetailTargetLive) (RetailOrderImage, error) {
 	resolvedOwner, err := retailStableID(stableID, n.Owner, "node owner")
 	if err != nil {
 		return RetailOrderImage{}, err
@@ -75,7 +89,7 @@ func retailOrderImage(n *Node, ownerID uint16, sequence uint32, rear bool, stabl
 	if resolvedOwner != ownerID {
 		return RetailOrderImage{}, fmt.Errorf("orders: retail save: node owner %d does not match queue owner %d", resolvedOwner, ownerID)
 	}
-	targetID, err := optionalRetailStableID(stableID, n.Target, "node target")
+	targetID, err := mainOrderTargetStableID(stableID, n.Target, targetLive)
 	if err != nil {
 		return RetailOrderImage{}, err
 	}
@@ -178,6 +192,17 @@ func optionalRetailStableID(resolve RetailStableID, h pool.Handle, kind string) 
 		return 0, nil
 	}
 	return retailStableID(resolve, h, kind)
+}
+
+// mainOrderTargetStableID is intentionally narrower than optionalRetailStableID:
+// the main record's link writes zero for a null or dead target, while subtype
+// reference writers retain their independently traced stable-ID requirements
+// [08 R-SAVE-ORDER-01].
+func mainOrderTargetStableID(resolve RetailStableID, h pool.Handle, live RetailTargetLive) (uint16, error) {
+	if h == 0 || (live != nil && !live(h)) {
+		return 0, nil
+	}
+	return retailStableID(resolve, h, "node target")
 }
 
 func putOrderI32(dst []byte, value int32) { binary.LittleEndian.PutUint32(dst, uint32(value)) }

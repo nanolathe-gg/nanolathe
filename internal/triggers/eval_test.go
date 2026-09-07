@@ -123,13 +123,19 @@ func TestKillUnitTypeOwnerGate(t *testing.T) {
 func TestDefaultTriggersResolve(t *testing.T) {
 	w := triggerWorld(t)
 	vic, def := EnsureDefaults(nil, nil)
+	celebrations := 0
+	c := pollCtx(w, 0)
+	c.Celebrate = func() { celebrations++ }
 
 	// DestroyAllUnits reads slot 1's live-unit counter [08 R-TRIG-01 §4].
-	vDone, dDone := Evaluate(vic, def, pollCtx(w, 0))
+	vDone, dDone := Evaluate(vic, def, c)
 	if !vDone {
 		t.Fatal("the default victory condition never resolves")
 	}
 	_ = dDone
+	if vDone, _ = Evaluate(vic, def, c); !vDone || celebrations != 1 || !vic[0].Celebrated {
+		t.Fatalf("persistent default cue state = trigger=%+v cues=%d", vic[0], celebrations)
+	}
 
 	// The default defeat condition resolves when the local player is wiped out.
 	_, def2 := EnsureDefaults(nil, nil)
@@ -145,6 +151,22 @@ func TestDefaultTriggersResolve(t *testing.T) {
 	}
 	if _, d := Evaluate(blockingVictory, def2, pollCtx(w, 0)); !d {
 		t.Fatal("all-units-killed did not fire with no local units left")
+	}
+}
+
+func TestEvaluateOwnedInstallsPersistentDefaults(t *testing.T) {
+	victory, defeat := []*Trigger(nil), []*Trigger(nil)
+	c := pollCtx(triggerWorld(t), 0)
+	celebrations := 0
+	c.Celebrate = func() { celebrations++ }
+	if v, d := EvaluateOwned(&victory, &defeat, c); !v || d {
+		t.Fatalf("owned defaults returned victory=%v defeat=%v", v, d)
+	}
+	if len(victory) != 1 || len(defeat) != 1 || !victory[0].Celebrated || celebrations != 1 {
+		t.Fatalf("owned defaults were not retained: victory=%+v defeat=%+v cues=%d", victory, defeat, celebrations)
+	}
+	if v, _ := EvaluateOwned(&victory, &defeat, c); !v || celebrations != 1 {
+		t.Fatalf("persistent default repeated cue: victory=%+v cues=%d", victory, celebrations)
 	}
 }
 
@@ -354,9 +376,13 @@ func TestEvaluateCombination(t *testing.T) {
 	if _, d := Evaluate(vic, def, c); !d {
 		t.Fatal("defeat OR did not fire with one member complete")
 	}
-	// An empty victory queue injects DestroyAllUnits at poll time.
-	if v, _ := Evaluate(nil, def, c); !v {
-		t.Fatal("the poll-time default victory was not injected")
+	// Evaluate is the detached compatibility API. Its empty slice gets a
+	// temporary default record, rather than retaining the empty-AND identity;
+	// EvaluateOwned is the production path that persists that record.
+	spawn(t, w, "enemy", 1, 0, 0)
+	blockingDefeat := []*Trigger{NewTimer(KindDeathTimerRunsOut, 1)}
+	if v, d := Evaluate(nil, blockingDefeat, c); v || d {
+		t.Fatalf("detached default polling returned victory=%v defeat=%v with a live enemy", v, d)
 	}
 }
 

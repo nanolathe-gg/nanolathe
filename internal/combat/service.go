@@ -2026,6 +2026,12 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			s.MarkDead(h)
 			continue
 		}
+		// The authored propeller advance is common record entry work: it runs
+		// before the selected family tests expiry or motion [06 §6.1][06 §7.1].
+		// Meteor's separate velocity-derived accumulator remains in its family.
+		if weapon.Propeller {
+			p.PropellerYaw = p.PropellerYaw.Add(1024)
+		}
 		// [06 §5.1] has no top-of-visit dead filter. A record retired earlier
 		// in this tick still takes its ordinary branch before tail compaction.
 		preMotionY := int16(p.Pos.Y.Raw() >> 16)
@@ -2059,24 +2065,34 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			continue
 		}
 		if res == AdvanceImpact {
-			var direct pool.Handle
-			if terrain != nil {
-				cx, cz := world.WorldToCell(p.Pos.X), world.WorldToCell(p.Pos.Z)
-				direct = contactUnitInCell(p, w, terrain, cx, cz)
-			}
-			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, direct)
+			// Motion-triggered impact has no direct unit. A direct recipient is
+			// supplied only by the ordinary unit-contact ladder [06 §9.1].
+			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, 0)
 			continue
 		}
-		if res == AdvancePhaseTransition {
-			continue
+		if res == AdvanceImpactThenContinue {
+			// Self-propelled burn-blow expiry impacts before its existing
+			// velocity continues through motion and collision [06 §6.6].
+			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, 0)
+			ContinueSelfPropImpactMotion(p)
 		}
+		if res == AdvanceImpactThenRebuildSelfProp {
+			// Steering failure impacts before rebuilding velocity; motion and
+			// collision still run in this visit [06 §6.7].
+			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, 0)
+			p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
+			ContinueSelfPropImpactMotion(p)
+		}
+		// A first two-phase expiry transition has already applied gravity and
+		// position in AdvanceSelfProp; it still falls through to collision and
+		// the common live-record tail [06 §6.6][06 §7.1].
 		// The linked-projectile test is the first contact-ladder operation.
 		// Its impact may retire records and append effects, so run it before
 		// inspecting the cell contacts that follow [06 §8.1][06 §11.2].
 		if projectileProximityContact(s, p, weapon) {
 			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, 0)
 		}
-		hitUnit, hitFeature, isWaterTerrain, isOffMap, terrainContact, _ := checkCollision(p, weapon, w, terrain, featSvc)
+		hitUnit, hitFeature, isWaterTerrain, isOffMap, terrainContact, _ := checkCollision(p, weapon, w, terrain, featSvc, s.OpaqueLiquidMode)
 		if isOffMap {
 			s.MarkDead(h)
 			continue
@@ -2092,10 +2108,8 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 			needImpact = true
 		} else if terrainContact {
 			needImpact = true
-		} else {
 		}
 		if needImpact {
-			_ = isWaterTerrain // central impact classifies the contacted cell.
 			impactProjectile(s, h, p, weapon, w, terrain, featSvc, econ, catalog, tick, windVec, simRNG, directTarget)
 		}
 		// Trail puffs: the smoke-trail flag plus smoke delay, ALIVE records
@@ -2112,8 +2126,6 @@ func (s *Service) TickProjectiles(tick uint32, w *units.World, terrain *world.Te
 		if !s.Slots.IsDead(h) {
 			emitWaterCrossing(s, h, p, weapon, terrain, tick, preMotionY)
 		}
-		_ = directTarget
-		_ = hitFeature
 	}
 	s.Compact(nil)
 }
@@ -2128,7 +2140,7 @@ func projectileProximityContact(s *Service, p *Projectile, weapon *content.Weapo
 	return idx >= 0 && idx < len(s.Records) && ProjectileInInterceptorBlast(p.Pos, s.Records[idx].Pos, weapon.AreaOfEffect)
 }
 
-func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, terrainContact bool, bounce bool) {
+func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, terrain *world.Terrain, featSvc *features.Service, opaqueLiquid bool) (hitUnit pool.Handle, hitFeature *features.Instance, isWaterTerrain bool, isOffMap bool, terrainContact bool, bounce bool) {
 	if terrain != nil {
 		cx := world.WorldToCell(p.Pos.X)
 		cz := world.WorldToCell(p.Pos.Z)
@@ -2208,6 +2220,12 @@ func checkCollision(p *Projectile, weapon *content.WeaponDef, w *units.World, te
 		sea := int16(terrain.SeaLevel)
 		if int16(p.Pos.Y.Raw()>>16) < sea {
 			if weapon != nil && !weapon.WaterWeapon {
+				// Opaque liquid mode ends the ladder here. This is distinct from
+				// central impact's water retirement: a direct unit was already
+				// returned above and is still allowed to impact [06 §8.2].
+				if opaqueLiquid {
+					return
+				}
 				isWaterTerrain = true
 				return
 			}

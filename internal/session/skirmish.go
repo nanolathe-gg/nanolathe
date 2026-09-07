@@ -769,7 +769,7 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		if cfg.Players[i].IsObserver() {
 			continue
 		}
-		if err := initializeBattleAI(s, uint8(i), sharedProf); err != nil {
+		if err := initializeBattleAI(s, uint8(i), sharedProf, sessionKindSkirmish); err != nil {
 			return nil, err
 		}
 	}

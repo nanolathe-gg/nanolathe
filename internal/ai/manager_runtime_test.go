@@ -688,6 +688,126 @@ func TestRallyRequiresExplicitBattleBindings(t *testing.T) {
 	}
 }
 
+func TestEmptyRallyGroupConsumesNoBodyDraws(t *testing.T) {
+	w := newAIFixtureWorld(2, nil)
+	terrain := &world.Terrain{CellW: 16, CellH: 12}
+	r := rng.NewSimulation(27)
+	m := &Manager{Player: 1, RNG: &r}
+	if !m.InitializeBattleState(terrain, RallyBattleBindings{
+		ProbeKnown: func(uint8, numeric.Fixed, numeric.Fixed, numeric.Fixed) bool { return true },
+	}) {
+		t.Fatal("empty rally manager did not accept battle bindings")
+	}
+	m.doRally(2, w, nil)
+	if got := r.Draws(); got != 0 {
+		t.Fatalf("empty rally group consumed %d body draws", got)
+	}
+}
+
+// TestRestoredRallyGroupUsesKnowledgeBeforeSubmittingOrders exercises the
+// category-nine save reader through the rally task. Category nine has no
+// classifier producer: restored pool order is therefore the submission order
+// [08 R-AI-01 §7][08 R-SAVE-02 §6].
+func TestRestoredRallyGroupUsesKnowledgeBeforeSubmittingOrders(t *testing.T) {
+	seed := uint32(1)
+	for {
+		probe := rng.NewSimulation(seed)
+		if probe.Uint32n(10) != 0 && probe.Uint32n(17) < probe.Uint32n(23) {
+			break
+		}
+		seed++
+	}
+
+	for _, tt := range []struct {
+		name       string
+		known      bool
+		wantDraws  uint64
+		adoptsBest bool
+	}{
+		{name: "known cell", known: true, wantDraws: 3, adoptsBest: true},
+		{name: "unknown cell", known: false, wantDraws: 1, adoptsBest: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "attacker"}, UnitName: "attacker", CanAttack: true, CanMove: true, BMCode: true, MaxDamage: 100}
+			cat := &content.Catalog{Units: map[string]*content.UnitDef{"attacker": def}}
+			w := newAIFixtureWorld(8, cat)
+			first, err := w.Create(def, 0, 0, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := w.Create(def, 0, numeric.FixedFromInt(8), 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			probeX, probeZ := numeric.FixedFromInt(96), numeric.FixedFromInt(80)
+			target, err := w.Create(def, 1, probeX, 0, probeZ)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.Unit(first).RestoredAIGroup = 9
+			w.Unit(second).RestoredAIGroup = 9
+			w.Unit(first).Flags |= units.ArmedStatus
+			w.Unit(second).Flags |= units.ArmedStatus
+
+			sim := rng.NewSimulation(seed)
+			m := &Manager{Player: 0, RNG: &sim}
+			m.RestoreGroupsFromUnits(w)
+			if got, want := m.GroupRally, []pool.Handle{first, second}; !sameHandles(got, want) {
+				t.Fatalf("restored rally vector=%v, want pool order %v", got, want)
+			}
+			if !m.InitializeBattleState(&world.Terrain{CellW: 32, CellH: 24}, RallyBattleBindings{
+				ProbeKnown: func(owner uint8, x, _ numeric.Fixed, z numeric.Fixed) bool {
+					if owner != 0 || x != probeX || z != probeZ {
+						t.Fatalf("probe owner/point=%d/(%d,%d), want 0/(%d,%d)", owner, x, z, probeX, probeZ)
+					}
+					return tt.known
+				},
+			}) {
+				t.Fatal("restored rally manager did not initialize")
+			}
+			incumbentX, incumbentZ := numeric.FixedFromInt(32), numeric.FixedFromInt(48)
+			m.rallyBestX, m.rallyBestZ = incumbentX, incumbentZ
+			m.rallyProbeX, m.rallyProbeZ = probeX, probeZ
+			m.rallyDriftX, m.rallyDriftY, m.rallyDriftZ = 0, 0, 0
+			m.rallyBestScore = 17
+			m.rallyTargets = []pool.Handle{target}
+			m.Strategic.SingleVectors = map[string]int8{"attacker": 23}
+
+			m.doRally(77, w, nil)
+			if got := sim.Draws(); got != tt.wantDraws {
+				t.Fatalf("%s score-draw ledger=%d, want %d", tt.name, got, tt.wantDraws)
+			}
+			wantRNG := rng.NewSimulation(seed)
+			wantRNG.Uint32n(10)
+			if tt.known {
+				wantRNG.Uint32n(17)
+				wantRNG.Uint32n(23)
+			}
+			if sim.State != wantRNG.State {
+				t.Fatalf("%s score-draw state=%d, want %d", tt.name, sim.State, wantRNG.State)
+			}
+			wantX, wantZ := incumbentX, incumbentZ
+			if tt.adoptsBest {
+				wantX, wantZ = probeX, probeZ
+			}
+			wantScore := int32(17)
+			if tt.adoptsBest {
+				wantScore = 23
+			}
+			if m.rallyBestX != wantX || m.rallyBestZ != wantZ || m.rallyBestScore != wantScore {
+				t.Fatalf("%s rally best=(%d,%d,%d), want (%d,%d,%d)", tt.name, m.rallyBestX, m.rallyBestZ, m.rallyBestScore, wantX, wantZ, wantScore)
+			}
+			for i, h := range []pool.Handle{first, second} {
+				q := orders.QueueOfUnit(w.Unit(h))
+				nodes := q.Primary()
+				if len(nodes) != 1 || nodes[0].Owner != h || nodes[0].GoalX != wantX || nodes[0].GoalZ != wantZ {
+					t.Fatalf("submission %d for restored member %d = %v, want one ordered rally node at (%d,%d)", i, h, nodes, wantX, wantZ)
+				}
+			}
+		})
+	}
+}
+
 func TestWaveAndExploreNoTargetPathsAreDeterministicNoOps(t *testing.T) {
 	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "scout"}, UnitName: "scout", CanMove: true, CanPatrol: true, CanAttack: true, MaxDamage: 100}
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{"scout": def}}

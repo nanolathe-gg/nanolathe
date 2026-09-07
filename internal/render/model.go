@@ -133,18 +133,15 @@ func FoldProjectileAngles(st []model.PieceState, root int, yaw, pitch uint16) { 
 // (strict). The parent model is drawn first, from the unsubstituted block, so a
 // propeller weapon's body does not spin — only its propeller piece does. The
 // angle itself advances a fixed 1,024 units per tick in the simulation
-// [06 §6.2]; nothing in the draw path advances it.
+// [06 §6.1][06 §7.1]; nothing in the draw path advances it.
 //
 // The accumulate-rather-than-assign form matches `FoldProjectileAngles`: retail
 // builds the block fresh each draw, and the presentation copy this folds into
 // starts from the model's authored piece state.
 //
-// Not yet reachable: the client's projectile model draw folds yaw and pitch
-// only — it never applies the roll word and never draws the model's child
-// piece, so nothing calls this. Wiring it needs the record's roll/propeller
-// angle published on the projectile view (the simulation already keeps it, and
-// already advances it) plus the child-piece draw beside the parent; both live
-// outside this package.
+// The helper below consumes the published word and deadline.  Selecting and
+// drawing the conditional child remains REND-13 work; this helper deliberately
+// leaves the parent's yaw, pitch and base roll untouched.
 //
 // Presentation only; caller must operate on a presentation copy, never sim state (I6).
 func FoldPropellerSpin(st []model.PieceState, piece int, spin uint16) { // [03 §5.2][06 R-WFX-01 §4]
@@ -152,6 +149,17 @@ func FoldPropellerSpin(st []model.PieceState, piece int, spin uint16) { // [03 �
 		return
 	}
 	st[piece].RotZ += spin // [06 R-WFX-01 §4] block word 0 is the roll slot; no -32768 offset
+}
+
+// FoldPublishedPropellerSpin applies the committed propeller word to one
+// already-selected child. The strict deadline is part of the renderer contract:
+// equality suppresses the child [06 R-WFX-01 §4]. Child selection and dispatch
+// remain the separate REND-13 integration.
+func FoldPublishedPropellerSpin(st []model.PieceState, piece int, v frame.ProjectileView, now uint32) { // [06 R-WFX-01 §4]
+	if !v.Propeller || now >= v.ExpiryTick {
+		return
+	}
+	FoldPropellerSpin(st, piece, v.Roll)
 }
 
 // BuildUnitPieceStates returns a presentation copy of base with unit orientation folded into the root [03 §2.4] C24 [03 §5.2] C13.

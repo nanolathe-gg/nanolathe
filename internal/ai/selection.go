@@ -238,7 +238,8 @@ func computerPlayerCount(econ *economy.Service) int {
 }
 
 // SelectWithCandidates is the testable core of candidate selection with explicit candidate list.
-// It implements C5 gates, C6 scoring, C7 reservoir (single RNG(cumulative) draw), C9 bound census [PLAN 11].
+// It implements C5 gates, C6 scoring, and C7's running-total reservoir
+// [08 R-AI-01 §8].
 func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service, candidates []string) (Candidate, bool) {
 	if m == nil || builder == nil || builder.Def == nil || econ == nil {
 		return Candidate{}, false
@@ -292,12 +293,10 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 	// Caller must provide deterministically ordered slice; BuildMenus already does. This avoids map randomization.
 	curEnergy := econ.Players[player].Stock[economy.Energy]
 	curMetal := econ.Players[player].Stock[economy.Metal]
-	type scored struct {
-		key   string
-		score int32
-	}
-	var positives []scored
-	var total int32 // cumulative [PLAN 11 C7] [PLAN 11 C9]
+	var total int32
+	var selected Candidate
+	selectedOK := false
+	var rngStream *rng.Simulation
 
 	// Inputs derived once per selection (economy-mixed, not per candidate varying) [08].
 	in := ScoreInputsFromEconomy(econ, player)
@@ -348,47 +347,34 @@ func SelectWithCandidates(m Selector, builder *units.Unit, econ *economy.Service
 		if score <= 0 {
 			continue
 		}
-		positives = append(positives, scored{key: candKeyRaw, score: score})
-		total += score
-	}
 
-	// C9 bound census: cumulative total is the only variable bound in this file [PLAN 11 C9] [08].
-	// C7: cumulative weighted reservoir: ONE global RNG draw of RNG(cumulative) yielding score/finalTotal; positive scores only [PLAN 11 C7] [08] [I4] RS-02.
-	if len(positives) == 0 || total <= 0 {
-		return Candidate{}, false
-	}
-	// Bounds below 2 do not advance the stream per [01 §7.1] [INVARIANTS I4]; RNG(cumulative) is 0 without draw.
-	if total < 2 {
-		return Candidate{DefKey: positives[0].key, Score: positives[0].score}, true
-	}
-	b, ok := m.(selectorBindings)
-	if !ok || b == nil {
-		return Candidate{}, false
-	}
-	rngStream := b.GetRNG()
-	if rngStream == nil {
-		// The session binds the simulation stream before any manager task runs;
-		// there is no alternate random source for a live planner [I4].
-		return Candidate{}, false
-	}
-	// Single draw [PLAN 11 C7] single global stream [I4][RS-02].
-	draw := rngStream.Uint32n(uint32(total)) // I4 call order is behavior [01 §7.1] [INVARIANTS I4]
-	// Walk cumulative intervals
-	var cum int32
-	for _, p := range positives {
-		cum += p.score
-		if int32(draw) < cum {
-			return Candidate{DefKey: p.key, Score: p.score}, true
+		// The total is a signed 32-bit accumulator. The bounded helper receives
+		// its bit pattern and performs retail's signed below-two test itself, so
+		// an overflowed or sub-two total does not advance the stream [01 §7.1].
+		total += score
+		if rngStream == nil {
+			bindings, ok := m.(selectorBindings)
+			if !ok || bindings == nil || bindings.GetRNG() == nil {
+				return Candidate{}, false
+			}
+			rngStream = bindings.GetRNG()
+		}
+		draw := rngStream.Uint32n(uint32(total))
+		// Each positive candidate gets one draw after joining the running total.
+		// The signed comparison is against this candidate's score, not the total
+		// or the previously selected score [08 R-AI-01 §8].
+		if int32(draw) < score {
+			selected = Candidate{DefKey: candKeyRaw, Score: score}
+			selectedOK = true
 		}
 	}
-	// Every positive interval is included in total, so a correctly bounded
-	// draw always returns above. Keep failure explicit if that invariant breaks.
-	return Candidate{}, false
+
+	return selected, selectedOK
 }
 
 // selectedCandidateForBuilder applies the post-reservoir side filter. The
-// selected definition is not filtered before the draw: a side mismatch wastes
-// that one selection and returns no candidate, with no re-draw or runner-up
+// selected definition is not filtered before the draws: a side mismatch wastes
+// the completed reservoir selection and returns no candidate, with no re-draw or runner-up
 // [08 R-AI-01 §8]. Authored side strings compare byte-for-byte and
 // case-sensitively.
 func selectedCandidateForBuilder(strat *Strategic, builder *units.Unit, key string, score int32) (Candidate, bool) {

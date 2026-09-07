@@ -5948,7 +5948,7 @@ currently named by a consumer.
 | Save bytes | Wire form | Restored order state |
 |---|---|---|
 | `0x00..0x01` | `u16` | Parent unit stable slot. It must equal the unit selected by the box name. A mismatch does not prevent retail from allocating/linking a default node; a transactional reader must reject the image before commit. [Established] |
-| `0x02..0x03` | `u16` | Linked unit stable slot, or zero for null. Resolve against the staged fixed-slot unit table after all base units are allocated. The exact order relation represented by this link is subtype/handler-owned and remains Unknown. [Established reference; Unknown relation] |
+| `0x02..0x03` | `u16` | Linked unit stable slot, or zero when the reference is null or its unit is no longer alive at save time. The writer tests liveness before reading the stable slot; a retained dead target therefore does not make the save invalid. Resolve nonzero values against the staged fixed-slot unit table after all base units are allocated. The exact order relation represented by this link is subtype/handler-owned and remains Unknown. [Established reference; Unknown relation] |
 | `0x04..0x07` | `u32` | Subtype code. Zero means no `g` payload. Codes 2–6 select the exact subtype sizes below; other nonzero codes are not established and must not be guessed. [Established wire dispatch; Unknown other codes] |
 | `0x08` | `u8` | Descriptor ordinal in the final case-sensitive sorted descriptor table. Zero is the empty/reject descriptor. [Established; [04 §3.1]] |
 | `0x09` | `u8` | Handler-private phase/state byte. Restore without normalization; handlers own its interpretation. [Established] |

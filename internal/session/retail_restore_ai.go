@@ -38,7 +38,7 @@ import (
 // which the stage has already copied onto the session. initializeBattleAI
 // applies it to the shared profile through the ordinary plan gate
 // [08 R-SKIR-01 §9] [08 R-AI-01 §12].
-func initializeRestoredBattleAI(s *Session, fs vfs.FSOps, m *mission.Mission) error {
+func initializeRestoredBattleAI(s *Session, fs vfs.FSOps, m *mission.Mission, sessionKind int) error {
 	if s == nil || s.Econ == nil {
 		return fmt.Errorf("session: retail restore: no economy service for AI construction")
 	}
@@ -79,7 +79,7 @@ func initializeRestoredBattleAI(s *Session, fs vfs.FSOps, m *mission.Mission) er
 	// Ascending slot order: each constructor consumes its exact eight strategic
 	// draws from the shared stream in that order [08 R-ENTRY-01 §3 step 24].
 	for _, slot := range slots {
-		if err := initializeBattleAI(s, slot, prof); err != nil {
+		if err := initializeBattleAI(s, slot, prof, sessionKind); err != nil {
 			return err
 		}
 	}

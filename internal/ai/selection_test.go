@@ -112,9 +112,9 @@ func TestScoreFormula(t *testing.T) {
 	}
 }
 
-// TestReservoirSingleDraw asserts one RNG draw per selection regardless of candidate count [PLAN 11 C7] [INVARIANTS I4].
-// RS-02: single global simulation stream [08][I4].
-func TestReservoirSingleDraw(t *testing.T) {
+// TestReservoirDrawsPerPositiveCandidate compares the selector with an
+// independently authored running-total reference [08 R-AI-01 §8].
+func TestReservoirDrawsPerPositiveCandidate(t *testing.T) {
 	seed := uint32(12345)
 	rng.SeedGlobal(seed, 0)
 	sel := &testSelector{
@@ -140,22 +140,42 @@ func TestReservoirSingleDraw(t *testing.T) {
 	// Need to set AIConsumption zero so the settled net remains production.
 	rng.SeedGlobal(seed, 0)
 	before := rng.Global.Sim.Draws()
-	_, ok := SelectWithCandidates(sel, builder, econStarved, cands)
+	got, ok := SelectWithCandidates(sel, builder, econStarved, cands)
 	if !ok {
 		t.Fatalf("selection should succeed")
 	}
 	after := rng.Global.Sim.Draws()
-	if after-before != 1 {
-		t.Fatalf("reservoir single draw: draws %d -> %d want +1 regardless of %d candidates", before, after, len(cands))
+	if after-before != uint64(len(cands)) {
+		t.Fatalf("reservoir draws: %d -> %d want +%d positive candidates", before, after, len(cands))
 	}
-	// Regardless of candidate count, still one draw
+	// The reference deliberately duplicates the stated loop instead of calling
+	// the production selector: add one score, draw at that total, then compare
+	// the signed result with that candidate's own score.
+	probe := rng.NewSimulation(seed)
+	var want Candidate
+	var total int32
+	for _, key := range cands {
+		score := ComputeScore(ScoreInputsFromEconomy(econStarved, 1), sel.strategic.ClassVectors[key], sel.profile.WeightFor(key))
+		if score <= 0 {
+			continue
+		}
+		total += score
+		if int32(probe.Uint32n(uint32(total))) < score {
+			want = Candidate{DefKey: key, Score: score}
+		}
+	}
+	if got != want || rng.Global.Sim.State != probe.State || rng.Global.Sim.Draws() != probe.Draws() {
+		t.Fatalf("reservoir got candidate=%+v state/draws=%d/%d, want %+v %d/%d", got, rng.Global.Sim.State, rng.Global.Sim.Draws(), want, probe.State, probe.Draws())
+	}
+
+	// Two positive candidates consume two draws.
 	rng.SeedGlobal(seed, 0)
 	cands2 := []string{"armfav", "corfav"}
 	before = rng.Global.Sim.Draws()
 	_, _ = SelectWithCandidates(sel, builder, econStarved, cands2)
 	after = rng.Global.Sim.Draws()
-	if after-before != 1 {
-		t.Fatalf("single draw with 2 cands: draws %d want +1", after-before)
+	if after-before != 2 {
+		t.Fatalf("reservoir draws with 2 candidates: %d want +2", after-before)
 	}
 	// Total <2 should consume no draw per [01 §7.1]
 	// Create a scenario where only one positive remains and total==1 => need special cands with weight to produce score 1
@@ -193,18 +213,51 @@ func TestReservoirSingleDraw(t *testing.T) {
 	if after-before != 0 {
 		t.Fatalf("total<2 should not advance RNG [01 §7.1], draws %d want 0", after-before)
 	}
-	// Determinism: same seed gives same choice
+	// Determinism: same seed gives same choice and stream state.
 	rng.SeedGlobal(seed, 0)
 	c1, _ := SelectWithCandidates(sel, builder, econStarved, cands)
+	state1 := rng.Global.Sim.State
 	rng.SeedGlobal(seed, 0)
 	c2, _ := SelectWithCandidates(sel, builder, econStarved, cands)
-	if c1.DefKey != c2.DefKey {
-		t.Fatalf("reservoir deterministic: %s vs %s", c1.DefKey, c2.DefKey)
+	if c1 != c2 || state1 != rng.Global.Sim.State {
+		t.Fatalf("reservoir deterministic: %+v/%d vs %+v/%d", c1, state1, c2, rng.Global.Sim.State)
 	}
 	_ = econ // keep
 }
 
-func TestSelectedSideMismatchConsumesOneDrawWithoutRedraw(t *testing.T) {
+func TestReservoirNonpositiveCandidateBoundary(t *testing.T) {
+	// A nonpositive candidate is skipped before the total or RNG helper. The
+	// remaining score of one still enters the reservoir, but its bound also
+	// consumes no draw.
+	builder := testBuilder("armcom")
+	econ := testEcon(1, 1000, 1000, 500, 500, 300, 10, 0, 0)
+	sim := rng.NewSimulation(91)
+	before := sim.State
+	sel := &testSelector{
+		player: 1,
+		profile: &Profile{Weight: map[string]int32{
+			"negative": 100,
+			"one":      1,
+		}, Limit: map[string]int32{}},
+		strategic: &Strategic{
+			Counts: map[string]int32{},
+			ClassVectors: map[string]ClassVector{
+				"negative": {C0: -100},
+				"one":      {C0: 100},
+			},
+		},
+		rng: &sim,
+	}
+	got, ok := SelectWithCandidates(sel, builder, econ, []string{"negative", "one"})
+	if !ok || got != (Candidate{DefKey: "one", Score: 1}) {
+		t.Fatalf("nonpositive skip selection=%+v ok=%v, want one with score one", got, ok)
+	}
+	if sim.Draws() != 0 || sim.State != before {
+		t.Fatalf("nonpositive/one-bound candidates advanced RNG: draws=%d state=%d want state=%d", sim.Draws(), sim.State, before)
+	}
+}
+
+func TestSelectedSideMismatchConsumesPerPositiveDrawsWithoutRedraw(t *testing.T) {
 	cross := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "cross"}, UnitName: "cross", Side: "CORE"}
 	runnerUp := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "runner"}, UnitName: "runner", Side: "ARM"}
 	cat := &content.Catalog{
@@ -223,12 +276,14 @@ func TestSelectedSideMismatchConsumesOneDrawWithoutRedraw(t *testing.T) {
 	builder.Def.Side = "ARM"
 	econ := testEcon(1, 1000, 1000, 500, 500, 300, 10, 0, 0)
 
-	// Both candidates score 100. Choose a seed whose single final reservoir
-	// draw lands in the first interval, the cross-side candidate.
+	// Both candidates score 100. The first positive candidate always becomes
+	// the tentative result. Choose a seed whose second draw does not replace
+	// it, leaving the cross-side candidate selected.
 	seed := uint32(1)
 	for {
 		probe := rng.NewSimulation(seed)
-		if probe.Uint32n(200) < 100 {
+		_ = probe.Uint32n(100)
+		if probe.Uint32n(200) >= 100 {
 			break
 		}
 		seed++
@@ -238,8 +293,8 @@ func TestSelectedSideMismatchConsumesOneDrawWithoutRedraw(t *testing.T) {
 	if got, ok := Select(sel, builder, econ); ok || got != (Candidate{}) {
 		t.Fatalf("cross-side reservoir winner was not discarded: got=%+v ok=%v", got, ok)
 	}
-	if got := sim.Draws(); got != 1 {
-		t.Fatalf("side mismatch draw count=%d, want exactly one with no redraw", got)
+	if got := sim.Draws(); got != 2 {
+		t.Fatalf("side mismatch draw count=%d, want one per positive candidate and no redraw", got)
 	}
 }
 

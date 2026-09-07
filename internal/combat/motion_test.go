@@ -287,6 +287,17 @@ func TestSelfPropTwoPhaseTransition(t *testing.T) {
 	}
 }
 
+func TestSelfPropFlightTimeUsesUnsignedWordAtRuntime(t *testing.T) {
+	w := &content.WeaponDef{SelfProp: true, TwoPhase: true, FlightTime: 65537}
+	p := Projectile{ExpiryTick: 5}
+	if res := AdvanceSelfProp(&p, w, 5, 0, 0, GuidanceEnv{}); res != AdvancePhaseTransition {
+		t.Fatalf("transition result = %v, want phase transition", res)
+	}
+	if p.ExpiryTick != 6 {
+		t.Fatalf("flighttime runtime word = expiry %d, want 6 from uint16(65537)==1 [06 §6.6]", p.ExpiryTick)
+	}
+}
+
 // TestSelfPropTwoPhaseTracksPreservesTargets per [06 §6.6]: when tracks set, targets not cleared.
 func TestSelfPropTwoPhaseTracksPreservesTargets(t *testing.T) {
 	w := &content.WeaponDef{SelfProp: true, TwoPhase: true, Tracks: true, FlightTime: 10, WeaponTimer: 5, BurnBlow: false}
@@ -312,13 +323,14 @@ func TestSelfPropBurnBlowAtExpiryImpact(t *testing.T) {
 	}
 	grav := fix(8192)
 	res := AdvanceSelfProp(&p, w, 5, grav, fix(0x7FFFFFFF), GuidanceEnv{})
-	if res != AdvanceImpact {
-		t.Fatalf("selfProp burnBlow at expiry expected impact got %v", res)
+	if res != AdvanceImpactThenContinue {
+		t.Fatalf("selfProp burnBlow at expiry expected impact continuation got %v", res)
 	}
 	if p.TwoPhase {
 		t.Fatalf("burnBlow should skip phase transition")
 	}
-	// visible flow still adds velocity [06 §6.6]
+	// The driver applies this visible continuation after central impact [06 §6.6].
+	ContinueSelfPropImpactMotion(&p)
 	if p.Pos.X.Raw() != 65536 {
 		t.Fatalf("burnBlow expiry should still add velocity pos X got %d want 65536", p.Pos.X.Raw())
 	}

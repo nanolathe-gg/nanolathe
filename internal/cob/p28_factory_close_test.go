@@ -28,30 +28,31 @@ func p28RetailARMLABVM(t *testing.T) *VM {
 func p28BindFactoryPorts(vm *VM, denyCloseWrites int, events *[]string) {
 	stance, busy, yard, bugger := true, false, true, false
 	bind := func(port Port, state *bool, deny *int, label string) {
-		vm.BindPort(port, func(args []int32) int32 {
-			if len(args) >= 2 {
-				want := args[1]&1 != 0
+		vm.BindPortBinding(port, PortBinding{
+			Read: func([4]int32) int32 {
+				if *state {
+					return 1
+				}
+				return 0
+			},
+			Write: func(value int32) {
+				want := value&1 != 0
 				if !want && deny != nil && *deny > 0 {
 					*deny--
 					*events = append(*events, label+":denied")
-					return 0
+					return
 				}
 				*state = want
 				*events = append(*events, label+":"+map[bool]string{false: "0", true: "1"}[want])
-				return 0
-			}
-			if *state {
-				return 1
-			}
-			return 0
+			},
 		})
 	}
 	bind(Port(5), &stance, nil, "stance")
 	bind(Port(6), &busy, nil, "busy")
 	bind(Port(18), &yard, &denyCloseWrites, "yard")
 	bind(Port(19), &bugger, nil, "bugger")
-	vm.BindPort(Port(20), func([]int32) int32 { return 0 })
-	vm.BindPort(Port(1), func([]int32) int32 { return 0 })
+	vm.BindPortBinding(Port(20), PortBinding{Read: func([4]int32) int32 { return 0 }})
+	vm.BindPortBinding(Port(1), PortBinding{Read: func([4]int32) int32 { return 0 }})
 }
 
 func TestP28ARMLABDeactivateOwnsAuthoredCloseDelay(t *testing.T) {

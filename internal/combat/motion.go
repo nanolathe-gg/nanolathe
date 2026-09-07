@@ -41,6 +41,14 @@ const (
 	AdvanceAlive AdvanceResult = iota
 	AdvanceRetire
 	AdvanceImpact
+	// AdvanceImpactThenContinue asks the driver to run central impact before
+	// applying this self-propelled record's prepared velocity and collision.
+	// The record may already be dead when those later steps run [06 §6.6][06 §6.7].
+	AdvanceImpactThenContinue
+	// AdvanceImpactThenRebuildSelfProp asks the driver to run central impact
+	// before rebuilding the self-propelled velocity, then to move and collide.
+	// Steering failure takes this path [06 §6.7].
+	AdvanceImpactThenRebuildSelfProp
 	AdvancePhaseTransition
 )
 
@@ -74,7 +82,6 @@ func MotionFamilyForWeapon(w *content.WeaponDef) MotionFamily {
 	if w == nil {
 		return MotionNone
 	}
-	// [06 §6.2] propeller presentation advances first, then family owns tick
 	if w.SelfProp { // [06 §6.2] 1. self-propelled
 		return MotionSelfProp
 	}
@@ -578,8 +585,6 @@ func AdvanceDirect(p *Projectile, w *content.WeaponDef, tick uint32) AdvanceResu
 	if tick >= p.ExpiryTick { // [06 §7.3] expiry is not universal but direct retires at expiry [06 §6.3]
 		return AdvanceRetire // [06 §6.3] does not move, collide, or deliver expiry damage
 	}
-	// Propeller visual advances first [06 §6.2]
-	p.PropellerYaw = p.PropellerYaw.Add(1)
 	// [06 §6.10] beam latch handling
 	isBeam := w != nil && w.BeamWeapon
 	wasLatched := p.BeamLatch
@@ -635,7 +640,6 @@ func AdvanceBallistic(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec
 			return AdvanceRetire
 		}
 	}
-	p.PropellerYaw = p.PropellerYaw.Add(1) // [06 §6.2] propeller first
 	// [06 §6.4] integrating tick adds velocity to position, adds wind, subtracts gravity, then collision
 	p.Pos.X = p.Pos.X.Add(p.Velocity.X) // [06 §7.2] integer fixed-point
 	p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
@@ -655,8 +659,7 @@ func AdvanceDropped(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec3,
 	}
 	_ = w
 	_ = tick
-	p.PropellerYaw = p.PropellerYaw.Add(1) // [06 §6.2]
-	p.Pos.X = p.Pos.X.Add(p.Velocity.X)    // [06 §6.4] adds velocity
+	p.Pos.X = p.Pos.X.Add(p.Velocity.X) // [06 §6.4] adds velocity
 	p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
 	p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
 	p.Pos.X = p.Pos.X.Add(wind.X) // [06 §6.4] adds wind directly to position
@@ -887,23 +890,19 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 	if p == nil || w == nil {
 		return AdvanceRetire
 	}
-	p.PropellerYaw = p.PropellerYaw.Add(1) // [06 §6.2]
 	// [06 §6.6] expiry handling at or after expiry
 	if tick >= p.ExpiryTick {
 		if w.BurnBlow {
-			// [06 §6.6] burn-blow invokes central impact and skips gravity/phase-transition work
-			// Visible control flow still adds existing velocity and calls collision afterward [06 §6.6]
-			p.Pos.X = p.Pos.X.Add(p.Velocity.X)
-			p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
-			p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
-			return AdvanceImpact // [06 §6.6]
+			// The driver invokes central impact before this visit's existing
+			// velocity and collision continuation [06 §6.6].
+			return AdvanceImpactThenContinue
 		}
 		// [06 §6.6] without burn-blow, gravity is applied and motion continues
 		// If two-phase enabled and phase still clear, set expiry to tick+flightTime, enter first phase, clear targets when tracks not set
 		transitioned := false
 		if w.TwoPhase && !p.TwoPhase { // [06 §6.6] still clear
-			p.ExpiryTick = tick + uint32(w.FlightTime) // [06 §6.6] unsigned flight time; wraps modulo 2^32
-			p.TwoPhase = true                          // [06 §6.6] enters observed first phase state [06 §6.1]
+			p.ExpiryTick = tick + uint32(uint16(w.FlightTime)) // [06 §6.6] zero-extended unsigned 16-bit flight time
+			p.TwoPhase = true                                  // [06 §6.6] enters observed first phase state [06 §6.1]
 			if !w.Tracks {
 				p.TargetUnit = 0 // [06 §6.6] clears both retained references when tracks not set
 				p.TargetProjectile = 0
@@ -970,13 +969,9 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 		// every guided missile fly at the launch-time aim point and miss any
 		// target that moved after the shot.
 		if failed := steerToward(p, w, GuidanceTargetPoint(p, w, env)); failed {
-			// Burn-blow steering failure invokes central impact; the visible
-			// velocity/motion code still runs this visit [06 §6.7].
-			p.Velocity = VelocityFromAngles(p.Yaw, p.Pitch, p.Speed)
-			p.Pos.X = p.Pos.X.Add(p.Velocity.X)
-			p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
-			p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
-			return AdvanceImpact
+			// Burn-blow steering failure invokes central impact before velocity
+			// rebuild; the driver then rebuilds, moves and collides [06 §6.7].
+			return AdvanceImpactThenRebuildSelfProp
 		}
 	}
 	// [06 §6.7] after optional guidance, recomputes all velocity components from scalar speed, yaw, pitch
@@ -987,8 +982,21 @@ func AdvanceSelfProp(p *Projectile, w *content.WeaponDef, tick uint32, gravity n
 	return AdvanceAlive
 }
 
+// ContinueSelfPropImpactMotion applies the visible self-propelled motion that
+// follows an expiry or steering-failure central impact [06 §6.6][06 §6.7].
+// It intentionally has no liveness gate: central impact may have marked the
+// record dead, but this visit still reaches position and collision handling.
+func ContinueSelfPropImpactMotion(p *Projectile) {
+	if p == nil {
+		return
+	}
+	p.Pos.X = p.Pos.X.Add(p.Velocity.X)
+	p.Pos.Y = p.Pos.Y.Add(p.Velocity.Y)
+	p.Pos.Z = p.Pos.Z.Add(p.Velocity.Z)
+}
+
 // Advance dispatches to the appropriate per-family advance per [06 §6.2] motion ordering (C15).
-// Propeller presentation advances first [06 §6.2] is handled inside each family; this wrapper selects the family.
+// Common record entry advances an authored propeller before this wrapper selects a family [06 §6.1][06 §7.1].
 func Advance(p *Projectile, w *content.WeaponDef, tick uint32, wind Vec3, gravity numeric.Fixed, seaLevel numeric.Fixed, env GuidanceEnv) AdvanceResult {
 	if p == nil || w == nil {
 		return AdvanceRetire

@@ -482,7 +482,7 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 			continue
 		}
 		if s.World != nil {
-			if err := initializeBattleAI(s, uint8(i), prof); err != nil {
+			if err := initializeBattleAI(s, uint8(i), prof, sessionKindSkirmish); err != nil {
 				return nil, err
 			}
 		} else {

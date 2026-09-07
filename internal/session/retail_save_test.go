@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -89,6 +91,67 @@ func TestProjectRetailSessionAssemblesRuntimeUnit(t *testing.T) {
 	}
 	if len(p.Units.Other) != 1 || p.Units.Other[0].Name != "u0073acc" || len(p.Units.Other[0].Data) != 48 {
 		t.Fatalf("unit auxiliary projection = %#v, want one 48-byte account", p.Units.Other)
+	}
+}
+
+func TestProjectRetailSessionWritesNullForDeadMainOrderTarget(t *testing.T) {
+	def := &content.UnitDef{UnitName: "runtime", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}}}
+	w := units.NewSliced(3, nil)
+	owner, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	target, err := w.Create(def, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	orders.BindQueue(w.Unit(owner), orders.NewQueueWith([]*orders.Node{{ID: orders.Lookup("Move_Ground"), Owner: owner, Target: target}}, nil))
+	// The dead target stays in the queue link long enough for the writer to
+	// project the established null wire field, but is no longer a live slot.
+	w.Unit(target).Alive = false
+	econ := &economy.Service{}
+	econ.UnitBuckets(owner)
+	p, err := ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
+		Summary:             save.Summary{Gametype: 1},
+		Mapping:             []byte{0},
+		StableIDs:           map[pool.Handle]uint16{owner: 9},
+		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{owner: {}},
+		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{owner: {}},
+	})
+	if err != nil {
+		t.Fatalf("projection with dead main target: %v", err)
+	}
+	if len(p.Units.Orders) != 1 {
+		t.Fatalf("projected order count=%d, want one", len(p.Units.Orders))
+	}
+	if got := binary.LittleEndian.Uint16(p.Units.Orders[0].Main[2:]); got != 0 {
+		t.Fatalf("dead main target stable ID=%d, want wire null", got)
+	}
+}
+
+func TestProjectRetailSessionRejectsLiveMainTargetWithoutStableID(t *testing.T) {
+	def := &content.UnitDef{UnitName: "runtime", MaxDamage: 100, Script: &cob.Program{Code: []uint32{0x10065000}, Scripts: map[string]int{}}}
+	w := units.NewSliced(3, nil)
+	owner, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create owner: %v", err)
+	}
+	target, err := w.Create(def, 1, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	orders.BindQueue(w.Unit(owner), orders.NewQueueWith([]*orders.Node{{ID: orders.Lookup("Move_Ground"), Owner: owner, Target: target}}, nil))
+	econ := &economy.Service{}
+	econ.UnitBuckets(owner)
+	_, err = ProjectRetailSession(&Session{Clock: &clock.State{}, Units: w, Econ: econ}, RetailSaveInputs{
+		Summary:             save.Summary{Gametype: 1},
+		Mapping:             []byte{0},
+		StableIDs:           map[pool.Handle]uint16{owner: 9},
+		UnitWriterScratch:   map[pool.Handle]units.RetailUnitWriterScratch{owner: {}},
+		ScriptWriterScratch: map[pool.Handle]cob.RetailScriptWriterScratch{owner: {}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "unresolved node target") {
+		t.Fatalf("live target without a stable ID error=%v, want unresolved node target", err)
 	}
 }
 

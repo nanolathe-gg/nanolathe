@@ -34,7 +34,7 @@ func TestCachePairWrittenOnlyByFeatureContact(t *testing.T) {
 	// Featureless cell: no write.
 	p := &Projectile{ShooterSide: 0, CacheCellX: -5, CacheCellZ: -5,
 		Pos: Vec3{X: cellCentre(cx + 3), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz + 3)}}
-	if _, feature, _, _, _, _ := checkCollision(p, weapon, w, ter, nil); feature != nil {
+	if _, feature, _, _, _, _ := checkCollision(p, weapon, w, ter, nil, false); feature != nil {
 		t.Fatal("featureless cell resolved a feature")
 	}
 	if p.CacheCellX != -5 || p.CacheCellZ != -5 {
@@ -44,7 +44,7 @@ func TestCachePairWrittenOnlyByFeatureContact(t *testing.T) {
 	// Feature contact: written, and the contact is delivered.
 	ter.PlotAt(cx, cz).SetFeature(0)
 	p.Pos = Vec3{X: cellCentre(cx), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz)}
-	if _, feature, _, _, _, _ := checkCollision(p, weapon, w, ter, nil); feature == nil {
+	if _, feature, _, _, _, _ := checkCollision(p, weapon, w, ter, nil, false); feature == nil {
 		t.Fatal("first contact with the feature cell was not delivered")
 	}
 	if p.CacheCellX != cx || p.CacheCellZ != cz {
@@ -55,7 +55,7 @@ func TestCachePairWrittenOnlyByFeatureContact(t *testing.T) {
 	// first contact with that same cell suppressed, and the pair stays.
 	reused := &Projectile{ShooterSide: 0, CacheCellX: p.CacheCellX, CacheCellZ: p.CacheCellZ,
 		Pos: Vec3{X: cellCentre(cx), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz)}}
-	if _, feature, _, _, _, _ := checkCollision(reused, weapon, w, ter, nil); feature != nil {
+	if _, feature, _, _, _, _ := checkCollision(reused, weapon, w, ter, nil, false); feature != nil {
 		t.Fatal("a reused record's inherited pair must suppress its first contact with the same cell [R-DMG-01 §13]")
 	}
 	if reused.CacheCellX != cx || reused.CacheCellZ != cz {
@@ -74,14 +74,14 @@ func TestFloorScratchWrittenInMapOnly(t *testing.T) {
 
 	p := &Projectile{ShooterSide: 0, CachedFloorHeight: -1,
 		Pos: Vec3{X: cellCentre(cx), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz)}}
-	checkCollision(p, wu1913Weapon(10), w, ter, nil)
+	checkCollision(p, wu1913Weapon(10), w, ter, nil, false)
 	if p.CachedFloorHeight != want {
 		t.Fatalf("in-map tick: floor scratch = %d, want %d [R-DMG-01 §14]", p.CachedFloorHeight, want)
 	}
 
 	off := &Projectile{ShooterSide: 0, CachedFloorHeight: -1,
 		Pos: Vec3{X: numeric.Fixed(-1), Y: numeric.Fixed(8 * 65536), Z: cellCentre(cz)}}
-	if _, _, _, isOffMap, _, _ := checkCollision(off, wu1913Weapon(10), w, ter, nil); !isOffMap {
+	if _, _, _, isOffMap, _, _ := checkCollision(off, wu1913Weapon(10), w, ter, nil, false); !isOffMap {
 		t.Fatal("negative X must be off-map")
 	}
 	if off.CachedFloorHeight != -1 {

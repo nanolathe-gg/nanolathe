@@ -8,6 +8,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
@@ -148,6 +149,60 @@ func TestCompositionBinderFutureAllocationIsStrictAndPreCreate(t *testing.T) {
 	}
 	if createCalls != 1 || w.Unit(2) != nil {
 		t.Fatalf("failed allocation was observable: calls=%d slot2=%#v", createCalls, w.Unit(2))
+	}
+}
+
+func TestCompositionCreationInitializesEconomyAccountBeforePublicationAndSlotReuse(t *testing.T) {
+	root := t.TempDir()
+	writeCompositionModel(t, root, "fixture", 1)
+	writeCompositionCOB(t, root, "testunit", []string{"modelroot", "modelchild"})
+	fs := vfs.New()
+	if err := fs.MountDirectory(root, 10); err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	def := &content.UnitDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: "testunit"}, UnitName: "testunit", ObjectName: "fixture", MaxDamage: 10, Limit: -1, BMCode: true}
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{def.CanonicalKey: def}}
+	w, err := newSlicedWorldWithCOB(cat, fs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{Catalog: cat, World: minimalTerrain(), Mission: syntheticMission(), Units: w, Econ: &economy.Service{}}
+	s.InitBattleWindForSession()
+	if err := createAndBindServicesForTest(t, s); err != nil {
+		t.Fatalf("createAndBindServices: %v", err)
+	}
+	var observedSaveable bool
+	w.OnCreate = func(h pool.Handle, _ *units.Unit) {
+		_, err := s.Econ.RetailUnitAccountImage(h)
+		observedSaveable = err == nil
+	}
+	h, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	if !observedSaveable {
+		t.Fatal("OnCreate observed no saveable zero economy account")
+	}
+	if !s.Econ.RestoreUnitEconomy(h, [2]economy.Bucket{{Production: 7}}, [2]economy.ArchivedBucket{{Requested: 9}}) {
+		t.Fatal("seed account state")
+	}
+	w.FreeImmediate(h)
+	reused, err := w.Create(def, 0, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("reused create: %v", err)
+	}
+	if reused != h {
+		t.Fatalf("reused handle = %d, want %d", reused, h)
+	}
+	image, err := s.Econ.RetailUnitAccountImage(reused)
+	if err != nil {
+		t.Fatalf("reused account image: %v", err)
+	}
+	for i, b := range image {
+		if b != 0 {
+			t.Fatalf("reused account byte %d = %#x, want zero", i, b)
+		}
 	}
 }
 

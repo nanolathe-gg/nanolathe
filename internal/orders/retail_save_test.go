@@ -40,3 +40,27 @@ func TestRetailOrderImagesRoundTripPreservesQueueOrderAndReferences(t *testing.T
 		t.Fatalf("restored queue mismatch: front=%#v rear=%#v", q.Primary(), q.Secondary())
 	}
 }
+
+func TestRetailOrderImagesMainTargetLiveness(t *testing.T) {
+	owner := &units.Unit{Handle: 100, Alive: true}
+	target := pool.Handle(101)
+	BindQueue(owner, NewQueueWith([]*Node{{ID: Lookup("Move_Ground"), Owner: owner.Handle, Target: target}}, nil))
+	resolveOwnerOnly := func(h pool.Handle) (uint16, bool) {
+		if h != owner.Handle {
+			return 0, false
+		}
+		return 9, true
+	}
+
+	dead, err := RetailOrderImages(owner, resolveOwnerOnly, func(pool.Handle) bool { return false })
+	if err != nil {
+		t.Fatalf("dead main target blocked save: %v", err)
+	}
+	if got := binary.LittleEndian.Uint16(dead[0].Main[2:]); got != 0 {
+		t.Fatalf("dead main target stable ID=%d, want wire null", got)
+	}
+
+	if _, err := RetailOrderImages(owner, resolveOwnerOnly, func(h pool.Handle) bool { return h == target }); err == nil {
+		t.Fatal("live main target without a stable ID did not fail")
+	}
+}

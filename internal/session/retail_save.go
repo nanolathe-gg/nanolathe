@@ -182,7 +182,9 @@ func projectUnitImage(w *units.World, econ *economy.Service, movement *movement.
 		if !ok {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: missing unit packed scratch: logical path save/Units/u%04x, providers searched [caller], expected RetailUnitWriterScratch", h)
 		}
-		ordersImage, err := orders.RetailOrderImages(u, resolve)
+		ordersImage, err := orders.RetailOrderImages(u, resolve, func(target pool.Handle) bool {
+			return w.Unit(target) != nil
+		})
 		if err != nil {
 			return save.UnitImage{}, fmt.Errorf("nanolathe: retail save projection: unit %04x orders: %w", h, err)
 		}

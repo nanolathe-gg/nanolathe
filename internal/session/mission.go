@@ -201,7 +201,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		if !p.Exists || p.IsObserver || (p.ControllerState != 1 && p.ControllerState != 2) {
 			continue
 		}
-		if err := initializeBattleAI(s, uint8(i), sharedProf); err != nil {
+		if err := initializeBattleAI(s, uint8(i), sharedProf, sessionKindCampaign); err != nil {
 			return nil, err
 		}
 	}

@@ -20,7 +20,7 @@ import (
 // of its keys are conditions.
 func DecodeTriggers(global *formats.Section) (victory, defeat []*triggers.Trigger) {
 	if global == nil {
-		return nil, nil
+		return triggers.EnsureDefaults(nil, nil)
 	}
 	for i := 0; i < triggers.KindCount; i++ {
 		kind := triggers.Kind(i)
@@ -38,5 +38,8 @@ func DecodeTriggers(global *formats.Section) (victory, defeat []*triggers.Trigge
 			defeat = append(defeat, t)
 		}
 	}
-	return victory, defeat
+	// Defaults belong to this mission's queues rather than to an evaluator's
+	// temporary poll slice, so their satisfied and celebrated state persists
+	// through the save image [08 "Default triggers"] [08 R-TRIG-01 §8].
+	return triggers.EnsureDefaults(victory, defeat)
 }

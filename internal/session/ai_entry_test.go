@@ -14,6 +14,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -52,12 +53,15 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 	s.Econ.Players[1].Allies[1] = true
 	s.SeedSessionRNG(0x1234, 0x5678)
 
-	if err := initializeBattleAI(s, 1, &ai.Profile{}); err != nil {
+	if err := initializeBattleAI(s, 1, &ai.Profile{}, sessionKindCampaign); err != nil {
 		t.Fatalf("initializeBattleAI: %v", err)
 	}
 	mgr := s.AI[1]
 	if mgr == nil {
 		t.Fatal("manager not installed")
+	}
+	if mgr.MissionGateFlag != sessionKindCampaign {
+		t.Fatalf("campaign manager gate = %d, want authoritative session kind %d", mgr.MissionGateFlag, sessionKindCampaign)
 	}
 	if got := s.SimRNG().Draws(); got != 8 {
 		t.Fatalf("manager constructor draws = %d, want exact pre-unit count 8 [08 R-ENTRY-01 §3 step 24]", got)
@@ -80,8 +84,8 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 	if mgr.RallyVisible == nil {
 		t.Fatal("ordinary rally visibility binding is nil")
 	}
-	if mgr.RallyProbeKnown != nil {
-		t.Fatal("the unknown rally explored/current option identity must fail closed")
+	if mgr.RallyProbeKnown == nil {
+		t.Fatal("the established rally knowledge predicate is nil")
 	}
 	// The rally member gate is bound now that [08 R-AI-01 §19] names it: the
 	// slot-1 shot-time physical gate of [06 §3.3], taken from the combat
@@ -94,6 +98,52 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 	}
 	if !mgr.IsAlliance(1, 1) || mgr.IsAlliance(1, 0) || mgr.IsAlliance(10, 1) {
 		t.Fatal("session-owned alliance binding did not validate active player rows")
+	}
+	if err := initializeBattleAI(s, 1, &ai.Profile{}, sessionKindSkirmish); err != nil {
+		t.Fatalf("initializeBattleAI skirmish: %v", err)
+	}
+	if got := s.AI[1].MissionGateFlag; got != sessionKindSkirmish {
+		t.Fatalf("skirmish manager gate = %d, want authoritative session kind %d", got, sessionKindSkirmish)
+	}
+}
+
+func TestRallyProbeKnowledgeUsesModeSelectedStore(t *testing.T) {
+	terrain := &world.Terrain{CellW: 128, CellH: 128}
+	const owner = visibility.PlayerID(1)
+	const local = visibility.PlayerID(0)
+	x := numeric.FixedFromInt(32)
+	y := numeric.FixedFromInt(16)
+	z := numeric.FixedFromInt(48)
+	// x=32 and z-y/2=40 map pixels both project to grid coordinate one.
+	const idx = 65
+
+	current := visibility.New(terrain, visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled)
+	current.SetLocal(local)
+	current.ByteGrid(owner)[idx] = 1
+	current.WordMask()[idx] = 1 << local
+	s := &Session{Vis: current}
+	known := rallyProbeKnowledge(s)
+	if !known(uint8(owner), x, y, z) {
+		t.Fatal("LineOfSight rally probe did not read the owner current-sight byte")
+	}
+	current.ByteGrid(owner)[idx] = 0
+	if known(uint8(owner), x, y, z) {
+		t.Fatal("LineOfSight rally probe read the mapping word instead of the owner byte")
+	}
+
+	permanent := visibility.New(terrain, visibility.ModeHistoryEnabled)
+	permanent.SetLocal(local)
+	permanent.WordMask()[idx] = 1 << local
+	s.Vis = permanent
+	if !known(uint8(owner), x, y, z) {
+		t.Fatal("Permanent LOS rally probe did not read the local viewer mapping bit")
+	}
+	permanent.WordMask()[idx] = 1 << owner
+	if known(uint8(owner), x, y, z) {
+		t.Fatal("Permanent LOS rally probe used the AI owner instead of the local viewer")
+	}
+	if known(uint8(owner), numeric.Fixed(-1), 0, 0) {
+		t.Fatal("off-map probe passed the signed high-half projection bounds")
 	}
 }
 

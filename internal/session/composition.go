@@ -1534,17 +1534,25 @@ func createAndBindServices(s *Session) error {
 	// replaces the table, destroying every object of the previous battle
 	// [R-CORE-01 §4.4.1]. Producers may append from here on.
 	s.strips = newStripTable()
+	if s.Econ == nil {
+		s.Econ = &economy.Service{}
+	}
 	// Worlds with an authored source use one binder before battle entry so
 	// scenario, construction, and forced-slot creation resolve the same model
-	// and script path [04 §4.1].
+	// and script path. Account initialization is part of that same pre-Create
+	// barrier: every live unit has all twelve zeroed account words before its
+	// script, callbacks, or publication can observe it [04 R-CB-01 §4][05
+	// "Unit instance economy state"].
 	if cobFS != nil {
-		s.Units.SetCOBBinder(func(u *units.Unit) error { return s.bindUnitCOB(cobFS, u) })
+		s.Units.SetCOBBinder(func(u *units.Unit) error {
+			if u == nil || !s.Econ.InitializeUnitEconomy(u.Handle) {
+				return fmt.Errorf("session: initialize unit economy account")
+			}
+			return s.bindUnitCOB(cobFS, u)
+		})
 		if !s.Units.HasCOBBinder() {
 			return fmt.Errorf("session: missing COB binder for service wiring [04 §4.1]")
 		}
-	}
-	if s.Econ == nil {
-		s.Econ = &economy.Service{}
 	}
 	// Bind authoritative wind and terrain to the one ledger per [05] [P1-I04].
 	// All other producers must go through bucket Production/Requested/Accepted;

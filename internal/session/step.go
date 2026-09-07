@@ -1105,7 +1105,7 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 	}
 	s.LocalOwner = uint8(localPlayer)
 
-	v, d := triggers.Evaluate(s.Mission.Victory, s.Mission.Defeat, s.missionTriggerContext(tick))
+	v, d := triggers.EvaluateOwned(&s.Mission.Victory, &s.Mission.Defeat, s.missionTriggerContext(tick))
 	s.VictoryDone = s.VictoryDone || v
 	s.DefeatDone = s.DefeatDone || d
 	var latched bool

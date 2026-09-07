@@ -92,8 +92,10 @@ type Manager struct {
 	Catalog      *content.Catalog // defKey resolution for the extractor gate [PLAN_11 C8]
 	Factory      *units.Unit      // builder receiving construction requests [PLAN_11 C12] [P0-07]
 	Terrain      *world.Terrain   // placement validation terrain; nil skips yard validation, success resets radius [PLAN_11 C8]
-	// MissionGateFlag is the authored mission-mode input to selection's
-	// definition gate [R-P0-05 §3].
+	// MissionGateFlag is the authoritative session-kind word copied at manager
+	// construction for selection's definition gate. Kind one is campaign; the
+	// manager does not infer it from mission data or setup fields [08 R-P0-05
+	// §3][08 R-SESS-01 §5].
 	MissionGateFlag int32
 
 	// P0-07: typed build request replacing lossy callback [P0-07] ON-06 F-P0-004.
@@ -163,10 +165,9 @@ type Manager struct {
 	// keeps that vector empty rather than granting omniscient target knowledge
 	// [08 R-AI-01 §7, §16].
 	RallyVisible func(viewer uint8, target *units.Unit) bool `json:"-"`
-	// RallyProbeKnown selects whichever of the two established explored/current
-	// grid predicates the session option word enables. The bit identity remains
-	// Unknown, so manager code consumes the selected predicate and does not
-	// invent an option mapping [08 R-AI-01 §7, §17].
+	// RallyProbeKnown follows the session visibility mode: LineOfSight samples
+	// the owner's current-sight byte grid; Permanent LOS samples the local
+	// viewing slot's mapping-word bit [08 R-AI-01 §7][03 R-VIS-01 §1].
 	RallyProbeKnown func(owner uint8, x, y, z numeric.Fixed) bool `json:"-"`
 	// RallyShotTimeAdmits is the gate the rally task applies to a member with
 	// no mover. [08 R-AI-01 §19] settles both halves of what used to be an open

@@ -32,3 +32,19 @@ func TestRetailTriggerImageRejectsUnknownKind(t *testing.T) {
 		t.Fatal("unknown trigger kind accepted")
 	}
 }
+
+func TestDefaultTriggerCelebrationSurvivesRetailSave(t *testing.T) {
+	victory, defeat := EnsureDefaults(nil, nil)
+	victory[0].Celebrated = true
+	accounts, err := RetailTriggerImage(victory, defeat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restoredVictory, restoredDefeat := EnsureDefaults(nil, nil)
+	if err := RestoreRetailTriggerAccounts(restoredVictory, restoredDefeat, accounts); err != nil {
+		t.Fatal(err)
+	}
+	if !restoredVictory[0].Celebrated {
+		t.Fatalf("default victory celebration was not restored: %+v", restoredVictory[0])
+	}
+}

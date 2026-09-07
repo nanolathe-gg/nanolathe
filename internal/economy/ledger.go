@@ -311,6 +311,14 @@ func (s *Service) RestoreUnitEconomy(handle pool.Handle, buckets [2]Bucket, arch
 	return true
 }
 
+// InitializeUnitEconomy creates or resets the complete zero account for one
+// newly allocated unit. Allocation and immediate slot reuse both enter the
+// same session creation barrier, before COB Create can observe or publish the
+// unit [05 "Unit instance economy state"].
+func (s *Service) InitializeUnitEconomy(handle pool.Handle) bool {
+	return s.RestoreUnitEconomy(handle, [2]Bucket{}, [2]ArchivedBucket{})
+}
+
 // PlayerEliminated is the retail player record's elimination test, derived
 // rather than flagged. Retail keeps no elimination bit; the automatic share
 // dispatcher spells the predicate out as "the slot is not eliminated (`live
