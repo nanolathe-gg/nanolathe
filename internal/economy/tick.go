@@ -32,7 +32,7 @@ func isSettlingState(s uint8) bool {
 
 // Tick runs the per-player deadline block for all ten slots in ascending order per C3 and I1.
 // It delegates to TickPlayer with a nil beforeDeadline hook; callers that need the AI dispatch
-// hook (phase 14) should call TickPlayer directly with the desired callback per C3.
+// hook (phase 5) should call TickPlayer directly with the desired callback per C3.
 func (s *Service) Tick(tick uint32, w *units.World) {
 	if s == nil {
 		return
@@ -42,24 +42,14 @@ func (s *Service) Tick(tick uint32, w *units.World) {
 	}
 }
 
-// TickPlayer owns eligibility, per-tick helpers, deadline comparison and settlement per C2–C4.
-// Order per [05 "Authoritative settlement order"]:
-//
-//  1. Early skip unless record exists, controller/state byte ∈ three active states, observer byte excludes observers —
-//     while skipped NOTHING advances INCLUDING the deadline (C3).
-//  2. Per-tick work independent of settlement still runs: two internally 30-paced helpers + a weapon/position refresh sweep,
-//     never touching stock (C3).
-//  3. After helpers and before the settlement deadline compare, invoke optional beforeDeadline callback (C3).
-//     Phase 14 supplies AI dispatch there; economy never imports internal/ai.
-//  4. Settlement deadline block: deadline is absolute tick compared UNSIGNED against global tick;
-//     while greater, skip slot's remaining processing; when due, advance by EXACTLY 30 BEFORE anything else runs (C2).
-//     Because the advance is a single conditional add, a slot >30 behind settles once per tick until caught up — reproduce that, do NOT loop (C2).
-//  5. Still inside the deadline block and still ahead of the gate chain: the
-//     local slot's end-condition block, through the EndCondition seam
-//     [08 R-TRIG-01 §6]. The victory/defeat polls, the shared countdown and the
-//     end latch ride this one deadline — there is no second 30-tick word.
-//  6. Still inside deadline block: settlement gate chain, all required before Settle is called (C4).
-func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDeadline func()) {
+// TickPlayer owns the early eligibility gate, the session's beforeDeadline
+// hook, the unsigned deadline advance, end conditions and settlement gates
+// [05 "Authoritative settlement order"]. The hook owns manager/strategic/LOS
+// work and runs on every eligible entry, even when settlement is not due.
+// The returned verdict reports entry into the deadline block, including a due
+// entry whose later settlement gates refuse. Session uses it for the viewing
+// player's sensor tail [03 R-SENSOR-01].
+func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDeadline func()) (deadlineRan bool) {
 	if s == nil {
 		return
 	}
@@ -79,37 +69,8 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 		return
 	}
 
-	// C3 per-tick non-settlement work still runs regardless of deadline; never touches stock.
-	// Two internally 30-paced helpers.
-	// Helper1: private 30-tick counter per [05 "Authoritative settlement order"] step 2.
-	if p.Helper1Deadline <= tick {
-		// Unsigned due check: deadline <= tick means due. Advance by exactly 30 before helper work.
-		// Single add, not loop, mirrors settlement catch-up shape.
-		p.Helper1Deadline += settleInterval
-		p.Helper1Calls++
-	}
-	// Helper2: second helper with its own internal 30-tick gate.
-	if p.Helper2Deadline <= tick {
-		p.Helper2Deadline += settleInterval
-		p.Helper2Calls++
-	}
-	// Weapon/position refresh sweep for player's unit range, never touching stock.
-	// Retail sweeps units of one type family; we count invocations and iterate for determinism without stock effects.
-	p.WeaponRefreshCalls++
-	if w != nil {
-		// Stable slot order visitation per I1, but never touch stock per C3.
-		for _, u := range w.Iter() {
-			if u == nil || !u.Alive {
-				continue
-			}
-			if int(u.Owner) != player {
-				continue
-			}
-			_ = u // refresh marker, no stock mutation
-		}
-	}
-
-	// C3: After helpers, before deadline compare, invoke optional beforeDeadline callback.
+	// The session owns the real manager, strategic and LOS work, in that
+	// order. Each service retains its own cadence [05 "Authoritative settlement order"].
 	if beforeDeadline != nil {
 		beforeDeadline()
 	}
@@ -122,6 +83,7 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	// When due, advance by EXACTLY 30 BEFORE anything else in the block runs (C2).
 	// Single conditional add — do NOT loop. A slot >30 behind settles once per tick until caught up.
 	p.UpdateTime += settleInterval
+	deadlineRan = true
 
 	// The local slot's end-condition block runs here: inside the settlement
 	// deadline block, after the advance and ahead of the gate chain
@@ -182,6 +144,7 @@ func (s *Service) TickPlayer(player int, tick uint32, w *units.World, beforeDead
 	// algorithm dead code: the sums degenerate to the player mirror, both
 	// ratios come out wrong, and C6's slot-order consumption never happens.
 	s.Settle(player, tick, w)
+	return
 }
 
 // PlayerSave persists the three absolute tick deadlines verbatim per [05 "Authoritative settlement order"] C5 and [05 "Saving economy, construction, and features"].
@@ -224,7 +187,6 @@ func (s *Service) LoadState(st [10]PlayerSave) {
 // Battle initialization seeds every active player's settlement deadline (and two siblings) to the current global tick,
 // so all players share the same initial phase [05 "Authoritative settlement order"] C5.
 // Active means record exists, controller/state ∈ three active states, not observer — the same early gate per C3.
-// Also seeds the two private helper deadlines to keep helpers phase-aligned; helpers never touch stock.
 func (s *Service) SeedDeadlines(tick uint32) {
 	if s == nil {
 		return
@@ -243,8 +205,6 @@ func (s *Service) SeedDeadlines(tick uint32) {
 		p.UpdateTime = tick
 		p.WinLoseTime = tick
 		p.DisplayTimer = tick
-		p.Helper1Deadline = tick
-		p.Helper2Deadline = tick
 	}
 }
 
@@ -373,6 +333,9 @@ func (s *Service) shareSensors(ref int, w *units.World) {
 		}
 		dst := &s.Players[i]
 		if dst.Exists && !dst.IsObserver && !PlayerEliminated(w, i) && dst.ControllerState == 3 && dst.OptionKind == 1 && src.Allies[i] {
+			// TODO(networking): emit the mapping-share packet here when the
+			// deferred network transport is implemented [05 R-SHARE-01 §3].
+			// This counter records eligibility only; it publishes no mapping.
 			s.SensorShareCalls++
 		}
 	}
@@ -392,7 +355,8 @@ func ApplySharePacket(s *Service, subtype int, amount float32, srcIdx, dstIdx in
 	case 2:
 		res = Metal
 	case 3:
-		// Mapping-grid merge is owned by visibility; economy records no stock.
+		// TODO(networking): bind the visibility-owned mapping-grid merge
+		// [05 R-SHARE-01 §6]. This unimplemented receive seam changes no grid.
 		return
 	default:
 		return

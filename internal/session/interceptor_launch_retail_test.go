@@ -136,10 +136,11 @@ func TestRetailAntiNukeIntercept(t *testing.T) {
 	coverage := interceptorSlot.Weapon.Coverage
 	t.Logf("interceptor coverage = %d world units", coverage)
 
-	// The silo is a command-fire launcher in play; here the target is installed
-	// directly, which is the manual-installation path the autonomous scan is
-	// documented to bypass [06 §3.2].
+	// Install the manual order's target and take the slot out of autonomy,
+	// as the ordinary attack handler does [04 R-ORD-01 §7][06 §3.2].
+	// A bare point store leaves a computer-owned slot available to the scan.
 	nukeSlot.Target = units.Target{Kind: units.TargetGround, X: protectorX, Z: protectorZ}
+	nukeSlot.Flags &^= units.SlotFlagAutonomous
 	nukeSlot.Reload = 0
 
 	// Step until the nuke is airborne.

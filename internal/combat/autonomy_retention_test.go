@@ -154,7 +154,7 @@ func TestRetentionDropsAlliedAndBadMaskTargets(t *testing.T) {
 		svc, w, terrain, cat, shooter, _ := setup(t)
 		econ := &economy.Service{}
 		econ.Players[shooter.Owner].Allies[1] = true // the target's owner
-		svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, econ, cat, nil, nil)
+		svc.StepAutonomousForPlayer(shooter.Owner, w, nil, terrain, econ, cat, nil)
 		if shooter.SlotAt(0).Target.Kind != units.TargetNone {
 			t.Fatal("a target whose owner is now allied must be dropped at retention [06 §3.2]")
 		}
@@ -164,7 +164,7 @@ func TestRetentionDropsAlliedAndBadMaskTargets(t *testing.T) {
 		svc, w, terrain, cat, shooter, target := setup(t)
 		target.Def.UnitMask = oneBit
 		shooter.Def.BadTargetCategoryWPRIMask = oneBit
-		svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, cat, nil, nil)
+		svc.StepAutonomousForPlayer(shooter.Owner, w, nil, terrain, nil, cat, nil)
 		if shooter.SlotAt(0).Target.Kind != units.TargetNone {
 			t.Fatal("a target in the slot's bad-target mask must be dropped at retention [06 §3.2]")
 		}
@@ -177,7 +177,7 @@ func TestRetentionDropsAlliedAndBadMaskTargets(t *testing.T) {
 		econ := &economy.Service{}
 		econ.Players[shooter.Owner].Allies[1] = true
 		shooter.SlotAt(0).Flags &^= units.SlotFlagAutonomous
-		svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, econ, cat, nil, nil)
+		svc.StepAutonomousForPlayer(shooter.Owner, w, nil, terrain, econ, cat, nil)
 		if shooter.SlotAt(0).Target.Kind != units.TargetUnit {
 			t.Fatal("the retention drops belong to the autonomous scan and must not touch an order's slot [06 §3.2]")
 		}

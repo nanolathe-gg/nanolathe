@@ -74,11 +74,14 @@ const (
 // the explore record's aircraft-only membership. This unit changed no
 // behavior.
 
-// Manager is the per-player AI manager [PLAN_11 Public API] [08 "Established AI-facing data and rooted planner"].
-// It is session-owned and dispatched inside kernel phase 5's per-player coordinator
-// via economy.TickPlayer's beforeDeadline callback — that AI-as-auxiliary-helper
-// identification is supported inference from the shared entry address [08 "Established AI-facing data and rooted planner"] [05 "Authoritative settlement order"] [PLAN_11 C11].
+// Manager is the per-player planner. The phase-5 session hook dispatches its
+// tasks and autonomous maintenance before strategic refresh and settlement
+// [08 "Dispatch gates and order sinks"][05 "Authoritative settlement order"].
 type Manager struct {
+	// WeaponMaintenance is session wiring for the manager's post-task scan.
+	// It runs before the separate strategic refresh [06 §3.2][08 "Dispatch gates and order sinks"].
+	WeaponMaintenance func(player uint8)
+
 	Player    uint8     // 0..9, 10 is sentinel never dispatched [08][PLAN_11 C1]
 	Strategic Strategic // fixed-size retail strategic state, named fields per I13 [08][PLAN_11 C2]
 	Deadlines [TaskKindCount]uint32
@@ -404,11 +407,10 @@ func (m *Manager) hasBuildOptionsForDef(def *content.UnitDef) bool {
 	return false
 }
 
-// Tick is the per-player AI entry [08 "Established AI-facing data and rooted planner"] [PLAN_11 C1][C3][C11][C12].
-// It is designed to be passed as economy.TickPlayer's beforeDeadline callback (kernel phase 5 session-owned coordinator)
-// so it runs after eligible per-tick helpers but before the settlement deadline compare; a skipped slot invokes neither AI nor settlement
-// and advances nothing [05 "Authoritative settlement order"] [08 "Established AI-facing data and rooted planner"].
-// That the AI dispatch is specifically one of that step's auxiliary helpers is supported inference from the shared entry address [08] [PLAN_11 C11].
+// Tick runs computer tasks, autonomous weapon maintenance, then the separate
+// strategic refresh. The session owns player eligibility and calls it before
+// the settlement deadline [08 "Dispatch gates and order sinks"]
+// [05 "Authoritative settlement order"].
 func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 	if m == nil || econ == nil || int(m.Player) >= len(econ.Players) {
 		return
@@ -456,6 +458,9 @@ func (m *Manager) Tick(tick uint32, w *units.World, econ *economy.Service) {
 		// [R-P0-05 §1, §6].
 		m.EnsureStrategicInitialized()
 		m.runDueTasks(tick, w, econ)
+	}
+	if m.WeaponMaintenance != nil {
+		m.WeaponMaintenance(m.Player)
 	}
 	// Strategic refresh follows manager dispatch and precedes economy
 	// settlement, which invokes this method as its before-deadline callback

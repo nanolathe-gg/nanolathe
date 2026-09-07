@@ -49,8 +49,6 @@ type PlayerTrace struct {
 	UnitsEverCreated     uint32
 	GameEnded            bool
 	EndGameCountdown     int32
-	Helper1Deadline      uint32
-	Helper2Deadline      uint32
 	Allies               [10]bool
 	AutoShareMetal       bool
 	AutoShareEnergy      bool
@@ -95,7 +93,6 @@ func (s *Service) ParitySnapshot(w *units.World) TraceSnapshot {
 			ControllerState: p.ControllerState, IsObserver: p.IsObserver,
 			LiveUnitCount: live, UnitsEverCreated: created,
 			GameEnded: p.GameEnded, EndGameCountdown: p.EndGameCountdown,
-			Helper1Deadline: p.Helper1Deadline, Helper2Deadline: p.Helper2Deadline,
 			Allies: p.Allies, AutoShareMetal: p.AutoShareMetal,
 			AutoShareEnergy: p.AutoShareEnergy, AutoShareSensor: p.AutoShareSensor,
 			MetalShareThreshold: p.MetalShareThreshold, EnergyShareThreshold: p.EnergyShareThreshold,

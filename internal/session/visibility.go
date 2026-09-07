@@ -187,7 +187,7 @@ func publishVisibilityForAll(s *Session) {
 // stampPlayerSlice is the phase-5 per-player stamp sweep [R-CORE-01 §4.4.1]:
 // walk player's unit slice slots ascending and re-stamp coverage for each
 // in-game unit whose stamp cell or sight range changed. Unchanged units write
-// nothing. Called after that player's orders/work inside phase 5.
+// nothing. Called after strategic refresh and before settlement in phase 5.
 func stampPlayerSlice(s *Session, player int) {
 	if s == nil || s.Vis == nil || s.Units == nil {
 		return
@@ -212,17 +212,10 @@ func stampPlayerSlice(s *Session, player int) {
 	}
 }
 
-// stepSensorPhase runs the multi-player sensor state (radar/sonar/jam/cloak
-// deadlines, SensorTick) once per tick [03 §3.4] P0-11. [R-SENSOR-01] closes
-// the DET-06 seam question: this is not a tick phase of its own — it executes
-// inside phase 5's per-player pass, in the LOCAL viewing player's iteration,
-// after that player's stamp sweep (and, in retail, after the per-tick minimap
-// contacts pass and 30-tick victory/defeat block, immediately before the
-// mapped-minimap rebuild; nanolathe's residual deltas are recorded at
-// tickPlayers). Callers: tickPlayers calls it unconditionally — SensorTick
-// owns the player-count gate. When that gate skips, retail leaves the three
-// status bits exactly as unit construction wrote them [R-VIS-01 §4] "Gate",
-// so this pass writes nothing either.
+// stepSensorPhase runs the sensor status and cloak deadline walks inside the
+// viewing player's due settlement block, after the settlement gates. The
+// service additionally requires more than one active player; skipped passes
+// retain their previous status bits [03 R-SENSOR-01][03 R-VIS-01 §4].
 func (s *Session) stepSensorPhase(tick uint32) {
 	if s.Vis == nil || s.Units == nil {
 		return

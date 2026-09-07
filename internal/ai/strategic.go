@@ -429,7 +429,7 @@ func (s *Strategic) InitClassVectors() {
 // outcome recomputes the class vectors [06 §3.1][08 R-AI-01 §16].
 //
 // The caller is the per-player phase, once per visited slot in ascending slot
-// order, after that slot's manager tick and before its per-unit visits, and
+// order, after that slot's manager maintenance and before its LOS sweep, and
 // the gate is null-checked on the strategic state rather than
 // controller-checked: "the local human's slot draws on the same 30-tick
 // cadence as a computer slot and a one-human, one-computer game consumes two
@@ -443,9 +443,9 @@ func (s *Strategic) MaybeRefresh(tick uint32, r *rng.Simulation, player uint8, w
 	if r == nil {
 		return false
 	}
-	// Gate: tick >= LastRefreshTick+30, expressed as unsigned subtraction so tick
-	// wrap follows the simulation clock [08].
-	if tick-s.LastRefreshTick < refreshInterval {
+	// Add before the unsigned comparison, preserving the stored-word wrap
+	// and future timestamps [06 §3.1][08 R-AI-01 §16].
+	if s.LastRefreshTick+refreshInterval > tick {
 		return false
 	}
 	// This gate is the ONE gate of the one retail routine [06 §3.1]: the

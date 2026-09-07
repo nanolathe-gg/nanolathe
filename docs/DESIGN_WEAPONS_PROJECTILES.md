@@ -73,6 +73,12 @@ does: there is **no impulse or knockback** `[06 §9.4]`, and there is **no
 moving-accuracy or aim-rate mechanism** `[06 R-WPN-03 §3]`. Both have been
 proposed as "obvious" additions; both are inventions.
 
+`Service.StepAutonomousForPlayer` owns phase-5 target retention and acquisition.
+The session binds it between manager task dispatch and strategic refresh.
+`StepWeaponsForUnit` only resolves and fires targets already installed at its
+phase-2 entry. Per-player cursor order, including wrapped visits and empty
+records, belongs to the maintenance pass `[06 §3.2]`.
+
 ## 2. Packages and key types
 
 ### 2.1 Weapon slots and the per-slot pipeline
@@ -117,10 +123,14 @@ rather than retested per candidate `[06 R-WPN-02 §3]` `[06 R-WPN-02 §6]`. The
 autonomous scan carries a persistent per-player round-robin cursor rather than
 starting from slot zero each visit `[06 §3.2]`.
 
-Candidate admission is hostility plus direct visibility plus physical
-admission, walked in stable pool order; the acquisition gate is the one that
-tests visibility and category, and the shot-time gate is the one that does not
-`[06 §3.1]` `[06 R-WPN-05 §9]`.
+Hostility and direct visibility classify the registry at rebuild. Per-attempt
+materialization checks liveness; the planar query determines whether the
+primary population is empty before secondary fallback. Acquisition samples
+that population in registry order with swap removal, at most fifty picks;
+even a smaller population is sampled. Each pick then undergoes physical and
+paralyzer rejection before its score, with preferred and fallback minima
+updated in pick order `[06 §3.1]` `[06 §3.2]`. The shot-time physical gate has
+its own ordered clauses below `[06 R-WPN-05 §9]`.
 
 Direct visibility consumes the completed sensor phase's runtime status word:
 the sonar bit permits a below-surface hull probe, while an alliance row cannot

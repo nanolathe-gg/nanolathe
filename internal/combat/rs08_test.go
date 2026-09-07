@@ -299,7 +299,7 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 		}
 		return cands
 	}
-	// 50 candidates: no sampling draws, scoring draws for each candidate in preferred bucket (50 draws)
+	// 50 candidates: 49 advancing sampling draws and 50 scoring draws.
 	// But bound <2 for some? For simplicity we ensure each candidate's bound >=2 by placing at distance 10+i
 	acq50 := Acquisition{
 		ShooterX: shooterX, ShooterZ: shooterZ, ShooterY: numeric.FixedFromInt(int64(10)),
@@ -315,10 +315,9 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 		t.Fatalf("50 acquire should succeed")
 	}
 	after50 := r50.Draws()
-	// For 50, sampling draws 0, scoring draws 50 (since each candidate in preferred bucket gets one draw with bound >=2)
-	// Check draws advanced by 50
-	if after50-before50 != 50 {
-		t.Fatalf("50 candidates: draws %d, expected 50 (scoring only) got %d before %d after %v h %d", after50-before50, 50, before50, after50, h50)
+	// The final bound-one sample returns zero without advancing [06 §3.2].
+	if after50-before50 != 99 {
+		t.Fatalf("50 candidates: draws %d, expected 99 (sampling plus scoring) got %d before %d after %v h %d", after50-before50, 99, before50, after50, h50)
 	}
 	// 51 candidates: sampling draws 50 (swap-remove 50 draws) + scoring draws 50 = 100 draws
 	acq51 := Acquisition{
@@ -338,7 +337,7 @@ func TestRS08_SamplingBoundary50_51(t *testing.T) {
 	if after51-before51 != 100 {
 		t.Fatalf("51 candidates: draws %d, expected 100 (50 sampling +50 scoring) got before %d after %d h %d", after51-before51, before51, after51, h51)
 	}
-	// Verify 50 case preserves order when bound <2? Already tested elsewhere but ensure no extra draws for sampling
+	// Both populations sample and score in pick order.
 }
 
 // TestRS08_NaturalFireImpactDeath verifies fire→impact→death without pool injection [06 §5][06 §9].

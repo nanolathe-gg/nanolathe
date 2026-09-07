@@ -259,6 +259,10 @@ active units; jam emission from everyone else's; the minimum-cloak proximity
 scan against the source side's primary candidate list; and the seen probe. It
 rasterizes nothing, consults no alliance row, and draws no random numbers
 `[03 §3.4]` `[03 R-VIS-01 §4]` `[03 R-VIS-01 §5]` `[03 R-VIS-01 §6]`.
+The session schedules this call in the viewing player's due settlement block,
+after settlement gates, using `TickPlayer`'s returned deadline verdict.
+Between due passes, stored sensor status remains unchanged; LOS publication
+still runs on each eligible player entry `[03 R-SENSOR-01]`.
 
 **Fog state** (`fog.go`). `FogCache` holds two per-cell channels of 0..15 built
 from the authoritative stores — channel one from the viewing player's byte grid

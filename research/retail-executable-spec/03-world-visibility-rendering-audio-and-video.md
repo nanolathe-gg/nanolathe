@@ -3297,8 +3297,9 @@ reader ORs the jammer or sensor-circle surfaces into the mapping word grid or
 the per-player byte grids, and the gameplay visibility predicate never samples
 them (bounded negative over the sensor and predicate families).
 
-**Sensor and proximity phase.** The per-tick sensor phase runs only when more
-than one player is present. It is five unit walks and it writes nothing but
+**Sensor and proximity phase.** The deadline-driven sensor phase runs only
+on due viewing-player entries and when more than one player is present
+([R-SENSOR-01]). It is five unit walks and it writes nothing but
 unit status bits; `[R-VIS-01 §4]` states them in order, at implementable
 precision, and `[R-VIS-01 §5]` states the radius visitor and the three
 callbacks. In summary: a first pass clears the decloak-timer bit for every live
@@ -3335,24 +3336,24 @@ documented in §3.9.
 
 #### R-SENSOR-01 — sensor phase placement in the tick
 
-**Established.** The sensor phase is not a phase of its own and does not run at composer time: it executes inside the
-per-player pass of document 01 §4.4 phase 5, in the LOCAL viewing player's
-iteration, after that player's order dispatch, per-player work, LOS stamp
-sweep, per-tick minimap contacts pass, and 30-tick victory/defeat block — and
-immediately before the mapped-minimap surface rebuild, which runs in the same
-iteration behind its dirty bit. The phase is gated on the player count being
-greater than one. Because the per-player pass walks players in ascending
-order, the sensor/deadline work runs AFTER the local player's visibility
-stamps but BEFORE every higher-indexed player's stamps within the same tick.
-Its unit walks (friendly-contact status, sensor-circle emission, jam circles,
-the minimum-cloak proximity scan writing `tick + 90` deadlines and the
-decloak status bit, and the final seen-marker pass) cover the whole unit pool
-in that one placement, once per tick — Nanolathe should schedule the
-sensor/deadline work as a single per-tick pass keyed to the local viewing
-slot, positioned after the local player's stamp sweep, not as a separate
-tick phase and not adjacent to the composer. The writer that clears the
-per-unit seen marker (status bit `0x100`) between passes is the phase's own
-first pass; a second clear is the radar-jam callback (`[R-VIS-01 §4]`).
+**Established.** The sensor phase executes inside document 01 §4.4 phase 5,
+in the local **viewing** player's iteration, after manager work, strategic
+refresh, LOS publication, minimap contacts, the due victory/defeat block and
+settlement gates. It immediately precedes the mapped-minimap rebuild.
+
+The sensor call is **inside the viewing player's settlement-deadline block**:
+the unsigned future-deadline branch skips directly to the next player. A due
+block advances the deadline once by 30 and reaches the sensor tail even when
+later settlement gates refuse resource settlement. The sensor routine itself
+also requires more than one active player. It is therefore one pass per due
+viewing-player entry, not one pass on every simulation tick. An overdue
+deadline catches up one due entry at a time; loading retains that deadline.
+
+Player order remains ascending, so the sensor work follows the viewing
+player's stamps and precedes higher-indexed players' stamps in that same
+phase. Its five unit walks cover the whole pool at this one placement. The
+phase's first walk and the radar-jam callback own their documented seen-marker
+clears ([R-VIS-01 §4]); no extra between-tick clearing pass is implied.
 
 #### R-VIS-01 §4 — the sensor phase's five passes, exactly
 
@@ -3409,7 +3410,7 @@ everything: the defeat handler sets that rule-word bit, clears mode-word bits
 and forces one bulk rebuild.
 
 **This pass is the seen-marker clear writer.** The `& ~0x700` branch clears
-seen, sonar and jammed together, every tick, for every unit that is not own,
+seen, sonar and jammed together, on each due sensor pass, for every unit that is not own,
 allied-with-sharing, or seen by an observer. The only other clear in the image
 is the radar-jam callback (`[R-VIS-01 §5]`).
 
@@ -3677,8 +3678,9 @@ never on the tick of the stamp itself, and `Cloak_Off` likewise takes effect
 at the next pass.
 
 **Two mechanisms, not one.** Bit 12 is cleared at the top of the sensor
-phase's first pass every tick and re-set only by that tick's proximity breach,
-so it is a same-tick latch. The suppression deadline is the durable half: the
+phase's first walk on each due viewing-player entry and re-set by that pass's
+proximity breach. It persists until a later sensor pass clears it. The
+suppression deadline supplies the longer interval: the
 breach writes `currentTick + 90` (three seconds at 30 Hz), and the unit stays
 uncloaked until the tick counter reaches it even though bit 12 has long since
 been cleared. The deadline field is **shared** with other reveal producers
@@ -4489,8 +4491,9 @@ and the circles land on the final surface, which is wiped from the mapped
 composite and rebuilt every tick. Nothing in this path writes the mapping
 word grid or any per-player byte grid.
 
-The per-tick **sensor phase** (§3.4, `[R-VIS-01 §4]`, `[R-VIS-01 §5]`) is a
-different thing: it runs only when more than one player is present, walks
+The deadline-driven **sensor phase** (§3.4, `[R-SENSOR-01]`, `[R-VIS-01 §4]`,
+`[R-VIS-01 §5]`) is a different thing: it runs only when more than one player
+is present, walks
 units through the 128-world-unit spatial grid, and writes unit status bits —
 the seen marker, the sonar bit, and the jam clears — that the contacts pass
 and the acquisition predicate then read. It draws nothing. The two palette

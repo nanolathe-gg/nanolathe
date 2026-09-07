@@ -195,7 +195,7 @@ type Service struct {
 	deathNotified map[pool.Handle]*units.Unit
 
 	// scanCursor is the autonomous target scan's persistent per-player
-	// round-robin cursor [06 §3.2]; service.go owns it. It is per-session state
+	// round-robin cursor [06 §3.2]; autonomous.go owns it. It is per-session state
 	// like the two maps above, not configuration.
 	scanCursor autonomousScanCursor
 

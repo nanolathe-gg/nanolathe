@@ -165,7 +165,8 @@ func planarSquared(a, b *SensorUnit) int32 {
 	return wholeSquare(dx) + wholeSquare(dz)
 }
 
-// SensorTick runs the per-tick sensor and proximity phase [03 §3.4][R-VIS-01 §4].
+// SensorTick runs the sensor and proximity phase at a due viewing-player
+// settlement entry [03 §3.4][R-SENSOR-01][R-VIS-01 §4].
 //
 // It runs only when more than one player is active. In a one-player session
 // none of the passes runs and the three status bits keep whatever value unit

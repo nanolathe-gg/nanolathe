@@ -509,3 +509,26 @@ func TestCenterIsWeightedByTheInitializationByte(t *testing.T) {
 		t.Fatalf("zero total weight left centre (%d,%d,%d), want (0,0,0)", s2.CenterX, s2.CenterY, s2.CenterZ)
 	}
 }
+
+// The sum comparison is not interchangeable with elapsed subtraction around
+// wrapped sums or a future stored timestamp [06 §3.1].
+func TestStrategicRefreshUnsignedDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		last, tick uint32
+		due        bool
+	}{
+		{100, 99, false}, {100, 129, false}, {100, 130, true},
+		{^uint32(0) - 10, 0, false}, {^uint32(0) - 10, 19, true},
+		{^uint32(0) - 10, ^uint32(0) - 5, true},
+	} {
+		s := &Strategic{LastRefreshTick: tc.last}
+		r := rng.NewSimulation(7)
+		got := s.MaybeRefresh(tc.tick, &r, 0, nil)
+		if got != tc.due {
+			t.Fatalf("last=%d tick=%d due=%v, want %v", tc.last, tc.tick, got, tc.due)
+		}
+		if got && r.Draws() != 1 || !got && r.Draws() != 0 {
+			t.Fatal("refresh draw differs from due verdict")
+		}
+	}
+}

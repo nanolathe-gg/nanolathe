@@ -939,14 +939,12 @@ read; the per-definition AI limit has no semantic reader and is wired to
 nothing. The mission placement flags of §3.2 C7 are parsed and inert
 `[08 "What remains not established"]`.
 
-**C11 — the planner runs inside the settlement walk.** The session passes the
-manager's tick as the economy's before-deadline callback, so it runs after the
-per-tick helpers and before the deadline compare, and a slot the gate skips
-invokes neither the planner nor a deadline advance. That the dispatch is
-specifically one of that step's auxiliary helpers is a supported inference and
-is marked as such at the call site
-`[05 "Authoritative settlement order"]` `[08 "Established AI-facing data and
-rooted planner"]`.
+**C11 — the planner runs inside the settlement walk.** The session's
+before-deadline hook runs the manager's computer tasks, its session-bound
+weapon maintenance, the strategic refresh and LOS publication. Eligibility
+belongs to `TickPlayer`; a skipped slot advances none of these owners. The
+manager mapping is established by direct caller tracing
+`[05 "Authoritative settlement order"]` `[08 "Dispatch gates and order sinks"]`.
 
 **C12 — ordinary paths only.** Builds go through the construction queue, orders
 through the command resolver and the order descriptor registry. There is no

@@ -422,7 +422,7 @@ func (s *Session) ParityAuthoritativeHash() (string, error) {
 				writeArchivedBucket(w, "archive", i, r, p.ArchivedMirror[r])
 				w("totals:%d:%d:%016x:%016x:%016x|", i, r, math.Float64bits(p.Waste[r]), math.Float64bits(p.TotalProduced[r]), math.Float64bits(p.TotalConsumed[r]))
 			}
-			w("deadlines:%d:%d:%d:%d:%d:%d:%t:%t:%t:%t:%t:%08x:%08x|", i, p.UpdateTime, p.WinLoseTime, p.DisplayTimer, p.Helper1Deadline, p.Helper2Deadline, p.IsObserver, p.GameEnded, p.AutoShareMetal, p.AutoShareEnergy, p.AutoShareSensor, math.Float32bits(p.MetalShareThreshold), math.Float32bits(p.EnergyShareThreshold))
+			w("deadlines:%d:%d:%d:%d:%t:%t:%t:%t:%t:%08x:%08x|", i, p.UpdateTime, p.WinLoseTime, p.DisplayTimer, p.IsObserver, p.GameEnded, p.AutoShareMetal, p.AutoShareEnergy, p.AutoShareSensor, math.Float32bits(p.MetalShareThreshold), math.Float32bits(p.EnergyShareThreshold))
 			w("storage:%d:%t:%08x:%08x|", i, p.StorageBonusEnabled, math.Float32bits(p.StorageBonus[0]), math.Float32bits(p.StorageBonus[1]))
 			for a := 0; a < 10; a++ {
 				w("ally:%d:%d:%t|", i, a, p.Allies[a])

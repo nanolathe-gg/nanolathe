@@ -115,7 +115,10 @@ func TestEnemyMinimapAdmissionRequiresSensorCoverage(t *testing.T) {
 	//    strictly greater than the 655360 separation, and the search radius is
 	//    the same authored distance so the candidate is examined [R-VIS-01 §5].
 	own.Def.RadarDistance = 900
-	enemy, mine = admitted(2)
+	if seen, _ := admitted(2); seen {
+		t.Fatal("sensor status refreshed before the viewing deadline")
+	}
+	enemy, mine = admitted(30)
 	if !enemy {
 		t.Fatal("an enemy inside the viewer's radar range was not admitted to the minimap [R-VIS-01 §5]")
 	}
@@ -127,9 +130,12 @@ func TestEnemyMinimapAdmissionRequiresSensorCoverage(t *testing.T) {
 	//    than 655360 — and the same enemy at the same place drops off again.
 	//    The admission tracks the sensor, not a latch.
 	own.Def.RadarDistance = 700
-	enemy, mine = admitted(3)
+	if seen, _ := admitted(31); !seen {
+		t.Fatal("sensor status was cleared between due passes")
+	}
+	enemy, mine = admitted(60)
 	if enemy {
-		t.Fatal("an enemy outside the shortened radar range stayed admitted: the seen marker is not being cleared each tick [R-VIS-01 §4] pass 1")
+		t.Fatal("an enemy outside the shortened radar range stayed admitted: the seen marker is not being cleared on each due pass [R-VIS-01 §4] pass 1")
 	}
 	if !mine {
 		t.Fatal("the viewing player's own unit stopped being admitted")
@@ -222,14 +228,14 @@ func TestRadarEmissionRequiresTheActivationBit(t *testing.T) {
 
 	// The completion edge raises the bit through the one writer retail has.
 	tower.SetActivationEdge(true)
-	s.stepAuthoritativePhases(2)
+	s.stepAuthoritativePhases(30)
 	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit == 0 {
 		t.Fatalf("an ACTIVE radar emitter did not detect an enemy inside its range: status %#x [R-VIS-01 §5]", got)
 	}
 
 	// Lowering the edge again withdraws detection.
 	tower.SetActivationEdge(false)
-	s.stepAuthoritativePhases(3)
+	s.stepAuthoritativePhases(60)
 	if got := s.visStatus[int(enemyH)]; got&visibility.SeenBit != 0 {
 		t.Fatalf("a DEACTIVATED radar emitter kept detecting an enemy: status %#x", got)
 	}
@@ -293,7 +299,7 @@ func TestMinimapCirclesOnlyForTheViewersSelectedUnits(t *testing.T) {
 
 	// Selecting it is the whole difference.
 	s.Units.Unit(mineH).Flags |= 0x10 // the authoritative selected bit [07 §9]
-	s.stepAuthoritativePhases(2)
+	s.stepAuthoritativePhases(30)
 	s.publishSnapshot(2)
 	mine, ok = radarContactFor(s.Snapshot.Current(), mineH)
 	if !ok {

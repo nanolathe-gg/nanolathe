@@ -90,16 +90,16 @@ declaration toward each other slot. `DeclaresAlliance` is that one-directional
 read, and `AllianceRow` projects it into the eleven-byte form the save bank
 carries `[05 R-SHARE-01 §1]` `[08 "Player records"]`.
 
-**The deadline block** (`tick.go`). `Tick` walks slots 0..9 ascending and
-delegates to `TickPlayer`, which owns the whole per-slot shape: the early
-eligibility skip, the two internally 30-paced helpers and the weapon/position
-refresh sweep that run whether or not settlement is due, the `beforeDeadline`
-callback the session uses to dispatch the computer player without economy
-importing it, the unsigned deadline compare and its single conditional advance,
-the end-condition block, then the settlement gate chain
-`[05 "Authoritative settlement order"]`. `PlayerEliminated` is the elimination
-predicate all four player walks share, derived from the two unit counters rather
-than a flag `[05 R-ECO-01 §12]` `[08 R-SKIR-01 §3]`.
+**The deadline block** (`tick.go`). `TickPlayer` owns early eligibility,
+invokes the session's `beforeDeadline` hook, compares and advances the unsigned
+deadline, runs end conditions, and applies settlement gates. The hook owns the
+real manager tasks, autonomous weapon maintenance, strategic refresh and LOS
+sweep; no economy helper counters or duplicate unit scan stand in for those
+services. Its returned boolean means the deadline block was entered, even if
+later settlement gates refuse. The session uses that verdict for the viewing
+player's sensor tail `[05 "Authoritative settlement order"]`
+`[03 R-SENSOR-01]`. `PlayerEliminated` remains the common predicate derived
+from the world's live and ever-created unit counters `[05 R-ECO-01 §12]`.
 
 **Production** (`maker.go`). `PerUnitProductionFills` is the per-unit gather in
 player-slice then unit-slot order: passive make and use, the wind and tidal
@@ -402,14 +402,13 @@ add, a slot more than 30 ticks behind settles once per tick until it catches up 
 reproduce that, do not loop `[05 "Authoritative settlement order"]`
 `[05 R-ECO-01 §1]`.
 
-**C3 — slot structure.** Ascending order; skip unless the record exists, the
-control byte is one of the three active states, and the observer byte excludes
-observers — and while skipped **nothing advances, including the deadline**. Work
-independent of settlement still runs: two internally 30-paced helpers and a
-weapon/position refresh sweep, none of which touches stock. After those helpers
-and before the deadline compare the optional `beforeDeadline` callback runs; the
-session supplies the computer player's dispatch there, so economy never imports
-the planner `[05 "Authoritative settlement order"]` `[05 R-SHARE-01 §1]`.
+**C3 — slot structure.** Ascending order; skip unless the record exists,
+the controller has an active value and the player is not an observer. Skips
+freeze the deadline and invoke no player work. On eligible entries, the session
+hook runs manager tasks, autonomous maintenance, strategic refresh and LOS
+publication before the deadline comparison. Their cadences remain with their
+owning services; economy owns no generic helper clocks
+`[05 "Authoritative settlement order"]` `[05 R-SHARE-01 §1]`.
 
 **C4 — the settlement gate chain.** All required: record exists; state active;
 not observer; the slot is not eliminated; state narrowed to one of the two
@@ -644,14 +643,22 @@ whose events fall on one tick spend the simulation stream in that order
 
 ### 3.5 Not implemented
 
-* **Automatic resource and sensor sharing never fires in a single-player
-  battle.** The dispatcher, its cadences and its arithmetic are implemented, but
-  the candidate scan admits only remote-human slots, and the whole path is gated
-  on a networked session. This is retail's own gate, not an omission
-  `[05 R-SHARE-01 §3]` `[05 R-SHARE-01 §5]`.
-* **The mapping-grid merge is not economy's.** A received sensor-share packet
-  records no stock here; the grid merge belongs to `internal/visibility`
-  `[05 R-SHARE-01 §6]`.
+* **Multiplayer sharing is deferred.** The automatic dispatcher retains the
+  network-session gate, remote-human candidate predicates and 60/450-tick
+  cadences. In a single-player battle it performs no automatic transfers,
+  matching `[05 R-SHARE-01 §3]`. Local resource-transfer helpers implement stock
+  debit and production credit; the resource receive seam applies a credit
+  without repeating the debit `[05 R-SHARE-01 §2]` `[05 R-SHARE-01 §4]`.
+  Packet emission and network receipt are not implemented. The sensor branch
+  increments `SensorShareCalls` as a diagnostic only: it sends no packet and
+  changes no mapping grid. Its cadence tests establish candidate visitation,
+  not completed sharing.
+* **Mapping sharing remains unimplemented.** `ApplySharePacket` subtype 3
+  returns without merging explored-memory bits. A future implementation needs
+  the visibility-owned grid operation, its network receive binding and the
+  local SHARE screen `MAPINFO` binding `[05 R-SHARE-01 §5–§6]`. The established
+  operation copies mapped memory only; it does not transfer LOS or radar.
+  These are explicit scope limits, not a claim that all sharing is complete.
 * **The extraction rate is sampled at the placement call sites, not by the unit
   creator.** Retail samples it in the allocator, so a unit created by a path
   that does not go through a placement — a resurrection, for one — yields

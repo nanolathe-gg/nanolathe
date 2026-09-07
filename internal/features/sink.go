@@ -61,12 +61,7 @@ func (s *Service) integrateSink(inst *Instance) {
 	if inst.Y.Raw() >= sea.Raw() {
 		// Apply per-tick gravity. Terrain gravity is per-tick fixed [03 §2.2].
 		// Gravity is positive magnitude; sinking is negative, so subtract.
-		if s.Terrain.Gravity != 0 {
-			inst.Vy = inst.Vy.Sub(s.Terrain.Gravity)
-		} else {
-			// Fallback gravity if map supplies 0: use 0x1FDB = 8155 [fmt ota] ~0.124
-			inst.Vy = inst.Vy.Sub(numeric.Fixed(0x1FDB))
-		}
+		inst.Vy = inst.Vy.Sub(s.Terrain.Gravity)
 		inst.IsSinking = true
 	}
 }

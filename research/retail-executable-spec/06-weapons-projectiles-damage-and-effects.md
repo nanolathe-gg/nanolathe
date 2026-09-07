@@ -476,7 +476,10 @@ bypass autonomous visibility lists and bad-category preference, but it does
 not bypass every firing check.
 
 **Established fact:** The autonomous scan is one pass per player per tick, run
-from that player's manager object immediately after its AI task dispatch. It
+from that player's manager object immediately after its AI task dispatch and
+before the strategic registry refresh, LOS sweep and settlement deadline.
+The cursor advances only when this manager is called; another player's visit
+does not move it. Within a wrap, the end of the slice precedes its beginning. It
 visits
 
 ```
@@ -548,8 +551,8 @@ Three consequences follow:
   revisited on the same fixed period as a player owning many.
 
 **Established fact:** Within a visited unit the three slots are processed in
-numeric order, and a slot is skipped unless its armed/has-target flag and its
-tracking flag are both set (the two persisted slot flags of
+numeric order, and a slot is skipped unless its enabled flag and its
+autonomy flag are both set (the two persisted slot flags of
 `[R-SAVE-WEAPON-01]`), its weapon is not `dropped`, and either the owning
 player's
 controller type is 2 (computer) or the weapon is **not** `commandfire`. The
@@ -622,6 +625,10 @@ shot-time admission code.
 scanner failure, automatic-targeting enable/disable transitions, STOP, and the
 identified order-cancellation path. Replacing a target does not clear the
 Aim-request latch, so a replacement can skip a fresh Aim request.
+The scanner's clear changes only the encoded target pair and posts the deferred
+callback when that pair was nonempty. It does not clear the Aim/control words
+or run a VM drain. Failed retention proceeds directly to acquisition in the
+same slot visit; a successful replacement avoids the clear callback.
 
 **Established fact:** VTOL tracking/reacquisition uses a randomized delay from 30 through 329 ticks in the documented branch. Ground/non-VTOL fast paths do not use the same delay.
 
@@ -5683,6 +5690,13 @@ and the decider that would close it. Findings that closed an item live in the
 body and are not restated here.
 
 ### Catalog and targeting
+
+- **Unknown:** the complete free-writer set for fields read by autonomous
+  retention through a stale raw unit target. The raw resolver performs no
+  liveness check, but Nanolathe's compact freed record currently preserves
+  only death-packet fields and resolves this retention case as absent.
+  [06 §3.2] · trace all free/finalizer stores affecting owner, definition index
+  and stunned state before extending retained storage.
 
 - The authored key or writer behind the one global option bit of the
   acquisition filter's second admission (the third disjunct beside `shootme`

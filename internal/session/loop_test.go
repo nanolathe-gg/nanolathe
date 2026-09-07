@@ -8,7 +8,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/units"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // TestPublishAfterEachSubTick verifies C6: 0..5 sub-ticks publishing after phase 12
@@ -101,190 +100,55 @@ func TestPauseUnpauseBurstCap(t *testing.T) {
 	}
 }
 
-// TestAICallbackInsideTickPlayer verifies the player coordinator supplies AI
-// callbacks to TickPlayer per PLAN_11 C11 and that the callback is invoked
-// inside TickPlayer's beforeDeadline window (after per-tick helpers but before
-// the settlement deadline compare) [05 "Authoritative settlement order"].
+// Real manager maintenance runs before settlement, for eligible slots only
+// [05 "Authoritative settlement order"][06 §3.2].
 func TestAICallbackInsideTickPlayer(t *testing.T) {
-	// Setup economy with one active player slot 0
 	econ := &economy.Service{}
 	p := &econ.Players[0]
 	p.Exists = true
-	p.ControllerState = 2 // computer (one of {1,2,3} outer gate, and ==2 inner gate)
-	p.IsObserver = false
-	p.GameEnded = false
+	p.ControllerState = 1
 	p.EndGameCountdown = -1
-	p.UpdateTime = 10 // due at tick 10
-	p.Helper1Deadline = 10
-	p.Helper2Deadline = 10
-	p.WinLoseTime = 10
-	p.DisplayTimer = 10
-
-	// Create AI manager for player 0
-	mgr := &ai.Manager{Player: 0}
-	// Profile not needed for Tick counting; Tick will count entries.
-	// Initialize deadlines so first tick is due.
-	mgr.Deadlines[ai.TaskConstruction] = 0
-	mgr.Deadlines[ai.TaskResource] = 0
-
-	// Track AI invocation and capture economy state at that moment.
-	aiCalled := false
-	var seenHelper1, seenHelper2 int
-	var seenUpdateTime uint32
-	originalTick := mgr.Tick // not needed
-	_ = originalTick
-
-	// Wrap manager tick to capture helper counts inside beforeDeadline window.
-	// We cannot easily intercept without modifying manager, so we use the econ's helper counts.
-	// Instead, we will test via tickPlayers directly and verify that AI Tick was called.
-	s := &Session{
-		Clock:    &clock.State{Requested: 10, Active: 10},
-		Econ:     econ,
-		Units:    units.NewSliced(10, nil),
-		AI:       [10]*ai.Manager{0: mgr},
-		Snapshot: &frame.Buffer{},
-	}
-	s.RegisterAll()
-
-	// Capture helper counts before
-	beforeHelper1 := p.Helper1Calls
-	beforeHelper2 := p.Helper2Calls
-	_ = beforeHelper1
-	_ = beforeHelper2
-
-	// Create a spy AI that records when called and checks helper state.
-	spyMgr := &ai.Manager{Player: 0}
-	// Use custom manager that records
-	called := false
-	spyMgr = &ai.Manager{Player: 0}
-	// We need to make AI invoked via beforeDeadline; we will verify after tickPlayers that spy was called.
-	// Instead of wrapping, we can directly test tickPlayers invokes manager.
-	// For timing window, we need to verify that TickPlayer's helper work ran before AI.
-
-	// Setup econ player to be due and helpers due
-	p.Helper1Deadline = 10
-	p.Helper2Deadline = 10
 	p.UpdateTime = 10
-	p.Helper1Calls = 0
-	p.Helper2Calls = 0
-
-	// Create a manager that captures econ state when Tick is called
-	capturedHelper1 := -1
-	capturedUpdateTime := uint32(999)
-	testMgr := &ai.Manager{Player: 0}
-	// Monkey: we will not use manager's Tick for capture; instead we will provide a custom beforeDeadline that checks.
-	// Better to test directly via econ.TickPlayer with manual beforeDeadline.
-	insideHelper1 := -1
-	insideUpdate := uint32(0)
-	econ.Players[0].Helper1Calls = 0
-	econ.Players[0].Helper2Calls = 0
-	econ.Players[0].UpdateTime = 10
-	econ.Players[0].Helper1Deadline = 10
-	econ.Players[0].Helper2Deadline = 10
-
-	// Use a terrain nil world nil for TickPlayer
-	econ.TickPlayer(0, 10, nil, func() {
-		aiCalled = true
-		insideHelper1 = econ.Players[0].Helper1Calls
-		insideUpdate = econ.Players[0].UpdateTime
-		seenHelper1 = insideHelper1
-		seenHelper2 = econ.Players[0].Helper2Calls
-		seenUpdateTime = insideUpdate
-	})
-
-	if !aiCalled {
-		t.Fatalf("AI beforeDeadline callback not invoked inside TickPlayer")
+	calls := 0
+	mgr := &ai.Manager{Player: 0, WeaponMaintenance: func(uint8) {
+		calls++
+		if p.UpdateTime != 10 {
+			t.Fatal("manager ran after deadline advance")
+		}
+		p.Mirror[economy.Metal].Production = 5
+	}}
+	s := &Session{Econ: econ, Units: units.NewSliced(10, nil), AI: [10]*ai.Manager{0: mgr}}
+	s.tickPlayers(10)
+	if calls != 1 || p.PassProduced[economy.Metal] != 5 || p.UpdateTime != 40 {
+		t.Fatalf("phase ordering calls=%d deadline=%d produced=%v", calls, p.UpdateTime, p.PassProduced[economy.Metal])
 	}
-	// Helpers must have run before callback [05 "Authoritative settlement order"] C3
-	if insideHelper1 != 1 {
-		t.Fatalf("helper1 should have run before AI callback (after helpers before deadline compare) [05], got %d", insideHelper1)
-	}
-	if seenHelper2 != 1 {
-		t.Fatalf("helper2 should have run before AI callback, got %d", seenHelper2)
-	}
-	// UpdateTime should not yet have advanced (advanced by exactly 30 before settlement, after callback) [05] C2
-	if insideUpdate != 10 {
-		t.Fatalf("UpdateTime should still be 10 inside beforeDeadline (advanced after callback), got %d", insideUpdate)
-	}
-	if econ.Players[0].UpdateTime != 40 {
-		t.Fatalf("UpdateTime should be 40 after TickPlayer (10+30) [05] C2, got %d", econ.Players[0].UpdateTime)
-	}
-
-	// The session coordinator invokes AI through the direct tick path.
-	_ = capturedHelper1
-	_ = capturedUpdateTime
-	_ = testMgr
-	_ = spyMgr
-	_ = called
-	_ = seenHelper1
-	_ = seenHelper2
-	_ = seenUpdateTime
-
-	// Reset for session-level test
-	econ2 := &economy.Service{}
-	p2 := &econ2.Players[1]
-	p2.Exists = true
-	p2.ControllerState = 2
-	p2.IsObserver = false
-	p2.GameEnded = false
-	p2.EndGameCountdown = -1
-	p2.UpdateTime = 20
-	p2.Helper1Deadline = 20
-	p2.Helper2Deadline = 20
-	mgr2 := &ai.Manager{Player: 1}
-	mgr2.Deadlines[ai.TaskResource] = 0
-	s2 := &Session{
-		Clock: &clock.State{Requested: 10, Active: 10},
-		Econ:  econ2,
-		Units: units.NewSliced(10, nil),
-		AI:    [10]*ai.Manager{1: mgr2}, // index 1 is player 1 per RS-02
-		World: &world.Terrain{CellW: 10, CellH: 10},
-	}
-	s2.RegisterAll()
-	// Run coordinator at tick 20
-	s2.tickPlayers(20)
-	// Verify helpers ran around the AI callback.
-	if econ2.Players[1].Helper1Calls != 1 {
-		t.Fatalf("helper1 not run before AI in session coordinator, got %d", econ2.Players[1].Helper1Calls)
+	p.IsObserver = true
+	s.tickPlayers(40)
+	if calls != 1 || p.UpdateTime != 40 {
+		t.Fatal("observer ran player work")
 	}
 }
 
-// Ensure determinism: iteration is players 0..9 ascending, no map iteration [I1]
 func TestCoordinatorIteratesPlayersAscending(t *testing.T) {
 	econ := &economy.Service{}
-	for i := 0; i < 10; i++ {
+	var order []uint8
+	var managers [10]*ai.Manager
+	for i := range managers {
 		p := &econ.Players[i]
 		p.Exists = true
-		p.ControllerState = 2
-		p.IsObserver = false
-		p.GameEnded = false
+		p.ControllerState = 1
 		p.EndGameCountdown = -1
 		p.UpdateTime = 100
-		p.Helper1Deadline = 100
-		p.Helper2Deadline = 100
+		managers[i] = &ai.Manager{Player: uint8(i), WeaponMaintenance: func(player uint8) { order = append(order, player) }}
 	}
-	var managers [10]*ai.Manager
-	for i := 0; i < 10; i++ {
-		ii := i
-		m := &ai.Manager{Player: uint8(ii)}
-		// Wrap to record order via OnSettle? Simpler: record via manager's Tick by inspecting econ share?
-		// We can record order by having each manager's Tick append to order slice via closure.
-		// But Manager.Tick is method; we can instead test tickPlayers order by checking that econ's UpdateTime advanced in order?
-		// Alternative: create spy managers that record player index when Tick called.
-		managers[ii] = m
+	s := &Session{Econ: econ, Units: units.NewSliced(10, nil), AI: managers}
+	s.tickPlayers(99) // future settlement deadlines still run the real manager work
+	if len(order) != 10 {
+		t.Fatalf("visits %v", order)
 	}
-	// Each fixed player slot receives one helper callback.
-	s := &Session{
-		Clock: &clock.State{Requested: 10, Active: 10},
-		Econ:  econ,
-		Units: units.NewSliced(10, nil),
-		AI:    managers,
-	}
-	s.RegisterAll()
-	s.tickPlayers(100)
-	for i := 0; i < 10; i++ {
-		if econ.Players[i].Helper1Calls != 1 {
-			t.Fatalf("player %d helper count = %d, want 1", i, econ.Players[i].Helper1Calls)
+	for i, p := range order {
+		if int(p) != i {
+			t.Fatalf("player order %v", order)
 		}
 	}
 }

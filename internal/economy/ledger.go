@@ -125,17 +125,12 @@ type Player struct {
 	// The semantic names of the retail flag bits beyond `0x04` stay open as
 	// doc 08 items; nothing here reads them.
 	EndGameCountdown     int32
-	Helper1Deadline      uint32   // private 30-tick counter for auxiliary player-level object update [05 "Authoritative settlement order"]
-	Helper2Deadline      uint32   // second helper private 30-tick gate [05 "Authoritative settlement order"]
 	Allies               [10]bool // alliance relations [05 "Player slot"]
 	AutoShareMetal       bool     // automatic sharing option [05 "Allied resource and sensor sharing"]
 	AutoShareEnergy      bool
 	AutoShareSensor      bool
 	MetalShareThreshold  float32 // separate sharing threshold [05 "Allied resource and sensor sharing"]
 	EnergyShareThreshold float32
-	Helper1Calls         int // diagnostic: helper1 invocations, never touches stock [05]
-	Helper2Calls         int // diagnostic: helper2 invocations, never touches stock [05]
-	WeaponRefreshCalls   int // diagnostic: weapon/position refresh sweep, never touches stock [05]
 	// Storage bonus per [05 "Storage capacity"] [OX P1]: an enable flag plus a
 	// per-resource bonus holding max(starting stock, 200). When set, the bonus
 	// is added to the player's storage capacity during the ledger's capacity

@@ -212,21 +212,6 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	// economy settlement, cloak/upkeep ... are outside the blocked task
 	// runner").
 	bridge := s.callbackBridgeForUnit(u)
-	// The autonomous target scan's PER-UNIT admission [06 §3.2]. It is a
-	// separate pass in retail — one per player per tick, run from that player's
-	// manager immediately after its AI task dispatch — and this build folds it
-	// into the unit's weapon visit, so its preconditions are read here and
-	// carried into the two halves of the scan below (the retention drops and
-	// the re-acquisition). It gates NOTHING else: the reload decrement, the Aim
-	// handshake, the shot-time gates and the firing of a target an order
-	// installed all run for a unit the scan does not visit this tick.
-	scanning := s.autonomousScanVisitsUnit(u, tick, w)
-	// The per-side target registry's rebuild used to be reached from here, and
-	// is not any more: RebuildTargetRegistryIfDue is called once per slot from
-	// the per-player phase, at the position [06 §3.1] gives it — after that
-	// slot's manager tick and before its per-unit visits — so that the lists,
-	// the census and the one bound-30 draw share the single cadence gate they
-	// share in retail. See RebuildTargetRegistryIfDue.
 	// --- Phase: pre-drain callback scheduling (TargetCleared + Aim) in slot order 0..2 [GAP T15] ---
 	type slotPrep struct {
 		needLatch    bool
@@ -240,16 +225,9 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 	}
 	var preps [NumSlots]*slotPrep
 	var queuedTargetCleared bool
-	// The ordinary target clear [06 §3.2]: drop the target, drop the Aim
-	// handshake and its latch, and queue TargetCleared when the slot was
-	// actually pointing somewhere. Both the autonomous scan's retention drops
-	// and the interceptor scan's miss go through it — [06 §11.2] says an
-	// interceptor miss "clears the slot target through the ordinary path", so
-	// it has to be one body rather than two that drift apart.
-	//
-	// Bit 1 is the slot's ENABLED bit, whose one writer is the slot
-	// initializer [06 R-WPN-05 §3]; a lost target does not disable the slot.
-	// This used to clear it, reading it as an armed/has-target flag.
+	// Target resolution in the weapon pipeline clears its Aim state when the
+	// installed target has become stale [06 R-WPN-04 §1][06 R-WPN-05 §3].
+	// The phase-5 scanner has a separate target-word-only clear [06 §3.2].
 	clearSlotTarget := func(slot *units.Slot, idx int) {
 		clearedHeading := slot.DesiredYaw != 0
 		clearedPitch := slot.DesiredPitch != 0x8000
@@ -281,138 +259,12 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot.Reload > 0 {
 			slot.Reload--
 		}
-		// The control byte's bit 4 is AUTONOMY [06 R-WPN-05 §3]
-		// [04 R-UNIT-06 §5 part 3]: set means the slot belongs to autonomous
-		// acquisition, clear means an order currently holds it. It is not a
-		// firing gate — a slot an attack order took still shoots the target
-		// that order installed — so it gates only the two halves of the
-		// autonomous scan [06 §3.2]: the scan's retention drops below, and the
-		// re-acquisition after them. Every other reader of the bit already
-		// tests it (the retaliation offer, the guards); this site claimed in a
-		// comment that the bit "gates the AUTONOMOUS SCAN below" and then never
-		// read it.
-		//
-		// Reading it as a *suppression* gate on the whole slot visit, which
-		// this file did before, was a total regression: the order-record
-		// removal cleanup walk sets the bit on every assigned slot on EVERY
-		// removal [04 R-ORDER-02 §2] — a player's own non-queued right-click
-		// included — so one order silenced every weapon that unit owned.
-		//
-		// `scanning` is the per-unit half of the same admission [06 §3.2]: a
-		// unit the round-robin cursor does not reach this tick, or that is not
-		// fully built, or whose standing-fire field is not fire-at-will, runs
-		// neither half of the scan. Retention is inside the scan ("the scan
-		// first tries to retain"), so it waits for the unit's next visit too.
-		autonomous := scanning && slot.Flags&units.SlotFlagAutonomous != 0
-		// The AUTOMATIC INTERCEPTOR SCAN [06 §11.2]. It "runs from the same
-		// per-slot position in the autonomous scan that ordinary acquisition
-		// runs from (§3.2) and is chosen by the slot weapon's interceptor
-		// flag", so it stands here, at that position, as the other arm of the
-		// same branch rather than as an extra pass somewhere else.
-		//
-		// It has no retention half. Retention's three drops [06 §3.2] are all
-		// tests on a target UNIT (allied now, bad-target mask, paralyzer versus
-		// the stunned mark) and an interceptor slot's target is a POINT, so
-		// there is nothing for them to test; the scan simply runs again and its
-		// own hit or miss decides. A miss "clears the slot target through the
-		// ordinary path", which is the shared clear above.
-		//
-		// The scan's own gates — nonzero ammunition, differing owner side,
-		// `targetable`, the coverage square on the candidate's stored aim
-		// point, unclaimed — live in interceptorScanCandidate. The slot store
-		// is the candidate's CURRENT position, not the aim point it was
-		// matched on [06 §11.2].
-		//
-		// Everything below this branch is unchanged for an interceptor slot:
-		// the shot-time gate, the muzzle query, the vertical-launch executor
-		// and the stockpile fire gate all run exactly as they do for any other
-		// weapon [06 §11.1].
-		if slot.Weapon != nil && slot.Weapon.Interceptor {
-			if autonomous {
-				if _, candPos, found := interceptorScanCandidate(s, u, slot, catalog); found {
-					// A hit installs a POINT target from the candidate's
-					// current position [06 §11.2]. The Aim handshake and the
-					// stored angles are left alone: the vertical-launch
-					// executor runs no drift gate [06 §3.3].
-					slot.Target = units.Target{Kind: units.TargetGround, X: candPos.X, Z: candPos.Z}
-				} else {
-					clearSlotTarget(slot, idx)
-				}
-			}
-			if slot.Target.Kind == units.TargetNone {
-				continue // nothing to shoot at [06 §11.2]
-			}
-		} else if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
+		// Autonomous maintenance runs in phase 5 after AI dispatch [06 §3.2].
+		// This phase resolves and fires the target already installed at entry.
+		if slot.Target.Kind == units.TargetUnit && slot.Target.Unit != 0 {
 			tu := w.Unit(slot.Target.Unit)
-			// Stale/dead resolution belongs to the slot pipeline's own target
-			// resolution and runs for every slot, autonomous or not: [06 §3.2]
-			// lists "stale/dead resolution" among TargetCleared's producers
-			// beside the scanner's own failure.
-			drop := tu == nil || !tu.Alive || tu.Dying
-			if !drop && autonomous {
-				// The autonomous scan tries to RETAIN first, and [06 §3.2]
-				// gives retention exactly three drops, in this order: the
-				// target's owning player is now allied to the scanning player;
-				// the target's definition index is in the slot's bad-target
-				// mask (retention is stricter than acquisition, which merely
-				// buckets such a candidate as fallback, [06 §3.1]); or the
-				// slot's weapon is a paralyzer and the target already carries
-				// the stunned mark — one of the exactly two readers of that
-				// mark [06 R-DMG-01 §11], and the reason a paralyzer does not
-				// spend its shots re-stunning a unit that is already down. An
-				// ordinary weapon ignores the mark entirely.
-				switch {
-				case isAllied(u.Owner, tu.Owner, econ):
-					drop = true
-				case !IsPreferredCategoryMask(tu.Def.DefinitionMask(), badMaskForSlot(u.Def, idx)):
-					drop = true
-				case slot.Weapon != nil && slot.Weapon.Paralyzer && tu.Stunned:
-					drop = true
-				}
-			}
-			if drop {
+			if tu == nil || !tu.Alive || tu.Dying {
 				clearSlotTarget(slot, idx)
-				continue
-			}
-		}
-		// The autonomous scan's per-slot command-fire clause [06 §3.2]: a slot
-		// only acquires when the owning player's controller type is 2
-		// (computer) or the weapon is not `commandfire`. The consequence is a
-		// contract, not a nicety — a human player's units never acquire
-		// autonomously with a command-fire weapon. Without this reader the
-		// commander's disintegrator hunted and fired on its own, which is also
-		// how a human commander ended up standing in its own blast.
-		//
-		// The gate suppresses only the ACQUISITION. A target the manual path
-		// installed on a command-fire slot — `AttackSpecial` resolves command
-		// code 3, sets p1 = 2 and the resolved attack handler binds slot 2
-		// [04 R-ORD-01 §2][04 R-ORD-01 §3] — is left in place and falls through
-		// to the ordinary shot-time gates below, because forced/manual
-		// installation bypasses the autonomous lists and nothing else
-		// [06 §3.2].
-		// The trigger is target absence alone. It used to read `|| bit 1
-		// clear` as "not armed"; bit 1 is the enabled bit and is set for the
-		// whole life of every populated slot [06 R-WPN-05 §3]. The autonomy
-		// bit is the scan's other per-slot clause [06 §3.2], so a slot an
-		// order holds re-acquires nothing.
-		if slot.Target.Kind == units.TargetNone {
-			if !autonomous || !AutonomousScanAdmitsSlot(slot.Weapon, s.PlayerControlByteFor(u.Owner)) {
-				if slot.Target.Kind == units.TargetNone {
-					continue // nothing installed and nothing to acquire [06 §3.2]
-				}
-			} else if acquired, ok := s.acquireTargetForSlot(u, slot, idx, w, vis, terrain, simRNG, econ, catalog); ok {
-				savedYaw := slot.DesiredYaw
-				savedPitch := slot.DesiredPitch
-				savedIssue := slot.Aim.IssueBit
-				savedReady := slot.Aim.Ready
-				savedFlags := slot.Flags & 0x01
-				slot.Target = units.Target{Kind: units.TargetUnit, Unit: acquired}
-				slot.DesiredYaw = savedYaw
-				slot.DesiredPitch = savedPitch
-				slot.Aim.IssueBit = savedIssue
-				slot.Aim.Ready = savedReady
-				slot.Flags = (slot.Flags &^ 0x01) | savedFlags
-			} else {
 				continue
 			}
 		}
@@ -860,140 +712,6 @@ const autonomousScanDivisor = 30
 // cursor is indexed over that fixed range, never a map (I1).
 const combatPlayerSlots = 10
 
-// autonomousScanCursor is the persistent per-player cursor of [06 §3.2]: the
-// scan "advanc[es] a persistent cursor through the owning player's unit vector
-// and wrap[s] to its beginning at the end". That vector is the player's whole
-// FIXED RECORD SLICE of the unit array — `perPlayerLimit` consecutive records,
-// bounded once at session entry and never resized, free records included — and
-// not a compacted list of its live units
-// [06 §3.2 "The budget word is the per-player unit limit"][05 R-SHARE-01 §7].
-//
-// The window is therefore a range of record INDICES, known before the pass
-// starts rather than measured by it: this tick admits the `span` consecutive
-// indices starting at the player's cursor, wrapping at the end of the slice,
-// and the cursor advances by `span` every tick. A live unit is visited exactly
-// when its own record index falls in that window, so a free record inside the
-// window still spends budget by simply not being anybody — which is retail's
-// "nonzero definition index" clause read from the other side. A player owning
-// few units spends most of its budget on empty records and its units are
-// revisited on the same fixed `ceil(perPlayerLimit / span)` period as a player
-// owning many.
-//
-// Correction (WU-19-154): the previous model divided the GLOBAL LIVE COUNT and
-// reconstructed the cursor from the order units arrived in the session's single
-// unit sweep, measuring the "vector length" as the number of live units the
-// previous pass saw. Both halves were the superseded reading of [06 §3.2],
-// which its own correction paragraph names; the marker that carried them said
-// closing it needed accessors internal/units does not expose, and that was
-// false — `World.MaxDefs` is the per-player slice width (the name predates
-// WU-19-118 sizing the pool from the unit limit and misdescribes it),
-// `World.SliceForPlayer` gives the slice base, and `Unit.Handle` is the record
-// index.
-type autonomousScanCursor struct {
-	tick   uint32
-	primed bool
-	span   int // this tick's budget, `perPlayerLimit/30 + 1`
-	limit  int // the per-player record slice length; 0 for an unsliced fixture pool
-	cursor [combatPlayerSlots]int
-}
-
-// beginTick rolls every player's cursor forward onto a new tick, wrapping it
-// against the fixed slice length [06 §3.2]. perPlayerLimit is the session's
-// per-player unit limit, which is also the slice length.
-func (c *autonomousScanCursor) beginTick(tick uint32, perPlayerLimit int) {
-	if c.primed && c.tick == tick {
-		return
-	}
-	if perPlayerLimit < 0 {
-		perPlayerLimit = 0
-	}
-	if c.primed {
-		for p := range c.cursor {
-			if c.limit > 0 {
-				c.cursor[p] = (c.cursor[p] + c.span) % c.limit
-			} else {
-				c.cursor[p] = 0
-			}
-		}
-	}
-	c.limit = perPlayerLimit
-	// `word / 30 + 1` [06 §3.2] — the dividend is truncated to sixteen bits
-	// before the divide, which is retail's storage width for the limit
-	// [05 R-SHARE-01 §7].
-	c.span = int(uint16(perPlayerLimit))/autonomousScanDivisor + 1
-	c.tick = tick
-	c.primed = true
-}
-
-// visits reports whether this tick's window covers the record the unit occupies
-// [06 §3.2]. record is the unit's index within its owner's fixed slice; a
-// negative index means the pool is not sliced (a fixture world), where there is
-// no record array to walk and every unit is admitted.
-func (c *autonomousScanCursor) visits(owner uint8, record int) bool {
-	p := int(owner)
-	if p < 0 || p >= combatPlayerSlots {
-		return false
-	}
-	count := c.limit
-	if count <= 0 || record < 0 || c.span >= count {
-		// Unsliced fixture pool, or a budget that covers the whole slice: every
-		// record is visited every tick.
-		return true
-	}
-	rel := record - c.cursor[p]
-	if rel < 0 {
-		rel += count // the window wraps to the beginning of the slice
-	}
-	return rel < c.span
-}
-
-// autonomousScanVisitsUnit is the autonomous scan's per-unit admission
-// [06 §3.2]: the visited unit must have a nonzero definition index, a
-// remaining-build-fraction of exactly zero, the ARMED status bit set, and its
-// two-bit stance field equal to the fire-at-will value — read in that order off
-// the one runtime status word.
-//
-// The cursor window is tested first, because the budget is spent on record
-// slots rather than on units that pass.
-func (s *Service) autonomousScanVisitsUnit(u *units.Unit, tick uint32, w *units.World) bool {
-	if s == nil || u == nil {
-		return false
-	}
-	// The slice width is the session's per-player unit limit [05 R-SHARE-01 §7];
-	// MaxDefs is its accessor under a name that predates WU-19-118 sizing the
-	// pool from the limit rather than from the catalog. record is the unit's
-	// index inside its owner's slice, and stays -1 for an unsliced fixture pool.
-	record := -1
-	if start, _, ok := w.SliceForPlayer(int(u.Owner)); ok {
-		record = int(u.Handle) - start
-	}
-	s.scanCursor.beginTick(tick, w.MaxDefs())
-	if !s.scanCursor.visits(u.Owner, record) {
-		return false
-	}
-	if u.Def == nil {
-		return false // "a nonzero definition index"
-	}
-	if u.Remaining != 0 {
-		return false // "a remaining-build-fraction of exactly zero"
-	}
-	// The third clause, now named [06 §3.2 "The third clause is the armed
-	// bit"]. The previous text here was an open-question marker saying that "one high
-	// status bit set" did "not name the bit, and no other section identifies a
-	// status bit this scan reads", and left the clause unmodelled so the gate
-	// scanned a superset. That was incomplete rather than wrong: the scan reads
-	// the same runtime status word this line's stance field lives in, and the
-	// bit it tests is the ARMED bit — the second of the two high bits the
-	// classifier census names, set once at creation when the definition
-	// resolved at least one of its three weapon slots [08 "Classifier
-	// eligibility, destinations, and order"]. The sense is SET: a clear bit
-	// ends the unit's visit before any slot is looked at.
-	if u.Flags&units.ArmedStatus == 0 {
-		return false
-	}
-	return u.Flags>>units.StandingFireShift&units.StandingFieldMask == stanceFireAtWill
-}
-
 // ---------------------------------------------------------------------------
 // The per-side target registry: both candidate lists and the secondary-list
 // gate [06 §3.1]
@@ -1373,28 +1091,9 @@ func (s *Service) acquireTargetForSlotRange(u *units.Unit, slot *units.Slot, idx
 	return h, ok
 }
 
-// primaryCandidates materializes the scanning player's PRIMARY list into the
-// per-attempt filter's candidate array [06 §3.1].
-//
-// "Automatic acquisition never scans the unit array": the array walked here is
-// the registry's list, filed at the last rebuild with the direct-visibility
-// predicate applied there, and the filter over it is thin — "no visibility,
-// category, sensor, medium, alliance or range test happens at this point". This
-// build's filter is liveness plus hostility; the distance test, the physical
-// gate and the category split are AcquireTarget's, in that section's order.
-//
-// Hostility is re-tested rather than trusted from the rebuild because an
-// alliance declared since then would otherwise leave a now-allied unit
-// shootable for up to thirty ticks, and the alliance row is read live
-// everywhere else in this package. Liveness must be re-tested: the list is up
-// to thirty ticks stale and can name units that have died, and a handle the
-// pool has since reused names a different unit (I5).
-//
-// The one thing NOT re-tested is visibility. A unit that has become visible
-// since the rebuild is not on this list and cannot be acquired until the next
-// one — "an acquisition can therefore see a list up to thirty ticks stale" —
-// and a listed unit that has since gone dark stays acquirable for the rest of
-// the window.
+// primaryCandidates materializes the cached primary registry in its stored
+// order. Only liveness is refreshed here; distance is checked by AcquireTarget.
+// Hostility and visibility remain those of the last rebuild [06 §3.1].
 func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel numeric.Fixed, vis *visibility.Service, econ *economy.Service, catalog *content.Catalog) []Candidate {
 	if s == nil || u == nil || w == nil {
 		return nil
@@ -1411,9 +1110,6 @@ func (s *Service) primaryCandidates(u *units.Unit, w *units.World, seaLevel nume
 		}
 		if !cand.Alive || cand.Dying {
 			continue // alive bit set, death latch clear [06 §3.1]
-		}
-		if !isHostile(u, cand, econ) {
-			continue
 		}
 		out = append(out, acquisitionCandidate(u, cand, seaLevel, sensorStatus(vis, cand.Handle), catalog))
 	}

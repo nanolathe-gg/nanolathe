@@ -43,18 +43,10 @@ func (s *Service) reproduceTick() {
 	if !cell.IsRealFeature() {
 		return
 	}
-	// Animation bit 0 clear: the plot flag byte's bit 0 — the same flag byte
-	// Occupied() reads [06 §13.1]. A map-authored cell with the bit set must
-	// not reproduce even with no live instance, so the plot byte is the
-	// source of truth; the definition's Animating flag is only the fallback
-	// when the plot flag is clear.
+	// Only the plot's attached-instance bit gates the source. Resting sprite
+	// convenience records are not attached runtime instances [05 R-FEAT-01 §12].
 	if cell.FlagByte()&0x01 != 0 {
 		return
-	}
-	if inst, ok := s.instances[idx]; ok && inst != nil {
-		if inst.Status&0x01 != 0 {
-			return
-		}
 	}
 	sim := s.sim()
 	if sim == nil {
@@ -67,26 +59,20 @@ func (s *Service) reproduceTick() {
 	if !ok || def == nil {
 		return
 	}
-	reproduce := def.Reproduce // integer percentage [02 "Feature record"]
-	if reproduce <= 0 {
-		// Draw already consumed, no spawn; this is the classic regression [I4].
-		return
-	}
+	// Both fields are zero-extended stored bytes. The roll comparison is
+	// signed, after that extension [05 R-FEAT-01 §12].
+	reproduce := int32(uint8(def.Reproduce))
 	if int32(roll) >= reproduce {
 		return
 	}
-	// On passing roll dx/dz = simRNG(area) − area/2 [05 "Feature catalog and placement"] [06 §13.1].
-	area := def.ReproduceArea
-	if area <= 0 {
-		return
-	}
-	// One draw each [06 §13.1].
-	dx := int(sim.Uint32n(uint32(area))) - int(area/2) // [05 "Feature catalog and placement"]
-	dz := int(sim.Uint32n(uint32(area))) - int(area/2)
-	cx := idx % w
-	cz := idx / w
-	tx := cx + dx
-	tz := cz + dz
+	area := uint32(uint8(def.ReproduceArea))
+	// Bounds zero and one return zero without drawing; the target test must
+	// still run. X then Z preserves the shared RNG order [01 §7.3].
+	dx := int(sim.Uint32n(area)) - int(area>>1)
+	dz := int(sim.Uint32n(area)) - int(area>>1)
+	tx := idx%w + dx
+	// Retail divides by height here even on rectangular maps [05 R-FEAT-01 §12].
+	tz := idx/h + dz
 	if tx < 0 || tx >= w || tz < 0 || tz >= h {
 		return
 	}
@@ -95,12 +81,9 @@ func (s *Service) reproduceTick() {
 		return
 	}
 	targetCell := s.Terrain.Plot[targetIdx]
-	// Target cell must be in-bounds and free (empty sentinel 0xFFFF) [06 §13.1].
-	if !targetCell.IsEmpty() {
-		return
-	}
-	// Source cell must still hold the reproducing feature [06 §13.1].
-	if s.Terrain.Plot[idx].Feature() != cell.Feature() {
+	// The source ground occupant is tested after target lookup and both
+	// offset calls. A target must be exactly empty [05 R-FEAT-01 §12].
+	if s.Terrain.Plot[idx].OccupantA() != 0 || !targetCell.IsEmpty() {
 		return
 	}
 	// Spawn goes through the common feature placement helper with no

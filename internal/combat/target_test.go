@@ -23,50 +23,21 @@ func acq(sx, sz numeric.Fixed, weaponRange int32, badMask uint32, r *rng.Simulat
 }
 
 func TestAcquisitionOrderDeterminismTiedCandidates(t *testing.T) {
-	// Two candidates at same distance (0) → bound <2 → score 0 without RNG advance [06 §3.2] [01 §7.1] I4.
-	// Strictly lower wins, equal preserves first sampled [06 §3.2]; determinism requires pool slot asc (I1).
-	// This locks that tied scores do not randomize order beyond stable iteration.
-	shooterX, shooterZ := fixed(0), fixed(0)
-	weaponRange := int32(1000)
-	badMask := uint32(0)
-
+	// Zero-distance scores tie without drawing. Sampling still spends its
+	// bound-two draw, and the first sampled candidate wins [06 §3.2].
 	candidates := []Candidate{
-		{Handle: pool.Handle(10), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
-		{Handle: pool.Handle(5), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
+		{Handle: 10, Hostile: true, Y: fixed(1)},
+		{Handle: 5, Hostile: true, Y: fixed(1)},
 	}
-	// Shuffle input order to prove determinism is by Handle asc, not input order.
-	// AcquireTarget sorts ≤50 sampled by Handle asc, so winner should be 5 regardless.
-	simRng := rng.NewSimulation(12345) // any seed; bound<2 path does not advance [01 §7.1]
-	// Use non-nil rng to exercise zero/no-advance path
-	var r rng.Simulation = simRng
-	h, ok := AcquireTarget(candidates, acq(shooterX, shooterZ, weaponRange, badMask, &r))
-	if !ok {
-		t.Fatalf("acquire failed, want ok")
-	}
-	if h != pool.Handle(5) {
-		t.Fatalf("tied winner %d, want 5 (pool slot asc) [06 §3.2] I1", h)
-	}
-	// Reverse input order still yields same winner.
-	candidatesRev := []Candidate{
-		{Handle: pool.Handle(5), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
-		{Handle: pool.Handle(10), X: fixed(0), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
-	}
-	r2 := rng.NewSimulation(999)
-	h2, _ := AcquireTarget(candidatesRev, acq(shooterX, shooterZ, weaponRange, badMask, &r2))
-	if h2 != pool.Handle(5) {
-		t.Fatalf("tied winner rev %d, want 5 [06 §3.2] I1", h2)
-	}
-	// Ensure deterministic across two runs with same seed and same candidates
-	r3 := rng.NewSimulation(1)
-	r4 := rng.NewSimulation(1)
-	cands := []Candidate{
-		{Handle: pool.Handle(2), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
-		{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Category: 0, Hostile: true, Y: fixed(1)},
-	}
-	h3, _ := AcquireTarget(cands, acq(shooterX, shooterZ, weaponRange, badMask, &r3))
-	h4, _ := AcquireTarget(cands, acq(shooterX, shooterZ, weaponRange, badMask, &r4))
-	if h3 != h4 {
-		t.Fatalf("determinism failed: %d vs %d with same seed [06 §3.2] I1 I4", h3, h4)
+	for reversed := 0; reversed < 2; reversed++ {
+		r := rng.NewSimulation(12345)
+		expected := r
+		first := expected.Uint32n(2)
+		h, ok := AcquireTarget(candidates, acq(0, 0, 1000, 0, &r))
+		if !ok || h != candidates[first].Handle || r.State != expected.State || r.Draws() != expected.Draws() {
+			t.Fatalf("order=%d winner=%d expected=%d draws=%d", reversed, h, candidates[first].Handle, r.Draws())
+		}
+		candidates[0], candidates[1] = candidates[1], candidates[0]
 	}
 }
 
@@ -159,8 +130,8 @@ func TestAcquisitionFiltersHostilityAndNotVisibility(t *testing.T) {
 	plain := Candidate{Handle: pool.Handle(3), X: fixed(10), Z: fixed(0), Hostile: true, Y: fixed(1)}
 
 	r := rng.NewSimulation(1)
-	if _, ok := AcquireTarget([]Candidate{friendly}, acq(shooterX, shooterZ, weaponRange, 0, &r)); ok {
-		t.Fatalf("a non-hostile entry was acquired [06 §3.1]")
+	if h, ok := AcquireTarget([]Candidate{friendly}, acq(shooterX, shooterZ, weaponRange, 0, &r)); !ok || h != friendly.Handle {
+		t.Fatalf("a cached entry that became allied must remain in this acquisition query [06 §3.1]")
 	}
 	r2 := rng.NewSimulation(1)
 	if h, ok := AcquireTarget([]Candidate{cloakedSinceRebuild}, acq(shooterX, shooterZ, weaponRange, 0, &r2)); !ok || h != pool.Handle(2) {

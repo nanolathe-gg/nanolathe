@@ -244,18 +244,22 @@ func TestRangeIsTheLastClause(t *testing.T) {
 	a.Ballistic = true
 	consulted := 0
 	a.BallisticFeasible = func(Candidate) bool { consulted++; return true }
-	if _, ok := AcquireTarget([]Candidate{hostileAt(1, 900, 9)}, a); ok {
-		t.Fatalf("an out-of-range candidate was acquired")
+	if a.admits(hostileAt(1, 900, 9)) {
+		t.Fatalf("physical gate admitted an out-of-range candidate")
 	}
 	if consulted != 1 {
 		t.Fatalf("the ballistic clause ran %d times for an out-of-range candidate, want 1 (range is last)", consulted)
 	}
+	consulted = 0
+	AcquireTarget([]Candidate{hostileAt(1, 900, 9)}, a)
+	if consulted != 0 {
+		t.Fatal("the preliminary query should reject before invoking the physical gate")
+	}
 }
 
-// The gates run before the sampling draw, so a rejected candidate must not
-// consume RNG. Two runs from the same seed, one with an inadmissible candidate
-// added, must leave the stream in the same place.
-func TestRejectedCandidatesDoNotAdvanceTheStream(t *testing.T) {
+// Physical rejection happens after the sampling draw but before scoring
+// [06 §3.2]. Adding one rejected entry spends one more sampling draw.
+func TestRejectedCandidatesSpendSamplingButNotScoringDraws(t *testing.T) {
 	good := hostileAt(1, 300, 9)
 	sunk := hostileAt(2, 300, 1) // below sea level: rejected before scoring
 
@@ -265,8 +269,8 @@ func TestRejectedCandidatesDoNotAdvanceTheStream(t *testing.T) {
 	r2 := rng.NewSimulation(7)
 	AcquireTarget([]Candidate{good, sunk}, base(&r2))
 
-	if r1.Draws() != r2.Draws() {
-		t.Fatalf("an inadmissible candidate advanced the shared stream: %d vs %d draws",
+	if r1.Draws() != 1 || r2.Draws() != 2 {
+		t.Fatalf("sampling/scoring draws=%d/%d, want 1/2",
 			r1.Draws(), r2.Draws())
 	}
 }

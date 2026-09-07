@@ -457,8 +457,6 @@ func TestSettlementGateIsTheEliminationTest(t *testing.T) {
 	p := &svc.Players[0]
 	activePlayer(p)
 	p.UpdateTime = 100
-	p.Helper1Deadline = 200
-	p.Helper2Deadline = 200
 	p.Mirror[Metal].Production = 4
 	svc.TickPlayer(0, 100, fresh, nil)
 	if p.UpdateTime != 130 {
@@ -476,8 +474,6 @@ func TestSettlementGateIsTheEliminationTest(t *testing.T) {
 	q := &svc2.Players[0]
 	activePlayer(q)
 	q.UpdateTime = 100
-	q.Helper1Deadline = 200
-	q.Helper2Deadline = 200
 	q.Mirror[Metal].Production = 4
 	svc2.TickPlayer(0, 100, dead, nil)
 	if q.UpdateTime != 130 {
@@ -574,8 +570,6 @@ func TestPreGameSpawnOutsideLedger(t *testing.T) {
 	svc2.Players[0].ControllerState = 1
 	svc2.Players[0].EndGameCountdown = -1
 	svc2.Players[0].UpdateTime = 0
-	svc2.Players[0].Helper1Deadline = 1 << 31
-	svc2.Players[0].Helper2Deadline = 1 << 31
 	svc2.Players[0].Mirror[Metal].Production = 4
 	// Tick 100 with deadline 0 => 100 behind, should settle once per tick, not loop to catch all at once
 	svc2.TickPlayer(0, 100, w, nil)

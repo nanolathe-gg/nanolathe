@@ -4,13 +4,12 @@
 // order, and hysteresis are established per [06 §3] P0-10. Coverage drives overlay
 // only [06 §3.3]; engagement uses Range. Candidate traversal excludes features
 // because they are in a separate system [06 §3.1]. Iteration is deterministic
-// (pool slot asc) [06 §1.2] (I1); no map iteration.
+// for registry walks (pool slot asc) and sampled picks (shared RNG) [06 §3.2];
+// no map iteration.
 
 package combat
 
 import (
-	"sort"
-
 	"github.com/nanolathe/nanolathe/internal/cob"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
@@ -245,7 +244,7 @@ type Candidate struct {
 	// [R-P0-03].
 	CategoryMask         content.CategoryMask
 	CategoryMaskResolved bool
-	Hostile              bool // hostility for primary list [06 §3.1] P0-10
+	Hostile              bool // reaction-offer hostility; cached queries trust registry membership [06 §3.1]
 
 	// OwnSide marks a candidate belonging to the viewing player. The
 	// direct-visibility predicate accepts own-side units outright, without
@@ -305,43 +304,8 @@ func rngBoundForCandidate(dx, dz numeric.Fixed) uint32 {
 	return bound
 }
 
-// selectPreferredWinner selects the winner from one bucket (preferred or fallback) using shared-RNG scores per [06 §3.2] P0-10.
-// Each candidate receives a shared-RNG score bounded by the sum of high halves of squared fixed deltas [06 §3.2] P0-10.
-// Bound <2 uses RNG zero/no-advance path [01 §7.1] (I4) P0-10. Strictly lower score wins, equal preserves first sampled candidate in that bucket [06 §3.2] P0-10.
-// Determinism: iteration is bucket order as provided (which must be stable per I1); no map iteration; RNG draw order is authoritative [06 §3.2] P0-10 (I4) (I1).
-func selectPreferredWinner(bucket []Candidate, shooterX, shooterZ numeric.Fixed, rng *rng.Simulation) (Candidate, bool) {
-	if len(bucket) == 0 {
-		return Candidate{}, false
-	}
-	bestIdx := -1
-	var bestScore uint32
-	for i, c := range bucket {
-		dx := c.X.Sub(shooterX)
-		dz := c.Z.Sub(shooterZ)
-		bound := rngBoundForCandidate(dx, dz) // [06 §3.2] P0-10
-		var score uint32
-		if rng != nil {
-			score = rng.Uint32n(bound) // [01 §7.1] I4: bound<2 returns 0 without advance P0-10
-		} else {
-			score = 0
-		}
-		if bestIdx == -1 || score < bestScore { // strictly lower wins [06 §3.2] P0-10
-			bestIdx = i
-			bestScore = score
-		}
-		// Equal score preserves first sampled candidate [06 §3.2] P0-10 (do not update on equality)
-	}
-	return bucket[bestIdx], true
-}
-
-// Acquisition carries one weapon slot's acquisition-time gates [06 §3.1] P0-10.
-//
-// Acquisition-time physical admission is separate from retention and firing
-// [06 §3.1] P0-10: a non-water weapon requires shooter and candidate reference
-// heights above sea level via Y > sea<<16, enforces the to-air target-status class when
-// requested, optionally requires a ballistic solution via disc vs 0 exactly, then planar range.
-// A water weapon applies two candidate depth/type predicates and planar range, skipping height test.
-// Shot-gate never tests radar/cloak/jammer per P0-10 NEGATIVE-BOUNDED.
+// Acquisition carries query and physical-gate operands plus the shared stream
+// for one slot acquisition [06 §3.1][06 §3.2].
 type Acquisition struct {
 	ShooterX, ShooterZ numeric.Fixed
 	// ShooterY is the shooter's world Y. The non-water branch tests its
@@ -545,157 +509,67 @@ func wholeYWord(v numeric.Fixed) int32 { return int32(int16(v.Raw() >> 16)) }
 // paralyzer weapon rejects a candidate already carrying the stunned bit". It is
 // paralyzer-only — an ordinary weapon happily re-targets a stunned unit, and
 // nothing else in the engine reads the mark [06 R-DMG-01 §11].
-//
-// The check sits after the physical gate here because that is its position in
-// the section's list; this build applies the picked-candidate checks to the
-// whole set before sampling rather than to each pick, which is a pre-existing
-// difference from [06 §3.2] and not this predicate's.
 func (a *Acquisition) rejectsStunned(c Candidate) bool {
 	return a.Paralyzer && c.Stunned
 }
 
-// AcquireTarget performs ordinary automatic target acquisition for one weapon
-// slot per [06 §3.1] [06 §3.2] [06 §3.3] P0-10.
-//
-// The candidates are the registry's PRIMARY list as the caller materialized it,
-// in unit-array order (I1); this function does not sort via maps. Steps, in the
-// order [06 §3] P0-10 gives them:
-//
-//  1. The per-attempt filter and acquisition-time physical admission: heights
-//     Y>sea, toAir, ballistic, planar range. NO visibility test — the
-//     direct-visibility predicate ran at the registry rebuild, up to thirty
-//     ticks ago [06 §3.1].
-//  2. Randomly sample and remove at most 50 candidates from the input set via swap-remove RNG(remaining.len) [06 §3.2] P0-10.
-//     len≤50 no sampling draw, >50 swap-remove 50x.
-//  3. Partition into preferred (category clear of BadMask) and fallback
-//     buckets; any preferred result wins over fallback [06 §3.1] P0-10.
-//  4. Within each bucket, each candidate receives a shared-RNG score bounded
-//     by high halves >>32 sum; bound<2→0 no-advance, strictly lower wins [06 §3.2] P0-10.
-//
-// The secondary (seen-bit) list is consulted only when the primary walk filtered empty and
-// HasUpgrade is set; it gets the same distance/liveness test and NO visibility re-test [06 §3.1].
-// Shot-gate never tests radar/cloak/jammer (NEGATIVE-BOUNDED) [06 §3.3] P0-10.
-//
-// Determinism: scan order is fixed (pool slot asc) (I1); no map iteration; the
-// RNG draw order is authoritative (I4) P0-10.
+// AcquireTarget queries the cached registry, chooses a primary/secondary
+// population, then samples and scores each pick in order [06 §3.1][06 §3.2].
+// Service materialization owns the live/death check. This query preserves the
+// registry order and does not re-test hostility or visibility after rebuild.
 func AcquireTarget(candidates []Candidate, a Acquisition) (pool.Handle, bool) {
-	// Step 1: the per-attempt filter over the registry's primary list, then
-	// physical admission [06 §3.1][06 §3.3].
-	//
-	// There is no visibility test here, and there must not be one: the
-	// direct-visibility predicate ran when the registry filed these candidates,
-	// and "no visibility, category, sensor, medium, alliance or range test
-	// happens at this point" [06 §3.1]. Running it again would make a listed
-	// candidate that has since gone dark unshootable and would erase the
-	// staleness the section makes a contract. Service.primaryCandidates applies
-	// the liveness and hostility half of the filter while materializing the
-	// list; the distance test is a.admits' last clause, shared with the
-	// secondary walk below.
 	filtered := make([]Candidate, 0, len(candidates))
 	for _, c := range candidates {
-		if !c.Hostile {
-			continue // both lists are built hostile-only at rebuild [06 §3.1]
+		if WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) {
+			filtered = append(filtered, c)
 		}
-		if !a.admits(c) {
+	}
+	if len(filtered) == 0 && a.HasUpgrade {
+		for _, c := range a.Secondary {
+			if WithinRange(a.ShooterX, a.ShooterZ, c.X, c.Z, a.Range) {
+				filtered = append(filtered, c)
+			}
+		}
+	}
+
+	// The two score minima are independent, but draws follow pick order,
+	// including fallback scores when a preferred winner already exists.
+	best := [2]pool.Handle{}
+	bestScore := [2]uint32{0x7fffffff, 0x7fffffff}
+	for picked := 0; picked < 50 && len(filtered) > 0; picked++ {
+		index := 0
+		if a.RNG != nil {
+			index = int(a.RNG.Uint32n(uint32(len(filtered))))
+		}
+		c := filtered[index]
+		filtered[index] = filtered[len(filtered)-1]
+		filtered = filtered[:len(filtered)-1]
+		// Rejected picks still spent their sampling draw and count toward
+		// the fifty-pick limit. They cannot open secondary fallback.
+		if !a.admits(c) || a.rejectsStunned(c) {
 			continue
 		}
-		if a.rejectsStunned(c) {
-			continue // check 5: a paralyzer rejects an already-stunned candidate [06 §3.2]
-		}
-		filtered = append(filtered, c)
-	}
-	if len(filtered) == 0 {
-		// Secondary status list consulted only when primary empty && upgrade [06 §3.1] P0-11
-		// Not retried if primary existed but failed scoring [06 §3.1] P0-10.
-		if a.HasUpgrade && len(a.Secondary) > 0 {
-			// The secondary walk is the primary walk MINUS the visibility
-			// predicate. [06 §3.1] (refinement of 2026-09-02): the filter
-			// "applies to it the **same** test as the primary walk — planar
-			// d² ≤ r² on the truncated whole-unit metric, alive bit set, death
-			// latch clear — with no visibility re-test: the secondary list was
-			// populated from the *seen* bit at rebuild, and that is the only
-			// sensor test it ever receives."
-			//
-			// directlyVisible used to run here as well, which made the fallback
-			// list a second copy of the primary list: every entry it could admit
-			// the primary walk had already admitted, so the gate could never
-			// produce a target the primary walk had not.
-			//
-			// Liveness is re-tested by the caller when it materializes these
-			// candidates from the registry's stored handles, because the list is
-			// up to thirty ticks stale [06 §3.1].
-			secFiltered := make([]Candidate, 0, len(a.Secondary))
-			for _, c := range a.Secondary {
-				if !c.Hostile {
-					continue // both lists are built hostile-only at rebuild [06 §3.1]
-				}
-				if !a.admits(c) {
-					continue
-				}
-				if a.rejectsStunned(c) {
-					continue // check 5 again on the secondary list [06 §3.2]
-				}
-				secFiltered = append(secFiltered, c)
-			}
-			if len(secFiltered) > 0 {
-				filtered = secFiltered
-			} else {
-				return 0, false
-			}
-		} else {
-			return 0, false
-		}
-	}
-
-	// Step 2: random sample at most 50 candidates [06 §3.2] P0-10.
-	var sampled []Candidate
-	if len(filtered) <= 50 {
-		// len≤50 no sampling draw P0-10
-		sampled = filtered
-		// Lock tie determinism to pool slot asc (I1) even if the caller supplied another order.
-		sort.SliceStable(sampled, func(i, j int) bool { return sampled[i].Handle < sampled[j].Handle })
-	} else {
-		// >50 swap-remove RNG(remaining.len) 50x P0-10
-		remaining := make([]Candidate, len(filtered))
-		copy(remaining, filtered)
-		sort.SliceStable(remaining, func(i, j int) bool { return remaining[i].Handle < remaining[j].Handle })
-		sampled = make([]Candidate, 0, 50)
-		for i := 0; i < 50 && len(remaining) > 0; i++ {
-			var idx int
-			if a.RNG != nil {
-				idx = int(a.RNG.Uint32n(uint32(len(remaining)))) // bounded draw [01 §7.1] (I4) P0-10
-			}
-			sampled = append(sampled, remaining[idx])
-			remaining[idx] = remaining[len(remaining)-1]
-			remaining = remaining[:len(remaining)-1]
-		}
-		// Sampled order is now RNG-driven, not pool-asc; the scoring step's
-		// first-sampled preservation is therefore RNG-influenced [06 §3.2] P0-10.
-	}
-
-	// Step 3: partition into preferred vs fallback [06 §3.1] P0-10.
-	var preferred, fallback []Candidate
-	for _, c := range sampled {
-		isPreferred := IsPreferredCategory(c.Category, a.BadMask)
+		preferred := IsPreferredCategory(c.Category, a.BadMask)
 		if a.MaskResolved && c.CategoryMaskResolved {
-			isPreferred = IsPreferredCategoryMask(c.CategoryMask, a.BadTargetMask)
+			preferred = IsPreferredCategoryMask(c.CategoryMask, a.BadTargetMask)
 		}
-		if isPreferred {
-			preferred = append(preferred, c)
-		} else {
-			fallback = append(fallback, c)
+		bucket := 1
+		if preferred {
+			bucket = 0
+		}
+		var score uint32
+		if a.RNG != nil {
+			score = a.RNG.Uint32n(rngBoundForCandidate(c.X.Sub(a.ShooterX), c.Z.Sub(a.ShooterZ)))
+		}
+		if score < bestScore[bucket] {
+			bestScore[bucket] = score
+			best[bucket] = c.Handle
 		}
 	}
-
-	// Step 4: scoring within each bucket; any preferred result wins over
-	// fallback [06 §3.1] [06 §3.2] P0-10.
-	if winner, ok := selectPreferredWinner(preferred, a.ShooterX, a.ShooterZ, a.RNG); ok {
-		return winner.Handle, true
+	if best[0] != 0 {
+		return best[0], true
 	}
-	if winner, ok := selectPreferredWinner(fallback, a.ShooterX, a.ShooterZ, a.RNG); ok {
-		return winner.Handle, true
-	}
-	return 0, false
+	return best[1], best[1] != 0
 }
 
 // ---------------------------------------------------------------------------

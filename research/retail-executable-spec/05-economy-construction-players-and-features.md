@@ -763,12 +763,18 @@ structure per slot index, ascending:
 1. Skip the whole slot unless the record exists, the controller/state byte is
    one of the three active states, and the observer byte excludes observers.
    While skipped, nothing in the slot advances, including its deadline.
-2. Per-tick work independent of settlement runs regardless of the deadline:
-   an auxiliary player-level object update (itself internally paced by a
-   private 30-tick counter), a second helper with its own internal 30-tick
-   gate, and a sweep of the player's unit range refreshing weapon/position
-   state for units of one type family. This per-tick work never touches
-   resource stock.
+2. **Established — helper ownership.** Before the settlement deadline:
+   the optional player manager dispatches computer tasks and then autonomous
+   weapon maintenance ([08 "Dispatch gates and order sinks"], [06 §3.2]);
+   the separate strategic object refreshes its census and target registry on
+   its own last-refresh-plus-30 gate ([06 §3.1]); then the whole player unit
+   slice refreshes LOS for records carrying the live status bit
+   ([03 R-VIS-01 §2]). The viewing player's minimap contacts pass follows.
+   The manager's computer-only classification countdown and strategic
+   refresh timestamp are different clocks; there are no additional generic
+   helper deadlines in the economy record. A missing manager skips only its
+   own task/weapon work; the strategic-object helper and LOS sweep still
+   follow. The LOS sweep is not weapon/position maintenance for a type family.
 3. The deadline compare and, when due, the unconditional advance by exactly
    30.
 4. Still inside the deadline block: the settlement gate chain — all of the
@@ -977,6 +983,12 @@ predicate behind the inactive-or-not-watching test) and the post-loop site for
 sessions with no human participant ([08 R-SKIR-01 §3] "Defeat detection",
 [08 R-TRIG-01]). The semantic names of the flag bits beyond `0x04` stay open
 as doc 08 items; the gate itself needs nothing more from this document.
+
+**Established — local sensor tail.** After the settlement gate chain, the
+viewing player's sensor pass and mapped-minimap rebuild remain inside that
+same deadline block. A future deadline skips both; a due block whose later
+settlement gates refuse still reaches this tail. There is no independent
+per-tick sensor cadence ([03 R-SENSOR-01]).
 
 ## Resource contributions
 
@@ -1775,15 +1787,12 @@ request bit is set is gated and charged exactly like a finished one. For an
 settlement pass and, when the owner can pay, is cloaked while still being
 built.
 
-**Established — the second bit.** The status bit whose clearness the gate also
-requires is the **decloak-forced** latch of [03 R-VIS-01 §4] and
-[03 R-VIS-01 §6]: the sensor phase's first pass clears it on every live unit
-every tick, and its proximity-breach pass sets it again on the same visit that
-stamps the `tick + 90` deadline. Because the breach writes the deadline on the
-same visit, the bit's own contribution to the gate is observable only on the
-breach tick itself (where the deadline term also fails); an implementation
-that carries the breach as the deadline alone diverges by nothing, but the
-term is real and a clone should keep it.
+**Established — the second bit.** The status bit whose clearness the gate
+also requires is the **decloak-forced** latch of [03 R-VIS-01 §4] and
+[03 R-VIS-01 §6]. The sensor phase clears it on every live unit at its next
+due viewing-player pass, then proximity breaches set it while stamping the
+`tick + 90` deadline. The bit persists between sensor passes; it is a separate
+input from the deadline, and neither should be omitted ([03 R-SENSOR-01]).
 
 **Established — every exit of the cloak block writes the instance bit.** The
 block's own entry test — the owner record's existence word is non-zero and its
@@ -1798,7 +1807,7 @@ mask and the outcome as the selector:
 | Exit | Bit 2 (instance cloaked) |
 |---|---|
 | (a) request bit clear — after `Cloak_Off`, or never requested | cleared |
-| (b) decloak-forced bit set — the breach tick | cleared |
+| (b) decloak-forced bit set — retained until a later sensor pass clears it | cleared |
 | (c) deadline not yet reached — after a stroke's `+150`/`+300`/`+900`, a shot's `+600`, or the breach's `+90` | cleared |
 | (d) gate due, integerized cost `<=` live energy stock | **set** (stock debited, request recorded) |
 | (e) gate due, cost `>` stock | cleared (no partial payment) |
@@ -6436,6 +6445,13 @@ if cell.word < 0xFFFB and cell has no instance:
         if target exists and cell.occupancyWord == 0 and target.word == 0xFFFF
             stamp(target, cell.word, null, null, 10)
 ```
+
+**Established — stored widths.** `reproduce` and `reproducearea` are read as
+unsigned bytes, widened to non-negative integers. The roll uses a signed
+comparison after widening; it does not sign-extend the reproduction byte.
+The half-area term is the unsigned byte shifted right once. Consequently
+out-of-range authored integers contribute their low byte, including negative
+values, before the bound and offset arithmetic.
 
 The Z of the target is derived from `cursor / mapHeight`, not
 `cursor / mapWidth` — confirmed at instruction level (the two divisions use

@@ -93,7 +93,7 @@ func (s *Session) phaseEffects(tick uint32) {
 // player's unit slice is swept stamping visibility coverage per in-game unit
 // (dirty-checked) — the visibility publication seam lives INSIDE phase 5
 // [R-CORE-01 §4.4.1] DET-06. The sensor/deadline pass runs inside the LOCAL
-// viewing player's iteration, after that player's stamp sweep [R-SENSOR-01].
+// viewing player's due deadline block, after settlement [R-SENSOR-01].
 func (s *Session) phaseOrders(tick uint32) {
 	s.stepPlayerPhase(tick)
 	s.recordPhase("phase5-orders", tick)
@@ -950,34 +950,11 @@ func (s *Session) tickMeteor(tick uint32) {
 	}
 }
 
-// tickPlayers is stage 5 of the authoritative tick: the per-player orders,
-// path, economy and occupancy pass.
-//
-// Invariant: players are traversed 0..9 ascending with no map-defined order
-// [INVARIANTS I1], and for each player the AI coordinator runs inside
-// economy.TickPlayer's beforeDeadline hook — after the per-tick helpers and
-// before the settlement deadline compare
-// [05 "Authoritative settlement order"][PLAN_11 C11]. That AI is the
-// auxiliary player-level update is a supported inference [08 "Established
-// AI-facing data and rooted planner"]. This is the only per-player settlement
-// loop in the package; a second one with a different hook position would be a
-// second settlement order.
-//
-// The sensor/deadline pass executes inside the LOCAL viewing player's
-// iteration, after that player's stamp sweep [R-SENSOR-01]: because the loop
-// walks players ascending, it runs after the local player's visibility stamps
-// but before every higher-indexed player's stamps within the same tick.
-// The campaign end-condition poll no longer rides this before-hook: it runs
-// inside the settlement deadline block, after the local slot's UpdateTime
-// advance and before that slot's settlement gate chain, through
-// economy.Service.EndCondition [08 R-TRIG-01 §6].
-//
-// Residual delta from [R-SENSOR-01]'s exact retail ordering: the per-tick
-// minimap contacts pass and mapped-minimap rebuild are presentation-side and
-// have no sim counterpart here. No economy after-hook is required — the
-// position after stampPlayerSlice is session-owned loop body. The pass runs
-// once per tick keyed to the local viewing slot; SensorTick owns the
-// player-count gate.
+// tickPlayers owns phase 5's ascending eligible player walk. The economy
+// beforeDeadline hook runs manager tasks, autonomous maintenance, strategic
+// refresh and LOS publication in that order. The local viewing player's
+// sensor pass follows settlement inside the same due block
+// [05 "Authoritative settlement order"][06 §3.2][03 R-SENSOR-01].
 func (s *Session) tickPlayers(tick uint32) {
 	if s == nil || s.Econ == nil {
 		return
@@ -1018,22 +995,29 @@ func (s *Session) tickPlayers(tick uint32) {
 		if mgr != nil && !mgr.Strategic.TargetRegistryRebuildBound() {
 			mgr.Strategic.BindTargetRegistryRebuild(s.rebuildTargetRegistryForSlot)
 		}
+		if mgr != nil && mgr.WeaponMaintenance == nil {
+			mgr.WeaponMaintenance = s.maintainPlayerWeapons
+		}
 		before := func() {
 			if mgr != nil {
 				mgr.Tick(tick, s.Units, s.Econ)
 			}
+			stampPlayerSlice(s, player)
 		}
-		s.Econ.TickPlayer(player, tick, s.Units, before)
-		// Per-player visibility stamp sweep, after that player's orders/work
-		// [R-CORE-01 §4.4.1] DET-06: dirty-checked, per in-game unit, slots
-		// ascending within the player's slice.
-		stampPlayerSlice(s, player)
-		// [R-SENSOR-01]: sensor/deadline work in the LOCAL viewing player's
-		// iteration only, immediately after that player's stamp sweep (called
-		// unconditionally; SensorTick owns the player-count gate).
-		if hasLocalPlayer && player == localPlayer {
+		due := s.Econ.TickPlayer(player, tick, s.Units, before)
+		// The sensor pass follows the settlement gates inside the same
+		// deadline block, even if those later gates refuse settlement
+		// [03 R-SENSOR-01][05 "Authoritative settlement order"].
+		if due && hasLocalPlayer && player == localPlayer {
 			s.stepSensorPhase(tick)
 		}
+	}
+}
+
+// maintainPlayerWeapons binds the phase-5 scan without an AI/combat import cycle.
+func (s *Session) maintainPlayerWeapons(player uint8) {
+	if s != nil && s.Combat != nil {
+		s.Combat.StepAutonomousForPlayer(player, s.Units, s.Vis, s.World, s.Econ, s.Catalog, s.SimRNG())
 	}
 }
 

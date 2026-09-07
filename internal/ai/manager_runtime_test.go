@@ -239,6 +239,15 @@ func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
 	m.Deadlines[TaskExplore] = 30
 	m.Strategic.LastRefreshTick = 0
 	e := runtimeEconomy(0, 2)
+	var maintenanceState uint32
+	maintenanceCalled := false
+	m.WeaponMaintenance = func(uint8) {
+		maintenanceCalled = true
+		maintenanceState = r.State
+		if m.Deadlines[TaskExplore] <= 30 || m.Strategic.LastRefreshTick != 0 {
+			t.Fatal("maintenance must follow task dispatch and precede strategic refresh")
+		}
+	}
 	m.Tick(30, w, e)
 	probe := rng.NewSimulation(41)
 	probe.Uint32n(900)
@@ -246,6 +255,9 @@ func TestDispatchPrecedesStrategicRefresh(t *testing.T) {
 	for i := uint32(0); i <= trials+1; i++ {
 		probe.Uint32n(uint32((terrain.CellW * 16) / 8))
 		probe.Uint32n(uint32((terrain.CellH * 16) / 8))
+	}
+	if !maintenanceCalled || maintenanceState != probe.State {
+		t.Fatal("maintenance did not observe the post-task RNG state")
 	}
 	probe.Uint32n(30)
 	if r.State != probe.State || r.Draws() != probe.Draws() {

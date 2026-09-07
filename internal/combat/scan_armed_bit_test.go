@@ -65,8 +65,7 @@ func TestAutonomousScanRequiresTheArmedStatusBit(t *testing.T) {
 			if got := u.Flags >> units.StandingFireShift & units.StandingFieldMask; got != stanceFireAtWill {
 				t.Fatalf("stance field = %d, want %d (fire at will)", got, stanceFireAtWill)
 			}
-			svc := &Service{}
-			if got := svc.autonomousScanVisitsUnit(u, 1, w); got != tc.wantVisits {
+			if got := autonomousScanAdmitsUnit(u); got != tc.wantVisits {
 				t.Fatalf("scan visits = %v, want %v [06 §3.2]", got, tc.wantVisits)
 			}
 		})
@@ -80,24 +79,22 @@ func TestAutonomousScanRequiresTheArmedStatusBit(t *testing.T) {
 // tested the other high bit, building class — would silence every mobile unit
 // in the game while looking exactly as plausible.
 func TestAutonomousScanArmedBitSenseIsSet(t *testing.T) {
-	w, _, shooter, _ := newTestWorldAndUnits(t)
-	svc := &Service{}
+	_, _, shooter, _ := newTestWorldAndUnits(t)
 	// All three probes run on the same tick, so the round-robin window is held
 	// fixed and the armed bit is the only thing that moves. The window is a
 	// range of RECORD indices over a fixed per-player slice [06 §3.2], so a
 	// probe that stepped the tick would also step the cursor off this record and
 	// read the cursor's advance as the armed bit's effect (WU-19-154; the
 	// previous version of this test stepped ticks 1, 2, 3).
-	const probeTick = uint32(1)
-	if !svc.autonomousScanVisitsUnit(shooter, probeTick, w) {
+	if !autonomousScanAdmitsUnit(shooter) {
 		t.Fatalf("the armed fixture must be visited [06 §3.2]")
 	}
 	shooter.Flags &^= units.ArmedStatus
-	if svc.autonomousScanVisitsUnit(shooter, probeTick, w) {
+	if autonomousScanAdmitsUnit(shooter) {
 		t.Fatalf("a cleared armed bit must end the visit [06 §3.2]")
 	}
 	shooter.Flags |= units.ArmedStatus
-	if !svc.autonomousScanVisitsUnit(shooter, probeTick, w) {
+	if !autonomousScanAdmitsUnit(shooter) {
 		t.Fatalf("restoring the armed bit must restore the visit [06 §3.2]")
 	}
 }
