@@ -107,7 +107,6 @@ func (c *Client) TickAudio() {
 		// poll on the presentation cadence [03 §8.3] C18 [03 §8.4]; the
 		// accumulated positional cues are played inside it, in raise order.
 		c.audioService.DrainEvents(committedTick, c.committedEvents)
-		c.messages.Expire(committedTick)
 	}
 }
 

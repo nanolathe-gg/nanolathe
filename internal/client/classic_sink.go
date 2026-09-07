@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/render"
@@ -69,9 +70,58 @@ func (c *Client) emitFog(fg drawlist.Fog) {
 	c.list.RecordFog(fg)
 }
 
-// emitSprite records one GAF-frame blit. The strip and projectile call sites use
-// the keyed and ALP-tinted kinds (WU-1.4).
+// emitSprite records one GAF-frame blit. General keyed and tinted GAF calls
+// decompose composites into their ordered leaves here, before either executor
+// sees the list. That preserves each child's destination-dependent ALP read and
+// leaves target clipping to the actual leaf blit [03 R-COMP-01 §2].
 func (c *Client) emitSprite(sp drawlist.Sprite) {
+	if sp.Frame != nil && len(sp.Frame.Subframes) != 0 {
+		switch sp.Kind {
+		case drawlist.BlitKeyed, drawlist.BlitTinted:
+			penX, penY := sp.X, sp.Y
+			if sp.Kind == drawlist.BlitKeyed && !sp.Anchored {
+				// A nonanchored caller supplied the parent's top-left. The
+				// compositor receives its anchor pen, shared unchanged by every
+				// child [fmt gaf][03 R-COMP-01 §2].
+				penX += int32(sp.Frame.XOffset)
+				penY += int32(sp.Frame.YOffset)
+			}
+			c.emitGeneralGAFLeaves(sp, sp.Frame, penX, penY, sp.Kind == drawlist.BlitTinted)
+			return
+		}
+	}
+	c.list.RecordSprite(sp)
+}
+
+func (c *Client) emitGeneralGAFLeaves(sp drawlist.Sprite, frame *formats.GAFFrame, penX, penY int32, tinted bool) {
+	if frame == nil {
+		return
+	}
+	if len(frame.Subframes) != 0 {
+		for _, child := range frame.Subframes {
+			if child == nil {
+				continue
+			}
+			// A tinted parent calls its descendants through the same tinted
+			// blitter; otherwise the child's authored high byte selects it.
+			c.emitGeneralGAFLeaves(sp, child, penX, penY, tinted || child.AlternateBlitter != 0)
+		}
+		return
+	}
+	sp.Frame, sp.X, sp.Y = frame, penX, penY
+	sp.Anchored = true
+	if tinted {
+		if !c.shading {
+			// The alternate child chooses the ALP family, whose draw call is
+			// gated by the current Shading option [02 R-MALF-01 §6]. Returning
+			// here suppresses only this leaf; ordinary siblings still retain
+			// their authored table order.
+			return
+		}
+		sp.Kind = drawlist.BlitTinted
+	} else {
+		sp.Kind = drawlist.BlitKeyed
+	}
 	c.list.RecordSprite(sp)
 }
 
@@ -163,9 +213,17 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 	switch sp.Kind {
 	case drawlist.BlitKeyed:
 		if sp.Anchored {
+			if sp.Frame == nil {
+				return
+			}
 			// The frame-anchor blit: UIBlitAnchor subtracts the frame's authored
 			// offsets before skipping the transparent key [03 R-RAST-01 §6][fmt gaf].
-			c.uiBlitAnchorRaw(sp.Frame, int(sp.X), int(sp.Y))
+			if sp.HasClip {
+				clipX, clipY, clipW, clipH := s.clip(true, sp.Clip)
+				c.uiBlitClippedRaw(sp.Frame, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset), clipX, clipY, clipW, clipH)
+			} else {
+				c.uiBlitAnchorRaw(sp.Frame, int(sp.X), int(sp.Y))
+			}
 		} else {
 			// The plain keyed blit: the rectangle is the contract, no offset is
 			// subtracted (UIBlit and the software cursor) [07 §4].
@@ -177,7 +235,12 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 		// destination to ALP[src*256+dst]. tintedBlitAnchor is the raw byte
 		// writer; the strip call site emits and this is its only execution
 		// [03 R-COMP-01 §2][03 R-FX-02 §2].
-		c.tintedBlitAnchor(sp.Frame, int(sp.X), int(sp.Y))
+		if sp.HasClip {
+			clipX, clipY, clipW, clipH := s.clip(true, sp.Clip)
+			c.tintedBlitAnchorClipped(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
+		} else {
+			c.tintedBlitAnchor(sp.Frame, int(sp.X), int(sp.Y))
+		}
 	case drawlist.BlitLit:
 		// The shaded glyph blit: every opaque pixel is remapped through one LHT
 		// row selected by LightRow. The palette rides the record (sp.Pal), so the
@@ -206,6 +269,39 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 		// (ShadTrans) exactly as the direct call did [03 §4.4].
 		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y), true, sp.Trans)
 	}
+}
+
+// tintedBlitAnchorClipped is the target-window form of tintedBlitAnchor. The
+// ordinary direct site uses the full framebuffer; composed child leaves carry
+// their caller's target clip and must not broaden it through anchor placement
+// [03 R-COMP-01 §2].
+func (c *Client) tintedBlitAnchorClipped(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) bool {
+	if c == nil || f == nil || c.pal == nil || len(c.indexed) == 0 {
+		return false
+	}
+	x -= int(f.XOffset)
+	y -= int(f.YOffset)
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
+	for row := 0; row < int(f.Height); row++ {
+		py := y + row
+		if py < minY || py >= maxY {
+			continue
+		}
+		for col := 0; col < int(f.Width); col++ {
+			px := x + col
+			if px < minX || px >= maxX {
+				continue
+			}
+			src, ok := f.At(col, row)
+			if !ok {
+				continue
+			}
+			idx := py*c.width + px
+			c.indexed[idx] = c.pal.Alpha[int(src)*256+int(c.indexed[idx])]
+		}
+	}
+	return true
 }
 
 // clip resolves a recorded Sprite clip into the (x, y, w, h) the raw writers

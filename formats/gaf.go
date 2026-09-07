@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"strings"
 
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -16,7 +15,6 @@ type GAF struct {
 	EntryCount uint32
 	Unknown    uint32
 	Entries    []GAFEntry
-	byName     map[string]int
 }
 
 // GAFEntry is one named sequence within a bank.
@@ -55,7 +53,22 @@ type GAFFrame struct {
 	Unknown3    uint32
 	Pixels      []byte
 	Transparent []bool
-	Subframes   []*GAFFrame
+	// PlainPixels and PlainTransparent are the host's ordinary keyed raster of
+	// this frame. For a composite they contain only children that take the
+	// ordinary path; alternate children are deliberately absent because ALP
+	// reads the destination at draw time. Pixels and Transparent alias these
+	// slices for existing raw-pixel consumers while those caller-specific paths
+	// are traced [fmt gaf].
+	PlainPixels      []byte
+	PlainTransparent []bool
+	// SubframeCount is the raw low byte beside AlternateBlitter. It is the
+	// effective child count, including when it is zero [fmt gaf].
+	SubframeCount uint8
+	Subframes     []*GAFFrame
+	// AlternateBlitter is the raw high byte beside the low-byte subframe
+	// count. A nonzero value selects ALP composition when this frame is drawn
+	// as a child; retain its authored byte for round-trip fidelity [fmt gaf].
+	AlternateBlitter uint8
 	// compositeDepth is the maximum number of subframe links below this frame.
 	// It keeps the host composition-depth budget valid when a shared frame is
 	// returned from the decode cache.
@@ -95,11 +108,15 @@ func LoadGAFWithLimits(data []byte, limits GAFLimits) (*GAF, error) {
 		Version:    binary.LittleEndian.Uint32(data[0:4]),
 		EntryCount: binary.LittleEndian.Uint32(data[4:8]),
 		Unknown:    binary.LittleEndian.Uint32(data[8:12]),
-		byName:     make(map[string]int),
 	}
-	// Retail uses only low 16 bits of the entry count (02:GAF). High bits are
-	// ignored; we mask for parity and keep full value in EntryCount for diagnostics.
-	count := uint64(gaf.EntryCount & 0xFFFF)
+	// Retail consumes the count as a signed low word. A negative low word means
+	// the loader takes no entry-table iteration; high bits are not part of the
+	// bound [fmt gaf][02 R-MALF-01 §6].
+	entryCount := int16(gaf.EntryCount)
+	count := uint64(0)
+	if entryCount > 0 {
+		count = uint64(entryCount)
+	}
 	if count > uint64((len(data)-12)/4) {
 		return nil, fmt.Errorf("gaf: entry offset table is truncated")
 	}
@@ -116,7 +133,6 @@ func LoadGAFWithLimits(data []byte, limits GAFLimits) (*GAF, error) {
 			return nil, fmt.Errorf("gaf: entry %d points outside file", i)
 		}
 		if cached, ok := entryCache[uint32(offset)]; ok {
-			gaf.byName[strings.ToLower(cached.Name)] = len(gaf.Entries)
 			gaf.Entries = append(gaf.Entries, cached)
 			continue
 		}
@@ -153,10 +169,6 @@ func LoadGAFWithLimits(data []byte, limits GAFLimits) (*GAF, error) {
 			entry.Frames[frame].Frame = decoded
 		}
 		entryCache[uint32(offset)] = entry
-		// Names are case-insensitive. Preserve the authored table's existing
-		// last-assignment behavior for duplicate names; duplicate-name handling
-		// is outside the established retail contract.
-		gaf.byName[strings.ToLower(entry.Name)] = len(gaf.Entries)
 		gaf.Entries = append(gaf.Entries, entry)
 	}
 	return gaf, nil
@@ -171,13 +183,38 @@ func LoadGAFFile(fs vfs.FSOps, name string) (*GAF, error) {
 	return LoadGAF(data)
 }
 
-// Find returns the entry with the given name, compared case-insensitively.
+// Find returns the first matching entry in authored table order. ASCII letter
+// folding is established; high bytes are preserved as a host fallback.
+// TODO(question): establish the locale comparison used for high bytes.
 func (g *GAF) Find(name string) (*GAFEntry, bool) {
-	index, ok := g.byName[strings.ToLower(name)]
-	if !ok {
+	if g == nil {
 		return nil, false
 	}
-	return &g.Entries[index], true
+	for i := range g.Entries {
+		if gafASCIIEqual(g.Entries[i].Name, name) {
+			return &g.Entries[i], true
+		}
+	}
+	return nil, false
+}
+
+func gafASCIIEqual(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if gafASCIIFold(a[i]) != gafASCIIFold(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func gafASCIIFold(b byte) byte {
+	if b >= 'A' && b <= 'Z' {
+		return b + ('a' - 'A')
+	}
+	return b
 }
 
 // At returns the palette index at (x, y) and whether that pixel is opaque.
@@ -250,21 +287,24 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		XOffset:  int16(binary.LittleEndian.Uint16(header[4:6])),
 		YOffset:  int16(binary.LittleEndian.Uint16(header[6:8])),
 		ColorKey: header[8], Compressed: header[9],
-		Unknown2:   binary.LittleEndian.Uint32(header[12:16]),
-		DataOffset: binary.LittleEndian.Uint32(header[16:20]),
-		Unknown3:   binary.LittleEndian.Uint32(header[20:24]),
+		Unknown2:         binary.LittleEndian.Uint32(header[12:16]),
+		DataOffset:       binary.LittleEndian.Uint32(header[16:20]),
+		Unknown3:         binary.LittleEndian.Uint32(header[20:24]),
+		SubframeCount:    header[10],
+		AlternateBlitter: header[11],
 	}
 	frame.Pixels = make([]byte, int(pixelCount))
 	frame.Transparent = make([]bool, int(pixelCount))
+	frame.PlainPixels = frame.Pixels
+	frame.PlainTransparent = frame.Transparent
 	// Retail frames have ColorKey==9 for all 48519 frames; synthetic
 	// mod/test frames may use 0 and should remain loadable.
 	if frame.Compressed != 0 && frame.Compressed != 1 {
 		return nil, fmt.Errorf("frame 0x%x has compression %d", offset, frame.Compressed)
 	}
-	// The subframe count is the complete little-endian u16 at +10. Reading
-	// only its low byte silently turns a valid high-byte count into a raw
-	// frame and can also bypass the table bounds check.
-	if subCount := binary.LittleEndian.Uint16(header[10:12]); subCount != 0 {
+	// The count is the low byte only; the high byte is AlternateBlitter for a
+	// frame used as a composite child [fmt gaf][02 R-MALF-01 §6].
+	if subCount := uint8(header[10]); subCount != 0 {
 		dataStart := uint64(frame.DataOffset)
 		bytesNeeded := uint64(subCount) * 4
 		if dataStart > uint64(len(data)) || bytesNeeded > uint64(len(data))-dataStart {
@@ -273,8 +313,9 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 		if err := budget.addRefs(uint64(subCount)); err != nil {
 			return nil, fmt.Errorf("frame 0x%x: %w", offset, err)
 		}
-		// A composite frame only owns the pixels its subframes cover. Everything
-		// else stays transparent instead of decoding to an opaque index zero.
+		// A composite is a child table, not a raster. Its transparent pixel
+		// backing avoids preflattening the alternate ALP path against an invented
+		// destination; presentation emits its leaves in authored order.
 		for i := range frame.Transparent {
 			frame.Transparent[i] = true
 		}
@@ -289,13 +330,15 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 			if subframe.compositeDepth == math.MaxUint32 || subframe.compositeDepth+1 > frame.compositeDepth {
 				frame.compositeDepth = subframe.compositeDepth + 1
 			}
-			// XOffset/YOffset are anchor distances: a frame's top-left corner
-			// sits that many pixels before its anchor point. A subframe shares
-			// the parent anchor, so its position inside the parent is the
-			// parent's offset minus its own [fmt gaf] [03 §4.4] A25 established.
-			// Subframes may extend slightly outside the parent canvas (clip) [fmt gaf];
-			// later subframes overwrite earlier where opaque [fmt gaf][03 §4.4] A25.
-			dx := int(frame.XOffset) - int(subframe.XOffset) // [fmt gaf] A25
+			if subframe.AlternateBlitter != 0 {
+				// This child needs the destination-reading ALP path. Do not
+				// flatten it against index zero or any other invented backdrop.
+				continue
+			}
+			// The compatibility raster has only ordinary child coverage. It is
+			// for callers that consume a frame as a texture or special mask;
+			// general keyed/tinted presentation emits the actual child leaves.
+			dx := int(frame.XOffset) - int(subframe.XOffset)
 			dy := int(frame.YOffset) - int(subframe.YOffset)
 			for sy := 0; sy < int(subframe.Height); sy++ {
 				dyPos := dy + sy
@@ -308,15 +351,25 @@ func decodeGAFFrame(data []byte, offset uint32, cache map[uint32]*GAFFrame, stac
 						continue
 					}
 					subIndex := sy*int(subframe.Width) + sx
-					if subframe.Transparent[subIndex] {
+					if subIndex >= len(subframe.PlainTransparent) || subframe.PlainTransparent[subIndex] {
+						continue
+					}
+					if subIndex >= len(subframe.PlainPixels) {
 						continue
 					}
 					index := dyPos*int(frame.Width) + dxPos
-					frame.Pixels[index] = subframe.Pixels[subIndex]
-					frame.Transparent[index] = false
+					frame.PlainPixels[index] = subframe.PlainPixels[subIndex]
+					frame.PlainTransparent[index] = false
 				}
 			}
 		}
+		// TODO(question): retail's ordinary loader relocates direct children;
+		// establish whether authored nested child tables are supported before
+		// treating recursive host decoding as a retail layout contract.
+		// TODO(question): establish alternate-child semantics for raw-pixel
+		// callers (scaled, LHT, feature, fog, and model texture paths). They
+		// receive this ordinary compatibility raster, with ALP-only children
+		// absent rather than incorrectly precomposed.
 		if frame.compositeDepth > budget.limits.MaxCompositeDepth-depth {
 			return nil, fmt.Errorf("composite depth exceeds limit")
 		}

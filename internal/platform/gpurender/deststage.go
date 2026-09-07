@@ -99,7 +99,7 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row int) {
 // pass reads the pre-blit destination. The family's gate is "ALP present": with
 // no ALP table it draws nothing, exactly as tintedBlitAnchor returns on a nil
 // palette [03 R-COMP-01 §2].
-func (r *Renderer) drawTint(f *formats.GAFFrame, x, y int) {
+func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
 	if f == nil || r.tint == nil || r.tables.alpha == nil || r.destScratch == nil {
 		return
 	}
@@ -110,8 +110,10 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y int) {
 	x -= int(f.XOffset)
 	y -= int(f.YOffset)
 	fw, fh := int(f.Width), int(f.Height)
-	col0, col1 := maxInt(0, -x), minInt(fw, r.w-x)
-	row0, row1 := maxInt(0, -y), minInt(fh, r.h-y)
+	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
+	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
+	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}

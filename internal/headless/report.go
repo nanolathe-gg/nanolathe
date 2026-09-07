@@ -60,22 +60,23 @@ type PlayerReport struct {
 // StateHash is produced by Session.ParityAuthoritativeHash, which walks the
 // ordered authoritative surfaces without mutating them.
 type Report struct {
-	ScenarioKind     ScenarioKind     `json:"scenario_kind"`
-	ScenarioIdentity string           `json:"scenario_identity"`
-	SimulationSeed   uint32           `json:"simulation_seed"`
-	CRTSeed          uint32           `json:"crt_seed"`
-	SimulationState  uint32           `json:"simulation_state"`
-	CRTState         uint32           `json:"crt_state"`
-	SimulationDraws  uint64           `json:"simulation_draws"`
-	CRTDraws         uint64           `json:"crt_draws"`
-	CatalogHash      string           `json:"catalog_hash,omitempty"`
-	ManifestHash     string           `json:"manifest_hash,omitempty"`
-	Tick             uint32           `json:"tick"`
-	Status           string           `json:"status"`
-	State            string           `json:"state"`
-	Result           string           `json:"result"`
-	StateHash        string           `json:"state_hash"`
-	Players          [10]PlayerReport `json:"players"`
+	ScenarioKind              ScenarioKind     `json:"scenario_kind"`
+	ScenarioIdentity          string           `json:"scenario_identity"`
+	SimulationSeed            uint32           `json:"simulation_seed"`
+	CRTSeed                   uint32           `json:"crt_seed"`
+	SimulationState           uint32           `json:"simulation_state"`
+	CRTState                  uint32           `json:"crt_state"`
+	SimulationDraws           uint64           `json:"simulation_draws"`
+	CRTDraws                  uint64           `json:"crt_draws"`
+	CatalogHash               string           `json:"catalog_hash,omitempty"`
+	ManifestHash              string           `json:"manifest_hash,omitempty"`
+	Tick                      uint32           `json:"tick"`
+	Status                    string           `json:"status"`
+	State                     string           `json:"state"`
+	Result                    string           `json:"result"`
+	StateHash                 string           `json:"state_hash"`
+	PresentationEventsDropped uint64           `json:"presentation_events_dropped,omitempty"`
+	Players                   [10]PlayerReport `json:"players"`
 }
 
 // attackFamily is the set of canonical command names the order resolver
@@ -182,6 +183,9 @@ func buildReport(request Request, kind ScenarioKind, identity string, sess *sess
 	if sess.Catalog != nil {
 		report.CatalogHash = sess.Catalog.Hash
 		report.ManifestHash = sess.Catalog.Manifest
+	}
+	if sess.Snapshot != nil {
+		report.PresentationEventsDropped, _ = sess.Snapshot.RetainedEventsDropped()
 	}
 	for i := range report.Players {
 		report.Players[i].Player = i

@@ -19,6 +19,7 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 		Snapshot: frame.NewBuffer(),
 	}
 	s.EnablePhaseTrace()
+	s.EnablePostLoopTrace()
 	var events []string
 	var callbackTicks []uint32
 	s.SetPostLoopHooks(PostLoopHooks{
@@ -33,10 +34,6 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 			events = append(events, "ring")
 			callbackTicks = append(callbackTicks, lastTick)
 		},
-		CompactPending: func(lastTick uint32) {
-			events = append(events, "pending")
-			callbackTicks = append(callbackTicks, lastTick)
-		},
 	})
 
 	s.Step(5)
@@ -46,10 +43,10 @@ func TestStepSeparatesPhasesPublicationAndPostLoopTail(t *testing.T) {
 	if got := s.PublicationCount(); got != 5 {
 		t.Fatalf("publication count=%d, want 5 completed-subtick boundaries", got)
 	}
-	if got, want := s.PostLoopTrace(), []string{"barrier-1", "barrier-2", "barrier-3", "message-ring-retire", "pending-compact", "eyeball-expire"}; !reflect.DeepEqual(got, want) {
+	if got, want := s.PostLoopTrace(), []string{"barrier-1", "barrier-2", "barrier-3", "message-ring-retire", "eyeball-expire"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("post-loop trace=%v, want %v", got, want)
 	}
-	if got, want := events, []string{"barrier", "barrier", "barrier", "ring", "pending"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"barrier", "barrier", "barrier", "ring"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("post-loop callbacks=%v, want %v", got, want)
 	}
 	for i, got := range callbackTicks {
@@ -82,6 +79,7 @@ func TestStepPublishesCompletedSubTickBeforeCatchUpExit(t *testing.T) {
 	// Countdown 0 is one step from the crossing, so the tick-5 due is terminal.
 	s.Latch.Countdown = 0
 	s.EnablePhaseTrace()
+	s.EnablePostLoopTrace()
 
 	s.Step(5)
 	if s.State == StateBattle {
@@ -93,7 +91,7 @@ func TestStepPublishesCompletedSubTickBeforeCatchUpExit(t *testing.T) {
 	if got := len(s.PhaseTrace()); got != 12 {
 		t.Fatalf("phase trace length=%d, want one completed sub-tick", got)
 	}
-	if got := len(s.PostLoopTrace()); got != 6 {
+	if got := len(s.PostLoopTrace()); got != 5 {
 		t.Fatalf("post-loop trace length=%d, want one tail after early exit", got)
 	}
 }
@@ -115,6 +113,8 @@ func TestFiveSubTicksMatchOneCatchUpPumpExceptTailCadence(t *testing.T) {
 	five, fiveTailCalls := makeSession()
 	one.EnablePhaseTrace()
 	five.EnablePhaseTrace()
+	one.EnablePostLoopTrace()
+	five.EnablePostLoopTrace()
 	one.Step(5)
 	for now := int32(1); now <= 5; now++ {
 		five.Step(now)
@@ -138,18 +138,25 @@ func TestFiveSubTicksMatchOneCatchUpPumpExceptTailCadence(t *testing.T) {
 	if *oneTailCalls != 1 || *fiveTailCalls != 5 {
 		t.Fatalf("post-loop tail calls=%d/%d, want 1/5", *oneTailCalls, *fiveTailCalls)
 	}
-	if len(one.PostLoopTrace()) != 6 || len(five.PostLoopTrace()) != 30 {
-		t.Fatalf("post-loop event counts=%d/%d, want 6/30", len(one.PostLoopTrace()), len(five.PostLoopTrace()))
+	if len(one.PostLoopTrace()) != 5 || len(five.PostLoopTrace()) != 25 {
+		t.Fatalf("post-loop event counts=%d/%d, want 5/25", len(one.PostLoopTrace()), len(five.PostLoopTrace()))
 	}
 }
 
-func TestZeroTickStepDoesNotMutateSimulationOrTail(t *testing.T) {
+func TestZeroTickStepRetiresAtMostOneMessageWithoutPublication(t *testing.T) {
 	s := &Session{
 		State:    StateBattle,
 		Clock:    &clock.State{Requested: 10, Active: 10, ScaledAnchor: 5},
 		Snapshot: frame.NewBuffer(),
 	}
 	s.EnablePhaseTrace()
+	s.EnablePostLoopTrace()
+	ring := frame.NewMessageRing()
+	ring.Configure(4, 0)
+	ring.Append("first", 1, 0, 10, 0)
+	ring.Append("second", 1, 0, 10, 0)
+	s.BindMessageRetirement(ring.RetireOne)
+	s.Clock.GlobalTick = 31
 	s.Step(5)
 	if got := s.PhaseTrace(); len(got) != 0 {
 		t.Fatalf("zero-tick phase trace=%v, want empty", got)
@@ -157,32 +164,53 @@ func TestZeroTickStepDoesNotMutateSimulationOrTail(t *testing.T) {
 	if s.Snapshot.Current() != nil {
 		t.Fatal("zero-tick step published a frame")
 	}
-	if got := s.PostLoopTrace(); len(got) != 0 {
-		t.Fatalf("zero-tick post-loop trace=%v, want empty", got)
+	if got := s.PostLoopTrace(); len(got) != 5 {
+		t.Fatalf("zero-tick post-loop trace=%v, want one complete tail", got)
+	}
+	if got := ring.Visible(); len(got) != 1 || got[0].Text != "second" {
+		t.Fatalf("first zero-tick pump lines=%#v, want only second", got)
+	}
+	s.Step(5)
+	if got := ring.Visible(); len(got) != 0 {
+		t.Fatalf("second zero-tick pump lines=%#v, want empty", got)
 	}
 }
 
-func TestPostLoopPendingCompactionIsStable(t *testing.T) {
-	var expired []uint32
-	state := &postLoopState{}
-	state.pending.entries = []pendingEntry{
-		{deadline: 3, expire: func() { expired = append(expired, 3) }},
-		{deadline: 12},
-		{deadline: 1, expire: func() { expired = append(expired, 1) }},
-		{deadline: 10, expire: func() { expired = append(expired, 10) }},
+func TestPostLoopTraceIsOptInAndBounded(t *testing.T) {
+	makeSession := func() *Session {
+		return &Session{State: StateBattle, Clock: &clock.State{Requested: 10, Active: 10}, Snapshot: frame.NewBuffer()}
 	}
-	state.pending.compact(10)
-	if !reflect.DeepEqual(expired, []uint32{3, 1}) {
-		t.Fatalf("expired callbacks=%v, want [3 1]", expired)
+	off := makeSession()
+	for now := int32(1); now <= 6000; now++ {
+		off.Step(now)
 	}
-	if len(state.pending.entries) != 2 || state.pending.entries[0].deadline != 12 || state.pending.entries[1].deadline != 10 {
-		t.Fatalf("pending survivors=%+v, want stable deadlines 12,10", state.pending.entries)
+	if got := off.PostLoopTrace(); got != nil {
+		t.Fatalf("trace without opt-in = %v, want nil", got)
 	}
-	state.pending.compact(11)
-	if !reflect.DeepEqual(expired, []uint32{3, 1, 10}) {
-		t.Fatalf("expired callbacks=%v, want [3 1 10] after strict boundary", expired)
+	if capacity := cap(postLoopStateFor(off).trace); capacity != 0 {
+		t.Fatalf("trace without opt-in retained capacity %d, want zero", capacity)
 	}
-	if len(state.pending.entries) != 1 || state.pending.entries[0].deadline != 12 {
-		t.Fatalf("pending survivors=%+v, want stable deadline 12", state.pending.entries)
+	zero := makeSession()
+	zero.SetPostLoopTraceLimit(0)
+	zero.EnablePostLoopTrace()
+	zero.Step(5)
+	if len(zero.PostLoopTrace()) != 0 || zero.PostLoopTraceDropped() != 5 {
+		t.Fatal("explicit zero trace capacity was replaced by the default")
+	}
+	plain, on := makeSession(), makeSession()
+	plain.Step(5)
+	plain.Step(10)
+	on.SetPostLoopTraceLimit(7)
+	on.EnablePostLoopTrace()
+	on.Step(5)
+	on.Step(10)
+	if got, want := on.PostLoopTrace(), []string{"message-ring-retire", "eyeball-expire", "barrier-1", "barrier-2", "barrier-3", "message-ring-retire", "eyeball-expire"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bounded trace=%v, want surviving tail order %v", got, want)
+	}
+	if got := on.PostLoopTraceDropped(); got != 3 {
+		t.Fatalf("trace drops=%d, want 3", got)
+	}
+	if plain.Clock.GlobalTick != on.Clock.GlobalTick || plain.SimRNG().State != on.SimRNG().State || plain.SimRNG().Draws() != on.SimRNG().Draws() || plain.CrtRNG().State != on.CrtRNG().State || plain.CrtRNG().Draws() != on.CrtRNG().Draws() {
+		t.Fatal("post-loop tracing changed authoritative clock or RNG state")
 	}
 }

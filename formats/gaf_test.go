@@ -5,14 +5,14 @@ import (
 	"testing"
 )
 
-func TestGAFSubframeCountUsesCompleteU16(t *testing.T) {
+func TestGAFSubframeCountUsesLowByteAndPreservesHighByte(t *testing.T) {
 	const entryOffset = 16
 	const entrySize = 40
 	const refOffset = entryOffset + entrySize
 	const parentOffset = refOffset + 8
 	const parentSize = 24
 	const tableOffset = parentOffset + parentSize
-	const subCount = 257 // high byte is significant
+	const subCount = 300 // effective low-byte count 44; high byte selects ALP.
 	const childOffset = tableOffset + subCount*4
 	const pixelOffset = childOffset + 24
 	data := make([]byte, pixelOffset+1)
@@ -38,8 +38,87 @@ func TestGAFSubframeCountUsesCompleteU16(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := g.Entries[0].Frames[0].Frame
-	if len(f.Subframes) != subCount || f.Pixels[0] != 7 || f.Transparent[0] {
-		t.Fatalf("subframe decode = count %d pixel %d transparent %v", len(f.Subframes), f.Pixels[0], f.Transparent[0])
+	if f.SubframeCount != 44 || len(f.Subframes) != 44 || f.AlternateBlitter != 1 {
+		t.Fatalf("subframe decode = raw count %d children %d alternate %d", f.SubframeCount, len(f.Subframes), f.AlternateBlitter)
+	}
+	if got, opaque := f.At(0, 0); !opaque || got != 7 {
+		t.Fatalf("ordinary compatibility raster = %d,%v, want 7,true", got, opaque)
+	}
+	if len(f.PlainPixels) != 1 || len(f.PlainTransparent) != 1 {
+		t.Fatalf("plain raster lengths = %d,%d, want 1,1", len(f.PlainPixels), len(f.PlainTransparent))
+	}
+}
+
+func TestGAFCompositePlainRasterSkipsAlternateChild(t *testing.T) {
+	data, err := EncodeGAF([]GAFWriteEntry{{Name: "alternate", Frames: []GAFWriteFrame{{
+		Width: 1, Height: 1,
+		Subframes: []GAFWriteFrame{
+			{Width: 1, Height: 1, Pixels: []byte{5}},
+			{Width: 1, Height: 1, Pixels: []byte{7}, AlternateBlitter: 1},
+		},
+	}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadGAF(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, opaque := g.Entries[0].Frames[0].Frame.At(0, 0); !opaque || got != 5 {
+		t.Fatalf("plain raster = %d,%v, want ordinary child 5 without ALP child", got, opaque)
+	}
+}
+
+func TestGAFRawFramePreservesHighByteWithoutChildren(t *testing.T) {
+	const entryOffset = 16
+	const refOffset = entryOffset + 40
+	const frameOffset = refOffset + 8
+	const pixelOffset = frameOffset + 24
+	data := make([]byte, pixelOffset+1)
+	binary.LittleEndian.PutUint32(data[4:], 1)
+	binary.LittleEndian.PutUint32(data[12:], entryOffset)
+	binary.LittleEndian.PutUint16(data[entryOffset:], 1)
+	copy(data[entryOffset+8:], "rawflag")
+	binary.LittleEndian.PutUint32(data[refOffset:], frameOffset)
+	binary.LittleEndian.PutUint16(data[frameOffset:], 1)
+	binary.LittleEndian.PutUint16(data[frameOffset+2:], 1)
+	data[frameOffset+11] = 0x9a // low count remains zero: raw frame.
+	binary.LittleEndian.PutUint32(data[frameOffset+16:], pixelOffset)
+	data[pixelOffset] = 7
+	g, err := LoadGAF(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := g.Entries[0].Frames[0].Frame
+	if f.SubframeCount != 0 || len(f.Subframes) != 0 || f.AlternateBlitter != 0x9a {
+		t.Fatalf("raw high-byte frame = raw count %d children %d alternate %#x", f.SubframeCount, len(f.Subframes), f.AlternateBlitter)
+	}
+	if got, opaque := f.At(0, 0); !opaque || got != 7 {
+		t.Fatalf("raw high-byte frame pixel = %d,%v", got, opaque)
+	}
+}
+
+func TestGAFEntryCountIsSignedLowWord(t *testing.T) {
+	data := make([]byte, 12)
+	// A negative signed low word suppresses the table walk even with high bits.
+	binary.LittleEndian.PutUint32(data[4:], 0x7fff8000)
+	g, err := LoadGAF(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.Entries) != 0 {
+		t.Fatalf("negative low-word entry count loaded %d entries", len(g.Entries))
+	}
+}
+
+func TestGAFFindUsesFirstASCIIFoldedMatch(t *testing.T) {
+	g := &GAF{Entries: []GAFEntry{{Name: "First"}, {Name: "fIrSt"}, {Name: "\xc1"}}}
+	got, ok := g.Find("FIRST")
+	if !ok || got != &g.Entries[0] {
+		t.Fatalf("first ASCII match = %p,%v, want first entry", got, ok)
+	}
+	if got, ok := g.Find("\xe1"); ok || got != nil {
+		t.Fatalf("high-byte lookup folded unexpectedly: %p,%v", got, ok)
 	}
 }
 

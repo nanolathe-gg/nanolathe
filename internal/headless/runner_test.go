@@ -65,6 +65,29 @@ func TestRunSessionAdvancesOrdinaryStepLoop(t *testing.T) {
 	}
 }
 
+func TestRunSessionDrainsPresentationEventsAndReportsExactOverflow(t *testing.T) {
+	request := Request{Map: "synthetic", SimulationSeed: 17, CRTSeed: 19, TickLimit: 1}
+	sess := syntheticSession(request)
+	write := sess.Snapshot.BeginWrite()
+	for i := 0; i < 4097; i++ {
+		write.Events = append(write.Events, frame.EventView{ID: uint32(i + 1), Tick: 0})
+	}
+	if err := sess.Snapshot.Publish(0); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := RunSession(request, sess)
+	if !errors.Is(err, ErrTickLimit) {
+		t.Fatalf("RunSession error = %v, want tick limit", err)
+	}
+	if report.PresentationEventsDropped != 1 {
+		t.Fatalf("reported retained-event loss = %d, want 1", report.PresentationEventsDropped)
+	}
+	if pending := sess.Snapshot.PendingCommittedEvents(); pending != 0 {
+		t.Fatalf("headless run retained %d presentation events", pending)
+	}
+}
+
 func TestEqualRequestProducesEqualReport(t *testing.T) {
 	request := Request{Map: "synthetic", SimulationSeed: 29, CRTSeed: 31, TickLimit: 11}
 	first, firstErr := RunSession(request, syntheticSession(request))

@@ -314,6 +314,11 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		return
 	}
 	b.cl = cl
+	// The session executor owns one message-ring retirement per host pump;
+	// the client remains the sole presentation owner of the ring itself
+	// [01 R-PLAT-02 §§7,8][I6]. Binding this callback leaves unrelated optional
+	// post-loop diagnostics installed by a caller intact.
+	bindBattleMessageRetirement(b.sess, cl)
 	cl.SetSnapshot(b.sess.Snapshot)
 	cl.SetTerrain(b.sess.World)
 	cl.SetCamera(b.cam)
@@ -351,6 +356,13 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		cl.WarmFeatureSequences(b.sess.Catalog.Features)
 	}
 	attachBattleAudio(cl, b.sess, b.fs)
+}
+
+func bindBattleMessageRetirement(sess *session.Session, cl *client.Client) {
+	if sess == nil || cl == nil {
+		return
+	}
+	sess.BindMessageRetirement(cl.MessageRing().RetireOne)
 }
 
 // teardown is the one idempotent battle-exit boundary. Presentation joins are

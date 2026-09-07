@@ -19,7 +19,15 @@ func TestMessageRingCaptionBudgetAndExpiry(t *testing.T) {
 	if len(lines) != 2 || lines[0].Text != "b" || lines[1].Text != "c" {
 		t.Fatalf("visible lines = %#v, want b,c", lines)
 	}
-	r.Expire(31) // strict stored+(scroll+1)*30 < currentTick
+	if !r.RetireOne(31) { // strict stored+(scroll+1)*30 < currentTick
+		t.Fatal("first overdue line did not retire")
+	}
+	if got := r.Entries[1].Text; got != "b" {
+		t.Fatalf("retirement cleared record text %q, want retained record", got)
+	}
+	if !r.RetireOne(31) {
+		t.Fatal("second overdue line did not retire on next pump")
+	}
 	if got := r.Visible(); len(got) != 0 {
 		t.Fatalf("expired lines = %#v, want empty", got)
 	}

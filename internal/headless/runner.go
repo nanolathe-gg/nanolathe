@@ -9,6 +9,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/ai"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -434,6 +435,7 @@ func (o *observer) scan(sess *session.Session, countNew bool) {
 
 func advance(sess *session.Session, limit uint32, observer *observer) {
 	scaledNow := sess.Clock.ScaledAnchor
+	var discarded []frame.EventView
 	for sess.State != session.StatePostBattle && sess.Clock.GlobalTick < limit {
 		remaining := limit - sess.Clock.GlobalTick
 		delta := int32(5)
@@ -442,6 +444,12 @@ func advance(sess *session.Session, limit uint32, observer *observer) {
 		}
 		scaledNow += delta
 		sess.Step(scaledNow)
+		// A displayless run has no presentation consumer. Drain the committed
+		// event stream at its host-pump boundary so retained event payloads do
+		// not accumulate; Buffer retains any exact overflow count for Report.
+		if sess.Snapshot != nil {
+			discarded = sess.Snapshot.DrainCommittedEvents(discarded)
+		}
 		observer.scan(sess, true)
 		observer.sampleGroups(sess)
 	}

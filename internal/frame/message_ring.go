@@ -109,19 +109,30 @@ func (r *MessageRing) Append(text string, class uint8, source pool.Handle, speak
 	return true
 }
 
-// Expire advances the visible head while its strict age bound has elapsed.
-func (r *MessageRing) Expire(currentTick uint32) {
+// RetireOne advances the display index by one when its strict age bound has
+// elapsed. The executor calls it once per outer pump, including a pump with no
+// sub-ticks, so a backlog retires one record at a time [01 R-PLAT-02 §§7,8].
+//
+// Retiring changes only the display index. The old record remains available to
+// the ring's record-level operations until a later poster replaces its slot.
+func (r *MessageRing) RetireOne(currentTick uint32) bool {
 	if r == nil || r.TextLines == 0 || r.Display == r.Producer {
-		return
+		return false
 	}
-	for r.Display != r.Producer {
-		line := r.Entries[r.Display]
-		deadline := line.StoredTick + (uint32(r.TextScroll)+1)*30
-		if deadline >= currentTick {
-			return
-		}
-		r.Entries[r.Display] = MessageLine{}
-		r.Display = uint16((uint32(r.Display) + 1) % 30)
+	line := r.Entries[r.Display]
+	deadline := line.StoredTick + (uint32(r.TextScroll)+1)*30
+	if deadline >= currentTick {
+		return false
+	}
+	r.Display = uint16((uint32(r.Display) + 1) % 30)
+	return true
+}
+
+// Expire retires every already-overdue record for direct maintenance callers.
+// The host-pump path must use RetireOne so it preserves the executor's
+// one-record cadence [01 R-PLAT-02 §8].
+func (r *MessageRing) Expire(currentTick uint32) {
+	for r.RetireOne(currentTick) {
 	}
 }
 

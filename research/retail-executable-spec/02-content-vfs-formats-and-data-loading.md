@@ -3902,6 +3902,15 @@ over the 958 GAFs of the reference install (123,294 frames including
 subframes) finds a maximum subframe count of 12 and no nonzero high byte.
 `[fmt gaf]` carries the byte-level statement.
 
+**Unknown — special consumers and nested relocation.** The ordinary loader
+relocates direct child tables, while general drawing recursively composes
+children. Which authored nested layouts survive that loader requires a
+complete caller/layout trace. Alternate children in consumers that directly
+read a raster (scaled images, light-table glyphs, feature/fog masks and model
+textures) also require their own call-site trace. Nanolathe's temporary plain
+compatibility raster includes only ordinary children and leaves alternate-only
+coverage transparent; that fallback is not an established retail result.
+
 The RLE blitter decodes each row until it has produced `width` pixels: a
 skip, repeat or literal run that would overshoot is **clamped to the
 remaining width** (the excess is discarded; a literal run still advances the
@@ -4023,6 +4032,9 @@ missing or type-mismatched item returns the caller's default.
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
+* GAF nested child layouts supported by ordinary relocation, and alternate
+  child behavior in scaled/light-table/feature/fog/model raster consumers ·
+  [R-MALF-01 §6] · static trace of each consuming blitter and loader.
 * Data contract of `ONLLoadConfigFile` · §1 · not decidable from the retail
   executable — the function is defined by `online.dll`. The executable side
   (directory resolution, `ONLGetVersion()==3` gate, 336-byte block, zeroed

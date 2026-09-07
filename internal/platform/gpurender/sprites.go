@@ -129,8 +129,9 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 			if sp.Frame == nil {
 				return
 			}
+			clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
 			r.drawKeyed(sp.Frame, int(sp.X)-int(sp.Frame.XOffset), int(sp.Y)-int(sp.Frame.YOffset),
-				0, 0, r.w, r.h)
+				clipX, clipY, clipW, clipH)
 		} else {
 			// UIBlit: the rectangle is the contract, no offset [07 §4].
 			clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
@@ -155,7 +156,8 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 	case drawlist.BlitTinted:
 		// tintedBlitAnchor: each opaque source texel resolves the destination to
 		// ALP[src*256 + dst]; anchored and destination-reading [03 R-COMP-01 §2].
-		r.drawTint(sp.Frame, int(sp.X), int(sp.Y))
+		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
+		r.drawTint(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
 	case drawlist.BlitFeatureShadow:
 		// blitGAFFrame isShadow: darken the destination through PALETTE.SHD where the
 		// shadow frame is opaque; destination-reading. Trans selects the SHD row

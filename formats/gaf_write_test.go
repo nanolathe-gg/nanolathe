@@ -47,3 +47,41 @@ func TestEncodeGAFRoundTrip(t *testing.T) {
 		t.Fatal("opaque art without the colour key stores raw; anything else stores RLE")
 	}
 }
+
+func TestEncodeGAFRoundTripsCompositeAlternateByte(t *testing.T) {
+	data, err := EncodeGAF([]GAFWriteEntry{{
+		Name: "composite",
+		Frames: []GAFWriteFrame{{
+			Width: 5, Height: 3, XOffset: 4, YOffset: -2,
+			Subframes: []GAFWriteFrame{
+				{Width: 1, Height: 1, XOffset: 4, YOffset: -2, Pixels: []byte{12}},
+				{Width: 1, Height: 1, XOffset: 3, YOffset: -2, Pixels: []byte{13}, AlternateBlitter: 0xa5},
+			},
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := LoadGAF(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := g.Entries[0].Frames[0].Frame
+	if parent.SubframeCount != 2 || len(parent.Subframes) != 2 {
+		t.Fatalf("child count = raw %d decoded %d, want 2", parent.SubframeCount, len(parent.Subframes))
+	}
+	if got := parent.Subframes[1].AlternateBlitter; got != 0xa5 {
+		t.Fatalf("alternate high byte = %#x, want %#x", got, byte(0xa5))
+	}
+}
+
+func TestEncodeGAFRejectsUnreadableEntryCountAndCyclicChildren(t *testing.T) {
+	if _, err := EncodeGAF(make([]GAFWriteEntry, 0x8000)); err == nil {
+		t.Fatal("writer admitted entry count with negative signed low word")
+	}
+	frames := []GAFWriteFrame{{Width: 1, Height: 1}}
+	frames[0].Subframes = frames
+	if _, err := EncodeGAF([]GAFWriteEntry{{Name: "cycle", Frames: frames}}); err == nil {
+		t.Fatal("writer admitted cyclic composite object graph")
+	}
+}

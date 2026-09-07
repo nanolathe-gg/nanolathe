@@ -1206,22 +1206,8 @@ func (s *Session) Step(scaledNow int32) {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}
 	}
-	if ticks > 0 {
-		// The executor tail is once per pump after runnable sub-ticks; it cannot
-		// interpose between a phase-12 result and that tick's publication
-		// [01 §4.4].
-		s.runRetailPostLoopTail(s.Clock.GlobalTick)
-	}
-	// A zero-runnable pump: retail still falls through to the same tail, which
-	// is neither inside the loop nor guarded by the runnable count
-	// [01 R-PLAT-02 §7]. It changes nothing there. The global tick did not
-	// advance, so the temporary-sight expiry pass is evaluated against the tick
-	// the previous pump already compacted for and finds nothing new; the ring
-	// slide is likewise idempotent at a fixed tick; the three barrier routines
-	// are empty. The only step that can still move is the text-scroll retire,
-	// which is the presentation message ring ([07 R-CAM-01 §7]) and is not
-	// driven from here. Skipping the call and running it are therefore
-	// observationally identical for simulation state, which is the property
-	// [01 R-PLAT-02 §7] states, and the skip keeps the tail's diagnostic trace
-	// a record of runnable pumps only.
+	// The executor tail is once per host pump after the whole catch-up batch,
+	// including a zero-runnable pump. It cannot interpose between a phase-12
+	// result and that tick's publication [01 §4.4][01 R-PLAT-02 §7].
+	s.runRetailPostLoopTail(s.Clock.GlobalTick)
 }
