@@ -979,7 +979,10 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 	if is3DDef(def) {
 		s.Terrain.Plot[idx].SetOccupied(true)
 	}
-	// Create instance.
+	// TODO(question): retained mode and sprite-to-wreck effects need the
+	// authored-observable or complete-writer decider in [05 R-FEAT-01 §14].
+	// Fresh records keep the documented host-zero velocity policy and also
+	// reset mode state; they do not emulate physical arena reuse (EC-G2).
 	inst := &Instance{
 		Def:        def,
 		Terrain:    s.Terrain,

@@ -576,6 +576,10 @@ type VisibilityView struct {
 	WordVisible   []uint16
 	CoverageBytes bool
 	Valid         bool
+	// MappingVersion identifies the immutable local visibility inputs copied
+	// into this frame slot. Reset retains those bytes until a newer revision
+	// arrives, so alternating slots do not copy an unchanged grid [03 §2.4].
+	MappingVersion uint64
 	// SeaLevel is the map header's sea-level byte scaled to 16.16 world units,
 	// which is the value the gameplay visibility gate's step 3 compares a
 	// unit's base height against — the comparison is against that scaled byte
@@ -860,6 +864,8 @@ type FogView struct {
 	OriginX, OriginZ int32
 	Ch0, Ch1         []uint8
 	Valid            bool
+	// Version identifies the completed derived fog bytes in this frame slot.
+	Version uint64
 }
 
 // Frame is one committed tick-end presentation payload.  It owns all slices;
@@ -910,6 +916,11 @@ type Frame struct {
 	// [07 §6][07 R-HUD-04 §4]. They are scheduling and lobby scalars, not
 	// simulation state, and the strip is the only consumer.
 	Strip StripReadout
+	// retainedVisibility and retainedFog keep this double-buffer slot's last
+	// immutable presentation copies while Reset restores the public zero-value
+	// shape expected by ordinary frame writers.
+	retainedVisibility VisibilityView
+	retainedFog        FogView
 }
 
 // StripReadout carries what the §6 slide strip prints: the game time is the
@@ -995,14 +1006,6 @@ func (f *Frame) Reset() {
 	f.CommandPage.ProductKeys = f.CommandPage.ProductKeys[:0]
 	clear(f.CommandPage.GeneratedProducts)
 	f.CommandPage.GeneratedProducts = f.CommandPage.GeneratedProducts[:0]
-	clear(f.Visibility.Visible)
-	f.Visibility.Visible = f.Visibility.Visible[:0]
-	clear(f.Visibility.WordVisible)
-	f.Visibility.WordVisible = f.Visibility.WordVisible[:0]
-	clear(f.Fog.Ch0)
-	clear(f.Fog.Ch1)
-	f.Fog.Ch0 = f.Fog.Ch0[:0]
-	f.Fog.Ch1 = f.Fog.Ch1[:0]
 	clear(f.Result.Winners)
 	clear(f.Result.Losers)
 	clear(f.Result.Scores)
@@ -1037,6 +1040,15 @@ func (f *Frame) Reset() {
 		ProductKeys:       f.CommandPage.ProductKeys,
 		GeneratedProducts: f.CommandPage.GeneratedProducts,
 	}
+	// Keep immutable presentation copies aside while the public frame returns to
+	// the ordinary empty writer shape. A later publication may restore them by
+	// revision without another map-sized copy [03 §2.4].
+	f.retainedVisibility = f.Visibility
+	f.retainedFog = f.Fog
+	f.Visibility.Visible = f.Visibility.Visible[:0]
+	f.Visibility.WordVisible = f.Visibility.WordVisible[:0]
+	f.Fog.Ch0 = f.Fog.Ch0[:0]
+	f.Fog.Ch1 = f.Fog.Ch1[:0]
 	f.Visibility = VisibilityView{Visible: f.Visibility.Visible, WordVisible: f.Visibility.WordVisible}
 	for i := range f.Radar.Contacts {
 		clear(f.Radar.Contacts[i].Rings)
@@ -1047,6 +1059,26 @@ func (f *Frame) Reset() {
 	f.Fog = FogView{Ch0: f.Fog.Ch0, Ch1: f.Fog.Ch1}
 	f.Result = ResultView{Winners: f.Result.Winners, Losers: f.Result.Losers, Scores: f.Result.Scores, ColumnMaxima: f.Result.ColumnMaxima}
 	f.Players = [PlayerRowSlots]PlayerRow{}
+}
+
+// RestoreVisibility restores this slot's last immutable visibility copy when
+// it already represents version. It is a publication optimization, not a
+// general retained-frame API [03 §2.4].
+func (f *Frame) RestoreVisibility(version uint64) bool {
+	if f == nil || !f.retainedVisibility.Valid || f.retainedVisibility.MappingVersion != version {
+		return false
+	}
+	f.Visibility = f.retainedVisibility
+	return true
+}
+
+// RestoreFog restores this slot's last immutable fog copy for version.
+func (f *Frame) RestoreFog(version uint64) bool {
+	if f == nil || !f.retainedFog.Valid || f.retainedFog.Version != version {
+		return false
+	}
+	f.Fog = f.retainedFog
+	return true
 }
 
 func resetOrders(s []OrderView) {

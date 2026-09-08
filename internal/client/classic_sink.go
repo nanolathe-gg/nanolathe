@@ -158,23 +158,80 @@ func (c *Client) emitSurface(sf drawlist.Surface) {
 	c.list.RecordSurface(sf)
 }
 
-// emitModel records one composed model subject's commit (WU-1.6). The finished
-// composition itself is not on the list — C-G5 keeps a subject's image on the
-// classic side until Phase 3 — so the record carries only an index into
-// c.modelCommits, appended here in lockstep with the command. The pending record
-// names which of the three commit steps the classic sink runs (the shadow, the
-// one body blit, the trace), so a carrier's staged child can record its own
-// framebuffer shadow before the carrier and its parity trace after, each in its
-// own list position rather than as a direct write during recording
+// emitModel records one composed model subject's durable classic commit. The
+// packet owns its finished body or staging image and its already-punched shadow,
+// so a retained list needs no client-side lookup. The pending record names which
+// of the three commit steps the classic sink runs (the shadow, one body blit,
+// then the observer), so a carrier's staged child can record its own framebuffer
+// shadow before the carrier and its observer after, each in its own list
+// position rather than as a direct write during recording
 // (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5).
 func (c *Client) emitModel(pending pendingModelCommit) {
-	ref := len(c.modelCommits)
-	c.modelCommits = append(c.modelCommits, pending)
-	cmd := drawlist.Model{Ref: ref, Geometry: geometryForCommit(pending), ShadowOnly: pending.shadow && !pending.body}
+	cmd := drawlist.Model{Classic: c.classicModelForCommit(pending), Geometry: geometryForCommit(pending), ShadowOnly: pending.shadow && !pending.body}
 	if pending.shadow && pending.m.draw != nil && pending.m.draw.CastsShadow && (cmd.Geometry == nil || !cmd.Geometry.Eligible) {
 		cmd.ShadowOmissions = 1
 	}
 	c.list.RecordModel(cmd)
+}
+
+// classicModelImage copies the recorder's mutable model planes into the draw
+// command. The command owns the values that replay needs, including a staging
+// body and a child-only shadow [03 R-REN-03A §4].
+func classicModelImage(t *modelTarget) *drawlist.ClassicModelImage {
+	if t == nil {
+		return nil
+	}
+	return &drawlist.ClassicModelImage{
+		Color: append([]byte(nil), t.color...), Coverage: append([]bool(nil), t.covered...), Key: append([]byte(nil), t.height...),
+		Width: int32(t.width), Height: int32(t.heightPx),
+		OriginX: t.originX, OriginY: t.originY, AnchorX: t.anchorX, AnchorY: t.anchorY,
+		Transparent: t.transparent,
+	}
+}
+
+// classicModelTarget adapts owned packet planes to the one model-image blitter
+// and diagnostic reader. Blitting reads these planes without mutating them.
+func classicModelTarget(i *drawlist.ClassicModelImage) *modelTarget {
+	if i == nil {
+		return nil
+	}
+	return &modelTarget{
+		color: i.Color, covered: i.Coverage, height: i.Key,
+		width: int(i.Width), heightPx: int(i.Height),
+		originX: i.OriginX, originY: i.OriginY, anchorX: i.AnchorX, anchorY: i.AnchorY,
+		transparent: i.Transparent,
+	}
+}
+
+// classicModelForCommit freezes every classic replay operand while the model
+// composer still owns its scratch. Shadow construction, including the body
+// punch, happens here because replay must not retain UnitDraw or model state.
+// Trace publication is an observer-only sidecar: it cannot affect pixels and
+// retains its own copied target planes rather than any resettable client table.
+func (c *Client) classicModelForCommit(p pendingModelCommit) *drawlist.ClassicModel {
+	if c == nil {
+		return nil
+	}
+	classic := &drawlist.ClassicModel{}
+	if p.shadow {
+		classic.Shadow = classicModelImage(c.buildModelShadow(p.m.draw, p.m.image))
+	}
+	if p.body {
+		classic.Body = classicModelImage(p.blit)
+	}
+	if p.trace && p.m.raster != nil && p.m.raster.trace != nil {
+		trace := p.m.raster.trace
+		sink, filter := c.rendererTraceSink, c.rendererTraceFilter
+		classic.Trace = classicModelImage(p.m.raster)
+		classic.Observer = func(target *drawlist.ClassicModelImage, indexed []byte, width, height int) {
+			trace.resolve(classicModelTarget(target), indexed, width, height)
+			trace.emit(sink, filter)
+		}
+	}
+	if classic.Shadow == nil && classic.Body == nil && classic.Observer == nil {
+		return nil
+	}
+	return classic
 }
 
 // Clear zeroes the indexed surface. It is the first command of every committed
@@ -420,7 +477,8 @@ func (s classicSink) Points(p drawlist.Points) {
 // composition (compose/rasterize/shadow-rasterize/waterline/digger/reveal/
 // outline) is already complete before recording; this runs only what the old
 // finishModel body ran, in the same order (docs/DESIGN_GPU_RENDERER.md §2.1
-// C-G5). Ref indexes the per-frame client-side table.
+// C-G5). The record owns the two finished planes, so no client model lookup is
+// involved.
 //
 // The shadow is composed and blitted before the body for the same subject
 // [03 §5.3]. It reads the finished body image to punch the body's own silhouette
@@ -431,19 +489,19 @@ func (s classicSink) Points(p drawlist.Points) {
 // [03 R-REN-03A].
 func (s classicSink) Model(m drawlist.Model) {
 	c := s.c
-	if m.Ref < 0 || m.Ref >= len(c.modelCommits) {
+	if c == nil || m.Classic == nil {
 		return
 	}
-	pending := c.modelCommits[m.Ref]
-	if pending.shadow {
-		c.drawModelShadow(pending.m.draw, pending.m.image)
+	if m.Classic.Shadow != nil && c.pal != nil {
+		classicModelTarget(m.Classic.Shadow).tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)
 	}
-	if pending.body && pending.blit != nil {
-		pending.blit.commit(c.indexed, c.width, c.height)
+	if m.Classic.Body != nil {
+		classicModelTarget(m.Classic.Body).commit(c.indexed, c.width, c.height)
 	}
-	if pending.trace && pending.m.raster != nil && pending.m.raster.trace != nil {
-		pending.m.raster.trace.resolve(pending.m.raster, c.indexed, c.width, c.height)
-		pending.m.raster.trace.emit(c.rendererTraceSink, c.rendererTraceFilter)
+	if m.Classic.Observer != nil {
+		// The observer receives a snapshot, never the writable framebuffer. This
+		// makes trace publication incapable of changing the recorded pixel order.
+		m.Classic.Observer(m.Classic.Trace, append([]byte(nil), c.indexed...), c.width, c.height)
 	}
 }
 

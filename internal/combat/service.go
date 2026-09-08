@@ -2167,14 +2167,11 @@ func emitWaterCrossing(s *Service, h pool.Handle, p *Projectile, weapon *content
 	s.emitEvent(Event{Kind: EventWaterExplosion, Tick: tick, Source: p.Shooter, Target: h, Position: p.Pos, Graphic: graphic, Bank: bank, HasCalculatedFlash: true, CalculatedTable: impactFlashTable, Smoke: weapon.StartSmoke})
 }
 
-// ExplodeWeaponAt is the shared authoritative area-damage entry point for
-// projectile splash and death explosions [06 §9.3][06 §12.1] C22–C25.
-// It performs EnumerateArea → DistanceToBox (the definition's bounding record
-// translated by the unit position) → Falloff (float32) →
-// SelectBaseDamage → ComputeScaledAmount → ApplyDamage→Destroy exactly as TickProjectiles
-// does, deterministically (pool asc via Iter, I1) and without new float64 sites
-// (I2 allowlist: Falloff float32 only). Collect-then-apply avoids double-processing
-// victims when nested deaths chain-explode [01 §4.4].
+// ExplodeWeaponAt applies area damage without central-impact presentation.
+// The feature burn-weapon producer uses this entry; pooled and stack impacts
+// reach the same area walk after their effects [05 R-FEAT-01 §11][06 §9.3].
+// Recipients are collected in cell order before delivery so mutations during
+// damage intake cannot change the remaining candidate walk [06 §9.3].
 func (s *Service) ExplodeWeaponAt(w *units.World, terrain *world.Terrain, weapon *content.WeaponDef, impact Vec3, shooter pool.Handle, tick uint32) {
 	shooterSide := NeutralSide
 	if attacker := w.Unit(shooter); attacker != nil {

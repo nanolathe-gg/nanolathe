@@ -104,7 +104,7 @@ type FlightState struct {
 // fixed-point differences, truncated toward zero. The result is a raw 16.16
 // quantity, compared against the producer's world-unit thresholds.
 func flightGoalDistance(dx, dz int64) int64 {
-	return int64(math.Hypot(float64(dx), float64(dz)))
+	return int64(numeric.TruncateFloat64ToLow32(math.Hypot(float64(dx), float64(dz))))
 }
 
 // bearing is the movement package's air-order adapter. It delegates the
@@ -222,10 +222,10 @@ func IntegrateFlight(s *FlightState) {
 	h := math.Hypot(float64(s.VX), float64(s.VZ)) / 65536.0 // float64 per I2
 	b := float64(s.BrakeRate) / 65536.0                     // float64 per I2
 	if h > b {                                              // STRICT [04 §10.1] C28
-		ratio := int32((b / h) * 65536.0)                // trunc((b/h)·65536) [04 §10.1] C28
-		s.VX = int32((int64(s.VX) * int64(ratio)) >> 16) // shift floors [04 §10.1]
+		ratio := numeric.TruncateFloat64ToLow32((b / h) * 65536.0) // trunc((b/h)·65536) [04 §10.1] C28
+		s.VX = int32((int64(s.VX) * int64(ratio)) >> 16)           // shift floors [04 §10.1]
 		s.VZ = int32((int64(s.VZ) * int64(ratio)) >> 16)
-		q := int32((h - b) * 65536.0) // trunc((h−b)·65536) [04 §10.1] C28
+		q := numeric.TruncateFloat64ToLow32((h - b) * 65536.0) // trunc((h−b)·65536) [04 §10.1] C28
 		// Fixed-point heading trig: Sin/Cos tables scaled 8192 [04 §5.1].
 		// Heading 0 == north (+Z), so X via Sin, Z via Cos.
 		// Sine feeds VX, cosine feeds VZ, both subtractions, each product
@@ -307,11 +307,11 @@ func IntegrateFlight(s *FlightState) {
 			az = 0
 		}
 	}
-	s.VX += int32(ax * 65536.0) // trunc toward zero [01 §8] via int32(float64)
-	s.VZ += int32(az * 65536.0)
+	s.VX += numeric.TruncateFloat64ToLow32(ax * 65536.0) // trunc toward zero [01 §8] via int32(float64)
+	s.VZ += numeric.TruncateFloat64ToLow32(az * 65536.0)
 
 	// Scalar speed recomputed as FULL 3-D magnitude trunc(sqrt(vx²+vy²+vz²)) [04 §10.1].
-	s.Speed = int32(math.Sqrt(float64(s.VX)*float64(s.VX) + float64(s.VY)*float64(s.VY) + float64(s.VZ)*float64(s.VZ)))
+	s.Speed = numeric.TruncateFloat64ToLow32(math.Sqrt(float64(s.VX)*float64(s.VX) + float64(s.VY)*float64(s.VY) + float64(s.VZ)*float64(s.VZ)))
 
 	// Commit position via velocity [04 §10.1] shared mover position commit; flight branch shares final position commit with ground [04 §10.1].
 	s.X += s.VX

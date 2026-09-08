@@ -140,3 +140,13 @@ func TestQueryPortsReachableFromBytecode(t *testing.T) {
 		t.Fatalf("out-of-range identifier = %d, want 0 [04 §4.4]", got)
 	}
 }
+
+// The raw-argument port retains the low word before the script sees it [01 R-DET-01 §1][04 R-COB-03 §2].
+func TestHypotPortWrapsBeforeReturningToScript(t *testing.T) {
+	if got := HypotPortFunc()([]int32{15, -2147483648, 0, 0, 0}); got != -2147483648 {
+		t.Fatalf("port low word = %d", got)
+	}
+	if got := HypotPort(2147483647, 2147483647); got != -1257966798 {
+		t.Fatalf("diagonal low word = %d", got)
+	}
+}

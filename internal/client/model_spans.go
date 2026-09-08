@@ -42,11 +42,19 @@ func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8,
 	if target == nil || p == nil {
 		return
 	}
+	if target.trace == nil && rev == nil && !p.useSHD {
+		target.fillPlainModelPoly(p, color)
+		return
+	}
+	last := spanRow
+	if p.useSHD {
+		last = spanAttrs
+	}
 	id := rendererID(ids)
 	face := p.traceFace()
-	target.polyScan(p, func(row, xl, xr int32, a, da *[spanAttrs]int64) {
+	target.polyScanLanes(p, spanKey, last, func(row, xl, xr int32, a, da [spanAttrs]int64) {
 		base := row * int32(target.width)
-		acc := *a
+		acc := a
 		for px := xl; px < xr; px++ {
 			key := spanByte(acc[spanKey])
 			idx := int(base + px)
@@ -83,7 +91,7 @@ func (c *Client) fillPolyTarget(target *modelTarget, p *screenPoly, color uint8,
 					target.write(idx, 0, false)
 				}
 			}
-			for k := range acc {
+			for k := spanKey; k < last; k++ {
 				acc[k] += da[k]
 			}
 		}
@@ -117,15 +125,18 @@ func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafF
 	if target == nil || p == nil || gafFrame == nil {
 		return
 	}
+	if target.trace == nil && rev == nil {
+		c.blitOrdinaryTexturedPoly(target, p, gafFrame)
+		return
+	}
 	id := rendererID(ids)
 	face := p.traceFace()
 	w, h := int(gafFrame.Width), int(gafFrame.Height)
-	target.polyScan(p, func(row, xl, xr int32, a, da *[spanAttrs]int64) {
+	target.polyScan(p, func(row, xl, xr int32, a, da [spanAttrs]int64) {
 		base := row * int32(target.width)
-		acc := *a
+		acc := a
 		for px := xl; px < xr; px++ {
 			tx, ty := int(acc[spanU]>>16), int(acc[spanV]>>16)
-			_, keyed := gafFrame.At(tx, ty)
 			key := spanByte(acc[spanKey])
 			idx := int(base + px)
 			var b uint8
@@ -141,6 +152,7 @@ func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafF
 			}
 			event := -1
 			if target.trace != nil {
+				_, keyed := gafFrame.At(tx, ty)
 				// The trace still records that the sampled texel carried the
 				// GAF key, because a parity capture wants to see it; the writer
 				// no longer acts on it [R-REN-03A §5].
@@ -172,6 +184,73 @@ func (c *Client) blitTexturedPolyTarget(target *modelTarget, p *screenPoly, gafF
 			for k := range acc {
 				acc[k] += da[k]
 			}
+		}
+	})
+}
+
+// Ordinary model textures retain the same UV/key arithmetic and opaque source
+// sampling, without diagnostic or construction-reveal work [03 R-REN-03A §5].
+func (c *Client) blitOrdinaryTexturedPoly(t *modelTarget, p *screenPoly, frame *formats.GAFFrame) {
+	w, h := int(frame.Width), int(frame.Height)
+	shaded := c != nil && c.pal != nil && p.useSHD
+	last := spanRow
+	if shaded {
+		last = spanAttrs
+	}
+	t.polyScanLanes(p, spanU, last, func(row, xl, xr int32, a, da [spanAttrs]int64) {
+		base := int(row) * t.width
+		for px := int(xl); px < int(xr); px++ {
+			tx, ty := int(a[spanU]>>16), int(a[spanV]>>16)
+			if tx >= 0 && ty >= 0 && tx < w && ty < h && ty*w+tx < len(frame.Pixels) {
+				idx := base + px
+				key := spanByte(a[spanKey])
+				if t.height == nil || t.height[idx] <= key {
+					if t.height != nil {
+						t.height[idx] = key
+					}
+					b := frame.Pixels[ty*w+tx]
+					if shaded {
+						b = c.pal.Shade[spanShadeRow(a[spanRow])][b]
+					}
+					t.color[idx], t.covered[idx] = b, true
+				}
+			}
+			for k := spanU; k < last; k++ {
+				a[k] += da[k]
+			}
+		}
+	})
+}
+
+// Unshaded bodies and shadows need only the height lane, and keyless painter
+// targets need no lanes. Equal keys still admit, and covered/background handling
+// matches the general writer [03 R-REN-03A §2][03 R-RAST-01 §1].
+func (t *modelTarget) fillPlainModelPoly(p *screenPoly, color uint8) {
+	last := spanRow
+	if t.height == nil {
+		last = spanKey
+	}
+	t.polyScanLanes(p, spanKey, last, func(row, xl, xr int32, a, da [spanAttrs]int64) {
+		base := int(row) * t.width
+		lo, hi := base+int(xl), base+int(xr)
+		pixels, covered := t.color[lo:hi], t.covered[lo:hi]
+		if t.height == nil {
+			for i := range pixels {
+				pixels[i] = color
+				covered[i] = true
+			}
+			return
+		}
+		keys := t.height[lo:hi]
+		acc, step := a[spanKey], da[spanKey]
+		for i := range pixels {
+			key := spanByte(acc)
+			if keys[i] <= key {
+				keys[i] = key
+				pixels[i] = color
+				covered[i] = true
+			}
+			acc += step
 		}
 	})
 }

@@ -49,6 +49,7 @@ type outputPlayer interface {
 type voice struct {
 	player   outputPlayer
 	baseGain float64
+	loop     bool
 }
 
 const staticInstances = 4
@@ -156,11 +157,27 @@ func (b *Backend) SetMasterEnabled(enabled bool) {
 	defer b.mu.Unlock()
 	b.master = enabled
 	if !enabled {
-		for _, v := range b.players {
-			release(v.player)
-		}
-		b.players = nil
+		b.stopVoicesLocked()
 	}
+}
+
+// StopVoices is the ordinary stop-all boundary used by MODE Off and shell
+// transitions. Narration streams keep their independent lifetime.
+func (b *Backend) StopVoices() {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.stopVoicesLocked()
+}
+
+func (b *Backend) stopVoicesLocked() {
+	for _, v := range b.players {
+		release(v.player)
+	}
+	b.players = nil
+
 }
 
 // SetEffectsVolume applies the application-local wave-output gain to both
@@ -309,10 +326,21 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 	if player == nil {
 		return nil
 	}
+	// Mode 1 reaches mixer capacity only after creation. A failed creation
+	// above cannot steal; a post-steal rewind failure releases the new player
+	// and leaves no mixer or transient reference [03 R-AUD-01 §1].
+	if !b.makeVoiceCapacityLocked() {
+		release(player)
+		return nil
+	}
+	if err := player.Rewind(); err != nil {
+		release(player)
+		return nil
+	}
 	v := voice{player: player, baseGain: volume}
 	b.applyGain(v)
-	b.admitVoiceLocked(v)
 	player.Play()
+	b.trackVoiceLocked(v)
 	b.transients = append(b.transients, v)
 	return nil
 }
@@ -326,7 +354,27 @@ func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan f
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.playRegistered(sample, volume, pan, false)
+}
+
+// PlayLoopingRegisteredSample is the by-name exclusive loop path. It shares
+// static selection, gain and tracking with ordinary registered playback.
+func (b *Backend) PlayLoopingRegisteredSample(sample *retailaudio.Sample, volume, pan float64) error {
+	if b == nil || sample == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.playRegistered(sample, volume, pan, true)
+}
+
+// playRegistered runs under b.mu and keeps ordinary and looping registered
+// playback on one selection, capacity and tracking path.
+func (b *Backend) playRegistered(sample *retailaudio.Sample, volume, pan float64, loop bool) error {
 	if !b.master || !(b.effects > 0) {
+		return nil
+	}
+	if loop && b.hasTrackedLoopLocked() {
 		return nil
 	}
 	_, pan = clampPlayback(volume, pan)
@@ -337,7 +385,9 @@ func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan f
 	// Retail resolves global mixer capacity before it chooses a static-buffer
 	// instance. Creation and reset failures therefore happen after a steal
 	// [03 R-AUD-01 §1 steps 2,4,6].
-	b.makeVoiceCapacityLocked()
+	if !b.makeVoiceCapacityLocked() {
+		return nil
+	}
 	group, ok := b.staticGroupLocked(sample)
 	if !ok {
 		reader := newPanReader(data, pan)
@@ -361,11 +411,12 @@ func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan f
 		_ = instance.player.Rewind()
 	}
 	instance.reader.SetPan(pan)
+	instance.reader.SetLoop(loop)
 	if err := instance.player.Rewind(); err != nil {
 		return nil
 	}
 	b.updateStaticGainLocked(instance.player, volume)
-	v := voice{player: instance.player, baseGain: volume}
+	v := voice{player: instance.player, baseGain: volume, loop: loop}
 	b.applyGain(v)
 	// TODO(T23): host SetVolume and Play have no failure result; proceed with
 	// those calls and track after Play until the device boundary exposes one.
@@ -374,26 +425,41 @@ func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan f
 	return nil
 }
 
-func (b *Backend) admitVoiceLocked(v voice) {
-	// The mixer uses tracked entries, including completed voices until the
-	// mode-1 loader or paced pump reaps them. A status sweep here changes
-	// which oldest voice is stolen [03 R-AUD-01 §1][03 R-AUD-02 §2].
-	b.makeVoiceCapacityLocked()
-	b.trackVoiceLocked(v)
+func (b *Backend) hasTrackedLoopLocked() bool {
+	for _, v := range b.players {
+		if v.loop {
+			return true
+		}
+	}
+	return false
 }
 
-func (b *Backend) makeVoiceCapacityLocked() {
+func (b *Backend) makeVoiceCapacityLocked() bool {
 	limit := b.voiceLimit
 	if limit <= 0 {
 		limit = defaultVoiceLimit
 	}
 	for len(b.players) >= limit {
-		// Oldest start first: the steal picks the smallest sequence number
-		// among the non-looping voices [R-AUD-01 §1 step 2]. Appends keep the
-		// slice in start order, so that voice is the front one.
-		release(b.players[0].player)
-		b.players = append(b.players[:0], b.players[1:]...)
+		// Oldest start first, excluding loops. The all-loop edge is unreachable
+		// in retail because exclusive-loop admission permits only one, but a
+		// host-configured limit can expose it; dropping is safer than choosing
+		// an invented victim [03 R-AUD-01 §1].
+		victim := -1
+		for i, v := range b.players {
+			if !v.loop {
+				victim = i
+				break
+			}
+		}
+		if victim < 0 {
+			return false
+		}
+		release(b.players[victim].player)
+		copy(b.players[victim:], b.players[victim+1:])
+		b.players[len(b.players)-1] = voice{}
+		b.players = b.players[:len(b.players)-1]
 	}
+	return true
 }
 
 func (b *Backend) trackVoiceLocked(v voice) {

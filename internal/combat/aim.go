@@ -225,5 +225,5 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 // a transient and is never stored.
 func distance3DRaw(dx, dy, dz int32) int64 {
 	fx, fy, fz := float64(dx), float64(dy), float64(dz)
-	return int64(math.Sqrt((fx*fx + fy*fy) + fz*fz))
+	return int64(numeric.TruncateFloat64ToLow32(math.Sqrt((fx*fx + fy*fy) + fz*fz)))
 }

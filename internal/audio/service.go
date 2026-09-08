@@ -314,6 +314,25 @@ func (a *Service) PlayUICue(alias string) bool {
 	return true
 }
 
+// PlayLoopingUICue resolves the by-name front-end loop. Only an output that
+// explicitly exposes the looping registered seam receives it; a missing seam
+// stays silent rather than changing this mode-0 request into a one-shot.
+func (a *Service) PlayLoopingUICue(alias string) bool {
+	if a == nil || strings.TrimSpace(alias) == "" {
+		return false
+	}
+	sample, err := a.Load(alias)
+	if err != nil || sample == nil {
+		return false
+	}
+	output, ok := GlobalOutput().(LoopingRegisteredOutput)
+	if !ok {
+		return false
+	}
+	_ = output.PlayLoopingRegisteredSample(sample, VolumeFromCentibel(VolInView), 0)
+	return true
+}
+
 // ConfigureMusic probes authored music media and selects the mission's
 // briefing/sequential mode. Zero tracks leaves the controller idle.
 func (a *Service) ConfigureMusic(hasBriefing bool) {
@@ -368,7 +387,8 @@ func (a *Service) PlayBriefing(glamourSound, brief, narration, missionHint strin
 }
 
 // playRegistered selects the optional mode-0 presentation cache without
-// changing the observable fallback for outputs that only implement Output.
+// changing ordinary-output compatibility for outputs that only implement
+// Output. The looping extension intentionally does not take this fallback.
 func playRegistered(sample *Sample, volume, pan float64) {
 	if output := GlobalOutput(); output != nil {
 		if registered, ok := output.(RegisteredOutput); ok {
@@ -376,6 +396,17 @@ func playRegistered(sample *Sample, volume, pan float64) {
 			return
 		}
 		_ = output.PlaySample(sample, volume, pan)
+	}
+}
+
+// StopVoices ends the ordinary tracked voice table when a presentation
+// transition reaches its committed stop point. Streams remain separate.
+func (a *Service) StopVoices() {
+	if a == nil {
+		return
+	}
+	if output, ok := GlobalOutput().(VoiceOutput); ok {
+		output.StopVoices()
 	}
 }
 

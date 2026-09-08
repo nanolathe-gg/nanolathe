@@ -603,7 +603,7 @@ const invFixedOne = 1 / float32(1<<16)
 // scale is a power of two, so the product is exact and forming it in single
 // precision yields the identical integer; no float64 is introduced for it.
 func centreWord(acc float32) numeric.Fixed {
-	return numeric.Fixed(int64(acc * (1 << 16)))
+	return numeric.Fixed(numeric.TruncateFloat32ToLow32(acc * (1 << 16)))
 }
 
 // lookupDef returns the UnitDef for canonical key ck via s.Catalog if available [P0-I16].
@@ -674,7 +674,7 @@ func (s *Strategic) classify(def *content.UnitDef) float32 {
 // [01 §8; P0-01 §4; I3].
 // Narrow to float32 at CALL boundaries is done by caller passing float32.
 func ftol(v float32) int32 {
-	return int32(v)
+	return numeric.TruncateFloat32ToLow32(v)
 }
 
 // clamp100 clamps to [-100,100] before i8 store [P0-01 §4].

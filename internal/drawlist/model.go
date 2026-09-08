@@ -57,6 +57,58 @@ const (
 	ModelWaterlineBlue
 )
 
+// ClassicModelImage is one owned indexed composition plane for the classic
+// executor. Color, Coverage, and Key are mutable working bytes produced while
+// recording; they are copied into a Model command so later recording cannot
+// alter an already-recorded subject. Key is nil for the painter-order path.
+// The placement scalars locate the model-local origin on the destination.
+type ClassicModelImage struct {
+	Color    []byte
+	Coverage []bool
+	Key      []byte
+
+	Width, Height    int32
+	OriginX, OriginY int32
+	AnchorX, AnchorY int32
+	Transparent      uint8
+}
+
+// Clone returns an image whose mutable planes do not alias the source.
+func (i *ClassicModelImage) Clone() *ClassicModelImage {
+	if i == nil {
+		return nil
+	}
+	out := *i
+	out.Color = append([]byte(nil), i.Color...)
+	out.Coverage = append([]bool(nil), i.Coverage...)
+	out.Key = append([]byte(nil), i.Key...)
+	return &out
+}
+
+// ClassicModel is the durable classic replay operand. Shadow has already been
+// projected and punched against Body during recording, so replay requires no
+// UnitDraw, camera, client model cache, or per-frame lookup. Replay applies
+// Shadow, then the single Body blit, then Observer. Observer is optional
+// diagnostics-only state: it never affects pixels and is permitted to retain
+// its own immutable recording-time evidence.
+type ClassicModel struct {
+	Shadow *ClassicModelImage
+	Body   *ClassicModelImage
+	// Trace is the observer-only raster plane. It is separate from Body when a
+	// supersampled raster was resolved before the body blit.
+	Trace    *ClassicModelImage
+	Observer func(trace *ClassicModelImage, indexed []byte, width, height int)
+}
+
+// Clone copies every classic pixel plane. Observer is intentionally shared: it
+// has no pixel-writing capability and exists only to publish renderer evidence.
+func (m *ClassicModel) Clone() *ClassicModel {
+	if m == nil {
+		return nil
+	}
+	return &ClassicModel{Shadow: m.Shadow.Clone(), Body: m.Body.Clone(), Trace: m.Trace.Clone(), Observer: m.Observer}
+}
+
 // ModelChild is a separately composed subject in the carrier's key space.
 // KeyDelta is compared at signed width before the resulting key byte is stored
 // [03 R-REN-03A §4]. Geometry remains in framebuffer placement coordinates.

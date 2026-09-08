@@ -41,6 +41,17 @@ func (c *Client) appendMinimapPoint(x, y int32, value byte) {
 // game viewport at the screen position of the ground resolver's world point,
 // and mode 2 is reachable only from film mode [03 §3.12].
 func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap) {
+	c.drawMinimapLayout(surf, dst, layout, 0, 0)
+}
+
+// DrawMinimapLayoutVersion records the same sampled image with an optional
+// stable source identity and revision. Zero identity retains the dynamic
+// surface contract for ordinary callers [03 §3.6].
+func (c *Client) DrawMinimapLayoutVersion(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, identity, revision uint64) {
+	c.drawMinimapLayout(surf, dst, layout, identity, revision)
+}
+
+func (c *Client) drawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layout camera.Minimap, identity, revision uint64) {
 	if c == nil || surf == nil || surf.W <= 0 || surf.H <= 0 || len(surf.Bits) < surf.W*surf.H || layout.W <= 0 || layout.H <= 0 {
 		return
 	}
@@ -74,7 +85,7 @@ func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 	// Own this packet's pixels; another minimap write or source mutation cannot
 	// change deferred replay. List.Clone also copies surface bytes.
 	c.emitSurface(drawlist.Surface{Pixels: pixels, SrcW: w, SrcH: h,
-		Dst: drawlist.Rect{X: dl + x0, Y: dt + y0, W: w, H: h}})
+		Dst: drawlist.Rect{X: dl + x0, Y: dt + y0, W: w, H: h}, Identity: identity, Revision: revision})
 }
 
 // minimapPictureSpan inverts floor(pixel*126/extent) into a half-open pixel

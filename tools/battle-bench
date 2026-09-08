@@ -1,0 +1,5 @@
+#!/bin/sh
+# Live simulation plus rendering, retail assets required. Output directory must be new.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+exec go run ./cmd/nanolathe "$@"

@@ -6614,6 +6614,33 @@ word the stamp does not write, whatever the slot's previous occupant left:
   `featuredead`. Established mechanism; the observable is a Supported
   inference with the same deciders.
 
+**Supported inference — a captured next identity reused during the walk.**
+The established head insertion, next-link capture before each visit (§10),
+and LIFO return/reallocation above do not imply that every newly stamped
+occupant waits until the following tick. If a visit destroys the next
+instance and immediately stamps its successor into that same slot, the
+captured identity can now denote the newly inserted head. Following its new
+next link could revisit an earlier member of the walk. The list operations
+support this mechanism; its reachability through a complete feature visit,
+any additional guard, and the resulting extra animation/RNG/publication
+ordering remain **Unknown**. Fresh independently allocated host records do
+not reproduce it, even when ordinary insertion order and capacity match.
+
+**Authorable decider.** Place two distinguishable live features so that the
+first visited burning feature's one-shot burn weapon destroys the immediately
+following feature, whose `featuredead` names a distinct live 3D successor.
+Keep other live allocations absent and give the two animation sequences
+visibly different frames. Observe whether the successor advances in that
+same feature phase, whether the burner is visited again, and which state is
+published/drawn first; compare a control whose destroyed feature has no live
+successor. A bounded static trace must follow the captured-next read through
+burn-weapon damage, teardown, successor allocation and the next loop visit,
+including all guards, before promoting this outcome to Established. This
+scenario is a proposed manual probe, not a claim that the observable has
+been reproduced. Together with the sinking-predecessor and sprite-to-3D
+probes above, it defines the field and list-identity boundary a compact
+representation must preserve or explicitly decline.
+
 #### The burning-feature smoke puff: its parameters, its three draws, and where the jitter lands [R-FEAT-01 §16]
 
 §10 pass 3a gives the jitter arithmetic; this section gives the puff's
@@ -6888,6 +6915,11 @@ body and are not restated here.
 - The reader of the copy of the reclaim flag the death/reclaim transition
   stores in the instance's bit 4 — none found · [R-FEAT-01 §5] · static
   trace over the unrecovered regions.
+- Same-phase reuse of a captured active-list successor, including repeated
+  visits and resulting animation/RNG/publication order · [R-FEAT-01 §14] ·
+  bounded burn-weapon teardown/reallocation/loop trace or the authored
+  two-feature manual probe specified there.
+
 - Whether the slot-reuse observables — a land corpse launched upward by a
   stale shadow-cursor pointer, and a 3D wreck replaced by `featurereclamate`
   because its slot's previous occupant was a reclaim animation — occur in

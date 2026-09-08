@@ -681,7 +681,7 @@ const routeLookaheadRaw = int64(80 << 16)
 // float is only the established working-precision temporary [04 R-MOV-01 §3]
 // [04 R-PATH-01 §8][I2].
 func groundHypotRaw(dx, dz int64) int64 {
-	return int64(math.Hypot(float64(dx), float64(dz)))
+	return int64(numeric.TruncateFloat64ToLow32(math.Hypot(float64(dx), float64(dz))))
 }
 
 // routeTargets emits the follower's clamped T0/T1/T2 triples and applies the

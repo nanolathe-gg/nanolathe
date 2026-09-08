@@ -2278,7 +2278,7 @@ func airReleaseLead(u *units.Unit, gravity int64) int64 {
 	}
 	cruise := float64(u.Def.CruiseAlt)
 	speed := float64(int16(u.Move.Speed.Raw() >> 16))
-	return int64(math.Sqrt((2.0*cruise)/float64(gravity)) * 30.0 * speed)
+	return int64(numeric.TruncateFloat64ToLow32(math.Sqrt((2.0*cruise)/float64(gravity)) * 30.0 * speed))
 }
 
 // legAirStrike is the bombing run, with the ballistic release lead of

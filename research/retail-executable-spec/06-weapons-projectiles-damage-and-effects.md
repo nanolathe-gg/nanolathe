@@ -4027,8 +4027,14 @@ where the impact cell is
 `(v + (v >> 31 & 0xF)) >> 4` — truncation toward zero of the signed high word,
 not the arithmetic shift the collision gate uses. Each range is clamped
 independently: the low bound to zero, the high bound to the map width or
-height. It traverses rows by increasing Z, then cells by increasing X, and both
-upper bounds are **exclusive**.
+height. **Established fact:** on each axis the lower bound is
+`max(center - cells, 0)` and the exclusive upper bound is
+`min(center + cells, mapExtent)`; there is no additional increment on that
+upper bound. The position's whole word is read as a signed 16-bit value before
+the division by 16. It traverses rows by increasing Z, then cells by increasing
+X. Thus a zero-radius span at an unclipped interior center covers two cells
+per axis; at the origin it covers only the origin cell. A range whose lower
+bound is at or above its upper bound visits nothing.
 
 **Established fact:** Within each cell the order is unit slot zero, unit slot
 one, then the feature/terrain candidate.

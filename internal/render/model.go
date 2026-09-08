@@ -314,15 +314,26 @@ func BuildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 // the returned transform slice directly, avoiding a second per-piece copy;
 // BuildPieceDraws remains the narrow compatibility wrapper for callers that
 // only need draw records [03 §2.4] C21.
-func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool) ([]PieceDraw, []model.Transform) { // [03 §2.4] C21 [03 §5.2] C13
+func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool) ([]PieceDraw, []model.Transform) {
+	return buildPieceDrawsInto(m, states, worldPos, dirty, shaded, &DrawScratch{})
+}
+func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]numeric.Fixed, dirty, shaded bool, scratch *DrawScratch) ([]PieceDraw, []model.Transform) { // [03 §2.4] C21 [03 §5.2] C13
 	if m == nil {
 		return nil, nil
 	}
-	transforms := UnitTransforms(m, states) // [03 §2.4] C21
-	out := make([]PieceDraw, 0, len(m.Pieces))
+	scratch.transforms = reuseDrawSlice(scratch.transforms, len(m.Pieces))
+	transforms := scratch.transforms
+	for i := range transforms {
+		transforms[i] = model.ComposeInto(m, states, i, transforms[i], &scratch.compose)
+	}
+	scratch.pieces = reuseDrawSlice(scratch.pieces, len(m.Pieces))
+	scratch.storage = reuseDrawSlice(scratch.storage, len(m.Pieces))
+	out := scratch.pieces[:0]
+	scratch.visited = reuseDrawSlice(scratch.visited, len(m.Pieces))
 	for i, piece := range m.Pieces {
+		store := &scratch.storage[i]
 		tr := transforms[i]
-		if pieceHidden(m, states, i) {
+		if pieceHiddenWithScratch(m, states, i, scratch.visited) {
 			// Keep the stable piece index while suppressing all authored geometry
 			// under a hidden piece [03 §2.4.1].
 			out = append(out, PieceDraw{
@@ -338,7 +349,8 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 			localOrigin[2].Add(worldPos[2]),
 		}
 		// World vertices: transform each authored vertex via the same chain then offset by worldPos [03 §2.4] C21
-		worldVerts := make([][3]numeric.Fixed, len(piece.Vertices))
+		store.world = reuseDrawSlice(store.world, len(piece.Vertices))
+		worldVerts := store.world
 		for vi, v := range piece.Vertices {
 			local := tr.Apply(v) // [03 §2.4] C21 from pristine vertices ancestor-after-descendant
 			worldVerts[vi] = [3]numeric.Fixed{
@@ -352,8 +364,11 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 			// The shaded renderer builds smooth normals from transformed piece
 			// geometry. The average remains unnormalized [03 §2.4.1]. The
 			// unshaded renderer does not read the per-piece shade bit [R-RND-02A].
-			normals := make([][3]float64, len(piece.Vertices))
-			normalCount := make([]int, len(piece.Vertices))
+			store.normals = reuseDrawSlice(store.normals, len(piece.Vertices))
+			clear(store.normals)
+			store.count = reuseDrawSlice(store.count, len(piece.Vertices))
+			clear(store.count)
+			normals, normalCount := store.normals, store.count
 			for primitiveIndex, pr := range piece.Primitives {
 				if piece.Selection && primitiveIndex == 0 {
 					continue // selection plate is not part of model lighting [03 §2.4.1]
@@ -376,7 +391,8 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 					normalCount[vi]++
 				}
 			}
-			rows = make([]int, len(normals))
+			store.rows = reuseDrawSlice(store.rows, len(normals))
+			rows = store.rows
 			for vi := range normals {
 				if normalCount[vi] == 0 {
 					rows[vi] = SHDIdentityRow
@@ -391,7 +407,17 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 			}
 		}
 		// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
-		prims := make([]PrimitiveDraw, len(piece.Primitives))
+		store.prims = reuseDrawSlice(store.prims, len(piece.Primitives))
+		prims := store.prims
+		corners := 0
+		for _, pr := range piece.Primitives {
+			corners += len(pr.VertexIndices)
+		}
+		if shaded {
+			store.shades = reuseDrawSlice(store.shades, corners)
+			clear(store.shades)
+		}
+		shadeOffset := 0
 		for pi, pr := range piece.Primitives {
 			pd := PrimitiveDraw{
 				ColorIndex:    pr.ColorIndex,
@@ -407,7 +433,9 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 				// overwritten by the first corner's trunc(dot*5)&31 result
 				// whenever that corner is resolvable [03 R-RAST-01 §5].
 				pd.ShadeRow = SHDIdentityRow
-				pd.ShadeRows = make([]int, len(pr.VertexIndices))
+				end := shadeOffset + len(pr.VertexIndices)
+				pd.ShadeRows = store.shades[shadeOffset:end:end]
+				shadeOffset = end
 				for k, vi := range pr.VertexIndices {
 					if int(vi) >= len(rows) {
 						continue
@@ -449,14 +477,15 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 	return out, transforms
 }
 
-func pieceHidden(m *model.Model, states []model.PieceState, index int) bool {
+func pieceHiddenWithScratch(m *model.Model, states []model.PieceState, index int, visited []bool) bool {
 	if index < 0 || index >= len(m.Pieces) {
 		return true
 	}
 	if index < len(states) && states[index].Hidden {
 		return true
 	}
-	visited := make([]bool, len(m.Pieces))
+	visited = reuseDrawSlice(visited, len(m.Pieces))
+	clear(visited)
 	for parent := m.Pieces[index].Parent; parent >= 0 && parent < len(m.Pieces); parent = m.Pieces[parent].Parent {
 		if visited[parent] {
 			// A cyclic public fixture is malformed. Suppress it as hidden rather
@@ -477,7 +506,13 @@ func pieceHidden(m *model.Model, states []model.PieceState, index int) bool {
 // and produces transforms and primitive lists in load-fixed order [03 §2.4] C20.
 // Caller must supply a presentation copy of base states or nil; the function never writes sim state (I6).
 // If cache is non-nil it is consulted and updated atomically (needs >7 any axis) [03 §5.2] C13.
-func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache) *UnitDraw { // [03 §2.4] C24 [03 §5.2] C13
+func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache) *UnitDraw {
+	return BuildUnitDrawInto(m, base, heading, pitch, bank, current, cache, &DrawScratch{})
+}
+
+// BuildUnitDrawInto borrows scratch until its next use. It never mutates base or
+// committed state; this only changes ownership of the presentation result.
+func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, bank uint16, current frame.UnitView, cache *OrientationCache, scratch *DrawScratch) *UnitDraw { // [03 §2.4] C24 [03 §5.2] C13
 	if m == nil {
 		return nil
 	}
@@ -489,7 +524,11 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 		// For determinism without cache, rebuild is false — caller must handle.
 		needsRebuild = false
 	}
-	states := BuildUnitPieceStates(m, base, heading, pitch, bank) // [03 §2.4] C24
+	scratch.states = reuseDrawSlice(scratch.states, len(m.Pieces))
+	clear(scratch.states)
+	copy(scratch.states, base)
+	states := scratch.states
+	model.FoldRootAngles(states, m.Root, heading, pitch, bank) // [03 §2.4] C24
 	worldPos := [3]numeric.Fixed{current.X, current.Y, current.Z}
 	// BuildPieceDraws is the one traversal. Derive the public transform view from
 	// its records so a frame cannot apply the hierarchy twice [03 §2.4] C21.
@@ -502,8 +541,8 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 	// BMcode=0 selects the shaded piece renderer only while the global
 	// display option is enabled; all other units take the no-SHD path
 	// [R-RND-02A].
-	pieces, transforms := buildPieceDraws(m, states, worldPos, needsRebuild, !current.BMCode && Shading) // [03 §2.4] C20
-	return &UnitDraw{
+	pieces, transforms := buildPieceDrawsInto(m, states, worldPos, needsRebuild, !current.BMCode && Shading, scratch) // [03 §2.4] C20
+	scratch.draw = UnitDraw{
 		Model:        m,
 		PieceStates:  states,
 		Transforms:   transforms,
@@ -515,6 +554,7 @@ func BuildUnitDraw(m *model.Model, base []model.PieceState, heading, pitch, bank
 		// view, so nothing here reads live sensor state [I6].
 		SonarContact: current.UnderwaterExempt,
 	}
+	return &scratch.draw
 }
 
 // BuildUnitDrawSimple builds a unit draw without interpolation or cache, for tests [03 §2.4] C24 [03 §5.2].

@@ -1066,3 +1066,16 @@ func TestMissionOFlagPreseed(t *testing.T) {
 		t.Fatalf("o should not queue order")
 	}
 }
+
+// Authored mission coordinates and times share the low-word conversion [01 R-DET-01 §1].
+func TestMissionCoordinateAndTimeStoreWidths(t *testing.T) {
+	if got := floatToFixed(32768).Raw(); got != -2147483648 {
+		t.Fatalf("coordinate = %d", got)
+	}
+	if got := floatToFixed(65536).Raw(); got != 0 {
+		t.Fatalf("coordinate wrap = %d", got)
+	}
+	if got := timeToTicks(2147483648.0 / 30); got != -2147483648 {
+		t.Fatalf("time = %d", got)
+	}
+}

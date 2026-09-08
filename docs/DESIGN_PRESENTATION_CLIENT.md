@@ -264,31 +264,43 @@ tracking entry [03 R-AUD-01 §1 steps 2,7]. Such a voice is outside the ordinary
 tracked stop-all/count. Separate host-only references let FX gain changes
 reach these voices too, as the original system-wide wave-output setting did;
 completion and application shutdown release those references. They never
-participate in admission or MODE Off stop-all.
+participate in admission or MODE Off stop-all, including when the untracked
+voice loops: the established stop-all visits only the fixed tracking table.
 
 Registered aliases implement the four-instance restart and resolve configured
-capacity before lazy device-player creation. Exclusive loops and mode-1
-device-player failure ordering remain REND-10 gaps. This does not change RNG
+capacity before lazy device-player creation. `LoopingRegisteredOutput` is the
+optional extension of `RegisteredOutput` for the front-end `BGM` alias; an
+output without it is silent for that request and does not fall back to the
+mode-1 path. A loop request first finds any tracked loop and returns before
+capacity or static-instance work. Every tracked voice records its loop flag;
+capacity stealing chooses the oldest non-loop only. If a configured limit is
+occupied only by loops, the host drops the new request rather than inventing a
+victim for the retail-unreachable edge. MODE Off, the paced pump and Close use
+the same ordinary-voice ownership as non-looping cues. This does not change RNG
 ownership or the separate narration stream. Tests exercise actual playback at
-limits 1/3/32, live limit lowering, completion reaping, and the
-tracked/untracked boundary above 32; setup tests verify delayed installation
-and live forwarding.
+limits 1/3/32, live limit lowering, completion reaping, the
+tracked/untracked boundary above 32, and loop exclusivity.
 
 **REND-10 transient admission contract.** The concrete
 `Backend.PlaySample` entry owns mode-1 unit voices and TEST previews. Production
 alias playback uses `PlayRegisteredSample` because this backend implements
-`audio.RegisteredOutput`; the generic service fallback does not reclassify
-registered playback on this backend. No public signature change is needed.
+`audio.RegisteredOutput`; ordinary outputs preserve their existing one-shot
+fallback. The new looping extension alone has no one-shot fallback. No public
+signature change is needed.
 
 Before creating a mode-1 device player, reap stopped transient references and
 ordinary voices, then drop the request if all eight transient slots are busy
 [03 R-AUD-01 §1]. This gate precedes ordinary mixer admission: a dropped ninth
-transient must neither create a player nor steal a tracked voice. Successful
-playback retains one transient reference until stopped/completed. A voice
-stopped by global stealing frees its transient slot at the next reap. Failed
-creation occupies no slot. Pump reaping uses the existing presentation pacing
-[03 R-AUD-02 §2]. Transient bookkeeping never adds to the global tracked count,
-changes host gain ownership, or extends MODE Off beyond tracked voices.
+transient must neither create a player nor steal a tracked voice. Conversion
+and creation also precede capacity stealing. After a successful steal, the new
+player is rewound once; rewind failure releases that new player and leaves no
+gain, play, tracked or transient reference. Successful playback applies gain,
+plays, tracks and then retains one transient reference until stopped/completed.
+A voice stopped by global stealing frees its transient slot at the next reap.
+Failed creation occupies no slot and cannot steal. Pump reaping uses the
+existing presentation pacing [03 R-AUD-02 §2]. Transient bookkeeping never
+adds to the global tracked count, changes host gain ownership, or extends MODE
+Off beyond tracked voices.
 Registered aliases and streams do not consume transient slots; application
 shutdown releases existing player ownership and clears transient references.
 
@@ -296,9 +308,8 @@ Acceptance uses actual backend entry points with a configured limit above eight
 to distinguish this gate from global stealing, completion and steal-then-reap,
 registered/stream admission while transient slots are full, and failed creation.
 Four-instance restart and registered-alias capacity-before-creation ordering
-are implemented. Exclusive loops and mode-1 device-player failure ordering
-remain separate REND-10 work. Registered-alias eager reaping is corrected by
-keeping the status sweep solely at the established mode-1 and pump entries.
+are implemented. Registered-alias eager reaping is corrected by keeping the
+status sweep solely at the established mode-1 and pump entries.
 Tests use a completed later voice at a full configured limit, distinguish
 99/100 ms pump boundaries, and complete a voice during fake device creation
 to prove there is no second transient sweep. No authoritative RNG or simulation
@@ -312,7 +323,10 @@ player and its pan reader. Replacement samples with identical aliases or PCM
 have separate groups. Clear retained groups at `Backend.Close`.
 
 Extend the private player boundary with `Position() time.Duration` and
-`Rewind() error`; make `panReader` a synchronized `io.ReadSeeker` with `SetPan`.
+`Rewind() error`; make `panReader` a synchronized `io.ReadSeeker` with `SetPan`
+and `SetLoop`. A looping reader wraps its canonical PCM frames without EOF;
+every static request sets loop state before its universal rewind, so a reused
+looping instance can become one-shot.
 Split global admission into capacity stealing before instance selection and
 tracking after successful playback. Scan instance slots in ascending order:
 first nonplaying wins immediately; otherwise remember the last null slot and
@@ -625,7 +639,8 @@ document carries them.
   immutable bytes. `Sample` is immutable after decode or registry admission,
   and owns this bounded rate-keyed host cache, so replacing an alias with a new
   sample selects new PCM and a departed session retains no backend-global PCM.
-  Outputs without the extension use `PlaySample`. Mode-1 voice loads and
+  Outputs without `RegisteredOutput` use `PlaySample`; outputs without
+  `LoopingRegisteredOutput` are silent only for a loop request. Mode-1 voice loads and
   mode-2 streams remain ordinary per-play conversion paths; this host cache is
   not a claim about retail device conversion or its mode-1 policy.
 

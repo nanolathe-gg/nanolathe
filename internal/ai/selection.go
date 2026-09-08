@@ -3,6 +3,7 @@ package ai
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
@@ -105,7 +106,7 @@ func energyRaw(in ScoreInputs) int32 {
 	if scaled < 0 {
 		scaled = 0
 	}
-	raw := int32(scaled) // trunc toward zero [01 §8] [INVARIANTS I3]
+	raw := numeric.TruncateFloat32ToLow32(scaled) // trunc toward zero [01 §8] [INVARIANTS I3]
 	if in.NetEnergy < 1 {
 		raw += 20
 	}
@@ -128,7 +129,7 @@ func metalRaw(in ScoreInputs) int32 {
 	if scaled < 0 {
 		scaled = 0
 	}
-	raw := int32(scaled)
+	raw := numeric.TruncateFloat32ToLow32(scaled)
 	if in.NetMetal < 1 {
 		raw += 20
 	}

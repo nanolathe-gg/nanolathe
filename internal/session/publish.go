@@ -430,21 +430,28 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// service currently has no generation counter; Version consequently stays
 	// zero rather than inventing one [I9].
 	if s.Vis != nil {
-		publishVisibilityView(s.Vis, s.LocalOwner, &published.Visibility)
+		publishVisibilityView(s.Vis, s.LocalOwner, published)
 		// Step 3 of the gate compares against the scaled sea-level byte, never
 		// against zero [03 §3.2][03 §2.2].
 		published.Visibility.SeaLevel = publishedSeaLevel(s.World)
 		s.Vis.RebuildFog(0, 0)
 		if fc := s.Vis.Fog(); fc != nil {
-			w, h := fc.Dimensions()
-			ch0, ch1 := fc.Channels()
-			published.Fog.W = w
-			published.Fog.H = h
-			published.Fog.OriginX, published.Fog.OriginZ = fc.Origin()
-			published.Fog.Ch0 = copyBytesInto(published.Fog.Ch0, ch0)
-			published.Fog.Ch1 = copyBytesInto(published.Fog.Ch1, ch1)
+			version := s.Vis.FogVersion()
+			if !published.RestoreFog(version) {
+				w, h := fc.Dimensions()
+				ch0, ch1 := fc.Channels()
+				published.Fog.W = w
+				published.Fog.H = h
+				published.Fog.OriginX, published.Fog.OriginZ = fc.Origin()
+				published.Fog.Ch0 = copyBytesInto(published.Fog.Ch0, ch0)
+				published.Fog.Ch1 = copyBytesInto(published.Fog.Ch1, ch1)
+				published.Fog.Version = version
+			}
 			published.Fog.Valid = s.Vis.FogCacheValid()
 		}
+	} else {
+		published.Visibility = frame.VisibilityView{}
+		published.Fog = frame.FogView{}
 	}
 	published.Features = published.Features[:0]
 	if s.Features != nil {
@@ -1201,10 +1208,15 @@ func (s *Session) radarSensorInputFor(inputs []visibility.SensorInput, id uint16
 // publishVisibilityView copies the local player's visibility masks into the
 // immutable presentation frame. Radar has no authoritative mask source in the
 // visibility service.
-func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.VisibilityView) {
-	if vis == nil || out == nil || local >= 10 {
+func publishVisibilityView(vis *visibility.Service, local uint8, dst *frame.Frame) {
+	if vis == nil || dst == nil || local >= 10 {
 		return
 	}
+	version := vis.MappingVersion()
+	if dst.RestoreVisibility(version) {
+		return
+	}
+	out := &dst.Visibility
 	w, h := vis.GridDimensions()
 	word := vis.WordMask()
 	if w <= 0 || h <= 0 || len(word) != int(w*h) {
@@ -1225,6 +1237,7 @@ func publishVisibilityView(vis *visibility.Service, local uint8, out *frame.Visi
 	out.WordVisible = copyWordsInto(out.WordVisible, word)
 	out.W, out.H = w, h
 	out.CoverageBytes, out.Valid = byteCoverage, true
+	out.MappingVersion = version
 }
 
 // publishedMoverMode is the selector the composer's two unit passes split on:

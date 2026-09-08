@@ -138,7 +138,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// [03 §3.6][I6].
 	h.radar.SetBlinkPhase(cur.Radar.BlinkPhase)
 	if cur.Visibility.Valid {
-		h.radar.RebuildMapped(cur.Visibility.WordVisible, cur.Visibility.Visible)
+		h.radar.RebuildMappedVersion(cur.Visibility.WordVisible, cur.Visibility.Visible, cur.Visibility.MappingVersion)
 	}
 	// The committed contacts are the whole circle input: the sensor phase has no
 	// surface of its own and rasterizes nothing [03 §3.10] correction of
@@ -207,7 +207,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 		return nil
 	}
 	regularIndex, commanderIndex := 0, 0
-	returnFinal := h.radar.RebuildFinal(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, commander bool) {
+	returnFinal := h.radar.RebuildFinalVersion(layout, playW, playH, contacts, func(dst *render.RadarSurface, x, y int, p byte, commander bool) {
 		if commander {
 			if commanderIndex < len(commanderArt) {
 				blitRadarGAF(dst, int32(x), int32(y), commanderArt[commanderIndex])
@@ -219,7 +219,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			blitRadarGAF(dst, int32(x), int32(y), regularArt[regularIndex])
 		}
 		regularIndex++
-	}, h.paletteIndex(10), h.paletteIndex(12), h.paletteIndex(15))
+	}, h.paletteIndex(10), h.paletteIndex(12), h.paletteIndex(15), uint64(cur.Tick))
 	if !returnFinal {
 		return nil
 	}
@@ -263,7 +263,7 @@ func (h *retailBattleHUD) drawMinimap(c *client.Client, b *battleSession, cur *f
 		return
 	}
 	// Drawing and input receive the same layout and destination rectangle.
-	c.DrawMinimapLayout(surf, dst, layout)
+	c.DrawMinimapLayoutVersion(surf, dst, layout, h.radar.FinalIdentity(), h.radar.FinalRevision())
 	// Then the viewport rectangle, exactly as retail's minimap repaint pre-pass
 	// strokes the camera-to-radar rectangle over the copied radar surface
 	// [03 R-MM-01 §1][03 R-COMP-02 §5]. The five-pixel cross that used to be

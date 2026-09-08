@@ -214,10 +214,11 @@ func FoldRootAngles(st []PieceState, root int, heading, pitch, bank uint16) {
 
 // xformNode is a leaf→root snapshot for Transform application [03 §2.4] C21.
 type xformNode struct {
-	t  [3]numeric.Fixed
-	ax uint16
-	ay uint16
-	az uint16
+	cx, sx, cy, sy, cz, sz float64
+	t                      [3]numeric.Fixed
+	ax                     uint16
+	ay                     uint16
+	az                     uint16
 }
 
 // Transform is the composed world transform for one piece [03 §2.4] C21.
@@ -498,6 +499,12 @@ func primitiveMeanY(obj formats.ThreeDOObject, primitiveIndex int) (int32, error
 	return sum / int32(len(primitive.VertexIndices)), nil
 }
 
+// ComposeScratch owns hierarchy-walk scratch; returned transforms own their nodes.
+type ComposeScratch struct {
+	chain []int
+	seen  map[int]bool
+}
+
 // Compose returns the world transform for piece index [03 §2.4] C21.
 // world(v) = M_root·…·M_leaf·v with M_i = T(t_i)·R_i [03 §2.4] C21.
 // Per-node translation is authored + script lanes summed componentwise [03 §2.4] C21.
@@ -507,13 +514,24 @@ func primitiveMeanY(obj formats.ThreeDOObject, primitiveIndex int) (int32, error
 // C24 root orientation folding is NOT included; call FoldRootAngles on a copy
 // before Compose if unit angles must be incorporated [03 §2.4] C24 [03 §5.2].
 func Compose(m *Model, st []PieceState, piece int) Transform {
+	var chain [8]int
+	return ComposeInto(m, st, piece, Transform{}, &ComposeScratch{chain: chain[:0]})
+}
+
+// ComposeInto reuses the previous transform's node storage. The caller must have
+// finished all reads of previous before calling; arithmetic is shared with Compose.
+func ComposeInto(m *Model, st []PieceState, piece int, previous Transform, scratch *ComposeScratch) Transform {
 	if m == nil || piece < 0 || piece >= len(m.Pieces) {
 		return Transform{}
 	}
 	// Collect leaf→root chain [03 §2.4] C21.
-	chain := make([]int, 0, 8)
+	chain := scratch.chain[:0]
 	cur := piece
-	seen := make(map[int]bool, len(m.Pieces))
+	if scratch.seen == nil {
+		scratch.seen = make(map[int]bool, len(m.Pieces))
+	}
+	seen := scratch.seen
+	clear(seen)
 	for cur != -1 {
 		if seen[cur] {
 			break // cycle guard — retail files are trees [fmt 3do]
@@ -528,7 +546,13 @@ func Compose(m *Model, st []PieceState, piece int) Transform {
 			break
 		}
 	}
-	nodes := make([]xformNode, len(chain))
+	scratch.chain = chain
+	nodes := previous.nodes
+	if cap(nodes) < len(chain) {
+		nodes = make([]xformNode, len(chain))
+	} else {
+		nodes = nodes[:len(chain)]
+	}
 	for i, idx := range chain {
 		t := m.Pieces[idx].Translate
 		var ax, ay, az uint16
@@ -540,7 +564,25 @@ func Compose(m *Model, st []PieceState, piece int) Transform {
 			t[1] = t[1].Add(st[idx].Trans[1])
 			t[2] = t[2].Add(st[idx].Trans[2])
 		}
-		nodes[i] = xformNode{t: t, ax: ax, ay: ay, az: az}
+		node := xformNode{t: t, ax: ax, ay: ay, az: az}
+		// Evaluate the same trig expressions once per immutable transform node,
+		// retaining per-axis/per-node rounding at application time [03 §2.4] C21.
+		if az != 0 {
+			theta := float64(az) * 2 * math.Pi / 65536
+			node.cz = math.Cos(theta)
+			node.sz = math.Sin(theta)
+		}
+		if ax != 0 {
+			theta := float64(ax) * 2 * math.Pi / 65536
+			node.cx = math.Cos(theta)
+			node.sx = math.Sin(theta)
+		}
+		if ay != 0 {
+			theta := float64(ay) * 2 * math.Pi / 65536
+			node.cy = math.Cos(theta)
+			node.sy = math.Sin(theta)
+		}
+		nodes[i] = node
 	}
 	origin := applyChain([3]numeric.Fixed{}, nodes)
 	return Transform{Origin: origin, nodes: nodes}
@@ -551,27 +593,22 @@ func applyChain(p [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {
 	x := float64(p[0].Raw())
 	y := float64(p[1].Raw())
 	z := float64(p[2].Raw())
-	for _, n := range nodes {
+	for i := range nodes {
+		n := &nodes[i]
 		if n.az != 0 {
-			theta := float64(n.az) * 2 * math.Pi / 65536 // [03 §2.4] C21
-			c := math.Cos(theta)
-			s := math.Sin(theta)
+			c, s := n.cz, n.sz
 			nx := math.Round(c*x - s*y) // Rz: x' = c*x - s*y ; y' = s*x + c*y [03 §2.4] C21
 			ny := math.Round(s*x + c*y)
 			x, y = nx, ny
 		}
 		if n.ax != 0 {
-			theta := float64(n.ax) * 2 * math.Pi / 65536
-			c := math.Cos(theta)
-			s := math.Sin(theta)
+			c, s := n.cx, n.sx
 			ny := math.Round(c*y - s*z) // Rx: y' = c*y - s*z ; z' = s*y + c*z [03 §2.4] C21
 			nz := math.Round(s*y + c*z)
 			y, z = ny, nz
 		}
 		if n.ay != 0 {
-			theta := float64(n.ay) * 2 * math.Pi / 65536
-			c := math.Cos(theta)
-			s := math.Sin(theta)
+			c, s := n.cy, n.sy
 			nx := math.Round(c*x - s*z) // Ry: x' = c*x - s*z ; z' = s*x + c*z [03 §2.4] C21
 			nz := math.Round(s*x + c*z)
 			x, z = nx, nz

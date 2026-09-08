@@ -24,6 +24,7 @@ const modelBodyShaderSource = `//kage:unit pixels
 
 package main
 
+var TextureAtlas bool
 var UseKey bool
 var UseReveal bool
 var RevealBounds vec2
@@ -49,7 +50,16 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// endpoint residue and may bias values this close to a texel boundary.
 		// It is one 16.16 unit, not an additional retail constant.
 		uv := floor(custom.xy + vec2(1.0/65536.0))
-		idx = floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+uv+vec2(0.5, 0.5)).r*255.0+0.5)
+		if TextureAtlas {
+            size := vec2(floor(custom.z/4096.0), mod(custom.z,4096.0))
+            offset := floor(srcPos-imageSrc0Origin()+vec2(0.5))
+            idx = 0.0
+            if uv.x >= 0.0 && uv.y >= 0.0 && uv.x < size.x && uv.y < size.y {
+                idx = floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+offset+uv+vec2(0.5)).r*255.0+0.5)
+            }
+        } else {
+            idx = floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+uv+vec2(0.5, 0.5)).r*255.0+0.5)
+        }
 	}
 	if custom.w > 0.5 {
 		row := floor(color.g)

@@ -168,3 +168,13 @@ func TestSnapshotStatusPublishedFrameIsImmutable(t *testing.T) {
 		t.Fatalf("published resources changed after producer mutation: %+v", got.Resources)
 	}
 }
+
+// The visible stock number is a signed 32-bit retail store, independent of host int size [01 R-DET-01 §1].
+func TestCurrentResourceTextUsesStoredLowWord(t *testing.T) {
+	if got := FormatCurrent(2147483648); got != "-2147483648" {
+		t.Fatalf("stock text = %s", got)
+	}
+	if got := FormatCurrent(4294967296); got != "0" {
+		t.Fatalf("wrapped stock text = %s", got)
+	}
+}

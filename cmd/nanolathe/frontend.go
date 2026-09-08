@@ -176,6 +176,9 @@ type gameShell struct {
 	// registered on audioOwner so the front end's own interface cues resolve
 	// [02 "Sound aliases"][07 R-FE-01 §2].
 	frontendAliasesBound bool
+	// menuBGMPending defers the MAINMENU loop until the common presentation
+	// step, after the process output has been installed [03 R-AUD-01 §5].
+	menuBGMPending bool
 
 	// campaignProgress is copied from the frozen result session when Start
 	// selects a successor or retry. The next battle receives the same bank
@@ -554,6 +557,13 @@ func (g *gameShell) openMenu(mode shellMode) {
 	}
 	saveUnder := oldPanel != nil && mode != oldMode && g.panelWindowNeedsUnder(mode)
 	g.frontend.Open(mode, panel, saveUnder)
+	if mode == modeMenuMain {
+		g.armMenuBGM()
+	} else {
+		// The request is deferred only for the main screen's common step. A
+		// transition before that step must not start it from loading or battle.
+		g.menuBGMPending = false
+	}
 	g.refreshRetailPanel()
 	g.resolveRetailButtonGeometry()
 	if mode <= modeMenuSkirmish {
@@ -655,6 +665,7 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
 	pumpAudio(time.Now())
+	g.playPendingMenuBGM()
 	switch g.frontend.Mode {
 	case modeBattle:
 		if g.battle != nil {
@@ -735,6 +746,10 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	if g == nil || battle == nil {
 		return
 	}
+	// Save restoration reaches this point only after both detached candidates
+	// are ready. Keep frontend cues alive on preflight failure, then stop the
+	// ordinary table at this successful commitment [03 R-AUD-01 §1].
+	g.stopOrdinaryAudio()
 	if g.battle != nil {
 		g.battle.teardown(clPtr)
 	}

@@ -15,6 +15,7 @@ type panReader struct {
 	mu       sync.Mutex
 	data     []byte
 	pan      float64
+	loop     bool
 	offset   int
 	frame    [8]byte
 	framePos int
@@ -36,10 +37,14 @@ func (r *panReader) Read(p []byte) (int, error) {
 	for n < len(p) {
 		if r.framePos == len(r.frame) {
 			if r.offset >= len(r.data) {
-				if n == 0 {
-					return 0, io.EOF
+				if r.loop && len(r.data) != 0 {
+					r.offset = 0
+				} else {
+					if n == 0 {
+						return 0, io.EOF
+					}
+					return n, io.EOF
 				}
-				return n, io.EOF
 			}
 			r.loadFrame()
 		}
@@ -97,6 +102,15 @@ func (r *panReader) SetPan(pan float64) {
 		pan = 1
 	}
 	r.pan = pan
+}
+
+// SetLoop controls whether reads wrap the canonical PCM instead of reporting
+// EOF. It is synchronized with Read and Seek so a reused static instance can
+// safely change between a menu loop and a one-shot request.
+func (r *panReader) SetLoop(loop bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.loop = loop
 }
 
 func (r *panReader) loadFrame() {

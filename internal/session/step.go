@@ -338,11 +338,9 @@ func (s *Session) sweepPlayerGate(owner uint8) (visit, work bool) {
 // result sets the ordinary death-pending state that step 10 finalizes at the end
 // of this same visit.
 //
-// This composes the per-unit act from combat's exported predicates rather than
-// calling combat.TickWaterDamage, which states the same contract as its own
-// whole-world sweep over players 0..9. Retail applies water damage inside the
-// visit, between the unit's script drain and its order pumps — running a sweep
-// per visit would be both quadratic and in the wrong order.
+// Water damage runs inside the phase-2 unit visit, between the script drain
+// and order pumps. Its mission/cadence predicates feed the same damage intake
+// used by other fixed-damage producers [04 §9.2][06 §9.1].
 //
 // The act that follows it in the same block is stepHealTimeSelfRepair below
 // [04 R-SPEC-01 §4].

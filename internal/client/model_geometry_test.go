@@ -69,10 +69,12 @@ func TestGeometryOnlyModelRecordsStructureResolveWithoutCPUCommit(t *testing.T) 
 	if !c.drawModel(draw, 0, teamColor{}, 1, modelCursorUnit, nil, 0) {
 		t.Fatal("geometry-only structure was not recorded")
 	}
-	if got := len(c.modelCommits); got != 0 {
-		t.Fatalf("geometry-only record retained %d CPU model commits", got)
-	}
 	models := c.list.ModelCommands()
+	for _, model := range models {
+		if model.Classic != nil {
+			t.Fatal("geometry-only recording retained CPU image planes")
+		}
+	}
 	if len(models) != 1 || models[0].Geometry == nil || !models[0].Geometry.Eligible || models[0].Geometry.Scale != 1 {
 		t.Fatalf("geometry-only record = %#v, want eligible native geometry", models)
 	}
@@ -108,10 +110,12 @@ func TestGeometryOnlyDiggerRecordsClipping(t *testing.T) {
 	if !c.drawModel(draw, 0, teamColor{}, 1, modelCursorUnit, nil, 0) {
 		t.Fatal("valid omitted geometry did not retain selection-chrome eligibility")
 	}
-	if got := len(c.modelCommits); got != 0 {
-		t.Fatalf("geometry-only omission retained %d CPU model commits", got)
-	}
 	models := c.list.ModelCommands()
+	for _, model := range models {
+		if model.Classic != nil {
+			t.Fatal("geometry-only recording retained CPU image planes")
+		}
+	}
 	if len(models) != 1 || models[0].Geometry == nil || !models[0].Geometry.Eligible || !models[0].Geometry.Digger || models[0].Geometry.DiggerKey != uint8(diggerEraseThreshold) {
 		t.Fatalf("geometry-only omission = %#v, want eligible digger clipping", models)
 	}

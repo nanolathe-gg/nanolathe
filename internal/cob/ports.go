@@ -750,7 +750,7 @@ func RelativeBearing(packedXZ int32, heading uint16) uint16 {
 func Distance(packedXZ int32) int32 {
 	x, z := unpackXZ(packedXZ)
 	h := math.Hypot(float64(x), float64(z))
-	return int32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
+	return numeric.TruncateFloat64ToLow32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
 }
 
 // AtanPort computes engine port 14's read [04 §4.4] C15: the low sixteen bits
@@ -774,7 +774,7 @@ func AtanPort(first, second int32) uint16 {
 // binds the port that reaches it.
 func HypotPort(first, second int32) int32 {
 	h := math.Hypot(float64(first), float64(second))
-	return int32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
+	return numeric.TruncateFloat64ToLow32(h) // trunc toward zero [01 §8] I3 [04 §4.4]
 }
 
 // BuildPercentLeft computes port 17 read [04 §4.4] C15: from remaining-build
@@ -784,8 +784,8 @@ func BuildPercentLeft(f float32) int32 {
 	if f == 0.0 {
 		return 0 // [04 §4.4] C15
 	}
-	// trunc toward zero is Go int32(f * -99.0) [01 §8] I3.
-	return 1 - int32(f*-99.0) // [04 §4.4] C15
+	// Keep the single-precision product, then retain the conversion low word [01 R-DET-01 §1].
+	return 1 - numeric.TruncateFloat32ToLow32(f*-99.0) // [04 §4.4] C15
 }
 
 // SetDirectionArg is the engine→COB SetDirection conversion [04 §5.3] [GAP T15]

@@ -14,6 +14,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // HUD palette roles are logical GUI entries, not physical palette indices.
@@ -364,8 +365,10 @@ func ResourceStatusFor(f *frame.Frame, player uint8) ResourceStatus {
 }
 
 // FormatCurrent applies retail's integer conversion to a stock/capacity value.
-// Go's int(float32) truncates toward zero, matching __ftol [01 §8].
-func FormatCurrent(value float32) string { return fmt.Sprintf("%d", int(value)) }
+// Preserve the signed stored low word, including extreme totals [01 R-DET-01 §1].
+func FormatCurrent(value float32) string {
+	return fmt.Sprintf("%d", int(numeric.TruncateFloat32ToLow32(value)))
+}
 
 // FormatEnergyRate formats a signed energy value as an integer, with a
 // truncated integer K suffix outside the inclusive -99999..99999 range
@@ -373,9 +376,9 @@ func FormatCurrent(value float32) string { return fmt.Sprintf("%d", int(value)) 
 // FormatEnergyProduced or FormatEnergyConsumed when the value's role is known.
 func FormatEnergyRate(value float32) string {
 	if value > 99999 || value < -99999 {
-		return fmt.Sprintf("%dK", int(value/1000))
+		return fmt.Sprintf("%dK", int(numeric.TruncateFloat32ToLow32(value/1000)))
 	}
-	return fmt.Sprintf("%d", int(value))
+	return fmt.Sprintf("%d", int(numeric.TruncateFloat32ToLow32(value)))
 }
 
 // FormatEnergyProduced formats the produced amount. Production retains the

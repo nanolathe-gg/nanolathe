@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/movement"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -251,7 +252,7 @@ func (s *Service) handleCancelCurrent(factory *units.Unit, node *orders.Node, ti
 			metalCost = def.BuildCostMetal
 		}
 	}
-	refund := float32(int32((1 - remaining) * metalCost)) // trunc toward zero [01 §8] I3
+	refund := float32(numeric.TruncateFloat32ToLow32((1 - remaining) * metalCost)) // trunc toward zero [01 §8] I3
 
 	// Normally add to builder's metal bucket UNLESS special second state [05 C21].
 	// Apply via economy mirror bucket Production.

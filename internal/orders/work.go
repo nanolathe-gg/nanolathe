@@ -921,7 +921,7 @@ func captureBudget(energyCost, metalCost float32, health, maxDamage, kills int32
 	// bias is carried negative, so both fold in through subtractions.
 	energyTerm := float64(energyCost) * float64(captureCostScale) * float64(captureEnergyUnit)
 	metalTerm := float64(metalCost) * float64(captureCostScale) * float64(captureMetalUnit)
-	base := int32((energyTerm - metalTerm) - float64(captureBias)) // one truncation [01 §8]
+	base := numeric.TruncateFloat64ToLow32((energyTerm - metalTerm) - float64(captureBias)) // one truncation [01 §8]
 	if base >= captureClampMax {
 		base = captureClampMax // the only clamp: signed, upper, and `>=`
 	}

@@ -1076,10 +1076,12 @@ N = per-vertex smooth normal:
    case-insensitively against the side's texture GAF set, then a fallback
    set. A miss rewrites the primitive to flat color `0xd1` (a gray placeholder
    quad, subject to the quads-only rule). One-frame entries are static;
-   multi-frame entries become animated textures driven by per-instance
-   players ticked once per simulation frame with per-frame delays from the
-   GAF table — except exactly-10-frame entries, which are the LOGOS team
-   textures: never animated, frame selected by owner player at draw time.
+   multi-frame entries become animated textures driven by loaded-primitive
+   players shared by instances of that loaded model and ticked once per simulation frame with per-frame delays from the
+   GAF table. Only a ten-frame entry resolved from the fallback LOGOS bank
+   after the primary banks miss becomes a team texture: it is never animated
+   and its frame is selected by owner player at draw time. A ten-frame entry
+   found in a primary bank remains an ordinary registered animation.
 
 #### R-REN-03A — the per-unit composition image, the height key, and structure anti-aliasing
 
@@ -1249,8 +1251,15 @@ fraction is not the completed sentinel every visible piece is admitted in
 every mode.
 
 The composition image built in §1 is the **cached** half, and it is rebuilt
-only when the unit is first drawn, when the orientation cache of [03 §5.2]
-goes dirty, or when a structure's construction state changes. Presentation
+when the unit is first drawn, when the orientation cache of [03 §5.2]
+goes dirty, when a structure's construction state changes, or when the
+script writes described in [R-COMP-01 §4] invalidate it. Changes to a live
+piece do not invalidate the cached half through the conditional cache-bit
+gate. Discarding the image reference is separate from invalidating that
+state: a missing structure or required key-plane image triggers a rebuild,
+but a mobile subject without a required key plane may draw all visible
+pieces directly when its image is absent and validity remains set. That
+fallback also advances the validity state. Presentation
 then proceeds down one of two paths, chosen on whether that cached image has a
 key plane:
 
@@ -2219,9 +2228,10 @@ campaign start writes colours `(0, 1)` for the local and enemy players
 owns those writers; the renderer only reads the byte.
 
 **Which primitives are team-coloured.** The loader sets the team bit on
-every primitive whose texture name resolves to an entry with **exactly ten
-frames** ([03 §2.4.1] item 4, [R-CRD-005 §1]); the artist authors nothing but
-the name. **Established (asset census, stock `textures/logos.gaf`):** the
+a primitive only when its texture name misses the primary banks and resolves
+to an entry with **exactly ten frames in the fallback LOGOS bank**
+([03 §2.4.1] item 4, [R-CRD-005 §1]); the artist authors nothing but the name.
+A ten-frame primary-bank match remains ordinary and registered. **Established (asset census, stock `textures/logos.gaf`):** the
 file holds 18 entries; 17 have ten frames — `colorslt`,
 `colorsmd`, `colorsdk`, `colordk2`, `Solid1a`, `Solid2a`, `Solid3a`,
 `Solid3b`, `Solgradb`, `32xlogos`, `32XGouraud`, `Arm32Lt`, `Arm32Dk`,
@@ -2384,19 +2394,26 @@ normalisation by `sqrt(x² + y² + z²)` (single-precision throughout; a
 zero-length normal divides by zero — the same edge as the beam projection's
 degenerate case, and a fault is the retail outcome).
 
-**What a script write dirties (Established for the writes; Supported
-inference for the reader).** The script host's piece setters — translation
-lane, angle lane, draw bit — write only on a change of value, and on a change
-zero the piece's per-piece stamp word, set the model's rebuild flag, and, when
-the piece's *cache-relevant* bit is set, clear a second model word. The
-inference is that this second word is the cached-image validity the
-cached-body path of [03 §2.4.1] item 4 tests, so a script move of a cached
-piece forces the composition image to rebuild while a move of a live piece
-does not — consistent with item 4's cached/live split. Decider: read the
-cache-build gate of [R-REN-03A §4] for the word it tests. The two
-cache/shadow bit setters write unconditionally and reset a third model word.
-(The setters' own contract is document 04's; only their effect on the
-presentation cache is recorded here.)
+**What a script write dirties (Established).** Translation and angle setters
+write only on a changed value. They invalidate the piece's transform stamp,
+request a model transform rebuild, and invalidate the cached image when the
+changed piece has its cache bit set. A changed draw bit also invalidates the
+piece stamp and conditionally invalidates the cached image, but does not
+request the transform rebuild. Cache and shade setters write their flags
+unconditionally and discard the cached-image reference on every call
+[04 R-MOV-03 §4].
+
+The cached-body draw entry directly reads the validity state cleared by those
+conditional writes: an invalid state requests a cached-body rebuild. This
+settles the former reader inference. Rebuilding also discards the cached
+shadow. The image builder installs the resulting composition image in the
+reference discarded by the cache/shade setters; that reference is an image,
+not a separate generation counter. Missing-image and construction/key-plane
+requirements retain the additional rebuild gates of [R-REN-03A §4]. The draw
+entry advances its validity state after either the direct-piece fallback or
+cached-image path. This finding is bounded to the named script setters,
+cached-body draw gate and image-builder/reference consumers; it does not
+replace the orientation-cache contract with a guessed dirty heuristic.
 
 #### Render piece state: allocation, the point-list copies, release, and the composition-cache purge [R-COMP-02 §3]
 
@@ -2442,11 +2459,16 @@ texture GAF banks, it examines the entry's frame count. An entry with fewer
 than two frames binds its single frame and clears the primitive's animated
 bit. An entry with two or more frames binds a **playback cursor** inside the
 primitive record (start frame 0), sets the animated bit, and — unless the
-primitive's *team-colour* bit is set, which the loader sets when the entry has
-exactly ten frames (the `LOGOS` bank) — appends the cursor's address to a
-global registry (`Animplay Pointers`, reallocated by one slot per append; the
-count starts at 0 at battle entry and is reset at teardown). Team-colour
+primitive's *team-colour* bit is set — appends the cursor's address to a
+global registry (grown by one slot per append; the count starts at zero at
+battle entry and is reset at texture-system teardown). These cursors belong
+to the loaded model primitive, shared by runtime instances referencing that
+model [R-CRD-005 §1]. Team-colour
 textures are therefore never animated; every other multi-frame texture is.
+The loader searches the primary texture banks first, then the fallback LOGOS
+bank only after those miss. Only a ten-frame entry resolved from that fallback
+sets the team-colour bit; a ten-frame primary-bank entry remains an ordinary
+registered animation.
 
 Phase 7 of the sub-tick ([01 §4.4]) walks the registry **from the last
 registered cursor to the first** and steps each once with the playback-cursor
@@ -5015,21 +5037,35 @@ wall-clock delta and accumulate authoring countdowns in those scaled units. The
 bounded producer that drives model-texture players is the per-tick walker that
 single-steps every registered model-texture player; the bounded cursor driver is
 the wall-clock delta path that subtracts the scaled delta via the multi-frame
-countdown stepper. Multi-frame model texture entries receive per-instance
-playback cursors so separately created model instances need not share phase.
+countdown stepper. Multi-frame model textures receive a cursor in each
+qualifying loaded primitive; runtime instances referencing that same loaded
+model share its texture phase [R-CRD-005 §1].
 
 #### CRD-005 closure — phase-7 model-texture sequence traversal [R-CRD-005 §1]
 
-The phase-7 owner is the session's global registry of **model-texture playback
-players**. A registered item is the per-instance cursor associated with an
-animated texture on one cloned model primitive: its semantic state is current
-frame, remaining authored duration, loop/hold flag, and a non-owning pointer to
-the shared GAF entry. It is not the shared GAF entry, a feature cursor, a fixed
-effect cursor, a projectile cursor, or a UI cursor. A model texture with fewer
-than two frames is static. A ten-frame `LOGOS` entry is the team-colour family:
-its frame is selected at draw time and it is not registered for phase 7. Other
-multi-frame model textures get one independent registered player per model
-instance [R-CRD-005 §1]. **Established.**
+**Established — ownership and binding lifetime.** The session's global registry
+contains playback cursors embedded in qualifying primitives of **loaded shared
+models**. The unit-definition loader resolves and binds the model before any
+unit instance uses it. Unit creation allocates separate transform/script state
+and mutable vertex arrays while retaining references to the loaded pieces; it
+does not clone the primitive texture cursors or register new ones. The earlier
+per-unit cursor wording was incorrect.
+
+Consequently two units using the same loaded model share the same primitive's
+texture phase, regardless of creation time, visibility or draw history. Two
+primitives naming the same sequence have distinct cursors. Distinct model loads
+also retain separate cursors even if their filenames or sequences match. The
+feature-model and projectile-model loaders use the same texture binder; those
+3D texture cursors belong to this registry too. Their separate sprite/event
+cursors are different objects with different phase owners.
+
+Each player stores its frame, remaining authored duration, loop/hold flag and
+non-owning sequence reference. Fewer than two frames bind statically; a
+team-colour entry resolved from the LOGOS bank is selected at draw time and is
+not registered [R-RAST-01 §3]. Other qualifying primitives register at model
+load/bind, before the first possible visible composition. The binder visits
+its sibling subtree, child subtree, then the current piece's primitives in
+ascending authored order. Registration appends in that load/bind order.
 
 The registry is advanced exactly once at phase 7 of every runnable simulation
 sub-tick, after phase 6 feature work and before phase 8 wind work [01 §4.4].
@@ -5055,20 +5091,16 @@ reloads its authored duration. The next frame is consequently observable on
 the presentation following that simulation tick. A one-frame entry is never a
 phase-7 player. **Established.**
 
-The phase-7 walker itself neither registers nor unregisters a player. The
-recovered registration path appends a qualifying model-instance player to the
-global pointer registry. A bounded census found no retail removal/compaction
-operation for that registry during model or unit teardown, so the exact
-lifetime of a registry slot after its owning model is destroyed is **Unknown**.
-The clean-room contract must not turn the older supported inference that dead
-entries are ignored into a fact: no dangling-pointer, tombstone, compaction, or
-survivor-reordering behavior is established. Until a teardown trace settles
-this, an implementation may only preserve the established phase-7 rule by
-deferring registry mutation across an invocation and by skipping an explicitly
-inactive player; it must not claim retail removal semantics. **Unknown; TODO
-(CRD-005): trace the complete model-instance teardown and registry ownership
-path, or run a retail create/destroy probe that distinguishes compaction from
-inactive retained slots.**
+**Established — teardown.** Destroying a unit releases its instance transform
+state and mutable vertex arrays and purges its composition-cache entries
+[R-COMP-02 §3]. It does not destroy the shared model's primitive cursors, so
+there is no per-unit registry removal, tombstone or compaction to invent. The
+texture-system teardown releases the registry as a whole and resets its count;
+the next battle's texture loading initializes an empty registry. The previously
+recorded per-unit teardown Unknown resulted from attributing shared primitive
+state to the unit instance. This closure is bounded to the recovered unit,
+feature and projectile model loaders, unit-state constructors/destructor,
+registry append/advance and texture-system initialization/teardown paths.
 
 The phase-7 consumer census is consequently narrow. Model-texture players are
 the only global registry consumers. Feature-definition and feature-instance
@@ -5089,7 +5121,7 @@ without importing presentation details:
 | Non-looping final frame | A below-two countdown clears the sequence; later invocations do not advance it. |
 | Two players | The newer entry is visited before the older entry (descending index order). |
 | Append after count capture | The appended player is not visited in that invocation and is first eligible on the next one. |
-| Removal/termination during traversal | Preserve survivor order and do not infer whether retail compacts or retains the slot; this remains the teardown unknown above. |
+| Unit destruction or player termination | Registry entries persist until whole-system teardown; unit destruction does not remove them, and a terminated player remains registered but inactive. |
 | Five one-tick pumps versus one five-tick pump | Equal positions only when the registered population is unchanged; a player created between sub-ticks starts at its first eligible phase-7 boundary, not retroactively. |
 
 These probes also separate the phase-7 strict countdown predicate from the
@@ -5321,8 +5353,10 @@ the owning player's colour index) and run the textured quad mapper; else draw
 nothing.
 
 **Established (direct-static).** The model binder initializes every
-multi-frame entry cursor at frame zero. It marks an exactly-ten-frame common
-entry as `LOGOS` and excludes that cursor from the advancement registry. The
+multi-frame entry cursor at frame zero. Only after primary texture-bank lookup
+fails does it search the fallback LOGOS bank; an exactly-ten-frame entry found
+there becomes team-colour and is excluded from the advancement registry. A
+ten-frame primary-bank entry remains an ordinary registered animation. The
 effect/projectile entry has no team-colour branch, so its ordinary resolver
 reads that still-initial frame zero; it neither creates a hole nor borrows an
 owning player's colour.
@@ -9443,9 +9477,6 @@ body — most under `R-<id>` headings — and are not restated here.
 - The two unread profile-row labels and whether the `Send/Receive K/s` text
   prints the rate or `0.0` · [R-COMP-01 §5] · read the two label pointers; a
   retail multiplayer capture for the text.
-- Whether the model word the script-host piece setters clear for
-  cache-relevant pieces is the cached-image validity the cached-body path
-  tests · [R-COMP-01 §4] · read the cache-build gate of [R-REN-03A §4].
 - Windowed/fullscreen mode transitions, DirectDraw surface flags, palette-loss
   recovery, and the exact blit/flip error policy; lost-surface recovery at the
   blit wrappers is established · §4.2 · static trace.
@@ -9490,10 +9521,6 @@ body — most under `R-<id>` headings — and are not restated here.
 - The mouse-event buffer and the "loaded surface wrapper" named beside the
   cursor save-under surfaces · [R-FX-01 §7] · static trace of their
   allocation sites (doc 07 owns the event buffer).
-- Teardown behavior of the model-player registry — whether a destroyed player
-  is cleared, retained as an inactive slot, or removed with compaction
-  · §5.6 [R-CRD-005 §1] · static trace. This is the CRD-005 residual, not
-  permission to choose a removal policy.
 - The follow-camera assignment writer, and the retail tracking command or
   producer behind it · §5.6.1 · static trace over a whole-image reference
   census, or manual retail observation. Marked `TODO(CRD-006)` at two sites.

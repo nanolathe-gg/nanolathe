@@ -175,6 +175,30 @@ func (g *gameShell) playMenuCue(alias string) {
 	}
 }
 
+const menuBGMAlias = "BGM"
+
+func (g *gameShell) armMenuBGM() {
+	if g != nil {
+		g.menuBGMPending = true
+	}
+}
+
+func (g *gameShell) playPendingMenuBGM() {
+	if g == nil || !g.menuBGMPending {
+		return
+	}
+	g.menuBGMPending = false
+	if svc := g.ensureFrontendAudio(); svc != nil {
+		_ = svc.PlayLoopingUICue(menuBGMAlias)
+	}
+}
+
+func (g *gameShell) stopOrdinaryAudio() {
+	if g != nil && g.audioOwner != nil {
+		g.audioOwner.StopVoices()
+	}
+}
+
 // orderButtonCue is the cue the GUI order-button dispatcher plays for the arm
 // that matched the button name [07 §9 "The GUI order-button dispatcher"]. The
 // per-arm column is Established: MOVE, STOP, ATTACK, BLAST, DEFEND, PATROL and

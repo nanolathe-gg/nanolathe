@@ -25,6 +25,8 @@ type modelImageCache struct {
 }
 
 type modelCacheEntry struct {
+	page        *modelCachePage
+	fresh       bool
 	key         string
 	image       *ebiten.Image // index in red, height key in green, opaque alpha
 	bytes, pins int
@@ -142,12 +144,17 @@ func (r *Renderer) acquireModelImage(g *drawlist.ModelGeometry) *modelImage {
 		return nil
 	}
 	c := &r.modelCache
-	key := c.identity(g)
+	key := r.frameModelKey(g)
 	if elem := c.entries[key]; elem != nil {
 		e := elem.Value.(*modelCacheEntry)
 		e.pins++
 		c.lru.MoveToFront(elem)
-		r.modelStats.CacheHits++
+		if e.fresh {
+			r.modelStats.CacheMisses++
+			e.fresh = false
+		} else {
+			r.modelStats.CacheHits++
+		}
 		return &modelImage{entry: e, bounds: b}
 	}
 	if !r.modelFacesSupported(g) || g.Supersample != nil && !r.modelFacesSupported(g.Supersample) {
@@ -195,7 +202,15 @@ func (r *Renderer) trimModelCache() {
 			delete(c.entries, e.key)
 			c.lru.Remove(elem)
 			c.bytes -= e.bytes
-			e.image.Deallocate()
+			if p := e.page; p != nil {
+				p.refs--
+				if p.refs == 0 {
+					p.image.Deallocate()
+					c.bytes -= p.bytes
+				}
+			} else {
+				e.image.Deallocate()
+			}
 			r.modelStats.CacheEvictions++
 		}
 		elem = prev
@@ -227,7 +242,7 @@ func (r *Renderer) ensureModelScratch(w, h int) {
 
 func (r *Renderer) commitModelImage(img *ebiten.Image, b image.Rectangle) {
 	r.resetGeometry()
-	r.appendTexQuad(float32(b.Min.X), float32(b.Min.Y), float32(b.Max.X), float32(b.Max.Y), 0, 0, float32(b.Dx()), float32(b.Dy()))
+	r.appendTexQuad(float32(b.Min.X), float32(b.Min.Y), float32(b.Max.X), float32(b.Max.Y), float32(img.Bounds().Min.X), float32(img.Bounds().Min.Y), float32(img.Bounds().Max.X), float32(img.Bounds().Max.Y))
 	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{img}})
 }
 
@@ -235,7 +250,7 @@ func (r *Renderer) commitModelShadow(shadow, body *modelImage) {
 	b := shadow.bounds
 	r.snapshotRect(b.Min.X, b.Min.Y, b.Max.X, b.Max.Y)
 	r.resetGeometry()
-	r.appendTexQuad(float32(b.Min.X), float32(b.Min.Y), float32(b.Max.X), float32(b.Max.Y), 0, 0, float32(b.Dx()), float32(b.Dy()))
+	r.appendTexQuad(float32(b.Min.X), float32(b.Min.Y), float32(b.Max.X), float32(b.Max.Y), float32(shadow.entry.image.Bounds().Min.X), float32(shadow.entry.image.Bounds().Min.Y), float32(shadow.entry.image.Bounds().Max.X), float32(shadow.entry.image.Bounds().Max.Y))
 	d := b.Min.Sub(body.bounds.Min)
 	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelShadowCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{shadow.entry.image, body.entry.image, r.destScratch, r.tables.alpha}, Uniforms: map[string]any{"BodyOffset": []float32{float32(d.X), float32(d.Y)}, "WorldOffset": []float32{float32(b.Min.X), float32(b.Min.Y)}}})
 	r.modelStats.Shadows++
@@ -276,7 +291,7 @@ func (r *Renderer) composeCachedModelChildren(g *drawlist.ModelGeometry, parent 
 		r.modelStageScratch.DrawImage(r.modelStage, &ebiten.DrawImageOptions{Blend: ebiten.BlendCopy})
 		d := m.bounds.Min.Sub(b.Min)
 		r.resetGeometry()
-		r.appendTexQuad(float32(d.X), float32(d.Y), float32(d.X+m.bounds.Dx()), float32(d.Y+m.bounds.Dy()), 0, 0, float32(m.bounds.Dx()), float32(m.bounds.Dy()))
+		r.appendTexQuad(float32(d.X), float32(d.Y), float32(d.X+m.bounds.Dx()), float32(d.Y+m.bounds.Dy()), float32(m.entry.image.Bounds().Min.X), float32(m.entry.image.Bounds().Min.Y), float32(m.entry.image.Bounds().Max.X), float32(m.entry.image.Bounds().Max.Y))
 		r.modelStageScratch.DrawTrianglesShader(r.verts, r.idx, r.modelChild, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{m.entry.image, nil, r.modelStage}, Uniforms: map[string]any{"KeyDelta": float32(child.KeyDelta), "PriorOffset": []float32{float32(d.X), float32(d.Y)}}})
 		r.modelStage, r.modelStageScratch = r.modelStageScratch, r.modelStage
 		r.releaseModelImage(m)

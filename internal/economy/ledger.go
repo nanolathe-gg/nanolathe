@@ -5,6 +5,7 @@ package economy
 
 import (
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -479,7 +480,7 @@ func DebitCloak(p *Player, cost float32) bool {
 	if p == nil {
 		return false
 	}
-	need := float32(int32(cost)) // truncation toward zero per [01 §8] and I3
+	need := float32(numeric.TruncateFloat32ToLow32(cost)) // truncation toward zero per [01 §8] and I3
 	if need > p.Stock[Energy] {
 		return false
 	}
@@ -559,7 +560,7 @@ func debitCloakToBucket(p *Player, b *Bucket, cost float32) bool {
 	if p == nil || b == nil {
 		return false
 	}
-	need := float32(int32(cost))
+	need := float32(numeric.TruncateFloat32ToLow32(cost))
 	if need > p.Stock[Energy] {
 		return false
 	}
@@ -789,7 +790,7 @@ func CreditConstructionTermination(p *Player, remaining float32, metalBuildCost 
 		return
 	}
 	// Truncation toward zero per I3.
-	refund := float32(int32((1 - remaining) * float32(metalBuildCost)))
+	refund := float32(numeric.TruncateFloat32ToLow32((1 - remaining) * float32(metalBuildCost)))
 	switch specialMode {
 	case 0:
 		// selector value 0 credits one half through the negative-factor form.

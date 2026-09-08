@@ -291,19 +291,15 @@ type preparedModelFace struct {
 
 func (r *Renderer) rasterModelFaces(g *drawlist.ModelGeometry) {
 	r.modelColor.Fill(color.RGBA{R: 1, A: 255})
-	prepared := make([]preparedModelFace, len(g.Faces))
+	prepared := r.modelPrep.prepared.take(len(g.Faces))
 	for i, f := range g.Faces {
 		prepared[i] = r.prepareModelFace(f)
 	}
 	if g.KeyPlane {
 		r.modelKeyImage.Fill(index0Color)
-		for _, f := range prepared {
-			r.drawPreparedModelFace(g, f, true)
-		}
+		r.drawModelFacesBatched(g, prepared, true)
 	}
-	for _, f := range prepared {
-		r.drawPreparedModelFace(g, f, false)
-	}
+	r.drawModelFacesBatched(g, prepared, false)
 }
 
 func (r *Renderer) prepareModelFace(f drawlist.ModelFace) preparedModelFace {
@@ -312,13 +308,13 @@ func (r *Renderer) prepareModelFace(f drawlist.ModelFace) preparedModelFace {
 	// diagonal made solar-panel textures visibly zig-zag [03 R-RAST-01 §1].
 	// Prepare the fractional row lanes once, then reuse them for key and color.
 	if f.Texture != nil && len(f.Vertices) == 4 {
-		out.strips = modelTextureStrips(f)
+		out.strips = r.prepareSpanStrips(f)
 		r.modelStats.TexturedQuadFaces++
 		r.modelStats.TexturedQuadStrips += len(out.strips)
 		return out
 	}
 	if polygonCrosses(f.Vertices) {
-		out.strips = foldedStrips(f)
+		out.strips = r.prepareSpanStrips(f)
 		r.modelStats.FoldedFaces++
 		r.modelStats.FoldedStrips += len(out.strips)
 		return out
@@ -328,7 +324,7 @@ func (r *Renderer) prepareModelFace(f drawlist.ModelFace) preparedModelFace {
 		// A touching ring can have no valid ear yet retain positive two-chain rows
 		// [03 R-RAST-01 §1]. Keep that geometry; the GPU still rasterizes its pixels.
 		r.modelStats.UntriangulatedFaces++
-		out.strips = modelSpanStrips(f)
+		out.strips = r.prepareSpanStrips(f)
 	} else if paints {
 		out.vertices, out.indices = modelGPUVertices(f.Vertices), tri
 	}
@@ -363,7 +359,8 @@ func modelTextureStrips(f drawlist.ModelFace) []modelGPUFace {
 	return modelSpanStrips(f)
 }
 
-func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace {
+func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace { return modelSpanStripsInto(f, nil, nil) }
+func modelSpanStripsInto(f drawlist.ModelFace, out []modelGPUFace, corners []modelGPUVertex) []modelGPUFace {
 	v := f.Vertices
 	n := len(v)
 	if n < 3 {
@@ -378,7 +375,17 @@ func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace {
 			bot = i
 		}
 	}
-	var out []modelGPUFace
+	// One backing store per face replaces one allocation per source row.
+	rows := int(v[bot].Y - v[top].Y)
+	if cap(out) < rows {
+		out = make([]modelGPUFace, rows)
+	}
+	out = out[:0]
+	if cap(corners) < rows*4 {
+		corners = make([]modelGPUVertex, rows*4)
+	} else {
+		corners = corners[:rows*4]
+	}
 	for y := v[top].Y; y < v[bot].Y; y++ {
 		l, a := chainAt(v, top, bot, -1, y)
 		r, b := chainAt(v, top, bot, 1, y)
@@ -405,7 +412,10 @@ func modelSpanStrips(f drawlist.ModelFace) []modelGPUFace {
 		l.Y, r.Y = float32(y), float32(y)
 		bottomL, bottomR := l, r
 		bottomL.Y, bottomR.Y = float32(y+1), float32(y+1)
-		out = append(out, modelGPUFace{Vertices: []modelGPUVertex{l, r, bottomR, bottomL}, Texture: f.Texture, Color: f.Color, Shaded: f.Shaded})
+		offset := len(out) * 4
+		strip := corners[offset : offset+4 : offset+4]
+		strip[0], strip[1], strip[2], strip[3] = l, r, bottomR, bottomL
+		out = append(out, modelGPUFace{Vertices: strip, Texture: f.Texture, Color: f.Color, Shaded: f.Shaded})
 	}
 	return out
 }

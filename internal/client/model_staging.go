@@ -119,11 +119,11 @@ func (c *Client) recordCarrierGeometry(v frame.UnitView, children []frame.UnitVi
 	carrier := c.unitGeometry(v, false)
 	if carrier == nil || !carrier.KeyPlane {
 		if carrier != nil {
-			c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: carrier})
+			c.list.RecordModel(drawlist.Model{Geometry: carrier})
 		}
 		for _, child := range children {
 			if g := c.unitGeometry(child, false); g != nil {
-				c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: g})
+				c.list.RecordModel(drawlist.Model{Geometry: g})
 			}
 		}
 		return carrier != nil
@@ -133,11 +133,11 @@ func (c *Client) recordCarrierGeometry(v frame.UnitView, children []frame.UnitVi
 		if g == nil {
 			continue
 		}
-		c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: g, ShadowOnly: true})
+		c.list.RecordModel(drawlist.Model{Geometry: g, ShadowOnly: true})
 		delta := int32(int64(child.Y)>>16) - int32(int64(v.Y)>>16)
 		carrier.Children = append(carrier.Children, drawlist.ModelChild{Geometry: g, KeyDelta: delta})
 	}
-	c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: carrier})
+	c.list.RecordModel(drawlist.Model{Geometry: carrier})
 	return true
 }
 
@@ -380,7 +380,7 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 		return nil, false
 	}
 	states := c.modelStates(m, v.Pieces)
-	draw := presentationrender.BuildUnitDraw(m.compiled, states, v.Heading, v.Pitch, v.Bank, v, c.orientationCache(unitPresentationID(v)))
+	draw := presentationrender.BuildUnitDrawInto(m.compiled, states, v.Heading, v.Pitch, v.Bank, v, c.orientationCache(unitPresentationID(v)), c.borrowDrawScratch())
 	// BMcode=0 is the structure class [R-RND-02A]; a unit under construction
 	// always gets the height plane because the nanoframe reveal reads it
 	// [R-REN-03A §2].

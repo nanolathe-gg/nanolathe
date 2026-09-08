@@ -155,7 +155,16 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 	if c == nil || c.cam == nil || draw == nil || draw.Model == nil {
 		return nil
 	}
-	var polys []screenPoly
+	faces, corners := 0, 0
+	for _, piece := range draw.Pieces {
+		faces += len(piece.Primitives)
+		for _, pr := range piece.Primitives {
+			corners += len(pr.VertexIndices)
+		}
+	}
+	scratch := c.borrowPolys(faces, corners)
+	polys := scratch.polys
+
 	// Retail walks the piece list last-to-first. Because the height-key test
 	// admits equal keys, draw order is the tie-break, so this direction is what
 	// makes piece 0 win every tie against every later piece — reversing it
@@ -174,7 +183,7 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			if n < 3 {
 				continue
 			}
-			ref, textured := resolveTextureRef(nil, c.texIndex, pr.TextureName)
+			ref, textured := resolveTextureRef(nil, c.texIndex, c.modelNameKey(pr.TextureName))
 			mode := modelPrimitiveDispatch(pr, textured)
 			if mode == modelPrimitiveSkip {
 				continue
@@ -228,7 +237,7 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			if !valid {
 				continue // malformed primitive suppresses the whole face [fmt 3do]
 			}
-			poly := newScreenPoly(n)
+			poly := scratch.face(n)
 			poly.color, poly.frame = color, texFrame
 			poly.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
 			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(polys)), piece.SourceIndex, pri, pr.TextureName
@@ -279,6 +288,7 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			polys = append(polys, poly)
 		}
 	}
+	scratch.polys = polys
 	return polys
 }
 
@@ -376,7 +386,7 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 		// The outer packet describes native output. An optional doubled body
 		// projection below supplies the GPU resolve; neither packet inherits
 		// pixels from the classic composition.
-		native := cloneScreenPolys(polys)
+		native := c.cloneModelPolys(polys)
 		placeFaces(native, originX, originY, 1)
 		geometry = modelGeometryPacketAt(native, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 		c.configureModelGeometry(geometry, draw, owner, kind, reveal, outline)
@@ -396,10 +406,10 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	// active the model is rasterized into a doubled scratch first and resolved
 	// into it [R-REN-03A §6].
 	keyPlane := draw.KeyPlane
-	target := newModelImage(width, height, originX, originY, anchorX, anchorY, keyPlane, 1)
+	target := c.borrowModelImage(width, height, originX, originY, anchorX, anchorY, keyPlane, 1)
 	raster := target
 	if scale == 2 {
-		raster = newModelImage(2*width, 2*height, 2*originX, 2*originY, anchorX, anchorY, keyPlane, 2)
+		raster = c.borrowModelImage(2*width, 2*height, 2*originX, 2*originY, anchorX, anchorY, keyPlane, 2)
 	}
 	c.attachModelTrace(raster, id)
 
@@ -437,20 +447,6 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 		target.eraseAtOrBelow(uint8(diggerEraseThreshold))
 	}
 	return composedModel{image: target, raster: raster, draw: draw, geometry: geometry}, true
-}
-
-func cloneScreenPolys(in []screenPoly) []screenPoly {
-	out := make([]screenPoly, len(in))
-	for i := range in {
-		out[i] = in[i]
-		out[i].x = append([]int32(nil), in[i].x...)
-		out[i].y = append([]int32(nil), in[i].y...)
-		out[i].oddHeight = append([]bool(nil), in[i].oddHeight...)
-		for lane := range in[i].attr {
-			out[i].attr[lane] = append([]int32(nil), in[i].attr[lane]...)
-		}
-	}
-	return out
 }
 
 // waterlinePass is retail's underwater presentation, both arms of it
@@ -530,12 +526,10 @@ func (c *Client) seaLevel() numeric.Fixed {
 	return cur.Visibility.SeaLevel
 }
 
-// pendingModelCommit is one composed subject held in the client-side table
-// drawlist.Model.Ref indexes: everything the classic executor needs to run the
-// two writes into the indexed surface that finish a model — the shadow and the
-// body blit — plus the trace that reads the surface afterwards. Composition is
-// already complete; this carries no geometry, only the finished images and the
-// image actually blitted (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5).
+// pendingModelCommit is the recorder-local description used to freeze one
+// drawlist.Model classic packet. It names the shadow/body/observer sequence;
+// emitModel copies every pixel operand before this temporary value goes away
+// (docs/DESIGN_GPU_RENDERER.md §2.1 C-G5).
 type pendingModelCommit struct {
 	m    composedModel
 	blit *modelTarget
@@ -595,7 +589,7 @@ func (c *Client) recordModelGeometryOnly(draw *presentationrender.UnitDraw, owne
 	if g == nil {
 		return false
 	}
-	c.list.RecordModel(drawlist.Model{Ref: -1, Geometry: g})
+	c.list.RecordModel(drawlist.Model{Geometry: g})
 	return true
 }
 

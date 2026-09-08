@@ -820,3 +820,32 @@ The contracts also carry these questions, each with its settling observation.
   found none, so the cancel-all bound is unreachable on shipped content; a probe
   under `probes/` would confirm the cancellation visibly on a map that did
   (SC23) `[04 R-AIR-01 §8]`.
+
+## Full-layer rebuild storage
+
+A blocking-feature revision still refreshes a stale class synchronously before
+its path request proceeds. Each full rebuild classifies each source cell once
+into a reusable byte array, then computes the footprint/ring minimum through
+row and column windows
+[04 R-SLOPE-01 §3]. Each window counts blocked and non-clear cells, updating
+those counts as one cell enters and another leaves. Classification and both
+passes complete before occupancy, watermark or terrain inputs can change.
+Rectangle restamps retain their distinct edge rule.
+Storage is two bytes per map cell for each instantiated class (source tiers
+and row results), reused across rebuilds; it is derived runtime storage and is
+not serialized.
+
+In the seeded 1080p Ashap Plateau experiment, blocking corpses at ticks 178 and
+202 forced two full class rebuilds. Classifying once reduced their combined
+cost from 21–22 ms to 6.4–6.8 ms, and those simulation steps from 23–24 ms to
+8–9 ms. These are measured workload results, not scheduling guarantees. Future
+window-minimum optimization must preserve the full classifier output and
+same-tick visibility. Local dirty rectangles cannot simply replace the full
+refresh without accounting for its occupancy-age reads.
+
+The scene-version-3 benchmark adds factory production and non-overlapping
+building yards. On the same Mac, row/column windows reduced its two slow
+simulation steps (ticks 179 and 202) from about 8 ms to about 5 ms. CPU captures
+were unchanged; repeated GPU controls established the same small nanoframe
+pixel variation observed in the optimized run. These observations do not
+establish stutter-free gameplay or GPU completion timing.

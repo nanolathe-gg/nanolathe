@@ -165,3 +165,41 @@ func TestWaterDamageDrownsAndFinalizesInTheSameVisit(t *testing.T) {
 		t.Fatalf("unit survived a lethal water-damage packet [04 §9.2]")
 	}
 }
+
+// The live phase-2 owner gate admits only human/computer rows. Damage scaling
+// belongs to the shared receiver, including the capped veteran reduction
+// [04 §9.2][06 §9.2][06 R-DMG-01 §8].
+func TestWaterDamageVisitOwnerAndVeteranGates(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		exists  bool
+		control uint8
+		kills   int32
+		want    int32
+	}{
+		{"absent", false, 0, 0, 100},
+		{"inactive", true, 0, 0, 100},
+		{"human", true, 1, 0, 80},
+		{"computer", true, 2, 0, 80},
+		{"remote", true, 3, 0, 100},
+		{"unknown control", true, 4, 0, 100},
+		{"veteran", true, 1, 10, 82},
+		{"veteran cap", true, 1, 25, 84},
+		{"above cap", true, 1, 30, 84},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, def := waterDamageFixture(t, 1, 20)
+			s.Econ.Players[0] = economy.Player{Exists: tc.exists, ControllerState: tc.control}
+			h, err := s.Units.Create(def, 0, 0, numeric.FixedFromInt(5), 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			u := s.Units.Unit(h)
+			u.Kills = tc.kills
+			s.stepUnitPhase(30)
+			if u.Health != tc.want {
+				t.Fatalf("health = %d, want %d", u.Health, tc.want)
+			}
+		})
+	}
+}

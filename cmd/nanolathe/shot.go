@@ -156,6 +156,9 @@ func runShot(opts Options, cs *contentSet) error {
 		b.cam.ViewW, b.cam.ViewH = int32(shotW), int32(shotH)
 		b.cam.Clamp()
 	}
+	if opts.BattleBenchmark != "" {
+		return runBattleBenchmark(opts, b, cl)
+	}
 
 	// Sampling starts after content load and battle composition so a profile
 	// describes the steady-state loop rather than one-time setup. With

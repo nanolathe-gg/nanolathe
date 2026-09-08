@@ -159,6 +159,19 @@ value with a fraction, which is the map's west and north edges. `Mul` forms the
 product at full width and shifts down, so it floors; `Div` is a divide, not a
 shift, so it truncates toward zero. That asymmetry is the hardware's.
 
+`TruncateFloat64ToLow32` owns the shared runtime/parser conversion: signed
+64-bit truncation followed by the signed low word, with zero for non-finite
+or out-of-range results [01 R-DET-01 §1]. `TruncateFloat32ToLow32` only widens
+an already rounded single-precision input into that same operation. It does
+not change any expression's stored precision. Runtime ports, resource debits
+and refunds, AI scores/centres, capture budgets, flight and follower distances,
+mission coordinates/times, strip spans and result/HUD totals retain the low
+word before widening into Go containers or performing subsequent division.
+Round-to-nearest bearings, vector normalization, integer cell shifts and the
+modern presentation zoom remain separate operations. Bounded positive
+resurrection and reclaim terms need no conversion change; raw-input parsing
+and renderer arithmetic still require their own caller-width audit (RT-01).
+
 `Sin` and `Cos` are *the* simulation trig: one 512-entry table where entry `i`
 is `round(8192 · sin(i·2π/512))`, indexed as `((angle + 32) >> 7) & 511` with
 cosine reading the same table a quarter turn ahead. The pre-add of 32 puts the

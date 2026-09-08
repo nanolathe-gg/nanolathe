@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Summarize one or more battle benchmark directories; compare like metadata only."""
+import json
+import pathlib
+import statistics
+import sys
+
+if len(sys.argv) < 2:
+    raise SystemExit("usage: tools/battle-bench-report OUTPUT_DIRECTORY [OUTPUT_DIRECTORY ...]")
+for directory in sys.argv[1:]:
+    path = pathlib.Path(directory)
+    data = json.loads((path / "frames.json").read_text())
+    rows = data["rows"]
+    print(f"\n{path}: {data['renderer']}; {len(rows)} measured frames")
+    print(json.dumps(data["metadata"], sort_keys=True))
+    for key in ("Step", "Record", "CPURender", "Submit", "Cadence"):
+        if key == "CPURender" and data["renderer"] == "modern":
+            continue
+        values = sorted(row[key] for row in rows)
+        print(f"{key:12} mean {statistics.mean(values):8.3f}  median {statistics.median(values):8.3f}  "
+              f"p95 {values[min(len(values)-1, int(len(values)*.95))]:8.3f}  max {values[-1]:8.3f} ms")
+    print(f"Alloc: {data['alloc_bytes']/len(rows)/1e6:.3f} MB/frame, "
+          f"{data['mallocs']/len(rows):.1f} objects/frame; GC {data['gc']}")
+    for key in ("units", "projectiles", "effects", "builds", "nanoframes", "nanolathe_events", "shake"):
+        values = [row["Census"][key] for row in rows]
+        print(f"{key}: {min(values)}..{max(values)}; present in {sum(bool(v) for v in values)} frames")
+
+    for owner in (0, 1):
+        active = [sum(f["Owner"] == owner and f["Phase"] == 3 and f["Target"] != 0
+                      for f in row["Census"].get("factory_production", [])) for row in rows]
+        print(f"owner {owner} active factories: {min(active)}..{max(active)}")

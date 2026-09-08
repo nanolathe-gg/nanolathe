@@ -621,6 +621,7 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/combat/damage.go func weaponNominal":           {2, "I2 area-damage amount product [06 §9.2]"},
 	"internal/construction/reclaim.go func UnitReclaimPulse": {2, "I2 unit-reclaim pulse divide [05 R-WORK-01 §4]"},
 
+	"internal/sim/numeric/numeric.go func TruncateFloat32ToLow32": {1, "I2 exact widening of stored single precision into the shared I3 conversion [01 R-DET-01 §1]"},
 	"internal/sim/numeric/numeric.go func TruncateFloat64ToLow32": {3, "I2 authored conversion and I3 signed-low-word narrowing [01 R-DET-01 §1]"},
 	"internal/sim/numeric/trig.go const angleScale":               {1, "I2 simulation trig-table construction [04 §5.1]"},
 	"internal/sim/numeric/trig.go func AngleFromAtan2":            {2, "I2 simulation trig-table construction [04 §5.1]"},

@@ -236,17 +236,15 @@ type Points struct {
 }
 
 // Model records one model subject — a unit, feature or projectile
-// (docs/DESIGN_GPU_RENDERER.md §2.1). Geometry is modern mode's only body
-// input. Ref remains a same-frame classic-sink lookup and modern mode never
-// consults it [I6].
+// (docs/DESIGN_GPU_RENDERER.md §2.1). Classic is the classic executor's owned
+// replay operand, and Geometry is modern mode's only body input [I6].
 type Model struct {
 	// ShadowOnly preserves a carried child's earlier framebuffer shadow commit;
 	// its body is composed by the later carrier command [03 R-REN-03A §4].
 	ShadowOnly bool
-	// Ref indexes the client-side table of finished composed subjects for this
-	// frame. Replaying this command runs that subject's shadow, its one body
-	// blit and its trace, in that order.
-	Ref int
+	// Classic owns the completed classic planes and placement for this command.
+	// It may be nil for geometry-only modern recording.
+	Classic *ClassicModel
 	// Geometry is the durable, device-neutral polygon packet. It never requires
 	// a client, camera, pool, or CPU image.
 	Geometry *ModelGeometry
@@ -287,6 +285,10 @@ type Surface struct {
 	SrcW, SrcH int32
 	// Dst is the destination rectangle in screen pixels.
 	Dst Rect
+	// Identity and Revision describe immutable presentation content. Identity
+	// zero preserves a dynamic upload for callers without a durable source.
+	Identity uint64
+	Revision uint64
 }
 
 // Terrain records one terrain blit (docs/DESIGN_GPU_RENDERER.md §2.1). Terrain
@@ -409,16 +411,25 @@ func (l *List) RecordModel(c Model) {
 }
 
 // ModelCommands copies the recorded model commands in model-family order for
-// diagnostic consumers such as static previews. Geometry is cloned, while Ref
-// still requires the source frame's model lookup table. Executors preserve
-// global order by using Replay.
+// diagnostic consumers such as static previews. Both payloads are cloned, so
+// callers can retain and replay the result after source-list reset. Executors
+// preserve global order by using Replay.
 func (l *List) ModelCommands() []Model {
 	out := make([]Model, len(l.model))
 	for i, m := range l.model {
 		out[i] = m
+		out[i].Classic = m.Classic.Clone()
 		out[i].Geometry = m.Geometry.Clone()
 	}
 	return out
+}
+
+// VisitModels borrows commands for synchronous read-only preparation. The visitor
+// must not mutate geometry or retain it beyond the recorded list's lifetime.
+func (l *List) VisitModels(visit func(Model)) {
+	for _, m := range l.model {
+		visit(m)
+	}
 }
 
 // RecordFog appends one fog command in record order.
@@ -498,10 +509,9 @@ func (l *List) Replay(s Sink) {
 // Clone copies the list's command slices, geometry packets and mutable pixel
 // buffers so resetting or recording into the source list cannot overwrite them.
 // Immutable loaded resources (GAF/PCX frames, palettes and terrain) are shared.
-// Terrain cameras are copied. Each Model.Ref still has an external lookup
-// dependency: callers must replay classic models before replacing the source
-// model table. Clone is not a self-contained later-frame replay
-// artifact [docs/DESIGN_GPU_RENDERER.md C-G5].
+// Terrain cameras are copied. Model classic packets own their planes, so Clone
+// is a self-contained later-frame replay artifact [docs/DESIGN_GPU_RENDERER.md
+// C-G5].
 func (l *List) Clone() List {
 	var c List
 	c.order = append([]tag(nil), l.order...)
@@ -519,6 +529,7 @@ func (l *List) Clone() List {
 	c.model = make([]Model, len(l.model))
 	for i, m := range l.model {
 		c.model[i] = m
+		c.model[i].Classic = m.Classic.Clone()
 		c.model[i].Geometry = m.Geometry.Clone()
 	}
 	c.cursor = append([]Cursor(nil), l.cursor...)
@@ -539,10 +550,12 @@ func (l *List) Clone() List {
 	c.surface = make([]Surface, len(l.surface))
 	for i, sf := range l.surface {
 		c.surface[i] = Surface{
-			Pixels: append([]byte(nil), sf.Pixels...),
-			SrcW:   sf.SrcW,
-			SrcH:   sf.SrcH,
-			Dst:    sf.Dst,
+			Pixels:   append([]byte(nil), sf.Pixels...),
+			SrcW:     sf.SrcW,
+			SrcH:     sf.SrcH,
+			Dst:      sf.Dst,
+			Identity: sf.Identity,
+			Revision: sf.Revision,
 		}
 	}
 	return c

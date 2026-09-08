@@ -908,7 +908,7 @@ func nanoLifetimeTicks(ax, ay, az, bx, by, bz numeric.Fixed) int32 {
 	dy := float64(by.Raw()-ay.Raw()) / fractionOne
 	dz := float64(bz.Raw()-az.Raw()) / fractionOne
 	dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
-	return int32(int64(dist) / 4) // truncate toward zero twice: __ftol then the integer divide [I3]
+	return numeric.TruncateFloat64ToLow32(dist) / 4 // truncate toward zero twice: __ftol then the integer divide [I3]
 }
 
 // sprinkleStep is the sprinkle family's per-tick step, one half world unit
@@ -932,7 +932,7 @@ func sprinkleStep(a, b [3]numeric.Fixed) (sx, sy, sz numeric.Fixed) {
 	dx := b[0].Raw() - a[0].Raw()
 	dy := b[1].Raw() - a[1].Raw()
 	dz := b[2].Raw() - a[2].Raw()
-	length := int64(math.Sqrt(float64(dx)*float64(dx) + float64(dy)*float64(dy) + float64(dz)*float64(dz)))
+	length := int64(numeric.TruncateFloat64ToLow32(math.Sqrt(float64(dx)*float64(dx) + float64(dy)*float64(dy) + float64(dz)*float64(dz))))
 	if length <= 0 {
 		return 0, 0, 0
 	}
@@ -961,7 +961,7 @@ func flameSegLife(a, b [3]numeric.Fixed) int32 {
 	dx := b[0].Raw() - a[0].Raw()
 	dy := b[1].Raw() - a[1].Raw()
 	dz := b[2].Raw() - a[2].Raw()
-	n := int64(math.Sqrt(float64(dx)*float64(dx) + float64(dy)*float64(dy) + float64(dz)*float64(dz)))
+	n := int64(numeric.TruncateFloat64ToLow32(math.Sqrt(float64(dx)*float64(dx) + float64(dy)*float64(dy) + float64(dz)*float64(dz))))
 	return int32(n / (5 * 65536)) // n is non-negative, so the divide floors [I3]
 }
 

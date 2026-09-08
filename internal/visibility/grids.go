@@ -33,6 +33,12 @@ type Service struct {
 	byteGrids [10][]uint8
 	fog       FogCache
 	local     PlayerID
+	// mappingVersion identifies the local viewer's immutable minimap inputs;
+	// fogVersion identifies completed derived fog bytes. They are presentation
+	// revisions, never simulation counters [03 §2.4][03 §3.6].
+	mappingVersion         uint64
+	fogVersion             uint64
+	rebuildingPresentation bool
 
 	// Authored raster inputs [03 §3.2]. Both nil means neither raster can
 	// publish, which is the correct answer for a fixture with no content.
@@ -160,8 +166,9 @@ func (s *Service) ByteGrid(p PlayerID) []uint8 {
 // SetLocal sets the local player for fog dirty semantics [03 §3.2] C15.
 // Invalid slots are ignored; they must not alias slot zero.
 func (s *Service) SetLocal(p PlayerID) {
-	if s != nil && validPlayer(p) {
+	if s != nil && validPlayer(p) && s.local != p {
 		s.local = p
+		s.invalidatePresentation()
 	}
 }
 
@@ -178,8 +185,40 @@ func (s *Service) SetMode(m Mode) {
 	if s == nil {
 		return
 	}
-	s.mode = m & 0x0f
+	next := m & 0x0f
+	if next != s.mode {
+		s.mode = next
+		s.invalidatePresentation()
+	}
+}
+
+// MappingVersion is the local viewer's immutable mapping-input revision. It
+// changes only at presentation-relevant visibility writes [03 §3.6].
+func (s *Service) MappingVersion() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.mappingVersion
+}
+
+// FogVersion is the revision of completed derived fog bytes [03 §3.3].
+func (s *Service) FogVersion() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.fogVersion
+}
+
+// invalidatePresentation is shared by the local LOS tail and bulk rebuild.
+// Camera invalidation remains a presentation concern and never arrives here.
+func (s *Service) invalidatePresentation() {
+	if s == nil {
+		return
+	}
 	s.mode &^= ModeFogCacheValid
+	if !s.rebuildingPresentation {
+		s.mappingVersion++
+	}
 }
 
 // The mode predicates keep bit tests explicit at call sites and prevent
@@ -262,11 +301,14 @@ func (s *Service) RebuildAll(observers []Observer) {
 	// A rebuild replaces the stores, so no old record may throttle a
 	// republication or later retirement.
 	s.footprints = make(map[ObserverID]footprint, len(observers))
+	s.rebuildingPresentation = true
 	for _, ob := range observers {
 		s.Publish(ob.Owner, ob.CX, ob.CZ, ob.HeightByte, ob.Radius)
 	}
-	// Any rebuild dirty-invalidates the fog presentation cache; it rebuilds lazily when valid bit clears [03 §3.3] C13.
-	s.mode &^= ModeFogCacheValid
+	s.rebuildingPresentation = false
+	// Any rebuild replaces the local viewer's mapping inputs and invalidates
+	// fog; callers observe this as one revision regardless of observer count.
+	s.invalidatePresentation()
 }
 
 // Observer is the minimal footprint source for RebuildAll [PLAN_05].

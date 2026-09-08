@@ -299,8 +299,9 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	}
 	b := &battleSession{sess: &session.Session{World: &world.Terrain{PlayRight: 126, PlayBottom: 126}}}
 	cur := &frame.Frame{
+		Tick:       17,
 		Selection:  frame.SelectionView{LocalPlayer: local},
-		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
+		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
 		Radar: frame.RadarView{BlinkPhase: 1, Contacts: []frame.RadarContactView{
 			// Selected, active, non-toggle unit: its published authored range
 			// produces a radar-colored circle and its authored blip pixel.
@@ -332,9 +333,19 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 		t.Fatalf("projectile dot pixel = %d, want projectile palette 14", got)
 	}
 	first := append([]byte(nil), final.Bits...)
+	revision := h.radar.FinalRevision()
 	second := h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
 	if second == nil || !bytes.Equal(second.Bits, first) {
 		t.Fatal("rebuilding one committed frame changed radar output")
+	}
+	if h.radar.FinalRevision() != revision {
+		t.Fatal("rebuilding one committed frame refreshed FINAL")
+	}
+	cur.Tick++
+	cur.Radar.Contacts[0].X = numeric.Fixed(64 << 16)
+	third := h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
+	if third == nil || h.radar.FinalRevision() <= revision || bytes.Equal(third.Bits, first) {
+		t.Fatal("a new committed contact frame did not refresh FINAL")
 	}
 	if got := h.radar.Blink().Phase; got != cur.Radar.BlinkPhase {
 		t.Fatalf("rebuild phase = %d, want committed %d", got, cur.Radar.BlinkPhase)

@@ -170,26 +170,6 @@ func TestFeatureCacheThenTerrainLadder(t *testing.T) {
 	if !FeatureCacheSuppressed(&cache, 5, 5) {
 		t.Fatalf("same cell should suppress [06 §8.1] C28")
 	}
-	// Ladder continues to water when feature suppressed
-	res := ResolveImpactLadder(5, 5, &cache, true, 100, 50, 0, 10, false, false, false, false)
-	if !res.FeatureSuppressed {
-		t.Fatalf("expected suppressed [06 §8.1] C28")
-	}
-	// Ground bounce never reaches central impact [06 §8.2] C28
-	bounceCache := [2]int32{0, 0}
-	_ = bounceCache
-	res2 := ResolveImpactLadder(0, 0, &[2]int32{99, 99}, false, 0, 5, 10, 10, false, false, false, false)
-	if !res2.Bounce {
-		t.Fatalf("bounce expected [06 §8.2] C28")
-	}
-	if res2.FeatureImpact || res2.WaterImpact {
-		t.Fatalf("bounce must not reach central impact [06 §8.2] C28")
-	}
-	// Off-map retires regardless [06 §8.1] [06 §13.2] C28
-	res3 := ResolveImpactLadder(0, 0, &[2]int32{0, 0}, false, 0, 0, 0, 0, false, false, false, true)
-	if !res3.OffMapRetired {
-		t.Fatalf("off-map should retire [06 §8.1] C28")
-	}
 }
 
 func TestAreaDedup(t *testing.T) {

@@ -1309,10 +1309,12 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	case "mode":
 		// `MODE` writes the sound-flags byte's low three bits. `Off` stops
 		// every voice; `Mono` outside a battle re-issues the front-end `BGM`
-		// loop — this build has no such loop, so nothing is re-issued. The
-		// device's 3-D flag follows the value 2 [03 R-AUD-01 §2].
+		// loop. The device's 3-D flag follows the value 2 [03 R-AUD-01 §2].
 		g.audioPrefs.SoundMode = retailCycleStage(g.audioPrefs.SoundMode, 3)
 		g.applyRetailAudioOptions()
+		if g.audioPrefs.SoundMode == settings.SoundModeMono && g.battle == nil {
+			g.armMenuBGM()
+		}
 		g.syncRetailSoundPage()
 		return true
 	case "speech":

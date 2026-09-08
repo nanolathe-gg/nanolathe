@@ -1701,3 +1701,18 @@ func TestCompositionInstallsContentAnimationMetadata(t *testing.T) {
 		t.Fatalf("puff last frame %d, want 2..10 for a twelve-frame entry", p.lastFrame)
 	}
 }
+
+// The low-word store precedes each integer divisor [01 R-DET-01 §1][03 R-FX-02 §2].
+func TestStripSpanNarrowsBeforeDividing(t *testing.T) {
+	a := [3]numeric.Fixed{}
+	b := [3]numeric.Fixed{numeric.FixedFromRaw(1 << 32), 0, 0}
+	if got := flameSegLife(a, b); got != 0 {
+		t.Fatalf("flame life = %d", got)
+	}
+	if x, y, z := sprinkleStep(a, b); x|y|z != 0 {
+		t.Fatalf("zero stored span did not take existing degenerate fallback: %d/%d/%d", x, y, z)
+	}
+	if got := nanoLifetimeTicks(0, 0, 0, numeric.FixedFromInt(1<<32), 0, 0); got != 0 {
+		t.Fatalf("nano lifetime = %d", got)
+	}
+}

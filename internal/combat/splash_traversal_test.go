@@ -210,7 +210,7 @@ func TestBlastStopsRememberingWhenTheMemoryIsFull(t *testing.T) {
 	stampGroundOccupancy(t, terrain, victim)
 	seen := flashRecorder(svc)
 
-	weapon := &content.WeaponDef{ID: 1, AreaOfEffect: 64, DamageDefault: 10, EdgeEffectiveness: 0}
+	weapon := &content.WeaponDef{ID: 1, AreaOfEffect: 96, DamageDefault: 10, EdgeEffectiveness: 0}
 	impact := Vec3{X: numeric.FixedFromInt(808), Y: numeric.FixedFromInt(1000), Z: numeric.FixedFromInt(808)}
 	svc.ExplodeWeaponAt(w, terrain, weapon, impact, 0, 1)
 

@@ -353,12 +353,12 @@ func splitArgs(s string) []string {
 
 func floatToFixed(f float64) numeric.Fixed {
 	// Coordinates parse as floats scaled by 65536; times scale by 30 [04 §3.6] C10.
-	// Truncate toward zero via int64 conversion [01 §8] I3.
-	return numeric.Fixed(int64(f * 65536)) // [04 §3.6] scaled by 65536 [I3] trunc toward zero
+	// Truncate and sign-extend the stored low word [01 R-DET-01 §1].
+	return numeric.Fixed(numeric.TruncateFloat64ToLow32(f * 65536)) // [04 §3.6] scaled by 65536 [I3] trunc toward zero
 }
 
 func timeToTicks(secs float64) int32 {
-	return int32(secs * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
+	return numeric.TruncateFloat64ToLow32(secs * 30) // [04 §3.6] times scale by 30, trunc toward zero [I3]
 }
 
 // productIdentity resolves an authored unit name to the product identity that

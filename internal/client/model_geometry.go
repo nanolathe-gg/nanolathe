@@ -21,19 +21,28 @@ func modelGeometryPacket(polys []screenPoly, target *modelTarget, scale int32, f
 // Modern recording uses it so geometry preparation never creates colour,
 // coverage, or height planes.
 func modelGeometryPacketAt(polys []screenPoly, width, height, originX, originY, anchorX, anchorY, scale int32, keyPlane bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
-	g := &drawlist.ModelGeometry{
+	return fillModelPacket(&drawlist.ModelGeometry{}, nil, polys, width, height, originX, originY, anchorX, anchorY, scale, keyPlane, fallback)
+}
+func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex, polys []screenPoly, width, height, originX, originY, anchorX, anchorY, scale int32, keyPlane bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
+	*g = drawlist.ModelGeometry{
 		Eligible: fallback == drawlist.ModelFallbackNone,
 		Fallback: fallback,
-		Faces:    make([]drawlist.ModelFace, len(polys)),
+		Faces:    resizeScratch(g.Faces, len(polys)),
 		Width:    width, Height: height,
 		OriginX: originX, OriginY: originY,
 		AnchorX: anchorX, AnchorY: anchorY,
 		Scale: scale, KeyPlane: keyPlane,
 	}
+	count := 0
+	for _, p := range polys {
+		count += len(p.x)
+	}
+	vertices = resizeScratch(vertices, count)
+	offset := 0
 	for i := range polys {
 		p := polys[i]
 		face := drawlist.ModelFace{
-			Vertices: make([]drawlist.ModelVertex, len(p.x)),
+			Vertices: vertices[offset : offset+len(p.x) : offset+len(p.x)],
 			Texture:  p.frame,
 			Color:    p.color,
 			Shaded:   p.useSHD,
@@ -44,6 +53,7 @@ func modelGeometryPacketAt(polys []screenPoly, width, height, originX, originY, 
 				U: p.attr[spanU][j], V: p.attr[spanV][j], Shade: uint8(p.attr[spanRow][j]),
 			}
 		}
+		offset += len(p.x)
 		g.Faces[i] = face
 	}
 	return g
@@ -141,7 +151,7 @@ func (c *Client) modelShadowGeometry(draw *presentationrender.UnitDraw) *drawlis
 	width, height, originX, originY := modelExtent(polys)
 	anchorX, anchorY := c.shadowAnchor(draw)
 	placeFaces(polys, originX, originY, 1)
-	return modelGeometryPacketAt(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
+	return c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, true, drawlist.ModelFallbackNone)
 }
 
 func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner uint8, selector teamColor, id uint64, kind uint8, reveal *presentationrender.NanoframeReveal, outline uint8) *drawlist.ModelGeometry {
@@ -153,7 +163,7 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 	width, height, originX, originY := modelExtent(polys)
 	supersample := c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
 	placeFaces(polys, originX, originY, 1)
-	g := modelGeometryPacketAt(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
+	g := c.borrowModelPacket(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 	c.configureModelGeometry(g, draw, owner, kind, reveal, outline)
 	g.Supersample = supersample
 	if supersample != nil {
@@ -169,7 +179,7 @@ func (c *Client) modelSupersampleGeometry(polys []screenPoly, draw *presentation
 	if !c.supersampleModel(draw.Structure) {
 		return nil
 	}
-	faces := cloneScreenPolys(polys)
+	faces := c.cloneModelPolys(polys)
 	placeFaces(faces, originX, originY, 2)
-	return modelGeometryPacketAt(faces, int32(2*width), int32(2*height), 2*originX, 2*originY, 2*originX, 2*originY, 2, draw.KeyPlane, drawlist.ModelFallbackNone)
+	return c.borrowModelPacket(faces, int32(2*width), int32(2*height), 2*originX, 2*originY, 2*originX, 2*originY, 2, draw.KeyPlane, drawlist.ModelFallbackNone)
 }

@@ -555,6 +555,36 @@ func TestMinimapServiceConsumesCommittedBlinkPhase(t *testing.T) {
 	}
 }
 
+func TestMinimapServiceReusesMappedRevisionAndRefreshesFinalRevision(t *testing.T) {
+	picture := &RadarSurface{W: 1, H: 1, Pitch: 1, Bits: []byte{7}}
+	s := NewMinimapService(MinimapServiceConfig{Picture: picture, MapW: 1, MapH: 1, LocalSlot: 0})
+	word := []uint16{1}
+	current := []uint8{1}
+	if !s.RebuildMappedVersion(word, current, 3) {
+		t.Fatal("first mapped build failed")
+	}
+	first := s.mapped
+	word[0] = 0
+	if !s.RebuildMappedVersion(word, current, 3) || s.mapped != first {
+		t.Fatal("unchanged mapping revision rebuilt MAPPED")
+	}
+	if !s.RebuildMappedVersion(word, current, 4) || s.mapped == first {
+		t.Fatal("new mapping revision did not rebuild MAPPED")
+	}
+	m := camera.Minimap{W: 1, H: 1}
+	if !s.RebuildFinalVersion(m, 1, 1, nil, nil, 0, 0, 0, 9) {
+		t.Fatal("first final build failed")
+	}
+	revision := s.FinalRevision()
+	if !s.RebuildFinalVersion(m, 1, 1, nil, nil, 0, 0, 0, 9) || s.FinalRevision() != revision {
+		t.Fatal("same final input rebuilt FINAL")
+	}
+	s.SetBlinkPhase(1)
+	if !s.RebuildFinalVersion(m, 1, 1, nil, nil, 0, 0, 0, 10) || s.FinalRevision() <= revision {
+		t.Fatal("blink input did not refresh FINAL")
+	}
+}
+
 func TestMinimapPhaseGatesRegularAndDashedPresentation(t *testing.T) {
 	m := camera.Minimap{W: 32, H: 32}
 	mapped := &RadarSurface{W: 32, H: 32, Bits: make([]byte, 32*32)}

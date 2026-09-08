@@ -18,8 +18,9 @@ import (
 // a recorded List straight through it. Every device resource lives here, never on
 // the client [I6].
 type Renderer struct {
-	tables tables
-	expand *ebiten.Shader
+	modelPrep modelPrepScratch
+	tables    tables
+	expand    *ebiten.Shader
 	// solid writes one constant palette index per fragment (the fills, the line
 	// and the plain point batch); atlas copies an index out of a source atlas's
 	// red channel (the terrain tile pass). Both draw into the indexed offscreen
@@ -88,6 +89,8 @@ type Renderer struct {
 	modelRasterOrigin             image.Point
 	modelScratch                  [4]*ebiten.Image
 	modelCache                    modelImageCache
+	textureAtlas                  modelTextureAtlas
+	stageAtlas                    [3]*ebiten.Image
 	w, h                          int
 
 	modelSuperColor, modelSuperKey, modelSuperCoord *ebiten.Image
@@ -115,12 +118,13 @@ type Renderer struct {
 	// reaches output, so it introduces no ordering [I1].
 	fntAtlases map[*formats.FNT]*fntAtlas
 
-	// surfaceImg is the per-frame scratch texture the indexed-surface blit uploads
-	// into (the minimap/radar surface changes every frame, so it is not cached). It
-	// is grown as needed and reused across calls.
-	surfaceImg *ebiten.Image
-	surfaceW   int
-	surfaceH   int
+	// surfaceDynamic serves zero-identity commands. surfaceCache is a bounded
+	// presentation cache for durable Surface identities; replay order never
+	// depends on its lookup or eviction order [I1].
+	surfaceDynamic surfaceUpload
+	surfaceCache   [4]surfaceUpload
+	surfaceClock   uint64
+	surfaceWrites  uint64 // focused device-fixture diagnostic; never output state
 
 	// verts and idx are reusable geometry scratch so a steady-state frame's draws
 	// allocate nothing after warm-up.
@@ -128,6 +132,15 @@ type Renderer struct {
 	idx   []uint16
 
 	modelStats ModelStats
+}
+
+type surfaceUpload struct {
+	identity uint64
+	revision uint64
+	used     uint64
+	img      *ebiten.Image
+	w, h     int
+	pixels   []byte
 }
 
 // New builds a renderer from the installed palette tables, uploading every table
@@ -297,7 +310,15 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 		return nil
 	}
 	r.modelStats = ModelStats{UnsupportedFace: -1, CacheBytes: r.modelCache.bytes}
+	r.modelPrep.reset()
+	r.modelPrep.active = true
+	defer func() { r.modelPrep.reset(); r.modelPrep.active = false }()
+	pins := r.prepareModelPages(list)
 	list.Replay(r)
+	for _, e := range pins {
+		e.pins--
+	}
+	r.trimModelCache()
 	return r.output
 }
 

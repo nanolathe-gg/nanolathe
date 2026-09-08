@@ -208,7 +208,7 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
 		return
 	}
-	img := r.uploadSurface(src, srcW, srcH)
+	img := r.uploadSurface(sf)
 	if img == nil {
 		return
 	}
@@ -359,25 +359,67 @@ func (r *Renderer) drawTexQuad(img *ebiten.Image, shader *ebiten.Shader, blend e
 	})
 }
 
-// uploadSurface uploads the indexed surface bytes into the reused scratch texture,
-// growing it when the source dimensions change. Index rides red; a byte present in
-// src is opaque (green 255), one past the source length is transparent (green 0),
-// matching uiBlitIndexedRaw's `idx < len(src)` guard, which skips the write for a
-// short source and leaves the destination untouched (C-G4).
-func (r *Renderer) uploadSurface(src []byte, srcW, srcH int) *ebiten.Image {
-	if r.surfaceImg == nil || r.surfaceW != srcW || r.surfaceH != srcH {
-		r.surfaceImg = ebiten.NewImage(srcW, srcH)
-		r.surfaceW, r.surfaceH = srcW, srcH
+// uploadSurface uploads indexed bytes only when a durable command's revision
+// changes. A zero identity is deliberately dynamic, preserving UIBlitIndexed's
+// ordinary borrowed-buffer behaviour [03 §3.6].
+func (r *Renderer) uploadSurface(sf drawlist.Surface) *ebiten.Image {
+	srcW, srcH := int(sf.SrcW), int(sf.SrcH)
+	if r == nil || srcW <= 0 || srcH <= 0 {
+		return nil
 	}
-	n := len(src)
-	buf := make([]byte, srcW*srcH*4)
-	for i := 0; i < srcW*srcH; i++ {
-		if i < n {
-			buf[i*4+0] = src[i]
-			buf[i*4+1] = 255
+	entry := &r.surfaceDynamic
+	upload := true
+	if sf.Identity != 0 {
+		r.surfaceClock++
+		entry = r.surfaceEntry(sf.Identity)
+		entry.used = r.surfaceClock
+		upload = entry.img == nil || entry.w != srcW || entry.h != srcH || sf.Revision == 0 || entry.revision != sf.Revision
+		if !upload {
+			return entry.img
 		}
-		buf[i*4+3] = 255
+		entry.identity = sf.Identity
+		entry.revision = sf.Revision
 	}
-	r.surfaceImg.WritePixels(buf)
-	return r.surfaceImg
+	if !upload {
+		return entry.img
+	}
+	if entry.img == nil || entry.w != srcW || entry.h != srcH {
+		entry.img = ebiten.NewImage(srcW, srcH)
+		entry.w, entry.h = srcW, srcH
+	}
+	n := srcW * srcH
+	if cap(entry.pixels) < n*4 {
+		entry.pixels = make([]byte, n*4)
+	} else {
+		entry.pixels = entry.pixels[:n*4]
+	}
+	for i := 0; i < n; i++ {
+		j := i * 4
+		if i < len(sf.Pixels) {
+			entry.pixels[j] = sf.Pixels[i]
+			entry.pixels[j+1] = 255
+		} else {
+			entry.pixels[j] = 0
+			entry.pixels[j+1] = 0
+		}
+		entry.pixels[j+2] = 0
+		entry.pixels[j+3] = 255
+	}
+	entry.img.WritePixels(entry.pixels)
+	r.surfaceWrites++
+	return entry.img
+}
+
+func (r *Renderer) surfaceEntry(identity uint64) *surfaceUpload {
+	var oldest *surfaceUpload
+	for i := range r.surfaceCache {
+		entry := &r.surfaceCache[i]
+		if entry.identity == identity {
+			return entry
+		}
+		if oldest == nil || entry.identity == 0 || entry.used < oldest.used {
+			oldest = entry
+		}
+	}
+	return oldest
 }

@@ -260,7 +260,13 @@ func (t *modelTarget) storedKey(idx int) uint8 {
 // with the per-pixel step. Left and top are inclusive, right and bottom
 // exclusive: the walk never writes the image's last row or last column, which
 // the two-pixel margin of [R-REN-03A §1] makes harmless.
-func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da *[spanAttrs]int64)) {
+func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da [spanAttrs]int64)) {
+	t.polyScanLanes(p, 0, spanAttrs, span)
+}
+
+// Only omit lanes that the selected span writer never reads. Edge X, coverage,
+// clipping and the arithmetic of retained lanes stay shared [03 R-RAST-01 §1].
+func (t *modelTarget) polyScanLanes(p *screenPoly, first, last int, span func(row, xl, xr int32, a, da [spanAttrs]int64)) {
 	n := len(p.x)
 	if n < 3 || t == nil || t.width <= 0 || t.heightPx <= 0 {
 		// A two-corner flat primitive makes both chains the same single edge,
@@ -334,7 +340,7 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 				x := int64(p.x[cur])<<16 + spanEdgeBias
 				xStep := (int64(p.x[next]-p.x[cur]) << 16) / dy
 				var a, aStep [spanAttrs]int64
-				for k := 0; k < spanAttrs; k++ {
+				for k := first; k < last; k++ {
 					a[k] = int64(p.attr[k][cur]) << 16
 					aStep[k] = (int64(p.attr[k][next]-p.attr[k][cur]) << 16) / dy
 				}
@@ -342,7 +348,7 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 				if row < boundTop {
 					d := int64(boundTop - row)
 					x += xStep * d
-					for k := range a {
+					for k := first; k < last; k++ {
 						a[k] += aStep[k] * d
 					}
 					row = boundTop
@@ -356,7 +362,7 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 						tab[i].x, tab[i].a = int32(x>>16), a
 					}
 					x += xStep
-					for k := range a {
+					for k := first; k < last; k++ {
 						a[k] += aStep[k]
 					}
 				}
@@ -374,13 +380,9 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 	// per-pixel attribute step divides by the UNCLAMPED width, and only then is
 	// the span clamped into the image.
 	//
-	// The accumulator pair lives outside the row loop only so it is allocated
-	// once per face instead of once per painted row: `span` takes it by
-	// pointer, so a declaration inside the loop escapes and every scanline of
-	// every primitive of every unit costs two heap objects. Both lanes are
-	// fully rewritten from the two edge tables at the top of each iteration
-	// below, so nothing carries across rows and the values handed to the span
-	// writer are the ones an in-loop declaration produced.
+	// Pass the lanes by value: pointer callback parameters made these two
+	// arrays escape for every polygon. Each row still rewrites every lane from
+	// the same edge tables before invoking its span writer [03 R-RAST-01 §1].
 	var a, da [spanAttrs]int64
 	for r := yStart; r < yEnd; r++ {
 		i := int(r - yStart)
@@ -389,14 +391,14 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 			continue // step 7's cull, evaluated per scanline
 		}
 		width := int64(rt.x - l.x)
-		for k := 0; k < spanAttrs; k++ {
+		for k := first; k < last; k++ {
 			a[k] = l.a[k]
 			da[k] = (rt.a[k] - l.a[k]) / width
 		}
 		xl, xr := l.x, rt.x
 		if xl < boundLeft {
 			d := int64(boundLeft - xl)
-			for k := range a {
+			for k := first; k < last; k++ {
 				a[k] += da[k] * d
 			}
 			xl = boundLeft
@@ -407,7 +409,7 @@ func (t *modelTarget) polyScan(p *screenPoly, span func(row, xl, xr int32, a, da
 		if xr <= xl {
 			continue
 		}
-		span(r, xl, xr, &a, &da)
+		span(r, xl, xr, a, da)
 	}
 }
 

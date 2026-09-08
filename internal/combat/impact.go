@@ -5,7 +5,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // NoExplodeRetirement reports whether the projectile should retire after impact
@@ -69,101 +68,6 @@ func FeatureCacheSuppressed(cache *[2]int32, cellX, cellZ int32) bool {
 	return false // not seen — process; dedup before radius test [06 §9.3]
 }
 
-// StampOrder is player 0..9 → pool 0x118 vacated reusable same tick [P1-07 §2.1].
-// Successful movement does Clear(oldFootprint) then Stamp(newFootprint) before
-// next slot so vacated cell reusable same tick; head-on both block because each
-// sees other occupant before either clears. This is implemented in
-// internal/movement/CollisionState.CommitSuccess and CommitSweep sorting by ID
-// asc which equals player 0..9 then pool 0x118 asc [P0-12][P1-07 §2.1] (I1).
-
-// ImpactLadderResult records which ladder branch produced impact for tests
-// covering C28 refinements [06 §8.1] [06 §13.2].
-type ImpactLadderResult struct {
-	FeatureSuppressed bool // cached-cell suppression cancelled feature impact [06 §8.1] C28
-	FeatureImpact     bool
-	TerrainImpact     bool
-	WaterImpact       bool
-	Bounce            bool // ground bounce never reaches central impact [06 §8.2] C28
-	OffMapRetired     bool // off-map retires regardless of noexplode [06 §8.1] C28
-}
-
-// ResolveImpactLadder simulates the fixed collision contact order for C28 tests
-// [06 §8.1] C28: projectile-link proximity (not modeled here) → cell-height
-// cache → unit slots (not modeled) → units-only early return → feature or
-// footprint-anchor resolution with repeated-cell suppression → terrain
-// penetration and bounce → water/sea continuation or impact [06 §8.1].
-//
-// For WU-09-6 we model the tail end after unit slots: feature suppression,
-// bounce, water/terrain selection. Link proximity's second same-call impact
-// reachable property is asserted by not checking dead bit [06 §8.1] C28.
-func ResolveImpactLadder(cellX, cellZ int32, cache *[2]int32, hasFeature bool, featureTop int32, projectileHeight int32, terrainHeight int32, seaLevel int32, isWaterWeapon bool, opaqueLiquid bool, noExplode bool, isOffMap bool) ImpactLadderResult {
-	var res ImpactLadderResult
-	if isOffMap {
-		res.OffMapRetired = true // [06 §8.1] off-map retires regardless, ignores noexplode [06 §13.2]
-		return res
-	}
-	// Feature stage [06 §8.1]
-	if hasFeature {
-		if FeatureCacheSuppressed(cache, cellX, cellZ) {
-			res.FeatureSuppressed = true // [06 §8.1] C28 cached-cell suppresses ONLY feature impact
-		} else if projectileHeight < featureTop { // strictly below feature top [06 §8.1]
-			res.FeatureImpact = true
-			// Note: per [06 §8.1] C28, even when feature impact occurs, ladder
-			// would normally return; but to demonstrate C28's "cached suppression
-			// cancels only feature" we still allow terrain/water to run when
-			// suppressed. When featureImpact is true, terrain/water still runs
-			// for second-same-call reachable test? Retail's feature impact returns
-			// without terrain? However cached suppression case explicitly says
-			// terrain/water ladder still runs when feature suppressed. We model
-			// suppressed case as continuing; non-suppressed feature impact as
-			// terminal? Yet [06 §8.1] says linked proximity does NOT return and
-			// resolver never rechecks dead bit, so second impact reachable WITHOUT
-			// noexplode. That second impact is demonstrated via separate flag.
-			// For determinism we keep feature impact terminal unless suppressed.
-			if !res.FeatureSuppressed {
-				// Feature impact takes the central impact path; still need to
-				// consider that second same-call impact reachable via link
-				// proximity not modeled here. Represent as: after feature impact,
-				// terrain/water reachable if link proximity left dead bit unchecked.
-				// We expose that via separate test using dead-bit-unchecked path.
-			}
-		} else {
-			// Feature present but not below top => miss, fall through to terrain/water [06 §8.1]
-		}
-		if res.FeatureSuppressed {
-			// Cached suppression cancels ONLY feature's impact while ladder continues [06 §8.1] C28
-			// Fall through to terrain/water
-		} else if res.FeatureImpact {
-			return res // feature impact returns [06 §8.1] — but second same-call still reachable via link path (tested separately)
-		}
-	}
-	// Terrain penetration and bounce [06 §8.2] C28
-	if projectileHeight < terrainHeight { // strictly below cell terrain height [06 §8.2]
-		// Ground-bounce replaces only vertical velocity with negation of signed
-		// arithmetic right shift by two and returns; branch never reaches central
-		// impact at all, so noexplode irrelevant [06 §8.2] C28.
-		// We represent as bounce true, no central impact here.
-		res.Bounce = true // [06 §8.2]
-		return res
-	}
-	// Water/sea stage [06 §8.1] — at or above terrain
-	if isWaterWeapon {
-		res.WaterImpact = false // water weapon returns and continues at or above terrain [06 §8.2]
-		return res
-	}
-	// Non-water weapon at or above sea level continues [06 §8.2]
-	if projectileHeight >= seaLevel {
-		return res
-	}
-	// Non-water weapon below sea level impacts unless opaque terrain/liquid mode suppresses [06 §8.1]
-	if opaqueLiquid {
-		return res // opaque mode suppresses that branch [06 §8.1]
-	}
-	res.WaterImpact = true // non-water weapon below sea level impacts water [06 §8.1]
-	_ = noExplode          // water impact retirement gating evaluated via NoExplodeRetirement by caller [06 §13.2]
-	return res
-}
-
 // EnumerateArea enumerates the rectangular broad phase around impact for area
 // damage per [06 §9.3] C26.
 //
@@ -179,17 +83,17 @@ func EnumerateArea(impact PosVec, radius int32, mapW, mapH int32, visit func(cx,
 	if mapW <= 0 || mapH <= 0 {
 		return
 	}
-	impactCX := world.WorldToCell(impact.X)
-	impactCZ := world.WorldToCell(impact.Z)
+	// Area quantization reads the signed whole word, then divides toward
+	// zero. Collision uses a different arithmetic-shift cell conversion
+	// [06 §8.1][06 §9.3].
+	impactCX := int32(int16(impact.X.Raw()>>16)) / 16
+	impactCZ := int32(int16(impact.Z.Raw()>>16)) / 16
 	cells := BroadPhaseRadiusCells(radius) // [06 §9.3]
 	minX := impactCX - cells
 	if minX < 0 {
 		minX = 0
 	}
-	maxX := impactCX + cells // inclusive? research says broad phase extends radius/16+1 around impact cell; need to interpret as inclusive radius. Clamped and upper bound exclusive [06 §9.3].
-	// If radius Cells =1, we expect 3x3 area: centre +-1 inclusive. So max is centre+ cells inclusive, but exclusive upper bound means maxX exclusive = centre+ cells +1? Let's transcribe: "extends (radius/16)+1 terrain cells around impact cell and is clamped to map. It traverses rows by increasing Z, then cells by increasing X. Both upper map bounds are exclusive." So around means inclusive radius; upper bound exclusive means loop < max exclusive where max = centre + cells +1? We'll implement as centre ± cells inclusive, loop < maxExclusive where maxExclusive = centre+ cells +1 clamped exclusive. Simpler: min = centre - cells, maxExclusive = centre+ cells +1.
-	// Let's compute exclusive max: centre+ cells +1
-	maxXExclusive := impactCX + cells + 1
+	maxXExclusive := impactCX + cells
 	if maxXExclusive > mapW {
 		maxXExclusive = mapW
 	}
@@ -197,12 +101,10 @@ func EnumerateArea(impact PosVec, radius int32, mapW, mapH int32, visit func(cx,
 	if minZ < 0 {
 		minZ = 0
 	}
-	maxZExclusive := impactCZ + cells + 1
+	maxZExclusive := impactCZ + cells
 	if maxZExclusive > mapH {
 		maxZExclusive = mapH
 	}
-	// Correct earlier maxX to exclusive as well: if we used inclusive logic, need +1. Above we already set exclusive. The minX stays inclusive start. So loop from min to exclusive.
-	_ = maxX // unused old inclusive max; keep for clarity
 	for cz := minZ; cz < maxZExclusive; cz++ {
 		for cx := minX; cx < maxXExclusive; cx++ {
 			visit(cx, cz) // [06 §9.3] rows by increasing Z, then cells by increasing X (I1)

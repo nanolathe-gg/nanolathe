@@ -322,6 +322,19 @@ player's byte grid only when current coverage is enabled, plus the fog channels
 and the sensor snapshot. Presentation samples that committed copy and nothing
 else `[03 §2.4]` `[03 R-VIS-01 §8]` [I6].
 
+**Presentation revisions (PERF-REND-04).** `Service.MappingVersion` names the
+immutable mapping input selected for the local viewer. It advances only when a
+local LOS raster changes a relevant grid, when the selected local slot or mode
+changes, or when a bulk rebuild replaces the stores. `Service.FogVersion` names
+completed derived fog-cache bytes and advances only after a rebuild, with mode
+and local-player changes invalidating the cache first. The two frame-buffer
+slots retain their own copied mapping and fog bytes across `Reset`; the session
+copies a source only when that slot holds an older revision. Thus a committed
+frame never aliases mutable visibility storage, while an unchanged LOS state
+does not pay a second map-sized copy on alternating frame slots. Camera is a
+presentation input to fog operations and does not advance either mapping
+revision `[03 §2.4]` `[03 §3.3]` `[03 §3.6]` `[03 R-VIS-01 §8]`.
+
 ## 3. Contracts
 
 ### 3.1 Terrain and placement — W1…W13

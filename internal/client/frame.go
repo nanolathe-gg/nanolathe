@@ -184,8 +184,7 @@ func (c *Client) recordFrame() {
 // The returned list is same-frame use only. Its backing arrays are reused by the
 // next RecordFrame or Frame (c.list.Reset), so the caller must replay it before
 // the next frame is recorded and must not retain it (ComposeFrameSnapshot's
-// List.Clone owns its arrays and cameras; classic model refs still require
-// the same-frame client table).
+// List.Clone owns its arrays, cameras and classic model planes).
 func (c *Client) RecordFrame() *drawlist.List {
 	if c == nil {
 		return nil
@@ -212,15 +211,14 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	// guard so a degenerate surface, which skips drawCommittedFrame, leaves an
 	// empty list rather than replaying the previous frame's commands.
 	c.list.Reset()
+	c.modelScratch.reset()
+	c.modelScratch.active = true
+	defer func() { c.modelScratch.active = false }()
 	// The point arena backs this frame's Points batches; it is truncated in
 	// lockstep with the list so a batch recorded as a sub-slice of it lines up
 	// with fresh data and no batch survives into the next frame (WU-1.8).
 	c.pointArena = c.pointArena[:0]
 	c.surfaceArena = c.surfaceArena[:0]
-	// The model commit table drawlist.Model.Ref indexes is reset here, in
-	// lockstep with the list, so a re-recorded frame's refs line up with fresh
-	// entries and no entry survives into the next frame (C-G5) [I6].
-	c.modelCommits = c.modelCommits[:0]
 	if len(c.indexed) != c.width*c.height {
 		return
 	}
@@ -373,8 +371,11 @@ func (c *Client) drawFog(cur *frame.Frame) {
 		}
 		if c.fogCache == nil {
 			c.fogCache = visibility.NewFogCacheFromChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1)
-		} else if !c.fogCache.ReplaceChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1) {
+			c.fogVersion = cur.Fog.Version
+		} else if c.fogVersion != cur.Fog.Version && !c.fogCache.ReplaceChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1) {
 			return
+		} else if c.fogVersion != cur.Fog.Version {
+			c.fogVersion = cur.Fog.Version
 		}
 		c.ensureFogGAF()
 		// The window is the composed surface, which is what the per-operation

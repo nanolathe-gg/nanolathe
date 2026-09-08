@@ -130,6 +130,90 @@ func TestFailedTransientCreationDoesNotOccupySlot(t *testing.T) {
 	}
 }
 
+type transientRewindFailPlayer struct {
+	observedPlayer
+	err error
+}
+
+func (p *transientRewindFailPlayer) Rewind() error { return p.err }
+
+func TestTransientFailureOrderingPreservesOrReleasesCapacity(t *testing.T) {
+	b := New()
+	b.ConfigureOutput(retailaudio.OutputConfig{MasterEnabled: true, EffectsVolume: 1, MixingBuffers: 1})
+	old := &observedPlayer{}
+	b.createPlayer = func(io.Reader) (outputPlayer, error) { return old, nil }
+	if err := b.PlayRegisteredSample(transientSample(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	b.createPlayer = func(io.Reader) (outputPlayer, error) { return nil, errors.New("create") }
+	if err := b.PlaySample(transientSample(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !old.playing || old.stops != 0 || len(b.players) != 1 || len(b.transients) != 0 {
+		t.Fatal("mode-1 create failure stole or retained playback state")
+	}
+
+	failing := &transientRewindFailPlayer{err: errors.New("rewind")}
+	b.createPlayer = func(io.Reader) (outputPlayer, error) { return failing, nil }
+	if err := b.PlaySample(transientSample(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	if old.playing || old.stops != 1 || failing.playing || failing.stops != 1 || len(b.players) != 0 || len(b.transients) != 0 {
+		t.Fatal("post-steal mode-1 rewind failure retained gain, playback, or references")
+	}
+}
+
+type transientOrderPlayer struct {
+	events  *[]string
+	playing bool
+}
+
+func (p *transientOrderPlayer) Play()                 { p.playing = true; *p.events = append(*p.events, "play") }
+func (p *transientOrderPlayer) IsPlaying() bool       { return p.playing }
+func (*transientOrderPlayer) Position() time.Duration { return 0 }
+func (p *transientOrderPlayer) Rewind() error         { *p.events = append(*p.events, "rewind"); return nil }
+func (p *transientOrderPlayer) SetVolume(float64)     { *p.events = append(*p.events, "gain") }
+func (p *transientOrderPlayer) PauseAndStopReading() {
+	p.playing = false
+	*p.events = append(*p.events, "stop")
+}
+
+func TestTransientSuccessCreatesThenStealsRewindsGainsAndTracks(t *testing.T) {
+	b := New()
+	b.ConfigureOutput(retailaudio.OutputConfig{MasterEnabled: true, EffectsVolume: 1, MixingBuffers: 1})
+	events := []string{}
+	old := &transientOrderPlayer{events: &events}
+	newPlayer := &transientOrderPlayer{events: &events}
+	created := 0
+	b.createPlayer = func(io.Reader) (outputPlayer, error) {
+		created++
+		if created == 1 {
+			return old, nil
+		}
+		events = append(events, "create")
+		return newPlayer, nil
+	}
+	if err := b.PlayRegisteredSample(transientSample(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	if err := b.PlaySample(transientSample(), 1, 0); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"create", "stop", "rewind", "gain", "play"}
+	if len(events) != len(want) {
+		t.Fatalf("mode-1 ordering = %v, want %v", events, want)
+	}
+	for i := range want {
+		if events[i] != want[i] {
+			t.Fatalf("mode-1 ordering = %v, want %v", events, want)
+		}
+	}
+	if len(b.players) != 1 || b.players[0].player != newPlayer || len(b.transients) != 1 || b.transients[0].player != newPlayer {
+		t.Fatal("successful mode-1 request did not track and retain the new voice")
+	}
+}
+
 func TestPumpReapsCompletedTransientReferencesAtItsExistingCadence(t *testing.T) {
 	b, made := newTransientBackend(t, 8+1)
 	if err := b.PlaySample(transientSample(), 1, 0); err != nil {

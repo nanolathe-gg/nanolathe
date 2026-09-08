@@ -272,3 +272,12 @@ client     — Ebitengine window loop presents a software framebuffer from the c
 - Verify visually when the change is visual. A screenshot from `--shot` beats
   an assertion that it should look right.
 - Use `go vet` / `go test ./...` lightly. Do not add heavy test harnesses.
+
+## Live battle performance regression check
+
+For simulation, movement, construction, model/effect rendering or renderer
+storage changes, use the opt-in [live battle benchmark](docs/BATTLE_BENCHMARK.md)
+with both `classic` and `modern` renderers when retail assets and a display are
+available. It exercises moving armies and factory construction. Inspect the
+feature census and captures as well as frame times; keep artifacts outside the
+repository. Run benchmarks sequentially and compare matching scene metadata.

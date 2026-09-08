@@ -631,3 +631,18 @@ func TestLeanPitchReadsFirstRotatedComponent(t *testing.T) {
 		t.Fatalf("pitchscale 0: pitch = %d, want 0 [02 \"Unit record\"]", d.Pitch)
 	}
 }
+
+// Both order/follower consumers widen only after the signed low-word store [01 R-DET-01 §1].
+func TestRawDistanceConsumersSignExtendStoredWord(t *testing.T) {
+	for _, f := range []func(int64, int64) int64{flightGoalDistance, groundHypotRaw} {
+		if got := f(1<<31, 0); got != -2147483648 {
+			t.Fatalf("signed boundary = %d", got)
+		}
+		if got := f(1<<32, 0); got != 0 {
+			t.Fatalf("word wrap = %d", got)
+		}
+		if got := f(3, 4); got != 5 {
+			t.Fatalf("ordinary distance = %d", got)
+		}
+	}
+}

@@ -17,13 +17,12 @@ import (
 // production recording pass composes within a frame.
 func (c *Client) replayForTest() { c.list.Replay(c.classicSink()) }
 
-// resetListForTest truncates the recorded list, the point arena and the
-// model-commit table the way composeIndexed does at the top of a frame, so a
-// test can record a fresh batch without replaying a previous one twice.
+// resetListForTest truncates the recorded list and point arena the way
+// composeIndexed does at the top of a frame, so a test can record a fresh
+// batch without replaying a previous one twice.
 func (c *Client) resetListForTest() {
 	c.list.Reset()
 	c.pointArena = c.pointArena[:0]
-	c.modelCommits = c.modelCommits[:0]
 }
 
 // drawUnitModelReplay records one unit model and replays the list once — the

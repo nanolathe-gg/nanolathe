@@ -166,12 +166,11 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	}
 	// The preview records the model into c.list and replays it once, the same
 	// record-then-replay the committed frame uses (WU-1.8). Reset the list, point
-	// arena and model-commit table first, then paint the background directly: the
+	// arena first, then paint the background directly: the
 	// model command carries no clear, so the replay composes the model over the
 	// background exactly as the former inline drawUnitModel did.
 	c.list.Reset()
 	c.pointArena = c.pointArena[:0]
-	c.modelCommits = c.modelCommits[:0]
 	if !geometryOnly {
 		for i := range c.indexed {
 			c.indexed[i] = opts.Background

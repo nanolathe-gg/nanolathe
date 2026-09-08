@@ -287,6 +287,9 @@ func (g *gameShell) applyRestoredUnitLimit(image *save.BattleImage) {
 }
 
 func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request freshBattleRequest, after func(*session.Session)) {
+	// A fresh loading transition stops ordinary frontend voices immediately.
+	// Save restoration defers the matching stop until its committed candidate.
+	g.stopOrdinaryAudio()
 	g.teardownBattle(clPtr)
 	g.bindFrontendClient(clPtr)
 	state := newLoadingState(mapName)

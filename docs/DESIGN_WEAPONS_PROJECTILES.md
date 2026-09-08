@@ -320,7 +320,10 @@ order, the fixed-point integration and the expiry rules are `[06 §7.1]`–
 
 ### 2.8 Impact
 
-`impact.go` holds the collision ladder and the `noexplode` rules. The contact
+`service.go` owns the live collision ladder, central impact for pooled and
+stack records, and the shared area-damage walk. `impact.go` supplies the
+contact, area and `noexplode` predicates. There is no separate simulated
+collision ladder for tests. The contact
 test has **no radius**: the plot cell's occupancy word is the horizontal gate
 and the model top is the vertical band `[06 R-DMG-01 §7]`. The ladder runs the
 projectile's own cell's two unit slots first, then feature resolution — with
@@ -333,6 +336,17 @@ finalization; shake, sounds, effects and damage always run, and retirements
 outside that branch — line-of-sight expiry, burst-root completion, the lava
 underwater self-expire, the off-map exit — ignore the flag entirely
 `[06 §13.2]`.
+
+**EC-P4 ownership contract.** `TickProjectiles` alone drives pooled motion and
+collision. `impactProjectile` applies pooled retirement and then calls
+`handleProjectileImpact`; `Service.ImpactStackRecord` calls that same central
+path without pooled retirement. `explodeWeaponAt` is their shared area walk;
+`Service.ExplodeWeaponAt` intentionally exposes only area damage for feature
+burn weapons. Weapon producers select a nominal through `weaponDamageNominal`,
+and every fixed or weapon recipient reaches `Service.AcceptDamage`. Packet
+serialization remains separate from producer arithmetic. Tests use these real
+entries; removed test-only collision, packet and water-sweep alternatives must
+not be reinstated [06 §8.1][06 §9.1][06 §9.3][06 §12.2].
 
 ### 2.9 Damage
 
@@ -347,8 +361,9 @@ before the shared `Service.AcceptDamage` receiver; fixed producers enter the
 receiver with their established nominal directly. The arithmetic order is C20:
 falloff conversion retains the low word, a null shooter skips attacker scaling,
 and percentage products wrap before division. `ComputeScaledAmount` is a
-standalone arithmetic helper that assumes a present shooter; `ComputePacket`
-uses its explicit shooter id. The table selected by the weapon producer is the
+standalone arithmetic helper that assumes a present shooter. Tests of packet
+producers and water damage run through the production intake and phase-2
+unit visit; no separate packet builder or whole-world water sweep is retained. The table selected by the weapon producer is the
 **weapon's own `[DAMAGE]` block**, keyed
 by the target definition's exact name; there is no `armor.tdf` and no armor
 category `[06 R-DMG-01 §1]`. The armored gate reads the victim's runtime

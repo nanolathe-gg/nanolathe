@@ -393,25 +393,6 @@ func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, dama
 	return uint16(amount) // modulo 65,536 [06 §9.2] step 7
 }
 
-// ComputePacket builds a Packet for a projectile recipient using the C20 order
-// [06 §9.2] C20, C21. It selects base damage via override lookup, applies steps
-// 2-7, and fills packet fields [06 §9.2] C21.
-func ComputePacket(weapon *content.WeaponDef, targetUnitName string, falloff float32, attacker pool.Handle, victim pool.Handle, attackerKills int32, defenderKills int32, isArmored bool, damageModifier int32, isHealing bool, globalDouble bool, globalHalf bool, direction uint8, kind uint8) Packet {
-	base := SelectBaseDamage(weapon, targetUnitName) // [06 §9.2] step 1
-	nominal := weaponNominal(base, falloff, attackerKills, attacker != 0, globalDouble, globalHalf)
-	amt := uint16(nominal)
-	if !isHealing {
-		amt = scaleAcceptedAmount(nominal, defenderKills, isArmored, damageModifier)
-	}
-	return Packet{
-		Victim:    uint16(victim),   // 0=null, no generation [06 §5.1] (I5) C18
-		Attacker:  uint16(attacker), // 0=null, no validation [06 §5.1] C18
-		Amount:    amt,              // modulo amount [06 §9.2] C20 step 7
-		Direction: direction,        // one-byte direction [06 §9.2] C21
-		Kind:      kind,             // kind byte [06 §9.2] C21
-	}
-}
-
 // ValidatePacketTarget reports whether victim acceptance requires alive bit and
 // clear dead latch [06 §9.1]. Stale-id reuse is accepted: nonzero id converts
 // directly by slot arithmetic with no liveness probe for attacker, and victim
@@ -804,7 +785,7 @@ func ApplyDamage(currentHealth int32, amount uint16) int32 {
 //   credited kill increments killer's counter (none for water damage, attacker null) [04 §9.2][06 §12.1].
 //
 // This file owns the arithmetic and eligibility predicates; the sweep
-// TickWaterDamage is the deterministic per-tick applicator (I1).
+// The session applies water damage during each eligible phase-2 unit visit (I1).
 
 // IsWaterDamageTick reports whether global tick is a water-damage tick [04 §9.2].
 func IsWaterDamageTick(tick uint32) bool {
@@ -839,89 +820,4 @@ func IsWaterDamageEligible(u *units.Unit, terrain *world.Terrain) bool {
 		return false
 	}
 	return IsInWaterForDamage(u.Y, terrain.SeaLevel) // [04 §9.2] signed integer height at or below sea-level byte
-}
-
-// ComputeWaterDamageScaledAmount computes the scaled water-damage amount for
-// victim per [04 §9.2][06 §9.2] C20.
-// Water enters the packet builder directly, so only armor and defender
-// veterancy scale its established nominal [04 §9.2][06 §9.2].
-// isArmored is the victim's runtime armored posture — bit 1 of its first state
-// byte, nothing else [06 R-DMG-01 §8]; damageModifier is def.DamageModifier
-// 16.16; defenderKills is the victim's credited-kill counter.
-func ComputeWaterDamageScaledAmount(baseDamage int32, defenderKills int32, isArmored bool, damageModifier int32) uint16 {
-	return scaleAcceptedAmount(baseDamage, defenderKills, isArmored, damageModifier)
-}
-
-// WaterDamagePacketForTest builds the would-be water-damage packet for inspection per [04 §9.2][06 §9.1].
-// It is kind 0xB (KindNoReaction, 11) with null attacker (0) and the scaled amount from ComputeWaterDamageScaledAmount [04 §9.2][06 §9.1].
-func WaterDamagePacketForTest(victim pool.Handle, baseDamage int32, defenderKills int32, isArmored bool, damageModifier int32) Packet {
-	amt := ComputeWaterDamageScaledAmount(baseDamage, defenderKills, isArmored, damageModifier) // [04 §9.2][06 §9.2]
-	return Packet{
-		Victim:    uint16(victim), // 0=null sentinel not used here [06 §9.1]
-		Attacker:  0,              // null attacker [04 §9.2][06 §12.1] cause 11 attacker null
-		Amount:    amt,            // modulo amount [06 §9.2] step 7
-		Direction: 0,              // no direction for water damage [04 §9.2] (blast distance zero)
-		Kind:      KindNoReaction, // type 0xB [04 §9.2][06 §9.1] == 11 skip-reaction [06 §9.1]
-	}
-}
-
-// TickWaterDamage applies retail water damage for one global tick [04 §9.2][06 §12.1] cause 11.
-// This standalone sweep supports isolated callers. The live session delivers
-// each packet inside its phase-2 unit visit [04 §9.2].
-// Deterministic iteration: players 0..9 ascending, slots ascending within each player's slice (I1) [01 §4.4][04 §9.2].
-// No map range, no float64 outside I2 allowlist, no time.Now, no per-entity RNG (I1,I2,I4).
-// Returns the number of units damaged this tick.
-// getControlByte reads the owning player slot's control byte [05 R-SHARE-01 §1]:
-// 1 a locally controlled human, 2 a computer player, 3 a remote peer, and
-// ControlByteAbsent (0) for a slot with no record. The sweep's block runs only
-// for 1 or 2 [04 R-MOV-03 §1][04 §9.2].
-//
-// Correction (2026-09-01, [06 R-DMG-01 §8]): this parameter was documented as
-// "0 empty, 1 human host, 2 human join, 3 computer/AI" and the gate was skipped
-// entirely when the accessor was nil. Both were wrong. 2 is the computer player
-// and 3 the remote peer, so the old table exempted every computer-owned unit
-// from water damage; and a nil accessor now fails closed — an unoccupied row is
-// not "eligible". (Unlike gate 1, which an unoccupied row PASSES
-// [06 R-DMG-01 §9], this gate admits only 1 and 2, so the sweep's block is the
-// one place where "no record" and "remote peer" behave the same.)
-func TickWaterDamage(tick uint32, w *units.World, terrain *world.Terrain, waterDoesDamage, waterDamage int32, getControlByte func(owner uint8) uint8) int {
-	if !IsWaterDamageTick(tick) { // [04 §9.2] cadence
-		return 0
-	}
-	if waterDoesDamage == 0 || waterDamage == 0 { // [04 §9.2] both mission fields nonzero
-		return 0
-	}
-	if w == nil {
-		return 0
-	}
-	// Sea-level byte from terrain header [03 §2.2] C9, used via IsInWaterForDamage [04 §9.2].
-	// If terrain nil, no unit can be determined in-water, so no damage (see IsWaterDamageEligible TODO).
-	applied := 0
-	service := &Service{ControlByte: getControlByte}
-	// Deterministic traversal: players 0..9 ascending, slots ascending (I1) [01 §4.4][04 §9.2].
-	// Use VisitActiveSlots which already enforces that order [01 §4.4].
-	w.VisitActiveSlots(func(v units.SlotVisit) {
-		u := v.Unit
-		if u == nil {
-			return
-		}
-		// Control-byte gate [04 R-MOV-03 §1][04 §9.2][06 R-DMG-01 §8] — the
-		// sweep's block runs only for an owner whose control byte is 1 or 2.
-		// An absent accessor reads every slot as having no record, which
-		// rejects: the byte must be read, never assumed.
-		ctrl := ControlByteAbsent
-		if getControlByte != nil {
-			ctrl = getControlByte(u.Owner)
-		}
-		if ctrl != ControlByteHuman && ctrl != ControlByteComputer {
-			return // [04 §9.2] control byte 1 or 2 only
-		}
-		if !IsWaterDamageEligible(u, terrain) { // [04 §9.2] canhover exclusion and Y <= seaLevel
-			return
-		}
-		if service.AcceptDamage(w, tick, DamageInput{Victim: u.Handle, Nominal: waterDamage, Kind: KindNoReaction}).Accepted {
-			applied++
-		}
-	})
-	return applied
 }

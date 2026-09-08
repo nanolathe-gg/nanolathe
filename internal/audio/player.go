@@ -245,6 +245,20 @@ type RegisteredOutput interface {
 	PlayRegisteredSample(*Sample, float64, float64) error
 }
 
+// LoopingRegisteredOutput is the optional exclusive-loop seam for registered
+// aliases. It deliberately has no ordinary-output fallback [03 R-AUD-01 §1].
+type LoopingRegisteredOutput interface {
+	RegisteredOutput
+	PlayLoopingRegisteredSample(*Sample, float64, float64) error
+}
+
+// VoiceOutput owns the ordinary voice table. It is optional because outputs
+// that expose only playback stay valid presentation boundaries.
+type VoiceOutput interface {
+	Output
+	StopVoices()
+}
+
 // StreamOutput is the optional delayed-stream seam used by briefing and
 // glamour narration. Ordinary cue outputs need only implement Output; stream
 // support is discovered at the presentation boundary and missing support is

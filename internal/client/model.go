@@ -107,11 +107,11 @@ func (c *Client) modelStates(m *unitModel, pieces []frame.PieceView) []compiledm
 	if m == nil || m.compiled == nil {
 		return nil
 	}
-	states := make([]compiledmodel.PieceState, len(m.compiled.Pieces))
+	states := c.borrowModelStates(len(m.compiled.Pieces))
 	for _, pv := range pieces {
 		idx := pv.Index
 		if pv.Name != "" {
-			found, ok := m.pieceByName[strings.ToLower(pv.Name)]
+			found, ok := m.pieceByName[c.modelNameKey(pv.Name)]
 			if !ok {
 				continue
 			}

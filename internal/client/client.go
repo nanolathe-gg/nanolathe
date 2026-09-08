@@ -40,7 +40,8 @@ type Options struct {
 // keeps retail's 8-bit indexed renderer and presents one RGBA upload per
 // frame. Rendering consumes only the currently committed frame (I6).
 type Client struct {
-	opts Options
+	modelScratch modelScratch
+	opts         Options
 
 	// exitRequested lets authored in-game GUI actions terminate the same
 	// Ebitengine loop as closing the window. It is presentation state only.
@@ -75,14 +76,6 @@ type Client struct {
 	// geometryOnlyModels records native-scale polygons without allocating or
 	// rasterizing CPU model images. RecordFrame selects it for modern mode.
 	geometryOnlyModels bool
-
-	// modelCommits is the per-frame client-side table drawlist.Model.Ref indexes:
-	// one entry per composed model subject in record order, holding what the
-	// classic executor needs to run that subject's shadow, body blit and trace.
-	// Reset in lockstep with list at the top of composeIndexed, it is same-frame
-	// only and never held across a frame boundary (docs/DESIGN_GPU_RENDERER.md
-	// §2.1 C-G5) [I6].
-	modelCommits []pendingModelCommit
 
 	// Runtime is presentation-only bookkeeping for backend frame cadence.
 	runtime float64
@@ -126,6 +119,7 @@ type Client struct {
 	frameTick    uint32 // committed tick of the frame being composed
 	worldBuckets worldBuckets
 	fogCache     *visibility.FogCache
+	fogVersion   uint64 // last immutable FogView copied into fogCache
 	fogOps       []presentationrender.FogOp
 	// pointArena is this frame's backing store for every recorded Points batch
 	// (the LHT halo, the calculated flash disc and the minimap

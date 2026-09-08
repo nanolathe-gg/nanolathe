@@ -94,7 +94,16 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 	if c == nil || draw == nil || draw.Model == nil {
 		return nil
 	}
-	var polys []screenPoly
+	faces, corners := 0, 0
+	for _, piece := range draw.Pieces {
+		faces += len(piece.Primitives)
+		for _, pr := range piece.Primitives {
+			corners += len(pr.VertexIndices)
+		}
+	}
+	scratch := c.borrowPolys(faces, corners)
+	polys := scratch.polys
+
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
 		if pi >= len(draw.Model.Pieces) {
 			continue
@@ -126,7 +135,7 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 				// body's: two projections of one face can wind differently.
 				continue
 			}
-			poly := newScreenPoly(n)
+			poly := scratch.face(n)
 			// Every shadow face is the literal palette index 0 and carries no
 			// SHD row, so the flat writer puts that byte down raw
 			// [R-REN-03D §2].
@@ -141,6 +150,7 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 			polys = append(polys, poly)
 		}
 	}
+	scratch.polys = polys
 	return polys
 }
 
@@ -165,28 +175,12 @@ func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *model
 	// the body composition, and §2 measures and allocates the shadow image
 	// exactly as the body image is measured at 1x.
 	placeFaces(polys, originX, originY, 1)
-	img := newModelImage(width, height, originX, originY, anchorX, anchorY, true, 1)
+	img := c.borrowModelImage(width, height, originX, originY, anchorX, anchorY, true, 1)
 	for i := range polys {
 		c.fillPolyTarget(img, &polys[i], shadowColorIndex, nil)
 	}
 	img.punchOut(body)
 	return img
-}
-
-// drawModelShadow composes and blits one model shadow. It runs before the body
-// for the same subject, which is the retail order [03 §5.3]. body is the
-// subject's finished composition image, which the punch-out below reads; it is
-// already rasterized at this point but not yet committed.
-//
-// The rasterize/punch half is buildModelShadow; this adds only the tinted
-// commit, so the classic byte path is byte-for-byte what it was before the
-// split.
-func (c *Client) drawModelShadow(draw *presentationrender.UnitDraw, body *modelTarget) {
-	img := c.buildModelShadow(draw, body)
-	if img == nil {
-		return
-	}
-	img.tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)
 }
 
 // shadowAnchor places the shadow. It uses the same X as the body plus five

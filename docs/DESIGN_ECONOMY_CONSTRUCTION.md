@@ -654,9 +654,11 @@ authored frames' own lifetime — clearing the cell and stamping `featureburnt`
 
 **C29 — active-list order.** The feature phase visits the active list from its
 head, most recently stamped or ignited first, capturing each next link before
-the visit; a record inserted by a visit is first visited next tick; two fires
-whose events fall on one tick spend the simulation stream in that order
-`[05 R-FEAT-01 §10]` [I1].
+the visit. Fresh record identities inserted by a visit are first visited next
+tick in this implementation. That guarantee does not cover retail reuse of
+the captured next slot: the potential same-walk revisit is explicitly bounded
+in §5 and [05 R-FEAT-01 §14]. Ordinary fires spend the simulation stream in
+active-list order `[05 R-FEAT-01 §10]` [I1].
 
 ### 3.5 Not implemented
 
@@ -737,9 +739,32 @@ whose events fall on one tick spend the simulation stream in that order
 
 ## 5. Divergences
 
-These packages introduce no divergence of their own. Three entries of
-[SPEC_CONFLICTS.md](SPEC_CONFLICTS.md) reach them through the seams they use;
-all three are owned and closed elsewhere.
+**Feature arena boundary (EC-G2).** The service enforces the researched live
+arena capacity and active-list order, but its Go records are fresh allocations,
+not identities reused from a retained arena. A resting sprite also has a
+convenience lookup/publication record without consuming a live slot. These are
+implementation facts, not evidence that retail clears a freed slot.
+
+The stamp initializes velocity and mode state to zero. Zero velocity follows
+the explicitly permitted host policy in [05 R-FEAT-01 §14], avoiding dependence
+on a prior sprite shadow's process-specific cursor identity. Fresh mode state
+also omits retail's retained reclaim/remote bits. Consequently this build does
+not reproduce a sinking successor inheriting movement, a death selecting a
+reclaim successor from an earlier slot occupant, or a captured next-list
+identity being reused at the head during the same visit. Ordinary insertion,
+removal, next-link capture, dormancy and capacity are implemented; physical
+slot reuse is not.
+
+The observable retained-mode and sprite-to-wreck effects remain Supported
+inference in [05 R-FEAT-01 §14]. Their deciders are an authored manual retail
+scenario (destroy a unit over a burning feature with a shadow; replace a
+reclaim event with a 3D wreck then destroy it), or a complete static writer
+trace showing an intervening reset. Do not claim arena fidelity from tests of
+fresh Go records. EC-P5's representation work must preserve this explicit
+boundary until those deciders settle it; no broad storage rewrite is implied.
+
+Three entries of [SPEC_CONFLICTS.md](SPEC_CONFLICTS.md) additionally reach these
+packages through shared seams; all three are owned and closed elsewhere.
 
 * **SC6 — fringe-anchor encoding.** The feature runtime resolves a fringe cell
   by the signed-offset reading, because absolute cell coordinates cannot address

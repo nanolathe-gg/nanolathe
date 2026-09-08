@@ -146,11 +146,13 @@ func TestModelPreviewRendersRetailArmCommanderDeterministically(t *testing.T) {
 		t.Fatal("geometry-only preview returned a CPU image")
 	}
 	modernModels := modernSolar.List.ModelCommands()
+	for _, model := range modernModels {
+		if model.Classic != nil {
+			t.Fatal("modern-only preview retained CPU image planes")
+		}
+	}
 	if len(modernModels) != 1 || modernModels[0].Geometry == nil || !modernModels[0].Geometry.Eligible || modernModels[0].Geometry.Scale != 1 {
 		t.Fatalf("modern solar did not record native geometry: %#v", modernModels)
-	}
-	if got := len(r.client.modelCommits); got != 0 {
-		t.Fatalf("geometry-only preview retained %d CPU model commits", got)
 	}
 
 	loaded, err := compiledmodel.Load(fs, "objects3d/armsolar.3do")

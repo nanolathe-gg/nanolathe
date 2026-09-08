@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/mission"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // ReasonCommanderDeath is the skirmish commander-death termination reason
@@ -160,12 +161,12 @@ func (s *Session) collectScores(winner int, draw bool) []frame.ResultScore {
 		}
 		kills := int(p.Kills)
 		losses := int(p.Losses)
-		energyProduced := int(p.TotalProduced[1])
-		metalProduced := int(p.TotalProduced[0])
-		energyConsumed := int(p.TotalConsumed[1])
-		metalConsumed := int(p.TotalConsumed[0])
-		energyWasted := int(p.Waste[1])
-		metalWasted := int(p.Waste[0])
+		energyProduced := int(numeric.TruncateFloat64ToLow32(p.TotalProduced[1]))
+		metalProduced := int(numeric.TruncateFloat64ToLow32(p.TotalProduced[0]))
+		energyConsumed := int(numeric.TruncateFloat64ToLow32(p.TotalConsumed[1]))
+		metalConsumed := int(numeric.TruncateFloat64ToLow32(p.TotalConsumed[0]))
+		energyWasted := int(numeric.TruncateFloat64ToLow32(p.Waste[1]))
+		metalWasted := int(numeric.TruncateFloat64ToLow32(p.Waste[0]))
 		score := s.resultScore(kills)
 		// The name and the colour are the player record's. The board copies a
 		// 30-byte name out of the record and the row's colour gadget indexes

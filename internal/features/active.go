@@ -51,7 +51,8 @@ func (s *Service) linkActive(inst *Instance) {
 // the freed slot is not re-popped in the same visit. The re-pop case — the
 // freed slot immediately re-stamped as a successor at the head, so that the
 // captured pointer now names the head and the walk repeats — needs the slot
-// arena itself and is not reproduced.
+// arena itself and is not reproduced. See the explicit EC-G2 boundary in
+// DESIGN_ECONOMY_CONSTRUCTION §5; this list models fresh record identities.
 func (s *Service) unlinkActive(inst *Instance) {
 	if inst == nil || !inst.onActive {
 		return
@@ -115,7 +116,8 @@ func (s *Service) activeWalk(tick uint32) {
 		// A record removed by the visit keeps its next link (unlinkActive), so
 		// the walk carries on to whatever followed it at that moment. A record
 		// inserted by the visit went to the HEAD — behind the walk — and is
-		// first visited next tick, as retail's captured pointer guarantees.
+		// first visited next tick for fresh record identities. Physical slot
+		// reuse during the visit is the separate EC-G2 boundary above.
 		for next != nil && !next.onActive {
 			next = next.nextActive
 		}

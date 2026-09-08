@@ -13,25 +13,28 @@ import (
 // Options is the command-line surface for the retail runtime and its host
 // configuration. Developer probes and capture modes are separate tools.
 type Options struct {
-	Root       string  // retail install root
-	Map        string  // map name without extension, e.g. "ashap plateau"
-	Seed       int64   // battle RNG seed for both streams; <0 = derive pair from clock
-	Headless   bool    // run the session without opening a window
-	Ticks      int     // authoritative tick limit; zero uses the headless default
-	Mission    string  // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
-	Difficulty int     // campaign difficulty
-	LoadSave   string  // explicit retail .SAV path to load in the windowed shell
-	Report     string  // JSON headless summary path; empty writes to stdout
-	Shot       string  // compose one frame to this PNG and exit, opening no window
-	ShotTicks  int     // authoritative ticks to advance before the frame is captured
-	Remaster   string  // remaster override: a loose directory or HPI mounted above every retail tier
-	ShotZoom   float64 // presentation zoom applied before --shot captures (1 = native)
-	ShotFocus  string  // "x,y" screen point kept fixed while zooming; default the screen centre
-	ShotSelect bool    // run the Ctrl+A select-all before --shot captures, so the command page is open
-	ShotSize   string  // "WxH" surface size for --shot; empty composes at the authored 640x480
-	ShotModal  string  // battle modal to open before --shot captures: "options", "exit" or "confirm"
-	ShotSpace  bool    // hold Space for --shot captures, so the bottom slide strip is fully raised
-	Renderer   string  // start-up presentation executor: "classic" (default) or "modern"
+	BattleBenchmark    string
+	BenchmarkFactories bool
+	BenchmarkFrames    int
+	Root               string  // retail install root
+	Map                string  // map name without extension, e.g. "ashap plateau"
+	Seed               int64   // battle RNG seed for both streams; <0 = derive pair from clock
+	Headless           bool    // run the session without opening a window
+	Ticks              int     // authoritative tick limit; zero uses the headless default
+	Mission            string  // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
+	Difficulty         int     // campaign difficulty
+	LoadSave           string  // explicit retail .SAV path to load in the windowed shell
+	Report             string  // JSON headless summary path; empty writes to stdout
+	Shot               string  // compose one frame to this PNG and exit, opening no window
+	ShotTicks          int     // authoritative ticks to advance before the frame is captured
+	Remaster           string  // remaster override: a loose directory or HPI mounted above every retail tier
+	ShotZoom           float64 // presentation zoom applied before --shot captures (1 = native)
+	ShotFocus          string  // "x,y" screen point kept fixed while zooming; default the screen centre
+	ShotSelect         bool    // run the Ctrl+A select-all before --shot captures, so the command page is open
+	ShotSize           string  // "WxH" surface size for --shot; empty composes at the authored 640x480
+	ShotModal          string  // battle modal to open before --shot captures: "options", "exit" or "confirm"
+	ShotSpace          bool    // hold Space for --shot captures, so the bottom slide strip is fully raised
+	Renderer           string  // start-up presentation executor: "classic" (default) or "modern"
 
 	// ShotRenderer selects which executor --shot captures through:
 	// "classic" (explicit software composer), "modern" (the GPU executor,
@@ -93,6 +96,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.Float64Var(&opts.ShotZoom, "shot-zoom", 1, "presentation zoom for --shot, 0.25..4 (1 = native)")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --shot-zoom (default the screen centre)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
+	set.StringVar(&opts.BattleBenchmark, "battle-benchmark", "", "run the seeded live battle benchmark into a new output directory")
+	set.BoolVar(&opts.BenchmarkFactories, "benchmark-factories", true, "queue factory production in the battle benchmark")
+	set.IntVar(&opts.BenchmarkFrames, "benchmark-frames", 180, "measured battle benchmark frames after 60 warm-up draws")
 	set.StringVar(&opts.ShotSize, "shot-size", "", "surface size \"WxH\" for --shot, one of the display modes (default 640x480)")
 	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\" or \"confirm\"")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
@@ -117,6 +123,22 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			return opts, ErrHelp
 		}
 		return opts, err
+	}
+	if opts.BattleBenchmark != "" {
+		if opts.Shot != "" || opts.ShotModel != "" || opts.Headless || opts.LoadSave != "" || opts.Mission != "" || opts.CPUProfile != "" || opts.MemProfile != "" || opts.ProfileSeconds != 0 || opts.ShotRenderer != "" || opts.ShotGPUProfileFrames != 0 || opts.ShotZoom != 1 || (opts.ShotSize != "" && opts.ShotSize != "1920x1080") {
+			return opts, fmt.Errorf("nanolathe: battle benchmark requires a standalone 1920x1080 unzoomed battle")
+		}
+		if opts.BenchmarkFrames < 1 || opts.BenchmarkFrames > 100000 {
+			return opts, fmt.Errorf("nanolathe: benchmark frames must be 1..100000")
+		}
+		if opts.Map == "" {
+			opts.Map = "ashap plateau"
+		}
+		if opts.Seed < 0 {
+			opts.Seed = 7
+		}
+		opts.Shot = filepath.Join(opts.BattleBenchmark, "battle.png")
+		opts.ShotSize = "1920x1080"
 	}
 	if opts.Shot != "" || opts.ShotModel != "" {
 		if err := validateShotOptions(opts); err != nil {

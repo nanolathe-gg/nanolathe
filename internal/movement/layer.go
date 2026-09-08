@@ -76,7 +76,8 @@ type ClassLayer struct {
 	// cells packs 2 bits per attribute cell: the dword at index
 	// (z>>4)·W + x holds cells z & ~15 .. z|15 of column x, cell z in shift
 	// (z&15)·2 [04 §6.1]. Size W · ceil(H/16) dwords.
-	cells []uint32
+	cells                   []uint32
+	stampScratch, stampRows []uint8
 
 	// mapping is the view of the visibility publisher's per-player mapping word
 	// grid the search's coarse test reads [04 R-PATH-01 §2][04 R-PATH-01 §14].
@@ -123,17 +124,6 @@ func NewClassLayer(p Profile, t *world.Terrain, grid *OccupancyGrid) *ClassLayer
 	l.staticRevision = t.StaticObstacleRevision()
 	l.stampAll()
 	return l
-}
-
-// stampAll runs the single-cell classifier over every attribute cell and packs
-// the result [04 §6.1]. Watermark is zero at map load, so the occupant-age
-// gate never fires here [04 §6.1 R-DOC04-B].
-func (l *ClassLayer) stampAll() {
-	for z := int32(0); z < l.H; z++ {
-		for x := int32(0); x < l.W; x++ {
-			l.setValue(x, z, l.classify(x, z))
-		}
-	}
 }
 
 // classify stamps one candidate anchor for this movement class. Every covered

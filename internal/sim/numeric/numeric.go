@@ -13,7 +13,7 @@ const (
 	AngleUnitsTurn = 1 << 16
 )
 
-// TruncateFloat64ToLow32 reproduces the definition parsers' floating-point
+// TruncateFloat64ToLow32 reproduces the shared runtime and parser floating-point
 // store: truncate a finite value to signed 64 bits, then retain its low word.
 // Values outside the signed-64 range and non-finite values produce the x87
 // indefinite integer's zero low word [01 R-DET-01 §1].
@@ -22,6 +22,13 @@ func TruncateFloat64ToLow32(value float64) int32 {
 		return 0
 	}
 	return int32(uint32(int64(value)))
+}
+
+// TruncateFloat32ToLow32 widens an already stored single-precision value
+// exactly, then uses the one runtime integer conversion [01 R-DET-01 §1].
+// Callers keep their established single-precision expression boundaries.
+func TruncateFloat32ToLow32(value float32) int32 {
+	return TruncateFloat64ToLow32(float64(value))
 }
 
 // Fixed is signed 16.16 fixed point, backed by int64.

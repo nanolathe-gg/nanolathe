@@ -61,20 +61,9 @@ func runPhase2Sweep(w *World, tick uint32) {
 // unitWaterDamage is a placeholder for the sweep's step-9 water damage
 // [04 §9.2][04 R-MOV-03 §1 step 9], and it stays a placeholder.
 //
-// The marker that stood here asked for the mission waterdoesdamage/waterdamage
-// keys and the player class check to be wired "when terrain/mission state is
-// available in this package". That will never happen and does not need to:
-// terrain and the damage funnel sit above internal/units in the import graph,
-// and the applicator is already written on the correct side of that line as
-// combat.TickWaterDamage (its cadence gate, canhover exemption, height test,
-// veterancy scaling and kind-0xB packet are all implemented and tested).
-//
-// Closed (WU-19-175): the gap this marker named — no caller — is wired. The
-// session's phase-2 visit now runs the step at its researched place, inside the
-// controller-1-or-2 block before the order pumps (Session.stepWaterDamage), and
-// the two mission words reach it on the terrain record beside the sea-level byte
-// they are compared against (world.Terrain.WaterDoesDamage/WaterDamage). This
-// placeholder stays a placeholder for the reason above it.
+// Terrain and damage intake sit above internal/units in the import graph.
+// Session.stepWaterDamage runs the act inside the controller-1-or-2 block
+// before the order pumps; the integration regressions live with that caller.
 func (w *World) unitWaterDamage(u *Unit, tick uint32) {
 	_ = u
 	_ = tick

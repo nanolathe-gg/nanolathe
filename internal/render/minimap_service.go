@@ -1,6 +1,12 @@
 package render
 
-import "github.com/nanolathe/nanolathe/internal/camera"
+import (
+	"sync/atomic"
+
+	"github.com/nanolathe/nanolathe/internal/camera"
+)
+
+var minimapSurfaceIdentity atomic.Uint64
 
 // Minimap dirty bits track presentation surface invalidation. The committed
 // blink phase is a separate scalar and is never folded into this word [03
@@ -22,6 +28,10 @@ type MinimapService struct {
 	local                  uint8
 	dcb                    byte
 	remap                  []byte
+	mappedVersion          uint64
+	finalInputVersion      uint64
+	finalRevision          uint64
+	finalIdentity          uint64
 }
 
 // MinimapServiceConfig supplies the map-sized picture and MAPPED inputs.
@@ -47,7 +57,7 @@ type MinimapServiceConfig struct {
 // bindings; the retail battle HUD rejects that state at initialization so a
 // missing source cannot become a silent blank rail [03 §3.7].
 func NewMinimapService(cfg MinimapServiceConfig) *MinimapService {
-	s := &MinimapService{mapW: cfg.MapW, mapH: cfg.MapH, local: cfg.LocalSlot, dcb: cfg.FogFill, dirty: MinimapDirtyMapped | MinimapDirtyFinal}
+	s := &MinimapService{mapW: cfg.MapW, mapH: cfg.MapH, local: cfg.LocalSlot, dcb: cfg.FogFill, dirty: MinimapDirtyMapped | MinimapDirtyFinal, finalIdentity: minimapSurfaceIdentity.Add(1)}
 	if cfg.Picture != nil {
 		s.picture = cloneRadarSurface(cfg.Picture)
 	}
@@ -69,6 +79,22 @@ func (s *MinimapService) Picture() *RadarSurface { return cloneRadarSurface(s.pi
 
 // Final returns a copy of the composed radar surface the HUD blits [03 §3.8].
 func (s *MinimapService) Final() *RadarSurface { return cloneRadarSurface(s.final) }
+
+// FinalIdentity and FinalRevision identify the current FINAL bytes for a
+// renderer cache. They do not expose mutable surface storage.
+func (s *MinimapService) FinalIdentity() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.finalIdentity
+}
+
+func (s *MinimapService) FinalRevision() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.finalRevision
+}
 
 // Blink is the current radar blink phase [01 R-CORE-03].
 func (s *MinimapService) Blink() BlinkState {
@@ -113,12 +139,23 @@ func (s *MinimapService) SetBlinkPhase(phase uint8) {
 // HUD composited, so terrain explored after that frame never reached the
 // minimap and the fog tint never changed (playtest defect PT3-13).
 func (s *MinimapService) RebuildMapped(word []uint16, current []uint8) bool {
+	return s.RebuildMappedVersion(word, current, 0)
+}
+
+// RebuildMappedVersion consumes a committed mapping revision. A zero revision
+// retains the legacy dynamic API; a nonzero revision skips recomposition when
+// the immutable mapping inputs are unchanged [03 §3.6].
+func (s *MinimapService) RebuildMappedVersion(word []uint16, current []uint8, version uint64) bool {
 	if s == nil || s.picture == nil {
 		return false
+	}
+	if version != 0 && s.mapped != nil && s.mappedVersion == version {
+		return true
 	}
 	s.mapped = BuildMapped(s.picture, word, current, s.mapW, s.mapH, s.local, s.dcb, s.remap)
 	s.dirty &^= MinimapDirtyMapped
 	s.dirty |= MinimapDirtyFinal
+	s.mappedVersion = version
 	return s.mapped != nil
 }
 
@@ -135,8 +172,18 @@ func (s *MinimapService) RebuildMapped(word []uint16, current []uint8) bool {
 // so the palette lookup remains the caller's, which is where the
 // logical→physical map lives.
 func (s *MinimapService) RebuildFinal(m camera.Minimap, playW, playH int32, contacts []MinimapContact, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) bool {
+	return s.RebuildFinalVersion(m, playW, playH, contacts, blit, radarColor, jammerColor, ringColor, 0)
+}
+
+// RebuildFinalVersion avoids rebuilding the same committed FINAL input during
+// repeated presentation of one frame. A nonzero version must include contact
+// and blink inputs; zero preserves the legacy every-call behaviour [03 §3.6].
+func (s *MinimapService) RebuildFinalVersion(m camera.Minimap, playW, playH int32, contacts []MinimapContact, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte, version uint64) bool {
 	if s == nil || s.mapped == nil {
 		return false
+	}
+	if version != 0 && s.final != nil && s.finalInputVersion == version {
+		return true
 	}
 	// The contacts pass is the sole circle producer: every circle on FINAL comes
 	// from a contact record's own authored distances, drawn in the contact walk
@@ -144,5 +191,7 @@ func (s *MinimapService) RebuildFinal(m camera.Minimap, playW, playH int32, cont
 	// pass"). There is no second circle list to reconcile against.
 	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, BlinkState{Phase: s.blinkPhase}, blit, radarColor, jammerColor, ringColor)
 	s.dirty &^= MinimapDirtyFinal
+	s.finalInputVersion = version
+	s.finalRevision++
 	return s.final != nil
 }

@@ -5,7 +5,10 @@ package session
 // This file implements latch, scoring, and registry vs bank split [P0-05]
 // and the P1-01 end-of-mission countdown/teardown [P1-01].
 
-import "github.com/nanolathe/nanolathe/internal/save"
+import (
+	"github.com/nanolathe/nanolathe/internal/save"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+)
 
 // Latch arms to 4 then decrements ~1/s before latch word bits [P0-05][P1-01].
 // Retail stores an int16 countdown starting at -1, then arms to 4 when <0
@@ -146,8 +149,8 @@ func (l *EndLatch) IsLose() bool { return l.Bits&LatchBitLose != 0 }
 // marked killmul/timemul "inert (reader census: none)" — that census missed
 // this helper, which multiplies by both; both docs are corrected in place.
 func Score(kills int, killmul float32, ticks uint32, timemul float32) int {
-	timePart := int64(int32(float32(ticks/60) * timemul))
-	killPart := int64(int32(float32(kills) * killmul))
+	timePart := int64(numeric.TruncateFloat32ToLow32(float32(ticks/60) * timemul))
+	killPart := int64(numeric.TruncateFloat32ToLow32(float32(kills) * killmul))
 	total := timePart + killPart
 	if total < 0 {
 		return 0

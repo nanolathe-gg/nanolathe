@@ -1,6 +1,7 @@
 package combat
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -547,5 +548,112 @@ func TestTickProjectilesSteeringFailureRebuildsAfterImpact(t *testing.T) {
 	}
 	if svc.Records[0].Velocity == oldVelocity || svc.Records[0].Pos == (Vec3{}) {
 		t.Fatalf("steering failure did not rebuild then move: velocity=%v position=%v", svc.Records[0].Velocity, svc.Records[0].Pos)
+	}
+}
+
+// Feature-cache suppression resumes the actual terrain/water ladder; bounce
+// is conditional on the authored flag and shifts the signed velocity before
+// negation [06 §8.1][06 §8.2]. These replace the test-only ladder simulation.
+func TestTickProjectilesCachedFeatureContinuesToTerrainAndWater(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		ground, sea   uint8
+		bounce        bool
+		impacts, live int
+	}{
+		{"ground impact", 20, 0, false, 1, 0},
+		{"ground bounce", 20, 0, true, 0, 1},
+		{"water impact", 0, 20, false, 1, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var svc Service
+			w, terrain := newContactFixture(t)
+			const cx, cz = 8, 8
+			terrain.SeaLevel = tc.sea
+			terrain.FeatureDefs = []*content.FeatureDef{{Height: 40}}
+			cell := terrain.PlotAt(cx, cz)
+			cell.SetFeature(0)
+			cell.SetMinHeight(tc.ground)
+			cell.SetMaxHeight(tc.ground)
+			weapon := driverWeapon(false)
+			weapon.GroundBounce = tc.bounce
+			h, ok := svc.Reserve()
+			if !ok {
+				t.Fatal("reserve")
+			}
+			p := &svc.Records[int(h)-1]
+			p.WeaponID = weapon.ID
+			p.Pos = Vec3{X: cellCentre(cx), Y: numeric.FixedFromInt(10), Z: cellCentre(cz)}
+			p.Velocity.Y = -7
+			p.CacheCellX, p.CacheCellZ = cx, cz
+			p.ExpiryTick = 10
+			impacts := 0
+			svc.Events = func(ev Event) {
+				if ev.Kind == EventProjectileImpact {
+					impacts++
+				}
+			}
+			svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+			if impacts != tc.impacts || svc.Count() != tc.live {
+				t.Fatalf("impacts/live = %d/%d, want %d/%d", impacts, svc.Count(), tc.impacts, tc.live)
+			}
+			if tc.bounce && p.Velocity.Y != 2 {
+				t.Fatalf("bounce velocity = %d, want 2", p.Velocity.Y)
+			}
+		})
+	}
+}
+
+// Leaving the map retires even noexplode without central-impact effects
+// [06 §8.1].
+func TestTickProjectilesOffMapNoExplodeRetiresWithoutImpact(t *testing.T) {
+	var svc Service
+	w, terrain := newContactFixture(t)
+	weapon := driverWeapon(false)
+	weapon.NoExplode = true
+	h, ok := svc.Reserve()
+	if !ok {
+		t.Fatal("reserve")
+	}
+	p := &svc.Records[int(h)-1]
+	p.WeaponID = weapon.ID
+	p.Pos = Vec3{X: -1, Y: numeric.FixedFromInt(10), Z: cellCentre(1)}
+	p.ExpiryTick = 10
+	impacts := 0
+	svc.Events = func(ev Event) {
+		if ev.Kind == EventProjectileImpact {
+			impacts++
+		}
+	}
+	svc.TickProjectiles(1, w, terrain, nil, nil, nil, nil, driverCatalog(weapon), nil, nil)
+	if svc.Count() != 0 || impacts != 0 {
+		t.Fatalf("live/impacts = %d/%d, want 0/0", svc.Count(), impacts)
+	}
+}
+
+// The area walk's positive bound is exclusive at centre+span, without an
+// extra row/column. Its centre uses signed whole-word division toward zero,
+// unlike collision's arithmetic cell shift [06 §9.3].
+func TestAreaEnumerationExactSpanAndSignedCentre(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		x, z   numeric.Fixed
+		radius int32
+		want   [][2]int32
+	}{
+		{"origin", 0, 0, 0, [][2]int32{{0, 0}}},
+		{"interior", world.CellToWorld(2), world.CellToWorld(2), 0, [][2]int32{{1, 1}, {2, 1}, {1, 2}, {2, 2}}},
+		{"negative fraction", -1, -1, 0, [][2]int32{{0, 0}}},
+		{"negative partial cell", numeric.FixedFromInt(-15), numeric.FixedFromInt(-15), 0, [][2]int32{{0, 0}}},
+		{"negative whole cell", numeric.FixedFromInt(-16), 0, 0, nil},
+		{"signed word wrap", numeric.FixedFromInt(65536), 0, 0, [][2]int32{{0, 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got [][2]int32
+			EnumerateArea(Vec3{X: tc.x, Z: tc.z}, tc.radius, 8, 8, func(x, z int32) { got = append(got, [2]int32{x, z}) })
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("cells = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

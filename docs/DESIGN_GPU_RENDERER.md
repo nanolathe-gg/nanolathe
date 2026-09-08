@@ -44,8 +44,8 @@ Retail evidence remains in the owning research document.
 One committed-frame ordering remains `drawCommittedFrame` [03 §1]. Neither
 executor reads live pools or simulation RNG or writes authoritative state [I6].
 A reusable frame packet owns transient model/command data and shares only
-immutable resources. Temporary same-frame CPU model references in Phase 2 are
-an implementation bridge, not the final recording contract.
+immutable resources. Classic model packets own their completed image planes;
+modern model packets own geometry, as specified by C-G5.
 
 The projection remains orthographic with the retail half-height shear
 [03 §2.5]. GPU Classic stays in palette index space through the retail composite:
@@ -82,7 +82,10 @@ classic executor) and by `internal/platform/gpurender` (modern executor).
   | `Expand` | none | `convertIndexedToRGBA` |
 
   A `Model` record is the durable form of a unit, feature model or
-  projectile model: the face list with per-vertex screen position, height key,
+  projectile model. Its classic packet owns the completed body or staging
+  color, coverage and optional key planes; the pre-punched shadow planes; and
+  every image placement scalar. Its modern packet carries the face list with
+  per-vertex screen position, height key,
   UV and shade row, the primitive's texture reference (or LOGOS frame choice),
   the flat colour byte, plus the subject flags — key plane or painter order
   `[03 R-REN-03A §2]`, supersample `[03 R-REN-03A §6]`, waterline threshold,
@@ -114,8 +117,15 @@ The shared scaled-index shader subtracts the destination atlas origin before
 integer source mapping; the real-device fixture exposed and now locks this
 existing executor correction. Both executors consume that same packet; viewport markers
 remain later point commands. This removes per-pixel point/quad submission without
-changing the separate PICTURE/MAPPED/FINAL lifecycle [03 R-MM-01 §1]. Fog and
-minimap invalidation propagation remains open. Acceptance compares the former
+changing the separate PICTURE/MAPPED/FINAL lifecycle [03 R-MM-01 §1]. A
+`Surface` may additionally carry a nonzero presentation identity and revision.
+That pair identifies immutable source content for the duration of a durable
+command: a zero identity retains the dynamic per-call upload behaviour, and a
+cloned list preserves both fields while owning its byte slice. The GPU holds a
+small bounded set of such textures and writes pixels again only when the
+revision (or dimensions) changes; it never hashes a whole source every frame.
+MAPPED consumes the committed visibility mapping version, whereas FINAL still
+refreshes for committed contacts and blink phase. Acceptance compares the former
 sampling result at native and fractional display sizes, both letterbox axes,
 clipped/reversed rectangles and retained replay after source reuse.
 
@@ -200,7 +210,15 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   operation is an integer texel fetch on the uploaded table. There is no
   linear filtering, no blending arithmetic on indices, and no float
   intermediate that can land between two entries.
-* **C-G5 GPU model composition.** Ordinary face pixels use a per-subject
+* **C-G5 Durable model composition.** `drawlist.Model.Classic` owns each
+  mutable classic body/staging/shadow plane and placement scalar at record
+  time; a retained `List.Clone` deep-copies those planes. The pre-punched
+  shadow is built while recording, so classic replay has no `UnitDraw`, client
+  model state, or per-frame index lookup. It preserves shadow, one body blit,
+  then trace-observer order, including a carried child's earlier shadow-only
+  command. The optional trace image and observer are diagnostic-only and cannot
+  affect pixels. Modern geometry stays a separate owned packet. Ordinary face pixels
+  use a per-subject
   maximum-byte-key pass and a color pass in original face order, so ties retain
   the later face [03 R-REN-03A §2–§3]. Conventional triangle interpolation is an
   intentional GPU approximation (§5); tests isolate key admission from that
@@ -261,12 +279,11 @@ Nil-camera projection remains distinct. The ordinary recording path retains
 its same-frame borrowed camera and adds no snapshot allocation. Modern terrain
 already uses the command's copied origin and destination dimensions.
 
-This closes only the camera dependency of REVIEW MAINT-REND-01. Classic model
-commands still index the client's per-frame composed-model table; a cloned list
-with those commands is not yet a durable cross-frame classic replay artifact.
-Owned geometry packets remain available to the modern executor. Retained
-terrain tests must replay A after recording B with a changed camera and compare
-actual classic pixels, including zoom and nil-camera projection.
+Together with C-G5's owned classic model planes, this makes a cloned list
+durable across later recording. Modern geometry packets remain independently
+owned. Retained terrain and model tests replay A after recording B with changed
+camera or pose and compare actual classic pixels, including zoom and nil-camera
+projection.
 
 ## 4. Retail behaviour that is not a bug
 
@@ -463,8 +480,15 @@ The geometry packet owns its vertex and face slices and survives the next frame.
 No client pointer, live camera, or simulation pool is permitted in it. Give the
 CPU bridge neutral pixel-plane data rather than making drawlist import client.
 
-**P2 published API.** `drawlist.Model` retains its classic same-frame `Ref` and
-adds `Geometry *drawlist.ModelGeometry`. `ModelGeometry` owns ordered
+**Published model packet ownership.** `drawlist.Model` holds
+`Classic *drawlist.ClassicModel` and `Geometry *drawlist.ModelGeometry`.
+`ClassicModel` owns the mutable completed body/staging and pre-punched shadow
+pixel operands: each plane's colour bytes, coverage bits, optional key bytes,
+transparent index, dimensions, origin and framebuffer anchor. Recording builds
+the shadow before it releases the composer, so replay retains no live draw,
+camera, client model cache, or frame-local lookup. Its optional trace image and
+observer are strictly diagnostic and cannot write pixels. `List.Clone`
+deep-copies all classic plane slices. `ModelGeometry` owns ordered
 `[]ModelFace`, each owning its ordered `[]ModelVertex`; a vertex holds projected
 `X`, `Y`, signed pre-interpolation `Key`, integer texel `U`/`V`, and physical
 `Shade` row. A face holds its immutable resolved `*formats.GAFFrame` (or nil),
@@ -597,8 +621,8 @@ The model-only `both` recipe disables the classic structure resolve to isolate
 native-scale texture mapping and says so in its log. Modern-only previews do
 not require disabling the classic Anti-Alias option.
 
-`gpurender.Model` consumes `Model.Geometry` and never reads `Model.Ref`; that
-reference belongs only to the classic sink. The former `ModelSource`,
+`gpurender.Model` consumes `Model.Geometry` and never reads `Model.Classic`;
+that packet belongs only to the classic sink. The former `ModelSource`,
 `ModelImage` and client/platform image adapters have been removed. `ModelStats`
 reports GPU bodies, GPU shadows, composed groups, skips and geometry/material
 failures. Legacy omission counters remain available for explicitly unsupported
@@ -818,3 +842,34 @@ combat; separate presentation scheduling from the 30 Hz authoritative tick
 without repeating audio or RNG consumption. Interpolation and enhanced visuals
 remain deferred. Older prototype contracts in §8–§9 describe historical stages;
 §10–§11 govern the current exclusive GPU path and performance work.
+
+## 12. Renderer storage and batching
+
+The renderer reuses frame-owned model state, transforms, polygons, image planes
+and GPU preparation arrays. Every simultaneously live body, shadow and child
+has a distinct borrowed slot; published snapshots still own deep copies. Reset
+occurs at the next recording boundary, with classic shadows borrowing additional
+slots during replay. Storage retains peak capacity; it is not a zero-allocation
+contract or a bounded-memory cache.
+
+Modern rendering packs immutable texture frames into 2048-square pages and
+batches adjacent compatible faces without reordering source faces or scanlines.
+Large textures use the existing per-face GPU route. Eligible model cache misses
+are prepared in shared key/color passes and packed into reference-counted cache
+pages. Entries pin pages through replay; eviction releases a page only after its
+last entry leaves. Exact model identities still include pose and paint inputs.
+These packing sizes are implementation policy, not retail behavior.
+
+Classic rasterization skips unused interpolation lanes and uses ordinary flat
+and textured writers when tracing and construction reveal are absent. General
+writers retain those cases. Piece transforms reuse the same sine/cosine values
+within one immutable node; rotation order and per-axis rounding remain intact.
+
+The retained September 7–8 real-map prototype measured a mean CPU rendering
+reduction from 14.33 to 12.28 ms at 1920×1080, excluding simulation, upload,
+pacing and screenshots. GPU and CPU allocation reductions were measured in the
+same seeded Ashap Plateau battle. These are development observations, not a
+universal frame-time guarantee. Activated 2× solar captures and final battle
+captures matched their respective pre-optimization baselines; CPU/GPU pixel
+identity is not claimed. Full raw experiments remain outside the production
+codebase on the retained profiling branches.

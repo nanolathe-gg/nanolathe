@@ -222,10 +222,12 @@ func TestGeometryOnlyCarrierRecordsChildComposition(t *testing.T) {
 	if !c.composeCarrier(carrier, 0, 0, []frame.UnitView{child}) {
 		t.Fatal("valid staged carrier did not retain selection-chrome eligibility")
 	}
-	if got := len(c.modelCommits); got != 0 {
-		t.Fatalf("geometry-only staged carrier retained %d CPU model commits", got)
-	}
 	models := c.list.ModelCommands()
+	for _, model := range models {
+		if c.geometryOnlyModels && model.Classic != nil {
+			t.Fatal("geometry-only recording retained CPU image planes")
+		}
+	}
 	if len(models) != 2 || !models[0].ShadowOnly || models[1].Geometry == nil || !models[1].Geometry.Eligible || len(models[1].Geometry.Children) != 1 {
 		t.Fatalf("geometry-only staged carrier = %#v, want child shadow then carrier group", models)
 	}
@@ -276,6 +278,11 @@ func TestGeometryOnlyMissingCarrierAccountsForValidChild(t *testing.T) {
 		t.Fatal("missing carrier unexpectedly retained selection-chrome eligibility")
 	}
 	models := c.list.ModelCommands()
+	for _, model := range models {
+		if c.geometryOnlyModels && model.Classic != nil {
+			t.Fatal("geometry-only recording retained CPU image planes")
+		}
+	}
 	if len(models) != 1 || models[0].Geometry == nil || !models[0].Geometry.Eligible || models[0].ShadowOnly {
 		t.Fatalf("missing-carrier geometry = %#v, want independent child body", models)
 	}
@@ -345,6 +352,11 @@ func TestCarrierRecordingRoutesPreserveChildHeightAndPainterOrder(t *testing.T) 
 				t.Fatal("carrier did not record")
 			}
 			models := c.list.ModelCommands()
+			for _, model := range models {
+				if c.geometryOnlyModels && model.Classic != nil {
+					t.Fatal("geometry-only recording retained CPU image planes")
+				}
+			}
 			if len(models) != 2 {
 				t.Fatalf("geometry=%v keyed=%v commands=%d", geometryOnly, keyed, len(models))
 			}

@@ -286,6 +286,9 @@ func (s *Service) RebuildFogWindow(cameraX, cameraZ, viewW, viewH int32) {
 		}
 	}
 	s.mode |= ModeFogCacheValid
+	// The revision moves only after the derived bytes and their address window
+	// are complete, so publication can retain a previous immutable copy.
+	s.fogVersion++
 }
 
 func floorDivFog(a, b int32) int32 {

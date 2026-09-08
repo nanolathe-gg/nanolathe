@@ -6039,23 +6039,25 @@ spawns a projectile — is [R-WPN-03 §6] and is not restated here.
 ### The model adapter's piece getters and setters [R-MOV-03 §4]
 
 Section 4.6 names the adapter's get/set-position and get/set-angle; doc 03
-([03 R-COMP-01 §4]) records their presentation effect as an inference. The
-writes, exactly:
+([03 R-COMP-01 §4]) establishes their presentation effect by the cached-body
+reader and image builder. The writes, exactly:
 
 * **get translation lane / get angle lane** return the raw stored dword /
   word for `(piece, axis)`; no bounds check.
 * **set translation lane / set angle lane** write only when the value
   changes; on a change they zero the piece's per-piece stamp word, set the
   model's rebuild flag, and, when the piece's *cache* flag bit is set, clear
-  the model's cached-image word.
+  the model's cached-body validity state.
 * **show/hide** (the draw bit) flips the bit only on a change, zeroes the
   stamp word and applies the same cache-conditional clear, but does **not**
   set the rebuild flag.
 * **cache** and **shade** (the two other flag bits) are written
-  unconditionally and reset a third model word each time.
+  unconditionally and discard the cached composition-image reference each time.
 
-This confirms doc 03's reading of the setters' second word as the cached-image
-validity the cached-body path tests; the reader side stays doc 03's.
+The cached-body path directly tests the validity state cleared for cached
+pieces. Its image builder installs the reference discarded by cache/shade
+writes. Document 03 owns those reader and rebuild contracts; these are
+Established rather than an inference about an unidentified counter.
 
 ### 4.7 Engine port write semantics, the factory stance handshake, and thread-start masks [R-P0-10]
 
