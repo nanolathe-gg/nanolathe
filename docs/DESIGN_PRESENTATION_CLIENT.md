@@ -224,6 +224,14 @@ releases finished cues and streams, including the final batch with no later
 play request. This keeps playback retention independent of simulation ticks
 `[03 R-AUD-02 §2]`.
 
+`audio.RegisteredOutput` extends the ordinary output seam only for loaded
+mode-0 aliases. Its canonical PCM cache belongs to the immutable `Sample`, is
+keyed by output rate and bounded per sample, and has no backend-global owner;
+an active reader retains the bytes it needs after an alias or session goes
+away. Each submitted reader holds independent pan state while backend base and
+FX gains remain live output settings. Mode-1 voices and mode-2 streams use the
+ordinary conversion boundary. §3.3 C20 states the API and fallback contract.
+
 ## 3. Contracts
 
 Two contract series meet in these packages, and both keep the numbering their
@@ -478,6 +486,17 @@ document carries them.
   There is **no eviction at all** — one decoded blob per alias, retained for the
   life of the session; the 255-alias cap is the registry's, not a cache size
   `[03 §8.2]` `[02 "Sound aliases"]` `[fmt wav]`.
+  `RegisteredOutput` is an optional presentation extension of `Output` for
+  those mode-0 registered aliases: `PlayRegisteredSample(*Sample, volume,
+  pan)` may reuse sample-owned, canonical stereo float32 PCM at its output
+  rate. The canonical bytes are unity-volume and centred; each play keeps its
+  own reader and applies pan plus the ordinary backend gain outside those
+  immutable bytes. `Sample` is immutable after decode or registry admission,
+  and owns this bounded rate-keyed host cache, so replacing an alias with a new
+  sample selects new PCM and a departed session retains no backend-global PCM.
+  Outputs without the extension use `PlaySample`. Mode-1 voice loads and
+  mode-2 streams remain ordinary per-play conversion paths; this host cache is
+  not a claim about retail device conversion or its mode-1 policy.
 
 C9 of the source plan — screen shake — is not carried here. The shake driver is
 authoritative phase 10 and the runtime document owns it; presentation only adds

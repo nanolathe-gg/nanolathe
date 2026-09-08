@@ -292,8 +292,8 @@ func (a *Service) playAdmittedPositional(alias string, pos [3]numeric.Fixed) (Pa
 		volume = Attenuate(pos, v)
 	}
 	sample, _ := a.Load(alias)
-	if output := GlobalOutput(); output != nil && sample != nil {
-		_ = output.PlaySample(sample, VolumeFromAttenuation(volume), PanFloat(pan, v))
+	if sample != nil {
+		playRegistered(sample, VolumeFromAttenuation(volume), PanFloat(pan, v))
 	}
 	return pan, volume, true
 }
@@ -308,9 +308,7 @@ func (a *Service) PlayUICue(alias string) bool {
 	if err != nil || sample == nil {
 		return false
 	}
-	if output := GlobalOutput(); output != nil {
-		_ = output.PlaySample(sample, VolumeFromCentibel(VolInView), 0)
-	}
+	playRegistered(sample, VolumeFromCentibel(VolInView), 0)
 	return true
 }
 
@@ -360,13 +358,23 @@ func (a *Service) PlayBriefing(glamourSound, brief, narration, missionHint strin
 	alias := BriefingAlias(glamourSound, brief, narration, missionHint)
 	if alias != "" {
 		if sample, err := a.Load(alias); err == nil && sample != nil {
-			if output := GlobalOutput(); output != nil {
-				_ = output.PlaySample(sample, 1.0, 0)
-			}
+			playRegistered(sample, 1.0, 0)
 			return true
 		}
 	}
 	return a.Music != nil && a.Music.NumTracks() > 0 && a.Music.Play(1)
+}
+
+// playRegistered selects the optional mode-0 presentation cache without
+// changing the observable fallback for outputs that only implement Output.
+func playRegistered(sample *Sample, volume, pan float64) {
+	if output := GlobalOutput(); output != nil {
+		if registered, ok := output.(RegisteredOutput); ok {
+			_ = registered.PlayRegisteredSample(sample, volume, pan)
+			return
+		}
+		_ = output.PlaySample(sample, volume, pan)
+	}
 }
 
 // StartStream arms one authored narration/glamour timer on the existing

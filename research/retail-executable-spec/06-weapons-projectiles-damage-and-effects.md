@@ -3673,6 +3673,23 @@ if (kind != 10) {
 packet.amount = (int16)amount                          ; modulo 65,536
 ```
 
+**Established (direct static trace):** the falloff product uses the signed
+base and stored single-precision falloff at working precision. Conversion
+retains the low 32 bits of signed-64 truncation [01 R-DET-01 §1]. Both percentage
+stages form their products in a wrapping signed 32-bit word **before** dividing
+by 100 with truncation toward zero. The defender first multiplies by `25-tier`
+and then by four; combining those two factors preserves the same low-word
+product. Widening either percentage product and dividing before narrowing is
+not equivalent for extreme authored overrides or falloff values. The armor
+product remains full signed 64-bit arithmetic followed by its arithmetic
+right shift, as shown above.
+
+**Established:** a null shooter skips the attacker percentage stage entirely;
+a present shooter with zero kills still forms the wrapping multiply by 100
+before dividing. These paths can differ at large amounts despite the tier-zero
+factor being mathematically one. Both kill-count readers zero-extend the stored
+16-bit word before dividing by five and applying the tier cap.
+
 Attacker veterancy therefore scales by `(100 + 6·tier)/100` and defender
 veterancy by `(25 − tier)·4/100`, both with the same five-kills-per-tier,
 five-tier cap; the defender factor is exactly 1 at tier zero. The armored-state

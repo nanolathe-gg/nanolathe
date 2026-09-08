@@ -2,6 +2,7 @@ package audiobackend
 
 import (
 	"bytes"
+	"io"
 	"sync"
 	"time"
 
@@ -19,7 +20,7 @@ type Backend struct {
 	ctx          *audio.Context
 	players      []voice
 	streams      []voice
-	createPlayer func([]byte) (outputPlayer, error)
+	createPlayer func(io.Reader) (outputPlayer, error)
 	lastPump     time.Time
 }
 
@@ -36,15 +37,15 @@ type voice struct {
 	baseGain float64
 }
 
-func (b *Backend) newPlayer(data []byte) (outputPlayer, error) {
+func (b *Backend) newPlayer(source io.Reader) (outputPlayer, error) {
 	if b.createPlayer != nil {
-		return b.createPlayer(data)
+		return b.createPlayer(source)
 	}
 	b.ensureContext()
 	if b.ctx == nil {
 		return nil, nil
 	}
-	return b.ctx.NewPlayerF32(bytes.NewReader(data))
+	return b.ctx.NewPlayerF32(source)
 }
 
 // Capabilities describes the concrete presentation device surface.
@@ -225,7 +226,7 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 	if len(data) == 0 {
 		return nil
 	}
-	player, err := b.newPlayer(data)
+	player, err := b.newPlayer(bytes.NewReader(data))
 	if err != nil {
 		return nil
 	}
@@ -234,6 +235,40 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 	}
 	v := voice{player: player, baseGain: volume}
 	b.applyGain(v)
+	b.admitVoiceLocked(v)
+	player.Play()
+	return nil
+}
+
+// PlayRegisteredSample plays a mode-0 alias from the sample-owned canonical
+// PCM cache. The pan reader is independent per voice, so simultaneous plays
+// cannot alter each other's placement or timeline.
+func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan float64) error {
+	if b == nil || sample == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.master || !(b.effects > 0) {
+		return nil
+	}
+	_, pan = clampPlayback(volume, pan)
+	data := sample.RegisteredPCM(b.sampleRate)
+	if len(data) == 0 {
+		return nil
+	}
+	player, err := b.newPlayer(newPanReader(data, pan))
+	if err != nil || player == nil {
+		return nil
+	}
+	v := voice{player: player, baseGain: volume}
+	b.applyGain(v)
+	b.admitVoiceLocked(v)
+	player.Play()
+	return nil
+}
+
+func (b *Backend) admitVoiceLocked(v voice) {
 	b.reapLocked()
 	// The voice limit is compared against the voices that are still playing:
 	// retail's reaper frees every finished buffer from the application pump,
@@ -249,8 +284,6 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 		b.players = append(b.players[:0], b.players[1:]...)
 	}
 	b.players = append(b.players, v)
-	player.Play()
-	return nil
 }
 
 // voiceLimit is the device's `MixingBuffers` default [R-AUD-01 §2].
@@ -327,7 +360,7 @@ func (b *Backend) PlayStream(sample *retailaudio.Sample, volume float64) error {
 	if len(data) == 0 {
 		return nil
 	}
-	player, err := b.newPlayer(data)
+	player, err := b.newPlayer(bytes.NewReader(data))
 	if err != nil {
 		return nil
 	}
@@ -380,7 +413,7 @@ func (b *Backend) PlayAlias(alias string, cache *retailaudio.SampleCache, volume
 	if err != nil || sample == nil {
 		return nil
 	}
-	return b.PlaySample(sample, volume, pan)
+	return b.PlayRegisteredSample(sample, volume, pan)
 }
 
 // Close stops and releases every player this backend opened.

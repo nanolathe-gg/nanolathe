@@ -3,13 +3,17 @@ package audio
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // Sample holds decoded PCM for one alias [fmt wav] [03 §8.2] (I13).
-// Byte layout is the contract; Go uses named fields (I13).
+// Byte layout is the contract; Go uses named fields (I13). A Sample is
+// immutable after decode or registry admission. Its optional converted PCM is
+// presentation-only, belongs to this sample's lifetime, and is not copied
+// into replacement aliases or retained by a process-global backend cache.
 type Sample struct {
 	Alias         string
 	Container     string // "RIFF", "DIGI", "raw" [fmt wav]
@@ -21,6 +25,48 @@ type Sample struct {
 	BitsPerSample uint16
 	Data          []byte // PCM bytes, owned copy
 	Provenance    vfs.Provenance
+
+	registeredMu  sync.Mutex
+	registeredPCM []registeredPCM
+}
+
+// registeredPCM is one output-rate version of unity-volume, centred stereo
+// float32 PCM. Four rates cover normal device changes without making every
+// formerly used session rate permanent.
+type registeredPCM struct {
+	rate int
+	data []byte
+}
+
+const maxRegisteredPCMRates = 4
+
+// RegisteredPCM returns canonical device PCM for a mode-0 registered sample.
+// It is intentionally sample-owned: active playback readers retain only their
+// byte slice, and replacing an alias with a new Sample cannot reuse old PCM.
+func (s *Sample) RegisteredPCM(rate int) []byte {
+	if s == nil || rate <= 0 {
+		return nil
+	}
+	s.registeredMu.Lock()
+	defer s.registeredMu.Unlock()
+	for _, cached := range s.registeredPCM {
+		if cached.rate == rate {
+			return cached.data
+		}
+	}
+
+	data := ConvertSample(s, 1, 0, rate)
+	if len(data) == 0 {
+		return nil
+	}
+
+	if len(s.registeredPCM) == maxRegisteredPCMRates {
+		copy(s.registeredPCM, s.registeredPCM[1:])
+		s.registeredPCM[len(s.registeredPCM)-1] = registeredPCM{rate: rate, data: data}
+		return data
+	}
+	s.registeredPCM = append(s.registeredPCM, registeredPCM{rate: rate, data: data})
+	return data
 }
 
 // SampleFormat describes PCM parameters for callers that only need the header.

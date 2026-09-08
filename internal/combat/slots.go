@@ -180,10 +180,7 @@ func aimRequirement(w *content.WeaponDef) (needLatch, needResult bool) {
 // Malformed states (zero maxHealth, negative health, overflow) are explicit unknowns per [06 §4.2] PLAN_09 Explicit unknowns.
 func ComputeStoredReload(health, maxHealth int32, kills int32, authoredReload int32) int32 {
 	// Tier: min(floor(unsigned kills/5),5) [06 §4.2] C7
-	tier := int32(uint32(kills) / 5) // unsigned division, floor [06 §4.2]
-	if tier > 5 {
-		tier = 5 // clamp [06 §4.2]
-	}
+	tier := veteranTier(kills) // shared unsigned stored-word reader [06 §4.2]
 	// veteranReload = floor((100-6*tier)*authoredReload/100) trunc toward zero [01 §8] I3 [06 §4.2]
 	veteranReload := int32((int64(100-6*tier) * int64(authoredReload)) / 100) // trunc toward zero [01 §8]
 
@@ -210,10 +207,7 @@ func ComputeStoredReload(health, maxHealth int32, kills int32, authoredReload in
 // VeteranReloadForTest exposes the intermediate veteran reload for testing C7 truncation vectors.
 // Not for gameplay; tests pin the truncation order per [06 §4.2] C7.
 func VeteranReloadForTest(kills int32, authoredReload int32) int32 {
-	tier := int32(uint32(kills) / 5)
-	if tier > 5 {
-		tier = 5
-	}
+	tier := veteranTier(kills)
 	return int32((int64(100-6*tier) * int64(authoredReload)) / 100) // trunc [01 §8] [06 §4.2]
 }
 

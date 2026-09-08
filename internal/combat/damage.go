@@ -238,7 +238,7 @@ func compareCaseInsensitive(a, b string) int {
 
 // veteranTier computes tier = min(floor(unsigned kills/5),5) [06 §4.2], [06 §9.2].
 func veteranTier(kills int32) int32 {
-	tier := int32(uint32(kills) / 5) // unsigned division, floor [06 §9.2], [06 §4.2]
+	tier := int32(uint16(kills) / 5) // unsigned stored-word reader [06 §9.2], [06 §4.2]
 	if tier > 5 {
 		tier = 5
 	}
@@ -330,8 +330,10 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 // — exact configuration aliases not recovered; bool gates preserve order.
 // Amount modulo and health subtraction ordering preserves low-32-bit wrap
 // [06 §9.2] per C20.
+// This standalone arithmetic entry models a present shooter; production passes
+// explicit shooter presence into weaponNominal before the shared receiver.
 func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32, defenderKills int32, isArmored bool, damageModifier int32, isHealing bool, globalDouble bool, globalHalf bool) uint16 {
-	amount := weaponNominal(baseDamage, falloff, attackerKills, globalDouble, globalHalf)
+	amount := weaponNominal(baseDamage, falloff, attackerKills, true, globalDouble, globalHalf)
 	if isHealing {
 		// Healing bypasses steps 5 and 6 [06 §9.2] C20.
 		return uint16(amount) // pack low 16 bits modulo 65,536 [06 §9.2] step 7
@@ -342,26 +344,18 @@ func ComputeScaledAmount(baseDamage int32, falloff float32, attackerKills int32,
 // weaponNominal is the weapon-side half of C20. It intentionally knows
 // nothing about the recipient: fixed producers have no weapon and enter the
 // receiver below with their established nominal directly [06 §9.2].
-func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, globalDouble bool, globalHalf bool) int32 {
+func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, hasAttacker, globalDouble, globalHalf bool) int32 {
 	// Step 1 already applied: baseDamage is selected override or default [06 §9.2] C19.
-	// Step 2: `amount = trunc((double)base * falloff)` [06 §9.2]. The base is
-	// promoted to double and multiplied by the STORED single-precision falloff
-	// of [06 §9.3] in double precision; only the conversion back to an integer
-	// narrows, and it truncates toward zero [01 §8] (I3).
-	//
-	// The product used to be formed and stored at single precision, which
-	// rounds where retail does not: a base of 100 against the float32 nearest
-	// 0.7 (about 0.6999999881) rounds up to exactly 70.0f and yields 70, while
-	// the promoted product is about 69.99999881 and truncates to 69. Twenty-odd
-	// stock default-damage and distance combinations differ by one because of
-	// it. The falloff's own single-precision store is untouched: it is the
-	// boundary [06 §9.3] names, and this step reads across it.
-	amount := int32(float64(baseDamage) * float64(falloff)) // [06 §9.2] step 2
+	// The base crosses the stored single-precision falloff boundary; only the
+	// signed-64 truncation retains its low 32 bits [06 §9.2][01 R-DET-01 §1].
+	amount := numeric.TruncateFloat64ToLow32(float64(baseDamage) * float64(falloff))
 
-	// Step 3: apply attacker veterancy 6% per tier, tier=min(kills/5,5), truncate [06 §9.2] [01 §8].
-	tierA := veteranTier(attackerKills)
-	// Multiply by (100+6*tier)/100 truncating toward zero.
-	amount = int32((int64(amount) * int64(100+6*tierA)) / 100) // truncate integer percentage [01 §8] [06 §9.2] step 3
+	// A null shooter skips this stage, including the tier-zero multiplication.
+	// Percentage products wrap before the signed division [06 §9.2].
+	if hasAttacker {
+		tierA := veteranTier(attackerKills)
+		amount = (amount * (100 + 6*tierA)) / 100
+	}
 
 	// Step 4: apply recovered global double/half gates [06 §9.2] step 4.
 	// Bits are the global options word's bit7 (0x80) for double and bit8
@@ -385,16 +379,15 @@ func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, dama
 	// Step 5: if target is in armored state and incoming amount <30000, apply fixed-point damage modifier [06 §9.2] step 5.
 	// The modifier is definition's fixed-point scale >>16 (damageModifier is 16.16, 65536 =1.0) [02 "Unit record"].
 	if isArmored && amount < 30000 {
-		// Apply as (amount * modifier) >>16 with truncation toward zero [01 §8].
-		// modifier is Fixed 16.16; Go division truncates toward zero; shift of positive matches trunc.
-		// Use int64 to avoid overflow.
+		// The full signed product uses an arithmetic right shift, including
+		// its downward rounding for a negative product [06 §9.2].
 		amount = int32((int64(amount) * int64(damageModifier)) >> 16) // [06 §9.2] step 5
 	}
 
 	// Step 6: apply defender veterancy ((25-tier)*4)/100, truncate [06 §9.2] step 6.
 	tierD := veteranTier(defenderKills)
-	defFactor := (25 - tierD) * 4                            // (25-tier)*4
-	amount = int32((int64(amount) * int64(defFactor)) / 100) // truncate [01 §8] [06 §9.2] step 6
+	defFactor := (25 - tierD) * 4
+	amount = (amount * defFactor) / 100 // wrap before signed division [06 §9.2]
 
 	// Step 7: pack low 16 bits into packet, modulo 65,536 [06 §9.2].
 	return uint16(amount) // modulo 65,536 [06 §9.2] step 7
@@ -404,8 +397,12 @@ func scaleAcceptedAmount(amount int32, defenderKills int32, isArmored bool, dama
 // [06 §9.2] C20, C21. It selects base damage via override lookup, applies steps
 // 2-7, and fills packet fields [06 §9.2] C21.
 func ComputePacket(weapon *content.WeaponDef, targetUnitName string, falloff float32, attacker pool.Handle, victim pool.Handle, attackerKills int32, defenderKills int32, isArmored bool, damageModifier int32, isHealing bool, globalDouble bool, globalHalf bool, direction uint8, kind uint8) Packet {
-	base := SelectBaseDamage(weapon, targetUnitName)                                                                                        // [06 §9.2] step 1
-	amt := ComputeScaledAmount(base, falloff, attackerKills, defenderKills, isArmored, damageModifier, isHealing, globalDouble, globalHalf) // [06 §9.2] steps 2-7
+	base := SelectBaseDamage(weapon, targetUnitName) // [06 §9.2] step 1
+	nominal := weaponNominal(base, falloff, attackerKills, attacker != 0, globalDouble, globalHalf)
+	amt := uint16(nominal)
+	if !isHealing {
+		amt = scaleAcceptedAmount(nominal, defenderKills, isArmored, damageModifier)
+	}
 	return Packet{
 		Victim:    uint16(victim),   // 0=null, no generation [06 §5.1] (I5) C18
 		Attacker:  uint16(attacker), // 0=null, no validation [06 §5.1] C18

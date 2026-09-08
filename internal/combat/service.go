@@ -2515,7 +2515,7 @@ func weaponDamageNominal(weapon *content.WeaponDef, victim *units.Unit, rawAttac
 	if rawAttacker != nil {
 		attackerKills = rawAttacker.Kills
 	}
-	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, false, false)
+	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, rawAttacker != nil, false, false)
 }
 
 func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {

@@ -342,8 +342,14 @@ The damage packet is nine bytes: a builder tag, the victim and shooter ids as
 is the victim's alive bit plus a clear dead latch and nothing more — a reused
 slot accepts a stale packet, and the attacker is not validated at all.
 
-`ComputeScaledAmount` is the funnel, and its step order is the contract (C20).
-The armor table it selects from is the **weapon's own `[DAMAGE]` block**, keyed
+The production weapon producer uses `weaponDamageNominal`/`weaponNominal`
+before the shared `Service.AcceptDamage` receiver; fixed producers enter the
+receiver with their established nominal directly. The arithmetic order is C20:
+falloff conversion retains the low word, a null shooter skips attacker scaling,
+and percentage products wrap before division. `ComputeScaledAmount` is a
+standalone arithmetic helper that assumes a present shooter; `ComputePacket`
+uses its explicit shooter id. The table selected by the weapon producer is the
+**weapon's own `[DAMAGE]` block**, keyed
 by the target definition's exact name; there is no `armor.tdf` and no armor
 category `[06 R-DMG-01 §1]`. The armored gate reads the victim's runtime
 posture bit, not the definition's `armoredstate` flag, which has no reader

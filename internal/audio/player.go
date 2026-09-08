@@ -217,6 +217,14 @@ type Output interface {
 	PlaySample(*Sample, float64, float64) error
 }
 
+// RegisteredOutput optionally accepts a mode-0 registered sample through a
+// sample-owned canonical PCM cache. Outputs that do not implement it retain
+// the ordinary PlaySample path.
+type RegisteredOutput interface {
+	Output
+	PlayRegisteredSample(*Sample, float64, float64) error
+}
+
 // StreamOutput is the optional delayed-stream seam used by briefing and
 // glamour narration. Ordinary cue outputs need only implement Output; stream
 // support is discovered at the presentation boundary and missing support is

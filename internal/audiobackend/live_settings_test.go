@@ -2,6 +2,7 @@ package audiobackend
 
 import (
 	"encoding/binary"
+	"io"
 	"math"
 	"testing"
 
@@ -29,7 +30,11 @@ func (p *observedPlayer) firstOutput() float64 {
 func TestLiveEffectsAndModeOff(t *testing.T) {
 	b := New()
 	var players []*observedPlayer
-	b.createPlayer = func(data []byte) (outputPlayer, error) {
+	b.createPlayer = func(source io.Reader) (outputPlayer, error) {
+		data, err := io.ReadAll(source)
+		if err != nil {
+			return nil, err
+		}
 		p := &observedPlayer{data: data}
 		players = append(players, p)
 		return p, nil
@@ -39,7 +44,7 @@ func TestLiveEffectsAndModeOff(t *testing.T) {
 		sample.Data[i] = 192
 	}
 	b.SetEffectsVolume(0.5)
-	if err := b.PlaySample(sample, 0.5, 0); err != nil {
+	if err := b.PlayRegisteredSample(sample, 0.5, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.PlayStream(sample, 1); err != nil {
@@ -60,7 +65,7 @@ func TestLiveEffectsAndModeOff(t *testing.T) {
 	assertOutput(0.0625, 0.125)
 	b.SetEffectsVolume(0)
 	assertOutput(0, 0)
-	if err := b.PlaySample(sample, 1, 0); err != nil {
+	if err := b.PlayRegisteredSample(sample, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	if len(players) != 2 {
@@ -78,7 +83,7 @@ func TestLiveEffectsAndModeOff(t *testing.T) {
 	if !narration.playing || narration.stops != 0 {
 		t.Fatal("ordinary stop-all tore down the separate narration stream")
 	}
-	if err := b.PlaySample(sample, 1, 0); err != nil {
+	if err := b.PlayRegisteredSample(sample, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	if len(players) != 2 {
@@ -100,7 +105,11 @@ func TestLiveEffectsAndModeOff(t *testing.T) {
 func TestStreamStartsThroughMutedOrdinaryOutput(t *testing.T) {
 	b := New()
 	p := &observedPlayer{}
-	b.createPlayer = func(data []byte) (outputPlayer, error) { p.data = data; return p, nil }
+	b.createPlayer = func(source io.Reader) (outputPlayer, error) {
+		data, err := io.ReadAll(source)
+		p.data = data
+		return p, err
+	}
 	b.SetMasterEnabled(false)
 	b.SetEffectsVolume(0)
 	if err := b.PlayStream(&retailaudio.Sample{Channels: 1, SampleRate: 11025, BitsPerSample: 8, Data: []byte{192}}, 1); err != nil {

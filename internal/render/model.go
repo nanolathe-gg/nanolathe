@@ -213,10 +213,9 @@ type PrimitiveDraw struct {
 	ColorIndex    uint32
 	TextureName   string
 	IsColored     int32
-	VertexIndices []uint16           // in load-fixed order [03 §2.4] C20
-	WorldVerts    [][3]numeric.Fixed // world-space vertices for this primitive [03 §5.2] C13 position only at final placement [03 §2.4] C24
-	ShadeRow      int                // first corner's SHD row, or NoShadeRow [R-RND-02A]
-	ShadeRows     []int              // one SHD row per corner; nil on the unshaded path [R-RND-02A]
+	VertexIndices []uint16 // borrowed immutable compiled indices in load-fixed order [03 §2.4] C20
+	ShadeRow      int      // first corner's SHD row, or NoShadeRow [R-RND-02A]
+	ShadeRows     []int    // one SHD row per corner; nil on the unshaded path [R-RND-02A]
 }
 
 // DefaultModelLight is the shipped model light direction [03 §2.4.1].
@@ -394,25 +393,11 @@ func buildPieceDraws(m *model.Model, states []model.PieceState, worldPos [3]nume
 		// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
 		prims := make([]PrimitiveDraw, len(piece.Primitives))
 		for pi, pr := range piece.Primitives {
-			idxCopy := append([]uint16(nil), pr.VertexIndices...)
-			worldPrimVerts := make([][3]numeric.Fixed, len(pr.VertexIndices))
-			for k, vi := range pr.VertexIndices {
-				if int(vi) < len(piece.Vertices) {
-					localV := piece.Vertices[vi]
-					worldLocal := tr.Apply(localV) // [03 §2.4] C21
-					worldPrimVerts[k] = [3]numeric.Fixed{
-						worldLocal[0].Add(worldPos[0]),
-						worldLocal[1].Add(worldPos[1]),
-						worldLocal[2].Add(worldPos[2]),
-					}
-				}
-			}
 			pd := PrimitiveDraw{
 				ColorIndex:    pr.ColorIndex,
 				TextureName:   pr.TextureName,
 				IsColored:     pr.IsColored,
-				VertexIndices: idxCopy,
-				WorldVerts:    worldPrimVerts,
+				VertexIndices: pr.VertexIndices,
 				ShadeRow:      NoShadeRow,
 			}
 			if shaded {
