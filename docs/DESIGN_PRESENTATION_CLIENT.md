@@ -244,6 +244,58 @@ away. Each submitted reader holds independent pan state while backend base and
 FX gains remain live output settings. Mode-1 voices and mode-2 streams use the
 ordinary conversion boundary. §3.3 C20 states the API and fallback contract.
 
+**REND-10 configured limit and tracking contract.** `audio.OutputConfig`
+carries `MixingBuffers int` from the stored preference through delayed device
+installation and subsequent option application. `Backend.ConfigureOutput`
+retains it; changing it does not stop voices until the next admission. The
+constructor defaults to eight [03 R-AUD-01 §2]. Nonpositive values keep the
+existing settings-layer host recovery to eight; that is not a retail clamp.
+Positive values have no upper clamp [02 R-SND-01 §2].
+
+For the existing non-looping producers, admission preserves the current
+completion reap and oldest-live ordering, then compares the tracked count to
+the configured limit. The tracking table holds at most 32 voices. When it is
+full and the configured limit exceeds that count, a new voice plays without a
+tracking entry [03 R-AUD-01 §1 steps 2,7]. Such a voice is outside the ordinary
+tracked stop-all/count. Separate host-only references let FX gain changes
+reach these voices too, as the original system-wide wave-output setting did;
+completion and application shutdown release those references. They never
+participate in admission or MODE Off stop-all.
+
+This slice does not implement per-sample four-instance restart or exclusive
+loops. Device-player creation still precedes stealing, so failure ordering
+remains a REND-10 gap. It does not change RNG ownership or the separate
+narration stream. Tests exercise actual playback at limits 1/3/32, live limit
+lowering, completion reaping, and the tracked/untracked boundary above 32;
+setup tests verify delayed installation and live forwarding.
+
+**REND-10 transient admission contract.** The concrete
+`Backend.PlaySample` entry owns mode-1 unit voices and TEST previews. Production
+alias playback uses `PlayRegisteredSample` because this backend implements
+`audio.RegisteredOutput`; the generic service fallback does not reclassify
+registered playback on this backend. No public signature change is needed.
+
+Before creating a mode-1 device player, reap stopped transient references and
+ordinary voices, then drop the request if all eight transient slots are busy
+[03 R-AUD-01 §1]. This gate precedes ordinary mixer admission: a dropped ninth
+transient must neither create a player nor steal a tracked voice. Successful
+playback retains one transient reference until stopped/completed. A voice
+stopped by global stealing frees its transient slot at the next reap. Failed
+creation occupies no slot. Pump reaping uses the existing presentation pacing
+[03 R-AUD-02 §2]. Transient bookkeeping never adds to the global tracked count,
+changes host gain ownership, or extends MODE Off beyond tracked voices.
+Registered aliases and streams do not consume transient slots; application
+shutdown releases existing player ownership and clears transient references.
+
+Acceptance uses actual backend entry points with a configured limit above eight
+to distinguish this gate from global stealing, completion and steal-then-reap,
+registered/stream admission while transient slots are full, and failed creation.
+Four-instance restart, exclusive loops and the existing device failure ordering
+remain separate REND-10 work. Ordinary registered-alias admission retains its
+existing reap-before-admission behavior, although retail limits that eager reap
+to mode-1 loads and the ≥99 ms pump; this unit does not broaden that unrelated
+correction. No authoritative RNG or simulation timing changes.
+
 ## 3. Contracts
 
 Two contract series meet in these packages, and both keep the numbering their

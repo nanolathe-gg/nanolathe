@@ -33,14 +33,14 @@ func TestConfigureOutputRetainsStateUntilOutputInstallation(t *testing.T) {
 		SetGlobalOutput(previous)
 	}()
 	SetGlobalOutput(nil)
-	want := OutputConfig{MasterEnabled: true, EffectsVolume: 0.5, SoundMode: SoundMode3D}
+	want := OutputConfig{MasterEnabled: true, EffectsVolume: 0.5, SoundMode: SoundMode3D, MixingBuffers: 3}
 	ConfigureOutput(want)
 	spy := &configuredOutputSpy{}
 	SetGlobalOutput(spy)
 	if len(spy.configs) != 1 || spy.configs[0] != want {
 		t.Fatalf("delayed output config = %#v, want %#v", spy.configs, want)
 	}
-	updated := OutputConfig{MasterEnabled: false, EffectsVolume: 0, SoundMode: SoundModeMono}
+	updated := OutputConfig{MasterEnabled: false, EffectsVolume: 0, SoundMode: SoundModeMono, MixingBuffers: 32}
 	ConfigureOutput(updated)
 	if len(spy.configs) != 2 || spy.configs[1] != updated {
 		t.Fatalf("live output config = %#v, want %#v", spy.configs, updated)

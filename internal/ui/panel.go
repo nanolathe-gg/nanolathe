@@ -275,9 +275,6 @@ func NewPanel(window *gui.Window) *Panel {
 	if window == nil {
 		return p
 	}
-	if window.Focus >= 0 && window.Focus < len(window.Gadgets) {
-		p.focus = window.Focus
-	}
 	// The window builder zeroes `colorf` for every button, label and picture
 	// box at open; every other kind keeps the authored word, which for a
 	// listbox and a text input really is a colour-table entry
@@ -297,6 +294,16 @@ func NewPanel(window *gui.Window) *Panel {
 		if gadget.Kind == gui.KindListBox {
 			p.states[i].list = &List{}
 		}
+	}
+	if window.Header.DefaultFocus == "" {
+		// The empty authored default starts at the header and traverses forward
+		// after runtime activity has been installed [07 R-WGT-01 §2].
+		p.focus = 0
+		p.MoveFocus(FocusForward)
+	} else if window.Focus >= 0 && window.Focus < len(window.Gadgets) {
+		// A nonempty default retains the compiler's exact first-match result,
+		// including its missing-name -1 result [07 R-FE-01 §12].
+		p.focus = window.Focus
 	}
 
 	return p
@@ -498,6 +505,9 @@ func (p *Panel) ActiveAt(index int) bool { s := p.stateAt(index); return s != ni
 func (p *Panel) SetActiveAt(index int, active bool) {
 	if s := p.stateAt(index); s != nil {
 		s.active = active
+		if !active && index == p.focus {
+			p.MoveFocus(FocusForward)
+		}
 	}
 }
 func (p *Panel) SetActive(name string, active bool) { p.SetActiveAt(p.Index(name), active) }

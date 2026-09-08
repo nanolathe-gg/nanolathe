@@ -232,6 +232,21 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   mode's contract, owned by the presentation design; GPU Classic follows the visual-fidelity policy of §1/§5.1, and Enhanced
   follows its separately designed presentation divergences.
 
+### Retained list camera ownership
+
+`List.Clone` captures each non-nil terrain camera by value, including zoom;
+subsequent movement of the live camera cannot change a cloned terrain command.
+Nil-camera projection remains distinct. The ordinary recording path retains
+its same-frame borrowed camera and adds no snapshot allocation. Modern terrain
+already uses the command's copied origin and destination dimensions.
+
+This closes only the camera dependency of REVIEW MAINT-REND-01. Classic model
+commands still index the client's per-frame composed-model table; a cloned list
+with those commands is not yet a durable cross-frame classic replay artifact.
+Owned geometry packets remain available to the modern executor. Retained
+terrain tests must replay A after recording B with a changed camera and compare
+actual classic pixels, including zoom and nil-camera projection.
+
 ## 4. Retail behaviour that is not a bug
 
 Everything the presentation design lists under this heading holds for both

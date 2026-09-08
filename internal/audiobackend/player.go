@@ -13,13 +13,21 @@ import (
 // Backend is the PCM output over Ebitengine audio [03 §8.2][03 §8.3].
 // Device construction remains lazy until the presentation edge admits a sample.
 type Backend struct {
-	sampleRate   int
-	master       bool
-	effects      float64
-	soundMode    retailaudio.SoundMode
-	mu           sync.Mutex
-	ctx          *audio.Context
-	players      []voice
+	sampleRate int
+	voiceLimit int
+	master     bool
+	effects    float64
+	soundMode  retailaudio.SoundMode
+	mu         sync.Mutex
+	ctx        *audio.Context
+	players    []voice
+	// transients retains mode-1 sample ownership independently of the ordinary
+	// voice table. It is a separate eight-entry loader admission limit, not a
+	// contribution to the mixer's tracked voice count [03 R-AUD-01 §1].
+	transients []voice
+	// untracked retains host gain/cleanup ownership only, outside the retail
+	// admission count and stop-all table [03 R-AUD-01 §1 step 7].
+	untracked    []voice
 	streams      []voice
 	createPlayer func(io.Reader) (outputPlayer, error)
 	lastPump     time.Time
@@ -67,7 +75,7 @@ func NewWithRate(rate int) *Backend {
 	if rate <= 0 {
 		rate = 44100
 	}
-	return &Backend{sampleRate: rate, master: true, effects: 1, soundMode: retailaudio.SoundModeMono}
+	return &Backend{sampleRate: rate, master: true, effects: 1, soundMode: retailaudio.SoundModeMono, voiceLimit: defaultVoiceLimit}
 }
 
 // Capabilities reports what this backend offers. A nil backend reports none.
@@ -112,6 +120,13 @@ func (b *Backend) ConfigureOutput(config retailaudio.OutputConfig) {
 	b.SetMasterEnabled(config.MasterEnabled)
 	b.SetEffectsVolume(config.EffectsVolume)
 	b.SetSoundMode(config.SoundMode)
+	b.mu.Lock()
+	b.voiceLimit = config.MixingBuffers
+	if b.voiceLimit <= 0 {
+		// Preserve the existing settings host recovery, not a retail clamp.
+		b.voiceLimit = defaultVoiceLimit
+	}
+	b.mu.Unlock()
 }
 
 // SetMasterEnabled controls ordinary cues. MODE Off stops the voice table;
@@ -146,6 +161,9 @@ func (b *Backend) SetEffectsVolume(volume float64) {
 		b.applyGain(v)
 	}
 	for _, v := range b.streams {
+		b.applyGain(v)
+	}
+	for _, v := range b.untracked {
 		b.applyGain(v)
 	}
 }
@@ -256,6 +274,13 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 		return nil
 	}
 	_, pan = clampPlayback(volume, pan)
+	// Mode-1 loads first reclaim finished transient references and ordinary
+	// voices. A ninth live transient is dropped before it creates a device
+	// player or reaches the ordinary mixer [03 R-AUD-01 §1].
+	b.reapTransientAdmissionLocked()
+	if len(b.transients) >= transientVoiceSlots {
+		return nil
+	}
 	data := retailaudio.ConvertSample(sample, 1, pan, b.sampleRate)
 	if len(data) == 0 {
 		return nil
@@ -271,6 +296,7 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 	b.applyGain(v)
 	b.admitVoiceLocked(v)
 	player.Play()
+	b.transients = append(b.transients, v)
 	return nil
 }
 
@@ -310,18 +336,33 @@ func (b *Backend) admitVoiceLocked(v voice) {
 	// [R-AUD-02 §2]. Without the reap the list saturated at eight voices ever
 	// started, and from the ninth cue on every play closed a sound that had
 	// only just begun.
-	for len(b.players) >= voiceLimit {
+	limit := b.voiceLimit
+	if limit <= 0 {
+		limit = defaultVoiceLimit
+	}
+	for len(b.players) >= limit {
 		// Oldest start first: the steal picks the smallest sequence number
 		// among the non-looping voices [R-AUD-01 §1 step 2]. Appends keep the
 		// slice in start order, so that voice is the front one.
 		release(b.players[0].player)
 		b.players = append(b.players[:0], b.players[1:]...)
 	}
-	b.players = append(b.players, v)
+	// A full tracking table does not reject playback [03 R-AUD-01 §1 step 7].
+	// Host-only references preserve the shared output gain without admitting
+	// these players into the retail count or stop-all table.
+	if len(b.players) < trackedVoiceSlots {
+		b.players = append(b.players, v)
+	} else {
+		b.untracked = append(b.untracked, v)
+	}
 }
 
-// voiceLimit is the device's `MixingBuffers` default [R-AUD-01 §2].
-const voiceLimit = 8
+// Device defaults and tracking capacity [03 R-AUD-01 §1][03 R-AUD-01 §2].
+const (
+	defaultVoiceLimit   = 8
+	trackedVoiceSlots   = 32
+	transientVoiceSlots = 8
+)
 
 // release frees one voice slot: the player stops producing sound at once and
 // stops reading its source, and the caller then drops its reference.
@@ -347,6 +388,17 @@ func release(player outputPlayer) {
 // b.mu.
 func (b *Backend) reapLocked() {
 	b.players = reapVoices(b.players)
+	b.untracked = reapVoices(b.untracked)
+}
+
+// reapTransientAdmissionLocked drops stopped mode-1 ownership references and
+// then performs the existing ordinary voice reap. It is used before a mode-1
+// load and by the presentation pump; registered aliases keep their existing
+// ordinary-admission reap path [03 R-AUD-01 §1][03 R-AUD-02 §2]. The caller
+// holds b.mu.
+func (b *Backend) reapTransientAdmissionLocked() {
+	b.transients = dropStoppedVoices(b.transients)
+	b.reapLocked()
 }
 
 func reapVoices(voices []voice) []voice {
@@ -354,6 +406,21 @@ func reapVoices(voices []voice) []voice {
 	for _, v := range voices {
 		if !v.player.IsPlaying() {
 			release(v.player)
+			continue
+		}
+		live = append(live, v)
+	}
+	clear(voices[len(live):])
+	return live
+}
+
+// dropStoppedVoices releases no player: every transient is already retained
+// by the ordinary tracked or host-only list. This avoids releasing a completed
+// or stolen device player once for each ownership reference.
+func dropStoppedVoices(voices []voice) []voice {
+	live := voices[:0]
+	for _, v := range voices {
+		if !v.player.IsPlaying() {
 			continue
 		}
 		live = append(live, v)
@@ -375,7 +442,7 @@ func (b *Backend) Pump(now time.Time) {
 		return
 	}
 	b.lastPump = now
-	b.reapLocked()
+	b.reapTransientAdmissionLocked()
 	b.streams = reapVoices(b.streams)
 }
 
@@ -463,6 +530,11 @@ func (b *Backend) Close() {
 	for _, v := range b.streams {
 		release(v.player)
 	}
+	for _, v := range b.untracked {
+		release(v.player)
+	}
 	b.players = nil
 	b.streams = nil
+	b.untracked = nil
+	b.transients = nil
 }

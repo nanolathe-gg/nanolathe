@@ -184,7 +184,8 @@ func (c *Client) recordFrame() {
 // The returned list is same-frame use only. Its backing arrays are reused by the
 // next RecordFrame or Frame (c.list.Reset), so the caller must replay it before
 // the next frame is recorded and must not retain it (ComposeFrameSnapshot's
-// List.Clone is the durable copy).
+// List.Clone owns its arrays and cameras; classic model refs still require
+// the same-frame client table).
 func (c *Client) RecordFrame() *drawlist.List {
 	if c == nil {
 		return nil

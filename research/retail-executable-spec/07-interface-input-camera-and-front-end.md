@@ -818,8 +818,10 @@ themselves (§6). Every other token passes through.
 
 **Focus order (Established by direct static trace for windows with at most
 49 controls).** No focus (`−1`) returns immediately without changing focus or
-capture. Otherwise traversal first constructs a canonical-X value for every
-control in file order, including controls later rejected as candidates. For
+capture. Header index 0 retains canonical X zero, independent of its authored
+rectangle X; the population walk begins at control index 1. Otherwise traversal
+constructs a canonical-X value for every control in file order, including
+controls later rejected as candidates. For
 each control, scan the prior canonical values from index 1 until the first
 zero. The first value within nine pixels of the control's raw X donates its
 value: the signed difference must be strictly greater than −10 and strictly

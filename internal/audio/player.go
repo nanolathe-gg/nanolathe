@@ -226,6 +226,7 @@ type OutputConfig struct {
 	MasterEnabled bool
 	EffectsVolume float64
 	SoundMode     SoundMode
+	MixingBuffers int // configured voice limit [03 R-AUD-01 §2]
 }
 
 // ConfigurableOutput is the optional output setup seam. Ordinary Output
@@ -258,7 +259,7 @@ type StreamOutput interface {
 var (
 	globalMu     sync.Mutex
 	globalOutput Output
-	globalConfig = OutputConfig{MasterEnabled: true, EffectsVolume: 1, SoundMode: SoundModeMono}
+	globalConfig = OutputConfig{MasterEnabled: true, EffectsVolume: 1, SoundMode: SoundModeMono, MixingBuffers: 8}
 )
 
 // SetGlobalOutput installs the presentation playback boundary and gives a

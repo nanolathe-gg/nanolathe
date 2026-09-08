@@ -229,7 +229,7 @@ unusable defaults, grey-bit polarity, indexed duplicates and excluded focused
 kinds in both callers. A helper tested without the two live callers is not
 accepted.
 
-**I04 focus traversal API and lifecycle contract.**
+**I04 focus traversal API and lifecycle contract (implemented; keyboard dispatch remains open).**
 `internal/ui` owns `FocusDirection` (`FocusForward`, `FocusBackward`,
 `FocusUp`, `FocusDown`) and `Panel.MoveFocus(direction FocusDirection) bool`.
 The method applies [07 R-WGT-01 §2] focus order to indexed runtime activity,

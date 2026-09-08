@@ -52,7 +52,7 @@ func TestDefaultKeysThroughBothInputHandlers(t *testing.T) {
 				t.Run(tc.name, func(t *testing.T) {
 					oldPanel, oldAssets, oldState, oldClient := optionsPanel, optionsAssets, optionsState, clPtr
 					t.Cleanup(func() { optionsPanel, optionsAssets, optionsState, clPtr = oldPanel, oldAssets, oldState, oldClient })
-					w := &gui.Window{Focus: 1, Header: gui.Header{CrDefault: "SHADING"}, Gadgets: []gui.Gadget{
+					w := &gui.Window{Focus: 1, Header: gui.Header{CrDefault: "SHADING", DefaultFocus: "ANTI"}, Gadgets: []gui.Gadget{
 						{Kind: gui.KindPanel},
 						{Kind: gui.KindButton, Name: "ANTI", Active: 1},
 						{Kind: gui.KindButton, Name: "SHADING", Active: 1},

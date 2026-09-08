@@ -121,13 +121,15 @@ func TestPanelZeroesFlashRowForButtonsLabelsAndPictures(t *testing.T) {
 
 func TestPanelStartsAtAuthoredFocusForKeyboardActivation(t *testing.T) {
 	w := testWindow()
+	w.Header.DefaultFocus = "OK"
 	w.Focus = 1
 	if got := NewPanel(w).Focused(); got != 1 {
 		t.Fatalf("authored focus=%d, want 1 for Enter/Space activation before mouse input", got)
 	}
-	w.Focus = len(w.Gadgets)
+	w.Header.DefaultFocus = "MISSING"
+	w.Focus = -1
 	if got := NewPanel(w).Focused(); got != -1 {
-		t.Fatalf("invalid authored focus=%d, want -1", got)
+		t.Fatalf("missing authored default focus=%d, want -1", got)
 	}
 }
 

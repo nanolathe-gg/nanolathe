@@ -9,12 +9,13 @@ import (
 // duplicate; the returned callback name keeps its authored bytes [07 R-FE-02 §5]
 // [07 R-WGT-01 §2].
 func TestDefaultKeyActionPreservesSelectedRecord(t *testing.T) {
-	w := &gui.Window{Focus: 2, Header: gui.Header{CrDefault: " SAME "}, Gadgets: []gui.Gadget{
+	w := &gui.Window{Focus: 1, Header: gui.Header{CrDefault: " SAME ", DefaultFocus: " SAME "}, Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel},
 		{Kind: gui.KindButton, Name: " SAME ", Active: 1},
 		{Kind: gui.KindButton, Name: " SAME ", Active: 1},
 	}}
 	p := NewPanel(w)
+	p.SetFocus(2)
 	if a := p.DefaultKeyAction(true); a.Kind != ActionActivate || a.Index != 1 || a.Gadget != " SAME " {
 		t.Fatalf("Enter action=%+v", a)
 	}

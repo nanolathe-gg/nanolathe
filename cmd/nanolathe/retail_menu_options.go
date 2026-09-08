@@ -989,6 +989,7 @@ func applyRetailAudioOptions(a settings.Audio) {
 		MasterEnabled: a.SoundEnabled(),
 		EffectsVolume: retailWaveVolumeScale(a.FXVol),
 		SoundMode:     audio.SpatialModeFromPreference(a.SoundMode),
+		MixingBuffers: a.MixingBuffers,
 	})
 }
 

@@ -292,7 +292,7 @@ type Surface struct {
 // Terrain records one terrain blit (docs/DESIGN_GPU_RENDERER.md §2.1). Terrain
 // is immutable after load. OriginX/OriginY and DstW/DstH capture the projection
 // values used by the GPU executor, while the classic executor still reads Cam.
-// A retained record therefore requires the source camera to remain unchanged.
+// A live record requires the source camera to remain unchanged; Clone captures it.
 //
 // A tile at world pixel (px, pz) lands at (px-OriginX, pz-OriginY); OriginX and
 // OriginY fold the camera scroll and the orthographic beam offset [03 §2.5].
@@ -301,7 +301,7 @@ type Terrain struct {
 	OriginX, OriginY int32
 	DstW, DstH       int32
 	// Cam is the live camera the classic executor reads for per-tile projection.
-	// Clone shares this pointer; it does not capture the camera's state.
+	// Clone replaces this pointer with an owned camera value.
 	Cam *camera.Camera
 }
 
@@ -498,14 +498,20 @@ func (l *List) Replay(s Sink) {
 // Clone copies the list's command slices, geometry packets and mutable pixel
 // buffers so resetting or recording into the source list cannot overwrite them.
 // Immutable loaded resources (GAF/PCX frames, palettes and terrain) are shared.
-// It also shares Terrain.Cam and each Model.Ref's external lookup dependency:
-// callers must replay those commands before changing the source camera or
-// replacing its model table. Clone is not a self-contained later-frame replay
+// Terrain cameras are copied. Each Model.Ref still has an external lookup
+// dependency: callers must replay classic models before replacing the source
+// model table. Clone is not a self-contained later-frame replay
 // artifact [docs/DESIGN_GPU_RENDERER.md C-G5].
 func (l *List) Clone() List {
 	var c List
 	c.order = append([]tag(nil), l.order...)
 	c.terrain = append([]Terrain(nil), l.terrain...)
+	for i, terrain := range l.terrain {
+		if terrain.Cam != nil {
+			captured := *terrain.Cam
+			c.terrain[i].Cam = &captured
+		}
+	}
 	c.sprite = append([]Sprite(nil), l.sprite...)
 	c.glyphs = append([]Glyphs(nil), l.glyphs...)
 	c.fill = append([]Fill(nil), l.fill...)
