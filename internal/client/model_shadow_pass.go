@@ -39,14 +39,9 @@ const shadowXOffset int32 = 5
 // mobile/Digger branches it stands in for until their own silhouette-clip
 // shadows are built, so the vehicle-shadow gate still applies to those.
 //
-// TODO(question): reconcile this existing classic visibility gate with
-// [03 R-REN-03D §1, §4] and the ALP-presence ambiguity in [03 Missing and unknown].
-// A trace of the palette-init request word and tinted-blitter flag would settle
-// it. GPU parity currently consumes the same CastsShadow producer decision.
-//
-// The SHADING option is not part of any branch's gate — that reading of
-// "every tinted blit is gated on shading" was wrong. SHADING selects the
-// shaded model renderer only [R-RND-02A]; it has no effect on shadows.
+// The tinted blitter's alpha-blend capability is enabled at window startup,
+// independently of the SHADING preference [03 R-REN-03D §4]. SHADING selects
+// shaded structure bodies [R-RND-02A]; it does not suppress shadows.
 func (c *Client) castsModelShadow(noShadow, canHover, floater, structure bool) bool {
 	if c == nil || c.pal == nil {
 		return false

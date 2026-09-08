@@ -887,8 +887,10 @@ texture-name, and colored/texture flags.
 
 Model loading resolves object names from unit catalog data, sorts the catalog by
 case-insensitive name, and caches model pointers per unit type. The sort makes
-piece/type identity independent of provider enumeration order. N-gon primitives
-are expanded into triangles by a fan-like operation. Leaf pieces with a vertex
+piece/type identity independent of provider enumeration order. **Established
+(direct-static):** colored primitives retain their authored polygon ring for the
+generic edge-table filler; textured primitives draw only at arity four. There
+is no fan-triangulation step [§2.4.1] [R-RAST-01 §1]. Leaf pieces with a vertex
 but no primitive are valid attachment/emit points.
 
 **Established (direct static trace).** After relocation and before any draw,
@@ -1516,8 +1518,9 @@ master-shadow and `noshadow` tests, retail selects exactly one branch:
 
 All three branches place the shadow five pixels right of the body, shear it by
 the terrain height under the subject, and blend palette index 0 through `ALP`.
-The tinted blitter produces no visible shadow when `Shading` is disabled. None
-of the branches uses a stencil, dither, or `SHD` row.
+The tinted blitter requires the alpha-blend table capability enabled at window
+startup; `Shading` does not control shadow visibility [R-REN-03D §4]. None of
+the branches uses a stencil, dither, or `SHD` row.
 
 **Table roster.** The renderer installs **five** tables. In install order and
 size: the 65,536-byte
@@ -1588,9 +1591,9 @@ exactly one branch:
    inference** from the loader walk; a live-type writer to ordinal 0 would
    settle it.
 
-All branches end at the tinted blitter of §4. The blitter itself returns
-without drawing when **`Shading`** is disabled, so that option is an effective
-visibility gate rather than a branch-selection predicate.
+All branches end at the tinted blitter of §4. Its alpha-blend table capability
+is enabled at window startup independently of the **`Shading`** preference.
+Turning that preference off does not suppress shadows.
 
 The bulk INI shadow key writes one value into the feature-shadow bit and then
 fans it down to the vehicle and master bits, so a player toggling shadows moves
@@ -1671,8 +1674,26 @@ every shadow pixel is index 0, the result is `ALP[0*256 + ground]`: each ground
 pixel snapped to the nearest palette entry halfway to black. No `SHD` row, no
 stencil, no dither, no per-category darkness.
 
-The whole blitter early-returns unless the `Shading` option bit is set, which
-is the effective visibility gate stated in §1.
+**Established (direct-static): table capabilities and display preferences are
+separate state.** The tinted blitter returns without drawing when the window's
+alpha-blend table capability is clear. The same capability controls allocation,
+loading and rebuilding of `ALP`. Ordinary application startup explicitly requests
+this capability before window initialization; it also requests the shade, light,
+gray and blue tables. These resources live for the window's lifetime and are
+released during window teardown. Changing display mode preserves their flags.
+
+The `Shading` preference's INI loader, Options handler and restore-defaults
+handler write a different state word. That preference selects the shaded
+structure-body renderer [R-RND-02A]; its Options handler also invalidates cached
+model compositions. It does not change table capabilities. Thus disabling
+`Shading` leaves model shadows, tinted feature shadows and tinted strip sprites
+visible whenever their own admission gates pass. The earlier claim equating
+this capability with `Shading` is withdrawn after tracing both writers and their
+consumers.
+
+The flash blitter has a separate light-table capability gate, also enabled by
+ordinary startup. The lens blitter has no palette-table capability gate at all;
+its capture and keyed-copy path is specified in [R-FX-01 §4].
 
 ##### 5. The structure shadow's cached sprite
 
@@ -5151,7 +5172,7 @@ census over every sub-frame header).
 | raw | whole rectangle copied, no key test (dword-wise when the width is a multiple of four, word-wise when even, else byte-wise) | RLE decode as above | none; used only by the tile pass ([R-COMP-01 §1]) |
 | gray (fog, §3.3) | `if src ≠ key : dst = grayTable[dst]` | **nothing is drawn** | gray table present |
 | dithered gray (§3.3) | x steps by two from parity `(y + dx + parity) & 1`; `if src ≠ key : dst = 0` | nothing is drawn | none |
-| tinted | `if src ≠ key : dst = ALP[src × 256 + dst]` ([R-REN-03D §4]) | tinted RLE variant | ALP table present |
+| tinted | `if src ≠ key : dst = ALP[src × 256 + dst]` ([R-REN-03D §4]) | tinted RLE variant | window alpha-blend capability, enabled at startup independently of `Shading` ([R-REN-03D §4]) |
 
 The gray-family gate closes a corner of §3.3: a fog cloud frame that is
 authored compressed, or a palette whose gray table failed to build, draws
@@ -6194,7 +6215,7 @@ established:**
   bits: bit 1 Anti_Alias (the structure-body supersample, not a shadow pass),
   bit 2 Shadows master, bit 3 VehicleShadows (unit model shadows), bit 4
   FeatureShadows (feature/sprite shadows — read directly by the feature
-  shadow gate), bit 5 Shading (enables the tinted shadow blitter), bit 6
+  shadow gate), bit 5 Shading (selects shaded structure bodies), bit 6
   DitheredFog (not read by the model-shadow branches). The bulk INI key writes
   bit 4 then fans out bit 4→bit 3→bit 2 so one toggle makes all three shadow bits equal;
   the per-category keys set only their own bit, so feature and vehicle
@@ -6218,7 +6239,8 @@ established:**
   map-pixel scale) and subtracted into the screen Y.
 - **Shadow raster families.** (A) GAF sprite shadows (features) blit the shadow
   frame through the opaque or the tinted blitter (the tinted path selected by
-  the definition's translucent flag and gated on the Shading bit), clipped by
+  the definition's translucent flag and gated on the window's alpha-blend
+  capability [R-REN-03D §4]), clipped by
   an inclusive-rect intersect. (B) Digger and mobile model shadows flatten the
   finished body silhouette to palette index 0. (C) Structure model shadows
   rerasterize every face directly at index 0, punch out the body, and cache the
@@ -6770,12 +6792,10 @@ is "no segments". **Draw:** the one-point coverage gate of [R-FX-01 §3] at
 tile `(high16(X) >> 5, (high16(Z) − high16(Y)/2) >> 5)`, then the frame at
 `(high16(X) − viewX + 128, high16(Z) − high16(Y)/2 − viewZ + 32)` through the
 **tinted blitter** of [R-COMP-01 §2] / [R-REN-03D §4] — the `ALP`-blend
-family, not the opaque keyed blitter — which draws nothing when its gate flag
-is clear. **Supported inference:** that gate is the `Shading` display option
-([R-REN-03D §4] states the early return; [R-COMP-01 §2] names the same flag
-"ALP table present"); decider: the palette-init request word that loads
-`ALP`. If so, every flame, trail and smoke strip sprite vanishes with
-`Shading` off.
+family, not the opaque keyed blitter. **Established (direct-static):** its gate
+is the window's alpha-blend table capability, enabled by application startup
+independently of the `Shading` preference [R-REN-03D §4]. Turning `Shading` off
+does not make these flame, trail or smoke sprites disappear.
 
 #### The 32-byte smoke-puff family, exactly; the geothermal steam is this class on strip 4 [R-FX-02 §3]
 
@@ -6941,8 +6961,8 @@ section that owns the arithmetic. **Established** unless marked.
 **The flash blitter (Established, direct-static).** The explosion pool's first
 draw walk ([06 R-WFX-01 §2]) hands every record's calculated (secondary) frame
 to a dedicated blitter that is neither the ordinary frame blitter nor a fill.
-It requires a window-state bit to be set (the same readiness gate the other
-software blits test), clips the frame rectangle `(x − x_offset, y − y_offset,
+It requires the window's light-table capability, enabled at startup independently
+of display preferences [R-REN-03D §4], and clips the frame rectangle `(x − x_offset, y − y_offset,
 +width − 1, +height − 1)` against the destination's clip rectangle
 (inclusive), and then, for every source pixel that is not the frame's
 transparent key (`0xff` for calculated frames), writes
@@ -6973,7 +6993,11 @@ assembled behind the captured block, the frame's pixel pointer is pointed at it
 for one call of the ordinary frame blitter (which honours the key), and the
 pointers are restored. Each destination pixel thus shows the background pixel
 the lens map points at — a refraction disc with a transparent corner mask —
-and the map is sampled once per blit with no random draw.
+and the map is sampled once per blit with no random draw. **Established
+(direct-static):** this path does not test the flash blitter's light-table
+capability or the tinted blitter's alpha-blend capability. Its render-type-2
+caller applies the ordinary projectile visibility selection and a viewport-point
+test before calling the capture/displacement/keyed-copy path.
 
 **Which presentation families do not use the authored countdown cursor.**
 Every sequence family of §4.4 — feature and model textures (phases 6 and 7),
@@ -9335,14 +9359,6 @@ body — most under `R-<id>` headings — and are not restated here.
   32`; unreachable from stock content, whose smallest authored value is 55)
   · [R-COMP-02 §1] · decider: the tagged allocator's block-header layout, or
   a retail capture of such a unit under a mod.
-- Whether the tinted blitter's gate flag ("ALP table present" in
-  [R-COMP-01 §2], "the `Shading` option" in [R-REN-03D §4]) is one bit,
-  making every strip sprite of [R-FX-02 §2–§3] invisible with `Shading` off ·
-  [R-FX-02 §2] · decider: the palette-init request word that loads `ALP`.
-  **Implementation reconciliation (Unknown):** classic currently admits model
-  shadows with `Shading` disabled, and GPU comparison uses that same producer
-  decision. Resolve the flag identity before changing either path
-  [R-REN-03D §1, §4].
 - Reader for plot flag bit 7, and whether any unexported code writes
   placer-nibble values into it · §2.2 · static trace over the unrecovered
   regions. Marked `TODO(T23)`.
@@ -9452,17 +9468,9 @@ body — most under `R-<id>` headings — and are not restated here.
   selector reader.
 - The identical-model six-variant shading matrix predicted by [R-RND-02A] has
   not been run · §5 · manual retail observation.
-- Whether the palette window's blue-table feature bit can be clear in a retail
-  session (the table's allocation gate; its build and its one consumer are
-  closed in [R-WATER-01 §2]) · §6 · static trace of the window's flag-word
-  initialiser.
 - The mouse-event buffer and the "loaded surface wrapper" named beside the
   cursor save-under surfaces · [R-FX-01 §7] · static trace of their
   allocation sites (doc 07 owns the event buffer).
-- Meaning of the window-state bit the flash and lens blitters require before
-  they write; it is set in every observed battle present, and it is the one
-  open item on render type 2 (`mindgun`), whose lens blitter is otherwise
-  fully described · [R-FX-01 §4] · static trace of its writer.
 - Teardown behavior of the model-player registry — whether a destroyed player
   is cleared, retained as an inactive slot, or removed with compaction
   · §5.6 [R-CRD-005 §1] · static trace. This is the CRD-005 residual, not

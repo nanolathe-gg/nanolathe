@@ -203,7 +203,7 @@ type Client struct {
 	antiAlias bool
 	// shadows is options word bit2 0x04, the master shadow gate;
 	// vehicleShadows is bit3 0x08, the unit model shadows; shading is bit5
-	// 0x20, which every tinted blit including the shadow requires. The bulk
+	// 0x20, which selects shaded structure bodies [03 R-RND-02A]. The bulk
 	// INI key fans one value out across bits 4, 3 and 2, so a player who turns
 	// shadows off turns all three off together [03 §5.3][R-REN-03D §1].
 	shadows        bool

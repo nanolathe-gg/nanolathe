@@ -386,7 +386,9 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 	// [R-REN-03A §2].
 	draw.Structure = !v.BMCode
 	draw.KeyPlane = v.ZBuffer || v.BuildRemaining > 0
-	draw.CastsShadow = c.castsModelShadow(v.NoShadow, v.CanHover, v.Floater, draw.Structure)
+	// Digger selects its silhouette branch before the structure/mobile split;
+	// even a structure-class Digger must pass the vehicle gates [R-REN-03D §1].
+	draw.CastsShadow = c.castsModelShadow(v.NoShadow, v.CanHover, v.Floater, draw.Structure && !v.Digger)
 	draw.GroundY = c.groundHeightUnder(v.X, v.Z)
 	draw.DiggerClip = v.Digger
 	if v.Digger {

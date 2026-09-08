@@ -73,8 +73,9 @@ func (c *Client) unitModelFor(name string) *unitModel {
 //     first and third parent translations of every object (a half-turn about
 //     the vertical axis applied to the whole model).
 //
-// Pieces walk depth-first (root → child → sibling); primitives fan-triangulate
-// [03 §2.4 "N-gon primitives"]. A face is dropped when its projected corner
+// Pieces walk depth-first (root → child → sibling); colored primitives retain
+// their authored polygon rings and textured faces draw only as quads
+// [03 §2.4.1]. A face is dropped when its projected corner
 // ring runs counter-clockwise, which is what retail's two-chain edge walk does
 // to a back face [R-RAST-01 §1] step 7 — see modelFacePaints. (This comment
 // previously said faces draw double-sided with no backface cull, citing

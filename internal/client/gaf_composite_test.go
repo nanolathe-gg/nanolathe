@@ -95,7 +95,7 @@ func TestEmitSpriteCompositeUsesTargetClipNotParentGeometry(t *testing.T) {
 	}
 }
 
-func TestEmitSpriteTintedCompositePropagatesTintAndShadingGate(t *testing.T) {
+func TestEmitSpriteTintedCompositePropagatesTintIndependentlyOfShading(t *testing.T) {
 	parent := &formats.GAFFrame{
 		Width: 1, Height: 1, XOffset: 4, YOffset: 5,
 		Subframes: []*formats.GAFFrame{{
@@ -147,11 +147,15 @@ func TestEmitSpriteTintedCompositePropagatesTintAndShadingGate(t *testing.T) {
 	c.width, c.height = 20, 20
 	c.indexed = make([]uint8, c.width*c.height)
 	c.SetPalette(pal)
-	c.shading = false
-	c.resetListForTest()
-	c.emitSprite(drawlist.Sprite{Frame: plainThenAlternate, X: 6, Y: 8, Kind: drawlist.BlitKeyed})
-	c.replayForTest()
-	if got := c.indexed[8*c.width+6]; got != 5 {
-		t.Fatalf("shading-off composite = %d, want plain sibling 5", got)
+	pal.Alpha[7*256+5] = 8
+	for _, shading := range []bool{true, false} {
+		c.shading = shading
+		clear(c.indexed)
+		c.resetListForTest()
+		c.emitSprite(drawlist.Sprite{Frame: plainThenAlternate, X: 6, Y: 8, Kind: drawlist.BlitKeyed})
+		c.replayForTest()
+		if got := c.indexed[8*c.width+6]; got != 8 {
+			t.Fatalf("shading=%v composite = %d, want ALP[7,5] = 8", shading, got)
+		}
 	}
 }

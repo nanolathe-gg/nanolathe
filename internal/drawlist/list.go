@@ -289,30 +289,19 @@ type Surface struct {
 	Dst Rect
 }
 
-// Terrain records one terrain blit (docs/DESIGN_GPU_RENDERER.md §2.1). It
-// carries the immutable-after-load *world.Terrain plus the camera-derived
-// screen origin and destination window as values, never a live camera pointer,
-// so the list stays durable across the frame boundary [I6].
+// Terrain records one terrain blit (docs/DESIGN_GPU_RENDERER.md §2.1). Terrain
+// is immutable after load. OriginX/OriginY and DstW/DstH capture the projection
+// values used by the GPU executor, while the classic executor still reads Cam.
+// A retained record therefore requires the source camera to remain unchanged.
 //
 // A tile at world pixel (px, pz) lands at (px-OriginX, pz-OriginY); OriginX and
-// OriginY fold the camera scroll and the orthographic beam offset the classic
-// blitter applies [03 §2.5].
-//
-// The modern (GPU) executor derives per-tile projection from OriginX/OriginY and
-// the DstW/DstH window, not from Cam; whether the half-height shear and any
-// per-tile parameters must also ride the record for that executor is not settled
-// until WU-1.x builds it. The classic blitter reads them from *world.Terrain and
-// the camera, both reproducible from these fields.
+// OriginY fold the camera scroll and the orthographic beam offset [03 §2.5].
 type Terrain struct {
 	Terrain          *world.Terrain
 	OriginX, OriginY int32
 	DstW, DstH       int32
 	// Cam is the live camera the classic executor reads for per-tile projection.
-	// It is same-frame replay only: the WU-1.3..WU-1.6 transition executes each
-	// record inline, so the pointer is never held across a frame boundary [I6].
-	// Carrying it resolves WU-1.1's TODO(question) for the classic executor; a
-	// later unit revisits the record's completeness for the GPU executor, which
-	// uses OriginX/OriginY and the window instead of this pointer.
+	// Clone shares this pointer; it does not capture the camera's state.
 	Cam *camera.Camera
 }
 
@@ -419,10 +408,10 @@ func (l *List) RecordModel(c Model) {
 	l.model = append(l.model, c)
 }
 
-// ModelCommands returns durable copies of the recorded model commands in their
-// model-family order. It is for diagnostic consumers such as static previews;
-// executors preserve global order by using Replay. Geometry is cloned so a
-// caller cannot mutate a recorded frame's packet.
+// ModelCommands copies the recorded model commands in model-family order for
+// diagnostic consumers such as static previews. Geometry is cloned, while Ref
+// still requires the source frame's model lookup table. Executors preserve
+// global order by using Replay.
 func (l *List) ModelCommands() []Model {
 	out := make([]Model, len(l.model))
 	for i, m := range l.model {
@@ -506,16 +495,13 @@ func (l *List) Replay(s Sink) {
 	}
 }
 
-// Clone returns a deep copy of the list that stays valid after the source list
-// is Reset and re-recorded (WU-1.8). ComposeFrameSnapshot hands the copy to a
-// caller who replays it through another sink after the client has moved on to
-// the next frame, so it must not alias any array the client reuses per frame:
-// the per-family backing slices, the point batches those slices' Points records
-// sub-slice out of the client's point arena, the fog op lists, and the surface
-// pixel buffers are all copied here. Immutable-after-load references a record
-// carries by pointer — GAF/PCX frames, palette tables, terrain — are shared, as
-// is the same-frame-only Model.Ref table and Terrain.Cam (C-G5): a durable
-// replay of those follows the classic path's own lifetime, not this copy's.
+// Clone copies the list's command slices, geometry packets and mutable pixel
+// buffers so resetting or recording into the source list cannot overwrite them.
+// Immutable loaded resources (GAF/PCX frames, palettes and terrain) are shared.
+// It also shares Terrain.Cam and each Model.Ref's external lookup dependency:
+// callers must replay those commands before changing the source camera or
+// replacing its model table. Clone is not a self-contained later-frame replay
+// artifact [docs/DESIGN_GPU_RENDERER.md C-G5].
 func (l *List) Clone() List {
 	var c List
 	c.order = append([]tag(nil), l.order...)

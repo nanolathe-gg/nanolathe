@@ -362,3 +362,39 @@ func TestCarrierRecordingRoutesPreserveChildHeightAndPainterOrder(t *testing.T) 
 		}
 	}
 }
+
+// The production draw-record producer must select Digger before the ordinary
+// structure shortcut without changing the body's structure class [R-REN-03D §1].
+func TestUnitDrawDiggerPrecedesStructureShadowGate(t *testing.T) {
+	c := newPieceFixtureClient(t)
+	c.pal = &palette.Tables{}
+	c.models = map[string]*unitModel{"subject": teamLogoTestModel()}
+	for _, tc := range []struct {
+		name                                                            string
+		digger, mobile, master, vehicle, hover, floater, noShadow, want bool
+	}{
+		{name: "structure digger vehicle off", digger: true, master: true},
+		{name: "structure digger hover", digger: true, master: true, vehicle: true, hover: true},
+		{name: "structure digger floater", digger: true, master: true, vehicle: true, floater: true},
+		{name: "structure digger admitted", digger: true, master: true, vehicle: true, want: true},
+		{name: "mobile digger vehicle off", digger: true, mobile: true, master: true},
+		{name: "mobile digger admitted", digger: true, mobile: true, master: true, vehicle: true, want: true},
+		{name: "structure ignores vehicle gates", master: true, hover: true, floater: true, want: true},
+		{name: "digger master off", digger: true, vehicle: true},
+		{name: "digger noshadow", digger: true, master: true, vehicle: true, noShadow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c.shadows, c.vehicleShadows = tc.master, tc.vehicle
+			draw, ok := c.unitDrawFor(frame.UnitView{Model: "subject", Digger: tc.digger, BMCode: tc.mobile, CanHover: tc.hover, Floater: tc.floater, NoShadow: tc.noShadow})
+			if !ok {
+				t.Fatal("production draw record was not prepared")
+			}
+			if draw.CastsShadow != tc.want {
+				t.Fatalf("casts shadow=%v, want %v", draw.CastsShadow, tc.want)
+			}
+			if draw.Structure != !tc.mobile || draw.DiggerClip != tc.digger {
+				t.Fatal("shadow admission changed body classification")
+			}
+		})
+	}
+}

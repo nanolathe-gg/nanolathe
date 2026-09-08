@@ -529,9 +529,9 @@ the published offset to the camera.
   into scratch, then per cell either the transparent key for the sentinel
   `32000` or `captured[offset]`, assembled behind the captured block and handed
   to one ordinary frame blit — so implementing it is work, not research
-  `[03 R-FX-01 §4]` `[03 §5.4]`. It remains an open item on doc 03's side only
-  in that the window-state bit the flash and lens blitters require has no
-  identified writer.
+  `[03 R-FX-01 §4]` `[03 §5.4]`. The palette capability writer is now traced:
+  startup enables the flash blitter's light table, and the lens path has no
+  corresponding palette-table gate `[03 R-REN-03D §4]`.
 * **The mobile and Digger shadow branches.** Retail selects one of three shadow
   branches: a Digger's buried-clip silhouette, a mobile unit's waterline-clip
   silhouette, and a structure's re-rasterized, punched, cached shadow. Only the
@@ -744,13 +744,8 @@ Marked in the source:
 Open on doc 03's side, with no marker in these packages because the implemented
 behaviour is bounded rather than guessed:
 
-* Whether the tinted blitter's gate is a single bit — which would make every
-  strip sprite invisible with `Shading` off `[03 R-COMP-01 §2]`
-  `[03 R-REN-03D §4]`.
 * Which stock GAF sub-frames set the alternate-blitter flag that routes a
   sub-frame through the tinted blitter `[03 R-COMP-01 §2]`.
-* The meaning of the window-state bit the flash and lens blitters require before
-  they write; it is set in every observed battle present `[03 R-FX-01 §4]`.
 * Teardown of the model-player registry — whether a destroyed player is cleared,
   retained inactive, or removed with compaction. This is a residual, not
   permission to choose a removal policy `[03 R-CRD-005 §1]`.
@@ -772,8 +767,3 @@ behaviour is bounded rather than guessed:
 * The player-colour selector of a feature pseudo-unit's `LOGOS` faces. The
   client leaves those faces absent until the pseudo-unit initialization path is
   traced; it does not substitute colour zero `[03 R-RAST-01 §3]`.
-
-One stale comment worth naming rather than leaving to be re-derived:
-`SampleCache.Put` still says "evicting oldest if at capacity". There is no
-eviction and no capacity; the type's own doc comment states the contract
-correctly.

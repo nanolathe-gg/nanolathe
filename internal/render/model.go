@@ -280,9 +280,9 @@ type UnitDraw struct {
 	// allocates it when the definition authors ZBuffer, when the unit is under
 	// construction, or when the caller asks for one outright [R-REN-03A §2].
 	KeyPlane bool
-	// CastsShadow is the resolved model-shadow gate: the option bits are on and
-	// the definition authors none of noshadow, canhover or floater
-	// [R-REN-03D §1].
+	// CastsShadow is the resolved branch-specific model-shadow gate. Diggers
+	// and mobile subjects require the vehicle gates; ordinary structures do
+	// not test canhover or floater [R-REN-03D §1].
 	CastsShadow bool
 	// GroundY is the terrain height under the unit. The shadow is sheared by
 	// it rather than by the unit's own height, which is what slides a shadow

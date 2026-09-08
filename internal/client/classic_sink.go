@@ -111,13 +111,9 @@ func (c *Client) emitGeneralGAFLeaves(sp drawlist.Sprite, frame *formats.GAFFram
 	sp.Frame, sp.X, sp.Y = frame, penX, penY
 	sp.Anchored = true
 	if tinted {
-		if !c.shading {
-			// The alternate child chooses the ALP family, whose draw call is
-			// gated by the current Shading option [02 R-MALF-01 §6]. Returning
-			// here suppresses only this leaf; ordinary siblings still retain
-			// their authored table order.
-			return
-		}
+		// The ALP capability is enabled at window startup independently of
+		// the model Shading preference [03 R-REN-03D §4]. The executor checks
+		// for its palette; an authored tinted leaf keeps its place in order.
 		sp.Kind = drawlist.BlitTinted
 	} else {
 		sp.Kind = drawlist.BlitKeyed

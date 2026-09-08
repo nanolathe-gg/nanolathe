@@ -3943,8 +3943,10 @@ count of 256 composes nothing and 300 composes 44. The high byte (frame
 offset 11) has a separate meaning on a **subframe**: when it is nonzero the
 compositor draws that subframe through the tinted ALP blitter instead of the
 plain one. **Established:** its nontransparent pixels write
-`ALP[source * 256 + destination]`, and the whole call is gated by the Shading
-option. A tinted composite propagates the tinted operation to every descendant.
+`ALP[source * 256 + destination]`. The call requires the window's alpha-blend
+table capability, enabled at application startup independently of the Shading
+preference; the earlier Shading-gate claim is withdrawn by the writer trace in
+[03 R-REN-03D §4]. A tinted composite propagates tint to every descendant.
 `[03 R-REN-03D §4]` and `[03 R-COMP-01 §2]` own the drawing behavior. Retail data never exercises either edge: a census
 over the 958 GAFs of the reference install (123,294 frames including
 subframes) finds a maximum subframe count of 12 and no nonzero high byte.
