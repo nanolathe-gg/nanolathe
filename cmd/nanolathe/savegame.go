@@ -148,6 +148,8 @@ type saveLoadScreen struct {
 	dir      string
 	entries  []saveGameEntry
 	selected int
+	// sideNames is the dialog-owned presentation copy [08 R-SAVE-02 §3].
+	sideNames []string
 	// name is the `GAMENAME` edit's text: the file stem a save writes under,
 	// and the description a selection copies into the edit [08 R-SAVE-02 §1].
 	name string

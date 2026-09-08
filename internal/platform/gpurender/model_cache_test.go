@@ -67,7 +67,7 @@ func checkCachedModelFrames() error {
 	fresh.modelCache.budget = 1
 	source := fixtureModelList()
 	models := source.ModelCommands()
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 7; i++ {
 		w, h := 80, 48
 		if i > 1 {
 			w, h = 128, 80
@@ -100,6 +100,9 @@ func checkCachedModelFrames() error {
 				if g.Supersample != nil {
 					g.Supersample.Faces[0].Color++
 				}
+			}
+			if i == 6 && cmd.Geometry != nil && !cmd.Geometry.KeyPlane {
+				cmd.Geometry.Children = []drawlist.ModelChild{{Geometry: fixtureGeometry(0, true, fixtureFace(0, 0, 2, 2, 10, 5))}}
 			}
 			l.RecordModel(cmd)
 		}

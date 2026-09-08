@@ -1078,7 +1078,7 @@ func (s *Session) pollMissionTriggers(tick uint32) {
 	}
 	if latched && s.Latch.IsEnding() && s.State == StateBattle {
 		win := s.Latch.IsWin()
-		s.Progress.ApplyCampaignResult(s.CampaignSlot, win)
+		s.CommitCampaignTeardown()
 		if !s.result.Ended {
 			kind := "defeat"
 			if win {

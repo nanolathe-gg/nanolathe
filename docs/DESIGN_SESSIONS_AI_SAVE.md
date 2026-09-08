@@ -92,9 +92,20 @@ save's `Player%i` account — reads the player record `[08 R-SKIR-01 §2]`
 
 ## 2. Packages and key types
 
+The frontend save/load dialog compiles side definitions from its mounted VFS
+without building a battle catalog. It owns a prepared side display-name slice
+until close; the summary painter indexes that copy by the saved side ordinal
+[08 R-SAVE-02 §3].
+
 ### 2.1 `internal/session` — states, entry, results, saves
 
 Only the non-tick half is described here.
+
+`Session.CommitCampaignTeardown` is the shared campaign mark writer for the
+ordinary ending transition and manual teardown. It reads the live win bit;
+a pending outcome does not replace that bit. The frontend return retains the
+retired session's bank after teardown, while starting a new campaign remains
+the reset owner [08 R-CAMP-01 §7] [08 R-CAMP-01 §8].
 
 **The state machine.** `State` is `0..7` with one dispatch method,
 `Session.Advance`, that runs exactly one state operation per call. The

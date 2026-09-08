@@ -405,6 +405,8 @@ func (b *battleSession) teardown(cl *client.Client) {
 	if b == nil {
 		return
 	}
+	// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
+	b.sess.CommitCampaignTeardown()
 	if b.battleUI != nil {
 		b.closeBattleMenu()
 		b.battleUI.SetPanelCue(nil)

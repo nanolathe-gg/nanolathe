@@ -308,8 +308,9 @@ func ContinuationSummary(p PostBattleSummary, meta ContinuationSaveMetadata) sav
 // Summary account. The single W/L mark is written once per battle, by the
 // score helper, at the battle-teardown end transition — before the results
 // handler is installed. Session.pollMissionTriggers matches that timing: it
-// calls BankProgress.ApplyCampaignResult the instant the latch crosses into
-// its ending state, before the post-battle result is reported.
+// calls CommitCampaignTeardown when the latch crosses into its ending state,
+// before the post-battle result is reported. Manual battle teardown uses the
+// same mark writer, including an unfinished mission's L [08 R-CAMP-01 §7–8].
 type CampaignTransition int
 
 const (

@@ -776,7 +776,18 @@ func (g *gameShell) returnFromBattle(cl *client.Client) {
 	if g == nil {
 		return
 	}
+	var retired *session.Session
+	if g.battle != nil {
+		retired = g.battle.sess
+	}
 	g.teardownBattle(cl)
+	// Teardown records the current mark before the battle loses its session.
+	// Retain that bank for the returning frontend; a fresh campaign selection
+	// remains the separate reset owner [08 R-CAMP-01 §7][08 R-CAMP-01 §8].
+	if retired != nil && retired.Mission != nil && retired.Mission.Type == mission.TypeCampaign {
+		g.campaignProgress = retired.Progress
+		g.campaignProgressSet = true
+	}
 	g.openMenu(modeMenuMain)
 	g.bindFrontendClient(cl)
 }

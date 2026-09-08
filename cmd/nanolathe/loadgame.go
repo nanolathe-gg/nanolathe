@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/save"
@@ -66,10 +67,17 @@ func (g *gameShell) openSaveLoadScreen(mode saveLoadMode, source saveLoadSource)
 		// screen shows no message for an empty list [08 R-SAVE-02 §2].
 		return g.showRetailMessage(retailNoSavedGamesMessage)
 	}
+	// Reuse the side compiler without constructing a battle catalog. The
+	// dialog owns its display-name copy until it closes [08 R-SAVE-02 §3].
+	sides, err := content.CompileSides(g.cs.fs)
+	if err != nil {
+		return retailFrontendAssetError(g.cs, "save dialog side table", "gamedata/sidedata.tdf", "the compiled side definitions", err)
+	}
 	panel, err := g.loadSaveLoadPanel(mode)
 	if err != nil {
 		return err
 	}
+	screen.sideNames = retailSideDisplayNames(sides)
 	saveLoadUI = screen
 	saveLoadPanel = panel
 	g.frontend.Panels.Push(panel)
@@ -166,16 +174,38 @@ func (g *gameShell) refreshSaveLoadPanel() {
 	}
 }
 
-// retailSideNames is the side-name table the `SIDE` field indexes; `???` is
-// what an absent table renders [08 R-SAVE-02 §3].
-//
-// The frontend compiles no catalog of its own — the side table is built at
-// battle entry — so the dialog has no table to index and every selection
-// renders `???`. Wiring the authored side names is a frontend-content task,
-// not a save-screen one; keeping the absent-table branch is the established
-// behavior for exactly this case.
+// retailSideNames returns the dialog-owned display table [08 R-SAVE-02 §3].
 func (g *gameShell) retailSideNames() []string {
-	return nil
+	if saveLoadUI == nil {
+		return nil
+	}
+	return saveLoadUI.sideNames
+}
+
+// retailSideDisplayNames preserves side ordinal and the first byte of each
+// name, then adds 32 to each remaining byte with byte-width wrapping. This
+// is not Unicode or conditional ASCII lowercasing [08 R-SAVE-02 §3].
+// TODO(question): establish the packed-table index outcome when a suffix byte
+// wraps to a terminator; the current host string retains that zero byte.
+func retailSideDisplayNames(sides []*content.SideDef) []string {
+	if len(sides) == 0 {
+		return nil
+	}
+	names := make([]string, len(sides))
+	for i, side := range sides {
+		if side == nil || side.Name == "" {
+			// TODO(question): empty compiled names make the retail packed-name
+			// walk cross string boundaries. Establish the complete malformed
+			// table outcome before replacing this host-policy empty entry.
+			continue
+		}
+		name := []byte(side.Name)
+		for j := 1; j < len(name); j++ {
+			name[j] += 32
+		}
+		names[i] = string(name)
+	}
+	return names
 }
 
 // retailSummaryPanelFields renders the summary panel from the selected file's

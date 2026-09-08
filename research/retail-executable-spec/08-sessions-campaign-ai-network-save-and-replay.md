@@ -6582,6 +6582,25 @@ when the table is absent. `DIFF` is `Easy`, `Medium`, `Hard` indexed by
 `Difficulty`. Every panel field defaults to the empty string when no entry is
 selected. [Established]
 
+**Established — side display-name preparation.** Both save and load openers
+make a dialog-owned name table from the already compiled sides, in side ordinal
+order. For each nonempty name, the first byte is retained and every subsequent
+byte before the terminator has 32 added, with byte-width wrapping. There is no
+uppercase-range test and no locale-aware case conversion: `ARM` displays as
+`Arm`, `CORE` as `Core`, and punctuation or already-lowercase suffix bytes are
+shifted too. The summary indexes this prepared table using the saved `Side`;
+closing the dialog releases the copy. The source remains the side compiler's
+`name` field [02 §6 "SIDE and battle interface data"], not a hardcoded faction
+list. This is established by both dialog callers, the table constructor and
+the summary reader.
+
+**Unknown — malformed side display names.** Empty compiled names make the
+packed-string transformation step into the following name; the complete
+outcome for empty entries or suffix bytes that wrap to a terminator has not
+been characterized. A bounded table-constructor and index-reader trace over
+those inputs would settle it. Nanolathe currently retains an empty entry for
+an empty name as explicit host policy.
+
 **The out-of-range `Difficulty`.** There is no fourth row and no clamp. The three labels are
 not a table in the image at all: the panel writer stores the three string
 pointers into three consecutive **stack** slots immediately before reading the
@@ -7828,6 +7847,8 @@ properties:
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it. Findings that closed an item live in the
 body and are not restated here.
+
+- Malformed empty side display names and transformed suffix terminators in the save/load table · [R-SAVE-02 §3] · bounded constructor/index-reader trace.
 
 ### Sessions and campaign
 

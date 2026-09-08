@@ -45,18 +45,9 @@ func CollisionSlotYGate(projectileY, lower, upper int32, slot int) bool {
 	return lower <= projectileY && projectileY <= upper // [P1-07 §2.1] slot1: lower<=Y<=upper
 }
 
-// Floor quant helpers per [P1-07 §4]: AOE tile quant is floor(x>>4) with sign
-// TODO(question): Historical analysis omitted; independently worded behavior is needed.
-// point to cell is arithmetic Shift>>20 (1<<20 = 16*65536 world per cell) [P1-07 §4].
-// world.WorldToCell already implements floor >>20 via floorDiv [03 §2.1] I3.
-// BroadPhaseRadiusCells already implements (radius>>4)+1 via unsigned SAR 4.
-
-// Sentinel offsets for fringe resolution: feature sentinel 0xFFFE resolves via
-// signed offsets at cell+0xB (X) and cell+0x5 (Z) (decompile view) [P1-07 §2.2].
-// In typed PlotCell the bytes live at AnchorDX 0xB and AnchorDZ 0xA (DZ scaled
-// by row stride) — the 0x5 vs 0xA alias is TNT attribute vs runtime plot cell
-// indexing, but both are signed i8 subtraction from current cell to reach
-// anchor [P1-07 §2.2] [02 "Terrain file"] SC6.
+// Coordinate conversion and fringe-anchor resolution are owned by the world
+// helpers; see [03 §2.1] and [06 §8.1]. Keep their behavior at those call sites
+// rather than duplicating it in impact selection.
 
 // FeatureCacheSuppressed reports whether a feature contact should be suppressed
 // due to cached quantized cell pair [06 §8.1] C28.

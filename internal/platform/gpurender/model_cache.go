@@ -132,7 +132,9 @@ func (c *modelImageCache) appendGeometry(g *drawlist.ModelGeometry) {
 }
 
 func (r *Renderer) acquireModelImage(g *drawlist.ModelGeometry) *modelImage {
-	if g == nil || !g.Eligible {
+	// Attachment configuration is not cached body content. Validate it on hits
+	// too, so a keyless body cannot bypass the keyed-group admission rule.
+	if g == nil || !g.Eligible || !r.modelGeometryConfigSupported(g) {
 		return nil
 	}
 	b := modelWorldBounds(g)
@@ -148,7 +150,7 @@ func (r *Renderer) acquireModelImage(g *drawlist.ModelGeometry) *modelImage {
 		r.modelStats.CacheHits++
 		return &modelImage{entry: e, bounds: b}
 	}
-	if !r.modelGeometrySupported(g) {
+	if !r.modelFacesSupported(g) || g.Supersample != nil && !r.modelFacesSupported(g.Supersample) {
 		return nil
 	}
 	r.modelStats.CacheMisses++

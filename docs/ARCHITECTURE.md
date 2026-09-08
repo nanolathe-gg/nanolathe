@@ -3,8 +3,9 @@
 Nanolathe is a clean-room reimplementation of the Total Annihilation engine in
 Go. Behavior comes from `research/retail-executable-spec/` (what the retail
 executable does) and `research/formats/` (how its files are laid out);
-content comes from the original assets, mounted at run time and never
-committed. This document is the map of the Go tree: what each package is for,
+content comes from the original assets, mounted at run time. See the
+[publication review](PUBLICATION.md) for the tracked remaster examples that
+need separate disposition. This document is the map of the Go tree: what each package is for,
 how packages depend on each other, where the authoritative tick lives, how the
 build is verified, and how a citation in a comment is resolved. Each subsystem
 has its own design document; this one only says where the boundaries are.

@@ -3,9 +3,11 @@
 This directory is a standalone, self-contained reference for every file format
 used by Total Annihilation (Cavedog Entertainment, 1997) and its expansions.
 It exists so that Nanolathe development does not depend on external web pages,
-which have a habit of disappearing. Everything here has been cross-checked
-against real retail game data (the `totala*.hpi`, `*.ccx`, and `rev31.gp3`
-archives). Nanolathe's parsers are conformance consumers of this reference,
+which have a habit of disappearing. Evidence and validation scope are stated
+in each document. Retail-format findings use game data and, where stated,
+executable analysis; the community
+TAD recording format has a separate corpus and provenance described in
+[tad.md](tad.md). Nanolathe's parsers are conformance consumers of this reference,
 not evidence for retail behavior.
 
 Each of the fourteen documents follows the same template:

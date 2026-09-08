@@ -1,11 +1,12 @@
 package gpurender
 
 import (
+	"image"
+	"image/color"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
-	"image"
-	"image/color"
 )
 
 // modelGPUVertex is private preparation data for the device rasterizer. The
@@ -92,7 +93,7 @@ func (r *Renderer) Model(cmd drawlist.Model) {
 	r.modelStats.Skipped++
 }
 
-func (r *Renderer) modelGeometrySupported(g *drawlist.ModelGeometry) bool {
+func (r *Renderer) modelGeometryConfigSupported(g *drawlist.ModelGeometry) bool {
 	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelPack == nil {
 		return false
 	}
@@ -105,10 +106,7 @@ func (r *Renderer) modelGeometrySupported(g *drawlist.ModelGeometry) bool {
 	if ss := g.Supersample; ss != nil && (ss.Scale != 2 || ss.Width <= 0 || ss.Height <= 0 || r.modelResolve == nil || r.tables.alpha == nil) {
 		return false
 	}
-	if !r.modelFacesSupported(g) {
-		return false
-	}
-	return g.Supersample == nil || r.modelFacesSupported(g.Supersample)
+	return true
 }
 
 func (r *Renderer) modelFacesSupported(g *drawlist.ModelGeometry) bool {

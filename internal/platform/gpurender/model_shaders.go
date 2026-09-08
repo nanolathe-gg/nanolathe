@@ -100,12 +100,12 @@ var WorldOffset vec2
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	shadow := floor(imageSrc0At(srcPos).r*255.0+0.5)
 	p := srcPos-imageSrc0Origin()+BodyOffset
- body := 1.0
- if p.x >= 0.0 && p.y >= 0.0 && p.x < imageSrc1Size().x && p.y < imageSrc1Size().y {
-  body = floor(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+p).r*255.0+0.5)
- }
- if shadow == 1.0 || body != 1.0 { return vec4(0.0) }
- dest := floor(imageSrc2AtFromSrc0Pos(srcPos+WorldOffset).r*255.0+0.5)
+	body := 1.0
+	if p.x >= 0.0 && p.y >= 0.0 && p.x < imageSrc1Size().x && p.y < imageSrc1Size().y {
+		body = floor(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+p).r*255.0+0.5)
+	}
+	if shadow == 1.0 || body != 1.0 { return vec4(0.0) }
+	dest := floor(imageSrc2AtFromSrc0Pos(srcPos+WorldOffset).r*255.0+0.5)
 	idx := floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+vec2(dest+0.5, shadow+0.5)).r*255.0+0.5)
 	return vec4(idx/255.0, 0.0, 0.0, 1.0)
 }

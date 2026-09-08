@@ -1,8 +1,34 @@
 # Nanolathe
 
-Nanolathe is an MIT-licensed, clean-room reimplementation of the Total
-Annihilation engine for single-player skirmish and campaign play. Original game
-assets are mounted at runtime and are never committed to this repository.
+Nanolathe is an experimental reimplementation of the Total Annihilation engine
+in Go, targeting single-player skirmish and campaign play. It is under active
+development, with incomplete behavior and compatibility gaps.
+
+The engine reads content from your own local Total Annihilation installation.
+Nanolathe's original code is [MIT licensed](LICENSE); the license does not grant
+rights to the original game or retail-derived artwork. The current development
+tree includes retail-derived remaster examples that need to be excluded or
+cleared before publication; see the [publication review](docs/PUBLICATION.md).
+
+## Run
+
+Install Go 1.25 or newer and provide a local retail installation. Linux desktop
+builds also need a C toolchain and graphics/audio development headers; the
+[Linux dependency script](.github/scripts/install-linux-deps.sh) lists the
+packages used by CI on Ubuntu.
+
+```sh
+go build -o nanolathe ./cmd/nanolathe
+./nanolathe --root "$HOME/TotalAnnihilation"
+```
+
+The default launches the classic front end. Use `./nanolathe --help` for map,
+rendering, and diagnostic options. The separate `cmd/nanolathe-headless`
+command supports displayless simulation runs; see
+[architecture and verification](docs/ARCHITECTURE.md).
+
+Multiplayer is outside the current scope. For implemented contracts and known
+gaps, read the design document for the relevant engine area.
 
 ## Start here
 
@@ -13,7 +39,7 @@ The repository keeps each kind of guidance in one place:
 * [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — package map, dependency
   graph, the authoritative tick, what runs today, verification, and the
   citation routing every token in the tree resolves through.
-* The ten design documents, one per engine area — how it is built in Go, its
+* The eleven design documents, one per engine area — how it is built in Go, its
   contracts, and which research owns each behavior:
   [`DESIGN_RUNTIME_DETERMINISM`](docs/DESIGN_RUNTIME_DETERMINISM.md),
   [`DESIGN_CONTENT_VFS`](docs/DESIGN_CONTENT_VFS.md),
@@ -24,7 +50,8 @@ The repository keeps each kind of guidance in one place:
   [`DESIGN_WEAPONS_PROJECTILES`](docs/DESIGN_WEAPONS_PROJECTILES.md),
   [`DESIGN_INTERFACE_HUD_INPUT`](docs/DESIGN_INTERFACE_HUD_INPUT.md),
   [`DESIGN_SESSIONS_AI_SAVE`](docs/DESIGN_SESSIONS_AI_SAVE.md),
-  [`DESIGN_PRESENTATION_CLIENT`](docs/DESIGN_PRESENTATION_CLIENT.md).
+  [`DESIGN_PRESENTATION_CLIENT`](docs/DESIGN_PRESENTATION_CLIENT.md),
+  [`DESIGN_GPU_RENDERER`](docs/DESIGN_GPU_RENDERER.md).
 * [`docs/INVARIANTS.md`](docs/INVARIANTS.md) — cross-cutting implementation
   rules every change must preserve.
 * [`docs/SPEC_CONFLICTS.md`](docs/SPEC_CONFLICTS.md) — audited cases where a
@@ -52,10 +79,10 @@ economy, construction, HUD, and fog state directly into the committed
 and never writes simulation state. Presentation samples the committed tick as
 published: there is no interpolation between ticks [03 §2.4] [I6].
 
-Save support is the retail HAPIBANK account format. Campaign-continuation
-metadata is exposed, while in-battle restoration returns an explicit
-unsupported result until the remaining retail account bodies are implemented;
-there is no Nanolathe-authored continuation format.
+Save/load uses the retail HAPIBANK account format, including in-battle
+restoration. This is still a compatibility work in progress; the
+[session design](docs/DESIGN_SESSIONS_AI_SAVE.md) describes the implemented
+accounts and remaining gaps.
 
 Exact-retail gaps remain explicit as `TODO(T23)`, `TODO(T25)`, or
 `TODO(question)` at their implementation site and under the relevant research
@@ -63,8 +90,9 @@ document's Unknown section. Do not replace them with plausible defaults.
 
 ## Build and check
 
-Go and the original assets are the only development inputs. Point
-`NANOLATHE_TA_ROOT` at a local retail installation for asset-backed tests.
+With neither `NANOLATHE_RETAIL_ASSETS` nor `NANOLATHE_TA_ROOT` set, these
+checks use authored fixtures and skip tests that require retail assets. Desktop
+packages require the native build prerequisites above.
 
 ```sh
 go build ./...
@@ -72,9 +100,17 @@ go vet ./...
 go test ./...
 ```
 
-Use an isolated writable `GOCACHE` when the host environment requires it. Some
-tests intentionally skip without retail assets; a release or gate report must
-state whether an asset-backed run actually executed.
+`./tools/check` runs the same checks plus formatting and explicitly disables
+retail tests, even if your shell has asset variables set.
+
+For the separate asset-backed integration gate, including retail-tagged tests:
+
+```sh
+NANOLATHE_RETAIL_ASSETS="$HOME/TotalAnnihilation" ./tools/check-retail
+```
+
+Use an isolated writable `GOCACHE` when the host environment requires it.
+Report whether an asset-backed run actually executed when sharing test results.
 
 ## Clean-room contribution rule
 
