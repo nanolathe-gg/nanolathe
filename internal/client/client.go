@@ -120,6 +120,7 @@ type Client struct {
 	worldBuckets worldBuckets
 	fogCache     *visibility.FogCache
 	fogVersion   uint64 // last immutable FogView copied into fogCache
+	fogSource    uint64 // source identity paired with fogVersion
 	fogOps       []presentationrender.FogOp
 	// pointArena is this frame's backing store for every recorded Points batch
 	// (the LHT halo, the calculated flash disc and the minimap
@@ -308,7 +309,12 @@ func New(opts Options) (*Client, error) {
 }
 
 // SetTerrain sets the world terrain for Gate 1 drawing [PLAN_04A C1].
-func (c *Client) SetTerrain(t *world.Terrain) { c.terrain = t }
+func (c *Client) SetTerrain(t *world.Terrain) {
+	if c != nil && c.terrain != t {
+		c.resetFogCache()
+		c.terrain = t
+	}
+}
 
 // SetCamera sets the camera for Gate 1 pan [07 §10].
 func (c *Client) SetCamera(cam *camera.Camera) { c.cam = cam }
@@ -341,9 +347,20 @@ func (c *Client) SetFNT(fnt *formats.FNT) { c.fnt = fnt }
 // SetSnapshot repoints presentation at another published buffer — used when
 // the shell transitions from front-end menus into a live battle session [I6].
 func (c *Client) SetSnapshot(b *frame.Buffer) {
-	if b != nil {
+	if c != nil && b != nil && c.buffer != b {
+		c.resetFogCache()
 		c.buffer = b
 	}
+}
+
+func (c *Client) resetFogCache() {
+	if c == nil {
+		return
+	}
+	c.fogCache = nil
+	c.fogVersion = 0
+	c.fogSource = 0
+	c.fogOps = c.fogOps[:0]
 }
 
 // Size returns the negotiated logical framebuffer size.

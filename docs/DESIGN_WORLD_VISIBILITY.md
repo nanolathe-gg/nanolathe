@@ -329,7 +329,8 @@ changes, or when a bulk rebuild replaces the stores. `Service.FogVersion` names
 completed derived fog-cache bytes and advances only after a rebuild, with mode
 and local-player changes invalidating the cache first. The two frame-buffer
 slots retain their own copied mapping and fog bytes across `Reset`; the session
-copies a source only when that slot holds an older revision. Thus a committed
+copies a source only when that slot holds an older revision from the same
+presentation-only service identity. Thus a committed
 frame never aliases mutable visibility storage, while an unchanged LOS state
 does not pay a second map-sized copy on alternating frame slots. Camera is a
 presentation input to fog operations and does not advance either mapping

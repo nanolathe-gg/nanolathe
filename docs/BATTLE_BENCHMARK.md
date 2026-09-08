@@ -55,3 +55,18 @@ This is an opt-in development/regression probe, not a timing threshold in CI.
 Keep baseline outputs outside the repository and report median, p95 and maxima
 alongside the exact workload. Pixel equality across CPU/GPU is not required;
 compare each renderer against its own baseline when no visual change is intended.
+
+Benchmark invocations automatically serialize for the same OS user on this
+host, across worktrees and output directories, including direct binary and
+`go run` launches. A busy invocation prints one waiting message and blocks
+before opening assets or creating its output directory. The lock covers setup,
+warm-up, measurement and artifact writing. OS file locking releases it on exit
+or crash; the persistent `nanolathe/battle-bench.lock` file in the user cache
+is not a stale-lock marker and must not be deleted while runs are queued.
+Wait time is outside all measurements. Lock acquisition does not promise FIFO
+ordering among several waiters. Normal gameplay does not take the lock.
+
+Compilation by `go run` precedes executable startup and is outside the lock.
+Build binaries before queueing runs when comparing performance, and avoid
+unrelated builds or other performance workloads during measurement. Older
+binaries without locking cannot participate in this serialization.

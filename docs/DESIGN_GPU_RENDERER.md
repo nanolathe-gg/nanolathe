@@ -11,7 +11,7 @@ For this experimental milestone the only public choices remain
 `--renderer=classic|modern`, default classic. All new rendering is behind
 `--renderer=modern`; no Enhanced flag or runtime options entry is added yet.
 The simulation cannot tell which executor is selected. The current GPU-only
-execution contract is §9–§11; it supersedes the historical P1–P3 CPU model bridge
+execution contract is §9–§12; it supersedes the historical P1–P3 CPU model bridge
 and fallback requirements below.
 
 This document is listed by [ARCHITECTURE.md](ARCHITECTURE.md), which owns
@@ -155,15 +155,14 @@ The indexed offscreen is an RGBA8 image whose red channel holds the palette
 index. Every shader runs in Kage pixel mode and samples with nearest
 filtering, so `index = int(r * 255 + 0.5)` recovers the byte exactly.
 
-The batching target is to group consecutive commands of one family into one
-Ebitengine draw where that is order-preserving (C-G3). Current destination
-operations use per-command snapshots; batching is not yet implemented. The families that read the
+Batching is specified by the compiled executor of §11: the scheduler groups
+commands into phases wherever that is order-preserving (C-G3). The families that read the
 destination pixel — `Tinted`, `Lit`, `LitRect`, `ShadeRect`, the gray and
 checker fog fills, the model shadow commit and the waterline tint — cannot be
-fixed-function blends because they are table lookups on the destination. The planned batching uses **layers**: a run of same-family commands whose screen rectangles are
-pairwise disjoint is drawn into a scratch overlay, then one table pass folds
-the overlay into the world image over the union rectangle. A command that
-overlaps an earlier member of the run closes the layer and opens the next.
+fixed-function blends because they are table lookups on the destination. The scheduler therefore runs them over a phase snapshot: a run of
+destination-reading commands whose screen rectangles are pairwise disjoint
+reads one snapshot; a command that overlaps an earlier member of the run opens
+the next phase (§11.2).
 Two overlapping smoke puffs therefore blend one after the other, exactly as
 the byte writers do `[03 R-COMP-01 §2]` `[03 R-FX-02 §3]`.
 
@@ -233,6 +232,12 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   implementation provides the classic subject stages (§10); invalid geometry
   or unavailable resources remain explicit skips (§9). It never substitutes
   a CPU-rendered model image.
+  Classic image copies use a separate pool owned by the recording draw list.
+  Every body, shadow and trace copy gets a distinct slot until `List.Reset`;
+  composition scratch never aliases the recorded planes. `List.Clone` and
+  `ModelCommands` still deep-copy all mutable planes for retained consumers.
+  Carrier/factory staging images borrow their own composition scratch slot and
+  are copied into the draw list only after child composition finishes.
 * **C-G6 Structure supersample.** Preserve the cached/all versus live gate,
   pre-shear doubled projection, ordered ALP color resolve, and top-left key
   resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
@@ -766,110 +771,159 @@ color passes. One bad ear no longer drops the whole unit. An authored touching
 ring checks both positive lobes and its empty pinch on the device; this is a
 geometry path, not a CPU image fallback. [03 R-RAST-01 §1]
 
-## 11. Performance milestone: local model images and reuse
+## 11. Compiled execution (current performance contract)
 
-Implementation policy, not additional retail behavior. The first measurement
-target is the development Mac at 1920×1080. The gameplay acceptance target is
-still 16.7 ms per presented frame; a frozen draw-list microbenchmark does not
-establish that target for simulation, camera motion or a complete battle.
-Screenshot readback and PNG encoding are excluded from gameplay timings.
+Implementation policy, not retail behavior. This section replaces the earlier
+per-body image cache and page packer (retained only in git history) and the
+per-command execution the first modern executor used. Classic is untouched.
 
-The modern executor rasterizes each body into its composition-sized color and
-height-key planes. It packs the completed result into one GPU image (red index,
-green key, opaque alpha), then reuses that image while its resolved raster input
-is unchanged. Camera placement is applied only when composing the scene. This
-also permits sharing identical resolved bodies across units. It does not skip
-recording, texture cursor registration or presentation event processing.
+### 11.1 Why the first executor was slow
 
-Cache identity compares all ordered face/vertex/material inputs, resolved
-immutable texture-frame identities, dimensions, scale, key-plane mode,
-supersample geometry, reveal bands, outlines, waterline and Digger decisions.
-It excludes the outer anchor and origin, shadows and attached children. Exact
-serialized key comparison avoids treating a hash collision as equal content.
-Turning, aiming, opening, animated/team texture changes and construction or
-clipping changes therefore rebuild the affected body. Palette tables are
-immutable for a renderer's lifetime. Future zoom, lighting or other material
-inputs must extend this identity when introduced.
+Measured on the seeded Ashap Plateau battle benchmark at 1920×1080 (darwin/arm64,
+Metal), the modern executor issued about 2,700 device draws and 59 image clears
+per frame: one draw per fog cell (1,177), two per translucent sprite (snapshot
+then tint), three per model commit, four to five scratch passes per model cache
+miss, and one per solid fill. Ebitengine's Metal driver opens a new render pass
+whenever the destination image changes, with a load and store of the whole
+target, so the snapshot ping-pong and per-model scratch work produced more than a
+thousand full-screen passes per frame. The body image cache missed on every
+animated mobile unit because pose is part of identity (143 misses and 146
+evictions per frame against a full 128 MiB budget). Textured quads were cut into
+one-pixel strips on the CPU (about 21,700 per frame), and per-draw uniform maps
+plus per-strip slices allocated 11 MB and 213k objects per frame. The result was
+12 ms of CPU submission, a further 12 ms on the render thread, and a 65 ms
+cadence against classic's 15 ms of CPU and 33 ms cadence.
 
-Shadows are cached as independent silhouettes and blended against a fresh,
-bounded destination snapshot on every draw. The current body punches the shadow
-using their separate placement rectangles. Fog, selection, terrain and other
-scene overlays remain outside the cached body. A carrier's children merge in
-order into a local union rectangle. Cached keys survive beneath transparent
-pixels; signed child comparison, byte storage and later-child ordering remain
-as specified in [03 R-REN-03A §4]. The completed scene or a crowd of units is not
-flattened into one persistent sprite, since intervening objects and effects must
-retain their normal ordering.
+### 11.2 Design
 
-The image cache uses least-recently-used eviction with a 128 MiB payload budget
-(packed pixels plus identity bytes), an implementation choice for this first
-prototype. Driver/atlas overhead, Go metadata, uploaded assets and reusable
-scratch images are additional memory. Images held by the current composition
-are pinned until submitted; they may temporarily exceed the budget, then become
-eligible for eviction. Oversized images therefore render correctly without
-remaining resident beyond the budget. Eviction explicitly releases device
-storage. Resizing the viewport preserves reusable model images.
+The recorded `drawlist.List` is unchanged and remains the contract with the
+recorder and the classic sink. The modern executor still implements
+`drawlist.Sink`, but its Sink methods **compile** the command into a small number
+of batched passes; `Execute` submits those passes after `Replay` returns. Order
+is preserved exactly where pixels depend on each other and relaxed everywhere
+else (C-G3). Byte semantics of every family are unchanged (C-G2, C-G4, C-G7,
+C-G8).
 
-`ModelStats` reports cache hits, misses, evictions, retained payload bytes and
-native pixels rasterized. Existing face/strip/resolve counters measure work
-actually performed, so cache hits do not increase them. GPU body/shadow counts
-continue to count scene submissions, including cached submissions.
+**One table atlas.** `PAL`, `Gray`, `Blue` (256×1 each), `SHD` and `LHT`
+(256×32 each) and `ALP` (256×256) are packed into one RGBA8 image with fixed row
+offsets, index in red. Every shader receives it as one source image, which frees
+Ebitengine's four image slots and lets unrelated families share a shader.
 
-Retail's cached-body/live-piece partition is established in [03 R-REN-03A §4].
-This first optimization caches the current complete-body approximation; it does
-not implement that missing partition. An animated factory can invalidate its
-whole body. Separating static and moving pieces requires preserving their key
-ownership and tie ordering and remains a later measured optimization.
+**One scene shader for the 2D families.** Terrain tiles, keyed GAF sprites,
+feature sprites, PCX, glyphs, fills, lines, points, indexed surfaces, the cursor
+and model body commits are all "opaque" writes: they read no destination. They
+draw with one Kage shader whose per-vertex custom attributes select the source
+(constant index, GAF atlas texel keyed on the green flag, table row remap for
+`BlitLit`, scaled integer mapping for `BlitScaled`/`Surface`). The
+destination-reading families (`BlitTinted`, translucent feature body and shadow,
+`FillLitRect`, `FillShadeRect`, `PointLit`, the model shadow commit) draw with
+one destination shader whose custom attributes select the table (ALP, LHT or
+SHD) and row, sampling a snapshot image. No uniforms are used on any per-frame
+draw; every parameter rides the vertex. Sources are: the scene GAF atlas (frames
+packed on first use into 2048-square pages, keyed by frame identity), the
+snapshot, the table atlas and the model slot atlas.
 
-Geometry preparation is reused across the key and color passes on a cache miss.
-Local coordinates exposed texture-boundary float residue in the translated-quad
-device fixture; a one-16.16-unit UV guard replaces the earlier smaller guard.
-This is a GPU sampling approximation, covered by that translation fixture.
+**The scheduler.** `Execute` keeps a coarse screen grid (32 px cells). Each
+compiled command has a clipped screen rectangle and a class, opaque or
+destination-reading. Commands are appended to *phases* in record order. A phase
+is executed as: (1) one draw of its opaque batch, (2) one copy of the offscreen
+into the snapshot, (3) one draw of its destination-reading batch. The rules:
 
-Repeatable model microbenchmarks run with `tools/gpu-bench -count=100
--frames=120 -mode=record` (one command). Modes are `frozen` (executor only),
-`record` (rebuild unchanged packets), `pan` (rebuild with changing placement),
-and `turn` (rebuild changing headings, including reuse of earlier poses). The
-crowd uses sixteen repeated headings of the requested installed `-unit`, at
-1920×1080, with structure AA when the definition selects a structure. It omits
-terrain, shadows, combat, simulation, input and audio; all poses are explicit
-tool inputs. Report preparation, CPU submission and observed draw cadence
-separately. `-shot=path.png` captures after sampling. The real-asset and device
-fixtures separately cover shadows, construction, clipping and attached units.
+* an opaque command joins the current phase unless its rectangle touches a cell
+  written by a destination-reading command already in the current phase; then it
+  opens the next phase (it must overwrite that result, so it must draw after it);
+* a destination-reading command joins the current phase unless its rectangle
+  touches a cell written by another destination-reading command already in the
+  current phase; then it opens the next phase (the later one reads the earlier
+  one's result);
+* cells are tagged per phase, so the tests above cost one grid lookup per cell
+  of the rectangle and no allocation after warm-up.
 
-Remaining performance work: measure repeatable stationary and changing-pose scenes, camera movement and
-combat; separate presentation scheduling from the 30 Hz authoritative tick
-without repeating audio or RNG consumption. Interpolation and enhanced visuals
-remain deferred. Older prototype contracts in §8–§9 describe historical stages;
-§10–§11 govern the current exclusive GPU path and performance work.
+This is C-G3's disjoint-run rule generalised across families. Within one batch,
+vertex order is record order, and the device rasterizes primitives of one draw in
+order, so overlapping opaque writes in the same batch still resolve to the later
+command. Overlapping smoke needs three to six phases per frame, hence about
+twenty draws for the world layer. The snapshot copy in (2) may be limited to the
+union rectangle of the phase's destination-reading batch. Batches whose vertex
+count would exceed the 16-bit index domain are split into consecutive draws
+without reordering.
 
-## 12. Renderer storage and batching
+**Fog as one pass** (C-G7). The recorded fog ops become a per-cell grid texture
+(kind, variant, frame and parity in the four channels) covering the visible
+cell range, rebuilt each frame from the record. One full-screen draw reads the
+pre-fog snapshot, the grid, the fog GAF atlas (all four variants of both
+families packed once) and the table atlas, and writes the fog result in place of
+the 1,177 per-cell draws. Per-pixel results equal the byte writers' [03 §3.3].
+Fog remains its own phase between the world phases before it and the interface
+phases after it, because it reads everything drawn so far.
 
-The renderer reuses frame-owned model state, transforms, polygons, image planes
-and GPU preparation arrays. Every simultaneously live body, shadow and child
-has a distinct borrowed slot; published snapshots still own deep copies. Reset
-occurs at the next recording boundary, with classic shadows borrowing additional
-slots during replay. Storage retains peak capacity; it is not a zero-allocation
-contract or a bounded-memory cache.
+**Models: per-frame slot atlas, no cache.** Every `Model` command with eligible
+geometry is allocated a slot in a per-frame atlas image (2048 wide, grown in
+height as needed, at most two pages) sized to its composition box; a body with a
+supersample packet gets a 2× slot on a separate 2× page and a native slot. The
+slot atlas is cleared once. All subjects' key passes are one draw (max blend,
+subject-local because each slot is disjoint), all colour passes are one draw
+(each fragment compares the interpolated key with the key stored at its own slot
+texel), all shadow silhouettes are one draw into shadow slots, and all 2× resolves
+are one draw into native slots. Outline, waterline/Digger clipping and reveal keep
+their researched semantics inside the colour pass or in one batched follow-up
+draw over the affected slots. The scene commit of a body is then a keyed quad in
+the opaque batch sampling the slot; the shadow commit is a destination-reading
+quad sampling the shadow slot and the body slot (for the coverage punch) through
+`ALP`. Attached-unit groups keep the sequential child merge of §10 over a small
+staging image, since there are a handful per frame. The image cache, its LRU,
+identity keys, page packer and pinning are removed; `ModelStats` drops the cache
+fields and keeps the counters that describe work performed.
 
-Modern rendering packs immutable texture frames into 2048-square pages and
-batches adjacent compatible faces without reordering source faces or scanlines.
-Large textures use the existing per-face GPU route. Eligible model cache misses
-are prepared in shared key/color passes and packed into reference-counted cache
-pages. Entries pin pages through replay; eviction releases a page only after its
-last entry leaves. Exact model identities still include pose and paint inputs.
-These packing sizes are implementation policy, not retail behavior.
+**Textured quads without strips.** Retail's span mapper interpolates each
+attribute along the two edges then across the row, which is bilinear over the
+quad in screen space. A textured quad therefore draws as two triangles whose
+fragment shader recovers U/V by inverse-bilinear interpolation from the four
+corner positions and UVs carried in the custom attributes, then floors before
+sampling as today. This removes the diagonal bend the strip path was introduced
+for [§5.1] without CPU scanline work. Crossed (folded) rings keep the strip path
+(about 66 per frame). The activated ARMSOLAR captures are the acceptance gate; a
+visible diagonal or zig-zag is a defect.
 
-Classic rasterization skips unused interpolation lanes and uses ordinary flat
-and textured writers when tracing and construction reveal are absent. General
-writers retain those cases. Piece transforms reuse the same sine/cosine values
-within one immutable node; rotation order and per-axis rounding remain intact.
+**Allocation policy.** Steady-state frames allocate nothing in the executor:
+vertex and index buffers, phase lists, grid tags, prepared face scratch and the
+fog grid bytes are reused across frames; no `map[string]any` uniform maps; no
+per-strip or per-face slice literals; texture and glyph atlases are built once
+per identity.
 
-The retained September 7–8 real-map prototype measured a mean CPU rendering
-reduction from 14.33 to 12.28 ms at 1920×1080, excluding simulation, upload,
-pacing and screenshots. GPU and CPU allocation reductions were measured in the
-same seeded Ashap Plateau battle. These are development observations, not a
-universal frame-time guarantee. Activated 2× solar captures and final battle
-captures matched their respective pre-optimization baselines; CPU/GPU pixel
-identity is not claimed. Full raw experiments remain outside the production
-codebase on the retained profiling branches.
+### 11.3 Public API
+
+Unchanged: `New`, `NewChecked`, `Execute(list, w, h) *ebiten.Image`,
+`ModelStats()` (fields may be removed, never given new meaning), and the
+`drawlist.Sink` implementation. `Execute` still visits the list in record order
+and still returns the expanded image after the `Expand` marker.
+
+### 11.4 Verification
+
+Gates in addition to §6: the battle benchmark (`docs/BATTLE_BENCHMARK.md`) on
+both renderers before and after each unit, comparing modern against its own
+baseline capture; the instrumented device-call count (draws and clears per
+frame) reported in the unit's commit message; the fog, tinted-overlap,
+carrier/child and ARMSOLAR device fixtures; and zero steady-state allocations in
+the executor measured by the benchmark's allocation delta. The targets for the
+complete redesign at 1920×1080 are about thirty device draws per frame, CPU
+submission under 2 ms, and a 33 ms cadence at 30 Hz with headroom for 60 Hz
+presentation.
+
+## 12. Work units for §11
+
+Each unit is one worktree, one sub-agent, exclusive files; the orchestrator
+reviews the diff, re-runs the gates and merges.
+
+| Unit | Scope | Files owned | Gate |
+|---|---|---|---|
+| G1 fog grid | grid texture, fog GAF atlas, one fog pass | `fog.go`, `fog_shaders.go` (new), `fog_test.go` | fog device fixture; M6 dithered and M2 regions equal to classic bytes; fog draws 1,177 → 2 |
+| G2 slot atlas | per-frame model slot atlas, batched key/colour/shadow/resolve passes, cache removal | `models.go`, `model_*.go`, `model_shaders.go`, model tests | model device fixtures; ARMSOLAR and carrier captures; model draws per frame independent of unit count |
+| G3 scheduler | table atlas, scene and destination shaders, phase scheduler, all 2D families and model commits through it | `renderer.go`, `draw.go`, `sprites.go`, `deststage.go`, `text.go`, `terrain.go`, `shaders.go`, `tables.go`, `batch.go`, `schedule.go` (new), `atlas.go` (new); model commit call sites by API agreed with G2 | tinted-overlap fixture; M1–M8 non-model regions equal to classic; total draws about thirty |
+| G4 bilinear quads | inverse-bilinear textured quads, strips only for folded rings | `model_shaders.go`, prepare functions in `models.go` | ARMSOLAR activated/open captures; strip count about 66 |
+| G5 allocation sweep | zero steady-state allocation | whatever remains, one file set | benchmark allocation delta near classic's |
+
+G1 and G2 are independent and run first in parallel. G3 follows G2 because the
+model commit goes through the scheduler. G4 follows G2. G5 runs last. After each
+merge the orchestrator runs the battle benchmark on both renderers and records
+draws per frame, submission, cadence and allocations in the merge commit.

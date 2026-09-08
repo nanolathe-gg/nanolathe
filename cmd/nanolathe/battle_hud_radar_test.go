@@ -301,7 +301,7 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	cur := &frame.Frame{
 		Tick:       17,
 		Selection:  frame.SelectionView{LocalPlayer: local},
-		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
+		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, MappingSource: 1, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
 		Radar: frame.RadarView{BlinkPhase: 1, Contacts: []frame.RadarContactView{
 			// Selected, active, non-toggle unit: its published authored range
 			// produces a radar-colored circle and its authored blip pixel.

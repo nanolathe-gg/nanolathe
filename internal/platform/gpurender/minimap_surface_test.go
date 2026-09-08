@@ -28,6 +28,15 @@ func checkMinimapSurfaceDevicePixels() error {
 	if r.Execute(&list, 8, 6) == nil || r.surfaceWrites != writes {
 		return fmt.Errorf("unchanged durable surfaces uploaded again: %d -> %d", writes, r.surfaceWrites)
 	}
+	cacheWrites := r.surfaceWrites
+	for identity := uint64(11); identity <= 15; identity++ {
+		if r.uploadSurface(drawlist.Surface{Pixels: []byte{byte(identity)}, SrcW: 1, SrcH: 1, Identity: identity, Revision: 1}) == nil {
+			return fmt.Errorf("durable surface %d did not upload", identity)
+		}
+	}
+	if got, want := r.surfaceWrites, cacheWrites+5; got != want {
+		return fmt.Errorf("same-size cache eviction skipped upload: writes=%d want %d", got, want)
+	}
 	rgba := make([]byte, 8*6*4)
 	img.ReadPixels(rgba)
 	expected := map[int]byte{9: 0, 10: 77, 11: 2, 17: 3, 18: 4, 19: 5, 21: 9, 22: 10, 29: 11, 30: 12}

@@ -1,8 +1,9 @@
 package gpurender
 
 import (
-	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"slices"
+
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
 // Execute owns these buffers until all preparation and replay have finished.
@@ -33,44 +34,25 @@ func (s *frameScratch[T]) reset() {
 	s.next = 0
 }
 
+// modelPrepScratch retains every frame's preparation buffers, so a steady-state
+// frame prepares faces, strips and outline endpoints without allocating
+// [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
 type modelPrepScratch struct {
-	active   bool
 	strips   frameScratch[modelGPUFace]
 	vertices frameScratch[modelGPUVertex]
 	prepared frameScratch[preparedModelFace]
-	keys     map[*drawlist.ModelGeometry]string
+	ears     frameScratch[int]
+	indices  frameScratch[uint16]
 }
 
 func (s *modelPrepScratch) reset() {
 	s.strips.reset()
 	s.vertices.reset()
 	s.prepared.reset()
-	clear(s.keys)
+	s.ears.reset()
+	s.indices.reset()
 }
-func (r *Renderer) frameModelKey(g *drawlist.ModelGeometry) string {
-	s := &r.modelPrep
-	if !s.active {
-		return r.modelCache.identity(g)
-	}
-	if key, ok := s.keys[g]; ok {
-		return key
-	}
-	c := &r.modelCache
-	c.keyScratch = c.keyScratch[:0]
-	c.appendGeometry(g)
-	var key string
-	// A temporary byte-to-string map lookup avoids allocating a duplicate key on hits.
-	if el := c.entries[string(c.keyScratch)]; el != nil {
-		key = el.Value.(*modelCacheEntry).key
-	} else {
-		key = string(c.keyScratch)
-	}
-	if s.keys == nil {
-		s.keys = make(map[*drawlist.ModelGeometry]string)
-	}
-	s.keys[g] = key
-	return key
-}
+
 func (r *Renderer) prepareSpanStrips(f drawlist.ModelFace) []modelGPUFace {
 	rows := 0
 	if len(f.Vertices) > 0 {

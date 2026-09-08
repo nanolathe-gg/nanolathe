@@ -177,16 +177,16 @@ func (c *Client) emitModel(pending pendingModelCommit) {
 // classicModelImage copies the recorder's mutable model planes into the draw
 // command. The command owns the values that replay needs, including a staging
 // body and a child-only shadow [03 R-REN-03A §4].
-func classicModelImage(t *modelTarget) *drawlist.ClassicModelImage {
+func (c *Client) classicModelImage(t *modelTarget) *drawlist.ClassicModelImage {
 	if t == nil {
 		return nil
 	}
-	return &drawlist.ClassicModelImage{
-		Color: append([]byte(nil), t.color...), Coverage: append([]bool(nil), t.covered...), Key: append([]byte(nil), t.height...),
+	return c.list.CopyClassicImage(drawlist.ClassicModelImage{
+		Color: t.color, Coverage: t.covered, Key: t.height,
 		Width: int32(t.width), Height: int32(t.heightPx),
 		OriginX: t.originX, OriginY: t.originY, AnchorX: t.anchorX, AnchorY: t.anchorY,
 		Transparent: t.transparent,
-	}
+	})
 }
 
 // classicModelTarget adapts owned packet planes to the one model-image blitter
@@ -214,15 +214,15 @@ func (c *Client) classicModelForCommit(p pendingModelCommit) *drawlist.ClassicMo
 	}
 	classic := &drawlist.ClassicModel{}
 	if p.shadow {
-		classic.Shadow = classicModelImage(c.buildModelShadow(p.m.draw, p.m.image))
+		classic.Shadow = c.classicModelImage(c.buildModelShadow(p.m.draw, p.m.image))
 	}
 	if p.body {
-		classic.Body = classicModelImage(p.blit)
+		classic.Body = c.classicModelImage(p.blit)
 	}
 	if p.trace && p.m.raster != nil && p.m.raster.trace != nil {
 		trace := p.m.raster.trace
 		sink, filter := c.rendererTraceSink, c.rendererTraceFilter
-		classic.Trace = classicModelImage(p.m.raster)
+		classic.Trace = c.classicModelImage(p.m.raster)
 		classic.Observer = func(target *drawlist.ClassicModelImage, indexed []byte, width, height int) {
 			trace.resolve(classicModelTarget(target), indexed, width, height)
 			trace.emit(sink, filter)

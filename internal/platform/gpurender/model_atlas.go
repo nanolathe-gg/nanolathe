@@ -3,9 +3,11 @@ package gpurender
 import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/formats"
-	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
+// modelTextureAtlas packs every resolved 3DO texture frame into shared pages, so
+// one batched body pass can carry faces of many subjects and many textures
+// (C-G9). Frames are packed once per identity and reused for their lifetime.
 type modelTextureSlot struct {
 	img        *ebiten.Image
 	x, y, w, h int
@@ -57,68 +59,4 @@ func (r *Renderer) modelTextureFor(f *formats.GAFFrame) modelTextureSlot {
 	}
 	a.slots[f] = s
 	return s
-}
-
-// Preserve source face and scanline order while sharing immutable texture pages.
-func (r *Renderer) drawModelFacesBatched(g *drawlist.ModelGeometry, faces []preparedModelFace, key bool) {
-	// The packed dimension lane is exact only for dimensions below 4096.
-	// Keep the existing per-face GPU route for larger textures.
-	for _, f := range faces {
-		if t := f.face.Texture; t != nil && (int(t.Width) >= 4096 || int(t.Height) >= 4096) {
-			for _, face := range faces {
-				r.drawPreparedModelFace(g, face, key)
-			}
-			return
-		}
-	}
-
-	for _, f := range faces {
-		r.modelTextureFor(f.face.Texture)
-	}
-	r.resetGeometry()
-	var page *ebiten.Image
-	uniforms := modelBodyUniforms(g, g.KeyPlane)
-	uniforms["TextureAtlas"] = true
-	flush := func() {
-		if len(r.idx) == 0 {
-			return
-		}
-		if key {
-			r.modelKeyImage.DrawTrianglesShader(r.verts, r.idx, r.modelKey, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.Blend{BlendOperationRGB: ebiten.BlendOperationMax, BlendOperationAlpha: ebiten.BlendOperationMax}, Images: [4]*ebiten.Image{r.modelCoord}})
-		} else {
-			r.modelColor.DrawTrianglesShader(r.verts, r.idx, r.modelBody, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Uniforms: uniforms, Images: [4]*ebiten.Image{r.modelCoord, r.modelKeyImage, r.tables.shade, page}})
-		}
-		r.resetGeometry()
-	}
-	dx, dy := g.AnchorX-g.OriginX-int32(r.modelRasterOrigin.X), g.AnchorY-g.OriginY-int32(r.modelRasterOrigin.Y)
-	appendFace := func(v []modelGPUVertex, idx []uint16, tex *formats.GAFFrame, c uint8, shaded bool) {
-		s := r.modelTextureFor(tex)
-		if !key && s.img != nil && page != s.img {
-			flush()
-			page = s.img
-		}
-		if len(r.verts)+len(v) > 65535 {
-			flush()
-		}
-		base := uint16(len(r.verts))
-		for _, p := range v {
-			q := ebiten.Vertex{DstX: float32(dx) + p.X, DstY: float32(dy) + p.Y, SrcX: float32(s.x + r.modelCoord.Bounds().Min.X), SrcY: float32(s.y + r.modelCoord.Bounds().Min.Y), ColorR: p.Key, ColorG: p.Shade, ColorB: float32(c), ColorA: 1, Custom0: p.U, Custom1: p.V, Custom3: boolFloat(shaded)}
-			if tex != nil {
-				q.Custom2 = float32(s.w*4096 + s.h)
-			}
-			r.verts = append(r.verts, q)
-		}
-		for _, i := range idx {
-			r.idx = append(r.idx, base+i)
-		}
-	}
-	for _, f := range faces {
-		for _, s := range f.strips {
-			appendFace(s.Vertices, []uint16{0, 1, 2, 0, 2, 3}, s.Texture, s.Color, s.Shaded)
-		}
-		if len(f.indices) > 0 {
-			appendFace(f.vertices, f.indices, f.face.Texture, f.face.Color, f.face.Shaded)
-		}
-	}
-	flush()
 }

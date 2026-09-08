@@ -3,9 +3,13 @@
 package visibility
 
 import (
+	"sync/atomic"
+
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
+
+var presentationIdentity atomic.Uint64
 
 // Mode is the four low mode-word bits [03 §3.1] [PLAN_05 C2].
 // Bit 3 is solely the presentation fog-cache-valid bit; it is not a terrain
@@ -38,6 +42,7 @@ type Service struct {
 	// revisions, never simulation counters [03 §2.4][03 §3.6].
 	mappingVersion         uint64
 	fogVersion             uint64
+	presentationIdentity   uint64
 	rebuildingPresentation bool
 
 	// Authored raster inputs [03 §3.2]. Both nil means neither raster can
@@ -93,7 +98,7 @@ type footprint struct {
 // New creates a Service for terrain t and mode [03 §3.1] C1.
 // Allocation is (cellW/2)*(cellH/2) bytes*2 = cellW*cellH/2 bytes as []uint16 [03 §3.1].
 func New(t *world.Terrain, mode Mode) *Service {
-	s := &Service{terrain: t, mode: mode & 0x0f, local: 0}
+	s := &Service{terrain: t, mode: mode & 0x0f, local: 0, presentationIdentity: presentationIdentity.Add(1)}
 	if t != nil {
 		s.W = t.CellW / 2
 		s.H = t.CellH / 2
@@ -185,11 +190,22 @@ func (s *Service) SetMode(m Mode) {
 	if s == nil {
 		return
 	}
-	next := m & 0x0f
-	if next != s.mode {
-		s.mode = next
+	const semantic = ModeHistoryEnabled | ModeCurrentEnabled | ModeTerrainRay
+	next := m & semantic
+	if next != s.mode&semantic {
+		s.mode = s.mode&ModeFogCacheValid | next
 		s.invalidatePresentation()
 	}
+}
+
+// PresentationIdentity distinguishes replacement visibility services whose
+// local revision counters both begin at zero. It is presentation-only and
+// never enters simulation state or RNG [03 §2.4].
+func (s *Service) PresentationIdentity() uint64 {
+	if s == nil {
+		return 0
+	}
+	return s.presentationIdentity
 }
 
 // MappingVersion is the local viewer's immutable mapping-input revision. It

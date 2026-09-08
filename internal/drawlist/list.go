@@ -344,7 +344,7 @@ type tag struct {
 // List is one frame's draw commands in record order (C-G1). It keeps a
 // per-family backing slice plus an ordering index of tags, so Replay can visit
 // commands across families in exact record order (C-G3) while Reset reuses
-// every array. A steady-state frame allocates nothing after warm-up.
+// backing arrays. Capacity grows when the recorded workload grows.
 type List struct {
 	order   []tag
 	terrain []Terrain
@@ -357,6 +357,9 @@ type List struct {
 	fog     []Fog
 	surface []Surface
 	cursor  []Cursor
+
+	classicImages    []*ClassicModelImage
+	classicImageNext int
 }
 
 // RecordClear appends the frame-clear marker in record order. It carries no
@@ -459,6 +462,7 @@ func (l *List) RecordExpand() {
 // Reset truncates every backing slice to zero length WITHOUT freeing capacity,
 // so a re-recorded frame that fits reuses the arrays and allocates nothing.
 func (l *List) Reset() {
+	l.classicImageNext = 0
 	l.order = l.order[:0]
 	l.terrain = l.terrain[:0]
 	l.sprite = l.sprite[:0]

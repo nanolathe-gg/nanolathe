@@ -369,13 +369,16 @@ func (c *Client) drawFog(cur *frame.Frame) {
 		if _, valid1 := visibilityGridSize(cur.Fog.W, cur.Fog.H, len(cur.Fog.Ch1)); !valid1 {
 			return
 		}
+		unchanged := c.fogCache != nil && cur.Fog.Source != 0 && cur.Fog.Version != 0 && c.fogSource == cur.Fog.Source && c.fogVersion == cur.Fog.Version
 		if c.fogCache == nil {
 			c.fogCache = visibility.NewFogCacheFromChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1)
 			c.fogVersion = cur.Fog.Version
-		} else if c.fogVersion != cur.Fog.Version && !c.fogCache.ReplaceChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1) {
+			c.fogSource = cur.Fog.Source
+		} else if !unchanged && !c.fogCache.ReplaceChannelsAt(cur.Fog.W, cur.Fog.H, cur.Fog.OriginX, cur.Fog.OriginZ, cur.Fog.Ch0, cur.Fog.Ch1) {
 			return
-		} else if c.fogVersion != cur.Fog.Version {
+		} else if !unchanged {
 			c.fogVersion = cur.Fog.Version
+			c.fogSource = cur.Fog.Source
 		}
 		c.ensureFogGAF()
 		// The window is the composed surface, which is what the per-operation

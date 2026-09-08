@@ -178,3 +178,23 @@ func (g *ModelGeometry) Clone() *ModelGeometry {
 	}
 	return &out
 }
+
+// CopyClassicImage freezes composition scratch in storage owned by this list.
+// Each call gets distinct planes until Reset; retained lists use Clone, which
+// copies these planes independently of this reusable recording storage [C-G5].
+func (l *List) CopyClassicImage(src ClassicModelImage) *ClassicModelImage {
+	if l.classicImageNext == len(l.classicImages) {
+		l.classicImages = append(l.classicImages, &ClassicModelImage{})
+	}
+	dst := l.classicImages[l.classicImageNext]
+	l.classicImageNext++
+	color := append(dst.Color[:0], src.Color...)
+	coverage := append(dst.Coverage[:0], src.Coverage...)
+	key := append(dst.Key[:0], src.Key...)
+	if src.Key == nil {
+		key = nil
+	}
+	*dst = src
+	dst.Color, dst.Coverage, dst.Key = color, coverage, key
+	return dst
+}

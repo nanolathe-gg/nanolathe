@@ -138,7 +138,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// [03 §3.6][I6].
 	h.radar.SetBlinkPhase(cur.Radar.BlinkPhase)
 	if cur.Visibility.Valid {
-		h.radar.RebuildMappedVersion(cur.Visibility.WordVisible, cur.Visibility.Visible, cur.Visibility.MappingVersion)
+		h.radar.RebuildMappedVersion(cur.Visibility.WordVisible, cur.Visibility.Visible, cur.Visibility.MappingSource, cur.Visibility.MappingVersion)
 	}
 	// The committed contacts are the whole circle input: the sensor phase has no
 	// surface of its own and rasterizes nothing [03 §3.10] correction of

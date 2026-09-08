@@ -1,7 +1,6 @@
 package gpurender
 
 import (
-	"image"
 	"image/color"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -49,17 +48,19 @@ type Renderer struct {
 	// translucent strip and static-feature-shadow blit, and destTable is the
 	// shared light/shade rect and lit point pass. glyph is the keyed FNT text
 	// blit (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4).
-	litBlit               *ebiten.Shader
-	tint                  *ebiten.Shader
-	destTable             *ebiten.Shader
-	glyph                 *ebiten.Shader
-	modelKey              *ebiten.Shader
-	modelBody             *ebiten.Shader
-	modelCommit           *ebiten.Shader
-	modelShadowCommit     *ebiten.Shader
-	modelClip             *ebiten.Shader
-	modelPack, modelChild *ebiten.Shader
-	modelResolve          *ebiten.Shader
+	litBlit           *ebiten.Shader
+	tint              *ebiten.Shader
+	destTable         *ebiten.Shader
+	glyph             *ebiten.Shader
+	modelKey          *ebiten.Shader
+	modelBody         *ebiten.Shader
+	modelCommit       *ebiten.Shader
+	modelShadowCommit *ebiten.Shader
+	modelClip         *ebiten.Shader
+	modelReveal       *ebiten.Shader
+	modelCopy         *ebiten.Shader
+	modelChild        *ebiten.Shader
+	modelResolve      *ebiten.Shader
 
 	// offscreen is the indexed frame surface, RGBA8 with the palette index in the
 	// red channel (C-G4). output is the expanded RGBA surface Execute returns.
@@ -78,23 +79,20 @@ type Renderer struct {
 	// dest-reading write never samples a pixel it just changed. It is full-surface
 	// and aligned 1:1 with the offscreen, recreated when the frame size changes.
 	destScratch *ebiten.Image
-	// modelKey is the subject-local maximum byte-key plane. modelCoord is a
-	// same-sized coordinate source used to address the key/table/texture inputs
-	// from one Kage source space while a face carries UVs separately.
-	modelKeyImage                 *ebiten.Image
-	modelColor                    *ebiten.Image
-	modelProcessed                *ebiten.Image
+	// modelAtlas is the per-frame slot atlas every model subject rasterizes
+	// into before any of them commits (docs/DESIGN_GPU_RENDERER.md §11.2).
+	// modelStage/modelStageScratch are the attached-unit group's staging pair,
+	// grown to the largest group seen and reused. modelOpts and modelStageOp
+	// are reused draw options, so a steady-state frame's model draws allocate
+	// no options value and no uniform map.
+	modelAtlas                    modelSlotAtlas
+	modelPageLimit                int
 	modelStage, modelStageScratch *ebiten.Image
-	modelCoord                    *ebiten.Image
-	modelRasterOrigin             image.Point
-	modelScratch                  [4]*ebiten.Image
-	modelCache                    modelImageCache
+	modelStageW, modelStageH      int
+	modelOpts                     ebiten.DrawTrianglesShaderOptions
+	modelStageOp                  ebiten.DrawImageOptions
 	textureAtlas                  modelTextureAtlas
-	stageAtlas                    [3]*ebiten.Image
 	w, h                          int
-
-	modelSuperColor, modelSuperKey, modelSuperCoord *ebiten.Image
-	modelSuperW, modelSuperH                        int
 
 	// tileAtlases caches one tile-index atlas per *world.Terrain identity, built
 	// on first Terrain draw and reused for the map's lifetime (C-G4,
@@ -132,6 +130,10 @@ type Renderer struct {
 	idx   []uint16
 
 	modelStats ModelStats
+
+	// fog is the fog pass state of docs/DESIGN_GPU_RENDERER.md §11.2, owned by
+	// fog.go so the fog unit and the model unit never edit the same file.
+	fog fogPass
 }
 
 type surfaceUpload struct {
@@ -178,7 +180,8 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	modelCommit, modelCommitErr := newModelCommitShader()
 	modelShadowCommit, modelShadowCommitErr := newModelShadowCommitShader()
 	modelClip, modelClipErr := newModelClipShader()
-	modelPack, modelPackErr := newModelPackShader()
+	modelReveal, modelRevealErr := newModelRevealShader()
+	modelCopy, modelCopyErr := newModelCopyShader()
 	modelChild, modelChildErr := newModelChildShader()
 	modelResolve, modelResolveErr := newModelResolveShader()
 	r := &Renderer{
@@ -201,7 +204,8 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		modelCommit:       modelCommit,
 		modelShadowCommit: modelShadowCommit,
 		modelClip:         modelClip,
-		modelPack:         modelPack,
+		modelReveal:       modelReveal,
+		modelCopy:         modelCopy,
 		modelChild:        modelChild,
 		modelResolve:      modelResolve,
 		tileAtlases:       make(map[*world.Terrain]*tileAtlas),
@@ -267,7 +271,10 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		err = modelClipErr
 	}
 	if err == nil {
-		err = modelPackErr
+		err = modelRevealErr
+	}
+	if err == nil {
+		err = modelCopyErr
 	}
 	if err == nil {
 		err = modelChildErr
@@ -309,16 +316,14 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	if r.offscreen == nil {
 		return nil
 	}
-	r.modelStats = ModelStats{UnsupportedFace: -1, CacheBytes: r.modelCache.bytes}
+	r.modelStats = ModelStats{UnsupportedFace: -1}
 	r.modelPrep.reset()
-	r.modelPrep.active = true
-	defer func() { r.modelPrep.reset(); r.modelPrep.active = false }()
-	pins := r.prepareModelPages(list)
+	defer r.modelPrep.reset()
+	// Every eligible subject of the frame is rasterized into the slot atlas
+	// before Replay commits any of them, so the model stages cost a fixed
+	// number of draws instead of one set per subject (§11.2).
+	r.prepareModelSlots(list)
 	list.Replay(r)
-	for _, e := range pins {
-		e.pins--
-	}
-	r.trimModelCache()
 	return r.output
 }
 
@@ -381,8 +386,9 @@ func (r *Renderer) Expand() {
 // Glyphs is implemented in text.go: the keyed FNT text blit over the indexed
 // offscreen (C-G4).
 
-// Model is implemented in models.go: the shadow (ALP) and body (keyed) commit of
-// GPU-rasterized, cached local composition images (DESIGN_GPU_RENDERER §11).
+// Model is implemented in models.go and model_slots.go: every subject of the
+// frame is rasterized into the per-frame slot atlas, then each command commits
+// its shadow (ALP) and body (keyed) from its slot (DESIGN_GPU_RENDERER §11.2).
 
 // Fog is implemented in fog.go: the fog composite over the indexed offscreen
 // (C-G7).

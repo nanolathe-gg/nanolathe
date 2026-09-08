@@ -21,6 +21,11 @@ func TestPresentationVersionsFollowLocalInvalidationAndFogRebuild(t *testing.T) 
 	if s.FogVersion() <= fog0 {
 		t.Fatalf("completed fog rebuild did not advance fog version: %d -> %d", fog0, s.FogVersion())
 	}
+	stableMode := s.MappingVersion()
+	s.SetMode(s.Mode() &^ ModeFogCacheValid)
+	if s.MappingVersion() != stableMode || !s.FogCacheValid() {
+		t.Fatal("SetMode treated the internal fog-valid bit as a semantic mode change")
+	}
 	stable := s.MappingVersion()
 	s.SetLocal(0)
 	if s.MappingVersion() != stable {

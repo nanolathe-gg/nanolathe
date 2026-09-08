@@ -28,6 +28,7 @@ type MinimapService struct {
 	local                  uint8
 	dcb                    byte
 	remap                  []byte
+	mappedSource           uint64
 	mappedVersion          uint64
 	finalInputVersion      uint64
 	finalRevision          uint64
@@ -122,40 +123,29 @@ func (s *MinimapService) SetBlinkPhase(phase uint8) {
 // RebuildMapped composites the picture against the supplied LOS stores. It
 // does not mutate them and marks FINAL dirty after the composite. [03 §3.8]
 //
-// Retail gates the composite on the MAPPED dirty bit, and that bit is raised
-// by the tail of the LOS raster publication — the same tail that clears the
-// fog-cache-valid mode bit, and under the same two conditions: the raster
-// changed at least one cell, and the observer belongs to the local viewing
-// player [03 §3.6 "Mapped-surface invalidation"][R-VIS-01 §2]. Our
-// presentation layer receives the committed word mask and byte grid once per
-// tick and has no separate invalidation channel from the publisher, so the
-// composite runs on every supplied pair instead of behind a bit nothing can
-// raise. The picture is identical either way: MAPPED is a pure function of the
-// picture and the two stores, which is exactly what the dirty bit caches, and
-// the composite is bounded by the 126-pixel radar canvas rather than by the
-// map-sized stores.
-//
-// Gating on the allocation-time bit alone froze MAPPED at the first frame the
-// HUD composited, so terrain explored after that frame never reached the
-// minimap and the fog tint never changed (playtest defect PT3-13).
+// Retail gates the composite on the MAPPED dirty bit, raised by a local
+// observer's changed LOS raster [03 §3.6 "Mapped-surface invalidation"]
+// [R-VIS-01 §2]. Publication carries that event as MappingVersion. The
+// versioned API therefore reuses MAPPED for a retained immutable input while
+// the zero-version compatibility API remains dynamic.
 func (s *MinimapService) RebuildMapped(word []uint16, current []uint8) bool {
-	return s.RebuildMappedVersion(word, current, 0)
+	return s.RebuildMappedVersion(word, current, 0, 0)
 }
 
-// RebuildMappedVersion consumes a committed mapping revision. A zero revision
-// retains the legacy dynamic API; a nonzero revision skips recomposition when
-// the immutable mapping inputs are unchanged [03 §3.6].
-func (s *MinimapService) RebuildMappedVersion(word []uint16, current []uint8, version uint64) bool {
+// RebuildMappedVersion consumes a source identity and its committed revision.
+// A zero source retains the dynamic API; a known source can retain revision
+// zero until its first visibility mutation [03 §3.6].
+func (s *MinimapService) RebuildMappedVersion(word []uint16, current []uint8, source, version uint64) bool {
 	if s == nil || s.picture == nil {
 		return false
 	}
-	if version != 0 && s.mapped != nil && s.mappedVersion == version {
+	if source != 0 && s.mapped != nil && s.mappedSource == source && s.mappedVersion == version {
 		return true
 	}
 	s.mapped = BuildMapped(s.picture, word, current, s.mapW, s.mapH, s.local, s.dcb, s.remap)
 	s.dirty &^= MinimapDirtyMapped
 	s.dirty |= MinimapDirtyFinal
-	s.mappedVersion = version
+	s.mappedSource, s.mappedVersion = source, version
 	return s.mapped != nil
 }
 
@@ -182,7 +172,7 @@ func (s *MinimapService) RebuildFinalVersion(m camera.Minimap, playW, playH int3
 	if s == nil || s.mapped == nil {
 		return false
 	}
-	if version != 0 && s.final != nil && s.finalInputVersion == version {
+	if version != 0 && s.final != nil && s.finalInputVersion == version && s.dirty&MinimapDirtyFinal == 0 {
 		return true
 	}
 	// The contacts pass is the sole circle producer: every circle on FINAL comes

@@ -427,8 +427,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// mode-dependent/raw representation remains owned by visibility [03 §3.1–§3.2].
 	// Radar is a separate presentation surface, not a mask
 	// published by visibility.Service [03 §3.4], so it remains unset. The
-	// service currently has no generation counter; Version consequently stays
-	// zero rather than inventing one [I9].
+	// Visibility publishes immutable presentation revisions; source identity
+	// prevents a fresh service from restoring another service's retained bytes.
 	if s.Vis != nil {
 		publishVisibilityView(s.Vis, s.LocalOwner, published)
 		// Step 3 of the gate compares against the scaled sea-level byte, never
@@ -437,7 +437,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 		s.Vis.RebuildFog(0, 0)
 		if fc := s.Vis.Fog(); fc != nil {
 			version := s.Vis.FogVersion()
-			if !published.RestoreFog(version) {
+			source := s.Vis.PresentationIdentity()
+			if !published.RestoreFog(source, version) {
 				w, h := fc.Dimensions()
 				ch0, ch1 := fc.Channels()
 				published.Fog.W = w
@@ -446,6 +447,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				published.Fog.Ch0 = copyBytesInto(published.Fog.Ch0, ch0)
 				published.Fog.Ch1 = copyBytesInto(published.Fog.Ch1, ch1)
 				published.Fog.Version = version
+				published.Fog.Source = source
 			}
 			published.Fog.Valid = s.Vis.FogCacheValid()
 		}
@@ -1213,7 +1215,8 @@ func publishVisibilityView(vis *visibility.Service, local uint8, dst *frame.Fram
 		return
 	}
 	version := vis.MappingVersion()
-	if dst.RestoreVisibility(version) {
+	source := vis.PresentationIdentity()
+	if dst.RestoreVisibility(source, version) {
 		return
 	}
 	out := &dst.Visibility
@@ -1238,6 +1241,7 @@ func publishVisibilityView(vis *visibility.Service, local uint8, dst *frame.Fram
 	out.W, out.H = w, h
 	out.CoverageBytes, out.Valid = byteCoverage, true
 	out.MappingVersion = version
+	out.MappingSource = source
 }
 
 // publishedMoverMode is the selector the composer's two unit passes split on:

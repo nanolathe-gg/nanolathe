@@ -1,6 +1,7 @@
 package render
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/camera"
@@ -560,15 +561,15 @@ func TestMinimapServiceReusesMappedRevisionAndRefreshesFinalRevision(t *testing.
 	s := NewMinimapService(MinimapServiceConfig{Picture: picture, MapW: 1, MapH: 1, LocalSlot: 0})
 	word := []uint16{1}
 	current := []uint8{1}
-	if !s.RebuildMappedVersion(word, current, 3) {
+	if !s.RebuildMappedVersion(word, current, 1, 3) {
 		t.Fatal("first mapped build failed")
 	}
 	first := s.mapped
 	word[0] = 0
-	if !s.RebuildMappedVersion(word, current, 3) || s.mapped != first {
+	if !s.RebuildMappedVersion(word, current, 1, 3) || s.mapped != first {
 		t.Fatal("unchanged mapping revision rebuilt MAPPED")
 	}
-	if !s.RebuildMappedVersion(word, current, 4) || s.mapped == first {
+	if !s.RebuildMappedVersion(word, current, 1, 4) || s.mapped == first {
 		t.Fatal("new mapping revision did not rebuild MAPPED")
 	}
 	m := camera.Minimap{W: 1, H: 1}
@@ -579,6 +580,18 @@ func TestMinimapServiceReusesMappedRevisionAndRefreshesFinalRevision(t *testing.
 	if !s.RebuildFinalVersion(m, 1, 1, nil, nil, 0, 0, 0, 9) || s.FinalRevision() != revision {
 		t.Fatal("same final input rebuilt FINAL")
 	}
+
+	// A replacement publisher may start with the same counter. Both surfaces
+	// must refresh even when the host is still presenting the same tick.
+	word[0] = 1
+	before := append([]byte(nil), s.final.Bits...)
+	if !s.RebuildMappedVersion(word, current, 2, 4) || !s.RebuildFinalVersion(m, 1, 1, nil, nil, 0, 0, 0, 9) {
+		t.Fatal("replacement source failed to rebuild")
+	}
+	if s.FinalRevision() <= revision || bytes.Equal(before, s.final.Bits) {
+		t.Fatal("replacement source retained stale FINAL pixels at the same tick")
+	}
+	revision = s.FinalRevision()
 	s.SetBlinkPhase(1)
 	if !s.RebuildFinalVersion(m, 1, 1, nil, nil, 0, 0, 0, 10) || s.FinalRevision() <= revision {
 		t.Fatal("blink input did not refresh FINAL")

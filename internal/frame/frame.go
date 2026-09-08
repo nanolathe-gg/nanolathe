@@ -580,6 +580,9 @@ type VisibilityView struct {
 	// into this frame slot. Reset retains those bytes until a newer revision
 	// arrives, so alternating slots do not copy an unchanged grid [03 §2.4].
 	MappingVersion uint64
+	// MappingSource distinguishes a replacement visibility service from a
+	// separate service that happens to publish the same revision number.
+	MappingSource uint64
 	// SeaLevel is the map header's sea-level byte scaled to 16.16 world units,
 	// which is the value the gameplay visibility gate's step 3 compares a
 	// unit's base height against — the comparison is against that scaled byte
@@ -866,6 +869,9 @@ type FogView struct {
 	Valid            bool
 	// Version identifies the completed derived fog bytes in this frame slot.
 	Version uint64
+	// Source distinguishes a replacement visibility service at the frame
+	// boundary [03 §2.4]. Zero retains dynamic fixture behaviour.
+	Source uint64
 }
 
 // Frame is one committed tick-end presentation payload.  It owns all slices;
@@ -1064,8 +1070,8 @@ func (f *Frame) Reset() {
 // RestoreVisibility restores this slot's last immutable visibility copy when
 // it already represents version. It is a publication optimization, not a
 // general retained-frame API [03 §2.4].
-func (f *Frame) RestoreVisibility(version uint64) bool {
-	if f == nil || !f.retainedVisibility.Valid || f.retainedVisibility.MappingVersion != version {
+func (f *Frame) RestoreVisibility(source, version uint64) bool {
+	if f == nil || source == 0 || !f.retainedVisibility.Valid || f.retainedVisibility.MappingSource != source || f.retainedVisibility.MappingVersion != version {
 		return false
 	}
 	f.Visibility = f.retainedVisibility
@@ -1073,8 +1079,8 @@ func (f *Frame) RestoreVisibility(version uint64) bool {
 }
 
 // RestoreFog restores this slot's last immutable fog copy for version.
-func (f *Frame) RestoreFog(version uint64) bool {
-	if f == nil || !f.retainedFog.Valid || f.retainedFog.Version != version {
+func (f *Frame) RestoreFog(source, version uint64) bool {
+	if f == nil || source == 0 || !f.retainedFog.Valid || f.retainedFog.Source != source || f.retainedFog.Version != version {
 		return false
 	}
 	f.Fog = f.retainedFog

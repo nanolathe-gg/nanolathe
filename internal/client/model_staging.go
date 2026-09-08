@@ -96,7 +96,7 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 		c.finishModel(carrier, nil)
 		return true
 	}
-	staging := newStagingImage(carrier.image, staged)
+	staging := stagingImage(carrier.image, staged, c.borrowModelImage)
 	for i := range staged {
 		staging.compositeChild(staged[i].model.image, staged[i].keyDelta)
 		if carrier.geometry != nil && staged[i].model.geometry != nil {
@@ -239,6 +239,12 @@ func (c *Client) drawChildModel(v frame.UnitView) {
 // the offset those anchors already carry. Uniting the projected rectangles is
 // that statement without a second copy of the projection.
 func newStagingImage(body *modelTarget, children []stagingChild) *modelTarget {
+	return stagingImage(body, children, newModelImage)
+}
+
+// Recording uses a distinct frame-owned image slot; standalone callers keep
+// independently allocated storage. Both use the same union and composition.
+func stagingImage(body *modelTarget, children []stagingChild, allocate func(int, int, int32, int32, int32, int32, bool, int32) *modelTarget) *modelTarget {
 	if body == nil {
 		return nil
 	}
@@ -266,7 +272,7 @@ func newStagingImage(body *modelTarget, children []stagingChild) *modelTarget {
 	// puts the union's top-left corner at image pixel (0,0).
 	originX := body.anchorX - left
 	originY := body.anchorY - top
-	staging := newModelImage(int(right-left+1), int(bottom-top+1), originX, originY, body.anchorX, body.anchorY, body.height != nil, 1)
+	staging := allocate(int(right-left+1), int(bottom-top+1), originX, originY, body.anchorX, body.anchorY, body.height != nil, 1)
 	staging.copyFrom(body)
 	return staging
 }

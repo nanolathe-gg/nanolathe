@@ -164,13 +164,16 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		g.err = checkConstantShadeRows()
 	}
 	if g.err == nil {
-		g.err = checkCachedModelFrames()
+		g.err = checkModelSlotFrames()
 	}
 	if g.err == nil {
 		g.err = checkFeatureShadowDevicePixels()
 	}
 	if g.err == nil {
 		g.err = checkMinimapSurfaceDevicePixels()
+	}
+	if g.err == nil {
+		g.err = checkFogDevicePixels()
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }

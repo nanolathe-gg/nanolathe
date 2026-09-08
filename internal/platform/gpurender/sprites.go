@@ -371,9 +371,10 @@ func (r *Renderer) uploadSurface(sf drawlist.Surface) *ebiten.Image {
 	upload := true
 	if sf.Identity != 0 {
 		r.surfaceClock++
-		entry = r.surfaceEntry(sf.Identity)
+		var found bool
+		entry, found = r.surfaceEntry(sf.Identity)
 		entry.used = r.surfaceClock
-		upload = entry.img == nil || entry.w != srcW || entry.h != srcH || sf.Revision == 0 || entry.revision != sf.Revision
+		upload = !found || entry.img == nil || entry.w != srcW || entry.h != srcH || sf.Revision == 0 || entry.revision != sf.Revision
 		if !upload {
 			return entry.img
 		}
@@ -410,16 +411,16 @@ func (r *Renderer) uploadSurface(sf drawlist.Surface) *ebiten.Image {
 	return entry.img
 }
 
-func (r *Renderer) surfaceEntry(identity uint64) *surfaceUpload {
+func (r *Renderer) surfaceEntry(identity uint64) (*surfaceUpload, bool) {
 	var oldest *surfaceUpload
 	for i := range r.surfaceCache {
 		entry := &r.surfaceCache[i]
 		if entry.identity == identity {
-			return entry
+			return entry, true
 		}
 		if oldest == nil || entry.identity == 0 || entry.used < oldest.used {
 			oldest = entry
 		}
 	}
-	return oldest
+	return oldest, false
 }

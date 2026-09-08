@@ -36,3 +36,29 @@ func TestModelGeometryCloneOwnsFaceStorage(t *testing.T) {
 		t.Fatal("cloned classic coverage or key aliases recorder storage")
 	}
 }
+
+// C-G5: recording a second subject or resetting the source list cannot change
+// a retained frame's owned body, shadow, placement, or painter-order key mode.
+func TestClassicImageStoragePreservesRetainedFrame(t *testing.T) {
+	var list List
+	source := ClassicModelImage{Color: []byte{7}, Coverage: []bool{true}, Key: []byte{80}, Width: 1, Height: 1, AnchorX: 3}
+	body := list.CopyClassicImage(source)
+	source.Color[0], source.Coverage[0], source.Key[0] = 9, false, 90
+	shadow := list.CopyClassicImage(source)
+	if body.Color[0] != 7 || !body.Coverage[0] || body.Key[0] != 80 {
+		t.Fatal("recorded body aliases scratch or another subject")
+	}
+	list.RecordModel(Model{Classic: &ClassicModel{Body: body, Shadow: shadow}})
+	saved := list.Clone()
+	list.Reset()
+	list.CopyClassicImage(ClassicModelImage{Color: []byte{1, 2}, Coverage: []bool{true, true}, Width: 2, Height: 1})
+	packet := saved.model[0].Classic
+	if packet.Body.Color[0] != 7 || packet.Body.Key[0] != 80 || packet.Body.AnchorX != 3 || packet.Shadow.Color[0] != 9 {
+		t.Fatal("reset overwrote retained classic planes or placement")
+	}
+	list.Reset()
+	keyless := list.CopyClassicImage(ClassicModelImage{Color: []byte{4}, Coverage: []bool{true}, Width: 1, Height: 1})
+	if keyless.Key != nil {
+		t.Fatal("keyless subject acquired a stale height plane")
+	}
+}

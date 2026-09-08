@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/nanolathe/nanolathe/internal/platform/benchlock"
 	"github.com/nanolathe/nanolathe/internal/version"
 )
 
@@ -79,6 +80,20 @@ func seedsFor(opts Options) (sim, crt uint32) {
 }
 
 func run(opts Options, out *os.File) error {
+	if opts.BattleBenchmark != "" {
+		path, err := benchlock.Path()
+		if err != nil {
+			return fmt.Errorf("nanolathe: locate benchmark lock: %w", err)
+		}
+		lock, err := benchlock.Acquire(path, func() {
+			fmt.Fprintf(os.Stderr, "nanolathe: battle benchmark waiting for lock %s\n", path)
+		})
+		if err != nil {
+			return fmt.Errorf("nanolathe: acquire benchmark lock %s: %w", path, err)
+		}
+		defer lock.Close()
+	}
+
 	if opts.LoadSave != "" && (opts.Map != "" || opts.Mission != "" || opts.Headless || opts.Shot != "") {
 		return fmt.Errorf("nanolathe: --load-save cannot be combined with --map, --mission, --headless, or --shot")
 	}
