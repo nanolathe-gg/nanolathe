@@ -3,7 +3,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -27,9 +26,9 @@ func TestRetailEndMissionAuthoredControls(t *testing.T) {
 	}
 	seen := make(map[string]bool)
 	for _, gadget := range window.Gadgets {
-		seen[strings.ToLower(gadget.Name)] = true
+		seen[gadget.Name] = true
 	}
-	for _, name := range []string{"start", "loadgame", "savegame", "mainmenu", "difficulty"} {
+	for _, name := range []string{"Start", "LoadGame", "SaveGame", "MainMenu", "Difficulty"} {
 		if !seen[name] {
 			t.Fatalf("endmsn.gui missing authored %s control", name)
 		}
@@ -74,10 +73,8 @@ func findGadget(window *gui.Window, name string) *gui.Gadget {
 	if window == nil {
 		return nil
 	}
-	for i := range window.Gadgets {
-		if strings.EqualFold(window.Gadgets[i].Name, name) {
-			return &window.Gadgets[i]
-		}
+	if i := window.GadgetIndex(name); i >= 0 {
+		return &window.Gadgets[i]
 	}
 	return nil
 }

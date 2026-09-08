@@ -3,6 +3,7 @@ package ui
 import (
 	"time"
 
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 )
 
@@ -404,38 +405,39 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 	if s == nil {
 		return BattleModalActionNone
 	}
+	name = gui.CallbackName(name)
 	switch s.modal {
 	case BattleModalOptions:
-		switch Key(name) {
-		case "ok", "cancel":
+		switch name {
+		case "OK", "CANCEL":
 			s.CloseOptions()
-		case "exit":
+		case "EXIT":
 			s.ShowExit()
-		case "savegame":
+		case "SAVEGAME":
 			// The dialog opens over ARMOPT, which stays on the modal chain
 			// [07 R-FE-01 §7] [07 R-FE-01 §8].
 			return BattleModalActionSaveGame
-		case "loadgame":
+		case "LOADGAME":
 			return BattleModalActionLoadGame
-		case "prefs":
+		case "PREFS":
 			// The options root opens over ARMOPT, which stays on the modal
 			// chain [07 R-FE-01 §6][07 R-FE-01 §7].
 			return BattleModalActionPrefs
 		}
 	case BattleModalExit:
-		switch Key(name) {
-		case "cancel":
+		switch name {
+		case "CANCEL":
 			s.modal = BattleModalOptions
-		case "mainmenu":
+		case "MAINMENU":
 			s.ShowConfirmation(true)
-		case "exitgame":
+		case "EXITGAME":
 			s.ShowConfirmation(false)
 		}
 	case BattleModalConfirmMain, BattleModalConfirmExit:
-		switch Key(name) {
-		case "choice2", "cancel":
+		switch name {
+		case "CHOICE2", "CANCEL":
 			s.modal = BattleModalOptions
-		case "choice1":
+		case "CHOICE1":
 			if s.modal == BattleModalConfirmMain {
 				return BattleModalActionMainMenu
 			}

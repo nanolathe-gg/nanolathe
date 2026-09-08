@@ -200,9 +200,9 @@ func TestParseLine(t *testing.T) {
 	if tr, err = ParseLine("AnyUnitPassesX=-1;"); err == nil || tr != nil {
 		t.Fatalf("negative boundary must not build a record: %v %+v", err, tr)
 	}
-	for _, value := range []string{"", "nonnumeric"} {
-		if tr, present := ParseCondition("AnyUnitPassesX", value); present || tr != nil {
-			t.Fatalf("malformed boundary %q built a record: %+v", value, tr)
+	for _, value := range []string{"", "nonnumeric", "0x100tail"} {
+		if tr, present := ParseCondition("AnyUnitPassesX", value); !present || tr == nil || tr.Args[0] != 0 {
+			t.Fatalf("ordinary boundary %q = %+v present=%v, want admitted zero [08 R-TRIG-01 §2]", value, tr, present)
 		}
 	}
 	if tr, present := ParseCondition("AnyUnitPassesX", "0"); !present || tr == nil || tr.Args[0] != 0 {
@@ -269,11 +269,18 @@ func TestParseConditionScanIntegerFamilies(t *testing.T) {
 		t.Fatalf("type boundary applies scan conversion before >>4: %+v present=%v", tr, present)
 	}
 
-	// The ordinary integer-accessor families do not use the %i prefix scan.
-	if tr, present = ParseCondition("AnyUnitPassesX", "0x100tail"); present || tr != nil {
-		t.Fatalf("AnyUnit boundary unexpectedly used scan conversion: %+v present=%v", tr, present)
+	// Ordinary integer-accessor families use decimal-prefix, wrapped TDF
+	// conversion rather than the %i scan format [08 R-TRIG-01 §2][fmt tdf].
+	if tr, present = ParseCondition("AnyUnitPassesX", "0x100tail"); !present || tr == nil || tr.Args[0] != 0 {
+		t.Fatalf("AnyUnit ordinary decimal conversion = %+v present=%v, want admitted zero", tr, present)
 	}
-	if tr, present = ParseCondition("VictoryTimerRunsOut", "077tail"); present || tr != nil {
-		t.Fatalf("timer unexpectedly used scan conversion: %+v present=%v", tr, present)
+	if tr, present = ParseCondition("VictoryTimerRunsOut", "077tail"); !present || tr == nil || tr.Args[0] != 77*30 {
+		t.Fatalf("timer ordinary decimal conversion = %+v present=%v, want %d", tr, present, 77*30)
+	}
+	if tr, present = ParseCondition("VictoryTimerRunsOut", "4294967297tail"); !present || tr == nil || tr.Args[0] != 30 {
+		t.Fatalf("timer wrapped integer = %+v present=%v, want 30", tr, present)
+	}
+	if tr, present = ParseCondition("KillEnemyCommander", "1tail"); !present || tr == nil {
+		t.Fatalf("flag decimal prefix did not build: %+v present=%v", tr, present)
 	}
 }

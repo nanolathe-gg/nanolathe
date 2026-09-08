@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
 )
@@ -313,22 +314,22 @@ func (s *saveLoadScreen) Activate(name string) saveLoadCommand {
 	if s == nil {
 		return saveLoadNone
 	}
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "load", "games", "gamename":
+	switch gui.CallbackName(name) {
+	case "LOAD", "GAMES", "GAMENAME":
 		return saveLoadCommit
-	case "delete":
+	case "DELETE":
 		if s.mode != saveScreenMode || s.selected < 0 {
 			return saveLoadNone
 		}
 		return saveLoadDelete
-	case "cancel":
+	case "CANCEL":
 		return saveLoadCancel
-	case "savegame":
+	case "SaveGame":
 		if s.mode == saveScreenMode {
 			return saveLoadNone
 		}
 		return saveLoadToSave
-	case "loadgame":
+	case "LoadGame":
 		if s.mode == loadScreenMode {
 			return saveLoadNone
 		}

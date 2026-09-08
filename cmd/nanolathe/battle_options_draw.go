@@ -48,7 +48,7 @@ func (h *retailBattleHUD) drawBattleOptionsWindow(c *client.Client, b *battleSes
 		case gui.KindButton:
 			g.drawRetailButton(c, p, i, gad, r)
 		case gui.KindScrollBar:
-			g.drawRetailScrollbar(c, p, gad, r)
+			g.drawRetailScrollbar(c, p, i, gad, r)
 		case gui.KindPicture:
 			if f := battleOptionsPictureFrame(g, gad); f != nil {
 				blitRetailFrame(c, f, int(r.X), int(r.Y))

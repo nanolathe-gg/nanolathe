@@ -1,5 +1,7 @@
 package ui
 
+import "github.com/nanolathe/nanolathe/internal/gui"
+
 // ResultAction is the semantic action emitted by an authored end-mission
 // control. It is passed across the UI boundary as a typed value; no control
 // name or string route is used after this point [07 §11].
@@ -18,10 +20,10 @@ const (
 // controls remain inert rather than gaining guessed aliases or synthetic routes
 // [07 §11].
 func ResultActionForControl(name string) ResultAction {
-	switch Key(name) {
-	case "start":
+	switch gui.CallbackName(name) {
+	case "Start":
 		return ResultActionContinue
-	case "mainmenu":
+	case "MainMenu":
 		return ResultActionMainMenu
 	}
 	return ResultActionNone

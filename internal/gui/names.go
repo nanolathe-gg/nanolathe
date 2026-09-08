@@ -16,6 +16,22 @@ func GadgetName(name string) string {
 	return name
 }
 
+// CallbackName is the complete NUL-terminated name a fired gadget sends to
+// its callback. It deliberately has no fixed-width limit: named lookup and
+// callback dispatch are separate retail operations [07 R-FE-02 §5][07 R-WGT-02 §2].
+func CallbackName(name string) string {
+	if end := strings.IndexByte(name, 0); end >= 0 {
+		return name[:end]
+	}
+	return name
+}
+
+// CallbackNameEqual compares two fired callback names through their complete
+// NUL-terminated values. Case and whitespace remain significant [07 R-WGT-02 §2].
+func CallbackNameEqual(left, right string) bool {
+	return CallbackName(left) == CallbackName(right)
+}
+
 // GadgetIndex returns the first exact named record after the window header,
 // or -1 on a miss [07 R-FE-02 §5].
 func (w *Window) GadgetIndex(name string) int {

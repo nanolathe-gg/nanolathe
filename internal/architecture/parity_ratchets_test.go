@@ -184,8 +184,7 @@ var float64Baseline = map[string]int{
 	"internal/economy/tick.go":              2,
 	"internal/mission/initial_mission.go":   8,
 	"internal/movement/altitude.go":         6,
-	"internal/session/step.go":              1,
-	"internal/world/terrain.go":             1,
+	"internal/world/terrain.go":             2, // two single-precision tidal defaults [03 R-TERR-01 §6]
 	"internal/world/wind.go":                2,
 }
 

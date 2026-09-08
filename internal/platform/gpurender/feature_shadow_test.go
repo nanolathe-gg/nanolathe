@@ -28,37 +28,60 @@ const (
 // routes must therefore submit identical destination/source geometry despite
 // nonzero authored offsets [03 §5.3.1][R-REN-03D §4].
 func TestFeatureShadowRoutesPreserveAuthoredGeometry(t *testing.T) {
+	// The same check runs inside the device fixture loop, which is where a
+	// renderer can still allocate images.
+	skipAfterDeviceLoop(t)
+	if err := checkFeatureShadowRouteGeometry(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// checkFeatureShadowRouteGeometry compiles both feature-shadow routes and
+// compares the geometry they submit. It needs a renderer, so it runs either as
+// an ordinary test or inside the device fixture loop, never after it.
+func checkFeatureShadowRouteGeometry() error {
 	p := &palette.Tables{}
 	p.Alpha[37*256+201] = 88
 	r, err := NewChecked(p, 16, 12)
 	if err != nil {
-		t.Fatalf("compile GPU shaders: %v", err)
+		return fmt.Errorf("compile GPU shaders: %w", err)
 	}
 	f := &formats.GAFFrame{
 		Width: 2, Height: 1, XOffset: 2, YOffset: 1,
 		ColorKey: 9, Pixels: []byte{37, 9}, Transparent: []bool{false, true},
 	}
-	want := [4]ebitenVertexPoint{{3, 4, 0, 0}, {5, 4, 2, 0}, {3, 5, 0, 1}, {5, 5, 2, 1}}
 	for _, tc := range []struct {
 		name  string
 		trans bool
+		class int
 	}{
-		{name: "opaque keyed"},
-		{name: "translucent ALP", trans: true},
+		{name: "opaque keyed", class: schedOpaque},
+		{name: "translucent ALP", trans: true, class: schedDest},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			r.Sprite(drawlist.Sprite{Frame: f, X: 3, Y: 4, Kind: drawlist.BlitFeatureShadow, Trans: tc.trans})
-			if len(r.verts) != 4 {
-				t.Fatalf("submitted %d vertices, want 4", len(r.verts))
+		r.sched.resetFrame(16, 12)
+		r.Sprite(drawlist.Sprite{Frame: f, X: 3, Y: 4, Kind: drawlist.BlitFeatureShadow, Trans: tc.trans})
+		verts := r.sched.verts[tc.class]
+		if len(verts) != 4 {
+			return fmt.Errorf("%s: compiled %d vertices, want 4", tc.name, len(verts))
+		}
+		// The frame's scene atlas region is the source; both routes must place
+		// the same destination rectangle over the same region texels.
+		e := r.sceneFrameFor(f)
+		ax, ay := e.x, e.y
+		want := [4]ebitenVertexPoint{
+			{3, 4, float32(ax), float32(ay)},
+			{5, 4, float32(ax + 2), float32(ay)},
+			{3, 5, float32(ax), float32(ay + 1)},
+			{5, 5, float32(ax + 2), float32(ay + 1)},
+		}
+		for i, v := range verts {
+			got := ebitenVertexPoint{v.DstX, v.DstY, v.SrcX, v.SrcY}
+			if got != want[i] {
+				return fmt.Errorf("%s: vertex %d = %+v, want %+v", tc.name, i, got, want[i])
 			}
-			for i, v := range r.verts {
-				got := ebitenVertexPoint{v.DstX, v.DstY, v.SrcX, v.SrcY}
-				if got != want[i] {
-					t.Fatalf("vertex %d = %+v, want %+v", i, got, want[i])
-				}
-			}
-		})
+		}
 	}
+	return nil
 }
 
 type ebitenVertexPoint struct {
@@ -75,6 +98,9 @@ type ebitenVertexPoint struct {
 // gate remains independent when Shading is off [03 §5.3][03 R-RAST-01 §6]
 // [R-REN-03D §4].
 func checkFeatureShadowDevicePixels() error {
+	if err := checkFeatureShadowRouteGeometry(); err != nil {
+		return err
+	}
 	var p palette.Tables
 	for i := 0; i < 256; i++ {
 		p.Base[i] = [4]byte{byte(i), byte(i), byte(i), 255}
@@ -153,6 +179,95 @@ func checkFeatureShadowDevicePixels() error {
 	if path := os.Getenv("NANOLATHE_FEATURE_SHADOW_SHOT"); path != "" {
 		if err := writeFeatureShadowDeviceShot(path, pixels); err != nil {
 			return err
+		}
+	}
+	// The device loop's call sites live in a file this unit does not own, so the
+	// scheduler's record-order fixture is chained here rather than added there.
+	return checkTintedOverlapDevicePixels()
+}
+
+const (
+	overlapWidth  = 8
+	overlapHeight = 2
+	overlapBack   = byte(200)
+)
+
+// overlapALP is the fixture's authored ALP table: a deterministic function of
+// the source and destination index, so the expected chain below is computed from
+// the same table the shader samples rather than from a captured image.
+func overlapALP(src, dst byte) byte {
+	return byte((int(src)*7+int(dst)*3+11)%251 + 1)
+}
+
+// checkTintedOverlapDevicePixels is the scheduler's record-order fixture
+// (docs/DESIGN_GPU_RENDERER.md §11.2 "The scheduler", C-G3). Two overlapping
+// ALP-tinted puffs must blend one after the other, an opaque write over one of
+// them must land after that blend, and a third puff over both must read what
+// they left [03 R-COMP-01 §2][03 R-FX-02 §3]. Every one of those commands shares
+// a 32-pixel grid cell, so the scheduler has to open a phase per dependency; a
+// batch that merged them would show the background under the second puff.
+func checkTintedOverlapDevicePixels() error {
+	var p palette.Tables
+	for i := 0; i < 256; i++ {
+		p.Base[i] = [4]byte{byte(i), byte(i), byte(i), 255}
+		for j := 0; j < 256; j++ {
+			p.Alpha[i*256+j] = overlapALP(byte(i), byte(j))
+		}
+	}
+	r, err := NewChecked(&p, overlapWidth, overlapHeight)
+	if err != nil {
+		return fmt.Errorf("compile tinted-overlap fixture shaders: %w", err)
+	}
+	puff := func(index byte, w int) *formats.GAFFrame {
+		pixels := make([]byte, w*overlapHeight)
+		transparent := make([]bool, w*overlapHeight)
+		for i := range pixels {
+			pixels[i] = index
+		}
+		return &formats.GAFFrame{Width: uint16(w), Height: overlapHeight,
+			Pixels: pixels, Transparent: transparent}
+	}
+	const (
+		s1 = byte(31)
+		s2 = byte(57)
+		s3 = byte(93)
+		q  = byte(150)
+	)
+	var list drawlist.List
+	list.RecordClear()
+	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: overlapWidth, H: overlapHeight}, Index: overlapBack})
+	list.RecordSprite(drawlist.Sprite{Frame: puff(s1, 4), X: 0, Y: 0, Kind: drawlist.BlitTinted})
+	list.RecordSprite(drawlist.Sprite{Frame: puff(s2, 4), X: 2, Y: 0, Kind: drawlist.BlitTinted})
+	list.RecordSprite(drawlist.Sprite{Frame: puff(q, 2), X: 3, Y: 0, Kind: drawlist.BlitKeyed})
+	list.RecordSprite(drawlist.Sprite{Frame: puff(s3, 8), X: 0, Y: 0, Kind: drawlist.BlitTinted})
+	list.RecordExpand()
+	img := r.Execute(&list, overlapWidth, overlapHeight)
+	if img == nil {
+		return fmt.Errorf("tinted-overlap fixture renderer returned no image")
+	}
+	// The classic sink's chain, computed byte by byte in record order.
+	want := make([]byte, overlapWidth)
+	for x := range want {
+		v := overlapBack
+		if x < 4 {
+			v = overlapALP(s1, v)
+		}
+		if x >= 2 && x < 6 {
+			v = overlapALP(s2, v)
+		}
+		if x >= 3 && x < 5 {
+			v = q
+		}
+		want[x] = overlapALP(s3, v)
+	}
+	pixels := make([]byte, overlapWidth*overlapHeight*4)
+	img.ReadPixels(pixels)
+	for y := 0; y < overlapHeight; y++ {
+		for x := 0; x < overlapWidth; x++ {
+			if got := pixels[(y*overlapWidth+x)*4]; got != want[x] {
+				return fmt.Errorf("tinted overlap at (%d,%d): index %d, want %d (record-order chain %v)",
+					x, y, got, want[x], want)
+			}
 		}
 	}
 	return nil

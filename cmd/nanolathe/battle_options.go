@@ -12,9 +12,11 @@ package main
 
 import (
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
 // openBattlePrefs is `ARMOPT`'s `PREFS`: the options root opens as a child
@@ -105,98 +107,86 @@ func (g *gameShell) applyRetailBattleMessageLines() {
 	b.cl.SetScreenChat(uint8(g.messages.ScreenChat))
 }
 
-// handleBattleOptionsInput is the in-battle options window's own pointer and
-// keyboard pass.
-//
-// This pump retains the options window's own pointer capture and page-slider
-// state. Both pumps share indexed Enter/Space target selection; ordinary battle
-// child windows do not call either consuming matrix path [07 R-WGT-01 §2].
+// handleBattleOptionsInput routes the active options root through the shared
+// widget service. Ordinary battle child windows do not call this consuming
+// path [07 R-WGT-01 §2].
 func (b *battleSession) handleBattleOptionsInput(cl *client.Client) {
 	if !b.battlePrefsActive() || cl == nil || cl.Input() == nil {
 		return
 	}
-	g := b.shell
 	p := optionsPanel
 	in := cl.Input()
-	mouse, kbd := in.Mouse, in.Kbd
-	if mouse == nil || kbd == nil || p == nil || p.Window == nil {
+	if in.Mouse == nil || in.Kbd == nil || p == nil || p.Window == nil {
 		return
 	}
+	b.serviceBattleOptionsWidgets(p, in)
+}
 
-	// A knob drag owns the pointer until the button is released
-	// [07 R-WGT-01 §5 "Pointer"].
-	g.updateRetailSliderDrag(mouse)
-
-	pressed := mouse.Pressed(input.MouseButtonLeft)
-	released := mouse.Released(input.MouseButtonLeft)
-	held := mouse.Held(input.MouseButtonLeft)
-	x, y := int32(mouse.X), int32(mouse.Y)
-
-	// The captured gadget keeps receiving the pass while the button is held,
-	// which is what makes a slider arrow repeat [07 R-WGT-01 §1 "Capture"]
-	// [07 R-WGT-01 §5 "Pointer"].
-	if held && !pressed && optionsState.pressed >= 0 {
-		if gad, ok := battleOptionsGadget(optionsState.pressed); ok && gad.Kind == gui.KindScrollBar {
-			if s := g.retailOptionsSlider(gad.Name); s != nil {
-				r := p.Window.PlacedRect(optionsState.pressed)
-				knobStart := int(r.X) + s.arrowW + 1 + s.knob
-				if int(x) < knobStart {
-					g.adjustRetailSlider(gad, -1)
-				} else if int(x) >= knobStart+s.knobSize {
-					g.adjustRetailSlider(gad, 1)
-				}
+// serviceBattleOptionsWidgets adapts the shared service to the in-battle
+// options window. Preference writes and screen transitions remain here.
+func (b *battleSession) serviceBattleOptionsWidgets(p *ui.Panel, in *input.State) bool {
+	if b == nil || b.shell == nil || p == nil || in == nil || in.Mouse == nil {
+		return true
+	}
+	g, mouse := b.shell, in.Mouse
+	for i, gad := range p.Window.Gadgets {
+		if gad.Kind == gui.KindScrollBar {
+			if s := g.retailOptionsSliderAt(i); s != nil {
+				p.SetSliderKnobAt(i, s.knob)
 			}
 		}
 	}
-
-	if pressed {
-		optionsState.pressed = battleOptionsPressTest(x, y)
-		if optionsState.pressed >= 0 {
-			p.SetFocus(optionsState.pressed)
-			if gad, ok := battleOptionsGadget(optionsState.pressed); ok && gad.Kind == gui.KindScrollBar {
-				g.clickRetailSlider(gad, p.Window.PlacedRect(optionsState.pressed), x, y)
-			}
-		}
+	frame := ui.WidgetFrame{PointerX: int32(mouse.X), PointerY: int32(mouse.Y), Tokens: in.PeekTokens()}
+	if b.millisSource != nil {
+		frame.TimerAdvanced = p.TimerAdvanced(clock.ScaledNow(b.millisSource.Millis32()))
 	}
-	if released {
-		index := optionsState.pressed
-		optionsState.pressed = -1
-		if index >= 0 && battleOptionsPressTest(x, y) == index {
-			if gad, ok := battleOptionsGadget(index); ok {
-				if gad.Kind == gui.KindScrollBar {
-					g.releaseRetailSlider(gad)
-					// A release on the track beyond the knob is the
-					// synthesised arrow's step [07 R-WGT-01 §5 "Pointer"].
-					if s := g.retailOptionsSlider(gad.Name); s != nil {
-						r := p.Window.PlacedRect(index)
-						knobStart := int(r.X) + s.arrowW + 1 + s.knob
-						if int(x) < knobStart {
-							g.adjustRetailSlider(gad, -1)
-						} else if int(x) >= knobStart+s.knobSize {
-							g.adjustRetailSlider(gad, 1)
-						}
-					}
-				} else {
-					// A callback may close the window, so nothing after this
-					// may touch the options state.
-					g.activateGadget(gad.Name)
-					return
-				}
-			}
-		}
+	if mouse.Held(input.MouseButtonLeft) {
+		frame.HeldButtons |= 1
 	}
-
-	// `PREFS.GUI` authors `escdefault=PREV` and `crdefault=PREV`, so Escape and
-	// Enter both leave through "OK" — the tab-close path of [07 R-FE-01 §6],
-	// which returns to `ARMOPT` with the battle still paused.
-	if kbd.KeyDown(input.KeyEscape) {
+	if mouse.Held(input.MouseButtonRight) {
+		frame.HeldButtons |= 2
+	}
+	if mouse.Pressed(input.MouseButtonLeft) {
+		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftDown, X: int32(mouse.X), Y: int32(mouse.Y)})
+	}
+	if mouse.Released(input.MouseButtonLeft) {
+		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftUp, X: int32(mouse.X), Y: int32(mouse.Y)})
+	}
+	if mouse.Pressed(input.MouseButtonRight) {
+		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightDown, X: int32(mouse.X), Y: int32(mouse.Y)})
+	}
+	if mouse.Released(input.MouseButtonRight) {
+		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightUp, X: int32(mouse.X), Y: int32(mouse.Y)})
+	}
+	result := p.ServiceFrame(frame, ui.WidgetHooks{Metric: func(int) int { return g.retailTextHeight() }, ArtFrames: func(index int) int {
+		gad, ok := battleOptionsGadget(index)
+		if !ok {
+			return 0
+		}
+		return g.retailButtonArtFrames(gad)
+	}, Change: func(index int) {
+		if s := g.retailOptionsSliderAt(index); s != nil {
+			g.moveRetailSliderAt(index, s, p.SliderKnobAt(index))
+		}
+	}})
+	in.DiscardTokens(result.ConsumedTokens)
+	if result.Fired {
+		if _, ok := battleOptionsGadget(result.FiredIndex); ok {
+			g.activateWidgetGadget(p, result)
+		}
+		return true
+	}
+	if !p.EditorCaptured() && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) {
 		g.activateEscape()
-		return
+		return true
 	}
-	if (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, kbd.KeyDown(input.KeyEnter)) {
-		return
+	if in.Kbd != nil && (in.Kbd.KeyDown(input.KeyEnter) || in.Kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, in.Kbd.KeyDown(input.KeyEnter)) {
+		return true
 	}
-	g.activateButtonQuickKey(p, kbd, optionsState.pressed)
+	if in.Kbd != nil {
+		g.activateButtonQuickKey(p, in.Kbd, p.CaptureIndex())
+	}
+	return true
 }
 
 // battleOptionsGadget reads one gadget of the open in-battle window.
@@ -205,42 +195,4 @@ func battleOptionsGadget(index int) (gui.Gadget, bool) {
 		return gui.Gadget{}, false
 	}
 	return optionsPanel.Window.Gadgets[index], true
-}
-
-// battleOptionsFires reports whether a gadget kind has a press handler at all.
-// Buttons (§3), lists (§4), text inputs (§6) and sliders (§5) do; labels reach
-// their `link` redirection (§7). Panels, fonts, raw files, lines and picture
-// boxes do not — a picture box "blits its frame" and returns
-// [07 R-WGT-01 §8][07 R-WGT-01 §12]. A blank surface takes a press only while
-// its `hotornot` word is 1 [07 R-WGT-01 §8].
-func battleOptionsFires(gad gui.Gadget) bool {
-	switch gad.Kind {
-	case gui.KindButton, gui.KindListBox, gui.KindTextBox, gui.KindScrollBar, gui.KindLabel:
-		return true
-	case gui.KindSurface:
-		return gad.HotOrNot == 1
-	}
-	return false
-}
-
-// battleOptionsPressTest returns the gadget that takes the pointer capture, or
-// -1: the first in index order that can accept a press, is not hidden and is
-// not greyed [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13].
-func battleOptionsPressTest(x, y int32) int {
-	p := optionsPanel
-	if p == nil || p.Window == nil {
-		return -1
-	}
-	for i := 1; i < len(p.Window.Gadgets); i++ {
-		gad := p.Window.Gadgets[i]
-		if !battleOptionsFires(gad) || !p.ActiveAt(i) || gad.GrayedOut != 0 {
-			continue
-		}
-		r := p.Window.PlacedRect(i)
-		if r.W <= 0 || r.H <= 0 || x < r.X || y < r.Y || x > r.X+r.W-1 || y > r.Y+r.H-1 {
-			continue
-		}
-		return i
-	}
-	return -1
 }

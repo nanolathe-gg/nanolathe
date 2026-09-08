@@ -30,7 +30,7 @@ func checkMinimapSurfaceDevicePixels() error {
 	}
 	cacheWrites := r.surfaceWrites
 	for identity := uint64(11); identity <= 15; identity++ {
-		if r.uploadSurface(drawlist.Surface{Pixels: []byte{byte(identity)}, SrcW: 1, SrcH: 1, Identity: identity, Revision: 1}) == nil {
+		if e := r.uploadSurface(drawlist.Surface{Pixels: []byte{byte(identity)}, SrcW: 1, SrcH: 1, Identity: identity, Revision: 1}); !e.ok {
 			return fmt.Errorf("durable surface %d did not upload", identity)
 		}
 	}

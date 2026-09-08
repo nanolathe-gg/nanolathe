@@ -94,12 +94,16 @@ type Client struct {
 	cam     *camera.Camera
 	fnt     *formats.FNT
 
-	modelFS  *vfs.FS
-	models   map[string]*unitModel
-	texIndex map[string]texRef
-	// Model presentation state is owned by this client so independent windows
-	// cannot share animation phase or orientation caches [03 §1][I6]. The map
-	// is a lookup cache; modelPlayers is the deterministic phase-7 registry.
+	modelFS   *vfs.FS
+	models    map[string]*unitModel
+	texIndex  map[string]texRef
+	logoIndex map[string]texRef
+	// modelTextures is supplied by battle composition. Its players are bound
+	// before ticks begin; this client only reads the selected primitive frame.
+	modelTextures *ModelTextureRegistry
+	// The two fields below support only explicit standalone preview/test setup.
+	// A battle receives its loaded-model phase-7 registry through modelTextures;
+	// orientation caches remain client-local [03 R-CRD-005 §1][I6].
 	modelPresentation map[modelTextureKey]*modelTextureCursor
 	modelPlayers      []phase7Stepper
 	modelOrientation  map[uint64]*presentationrender.OrientationCache
@@ -271,6 +275,7 @@ func New(opts Options) (*Client, error) {
 		rgba:              make([]byte, w*h*4),
 		models:            map[string]*unitModel{},
 		texIndex:          map[string]texRef{},
+		logoIndex:         map[string]texRef{},
 		modelPresentation: map[modelTextureKey]*modelTextureCursor{},
 		modelPlayers:      nil,
 		modelOrientation:  map[uint64]*presentationrender.OrientationCache{},
@@ -496,9 +501,11 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	SetUnitHullModels(c)
 	c.modelPresentation = map[modelTextureKey]*modelTextureCursor{}
 	c.modelPlayers = nil
+	c.modelTextures = nil
 	c.modelOrientation = map[uint64]*presentationrender.OrientationCache{}
 	c.models = map[string]*unitModel{}
 	c.texIndex = map[string]texRef{}
+	c.logoIndex = map[string]texRef{}
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
 	c.featureGACErr = map[string]error{}
@@ -516,6 +523,23 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 		c.fogBlack[i] = nil
 	}
 	c.buildTextureIndex()
+}
+
+// SetModelTextureRegistry attaches immutable battle model metadata. The
+// registry remains battle-owned and is installed as the session phase-7
+// service; replacing this client never changes its cadence [03 R-CRD-005 §1].
+func (c *Client) SetModelTextureRegistry(registry *ModelTextureRegistry) {
+	if c == nil {
+		return
+	}
+	c.modelTextures = registry
+	if registry == nil {
+		return
+	}
+	c.modelFS = registry.fs
+	c.texIndex = registry.primary
+	c.logoIndex = registry.logos
+	c.models = map[string]*unitModel{}
 }
 
 // SetDitheredFog selects patterned current-fog rendering [03 §3.3]. When set,

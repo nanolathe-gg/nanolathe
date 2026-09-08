@@ -229,7 +229,7 @@ func ShadeRowForNormal(normal, light [3]float64, dontShade bool) int {
 		return 15
 	}
 	dot := normal[0]*light[0] + normal[1]*light[1] + normal[2]*light[2]
-	return int(dot*5.0) & 31 // int conversion truncates toward zero [I3]
+	return int(numeric.TruncateFloat64ToLow32(dot*5.0)) & 31 // [01 R-DET-01 §1]
 }
 
 func faceNormal(a, b, c [3]numeric.Fixed) [3]float64 {

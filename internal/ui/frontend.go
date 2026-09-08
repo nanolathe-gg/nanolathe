@@ -79,16 +79,16 @@ func (f *Frontend) Navigate(name string) (Mode, bool) {
 	if f == nil {
 		return 0, false
 	}
-	switch Key(name) {
-	case "single":
+	switch gui.CallbackName(name) {
+	case "SINGLE":
 		if f.Mode == ModeMain {
 			return ModeSingle, true
 		}
-	case "skirmish":
+	case "Skirmish":
 		if f.Mode == ModeSingle {
 			return ModeSkirmish, true
 		}
-	case "prevmenu":
+	case "PrevMenu":
 		switch f.Mode {
 		case ModeSingle:
 			return ModeMain, true

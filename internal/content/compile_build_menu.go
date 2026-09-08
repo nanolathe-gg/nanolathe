@@ -14,8 +14,7 @@ import (
 // BuildMenuPage is one builder's ordered button list [02 "Build-menu catalog keys"].
 //
 // Per-unit numbered pages derive from `CANBUILD %s` sections holding numbered
-// `canbuild%d` keys enumerated from 1 upward; a gap yields a missing entry
-// rather than terminating the enumeration. Buttons are stored verbatim as
+// `canbuild%d` keys enumerated from 1 upward until the first absent key. Buttons are stored verbatim as
 // authored; consumers compare case-insensitively via CanonicalKey.
 type BuildMenuPage struct {
 	DefinitionHeader
@@ -60,8 +59,8 @@ func (p *BuildMenuPage) ButtonsSorted() []string {
 // Measured shape of the reference install: sidedata.tdf has exactly three
 // top-level sections — SIDE0, SIDE1, CANBUILD — where CANBUILD holds one child
 // section per builder (ARMCOM..CORGANT, 45 of them) each authoring numbered
-// `canbuild%d = UNITNAME` keys. A missing key yields a missing entry, not a
-// termination: enumeration runs to the highest authored index.
+// `canbuild%d = UNITNAME` keys. The first missing key terminates the list
+// [02 R-CAT-01 §5].
 //
 // Note on the rest of the vocabulary: doc-02 also names MENU, UNITMENU,
 // DOWNLOADMENU and BUTTON sections consumed while assembling build and order
@@ -101,20 +100,16 @@ func CompileBuildMenus(fs vfs.FSOps) (map[string]*BuildMenuPage, error) {
 			},
 			Builder: name,
 		}
-		// Highest authored canbuild%d bounds the enumeration; gaps inside the
-		// range yield missing entries rather than ending the scan [02
-		// "Build-menu catalog keys"].
-		highest := 0
-		for _, item := range builder.Assignments() {
-			var n int
-			if _, err := fmt.Sscanf(CanonicalKey(item.Key), "canbuild%d", &n); err == nil && n > highest {
-				highest = n
-			}
-		}
-		for i := 1; i <= highest; i++ {
+		// Retail requests successive keys, ending at the first absent one.
+		// It never parses a highest suffix from the authored key names
+		// [02 R-CAT-01 §5].
+		for i := 1; ; i++ {
 			button, ok := builder.StringValue(fmt.Sprintf("canbuild%d", i), "")
-			if !ok || trimTDFSemantic(button) == "" {
-				continue // gap: missing entry, enumeration continues
+			if !ok {
+				break
+			}
+			if trimTDFSemantic(button) == "" {
+				continue // An empty name resolves to no unit; a later key can exist.
 			}
 			page.Buttons = append(page.Buttons, button)
 		}

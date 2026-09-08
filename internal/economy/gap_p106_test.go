@@ -300,7 +300,7 @@ func TestTidalProductNarrowsOnceForComputerPlayer(t *testing.T) {
 	svc.Players[0].Exists = true
 	svc.Players[0].ControllerState = 2
 	svc.SetEconomySelector(1)
-	svc.Terrain = &world.Terrain{Tidal: 1294337}
+	svc.Terrain = &world.Terrain{Tidal: 1294337.0 / 65536}
 	def := economyFixtureDef(&content.UnitDef{UnitName: "tidalbit", TidalGenerator: 13, BuildTime: 1, MaxDamage: 1})
 	h, err := w.Create(def, 0, 0, 0, 0)
 	if err != nil {

@@ -9,6 +9,16 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 )
 
+type fixedCRTRand struct {
+	value int32
+	draws int
+}
+
+func (r *fixedCRTRand) Rand() int32 {
+	r.draws++
+	return r.value
+}
+
 // TestRendertypeDispatchTable verifies dispatch covers 0..7 per [03 §5.4] C6.
 func TestRendertypeDispatchTable(t *testing.T) {
 	// Fixture: one weapon per rendertype, same projectile record.
@@ -255,7 +265,8 @@ func TestSmokeEmissionCadence(t *testing.T) {
 	}
 }
 
-// TestSegmentedBeam verifies rendertype 7 segment count denominator and jitter range [03 §5.4].
+// TestSegmentedBeam verifies the fixed-count boundary, tail-to-head stepping,
+// and CRT draw order for rendertype 7 [06 R-WFX-01 §4].
 func TestSegmentedBeam(t *testing.T) {
 	head := combat.Vec3{X: numeric.Fixed(0), Y: numeric.Fixed(0), Z: numeric.Fixed(0)}
 	tail := combat.Vec3{X: numeric.Fixed(10 * 65536), Y: numeric.Fixed(0), Z: numeric.Fixed(0)} // 10 world units raw 655360
@@ -283,21 +294,24 @@ func TestSegmentedBeam(t *testing.T) {
 			t.Fatalf("jitter %d,%d,%d out of [-5,5] range [03 §5.4]", dx, dy, dz)
 		}
 	}
-	// SegmentedBeamPoints uses exactly three CRT draws per interior point [03 §5.4] [I4].
-	// Verify call count by seeding and reproducing jitter manually.
-	head5 := combat.Vec3{X: numeric.Fixed(0), Y: numeric.Fixed(0), Z: numeric.Fixed(0)}
-	tail5 := combat.Vec3{X: numeric.Fixed(20 * 65536), Y: numeric.Fixed(0), Z: numeric.Fixed(0)} // span 20 -> 4 segments, so 2 interior points (n=4)
-	// Actually 20*65536=1310720 /327680=4
+	// Each pass starts at the tail and generates n jittered endpoints, consuming
+	// exactly 3*n CRT draws [06 R-WFX-01 §4].
+	head5 := combat.Vec3{X: numeric.Fixed(20 * 65536), Y: numeric.Fixed(0), Z: numeric.Fixed(0)}
+	tail5 := combat.Vec3{}
 	n5 := SegmentCount(head5, tail5)
 	if n5 != 4 {
 		t.Fatalf("segment count 20 units want 4 got %d", n5)
 	}
 	crt2 := rng.NewCRT(12345)
 	pts := SegmentedBeamPoints(head5, tail5, &crt2)
-	if len(pts) != n5+1-1+1 { // head + (n-1) interior + tail = n+1? Let's see: we push head, then n-1 interior, then tail => n+1 total
-		// For n=4 => head, 3 interior? Actually our loop i=1..n-1 => 3? Wait code: for i=1;i<n;i++ => when n=4, i=1,2,3 =>3 interior => total 5 = n+1.
-		// So len should be n+1.
-		t.Fatalf("segmented points len %d want %d [03 §5.4]", len(pts), n5+1)
+	if len(pts) != n5+1 {
+		t.Fatalf("segmented points len %d want %d [06 R-WFX-01 §4]", len(pts), n5+1)
+	}
+	if pts[0] != tail5 {
+		t.Fatalf("first point = %+v, want fixed retail tail %+v [06 R-WFX-01 §4]", pts[0], tail5)
+	}
+	if crt2.Draws() != uint64(3*n5) {
+		t.Fatalf("one pass consumed %d CRT draws, want %d [06 R-WFX-01 §4]", crt2.Draws(), 3*n5)
 	}
 	// Verify deterministic: same seed yields same points.
 	crt3 := rng.NewCRT(12345)
@@ -309,6 +323,22 @@ func TestSegmentedBeam(t *testing.T) {
 		if pts[i].X != pts2[i].X || pts[i].Y != pts2[i].Y || pts[i].Z != pts2[i].Z {
 			t.Fatalf("deterministic jitter mismatch at %d", i)
 		}
+	}
+	if crt3.Draws() != uint64(3*n5) {
+		t.Fatalf("second pass consumed %d CRT draws, want %d [06 R-WFX-01 §4]", crt3.Draws(), 3*n5)
+	}
+
+	// 0x4000 produces zero jitter: ((0x4000*11)/0x8000)-5 == 0.
+	// This exposes the fixed-point step without encoding a random census.
+	flat := &fixedCRTRand{value: 0x4000}
+	points := SegmentedBeamPoints(head5, tail5, flat)
+	for i, want := range []int64{0, 5, 10, 15, 20} {
+		if got := points[i].X.Raw(); got != want*65536 {
+			t.Fatalf("point %d X = %d, want %d [06 R-WFX-01 §4]", i, got, want*65536)
+		}
+	}
+	if flat.draws != 3*n5 {
+		t.Fatalf("fixed source draws = %d, want %d [06 R-WFX-01 §4]", flat.draws, 3*n5)
 	}
 }
 

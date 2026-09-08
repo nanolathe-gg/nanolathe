@@ -1,8 +1,6 @@
 package main
 
 import (
-	"strings"
-
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -66,8 +64,8 @@ func (b *battleSession) menuWindow() *gui.Window {
 	}
 }
 
-// handleBattleMenuInput owns all input while a retail modal is open. Buttons
-// activate once on release-inside the same authored gadget [07 §3].
+// handleBattleMenuInput routes each open battle modal to its input owner.
+// Preferences uses the shared attribute-driven widget service [07 R-WGT-01 §3].
 func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client) {
 	if b != nil && b.shell != nil && b.shell.saveLoadPanelActive() {
 		// The dialog is a child window of the frontend panel stack, so the
@@ -112,7 +110,7 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 	if !ok || window == nil || pressed >= len(window.Gadgets) {
 		return
 	}
-	b.activateBattleMenuButton(strings.ToUpper(window.Gadgets[pressed].Name), cl)
+	b.activateBattleMenuButton(window.Gadgets[pressed].Name, cl)
 }
 
 func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client) {

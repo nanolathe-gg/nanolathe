@@ -8,22 +8,25 @@ import (
 // The destination-independent 2D primitive families for the modern executor:
 // solid and outline fills, the Bresenham line, and the plain point batch
 // (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). Each writes a physical palette index
-// straight into the indexed offscreen with BlendCopy, so the stored bytes match
-// the classic byte writers exactly. Every write is an axis-aligned integer quad,
-// which rasterizes to exactly the classic rectangle's pixels; a single-pixel
-// write is a 1×1 quad. Lines and outline frames are reduced to the exact pixel
-// set the classic integer algorithms produce and drawn as 1×1 quads, because a
-// GPU-native line or thin quad would not match the integer Bresenham / per-edge
-// clip [03 §5.4][R-SEL-02A].
+// straight into the indexed offscreen, so the stored bytes match the classic byte
+// writers exactly. Every write is an axis-aligned integer quad, which rasterizes
+// to exactly the classic rectangle's pixels; a single-pixel write is a 1×1 quad.
+// Lines and outline frames are reduced to the exact pixel set the classic integer
+// algorithms produce and drawn as 1×1 quads, because a GPU-native line or thin
+// quad would not match the integer Bresenham / per-edge clip [03 §5.4][R-SEL-02A].
+//
+// None of them draws directly: each compiles into the scheduler's opaque batch
+// under the scene shader's constant-index op (§11.2), so a whole phase's fills,
+// lines, points, sprites, glyphs and terrain leave as one device draw.
 
 // Fill replays one indexed rectangle. This unit implements the four
 // destination-independent styles — Solid, Outline, SolidInclusive and
 // FrameInclusive — reproducing the classic fillIndexedRect, frameIndexedRect,
 // fillRectInclusive and drawIndexedFrameInclusive clip semantics exactly. The
-// destination-reading LitRect/ShadeRect styles run over a snapshot in
-// deststage.go (WU-2.6) [03 §4.3.1][03 R-COMP-02 §5].
+// destination-reading LitRect/ShadeRect styles compile into the destination
+// batch in deststage.go [03 §4.3.1][03 R-COMP-02 §5].
 func (r *Renderer) Fill(f drawlist.Fill) {
-	if r == nil || r.offscreen == nil || r.solid == nil {
+	if r == nil || r.offscreen == nil {
 		return
 	}
 	switch f.Style {
@@ -49,13 +52,31 @@ func (r *Renderer) Fill(f drawlist.Fill) {
 			int(f.Clip.X), int(f.Clip.Y), int(f.Clip.X+f.Clip.W-1), int(f.Clip.Y+f.Clip.H-1), f.Index)
 	case drawlist.FillLitRect:
 		// uiLightRectRaw: rewrite each pixel as LightLookup(level, dst) through one
-		// LHT row; destination-reading, so it runs over a snapshot [03 §4.3.1].
+		// LHT row; destination-reading, so it joins the destination batch
+		// [03 §4.3.1].
 		r.drawLitRect(int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), int(f.Level))
 	case drawlist.FillShadeRect:
 		// uiShadeRectRaw: rewrite each pixel through the signed fade table (SHD for a
 		// negative level, else LHT); destination-reading [03 R-COMP-02 §5].
 		r.drawShadeRect(int(f.Rect.X), int(f.Rect.Y), int(f.Rect.W), int(f.Rect.H), int(f.Level))
 	}
+}
+
+// beginSolid opens one constant-index command covering the clipped rectangle. It
+// reports false when the rectangle covers nothing.
+func (r *Renderer) beginSolid(x0, y0, x1, y1 int) bool {
+	if r.scene2D == nil {
+		return false
+	}
+	return r.sched.begin(schedOpaque, x0, y0, x1, y1, [4]*ebiten.Image{})
+}
+
+// appendSolidQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1) as
+// two triangles, every vertex carrying the physical palette index in the red
+// colour lane and the constant-index op in Custom3 (C-G4).
+func (r *Renderer) appendSolidQuad(dx0, dy0, dx1, dy1 float32, idx uint8) {
+	r.sched.quad(schedOpaque, dx0, dy0, dx1, dy1, 0, 0, 0, 0,
+		[4]float32{float32(idx), 0, 0, 0}, [4]float32{0, 0, 0, sceneOpSolid})
 }
 
 // fillSolidExclusive reproduces internal/client fillIndexedRect: clamp the
@@ -78,10 +99,10 @@ func (r *Renderer) fillSolidExclusive(x, y, w, h int, idx uint8) {
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
+	if !r.beginSolid(x0, y0, x1, y1) {
+		return
+	}
 	r.appendSolidQuad(float32(x0), float32(y0), float32(x1), float32(y1), idx)
-	r.flushSolid()
 }
 
 // fillSolidInclusive reproduces internal/client fillRectInclusive: reject when
@@ -107,11 +128,11 @@ func (r *Renderer) fillSolidInclusive(left, top, right, bottom int32, idx uint8)
 	if left > right || top > bottom {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
+	if !r.beginSolid(int(left), int(top), int(right)+1, int(bottom)+1) {
+		return
+	}
 	// Inclusive [left..right] covers the exclusive quad [left, right+1).
 	r.appendSolidQuad(float32(left), float32(top), float32(right+1), float32(bottom+1), idx)
-	r.flushSolid()
 }
 
 // drawFrameInclusive reproduces internal/client drawIndexedFrameInclusive: a
@@ -123,18 +144,21 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 	if rMinX > rMaxX || rMinY > rMaxY || clipMinX > clipMaxX || clipMinY > clipMaxY {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
+	// The command's screen rectangle is the frame's clipped bounding box; the
+	// per-pixel writes below stay inside it.
+	bx0 := maxInt(maxInt(rMinX, clipMinX), 0)
+	by0 := maxInt(maxInt(rMinY, clipMinY), 0)
+	bx1 := minInt(minInt(rMaxX, clipMaxX)+1, r.w)
+	by1 := minInt(minInt(rMaxY, clipMaxY)+1, r.h)
+	if !r.beginSolid(bx0, by0, bx1, by1) {
+		return
+	}
 	write := func(x, y int) {
 		if x < 0 || y < 0 || x >= r.w || y >= r.h {
 			return
 		}
 		if x < clipMinX || x > clipMaxX || y < clipMinY || y > clipMaxY {
 			return
-		}
-		if !r.quadBatchHasRoom() {
-			r.flushSolid()
-			r.resetGeometry()
 		}
 		r.appendSolidQuad(float32(x), float32(y), float32(x+1), float32(y+1), idx)
 	}
@@ -164,7 +188,6 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 	if rMaxX != rMinX {
 		vertical(rMaxX)
 	}
-	r.flushSolid()
 }
 
 // Line replays one indexed line. A GPU-native line does not match the classic
@@ -172,11 +195,16 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 // each point as a 1×1 quad; points off the framebuffer no-op, exactly as the
 // byte writer's per-point clip skips them [03 §5.4].
 func (r *Renderer) Line(l drawlist.Line) {
-	if r == nil || r.offscreen == nil || r.solid == nil {
+	if r == nil || r.offscreen == nil {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
+	bx0 := maxInt(minInt(int(l.X0), int(l.X1)), 0)
+	by0 := maxInt(minInt(int(l.Y0), int(l.Y1)), 0)
+	bx1 := minInt(maxInt(int(l.X0), int(l.X1))+1, r.w)
+	by1 := minInt(maxInt(int(l.Y0), int(l.Y1))+1, r.h)
+	if !r.beginSolid(bx0, by0, bx1, by1) {
+		return
+	}
 	x0, y0, x1, y1 := l.X0, l.Y0, l.X1, l.Y1
 	dx := x1 - x0
 	if dx < 0 {
@@ -197,10 +225,6 @@ func (r *Renderer) Line(l drawlist.Line) {
 	err := dx - dy
 	for {
 		if x0 >= 0 && x0 < int32(r.w) && y0 >= 0 && y0 < int32(r.h) {
-			if !r.quadBatchHasRoom() {
-				r.flushSolid()
-				r.resetGeometry()
-			}
 			r.appendSolidQuad(float32(x0), float32(y0), float32(x0+1), float32(y0+1), l.Index)
 		}
 		if x0 == x1 && y0 == y1 {
@@ -216,68 +240,55 @@ func (r *Renderer) Line(l drawlist.Line) {
 			y0 += sy
 		}
 	}
-	r.flushSolid()
 }
 
-// Points replays one batch of single-pixel writes. This unit implements the
-// destination-independent PointPlain kind: each point is a 1×1 quad carrying its
-// own physical index, drawn in array order so a later point overwrites an earlier
-// one at the same pixel, matching the classic in-order write [03 §5.5]. The
-// destination-reading PointLit kind runs over a snapshot in deststage.go (WU-2.6).
+// Points replays one batch of single-pixel writes. The destination-independent
+// PointPlain kind draws each point as a 1×1 quad carrying its own physical index,
+// in array order so a later point overwrites an earlier one at the same pixel,
+// matching the classic in-order write [03 §5.5]. The destination-reading PointLit
+// kind compiles into the destination batch in deststage.go.
 func (r *Renderer) Points(p drawlist.Points) {
-	if r == nil || r.offscreen == nil || r.solid == nil {
+	if r == nil || r.offscreen == nil {
 		return
 	}
 	if p.Kind == drawlist.PointLit {
 		// PointLit folds each destination pixel through the point's own LHT row; it
-		// is destination-reading and runs over a snapshot in deststage.go [03 §4.3.1].
+		// is destination-reading [03 §4.3.1].
 		r.drawLitPoints(p.Points)
 		return
 	}
 	if len(p.Points) == 0 {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
+	x0, y0, x1, y1, ok := r.pointBounds(p.Points)
+	if !ok || !r.beginSolid(x0, y0, x1, y1) {
+		return
+	}
 	for _, pt := range p.Points {
 		x, y := int(pt.X), int(pt.Y)
 		if x < 0 || y < 0 || x >= r.w || y >= r.h {
 			continue
 		}
-		if !r.quadBatchHasRoom() {
-			r.flushSolid()
-			r.resetGeometry()
-		}
 		r.appendSolidQuad(float32(x), float32(y), float32(x+1), float32(y+1), pt.Index)
 	}
-	r.flushSolid()
 }
 
-// appendSolidQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1) as
-// two triangles, every vertex carrying the palette index in the red channel as
-// index/255 (C-G4), into the reusable geometry scratch.
-func (r *Renderer) appendSolidQuad(dx0, dy0, dx1, dy1 float32, idx uint8) {
-	c := float32(idx) / 255.0
-	base := uint16(len(r.verts))
-	r.verts = append(r.verts,
-		ebiten.Vertex{DstX: dx0, DstY: dy0, ColorR: c, ColorA: 1},
-		ebiten.Vertex{DstX: dx1, DstY: dy0, ColorR: c, ColorA: 1},
-		ebiten.Vertex{DstX: dx0, DstY: dy1, ColorR: c, ColorA: 1},
-		ebiten.Vertex{DstX: dx1, DstY: dy1, ColorR: c, ColorA: 1},
-	)
-	r.idx = append(r.idx, base, base+1, base+2, base+1, base+2, base+3)
-}
-
-// flushSolid draws the accumulated solid geometry into the offscreen with the
-// constant-index shader and BlendCopy (overwrite, no index blend — C-G4). An
-// empty batch draws nothing.
-func (r *Renderer) flushSolid() {
-	if len(r.verts) == 0 {
-		return
+// pointBounds returns the framebuffer-clipped bounding rectangle of the visible
+// points, the command rectangle the scheduler tests against the phase grid.
+func (r *Renderer) pointBounds(points []drawlist.Point) (x0, y0, x1, y1 int, ok bool) {
+	for _, pt := range points {
+		x, y := int(pt.X), int(pt.Y)
+		if x < 0 || y < 0 || x >= r.w || y >= r.h {
+			continue
+		}
+		if !ok {
+			x0, y0, x1, y1, ok = x, y, x+1, y+1, true
+			continue
+		}
+		x0, y0 = minInt(x0, x), minInt(y0, y)
+		x1, y1 = maxInt(x1, x+1), maxInt(y1, y+1)
 	}
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.solid, &ebiten.DrawTrianglesShaderOptions{
-		Blend: ebiten.BlendCopy,
-	})
+	return x0, y0, x1, y1, ok
 }
 
 func maxInt(a, b int) int {

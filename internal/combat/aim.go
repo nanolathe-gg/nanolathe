@@ -195,11 +195,11 @@ func BallisticSolve(dx, dy, dz numeric.Fixed, vel, grav numeric.Fixed, minBarrel
 	// [GAP T5] same.
 	if !math.IsNaN(aPlus) && aPlus > minBarrel && aPlus <= pi4 {
 		// [06 §6.4] accepted angle serializes as trunc(angle*32768/pi) into 16-bit domain.
-		pitch := uint16(int32(aPlus * 32768 / math.Pi))
+		pitch := uint16(numeric.TruncateFloat64ToLow32(aPlus * 32768 / math.Pi))
 		return pitch, true
 	}
 	if !math.IsNaN(aMinus) && aMinus > minBarrel && aMinus <= pi4 {
-		pitch := uint16(int32(aMinus * 32768 / math.Pi))
+		pitch := uint16(numeric.TruncateFloat64ToLow32(aMinus * 32768 / math.Pi))
 		return pitch, true
 	}
 	return 0, false

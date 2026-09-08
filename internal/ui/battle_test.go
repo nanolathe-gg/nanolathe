@@ -44,6 +44,20 @@ func TestBattleStateModalChainAndReleaseCapture(t *testing.T) {
 	}
 }
 
+func TestBattleStateCallbacksAreTerminatedAndCaseSensitive(t *testing.T) {
+	s := NewProductionBattleState()
+	s.OpenOptions()
+	if got := s.Activate("savegame"); got != BattleModalActionNone {
+		t.Fatalf("folded SAVEGAME produced %d", got)
+	}
+	if got := s.Activate("SAVEGAME "); got != BattleModalActionNone {
+		t.Fatalf("spaced SAVEGAME produced %d", got)
+	}
+	if got := s.Activate("SAVEGAME\x00tail"); got != BattleModalActionSaveGame {
+		t.Fatalf("terminated SAVEGAME produced %d", got)
+	}
+}
+
 func TestBattleStateScheduleIntentValues(t *testing.T) {
 	if got := PauseIntent(true); !got.PauseSet || !got.Pause || got.SpeedDelta != 0 {
 		t.Fatalf("pause intent=%+v", got)

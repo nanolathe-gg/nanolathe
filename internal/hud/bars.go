@@ -1,5 +1,7 @@
 package hud
 
+import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+
 // Bars: health/metal/energy bar geometry from the anchor data per [02 §6]
 // "SIDE and battle interface data" and [07 §6] battle-HUD. Pure presentation-side
 // math (no sim reads beyond passed-in values). Anchors are stored verbatim as
@@ -20,7 +22,7 @@ func clampFrac(f float32) float32 {
 // BarFillHorizontal returns the filled sub-rectangle for a horizontal bar that
 // fills left-to-right within the anchor's ordered bounds [02 §6] [07 §6].
 // Fraction is clamped to [0,1]; width is trunc(fraction * width) toward zero
-// per [01 §8] __ftol (Go int32(f) truncates toward zero). Height is preserved
+// per [01 R-DET-01 §1], retaining the low word. Height is preserved
 // full. If the anchor is verbatim inverted (x2 < x1), Ordered normalizes it
 // for presentation; the stored anchor remains verbatim.
 func BarFillHorizontal(anchor Rect, fraction float32) Rect {
@@ -34,7 +36,7 @@ func BarFillHorizontal(anchor Rect, fraction float32) Rect {
 		return Rect{X1: left, Y1: top, X2: right, Y2: bottom}
 	}
 	// Truncate toward zero [01 §8]; w >=0 so trunc == floor.
-	fill := int32(fraction * float32(w))
+	fill := numeric.TruncateFloat32ToLow32(fraction * float32(w))
 	return Rect{X1: left, Y1: top, X2: left + fill, Y2: bottom}
 }
 
@@ -53,7 +55,7 @@ func BarFillVertical(anchor Rect, fraction float32) Rect {
 	if fraction >= 1 {
 		return Rect{X1: left, Y1: top, X2: right, Y2: bottom}
 	}
-	fill := int32(fraction * float32(h))
+	fill := numeric.TruncateFloat32ToLow32(fraction * float32(h))
 	return Rect{X1: left, Y1: top, X2: right, Y2: top + fill}
 }
 

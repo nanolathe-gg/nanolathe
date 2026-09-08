@@ -124,7 +124,7 @@ func (g *gameShell) drawListSelection(c *client.Client, r gui.Rect, y, h int) {
 // list row, focused or not.
 const retailListSelectionLevel = 30
 
-func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if g.assets == nil || g.assets.common == nil {
 		return
 	}
@@ -255,7 +255,7 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, gad gui.G
 	// A kind-4 gadget with no associated list is a slider: its knob length is
 	// the authored SLIDERS knob frame and its position is the knob word, not a
 	// list origin [07 R-WGT-01 §5].
-	if s := g.retailOptionsSlider(gad.Name); s != nil {
+	if s := g.retailOptionsSliderAt(index); s != nil {
 		thumbLen = s.knobSize
 		pos = s.knob
 	}
@@ -469,13 +469,13 @@ func retailListAssocItemHeightPanel(g *gameShell, p *ui.Panel, assoc int32) int 
 	return g.retailTextHeight() + 1
 }
 
-func (g *gameShell) adjustRetailScrollbar(gad gui.Gadget, delta int) {
+func (g *gameShell) adjustRetailScrollbar(index int, gad gui.Gadget, delta int) {
 	if g == nil || delta == 0 {
 		return
 	}
 	// Scrollbar and slider are one kind [07 R-WGT-01 §5]; a kind-4 gadget on
 	// the open options page drives its own value rather than a list origin.
-	if g.adjustRetailSlider(gad, delta) {
+	if g.adjustRetailSlider(index, delta) {
 		return
 	}
 	l := g.listForAssoc(gad.Assoc)
@@ -494,7 +494,7 @@ func (g *gameShell) adjustRetailScrollbar(gad gui.Gadget, delta int) {
 }
 
 func (g *gameShell) clickRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, x, y int32) {
-	if g.clickRetailSlider(gad, r, x, y) {
+	if g.clickRetailSlider(index, r, x, y) {
 		return
 	}
 	geometry, ok := g.retailScrollbarGeometry(gad, r)
@@ -536,21 +536,8 @@ func (g *gameShell) clickRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, 
 	}
 }
 
-func (g *gameShell) updateRetailScrollbarDrag(mouse *input.MouseState) {
-	if g.updateRetailSliderDrag(mouse) {
-		return
-	}
-	p := g.activePanel()
-	if p == nil || mouse == nil || !p.ScrollDragging() {
-		return
-	}
-	// The panel owns pointer capture and the integer thumb mapping. Geometry
-	// remains in this file because it comes from authored frame dimensions.
-	_ = p.UpdateScrollDrag(int32(mouse.X), int32(mouse.Y), mouse.Held(input.MouseButtonLeft))
-}
-
-func (g *gameShell) releaseRetailScrollbar(gad gui.Gadget, r gui.Rect, x, y int32) {
-	if g.releaseRetailSlider(gad) {
+func (g *gameShell) releaseRetailScrollbar(index int, gad gui.Gadget, r gui.Rect, x, y int32) {
+	if g.releaseRetailSlider(index) {
 		return
 	}
 	geometry, ok := g.retailScrollbarGeometry(gad, r)
@@ -562,8 +549,8 @@ func (g *gameShell) releaseRetailScrollbar(gad gui.Gadget, r gui.Rect, x, y int3
 		coordinate = int(y)
 	}
 	if coordinate < geometry.axisStart {
-		g.adjustRetailScrollbar(gad, -1)
+		g.adjustRetailScrollbar(index, gad, -1)
 	} else if coordinate >= geometry.axisEnd {
-		g.adjustRetailScrollbar(gad, 1)
+		g.adjustRetailScrollbar(index, gad, 1)
 	}
 }

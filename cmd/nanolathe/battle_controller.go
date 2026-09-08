@@ -88,11 +88,9 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	if c.battle.ended || c.battle.sess == nil || c.battle.sess.Clock == nil {
 		return
 	}
-	// The composition root binds, or clears, the presentation-owned phase-7
-	// seam before the next runnable sub-tick. The session invokes it at the
-	// exact boundary, including every sub-tick in a catch-up batch
-	// [01 §4.4][R-CRD-005 §1].
-	c.battle.sess.SetPhase7Service(cl)
+	// Battle entry installs its loaded-model registry once. Client replacement
+	// cannot change phase-7 ownership or pause model textures; the session
+	// invokes that registry at every runnable sub-tick [01 §4.4][R-CRD-005 §1].
 	scaled := int32(0)
 	if c.millis != nil {
 		scaled = clock.ScaledNow(c.millis.Millis32())

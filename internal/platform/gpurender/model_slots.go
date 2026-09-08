@@ -92,6 +92,10 @@ type modelSlotAtlas struct {
 	slots            map[*drawlist.ModelGeometry]modelSlot
 	resolves         []modelResolveJob
 	overflowResolves []modelResolveJob
+	// quads is the frame's textured-quad parameter store, read by the key and
+	// colour passes as source 3 (docs/DESIGN_GPU_RENDERER.md §11.2 "Textured
+	// quads without strips").
+	quads modelQuadParams
 }
 
 // modelResolveJob is one doubled slot resolving into its native slot.
@@ -206,6 +210,7 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 	}
 	a.super.reset(2, r.modelPageLimit)
 	a.resolves = a.resolves[:0]
+	a.quads.reset()
 	l.VisitModels(func(m drawlist.Model) {
 		g := m.Geometry
 		if g == nil || !g.Eligible {
@@ -294,7 +299,7 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, native, doubled 
 		}
 		ssOrigin := ssRect.Min.Sub(ssLocal.Min)
 		ssSub := modelPageSubject{origin: ssOrigin, rect: ssRect, keyed: ss.KeyPlane, reveal: ss.Reveal}
-		ssSub.faces = r.prepareModelFaces(ss)
+		ssSub.faces = r.prepareModelFaces(ss, ssOrigin)
 		if ssSub.reveal != nil {
 			ssPage.needPost = true
 		}
@@ -307,7 +312,7 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, native, doubled 
 		r.modelStats.StructureResolves++
 		r.modelStats.RasterPixels += ssRect.Dx() * ssRect.Dy()
 	} else {
-		sub.faces = r.prepareModelFaces(g)
+		sub.faces = r.prepareModelFaces(g, origin)
 		sub.reveal = g.Reveal
 	}
 	if sub.reveal != nil || sub.clips() {
@@ -334,10 +339,13 @@ func (r *Renderer) allocModelSlot(page *modelPage, w, h int) (image.Rectangle, *
 	return image.Rectangle{}, nil, false
 }
 
-func (r *Renderer) prepareModelFaces(g *drawlist.ModelGeometry) []preparedModelFace {
+// prepareModelFaces prepares one subject's faces. origin is where the subject's
+// local (0,0) lands on its page, so a textured quad's parameters describe the
+// page pixels its fragment shader compares against.
+func (r *Renderer) prepareModelFaces(g *drawlist.ModelGeometry, origin image.Point) []preparedModelFace {
 	out := r.modelPrep.prepared.take(len(g.Faces))
 	for i := range g.Faces {
-		out[i] = r.prepareModelFace(g.Faces[i])
+		out[i] = r.prepareModelFace(g.Faces[i], origin)
 		out[i].tex = r.modelTextureFor(g.Faces[i].Texture)
 	}
 	return out
@@ -429,6 +437,11 @@ func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
 	if keyPass && (r.modelKey == nil || p.key == nil) || !keyPass && r.modelBody == nil {
 		return
 	}
+	// Both passes evaluate the textured quad mapping from the frame's parameter
+	// image, so the key a fragment writes and the key its colour pass compares
+	// come from one arithmetic (§11.2 "Textured quads without strips").
+	r.modelAtlas.quads.upload()
+	quads := r.modelAtlas.quads.img
 	r.resetGeometry()
 	var texPage *ebiten.Image
 	flush := func() {
@@ -436,12 +449,12 @@ func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
 			return
 		}
 		if keyPass {
-			r.rasterDraw(p.key, r.modelKey, modelKeyBlend, p.img, nil, nil, nil)
+			r.rasterDraw(p.key, r.modelKey, modelKeyBlend, p.img, nil, nil, quads)
 			return
 		}
-		r.rasterDraw(p.img, r.modelBody, ebiten.BlendSourceOver, p.key, r.tables.shade, texPage, nil)
+		r.rasterDraw(p.img, r.modelBody, ebiten.BlendSourceOver, p.key, r.tables.shade, texPage, quads)
 	}
-	emit := func(v []modelGPUVertex, idx []uint16, slot modelTextureSlot, textured bool, flat uint8, shaded, keyed bool, origin image.Point) {
+	emit := func(v []modelGPUVertex, idx []uint16, slot modelTextureSlot, textured bool, flat uint8, shaded, keyed bool, origin image.Point, quad int) {
 		if !keyPass && slot.img != nil && texPage != nil && texPage != slot.img {
 			flush()
 		}
@@ -467,6 +480,13 @@ func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
 					// image from its origin instead.
 					vertex.Custom2 = -1
 				}
+				// The flat colour lane is dead on a textured face, so a mapped
+				// quad rides it as a one-based parameter index. A face whose
+				// texture slot did not resolve keeps the flat fallback the
+				// shader's untextured branch already writes.
+				if quad != 0 && vertex.Custom2 != 0 {
+					vertex.ColorB = float32(quad)
+				}
 			}
 			r.verts = append(r.verts, vertex)
 		}
@@ -481,7 +501,7 @@ func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
 		}
 		if outline {
 			for _, o := range s.outline {
-				emit(o.Vertices, modelQuadIndices, modelTextureSlot{}, false, o.Color, false, s.keyed, s.origin)
+				emit(o.Vertices, modelQuadIndices, modelTextureSlot{}, false, o.Color, false, s.keyed, s.origin, 0)
 			}
 			continue
 		}
@@ -491,10 +511,10 @@ func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
 			f := &s.faces[i]
 			textured := f.face.Texture != nil
 			for _, strip := range f.strips {
-				emit(strip.Vertices, modelQuadIndices, f.tex, textured, strip.Color, strip.Shaded, s.keyed, s.origin)
+				emit(strip.Vertices, modelQuadIndices, f.tex, textured, strip.Color, strip.Shaded, s.keyed, s.origin, 0)
 			}
 			if len(f.indices) != 0 {
-				emit(f.vertices, f.indices, f.tex, textured, f.face.Color, f.face.Shaded, s.keyed, s.origin)
+				emit(f.vertices, f.indices, f.tex, textured, f.face.Color, f.face.Shaded, s.keyed, s.origin, f.quad)
 			}
 		}
 	}

@@ -289,10 +289,11 @@ func YawFromDelta(dx, dz numeric.Fixed) numeric.Angle {
 // targets and never impacted, and the drift gate compared against a
 // wrong-signed pitch.
 func PitchFromDelta(dx, dy, dz numeric.Fixed) numeric.Angle {
-	// Retail first truncates the vertical and planar distance operands to
-	// signed whole units, then invokes the same atan2q conversion [06 §3.3].
+	// Retail first truncates the vertical and planar distance operands through
+	// the signed-low-word helper, then invokes the same atan2q conversion [06 §3.3]
+	// [01 R-DET-01 §1].
 	vertical := -int64(int16((-dy.Raw()) >> 16))
-	distanceRaw := int64(math.Trunc(math.Hypot(float64(dx.Raw()), float64(dz.Raw()))))
+	distanceRaw := int64(numeric.TruncateFloat64ToLow32(math.Hypot(float64(dx.Raw()), float64(dz.Raw()))))
 	horizontal := int64(int16(distanceRaw >> 16))
 	return numeric.AngleFromAtan2(vertical, horizontal)
 }
@@ -329,7 +330,7 @@ func BallisticBurnBlowExpiry(now uint32, muzzle, target Vec3, pitch numeric.Angl
 	dz := int32((target.Z.Raw() - muzzle.Z.Raw()))
 	// [06 §6.4] wideDistance = trunc(hypot(...)) keeps the LOW 32 BITS on
 	// overflow [GAP T5]: truncate the double toward zero, then take low 32.
-	wide := int32(uint32(uint64(math.Trunc(math.Hypot(float64(dx), float64(dz))))))
+	wide := numeric.TruncateFloat64ToLow32(math.Hypot(float64(dx), float64(dz)))
 	// [06 §6.4] H = fixedCos(pitch, weaponVelocity)
 	cosPitch := numeric.Cos(pitch)
 	h := numeric.MulRound(cosPitch, weaponVelocity) // int32

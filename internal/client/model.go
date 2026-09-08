@@ -14,12 +14,14 @@ package client
 // textured quad does [03 §4.3] [03 R-REN-03A §5].
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 type modelCorner struct {
@@ -52,6 +54,9 @@ func (c *Client) unitModelFor(name string) *unitModel {
 	if name == "" {
 		return nil
 	}
+	if c != nil && c.modelTextures != nil {
+		return c.modelTextures.modelFor(modelLoadUnit, name, name)
+	}
 	if m, ok := c.models[name]; ok {
 		return m
 	}
@@ -83,13 +88,31 @@ func (c *Client) unitModelFor(name string) *unitModel {
 // wrong — the cull is not a separate test, it is the span comparison.)
 // This version stores the hierarchy for dynamic piece transforms [03 §2.4] C21–C22.
 func (c *Client) expandModel(name string) *unitModel {
+	return expandModelFromFS(c.modelFS, name)
+}
+
+// expandModelFromFS is the explicit standalone-preview recovery wrapper. A
+// battle registry uses expandModelFromFSStrict during composition and reports
+// a named-model failure before any tick can run [02 R-MALF-01 §5].
+func expandModelFromFS(fs *vfs.FS, name string) *unitModel {
+	m, _ := expandModelFromFSStrict(fs, name)
+	return m
+}
+
+func expandModelFromFSStrict(fs *vfs.FS, name string) (*unitModel, error) {
+	if fs == nil {
+		return nil, fmt.Errorf("model %q: no virtual filesystem", name)
+	}
 	path := name
 	if !strings.Contains(strings.ToLower(path), ".3do") {
 		path = "objects3d/" + path + ".3do"
 	}
-	compiled, err := compiledmodel.Load(c.modelFS, path)
-	if err != nil || compiled == nil || len(compiled.Pieces) == 0 {
-		return nil
+	compiled, err := compiledmodel.Load(fs, path)
+	if err != nil {
+		return nil, fmt.Errorf("model %q: %w", path, err)
+	}
+	if compiled == nil || len(compiled.Pieces) == 0 {
+		return nil, fmt.Errorf("model %q: empty compiled geometry", path)
 	}
 	byName := make(map[string]int, len(compiled.Pieces))
 	for i, piece := range compiled.Pieces {
@@ -97,7 +120,30 @@ func (c *Client) expandModel(name string) *unitModel {
 	}
 	// Loading, selection-primitive placement, primitive ordering, and the
 	// authored half-turn are complete in internal/model.Load [03 §2.4].
-	return &unitModel{compiled: compiled, pieceByName: byName}
+	return &unitModel{compiled: compiled, pieceByName: byName}, nil
+}
+
+func (c *Client) modelForUnit(v frame.UnitView) *unitModel {
+	if c != nil && c.modelTextures != nil {
+		// DefName/DefID choose the catalog's already-loaded model identity;
+		// Model is only the no-definition fallback used by standalone previews.
+		return c.modelTextures.unitModel(v.DefName, v.DefID, v.Model)
+	}
+	return c.unitModelFor(v.Model)
+}
+
+func (c *Client) modelForFeature(v frame.FeatureView) *unitModel {
+	if c != nil && c.modelTextures != nil {
+		return c.modelTextures.modelFor(modelLoadFeature, v.DefName, v.Model)
+	}
+	return c.unitModelFor(v.Model)
+}
+
+func (c *Client) modelForProjectile(v frame.ProjectileView) *unitModel {
+	if c != nil && c.modelTextures != nil {
+		return c.modelTextures.projectileModel(v.WeaponID, v.Model)
+	}
+	return c.unitModelFor(v.Model)
 }
 
 // modelStates copies committed piece lanes into the canonical presentation state.
@@ -197,7 +243,7 @@ func (c *Client) drawUnitModel(v frame.UnitView, sx, sy int32) bool {
 
 // drawFeatureModel and drawProjectileModel share the same concrete traversal.
 func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
-	m := c.unitModelFor(f.Model)
+	m := c.modelForFeature(f)
 	if m == nil || m.compiled == nil || c.cam == nil {
 		return false
 	}
@@ -222,7 +268,7 @@ func (c *Client) drawFeatureModel(f frame.FeatureView) bool {
 }
 
 func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
-	m := c.unitModelFor(p.Model)
+	m := c.modelForProjectile(p)
 	if m == nil || m.compiled == nil || c.cam == nil {
 		return false
 	}

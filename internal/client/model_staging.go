@@ -381,7 +381,7 @@ func (c *Client) unitDrawFor(v frame.UnitView) (*presentationrender.UnitDraw, bo
 	if c == nil || c.cam == nil {
 		return nil, false
 	}
-	m := c.unitModelFor(v.Model)
+	m := c.modelForUnit(v)
 	if m == nil || m.compiled == nil {
 		return nil, false
 	}

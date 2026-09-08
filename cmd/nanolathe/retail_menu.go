@@ -63,8 +63,6 @@ func (g *gameShell) skirmishConfigForStart(mapName string) session.SkirmishConfi
 	return cfg
 }
 
-func menuKey(s string) string { return ui.Key(s) }
-
 type retailMapData struct {
 	label       string
 	description string
@@ -143,12 +141,9 @@ func (g *gameShell) applyRetailMissionLayout() {
 		return
 	}
 	setRect := func(name string, y, h int32) {
-		for i := range p.window.Gadgets {
-			if strings.EqualFold(p.window.Gadgets[i].Name, name) {
-				p.window.Gadgets[i].Rect.Y = y
-				p.window.Gadgets[i].Rect.H = h
-				return
-			}
+		if i := p.window.GadgetIndex(name); i >= 0 {
+			p.window.Gadgets[i].Rect.Y = y
+			p.window.Gadgets[i].Rect.H = h
 		}
 	}
 	setRect("Campaign", 308, 48)
@@ -171,30 +166,33 @@ func (g *gameShell) refreshRetailPanel() {
 	}
 }
 
-// resolveRetailButtonGeometry is the stateful part of the retail implementation that is
-// easy to miss when treating a .GUI rectangle as final layout. Retail picks
-// the closest stock/owned GAF frame and then stores that frame's dimensions
-// back into the runtime gadget record. Hit testing and text centering must see
-// those dimensions too.
-func (g *gameShell) resolveRetailButtonGeometry() {
-	p := g.activePanel()
-	if p == nil || p.Window == nil {
+// installRetailWindowButtonArt writes the generic window builder's effective
+// button record before ui.NewPanel copies its runtime state. The installed
+// record is the authority for button art, geometry and staged state thereafter
+// [07 R-WGT-01 §3].
+func (g *gameShell) installRetailWindowButtonArt(window *gui.Window, own *formats.GAF) {
+	if window == nil {
 		return
 	}
-	for i := range p.Window.Gadgets {
-		gad := p.Window.Gadgets[i]
-		if i == 0 || gad.Kind != gui.KindButton {
+	for i := range window.Gadgets {
+		if i == 0 || window.Gadgets[i].Kind != gui.KindButton {
 			continue
 		}
-		frame := g.gadgetArt(gad, p.StatusAt(i))
-		if frame == nil {
-			frame = g.retailButtonFrame(gad, p.StatusAt(i), false)
-		}
-		if frame == nil || frame.Width == 0 || frame.Height == 0 {
+		if window.Gadgets[i].ButtonArtResolved {
 			continue
 		}
-		p.Window.Gadgets[i].Rect.W = int32(frame.Width)
-		p.Window.Gadgets[i].Rect.H = int32(frame.Height)
+		art := g.buildRetailButtonArt(window.Gadgets[i], own)
+		gad := art.gadget
+		gad.ArtFrame = int32(art.base)
+		gad.ButtonArt = art.entry
+		gad.ButtonArtResolved = true
+		if art.entry != nil && art.base >= 0 && art.base < len(art.entry.Frames) {
+			if frame := art.entry.Frames[art.base].Frame; frame != nil {
+				gad.Rect.W = int32(frame.Width)
+				gad.Rect.H = int32(frame.Height)
+			}
+		}
+		window.Gadgets[i] = gad
 	}
 }
 
@@ -255,7 +253,7 @@ func (g *gameShell) refreshMissionPanel() {
 	p.SetActive("CampaignKnob", true)
 	p.SetActive("Missions", true)
 	p.SetActive("MissionsKnob", true)
-	p.SetStatus("Difficulty", clampMenuStage(g.missionDifficultyValue, 3))
+	p.SetStageAt(p.Index("Difficulty"), clampMenuStage(g.missionDifficultyValue, 3))
 	if g.missionSide&1 == 0 {
 		p.SetStatus("Side0", 1)
 		p.SetStatus("Side1", 0)
@@ -381,16 +379,16 @@ func (g *gameShell) refreshSkirmishPanel() {
 		p.SetHelp("Mapping", "Terrain is blacked out until explored.")
 	}
 	if g.setup.LineOfSight == 0 {
-		p.SetStatus("LineOfSight", 0)
+		p.SetStageAt(p.Index("LineOfSight"), 0)
 		p.SetHelp("LineOfSight", "All mapped terrain is visible.")
 	} else if g.setup.LOSType == 1 {
-		p.SetStatus("LineOfSight", 1)
+		p.SetStageAt(p.Index("LineOfSight"), 1)
 		p.SetHelp("LineOfSight", "Terrain elevations affect a unit's view.")
 	} else {
-		p.SetStatus("LineOfSight", 2)
+		p.SetStageAt(p.Index("LineOfSight"), 2)
 		p.SetHelp("LineOfSight", "Terrain elevations do not affect a unit's view.")
 	}
-	p.SetStatus("Difficulty", clampMenuStage(g.setup.Difficulty, 3))
+	p.SetStageAt(p.Index("Difficulty"), clampMenuStage(g.setup.Difficulty, 3))
 
 	// Player%d/Side%d/etc. are appended at runtime by the retail implementation. They are
 	// not present in SKIRMISH.GUI on disk, but are still retail gadgets with
@@ -596,34 +594,7 @@ func (g *gameShell) currentGadget(index int) (gui.Gadget, bool) {
 }
 
 func (g *gameShell) gadgetArt(gad gui.Gadget, status int) *formats.GAFFrame {
-	p := g.panelAssets()
-	if p == nil {
-		return nil
-	}
-	artName := gad.Art
-	if artName == "" {
-		artName = gad.Name
-	}
-	var e *formats.GAFEntry
-	if p.art != nil {
-		if found, ok := p.art.Find(artName); ok {
-			e = found
-		}
-	}
-	// The executable asks the skirmish runtime GAF for TEAMICONSx. In the
-	// installed retail resource set that entry is named "ally icons" (the
-	// same 38×20 stock strip); retain the executable name in the runtime
-	// gadget and resolve the mounted resource spelling here.
-	if e == nil && strings.EqualFold(artName, "TEAMICONSx") && p.art != nil {
-		if found, ok := p.art.Find("ally icons"); ok {
-			e = found
-		}
-	}
-	if e == nil && g.assets != nil && g.assets.logos != nil {
-		if found, ok := g.assets.logos.Find(artName); ok {
-			e = found
-		}
-	}
+	e := g.namedGadgetArtEntry(gad)
 	if e == nil || len(e.Frames) == 0 {
 		return nil
 	}
@@ -635,4 +606,171 @@ func (g *gameShell) gadgetArt(gad gui.Gadget, status int) *formats.GAFFrame {
 		idx = len(e.Frames) - 1
 	}
 	return e.Frames[idx].Frame
+}
+
+// namedGadgetArtEntry is the existing named-art search used by non-button
+// painters: the current window page, then its mounted side art. Buttons add
+// the common-interface and generic fallback hops in buttonArtResolution.
+func (g *gameShell) namedGadgetArtEntry(gad gui.Gadget) *formats.GAFEntry {
+	p := g.panelAssets()
+	if p == nil {
+		return nil
+	}
+	artName := gad.Art
+	if artName == "" {
+		artName = gad.Name
+	}
+	if p.art != nil {
+		if found, ok := p.art.Find(artName); ok {
+			return found
+		}
+		// The executable asks the skirmish runtime GAF for TEAMICONSx. In the
+		// installed retail resource set that entry is named "ally icons" (the
+		// same 38×20 stock strip); retain the executable name in the runtime
+		// gadget and resolve the mounted resource spelling here.
+		if strings.EqualFold(artName, "TEAMICONSx") {
+			if found, ok := p.art.Find("ally icons"); ok {
+				return found
+			}
+		}
+	}
+	if g.assets != nil && g.assets.logos != nil {
+		if found, ok := g.assets.logos.Find(artName); ok {
+			return found
+		}
+	}
+	return nil
+}
+
+type retailButtonArtResolution struct {
+	entry  *formats.GAFEntry
+	base   int
+	gadget gui.Gadget
+}
+
+// buildRetailButtonArt selects art once for a window record. Stage forcing is
+// confined to the nonzero-stage fallback arm, while staged record finalization
+// runs after every selected-art arm [07 R-WGT-01 §3].
+func (g *gameShell) buildRetailButtonArt(gad gui.Gadget, own *formats.GAF) retailButtonArtResolution {
+	name := gad.Art
+	if name == "" {
+		name = gad.Name
+	}
+	base := int(gad.ArtFrame)
+	var entry *formats.GAFEntry
+	if own != nil {
+		if e, ok := own.Find(name); ok {
+			entry = e
+		}
+	}
+	common := (*formats.GAF)(nil)
+	if g != nil && g.assets != nil {
+		common = g.assets.common
+	}
+	if entry == nil && common != nil {
+		if e, ok := common.Find(name); ok {
+			entry = e
+		}
+	}
+	if entry == nil && common != nil {
+		// Choose one fallback family. Its absence remains a missing entry;
+		// it does not permit trying another family [07 R-WGT-01 §3].
+		fallbackName := "BUTTONS0"
+		switch {
+		case gad.Attribs&guiAttribCheckbox != 0:
+			fallbackName = "CHECKBOX"
+		case gad.Stages != 0:
+			fallbackName = fmt.Sprintf("stagebuttn%d", gad.Stages)
+			if gad.Text == "Off|On" || gad.Stages == 1 || gad.Attribs&0x4000 != 0 {
+				gad.Stages = 2
+				gad.Attribs |= 0x4000
+				fallbackName = "stagebuttn1"
+			}
+		}
+		entry, _ = common.Find(fallbackName)
+		base = g.fallbackButtonArtResolution(entry, gad).base
+	}
+	if gad.Stages != 0 {
+		if strings.Contains(gad.Text, "|") {
+			gad.Labels = strings.Split(gad.Text, "|")
+		}
+		gad.Attribs = (gad.Attribs & 0x4000) | 1
+	}
+	return retailButtonArtResolution{entry: entry, base: base, gadget: gad}
+}
+
+// resolveRetailButtonArt reads the exact entry identity installed by the
+// builder. A resolved nil keeps the no-art result authoritative rather than
+// consulting another GAF provider [07 R-WGT-01 §3].
+func (g *gameShell) resolveRetailButtonArt(gad gui.Gadget) retailButtonArtResolution {
+	if gad.ButtonArtResolved {
+		return retailButtonArtResolution{entry: gad.ButtonArt, base: int(gad.ArtFrame), gadget: gad}
+	}
+	return g.buildRetailButtonArt(gad, nil)
+}
+
+// fallbackButtonArtResolution compares only the four-frame group bases. A
+// score of 1000 is not replaced on a tie or worse, matching the builder's
+// bounded search [07 R-WGT-01 §3].
+func (g *gameShell) fallbackButtonArtResolution(entry *formats.GAFEntry, gad gui.Gadget) retailButtonArtResolution {
+	if entry == nil {
+		return retailButtonArtResolution{}
+	}
+	bestFrame, bestScore := 0, 1000
+	for i := 0; i < len(entry.Frames); i += 4 {
+		f := entry.Frames[i].Frame
+		if f == nil {
+			continue
+		}
+		score := absInt(int(f.Width)-int(gad.Rect.W)) + absInt(int(f.Height)-int(gad.Rect.H))
+		if score < bestScore {
+			bestFrame, bestScore = i, score
+		}
+	}
+	return retailButtonArtResolution{entry: entry, base: bestFrame, gadget: gad}
+}
+
+func (g *gameShell) retailButtonArtFrames(gad gui.Gadget) int {
+	art := g.resolveRetailButtonArt(gad)
+	if art.entry == nil {
+		return 0
+	}
+	return len(art.entry.Frames)
+}
+
+// retailButtonArt applies the button painter's independent down-state and
+// current-stage words. A resolved entry starts at its stored base: named and
+// staged entries use zero; BUTTONS0 uses the builder's closest four-frame
+// group [07 R-WGT-01 §3].
+func (g *gameShell) retailButtonArt(gad gui.Gadget, down, stage int, grey bool) *formats.GAFFrame {
+	art := g.resolveRetailButtonArt(gad)
+	if art.entry == nil || len(art.entry.Frames) == 0 {
+		return nil
+	}
+	gad = art.gadget
+	last := len(art.entry.Frames) - 1
+	idx := art.base
+	switch {
+	case grey && cycleButton(gad):
+		idx = last
+	case grey && gad.Attribs&0x1800 != 0:
+		idx = art.base
+	case grey && gad.Stages != 0:
+		idx = stage
+	case grey:
+		idx = art.base + min(down+2, last)
+	case gad.Stages != 0 && down != 0 && int(gad.Stages) < len(art.entry.Frames):
+		idx = last - 1
+	case gad.Stages != 0:
+		idx = stage
+	case down != 0:
+		idx = art.base + down
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > last {
+		idx = last
+	}
+	return art.entry.Frames[idx].Frame
 }

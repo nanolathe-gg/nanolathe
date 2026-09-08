@@ -110,7 +110,7 @@ func (r *Renderer) atlasFor(t *world.Terrain) *tileAtlas {
 // here. What would settle it: the design's world-space-zoom entry, which replaces
 // per-tile scaling with a single scaled compose.
 func (r *Renderer) Terrain(c drawlist.Terrain) {
-	if r == nil || r.offscreen == nil || r.atlas == nil {
+	if r == nil || r.offscreen == nil || r.scene2D == nil {
 		return
 	}
 	t := c.Terrain
@@ -162,16 +162,11 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 		endTY = tileMapH - 1
 	}
 
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	flush := func() {
-		if len(r.verts) == 0 {
-			return
-		}
-		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.atlas, &ebiten.DrawTrianglesShaderOptions{
-			Blend:  ebiten.BlendCopy,
-			Images: [4]*ebiten.Image{atlas.img, nil, nil, nil},
-		})
+	// One command: the tile atlas rides source slot 3 of the scene shader, so the
+	// terrain pass merges into the same batch as the frame's sprites, glyphs and
+	// fills (docs/DESIGN_GPU_RENDERER.md §11.2).
+	if !r.sched.begin(schedOpaque, 0, 0, dstW, dstH, [4]*ebiten.Image{3: atlas.img}) {
+		return
 	}
 	for ty := startTY; ty <= endTY; ty++ {
 		for tx := startTX; tx <= endTX; tx++ {
@@ -210,23 +205,18 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 				continue
 			}
 			ax0, ay0 := atlas.atlasSrc(tileID, srcX0, srcY0)
-			if !r.quadBatchHasRoom() {
-				flush()
-				r.resetGeometry()
-			}
-			r.appendTexQuad(
+			r.sched.quad(schedOpaque,
 				float32(dstX0), float32(dstY0), float32(dstX1), float32(dstY1),
 				float32(ax0), float32(ay0), float32(ax0+w), float32(ay0+h),
-			)
+				[4]float32{}, [4]float32{0, 0, 0, sceneOpTerrain})
 		}
 	}
-	flush()
 }
 
 // appendTexQuad appends one axis-aligned quad mapping destination rect
-// [dx0,dx1)×[dy0,dy1) to source-atlas rect [sx0,sx1)×[sy0,sy1) as two triangles,
-// into the reusable geometry scratch. Vertices sit on integer pixel corners with
-// no colour operand (the atlas shader ignores vertex colour).
+// [dx0,dx1)×[dy0,dy1) to source rect [sx0,sx1)×[sy0,sy1) as two triangles, into
+// the reusable geometry scratch the fog pass and the expansion share. Vertices
+// sit on integer pixel corners with no colour operand.
 func (r *Renderer) appendTexQuad(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) {
 	base := uint16(len(r.verts))
 	r.verts = append(r.verts,

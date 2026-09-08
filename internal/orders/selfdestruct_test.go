@@ -162,7 +162,7 @@ func TestSelfDestructCountdownFieldFollowsTheParser(t *testing.T) {
 	for _, row := range []struct {
 		authored string
 		want     uint32
-	}{{"0", 0}, {"1", 1}, {"5", 5}, {"6", 6}, {"7", 7}, {"8", 0}, {"9", 1}} {
+	}{{"0", 0}, {"1", 1}, {"5", 5}, {"6", 6}, {"7", 7}, {"8", 0}, {"9", 1}, {"9tail", 1}, {"18446744073709551617", 1}, {"-18446744073709551617tail", 7}} {
 		def := &content.UnitDef{SelfDestructCountdown: row.authored, SelfDestructCountdownPresent: true}
 		if got := selfDestructCountdownField(def); got != row.want {
 			t.Fatalf("selfdestructcountdown=%s yielded %d, want %d [04 R-SPEC-01 §13]", row.authored, got, row.want)

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -93,11 +92,8 @@ func (g *gameShell) focusSaveLoadNameEditor() {
 	if !g.saveLoadPanelActive() || saveLoadUI.Mode() != saveScreenMode || saveLoadPanel.Window == nil {
 		return
 	}
-	for i, gadget := range saveLoadPanel.Window.Gadgets {
-		if gadget.Kind == gui.KindTextBox && strings.EqualFold(gadget.Name, "GAMENAME") {
-			saveLoadPanel.FocusEditor(i)
-			return
-		}
+	if i := saveLoadPanel.Window.GadgetIndex("GAMENAME"); i >= 0 && saveLoadPanel.Window.Gadgets[i].Kind == gui.KindTextBox {
+		saveLoadPanel.FocusEditor(i)
 	}
 }
 

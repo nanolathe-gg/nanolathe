@@ -2,9 +2,9 @@ package render
 
 import "github.com/nanolathe/nanolathe/internal/content"
 
-// TexturePlayer is the presentation cursor for one model instance.  It owns
-// no global clock and therefore two instances created at different ticks do
-// not accidentally share a phase [03 §2.4.1][03 §4.4].
+// TexturePlayer is one cursor embedded in a loaded model primitive. Its owner
+// chooses registration and phase-7 lifetime; runtime model instances only read
+// its selected frame [03 R-CRD-005 §1][03 §4.4].
 //
 // Durations are authored whole simulation ticks.  A zero duration is retained
 // as authored data; the cursor advances at the next tick rather than inventing
@@ -19,7 +19,7 @@ type TexturePlayer struct {
 	active      bool
 }
 
-// NewTexturePlayer copies one authored sequence into an independent cursor.
+// NewTexturePlayer copies one authored sequence into one embedded cursor.
 func NewTexturePlayer(sequence content.AssetSequence) *TexturePlayer {
 	p := &TexturePlayer{
 		frames:    append([]content.AssetID(nil), sequence.Frames...),

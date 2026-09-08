@@ -4,8 +4,6 @@ package main
 // paused title — and the authored-window painter they share [07 §11].
 
 import (
-	"strings"
-
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -158,7 +156,7 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 			}
 		}
 		text := gad.Text
-		if strings.EqualFold(gad.Name, "TITLE") && title != "" {
+		if window.GadgetIndex("TITLE") == i && title != "" {
 			text = title
 		} else if gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
 			text = gad.Labels[0]

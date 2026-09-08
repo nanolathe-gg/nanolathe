@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/session"
@@ -171,15 +172,15 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 	if !ok {
 		return
 	}
-	switch ui.Key(name) {
-	case "savegame":
+	switch gui.CallbackName(name) {
+	case "SaveGame":
 		// ENDMSN's SaveGame opens the save dialog, and a save taken there is
 		// the between-missions bank that carries campaign progress across
 		// process runs [08 R-CAMP-01 §8] [07 R-FE-01 §10].
 		if b.shell != nil {
 			b.shell.openSaveLoadScreenReporting(saveScreenMode, saveLoadFromResults)
 		}
-	case "loadgame":
+	case "LoadGame":
 		if b.shell != nil {
 			b.shell.openSaveLoadScreenReporting(loadScreenMode, saveLoadFromResults)
 		}

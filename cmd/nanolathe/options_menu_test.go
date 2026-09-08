@@ -225,7 +225,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	}
 
 	// Moving the knob to the second row of the table selects 800x600.
-	shell.moveRetailSlider("vidsldr", slider, retailSliderKnob(1, slider.travel, slider.max))
+	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(1, slider.travel, slider.max))
 	if shell.display.Width != 800 || shell.display.Height != 600 {
 		t.Fatalf("VIDSLDR at index 1 wrote %dx%d; want 800x600", shell.display.Width, shell.display.Height)
 	}
@@ -249,7 +249,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	// Choose 800x600 again and leave through `PREV` ("OK"), which is the save
 	// point; `CANCEL` would discard it instead.
 	slider = shell.retailOptionsSlider("VIDSLDR")
-	shell.moveRetailSlider("vidsldr", slider, retailSliderKnob(1, slider.travel, slider.max))
+	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(1, slider.travel, slider.max))
 	shell.activateGadget("PREV")
 	if shell.retailOptionsActive() {
 		t.Fatal("PREV did not pop the options root")
@@ -367,7 +367,7 @@ func TestRetailOptionsSliderPointerCaptureAndDrag(t *testing.T) {
 	}
 	index, rect := -1, gui.Rect{}
 	for i, gad := range optionsPanel.Window.Gadgets {
-		if menuKey(gad.Name) == "vidsldr" {
+		if gad.Name == "VIDSLDR" {
 			index, rect = i, optionsPanel.Window.PlacedRect(i)
 			break
 		}
@@ -413,7 +413,7 @@ func TestRetailOptionsSliderPointerCaptureAndDrag(t *testing.T) {
 	freed.SetPosition(float32(rect.X+rect.W+40), float32(midY))
 	shell.updateRetailSliderDrag(freed)
 	before := slider.knob
-	shell.releaseRetailScrollbar(gad, rect, rect.X+rect.W+40, midY)
+	shell.releaseRetailScrollbar(index, gad, rect, rect.X+rect.W+40, midY)
 	if slider.knob != before {
 		t.Fatalf("the release that ended the drag stepped the knob to %d; want %d", slider.knob, before)
 	}
@@ -422,11 +422,11 @@ func TestRetailOptionsSliderPointerCaptureAndDrag(t *testing.T) {
 	}
 
 	// A release on the right arrow with no drag in flight is the arrow step.
-	shell.releaseRetailScrollbar(gad, rect, rect.X+rect.W-1, midY)
+	shell.releaseRetailScrollbar(index, gad, rect, rect.X+rect.W-1, midY)
 	if slider.knob != before+1 {
 		t.Fatalf("the right arrow left the knob at %d; want %d", slider.knob, before+1)
 	}
-	shell.releaseRetailScrollbar(gad, rect, rect.X, midY)
+	shell.releaseRetailScrollbar(index, gad, rect, rect.X, midY)
 	if slider.knob != before {
 		t.Fatalf("the left arrow left the knob at %d; want %d", slider.knob, before)
 	}
@@ -497,10 +497,10 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		sliders []string
 		stages  []string
 	}{
-		{"SOUND", "sound", []string{"fxvol"}, []string{"MODE", "SPEECH"}},
-		{"MUSIC", "music", []string{"musicvol"}, []string{"NOTRAK", "TRACKMODE", "TRACKTYPE"}},
-		{"SPEEDS", "speeds", []string{"game", "screen", "txtscrol", "maxlines"}, []string{"LEFTCLICK", "UNITCHAT"}},
-		{"VISUALS", "visuals", []string{"gamma", "vidsldr"}, []string{"ANTI", "SHADING", "BSHADOWS"}},
+		{"SOUND", "sound", []string{"FXVOL"}, []string{"MODE", "SPEECH"}},
+		{"MUSIC", "music", []string{"MUSICVOL"}, []string{"NOTRAK", "TRACKMODE", "TRACKTYPE"}},
+		{"SPEEDS", "speeds", []string{"GAME", "SCREEN", "TXTSCROL", "MAXLINES"}, []string{"LEFTCLICK", "UNITCHAT"}},
+		{"VISUALS", "visuals", []string{"GAMMA", "VIDSLDR"}, []string{"ANTI", "SHADING", "BSHADOWS"}},
 	} {
 		shell.activateGadget(page.button)
 		if optionsState.page != page.key {
@@ -516,6 +516,14 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 				t.Errorf("page %s did not merge its %s control", page.key, name)
 			}
 		}
+		// These six are authored staged buttons: their labels and art consume
+		// the stage byte, while the other rows in this table are toggles that
+		// retain down-state [07 R-WGT-01 §3].
+		for _, name := range []string{"MODE", "SPEECH", "TRACKMODE", "TRACKTYPE", "LEFTCLICK", "UNITCHAT"} {
+			if index := shell.activePanel().Index(name); index >= 0 && shell.activePanel().Window.Gadgets[index].Stages == 0 {
+				t.Errorf("page %s merged %s without authored stages", page.key, name)
+			}
+		}
 		if shotDir != "" {
 			writeShellShot(t, cl, shotDir+"/options-"+page.key+".png")
 		}
@@ -529,10 +537,10 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 		value  int
 		read   func() int
 	}{
-		{"screen", 40, func() int { return shell.scrollSpeed }},
-		{"txtscrol", 7, func() int { return shell.messages.TextScroll }},
-		{"maxlines", 18, func() int { return shell.messages.TextLines }},
-		{"game", 14, func() int { return shell.gameSpeed }},
+		{"SCREEN", 40, func() int { return shell.scrollSpeed }},
+		{"TXTSCROL", 7, func() int { return shell.messages.TextScroll }},
+		{"MAXLINES", 18, func() int { return shell.messages.TextLines }},
+		{"GAME", 14, func() int { return shell.gameSpeed }},
 	} {
 		s := shell.retailOptionsSlider(c.slider)
 		if s == nil {
@@ -547,26 +555,35 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 	if shell.interfaceType != settings.InterfaceTypeRightClick {
 		t.Errorf("LEFTCLICK left Interface Type %d; want %d", shell.interfaceType, settings.InterfaceTypeRightClick)
 	}
+	if got := optionsPanel.StageAt(optionsPanel.Index("LEFTCLICK")); got != settings.InterfaceTypeRightClick || optionsPanel.DownAt(optionsPanel.Index("LEFTCLICK")) != 0 {
+		t.Errorf("LEFTCLICK stage/down=%d/%d, want 1/0", got, optionsPanel.DownAt(optionsPanel.Index("LEFTCLICK")))
+	}
 	shell.activateGadget("UNITCHAT")
 	if shell.messages.UnitChatText != 10 {
 		t.Errorf("UNITCHAT from Medium left the text level %d; want 10", shell.messages.UnitChatText)
 	}
+	if got := optionsPanel.StageAt(optionsPanel.Index("UNITCHAT")); got != 2 || optionsPanel.DownAt(optionsPanel.Index("UNITCHAT")) != 0 {
+		t.Errorf("UNITCHAT stage/down=%d/%d, want 2/0", got, optionsPanel.DownAt(optionsPanel.Index("UNITCHAT")))
+	}
 
 	// The sound page's gauge and its two stage buttons [03 R-AUD-01 §2].
 	shell.activateGadget("SOUND")
-	fx := shell.retailOptionsSlider("fxvol")
+	fx := shell.retailOptionsSlider("FXVOL")
 	if fx == nil {
 		t.Fatal("the sound page installed no FXVOL slider")
 	}
-	shell.moveRetailSlider("fxvol", fx, retailSliderKnob(40, fx.travel, fx.max))
+	shell.moveRetailSlider("FXVOL", fx, retailSliderKnob(40, fx.travel, fx.max))
 	if shell.audioPrefs.FXVol != 40 {
 		t.Errorf("FXVOL at 40 stored %d", shell.audioPrefs.FXVol)
 	}
 	// `SPEECH` writes both halves: bit 6 and the voice level as stage times five.
-	optionsPanel.SetStatus("SPEECH", 0)
+	optionsPanel.SetStageAt(optionsPanel.Index("SPEECH"), 0)
 	shell.activateGadget("SPEECH")
 	if shell.audioPrefs.SpeechFX != 1 || shell.audioPrefs.UnitChat != 5 {
 		t.Errorf("SPEECH at Medium stored speechfx %d unitchat %d; want 1 and 5", shell.audioPrefs.SpeechFX, shell.audioPrefs.UnitChat)
+	}
+	if got := optionsPanel.StageAt(optionsPanel.Index("SPEECH")); got != 1 || optionsPanel.DownAt(optionsPanel.Index("SPEECH")) != 0 {
+		t.Errorf("SPEECH stage/down=%d/%d, want 1/0", got, optionsPanel.DownAt(optionsPanel.Index("SPEECH")))
 	}
 	// `MODE` Off greys the gauge, the test button and the speech gauge and
 	// deactivates the volume caption [03 R-AUD-01 §2].
@@ -574,6 +591,9 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 	shell.activateGadget("MODE")
 	if shell.audioPrefs.SoundMode != settings.SoundModeOff {
 		t.Fatalf("MODE from 3D left mode %d; want Off", shell.audioPrefs.SoundMode)
+	}
+	if got := optionsPanel.StageAt(optionsPanel.Index("MODE")); got != settings.SoundModeOff || optionsPanel.DownAt(optionsPanel.Index("MODE")) != 0 {
+		t.Errorf("MODE stage/down=%d/%d, want 0/0", got, optionsPanel.DownAt(optionsPanel.Index("MODE")))
 	}
 	if optionsPanel.ActiveOf("VOLTEXT") {
 		t.Error("Sound Mode Off left the VOLTEXT caption active")
@@ -590,6 +610,12 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 	// The music page shows `NO DISC` with no tracks, and greys the transport
 	// while music is off [03 R-AUD-01 §4].
 	shell.activateGadget("MUSIC")
+	if got := optionsPanel.StageAt(optionsPanel.Index("TRACKMODE")); got != shell.audioPrefs.CDMode-1 || optionsPanel.DownAt(optionsPanel.Index("TRACKMODE")) != 0 {
+		t.Errorf("TRACKMODE stage/down=%d/%d, want %d/0", got, optionsPanel.DownAt(optionsPanel.Index("TRACKMODE")), shell.audioPrefs.CDMode-1)
+	}
+	if want := retailTrackCategory(optionsState.track); optionsPanel.StageAt(optionsPanel.Index("TRACKTYPE")) != want || optionsPanel.DownAt(optionsPanel.Index("TRACKTYPE")) != 0 {
+		t.Errorf("TRACKTYPE stage/down=%d/%d, want %d/0", optionsPanel.StageAt(optionsPanel.Index("TRACKTYPE")), optionsPanel.DownAt(optionsPanel.Index("TRACKTYPE")), want)
+	}
 	if optionsState.tracks == 0 && optionsPanel.TextOf("TRACKNUM") != retailNoDiscText {
 		t.Errorf("TRACKNUM with no tracks reads %q; want %q", optionsPanel.TextOf("TRACKNUM"), retailNoDiscText)
 	}
@@ -643,11 +669,11 @@ func TestRetailOptionsCancelDiscardsEveryPage(t *testing.T) {
 	before := shell.retailOptionsSnapshot()
 
 	shell.activateGadget("SOUND")
-	fx := shell.retailOptionsSlider("fxvol")
+	fx := shell.retailOptionsSlider("FXVOL")
 	if fx == nil {
 		t.Fatal("the sound page installed no FXVOL slider")
 	}
-	shell.moveRetailSlider("fxvol", fx, retailSliderKnob(3, fx.travel, fx.max))
+	shell.moveRetailSlider("FXVOL", fx, retailSliderKnob(3, fx.travel, fx.max))
 	shell.activateGadget("SPEEDS")
 	shell.activateGadget("LEFTCLICK")
 	shell.activateGadget("CANCEL")
@@ -873,7 +899,7 @@ func TestBattlePrefsInterfacePageDrivesTheLiveSession(t *testing.T) {
 	if game == nil {
 		t.Fatal("the merged interface page installed no GAME slider")
 	}
-	shell.moveRetailSlider("game", game, retailSliderKnob(settings.MaxGameSpeed, game.travel, game.max))
+	shell.moveRetailSlider("GAME", game, retailSliderKnob(settings.MaxGameSpeed, game.travel, game.max))
 	if shell.gameSpeed != settings.MaxGameSpeed {
 		t.Fatalf("GAME at the end of travel stored %d; want %d", shell.gameSpeed, settings.MaxGameSpeed)
 	}
@@ -885,7 +911,7 @@ func TestBattlePrefsInterfacePageDrivesTheLiveSession(t *testing.T) {
 	if screen == nil {
 		t.Fatal("the merged interface page installed no SCREEN slider")
 	}
-	shell.moveRetailSlider("screen", screen, retailSliderKnob(settings.ScrollSliderMax, screen.travel, screen.max))
+	shell.moveRetailSlider("SCREEN", screen, retailSliderKnob(settings.ScrollSliderMax, screen.travel, screen.max))
 	if b.scrollSetting() != byte(shell.scrollSpeed) {
 		t.Fatalf("SCREEN left the camera reading %d; want the stored %d", b.scrollSetting(), shell.scrollSpeed)
 	}
@@ -926,7 +952,7 @@ func TestBattlePrefsPressSkipsThePlatePictureBox(t *testing.T) {
 	}
 	r := optionsPanel.Window.PlacedRect(want)
 	x, y := r.X+r.W/2, r.Y+r.H/2
-	if got := battleOptionsPressTest(x, y); got != want {
+	if got := optionsPanel.PressTest(x, y); got != want {
 		name := "nothing"
 		if got >= 0 {
 			name = optionsPanel.Window.Gadgets[got].Name
@@ -935,10 +961,10 @@ func TestBattlePrefsPressSkipsThePlatePictureBox(t *testing.T) {
 	}
 }
 
-// The in-battle pump is the window's whole pointer pass: a press captures the
-// gadget under it and the release inside the same gadget runs its callback
-// [07 R-WGT-01 §1][07 R-WGT-01 §3].
-func TestBattlePrefsPumpActivatesOnReleaseInside(t *testing.T) {
+// The authored preferences page selector has the immediate-action attribute;
+// it fires on press and rebuilding the page releases its old panel capture
+// [07 R-WGT-01 §3]. Ordinary release buttons are covered by the shared service.
+func TestBattlePrefsPumpActivatesAuthoredPressButton(t *testing.T) {
 	_, b, cl := retailBattleOptionsShell(t)
 	b.openBattleMenu()
 	b.activateBattleMenuButton("PREFS", cl)
@@ -953,6 +979,9 @@ func TestBattlePrefsPumpActivatesOnReleaseInside(t *testing.T) {
 	if index < 0 {
 		t.Fatal("the in-battle root authors no VISUALS button")
 	}
+	if optionsPanel.Window.Gadgets[index].Attribs&0x10 == 0 {
+		t.Fatal("VISUALS no longer authors an immediate-action button")
+	}
 	r := optionsPanel.Window.PlacedRect(index)
 	x, y := float32(r.X+r.W/2), float32(r.Y+r.H/2)
 	mouse := cl.Input().Mouse
@@ -961,18 +990,19 @@ func TestBattlePrefsPumpActivatesOnReleaseInside(t *testing.T) {
 	mouse.SetPosition(x, y)
 	mouse.SetButton(input.MouseButtonLeft, true)
 	b.handleBattleMenuInput(cl.Input(), cl)
-	if optionsState.pressed != index {
-		t.Fatalf("the press captured gadget %d; want VISUALS at %d", optionsState.pressed, index)
+	if optionsState == nil || optionsState.page != "visuals" {
+		t.Fatal("the authored immediate-action button did not merge VISUALS on press")
 	}
-	if optionsState.page != "" {
-		t.Fatalf("the press alone merged page %q; a button fires on release", optionsState.page)
+	opened := optionsPanel
+	if owner, button := opened.Capture(); owner != -1 || button != 0 {
+		t.Fatal("rebuilt page retained the previous panel's capture")
 	}
 
 	mouse.ResetEdges()
 	mouse.SetButton(input.MouseButtonLeft, false)
 	b.handleBattleMenuInput(cl.Input(), cl)
-	if optionsState == nil || optionsState.page != "visuals" {
-		t.Fatal("the release inside VISUALS did not merge the visuals page")
+	if optionsPanel != opened || optionsState == nil || optionsState.page != "visuals" {
+		t.Fatal("release activated the immediate-action selector again")
 	}
 	mouse.ResetEdges()
 }

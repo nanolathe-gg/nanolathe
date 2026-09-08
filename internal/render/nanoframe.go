@@ -1,5 +1,7 @@
 package render
 
+import "github.com/nanolathe/nanolathe/internal/sim/numeric"
+
 // Nanoframe reveal [03 §5.2]. An unfinished unit is composed exactly like a
 // finished one and then recoloured band by band against the model's own
 // per-pixel height key, with the model's polygon outlines overdrawn in a
@@ -89,7 +91,7 @@ func BuildNanoframeReveal(remaining float32, bandColor, outlineColor uint8) Nano
 	if remaining > 1 {
 		remaining = 1
 	}
-	p := int32(remaining * 255) // truncated toward zero, as the retail conversion is
+	p := numeric.TruncateFloat32ToLow32(remaining * 255) // truncated toward zero, as the retail conversion is
 	var r NanoframeReveal
 	var line int32
 	switch {

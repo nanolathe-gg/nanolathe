@@ -36,6 +36,18 @@ func TestFrontendNavigateReportsOnlyFixedEdges(t *testing.T) {
 	}
 }
 
+func TestFrontendNavigateUsesExactTerminatedFiredName(t *testing.T) {
+	f := NewFrontend(ModeMain)
+	for _, name := range []string{"single", "SINGLE ", " SINGLE", "SINGLE          "} {
+		if _, ok := f.Navigate(name); ok {
+			t.Fatalf("Navigate(%q) accepted a different fired name", name)
+		}
+	}
+	if got, ok := f.Navigate("SINGLE\x00suffix"); !ok || got != ModeSingle {
+		t.Fatal("terminated SINGLE callback did not navigate")
+	}
+}
+
 func TestInstallSkirmishDynamicGadgetsUsesAuthoredRows(t *testing.T) {
 	w := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel, Active: 1}}}
 	InstallSkirmishDynamicGadgets(w, []SkirmishSlot{{Side: 2, Color: 4}, {Side: 1, Color: 7}})
@@ -55,7 +67,7 @@ func TestInstallSkirmishDynamicGadgetsUsesAuthoredRows(t *testing.T) {
 }
 
 func TestResultActionUsesAuthoredStartOnly(t *testing.T) {
-	if ResultActionForControl("START") != ResultActionContinue {
+	if ResultActionForControl("Start") != ResultActionContinue {
 		t.Fatal("authored Start did not emit continue")
 	}
 	if ResultActionForControl("MainMenu") != ResultActionMainMenu {
@@ -63,5 +75,11 @@ func TestResultActionUsesAuthoredStartOnly(t *testing.T) {
 	}
 	if ResultActionForControl("Continue") != ResultActionNone {
 		t.Fatal("unestablished result alias became active")
+	}
+	if ResultActionForControl("START") != ResultActionNone {
+		t.Fatal("case-distinct result callback became active")
+	}
+	if ResultActionForControl("Start\x00tail") != ResultActionContinue {
+		t.Fatal("terminated result callback did not use Start")
 	}
 }

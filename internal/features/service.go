@@ -157,10 +157,13 @@ const (
 
 // Service is the features runtime [PLAN_08 WU-08-6].
 type Service struct {
-	Terrain *world.Terrain
-	Sim     *rng.Simulation // nil => rng.Global.Sim (I4)
-	Crt     *rng.CRT        // for smoke jitter, not sim draws [05 "Feature burning"]
-	Wind    *world.Wind
+	Terrain                     *world.Terrain
+	Sim                         *rng.Simulation // nil => rng.Global.Sim (I4)
+	Crt                         *rng.CRT        // for smoke jitter, not sim draws [05 "Feature burning"]
+	Wind                        *world.Wind
+	definitionAdmissionObserver func(*content.FeatureDef)
+	definitionRestoreStart      int
+	definitionRestoreStarted    bool
 
 	cursor int // global cursor descending from W*H-1 with wrap-skip [06 §13.1]
 
@@ -248,6 +251,37 @@ type Service struct {
 	// (including every failure path), so a failed successor cannot suppress a
 	// later unrelated blocking placement [05 "Feature burning"].
 	pendingBurnReplacement *burnReplacement
+}
+
+// SetDefinitionAdmissionObserver observes the terrain definition table in its
+// existing order, then each successful append. It does not alter feature
+// simulation state.
+func (s *Service) SetDefinitionAdmissionObserver(observer func(*content.FeatureDef)) {
+	if s == nil {
+		return
+	}
+	s.definitionAdmissionObserver = observer
+	if observer == nil || s.Terrain == nil {
+		return
+	}
+	for _, def := range s.Terrain.FeatureDefs {
+		if def != nil {
+			observer(def)
+		}
+	}
+}
+
+// DefinitionRestoreStart returns the definition-table boundary captured before
+// the first saved feature row is replayed. Without a restore, the current
+// table length is the ordinary-entry boundary [03 R-CRD-005 §1].
+func (s *Service) DefinitionRestoreStart() int {
+	if s == nil || s.Terrain == nil {
+		return 0
+	}
+	if s.definitionRestoreStarted {
+		return s.definitionRestoreStart
+	}
+	return len(s.Terrain.FeatureDefs)
 }
 
 type burnReplacement struct {
@@ -458,6 +492,10 @@ func RetailRestorePayloadSize(family int) int {
 func (s *Service) ResetForRestore() {
 	if s == nil {
 		return
+	}
+	if !s.definitionRestoreStarted && s.Terrain != nil {
+		s.definitionRestoreStart = len(s.Terrain.FeatureDefs)
+		s.definitionRestoreStarted = true
 	}
 	for _, inst := range s.Instances() {
 		if inst != nil {
@@ -900,6 +938,9 @@ func (s *Service) stampFeature(cx, cz int, def *content.FeatureDef, pos *[3]nume
 		// a retail cap at all; [05 R-FEAT-01 §1] answers it as Established —
 		// it is not — so the refusal is gone.
 		s.Terrain.FeatureDefs = append(s.Terrain.FeatureDefs, def)
+		if s.definitionAdmissionObserver != nil {
+			s.definitionAdmissionObserver(def)
+		}
 		featIdx = uint16(len(s.Terrain.FeatureDefs) - 1)
 	}
 	// Normalize zero/negative extents to the service's established 1x1
@@ -1524,7 +1565,7 @@ func ReclaimTransition(t *world.Terrain, cx, cz int) (metal, energy float32, ok 
 	successor := def.FeatureReclamateDef
 	placed := false
 	if successor != nil {
-		placed = stampFeatureDef(t, cx, cz, successor)
+		placed = stampFeatureDef(t, cx, cz, successor, nil)
 	}
 	// One revision bump for the whole replacement: a blocking successor bumps
 	// inside the stamp, so this covers only the case where the blocking
@@ -1568,7 +1609,7 @@ func clearFeatureRect(t *world.Terrain, cx, cz int, def *content.FeatureDef) {
 // binding the definition into the terrain's own record list when the map did
 // not author it — the same admission spawnFeatureAt performs, so a successor
 // the map never names can still be stamped [05 R-FEAT-01 §2].
-func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef) bool {
+func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef, observer func(*content.FeatureDef)) bool {
 	if t == nil || def == nil {
 		return false
 	}
@@ -1577,6 +1618,9 @@ func stampFeatureDef(t *world.Terrain, cx, cz int, def *content.FeatureDef) bool
 		// The catalog has no cap: it is reallocated per record and "catalog
 		// exhaustion" is not a retail failure mode [05 R-FEAT-01 §1].
 		t.FeatureDefs = append(t.FeatureDefs, def)
+		if observer != nil {
+			observer(def)
+		}
 		idx = uint16(len(t.FeatureDefs) - 1)
 	}
 	footX, footZ := def.FootprintX, def.FootprintZ

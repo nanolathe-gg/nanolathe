@@ -37,6 +37,7 @@ Allowed floating point, exhaustively:
 | Economy cumulative totals and waste counters — including the opt-in trace copy of the same totals in `internal/economy/p28_parity_trace.go` (P28-OBS-00C; mirrored by `internal/architecture`'s parity ratchet as this row) | `float64` | `[05 "Stocks, counters, and waste"]` |
 | Construction remaining fraction and its proportional cost/health intermediates | `float32` | `[05 "Construction target state"]`, `[05 "Construction arithmetic"]` |
 | Meteor parameter installation (spacing, duration and interval) | `float64` transient after the source `float32` store; signed-64 truncation retains the low 32 bits, with no intervening float store | `[06 §6.5]`, `[01 R-DET-01 §1]` |
+| Map tidal scalar, stored once at map load without fixed-point conversion | `float32` | `[03 R-TERR-01 §6]`, `[05 R-PROD-01 §4]` |
 | Wind scalar published to consumers (clamped to 1.0) | `float32` | `[01 §7.3]` |
 | Clock budget product `delta × speed + carry` | `float64` product, `float32` carry | `[01 §4.2]` |
 | Ballistic discriminant, `acos`, `sqrt` | `float64` | `[06 §3.3]` |

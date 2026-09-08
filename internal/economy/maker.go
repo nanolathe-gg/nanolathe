@@ -53,7 +53,7 @@ func (s *Service) TidalScalar() float32 {
 	if s == nil || s.Terrain == nil {
 		return 0
 	}
-	return float32(s.Terrain.Tidal) / 65536
+	return s.Terrain.Tidal
 }
 
 // addContribution applies the retail positive-production discount. The two

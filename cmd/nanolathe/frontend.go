@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
@@ -98,6 +99,11 @@ type gameShell struct {
 	// cursorAccum converts renderer seconds into whole cursor animation ticks
 	// for the menu screens, which have no simulation clock [03 §4.4].
 	cursorAccum float64
+
+	// widgetMillis is the presentation timer used by the common GUI pass. It
+	// shares the established wrapping millisecond source and 30 Hz conversion
+	// with the battle controller, without borrowing simulation time [07 R-WGT-01 §1].
+	widgetMillis clock.MillisSource
 
 	maps         []string
 	mapLabels    []string
@@ -207,6 +213,16 @@ type gameShell struct {
 
 	cam    *camera.Camera
 	battle *battleSession
+}
+
+func (g *gameShell) widgetTimerAdvanced(p *ui.Panel) bool {
+	if g == nil || p == nil {
+		return false
+	}
+	if g.widgetMillis == nil {
+		g.widgetMillis = newMonotonicMillisSource()
+	}
+	return p.TimerAdvanced(clock.ScaledNow(g.widgetMillis.Millis32()))
 }
 
 // gameShellUIStage adapts the canonical frontend state to the client's single
@@ -544,6 +560,7 @@ func (g *gameShell) openMenu(mode shellMode) {
 			g.applyRetailMissionLayout()
 		}
 		if p := g.assets.panel[mode]; p != nil && p.window != nil {
+			g.installRetailWindowButtonArt(p.window, p.art)
 			panel = ui.NewPanel(p.window)
 		}
 	}
@@ -551,6 +568,7 @@ func (g *gameShell) openMenu(mode shellMode) {
 		g.installSkirmishDynamicGadgets()
 		if g.assets != nil {
 			if p := g.assets.panel[mode]; p != nil && p.window != nil {
+				g.installRetailWindowButtonArt(p.window, p.art)
 				panel = ui.NewPanel(p.window)
 			}
 		}
@@ -565,7 +583,6 @@ func (g *gameShell) openMenu(mode shellMode) {
 		g.menuBGMPending = false
 	}
 	g.refreshRetailPanel()
-	g.resolveRetailButtonGeometry()
 	if mode <= modeMenuSkirmish {
 		// The shell loader and the post-battle controller both call the one
 		// routine that forces the logical display size back to 640x480 and,

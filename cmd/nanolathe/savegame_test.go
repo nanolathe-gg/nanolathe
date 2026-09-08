@@ -151,6 +151,14 @@ func TestSaveScreenControlVocabulary(t *testing.T) {
 			t.Fatalf("%s did not commit", name)
 		}
 	}
+	if screen.Activate("LOAD\x00tail") != saveLoadCommit {
+		t.Fatal("terminated LOAD did not commit")
+	}
+	for _, name := range []string{"load", "LOAD ", " LOAD"} {
+		if screen.Activate(name) != saveLoadNone {
+			t.Fatalf("altered callback %q became active", name)
+		}
+	}
 	if screen.Activate("CANCEL") != saveLoadCancel {
 		t.Fatal("CANCEL did not cancel")
 	}

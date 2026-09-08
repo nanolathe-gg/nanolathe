@@ -3,8 +3,10 @@ package gpurender
 import (
 	"bytes"
 	"fmt"
+	"image"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
@@ -20,13 +22,20 @@ func TestModelPreparationReusesFrameScratch(t *testing.T) {
 			{X: 1, Y: 1, Key: 30}, {X: 9, Y: 3, Key: 31}, {X: 5, Y: 9, Key: 32},
 		}},
 		fixturePinchedRing(2, 2),
+		// A textured quad takes the parameter-image path, which must also grow
+		// its packed bytes once and reuse them from then on.
+		drawlist.ModelFace{Texture: &formats.GAFFrame{Width: 8, Height: 8}, Vertices: []drawlist.ModelVertex{
+			{X: 2, Y: 1, U: 0, V: 0, Key: 30}, {X: 10, Y: 3, U: 7, V: 0, Key: 30},
+			{X: 7, Y: 9, U: 7, V: 7, Key: 30}, {X: 0, Y: 7, U: 0, V: 7, Key: 30},
+		}},
 	)
 	g.Outline = []drawlist.ModelFace{fixtureFace(0, 0, 6, 6, 20, 5)}
 	prepare := func() {
 		r.modelPrep.reset()
+		r.modelAtlas.quads.reset()
 		out := r.modelPrep.prepared.take(len(g.Faces))
 		for i := range g.Faces {
-			out[i] = r.prepareModelFace(g.Faces[i])
+			out[i] = r.prepareModelFace(g.Faces[i], image.Point{})
 		}
 		r.prepareModelOutline(g)
 	}

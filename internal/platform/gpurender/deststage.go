@@ -1,6 +1,8 @@
 package gpurender
 
 import (
+	"image"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
@@ -8,28 +10,29 @@ import (
 
 // The destination-reading families for the modern executor beyond fog: the
 // translucent strip blit (BlitTinted), translucent feature bodies and shadows,
-// the UI light/shade rects (FillLitRect/FillShadeRect) and
-// the lit point batch (PointLit), plus the source-through-LHT strip blit
-// (BlitLit), which reads no destination (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4,
-// C-G7).
+// the UI light/shade rects (FillLitRect/FillShadeRect) and the lit point batch
+// (PointLit), plus the source-through-LHT strip blit (BlitLit), which reads no
+// destination (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4, C-G7).
 //
-// Every destination-reading family runs over a per-command snapshot: before the
-// shading pass writes the offscreen, snapshotRect copies the command's covered
-// rect from the offscreen into destScratch, and the pass reads destScratch (the
-// pre-command destination) while writing the offscreen — the same read/write
-// split fog uses for its gray layer (C-G7), so a dest-reading write never samples
-// a pixel it just changed. Snapshotting per command (rather than per disjoint
-// run) means an overlapping later command reads the earlier command's writes,
-// exactly as the byte writers do when they read c.indexed in record order
-// [03 R-COMP-01 §2].
+// Every destination-reading family runs over the phase snapshot: before a phase's
+// destination batch writes the offscreen, the union rectangle of that batch is
+// copied from the offscreen into destScratch, and the pass reads destScratch (the
+// pre-batch destination) while writing the offscreen — the same read/write split
+// fog uses for its gray layer (C-G7), so a destination-reading write never
+// samples a pixel it just changed. The scheduler keeps a batch's rectangles
+// pairwise disjoint and opens the next phase for an overlapping command, so an
+// overlapping later command still reads the earlier command's writes, exactly as
+// the byte writers do when they read c.indexed in record order
+// (§11.2 "The scheduler")[03 R-COMP-01 §2].
 
-// snapshotRect copies the offscreen's [x0,x1)×[y0,y1) rect into destScratch under
-// BlendCopy, so a following dest-reading pass reads the pre-command destination
-// there (C-G7). The atlas shader copies the red channel (the index); destScratch
-// is full-surface and aligned 1:1 with the offscreen, so a screen pixel in the
-// rect reads its own pre-command index. The rect is clamped to the framebuffer.
+// snapshotRect copies the offscreen's [x0,x1)×[y0,y1) rect into destScratch, so a
+// following destination-reading pass reads the pre-batch destination there
+// (C-G7). destScratch is full-surface and aligned 1:1 with the offscreen, so a
+// screen pixel in the rect reads its own pre-batch index. The rect is clamped to
+// the framebuffer. A plain image copy under BlendCopy reproduces the stored bytes
+// exactly: sampling is nearest and no colour scale applies (C-G4).
 func (r *Renderer) snapshotRect(x0, y0, x1, y1 int) {
-	if r.destScratch == nil || r.atlas == nil {
+	if r.destScratch == nil || r.offscreen == nil {
 		return
 	}
 	x0, y0 = maxInt(x0, 0), maxInt(y0, 0)
@@ -37,14 +40,12 @@ func (r *Renderer) snapshotRect(x0, y0, x1, y1 int) {
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(float32(x0), float32(y0), float32(x1), float32(y1),
-		float32(x0), float32(y0), float32(x1), float32(y1))
-	r.destScratch.DrawTrianglesShader(r.verts, r.idx, r.atlas, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendCopy,
-		Images: [4]*ebiten.Image{r.offscreen, nil, nil, nil},
-	})
+	rect := image.Rect(x0, y0, x1, y1)
+	r.snapshotOpt.Blend = ebiten.BlendCopy
+	r.snapshotOpt.GeoM.Reset()
+	r.snapshotOpt.GeoM.Translate(float64(x0), float64(y0))
+	r.destScratch.DrawImage(r.offscreen.SubImage(rect).(*ebiten.Image), &r.snapshotOpt)
+	r.frameDraws++
 }
 
 // clampLHTRow clamps a light level to the LHT's 0..31 row range, matching
@@ -63,15 +64,15 @@ func clampLHTRow(level int) int {
 // drawLit reproduces uiBlitLitRaw: every opaque source texel is written as
 // LightLookup(row, src) — the SOURCE index folded through one LHT row — and the
 // transparent key is skipped (docs/DESIGN_GPU_RENDERER.md §2.3)[03 §4.3.1]. It
-// reads no destination, so it needs no snapshot; the geometry is the plain keyed
-// blit's clip to the framebuffer at (x,y) with no anchor offset, exactly as
+// reads no destination, so it joins the opaque batch; the geometry is the plain
+// keyed blit's clip to the framebuffer at (x,y) with no anchor offset, exactly as
 // uiBlitLitRaw walks x+col / y+row. row is the caller's LHT row clamped to 0..31.
 func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row int) {
-	if f == nil || r.litBlit == nil || r.tables.light == nil {
+	if f == nil || r.scene2D == nil || r.tables.atlas == nil {
 		return
 	}
-	img := r.gafImageFor(f)
-	if img == nil {
+	e := r.sceneFrameFor(f)
+	if !e.ok {
 		return
 	}
 	fw, fh := int(f.Width), int(f.Height)
@@ -80,31 +81,30 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row int) {
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(
+	imgs := r.sceneImages(e)
+	imgs[1] = r.tables.atlas
+	if !r.sched.begin(schedOpaque, x+col0, y+row0, x+col1, y+row1, imgs) {
+		return
+	}
+	r.sched.quad(schedOpaque,
 		float32(x+col0), float32(y+row0), float32(x+col1), float32(y+row1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.litBlit, &ebiten.DrawTrianglesShaderOptions{
-		Blend:    ebiten.BlendSourceOver,
-		Uniforms: map[string]any{"Row": float32(row)},
-		Images:   [4]*ebiten.Image{img, r.tables.light, nil, nil},
-	})
+		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
+		[4]float32{float32(tableRowLHT + row), 0, 0, 0},
+		[4]float32{0, 0, 0, sceneOpLit})
 }
 
 // drawTint reproduces tintedBlitAnchor: it subtracts the frame's authored anchor
 // offsets, clips to the framebuffer, and for every opaque source texel writes
 // ALP[src*256 + dst] — a destination read (docs/DESIGN_GPU_RENDERER.md §2.3)
-// [03 R-COMP-01 §2][03 R-FX-02 §2]. The covered rect is snapshotted first so the
-// pass reads the pre-blit destination. The family's gate is "ALP present": with
-// no ALP table it draws nothing, exactly as tintedBlitAnchor returns on a nil
-// palette [03 R-COMP-01 §2].
+// [03 R-COMP-01 §2][03 R-FX-02 §2]. The family's gate is "ALP present": with no
+// palette it draws nothing, exactly as tintedBlitAnchor returns on a nil palette
+// [03 R-COMP-01 §2].
 func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
-	if f == nil || r.tint == nil || r.tables.alpha == nil || r.destScratch == nil {
+	if f == nil || r.sceneDest == nil || r.tables.atlas == nil || r.destScratch == nil {
 		return
 	}
-	img := r.gafImageFor(f)
-	if img == nil {
+	e := r.sceneFrameFor(f)
+	if !e.ok {
 		return
 	}
 	x -= int(f.XOffset)
@@ -118,16 +118,15 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 		return
 	}
 	dx0, dy0, dx1, dy1 := x+col0, y+row0, x+col1, y+row1
-	r.snapshotRect(dx0, dy0, dx1, dy1)
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(
+	imgs := r.sceneImages(e)
+	imgs[1], imgs[2] = r.tables.atlas, r.destScratch
+	if !r.sched.begin(schedDest, dx0, dy0, dx1, dy1, imgs) {
+		return
+	}
+	r.sched.quad(schedDest,
 		float32(dx0), float32(dy0), float32(dx1), float32(dy1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.tint, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendSourceOver,
-		Images: [4]*ebiten.Image{img, r.destScratch, r.tables.alpha, nil},
-	})
+		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
+		[4]float32{}, [4]float32{0, 0, 0, destOpTint})
 }
 
 // drawLitRect reproduces uiLightRectRaw: every pixel of the framebuffer-clipped
@@ -135,7 +134,7 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 // LHT row (docs/DESIGN_GPU_RENDERER.md §2.3)[03 §4.3.1]. The level is clamped to
 // the LHT's 0..31 row range as LightLookup does.
 func (r *Renderer) drawLitRect(x, y, w, h, level int) {
-	r.drawDestRect(x, y, w, h, clampLHTRow(level), r.tables.light)
+	r.drawDestRect(x, y, w, h, tableRowLHT+clampLHTRow(level))
 }
 
 // drawShadeRect reproduces uiShadeRectRaw: every pixel of the framebuffer-clipped
@@ -158,20 +157,21 @@ func (r *Renderer) drawShadeRect(x, y, w, h, level int) {
 	if row < 0 {
 		row = 0
 	}
-	table := r.tables.light
+	base := tableRowLHT
 	if useShade {
-		table = r.tables.shade
+		base = tableRowSHD
 	}
-	r.drawDestRect(x, y, w, h, row, table)
+	r.drawDestRect(x, y, w, h, base+row)
 }
 
 // drawDestRect is the shared body of the UI light/shade rects: it clips the rect
-// to the framebuffer, snapshots it, and rewrites every pixel as TABLE[row][dst]
-// through the destTable pass under BlendCopy (docs/DESIGN_GPU_RENDERER.md §2.3).
-// The row rides the vertex colour, constant across the quad. A nil table (no
-// palette) draws nothing, matching the byte writers' nil-palette return.
-func (r *Renderer) drawDestRect(x, y, w, h, row int, table *ebiten.Image) {
-	if r.destTable == nil || table == nil || r.destScratch == nil || w <= 0 || h <= 0 {
+// to the framebuffer and rewrites every pixel as TABLE[row][dst] through the
+// destination pass (docs/DESIGN_GPU_RENDERER.md §2.3). row is the absolute table
+// atlas row and rides the vertex colour, constant across the quad. With no
+// palette installed there is no table atlas and nothing is drawn, matching the
+// byte writers' nil-palette return.
+func (r *Renderer) drawDestRect(x, y, w, h, row int) {
+	if r.sceneDest == nil || r.tables.atlas == nil || r.destScratch == nil || w <= 0 || h <= 0 {
 		return
 	}
 	x0, y0 := maxInt(x, 0), maxInt(y, 0)
@@ -179,107 +179,42 @@ func (r *Renderer) drawDestRect(x, y, w, h, row int, table *ebiten.Image) {
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
-	r.snapshotRect(x0, y0, x1, y1)
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendDestTableQuad(float32(x0), float32(y0), float32(x1), float32(y1), uint8(row))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.destTable, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  ebiten.BlendCopy,
-		Images: [4]*ebiten.Image{r.destScratch, table, nil, nil},
-	})
+	if !r.sched.begin(schedDest, x0, y0, x1, y1, [4]*ebiten.Image{1: r.tables.atlas, 2: r.destScratch}) {
+		return
+	}
+	r.appendDestTableQuad(float32(x0), float32(y0), float32(x1), float32(y1), row)
 }
 
 // drawLitPoints reproduces the PointLit branch of classicSink.Points: each point
 // rewrites its destination pixel as LightLookup(pt.Index, dst) — a destination
 // read through the point's own LHT row (docs/DESIGN_GPU_RENDERER.md §2.3)
-// [03 §4.3.1][03 R-FX-01 §4]. A run of pairwise-distinct points shares one
-// destination snapshot; its geometry can then split at the uint16 index bound
-// while every chunk still reads that same pre-run image. A repeated point closes
-// the run, so its next snapshot observes the earlier write in record order.
-// Points outside the framebuffer are skipped, matching the producers' own clip.
+// [03 §4.3.1][03 R-FX-01 §4]. Each point is placed on its own, so the batch tags
+// the cells its points occupy rather than its bounding rectangle, and only a
+// point that repeats a pixel this phase already wrote opens the next phase —
+// that write must observe the earlier one, exactly as the byte writer's
+// record-order chain does (§11.2 "The scheduler"). Points outside the
+// framebuffer are skipped, matching the producers' own clip.
 func (r *Renderer) drawLitPoints(points []drawlist.Point) {
-	if r.destTable == nil || r.tables.light == nil || r.destScratch == nil || len(points) == 0 {
+	if r.sceneDest == nil || r.tables.atlas == nil || r.destScratch == nil || len(points) == 0 {
 		return
 	}
-	start := 0
-	seen := make(map[uint64]struct{}, len(points))
-	for i, pt := range points {
-		x, y := int(pt.X), int(pt.Y)
-		if x < 0 || y < 0 || x >= r.w || y >= r.h {
-			continue
-		}
-		key := uint64(uint32(x))<<32 | uint64(uint32(y))
-		if _, duplicate := seen[key]; duplicate {
-			r.drawDistinctLitPoints(points[start:i])
-			start = i
-			clear(seen)
-		}
-		seen[key] = struct{}{}
-	}
-	r.drawDistinctLitPoints(points[start:])
-}
-
-// drawDistinctLitPoints draws a record-order run whose visible points do not
-// overlap. Each chunk uses one snapshot of the entire run, so splitting the
-// uint16 geometry scratch cannot change the destination bytes it reads.
-func (r *Renderer) drawDistinctLitPoints(points []drawlist.Point) {
-	minX, minY, maxX, maxY := 0, 0, 0, 0
-	any := false
+	imgs := [4]*ebiten.Image{1: r.tables.atlas, 2: r.destScratch}
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
 		if x < 0 || y < 0 || x >= r.w || y >= r.h {
 			continue
 		}
-		if !any {
-			minX, minY, maxX, maxY = x, y, x, y
-			any = true
-			continue
-		}
-		minX, minY = minInt(minX, x), minInt(minY, y)
-		maxX, maxY = maxInt(maxX, x), maxInt(maxY, y)
+		r.sched.beginPoint(x, y, imgs)
+		r.appendDestTableQuad(float32(x), float32(y), float32(x+1), float32(y+1),
+			tableRowLHT+clampLHTRow(int(pt.Index)))
 	}
-	if !any {
-		return
-	}
-	r.snapshotRect(minX, minY, maxX+1, maxY+1)
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	flush := func() {
-		if len(r.verts) == 0 {
-			return
-		}
-		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.destTable, &ebiten.DrawTrianglesShaderOptions{
-			Blend:  ebiten.BlendCopy,
-			Images: [4]*ebiten.Image{r.destScratch, r.tables.light, nil, nil},
-		})
-	}
-	for _, pt := range points {
-		x, y := int(pt.X), int(pt.Y)
-		if x < 0 || y < 0 || x >= r.w || y >= r.h {
-			continue
-		}
-		if !r.quadBatchHasRoom() {
-			flush()
-			r.resetGeometry()
-		}
-		row := clampLHTRow(int(pt.Index))
-		r.appendDestTableQuad(float32(x), float32(y), float32(x+1), float32(y+1), uint8(row))
-	}
-	flush()
 }
 
 // appendDestTableQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1)
-// for the destTable pass: the source coordinates equal the destination screen
-// coordinates so destScratch (source image 0) is sampled 1:1 at the fragment's
-// pixel, and the table row rides the red vertex channel as row/255 (C-G4).
-func (r *Renderer) appendDestTableQuad(dx0, dy0, dx1, dy1 float32, row uint8) {
-	c := float32(row) / 255.0
-	base := uint16(len(r.verts))
-	r.verts = append(r.verts,
-		ebiten.Vertex{DstX: dx0, DstY: dy0, SrcX: dx0, SrcY: dy0, ColorR: c, ColorA: 1},
-		ebiten.Vertex{DstX: dx1, DstY: dy0, SrcX: dx1, SrcY: dy0, ColorR: c, ColorA: 1},
-		ebiten.Vertex{DstX: dx0, DstY: dy1, SrcX: dx0, SrcY: dy1, ColorR: c, ColorA: 1},
-		ebiten.Vertex{DstX: dx1, DstY: dy1, SrcX: dx1, SrcY: dy1, ColorR: c, ColorA: 1},
-	)
-	r.idx = append(r.idx, base, base+1, base+2, base+1, base+2, base+3)
+// for the destination table op: the absolute table atlas row rides the red vertex
+// lane and the fragment reads the phase snapshot under its own screen pixel
+// (C-G4).
+func (r *Renderer) appendDestTableQuad(dx0, dy0, dx1, dy1 float32, row int) {
+	r.sched.quad(schedDest, dx0, dy0, dx1, dy1, 0, 0, 0, 0,
+		[4]float32{float32(row), 0, 0, 0}, [4]float32{0, 0, 0, destOpTable})
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // NoExplodeRetirement reports whether the projectile should retire after impact
@@ -170,11 +171,11 @@ func DistanceToBox(impact Vec3, u UnitForArea) int32 {
 	// square root runs on the raw 16.16 deltas and the shift converts the
 	// truncated result to whole world units, so the shift is the only place the
 	// fraction is dropped. float64 for the square root is on the I2 allowlist
-	// alongside the ballistic discriminant; the narrowing truncates toward zero
-	// [01 §8] I3, and the deltas are non-negative here so truncation, flooring
-	// and the arithmetic shift all agree.
+	// alongside the ballistic discriminant. The shared narrowing retains the
+	// signed low word before the arithmetic shift [01 R-DET-01 §1]; the deltas
+	// are non-negative here, so the root itself truncates toward zero [01 §8] I3.
 	fx, fy, fz := float64(cx), float64(cy), float64(cz)
-	whole := int64(math.Sqrt(fx*fx+fy*fy+fz*fz)) >> 16
+	whole := int64(numeric.TruncateFloat64ToLow32(math.Sqrt(fx*fx+fy*fy+fz*fz))) >> 16
 	// The reduction to sixteen bits is a truncating narrowing and therefore
 	// WRAPS: [06 §9.3] states that "a distance at or above 32,768 world units
 	// wraps negative and passes the acceptance test", which is the whole reason

@@ -65,7 +65,7 @@ func TestDefaultKeysThroughBothInputHandlers(t *testing.T) {
 					}
 					shell := &gameShell{frontend: ui.NewFrontend(modeMenuMain)}
 					shell.frontend.Panels.Replace(p)
-					optionsPanel, optionsAssets, optionsState = p, &retailPanelAssets{window: w}, &retailOptionsState{inBattle: battle, pressed: -1}
+					optionsPanel, optionsAssets, optionsState = p, &retailPanelAssets{window: w}, &retailOptionsState{inBattle: battle}
 					cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 32, Height: 24})
 					if err != nil {
 						t.Fatal(err)

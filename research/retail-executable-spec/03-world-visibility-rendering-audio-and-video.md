@@ -885,9 +885,13 @@ sibling/child links. Sibling and child links form a depth-first hierarchy.
 Vertices are three 16.16 coordinates; primitives contain color, vertex-index,
 texture-name, and colored/texture flags.
 
-Model loading resolves object names from unit catalog data, sorts the catalog by
-case-insensitive name, and caches model pointers per unit type. The sort makes
-piece/type identity independent of provider enumeration order. **Established
+Model loading visits compiled unit definitions in their definition order and
+loads one model object for every definition with an object name. The resulting
+pointer table is indexed by definition identity: two definitions naming the
+same file still have distinct loaded pieces and texture cursors, while every
+runtime instance of one definition shares its selected loaded object. The
+definition traversal makes piece/type identity independent of provider
+enumeration order. **Established
 (direct-static):** colored primitives retain their authored polygon ring for the
 generic edge-table filler; textured primitives draw only at arity four. There
 is no fan-triangulation step [§2.4.1] [R-RAST-01 §1]. Leaf pieces with a vertex
@@ -5051,13 +5055,28 @@ and mutable vertex arrays while retaining references to the loaded pieces; it
 does not clone the primitive texture cursors or register new ones. The earlier
 per-unit cursor wording was incorrect.
 
-Consequently two units using the same loaded model share the same primitive's
-texture phase, regardless of creation time, visibility or draw history. Two
-primitives naming the same sequence have distinct cursors. Distinct model loads
-also retain separate cursors even if their filenames or sequences match. The
-feature-model and projectile-model loaders use the same texture binder; those
-3D texture cursors belong to this registry too. Their separate sprite/event
-cursors are different objects with different phase owners.
+Consequently two instances of one unit definition share that definition's
+loaded primitive phase, regardless of creation time, visibility or draw
+history. Two primitives naming the same sequence have distinct cursors, and
+two unit definitions retain separate cursors even when their object names
+match. Projectile records instead reuse the first earlier compiled weapon
+record whose model name matches case-insensitively; only a first occurrence
+loads and binds a model, so later matching records share its cursors. A feature
+definition with an object name loads its own model when admitted to the battle
+feature-definition table; unused discovered definitions do not bind models.
+At a normal battle entry, weapon models bind first, then the terrain file's
+feature-name table and map-specified feature additions admit feature records,
+then the unit-definition loop admits a missing `corpse` feature immediately
+before binding that unit model. The subsequent feature-link pass walks the
+admitted table by increasing ordinal with a live count. For every visited
+record it resolves `featuredead`, then `featurereclamate`, then `featureburnt`;
+each missing target is appended and is visited later in that same pass. A cycle
+or repeated name therefore admits one record, not a recursive duplicate. Save
+restoration adds its saved feature records and runs its own link pass only after
+those records are admitted. The feature-model and projectile-model loaders use
+the same texture binder; those 3D texture cursors belong to this registry too.
+Their separate sprite/event cursors are different objects with different phase
+owners. **Established (direct-static).**
 
 Each player stores its frame, remaining authored duration, loop/hold flag and
 non-owning sequence reference. Fewer than two frames bind statically; a

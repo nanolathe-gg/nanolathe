@@ -162,9 +162,9 @@ func LoadGUI(data []byte) (*GUI, error) {
 }
 
 func atoi(value string) int {
-	var result int
-	_, _ = fmt.Sscanf(strings.TrimSpace(value), "%d", &result)
-	return result
+	// GUI header fields use the same wrapped decimal accessor as COMMON;
+	// the runtime gadget builder performs the later byte/word stores [02 §6].
+	return int(ParseTDFInteger(value))
 }
 
 func isBinaryGUI(data []byte) bool {

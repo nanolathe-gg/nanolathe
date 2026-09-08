@@ -32,9 +32,7 @@ package orders
 // spawned. A test in wu19168_test.go locks the segment.
 
 import (
-	"strconv"
-	"strings"
-
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -78,11 +76,8 @@ func selfDestructCountdownField(def *content.UnitDef) uint32 {
 	if def == nil || !def.SelfDestructCountdownPresent {
 		return 5
 	}
-	// A decimal accessor: a value that is not a number reads as zero.
-	v, err := strconv.Atoi(strings.TrimSpace(def.SelfDestructCountdown))
-	if err != nil {
-		v = 0
-	}
+	// The decimal prefix wraps before the three-bit store [04 R-SPEC-01 §13].
+	v := formats.ParseTDFInteger(def.SelfDestructCountdown)
 	return uint32(v) & selfDestructDefinitionField
 }
 

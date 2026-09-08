@@ -1,8 +1,6 @@
 package gpurender
 
 import (
-	"slices"
-
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
@@ -19,10 +17,17 @@ func (s *frameScratch[T]) take(n int) []T {
 	}
 	v := s.slots[s.next]
 	if cap(v) < n {
-		v = slices.Grow(v[:0], n)[:n]
-	} else {
-		v = v[:n]
+		// Grow geometrically, so a slot converges on the largest request it has
+		// ever served and a steady-state frame reallocates nothing. Growing to
+		// exactly the request reallocated whenever a frame ordered its subjects
+		// differently [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
+		size := cap(v) * 2
+		if size < n {
+			size = n
+		}
+		v = make([]T, size)
 	}
+	v = v[:n]
 	s.slots[s.next] = v
 	s.next++
 	return v

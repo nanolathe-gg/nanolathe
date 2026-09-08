@@ -231,7 +231,7 @@ func constructionStatus(b frame.BuildProgressView) ConstructionStatus {
 	if remaining > 1 {
 		remaining = 1
 	}
-	percent := int((1 - remaining) * 100) // __ftol truncates toward zero [01 §8]
+	percent := int(numeric.TruncateFloat32ToLow32((1 - remaining) * 100)) // __ftol truncates toward zero [01 §8]
 	if percent < 0 {
 		percent = 0
 	}
@@ -256,7 +256,7 @@ func healthPercent(current, max int32) int {
 	if current >= max {
 		return 100
 	}
-	percent := int((float32(current) / float32(max)) * 100) // [01 §8]
+	percent := int((int64(current) * 100) / int64(max)) // signed integer division [07 R-HUD-03 §2]
 	if percent < 0 {
 		return 0
 	}

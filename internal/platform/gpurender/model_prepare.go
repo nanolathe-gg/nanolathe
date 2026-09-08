@@ -1,6 +1,8 @@
 package gpurender
 
 import (
+	"image"
+
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
@@ -163,16 +165,33 @@ type preparedModelFace struct {
 	strips   []modelGPUFace
 	vertices []modelGPUVertex
 	indices  []uint16
+	// quad is the one-based parameter index of a textured quad the fragment
+	// shader maps itself; zero means the face carries its lanes on its
+	// vertices, as a strip or a plain triangulated ring does.
+	quad int
 }
 
-func (r *Renderer) prepareModelFace(f drawlist.ModelFace) preparedModelFace {
+func (r *Renderer) prepareModelFace(f drawlist.ModelFace, origin image.Point) preparedModelFace {
 	out := preparedModelFace{face: f}
-	// Textured quads use the two-chain row mapper, not a GPU diagonal: that
-	// diagonal made solar-panel textures visibly zig-zag [03 R-RAST-01 §1].
-	// Prepare the fractional row lanes once, then reuse them for key and color.
+	// A textured quad may not use a GPU diagonal for its lanes: that diagonal
+	// made solar-panel textures visibly zig-zag [03 R-RAST-01 §1]. It still
+	// draws as two device triangles, because the fragment shader evaluates the
+	// span writer's two-chain row mapping itself from the four corners the
+	// frame's parameter image carries (docs/DESIGN_GPU_RENDERER.md §11.2
+	// "Textured quads without strips"). Only a ring the triangulation rejects,
+	// or one whose lanes do not fit the parameter image, still needs CPU rows.
 	if f.Texture != nil && len(f.Vertices) == 4 {
-		out.strips = r.prepareSpanStrips(f)
 		r.modelStats.TexturedQuadFaces++
+		if tri, paints, supported := modelFaceTrianglesInto(f, &r.modelPrep); supported {
+			if !paints {
+				return out
+			}
+			if q := r.modelAtlas.quads.add(f.Vertices, origin.X, origin.Y); q != 0 {
+				out.vertices, out.indices, out.quad = r.prepareModelVertices(f.Vertices), tri, q
+				return out
+			}
+		}
+		out.strips = r.prepareSpanStrips(f)
 		r.modelStats.TexturedQuadStrips += len(out.strips)
 		return out
 	}
@@ -268,6 +287,38 @@ func (r *Renderer) prepareModelOutline(g *drawlist.ModelGeometry) []modelGPUFace
 
 func foldedStrips(f drawlist.ModelFace) []modelGPUFace {
 	return modelSpanStrips(f)
+}
+
+// modelSpanRows counts the rows the two-chain span mapper paints for one ring,
+// without preparing a single strip. The face admission only needs to know
+// whether a folded ring paints anything at all, and preparing its strips there
+// allocated a backing store per folded face per frame
+// [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
+func modelSpanRows(f drawlist.ModelFace) int {
+	v := f.Vertices
+	n := len(v)
+	if n < 3 {
+		return 0
+	}
+	top, bot := 0, 0
+	for i := 1; i < n; i++ {
+		if v[i].Y < v[top].Y {
+			top = i
+		}
+		if v[i].Y > v[bot].Y {
+			bot = i
+		}
+	}
+	rows := 0
+	for y := v[top].Y; y < v[bot].Y; y++ {
+		l, a := chainAt(v, top, bot, -1, y)
+		r, b := chainAt(v, top, bot, 1, y)
+		if !a || !b || r.X <= l.X {
+			continue
+		}
+		rows++
+	}
+	return rows
 }
 
 // modelTextureStrips prepares a textured quad from the original two-chain

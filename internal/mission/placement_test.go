@@ -565,3 +565,15 @@ func TestStartPosCounterAdvancesOnlyOnNonNumericLabels(t *testing.T) {
 		}
 	}
 }
+
+// The synthetic codec retains the authored accessor's low nibble; it is not
+// evidence for a separate retail file layout [08 R-TRIG-01 §9].
+func TestPlacementCodecRetainsWrappedInitialGroup(t *testing.T) {
+	for _, text := range []string{"18446744073709551617tail", "17suffix"} {
+		var heap []byte
+		record := MarshalUnit(UnitPlacement{InitialGroup: text}, &heap)
+		if got := UnmarshalUnit(record, heap).InitialGroup; got != "1" {
+			t.Fatalf("group %q decoded as %q, want 1", text, got)
+		}
+	}
+}

@@ -131,6 +131,13 @@ type Gadget struct {
 	// frames base+6 and base+8 of SLIDERS here [07 R-WGT-01 §5].
 	ArtFrame int32
 
+	// ButtonArt retains the immutable entry selected by the runtime window
+	// builder. Its identity includes its GAF provider; resolving its name again
+	// could select a different provider [07 R-WGT-01 §3]. These fields are not
+	// authored GUI data. A resolved nil entry means the builder found no art.
+	ButtonArt         *formats.GAFEntry
+	ButtonArtResolved bool
+
 	// Provenance
 	SourceName string // original TDF section name like GADGET0
 }

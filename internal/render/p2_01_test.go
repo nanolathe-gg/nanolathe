@@ -237,18 +237,18 @@ func TestFixedEffectPerRecordGravityOverride(t *testing.T) {
 
 // TestCase7PresentationRNGIsolation ensures case-7 jitter uses CRT not sim, and sim draws unchanged [I4][03 §5.4].
 func TestCase7PresentationRNGIsolation(t *testing.T) {
-	// Ensure SegmentedJitter draws exactly 3 CRT values per interior point and zero sim draws.
+	// Ensure SegmentedJitter draws exactly 3 CRT values per generated point and zero sim draws.
 	// We cannot directly check sim draws without global, but we can ensure CRT consumption count and that sim helper not called.
 	crt := rng.NewCRT(1) // CRT seed 1
 	// Capture CRT draws before
-	// CRT Rand returns 0..0x7FFF; we check count by calling SegmentedBeamPoints which should draw 3*(n-1) times
+	// CRT Rand returns 0..0x7FFF; one pass draws 3*n times [06 R-WFX-01 §4].
 	head := combat.Vec3{X: numeric.Fixed(0), Y: numeric.Fixed(0), Z: numeric.Fixed(0)}
-	tail := combat.Vec3{X: numeric.Fixed(327680 * 3), Y: numeric.Fixed(0), Z: numeric.Fixed(0)} // 3 segments => 2 interior
+	tail := combat.Vec3{X: numeric.Fixed(327680 * 3), Y: numeric.Fixed(0), Z: numeric.Fixed(0)}
 	n := SegmentCount(head, tail)
 	if n != 3 {
 		t.Fatalf("SegmentCount %d want 3", n)
 	}
-	// count CRT draws: SegmentedBeamPoints draws 3 per interior point
+	// count CRT draws: SegmentedBeamPoints draws 3 per generated point
 	// We'll do manual by checking that repeated calls with same CRT seed produce same jitter deterministic,
 	// and that sim RNG not touched (we test via absence of import and via note).
 	crt2 := rng.NewCRT(1)
@@ -262,23 +262,11 @@ func TestCase7PresentationRNGIsolation(t *testing.T) {
 			t.Fatalf("determinism fail i %d", i)
 		}
 	}
-	// Verify that jitter is integer -5..+6 offset
-	for i := 1; i < len(pts1)-1; i++ {
-		// lerp position without jitter would be at t=i/n
-		// check that jitter offset is within -5..+6 pixels *65536
-		// Since head 0 tail 983040, lerp at i=1 => 327680, jitter ±5*65536 => range [0, 655360] approx
-		// Just verify pts are not exactly lerp (jitter applied)
-		lerpX := numeric.Fixed(int64(327680 * i)) // simplified because n=3 and head 0
-		// Actually tailored: head 0 tail 983040, t=1/3 => 327680, with jitter.
-		diff := int64(pts1[i].X) - int64(lerpX)
-		// diff should be multiple of 65536 and -5..+6
-		if diff%65536 != 0 {
-			t.Fatalf("jitter not pixel aligned diff %d", diff)
-		}
-		j := diff / 65536
-		if j < -5 || j > 6 {
-			t.Fatalf("jitter out of range %d", j)
-		}
+	if pts1[0] != tail {
+		t.Fatalf("first pass point = %+v, want tail %+v [06 R-WFX-01 §4]", pts1[0], tail)
+	}
+	if crt.Draws() != uint64(3*n) {
+		t.Fatalf("CRT draws = %d, want %d [06 R-WFX-01 §4]", crt.Draws(), 3*n)
 	}
 	// Check SegmentCount edge cases
 	if SegmentCount(head, head) != 0 {

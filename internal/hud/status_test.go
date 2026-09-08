@@ -43,6 +43,17 @@ func TestSnapshotStatusSelectedBuildAndFactory(t *testing.T) {
 	}
 }
 
+func TestHealthPercentUsesIntegerDamageBarArithmetic(t *testing.T) {
+	// The unit readout's bar uses signed integer multiply/divide, so 53/100
+	// remains 53. A float32 quotient can land just below 53 before truncation
+	// [07 R-HUD-03 §2].
+	f := frame.Frame{Units: []frame.UnitView{{Slot: 1, Owner: 0, Health: 53, MaxHealth: 100}}}
+	got := SnapshotStatus(&f, 0, []pool.Handle{1})
+	if got.Selected.HealthPercent != 53 {
+		t.Fatalf("health percent = %d, want 53 [07 R-HUD-03 §2]", got.Selected.HealthPercent)
+	}
+}
+
 func TestResourceStatusFormatting(t *testing.T) {
 	f := frame.Frame{Economy: []frame.EconomyView{{
 		Player: 3, Metal: 12.9, MetalCapacity: 100.9, Energy: 150000.9, EnergyCapacity: 250000.9,

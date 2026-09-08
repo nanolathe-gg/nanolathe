@@ -1,7 +1,6 @@
 package gpurender
 
 import (
-	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
@@ -15,18 +14,19 @@ import (
 // and first-character table bias — is reproduced from drawText/MeasureText/
 // TruncateToWidth so the covered pixel set matches the byte writer [fmt fnt][07 §7].
 //
-// One glyph atlas per *formats.FNT packs every present glyph in a horizontal
-// strip, the set bit flagged in green (the same opacity convention the GAF frame
-// images use); the run colour rides the vertex red channel and the glyph shader
-// keys on the green flag. The atlas is built on first use and cached by pointer
-// identity for the font's lifetime.
+// One glyph strip per *formats.FNT packs every present glyph horizontally into
+// the scene atlas, the set bit flagged in green (the same opacity convention the
+// GAF frame regions use); the run colour rides the vertex red channel and the
+// scene shader's glyph op keys on the green flag. The strip is packed on first
+// use and cached by pointer identity for the font's lifetime, so a text run
+// merges into the same device draw as the sprites and fills around it (§11.2).
 
-// fntAtlas is one font's packed glyph strip and its per-code layout. img is a
-// total-width × height image with the set-bit flag in green; xOffset[code] is a
-// present glyph's left edge in img (-1 when the code is absent) and width[code] is
-// its advance, both indexed by the character code.
+// fntAtlas is one font's packed glyph strip and its per-code layout. entry is the
+// strip's scene atlas placement; xOffset[code] is a present glyph's left edge in
+// scene atlas coordinates (-1 when the code is absent) and width[code] is its
+// advance, both indexed by the character code.
 type fntAtlas struct {
-	img     *ebiten.Image
+	entry   sceneEntry
 	height  int
 	xOffset [256]int32
 	width   [256]int32
@@ -96,12 +96,13 @@ func truncateToWidth(fnt *formats.FNT, text string, maxWidth int) string {
 	return src
 }
 
-// buildFNTAtlas packs every present glyph of fnt into a horizontal strip with the
-// set-bit flag in green (255) and alpha opaque so premultiplied sampling recovers
-// the flag; clear bits stay zero (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). The
-// per-code left edge and width are recorded for the draw walk. A font with no
-// present glyph yields nil.
-func buildFNTAtlas(fnt *formats.FNT) *fntAtlas {
+// buildFNTAtlas packs every present glyph of fnt into a horizontal strip in the
+// scene atlas with the set-bit flag in green (255) and alpha opaque so
+// premultiplied sampling recovers the flag; clear bits stay zero
+// (docs/DESIGN_GPU_RENDERER.md §2.3, §11.2, C-G4). The per-code left edge — in
+// scene atlas coordinates — and width are recorded for the draw walk. A font with
+// no present glyph yields nil.
+func (r *Renderer) buildFNTAtlas(fnt *formats.FNT) *fntAtlas {
 	if fnt == nil || fnt.Height == 0 {
 		return nil
 	}
@@ -121,7 +122,14 @@ func buildFNTAtlas(fnt *formats.FNT) *fntAtlas {
 	if total <= 0 {
 		return nil
 	}
-	buf := make([]byte, total*h*4)
+	a.entry = r.scene.allocate(total, h)
+	if !a.entry.ok {
+		return nil
+	}
+	buf := r.scene.scratch(total * h * 4)
+	for i := range buf {
+		buf[i] = 0
+	}
 	for i := 0; i < 256; i++ {
 		g := fnt.Glyphs[i]
 		if g == nil {
@@ -140,24 +148,32 @@ func buildFNTAtlas(fnt *formats.FNT) *fntAtlas {
 			}
 		}
 	}
-	img := ebiten.NewImage(total, h)
-	img.WritePixels(buf)
-	a.img = img
+	r.scene.upload(a.entry, buf)
+	// Rebase the per-code left edges onto the packed page, so a glyph quad
+	// samples the strip in scene atlas coordinates.
+	for i := 0; i < 256; i++ {
+		if a.xOffset[i] >= 0 {
+			a.xOffset[i] += a.entry.x
+		}
+	}
 	return a
 }
 
-// fntAtlasFor returns the cached glyph atlas for fnt, building it on first use and
+// fntAtlasFor returns the cached glyph strip for fnt, packing it on first use and
 // caching it (including a nil for a font with no present glyph) by pointer
 // identity (docs/DESIGN_GPU_RENDERER.md §2.3).
 func (r *Renderer) fntAtlasFor(fnt *formats.FNT) *fntAtlas {
 	if fnt == nil {
 		return nil
 	}
-	if a, ok := r.fntAtlases[fnt]; ok {
+	if a, ok := r.scene.fonts[fnt]; ok {
 		return a
 	}
-	a := buildFNTAtlas(fnt)
-	r.fntAtlases[fnt] = a
+	a := r.buildFNTAtlas(fnt)
+	if r.scene.fonts == nil {
+		r.scene.fonts = make(map[*formats.FNT]*fntAtlas)
+	}
+	r.scene.fonts[fnt] = a
 	return a
 }
 
@@ -169,7 +185,7 @@ func (r *Renderer) fntAtlasFor(fnt *formats.FNT) *fntAtlas {
 // vertex red channel and the glyph shader writes it where the atlas marks a set
 // bit, leaving the destination untouched elsewhere (C-G4).
 func (r *Renderer) Glyphs(g drawlist.Glyphs) {
-	if r == nil || r.offscreen == nil || r.glyph == nil {
+	if r == nil || r.offscreen == nil || r.scene2D == nil {
 		return
 	}
 	fnt := g.Font
@@ -177,7 +193,7 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 		return
 	}
 	atlas := r.fntAtlasFor(fnt)
-	if atlas == nil || atlas.img == nil {
+	if atlas == nil || !atlas.entry.ok {
 		return
 	}
 	text := g.Text
@@ -191,18 +207,15 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	top := int(g.Y) - baselineDescender(fnt)
 	curX := int(g.X)
 	gh := atlas.height
-	col := float32(g.Color) / 255.0
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	flush := func() {
-		if len(r.verts) == 0 {
-			return
-		}
-		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.glyph, &ebiten.DrawTrianglesShaderOptions{
-			Blend:  ebiten.BlendSourceOver,
-			Images: [4]*ebiten.Image{atlas.img, nil, nil, nil},
-		})
+	// The run's screen rectangle is its total advance by the font height; the
+	// per-glyph clip below decides the covered pixels inside it.
+	bx0, by0 := maxInt(curX, 0), maxInt(top, 0)
+	bx1 := minInt(curX+measureText(fnt, text), r.w)
+	by1 := minInt(top+gh, r.h)
+	if !r.sched.begin(schedOpaque, bx0, by0, bx1, by1, r.sceneImages(atlas.entry)) {
+		return
 	}
+	col := float32(g.Color)
 	for i := 0; i < len(text); i++ {
 		b := text[i]
 		if b == 0x0A || b == 0x00 { // newline / NUL terminates the advance [02 §7].
@@ -215,37 +228,19 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 		gw := int(atlas.width[code])
 		if gw > 0 {
 			xoff := int(atlas.xOffset[code])
+			yoff := int(atlas.entry.y)
 			// The glyph is a rectangle, so drawText's per-pixel framebuffer clip is
 			// the rectangular intersection of [curX,curX+gw)×[top,top+gh) with the
 			// framebuffer; the source sub-rect shifts to match.
 			c0, c1 := maxInt(0, -curX), minInt(gw, r.w-curX)
 			r0, r1 := maxInt(0, -top), minInt(gh, r.h-top)
 			if c0 < c1 && r0 < r1 {
-				if !r.quadBatchHasRoom() {
-					flush()
-					r.resetGeometry()
-				}
-				r.appendGlyphQuad(
+				r.sched.quad(schedOpaque,
 					float32(curX+c0), float32(top+r0), float32(curX+c1), float32(top+r1),
-					float32(xoff+c0), float32(r0), float32(xoff+c1), float32(r1),
-					col)
+					float32(xoff+c0), float32(yoff+r0), float32(xoff+c1), float32(yoff+r1),
+					[4]float32{col, 0, 0, 0}, [4]float32{0, 0, 0, sceneOpGlyph})
 			}
 		}
 		curX += gw // advance; space advances via its glyph width [03 §7.1].
 	}
-	flush()
-}
-
-// appendGlyphQuad appends one axis-aligned glyph quad sampling the atlas
-// [sx0,sx1)×[sy0,sy1) across the screen [dx0,dx1)×[dy0,dy1) rectangle, every
-// vertex carrying the run colour in the red channel (C-G4).
-func (r *Renderer) appendGlyphQuad(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1, col float32) {
-	base := uint16(len(r.verts))
-	r.verts = append(r.verts,
-		ebiten.Vertex{DstX: dx0, DstY: dy0, SrcX: sx0, SrcY: sy0, ColorR: col, ColorA: 1},
-		ebiten.Vertex{DstX: dx1, DstY: dy0, SrcX: sx1, SrcY: sy0, ColorR: col, ColorA: 1},
-		ebiten.Vertex{DstX: dx0, DstY: dy1, SrcX: sx0, SrcY: sy1, ColorR: col, ColorA: 1},
-		ebiten.Vertex{DstX: dx1, DstY: dy1, SrcX: sx1, SrcY: sy1, ColorR: col, ColorA: 1},
-	)
-	r.idx = append(r.idx, base, base+1, base+2, base+1, base+2, base+3)
 }

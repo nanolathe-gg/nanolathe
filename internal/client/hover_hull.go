@@ -63,6 +63,9 @@ func (c *Client) HullModel(name string) *compiledmodel.Model {
 	if c == nil {
 		return nil
 	}
+	if c.modelTextures != nil {
+		return c.modelTextures.hullByName[ckey(name)]
+	}
 	m := c.unitModelFor(name)
 	if m == nil {
 		return nil

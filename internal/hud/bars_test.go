@@ -1,6 +1,7 @@
 package hud
 
 import (
+	"math"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -181,5 +182,18 @@ func TestAnchorsBarIntegration(t *testing.T) {
 	hb0 := HealthBarFromAnchors(anchors, 0)
 	if hb0.X2 != 0 {
 		t.Errorf("HealthBarFromAnchors 0: got %v", hb0)
+	}
+}
+
+// Unordered fractions reach the retail integer conversion, whose indefinite
+// result has a zero low word [01 R-DET-01 §1].
+func TestBarUnorderedFractionUsesLowWord(t *testing.T) {
+	anchor := Rect{X1: 10, Y1: 20, X2: 110, Y2: 120}
+	fraction := float32(math.NaN())
+	if got := BarFillHorizontal(anchor, fraction); got.X2 != anchor.X1 {
+		t.Fatalf("horizontal unordered fill = %+v", got)
+	}
+	if got := BarFillVertical(anchor, fraction); got.Y2 != anchor.Y1 {
+		t.Fatalf("vertical unordered fill = %+v", got)
 	}
 }

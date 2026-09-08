@@ -168,9 +168,24 @@ and refunds, AI scores/centres, capture budgets, flight and follower distances,
 mission coordinates/times, strip spans and result/HUD totals retain the low
 word before widening into Go containers or performing subsequent division.
 Round-to-nearest bearings, vector normalization, integer cell shifts and the
-modern presentation zoom remain separate operations. Bounded positive
-resurrection and reclaim terms need no conversion change; raw-input parsing
-and renderer arithmetic still require their own caller-width audit (RT-01).
+modern presentation zoom remain separate operations. The bounded RT-01 audit
+also routes ballistic-pitch stores, area-distance roots, direct-pitch and
+ballistic-distance roots, HUD health percentage arithmetic, and type-7 beam
+distance/count operands through their documented integer boundaries. Bounded
+positive resurrection and reclaim terms need no conversion change. The authored
+integer caller audit routes GUI header/version fields and self-destruct seed
+text through the TDF decimal accessor before their smaller stores; the
+synthetic placement codec retains that same boundary for InitialGroup. Build
+lists request consecutive numbered keys until the first absent key, removing
+the unsupported host-width highest-suffix scan [02 R-CAT-01 §5]. Host tool
+arguments, generated interface names, explicit composition selectors and
+Nanolathe save identifiers remain their own input formats. The permissive
+InitialMission integer scanner remains the explicit Unknown described below;
+this conversion audit does not establish its scanning grammar. Ordinary
+victory/defeat flags, timers and AnyUnit boundaries use the same authored
+decimal accessor: a present empty or malformed field is zero, while only a
+missing field is absent; `%i` applies exclusively to the separate typed
+argument scan families [08 R-TRIG-01 §2].
 
 `Sin` and `Cos` are *the* simulation trig: one 512-entry table where entry `i`
 is `round(8192 · sin(i·2π/512))`, indexed as `((angle + 32) >> 7) & 511` with
@@ -185,6 +200,17 @@ are never shared. `AngleFromAtan2` is the bearing helper: a `float64` transient
 scaled by `65536/2π` and narrowed under round-to-nearest-even before the
 `uint16` store, which is one of the two round-to-nearest sites retail has
 `[01 R-DET-01 §2]`.
+
+The remaining presentation audit uses the same conversion for HUD fill and
+percentage stores, nanoframe bands, shade-row selection and segmented-beam
+integer operands. Nearest-angle and nearest-point transforms remain separate;
+modern zoom/cursor coordinates and host audio resampling remain host operations.
+The map tidal value is a single-precision scalar, not an integer conversion:
+`Terrain.Tidal` retains that store directly through economy and AI consumers
+[03 R-TERR-01 §6][05 R-PROD-01 §4]. The old fixed-point round trip lost small
+authored fractions and has been removed. Mission command integer scan grammar
+and overflow remain a separate unresolved input audit, not permission to apply
+the floating-point helper to `%d` fields.
 
 ### 2.4 `internal/pool` — fixed capacity, slot 0 null
 

@@ -77,9 +77,9 @@ type Terrain struct {
 	// basename — so a campaign mission and a skirmish reach the same two words.
 	WaterDoesDamage int32
 	WaterDamage     int32
-	WindMin         int32         // [03 §2.2] C3/C4
-	WindMax         int32         // [03 §2.2] C3/C4
-	Tidal           numeric.Fixed // [03 §2.2] C4
+	WindMin         int32   // [03 §2.2] C3/C4
+	WindMax         int32   // [03 §2.2] C3/C4
+	Tidal           float32 // authored single-precision scalar [03 R-TERR-01 §6]
 
 	// Playable insets derived at void-fixup time [P0-17]: PlayRight = Wpix-32, PlayBottom = Hpix-128.
 	PlayRight  int32 // Wpix-32 in map pixels, Wpix=CellW*16 [P0-17]
@@ -516,12 +516,16 @@ func canonicalGlobals(mh *content.MapHeader) *content.MapHeader {
 
 // canonicalTidal is the mission's `tidalstrength` unless it is < 0.0 (strict),
 // else 0.5 [03 §2.2] C4.
-func canonicalTidal(mh *content.MapHeader) numeric.Fixed {
+func canonicalTidal(mh *content.MapHeader) float32 {
 	g := canonicalGlobals(mh)
-	if g == nil || g.TidalStrength < 0 {
-		return numeric.Fixed(32768) // 0.5 * 65536
+	if g == nil {
+		return 0.5
 	}
-	return tidalFromFloat(g.TidalStrength)
+	tidal := float32(g.TidalStrength)
+	if tidal < 0 {
+		return 0.5
+	}
+	return tidal
 }
 
 // canonicalWindAndGravity resolves the canonical map's wind pair and gravity.
@@ -543,12 +547,6 @@ func canonicalWindAndGravity(mh *content.MapHeader) (windMin, windMax int32, gra
 		}
 	}
 	return windMin, windMax, numeric.Fixed(0x1FDB), 112
-}
-
-// tidalFromFloat converts authored tidalstrength float to Fixed 16.16
-// via *65536 truncated toward zero [03 §2.2].
-func tidalFromFloat(v float64) numeric.Fixed {
-	return numeric.Fixed(int64(v * 65536))
 }
 
 // Load loads terrain for mapKey through the VFS and catalog [03 §2.2].

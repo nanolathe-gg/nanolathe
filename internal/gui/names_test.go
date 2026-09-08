@@ -57,3 +57,30 @@ func TestWindowDefaultPrefixesAreSeparateFromExactNames(t *testing.T) {
 		t.Fatal("nonempty missing defaults incorrectly used prefix fallback")
 	}
 }
+
+func TestCallbackNameUsesFullTerminatedValue(t *testing.T) {
+	for _, tc := range []struct {
+		left, right string
+		want        bool
+	}{
+		{"SINGLE\x00suffix", "SINGLE", true},
+		{"SINGLE", "SINGLE\x00suffix", true},
+		{"SINGLE", "single", false},
+		{"SINGLE", "SINGLE ", false},
+		{"1234567890abcdefA", "1234567890abcdefB", false},
+	} {
+		if got := CallbackNameEqual(tc.left, tc.right); got != tc.want {
+			t.Errorf("CallbackNameEqual(%q, %q) = %v, want %v", tc.left, tc.right, got, tc.want)
+		}
+	}
+}
+
+func TestCallbackNameAndNamedLookupRemainDistinct(t *testing.T) {
+	w := &Window{Gadgets: []Gadget{{}, {Name: "1234567890abcdefA"}, {Name: "1234567890abcdefB"}}}
+	if got := w.GadgetIndex("1234567890abcdefB"); got != 1 {
+		t.Fatalf("bounded lookup = %d, want first 16-byte match 1", got)
+	}
+	if CallbackNameEqual(w.Gadgets[1].Name, w.Gadgets[2].Name) {
+		t.Fatal("full callback names incorrectly matched at 16-byte boundary")
+	}
+}

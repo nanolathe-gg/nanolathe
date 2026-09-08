@@ -4,7 +4,6 @@ package main
 // drawer per control kind — art, button, text and surface [07 §5].
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
@@ -105,7 +104,7 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		case gui.KindListBox:
 			g.drawRetailList(c, p, i, gad, r)
 		case gui.KindScrollBar:
-			g.drawRetailScrollbar(c, p, gad, r)
+			g.drawRetailScrollbar(c, p, i, gad, r)
 		case gui.KindSurface:
 			g.drawRetailSurface(c, p, i, gad, r)
 		case gui.KindLabel, gui.KindPicture:
@@ -140,12 +139,7 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 		r := m.Window.PlacedRect(i)
 		switch gad.Kind {
 		case gui.KindButton:
-			pressed := false
-			if c != nil && c.Input() != nil && c.Input().Mouse != nil {
-				pressed = pointInRect(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y), r) &&
-					c.Input().Mouse.Held(input.MouseButtonLeft)
-			}
-			if frame := g.retailButtonFrame(gad, m.StatusAt(i), pressed); frame != nil {
+			if frame := g.retailButtonArt(gad, m.DownAt(i), m.StageAt(i), gad.GrayedOut&1 != 0); frame != nil {
 				blitRetailFrame(c, frame, int(r.X), int(r.Y))
 			}
 			g.drawRetailTextState(c, m, i, gad, r)
@@ -179,16 +173,11 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, g
 	if p == nil {
 		return
 	}
-	pressed := retailButtonPressed(c, r)
-	grey := gad.GrayedOut != 0
-	status := p.StatusAt(index)
-	art := g.gadgetButtonArt(gad, status, pressed)
+	grey := gad.GrayedOut&1 != 0
+	art := g.retailButtonArt(gad, p.DownAt(index), p.StageAt(index), grey)
 	drawn := art
 	if art != nil {
 		blitRetailFrame(c, art, int(r.X), int(r.Y))
-	} else if frame := g.retailButtonFrame(gad, status, pressed); frame != nil {
-		drawn = frame
-		blitRetailFrame(c, frame, int(r.X), int(r.Y))
 	}
 	// A greyed button's rectangle goes through the rectangle shader after the
 	// frame blit, at level -20 — PALETTE.SHD darken row 12 — which is what the
@@ -202,98 +191,19 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, g
 	g.drawRetailText(c, p, index, gad, r)
 }
 
-// gadgetButtonArt applies the pressed state that the retail button pump
-// applies to an owned GAF entry. Retail does not tint or replace an ordinary
-// button merely because the pointer is over it; the armed frame is visible
-// only while the left button is held inside the gadget [07 §3]. The
-// executable's renderer uses frame 1 for an ordinary two-state entry and
-// the penultimate frame for an entry with Stages set [the retail trace].
-func (g *gameShell) gadgetButtonArt(gad gui.Gadget, status int, pressed bool) *formats.GAFFrame {
-	art := g.gadgetArt(gad, status)
-	if art == nil || !pressed {
-		return art
-	}
-	name := gad.Art
-	if name == "" {
-		name = gad.Name
-	}
-	p := g.panelAssets()
-	if p == nil {
-		return art
-	}
-	var e *formats.GAFEntry
-	if p.art != nil {
-		e, _ = p.art.Find(name)
-	}
-	if e == nil && g.assets != nil && g.assets.logos != nil {
-		e, _ = g.assets.logos.Find(name)
-	}
-	if e == nil || len(e.Frames) < 2 {
-		return art
-	}
-	idx := 1
-	if gad.Stages != 0 {
-		idx = len(e.Frames) - 2
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(e.Frames) {
-		idx = len(e.Frames) - 1
-	}
-	return e.Frames[idx].Frame
-}
-
 func (g *gameShell) retailButtonFrame(gad gui.Gadget, status int, pressed bool) *formats.GAFFrame {
-	if g.assets == nil || g.assets.common == nil {
-		return nil
+	// The compatibility callers predate the separate stage word. Resolve first
+	// so their staged special cases use the builder's effective stages.
+	resolved := g.resolveRetailButtonArt(gad)
+	gad = resolved.gadget
+	down, stage := status, 0
+	if gad.Stages != 0 {
+		down, stage = 0, status
 	}
-	// Retail staged controls keep Status at zero in the ordinary button record;
-	// the selected label is the final authored frame before the pressed state.
-	// Press uses the common
-	// final active frame (entry-count minus two), as the retail implementation does.
-	if gad.Stages > 0 {
-		name := fmt.Sprintf("stagebuttn%d", gad.Stages)
-		if e, ok := g.assets.common.Find(name); ok && len(e.Frames) != 0 {
-			stage := clampMenuStage(status, int(gad.Stages))
-			idx := stage
-			if pressed && len(e.Frames) >= 2 {
-				idx = len(e.Frames) - 2
-			}
-			if idx >= len(e.Frames) {
-				idx = len(e.Frames) - 1
-			}
-			return e.Frames[idx].Frame
-		}
-	}
-	e, ok := g.assets.common.Find("BUTTONS0")
-	if !ok {
-		return nil
-	}
-	bestFrame, bestScore := -1, int(^uint(0)>>1)
-	for i, ref := range e.Frames {
-		f := ref.Frame
-		if f == nil {
-			continue
-		}
-		score := absInt(int(f.Width)-int(gad.Rect.W)) + absInt(int(f.Height)-int(gad.Rect.H))
-		if score < bestScore {
-			bestFrame, bestScore = i, score
-		}
-	}
-	if bestFrame < 0 {
-		return nil
-	}
-	// BUTTONS0 is four frames per size: normal, active, disabled, spare.
-	base := bestFrame / 4 * 4
-	idx := base + clampMenuStage(status, 4)
 	if pressed {
-		idx = base + 1
+		down = 1
 	}
-	if idx >= len(e.Frames) {
-		idx = len(e.Frames) - 1
-	}
-	return e.Frames[idx].Frame
+	return g.retailButtonArt(gad, down, stage, false)
 }
 
 func (g *gameShell) drawRetailText(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
@@ -321,11 +231,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		// box has no retail counterpart [03 R-FONT-01 §6].
 		return
 	}
-	text := p.TextAt(index)
-	if len(gad.Labels) != 0 {
-		idx := clampMenuStage(p.StatusAt(index), len(gad.Labels))
-		text = gad.Labels[idx]
-	}
+	text := retailGadgetText(p, index, gad)
 	if text == "" && !(gad.Kind == gui.KindTextBox && p.EditorCaptured() && p.EditorIndex() == index) {
 		return
 	}
@@ -370,7 +276,7 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		return
 	}
 	width := measure(text)
-	pressed := retailButtonPressed(c, r)
+	pressed := retailButtonPressed(c, p, index)
 	x := int(r.X)
 	// the retail implementation tests the left-aligned attribute before the right/center
 	// attributes. These are the actual authored GUI conventions: bit 0 uses a
@@ -417,6 +323,24 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		return
 	}
 	g.drawRetailStringSelected(c, text, x, y, maxWidth, color, shade, selected)
+}
+
+// retailGadgetText selects staged captions from the current-stage byte. The
+// down-state word only controls an armed frame, so a released selection keeps
+// both its art and its caption [07 R-WGT-01 §3].
+func retailGadgetText(p *ui.Panel, index int, gad gui.Gadget) string {
+	if p == nil {
+		return ""
+	}
+	text := p.TextAt(index)
+	if len(gad.Labels) == 0 {
+		return text
+	}
+	state := p.DownAt(index)
+	if gad.Stages != 0 {
+		state = p.StageAt(index)
+	}
+	return gad.Labels[clampMenuStage(state, len(gad.Labels))]
 }
 
 // windowGadgetFont is the FNT a gadget's `fontnumber` selects from its own
@@ -584,12 +508,21 @@ func retailTextPenY(gad gui.Gadget, r gui.Rect, textHeight int) int {
 	return y
 }
 
-func retailButtonPressed(c *client.Client, r gui.Rect) bool {
-	if c == nil || c.Input() == nil || c.Input().Mouse == nil {
+func retailButtonPressed(c *client.Client, p *ui.Panel, index int) bool {
+	if c == nil || c.Input() == nil || c.Input().Mouse == nil || p == nil {
 		return false
 	}
-	m := c.Input().Mouse
-	return pointInRect(int32(m.X), int32(m.Y), r) && m.Held(input.MouseButtonLeft)
+	owner, button := p.Capture()
+	if owner != index || p.DownAt(index) == 0 {
+		return false
+	}
+	switch button {
+	case 1:
+		return c.Input().Mouse.Held(input.MouseButtonLeft)
+	case 2:
+		return c.Input().Mouse.Held(input.MouseButtonRight)
+	}
+	return false
 }
 
 func boolInt(value bool) int {
@@ -600,7 +533,7 @@ func boolInt(value bool) int {
 }
 
 func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
-	if strings.EqualFold(gad.Name, "MAPPIC") && len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
+	if p != nil && p.Window != nil && p.Window.GadgetIndex("MAPPIC") == index && len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 		if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil && d.tnt != nil {
 			// the retail implementation writes the selected RADARPIC into the authored
 			// MAPPIC canvas using the map's aspect, leaving the surrounding

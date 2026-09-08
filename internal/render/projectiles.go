@@ -279,23 +279,24 @@ func DispatchRendertype(p combat.Projectile, w *content.WeaponDef, now uint32, f
 	}
 }
 
-// SegmentCount computes the number of segments for rendertype 7 per [03 §5.4].
-// Segment count derives from endpoint span divided by literal constant 327680 (0x50000),
-// skipped when zero [03 §5.4]. Span is Euclidean distance of head-tail in raw
-// Fixed units (16.16) so 327680 corresponds to 5 world units (5*65536) [03 §5.4].
+// SegmentCount computes the number of segments for rendertype 7 per [06 R-WFX-01 §4].
+// Retail first truncates the raw 16.16 endpoint distance, then forms the
+// 16.16 count (distance<<16)/0x50000.  It does not divide the floating-point
+// distance directly by 0x50000: that loses the required intermediate boundary.
 // Established: the span is map-space (world units), not projected screen
 // space — [03 R-FX-01 §2] closes this explicitly ("whole world units per
 // segment, in map space"), matching the world-space Fixed raw math below.
-func SegmentCount(head, tail combat.Vec3) int { // [03 §5.4]
+func SegmentCount(head, tail combat.Vec3) int { // [06 R-WFX-01 §4]
 	dx := float64(int64(head.X) - int64(tail.X)) // Fixed raw delta [I2]
 	dy := float64(int64(head.Y) - int64(tail.Y))
 	dz := float64(int64(head.Z) - int64(tail.Z))
-	span := math.Hypot(math.Hypot(dx, dy), dz) // Fixed raw Euclidean
-	if span <= 0 {
+	distance := int64(numeric.TruncateFloat64ToLow32(math.Hypot(math.Hypot(dx, dy), dz)))
+	if distance <= 0 {
 		return 0
 	}
-	n := int(span / 327680) // [03 §5.4] 0x50000 literal
-	if n < 0 {
+	nFixed := (distance << 16) / 0x50000 // 16.16, signed division [06 R-WFX-01 §4]
+	n := int(nFixed >> 16)
+	if n <= 0 {
 		n = 0
 	}
 	return n
@@ -329,26 +330,34 @@ func SegmentedJitter(crt CRTRandomSource, x, y, z numeric.Fixed) (numeric.Fixed,
 	return xj, yj, zj
 }
 
-// SegmentedBeamPoints generates jittered intermediate points for rendertype 7
-// per [03 §5.4]. It returns head, jittered intermediates, and tail, using
-// exactly three CRT draws per interior point. When segment count is zero it
-// returns nil and the caller skips drawing [03 §5.4].
-func SegmentedBeamPoints(head, tail combat.Vec3, crt CRTRandomSource) []combat.Vec3 { // [03 §5.4] [I4] (I6)
-	n := SegmentCount(head, tail) // [03 §5.4]
-	if n == 0 {                   // skipped when zero [03 §5.4]
+// SegmentedBeamPoints generates one type-7 pass from the retail tail endpoint
+// to the current point. It returns that fixed start point followed by n
+// jittered generated endpoints, spending exactly three CRT draws per generated
+// point. A zero segment count draws nothing [06 R-WFX-01 §4].
+func SegmentedBeamPoints(head, tail combat.Vec3, crt CRTRandomSource) []combat.Vec3 { // [06 R-WFX-01 §4] [I4] (I6)
+	n := SegmentCount(head, tail)
+	if n == 0 {
 		return nil
 	}
 	pts := make([]combat.Vec3, 0, n+1)
-	pts = append(pts, head)
-	for i := 1; i < n; i++ {
-		t := float64(i) / float64(n)
-		ix := numeric.Fixed(int64(float64(int64(head.X))*(1-t) + float64(int64(tail.X))*t))
-		iy := numeric.Fixed(int64(float64(int64(head.Y))*(1-t) + float64(int64(tail.Y))*t))
-		iz := numeric.Fixed(int64(float64(int64(head.Z))*(1-t) + float64(int64(tail.Z))*t))
-		jx, jy, jz := SegmentedJitter(crt, ix, iy, iz) // [03 §5.4]
+	pts = append(pts, tail)
+
+	dx := int64(head.X) - int64(tail.X)
+	dy := int64(head.Y) - int64(tail.Y)
+	dz := int64(head.Z) - int64(tail.Z)
+	distance := int64(numeric.TruncateFloat64ToLow32(math.Hypot(math.Hypot(float64(dx), float64(dy)), float64(dz))))
+	nFixed := (distance << 16) / 0x50000
+	stepX := (dx << 16) / nFixed
+	stepY := (dy << 16) / nFixed
+	stepZ := (dz << 16) / nFixed
+	point := tail
+	for i := 0; i < n; i++ {
+		point.X += numeric.Fixed(stepX)
+		point.Y += numeric.Fixed(stepY)
+		point.Z += numeric.Fixed(stepZ)
+		jx, jy, jz := SegmentedJitter(crt, point.X, point.Y, point.Z)
 		pts = append(pts, combat.Vec3{X: jx, Y: jy, Z: jz})
 	}
-	pts = append(pts, tail)
 	return pts
 }
 

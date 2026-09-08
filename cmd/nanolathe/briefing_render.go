@@ -72,13 +72,9 @@ func (g *gameShell) installBriefingTextRegion() {
 	}
 	window := g.briefingPanel.Window
 	g.briefingFont = g.loadRetailWindowFont(window, g.missionSide+1)
-	for i, gadget := range window.Gadgets {
-		if i == 0 || !strings.EqualFold(gadget.Name, "TextRegion") {
-			continue
-		}
+	if i := window.GadgetIndex("TextRegion"); i >= 0 {
 		rect := window.PlacedRect(i)
 		g.briefing.SetTextRegion(g.briefing.text, int(rect.W), int(rect.H), g.briefingTextHeight(), g.briefingTextWidth)
-		return
 	}
 }
 
@@ -279,12 +275,12 @@ func (g *gameShell) briefingInput(cl *client.Client) {
 		// A press takes the capture, and a greyed gadget never captures
 		// [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13].
 		if idx := g.briefingPanel.PressTest(x, y); idx >= 0 {
-			switch menuKey(window.Gadgets[idx].Name) {
-			case "start":
+			switch gui.CallbackName(window.Gadgets[idx].Name) {
+			case "Start":
 				g.dispatchBriefing(BriefingActionStart)
-			case "prevmenu":
+			case "PrevMenu":
 				g.dispatchBriefing(BriefingActionPrev)
-			case "shutup":
+			case "SHUTUP":
 				g.dispatchBriefing(BriefingActionShutup)
 			}
 			return
@@ -301,8 +297,8 @@ func (g *gameShell) briefingInput(cl *client.Client) {
 		// eligibility PressTest requires, so it is the direct stand-in for
 		// that dedicated hit test.
 		if idx := window.HitTest(x, y); idx >= 0 {
-			switch menuKey(window.Gadgets[idx].Name) {
-			case "morebar", "more", "textregion":
+			switch gui.CallbackName(window.Gadgets[idx].Name) {
+			case "MOREBAR", "MORE", "TextRegion":
 				g.dispatchBriefing(BriefingActionMore)
 			}
 		}
@@ -377,16 +373,22 @@ func (g *gameShell) drawBriefing(c *client.Client) {
 			continue
 		}
 		r := panel.Window.PlacedRect(i)
-		switch menuKey(gad.Name) {
-		case "panorama":
+		// Screen-specific painters are installed through first named lookup;
+		// a later duplicate retains its generic gadget painter [07 R-FE-02 §5].
+		name := gui.GadgetName(gad.Name)
+		if panel.Window.GadgetIndex(name) != i {
+			name = ""
+		}
+		switch name {
+		case "PANORAMA":
 			g.drawBriefingPanorama(c, b, r)
-		case "planet":
+		case "PLANET":
 			g.drawBriefingPlanet(c, b, r)
-		case "solarsystem":
+		case "SOLARSYSTEM":
 			g.drawBriefingSolarSystem(c, b, r)
-		case "textregion":
+		case "TextRegion":
 			g.drawBriefingText(c, b, r)
-		case "morebar", "more":
+		case "MOREBAR", "MORE":
 			// MOREBAR is a kind-5 label the pager captions; the screen leaves
 			// its own font number alone, so on MSNBRIEF it selects the first
 			// kind-7 record (`smlfont`) and the label painter takes the FNT

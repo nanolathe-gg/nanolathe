@@ -2,6 +2,7 @@ package world
 
 import (
 	"encoding/binary"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -435,7 +436,7 @@ func TestCanonicalGlobalsTreatOmissionAsTheParserDefault(t *testing.T) {
 		t.Fatalf("omitted gravity = %d (authored %d), want 0/0 [03 §2.2 C4]", grav, authored)
 	}
 	if got := canonicalTidal(omitted); got != 0 {
-		t.Fatalf("omitted tidalstrength = %d, want 0 [03 §2.2 C4]", got)
+		t.Fatalf("omitted tidalstrength = %g, want 0 [03 §2.2 C4]", got)
 	}
 
 	// A negative authored value is the case the fallbacks are for, and it must
@@ -450,8 +451,8 @@ func TestCanonicalGlobalsTreatOmissionAsTheParserDefault(t *testing.T) {
 	if grav != numeric.Fixed(0x1FDB) || authored != 112 {
 		t.Fatalf("negative gravity = %d (authored %d), want 0x1FDB/112 [03 §2.2 C4]", grav, authored)
 	}
-	if got := canonicalTidal(negative); got != numeric.Fixed(32768) {
-		t.Fatalf("negative tidalstrength = %d, want 32768 (0.5) [03 §2.2 C4]", got)
+	if got := canonicalTidal(negative); got != 0.5 {
+		t.Fatalf("negative tidalstrength = %g, want 0.5 [03 §2.2 C4]", got)
 	}
 
 	// No `[GlobalHeader]` parsed at all takes the same fallbacks as a negative.
@@ -459,13 +460,32 @@ func TestCanonicalGlobalsTreatOmissionAsTheParserDefault(t *testing.T) {
 	if wMin != 100 || wMax != 2000 || grav != numeric.Fixed(0x1FDB) || authored != 112 {
 		t.Fatalf("unparsed header = %d/%d g=%d a=%d, want 100/2000/0x1FDB/112 [03 §2.2]", wMin, wMax, grav, authored)
 	}
-	if got := canonicalTidal(nil); got != numeric.Fixed(32768) {
-		t.Fatalf("unparsed tidalstrength = %d, want 32768 [03 §2.2 C4]", got)
+	if got := canonicalTidal(nil); got != 0.5 {
+		t.Fatalf("unparsed tidalstrength = %g, want 0.5 [03 §2.2 C4]", got)
 	}
 
 	// A stock authored value still converts by *65536/900 [fmt ota].
 	stock := parsed(func(mh *content.MapHeader) { mh.Gravity = 112 })
 	if _, _, g, a := canonicalWindAndGravity(stock); g != numeric.Fixed(112*65536/900) || a != 112 {
 		t.Fatalf("authored 112 gave %d (authored %d)", g, a)
+	}
+}
+
+// Tidal strength is a single-precision scalar, not a fixed-point position
+// [03 R-TERR-01 §6][05 R-PROD-01 §4].
+func TestTidalScalarPreservesFractionAndFloatStore(t *testing.T) {
+	for _, tt := range []struct {
+		source float64
+		bits   uint32
+	}{
+		{0.000001, 0x358637bd},
+		{0.1, 0x3dcccccd},
+		{-1e-50, 0x80000000}, // source rounds to negative zero before the strict test
+		{-1, 0x3f000000},
+	} {
+		h := &content.MapHeader{RawOTA: &formats.OTA{Global: &formats.Section{}}, TidalStrength: tt.source}
+		if got := math.Float32bits(canonicalTidal(h)); got != tt.bits {
+			t.Fatalf("tidal %g=%08x, want %08x", tt.source, got, tt.bits)
+		}
 	}
 }

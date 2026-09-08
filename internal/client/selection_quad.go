@@ -122,7 +122,7 @@ func (c *Client) drawSelectionQuad(v frame.UnitView) {
 	if c == nil || v.Model == "" {
 		return
 	}
-	m := c.unitModelFor(v.Model)
+	m := c.modelForUnit(v)
 	if m == nil || m.compiled == nil {
 		return
 	}

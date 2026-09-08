@@ -1,8 +1,6 @@
 package ui
 
 import (
-	"strings"
-
 	"github.com/nanolathe/nanolathe/internal/gui"
 )
 
@@ -95,6 +93,21 @@ type Panel struct {
 	drag         scrollDrag
 	editor       editorState
 	message      string
+
+	// The generic service owns one indexed capture and the mutable per-kind
+	// widget state. Screen callbacks observe it through the accessors below.
+	capture, hover          int
+	captureButton           uint8
+	pointerX, pointerY      int32
+	savedDown, repeat       int
+	stage, knob, listMaxTop []int
+	listEdgeTicks           []uint8
+	sliderDragging          bool
+	sliderStartPointer      int32
+	sliderStartKnob         int
+	dirty                   bool
+	timerStamp              int32
+	timerStampSet           bool
 
 	// flash is the per-gadget `colorf` word held as runtime state, indexed by
 	// authored gadget index. `colorf` is not a colour for a button, a label or
@@ -271,7 +284,7 @@ func (s *PanelStack) Entries() []PanelEntry {
 // press indices and the per-gadget text, help, active, status and list state
 // [07 §5] [07 R-WGT-01 §1].
 func NewPanel(window *gui.Window) *Panel {
-	p := &Panel{Window: window, focus: -1, pressed: -1, rightPressed: -1, editor: editorState{captured: -1}}
+	p := &Panel{Window: window, focus: -1, pressed: -1, rightPressed: -1, capture: -1, hover: -1, editor: editorState{captured: -1}}
 	if window == nil {
 		return p
 	}
@@ -289,11 +302,16 @@ func NewPanel(window *gui.Window) *Panel {
 		}
 	}
 	p.states = make([]gadgetState, len(window.Gadgets))
+	p.stage = make([]int, len(window.Gadgets))
+	p.knob = make([]int, len(window.Gadgets))
+	p.listMaxTop = make([]int, len(window.Gadgets))
+	p.listEdgeTicks = make([]uint8, len(window.Gadgets))
 	for i, gadget := range window.Gadgets {
 		p.states[i] = gadgetState{text: gadget.Text, help: gadget.Help, active: gadget.Active != 0, status: int(gadget.Status)}
 		if gadget.Kind == gui.KindListBox {
 			p.states[i].list = &List{}
 		}
+		p.knob[i] = int(gadget.KnobPos)
 	}
 	if window.Header.DefaultFocus == "" {
 		// The empty authored default starts at the header and traverses forward
@@ -309,9 +327,80 @@ func NewPanel(window *gui.Window) *Panel {
 	return p
 }
 
-// Key is the legacy screen-action normalization. Gadget lookup uses Index.
-// TODO(I16): migrate screen callback comparisons to [07 R-FE-02 §5].
-func Key(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+// Capture reports the stable indexed pointer owner and its button bit.
+func (p *Panel) Capture() (index int, button uint8) {
+	if p == nil {
+		return -1, 0
+	}
+	return p.capture, p.captureButton
+}
+func (p *Panel) CaptureIndex() int    { index, _ := p.Capture(); return index }
+func (p *Panel) CaptureButton() uint8 { _, button := p.Capture(); return button }
+func (p *Panel) DownAt(index int) int { return p.StatusAt(index) }
+func (p *Panel) StageAt(index int) int {
+	if p == nil || index < 0 || index >= len(p.stage) {
+		return 0
+	}
+	return p.stage[index]
+}
+
+// SetStageAt installs the current staged-button selection without changing its
+// independent down-state word [07 R-WGT-01 §3]. Screen state restores use this
+// for a released staged control; SetStatusAt remains the down-state writer.
+func (p *Panel) SetStageAt(index, stage int) {
+	if p != nil && index >= 0 && index < len(p.stage) {
+		p.stage[index] = stage
+	}
+}
+
+func (p *Panel) CycleAt(index int) int { return p.StageAt(index) }
+func (p *Panel) SliderKnobAt(index int) int {
+	if p == nil || index < 0 || index >= len(p.knob) {
+		return 0
+	}
+	return p.knob[index]
+}
+
+// SetSliderKnobAt installs a screen-derived knob position before a service
+// pass. Options pages retain their preference-to-knob conversion outside ui.
+func (p *Panel) SetSliderKnobAt(index, knob int) {
+	if p != nil && index >= 0 && index < len(p.knob) {
+		p.knob[index] = knob
+	}
+}
+func (p *Panel) ListMaxTopAt(index int) int {
+	if p == nil || index < 0 || index >= len(p.listMaxTop) {
+		return 0
+	}
+	return p.listMaxTop[index]
+}
+func (p *Panel) Hovered() int {
+	if p == nil {
+		return -1
+	}
+	return p.hover
+}
+func (p *Panel) Dirty() bool { return p != nil && p.dirty }
+func (p *Panel) ClearDirty() {
+	if p != nil {
+		p.dirty = false
+	}
+}
+
+// TimerAdvanced samples the established 30 Hz presentation stamp supplied by
+// the caller. It is the GUI pass's once-per-timer-unit latch.
+func (p *Panel) TimerAdvanced(stamp int32) bool {
+	if p == nil {
+		return false
+	}
+	if !p.timerStampSet {
+		p.timerStamp, p.timerStampSet = stamp, true
+		return false
+	}
+	advanced := stamp-p.timerStamp > 0
+	p.timerStamp = stamp
+	return advanced
+}
 
 // ActiveOf reports the active flag recorded for a named control.
 func (p *Panel) ActiveOf(name string) bool { return p.ActiveAt(p.Index(name)) }
@@ -393,7 +482,7 @@ func (p *Panel) ReleaseAction(x, y int32) Action {
 				return Action{Kind: ActionNone, Index: -1}
 			}
 			if candidate.Kind == gui.KindButton {
-				if candidate.GrayedOut != 0 {
+				if candidate.GrayedOut&1 != 0 {
 					return Action{Kind: ActionNone, Index: -1}
 				}
 				p.SetFocus(target)
@@ -646,7 +735,7 @@ func (p *Panel) Fires(index int) bool {
 		return false
 	}
 	g := p.Window.Gadgets[index]
-	return kindHasPressHandler(g) && p.ActiveAt(index) && g.GrayedOut == 0
+	return kindHasPressHandler(g) && p.ActiveAt(index) && g.GrayedOut&1 == 0 && (g.Kind != gui.KindScrollBar || g.Attribs&0x10 == 0)
 }
 
 // kindHasPressHandler reports whether a gadget kind's handler accepts a press

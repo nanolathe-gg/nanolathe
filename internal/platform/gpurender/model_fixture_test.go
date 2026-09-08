@@ -12,12 +12,29 @@ import (
 )
 
 var deviceFixtureResult error
+var deviceFixtureLoop bool
+
+// deviceFixtureLoopRan reports whether TestMain already ran, and finished, the
+// Ebitengine device loop. Ebitengine rejects NewImage after RunGame returns, so
+// a fixture that builds a renderer must either run inside that loop or skip.
+func deviceFixtureLoopRan() bool { return deviceFixtureLoop }
+
+// skipAfterDeviceLoop skips a fixture that builds a renderer once that loop has
+// finished. The ordinary (non-device) run covers these cases, and the device
+// run exists for the fixtures inside the loop.
+func skipAfterDeviceLoop(t *testing.T) {
+	t.Helper()
+	if deviceFixtureLoopRan() {
+		t.Skip("a renderer cannot allocate images after the device loop; covered by the ordinary test run")
+	}
+}
 
 // TestMain owns the optional device loop so Ebiten starts on the process main
 // goroutine. macOS graphics backends reject RunGame from a testing worker
 // goroutine; ordinary tests still do no device work unless explicitly opted in.
 func TestMain(m *testing.M) {
 	if os.Getenv("NANOLATHE_GPU_DEVICE_TEST") == "1" {
+		deviceFixtureLoop = true
 		game := &modelFixtureGame{}
 		ebiten.SetWindowVisible(false)
 		ebiten.SetWindowSize(80, 48)
@@ -162,6 +179,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	}
 	if g.err == nil {
 		g.err = checkConstantShadeRows()
+	}
+	if g.err == nil {
+		g.err = checkTexturedQuadInteriorMatchesStrips()
 	}
 	if g.err == nil {
 		g.err = checkModelSlotFrames()

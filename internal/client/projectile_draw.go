@@ -58,7 +58,7 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 			// These are the three researched model-bearing families.  Do not let
 			// an authored Model field override beam/GAF/segmented dispatch; the
 			// rendertype byte is the family authority [03 §5.4].
-			if view.Model == "" || c.unitModelFor(view.Model) == nil {
+			if view.Model == "" || c.modelForProjectile(view) == nil {
 				stats.Skipped++
 				continue
 			}
@@ -189,7 +189,7 @@ func (c *Client) drawProjectileSegmentsSecond(d render.ProjectileDraw) int {
 		b := d.Segments2[i]
 		ax, ay := c.cam.WorldToScreen(a.X, a.Y, a.Z)
 		bx, by := c.cam.WorldToScreen(b.X, b.Y, b.Z)
-		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color2)})
+		c.emitLine(drawlist.Line{X0: ax - 128, Y0: ay - 32, X1: bx - 128, Y1: by - 32, Index: indexedColor(d.Color)})
 		count++
 	}
 	return count

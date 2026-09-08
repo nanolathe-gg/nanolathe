@@ -13663,6 +13663,14 @@ and the decider that would close it.
 
 ### Orders and queues
 
+- **Unknown implementation boundary:** initial-mission integer operands use
+  retail formatted scans [§3.6], but the runtime library's integer-prefix,
+  overflow and failed-field continuation behavior has not been translated
+  into the implementation contract. Trace the scanner and these callers with
+  malformed, fractional and out-of-range operands. Nanolathe retains its
+  permissive integer/float fallback as an explicit placeholder; that fallback
+  is not retail evidence and is not covered by the float-to-low-word audit.
+
 - Which front-end setting or mission key writes the session option bit that
   admits every candidate in the shared target search regardless of `shootme`
   · §3.9 [R-SPEC-01 §5], [06 §3.2] · static trace over the option byte's

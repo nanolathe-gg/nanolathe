@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -70,6 +71,11 @@ type fogPass struct {
 	gridW   int
 	gridH   int
 	gridBuf []byte
+	// gridSent is the last bytes uploaded into the grid texture. A frame whose
+	// fog did not change re-encodes the same bytes, and Ebitengine's Metal
+	// driver builds a staging texture per WritePixels, so the upload is skipped
+	// when they compare equal [DESIGN_GPU_RENDERER.md §11.2].
+	gridSent []byte
 
 	// draws counts the device draws the most recent Fog command issued, so the
 	// per-frame device-call budget of §11.4 can be asserted.
@@ -100,9 +106,13 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		return
 	}
 	r.fog.draws = 0
-	if r.offscreen == nil || r.destScratch == nil || r.atlas == nil {
+	if r.offscreen == nil || r.destScratch == nil {
 		return
 	}
+	// Fog reads everything drawn so far, so it is a phase boundary: the compiled
+	// phases are submitted before the pass runs (docs/DESIGN_GPU_RENDERER.md
+	// §11.2 "Fog as one pass").
+	r.submitSchedule()
 	if len(fg.Ops) == 0 {
 		return
 	}
@@ -145,13 +155,16 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	r.verts = r.verts[:0]
 	r.idx = r.idx[:0]
 	r.appendFogQuad(region, float32(fogParityOps(fg.Ops)))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.fog.shader, &ebiten.DrawTrianglesShaderOptions{
-		// The pass writes every pixel of the region, unfogged ones with the
-		// snapshot value it read, so a copy is the correct blend (C-G4).
-		Blend:  ebiten.BlendCopy,
-		Images: [4]*ebiten.Image{r.destScratch, r.fog.grid, r.fog.atlas, grayTable},
-	})
+	// The pass writes every pixel of the region, unfogged ones with the
+	// snapshot value it read, so a copy is the correct blend (C-G4). The reused
+	// options value keeps the frame free of a per-draw allocation
+	// (§11.2 "Allocation policy").
+	r.sceneOpts.Blend = ebiten.BlendCopy
+	r.sceneOpts.Images = [4]*ebiten.Image{r.destScratch, r.fog.grid, r.fog.atlas, grayTable}
+	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.fog.shader, &r.sceneOpts)
+	r.sceneOpts.Images = [4]*ebiten.Image{}
 	r.fog.draws++
+	r.frameDraws++
 }
 
 // appendFogQuad appends the fog pass quad. The lattice origin and the checker
@@ -380,8 +393,13 @@ func (f *fogPass) uploadGrid(region fogRegion) bool {
 	if f.grid == nil || f.gridW != imgW || f.gridH != imgH {
 		f.grid = ebiten.NewImage(imgW, imgH)
 		f.gridW, f.gridH = imgW, imgH
+		f.gridSent = f.gridSent[:0]
+	}
+	if bytes.Equal(f.gridSent, f.gridBuf) {
+		return true
 	}
 	f.grid.WritePixels(f.gridBuf)
+	f.gridSent = append(f.gridSent[:0], f.gridBuf...)
 	return true
 }
 

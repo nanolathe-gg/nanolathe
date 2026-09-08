@@ -3,6 +3,8 @@ package triggers
 import (
 	"strconv"
 	"strings"
+
+	"github.com/nanolathe/nanolathe/formats"
 )
 
 // Authored mission end conditions are `[GlobalHeader]`-level assignments whose
@@ -109,11 +111,12 @@ func ParseCondition(key, value string) (*Trigger, bool) {
 }
 
 // splitArgs splits the authored value on commas and trims each field. An empty
-// value yields no fields, which leaves every argument at its initial zero.
+// authored value is one empty field, so ordinary integer readers distinguish
+// it from a field that is absent after a comma [08 R-TRIG-01 §2].
 func splitArgs(value string) []string {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return nil
+		return []string{""}
 	}
 	parts := strings.Split(value, ",")
 	for i := range parts {
@@ -141,9 +144,10 @@ func typeAt(fields []string, i int) string {
 	return name
 }
 
-// intAt returns field i parsed as a complete base-ten integer. This is the
-// ordinary authored integer accessor used by flags, timers, and AnyUnit
-// boundaries; it is distinct from the scan-family conversion below.
+// intAt returns field i through the ordinary authored decimal accessor used by
+// flags, timers, and AnyUnit boundaries. A present empty or malformed field is
+// the accessor's zero; only a missing field is absent [08 R-TRIG-01 §2]. It is
+// distinct from the scan-family conversion below.
 func intAt(fields []string, i int) int32 {
 	v, _ := intAtOK(fields, i)
 	return v
@@ -153,11 +157,7 @@ func intAtOK(fields []string, i int) (int32, bool) {
 	if i >= len(fields) {
 		return 0, false
 	}
-	v, err := strconv.ParseInt(fields[i], 10, 32)
-	if err != nil {
-		return 0, false
-	}
-	return int32(v), true
+	return formats.ParseTDFInteger(fields[i]), true
 }
 
 // scanIntAt applies the C %i conversion used by the type-plus-integer argument

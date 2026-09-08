@@ -225,6 +225,30 @@ func TestFogGridEncoding(t *testing.T) {
 // The grid texture grows with the visible cell range and is never recreated when
 // the range shrinks, so a panning camera reuses one texture (§11.2 allocation
 // policy).
+// The fog grid is rebuilt from the op list every frame, so its encode must reuse
+// its buffer (docs/DESIGN_GPU_RENDERER.md §11.2 "Allocation policy").
+func TestFogGridEncodeIsAllocationFree(t *testing.T) {
+	const camX, camZ = 400, 96
+	ops := []render.FogOp{
+		fogOpAt(13, 3, camX, camZ, render.FogKindSolidDark),
+		fogOpAt(14, 3, camX, camZ, render.FogKindGrayRemap),
+		fogOpAt(15, 3, camX, camZ, render.FogKindPatterned),
+		fogOpAt(16, 4, camX, camZ, render.FogKindGAFCh1),
+		fogOpAt(17, 5, camX, camZ, render.FogKindGAFCh0),
+	}
+	var f fogPass
+	f.slotPresent[0*fogSlots] = true
+	f.slotPresent[1*fogSlots] = true
+	encode := func() {
+		region := fogRegionFor(ops, 640, 480)
+		f.encodeGrid(region, ops, 640, 480, true)
+	}
+	encode()
+	if got := testing.AllocsPerRun(8, encode); got != 0 {
+		t.Fatalf("fog grid encode allocated %v objects per frame, want none", got)
+	}
+}
+
 func TestFogGridImageGrowsOnly(t *testing.T) {
 	var f fogPass
 	f.gridW, f.gridH = 40, 30

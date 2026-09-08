@@ -60,12 +60,8 @@ func TestButtonQuickKeysThroughBothInputHandlers(t *testing.T) {
 					}
 					shell := &gameShell{frontend: ui.NewFrontend(modeMenuMain)}
 					shell.frontend.Panels.Replace(p)
-					optionsPanel, optionsAssets, optionsState = p, &retailPanelAssets{window: w}, &retailOptionsState{inBattle: battle, pressed: -1}
-					if battle {
-						optionsState.pressed = tc.capture
-					} else {
-						p.SetPressed(tc.capture)
-					}
+					optionsPanel, optionsAssets, optionsState = p, &retailPanelAssets{window: w}, &retailOptionsState{inBattle: battle}
+					p.SetPressed(tc.capture)
 					cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 32, Height: 24})
 					if err != nil {
 						t.Fatal(err)

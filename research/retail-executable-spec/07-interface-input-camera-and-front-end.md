@@ -984,6 +984,28 @@ left-aligned. So the retail frame layout is: *base* (rest), *base+1*
 `k` is stage `k` directly with `frames−2` the pressed look and `frames−1`
 the greyed look.
 
+The staged-label split and alignment-attribute write are one common builder
+tail after every art choice, including a named entry and `CHECKBOX`; selecting
+a checkbox prevents only the fallback's stage-count forcing. The completed
+record retains the selected entry itself, so another bank with the same entry
+name cannot replace it during later input or painting.
+
+A found entry ends the provider search even when it has no frames. Fallback
+selects exactly one of the checkbox, staged, or ordinary button families;
+an absent entry in that family remains absent. It does not cause a second
+fallback to another family. Missing art or a zero-frame entry leaves the
+authored geometry unchanged; the shared staged tail still runs.
+
+The fallback scan begins with base frame zero already selected; only a score
+strictly below its initial bound replaces that selection, so a window with no
+closer group still keeps frame zero.
+
+**Established — installed runtime record.** The builder completes that art
+choice before the screen service is created: the record then holds the chosen
+entry, base frame, resulting rectangle, stages and attributes. Later input and
+painting use that one record, while only the current-stage value remains
+mutable in the screen state.
+
 **Established — the painter's frame choice.** Not greyed and down-state set
 with `stages < frameCount` → `base + downState` when `stages == 0`, else
 `frames − 2`; not greyed otherwise → `base` (`stages == 0`) or the
@@ -1045,13 +1067,23 @@ first battle. The preserve attribute retains the post-preclear value, which
 can be zero; it does not recover the originally parsed byte. This state is
 separate from accelerator service enablement [R-WGT-02 §2].
 
-**Unknown — extended caption-byte case conversion.** The lowercase helper
-has an ASCII fast path when its runtime locale handle is zero and delegates
-nonzero-locale mapping to the operating system. CRT startup and indirect
-locale initialization/mutation are not yet closed. Their complete trace, or
-an independently authored manual extended-byte probe across supported retail
-locales/code pages, would settle the collision mapping. An ASCII-only builder
-cannot yet claim the complete assignment contract.
+**Established — caption-byte case conversion is process-wide ASCII only.**
+Every candidate byte and stored key reaches the collision comparison as a
+signed byte widened to an integer. The fold changes only `A` through `Z`, by
+adding `0x20`; every other input, including bytes `0x80` through `0xFF`, is
+returned unchanged. Consequently extended caption bytes collide only with the
+same byte value, while ASCII letters collide without regard to case.
+
+The process starts with the locale selector in its zero state and retains that
+state throughout supported ordinary single-player execution. The complete CRT
+startup initializer sequence was traced: it selects the system ANSI code page
+for multibyte classification, but does not select a locale for the character
+case mapper. The one locale-selection path can replace the selector through an
+indexed category update, including the character category, but it is absent
+from the startup tables and has no reachable application caller or callback in
+this scope. Therefore the system ANSI code page does not affect quickkey
+collision folding. This closes the caption-byte contract without assuming an
+ASCII or Windows-1252 code page.
 
 **Established — press semantics.** Greyed buttons ignore everything. A
 press (left or right button-down message) inside takes the capture and
@@ -7526,7 +7558,6 @@ supported inference, not established fact.
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
-- Extended caption-byte case conversion · [R-WGT-01 §3] · complete CRT startup/indirect locale initialization and mutation trace, or manual extended-byte probes across supported locales/code pages.
 - Focus traversal for windows with more than 49 controls depends on incompletely initialized canonical-coordinate scratch · [R-WGT-01 §2] · bounded initialization/lifetime trace or manual custom-window observation.
 
 ### Input and text

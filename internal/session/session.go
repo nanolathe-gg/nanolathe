@@ -395,10 +395,10 @@ func (s *Session) RadarBlinkPhase() uint8 {
 	return uint8(s.radarBlinkPhase & 1)
 }
 
-// SetPhase7Service installs the presentation-owned phase-7 callback. The
-// composition root may replace it when the active client changes; nil clears
-// the callback. Session simulation state never reads or stores presentation
-// pixels [R-CRD-005 §1][I6].
+// SetPhase7Service installs the battle-owned phase-7 callback. Battle
+// composition supplies the loaded-model texture registry once; client changes
+// do not replace it. Nil clears the callback at whole-battle teardown. Session
+// simulation state never reads or stores presentation pixels [R-CRD-005 §1][I6].
 func (s *Session) SetPhase7Service(service Phase7Service) {
 	if s != nil {
 		s.phase7 = service

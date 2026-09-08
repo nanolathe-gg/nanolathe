@@ -24,7 +24,7 @@ func TestInitializeBattleAIPrecedesUnitDraws(t *testing.T) {
 		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
 		terrain.Plot[i][7] = 44
 	}
-	terrain.Tidal = numeric.Fixed(16384) // 0.25 map tidal strength.
+	terrain.Tidal = 0.25 // 0.25 map tidal strength.
 	ota, err := formats.LoadOTA([]byte("[GlobalHeader]{SurfaceMetal=300;}"))
 	if err != nil {
 		t.Fatal(err)

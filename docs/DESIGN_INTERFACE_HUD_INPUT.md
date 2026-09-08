@@ -181,6 +181,39 @@ a truncating divide with no half-viewport term `[07 R-CAM-01 §11]`.
 
 ### 2.4 `internal/ui` — screen-level state
 
+**I06 common widget service contract.** `input.PointerEventKind` carries only
+the six already-classified left/right down, double-click and up messages;
+platform event history and double-click timing remain I02. `ui.WidgetFrame`
+is one host-pass sample (`PointerX`/`PointerY`, held bits, ordered pointer
+events, ordered tokens and caller-provided `TimerAdvanced`). `Panel.ServiceFrame`
+visits runtime records in increasing index order, retains one indexed capture
+and button bit, freezes held samples outside the window, services a captured
+editor before other tokens, updates hover/`HELPTEXT`, invokes each reached
+surface hook, and returns after the first fired record. `WidgetHooks.Change`
+is synchronous, while the screen consumes `ServiceResult.FiredIndex` only
+after the pass returns. `WidgetHooks.ArtFrames` returns the resolved button
+entry's frame count after named, common and fallback lookup; it is the modulo
+for an attribute-`0x100` down-state cycle, never the authored stage count. The
+panel exposes indexed down/stage/cycle, slider knob, list top/max-top, hover,
+dirty and capture state for painters and later keyboard work. `StatusAt` is the
+down-state word and `StageAt` is the independent current-stage byte;
+`SetStageAt` restores a released staged selection without setting it down.
+Buttons use their documented radio/toggle/bit-8/cycle/plain and staged paths;
+slider dragging and track paging are unthrottled; timed button
+repeat and list edge scrolling advance only when `TimerAdvanced` is true. The
+adapters sample the existing monotonic millisecond source through
+`clock.ScaledNow`, retaining one panel-local prior stamp; battle uses its
+existing source and menus retain the shell source. Record-list variable row
+payload beyond its known height remains `TODO(question)` in the service
+boundary [07 R-WGT-01 §§1-8] [07 R-WGT-02 §2] [07 R-FE-02 §4].
+
+The host window builder resolves each button's own/common/fallback art before
+calling `ui.NewPanel` and installs the effective `Gadget` record there:
+effective stages and attributes, the selected art entry identity and base
+frame, and the base frame's geometry. The authored lookup name remains intact.
+Service, painting and captions read that installed record; `Panel.StageAt`
+alone carries the mutable current stage [07 R-WGT-01 §3].
+
 **I13 bounded text-list painter contract.** `drawRetailList` retains its
 existing API and list-top preparation, but paints rows using the selected
 font's metric and the painter's stopping predicate [07 R-WGT-01 §4]. An

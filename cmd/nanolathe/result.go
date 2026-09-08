@@ -226,17 +226,12 @@ func configureResultControls(panel *ui.Panel, route bool) {
 	// result retail relocates it to the lower action row [08 R-CAMP-01 §8].
 	panel.SetActive("MainMenu", true)
 	if !route && panel.Window != nil {
-		for i := range panel.Window.Gadgets {
-			if strings.EqualFold(panel.Window.Gadgets[i].Name, "MainMenu") {
-				panel.Window.Gadgets[i].Rect.Y = 416
-			}
+		if i := panel.Window.GadgetIndex("MainMenu"); i >= 0 {
+			panel.Window.Gadgets[i].Rect.Y = 416
 		}
 	} else if route && panel.Window != nil {
-		for i := range panel.Window.Gadgets {
+		if i := panel.Window.GadgetIndex("MainMenu"); i >= 0 && panel.Window.Gadgets[i].Rect.Y == 416 {
 			gadget := &panel.Window.Gadgets[i]
-			if !strings.EqualFold(gadget.Name, "MainMenu") || gadget.Rect.Y != 416 {
-				continue
-			}
 			// RawY is the authored value retained by the GUI loader. Restore
 			// its resolved position when this panel instance is reused.
 			switch gadget.Rect.RawY {

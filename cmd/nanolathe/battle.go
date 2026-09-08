@@ -50,6 +50,10 @@ type battleSession struct {
 	ended            bool
 
 	controller *BattleController
+	// modelTextures is built once at battle entry from the catalog and VFS. It
+	// owns loaded-model primitive cursors and remains the session's phase-7
+	// service even when no client is attached [03 R-CRD-005 §1].
+	modelTextures *client.ModelTextureRegistry
 
 	// postBattle is created once, at the first committed terminal ResultView.
 	// It owns the frozen result presentation sequence; the live Session is not
@@ -289,6 +293,18 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
 		watcherSlot: sessionLocalIsWatcher(sess),
 	}
+	restoreStart := len(sess.World.FeatureDefs)
+	if sess.Features != nil {
+		restoreStart = sess.Features.DefinitionRestoreStart()
+	}
+	b.modelTextures, err = client.NewModelTextureRegistry(cs.fs, cat, sess.World, restoreStart)
+	if err != nil {
+		return nil, fmt.Errorf("nanolathe: battle composition failed: model textures: %w", err)
+	}
+	sess.SetPhase7Service(b.modelTextures)
+	if sess.Features != nil {
+		sess.Features.SetDefinitionAdmissionObserver(b.modelTextures.AdmitFeatureDefinition)
+	}
 	// Prime the scroll-speed cache once here, at battle entry, instead of
 	// leaving the first camera-pan frame to fault it in lazily [WU-19-114].
 	b.primeScrollSetting()
@@ -329,6 +345,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		return
 	}
 	b.cl = cl
+	cl.SetModelTextureRegistry(b.modelTextures)
 	// The session executor owns one message-ring retirement per host pump;
 	// the client remains the sole presentation owner of the ring itself
 	// [01 R-PLAT-02 §§7,8][I6]. Binding this callback leaves unrelated optional
@@ -407,12 +424,17 @@ func (b *battleSession) teardown(cl *client.Client) {
 	}
 	// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
 	b.sess.CommitCampaignTeardown()
+	b.sess.SetPhase7Service(nil)
+	if b.sess != nil && b.sess.Features != nil {
+		b.sess.Features.SetDefinitionAdmissionObserver(nil)
+	}
 	if b.battleUI != nil {
 		b.closeBattleMenu()
 		b.battleUI.SetPanelCue(nil)
 		b.battleUI.ResetInteraction()
 	}
 	if cl != nil {
+		cl.SetModelTextureRegistry(nil)
 		cl.SetUIStage(nil)
 		cl.SetAudioService(nil)
 		cl.SetTerrain(nil)
@@ -438,6 +460,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 	b.shell = nil
 	b.battleUI = nil
 	b.controller = nil
+	b.modelTextures = nil
 	b.returnToMenu = nil
 	b.returnToSkirmish = nil
 }

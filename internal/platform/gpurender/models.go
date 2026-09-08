@@ -108,7 +108,7 @@ func (r *Renderer) modelFacesSupported(g *drawlist.ModelGeometry) bool {
 	for i := range g.Faces {
 		f := g.Faces[i]
 		if polygonCrosses(f.Vertices) {
-			if len(foldedStrips(f)) == 0 {
+			if modelSpanRows(f) == 0 {
 				// The established winding/two-chain admission can retain a
 				// projected ring with no positive row. It contributes no body
 				// pixels, just like a back-facing ring, and is not unsupported.
@@ -164,13 +164,17 @@ func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool)
 	if !ok {
 		return false
 	}
+	// The shadow pass writes only pixels this body's own plane leaves uncovered,
+	// and reads only the pixels it writes, so the body commit may join the
+	// shadow's phase however their rectangles overlap [03 R-REN-03D §4–§5].
+	exempt := schedNoOwner
 	if g.Shadow != nil {
 		shadow, ok := modelSlot{}, false
 		if r.modelShadowCommit != nil && r.tables.alpha != nil {
 			shadow, ok = r.modelSlotFor(g.Shadow, 1)
 		}
 		if ok {
-			r.commitModelShadow(g.Shadow, shadow, g, body)
+			exempt = r.commitModelShadow(g.Shadow, shadow, g, body)
 		} else {
 			r.modelStats.ShadowsOmitted++
 		}
@@ -179,9 +183,14 @@ func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool)
 		return true
 	}
 	if len(g.Children) != 0 {
+		// A group commits its composed staging plane, which carries the
+		// children's pixels too; the shadow punched only the parent's coverage,
+		// so the exemption does not hold and is not claimed.
 		r.composeModelChildren(g, body)
 	} else {
-		r.commitModelImage(body.image(), modelWorldBounds(g))
+		if body.page != nil {
+			r.commitModelSlot(body.page.img, body.box, modelWorldBounds(g), exempt)
+		}
 	}
 	return true
 }
@@ -189,44 +198,102 @@ func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool)
 // modelSlotFor returns the frame slot reserved for one subject. A subject the
 // atlas could not fit is rasterized now through the per-subject fallback pages;
 // an unsupported one has no slot and stays an explicit omission.
+//
+// The fallback pages are reused by the next overflowing subject, so rasterizing
+// into them is a scheduler barrier: everything compiled so far — including an
+// earlier overflow subject's commit — is submitted first, while its page still
+// holds that subject (docs/DESIGN_GPU_RENDERER.md §11.2).
 func (r *Renderer) modelSlotFor(g *drawlist.ModelGeometry, set int) (modelSlot, bool) {
 	slot, ok := r.modelAtlas.slots[g]
 	if !ok {
 		return modelSlot{}, false
 	}
 	if slot.overflow {
+		r.submitSchedule()
 		return r.rasterizeModelOverflow(g, set)
 	}
 	return slot, slot.page != nil
 }
 
-func (r *Renderer) commitModelImage(img *ebiten.Image, b image.Rectangle) {
-	if img == nil {
+// commitModelSlot compiles one finished subject plane into the frame's opaque
+// batch: a keyed quad sampling the plane, skipping the composition background
+// index 1 (docs/DESIGN_GPU_RENDERER.md §11.2)[03 R-REN-03A §5]. src and dst are
+// the same size, so the framebuffer clip shifts the source by the same amount and
+// covers exactly the pixels the per-subject commit covered.
+func (r *Renderer) commitModelSlot(page *ebiten.Image, src, dst image.Rectangle, exempt int32) {
+	if page == nil || r.scene2D == nil {
 		return
 	}
-	r.resetGeometry()
-	r.appendModelQuad(b, img.Bounds(), [4]float32{}, [4]float32{})
-	r.modelDraw(r.offscreen, r.modelCommit, ebiten.BlendSourceOver, img, nil, nil, nil)
-	r.resetGeometry()
+	x0, y0 := maxInt(dst.Min.X, 0), maxInt(dst.Min.Y, 0)
+	x1, y1 := minInt(dst.Max.X, r.w), minInt(dst.Max.Y, r.h)
+	if x0 >= x1 || y0 >= y1 {
+		return
+	}
+	sx0, sy0 := src.Min.X+(x0-dst.Min.X), src.Min.Y+(y0-dst.Min.Y)
+	if r.sched.beginExempt(schedOpaque, x0, y0, x1, y1, [4]*ebiten.Image{2: page}, exempt) < 0 {
+		return
+	}
+	r.sched.quad(schedOpaque,
+		float32(x0), float32(y0), float32(x1), float32(y1),
+		float32(sx0), float32(sy0), float32(sx0+x1-x0), float32(sy0+y1-y0),
+		[4]float32{}, [4]float32{0, 0, 0, sceneOpModelCommit})
 }
 
-// commitModelShadow blends the silhouette through ALP over a snapshot of the
-// destination, punching the body's coverage first so overlapping silhouette
-// faces darken the ground once [03 R-REN-03D §4–§5].
-func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlot, bg *drawlist.ModelGeometry, body modelSlot) {
+// commitModelShadow blends the silhouette through ALP over the phase snapshot,
+// punching the body's coverage first so overlapping silhouette faces darken the
+// ground once [03 R-REN-03D §4–§5]. The shadow plane rides source slot 3 and the
+// body plane source slot 0; Custom0/1 carries the body-page offset of a shadow
+// texel and the colour lanes the body slot's page bounds, so a shadow texel
+// outside the body slot reads as uncovered.
+// It returns the shadow command's scheduler owner, which the paired body commit
+// names as its exemption.
+func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlot, bg *drawlist.ModelGeometry, body modelSlot) int32 {
+	shadowPage, bodyPage := shadow.page, body.page
+	if r.sceneDest == nil || r.tables.atlas == nil || r.destScratch == nil ||
+		shadowPage == nil || shadowPage.img == nil || bodyPage == nil || bodyPage.img == nil {
+		r.modelStats.ShadowsOmitted++
+		return schedNoOwner
+	}
 	b := modelWorldBounds(sg)
-	r.snapshotRect(b.Min.X, b.Min.Y, b.Max.X, b.Max.Y)
+	x0, y0 := maxInt(b.Min.X, 0), maxInt(b.Min.Y, 0)
+	x1, y1 := minInt(b.Max.X, r.w), minInt(b.Max.Y, r.h)
+	if x0 >= x1 || y0 >= y1 {
+		r.modelStats.Shadows++
+		return schedNoOwner
+	}
+	sx0 := shadow.box.Min.X + (x0 - b.Min.X)
+	sy0 := shadow.box.Min.Y + (y0 - b.Min.Y)
+	// The body plane is read at the same subject-local offset the per-subject
+	// commit used: the shadow's world displacement from the body, rebased from
+	// the shadow slot's page origin onto the body slot's.
 	d := b.Min.Sub(modelWorldBounds(bg).Min)
-	r.resetGeometry()
-	r.appendModelQuad(b, shadow.box, [4]float32{}, [4]float32{float32(d.X), float32(d.Y), 0, 0})
-	r.modelDraw(r.offscreen, r.modelShadowCommit, ebiten.BlendSourceOver, shadow.image(), body.image(), r.destScratch, r.tables.alpha)
-	r.resetGeometry()
+	kx := body.box.Min.X - shadow.box.Min.X + d.X
+	ky := body.box.Min.Y - shadow.box.Min.Y + d.Y
+	owner := r.sched.beginExempt(schedDest, x0, y0, x1, y1, [4]*ebiten.Image{
+		0: bodyPage.img, 1: r.tables.atlas, 2: r.destScratch, 3: shadowPage.img,
+	}, schedNoOwner)
+	if owner < 0 {
+		return schedNoOwner
+	}
+	r.sched.quad(schedDest,
+		float32(x0), float32(y0), float32(x1), float32(y1),
+		float32(sx0), float32(sy0), float32(sx0+x1-x0), float32(sy0+y1-y0),
+		[4]float32{float32(body.box.Min.X), float32(body.box.Min.Y),
+			float32(body.box.Max.X), float32(body.box.Max.Y)},
+		[4]float32{float32(kx), float32(ky), 0, destOpShadowCommit})
 	r.modelStats.Shadows++
+	return owner
 }
 
 // composeModelChildren merges an attached-unit group over a local staging pair.
 // Each child is finished in its own slot, then merged with the full signed
 // shifted-key comparison and the wrapped byte store [03 R-REN-03A §4].
+//
+// The staging pair is shared by every group of the frame, so composing one is a
+// scheduler barrier: the phases compiled so far are submitted first, while the
+// previous group's staging image still holds the plane its commit samples
+// (docs/DESIGN_GPU_RENDERER.md §11.2). One barrier per group, and the group's own
+// commit then joins the batch that follows it.
 func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelSlot) {
 	b := modelWorldBounds(g)
 	for _, child := range g.Children {
@@ -234,6 +301,7 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 			b = b.Union(modelWorldBounds(cg))
 		}
 	}
+	r.submitSchedule()
 	r.ensureModelStage(b.Dx(), b.Dy())
 	if r.modelStage == nil {
 		r.modelStats.Skipped++
@@ -241,6 +309,7 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 	}
 	area := image.Rect(0, 0, b.Dx(), b.Dy())
 	stage, scratch := r.modelStage.SubImage(area).(*ebiten.Image), r.modelStageScratch.SubImage(area).(*ebiten.Image)
+	stageImg, scratchImg := r.modelStage, r.modelStageScratch
 	stage.Fill(color.RGBA{R: 1, A: 255})
 	d := modelWorldBounds(g).Min.Sub(b.Min)
 	r.modelStageOp.Blend = ebiten.BlendCopy
@@ -266,9 +335,10 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 		r.modelDraw(scratch, r.modelChild, ebiten.BlendCopy, slot.image(), stage, nil, nil)
 		r.resetGeometry()
 		stage, scratch = scratch, stage
+		stageImg, scratchImg = scratchImg, stageImg
 		r.modelStats.GPU++
 	}
-	r.commitModelImage(stage, b)
+	r.commitModelSlot(stageImg, area, b, schedNoOwner)
 	r.modelStats.ComposedGroups++
 }
 

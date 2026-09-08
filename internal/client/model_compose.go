@@ -183,7 +183,7 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			if n < 3 {
 				continue
 			}
-			ref, textured := resolveTextureRef(nil, c.texIndex, c.modelNameKey(pr.TextureName))
+			ref, textured := c.resolveModelTexture(pr.TextureName)
 			mode := modelPrimitiveDispatch(pr, textured)
 			if mode == modelPrimitiveSkip {
 				continue
@@ -196,6 +196,13 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			if mode == modelPrimitiveTexture {
 				switch ref.kind {
 				case texAnimated:
+					if c.modelTextures != nil {
+						texFrame = c.modelTextures.animatedFrame(draw.Model, pi, pri, ref)
+						if texFrame == nil {
+							continue
+						}
+						break
+					}
 					if kind == modelCursorFeature && id == 0 {
 						// Same publication gap as the sprite path above:
 						// FeatureView carries no stable identity, so an
@@ -290,6 +297,13 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 	}
 	scratch.polys = polys
 	return polys
+}
+
+func (c *Client) resolveModelTexture(name string) (texRef, bool) {
+	if c == nil {
+		return texRef{}, false
+	}
+	return resolveTextureRef(c.texIndex, c.logoIndex, c.modelNameKey(name))
 }
 
 // modelExtent measures the composition image from the collected faces: retail

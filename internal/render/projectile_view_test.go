@@ -135,15 +135,19 @@ func TestDispatchProjectileViewAbsentSelectorStaysSuppressed(t *testing.T) {
 
 func TestSnapshotSegmentedPointPassesUseBothDeterministicStreams(t *testing.T) {
 	v := frame.ProjectileView{X: numeric.Fixed(20 << 16), TailX: 0}
-	first, second, ok := SnapshotSegmentedPointPasses(v, funcCRT(7))
+	crt := funcCRT(7)
+	first, second, ok := SnapshotSegmentedPointPasses(v, crt)
 	if !ok || len(first) < 2 || len(second) < 2 {
 		t.Fatalf("segmented passes missing: first=%d second=%d ok=%v", len(first), len(second), ok)
 	}
-	if first[0] != second[0] || first[len(first)-1] != second[len(second)-1] {
-		t.Fatal("segmented passes must preserve shared endpoints")
+	if first[0] != second[0] || first[0] != (ProjectilePoint{}) {
+		t.Fatal("each segmented pass must start at the unjittered tail [06 R-WFX-01 §4]")
 	}
 	if first[1] == second[1] {
 		t.Fatal("segmented passes must consume distinct CRT jitter")
+	}
+	if crt.Draws() != 24 { // two passes × four points × three axes
+		t.Fatalf("two passes consumed %d CRT draws, want 24 [06 R-WFX-01 §4]", crt.Draws())
 	}
 	v.RenderType = RenderTypeSegmented
 	d := DispatchProjectileView(v, 1, ProjectileDispatchOptions{

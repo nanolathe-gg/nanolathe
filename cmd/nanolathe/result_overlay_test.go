@@ -143,13 +143,16 @@ func TestResultOverlayHonorsCanonicalDismissalState(t *testing.T) {
 }
 
 func TestResultControlRequiresAuthoredStart(t *testing.T) {
-	if got := resultActionForControl("START"); got != ui.ResultActionContinue {
+	if got := resultActionForControl("Start"); got != ui.ResultActionContinue {
 		t.Fatalf("authored Start action = %q", got)
 	}
-	for _, name := range []string{"Continue", "Retry", "Main Menu", "Skirmish Setup", "synthetic"} {
+	for _, name := range []string{"Continue", "Retry", "Main Menu", "Skirmish Setup", "synthetic", "START", "Start "} {
 		if got := resultActionForControl(name); got != ui.ResultActionNone {
 			t.Fatalf("unsupported result control %q mapped to %q", name, got)
 		}
+	}
+	if got := resultActionForControl("Start\x00tail"); got != ui.ResultActionContinue {
+		t.Fatalf("terminated Start action = %q", got)
 	}
 }
 

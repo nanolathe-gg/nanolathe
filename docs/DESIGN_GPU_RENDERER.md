@@ -829,24 +829,48 @@ destination-reading. Commands are appended to *phases* in record order. A phase
 is executed as: (1) one draw of its opaque batch, (2) one copy of the offscreen
 into the snapshot, (3) one draw of its destination-reading batch. The rules:
 
-* an opaque command joins the current phase unless its rectangle touches a cell
-  written by a destination-reading command already in the current phase; then it
+* an opaque command joins the current phase unless it overlaps a
+  destination-reading command already in the current phase; then it
   opens the next phase (it must overwrite that result, so it must draw after it);
-* a destination-reading command joins the current phase unless its rectangle
-  touches a cell written by another destination-reading command already in the
+* a destination-reading command joins the current phase unless it overlaps
+  another destination-reading command already in the
   current phase; then it opens the next phase (the later one reads the earlier
   one's result);
-* cells are tagged per phase, so the tests above cost one grid lookup per cell
-  of the rectangle and no allocation after warm-up.
+* a cell tag names the destination-reading commands that covered it — four,
+  after which the cell answers every later test conservatively — and the test
+  then compares the two rectangles, so sharing a cell without overlapping does
+  not split a phase. Both tests cost one grid lookup per cell of the rectangle
+  and allocate nothing after warm-up.
+
+Two relaxations of the rectangle test are exact, not heuristic, and both were
+worth about half the frame's phases on the battle benchmark:
+
+* A lit point batch tags the cell of each visible point rather than the cells of
+  its bounding rectangle, and two points conflict only when they write the same
+  pixel; the phase keeps the pixel set that decides it. Any other command sharing
+  a cell with a point still opens the next phase.
+* A model body commit may join the phase of its own shadow commit. The shadow
+  pass writes — and reads — only pixels its own body plane leaves uncovered
+  [03 R-REN-03D §4–§5], and the body commit writes only pixels that plane
+  covers, so the two pixel sets are disjoint and their order cannot matter. The
+  exemption names that one command; a composed attached-unit group, whose commit
+  carries the children's pixels too, does not claim it.
 
 This is C-G3's disjoint-run rule generalised across families. Within one batch,
 vertex order is record order, and the device rasterizes primitives of one draw in
 order, so overlapping opaque writes in the same batch still resolve to the later
-command. Overlapping smoke needs three to six phases per frame, hence about
-twenty draws for the world layer. The snapshot copy in (2) may be limited to the
+command. The snapshot copy in (2) may be limited to the
 union rectangle of the phase's destination-reading batch. Batches whose vertex
 count would exceed the 16-bit index domain are split into consecutive draws
 without reordering.
+
+Overlapping translucent effects, not the 2D families, set the phase count: at
+1920×1080 the battle benchmark compiles about eighty phases per frame, of which
+about thirty-five are opened by an overlapping ALP-tinted sprite and about
+twenty-five by model shadow and body commits that genuinely chain. Sharing one
+snapshot between two phases was measured and rejected: only about ten of those
+eighty phases have a destination rectangle that even misses the previous
+phase's, which is an upper bound on what a snapshot-validity scheme could save.
 
 **Fog as one pass** (C-G7). The recorded fog ops become a per-cell grid texture
 (kind, variant, frame and parity in the four channels) covering the visible
@@ -875,15 +899,20 @@ staging image, since there are a handful per frame. The image cache, its LRU,
 identity keys, page packer and pinning are removed; `ModelStats` drops the cache
 fields and keeps the counters that describe work performed.
 
-**Textured quads without strips.** Retail's span mapper interpolates each
-attribute along the two edges then across the row, which is bilinear over the
-quad in screen space. A textured quad therefore draws as two triangles whose
-fragment shader recovers U/V by inverse-bilinear interpolation from the four
-corner positions and UVs carried in the custom attributes, then floors before
-sampling as today. This removes the diagonal bend the strip path was introduced
-for [§5.1] without CPU scanline work. Crossed (folded) rings keep the strip path
-(about 66 per frame). The activated ARMSOLAR captures are the acceptance gate; a
-visible diagonal or zig-zag is a defect.
+**Textured quads without strips.** Retail's span mapper finds, for each row,
+the active edge on the decreasing-index chain and on the increasing-index chain
+of the quad, interpolates every lane along each edge by the row's parameter,
+then interpolates across the row by the column's parameter [03 R-RAST-01 §1].
+A textured quad therefore draws as two device triangles whose key and colour
+passes evaluate exactly that two-chain mapping per fragment from a per-frame
+quad parameter image (twelve RGBA8 texels per quad: corner positions, corner
+texel coordinates, corner key and shade), then floor before sampling as before.
+This is not a generic inverse-bilinear map, which differs from the retail mapping
+on a non-parallelogram. It removes the diagonal bend the strip path was
+introduced for [§5.1] without CPU scanline work. Crossed (folded) rings, rings
+with no ear and non-quad textured faces keep the strip path, about 300 strips
+per frame in the battle benchmark. The activated ARMSOLAR captures are the
+acceptance gate; a visible diagonal or zig-zag is a defect.
 
 **Allocation policy.** Steady-state frames allocate nothing in the executor:
 vertex and index buffers, phase lists, grid tags, prepared face scratch and the
@@ -910,6 +939,19 @@ complete redesign at 1920×1080 are about thirty device draws per frame, CPU
 submission under 2 ms, and a 33 ms cadence at 30 Hz with headroom for 60 Hz
 presentation.
 
+Measured after G5 on the seeded Ashap Plateau battle benchmark at 1920×1080:
+cadence 33.3 ms — the 30 Hz vsync floor, and classic's own figure — with CPU
+submission about 7.4 ms over roughly 230 device calls (about 80 phases, each a
+batched opaque draw, a snapshot copy and a batched destination draw, plus the
+model slot passes, the fog pass and the expansion). The device-call and
+submission targets are therefore not met: the phase count, not the draw count
+within a phase, is what stands between the executor and them, and the phases
+that remain are real per-pixel dependencies between overlapping translucent
+effects. The executor itself allocates about a hundred objects per frame; the
+benchmark's 42,000 are Ebitengine's per-Metal-call boxing (about a hundred
+objects per device call, a third of them in opening the render pass a
+destination change forces) and the recorder in `internal/client`.
+
 ## 12. Work units for §11
 
 Each unit is one worktree, one sub-agent, exclusive files; the orchestrator
@@ -921,7 +963,7 @@ reviews the diff, re-runs the gates and merges.
 | G2 slot atlas | per-frame model slot atlas, batched key/colour/shadow/resolve passes, cache removal | `models.go`, `model_*.go`, `model_shaders.go`, model tests | model device fixtures; ARMSOLAR and carrier captures; model draws per frame independent of unit count |
 | G3 scheduler | table atlas, scene and destination shaders, phase scheduler, all 2D families and model commits through it | `renderer.go`, `draw.go`, `sprites.go`, `deststage.go`, `text.go`, `terrain.go`, `shaders.go`, `tables.go`, `batch.go`, `schedule.go` (new), `atlas.go` (new); model commit call sites by API agreed with G2 | tinted-overlap fixture; M1–M8 non-model regions equal to classic; total draws about thirty |
 | G4 bilinear quads | inverse-bilinear textured quads, strips only for folded rings | `model_shaders.go`, prepare functions in `models.go` | ARMSOLAR activated/open captures; strip count about 66 |
-| G5 allocation sweep | zero steady-state allocation | whatever remains, one file set | benchmark allocation delta near classic's |
+| G5 render-pass and allocation sweep | phase count, per-frame uploads, zero steady-state allocation in the executor | `internal/platform/gpurender` | M1–M8 modern byte-identical to the previous revision's modern; device fixtures; benchmark phase, pass and allocation counts reported |
 
 G1 and G2 are independent and run first in parallel. G3 follows G2 because the
 model commit goes through the scheduler. G4 follows G2. G5 runs last. After each

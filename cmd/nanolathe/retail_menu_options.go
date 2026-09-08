@@ -147,21 +147,26 @@ const retailMusicCategoryCount = 100
 type retailOptionsState struct {
 	page     string // "" for the root with no page merged
 	snapshot retailOptionsSnapshot
-	sliders  map[string]*retailSliderState
-	drag     retailSliderDrag
-	modes    []retailDisplayMode
+	// Sliders are keyed by their window-record index. Their display names are
+	// only for the bounded first-match lookup helpers; two records that happen
+	// to share a name retain separate knob state [07 R-WGT-02 §2].
+	sliders map[int]*retailSliderState
+	drag    retailSliderDrag
+	modes   []retailDisplayMode
 
 	// inBattle selects the in-battle arm of every routine in this file: the
 	// `PREFS.GUI` root, the `…RT.GUI` pages, no page bitmap, and the writes
 	// that reach the running session rather than only the stored block
 	// [07 R-FE-01 §6].
 	inBattle bool
-	// pressed is the index of the gadget holding the pointer capture on the
-	// in-battle window, -1 when free [07 R-WGT-01 §1 "Capture"]. The front-end
-	// arm keeps the same word on `ui.Panel`; the battle needs its own because
-	// the in-battle pump applies the capture rule this window requires — see
-	// battle_options.go.
-	pressed int
+	// serviceStageIndex identifies the staged button only while
+	// serviceStageActive marks a shared-widget handoff. Keyboard and direct
+	// screen calls leave it clear and advance exactly once themselves.
+	// callbackIndex retains the fired record through pointer and key callbacks.
+	// Zero is the header, so it also represents a direct named invocation.
+	callbackIndex      int
+	serviceStageIndex  int
+	serviceStageActive bool
 
 	// tracks is the music object's audio-track count and track the `MUSIC`
 	// page's selected track, 1-based, 0 when there is none. Retail keeps the
@@ -266,7 +271,7 @@ type retailSliderState struct {
 // [07 R-WGT-01 §5 "Pointer"].
 type retailSliderDrag struct {
 	active     bool
-	name       string
+	index      int
 	startCoord int
 	startKnob  int
 	// ended marks the pass on which the capture was freed. Release frees the
@@ -365,10 +370,19 @@ func (g *gameShell) retailSliderMetrics(gad gui.Gadget) (travel, knobSize, arrow
 // options page, or nil. Every other kind-4 gadget stays on the list-scrollbar
 // path.
 func (g *gameShell) retailOptionsSlider(name string) *retailSliderState {
+	if optionsPanel == nil {
+		return nil
+	}
+	return g.retailOptionsSliderAt(optionsPanel.Index(name))
+}
+
+// retailOptionsSliderAt uses the caller's already-selected record. This is
+// the callback path; it must not turn that record back into a name lookup.
+func (g *gameShell) retailOptionsSliderAt(index int) *retailSliderState {
 	if optionsState == nil || optionsPanel == nil || g == nil || g.activePanel() != optionsPanel {
 		return nil
 	}
-	return optionsState.sliders[menuKey(name)]
+	return optionsState.sliders[index]
 }
 
 // openRetailOptionsScreen builds the options root and pushes it over the
@@ -404,11 +418,11 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 	desktopW, desktopH := ebitenapp.DesktopSize()
 	optionsAssets = &retailPanelAssets{window: window, background: background}
 	optionsState = &retailOptionsState{
-		sliders:    map[string]*retailSliderState{},
-		modes:      retailDisplayModes(desktopW, desktopH),
-		categories: retailDefaultCategories(),
-		inBattle:   inBattle,
-		pressed:    -1,
+		sliders:           map[int]*retailSliderState{},
+		modes:             retailDisplayModes(desktopW, desktopH),
+		categories:        retailDefaultCategories(),
+		inBattle:          inBattle,
+		serviceStageIndex: -1,
 	}
 	// Retail's stored game speed and the session's requested speed are one
 	// word: the `GAME` slider reads it, the speed setter writes it, and the
@@ -439,6 +453,7 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 	if inBattle {
 		hideRetailBattleOptionsGadgets(window)
 	}
+	g.installRetailWindowButtonArt(window, nil)
 	optionsPanel = ui.NewPanel(window)
 	if optionsPanel == nil {
 		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", root, "the authored options root", nil)
@@ -501,10 +516,8 @@ func retailOptionsPanelRect(window *gui.Window) (gui.Rect, int, bool) {
 	if window == nil {
 		return gui.Rect{}, -1, false
 	}
-	for i := 1; i < len(window.Gadgets); i++ {
-		if strings.EqualFold(window.Gadgets[i].Name, retailBattleOptionsPanel) {
-			return window.Gadgets[i].Rect, i, true
-		}
+	if i := window.GadgetIndex(retailBattleOptionsPanel); i >= 0 {
+		return window.Gadgets[i].Rect, i, true
 	}
 	return gui.Rect{}, -1, false
 }
@@ -517,8 +530,8 @@ func hideRetailBattleOptionsGadgets(window *gui.Window) {
 		return
 	}
 	for i := 1; i < len(window.Gadgets); i++ {
-		key := menuKey(window.Gadgets[i].Name)
-		if strings.HasPrefix(key, "map") || strings.HasPrefix(key, "vid") {
+		name := gui.GadgetName(window.Gadgets[i].Name)
+		if strings.HasPrefix(name, "MAP") || strings.HasPrefix(name, "VID") {
 			window.Gadgets[i].Active = 0
 		}
 	}
@@ -570,15 +583,14 @@ func retailGreyGadget(window *gui.Window, name string, greyed bool) {
 	if window == nil {
 		return
 	}
-	for i := range window.Gadgets {
-		if !strings.EqualFold(window.Gadgets[i].Name, name) {
-			continue
-		}
-		if greyed {
-			window.Gadgets[i].GrayedOut = 1
-		} else {
-			window.Gadgets[i].GrayedOut = 0
-		}
+	i := window.GadgetIndex(name)
+	if i < 0 {
+		return
+	}
+	if greyed {
+		window.Gadgets[i].GrayedOut = 1
+	} else {
+		window.Gadgets[i].GrayedOut = 0
 	}
 }
 
@@ -635,7 +647,6 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	if !g.retailOptionsActive() || optionsAssets == nil || optionsAssets.window == nil {
 		return
 	}
-	page = menuKey(page)
 	source, ok := retailOptionsPages[page]
 	if !ok {
 		return
@@ -684,9 +695,10 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	if inBattle {
 		hideRetailBattleOptionsGadgets(root)
 	}
+	g.installRetailWindowButtonArt(root, nil)
 	optionsAssets.background = background
 	optionsState.page = page
-	optionsState.sliders = map[string]*retailSliderState{}
+	optionsState.sliders = map[int]*retailSliderState{}
 
 	// The panel is rebuilt over the widened gadget list, then the entry values
 	// are pushed into it: after the page opens every slider's value callback
@@ -763,15 +775,18 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		return
 	}
 	p := optionsPanel
-	optionsState.sliders = map[string]*retailSliderState{}
+	optionsState.sliders = map[int]*retailSliderState{}
 	// Gadget order, not map order: the value callbacks below run in the order
 	// the opener walks the window's gadget array [07 R-FE-01 §6] [I1].
-	order := make([]string, 0, len(p.Window.Gadgets))
-	for _, gad := range p.Window.Gadgets {
+	order := make([]int, 0, len(p.Window.Gadgets))
+	for i, gad := range p.Window.Gadgets {
 		if !retailOptionsPageGadget(gad) || gad.Kind != gui.KindScrollBar {
 			continue
 		}
-		key := menuKey(gad.Name)
+		key, trackedName := retailSliderKey(gui.CallbackName(gad.Name))
+		if !trackedName {
+			continue
+		}
 		max, tracked := g.retailSliderMax(key)
 		if !tracked {
 			continue
@@ -780,14 +795,14 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		if !ok {
 			continue
 		}
-		optionsState.sliders[key] = &retailSliderState{
+		optionsState.sliders[i] = &retailSliderState{
 			travel:   travel,
 			knobSize: knobSize,
 			arrowW:   arrowW,
 			max:      max,
 			knob:     retailSliderKnob(g.retailSliderStoredValue(key), travel, max),
 		}
-		order = append(order, key)
+		order = append(order, i)
 	}
 	switch optionsState.page {
 	case "visuals":
@@ -807,15 +822,15 @@ func (g *gameShell) refreshRetailOptionsPage() {
 		// `UNITCHAT` is the acknowledgement **text** gauge, displayed as the
 		// stored byte divided by five; `LEFTCLICK` shows the `Interface Type`
 		// word directly [07 R-CAM-01 §7][07 R-CAM-01 §5].
-		p.SetStatus("UNITCHAT", g.messages.UnitChatText/5)
-		p.SetStatus("LEFTCLICK", g.interfaceType)
+		p.SetStageAt(p.Index("UNITCHAT"), g.messages.UnitChatText/5)
+		p.SetStageAt(p.Index("LEFTCLICK"), g.interfaceType)
 		g.syncRetailMaxLinesLabel()
 	}
 	// After the page opens, every kind-4 gadget's value callback runs once, so
 	// the labels and the stored values match the knobs the opener just placed
 	// [07 R-FE-01 §6].
-	for _, key := range order {
-		g.commitRetailSliderValue(key, optionsState.sliders[key])
+	for _, index := range order {
+		g.commitRetailSliderValue(index, optionsState.sliders[index])
 	}
 }
 
@@ -863,12 +878,12 @@ func (g *gameShell) syncRetailSoundPage() {
 	if p == nil || optionsAssets == nil {
 		return
 	}
-	p.SetStatus("MODE", g.audioPrefs.SoundMode)
+	p.SetStageAt(p.Index("MODE"), g.audioPrefs.SoundMode)
 	speech := 0
 	if g.audioPrefs.SpeechFX != 0 {
 		speech = g.audioPrefs.UnitChat / 5
 	}
-	p.SetStatus("SPEECH", speech)
+	p.SetStageAt(p.Index("SPEECH"), speech)
 	off := !g.audioPrefs.SoundEnabled()
 	p.SetActive("VOLTEXT", !off)
 	for _, name := range []string{"FXVOL", "TEST", "SPEECH"} {
@@ -889,12 +904,12 @@ func (g *gameShell) syncRetailMusicPage() {
 	}
 	on := g.audioPrefs.MusicMode != 0
 	p.SetStatus("NOTRAK", boolInt(on))
-	p.SetStatus("TRACKMODE", g.audioPrefs.CDMode-1)
+	p.SetStageAt(p.Index("TRACKMODE"), g.audioPrefs.CDMode-1)
 	for _, name := range []string{"MUSICVOL", "CDPREV", "CDSTOP", "CDPLAY", "CDNEXT", "TRACKMODE"} {
 		retailGreyGadget(optionsAssets.window, name, !on)
 	}
 	retailGreyGadget(optionsAssets.window, "TRACKTYPE", !(on && g.audioPrefs.CDMode == settings.MaxCDMode))
-	p.SetStatus("TRACKTYPE", retailTrackCategory(optionsState.track))
+	p.SetStageAt(p.Index("TRACKTYPE"), retailTrackCategory(optionsState.track))
 	g.syncRetailTrackLabel()
 }
 
@@ -1263,116 +1278,122 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	if !g.retailOptionsActive() {
 		return false
 	}
+	name = gui.CallbackName(name)
 	// Every arm below either transitions or writes a preference, so the cue
 	// precedes them all, as it does on the screens frontendCue serves.
-	g.playMenuCue(retailOptionsCue(menuKey(name)))
-	switch menuKey(name) {
-	case "sound", "music", "speeds", "visuals":
-		g.openRetailOptionsPage(name)
+	g.playMenuCue(retailOptionsCue(retailOptionsCueKey(name)))
+	switch name {
+	case "SOUND", "MUSIC", "SPEEDS", "VISUALS":
+		page, _ := retailOptionsPageKey(name)
+		g.openRetailOptionsPage(page)
 		return true
-	case "prev":
+	case "PREV":
 		// "OK": every preference is written back, then the window closes
 		// [07 R-FE-01 §6][07 R-FE-01 §11].
 		g.closeRetailOptionsScreen()
 		g.saveSettings()
 		return true
-	case "cancel":
+	case "CANCEL":
 		// The entry snapshot is restored and re-applied, then the window
 		// closes. Unsaved edits made on any page are discarded, because no
 		// screen writes a value directly [07 R-FE-01 §6][07 R-FE-01 §11].
 		g.restoreRetailOptionsSnapshot(optionsState.snapshot)
 		g.closeRetailOptionsScreen()
 		return true
-	case "restore":
+	case "RESTORE":
 		g.restoreRetailOptionsDefaults()
 		return true
-	case "undo":
+	case "UNDO":
 		g.undoRetailOptionsPage()
 		return true
-	case "anti":
+	case "ANTI":
 		g.display.AntiAlias = boolInt(g.display.AntiAlias == 0)
 		optionsPanel.SetStatus("ANTI", g.display.AntiAlias)
 		g.applyRetailVisualOptions(clPtr)
 		return true
-	case "shading":
+	case "SHADING":
 		g.display.Shading = boolInt(g.display.Shading == 0)
 		optionsPanel.SetStatus("SHADING", g.display.Shading)
 		g.applyRetailVisualOptions(clPtr)
 		return true
-	case "bshadows":
+	case "BSHADOWS":
 		g.setRetailShadowBits(g.display.FeatureShadows == 0)
 		optionsPanel.SetStatus("BSHADOWS", g.display.FeatureShadows)
 		g.applyRetailVisualOptions(clPtr)
 		return true
 
 	// ---- SOUNDS ---------------------------------------------------------
-	case "mode":
+	case "MODE":
 		// `MODE` writes the sound-flags byte's low three bits. `Off` stops
 		// every voice; `Mono` outside a battle re-issues the front-end `BGM`
 		// loop. The device's 3-D flag follows the value 2 [03 R-AUD-01 §2].
-		g.audioPrefs.SoundMode = retailCycleStage(g.audioPrefs.SoundMode, 3)
+		g.audioPrefs.SoundMode = g.retailOptionsStage("MODE", 3, g.audioPrefs.SoundMode)
 		g.applyRetailAudioOptions()
 		if g.audioPrefs.SoundMode == settings.SoundModeMono && g.battle == nil {
 			g.armMenuBGM()
 		}
 		g.syncRetailSoundPage()
 		return true
-	case "speech":
+	case "SPEECH":
 		// `SPEECH` writes both halves at once: bit 6 takes `stage != 0` and
 		// the acknowledgement voice level takes `stage × 5` [03 R-AUD-01 §2].
-		stage := retailCycleStage(optionsPanel.StatusOf("SPEECH"), 3)
+		speech := 0
+		if g.audioPrefs.SpeechFX != 0 {
+			speech = g.audioPrefs.UnitChat / 5
+		}
+		stage := g.retailOptionsStage("SPEECH", 3, speech)
 		g.audioPrefs.SpeechFX = boolInt(stage != 0)
 		g.audioPrefs.UnitChat = stage * 5
 		g.syncRetailSoundPage()
 		return true
-	case "test":
+	case "TEST":
 		g.playRetailSoundTest()
 		return true
 
 	// ---- MUSIC ----------------------------------------------------------
-	case "notrak":
+	case "NOTRAK":
 		g.audioPrefs.MusicMode = boolInt(g.audioPrefs.MusicMode == 0)
 		g.setRetailMusicEnabled(g.audioPrefs.MusicMode != 0)
 		g.syncRetailMusicPage()
 		return true
-	case "trackmode":
+	case "TRACKMODE":
 		// `TRACKMODE`'s stage plus one is `cdmode`. `Repeat` copies the
 		// selection into the requested track; `Custom` shows `TRACKTYPE` for
 		// the selection [03 R-AUD-01 §4].
-		g.audioPrefs.CDMode = retailCycleStage(g.audioPrefs.CDMode-1, settings.MaxCDMode) + 1
+		g.audioPrefs.CDMode = g.retailOptionsStage("TRACKMODE", settings.MaxCDMode, g.audioPrefs.CDMode-1) + 1
 		g.applyRetailMusicMode()
 		g.syncRetailMusicPage()
 		return true
-	case "tracktype":
+	case "TRACKTYPE":
 		if optionsState.track >= 1 && optionsState.track <= retailMusicCategoryCount {
-			optionsState.categories[optionsState.track-1] = retailCycleStage(retailTrackCategory(optionsState.track), 5)
+			optionsState.categories[optionsState.track-1] = g.retailOptionsStage("TRACKTYPE", 5, retailTrackCategory(optionsState.track))
 		}
 		g.syncRetailMusicPage()
 		return true
-	case "cdplay", "cdnext", "cdprev", "cdstop":
-		g.activateRetailMusicTransport(menuKey(name))
+	case "CDPLAY", "CDNEXT", "CDPREV", "CDSTOP":
+		g.activateRetailMusicTransport(retailOptionsCueKey(name))
 		return true
 
 	// ---- SPEEDS (the root captions its button `INTERFACE`) --------------
-	case "leftclick":
+	case "LEFTCLICK":
 		// The two-stage `LEFTCLICK` button writes the `Interface Type` word
 		// [07 R-CAM-01 §5].
-		g.interfaceType = retailCycleStage(g.interfaceType, 2)
-		optionsPanel.SetStatus("LEFTCLICK", g.interfaceType)
+		g.interfaceType = g.retailOptionsStage("LEFTCLICK", 2, g.interfaceType)
+		optionsPanel.SetStageAt(optionsPanel.Index("LEFTCLICK"), g.interfaceType)
 		return true
-	case "unitchat":
+	case "UNITCHAT":
 		// `UNITCHAT` is the acknowledgement **text** level, `stage × 5`. Its
 		// voice twin is the sound page's `SPEECH` [07 R-CAM-01 §7].
-		stage := retailCycleStage(optionsPanel.StatusOf("UNITCHAT"), 3)
+		stage := g.retailOptionsStage("UNITCHAT", 3, g.messages.UnitChatText/5)
 		g.messages.UnitChatText = stage * 5
-		optionsPanel.SetStatus("UNITCHAT", stage)
+		optionsPanel.SetStageAt(optionsPanel.Index("UNITCHAT"), stage)
 		return true
 	}
 	// Every remaining control on the open page belongs to the options window,
 	// so the screen underneath must not see it.
 	if optionsPanel != nil && optionsPanel.Window != nil {
 		for _, gad := range optionsPanel.Window.Gadgets {
-			if strings.EqualFold(gad.Name, name) {
+			if gui.CallbackNameEqual(gad.Name, name) {
 				return true
 			}
 		}
@@ -1380,15 +1401,53 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 	return false
 }
 
+// retailOptionsStage takes the stage already selected by a pointer service
+// pass, or advances current for a direct/key activation. current also keeps
+// callbacks valid in a narrow screen transition after its page is gone. The
+// callback runs after the service pass, so it must not cycle the same pointer
+// gesture twice [07 R-WGT-01 §1][07 R-WGT-01 §3].
+func (g *gameShell) retailOptionsStage(name string, stages, current int) int {
+	if optionsPanel == nil {
+		return retailCycleStage(current, stages)
+	}
+	index := optionsPanel.Index(name)
+	if optionsState != nil && optionsPanel.Window != nil {
+		fired := optionsState.callbackIndex
+		if fired > 0 && fired < len(optionsPanel.Window.Gadgets) && gui.CallbackNameEqual(optionsPanel.Window.Gadgets[fired].Name, name) {
+			index = fired
+		}
+	}
+	if index < 0 {
+		return retailCycleStage(current, stages)
+	}
+	stage := optionsPanel.StageAt(index)
+	if optionsState != nil && optionsState.serviceStageActive && optionsState.serviceStageIndex == index {
+		return stage
+	}
+	// Direct and keyboard callbacks retain the stored preference as their
+	// source. The two acknowledgement controls instead use the panel state,
+	// which is their screen-local source [07 R-WGT-01 §3].
+	switch name {
+	case "SPEECH", "UNITCHAT":
+		return retailCycleStage(stage, stages)
+	default:
+		return retailCycleStage(current, stages)
+	}
+}
+
 // commitRetailSliderValue runs one slider's change callback: the read-out is
 // computed from the knob and written to whatever the slider drives
 // [07 R-FE-01 §6].
-func (g *gameShell) commitRetailSliderValue(name string, s *retailSliderState) {
-	if g == nil || s == nil {
+func (g *gameShell) commitRetailSliderValue(index int, s *retailSliderState) {
+	if g == nil || s == nil || optionsPanel == nil || optionsPanel.Window == nil || index < 1 || index >= len(optionsPanel.Window.Gadgets) {
+		return
+	}
+	key, ok := retailSliderKey(gui.CallbackName(optionsPanel.Window.Gadgets[index].Name))
+	if !ok {
 		return
 	}
 	value := retailSliderValue(s.knob, s.travel, s.max)
-	switch menuKey(name) {
+	switch key {
 	case "vidsldr":
 		if len(optionsState.modes) == 0 {
 			return
@@ -1460,7 +1519,7 @@ func (g *gameShell) commitRetailSliderValue(name string, s *retailSliderState) {
 
 // moveRetailSlider clamps a knob into 0..travel-1 and runs the change callback
 // when it moved [07 R-WGT-01 §5 "Pointer"].
-func (g *gameShell) moveRetailSlider(name string, s *retailSliderState, knob int) {
+func (g *gameShell) moveRetailSliderAt(index int, s *retailSliderState, knob int) {
 	if s == nil {
 		return
 	}
@@ -1474,14 +1533,24 @@ func (g *gameShell) moveRetailSlider(name string, s *retailSliderState, knob int
 		return
 	}
 	s.knob = knob
-	g.commitRetailSliderValue(name, s)
+	g.commitRetailSliderValue(index, s)
+}
+
+// moveRetailSlider is the explicit named-operation adapter. It retains the
+// GUI family's bounded first-match semantics; fired widget callbacks use the
+// indexed moveRetailSliderAt path above.
+func (g *gameShell) moveRetailSlider(name string, s *retailSliderState, knob int) {
+	if optionsPanel == nil {
+		return
+	}
+	g.moveRetailSliderAt(optionsPanel.Index(name), s, knob)
 }
 
 // clickRetailSlider takes the capture when the press lands inside the knob
 // rectangle. A press on the track beside the knob captures but does not move
 // it, and a press on an arrow is handled on release [07 R-WGT-01 §5].
-func (g *gameShell) clickRetailSlider(gad gui.Gadget, r gui.Rect, x, y int32) bool {
-	s := g.retailOptionsSlider(gad.Name)
+func (g *gameShell) clickRetailSlider(index int, r gui.Rect, x, y int32) bool {
+	s := g.retailOptionsSliderAt(index)
 	if s == nil {
 		return false
 	}
@@ -1495,15 +1564,15 @@ func (g *gameShell) clickRetailSlider(gad gui.Gadget, r gui.Rect, x, y int32) bo
 	if coordinate < knobStart || coordinate >= knobStart+s.knobSize {
 		return true
 	}
-	optionsState.drag = retailSliderDrag{active: true, name: menuKey(gad.Name), startCoord: coordinate, startKnob: s.knob}
+	optionsState.drag = retailSliderDrag{active: true, index: index, startCoord: coordinate, startKnob: s.knob}
 	return true
 }
 
 // releaseRetailSlider consumes the release that ended a drag, so the arrow
 // step below it does not also fire when the pointer was dragged past the end of
 // the track [07 R-WGT-01 §5 "Pointer"].
-func (g *gameShell) releaseRetailSlider(gad gui.Gadget) bool {
-	if g.retailOptionsSlider(gad.Name) == nil {
+func (g *gameShell) releaseRetailSlider(index int) bool {
+	if g.retailOptionsSliderAt(index) == nil {
 		return false
 	}
 	if optionsState.drag.ended || optionsState.drag.active {
@@ -1524,27 +1593,115 @@ func (g *gameShell) updateRetailSliderDrag(mouse *input.MouseState) bool {
 		optionsState.drag = retailSliderDrag{ended: true}
 		return true
 	}
-	name := optionsState.drag.name
-	s := optionsState.sliders[name]
+	index := optionsState.drag.index
+	s := optionsState.sliders[index]
 	if s == nil {
 		optionsState.drag = retailSliderDrag{ended: true}
 		return true
 	}
-	g.moveRetailSlider(name, s, optionsState.drag.startKnob+(int(mouse.X)-optionsState.drag.startCoord))
+	g.moveRetailSliderAt(index, s, optionsState.drag.startKnob+(int(mouse.X)-optionsState.drag.startCoord))
 	return true
 }
 
 // adjustRetailSlider is the synthesised arrow buttons' step: the knob moves by
 // one while the pointer is before or after the knob rectangle and the button
 // is held [07 R-WGT-01 §5 "Pointer"].
-func (g *gameShell) adjustRetailSlider(gad gui.Gadget, delta int) bool {
-	s := g.retailOptionsSlider(gad.Name)
+func (g *gameShell) adjustRetailSlider(index int, delta int) bool {
+	s := g.retailOptionsSliderAt(index)
 	if s == nil {
 		return false
 	}
 	if optionsState.drag.active {
 		return true
 	}
-	g.moveRetailSlider(menuKey(gad.Name), s, s.knob+delta)
+	g.moveRetailSliderAt(index, s, s.knob+delta)
 	return true
+}
+
+func retailOptionsPageKey(name string) (string, bool) {
+	switch name {
+	case "SOUND":
+		return "sound", true
+	case "MUSIC":
+		return "music", true
+	case "SPEEDS":
+		return "speeds", true
+	case "VISUALS":
+		return "visuals", true
+	}
+	return "", false
+}
+
+func retailOptionsCueKey(name string) string {
+	switch name {
+	case "SOUND":
+		return "sound"
+	case "MUSIC":
+		return "music"
+	case "SPEEDS":
+		return "speeds"
+	case "VISUALS":
+		return "visuals"
+	case "PREV":
+		return "prev"
+	case "CANCEL":
+		return "cancel"
+	case "RESTORE":
+		return "restore"
+	case "UNDO":
+		return "undo"
+	case "ANTI":
+		return "anti"
+	case "SHADING":
+		return "shading"
+	case "BSHADOWS":
+		return "bshadows"
+	case "MODE":
+		return "mode"
+	case "SPEECH":
+		return "speech"
+	case "NOTRAK":
+		return "notrak"
+	case "TRACKMODE":
+		return "trackmode"
+	case "TRACKTYPE":
+		return "tracktype"
+	case "CDPLAY":
+		return "cdplay"
+	case "CDNEXT":
+		return "cdnext"
+	case "CDPREV":
+		return "cdprev"
+	case "CDSTOP":
+		return "cdstop"
+	case "LEFTCLICK":
+		return "leftclick"
+	case "UNITCHAT":
+		return "unitchat"
+	}
+	return ""
+}
+
+// retailSliderKey recognizes callback literals only. Page labels such as
+// "TEXT" remain labels; they are never aliases for a slider [07 R-WGT-02 §2].
+func retailSliderKey(name string) (string, bool) {
+	switch name {
+	case "VIDSLDR":
+		return "vidsldr", true
+	case "GAMMA":
+		return "gamma", true
+	case "FXVOL":
+		return "fxvol", true
+	case "MUSICVOL":
+		return "musicvol", true
+	case "GAME":
+		return "game", true
+	case "SCREEN":
+		return "screen", true
+	case "TXTSCROL":
+		return "txtscrol", true
+	case "MAXLINES":
+		return "maxlines", true
+	}
+	return "", false
 }

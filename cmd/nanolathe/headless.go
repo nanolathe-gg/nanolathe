@@ -6,7 +6,10 @@ import (
 	"io"
 	"os"
 
+	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/headless"
+	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 var errHeadlessTickLimit = headless.ErrTickLimit
@@ -28,6 +31,12 @@ func runHeadless(opts Options, cs *contentSet, out io.Writer) error {
 	if err != nil {
 		return err
 	}
+	if _, err := installHeadlessModelTextureRegistry(authoritative.Session, cs.fs); err != nil {
+		return err
+	}
+	if authoritative.Session.Features != nil {
+		defer authoritative.Session.Features.SetDefinitionAdmissionObserver(nil)
+	}
 	reportRequest.TickLimit = uint32(opts.Ticks)
 	report, runErr := headless.RunSession(reportRequest, authoritative.Session)
 	if report.ScenarioIdentity != "" {
@@ -36,6 +45,33 @@ func runHeadless(opts Options, cs *contentSet, out io.Writer) error {
 		}
 	}
 	return runErr
+}
+
+// installHeadlessModelTextureRegistry gives a displayless battle the same
+// battle-owned phase-7 service as a windowed battle. It deliberately creates
+// no Client; the registry advances presentation metadata while RunSession owns
+// the authoritative tick loop [03 R-CRD-005 §1]. An unexpected named-model
+// failure rejects composition before the tick loop starts.
+func installHeadlessModelTextureRegistry(sess *session.Session, fs *vfs.FS) (*client.ModelTextureRegistry, error) {
+	if sess == nil {
+		return nil, fmt.Errorf("nanolathe: headless session load failed: no session")
+	}
+	restoreStart := 0
+	if sess.World != nil {
+		restoreStart = len(sess.World.FeatureDefs)
+	}
+	if sess.Features != nil {
+		restoreStart = sess.Features.DefinitionRestoreStart()
+	}
+	registry, err := client.NewModelTextureRegistry(fs, sess.Catalog, sess.World, restoreStart)
+	if err != nil {
+		return nil, fmt.Errorf("nanolathe: headless session load failed: model textures: %w", err)
+	}
+	sess.SetPhase7Service(registry)
+	if sess.Features != nil {
+		sess.Features.SetDefinitionAdmissionObserver(registry.AdmitFeatureDefinition)
+	}
+	return registry, nil
 }
 
 func headlessFreshBattleRequest(opts Options, cs *contentSet, source BattleSeedSource) (freshBattleRequest, headless.Request, error) {

@@ -255,13 +255,9 @@ func (s *unitInfoScreen) doneIndex() int {
 	if s == nil || s.window == nil {
 		return -1
 	}
-	for i, gad := range s.window.Gadgets {
-		if i == 0 || gad.Kind != gui.KindButton {
-			continue
-		}
-		if strings.EqualFold(gad.Name, "DONE") {
-			return i
-		}
+	i := s.window.GadgetIndex("DONE")
+	if i >= 0 && s.window.Gadgets[i].Kind == gui.KindButton {
+		return i
 	}
 	return -1
 }
@@ -305,14 +301,12 @@ func (h *retailBattleHUD) drawUnitInfo(c *client.Client) {
 	// The `NAME` gadget's text is the definition's display name, written with
 	// a 128-byte limit argument [07 R-HUD-03 §8]. The authored label carries
 	// no text of its own, so the runtime binds it before the window draws.
-	for i := range window.Gadgets {
-		if strings.EqualFold(window.Gadgets[i].Name, "NAME") {
-			name := screen.def.Name
-			if len(name) > unitInfoNameLimit {
-				name = name[:unitInfoNameLimit]
-			}
-			window.Gadgets[i].Text = name
+	if i := window.GadgetIndex("NAME"); i >= 0 {
+		name := screen.def.Name
+		if len(name) > unitInfoNameLimit {
+			name = name[:unitInfoNameLimit]
 		}
+		window.Gadgets[i].Text = name
 	}
 	h.drawGUIWindow(c, window, nil, "")
 	h.drawUnitInfoPicture(c, screen)
@@ -325,13 +319,9 @@ func (h *retailBattleHUD) drawUnitInfoPicture(c *client.Client, screen *unitInfo
 	if screen.pic == nil {
 		return
 	}
-	for i, gad := range screen.window.Gadgets {
-		if i == 0 || !strings.EqualFold(gad.Name, "HOTR") {
-			continue
-		}
+	if i := screen.window.GadgetIndex("HOTR"); i >= 0 {
 		r := screen.window.PlacedRect(i)
 		c.UIBlitPCXClipped(screen.pic, int(r.X), int(r.Y), int(r.X), int(r.Y), int(r.W), int(r.H))
-		return
 	}
 }
 

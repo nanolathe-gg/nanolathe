@@ -10,48 +10,31 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3). It
-// owns the palette-table textures, the indexed offscreen the frame composes into
-// (index in the red channel), the expanded RGBA surface presented at the end, and
-// the compiled expansion shader. It implements drawlist.Sink, so Execute replays
-// a recorded List straight through it. Every device resource lives here, never on
-// the client [I6].
+// Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3,
+// §11.2). It owns the palette table atlas, the scene atlas, the indexed
+// offscreen the frame composes into (index in the red channel), the expanded RGBA
+// surface presented at the end, and the compiled passes. It implements
+// drawlist.Sink, so Execute replays a recorded List straight through it. Every
+// device resource lives here, never on the client [I6].
+//
+// The Sink methods compile rather than draw: each appends its command's clipped
+// rectangle, class and vertices to the phase scheduler (schedule.go), and Execute
+// submits the phases after Replay returns. A barrier — the fog pass, a
+// carrier/child group, a model subject the slot atlas could not fit, the clear
+// and the expansion — submits everything pending first, so those keep their
+// places in record order (C-G3).
 type Renderer struct {
 	modelPrep modelPrepScratch
 	tables    tables
 	expand    *ebiten.Shader
-	// solid writes one constant palette index per fragment (the fills, the line
-	// and the plain point batch); atlas copies an index out of a source atlas's
-	// red channel (the terrain tile pass). Both draw into the indexed offscreen
-	// with BlendCopy (C-G4).
-	solid *ebiten.Shader
-	atlas *ebiten.Shader
-	// gafKeyed copies a frame's opaque index texels into the offscreen, skipping
-	// its transparent ones under the source-over blend (the keyed sprite, feature
-	// GAF and cursor blits). indexScaled reproduces the byte writers' integer
-	// source mapping for the scaled GAF blit and the indexed surface blit (C-G4).
-	gafKeyed    *ebiten.Shader
-	indexScaled *ebiten.Shader
-	// The fog composite's destination-reading passes (C-G7): fogGray builds the
-	// gray-remapped destination layer, fogCheck writes the dithered checker,
-	// fogGrayMask is the plain gray fog GAF (masked Gray[dst]) and fogPatMask the
-	// dithered gray fog GAF. Solid fog fills reuse solid, gray fills copy the gray
-	// layer through atlas, and black fog GAF reuses gafKeyed.
-	fogGray     *ebiten.Shader
-	fogCheck    *ebiten.Shader
-	fogGrayMask *ebiten.Shader
-	fogPatMask  *ebiten.Shader
-	// The remaining dest-reading and text families (WU-2.6). litBlit folds a
-	// keyed source through one LHT row (BlitLit, source-through, no snapshot).
-	// tint and destTable read the destination through ALP / SHD / LHT and so run
-	// over a pre-command snapshot of the offscreen (destScratch): tint is the
-	// translucent strip and static-feature-shadow blit, and destTable is the
-	// shared light/shade rect and lit point pass. glyph is the keyed FNT text
-	// blit (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4).
-	litBlit           *ebiten.Shader
-	tint              *ebiten.Shader
-	destTable         *ebiten.Shader
-	glyph             *ebiten.Shader
+	// scene2D is the one opaque pass and sceneDest the one destination-reading
+	// pass (§11.2 "One scene shader for the 2D families").
+	scene2D   *ebiten.Shader
+	sceneDest *ebiten.Shader
+	// The model slot atlas rasterization passes. modelCommit and
+	// modelShadowCommit are compiled because the slot allocator gates a
+	// subject's shadow and body on them; the commits themselves ride the scene
+	// and destination shaders above.
 	modelKey          *ebiten.Shader
 	modelBody         *ebiten.Shader
 	modelCommit       *ebiten.Shader
@@ -64,21 +47,18 @@ type Renderer struct {
 
 	// offscreen is the indexed frame surface, RGBA8 with the palette index in the
 	// red channel (C-G4). output is the expanded RGBA surface Execute returns.
-	// grayScratch is the fog composite's per-frame gray-remapped snapshot of the
-	// offscreen: the fog pass reads it while writing the offscreen, so a gray fill
-	// or gray fog GAF never samples a pixel a fog write already changed (C-G7).
-	// All three are recreated when the frame size changes.
-	offscreen   *ebiten.Image
-	output      *ebiten.Image
-	grayScratch *ebiten.Image
-	// destScratch is the dest-reading families' per-command snapshot of the
-	// offscreen: before a tinted/shadow/lit-rect/shade-rect/lit-point command (or
-	// a point batch) writes the offscreen, the command's covered rect is copied
-	// from the offscreen into destScratch, and the shading pass reads destScratch
-	// while writing the offscreen — the fog snapshot pattern (C-G7), so a
-	// dest-reading write never samples a pixel it just changed. It is full-surface
-	// and aligned 1:1 with the offscreen, recreated when the frame size changes.
+	offscreen *ebiten.Image
+	output    *ebiten.Image
+	// destScratch is the phase snapshot: before a phase's destination-reading
+	// batch writes the offscreen, the union rectangle of that batch is copied
+	// here, and the pass reads it while writing the offscreen — so a
+	// destination-reading write never samples a pixel the same batch changed
+	// (§11.2 "The scheduler", C-G7). It is full-surface and aligned 1:1 with the
+	// offscreen, recreated when the frame size changes.
 	destScratch *ebiten.Image
+	// placeholder backs an image slot no op in a run requested, for the case
+	// where no palette (and so no table atlas) has been installed.
+	placeholder *ebiten.Image
 	// modelAtlas is the per-frame slot atlas every model subject rasterizes
 	// into before any of them commits (docs/DESIGN_GPU_RENDERER.md §11.2).
 	// modelStage/modelStageScratch are the attached-unit group's staging pair,
@@ -100,21 +80,23 @@ type Renderer struct {
 	// that reaches output, so it introduces no ordering [I1].
 	tileAtlases map[*world.Terrain]*tileAtlas
 
-	// gafImages caches one index texture per *formats.GAFFrame identity, built on
-	// first use and reused for the frame's lifetime: index in red, opacity flag in
-	// green, alpha opaque (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). pcxImages does
-	// the same for each *formats.PCX frontend background. Both are keyed by pointer
-	// and never ranged in a way that reaches output, so they introduce no ordering
-	// [I1].
+	// gafImages caches one index texture per *formats.GAFFrame identity for the
+	// model material passes, which sample a frame directly rather than through
+	// the scene atlas (C-G4). The 2D families read the scene atlas instead. Keyed
+	// by pointer and never ranged in a way that reaches output [I1].
 	gafImages map[*formats.GAFFrame]*ebiten.Image
-	pcxImages map[*formats.PCX]*ebiten.Image
 
-	// fntAtlases caches one glyph atlas per *formats.FNT identity, built on first
-	// Glyphs draw and reused for the font's lifetime (docs/DESIGN_GPU_RENDERER.md
-	// §2.3). Each atlas packs every present glyph in a horizontal strip with the
-	// set-bit flag in green; keyed by pointer and never ranged in a way that
-	// reaches output, so it introduces no ordering [I1].
-	fntAtlases map[*formats.FNT]*fntAtlas
+	// scene is the packed source atlas the scene shader samples: GAF frames, FNT
+	// glyph strips, PCX backgrounds and the per-frame indexed surface, so a whole
+	// phase's opaque commands can share one device draw (§11.2).
+	scene sceneAtlas
+
+	// sceneOpts is the reused draw options value every batched submission fills,
+	// so a steady-state frame allocates no options and no uniform map
+	// (§11.2 "Allocation policy").
+	sceneOpts ebiten.DrawTrianglesShaderOptions
+	// snapshotOpt is the reused options value of the phase snapshot copy.
+	snapshotOpt ebiten.DrawImageOptions
 
 	// surfaceDynamic serves zero-identity commands. surfaceCache is a bounded
 	// presentation cache for durable Surface identities; replay order never
@@ -124,8 +106,17 @@ type Renderer struct {
 	surfaceClock   uint64
 	surfaceWrites  uint64 // focused device-fixture diagnostic; never output state
 
-	// verts and idx are reusable geometry scratch so a steady-state frame's draws
-	// allocate nothing after warm-up.
+	// sched is the compiled frame: phases, runs and reusable vertex/index
+	// scratch (schedule.go).
+	sched scheduler
+
+	// frameDraws counts device draws issued since the last Execute began. It is
+	// diagnostic only.
+	frameDraws int
+
+	// verts and idx are the geometry scratch the fog pass, the expansion and the
+	// model rasterization passes share; the batched 2D families use the
+	// scheduler's own buffers instead.
 	verts []ebiten.Vertex
 	idx   []uint16
 
@@ -136,13 +127,21 @@ type Renderer struct {
 	fog fogPass
 }
 
+// surfaceUpload is one indexed-surface upload slot: the scene atlas region its
+// bytes live in, and the identity/revision that decides whether they have to be
+// written again.
 type surfaceUpload struct {
 	identity uint64
 	revision uint64
 	used     uint64
-	img      *ebiten.Image
+	entry    sceneEntry
 	w, h     int
 	pixels   []byte
+	// sent is the source bytes last uploaded. A surface whose revision changed
+	// but whose bytes did not is not re-uploaded, because Ebitengine's Metal
+	// driver builds a staging texture per WritePixels
+	// (docs/DESIGN_GPU_RENDERER.md §11.2 "Allocation policy").
+	sent []byte
 }
 
 // New builds a renderer from the installed palette tables, uploading every table
@@ -150,9 +149,10 @@ type surfaceUpload struct {
 // initial frame size; pass 0 for either to defer surface allocation until the
 // first Execute (the size is re-checked every Execute regardless).
 //
-// The expansion shader is compiled here. If it fails to compile the renderer is
-// still returned with a nil shader; Expand then no-ops rather than panicking, and
-// the compile error is reported by NewChecked for callers that want it.
+// The passes are compiled here. If one fails to compile the renderer is still
+// returned with a nil shader; the families guarding on it then no-op rather than
+// panicking, and the compile error is reported by NewChecked for callers that
+// want it.
 func New(pal *palette.Tables, w, h int) *Renderer {
 	r, _ := NewChecked(pal, w, h)
 	return r
@@ -162,127 +162,43 @@ func New(pal *palette.Tables, w, h int) *Renderer {
 // drawing family guards its own resources; callers report the initialization
 // error before attempting a frame.
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
-	shader, err := newExpandShader()
-	solid, solidErr := newSolidShader()
-	atlas, atlasErr := newAtlasShader()
-	gafKeyed, gafErr := newGAFKeyedShader()
-	indexScaled, scaledErr := newIndexScaledShader()
-	fogGray, fogGrayErr := newFogGrayShader()
-	fogCheck, fogCheckErr := newFogCheckerShader()
-	fogGrayMask, fogGrayMaskErr := newFogGrayMaskShader()
-	fogPatMask, fogPatMaskErr := newFogPatternMaskShader()
-	litBlit, litBlitErr := newLitBlitShader()
-	tint, tintErr := newTintShader()
-	destTable, destTableErr := newDestTableShader()
-	glyph, glyphErr := newGlyphShader()
-	modelKey, modelKeyErr := newModelKeyShader()
-	modelBody, modelBodyErr := newModelBodyShader()
-	modelCommit, modelCommitErr := newModelCommitShader()
-	modelShadowCommit, modelShadowCommitErr := newModelShadowCommitShader()
-	modelClip, modelClipErr := newModelClipShader()
-	modelReveal, modelRevealErr := newModelRevealShader()
-	modelCopy, modelCopyErr := newModelCopyShader()
-	modelChild, modelChildErr := newModelChildShader()
-	modelResolve, modelResolveErr := newModelResolveShader()
 	r := &Renderer{
-		tables:            uploadTables(pal),
-		expand:            shader,
-		solid:             solid,
-		atlas:             atlas,
-		gafKeyed:          gafKeyed,
-		indexScaled:       indexScaled,
-		fogGray:           fogGray,
-		fogCheck:          fogCheck,
-		fogGrayMask:       fogGrayMask,
-		fogPatMask:        fogPatMask,
-		litBlit:           litBlit,
-		tint:              tint,
-		destTable:         destTable,
-		glyph:             glyph,
-		modelKey:          modelKey,
-		modelBody:         modelBody,
-		modelCommit:       modelCommit,
-		modelShadowCommit: modelShadowCommit,
-		modelClip:         modelClip,
-		modelReveal:       modelReveal,
-		modelCopy:         modelCopy,
-		modelChild:        modelChild,
-		modelResolve:      modelResolve,
-		tileAtlases:       make(map[*world.Terrain]*tileAtlas),
-		gafImages:         make(map[*formats.GAFFrame]*ebiten.Image),
-		pcxImages:         make(map[*formats.PCX]*ebiten.Image),
-		fntAtlases:        make(map[*formats.FNT]*fntAtlas),
+		tables:      uploadTables(pal),
+		tileAtlases: make(map[*world.Terrain]*tileAtlas),
+		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
 	}
-	if w > 0 && h > 0 {
-		r.ensureSize(w, h)
-	}
+	r.scene.frames = make(map[*formats.GAFFrame]sceneEntry)
+	r.scene.pcx = make(map[*formats.PCX]sceneEntry)
+	r.scene.fonts = make(map[*formats.FNT]*fntAtlas)
+
 	// Report the first compile error so a caller that wants it (NewChecked) can
 	// surface it; each drawing family guards on its own nil shader and no-ops
 	// rather than panicking, exactly as Expand does.
-	if err == nil {
-		err = solidErr
+	var firstErr error
+	compile := func(dst **ebiten.Shader, build func() (*ebiten.Shader, error)) {
+		s, err := build()
+		*dst = s
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
-	if err == nil {
-		err = atlasErr
+	compile(&r.expand, newExpandShader)
+	compile(&r.scene2D, newScene2DShader)
+	compile(&r.sceneDest, newSceneDestShader)
+	compile(&r.modelKey, newModelKeyShader)
+	compile(&r.modelBody, newModelBodyShader)
+	compile(&r.modelCommit, newModelCommitShader)
+	compile(&r.modelShadowCommit, newModelShadowCommitShader)
+	compile(&r.modelClip, newModelClipShader)
+	compile(&r.modelReveal, newModelRevealShader)
+	compile(&r.modelCopy, newModelCopyShader)
+	compile(&r.modelChild, newModelChildShader)
+	compile(&r.modelResolve, newModelResolveShader)
+
+	if w > 0 && h > 0 {
+		r.ensureSize(w, h)
 	}
-	if err == nil {
-		err = gafErr
-	}
-	if err == nil {
-		err = scaledErr
-	}
-	if err == nil {
-		err = fogGrayErr
-	}
-	if err == nil {
-		err = fogCheckErr
-	}
-	if err == nil {
-		err = fogGrayMaskErr
-	}
-	if err == nil {
-		err = fogPatMaskErr
-	}
-	if err == nil {
-		err = litBlitErr
-	}
-	if err == nil {
-		err = tintErr
-	}
-	if err == nil {
-		err = destTableErr
-	}
-	if err == nil {
-		err = glyphErr
-	}
-	if err == nil {
-		err = modelKeyErr
-	}
-	if err == nil {
-		err = modelBodyErr
-	}
-	if err == nil {
-		err = modelCommitErr
-	}
-	if err == nil {
-		err = modelShadowCommitErr
-	}
-	if err == nil {
-		err = modelClipErr
-	}
-	if err == nil {
-		err = modelRevealErr
-	}
-	if err == nil {
-		err = modelCopyErr
-	}
-	if err == nil {
-		err = modelChildErr
-	}
-	if err == nil {
-		err = modelResolveErr
-	}
-	return r, err
+	return r, firstErr
 }
 
 // ensureSize allocates or reallocates the indexed offscreen and the expanded
@@ -296,14 +212,15 @@ func (r *Renderer) ensureSize(w, h int) {
 	}
 	r.offscreen = ebiten.NewImage(w, h)
 	r.output = ebiten.NewImage(w, h)
-	r.grayScratch = ebiten.NewImage(w, h)
 	r.destScratch = ebiten.NewImage(w, h)
 	r.w, r.h = w, h
+	r.sched.resetFrame(w, h)
 }
 
 // Execute replays the recorded frame list through this renderer and returns the
 // expanded RGBA surface for the adapter to present (docs/DESIGN_GPU_RENDERER.md
-// §2.3). The list is visited in exact record order (C-G3), ending with the
+// §2.3). The list is visited in exact record order (C-G3); the Sink methods
+// compile the commands into phases and this submits them (§11.2), ending with the
 // palette expansion after every indexed composite.
 //
 // It returns nil when the surface cannot be sized (a degenerate w/h) or when the
@@ -317,6 +234,8 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 		return nil
 	}
 	r.modelStats = ModelStats{UnsupportedFace: -1}
+	r.frameDraws = 0
+	r.sched.resetFrame(r.w, r.h)
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()
 	// Every eligible subject of the frame is rasterized into the slot atlas
@@ -324,7 +243,18 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	// number of draws instead of one set per subject (§11.2).
 	r.prepareModelSlots(list)
 	list.Replay(r)
+	// A list without an Expand marker still leaves no compiled work behind.
+	r.submitSchedule()
 	return r.output
+}
+
+// DeviceDraws reports the device draws the most recent Execute issued. It is
+// diagnostic only and never reaches simulation state.
+func (r *Renderer) DeviceDraws() int {
+	if r == nil {
+		return 0
+	}
+	return r.frameDraws
 }
 
 // index0Color is the offscreen's cleared value: index 0 in the red channel with
@@ -333,65 +263,55 @@ var index0Color = color.RGBA{R: 0, G: 0, B: 0, A: 255}
 
 // Clear fills the indexed offscreen with palette index 0 — the first command of
 // every committed frame (C-G1). Index 0 rides the red channel; alpha is opaque so
-// the stored red survives premultiplication and decodes back to 0 (C-G4).
+// the stored red survives premultiplication and decodes back to 0 (C-G4). It is a
+// barrier: anything already compiled is submitted first, so the clear keeps its
+// place in record order.
 func (r *Renderer) Clear() {
 	if r.offscreen == nil {
 		return
 	}
+	r.submitSchedule()
 	r.offscreen.Fill(index0Color)
+	r.frameDraws++
 }
 
 // Expand runs the index→RGBA expansion pass: the indexed offscreen through
 // PALETTE.PAL into the output surface, the single colour pass of the composite
-// (docs/DESIGN_GPU_RENDERER.md C-G8). It is a triangle draw rather than a rect
-// draw because the two source images differ in size (the offscreen is the screen
-// size, PAL is 256×1) and only DrawTrianglesShader permits that in pixel mode.
+// (docs/DESIGN_GPU_RENDERER.md C-G8). It is a barrier — every compiled phase is
+// submitted before the surface is read.
 //
 // The quad maps the output 1:1 to the offscreen, so each output pixel samples its
 // own offscreen texel with nearest filtering (C-G4). BlendCopy overwrites the
 // output outright — no blend arithmetic on the result (C-G4).
 func (r *Renderer) Expand() {
-	if r.expand == nil || r.offscreen == nil || r.output == nil || r.tables.pal == nil {
+	r.submitSchedule()
+	if r.expand == nil || r.offscreen == nil || r.output == nil || r.tables.atlas == nil {
 		// Without a compiled shader or an installed palette there is nothing to
 		// expand; leave the output as-is rather than guessing a colour (I9).
 		return
 	}
 	fw, fh := float32(r.w), float32(r.h)
-	vertices := []ebiten.Vertex{
-		{DstX: 0, DstY: 0, SrcX: 0, SrcY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-		{DstX: fw, DstY: 0, SrcX: fw, SrcY: 0, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-		{DstX: 0, DstY: fh, SrcX: 0, SrcY: fh, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-		{DstX: fw, DstY: fh, SrcX: fw, SrcY: fh, ColorR: 1, ColorG: 1, ColorB: 1, ColorA: 1},
-	}
-	indices := []uint16{0, 1, 2, 1, 2, 3}
-	opts := &ebiten.DrawTrianglesShaderOptions{
-		Blend: ebiten.BlendCopy,
-		Images: [4]*ebiten.Image{
-			r.offscreen,  // source 0: the indexed frame, index in red
-			r.tables.pal, // source 1: PALETTE.PAL colours
-			nil,
-			nil,
-		},
-	}
-	r.output.DrawTrianglesShader(vertices, indices, r.expand, opts)
+	r.verts = r.verts[:0]
+	r.idx = r.idx[:0]
+	r.appendTexQuad(0, 0, fw, fh, 0, 0, fw, fh)
+	r.sceneOpts.Blend = ebiten.BlendCopy
+	r.sceneOpts.Images[0] = r.offscreen // the indexed frame, index in red
+	r.sceneOpts.Images[1] = r.tables.atlas
+	r.sceneOpts.Images[2] = nil
+	r.sceneOpts.Images[3] = nil
+	r.output.DrawTrianglesShader(r.verts, r.idx, r.expand, &r.sceneOpts)
+	r.sceneOpts.Images[1] = nil
+	r.frameDraws++
+	r.verts = r.verts[:0]
+	r.idx = r.idx[:0]
 }
 
-// Every drawing family is now implemented — Terrain, Fill, Line and Points in
-// terrain.go and draw.go (WU-2.3); the keyed Sprite families, Surface and Cursor
-// in sprites.go (WU-2.4); Fog in fog.go (WU-2.5); Glyphs, the BlitLit/BlitTinted/
-// BlitFeatureShadow Sprite kinds, the FillLitRect/FillShadeRect Fill styles and
-// the PointLit Points kind in text.go and deststage.go (WU-2.6); and the composed
-// Model in models.go (WU-2.7).
-
-// Glyphs is implemented in text.go: the keyed FNT text blit over the indexed
-// offscreen (C-G4).
-
-// Model is implemented in models.go and model_slots.go: every subject of the
-// frame is rasterized into the per-frame slot atlas, then each command commits
-// its shadow (ALP) and body (keyed) from its slot (DESIGN_GPU_RENDERER §11.2).
-
-// Fog is implemented in fog.go: the fog composite over the indexed offscreen
-// (C-G7).
+// The drawing families live beside this file: Terrain in terrain.go, the fills,
+// line and point batches in draw.go, the keyed sprite/PCX/surface/cursor blits in
+// sprites.go, the destination-reading blits and rects in deststage.go, the FNT
+// text run in text.go, the fog composite in fog.go and the model commits in
+// models.go. Every one of them compiles into the scheduler rather than drawing
+// (§11.2).
 
 // staticSinkCheck fails to compile if *Renderer stops satisfying drawlist.Sink.
 var _ drawlist.Sink = (*Renderer)(nil)

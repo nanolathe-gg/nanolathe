@@ -580,6 +580,8 @@ func handleB(token string, ctx *interpCtx) {
 		if v, err := strconv.ParseInt(fields[1], 10, 32); err == nil {
 			n = v
 		} else if fv, err2 := strconv.ParseFloat(fields[1], 64); err2 == nil {
+			// TODO(question): retain the existing permissive fallback until the retail
+			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
 			n = int64(fv)
 		}
 	}
@@ -634,7 +636,9 @@ func handleBW(token string, ctx *interpCtx) {
 		if v, err := strconv.ParseInt(fields[0], 10, 32); err == nil {
 			n = v
 		} else if fv, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil {
-			n = int64(fv) // [04 §3.6] move/… don't test counts but bw maybe? Still parse.
+			// TODO(question): retain the existing permissive fallback until the retail
+			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
+			n = int64(fv)
 		}
 	} else {
 		n = 1 // default?
@@ -771,6 +775,8 @@ func handleO(token string, ctx *interpCtx) {
 		if v, err := strconv.ParseInt(fields[0], 10, 32); err == nil {
 			d1 = v
 		} else if fv, err2 := strconv.ParseFloat(fields[0], 64); err2 == nil {
+			// TODO(question): retain the existing permissive fallback until the retail
+			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
 			d1 = int64(fv)
 		}
 	}
@@ -778,6 +784,8 @@ func handleO(token string, ctx *interpCtx) {
 		if v, err := strconv.ParseInt(fields[1], 10, 32); err == nil {
 			d2 = v
 		} else if fv, err2 := strconv.ParseFloat(fields[1], 64); err2 == nil {
+			// TODO(question): retain the existing permissive fallback until the retail
+			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
 			d2 = int64(fv)
 		}
 	}
@@ -909,6 +917,8 @@ func handleW(token string, ctx *interpCtx) {
 		if v, err := strconv.ParseInt(fields[1], 10, 32); err == nil {
 			trailing = v
 		} else if fv, err2 := strconv.ParseFloat(fields[1], 64); err2 == nil {
+			// TODO(question): retain the existing permissive fallback until the retail
+			// integer scanner's prefix, overflow and failed-field continuation are traced [04 §3.6].
 			trailing = int64(fv)
 		}
 	}

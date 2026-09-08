@@ -1,6 +1,8 @@
 package gpurender
 
 import (
+	"bytes"
+
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
@@ -10,28 +12,32 @@ import (
 // executor: the keyed GAF sprite (anchored and plain), the scaled GAF blit, the
 // 2D feature GAF copy, the opaque PCX background, the indexed surface and the
 // software cursor (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). Each reproduces its
-// classic byte writer's covered-pixel set and per-pixel value exactly: an index
-// texture carries the frame's bytes in the red channel and its opacity in green,
-// and a keyed blit draws it under the source-over blend so a texel the byte
-// writer skips leaves the destination untouched (a discard), while an opaque
-// texel overwrites the index with no blend arithmetic on red [03 R-RAST-01 §6]
+// classic byte writer's covered-pixel set and per-pixel value exactly: the scene
+// atlas carries the frame's bytes in the red channel and its opacity in green,
+// and a keyed blit's fragment returns a transparent "skip" for a texel the byte
+// writer skips, so the destination is left untouched, while an opaque texel
+// overwrites the index with no blend arithmetic on red [03 R-RAST-01 §6]
 // [03 §4.4][07 §4].
 //
 // ALP-tinted blits, including translucent feature bodies and shadows, and the
-// source-through-LHT BlitLit are implemented in deststage.go (WU-2.6). The
-// destination-reading ALP path runs over a per-command snapshot of the
-// offscreen, exactly as the classic sink's counterpart reads c.indexed.
+// source-through-LHT BlitLit are implemented in deststage.go. The
+// destination-reading ALP path runs over the phase snapshot, exactly as the
+// classic sink's counterpart reads c.indexed.
 
-// buildGAFFrameImage uploads one GAF frame as an index texture: index in red,
-// opacity flag in green (255 opaque, 0 transparent), alpha opaque so premultiplied
-// sampling recovers both bytes (C-G4). Opacity is baked from the frame's own
-// Transparent mask, the same signal every classic byte writer tests — the raw
-// color key, the RLE skip runs and the composite coverage all reduce to it
-// [fmt gaf]. Red is retained even for a transparent-marked texel: model faces
+// buildGAFFrameImage uploads one GAF frame as a standalone index texture: index
+// in red, opacity flag in green (255 opaque, 0 transparent), alpha opaque so
+// premultiplied sampling recovers both bytes (C-G4). Opacity is baked from the
+// frame's own Transparent mask, the same signal every classic byte writer tests —
+// the raw color key, the RLE skip runs and the composite coverage all reduce to
+// it [fmt gaf]. Red is retained even for a transparent-marked texel: model faces
 // use the raw resolved texture index for ownership, while ordinary keyed
 // blitters use green to skip it. A texel past the decoded pixel length is
 // transparent and remains index zero, matching the byte writers' short-array
 // skip.
+//
+// The 2D families read the packed scene atlas instead (atlas.go); this per-frame
+// texture serves the model material passes, which sample a texture frame from its
+// own image.
 func buildGAFFrameImage(f *formats.GAFFrame) *ebiten.Image {
 	fw, fh := int(f.Width), int(f.Height)
 	if fw <= 0 || fh <= 0 {
@@ -57,10 +63,10 @@ func buildGAFFrameImage(f *formats.GAFFrame) *ebiten.Image {
 	return img
 }
 
-// gafImageFor returns the cached index texture for f, building it on first use and
-// caching it by pointer identity (docs/DESIGN_GPU_RENDERER.md §2.3). A nil frame
-// or an empty frame has no image. The nil result is cached too, so a degenerate
-// frame is not rebuilt every call.
+// gafImageFor returns the cached standalone index texture for f, building it on
+// first use and caching it by pointer identity (docs/DESIGN_GPU_RENDERER.md
+// §2.3). A nil frame or an empty frame has no image. The nil result is cached
+// too, so a degenerate frame is not rebuilt every call.
 func (r *Renderer) gafImageFor(f *formats.GAFFrame) *ebiten.Image {
 	if f == nil {
 		return nil
@@ -70,42 +76,6 @@ func (r *Renderer) gafImageFor(f *formats.GAFFrame) *ebiten.Image {
 	}
 	img := buildGAFFrameImage(f)
 	r.gafImages[f] = img
-	return img
-}
-
-// buildPCXImage uploads one PCX image as an index texture: index in red, alpha
-// opaque (C-G4). PCX frontend backgrounds are copied opaquely — no key applies —
-// so no opacity flag is needed and the atlas shader copies the red channel under
-// BlendCopy [fmt pcx][07 "Retail palette contract"].
-func buildPCXImage(p *formats.PCX) *ebiten.Image {
-	pw, ph := int(p.Width), int(p.Height)
-	if pw <= 0 || ph <= 0 {
-		return nil
-	}
-	buf := make([]byte, pw*ph*4)
-	n := len(p.Pixels)
-	for i := 0; i < pw*ph; i++ {
-		if i < n {
-			buf[i*4+0] = p.Pixels[i]
-		}
-		buf[i*4+3] = 255
-	}
-	img := ebiten.NewImage(pw, ph)
-	img.WritePixels(buf)
-	return img
-}
-
-// pcxImageFor returns the cached index texture for p, built on first use and
-// cached by pointer identity (docs/DESIGN_GPU_RENDERER.md §2.3).
-func (r *Renderer) pcxImageFor(p *formats.PCX) *ebiten.Image {
-	if p == nil {
-		return nil
-	}
-	if img, ok := r.pcxImages[p]; ok {
-		return img
-	}
-	img := buildPCXImage(p)
-	r.pcxImages[p] = img
 	return img
 }
 
@@ -196,10 +166,11 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 
 // Surface replays one indexed byte surface blit (the minimap/radar image),
 // matching uiBlitIndexedRaw's nearest-neighbour integer scaling and framebuffer
-// clip (docs/DESIGN_GPU_RENDERER.md §2.3). The surface changes every frame, so its
-// texture is uploaded per call into a reused scratch image rather than cached.
+// clip (docs/DESIGN_GPU_RENDERER.md §2.3). The surface changes every frame, so
+// its bytes are re-uploaded into a fixed scene atlas region rather than cached by
+// identity, and the blit then merges into the frame's opaque batch.
 func (r *Renderer) Surface(sf drawlist.Surface) {
-	if r == nil || r.offscreen == nil || r.indexScaled == nil {
+	if r == nil || r.offscreen == nil || r.scene2D == nil {
 		return
 	}
 	src := sf.Pixels
@@ -208,8 +179,8 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
 		return
 	}
-	img := r.uploadSurface(sf)
-	if img == nil {
+	e := r.uploadSurface(sf)
+	if !e.ok {
 		return
 	}
 	x, y := int(sf.Dst.X), int(sf.Dst.Y)
@@ -220,9 +191,8 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 	if qx0 >= qx1 || qy0 >= qy1 {
 		return
 	}
-	r.drawIndexScaledQuad(img,
-		float32(qx0), float32(qy0), float32(qx1), float32(qy1),
-		x, y, srcW, srcH, w, h, 0, 0, srcW, srcH)
+	r.drawIndexScaledQuad(e, qx0, qy0, qx1, qy1, x, y,
+		srcW, w, srcH, h, 0, 0, srcW, srcH)
 }
 
 // Cursor replays the software cursor blit: a full-framebuffer plain keyed copy of
@@ -247,15 +217,15 @@ func (r *Renderer) spriteClip(has bool, rect drawlist.Rect) (x, y, w, h int) {
 
 // drawKeyed reproduces uiBlitClippedRaw for a 1:1 keyed GAF copy: it computes the
 // same clipped destination rectangle and intra-frame source offset the byte writer
-// covers, then draws an axis-aligned quad sampling the frame's index texture under
-// the source-over blend so transparent texels leave the destination untouched
-// (C-G4). x and y are the destination top-left the byte writer received.
+// covers, then compiles an axis-aligned quad sampling the frame's scene atlas
+// region, whose fragment skips the transparent texels (C-G4). x and y are the
+// destination top-left the byte writer received.
 func (r *Renderer) drawKeyed(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
-	if f == nil || r.gafKeyed == nil {
+	if f == nil || r.scene2D == nil {
 		return
 	}
-	img := r.gafImageFor(f)
-	if img == nil {
+	e := r.sceneFrameFor(f)
+	if !e.ok {
 		return
 	}
 	fw, fh := int(f.Width), int(f.Height)
@@ -266,20 +236,24 @@ func (r *Renderer) drawKeyed(f *formats.GAFFrame, x, y, clipX, clipY, clipW, cli
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
-	r.drawTexQuad(img, r.gafKeyed, ebiten.BlendSourceOver,
+	if !r.sched.begin(schedOpaque, x+col0, y+row0, x+col1, y+row1, r.sceneImages(e)) {
+		return
+	}
+	r.sched.quad(schedOpaque,
 		float32(x+col0), float32(y+row0), float32(x+col1), float32(y+row1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
+		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
+		[4]float32{}, [4]float32{0, 0, 0, sceneOpKeyed})
 }
 
 // drawPCX reproduces uiBlitPCXClippedRaw: an opaque 1:1 copy of the PCX pixels
-// over the clip-intersected destination rectangle, sampling the PCX index texture
-// under BlendCopy (no key applies) [fmt pcx].
+// over the clip-intersected destination rectangle, sampling the PCX's scene atlas
+// region (no key applies) [fmt pcx].
 func (r *Renderer) drawPCX(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int) {
-	if p == nil || r.atlas == nil {
+	if p == nil || r.scene2D == nil {
 		return
 	}
-	img := r.pcxImageFor(p)
-	if img == nil {
+	e := r.scenePCXFor(p)
+	if !e.ok {
 		return
 	}
 	pw, ph := int(p.Width), int(p.Height)
@@ -290,22 +264,27 @@ func (r *Renderer) drawPCX(p *formats.PCX, x, y, clipX, clipY, clipW, clipH int)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
-	r.drawTexQuad(img, r.atlas, ebiten.BlendCopy,
+	if !r.sched.begin(schedOpaque, x+col0, y+row0, x+col1, y+row1, r.sceneImages(e)) {
+		return
+	}
+	r.sched.quad(schedOpaque,
 		float32(x+col0), float32(y+row0), float32(x+col1), float32(y+row1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
+		float32(int(e.x)+col0), float32(int(e.y)+row0), float32(int(e.x)+col1), float32(int(e.y)+row1),
+		[4]float32{}, [4]float32{0, 0, 0, sceneOpCopy})
 }
 
 // drawScaled reproduces uiBlitFrameSourceRectScaledClippedRaw: it draws the
-// clip-intersected destination rectangle and lets the indexScaled shader map each
-// destination pixel to its source texel with the byte writer's integer
-// span-over-span division, skipping transparent or out-of-frame texels under the
-// source-over blend (C-G4)[07 R-HUD-03 §11].
+// clip-intersected destination rectangle with the byte writer's integer
+// span-over-span source mapping [07 R-HUD-03 §11]. A destination pixel whose
+// mapped source lies outside the frame is one the byte writer skips, so the
+// destination rectangle is narrowed to the pixels that do map inside — the same
+// covered set, with the mapping kept exact inside the shader (C-G4).
 func (r *Renderer) drawScaled(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y, w, h, clipX, clipY, clipW, clipH int) {
-	if f == nil || r.indexScaled == nil || w <= 0 || h <= 0 || srcW <= 0 || srcH <= 0 || f.Width == 0 || f.Height == 0 {
+	if f == nil || r.scene2D == nil || w <= 0 || h <= 0 || srcW <= 0 || srcH <= 0 || f.Width == 0 || f.Height == 0 {
 		return
 	}
-	img := r.gafImageFor(f)
-	if img == nil {
+	e := r.sceneFrameFor(f)
+	if !e.ok {
 		return
 	}
 	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
@@ -317,55 +296,100 @@ func (r *Renderer) drawScaled(f *formats.GAFFrame, srcX, srcY, srcW, srcH, x, y,
 	}
 	// Span-over-span mapping: sx = dx*(srcW-1)/(w-1); the source origin is the
 	// sub-rect corner, the frame size bounds the At coordinate.
-	r.drawIndexScaledQuad(img,
-		float32(qx0), float32(qy0), float32(qx1), float32(qy1),
-		x, y, srcW-1, srcH-1, w-1, h-1, srcX, srcY, int(f.Width), int(f.Height))
+	r.drawIndexScaledQuad(e, qx0, qy0, qx1, qy1, x, y,
+		srcW-1, w-1, srcH-1, h-1, srcX, srcY, int(f.Width), int(f.Height))
 }
 
-// drawIndexScaledQuad draws one quad through the indexScaled shader with the
-// integer-mapping uniforms. srcNum/dstDen are the numerator/denominator of the
-// per-axis source mapping (span-over-span for the scaled GAF blit, size-over-size
-// for the surface blit); srcOrigin is added after the mapping and frameW/frameH
-// bound the source coordinate (C-G4).
-func (r *Renderer) drawIndexScaledQuad(img *ebiten.Image, dx0, dy0, dx1, dy1 float32,
-	dstOX, dstOY, srcNumX, srcNumY, dstDenX, dstDenY, srcOX, srcOY, frameW, frameH int) {
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(dx0, dy0, dx1, dy1, 0, 0, 0, 0)
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.indexScaled, &ebiten.DrawTrianglesShaderOptions{
-		Blend: ebiten.BlendSourceOver,
-		Uniforms: map[string]any{
-			"DstOrigin": []float32{float32(dstOX), float32(dstOY)},
-			"SrcNum":    []float32{float32(srcNumX), float32(srcNumY)},
-			"DstDen":    []float32{float32(dstDenX), float32(dstDenY)},
-			"SrcOrigin": []float32{float32(srcOX), float32(srcOY)},
-			"FrameSize": []float32{float32(frameW), float32(frameH)},
-		},
-		Images: [4]*ebiten.Image{img, nil, nil, nil},
-	})
+// drawIndexScaledQuad compiles one integer-mapped quad. numX/denX and numY/denY
+// are the per-axis source mapping (span-over-span for the scaled GAF blit,
+// size-over-size for the surface blit); srcOX/srcOY is added after the mapping and
+// frameW/frameH bound the source coordinate, exactly as the byte writers do
+// (C-G4). The destination rectangle is first narrowed to the offsets whose mapped
+// source is inside those bounds, so no fragment can sample a neighbouring atlas
+// entry.
+func (r *Renderer) drawIndexScaledQuad(e sceneEntry, qx0, qy0, qx1, qy1, dstOX, dstOY,
+	numX, denX, numY, denY, srcOX, srcOY, frameW, frameH int) {
+	loX, hiX, ok := scaledValidRange(numX, denX, srcOX, frameW, qx0-dstOX, qx1-1-dstOX)
+	if !ok {
+		return
+	}
+	loY, hiY, ok := scaledValidRange(numY, denY, srcOY, frameH, qy0-dstOY, qy1-1-dstOY)
+	if !ok {
+		return
+	}
+	x0, x1 := dstOX+loX, dstOX+hiX+1
+	y0, y1 := dstOY+loY, dstOY+hiY+1
+	if x0 >= x1 || y0 >= y1 {
+		return
+	}
+	if !r.sched.begin(schedOpaque, x0, y0, x1, y1, r.sceneImages(e)) {
+		return
+	}
+	// SrcX/SrcY carry the destination-relative offset, so the fragment recovers
+	// the byte writer's dx and dy by flooring the interpolated position.
+	r.sched.quad(schedOpaque,
+		float32(x0), float32(y0), float32(x1), float32(y1),
+		float32(x0-dstOX), float32(y0-dstOY), float32(x1-dstOX), float32(y1-dstOY),
+		[4]float32{float32(numX), float32(denX), float32(numY), float32(denY)},
+		[4]float32{float32(int(e.x) + srcOX), float32(int(e.y) + srcOY), 0, sceneOpScaled})
 }
 
-// drawTexQuad draws one axis-aligned textured quad into the offscreen with the
-// given shader and blend, sampling the source image's [sx0,sx1)×[sy0,sy1) region
-// across the destination [dx0,dx1)×[dy0,dy1) rectangle (C-G4).
-func (r *Renderer) drawTexQuad(img *ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend,
-	dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) {
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1)
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, shader, &ebiten.DrawTrianglesShaderOptions{
-		Blend:  blend,
-		Images: [4]*ebiten.Image{img, nil, nil, nil},
-	})
+// scaledValidRange narrows a destination offset span [dLo, dHi] to the offsets
+// whose mapped source coordinate origin + (d*num)/den lies inside [0, limit) —
+// the byte writers' per-pixel in-frame test, resolved once per axis because the
+// mapping is monotone in d. It returns false when no offset maps inside.
+func scaledValidRange(num, den, origin, limit, dLo, dHi int) (lo, hi int, ok bool) {
+	if limit <= 0 || dLo > dHi {
+		return 0, 0, false
+	}
+	if den <= 0 || num == 0 {
+		// The byte writer's `if span > 0` guard leaves the source coordinate at
+		// the origin for every destination pixel.
+		if origin < 0 || origin >= limit {
+			return 0, 0, false
+		}
+		return dLo, dHi, true
+	}
+	lo = dLo
+	if origin < 0 {
+		// Smallest d with floor(d*num/den) >= -origin, i.e. d*num >= -origin*den.
+		need := (-origin*den + num - 1) / num
+		if need > lo {
+			lo = need
+		}
+	}
+	m := limit - 1 - origin
+	if m < 0 {
+		return 0, 0, false
+	}
+	// Largest d with floor(d*num/den) <= m, i.e. d*num <= (m+1)*den - 1.
+	hi = ((m+1)*den - 1) / num
+	if hi > dHi {
+		hi = dHi
+	}
+	if lo > hi {
+		return 0, 0, false
+	}
+	return lo, hi, true
 }
 
-// uploadSurface uploads indexed bytes only when a durable command's revision
+// sceneImages is the image binding a scene atlas entry needs: its page in source
+// slot 0. Every other slot stays open, so this command can share a run with the
+// fills, terrain tiles and model commits around it.
+func (r *Renderer) sceneImages(e sceneEntry) [4]*ebiten.Image {
+	return [4]*ebiten.Image{r.scene.pageImage(e)}
+}
+
+// uploadSurface writes an indexed surface's bytes into its scene atlas region
+// and returns that region, uploading only when a durable command's revision
 // changes. A zero identity is deliberately dynamic, preserving UIBlitIndexed's
-// ordinary borrowed-buffer behaviour [03 §3.6].
-func (r *Renderer) uploadSurface(sf drawlist.Surface) *ebiten.Image {
+// ordinary borrowed-buffer behaviour [03 §3.6]. Packing the region into the
+// scene atlas is what lets the minimap blit merge into the frame's opaque batch
+// (docs/DESIGN_GPU_RENDERER.md §11.2).
+func (r *Renderer) uploadSurface(sf drawlist.Surface) sceneEntry {
 	srcW, srcH := int(sf.SrcW), int(sf.SrcH)
 	if r == nil || srcW <= 0 || srcH <= 0 {
-		return nil
+		return sceneEntry{}
 	}
 	entry := &r.surfaceDynamic
 	upload := true
@@ -374,21 +398,35 @@ func (r *Renderer) uploadSurface(sf drawlist.Surface) *ebiten.Image {
 		var found bool
 		entry, found = r.surfaceEntry(sf.Identity)
 		entry.used = r.surfaceClock
-		upload = !found || entry.img == nil || entry.w != srcW || entry.h != srcH || sf.Revision == 0 || entry.revision != sf.Revision
+		upload = !found || !entry.entry.ok || entry.w != srcW || entry.h != srcH || sf.Revision == 0 || entry.revision != sf.Revision
 		if !upload {
-			return entry.img
+			return entry.entry
 		}
 		entry.identity = sf.Identity
 		entry.revision = sf.Revision
 	}
-	if !upload {
-		return entry.img
+	if entry.entry.ok && (entry.w != srcW || entry.h != srcH) {
+		// A resized surface needs a region of its own; atlas regions are never
+		// freed, and a minimap only changes size when the window does.
+		entry.entry = sceneEntry{}
 	}
-	if entry.img == nil || entry.w != srcW || entry.h != srcH {
-		entry.img = ebiten.NewImage(srcW, srcH)
+	if !entry.entry.ok {
+		entry.entry = r.scene.allocate(srcW, srcH)
+		if !entry.entry.ok {
+			return sceneEntry{}
+		}
 		entry.w, entry.h = srcW, srcH
+		// A fresh region holds nothing yet, so the unchanged-bytes test below
+		// must not match what the previous region held.
+		entry.sent = entry.sent[:0]
 	}
 	n := srcW * srcH
+	if entry.entry.ok && bytes.Equal(entry.sent, sf.Pixels) {
+		// Same bytes as the region already holds; the upload would rewrite it
+		// with itself.
+		return entry.entry
+	}
+	entry.sent = append(entry.sent[:0], sf.Pixels...)
 	if cap(entry.pixels) < n*4 {
 		entry.pixels = make([]byte, n*4)
 	} else {
@@ -406,11 +444,13 @@ func (r *Renderer) uploadSurface(sf drawlist.Surface) *ebiten.Image {
 		entry.pixels[j+2] = 0
 		entry.pixels[j+3] = 255
 	}
-	entry.img.WritePixels(entry.pixels)
+	r.scene.upload(entry.entry, entry.pixels)
 	r.surfaceWrites++
-	return entry.img
+	return entry.entry
 }
 
+// surfaceEntry finds the cache slot for a durable identity, or the slot to
+// evict. Neither the search nor the eviction can reach output [I1].
 func (r *Renderer) surfaceEntry(identity uint64) (*surfaceUpload, bool) {
 	var oldest *surfaceUpload
 	for i := range r.surfaceCache {

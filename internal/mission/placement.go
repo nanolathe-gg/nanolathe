@@ -481,12 +481,9 @@ func MarshalUnit(u UnitPlacement, heap *[]byte) [36]byte {
 	binary.LittleEndian.PutUint16(rec[30:32], uint16(u.BuildPriority))
 	binary.LittleEndian.PutUint16(rec[32:34], uint16(u.CreationCountdown))
 	rec[34] = u.RawFlags
-	// Low nibble of InitialGroup if numeric, else 0.
-	var nibble byte
-	if v, err := strconv.Atoi(strings.TrimSpace(u.InitialGroup)); err == nil {
-		nibble = byte(v & 0x0F)
-	}
-	rec[35] = nibble
+	// Retain the ordinary integer accessor before the low-nibble store, as
+	// in the authored placement record [08 R-TRIG-01 §9].
+	rec[35] = byte(formats.ParseTDFInteger(u.InitialGroup) & 0x0f)
 	return rec
 }
 

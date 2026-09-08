@@ -81,10 +81,32 @@ Two neighbours own things that look like they belong here and do not. The
 draws per active tick and publishes an offset on the committed frame, which the
 battle camera adds — [DESIGN_RUNTIME_DETERMINISM](DESIGN_RUNTIME_DETERMINISM.md)
 DET-04, `[03 §5.6]` `[01 R-CORE-01 §4.4.1]`. The **phase-7 model-texture
-sequence advance** is likewise a session phase, but the registry it advances is
-this client's: one per-instance cursor per animated texture on one cloned model
-primitive, owned by `internal/client` so two windows cannot share animation
-phase `[03 R-CRD-005 §1]`. **Wind** is read by the simulation's strip
+sequence advance** is likewise a session phase, but its `ModelTextureRegistry`
+is battle-owned. Battle composition binds every qualifying primitive of each
+loaded unit and projectile model before ticks begin, then installs that
+registry as the session's phase-7 service. A cursor belongs to a loaded model
+primitive, not a unit instance, frame, window or renderer: all instances of one
+load share it, while distinct loads and primitives do not. Unit definitions use
+one load per definition ordinal even when their filenames match; projectile
+weapon records reuse the first earlier matching model-name load. The registry
+precompiles candidate feature geometry at battle setup without binding cursors.
+`features.Service.SetDefinitionAdmissionObserver` first visits the terrain's
+existing feature-definition table in order, then reports each successful later
+append; that callback binds a precompiled feature load once. A client receives
+the immutable registry through `SetModelTextureRegistry`; drawing only reads its
+current frames and can never admit a player. Bootstrap binds pre-restore terrain
+definitions before tick one, follows every feature's dead/reclaim/burnt links
+with a growing ordinal walk, and admits each unit corpse before that unit's
+model. `features.Service` latches its definition-table length at the first
+restore reset; bootstrap binds the saved suffix after the normal link walk and
+then performs its own growing link walk. Repeated entries preserve their first
+loaded model identity. All named geometry is strictly expanded before startup;
+an unexpected provider or decode error rejects composition, while standalone
+preview retains its explicit absent-model wrapper. The `--headless` composition
+adapter installs the same registry before its session begins, without creating a
+client. Replacing or removing a client therefore cannot pause phase 7, and
+battle teardown clears the observer and resets the whole registry once `[03
+R-CRD-005 §1]`. **Wind** is read by the simulation's strip
 producers, not by any draw here; `[03 R-WIND-01]` belongs to
 [DESIGN_WORLD_VISIBILITY](DESIGN_WORLD_VISIBILITY.md).
 
@@ -170,8 +192,8 @@ with a per-pixel **height key**, and that image is blitted. The split across
   textured, each in an unshaded form that writes the byte raw and a shaded form
   that writes it through `SHD[row·256 + byte]`. Which pair runs is the
   *renderer* selection, not the flat/textured one.
-* `model_textures.go` — texture-name resolution and the per-instance sequence
-  cursors. One frame is static; exactly ten frames is a `LOGOS` team texture
+* `model_textures.go` — texture-name resolution and the battle-owned loaded-model
+  primitive registry. One frame is static; exactly ten frames is a `LOGOS` team texture
   indexed by a known `UnitView.OwnerColor` byte, never by its owner slot and
   never animated; unknown or out-of-range selectors yield no frame. Anything
   else is an animated sequence with per-frame holds `[03 §2.4.1]` `[03 §4.4]`
@@ -875,9 +897,6 @@ behaviour is bounded rather than guessed:
 
 * Which stock GAF sub-frames set the alternate-blitter flag that routes a
   sub-frame through the tinted blitter `[03 R-COMP-01 §2]`.
-* Teardown of the model-player registry — whether a destroyed player is cleared,
-  retained inactive, or removed with compaction. This is a residual, not
-  permission to choose a removal policy `[03 R-CRD-005 §1]`.
 * The purpose of the nanolathe particle word set at spawn and read by neither
   the advance nor the draw `[03 §5.5]`.
 * Whether the fog cache's `1 = NW` corner-to-bit assignment holds; supported
