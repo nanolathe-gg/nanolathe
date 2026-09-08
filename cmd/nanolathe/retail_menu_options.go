@@ -1206,6 +1206,7 @@ func applyVisualOptions(cl *client.Client, d settings.Display) {
 		return
 	}
 	cl.SetAntiAlias(d.AntiAlias != 0)
+	cl.SetFeatureShadows(d.FeatureShadows != 0)
 	cl.SetShadowOptions(d.Shadows != 0, d.VehicleShadows != 0, d.Shading != 0)
 }
 

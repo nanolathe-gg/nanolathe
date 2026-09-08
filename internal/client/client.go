@@ -201,13 +201,14 @@ type Client struct {
 	// composition supersample and, with it, retail's red/purple building
 	// fringe [R-REN-03A §6][R-REN-03A §7].
 	antiAlias bool
-	// shadows is options word bit2 0x04, the master shadow gate;
-	// vehicleShadows is bit3 0x08, the unit model shadows; shading is bit5
-	// 0x20, which selects shaded structure bodies [03 R-RND-02A]. The bulk
-	// INI key fans one value out across bits 4, 3 and 2, so a player who turns
-	// shadows off turns all three off together [03 §5.3][R-REN-03D §1].
+	// shadows is options word bit2 0x04, the master model-shadow gate;
+	// vehicleShadows is bit3 0x08, featureShadows is bit4 0x10, and shading is
+	// bit5 0x20. Feature sprites read bit4 directly; it remains independent of
+	// the model-shadow master and the structure-body shading selector when a
+	// per-category preference changes it [03 §5.3][R-REN-03D §1, §4].
 	shadows        bool
 	vehicleShadows bool
+	featureShadows bool
 	shading        bool
 
 	// Software cursor, drawn last over the composed surface [07 §8].
@@ -263,6 +264,7 @@ func New(opts Options) (*Client, error) {
 		// bits together [03 §5.3].
 		shadows:           true,
 		vehicleShadows:    true,
+		featureShadows:    true,
 		shading:           true,
 		width:             w,
 		height:            h,
@@ -526,6 +528,14 @@ func (c *Client) SetShadowOptions(master, vehicle, shading bool) {
 	c.shadows, c.vehicleShadows, c.shading = master, vehicle, shading
 	presentationrender.Shading = shading
 }
+
+// SetFeatureShadows selects the feature/sprite shadow bit. The per-feature
+// dispatcher reads this bit directly, independently of the model-shadow master,
+// vehicle-shadow and structure-body shading bits [03 §5.3][R-REN-03D §4].
+func (c *Client) SetFeatureShadows(enabled bool) { c.featureShadows = enabled }
+
+// FeatureShadows reports the current feature/sprite shadow bit.
+func (c *Client) FeatureShadows() bool { return c != nil && c.featureShadows }
 
 // ShadowOptions returns the three bits the model shadow gate reads.
 func (c *Client) ShadowOptions() (master, vehicle, shading bool) {
@@ -868,14 +878,11 @@ func sortedFeatureAnim(m map[string]*featureAnimCursor) []*featureAnimCursor {
 }
 
 // blitGAFFrame blits a GAF indexed frame to the indexed framebuffer at
-// top-left (dstX,dstY) = anchor - frame offsets, clipped to the viewport [03 §4.4] [fmt gaf].
-// It copies opaque indexed pixels directly (palette mapping happens at present time, C7).
-// Shadow path darkens the underlying terrain via PALETTE.SHD instead of copying
-// the shadow sprite's own indices. The mask is the shadow GAF's opaque pixels;
-// with dither the effect is translucent. For
-// feature shadows `shadTrans` selects the dithered translucent path (checker)
-// vs solid darken. Row 8 is a mid-dark row that is visible but not pure black.
-func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow bool, shadTrans bool) {
+// top-left (dstX,dstY) = anchor - frame offsets, clipped to the viewport
+// [03 §4.4] [fmt gaf]. It copies opaque indexed pixels directly (palette
+// mapping happens at present time, C7). Feature shadows select the ordinary
+// keyed or ALP-tinted primitive before reaching this writer [03 §5.3.1].
+func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int) {
 	if frame == nil || c.indexed == nil {
 		return
 	}
@@ -912,13 +919,6 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 	if copyW <= 0 || copyH <= 0 {
 		return
 	}
-	// Shadow stencil darkens the destination (ground) where the shadow GAF
-	// is opaque, via PALETTE.SHD. The authored translucent flag selects the
-	// dithered versus opaque route
-	// but both are stencil darkens, not sprite copies. Row 0 is near-black,
-	// row 8 is mid-dark; retail's exact row for feature shadows is not fully
-	// established, but the effect is a solid darkening, not a checker dither.
-	// User checked retail and saw no dithering, so we use solid rows.
 	for y := 0; y < copyH; y++ {
 		srcY := srcY0 + y
 		dstYPos := dstY + y
@@ -930,30 +930,6 @@ func (c *Client) blitGAFFrame(frame *formats.GAFFrame, dstX, dstY int, isShadow 
 				continue
 			}
 			if idx < len(frame.Transparent) && frame.Transparent[idx] {
-				continue
-			}
-			if isShadow {
-				// Use the shadow GAF as a mask: darken the underlying terrain pixel.
-				dstIdx := dstOff + x
-				if dstIdx < 0 || dstIdx >= len(c.indexed) {
-					continue
-				}
-				destPix := c.indexed[dstIdx]
-				var darkPix byte
-				if c.pal != nil {
-					// shadTrans selects translucent (lighter) vs opaque (darker) row.
-					// Row 16 is near-identity for brightening, rows 0-14 darken.
-					// Use row 8 for translucent, row 4 for opaque as a plausible
-					// retail split; both are solid, no checker.
-					row := 8
-					if !shadTrans {
-						row = 4
-					}
-					darkPix = c.pal.Shade[row][destPix]
-				} else {
-					darkPix = 0
-				}
-				c.indexed[dstIdx] = darkPix
 				continue
 			}
 			pix := frame.Pixels[idx]

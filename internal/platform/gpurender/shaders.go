@@ -115,39 +115,6 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 }
 `
 
-// shadowShaderSource is the feature GAF shadow stencil (BlitFeatureShadow): where
-// the shadow frame is opaque, the destination pixel is darkened through one
-// PALETTE.SHD row (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). It reproduces
-// internal/client blitGAFFrame's isShadow path: `dst = Shade[Row][dst]`, with Row
-// 8 for the translucent flag and 4 otherwise [03 §4.4]. It reads the destination,
-// so the caller snapshots the covered rect into destScratch first (C-G7).
-//
-// Source image 0 is the shadow frame (opacity flag in green); source image 1 is
-// destScratch (pre-blit offscreen copy); source image 2 is PALETTE.SHD (256×32).
-// SHD[Row][dst] is texel (col = dst, row = Row). A transparent (keyed) frame
-// texel returns a transparent fragment, so the source-over blend keeps the
-// offscreen byte, exactly as blitGAFFrame's key skip does (C-G4).
-const shadowShaderSource = `//kage:unit pixels
-
-package main
-
-var Row float
-
-func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
-	tex := imageSrc0At(srcPos)
-	if tex.g < 0.5 {
-		return vec4(0.0, 0.0, 0.0, 0.0)
-	}
-	d := dstPos.xy - imageDstOrigin()
-	ds := imageSrc1AtFromSrc0Pos(imageSrc0Origin() + vec2(floor(d.x)+0.5, floor(d.y)+0.5))
-	dst := floor(ds.r*255.0 + 0.5)
-	// SHD[Row][dst] from source image 2 (C-G4)[03 §4.4].
-	s := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(dst+0.5, Row+0.5))
-	idx := floor(s.r*255.0 + 0.5)
-	return vec4(idx/255.0, 0.0, 0.0, 1.0)
-}
-`
-
 // destTableShaderSource is the shared destination-through-table pass for the
 // frameless dest-reading families — the UI light rect, the UI shade rect and the
 // lit point batch (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). Each rewrites a
@@ -213,12 +180,6 @@ func newLitBlitShader() (*ebiten.Shader, error) {
 // life.
 func newTintShader() (*ebiten.Shader, error) {
 	return ebiten.NewShader([]byte(tintShaderSource))
-}
-
-// newShadowShader compiles the feature shadow stencil pass once for the
-// renderer's life.
-func newShadowShader() (*ebiten.Shader, error) {
-	return ebiten.NewShader([]byte(shadowShaderSource))
 }
 
 // newDestTableShader compiles the shared destination-through-table pass once for

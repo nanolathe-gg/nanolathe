@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -695,28 +696,44 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		_ = c.drawFeatureModel(*f)
 		return
 	}
-	shadowFrame := c.featureFrameFor(*f, true)
+	var shadowFrame *formats.GAFFrame
+	if c.featureShadows {
+		shadowFrame = c.featureFrameFor(*f, true)
+	}
 	normalFrame := c.featureFrameFor(*f, false)
 	// Record the shadow then the normal frame through the committed-frame draw
 	// list, in the same order the direct blits ran. drawFeature subtracts the
 	// frame's XOffset/YOffset here, so the recorded X/Y are the final top-left
-	// (not the anchored path); the sink routes both to blitGAFFrame [03 §4.4].
+	// (not the anchored path); the sink selects the keyed or ALP-tinted primitive
+	// without changing that geometry [03 R-RAST-01 §6][03 §5.3.1].
 	if shadowFrame != nil {
+		// A live event record's cursor uses the opaque primitive. The authored
+		// shadtrans selector applies to the static definition cursor only
+		// [03 R-RAST-01 §6][03 §5.3.1].
+		// TODO(EC-P5): publish the runtime feature-shadow enable/live state so a
+		// live instance with no current event cursor can be distinguished from
+		// the static definition path; EventSeqName is the only established live
+		// cursor signal currently available here.
+		shadowTrans := f.ShadTrans && f.EventSeqName == ""
 		c.emitSprite(drawlist.Sprite{
 			Frame: shadowFrame,
 			X:     sx - int32(shadowFrame.XOffset),
 			Y:     sy - int32(shadowFrame.YOffset),
 			Kind:  drawlist.BlitFeatureShadow,
-			Trans: f.ShadTrans,
+			Trans: shadowTrans,
 		})
 	}
 	if normalFrame != nil {
+		// A live event cursor is opaque for both its shadow and body. The authored
+		// animtrans selector applies only to the static definition cursor
+		// [03 R-RAST-01 §6].
+		normalTrans := f.AnimTrans && f.EventSeqName == ""
 		c.emitSprite(drawlist.Sprite{
 			Frame: normalFrame,
 			X:     sx - int32(normalFrame.XOffset),
 			Y:     sy - int32(normalFrame.YOffset),
 			Kind:  drawlist.BlitFeatureNormal,
-			Trans: f.AnimTrans,
+			Trans: normalTrans,
 		})
 	}
 }

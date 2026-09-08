@@ -189,26 +189,8 @@ noRetailArrowRepeat:
 		g.activateEscape()
 		return
 	}
-	if !p.EditorCaptured() && (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) {
-		name := ""
-		if idx := p.Focused(); idx >= 0 {
-			if _, ok := g.currentGadget(idx); ok && p.ActiveAt(idx) {
-				if action := p.Activate(idx); action.Kind == ui.ActionActivate {
-					name = action.Gadget
-				}
-			}
-		}
-		if name != "" {
-			// The focused record has already passed its indexed activity
-			// test; a first-name lookup would select a different duplicate
-			// [07 R-WGT-01 §2][07 R-FE-02 §5].
-			g.activateGadget(name)
-			return
-		}
-		if index := p.Window.EnterDefaultIndex(); p.ActiveAt(index) {
-			g.activateGadget(p.Window.Gadgets[index].Name)
-			return
-		}
+	if (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, kbd.KeyDown(input.KeyEnter)) {
+		return
 	}
 	for i, gad := range p.Window.Gadgets {
 		if i == 0 || gad.QuickKey == 0 || !p.ActiveAt(i) {
@@ -222,6 +204,19 @@ noRetailArrowRepeat:
 	if kbd.KeyDown(input.KeyUp) || kbd.KeyDown(input.KeyDown) {
 		g.adjustFocusedList(kbd.KeyDown(input.KeyUp))
 	}
+}
+
+// activateDefaultKey preserves the fired record into focus before running the
+// screen callback [07 R-WGT-01 §1 step 8][07 R-WGT-01 §2]. Selection is indexed:
+// resolving its name again would replace a later duplicate with the first one.
+func (g *gameShell) activateDefaultKey(p *ui.Panel, enter bool) bool {
+	action := p.DefaultKeyAction(enter)
+	if action.Kind != ui.ActionActivate {
+		return false
+	}
+	p.SetFocus(action.Index)
+	g.activateGadget(action.Gadget)
+	return true
 }
 
 // applyRetailEditorTokens gives a captured kind-3 gadget the ordered token

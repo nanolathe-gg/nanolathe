@@ -399,17 +399,6 @@ func (p *Panel) ReleaseAction(x, y int32) Action {
 	return Action{Kind: ActionActivate, Gadget: gadget.Name, Index: idx}
 }
 
-// Activate returns a semantic action for a focused authored gadget. It is used
-// by keyboard activation, and Enter's `crdefault` and Space both refuse a
-// greyed button, so it applies the same fire-time predicate as a press
-// [07 R-WGT-01 §2][07 R-WGT-01 §13].
-func (p *Panel) Activate(index int) Action {
-	if !p.Fires(index) {
-		return Action{Kind: ActionNone, Index: -1}
-	}
-	return Action{Kind: ActionActivate, Gadget: p.Window.Gadgets[index].Name, Index: index}
-}
-
 // BeginScrollDrag captures a scrollbar thumb. The associated list is found
 // from the authored gadget record, keeping drag state out of cmd/frontend.
 func (p *Panel) BeginScrollDrag(index int, vertical bool, coordinate int32, maxTop, travel int) bool {

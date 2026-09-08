@@ -108,15 +108,9 @@ func (g *gameShell) applyRetailBattleMessageLines() {
 // handleBattleOptionsInput is the in-battle options window's own pointer and
 // keyboard pass.
 //
-// It exists rather than reusing the front end's pump because of the capture
-// rule of [07 R-WGT-01 §1]: a press goes to the first gadget in index order
-// whose handler accepts it, and a picture box (kind 12) has no such handler —
-// it blits its frame and nothing else [07 R-WGT-01 §8]. `PREFS.GUI` authors
-// its whole rail plate as one picture box at index 1, in front of every button
-// on the window, and each `…RT.GUI` page authors another over its own column.
-// The shared front-end press test admits every kind but the panel, so on this
-// window it would hand every click to the plate. Every semantic action below
-// is the shared routine the front-end pump calls.
+// This pump retains the options window's own pointer capture and page-slider
+// state. Both pumps share indexed Enter/Space target selection; ordinary battle
+// child windows do not call either consuming matrix path [07 R-WGT-01 §2].
 func (b *battleSession) handleBattleOptionsInput(cl *client.Client) {
 	if !b.battlePrefsActive() || cl == nil || cl.Input() == nil {
 		return
@@ -199,24 +193,8 @@ func (b *battleSession) handleBattleOptionsInput(cl *client.Client) {
 		g.activateEscape()
 		return
 	}
-	if kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace) {
-		name := ""
-		if idx := p.Focused(); idx >= 0 {
-			if gad, ok := battleOptionsGadget(idx); ok && p.ActiveAt(idx) && gad.GrayedOut == 0 && battleOptionsFires(gad) {
-				name = gad.Name
-			}
-		}
-		if name != "" {
-			// The focused record has already passed its indexed activity
-			// test; a first-name lookup would select a different duplicate
-			// [07 R-WGT-01 §2][07 R-FE-02 §5].
-			g.activateGadget(name)
-			return
-		}
-		if index := p.Window.EnterDefaultIndex(); p.ActiveAt(index) {
-			g.activateGadget(p.Window.Gadgets[index].Name)
-			return
-		}
+	if (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, kbd.KeyDown(input.KeyEnter)) {
+		return
 	}
 	for i, gad := range p.Window.Gadgets[1:] {
 		if gad.QuickKey == 0 || !p.ActiveAt(i+1) || gad.GrayedOut != 0 {

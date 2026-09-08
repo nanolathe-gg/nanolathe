@@ -17,10 +17,10 @@ import (
 // texel overwrites the index with no blend arithmetic on red [03 R-RAST-01 §6]
 // [03 §4.4][07 §4].
 //
-// The destination-reading kinds — BlitTinted and BlitFeatureShadow — and the
-// source-through-LHT BlitLit are implemented in deststage.go (WU-2.6): the
-// dest-reading kinds run over a per-command snapshot of the offscreen, exactly as
-// the classic sink's counterparts read c.indexed.
+// ALP-tinted blits, including translucent feature bodies and shadows, and the
+// source-through-LHT BlitLit are implemented in deststage.go (WU-2.6). The
+// destination-reading ALP path runs over a per-command snapshot of the
+// offscreen, exactly as the classic sink's counterpart reads c.indexed.
 
 // buildGAFFrameImage uploads one GAF frame as an index texture: index in red,
 // opacity flag in green (255 opaque, 0 transparent), alpha opaque so premultiplied
@@ -112,8 +112,8 @@ func (r *Renderer) pcxImageFor(p *formats.PCX) *ebiten.Image {
 // Sprite replays one GAF-frame or PCX blit, routing each recorded blit to the GPU
 // pass that matches its classic byte writer (docs/DESIGN_GPU_RENDERER.md §2.3).
 // A non-nil PCX is an opaque background blit regardless of Kind; the keyed kinds
-// (anchored/plain), the scaled kind and the feature-normal kind are copied here;
-// the destination-reading kinds draw nothing and are left to a later unit.
+// (anchored/plain), the scaled kind and opaque feature kinds are copied here;
+// destination-reading variants route to the helpers in deststage.go.
 func (r *Renderer) Sprite(sp drawlist.Sprite) {
 	if r == nil || r.offscreen == nil {
 		return
@@ -149,8 +149,20 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 			int(sp.Dst.X), int(sp.Dst.Y), int(sp.Dst.W), int(sp.Dst.H),
 			clipX, clipY, clipW, clipH)
 	case drawlist.BlitFeatureNormal:
-		// blitGAFFrame's non-shadow path: a full-framebuffer keyed copy at the
-		// already-offset top-left [03 §4.4][fmt gaf].
+		// Static feature bodies select the same ALP-tinted/keyed primitive pair as
+		// their shadow. Live event cursors arrive with Trans clear. The tinted
+		// helper accepts an anchor, while the record carries top-left placement
+		// [03 R-RAST-01 §6][fmt gaf].
+		if sp.Trans {
+			if sp.Frame == nil {
+				return
+			}
+			r.drawTint(sp.Frame,
+				int(sp.X)+int(sp.Frame.XOffset),
+				int(sp.Y)+int(sp.Frame.YOffset),
+				0, 0, r.w, r.h)
+			return
+		}
 		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.w, r.h)
 	case drawlist.BlitLit:
 		// uiBlitLitRaw: every opaque source texel written as LightLookup(row, src),
@@ -164,10 +176,21 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
 		r.drawTint(sp.Frame, int(sp.X), int(sp.Y), clipX, clipY, clipW, clipH)
 	case drawlist.BlitFeatureShadow:
-		// blitGAFFrame isShadow: darken the destination through PALETTE.SHD where the
-		// shadow frame is opaque; destination-reading. Trans selects the SHD row
-		// [03 §4.4].
-		r.drawShadow(sp.Frame, int(sp.X), int(sp.Y), sp.Trans)
+		// Feature shadows select the ordinary keyed or ALP-tinted frame primitive.
+		// The record carries top-left placement while drawTint accepts the frame
+		// anchor, so add the authored offsets before that helper subtracts them
+		// [03 §5.3.1][R-REN-03D §4].
+		if sp.Trans {
+			if sp.Frame == nil {
+				return
+			}
+			r.drawTint(sp.Frame,
+				int(sp.X)+int(sp.Frame.XOffset),
+				int(sp.Y)+int(sp.Frame.YOffset),
+				0, 0, r.w, r.h)
+			return
+		}
+		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.w, r.h)
 	}
 }
 

@@ -205,6 +205,52 @@ without trimming or filtering inactive records `[07 R-FE-01 §12]`.
 I16 remains open for screen callback comparisons and options slider identity;
 I04 owns the complete key matrix and default-versus-focus admission order.
 
+**I04 bounded Enter/Space selection contract.**
+`Panel.DefaultKeyAction(enter bool) Action` in `internal/ui` replaces the
+old pointer-predicate `Panel.Activate` keyboard surrogate: `enter=true`
+selects the usable Enter default first and otherwise applies the focused
+Space-kind rule; `enter=false` applies only that focused rule. The result keeps
+the selected record index and exact authored name. Missing/inactive records
+and a greyed button produce no target; default admission does not borrow the
+pointer-kind or surface-hotness predicate [07 R-WGT-01 §2]. A captured text
+editor retains these tokens through the existing editor path. Selection does
+not mutate button stages or radio state; those state machines remain I06.
+
+The frontend and active in-battle options handlers both consume this selector
+through `activateDefaultKey`, which installs the selected index as focus
+(including text-editor setup) before the name callback [07 R-WGT-01 §1 step 8].
+It performs no second first-name lookup. Ordinary
+battle children keep their current zero-token path. Preserve Escape, ordered
+editor service and existing callback ownership. This bounded correction does
+not implement traversal, navigation lifetimes, token-history ordering or the
+remaining per-kind directional matrix; those stay explicitly open under I04.
+Production tests must distinguish focus from default, Enter from Space,
+unusable defaults, grey-bit polarity, indexed duplicates and excluded focused
+kinds in both callers. A helper tested without the two live callers is not
+accepted.
+
+**I04 focus traversal API and lifecycle contract.**
+`internal/ui` owns `FocusDirection` (`FocusForward`, `FocusBackward`,
+`FocusUp`, `FocusDown`) and `Panel.MoveFocus(direction FocusDirection) bool`.
+The method applies [07 R-WGT-01 §2] focus order to indexed runtime activity,
+releases capture and installs the selected record with text-editor setup.
+Its boolean reports an attempted supported traversal, including an unchanged
+winner; nil windows, absent focus, invalid direction and the unresolved
+more-than-49-control case return false without mutation. The latter retains
+an explicit `TODO(question)` and the existing research Unknown; this is a
+bounded host fallback, not a claim about retail temporary memory.
+
+`NewPanel` invokes forward traversal from header index 0 when authored
+`defaultfocus` is empty, after initializing runtime gadget state. A nonempty
+field retains the compiler's exact lookup, including its missing-name result.
+`SetActiveAt` invokes forward traversal when disabling the focused record.
+These production lifecycle consumers are the acceptance scope of this unit;
+keyboard token dispatch and navigation-enable lifetimes remain separate I04
+work. Tests must exercise actual opening/disabling as well as strict donor,
+wrap, tie, admission, capture and text-setup contracts. Existing authored
+fixtures that relied on unspecified default focus should state their intended
+focus explicitly rather than weakening production opening behavior.
+
 **The front end** (`frontend.go`). `Mode` is the screen: `ModeMain`,
 `ModeSingle`, `ModeMission`, `ModeMap`, `ModeSkirmish`, `ModeLoading`,
 `ModeBattle`. `Frontend` owns the mode and the panel stack; `Open` decides

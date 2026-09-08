@@ -16,7 +16,7 @@ type Rect struct {
 }
 
 // BlitKind selects which GAF blitter family a Sprite replays as
-// (docs/DESIGN_GPU_RENDERER.md §2.1). The four kinds are the keyed, the
+// (docs/DESIGN_GPU_RENDERER.md §2.1). The kinds include the keyed, the
 // ALP-tinted, the LHT-lit and the scaled blitters [03 R-COMP-01 §2]
 // [03 R-FX-02 §3].
 type BlitKind uint8
@@ -34,16 +34,15 @@ const (
 	// BlitScaled samples Sprite.Src into Sprite.Dst, the scaled GAF blit.
 	BlitScaled
 	// BlitFeatureNormal is the 2D feature GAF sprite copy (trees, rocks and
-	// sprite-form wrecks): a keyed copy of the frame's opaque pixels at the
-	// already-offset destination top-left, routed to the feature blitter rather
-	// than the plain keyed writer because the feature path is its own raw writer
-	// [03 §4.4][fmt gaf]. Sprite.Trans carries the authored translucent flag.
+	// sprite-form wrecks): Sprite.Trans selects the ALP-tinted primitive for a
+	// static feature whose definition sets animtrans; otherwise the non-key source
+	// indices copy opaquely at the already-offset top-left. Live event cursors
+	// always take the opaque route [03 R-RAST-01 §6][fmt gaf].
 	BlitFeatureNormal
-	// BlitFeatureShadow is the feature GAF sprite's shadow pass: instead of
-	// copying source pixels, each opaque source pixel darkens the destination
-	// (ground) through PALETTE.SHD — a destination-reading stencil darken. It is
-	// emitted before BlitFeatureNormal for the same feature, in the order the
-	// direct draw ran [03 §4.4]. Sprite.Trans selects the shadow's darken row.
+	// BlitFeatureShadow is the feature GAF sprite's shadow pass. Sprite.Trans
+	// selects ALP[source*256+destination]; when clear, every non-key source byte
+	// is copied opaquely. It is emitted before BlitFeatureNormal for the same
+	// feature [03 §5.3.1][R-REN-03D §4].
 	BlitFeatureShadow
 )
 
@@ -87,8 +86,9 @@ type Sprite struct {
 	// Trans is the authored translucent flag for the feature GAF blitter, used
 	// when Kind is BlitFeatureNormal or BlitFeatureShadow (WU-1.7c). It is the
 	// per-feature ShadTrans (shadow pass) or AnimTrans (normal pass) value the
-	// direct blitGAFFrame call carried, selecting the translucent versus opaque
-	// route for the shadow darken; it is ignored for the other kinds [03 §4.4].
+	// direct blit call carried. For either static feature frame it selects the
+	// ALP-tinted rather than opaque keyed primitive [03 R-RAST-01 §6]
+	// [03 §5.3.1][R-REN-03D §4].
 	Trans bool
 	// Pal is the palette a BlitLit sprite resolves its LHT row against; nil for
 	// every other kind (WU-1.8). Carrying it on the record makes the lit glyph

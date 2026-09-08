@@ -6287,15 +6287,26 @@ flight gates; nothing in the three branches tests a flight capability at all.
 
 #### 5.3.1 Feature shadow selection and blit order
 
-Shadows are a global option packing (master shadow plus feature/vehicle
-shadows) and a per-definition `shadtrans` flag. When enabled, each feature may
-emit up to two blits — a shadow frame followed by a normal frame — at the same
-anchor. Static features select `seqnameshad`; animated features use the
-runtime shadow cursor copy pre-wired at load; burning instances use the slot's
-shadow cursor. The shadow path respects the same clipping as the normal path;
-`shadtrans=1` selects the translucent darkening blitter. On Great Divide
-trees, rocks, and the vent all carry `shadtrans=1`, so their shadows are
-translucent. The two raster families are separate primitives.
+**Established.** The feature-shadow preference directly gates sprite shadows;
+unit master shadows and `Shading` do not add gates. Each admitted sprite feature
+may emit its shadow before its body at the same anchor, with the standard
+clipping of [R-RAST-01 §6]. The dispatcher distinguishes two sources:
+
+- Without a live event record, the definition selects the shadow and body
+  sequences. Static definitions use frame zero; animated definitions use their
+  pre-wired rest cursors. `shadtrans` chooses the shadow's tinted or opaque
+  blitter, and `animtrans` independently chooses the body's blitter.
+- With a live sprite event record, its own shadow-enabled state and the
+  feature-shadow preference admit the shadow cursor. Both that shadow cursor
+  and the following body cursor use the opaque blitter, irrespective of the
+  definition's translucent flags.
+
+The tinted blitter uses the startup alpha-blend capability and the `ALP`
+lookup of [R-REN-03D §4]; it does not select a shadow-specific `SHD` row.
+Great Divide's resting trees, rocks and vent all carry `shadtrans=1`, so
+those static/rest-cursor shadows take the tinted route. The previous blanket
+statement that the definition flag also chooses the live-event blitter was
+incorrect; [R-RAST-01 §6] owns that branch distinction.
 
 ### 5.4 Projectiles and laser beams
 

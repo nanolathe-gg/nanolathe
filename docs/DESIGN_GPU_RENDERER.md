@@ -592,12 +592,26 @@ The body commits afterward. Clones own both packets independently.
 
 This milestone targets the existing classic image. It inherits classic's
 explicit use of the structure rerasterization technique for mobile and Digger
-shadows; implementing the retail silhouette branches is separate work. Classic's
-shadow Shading gate also disagrees with [03 R-REN-03D §1, §4]; reuse the existing
-producer gate for comparison and retain that research conflict explicitly.
+shadows; implementing the retail silhouette branches is separate work. The
+producer now applies the corrected master/vehicle/Digger gates, independently
+of the structure-body `Shading` preference [03 R-REN-03D §1, §4].
 Actual GPU shadows and omitted shadows are reported separately. The device
 fixture verifies the blend, body punch and overlapping-face behavior; paired
 battle captures verify placement against the classic output.
+
+### Feature sprite raster selection
+
+Feature commands retain their already-offset destination and shadow-before-body
+order. `FeatureShadows` is a separate client preference populated by display
+settings. `Sprite.Trans` carries the selected raster route: definition flags
+apply to static/rest-cursor sprites, while a published live event selects opaque
+for both commands [03 R-RAST-01 §6][03 §5.3.1]. Both executors use the existing
+keyed/tinted primitives for these selections, including the startup palette
+capability; there is no separate feature-shadow shader or shade-row policy.
+The current publisher proves a running event with `EventSeqName`; it does not
+carry independent live-record and runtime-shadow-enable state when that cursor
+is absent. `TODO(EC-P5)` at the draw site tracks that publication boundary; this
+raster correction does not complete the feature arena/cursor lifecycle.
 
 ### Reveal, outline and submerged geometry
 

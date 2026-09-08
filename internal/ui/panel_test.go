@@ -74,7 +74,8 @@ func TestPanelGreyedGadgetIsHoveredButNeverFires(t *testing.T) {
 	if _, ok := p.Release(62, 21); ok {
 		t.Fatal("release on a greyed gadget fired")
 	}
-	if act := p.Activate(idx); act.Kind != ActionNone {
+	p.SetFocus(idx)
+	if act := p.DefaultKeyAction(false); act.Kind != ActionNone {
 		t.Fatalf("keyboard activation of a greyed gadget produced %+v", act)
 	}
 }

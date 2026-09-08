@@ -43,14 +43,13 @@ type Renderer struct {
 	fogPatMask  *ebiten.Shader
 	// The remaining dest-reading and text families (WU-2.6). litBlit folds a
 	// keyed source through one LHT row (BlitLit, source-through, no snapshot).
-	// tint, shadow and destTable read the destination through ALP / SHD / LHT and
-	// so run over a pre-command snapshot of the offscreen (destScratch): tint is
-	// the translucent strip blit, shadow the feature shadow stencil, and destTable
-	// the shared light/shade rect and lit point pass. glyph is the keyed FNT text
+	// tint and destTable read the destination through ALP / SHD / LHT and so run
+	// over a pre-command snapshot of the offscreen (destScratch): tint is the
+	// translucent strip and static-feature-shadow blit, and destTable is the
+	// shared light/shade rect and lit point pass. glyph is the keyed FNT text
 	// blit (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4).
 	litBlit               *ebiten.Shader
 	tint                  *ebiten.Shader
-	shadow                *ebiten.Shader
 	destTable             *ebiten.Shader
 	glyph                 *ebiten.Shader
 	modelKey              *ebiten.Shader
@@ -159,7 +158,6 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	fogPatMask, fogPatMaskErr := newFogPatternMaskShader()
 	litBlit, litBlitErr := newLitBlitShader()
 	tint, tintErr := newTintShader()
-	shadow, shadowErr := newShadowShader()
 	destTable, destTableErr := newDestTableShader()
 	glyph, glyphErr := newGlyphShader()
 	modelKey, modelKeyErr := newModelKeyShader()
@@ -183,7 +181,6 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		fogPatMask:        fogPatMask,
 		litBlit:           litBlit,
 		tint:              tint,
-		shadow:            shadow,
 		destTable:         destTable,
 		glyph:             glyph,
 		modelKey:          modelKey,
@@ -234,9 +231,6 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	}
 	if err == nil {
 		err = tintErr
-	}
-	if err == nil {
-		err = shadowErr
 	}
 	if err == nil {
 		err = destTableErr

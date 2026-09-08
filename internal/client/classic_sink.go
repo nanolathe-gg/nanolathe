@@ -256,18 +256,37 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 			int(sp.Dst.X), int(sp.Dst.Y), int(sp.Dst.W), int(sp.Dst.H),
 			clipX, clipY, clipW, clipH)
 	case drawlist.BlitFeatureNormal:
-		// The 2D feature GAF sprite copy (trees, rocks, sprite-form wrecks). The
-		// destination is already the final top-left — drawFeature subtracted the
-		// frame's XOffset/YOffset before recording — so no offset is applied here;
-		// blitGAFFrame is the raw byte writer and drawFeature's site emits, so this
-		// is its only execution [03 §4.4][fmt gaf].
-		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y), false, sp.Trans)
+		// Static feature bodies select ALP[source*256+destination] when animtrans is
+		// set and the opaque keyed primitive otherwise. Live event cursors are
+		// always recorded with Trans clear [03 R-RAST-01 §6]. X/Y is already the
+		// final top-left, while the tinted helper accepts an anchor.
+		if sp.Trans {
+			if sp.Frame == nil {
+				return
+			}
+			c.tintedBlitAnchor(sp.Frame,
+				int(sp.X)+int(sp.Frame.XOffset),
+				int(sp.Y)+int(sp.Frame.YOffset))
+			return
+		}
+		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y))
 	case drawlist.BlitFeatureShadow:
-		// The feature GAF shadow pass: blitGAFFrame with isShadow=true darkens the
-		// destination through PALETTE.SHD where the shadow frame is opaque, a
-		// destination-reading stencil. Trans carries the authored translucent flag
-		// (ShadTrans) exactly as the direct call did [03 §4.4].
-		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y), true, sp.Trans)
+		// Feature shadows are two ordinary frame primitives. Static shadtrans=1
+		// uses ALP[source*256+destination]; shadtrans=0 and live event cursors copy
+		// every non-key source index opaquely [03 R-RAST-01 §6][03 §5.3.1]
+		// [R-REN-03D §4]. The record carries an already-offset top-left, while the
+		// tinted helper accepts an anchor, so add the authored offsets before it
+		// subtracts them again.
+		if sp.Trans {
+			if sp.Frame == nil {
+				return
+			}
+			c.tintedBlitAnchor(sp.Frame,
+				int(sp.X)+int(sp.Frame.XOffset),
+				int(sp.Y)+int(sp.Frame.YOffset))
+			return
+		}
+		c.blitGAFFrame(sp.Frame, int(sp.X), int(sp.Y))
 	}
 }
 

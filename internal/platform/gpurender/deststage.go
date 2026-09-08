@@ -7,8 +7,8 @@ import (
 )
 
 // The destination-reading families for the modern executor beyond fog: the
-// translucent strip blit (BlitTinted), the feature shadow stencil
-// (BlitFeatureShadow), the UI light/shade rects (FillLitRect/FillShadeRect) and
+// translucent strip blit (BlitTinted), translucent feature bodies and shadows,
+// the UI light/shade rects (FillLitRect/FillShadeRect) and
 // the lit point batch (PointLit), plus the source-through-LHT strip blit
 // (BlitLit), which reads no destination (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4,
 // C-G7).
@@ -127,51 +127,6 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.tint, &ebiten.DrawTrianglesShaderOptions{
 		Blend:  ebiten.BlendSourceOver,
 		Images: [4]*ebiten.Image{img, r.destScratch, r.tables.alpha, nil},
-	})
-}
-
-// drawShadow reproduces blitGAFFrame's isShadow path: where the shadow frame is
-// opaque, the destination pixel is darkened through PALETTE.SHD row 8 (translucent
-// flag) or 4 (opaque flag) — a destination read (docs/DESIGN_GPU_RENDERER.md
-// §2.3)[03 §4.4]. The caller has already applied the frame's anchor offset (the
-// feature GAF site records the final top-left), so no offset is subtracted here;
-// the clip is the framebuffer. The covered rect is snapshotted first.
-//
-// blitGAFFrame's palette-absent branch writes index 0 for every opaque shadow
-// pixel; that branch is unreachable in a composed frame (a feature shadow is only
-// recorded when the game — and its palette — is loaded), so with the SHD table
-// present this reproduces the only reachable path. The table guard keeps a
-// palette-less renderer from drawing rather than guessing index 0.
-func (r *Renderer) drawShadow(f *formats.GAFFrame, x, y int, trans bool) {
-	if f == nil || r.shadow == nil || r.tables.shade == nil || r.destScratch == nil {
-		return
-	}
-	img := r.gafImageFor(f)
-	if img == nil {
-		return
-	}
-	fw, fh := int(f.Width), int(f.Height)
-	col0, col1 := maxInt(0, -x), minInt(fw, r.w-x)
-	row0, row1 := maxInt(0, -y), minInt(fh, r.h-y)
-	if col0 >= col1 || row0 >= row1 {
-		return
-	}
-	dx0, dy0, dx1, dy1 := x+col0, y+row0, x+col1, y+row1
-	r.snapshotRect(dx0, dy0, dx1, dy1)
-	// Row 8 for the translucent flag, 4 otherwise, matching blitGAFFrame [03 §4.4].
-	shadowRow := 4
-	if trans {
-		shadowRow = 8
-	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(
-		float32(dx0), float32(dy0), float32(dx1), float32(dy1),
-		float32(col0), float32(row0), float32(col1), float32(row1))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.shadow, &ebiten.DrawTrianglesShaderOptions{
-		Blend:    ebiten.BlendSourceOver,
-		Uniforms: map[string]any{"Row": float32(shadowRow)},
-		Images:   [4]*ebiten.Image{img, r.destScratch, r.tables.shade, nil},
 	})
 }
 
