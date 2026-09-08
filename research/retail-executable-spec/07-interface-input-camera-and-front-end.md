@@ -2749,9 +2749,14 @@ cleared, then host mode 2 — so the next frame opens `MAINMENU`; for kind
 `RESTART.GUI` (flags `0x1000`, background `drestart`) wraps the map name
 into `MISSIONNAME`/`MISSIONNAME1` and focuses `Difficulty`; `RESTART` does
 the disc check for the mission type, the mount pass, stores the
-`Difficulty` stage and raises the restart request word (its consumer, the
-restart itself, is described from the campaign side in [08 R-CAMP-01 §8];
-the reader in the battle pump is **Unknown** · static trace).
+`Difficulty` stage and raises the restart request. The battle host pump
+consumes it through teardown and normal campaign/skirmish re-entry
+[08 R-CAMP-01 §8 "In-battle restart request and re-entry"]. **Established
+(direct static caller trace).** The exit menu closes before this dialog opens.
+Cancel closes only the restart dialog: it does not reconstruct the exit menu,
+and the surviving root options window continues to own pause/audio pause.
+The same close-before-open rule applies to `YESORNO`; its No action, including
+Enter/Escape, returns to the surviving options window [R-WGT-01 §1].
 
 ### Save and load [R-FE-01 §8]
 
@@ -3325,10 +3330,6 @@ validation, and endgame continuation.
 
 ### Unknown
 
-- The consumer of the restart request word raised by `RESTART.GUI`'s
-  `RESTART` button (the restart control is described from the campaign side
-  in [08 R-CAMP-01 §8]; the word's reader in the battle pump is not cited) ·
-  §5 [R-FE-01 §7], doc 08 · static trace.
 - The `DitheredFog` bit's presenter and the `Gamma` factor's exact palette
   application beyond the `0.5 + g/24` factor · §5 [R-FE-01 §11], doc 03 ·
   static trace.
@@ -4273,7 +4274,8 @@ with screen height.
 2. The primary UI font (`fonts/COMIX`, [03 R-FONT-01 §5]) is selected; let `h`
    be that font's glyph height.
 3. The first line is drawn at `y = 52`; each drawn line advances `y` by `h`.
-4. The foreground is `dcb[15]`.
+4. The ordinary foreground is `dcb[15]`; the F3 destination uses `dcb[10]`
+   by the flag rule below.
 5. A line whose speaker slot is not the sentinel first stamps that player's
    owner logo — the same primitive that draws `LOGO2` ([R-HUD-03 §2]), keyed by
    the owner's lobby colour index — stretched into the square
@@ -4285,13 +4287,14 @@ with screen height.
    width and no outline colour, so a long line is bounded only by the
    destination surface.
 
-**Supported inference — the second colour is unreachable.** The drawer has a
-second branch that uses `dcb[10]` when bit 5 of the entry's class byte is set,
-but no writer anywhere in the image sets that bit: the only writer of the class
-byte masks its input to the low four bits and preserves the rest. With a
-zero-initialised ring every line is `dcb[15]`. *Decider:* confirm the ring's
-backing memory is zeroed at session start; until then treat `dcb[15]` as the
-only colour and do not implement the alternate.
+**Established — the second colour marks the F3 destination.** The drawer
+uses `dcb[10]` when bit 5 of the entry's class byte is set and `dcb[15]`
+otherwise. F3 clears bit 5 across the ring, then sets it on the live-source
+message it chooses; its separate bit-4 visited marker controls cycling. The
+append operation's low-nibble write preserves both upper bits. The complete
+writer/reader chain is [R-CAM-01 §14], which supersedes the earlier negative
+writer census. Ring initialization is not a prerequisite for this branch's
+reachability.
 
 **Established — the class filter, and the `screenchat` polarity.** The drawer
 selects on a presenter-mode word. Process init sets that word to 3 and nothing
@@ -4751,10 +4754,6 @@ apply the same letterbox inside that canvas [07 §6][07 §10].
 - Whether any stock or third-party content authors a `<unit>0.GUI` page (the
   authored-page bit of [R-HUD-03 §6] is never set by stock content) · §6
   [R-HUD-03 §6] · asset census.
-- Whether the message ring's backing memory is zero-initialised at session
-  start, which decides whether the drawer's second text colour (`dcb[10]`, on
-  class-byte bit 5) is reachable at all · §6 [R-HUD-03 §14.4] · static trace
-  of the session-init clear.
 - Whether a mission script can post to the message ring, or whether campaign
   objective text has its own path; none of the ring's producers in
   [R-HUD-03 §14.4]'s class census is a mission-event producer · §6, doc 08 ·
@@ -7266,11 +7265,16 @@ does not set this local pause bit.
 Activating `EXIT` pushes `guis/exitmenu.gui` over the options window. Its
 authored controls are `MAINMENU` (`Exit to Menu`), `EXITGAME` (`Exit Game`),
 `RESTART`, and `CANCEL`. `MAINMENU` opens `guis/yesorno.gui` with the title
-`Surrender this battle and return to main menu?`; `EXITGAME` opens it with
-`Exit the Battle` in the ordinary local skirmish path. `CHOICE1` (`Yes`)
-commits the requested transition and `CHOICE2` (`No`) returns to the exit
-window. These windows are a SAVE UNDER modal chain: the options window remains
-beneath the exit window, which remains beneath the confirmation window.
+`Surrender this battle and return to main menu?`; `EXITGAME` uses
+`Surrender this battle and exit to Windows?` unless launched from a lobby,
+where it uses `Exit the Battle` [R-FE-01 §7]. Before either confirmation opens,
+the exit callback closes `EXITMENU`. `CHOICE1` (`Yes`) commits the requested
+transition; `CHOICE2` (`No`), including Enter or Escape, closes the confirmation
+and exposes the still-open options window. The root options window remains
+beneath either child, but the exit window does not remain beneath confirmation
+or Restart. Closing a child therefore preserves root-owned pause/audio pause;
+closing the root resumes the battle. **Established (direct static caller
+trace)** [R-FE-01 §7][R-WGT-01 §1].
 
 The modal layout and raster contract is also established. `ARMOPT.GUI` is
 created with flags `0x800` and retains its authored `(0,128,128,352)` root.
@@ -7462,8 +7466,7 @@ and the decider that would close it.
   elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.
 - The per-window census of authored gadget association ids · §4, §9, doc 02 §6
   · asset census.
-- The restart request word's consumer in the battle pump; the `DitheredFog`
-  presenter · §5 [R-FE-01 §7, §11], doc 08, doc 03 · static trace.
+- The `DitheredFog` presenter · §5 [R-FE-01 §11], doc 03 · static trace.
 - Process-level outcome of malformed HATTFONT or malformed GAF payloads whose
   decoders return null · §5 "Frontend asset failure boundaries" · static
   trace.
@@ -7484,6 +7487,11 @@ and the decider that would close it.
 - Whether a mission script can post to the message ring, or whether campaign
   objective text has its own path · §6 [R-HUD-03 §14.4], doc 08 · static
   trace of the mission-event text producers.
+
+- Whether the in-battle F1 unit-picture consumer installs an embedded PCX
+  palette or only copies indexed pixels into the active palette surface ·
+  §6 [R-HUD-03 §8], [fmt pcx] · trace its palette installation calls; the
+  frontend background contract does not settle this separate consumer.
 
 ### Picking, selection, and orders
 

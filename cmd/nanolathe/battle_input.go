@@ -588,13 +588,13 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool, cl *client.Client) {
 	// The gate is `switchAlt == alt` [07 R-CAM-01 §4]: by default digits pick
 	// build pages and Alt+digit recalls groups; with the persistent `SwitchAlt`
-	// option set the two swap. The option is absent from this build's settings
-	// block, and its documented default when the registry value is absent is
-	// zero, which is the value passed here. Wiring the persisted option is the
-	// settings owner's; the gate itself is now the traced one, not the
-	// "battle-mode flag" the earlier text named [07 R-CAM-01 §4].
-	const switchAltDefault byte = 0
-	if hud.RoutesToPage(switchAltDefault, altHeld) {
+	// option set the two swap. The cached bit is installed at battle entry, so
+	// this hotkey path has no settings I/O [07 R-CAM-01 §4].
+	mode := byte(0)
+	if b.switchAlt {
+		mode = 1
+	}
+	if hud.RoutesToPage(mode, altHeld) {
 		b.switchBuildPage(digit)
 		return
 	}

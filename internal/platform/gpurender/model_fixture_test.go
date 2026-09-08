@@ -163,6 +163,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if g.err == nil {
 		g.err = checkConstantShadeRows()
 	}
+	if g.err == nil {
+		g.err = checkCachedModelFrames()
+	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
 

@@ -1,5 +1,7 @@
 package audio
 
+import "testing"
+
 type outputPlay struct {
 	sample *Sample
 	volume float64
@@ -13,6 +15,36 @@ type outputSpy struct {
 func (s *outputSpy) PlaySample(sample *Sample, volume, pan float64) error {
 	s.plays = append(s.plays, outputPlay{sample: sample, volume: volume, pan: pan})
 	return nil
+}
+
+type configuredOutputSpy struct {
+	outputSpy
+	configs []OutputConfig
+}
+
+func (s *configuredOutputSpy) ConfigureOutput(config OutputConfig) {
+	s.configs = append(s.configs, config)
+}
+
+func TestConfigureOutputRetainsStateUntilOutputInstallation(t *testing.T) {
+	previous := GlobalOutput()
+	defer func() {
+		ConfigureOutput(OutputConfig{MasterEnabled: true, EffectsVolume: 1, SoundMode: SoundModeMono})
+		SetGlobalOutput(previous)
+	}()
+	SetGlobalOutput(nil)
+	want := OutputConfig{MasterEnabled: true, EffectsVolume: 0.5, SoundMode: SoundMode3D}
+	ConfigureOutput(want)
+	spy := &configuredOutputSpy{}
+	SetGlobalOutput(spy)
+	if len(spy.configs) != 1 || spy.configs[0] != want {
+		t.Fatalf("delayed output config = %#v, want %#v", spy.configs, want)
+	}
+	updated := OutputConfig{MasterEnabled: false, EffectsVolume: 0, SoundMode: SoundModeMono}
+	ConfigureOutput(updated)
+	if len(spy.configs) != 2 || spy.configs[1] != updated {
+		t.Fatalf("live output config = %#v, want %#v", spy.configs, updated)
+	}
 }
 
 type streamOutputSpy struct {

@@ -28,6 +28,21 @@ func applyDamageBarsSetting(s settings.Settings) {
 	client.SetDamageBars(s.DamageBarsEnabled())
 }
 
+// applySwitchAltSetting captures the digit-key mux at battle install. The
+// frontend shell owns its already-loaded preference copy; direct battles use
+// the settings block read by installBattleClient. No input path reads disk
+// [07 R-CAM-01 §4].
+func (b *battleSession) applySwitchAltSetting(s settings.Settings) {
+	if b == nil {
+		return
+	}
+	if b.shell != nil {
+		b.switchAlt = b.shell.switchAlt
+		return
+	}
+	b.switchAlt = s.SwitchAltEnabled()
+}
+
 // applyMessageLineSettings installs the loaded block's message-column ring
 // configuration onto the battle client. `textlines` is the ring's line
 // budget and `textscroll` its line-age limit; both are read once at settings

@@ -7391,8 +7391,9 @@ and its missing prefix (read from the two string constants).
 
 ### The score helper and every statistic's source [R-CAMP-01 §7]
 
-**When.** The score helper runs once, from the battle teardown at the end
-transition (§6), before the results handler is installed. It writes:
+**When.** The score helper runs from battle teardown. The ordinary end
+transition (§6) calls it before installing the results handler; restart and
+return-to-menu teardown also call it [R-CAMP-01 §8][07 R-FE-01 §7]. It writes:
 
 1. the *won* word = latch bit `0x10` (0 or 1);
 2. for kind 1: the *end-mission index* = the record's current mission index,
@@ -7591,8 +7592,51 @@ end-mission index. A save taken from the results screen therefore names the
 **next** mission whenever one exists — regardless of whether the mission was
 won — and the current mission only when it was the last. A save taken from
 inside a battle names the current mission and omits `BetweenMissions`. The
-restart control [07 §11] re-opens the campaign by name and Set(endIndex)
-without touching the marks.
+restart control re-opens the campaign by name and selects the saved current
+mission index; its preceding teardown does update the current progress mark,
+as described below.
+
+#### In-battle restart request and re-entry [R-CAMP-01 §8]
+
+**Established (direct static caller trace):** the battle host pump tests the
+restart request after its ordinary battle-end transition test. The request is
+raised only after the `RESTART` dialog has passed its mission-kind disc gate,
+re-mounted the archives and stored the selected difficulty [07 R-FE-01 §7].
+It is consumed outside the authoritative sub-tick loop.
+
+For a campaign, the consumer performs the normal battle teardown, closes
+windows down through the battle HUD, and clears the presentation buffers.
+It then retains the current mission index, re-opens the campaign by its
+existing name, and calls Set with that index [R-CAMP-01 §1]. Re-opening loads
+the first mission before Set reloads the selected one; those are two calls,
+not a save-state restoration. When Set succeeds, it raises the mission-loaded
+and battle-start flags. Even when Set fails, it selects the front-end host
+pump, but without raising those flags. Existing mission-load diagnostics
+remain the failure path.
+
+The teardown invokes the score/progress collector of §7. Thus an ordinary
+restart with no victory bit set writes `L` for the current campaign mission;
+if the victory bit is already set, it writes `W`. Other progress marks are
+retained. The campaign re-open and Set operations do not reset the mark array.
+Treating restart as preserving every mark would omit this teardown side effect.
+
+For skirmish, the consumer saves the current player-count word, performs the
+same teardown and window/buffer cleanup, switches to the busy cursor, restores
+that count, loads the map named by the retained skirmish setup, and re-applies
+the setup's row-to-player conversion [R-SKIR-01 §2]. It raises battle-start
+without testing the map loader's return value at this call site. Both branches
+select the normal front-end host pump and request the music controller's
+silence category [03 R-AUD-01 §4].
+With battle-start set, that pump routes campaign through campaign preparation
+and skirmish directly into the normal loading path [R-ENTRY-01 §1]. The battle
+initializers clear the restart request; the consumer does not replay a saved
+simulation or promise the previous RNG state.
+
+**Established:** cancellation of the restart dialog leaves the request clear.
+The generic fired-gadget service closes the dialog when its callback leaves
+the fired result set [07 R-WGT-01 §1]; the already closed exit menu is not
+recreated. The surviving options window continues to own the single-player
+pause and audio pause until that root window closes [07 R-FE-01 §7].
 
 **Confidence.** Established.
 

@@ -308,17 +308,18 @@ func (s *BattleState) Modal() BattleModal {
 }
 
 // HasOptionsLayer reports whether ARMOPT remains visible beneath the active
-// child modal. EXITMENU and YESORNO are SAVE UNDER children [07 §11].
+// child modal. The root survives exit/confirmation replacement [07 R-FE-01 §7].
 func (s *BattleState) HasOptionsLayer() bool {
 	return s != nil && s.modal != BattleModalClosed
 }
 
-// HasExitLayer reports whether EXITMENU remains visible beneath YESORNO.
+// HasExitLayer reports whether EXITMENU itself is open. Its callback closes
+// it before opening YESORNO [07 R-FE-01 §7].
 func (s *BattleState) HasExitLayer() bool {
 	if s == nil {
 		return false
 	}
-	return s.modal == BattleModalExit || s.modal == BattleModalConfirmMain || s.modal == BattleModalConfirmExit
+	return s.modal == BattleModalExit
 }
 
 // ConfirmTitle selects the authored confirmation title variant.
@@ -330,7 +331,7 @@ func (s *BattleState) ConfirmTitle() string {
 	case BattleModalConfirmMain:
 		return "Surrender this battle and return to main menu?"
 	case BattleModalConfirmExit:
-		return "Exit the Battle"
+		return "Surrender this battle and exit to Windows?"
 	default:
 		return ""
 	}
@@ -368,7 +369,7 @@ func (s *BattleState) Back() BattleScheduleIntent {
 	case BattleModalOptions:
 		return s.CloseOptions()
 	case BattleModalConfirmMain, BattleModalConfirmExit:
-		s.modal = BattleModalExit
+		s.modal = BattleModalOptions
 	case BattleModalExit:
 		s.modal = BattleModalOptions
 	}
@@ -383,7 +384,8 @@ func (s *BattleState) ShowExit() {
 	}
 }
 
-// ShowConfirmation pushes YESORNO over EXITMENU with the requested outcome.
+// ShowConfirmation replaces EXITMENU with YESORNO above the surviving options
+// root [07 R-FE-01 §7].
 func (s *BattleState) ShowConfirmation(mainMenu bool) {
 	if s == nil || s.modal != BattleModalExit {
 		return
@@ -432,7 +434,7 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 	case BattleModalConfirmMain, BattleModalConfirmExit:
 		switch Key(name) {
 		case "choice2", "cancel":
-			s.modal = BattleModalExit
+			s.modal = BattleModalOptions
 		case "choice1":
 			if s.modal == BattleModalConfirmMain {
 				return BattleModalActionMainMenu

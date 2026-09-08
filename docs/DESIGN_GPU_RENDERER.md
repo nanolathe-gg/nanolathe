@@ -11,7 +11,7 @@ For this experimental milestone the only public choices remain
 `--renderer=classic|modern`, default classic. All new rendering is behind
 `--renderer=modern`; no Enhanced flag or runtime options entry is added yet.
 The simulation cannot tell which executor is selected. The current GPU-only
-execution contract is §9; it supersedes the historical P1–P3 CPU model bridge
+execution contract is §9–§11; it supersedes the historical P1–P3 CPU model bridge
 and fallback requirements below.
 
 This document is listed by [ARCHITECTURE.md](ARCHITECTURE.md), which owns
@@ -691,3 +691,80 @@ positive-row strip preparation as folded geometry, retaining device key and
 color passes. One bad ear no longer drops the whole unit. An authored touching
 ring checks both positive lobes and its empty pinch on the device; this is a
 geometry path, not a CPU image fallback. [03 R-RAST-01 §1]
+
+## 11. Performance milestone: local model images and reuse
+
+Implementation policy, not additional retail behavior. The first measurement
+target is the development Mac at 1920×1080. The gameplay acceptance target is
+still 16.7 ms per presented frame; a frozen draw-list microbenchmark does not
+establish that target for simulation, camera motion or a complete battle.
+Screenshot readback and PNG encoding are excluded from gameplay timings.
+
+The modern executor rasterizes each body into its composition-sized color and
+height-key planes. It packs the completed result into one GPU image (red index,
+green key, opaque alpha), then reuses that image while its resolved raster input
+is unchanged. Camera placement is applied only when composing the scene. This
+also permits sharing identical resolved bodies across units. It does not skip
+recording, texture cursor registration or presentation event processing.
+
+Cache identity compares all ordered face/vertex/material inputs, resolved
+immutable texture-frame identities, dimensions, scale, key-plane mode,
+supersample geometry, reveal bands, outlines, waterline and Digger decisions.
+It excludes the outer anchor and origin, shadows and attached children. Exact
+serialized key comparison avoids treating a hash collision as equal content.
+Turning, aiming, opening, animated/team texture changes and construction or
+clipping changes therefore rebuild the affected body. Palette tables are
+immutable for a renderer's lifetime. Future zoom, lighting or other material
+inputs must extend this identity when introduced.
+
+Shadows are cached as independent silhouettes and blended against a fresh,
+bounded destination snapshot on every draw. The current body punches the shadow
+using their separate placement rectangles. Fog, selection, terrain and other
+scene overlays remain outside the cached body. A carrier's children merge in
+order into a local union rectangle. Cached keys survive beneath transparent
+pixels; signed child comparison, byte storage and later-child ordering remain
+as specified in [03 R-REN-03A §4]. The completed scene or a crowd of units is not
+flattened into one persistent sprite, since intervening objects and effects must
+retain their normal ordering.
+
+The image cache uses least-recently-used eviction with a 128 MiB payload budget
+(packed pixels plus identity bytes), an implementation choice for this first
+prototype. Driver/atlas overhead, Go metadata, uploaded assets and reusable
+scratch images are additional memory. Images held by the current composition
+are pinned until submitted; they may temporarily exceed the budget, then become
+eligible for eviction. Oversized images therefore render correctly without
+remaining resident beyond the budget. Eviction explicitly releases device
+storage. Resizing the viewport preserves reusable model images.
+
+`ModelStats` reports cache hits, misses, evictions, retained payload bytes and
+native pixels rasterized. Existing face/strip/resolve counters measure work
+actually performed, so cache hits do not increase them. GPU body/shadow counts
+continue to count scene submissions, including cached submissions.
+
+Retail's cached-body/live-piece partition is established in [03 R-REN-03A §4].
+This first optimization caches the current complete-body approximation; it does
+not implement that missing partition. An animated factory can invalidate its
+whole body. Separating static and moving pieces requires preserving their key
+ownership and tie ordering and remains a later measured optimization.
+
+Geometry preparation is reused across the key and color passes on a cache miss.
+Local coordinates exposed texture-boundary float residue in the translated-quad
+device fixture; a one-16.16-unit UV guard replaces the earlier smaller guard.
+This is a GPU sampling approximation, covered by that translation fixture.
+
+Repeatable model microbenchmarks run with `tools/gpu-bench -count=100
+-frames=120 -mode=record` (one command). Modes are `frozen` (executor only),
+`record` (rebuild unchanged packets), `pan` (rebuild with changing placement),
+and `turn` (rebuild changing headings, including reuse of earlier poses). The
+crowd uses sixteen repeated headings of the requested installed `-unit`, at
+1920×1080, with structure AA when the definition selects a structure. It omits
+terrain, shadows, combat, simulation, input and audio; all poses are explicit
+tool inputs. Report preparation, CPU submission and observed draw cadence
+separately. `-shot=path.png` captures after sampling. The real-asset and device
+fixtures separately cover shadows, construction, clipping and attached units.
+
+Remaining performance work: measure repeatable stationary and changing-pose scenes, camera movement and
+combat; separate presentation scheduling from the 30 Hz authoritative tick
+without repeating audio or RNG consumption. Interpolation and enhanced visuals
+remain deferred. Older prototype contracts in §8–§9 describe historical stages;
+§10–§11 govern the current exclusive GPU path and performance work.

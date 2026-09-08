@@ -23,7 +23,6 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/audio"
-	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
@@ -969,13 +968,12 @@ func retailWaveVolumeScale(v int) float64 {
 	return float64(level) / float64(0xFFFF)
 }
 
-// applyRetailAudioOptions pushes the two wave gates into the presentation
-// backend and the music level into the music controller.
+// applyRetailAudioOptions pushes the wave gates and selected Sound Mode into
+// the presentation backend and the music level into the music controller.
 //
 // The two gates are retail's own: every play requires a nonzero sound mode and
-// a nonzero `fxvol` [03 R-AUD-01 §2]. `Mono` versus `3D` is not applied — the
-// value 2 sets the output device's 3-D flag, whose consumer here would be the
-// positional pan of [03 §8.3], which this build applies unconditionally.
+// a nonzero `fxvol`; the exact value 2 also selects positional 3-D, while all
+// other values select Mono placement [03 R-AUD-01 §2][03 R-AUD-01 §1].
 func (g *gameShell) applyRetailAudioOptions() {
 	applyRetailAudioOptions(g.audioPrefs)
 	if c := g.retailMusicController(); c != nil {
@@ -987,12 +985,11 @@ func (g *gameShell) applyRetailAudioOptions() {
 // the gates before any screen exists. It takes the block rather than reading a
 // shell field because the startup read runs before the shell owns one.
 func applyRetailAudioOptions(a settings.Audio) {
-	backend, ok := audio.GlobalOutput().(*audiobackend.Backend)
-	if !ok || backend == nil {
-		return
-	}
-	backend.SetMasterEnabled(a.SoundEnabled())
-	backend.SetEffectsVolume(retailWaveVolumeScale(a.FXVol))
+	audio.ConfigureOutput(audio.OutputConfig{
+		MasterEnabled: a.SoundEnabled(),
+		EffectsVolume: retailWaveVolumeScale(a.FXVol),
+		SoundMode:     audio.SpatialModeFromPreference(a.SoundMode),
+	})
 }
 
 // retailCycleStage advances one staged button by a stage, wrapping.

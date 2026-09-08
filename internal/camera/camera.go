@@ -201,6 +201,22 @@ func (c *Camera) BattleView() (int32, int32) { // [03 §4.1]
 	return w, h
 }
 
+// BattleViewOrigin returns the map-pixel point at the battle beam's top-left
+// corner. Camera X/Z are this build's framebuffer origin, whereas retail's
+// audio placement uses the beam origin; the leading chrome inset is therefore
+// part of this conversion [03 §4.1][07 R-CAM-01 §13].
+//
+// Presentation zoom is a host extension. It uses the same scale-adjusted
+// inset as BattleView and Clamp, so the beam's world extent and origin remain
+// one consistent presentation policy at every zoom [F-P1-008].
+func (c *Camera) BattleViewOrigin() (int32, int32) { // [03 §4.1]
+	if c == nil {
+		return 0, 0
+	}
+	leadX, _, leadZ, _ := c.clampInsets()
+	return c.X + leadX, c.Z + leadZ
+}
+
 // JumpTo is the retail camera *jump*: the current origin is written outright
 // and clamped, and the clamped result is copied into the desired origin so no
 // glide survives the jump [07 R-CAM-01 §12]. It does not clear the tracked

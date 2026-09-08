@@ -85,6 +85,12 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 	if b == nil || state == nil || in == nil || in.Kbd == nil || in.Mouse == nil || state.Modal() == ui.BattleModalClosed {
 		return
 	}
+	// Both authored confirmation defaults are No [07 R-FE-01 §7]. Keep
+	// this local to YESORNO; other windows have their own keyboard matrix.
+	if (state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) && in.Kbd.KeyDown(input.KeyEnter) {
+		b.activateBattleMenuButton("CHOICE2", cl)
+		return
+	}
 	if in.Kbd.KeyDown(input.KeyEscape) {
 		b.applyBattleSchedule(state.Back())
 		return

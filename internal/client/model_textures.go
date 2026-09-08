@@ -131,16 +131,11 @@ func (c *Client) modelAnimatedFrameAt(ref texRef, kind uint8, id uint64, piece, 
 	if p == nil {
 		return ref.frame
 	}
-	asset, ok := p.player.Frame()
-	if !ok {
+	index, ok := p.player.FrameIndex()
+	if !ok || index >= len(p.frames) {
 		return nil
 	}
-	for i := range p.frames {
-		if content.AssetID(ref.key+"#"+fmt.Sprint(i)) == asset {
-			return p.frames[i]
-		}
-	}
-	return nil
+	return p.frames[index]
 }
 
 func unitPresentationID(v frame.UnitView) uint64 {

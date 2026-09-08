@@ -1,0 +1,6 @@
+#!/bin/sh
+# Device benchmark lives within the platform adapter; other tools remain
+# displayless. Additional arguments configure the opt-in benchmark only.
+set -e
+cd "$(git rev-parse --show-toplevel)"
+NANOLATHE_GPU_BENCH=1 go test ./internal/platform/ebitenapp -run '^TestGPUModelBenchmark$' -count=1 -v -args "$@"

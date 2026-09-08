@@ -4,12 +4,20 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/audio"
+	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 type audioOutputSpy struct {
 	plays int
 }
+
+type spatialAudioOutputSpy struct {
+	audioOutputSpy
+	mode audio.SoundMode
+}
+
+func (s *spatialAudioOutputSpy) SoundMode() audio.SoundMode { return s.mode }
 
 func (s *audioOutputSpy) PlaySample(*audio.Sample, float64, float64) error {
 	s.plays++
@@ -46,5 +54,26 @@ func TestPlayPositionalRequiresVisibilityPredicate(t *testing.T) {
 	}
 	if spy.plays != 1 {
 		t.Fatalf("explicitly audible positional audio played %d times, want 1", spy.plays)
+	}
+}
+
+func TestUpdateAudioViewportUsesBattleBeamAndSelectedMode(t *testing.T) {
+	c, err := New(Options{Width: 640, Height: 480})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.SetAudioService(audio.NewService(nil))
+	c.SetCamera(&camera.Camera{X: 10, Z: 20, ViewW: 640, ViewH: 480, MapW: 2048, MapH: 1024})
+	old := audio.GlobalOutput()
+	audio.SetGlobalOutput(&spatialAudioOutputSpy{mode: audio.SoundMode3D})
+	t.Cleanup(func() { audio.SetGlobalOutput(old) })
+
+	c.UpdateAudioViewportFromCamera()
+	v := c.AudioViewport()
+	if v.Left != 138 || v.Top != 52 || v.Width != 32 || v.Height != 26 {
+		t.Fatalf("audio beam = %+v; want origin (138,52), cells 32x26", v)
+	}
+	if v.MapW != 128 || v.MapH != 64 || v.SoundMode != audio.SoundMode3D {
+		t.Fatalf("audio map/mode = %+v; want map 128x64 and 3D", v)
 	}
 }

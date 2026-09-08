@@ -15,6 +15,9 @@ func TestDefaultsMatchRetail(t *testing.T) {
 	if s.Difficulty != 1 {
 		t.Errorf("Difficulty = %d, want 1", s.Difficulty)
 	}
+	if s.SwitchAlt != DefaultSwitchAlt || s.SwitchAltEnabled() {
+		t.Errorf("SwitchAlt = %d (enabled %t), want clear default", s.SwitchAlt, s.SwitchAltEnabled())
+	}
 	sk := s.Skirmish
 	if sk.NumPlayers != 4 {
 		t.Errorf("NumPlayers = %d, want 4", sk.NumPlayers)
@@ -67,6 +70,7 @@ func TestRoundTrip(t *testing.T) {
 	want.Skirmish.NumPlayers = 3
 	want.Skirmish.Mapping = 0
 	want.Messages = Messages{TextLines: 20, TextScroll: 0, ScreenChat: 0, UnitChatText: 10}
+	want.SwitchAlt = 7 // only the stored low bit survives SaveTo.
 	want.Skirmish.Players[0] = Player{Controller: 1, Side: 1, Color: 4, AllyGroup: 0, Metal: 2500, Energy: 500}
 	want.Skirmish.Players[1] = Player{Controller: 2, Side: 0, Color: 0, AllyGroup: 1, Metal: 200, Energy: 200}
 	if err := want.SaveTo(path); err != nil {
@@ -86,6 +90,9 @@ func TestRoundTrip(t *testing.T) {
 	// their defaults.
 	if got.Messages != want.Messages {
 		t.Errorf("Messages round-tripped as %+v, want %+v", got.Messages, want.Messages)
+	}
+	if got.SwitchAlt != 1 || !got.SwitchAltEnabled() {
+		t.Errorf("SwitchAlt round-tripped as %d (enabled %t), want normalized set bit", got.SwitchAlt, got.SwitchAltEnabled())
 	}
 	// The zeros in these two rows are stored choices, not absent values, so
 	// they must survive the normalization the loader runs.
@@ -219,6 +226,27 @@ func TestLoadFromDistinguishesAbsentFromZero(t *testing.T) {
 		} {
 			if tc.got != 0 {
 				t.Errorf("stored %s = %d, want the stored 0", tc.name, tc.got)
+			}
+		}
+	})
+
+	t.Run("switch alt keeps only bit zero", func(t *testing.T) {
+		for _, tc := range []struct {
+			stored int
+			want   int
+		}{
+			{stored: 0, want: 0},
+			{stored: 6, want: 0},
+			{stored: 7, want: 1},
+			{stored: -1, want: 1},
+		} {
+			body := `{"version":` + strconv.Itoa(FileVersion) + `,"switchAlt":` + strconv.Itoa(tc.stored) + `}`
+			got, err := LoadFrom(write(t, body))
+			if err != nil {
+				t.Fatalf("LoadFrom(%d): %v", tc.stored, err)
+			}
+			if got.SwitchAlt != tc.want {
+				t.Errorf("SwitchAlt %d loaded as %d, want %d", tc.stored, got.SwitchAlt, tc.want)
 			}
 		}
 	})

@@ -16,7 +16,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 }
 `
 
-// Source 0 is a screen-sized coordinate image, source 1 is the subject key
+// Source 0 is a model-sized coordinate image, source 1 is the subject key
 // plane, source 2 is SHD and source 3 is the resolved GAF frame.  Texture
 // transparency is intentionally ignored: keyed texels own a composition pixel
 // and the composition boundary applies transparency later [03 R-REN-03A §5].
@@ -45,10 +45,10 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 		// fraction directly to nearest sampling would round it instead.
 		// The centre-sample endpoint correction can leave an intended integer
 		// lane infinitesimally below that integer in backend float arithmetic.
-		// A 2^-20 texel guard is GPU implementation policy: it corrects observed
+		// A 2^-16 texel guard is GPU implementation policy: it corrects observed
 		// endpoint residue and may bias values this close to a texel boundary.
-		// It is smaller than a 16.16 unit, not an additional retail constant.
-		uv := floor(custom.xy + vec2(1.0/1048576.0))
+		// It is one 16.16 unit, not an additional retail constant.
+		uv := floor(custom.xy + vec2(1.0/65536.0))
 		idx = floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+uv+vec2(0.5, 0.5)).r*255.0+0.5)
 	}
 	if custom.w > 0.5 {
@@ -94,11 +94,18 @@ const modelShadowCommitShaderSource = `//kage:unit pixels
 
 package main
 
+var BodyOffset vec2
+var WorldOffset vec2
+
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
 	shadow := floor(imageSrc0At(srcPos).r*255.0+0.5)
-	body := floor(imageSrc1AtFromSrc0Pos(srcPos).r*255.0+0.5)
-	if shadow == 1.0 || body != 1.0 { return vec4(0.0) }
-	dest := floor(imageSrc2AtFromSrc0Pos(srcPos).r*255.0+0.5)
+	p := srcPos-imageSrc0Origin()+BodyOffset
+ body := 1.0
+ if p.x >= 0.0 && p.y >= 0.0 && p.x < imageSrc1Size().x && p.y < imageSrc1Size().y {
+  body = floor(imageSrc1AtFromSrc0Pos(imageSrc0Origin()+p).r*255.0+0.5)
+ }
+ if shadow == 1.0 || body != 1.0 { return vec4(0.0) }
+ dest := floor(imageSrc2AtFromSrc0Pos(srcPos+WorldOffset).r*255.0+0.5)
 	idx := floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+vec2(dest+0.5, shadow+0.5)).r*255.0+0.5)
 	return vec4(idx/255.0, 0.0, 0.0, 1.0)
 }
@@ -142,10 +149,11 @@ func Fragment(dstPos vec4,srcPos vec2,color vec4) vec4 {
 const modelChildShaderSource = `//kage:unit pixels
 package main
 var KeyDelta float
+var PriorOffset vec2
 func Fragment(dstPos vec4,srcPos vec2,color vec4) vec4 {
-	prior := imageSrc2AtFromSrc0Pos(srcPos)
+	prior := imageSrc2AtFromSrc0Pos(srcPos+PriorOffset)
 	idx := floor(imageSrc0At(srcPos).r*255.0+0.5)
-	key := floor(imageSrc1AtFromSrc0Pos(srcPos).r*255.0+0.5)+KeyDelta
+	key := floor(imageSrc0At(srcPos).g*255.0+0.5)+KeyDelta
 	if idx == 1.0 || floor(prior.g*255.0+0.5) > key { return prior }
 	stored := key-floor(key/256.0)*256.0
 	return vec4(idx/255.0,stored/255.0,0.0,1.0)

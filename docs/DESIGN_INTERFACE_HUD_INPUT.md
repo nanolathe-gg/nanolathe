@@ -625,6 +625,11 @@ with a GUI dirty bit. Group recall honours the preserve/toggle argument and the
 **C10 — digits and pages.** Digits 1–9 select a control group or a build page
 under the `SwitchAlt` gate: the gate is `switchAlt == alt`, so by default a
 plain digit pages and Alt+digit recalls, and with the option set the two swap.
+`SwitchAlt` is a persisted low-bit preference: an absent value is clear, the
+frontend shell carries its normalized bit into battle, and a direct battle
+captures it at install time. Digit handling reads that captured bit and never
+opens settings on a keypress. The option has no authored options-page gadget;
+the local chat command that can alter it is outside this unit's chat scope.
 The page number lives in unit-flag bits 23–25 with bit 22 marking paged, guarded
 by the builder's page count. Generated menu records author `PAGE` and `BUTTON`
 explicitly, and the generated `<unit>N.GUI` pages determine page existence and
@@ -1122,12 +1127,6 @@ would settle it.
   issue no world point, and nothing says whether a Shift-held press of one runs
   the test, which would make a second Shift-press cancel the first. A trace of
   those button handlers settles it `[07 R-P0-11 §6]` (same site).
-* The footer's priority order among status and mission text, build-card hover,
-  world-unit hover, selected primary, selected group and no target. The
-  ordinary footer's state multiplexer and field writers are not in the
-  surviving static corpus, and the anchor names do not establish the order;
-  this build follows the ordinary-footer closure and treats the rest as
-  unresolved `[07 R-HUD-02R]` `[07 R-HUD-03 §1]`.
 * The user-facing name of the interface-flags bit F4 toggles. No string in the
   image names it. Both of its readers are closed and nothing reads a name, so
   this is a naming curiosity rather than a behavioural gap `[07 §2]`
@@ -1159,13 +1158,12 @@ Two open questions belong to the in-battle options window and are carried as
   nothing to restore. Copying them would be two dead fields. A writer reachable
   from the options family would settle it.
 
-Two differences from retail are recorded from a retail capture rather than
-from a trace, and neither is implemented:
-
-* Retail's exit menu shows an **active** `RESTART`, where the authored gadget's
-  status byte is inactive `[07 R-FE-01 §7]`.
-* Retail does **not** draw the exit window beneath the yes/no confirmation box,
-  while this build keeps the exit layer visible under it `[07 R-FE-01 §7]`.
+Retail's exit menu enables the authored inactive `RESTART` control for campaign
+and skirmish; that branch remains unimplemented [07 R-FE-01 §7]. The separate
+confirmation mismatch is fixed: opening `YESORNO` replaces `EXITMENU`, and
+No/Enter/Escape return to the surviving paused options root. Closing that root
+resumes the battle. The ordinary footer's sources and priority are also closed
+by [07 R-HUD-03 §1]; selection is not a footer source.
 
 Not implemented: `[07 R-HUD-04 §2]` unfold. Opening the options root in battle
 arms an unfold animation whose per-frame step draws the snapshotted window

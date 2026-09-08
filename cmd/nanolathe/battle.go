@@ -17,6 +17,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/session"
+	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -89,6 +90,11 @@ type battleSession struct {
 	// through the composition root (tests) still resolves a real value. Valid
 	// bytes are 1..255, so 0 doubles as "not primed yet".
 	scrollSpeedByte byte
+
+	// switchAlt is captured once when the battle installs its settings. It is
+	// presentation input state only; routeDigit reads this cached bit rather
+	// than opening the settings file on a keypress [07 R-CAM-01 §4][I6].
+	switchAlt bool
 
 	// The footer's pointer record [07 R-HUD-03 §1]. Both words are
 	// presentation-only: the simulation neither writes nor reads them [I6].
@@ -200,7 +206,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 		return cerr
 	}
 	cl.SetCursors(cursors)
-	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9=buildpage Shift=queue")
+	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9/Alt+1..9=pages/groups (SwitchAlt swaps) Shift=queue")
 	return ebitenapp.Run(cl, rendererMode(opts))
 }
 
@@ -334,7 +340,12 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetPalette(b.hud.pal)
 	cl.SetFNT(b.hud.console)
 	s := loadedSettings()
+	applyBattleAudioOptions(b, s)
 	applyDamageBarsSetting(s)
+	// A shell already holds the startup settings block and may carry its live
+	// value into a new battle. A direct --map battle has no shell, so its one
+	// install-time settings read supplies the same bit.
+	b.applySwitchAltSetting(s)
 	// `textlines`/`textscroll` configure the message ring and `screenchat`
 	// sets its class filter; retail's startup loader installs these the same
 	// way it installs damagebars [02 §3][07 R-HUD-03 §14.3][07 R-HUD-03 §14.4].
@@ -365,6 +376,18 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 		cl.WarmFeatureSequences(b.sess.Catalog.Features)
 	}
 	attachBattleAudio(cl, b.sess, b.fs)
+}
+
+// applyBattleAudioOptions supplies the presentation output configuration at
+// battle installation. A frontend carries its live selection into battle; a
+// direct map/capture path reads the persisted block here, before the platform
+// creates its PCM output [03 R-AUD-01 §2][I6].
+func applyBattleAudioOptions(b *battleSession, s settings.Settings) {
+	if b != nil && b.shell != nil {
+		applyRetailAudioOptions(b.shell.audioPrefs)
+		return
+	}
+	applyRetailAudioOptions(s.Audio)
 }
 
 func bindBattleMessageRetirement(sess *session.Session, cl *client.Client) {

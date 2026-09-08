@@ -30,9 +30,6 @@ func (g *gameShell) attachSettings() {
 	// The three display-option bits reach the presentation as soon as they are
 	// read; retail's own loader installs them the same way [07 R-FE-01 §6].
 	g.applyRetailVisualOptions(clPtr)
-	// So do the two wave gates, which retail pushes to the device from the same
-	// startup read [03 R-AUD-01 §2].
-	applyRetailAudioOptions(g.audioPrefs)
 }
 
 // applySettings installs a loaded block over the shell's default setup.
@@ -55,12 +52,17 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// `TXTSCROL`, `MAXLINES` and `UNITCHAT` controls plus `screenchat`, which
 	// no screen edits [02 §3][07 R-CAM-01 §7].
 	g.messages = s.Messages
-	// The audio block, the stored game speed and the `Interface Type` word are
-	// the sound, music and interface pages' stores [03 R-AUD-01 §2]
-	// [07 R-CAM-01 §7][07 R-CAM-01 §5].
+	// The audio block, stored game speed, `Interface Type` word and digit-key
+	// mux are persistent presentation preferences [03 R-AUD-01 §2]
+	// [07 R-CAM-01 §7][07 R-CAM-01 §§4,5].
 	g.audioPrefs = s.Audio
+	// The retained presentation configuration accepts this before a PCM device
+	// exists and applies it again when the platform installs one, so startup
+	// ordering cannot discard a saved 3-D selection [03 R-AUD-01 §2][I6].
+	applyRetailAudioOptions(g.audioPrefs)
 	g.gameSpeed = s.GameSpeed
 	g.interfaceType = s.InterfaceType
+	g.switchAlt = s.SwitchAltEnabled()
 	// The configured per-player unit limit rides on the setup record into
 	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
 	// screen edits it: retail reads it from the profile file, and the
@@ -167,6 +169,7 @@ func (g *gameShell) captureSettings() settings.Settings {
 		Audio:         g.audioPrefs,
 		GameSpeed:     g.gameSpeed,
 		InterfaceType: g.interfaceType,
+		SwitchAlt:     boolInt(g.switchAlt),
 	}
 	if s.ScrollSpeed == 0 {
 		s.ScrollSpeed = settings.DefaultScrollSpeed

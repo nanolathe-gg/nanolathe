@@ -86,45 +86,16 @@ func (g *gameShell) drawListBox(c *client.Client, r gui.Rect) {
 		return
 	}
 	e, ok := g.assets.common.Find("LISTBOX")
-	if !ok || len(e.Frames) < 9 {
+	if !ok || len(e.Frames) < 9 || e.Frames[4].Frame == nil {
 		return
 	}
-	frames := make([]*formats.GAFFrame, 9)
-	for i := range frames {
-		frames[i] = e.Frames[i].Frame
-	}
-	if frames[0] == nil || frames[4] == nil {
-		return
-	}
-	left, top := int(r.X), int(r.Y)
-	w, h := int(r.W), int(r.H)
-	cornerW, cornerH := int(frames[0].Width), int(frames[0].Height)
-	if cornerW <= 0 || cornerH <= 0 {
-		return
-	}
-	for y := top; y < top+h; y += cornerH {
-		for x := left; x < left+w; x += cornerW {
-			col := 1
-			row := 1
-			if x == left {
-				col = 0
-			} else if x+cornerW >= left+w {
-				col = 2
-			}
-			if y == top {
-				row = 0
-			} else if y+cornerH >= top+h {
-				row = 2
-			}
-			idx := row*3 + col
-			if idx >= len(frames) {
-				idx = 4
-			}
-			if frames[idx] != nil {
-				blitRetailFrame(c, frames[idx], x, y)
-			}
-		}
-	}
+	// LISTBOX uses the common panel tiler, including its strict bottom
+	// overflow and flush-edge overlap. Its builder clears authored origins;
+	// writes remain inside the list's own rectangle [07 R-FE-02 §4][07 R-WGT-01 §4].
+	x, y, w, h := int(r.X), int(r.Y), int(r.W), int(r.H)
+	nineSliceFill(e, x, y, w, h, func(f *formats.GAFFrame, px, py int) {
+		c.UIBlitClipped(f, px, py, x, y, w, h)
+	})
 }
 
 // drawListSelection is the retail highlight. the retail implementation does not stamp art

@@ -24,16 +24,18 @@ func TestBattleStateModalChainAndReleaseCapture(t *testing.T) {
 	}
 	s.ShowExit()
 	s.ShowConfirmation(true)
-	if got := s.Activate("CHOICE2"); got != BattleModalActionNone || s.Modal() != BattleModalExit {
+	if got := s.Activate("CHOICE2"); got != BattleModalActionNone || s.Modal() != BattleModalOptions {
 		t.Fatalf("choice2 modal=%d action=%d", s.Modal(), got)
 	}
+	s.ShowExit()
 	s.ShowConfirmation(false)
 	if got := s.Activate("CHOICE1"); got != BattleModalActionExitGame || s.Modal() != BattleModalConfirmExit {
 		t.Fatalf("choice1 action=%d modal=%d", got, s.Modal())
 	}
-	if intent := s.Back(); intent.PauseSet || s.Modal() != BattleModalExit {
+	if intent := s.Back(); intent.PauseSet || s.Modal() != BattleModalOptions {
 		t.Fatalf("back from confirm intent=%+v modal=%d", intent, s.Modal())
 	}
+	s.ShowExit()
 	if intent := s.Back(); intent.PauseSet || s.Modal() != BattleModalOptions {
 		t.Fatalf("back from exit intent=%+v modal=%d", intent, s.Modal())
 	}

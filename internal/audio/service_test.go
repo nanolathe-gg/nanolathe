@@ -1,14 +1,20 @@
 package audio
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/vfs"
 )
+
+func fixedPixels(x, y, z int32) [3]numeric.Fixed {
+	return [3]numeric.Fixed{numeric.Fixed(int64(x) << 16), numeric.Fixed(int64(y) << 16), numeric.Fixed(int64(z) << 16)}
+}
 
 func testAudioFS(t *testing.T, name string) vfs.FSOps {
 	t.Helper()
@@ -74,6 +80,46 @@ func TestServiceDrainEventsDefersPositionalPlaybackUntilPresentation(t *testing.
 	s.DrainEvents(7, ev)
 	if len(spy.plays) != 1 {
 		t.Fatalf("committed event replayed on second rendered frame: %d", len(spy.plays))
+	}
+}
+
+func TestServicePositionalSoundModeSelectsMonoOrPlanarRolloff(t *testing.T) {
+	s := NewService(testAudioFS(t, "shot"))
+	old := GlobalOutput()
+	spy := &outputSpy{}
+	SetGlobalOutput(spy)
+	t.Cleanup(func() { SetGlobalOutput(old) })
+
+	v := Viewport{Left: 128, Top: 32, Width: 32, Height: 26, MapW: 64, MapH: 64, SoundMode: SoundModeMono}
+	s.SetViewport(v)
+	center := fixedPixels(384, 0, 240)
+	if pan, volume, ok := s.PlayPositional("shot", center, func([3]numeric.Fixed) bool { return true }); !ok || pan != (Pan{}) || volume != VolInView {
+		t.Fatalf("mono center = pan=%+v volume=%d ok=%t", pan, volume, ok)
+	}
+	if got, want := spy.plays[0].volume, VolumeFromCentibel(VolInView); got != want || spy.plays[0].pan != 0 {
+		t.Fatalf("mono output = volume=%v pan=%v; want base, centered", got, spy.plays[0].pan)
+	}
+
+	// The same point is off-screen in Mono but its Z displacement drives 3-D
+	// distance. This proves the mode, rather than device stereo capability,
+	// selects the branch.
+	offscreen := fixedPixels(384, 0, 240+928)
+	if _, volume, ok := s.PlayPositional("shot", offscreen, func([3]numeric.Fixed) bool { return true }); !ok || volume != VolOffScreen {
+		t.Fatalf("mono offscreen volume=%d ok=%t, want %d true", volume, ok, VolOffScreen)
+	}
+	v.SoundMode = SoundMode3D
+	s.SetViewport(v)
+	if pan, volume, ok := s.PlayPositional("shot", offscreen, func([3]numeric.Fixed) bool { return true }); !ok || volume != VolInView || pan.Z != -928 {
+		t.Fatalf("3D placement = pan=%+v volume=%d ok=%t", pan, volume, ok)
+	}
+	if got, want := spy.plays[2].volume, VolumeFromCentibel(VolInView)*0.5; math.Abs(got-want) > 1e-12 {
+		t.Fatalf("3D twice-min gain = %v, want %v", got, want)
+	}
+	v.SoundMode = SoundModeMono
+	s.SetViewport(v)
+	_, volume, _ := s.PlayPositional("shot", offscreen, func([3]numeric.Fixed) bool { return true })
+	if volume != VolOffScreen {
+		t.Fatalf("mode switch back to Mono volume=%d, want %d", volume, VolOffScreen)
 	}
 }
 

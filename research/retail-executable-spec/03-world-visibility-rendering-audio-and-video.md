@@ -9506,6 +9506,18 @@ body — most under `R-<id>` headings — and are not restated here.
   game · §8.3 · static trace over the unrecovered regions.
 - Exact PCM conversion for every legacy WAV variant beyond the DIGI and raw
   rules of §8.2 · §8.2 · asset census of the non-RIFF files.
+- Exact left/right gain curve after DirectSound receives the established 3-D
+  vector · [R-AUD-01 §1] · platform/library documentation or a controlled
+  stereo capture. **Implementation reconciliation (Unknown):** Nanolathe's
+  PCM backend currently uses a linear-X balance approximation after applying
+  the established planar distance factor; that host policy is not labelled a
+  retail stereo law. Marked `TODO(question)` at the conversion boundary.
+- Device behavior when the derived 3-D minimum or maximum distance is zero,
+  negative, or has maximum below minimum · [R-AUD-01 §1] · a malformed-view
+  trace against the library. **Implementation reconciliation (Unknown):** the
+  host keeps the base level for nonpositive bounds and clamps a reversed range
+  to its minimum; neither policy is a claimed retail outcome. Marked
+  `TODO(question)` at the placement boundary.
 
 ### Video and capture
 

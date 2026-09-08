@@ -4,6 +4,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"image"
 	"image/color"
 )
 
@@ -28,16 +29,17 @@ type modelGPUFace struct {
 // ModelStats is the per-Execute accounting for modern model execution.
 // It is diagnostic data for captures, never simulation state.
 type ModelStats struct {
-	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody int
-	UnsupportedGeometry, MissingTexture, UnsupportedFace        int
-	FoldedFaces, FoldedStrips                                   int
-	TexturedQuadFaces, TexturedQuadStrips                       int
-	UntriangulatedFaces                                         int
-	StructureResolves                                           int
-	ComposedGroups                                              int
-	RevealOrOutlineOmitted                                      int
-	WaterlineOrDiggerOmitted                                    int
-	StagingCommandsOmitted                                      int
+	CacheHits, CacheMisses, CacheEvictions, CacheBytes, RasterPixels int
+	GPU, Skipped, Shadows, ShadowsOmitted, StagedGroups, NoBody      int
+	UnsupportedGeometry, MissingTexture, UnsupportedFace             int
+	FoldedFaces, FoldedStrips                                        int
+	TexturedQuadFaces, TexturedQuadStrips                            int
+	UntriangulatedFaces                                              int
+	StructureResolves                                                int
+	ComposedGroups                                                   int
+	RevealOrOutlineOmitted                                           int
+	WaterlineOrDiggerOmitted                                         int
+	StagingCommandsOmitted                                           int
 }
 
 func (r *Renderer) ModelStats() ModelStats {
@@ -66,8 +68,7 @@ func (r *Renderer) Model(cmd drawlist.Model) {
 	if cmd.ShadowOnly && cmd.Geometry != nil && cmd.Geometry.Shadow == nil {
 		return
 	}
-	if g := cmd.Geometry; g != nil && g.Eligible && r.modelGeometrySupported(g) {
-		r.drawModelGeometry(g, cmd.ShadowOnly)
+	if g := cmd.Geometry; g != nil && g.Eligible && r.drawModelGeometry(g, cmd.ShadowOnly) {
 		if !cmd.ShadowOnly {
 			r.modelStats.GPU++
 		}
@@ -92,13 +93,13 @@ func (r *Renderer) Model(cmd drawlist.Model) {
 }
 
 func (r *Renderer) modelGeometrySupported(g *drawlist.ModelGeometry) bool {
-	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelKeyImage == nil || r.modelColor == nil || r.modelCoord == nil {
+	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelPack == nil {
 		return false
 	}
-	if g.KeyPlane && (g.Waterline != drawlist.ModelWaterlineNone || g.Digger) && (r.modelClip == nil || r.modelProcessed == nil || g.Waterline == drawlist.ModelWaterlineBlue && r.tables.blue == nil) {
+	if g.KeyPlane && (g.Waterline != drawlist.ModelWaterlineNone || g.Digger) && (r.modelClip == nil || g.Waterline == drawlist.ModelWaterlineBlue && r.tables.blue == nil) {
 		return false
 	}
-	if len(g.Children) != 0 && (!g.KeyPlane || r.modelPack == nil || r.modelChild == nil || r.modelStage == nil || r.modelStageScratch == nil) {
+	if len(g.Children) != 0 && (!g.KeyPlane || r.modelPack == nil || r.modelChild == nil) {
 		return false
 	}
 	if ss := g.Supersample; ss != nil && (ss.Scale != 2 || ss.Width <= 0 || ss.Height <= 0 || r.modelResolve == nil || r.tables.alpha == nil) {
@@ -244,32 +245,33 @@ func segmentsCross(a, b, c, d drawlist.ModelVertex) bool {
 	return (ab1 > 0 && ab2 < 0 || ab1 < 0 && ab2 > 0) && (cd1 > 0 && cd2 < 0 || cd1 < 0 && cd2 > 0)
 }
 
-func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool) {
-	shadow := g.Shadow != nil && g.Shadow.Eligible && r.modelShadowCommit != nil && r.modelShadowImage != nil && r.tables.alpha != nil && r.modelGeometrySupported(g.Shadow)
-	if shadow {
-		r.rasterModelGeometry(g.Shadow)
-		r.modelColor, r.modelShadowImage = r.modelShadowImage, r.modelColor
-	} else if g.Shadow != nil {
-		r.modelStats.ShadowsOmitted++
+func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool) bool {
+	body := r.acquireModelImage(g)
+	if body == nil {
+		return false
 	}
-	r.rasterModelGeometry(g)
-	if shadow {
-		r.snapshotRect(0, 0, r.w, r.h)
-		r.resetGeometry()
-		r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
-		r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelShadowCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{r.modelShadowImage, r.modelColor, r.destScratch, r.tables.alpha}})
-		r.modelStats.Shadows++
+	defer r.releaseModelImage(body)
+	if g.Shadow != nil {
+		var shadow *modelImage
+		if r.modelShadowCommit != nil && r.tables.alpha != nil {
+			shadow = r.acquireModelImage(g.Shadow)
+		}
+		if shadow != nil {
+			r.commitModelShadow(shadow, body)
+			r.releaseModelImage(shadow)
+		} else {
+			r.modelStats.ShadowsOmitted++
+		}
 	}
 	if shadowOnly {
-		return
+		return true
 	}
-	body := r.modelColor
 	if len(g.Children) != 0 {
-		body = r.composeModelChildren(g)
+		r.composeCachedModelChildren(g, body)
+	} else {
+		r.commitModelImage(body.entry.image, body.bounds)
 	}
-	r.resetGeometry()
-	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.modelCommit, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendSourceOver, Images: [4]*ebiten.Image{body, nil, nil, nil}})
+	return true
 }
 
 func (r *Renderer) rasterModelGeometry(g *drawlist.ModelGeometry) {
@@ -282,60 +284,65 @@ func (r *Renderer) rasterModelGeometry(g *drawlist.ModelGeometry) {
 	r.clipModel(g)
 }
 
+type preparedModelFace struct {
+	face     drawlist.ModelFace
+	strips   []modelGPUFace
+	vertices []modelGPUVertex
+	indices  []uint16
+}
+
 func (r *Renderer) rasterModelFaces(g *drawlist.ModelGeometry) {
 	r.modelColor.Fill(color.RGBA{R: 1, A: 255})
+	prepared := make([]preparedModelFace, len(g.Faces))
+	for i, f := range g.Faces {
+		prepared[i] = r.prepareModelFace(f)
+	}
 	if g.KeyPlane {
 		r.modelKeyImage.Fill(index0Color)
-		for i := range g.Faces {
-			r.drawPreparedFace(g, g.Faces[i], true, true)
+		for _, f := range prepared {
+			r.drawPreparedModelFace(g, f, true)
 		}
 	}
-	for i := range g.Faces {
-		r.drawPreparedFace(g, g.Faces[i], false, g.KeyPlane)
+	for _, f := range prepared {
+		r.drawPreparedModelFace(g, f, false)
 	}
 }
 
-func (r *Renderer) drawPreparedFace(g *drawlist.ModelGeometry, f drawlist.ModelFace, key, useKey bool) {
-	// The retail textured branch is a quad scanline mapper, not two affine
-	// triangles: it interpolates U/V between the two active edge chains on each
-	// row [03 R-REN-03A §5][03 R-RAST-01 §1].  Interpolating the four corners
-	// through a GPU diagonal breaks that mapping into two planes, which makes a
-	// visible texture seam on skewed solar panels.  Keep the row preparation on
-	// the CPU, but leave coverage, key reduction, texture sampling and colour
-	// writes to the device. This is GPU Classic implementation policy, not a
-	// claim that this path duplicates every fixed-point pixel detail.
+func (r *Renderer) prepareModelFace(f drawlist.ModelFace) preparedModelFace {
+	out := preparedModelFace{face: f}
+	// Textured quads use the two-chain row mapper, not a GPU diagonal: that
+	// diagonal made solar-panel textures visibly zig-zag [03 R-RAST-01 §1].
+	// Prepare the fractional row lanes once, then reuse them for key and color.
 	if f.Texture != nil && len(f.Vertices) == 4 {
-		strips := modelTextureStrips(f)
-		if !key {
-			r.modelStats.TexturedQuadFaces++
-			r.modelStats.TexturedQuadStrips += len(strips)
-		}
-		r.drawModelStripBatch(g, strips, key, useKey)
-		return
+		out.strips = modelTextureStrips(f)
+		r.modelStats.TexturedQuadFaces++
+		r.modelStats.TexturedQuadStrips += len(out.strips)
+		return out
 	}
 	if polygonCrosses(f.Vertices) {
-		strips := foldedStrips(f)
-		if !key {
-			r.modelStats.FoldedFaces++
-			r.modelStats.FoldedStrips += len(strips)
-		}
-		r.drawModelStripBatch(g, strips, key, useKey)
-		return
+		out.strips = foldedStrips(f)
+		r.modelStats.FoldedFaces++
+		r.modelStats.FoldedStrips += len(out.strips)
+		return out
 	}
 	tri, paints, supported := modelFaceTriangles(f)
 	if !supported {
-		// A projected ring can touch itself or leave collinear ears without a
-		// strict edge crossing. Failure to triangulate is not an unsupported
-		// model: the original two-chain mapper still defines its positive rows
-		// [03 R-RAST-01 §1]. Reuse that geometry preparation; pixels stay on GPU.
-		if !key {
-			r.modelStats.UntriangulatedFaces++
-		}
-		r.drawModelStripBatch(g, modelSpanStrips(f), key, useKey)
-		return
+		// A touching ring can have no valid ear yet retain positive two-chain rows
+		// [03 R-RAST-01 §1]. Keep that geometry; the GPU still rasterizes its pixels.
+		r.modelStats.UntriangulatedFaces++
+		out.strips = modelSpanStrips(f)
+	} else if paints {
+		out.vertices, out.indices = modelGPUVertices(f.Vertices), tri
 	}
-	if paints {
-		r.drawModelFace(g, modelGPUVertices(f.Vertices), f.Texture, f.Color, f.Shaded, tri, key, useKey)
+	return out
+}
+
+func (r *Renderer) drawPreparedModelFace(g *drawlist.ModelGeometry, f preparedModelFace, key bool) {
+	if len(f.strips) != 0 {
+		r.drawModelStripBatch(g, f.strips, key, g.KeyPlane)
+	}
+	if len(f.indices) != 0 {
+		r.drawModelFace(g, f.vertices, f.face.Texture, f.face.Color, f.face.Shaded, f.indices, key, g.KeyPlane)
 	}
 }
 
@@ -462,7 +469,7 @@ func biasedEdgeX(a, b drawlist.ModelVertex, y int32) int32 {
 func (r *Renderer) drawModelFace(g *drawlist.ModelGeometry, vertices []modelGPUVertex, textureFrame *formats.GAFFrame, flatColor uint8, shaded bool, idx []uint16, keyPass, useKey bool) {
 	n := len(vertices)
 	verts := make([]ebiten.Vertex, n)
-	dx, dy := g.AnchorX-g.OriginX, g.AnchorY-g.OriginY
+	dx, dy := g.AnchorX-g.OriginX-int32(r.modelRasterOrigin.X), g.AnchorY-g.OriginY-int32(r.modelRasterOrigin.Y)
 	for i, v := range vertices {
 		verts[i] = ebiten.Vertex{DstX: float32(dx) + v.X, DstY: float32(dy) + v.Y, SrcX: float32(dx) + v.X, SrcY: float32(dy) + v.Y, ColorR: v.Key, ColorG: v.Shade, ColorB: float32(flatColor), ColorA: 1, Custom0: v.U, Custom1: v.V, Custom3: boolFloat(shaded)}
 		if textureFrame != nil {
@@ -488,7 +495,7 @@ func (r *Renderer) drawModelStripBatch(g *drawlist.ModelGeometry, strips []model
 	for start := 0; start < len(strips); {
 		r.resetGeometry()
 		end := start
-		dx, dy := g.AnchorX-g.OriginX, g.AnchorY-g.OriginY
+		dx, dy := g.AnchorX-g.OriginX-int32(r.modelRasterOrigin.X), g.AnchorY-g.OriginY-int32(r.modelRasterOrigin.Y)
 		for end < len(strips) && r.quadBatchHasRoom() {
 			s := strips[end]
 			base := uint16(len(r.verts))
@@ -584,49 +591,30 @@ func (r *Renderer) clipModel(g *drawlist.ModelGeometry) {
 		return
 	}
 	r.resetGeometry()
-	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
+	b := r.modelColor.Bounds()
+	r.appendTexQuad(0, 0, float32(b.Dx()), float32(b.Dy()), 0, 0, float32(b.Dx()), float32(b.Dy()))
 	r.modelProcessed.DrawTrianglesShader(r.verts, r.idx, r.modelClip, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelColor, r.modelKeyImage, r.tables.blue, nil}, Uniforms: map[string]any{"WaterlineMode": float32(g.Waterline), "WaterlineKey": float32(g.WaterlineKey), "Digger": g.Digger, "DiggerKey": float32(g.DiggerKey)}})
 	r.modelColor, r.modelProcessed = r.modelProcessed, r.modelColor
 }
 
-// composeModelChildren stores color in red and the current staging key in green.
-// Each child reads the completed prior stage and writes a separate image, so the
-// full signed comparison and wrapped store remain ordered [03 R-REN-03A §4].
-func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry) *ebiten.Image {
-	r.resetGeometry()
-	r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
-	r.modelStage.DrawTrianglesShader(r.verts, r.idx, r.modelPack, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelColor, r.modelKeyImage, nil, nil}})
-	for _, child := range g.Children {
-		if child.Geometry == nil || !child.Geometry.Eligible || !child.Geometry.KeyPlane || len(child.Geometry.Children) != 0 || !r.modelGeometrySupported(child.Geometry) {
-			r.modelStats.Skipped++
-			continue
-		}
-		r.rasterModelGeometry(child.Geometry)
-		r.resetGeometry()
-		r.appendTexQuad(0, 0, float32(r.w), float32(r.h), 0, 0, float32(r.w), float32(r.h))
-		r.modelStageScratch.DrawTrianglesShader(r.verts, r.idx, r.modelChild, &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelColor, r.modelKeyImage, r.modelStage, nil}, Uniforms: map[string]any{"KeyDelta": float32(child.KeyDelta)}})
-		r.modelStage, r.modelStageScratch = r.modelStageScratch, r.modelStage
-		r.modelStats.GPU++
-	}
-	r.modelStats.ComposedGroups++
-	return r.modelStage
-}
-
 // rasterSupersampledModel borrows bounded scratch surfaces only for the face
-// passes, then resolves into the ordinary framebuffer-aligned model planes.
+// passes, then resolves into the native model-local planes.
 // Outlines, waterline and children consume the resolved native planes.
 func (r *Renderer) rasterSupersampledModel(g *drawlist.ModelGeometry) {
 	ss := g.Supersample
 	r.ensureModelSupersampleSize(int(ss.Width), int(ss.Height))
 	nativeColor, nativeKey, nativeCoord := r.modelColor, r.modelKeyImage, r.modelCoord
+	nativeOrigin := r.modelRasterOrigin
+	r.modelRasterOrigin = image.Point{}
 	r.modelColor, r.modelKeyImage, r.modelCoord = r.modelSuperColor, r.modelSuperKey, r.modelSuperCoord
 	r.rasterModelFaces(ss)
 	r.modelColor, r.modelKeyImage, r.modelCoord = nativeColor, nativeKey, nativeCoord
+	r.modelRasterOrigin = nativeOrigin
 	r.modelColor.Fill(color.RGBA{R: 1, A: 255})
 	if g.KeyPlane {
 		r.modelKeyImage.Fill(index0Color)
 	}
-	x, y := float32(g.AnchorX-g.OriginX), float32(g.AnchorY-g.OriginY)
+	x, y := float32(g.AnchorX-g.OriginX)-float32(nativeOrigin.X), float32(g.AnchorY-g.OriginY)-float32(nativeOrigin.Y)
 	r.resetGeometry()
 	r.appendTexQuad(x, y, x+float32(g.Width), y+float32(g.Height), 0, 0, float32(ss.Width), float32(ss.Height))
 	opts := &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelSuperColor, r.modelSuperKey, r.tables.alpha, nil}, Uniforms: map[string]any{"KeyOnly": false}}
@@ -641,6 +629,11 @@ func (r *Renderer) rasterSupersampledModel(g *drawlist.ModelGeometry) {
 func (r *Renderer) ensureModelSupersampleSize(w, h int) {
 	if r.modelSuperColor != nil && r.modelSuperW >= w && r.modelSuperH >= h {
 		return
+	}
+	if r.modelSuperColor != nil {
+		r.modelSuperColor.Deallocate()
+		r.modelSuperKey.Deallocate()
+		r.modelSuperCoord.Deallocate()
 	}
 	r.modelSuperW, r.modelSuperH = maxInt(w, r.modelSuperW), maxInt(h, r.modelSuperH)
 	r.modelSuperColor = ebiten.NewImage(r.modelSuperW, r.modelSuperH)

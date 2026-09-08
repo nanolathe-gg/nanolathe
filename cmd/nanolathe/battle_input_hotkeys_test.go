@@ -368,6 +368,74 @@ func TestBuildPageCommaAndPeriod(t *testing.T) {
 	}
 }
 
+// TestSwitchAltDigitRouting exercises the production token path, including
+// Alt's digit token and the shifted-character exclusion [07 R-CAM-01 §4]
+// [07 R-CAM-01 §14].
+func TestSwitchAltDigitRouting(t *testing.T) {
+	cat := hotkeyCatalog(t)
+	b := newTestBattle(cat, testWorldON05(40, 40))
+	b.sess.LocalOwner = 0
+	builder := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
+	member := placeUnit(b, "armsolar", numeric.Fixed(280*65536), numeric.Fixed(180*65536))
+	extra := placeUnit(b, "armsolar", numeric.Fixed(360*65536), numeric.Fixed(240*65536))
+
+	// Assign the builder and member to group 1 through the same Ctrl token
+	// handler the player uses, then leave the builder as the page target.
+	replaceSelectionForTest(t, b, builder, member)
+	pressKeys(b, input.KeyCtrl, input.Key1)
+	replaceSelectionForTest(t, b, builder)
+
+	// The absent/default-clear bit maps plain digits to pages.
+	b.switchAlt = false
+	pressKeys(b, input.Key2)
+	f, ok := b.currentSnapshot()
+	if !ok {
+		t.Fatal("default plain digit left no committed frame")
+	}
+	if f.CommandPage.Page != 1 {
+		t.Fatalf("default plain digit page = %d, want page 1", f.CommandPage.Page)
+	}
+	pressKeys(b, input.KeyAlt, input.Key1)
+	got := selectedHandles(t, b)
+	if len(got) != 2 || !containsHandle(got, builder.Handle) || !containsHandle(got, member.Handle) {
+		t.Fatalf("default Alt+1 recalled %v, want group members", got)
+	}
+	// Shift remains the recall preserve argument when Alt produces a digit
+	// token, so the unrelated selection survives Shift+Alt+1.
+	replaceSelectionForTest(t, b, extra)
+	pressKeys(b, input.KeyShift, input.KeyAlt, input.Key1)
+	got = selectedHandles(t, b)
+	if len(got) != 3 || !containsHandle(got, extra.Handle) || !containsHandle(got, builder.Handle) || !containsHandle(got, member.Handle) {
+		t.Fatalf("default Shift+Alt+1 selected %v, want preserved selection plus group", got)
+	}
+
+	// The set bit swaps the two arms: plain digits recall and Alt+digits page.
+	b.switchAlt = true
+	replaceSelectionForTest(t, b, extra)
+	pressKeys(b, input.Key1)
+	got = selectedHandles(t, b)
+	if len(got) != 2 || !containsHandle(got, builder.Handle) || !containsHandle(got, member.Handle) {
+		t.Fatalf("set SwitchAlt plain 1 recalled %v, want group members", got)
+	}
+	replaceSelectionForTest(t, b, builder)
+	pressKeys(b, input.KeyAlt, input.Key2)
+	f, ok = b.currentSnapshot()
+	if !ok {
+		t.Fatal("set SwitchAlt Alt+2 left no committed frame")
+	}
+	if f.CommandPage.Page != 1 {
+		t.Fatalf("set SwitchAlt Alt+2 page = %d, want page 1", f.CommandPage.Page)
+	}
+	// Shift+digit without Alt is a shifted character. Digit 2 has no dispatch
+	// case, so it cannot become an additive group recall under SwitchAlt=1.
+	replaceSelectionForTest(t, b, extra)
+	pressKeys(b, input.KeyShift, input.Key2)
+	got = selectedHandles(t, b)
+	if len(got) != 1 || got[0] != extra.Handle {
+		t.Fatalf("Shift+2 under SwitchAlt recalled a group: %v", got)
+	}
+}
+
 // TestF4TogglesPanelHoldAndF12ClearsRing locks the F4 and F12 rows
 // [07 R-CAM-01 §2][07 §6].
 func TestF4TogglesPanelHoldAndF12ClearsRing(t *testing.T) {

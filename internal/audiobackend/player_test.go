@@ -1,6 +1,10 @@
 package audiobackend
 
-import "testing"
+import (
+	"testing"
+
+	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
+)
 
 func TestBackendIsLazy(t *testing.T) {
 	b := New()
@@ -12,6 +16,13 @@ func TestBackendIsLazy(t *testing.T) {
 	}
 	if !b.Capabilities().Device || !b.Capabilities().Stereo {
 		t.Fatal("real backend should advertise device and stereo output")
+	}
+	if got := b.SoundMode(); got != retailaudio.SoundModeMono {
+		t.Fatalf("default sound mode = %v, want Mono", got)
+	}
+	b.SetSoundMode(retailaudio.SoundMode3D)
+	if got := b.SoundMode(); got != retailaudio.SoundMode3D {
+		t.Fatalf("set sound mode = %v, want 3D", got)
 	}
 }
 

@@ -34,6 +34,7 @@ func TestSettingsRoundTripThroughShell(t *testing.T) {
 	// No screen edits the message-column block, so it has to ride through
 	// captureSettings/applySettings unchanged, the same as UnitLimit.
 	src.messages = settings.Messages{TextLines: 20, TextScroll: 15, ScreenChat: 0, UnitChatText: 8}
+	src.switchAlt = true
 
 	blob := src.captureSettings()
 
@@ -69,6 +70,9 @@ func TestSettingsRoundTripThroughShell(t *testing.T) {
 	if dst.messages != src.messages {
 		t.Errorf("messages = %+v, want %+v", dst.messages, src.messages)
 	}
+	if !dst.switchAlt || blob.SwitchAlt != 1 {
+		t.Errorf("SwitchAlt shell round trip: source %t, captured %d, destination %t; want set", src.switchAlt, blob.SwitchAlt, dst.switchAlt)
+	}
 	for i := 0; i < 3; i++ {
 		a, b := src.setup.Players[i], dst.setup.Players[i]
 		if a.Side != b.Side || a.Color != b.Color || a.AllyGroup != b.AllyGroup || a.Metal != b.Metal || a.Energy != b.Energy {
@@ -86,6 +90,24 @@ func TestSettingsRoundTripThroughShell(t *testing.T) {
 	}
 	if cfg.Players[1].Controller == session.SkirmishDefaultController {
 		t.Errorf("slot 1 controller = %d, want computer", cfg.Players[1].Controller)
+	}
+}
+
+// TestBattleSwitchAltCapturesShellOrAttachedSettings keeps the bit at the
+// battle-install seam. A live shell is authoritative for a menu-launched
+// battle; direct --map composition has no shell and consumes the one loaded
+// settings block. routeDigit then reads only this cached boolean.
+func TestBattleSwitchAltCapturesShellOrAttachedSettings(t *testing.T) {
+	fromShell := &battleSession{shell: &gameShell{switchAlt: false}}
+	fromShell.applySwitchAltSetting(settings.Settings{SwitchAlt: 1})
+	if fromShell.switchAlt {
+		t.Fatal("shell-backed battle ignored its live clear SwitchAlt value")
+	}
+
+	direct := &battleSession{}
+	direct.applySwitchAltSetting(settings.Settings{SwitchAlt: 7})
+	if !direct.switchAlt {
+		t.Fatal("direct battle did not capture the loaded SwitchAlt low bit")
 	}
 }
 

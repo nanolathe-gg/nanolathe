@@ -48,10 +48,21 @@ func (p *TexturePlayer) duration(index int) uint32 {
 // Frame returns the current immutable asset identity. A missing sequence is a
 // normal unresolved-art result.
 func (p *TexturePlayer) Frame() (content.AssetID, bool) {
-	if p == nil || !p.active || p.index < 0 || p.index >= len(p.frames) {
+	index, ok := p.FrameIndex()
+	if !ok {
 		return "", false
 	}
-	return p.frames[p.index], true
+	return p.frames[index], true
+}
+
+// FrameIndex returns the current sequence position without advancing playback.
+// Resolved-frame adapters can index their parallel immutable storage directly
+// instead of reconstructing asset identities [03 R-CRD-005 §1].
+func (p *TexturePlayer) FrameIndex() (int, bool) {
+	if p == nil || !p.active || p.index < 0 || p.index >= len(p.frames) {
+		return 0, false
+	}
+	return p.index, true
 }
 
 // Step advances one simulation tick. It is intentionally separate from

@@ -285,15 +285,17 @@ func (a *Service) playAdmittedPositional(alias string, pos [3]numeric.Fixed) (Pa
 	v := a.Viewport()
 	var pan Pan
 	var volume int32
-	if v.StereoCapable {
+	gain := 1.0
+	if v.SoundMode == SoundMode3D {
 		pan = ComputePan(pos, v)
 		volume = VolInView
+		gain = DistanceGain(pan, v)
 	} else {
 		volume = Attenuate(pos, v)
 	}
 	sample, _ := a.Load(alias)
 	if sample != nil {
-		playRegistered(sample, VolumeFromAttenuation(volume), PanFloat(pan, v))
+		playRegistered(sample, VolumeFromAttenuation(volume)*gain, PanFloat(pan, v))
 	}
 	return pan, volume, true
 }

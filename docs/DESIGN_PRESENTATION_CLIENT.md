@@ -175,7 +175,8 @@ with a per-pixel **height key**, and that image is blitted. The split across
   indexed by a known `UnitView.OwnerColor` byte, never by its owner slot and
   never animated; unknown or out-of-range selectors yield no frame. Anything
   else is an animated sequence with per-frame holds `[03 §2.4.1]` `[03 §4.4]`
-  `[03 R-CRD-005 §1]`.
+  `[03 R-CRD-005 §1]`. Decoded-frame adapters read `TexturePlayer.FrameIndex`
+  directly; resolving a frame neither advances playback nor rebuilds asset IDs.
 * `model_outline.go` — the nanoframe wireframe: not a polyline, but the edge
   walk's per-scanline extremes written into the composition image, admitted
   against the same key plane `[03 R-P0-19-N]` `[03 R-COMP-01 §3]`.
@@ -223,6 +224,17 @@ paused battles. At intervals of at least 99 ms of monotonic wall time, it
 releases finished cues and streams, including the final batch with no later
 play request. This keeps playback retention independent of simulation ticks
 `[03 R-AUD-02 §2]`.
+
+The selected Sound Mode crosses the same output boundary independently of the
+backend's stereo format capability. The default `Mono` branch uses the
+inclusive beam rectangle's −585/−1585 pair. Exact `3D` uses the camera's battle
+beam origin and extent, and terrain map extents, represented in 16-pixel cells:
+the audio service applies the established planar inverse-distance factor between
+its derived minimum and maximum distances before it submits PCM to the backend
+`[03 R-AUD-01 §1]` `[03 R-AUD-01 §2]`. `Camera.BattleViewOrigin` converts this
+build's framebuffer origin to retail's beam origin. At host zoom, which retail
+does not have, the scaled beam span and inset are both truncating world-pixel
+values before conversion to cells; this is the client-wide extension policy.
 
 `audio.RegisteredOutput` extends the ordinary output seam only for loaded
 mode-0 aliases. Its canonical PCM cache belongs to the immutable `Sample`, is
@@ -475,8 +487,13 @@ document carries them.
   raise may cross the publication boundary only when each committed tick's
   events are applied exactly once in raise order `[03 R-AUD-01 §7]`
   `[03 R-AUD-02 §2]`.
-* **C19 No feedback.** Audio state never enters the simulation and no audio path
-  draws from the simulation RNG [I4] [I6].
+* **C19 No feedback and spatial placement.** Audio state never enters the
+  simulation and no audio path draws from the simulation RNG [I4] [I6]. The
+  selected Sound Mode, rather than a device stereo-capability probe, selects
+  positional placement: Mono applies the inclusive −585/−1585 beam rectangle;
+  exact 3D uses `(dx, 0, dy)`, `minDist = trunc((viewH+viewW)/2)×16`,
+  `maxDist = (mapW+mapH)×16`, and the documented inverse-distance rolloff
+  held after maximum distance `[03 R-AUD-01 §1]` `[03 R-AUD-01 §2]`.
 * **C20 Samples.** `formats.LoadAudio` owns detection, metadata and payload
   bounds for raw PCM, DIGI and RIFF under `[fmt wav]`. `internal/audio.Decode`
   takes an owned PCM copy, derives playback frame alignment from channels and

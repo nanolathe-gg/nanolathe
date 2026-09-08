@@ -16,6 +16,7 @@ type Backend struct {
 	sampleRate   int
 	master       bool
 	effects      float64
+	soundMode    retailaudio.SoundMode
 	mu           sync.Mutex
 	ctx          *audio.Context
 	players      []voice
@@ -50,8 +51,8 @@ func (b *Backend) newPlayer(source io.Reader) (outputPlayer, error) {
 
 // Capabilities describes the concrete presentation device surface.
 // Capabilities is what the opened device can do: whether there is a device at
-// all, and whether it is stereo. internal/audio's positional pan is only used
-// when Stereo is set [03 §8.3].
+// all, and whether it is stereo. Sound Mode independently selects positional
+// placement [03 R-AUD-01 §1][03 R-AUD-01 §2].
 type Capabilities struct {
 	Device bool
 	Stereo bool
@@ -66,7 +67,7 @@ func NewWithRate(rate int) *Backend {
 	if rate <= 0 {
 		rate = 44100
 	}
-	return &Backend{sampleRate: rate, master: true, effects: 1}
+	return &Backend{sampleRate: rate, master: true, effects: 1, soundMode: retailaudio.SoundModeMono}
 }
 
 // Capabilities reports what this backend offers. A nil backend reports none.
@@ -77,8 +78,41 @@ func (b *Backend) Capabilities() Capabilities {
 	return Capabilities{Device: true, Stereo: true}
 }
 
-// StereoCapable reports whether positional pan should be computed [03 §8.3].
-func (b *Backend) StereoCapable() bool { return b != nil }
+// SetSoundMode installs the player's selected spatial policy. Device format
+// capability is deliberately not this decision: the default is Mono even on
+// this stereo backend [03 R-AUD-01 §1][03 R-AUD-01 §2].
+func (b *Backend) SetSoundMode(mode retailaudio.SoundMode) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	b.soundMode = mode
+	b.mu.Unlock()
+}
+
+// SoundMode reports the selected spatial policy for the client viewport
+// builder. Outputs without this optional reader fall back to Mono.
+func (b *Backend) SoundMode() retailaudio.SoundMode {
+	if b == nil {
+		return retailaudio.SoundModeMono
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.soundMode
+}
+
+// ConfigureOutput applies the retained presentation configuration when this
+// device is installed and whenever options change. It keeps the device-local
+// live-gain owner: changing FX still updates already playing voices and MODE
+// Off still stops them [03 R-AUD-01 §2].
+func (b *Backend) ConfigureOutput(config retailaudio.OutputConfig) {
+	if b == nil {
+		return
+	}
+	b.SetMasterEnabled(config.MasterEnabled)
+	b.SetEffectsVolume(config.EffectsVolume)
+	b.SetSoundMode(config.SoundMode)
+}
 
 // SetMasterEnabled controls ordinary cues. MODE Off stops the voice table;
 // streamed narration has its separate lifetime [03 R-AUD-01 §1][03 R-AUD-02 §1].

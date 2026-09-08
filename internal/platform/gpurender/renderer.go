@@ -1,6 +1,7 @@
 package gpurender
 
 import (
+	"image"
 	"image/color"
 
 	"github.com/hajimehoshi/ebiten/v2"
@@ -82,10 +83,12 @@ type Renderer struct {
 	// from one Kage source space while a face carries UVs separately.
 	modelKeyImage                 *ebiten.Image
 	modelColor                    *ebiten.Image
-	modelShadowImage              *ebiten.Image
 	modelProcessed                *ebiten.Image
 	modelStage, modelStageScratch *ebiten.Image
 	modelCoord                    *ebiten.Image
+	modelRasterOrigin             image.Point
+	modelScratch                  [4]*ebiten.Image
+	modelCache                    modelImageCache
 	w, h                          int
 
 	modelSuperColor, modelSuperKey, modelSuperCoord *ebiten.Image
@@ -281,13 +284,6 @@ func (r *Renderer) ensureSize(w, h int) {
 	r.output = ebiten.NewImage(w, h)
 	r.grayScratch = ebiten.NewImage(w, h)
 	r.destScratch = ebiten.NewImage(w, h)
-	r.modelKeyImage = ebiten.NewImage(w, h)
-	r.modelColor = ebiten.NewImage(w, h)
-	r.modelShadowImage = ebiten.NewImage(w, h)
-	r.modelProcessed = ebiten.NewImage(w, h)
-	r.modelStage = ebiten.NewImage(w, h)
-	r.modelStageScratch = ebiten.NewImage(w, h)
-	r.modelCoord = ebiten.NewImage(w, h)
 	r.w, r.h = w, h
 }
 
@@ -306,7 +302,7 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	if r.offscreen == nil {
 		return nil
 	}
-	r.modelStats = ModelStats{}
+	r.modelStats = ModelStats{UnsupportedFace: -1, CacheBytes: r.modelCache.bytes}
 	list.Replay(r)
 	return r.output
 }
@@ -371,7 +367,7 @@ func (r *Renderer) Expand() {
 // offscreen (C-G4).
 
 // Model is implemented in models.go: the shadow (ALP) and body (keyed) commit of
-// one classic-rasterized composition image (C-G5).
+// GPU-rasterized, cached local composition images (DESIGN_GPU_RENDERER §11).
 
 // Fog is implemented in fog.go: the fog composite over the indexed offscreen
 // (C-G7).

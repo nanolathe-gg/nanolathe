@@ -1,28 +1,55 @@
 package audio
 
 import (
+	"math"
+
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
 // Positional audio is presentation-only and must never mutate authoritative
 // state or draw from the simulation RNG stream [03 §8.3] C19, [01 §7.2] I4.
-// The helper has audience gating, two-level attenuation, and viewport-relative
-// pan [03 §8.3].
+// The helper has audience gating, Sound-Mode-selected placement, and
+// viewport-relative pan [03 §8.3].
+
+// SoundMode is the selected spatial placement policy. It deliberately names
+// the setting rather than a device capability: a stereo host still follows the
+// Mono branch until the player selects 3D [03 R-AUD-01 §1][03 R-AUD-01 §2].
+type SoundMode uint8
+
+const (
+	SoundModeOff SoundMode = iota
+	SoundModeMono
+	SoundMode3D
+)
+
+// SpatialModeFromPreference translates the packed settings field. Only the
+// exact value 2 enables 3-D; every other stored value clears the device 3-D
+// flag, including Off and hand-edited in-range values [03 R-AUD-01 §2].
+func SpatialModeFromPreference(mode int) SoundMode {
+	if mode == int(SoundMode3D) {
+		return SoundMode3D
+	}
+	return SoundModeMono
+}
 
 // Viewport describes the presentation viewport in 16.16 world units projected
 // to pixel space via the retail half-height shear. For the mono fallback the
-// volume gate uses integer pixel bounds; for stereo the pan vector is
-// viewport-relative. All fields are world-pixel units (short truncated).
+// volume gate uses integer pixel bounds; for 3-D the pan vector is
+// viewport-relative. Left/Top are map pixels, while Width/Height and MapW/MapH
+// are 16-pixel cells, exactly as the retail placement arithmetic requires.
 type Viewport struct {
-	Left, Top     int32 // camera origin in map pixels (short truncated)
-	Width, Height int32 // viewport dimensions in pixels (tiles*16)
-	MapW, MapH    int32 // map dimensions in pixels (tiles*16) for mixer center
-	StereoCapable bool  // backend-reported stereo capability [03 §8.3]
+	Left, Top     int32 // beam origin in map pixels (short truncated)
+	Width, Height int32 // beam dimensions in 16-pixel cells
+	MapW, MapH    int32 // map dimensions in 16-pixel cells for 3-D max distance
+	SoundMode     SoundMode
+	// StereoCapable is retained for the existing publication tuple and mirrors
+	// selected 3-D placement; it is no longer a device-capability decision.
+	StereoCapable bool
 }
 
-// Pan holds the viewport-relative offsets passed to the mixer when stereo is
-// capable. The mixer computes dx = pos.x - ((viewW/2)<<4) - left and a
-// half-height sheared dy. The third component is zero in retail.
+// Pan holds the viewport-relative offsets passed to the 3-D mixer. The mixer
+// computes dx = pos.x - ((viewW/2)<<4) - left and a half-height sheared dy.
+// The middle component is zero in retail.
 type Pan struct {
 	X, Y, Z int32
 }
@@ -69,6 +96,42 @@ func Attenuate(pos [3]numeric.Fixed, v Viewport) int32 {
 		return VolInView
 	}
 	return VolOffScreen
+}
+
+// DistanceBounds returns the 3-D buffer distances in pixels. Width, Height,
+// MapW and MapH are their retail 16-pixel-cell quantities [03 R-AUD-01 §1].
+func DistanceBounds(v Viewport) (minDist, maxDist int32) {
+	minDist = ((v.Height + v.Width) / 2) * 16
+	maxDist = (v.MapW + v.MapH) * 16
+	return minDist, maxDist
+}
+
+// DistanceGain is DirectSound's documented default inverse-distance rolloff:
+// full gain through minDist, minDist/distance beyond it, and the max-distance
+// gain held after maxDist [03 R-AUD-01 §1]. The distance uses both planar
+// components of the established placement vector. It is presentation-only.
+func DistanceGain(p Pan, v Viewport) float64 {
+	minDist, maxDist := DistanceBounds(v)
+	if minDist <= 0 || maxDist <= 0 {
+		// TODO(question): retail's behavior for zero/invalid device distances is
+		// unestablished. Host policy retains the base level rather than inventing
+		// a clamp; a trace with malformed view/map dimensions would settle it.
+		return 1
+	}
+	distance := math.Hypot(float64(p.X), float64(p.Z))
+	if distance <= float64(minDist) {
+		return 1
+	}
+	limit := float64(maxDist)
+	if limit < float64(minDist) {
+		// TODO(question): retail's behavior when maxDist < minDist is not
+		// established. Keep the closest valid endpoint as host policy.
+		limit = float64(minDist)
+	}
+	if distance > limit {
+		distance = limit
+	}
+	return float64(minDist) / distance
 }
 
 // The audience gate that decides whether a positional cue is heard is NOT

@@ -32,9 +32,10 @@ func VolumeFromAttenuation(v int32) float64 {
 	}
 }
 
-// PanFloat converts a Pan and Viewport to a stereo pan factor -1..1 [03 §8.3].
-// dx = pan.X is viewport-relative in pixel*16 units; normalizing by viewport
-// half-width*16 maps the audible field to -1..1. Off-screen clamps.
+// PanFloat converts a Pan to this host backend's balance factor. The existing
+// linear-X rule is a presentation policy, not a claimed retail stereo gain
+// law: retail delegates that curve to DirectSound. TODO(question): establish
+// the platform mix curve needed to replace this approximation [03 R-AUD-01 §1].
 func PanFloat(p Pan, v Viewport) float64 {
 	if v.Width == 0 {
 		return 0
@@ -217,6 +218,24 @@ type Output interface {
 	PlaySample(*Sample, float64, float64) error
 }
 
+// OutputConfig is the presentation-owned state that reaches a device. It is
+// retained before a device exists, so loading preferences ahead of the window
+// startup produces the same state as a later live options change [03
+// R-AUD-01 §2].
+type OutputConfig struct {
+	MasterEnabled bool
+	EffectsVolume float64
+	SoundMode     SoundMode
+}
+
+// ConfigurableOutput is the optional output setup seam. Ordinary Output
+// implementations retain the PCM fallback; a newly installed configurable
+// device immediately receives the retained presentation configuration.
+type ConfigurableOutput interface {
+	Output
+	ConfigureOutput(OutputConfig)
+}
+
 // RegisteredOutput optionally accepts a mode-0 registered sample through a
 // sample-owned canonical PCM cache. Outputs that do not implement it retain
 // the ordinary PlaySample path.
@@ -239,13 +258,19 @@ type StreamOutput interface {
 var (
 	globalMu     sync.Mutex
 	globalOutput Output
+	globalConfig = OutputConfig{MasterEnabled: true, EffectsVolume: 1, SoundMode: SoundModeMono}
 )
 
-// SetGlobalOutput installs the presentation playback boundary [I6].
+// SetGlobalOutput installs the presentation playback boundary and gives a
+// configurable output the current retained configuration [I6].
 func SetGlobalOutput(o Output) {
 	globalMu.Lock()
 	globalOutput = o
+	config := globalConfig
 	globalMu.Unlock()
+	if configurable, ok := o.(ConfigurableOutput); ok {
+		configurable.ConfigureOutput(config)
+	}
 }
 
 // GlobalOutput returns the installed presentation playback boundary [I6].
@@ -253,4 +278,17 @@ func GlobalOutput() Output {
 	globalMu.Lock()
 	defer globalMu.Unlock()
 	return globalOutput
+}
+
+// ConfigureOutput retains presentation configuration and applies it to the
+// currently installed device when that device accepts the optional seam. It
+// never reaches simulation state [I6].
+func ConfigureOutput(config OutputConfig) {
+	globalMu.Lock()
+	globalConfig = config
+	output := globalOutput
+	globalMu.Unlock()
+	if configurable, ok := output.(ConfigurableOutput); ok {
+		configurable.ConfigureOutput(config)
+	}
 }

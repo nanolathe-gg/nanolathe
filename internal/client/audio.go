@@ -46,17 +46,15 @@ func (c *Client) SetAudioService(a *audio.Service) {
 	}
 }
 
-// stereoOutput is the one capability the positional-pan viewport reads from
-// the installed playback boundary. Declaring it here keeps the client on
-// audio.Output and off the concrete device package: the platform adapter
-// installs the device, and an output without stereo support simply reports
-// none [03 §8.3][I6].
-type stereoOutput interface{ StereoCapable() bool }
+// spatialModeOutput is the optional selected-Sound-Mode reader at the output
+// boundary. It is intentionally not a stereo capability: Sound Mode selects
+// Mono versus 3D even on a stereo device [03 R-AUD-01 §1][03 R-AUD-01 §2].
+type spatialModeOutput interface{ SoundMode() audio.SoundMode }
 
-// SetAudioViewport sets the presentation viewport for positional pan and
-// attenuation [03 §8.3]. Stereo pan is dx = px-((w/2)<<4)-left and
-// dy = top+((h/2)<<4)+(py>>1)-pz; mono fallback is -585 in-view vs -1585
-// off-screen [03 §8.3]. Presentation-only [I6].
+// SetAudioViewport sets the presentation viewport for positional placement
+// and attenuation [03 §8.3]. Sound Mode 3D uses the planar pan vector and
+// device distances; Mono uses -585 in-view versus -1585 off-screen.
+// Presentation-only [I6].
 func (c *Client) SetAudioViewport(v audio.Viewport) {
 	if c == nil || c.audioService == nil {
 		return
@@ -186,8 +184,10 @@ func (c *Client) MessageLines() []frame.MessageLine {
 }
 
 // UpdateAudioViewportFromCamera builds the audio viewport from the current
-// camera and world dimensions [03 §8.3]. Pan is viewport-relative with
-// half-height shear; attenuation is the two-level -585/-1585 step.
+// camera's actual battle beam and map cell dimensions [03 R-AUD-01 §1]. The
+// beam's dimensions are represented in truncating 16-pixel cells, the unit
+// the retail distance formula consumes. At presentation zoom, whose scale is
+// a host extension, the scaled beam uses the same truncation policy.
 // Presentation-only [I6].
 func (c *Client) UpdateAudioViewportFromCamera() {
 	if c == nil || c.cam == nil {
@@ -195,26 +195,42 @@ func (c *Client) UpdateAudioViewportFromCamera() {
 	}
 	var mapW, mapH int32
 	if c.terrain != nil {
-		// Map dimensions in pixels: tiles*16 (cellW*16?) Actually terrain CellW is in 16-pixel cells; map pixels = CellW*16.
-		mapW = c.terrain.CellW * 16
-		mapH = c.terrain.CellH * 16
+		// Terrain cells are already the 16-pixel units the device max-distance
+		// formula consumes [03 R-AUD-01 §1].
+		mapW = c.terrain.CellW
+		mapH = c.terrain.CellH
+	} else if c.cam.MapW > 0 && c.cam.MapH > 0 {
+		mapW = c.cam.MapW / 16
+		mapH = c.cam.MapH / 16
 	} else {
-		mapW = int32(c.width)
-		mapH = int32(c.height)
+		mapW = int32(c.width / 16)
+		mapH = int32(c.height / 16)
 	}
-	// Width and Height are tile counts because the pan formula expands their
-	// half-size by 16 [03 §8.3]. Camera X/Z are already map pixels.
+	beamW, beamH := c.cam.BattleView()
+	beamLeft, beamTop := c.cam.BattleViewOrigin()
+	if beamW == 0 || beamH == 0 {
+		// Retail has no framebuffer smaller than its chrome. Preserve a usable
+		// presentation-only tuple for tiny synthetic hosts, whose tests still
+		// need audio drain ordering, without changing any supported beam.
+		beamW, beamH = c.cam.EffectiveView()
+		beamLeft, beamTop = c.cam.X, c.cam.Z
+	}
 	v := audio.Viewport{
-		Left:   c.cam.X,
-		Top:    c.cam.Z,
-		Width:  int32(c.width / 16), // approximate tiles; precise value is not critical for the fallback
-		Height: int32(c.height / 16),
-		MapW:   mapW,
-		MapH:   mapH,
+		Left:      beamLeft,
+		Top:       beamTop,
+		Width:     beamW / 16,
+		Height:    beamH / 16,
+		MapW:      mapW,
+		MapH:      mapH,
+		SoundMode: audio.SoundModeMono,
 	}
-	if out, ok := audio.GlobalOutput().(stereoOutput); ok {
-		v.StereoCapable = out.StereoCapable()
+	if out, ok := audio.GlobalOutput().(spatialModeOutput); ok {
+		v.SoundMode = out.SoundMode()
 	}
+	// Compatibility tuple for the existing publication producer: it carries
+	// whether placement was selected, not a hardware stereo capability. The
+	// service itself reads SoundMode and never consults this legacy field.
+	v.StereoCapable = v.SoundMode == audio.SoundMode3D
 	if c.audioService != nil {
 		c.audioService.SetViewport(v)
 	}

@@ -2,8 +2,7 @@
 
 ## Overview
 
-Total Annihilation uses the standard ZSoft PCX image format for
-non-palette-shared 2D art:
+Total Annihilation uses the ZSoft PCX image format for indexed 2D art:
 
 - `unitpics/<UNITNAME>.PCX` — the 96×96 unit portrait shown by the F1 info
   screen.
@@ -11,9 +10,11 @@ non-palette-shared 2D art:
 - `palettes/GUIPAL.PCX` — a palette shipped in PCX clothing.
 
 PCX is fully documented elsewhere (it predates TA); this page records only
-what TA requires. TA reads **8-bit, single-plane, RLE-encoded PCX with a
-256-color palette appended at the end of the file** (PCX version 5). Images
-in other bit depths do not load.
+the authored format and the retail reader separately. Stock images use
+**8-bit, single-plane, RLE-encoded PCX with a 256-color palette appended at the
+end of the file** (PCX version 5). Retail validates the manufacturer and version
+bytes; it does not reject by the depth, planes or encoding fields
+[02 R-MALF-01 §9].
 
 ## Format at a glance
 
@@ -47,14 +48,19 @@ Header fields TA cares about (full header is 128 bytes):
 
 RLE decoding per scanline: read a byte; if the top two bits are set
 (`byte >= 0xC0`), it is a run count `byte & 0x3F` and the next byte is the
-pixel value; otherwise it is a literal pixel. Decode `bytes_per_line`
-bytes per scanline, then crop to the image width.
+pixel value; otherwise it is a literal pixel. Standard PCX uses
+`bytes_per_line` bytes per row. Retail instead decodes exactly the image width,
+ignores the stride, and clamps each run at the row edge; see "How the engine
+decodes it" below [02 R-MALF-01 §9].
 
-Trailer: the byte at `filesize − 769` must be `0x0C`, followed by 256 × 3
-bytes of RGB (8-bit channels) — the image's own palette. The executable
-reads the last 768 bytes **without checking the marker**. Unit pictures are
-*not* forced to the shared game palette; the engine loads the embedded one
-(art was nevertheless usually authored with TA-safe colors).
+Trailer: standard PCX places `0x0C` at `filesize − 769`, followed by 256 × 3
+bytes of RGB (8-bit channels). **Established:** retail reads the last 768 bytes
+without checking the marker [02 R-MALF-01 §9]. These embedded palette bytes
+belong to the decoded asset; their presence does not establish that a consumer
+installs them as the active display palette. Frontend PCX backgrounds retain
+their indexed pixels and display through `PALETTE.PAL`, with GUI semantic-color
+mapping handled separately [07 §5 "Retail palette contract"]. The F1 consumer's
+palette-installation behavior remains Unknown below.
 
 Real example — `unitpics/ARMFLASH.PCX` from `totala1.hpi`:
 
@@ -91,8 +97,10 @@ the seek fails and the palette bytes are read from the current position.
 - The engine never reads `bytes_per_line`: each row is decoded as exactly
   `width` pixels, so a padded file shears (each row starts in the previous
   row's padding) without any error.
-- Some retail PCX palettes disagree with `PALETTE.PAL`; the F1 screen
-  displays them with their own palette (community observation).
+- **Unknown:** whether the F1 unit-picture consumer installs its PCX trailer
+  palette. A trace of that consumer's palette installation calls would settle
+  it [07 R-HUD-03 §8]. Do not generalize from the established frontend
+  background path or treat a decoded trailer as proof of display selection.
 
 ## Sources
 

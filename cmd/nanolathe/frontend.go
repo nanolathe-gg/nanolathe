@@ -139,6 +139,9 @@ type gameShell struct {
 	// interfaceType is the `Interface Type` word the interface page's
 	// `LEFTCLICK` two-stage button writes [07 R-CAM-01 §5].
 	interfaceType int
+	// switchAlt is the persisted digit-key mux bit [07 R-CAM-01 §4]. It has
+	// no authored options-page gadget; the shell carries it into each battle.
+	switchAlt bool
 
 	campaigns       []mission.Campaign
 	campaignOptions []mission.Campaign
@@ -254,6 +257,7 @@ func newGameShell(opts Options, cs *contentSet) (*gameShell, error) {
 	shell.audioPrefs = settings.DefaultAudio()
 	shell.gameSpeed = settings.DefaultGameSpeed
 	shell.interfaceType = settings.DefaultInterfaceType
+	shell.switchAlt = settings.DefaultSwitchAlt != 0
 	shell.assets = loadMenuAssets(cs)
 	if shell.assets == nil {
 		return nil, fmt.Errorf("nanolathe: retail frontend assets: construction returned no asset set")
