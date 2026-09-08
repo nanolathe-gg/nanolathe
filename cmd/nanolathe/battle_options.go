@@ -196,15 +196,7 @@ func (b *battleSession) handleBattleOptionsInput(cl *client.Client) {
 	if (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, kbd.KeyDown(input.KeyEnter)) {
 		return
 	}
-	for i, gad := range p.Window.Gadgets[1:] {
-		if gad.QuickKey == 0 || !p.ActiveAt(i+1) || gad.GrayedOut != 0 {
-			continue
-		}
-		if quickKeyDown(kbd, gad.QuickKey) {
-			g.activateGadget(gad.Name)
-			return
-		}
-	}
+	g.activateButtonQuickKey(p, kbd, optionsState.pressed)
 }
 
 // battleOptionsGadget reads one gadget of the open in-battle window.

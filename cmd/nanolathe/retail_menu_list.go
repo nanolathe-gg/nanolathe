@@ -49,27 +49,36 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 	// then draws every row through the GAF pen, so the selected FNT is only
 	// reached on the pen's null-slot fallback [03 R-FONT-01 §5][03 R-FONT-01 §6].
 	rowFont := g.windowGadgetFont(p, gad)
-	for row := 0; row < visible; row++ {
+	_, metric := g.retailTextMetrics(rowFont)
+	rowHeight := int(gad.ItemHeight)
+	if rowHeight == 0 {
+		rowHeight = metric + 1
+	}
+	// Painting reserves a full font metric below each admitted row. Its
+	// boundary differs from click/scroll geometry, and nonzero authored row
+	// heights are not clamped to the metric [07 R-WGT-01 §4].
+	for row := 0; int(r.H)-(row+1)*rowHeight >= metric; row++ {
 		idx := top + row
 		if idx >= len(items) {
 			break
 		}
 		// the retail implementation reserves the first two pixels of a listbox before
 		// calculating rows. The same origin is used by its text renderer.
-		y := int(r.Y) + 2 + row*itemHeight
+		y := int(r.Y) + 2 + row*rowHeight
 		color := g.guiColor(byte(gad.ColorF & 0xff))
 		g.drawRetailStringSelected(c, items[idx], int(r.X)+4, y, int(r.W)-4, color, 0, rowFont)
 		// The highlight runs after the row's text, as the retail implementation does: the
 		// operator remaps whatever is already in the rectangle, so the glyphs
 		// are lifted along with the listbox interior.
-		if idx == selected {
-			g.drawListSelection(c, r, y, itemHeight)
+		if idx == selected && gad.Attribs&0x100 == 0 {
+			g.drawListSelection(c, r, y, rowHeight)
 		}
 	}
 }
 
-// retailVisibleListRows is the row count used by the retail implementation: two pixels of
-// the authored list rectangle are reserved before dividing by itemheight.
+// retailVisibleListRows retains the click/scroll row count and its existing
+// minimum-one host fallback. Painting uses its separate metric boundary
+// [07 R-WGT-01 §4].
 func retailVisibleListRows(r gui.Rect, itemHeight int) int {
 	if itemHeight <= 0 {
 		itemHeight = 1

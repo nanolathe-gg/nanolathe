@@ -8545,8 +8545,9 @@ non-CD sound goes through one routine. In order:
    stolen. (Edge: if every slot is loop-flagged the search runs off the end
    of the table — unreachable, since step 1 admits at most one loop voice.)
 3. Null sample → return 0.
-4. **Instance choice** over the sample's four slots: a slot that holds a
-   buffer whose `GetStatus` reports *not playing* is reused as is; otherwise
+4. **Instance choice** over the sample's four slots: a failed playback-status
+   query aborts admission. A slot that holds a buffer whose `GetStatus`
+   reports *not playing* is reused as is; otherwise
    its play cursor is read and the instance with the **largest play cursor**
    (strictly greater wins; ties keep the earlier slot) is remembered; a null
    slot is remembered as `lastNull`. If no idle instance was found: when
@@ -8554,7 +8555,11 @@ non-CD sound goes through one routine. In order:
    (failure → return 0); when all four are busy, the remembered
    furthest-along instance is **restarted** (`SetCurrentPosition(0)`). So a
    sample plays at most **four** times simultaneously and the fifth request
-   steals the one closest to finishing.
+   steals the one closest to finishing. The all-busy branch ignores this
+   first reset's result and continues to step 5, even on failure. The later
+   step-6 reset is separate and its failure aborts before volume, playback
+   and tracking. The play-cursor query result in the choice scan is also
+   ignored; these return-handling distinctions are Established.
 5. **3-D setup.** `QueryInterface(IID_IDirectSound3DBuffer)` on the chosen
    instance (every real sample has `CTRL3D`, so this succeeds; it is skipped
    silently if not). If the device's 3-D flag is set **and** a pan vector

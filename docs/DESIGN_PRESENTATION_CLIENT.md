@@ -252,9 +252,13 @@ constructor defaults to eight [03 R-AUD-01 §2]. Nonpositive values keep the
 existing settings-layer host recovery to eight; that is not a retail clamp.
 Positive values have no upper clamp [02 R-SND-01 §2].
 
-For the existing non-looping producers, admission preserves the current
-completion reap and oldest-live ordering, then compares the tracked count to
-the configured limit. The tracking table holds at most 32 voices. When it is
+For non-looping producers, ordinary mixer admission compares the tracked count
+to the configured limit, then steals in oldest-start order. The tracked count
+may include completed buffers between explicit reaper calls: mode-1 loading
+reaps before conversion/device creation, and the paced application pump reaps
+at its deadline. Admission does not repeat that sweep after device creation.
+A later stopped buffer therefore does not spare an older live tracked voice
+from the mixer's steal [03 R-AUD-01 §1][03 R-AUD-02 §2]. The tracking table holds at most 32 voices. When it is
 full and the configured limit exceeds that count, a new voice plays without a
 tracking entry [03 R-AUD-01 §1 steps 2,7]. Such a voice is outside the ordinary
 tracked stop-all/count. Separate host-only references let FX gain changes
@@ -262,12 +266,13 @@ reach these voices too, as the original system-wide wave-output setting did;
 completion and application shutdown release those references. They never
 participate in admission or MODE Off stop-all.
 
-This slice does not implement per-sample four-instance restart or exclusive
-loops. Device-player creation still precedes stealing, so failure ordering
-remains a REND-10 gap. It does not change RNG ownership or the separate
-narration stream. Tests exercise actual playback at limits 1/3/32, live limit
-lowering, completion reaping, and the tracked/untracked boundary above 32;
-setup tests verify delayed installation and live forwarding.
+Registered aliases implement the four-instance restart and resolve configured
+capacity before lazy device-player creation. Exclusive loops and mode-1
+device-player failure ordering remain REND-10 gaps. This does not change RNG
+ownership or the separate narration stream. Tests exercise actual playback at
+limits 1/3/32, live limit lowering, completion reaping, and the
+tracked/untracked boundary above 32; setup tests verify delayed installation
+and live forwarding.
 
 **REND-10 transient admission contract.** The concrete
 `Backend.PlaySample` entry owns mode-1 unit voices and TEST previews. Production
@@ -290,11 +295,68 @@ shutdown releases existing player ownership and clears transient references.
 Acceptance uses actual backend entry points with a configured limit above eight
 to distinguish this gate from global stealing, completion and steal-then-reap,
 registered/stream admission while transient slots are full, and failed creation.
-Four-instance restart, exclusive loops and the existing device failure ordering
-remain separate REND-10 work. Ordinary registered-alias admission retains its
-existing reap-before-admission behavior, although retail limits that eager reap
-to mode-1 loads and the ≥100 ms pump; this unit does not broaden that unrelated
-correction. No authoritative RNG or simulation timing changes.
+Four-instance restart and registered-alias capacity-before-creation ordering
+are implemented. Exclusive loops and mode-1 device-player failure ordering
+remain separate REND-10 work. Registered-alias eager reaping is corrected by
+keeping the status sweep solely at the established mode-1 and pump entries.
+Tests use a completed later voice at a full configured limit, distinguish
+99/100 ms pump boundaries, and complete a voice during fake device creation
+to prove there is no second transient sweep. No authoritative RNG or simulation
+timing changes.
+
+**REND-10 static-instance API.** The independently reviewed reaper repair
+landed at `df6ccebe`. Keep `RegisteredOutput` and
+`PlayRegisteredSample` unchanged. The backend owns a session-lifetime slice
+keyed by `*audio.Sample` identity, with four instance slots holding the host
+player and its pan reader. Replacement samples with identical aliases or PCM
+have separate groups. Clear retained groups at `Backend.Close`.
+
+Extend the private player boundary with `Position() time.Duration` and
+`Rewind() error`; make `panReader` a synchronized `io.ReadSeeker` with `SetPan`.
+Split global admission into capacity stealing before instance selection and
+tracking after successful playback. Scan instance slots in ascending order:
+first nonplaying wins immediately; otherwise remember the last null slot and
+use strict greater cursor comparison, preserving the earlier slot on ties.
+Lazy allocation fills 0, 3, 2, 1; a fifth all-busy request restarts the furthest
+instance. The all-busy path first rewinds the selected instance before pan
+setup, ignoring that reset's error. Every path then sets new pan and rewinds
+again so buffered device data is discarded. A failure of this universal reset
+returns before gain, playback or tracking. Otherwise apply current request/FX
+gain, play, and append a new mixer reference even if
+that player already has another reference. Preserve duplicate retail tracking:
+stealing one reference stops the shared player but clears only that entry;
+a restart before reaping makes remaining references live again.
+
+Gain must have one current value per physical instance. Either retain it on the
+instance or update every matching tracked/untracked reference on restart;
+an older untracked reference must not overwrite a newer request's gain during
+FX updates. Terminal cleanup must also release static instances whose ordinary
+references were already reaped, without retaining departed-session samples.
+
+**Platform residuals for this plan (`TODO(T23)`).** Ebitengine `Position` is an
+audible-position estimate, not DirectSound's byte play cursor; an exact near-tie
+decision needs a consumed-device-frame API. The output seam first sees a sample
+at playback, so lazy creation of slot zero is explicit host recovery, not a
+claim of registration-time allocation or equivalent failure timing. Rewind
+can fail synchronously, but host Play has no error result; exact retail
+SetVolume/Play failure timing remains outside that host boundary.
+Retail aborts instance selection when a playback-status query fails, while
+the host's `IsPlaying() bool` cannot report failure. Keep bool-based selection
+as an explicit host residual; exact failure admission needs a status/error API.
+
+Own only this design section, backend `player.go`, `pan_reader.go`, the shared
+fake player in `live_settings_test.go`, `voice_limit_test.go`, and new
+`static_sample_test.go` and `pan_reader_seek_test.go`. The registered configured-limit
+fixture must use distinct sample identities so it continues to test the global
+limit independently of the per-sample four-instance cap.
+Acceptance locks fill order, first-idle reuse, strict ties, fifth restart,
+sample identity, pan/gain updates including tracked/untracked aliases, both
+all-busy pre-pan rewind and universal post-pan rewind ordering, continuation
+after an early-reset error, and no playback/reference after a universal-reset error,
+duplicate-reference steal/restart, and terminal cleanup. Independent review
+accepted the implementation and its ordering regressions; source, integration
+and post-merge synthetic/installed-asset gates passed at `0b2febe9`. Exclusive
+loops and mode-1 creation/failure ordering remain separate work.
 
 ## 3. Contracts
 

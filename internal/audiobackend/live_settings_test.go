@@ -5,6 +5,7 @@ import (
 	"io"
 	"math"
 	"testing"
+	"time"
 
 	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
 )
@@ -13,13 +14,16 @@ type observedPlayer struct {
 	data          []byte
 	volume        float64
 	playing       bool
+	position      time.Duration
 	starts, stops int
 }
 
-func (p *observedPlayer) Play()                { p.playing = true; p.starts++ }
-func (p *observedPlayer) IsPlaying() bool      { return p.playing }
-func (p *observedPlayer) SetVolume(v float64)  { p.volume = v }
-func (p *observedPlayer) PauseAndStopReading() { p.playing = false; p.stops++ }
+func (p *observedPlayer) Play()                   { p.playing = true; p.starts++ }
+func (p *observedPlayer) IsPlaying() bool         { return p.playing }
+func (p *observedPlayer) Position() time.Duration { return p.position }
+func (p *observedPlayer) Rewind() error           { p.position = 0; return nil }
+func (p *observedPlayer) SetVolume(v float64)     { p.volume = v }
+func (p *observedPlayer) PauseAndStopReading()    { p.playing = false; p.stops++ }
 func (p *observedPlayer) firstOutput() float64 {
 	return float64(math.Float32frombits(binary.LittleEndian.Uint32(p.data))) * p.volume
 }

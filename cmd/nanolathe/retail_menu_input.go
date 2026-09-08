@@ -192,18 +192,43 @@ noRetailArrowRepeat:
 	if (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, kbd.KeyDown(input.KeyEnter)) {
 		return
 	}
-	for i, gad := range p.Window.Gadgets {
-		if i == 0 || gad.QuickKey == 0 || !p.ActiveAt(i) {
-			continue
-		}
-		if quickKeyDown(kbd, gad.QuickKey) {
-			g.activateGadget(gad.Name)
-			return
-		}
+	if g.activateButtonQuickKey(p, kbd, -1) {
+		return
 	}
 	if kbd.KeyDown(input.KeyUp) || kbd.KeyDown(input.KeyDown) {
 		g.adjustFocusedList(kbd.KeyDown(input.KeyUp))
 	}
+}
+
+// activateButtonQuickKey preserves authored record order and installs the
+// fired index before its screen callback [07 R-WGT-01 §1 step 8]. The options
+// pump supplies its pointer owner; otherwise capture comes from the panel.
+func (g *gameShell) activateButtonQuickKey(p *ui.Panel, kbd *input.KeyboardState, capture int) bool {
+	if p == nil || p.Window == nil || kbd == nil {
+		return false
+	}
+	if capture < 0 {
+		capture = p.PressedIndex()
+	}
+	if capture < 0 {
+		capture = p.RightPressedIndex()
+	}
+	if capture < 0 {
+		capture = p.EditorIndex()
+	}
+	for i, gad := range p.Window.Gadgets {
+		if !quickKeyDown(kbd, gad.QuickKey) {
+			continue
+		}
+		action := p.ButtonQuickKeyAction(i, capture, kbd.KeyHeld(input.KeyAlt))
+		if action.Kind != ui.ActionActivate {
+			continue
+		}
+		p.SetFocus(action.Index)
+		g.activateGadget(action.Gadget)
+		return true
+	}
+	return false
 }
 
 // activateDefaultKey preserves the fired record into focus before running the

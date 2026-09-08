@@ -1034,13 +1034,24 @@ own builder arm. Thus ordinary nonempty, non-staged buttons normally replace
 their authored key, but the empty-caption, preservation and bypass cases must
 not be collapsed into that rule.
 
-**Unknown — whole-window key preclear.** Before the per-record build, a
-separate interface-context condition can clear every button key. Its writer
-and lifecycle must be established before selecting the initial collision set
-for a complete production builder. A bounded context writer/caller trace would
-settle it; the helper algorithm above does not identify that condition. Extended
-caption-byte case conversion also needs the runtime locale contract before an
-ASCII-only implementation can claim localized parity.
+**Established — whole-window key preclear lifetime.** The process-lifetime
+interface context initializes preclear enabled. The first loading-to-battle
+transition clears it; no later writer restores it, and returning to the
+frontend reuses the same context. Before each window build's record loop,
+enabled preclear clears every button key while retaining label keys. A repaint
+alone does not run this prelude. Thus later authored button keys participate
+in collision checks after the first battle, but are already zero before the
+first battle. The preserve attribute retains the post-preclear value, which
+can be zero; it does not recover the originally parsed byte. This state is
+separate from accelerator service enablement [R-WGT-02 §2].
+
+**Unknown — extended caption-byte case conversion.** The lowercase helper
+has an ASCII fast path when its runtime locale handle is zero and delegates
+nonzero-locale mapping to the operating system. CRT startup and indirect
+locale initialization/mutation are not yet closed. Their complete trace, or
+an independently authored manual extended-byte probe across supported retail
+locales/code pages, would settle the collision mapping. An ASCII-only builder
+cannot yet claim the complete assignment contract.
 
 **Established — press semantics.** Greyed buttons ignore everything. A
 press (left or right button-down message) inside takes the capture and
@@ -1056,12 +1067,18 @@ saves the down-state. While captured, by attribute:
 | `0x2000` auto-repeat (with plain) | While held inside, after the 15-tick delay the button re-triggers **every timer tick**; the arrows of a synthesised slider carry it (§5). |
 | `0x1800` slider arrow | On each trigger (first press and every repeat) the kind-4 gadget with the same `assoc` byte moves its knob by −1 (`0x1000`) or +1 (`0x800`), clamped to `0..travel−1`, is repainted, synchronised (§5) and its change callback runs. The arrow itself never fires. |
 
-**Quickkey.** When the window's quickkey flag is set and no other gadget
-holds the capture (a captured text input blocks quickkeys unless Alt is
-held), a token equal to the key in either case triggers the button without
-the pointer: toggle buttons flip, radio buttons go down and clear their
-group, the token is popped, and the button fires. The screen's fired
-callback cannot tell a quickkey from a click.
+**Established — button quickkey admission.** The button first rejects the
+low bit of its grey word; other bits alone do not reject it. Hidden gadgets
+are skipped by the outer service pass. When this button itself holds capture,
+it follows its pointer state machine and does not also take the quickkey path.
+Otherwise, a captured text input blocks the quickkey unless Alt is held. A
+different non-text gadget's capture does **not** block the key: the earlier
+blanket no-other-capture rule was incorrect. With the window's quickkey flag
+exactly 1 and a nonzero token equal to the stored key in either case, toggle
+buttons flip, radio buttons go down and clear their group, the token is popped,
+and the button fires. The screen's fired callback cannot tell a quickkey from
+a click. These capture rules concern accelerator admission; they do not change
+the separate rules for taking pointer capture in §1.
 
 **Cue sounds (Established, bounded negative).** No widget handler or
 painter plays a sound. `BigButton`, `SMLBUTTON` and their case variants
@@ -1473,6 +1490,11 @@ decides whether any build work follows.
 
 ### The window builder's kind switch, exactly [R-WGT-01 §12]
 
+The whole-window quickkey preclear of §3 runs before this record loop on a
+build/open operation, not during repaint-only service. Its process-lifetime
+state must therefore be sampled for each build, including a return to the
+frontend after battle (Established).
+
 **Established — the table.** The builder (the routine that resolves art,
 synthesises the slider arrows and paints the tree — the "control-kind
 switch" of §4) dispatches on the kind byte through a **fourteen-entry jump
@@ -1576,10 +1598,19 @@ screen-side helpers that every screen calls set single words:
 | redraw-request word (interface object) | 1 = repaint the top window this pass | *request redraw*; set by every text/stage/grey mutation of [R-FE-02 §5] and by the unfold of [R-HUD-04 §2] |
 | dirty word (window record) | 1 = the gadget painter re-lays the whole window | *mark dirty* (through the top record; a no-op with no window); the painter and every gadget mutation set it |
 | token-mode word (window record) | non-zero = the GUI pass pops keyboard tokens, zero = it peeks ([R-WGT-01 §1] step 3; with zero the text editor pops for itself) | *set token mode*; the front-end shell and the options root set 1 |
-| quickkey-enable word (interface object) | 1 = button and label quickkeys are honoured; the window open routine sets 1 | *set quickkey enable* — `LOADGAME`/`SAVELIST`/`RESTRICT2` clear it while a name is typed ([R-WGT-01 §7] gates on it after the Alt test) |
+| quickkey-enable word (interface object) | exactly 1 = button and label quickkeys are honoured | initialized to 1; dialog/list close paths write 1; only the F11 developer film-mode toggle disables it; ordinary window opening does not write it |
 | fired-button word (interface object, mirrored into the window record) | 1 = the fired gadget was pressed with the left button, 2 = the right button; the button, label, link and list handlers write it when they fire; a screen reads the mirror to distinguish a right-click on a row (`SKIRMISH` uses 2 for its row actions, [R-FE-01 §5]) | written by the gadget handlers only |
 | held-button bits (interface object) | the mouse sample's held-button mask of [R-WGT-01 §1] step 2 (1 left, 2 right) | the sample fetch; the *held-button test* helper masks it |
 | top-window backdrop pointer (window record) | the image the window painter blits behind the gadgets | the bitmap cache (§1) |
+
+**Established — accelerator enable lifetime.** The only disabling caller is
+the F11 developer film-mode toggle [R-CAM-01 §2]. Within the supported
+single-player scope, accelerator service therefore stays enabled. Editor
+focus does not clear this word: text capture suppresses accelerator admission
+through the separate Alt rule [R-WGT-01 §3][R-WGT-01 §7]. The previous account
+that ordinary window opening enables the word and typing disables it was
+incorrect. Do not confuse this service state with the one-way build preclear
+state [R-WGT-01 §3].
 
 **Established — the two mouse-message predicates.** The "last mouse
 message" word of [R-WGT-01 §1] step 2 holds the Win32 message identity.
@@ -7495,7 +7526,7 @@ supported inference, not established fact.
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
-- Whole-window button-key preclear context lifetime and extended-byte case conversion · [R-WGT-01 §3] · context writer/caller and runtime locale traces.
+- Extended caption-byte case conversion · [R-WGT-01 §3] · complete CRT startup/indirect locale initialization and mutation trace, or manual extended-byte probes across supported locales/code pages.
 - Focus traversal for windows with more than 49 controls depends on incompletely initialized canonical-coordinate scratch · [R-WGT-01 §2] · bounded initialization/lifetime trace or manual custom-window observation.
 
 ### Input and text

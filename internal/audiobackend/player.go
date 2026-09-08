@@ -27,8 +27,11 @@ type Backend struct {
 	transients []voice
 	// untracked retains host gain/cleanup ownership only, outside the retail
 	// admission count and stop-all table [03 R-AUD-01 §1 step 7].
-	untracked    []voice
-	streams      []voice
+	untracked []voice
+	streams   []voice
+	// statics retains the four reusable device instances for each registered
+	// sample identity. It is presentation-only session ownership [03 R-AUD-01 §1].
+	statics      []staticSample
 	createPlayer func(io.Reader) (outputPlayer, error)
 	lastPump     time.Time
 }
@@ -37,6 +40,8 @@ type Backend struct {
 type outputPlayer interface {
 	Play()
 	IsPlaying() bool
+	Position() time.Duration
+	Rewind() error
 	SetVolume(float64)
 	PauseAndStopReading()
 }
@@ -44,6 +49,18 @@ type outputPlayer interface {
 type voice struct {
 	player   outputPlayer
 	baseGain float64
+}
+
+const staticInstances = 4
+
+type staticSample struct {
+	sample    *retailaudio.Sample
+	instances [staticInstances]staticInstance
+}
+
+type staticInstance struct {
+	player outputPlayer
+	reader *panReader
 }
 
 func (b *Backend) newPlayer(source io.Reader) (outputPlayer, error) {
@@ -301,8 +318,8 @@ func (b *Backend) PlaySample(sample *retailaudio.Sample, volume, pan float64) er
 }
 
 // PlayRegisteredSample plays a mode-0 alias from the sample-owned canonical
-// PCM cache. The pan reader is independent per voice, so simultaneous plays
-// cannot alter each other's placement or timeline.
+// PCM cache. Each physical static instance owns its pan reader, so distinct
+// instances cannot alter each other's placement or timeline.
 func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan float64) error {
 	if b == nil || sample == nil {
 		return nil
@@ -317,24 +334,55 @@ func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan f
 	if len(data) == 0 {
 		return nil
 	}
-	player, err := b.newPlayer(newPanReader(data, pan))
-	if err != nil || player == nil {
+	// Retail resolves global mixer capacity before it chooses a static-buffer
+	// instance. Creation and reset failures therefore happen after a steal
+	// [03 R-AUD-01 §1 steps 2,4,6].
+	b.makeVoiceCapacityLocked()
+	group, ok := b.staticGroupLocked(sample)
+	if !ok {
+		reader := newPanReader(data, pan)
+		player, err := b.newPlayer(reader)
+		if err != nil || player == nil {
+			return nil
+		}
+		b.statics = append(b.statics, staticSample{sample: sample})
+		group = &b.statics[len(b.statics)-1]
+		group.instances[0] = staticInstance{player: player, reader: reader}
+		// TODO(T23): initial instance creation is lazy at this host boundary;
+		// retail allocates it during alias registration.
+	}
+	instance, allBusy, err := b.selectStaticInstanceLocked(group, data, pan)
+	if err != nil || instance == nil {
 		return nil
 	}
-	v := voice{player: player, baseGain: volume}
+	if allBusy {
+		// This first reset is intentionally ignored. The checked reset below is
+		// the one that decides whether gain, play, and tracking may proceed.
+		_ = instance.player.Rewind()
+	}
+	instance.reader.SetPan(pan)
+	if err := instance.player.Rewind(); err != nil {
+		return nil
+	}
+	b.updateStaticGainLocked(instance.player, volume)
+	v := voice{player: instance.player, baseGain: volume}
 	b.applyGain(v)
-	b.admitVoiceLocked(v)
-	player.Play()
+	// TODO(T23): host SetVolume and Play have no failure result; proceed with
+	// those calls and track after Play until the device boundary exposes one.
+	instance.player.Play()
+	b.trackVoiceLocked(v)
 	return nil
 }
 
 func (b *Backend) admitVoiceLocked(v voice) {
-	b.reapLocked()
-	// TODO(question): Remove this eager registered-alias status sweep when the
-	// remaining mixer lifecycle is reconciled. Retail reaps on mode-1 loads
-	// and the paced pump, so stopped entries can remain counted between those
-	// calls [03 R-AUD-01 §1][03 R-AUD-02 §2]. Keep the existing host behavior
-	// explicit while transient admission and the pump threshold are corrected.
+	// The mixer uses tracked entries, including completed voices until the
+	// mode-1 loader or paced pump reaps them. A status sweep here changes
+	// which oldest voice is stolen [03 R-AUD-01 §1][03 R-AUD-02 §2].
+	b.makeVoiceCapacityLocked()
+	b.trackVoiceLocked(v)
+}
+
+func (b *Backend) makeVoiceCapacityLocked() {
 	limit := b.voiceLimit
 	if limit <= 0 {
 		limit = defaultVoiceLimit
@@ -346,13 +394,86 @@ func (b *Backend) admitVoiceLocked(v voice) {
 		release(b.players[0].player)
 		b.players = append(b.players[:0], b.players[1:]...)
 	}
+}
+
+func (b *Backend) trackVoiceLocked(v voice) {
 	// A full tracking table does not reject playback [03 R-AUD-01 §1 step 7].
 	// Host-only references preserve the shared output gain without admitting
 	// these players into the retail count or stop-all table.
 	if len(b.players) < trackedVoiceSlots {
 		b.players = append(b.players, v)
 	} else {
+		// Retail has no slot after the 32nd reference. Keep one host-only
+		// ownership record per physical player so repeated static restarts do
+		// not grow retention without bound; the 32 tracked entries above still
+		// preserve duplicate mixer references [03 R-AUD-01 §1 step 7].
+		for i := range b.untracked {
+			if b.untracked[i].player == v.player {
+				b.untracked[i].baseGain = v.baseGain
+				return
+			}
+		}
 		b.untracked = append(b.untracked, v)
+	}
+}
+
+func (b *Backend) staticGroupLocked(sample *retailaudio.Sample) (*staticSample, bool) {
+	for i := range b.statics {
+		if b.statics[i].sample == sample {
+			return &b.statics[i], true
+		}
+	}
+	return nil, false
+}
+
+// selectStaticInstanceLocked follows the four-slot selection order. TODO(T23):
+// the host's bool IsPlaying cannot report a failed status query, and Position
+// estimates audible time rather than exposing the retail byte play cursor.
+func (b *Backend) selectStaticInstanceLocked(group *staticSample, data []byte, pan float64) (*staticInstance, bool, error) {
+	lastNull := -1
+	selected := -1
+	var furthest time.Duration
+	for i := range group.instances {
+		instance := &group.instances[i]
+		if instance.player == nil {
+			lastNull = i
+			continue
+		}
+		if !instance.player.IsPlaying() {
+			return instance, false, nil
+		}
+		cursor := instance.player.Position()
+		if selected < 0 || cursor > furthest {
+			selected, furthest = i, cursor
+		}
+	}
+	if lastNull >= 0 {
+		reader := newPanReader(data, pan)
+		player, err := b.newPlayer(reader)
+		if err != nil || player == nil {
+			return nil, false, err
+		}
+		group.instances[lastNull] = staticInstance{player: player, reader: reader}
+		return &group.instances[lastNull], false, nil
+	}
+	if selected < 0 {
+		return nil, false, nil
+	}
+	return &group.instances[selected], true, nil
+}
+
+// updateStaticGainLocked gives a reused physical instance one current gain.
+// Older tracked or host-only aliases must not overwrite it on a live FX update.
+func (b *Backend) updateStaticGainLocked(player outputPlayer, gain float64) {
+	for i := range b.players {
+		if b.players[i].player == player {
+			b.players[i].baseGain = gain
+		}
+	}
+	for i := range b.untracked {
+		if b.untracked[i].player == player {
+			b.untracked[i].baseGain = gain
+		}
 	}
 }
 
@@ -391,10 +512,9 @@ func (b *Backend) reapLocked() {
 }
 
 // reapTransientAdmissionLocked drops stopped mode-1 ownership references and
-// then performs the existing ordinary voice reap. It is used before a mode-1
-// load and by the presentation pump; registered aliases keep their existing
-// ordinary-admission reap path [03 R-AUD-01 §1][03 R-AUD-02 §2]. The caller
-// holds b.mu.
+// then reaps ordinary voices. Only mode-1 loading and the paced presentation
+// pump call this helper; registered-alias admission does not reap
+// [03 R-AUD-01 §1][03 R-AUD-02 §2]. The caller holds b.mu.
 func (b *Backend) reapTransientAdmissionLocked() {
 	b.transients = dropStoppedVoices(b.transients)
 	b.reapLocked()
@@ -523,17 +643,36 @@ func (b *Backend) Close() {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	var released []outputPlayer
+	releaseOnce := func(player outputPlayer) {
+		if player == nil {
+			return
+		}
+		for _, prior := range released {
+			if prior == player {
+				return
+			}
+		}
+		release(player)
+		released = append(released, player)
+	}
 	for _, v := range b.players {
-		release(v.player)
+		releaseOnce(v.player)
 	}
 	for _, v := range b.streams {
-		release(v.player)
+		releaseOnce(v.player)
 	}
 	for _, v := range b.untracked {
-		release(v.player)
+		releaseOnce(v.player)
+	}
+	for _, group := range b.statics {
+		for _, instance := range group.instances {
+			releaseOnce(instance.player)
+		}
 	}
 	b.players = nil
 	b.streams = nil
 	b.untracked = nil
 	b.transients = nil
+	b.statics = nil
 }

@@ -181,6 +181,18 @@ a truncating divide with no half-viewport term `[07 R-CAM-01 §11]`.
 
 ### 2.4 `internal/ui` — screen-level state
 
+**I13 bounded text-list painter contract.** `drawRetailList` retains its
+existing API and list-top preparation, but paints rows using the selected
+font's metric and the painter's stopping predicate [07 R-WGT-01 §4]. An
+authored nonzero item height is used directly; only zero selects the metric
+default. The click/scroll row count is not the painter's row limit. Attribute
+`0x100` suppresses selection brightening. Production-painter fixtures cover
+exact metric equality, one-pixel-short rejection, short authored rows, and
+locked versus ordinary selection. This bounded unit owns only this paragraph,
+`cmd/nanolathe/retail_menu_list.go` and `cmd/nanolathe/list_rows_test.go`.
+Alignment, heading/record rows, wrapping, highlight rectangle geometry and
+list-top lifecycle remain separate I13 work.
+
 **The panel** (`panel.go`). `Panel` is one authored window's mutable state:
 per-record active, status, text, help and list state; named operations find the
 first exact 16-byte name match after the window header `[07 R-FE-02 §5]`.
@@ -228,6 +240,37 @@ Production tests must distinguish focus from default, Enter from Space,
 unusable defaults, grey-bit polarity, indexed duplicates and excluded focused
 kinds in both callers. A helper tested without the two live callers is not
 accepted.
+
+**I05 bounded button accelerator admission (implemented; remaining service open).**
+Builder readiness: [07 R-WGT-01 §3] establishes process-lifetime preclear,
+enabled at startup and permanently cleared by the first loading-to-battle
+transition. The eventual runtime builder must work per open, after dynamic
+gadget append and before panel construction; mutating only cached parsed GUI
+definitions cannot reproduce that lifetime. [07 R-WGT-02 §2] establishes
+that quickkey service stays enabled throughout supported single-player scope,
+so a new mutable enable flag is unnecessary here. Extended-byte lowercase
+mapping remains Unknown and blocks a complete assignment builder; retain
+parsed keys until that locale contract closes. This is research readiness,
+not implemented assignment or token service.
+
+`Panel.ButtonQuickKeyAction(index, capture int, alt bool) Action` checks a
+matching button in `internal/ui`, retaining its indexed identity. `capture`
+is the current owning pump's record index, or -1. It rejects inactive records,
+non-buttons, absent keys, low-bit grey, the captured button itself, and a
+captured text editor without Alt. Another non-text capture does not reject a
+button [07 R-WGT-01 §3]. This distinction was checked against both the handler
+and its outer service pass before implementation.
+
+The frontend and battle-options handlers share `activateButtonQuickKey`,
+which walks authored indexes, performs their existing key matching, and sets
+the fired index as focus before the unchanged screen callback. The options
+pump passes its existing pointer owner rather than installing a second owner
+in Panel. Tests use both production input handlers, low-bit versus upper-bit
+grey, same-button versus other capture, text capture with/without Alt, changed
+keys and duplicate records. The owning scope is admission and callback identity;
+assignment, linked-label quickkeys, ordered token service,
+extended-byte case conversion and I06 toggle/radio mutation remain open. This
+unit preserves existing callback-owned preference mutations and cues.
 
 **I04 focus traversal API and lifecycle contract (implemented; keyboard dispatch remains open).**
 `internal/ui` owns `FocusDirection` (`FocusForward`, `FocusBackward`,

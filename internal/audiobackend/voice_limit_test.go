@@ -16,8 +16,10 @@ func TestConfiguredVoiceLimitAndTracking(t *testing.T) {
 			var made []*observedPlayer
 			b.createPlayer = func(io.Reader) (outputPlayer, error) { p := &observedPlayer{}; made = append(made, p); return p, nil }
 			b.ConfigureOutput(retailaudio.OutputConfig{MasterEnabled: true, EffectsVolume: 1, MixingBuffers: limit})
-			sample := &retailaudio.Sample{Channels: 1, SampleRate: 11025, BitsPerSample: 8, Data: []byte{192}}
 			for i := 0; i < limit+1; i++ {
+				// Distinct identities isolate global mixer capacity from the
+				// registered sample's four-instance limit [03 R-AUD-01 §1].
+				sample := &retailaudio.Sample{Channels: 1, SampleRate: 11025, BitsPerSample: 8, Data: []byte{byte(192 - i%2)}}
 				if err := b.PlayRegisteredSample(sample, 1, 0); err != nil {
 					t.Fatal(err)
 				}
