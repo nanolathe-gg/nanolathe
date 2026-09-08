@@ -33,7 +33,7 @@ func (m *MouseState) SetPosition(x, y float32) {
 	if m == nil {
 		return
 	}
-	m.moved = m.X != x || m.Y != y
+	m.moved = m.moved || m.X != x || m.Y != y
 	m.X, m.Y = x, y
 }
 
@@ -121,6 +121,14 @@ type State struct {
 	Kbd   *KeyboardState
 
 	tokens TokenRing
+
+	pointers PointerRing
+	motion   PointerEvent
+	// motionValid distinguishes an observed stationary/motion sample from the
+	// zero value. A stationary pointer is still a usable fallback record.
+	motionValid  bool
+	current      PointerEvent
+	currentValid bool
 }
 
 // NewState returns an empty host-frame sample with both halves allocated.
@@ -133,6 +141,95 @@ func (s *State) EnqueueToken(token Token) bool {
 		return false
 	}
 	return s.tokens.Enqueue(token)
+}
+
+// EnqueuePointer updates the live pointer sample and retains a classified
+// button record when the reserved-slot queue has room. Live held state changes
+// even when a full queue refuses the record [07 §2][01 R-PLAT-01 §6].
+func (s *State) EnqueuePointer(event PointerEvent) bool {
+	if s == nil {
+		return false
+	}
+	if _, _, valid := event.Kind.button(); !valid {
+		return false
+	}
+	s.updateLivePointer(event)
+	return s.pointers.Enqueue(event)
+}
+
+// UpdatePointerMotion updates the live pointer sample and replaces the latest
+// motion fallback. Motion is not retained in the button queue [07 §2].
+func (s *State) UpdatePointerMotion(event PointerEvent) {
+	if s == nil {
+		return
+	}
+	event.Kind = PointerEventNone
+	s.updateLivePointer(event)
+	s.motion = event
+	s.motionValid = true
+}
+
+func (s *State) updateLivePointer(event PointerEvent) {
+	if s == nil || s.Mouse == nil {
+		return
+	}
+	s.Mouse.SetPosition(float32(event.X), float32(event.Y))
+	if button, down, ok := event.Kind.button(); ok {
+		s.Mouse.SetButton(button, down)
+	}
+}
+
+// PopPointer returns one button record in producer order. With no queued
+// button record it returns the latest motion fallback; queued distinguishes
+// those two results [07 §2][01 R-PLAT-01 §6]. A host service calls it once.
+func (s *State) PopPointer() (event PointerEvent, queued bool) {
+	if s == nil {
+		return PointerEvent{}, false
+	}
+	if event, ok := s.pointers.Dequeue(); ok {
+		return event, true
+	}
+	if !s.motionValid {
+		return PointerEvent{}, false
+	}
+	return s.motion, false
+}
+
+// PublishPointer consumes at most one pointer record for a host service and
+// caches it for every consumer in that service. It consumes the oldest queued
+// button record first; with no button record it uses the latest observed motion
+// record. It does not turn later live held state into an event record
+// [07 §2][01 R-PLAT-01 §6].
+func (s *State) PublishPointer() bool {
+	if s == nil {
+		return false
+	}
+	event, queued := s.PopPointer()
+	if !queued && !s.motionValid {
+		s.current = PointerEvent{}
+		s.currentValid = false
+		return false
+	}
+	s.current = event
+	s.currentValid = true
+	return true
+}
+
+// CurrentPointer returns the pointer record published for the current host
+// service. It is a read-only cached value: callers must not pop the queue to
+// obtain separate records in one service [07 R-WGT-01 §1].
+func (s *State) CurrentPointer() (PointerEvent, bool) {
+	if s == nil || !s.currentValid {
+		return PointerEvent{}, false
+	}
+	return s.current, true
+}
+
+// FlushPointers discards queued button records and retains the motion fallback.
+func (s *State) FlushPointers() {
+	if s != nil {
+		s.pointers.Flush()
+	}
 }
 
 // DrainTokens takes the pending token history in producer order.
@@ -185,6 +282,11 @@ type Sample struct {
 	Elapsed                         float64
 	PressedKeys                     []Key
 	HeldKeys                        []Key
+	// Pointer is the one record already published by the host service.
+	// PointerValid distinguishes native/polled pointer history from legacy
+	// manually-built edge samples, which retain only the live fields above.
+	Pointer      PointerEvent
+	PointerValid bool
 }
 
 func logical(v float32, limit int32) int32 {
@@ -249,6 +351,7 @@ func SampleFromState(in *State, elapsed float64, surfaceW, surfaceH int32) Sampl
 		}
 		s.Modifiers = Modifiers{Shift: k.HasShift(), Ctrl: k.KeyHeld(KeyCtrl), Alt: k.KeyHeld(KeyAlt)}
 	}
+	s.Pointer, s.PointerValid = in.CurrentPointer()
 	return s
 }
 
@@ -282,6 +385,13 @@ func StateFromSample(s Sample) *State {
 	desired[KeyAlt] = desired[KeyAlt] || s.Modifiers.Alt
 	for key := Key(1); key < KeyCount; key++ {
 		in.Kbd.held[key] = desired[key]
+	}
+	if s.PointerValid {
+		// A copied sample carries the already-published record, not a new
+		// native-history entry. Legacy callers that construct only edge fields
+		// deliberately leave PointerValid false [07 §2].
+		in.current = s.Pointer
+		in.currentValid = true
 	}
 	return in
 }

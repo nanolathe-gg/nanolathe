@@ -100,7 +100,7 @@ func TestBattleOptionsWidgetCycleUsesResolvedArtCount(t *testing.T) {
 func TestMenuWidgetReleasedStageRepaintsAndPersists(t *testing.T) {
 	shell, p, in := widgetArtFixture(t, []gui.Gadget{{
 		Kind: gui.KindButton, Name: "STAGE", Art: "STAGE", Active: 1, Stages: 2,
-		Labels: []string{"Off", "On"}, Rect: gui.Rect{X: 2, Y: 2, W: 10, H: 10},
+		Text: "Off|On", Rect: gui.Rect{X: 2, Y: 2, W: 10, H: 10},
 	}}, widgetArtEntry("STAGE", 3, 7, 11, 13))
 	widgetLeftDown(in, 3, 3)
 	shell.serviceMenuWidgets(p, in)

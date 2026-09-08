@@ -6,7 +6,8 @@ package input
 type PointerEventKind uint8
 
 const (
-	LeftDown PointerEventKind = iota + 1
+	PointerEventNone PointerEventKind = iota
+	LeftDown
 	LeftDoubleClick
 	LeftUp
 	RightDown
@@ -14,9 +15,28 @@ const (
 	RightUp
 )
 
-// PointerEvent is one ordered semantic pointer event for a host frame.
+// PointerEvent is one semantic pointer record. Timestamp is the scaled host
+// time supplied by the platform edge; this package neither derives it nor
+// recognizes double-clicks [07 §2][01 R-PLAT-01 §6].
 type PointerEvent struct {
 	Kind      PointerEventKind
 	X, Y      int32
 	Modifiers Modifiers
+	Buttons   MouseButtons // event-time state, independent of the latest live buttons [07 §2]
+	Timestamp uint32
+}
+
+func (kind PointerEventKind) button() (MouseButton, bool, bool) {
+	switch kind {
+	case LeftDown, LeftDoubleClick:
+		return MouseButtonLeft, true, true
+	case LeftUp:
+		return MouseButtonLeft, false, true
+	case RightDown, RightDoubleClick:
+		return MouseButtonRight, true, true
+	case RightUp:
+		return MouseButtonRight, false, true
+	default:
+		return MouseButtonNone, false, false
+	}
 }

@@ -9,6 +9,32 @@ import (
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
+type captionTranslator map[string]string
+
+func (t captionTranslator) Translate(source string) string {
+	if translated, ok := t[source]; ok {
+		return translated
+	}
+	return source
+}
+
+func TestLoadWithTranslationLocalizesCaptionsBeforeBuild(t *testing.T) {
+	fs := testFS(t, "testdata")
+	w, err := LoadWithTranslation(fs, "all_kinds.gui", captionTranslator{"On|Off|Auto": "Ja|Nein|Auto"})
+	if err != nil {
+		t.Fatalf("LoadWithTranslation: %v", err)
+	}
+	for _, g := range w.Gadgets {
+		if g.Kind == KindButton {
+			if g.Text != "Ja|Nein|Auto" || strings.Join(g.Labels, "|") != "Ja|Nein|Auto" {
+				t.Fatalf("localized button = %q labels %q", g.Text, strings.Join(g.Labels, "|"))
+			}
+			return
+		}
+	}
+	t.Fatal("button missing")
+}
+
 func testFS(t *testing.T, dir string) vfs.FSOps {
 	t.Helper()
 	fs := vfs.New()

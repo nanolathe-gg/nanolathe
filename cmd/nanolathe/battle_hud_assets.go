@@ -55,13 +55,24 @@ func loadGAFOptional(fs vfs.FSOps, logical, ctx string) *formats.GAF {
 	return gaf
 }
 
-func loadGUIOptional(fs vfs.FSOps, logical, ctx string) *gui.Window {
-	w, err := gui.Load(fs, logical)
+func loadGUIOptional(fs vfs.FSOps, logical, ctx string, captions ...gui.CaptionTranslator) *gui.Window {
+	var translator gui.CaptionTranslator
+	if len(captions) != 0 {
+		translator = captions[0]
+	}
+	w, err := gui.LoadWithTranslation(fs, logical, translator)
 	if err != nil {
 		hudAssetWarning(fs, logical, ctx, err)
 		return nil
 	}
 	return w
+}
+
+func hudCaptionTranslator(h *retailBattleHUD) gui.CaptionTranslator {
+	if h != nil && h.windowContext != nil {
+		return h.windowContext.captions()
+	}
+	return nil
 }
 
 // loadGAFFontOptional loads one GAF font's glyph entry, or nil with a

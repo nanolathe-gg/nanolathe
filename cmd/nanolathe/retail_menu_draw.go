@@ -9,7 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/gui"
-	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
@@ -23,7 +22,8 @@ func (g *gameShell) drawRetailPanel(c *client.Client) {
 		return
 	}
 	if g.frontend.Mode == modeMenuSkirmish {
-		g.updateHoverHelp(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
+		mouse, _ := c.Input().PointerSample()
+		g.updateHoverHelp(int32(mouse.X), int32(mouse.Y))
 	}
 	// Back to front along the window chain. Modal entries are presented by
 	// drawRetailModal after all saved-under screens; every entry is authored.
@@ -139,10 +139,7 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 		r := m.Window.PlacedRect(i)
 		switch gad.Kind {
 		case gui.KindButton:
-			if frame := g.retailButtonArt(gad, m.DownAt(i), m.StageAt(i), gad.GrayedOut&1 != 0); frame != nil {
-				blitRetailFrame(c, frame, int(r.X), int(r.Y))
-			}
-			g.drawRetailTextState(c, m, i, gad, r)
+			g.drawRetailButton(c, m, i, gad, r)
 		case gui.KindLabel:
 			g.drawRetailTextState(c, m, i, gad, r)
 		}
@@ -178,6 +175,14 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, g
 	drawn := art
 	if art != nil {
 		blitRetailFrame(c, art, int(r.X), int(r.Y))
+	} else {
+		top, bottom, fill := byte(17), byte(0), byte(20)
+		if grey {
+			top, bottom, fill = 0, 19, 19
+		} else if retailButtonPressed(c, p, index) {
+			top, bottom = 0, 17
+		}
+		drawGUIBevel(c, r, g.guiColor(top), g.guiColor(bottom), g.guiColor(fill))
 	}
 	// A greyed button's rectangle goes through the rectangle shader after the
 	// frame blit, at level -20 — PALETTE.SHD darken row 12 — which is what the
@@ -252,6 +257,10 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		return
 	}
 	measure, lineStep := g.retailTextMetrics(selected)
+	if gad.Kind == gui.KindButton {
+		g.drawRetailButtonCaption(c, p, index, gad, r, text, selected, measure, lineStep)
+		return
+	}
 	if gad.Kind == gui.KindTextBox {
 		// A filled kind-3 input owns its plain background; otherwise the
 		// window background already restored by the panel draw remains visible
@@ -276,12 +285,11 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		return
 	}
 	width := measure(text)
-	pressed := retailButtonPressed(c, p, index)
 	x := int(r.X)
 	// the retail implementation tests the left-aligned attribute before the right/center
 	// attributes. These are the actual authored GUI conventions: bit 0 uses a
 	// three-pixel inset, bit 2 centers, and bit 4 right-aligns with a
-	// three-pixel inset. A held button adds the one-pixel armed offset.
+	// three-pixel inset. Button captions have their own stage-based pen below.
 	switch {
 	case gad.Attribs&1 != 0:
 		x += 3
@@ -294,9 +302,6 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		x += (int(r.W)-1-width)/2 + 1
 	default:
 		x += 3
-	}
-	if pressed {
-		x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
 	}
 	y := retailTextPenY(gad, r, lineStep)
 	color, shade := g.retailTextPen(p, index, gad)
@@ -508,21 +513,11 @@ func retailTextPenY(gad gui.Gadget, r gui.Rect, textHeight int) int {
 	return y
 }
 
-func retailButtonPressed(c *client.Client, p *ui.Panel, index int) bool {
-	if c == nil || c.Input() == nil || c.Input().Mouse == nil || p == nil {
-		return false
-	}
-	owner, button := p.Capture()
-	if owner != index || p.DownAt(index) == 0 {
-		return false
-	}
-	switch button {
-	case 1:
-		return c.Input().Mouse.Held(input.MouseButtonLeft)
-	case 2:
-		return c.Input().Mouse.Held(input.MouseButtonRight)
-	}
-	return false
+func retailButtonPressed(_ *client.Client, p *ui.Panel, index int) bool {
+	// The widget service owns this word, including drag-out/return and toggle
+	// state. Painting must not introduce a second live-pointer predicate
+	// [07 R-WGT-01 §3].
+	return p != nil && p.DownAt(index) != 0
 }
 
 func boolInt(value bool) int {

@@ -80,6 +80,7 @@ func (g *gameShell) openSaveLoadScreen(mode saveLoadMode, source saveLoadSource)
 	saveLoadUI = screen
 	saveLoadPanel = panel
 	g.frontend.Panels.Push(panel)
+	flushWindowTokens(clPtr)
 	g.refreshSaveLoadPanel()
 	g.focusSaveLoadNameEditor()
 	return nil
@@ -108,7 +109,7 @@ func (g *gameShell) openSaveLoadScreenReporting(mode saveLoadMode, source saveLo
 // loadSaveLoadPanel parses `LOADGAME.GUI` once and re-reads only the backdrop
 // when the direction changes [08 R-SAVE-02 §1].
 func (g *gameShell) loadSaveLoadPanel(mode saveLoadMode) (*ui.Panel, error) {
-	window, err := gui.Load(g.cs.fs, retailSaveLoadGUI)
+	window, err := g.cs.loadGUI(retailSaveLoadGUI)
 	if err != nil {
 		return nil, retailFrontendAssetError(g.cs, "retail save dialog GUI unavailable", retailSaveLoadGUI, "the authored save/load window", err)
 	}
@@ -117,6 +118,9 @@ func (g *gameShell) loadSaveLoadPanel(mode saveLoadMode) (*ui.Panel, error) {
 		return nil, retailFrontendAssetError(g.cs, "retail save dialog bitmap", mode.backdrop(), "the authored save/load backdrop", err)
 	}
 	saveLoadAssets = &retailPanelAssets{window: window, background: background}
+	// LOADGAME is a fresh authored open. Build before the panel captures its
+	// runtime state [07 R-WGT-01 §3].
+	g.installRetailWindowButtonArt(window, nil)
 	panel := ui.NewPanel(window)
 	if panel == nil {
 		return nil, retailFrontendAssetError(g.cs, "retail save dialog GUI unavailable", retailSaveLoadGUI, "the authored save/load window", nil)
@@ -468,11 +472,12 @@ func (h *retailBattleHUD) resultControlName(in *input.State) (string, bool) {
 	if h == nil || h.resultPanel == nil || in == nil || in.Mouse == nil {
 		return "", false
 	}
-	mx, my := int32(in.Mouse.X), int32(in.Mouse.Y)
-	if in.Mouse.Pressed(input.MouseButtonLeft) {
+	mouse, _ := publishedPointer(in)
+	mx, my := int32(mouse.X), int32(mouse.Y)
+	if mouse.Pressed(input.MouseButtonLeft) {
 		h.resultPanel.Press(mx, my)
 	}
-	if !in.Mouse.Released(input.MouseButtonLeft) {
+	if !mouse.Released(input.MouseButtonLeft) {
 		return "", false
 	}
 	action := h.resultPanel.ReleaseAction(mx, my)

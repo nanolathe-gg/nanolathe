@@ -50,6 +50,27 @@ func TestMenuEditorKeepsTokensAfterEscape(t *testing.T) {
 	}
 }
 
+func TestWidgetTokensRetainObservedNavigationAfterQueuedText(t *testing.T) {
+	in := input.NewState()
+	in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'x'})
+	in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyUp})
+	in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyDown})
+	first := widgetTokens(in)
+	if len(first) != 3 || first[0].Rune != 'x' || first[1].Key != input.KeyUp || first[2].Key != input.KeyDown {
+		t.Fatalf("first tokens=%#v", first)
+	}
+	in.DiscardTokens(1)
+	second := widgetTokens(in)
+	if len(second) != 2 || second[0].Key != input.KeyUp || second[1].Key != input.KeyDown {
+		t.Fatalf("retained navigation=%#v", second)
+	}
+	in.DiscardTokens(1)
+	third := widgetTokens(in)
+	if len(third) != 1 || third[0].Key != input.KeyDown {
+		t.Fatalf("tail navigation=%#v", third)
+	}
+}
+
 func TestMenuEditorRightPressCapturesTextInput(t *testing.T) {
 	shell, panel, cl := editorMenuShell(t)
 	cl.Input().Mouse.SetPosition(5, 5)
@@ -76,9 +97,11 @@ func TestOrdinaryTokensDoNotEnterLaterSaveEditor(t *testing.T) {
 				t.Fatalf("ordinary token %d/%d was refused before ring capacity", batch, i)
 			}
 		}
-		shell.menuInput(cl)
+		for passes := 0; cl.Input().PendingTokens() != 0 && passes < 29; passes++ {
+			shell.menuInput(cl)
+		}
 		if pending := cl.Input().PendingTokens(); pending != 0 {
-			t.Fatalf("ordinary menu batch %d left %d tokens", batch, pending)
+			t.Fatalf("ordinary menu batch %d left %d tokens after ordered service", batch, pending)
 		}
 	}
 	if err := shell.openSaveLoadScreen(saveScreenMode, saveLoadFromResults); err != nil {
@@ -120,7 +143,7 @@ func TestMenuFocusedDuplicateDoesNotRecheckFirstNamesActivity(t *testing.T) {
 	}})
 	shell.frontend.Panels.Replace(panel)
 	panel.SetFocus(2)
-	cl.Input().Kbd.SetKey(input.KeySpace, true)
+	cl.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeySpace})
 	shell.menuInput(cl)
 	if shell.frontend.Mode != modeMenuSingle {
 		t.Fatalf("focused duplicate did not fire: mode=%v", shell.frontend.Mode)
@@ -150,7 +173,7 @@ func TestMenuEscapeUsesExactDefaultAndSeparatePrefix(t *testing.T) {
 			}
 			shell.frontend.SetMode(modeMenuSingle)
 			shell.frontend.Panels.Replace(ui.NewPanel(w))
-			cl.Input().Kbd.SetKey(input.KeyEscape, true)
+			cl.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEscape})
 			shell.menuInput(cl)
 			if shell.frontend.Mode != tc.want {
 				t.Fatalf("Escape changed mode to %v, want %v", shell.frontend.Mode, tc.want)

@@ -6,9 +6,17 @@ import "github.com/nanolathe/nanolathe/internal/gui"
 // Space (enter=false) has only that fallback [07 R-WGT-01 §2]. It preserves
 // record identity and does not borrow the mouse kind or surface-hotness test.
 func (p *Panel) DefaultKeyAction(enter bool) Action {
+	action, _ := p.defaultKeyAction(enter)
+	return action
+}
+
+// defaultKeyAction also reports whether Enter selected the authored crdefault.
+// The caller needs that distinction because only the focused Space fallback
+// changes radio or staged state [07 R-WGT-01 §2].
+func (p *Panel) defaultKeyAction(enter bool) (Action, bool) {
 	none := Action{Kind: ActionNone, Index: -1}
 	if p == nil || p.Window == nil || p.EditorCaptured() {
-		return none
+		return none, false
 	}
 	usable := func(index int) bool {
 		if index <= 0 || index >= len(p.Window.Gadgets) || !p.ActiveAt(index) {
@@ -21,7 +29,7 @@ func (p *Panel) DefaultKeyAction(enter bool) Action {
 	selected := -1
 	if enter {
 		if index := p.Window.EnterDefaultIndex(); usable(index) {
-			selected = index
+			return Action{Kind: ActionActivate, Index: index, Gadget: p.Window.Gadgets[index].Name}, true
 		}
 	}
 	if selected < 0 && usable(p.focus) {
@@ -31,9 +39,7 @@ func (p *Panel) DefaultKeyAction(enter bool) Action {
 		}
 	}
 	if selected < 0 {
-		return none
+		return none, false
 	}
-	// TODO(I06): implement radio-group and staged-button matrix
-	// mutations; selection currently preserves callback-owned state changes.
-	return Action{Kind: ActionActivate, Index: selected, Gadget: p.Window.Gadgets[selected].Name}
+	return Action{Kind: ActionActivate, Index: selected, Gadget: p.Window.Gadgets[selected].Name}, false
 }

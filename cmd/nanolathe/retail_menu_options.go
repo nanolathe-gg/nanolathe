@@ -400,7 +400,10 @@ func (g *gameShell) openRetailOptionsScreen(inBattle bool) error {
 	if g == nil || g.cs == nil || g.cs.fs == nil {
 		return fmt.Errorf("nanolathe: options screen: no mounted content: logical path %s, providers searched [], expected the authored options root", root)
 	}
-	window, err := gui.Load(g.cs.fs, root)
+	if clPtr != nil && clPtr.Input() != nil {
+		clPtr.Input().DrainTokens()
+	}
+	window, err := g.cs.loadGUI(root)
 	if err != nil {
 		return retailFrontendAssetError(g.cs, "retail options GUI unavailable", root, "the authored options root", err)
 	}
@@ -653,7 +656,7 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	}
 	inBattle := optionsState.inBattle
 	pageGUI := source.source(inBattle)
-	pageWindow, err := gui.Load(g.cs.fs, pageGUI)
+	pageWindow, err := g.cs.loadGUI(pageGUI)
 	if err != nil {
 		reportRetailMessageError(g.showRetailMessage(
 			retailFrontendAssetError(g.cs, "retail options page GUI unavailable", pageGUI, "the authored options page", err).Error()))
@@ -712,6 +715,7 @@ func (g *gameShell) openRetailOptionsPage(page string) {
 	}
 	optionsPanel = rebuilt
 	g.frontend.Panels.Push(optionsPanel)
+	flushWindowTokens(clPtr)
 	g.refreshRetailOptionsPage()
 }
 

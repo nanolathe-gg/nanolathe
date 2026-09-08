@@ -22,6 +22,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
@@ -82,6 +83,7 @@ const unitInfoNameLimit = 128
 // definition, its picture and the eight value strings.
 type unitInfoScreen struct {
 	window *gui.Window
+	panel  *ui.Panel
 	def    *content.UnitDef
 	pic    *formats.PCX
 	values [8]string
@@ -169,14 +171,17 @@ func (b *battleSession) openUnitInfoScreen() {
 	if !ok || def == nil {
 		return
 	}
-	window, err := gui.Load(b.fs, retailUnitInfoGUI)
+	window, err := gui.LoadWithTranslation(b.fs, retailUnitInfoGUI, hudCaptionTranslator(b.hud))
 	if err != nil || window == nil {
 		if b.hud != nil {
 			b.hud.assetErr = hudAssetError(b.fs, retailUnitInfoGUI, "the authored unit information window", err)
 		}
 		return
 	}
-	screen := &unitInfoScreen{window: window, def: def, values: unitInfoValues(def)}
+	if b.hud != nil {
+		b.hud.installWindow(window, nil)
+	}
+	screen := &unitInfoScreen{window: window, panel: ui.NewPanel(window), def: def, values: unitInfoValues(def)}
 	// The `HOTR` gadget receives the picture `unitpics/<internal name>.PCX`
 	// [07 R-HUD-03 §8]. Missing art leaves the surface empty rather than
 	// refusing the screen.
@@ -187,6 +192,25 @@ func (b *battleSession) openUnitInfoScreen() {
 		hudAssetWarning(b.fs, logical, "the unit information picture", err)
 	}
 	unitInfoUI = screen
+	flushWindowTokens(b.cl)
+}
+
+// serviceUnitInfoKeyboard performs the battle-child peek pass before battle
+// hotkeys. Its token mode stays zero: only an admitted accelerator pops a
+// token, while Enter and Escape never reach the key matrix [07 R-WGT-01 §§1-3].
+func (b *battleSession) serviceUnitInfoKeyboard(in *input.State) {
+	if b == nil || in == nil || unitInfoUI == nil || unitInfoUI.panel == nil {
+		return
+	}
+	frame := ui.WidgetFrame{Tokens: in.PeekTokens()}
+	if in.Kbd != nil {
+		frame.AltHeld = in.Kbd.KeyHeld(input.KeyAlt)
+	}
+	result := unitInfoUI.panel.ServiceFrame(frame, ui.WidgetHooks{})
+	in.DiscardTokens(result.ConsumedTokens)
+	if result.Fired && result.FiredIndex == unitInfoUI.doneIndex() {
+		closeUnitInfo()
+	}
 }
 
 // unitInfoSubject is the section's two-branch subject resolution: the hovered

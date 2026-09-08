@@ -128,7 +128,7 @@ func (b *battleSession) serviceBattleOptionsWidgets(p *ui.Panel, in *input.State
 	if b == nil || b.shell == nil || p == nil || in == nil || in.Mouse == nil {
 		return true
 	}
-	g, mouse := b.shell, in.Mouse
+	g := b.shell
 	for i, gad := range p.Window.Gadgets {
 		if gad.Kind == gui.KindScrollBar {
 			if s := g.retailOptionsSliderAt(i); s != nil {
@@ -136,27 +136,16 @@ func (b *battleSession) serviceBattleOptionsWidgets(p *ui.Panel, in *input.State
 			}
 		}
 	}
-	frame := ui.WidgetFrame{PointerX: int32(mouse.X), PointerY: int32(mouse.Y), Tokens: in.PeekTokens()}
+	frame := pointerFrame(in, widgetTokens(in), false)
+	frame.TokenMode = true
+	// TODO(question): options-close/page transition coverage for this word is
+	// unfinished; the open root explicitly enables it [07 R-WGT-01 §2].
+	frame.KeyNavigation = true
+	if in.Kbd != nil {
+		frame.ShiftHeld, frame.AltHeld = in.Kbd.HasShift(), in.Kbd.KeyHeld(input.KeyAlt)
+	}
 	if b.millisSource != nil {
 		frame.TimerAdvanced = p.TimerAdvanced(clock.ScaledNow(b.millisSource.Millis32()))
-	}
-	if mouse.Held(input.MouseButtonLeft) {
-		frame.HeldButtons |= 1
-	}
-	if mouse.Held(input.MouseButtonRight) {
-		frame.HeldButtons |= 2
-	}
-	if mouse.Pressed(input.MouseButtonLeft) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftDown, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Released(input.MouseButtonLeft) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftUp, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Pressed(input.MouseButtonRight) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightDown, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Released(input.MouseButtonRight) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightUp, X: int32(mouse.X), Y: int32(mouse.Y)})
 	}
 	result := p.ServiceFrame(frame, ui.WidgetHooks{Metric: func(int) int { return g.retailTextHeight() }, ArtFrames: func(index int) int {
 		gad, ok := battleOptionsGadget(index)
@@ -175,16 +164,6 @@ func (b *battleSession) serviceBattleOptionsWidgets(p *ui.Panel, in *input.State
 			g.activateWidgetGadget(p, result)
 		}
 		return true
-	}
-	if !p.EditorCaptured() && in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) {
-		g.activateEscape()
-		return true
-	}
-	if in.Kbd != nil && (in.Kbd.KeyDown(input.KeyEnter) || in.Kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, in.Kbd.KeyDown(input.KeyEnter)) {
-		return true
-	}
-	if in.Kbd != nil {
-		g.activateButtonQuickKey(p, in.Kbd, p.CaptureIndex())
 	}
 	return true
 }

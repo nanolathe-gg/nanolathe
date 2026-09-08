@@ -67,7 +67,9 @@ func TestButtonQuickKeysThroughBothInputHandlers(t *testing.T) {
 						t.Fatal(err)
 					}
 					clPtr = nil
-					cl.Input().Kbd.SetKey(input.KeyA, true)
+					if !cl.Input().EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'A'}) {
+						t.Fatal("enqueue quick-key token")
+					}
 					cl.Input().Kbd.SetKey(input.KeyAlt, tc.alt)
 					if battle {
 						(&battleSession{shell: shell}).handleBattleOptionsInput(cl)

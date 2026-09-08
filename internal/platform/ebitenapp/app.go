@@ -3,11 +3,13 @@ package ebitenapp
 import (
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/audiobackend"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/platform/gpurender"
 )
 
@@ -52,6 +54,9 @@ type app struct {
 	// still be called at the monitor's refresh rate, so the retained-screen
 	// mode configured by Run lets those extra calls leave the frame untouched.
 	presentPending bool
+	// inputStarted anchors the platform-only host clock used to timestamp
+	// polled pointer records. It is deliberately outside the client and sim.
+	inputStarted time.Time
 }
 
 // Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
@@ -59,7 +64,7 @@ type app struct {
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *app) Update() error {
 	a.syncWindowSize()
-	pollInput(a.c.Input())
+	pollInput(a.c.Input(), a.scaledInputNow())
 	a.c.SetFocused(ebiten.IsFocused())
 	a.c.Step(1.0 / float64(presentationTPS))
 	a.presentPending = true
@@ -67,6 +72,14 @@ func (a *app) Update() error {
 		return ebiten.Termination
 	}
 	return nil
+}
+
+func (a *app) scaledInputNow() uint32 {
+	if a.inputStarted.IsZero() {
+		a.inputStarted = time.Now()
+	}
+	millis := uint32(time.Since(a.inputStarted) / time.Millisecond)
+	return uint32(clock.ScaledNow(millis))
 }
 
 // Draw presents one composed frame. The image is recreated only when the

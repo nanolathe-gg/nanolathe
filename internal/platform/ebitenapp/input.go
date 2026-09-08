@@ -5,67 +5,131 @@ import (
 	"github.com/nanolathe/nanolathe/internal/input"
 )
 
+// sampledInput is one complete Ebiten poll. The adapter collects all of these
+// current values before it creates an event record; Ebiten does not expose the
+// native ordering of changes that happened between polls [07 §2].
+type sampledInput struct {
+	x, y       int32
+	buttons    input.MouseButtons
+	modifiers  input.Modifiers
+	wheelX     float32
+	wheelY     float32
+	keys       [input.KeyCount]bool
+	characters []rune
+	timestamp  uint32
+}
+
 // pollInput is the only production device-polling path. Ebitengine reaches no
 // further than this package; downstream code receives the platform-neutral
-// input.State [I6].
-func pollInput(in *input.State) {
+// input.State [I6]. timestamp is the scaled 30-Hz host clock supplied by app.
+func pollInput(in *input.State, timestamp uint32) {
+	if in == nil || in.Mouse == nil || in.Kbd == nil {
+		return
+	}
+	applyInput(in, readInput(timestamp))
+}
+
+func readInput(timestamp uint32) sampledInput {
+	cx, cy := ebiten.CursorPosition()
+	sample := sampledInput{
+		x: int32(cx), y: int32(cy), timestamp: timestamp,
+		buttons: input.MouseButtons{
+			Left:   ebiten.IsMouseButtonPressed(ebiten.MouseButtonLeft),
+			Middle: ebiten.IsMouseButtonPressed(ebiten.MouseButtonMiddle),
+			Right:  ebiten.IsMouseButtonPressed(ebiten.MouseButtonRight),
+		},
+		modifiers: input.Modifiers{
+			Shift: ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight),
+			Ctrl:  ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight),
+			Alt:   ebiten.IsKeyPressed(ebiten.KeyAltLeft) || ebiten.IsKeyPressed(ebiten.KeyAltRight),
+		},
+		characters: ebiten.AppendInputChars(nil),
+	}
+	wx, wy := ebiten.Wheel()
+	sample.wheelX, sample.wheelY = float32(wx), float32(wy)
+	for key := input.Key(1); key < input.KeyCount; key++ {
+		switch key {
+		case input.KeyShift:
+			sample.keys[key] = sample.modifiers.Shift
+		case input.KeyCtrl:
+			sample.keys[key] = sample.modifiers.Ctrl
+		case input.KeyAlt:
+			sample.keys[key] = sample.modifiers.Alt
+		default:
+			if ek, ok := ebitenKey(key); ok {
+				sample.keys[key] = ebiten.IsKeyPressed(ek)
+			}
+		}
+	}
+	return sample
+}
+
+// applyInput establishes the one host service's live state and one published
+// pointer record. The transition enumeration is only an observation order for
+// a polling API; it does not claim to restore native message chronology
+// [07 §2][01 R-PLAT-01 §6].
+func applyInput(in *input.State, sample sampledInput) {
 	if in == nil || in.Mouse == nil || in.Kbd == nil {
 		return
 	}
 	m, k := in.Mouse, in.Kbd
 	m.ResetEdges()
 	k.ResetEdges()
-	cx, cy := ebiten.CursorPosition()
-	m.SetPosition(float32(cx), float32(cy))
-	for _, mp := range []struct {
-		btn input.MouseButton
-		eb  ebiten.MouseButton
-	}{
-		{input.MouseButtonLeft, ebiten.MouseButtonLeft},
-		{input.MouseButtonMiddle, ebiten.MouseButtonMiddle},
-		{input.MouseButtonRight, ebiten.MouseButtonRight},
-	} {
-		m.SetButton(mp.btn, ebiten.IsMouseButtonPressed(mp.eb))
-	}
-	wx, wy := ebiten.Wheel()
-	m.SetWheel(float32(wx), float32(wy))
+
 	for key := input.Key(1); key < input.KeyCount; key++ {
-		down := false
-		// Retail asks for one held state per modifier (`0xF9` Shift, `0xFA`
-		// Ctrl, `0xFB` Alt), so either physical key satisfies the query
-		// [07 §2]. Ctrl in particular now gates a whole column of the battle
-		// hotkey census [07 R-CAM-01 §2].
-		switch key {
-		case input.KeyShift:
-			down = ebiten.IsKeyPressed(ebiten.KeyShiftLeft) || ebiten.IsKeyPressed(ebiten.KeyShiftRight)
-		case input.KeyCtrl:
-			down = ebiten.IsKeyPressed(ebiten.KeyControlLeft) || ebiten.IsKeyPressed(ebiten.KeyControlRight)
-		case input.KeyAlt:
-			down = ebiten.IsKeyPressed(ebiten.KeyAltLeft) || ebiten.IsKeyPressed(ebiten.KeyAltRight)
-		default:
-			if ek, ok := ebitenKey(key); ok {
-				down = ebiten.IsKeyPressed(ek)
-			}
-		}
-		wasDown := k.KeyDown(key)
+		wasHeld := k.KeyHeld(key)
+		down := sample.keys[key]
 		k.SetKey(key, down)
-		if down && !wasDown && editorKey(key) {
+		if down && !wasHeld && keyboardTokenKey(key) {
 			in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: key})
 		}
 	}
-	// AppendInputChars supplies the platform's locale-translated characters.
-	// Its batch preserves character order, but Ebiten exposes no event history
-	// ordering that batch against physical polling edges; TokenRing cannot
-	// reconstruct that unavailable upstream history [07 §2].
-	for _, r := range ebiten.AppendInputChars(nil) {
+
+	wasLeft := m.Held(input.MouseButtonLeft)
+	wasRight := m.Held(input.MouseButtonRight)
+	m.SetPosition(float32(sample.x), float32(sample.y))
+	m.SetWheel(sample.wheelX, sample.wheelY)
+	// Middle has no semantic pointer record, but remains an independent held
+	// sample for legacy consumers.
+	m.SetButton(input.MouseButtonMiddle, sample.buttons.Middle)
+
+	event := input.PointerEvent{
+		X: sample.x, Y: sample.y, Modifiers: sample.modifiers,
+		Buttons: sample.buttons, Timestamp: sample.timestamp,
+	}
+	in.UpdatePointerMotion(event)
+	if wasLeft != sample.buttons.Left {
+		if sample.buttons.Left {
+			event.Kind = input.LeftDown
+		} else {
+			event.Kind = input.LeftUp
+		}
+		in.EnqueuePointer(event)
+	}
+	if wasRight != sample.buttons.Right {
+		if sample.buttons.Right {
+			event.Kind = input.RightDown
+		} else {
+			event.Kind = input.RightUp
+		}
+		in.EnqueuePointer(event)
+	}
+	// TODO(T25): Ebiten polling exposes no native message order, key-repeat
+	// history, or double-click identity. Do not synthesize those details here.
+	in.PublishPointer()
+
+	// AppendInputChars preserves character order within its own batch. Ebiten
+	// does not order that batch against the polled physical transitions above.
+	for _, r := range sample.characters {
 		in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: r})
 	}
 }
 
-func editorKey(key input.Key) bool {
+func keyboardTokenKey(key input.Key) bool {
 	switch key {
 	case input.KeyBackspace, input.KeyDelete, input.KeyHome, input.KeyEnd,
-		input.KeyLeft, input.KeyRight, input.KeyEnter, input.KeyEscape:
+		input.KeyLeft, input.KeyRight, input.KeyUp, input.KeyDown, input.KeyTab,
+		input.KeyEnter, input.KeyEscape:
 		return true
 	}
 	return false

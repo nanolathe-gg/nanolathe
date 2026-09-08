@@ -13,6 +13,13 @@ const (
 	logicalHeight = 480
 )
 
+// CaptionTranslator supplies the parse-time caption lookup. GUI owns no
+// language selection; the startup composition supplies the already-selected
+// table [07 R-WGT-01 §11].
+type CaptionTranslator interface {
+	Translate(string) string
+}
+
 // Attribute bits the window builder writes [07 R-WGT-01 §12][07 R-WGT-01 §5].
 const (
 	// AttribInert is the bit the label arm sets on every label whose `link` is
@@ -48,6 +55,13 @@ const sliderArtEntry = "SLIDERS"
 // frames — panel, listbox, text input, button, picture and the kind-4 synthesis
 // of BuildSlider — are finished by the presentation layer, which holds the GAF.
 func Load(fs vfs.FSOps, name string) (*Window, error) {
+	return LoadWithTranslation(fs, name, nil)
+}
+
+// LoadWithTranslation parses a .GUI panel using the already-selected caption
+// table. Retail localizes text for kinds 1, 3, 4 and 5 before window build,
+// so accelerators inspect the localized bytes [07 R-WGT-01 §3][§11].
+func LoadWithTranslation(fs vfs.FSOps, name string, captions CaptionTranslator) (*Window, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("gui: nil VFS")
 	}
@@ -219,6 +233,9 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		// Scrollbar keys: range, knobpos, knobsize, thick, text [02 §6].
 		// List/text/compound: itemheight, maxchars, range, knobpos, knobsize, thick, text, link, filename, hotornot, nuttin [02 §6].
 		g.Text = fieldString(fg.Fields, "text", "")
+		if captions != nil && (kind == KindButton || kind == KindTextBox || kind == KindScrollBar || kind == KindLabel) {
+			g.Text = captions.Translate(g.Text)
+		}
 		// staged buttons: | separated multi-line labels [07 §4]
 		if kind == KindButton && g.Text != "" && strings.Contains(g.Text, "|") {
 			g.Labels = strings.Split(g.Text, "|")
@@ -229,9 +246,9 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		g.Status = int16(fieldInt(fg.Fields, "status", 0))
 		g.GrayedOut = int16(fieldInt(fg.Fields, "grayedout", 0))
 		g.Stages = uint8(fieldInt(fg.Fields, "stages", 0) & 0xFF)
-		// TODO(question): Builder key assignment still needs locale case
-		// conversion [07 R-WGT-01 §3]. Keep parsed keys until its startup and
-		// indirect mutation trace settles the extended-byte collision mapping.
+		// Keep the authored key until the runtime builder processes this
+		// window record. Its collision fold changes ASCII A..Z only; extended
+		// bytes compare with themselves [07 R-WGT-01 §3].
 		// quickkey string stored as byte [02 §6]
 		if v, ok := fg.Fields["quickkey"]; ok && v != "" {
 			// In retail files quickkey is often numeric string like "83" or a bare symbol.

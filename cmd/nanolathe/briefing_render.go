@@ -41,6 +41,9 @@ func (g *gameShell) openCampaignBriefing() {
 		return missionBattleRequest(g.opts, g.cs, identity, g.missionDifficulty(), missionIndex, missionIndex, nil, briefingBattleSeedSource{opts: g.opts, crt: &crt})
 	}
 	g.briefing = NewCampaignBriefingController(loaded, g.missionSide, &crt, request)
+	if clPtr != nil && clPtr.Input() != nil {
+		clPtr.Input().DrainTokens()
+	}
 	if g.audioOwner == nil {
 		g.audioOwner = audio.NewService(g.cs.fs)
 	}
@@ -236,7 +239,9 @@ func (g *gameShell) loadBriefingPanel(planet BriefingPlanet) *ui.Panel {
 		return nil
 	}
 	g.assets.briefing.art = loadBriefingArt(g.cs.fs, planet, g.assets.briefing.art)
-	return ui.NewPanel(g.assets.briefing.window)
+	window := gui.CloneWindow(g.assets.briefing.window)
+	g.installRetailWindowButtonArt(window, g.assets.briefing.art)
+	return ui.NewPanel(window)
 }
 
 // loadBriefingArt resolves the planet-specific GAF for every newly opened
@@ -261,17 +266,33 @@ func (g *gameShell) briefingInput(cl *client.Client) {
 		return
 	}
 	in := cl.Input()
-	if in.Kbd.KeyDown(input.KeyEscape) {
-		g.dispatchBriefing(BriefingActionPrev)
-		return
+	if p := g.briefingPanel; p != nil && p.Window != nil {
+		frame := pointerFrame(in, widgetTokens(in), false)
+		frame.TokenMode = true
+		// TODO(question): MSNBRIEF's navigation word is initialized enabled;
+		// its full transition census remains open [07 R-WGT-01 §2].
+		frame.KeyNavigation = true
+		if in.Kbd != nil {
+			frame.ShiftHeld, frame.AltHeld = in.Kbd.HasShift(), in.Kbd.KeyHeld(input.KeyAlt)
+		}
+		result := p.ServiceFrame(frame, ui.WidgetHooks{})
+		in.DiscardTokens(result.ConsumedTokens)
+		if result.Fired {
+			switch gui.CallbackName(p.Window.Gadgets[result.FiredIndex].Name) {
+			case "Start":
+				g.dispatchBriefing(BriefingActionStart)
+			case "PrevMenu":
+				g.dispatchBriefing(BriefingActionPrev)
+			case "SHUTUP":
+				g.dispatchBriefing(BriefingActionShutup)
+			}
+			return
+		}
 	}
-	if in.Kbd.KeyDown(input.KeyEnter) || in.Kbd.KeyDown(input.KeySpace) {
-		g.dispatchBriefing(BriefingActionStart)
-		return
-	}
-	if in.Mouse.Pressed(input.MouseButtonLeft) && g.briefingPanel != nil && g.briefingPanel.Window != nil {
+	mouse, _ := publishedPointer(in)
+	if mouse.Pressed(input.MouseButtonLeft) && g.briefingPanel != nil && g.briefingPanel.Window != nil {
 		window := g.briefingPanel.Window
-		x, y := int32(in.Mouse.X), int32(in.Mouse.Y)
+		x, y := int32(mouse.X), int32(mouse.Y)
 		// A press takes the capture, and a greyed gadget never captures
 		// [07 R-WGT-01 §1 "Capture"][07 R-WGT-01 §13].
 		if idx := g.briefingPanel.PressTest(x, y); idx >= 0 {

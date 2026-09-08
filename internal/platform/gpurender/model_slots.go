@@ -9,11 +9,19 @@ import (
 )
 
 // The modern executor rasterizes every model subject of one frame into a
-// per-frame slot atlas and submits one batched draw per stage, replacing the
-// per-subject scratch surfaces, the body image cache and its page packer
-// [DESIGN_GPU_RENDERER.md §11.2]. Slots are disjoint, so the maximum-byte-key
-// pass stays subject-local [03 R-REN-03A §2] and cross-subject painter order
-// remains the commit order Replay issues [03 R-RAST-01 §7].
+// per-frame slot atlas and submits the stage as a fixed handful of passes,
+// replacing the per-subject scratch surfaces, the body image cache and its page
+// packer [DESIGN_GPU_RENDERER.md §11.2, §11.5]. Slots are disjoint, so the
+// maximum-byte-key pass stays subject-local [03 R-REN-03A §2] and cross-subject
+// painter order remains the commit order Replay issues [03 R-RAST-01 §7].
+//
+// One page carries every subject of the frame, native and doubled alike, and
+// the stage is ordered by destination rather than by subject or page: the device
+// cost unit is the destination switch, because the driver ends its render pass —
+// a whole attachment load and store — whenever the destination image changes
+// [DESIGN_GPU_RENDERER.md §11.5]. Ordering by destination makes the switch count
+// a property of which stages the frame needs, never of how many subjects or
+// pages it holds.
 //
 // These are renderer payload bounds, not retail constants. Page height grows to
 // what one frame needs; a frame that still does not fit falls back to the
@@ -22,27 +30,44 @@ const (
 	modelPageWidth     = 2048
 	modelPageMaxHeight = 2048
 	modelPageGrowStep  = 256
-	modelNativePages   = 2
+	// One page now carries what the doubled page and both native pages carried
+	// before it, so its row bound is two page heights rather than one: a loaded
+	// battle at 1920x1080 reserves about 1,850 rows, and one page height would
+	// leave almost nothing above that. The planes are still grown only to what a
+	// frame asks for, so the bound is reached only by a frame that reserves it,
+	// and a frame that does not fit still takes the per-subject fallback route.
+	modelPageMaxRows = 2 * modelPageMaxHeight
+	// Every slot is placed on an even page origin with even dimensions, so a
+	// doubled slot's two-by-two blocks line up with the native pixels the
+	// resolve produces [03 R-REN-03A §7]. Paying that alignment on native slots
+	// too — at most one wasted row and column each — is what lets native and
+	// doubled subjects share one page, which removes the doubled page's own
+	// clear, key, colour and reveal passes from the stage.
+	modelSlotAlign = 2
+	// modelBatchVertexLimit bounds one device draw's vertex range. Indices are
+	// uint32 (§11.5 "CPU"), so this is a payload bound rather than the 16-bit
+	// index domain the earlier batches were split by.
+	modelBatchVertexLimit = 1 << 20
 )
 
 // modelPage is one slot atlas page. img holds the composed subject planes —
 // index in red, the key stored at that texel in green, body coverage in blue —
 // key holds the maximum-byte-key plane the body pass reads, and post is the
-// scratch the reveal and clipping passes write before their region is copied
-// back. scale 2 pages carry the doubled structure raster of [03 R-REN-03A §6].
+// scratch the reveal and clipping stages write. Doubled subjects live on the
+// same page as native ones, at even origins [03 R-REN-03A §6].
 type modelPage struct {
 	img, key, post *ebiten.Image
 	w, h           int
-	scale          int
 
 	x, y, rowH   int
 	maxH         int
 	usedW, usedH int
 	needPost     bool
+	needClip     bool
 	subjects     []modelPageSubject
 }
 
-// modelPageSubject is one subject's raster on one page: where its local origin
+// modelPageSubject is one subject's raster on the page: where its local origin
 // lands, the prepared faces and outline endpoints, and the processed-pass
 // parameters that used to be per-draw uniforms.
 type modelPageSubject struct {
@@ -52,7 +77,11 @@ type modelPageSubject struct {
 	outline []modelGPUFace
 	reveal  *drawlist.ModelReveal
 
-	keyed        bool
+	keyed bool
+	// doubled marks a subject whose finished plane a resolve reads. Its plane
+	// must reach the post scratch even when it carries no reveal, because the
+	// resolve reads post while it writes the page [03 R-REN-03A §6–§7].
+	doubled      bool
 	waterline    drawlist.ModelWaterline
 	waterlineKey uint8
 	digger       bool
@@ -81,17 +110,43 @@ func (s modelSlot) image() *ebiten.Image {
 	return s.page.img.SubImage(s.box).(*ebiten.Image)
 }
 
-// modelSlotAtlas owns the frame's pages. overflow pages are the per-subject
+// modelFaceRun is one device draw of the page's shared vertex list. Indices are
+// relative to v0, so a run submits only the vertices it addresses. The list is
+// built once per page per frame and read by both the key pass and the colour
+// pass, which differ only in destination, shader, blend and — for the colour
+// pass — the texture page a run samples (§11.5 "Model slot passes").
+type modelFaceRun struct {
+	v0, vn int
+	i0, iN int
+	tex    *ebiten.Image
+	keyed  bool
+}
+
+// modelSlotAtlas owns the frame's page. overflow pages are the per-subject
 // fallback route: one subject at a time, rasterized at commit time through the
-// same batched passes.
+// same ordered stages.
 type modelSlotAtlas struct {
-	native           [modelNativePages]modelPage
-	super            modelPage
+	page             modelPage
 	overflow         [2]modelPage
-	overflowSuper    modelPage
 	slots            map[*drawlist.ModelGeometry]modelSlot
 	resolves         []modelResolveJob
 	overflowResolves []modelResolveJob
+	// passes counts the slot stage's device destination switches: the unit of
+	// cost on a driver that opens a render pass whenever the destination image
+	// changes [DESIGN_GPU_RENDERER.md §11.5]. lastDst is the destination the
+	// previous slot-stage device call named.
+	passes  int
+	lastDst *ebiten.Image
+	// verts/idx/runs are the page's face geometry, built once per page per
+	// frame; quadVerts/quadIdx are the stage-quad geometry the reveal, resolve,
+	// copy and clipping stages append to. They are separate stores because the
+	// outline runs must survive the quad draws issued between the outline key
+	// pass and the outline colour pass.
+	verts     []ebiten.Vertex
+	idx       []uint32
+	runs      []modelFaceRun
+	quadVerts []ebiten.Vertex
+	quadIdx   []uint32
 	// quads is the frame's textured-quad parameter store, read by the key and
 	// colour passes as source 3 (docs/DESIGN_GPU_RENDERER.md §11.2 "Textured
 	// quads without strips").
@@ -104,6 +159,28 @@ type modelResolveJob struct {
 	keyed    bool
 }
 
+// modelPass records one slot-stage device call's destination. The Metal driver
+// ends its render command encoder — a whole attachment load and store — whenever
+// the destination image changes, so this counts the stage's real cost unit
+// [DESIGN_GPU_RENDERER.md §11.5]. dst is always a whole plane, never a
+// sub-image, so pointer identity is the destination identity.
+func (r *Renderer) modelPass(dst *ebiten.Image) {
+	a := &r.modelAtlas
+	if a.lastDst != dst {
+		a.passes++
+		a.lastDst = dst
+	}
+}
+
+// modelStagePasses reports the destination switches the most recent frame's
+// slot stage issued. Diagnostic only; it never reaches output state.
+func (r *Renderer) modelStagePasses() int {
+	if r == nil {
+		return 0
+	}
+	return r.modelAtlas.passes
+}
+
 func ceilTo(v, a int) int {
 	if a <= 1 {
 		return v
@@ -111,25 +188,25 @@ func ceilTo(v, a int) int {
 	return (v + a - 1) / a * a
 }
 
-func (p *modelPage) reset(scale, maxH int) {
-	p.scale, p.maxH = scale, maxH
-	if p.maxH <= 0 || p.maxH > modelPageMaxHeight {
-		p.maxH = modelPageMaxHeight
+func (p *modelPage) reset(maxH int) {
+	p.maxH = maxH
+	if p.maxH <= 0 || p.maxH > modelPageMaxRows {
+		p.maxH = modelPageMaxRows
 	}
 	p.x, p.y, p.rowH = 0, 0, 0
 	p.usedW, p.usedH = 0, 0
-	p.needPost = false
+	p.needPost, p.needClip = false, false
 	p.subjects = p.subjects[:0]
 }
 
-// alloc reserves one shelf-packed region. Doubled pages align every slot to an
-// even origin so a resolve's two-by-two blocks line up with the native pixel it
-// produces [03 R-REN-03A §7].
+// alloc reserves one shelf-packed region on an even origin with even
+// dimensions, so a doubled slot's two-by-two blocks line up with the native
+// pixel the resolve produces [03 R-REN-03A §7].
 func (p *modelPage) alloc(w, h int) (image.Rectangle, bool) {
 	if w <= 0 || h <= 0 {
 		return image.Rectangle{}, false
 	}
-	w, h = ceilTo(w, p.scale), ceilTo(h, p.scale)
+	w, h = ceilTo(w, modelSlotAlign), ceilTo(h, modelSlotAlign)
 	if w > modelPageWidth || h > p.maxH {
 		return image.Rectangle{}, false
 	}
@@ -154,7 +231,7 @@ func (p *modelPage) ensure() {
 	if p.usedH == 0 {
 		return
 	}
-	w, h := modelPageWidth, minInt(ceilTo(p.usedH, modelPageGrowStep), modelPageMaxHeight)
+	w, h := modelPageWidth, minInt(ceilTo(p.usedH, modelPageGrowStep), modelPageMaxRows)
 	if p.img != nil && p.w >= w && p.h >= h {
 		return
 	}
@@ -194,8 +271,8 @@ func modelSlotBounds(g *drawlist.ModelGeometry) image.Rectangle {
 }
 
 // prepareModelSlots reserves one slot per eligible subject of the frame and
-// rasterizes every page before Replay commits any of them. Preparation visits
-// the same subjects the commit path consumes, in record order.
+// rasterizes the page before Replay commits any of them. Preparation visits the
+// same subjects the commit path consumes, in record order.
 func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 	a := &r.modelAtlas
 	if a.slots == nil {
@@ -203,13 +280,11 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 	} else {
 		clear(a.slots)
 	}
-	// modelPageLimit is a test hook: a small limit exhausts the shared pages
-	// so the per-subject fallback route runs against real geometry.
-	for i := range a.native {
-		a.native[i].reset(1, r.modelPageLimit)
-	}
-	a.super.reset(2, r.modelPageLimit)
+	// modelPageLimit is a test hook: a small limit exhausts the shared page so
+	// the per-subject fallback route runs against real geometry.
+	a.page.reset(r.modelPageLimit)
 	a.resolves = a.resolves[:0]
+	a.passes, a.lastDst = 0, nil
 	a.quads.reset()
 	l.VisitModels(func(m drawlist.Model) {
 		g := m.Geometry
@@ -229,7 +304,10 @@ func (r *Renderer) prepareModelSlots(l *drawlist.List) {
 			}
 		}
 	})
-	r.flushModelPages()
+	r.flushModelPage(&a.page, a.resolves)
+	// SlotPages keeps its meaning: the page-sized areas this frame's raster
+	// needed, now measured as bands of one page height on the shared page.
+	r.modelStats.SlotPages += ceilTo(a.page.usedH, modelPageMaxHeight) / modelPageMaxHeight
 }
 
 // reserveModelSlot places one subject on the atlas. An unsupported packet is
@@ -249,7 +327,7 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	if ss := g.Supersample; ss != nil && !r.modelFacesSupported(ss) {
 		return
 	}
-	slot, ok := r.placeModelSubject(g, nil, &a.super, &a.resolves)
+	slot, ok := r.placeModelSubject(g, &a.page, &a.resolves)
 	if !ok {
 		// The frame does not fit; this subject takes the per-subject route at
 		// commit time rather than disappearing from the frame.
@@ -260,15 +338,15 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	a.slots[g] = slot
 }
 
-// placeModelSubject reserves the native slot, the doubled slot a structure
-// resolve needs, and appends the page subjects that rasterize them. native nil
-// selects the shared atlas pages.
-func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, native, doubled *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
+// placeModelSubject reserves the native slot and the doubled slot a structure
+// resolve needs, and appends the page subjects that rasterize them. Both land on
+// the same page, so a doubled body costs no pass of its own.
+func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
 	local := modelSlotBounds(g)
 	if local.Empty() {
 		return modelSlot{}, false
 	}
-	rect, page, ok := r.allocModelSlot(native, local.Dx(), local.Dy())
+	rect, ok := page.alloc(local.Dx(), local.Dy())
 	if !ok {
 		return modelSlot{}, false
 	}
@@ -280,32 +358,33 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, native, doubled 
 	}
 	sub.outline = r.prepareModelOutline(g)
 	if ss := g.Supersample; ss != nil {
-		// The doubled body and its reveal rasterize on the 2x page; the native
-		// slot receives the resolve, then the native outline and clipping
-		// passes [03 R-REN-03A §6–§7].
+		// The doubled body and its reveal rasterize into a doubled slot on the
+		// same page; the native slot receives the resolve, then the native
+		// outline and clipping passes [03 R-REN-03A §6–§7].
 		ssLocal := modelSlotBounds(ss)
 		if ssLocal.Empty() {
 			return modelSlot{}, false
 		}
-		// A doubled slot is placed at an even page origin; rounding the local
-		// box down to an even corner keeps the doubled body's own origin even
-		// too, so each resolved native pixel reads the two-by-two block the
-		// classic resolve reads [03 R-REN-03A §7].
+		// Rounding the local box down to an even corner keeps the doubled
+		// body's own origin even inside its evenly placed slot, so each
+		// resolved native pixel reads the two-by-two block the classic resolve
+		// reads [03 R-REN-03A §7].
 		ssLocal.Min.X -= ssLocal.Min.X & 1
 		ssLocal.Min.Y -= ssLocal.Min.Y & 1
-		ssRect, ssPage, ok := r.allocModelSlot(doubled, ssLocal.Dx(), ssLocal.Dy())
+		ssRect, ok := page.alloc(ssLocal.Dx(), ssLocal.Dy())
 		if !ok {
 			return modelSlot{}, false
 		}
 		ssOrigin := ssRect.Min.Sub(ssLocal.Min)
-		ssSub := modelPageSubject{origin: ssOrigin, rect: ssRect, keyed: ss.KeyPlane, reveal: ss.Reveal}
+		ssSub := modelPageSubject{origin: ssOrigin, rect: ssRect, keyed: ss.KeyPlane, reveal: ss.Reveal, doubled: true}
 		ssSub.faces = r.prepareModelFaces(ss, ssOrigin)
-		if ssSub.reveal != nil {
-			ssPage.needPost = true
-		}
-		ssPage.subjects = append(ssPage.subjects, ssSub)
+		// The resolve reads the doubled plane out of the post scratch while it
+		// writes the page, so every doubled subject reaches post whether or not
+		// it carries a reveal.
+		page.needPost = true
+		page.subjects = append(page.subjects, ssSub)
 		*resolves = append(*resolves, modelResolveJob{
-			src:   modelSlot{page: ssPage, rect: ssRect, box: modelLocalBounds(ss).Add(ssOrigin)},
+			src:   modelSlot{page: page, rect: ssRect, box: modelLocalBounds(ss).Add(ssOrigin)},
 			dst:   slot,
 			keyed: g.KeyPlane,
 		})
@@ -315,28 +394,15 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, native, doubled 
 		sub.faces = r.prepareModelFaces(g, origin)
 		sub.reveal = g.Reveal
 	}
-	if sub.reveal != nil || sub.clips() {
+	if sub.reveal != nil {
 		page.needPost = true
+	}
+	if sub.clips() {
+		page.needPost, page.needClip = true, true
 	}
 	page.subjects = append(page.subjects, sub)
 	r.modelStats.RasterPixels += rect.Dx() * rect.Dy()
 	return slot, true
-}
-
-// allocModelSlot places one region on the given page, or on the first shared
-// native page with room when page is nil.
-func (r *Renderer) allocModelSlot(page *modelPage, w, h int) (image.Rectangle, *modelPage, bool) {
-	if page != nil {
-		rect, ok := page.alloc(w, h)
-		return rect, page, ok
-	}
-	for i := range r.modelAtlas.native {
-		p := &r.modelAtlas.native[i]
-		if rect, ok := p.alloc(w, h); ok {
-			return rect, p, true
-		}
-	}
-	return image.Rectangle{}, nil, false
 }
 
 // prepareModelFaces prepares one subject's faces. origin is where the subject's
@@ -351,39 +417,57 @@ func (r *Renderer) prepareModelFaces(g *drawlist.ModelGeometry, origin image.Poi
 	return out
 }
 
-// flushModelPages rasterizes the whole frame. The doubled page and its resolves
-// run first, so a resolved structure's native slot is complete before its
-// outline and clipping passes read it.
-func (r *Renderer) flushModelPages() {
-	a := &r.modelAtlas
-	pages := [modelNativePages + 1]*modelPage{&a.super}
-	for i := range a.native {
-		pages[i+1] = &a.native[i]
+// flushModelPage rasterizes one page as a sequence ordered by destination, not
+// by subject: every clear, then every key write, then every colour write, then
+// the follow-ups, with two stages kept apart exactly where the researched
+// semantics require it [DESIGN_GPU_RENDERER.md §11.5 "Model slot passes"].
+//
+// The order, and the reason each boundary exists:
+//
+//	img   the clear
+//	key   the clear, then every subject's key faces
+//	img   every subject's colour faces — reads the key plane the key faces
+//	      wrote, and must not see the outline keys
+//	post  the reveal, and every doubled plane a resolve reads — a fragment
+//	      cannot read the image it writes, so the reveal is a ping-pong, and
+//	      routing the doubled planes through the same scratch is what lets a
+//	      resolve read one plane of the page while it writes another
+//	key   the key-plane resolves, then the outline keys, which max-blend on top
+//	      of the resolved key
+//	img   the revealed regions copied back, the composed resolves, then the
+//	      outline colours — outline colour compares against keys including the
+//	      outline keys [§10], and a resolve must not overwrite the outline
+//	post  the waterline/Digger clipping that follows colour [§10], after which
+//	      the two planes swap, so the finished raster is the one img names
+//
+// That is at most eight destination switches for the whole stage whatever the
+// frame holds; a stage the frame does not need is skipped entirely.
+func (r *Renderer) flushModelPage(p *modelPage, resolves []modelResolveJob) {
+	if p.usedH == 0 {
+		return
 	}
-	for _, p := range pages {
-		p.ensure()
-		if p.needPost {
-			p.ensurePost()
-		}
-		r.clearModelPage(p)
+	p.ensure()
+	if p.needPost {
+		p.ensurePost()
 	}
-	if len(a.super.subjects) != 0 {
-		r.drawModelPage(&a.super, false)
+	if p.img == nil {
+		return
 	}
-	r.drawModelResolves(a.resolves)
-	for i := range a.native {
-		if len(a.native[i].subjects) != 0 {
-			r.drawModelPage(&a.native[i], true)
-		}
-	}
-	for i := range a.native {
-		if a.native[i].usedH > 0 {
-			r.modelStats.SlotPages++
-		}
-	}
-	if a.super.usedH > 0 {
-		r.modelStats.SlotPages++
-	}
+	// The stage's first device call always opens a pass: whatever ran before it
+	// wrote somewhere else.
+	r.modelAtlas.lastDst = nil
+	r.clearModelPage(p)
+	r.buildModelFaceRuns(p, false)
+	r.drawModelKeyRuns(p)
+	r.drawModelColourRuns(p)
+	r.drawModelReveal(p)
+	r.drawModelResolvePass(resolves, true)
+	r.buildModelFaceRuns(p, true)
+	r.drawModelKeyRuns(p)
+	r.drawModelRevealCopyBack(p)
+	r.drawModelResolvePass(resolves, false)
+	r.drawModelColourRuns(p)
+	r.drawModelClip(p)
 }
 
 func (r *Renderer) clearModelPage(p *modelPage) {
@@ -392,79 +476,60 @@ func (r *Renderer) clearModelPage(p *modelPage) {
 	}
 	rect := image.Rect(0, 0, p.usedW, p.usedH)
 	// Index 1 is the composition transparent index and 0 the cleared key
-	// [03 R-REN-03A §1–§2]. One clear per page replaces one per subject.
-	p.img.SubImage(rect).(*ebiten.Image).Fill(color.RGBA{R: 1, A: 255})
-	p.key.SubImage(rect).(*ebiten.Image).Fill(index0Color)
+	// [03 R-REN-03A §1–§2]. One clear per plane replaces one per subject. Both
+	// sub-images live only for the call, so they are recycled rather than kept
+	// in the page's own sub-image cache (§11.5 "CPU").
+	r.modelPass(p.img)
+	fillModelRegion(p.img, rect, color.RGBA{R: 1, A: 255})
+	r.modelPass(p.key)
+	fillModelRegion(p.key, rect, index0Color)
 	r.modelStats.Draws += 2
 	r.modelStats.RasterDraws += 2
 }
 
-// drawModelPage submits one page's stages: the maximum-key pass, the colour
-// pass, the reveal, then — natively — the outline and the waterline/Digger
-// clipping. Every stage is one draw for every subject on the page.
-func (r *Renderer) drawModelPage(p *modelPage, native bool) {
-	if p.img == nil {
-		return
-	}
-	r.drawModelPageFaces(p, true, false)
-	r.drawModelPageFaces(p, false, false)
-	r.drawModelProcessed(p, r.modelReveal, nil, func(s *modelPageSubject) (bool, [4]float32, [4]float32) {
-		if s.reveal == nil {
-			return false, [4]float32{}, [4]float32{}
-		}
-		v := s.reveal
-		return true, [4]float32{float32(v.Line), float32(v.Floor), 0, 0},
-			[4]float32{float32(v.Below), float32(v.Band), float32(v.Above), 0}
-	})
-	if !native {
-		return
-	}
-	r.drawModelPageFaces(p, true, true)
-	r.drawModelPageFaces(p, false, true)
-	r.drawModelProcessed(p, r.modelClip, r.tables.blue, func(s *modelPageSubject) (bool, [4]float32, [4]float32) {
-		if !s.clips() {
-			return false, [4]float32{}, [4]float32{}
-		}
-		return true, [4]float32{float32(s.waterline), float32(s.waterlineKey), boolFloat(s.digger), float32(s.diggerKey)}, [4]float32{}
-	})
+func fillModelRegion(img *ebiten.Image, rect image.Rectangle, c color.RGBA) {
+	sub := img.RecyclableSubImage(rect)
+	sub.Fill(c)
+	sub.Recycle()
 }
 
-// drawModelPageFaces batches every prepared face of every subject on the page
-// into one device draw, split only where the texture page changes or the 16-bit
-// index domain fills. Source face and scanline order is preserved across a
-// split, so an equal-key tie still goes to the later face [03 R-REN-03A §3].
-func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
-	if keyPass && (r.modelKey == nil || p.key == nil) || !keyPass && r.modelBody == nil {
-		return
-	}
-	// Both passes evaluate the textured quad mapping from the frame's parameter
-	// image, so the key a fragment writes and the key its colour pass compares
-	// come from one arithmetic (§11.2 "Textured quads without strips").
-	r.modelAtlas.quads.upload()
-	quads := r.modelAtlas.quads.img
-	r.resetGeometry()
+// buildModelFaceRuns assembles one page's device geometry once per frame. The
+// key pass and the colour pass carry identical vertices — they differ only in
+// destination, shader, blend and the texture page a run samples — so the list is
+// built once and read twice (§11.5 "Model slot passes"). Subjects owning a key
+// plane are emitted first, so the key pass is exactly the leading runs instead
+// of a second walk that skips keyless subjects.
+//
+// Source face and scanline order is preserved inside each subject, so an
+// equal-key tie still goes to the later face [03 R-REN-03A §3]; subject order
+// within a page is free because slots are disjoint.
+func (r *Renderer) buildModelFaceRuns(p *modelPage, outline bool) {
+	a := &r.modelAtlas
+	a.verts, a.idx, a.runs = a.verts[:0], a.idx[:0], a.runs[:0]
+	run := modelFaceRun{keyed: true}
 	var texPage *ebiten.Image
-	flush := func() {
-		if len(r.idx) == 0 {
-			return
+	closeRun := func() {
+		run.vn, run.iN = len(a.verts)-run.v0, len(a.idx)
+		if run.iN > run.i0 {
+			run.tex = texPage
+			a.runs = append(a.runs, run)
 		}
-		if keyPass {
-			r.rasterDraw(p.key, r.modelKey, modelKeyBlend, p.img, nil, nil, quads)
-			return
-		}
-		r.rasterDraw(p.img, r.modelBody, ebiten.BlendSourceOver, p.key, r.tables.shade, texPage, quads)
+		run = modelFaceRun{v0: len(a.verts), i0: len(a.idx), keyed: run.keyed}
 	}
 	emit := func(v []modelGPUVertex, idx []uint16, slot modelTextureSlot, textured bool, flat uint8, shaded, keyed bool, origin image.Point, quad int) {
-		if !keyPass && slot.img != nil && texPage != nil && texPage != slot.img {
-			flush()
+		// The colour pass samples one texture page per draw, so a face on
+		// another page opens the next run; the key pass ignores the texture and
+		// simply draws the same runs.
+		if slot.img != nil && texPage != nil && texPage != slot.img {
+			closeRun()
 		}
 		if slot.img != nil {
 			texPage = slot.img
 		}
-		if len(r.verts)+len(v) > quadBatchVertexLimit {
-			flush()
+		if len(a.verts)-run.v0+len(v) > modelBatchVertexLimit {
+			closeRun()
 		}
-		base := uint16(len(r.verts))
+		base := uint32(len(a.verts) - run.v0)
 		dx, dy := float32(origin.X), float32(origin.Y)
 		for _, q := range v {
 			vertex := ebiten.Vertex{
@@ -488,119 +553,232 @@ func (r *Renderer) drawModelPageFaces(p *modelPage, keyPass, outline bool) {
 					vertex.ColorB = float32(quad)
 				}
 			}
-			r.verts = append(r.verts, vertex)
+			a.verts = append(a.verts, vertex)
 		}
 		for _, i := range idx {
-			r.idx = append(r.idx, base+i)
+			a.idx = append(a.idx, base+uint32(i))
 		}
 	}
+	for _, keyed := range [2]bool{true, false} {
+		if run.keyed != keyed {
+			closeRun()
+			run.keyed = keyed
+		}
+		for i := range p.subjects {
+			s := &p.subjects[i]
+			if s.keyed != keyed {
+				continue
+			}
+			if outline {
+				for _, o := range s.outline {
+					emit(o.Vertices, modelQuadIndices, modelTextureSlot{}, false, o.Color, false, s.keyed, s.origin, 0)
+				}
+				continue
+			}
+			// The texture page is resolved once per source face at preparation
+			// time; every strip of one face shares it.
+			for j := range s.faces {
+				f := &s.faces[j]
+				textured := f.face.Texture != nil
+				for _, strip := range f.strips {
+					emit(strip.Vertices, modelQuadIndices, f.tex, textured, strip.Color, strip.Shaded, s.keyed, s.origin, 0)
+				}
+				if len(f.indices) != 0 {
+					emit(f.vertices, f.indices, f.tex, textured, f.face.Color, f.face.Shaded, s.keyed, s.origin, f.quad)
+				}
+			}
+		}
+	}
+	closeRun()
+	// Padding a submitted vertex slice needs capacity past the list's end.
+	a.verts = reserveModelVertices(a.verts)
+}
+
+// drawModelKeyRuns writes the maximum-byte-key plane. Keyless subjects stay in
+// painter order and own no key, so only the leading keyed runs draw
+// [03 R-REN-03A §2].
+func (r *Renderer) drawModelKeyRuns(p *modelPage) {
+	a := &r.modelAtlas
+	if r.modelKey == nil || p.key == nil || len(a.runs) == 0 {
+		return
+	}
+	// Both passes evaluate the textured quad mapping from the frame's parameter
+	// image, so the key a fragment writes and the key its colour pass compares
+	// come from one arithmetic (§11.2 "Textured quads without strips").
+	a.quads.upload()
+	for i := range a.runs {
+		if !a.runs[i].keyed {
+			continue
+		}
+		r.drawModelRun(p.key, r.modelKey, modelKeyBlend, &a.runs[i], p.img, nil, nil, a.quads.img)
+	}
+}
+
+// drawModelColourRuns writes the composed plane. Each fragment compares the
+// interpolated key against the key stored at its own page texel.
+func (r *Renderer) drawModelColourRuns(p *modelPage) {
+	a := &r.modelAtlas
+	if r.modelBody == nil || len(a.runs) == 0 {
+		return
+	}
+	a.quads.upload()
+	for i := range a.runs {
+		r.drawModelRun(p.img, r.modelBody, ebiten.BlendSourceOver, &a.runs[i], p.key, r.tables.shade, a.runs[i].tex, a.quads.img)
+	}
+}
+
+func (r *Renderer) drawModelRun(dst *ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, run *modelFaceRun, src0, src1, src2, src3 *ebiten.Image) {
+	a := &r.modelAtlas
+	if dst == nil || shader == nil || run.iN <= run.i0 {
+		return
+	}
+	r.modelStats.RasterDraws++
+	r.modelStats.Draws++
+	r.modelPass(dst)
+	r.modelOpts.Blend = blend
+	r.modelOpts.Images[0], r.modelOpts.Images[1] = src0, src1
+	r.modelOpts.Images[2], r.modelOpts.Images[3] = src2, src3
+	dst.DrawTrianglesShader32(padModelVertices(a.verts, run.v0, run.vn), a.idx[run.i0:run.iN], shader, &r.modelOpts)
+}
+
+// drawModelReveal applies the nanoframe reveal, and carries every doubled plane
+// a resolve reads, into the page's scratch. A fragment cannot read the image it
+// writes, so the reveal is a ping-pong; routing the doubled planes through the
+// same scratch is what lets a resolve read one plane of the page while it writes
+// another [03 R-COMP-01 §3][03 R-REN-03A §6].
+func (r *Renderer) drawModelReveal(p *modelPage) {
+	if p.post == nil || r.modelCopy == nil {
+		return
+	}
+	// A doubled subject with no reveal only has to reach the scratch unchanged.
+	r.resetModelQuads()
 	for i := range p.subjects {
 		s := &p.subjects[i]
-		if keyPass && !s.keyed {
+		if !s.doubled || s.reveal != nil {
 			continue
 		}
-		if outline {
-			for _, o := range s.outline {
-				emit(o.Vertices, modelQuadIndices, modelTextureSlot{}, false, o.Color, false, s.keyed, s.origin, 0)
-			}
-			continue
+		if !r.modelQuadHasRoom() {
+			r.rasterQuadDraw(p.post, r.modelCopy, ebiten.BlendCopy, p.img, nil)
 		}
-		// The texture page is resolved once per source face at preparation
-		// time; every strip of one face shares it.
-		for i := range s.faces {
-			f := &s.faces[i]
-			textured := f.face.Texture != nil
-			for _, strip := range f.strips {
-				emit(strip.Vertices, modelQuadIndices, f.tex, textured, strip.Color, strip.Shaded, s.keyed, s.origin, 0)
-			}
-			if len(f.indices) != 0 {
-				emit(f.vertices, f.indices, f.tex, textured, f.face.Color, f.face.Shaded, s.keyed, s.origin, f.quad)
-			}
-		}
+		r.appendModelQuad(s.rect, s.rect, [4]float32{}, [4]float32{})
 	}
-	flush()
+	r.rasterQuadDraw(p.post, r.modelCopy, ebiten.BlendCopy, p.img, nil)
+	if r.modelReveal == nil {
+		return
+	}
+	r.resetModelQuads()
+	for i := range p.subjects {
+		s := &p.subjects[i]
+		if s.reveal == nil {
+			continue
+		}
+		if !r.modelQuadHasRoom() {
+			r.rasterQuadDraw(p.post, r.modelReveal, ebiten.BlendCopy, p.img, nil)
+		}
+		v := s.reveal
+		r.appendModelQuad(s.rect, s.rect,
+			[4]float32{float32(v.Line), float32(v.Floor), 0, 0},
+			[4]float32{float32(v.Below), float32(v.Band), float32(v.Above), 0})
+	}
+	r.rasterQuadDraw(p.post, r.modelReveal, ebiten.BlendCopy, p.img, nil)
+}
+
+// drawModelRevealCopyBack returns each revealed native region to the page. A
+// doubled subject needs no copy: its resolve reads the scratch plane and writes
+// the native slot directly.
+func (r *Renderer) drawModelRevealCopyBack(p *modelPage) {
+	if p.post == nil || r.modelCopy == nil {
+		return
+	}
+	r.resetModelQuads()
+	for i := range p.subjects {
+		s := &p.subjects[i]
+		if s.reveal == nil || s.doubled {
+			continue
+		}
+		if !r.modelQuadHasRoom() {
+			r.rasterQuadDraw(p.img, r.modelCopy, ebiten.BlendCopy, p.post, nil)
+		}
+		r.appendModelQuad(s.rect, s.rect, [4]float32{}, [4]float32{})
+	}
+	r.rasterQuadDraw(p.img, r.modelCopy, ebiten.BlendCopy, p.post, nil)
+}
+
+// drawModelResolvePass resolves every doubled plane, reading the scratch the
+// reveal stage wrote. key selects the key plane the outline pass reads, which is
+// the top-left sample of each block [03 R-REN-03A §6–§7].
+func (r *Renderer) drawModelResolvePass(jobs []modelResolveJob, key bool) {
+	if len(jobs) == 0 || r.modelResolve == nil || r.tables.alpha == nil {
+		return
+	}
+	var page *modelPage
+	r.resetModelQuads()
+	for _, j := range jobs {
+		if key && !j.keyed || j.src.page == nil || j.dst.page == nil || j.dst.page.post == nil {
+			continue
+		}
+		if page != nil && page != j.dst.page || !r.modelQuadHasRoom() {
+			r.flushModelResolve(page, key)
+		}
+		page = j.dst.page
+		r.appendModelQuad(j.dst.box, j.src.box, [4]float32{boolFloat(key), 0, 0, 0}, [4]float32{})
+	}
+	r.flushModelResolve(page, key)
+}
+
+func (r *Renderer) flushModelResolve(page *modelPage, key bool) {
+	if page == nil {
+		r.resetModelQuads()
+		return
+	}
+	target := page.img
+	if key {
+		target = page.key
+	}
+	r.rasterQuadDraw(target, r.modelResolve, ebiten.BlendCopy, page.post, r.tables.alpha)
+}
+
+// drawModelClip applies the waterline and Digger clipping that follows colour
+// [03 R-WATER-01 §2][03 R-REN-03A §8]. The stage copies the whole used page
+// forward into the scratch first, so exchanging the two planes afterwards leaves
+// the finished raster under the name every commit site reads. That replaces the
+// copy back a per-region ping-pong would need with one destination switch; the
+// two planes are otherwise interchangeable, and the commit sites read the page's
+// img field after the whole stage has run.
+func (r *Renderer) drawModelClip(p *modelPage) {
+	if !p.needClip || p.post == nil || r.modelClip == nil || r.modelCopy == nil {
+		return
+	}
+	used := image.Rect(0, 0, p.usedW, p.usedH)
+	r.resetModelQuads()
+	r.appendModelQuad(used, used, [4]float32{}, [4]float32{})
+	r.rasterQuadDraw(p.post, r.modelCopy, ebiten.BlendCopy, p.img, nil)
+	r.resetModelQuads()
+	for i := range p.subjects {
+		s := &p.subjects[i]
+		if !s.clips() {
+			continue
+		}
+		if !r.modelQuadHasRoom() {
+			r.rasterQuadDraw(p.post, r.modelClip, ebiten.BlendCopy, p.img, r.tables.blue)
+		}
+		r.appendModelQuad(s.rect, s.rect,
+			[4]float32{float32(s.waterline), float32(s.waterlineKey), boolFloat(s.digger), float32(s.diggerKey)},
+			[4]float32{})
+	}
+	r.rasterQuadDraw(p.post, r.modelClip, ebiten.BlendCopy, p.img, r.tables.blue)
+	p.img, p.post = p.post, p.img
 }
 
 var modelQuadIndices = []uint16{0, 1, 2, 0, 2, 3}
 
 var modelKeyBlend = ebiten.Blend{BlendOperationRGB: ebiten.BlendOperationMax, BlendOperationAlpha: ebiten.BlendOperationMax}
 
-// drawModelProcessed runs one destination-reading stage over every subject that
-// asks for it. The stage reads the page and writes the page's scratch plane, so
-// one batched draw covers the frame; the affected regions are then copied back.
-func (r *Renderer) drawModelProcessed(p *modelPage, shader *ebiten.Shader, table *ebiten.Image, params func(*modelPageSubject) (bool, [4]float32, [4]float32)) {
-	if shader == nil || r.modelCopy == nil || p.img == nil || p.post == nil {
-		return
-	}
-	r.resetGeometry()
-	// The stage reads the page and writes its scratch plane, then the same
-	// quads copy the processed regions back. Two draws cover the whole frame.
-	flush := func() {
-		if len(r.idx) == 0 {
-			return
-		}
-		verts, idx := len(r.verts), len(r.idx)
-		r.rasterDraw(p.post, shader, ebiten.BlendCopy, p.img, table, nil, nil)
-		r.verts, r.idx = r.verts[:verts], r.idx[:idx]
-		r.rasterDraw(p.img, r.modelCopy, ebiten.BlendCopy, p.post, nil, nil, nil)
-	}
-	for i := range p.subjects {
-		s := &p.subjects[i]
-		on, col, custom := params(s)
-		if !on {
-			continue
-		}
-		if !r.quadBatchHasRoom() {
-			flush()
-		}
-		r.appendModelQuad(s.rect, s.rect, col, custom)
-	}
-	flush()
-}
-
-// drawModelResolves resolves every doubled slot into its native slot: one draw
-// for the composed plane and one for the key plane the outline pass reads
-// [03 R-REN-03A §6–§7].
-func (r *Renderer) drawModelResolves(jobs []modelResolveJob) {
-	if len(jobs) == 0 || r.modelResolve == nil || r.tables.alpha == nil {
-		return
-	}
-	for pass := 0; pass < 2; pass++ {
-		r.resetGeometry()
-		key := pass == 1
-		var dst, src *modelPage
-		for _, j := range jobs {
-			if key && !j.keyed {
-				continue
-			}
-			if j.src.page == nil || j.dst.page == nil {
-				continue
-			}
-			if dst != nil && dst != j.dst.page || src != nil && src != j.src.page || !r.quadBatchHasRoom() {
-				r.flushModelResolve(dst, src, key)
-			}
-			dst, src = j.dst.page, j.src.page
-			r.appendModelQuad(j.dst.box, j.src.box, [4]float32{boolFloat(key), 0, 0, 0}, [4]float32{})
-		}
-		r.flushModelResolve(dst, src, key)
-	}
-}
-
-func (r *Renderer) flushModelResolve(dst, src *modelPage, key bool) {
-	if dst == nil || src == nil || len(r.idx) == 0 {
-		return
-	}
-	target := dst.img
-	if key {
-		target = dst.key
-	}
-	r.rasterDraw(target, r.modelResolve, ebiten.BlendCopy, src.img, r.tables.alpha, nil, nil)
-}
-
 // appendModelQuad appends one destination/source rectangle pair carrying the
 // stage's parameters on its vertices.
 func (r *Renderer) appendModelQuad(dst, src image.Rectangle, col, custom [4]float32) {
-	base := uint16(len(r.verts))
+	a := &r.modelAtlas
+	base := uint32(len(a.quadVerts))
 	corners := [4][4]float32{
 		{float32(dst.Min.X), float32(dst.Min.Y), float32(src.Min.X), float32(src.Min.Y)},
 		{float32(dst.Max.X), float32(dst.Min.Y), float32(src.Max.X), float32(src.Min.Y)},
@@ -608,64 +786,70 @@ func (r *Renderer) appendModelQuad(dst, src image.Rectangle, col, custom [4]floa
 		{float32(dst.Min.X), float32(dst.Max.Y), float32(src.Min.X), float32(src.Max.Y)},
 	}
 	for _, c := range corners {
-		r.verts = append(r.verts, ebiten.Vertex{
+		a.quadVerts = append(a.quadVerts, ebiten.Vertex{
 			DstX: c[0], DstY: c[1], SrcX: c[2], SrcY: c[3],
 			ColorR: col[0], ColorG: col[1], ColorB: col[2], ColorA: col[3],
 			Custom0: custom[0], Custom1: custom[1], Custom2: custom[2], Custom3: custom[3],
 		})
 	}
-	r.idx = append(r.idx, base, base+1, base+2, base, base+2, base+3)
+	a.quadIdx = append(a.quadIdx, base, base+1, base+2, base, base+2, base+3)
+}
+
+func (r *Renderer) resetModelQuads() {
+	a := &r.modelAtlas
+	a.quadVerts, a.quadIdx = a.quadVerts[:0], a.quadIdx[:0]
+}
+
+// modelQuadHasRoom reports whether another four-vertex quad fits the current
+// stage batch.
+func (r *Renderer) modelQuadHasRoom() bool {
+	return len(r.modelAtlas.quadVerts) <= modelBatchVertexLimit-quadVertices
 }
 
 // modelDraw submits one model-family draw through the renderer's reused options
 // value, so no steady-state frame allocates a draw option or uniform map
-// [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
+// [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"]. Indices are uint32, since
+// Ebitengine converts a uint16 index slice into a freshly grown uint32 buffer on
+// every call (§11.5 "CPU").
 func (r *Renderer) modelDraw(dst *ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, src0, src1, src2, src3 *ebiten.Image) {
-	if dst == nil || shader == nil || len(r.idx) == 0 {
-		return
+	a := &r.modelAtlas
+	if dst != nil && shader != nil && len(a.quadIdx) != 0 {
+		r.modelOpts.Blend = blend
+		r.modelOpts.Images[0], r.modelOpts.Images[1] = src0, src1
+		r.modelOpts.Images[2], r.modelOpts.Images[3] = src2, src3
+		a.quadVerts = reserveModelVertices(a.quadVerts)
+		dst.DrawTrianglesShader32(padModelVertices(a.quadVerts, 0, len(a.quadVerts)), a.quadIdx, shader, &r.modelOpts)
+		r.modelStats.Draws++
 	}
-	r.modelOpts.Blend = blend
-	r.modelOpts.Images[0], r.modelOpts.Images[1] = src0, src1
-	r.modelOpts.Images[2], r.modelOpts.Images[3] = src2, src3
-	dst.DrawTrianglesShader(r.verts, r.idx, shader, &r.modelOpts)
-	r.modelStats.Draws++
-	r.resetGeometry()
+	r.resetModelQuads()
 }
 
-// rasterDraw is a slot atlas pass: one draw for every subject on one page, so
-// its count is a property of the frame's pages, not of the number of subjects.
-func (r *Renderer) rasterDraw(dst *ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, src0, src1, src2, src3 *ebiten.Image) {
-	if dst == nil || shader == nil || len(r.idx) == 0 {
+// rasterQuadDraw is one slot atlas stage draw: it covers every subject the stage
+// applies to, so its count is a property of the frame's stages, not of the
+// number of subjects.
+func (r *Renderer) rasterQuadDraw(dst *ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, src0, src1 *ebiten.Image) {
+	if dst == nil || shader == nil || len(r.modelAtlas.quadIdx) == 0 {
+		r.resetModelQuads()
 		return
 	}
 	r.modelStats.RasterDraws++
-	r.modelDraw(dst, shader, blend, src0, src1, src2, src3)
+	r.modelPass(dst)
+	r.modelDraw(dst, shader, blend, src0, src1, nil, nil)
 }
 
 // rasterizeModelOverflow is the per-subject fallback for a frame whose subjects
-// do not fit the atlas. It runs the same stages over a single-subject page at
-// commit time, so an oversized frame costs more draws but loses no subject.
+// do not fit the atlas. It runs the same ordered stages over a single-subject
+// page at commit time, so an oversized frame costs more passes but loses no
+// subject.
 func (r *Renderer) rasterizeModelOverflow(g *drawlist.ModelGeometry, set int) (modelSlot, bool) {
 	a := &r.modelAtlas
-	native, doubled := &a.overflow[set], &a.overflowSuper
-	native.reset(1, modelPageMaxHeight)
-	doubled.reset(2, modelPageMaxHeight)
+	page := &a.overflow[set]
+	page.reset(modelPageMaxHeight)
 	a.overflowResolves = a.overflowResolves[:0]
-	slot, ok := r.placeModelSubject(g, native, doubled, &a.overflowResolves)
+	slot, ok := r.placeModelSubject(g, page, &a.overflowResolves)
 	if !ok {
 		return modelSlot{}, false
 	}
-	for _, p := range []*modelPage{doubled, native} {
-		p.ensure()
-		if p.needPost {
-			p.ensurePost()
-		}
-		r.clearModelPage(p)
-	}
-	if len(doubled.subjects) != 0 {
-		r.drawModelPage(doubled, false)
-	}
-	r.drawModelResolves(a.overflowResolves)
-	r.drawModelPage(native, true)
+	r.flushModelPage(page, a.overflowResolves)
 	return slot, true
 }

@@ -348,6 +348,16 @@ families still use their independent coverage flag. GPU final model composition
 keys index 1 as researched. The CPU target's differing index-1 coverage remains
 a documented comparison exception, not a change to classic.
 
+The device raster is also sensitive to where a subject lands in the slot atlas:
+moving a subject's slot origin by one pixel, with no other change, moves a few
+hundred silhouette-edge pixels across a full battle frame (measured: 452 of
+2,073,600 on the seeded benchmark capture, one to three pixels per unit). The
+shader arithmetic is translation-invariant; the residue is the device's edge
+and varying interpolation at absolute positions, and it is part of this
+approximation. A capture comparison between two revisions is therefore only
+byte-exact when their slot placement is identical; a placement change is
+reviewed on the model preview captures and by inspection, not by pixel count.
+
 ### 5.2 Enhanced zoom and strategic view (planned)
 
 One continuous camera scale should support native 1× through detailed 2× zoom,

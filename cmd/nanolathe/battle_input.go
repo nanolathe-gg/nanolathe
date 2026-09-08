@@ -113,7 +113,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// routes return through gameShell.menuInput before this method is reached.
 	defer in.DiscardTokens(in.PendingTokens())
 	kbd := in.Kbd
-	mouse := in.Mouse
+	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	b.battleState().Input.ShiftHeld = kbd.HasShift()
 	b.battleState().Input.PointerX, b.battleState().Input.PointerY = mx, my
@@ -128,14 +128,14 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// its first jump is serviced here on the following host frame. Capture is
 	// intentionally serviced before fresh clicks and continues outside the
 	// radar until its matching release [07 R-CAM-01 §5][07 R-CAM-01 §11].
-	if b.serviceMinimapCameraLatch(mx, my, mouse) {
+	if b.serviceMinimapCameraLatch(mx, my, &mouse) {
 		return
 	}
-	if b.beginMinimapCameraLatch(mx, my, mouse) {
+	if b.beginMinimapCameraLatch(mx, my, &mouse) {
 		return
 	}
 	if b.classifyPointer(mx, my) == battlePointerMinimap && mouse.Pressed(b.minimapOrderButton()) {
-		b.minimapClickOrder(cl, mx, my, kbd.HasShift())
+		b.minimapClickOrder(cl, mx, my, pointerModifiers.Shift)
 		return
 	}
 	if b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
@@ -368,7 +368,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if mouse.Pressed(input.MouseButtonRight) {
 		// A factory product button is the one right-click exception: it
 		// subtracts one/five from the matching tail node [R-P0-11].
-		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClick(b, mx, my) {
+		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClickWithShift(b, mx, my, pointerModifiers.Shift) {
 			return
 		}
 		if b.battleState().Input.BuildDef != "" {
@@ -415,7 +415,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		// across the rail from activating a different control [07 §3][07 §4].
 		b.battleState().Input.HUDCaptured = false
 		b.battleState().Input.DragActive = false
-		if b.hud != nil && b.hud.sameButton(b, b.battleState().Input.HUDPressX, b.battleState().Input.HUDPressY, mx, my) && b.hud.consumeClick(b, mx, my) {
+		if b.hud != nil && b.hud.sameButton(b, b.battleState().Input.HUDPressX, b.battleState().Input.HUDPressY, mx, my) && b.hud.consumeClickWithShift(b, mx, my, pointerModifiers.Shift) {
 			return
 		}
 		return
@@ -464,7 +464,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				b.playUICue(cl, "notoktobuild")
 				return
 			}
-			queued := kbd.HasShift()
+			queued := pointerModifiers.Shift
 			if !b.commitBuild(queued) {
 				// A command rejection is a failed commit, not an armed
 				// placement state. All cancellation exits share disarmPlacement.
@@ -482,7 +482,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	}
 
 	leftHeld := mouse.Held(input.MouseButtonLeft)
-	additive := kbd.HasShift()
+	additive := pointerModifiers.Shift
 	if leftHeld && !b.battleState().Input.DragActive {
 		b.battleState().Input.DragActive = true
 		b.battleState().Input.DragStartX, b.battleState().Input.DragStartY = mx, my

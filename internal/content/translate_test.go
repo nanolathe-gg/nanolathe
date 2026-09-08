@@ -67,15 +67,14 @@ func TestLoadTranslationTableForwardAndReverse(t *testing.T) {
 	}
 }
 
-// TestLoadTranslationTableEnglishIsEmpty locks the residual Supported
-// inference in [08 R-CAMP-01 §11]: with the default empty (English) language
-// string, no authored key is ever named "", so no entry is ever collected
-// and the table comes back nil ("no table loaded").
-func TestLoadTranslationTableEnglishIsEmpty(t *testing.T) {
+// TestLoadTranslationTableDefaultEnglishIsEmpty locks ordinary startup's
+// literal lowercase `english` selection [02 §3]. With no authored `english`
+// key, no entry is collected and the table comes back nil ("no table loaded").
+func TestLoadTranslationTableDefaultEnglishIsEmpty(t *testing.T) {
 	fs := translateFS(t, map[string]string{
 		"gamedata/translate.tdf": "[ashap plateau]\n{\n    German=Ashap-Ebene;\n}\n",
 	})
-	table, err := LoadTranslationTable(fs, "")
+	table, err := LoadTranslationTable(fs, "english")
 	if err != nil {
 		t.Fatalf("LoadTranslationTable: %v", err)
 	}

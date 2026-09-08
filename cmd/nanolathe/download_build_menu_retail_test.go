@@ -72,7 +72,7 @@ func TestRetailARMLabGeneratedSecondPageQueuesWarriorAndFlea(t *testing.T) {
 	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := retailPaletteForTest(t, cs)
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil, newBattleWindowContext(cs, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestRetailARMLabGeneratedSecondPageQueuesWarriorAndFlea(t *testing.T) {
 	want := []string{"armwar", "armflea"}
 	for button, product := range want {
 		gad := generated.Gadgets[button+4]
-		if !strings.EqualFold(gad.Name, product) || !strings.EqualFold(gad.Art, product) || gad.GrayedOut != 0 || gad.CommonAttribs != 4 {
+		if !strings.EqualFold(gad.Name, product) || !strings.EqualFold(gad.Art, "IGPATCH") || gad.GAFFile&1 == 0 || gad.GrayedOut&1 != 0 || gad.CommonAttribs != 4 {
 			t.Fatalf("ARMDL slot %d = %+v, want %s product gadget", button, gad, product)
 		}
 		entry := b.hud.gadgetArtEntry(gad, pageArt)

@@ -47,7 +47,12 @@ type battleSession struct {
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
-	ended            bool
+	// restart is RESTART.GUI's presentation-only widget state. The callback is
+	// installed by the frontend lifecycle owner; it tears down and starts a
+	// fresh entry rather than reusing this session [08 R-CAMP-01 §8].
+	restart       battleRestartState
+	restartBattle func(*client.Client, battleRestartRequest)
+	ended         bool
 
 	controller *BattleController
 	// modelTextures is built once at battle entry from the catalog and VFS. It
@@ -195,14 +200,30 @@ func runBattleView(opts Options, cs *contentSet) error {
 		return err
 	}
 	clPtr = cl
-	b.returnToMenu = func(cl *client.Client) {
+	exitBattle := func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
 		b.ended = true
 		if cl != nil {
 			cl.RequestExit()
 		}
 	}
-	defer b.teardown(cl)
+	var restart func(*client.Client, battleRestartRequest)
+	restart = func(active *client.Client, request battleRestartRequest) {
+		if active == nil {
+			active = cl
+		}
+		if err := restartDirectBattle(opts, cs, active, &b, request); err != nil {
+			fmt.Fprintf(os.Stderr, "nanolathe: restart battle: %v\n", err)
+			return
+		}
+		b.returnToMenu = exitBattle
+		b.restartBattle = restart
+	}
+	b.returnToMenu = exitBattle
+	b.restartBattle = restart
+	defer func() {
+		b.teardown(cl)
+	}()
 	// Software cursor [07 §8]. The cursor GAF is mandatory for a windowed
 	// battle, and installation happens before entering Ebitengine's loop.
 	cursors, cerr := client.LoadCursors(cs.fs)
@@ -212,6 +233,36 @@ func runBattleView(opts Options, cs *contentSet) error {
 	cl.SetCursors(cursors)
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9/Alt+1..9=pages/groups (SwitchAlt swaps) Shift=queue")
 	return ebitenapp.Run(cl, rendererMode(opts))
+}
+
+// restartDirectBattle is the --map lifecycle's fresh skirmish entry. The
+// direct battle view has no frontend shell, but it still owns a live client
+// and can construct the same retained-setup fresh entry RESTART.GUI requests
+// [08 R-CAMP-01 §8]. Candidate construction completes before the old battle
+// is retired, preserving the normal entry boundary without Session.Retry.
+func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, current **battleSession, request battleRestartRequest) error {
+	if current == nil || *current == nil {
+		return fmt.Errorf("no active direct battle")
+	}
+	if request.Campaign {
+		return fmt.Errorf("campaign request has no direct battle route")
+	}
+	sess, cat, err := newBattleSessionWithConfig(opts, cs, request.Skirmish)
+	if err != nil {
+		return err
+	}
+	next, err := composeBattleEntryDetached(sess, cat, cs, nil, nil)
+	if err != nil {
+		return err
+	}
+	old := *current
+	old.teardown(cl)
+	*current = next
+	installBattleClient(cl, next)
+	if next.hud != nil && next.hud.windowContext != nil {
+		next.hud.windowContext.completeTransition()
+	}
+	return nil
 }
 
 // rendererMode maps the --renderer flag to the platform executor selection. Any
@@ -237,6 +288,9 @@ func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *content
 	}
 	if cl != nil {
 		installBattleClient(cl, b)
+	}
+	if b.hud != nil && b.hud.windowContext != nil {
+		b.hud.windowContext.completeTransition()
 	}
 	return b, nil
 }
@@ -284,7 +338,7 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	// The battle HUD is mandatory retail content: side-selected PANELTOP,
 	// PANELSIDE, PANELBOT, the 30 SIDEDATA anchors, side fonts, and the authored
 	// general command page [07 §6][07 §9].
-	hud, err := loadRetailBattleHUD(cs.fs, sess, cat, pal, shell)
+	hud, err := loadRetailBattleHUD(cs.fs, sess, cat, pal, shell, newBattleWindowContext(cs, shell))
 	if err != nil {
 		return nil, err
 	}
@@ -419,7 +473,7 @@ func bindBattleMessageRetirement(sess *session.Session, cl *client.Client) {
 // latch is reset so a later load cannot reach the old battle [08 "Session
 // states"][08 R-ENTRY-01 §8][I6].
 func (b *battleSession) teardown(cl *client.Client) {
-	if b == nil {
+	if b == nil || b.sess == nil {
 		return
 	}
 	// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
@@ -623,11 +677,10 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
-	// There is deliberately no keyboard-ownership seam for the unit-information
-	// screen here. A battle window leaves its token-mode word zero, so the GUI
-	// pass *peeks* the token instead of popping it and every battle hotkey runs
-	// underneath the open window [07 R-WGT-01 §1 step 3][07 R-WGT-01 §2]; see
-	// the correction note in unitinfo.go, which this block used to contradict.
+	// A unit-information child makes its zero-token peek pass before battle
+	// hotkeys. It can claim an admitted quickkey, but it never gives Enter or
+	// Escape automatic default behavior [07 R-WGT-01 §§1-3].
+	b.serviceUnitInfoKeyboard(in)
 	if keyDown(input.KeyTab) || (keyDown(input.KeyF2) && !shiftHeld) {
 		b.openBattleMenu()
 		cl.Cursors().SetIndex(render.CursorNormal)

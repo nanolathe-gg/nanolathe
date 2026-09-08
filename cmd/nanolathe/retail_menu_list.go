@@ -154,7 +154,12 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int
 	}
 	arrow0 := arrow0Normal
 	arrow1 := arrow1Normal
-	leftMouseHeld := c != nil && c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft)
+	var mouse input.MouseState
+	leftMouseHeld := false
+	if c != nil && c.Input() != nil && c.Input().Mouse != nil {
+		mouse, _ = c.Input().PointerSample()
+		leftMouseHeld = mouse.Held(input.MouseButtonLeft)
+	}
 
 	left, top, right, bottom := int(r.X), int(r.Y), int(r.X+r.W), int(r.Y+r.H)
 	if vertical {
@@ -162,12 +167,12 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int
 		if int(arrow1.Height) > arrowH {
 			arrowH = int(arrow1.Height)
 		}
-		if leftMouseHeld && pointInRect(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y), gui.Rect{X: int32(left), Y: int32(top), W: r.W, H: int32(arrowH)}) {
+		if leftMouseHeld && pointInRect(int32(mouse.X), int32(mouse.Y), gui.Rect{X: int32(left), Y: int32(top), W: r.W, H: int32(arrowH)}) {
 			if e.Frames[base+7].Frame != nil {
 				arrow0 = e.Frames[base+7].Frame
 			}
 		}
-		if leftMouseHeld && pointInRect(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y), gui.Rect{X: int32(left), Y: int32(bottom - arrowH), W: r.W, H: int32(arrowH)}) {
+		if leftMouseHeld && pointInRect(int32(mouse.X), int32(mouse.Y), gui.Rect{X: int32(left), Y: int32(bottom - arrowH), W: r.W, H: int32(arrowH)}) {
 			if e.Frames[base+9].Frame != nil {
 				arrow1 = e.Frames[base+9].Frame
 			}
@@ -212,12 +217,12 @@ func (g *gameShell) drawRetailScrollbar(c *client.Client, p *ui.Panel, index int
 	if int(arrow1.Width) > arrowW {
 		arrowW = int(arrow1.Width)
 	}
-	if leftMouseHeld && pointInRect(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y), gui.Rect{X: int32(left), Y: int32(top), W: int32(arrowW), H: r.H}) {
+	if leftMouseHeld && pointInRect(int32(mouse.X), int32(mouse.Y), gui.Rect{X: int32(left), Y: int32(top), W: int32(arrowW), H: r.H}) {
 		if e.Frames[base+7].Frame != nil {
 			arrow0 = e.Frames[base+7].Frame
 		}
 	}
-	if leftMouseHeld && pointInRect(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y), gui.Rect{X: int32(right - arrowW), Y: int32(top), W: int32(arrowW), H: r.H}) {
+	if leftMouseHeld && pointInRect(int32(mouse.X), int32(mouse.Y), gui.Rect{X: int32(right - arrowW), Y: int32(top), W: int32(arrowW), H: r.H}) {
 		if e.Frames[base+9].Frame != nil {
 			arrow1 = e.Frames[base+9].Frame
 		}

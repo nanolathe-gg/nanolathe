@@ -21,7 +21,5 @@ func (p *Panel) ButtonQuickKeyAction(index, capture int, alt bool) Action {
 	if capture >= 0 && capture < len(p.Window.Gadgets) && p.Window.Gadgets[capture].Kind == gui.KindTextBox && !alt {
 		return none
 	}
-	// TODO(I06): toggle/radio and group-clear mutations remain with the
-	// existing screen callbacks until the shared widget state machines land.
 	return Action{Kind: ActionActivate, Index: index, Gadget: g.Name}
 }

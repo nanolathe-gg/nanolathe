@@ -6,14 +6,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
 // contentSet is the mounted install plus the notes gathered while mounting.
 type contentSet struct {
-	fs    *vfs.FS
-	root  string
-	notes []string
+	fs           *vfs.FS
+	root         string
+	notes        []string
+	translations *content.TranslationTable
 }
 
 func (c *contentSet) Close() error {
@@ -82,7 +85,23 @@ func openContent(opts Options) (*contentSet, error) {
 			}
 		}
 	}
+	// The modeled startup state selects retail's literal lowercase English
+	// default before GUI parsing. TODO(T25): host command-line/registry
+	// non-default language selection has not been integrated yet.
+	translations, err := content.LoadTranslationTable(fileSystem, "english")
+	if err != nil {
+		set.Close()
+		return nil, fmt.Errorf("nanolathe: loading default GUI translation table: %w", err)
+	}
+	set.translations = translations
 	return set, nil
+}
+
+func (c *contentSet) loadGUI(name string) (*gui.Window, error) {
+	if c == nil {
+		return nil, fmt.Errorf("nanolathe: GUI load: no mounted content")
+	}
+	return gui.LoadWithTranslation(c.fs, name, c.translations)
 }
 
 // providerNames lists the mounted providers in precedence order, which is what

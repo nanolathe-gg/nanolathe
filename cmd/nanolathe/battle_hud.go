@@ -47,6 +47,7 @@ type retailBattleHUD struct {
 	optionsWin  *gui.Window
 	exitWin     *gui.Window
 	confirmWin  *gui.Window
+	restartWin  *gui.Window
 	// screenW/screenH is the negotiated surface size the chrome is currently
 	// laid out for; applyDisplaySize re-places the size-dependent windows when
 	// it changes [07 R-HUD-05].
@@ -71,6 +72,13 @@ type retailBattleHUD struct {
 	resultDefeatFrame  *formats.GAFFrame  // [07 §11] authored endmsn.gaf defeat copy
 	resultPanel        *ui.Panel          // shared authored gesture state [07 §3]
 	resultState        resultPresentation // ENDMSN dynamic bars/reveal state [08 R-CAMP-01 §7]
+	windowContext      *battleWindowContext
+	optionsRelabel     bool
+	optionsBuilt       bool
+	exitBuilt          bool
+	confirmBuilt       bool
+	restartBuilt       bool
+	resultBuilt        bool
 
 	fs    vfs.FSOps
 	pages map[string]*formats.GAF
@@ -80,7 +88,8 @@ type retailBattleHUD struct {
 	// authored support-GAF fallback chain supplies the control art [07 §6].
 	pageChecked map[string]bool
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1][R-P0-03]
-	windows map[string]*gui.Window
+	windows     map[string]*gui.Window
+	windowBuilt map[string]bool
 	// generatedWindows are cloned command pages patched from the committed
 	// download-menu slot records. The unmodified authored page/template stays
 	// in windows so another generated page can safely reuse it [07 R-HUD-03
@@ -181,12 +190,18 @@ type retailBattleHUD struct {
 // CORE does not load ARM-specific options unconditionally [07 "Tab options menu and manual exit"].
 // GUI/GAF loads are cached at battle entry in the HUD maps (windows/pages) so
 // the frame loop does not re-read VFS [07 §4].
-func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, pal *palette.Tables, shell *gameShell) (*retailBattleHUD, error) {
+func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catalog, pal *palette.Tables, shell *gameShell, windowContext *battleWindowContext) (*retailBattleHUD, error) {
+	// TODO(question): identify the owned battle-root MAIN2.GUI opener. This HUD
+	// has no existing MAIN2 load path, so do not synthesize one solely to run a
+	// builder pass; its documented pre-transition build belongs at that opener.
 	if fs == nil || sess == nil || cat == nil {
 		return nil, fmt.Errorf("nanolathe: battle HUD load failed: no mounted content, session or catalog")
 	}
 	if pal == nil {
 		return nil, fmt.Errorf("nanolathe: battle HUD load failed: the shared palette tables are required [03 §4.3]")
+	}
+	if windowContext == nil {
+		return nil, fmt.Errorf("nanolathe: battle HUD load failed: no window build context")
 	}
 	side, err := battleSide(fs, sess, cat, shell)
 	if err != nil {
@@ -244,10 +259,12 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	// caller-level outcome for missing/malformed modal files is not established;
 	// keep a nil window/GAF rather than converting that uncertainty into a
 	// battle-entry failure or a fabricated modal [07 §11 "Missing and unknown"].
-	optionsWin := loadGUIOptional(fs, "guis/armopt.gui", "options window [07 \"Tab options menu and manual exit\"]")
+	captions := windowContext.captions()
+	optionsWin := loadGUIOptional(fs, "guis/armopt.gui", "options window [07 \"Tab options menu and manual exit\"]", captions)
 	optionsGAF := loadGAFOptional(fs, "anims/armopt.gaf", "options GAF [07 \"Tab options menu and manual exit\"]")
-	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]")
-	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]")
+	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]", captions)
+	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]", captions)
+	restartWin := loadGUIOptional(fs, "guis/restart.gui", "restart.gui [07 R-FE-01 §7]", captions)
 	// Optional modal fonts — degradable [07 §4]. Startup hands the GUI window
 	// slot 0 = hattfont12 and slot 1 = hattfont11; a missing GAF font is a null
 	// slot, not fatal [03 R-FONT-01 §5].
@@ -270,14 +287,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	// the other kinds reach GAMEOPTIONS.GUI) [07 R-FE-01 §7]. The button is
 	// relabelled, never hidden or greyed. With no translation table loaded
 	// the key is returned verbatim [02 "Translation table"].
-	if optionsWin != nil && !(sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign) {
-		for i := range optionsWin.Gadgets {
-			if gui.Name16Equal(optionsWin.Gadgets[i].Name, optionsMissionButton) {
-				optionsWin.Gadgets[i].Text = optionsSettingsLabel
-				optionsWin.Gadgets[i].Labels = nil
-			}
-		}
-	}
+	optionsRelabel := optionsWin != nil && !(sess.Mission != nil && sess.Mission.Type == mission.TypeCampaign)
 	// Optional title art — degradable [07 §11]. Load via same intgaf/gui machinery as HUD panels [07 §6][07 §11].
 	var pausedFrame, victoryFrame, defeatFrame *formats.GAFFrame
 	titlesPath := "anims/igtitles.gaf"
@@ -304,7 +314,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	// both records optional at battle entry: the title and result surface may be
 	// absent from a development mount, but neither case permits a generated
 	// replacement layout [07 §11][08 "Session end and reporting"].
-	resultWin := loadGUIOptional(fs, "guis/endmsn.gui", "endmsn.gui [07 §11]")
+	resultWin := loadGUIOptional(fs, "guis/endmsn.gui", "endmsn.gui [07 §11]", captions)
 	resultGAF := loadGAFOptional(fs, "anims/endmsn.gaf", "endmsn.gaf [07 §11]")
 	var resultVictoryFrame, resultDefeatFrame *formats.GAFFrame
 	if resultGAF != nil {
@@ -320,22 +330,19 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		}
 	}
 	var resultPanel *ui.Panel
-	if resultWin != nil {
-		resultPanel = ui.NewPanel(resultWin)
-		configureResultPanel(fs, sess, resultPanel)
-	}
 	h := &retailBattleHUD{
-		shell: shell,
-		side:  side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
+		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel,
+		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
-		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin,
+		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
 		modalFont: modalFont, modalFontSmall: modalFontSmall, stripArt: stripArt,
 		pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
 		fs:                fs,
 		pages:             make(map[string]*formats.GAF),
 		windows:           make(map[string]*gui.Window),
+		windowBuilt:       make(map[string]bool),
 		generatedWindows:  make(map[string]*gui.Window),
 		generatedPageArt:  make(map[string]*formats.GAF),
 		generatedProducts: make(map[string]bool),
@@ -465,6 +472,7 @@ func (h *retailBattleHUD) applyDisplaySize(w, height int) {
 	h.screenW, h.screenH = int32(w), int32(height)
 	placeBattleModal(h.exitWin, w, height)
 	placeBattleModal(h.confirmWin, w, height)
+	placeBattleModal(h.restartWin, w, height)
 }
 
 func battleFrame(g *formats.GAF, name string) (*formats.GAFFrame, error) {
@@ -476,6 +484,64 @@ func battleFrame(g *formats.GAF, name string) (*formats.GAFFrame, error) {
 		return nil, fmt.Errorf("nanolathe: battle HUD frame lookup failed: the interface GAF has no %s [02 §6]", name)
 	}
 	return e.Frames[0].Frame, nil
+}
+
+// openOptionsWindow builds the parsed ARMOPT record only when the running
+// battle opens it. The caller relabel follows the build and never reassigns
+// the original caption's accelerator [07 R-WGT-01 §3].
+func (h *retailBattleHUD) openOptionsWindow() {
+	if h == nil || h.optionsBuilt {
+		return
+	}
+	h.installWindow(h.optionsWin, h.optionsGAF)
+	h.optionsBuilt = true
+	if !h.optionsRelabel || h.optionsWin == nil {
+		return
+	}
+	label := optionsSettingsLabel
+	if captions := hudCaptionTranslator(h); captions != nil {
+		label = captions.Translate(label)
+	}
+	for i := range h.optionsWin.Gadgets {
+		if gui.Name16Equal(h.optionsWin.Gadgets[i].Name, optionsMissionButton) {
+			h.optionsWin.Gadgets[i].Text = label
+			h.optionsWin.Gadgets[i].Labels = nil
+		}
+	}
+}
+
+func (h *retailBattleHUD) openExitWindow() {
+	if h == nil || h.exitBuilt {
+		return
+	}
+	h.installWindow(h.exitWin, nil)
+	h.exitBuilt = true
+}
+
+func (h *retailBattleHUD) openConfirmWindow() {
+	if h == nil || h.confirmBuilt {
+		return
+	}
+	h.installWindow(h.confirmWin, nil)
+	h.confirmBuilt = true
+}
+
+// openRestartWindow builds RESTART.GUI only after EXITMENU has yielded to its
+// child. The parsed record remains inert at battle entry [07 R-WGT-01 §3].
+func (h *retailBattleHUD) openRestartWindow() {
+	if h == nil || h.restartBuilt {
+		return
+	}
+	h.installWindow(h.restartWin, nil)
+	h.restartBuilt = true
+}
+
+func (h *retailBattleHUD) openResultWindow() {
+	if h == nil || h.resultBuilt {
+		return
+	}
+	h.installWindow(h.resultWin, h.resultGAF)
+	h.resultBuilt = true
 }
 
 // battleSide resolves the side whose SIDEDATA anchors, fonts and interface GAF
@@ -701,7 +767,7 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// The hovered-gadget index is the footer's first source, so the pointer
 	// pass over the open page runs before the footer draws [07 R-HUD-03 §1].
 	if c.Input() != nil && c.Input().Mouse != nil {
-		mouse := c.Input().Mouse
+		mouse, _ := c.Input().PointerSample()
 		h.updateHoveredGadget(b, cur, int32(mouse.X), int32(mouse.Y))
 	}
 	ok := false

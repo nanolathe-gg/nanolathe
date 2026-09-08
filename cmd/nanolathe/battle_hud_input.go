@@ -95,17 +95,22 @@ func (h *retailBattleHUD) dispatchFactoryBuild(b *battleSession, product string,
 // is consumed to prevent leak into world drag [07 §3][F-P0-003]. Page next/prev
 // are data-driven with count guard [R-P0-03][07 §9] C10.
 func (h *retailBattleHUD) consumeClick(b *battleSession, x, y int32) bool {
-	return h.consumeClickDelta(b, x, y, false)
+	shift := b != nil && b.battleState() != nil && b.battleState().Input.ShiftHeld
+	return h.consumeClickDelta(b, x, y, false, shift)
 }
 
-// consumeRightClick handles the signed cancellation form of a factory
+func (h *retailBattleHUD) consumeClickWithShift(b *battleSession, x, y int32, shift bool) bool {
+	return h.consumeClickDelta(b, x, y, false, shift)
+}
+
+// consumeRightClickWithShift handles the signed cancellation form of a factory
 // product button. Other authored controls are consumed without an action;
 // right-click remains deselect/cancel on the world [R-P0-11].
-func (h *retailBattleHUD) consumeRightClick(b *battleSession, x, y int32) bool {
-	return h.consumeClickDelta(b, x, y, true)
+func (h *retailBattleHUD) consumeRightClickWithShift(b *battleSession, x, y int32, shift bool) bool {
+	return h.consumeClickDelta(b, x, y, true, shift)
 }
 
-func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightClick bool) bool {
+func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightClick, shift bool) bool {
 	if h == nil || b == nil {
 		return false
 	}
@@ -265,7 +270,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			if rightClick {
 				return true
 			}
-			if err := b.DispatchStockpileGadget(b.battleState().Input.ShiftHeld); err != nil {
+			if err := b.DispatchStockpileGadget(shift); err != nil {
 				h.dispatchErr = err
 			}
 			return true
@@ -303,7 +308,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 				// Retail branches on the product's BMcode, not on the builder
 				// [07 §9]. Product BMcode determines queue versus placement.
 				if !hud.ProductArmsPlacement(prodDef) {
-					delta := factoryBuildDelta(b.battleState().Input.ShiftHeld, rightClick)
+					delta := factoryBuildDelta(shift, rightClick)
 					// The counted-add routine's own cue runs before the
 					// descriptor routing and before the queue coalesce, so a
 					// click that ends up changing nothing is still audible
@@ -334,7 +339,7 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 			if rightClick {
 				return true
 			}
-			b.toggleOnOffSelected(b.battleState().Input.ShiftHeld)
+			b.toggleOnOffSelected(shift)
 			// "the on/off and cloak arms of the same handler play the
 			// already-documented `specialorders`" [07 §9]. The cue belongs to the
 			// side-panel gadget arm, not to the on/off command itself, so the

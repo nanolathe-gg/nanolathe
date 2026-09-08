@@ -73,7 +73,7 @@ func TestBattleHUDLoadsARMAndCORE(t *testing.T) {
 			t.Fatalf("side %d %s session: %v", sideIdx, wantPrefix, err)
 		}
 		pal := retailPaletteForTest(t, cs)
-		hud, err := loadRetailBattleHUD(cs.fs, sess, sess.Catalog, pal, nil)
+		hud, err := loadRetailBattleHUD(cs.fs, sess, sess.Catalog, pal, nil, newBattleWindowContext(cs, nil))
 		if err != nil {
 			t.Fatalf("side %d %s HUD load failed: %v", sideIdx, wantPrefix, err)
 		}
@@ -133,7 +133,7 @@ func TestMissingOptionalStillEntersBattle(t *testing.T) {
 	} {
 		t.Run(strings.Join(hide, "+"), func(t *testing.T) {
 			hfs := newHiddenFS(base, providers, hide...)
-			hud, err := loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil)
+			hud, err := loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil, newBattleWindowContext(cs, nil))
 			if err != nil {
 				t.Fatalf("optional hide %v should not fail HUD load: %v", hide, err)
 			}
@@ -189,7 +189,7 @@ func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 	mandatoryFont := "fonts/" + strings.ToLower(side.Font) + ".fnt"
 	providers := cs.fs.Providers()
 	hfs := newHiddenFS(cs.fs, providers, mandatoryFont)
-	_, err = loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil)
+	_, err = loadRetailBattleHUD(hfs, sess, sess.Catalog, pal, nil, newBattleWindowContext(cs, nil))
 	if err == nil {
 		t.Fatalf("expected HUD load to fail when mandatory font %s missing", mandatoryFont)
 	}
@@ -246,7 +246,7 @@ func TestMissingMandatoryFailsBeforeClientWithDiagnostic(t *testing.T) {
 		World:      sess.World,
 		Units:      sess.Units,
 	}
-	_, err = loadRetailBattleHUD(cs.fs, sessBroken, &brokenCat, pal, nil)
+	_, err = loadRetailBattleHUD(cs.fs, sessBroken, &brokenCat, pal, nil, newBattleWindowContext(cs, nil))
 	if err == nil {
 		t.Fatal("expected anchor missing to fail")
 	}

@@ -21,7 +21,19 @@ func drawWindowPanel(c *client.Client, window *gui.Window, page, common *formats
 	// Without art, fill + sunken uses fields 17 on top/left, 0 on bottom/right,
 	// and 20 inside. Inclusive line endpoints and their draw order matter at
 	// shared corners, including a window smaller than the bevel [07 R-FE-02 §4].
-	c.UIFillRect(x, y, w, h, color(20))
+	drawGUIBevel(c, r, color(17), color(0), color(20))
+}
+
+// drawGUIBevel fills and draws the eight ordered edge runs shared by art-less
+// windows and buttons. Callers select the exact top/left and bottom/right
+// colours rather than inferring them from a visual raised/sunken label
+// [07 R-FE-02 §4].
+func drawGUIBevel(c *client.Client, r gui.Rect, topLeft, bottomRight, fill byte) {
+	if c == nil || r.W <= 0 || r.H <= 0 {
+		return
+	}
+	x, y, w, h := int(r.X), int(r.Y), int(r.W), int(r.H)
+	c.UIFillRect(x, y, w, h, fill)
 	line := func(x1, y1, x2, y2 int, index byte) {
 		left, top := max(x, min(x1, x2)), max(y, min(y1, y2))
 		right, bottom := min(x+w-1, max(x1, x2)), min(y+h-1, max(y1, y2))
@@ -30,7 +42,7 @@ func drawWindowPanel(c *client.Client, window *gui.Window, page, common *formats
 		}
 	}
 	right, bottom := x+w-1, y+h-1
-	dark, light := color(17), color(0)
+	dark, light := topLeft, bottomRight
 	line(x, y, right, y, dark)
 	line(x, y+1, right-1, y+1, dark)
 	line(x, y, x, bottom, dark)

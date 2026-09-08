@@ -160,7 +160,7 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 	if b.postBattle.State() == session.PostBattleGlamour {
 		if resultKeyPressed(in) && b.postBattle.Handle(session.PostBattleControlKey, uint32(now)) {
 			b.consumePostBattleEffects(uint32(now), cl)
-		} else if in != nil && in.Mouse != nil && in.Mouse.Pressed(input.MouseButtonLeft) && b.postBattle.Handle(session.PostBattleControlMouse, uint32(now)) {
+		} else if mouse, _ := publishedPointer(in); in != nil && in.Mouse != nil && mouse.Pressed(input.MouseButtonLeft) && b.postBattle.Handle(session.PostBattleControlMouse, uint32(now)) {
 			b.consumePostBattleEffects(uint32(now), cl)
 		}
 		return
@@ -168,6 +168,7 @@ func (b *battleSession) stepPostBattle(delta float64, in *input.State, cl *clien
 	if b.postBattle.State() != session.PostBattleEndMission || b.hud == nil {
 		return
 	}
+	b.prepareResultPanel()
 	name, ok := b.hud.resultControlName(in)
 	if !ok {
 		return
@@ -227,6 +228,7 @@ func (b *battleSession) consumePostBattleEffects(now uint32, cl *client.Client) 
 				}
 			}
 		case session.PostBattleEffectPopulateEndMission:
+			b.prepareResultPanel()
 			b.installEndMissionBackground(cl)
 		case session.PostBattleEffectGlamourFadeStep:
 			b.advancePostBattleGlamourFade(now, cl)

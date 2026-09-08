@@ -37,8 +37,9 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 		// no gadget rectangle [07 R-HUD-05] (WU-19-223).
 		r := window.PlacedRect(i)
 		pressed := false
-		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
-			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
+		if c.Input() != nil && c.Input().Mouse != nil {
+			mouse, _ := c.Input().PointerSample()
+			pressed = mouse.Held(input.MouseButtonLeft) && guiRectContains(r, int32(mouse.X), int32(mouse.Y))
 		}
 		command, isCommand := commandGadgetVerdict(gad, f, paged)
 		if isCommand && command.hidden {

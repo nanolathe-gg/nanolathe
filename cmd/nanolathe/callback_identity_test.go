@@ -205,7 +205,7 @@ func TestOptionsCallbackRetainsLaterStagedRecord(t *testing.T) {
 	optionsState = &retailOptionsState{serviceStageIndex: -1}
 	panel.SetStageAt(1, 0)
 	panel.SetStageAt(2, 2)
-	shell.activateWidgetGadget(panel, ui.ServiceResult{Fired: true, FiredIndex: 2, FiredButton: 1})
+	shell.activateWidgetGadget(panel, ui.ServiceResult{Fired: true, FiredIndex: 2, FiredButton: 1, StageAdvanced: true})
 	if shell.audioPrefs.SoundMode != 2 {
 		t.Fatalf("later MODE stage=%d, want 2", shell.audioPrefs.SoundMode)
 	}

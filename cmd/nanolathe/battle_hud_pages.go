@@ -140,13 +140,15 @@ func (h *retailBattleHUD) numberedPage(name string, placements []frame.Generated
 		}
 	}
 	if physical && len(placements) == 0 {
-		return h.loadWindowRequired(name)
+		window, page, err := h.loadWindowRequired(name)
+		h.ensureWindowBuilt(name, window, page)
+		return window, page, err
 	}
 	sourceName := name
 	if !physical {
 		sourceName = strings.ToLower(sideNamePrefix(h.side)) + "dl"
 	}
-	source, sourceArt, err := h.loadWindowRequired(sourceName)
+	source, sourceArt, err := h.loadParsedGeneratedWindow(sourceName)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -170,14 +172,17 @@ func (h *retailBattleHUD) numberedPage(name string, placements []frame.Generated
 		}
 		gad := &window.Gadgets[index]
 		gad.Name = placement.ProductKey
-		gad.Art = placement.ProductKey
-		gad.GrayedOut = 0
+		// The generated-page patch selects the per-record resource prepass;
+		// it does not rename the template art field [07 §9].
+		gad.GAFFile |= 1
+		gad.GrayedOut &^= 1
 		gad.CommonAttribs = 4
 		if h.generatedProducts == nil {
 			h.generatedProducts = make(map[string]bool)
 		}
 		h.generatedProducts[content.CanonicalKey(placement.ProductKey)] = true
 	}
+	h.installWindow(window, sourceArt)
 	if h.generatedWindows == nil {
 		h.generatedWindows = make(map[string]*gui.Window)
 	}
@@ -225,6 +230,7 @@ func commandWindowName(namePrefix, unitName string, paged bool, page int) string
 
 func (h *retailBattleHUD) loadWindow(name string) (*gui.Window, *formats.GAF) {
 	window, page, _ := h.loadWindowInternal(name, false)
+	h.ensureWindowBuilt(name, window, page)
 	return window, page
 }
 
@@ -244,6 +250,28 @@ func (h *retailBattleHUD) loadWindowRequired(name string) (*gui.Window, *formats
 	return h.loadWindowInternal(name, true)
 }
 
+// loadParsedGeneratedWindow gives a generated page an unbuilt authored source.
+// Its dynamic slot writes therefore happen before its one builder pass; the
+// cached ordinary page may already be a runtime record [07 R-WGT-01 §3].
+func (h *retailBattleHUD) loadParsedGeneratedWindow(name string) (*gui.Window, *formats.GAF, error) {
+	if h == nil || h.fs == nil || name == "" {
+		return nil, nil, nil
+	}
+	// Small isolated HUD tests may supply an authored source directly without a
+	// mounted parser context. Production always has one, and reparses there so
+	// no already-built record can be cloned into the generated-page build.
+	if h.windowContext == nil {
+		if source := h.windows[name]; source != nil {
+			return gui.CloneWindow(source), h.resolvePageArt(name), nil
+		}
+	}
+	window, err := gui.LoadWithTranslation(h.fs, "guis/"+name+".gui", hudCaptionTranslator(h))
+	if err != nil {
+		return nil, nil, hudAssetError(h.fs, "guis/"+name+".gui", "generated builder GUI "+name+" [07 §9]", err)
+	}
+	return window, h.resolvePageArt(name), nil
+}
+
 func (h *retailBattleHUD) loadWindowInternal(name string, required bool) (*gui.Window, *formats.GAF, error) {
 	if h == nil || h.fs == nil || name == "" {
 		return nil, nil, nil
@@ -254,18 +282,39 @@ func (h *retailBattleHUD) loadWindowInternal(name string, required bool) (*gui.W
 		}
 		return nil, nil, nil
 	}
-	window, err := gui.Load(h.fs, "guis/"+name+".gui")
+	window, err := gui.LoadWithTranslation(h.fs, "guis/"+name+".gui", hudCaptionTranslator(h))
 	if err != nil {
 		if required {
 			return nil, nil, hudAssetError(h.fs, "guis/"+name+".gui", "builder GUI "+name+" [07 §9]", err)
 		}
 		return nil, nil, nil
 	}
+	page := h.resolvePageArt(name)
 	if h.windows == nil {
 		h.windows = make(map[string]*gui.Window)
 	}
 	h.windows[name] = window
-	return window, h.resolvePageArt(name), nil
+	return window, page, nil
+}
+
+func (h *retailBattleHUD) installWindow(window *gui.Window, page *formats.GAF) {
+	if h != nil && h.windowContext != nil {
+		h.windowContext.install(window, page, h.common)
+	}
+}
+
+func (h *retailBattleHUD) ensureWindowBuilt(name string, window *gui.Window, page *formats.GAF) {
+	if h == nil || window == nil {
+		return
+	}
+	if h.windowBuilt == nil {
+		h.windowBuilt = make(map[string]bool)
+	}
+	if h.windowBuilt[name] {
+		return
+	}
+	h.installWindow(window, page)
+	h.windowBuilt[name] = true
 }
 
 // resolvePageArt validates the page-specific GAF independently of the GUI
@@ -300,6 +349,12 @@ func (h *retailBattleHUD) resolvePageArt(name string) *formats.GAF {
 // chain: the page's own GAF first, then the side interface GAF and the shared
 // support GAFs [07 §4].
 func (h *retailBattleHUD) gadgetArtEntry(gad gui.Gadget, page *formats.GAF) *formats.GAFEntry {
+	if gad.Kind == gui.KindButton && gad.ExternalArtResolved {
+		return gad.ExternalArt
+	}
+	if gad.ButtonArtResolved {
+		return gad.ButtonArt
+	}
 	name := gad.Art
 	if name == "" {
 		name = gad.Name
@@ -360,7 +415,7 @@ func (h *retailBattleHUD) generatedProductGAF(product string) *formats.GAF {
 func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
 	entry := h.gadgetArtEntry(gad, page)
 	stockButtons := false
-	if entry == nil && gad.Kind == gui.KindButton && h.common != nil {
+	if entry == nil && !gad.ButtonArtResolved && !gad.ExternalArtResolved && gad.Kind == gui.KindButton && h.common != nil {
 		entry, _ = h.common.Find("BUTTONS0")
 		stockButtons = entry != nil
 	}
@@ -395,10 +450,16 @@ func selectGadgetFrame(entry *formats.GAFEntry, gad gui.Gadget, pressed, disable
 		} else if pressed {
 			idx++
 		}
-	} else if disabled && len(entry.Frames) > 2 {
-		idx = 2
-	} else if pressed && len(entry.Frames) > 1 {
-		idx = 1
+	} else {
+		// The window builder records the chosen four-frame family base. A
+		// retained installed entry therefore supplies both its identity and
+		// its base; only the button state offsets it [07 R-WGT-01 §3].
+		idx = int(gad.ArtFrame)
+		if disabled && idx+2 < len(entry.Frames) {
+			idx += 2
+		} else if pressed && idx+1 < len(entry.Frames) {
+			idx++
+		}
 	}
 	if idx >= len(entry.Frames) {
 		idx = len(entry.Frames) - 1

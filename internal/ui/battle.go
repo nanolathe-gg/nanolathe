@@ -30,6 +30,10 @@ const (
 	BattleModalExit
 	BattleModalConfirmMain
 	BattleModalConfirmExit
+	// BattleModalRestart replaces EXITMENU while the authored RESTART.GUI
+	// child is open. ARMOPT remains the pause-owning root underneath it
+	// [07 R-FE-01 §7][08 R-CAMP-01 §8].
+	BattleModalRestart
 )
 
 // BattleModalAction is the concrete result of activating a modal control.
@@ -52,6 +56,11 @@ const (
 	// set, so this reports the request and emits no schedule intent
 	// [07 R-FE-01 §6][07 R-FE-01 §7].
 	BattleModalActionPrefs
+	// RESTART.GUI owns only a three-stage difficulty selector and the
+	// request-producing button. The battle composition supplies the stage and
+	// consumes the request because both cross the session boundary.
+	BattleModalActionRestartDifficulty
+	BattleModalActionRestart
 )
 
 // BattleScheduleIntent is a plain presentation value. Session applies it at
@@ -369,7 +378,7 @@ func (s *BattleState) Back() BattleScheduleIntent {
 	switch s.modal {
 	case BattleModalOptions:
 		return s.CloseOptions()
-	case BattleModalConfirmMain, BattleModalConfirmExit:
+	case BattleModalConfirmMain, BattleModalConfirmExit, BattleModalRestart:
 		s.modal = BattleModalOptions
 	case BattleModalExit:
 		s.modal = BattleModalOptions
@@ -396,6 +405,17 @@ func (s *BattleState) ShowConfirmation(mainMenu bool) {
 	} else {
 		s.modal = BattleModalConfirmExit
 	}
+	s.ClearModalPress()
+}
+
+// ShowRestart replaces EXITMENU with RESTART.GUI above the surviving options
+// root. The caller has already established that this is a campaign or
+// skirmish battle; multiplayer never reaches this branch [07 R-FE-01 §7].
+func (s *BattleState) ShowRestart() {
+	if s == nil || s.modal != BattleModalExit {
+		return
+	}
+	s.modal = BattleModalRestart
 	s.ClearModalPress()
 }
 
@@ -428,6 +448,8 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 		switch name {
 		case "CANCEL":
 			s.modal = BattleModalOptions
+		case "RESTART":
+			s.ShowRestart()
 		case "MAINMENU":
 			s.ShowConfirmation(true)
 		case "EXITGAME":
@@ -442,6 +464,15 @@ func (s *BattleState) Activate(name string) BattleModalAction {
 				return BattleModalActionMainMenu
 			}
 			return BattleModalActionExitGame
+		}
+	case BattleModalRestart:
+		switch name {
+		case "CANCEL":
+			s.modal = BattleModalOptions
+		case "Difficulty":
+			return BattleModalActionRestartDifficulty
+		case "RESTART":
+			return BattleModalActionRestart
 		}
 	}
 	return BattleModalActionNone

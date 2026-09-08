@@ -7,6 +7,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/ui"
@@ -19,6 +20,27 @@ func resetUnitInfoState(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() { unitInfoUI = nil })
 	unitInfoUI = nil
+}
+
+func TestUnitInfoPeekPassLeavesDefaultsForBattleAndClaimsQuickKey(t *testing.T) {
+	resetUnitInfoState(t)
+	w := &gui.Window{Header: gui.Header{CrDefault: "DONE", EscDefault: "DONE"}, Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel},
+		{Kind: gui.KindButton, Name: "DONE", Active: 1, QuickKey: 'D'},
+	}}
+	unitInfoUI = &unitInfoScreen{window: w, panel: ui.NewPanel(w)}
+	in := input.NewState()
+	in.EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEnter})
+	(&battleSession{}).serviceUnitInfoKeyboard(in)
+	if !unitInfoOpen() || in.PendingTokens() != 1 {
+		t.Fatalf("Enter child ownership open=%t pending=%d", unitInfoOpen(), in.PendingTokens())
+	}
+	in.DiscardTokens(1)
+	in.EnqueueToken(input.Token{Kind: input.TokenText, Rune: 'd'})
+	(&battleSession{}).serviceUnitInfoKeyboard(in)
+	if unitInfoOpen() || in.PendingTokens() != 0 {
+		t.Fatalf("quickkey child ownership open=%t pending=%d", unitInfoOpen(), in.PendingTokens())
+	}
 }
 
 func unitInfoTestCatalog() *content.Catalog {

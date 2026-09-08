@@ -19,7 +19,13 @@ type WidgetFrame struct {
 	PointerX, PointerY int32
 	HeldButtons        uint8
 	PointerEvents      []input.PointerEvent
+	// Tokens is the input ring's producer-ordered snapshot.  The service
+	// consumes only the prefix it reports, so a later token stays available to
+	// the next GUI pass.
 	Tokens             []input.Token
+	TokenMode          bool
+	KeyNavigation      bool
+	ShiftHeld, AltHeld bool
 	TimerAdvanced      bool
 }
 
@@ -41,6 +47,9 @@ type ServiceResult struct {
 	FiredButton    uint8
 	HoverIndex     int
 	ConsumedTokens int
+	// StageAdvanced distinguishes a shared gesture which actually advanced a
+	// staged button from a mere callback firing [07 R-WGT-01 §§2-3].
+	StageAdvanced bool
 }
 
 func widgetButton(kind input.PointerEventKind) (uint8, bool, bool) {
@@ -86,6 +95,35 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		p.updateHelpText()
 		return result
 	}
+	// Retail takes the keyboard token before visiting any gadget.  A captured
+	// editor owns its ordered prefix even when the surrounding window is in its
+	// peek mode; otherwise the matrix is gated by both window words
+	// [07 R-WGT-01 §§1-2, §6].
+	matrixConsumed := false
+	if p.EditorCaptured() && len(frame.Tokens) != 0 && !frame.AltHeld {
+		measure := func(text string) int { return len(text) }
+		if hooks.Measure != nil {
+			editor := p.EditorIndex()
+			measure = func(text string) int { return hooks.Measure(editor, text) }
+		}
+		er := p.ApplyEditorTokens(frame.Tokens, measure)
+		result.ConsumedTokens = er.Consumed
+		if er.Action.Kind == ActionActivate {
+			p.fire(er.Action.Index, 0, &result)
+			return finish()
+		}
+	} else if !p.EditorCaptured() && frame.TokenMode && len(frame.Tokens) != 0 {
+		// Token mode pops one record regardless of whether the matrix recognizes
+		// it; retail would then offer the residue to its window callback, which
+		// this bounded service has no client for [07 R-WGT-01 §1].
+		result.ConsumedTokens = 1
+		if frame.KeyNavigation {
+			matrixConsumed = p.serviceKeyboardToken(frame.Tokens[0], frame, hooks, &result)
+		}
+		if result.Fired {
+			return finish()
+		}
+	}
 	for i, g := range p.Window.Gadgets {
 		if i == 0 || !p.ActiveAt(i) {
 			continue
@@ -99,17 +137,9 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		if g.Kind == gui.KindSurface && hooks.Surface != nil {
 			hooks.Surface(i)
 		}
-		if p.EditorCaptured() && p.EditorIndex() == i && len(frame.Tokens) != 0 {
-			measure := func(text string) int { return len(text) }
-			if hooks.Measure != nil {
-				measure = func(text string) int { return hooks.Measure(i, text) }
-			}
-			er := p.ApplyEditorTokens(frame.Tokens, measure)
-			result.ConsumedTokens = er.Consumed
-			if er.Action.Kind == ActionActivate {
-				p.fire(i, 0, &result)
-				return finish()
-			}
+		if len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, &result) {
+			result.ConsumedTokens = 1
+			return finish()
 		}
 		handled := false
 		for _, event := range frame.PointerEvents {
@@ -141,6 +171,10 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		}
 	}
 	return finish()
+}
+
+func suppressedPeekToken(tokenMode bool, token input.Token) bool {
+	return !tokenMode && token.Kind == input.TokenEdit && token.Key >= input.KeyF1 && token.Key <= input.KeyF10
 }
 
 func (p *Panel) serviceDown(button uint8, double bool, hooks WidgetHooks, result *ServiceResult) bool {
@@ -260,6 +294,7 @@ func (p *Panel) serviceUp(button uint8, hooks WidgetHooks, result *ServiceResult
 		}
 		if g.Stages > 0 {
 			p.cycleButton(idx)
+			result.StageAdvanced = true
 		}
 		p.markDirty()
 		return p.fire(idx, button, result)
@@ -655,7 +690,10 @@ func (p *Panel) serviceLinkOrFire(idx int, button uint8, result *ServiceResult) 
 			if tg.GrayedOut&1 != 0 {
 				return false
 			}
-			p.cycleButton(target)
+			if tg.Stages > 0 {
+				p.cycleButton(target)
+				result.StageAdvanced = true
+			}
 			return p.fire(target, button, result)
 		}
 		if tg.Kind == gui.KindScrollBar && (tg.Attribs&0x10 != 0 || tg.GrayedOut != 0) {

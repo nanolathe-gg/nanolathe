@@ -133,7 +133,7 @@ func TestQueueCountLabelPenLeftRightCentre(t *testing.T) {
 func generatedPageFixture(name string) *gui.Window {
 	gadgets := make([]gui.Gadget, 10)
 	for i := range gadgets {
-		gadgets[i] = gui.Gadget{Name: "UNCHANGED", Art: "IGPATCH", GrayedOut: 1, CommonAttribs: 9}
+		gadgets[i] = gui.Gadget{Name: "UNCHANGED", Art: "IGPATCH", GrayedOut: 3, CommonAttribs: 9}
 	}
 	return &gui.Window{Name: name, Gadgets: gadgets}
 }
@@ -161,7 +161,7 @@ func TestGeneratedPageClonesTemplateAndPatchesAuthoredSlots(t *testing.T) {
 	assertSlot := func(button int, product string) {
 		t.Helper()
 		gad := got.Gadgets[button+4]
-		if gad.Name != product || gad.Art != product || gad.GrayedOut != 0 || gad.CommonAttribs != 4 {
+		if gad.Name != product || gad.Art != "IGPATCH" || gad.GAFFile&1 == 0 || gad.GrayedOut != 2 || gad.CommonAttribs != 4 {
 			t.Fatalf("slot %d = %+v, want patched product %q", button, gad, product)
 		}
 	}
@@ -190,7 +190,7 @@ func TestGeneratedPageOverlaysExistingNumberedPage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Gadgets[7].Name != "corfast" || got.Gadgets[7].CommonAttribs != 4 || got.Gadgets[7].GrayedOut != 0 {
+	if got.Gadgets[7].Name != "corfast" || got.Gadgets[7].CommonAttribs != 4 || got.Gadgets[7].GrayedOut != 2 {
 		t.Fatalf("existing IGPATCH overlay = %+v", got.Gadgets[7])
 	}
 	if source.Gadgets[7].Name != "UNCHANGED" || source.Gadgets[7].Art != "IGPATCH" {

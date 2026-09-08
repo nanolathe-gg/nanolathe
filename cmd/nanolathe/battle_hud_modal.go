@@ -63,14 +63,22 @@ func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
 	}
 	state := b.battleState()
 	if state.HasOptionsLayer() {
+		h.openOptionsWindow()
 		h.drawGUIWindow(c, h.optionsWin, h.optionsGAF, "")
 	}
 	if state.HasExitLayer() {
+		h.openExitWindow()
 		h.drawGUIWindow(c, h.exitWin, nil, "")
 	}
+	if state.Modal() == ui.BattleModalRestart {
+		h.openRestartWindow()
+		h.drawBattleRestartWindow(c, b)
+	}
 	if state.Modal() == ui.BattleModalConfirmMain {
+		h.openConfirmWindow()
 		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
 	} else if state.Modal() == ui.BattleModalConfirmExit {
+		h.openConfirmWindow()
 		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
 	}
 }
@@ -129,6 +137,13 @@ func commanderDeathOption(b *battleSession) int {
 // Every write is clipped to the window rectangle before that surface is
 // presented, and buttons take the runtime dimensions of their selected art.
 func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, page *formats.GAF, title string) {
+	h.drawGUIWindowState(c, window, page, title, nil, nil)
+}
+
+// drawGUIWindowState retains the shared modal painter while allowing a
+// session-owned child to supply its widget state and dynamic labels. The
+// panel's down/stage words are the only input to a child button painter.
+func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Window, page *formats.GAF, title string, panel *ui.Panel, textAt func(int, gui.Gadget) (string, bool)) {
 	if window == nil {
 		return
 	}
@@ -136,6 +151,9 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 	h.drawWindowBackground(c, window, page)
 	for i, gad := range window.Gadgets {
 		active := gad.Active != 0
+		if panel != nil {
+			active = panel.ActiveAt(i)
+		}
 		if window == h.resultWin && h.resultPanel != nil {
 			active = h.resultPanel.ActiveAt(i)
 		}
@@ -144,10 +162,19 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		}
 		r := h.modalGadgetRect(window, i, page)
 		pressed := false
-		if c.Input() != nil && c.Input().Mouse != nil && c.Input().Mouse.Held(input.MouseButtonLeft) {
-			pressed = guiRectContains(r, int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y))
+		stage := 0
+		if panel != nil {
+			pressed = panel.DownAt(i) != 0
+			stage = panel.StageAt(i)
+		} else if c.Input() != nil && c.Input().Mouse != nil {
+			mouse, _ := c.Input().PointerSample()
+			pressed = mouse.Held(input.MouseButtonLeft) && guiRectContains(r, int32(mouse.X), int32(mouse.Y))
 		}
-		frame := h.modalGadgetFrame(gad, page, pressed, gad.GrayedOut != 0)
+		grey := gad.GrayedOut&1 != 0
+		frame := h.modalGadgetFrame(gad, page, pressed, grey)
+		if panel != nil && gad.Kind == gui.KindButton && gad.Stages != 0 {
+			frame = h.modalStagedButtonFrame(gad, page, pressed, stage, grey)
+		}
 		if frame != nil {
 			if modalArtResampled(gad.Kind, frame, r) {
 				c.UIBlitFrameScaledClipped(frame, int(r.X), int(r.Y), int(r.W), int(r.H), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
@@ -155,11 +182,16 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 				c.UIBlitClipped(frame, int(r.X), int(r.Y), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 			}
 		}
-		text := gad.Text
-		if window.GadgetIndex("TITLE") == i && title != "" {
+		text, dynamic := "", false
+		if textAt != nil {
+			text, dynamic = textAt(i, gad)
+		}
+		if !dynamic && window.GadgetIndex("TITLE") == i && title != "" {
 			text = title
-		} else if gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
+		} else if !dynamic && gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
 			text = gad.Labels[0]
+		} else if !dynamic {
+			text = gad.Text
 		}
 		if text == "" || (gad.Kind != gui.KindButton && gad.Kind != gui.KindLabel) {
 			continue
@@ -208,8 +240,8 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		default:
 			x += 3
 		}
-		if pressed {
-			x += boolInt(gad.Attribs&1 != 0 || gad.Attribs&2 != 0)
+		if gad.Kind == gui.KindButton && gad.Stages != 0 {
+			x++
 		}
 		y := retailTextPenY(gad, r, metric)
 		if h.modalFont != nil {
@@ -225,6 +257,52 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 		}
 		c.UITextWidth(fallback, text, x, y, -1, color)
 	}
+}
+
+// drawBattleRestartWindow supplies RESTART.GUI's session-owned labels and
+// selected stage without rewriting the parsed authored record.
+func (h *retailBattleHUD) drawBattleRestartWindow(c *client.Client, b *battleSession) {
+	if h == nil || h.restartWin == nil || b == nil || b.restart.panel == nil {
+		return
+	}
+	h.drawGUIWindowState(c, h.restartWin, nil, "", b.restart.panel, func(index int, gad gui.Gadget) (string, bool) {
+		switch gui.CallbackName(gad.Name) {
+		case "MISSIONNAME", "MISSIONNAME1", "Difficulty":
+			return b.restartGadgetText(h.restartWin, index), true
+		default:
+			return "", false
+		}
+	})
+}
+
+// modalGadgetArtFrames gives the widget service the resolved entry's real
+// frame count. A staged button's own stage count controls its cycle; this
+// count is still required for the common down-state service [07 R-WGT-01 §3].
+func (h *retailBattleHUD) modalGadgetArtFrames(gad gui.Gadget, page *formats.GAF) int {
+	if gad.Kind == gui.KindButton {
+		entry, _ := h.modalButtonArtEntry(gad, page)
+		if entry != nil {
+			return len(entry.Frames)
+		}
+		return 0
+	}
+	name := gad.Art
+	if name == "" {
+		name = gad.Name
+	}
+	for _, gaf := range []*formats.GAF{page, h.intGAF, h.common} {
+		if gaf != nil {
+			if entry, ok := gaf.Find(name); ok {
+				return len(entry.Frames)
+			}
+		}
+	}
+	if gad.Kind == gui.KindButton && h.common != nil {
+		if entry, ok := h.common.Find("BUTTONS0"); ok {
+			return len(entry.Frames)
+		}
+	}
+	return 0
 }
 
 // drawModalLabelFNT is the label painter's FNT path inside a modal window,
@@ -315,7 +393,7 @@ func (h *retailBattleHUD) modalGadgetRect(window *gui.Window, index int, page *f
 	r := window.PlacedRect(index)
 	gad := window.Gadgets[index]
 	if gad.Kind == gui.KindButton {
-		if frame := h.modalGadgetFrame(gad, page, false, gad.GrayedOut != 0); frame != nil {
+		if frame := h.modalGadgetFrame(gad, page, false, gad.GrayedOut&1 != 0); frame != nil {
 			r.W = int32(frame.Width)
 			r.H = int32(frame.Height)
 		}
@@ -362,6 +440,12 @@ func (h *retailBattleHUD) modalButtonAt(window *gui.Window, x, y int32) int {
 // Side-*page* GAFs are still not consulted: they carry unrelated entries with
 // colliding names (notably EXIT) and are not part of ARMOPT's retail binding.
 func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
+	if gad.Kind == gui.KindButton && gad.ExternalArtResolved {
+		return selectGadgetFrame(gad.ExternalArt, gad, pressed, disabled, false)
+	}
+	if gad.ButtonArtResolved {
+		return selectGadgetFrame(gad.ButtonArt, gad, pressed, disabled, false)
+	}
 	name := gad.Art
 	if name == "" {
 		name = gad.Name
@@ -380,4 +464,90 @@ func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pr
 		}
 	}
 	return nil
+}
+
+// modalStagedButtonFrame keeps a staged child on the common button-state
+// contract even in a renderer test that has no frontend shell. An installed
+// shell remains the normal resolver; the local path repeats only its frame
+// selection after the modal's own already-resolved art lookup.
+func (h *retailBattleHUD) modalStagedButtonFrame(gad gui.Gadget, page *formats.GAF, pressed bool, stage int, grey bool) *formats.GAFFrame {
+	if h != nil && h.shell != nil {
+		if frame := h.shell.retailButtonArt(gad, boolInt(pressed), stage, grey); frame != nil {
+			return frame
+		}
+	}
+	entry, stock := h.modalButtonArtEntry(gad, page)
+	if entry == nil || len(entry.Frames) == 0 {
+		return nil
+	}
+	last := len(entry.Frames) - 1
+	base := int(gad.ArtFrame)
+	if stock {
+		best, bestScore := -1, int(^uint(0)>>1)
+		for i, ref := range entry.Frames {
+			if ref.Frame == nil {
+				continue
+			}
+			score := absInt(int(ref.Frame.Width)-int(gad.Rect.W)) + absInt(int(ref.Frame.Height)-int(gad.Rect.H))
+			if score < bestScore {
+				best, bestScore = i, score
+			}
+		}
+		if best < 0 {
+			return nil
+		}
+		base = (best / 4) * 4
+	}
+	idx := base
+	switch {
+	case grey && cycleButton(gad):
+		idx = last
+	case grey && gad.Attribs&0x1800 != 0:
+		idx = base
+	case grey:
+		idx = stage
+	case pressed && int(gad.Stages) < len(entry.Frames):
+		idx = last - 1
+	default:
+		idx = stage
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > last {
+		idx = last
+	}
+	return entry.Frames[idx].Frame
+}
+
+// modalButtonArtEntry has the same explicit-resolution boundary as the
+// generic modal frame lookup: a resolved nil external slot is a miss, not a
+// request to invent a fallback art source.
+func (h *retailBattleHUD) modalButtonArtEntry(gad gui.Gadget, page *formats.GAF) (*formats.GAFEntry, bool) {
+	if h == nil || gad.Kind != gui.KindButton {
+		return nil, false
+	}
+	if gad.ExternalArtResolved {
+		return gad.ExternalArt, false
+	}
+	if gad.ButtonArtResolved {
+		return gad.ButtonArt, false
+	}
+	name := gad.Art
+	if name == "" {
+		name = gad.Name
+	}
+	for _, gaf := range []*formats.GAF{page, h.intGAF, h.common} {
+		if gaf != nil {
+			if entry, ok := gaf.Find(name); ok {
+				return entry, false
+			}
+		}
+	}
+	if h.common != nil {
+		if entry, ok := h.common.Find("BUTTONS0"); ok {
+			return entry, true
+		}
+	}
+	return nil, false
 }

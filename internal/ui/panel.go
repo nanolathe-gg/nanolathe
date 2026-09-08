@@ -374,6 +374,16 @@ func (p *Panel) ListMaxTopAt(index int) int {
 	}
 	return p.listMaxTop[index]
 }
+
+// SetListMaxTopAt installs the screen-owned scrolling limit. List population
+// and association setup determine this value; keyboard navigation only uses
+// it to clamp a one-row scroll [07 R-WGT-01 §4].
+func (p *Panel) SetListMaxTopAt(index, top int) {
+	if p == nil || index < 0 || index >= len(p.listMaxTop) {
+		return
+	}
+	p.listMaxTop[index] = maxInt(0, top)
+}
 func (p *Panel) Hovered() int {
 	if p == nil {
 		return -1

@@ -1050,11 +1050,44 @@ exclude a candidate before that later button is rebuilt.
 
 The button builder calls assignment before resolving art and before splitting
 and relocalizing staged captions. The parser has already localized the initial
-caption (§11). Buttons marked as slider arrows, or with the builder's existing
-resource flag set, bypass this assignment call. Linked labels invoke it in their
-own builder arm. Thus ordinary nonempty, non-staged buttons normally replace
-their authored key, but the empty-caption, preservation and bypass cases must
-not be collapsed into that rule.
+caption (§11). Buttons marked as slider arrows, or with the authored per-gadget
+GAF flag below set, bypass this assignment call. Linked labels invoke it in
+their own builder arm. Thus ordinary nonempty, non-staged buttons normally
+replace their authored key, but the empty-caption, preservation and bypass
+cases must not be collapsed into that rule.
+
+**Established — the authored per-gadget GAF flag.** This flag is exactly bit 0
+of `[COMMON].gaffile`; it is not a result of resource lookup or a marker that
+button art has already been resolved. New window record storage starts zeroed.
+For every record with a `[COMMON]` subsection, the parser reads `gaffile` as an
+integer with default zero and replaces only this bit with the integer's low bit.
+Whole-record moves used while appending a child GUI preserve it, while the
+builder's newly synthesised slider-arrow records start with it clear. No traced
+runtime setter changes the bit: the common-field parser is its only targeted
+writer, and the value then lasts for the record's lifetime. The GUI serializer
+also emits only this low bit.
+
+At the start of the build record loop, a set bit selects the per-gadget resource
+path. The builder clears the record's installed GAF and entry, tests
+`anims\\<gadget-name>_gadget.GAF`, and, when that resource exists and loads,
+looks up an entry with the gadget name in that GAF. Neither existence nor load
+success changes the flag. For a button, the same set bit closes the later gate
+that contains quickkey assignment and the ordinary button-art pipeline. It
+therefore also bypasses the window-GAF/common-GAF/fallback search, best-fit base
+selection, geometry replacement, and staged-caption split and attribute rewrite.
+The external entry uses base frame zero when present; if the resource or entry
+is absent, the button remains art-less with its authored geometry. Slider-arrow
+attributes close this same later gate independently, after their owning slider
+has installed their art and geometry (§5).
+
+**Established — open, assignment, and caller mutation order.** An ordinary
+window open performs its initial build, including button-key preclear and
+assignment, before returning the new window to its screen-specific caller.
+That caller may then relabel, hide, or grey gadgets and request a repaint; the
+repaint does not repeat the build prelude or key assignment. In particular,
+the in-battle options window assigns `MISSION` from its initially localized
+authored caption before the skirmish/multiplayer caller relabels it to the
+translated `Settings`. The relabel does not assign a new accelerator.
 
 **Established — whole-window key preclear lifetime.** The process-lifetime
 interface context initializes preclear enabled. The first loading-to-battle
@@ -1066,6 +1099,16 @@ in collision checks after the first battle, but are already zero before the
 first battle. The preserve attribute retains the post-preclear value, which
 can be zero; it does not recover the originally parsed byte. This state is
 separate from accelerator service enablement [R-WGT-02 §2].
+
+The loading worker opens and builds the side's root `MAIN2.GUI` before it
+reports completion, so that root still sees the enabled startup preclear. The
+successful transition then finishes the loading draw, selects the running
+battle host mode, and clears the latch. Selection-driven command pages and
+the in-battle options, exit, confirmation, Tab, and post-battle result windows
+are opened only by the running or post-battle paths, after that clear. Parsing
+or caching those resources early must therefore remain separate from their
+one-time runtime build: eagerly building them with the loading candidate would
+apply the wrong first-battle preclear state.
 
 **Established — caption-byte case conversion is process-wide ASCII only.**
 Every candidate byte and stored key reaches the collision comparison as a
@@ -1494,6 +1537,17 @@ authored key census.
 
 **Established** (static trace of the panel parser: the `[COMMON]` reader,
 the per-kind reader it dispatches to, and the kind-0 header reader).
+
+**The caption-localization boundary.** Every `text` field called localized in
+the table below is read from the authored gadget section, passed through the
+already-loaded translation table, and copied into the runtime gadget record
+during parsing. This finishes before the window builder runs, so button and
+linked-label quickkey assignment in §3 scans the current localized record
+caption. A missing table or missing source entry supplies the authored text
+unchanged under [02 "Translation table"]. For a staged button the whole
+authored field first crosses this parser boundary; the later builder splits
+the stored field at `|` and localizes each stage fragment again. Staged buttons
+do not receive an assigned quickkey (§3).
 
 **The kind byte.** `id` is read as an integer and stored as **one byte** —
 the low eight bits — so the byte the builder and the service pass dispatch
@@ -5893,6 +5947,16 @@ entries 1–6 to page one, 7–12 to page two, and so on. Generated
 `<unit>N.GUI` pages are authoritative for page existence and placement, so a
 replacement engine must not infer an eight-slot grid or synthesize missing
 pages.
+
+**Established — generated slot patch and build.** For each matched product,
+the selected gadget index is the authored `BUTTON` byte plus four. The patch
+clears only the low grey bit, sets `commonattribs` to four, copies the product
+name into the gadget name, and sets the low per-record GAF flag bit. It leaves
+the separate art-name field alone. After all matching product patches, the
+ordinary window builder runs over the resulting records. The odd-GAF prepass
+therefore resolves each product's named gadget resource and retains both hits
+and missing entries before any painter uses the record [R-WGT-01 §3].
+
 
 **Build placement is closed, and the branch into it is on the product.** The GUI
 build-button handler resolves the gadget to a definition id and, when that id is

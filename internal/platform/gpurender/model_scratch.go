@@ -1,53 +1,65 @@
 package gpurender
 
 import (
+	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
-// Execute owns these buffers until all preparation and replay have finished.
-// Distinct slots preserve prepared faces while other model jobs are assembled.
-type frameScratch[T any] struct {
-	slots [][]T
-	next  int
+// frameArena is the per-type preparation store of one frame. Execute owns it
+// until all preparation and replay have finished, and every slice it hands out
+// stays valid and distinct for the whole frame, so prepared faces survive while
+// later model jobs are assembled.
+//
+// take hands out a subslice of one retained backing array and reset only rewinds
+// the offset: the earlier scheme kept one slice per request, so a frame both
+// cleared thousands of small slices and converged on their sizes one request at
+// a time [DESIGN_GPU_RENDERER.md §11.5 "CPU"].
+//
+// Growing allocates a fresh backing array and rewinds into it rather than
+// copying. Slices handed out before the growth keep pointing at the previous
+// array, which is exactly as valid for the rest of the frame; the old array
+// becomes garbage once the last of them is dropped. Growth is geometric, so a
+// steady-state frame never grows and never allocates.
+//
+// reset does not clear. Every caller either fills the whole subslice it took or
+// takes it with a zero length and appends, so nothing reads a stale element.
+// The only references a retained arena holds past a frame are to recorded
+// geometry, GAF frames and atlas images that the recorder and the renderer's own
+// caches keep alive regardless, so clearing would free nothing and cost the
+// memclr the previous scheme paid every frame.
+type frameArena[T any] struct {
+	buf []T
+	off int
 }
 
-func (s *frameScratch[T]) take(n int) []T {
-	if s.next == len(s.slots) {
-		s.slots = append(s.slots, nil)
+func (s *frameArena[T]) take(n int) []T {
+	if n < 0 {
+		n = 0
 	}
-	v := s.slots[s.next]
-	if cap(v) < n {
-		// Grow geometrically, so a slot converges on the largest request it has
-		// ever served and a steady-state frame reallocates nothing. Growing to
-		// exactly the request reallocated whenever a frame ordered its subjects
-		// differently [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
-		size := cap(v) * 2
+	if s.off+n > len(s.buf) {
+		size := 2 * len(s.buf)
 		if size < n {
 			size = n
 		}
-		v = make([]T, size)
+		s.buf = make([]T, size)
+		s.off = 0
 	}
-	v = v[:n]
-	s.slots[s.next] = v
-	s.next++
+	v := s.buf[s.off : s.off+n : s.off+n]
+	s.off += n
 	return v
 }
-func (s *frameScratch[T]) reset() {
-	for _, v := range s.slots {
-		clear(v)
-	}
-	s.next = 0
-}
+
+func (s *frameArena[T]) reset() { s.off = 0 }
 
 // modelPrepScratch retains every frame's preparation buffers, so a steady-state
 // frame prepares faces, strips and outline endpoints without allocating
 // [DESIGN_GPU_RENDERER.md §11.2 "Allocation policy"].
 type modelPrepScratch struct {
-	strips   frameScratch[modelGPUFace]
-	vertices frameScratch[modelGPUVertex]
-	prepared frameScratch[preparedModelFace]
-	ears     frameScratch[int]
-	indices  frameScratch[uint16]
+	strips   frameArena[modelGPUFace]
+	vertices frameArena[modelGPUVertex]
+	prepared frameArena[preparedModelFace]
+	ears     frameArena[int]
+	indices  frameArena[uint16]
 }
 
 func (s *modelPrepScratch) reset() {
@@ -69,4 +81,56 @@ func (r *Renderer) prepareSpanStrips(f drawlist.ModelFace) []modelGPUFace {
 		rows = int(hi - lo)
 	}
 	return modelSpanStripsInto(f, r.modelPrep.strips.take(rows), r.modelPrep.vertices.take(rows*4))
+}
+
+// Ebitengine keeps one temporary vertex buffer per destination image and grows
+// it whenever a draw passes more vertices than it has ever held. A model stage
+// whose vertex count drifts upward frame by frame therefore reallocates that
+// buffer almost every frame [DESIGN_GPU_RENDERER.md §11.5 "CPU"]. Rounding the
+// submitted length up to a coarse quantum turns that into a handful of growths
+// over a run: padding vertices are never indexed, so they cost only their
+// conversion, and the arenas keep the spare capacity the rounding addresses.
+const (
+	modelVertexPadMin   = 16
+	modelVertexPadBlock = 4096
+	// modelVertexPadSlack is the largest overshoot padModelVertices can ask for
+	// past the end of a list, so an arena that reserves it can always serve the
+	// padded slice.
+	modelVertexPadSlack = modelVertexPadBlock
+)
+
+// modelPadCount rounds a run's vertex count up to the next power of two while it
+// is small, then to whole blocks: at most twice the conversion work for a small
+// draw, and at most one block of waste for a large one.
+func modelPadCount(n int) int {
+	if n >= modelVertexPadBlock {
+		return ceilTo(n, modelVertexPadBlock)
+	}
+	p := modelVertexPadMin
+	for p < n {
+		p *= 2
+	}
+	return p
+}
+
+// reserveModelVertices keeps modelVertexPadSlack spare vertices past the end of
+// a built list, so padModelVertices can extend any run's slice without
+// reallocating and without disturbing the vertices already written.
+func reserveModelVertices(v []ebiten.Vertex) []ebiten.Vertex {
+	if cap(v)-len(v) >= modelVertexPadSlack {
+		return v
+	}
+	grown := make([]ebiten.Vertex, len(v), 2*len(v)+modelVertexPadSlack)
+	copy(grown, v)
+	return grown
+}
+
+// padModelVertices returns the run's vertices extended to a padded length. The
+// extra vertices hold whatever the arena already held; no index addresses them.
+func padModelVertices(v []ebiten.Vertex, first, n int) []ebiten.Vertex {
+	end := first + modelPadCount(n)
+	if end > cap(v) {
+		end = first + n
+	}
+	return v[first:end]
 }

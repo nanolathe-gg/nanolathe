@@ -175,7 +175,8 @@ func (c *Client) drawCursor() {
 	if f == nil {
 		return
 	}
-	x, y := render.CursorHotspot(f, int(c.in.Mouse.X), int(c.in.Mouse.Y))
+	mouse, _ := c.in.PointerSample()
+	x, y := render.CursorHotspot(f, int(mouse.X), int(mouse.Y))
 	// Record then execute inline: classicSink.Cursor runs the same UIBlit at the
 	// hotspot-resolved origin this used to call directly [07 §8].
 	c.emitCursor(drawlist.Cursor{Frame: f, HotX: int32(x), HotY: int32(y)})

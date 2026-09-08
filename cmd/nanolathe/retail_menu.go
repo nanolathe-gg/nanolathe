@@ -132,18 +132,14 @@ func (g *gameShell) panelBackground() *formats.PCX {
 // [07 §4 (R-FE-01 §4)] — so both `NewCamp` and `AnyMsn` apply this same
 // compressed layout; the field that used to select between them controlled
 // nothing retail ever exercises.
-func (g *gameShell) applyRetailMissionLayout() {
-	if g == nil || g.assets == nil {
-		return
-	}
-	p := g.assets.panel[modeMenuMission]
-	if p == nil || p.window == nil {
+func (g *gameShell) applyRetailMissionLayout(window *gui.Window) {
+	if window == nil {
 		return
 	}
 	setRect := func(name string, y, h int32) {
-		if i := p.window.GadgetIndex(name); i >= 0 {
-			p.window.Gadgets[i].Rect.Y = y
-			p.window.Gadgets[i].Rect.H = h
+		if i := window.GadgetIndex(name); i >= 0 {
+			window.Gadgets[i].Rect.Y = y
+			window.Gadgets[i].Rect.H = h
 		}
 	}
 	setRect("Campaign", 308, 48)
@@ -174,26 +170,71 @@ func (g *gameShell) installRetailWindowButtonArt(window *gui.Window, own *format
 	if window == nil {
 		return
 	}
+	if g == nil || !g.quickKeyPreclearDisabled {
+		gui.PreclearButtonQuickKeys(window)
+	}
 	for i := range window.Gadgets {
-		if i == 0 || window.Gadgets[i].Kind != gui.KindButton {
-			continue
+		gad := &window.Gadgets[i]
+		if gad.Kind == gui.KindButton {
+			// Button flash is reset before either bypass gate. This is runtime
+			// builder state, not the authored colour [07 R-WGT-01 §3].
+			gad.ColorF = 0
 		}
-		if window.Gadgets[i].ButtonArtResolved {
-			continue
-		}
-		art := g.buildRetailButtonArt(window.Gadgets[i], own)
-		gad := art.gadget
-		gad.ArtFrame = int32(art.base)
-		gad.ButtonArt = art.entry
-		gad.ButtonArtResolved = true
-		if art.entry != nil && art.base >= 0 && art.base < len(art.entry.Frames) {
-			if frame := art.entry.Frames[art.base].Frame; frame != nil {
-				gad.Rect.W = int32(frame.Width)
-				gad.Rect.H = int32(frame.Height)
+		// The per-gadget resource prepass precedes the kind switch. Its
+		// resolved-nil result is retained. Only the button arm bypasses its
+		// ordinary builder when that bit is set [07 R-WGT-01 §3][§12].
+		if gad.GAFFile&1 != 0 {
+			gad.ExternalArt = g.externalGadgetArt(*gad)
+			gad.ExternalArtResolved = true
+			if gad.Kind == gui.KindButton {
+				gad.ButtonArt = gad.ExternalArt
+				gad.ArtFrame = 0
+				gad.ButtonArtResolved = true
+				continue
 			}
 		}
-		window.Gadgets[i] = gad
+		switch gad.Kind {
+		case gui.KindLabel:
+			gad.ColorF = 0
+			gui.AssignLinkedLabelQuickKey(window, i)
+		case gui.KindButton:
+			if gad.Attribs&0x1800 != 0 {
+				continue
+			}
+			gui.AssignButtonQuickKey(window, i)
+			art := g.buildRetailButtonArt(*gad, own)
+			built := art.gadget
+			built.ArtFrame = int32(art.base)
+			built.ButtonArt = art.entry
+			built.ButtonArtResolved = true
+			if art.entry != nil && art.base >= 0 && art.base < len(art.entry.Frames) {
+				if frame := art.entry.Frames[art.base].Frame; frame != nil {
+					built.Rect.W = int32(frame.Width)
+					built.Rect.H = int32(frame.Height)
+				}
+			}
+			window.Gadgets[i] = built
+		}
 	}
+}
+
+// externalGadgetArt is the odd-gaffile prepass. A failed resource or
+// entry lookup remains a resolved nil result, so later drawing cannot replace
+// this record with normal/common/fallback art [07 R-WGT-01 §3].
+func (g *gameShell) externalGadgetArt(gad gui.Gadget) *formats.GAFEntry {
+	name := gad.Name
+	if cut := strings.IndexByte(name, 0); cut >= 0 {
+		name = name[:cut]
+	}
+	if g == nil || g.cs == nil || g.cs.fs == nil || name == "" {
+		return nil
+	}
+	bank, err := formats.LoadGAFFile(g.cs.fs, "anims/"+name+"_gadget.GAF")
+	if err != nil {
+		return nil
+	}
+	entry, _ := bank.Find(name)
+	return entry
 }
 
 func (g *gameShell) refreshMissionPanel() {
@@ -486,8 +527,8 @@ func (g *gameShell) updateHoverHelp(x, y int32) {
 // installSkirmishDynamicGadgets supplies authored lobby row values to the
 // canonical UI runtime builder. The builder owns gadget construction and
 // geometry; this composition root retains only skirmish configuration.
-func (g *gameShell) installSkirmishDynamicGadgets() {
-	if g.assets == nil || g.assets.panel[modeMenuSkirmish] == nil || g.assets.panel[modeMenuSkirmish].window == nil {
+func (g *gameShell) installSkirmishDynamicGadgets(window *gui.Window) {
+	if window == nil {
 		return
 	}
 	n := g.setup.NumPlayers
@@ -501,7 +542,7 @@ func (g *gameShell) installSkirmishDynamicGadgets() {
 	for i := range slots {
 		slots[i] = ui.SkirmishSlot{Side: g.setup.Players[i].Side, Color: g.setup.Players[i].Color}
 	}
-	ui.InstallSkirmishDynamicGadgets(g.assets.panel[modeMenuSkirmish].window, slots)
+	ui.InstallSkirmishDynamicGadgets(window, slots)
 }
 
 func clampMenuStage(value, stages int) int {
@@ -612,6 +653,7 @@ func (g *gameShell) gadgetArt(gad gui.Gadget, status int) *formats.GAFFrame {
 // painters: the current window page, then its mounted side art. Buttons add
 // the common-interface and generic fallback hops in buttonArtResolution.
 func (g *gameShell) namedGadgetArtEntry(gad gui.Gadget) *formats.GAFEntry {
+
 	p := g.panelAssets()
 	if p == nil {
 		return nil
@@ -691,8 +733,15 @@ func (g *gameShell) buildRetailButtonArt(gad gui.Gadget, own *formats.GAF) retai
 		base = g.fallbackButtonArtResolution(entry, gad).base
 	}
 	if gad.Stages != 0 {
-		if strings.Contains(gad.Text, "|") {
-			gad.Labels = strings.Split(gad.Text, "|")
+		// Parsing translated the complete field. The common post-art tail
+		// translates each terminated stage fragment again, including a single
+		// fragment, before storing the stage labels [07 R-WGT-01 §3][§11].
+		caption, _, _ := strings.Cut(gad.Text, "\x00")
+		gad.Labels = strings.Split(caption, "|")
+		if g != nil && g.cs != nil {
+			for i, label := range gad.Labels {
+				gad.Labels[i] = g.cs.translations.Translate(label)
+			}
 		}
 		gad.Attribs = (gad.Attribs & 0x4000) | 1
 	}

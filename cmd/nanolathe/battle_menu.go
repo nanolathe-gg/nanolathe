@@ -34,7 +34,14 @@ func (b *battleSession) openBattleMenu() {
 	if b == nil || b.sess == nil {
 		return
 	}
+	if b.hud != nil {
+		b.hud.openOptionsWindow()
+	}
+	before := b.battleState().Modal()
 	b.applyBattleSchedule(b.battleState().OpenOptions())
+	if b.battleState().Modal() != before {
+		flushWindowTokens(b.cl)
+	}
 	b.battleState().Input.DragActive = false
 	b.battleState().Input.HUDCaptured = false
 }
@@ -54,11 +61,17 @@ func (b *battleSession) menuWindow() *gui.Window {
 	}
 	switch b.battleState().Modal() {
 	case ui.BattleModalOptions:
+		b.hud.openOptionsWindow()
 		return b.hud.optionsWin
 	case ui.BattleModalExit:
+		b.hud.openExitWindow()
 		return b.hud.exitWin
 	case ui.BattleModalConfirmMain, ui.BattleModalConfirmExit:
+		b.hud.openConfirmWindow()
 		return b.hud.confirmWin
+	case ui.BattleModalRestart:
+		b.hud.openRestartWindow()
+		return b.hud.restartWin
 	default:
 		return nil
 	}
@@ -79,6 +92,10 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 		b.handleBattleOptionsInput(cl)
 		return
 	}
+	if b != nil && b.battleState() != nil && b.battleState().Modal() == ui.BattleModalRestart {
+		b.handleBattleRestartInput(in, cl)
+		return
+	}
 	state := b.battleState()
 	if b == nil || state == nil || in == nil || in.Kbd == nil || in.Mouse == nil || state.Modal() == ui.BattleModalClosed {
 		return
@@ -90,15 +107,20 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 		return
 	}
 	if in.Kbd.KeyDown(input.KeyEscape) {
+		before := state.Modal()
 		b.applyBattleSchedule(state.Back())
+		if state.Modal() != before && state.Modal() != ui.BattleModalClosed {
+			flushWindowTokens(cl)
+		}
 		return
 	}
 
-	mx, my := int32(in.Mouse.X), int32(in.Mouse.Y)
-	if b.hud != nil && in.Mouse.Pressed(input.MouseButtonLeft) {
+	mouse, _ := publishedPointer(in)
+	mx, my := int32(mouse.X), int32(mouse.Y)
+	if b.hud != nil && mouse.Pressed(input.MouseButtonLeft) {
 		state.PressModal(b.hud.modalButtonAt(b.menuWindow(), mx, my))
 	}
-	if !in.Mouse.Released(input.MouseButtonLeft) {
+	if !mouse.Released(input.MouseButtonLeft) {
 		return
 	}
 	window := b.menuWindow()
@@ -120,10 +142,19 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 	}
 	before := state.Modal()
 	action := state.Activate(name)
+	if state.Modal() != before && state.Modal() != ui.BattleModalClosed {
+		flushWindowTokens(cl)
+	}
 	// Only root close emits the resume intent. All child transitions keep the
 	// single-player pause anchor unchanged [07 §11].
 	if before == ui.BattleModalOptions && state.Modal() == ui.BattleModalClosed {
 		b.applyBattleSchedule(ui.BattleScheduleIntent{PauseSet: true, Pause: false})
+	}
+	if before == ui.BattleModalExit && state.Modal() == ui.BattleModalRestart {
+		if b.hud != nil {
+			b.hud.openRestartWindow()
+		}
+		b.openBattleRestartDialog()
 	}
 	switch action {
 	case ui.BattleModalActionMainMenu:
@@ -141,6 +172,8 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 		b.openBattleSaveLoadScreen(loadScreenMode)
 	case ui.BattleModalActionPrefs:
 		b.openBattlePrefs()
+	case ui.BattleModalActionRestart:
+		b.acceptBattleRestart(cl)
 	}
 }
 

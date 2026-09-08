@@ -143,6 +143,12 @@ func (q *modelQuadParams) upload() {
 		q.rows = ceilTo(rows, modelQuadGrowRows)
 		q.img = ebiten.NewImage(modelQuadParamWidth, q.rows)
 	}
-	q.img.SubImage(image.Rect(0, 0, modelQuadParamWidth, rows)).(*ebiten.Image).WritePixels(q.buf[:need])
+	// The sub-image lives only for this upload, so it comes from the recyclable
+	// pool instead of the image's own sub-image cache, which would otherwise
+	// retain one entry per distinct row count the frames ask for
+	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
+	sub := q.img.RecyclableSubImage(image.Rect(0, 0, modelQuadParamWidth, rows))
+	sub.WritePixels(q.buf[:need])
+	sub.Recycle()
 	q.uploaded = q.count
 }

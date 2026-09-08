@@ -45,6 +45,72 @@ func TestModelPreparationReusesFrameScratch(t *testing.T) {
 	}
 }
 
+// The preparation arenas hand out subslices of one retained backing array, so a
+// slice taken before a growth must still be the caller's own storage afterwards
+// [DESIGN_GPU_RENDERER.md §11.5 "CPU"]. A frame's prepared faces are read after
+// later subjects have been prepared, so aliasing or copy-on-grow would corrupt
+// them.
+func TestFrameArenaKeepsEarlierSlicesValidAcrossGrowth(t *testing.T) {
+	var a frameArena[int]
+	first := a.take(4)
+	for i := range first {
+		first[i] = 100 + i
+	}
+	// Force several growths, filling each new slice with a distinct pattern.
+	var later [][]int
+	for n := 8; n <= 4096; n *= 2 {
+		v := a.take(n)
+		for i := range v {
+			v[i] = n + i
+		}
+		later = append(later, v)
+	}
+	for i := range first {
+		if first[i] != 100+i {
+			t.Fatalf("slice taken before the growth was overwritten at %d: %d", i, first[i])
+		}
+	}
+	for _, v := range later {
+		for i := range v {
+			if v[i] != len(v)+i {
+				t.Fatalf("slice of length %d was overwritten at %d: %d", len(v), i, v[i])
+			}
+		}
+	}
+	// take must never hand the same element to two callers in one frame.
+	if len(first) > 0 && len(later) > 0 && &first[0] == &later[0][0] {
+		t.Fatal("two takes in one frame share an element")
+	}
+	// A steady-state frame rewinds rather than reallocating.
+	frame := func() {
+		a.reset()
+		a.take(4)
+		a.take(4096)
+	}
+	frame()
+	before := cap(a.buf)
+	if n := testing.AllocsPerRun(20, frame); n != 0 {
+		t.Fatalf("steady-state arena use allocated %v objects per frame", n)
+	}
+	if cap(a.buf) != before {
+		t.Fatalf("arena backing changed size in steady state: %d, want %d", cap(a.buf), before)
+	}
+}
+
+func TestModelPadCountGrowsCoarsely(t *testing.T) {
+	for _, c := range [][2]int{{0, 16}, {1, 16}, {16, 16}, {17, 32}, {4095, 4096}, {4096, 4096}, {4097, 8192}, {9000, 12288}} {
+		if got := modelPadCount(c[0]); got != c[1] {
+			t.Fatalf("modelPadCount(%d) = %d, want %d", c[0], got, c[1])
+		}
+	}
+	// Padding never asks for more than the reserved slack past a list's end.
+	for _, n := range []int{1, 100, 4095, 4096, 20000} {
+		if modelPadCount(n)-n > modelVertexPadSlack {
+			t.Fatalf("modelPadCount(%d) overshoots the reserved slack", n)
+		}
+	}
+}
+
 // The slot atlas replaces one scratch surface set per subject, so a page's
 // stages must cost the same number of device draws whatever the frame holds.
 // Runs inside the existing opt-in device loop.
@@ -76,6 +142,7 @@ func checkModelSlotFrames() error {
 		return l
 	}
 	var first ModelStats
+	var firstPasses int
 	for i := 0; i < 5; i++ {
 		w, h := 80, 48
 		if i > 1 {
@@ -102,10 +169,21 @@ func checkModelSlotFrames() error {
 		if s.SlotOverflows != 0 || s.SlotPages == 0 || s.RasterPixels == 0 {
 			return fmt.Errorf("frame %d slot accounting: %+v", i, s)
 		}
+		// The stage is ordered by destination, so its device destination
+		// switches are a property of which stages the frame needs and never of
+		// the number of subjects or pages
+		// [DESIGN_GPU_RENDERER.md §11.5 "Model slot passes"]. This fixture frame
+		// exercises every stage: key, colour, reveal, both resolves, outline and
+		// waterline/Digger clipping.
+		if p := a.modelStagePasses(); p > modelStageMaxPasses {
+			return fmt.Errorf("frame %d model stage passes=%d, want at most %d", i, p, modelStageMaxPasses)
+		}
 		if i == 0 {
-			first = s
+			first, firstPasses = s, a.modelStagePasses()
 		} else if s.RasterDraws != first.RasterDraws {
 			return fmt.Errorf("frame %d raster draws=%d, want the frame-0 count %d", i, s.RasterDraws, first.RasterDraws)
+		} else if p := a.modelStagePasses(); p != firstPasses {
+			return fmt.Errorf("frame %d model stage passes=%d, want the frame-0 count %d", i, p, firstPasses)
 		}
 	}
 	// A frame that cannot fit the shared pages sends its remaining subjects
@@ -132,8 +210,17 @@ func checkModelSlotFrames() error {
 	if s := a.ModelStats(); s.RasterDraws != first.RasterDraws || s.GPU != 4*first.GPU {
 		return fmt.Errorf("crowded frame raster draws=%d bodies=%d, want %d draws and %d bodies", s.RasterDraws, s.GPU, first.RasterDraws, 4*first.GPU)
 	}
+	if p := a.modelStagePasses(); p != firstPasses {
+		return fmt.Errorf("crowded frame model stage passes=%d, want the single-copy count %d", p, firstPasses)
+	}
 	return nil
 }
+
+// modelStageMaxPasses is the contract of the destination-ordered slot stage:
+// the clear of each plane, the key work, the colour work, the reveal ping-pong,
+// the resolves that ride it, and the clipping that follows colour
+// [DESIGN_GPU_RENDERER.md §11.5 "Model slot passes"].
+const modelStageMaxPasses = 8
 
 func moveModelFixture(g *drawlist.ModelGeometry, dx, dy int32) {
 	if g == nil {

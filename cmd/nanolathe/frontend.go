@@ -206,6 +206,11 @@ type gameShell struct {
 	loading *loadingState
 	// loadingReturn is the screen a failed load falls back to.
 	loadingReturn shellMode
+	// quickKeyPreclearDisabled starts false, so every window build clears
+	// button keys until the first successful loading-to-battle hand-off.
+	// Nothing restores it when a battle returns to the frontend
+	// [07 R-WGT-01 §3].
+	quickKeyPreclearDisabled bool
 
 	// frontend owns mode, active authored window, save-under predecessor, modal
 	// message, focus/press latches, and list thumb capture [07 §3][07 §4].
@@ -493,7 +498,7 @@ func loadRetailPanelStrict(cs *contentSet, guiName, pcxName, gafName, expected s
 		return nil, fmt.Errorf("nanolathe: retail frontend panel: logical path %s, providers searched [], expected %s", guiName, expected)
 	}
 	p := &retailPanelAssets{}
-	if w, err := gui.Load(cs.fs, guiName); err != nil {
+	if w, err := cs.loadGUI(guiName); err != nil {
 		// Deliberate divergence, and the divergence is the point. Retail's
 		// shared window opener does not test its own result: when the file
 		// cannot be opened it skips the whole allocate-and-parse block and
@@ -542,6 +547,9 @@ func (g *gameShell) openMenu(mode shellMode) {
 	if g.frontend == nil {
 		g.frontend = ui.NewFrontend(mode)
 	}
+	if clPtr != nil && clPtr.Input() != nil {
+		clPtr.Input().DrainTokens()
+	}
 	oldPanel, oldMode := g.activePanel(), g.frontend.Mode
 	if oldPanel != nil {
 		// Clear a gesture before replacing the active window. This used to sit
@@ -552,25 +560,22 @@ func (g *gameShell) openMenu(mode shellMode) {
 	}
 	var panel *ui.Panel
 	if g.assets != nil {
-		if mode == modeMenuMission {
-			// NEWGAME.GUI is reused for both New Campaign and Play Any Game.
-			// The Play Any branch changes these authored list rectangles, so
-			// restore/apply that runtime mutation before the
-			// panel state takes its frame.
-			g.applyRetailMissionLayout()
-		}
 		if p := g.assets.panel[mode]; p != nil && p.window != nil {
-			g.installRetailWindowButtonArt(p.window, p.art)
-			panel = ui.NewPanel(p.window)
-		}
-	}
-	if mode == modeMenuSkirmish {
-		g.installSkirmishDynamicGadgets()
-		if g.assets != nil {
-			if p := g.assets.panel[mode]; p != nil && p.window != nil {
-				g.installRetailWindowButtonArt(p.window, p.art)
-				panel = ui.NewPanel(p.window)
+			// The cached window is the parsed definition. Each open begins from
+			// a fresh record set so startup preclear never erases the authored
+			// keys needed after the first battle [07 R-WGT-01 §3].
+			window := gui.CloneWindow(p.window)
+			if mode == modeMenuMission {
+				g.applyRetailMissionLayout(window)
 			}
+			if mode == modeMenuSkirmish {
+				g.installSkirmishDynamicGadgets(window)
+			}
+			// The builder sees runtime-appended controls and resolves all
+			// records before Panel copies instance state. Repaints only use the
+			// installed record and never reassign keys [07 R-WGT-01 §3].
+			g.installRetailWindowButtonArt(window, p.art)
+			panel = ui.NewPanel(window)
 		}
 	}
 	saveUnder := oldPanel != nil && mode != oldMode && g.panelWindowNeedsUnder(mode)
@@ -788,6 +793,7 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	g.applyRetailVisualOptions(clPtr)
 	g.battle = battle
 	g.battle.returnToMenu = g.returnFromBattle
+	g.battle.restartBattle = g.restartBattle
 	g.battle.returnToSkirmish = func(cl *client.Client) {
 		if g != nil {
 			g.teardownBattle(cl)
@@ -798,6 +804,10 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	if g.frontend != nil {
 		g.frontend.SetMode(modeBattle)
 	}
+	// This is the successful end of loading-to-battle. The candidate's loading
+	// windows were built before this point; failed loads never reach it
+	// [07 R-WGT-01 §3].
+	g.quickKeyPreclearDisabled = true
 }
 
 // returnFromBattle is the retail MAINMENU confirmation outcome: discard the

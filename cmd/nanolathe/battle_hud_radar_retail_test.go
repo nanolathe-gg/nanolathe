@@ -134,7 +134,7 @@ func TestRetailRadarPutsDetectedEnemyOnMinimapInOwnerColour(t *testing.T) {
 	centerBattleStartCamera(sess, cam)
 	b := &battleSession{sess: sess, cat: cat, cam: cam}
 	pal := retailPaletteForTest(t, cs)
-	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil)
+	b.hud, err = loadRetailBattleHUD(cs.fs, sess, cat, pal, nil, newBattleWindowContext(cs, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

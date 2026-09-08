@@ -129,6 +129,7 @@ func (h *retailBattleHUD) drawResultOverlay(c *client.Client, b *battleSession, 
 		}
 		return
 	}
+	b.prepareResultPanel()
 	if h.resultPanel != nil {
 		if b.postBattle != nil {
 			_, route := b.postBattle.NextMission()
@@ -203,6 +204,26 @@ func resultStartAvailable(fs vfs.FSOps, sess *session.Session) bool {
 // Retail files carry these controls inactive and the end-mission initializer
 // enables the single route selected by campaign progression; unrelated
 // controls remain inactive rather than being force-enabled [07 §11].
+// prepareResultPanel opens the authored controls during ENDMSN population,
+// before the first input pass. Drawing may call it for standalone previews,
+// but is never required to establish input ownership [08 R-CAMP-01 §8].
+func (b *battleSession) prepareResultPanel() {
+	if b == nil || b.hud == nil {
+		return
+	}
+	h := b.hud
+	h.openResultWindow()
+	if h.resultPanel == nil && h.resultWin != nil {
+		h.resultPanel = ui.NewPanel(h.resultWin)
+		flushWindowTokens(b.cl)
+		configureResultPanel(h.fs, b.sess, h.resultPanel)
+	}
+	if b.postBattle != nil {
+		_, route := b.postBattle.NextMission()
+		configureResultControls(h.resultPanel, route)
+	}
+}
+
 func configureResultPanel(fs vfs.FSOps, sess *session.Session, panel *ui.Panel) {
 	if panel == nil {
 		return

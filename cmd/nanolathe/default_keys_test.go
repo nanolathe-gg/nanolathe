@@ -71,7 +71,9 @@ func TestDefaultKeysThroughBothInputHandlers(t *testing.T) {
 						t.Fatal(err)
 					}
 					clPtr = nil
-					cl.Input().Kbd.SetKey(tc.key, true)
+					if !cl.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: tc.key}) {
+						t.Fatal("enqueue default-key token")
+					}
 					if battle {
 						(&battleSession{shell: shell}).handleBattleOptionsInput(cl)
 					} else {
@@ -84,7 +86,9 @@ func TestDefaultKeysThroughBothInputHandlers(t *testing.T) {
 					if p.Focused() != wantFocus {
 						t.Fatalf("callback focus=%d, want selected record %d", p.Focused(), wantFocus)
 					}
-					if w.Gadgets[wantFocus].Kind == gui.KindTextBox && !p.EditorCaptured() {
+					// A captured editor owns Enter and fires/releases through its
+					// own token path; Space remains editor text [07 R-WGT-01 §§2,6].
+					if w.Gadgets[wantFocus].Kind == gui.KindTextBox && tc.key != input.KeyEnter && !p.EditorCaptured() {
 						t.Fatal("focused editor missing capture/setup")
 					}
 					if shell.display.AntiAlias != tc.anti || shell.display.Shading != tc.shading {

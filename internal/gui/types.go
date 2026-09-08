@@ -137,6 +137,11 @@ type Gadget struct {
 	// authored GUI data. A resolved nil entry means the builder found no art.
 	ButtonArt         *formats.GAFEntry
 	ButtonArtResolved bool
+	// ExternalArt is the per-gadget GAF entry selected by an odd gaffile
+	// prepass. A resolved nil records an absent resource/entry and prevents a
+	// later builder arm from falling through to ordinary art [07 R-WGT-01 §3].
+	ExternalArt         *formats.GAFEntry
+	ExternalArtResolved bool
 
 	// Provenance
 	SourceName string // original TDF section name like GADGET0

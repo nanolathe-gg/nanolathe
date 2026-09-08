@@ -20,7 +20,7 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 	if cursors == nil || b.sess == nil {
 		return
 	}
-	mouse := cl.Input().Mouse
+	mouse, _ := cl.Input().PointerSample()
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	region := b.classifyPointer(mx, my)
 	// The footer's pointer record is written by the same per-frame pointer

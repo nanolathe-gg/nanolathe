@@ -27,8 +27,10 @@ type translationEntry struct {
 	translation string
 }
 
-// LoadTranslationTable parses gamedata/translate.tdf for the given language
-// string (an empty string selects English) [02 "Translation table"].
+// LoadTranslationTable parses gamedata/translate.tdf for the exact language
+// string supplied by its caller. Ordinary startup supplies the literal
+// lowercase `english`; an empty string remains a valid explicit generic input,
+// but is not retail's startup default [02 §3 "Translation table"].
 // translate.tdf is optional content [02 §1]. Only a missing file yields no
 // table; a present file that cannot be read or parsed is authored corruption
 // and its diagnostic reaches the loader. A language with no matching key in

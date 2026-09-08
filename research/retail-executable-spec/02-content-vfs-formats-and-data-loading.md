@@ -565,8 +565,29 @@ key** in the executable. The string vocabulary contains no `maxthisunit` or
 (see the `ai_weight` note above). Any implementation field for a per-definition
 unit limit keyed from FBI data has no retail source and must not be invented.
 
-The language setting is read as a string. An empty value selects English.
-The language string is kept in one global buffer and drives two distinct
+**Established — startup language selection and precedence.** The language
+buffer begins empty. Command-line parsing copies every unconsumed positional
+token reached by the main token loop into that buffer, so the last such token
+wins. This excludes operands consumed inside a recognized switch arm, such as
+the configuration reference following `C`/`c`. Only when the buffer is still
+empty after parsing does startup query the `language` string under the
+`Total Annihilation` registry key, with a 64-byte destination. If the resulting
+string is empty, startup stores the literal lowercase name `english`. It then
+loads the translation table before the remaining persistent preferences and
+content catalogs.
+
+The startup selection buffer and the translation loader's remembered current
+name are distinct and both begin empty. Consequently the default `english`
+selection is different from the loader's current name and the first startup
+call does parse a present `gamedata\\translate.tdf`; it is not skipped as an
+already-selected language. A malformed present table therefore still reaches
+the parser's failure path under the default English selection even when the
+table contributes no `english` entries.
+
+The registry read in this path does not install or write back the English
+fallback. Neither `<executable directory>\\totala.ini` nor the `C`/`c` online
+configuration block supplies the language string. The resulting selected name
+is kept in one global buffer for ordinary startup and drives two distinct
 mechanisms.
 
 #### Translation table
@@ -591,9 +612,10 @@ which is case-insensitive.
 *key prefix* by a dedicated string accessor. That accessor builds
 `<language><key>`, looks that up first, and falls back to the plain `<key>`.
 Authored records therefore carry localized variants in the same section as the
-base field — a `German` language setting reads `Germanname` before `name`. With
-the default empty language string the prefixed key is identical to the plain
-key, so English content needs no special case.
+base field — a `German` language setting reads `Germanname` before `name`. The
+default selected name `english` tries `english<key>` first and then the plain
+key; English content therefore normally reaches its unprefixed field through
+the ordinary fallback rather than through an empty-prefix special case.
 
 The unit catalog reads its display name and description through this accessor,
 so localized unit names and descriptions authored in the unit record **are**
@@ -4129,10 +4151,10 @@ questions do not supersede those consumer contracts.
   bit and no isolated reader exists in the bounded census.
 * Code-page behavior for high bytes · §3 · static trace. Marked `TODO(T23)` at
   the site.
-* Language-selection interface, language-specific font fallback, and the
-  census of runtime messages that pass through the translation lookup · §3 ·
-  static trace for the interface and message census, asset census for the font
-  fallback.
+* Language-specific font fallback and the census of runtime messages that pass
+  through the translation lookup · §3 · static trace for the message census,
+  asset census for the font fallback. Ordinary startup language selection and
+  precedence are Established in §3.
 * Which front-end screen reads the translated `missiondescription`, and what
   the briefing globe shows for a `Planet` value outside its vocabulary · §6
   `[R-MAP-01 §3]` · static trace (doc 07 owns both screens; the loader side is

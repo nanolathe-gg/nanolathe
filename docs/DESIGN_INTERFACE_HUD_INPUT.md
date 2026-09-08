@@ -139,6 +139,60 @@ past `(639, 479)` unreachable `[07 §1]` `[07 R-HUD-05]`. `SurfaceWidth` and
 that does not yet know the negotiated surface, never a clamp applied to a
 larger one.
 
+**I02 pointer-record queue contract.** `PointerEvent` is the semantic button
+record: its kind is one of the already classified left/right down,
+double-click, and up messages; it retains the event coordinates, modifier
+snapshot, event-time `Buttons`, and caller-supplied scaled host `Timestamp`.
+The button snapshot belongs to the record even when later live button state
+has advanced; alternate drag consumes that record state [07 R-CAM-01 §11]. `PointerRing` has 20
+records with one reserved slot, so `Enqueue`, `Dequeue`, `Len`, and `Flush`
+operate on at most 19 pending button records. `Enqueue` refuses a full ring
+without changing either index. It is not a motion queue.
+
+`State.EnqueuePointer(PointerEvent) bool` updates the live pointer/button
+sample and attempts to retain that button record. Its result says whether the
+record entered the ring; it does not report the live-state update. An invalid
+button kind is rejected before changing either live state or queue state. The caller
+uses `State.UpdatePointerMotion(PointerEvent)` for a motion record: it updates
+the live pointer sample and replaces the one latest-motion fallback, without
+adding a button record. `State.PopPointer() (PointerEvent, bool)` is called
+once for a host service: it returns the oldest queued button record with
+`true`, or the latest motion record with `false` when the button ring is empty.
+`State.FlushPointers()` discards queued button records. Once per host service,
+the producer calls `State.PublishPointer()`: it consumes exactly one oldest
+button record, or the latest motion fallback when no button record is pending,
+and caches that canonical result. `State.CurrentPointer() (PointerEvent, bool)`
+is the read-only fetch every widget and battle consumer shares for that service;
+it never consumes another record. `SampleFromState` carries the cached value as
+`Sample.Pointer` plus `Sample.PointerValid`, and `StateFromSample` restores only
+that already-published record. A manually built `Sample` that leaves
+`PointerValid` clear remains the legacy live-edge form and does not claim native
+history. The event modifier snapshot is never reconstructed from later live key
+state. The existing `MouseState.SetButton`/`Sample` edge APIs remain live-state
+samples and do not claim to reconstruct native event history; producers must
+call the pointer methods above to retain a same-interval down/up pair.
+
+The platform boundary owns native message history, timestamp scaling, and
+double-click recognition. The current Ebiten producer polls all modifier and
+button states before it constructs one snapshot, retains observed left/right
+transitions without representing their retention order as native chronology,
+updates the motion fallback, and publishes once before `Client.Step`. Its
+timestamp is the existing scaled 30-Hz host-clock value. Polling does not
+recover native ordering among changes that arrived between polls, native key
+repeat/history, or double-click identity; it does not derive a double-click
+timing heuristic.
+`TODO(T25): establish an Ebiten event source that exposes native ordering,
+repeat, and double-click identity without a heuristic.` [07 §2] [01 R-PLAT-01 §6]
+
+`cmd/nanolathe` uses one `pointerFrame` adapter whenever it services a
+`ui.Panel`. It projects the already-published record into the frame and passes
+that exact one event through, including double-click kind, modifier snapshot,
+button snapshot, coordinates, and timestamp. Command, cursor, hover, and
+pressed-art consumers use the same published projection. A manually constructed
+sample without `PointerValid` keeps the legacy live-edge fallback; it does not
+claim native message history. Middle-button camera drag, wheel, and keyboard
+held queries remain live samples [07 §2] [07 R-WGT-01 §1].
+
 ### 2.3 `internal/camera` — origin, scroll, zoom, minimap
 
 **The camera** (`camera.go`). `Camera` is the integer orthographic camera:
@@ -275,16 +329,43 @@ kinds in both callers. A helper tested without the two live callers is not
 accepted.
 
 **I05 bounded button accelerator admission (implemented; remaining service open).**
-Builder readiness: [07 R-WGT-01 §3] establishes process-lifetime preclear,
-enabled at startup and permanently cleared by the first loading-to-battle
-transition. The eventual runtime builder must work per open, after dynamic
-gadget append and before panel construction; mutating only cached parsed GUI
-definitions cannot reproduce that lifetime. [07 R-WGT-02 §2] establishes
-that quickkey service stays enabled throughout supported single-player scope,
-so a new mutable enable flag is unnecessary here. Extended-byte lowercase
-mapping remains Unknown and blocks a complete assignment builder; retain
-parsed keys until that locale contract closes. This is research readiness,
-not implemented assignment or token service.
+The runtime builder runs per open after dynamic gadget append and before panel
+construction. Its process-lifetime preclear starts enabled, clears button keys
+before each build, and is permanently disabled only by the first successful
+loading-to-battle hand-off; a failed load and a later frontend return do not
+reset it. `gui` supplies the pure preclear and per-record assignment helpers:
+buttons preserve on `0x10000`, staged buttons clear, empty ordinary captions
+retain, and linked labels clear and search while unlinked labels remain
+unchanged. Caption scanning stops at NUL, skips only space, compares every
+current button and label key including later/inactive records with ASCII-only
+`A`..`Z` folding, and stores the first free original byte. The odd low bit of
+`gaffile` and `0x1800` arrows bypass the ordinary button arm; an odd `gaffile`
+uses `anims/<name>_gadget.GAF` and retains that resolved entry identity,
+including a resolved absence. Button flash state is reset before either gate
+[07 R-WGT-01 §3] [07 R-WGT-01 §7]. [07 R-WGT-02 §2] establishes that quickkey
+service stays enabled throughout supported single-player scope, so a new
+mutable enable flag is unnecessary here. Ordered token service remains open;
+the shared I06 toggle/radio mutation path is implemented.
+
+`TODO(question)`: Nanolathe has no identified authored battle-root
+`MAIN2.GUI` opener. Retail builds that root before the successful transition;
+its integration must preserve that timing when the root owner is implemented.
+Actual command, options, confirmation and result windows build at their runtime
+open, after the transition. The options caller relabels the already-built
+MISSION caption, retaining the originally assigned accelerator. Results
+population establishes its panel before the first input pass. Generated
+product slots set the per-record GAF bit so the ordinary builder resolves the
+product image; the generic external prepass does not replace a nonbutton
+kind's own image slot `[07 R-WGT-01 §3]` `[07 §9]` `[08 R-CAMP-01 §8]`.
+
+The builder consumes the caption already held in `Gadget.Text`. Retail
+localizes kinds 1, 3, 4 and 5 while parsing a GUI, before this assignment pass.
+The modeled startup loads `gamedata/translate.tdf` with literal lowercase
+`english`, including an English-table override, and applies it at that parser
+boundary. This scope is GUI captions only. `TODO(T25)`: integrate the traced
+host command-line/registry selection for a non-default language; do not add a
+local case-map or language flag at this seam [07 R-WGT-01 §3][07 R-WGT-01
+§11][02 §3].
 
 `Panel.ButtonQuickKeyAction(index, capture int, alt bool) Action` checks a
 matching button in `internal/ui`, retaining its indexed identity. `capture`
@@ -301,11 +382,22 @@ pump passes its existing pointer owner rather than installing a second owner
 in Panel. Tests use both production input handlers, low-bit versus upper-bit
 grey, same-button versus other capture, text capture with/without Alt, changed
 keys and duplicate records. The owning scope is admission and callback identity;
-assignment, linked-label quickkeys, ordered token service,
-extended-byte case conversion and I06 toggle/radio mutation remain open. This
-unit preserves existing callback-owned preference mutations and cues.
+ordered token service remains open. This unit preserves existing
+callback-owned preference mutations and cues.
 
-**I04 focus traversal API and lifecycle contract (implemented; keyboard dispatch remains open).**
+**I12 frontend button painter (implemented; battle adapters remain open).**
+Frontend windows, shell-owned battle options and MSGBOX share the same button
+painter. Missing art uses the shared ordered eight-run bevel with the exact
+up/down/low-grey-bit colour triples [07 R-FE-02 §4]. Its down word comes from
+the indexed widget service. The caption is a single-line button pen whose
+position depends on stage count, never held-pointer state; build-key colour
+and centred-key underline follow [03 R-FONT-01 §6][07 R-WGT-01 §3]. Authored
+raster fixtures exercise missing art, upper grey bits, stationary pressed text,
+case-insensitive first-byte key decoration and the grey build-key exception.
+The separate battle modal and command-page painters still need their runtime
+capture, installed-art and caption paths reconciled before whole I12 closure.
+
+**I04 focus traversal API and lifecycle contract (implemented).**
 `internal/ui` owns `FocusDirection` (`FocusForward`, `FocusBackward`,
 `FocusUp`, `FocusDown`) and `Panel.MoveFocus(direction FocusDirection) bool`.
 The method applies [07 R-WGT-01 §2] focus order to indexed runtime activity,
@@ -326,6 +418,49 @@ work. Tests must exercise actual opening/disabling as well as strict donor,
 wrap, tie, admission, capture and text-setup contracts. Existing authored
 fixtures that relied on unspecified default focus should state their intended
 focus explicitly rather than weakening production opening behavior.
+
+**I04 keyboard matrix and ordered-token service (partial; review remains).**
+`WidgetFrame.Tokens` is the producer-ordered keyboard-ring snapshot and
+`ServiceResult.ConsumedTokens` identifies only the serviced prefix. The common
+service handles a captured editor before the one-token matrix; otherwise a
+consuming, navigation-enabled front-end or battle-options root passes Tab,
+Enter, Escape, Space and arrow tokens through the matrix before pointer
+gadgets. Tab uses `MoveFocus` and held Shift; Enter selects the usable
+`crdefault` then the restricted focused fallback; Escape uses an active
+`escdefault`; Space is limited to button, listbox and surface. Horizontal
+sliders step and clamp through their ordinary knob/change path, while a focused
+list changes its selected row without wrapping and computes keyboard rows from
+`metric + 1`, independently of authored `itemheight`. It changes `top` by one
+row only and clamps against the screen-provided `maxTop`; keyboard service does
+not recalculate that list-owner value. Other directional keys traverse from the
+focused control. An unusable Enter default takes the Space fallback, including
+radio/staged mutation; a usable default only fires. Every firing matrix row
+returns the indexed record through `ServiceResult`, with `StageAdvanced` set
+only by the gesture that actually changed a staged value, so callbacks preserve
+duplicate identity and slider write ownership `[07 R-WGT-01 §§1,2,4-6,8]`
+`[07 R-FE-01 §12]`.
+
+The two consuming callers and `MSNBRIEF` pass the result directly to their
+existing callback paths. Residual button and linked-label accelerators are
+checked during each indexed gadget visit, independently of the matrix gates;
+they can mutate radio/toggle state and claim a peeked battle-child token. The
+UNITINFO child performs that peek pass before battle hotkeys, but remains
+outside Enter/Escape defaults. Screen/window open paths flush the token ring;
+pointer and held-key state survive `[07 R-WGT-01 §§1-3,7]` `[07 R-WGT-02 §5]`.
+
+The navigation-enable word is initialized enabled for the traced shell,
+options and briefing adapters. `TODO(question): complete the per-screen
+transition census for every explicit enable/disable write; current code must
+not be read as a universal navigation lifetime.` Ebiten does not provide native
+event chronology between its text batch and physical navigation edges. The
+adapter retains each observation after the producer queue, but does not invent
+repeat cadence or a native order among simultaneous physical edges
+`TODO(T25)` `[07 R-WGT-01 §2]`.
+
+Quickkey comparison folds only ASCII letters. A `TokenText` rune in the byte
+range `0x80..0xFF` compares to the same stored quickkey byte unchanged; a rune
+outside the byte range is not mapped. Text-editor admission remains its
+separate ASCII-only contract until the codepage/IME question is resolved.
 
 **The front end** (`frontend.go`). `Mode` is the screen: `ModeMain`,
 `ModeSingle`, `ModeMission`, `ModeMap`, `ModeSkirmish`, `ModeLoading`,
@@ -681,9 +816,11 @@ view centre, and then applies C3. There is no separate drag branch: the latch
 re-runs the same jump every host frame `[03 §3.6]` `[07 §10]`
 `[07 R-CAM-01 §11]`.
 
-**C5 — input queues.** The keyboard ring has 30 entries with 29 usable and the
-mouse ring 24 records. A full ring refuses the new event and never overwrites an
-older one `[07 §2]` `[01 R-PLAT-01 §6]`.
+**C5 — input queues.** The keyboard ring has 30 entries with 29 usable; the
+pointer button ring has 20 records with 19 usable. A full ring refuses the new
+event, never overwrites an older one, and leaves both indices unchanged. When
+the pointer button ring is empty, host service uses the latest separate motion
+record `[07 §2]` `[01 R-PLAT-01 §6]`.
 
 **C6 — selection modifiers.** With the modifier clear, units inside the
 rectangle are set and those outside cleared; with it set, units inside toggle

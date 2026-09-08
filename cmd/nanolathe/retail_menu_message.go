@@ -49,6 +49,7 @@ func (g *gameShell) showRetailMessage(message string) error {
 	}
 	m.SetMessage(message)
 	g.frontend.Panels.PushModal(m)
+	flushWindowTokens(clPtr)
 	return nil
 }
 
@@ -88,14 +89,6 @@ func (g *gameShell) buildRetailMessageWindow(authored *gui.Window, message strin
 	}
 	built.Gadgets = append(built.Gadgets, authored.Gadgets...)
 
-	// Install the generic button record before MSGBOX reads the resolved OK
-	// geometry for its own height and placement calculation [07 R-WGT-01 §3].
-	var ownArt *formats.GAF
-	if g != nil && g.assets != nil && g.assets.message != nil {
-		ownArt = g.assets.message.art
-	}
-	g.installRetailWindowButtonArt(built, ownArt)
-
 	for i, line := range lines {
 		built.Gadgets = append(built.Gadgets, gui.Gadget{
 			Kind:       gui.KindLabel,
@@ -108,6 +101,14 @@ func (g *gameShell) buildRetailMessageWindow(authored *gui.Window, message strin
 			Text:       line,
 		})
 	}
+	// The builder sees the runtime-appended message labels before it installs
+	// the button record whose resolved size this opener reads below
+	// [07 R-WGT-01 §3].
+	var ownArt *formats.GAF
+	if g != nil && g.assets != nil && g.assets.message != nil {
+		ownArt = g.assets.message.art
+	}
+	g.installRetailWindowButtonArt(built, ownArt)
 
 	// Every retail call site but one passes `autoWidth` — the panel is sized to
 	// its widest line plus 20 and the wrap width only bounds the lines

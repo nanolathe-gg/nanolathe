@@ -21,16 +21,6 @@ func (g *gameShell) menuInput(cl *client.Client) {
 		return
 	}
 	in := cl.Input()
-	// A kind-3 editor is the only frontend consumer that may leave the tail
-	// after Escape for its next service pass. Every ordinary menu route has
-	// serviced or ignored the token batch and retires it here, so stale text
-	// cannot reach a later save-name capture [07 §2][07 R-WGT-01 §12].
-	ordinaryTokens := true
-	defer func() {
-		if ordinaryTokens {
-			in.DiscardTokens(in.PendingTokens())
-		}
-	}()
 	if g != nil && g.briefing != nil && g.briefing.State() == BriefingOpen {
 		g.briefingInput(cl)
 		return
@@ -43,12 +33,7 @@ func (g *gameShell) menuInput(cl *client.Client) {
 	if p == nil || p.Window == nil {
 		return
 	}
-	editorWasCaptured := p.EditorCaptured()
 	g.serviceMenuWidgets(p, in)
-	if editorWasCaptured {
-		// Escape leaves the editor's unconsumed tail for its next pass.
-		ordinaryTokens = false
-	}
 }
 
 // serviceMenuWidgets is the front-end adapter around the common widget pass.
@@ -67,26 +52,15 @@ func (g *gameShell) serviceMenuWidgets(p *ui.Panel, in *input.State) bool {
 			}
 		}
 	}
-	mouse := in.Mouse
 	editorIndex := p.EditorIndex()
-	frame := ui.WidgetFrame{PointerX: int32(mouse.X), PointerY: int32(mouse.Y), Tokens: in.PeekTokens(), TimerAdvanced: g.widgetTimerAdvanced(p)}
-	if mouse.Held(input.MouseButtonLeft) {
-		frame.HeldButtons |= 1
-	}
-	if mouse.Held(input.MouseButtonRight) {
-		frame.HeldButtons |= 2
-	}
-	if mouse.Pressed(input.MouseButtonLeft) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftDown, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Released(input.MouseButtonLeft) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftUp, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Pressed(input.MouseButtonRight) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightDown, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Released(input.MouseButtonRight) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightUp, X: int32(mouse.X), Y: int32(mouse.Y)})
+	frame := pointerFrame(in, widgetTokens(in), g.widgetTimerAdvanced(p))
+	frame.TokenMode = true
+	// TODO(question): census every front-end transition which disables this
+	// independently initialized navigation word; the shell's enabled state is
+	// traced, but a universal lifetime is not [07 R-WGT-01 §2].
+	frame.KeyNavigation = true
+	if in.Kbd != nil {
+		frame.ShiftHeld, frame.AltHeld = in.Kbd.HasShift(), in.Kbd.KeyHeld(input.KeyAlt)
 	}
 	result := p.ServiceFrame(frame, ui.WidgetHooks{
 		Metric: func(int) int { return g.retailTextHeight() },
@@ -127,19 +101,6 @@ func (g *gameShell) serviceMenuWidgets(p *ui.Panel, in *input.State) bool {
 		}
 	}
 	if !result.Fired {
-		if !p.EditorCaptured() && in.Kbd.KeyDown(input.KeyEscape) {
-			g.activateEscape()
-			return true
-		}
-		if (in.Kbd.KeyDown(input.KeyEnter) || in.Kbd.KeyDown(input.KeySpace)) && g.activateDefaultKey(p, in.Kbd.KeyDown(input.KeyEnter)) {
-			return true
-		}
-		if g.activateButtonQuickKey(p, in.Kbd, p.CaptureIndex()) {
-			return true
-		}
-		if in.Kbd.KeyDown(input.KeyUp) || in.Kbd.KeyDown(input.KeyDown) {
-			g.adjustFocusedList(in.Kbd.KeyDown(input.KeyUp))
-		}
 		return true
 	}
 	gad, ok := g.currentGadget(result.FiredIndex)
@@ -171,7 +132,7 @@ func (g *gameShell) activateWidgetGadget(p *ui.Panel, result ui.ServiceResult) {
 	if g == nil {
 		return
 	}
-	if optionsState != nil && p != nil && p.Window != nil && p == optionsPanel && result.FiredIndex >= 0 && result.FiredIndex < len(p.Window.Gadgets) && p.Window.Gadgets[result.FiredIndex].Stages != 0 {
+	if optionsState != nil && p != nil && p.Window != nil && p == optionsPanel && result.StageAdvanced && result.FiredIndex >= 0 && result.FiredIndex < len(p.Window.Gadgets) && p.Window.Gadgets[result.FiredIndex].Stages != 0 {
 		state := optionsState
 		state.serviceStageIndex = result.FiredIndex
 		state.serviceStageActive = true
@@ -199,50 +160,6 @@ func (g *gameShell) activateGadgetAt(p *ui.Panel, index int) {
 	g.activateGadget(p.Window.Gadgets[index].Name)
 }
 
-// activateButtonQuickKey preserves authored record order and installs the
-// fired index before its screen callback [07 R-WGT-01 §1 step 8]. The options
-// pump supplies its pointer owner; otherwise capture comes from the panel.
-func (g *gameShell) activateButtonQuickKey(p *ui.Panel, kbd *input.KeyboardState, capture int) bool {
-	if p == nil || p.Window == nil || kbd == nil {
-		return false
-	}
-	if capture < 0 {
-		capture = p.PressedIndex()
-	}
-	if capture < 0 {
-		capture = p.RightPressedIndex()
-	}
-	if capture < 0 {
-		capture = p.EditorIndex()
-	}
-	for i, gad := range p.Window.Gadgets {
-		if !quickKeyDown(kbd, gad.QuickKey) {
-			continue
-		}
-		action := p.ButtonQuickKeyAction(i, capture, kbd.KeyHeld(input.KeyAlt))
-		if action.Kind != ui.ActionActivate {
-			continue
-		}
-		p.SetFocus(action.Index)
-		g.activateGadgetAt(p, action.Index)
-		return true
-	}
-	return false
-}
-
-// activateDefaultKey preserves the fired record into focus before running the
-// screen callback [07 R-WGT-01 §1 step 8][07 R-WGT-01 §2]. Selection is indexed:
-// resolving its name again would replace a later duplicate with the first one.
-func (g *gameShell) activateDefaultKey(p *ui.Panel, enter bool) bool {
-	action := p.DefaultKeyAction(enter)
-	if action.Kind != ui.ActionActivate {
-		return false
-	}
-	p.SetFocus(action.Index)
-	g.activateGadgetAt(p, action.Index)
-	return true
-}
-
 func (g *gameShell) modalInput(cl *client.Client) {
 	if g == nil || cl == nil || cl.Input() == nil {
 		return
@@ -252,25 +169,13 @@ func (g *gameShell) modalInput(cl *client.Client) {
 		return
 	}
 	in := cl.Input()
-	mouse := in.Mouse
-	frame := ui.WidgetFrame{PointerX: int32(mouse.X), PointerY: int32(mouse.Y)}
-	if mouse.Held(input.MouseButtonLeft) {
-		frame.HeldButtons |= 1
-	}
-	if mouse.Held(input.MouseButtonRight) {
-		frame.HeldButtons |= 2
-	}
-	if mouse.Pressed(input.MouseButtonLeft) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftDown, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Released(input.MouseButtonLeft) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.LeftUp, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Pressed(input.MouseButtonRight) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightDown, X: int32(mouse.X), Y: int32(mouse.Y)})
-	}
-	if mouse.Released(input.MouseButtonRight) {
-		frame.PointerEvents = append(frame.PointerEvents, input.PointerEvent{Kind: input.RightUp, X: int32(mouse.X), Y: int32(mouse.Y)})
+	frame := pointerFrame(in, widgetTokens(in), false)
+	frame.TokenMode = true
+	// TODO(question): modal transition ownership for the navigation word is
+	// not yet fully traced [07 R-WGT-01 §2].
+	frame.KeyNavigation = true
+	if in.Kbd != nil {
+		frame.ShiftHeld, frame.AltHeld = in.Kbd.HasShift(), in.Kbd.KeyHeld(input.KeyAlt)
 	}
 	result := m.ServiceFrame(frame, ui.WidgetHooks{ArtFrames: func(index int) int {
 		if index < 0 || index >= len(m.Window.Gadgets) {
@@ -278,14 +183,11 @@ func (g *gameShell) modalInput(cl *client.Client) {
 		}
 		return g.retailButtonArtFrames(m.Window.Gadgets[index])
 	}})
+	in.DiscardTokens(result.ConsumedTokens)
 	if result.Fired {
-		if gad, ok := modalGadget(m, result.FiredIndex); ok && gui.CallbackNameEqual(gad.Name, "OK") {
+		if _, ok := modalGadget(m, result.FiredIndex); ok {
 			g.frontend.Panels.CloseModal()
-			return
 		}
-	}
-	if in.Kbd.KeyDown(input.KeyEscape) || in.Kbd.KeyDown(input.KeyEnter) || in.Kbd.KeyDown(input.KeySpace) {
-		g.frontend.Panels.CloseModal()
 	}
 }
 
@@ -296,56 +198,14 @@ func modalGadget(p *ui.Panel, index int) (gui.Gadget, bool) {
 	return p.Window.Gadgets[index], true
 }
 
-func quickKeyDown(kbd *input.KeyboardState, quick byte) bool {
-	if kbd == nil {
-		return false
+// widgetTokens exposes the producer-owned ordered ring. Ebiten appends its
+// observed navigation transitions there before this adapter runs; host polling
+// cannot recover native chronology or repeat [07 R-WGT-01 §2] TODO(T25).
+func widgetTokens(in *input.State) []input.Token {
+	if in == nil {
+		return nil
 	}
-	if quick >= 'a' && quick <= 'z' {
-		quick -= 'a' - 'A'
-	}
-	if quick >= 'A' && quick <= 'Z' {
-		return kbd.KeyDown(input.KeyA + input.Key(quick-'A'))
-	}
-	if quick >= '0' && quick <= '9' {
-		return kbd.KeyDown(input.Key0 + input.Key(quick-'0'))
-	}
-	return false
-}
-
-func (g *gameShell) adjustFocusedList(up bool) {
-	p := g.activePanel()
-	if p == nil {
-		return
-	}
-	var name string
-	switch g.frontend.Mode {
-	case modeMenuMap:
-		name = "MAPNAMES"
-	case modeMenuMission:
-		// Both lists are always live in the play-any layout [07 §4
-		// (R-FE-01 §4)], so prefer whichever list the player actually
-		// focused (by clicking into it); retail's stated initial focus for
-		// this layout is "Missions", which is also the default here.
-		name = "Missions"
-		if gad, ok := g.currentGadget(p.Focused()); ok {
-			if gui.CallbackNameEqual(gad.Name, "Campaign") {
-				name = "Campaign"
-			}
-		}
-	}
-	l := p.ListFor(name)
-	if l == nil || l.Len() == 0 {
-		return
-	}
-	selected := l.Selected()
-	if up {
-		selected = cycleInt(selected, 0, l.Len()-1, -1)
-	} else {
-		selected = cycleInt(selected, 0, l.Len()-1, 1)
-	}
-	l.SetSelected(selected)
-	g.ensureRetailListVisible(name)
-	g.commitListSelection(name, selected)
+	return in.PeekTokens()
 }
 
 func (g *gameShell) commitListSelection(name string, index int) {

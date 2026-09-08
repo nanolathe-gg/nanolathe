@@ -333,17 +333,15 @@ func loadWithTypeInternal(fs vfs.FSOps, typ Type, logicalPath string, difficulty
 }
 
 // defaultLanguage is the current-language string reaching this package. No
-// caller in this codebase yet plumbs the configured language this far (the
-// content catalog's language-prefixed name trial takes the same parameter
-// explicitly from its own caller, unresolved for the same reason — see
-// CompileUnitsWithLanguage); an empty string is retail's own default and
-// selects English [02 "Translation table"]. With the stock English table
-// this never matters: no authored section carries an empty-named key, so the
-// translation table loaded for English is always empty and the reverse
-// lookup below never has an entry to find — matching the residual
-// Supported-inference note in [08 R-CAMP-01 §11] that the fallback only
-// fires for a non-English translation file.
-const defaultLanguage = ""
+// caller in this codebase yet plumbs a configured non-English language this
+// far (the content catalog's language-prefixed name trial takes the same
+// parameter explicitly from its own caller, unresolved for the same reason —
+// see CompileUnitsWithLanguage). Retail ordinary startup selects the literal
+// lowercase `english` when neither its command line nor registry supplies a
+// language [02 §3]. With the stock English table this never matters: no
+// authored section carries an `english` key, so the translation table loaded
+// for English has no entries and the reverse lookup below cannot find one.
+const defaultLanguage = "english"
 
 // buildOTAPath builds Maps\<name>.OTA with the extension replaced: any
 // directory component and any existing extension on name are discarded, and
