@@ -3,6 +3,7 @@ package audiobackend
 import (
 	"bytes"
 	"sync"
+	"time"
 
 	"github.com/hajimehoshi/ebiten/v2/audio"
 	retailaudio "github.com/nanolathe/nanolathe/internal/audio"
@@ -19,6 +20,7 @@ type Backend struct {
 	players      []voice
 	streams      []voice
 	createPlayer func([]byte) (outputPlayer, error)
+	lastPump     time.Time
 }
 
 // outputPlayer is the device boundary; gain stays outside immutable PCM.
@@ -277,16 +279,37 @@ func release(player outputPlayer) {
 // application pump's media keepalive walk [R-AUD-02 §2]. The caller holds
 // b.mu.
 func (b *Backend) reapLocked() {
-	live := b.players[:0]
-	for _, v := range b.players {
+	b.players = reapVoices(b.players)
+}
+
+func reapVoices(voices []voice) []voice {
+	live := voices[:0]
+	for _, v := range voices {
 		if !v.player.IsPlaying() {
 			release(v.player)
 			continue
 		}
 		live = append(live, v)
 	}
-	clear(b.players[len(live):])
-	b.players = live
+	clear(voices[len(live):])
+	return live
+}
+
+// Pump releases finished output buffers from the application pump, including
+// its last silent batch. This wall-clock keepalive is independent of pause,
+// simulation ticks and subsequent cue submissions [03 R-AUD-02 §2].
+func (b *Backend) Pump(now time.Time) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.lastPump.IsZero() && now.Sub(b.lastPump) < 99*time.Millisecond {
+		return
+	}
+	b.lastPump = now
+	b.reapLocked()
+	b.streams = reapVoices(b.streams)
 }
 
 // PlayStream is the optional non-looping stream boundary. The sample is

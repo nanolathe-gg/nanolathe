@@ -555,9 +555,18 @@ shot.
 
 `meteor.go` is the meteor shower's arithmetic: the per-hit delay, the fixed
 spawn height and fall velocity that make impact land exactly 90 ticks later,
-the origin band, the lateral spread tables, and the substitution of
-`METEOR.TDF` defaults for zero mission parameters — where **one** zero
-parameter replaces the whole default block `[06 §6.5]` `[06 R-WPN-01 §5]`.
+and the origin band and lateral spread tables. Session startup selects the
+mission's schema record, fixes its enabled bit from the original weapon name,
+then uses a present `METEOR.TDF` `[Default]` only when that name is empty or
+any numeric value is zero. That selection replaces all five values, including
+the weapon name; it does not recompute enabled. A missing file or `[Default]`
+returns without changing the incoming loader record. The numeric lanes after
+an original empty name and no default remain Unknown; the checked host uses an
+explicitly non-retail all-zero disabled record there. A present invalid
+default is fatal only if selected, before a storm is installed
+`[02 §6]` `[06 §6.5]`.
+The three floating inputs are stored as `float32`, then converted at working
+precision with signed-64 low-word truncation `[01 R-DET-01 §1]`.
 Meteor geometry draws from the **CRT** stream, not the simulation stream, and
 the census is four draws per storm and two per hit `[06 R-WPN-01 §6]` [I4].
 Records spawned through the null-shooter path carry the neutral side byte so
@@ -729,15 +738,23 @@ Timer expiry without burn-blow emits exactly one trail-style puff and retires
 silently — no sound, no shake, no explosion art, no damage `[06 §6.3]`
 `[06 §6.4]` `[06 §7.3]`.
 
-**C17 — the meteor shower.** Per-hit delay `trunc(30 / density)`; a fixed
+**C17 — the meteor shower.** Session startup reads only the selected schema;
+it chooses enabled from the original weapon's emptiness and then, if that name
+is empty or any numeric input is zero, replaces all five values from a present
+valid `METEOR.TDF` `[Default]`. Missing defaults leave the incoming loader
+record; the numeric lanes after an original empty name without a default are
+Unknown, so the checked host uses a non-retail all-zero disabled record.
+A selected present invalid block terminates startup or restore before partial
+state can install. The source floating values are single precision, while
+`trunc(30 / density)`, duration and interval conversion use working precision
+and signed-64 low-word truncation. A fixed
 vertical speed of −15 world units per tick from a spawn height of 1350, so
 impact lands exactly 90 ticks later; the origin band 6–15 to the north; lateral
 spread from the fixed sine tables; geometry from the **CRT** stream, four draws
 per storm and two per hit; an unresolved weapon falls back to weapon 0; a full
-pool drops the meteor silently; and one zero mission parameter substitutes the
-whole `METEOR.TDF` default block `[06 §6.5]` `[06 R-WPN-01 §5]`
-`[06 R-WPN-01 §6]` [I4]. Meteor orientation is derived from the high halves of
-velocity shifted left eight, not from a stored rate.
+pool drops the meteor silently `[06 §6.5]` `[06 R-WPN-01 §5]`
+`[06 R-WPN-01 §6]` `[01 R-DET-01 §1]` [I4]. Meteor orientation is derived from
+the high halves of velocity shifted left eight, not from a stored rate.
 
 ### 3.4 Damage and death — C18–C28
 

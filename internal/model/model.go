@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -16,12 +17,18 @@ type Primitive struct {
 	VertexIndices []uint16
 	TextureName   string
 	IsColored     int32
+	// SourceIndex is this primitive's authored position in its 3DO object.
+	// Compilation moves an authored selection face to slot zero and orders the
+	// remaining faces without losing that source identity [02 "Model archive
+	// (3DO)"][03 §2.4].
+	SourceIndex int32
 }
 
 // Piece is one object/piece of a 3DO model [03 §2.4] [fmt 3do].
 // Translate is the authored parent translation (16.16) after the half-turn pass [03 §2.4] C20.
 // Vertices are after the half-turn pass [03 §2.4] C20.
-// Primitives are after the load-time reorder already applied in formats [GAP 02-A6].
+// Primitives are in the retail load-time order, compiled once from the
+// lossless authored 3DO object [02 "Model archive (3DO)"][03 §2.4].
 // Leaf pieces with a vertex but no primitive are valid attachment/emit points [03 §2.4] C23.
 type Piece struct {
 	Name       string
@@ -30,7 +37,7 @@ type Piece struct {
 	Translate  [3]numeric.Fixed
 	Vertices   [][3]numeric.Fixed
 	Primitives []Primitive
-	// Selection marks the load-time selection primitive.  It remains in the
+	// Selection marks the load-time selection primitive. It remains in the
 	// primitive list at index zero so consumers can exclude it without
 	// reinterpreting the source geometry [03 §2.4.1].
 	Selection bool
@@ -41,9 +48,10 @@ type Piece struct {
 // that authored geometry and never substitutes a movement or footprint shape
 // [03 §2.4][03 §2.4.1].
 type SelectionPrimitive struct {
-	PieceIndex     int
-	PrimitiveIndex int
-	Primitive      Primitive
+	PieceIndex      int
+	PrimitiveIndex  int // compiled slot; selection remains ABI slot zero
+	SourcePrimitive int // authored 3DO primitive index
+	Primitive       Primitive
 }
 
 // Model is an immutable compiled 3DO model [03 §2.4].
@@ -84,7 +92,7 @@ func (m *Model) SelectionPrimitives() []SelectionPrimitive {
 		indices := append([]uint16(nil), primitive.VertexIndices...)
 		primitive.VertexIndices = indices
 		out = append(out, SelectionPrimitive{
-			PieceIndex: pieceIndex, PrimitiveIndex: 0, Primitive: primitive,
+			PieceIndex: pieceIndex, PrimitiveIndex: 0, SourcePrimitive: int(primitive.SourceIndex), Primitive: primitive,
 		})
 	}
 	return out
@@ -272,9 +280,8 @@ func (t Transform) WorldOffset() [3]numeric.Fixed {
 // Load loads a 3DO model via the VFS and completes the load-time work owned
 // by this package [03 §2.4] C20 [PLAN_06 WU-06-8].
 //
-//   - Primitive reordering (selection swap + mean-Y bubble sort) is already
-//     applied by formats.LoadThreeDO per [GAP 02-A6]; cited here and NOT redone
-//     per the ownership note in DESIGN_UNITS_ORDERS_COB §2.4 `internal/model`.
+//   - Primitive reordering (selection swap + mean-Y stable order) is compiled
+//     here from the lossless authored parse [02 "Model archive (3DO)"].
 //   - The recursive half-turn pass negating first and third vertex coordinates
 //     and first and third parent translations of every object is applied HERE
 //     per [03 §2.4] C20.
@@ -292,18 +299,65 @@ func Load(fs vfs.FSOps, name string) (*Model, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildModel(three, name)
+	model, err := buildModel(three, name)
+	if err != nil {
+		return nil, withModelCompileContext(fs, name, err)
+	}
+	return model, nil
+}
+
+func withModelCompileContext(fs vfs.FSOps, logical string, err error) error {
+	provider := "unknown"
+	if info, statErr := fs.Stat(logical); statErr == nil {
+		if id := info.Source.ProviderID(); id != "" {
+			provider = id
+		}
+	}
+	return fmt.Errorf("nanolathe: model compile failed: logical path %s, providers searched [%s], expected valid 3DO model: %w", logical, provider, err)
+}
+
+// ValidateSource checks the safe compilation requirements of a parsed 3DO
+// without deriving geometry or sorting faces. Required-resource loaders use
+// this before publication; malformed ordering inputs cannot become a silent
+// missing model later [02 "Model archive (3DO)"][02 R-MALF-01 §8].
+func ValidateSource(three *formats.ThreeDO) error {
+	if three == nil {
+		return fmt.Errorf("model: nil threeDO")
+	}
+	if len(three.Objects) == 0 {
+		return fmt.Errorf("model: empty object table")
+	}
+	if three.Root < 0 || int(three.Root) >= len(three.Objects) {
+		return fmt.Errorf("model: bad root %d", three.Root)
+	}
+	for _, obj := range three.Objects {
+		if err := validatePrimitiveOrder(obj); err != nil {
+			return fmt.Errorf("model: object %q: %w", obj.Name, err)
+		}
+	}
+	return nil
+}
+
+func validatePrimitiveOrder(obj formats.ThreeDOObject) error {
+	n := len(obj.Primitives)
+	fixed := 0
+	if n > 0 && obj.Selection != -1 {
+		if obj.Selection < 0 || int(obj.Selection) >= n {
+			return fmt.Errorf("selection primitive %d is outside %d primitives", obj.Selection, n)
+		}
+		fixed = int(obj.Selection)
+	}
+	for i, primitive := range obj.Primitives {
+		if n > 2 && i != fixed && len(primitive.VertexIndices) == 0 {
+			return fmt.Errorf("primitive %d has zero vertex indexes for ordering", i)
+		}
+	}
+	return nil
 }
 
 func buildModel(three *formats.ThreeDO, name string) (*Model, error) {
-	if three == nil {
-		return nil, fmt.Errorf("model: nil threeDO")
-	}
-	if len(three.Objects) == 0 {
-		return nil, fmt.Errorf("model: empty object table")
-	}
-	if three.Root < 0 || int(three.Root) >= len(three.Objects) {
-		return nil, fmt.Errorf("model: bad root %d", three.Root)
+	if err := ValidateSource(three); err != nil {
+		return nil, err
 	}
 	m := &Model{
 		Pieces: make([]Piece, len(three.Objects)),
@@ -340,17 +394,22 @@ func buildModel(three *formats.ThreeDO, name string) (*Model, error) {
 			p.Vertices[j] = [3]numeric.Fixed{x, y, z}
 		}
 		p.Primitives = make([]Primitive, len(obj.Primitives))
-		p.Selection = obj.Selection == 0
-		for j, pr := range obj.Primitives {
+		for sourceIndex, pr := range obj.Primitives {
 			cp := make([]uint16, len(pr.VertexIndices))
 			copy(cp, pr.VertexIndices)
-			p.Primitives[j] = Primitive{
+			p.Primitives[sourceIndex] = Primitive{
 				ColorIndex:    pr.ColorIndex,
 				VertexIndices: cp,
 				TextureName:   pr.TextureName,
 				IsColored:     pr.IsColored,
+				SourceIndex:   int32(sourceIndex),
 			}
 		}
+		selected, err := compilePrimitiveOrder(obj, p.Primitives)
+		if err != nil {
+			return nil, fmt.Errorf("model: object %q: %w", obj.Name, err)
+		}
+		p.Selection = selected
 	}
 	// Build Children lists from Parent [fmt 3do] [03 §2.4].
 	for i := range m.Pieces {
@@ -363,6 +422,80 @@ func buildModel(three *formats.ThreeDO, name string) (*Model, error) {
 		}
 	}
 	return m, nil
+}
+
+// compilePrimitiveOrder reproduces the one-time per-object ordering retail
+// performs after 3DO relocation [02 "Model archive (3DO)"]. The parser keeps
+// the authored order and selection word for source tools; this compiler owns
+// the derived presentation order.
+//
+// A checked host cannot emulate the undefined read/fault cases for a selected
+// index outside the primitive table, an out-of-range vertex index, or a
+// compared zero-corner primitive. Reject those inputs rather than inventing a
+// replacement mean [02 R-MALF-01 §8]. Objects with at most two primitives are
+// never compared, so their faces do not acquire a divide requirement.
+func compilePrimitiveOrder(obj formats.ThreeDOObject, primitives []Primitive) (bool, error) {
+	n := len(obj.Primitives)
+	if len(primitives) != n {
+		return false, fmt.Errorf("primitive compiler has %d output slots for %d source primitives", len(primitives), n)
+	}
+
+	// Retail only consumes the selection word when the primitive count is
+	// positive. Stock child emit pieces may therefore carry a zero selection
+	// word with no face table; they do not declare a compiled selection face
+	// [02 "Model archive (3DO)"].
+	selected := obj.Selection != -1 && n > 0
+	if selected {
+		selection := int(obj.Selection)
+		primitives[0], primitives[selection] = primitives[selection], primitives[0]
+	}
+
+	// Retail performs no comparison pass at 0, 1, or 2 primitives. In
+	// particular, the primitive at slot one of a two-face object cannot cause
+	// a division check merely because it is malformed [02 "Model archive
+	// (3DO)"].
+	if n <= 2 {
+		return selected, nil
+	}
+	keys := make([]int32, n)
+	for slot := 1; slot < n; slot++ {
+		sourceIndex := int(primitives[slot].SourceIndex)
+		key, err := primitiveMeanY(obj, sourceIndex)
+		if err != nil {
+			return false, err
+		}
+		keys[sourceIndex] = key
+	}
+	// The original adjacent-exchange pass is a stable ascending sort. Keys are
+	// evaluated once while preserving its strict-less tie behavior in O(n log n).
+	slices.SortStableFunc(primitives[1:], func(left, right Primitive) int {
+		if keys[left.SourceIndex] < keys[right.SourceIndex] {
+			return -1
+		}
+		if keys[left.SourceIndex] > keys[right.SourceIndex] {
+			return 1
+		}
+		return 0
+	})
+	return selected, nil
+}
+
+func primitiveMeanY(obj formats.ThreeDOObject, primitiveIndex int) (int32, error) {
+	primitive := obj.Primitives[primitiveIndex]
+	if len(primitive.VertexIndices) == 0 {
+		return 0, fmt.Errorf("primitive %d has zero vertex indexes for ordering", primitiveIndex)
+	}
+	var sum int32
+	for _, vertexIndex := range primitive.VertexIndices {
+		if int(vertexIndex) >= len(obj.Vertices) {
+			return 0, fmt.Errorf("primitive %d vertex index %d is outside %d vertices for ordering", primitiveIndex, vertexIndex, len(obj.Vertices))
+		}
+		// Go's signed integer addition wraps in two's complement, matching the
+		// signed 32-bit accumulator before the signed quotient [02 "Model
+		// archive (3DO)"].
+		sum += obj.Vertices[vertexIndex].Y
+	}
+	return sum / int32(len(primitive.VertexIndices)), nil
 }
 
 // Compose returns the world transform for piece index [03 §2.4] C21.

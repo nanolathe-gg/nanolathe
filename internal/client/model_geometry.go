@@ -151,8 +151,25 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 	}
 	anchorX, anchorY := c.modelAnchor(draw)
 	width, height, originX, originY := modelExtent(polys)
+	supersample := c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
 	placeFaces(polys, originX, originY, 1)
 	g := modelGeometryPacketAt(polys, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 	c.configureModelGeometry(g, draw, owner, kind, reveal, outline)
+	g.Supersample = supersample
+	if supersample != nil {
+		supersample.Reveal = g.Reveal
+	}
 	return g
+}
+
+// The doubled projection shares placeFaces with classic, including its odd
+// height correction. It targets a bounded local GPU image; final placement
+// remains on the outer packet [03 R-REN-03A §6].
+func (c *Client) modelSupersampleGeometry(polys []screenPoly, draw *presentationrender.UnitDraw, width, height int, originX, originY int32) *drawlist.ModelGeometry {
+	if !c.supersampleModel(draw.Structure) {
+		return nil
+	}
+	faces := cloneScreenPolys(polys)
+	placeFaces(faces, originX, originY, 2)
+	return modelGeometryPacketAt(faces, int32(2*width), int32(2*height), 2*originX, 2*originY, 2*originX, 2*originY, 2, draw.KeyPlane, drawlist.ModelFallbackNone)
 }

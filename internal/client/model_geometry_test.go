@@ -53,7 +53,7 @@ func TestModelGeometryTraceOnlyOmitsBody(t *testing.T) {
 	}
 }
 
-func TestGeometryOnlyModelRecordsNativeStructureWithoutCPUCommit(t *testing.T) {
+func TestGeometryOnlyModelRecordsStructureResolveWithoutCPUCommit(t *testing.T) {
 	c := testModelTextureClient()
 	c.geometryOnlyModels = true
 	c.antiAlias = true
@@ -63,7 +63,7 @@ func TestGeometryOnlyModelRecordsNativeStructureWithoutCPUCommit(t *testing.T) {
 		ColorIndex:    7,
 		VertexIndices: []uint16{0, 1, 2, 3},
 	}, [][3]numeric.Fixed{
-		fixedVertex(0, 0, 0), fixedVertex(8, 0, 0), fixedVertex(8, 0, -8), fixedVertex(0, 0, -8),
+		fixedVertex(0, 1, 0), fixedVertex(8, 1, 0), fixedVertex(8, 1, -8), fixedVertex(0, 1, -8),
 	})
 	draw.Structure, draw.KeyPlane, draw.CastsShadow = true, true, true
 	if !c.drawModel(draw, 0, teamColor{}, 1, modelCursorUnit, nil, 0) {
@@ -77,6 +77,13 @@ func TestGeometryOnlyModelRecordsNativeStructureWithoutCPUCommit(t *testing.T) {
 		t.Fatalf("geometry-only record = %#v, want eligible native geometry", models)
 	}
 	g := models[0].Geometry
+	if g.Supersample == nil || g.Supersample.Scale != 2 {
+		t.Fatal("structure did not record GPU resolve geometry")
+	}
+	native, doubled := g.Faces[0].Vertices[0], g.Supersample.Faces[0].Vertices[0]
+	if doubled.X != 2*native.X || doubled.Y != 2*native.Y-1 || doubled.Key != native.Key {
+		t.Fatalf("doubled odd-height corner=%+v, native=%+v", doubled, native)
+	}
 	if g.Shadow == nil || !g.Shadow.Eligible || len(g.Shadow.Faces) == 0 || models[0].ShadowOmissions != 0 {
 		t.Fatal("eligible shadow was not recorded as geometry")
 	}

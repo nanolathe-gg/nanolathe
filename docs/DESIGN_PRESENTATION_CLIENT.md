@@ -218,6 +218,11 @@ start/stop lifetime. The stream opener has no ordinary MODE play gate
 `[03 R-AUD-01 §1]` `[03 R-AUD-01 §2]` `[03 R-AUD-02 §1]`. Ebitengine player
 gain stands in for the retail system wave-output mixer; no host-wide volume
 setting is changed.
+The shell's common presentation step pumps the backend in menus, loading and
+paused battles. At intervals of at least 99 ms of monotonic wall time, it
+releases finished cues and streams, including the final batch with no later
+play request. This keeps playback retention independent of simulation ticks
+`[03 R-AUD-02 §2]`.
 
 ## 3. Contracts
 

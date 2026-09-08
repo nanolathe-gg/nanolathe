@@ -88,12 +88,21 @@ reader takes a byte slice (or an `FSOps` plus a logical path) and returns a
 structure; readers that need bounds carry an explicit `…Limits` struct with a
 `Default…Limits()` so a malformed file cannot request an unbounded allocation.
 
+`LoadThreeDO` is source-faithful: it preserves the raw input, authored object
+selection values, source offsets and primitive order. `internal/model` derives
+the retail selection swap and stable mean-Y primitive order once for its
+immutable presentation model, retaining each compiled primitive's authored
+index for source-facing consumers `[02 "Model archive (3DO)"]` `[03 §2.4]`.
+Catalog admission calls `model.ValidateSource` before publishing required
+models or derived heights. This checks compilation requirements without
+allocating presentation geometry or sorting a second time.
+
 | Reader | Owns | Layout authority |
 |---|---|---|
 | `ParseTDF`, `ParseTDFWithLimits`, `Document`, `Section`, `Item` | The generic authored-text grammar: sections, assignments, nesting, comment blanking, duplicate policy, typed accessors | `[fmt tdf]` `[02 §4]` |
 | `LoadGAF`, `GAF`, `GAFEntry`, `GAFFrame` | The animation archive: entries, frame references, sub-frames, the transparent index | `[fmt gaf]` `[02 §6]` |
 | `LoadTNT`, `TNT`, `TNTAttribute`, `TNTFeatureRecord` | The map terrain file: version word, tile index, per-cell attributes, feature records | `[fmt tnt]` `[02 §6]` |
-| `LoadThreeDO`, `ThreeDO`, `ThreeDOObject`, `ThreeDOPrimitive` | The model archive: the object tree with its pointer relocation, vertices, primitives, texture names | `[fmt 3do]` `[02 §6]` |
+| `LoadThreeDO`, `ThreeDO`, `ThreeDOObject`, `ThreeDOPrimitive` | The lossless model archive: the object tree with pointer relocation, authored selection word, vertices, primitives in authored order, texture names, source offsets and raw bytes | `[fmt 3do]` `[02 "Model archive (3DO)"]` |
 | `LoadGUI`, `GUI`, `Gadget`, `CommonGadget` | Interface panel files, text and binary form | `[fmt gui]` `[02 §6]` |
 | `LoadOTA`, `OTA`, `OTASchema` | Map metadata over a TDF document: the global header, the schema probe, the language-prefixed strings | `[fmt ota]` `[02 §6]` |
 | `LoadPAL`, `LoadPaletteTable`, `Palette`, `PaletteTable` | The 768/1024-byte palette and the rectangular lookup tables built on it | `[fmt pal]` `[02 §7]` |

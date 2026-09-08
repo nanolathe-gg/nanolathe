@@ -567,20 +567,16 @@ var float64FieldAllowances = map[string]string{
 	"internal/economy/p28_parity_trace.go type PlayerTrace.TotalProduced [2]float64": "I2 opt-in trace copy of cumulative totals (P28-OBS-00C)",
 	"internal/economy/p28_parity_trace.go type PlayerTrace.TotalConsumed [2]float64": "I2 opt-in trace copy of cumulative totals (P28-OBS-00C)",
 
-	"internal/mission/mission_globals.go type MissionGlobals.TidalStrength float64":  "I2 immutable authored map-global value [02 map-global keys]",
-	"internal/mission/mission_globals.go type MissionGlobals.KillMul float64":        "I2 immutable authored map-global value [02 map-global keys]",
-	"internal/mission/mission_globals.go type MissionGlobals.TimeMul float64":        "I2 immutable authored map-global value [02 map-global keys]",
-	"internal/mission/mission_globals.go type MissionGlobals.MeteorDensity float64":  "I2 immutable authored map-global value [02 map-global keys]",
-	"internal/mission/mission_globals.go type MissionGlobals.MeteorDuration float64": "I2 immutable authored map-global value [02 map-global keys]",
-	"internal/mission/mission_globals.go type MissionGlobals.MeteorInterval float64": "I2 immutable authored map-global value [02 map-global keys]",
-
-	"internal/save/bank.go type DoubleItem.Value float64":                "I13 HAPIBANK account record double",
-	"internal/save/boxes.go type PlayerSlot.TotalEnergyProduced float64": "I2/I13 player save-box double",
-	"internal/save/boxes.go type PlayerSlot.TotalMetalProduced float64":  "I2/I13 player save-box double",
-	"internal/save/boxes.go type PlayerSlot.TotalEnergyConsumed float64": "I2/I13 player save-box double",
-	"internal/save/boxes.go type PlayerSlot.TotalMetalConsumed float64":  "I2/I13 player save-box double",
-	"internal/save/boxes.go type PlayerSlot.EnergyWasted float64":        "I2/I13 player save-box double",
-	"internal/save/boxes.go type PlayerSlot.MetalWasted float64":         "I2/I13 player save-box double",
+	"internal/mission/mission_globals.go type MissionGlobals.TidalStrength float64": "I2 immutable authored map-global value [02 map-global keys]",
+	"internal/mission/mission_globals.go type MissionGlobals.KillMul float64":       "I2 immutable authored map-global value [02 map-global keys]",
+	"internal/mission/mission_globals.go type MissionGlobals.TimeMul float64":       "I2 immutable authored map-global value [02 map-global keys]",
+	"internal/save/bank.go type DoubleItem.Value float64":                           "I13 HAPIBANK account record double",
+	"internal/save/boxes.go type PlayerSlot.TotalEnergyProduced float64":            "I2/I13 player save-box double",
+	"internal/save/boxes.go type PlayerSlot.TotalMetalProduced float64":             "I2/I13 player save-box double",
+	"internal/save/boxes.go type PlayerSlot.TotalEnergyConsumed float64":            "I2/I13 player save-box double",
+	"internal/save/boxes.go type PlayerSlot.TotalMetalConsumed float64":             "I2/I13 player save-box double",
+	"internal/save/boxes.go type PlayerSlot.EnergyWasted float64":                   "I2/I13 player save-box double",
+	"internal/save/boxes.go type PlayerSlot.MetalWasted float64":                    "I2/I13 player save-box double",
 }
 
 // float64ScopeAllowances is intentionally declaration-scoped. Each entry
@@ -590,6 +586,7 @@ var float64ScopeAllowances = map[string]float64Allowance{
 	"internal/combat/meteor.go func MeteorDelay":               {2, "I2 meteor source float32, working quotient and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorDurationTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
 	"internal/combat/meteor.go func MeteorIntervalTicks":       {2, "I2 meteor source float32, working product and signed64/low32 conversion [06 §6.5][01 R-DET-01 §1]"},
+	"internal/session/step.go func *Session.initMeteor":        {3, "I2 selected-schema meteor source stores enter the documented working-precision conversion helpers [06 §6.5][01 R-DET-01 §1]"},
 	"internal/clock/clock.go func *State.budget":               {5, "I2 clock budget product and float32 carry [01 §4.2]"},
 	"internal/clock/clock.go func *State.effectiveSpeedLocked": {3, "I2 clock speed multiplier [01 §4.2]"},
 	"internal/clock/clock.go func lagThrottleFactor":           {6, "I2 retained multiplayer throttle expression [01 §4.2]"},

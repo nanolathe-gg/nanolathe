@@ -113,12 +113,13 @@ func TestRetailTickSequenceAndRandomDrawPlacement(t *testing.T) {
 	assertDrawDelta(1, "phase8-wind", 1, 2)
 	assertDrawDelta(1, "phase9-meteor", 4, 0)
 
-	// Wind is not due on the next tick (strict deadline), and the disabled
-	// meteor scheduler's expired window does not draw again.
+	// Wind is not due on the next tick (strict deadline). The disabled shower
+	// has zero interval in this fixture, so its next deadline is due again and
+	// it consumes the scheduling block before clearing Active [06 §6.5].
 	s.EnablePhaseTrace()
 	s.stepAuthoritativePhases(2)
 	assertDrawDelta(2, "phase8-wind", 0, 0)
-	assertDrawDelta(2, "phase9-meteor", 0, 0)
+	assertDrawDelta(2, "phase9-meteor", 4, 0)
 }
 
 func TestIdleUnitKeepsOrdersNilAcrossTicks(t *testing.T) {

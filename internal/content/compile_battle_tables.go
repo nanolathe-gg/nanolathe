@@ -3,7 +3,9 @@
 package content
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -36,11 +38,17 @@ type LOSTables struct {
 // and are not re-parsed by combat [PLAN_02 C15] (I8).
 type MeteorDefaults struct {
 	DefinitionHeader
-	MeteorWeapon   string  // MeteorWeapon string, empty disables [02 §6]
+	// DefaultPresent distinguishes a missing file/section, which leaves a
+	// selected mission record unchanged, from a present record with bad values.
+	// DefaultValid is deferred validation: an invalid default is fatal only when
+	// a selected schema asks for whole-record substitution [02 §6][06 §6.5].
+	DefaultPresent bool
+	DefaultValid   bool
+	MeteorWeapon   string  // MeteorWeapon string, empty is a valid present value [02 §6]
 	MeteorRadius   int32   // MeteorRadius integer default 0 [02 §6]
-	MeteorDensity  float64 // MeteorDensity floating default 0.0 [02 §6]
-	MeteorDuration float64 // MeteorDuration floating default 0.0 [02 §6]
-	MeteorInterval float64 // MeteorInterval floating default 0.0 [02 §6]
+	MeteorDensity  float32 // source single store [06 §6.5]
+	MeteorDuration float32 // source single store [06 §6.5]
+	MeteorInterval float32 // source single store [06 §6.5]
 }
 
 // parseLOSLine parses a LOS line value like " 1, 0, 1" or " 2, 0, 1, 0, 2" into ints.
@@ -189,17 +197,22 @@ func CompileLOSTables(fs vfs.FSOps) (*LOSTables, error) {
 // (floatings) [research/formats/tdf.md METEOR.TDF]. Values retain source
 // precision and are not re-parsed by combat [PLAN_02 C15] (I8).
 //
-// Missing file or [Default] section leaves zero defaults without error. This is
-// the established retail early-return behavior, not a synthetic fixture
-// fallback [02 §6][06 §6.5].
+// A missing file or [Default] section records no default without error. Other
+// read failures remain compilation failures. A present but invalid block is
+// retained for the selected-schema startup path to reject if it is needed;
+// otherwise a complete authored schema is valid without it [02 §6][06 §6.5].
 func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
 	if fs == nil {
 		return nil, fmt.Errorf("content: nil VFS")
 	}
 	data, err := fs.ReadFileLimit("gamedata/meteor.tdf", 1<<20)
 	if err != nil {
+		if !errors.Is(err, vfs.ErrNotFound) {
+			return nil, requiredContentError(fs, "gamedata/meteor.tdf", "retail METEOR.TDF default table", err)
+		}
 		md := &MeteorDefaults{}
 		md.CanonicalKey = CanonicalKey("meteor")
+		md.Hash = HashDefinition([]byte(md.CanonicalKey + "|present=false|"))
 		return md, nil
 	}
 	prov := Provenance{}
@@ -219,17 +232,26 @@ func CompileMeteor(fs vfs.FSOps) (*MeteorDefaults, error) {
 	// Section may be [Default] or [DEFAULT]; case-insensitive [02 §3].
 	sec := doc.Root.Section("default")
 	if sec == nil {
-		// Fallback: if document root contains assignments directly (shouldn't),
-		// try root.
-		sec = doc.Root
+		var b strings.Builder
+		fmt.Fprintf(&b, "%s|present=false|", md.CanonicalKey)
+		md.Hash = HashDefinition([]byte(b.String()))
+		return md, nil
 	}
-	md.MeteorWeapon, _ = sec.StringValue("MeteorWeapon", "")
-	md.MeteorRadius = sec.IntValue("MeteorRadius", 0)       // typed int accessor [02 §4]
-	md.MeteorDensity = sec.FloatValue("MeteorDensity", 0)   // typed float accessor [02 §4]
-	md.MeteorDuration = sec.FloatValue("MeteorDuration", 0) // [02 §4]
-	md.MeteorInterval = sec.FloatValue("MeteorInterval", 0) // [02 §4]
+	md.DefaultPresent = true
+	var hasWeapon bool
+	md.MeteorWeapon, hasWeapon = sec.StringValue("MeteorWeapon", "")
+	// A missing weapon is the fatal branch that precedes all numeric reads when
+	// this block is selected. Keep that semantic outcome through compilation;
+	// an unused bad block remains admissible [02 §6][06 §6.5].
+	if hasWeapon {
+		md.MeteorRadius = sec.IntValue("MeteorRadius", 0)                // typed int accessor [02 §4]
+		md.MeteorDensity = float32(sec.FloatValue("MeteorDensity", 0))   // source single store [06 §6.5]
+		md.MeteorDuration = float32(sec.FloatValue("MeteorDuration", 0)) // source single store [06 §6.5]
+		md.MeteorInterval = float32(sec.FloatValue("MeteorInterval", 0)) // source single store [06 §6.5]
+		md.DefaultValid = md.MeteorRadius != 0 && md.MeteorDensity != 0 && md.MeteorDuration != 0 && md.MeteorInterval != 0
+	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s|%s|%d|%.10f|%.10f|%.10f|", md.CanonicalKey, md.MeteorWeapon, md.MeteorRadius, md.MeteorDensity, md.MeteorDuration, md.MeteorInterval)
+	fmt.Fprintf(&b, "%s|present=%t|valid=%t|%s|%d|%08x|%08x|%08x|", md.CanonicalKey, md.DefaultPresent, md.DefaultValid, md.MeteorWeapon, md.MeteorRadius, math.Float32bits(md.MeteorDensity), math.Float32bits(md.MeteorDuration), math.Float32bits(md.MeteorInterval))
 	md.Hash = HashDefinition([]byte(b.String()))
 	return md, nil
 }

@@ -2583,6 +2583,16 @@ and the later parameter installation does not recompute that bit. An unresolved 
 resolved weapon lacking the meteor flag, still falls back to weapon index zero
 instead of disabling.
 
+**Unknown — empty source weapon with absent defaults.** The empty-name branch
+skips the four numeric schema reads before calling the default loader. If the
+file or section is absent, installation can therefore consume numeric values
+that this path did not initialize. Their concrete values and resulting disabled
+scheduler timing have not been established; the decider is a complete lifetime
+trace of those incoming numeric values through battle entry. A checked host
+may use explicit zero initialization for this unsafe case, but must not describe
+those zeros, or otherwise ignored numeric schema keys, as a retail default.
+A synthetic session with no mission uses the same explicit host initialization.
+
 **Established fact:** "Weapon index zero" is weapon record 0 of the ID-indexed
 table. The weapon name is resolved once,
 by the storm reset that runs when a battle starts (the same routine clears the
@@ -4301,7 +4311,15 @@ progress is denominated in the same units as the compiled reload time and the
 cap below is a full round.
 
 **Established fact:** Each stockpile work visit advances a per-node progress
-value by five, capped at the selected weapon's compiled reload-time value. The
+value by five, capped at the selected weapon's compiled reload-time value.
+**Established (direct static trace):** this production reader zero-extends the
+stored 16-bit reload word, unlike the firing reader's signed interpretation.
+A stored all-ones reload word therefore means a production build time of
+65535. Both cumulative cost expressions use the stored single-precision cost
+at working precision, then retain the low 32 bits of signed-64 truncation
+[01 R-DET-01 §1]. Their subtraction wraps in the signed 32-bit result before
+that difference is stored as single precision for resource admission. There
+is no intervening single-precision quotient store. The
 admitted energy and metal demands for that visit are the differences of two
 independently truncated cumulative proportional costs:
 

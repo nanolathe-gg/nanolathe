@@ -1033,14 +1033,14 @@ func TestConstructionArithmeticCarry(t *testing.T) {
 	if got := WorkerQuantum(-1); got != 2184 {
 		t.Fatalf("WorkerQuantum -1 => %d want unsigned 65535/30 = 2184", got)
 	}
-	// RemainingStep
-	if got := RemainingStep(1.0, 3, 30); got != 0.9 {
-		t.Fatalf("RemainingStep 1-3/30 => %v want 0.9", got)
+	// The live construction remaining-fraction path
+	if got, _, _, _ := ConstructionStep(1.0, 3, 30, 0, 0, 0); got != 0.9 {
+		t.Fatalf("ConstructionStep 1-3/30 => %v want 0.9", got)
 	}
-	if got := RemainingStep(0.1, 10, 10); got != 0 {
+	if got, _, _, _ := ConstructionStep(0.1, 10, 10, 0, 0, 0); got != 0 {
 		t.Fatalf("clamp to 0 got %v", got)
 	}
-	// HealthGain difference-of-truncations preserves sub-health progress
+	// Construction health difference-of-truncations preserves sub-health progress
 	// Example from spec: maxDamage 10, worker 1, buildTime 3 => delta 0.333
 	// Step1 old 1.0 new 0.666... => trunc10 - trunc6.666 =10-6=4
 	// Step2 old 0.666 new 0.333 => 6-3=3

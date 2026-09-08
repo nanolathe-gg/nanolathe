@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/audio"
@@ -649,6 +650,7 @@ func (g *gameShell) panelWindowNeedsUnder(mode shellMode) bool {
 }
 
 func (g *gameShell) step(delta float64, cl *client.Client) {
+	pumpAudio(time.Now())
 	switch g.frontend.Mode {
 	case modeBattle:
 		if g.battle != nil {

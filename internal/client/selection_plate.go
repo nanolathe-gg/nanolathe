@@ -83,7 +83,7 @@ func BuildSelectionPlateGeometry(m *compiledmodel.Model, pose frame.UnitView, ca
 		geometry := SelectionPlateGeometry{
 			Handle:          pose.Slot,
 			SourcePiece:     selection.PieceIndex,
-			SourcePrimitive: selection.PrimitiveIndex,
+			SourcePrimitive: selection.SourcePrimitive,
 			Visible:         visible,
 			Selectable:      selectable && visible,
 			Valid:           true,

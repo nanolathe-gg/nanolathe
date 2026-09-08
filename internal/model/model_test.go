@@ -5,8 +5,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/vfs"
@@ -173,6 +175,41 @@ func TestHalfTurnNegation(t *testing.T) {
 	expVz := numeric.Fixed(-30 * 65536)
 	if v[0] != expVx || v[1] != expVy || v[2] != expVz {
 		t.Fatalf("half-turn vertex: got %v want [%d %d %d]", v, expVx, expVy, expVz)
+	}
+}
+
+func TestLoadWrapsMalformedCompileWithModelContext(t *testing.T) {
+	dir := t.TempDir()
+	data, err := formats.EncodeThreeDO(&formats.ThreeDO{Root: 0, Objects: []formats.ThreeDOObject{{
+		Version: 1, Name: "base", Selection: 9, Parent: -1,
+		Vertices:   []formats.ThreeDOVertex{{}},
+		Primitives: []formats.ThreeDOPrimitive{{VertexIndices: []uint16{0}}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "objects3d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "objects3d", "invalid.3do"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fs := vfs.New()
+	if err := fs.MountDirectory(dir, 10); err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	_, err = Load(fs, "objects3d/invalid.3do")
+	for _, want := range []string{
+		"nanolathe: model compile failed:",
+		"logical path objects3d/invalid.3do",
+		"providers searched [objects3d/invalid.3do]",
+		"expected valid 3DO model",
+		"selection primitive 9 is outside 1 primitives",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("error=%v, want context %q", err, want)
+		}
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/cob"
+	"github.com/nanolathe/nanolathe/internal/model"
 	"github.com/nanolathe/nanolathe/vfs"
 )
 
@@ -1334,11 +1335,14 @@ func validateRequiredModels(fs vfs.FSOps, units map[string]*UnitDef, weapons map
 		if err != nil {
 			return requiredContentError(fs, logical, "valid 3DO model", err)
 		}
+		if err := model.ValidateSource(threeDO); err != nil {
+			return requiredContentError(fs, logical, "valid 3DO model", err)
+		}
 		loaded[logical] = threeDO
 	}
 
 	// Do not publish a partly updated set of unit heights: all required model
-	// reads and parses above complete before one definition changes [02 §5].
+	// reads, parses and compilation checks complete before one definition changes [02 §5].
 	for _, u := range units {
 		if u == nil {
 			continue

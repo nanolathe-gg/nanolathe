@@ -10,6 +10,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/ui"
 	"github.com/nanolathe/nanolathe/vfs"
+	"time"
 )
 
 // attachBattleAudio is the single composition step that joins the session's
@@ -270,4 +271,13 @@ func countedBuildCue(delta int) string {
 		return cueAddBuild
 	}
 	return cueSubBuild
+}
+
+// pumpAudio runs from the shell's common presentation step, including menus
+// and paused battles. The backend owns the wall-clock media cadence; semantic
+// audio state and simulation clocks do not advance here [03 R-AUD-02 §2][I6].
+func pumpAudio(now time.Time) {
+	if output, ok := audio.GlobalOutput().(interface{ Pump(time.Time) }); ok {
+		output.Pump(now)
+	}
 }

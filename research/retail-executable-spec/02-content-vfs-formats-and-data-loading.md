@@ -2733,7 +2733,10 @@ values never reach storm installation. These are fatal branches, not a
 recoverable partial-default policy. The enable bit is chosen from the original
 mission weapon's emptiness, independently of the substituted weapon string.
 Installation converts the stored numbers using the working-precision and
-signed-64/low-word boundaries in [06 §6.5].
+signed-64/low-word boundaries in [06 §6.5]. **Unknown:** when the original
+weapon name is empty and defaults are absent, the numeric schema reads were
+skipped and the incoming numeric values are not established. See [06 §6.5]
+for the lifetime-trace decider and explicit checked-host initialization policy.
 
 **Meteor scheduler and geometry.** The storm scheduler runs unconditionally
 after wind jitter in the simulation tick body. Timing is integral:

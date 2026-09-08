@@ -183,6 +183,13 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 	// rebuilds, never from a flag [05 R-ECO-01 §12].
 	s.publishEndCountdown()
 	s.InitBattleWindForSession()
+	// The world rebuild installs the authored storm after its scheduler reset
+	// and before the per-player reset constructs AI records or any unit is
+	// reserved [08 R-ENTRY-01 §3 step 21-24]. A bad selected default therefore
+	// fails the detached stage before those later effects.
+	if err := s.initMeteor(); err != nil {
+		return nil, err
+	}
 	if err := createAndBindServices(s); err != nil {
 		return nil, fmt.Errorf("session: retail shell composition: %w", err)
 	}

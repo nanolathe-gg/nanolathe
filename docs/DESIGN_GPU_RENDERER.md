@@ -118,7 +118,7 @@ and `cmd/nanolathe` in the architecture test's Ebitengine allowlist. Exposes:
   RGB image for `Draw` to present, or for `--shot` to read back.
 * Resource caches keyed by pointer identity: tile-set atlases per map, GAF
   frame atlases filled on first use, FNT glyph atlases, the 3DO texture atlas
-  with its LOGOS frames, and the per-frame slot atlas for models (§3 C-G5).
+  with its LOGOS frames, and reusable GPU model composition surfaces (§3 C-G5).
 
 The indexed offscreen is an RGBA8 image whose red channel holds the palette
 index. Every shader runs in Kage pixel mode and samples with nearest
@@ -147,11 +147,12 @@ not promised to fit one frame. Graphics-device recovery is not a prototype gate.
 
 ### 2.5 `cmd/nanolathe` — flags and capture
 
-`--renderer classic|modern` selects the start-up executor. `--shot` composes
-through the classic path as today; `--shot-renderer modern` additionally runs
-a hidden Ebitengine loop for one frame, executes the recorded list, reads the
-pixels back and writes them beside the classic capture; `--shot-renderer both`
-writes both and the diff. The diff itself is `tools/framediff` (§6).
+`--renderer classic|modern` selects the start-up executor and the default
+`--shot` executor. `--shot-renderer modern` records geometry, executes it in a
+hidden Ebitengine loop, then reads pixels for the PNG. Explicit
+`--shot-renderer both` also composes the independent classic reference and
+writes both images and their diff. Readback and PNG encoding are capture costs,
+excluded from presentation timing (§6). The diff tool is `tools/framediff`.
 
 ## 3. Contracts — C-G1 … C-G11
 
@@ -190,15 +191,17 @@ writes both and the diff. The diff itself is `tools/framediff` (§6).
   signed shifted-key comparison and wrapped-byte store [03 R-REN-03A §4]. Never
   flatten children into one maximum reduction. Waterline, digger, reveal and
   outline retain their established stage order when implemented. The current
-  prototype omits unsupported stages or subjects and reports them explicitly
-  (§9); it never substitutes a CPU-rendered model image.
+  implementation provides the classic subject stages (§10); invalid geometry
+  or unavailable resources remain explicit skips (§9). It never substitutes
+  a CPU-rendered model image.
 * **C-G6 Structure supersample.** Preserve the cached/all versus live gate,
   pre-shear doubled projection, ordered ALP color resolve, and top-left key
   resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
   Mobile units are not supersampled in GPU Classic. A full subject-wide MSAA
   or SSAA replacement belongs to Enhanced and needs a separate design.
-  This is a future parity contract: the current GPU prototype draws ordinary
-  structures at native scale and omits this resolve stage (§9).
+  The current GPU resolve preserves the existing classic all-piece
+  approximation. Its cached/live-piece split remains a shared reconciliation
+  gap (§10); the GPU pass does not independently invent that split.
 * **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
   grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
   shader over the world image: solid fills write the dark index, gray fills
@@ -393,7 +396,11 @@ GPU parity.
 | FNT text | `[03 §7.1]` |
 | Software cursor | `[07 §8]` |
 
-## 8. Prototype work sequence and public API contract
+## 8. Historical prototype work sequence and public API contract
+
+This section records the earlier P1–P3 staging design. Its model-image adapters,
+CPU fallbacks, and native-only structure restriction have been removed. Use
+§9–§10 for the current API and behavior; do not reintroduce those adapters.
 
 User-approved milestone: reviewed GPU raster prototypes behind `--renderer=modern`
 and a local human-review capture bundle. No new public renderer modes, zoom,
@@ -508,10 +515,10 @@ This instruction replaces the earlier fallback-first prototype staging policy.
   commands without allocating/rasterizing software model color, coverage or
   height planes. CPU transforms, visibility/order decisions, texture decoding,
   and GPU vertex preparation remain legitimate preparation work.
-- Ordinary completed structures emit native-scale geometry regardless of the
-  classic Anti-Alias setting. Until its GPU implementation exists, the structure
-  supersample/resolve stage is omitted, not routed through the CPU. This makes
-  live ARMSOLAR exercise the same model rasterizer as its isolated GPU preview.
+- Structures follow the existing Anti-Alias option through a GPU doubled
+  projection and palette resolve (§10). Its scratch surfaces are bounded by
+  model dimensions. This preserves the classic stage; it does not enable a
+  new Enhanced MSAA/SSAA policy.
 - Model shadows, nanoframe reveal/outline, waterline/digger processing, and
   carrier/child composition now have GPU passes (§10). Unsupported geometry or
   missing material resources remain explicit skips. Resolved subjects retain
@@ -526,8 +533,8 @@ This instruction replaces the earlier fallback-first prototype staging policy.
   path with `--renderer=modern`; use the GPU capture profiler instead.
 - An explicit `--shot-renderer=both` comparison may compose the classic
   reference separately as diagnostic work. It does not supply pixels to the
-  modern executor. The modern geometry describes native-scale bodies even when
-  the classic reference applies its structure resolve. Preserve a single
+  modern executor. The modern geometry carries the same structure-resolve option as the classic
+  reference. Preserve a single
   presentation walk where possible so presentation RNG/audio side effects are
   not repeated. Ordinary modern-only captures use geometry recording only.
 - Texture alignment is a correctness gate before this switch: the activated
@@ -546,7 +553,7 @@ readback or PNG encode time is counted toward presentation performance.
 `Client.RecordFrame()` selects geometry-only model preparation for live modern
 presentation. Its returned list remains same-frame data; callers retaining a
 frozen diagnostic list call `Clone()`. `ComposeFrameSnapshot()` additionally
-composes the classic reference and includes native-scale GPU geometry; its
+composes the classic reference and includes GPU geometry and stage metadata; its
 classic image is never a GPU input. `ModelPreviewRenderer.RecordGeometry()`
 returns a durable list, palette and background with a nil `Image`, while
 `RecordModel()` retains the classic preview image for explicit comparisons.
@@ -564,12 +571,13 @@ diagnostic counts, not simulation data.
 
 ## 10. Approximate visual parity before enhanced features
 
-The current implementation sequence is GPU model shadows, reveal/outline and
-waterline/digger passes, attached-unit staging, then structure resolve and a
-combat/effect capture audit. All work stays behind `--renderer=modern`. Enhanced
-lighting, glow, camera zoom and interpolation wait until this coverage is ready
-for visual review. New passes consume immutable geometry and palette tables;
-none may upload a software-rendered model image or read GPU pixels during play.
+GPU model shadows, reveal/outline, waterline/digger processing, attached-unit
+staging, and structure resolve are implemented. The capture audit below checks
+these stages alongside the existing terrain, feature, weapon, effect, fog and
+interface command families. All work stays behind `--renderer=modern`. Enhanced
+lighting, glow, camera zoom and interpolation wait for human visual acceptance.
+The passes consume immutable geometry and palette tables; none uploads a
+software-rendered model image or reads GPU pixels during play.
 
 ### Model shadows
 
@@ -623,3 +631,63 @@ geometry-only recording preserve this behavior and texture cursor registration.
 Nested child groups are not emitted by the current presentation walk. A device
 fixture covers carrier/child occlusion, signed compare before wrapped store,
 later-child ordering, invisible key ownership, and child shadow-only commits.
+
+### Structure resolve
+
+The recorder carries an optional doubled body projection using the same
+`placeFaces` operation as classic, including the odd-height shear correction.
+Its coordinates target a model-sized local scratch image. The GPU renders that
+body and its reveal, then resolves each 2×2 block with the three ordered ALP
+lookups; the resolved key is the top-left sample. Transparent background
+participates in the filter. The native outline and clipping passes follow the
+resolve, and a child's resolved image is what enters carrier composition.
+No CPU pixels are involved. [03 R-REN-03A §6–§7]
+
+This preserves the existing all-piece classic approximation: separating cached
+and live pieces into distinct raster scales remains a shared classic research
+reconciliation, not a new GPU behavior. Model-only `both` captures can continue
+using their explicitly logged native-scale comparison recipe; the scene matrix
+and AA-enabled preview API cover the normal structure option.
+
+### Weapon, effect and asset coverage review
+
+Weapon and effect producers already emit palette-index draw commands through
+both executors. Their modern path uses GPU lines, points, sprites, destination
+palette operations, and model geometry. A separate per-weapon GPU implementation
+would duplicate the presentation rules and is unnecessary. The device capture
+audit supplies authored committed views using installed definition properties,
+composes the classic reference, then independently calls `RecordFrame` for the
+modern list. It resets the presentation CRT copy for reproducible lightning.
+Every case must change visible pixels from an empty terrain frame; model cases
+must report GPU body execution and no skips. Screenshot reads happen only after
+execution, outside timing.
+
+The audit covers all installed projectile model identities, the published laser,
+lightning, flame and plasma paths, all three calculated-flash tables, named
+explosion/smoke/flame art, every published strip family, and overlapping smoke
+and impacts. The broader audit adds every installed unit definition at two headings, every
+unique feature model, and representative feature sprite banks/transparency
+modes: 1,000 non-empty cases (556 unit, 404 feature, 26 weapon, 14 effect/strip),
+plus an empty-frame control. All cases draw visible pixels without skipped
+models after the polygon fix below. Non-model cases match classic exactly on
+the tested Metal device; model cases retain edge/shade raster differences.
+These static unit poses expose every piece and do not claim to be COB states.
+Render type 2's fixed global sprite binding remains unresolved in classic as
+well; this milestone does not invent that resource. The capture source and
+paired images are retained in the human-review artifact, not as retail fixtures
+in the repository.
+
+This is approximate parity with the current classic implementation, not proof
+of complete retail behavior or every animated pose. The shared classic gaps
+above, the covered-index-1 discrepancy at model commit, and producerless world
+passes remain explicit. Live motion, camera movement, team textures, activation,
+construction, cargo, waterline and combat remain human review targets. The
+existing 30 Hz presentation sampling is unchanged; the 16.7 ms budget remains a
+performance acceptance target, not a result established by static captures.
+
+A catalog-wide capture audit exposed three disappearing subjects when a flat
+projected ring could not be triangulated. Such a ring now uses the same
+positive-row strip preparation as folded geometry, retaining device key and
+color passes. One bad ear no longer drops the whole unit. An authored touching
+ring checks both positive lobes and its empty pinch on the device; this is a
+geometry path, not a CPU image fallback. [03 R-RAST-01 §1]

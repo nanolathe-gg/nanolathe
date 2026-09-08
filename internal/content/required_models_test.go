@@ -125,3 +125,60 @@ func (f *countingModelFS) ReadFileLimit(name string, max int64) ([]byte, error) 
 	}
 	return f.fixtureFS.ReadFileLimit(name, max)
 }
+
+// Compilation rejects only faces that participate in the ordering divide.
+// Admission must enforce this before publishing any unit heights [02 "Model
+// archive (3DO)"], even when the malformed model belongs to another family.
+func TestRequiredModelsCheckCompilationBeforePublication(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		selection int32
+		faces     int
+		empty     int
+		want      string
+	}{
+		{"invalid selection", 4, 3, -1, "selection primitive 4"},
+		{"compared empty", -1, 3, 1, "zero vertex indexes"},
+		{"source zero moved into comparison", 2, 3, 0, "zero vertex indexes"},
+		{"selected empty excluded", 2, 3, 2, ""},
+		{"two faces never compared", -1, 2, 1, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			obj := formats.ThreeDOObject{Version: 1, Name: "root", Selection: tt.selection, Parent: -1, FirstChild: -1, NextSibling: -1,
+				Vertices: []formats.ThreeDOVertex{{Y: 1 << 16}}}
+			for i := 0; i < tt.faces; i++ {
+				face := formats.ThreeDOPrimitive{VertexIndices: []uint16{0}}
+				if i == tt.empty {
+					face.VertexIndices = nil
+				}
+				obj.Primitives = append(obj.Primitives, face)
+			}
+			data, err := formats.EncodeThreeDO(&formats.ThreeDO{Root: 0, Objects: []formats.ThreeDOObject{obj}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fs := newFixtureFS(t,
+				fixtureFile{path: "objects3d/a_unit.3do", data: authoredRequiredModel3DO(t, 5<<16)},
+				fixtureFile{path: "objects3d/z_weapon.3do", data: string(data)})
+			unit := &UnitDef{ObjectName: "a_unit", ModelTop: 9, ModelTopFixed: 9 << 16}
+			err = validateRequiredModels(fs, map[string]*UnitDef{"unit": unit}, map[string]*WeaponDef{"weapon": {Model: "z_weapon"}}, nil)
+			if tt.want == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if unit.ModelTop != 5 {
+					t.Fatalf("valid admission did not publish height: %d", unit.ModelTop)
+				}
+				return
+			}
+			for _, want := range []string{tt.want, "logical path objects3d/z_weapon.3do", "providers searched [unknown]", "expected valid 3DO model"} {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %v, want %q", err, want)
+				}
+			}
+			if unit.ModelTop != 9 || unit.ModelTopFixed != 9<<16 {
+				t.Fatal("failed admission published partial heights")
+			}
+		})
+	}
+}

@@ -307,10 +307,12 @@ has nothing to clone — so they are a caller-owned scratch argument
 
 ### 2.4 `internal/model`
 
-`Piece` is one 3DO object: name, parent, children, the authored parent
+`Piece` is one compiled 3DO object: name, parent, children, the authored parent
 translation and the vertices, both in 16.16 after the half-turn pass, and the
-primitives after the load-time reorder `formats` already applied `[03 §2.4]`
-`[fmt 3do]`. `Model` is the immutable hierarchy. `PieceState` carries the three
+primitives after `internal/model`'s one-time selection swap and stable mean-Y
+order. `formats` retains the authored primitive order and selection word for
+source-facing tools `[02 "Model archive (3DO)"]` `[03 §2.4]` `[fmt 3do]`.
+`Model` is the immutable hierarchy. `PieceState` carries the three
 `uint16` rotation accumulators and the script translation lanes; `Compose`
 builds a piece's world transform by composing ancestors after descendants. A
 leaf with a vertex and no primitive is a valid attachment and emission point,

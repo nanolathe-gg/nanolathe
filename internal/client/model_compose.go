@@ -373,13 +373,17 @@ func (c *Client) composeModel(draw *presentationrender.UnitDraw, owner uint8, se
 	width, height, originX, originY := modelExtent(polys)
 	var geometry *drawlist.ModelGeometry
 	if c.recordModelGeometry {
-		// The modern packet remains native scale even when the classic commit
-		// below performs retail's structure resolve. The two executors may
-		// differ there, but the modern path must never inherit CPU pixels.
+		// The outer packet describes native output. An optional doubled body
+		// projection below supplies the GPU resolve; neither packet inherits
+		// pixels from the classic composition.
 		native := cloneScreenPolys(polys)
 		placeFaces(native, originX, originY, 1)
 		geometry = modelGeometryPacketAt(native, int32(width), int32(height), originX, originY, anchorX, anchorY, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 		c.configureModelGeometry(geometry, draw, owner, kind, reveal, outline)
+		geometry.Supersample = c.modelSupersampleGeometry(polys, draw, width, height, originX, originY)
+		if geometry.Supersample != nil {
+			geometry.Supersample.Reveal = geometry.Reveal
+		}
 	}
 
 	scale := int32(1)

@@ -32,6 +32,8 @@ type ModelStats struct {
 	UnsupportedGeometry, MissingTexture, UnsupportedFace        int
 	FoldedFaces, FoldedStrips                                   int
 	TexturedQuadFaces, TexturedQuadStrips                       int
+	UntriangulatedFaces                                         int
+	StructureResolves                                           int
 	ComposedGroups                                              int
 	RevealOrOutlineOmitted                                      int
 	WaterlineOrDiggerOmitted                                    int
@@ -99,6 +101,16 @@ func (r *Renderer) modelGeometrySupported(g *drawlist.ModelGeometry) bool {
 	if len(g.Children) != 0 && (!g.KeyPlane || r.modelPack == nil || r.modelChild == nil || r.modelStage == nil || r.modelStageScratch == nil) {
 		return false
 	}
+	if ss := g.Supersample; ss != nil && (ss.Scale != 2 || ss.Width <= 0 || ss.Height <= 0 || r.modelResolve == nil || r.tables.alpha == nil) {
+		return false
+	}
+	if !r.modelFacesSupported(g) {
+		return false
+	}
+	return g.Supersample == nil || r.modelFacesSupported(g.Supersample)
+}
+
+func (r *Renderer) modelFacesSupported(g *drawlist.ModelGeometry) bool {
 	r.modelStats.UnsupportedFace = -1
 	for i := range g.Faces {
 		f := g.Faces[i]
@@ -115,8 +127,7 @@ func (r *Renderer) modelGeometrySupported(g *drawlist.ModelGeometry) bool {
 			}
 			continue
 		}
-		_, _, supported := modelFaceTriangles(f)
-		if !supported {
+		if len(f.Vertices) > 1<<16 {
 			r.modelStats.UnsupportedGeometry++
 			r.modelStats.UnsupportedFace = i
 			return false
@@ -262,6 +273,16 @@ func (r *Renderer) drawModelGeometry(g *drawlist.ModelGeometry, shadowOnly bool)
 }
 
 func (r *Renderer) rasterModelGeometry(g *drawlist.ModelGeometry) {
+	if g.Supersample != nil {
+		r.rasterSupersampledModel(g)
+	} else {
+		r.rasterModelFaces(g)
+	}
+	r.drawModelOutline(g)
+	r.clipModel(g)
+}
+
+func (r *Renderer) rasterModelFaces(g *drawlist.ModelGeometry) {
 	r.modelColor.Fill(color.RGBA{R: 1, A: 255})
 	if g.KeyPlane {
 		r.modelKeyImage.Fill(index0Color)
@@ -272,8 +293,6 @@ func (r *Renderer) rasterModelGeometry(g *drawlist.ModelGeometry) {
 	for i := range g.Faces {
 		r.drawPreparedFace(g, g.Faces[i], false, g.KeyPlane)
 	}
-	r.drawModelOutline(g)
-	r.clipModel(g)
 }
 
 func (r *Renderer) drawPreparedFace(g *drawlist.ModelGeometry, f drawlist.ModelFace, key, useKey bool) {
@@ -303,7 +322,19 @@ func (r *Renderer) drawPreparedFace(g *drawlist.ModelGeometry, f drawlist.ModelF
 		r.drawModelStripBatch(g, strips, key, useKey)
 		return
 	}
-	if tri, paints, _ := modelFaceTriangles(f); paints {
+	tri, paints, supported := modelFaceTriangles(f)
+	if !supported {
+		// A projected ring can touch itself or leave collinear ears without a
+		// strict edge crossing. Failure to triangulate is not an unsupported
+		// model: the original two-chain mapper still defines its positive rows
+		// [03 R-RAST-01 §1]. Reuse that geometry preparation; pixels stay on GPU.
+		if !key {
+			r.modelStats.UntriangulatedFaces++
+		}
+		r.drawModelStripBatch(g, modelSpanStrips(f), key, useKey)
+		return
+	}
+	if paints {
 		r.drawModelFace(g, modelGPUVertices(f.Vertices), f.Texture, f.Color, f.Shaded, tri, key, useKey)
 	}
 }
@@ -579,4 +610,40 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry) *ebiten.Image
 	}
 	r.modelStats.ComposedGroups++
 	return r.modelStage
+}
+
+// rasterSupersampledModel borrows bounded scratch surfaces only for the face
+// passes, then resolves into the ordinary framebuffer-aligned model planes.
+// Outlines, waterline and children consume the resolved native planes.
+func (r *Renderer) rasterSupersampledModel(g *drawlist.ModelGeometry) {
+	ss := g.Supersample
+	r.ensureModelSupersampleSize(int(ss.Width), int(ss.Height))
+	nativeColor, nativeKey, nativeCoord := r.modelColor, r.modelKeyImage, r.modelCoord
+	r.modelColor, r.modelKeyImage, r.modelCoord = r.modelSuperColor, r.modelSuperKey, r.modelSuperCoord
+	r.rasterModelFaces(ss)
+	r.modelColor, r.modelKeyImage, r.modelCoord = nativeColor, nativeKey, nativeCoord
+	r.modelColor.Fill(color.RGBA{R: 1, A: 255})
+	if g.KeyPlane {
+		r.modelKeyImage.Fill(index0Color)
+	}
+	x, y := float32(g.AnchorX-g.OriginX), float32(g.AnchorY-g.OriginY)
+	r.resetGeometry()
+	r.appendTexQuad(x, y, x+float32(g.Width), y+float32(g.Height), 0, 0, float32(ss.Width), float32(ss.Height))
+	opts := &ebiten.DrawTrianglesShaderOptions{Blend: ebiten.BlendCopy, Images: [4]*ebiten.Image{r.modelSuperColor, r.modelSuperKey, r.tables.alpha, nil}, Uniforms: map[string]any{"KeyOnly": false}}
+	r.modelColor.DrawTrianglesShader(r.verts, r.idx, r.modelResolve, opts)
+	if g.KeyPlane {
+		opts.Uniforms["KeyOnly"] = true
+		r.modelKeyImage.DrawTrianglesShader(r.verts, r.idx, r.modelResolve, opts)
+	}
+	r.modelStats.StructureResolves++
+}
+
+func (r *Renderer) ensureModelSupersampleSize(w, h int) {
+	if r.modelSuperColor != nil && r.modelSuperW >= w && r.modelSuperH >= h {
+		return
+	}
+	r.modelSuperW, r.modelSuperH = maxInt(w, r.modelSuperW), maxInt(h, r.modelSuperH)
+	r.modelSuperColor = ebiten.NewImage(r.modelSuperW, r.modelSuperH)
+	r.modelSuperKey = ebiten.NewImage(r.modelSuperW, r.modelSuperH)
+	r.modelSuperCoord = ebiten.NewImage(r.modelSuperW, r.modelSuperH)
 }

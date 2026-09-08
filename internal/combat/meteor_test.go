@@ -211,38 +211,6 @@ func TestMeteorStreamCRTNotSim(t *testing.T) {
 	}
 }
 
-func TestMeteorEffectiveParams(t *testing.T) {
-	def := &content.MeteorDefaults{
-		MeteorRadius:   300,
-		MeteorDensity:  2.0,
-		MeteorDuration: 5.0,
-		MeteorInterval: 10.0,
-	}
-	// zero OTA substitutes default
-	if got := EffectiveMeteorRadius(0, def); got != 300 {
-		t.Fatalf("zero radius should substitute default 300 got %d [06 §6.5]", got)
-	}
-	if got := EffectiveMeteorRadius(150, def); got != 150 {
-		t.Fatalf("non-zero radius should not substitute got %d", got)
-	}
-	if got := EffectiveMeteorDensity(0, def); got != 2.0 {
-		t.Fatalf("zero density fallback failed got %v", got)
-	}
-	if got := EffectiveMeteorDensity(3.0, def); got != 3.0 {
-		t.Fatalf("non-zero density fallback failed")
-	}
-	if got := EffectiveMeteorDuration(0, def); got != 5.0 {
-		t.Fatalf("duration fallback failed")
-	}
-	if got := EffectiveMeteorInterval(0, def); got != 10.0 {
-		t.Fatalf("interval fallback failed")
-	}
-	// nil defaults returns zero
-	if got := EffectiveMeteorRadius(0, nil); got != 0 {
-		t.Fatalf("nil defaults should return 0 got %d", got)
-	}
-}
-
 func TestMeteorResolveWeapon(t *testing.T) {
 	wMeteor := &content.WeaponDef{ID: 5, Meteor: true}
 	wMeteor.CanonicalKey = content.CanonicalKey("smallmeteor")
@@ -255,12 +223,13 @@ func TestMeteorResolveWeapon(t *testing.T) {
 		wOther.CanonicalKey:  wOther,
 		wOther2.CanonicalKey: wOther2,
 	}
-	// empty name disables
-	if got := ResolveMeteorWeapon("", weapons); got != nil {
-		t.Fatalf("empty weapon name should disable [06 §6.5], got %v", got)
+	// Resolution is separate from original-name enablement. A default-supplied
+	// empty name still takes the record-0 fallback once enabled was chosen.
+	if got := ResolveMeteorWeapon("", weapons); got != wOther {
+		t.Fatalf("empty selected name should fall back to ID 0 [06 §6.5], got %v", got)
 	}
-	if got := ResolveMeteorWeapon("   ", weapons); got != nil {
-		t.Fatalf("whitespace weapon should disable")
+	if got := ResolveMeteorWeapon("   ", weapons); got != wOther {
+		t.Fatalf("whitespace selected name should fall back to ID 0, got %v", got)
 	}
 	// resolved meteor weapon returns itself
 	if got := ResolveMeteorWeapon("smallmeteor", weapons); got != wMeteor {
@@ -348,6 +317,9 @@ func TestIsMeteorEnabled(t *testing.T) {
 	}
 	if !IsMeteorEnabled("0") {
 		t.Fatalf("literal zero weapon name string not empty should enable (zero check is for radius/density etc)")
+	}
+	if !IsMeteorEnabled("   ") {
+		t.Fatalf("only an exactly empty original name disables")
 	}
 }
 

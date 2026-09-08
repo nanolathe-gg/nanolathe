@@ -168,3 +168,36 @@ func TestCenterSampledSpanStartsAtTheCPUFirstColumn(t *testing.T) {
 		t.Fatalf("last device sample = %v, want CPU left+3*step 8", last)
 	}
 }
+
+// A ring touching itself at the middle has no strict edge crossing and cannot
+// be ear-triangulated. Its positive two-chain rows remain defined by
+// [03 R-RAST-01 §1]; failure to find an ear must not discard the entire subject.
+func TestUntriangulatedRingRetainsPositiveRows(t *testing.T) {
+	f := fixturePinchedRing(0, 0)
+	if polygonCrosses(f.Vertices) {
+		t.Fatal("fixture must exercise a touching, not crossing ring")
+	}
+	if _, _, supported := modelFaceTriangles(f); supported {
+		t.Fatal("fixture no longer exercises the non-triangle path")
+	}
+	rows := modelSpanStrips(f)
+	want := [][3]float32{{0, 0, 4}, {1, 1, 3}, {3, 1, 3}}
+	if len(rows) != len(want) {
+		t.Fatalf("positive rows=%d, want %d", len(rows), len(want))
+	}
+	for i, row := range rows {
+		if row.Vertices[0].Y != want[i][0] || row.Vertices[0].X != want[i][1] || row.Vertices[1].X != want[i][2] {
+			t.Fatalf("row %d=%+v, want %v", i, row.Vertices, want[i])
+		}
+	}
+}
+
+func fixturePinchedRing(x, y int32) drawlist.ModelFace {
+	v := []drawlist.ModelVertex{{X: 0, Y: 0}, {X: 4, Y: 0}, {X: 2, Y: 2}, {X: 4, Y: 4}, {X: 0, Y: 4}, {X: 2, Y: 2}}
+	for i := range v {
+		v[i].X += x
+		v[i].Y += y
+		v[i].Key = 30
+	}
+	return drawlist.ModelFace{Vertices: v, Color: 19}
+}

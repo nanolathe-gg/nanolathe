@@ -45,36 +45,6 @@ func HealQuantum(healTime int32) int32 {
 	return int32(uint16(healTime)) * 8 / 30
 }
 
-// RemainingStep computes new remaining fraction clamp(old - worker/buildTime,0,1) [05 "Construction arithmetic"].
-func RemainingStep(old float32, worker int32, buildTime int32) float32 {
-	if buildTime <= 0 {
-		// A guard that returns 0 for `buildtime = 0` is retail-exact: the
-		// division is `+∞`, `old − ∞` is `−∞`, and the clamp's first test stores
-		// `0.0f` — the whole remaining cost is demanded in one admission and the
-		// product completes on that call [05 R-WORK-01 §11]. A NEGATIVE
-		// `buildtime` instead inverts the step in retail (the fraction rises and
-		// pins at 1.0, a frame that never completes); that case is malformed,
-		// unshipped, and deliberately not reproduced by this `<= 0` guard.
-		return 0
-	}
-	delta := float32(worker) / float32(buildTime)
-	nv := old - delta
-	if nv < 0 {
-		nv = 0
-	}
-	if nv > 1 {
-		nv = 1
-	}
-	return nv
-}
-
-// HealthGain implements difference-of-truncations health gain [05 "Construction arithmetic"].
-// health gain = trunc(maxDamage*old) - trunc(maxDamage*new)
-func HealthGain(old, newRemaining float32, maxDamage int32) int32 {
-	// trunc toward zero is Go int32(float32) [01 §8] I3.
-	return int32(float32(maxDamage)*old) - int32(float32(maxDamage)*newRemaining)
-}
-
 // ConstructionStep performs one construction helper step [05 "Construction arithmetic"].
 // Returns newRemaining, healthGain, energyDemand, metalDemand.
 func ConstructionStep(old float32, worker int32, buildTime int32, maxDamage int32, energyCost, metalCost float32) (float32, int32, float32, float32) {
@@ -104,7 +74,9 @@ func wideConstructionStepQuantum(old float32, quantum float32, buildTime int32, 
 	energy := float32(float64(energyCost) * float64(delta32))
 	metal := float32(float64(metalCost) * float64(delta32))
 	max80 := float64(uint32(maxDamage))
-	healthGain := int32(max80*old80) - int32(max80*float64(newStored))
+	// Each product uses the shared signed-64 truncation and low-word result;
+	// subtraction then wraps in the health word [01 R-DET-01 §1][05 R-WORK-01 §1].
+	healthGain := numeric.TruncateFloat64ToLow32(max80*old80) - numeric.TruncateFloat64ToLow32(max80*float64(newStored))
 	return newStored, healthGain, energy, metal
 }
 

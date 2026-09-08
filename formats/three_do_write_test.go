@@ -2,6 +2,7 @@ package formats
 
 import (
 	"bytes"
+	"encoding/binary"
 	"reflect"
 	"testing"
 )
@@ -57,8 +58,8 @@ func TestEncodeThreeDORoundTrip(t *testing.T) {
 			}
 		}
 	}
-	// The loader's reordering is a fixed point for already-ordered data, so a
-	// second encode reproduces the bytes exactly.
+	// The lossless parser preserves the authored object fields and primitive
+	// order, so a second encode reproduces the bytes exactly.
 	again, err := EncodeThreeDO(got)
 	if err != nil {
 		t.Fatal(err)
@@ -73,5 +74,43 @@ func TestEncodeThreeDORejectsTexturedTriangle(t *testing.T) {
 	m.Objects[1].Primitives[0].TextureName = "rm_plate"
 	if _, err := EncodeThreeDO(m); err == nil {
 		t.Fatal("textured triangle must be rejected: retail's quad mapper has no textured n-gon path")
+	}
+}
+
+func TestLoadThreeDOPreservesAuthoredPrimitiveOrderAndSelection(t *testing.T) {
+	model := authoredThreeDO()
+	model.Objects[0].Selection = 1
+	data, err := EncodeThreeDO(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadThreeDO(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Raw, data) {
+		t.Fatal("parser raw backing differs from authored input")
+	}
+	object := got.Objects[0]
+	if object.Selection != 1 {
+		t.Fatalf("selection=%d, want authored index 1", object.Selection)
+	}
+	if len(object.Primitives) != 2 || object.Primitives[0].TextureName != "" || object.Primitives[1].TextureName != "rm_plate" {
+		t.Fatalf("primitives lost authored order: %+v", object.Primitives)
+	}
+	for primitiveIndex, primitive := range object.Primitives {
+		if primitive.SourceOffset == 0 {
+			t.Fatalf("primitive %d source offset was not retained", primitiveIndex)
+		}
+		if color := binary.LittleEndian.Uint32(got.Raw[primitive.SourceOffset:]); color != primitive.ColorIndex {
+			t.Fatalf("primitive %d source offset %#x reads color %#x, want %#x", primitiveIndex, primitive.SourceOffset, color, primitive.ColorIndex)
+		}
+	}
+	again, err := EncodeThreeDO(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(again, data) {
+		t.Fatal("re-encoding nonzero authored selection changed bytes")
 	}
 }

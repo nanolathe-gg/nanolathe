@@ -731,7 +731,9 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 	s.InitBattleWindForSession()
 	// Meteor scheduler state (initial next-strike = per-hit spacing) is
 	// written at battle entry; the write consumes no draws [R-CORE-01 §4.4.1].
-	s.initMeteor()
+	if err := s.initMeteor(); err != nil {
+		return nil, err
+	}
 	// Audio presentation queue/cache/music owned by session so unit/weapon/feature/UI events can queue without client import cycle [03 §8.3][03 §8.4] I6.
 	s.InitAudio(fs)
 	// 5. create every required service non-nil and bind ports [08][04 §7.2]

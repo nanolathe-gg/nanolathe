@@ -75,8 +75,8 @@ func TestResolveMeteorWeaponFallsBackToRecordZero(t *testing.T) {
 	if got := ResolveMeteorWeapon("three", weapons); got != zero {
 		t.Fatalf("non-meteor hit resolves to record 0, got %v", got)
 	}
-	if got := ResolveMeteorWeapon("  ", weapons); got != nil {
-		t.Fatalf("empty name disables, got %v", got)
+	if got := ResolveMeteorWeapon("  ", weapons); got != zero {
+		t.Fatalf("empty selected name resolves to record 0, got %v", got)
 	}
 }
 

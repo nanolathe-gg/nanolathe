@@ -75,7 +75,7 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 		return nil, fmt.Errorf("nanolathe: shot: modern capture produced no frame")
 	}
 	ms := game.modelStats
-	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d no-body=%d unsupported-geometry=%d unsupported-face=%d missing-texture=%d folded-faces=%d folded-strips=%d\n", mapName, ms.GPU, ms.Skipped, ms.Shadows, ms.ShadowsOmitted, ms.RevealOrOutlineOmitted, ms.WaterlineOrDiggerOmitted, ms.StagingCommandsOmitted, ms.StagedGroups, ms.ComposedGroups, ms.NoBody, ms.UnsupportedGeometry, ms.UnsupportedFace, ms.MissingTexture, ms.FoldedFaces, ms.FoldedStrips)
+	fmt.Fprintf(os.Stderr, "nanolathe: modern model route: scene=%q gpu=%d skipped=%d shadows=%d shadows-omitted=%d reveal-outline-omitted=%d waterline-digger-omitted=%d staging-commands-omitted=%d staged-groups=%d composed-groups=%d structure-resolves=%d no-body=%d unsupported-geometry=%d unsupported-face=%d missing-texture=%d folded-faces=%d folded-strips=%d\n", mapName, ms.GPU, ms.Skipped, ms.Shadows, ms.ShadowsOmitted, ms.RevealOrOutlineOmitted, ms.WaterlineOrDiggerOmitted, ms.StagingCommandsOmitted, ms.StagedGroups, ms.ComposedGroups, ms.StructureResolves, ms.NoBody, ms.UnsupportedGeometry, ms.UnsupportedFace, ms.MissingTexture, ms.FoldedFaces, ms.FoldedStrips)
 	if game.profileFrames > 0 {
 		got := 0
 		if game.profileStats != nil {

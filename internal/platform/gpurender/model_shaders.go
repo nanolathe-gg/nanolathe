@@ -158,3 +158,28 @@ func newModelPackShader() (*ebiten.Shader, error) {
 func newModelChildShader() (*ebiten.Shader, error) {
 	return ebiten.NewShader([]byte(modelChildShaderSource))
 }
+
+// ALP is ordered: left then right within a row, top then bottom between rows.
+// The key comes only from the top-left sample, including under erased pixels
+// [03 R-REN-03A §6–§7]. Background indices participate in all three lookups.
+const modelResolveShaderSource = `//kage:unit pixels
+package main
+var KeyOnly bool
+func blend(a,b float) float {
+	return floor(imageSrc2AtFromSrc0Pos(imageSrc0Origin()+vec2(b+0.5,a+0.5)).r*255.0+0.5)
+}
+func Fragment(dstPos vec4,srcPos vec2,color vec4) vec4 {
+	p := imageSrc0Origin()+2.0*floor((srcPos-imageSrc0Origin())/2.0)+vec2(0.5)
+	if KeyOnly { return vec4(imageSrc1AtFromSrc0Pos(p).r,0.0,0.0,1.0) }
+	a := floor(imageSrc0At(p).r*255.0+0.5)
+	b := floor(imageSrc0At(p+vec2(1.0,0.0)).r*255.0+0.5)
+	c := floor(imageSrc0At(p+vec2(0.0,1.0)).r*255.0+0.5)
+	d := floor(imageSrc0At(p+vec2(1.0,1.0)).r*255.0+0.5)
+	idx := blend(blend(a,b),blend(c,d))
+	return vec4(idx/255.0,0.0,0.0,1.0)
+}
+`
+
+func newModelResolveShader() (*ebiten.Shader, error) {
+	return ebiten.NewShader([]byte(modelResolveShaderSource))
+}

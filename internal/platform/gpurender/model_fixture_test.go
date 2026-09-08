@@ -126,15 +126,27 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	check("child shadow-only blend", 59, 37, 11)
 	check("child shadow-only punches own body", 61, 37, 7)
 	check("child shadow-only omits body commit", 63, 37, 7)
+	check("structure ALP row and pair order", 68, 37, 43)
+	check("structure resolve takes top-left key", 69, 37, 44)
+	check("structure resolve includes transparent background", 72, 37, 46)
+	check("untriangulated upper lobe", 17, 16, 19)
+	check("untriangulated pinch leaves prior face", 18, 17, 18)
+	check("untriangulated lower lobe", 17, 18, 19)
 	stats := r.ModelStats()
-	if stats.ComposedGroups != 2 && g.err == nil {
-		g.err = fmt.Errorf("fixture composed groups = %d, want 2", stats.ComposedGroups)
+	if stats.UntriangulatedFaces != 1 && g.err == nil {
+		g.err = fmt.Errorf("untriangulated faces=%d, want 1", stats.UntriangulatedFaces)
+	}
+	if stats.StructureResolves != 2 && g.err == nil {
+		g.err = fmt.Errorf("fixture structure resolves=%d, want 2", stats.StructureResolves)
+	}
+	if stats.ComposedGroups != 3 && g.err == nil {
+		g.err = fmt.Errorf("fixture composed groups = %d, want 3", stats.ComposedGroups)
 	}
 	if stats.Shadows != 2 && g.err == nil {
 		g.err = fmt.Errorf("fixture GPU shadow count = %d, want 2", stats.Shadows)
 	}
-	if stats.GPU != 20 && g.err == nil {
-		g.err = fmt.Errorf("fixture GPU count = %d, want 20", stats.GPU)
+	if stats.GPU != 24 && g.err == nil {
+		g.err = fmt.Errorf("fixture GPU count = %d, want 24", stats.GPU)
 	}
 	if stats.Skipped != 1 && g.err == nil {
 		g.err = fmt.Errorf("fixture omitted count = %d, want 1", stats.Skipped)
@@ -147,6 +159,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	}
 	if stats.WaterlineOrDiggerOmitted != 1 && g.err == nil {
 		g.err = fmt.Errorf("fixture waterline omission count = %d, want 1", stats.WaterlineOrDiggerOmitted)
+	}
+	if g.err == nil {
+		g.err = checkConstantShadeRows()
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
@@ -165,6 +180,11 @@ func fixturePalette() palette.Tables {
 			p.Shade[row][i] = byte(i)
 		}
 	}
+	p.Alpha[31*256+32] = 41
+	p.Alpha[33*256+34] = 42
+	p.Alpha[41*256+42] = 43
+	p.Alpha[31*256+1] = 45
+	p.Alpha[45*256+1] = 46
 	p.Blue[15] = 17
 	p.Alpha[7] = 11
 	p.Alpha[11] = 12 // A repeated shadow blend must not reach this index.
@@ -179,6 +199,8 @@ func fixtureModelList() drawlist.List {
 	// The same transparent-marked index-1 texel is also sent through the keyed
 	// sprite path. Its green admission flag must leave the background untouched.
 	list.RecordSprite(drawlist.Sprite{Frame: texture, X: 36, Y: 0, Kind: drawlist.BlitKeyed})
+	// An authored touching ring retains both lobes and the prior face at its pinch.
+	list.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true, fixtureFace(16, 15, 4, 4, 10, 18), fixturePinchedRing(16, 15))})
 	// Equal key: the later color 4 owns the tie.
 	list.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true,
 		fixtureFace(0, 0, 4, 4, 20, 3), fixtureFace(0, 0, 4, 4, 20, 4))})
@@ -263,6 +285,21 @@ func fixtureModelList() drawlist.List {
 	shadowOnly := fixtureGeometry(0, true, fixtureFace(60, 36, 4, 6, 50, 19))
 	shadowOnly.Shadow = fixtureGeometry(0, true, fixtureFace(58, 36, 4, 6, 25, 0))
 	list.RecordModel(drawlist.Model{Geometry: shadowOnly, ShadowOnly: true})
+	resolved := fixtureGeometry(68, true, fixtureFace(0, 0, 2, 1, 50, 31))
+	resolved.AnchorY, resolved.Width, resolved.Height = 37, 2, 1
+	ss := fixtureGeometry(0, true)
+	ss.Scale, ss.Width, ss.Height = 2, 4, 2
+	for _, x := range []int32{0, 2} {
+		ss.Faces = append(ss.Faces, fixtureFace(x, 0, 1, 1, 70, 31), fixtureFace(x+1, 0, 1, 1, 200, 32), fixtureFace(x, 1, 1, 1, 210, 33), fixtureFace(x+1, 1, 1, 1, 220, 34))
+	}
+	resolved.Supersample = ss
+	resolved.Children = []drawlist.ModelChild{{Geometry: fixtureGeometry(0, true, fixtureFace(69, 37, 1, 1, 100, 44))}}
+	list.RecordModel(drawlist.Model{Geometry: resolved})
+	edge := fixtureGeometry(72, true, fixtureFace(0, 0, 1, 1, 50, 31))
+	edge.AnchorY, edge.Width, edge.Height = 37, 1, 1
+	edge.Supersample = fixtureGeometry(0, true, fixtureFace(0, 0, 1, 1, 50, 31))
+	edge.Supersample.Scale, edge.Supersample.Width, edge.Supersample.Height = 2, 2, 2
+	list.RecordModel(drawlist.Model{Geometry: edge})
 	list.RecordExpand()
 	return list
 }
@@ -285,4 +322,49 @@ func fixtureFace(x, y, w, h, key int32, color uint8) drawlist.ModelFace {
 	return drawlist.ModelFace{Color: color, Vertices: []drawlist.ModelVertex{
 		{X: x, Y: y, Key: key}, {X: x + w, Y: y, Key: key}, {X: x + w, Y: y + h, Key: key}, {X: x, Y: y + h, Key: key},
 	}}
+}
+
+// A flat shade row must stay constant across a slanted primitive; interpolator
+// residue at an integer boundary must not select an adjacent SHD row.
+func checkConstantShadeRows() error {
+	p := fixturePalette()
+	for row := range p.Shade {
+		p.Shade[row][100] = uint8(100 + row)
+	}
+	r, err := NewChecked(&p, 80, 48)
+	if err != nil {
+		return err
+	}
+	var l drawlist.List
+	l.RecordClear()
+	l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: 80, H: 48}, Index: 7, Style: drawlist.FillSolid})
+	for row := int32(0); row < 32; row++ {
+		x, y := (row%8)*10, (row/8)*12
+		f := drawlist.ModelFace{Color: 100, Shaded: true, Vertices: []drawlist.ModelVertex{{X: x + 1, Y: y + 1, Shade: uint8(row), Key: 50}, {X: x + 9, Y: y + 3, Shade: uint8(row), Key: 50}, {X: x + 5, Y: y + 10, Shade: uint8(row), Key: 50}}}
+		l.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true, f)})
+	}
+	l.RecordExpand()
+	out := r.Execute(&l, 80, 48)
+	pixels := make([]byte, 80*48*4)
+	out.ReadPixels(pixels)
+	var seen [32]bool
+	for y := 0; y < 48; y++ {
+		for x := 0; x < 80; x++ {
+			idx := pixels[(y*80+x)*4]
+			if idx == 7 {
+				continue
+			}
+			row := y/12*8 + x/10
+			seen[row] = true
+			if idx != byte(100+row) {
+				return fmt.Errorf("constant shade row %d at (%d,%d): index %d, want %d", row, x, y, idx, 100+row)
+			}
+		}
+	}
+	for row, ok := range seen {
+		if !ok {
+			return fmt.Errorf("constant shade row %d painted nothing", row)
+		}
+	}
+	return nil
 }

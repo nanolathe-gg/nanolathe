@@ -68,8 +68,8 @@ type ModelChild struct {
 // ModelGeometry is the immutable, subject-local geometry input for the modern
 // model path. Its slices are owned by the packet and never alias the recorder's
 // scratch storage. Origin is the image pixel at model-local (0,0), and Anchor
-// is that point on the framebuffer. Modern recording always emits native-scale
-// geometry; a classic reference may independently use its structure resolve.
+// is that point on the framebuffer. The outer packet describes native output;
+// Supersample optionally supplies a doubled local body raster for the resolve.
 //
 // Ineligible describes a subject modern mode intentionally omits. It lets a
 // consumer report the reason without consulting a CPU image [03 R-REN-03A
@@ -79,7 +79,9 @@ type ModelGeometry struct {
 	Fallback ModelFallbackReason
 	Faces    []ModelFace
 	// Shadow is a separately projected silhouette, committed before this body.
-	Shadow       *ModelGeometry
+	Shadow *ModelGeometry
+	// Supersample is an optional doubled body raster in local image coordinates.
+	Supersample  *ModelGeometry
 	Reveal       *ModelReveal
 	Outline      []ModelFace
 	Waterline    ModelWaterline
@@ -103,6 +105,7 @@ func (g *ModelGeometry) Clone() *ModelGeometry {
 	}
 	out := *g
 	out.Shadow = g.Shadow.Clone()
+	out.Supersample = g.Supersample.Clone()
 	out.Children = make([]ModelChild, len(g.Children))
 	for i, ch := range g.Children {
 		out.Children[i] = ModelChild{Geometry: ch.Geometry.Clone(), KeyDelta: ch.KeyDelta}

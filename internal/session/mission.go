@@ -177,7 +177,9 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 	// the zero values here are the direct constructor's explicit zero-seed input.
 	s.SeedSessionRNG(simSeed, crtSeed)
 	s.InitBattleWindForSession()
-	s.initMeteor()
+	if err := s.initMeteor(); err != nil {
+		return nil, err
+	}
 	s.InitAudio(fs)
 	if err := createAndBindServices(s); err != nil {
 		return nil, err

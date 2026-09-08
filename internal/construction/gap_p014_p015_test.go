@@ -232,13 +232,13 @@ func TestWorkClampAndHealthDiff(t *testing.T) {
 	old := float32(1.0)
 	worker := int32(1) // floor(30/30)=1
 	buildTime := int32(3000)
-	nv := RemainingStep(old, worker, buildTime)
+	nv, _, _, _ := ConstructionStep(old, worker, buildTime, 0, 0, 0)
 	if nv != 1.0-float32(1)/3000.0 {
 		t.Fatalf("remaining step %v", nv)
 	}
 	// Health diff-of-trunc preserves fraction: max 10, 3 steps total 10 as in factory_test
 	maxD := int32(10)
-	hg1 := HealthGain(1.0, 0.6666667, maxD) // trunc10 - trunc6 =4
+	_, hg1, _, _ := ConstructionStep(1, 1, 3, maxD, 0, 0) // trunc10 - trunc6 =4
 	if hg1 != 4 {
 		t.Fatalf("hg1 %d want 4", hg1)
 	}

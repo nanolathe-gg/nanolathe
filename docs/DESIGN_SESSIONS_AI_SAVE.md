@@ -166,6 +166,17 @@ manager construction is a battle-entry step and not a lazy one
 per-player phase once, grants no second helping of resources, and snapshots the
 metal-spot vector `[08 R-ENTRY-01 §8]`.
 
+**Meteor startup.** Before services start scheduling, battle entry and retail
+restore install the storm from the selected schema, not `[GlobalHeader]`. The
+original weapon name fixes enabled before `METEOR.TDF` may replace the five-field
+record. Missing defaults leave that record intact; a present invalid default is
+a fatal startup/load result only when the selected record asks for it. The phase
+fallback preserves the same fatal outcome for a directly composed host rather
+than logging or installing a partial scheduler. The numeric lanes after an
+original empty weapon and a missing default are Unknown; the checked host
+uses an explicit non-retail all-zero disabled record for that case
+`[02 §6]` `[06 §6.5]`.
+
 **The commander-death chain.** The kill-record path compares the dead unit's
 definition name against the commander name on the *owner's side record*, read
 from the player record. On a match it clears the owner's storage bonus for

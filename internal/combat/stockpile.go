@@ -10,6 +10,7 @@ package combat
 import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
 )
 
@@ -56,7 +57,7 @@ const StockpileMaxAmmo = 200 // [06 §11.1]
 // this implementation treats it as no weapon / wait instead [06 §11.1]
 // [06 R-WPN-05 §2].
 type StockpileEntry struct {
-	Weapon   *content.WeaponDef // selected weapon; BuildTime is Weapon.ReloadTime [06 §11.1]
+	Weapon   *content.WeaponDef // selected weapon; BuildTime reads ReloadTime unsigned [06 §11.1]
 	Count    int32              // signed requested count [06 §11.1]
 	Progress int32              // per-node progress 0..BuildTime, step 5 capped [06 §11.1]
 	SlotIdx  int32              // slot index selecting the unit's weapon slot directly, stored verbatim [06 §11.1]
@@ -75,12 +76,13 @@ const StockpileNodeSize = 0x56 // [P1-09 §2.1]
 // wrapping. There is no wrap to model.
 const StockpileSlotByteCap = 199 // [P1-09 §2.2]
 
-// BuildTime returns the compiled reload-time used as stockpile build time [06 §11.1].
+// StockpileBuildTime reads the compiled reload word unsigned for production
+// [06 §11.1]; the firing path has its separate signed reader [06 §4.2].
 func StockpileBuildTime(w *content.WeaponDef) int32 {
 	if w == nil {
 		return 0
 	}
-	return w.ReloadTime // [02 "Weapon record"] reloadtime*30, used as build time per [06 §11.1]
+	return int32(uint16(w.ReloadTime)) // [06 §11.1]
 }
 
 // CanStartStockpileRound reports whether a new round may start given the slot's
@@ -125,18 +127,11 @@ var QueueProducers = []string{
 // On cancel after partial progress the fractional carry remains in buckets
 // (not refunded) — cancellation just unlinks the node [P1-09 §5].
 func StockpileCostDelta(oldProg, newProg int32, cost float64, buildTime int32) float32 {
-	if buildTime <= 0 {
-		// A build time of zero is the unarmed slot's weapon record 0, the
-		// `[noweapon]` sentinel every empty slot points at [06 R-DMG-01 §5].
-		// Phase 1 forms `next = min(progress + 5, 0) = 0`, so BOTH quotients
-		// are `0·cost/0` — an invalid operation whose truncation is the same
-		// indefinite integer on either side — and the delta is exactly 0
-		// [06 R-WPN-05 §2]. Returning the full cost, as this used to, charged
-		// for a round retail completes free.
-		return 0
-	}
-	oldTrunc := int32(float64(oldProg) * cost / float64(buildTime)) // trunc toward zero [01 §8]
-	newTrunc := int32(float64(newProg) * cost / float64(buildTime))
+	// Zero build time yields non-finite quotients, each retaining a zero low
+	// word. Their difference remains the unarmed slot's free round, without
+	// a separate arithmetic path [06 R-WPN-05 §2][01 R-DET-01 §1].
+	oldTrunc := numeric.TruncateFloat64ToLow32(float64(oldProg) * cost / float64(buildTime))
+	newTrunc := numeric.TruncateFloat64ToLow32(float64(newProg) * cost / float64(buildTime))
 	return float32(newTrunc - oldTrunc) // delta per [06 §11.1]
 }
 

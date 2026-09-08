@@ -103,11 +103,11 @@ var MissionGlobalCensus = []CensusEntry{
 	{Key: "lineofsight", VA: "SingleLineOfSight", Offset: "line-of-sight option word", Type: "int", Default: "0", Clamp: "—", Consumer: "stored into the single-player line-of-sight option word; campaign battle entry copies its low bit into visibility mode bit 1 — current-sight tracking on when set, Permanent when clear [08 R-SKIR-01 §4][03 R-VIS-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "LOSType", VA: "SingleLOSType", Offset: "LOS type enum", Type: "int", Default: "—", Clamp: "sprite vs ray", Consumer: "none: the OTA loader forces the LOSType option word to 1 whenever it parses a GlobalHeader, so campaign mode bit 2 is always the terrain ray and never reads an authored key — this decode is an inert carry [08 R-SKIR-01 §4]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	{Key: "commanderDeath", VA: "SingleCommanderDeath", Offset: "commanderDeath", Type: "int", Default: "1 registry default", Clamp: "—", Consumer: "lobby-value rule for the skirmish defeat gate and respawn path; no mission-level key, no injected trigger [08 mission globals]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorWeapon", VA: "", Offset: "meteor storm record", Type: "string", Default: "empty (decode)", Clamp: "empty predicate", Consumer: "meteor scheduler + gamedata\\METEOR.TDF [Default] merge at storm resolution — only an empty weapon disables; zero parameters substitute the [Default] values [02 meteor merge][06 §6.5] [P1-02 §2.1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorRadius", VA: "", Offset: "meteor storm record", Type: "int", Default: "0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] radius at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorDensity", VA: "", Offset: "meteor storm record", Type: "float", Default: "0.0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] density at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorDuration", VA: "", Offset: "meteor storm record", Type: "float", Default: "0.0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] duration at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
-	{Key: "MeteorInterval", VA: "", Offset: "meteor storm record", Type: "float", Default: "0.0 (decode)", Clamp: "—", Consumer: "meteor scheduler; zero substitutes the METEOR.TDF [Default] interval at storm resolution [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorWeapon", VA: "", Offset: "selected-schema storm record", Type: "string", Default: "empty (decode)", Clamp: "original empty predicate", Consumer: "meteor scheduler reads the selected schema, never GlobalHeader; it chooses enablement from that original value before the METEOR.TDF [Default] whole-record replacement [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorRadius", VA: "", Offset: "selected-schema storm record", Type: "int", Default: "0 (decode)", Clamp: "zero selects the whole Default record", Consumer: "meteor scheduler; one zero numeric selects METEOR.TDF [Default] for all five values [02 meteor merge][06 §6.5]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorDensity", VA: "", Offset: "selected-schema storm record", Type: "float32", Default: "0.0 (decode)", Clamp: "zero selects the whole Default record", Consumer: "meteor scheduler source single store, then working-precision spacing conversion [06 §6.5][01 R-DET-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorDuration", VA: "", Offset: "selected-schema storm record", Type: "float32", Default: "0.0 (decode)", Clamp: "zero selects the whole Default record", Consumer: "meteor scheduler source single store, then working-precision duration conversion [06 §6.5][01 R-DET-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
+	{Key: "MeteorInterval", VA: "", Offset: "selected-schema storm record", Type: "float32", Default: "0.0 (decode)", Clamp: "zero selects the whole Default record", Consumer: "meteor scheduler source single store, then working-precision interval conversion [06 §6.5][01 R-DET-01 §1]", Class: GlobalAuthoritative, Fatal: FatalKindNotFatal},
 	// Presentation — briefing/panorama only [P1-02 §2.1].
 	{Key: "Planet", VA: "", Offset: "fixed-size string slot", Type: "string", Default: "empty 15-value enum Green…Crystal", Clamp: "enum via the planet-table triple", Consumer: "planet selects parallel brief/pan/rotate tables [P0-05]", Class: GlobalPresentation, Fatal: FatalKindDegrade},
 	{Key: "brief", VA: "", Offset: "briefing text", Type: "string", Default: "empty", Clamp: "—", Consumer: "briefing text from camps\\briefs", Class: GlobalPresentation, Fatal: FatalKindDegrade},
@@ -227,11 +227,11 @@ type MissionGlobals struct {
 	Mapping            int32   // mapping, default 0 [02 map-global keys]; its low bit IS the campaign visibility mode word's bit 0 [08 R-SKIR-01 §4][03 R-VIS-01 §1]
 	LineOfSight        int32   // lineofsight, default 0 [02 map-global keys]; its low bit IS the campaign visibility mode word's bit 1 [08 R-SKIR-01 §4][03 R-VIS-01 §1]
 	LOSType            int32   // authored LOSType/SingleLOSType if the OTA carries one; inert — the OTA loader forces the LOSType option word to 1, so mode bit 2 never reads this key [08 R-SKIR-01 §4]
-	MeteorWeapon       string  // MeteorWeapon empty disables [P1-02 §2.1]
-	MeteorRadius       int32   // MeteorRadius, default 0 [02 map-global keys]
-	MeteorDensity      float64 // MeteorDensity, default 0.0 [02 map-global keys]
-	MeteorDuration     float64 // MeteorDuration, default 0.0 [02 map-global keys]
-	MeteorInterval     float64 // MeteorInterval, default 0.0 [02 map-global keys]
+	MeteorWeapon       string  // GlobalHeader carry only; scheduler reads selected schema [06 §6.5]
+	MeteorRadius       int32   // GlobalHeader carry only; selected schema owns the storm record [06 §6.5]
+	MeteorDensity      float32 // GlobalHeader carry only; source single store when selected schema installs [06 §6.5]
+	MeteorDuration     float32 // GlobalHeader carry only; source single store when selected schema installs [06 §6.5]
+	MeteorInterval     float32 // GlobalHeader carry only; source single store when selected schema installs [06 §6.5]
 	UpdateTime         int32   // economy settlement deadline, per-player save slot, default 0 [08 player records]
 	WinLoseTime        int32   // save WinLoseTime slot, default 0 [08 player records]
 	DisplayTimer       int32   // HUD resource-rate refresh deadline, default 0 [08 player records]
@@ -318,9 +318,9 @@ func DecodeMissionGlobals(global *formats.Section) *MissionGlobals {
 	// lobby value, and no defeat trigger is injected for it [08 mission globals].
 	mg.MeteorWeapon, _ = global.StringValue("MeteorWeapon", "") // empty disables [02 meteor merge]
 	mg.MeteorRadius = global.IntValue("MeteorRadius", 0)        // 0 [02 map-global keys]; METEOR.TDF substitution happens at storm resolution [02 meteor merge][06 §6.5]
-	mg.MeteorDensity = global.FloatValue("MeteorDensity", 0)
-	mg.MeteorDuration = global.FloatValue("MeteorDuration", 0)
-	mg.MeteorInterval = global.FloatValue("MeteorInterval", 0)
+	mg.MeteorDensity = float32(global.FloatValue("MeteorDensity", 0))
+	mg.MeteorDuration = float32(global.FloatValue("MeteorDuration", 0))
+	mg.MeteorInterval = float32(global.FloatValue("MeteorInterval", 0))
 	mg.UpdateTime = global.IntValue("UpdateTime", 0)     // i32 0 [08 player records]; battle init seeds the current tick
 	mg.WinLoseTime = global.IntValue("WinLoseTime", 0)   // i32 0 [08 player records]
 	mg.DisplayTimer = global.IntValue("DisplayTimer", 0) // i32 0 [08 player records]

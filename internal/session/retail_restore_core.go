@@ -362,7 +362,9 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	}
 	// The shower sits between the units and the trigger records in retail's
 	// account order [08 R-SAVE-02 §11].
-	restoreRetailMeteor(s, image.Meteor)
+	if err := restoreRetailMeteor(s, image.Meteor); err != nil {
+		return err
+	}
 	// Camera target/glide words and option-bit names are not part of the staged
 	// session API; the presentation-side restore seam remains owned by D4
 	// [08 R-SAVE-02 §12].
@@ -416,12 +418,16 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 //
 // A missing or wrong-typed item decodes as `0`, "so an absent `Meteor` account
 // silently disables and de-activates the shower rather than failing the load"
-// [08 "Account inventory"] — which is why this returns no error.
-func restoreRetailMeteor(s *Session, m save.MeteorScalars) {
+// [08 "Account inventory"]. The scalar overlay itself is non-failing; this
+// function returns the defensive idempotent authored-initialization failure
+// when a caller did not stage the world-rebuild meteor step first.
+func restoreRetailMeteor(s *Session, m save.MeteorScalars) error {
 	if s == nil {
-		return
+		return nil
 	}
-	s.initMeteor()
+	if err := s.initMeteor(); err != nil {
+		return err
+	}
 	s.Meteor.Enabled = m.Enabled != 0
 	s.Meteor.Active = m.Active != 0
 	s.Meteor.NextStrike = uint32(m.NextStrikeTime)
@@ -433,6 +439,7 @@ func restoreRetailMeteor(s *Session, m save.MeteorScalars) {
 	s.Meteor.OriginZ = int32(int16(m.OriginZ))
 	s.Meteor.TargetX = int32(int16(m.TargetX))
 	s.Meteor.TargetZ = int32(int16(m.TargetZ))
+	return nil
 }
 
 // restoreRetailMapping installs the saved explored-memory word grid, gated on

@@ -1,8 +1,6 @@
 package combat
 
 import (
-	"strings"
-
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -45,67 +43,18 @@ func MeteorIntervalTicks(interval float64) int32 {
 	return numeric.TruncateFloat64ToLow32(float64(float32(interval)) * 30)
 }
 
-// EffectiveMeteorRadius returns the effective radius substituting the
-// gamedata/METEOR.TDF default when the OTA radius is literal zero per [06 §6.5] C17.
-// Zero OTA parameters substitute the corresponding METEOR.TDF default and enable scheduling.
-func EffectiveMeteorRadius(otaRadius int32, defaults *content.MeteorDefaults) int32 {
-	if otaRadius != 0 {
-		return otaRadius
-	}
-	if defaults != nil {
-		return defaults.MeteorRadius
-	}
-	return 0
-}
-
-// EffectiveMeteorDensity returns the effective density with zero-OTA fallback per [06 §6.5].
-func EffectiveMeteorDensity(otaDensity float64, defaults *content.MeteorDefaults) float64 {
-	if otaDensity != 0 {
-		return otaDensity
-	}
-	if defaults != nil {
-		return defaults.MeteorDensity
-	}
-	return 0
-}
-
-// EffectiveMeteorDuration returns the effective duration with zero-OTA fallback.
-func EffectiveMeteorDuration(otaDuration float64, defaults *content.MeteorDefaults) float64 {
-	if otaDuration != 0 {
-		return otaDuration
-	}
-	if defaults != nil {
-		return defaults.MeteorDuration
-	}
-	return 0
-}
-
-// EffectiveMeteorInterval returns the effective interval with zero-OTA fallback.
-func EffectiveMeteorInterval(otaInterval float64, defaults *content.MeteorDefaults) float64 {
-	if otaInterval != 0 {
-		return otaInterval
-	}
-	if defaults != nil {
-		return defaults.MeteorInterval
-	}
-	return 0
-}
-
-// ResolveMeteorWeapon implements shower resolution per [06 §6.5]:
-// an empty weapon name disables meteor scheduling; an unresolved name or a
-// resolved weapon lacking the meteor flag falls back to weapon RECORD 0 of
+// ResolveMeteorWeapon implements shower resolution per [06 §6.5]: an
+// unresolved name (including an empty default-supplied name), or a resolved
+// weapon lacking the meteor flag, falls back to weapon RECORD 0 of
 // the ID-indexed table — the definition authoring ID=0, stock [noweapon]
 // [06 R-DMG-01 §5] — instead of disabling (refinement of 2026-09-02). The
 // table is addressed by the authored ID, so there is no "smallest ID" or
 // "first loaded" rule; the smallest-ID fallback that stood here was never
 // retail. When the catalog has no ID-0 record retail addresses the
-// zero-filled slot, which has no counterpart here: the shower is then
-// disabled, the one divergence, unreachable from stock content.
-// Returns nil when disabled.
+// zero-filled slot, which has no counterpart here. This host returns nil in
+// that case, but does not alter the independently selected enabled bit: the
+// spawn attempt drops while retaining its draw/timer effects.
 func ResolveMeteorWeapon(name string, weapons map[string]*content.WeaponDef) *content.WeaponDef {
-	if strings.TrimSpace(name) == "" {
-		return nil
-	}
 	ck := content.CanonicalKey(name)
 	if w, ok := weapons[ck]; ok && w.Meteor {
 		return w
@@ -116,11 +65,11 @@ func ResolveMeteorWeapon(name string, weapons map[string]*content.WeaponDef) *co
 	return nil
 }
 
-// IsMeteorEnabled reports whether meteor scheduling is enabled per [06 §6.5]:
-// only an empty weapon name disables; literal-zero radius/density/duration/interval
-// remain enabled via defaults.
+// IsMeteorEnabled reports the original-name enable decision per [06 §6.5].
+// The caller takes it before whole-record default replacement, so even a
+// default-supplied empty name does not alter it.
 func IsMeteorEnabled(weaponName string) bool {
-	return strings.TrimSpace(weaponName) != ""
+	return weaponName != ""
 }
 
 // MeteorTarget picks the shower target cell per [06 §6.5] [R-CORE-01 §4.4.1].

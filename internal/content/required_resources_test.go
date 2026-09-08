@@ -3,6 +3,8 @@ package content
 import (
 	"strings"
 	"testing"
+
+	"github.com/nanolathe/nanolathe/vfs"
 )
 
 func TestCompileSightShapesUsesAuthoredPluralMaskEntry(t *testing.T) {
@@ -83,7 +85,7 @@ func TestCompileLOSTablesReadsAuthoredFixture(t *testing.T) {
 }
 
 func TestCompileMeteorMissingResourceKeepsRetailEmptyDefaults(t *testing.T) {
-	md, err := CompileMeteor(newFixtureFS(t))
+	md, err := CompileMeteor(vfs.New())
 	if err != nil {
 		t.Fatalf("CompileMeteor missing resource: %v", err)
 	}

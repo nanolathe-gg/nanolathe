@@ -121,16 +121,15 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 	// Enabled: 4 scheduling draws at the single due evaluation (tick 15,
 	// interval 1800) + 2 draws per hit (11 hits across the 150-tick window at
 	// spacing 15) + 1 wind = 27.
-	// Disabled: NextStrike = trunc(30/density) = 0 at entry and this synthetic
-	// fixture carries a zero interval, so the scheduler is due every other
-	// tick: 100 due evaluations × 4 draws + 1 wind = 401. The earlier
-	// "four per tick" reading is superseded — draws happen only on due
-	// evaluations [R-CORE-01 §4.4.1].
+	// Disabled: NextStrike and interval are zero in this fixture, so it is due
+	// on every tick: 200 due evaluations × 4 draws + 1 wind = 801. The due
+	// block clears Active after its four draws, and does not defer its next
+	// check because of that clear [06 §6.5].
 	if dCrt1 != 27 {
 		t.Fatalf("enabled storm CRT draws = %d, want 27 (1 wind + 4 scheduling + 22 per-hit) [06 §6.5][R-CORE-01 §4.4.1]", dCrt1)
 	}
-	if crtNo != 401 {
-		t.Fatalf("disabled storm CRT draws = %d, want 401 (1 wind + 100 due evaluations x 4) [06 §6.5][R-CORE-01 §4.4.1]", crtNo)
+	if crtNo != 801 {
+		t.Fatalf("disabled storm CRT draws = %d, want 801 (1 wind + 200 due evaluations x 4) [06 §6.5]", crtNo)
 	}
 	if dSim1 != simNo {
 		t.Fatalf("meteor should consume zero sim draws [06 §6.5]: enabled sim %d vs disabled %d", dSim1, simNo)
@@ -146,6 +145,95 @@ func TestMeteorDeterminism_TwoRunsIdentical(t *testing.T) {
 	if rCrt.Draws()-crtBefore != 4 {
 		t.Fatalf("MeteorSchedule must consume 4 CRT draws")
 	}
+}
+
+func TestMeteorSchedulerDueAndHitBoundaries(t *testing.T) {
+	terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
+	for i := range terrain.Plot {
+		terrain.Plot[i].SetFeature(world.PlotFeatureNone)
+	}
+	weapon := &content.WeaponDef{ID: 0, Name: "noweapon"}
+
+	t.Run("disabled due spends scheduling draws only", func(t *testing.T) {
+		s := &Session{World: terrain, Combat: &combat.Service{}, Meteor: MeteorState{
+			Initialized: true, NextStrike: 10, DurationTicks: 5, IntervalTicks: 10,
+		}}
+		s.SeedSessionRNG(1, 2)
+		s.tickMeteor(10)
+		if got := s.CrtRNG().Draws(); got != 4 {
+			t.Fatalf("disabled due draws = %d, want 4", got)
+		}
+		if s.Meteor.Active || s.Combat.Count() != 0 {
+			t.Fatalf("disabled due state = %+v, projectiles=%d", s.Meteor, s.Combat.Count())
+		}
+	})
+
+	t.Run("inclusive final hit", func(t *testing.T) {
+		s := &Session{World: terrain, Combat: &combat.Service{}, Meteor: MeteorState{
+			Enabled: true, Initialized: true, Weapon: weapon, NextStrike: 10,
+			DurationTicks: 0, IntervalTicks: 10, PerHitDelay: 1,
+		}}
+		s.SeedSessionRNG(1, 2)
+		s.tickMeteor(10)
+		if got := s.Combat.Count(); got != 1 {
+			t.Fatalf("opening/final tick projectiles = %d, want 1", got)
+		}
+		if s.Meteor.Active || s.Meteor.NextHit != 11 {
+			t.Fatalf("inclusive final state = %+v", s.Meteor)
+		}
+		if got := s.CrtRNG().Draws(); got != 6 {
+			t.Fatalf("opening/final tick draws = %d, want 6", got)
+		}
+	})
+
+	t.Run("zero spacing while active attempts once per tick", func(t *testing.T) {
+		s := &Session{World: terrain, Combat: &combat.Service{}, Meteor: MeteorState{
+			Enabled: true, Active: true, Initialized: true, Weapon: weapon,
+			NextStrike: 100, StrikeEnds: 100, NextHit: 10, PerHitDelay: 0,
+		}}
+		s.SeedSessionRNG(1, 2)
+		s.tickMeteor(10)
+		s.tickMeteor(11)
+		if got := s.Combat.Count(); got != 2 {
+			t.Fatalf("zero-spacing projectiles = %d, want 2", got)
+		}
+		if s.Meteor.NextHit != 11 || !s.Meteor.Active {
+			t.Fatalf("zero-spacing state = %+v", s.Meteor)
+		}
+		if got := s.CrtRNG().Draws(); got != 4 {
+			t.Fatalf("zero-spacing draws = %d, want 4", got)
+		}
+	})
+
+	t.Run("negative spacing retains modular next-hit bits", func(t *testing.T) {
+		s := &Session{World: terrain, Combat: &combat.Service{}, Meteor: MeteorState{
+			Enabled: true, Active: true, Initialized: true, Weapon: weapon,
+			NextStrike: 100, StrikeEnds: 100, NextHit: 10, PerHitDelay: -1,
+		}}
+		s.SeedSessionRNG(1, 2)
+		s.tickMeteor(10)
+		if got := s.Meteor.NextHit; got != 9 {
+			t.Fatalf("negative spacing next hit = %#x, want %#x", got, uint32(9))
+		}
+		if got := s.CrtRNG().Draws(); got != 2 {
+			t.Fatalf("negative-spacing draws = %d, want 2", got)
+		}
+	})
+
+	t.Run("due block re-arms an already active storm", func(t *testing.T) {
+		s := &Session{World: terrain, Combat: &combat.Service{}, Meteor: MeteorState{
+			Enabled: true, Active: true, Initialized: true, Weapon: weapon,
+			NextStrike: 10, StrikeEnds: 99, NextHit: 99, DurationTicks: 5, IntervalTicks: 20, PerHitDelay: 3,
+		}}
+		s.SeedSessionRNG(1, 2)
+		s.tickMeteor(10)
+		if !s.Meteor.Active || s.Meteor.StrikeEnds != 15 || s.Meteor.NextStrike != 35 || s.Meteor.NextHit != 13 {
+			t.Fatalf("already-active due state = %+v", s.Meteor)
+		}
+		if got := s.CrtRNG().Draws(); got != 6 {
+			t.Fatalf("already-active due draws = %d, want 6", got)
+		}
+	})
 }
 
 // TestMeteorWithoutTerrainDoesNotSchedule verifies that the scheduler has no

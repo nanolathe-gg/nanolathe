@@ -170,7 +170,6 @@ var float64Baseline = map[string]int{
 	"internal/ai/selection.go":     2,
 	"internal/ai/strategic.go":     5,
 	"internal/cob/ports.go":        6,
-	"internal/combat/meteor.go":    6,
 	"internal/combat/motion.go":    4,
 	"internal/combat/service.go":   2,
 	"internal/combat/stockpile.go": 5,

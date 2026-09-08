@@ -91,6 +91,16 @@ func TestSelectionPlateGeometryUsesNestedPoseAndPreservesEdges(t *testing.T) {
 	}
 }
 
+func TestSelectionPlateGeometryReportsAuthoredPrimitiveIndex(t *testing.T) {
+	m := selectionModel()
+	m.Pieces[0].Primitives[0].SourceIndex = 7
+	m.Pieces[1].Primitives[0].SourceIndex = 3
+	got := BuildSelectionPlateGeometry(m, selectionPose(), selectionCamera(), true, true)
+	if len(got) != 2 || got[0].SourcePrimitive != 7 || got[1].SourcePrimitive != 3 {
+		t.Fatalf("source primitive identities=%+v, want authored indexes 7 and 3", got)
+	}
+}
+
 func TestSelectionPlateGeometryReusesHeadingPitchBankAndCOBState(t *testing.T) {
 	m := selectionModel()
 	pose := selectionPose()

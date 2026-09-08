@@ -1,6 +1,8 @@
 package session
 
 import (
+	"errors"
+
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/construction"
@@ -134,7 +136,13 @@ func (s *Session) phaseWind(tick uint32) {
 // zero sim draws [06 §6.5].
 func (s *Session) phaseMeteorShower(tick uint32) {
 	if !s.Meteor.Initialized {
-		s.initMeteor()
+		// Production constructors and restore return this error before a battle
+		// exists. This fallback serves only direct hosts/tests that assembled a
+		// Session themselves; a fatal selected default cannot become a silent
+		// phase-time diagnostic or a partial storm.
+		if err := s.initMeteor(); err != nil {
+			panic(err)
+		}
 	}
 	s.tickMeteor(tick)
 	s.recordPhase("phase9-meteor", tick)
@@ -788,92 +796,78 @@ func (s *Session) stepResultPhase(tick uint32) {
 	}
 }
 
-func (s *Session) initMeteor() {
+//lint:ignore ST1005 retail diagnostic text, reproduced verbatim [02 §6]
+var errMeteorDefaultData = errors.New("Hey, hoser!  The default meteor shower data was bogus!")
+
+// initMeteor installs the selected schema's storm record once at battle entry.
+// Enablement is chosen from that original weapon value before default loading;
+// a requested default replaces the entire record, never individual fields
+// [02 §6][06 §6.5].
+func (s *Session) initMeteor() error {
 	if s == nil || s.Meteor.Initialized {
-		return
+		return nil
 	}
-	s.Meteor.Initialized = true
 	var weaponName string
 	var radius int32
-	var density, duration, interval float64
-	// Try global header first [P1-02 §2.1] (campaign/skirmish global).
-	if s.Mission != nil && s.Mission.OTA != nil && s.Mission.OTA.Global != nil {
-		// Use mission globals census [P1-02]
-		if mg := mission.DecodeMissionGlobals(s.Mission.OTA.Global); mg != nil {
-			weaponName = mg.MeteorWeapon
-			radius = mg.MeteorRadius
-			density = mg.MeteorDensity
-			duration = mg.MeteorDuration
-			interval = mg.MeteorInterval
+	var density, duration, interval float32
+	if s.Mission != nil {
+		if schema := s.Mission.SchemaSection(); schema != nil {
+			weaponName, _ = schema.StringValue("MeteorWeapon", "")
+			radius = schema.IntValue("MeteorRadius", 0)
+			density = float32(schema.FloatValue("MeteorDensity", 0))
+			duration = float32(schema.FloatValue("MeteorDuration", 0))
+			interval = float32(schema.FloatValue("MeteorInterval", 0))
 		}
+	} else {
+		// A synthetic Session without a mission uses Go's all-zero input record as
+		// a host policy. It is not a retail state [06 §6.5].
 	}
-	// Fallback to per-schema meteor from MapHeader when global missing or weapon empty but schema carries it [02 "Map files"] [fmt ota].
-	if weaponName == "" && s.Mission != nil && s.Catalog != nil && s.Mission.TerrainKey != "" && s.Mission.Schema.Name != "" {
-		if mh, ok := s.Catalog.Maps[content.CanonicalKey(s.Mission.TerrainKey)]; ok && mh != nil {
-			for _, sch := range mh.Schemas {
-				if sch.Name == s.Mission.Schema.Name {
-					if sch.MeteorWeapon != "" {
-						weaponName = sch.MeteorWeapon
-					}
-					if radius == 0 && sch.MeteorRadius != 0 {
-						radius = sch.MeteorRadius
-					}
-					if density == 0 && sch.MeteorDensity != 0 {
-						density = sch.MeteorDensity
-					}
-					if duration == 0 && sch.MeteorDuration != 0 {
-						duration = sch.MeteorDuration
-					}
-					if interval == 0 && sch.MeteorInterval != 0 {
-						interval = sch.MeteorInterval
-					}
-					break
-				}
-			}
-		}
-	}
+	enabled := combat.IsMeteorEnabled(weaponName)
+	useDefault := weaponName == "" || radius == 0 || density == 0 || duration == 0 || interval == 0
 	var defaults *content.MeteorDefaults
 	if s.Catalog != nil {
 		defaults = s.Catalog.Meteor
 	}
-	effRadius := combat.EffectiveMeteorRadius(radius, defaults)
-	effDensity := combat.EffectiveMeteorDensity(density, defaults)
-	effDuration := combat.EffectiveMeteorDuration(duration, defaults)
-	effInterval := combat.EffectiveMeteorInterval(interval, defaults)
-	s.Meteor.WeaponName = weaponName
-	s.Meteor.Radius = effRadius
-	s.Meteor.DurationTicks = combat.MeteorDurationTicks(effDuration)
-	s.Meteor.IntervalTicks = combat.MeteorIntervalTicks(effInterval)
-	s.Meteor.PerHitDelay = combat.MeteorDelay(effDensity)
-	// Resolve weapon: empty disables, unresolved or non-meteor falls back to ID 0 [06 §6.5]
-	if s.Catalog != nil && s.Catalog.Weapons != nil {
-		s.Meteor.Weapon = combat.ResolveMeteorWeapon(weaponName, s.Catalog.Weapons)
-	}
-	s.Meteor.Enabled = combat.IsMeteorEnabled(weaponName)
-	if s.Meteor.Weapon == nil {
-		// If weapon name resolves to nil (empty disables), ensure disabled even if helper would fallback
-		if weaponName == "" {
-			s.Meteor.Enabled = false
+	missingDefault := defaults == nil || !defaults.DefaultPresent
+	if useDefault && defaults != nil && defaults.DefaultPresent {
+		if !defaults.DefaultValid {
+			return errMeteorDefaultData
 		}
-	} else {
-		// Weapon resolved non-nil implies enabled when name non-empty per [08 "Meteor showers"]; keep Enabled as IsMeteorEnabled
+		weaponName = defaults.MeteorWeapon
+		radius = defaults.MeteorRadius
+		density = defaults.MeteorDensity
+		duration = defaults.MeteorDuration
+		interval = defaults.MeteorInterval
 	}
-	if !s.Meteor.Enabled {
-		return
+	if !enabled && missingDefault {
+		// TODO(question): The default loader returns before changing the incoming
+		// record, but the source's numeric-lane initialization on this
+		// empty-weapon/missing-default path is not yet established. Host policy for
+		// the Go session is an all-zero disabled record; do not read this as a
+		// retail default or a replacement for a selected Default block.
+		radius, density, duration, interval = 0, 0, 0, 0
 	}
-	// Seed first storm to per-hit delay [02 Meteor scheduler]
-	// When delay 0, NextStrike 0 means immediate storm at tick 0.
-	if s.Meteor.PerHitDelay < 0 {
-		s.Meteor.PerHitDelay = 0
+
+	// Do not publish a partial storm before the deferred default check succeeds.
+	next := MeteorState{
+		Enabled:       enabled,
+		Radius:        radius,
+		DurationTicks: combat.MeteorDurationTicks(float64(duration)),
+		IntervalTicks: combat.MeteorIntervalTicks(float64(interval)),
+		PerHitDelay:   combat.MeteorDelay(float64(density)),
+		WeaponName:    weaponName,
+		Initialized:   true,
 	}
-	s.Meteor.NextStrike = uint32(s.Meteor.PerHitDelay)
-	s.Meteor.NextHit = 0
-	s.Meteor.StrikeEnds = 0
-	s.Meteor.Active = false
-	s.Meteor.OriginX = 0
-	s.Meteor.OriginZ = 0
-	s.Meteor.TargetX = 0
-	s.Meteor.TargetZ = 0
+	// Resolve independently from the original-name enable bit: unresolved,
+	// non-meteor, and default-supplied empty names all fall back to ID 0 [06 §6.5].
+	if s.Catalog != nil && s.Catalog.Weapons != nil {
+		next.Weapon = combat.ResolveMeteorWeapon(weaponName, s.Catalog.Weapons)
+	}
+	// The original empty name remains disabled even if a valid default supplies
+	// a nonempty weapon.
+	next.NextStrike = uint32(next.PerHitDelay)
+	s.Meteor = next
+	return nil
 }
 
 // tickMeteor implements the phase-9 shower scheduler per [R-CORE-01 §4.4.1]
@@ -894,10 +888,9 @@ func (s *Session) tickMeteor(tick uint32) {
 		return
 	}
 	if !s.Meteor.Initialized {
-		s.initMeteor()
-		if !s.Meteor.Initialized {
-			return
-		}
+		// phaseMeteorShower owns the direct-host fallback and converts any fatal
+		// default error into the host's fatal path before this scheduler runs.
+		return
 	}
 	if s.World == nil {
 		// No map-independent geometry source: leave state and stream untouched.
@@ -907,11 +900,10 @@ func (s *Session) tickMeteor(tick uint32) {
 	if crt == nil {
 		return
 	}
-	if !s.Meteor.Active {
-		// Non-strict next-strike comparison [R-CORE-01 §4.4.1].
-		if tick < s.Meteor.NextStrike {
-			return
-		}
+	// Non-strict next-strike comparison. This block is independent of the
+	// current active bit and consumes its four draws before disabling an
+	// originally empty-name storm [06 §6.5].
+	if tick >= s.Meteor.NextStrike {
 		// Due evaluation: four scheduling draws, consumed even when the storm
 		// is disabled [06 §6.5][R-CORE-01 §4.4.1]. Target = one draw scaled by
 		// map depth then one by map width; origin = target plus a depth-axis
@@ -922,30 +914,26 @@ func (s *Session) tickMeteor(tick uint32) {
 		s.Meteor.StrikeEnds = tick + uint32(s.Meteor.DurationTicks)                // trunc(duration*30) at load
 		s.Meteor.NextStrike = s.Meteor.StrikeEnds + uint32(s.Meteor.IntervalTicks) // trunc(interval*30) at load
 		s.Meteor.NextHit = tick                                                    // first hit on the opening tick
+		if !s.Meteor.Enabled {
+			s.Meteor.Active = false
+		}
 	}
-	if tick > s.Meteor.StrikeEnds {
-		s.Meteor.Active = false
-		return
-	}
-	if tick < s.Meteor.NextHit {
-		return
-	}
-	// Per-hit spacing trunc(30/density); a zero spacing attempts a spawn on
-	// every storm tick (density 31+) so keep a one-tick floor for the timer.
-	if s.Meteor.PerHitDelay > 0 {
+	if s.Meteor.Active && tick >= s.Meteor.NextHit {
+		// Addition retains the stored low-32 signed spacing bits. A zero delay
+		// therefore attempts one hit on every invocation, without a retry loop.
 		s.Meteor.NextHit = tick + uint32(s.Meteor.PerHitDelay)
-	} else {
-		s.Meteor.NextHit = tick + 1
-	}
-	// Spawn gate: a disabled storm (no weapon) spends no per-hit draws —
-	// "six draws per METEOR" counts only meteors actually created [06 §6.5].
-	if s.Combat != nil && s.Meteor.Weapon != nil {
 		// Spawn uses the stored storm target/origin plus two lateral CRT draws
 		// (radius then angle) inside SpawnMeteor [06 §6.5]. Pool-full drops
 		// silently after the hit timer advanced; no retry [06 §6.5]. Meteor
 		// enters at 1350 wu altitude, −15 wu/tick vertical, horizontal
 		// trunc(((target−origin)<<20)/90) per axis.
+		// SpawnMeteor consumes the two hit draws even if a direct host has no
+		// record-0 weapon or combat service, matching an attempted hit.
 		_, _ = combat.SpawnMeteor(s.Combat, crt, tick, s.Meteor.Weapon, s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ, s.Meteor.Radius)
+	}
+	// The end comparison is inclusive and comes after the possible final hit.
+	if tick >= s.Meteor.StrikeEnds {
+		s.Meteor.Active = false
 	}
 }
 

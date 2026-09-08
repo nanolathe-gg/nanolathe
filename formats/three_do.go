@@ -225,56 +225,7 @@ func LoadThreeDOWithLimits(data []byte, limits ThreeDOLimits) (*ThreeDO, error) 
 		result.Objects[root].NextSibling = sibling
 	}
 	result.Root = root
-	// Retail load-time primitive reordering (02:3DO). After relocation, before
-	// first draw: if object declares a selection primitive, swap it with
-	// primitive zero and rewrite index to 0, then bubble-sort primitives
-	// 1..n-1 ascending by mean of vertices' second coordinate (Y) via
-	// integer division by vertex count. Draw order is fixed at load, not per
-	// frame; an implementation that sorts at draw time misorders ties.
-	for i := range result.Objects {
-		obj := &result.Objects[i]
-		if obj.Selection >= 0 && obj.Selection < int32(len(obj.Primitives)) {
-			if obj.Selection != 0 {
-				obj.Primitives[0], obj.Primitives[obj.Selection] = obj.Primitives[obj.Selection], obj.Primitives[0]
-			}
-			obj.Selection = 0
-		}
-		if len(obj.Primitives) > 1 {
-			// Bubble from 1 upward; keep primitive 0 (selection) fixed.
-			for end := len(obj.Primitives) - 1; end > 1; end-- {
-				swapped := false
-				for j := 1; j < end; j++ {
-					meanJ := primitiveMeanY(obj, j)
-					meanNext := primitiveMeanY(obj, j+1)
-					if meanNext < meanJ {
-						obj.Primitives[j], obj.Primitives[j+1] = obj.Primitives[j+1], obj.Primitives[j]
-						swapped = true
-					}
-				}
-				if !swapped {
-					break
-				}
-			}
-		}
-	}
 	return result, nil
-}
-
-func primitiveMeanY(obj *ThreeDOObject, index int) int32 {
-	if index < 0 || index >= len(obj.Primitives) {
-		return 0
-	}
-	prim := obj.Primitives[index]
-	if len(prim.VertexIndices) == 0 {
-		return 0
-	}
-	var sum int64
-	for _, vi := range prim.VertexIndices {
-		if int(vi) < len(obj.Vertices) {
-			sum += int64(obj.Vertices[vi].Y)
-		}
-	}
-	return int32(sum / int64(len(prim.VertexIndices)))
 }
 
 func threeDOSlice(data []byte, off int32, count, stride uint64) ([]byte, error) {

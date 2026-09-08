@@ -58,6 +58,7 @@ type Renderer struct {
 	modelShadowCommit     *ebiten.Shader
 	modelClip             *ebiten.Shader
 	modelPack, modelChild *ebiten.Shader
+	modelResolve          *ebiten.Shader
 
 	// offscreen is the indexed frame surface, RGBA8 with the palette index in the
 	// red channel (C-G4). output is the expanded RGBA surface Execute returns.
@@ -86,6 +87,9 @@ type Renderer struct {
 	modelStage, modelStageScratch *ebiten.Image
 	modelCoord                    *ebiten.Image
 	w, h                          int
+
+	modelSuperColor, modelSuperKey, modelSuperCoord *ebiten.Image
+	modelSuperW, modelSuperH                        int
 
 	// tileAtlases caches one tile-index atlas per *world.Terrain identity, built
 	// on first Terrain draw and reused for the map's lifetime (C-G4,
@@ -162,6 +166,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	modelClip, modelClipErr := newModelClipShader()
 	modelPack, modelPackErr := newModelPackShader()
 	modelChild, modelChildErr := newModelChildShader()
+	modelResolve, modelResolveErr := newModelResolveShader()
 	r := &Renderer{
 		tables:            uploadTables(pal),
 		expand:            shader,
@@ -185,6 +190,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		modelClip:         modelClip,
 		modelPack:         modelPack,
 		modelChild:        modelChild,
+		modelResolve:      modelResolve,
 		tileAtlases:       make(map[*world.Terrain]*tileAtlas),
 		gafImages:         make(map[*formats.GAFFrame]*ebiten.Image),
 		pcxImages:         make(map[*formats.PCX]*ebiten.Image),
@@ -255,6 +261,9 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	}
 	if err == nil {
 		err = modelChildErr
+	}
+	if err == nil {
+		err = modelResolveErr
 	}
 	return r, err
 }

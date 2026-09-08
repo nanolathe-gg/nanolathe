@@ -6,13 +6,16 @@ package session
 // something different on every install.
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/orders"
+	"github.com/nanolathe/nanolathe/internal/save"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/testsupport/retailcat"
 	"github.com/nanolathe/nanolathe/internal/units"
@@ -34,6 +37,19 @@ type retailFixture struct {
 	fs  *vfs.FS
 	cat *content.Catalog
 	cfg SkirmishConfig
+}
+
+type meteorStageOverrideFS struct {
+	vfs.FSOps
+	path string
+	data []byte
+}
+
+func (f meteorStageOverrideFS) ReadFileLimit(name string, limit int64) ([]byte, error) {
+	if strings.EqualFold(name, f.path) {
+		return append([]byte(nil), f.data...), nil
+	}
+	return f.FSOps.ReadFileLimit(name, limit)
 }
 
 // loadRetailFixture is the sole retail-root and catalog setup path for this
@@ -93,6 +109,56 @@ func (f *retailFixture) session(t *testing.T) *Session {
 		t.Fatalf("validate retail composition: %v", err)
 	}
 	return s
+}
+
+func TestStageRetailBattleMeteorFailurePrecedesAIAndUnitReservation(t *testing.T) {
+	f := loadRetailFixture(t)
+	otaPath := "maps/" + retailMap + ".ota"
+	ota, err := f.fs.ReadFileLimit(otaPath, 1<<20)
+	if err != nil {
+		t.Fatalf("read retail fixture OTA: %v", err)
+	}
+	meteorRadius := regexp.MustCompile(`(?im)(meteorradius\s*=\s*)[^;]*;`)
+	if !meteorRadius.Match(ota) {
+		t.Skipf("retail fixture OTA %q has no MeteorRadius key to select the default", otaPath)
+	}
+	override := meteorRadius.ReplaceAll(ota, []byte("${1}0;"))
+	stageFS := meteorStageOverrideFS{FSOps: f.fs, path: otaPath, data: override}
+
+	cat := f.cat.Clone()
+	cat.Meteor = &content.MeteorDefaults{DefaultPresent: true, DefaultValid: false}
+	b := save.NewBuilder()
+	save.WriteSummary(b, save.Summary{MapName: retailMap, Players: 1, Gametype: GametypeMultiplayer, IsBattle: true})
+	save.WriteCamera(b, save.Camera{})
+	scheduler := (&clock.State{Requested: 1, Active: 1}).SaveBox()
+	b.Add(save.PlayersAccount).AppendBox(save.GameTimeBoxName, 0, scheduler[:])
+	// This would construct an AI record after the meteor step. The malformed
+	// record would then fail unit reservation, so neither later path may mask
+	// the selected-default diagnostic [08 R-ENTRY-01 §3 step 22, step 24].
+	save.WritePlayerSlot(b, save.PlayerSlot{Index: 0, Controller: 1})
+	units := b.Add(save.UnitsAccount)
+	units.SetInt("Version", save.UnitsVersionRetail)
+	units.SetInt("Number of Units", 1)
+	badUnit := make([]byte, save.UnitBoxSize)
+	badUnit[0x20] = 10
+	badUnit[0x21] = 1
+	units.AppendBox("", 0, badUnit)
+	features := b.Add(save.FeaturesAccount)
+	features.SetInt("Number of Normal Features", 0)
+	features.SetInt("Number of Animating Features", 0)
+	features.SetInt("Number of 3D Features", 0)
+	b.Add("Metal").AppendBox("Plotmap", 0, []byte{0})
+	b.Add("PlayerFeatures").AppendBox("Plotmap", 0, []byte{0})
+	b.Add("Mapping").AppendBox("", 0, []byte{0})
+	save.WriteMeteorScalars(b, save.MeteorScalars{})
+	bank, err := save.OpenBytes(b.Bytes())
+	if err != nil {
+		t.Fatalf("open stage bank: %v", err)
+	}
+	_, err = StageRetailBattle(bank, RetailLoadDeps{FS: stageFS, Catalog: cat, UnitLimit: 1})
+	if err == nil || err.Error() != "Hey, hoser!  The default meteor shower data was bogus!" {
+		t.Fatalf("stage meteor error = %v", err)
+	}
 }
 
 func retailUnit(s *Session, owner uint8, key string) *units.Unit {
