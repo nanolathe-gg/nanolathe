@@ -1008,14 +1008,39 @@ one run. The "gadget colour" of both branches is the window colour-table
 entry the button's `colorf` selects when `stages` is zero, and entry 0 when
 it is not ([03 R-FONT-01 §6]).
 
-**Established — quickkey assignment.** The builder clears the authored key
-and assigns the **first non-space character of the label whose lowercase
-form is not already the quickkey of any button or linked label in the
-window**; a staged button gets no key; a button with attribute `0x10000`
-keeps its authored key. The authored `quickkey` field is therefore inert
-for every stock button that lacks `0x10000` — the accelerator is always
-the first free letter of the caption ([fmt gui]'s "keyboard accelerator as
-an ASCII code" describes the field, not its effect).
+**Established — quickkey assignment.** Assignment operates on the current
+records of the whole window, in builder record order. For a button the helper
+first preserves the current key when attribute `0x10000` is set. Otherwise a
+nonzero stage count clears the key and returns. A non-staged button with an
+empty caption returns without clearing its key. For other nonempty button
+captions the key is cleared before searching. A label with an empty link is
+not assigned; a linked label clears its key before searching, even with an
+empty caption.
+
+The search walks caption bytes until the terminator, skipping only the literal
+space byte. For each candidate it compares lowercase forms against the current
+key of **every button and every label** in the window, including later records
+and inactive records. A collision advances to the next caption byte. The first
+free candidate is stored with its original case, not its lowercase form. If
+none is free, the cleared key remains zero. This is not a reservation pass over
+only previously assigned controls: a later button's existing authored key can
+exclude a candidate before that later button is rebuilt.
+
+The button builder calls assignment before resolving art and before splitting
+and relocalizing staged captions. The parser has already localized the initial
+caption (§11). Buttons marked as slider arrows, or with the builder's existing
+resource flag set, bypass this assignment call. Linked labels invoke it in their
+own builder arm. Thus ordinary nonempty, non-staged buttons normally replace
+their authored key, but the empty-caption, preservation and bypass cases must
+not be collapsed into that rule.
+
+**Unknown — whole-window key preclear.** Before the per-record build, a
+separate interface-context condition can clear every button key. Its writer
+and lifecycle must be established before selecting the initial collision set
+for a complete production builder. A bounded context writer/caller trace would
+settle it; the helper algorithm above does not identify that condition. Extended
+caption-byte case conversion also needs the runtime locale contract before an
+ASCII-only implementation can claim localized parity.
 
 **Established — press semantics.** Greyed buttons ignore everything. A
 press (left or right button-down message) inside takes the capture and
@@ -7470,6 +7495,7 @@ supported inference, not established fact.
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
 
+- Whole-window button-key preclear context lifetime and extended-byte case conversion · [R-WGT-01 §3] · context writer/caller and runtime locale traces.
 - Focus traversal for windows with more than 49 controls depends on incompletely initialized canonical-coordinate scratch · [R-WGT-01 §2] · bounded initialization/lifetime trace or manual custom-window observation.
 
 ### Input and text

@@ -229,6 +229,9 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 		g.Status = int16(fieldInt(fg.Fields, "status", 0))
 		g.GrayedOut = int16(fieldInt(fg.Fields, "grayedout", 0))
 		g.Stages = uint8(fieldInt(fg.Fields, "stages", 0) & 0xFF)
+		// TODO(question): Builder key assignment needs the whole-window preclear
+		// context lifetime and locale case conversion [07 R-WGT-01 §3]. Keep
+		// parsed keys until those writer/caller contracts settle the collision set.
 		// quickkey string stored as byte [02 §6]
 		if v, ok := fg.Fields["quickkey"]; ok && v != "" {
 			// In retail files quickkey is often numeric string like "83" or a bare symbol.

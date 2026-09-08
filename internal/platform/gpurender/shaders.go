@@ -301,8 +301,9 @@ var SrcOrigin vec2
 var FrameSize vec2
 
 func Fragment(dstPos vec4, srcPos vec2, color vec4) vec4 {
-	dx := int(dstPos.x) - int(DstOrigin.x)
-	dy := int(dstPos.y) - int(DstOrigin.y)
+	local := dstPos.xy - imageDstOrigin()
+	dx := int(local.x) - int(DstOrigin.x)
+	dy := int(local.y) - int(DstOrigin.y)
 	sx := 0
 	if int(DstDen.x) > 0 {
 		sx = dx * int(SrcNum.x) / int(DstDen.x)

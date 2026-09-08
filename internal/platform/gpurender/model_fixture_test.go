@@ -169,6 +169,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if g.err == nil {
 		g.err = checkFeatureShadowDevicePixels()
 	}
+	if g.err == nil {
+		g.err = checkMinimapSurfaceDevicePixels()
+	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
 

@@ -128,7 +128,7 @@ type Client struct {
 	fogCache     *visibility.FogCache
 	fogOps       []presentationrender.FogOp
 	// pointArena is this frame's backing store for every recorded Points batch
-	// (the LHT halo, the calculated flash disc, the minimap surface and its
+	// (the LHT halo, the calculated flash disc and the minimap
 	// viewport rectangle). Each emitPoints batch is appended here and recorded as
 	// a three-index sub-slice arena[off:end:end]; the capped bound forces any
 	// later append to reallocate rather than overwrite an already-recorded batch,
@@ -136,6 +136,10 @@ type Client struct {
 	// deferred replay (WU-1.8). It is reset to [:0] in lockstep with c.list at the
 	// top of composeIndexed, and its capacity is retained so a warm frame
 	// allocates nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
+	// surfaceArena owns minimap packet bytes until the frame list is reset.
+	// Separate capped sub-slices preserve multiple writes within one frame;
+	// retained lists copy their bytes through List.Clone.
+	surfaceArena    []byte
 	pointArena      []drawlist.Point
 	selectionChrome []selectionChrome
 	selectionDrag   SelectionDrag

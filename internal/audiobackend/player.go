@@ -330,12 +330,11 @@ func (b *Backend) PlayRegisteredSample(sample *retailaudio.Sample, volume, pan f
 
 func (b *Backend) admitVoiceLocked(v voice) {
 	b.reapLocked()
-	// The voice limit is compared against the voices that are still playing:
-	// retail's reaper frees every finished buffer from the application pump,
-	// so the mixer's steal only ever evicts a live voice [R-AUD-01 §1 step 2]
-	// [R-AUD-02 §2]. Without the reap the list saturated at eight voices ever
-	// started, and from the ninth cue on every play closed a sound that had
-	// only just begun.
+	// TODO(question): Remove this eager registered-alias status sweep when the
+	// remaining mixer lifecycle is reconciled. Retail reaps on mode-1 loads
+	// and the paced pump, so stopped entries can remain counted between those
+	// calls [03 R-AUD-01 §1][03 R-AUD-02 §2]. Keep the existing host behavior
+	// explicit while transient admission and the pump threshold are corrected.
 	limit := b.voiceLimit
 	if limit <= 0 {
 		limit = defaultVoiceLimit
@@ -438,7 +437,7 @@ func (b *Backend) Pump(now time.Time) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if !b.lastPump.IsZero() && now.Sub(b.lastPump) < 99*time.Millisecond {
+	if !b.lastPump.IsZero() && now.Sub(b.lastPump) < 100*time.Millisecond {
 		return
 	}
 	b.lastPump = now

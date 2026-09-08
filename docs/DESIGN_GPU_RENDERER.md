@@ -105,6 +105,27 @@ does. If two sprites overlap, the list says so in that order.
 `ComposeFrameSnapshot` gains the recorded `List` beside `Indexed` and `RGBA`,
 which is what the diff tool replays through the GPU executor.
 
+**PERF-REND-04 minimap surface submission.** `DrawMinimapLayout` keeps the
+canonical two-step integer sampling and unchanged letterbox bars, clips the
+picture to the framebuffer, and records one owned indexed `Surface` at one-to-one
+output size. Frame-local byte storage is reused in lockstep with list reset;
+multiple packets own disjoint ranges, and retained clones copy their bytes.
+The shared scaled-index shader subtracts the destination atlas origin before
+integer source mapping; the real-device fixture exposed and now locks this
+existing executor correction. Both executors consume that same packet; viewport markers
+remain later point commands. This removes per-pixel point/quad submission without
+changing the separate PICTURE/MAPPED/FINAL lifecycle [03 R-MM-01 §1]. Fog and
+minimap invalidation propagation remains open. Acceptance compares the former
+sampling result at native and fractional display sizes, both letterbox axes,
+clipped/reversed rectangles and retained replay after source reuse.
+
+A scoped warm-submission benchmark on darwin/arm64 Apple M3 Pro at 126×126
+measured the former point producer at 31.4 µs and the surface producer at 20.2 µs,
+both zero steady-state allocations. One surface replaces 15,876 points and
+63,504 solid vertices with one textured quad. This measures command production,
+not whole-frame GPU time or fog/minimap recomposition savings; the surface
+executor still uploads indexed bytes for each call.
+
 ### 2.3 `internal/platform/gpurender` — the modern executor
 
 Imports Ebitengine; joins `internal/platform/ebitenapp`, `internal/audiobackend`

@@ -8573,7 +8573,7 @@ non-CD sound goes through one routine. In order:
 
 **Reaper.** Before a transient load (mode 1) the device walks the 8
 transient samples and the 32 voice slots, freeing/clearing every entry whose
-buffer reports *not playing* (or whose status query fails). The application pump also reaps every ≥99 ms of wall clock
+buffer reports *not playing* (or whose status query fails). The application pump also reaps every ≥100 ms of wall clock
 ([R-AUD-02 §2]); there is no per-tick reaper, and voice slots are otherwise
 reclaimed only by the steal of step 2. **Stop-all** (`MODE` set to `Off`, movie start, battle exit) stops
 every voice slot's buffer and clears the table.
@@ -9125,7 +9125,7 @@ offset toggles between 0 and `half`.
 
 **Established fact — poll and stop.** The application pump's media
 keepalive ([01 R-PLAT-01 §1]; the reaper of [R-AUD-02 §2]) polls the stream
-when one exists, at most once per 99 ms of wall clock. The poll reads the
+when one exists, at most once per 100 ms of wall clock. The poll reads the
 DirectSound **write** cursor `w` (not the play cursor) and, with `next` the
 fill offset:
 
@@ -9154,7 +9154,7 @@ slots or 8 transient slots and is never stolen ([R-AUD-01 §1]). Nothing
 sets the stream buffer's own volume after the start (bounded negative: the
 only `SetVolume` on it is the opener's).
 
-**Draws and timing.** No random draws. The 60-unit delay and the ≥99 ms
+**Draws and timing.** No random draws. The 60-unit delay and the ≥100 ms
 poll are wall-clock; nothing here is visible to the simulation or the
 save file.
 
@@ -9164,15 +9164,18 @@ save file.
 slots, freeing or clearing every entry whose buffer reports *not playing*
 or whose status query fails, then poll the stream) is called by the
 application pump
-on every busy iteration in which at least 99 ms of wall clock have passed
+on every busy iteration in which at least 100 ms of wall clock have passed
 since the previous call — the "media keepalive" walk that [01 R-PLAT-01 §1]
-records with its slot counts (eight, then thirty-two) and its ≥99 ms gate,
+records with its slot counts (eight, then thirty-two) and its ≥100 ms gate,
 whose "keepalive virtual" is `IDirectSoundBuffer::GetStatus`. So a voice
-slot is reclaimed within ~100 ms of its buffer finishing, and the mixer's
-steal ([R-AUD-01 §1] step 2) only ever evicts voices that are still
-playing. The consequence for Nanolathe: the *active voice* count that the
-`MixingBuffers` limit compares against is the count of buffers still
-playing (to within 100 ms), not the count of voices ever started. The
+slot is reclaimed by a later eligible busy-pump iteration. Between reaper
+calls, a completed buffer can still occupy a counted voice slot; the mixer
+steal ([R-AUD-01 §1] step 2) does not run a status sweep of its own. The
+`MixingBuffers` comparison uses the tracked count maintained by admission,
+stealing and reaping, not an immediate recount of playing buffers. The timing
+comparison admits an elapsed integer-millisecond difference of 100 and rejects
+99; this corrects the earlier off-by-one description. Busy-pump scheduling can
+delay the call further, so this is not a guaranteed wall-clock cleanup deadline. The
 reaper still also runs before every transient (mode 1) load. The constant
 helper that makes `UseWindowsSound` force the no-DirectSound flag simply
 returns 1 ([R-AUD-01 §1]).

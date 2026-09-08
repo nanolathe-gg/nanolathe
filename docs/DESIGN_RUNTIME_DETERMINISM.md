@@ -402,7 +402,7 @@ stalls the anchor, so unpause yields one capped burst of at most five. The
 multiplayer path runs the budget, discards the integer and keeps the carry.
 Both exist `[01 §4.3]`.
 
-**C5 — the 99 ms gate is not the budget.** It drives only the audio and media
+**C5 — the 100 ms gate is not the budget.** It drives only the audio and media
 keepalive `[01 §4.3]`.
 
 **C6 — the tick increments first.** The global tick increments before phase 1
@@ -690,7 +690,7 @@ streams, the pools, the tick or the committed frame.
 | Timebase: `floor(ms × 30 / 1000)`; the performance counter seeds, it does not drive | `[01 §4.1]` |
 | The scaled-clock timer table and its two audio registrants | `[01 R-PLAT-02 §4]` |
 | Budget arithmetic, the `float32` carry, the `0..5` clamp, negative wrap deltas | `[01 §4.2]` |
-| Speed clamp, hysteresis, the pause asymmetry, the 99 ms keepalive gate | `[01 §4.3]`, `[01 R-PLAT-01 §3]` |
+| Speed clamp, hysteresis, the pause asymmetry, the 100 ms keepalive gate | `[01 §4.3]`, `[01 R-PLAT-01 §3]` |
 | The twelve-phase order, the per-unit micro-order, event visibility across phases | `[01 §4.4]`, `[04 §5.4]` |
 | Phase 9 identity, phase 10 shake arithmetic, phase 11's object family, the phase 5 visibility seam | `[01 R-CORE-01 §4.4.1]` |
 | Battle RNG seeding and the chronological draw census | `[01 R-CORE-02]` |

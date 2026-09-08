@@ -216,19 +216,19 @@ mode work:
   messages terminate this loop.
 - When there is no immediately queued message and the window is active or the
   session is networked, the pump runs its housekeeping helper and then, when
-  at least 99 milliseconds
+  at least 100 milliseconds
   have elapsed since the previous one, exactly one media-keepalive call that
   walks the audio/media channel arrays (eight then thirty-two object slots,
   invoking each live object's keepalive virtual and clearing dead slots).
   That walk is the audio reaper — eight transient plus thirty-two voice slots,
   then the narration-stream poll ([03 R-AUD-02 §2], Established). That
-  ≥99 ms gate drives only this keepalive. The network/game dispatcher itself
+  ≥100 ms gate drives only this keepalive. The network/game dispatcher itself
   runs every busy iteration; it tail-dispatches the session callback, which
   evaluates the fixed wall-clock budget each time. The loop does not use a
   33-millisecond `Sleep` to drive simulation. A second, distinct keepalive is
   the network control message: on the networked zero-budget path the
   dispatcher sends one control byte every 60 scaled units (two seconds),
-  gated on its own stamp. The two cadences must not be conflated: the ≥99 ms
+  gated on its own stamp. The two cadences must not be conflated: the ≥100 ms
   gate belongs to the pump's media walk, the 60-unit gate to the network
   control send.
 - Audio/CD status is polled from this same application activity. Media playback
@@ -2277,7 +2277,7 @@ byte `0x0C` and the 768-byte palette.
   second-instance `OpenSemaphoreA` with an existing object returns immediately
   with `-1` and no window activation or handoff.
 - 30-Hz scaled `GetTickCount` budget, carry, truncation, zero-to-five cap, and
-  50-ms barrier waits that are not the tick driver; the ≥99 ms pump gate drives
+  50-ms barrier waits that are not the tick driver; the ≥100 ms pump gate drives
   exactly one media-keepalive call while the budget itself is evaluated every
   busy pump iteration, and the networked zero-budget path sends a separate
   one-byte control keepalive every 60 scaled units.

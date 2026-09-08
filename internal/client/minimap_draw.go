@@ -49,33 +49,51 @@ func (c *Client) DrawMinimapLayout(surf *render.RadarSurface, dst hud.Rect, layo
 	if dw <= 0 || dh <= 0 {
 		return
 	}
-	// The radar surface is recorded as one plain single-pixel batch that replays
-	// under the committed-frame list in per-frame order; the sampling and clip are
-	// unchanged from the direct putIndexed loop (docs/DESIGN_GPU_RENDERER.md
-	// §2.2)[03 R-MM-01 §1]. The batch is a self-owned sub-slice of the point arena,
-	// immutable for the frame (WU-1.8).
-	off := len(c.pointArena)
-	for y := int32(0); y < dh; y++ {
+	// Crop the sampled picture to its displayed letterbox interior and the
+	// framebuffer, then submit physical bytes as one surface. Sampling retains
+	// both integer divisions of the canonical canvas [03 R-MM-01 §1]; replacing
+	// them with a direct source-to-destination scale changes boundary pixels.
+	x0, x1 := minimapPictureSpan(dl, dw, layout.PadX, layout.W, int32(c.width))
+	y0, y1 := minimapPictureSpan(dt, dh, layout.PadY, layout.H, int32(c.height))
+	if x0 >= x1 || y0 >= y1 {
+		return
+	}
+	w, h := x1-x0, y1-y0
+	off := len(c.surfaceArena)
+	c.surfaceArena = append(c.surfaceArena, make([]byte, int(w)*int(h))...)
+	pixels := c.surfaceArena[off:len(c.surfaceArena):len(c.surfaceArena)]
+	for y := y0; y < y1; y++ {
 		canvasY := y * camera.MinimapLongSide / dh
-		if canvasY < layout.PadY || canvasY > layout.Bottom() {
-			continue
-		}
 		sy := (canvasY - layout.PadY) * int32(surf.H) / layout.H
-		if sy < 0 || sy >= int32(surf.H) {
-			continue
-		}
-		for x := int32(0); x < dw; x++ {
+		for x := x0; x < x1; x++ {
 			canvasX := x * camera.MinimapLongSide / dw
-			if canvasX < layout.PadX || canvasX > layout.Right() {
-				continue
-			}
 			sx := (canvasX - layout.PadX) * int32(surf.W) / layout.W
-			if sx >= 0 && sx < int32(surf.W) {
-				c.appendMinimapPoint(dl+x, dt+y, surf.Bits[int(sy)*surf.W+int(sx)])
-			}
+			pixels[int(y-y0)*int(w)+int(x-x0)] = surf.Bits[int(sy)*surf.W+int(sx)]
 		}
 	}
-	c.emitPoints(off, drawlist.PointPlain)
+	// Own this packet's pixels; another minimap write or source mutation cannot
+	// change deferred replay. List.Clone also copies surface bytes.
+	c.emitSurface(drawlist.Surface{Pixels: pixels, SrcW: w, SrcH: h,
+		Dst: drawlist.Rect{X: dl + x0, Y: dt + y0, W: w, H: h}})
+}
+
+// minimapPictureSpan inverts floor(pixel*126/extent) into a half-open pixel
+// interval. Ceil at both ends preserves inclusive canvas edges and untouched
+// bars. Wider intermediates keep clipping arithmetic independent of products.
+func minimapPictureSpan(origin, extent, pad, span, framebuffer int32) (int32, int32) {
+	ceil := func(n int64) int64 {
+		q := n / int64(camera.MinimapLongSide)
+		if n%int64(camera.MinimapLongSide) > 0 {
+			q++
+		}
+		return q
+	}
+	lo := max(int64(0), -int64(origin), ceil(int64(pad)*int64(extent)))
+	hi := min(int64(extent), int64(framebuffer)-int64(origin), ceil((int64(pad)+int64(span))*int64(extent)))
+	if lo >= hi {
+		return 0, 0
+	}
+	return int32(lo), int32(hi)
 }
 
 // DrawMinimapViewportRect strokes the camera-to-radar rectangle as a one-pixel

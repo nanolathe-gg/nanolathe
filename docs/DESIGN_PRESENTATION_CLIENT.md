@@ -220,7 +220,7 @@ start/stop lifetime. The stream opener has no ordinary MODE play gate
 gain stands in for the retail system wave-output mixer; no host-wide volume
 setting is changed.
 The shell's common presentation step pumps the backend in menus, loading and
-paused battles. At intervals of at least 99 ms of monotonic wall time, it
+paused battles. At intervals of at least 100 ms of monotonic wall time, it
 releases finished cues and streams, including the final batch with no later
 play request. This keeps playback retention independent of simulation ticks
 `[03 R-AUD-02 §2]`.
@@ -293,7 +293,7 @@ registered/stream admission while transient slots are full, and failed creation.
 Four-instance restart, exclusive loops and the existing device failure ordering
 remain separate REND-10 work. Ordinary registered-alias admission retains its
 existing reap-before-admission behavior, although retail limits that eager reap
-to mode-1 loads and the ≥99 ms pump; this unit does not broaden that unrelated
+to mode-1 loads and the ≥100 ms pump; this unit does not broaden that unrelated
 correction. No authoritative RNG or simulation timing changes.
 
 ## 3. Contracts

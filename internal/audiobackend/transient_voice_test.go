@@ -138,11 +138,11 @@ func TestPumpReapsCompletedTransientReferencesAtItsExistingCadence(t *testing.T)
 	now := time.Unix(100, 0)
 	b.Pump(now)
 	(*made)[0].playing = false
-	b.Pump(now.Add(98 * time.Millisecond))
-	if len(b.transients) != 1 {
-		t.Fatal("pump reaped a transient before its 99 ms cadence")
-	}
 	b.Pump(now.Add(99 * time.Millisecond))
+	if len(b.transients) != 1 {
+		t.Fatal("pump reaped a transient before its 100 ms cadence")
+	}
+	b.Pump(now.Add(100 * time.Millisecond))
 	if len(b.transients) != 0 || len(b.players) != 0 || (*made)[0].stops != 1 {
 		t.Fatalf("pump did not release the completed transient: transients=%d players=%d stops=%d", len(b.transients), len(b.players), (*made)[0].stops)
 	}

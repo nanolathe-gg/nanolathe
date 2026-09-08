@@ -216,6 +216,7 @@ func (c *Client) composeIndexed(cur *frame.Frame, ok bool) {
 	// lockstep with the list so a batch recorded as a sub-slice of it lines up
 	// with fresh data and no batch survives into the next frame (WU-1.8).
 	c.pointArena = c.pointArena[:0]
+	c.surfaceArena = c.surfaceArena[:0]
 	// The model commit table drawlist.Model.Ref indexes is reset here, in
 	// lockstep with the list, so a re-recorded frame's refs line up with fresh
 	// entries and no entry survives into the next frame (C-G5) [I6].
