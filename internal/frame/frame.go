@@ -43,6 +43,9 @@ type PieceView struct {
 	DontShade        bool
 	Hidden           bool
 	DontShadow       bool
+	// DontCache mirrors the cleared cache bit of the committed render-piece
+	// record. The composition producer, not the renderer, owns this polarity.
+	DontCache bool
 }
 
 // UnitView is the committed presentation copy of one live unit.  InstanceID
@@ -63,7 +66,12 @@ type UnitView struct {
 	Model                string
 	FootX, FootZ         int8
 	Pieces               []PieceView
-	BMCode               bool // authored model-shading class gate [R-RND-02A]
+	// CacheRevision is a copied VM presentation revision. It models image
+	// invalidation in Go and is not a persisted retail counter.
+	CacheRevision uint64
+	// CacheValidityRevision distinguishes validity clears from image discards.
+	CacheValidityRevision uint64
+	BMCode                bool // authored model-shading class gate [R-RND-02A]
 	// ZBuffer is the authored FBI key that gives the unit's composition image
 	// a per-pixel height plane. 276 of the 278 stock units author it
 	// [R-REN-03A §2].

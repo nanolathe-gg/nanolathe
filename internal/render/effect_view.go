@@ -55,7 +55,17 @@ func BuildEffectDraws(effects []frame.EffectView) []EffectDraw {
 	if len(effects) == 0 {
 		return nil
 	}
-	out := make([]EffectDraw, 0, len(effects))
+	return BuildEffectDrawsInto(make([]EffectDraw, 0, len(effects)), effects)
+}
+
+// BuildEffectDrawsInto is BuildEffectDraws over a caller-owned buffer. The
+// records are values with no pointer fields beyond their interned strings, so
+// the recorder can keep one buffer for the life of the client and refill it
+// every frame instead of allocating one draw list per effect pass; the returned
+// slice is the same sequence BuildEffectDraws produces. The caller must not
+// retain the result past its next call [I6].
+func BuildEffectDrawsInto(dst []EffectDraw, effects []frame.EffectView) []EffectDraw {
+	out := dst[:0]
 	for _, e := range effects {
 		out = append(out, EffectDraw{
 			ID:                 e.ID,

@@ -500,9 +500,14 @@ func primitiveMeanY(obj formats.ThreeDOObject, primitiveIndex int) (int32, error
 }
 
 // ComposeScratch owns hierarchy-walk scratch; returned transforms own their nodes.
+//
+// The walk keeps only the leaf→root chain. The cycle guard is a scan of that
+// chain rather than a side table: a chain is at most one entry per piece and in
+// practice a handful, so the scan costs less than the map probe it replaces and
+// removes the per-scratch map allocation and its per-call clear from every
+// composition [03 §2.4] C21.
 type ComposeScratch struct {
 	chain []int
-	seen  map[int]bool
 }
 
 // Compose returns the world transform for piece index [03 §2.4] C21.
@@ -514,8 +519,12 @@ type ComposeScratch struct {
 // C24 root orientation folding is NOT included; call FoldRootAngles on a copy
 // before Compose if unit angles must be incorporated [03 §2.4] C24 [03 §5.2].
 func Compose(m *Model, st []PieceState, piece int) Transform {
+	// The chain array and the scratch stay in the caller's frame: neither is
+	// reachable from the returned transform, so a one-off composition allocates
+	// only the node storage the transform itself owns.
 	var chain [8]int
-	return ComposeInto(m, st, piece, Transform{}, &ComposeScratch{chain: chain[:0]})
+	scratch := ComposeScratch{chain: chain[:0]}
+	return ComposeInto(m, st, piece, Transform{}, &scratch)
 }
 
 // ComposeInto reuses the previous transform's node storage. The caller must have
@@ -527,16 +536,10 @@ func ComposeInto(m *Model, st []PieceState, piece int, previous Transform, scrat
 	// Collect leaf→root chain [03 §2.4] C21.
 	chain := scratch.chain[:0]
 	cur := piece
-	if scratch.seen == nil {
-		scratch.seen = make(map[int]bool, len(m.Pieces))
-	}
-	seen := scratch.seen
-	clear(seen)
 	for cur != -1 {
-		if seen[cur] {
+		if slices.Contains(chain, cur) {
 			break // cycle guard — retail files are trees [fmt 3do]
 		}
-		seen[cur] = true
 		chain = append(chain, cur)
 		if cur < 0 || cur >= len(m.Pieces) {
 			break
@@ -549,10 +552,13 @@ func ComposeInto(m *Model, st []PieceState, piece int, previous Transform, scrat
 	scratch.chain = chain
 	nodes := previous.nodes
 	if cap(nodes) < len(chain) {
-		nodes = make([]xformNode, len(chain))
-	} else {
-		nodes = nodes[:len(chain)]
+		// Grow geometrically. An exact allocation reallocated on every chain
+		// that was one node deeper than the last one this slot composed, which
+		// on a mixed unit population is most calls; append's growth makes a
+		// reused transform slot stop allocating after a few frames.
+		nodes = slices.Grow(nodes[:0], len(chain))
 	}
+	nodes = nodes[:len(chain)]
 	for i, idx := range chain {
 		t := m.Pieces[idx].Translate
 		var ax, ay, az uint16

@@ -132,6 +132,10 @@ func RetailScriptRestore(v *VM, image []byte) error {
 		setRetailPieceFlag(v, p, 0x02, pieces[p].flags[1] != 0)
 		setRetailPieceFlag(v, p, 0x04, pieces[p].flags[2] != 0)
 	}
+	// The image reference is not serialized. A successful restore gives the
+	// presentation cache fresh state to rebuild without treating this Go
+	// revision as a retail script field [03 R-COMP-01 §4][08 R-SAVE-02 §9].
+	v.invalidateCacheValidity()
 	return nil
 }
 

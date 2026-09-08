@@ -157,6 +157,12 @@ type VM struct {
 	DrainCalls        int    // count of Drain invocations for RS-08 one-drain invariant [04 §4.2][GAP T15]
 	activeThreadCount uint32 // authoritative active-thread count [04 §4.2]
 	dirty             bool   // global animation dirty flag [04 §4.6]
+	// These presentation revisions preserve both invalidation causes. The
+	// all-event revision changes for validity clears and image discards; the
+	// validity revision changes only for full cached-body invalidation. Neither
+	// is a saved retail counter [03 R-COMP-01 §4][03 R-REN-03A §4].
+	cacheRevision         uint64
+	cacheValidityRevision uint64
 
 	// Render-piece flag delegation [04 §"Piece flag polarity"] [R-COB-01 §1].
 	// Production units own RenderPieceFlags on units.Unit; the VM delegates its
@@ -232,6 +238,11 @@ func (v *VM) SetProgram(prog *Program) {
 func (v *VM) SetProgramChecked(prog *Program) error {
 	if err := ValidateProgram(prog); err != nil {
 		return err
+	}
+	if v.prog != nil || v.cacheRevision != 0 {
+		// Replacing a program retires its old presentation image as well as
+		// its script state. Initial construction has no image to retire.
+		v.invalidateCacheValidity()
 	}
 	v.prog = prog
 	if prog == nil {
@@ -325,6 +336,26 @@ func (v *VM) ActiveThreadCount() uint32 {
 // ScriptDirty reports the global piece-animation dirty flag [04 §4.6].
 func (v *VM) ScriptDirty() bool {
 	return v != nil && v.dirty
+}
+
+// CacheRevision is the read-only presentation invalidation revision for this
+// VM's cached body.  It is not part of retail script persistence; publication
+// copies it to the committed UnitView [03 R-COMP-01 §4].
+func (v *VM) CacheRevision() uint64 {
+	if v == nil {
+		return 0
+	}
+	return v.cacheRevision
+}
+
+// CacheValidityRevision identifies cached-body validity clears separately
+// from image-reference discards. A mobile no-key subject can draw directly
+// after the latter while the former requires a rebuild [03 R-REN-03A §4].
+func (v *VM) CacheValidityRevision() uint64 {
+	if v == nil {
+		return 0
+	}
+	return v.cacheValidityRevision
 }
 
 // BindPort registers a port handler for WU-06-7 [PLAN_06 Public API] [04 §4.4].
@@ -486,26 +517,78 @@ func (v *VM) setRenderFlag(piece int, mask uint8, set bool) bool {
 	if v == nil {
 		return false
 	}
+	flags := v.renderPieceFlags()
+	if piece < 0 || piece >= len(flags) || (mask != 0x01 && mask != 0x02 && mask != 0x04) {
+		return false
+	}
+	before := flags[piece]
 	if v.renderFlagSet != nil {
-		return v.renderFlagSet(piece, mask, set)
-	}
-	var flags []uint8
-	if v.renderFlagsBound {
-		flags = v.renderFlags
+		if !v.renderFlagSet(piece, mask, set) {
+			return false
+		}
 	} else {
-		flags = v.pieceFlags
+		if v.renderFlagsBound {
+			flags = v.renderFlags
+		} else {
+			flags = v.pieceFlags
+		}
+		if set {
+			flags[piece] |= mask // lower opcode sets [04 §"Piece flag polarity"]
+		} else {
+			flags[piece] &^= mask // higher clears
+		}
 	}
-	if piece < 0 || piece >= len(flags) {
+
+	// Cache and shade setters discard the cached image on every valid call.
+	// A draw-bit write clears validity only when it changed and this piece is cached
+	// [03 R-COMP-01 §4].  The externally owned unit record remains the flag
+	// authority; this is only the presentation invalidation publication seam.
+	if mask == 0x02 || mask == 0x04 {
+		v.invalidateCache()
+	} else if before&0x02 != 0 && before != v.renderPieceFlags()[piece] {
+		v.invalidateCacheValidity()
+	}
+	return true
+}
+
+func (v *VM) invalidateCache() {
+	if v != nil {
+		v.cacheRevision++
+	}
+}
+
+func (v *VM) invalidateCacheValidity() {
+	if v != nil {
+		v.cacheValidityRevision++
+		v.invalidateCache()
+	}
+}
+
+func (v *VM) invalidateCachedPiece(piece int) {
+	flags := v.renderPieceFlags()
+	if piece >= 0 && piece < len(flags) && flags[piece]&0x02 != 0 {
+		v.invalidateCacheValidity()
+	}
+}
+
+// setPieceTrans and setPieceAngle keep the established pose arithmetic at
+// their call sites while applying the script setter's exact cache gate
+// [03 R-COMP-01 §4].
+func (v *VM) setPieceTrans(piece, axis int, value numeric.Fixed) bool {
+	if v == nil || piece < 0 || piece >= len(v.Pieces) || axis < 0 || axis >= 3 || v.Pieces[piece].GetTrans(axis) == value {
 		return false
 	}
-	if mask != 0x01 && mask != 0x02 && mask != 0x04 {
+	v.Pieces[piece].SetTrans(axis, value)
+	v.invalidateCachedPiece(piece)
+	return true
+}
+
+func (v *VM) setPieceAngle(piece, axis int, value uint16) bool {
+	if v == nil || piece < 0 || piece >= len(v.Pieces) || axis < 0 || axis >= 3 || v.Pieces[piece].GetAngle(axis) == value {
 		return false
 	}
-	if set {
-		flags[piece] |= mask // lower opcode sets [04 §"Piece flag polarity"]
-	} else {
-		flags[piece] &^= mask // higher clears
-	}
+	v.Pieces[piece].SetAngle(axis, value)
+	v.invalidateCachedPiece(piece)
 	return true
 }
 
@@ -1112,19 +1195,19 @@ func (v *VM) interpolate(delta int) {
 						}
 						if diff > 0 {
 							if diff <= mag {
-								v.Pieces[p].SetTrans(axis, fixedFromRaw(target)) // snap on inclusive arrival [04 §4.6]
+								v.setPieceTrans(p, axis, fixedFromRaw(target)) // snap on inclusive arrival [04 §4.6]
 								anim.moveBusy = false
 								anim.moveSpeed = 0
 							} else {
-								v.Pieces[p].SetTrans(axis, fixedFromRaw(cur+mag))
+								v.setPieceTrans(p, axis, fixedFromRaw(cur+mag))
 							}
 						} else {
 							if -diff <= mag {
-								v.Pieces[p].SetTrans(axis, fixedFromRaw(target))
+								v.setPieceTrans(p, axis, fixedFromRaw(target))
 								anim.moveBusy = false
 								anim.moveSpeed = 0
 							} else {
-								v.Pieces[p].SetTrans(axis, fixedFromRaw(cur-mag))
+								v.setPieceTrans(p, axis, fixedFromRaw(cur-mag))
 							}
 						}
 					}
@@ -1151,7 +1234,7 @@ func (v *VM) interpolate(delta int) {
 				if anim.spinSpeed != 0 {
 					step := int64(anim.spinSpeed) * int64(delta) // already trunc(speed/30) [04 §4.6]
 					if step != 0 {
-						v.Pieces[p].AddAngle(axis, uint16(step)) // wraps [03 §2.4] C22 (I2)
+						v.setPieceAngle(p, axis, v.Pieces[p].GetAngle(axis)+uint16(step)) // wraps [03 §2.4] C22 (I2)
 					}
 				}
 				// spinActive stays set until stop-spin clears it, even at zero speed: a spin at rest is still a spin as far as turn lane is concerned [03 §2.4] C22.
@@ -1182,13 +1265,13 @@ func (v *VM) interpolate(delta int) {
 							remaining = int64(uint16(cur - target))
 						}
 						if remaining <= mag {
-							v.Pieces[p].SetAngle(axis, target) // snap on inclusive arrival [04 §4.6]
+							v.setPieceAngle(p, axis, target) // snap on inclusive arrival [04 §4.6]
 							anim.turnBusy = false
 							anim.turnSpeed = 0
 						} else if anim.turnSpeed > 0 {
-							v.Pieces[p].SetAngle(axis, uint16(int64(cur)+mag))
+							v.setPieceAngle(p, axis, uint16(int64(cur)+mag))
 						} else {
-							v.Pieces[p].SetAngle(axis, uint16(int64(cur)-mag))
+							v.setPieceAngle(p, axis, uint16(int64(cur)-mag))
 						}
 					}
 				}
@@ -1452,7 +1535,7 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			v.Pieces[piece].SetTrans(axis, fixedFromRaw(int64(target))) // [03 §2.4] C22; immediate set-position commit [04 §4.6]
+			v.setPieceTrans(piece, axis, fixedFromRaw(int64(target))) // [03 §2.4] C22; immediate set-position commit [04 §4.6]
 			if piece < len(v.anims) {
 				anim := &v.anims[piece].axes[axis]
 				anim.moveTarget = target // the axis's move-target word [04 §4.6]
@@ -1475,7 +1558,7 @@ func (v *VM) runThread(idx int) {
 				v.killThread(idx)
 				return
 			}
-			v.Pieces[piece].SetAngle(axis, uint16(target)) // masked [04 §4.3][04 §4.6]; immediate set-angle commit
+			v.setPieceAngle(piece, axis, uint16(target)) // masked [04 §4.3][04 §4.6]; immediate set-angle commit
 			if piece < len(v.anims) {
 				anim := &v.anims[piece].axes[axis]
 				anim.turnTarget = uint16(target) // masked &0xffff [04 §4.6]

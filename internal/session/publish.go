@@ -267,6 +267,10 @@ func (s *Session) publishSnapshot(tick uint32) {
 			// four-point visibility gate [03 §3.2] steps 3 and 5.
 			publishHullGateInputs(vp, u, s)
 			if vm := u.GetScript(); vm != nil {
+				// CacheRevision is copied at the publication boundary; consuming or
+				// clearing it here would make presentation cadence authoritative.
+				vp.CacheRevision = vm.CacheRevision()
+				vp.CacheValidityRevision = vm.CacheValidityRevision()
 				if vmPieces := vm.Pieces; len(vmPieces) > 0 {
 					flags := vm.SnapshotFlags()
 					prog := vm.Program()
@@ -291,9 +295,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 						if i < len(flags) {
 							f := flags[i]
 							pv.Hidden = (f & 0x01) == 0     // show bit [04 §4.3]
+							pv.DontCache = (f & 0x02) == 0  // cache bit [04 §4.3]
 							pv.DontShade = (f & 0x04) == 0  // shade bit [04 §4.3] 0x1000d/e000
 							pv.DontShadow = (f & 0x08) == 0 // dont-shadow [04 §4.3] 0x1000a000
-							// DontCache (0x02) not needed in snapshot; renderer decides via IsBuilding.
 						}
 						vp.Pieces = append(vp.Pieces, pv)
 					}

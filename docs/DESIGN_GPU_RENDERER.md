@@ -952,6 +952,105 @@ benchmark's 42,000 are Ebitengine's per-Metal-call boxing (about a hundred
 objects per device call, a third of them in opening the render pass a
 destination change forces) and the recorder in `internal/client`.
 
+### 11.5 Render passes, not draws (second round)
+
+Measured after G5 with `--benchmark-tps=60` (one simulation step per draw, the
+enhanced presentation target): classic holds the 16.7 ms floor with 15 ms of
+CPU, modern's cadence leaves it (27.5 ms median, 79% of frames on the 30 Hz
+floor but few on the 60 Hz one) with only 13 ms of CPU. Modern is device-bound.
+Skip experiments in a throwaway worktree attributed the device time: dropping the
+snapshot copies alone put modern on the 60 Hz floor; dropping the
+destination-reading draws while keeping the copies did not; dropping the fog
+pass or the model slot passes changed nothing; copying into a 512-square
+snapshot instead of the full-size one was slower. Ebitengine's Metal driver opens
+a render command encoder whenever the destination image changes, loading and
+storing the whole attachment, and that switch costs on the order of 70 µs
+whatever it draws. Of the roughly 195 passes per frame, about 168 are the
+offscreen → snapshot → offscreen alternation of the phases. The unit of cost is
+therefore the destination switch, and the executor's job is to issue as few as
+possible; the draw count within a pass and the pixels a pass touches are
+secondary.
+
+Two changes follow, both preserving the §11.2 order rules exactly.
+
+**Critical-path placement.** A command is placed in the earliest phase its
+overlaps permit, not the latest open one. With record order the only order, the
+phase of a command C is the maximum, over every earlier-recorded command E whose
+clipped rectangle overlaps C's, of E's phase plus one when E reads the
+destination and E's phase when it does not; a command overlapping nothing goes to
+phase zero. This is exactly the dependency the sequential rules express: a
+destination read must follow, by a phase, every earlier destination read and
+must be preceded, in the same or an earlier phase, by every earlier opaque write
+it covers (the opaque batch of a phase draws before its destination batch); an
+opaque write must follow, by a phase, every earlier destination read it covers,
+and may share a phase with earlier opaque writes because a batch is drawn in
+record order. Each phase therefore keeps its own vertex and index storage, and a
+command appends to the storage of the phase it was placed in, so a batch is
+still record-ordered. The lit point and body/shadow relaxations of §11.2 carry
+over unchanged: they only alter which pairs count as overlapping. The cell grid
+keeps, per cell, up to four owners with their phases; the rectangle test decides,
+and a saturated cell answers with the largest phase it has seen. Barriers (fog,
+a composed group's staging, the clear, the expansion) end a *segment*: every
+later command is placed after the barrier's phase. Estimated on the battle
+benchmark by placing every command of the current scheduler's stream both ways:
+31 phases per frame mean and 54 maximum, against 70 and 102 today.
+
+**One pass per phase.** Two full-size indexed surfaces alternate as the
+destination, so the separate snapshot surface and its pass disappear. Phase k
+writes surface W_k and its destination batch reads the other, R_k, which is
+W_{k-1}. Pass k, in this order and all into W_k: (1) copy R_k over the previous
+phase's destination rectangle (the only pixels W_k still lacks: that rectangle
+in R_k already holds the later opaque writes over it, which is the later state
+anyway); (2) the opaque batch of phase k; (3) the destination batch of phase k,
+reading R_k; (4) the opaque batch of phase k+1, so that W_k already holds it
+when it becomes R_{k+1}. Every opaque batch is thus drawn twice, once per
+surface, and every destination batch once. The invariant is that before pass k,
+R_k holds the complete state through phase k-1 plus the opaque batch of phase k,
+and W_k holds the complete state through phase k-2 plus the opaque batch of
+phase k-1. The clear is an opaque full-surface fill in the first phase, so both
+surfaces receive it. Fog is a phase of its own whose destination batch is the
+one fog draw over the visible region, reading R (complete by the invariant); the
+next pass copies that rectangle like any other. The expansion reads the last
+written surface. Model slot pages are built before the phases and are not
+involved. A destination-reading run's read surface is resolved at submission,
+not at compilation. `ModelStats` gains `Phases` and `Passes` (device
+destination switches the executor issued) so the benchmark rows record them.
+
+Expected: passes fall from about 195 to about 30 phase passes plus the model
+slot passes, the fog pass and the expansion. The doubled opaque fill (terrain,
+sprites and body commits, a few million pixels) is cheap on a tiled device and is
+accepted.
+
+**Model slot passes.** The slot stage today alternates its destinations per
+page: two clears, the key faces into the key plane, the colour faces into the
+body plane, reveal, the outline keys back into the key plane, the outline
+colours into the body plane, then the clip pass, for each of up to three native
+pages and the supersample page, about twenty switches. Stacking every page as a
+vertical band of one image per plane (body, key, post; 2048 wide) and ordering
+the work by destination — every page's clears, then every page's key work, then
+colour, then the follow-ups — brings the stage to a fixed handful of passes
+regardless of page count. The researched pass semantics (§10: outline colour
+compares against the key plane including the outline keys; clipping follows
+colour; reveal) decide which stages may merge; where they must stay ordered, they
+stay ordered, and the count is reported.
+
+**CPU.** Both renderers now spend the larger part of their main-thread CPU in
+the Go allocator rather than in any renderer code: on this platform every fresh
+heap span costs a page re-commit and the heap of a loaded battle grows for
+seconds between collections, so per-frame allocation is paid at allocation
+time, not at collection. The battle benchmark's 3.9 MB and 42,000 objects per
+frame (modern) break down as about 37,000 objects in Ebitengine's per-Metal-call
+boxing on the render thread (proportional to passes and draws, which the two
+changes above cut), Ebitengine's per-destination temporary vertex and index
+buffers (which reallocate on every new high-water mark), the executor's own
+scratch (cleared each frame instead of merely reset, and grown slot by slot), and
+about 2,500 objects in the recorder and HUD (`internal/client` outline geometry
+and model composition, effect draw lists, the minimap surfaces rebuilt and
+copied every frame). The policy of §11.2 stands: a steady-state frame allocates
+nothing in the executor, and the recorder and HUD retain their per-frame
+buffers across frames. The recorded list is the contract and must not change:
+classic output stays byte-identical.
+
 ## 12. Work units for §11
 
 Each unit is one worktree, one sub-agent, exclusive files; the orchestrator
@@ -969,3 +1068,18 @@ G1 and G2 are independent and run first in parallel. G3 follows G2 because the
 model commit goes through the scheduler. G4 follows G2. G5 runs last. After each
 merge the orchestrator runs the battle benchmark on both renderers and records
 draws per frame, submission, cadence and allocations in the merge commit.
+
+### Second round (§11.5)
+
+| Unit | Scope | Files owned | Gate |
+|---|---|---|---|
+| H0 benchmark | `--benchmark-tps`, on-cadence share in the report | `cmd/nanolathe/flags.go`, `cmd/nanolathe/battle_benchmark.go`, `internal/platform/ebitenapp/battle_benchmark.go`, `tools/battle-bench-report`, `docs/BATTLE_BENCHMARK.md` | landed (`a4fb00cd`) |
+| H1 scheduler | critical-path placement, one pass per phase, `Phases`/`Passes` stats, fog and clear as phases, retained uint32 index buffers | `schedule.go`, `deststage.go`, `renderer.go`, `fog.go`, `draw.go`, `sprites.go`, `terrain.go`, `text.go`, `shaders.go`, `atlas.go`, `models.go` (commit and shadow call sites), their tests | M1–M8 modern byte-identical to the previous revision's modern; fog, tinted-overlap and carrier fixtures; phases about 31 and phase passes equal to phases on the benchmark; 60 TPS on-cadence share reported |
+| H2 model stage | stacked pages, passes ordered by destination, vertices emitted once per page for key and colour, scratch arena without per-frame clearing, uint32 indices, recyclable sub-images | `model_slots.go`, `model_prepare.go`, `model_quads.go`, `model_scratch.go`, `model_atlas.go`, `model_shaders.go`, their tests | model device fixtures; ARMSOLAR and carrier captures; model stage passes ≤ 8 and independent of page count; executor allocations reported |
+| H3 recorder | retained buffers in the recorder and HUD: outline geometry, composition scratch, effect draws, minimap surfaces | `internal/client/model_geometry.go`, `internal/client/model_scratch.go`, `internal/model/model.go` (composition scratch only), `internal/render/effect_view.go`, `internal/render/minimap*.go`, `cmd/nanolathe/battle_hud_minimap.go`, their tests | M1–M8 classic byte-identical; classic and modern battle captures identical to the previous revision's; recorder objects per frame reported before and after |
+
+H1, H2 and H3 are independent and run in parallel; H1 owns `models.go` and H2
+must report, not make, any change it needs there. After each merge the
+orchestrator runs the battle benchmark on both renderers at 30 and 60 TPS and
+records phases, passes, submission, cadence, on-cadence share and allocations in
+the merge commit.

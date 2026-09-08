@@ -127,7 +127,11 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 	if c == nil || c.cam == nil {
 		return stats
 	}
-	draws := render.BuildEffectDraws(effects)
+	// The draw records live only for this call, so they are built into the
+	// client's retained buffer rather than a fresh list per pass
+	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
+	c.effectDraws = render.BuildEffectDrawsInto(c.effectDraws, effects)
+	draws := c.effectDraws
 	stats.Admitted = len(draws)
 	// Two walks over the pool, in retail's order [06 R-WFX-01 §2]: every
 	// record's SECONDARY (calculated) frame first through the flash blitter,

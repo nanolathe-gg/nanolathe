@@ -3,6 +3,8 @@ package render
 // Minimap and radar surfaces [03 §3.4][07 §10][03 §3.6–§3.12].
 
 import (
+	"slices"
+
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -281,16 +283,37 @@ func BuildRadarPictureFromWorld(t *world.Terrain, m camera.Minimap, baked []byte
 	return BuildRadarPicture(t, t.PlayRight, t.PlayBottom, m, baked, bakedW, bakedH, tables)
 }
 
+// resizeRadarBits returns a length-n byte slice reusing v's storage when it
+// fits. Every caller writes all n bytes before reading any, so the retained
+// tail is never observed and no clearing is owed.
+func resizeRadarBits(v []byte, n int) []byte {
+	if cap(v) < n {
+		return slices.Grow(v[:0], n)[:n]
+	}
+	return v[:n]
+}
+
 // BuildMapped implements MAPPED composite: picture masked by authoritative LOS
 // grids [03 §3.8][03 §3.3]. It is a pure presentation operation [03 §3.6].
 func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, mapW, mapH int, localSlot uint8, dcb byte, guiRemap []byte) *RadarSurface {
+	return buildMappedInto(nil, picture, wordMask, byteGrid, mapW, mapH, localSlot, dcb, guiRemap)
+}
+
+// buildMappedInto is BuildMapped over a caller-owned surface. The composite
+// writes every pixel of the result from the picture and the LOS grids, so the
+// reused storage carries nothing of the previous composite; dst nil allocates.
+func buildMappedInto(dst, picture *RadarSurface, wordMask []uint16, byteGrid []uint8, mapW, mapH int, localSlot uint8, dcb byte, guiRemap []byte) *RadarSurface {
 	if picture == nil || picture.Bits == nil || picture.W <= 0 || picture.H <= 0 {
 		return nil
 	}
 	w := picture.W
 	h := picture.H
 	pitch := (w + 3) &^ 3 // [03 §3.6]
-	bits := make([]byte, w*h)
+	out := dst
+	if out == nil {
+		out = &RadarSurface{}
+	}
+	bits := resizeRadarBits(out.Bits, w*h)
 	mask := uint16(1 << (localSlot & 0x1F)) // [03 §3.8] bit 1<<(player&0x1F)
 	for y := 0; y < h; y++ {
 		visY := 0
@@ -324,23 +347,24 @@ func BuildMapped(picture *RadarSurface, wordMask []uint16, byteGrid []uint8, map
 				bVal = byteGrid[visIdx]
 			}
 			src := picture.Bits[y*w+x]
-			var out byte
+			var value byte
 			// word→byte→remap→DCB gate order [03 §3.8].
 			if word&mask == 0 {
-				out = dcb // [03 §3.8] unexplored → configured fog fill
+				value = dcb // [03 §3.8] unexplored → configured fog fill
 			} else if bVal == 0 {
 				if len(guiRemap) == 256 {
-					out = guiRemap[src] // [03 §3.8] GUI remap
+					value = guiRemap[src] // [03 §3.8] GUI remap
 				} else {
-					out = src // no remap when nil [03 §3.8]
+					value = src // no remap when nil [03 §3.8]
 				}
 			} else {
-				out = src
+				value = src
 			}
-			bits[y*w+x] = out
+			bits[y*w+x] = value
 		}
 	}
-	return &RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
+	*out = RadarSurface{W: w, H: h, Pitch: pitch, Bits: bits}
+	return out
 }
 
 // minimapSelectedStatus is the unit status word's selected bit (bit 4), the
@@ -422,10 +446,23 @@ func MinimapBlipAdmitted(c MinimapContact, blink BlinkState) bool {
 }
 
 func rebuildFinalExact(mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
+	return rebuildFinalExactInto(nil, mapped, m, playW, playH, contacts, blink, blit, radarColor, jammerColor, ringColor)
+}
+
+// rebuildFinalExactInto composes FINAL over a caller-owned surface. FINAL is
+// wiped from MAPPED before any contact is drawn, so every byte of the reused
+// storage is overwritten by that copy and a retained surface produces exactly
+// the bytes a fresh one does; dst nil allocates as before.
+func rebuildFinalExactInto(dst, mapped *RadarSurface, m camera.Minimap, playW, playH int32, contacts []MinimapContact, blink BlinkState, blit MinimapContactBlitter, radarColor, jammerColor, ringColor byte) *RadarSurface {
 	if mapped == nil || mapped.W <= 0 || mapped.H <= 0 || len(mapped.Bits) < mapped.W*mapped.H {
 		return nil
 	}
-	final := &RadarSurface{W: mapped.W, H: mapped.H, Pitch: (mapped.W + 3) &^ 3, Bits: make([]byte, mapped.W*mapped.H)}
+	final := dst
+	if final == nil {
+		final = &RadarSurface{}
+	}
+	final.W, final.H, final.Pitch = mapped.W, mapped.H, (mapped.W+3)&^3
+	final.Bits = resizeRadarBits(final.Bits, mapped.W*mapped.H)
 	copy(final.Bits, mapped.Bits)
 	// Unit blips precede all circles, and commander art is the next layer.
 	for _, c := range contacts {

@@ -16,6 +16,7 @@ type Options struct {
 	BattleBenchmark    string
 	BenchmarkFactories bool
 	BenchmarkFrames    int
+	BenchmarkTPS       int
 	Root               string  // retail install root
 	Map                string  // map name without extension, e.g. "ashap plateau"
 	Seed               int64   // battle RNG seed for both streams; <0 = derive pair from clock
@@ -99,6 +100,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.BattleBenchmark, "battle-benchmark", "", "run the seeded live battle benchmark into a new output directory")
 	set.BoolVar(&opts.BenchmarkFactories, "benchmark-factories", true, "queue factory production in the battle benchmark")
 	set.IntVar(&opts.BenchmarkFrames, "benchmark-frames", 180, "measured battle benchmark frames after 60 warm-up draws")
+	set.IntVar(&opts.BenchmarkTPS, "benchmark-tps", 30, "battle benchmark draw rate in frames per second, one simulation step per draw: 30 (the retail cadence) or 60 (the enhanced presentation target)")
 	set.StringVar(&opts.ShotSize, "shot-size", "", "surface size \"WxH\" for --shot, one of the display modes (default 640x480)")
 	set.StringVar(&opts.ShotModal, "shot-modal", "", "open a battle modal before --shot captures: \"options\" (Tab), \"exit\" or \"confirm\"")
 	set.BoolVar(&opts.ShotSpace, "shot-space", false, "hold Space for --shot captures, so the bottom slide strip (Game Time / Total Units / Game Speed) is fully raised")
@@ -130,6 +132,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 		if opts.BenchmarkFrames < 1 || opts.BenchmarkFrames > 100000 {
 			return opts, fmt.Errorf("nanolathe: benchmark frames must be 1..100000")
+		}
+		if opts.BenchmarkTPS != 30 && opts.BenchmarkTPS != 60 {
+			return opts, fmt.Errorf("nanolathe: benchmark tps must be 30 or 60")
 		}
 		if opts.Map == "" {
 			opts.Map = "ashap plateau"

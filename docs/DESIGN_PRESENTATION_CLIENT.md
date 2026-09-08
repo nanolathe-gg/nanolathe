@@ -600,6 +600,13 @@ document carries them.
   a rebuild. A dirty frame resets affected subtrees from pristine model vertices
   and reapplies transforms ancestor-after-descendant. Unit position never enters
   piece math — it enters only at final screen placement `[03 §5.2]`.
+  `PieceView.DontCache` is the committed inverse of the render-piece cache bit,
+  and `UnitView.CacheRevision` is a copied, monotonic Go representation of the
+  script-driven cached-image invalidation. It is not a retail physical counter:
+  the VM advances it for the exact invalidating setters, restore and rebind.
+  `CacheValidityRevision` advances only for validity clears and full resets;
+  cache/shade image discards leave it unchanged, preserving the mobile no-key
+  direct-draw fallback. Frame publication consumes or clears neither revision `[03 R-COMP-01 §4]`.
 * **C14 Sound categories.** Retail identity is a 64-byte name and 24
   twelve-byte event rows indexed by slot, where slot 0 is an unused sentinel and
   1–23 are the events; a row holds a variant count and two parallel arrays of

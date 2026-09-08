@@ -138,8 +138,13 @@ type Client struct {
 	// surfaceArena owns minimap packet bytes until the frame list is reset.
 	// Separate capped sub-slices preserve multiple writes within one frame;
 	// retained lists copy their bytes through List.Clone.
-	surfaceArena    []byte
-	pointArena      []drawlist.Point
+	surfaceArena []byte
+	pointArena   []drawlist.Point
+	// effectDraws is the retained buffer each effect pass refills. The draw
+	// records are consumed inside DrawEffectViews and never recorded, so one
+	// buffer serves every strip and the fixed pool instead of allocating a list
+	// per pass (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
+	effectDraws     []presentationrender.EffectDraw
 	selectionChrome []selectionChrome
 	selectionDrag   SelectionDrag
 	// rendererTraceSink is nil for the normal presentation path. When enabled,

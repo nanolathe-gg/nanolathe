@@ -12,18 +12,29 @@ import (
 // Slots never overlap within that frame, including nested carrier composition.
 // Diagnostic helpers outside recording retain their independently owned results.
 type modelScratch struct {
-	states     [][]compiledmodel.PieceState
-	stateNext  int
-	names      map[string]string
-	draws      []*presentationrender.DrawScratch
-	drawNext   int
-	packets    []*packetScratch
-	packetNext int
-	active     bool
-	polys      []*polyScratch
-	polyNext   int
-	images     []*imageScratch
-	imageNext  int
+	states      [][]compiledmodel.PieceState
+	stateNext   int
+	names       map[string]string
+	draws       []*presentationrender.DrawScratch
+	drawNext    int
+	packets     []*packetScratch
+	packetNext  int
+	active      bool
+	polys       []*polyScratch
+	polyNext    int
+	images      []*imageScratch
+	imageNext   int
+	outlines    []*outlineScratch
+	outlineNext int
+}
+
+// outlineScratch is one subject's nanoframe outline: the ring list, the corner
+// arena its rings address, and the half-open corner spans used to point the
+// rings at the arena once it has stopped moving.
+type outlineScratch struct {
+	faces []drawlist.ModelFace
+	verts []drawlist.ModelVertex
+	spans []int32
 }
 type imageScratch struct {
 	target modelTarget
@@ -37,24 +48,56 @@ type polyScratch struct {
 	corner int
 }
 
+// resizeScratch rewinds a borrowed slot's storage to exactly n elements,
+// overshooting the request when it has to grow. A slot is reused by whichever
+// subject lands in it, so its size drifts from frame to frame; growing to
+// exactly the current need makes the next slightly larger subject reallocate
+// again, and the composition planes and vertex arenas are the largest per-frame
+// buffers the recorder keeps. The returned length is still exactly n, so no
+// caller can observe the extra capacity (docs/DESIGN_GPU_RENDERER.md §11.5
+// "CPU").
 func resizeScratch[T any](v []T, n int) []T {
 	if cap(v) < n {
-		return slices.Grow(v[:0], n)[:n]
+		return slices.Grow(v[:0], n+n/2)[:n]
 	}
 	return v[:n]
 }
 func (s *modelScratch) reset() {
-	s.polyNext, s.imageNext, s.packetNext, s.drawNext, s.stateNext = 0, 0, 0, 0, 0
+	s.polyNext, s.imageNext, s.packetNext, s.drawNext, s.stateNext, s.outlineNext = 0, 0, 0, 0, 0, 0
+	// Rewind, do not erase. Both face and polygon storage is fully rewritten
+	// before it is read again — a borrowed slot resizes and then assigns every
+	// element it hands out — so the only thing a blanket clear achieved was
+	// dropping the one pointer these records carry, a texture frame the loaded
+	// GAF owns for the life of the process. Erasing every used face and polygon
+	// of every subject each frame is real memory traffic bought for nothing
+	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU"). The lane and corner arrays that
+	// a partially written packet WOULD expose are still cleared at borrow time.
 	for _, p := range s.packets {
-		clear(p.g.Faces)
 		p.g = drawlist.ModelGeometry{Faces: p.g.Faces[:0]}
 	}
-	// Drop texture references in unused slots while retaining owned lane storage.
 	for _, p := range s.polys {
-		clear(p.polys)
 		p.polys = p.polys[:0]
 		p.corner = 0
 	}
+	for _, o := range s.outlines {
+		o.faces, o.verts, o.spans = o.faces[:0], o.verts[:0], o.spans[:0]
+	}
+}
+
+// borrowOutline hands out one subject's outline slot for the frame. Slots never
+// overlap within a frame, so a subject's rings stay valid until the next reset.
+func (c *Client) borrowOutline() *outlineScratch {
+	if c == nil || !c.modelScratch.active {
+		return &outlineScratch{}
+	}
+	s := &c.modelScratch
+	if s.outlineNext == len(s.outlines) {
+		s.outlines = append(s.outlines, &outlineScratch{})
+	}
+	o := s.outlines[s.outlineNext]
+	s.outlineNext++
+	o.faces, o.verts, o.spans = o.faces[:0], o.verts[:0], o.spans[:0]
+	return o
 }
 func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 	var p *polyScratch

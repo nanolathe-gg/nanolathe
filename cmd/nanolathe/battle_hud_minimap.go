@@ -144,9 +144,12 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// surface of its own and rasterizes nothing [03 §3.10] correction of
 	// 2026-08-29. FINAL is wiped from MAPPED and rebuilt from these records
 	// every tick, so no stale circle can survive a frame.
-	contacts := make([]render.MinimapContact, 0, len(cur.Radar.Contacts))
-	regularArt := make([]*formats.GAFFrame, 0, len(cur.Radar.Contacts))
-	commanderArt := make([]*formats.GAFFrame, 0, len(cur.Radar.Contacts))
+	// The three lists are refilled into the HUD's retained storage: they are
+	// read only by the rebuild below and never escape it
+	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
+	contacts := h.radarContacts[:0]
+	regularArt := h.radarRegularArt[:0]
+	commanderArt := h.radarCommanderArt[:0]
 	blink := h.radar.Blink()
 	for _, published := range cur.Radar.Contacts {
 		// The renderer's contact adapter owns the unit/commander/ring passes.
@@ -202,6 +205,8 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			}
 		}
 	}
+	// Keep whatever capacity the walk grew so the next frame refills in place.
+	h.radarContacts, h.radarRegularArt, h.radarCommanderArt = contacts, regularArt, commanderArt
 	playW, playH, ok := b.sess.PlayArea()
 	if !ok {
 		return nil
@@ -223,7 +228,12 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	if !returnFinal {
 		return nil
 	}
-	final := h.radar.Final()
+	// FINAL is copied into the HUD's own surface because the projectile and
+	// feature pass below draws over it; the service's FINAL must stay the
+	// contacts-only composite so a repeated presentation of one committed frame
+	// reproduces it exactly [03 §3.6]. The copy reuses the HUD's storage rather
+	// than cloning a fresh surface per frame.
+	final := h.radar.FinalInto(&h.radarFinal)
 	if final == nil {
 		return nil
 	}

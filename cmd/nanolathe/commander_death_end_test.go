@@ -91,13 +91,17 @@ func TestSkirmishCommanderDeathWidgetSaysGameEndsExactlyWhenItDoes(t *testing.T)
 	// The toggle is xor 1 and the label follows it in both directions.
 	g.setup.CommanderDeath = 1
 	g.activateSkirmishGadget("commanderdeath")
+	if g.setup.CommanderDeath != 1 {
+		t.Fatal("case-folded callback changed CommanderDeath")
+	}
+	g.activateSkirmishGadget("CommanderDeath")
 	if g.setup.CommanderDeath != 0 {
 		t.Fatalf("toggle from 1 gave %d, want 0", g.setup.CommanderDeath)
 	}
 	if got := gad.Labels[clampMenuStage(p.StatusOf("CommanderDeath"), len(gad.Labels))]; got != "Continues" {
 		t.Errorf("after toggling to rule 0 the widget shows %q, want \"Continues\"", got)
 	}
-	g.activateSkirmishGadget("commanderdeath")
+	g.activateSkirmishGadget("CommanderDeath")
 	if g.setup.CommanderDeath != 1 {
 		t.Fatalf("toggle from 0 gave %d, want 1", g.setup.CommanderDeath)
 	}

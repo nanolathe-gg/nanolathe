@@ -19,6 +19,10 @@ for directory in sys.argv[1:]:
         values = sorted(row[key] for row in rows)
         print(f"{key:12} mean {statistics.mean(values):8.3f}  median {statistics.median(values):8.3f}  "
               f"p95 {values[min(len(values)-1, int(len(values)*.95))]:8.3f}  max {values[-1]:8.3f} ms")
+    tps = data.get("tps") or 30
+    budget = 1000.0 / tps * 1.05
+    on_cadence = sum(row["Cadence"] <= budget for row in rows)
+    print(f"On cadence at {tps} Hz (<= {budget:.1f} ms): {on_cadence}/{len(rows)} frames ({100*on_cadence/len(rows):.0f}%)")
     print(f"Alloc: {data['alloc_bytes']/len(rows)/1e6:.3f} MB/frame, "
           f"{data['mallocs']/len(rows):.1f} objects/frame; GC {data['gc']}")
     for key in ("units", "projectiles", "effects", "builds", "nanoframes", "nanolathe_events", "shake"):

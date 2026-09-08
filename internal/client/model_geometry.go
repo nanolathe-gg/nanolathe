@@ -82,8 +82,18 @@ func (c *Client) configureModelGeometry(g *drawlist.ModelGeometry, draw *present
 // modelOutlineGeometry retains all valid rings, including primitives omitted by
 // body material dispatch. The executor draws their two row endpoints with the
 // subject key comparison, not a polygon border [03 R-COMP-01 §3].
+//
+// The ring list and its corners come from a borrowed scratch slot so a subject
+// costs no allocation per frame: one face slice and one vertex arena grow to
+// the frame's high-water mark and are rewound at the next reset. Corners are
+// appended to the arena first and the faces are pointed at their spans
+// afterwards, because an append that reallocates the arena would otherwise
+// leave earlier faces addressing the old backing array. A ring that names a
+// corner the piece does not have rewinds the arena and is dropped, exactly as
+// the abandoned face was before.
 func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX, originY int32, color uint8) []drawlist.ModelFace {
-	var faces []drawlist.ModelFace
+	s := c.borrowOutline()
+	faces, verts, spans := s.faces[:0], s.verts[:0], s.spans[:0]
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
 		if pi >= len(draw.Model.Pieces) {
 			continue
@@ -93,21 +103,33 @@ func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX
 			if draw.Model.Pieces[pi].Selection && pri == 0 || len(pr.VertexIndices) < 2 {
 				continue
 			}
-			face := drawlist.ModelFace{Color: color}
+			start := len(verts)
+			complete := true
 			for _, vi := range pr.VertexIndices {
 				if int(vi) >= len(piece.WorldVertices) {
-					face.Vertices = nil
+					complete = false
 					break
 				}
 				v := piece.WorldVertices[vi]
 				x, y, _ := modelLocalVertex(v, draw.WorldPos)
 				x, y = c.scaleModelLocal(x, y)
-				face.Vertices = append(face.Vertices, drawlist.ModelVertex{X: x + originX, Y: y + originY, Key: modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip)})
+				verts = append(verts, drawlist.ModelVertex{X: x + originX, Y: y + originY, Key: modelHeightKey(v[1].Sub(draw.WorldPos[1]), draw.DiggerClip)})
 			}
-			if len(face.Vertices) >= 2 {
-				faces = append(faces, face)
+			if !complete || len(verts)-start < 2 {
+				verts = verts[:start]
+				continue
 			}
+			faces = append(faces, drawlist.ModelFace{Color: color})
+			spans = append(spans, int32(start), int32(len(verts)))
 		}
+	}
+	s.faces, s.verts, s.spans = faces, verts, spans
+	if len(faces) == 0 {
+		return nil
+	}
+	for i := range faces {
+		lo, hi := spans[2*i], spans[2*i+1]
+		faces[i].Vertices = verts[lo:hi:hi]
 	}
 	return faces
 }
@@ -115,11 +137,22 @@ func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX
 // geometryForCommit preserves the recorded shadow/body separation. A staging
 // body is represented by its carrier and ordered child packets, never a CPU
 // composition image [03 R-REN-03A §4].
+//
+// The commit record is a value copy of the composed packet, not a deep clone.
+// A subject can be committed more than once — a staged child records its shadow
+// and its trace separately — and each command needs its own Shadow and
+// eligibility fields, but the faces, vertices, outline, reveal and children
+// underneath them are read-only and are already owned by the recorder's frame
+// scratch, which the other model call sites record directly. The recorded list
+// is same-frame use only and List.Clone deep-copies for a retained one, so
+// sharing here costs nothing and saves a full copy of every face and vertex of
+// every subject per frame (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU").
 func geometryForCommit(p pendingModelCommit) *drawlist.ModelGeometry {
 	if p.m.geometry == nil {
 		return nil
 	}
-	g := p.m.geometry.Clone()
+	g := new(drawlist.ModelGeometry)
+	*g = *p.m.geometry
 	if !p.shadow {
 		g.Shadow = nil
 	}

@@ -108,6 +108,19 @@ type retailBattleHUD struct {
 	radarCommanderGAF *formats.GAFEntry
 	radarFeatureGAF   *formats.GAFEntry
 
+	// rebuildRadar's working storage, retained for the life of the HUD. The
+	// contact list and the two blip-art lists are refilled from the committed
+	// radar payload every frame and consumed inside that rebuild, and radarFinal
+	// receives the FINAL copy the projectile/feature pass draws over. None of the
+	// four outlives the call that fills it, so retaining them removes four
+	// per-frame allocations of the whole radar payload
+	// (docs/DESIGN_GPU_RENDERER.md §11.5 "CPU"). The art entries point into the
+	// retained FX GAF, so a stale tail pins nothing the HUD does not already hold.
+	radarContacts     []render.MinimapContact
+	radarRegularArt   []*formats.GAFFrame
+	radarCommanderArt []*formats.GAFFrame
+	radarFinal        render.RadarSurface
+
 	// Retail's battle composer copies FINAL to the origin of the fixed 126-pixel
 	// radar canvas; aspect letterbox is inside that canvas [07 §6][07 §10].
 	minimapAnchor   hud.Rect

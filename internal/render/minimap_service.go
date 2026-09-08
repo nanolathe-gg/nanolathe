@@ -79,7 +79,27 @@ func cloneRadarSurface(src *RadarSurface) *RadarSurface {
 func (s *MinimapService) Picture() *RadarSurface { return cloneRadarSurface(s.picture) }
 
 // Final returns a copy of the composed radar surface the HUD blits [03 §3.8].
+// The copy is durable: a caller may retain it across rebuilds.
 func (s *MinimapService) Final() *RadarSurface { return cloneRadarSurface(s.final) }
+
+// FinalInto copies FINAL into a caller-owned surface and returns it. The HUD
+// draws the projectile and feature pass over its own copy every frame, so it
+// keeps one surface for the life of the battle instead of cloning FINAL per
+// frame; the bytes are the same ones Final returns, and the service's own FINAL
+// is not exposed. A nil FINAL leaves dst untouched and returns nil, matching
+// Final [03 §3.8].
+func (s *MinimapService) FinalInto(dst *RadarSurface) *RadarSurface {
+	if s == nil || s.final == nil {
+		return nil
+	}
+	if dst == nil {
+		return cloneRadarSurface(s.final)
+	}
+	dst.W, dst.H, dst.Pitch = s.final.W, s.final.H, s.final.Pitch
+	dst.Bits = resizeRadarBits(dst.Bits, len(s.final.Bits))
+	copy(dst.Bits, s.final.Bits)
+	return dst
+}
 
 // FinalIdentity and FinalRevision identify the current FINAL bytes for a
 // renderer cache. They do not expose mutable surface storage.
@@ -142,7 +162,10 @@ func (s *MinimapService) RebuildMappedVersion(word []uint16, current []uint8, so
 	if source != 0 && s.mapped != nil && s.mappedSource == source && s.mappedVersion == version {
 		return true
 	}
-	s.mapped = BuildMapped(s.picture, word, current, s.mapW, s.mapH, s.local, s.dcb, s.remap)
+	// MAPPED is recomposed over its own retained storage. Nothing outside the
+	// service holds it — FINAL copies it and the accessors clone — so reusing
+	// the buffer cannot be observed.
+	s.mapped = buildMappedInto(s.mapped, s.picture, word, current, s.mapW, s.mapH, s.local, s.dcb, s.remap)
 	s.dirty &^= MinimapDirtyMapped
 	s.dirty |= MinimapDirtyFinal
 	s.mappedSource, s.mappedVersion = source, version
@@ -179,7 +202,10 @@ func (s *MinimapService) RebuildFinalVersion(m camera.Minimap, playW, playH int3
 	// from a contact record's own authored distances, drawn in the contact walk
 	// [03 §3.10] correction of 2026-08-29 ("presentation drawn by the contacts
 	// pass"). There is no second circle list to reconcile against.
-	s.final = rebuildFinalExact(s.mapped, m, playW, playH, contacts, BlinkState{Phase: s.blinkPhase}, blit, radarColor, jammerColor, ringColor)
+	// FINAL is recomposed over its own retained storage: the wipe from MAPPED
+	// that opens the rebuild overwrites every byte, and callers only ever see a
+	// copy (Final, FinalInto), so no stale pixel and no aliased surface escapes.
+	s.final = rebuildFinalExactInto(s.final, s.mapped, m, playW, playH, contacts, BlinkState{Phase: s.blinkPhase}, blit, radarColor, jammerColor, ringColor)
 	s.dirty &^= MinimapDirtyFinal
 	s.finalInputVersion = version
 	s.finalRevision++

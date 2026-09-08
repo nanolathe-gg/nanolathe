@@ -564,12 +564,15 @@ func TestMinimapServiceReusesMappedRevisionAndRefreshesFinalRevision(t *testing.
 	if !s.RebuildMappedVersion(word, current, 1, 3) {
 		t.Fatal("first mapped build failed")
 	}
-	first := s.mapped
+	// MAPPED is recomposed over its own retained storage, so surface identity is
+	// no longer the signal that a rebuild ran; compare the composite. Clearing
+	// the explored word replaces the picture byte with the fog fill.
+	first := append([]byte(nil), s.mapped.Bits...)
 	word[0] = 0
-	if !s.RebuildMappedVersion(word, current, 1, 3) || s.mapped != first {
+	if !s.RebuildMappedVersion(word, current, 1, 3) || !bytes.Equal(s.mapped.Bits, first) {
 		t.Fatal("unchanged mapping revision rebuilt MAPPED")
 	}
-	if !s.RebuildMappedVersion(word, current, 1, 4) || s.mapped == first {
+	if !s.RebuildMappedVersion(word, current, 1, 4) || bytes.Equal(s.mapped.Bits, first) {
 		t.Fatal("new mapping revision did not rebuild MAPPED")
 	}
 	m := camera.Minimap{W: 1, H: 1}

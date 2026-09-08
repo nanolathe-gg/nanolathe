@@ -19,7 +19,10 @@ Each output directory must be new. Use `--root` for another retail install,
 180 measured draws, and `--benchmark-factories=false` for the earlier battle
 without factory orders. Assets are not embedded or committed. Run cases
 sequentially without concurrent builds, tests or other performance workloads.
-The visible window runs at 30 TPS with VSync and continues when unfocused.
+The visible window runs with VSync at `--benchmark-tps` draws per second (30, the
+retail cadence, by default; 60 is the enhanced presentation target) and
+continues when unfocused. One simulation step still runs per draw, so a 60 TPS
+run advances the battle twice as fast in wall time; compare runs at one rate.
 
 `frames.json` records scene version, seed, map, renderer, display options, runtime
 and build information, per-frame timings and feature census. `cpu.pprof`,
@@ -43,6 +46,15 @@ also matter. Camera origins and shake status are recorded with each census.
 - `Submit`: CPU time issuing GPU execution/upload and final draw commands.
   It is not a GPU completion timestamp; do not add it to cadence as GPU work.
 - `Cadence`: intervals measured after each simulation step, including pacing.
+  With VSync the cadence quantizes to whole display refreshes, so a run whose
+  CPU and GPU work fit the period sits at the floor (33.3 ms at 30, 16.7 ms at
+  60) and one that does not alternates between one and two refreshes. The
+  report's "on cadence" share is the fraction of frames at the floor; it is the
+  first figure to compare when the medians are at the floor already.
+- Modern is GPU-bound before it is CPU-bound: a 60 TPS run whose `Submit` is
+  well under the period and whose cadence still leaves the floor is waiting on
+  the device, and the executor's pass count (destination switches) is the cost
+  to cut, not fragment work.
 - Readback, PNG encoding and profile finalization are outside measured frame work.
   Profile/counter setup can affect the first measured cadence sample.
 

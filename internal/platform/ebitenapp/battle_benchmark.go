@@ -21,7 +21,11 @@ import (
 type BenchmarkOptions struct {
 	Directory, Renderer string
 	Frames              int
-	Metadata            map[string]any
+	// TPS is the draw rate; one simulation step still runs per draw. 30 is the
+	// retail cadence, 60 the enhanced presentation target (a cadence at 60
+	// is only reachable when CPU and GPU both finish inside 16.7 ms).
+	TPS      int
+	Metadata map[string]any
 }
 type benchmarkRow struct {
 	Frame                            int
@@ -85,7 +89,7 @@ func (g *battleBenchmark) finish() error {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	info, _ := debug.ReadBuildInfo()
-	report := map[string]any{"metadata": g.options.Metadata, "renderer": g.options.Renderer, "go_version": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "gomaxprocs": runtime.GOMAXPROCS(0), "build": info, "rows": g.rows, "alloc_bytes": mem.TotalAlloc - g.mem.TotalAlloc, "mallocs": mem.Mallocs - g.mem.Mallocs, "gc": mem.NumGC - g.mem.NumGC, "gc_pause_ns": mem.PauseTotalNs - g.mem.PauseTotalNs}
+	report := map[string]any{"tps": g.options.TPS, "metadata": g.options.Metadata, "renderer": g.options.Renderer, "go_version": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH, "gomaxprocs": runtime.GOMAXPROCS(0), "build": info, "rows": g.rows, "alloc_bytes": mem.TotalAlloc - g.mem.TotalAlloc, "mallocs": mem.Mallocs - g.mem.Mallocs, "gc": mem.NumGC - g.mem.NumGC, "gc_pause_ns": mem.PauseTotalNs - g.mem.PauseTotalNs}
 	if err := g.file("frames.json", func(f *os.File) error { return json.NewEncoder(f).Encode(report) }); err != nil {
 		return err
 	}
@@ -170,7 +174,11 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 	ebiten.SetRunnableOnUnfocused(true)
 	ebiten.SetWindowSize(1920, 1080)
 	ebiten.SetVsyncEnabled(true)
-	ebiten.SetTPS(30)
+	tps := options.TPS
+	if tps <= 0 {
+		tps = 30
+	}
+	ebiten.SetTPS(tps)
 	ebiten.SetScreenClearedEveryFrame(false)
 	if err := ebiten.RunGame(g); err != nil {
 		return err
