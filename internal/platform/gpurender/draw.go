@@ -26,7 +26,7 @@ import (
 // destination-reading LitRect/ShadeRect styles compile into the destination
 // batch in deststage.go [03 §4.3.1][03 R-COMP-02 §5].
 func (r *Renderer) Fill(f drawlist.Fill) {
-	if r == nil || r.offscreen == nil {
+	if r == nil || r.surfaces[0] == nil {
 		return
 	}
 	switch f.Style {
@@ -195,7 +195,7 @@ func (r *Renderer) drawFrameInclusive(rMinX, rMinY, rMaxX, rMaxY, clipMinX, clip
 // each point as a 1×1 quad; points off the framebuffer no-op, exactly as the
 // byte writer's per-point clip skips them [03 §5.4].
 func (r *Renderer) Line(l drawlist.Line) {
-	if r == nil || r.offscreen == nil {
+	if r == nil || r.surfaces[0] == nil {
 		return
 	}
 	bx0 := maxInt(minInt(int(l.X0), int(l.X1)), 0)
@@ -248,7 +248,7 @@ func (r *Renderer) Line(l drawlist.Line) {
 // matching the classic in-order write [03 §5.5]. The destination-reading PointLit
 // kind compiles into the destination batch in deststage.go.
 func (r *Renderer) Points(p drawlist.Points) {
-	if r == nil || r.offscreen == nil {
+	if r == nil || r.surfaces[0] == nil {
 		return
 	}
 	if p.Kind == drawlist.PointLit {

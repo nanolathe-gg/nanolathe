@@ -170,6 +170,8 @@ func (r *Renderer) modelPass(dst *ebiten.Image) {
 		a.passes++
 		a.lastDst = dst
 	}
+	// The frame-wide count in ModelStats.Passes sees the same switch.
+	r.beginPass(dst)
 }
 
 // modelStagePasses reports the destination switches the most recent frame's

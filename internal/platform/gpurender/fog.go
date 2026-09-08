@@ -14,18 +14,20 @@ import (
 // The fog composite for the modern executor (docs/DESIGN_GPU_RENDERER.md C-G7,
 // §11.2 "Fog as one pass").
 //
-// The recorded op list becomes two device draws instead of one per fog cell:
-//
-//  1. one copy of the pre-fog offscreen into destScratch over the fog region;
-//  2. one draw of that region through the fog pass shader, which reads the
-//     snapshot, a per-cell grid texture rebuilt this frame from the ops, the fog
-//     GAF atlas built once per family identity, and the GRAY TABLE.
+// The recorded op list becomes one device draw instead of one per fog cell: one
+// draw over the fog region through the fog pass shader, which reads the phase's
+// read surface, a per-cell grid texture rebuilt this frame from the ops, the fog
+// GAF atlas built once per family identity, and the GRAY TABLE.
 //
 // Fog is a destination-reading family — the gray fills and the plain gray fog
 // GAF remap the pixels already on the surface through the GRAY TABLE
-// [03 §3.3][R-RR16-A §1] — so it needs the pre-fog destination. Reading it from
-// a snapshot image while writing the offscreen keeps the pass free of any
-// read-after-write hazard (C-G4). Everything else the classic byte writers do
+// [03 §3.3][R-RR16-A §1] — so it needs the pre-fog destination. It is therefore
+// an ordinary destination-reading command of the scheduler, with its own shader
+// and the fog region as its rectangle: the phase rules place it after everything
+// already drawn under that region and before everything later that overwrites it,
+// and the phase's read surface is the pre-fog destination, free of any
+// read-after-write hazard (C-G4). It is no longer a barrier
+// (docs/DESIGN_GPU_RENDERER.md §11.5). Everything else the classic byte writers do
 // sequentially — the later cell that reads an earlier cell's fog write — the
 // shader reproduces by carrying a running index through the 2×2 block of cells
 // that can reach a pixel, in the op list's own row-major order.
@@ -77,8 +79,9 @@ type fogPass struct {
 	// when they compare equal [DESIGN_GPU_RENDERER.md §11.2].
 	gridSent []byte
 
-	// draws counts the device draws the most recent Fog command issued, so the
-	// per-frame device-call budget of §11.4 can be asserted.
+	// draws counts the device draws the most recent Fog command compiled, so the
+	// per-frame device-call budget of §11.4 can be asserted. Since §11.5 the fog
+	// composite is one scheduled draw with no snapshot copy of its own.
 	draws int
 }
 
@@ -106,13 +109,9 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		return
 	}
 	r.fog.draws = 0
-	if r.offscreen == nil || r.destScratch == nil {
+	if r.surfaces[0] == nil {
 		return
 	}
-	// Fog reads everything drawn so far, so it is a phase boundary: the compiled
-	// phases are submitted before the pass runs (docs/DESIGN_GPU_RENDERER.md
-	// §11.2 "Fog as one pass").
-	r.submitSchedule()
 	if len(fg.Ops) == 0 {
 		return
 	}
@@ -142,49 +141,35 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		return
 	}
 
-	// The pre-fog destination the gray operations read (C-G7).
-	r.snapshotRect(int(region.x0), int(region.y0), int(region.x1), int(region.y1))
-	r.fog.draws++
-
 	// A nil gray table means no operation samples source 3; bind the grid there
 	// so the shader's sampler still has an image behind it.
 	grayTable := r.tables.gray
 	if grayTable == nil {
 		grayTable = r.fog.grid
 	}
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendFogQuad(region, float32(fogParityOps(fg.Ops)))
-	// The pass writes every pixel of the region, unfogged ones with the
-	// snapshot value it read, so a copy is the correct blend (C-G4). The reused
-	// options value keeps the frame free of a per-draw allocation
-	// (§11.2 "Allocation policy").
-	r.sceneOpts.Blend = ebiten.BlendCopy
-	r.sceneOpts.Images = [4]*ebiten.Image{r.destScratch, r.fog.grid, r.fog.atlas, grayTable}
-	r.offscreen.DrawTrianglesShader(r.verts, r.idx, r.fog.shader, &r.sceneOpts)
-	r.sceneOpts.Images = [4]*ebiten.Image{}
-	r.fog.draws++
-	r.frameDraws++
-}
-
-// appendFogQuad appends the fog pass quad. The lattice origin and the checker
-// parity ride the vertex custom attributes rather than a uniform map, so a
-// steady-state frame builds no per-draw uniform (§11.2 "Allocation policy").
-// All four vertices carry the same values, so the interpolated attribute is
-// constant across the region. Source coordinates equal destination coordinates,
-// so the snapshot is sampled 1:1 under each fragment.
-func (r *Renderer) appendFogQuad(region fogRegion, parity float32) {
+	// Source slot 0 is the phase's read surface, left unbound here and filled at
+	// submission (§11.5). The pass writes every pixel of the region, unfogged
+	// ones with the value it read there, and always returns an opaque fragment,
+	// so the batch's source-over blend stores the index unchanged — the copy the
+	// pass used when it drew on its own (C-G4).
+	imgs := [4]*ebiten.Image{1: r.fog.grid, 2: r.fog.atlas, 3: grayTable}
+	if !r.sched.beginShader(schedDest,
+		int(region.x0), int(region.y0), int(region.x1), int(region.y1),
+		imgs, r.fog.shader) {
+		return
+	}
+	// The lattice origin and the checker parity ride the vertex custom attributes
+	// rather than a uniform map, so a steady-state frame builds no per-draw
+	// uniform (§11.2 "Allocation policy"). All four vertices carry the same
+	// values, so the interpolated attribute is constant across the region. Source
+	// coordinates equal destination coordinates, so the read surface is sampled
+	// 1:1 under each fragment.
 	x0, y0 := float32(region.x0), float32(region.y0)
 	x1, y1 := float32(region.x1), float32(region.y1)
-	ox, oy := float32(region.originX), float32(region.originY)
-	base := uint16(len(r.verts))
-	r.verts = append(r.verts,
-		ebiten.Vertex{DstX: x0, DstY: y0, SrcX: x0, SrcY: y0, Custom0: ox, Custom1: oy, Custom2: parity},
-		ebiten.Vertex{DstX: x1, DstY: y0, SrcX: x1, SrcY: y0, Custom0: ox, Custom1: oy, Custom2: parity},
-		ebiten.Vertex{DstX: x0, DstY: y1, SrcX: x0, SrcY: y1, Custom0: ox, Custom1: oy, Custom2: parity},
-		ebiten.Vertex{DstX: x1, DstY: y1, SrcX: x1, SrcY: y1, Custom0: ox, Custom1: oy, Custom2: parity},
-	)
-	r.idx = append(r.idx, base, base+1, base+2, base+1, base+2, base+3)
+	r.sched.quad(schedDest, x0, y0, x1, y1, x0, y0, x1, y1,
+		[4]float32{},
+		[4]float32{float32(region.originX), float32(region.originY), float32(fogParityOps(fg.Ops)), 0})
+	r.fog.draws++
 }
 
 // fogOpRect returns one op's rebased screen rectangle exactly as

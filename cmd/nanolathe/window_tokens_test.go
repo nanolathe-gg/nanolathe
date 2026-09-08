@@ -3,10 +3,13 @@ package main
 import (
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/vfs"
 	"testing"
 )
 
@@ -35,7 +38,6 @@ func TestBattleWindowTransitionsFlushOnlyOnOpen(t *testing.T) {
 		{"options", b.openBattleMenu, ui.BattleModalOptions},
 		{"exit", func() { b.activateBattleMenuButton("EXIT", cl) }, ui.BattleModalExit},
 		{"confirmation", func() { b.activateBattleMenuButton("MAINMENU", cl) }, ui.BattleModalConfirmMain},
-		{"cancel to options", func() { b.activateBattleMenuButton("CHOICE2", cl) }, ui.BattleModalOptions},
 	} {
 		queuedWindowTail(cl)
 		step.open()
@@ -43,6 +45,12 @@ func TestBattleWindowTransitionsFlushOnlyOnOpen(t *testing.T) {
 			t.Fatalf("%s: modal=%v pending=%d", step.name, b.battleState().Modal(), cl.Input().PendingTokens())
 		}
 	}
+	queuedWindowTail(cl)
+	b.activateBattleMenuButton("CHOICE2", cl)
+	if b.battleState().Modal() != ui.BattleModalOptions || cl.Input().PendingTokens() != 2 {
+		t.Fatal("closing confirmation discarded tokens for surviving options")
+	}
+	cl.Input().DrainTokens()
 	queuedWindowTail(cl)
 	b.openBattleMenu()
 	if cl.Input().PendingTokens() != 2 {
@@ -115,5 +123,42 @@ func TestRetailChildWindowOpenFlushesQueuedTail(t *testing.T) {
 	b.openUnitInfoScreen()
 	if cl.Input().PendingTokens() != 2 {
 		t.Fatal("refused information open discarded tokens")
+	}
+}
+
+func TestCommandWindowOpenFlushesButCachedLookupPreservesTokens(t *testing.T) {
+	cl := windowTokenClient(t)
+	w := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}}}
+	h := &retailBattleHUD{fs: vfs.New(), windows: map[string]*gui.Window{"gen": w}}
+	b := &battleSession{cl: cl}
+	f := &frame.Frame{}
+	f.Selection.Handles = []pool.Handle{1}
+	queuedWindowTail(cl)
+	if got, _, err := h.windowForRequired(b, f); err != nil || got != w {
+		t.Fatal("command window did not open")
+	}
+	if cl.Input().PendingTokens() != 0 {
+		t.Fatal("command open retained old tokens")
+	}
+	queuedWindowTail(cl)
+	h.windowForRequired(b, f)
+	if cl.Input().PendingTokens() != 2 {
+		t.Fatal("cached command lookup discarded fresh tokens")
+	}
+	f.Selection.Handles = nil
+	h.windowForRequired(b, f)
+	if cl.Input().PendingTokens() != 2 {
+		t.Fatal("command close discarded tokens")
+	}
+	f.Selection.Handles = []pool.Handle{2}
+	h.windowForRequired(b, f)
+	if cl.Input().PendingTokens() != 0 {
+		t.Fatal("reopening cached command window retained old tokens")
+	}
+	queuedWindowTail(cl)
+	f.Selection.Handles = []pool.Handle{3}
+	h.windowForRequired(b, f)
+	if cl.Input().PendingTokens() != 0 {
+		t.Fatal("selection change retained old command-window tokens")
 	}
 }

@@ -26,11 +26,9 @@ func (p *Panel) serviceKeyboardToken(token input.Token, frame WidgetFrame, hooks
 	case input.KeySpace:
 		return p.keyboardDefault(false, hooks, result)
 	case input.KeyLeft:
-		p.keyboardHorizontal(-1, hooks)
-		return true
+		return p.keyboardHorizontal(-1, hooks)
 	case input.KeyRight:
-		p.keyboardHorizontal(1, hooks)
-		return true
+		return p.keyboardHorizontal(1, hooks)
 	case input.KeyUp:
 		p.keyboardList(-1, hooks)
 		return true
@@ -46,7 +44,7 @@ func (p *Panel) serviceKeyboardToken(token input.Token, frame WidgetFrame, hooks
 // accelerator can claim a token which a peek-mode battle child otherwise
 // leaves for battle hotkeys [07 R-WGT-01 §§1-3,7].
 func (p *Panel) keyboardQuickKeyAt(index int, token input.Token, alt bool, result *ServiceResult) bool {
-	if p == nil || p.Window == nil || token.Kind != input.TokenText {
+	if p == nil || p.Window == nil {
 		return false
 	}
 	capture := p.capture
@@ -63,7 +61,7 @@ func (p *Panel) keyboardQuickKeyAt(index int, token input.Token, alt bool, resul
 		return false
 	}
 	gadget := p.Window.Gadgets[index]
-	if !matrixQuickKeyMatches(token.Rune, gadget.QuickKey) {
+	if !matrixQuickKeyMatchesToken(token, gadget.QuickKey) {
 		return false
 	}
 	action := p.ButtonQuickKeyAction(index, capture, alt)
@@ -151,6 +149,60 @@ func matrixQuickKeyMatches(r rune, quick byte) bool {
 	return byte(r) == quick
 }
 
+// matrixQuickKeyMatchesToken compares an authored byte key with the input
+// token's normalized retail byte. Character tokens carry their byte directly;
+// edit keys use the established control and special-key token map [07 §2].
+func matrixQuickKeyMatchesToken(token input.Token, quick byte) bool {
+	if token.Kind == input.TokenText {
+		return matrixQuickKeyMatches(token.Rune, quick)
+	}
+	if token.Kind != input.TokenEdit {
+		return false
+	}
+	value, ok := editTokenByte(token.Key)
+	return ok && matrixQuickKeyMatches(rune(value), quick)
+}
+
+func editTokenByte(key input.Key) (byte, bool) {
+	switch key {
+	case input.KeyBackspace:
+		return '\b', true
+	case input.KeyTab:
+		return '\t', true
+	case input.KeyEnter:
+		return '\r', true
+	case input.KeyEscape:
+		return '\x1b', true
+	case input.KeyPause:
+		return 0xf8, true
+	case input.KeyPrior:
+		return 0xf2, true
+	case input.KeyNext:
+		return 0xf3, true
+	case input.KeyEnd:
+		return 0xf1, true
+	case input.KeyHome:
+		return 0xf0, true
+	case input.KeyLeft:
+		return 0xf4, true
+	case input.KeyUp:
+		return 0xf5, true
+	case input.KeyRight:
+		return 0xf6, true
+	case input.KeyDown:
+		return 0xf7, true
+	case input.KeyInsert:
+		return 0xee, true
+	case input.KeyDelete:
+		return 0xef, true
+	default:
+		if key >= input.KeyF1 && key <= input.KeyF12 {
+			return 0xe2 + byte(key-input.KeyF1), true
+		}
+		return 0, false
+	}
+}
+
 func (p *Panel) keyboardDefault(enter bool, hooks WidgetHooks, result *ServiceResult) bool {
 	action, usedDefault := p.defaultKeyAction(enter)
 	if action.Kind != ActionActivate {
@@ -187,7 +239,7 @@ func (p *Panel) keyboardEscape(result *ServiceResult) bool {
 
 func (p *Panel) keyboardHorizontal(delta int, hooks WidgetHooks) bool {
 	if p == nil || p.Window == nil || p.focus < 0 || p.focus >= len(p.Window.Gadgets) {
-		return false
+		return true
 	}
 	g := p.Window.Gadgets[p.focus]
 	if g.Kind == gui.KindTextBox {
@@ -195,14 +247,14 @@ func (p *Panel) keyboardHorizontal(delta int, hooks WidgetHooks) bool {
 	}
 	if g.Kind == gui.KindScrollBar && g.Rect.W > g.Rect.H && p.ActiveAt(p.focus) && g.GrayedOut == 0 && g.Attribs&0x10 == 0 {
 		p.setKnob(p.focus, p.knob[p.focus]+delta, hooks)
-		return false
+		return true
 	}
 	if delta < 0 {
 		p.MoveFocus(FocusBackward)
 	} else {
 		p.MoveFocus(FocusForward)
 	}
-	return false
+	return true
 }
 
 func (p *Panel) keyboardList(delta int, hooks WidgetHooks) bool {

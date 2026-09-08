@@ -27,7 +27,8 @@ import (
 
 // windowForRequired returns a selected authored page construction error to
 // every presentation and input caller [07 §6][07 §9].
-func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (*gui.Window, *formats.GAF, error) {
+func (h *retailBattleHUD) windowForRequired(b *battleSession, f *frame.Frame) (selected *gui.Window, art *formats.GAF, failure error) {
+	defer func() { h.commandWindowInput.open(b, f, selected) }()
 	// Cache resolved GUI/model once instead of reparsing on draw/click [ON-05 1]
 	// Name selection is data-driven with paging: builder's page bits select guis/<unit><page>.gui [R-P0-03][07 §9] C10
 	name := ""

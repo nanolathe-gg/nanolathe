@@ -852,19 +852,23 @@ into the snapshot, (3) one draw of its destination-reading batch. The rules:
   not split a phase. Both tests cost one grid lookup per cell of the rectangle
   and allocate nothing after warm-up.
 
-Two relaxations of the rectangle test are exact, not heuristic, and both were
-worth about half the frame's phases on the battle benchmark:
+One relaxation of the rectangle test is exact, not heuristic: a lit point batch
+tags the cell of each visible point rather than the cells of its bounding
+rectangle, and two points conflict only when they write the same pixel; the
+phase keeps the pixel set that decides it. Any other command sharing a cell with
+a point still opens the next phase.
 
-* A lit point batch tags the cell of each visible point rather than the cells of
-  its bounding rectangle, and two points conflict only when they write the same
-  pixel; the phase keeps the pixel set that decides it. Any other command sharing
-  a cell with a point still opens the next phase.
-* A model body commit may join the phase of its own shadow commit. The shadow
-  pass writes — and reads — only pixels its own body plane leaves uncovered
-  [03 R-REN-03D §4–§5], and the body commit writes only pixels that plane
-  covers, so the two pixel sets are disjoint and their order cannot matter. The
-  exemption names that one command; a composed attached-unit group, whose commit
-  carries the children's pixels too, does not claim it.
+A second relaxation was claimed here and is retracted: that a model body commit
+may join the phase of its own shadow commit because the shadow writes only
+pixels the body plane leaves uncovered [03 R-REN-03D §4–§5] and the body only
+pixels it covers. Measured against the battle capture the two pixel sets are not
+exactly complementary — a column of the silhouette at the body's edge belongs to
+both — and drawing the body first drops the shadow there. The sequential
+scheduler never exercised the exemption (a body commit almost always overlapped
+some other destination read of its shadow's phase), so removing it changes no
+pixel of that executor; critical-path placement exercises it constantly. The
+shadow commit is an ordinary destination read and the body commit that follows
+it takes the next phase [03 R-REN-03D §4].
 
 This is C-G3's disjoint-run rule generalised across families. Within one batch,
 vertex order is record order, and the device rasterizes primitives of one draw in
@@ -1031,6 +1035,27 @@ slot passes, the fog pass and the expansion. The doubled opaque fill (terrain,
 sprites and body commits, a few million pixels) is cheap on a tiled device and is
 accepted.
 
+*Status.* Critical-path placement is landed. The two-surface alternation is
+not: implemented as written, it composes a battle frame whose model shadow
+commits lose about 500 of 2,073,600 pixels (the pre-shadow value remains), and
+the loss survives every variation tried — copying the full surface instead of
+the rectangle, either copy blend, no run merging, fog as a barrier, an exact
+grid-free placement — while the same placement over the snapshot submission is
+byte-identical, as is drawing every opaque batch into both surfaces under that
+submission. Why the alternation itself changes those pixels is unexplained;
+the executor keeps the snapshot copy per phase (`TODO(H1)` at the submit site)
+until it is, and the phase count alone still more than halves the passes.
+
+Measured after H1–H3 on the battle benchmark, 180 frames: phases 42 per frame
+median (against 70 before placement; the retracted exemption costs some of the
+estimated 31), device destination switches 104 including the model stage's 6
+(against about 195), modern allocation 1.9 MB and 24k objects per frame
+(against 3.9 MB and 42k), modern Submit 7.3 ms (against 7.8) and Record 4.8
+ms. At 60 TPS modern's cadence median is about 20–23 ms with 2–12% of frames on
+the 16.7 ms floor (classic: 17.6 ms, 45%); at 30 TPS both are on the floor.
+The device time still tracks the pass count, so the remaining lever is the
+two-surface alternation above, or fewer phases.
+
 **Model slot passes.** The slot stage today alternates its destinations per
 page: two clears, the key faces into the key plane, the colour faces into the
 body plane, reveal, the outline keys back into the key plane, the outline
@@ -1084,9 +1109,9 @@ draws per frame, submission, cadence and allocations in the merge commit.
 | Unit | Scope | Files owned | Gate |
 |---|---|---|---|
 | H0 benchmark | `--benchmark-tps`, on-cadence share in the report | `cmd/nanolathe/flags.go`, `cmd/nanolathe/battle_benchmark.go`, `internal/platform/ebitenapp/battle_benchmark.go`, `tools/battle-bench-report`, `docs/BATTLE_BENCHMARK.md` | landed (`a4fb00cd`) |
-| H1 scheduler | critical-path placement, one pass per phase, `Phases`/`Passes` stats, fog and clear as phases, retained uint32 index buffers | `schedule.go`, `deststage.go`, `renderer.go`, `fog.go`, `draw.go`, `sprites.go`, `terrain.go`, `text.go`, `shaders.go`, `atlas.go`, `models.go` (commit and shadow call sites), their tests | M1–M8 modern byte-identical to the previous revision's modern; fog, tinted-overlap and carrier fixtures; phases about 31 and phase passes equal to phases on the benchmark; 60 TPS on-cadence share reported |
-| H2 model stage | stacked pages, passes ordered by destination, vertices emitted once per page for key and colour, scratch arena without per-frame clearing, uint32 indices, recyclable sub-images | `model_slots.go`, `model_prepare.go`, `model_quads.go`, `model_scratch.go`, `model_atlas.go`, `model_shaders.go`, their tests | model device fixtures; ARMSOLAR and carrier captures; model stage passes ≤ 8 and independent of page count; executor allocations reported |
-| H3 recorder | retained buffers in the recorder and HUD: outline geometry, composition scratch, effect draws, minimap surfaces | `internal/client/model_geometry.go`, `internal/client/model_scratch.go`, `internal/model/model.go` (composition scratch only), `internal/render/effect_view.go`, `internal/render/minimap*.go`, `cmd/nanolathe/battle_hud_minimap.go`, their tests | M1–M8 classic byte-identical; classic and modern battle captures identical to the previous revision's; recorder objects per frame reported before and after |
+| H1 scheduler | critical-path placement (landed), one pass per phase (not landed, see §11.5 status), `Phases`/`Passes` stats, fog and clear as phases, retained uint32 index buffers | `schedule.go`, `deststage.go`, `renderer.go`, `fog.go`, `draw.go`, `sprites.go`, `terrain.go`, `text.go`, `shaders.go`, `atlas.go`, `models.go` (commit and shadow call sites), their tests | M1–M8 modern byte-identical to the previous revision's modern; fog, tinted-overlap and carrier fixtures; phases about 31 and phase passes equal to phases on the benchmark; 60 TPS on-cadence share reported |
+| H2 model stage (landed) | stacked pages, passes ordered by destination, vertices emitted once per page for key and colour, scratch arena without per-frame clearing, uint32 indices, recyclable sub-images | `model_slots.go`, `model_prepare.go`, `model_quads.go`, `model_scratch.go`, `model_atlas.go`, `model_shaders.go`, their tests | model device fixtures; ARMSOLAR and carrier captures; model stage passes ≤ 8 and independent of page count; executor allocations reported |
+| H3 recorder (landed) | retained buffers in the recorder and HUD: outline geometry, composition scratch, effect draws, minimap surfaces | `internal/client/model_geometry.go`, `internal/client/model_scratch.go`, `internal/model/model.go` (composition scratch only), `internal/render/effect_view.go`, `internal/render/minimap*.go`, `cmd/nanolathe/battle_hud_minimap.go`, their tests | M1–M8 classic byte-identical; classic and modern battle captures identical to the previous revision's; recorder objects per frame reported before and after |
 
 H1, H2 and H3 are independent and run in parallel; H1 owns `models.go` and H2
 must report, not make, any change it needs there. After each merge the

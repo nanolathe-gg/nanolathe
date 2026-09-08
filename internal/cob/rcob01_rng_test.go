@@ -4,7 +4,7 @@ package cob
 // dispatched opcodes consume draws, both from the simulation stream —
 // `random` (0 or 1 draws; a bound below 2 consumes nothing and yields the low
 // value unchanged) and `explode` (0 or 6 draws bounded 3000, 3000, 3000, 40,
-// 10, 40 with the bound-10 draw dead; zero draws under bitmap-only). No other
+// 10, 40 for angular rates then X/upward/Z velocity; zero draws under bitmap-only). No other
 // opcode may consume either stream, and the CRT stream is never touched from
 // opcode execution.
 //
@@ -72,8 +72,7 @@ func TestRandomDrawCensus(t *testing.T) {
 
 func TestExplodeDrawCensus(t *testing.T) {
 	// Physical branch: six draws in fixed order bounded 3000, 3000, 3000, 40,
-	// 10, 40 — the fifth (bound 10) is dead, its stored result overwritten by
-	// the sixth, and the dead draw is still made [04 §4.5][R-COB-01 §2].
+	// 10, 40 for angular rates then X/upward/Z velocity [04 R-COB-04 §1].
 	// Authored explode flags per [fmt cob] "Explosion type flags":
 	// FALL|SMOKE|FIRE|EXPLODE_ON_HIT without BITMAPONLY.
 	const physicalFlags = 0x1E

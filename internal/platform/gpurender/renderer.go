@@ -11,18 +11,19 @@ import (
 )
 
 // Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3,
-// §11.2). It owns the palette table atlas, the scene atlas, the indexed
-// offscreen the frame composes into (index in the red channel), the expanded RGBA
-// surface presented at the end, and the compiled passes. It implements
-// drawlist.Sink, so Execute replays a recorded List straight through it. Every
-// device resource lives here, never on the client [I6].
+// §11.2, §11.5). It owns the palette table atlas, the scene atlas, the two
+// indexed surfaces the frame's phases alternate between (index in the red
+// channel), the expanded RGBA surface presented at the end, and the compiled
+// passes. It implements drawlist.Sink, so Execute replays a recorded List
+// straight through it. Every device resource lives here, never on the client [I6].
 //
 // The Sink methods compile rather than draw: each appends its command's clipped
 // rectangle, class and vertices to the phase scheduler (schedule.go), and Execute
-// submits the phases after Replay returns. A barrier — the fog pass, a
-// carrier/child group, a model subject the slot atlas could not fit, the clear
-// and the expansion — submits everything pending first, so those keep their
-// places in record order (C-G3).
+// submits the phases after Replay returns. A barrier — a carrier/child group, a
+// model subject the slot atlas could not fit, the clear and the expansion —
+// submits everything pending first, so those keep their places in record order
+// (C-G3). The fog composite is no longer one of them: it compiles as an ordinary
+// destination-reading command over the visible fog region.
 type Renderer struct {
 	modelPrep modelPrepScratch
 	tables    tables
@@ -45,17 +46,15 @@ type Renderer struct {
 	modelChild        *ebiten.Shader
 	modelResolve      *ebiten.Shader
 
-	// offscreen is the indexed frame surface, RGBA8 with the palette index in the
-	// red channel (C-G4). output is the expanded RGBA surface Execute returns.
-	offscreen *ebiten.Image
-	output    *ebiten.Image
-	// destScratch is the phase snapshot: before a phase's destination-reading
-	// batch writes the offscreen, the union rectangle of that batch is copied
-	// here, and the pass reads it while writing the offscreen — so a
-	// destination-reading write never samples a pixel the same batch changed
-	// (§11.2 "The scheduler", C-G7). It is full-surface and aligned 1:1 with the
-	// offscreen, recreated when the frame size changes.
-	destScratch *ebiten.Image
+	// surfaces[0] is the indexed frame surface the whole composite is drawn into,
+	// RGBA8 with the palette index in the red channel (C-G4). surfaces[1] is the
+	// phase read surface: before a phase's destination-reading batch writes the
+	// composed surface, the union rectangle of that batch is copied here, and the
+	// batch reads it while writing the composite — so a destination-reading write
+	// never samples a pixel the same batch changed. output is the expanded RGBA
+	// surface Execute returns.
+	surfaces [2]*ebiten.Image
+	output   *ebiten.Image
 	// placeholder backs an image slot no op in a run requested, for the case
 	// where no palette (and so no table atlas) has been installed.
 	placeholder *ebiten.Image
@@ -95,8 +94,11 @@ type Renderer struct {
 	// so a steady-state frame allocates no options and no uniform map
 	// (§11.2 "Allocation policy").
 	sceneOpts ebiten.DrawTrianglesShaderOptions
-	// snapshotOpt is the reused options value of the phase snapshot copy.
-	snapshotOpt ebiten.DrawImageOptions
+	// copyVerts and copyIdx are the one quad every forward copy between the two
+	// surfaces draws, kept as fixed arrays so a pass allocates no geometry and no
+	// sub-image (§11.5).
+	copyVerts [4]ebiten.Vertex
+	copyIdx   [6]uint32
 
 	// surfaceDynamic serves zero-identity commands. surfaceCache is a bounded
 	// presentation cache for durable Surface identities; replay order never
@@ -110,9 +112,12 @@ type Renderer struct {
 	// scratch (schedule.go).
 	sched scheduler
 
-	// frameDraws counts device draws issued since the last Execute began. It is
-	// diagnostic only.
+	// frameDraws counts device draws issued since the last Execute began, and
+	// lastDest the destination of the most recent device call this package
+	// instruments, which is how ModelStats.Passes counts destination switches.
+	// Both are diagnostic only.
 	frameDraws int
+	lastDest   *ebiten.Image
 
 	// verts and idx are the geometry scratch the fog pass, the expansion and the
 	// model rasterization passes share; the batched 2D families use the
@@ -166,6 +171,7 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 		tables:      uploadTables(pal),
 		tileAtlases: make(map[*world.Terrain]*tileAtlas),
 		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
+		copyIdx:     [6]uint32{0, 1, 2, 1, 2, 3},
 	}
 	r.scene.frames = make(map[*formats.GAFFrame]sceneEntry)
 	r.scene.pcx = make(map[*formats.PCX]sceneEntry)
@@ -201,18 +207,18 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	return r, firstErr
 }
 
-// ensureSize allocates or reallocates the indexed offscreen and the expanded
+// ensureSize allocates or reallocates the two indexed surfaces and the expanded
 // output when the frame size changes.
 func (r *Renderer) ensureSize(w, h int) {
 	if w <= 0 || h <= 0 {
 		return
 	}
-	if r.offscreen != nil && r.w == w && r.h == h {
+	if r.surfaces[0] != nil && r.w == w && r.h == h {
 		return
 	}
-	r.offscreen = ebiten.NewImage(w, h)
+	r.surfaces[0] = ebiten.NewImage(w, h)
+	r.surfaces[1] = ebiten.NewImage(w, h)
 	r.output = ebiten.NewImage(w, h)
-	r.destScratch = ebiten.NewImage(w, h)
 	r.w, r.h = w, h
 	r.sched.resetFrame(w, h)
 }
@@ -230,11 +236,12 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 		return nil
 	}
 	r.ensureSize(w, h)
-	if r.offscreen == nil {
+	if r.surfaces[0] == nil {
 		return nil
 	}
 	r.modelStats = ModelStats{UnsupportedFace: -1}
 	r.frameDraws = 0
+	r.lastDest = nil
 	r.sched.resetFrame(r.w, r.h)
 	r.modelPrep.reset()
 	defer r.modelPrep.reset()
@@ -261,31 +268,40 @@ func (r *Renderer) DeviceDraws() int {
 // opaque alpha, so premultiplied sampling recovers red exactly (C-G4).
 var index0Color = color.RGBA{R: 0, G: 0, B: 0, A: 255}
 
-// Clear fills the indexed offscreen with palette index 0 — the first command of
+// Clear fills the indexed surface with palette index 0 — the first command of
 // every committed frame (C-G1). Index 0 rides the red channel; alpha is opaque so
-// the stored red survives premultiplication and decodes back to 0 (C-G4). It is a
-// barrier: anything already compiled is submitted first, so the clear keeps its
-// place in record order.
+// the stored red survives premultiplication and decodes back to 0 (C-G4).
+//
+// It is a barrier that opens a segment rather than a device call: the clear
+// compiles as an opaque full-surface fill at the head of the new segment's first
+// phase, so it joins the batch the phase draws first instead of costing a device
+// call of its own (docs/DESIGN_GPU_RENDERER.md §11.5).
 func (r *Renderer) Clear() {
-	if r.offscreen == nil {
+	if r.surfaces[0] == nil {
 		return
 	}
 	r.submitSchedule()
-	r.offscreen.Fill(index0Color)
-	r.frameDraws++
+	if r.scene2D == nil {
+		return
+	}
+	if !r.sched.begin(schedOpaque, 0, 0, r.w, r.h, [4]*ebiten.Image{}) {
+		return
+	}
+	r.sched.quad(schedOpaque, 0, 0, float32(r.w), float32(r.h), 0, 0, 0, 0,
+		[4]float32{0, 0, 0, 0}, [4]float32{0, 0, 0, sceneOpSolid})
 }
 
-// Expand runs the index→RGBA expansion pass: the indexed offscreen through
-// PALETTE.PAL into the output surface, the single colour pass of the composite
-// (docs/DESIGN_GPU_RENDERER.md C-G8). It is a barrier — every compiled phase is
-// submitted before the surface is read.
+// Expand runs the index→RGBA expansion pass: the composed indexed surface
+// through PALETTE.PAL into the output surface, the single colour pass of the
+// composite (docs/DESIGN_GPU_RENDERER.md C-G8). It is a barrier — every compiled
+// phase is submitted before the surface is read.
 //
-// The quad maps the output 1:1 to the offscreen, so each output pixel samples its
-// own offscreen texel with nearest filtering (C-G4). BlendCopy overwrites the
+// The quad maps the output 1:1 to the indexed surface, so each output pixel
+// samples its own texel with nearest filtering (C-G4). BlendCopy overwrites the
 // output outright — no blend arithmetic on the result (C-G4).
 func (r *Renderer) Expand() {
 	r.submitSchedule()
-	if r.expand == nil || r.offscreen == nil || r.output == nil || r.tables.atlas == nil {
+	if r.expand == nil || r.surfaces[0] == nil || r.output == nil || r.tables.atlas == nil {
 		// Without a compiled shader or an installed palette there is nothing to
 		// expand; leave the output as-is rather than guessing a colour (I9).
 		return
@@ -295,10 +311,11 @@ func (r *Renderer) Expand() {
 	r.idx = r.idx[:0]
 	r.appendTexQuad(0, 0, fw, fh, 0, 0, fw, fh)
 	r.sceneOpts.Blend = ebiten.BlendCopy
-	r.sceneOpts.Images[0] = r.offscreen // the indexed frame, index in red
+	r.sceneOpts.Images[0] = r.surfaces[0] // the indexed frame, index in red
 	r.sceneOpts.Images[1] = r.tables.atlas
 	r.sceneOpts.Images[2] = nil
 	r.sceneOpts.Images[3] = nil
+	r.beginPass(r.output)
 	r.output.DrawTrianglesShader(r.verts, r.idx, r.expand, &r.sceneOpts)
 	r.sceneOpts.Images[1] = nil
 	r.frameDraws++

@@ -6,6 +6,7 @@ package main
 
 import (
 	"math"
+	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
@@ -49,7 +50,7 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 	// then draws every row through the GAF pen, so the selected FNT is only
 	// reached on the pen's null-slot fallback [03 R-FONT-01 §5][03 R-FONT-01 §6].
 	rowFont := g.windowGadgetFont(p, gad)
-	_, metric := g.retailTextMetrics(rowFont)
+	measure, metric := g.retailTextMetrics(rowFont)
 	rowHeight := int(gad.ItemHeight)
 	if rowHeight == 0 {
 		rowHeight = metric + 1
@@ -62,17 +63,46 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad
 		if idx >= len(items) {
 			break
 		}
-		// the retail implementation reserves the first two pixels of a listbox before
-		// calculating rows. The same origin is used by its text renderer.
 		y := int(r.Y) + 2 + row*rowHeight
+		text, _, _ := strings.Cut(items[idx], "\x00")
+		// Alignment measures the stored text before the heading prefix is
+		// skipped. Its inclusive row rectangle is also the shade boundary
+		// [07 R-WGT-01 §4].
+		x, width := retailListTextPen(r, gad.Attribs, measure(text))
+		heading := strings.HasPrefix(text, "&G")
+		if strings.HasPrefix(text, "&") && len(text) >= 2 {
+			text = text[2:]
+		}
 		color := g.guiColor(byte(gad.ColorF & 0xff))
-		g.drawRetailStringSelected(c, items[idx], int(r.X)+4, y, int(r.W)-4, color, 0, rowFont)
-		// The highlight runs after the row's text, as the retail implementation does: the
-		// operator remaps whatever is already in the rectangle, so the glyphs
-		// are lifted along with the listbox interior.
-		if idx == selected && gad.Attribs&0x100 == 0 {
+		g.drawRetailStringSelected(c, text, x, y, width, color, 0, rowFont)
+		if heading {
+			if g.assets != nil && g.assets.pal != nil {
+				for level := -19; level >= -22; level-- {
+					c.UIShadeRect(g.assets.pal, int(r.X)+2, y, int(r.W)-1, rowHeight+1, level)
+				}
+			}
+		} else if idx == selected && gad.Attribs&0x100 == 0 {
 			g.drawListSelection(c, r, y, rowHeight)
 		}
+	}
+}
+
+// retailListTextPen keeps the row's inclusive bounds and the builder's
+// attribute precedence [07 R-WGT-01 §4].
+func retailListTextPen(r gui.Rect, attrs uint32, textWidth int) (x, width int) {
+	left, right := int(r.X)+2, int(r.X+r.W)
+	switch {
+	case attrs&1 != 0:
+		return left, right - left + 1
+	case attrs&4 != 0:
+		return right - textWidth, textWidth
+	case attrs&2 != 0:
+		x = max(left, (left+right-textWidth)/2)
+		return x, right - x + 1
+	default:
+		// TODO(T25): retail leaves the pen scratch unset when no alignment
+		// bit is present; retain the existing host inset for that case.
+		return int(r.X) + 4, int(r.W) - 4
 	}
 }
 
@@ -117,7 +147,7 @@ func (g *gameShell) drawListSelection(c *client.Client, r gui.Rect, y, h int) {
 	if g == nil || g.assets == nil || g.assets.pal == nil {
 		return
 	}
-	c.UILightRect(g.assets.pal, int(r.X), y, int(r.W), h, retailListSelectionLevel)
+	c.UILightRect(g.assets.pal, int(r.X)+2, y, int(r.W)-1, h+1, retailListSelectionLevel)
 }
 
 // retailListSelectionLevel is the literal the retail implementation pushes for a selected

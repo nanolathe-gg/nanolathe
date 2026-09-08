@@ -110,7 +110,7 @@ func (r *Renderer) atlasFor(t *world.Terrain) *tileAtlas {
 // here. What would settle it: the design's world-space-zoom entry, which replaces
 // per-tile scaling with a single scaled compose.
 func (r *Renderer) Terrain(c drawlist.Terrain) {
-	if r == nil || r.offscreen == nil || r.scene2D == nil {
+	if r == nil || r.surfaces[0] == nil || r.scene2D == nil {
 		return
 	}
 	t := c.Terrain

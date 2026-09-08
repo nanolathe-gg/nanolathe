@@ -241,8 +241,10 @@ platform event history and double-click timing remain I02. `ui.WidgetFrame`
 is one host-pass sample (`PointerX`/`PointerY`, held bits, ordered pointer
 events, ordered tokens and caller-provided `TimerAdvanced`). `Panel.ServiceFrame`
 visits runtime records in increasing index order, retains one indexed capture
-and button bit, freezes held samples outside the window, services a captured
-editor before other tokens, updates hover/`HELPTEXT`, invokes each reached
+and button bit, freezes held samples outside the window, runs the gated key
+matrix before the gadget walk and services a captured editor at its own
+indexed visit when the matrix leaves its token available, updates
+hover/`HELPTEXT`, invokes each reached
 surface hook, and returns after the first fired record. `WidgetHooks.Change`
 is synchronous, while the screen consumes `ServiceResult.FiredIndex` only
 after the pass returns. `WidgetHooks.ArtFrames` returns the resolved button
@@ -421,11 +423,11 @@ focus explicitly rather than weakening production opening behavior.
 
 **I04 keyboard matrix and ordered-token service (partial; review remains).**
 `WidgetFrame.Tokens` is the producer-ordered keyboard-ring snapshot and
-`ServiceResult.ConsumedTokens` identifies only the serviced prefix. The common
-service handles a captured editor before the one-token matrix; otherwise a
+`ServiceResult.ConsumedTokens` identifies only the serviced prefix. A
 consuming, navigation-enabled front-end or battle-options root passes Tab,
 Enter, Escape, Space and arrow tokens through the matrix before pointer
-gadgets. Tab uses `MoveFocus` and held Shift; Enter selects the usable
+gadgets, regardless of an editor capture. Tab uses `MoveFocus` and held Shift;
+Enter selects the usable
 `crdefault` then the restricted focused fallback; Escape uses an active
 `escdefault`; Space is limited to button, listbox and surface. Horizontal
 sliders step and clamp through their ordinary knob/change path, while a focused
@@ -447,6 +449,11 @@ they can mutate radio/toggle state and claim a peeked battle-child token. The
 UNITINFO child performs that peek pass before battle hotkeys, but remains
 outside Enter/Escape defaults. Screen/window open paths flush the token ring;
 pointer and held-key state survive `[07 R-WGT-01 §§1-3,7]` `[07 R-WGT-02 §5]`.
+A captured editor then drains its available prefix only when the index walk
+reaches that text record, so an earlier indexed gadget fire wins the pass.
+Left/Right leave a focused text input token for that editor; Enter does
+likewise, while an active `escdefault` consumes Escape before the editor can
+see it.
 
 The navigation-enable word is initialized enabled for the traced shell,
 options and briefing adapters. `TODO(question): complete the per-screen
@@ -459,7 +466,10 @@ repeat cadence or a native order among simultaneous physical edges
 
 Quickkey comparison folds only ASCII letters. A `TokenText` rune in the byte
 range `0x80..0xFF` compares to the same stored quickkey byte unchanged; a rune
-outside the byte range is not mapped. Text-editor admission remains its
+outside the byte range is not mapped. The control-byte edit tokens Backspace,
+Tab, Enter and Escape normalize to `0x08`, `0x09`, `0x0D` and `0x1B` before
+the same comparison. Other edit keys use the established special-key token
+bytes of `[07 §2]` before that comparison. Text-editor admission remains its
 separate ASCII-only contract until the codepage/IME question is resolved.
 
 **The front end** (`frontend.go`). `Mode` is the screen: `ModeMain`,
@@ -1187,6 +1197,15 @@ This does not alter the existing [F-P1-008] implementation. The current GPU
 prototype milestone exposes only `--renderer=modern`; the three-mode runtime
 selector and the Enhanced camera are deferred until human review.
 
+**I13 text-list raster correction.** The frontend list painter measures
+stored text before removing ampersand prefixes, applies the traced 1/4/2
+alignment precedence and inclusive row bounds, and performs heading shading
+as four successive table operations instead of selection brightening. The
+unaligned authored case retains the previous host inset with `TODO(T25)`
+because retail leaves that pen scratch unset. Row metadata/record images,
+tall-row wrapping, screen-owned top limits and inherited child-surface clips
+remain separate open I13 work `[07 R-WGT-01 §4]`.
+
 ### 3.9 Not implemented
 
 * **Chat.** `TALK.GUI` and `TALK2.GUI`, the recipient modes, the `+`-command
@@ -1448,6 +1467,8 @@ inference: the authored `PREFS.GUI` panel is 128 columns wide, so widened it is
 278 and `limit = windowWidth − 1 = 277` equals the saturation value, which makes
 the `counter > limit` branch unreachable.
 
-One `TODO(T25)` remains in `cmd/nanolathe`, on a parity fixture test: the pinned
-retail/Nanolathe screenshot pair does not record the scenario that produced it,
-so the fixture pins the comparison rather than a reproducible staging.
+`TODO(T25)` boundaries remain at their owning code sites and in the feature
+sections above. These include the unaligned text-list pen, whose unset native
+scratch is not reproduced, and a parity fixture whose pinned retail/Nanolathe
+screenshot pair does not record its original scenario. That fixture pins the
+comparison rather than reproducible staging.

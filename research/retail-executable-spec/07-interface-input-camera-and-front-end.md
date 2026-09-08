@@ -1230,6 +1230,24 @@ the selected row (attribute `0x100` clear) is lightened by 30 steps whether
 or not the list has focus. Record lists draw each item's frame and lighten
 the selected one by 20.
 
+**Established — text-row pen and remap details.** Define the inclusive row
+edges as `left = gx + 2` and `right = gx + w`. Alignment tests left bit 1
+before right bit 4 before centre bit 2. Left uses `x = left` and width
+`right - left + 1`; right uses `x = right - textW` and width `textW`;
+centre uses `x = max(left, trunc((left + right - textW) / 2))` and width
+`right - x + 1`. The width measurement precedes prefix removal. Without a
+per-row heading flag, a leading ampersand skips two bytes; only `&G` makes
+that row a heading. A row marked by a flag equal to one is a heading without
+removing its text prefix. Heading shading uses four successive signed levels
+`-19`, `-20`, `-21`, `-22` over the inclusive row rectangle and excludes the
+ordinary selected-row brightening branch. That rectangle includes both its
+right edge and bottom edge, so its extent is `w - 1` by `rowH + 1`.
+
+**Unknown — unaligned text-list pen.** With none of alignment bits 1, 2 or 4,
+the retail painter does not initialize its local pen position/width on that
+branch. The native scratch history is not modeled; the current host retains
+its prior four-pixel inset for this malformed/authored edge case (`TODO(T25)`).
+
 ### The kind-4 gadget: scrollbar, slider, knob and travel arithmetic, synthesised arrows, value read-out [R-WGT-01 §5]
 
 **Established — one kind.** `SCROLLSLIDER`, `VIDSLDR`, `SLIDER%d` and the

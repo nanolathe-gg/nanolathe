@@ -95,24 +95,11 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		p.updateHelpText()
 		return result
 	}
-	// Retail takes the keyboard token before visiting any gadget.  A captured
-	// editor owns its ordered prefix even when the surrounding window is in its
-	// peek mode; otherwise the matrix is gated by both window words
-	// [07 R-WGT-01 §§1-2, §6].
+	// Retail takes the keyboard token before visiting any gadget. The matrix is
+	// gated only by the two window words; a captured editor gets the matrix's
+	// unclaimed token at its own indexed visit [07 R-WGT-01 §§1-2, §6].
 	matrixConsumed := false
-	if p.EditorCaptured() && len(frame.Tokens) != 0 && !frame.AltHeld {
-		measure := func(text string) int { return len(text) }
-		if hooks.Measure != nil {
-			editor := p.EditorIndex()
-			measure = func(text string) int { return hooks.Measure(editor, text) }
-		}
-		er := p.ApplyEditorTokens(frame.Tokens, measure)
-		result.ConsumedTokens = er.Consumed
-		if er.Action.Kind == ActionActivate {
-			p.fire(er.Action.Index, 0, &result)
-			return finish()
-		}
-	} else if !p.EditorCaptured() && frame.TokenMode && len(frame.Tokens) != 0 {
+	if frame.TokenMode && len(frame.Tokens) != 0 {
 		// Token mode pops one record regardless of whether the matrix recognizes
 		// it; retail would then offer the residue to its window callback, which
 		// this bounded service has no client for [07 R-WGT-01 §1].
@@ -136,6 +123,25 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		}
 		if g.Kind == gui.KindSurface && hooks.Surface != nil {
 			hooks.Surface(i)
+		}
+		// An editor drains its token prefix only when its record is reached. An
+		// earlier indexed pointer or quickkey result therefore wins this pass
+		// [07 R-WGT-01 §1, §6]. Alt keeps the editor's quickkey exception.
+		if !matrixConsumed && !frame.AltHeld && p.EditorCaptured() && p.EditorIndex() == i && len(frame.Tokens) != 0 {
+			measure := func(text string) int { return len(text) }
+			if hooks.Measure != nil {
+				editor := i
+				measure = func(text string) int { return hooks.Measure(editor, text) }
+			}
+			er := p.ApplyEditorTokens(frame.Tokens, measure)
+			if er.Consumed > result.ConsumedTokens {
+				result.ConsumedTokens = er.Consumed
+			}
+			matrixConsumed = er.Consumed != 0
+			if er.Action.Kind == ActionActivate {
+				p.fire(er.Action.Index, 0, &result)
+				return finish()
+			}
 		}
 		if len(frame.Tokens) != 0 && !matrixConsumed && !suppressedPeekToken(frame.TokenMode, frame.Tokens[0]) && p.keyboardQuickKeyAt(i, frame.Tokens[0], frame.AltHeld, &result) {
 			result.ConsumedTokens = 1

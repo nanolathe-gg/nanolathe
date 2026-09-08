@@ -180,18 +180,51 @@ func TestKeyboardServiceTraversalAndDirectionalKinds(t *testing.T) {
 	}
 }
 
-func TestKeyboardServiceEditorRetainsCaptureForTextAfterEnter(t *testing.T) {
-	p := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
-		{Kind: gui.KindPanel},
-		{Kind: gui.KindTextBox, Name: "EDIT", Active: 1, MaxChars: 8, Rect: gui.Rect{W: 20}},
-	}})
-	p.FocusEditor(1)
-	r := p.ServiceFrame(WidgetFrame{TokenMode: true, KeyNavigation: true, Tokens: []input.Token{
-		{Kind: input.TokenText, Rune: 'a'},
-		{Kind: input.TokenEdit, Key: input.KeyEnter},
-		{Kind: input.TokenText, Rune: 'b'},
-	}}, WidgetHooks{})
-	if r.Fired || r.ConsumedTokens != 3 || p.TextAt(1) != "ab" || !p.EditorCaptured() {
-		t.Fatalf("editor result=%+v text=%q captured=%t", r, p.TextAt(1), p.EditorCaptured())
+func TestKeyboardControlQuickKeysNormalizeEditTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  input.Key
+		byte byte
+	}{
+		{"backspace", input.KeyBackspace, '\b'},
+		{"tab", input.KeyTab, '\t'},
+		{"enter", input.KeyEnter, '\r'},
+		{"escape", input.KeyEscape, '\x1b'},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
+				{Kind: gui.KindPanel},
+				{Kind: gui.KindButton, Name: "CONTROL", Active: 1, QuickKey: tc.byte},
+			}})
+			r := p.ServiceFrame(WidgetFrame{Tokens: []input.Token{{Kind: input.TokenEdit, Key: tc.key}}}, WidgetHooks{})
+			if !r.Fired || r.FiredIndex != 1 || r.ConsumedTokens != 1 {
+				t.Fatalf("result=%+v", r)
+			}
+		})
+	}
+}
+
+func TestEditTokenByteUsesRetailSpecialKeyMap(t *testing.T) {
+	for _, tc := range []struct {
+		key  input.Key
+		want byte
+	}{
+		{input.KeyHome, 0xf0},
+		{input.KeyEnd, 0xf1},
+		{input.KeyPrior, 0xf2},
+		{input.KeyNext, 0xf3},
+		{input.KeyLeft, 0xf4},
+		{input.KeyUp, 0xf5},
+		{input.KeyRight, 0xf6},
+		{input.KeyDown, 0xf7},
+		{input.KeyInsert, 0xee},
+		{input.KeyDelete, 0xef},
+		{input.KeyF1, 0xe2},
+		{input.KeyF12, 0xed},
+	} {
+		got, ok := editTokenByte(tc.key)
+		if !ok || got != tc.want {
+			t.Fatalf("key %v byte=%#x/%t, want %#x", tc.key, got, ok, tc.want)
+		}
 	}
 }

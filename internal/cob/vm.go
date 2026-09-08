@@ -79,17 +79,18 @@ type VM struct {
 	Threads [8]Thread
 	Pieces  []model.PieceState // len == len(Program.Pieces) [04 §4.1]
 
-	prog         *Program
-	statics      []int32
-	anims        []pieceAnim // per-piece per-axis animation state [04 §4.6]
-	pieceBusy    []bool      // per-piece animation dirty/busy reduction [04 §4.6]
-	pieceFlags   []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3] — fallback for fixture VMs; production flags live on units.Unit.RenderPieceFlags [04 §"Piece flag polarity"]
-	simRng       *rng.Simulation
-	portFuncs    map[Port]func(args []int32) int32   // legacy combined hook; nil means default 0 [04 §4.4]
-	portBindings map[Port]PortBinding                // explicit read/write hooks [04 R-COB-03 §1]
-	sfxSink      SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
-	sfxVisible   func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
-	diagnostics  []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
+	prog          *Program
+	statics       []int32
+	anims         []pieceAnim // per-piece per-axis animation state [04 §4.6]
+	pieceBusy     []bool      // per-piece animation dirty/busy reduction [04 §4.6]
+	pieceFlags    []uint8     // per-piece draw/cache/shade/shadow flags [04 §4.3] — fallback for fixture VMs; production flags live on units.Unit.RenderPieceFlags [04 §"Piece flag polarity"]
+	simRng        *rng.Simulation
+	portFuncs     map[Port]func(args []int32) int32   // legacy combined hook; nil means default 0 [04 §4.4]
+	portBindings  map[Port]PortBinding                // explicit read/write hooks [04 R-COB-03 §1]
+	sfxSink       SFXSink                             // presentation-only sink for emit-sfx [GAP T15] C19; nil discards
+	sfxVisible    func(piece int, sfxType int32) bool // visibility gate for emit-sfx [GAP T15] C19; nil fails closed
+	explosionSink ExplosionSink                       // immediate session arena admission [04 R-COB-04 §1]; nil is pending U13
+	diagnostics   []string                            // [P2-03] fallback diagnostics (divide, overflow, corrupt) not fatal
 
 	// The two transport query opcodes read the owning unit's cargo linkage
 	// [04 §4.4][04 R-COB-03 §5]. They are not engine ports and carry no port
@@ -596,6 +597,16 @@ func (v *VM) setPieceAngle(piece, axis int, value uint16) bool {
 // Nil discards. Presentation-only and visibility-gated; no simulation state
 // is written from this path.
 func (v *VM) SetSFXSink(s SFXSink) { v.sfxSink = s }
+
+// SetExplosionSink binds the synchronous physical/effect arena admission
+// boundary. The sink owns bounded storage and phase-4 stepping; the VM keeps
+// no event history and a nil sink is the explicit pending-U13 path [04
+// R-COB-04 §1]–[04 R-COB-04 §4] [I5].
+func (v *VM) SetExplosionSink(s ExplosionSink) {
+	if v != nil {
+		v.explosionSink = s
+	}
+}
 
 // SetSFXVisible installs the visibility gate for emit-sfx [GAP T15] C19.
 // When nil, presentation emission is suppressed (the missing dependency fails
@@ -2194,34 +2205,39 @@ func (v *VM) runThread(idx int) {
 				return
 			}
 			flags, _ := t.stackPop() // flags [04 §4.3] [04 §4.5]
-			// Random-draw census [R-COB-01 §2]: the six authoritative draws exist
-			// ONLY when the flags word does not request bitmap-only (flag 0x20,
-			// the authored BITMAPONLY value [fmt cob] "Explosion type flags");
-			// bitmap-only consumes zero draws from either stream. The physical
-			// branch makes six draws in fixed order bounded 3000, 3000, 3000, 40,
-			// 10, 40 — the fifth (bound 10) is dead, its stored result overwritten
-			// by the sixth — and the dead draw is still made [04 §4.5][R-COB-01 §2].
-			// No opcode execution may touch the CRT stream [R-COB-01 §2].
+			// Random-draw census: bitmap-only consumes no simulation draws. A
+			// physical record consumes six in order 3000, 3000, 3000, 40, 10,
+			// 40 before source hiding and arena admission [04 R-COB-04 §1].
 			if flags&0x20 == 0 {
 				piece := int(v.prog.Code[t.PC+1])
-				// A physical spawner hides its source before any allocation;
+				physical := v.physicalExplosion(flags)
+				// A physical spawner hides its source before any arena allocation;
 				// bitmap-only leaves it visible [04 R-COB-04 §1].
 				if !v.setRenderFlag(piece, 0x01, false) {
 					v.killThread(idx)
 					return
 				}
-				v.simRandN(3000)
-				v.simRandN(3000)
-				v.simRandN(3000)
-				v.simRandN(40)
-				dead := v.simRandN(10)
-				_ = dead // overwritten dead [04 §4.5][R-COB-01 §2]
-				v.simRandN(40)
+				physical.Source = v.explosionSource(piece)
+				if v.explosionSink != nil {
+					if physical.Flags&ExplosionShatter != 0 {
+						v.explosionSink.AdmitShatter(ShatterExplosion{PhysicalExplosion: physical})
+					} else {
+						v.explosionSink.AdmitWholePiece(WholePieceExplosion{PhysicalExplosion: physical})
+					}
+				}
 			}
-			// Bitmap branch spawns one presentation effect per set bitmap flag in
-			// ascending bit order; it consumes no draws and runs even when
-			// bitmap-only suppressed the physical branch [04 §4.5]. Presentation
-			// debris is not wired in this package (no sink owns explosion art).
+			// Bitmap requests run in ascending bit order even when bitmap-only
+			// suppressed physical debris. Their sink owns the fixed effect pool;
+			// this VM retains no event queue [04 R-COB-04 §1] [04 R-COB-04 §4].
+			if v.explosionSink != nil {
+				piece := int(v.prog.Code[t.PC+1])
+				source := v.explosionSource(piece)
+				for bit, kind := range [...]BitmapExplosionKind{BitmapExplosionPrimary, BitmapExplode2, BitmapExplode3, BitmapExplode4, BitmapExplode5, BitmapNuke1} {
+					if flags&(1<<uint(bit+8)) != 0 {
+						v.explosionSink.AdmitBitmap(BitmapExplosion{Source: source, Kind: kind})
+					}
+				}
+			}
 			t.PC += 2
 		case 0x10082000: // engine write [04 §4.3]
 			// The shipped compiler emits the identifier first and the value

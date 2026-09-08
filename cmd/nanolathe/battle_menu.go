@@ -107,11 +107,7 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 		return
 	}
 	if in.Kbd.KeyDown(input.KeyEscape) {
-		before := state.Modal()
 		b.applyBattleSchedule(state.Back())
-		if state.Modal() != before && state.Modal() != ui.BattleModalClosed {
-			flushWindowTokens(cl)
-		}
 		return
 	}
 
@@ -142,7 +138,7 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 	}
 	before := state.Modal()
 	action := state.Activate(name)
-	if state.Modal() != before && state.Modal() != ui.BattleModalClosed {
+	if state.Modal() != before && (state.Modal() == ui.BattleModalExit || state.Modal() == ui.BattleModalRestart || state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) {
 		flushWindowTokens(cl)
 	}
 	// Only root close emits the resume intent. All child transitions keep the

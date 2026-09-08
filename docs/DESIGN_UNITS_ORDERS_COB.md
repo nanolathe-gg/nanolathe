@@ -286,6 +286,25 @@ through the shared fixed-point trig table, the local death-severity query, the
 reload-time conversion, and the two synchronous query seeds `[04 §5.1]`
 `[04 §5.3]` `[04 R-CB-01 §2]` `[04 R-CB-01 §3]` `[04 R-CB-01 §4]`.
 
+**Explosion admission** (`explode.go`, `bridge.go`). `ExplosionSink` is an
+immediate, typed hand-off from one COB `explode` instruction to the
+session-owned physical/effect arenas; it is not a retained event queue. A
+physical instruction first forms its six-draw kinematics, hides its source
+piece, then offers exactly one `WholePieceExplosion` or `ShatterExplosion` to
+the sink. The sink's boolean is the arena's admission decision and cannot undo
+the hide or the six draws. Each requested bitmap bit is then offered, in
+ascending bit order, as a `BitmapExplosion`; bitmap-only skips the physical
+offer and leaves its source shown. `ExplosionPieceIdentity` (the COB piece
+index and declared geometry name), `ExplosionPieceState` (the copied script
+transform and current render flags), and `ExplosionKinematics` are separate
+concepts so a future arena can resolve unit/world state and model geometry
+without making a COB VM own either. Session must bind the sink with the source
+unit identity, model-piece mapping/geometry, current unit transform and mover
+velocity, and must allocate whole debris or each shatter fragment at the
+researched admission boundary. It owns the 100-slot debris ring, 300 effect
+slots, 300 fragment geometries and effect-phase stepping; the client only sees
+their committed snapshot `[04 R-COB-04 §1]`–`[04 R-COB-04 §4]` [I4] [I5] [I6].
+
 **The aim handshake** (`ports.go`). `AimSlot` is the seam between the script and
 the weapon: an issue bit set immediately after an `Aim*` start, which gates
 re-issue and authorizes nothing, and a ready latch granted only by a nonzero
@@ -538,6 +557,19 @@ independently with the post-hit percentage `clamp(health × 100 / maxHealth, 0,
 paralyze kinds skip the pair entirely, and lethal damage against a
 movement-category-1 or -2 victim sets the death latch and returns with **no**
 callbacks `[04 §5.1]` `[04 R-CB-01 §3]`.
+
+**C27 — explosion admission boundary.** `explode` synchronously offers typed
+whole-piece, shatter and bitmap requests to an optional sink; nil means the
+currently explicit no-consumer path. The physical record consumes exactly six
+simulation draws in the order 3000, 3000, 3000, 40, 10, 40 before the source
+hide and before the sink may refuse allocation. A shatter sink must test each
+fragment admission before its eight fragment draws; a whole-piece sink admits
+its debris slot and ring allocation after the six draws. The source hide occurs
+for either physical kind even on refusal. Bitmap requests consume no simulation
+draws and do not hide a bitmap-only source. The sink runs synchronously and
+retains no record; session owns all bounded arena storage and effect-phase
+updates. Smoke/fire trail class identity and the stale claimed-effect case stay
+`TODO(question)` until their owning research gaps close `[04 R-COB-04 §1]`–`[04 R-COB-04 §4]` [I4] [I5] [I6].
 
 ### 3.4 Model — C20…C24
 

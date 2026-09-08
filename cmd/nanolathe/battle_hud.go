@@ -26,6 +26,8 @@ import (
 )
 
 type retailBattleHUD struct {
+	commandWindowInput commandWindowInputState
+
 	side    *content.SideDef
 	cat     *content.Catalog
 	owner   uint8

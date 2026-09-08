@@ -85,7 +85,7 @@ func (r *Renderer) gafImageFor(f *formats.GAFFrame) *ebiten.Image {
 // (anchored/plain), the scaled kind and opaque feature kinds are copied here;
 // destination-reading variants route to the helpers in deststage.go.
 func (r *Renderer) Sprite(sp drawlist.Sprite) {
-	if r == nil || r.offscreen == nil {
+	if r == nil || r.surfaces[0] == nil {
 		return
 	}
 	// A non-nil PCX carries an opaque frontend background; it cannot ride
@@ -170,7 +170,7 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 // its bytes are re-uploaded into a fixed scene atlas region rather than cached by
 // identity, and the blit then merges into the frame's opaque batch.
 func (r *Renderer) Surface(sf drawlist.Surface) {
-	if r == nil || r.offscreen == nil || r.scene2D == nil {
+	if r == nil || r.surfaces[0] == nil || r.scene2D == nil {
 		return
 	}
 	src := sf.Pixels
@@ -199,7 +199,7 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 // the cursor frame at the resolved blit origin, exactly as the classic sink calls
 // uiBlitClippedRaw(cu.Frame, HotX, HotY, 0, 0, width, height) [07 §8].
 func (r *Renderer) Cursor(cu drawlist.Cursor) {
-	if r == nil || r.offscreen == nil {
+	if r == nil || r.surfaces[0] == nil {
 		return
 	}
 	r.drawKeyed(cu.Frame, int(cu.HotX), int(cu.HotY), 0, 0, r.w, r.h)

@@ -374,8 +374,22 @@ func checkFogDevicePixels() error {
 	if img == nil {
 		return fmt.Errorf("fog device fixture returned no image")
 	}
-	if r.fog.draws != 2 {
-		return fmt.Errorf("fog issued %d device draws for %d ops, want 2", r.fog.draws, len(ops))
+	if r.fog.draws != 1 {
+		return fmt.Errorf("fog issued %d device draws for %d ops, want 1", r.fog.draws, len(ops))
+	}
+	// Clear, fill and fog all land in one phase: the fills are opaque and the fog
+	// reads them, and a phase draws its opaque batch before its destination batch.
+	// That one phase costs three destination switches — the opaque batch into the
+	// composed surface, the read-surface copy, the destination batch back into the
+	// composite — and the expansion one more
+	// (docs/DESIGN_GPU_RENDERER.md §11.5).
+	stats := r.ModelStats()
+	if stats.Phases != 1 {
+		return fmt.Errorf("fog fixture compiled %d phases, want 1", stats.Phases)
+	}
+	if stats.Passes != 4 {
+		return fmt.Errorf("fog fixture issued %d destination switches for %d phases, want 4",
+			stats.Passes, stats.Phases)
 	}
 	pixels := make([]byte, w*h*4)
 	img.ReadPixels(pixels)

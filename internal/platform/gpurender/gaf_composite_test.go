@@ -32,7 +32,7 @@ func TestCompositeLeafCommandsReachGPUKeyedAndTintStages(t *testing.T) {
 	// begins at both destination x=3 and source x=1.
 	clipped := &formats.GAFFrame{Width: 2, Height: 1, Pixels: []byte{7, 7}, Transparent: []bool{false, false}}
 	r.Sprite(drawlist.Sprite{Frame: clipped, X: 2, Y: 3, Kind: drawlist.BlitTinted, HasClip: true, Clip: drawlist.Rect{X: 3, Y: 3, W: 1, H: 1}})
-	dest := r.sched.verts[schedDest]
+	dest := r.sched.classVerts(schedDest)
 	if len(dest) != 8 {
 		t.Fatalf("GPU destination batch = %d vertices, want the two tinted leaves", len(dest))
 	}

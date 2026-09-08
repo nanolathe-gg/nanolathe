@@ -432,7 +432,7 @@ the task's content now lives here:
 | T22 interface promotions | `[07 §6]`, `[07 §9]` |
 | T23 platform residuals | `TODO(T23)` markers in code — none gate gameplay |
 | T24 network internals | out of scope; no multiplayer |
-| T25 accepted blocked items | `TODO(T25)` markers in code: extractor placement helpers, resource-activity ledger arguments, definition flag semantics, save bulk-box byte layouts |
+| T25 accepted blocked items | `TODO(T25)` markers at their owning code sites, including extractor placement helpers, resource-activity ledger arguments, definition flag semantics, save bulk-box byte layouts, and the unaligned text-list pen scratch ([07 R-WGT-01 §4]) |
 
 The compressed GAF decoder is **not** a gap: it is fully specified in
 `[fmt gaf]` and implemented.

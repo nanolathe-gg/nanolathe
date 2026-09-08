@@ -185,7 +185,7 @@ func (r *Renderer) fntAtlasFor(fnt *formats.FNT) *fntAtlas {
 // vertex red channel and the glyph shader writes it where the atlas marks a set
 // bit, leaving the destination untouched elsewhere (C-G4).
 func (r *Renderer) Glyphs(g drawlist.Glyphs) {
-	if r == nil || r.offscreen == nil || r.scene2D == nil {
+	if r == nil || r.surfaces[0] == nil || r.scene2D == nil {
 		return
 	}
 	fnt := g.Font

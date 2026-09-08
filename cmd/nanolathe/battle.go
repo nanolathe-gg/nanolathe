@@ -473,14 +473,16 @@ func bindBattleMessageRetirement(sess *session.Session, cl *client.Client) {
 // latch is reset so a later load cannot reach the old battle [08 "Session
 // states"][08 R-ENTRY-01 §8][I6].
 func (b *battleSession) teardown(cl *client.Client) {
-	if b == nil || b.sess == nil {
+	if b == nil {
 		return
 	}
-	// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
-	b.sess.CommitCampaignTeardown()
-	b.sess.SetPhase7Service(nil)
-	if b.sess != nil && b.sess.Features != nil {
-		b.sess.Features.SetDefinitionAdmissionObserver(nil)
+	if b.sess != nil {
+		// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
+		b.sess.CommitCampaignTeardown()
+		b.sess.SetPhase7Service(nil)
+		if b.sess.Features != nil {
+			b.sess.Features.SetDefinitionAdmissionObserver(nil)
+		}
 	}
 	if b.battleUI != nil {
 		b.closeBattleMenu()

@@ -60,7 +60,7 @@ func checkFeatureShadowRouteGeometry() error {
 	} {
 		r.sched.resetFrame(16, 12)
 		r.Sprite(drawlist.Sprite{Frame: f, X: 3, Y: 4, Kind: drawlist.BlitFeatureShadow, Trans: tc.trans})
-		verts := r.sched.verts[tc.class]
+		verts := r.sched.classVerts(tc.class)
 		if len(verts) != 4 {
 			return fmt.Errorf("%s: compiled %d vertices, want 4", tc.name, len(verts))
 		}

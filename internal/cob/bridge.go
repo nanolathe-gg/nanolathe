@@ -13,6 +13,16 @@ func (b *CallbackBridge) SetSimulationRNG(sim *rng.Simulation) {
 	}
 }
 
+// SetExplosionSink binds the session-owned, synchronous explosion-arena
+// admission seam. It is separate from presentation SFX: physical debris and
+// bitmap records are authoritative bounded-pool work, not visibility-gated
+// draw cues [04 R-COB-04 §1]–[04 R-COB-04 §4] [I5] [I6].
+func (b *CallbackBridge) SetExplosionSink(sink ExplosionSink) {
+	if b != nil && b.VM != nil {
+		b.VM.SetExplosionSink(sink)
+	}
+}
+
 // SetSFXSink binds the VM's presentation-only emit-sfx sink and visibility
 // predicate [GAP T15] C19.
 func (b *CallbackBridge) SetSFXSink(sink SFXSink, visible func(piece int, sfxType int32) bool) {
