@@ -5783,16 +5783,28 @@ definition and no TDF key is involved anywhere in `explode`** — the
 ### Whole-piece debris: lifecycle, bounce, and explode-on-hit [R-COB-04 §2]
 
 **Established — spawn.** Debris lives in a fixed table of **100** slots
-backed by a **100,000-byte** ring arena. The spawner takes the first empty
-slot (none → the piece is hidden but no debris exists) and asks the arena for
-`vertexCount · 12 + 0x66` bytes. The arena allocator is *evicting*: when the
-request does not fit before the wrap point it frees whole older blocks from
-its cursor forward — clearing each victim's owning slot, so that debris
-vanishes — until the request fits, then wraps to the start when the tail is
-too small. It then copies the twelve-word record and the piece's render entry
-(the §4.3 record: transformed point list, world offset, angles, flags), points
-the copy's point list at its own tail, and adds the unit's X, Y, Z to the
-copied world offset so the copy is absolute.
+backed by a circular arena with **100,000 storage charges**. Admission first
+chooses the lowest empty slot; if none exists, the source remains hidden and
+no debris is admitted. The allocation charge is `vertexCount × 12 + 110`;
+a charge larger than the arena fails. This accounting controls eviction and
+does not require reproducing the executable's memory layout.
+
+The arena keeps a cursor and an ordered partition into occupied or free
+blocks. If the requested charge exceeds the remaining tail, clear all blocks
+from the cursor through the tail and wrap to the beginning. Starting at the
+chosen cursor, clear complete blocks until their combined charge covers the
+request. Clearing a block removes its live debris only if that slot still
+owns this exact allocation; a slot reused since the old debris died is not
+removed. If the excess charge is at least nine, leave that excess as a free
+block and advance the cursor to it. Otherwise absorb the excess into the new
+allocation and advance to the following block, wrapping immediately at the
+arena end. A dead piece's block remains charged until the cursor reaches it.
+Eviction never preserves only part of a piece.
+
+The new debris owns separate transformed-point storage and copies the piece's
+pose, render flags and explosion motion state. Its world position is the
+copied piece offset plus the source unit's position. Subsequent source-piece
+pose mutation does not change the detached copy.
 
 **Established — per-tick step.** The effect phase of the tick (the same phase
 as the fixed effect pool, doc 03 §1.3; doc 01 owns the phase order) visits

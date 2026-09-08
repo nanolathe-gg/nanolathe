@@ -449,6 +449,11 @@ they can mutate radio/toggle state and claim a peeked battle-child token. The
 UNITINFO child performs that peek pass before battle hotkeys, but remains
 outside Enter/Escape defaults. Screen/window open paths flush the token ring;
 pointer and held-key state survive `[07 R-WGT-01 §§1-3,7]` `[07 R-WGT-02 §5]`.
+`flushWindowTokens` is called at save/load, message, preferences-page,
+information and results opens. Battle child cancellation preserves the surviving
+options window's input; it is a close, not an open. Command-window identity and
+selection changes mark actual opens, while cached draw/input lookups preserve
+fresh tokens `[07 §6]` `[07 R-HUD-04 §3]`.
 A captured editor then drains its available prefix only when the index walk
 reaches that text record, so an earlier indexed gadget fire wins the pass.
 Left/Right leave a focused text input token for that editor; Enter does
@@ -1446,12 +1451,27 @@ Two open questions belong to the in-battle options window and are carried as
   nothing to restore. Copying them would be two dead fields. A writer reachable
   from the options family would settle it.
 
-Retail's exit menu enables the authored inactive `RESTART` control for campaign
-and skirmish; that branch remains unimplemented [07 R-FE-01 §7]. The separate
-confirmation mismatch is fixed: opening `YESORNO` replaces `EXITMENU`, and
-No/Enter/Escape return to the surviving paused options root. Closing that root
-resumes the battle. The ordinary footer's sources and priority are also closed
-by [07 R-HUD-03 §1]; selection is not a footer source.
+The exit menu enables the authored `RESTART` control for campaign and
+skirmish. `battle_restart.go` owns its retained dialog state and request;
+`RESTART.GUI` replaces `EXITMENU`, wraps the mission/map name to the authored
+label width, focuses the difficulty stage, and uses the shared indexed pointer
+service. It retains zero token mode, so Enter/Escape do not invoke header
+defaults. Cancel exposes the surviving paused options root. The modal painter
+reads this child's down/stage state and dynamic labels [07 R-FE-01 §7].
+
+The shell remounts its original content root before consuming an accepted
+request, tears down the old battle and uses normal fresh entry. Campaign
+re-entry retains teardown W/L marks and loads the campaign's first entry before
+its selected entry. Skirmish preserves its map, player count, rows and chosen
+difficulty. The direct `--map` extension creates a fresh session on its existing
+mount; its exit closure resolves the current battle after any replacement.
+Session-less teardown still cleans presentation and shell state. No route uses
+`Session.Retry` [08 R-CAMP-01 §8].
+
+Opening `YESORNO` also replaces `EXITMENU`; No/Enter/Escape expose the surviving
+paused options root. Closing that root resumes the battle. The ordinary
+footer's sources and priority are closed by [07 R-HUD-03 §1]; selection is not a
+footer source.
 
 Not implemented: `[07 R-HUD-04 §2]` unfold. Opening the options root in battle
 arms an unfold animation whose per-frame step draws the snapshotted window

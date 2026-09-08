@@ -126,8 +126,8 @@ func (p *Panel) ServiceFrame(frame WidgetFrame, hooks WidgetHooks) ServiceResult
 		}
 		// An editor drains its token prefix only when its record is reached. An
 		// earlier indexed pointer or quickkey result therefore wins this pass
-		// [07 R-WGT-01 §1, §6]. Alt keeps the editor's quickkey exception.
-		if !matrixConsumed && !frame.AltHeld && p.EditorCaptured() && p.EditorIndex() == i && len(frame.Tokens) != 0 {
+		// [07 R-WGT-01 §1, §6]. Alt affects a later quickkey's admission only.
+		if !matrixConsumed && p.EditorCaptured() && p.EditorIndex() == i && len(frame.Tokens) != 0 {
 			measure := func(text string) int { return len(text) }
 			if hooks.Measure != nil {
 				editor := i

@@ -370,18 +370,26 @@ world-click cursor resolver:
   rectangle and left down over the minimap sets the **minimap latch** (camera
   jump every frame while held, released by left up `0x202`); left click on
   empty ground with the latch idle **deselects** (the world-click handler's
-  extra case); right down over the world with the pointer's region bit 2
-  set issues the armed or contextual order at the pointer's world point
-  through the order dispatcher; the cursor resolver's left-button column
-  returns the plain select cursor (`0xF`) over own selectable units and the
-  ally/enemy cursors (`0x11`/`0x12`) over others instead of the order
-  cursors, and consults the definition's order-capability bits for the
-  right-button column.
+  extra case). With the latch idle, right down over the world with the
+  pointer's region bit 2 set issues the contextual order at the pointer's
+  world point through the order dispatcher. Armed orders still fire on left
+  down; right down while a non-idle order is armed cancels it and returns the
+  latch to idle.
 
-§9's mouse-button assignment describes `Interface Type = 0`; under `1` the
-right-button path queues orders. **Unknown:** the complete right-button
-cursor column under `Interface Type = 1` (which latch shapes it offers) · §8
-· static trace of the cursor resolver's second case family.
+**Established (direct-static) — the Type-1 cursor column is closed.** The
+alternate column changes only the idle-latch row; every armed latch uses the
+same capability-gated shape row as Type 0. For each selected acting unit, an
+own selectable finished target gives `cursorselect`, a hostile unit gives
+`cursorred`, and any other unit gives `cursorgrn`. With no unit target, a
+reclaimable feature gives `cursorgrn` when the actor has either
+`canresurrect` or `canreclamate`; otherwise the result is `cursornormal`.
+These tests are ordered as written. The
+hostile/friendly colour rows do not test whether the actor can perform the
+contextual order; the order dispatcher applies its own capability gates when
+the right click arrives. With no selected acting unit, the chooser retains
+its ordinary idle fallback: `cursorselect` over an own selectable finished
+unit, `cursornormal` otherwise. Section 8 gives the shared reduction and the
+armed-latch rows.
 
 ### The chat `+` command vocabulary [R-CAM-01 §6]
 
@@ -5059,7 +5067,11 @@ coincide numerically only by table offset and must not be conflated. During
 mobile-build placement, site validity picks `cursorfindsite` when placement is
 valid else `cursortoofar`; the ghost preview uses `cursorred`/`cursorgrn`.
 
-**Every world order fires on left-click; right-click never fires an order — it only returns the command latch to idle (`cursornormal`) and, when idle, clears selection.**
+**Mouse polarity depends on `Interface Type`.** Armed orders fire on left
+click in both modes, and a right click while an order is armed returns the
+latch to idle. With the latch idle, Type 0 uses left click for the contextual
+order and right click to clear selection; Type 1 uses right click for the
+contextual order and left click to select or clear selection ([R-CAM-01 §5]).
 
 **The shape chooser is closed.** One pointer update resolves the shape in four
 steps. First, two region bits record whether the pointer is over the world
@@ -5084,11 +5096,12 @@ emptiness would gate `cursorselect` off for every idle unit whose queue
 holds its `defaultmissiontype` standing record (the idle-queue refill of
 [04 §3.3]).
 
-Per selected unit the shape is dispatched on the armed latch and gated on the
-same authored capability flags the order predicate reads, so the advertised
-action and the performed action cannot disagree:
+Per selected unit the Type-0 shape is dispatched on the armed latch and gated
+on the same authored capability flags the order predicate reads, so the
+advertised action and the performed action cannot disagree. The armed rows
+also apply unchanged to Type 1:
 
-* Idle (latch 1) rewrites itself to ATTACK over a hostile target the unit can
+* Idle (latch 1, Type 0) rewrites itself to ATTACK over a hostile target the unit can
   attack, and to RECLAIM over a hostile target a `canreclamate` unit could
   strip; otherwise it yields `cursorrepair` over a friendly target needing
   assistance, `cursorselect` over an own finished unit, `cursorrevive` or
@@ -5123,6 +5136,17 @@ action and the performed action cannot disagree:
   `cursorfindsite`.
 * Any gate that fails yields `cursornormal`, which is also the value the
   reduction starts from.
+
+**The Type-1 idle row is relationship-coloured, not action-shaped.** It tests
+an own selectable finished target first and returns `cursorselect`; otherwise
+a hostile unit returns `cursorred` and any other unit returns `cursorgrn`,
+without an actor-capability test. With no unit target, a reclaimable feature
+returns `cursorgrn` when the actor has `canresurrect` or `canreclamate`, in
+that order; failing those, the answer is `cursornormal`. Thus this row can
+return only `cursorselect`, `cursorred`, `cursorgrn`, or `cursornormal`. The
+chooser still reduces all per-actor answers by lowest cursor index, and an
+empty acting selection still uses the shared idle fallback described above.
+No armed-latch row branches on `Interface Type`.
 
 The cursor is rendered after the offscreen battle/front-end surface is
 prepared. Cursor position is read from the window system and translated into
@@ -5670,16 +5694,13 @@ cell, minimap, or GUI control consumes the action.
 
 #### Idle-latch divert, eligibility compare, and the active-state bit
 
-One branch of the idle latch is resolved. The red/green divert exists and is
-gated on the interface-type option (a runtime word the options and settings
-loaders write from the `Interface Type` registry value, clamped to 0/1):
-when the option equals `1`, the idle latch answers `cursorred` over a hostile
-target and `cursorgrn` over a friendly one, after the same own-finished-unit
-test that otherwise gives `cursorselect`, and the can-reclaim/can-attack
-branches also resolve to the green validity shape; when it equals `0` (the
-default), the specific per-latch shapes of the table above apply (including the
-idle ATTACK/RECLAIM rewrite over hostile targets). The option word's writers
-are the option loaders, and the gate is the option value itself.
+The idle-latch branch is closed. The interface-type option (a runtime word the
+options and settings loaders write from the `Interface Type` registry value,
+clamped to 0/1) selects the two rows established above: value `0` uses the
+action-shaped contextual table, while value `1` uses the relationship-coloured
+`cursorselect`/`cursorred`/`cursorgrn` row with its feature-capability gate and
+plain-normal fallback. The option word's writers are the option loaders, and the
+gate is the option value itself. Armed rows do not read it.
 
 The shared eligibility predicate's exact single-precision compare is **equal to
 `0.0`**, not `1.0`: all eligibility sites compile to an exact compare against
@@ -7646,8 +7667,6 @@ and the decider that would close it.
 
 - Which front-end screen paths handle which key tokens (the battle census is
   [R-CAM-01 §2]), and the unsupported-device census · §2, §5 · static trace.
-- The complete right-button cursor column under `Interface Type 1` · §8
-  [R-CAM-01 §5] · static trace of the cursor resolver's second case family.
 - The user-facing name of the F4 toggle; the `+MakePoster` argument grammar ·
   §2 [R-CAM-01 §2, §6] · static trace / manual retail observation (developer
   tooling, low priority; no implementation decision turns on either).

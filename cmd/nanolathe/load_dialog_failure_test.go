@@ -59,6 +59,8 @@ func TestLoadRefusalRetainsSelectedDialog(t *testing.T) {
 				t.Fatal(err)
 			}
 			cl.Input().Kbd.SetKey(input.KeyEnter, true)
+			// The host produces a token separately from its held-key table [07 §2].
+			cl.Input().EnqueueToken(input.Token{Kind: input.TokenEdit, Key: input.KeyEnter})
 			shell.menuInput(cl)
 			if shell.frontend.Panels.Modal() != nil || !shell.saveLoadPanelActive() {
 				t.Fatal("refusal did not return to the load dialog")

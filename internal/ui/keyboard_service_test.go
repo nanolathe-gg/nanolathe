@@ -81,27 +81,39 @@ func TestKeyboardQuickKeyMutatesRadioAndKeepsIndexedFirstFire(t *testing.T) {
 func TestKeyboardAltQuickKeyPrecedesCapturedEditor(t *testing.T) {
 	p := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel},
-		{Kind: gui.KindTextBox, Name: "EDIT", Active: 1, MaxChars: 8},
 		{Kind: gui.KindButton, Name: "ACTION", Active: 1, QuickKey: 'A'},
+		{Kind: gui.KindTextBox, Name: "EDIT", Active: 1, MaxChars: 8},
 	}})
-	p.FocusEditor(1)
+	p.FocusEditor(2)
 	r := p.ServiceFrame(WidgetFrame{Tokens: []input.Token{{Kind: input.TokenText, Rune: 'a'}}, AltHeld: true}, WidgetHooks{})
-	if !r.Fired || r.FiredIndex != 2 || r.ConsumedTokens != 1 || p.TextAt(1) != "" {
-		t.Fatalf("Alt quickkey result=%+v text=%q", r, p.TextAt(1))
+	if !r.Fired || r.FiredIndex != 1 || r.ConsumedTokens != 1 || p.TextAt(2) != "" {
+		t.Fatalf("Alt quickkey result=%+v text=%q", r, p.TextAt(2))
 	}
 }
 
-func TestKeyboardAltEditorLeavesQuickKeyInIndexedPointerOrder(t *testing.T) {
-	p := NewPanel(&gui.Window{Rect: gui.Rect{W: 100, H: 20}, Gadgets: []gui.Gadget{
+func TestKeyboardCapturedEditorPrecedesLaterAltQuickKey(t *testing.T) {
+	p := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel},
 		{Kind: gui.KindTextBox, Name: "EDIT", Active: 1, Attribs: 1, MaxChars: 8, Rect: gui.Rect{W: 20}},
-		{Kind: gui.KindButton, Name: "POINTER", Active: 1, Attribs: 0x100, Rect: gui.Rect{X: 30, W: 8, H: 8}},
 		{Kind: gui.KindButton, Name: "ACTION", Active: 1, QuickKey: 'A'},
 	}})
 	p.FocusEditor(1)
-	r := p.ServiceFrame(WidgetFrame{AltHeld: true, HeldButtons: 1, PointerEvents: []input.PointerEvent{{Kind: input.LeftDown, X: 31, Y: 1}}, Tokens: []input.Token{{Kind: input.TokenText, Rune: 'a'}}}, WidgetHooks{})
-	if !r.Fired || r.FiredIndex != 2 || r.ConsumedTokens != 0 || p.TextAt(1) != "" {
-		t.Fatalf("pointer ordering result=%+v text=%q", r, p.TextAt(1))
+	r := p.ServiceFrame(WidgetFrame{AltHeld: true, Tokens: []input.Token{{Kind: input.TokenText, Rune: 'a'}}}, WidgetHooks{})
+	if r.Fired || r.ConsumedTokens != 1 || p.TextAt(1) != "a" || !p.EditorCaptured() {
+		t.Fatalf("editor ordering result=%+v text=%q capture=%t", r, p.TextAt(1), p.EditorCaptured())
+	}
+}
+
+func TestKeyboardButtonQuickKeyDoesNotPreemptCapturedEditorWithoutAlt(t *testing.T) {
+	p := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel},
+		{Kind: gui.KindButton, Name: "ACTION", Active: 1, QuickKey: 'A'},
+		{Kind: gui.KindTextBox, Name: "EDIT", Active: 1, Attribs: 1, MaxChars: 8, Rect: gui.Rect{W: 20}},
+	}})
+	p.FocusEditor(2)
+	r := p.ServiceFrame(WidgetFrame{Tokens: []input.Token{{Kind: input.TokenText, Rune: 'a'}}}, WidgetHooks{})
+	if r.Fired || r.ConsumedTokens != 1 || p.TextAt(2) != "a" || !p.EditorCaptured() {
+		t.Fatalf("no-Alt result=%+v text=%q capture=%t", r, p.TextAt(2), p.EditorCaptured())
 	}
 }
 
@@ -122,8 +134,8 @@ func TestKeyboardLabelQuickKeyUsesLinkAndCaptureRules(t *testing.T) {
 	}
 	p.FocusEditor(1)
 	r = p.ServiceFrame(WidgetFrame{Tokens: []input.Token{{Kind: input.TokenText, Rune: 'l'}}, AltHeld: true}, WidgetHooks{})
-	if r.Fired || r.ConsumedTokens != 1 || p.Focused() != 3 || !p.EditorCaptured() {
-		t.Fatalf("Alt label focus result=%+v focus=%d capture=%t", r, p.Focused(), p.EditorCaptured())
+	if r.Fired || r.ConsumedTokens != 1 || p.TextAt(1) != "ll" || p.Focused() != 1 || !p.EditorCaptured() {
+		t.Fatalf("Alt editor ordering result=%+v text=%q focus=%d capture=%t", r, p.TextAt(1), p.Focused(), p.EditorCaptured())
 	}
 	p = newPanel(gui.Gadget{Kind: gui.KindScrollBar, Name: "TARGET", Active: 1, Attribs: 0x10})
 	r = p.ServiceFrame(WidgetFrame{Tokens: []input.Token{{Kind: input.TokenText, Rune: 'l'}}}, WidgetHooks{})
