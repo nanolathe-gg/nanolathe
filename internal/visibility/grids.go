@@ -58,6 +58,10 @@ type Service struct {
 	// It is the friendly pass's third disjunct: a defeated viewer marks every
 	// live unit friendly [R-VIS-01 §4] pass 1.
 	viewerDefeated bool
+
+	// sensorIndex is rebuilt from the immutable SensorTick input before its
+	// ordered candidate walks. It has no movement-phase dependency.
+	sensorIndex sensorCandidateIndex
 }
 
 type sensorStatus struct {

@@ -341,13 +341,15 @@ func (g *gameShell) commitSaveLoadLoad() {
 	// The load arm's cue follows its disc gates, which this build has no
 	// backend for, and precedes the restore [08 R-SAVE-02 §1].
 	g.playMenuCue(cueSaveLoadCommit)
-	// The dialog is closed before the route runs: a continuation replaces the
-	// frontend surface and a battle restore replaces the client stage, so the
-	// dialog must not remain on the stack underneath either.
-	g.closeSaveLoadScreen()
+	// Keep the selected row and dialog buffers through detached preparation:
+	// a preflight refusal returns to this load screen [08 R-SAVE-02 §2].
 	if err := g.loadRetailSavePath(entry.Path); err != nil {
 		reportRetailMessageError(g.showRetailMessage(retailInvalidSaveMessage))
+		return
 	}
+	// Successful routing may already have replaced the frontend stack. Close
+	// any surviving dialog and release its buffers only after that commit.
+	g.closeSaveLoadScreen()
 }
 
 // commitSaveLoadWrite writes the bank the current surface owns: a

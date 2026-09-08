@@ -2,9 +2,10 @@ package gui
 
 import "strings"
 
-// GadgetName is the byte span used by named lookup and screen callbacks.
+// GadgetName is the byte span used by bounded named lookup.
 // Retail compares at most 16 bytes and stops at a terminator; case and
-// whitespace remain significant [07 R-FE-02 §5].
+// whitespace remain significant [07 R-FE-02 §5]. Callback comparisons use
+// full terminated names instead [07 R-WGT-02 §2].
 func GadgetName(name string) string {
 	if len(name) > 16 {
 		name = name[:16]

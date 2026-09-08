@@ -95,7 +95,9 @@ save's `Player%i` account — reads the player record `[08 R-SKIR-01 §2]`
 The frontend save/load dialog compiles side definitions from its mounted VFS
 without building a battle catalog. It owns a prepared side display-name slice
 until close; the summary painter indexes that copy by the saved side ordinal
-[08 R-SAVE-02 §3].
+[08 R-SAVE-02 §3]. Load preparation retains the dialog, selection and buffers
+through refusal; the invalid-save message covers the same load screen. Only a
+successful route commit releases that dialog [08 R-SAVE-02 §2].
 
 ### 2.1 `internal/session` — states, entry, results, saves
 

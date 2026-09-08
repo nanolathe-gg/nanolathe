@@ -816,19 +816,53 @@ is no per-kind key table beyond this: buttons additionally answer their
 quickkey (§3), labels theirs (§7), and text inputs drain the token stream
 themselves (§6). Every other token passes through.
 
-**Focus order (Established).** Candidates are active gadgets of kinds
-button, listbox, text input, slider and surface whose attribute bit `0x400`
-is clear, excluding greyed buttons, locked sliders, **vertical** sliders
-(height > width) and listboxes with attribute `0x100`. Each gadget's Y is
-snapped to a row: the first gadget in index order whose Y is within 9
-pixels (`|dy| < 10`) donates its Y. For Left/Right the ordering key is
-`x + y·5000` with the raw Y; for Up/Down it is `y + row·5000`. The move
-picks the candidate with the largest key below the focused gadget's key
-(Left/Up) or the smallest key above it (Right/Down), wrapping around by
-adding or subtracting `10⁸` when no candidate lies on that side; ties are
-resolved by index order (strict comparisons). The move releases the
-capture and, when the new focus is a text input, sets its colour, font and
-caret.
+**Focus order (Established by direct static trace for windows with at most
+49 controls).** No focus (`−1`) returns immediately without changing focus or
+capture. Otherwise traversal first constructs a canonical-X value for every
+control in file order, including controls later rejected as candidates. For
+each control, scan the prior canonical values from index 1 until the first
+zero. The first value within nine pixels of the control's raw X donates its
+value: the signed difference must be strictly greater than −10 and strictly
+less than 10. If none matches, keep the raw X. Thus columns can inherit an
+already clustered X; the scratch does not group Y rows. Zero terminates the
+donor scan rather than donating a coordinate. A first control at X=0 prevents
+all later clustering; a later zero cuts off itself and subsequent entries
+from later donor scans.
+
+Candidates are active controls of kinds button, listbox, text input, slider
+and surface whose attribute `0x400` is clear. Exclude greyed buttons, locked
+sliders, vertical sliders (`width < height`, so a square remains eligible),
+and listboxes with attribute `0x100`. Surfaces have no `hotornot` test here.
+Left and Shift+Tab move backward in raw `x + y·5000` order; Right and Tab
+move forward in that order. Up and Down use `y + canonicalX·5000`, backward
+and forward respectively. The keys and their adjustments use signed 32-bit
+arithmetic.
+
+Backward selection starts with a best key of `currentKey − 25,000,000`.
+For each eligible control in ascending index order, subtract 25,000,000 once
+when its key is at least the current key, then select it only when the
+adjusted key is strictly greater than the best key. Forward selection starts
+at `currentKey + 25,000,000`, adds 25,000,000 once to candidate keys at or
+below the current key, and selects only strict improvements below the best
+key. Equal candidate keys retain the first indexed winner. A candidate tied
+with the current key maps to the initial boundary and cannot replace the
+current focus. If no candidate improves the boundary, focus remains unchanged.
+The previous row-grouping and larger wrap-distance description was incorrect.
+
+After an attempt with a nonnegative focus, capture is released and the chosen
+index is stored, even when unchanged. Text-input focus initializes its colour,
+font and caret. Opening with empty `defaultfocus` seeds header index 0 and
+runs forward traversal; a nonempty field instead installs the exact bounded
+lookup result. Disabling the focused control also invokes forward traversal.
+
+**Unknown — focus scratch beyond 49 controls.** Only the first 50 canonical
+entries, including header index 0, are initialized before the control walk.
+There is no corresponding count guard, so the donor scan for later controls
+can depend on uninitialized temporary values. All GUI provider copies in the
+reference install have at most 43 controls; stock content does not settle
+that larger authored-input behavior. A bounded initialization/lifetime trace
+or manual observation of such a custom window is required before assigning
+a deterministic result. No implementation should invent that residue.
 
 
 ## 4. GUI file and widget model
@@ -1543,13 +1577,13 @@ untouched unless the clip rectangle says otherwise.
 close of [R-HUD-04 §3] and the options-close path use it.
 
 **Established — the fired-gadget name test.** The callback-side "which
-gadget fired" test of [R-FE-01 §2] compares the **focused** gadget's name
-(the record at the interface object's focused index — the fired gadget
-becomes the focused gadget before the fired callback runs, [R-WGT-01 §1]
-step 8) with the wanted text by a full C string compare — not the 16-byte
-bounded compare of the lookups in [R-FE-02 §5]; false when no window is
-open or no gadget is focused. Because authored names are at most 16 bytes
-with a terminator the two compares agree on stock content.
+gadget fired" predicate reads the record selected by the fired-gadget index,
+not the mutable focus field. With no top window or fired index `−1`, it is
+false. Otherwise it compares that record's name with the wanted string using
+full NUL-terminated byte equality: case and whitespace matter, and there is
+no 16-byte comparison bound. This is distinct from the bounded named-lookup
+helpers of [R-FE-02 §5]. Normal loaded names terminate within their name field,
+so the two predicates agree for ordinary stock names.
 
 #### Gadget appenders for the dialog builders [R-WGT-02 §3]
 
@@ -3127,10 +3161,10 @@ there is no reference counting.
 **Established fact — name lookup.** Every screen in this document finds its
 gadgets by name through one family of helpers, all of which scan gadget
 records 1..count in index order and compare the authored 16-byte name field
-with `strncmp(name, wanted, 16)` — **case-sensitive, first match wins** (the
-callback-side "which gadget fired" tests of [R-FE-01 §2] are the same
-compare on the fired record). The variants differ only in what they return
-and in what a miss does:
+with `strncmp(name, wanted, 16)` — **case-sensitive, first match wins**.
+The callback-side "which gadget fired" predicate instead compares the
+fired-index record's complete terminated name [R-WGT-02 §2]. The lookup
+variants differ only in what they return and in what a miss does:
 
 | Helper | Returns | On a miss |
 |---|---|---|
@@ -7433,6 +7467,8 @@ supported inference, not established fact.
 
 Open items only. Each bullet states what is unknown, the section that owns it,
 and the decider that would close it.
+
+- Focus traversal for windows with more than 49 controls depends on incompletely initialized canonical-coordinate scratch · [R-WGT-01 §2] · bounded initialization/lifetime trace or manual custom-window observation.
 
 ### Input and text
 

@@ -165,6 +165,14 @@ func planarSquared(a, b *SensorUnit) int32 {
 	return wholeSquare(dx) + wholeSquare(dz)
 }
 
+// sensorCandidates returns a partial candidate list only when the rebuilt
+// index proves its square bounds the raw fixed-point visitor. A nil result
+// tells the caller to retain the existing exhaustive input-order walk; a
+// non-nil result has already restored that same order.
+func (s *Service) sensorCandidates(source *SensorUnit, radius int32) []int {
+	return s.sensorIndex.candidatesFor(source, radius)
+}
+
 // SensorTick runs the sensor and proximity phase at a due viewing-player
 // settlement entry [03 §3.4][R-SENSOR-01][R-VIS-01 §4].
 //
@@ -204,6 +212,7 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 	if playerCount <= 1 {
 		return // more than one player required [R-VIS-01 §4] "Gate"
 	}
+	s.sensorIndex.rebuild(units)
 	sea := s.seaLevelWorld()
 
 	// Pass 1 — clear and friendly marking [R-VIS-01 §4].
@@ -259,27 +268,50 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		radarRadius := e.RadarDistance + 2*worldHigh(e.Y)
 		radar2 := radiusSquared(radarRadius)
 		sonar2 := radiusSquared(e.SonarDistance)
-		for j := range units {
-			c := &units[j]
-			if !c.Alive || c.Status == nil {
-				continue
+		candidates := s.sensorCandidates(e, search)
+		if candidates == nil || len(candidates) == len(units) {
+			for j := range units {
+				c := &units[j]
+				if !c.Alive || c.Status == nil {
+					continue
+				}
+				if c.Owner == s.local || c.Stealth {
+					continue
+				}
+				d2 := planarSquared(e, c)
+				if d2 > search2 {
+					continue
+				}
+				if c.Y <= sea && d2 < sonar2 {
+					*c.Status |= SonarBit
+				}
+				if sea <= c.Y+numeric.Fixed(int64(c.ModelTop)<<16) && d2 < radar2 {
+					*c.Status |= SeenBit
+				}
 			}
-			// Rejects in order: an own-side candidate, then definition
-			// stealth, which suppresses radar and sonar outright with no
-			// distance or elevation term [R-VIS-01 §5].
-			if c.Owner == s.local || c.Stealth {
-				continue
-			}
-			d2 := planarSquared(e, c)
-			if d2 > search2 {
-				continue // the visitor's own test is inclusive [R-VIS-01 §5]
-			}
-			// Both callback comparisons are strict [R-VIS-01 §5].
-			if c.Y <= sea && d2 < sonar2 {
-				*c.Status |= SonarBit
-			}
-			if sea <= c.Y+numeric.Fixed(int64(c.ModelTop)<<16) && d2 < radar2 {
-				*c.Status |= SeenBit
+		} else {
+			for _, j := range candidates {
+				c := &units[j]
+				if !c.Alive || c.Status == nil {
+					continue
+				}
+				// Rejects in order: an own-side candidate, then definition
+				// stealth, which suppresses radar and sonar outright with no
+				// distance or elevation term [R-VIS-01 §5].
+				if c.Owner == s.local || c.Stealth {
+					continue
+				}
+				d2 := planarSquared(e, c)
+				if d2 > search2 {
+					continue // the visitor's own test is inclusive [R-VIS-01 §5]
+				}
+				// Both callback comparisons are strict [R-VIS-01 §5].
+				if c.Y <= sea && d2 < sonar2 {
+					*c.Status |= SonarBit
+				}
+				if sea <= c.Y+numeric.Fixed(int64(c.ModelTop)<<16) && d2 < radar2 {
+					*c.Status |= SeenBit
+				}
 			}
 		}
 	}
@@ -294,22 +326,44 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		}
 		if e.RadarJam != 0 {
 			r2 := radiusSquared(e.RadarJam)
-			for j := range units {
-				c := &units[j]
-				if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
-					continue
+			candidates := s.sensorCandidates(e, e.RadarJam)
+			if candidates == nil || len(candidates) == len(units) {
+				for j := range units {
+					c := &units[j]
+					if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
+						continue
+					}
+					*c.Status = (*c.Status &^ SeenBit) | JammedBit
 				}
-				*c.Status = (*c.Status &^ SeenBit) | JammedBit
+			} else {
+				for _, j := range candidates {
+					c := &units[j]
+					if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
+						continue
+					}
+					*c.Status = (*c.Status &^ SeenBit) | JammedBit
+				}
 			}
 		}
 		if e.SonarJam != 0 {
 			r2 := radiusSquared(e.SonarJam)
-			for j := range units {
-				c := &units[j]
-				if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
-					continue
+			candidates := s.sensorCandidates(e, e.SonarJam)
+			if candidates == nil || len(candidates) == len(units) {
+				for j := range units {
+					c := &units[j]
+					if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
+						continue
+					}
+					*c.Status = (*c.Status &^ SonarBit) | JammedBit
 				}
-				*c.Status = (*c.Status &^ SonarBit) | JammedBit
+			} else {
+				for _, j := range candidates {
+					c := &units[j]
+					if !c.Alive || c.Status == nil || planarSquared(e, c) > r2 {
+						continue
+					}
+					*c.Status = (*c.Status &^ SonarBit) | JammedBit
+				}
 			}
 		}
 	}
@@ -354,22 +408,43 @@ func (s *Service) SensorTick(tick uint32, playerCount int, units []SensorUnit) {
 		mc := src.MinCloakDistance
 		r2 := radiusSquared(mc)
 		member := uint16(1) << uint(src.Owner)
-		for j := range units {
-			dst := &units[j]
-			if dst.PrimaryCandidateOf&member == 0 {
-				continue // not on this side's primary list [06 §3.1]
+		candidates := s.sensorCandidates(src, mc)
+		if candidates == nil || len(candidates) == len(units) {
+			for j := range units {
+				dst := &units[j]
+				if dst.PrimaryCandidateOf&member == 0 {
+					continue
+				}
+				if !dst.Alive || dst.Dying {
+					continue
+				}
+				if planarSquared(src, dst) > r2 {
+					continue
+				}
+				*src.Status |= DecloakBit
+				if src.DecloakDeadline != nil {
+					*src.DecloakDeadline = tick + DecloakDeadlineAdd
+				}
+				break
 			}
-			if !dst.Alive || dst.Dying {
-				continue // liveness and death latch, re-tested at use [06 §3.1]
+		} else {
+			for _, j := range candidates {
+				dst := &units[j]
+				if dst.PrimaryCandidateOf&member == 0 {
+					continue // not on this side's primary list [06 §3.1]
+				}
+				if !dst.Alive || dst.Dying {
+					continue // liveness and death latch, re-tested at use [06 §3.1]
+				}
+				if planarSquared(src, dst) > r2 {
+					continue // the breach test is inclusive [R-VIS-01 §4] pass 4
+				}
+				*src.Status |= DecloakBit
+				if src.DecloakDeadline != nil {
+					*src.DecloakDeadline = tick + DecloakDeadlineAdd
+				}
+				break
 			}
-			if planarSquared(src, dst) > r2 {
-				continue // the breach test is inclusive [R-VIS-01 §4] pass 4
-			}
-			*src.Status |= DecloakBit
-			if src.DecloakDeadline != nil {
-				*src.DecloakDeadline = tick + DecloakDeadlineAdd
-			}
-			break
 		}
 	}
 

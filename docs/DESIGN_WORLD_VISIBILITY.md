@@ -264,6 +264,41 @@ after settlement gates, using `TickPlayer`'s returned deadline verdict.
 Between due passes, stored sensor status remains unchanged; LOS publication
 still runs on each eligible player entry `[03 R-SENSOR-01]`.
 
+**Ordered sensor broad phase (PERF-REND-03 implementation contract).**
+`Service.SensorTick(tick, playerCount, units)` keeps its public API and owns
+any reusable candidate scratch. Build that scratch from the supplied immutable
+position snapshot at each due call; do not borrow a movement index whose update
+phase differs. Candidate queries return input indexes in their original order
+(the production caller supplies ascending unit slots), without duplicates or
+omitting any candidate admitted by the existing exact distance predicate.
+Keep all five passes, emitter gates, stale primary membership, callback tests,
+deadlines and publication at their existing owners [03 R-VIS-01 §4–§5].
+
+The internal index may use the established 128-world-unit cell size. It is an
+optimization of candidate enumeration, not a replacement distance metric.
+Fractional product truncation and signed coordinate/radius wrapping can admit
+points outside a naive geometric square. Prove conservative query bounds;
+use the exhaustive walk when those bounds cannot be proved for an input.
+No public tuning switch, new dependency or simulation map iteration is needed.
+
+The implementation rebuilds a 128-unit grid from the supplied positions and
+uses it only while each raw coordinate span is at most signed-32-bit maximum,
+the radius is non-negative and no greater than 32767, and the grid is both
+bounded and sparse enough to repay an ordered merge. In that domain the
+raw-square visitor cannot wrap: an admitted point has each raw axis delta
+strictly below `(radius + 1)` whole world units, so the expanded square is
+conservative. Queries merge cell lists back into input-index order before the
+exact predicate. A failed condition, including a compact population, chooses
+the original exhaustive input walk.
+
+Acceptance compares status words, suppression deadlines and published snapshots
+with the exhaustive production baseline across authored fractional, boundary,
+wrapped-coordinate/radius, dead, stealth, owner and stale-membership cases.
+Measure sparse and dense 500- and 1000-unit populations, including index rebuild
+and warm scratch reuse; report allocation and timing without extrapolating to
+whole-battle performance. A measured decision to retain an exhaustive path for
+a workload is valid; a changed verdict is not an optimization.
+
 **Fog state** (`fog.go`). `FogCache` holds two per-cell channels of 0..15 built
 from the authoritative stores — channel one from the viewing player's byte grid
 when current coverage is enabled, channel zero from the word grid's history bit —

@@ -17,7 +17,8 @@ Three conventional uses:
 - **Textures** (`textures/`): model textures referenced by name from 3DO
   primitives. Multi-frame texture entries animate (flashing lights);
   ten-frame entries in `textures/LOGOS.GAF` are the team-color textures
-  (frame *n* is drawn for player *n*).
+  (the owner's colour index selects the frame, independently of player slot;
+  **Established** [03 R-RAST-01 §3]).
 - **Build pictures inside menu GAFs** (e.g. `anims/ARMALAB.GAF` contains a
   64×64 entry per unit the ARM Kbot Lab can build).
 
@@ -266,10 +267,11 @@ null sequence with no message.
   invented art. The engine draws the widgets — minimap frame, order and build
   buttons — *over* this background; a HUD showing bare dark static is missing
   those widgets, not mis-decoding the panel.
-- Controlled retail model probes establish that a 10-frame `LOGOS.GAF`
-  entry stores ten complete player-specific indexed textures: select frame
-  *n* for player *n*, sample that frame's indexes, then apply the model's
-  `PALETTE.SHD` row and resolve the result through the shared palette. This
+- **Established** [03 R-RAST-01 §3]: a 10-frame `LOGOS.GAF` entry stores ten
+  complete colour-specific indexed textures. The owner's colour index selects
+  the frame independently of player slot. Sample that frame's indexes; the
+  shaded structure branch applies its interpolated `PALETTE.SHD` row, while
+  the unshaded branch uses the indexes directly [03 R-RND-02A]. This
   is **not** equivalent to deriving one global index substitution from frame
   0. Frames contain entry-specific spatial differences, and some corresponding
   frames even differ in dimensions (for example 32x32 versus 32x33).

@@ -168,7 +168,7 @@ type SampleCache struct {
 }
 
 // SetFS updates VFS resolution for an existing cache without discarding
-// already decoded samples or their stable eviction order.
+// already decoded samples or their stable insertion order.
 func (c *SampleCache) SetFS(fs vfs.FSOps) {
 	if c != nil && fs != nil {
 		c.fs = fs
