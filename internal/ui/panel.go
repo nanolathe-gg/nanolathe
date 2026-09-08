@@ -63,7 +63,12 @@ func (l *List) SetTop(top int) {
 // ListValues returns an immutable row snapshot and current presentation
 // indices for a named list.
 func (p *Panel) ListValues(name string) (items []string, selected, top int, ok bool) {
-	l := p.list(name)
+	return p.ListValuesAt(p.Index(name))
+}
+
+// ListValuesAt returns the row snapshot for one gadget record.
+func (p *Panel) ListValuesAt(index int) (items []string, selected, top int, ok bool) {
+	l := p.ListAt(index)
 	if l == nil {
 		return nil, 0, 0, false
 	}
@@ -80,12 +85,9 @@ func (p *Panel) ListFor(name string) *List { return p.list(name) }
 // list scrolling, and list selection belong here [07 §3][07 §4].
 type Panel struct {
 	Window *gui.Window
-	Text   map[string]string
-	Help   map[string]string
-	Active map[string]bool
-	Status map[string]int
-	Lists  map[string]*List
-	Owner  map[string]string
+	// Each authored record owns its state even when names are identical.
+	// Named operations resolve the first matching record [07 R-FE-02 §5].
+	states []gadgetState
 
 	focus        int
 	pressed      int
@@ -101,6 +103,13 @@ type Panel struct {
 	// the instance rather than to the compiled definition
 	// [07 R-WGT-01 §1][07 R-WGT-01 §12][03 R-FONT-01 §6].
 	flash []uint16
+}
+
+type gadgetState struct {
+	text, help string
+	active     bool
+	status     int
+	list       *List
 }
 
 // ActionKind identifies the presentation event emitted by an authored panel.
@@ -129,7 +138,7 @@ type scrollDrag struct {
 	startTop   int
 	maxTop     int
 	travel     int
-	list       string
+	list       int
 }
 
 // PanelEntry is one object in the authored panel stack. Modal entries are
@@ -259,10 +268,10 @@ func (s *PanelStack) Entries() []PanelEntry {
 }
 
 // NewPanel builds the mutable state for one authored window: its focus,
-// press indices and the per-gadget text, help, active, status and list maps
+// press indices and the per-gadget text, help, active, status and list state
 // [07 §5] [07 R-WGT-01 §1].
 func NewPanel(window *gui.Window) *Panel {
-	p := &Panel{Window: window, Text: make(map[string]string), Help: make(map[string]string), Active: make(map[string]bool), Status: make(map[string]int), Lists: make(map[string]*List), Owner: make(map[string]string), focus: -1, pressed: -1, rightPressed: -1, editor: editorState{captured: -1}}
+	p := &Panel{Window: window, focus: -1, pressed: -1, rightPressed: -1, editor: editorState{captured: -1}}
 	if window == nil {
 		return p
 	}
@@ -282,31 +291,23 @@ func NewPanel(window *gui.Window) *Panel {
 			p.flash[i] = gadget.ColorF
 		}
 	}
-	for _, gadget := range window.Gadgets {
-		key := Key(gadget.Name)
-		if key == "" {
-			continue
-		}
-		if _, exists := p.Owner[key]; exists {
-			continue
-		}
-		p.Owner[key] = gadget.SourceName
-		p.Text[key] = gadget.Text
-		p.Help[key] = gadget.Help
-		p.Active[key] = gadget.Active != 0
-		p.Status[key] = int(gadget.Status)
+	p.states = make([]gadgetState, len(window.Gadgets))
+	for i, gadget := range window.Gadgets {
+		p.states[i] = gadgetState{text: gadget.Text, help: gadget.Help, active: gadget.Active != 0, status: int(gadget.Status)}
 		if gadget.Kind == gui.KindListBox {
-			p.Lists[key] = &List{}
+			p.states[i].list = &List{}
 		}
 	}
+
 	return p
 }
 
-// Key is the lookup form of an authored control name: trimmed and lowercased.
+// Key is the legacy screen-action normalization. Gadget lookup uses Index.
+// TODO(I16): migrate screen callback comparisons to [07 R-FE-02 §5].
 func Key(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
 
 // ActiveOf reports the active flag recorded for a named control.
-func (p *Panel) ActiveOf(name string) bool { return p != nil && p.Active[Key(name)] }
+func (p *Panel) ActiveOf(name string) bool { return p.ActiveAt(p.Index(name)) }
 
 // SetFocus records the focused gadget index; -1 is no focus.
 func (p *Panel) SetFocus(index int) {
@@ -379,9 +380,10 @@ func (p *Panel) ReleaseAction(x, y int32) Action {
 	}
 	gadget := p.Window.Gadgets[idx]
 	if gadget.Kind == gui.KindLabel && gadget.Link != "" {
-		for target, candidate := range p.Window.Gadgets {
-			if Key(candidate.Name) != Key(gadget.Link) || !p.ActiveOf(candidate.Name) {
-				continue
+		if target := p.Index(gadget.Link); target >= 0 {
+			candidate := p.Window.Gadgets[target]
+			if !p.ActiveAt(target) {
+				return Action{Kind: ActionNone, Index: -1}
 			}
 			if candidate.Kind == gui.KindButton {
 				if candidate.GrayedOut != 0 {
@@ -418,17 +420,17 @@ func (p *Panel) BeginScrollDrag(index int, vertical bool, coordinate int32, maxT
 	if g.Kind != gui.KindScrollBar {
 		return false
 	}
-	name := ""
-	for _, list := range p.Window.Gadgets {
-		if list.Kind == gui.KindListBox && list.Assoc == g.Assoc {
-			name = list.Name
+	listIndex := -1
+	for i, list := range p.Window.Gadgets {
+		if i > 0 && list.Kind == gui.KindListBox && list.Assoc == g.Assoc {
+			listIndex = i
 			break
 		}
 	}
-	if name == "" || p.list(name) == nil {
+	if p.ListAt(listIndex) == nil {
 		return false
 	}
-	p.drag = scrollDrag{active: true, vertical: vertical, startCoord: coordinate, startTop: p.list(name).Top(), maxTop: maxTop, travel: travel, list: name}
+	p.drag = scrollDrag{active: true, vertical: vertical, startCoord: coordinate, startTop: p.ListAt(listIndex).Top(), maxTop: maxTop, travel: travel, list: listIndex}
 	return true
 }
 
@@ -451,7 +453,7 @@ func (p *Panel) UpdateScrollDrag(x, y int32, held bool) bool {
 	}
 	d := int(coordinate - p.drag.startCoord)
 	top := p.drag.startTop + d*p.drag.maxTop/p.drag.travel
-	p.SetListTop(p.drag.list, top, p.drag.maxTop)
+	p.SetListTopAt(p.drag.list, top, p.drag.maxTop)
 	return true
 }
 
@@ -486,75 +488,78 @@ func (p *Panel) Message() string {
 	return p.message
 }
 
-// SetActive records the active flag for a named control.
-func (p *Panel) SetActive(name string, active bool) {
-	if p != nil {
-		p.Active[Key(name)] = active
-	}
-}
-
-// StatusOf is the stage word recorded for a named control.
-func (p *Panel) StatusOf(name string) int {
+// Index finds the first matching authored record after the window header.
+// Comparison is byte-exact, stops at a terminator and examines at most 16
+// bytes; case and whitespace are significant [07 R-FE-02 §5].
+func (p *Panel) Index(name string) int {
 	if p == nil {
-		return 0
+		return -1
 	}
-	return p.Status[Key(name)]
+	return p.Window.GadgetIndex(name)
 }
 
-// SetStatus records the stage word for a named control.
-func (p *Panel) SetStatus(name string, status int) {
-	if p != nil {
-		p.Status[Key(name)] = status
+func (p *Panel) stateAt(index int) *gadgetState {
+	if p == nil || index < 0 || index >= len(p.states) {
+		return nil
 	}
+	return &p.states[index]
 }
 
-// SetText records the runtime text for a named control.
-func (p *Panel) SetText(name, value string) {
-	if p == nil {
-		return
-	}
-	key := Key(name)
-	p.Text[key] = value
-	if p.editor.captured >= 0 && p.Window != nil && p.editor.captured < len(p.Window.Gadgets) && Key(p.Window.Gadgets[p.editor.captured].Name) == key {
-		p.editor.caret = len(value)
+func (p *Panel) ActiveAt(index int) bool { s := p.stateAt(index); return s != nil && s.active }
+func (p *Panel) SetActiveAt(index int, active bool) {
+	if s := p.stateAt(index); s != nil {
+		s.active = active
 	}
 }
-
-// TextOf is the runtime text recorded for a named control.
-func (p *Panel) TextOf(name string) string {
-	if p == nil {
-		return ""
+func (p *Panel) SetActive(name string, active bool) { p.SetActiveAt(p.Index(name), active) }
+func (p *Panel) StatusAt(index int) int {
+	if s := p.stateAt(index); s != nil {
+		return s.status
 	}
-	return p.Text[Key(name)]
+	return 0
 }
-
-// TextFor is the text one gadget draws: the runtime text when this panel owns
-// the name, and the gadget's own authored text when a differently sourced
-// gadget shares it [07 §5].
-func (p *Panel) TextFor(gadget gui.Gadget) string {
-	if p == nil {
-		return ""
-	}
-	key := Key(gadget.Name)
-	if owner, ok := p.Owner[key]; ok && owner != gadget.SourceName {
-		return gadget.Text
-	}
-	return p.Text[key]
-}
-
-// SetHelp records the hover-help text for a named control.
-func (p *Panel) SetHelp(name, value string) {
-	if p != nil {
-		p.Help[Key(name)] = value
+func (p *Panel) SetStatusAt(index, status int) {
+	if s := p.stateAt(index); s != nil {
+		s.status = status
 	}
 }
-
-// HelpOf is the hover-help text recorded for a named control.
-func (p *Panel) HelpOf(name string) string {
-	if p == nil {
-		return ""
+func (p *Panel) StatusOf(name string) int          { return p.StatusAt(p.Index(name)) }
+func (p *Panel) SetStatus(name string, status int) { p.SetStatusAt(p.Index(name), status) }
+func (p *Panel) TextAt(index int) string {
+	if s := p.stateAt(index); s != nil {
+		return s.text
 	}
-	return p.Help[Key(name)]
+	return ""
+}
+func (p *Panel) SetTextAt(index int, value string) {
+	if s := p.stateAt(index); s != nil {
+		s.text = value
+		if p.editor.captured == index {
+			p.editor.caret = len(value)
+		}
+	}
+}
+func (p *Panel) SetText(name, value string) { p.SetTextAt(p.Index(name), value) }
+func (p *Panel) TextOf(name string) string  { return p.TextAt(p.Index(name)) }
+
+func (p *Panel) HelpAt(index int) string {
+	if s := p.stateAt(index); s != nil {
+		return s.help
+	}
+	return ""
+}
+func (p *Panel) SetHelpAt(index int, value string) {
+	if s := p.stateAt(index); s != nil {
+		s.help = value
+	}
+}
+func (p *Panel) SetHelp(name, value string) { p.SetHelpAt(p.Index(name), value) }
+func (p *Panel) HelpOf(name string) string  { return p.HelpAt(p.Index(name)) }
+func (p *Panel) ListAt(index int) *List {
+	if s := p.stateAt(index); s != nil {
+		return s.list
+	}
+	return nil
 }
 
 // FlashRow returns the gadget's light-table row — the runtime `colorf` word.
@@ -619,7 +624,7 @@ func (p *Panel) HitTest(x, y int32) int {
 	}
 	hovered := -1
 	for i, gadget := range p.Window.Gadgets {
-		if i == 0 || gadget.Kind == gui.KindPanel || !p.ActiveOf(gadget.Name) {
+		if i == 0 || gadget.Kind == gui.KindPanel || !p.ActiveAt(i) {
 			continue
 		}
 		r := p.Window.PlacedRect(i)
@@ -642,7 +647,7 @@ func (p *Panel) Fires(index int) bool {
 		return false
 	}
 	g := p.Window.Gadgets[index]
-	return kindHasPressHandler(g) && p.ActiveOf(g.Name) && g.GrayedOut == 0
+	return kindHasPressHandler(g) && p.ActiveAt(index) && g.GrayedOut == 0
 }
 
 // kindHasPressHandler reports whether a gadget kind's handler accepts a press
@@ -721,15 +726,18 @@ func (p *Panel) Release(x, y int32) (int, bool) {
 }
 
 // SetList replaces rows and clamps selection/top to the list's range.
-func (p *Panel) SetList(name string, items []string) {
-	if p == nil {
+func (p *Panel) SetList(name string, items []string) { p.SetListAt(p.Index(name), items) }
+
+// SetListAt replaces the rows owned by one gadget record.
+func (p *Panel) SetListAt(index int, items []string) {
+	state := p.stateAt(index)
+	if state == nil {
 		return
 	}
-	key := Key(name)
-	l := p.Lists[key]
+	l := state.list
 	if l == nil {
 		l = &List{}
-		p.Lists[key] = l
+		state.list = l
 	}
 	l.items = append(l.items[:0], items...)
 	if len(l.items) == 0 {
@@ -752,7 +760,12 @@ func (p *Panel) SetList(name string, items []string) {
 
 // SetListSelection updates selection and keeps it inside visible rows.
 func (p *Panel) SetListSelection(name string, selected, visibleRows int) bool {
-	l := p.list(name)
+	return p.SetListSelectionAt(p.Index(name), selected, visibleRows)
+}
+
+// SetListSelectionAt updates the list owned by one gadget record.
+func (p *Panel) SetListSelectionAt(index int, selected, visibleRows int) bool {
+	l := p.ListAt(index)
 	if l == nil || len(l.items) == 0 {
 		return false
 	}
@@ -773,7 +786,12 @@ func (p *Panel) SetListSelection(name string, selected, visibleRows int) bool {
 // ScrollList changes a list's top row and clamps to items-visibleRows. It
 // returns the resulting top row and whether a list was found.
 func (p *Panel) ScrollList(name string, delta, visibleRows int) (int, bool) {
-	l := p.list(name)
+	return p.ScrollListAt(p.Index(name), delta, visibleRows)
+}
+
+// ScrollListAt updates the list owned by one gadget record.
+func (p *Panel) ScrollListAt(index int, delta, visibleRows int) (int, bool) {
+	l := p.ListAt(index)
 	if l == nil || len(l.items) == 0 {
 		return 0, false
 	}
@@ -786,7 +804,12 @@ func (p *Panel) ScrollList(name string, delta, visibleRows int) (int, bool) {
 // geometry-derived maximum top row. Callers that have row geometry should
 // derive maxTop from items-visibleRows before calling this method.
 func (p *Panel) SetListTop(name string, top, maxTop int) bool {
-	l := p.list(name)
+	return p.SetListTopAt(p.Index(name), top, maxTop)
+}
+
+// SetListTopAt updates the list owned by one gadget record.
+func (p *Panel) SetListTopAt(index int, top, maxTop int) bool {
+	l := p.ListAt(index)
 	if l == nil {
 		return false
 	}
@@ -814,7 +837,7 @@ func (p *Panel) list(name string) *List {
 	if p == nil {
 		return nil
 	}
-	return p.Lists[Key(name)]
+	return p.ListAt(p.Index(name))
 }
 
 func (p *Panel) clampList(l *List, visibleRows int) {

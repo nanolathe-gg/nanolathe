@@ -3,10 +3,12 @@ package main
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
+	"github.com/nanolathe/nanolathe/internal/palette"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
 
@@ -50,4 +52,50 @@ func TestRetailTextBoxDrawsFocusedCaret(t *testing.T) {
 	if got := snapshot.Indexed[8*32+5]; got != 0 {
 		t.Fatalf("pixel before caret = %d, want textbox background", got)
 	}
+}
+
+// Production painters must retain record identity even when authored names
+// collide; named mutation still affects only the first match [07 R-FE-02 §5].
+func TestRetailDuplicateGadgetsDrawIndependentState(t *testing.T) {
+	snapshot := duplicateGadgetSnapshot(t)
+	for _, tc := range []struct {
+		x     int
+		color byte
+	}{{8, snapshot.Indexed[12*snapshot.Width+2]}, {32, 7}, {56, 11}, {80, 13}, {104, 17}} {
+		if got := snapshot.Indexed[12*snapshot.Width+tc.x]; got != tc.color {
+			t.Fatalf("gadget pixel x=%d = %d, want %d", tc.x, got, tc.color)
+		}
+	}
+}
+
+func duplicateGadgetSnapshot(t *testing.T) client.ComposedFrameSnapshot {
+	t.Helper()
+	window := &gui.Window{Rect: gui.Rect{W: 128, H: 40}, Gadgets: []gui.Gadget{{Kind: gui.KindPanel}}}
+	art := &formats.GAFEntry{Name: "fixture"}
+	for i, color := range []byte{3, 7, 11, 13, 17} {
+		pixels := make([]byte, 16*16)
+		for j := range pixels {
+			pixels[j] = color
+		}
+		art.Frames = append(art.Frames, formats.GAFFrameRef{Frame: &formats.GAFFrame{Width: 16, Height: 16, Compressed: 1, Pixels: pixels, Transparent: make([]bool, len(pixels))}})
+		name := []string{"ART", "ART", "art", " ART", "ART "}[i]
+		window.Gadgets = append(window.Gadgets, gui.Gadget{Kind: gui.KindSurface, Name: name, Art: "fixture", Active: 1, Status: int16(i), Rect: gui.Rect{X: int32(8 + i*24), Y: 8, W: 16, H: 16}})
+	}
+	panel := ui.NewPanel(window)
+	panel.SetActive("ART", false)
+	shell := &gameShell{frontend: ui.NewFrontend(modeMenuMain), assets: &menuAssets{panel: map[shellMode]*retailPanelAssets{modeMenuMain: {window: window, art: &formats.GAF{Entries: []formats.GAFEntry{*art}}}}}}
+	shell.frontend.Panels.Replace(panel)
+	cl, err := client.New(client.Options{Buffer: &frame.Buffer{}, Width: 128, Height: 40})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pal := &palette.Tables{}
+	pal.Base[20] = [4]byte{30, 40, 50, 255}
+	pal.Base[7] = [4]byte{55, 170, 200, 255}
+	pal.Base[11] = [4]byte{220, 165, 65, 255}
+	pal.Base[13] = [4]byte{170, 100, 210, 255}
+	pal.Base[17] = [4]byte{80, 185, 120, 255}
+	cl.SetPalette(pal)
+	cl.SetUIStage(gameShellUIStage{shell: shell})
+	return cl.ComposeFrameSnapshot()
 }

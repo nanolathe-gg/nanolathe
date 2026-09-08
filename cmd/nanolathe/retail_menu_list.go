@@ -25,14 +25,14 @@ type retailScrollbarGeometry struct {
 	arrowEnd   int
 }
 
-func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p == nil {
 		return
 	}
 	g.drawListBox(c, r)
 	// The selection and top row are read back after SetListTop clamps the top,
 	// so the pre-clamp selection from this first read is deliberately dropped.
-	items, _, top, ok := p.ListValues(gad.Name)
+	items, _, top, ok := p.ListValuesAt(index)
 	if !ok || len(items) == 0 || !g.hasRetailTextFont() {
 		return
 	}
@@ -42,8 +42,8 @@ func (g *gameShell) drawRetailList(c *client.Client, p *ui.Panel, gad gui.Gadget
 	if maxTop < 0 {
 		maxTop = 0
 	}
-	p.SetListTop(gad.Name, top, maxTop)
-	_, selected, top, _ := p.ListValues(gad.Name)
+	p.SetListTopAt(index, top, maxTop)
+	_, selected, top, _ := p.ListValuesAt(index)
 	// The list painter selects the FNT the gadget's `fontnumber` picks from
 	// the window's kind-7 records (the common font when none matches) and
 	// then draws every row through the GAF pen, so the selected FNT is only
@@ -338,31 +338,19 @@ func (g *gameShell) listForAssoc(assoc int32) *ui.List {
 }
 
 func listForAssocPanel(p *ui.Panel, assoc int32) *ui.List {
-	if p == nil || p.Window == nil {
-		return nil
-	}
-	for _, gad := range p.Window.Gadgets {
-		if gad.Kind == gui.KindListBox && gad.Assoc == assoc {
-			return p.ListFor(gad.Name)
-		}
-	}
-	return nil
+	return p.ListAt(listIndexForAssocPanel(p, assoc))
 }
 
-func (g *gameShell) listNameForAssoc(assoc int32) string {
-	return listNameForAssocPanel(g.activePanel(), assoc)
-}
-
-func listNameForAssocPanel(p *ui.Panel, assoc int32) string {
+func listIndexForAssocPanel(p *ui.Panel, assoc int32) int {
 	if p == nil || p.Window == nil {
-		return ""
+		return -1
 	}
-	for _, gad := range p.Window.Gadgets {
-		if gad.Kind == gui.KindListBox && gad.Assoc == assoc {
-			return gad.Name
+	for i, gad := range p.Window.Gadgets {
+		if i > 0 && gad.Kind == gui.KindListBox && gad.Assoc == assoc {
+			return i
 		}
 	}
-	return ""
+	return -1
 }
 
 func (g *gameShell) listRectForAssoc(assoc int32) gui.Rect {
@@ -492,7 +480,7 @@ func (g *gameShell) adjustRetailScrollbar(gad gui.Gadget, delta int) {
 		maxTop = 0
 	}
 	if p := g.activePanel(); p != nil {
-		_ = p.SetListTop(g.listNameForAssoc(gad.Assoc), l.Top()+delta, maxTop)
+		_ = p.SetListTopAt(listIndexForAssocPanel(p, gad.Assoc), l.Top()+delta, maxTop)
 	}
 }
 

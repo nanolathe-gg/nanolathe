@@ -202,20 +202,24 @@ func (b *battleSession) handleBattleOptionsInput(cl *client.Client) {
 	if kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace) {
 		name := ""
 		if idx := p.Focused(); idx >= 0 {
-			if gad, ok := battleOptionsGadget(idx); ok && p.ActiveOf(gad.Name) && gad.GrayedOut == 0 && battleOptionsFires(gad) {
+			if gad, ok := battleOptionsGadget(idx); ok && p.ActiveAt(idx) && gad.GrayedOut == 0 && battleOptionsFires(gad) {
 				name = gad.Name
 			}
 		}
-		if name == "" {
-			name = p.Window.Header.CrDefault
-		}
-		if name != "" && g.hasActiveGadget(name) {
+		if name != "" {
+			// The focused record has already passed its indexed activity
+			// test; a first-name lookup would select a different duplicate
+			// [07 R-WGT-01 §2][07 R-FE-02 §5].
 			g.activateGadget(name)
 			return
 		}
+		if index := p.Window.EnterDefaultIndex(); p.ActiveAt(index) {
+			g.activateGadget(p.Window.Gadgets[index].Name)
+			return
+		}
 	}
-	for _, gad := range p.Window.Gadgets[1:] {
-		if gad.QuickKey == 0 || !p.ActiveOf(gad.Name) || gad.GrayedOut != 0 {
+	for i, gad := range p.Window.Gadgets[1:] {
+		if gad.QuickKey == 0 || !p.ActiveAt(i+1) || gad.GrayedOut != 0 {
 			continue
 		}
 		if quickKeyDown(kbd, gad.QuickKey) {
@@ -259,7 +263,7 @@ func battleOptionsPressTest(x, y int32) int {
 	}
 	for i := 1; i < len(p.Window.Gadgets); i++ {
 		gad := p.Window.Gadgets[i]
-		if !battleOptionsFires(gad) || !p.ActiveOf(gad.Name) || gad.GrayedOut != 0 {
+		if !battleOptionsFires(gad) || !p.ActiveAt(i) || gad.GrayedOut != 0 {
 			continue
 		}
 		r := p.Window.PlacedRect(i)

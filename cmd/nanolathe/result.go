@@ -525,5 +525,5 @@ func (h *retailBattleHUD) editorFocused() bool {
 		return false
 	}
 	gadget := h.resultPanel.Window.Gadgets[index]
-	return gadget.Kind == gui.KindTextBox && gadget.Active != 0 && gadget.GrayedOut == 0 && h.resultPanel.ActiveOf(gadget.Name)
+	return gadget.Kind == gui.KindTextBox && gadget.Active != 0 && gadget.GrayedOut == 0 && h.resultPanel.ActiveAt(index)
 }

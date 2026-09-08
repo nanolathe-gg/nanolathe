@@ -697,17 +697,6 @@ tests and prevents a click intended for a dialog from selecting a world unit.
 - The meaning of the window key-navigation flag's *clear* state in the
   front end — which screens deliberately leave Tab/Enter/Escape to their
   own key callback rather than the matrix · §3 · per-screen static trace.
-- The identity of the matrix gate's second word. [R-WGT-01 §1] step 3 and
-  [R-WGT-01 §2] call it the interface object's key-navigation flag: a single
-  dword on the interface object with a set-to-1 helper and a clear-to-0
-  helper, about fourteen screens calling the first and seven the second —
-  and the same word matches the description [R-WGT-02 §2] gives the
-  **fired-result** word (set to 1 by the window open routine, cleared by a
-  screen callback that wants to stay open). No finding depends on which is
-  right: the matrix's *first* gate — a non-zero window token-mode word — is
-  on its own enough to keep the matrix out of every battle window
-  ([R-WGT-01 §2]) · §3 · static trace naming the readers of that dword
-  outside the GUI pass, low priority.
 
 ### The gadget service pass: order, capture, hover help, and who closes the window [R-WGT-01 §1]
 
@@ -786,8 +775,31 @@ the queue, `0xE2..0xEB` zeroed for that pass only) and skips the matrix
 outright. So for a battle child window: no token is consumed, every battle
 hotkey still runs after the GUI pass, and `escdefault`/`crdefault` never fire
 from Escape or Enter — the authored defaults are reachable only by clicking
-the gadget they name. (The second gate word's identity is contested; see the
-Unknown item in §3. It does not change this conclusion.)
+the gadget they name. The separate navigation switch is identified below; it does not change
+this token-mode exclusion.
+
+**Established — navigation enable is separate from the fired result.**
+The interface owns a keyboard-navigation switch, initialized enabled and
+explicitly enabled or disabled by screen transitions. The key matrix tests
+that switch together with a non-zero window token mode and a non-zero token.
+The same switch gates the focus/default marker pass after a full repaint.
+When it is disabled, the service skips the matrix and its unconsumed-key
+history/key-callback arm; the ordinary gadget pass still runs. Gadget
+accelerators retain their separate quickkey-enable and capture gates.
+
+The fired result is instead a gadget index, with `−1` meaning no result.
+Window opening initializes that index to `−1`; a gadget or the matrix writes
+the selected index. A screen callback keeps the window open by clearing the
+index back to `−1`. The close decision tests the surviving index, not the
+navigation switch. These are independent state, correcting the former
+boolean-result description in [R-WGT-02 §2].
+
+The in-battle options root explicitly enables navigation and consuming token
+mode; its close callback disables navigation. General battle entry disables
+navigation after closing the old windows. These traced transitions do not
+establish every screen's enable lifetime; that remaining census stays in §3's
+Unknown list. Ordinary zero-token battle children remain excluded from the
+matrix regardless of the inherited navigation switch.
 
 | Token | Rule |
 |---|---|
@@ -1498,7 +1510,8 @@ screen-side helpers that every screen calls set single words:
 
 | Word | Meaning | Setters |
 |---|---|---|
-| fired-result word (interface object) | non-zero after a gadget fires; a callback that leaves it set closes the window ([R-WGT-01 §1] step 8) | *request close* sets 1; *stay open* clears to 0 — the clear is the first line of nearly every screen callback; the window open routine sets it to 1 |
+| fired-gadget index (interface object) | `−1` means none; a surviving selected index requests closure after the fired callback ([R-WGT-01 §1] step 8) | gadget/key service writes the selected index; *stay open* clears to `−1`; window opening also initializes it to `−1` |
+| keyboard-navigation switch (interface object) | enables the key matrix and its unconsumed-key history/callback arm when token mode is non-zero, and enables focus/default markers after repaint ([R-WGT-01 §2]) | initialized enabled; screen transitions explicitly enable or disable it; independent of the fired index |
 | redraw-request word (interface object) | 1 = repaint the top window this pass | *request redraw*; set by every text/stage/grey mutation of [R-FE-02 §5] and by the unfold of [R-HUD-04 §2] |
 | dirty word (window record) | 1 = the gadget painter re-lays the whole window | *mark dirty* (through the top record; a no-op with no window); the painter and every gadget mutation set it |
 | token-mode word (window record) | non-zero = the GUI pass pops keyboard tokens, zero = it peeks ([R-WGT-01 §1] step 3; with zero the text editor pops for itself) | *set token mode*; the front-end shell and the options root set 1 |
@@ -7456,10 +7469,6 @@ and the decider that would close it.
   trace.
 - The meaning of the window key-navigation flag's clear state per front-end
   screen · §3 · per-screen static trace.
-- The identity of the key matrix's second gate word (key-navigation flag or
-  the fired-result word of [R-WGT-02 §2]); the token-mode gate alone settles
-  every battle window · §3 [R-WGT-01 §2] · static trace naming the readers of
-  that dword outside the GUI pass, low priority.
 - Who fills each listbox's `maxTop`; the record-list item structures · §4
   [R-WGT-01 §4, §5] · static trace.
 - Whether the label under a briefing blink word also draws the run, or

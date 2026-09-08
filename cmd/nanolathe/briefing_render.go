@@ -373,7 +373,7 @@ func (g *gameShell) drawBriefing(c *client.Client) {
 		c.UIBlitPCX(bg, int(panel.Window.Rect.X), int(panel.Window.Rect.Y))
 	}
 	for i, gad := range panel.Window.Gadgets {
-		if i == 0 || !panel.ActiveOf(gad.Name) {
+		if i == 0 || !panel.ActiveAt(i) {
 			continue
 		}
 		r := panel.Window.PlacedRect(i)
@@ -435,9 +435,9 @@ func (g *gameShell) drawBriefingGadget(c *client.Client, p *ui.Panel, index int,
 	if g == nil || g.briefing == nil || g.assets == nil || g.assets.briefing == nil {
 		return
 	}
-	if f := briefingFrame(g.assets.briefing.art, gad.Art, p.StatusOf(gad.Name)); f != nil {
+	if f := briefingFrame(g.assets.briefing.art, gad.Art, p.StatusAt(index)); f != nil {
 		blitRetailFrame(c, f, int(r.X), int(r.Y))
-	} else if f := g.retailButtonFrame(gad, p.StatusOf(gad.Name), false); f != nil && gad.Kind == gui.KindButton {
+	} else if f := g.retailButtonFrame(gad, p.StatusAt(index), false); f != nil && gad.Kind == gui.KindButton {
 		blitRetailFrame(c, f, int(r.X), int(r.Y))
 	}
 	g.drawRetailTextState(c, p, index, gad, r)

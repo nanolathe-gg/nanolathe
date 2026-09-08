@@ -95,7 +95,7 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		drawWindowPanel(c, p.Window, page, common, g.guiColor)
 	}
 	for i, gad := range p.Window.Gadgets {
-		if i == 0 || !p.ActiveOf(gad.Name) {
+		if i == 0 || !p.ActiveAt(i) {
 			continue
 		}
 		r := p.Window.PlacedRect(i)
@@ -103,16 +103,16 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 		case gui.KindButton:
 			g.drawRetailButton(c, p, i, gad, r)
 		case gui.KindListBox:
-			g.drawRetailList(c, p, gad, r)
+			g.drawRetailList(c, p, i, gad, r)
 		case gui.KindScrollBar:
 			g.drawRetailScrollbar(c, p, gad, r)
 		case gui.KindSurface:
-			g.drawRetailSurface(c, p, gad, r)
+			g.drawRetailSurface(c, p, i, gad, r)
 		case gui.KindLabel, gui.KindPicture:
-			g.drawRetailArt(c, p, gad, r)
+			g.drawRetailArt(c, p, i, gad, r)
 			g.drawRetailText(c, p, i, gad, r)
 		default:
-			g.drawRetailArt(c, p, gad, r)
+			g.drawRetailArt(c, p, i, gad, r)
 			g.drawRetailText(c, p, i, gad, r)
 		}
 	}
@@ -134,7 +134,7 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 	}
 	drawWindowPanel(c, m.Window, page, g.assets.common, g.guiColor)
 	for i, gad := range m.Window.Gadgets {
-		if i == 0 || !m.ActiveOf(gad.Name) {
+		if i == 0 || !m.ActiveAt(i) {
 			continue
 		}
 		r := m.Window.PlacedRect(i)
@@ -145,7 +145,7 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 				pressed = pointInRect(int32(c.Input().Mouse.X), int32(c.Input().Mouse.Y), r) &&
 					c.Input().Mouse.Held(input.MouseButtonLeft)
 			}
-			if frame := g.retailButtonFrame(gad, m.StatusOf(gad.Name), pressed); frame != nil {
+			if frame := g.retailButtonFrame(gad, m.StatusAt(i), pressed); frame != nil {
 				blitRetailFrame(c, frame, int(r.X), int(r.Y))
 			}
 			g.drawRetailTextState(c, m, i, gad, r)
@@ -166,11 +166,11 @@ func blitRetailFrame(c *client.Client, f *formats.GAFFrame, x, y int) {
 	c.UIBlit(f, x, y)
 }
 
-func (g *gameShell) drawRetailArt(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawRetailArt(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if p == nil {
 		return
 	}
-	if f := g.gadgetArt(gad, p.StatusOf(gad.Name)); f != nil {
+	if f := g.gadgetArt(gad, p.StatusAt(index)); f != nil {
 		blitRetailFrame(c, f, int(r.X), int(r.Y))
 	}
 }
@@ -181,7 +181,7 @@ func (g *gameShell) drawRetailButton(c *client.Client, p *ui.Panel, index int, g
 	}
 	pressed := retailButtonPressed(c, r)
 	grey := gad.GrayedOut != 0
-	status := p.StatusOf(gad.Name)
+	status := p.StatusAt(index)
 	art := g.gadgetButtonArt(gad, status, pressed)
 	drawn := art
 	if art != nil {
@@ -321,9 +321,9 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		// box has no retail counterpart [03 R-FONT-01 §6].
 		return
 	}
-	text := p.TextFor(gad)
+	text := p.TextAt(index)
 	if len(gad.Labels) != 0 {
-		idx := clampMenuStage(p.StatusOf(gad.Name), len(gad.Labels))
+		idx := clampMenuStage(p.StatusAt(index), len(gad.Labels))
 		text = gad.Labels[idx]
 	}
 	if text == "" && !(gad.Kind == gui.KindTextBox && p.EditorCaptured() && p.EditorIndex() == index) {
@@ -599,7 +599,7 @@ func boolInt(value bool) int {
 	return 0
 }
 
-func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, gad gui.Gadget, r gui.Rect) {
+func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect) {
 	if strings.EqualFold(gad.Name, "MAPPIC") && len(g.maps) != 0 && g.mapIdx >= 0 && g.mapIdx < len(g.maps) {
 		if d := g.mapDataFor(g.maps[g.mapIdx]); d != nil && d.tnt != nil {
 			// the retail implementation writes the selected RADARPIC into the authored
@@ -641,7 +641,7 @@ func (g *gameShell) drawRetailSurface(c *client.Client, p *ui.Panel, gad gui.Gad
 	if p == nil {
 		return
 	}
-	if f := g.gadgetArt(gad, p.StatusOf(gad.Name)); f != nil {
+	if f := g.gadgetArt(gad, p.StatusAt(index)); f != nil {
 		if f.Compressed == 0 {
 			c.UIBlitFrameScaled(f, int(r.X), int(r.Y), int(r.W), int(r.H))
 			return

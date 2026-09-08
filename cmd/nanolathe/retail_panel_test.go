@@ -11,7 +11,7 @@ import (
 
 func TestSetListItemsPreservesManualScrollOnIdenticalRefresh(t *testing.T) {
 	const name = "MAPNAMES"
-	window := &gui.Window{Gadgets: []gui.Gadget{{
+	window := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {
 		Kind:   gui.KindListBox,
 		Name:   name,
 		Active: 1,

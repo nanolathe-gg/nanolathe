@@ -277,7 +277,7 @@ missionfile=AC02.ota;
 		CampaignPath:  "camps/arm.tdf",
 		CampaignIndex: 0,
 	}}
-	window := &gui.Window{Gadgets: []gui.Gadget{{Name: "Start"}, {Name: "MainMenu"}}}
+	window := &gui.Window{Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {Name: "Start"}, {Name: "MainMenu"}}}
 	panel := ui.NewPanel(window)
 	configureResultPanel(fs, sess, panel)
 	if !panel.ActiveOf("Start") || !panel.ActiveOf("MainMenu") {

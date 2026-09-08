@@ -195,7 +195,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	shotDir := os.Getenv("NANOLATHE_OPTIONS_SHOT")
 
 	shell.openMenu(modeMenuSingle)
-	if !shell.hasActiveGadget("Options") {
+	if !shell.activePanel().ActiveOf("Options") {
 		t.Fatal("SINGLE.GUI has no active Options gadget")
 	}
 	shell.activateGadget("Options")
@@ -512,7 +512,7 @@ func TestRetailOptionsEveryPageOpensAndPersists(t *testing.T) {
 			}
 		}
 		for _, name := range page.stages {
-			if !shell.hasActiveGadget(name) {
+			if !shell.activePanel().ActiveOf(name) {
 				t.Errorf("page %s did not merge its %s control", page.key, name)
 			}
 		}

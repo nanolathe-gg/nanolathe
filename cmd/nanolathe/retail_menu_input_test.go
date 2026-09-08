@@ -108,3 +108,53 @@ func TestBattleInputDiscardsOrdinaryTokens(t *testing.T) {
 		t.Fatalf("battle ordinary pass left %d tokens", pending)
 	}
 }
+
+// Space fires the focused record. An inactive earlier duplicate must not
+// veto that record through a second by-name lookup [07 R-WGT-01 §2].
+func TestMenuFocusedDuplicateDoesNotRecheckFirstNamesActivity(t *testing.T) {
+	shell, _, cl := editorMenuShell(t)
+	panel := ui.NewPanel(&gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel},
+		{Kind: gui.KindButton, Name: "SINGLE", Active: 0},
+		{Kind: gui.KindButton, Name: "SINGLE", Active: 1},
+	}})
+	shell.frontend.Panels.Replace(panel)
+	panel.SetFocus(2)
+	cl.Input().Kbd.SetKey(input.KeySpace, true)
+	shell.menuInput(cl)
+	if shell.frontend.Mode != modeMenuSingle {
+		t.Fatalf("focused duplicate did not fire: mode=%v", shell.frontend.Mode)
+	}
+}
+
+// The screen dispatcher must use the bound default's record, without
+// trimming, case-folding an authored exact name or skipping to a second
+// prefix when the first is inactive [07 R-FE-01 §12][07 R-WGT-01 §2].
+func TestMenuEscapeUsesExactDefaultAndSeparatePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name, authored string
+		firstActive    uint8
+		second         bool
+		want           shellMode
+	}{
+		{"PrevMenu", "", 1, false, modeMenuMain},
+		{"PREVMENU", "prevmenu", 1, false, modeMenuSingle},
+		{" PREVMENU", "", 1, false, modeMenuSingle},
+		{"PREVMENU", "", 0, true, modeMenuSingle},
+	} {
+		t.Run(tc.name+tc.authored, func(t *testing.T) {
+			shell, _, cl := editorMenuShell(t)
+			w := &gui.Window{Header: gui.Header{EscDefault: tc.authored}, Gadgets: []gui.Gadget{{Kind: gui.KindPanel}, {Kind: gui.KindButton, Name: tc.name, Active: tc.firstActive}}}
+			if tc.second {
+				w.Gadgets = append(w.Gadgets, gui.Gadget{Kind: gui.KindButton, Name: "PREVMENU", Active: 1})
+			}
+			shell.frontend.SetMode(modeMenuSingle)
+			shell.frontend.Panels.Replace(ui.NewPanel(w))
+			cl.Input().Kbd.SetKey(input.KeyEscape, true)
+			shell.menuInput(cl)
+			if shell.frontend.Mode != tc.want {
+				t.Fatalf("Escape changed mode to %v, want %v", shell.frontend.Mode, tc.want)
+			}
+		})
+	}
+}

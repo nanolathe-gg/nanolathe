@@ -139,7 +139,7 @@ func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, pa
 	for i, gad := range window.Gadgets {
 		active := gad.Active != 0
 		if window == h.resultWin && h.resultPanel != nil {
-			active = h.resultPanel.ActiveOf(gad.Name)
+			active = h.resultPanel.ActiveAt(i)
 		}
 		if i == 0 || !active || gad.Kind == gui.KindFont || gad.Kind == gui.KindPanel {
 			continue

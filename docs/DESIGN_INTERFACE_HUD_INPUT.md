@@ -182,7 +182,10 @@ a truncating divide with no half-viewport term `[07 R-CAM-01 §11]`.
 ### 2.4 `internal/ui` — screen-level state
 
 **The panel** (`panel.go`). `Panel` is one authored window's mutable state:
-per-name active, status, text and help maps, the focus index, the left and
+per-record active, status, text, help and list state; named operations find the
+first exact 16-byte name match after the window header `[07 R-FE-02 §5]`.
+Indexed painters, editor capture and list associations preserve duplicate
+record identity. The remaining state includes the focus index, the left and
 right press latches, the list models, and the scrollbar drag capture. `List`
 holds items, selection and scroll top. `PanelStack` is the window chain with
 its retail shape: `Replace` swaps the screen, `Push` is a save-under open,
@@ -194,6 +197,13 @@ only when the same gadget is still under the pointer `[07 R-WGT-01 §1]`.
 `FlashRow`/`SetFlashRow`/`DecayFlash` are the row highlight decay. `HitTest`
 and `PressTest` are the two hit shapes; a greyed gadget returns before its own
 hit test and never captures `[07 R-WGT-01 §13]`.
+
+The compiler and panel share `gui.Window.GadgetIndex` for exact names.
+Enter/Escape default resolution uses that same lookup for a nonempty authored
+default; an empty default takes the separate case-insensitive prefix scan,
+without trimming or filtering inactive records `[07 R-FE-01 §12]`.
+I16 remains open for screen callback comparisons and options slider identity;
+I04 owns the complete key matrix and default-versus-focus admission order.
 
 **The front end** (`frontend.go`). `Mode` is the screen: `ModeMain`,
 `ModeSingle`, `ModeMission`, `ModeMap`, `ModeSkirmish`, `ModeLoading`,

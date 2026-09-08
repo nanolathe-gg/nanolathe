@@ -89,3 +89,23 @@ func TestEditorRejectsTextThatDoesNotFitTheControl(t *testing.T) {
 		t.Fatalf("width-limited text = %q, want ab [07 R-WGT-01 §12]", got)
 	}
 }
+
+// Captured editing addresses the record; a named mutation still finds the
+// first duplicate and must not move another record's caret [07 R-FE-02 §5].
+func TestEditorDuplicateNamesKeepTextAndCaretIndependent(t *testing.T) {
+	w := editorPanel().Window
+	w.Gadgets = append(w.Gadgets, w.Gadgets[1])
+	p := NewPanel(w)
+	p.SetTextAt(2, "a")
+	if !p.FocusEditor(2) {
+		t.Fatal("duplicate editor did not capture")
+	}
+	p.SetText("GAMENAME", "first")
+	if p.EditorCaret() != 1 {
+		t.Fatal("named first-record write moved duplicate caret")
+	}
+	p.ApplyEditorTokens([]input.Token{{Kind: input.TokenText, Rune: 'b'}}, nil)
+	if p.TextAt(1) != "first" || p.TextAt(2) != "ab" || p.EditorCaret() != 2 {
+		t.Fatal("captured editor shared duplicate text")
+	}
+}

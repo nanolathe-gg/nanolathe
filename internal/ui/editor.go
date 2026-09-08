@@ -8,8 +8,8 @@ import (
 )
 
 // editorState is the mutable state of the one captured kind-3 gadget in a
-// panel. Text remains in Panel.Text so screen bindings retain one source of
-// truth [07 R-WGT-01 §6].
+// panel. Text remains in the captured gadget state so screen bindings retain
+// one source of truth [07 R-WGT-01 §6].
 type editorState struct {
 	captured int
 	caret    int
@@ -30,14 +30,13 @@ func (p *Panel) FocusEditor(index int) bool {
 		return false
 	}
 	gadget := p.Window.Gadgets[index]
-	if gadget.Kind != gui.KindTextBox || !p.ActiveOf(gadget.Name) || gadget.GrayedOut != 0 {
+	if gadget.Kind != gui.KindTextBox || !p.ActiveAt(index) || gadget.GrayedOut != 0 {
 		return false
 	}
-	key := Key(gadget.Name)
-	text := p.Text[key]
+	text := p.TextAt(index)
 	if len(text) > editorCapacity(gadget) {
 		text = ""
-		p.Text[key] = text
+		p.states[index].text = text
 	}
 	p.focus = index
 	p.editor.captured = index
@@ -84,8 +83,7 @@ func (p *Panel) ApplyEditorTokens(tokens []input.Token, measure func(string) int
 	if measure == nil {
 		measure = func(s string) int { return len(s) }
 	}
-	key := Key(gadget.Name)
-	text := p.Text[key]
+	text := p.TextAt(index)
 	if p.editor.caret < 0 {
 		p.editor.caret = 0
 	}
@@ -100,7 +98,7 @@ func (p *Panel) ApplyEditorTokens(tokens []input.Token, measure func(string) int
 			case input.KeyEscape:
 				text = ""
 				p.editor.caret = 0
-				p.Text[key] = text
+				p.states[index].text = text
 			case input.KeyBackspace:
 				if p.editor.caret > 0 {
 					text = text[:p.editor.caret-1] + text[p.editor.caret:]
@@ -141,7 +139,7 @@ func (p *Panel) ApplyEditorTokens(tokens []input.Token, measure func(string) int
 			text = next
 			p.editor.caret++
 		}
-		p.Text[key] = text
+		p.states[index].text = text
 		if token.Kind == input.TokenEdit && token.Key == input.KeyEscape {
 			break
 		}

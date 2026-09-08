@@ -363,12 +363,7 @@ func Load(fs vfs.FSOps, name string) (*Window, error) {
 
 	// Default focus: gadget name that starts focused [02 §6] defaultfocus.
 	if w.Header.DefaultFocus != "" {
-		for idx, g := range w.Gadgets {
-			if strings.EqualFold(g.Name, w.Header.DefaultFocus) {
-				w.Focus = idx
-				break
-			}
-		}
+		w.Focus = w.GadgetIndex(w.Header.DefaultFocus)
 	}
 
 	return w, nil

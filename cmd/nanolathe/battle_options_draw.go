@@ -37,7 +37,7 @@ func (h *retailBattleHUD) drawBattleOptionsWindow(c *client.Client, b *battleSes
 	// column past the page art's own width.
 	h.drawWindowBackground(c, p.Window, nil)
 	for i, gad := range p.Window.Gadgets {
-		if i == 0 || !p.ActiveOf(gad.Name) {
+		if i == 0 || !p.ActiveAt(i) {
 			continue
 		}
 		r := p.Window.PlacedRect(i)
@@ -54,7 +54,7 @@ func (h *retailBattleHUD) drawBattleOptionsWindow(c *client.Client, b *battleSes
 				blitRetailFrame(c, f, int(r.X), int(r.Y))
 			}
 		default:
-			g.drawRetailArt(c, p, gad, r)
+			g.drawRetailArt(c, p, i, gad, r)
 			g.drawRetailText(c, p, i, gad, r)
 		}
 	}

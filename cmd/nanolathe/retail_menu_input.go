@@ -118,7 +118,7 @@ noRetailArrowRepeat:
 			if gad, ok := g.currentGadget(action.Index); ok {
 				switch gad.Kind {
 				case gui.KindListBox:
-					g.clickList(gad, p.Window.PlacedRect(action.Index), x, y)
+					g.clickList(action.Index, gad, p.Window.PlacedRect(action.Index), x, y)
 				case gui.KindScrollBar:
 					g.releaseRetailScrollbar(gad, p.Window.PlacedRect(action.Index), x, y)
 				default:
@@ -192,22 +192,26 @@ noRetailArrowRepeat:
 	if !p.EditorCaptured() && (kbd.KeyDown(input.KeyEnter) || kbd.KeyDown(input.KeySpace)) {
 		name := ""
 		if idx := p.Focused(); idx >= 0 {
-			if gad, ok := g.currentGadget(idx); ok && p.ActiveOf(gad.Name) {
+			if _, ok := g.currentGadget(idx); ok && p.ActiveAt(idx) {
 				if action := p.Activate(idx); action.Kind == ui.ActionActivate {
 					name = action.Gadget
 				}
 			}
 		}
-		if name == "" {
-			name = p.Window.Header.CrDefault
-		}
-		if name != "" && g.hasActiveGadget(name) {
+		if name != "" {
+			// The focused record has already passed its indexed activity
+			// test; a first-name lookup would select a different duplicate
+			// [07 R-WGT-01 §2][07 R-FE-02 §5].
 			g.activateGadget(name)
+			return
+		}
+		if index := p.Window.EnterDefaultIndex(); p.ActiveAt(index) {
+			g.activateGadget(p.Window.Gadgets[index].Name)
 			return
 		}
 	}
 	for i, gad := range p.Window.Gadgets {
-		if i == 0 || gad.QuickKey == 0 || !p.ActiveOf(gad.Name) {
+		if i == 0 || gad.QuickKey == 0 || !p.ActiveAt(i) {
 			continue
 		}
 		if quickKeyDown(kbd, gad.QuickKey) {
@@ -236,7 +240,7 @@ func (g *gameShell) applyRetailEditorTokens(p *ui.Panel, in *input.State) (fired
 	result := p.ApplyEditorTokens(in.PeekTokens(), measure)
 	in.DiscardTokens(result.Consumed)
 	if g.saveLoadPanelActive() && strings.EqualFold(gadget.Name, "GAMENAME") {
-		saveLoadUI.SetName(p.TextOf(gadget.Name))
+		saveLoadUI.SetName(p.TextAt(index))
 	}
 	if result.Action.Kind == ui.ActionActivate {
 		g.activateGadget(result.Action.Gadget)
@@ -326,14 +330,14 @@ func (g *gameShell) scrollAt(x, y int32, amount float32) {
 		return
 	}
 	for i, gad := range p.Window.Gadgets {
-		if gad.Kind != gui.KindListBox || !p.ActiveOf(gad.Name) {
+		if gad.Kind != gui.KindListBox || !p.ActiveAt(i) {
 			continue
 		}
 		r := p.Window.PlacedRect(i)
 		if !pointInRect(x, y, r) {
 			continue
 		}
-		l := p.ListFor(gad.Name)
+		l := p.ListAt(i)
 		if l == nil || l.Len() == 0 {
 			return
 		}
@@ -347,17 +351,17 @@ func (g *gameShell) scrollAt(x, y int32, amount float32) {
 		} else if amount < 0 {
 			delta = 1
 		}
-		p.ScrollList(gad.Name, delta, visible)
+		p.ScrollListAt(i, delta, visible)
 		return
 	}
 }
 
-func (g *gameShell) clickList(gad gui.Gadget, r gui.Rect, x, y int32) {
+func (g *gameShell) clickList(index int, gad gui.Gadget, r gui.Rect, x, y int32) {
 	p := g.activePanel()
 	if p == nil {
 		return
 	}
-	l := p.ListFor(gad.Name)
+	l := p.ListAt(index)
 	if l == nil || l.Len() == 0 || !g.hasRetailTextFont() {
 		return
 	}
@@ -376,7 +380,7 @@ func (g *gameShell) clickList(gad gui.Gadget, r gui.Rect, x, y int32) {
 		return
 	}
 	l.SetSelected(idx)
-	g.ensureRetailListVisible(gad.Name)
+	g.ensureRetailListIndexVisible(p, index)
 	g.commitListSelection(gad.Name, idx)
 }
 
@@ -403,54 +407,12 @@ func (g *gameShell) commitListSelection(name string, index int) {
 
 func (g *gameShell) activateEscape() {
 	p := g.activePanel()
-	if g.frontend.Mode == modeMenuMain {
+	if g.frontend.Mode == modeMenuMain || p == nil {
 		return
 	}
-	if p != nil && p.Window != nil && p.Window.Header.EscDefault != "" &&
-		g.hasActiveGadget(p.Window.Header.EscDefault) {
-		g.activateGadget(p.Window.Header.EscDefault)
-		return
+	if index := p.Window.EscapeDefaultIndex(); p.ActiveAt(index) {
+		g.activateGadget(p.Window.Gadgets[index].Name)
 	}
-	for _, name := range []string{"PrevMenu", "PREVMENU"} {
-		if g.hasActiveGadget(name) {
-			g.activateGadget(name)
-			return
-		}
-	}
-	// A window that authors an empty `escdefault` binds Escape to the first
-	// button whose name begins `PREV` or `Cancel`, case-insensitively
-	// [07 R-FE-01 §12]. `STARTOPT.GUI` authors none and names its OK button
-	// `PREV`, so this is what closes the options root.
-	if p == nil || p.Window == nil {
-		return
-	}
-	for _, gad := range p.Window.Gadgets {
-		if gad.Kind != gui.KindButton {
-			continue
-		}
-		key := menuKey(gad.Name)
-		if !strings.HasPrefix(key, "prev") && !strings.HasPrefix(key, "cancel") {
-			continue
-		}
-		if !p.ActiveOf(gad.Name) {
-			continue
-		}
-		g.activateGadget(gad.Name)
-		return
-	}
-}
-
-func (g *gameShell) hasActiveGadget(name string) bool {
-	p := g.activePanel()
-	if p == nil || p.Window == nil || !p.ActiveOf(name) {
-		return false
-	}
-	for _, gad := range p.Window.Gadgets {
-		if strings.EqualFold(gad.Name, name) {
-			return true
-		}
-	}
-	return false
 }
 
 func (g *gameShell) activateGadget(name string) {

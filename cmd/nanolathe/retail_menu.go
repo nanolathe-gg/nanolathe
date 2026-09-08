@@ -186,9 +186,9 @@ func (g *gameShell) resolveRetailButtonGeometry() {
 		if i == 0 || gad.Kind != gui.KindButton {
 			continue
 		}
-		frame := g.gadgetArt(gad, p.StatusOf(gad.Name))
+		frame := g.gadgetArt(gad, p.StatusAt(i))
 		if frame == nil {
-			frame = g.retailButtonFrame(gad, p.StatusOf(gad.Name), false)
+			frame = g.retailButtonFrame(gad, p.StatusAt(i), false)
 		}
 		if frame == nil || frame.Width == 0 || frame.Height == 0 {
 			continue
@@ -480,9 +480,7 @@ func (g *gameShell) updateHoverHelp(x, y int32) {
 	// The hover test skips only hidden gadgets, so a greyed button still feeds
 	// HELPTEXT its help line [07 R-WGT-01 §1 step 6][07 R-WGT-01 §13].
 	if idx := p.HitTest(x, y); idx >= 0 {
-		if gad, ok := g.currentGadget(idx); ok {
-			help = p.HelpOf(gad.Name)
-		}
+		help = p.HelpAt(idx)
 	}
 	p.SetText("HELPTEXT", help)
 }
@@ -523,8 +521,7 @@ func (g *gameShell) setListItems(name string, items []string, selected int) {
 	if p == nil {
 		return
 	}
-	key := menuKey(name)
-	oldItems, oldSelected, _, exists := p.ListValues(key)
+	oldItems, oldSelected, _, exists := p.ListValues(name)
 	if !exists {
 		return
 	}
@@ -538,18 +535,18 @@ func (g *gameShell) setListItems(name string, items []string, selected int) {
 		}
 	}
 	if changed {
-		p.SetList(key, items)
+		p.SetList(name, items)
 		// A new row source starts at its first row; an identical refresh below
 		// leaves the user's manual scrollbar position untouched.
-		visible := g.retailListVisibleRows(key)
+		visible := g.retailListVisibleRows(name)
 		maxTop := len(items) - visible
 		if maxTop < 0 {
 			maxTop = 0
 		}
-		p.SetListTop(key, 0, maxTop)
+		p.SetListTop(name, 0, maxTop)
 	}
 	if len(items) == 0 {
-		p.SetList(key, nil)
+		p.SetList(name, nil)
 		return
 	}
 	if selected < 0 {
@@ -560,41 +557,34 @@ func (g *gameShell) setListItems(name string, items []string, selected int) {
 	}
 	selectionChanged := oldSelected != selected
 	if changed || selectionChanged {
-		p.SetListSelection(key, selected, g.retailListVisibleRows(key))
-		g.ensureRetailListVisible(key)
+		p.SetListSelection(name, selected, g.retailListVisibleRows(name))
+		g.ensureRetailListVisible(name)
 	}
 }
 
 func (g *gameShell) retailListVisibleRows(name string) int {
 	p := g.activePanel()
-	if p == nil || p.Window == nil {
-		return 1
-	}
-	for i, gad := range p.Window.Gadgets {
-		if gad.Kind != gui.KindListBox || !strings.EqualFold(gad.Name, name) {
-			continue
+	if i := p.Index(name); i >= 0 {
+		gad := p.Window.Gadgets[i]
+		if gad.Kind == gui.KindListBox {
+			return retailVisibleListRows(p.Window.PlacedRect(i), retailListItemHeight(gad, g.retailTextHeight()))
 		}
-		return retailVisibleListRows(p.Window.PlacedRect(i), retailListItemHeight(gad, g.retailTextHeight()))
 	}
 	return 1
 }
 
 func (g *gameShell) ensureRetailListVisible(name string) {
 	p := g.activePanel()
-	if p == nil || p.Window == nil {
+	g.ensureRetailListIndexVisible(p, p.Index(name))
+}
+
+func (g *gameShell) ensureRetailListIndexVisible(p *ui.Panel, index int) {
+	l := p.ListAt(index)
+	if l == nil || l.Len() == 0 {
 		return
 	}
-	items, selected, _, ok := p.ListValues(menuKey(name))
-	if !ok || len(items) == 0 {
-		return
-	}
-	for i, gad := range p.Window.Gadgets {
-		if gad.Kind != gui.KindListBox || !strings.EqualFold(gad.Name, name) {
-			continue
-		}
-		p.SetListSelection(name, selected, retailVisibleListRows(p.Window.PlacedRect(i), retailListItemHeight(gad, g.retailTextHeight())))
-		return
-	}
+	gad := p.Window.Gadgets[index]
+	p.SetListSelectionAt(index, l.Selected(), retailVisibleListRows(p.Window.PlacedRect(index), retailListItemHeight(gad, g.retailTextHeight())))
 }
 
 func (g *gameShell) currentGadget(index int) (gui.Gadget, bool) {

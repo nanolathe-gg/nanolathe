@@ -180,8 +180,8 @@ func TestPanelPreservesFirstOwnerForDuplicateNames(t *testing.T) {
 	}}
 	p := NewPanel(w)
 	p.SetText("TEXT", "updated")
-	if got := p.TextFor(w.Gadgets[1]); got != "updated" || p.TextFor(w.Gadgets[2]) != "second" {
-		t.Fatalf("duplicate ownership first=%q second=%q", got, p.TextFor(w.Gadgets[2]))
+	if got := p.TextAt(1); got != "updated" || p.TextAt(2) != "second" {
+		t.Fatalf("duplicate ownership first=%q second=%q", got, p.TextAt(2))
 	}
 }
 
@@ -254,10 +254,10 @@ func TestPanelMessageDoesNotNeedAnAuthoredTextControl(t *testing.T) {
 		{Kind: gui.KindLabel, Name: "TEXT", SourceName: "GADGET2", Active: 1, Text: "second line"},
 	}})
 	runtimeLabels.SetMessage("first line\nsecond line")
-	if got := runtimeLabels.TextFor(runtimeLabels.Window.Gadgets[1]); got != "first line" {
+	if got := runtimeLabels.TextAt(1); got != "first line" {
 		t.Fatalf("first label text=%q", got)
 	}
-	if got := runtimeLabels.TextFor(runtimeLabels.Window.Gadgets[2]); got != "second line" {
+	if got := runtimeLabels.TextAt(2); got != "second line" {
 		t.Fatalf("second label text=%q", got)
 	}
 }
@@ -291,5 +291,67 @@ func TestPanelOnlyHandlerKindsTakeTheCapture(t *testing.T) {
 	}
 	if got := p.PressTest(90, 90); got != -1 {
 		t.Fatalf("press over only handler-less gadgets captured index %d, want -1", got)
+	}
+}
+
+// Names are bounded byte comparisons, while state belongs to each record
+// [07 R-FE-02 §5]. Header records never participate in named lookup.
+func TestPanelExactNamesKeepIndependentRecordState(t *testing.T) {
+	names := []string{"OK", "OK", "ok", " OK", "OK ", "OK", "1234567890abcdefA", "1234567890abcdefB", "NUL\x00ignored"}
+	w := &gui.Window{}
+	for i, name := range names {
+		w.Gadgets = append(w.Gadgets, gui.Gadget{Name: name, Kind: gui.KindButton, Active: 1, Text: name, Rect: gui.Rect{X: int32(i * 20), W: 10, H: 10}})
+	}
+	p := NewPanel(w)
+	for _, tc := range []struct {
+		name  string
+		index int
+	}{
+		{"OK", 1}, {"ok", 2}, {" OK", 3}, {"OK ", 4}, {"Ok", -1}, {"OK  ", -1},
+		{"1234567890abcdef", 6}, {"1234567890abcdefZ", 6}, {"1234567890abcde", -1}, {"NUL", 8},
+	} {
+		if got := p.Index(tc.name); got != tc.index {
+			t.Fatalf("Index(%q)=%d want %d", tc.name, got, tc.index)
+		}
+	}
+	p.SetActive("OK", false)
+	p.SetStatus("OK", 7)
+	p.SetText("OK", "first")
+	p.SetHelp("OK", "first help")
+	p.SetStatusAt(5, 9)
+	p.SetTextAt(5, "duplicate")
+	p.SetHelpAt(5, "duplicate help")
+	if p.ActiveAt(1) || !p.ActiveAt(5) || p.StatusAt(1) != 7 || p.StatusAt(5) != 9 || p.TextAt(1) != "first" || p.TextAt(5) != "duplicate" || p.HelpAt(5) != "duplicate help" {
+		t.Fatal("duplicate records shared state")
+	}
+	if !p.ActiveAt(2) || p.TextAt(2) != "ok" || p.StatusAt(2) != 0 || p.TextAt(3) != " OK" || p.TextAt(4) != "OK " {
+		t.Fatal("case or whitespace names shared state")
+	}
+	if p.HitTest(21, 1) != -1 || p.Press(101, 1) != 5 {
+		t.Fatal("input did not use per-record activity")
+	}
+	if action := p.ReleaseAction(101, 1); action.Index != 5 || action.Gadget != "OK" || action.Kind != ActionActivate {
+		t.Fatalf("duplicate activation=%+v", action)
+	}
+}
+
+func TestPanelDuplicateListsKeepAssociationAndCapture(t *testing.T) {
+	p := NewPanel(&gui.Window{Gadgets: []gui.Gadget{
+		{Kind: gui.KindPanel},
+		{Kind: gui.KindListBox, Name: "LIST", Assoc: 1},
+		{Kind: gui.KindListBox, Name: "LIST", Assoc: 2},
+		{Kind: gui.KindScrollBar, Name: "SCROLL", Assoc: 2},
+	}})
+	p.SetList("LIST", []string{"first"})
+	p.SetListAt(2, []string{"a", "b", "c", "d"})
+	if !p.BeginScrollDrag(3, false, 10, 2, 10) || !p.UpdateScrollDrag(20, 0, true) {
+		t.Fatal("second list did not capture scrollbar")
+	}
+	if p.ListAt(1).Len() != 1 || p.ListAt(1).Top() != 0 || p.ListAt(2).Top() != 2 {
+		t.Fatal("association selected the wrong duplicate")
+	}
+	p.SetListSelectionAt(2, 3, 2)
+	if p.ListFor("LIST").Selected() != 0 || p.ListAt(2).Selected() != 3 {
+		t.Fatal("duplicate lists shared selection")
 	}
 }
