@@ -172,7 +172,7 @@ func (s *Session) IsAudibleAt(pos [3]numeric.Fixed) bool {
 	if s == nil || s.Vis == nil {
 		return false // positional audio requires the session visibility service [03 §8.3]
 	}
-	local := localPlayerForSession(s)
+	local := int(s.ViewingOwner)
 	return s.Vis.AudiblePoint(visibility.PlayerID(local), pos[0], pos[1], pos[2])
 }
 

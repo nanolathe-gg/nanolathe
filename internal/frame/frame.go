@@ -920,6 +920,9 @@ type FogView struct {
 // the next permitted BeginWrite reuse.
 type Frame struct {
 	Tick uint32
+	// ViewingPlayer is the observer for this committed frame; selection keeps
+	// its separate true-local owner [03 R-VIS-01 §4].
+	ViewingPlayer uint8
 	// Paused is the scheduler state captured at this completed tick-end
 	// publication. A pause transition can take effect synchronously without
 	// another completed tick; UI keeps its own canonical truth for that interval
@@ -966,9 +969,11 @@ type Frame struct {
 	Strip StripReadout
 	// retainedVisibility and retainedFog keep this double-buffer slot's last
 	// immutable presentation copies while Reset restores the public zero-value
-	// shape expected by ordinary frame writers.
-	retainedVisibility VisibilityView
-	retainedFog        FogView
+	// shape expected by ordinary frame writers. The retained observer is part
+	// of the coverage-copy key: View changes grids without dirtying caches.
+	retainedViewingPlayer uint8
+	retainedVisibility    VisibilityView
+	retainedFog           FogView
 }
 
 // StripReadout carries what the §6 slide strip prints: the game time is the
@@ -1094,6 +1099,8 @@ func (f *Frame) Reset() {
 	// Keep immutable presentation copies aside while the public frame returns to
 	// the ordinary empty writer shape. A later publication may restore them by
 	// revision without another map-sized copy [03 §2.4].
+	f.retainedViewingPlayer = f.ViewingPlayer
+	f.ViewingPlayer = 0
 	f.retainedVisibility = f.Visibility
 	f.retainedFog = f.Fog
 	f.Visibility.Visible = f.Visibility.Visible[:0]
@@ -1116,7 +1123,7 @@ func (f *Frame) Reset() {
 // it already represents version. It is a publication optimization, not a
 // general retained-frame API [03 §2.4].
 func (f *Frame) RestoreVisibility(source, version uint64) bool {
-	if f == nil || source == 0 || !f.retainedVisibility.Valid || f.retainedVisibility.MappingSource != source || f.retainedVisibility.MappingVersion != version {
+	if f == nil || source == 0 || !f.retainedVisibility.Valid || f.retainedViewingPlayer != f.ViewingPlayer || f.retainedVisibility.MappingSource != source || f.retainedVisibility.MappingVersion != version {
 		return false
 	}
 	f.Visibility = f.retainedVisibility

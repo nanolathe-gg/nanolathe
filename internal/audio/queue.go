@@ -46,6 +46,7 @@ type Queue struct {
 	speechThreshold uint8
 	soundEnabled    bool
 	speechEnabled   bool
+	sing            bool
 	effectsVolume   float32
 	soundFlags      uint8
 	backendEnabled  bool
@@ -112,6 +113,15 @@ func SlotStatic(s Slot) (key, speech string, priority int8, cooldown uint32, ok 
 	}
 	e := slotTable[s]
 	return e.Key, e.Speech, e.Priority, e.Cooldown, true
+}
+
+// ToggleSing changes only the audible unit-voice alias [03 R-AUD-01 §3].
+func (q *Queue) ToggleSing() bool {
+	if q == nil {
+		return false
+	}
+	q.sing = !q.sing
+	return q.sing
 }
 
 // NewQueue creates a queue with permissive defaults [03 §8.3].
@@ -460,6 +470,14 @@ func (q *Queue) resolve(e Entry, now uint32, audible, showText bool) {
 		q.nextAllowed[e.Slot] = now + info.Cooldown*cooldownUnit
 		// Master backend gates apply only to dispatch, after the crowding gate.
 		if q.effectsVolume != 0 && q.soundFlags&7 != 0 && q.backendEnabled && q.onPlay != nil {
+			// Variant selection and all voice gates still precede the override;
+			// the caption keeps its selected variant [03 R-AUD-01 §3].
+			if q.sing {
+				alias = "sing"
+				if (now/30)&7 == 0 {
+					alias = "honk"
+				}
+			}
 			q.onPlay(alias, e.Slot, e.Unit)
 		}
 	}

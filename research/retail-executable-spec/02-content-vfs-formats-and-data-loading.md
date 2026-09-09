@@ -2548,7 +2548,7 @@ change the accepted bit.
 | `FeatureShadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
 | `VehicleShadows` | DWORD · 32-bit | bit set (1) | `[03 §5.3]` | Supported inference |
 | `Shading` | DWORD · 32-bit | bit set (1) | `[03 R-RND-02A]` | Established |
-| `DitheredFog` | DWORD · 32-bit | bit clear (0) | unknown: no doc cites the reader — decider: static trace of the fog presenter (doc 03 §3) | Unknown |
+| `DitheredFog` | DWORD · 32-bit, low bit kept | bit clear (0) | `[03 R-RR16-A §2]`, `[07 R-FE-01 §11]` (fog-presenter pattern selection) | Established (cited) |
 | `Gamma` | DWORD · 32-bit | 12 | `[07 R-FE-01 §5]` (palette factor `0.5 + g/24`) | Established (cited) |
 | `SwitchAlt` | DWORD · 32-bit | no default installed | `[07 R-CAM-01 §4]` | Established (cited) |
 | `Password` | string · 11 bytes (incl. NUL) | empty | out of scope (multiplayer lobby) | Established |

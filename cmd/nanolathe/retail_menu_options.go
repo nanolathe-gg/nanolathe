@@ -1112,9 +1112,8 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 	switch optionsState.page {
 	case "visuals":
 		// Bits 1-5 set, gamma 12 and — front end only — 640x480 with
-		// `DitheredFog` cleared [07 R-FE-01 §6]. `DitheredFog` has no owner
-		// here, so nothing clears it; it is not persisted either. The size pair
-		// is the front end's alone: the in-battle page authors no `VIDSLDR`,
+		// `DitheredFog` cleared [07 R-FE-01 §6]. The size pair is the front
+		// end's alone: the in-battle page authors no `VIDSLDR`,
 		// and resizing the surface out from under a running battle is not
 		// something the in-battle arm does.
 		g.display.AntiAlias = 1
@@ -1124,6 +1123,7 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 		if !optionsState.inBattle {
 			g.display.Width = settings.DefaultDisplaymodeWidth
 			g.display.Height = settings.DefaultDisplaymodeHeight
+			g.display.DitheredFog = settings.DefaultDitheredFog
 		}
 		g.applyRetailVisualOptions(clPtr)
 	case "sound":
@@ -1204,7 +1204,7 @@ func (g *gameShell) undoRetailOptionsPage() {
 	g.openRetailOptionsPage(optionsState.page)
 }
 
-// applyRetailVisualOptions pushes the three display-option bits into the live
+// applyRetailVisualOptions pushes the display-option bits into the live
 // presentation. `BSHADOWS` copies bit 4 into bit 3 and bit 3 into bit 2, so one
 // control drives `FeatureShadows`, `VehicleShadows` and `Shadows`
 // [07 R-FE-01 §6][03 §5.3].
@@ -1215,7 +1215,7 @@ func (g *gameShell) applyRetailVisualOptions(cl *client.Client) {
 	applyVisualOptions(cl, g.display)
 }
 
-// applyVisualOptions is the one place the three display-option bits reach a
+// applyVisualOptions is the one place the display-option bits reach a
 // client. The windowed shell calls it from the VISUALS page and at start-up;
 // the --shot capture calls it with the stored block so a capture composes
 // under the same Anti_Alias and Shading bits the window would, which is what
@@ -1228,6 +1228,7 @@ func applyVisualOptions(cl *client.Client, d settings.Display) {
 	cl.SetAntiAlias(d.AntiAlias != 0)
 	cl.SetFeatureShadows(d.FeatureShadows != 0)
 	cl.SetShadowOptions(d.Shadows != 0, d.VehicleShadows != 0, d.Shading != 0)
+	cl.SetDitheredFog(d.DitheredFogEnabled())
 }
 
 // setRetailShadowBits is the `BSHADOWS` write: bit 4 takes the stage, bit 3

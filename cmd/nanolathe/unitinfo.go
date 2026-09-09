@@ -235,7 +235,7 @@ func (b *battleSession) unitInfoSubject() (*content.UnitDef, bool) {
 	if !found || view.Slot == 0 || view.DefName == "" {
 		return nil, false
 	}
-	if b.sess != nil && !client.SnapshotVisible(f, view, b.sess.LocalOwner) {
+	if b.sess != nil && !client.SnapshotVisible(f, view, f.ViewingPlayer) {
 		return nil, false
 	}
 	def, ok := b.cat.Unit(view.DefName)

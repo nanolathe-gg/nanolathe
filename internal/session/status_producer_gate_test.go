@@ -40,7 +40,7 @@ func TestStatusProducerGateHasThreeClauses(t *testing.T) {
 				publication: newPublicationState(frame.NewEventBuffer(frame.Limits{})),
 			}
 			s.LocalOwner = 0
-			if got := localPlayerForSession(s); got != 0 {
+			if got := int(s.ViewingOwner); got != 0 {
 				t.Fatalf("local player = %d, want 0", got)
 			}
 			binding := s.newOrderBinding()

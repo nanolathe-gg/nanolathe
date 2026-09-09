@@ -150,7 +150,7 @@ func TestCampaignVisibilityModeComesFromMissionOTA(t *testing.T) {
 					t.Fatalf("word grid cell %d = %#04x, want %#04x [03 R-VIS-01 §1]", i, w, tc.wantWord)
 				}
 			}
-			local := visibility.PlayerID(localPlayerForSession(s))
+			local := visibility.PlayerID(int(s.ViewingOwner))
 			byteGrid := s.Vis.ByteGrid(local)
 			if len(byteGrid) == 0 {
 				t.Fatalf("byte grid for player %d not allocated", local)

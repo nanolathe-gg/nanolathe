@@ -105,7 +105,7 @@ func (b *battleSession) hoverFeature(sx, sy int32) *content.FeatureDef {
 		if footZ <= 0 {
 			footZ = 1
 		}
-		if cx < v.CX || cx >= v.CX+footX || cz < v.CZ || cz >= v.CZ+footZ || !snapshotFeatureVisible(f, v, b.sess.LocalOwner) {
+		if cx < v.CX || cx >= v.CX+footX || cz < v.CZ || cz >= v.CZ+footZ || !snapshotFeatureVisible(f, v, f.ViewingPlayer) {
 			continue
 		}
 		return &content.FeatureDef{DefinitionHeader: content.DefinitionHeader{CanonicalKey: v.DefName}, FootprintX: int32(v.FootX), FootprintZ: int32(v.FootZ), Height: v.Height, Reclaimable: v.Reclaimable, Geothermal: v.Geothermal, Blocking: v.Blocking}
@@ -131,7 +131,7 @@ func (b *battleSession) updateFooterHover(mx, my int32) {
 	case b.classifyPointer(mx, my) == battlePointerMinimap:
 		b.footerHoverUnit = b.minimapHoverUnit(f, mx, my)
 	case b.overWorld(mx, my) && !b.battleState().Input.DragActive:
-		handle, _, _ := client.PickSnapshotUnit(f, mx, my, b.cam, b.sess.LocalOwner)
+		handle, _, _ := client.PickSnapshotUnit(f, mx, my, b.cam, f.ViewingPlayer)
 		b.footerHoverUnit = handle
 	}
 	b.footerHoverFeature = ""
@@ -152,7 +152,7 @@ func (b *battleSession) footerHover(f *frame.Frame) hud.FooterHover {
 	out.Unit = b.footerHoverUnit
 	out.Feature = b.footerHoverFeature
 	out.Visible = func(v *frame.UnitView) bool {
-		return v != nil && client.SnapshotVisible(f, *v, b.sess.LocalOwner)
+		return v != nil && client.SnapshotVisible(f, *v, f.ViewingPlayer)
 	}
 	out.Gadget, out.GadgetName = b.hud.hoveredGadgetSource()
 	out.StockpilePercent = footerStockpilePercent(f, b.cat, out.Unit)

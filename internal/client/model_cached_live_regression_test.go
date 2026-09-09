@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
@@ -21,6 +22,61 @@ func cachedLiveRegressionSubject(t *testing.T) (*Client, frame.UnitView) {
 	v := frame.UnitView{InstanceID: 71, Slot: 1, Model: "split", X: numeric.Fixed(100 << 16), Z: numeric.Fixed(100 << 16), ZBuffer: true, CacheRevision: 1, CacheValidityRevision: 1,
 		Pieces: []frame.PieceView{{Index: 0}, {Index: 1, DontCache: true}}}
 	return c, v
+}
+
+func cachedTeamColorRegressionSubject(t *testing.T) (*Client, frame.UnitView, [10]*formats.GAFFrame) {
+	t.Helper()
+	c := newPieceFixtureClient(t)
+	var authored [10]*formats.GAFFrame
+	frames := make([]formats.GAFFrameRef, len(authored))
+	for i := range frames {
+		authored[i] = &formats.GAFFrame{Width: 1, Height: 1, Pixels: []byte{byte(100 + i)}}
+		frames[i].Frame = authored[i]
+	}
+	c.texIndex["logo"] = texRef{kind: texTeam, key: "logo", entry: &formats.GAFEntry{FrameCount: uint16(len(frames)), Frames: frames}}
+	c.models = map[string]*unitModel{"team": teamLogoTestModel()}
+	v := frame.UnitView{
+		InstanceID: 72, Slot: 1, Model: "team", X: numeric.Fixed(100 << 16), Z: numeric.Fixed(100 << 16),
+		ZBuffer: true, CacheRevision: 1, CacheValidityRevision: 1, OwnerColorKnown: true,
+	}
+	return c, v, authored
+}
+
+func TestCachedBodyMemoizationTracksPublishedTeamColor(t *testing.T) {
+	c, v, _ := cachedTeamColorRegressionSubject(t)
+	cachedLiveReplay(t, c, v)
+	first := c.cachedModelBodies[v.InstanceID]
+	if first == nil || first.teamColor != (teamColor{index: 0, known: true}) || bytes.Count(c.indexed, []byte{100}) == 0 {
+		t.Fatalf("initial team-colour body=%+v pixels=%d", first, bytes.Count(c.indexed, []byte{100}))
+	}
+	v.OwnerColor = 7
+	cachedLiveReplay(t, c, v)
+	second := c.cachedModelBodies[v.InstanceID]
+	if second == first || second.teamColor != (teamColor{index: 7, known: true}) || bytes.Count(c.indexed, []byte{107}) == 0 {
+		t.Fatalf("changed team-colour body=%+v pixels=%d", second, bytes.Count(c.indexed, []byte{107}))
+	}
+
+	native, nv, authored := cachedTeamColorRegressionSubject(t)
+	native.geometryOnlyModels = true
+	record := func() *cachedModelBody {
+		native.list.Reset()
+		native.modelScratch.reset()
+		native.modelScratch.active = true
+		defer func() { native.modelScratch.active = false }()
+		if !native.drawUnitModel(nv, 0, 0) {
+			t.Fatal("team-colour native model was not recorded")
+		}
+		return native.cachedModelBodies[nv.InstanceID]
+	}
+	body := record()
+	if body == nil || body.geometry == nil || len(body.geometry.Faces) == 0 || body.geometry.Faces[0].Texture != authored[0] {
+		t.Fatal("initial native body did not retain team frame zero")
+	}
+	nv.OwnerColor = 7
+	body = record()
+	if body == nil || body.teamColor != (teamColor{index: 7, known: true}) || body.geometry == nil || len(body.geometry.Faces) == 0 || body.geometry.Faces[0].Texture != authored[7] {
+		t.Fatal("changed native body did not rebuild with team frame seven")
+	}
 }
 
 func TestCachedLiveMotionExpandsRetainedBounds(t *testing.T) {

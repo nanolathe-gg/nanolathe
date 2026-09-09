@@ -304,9 +304,10 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	}
 	b := &battleSession{sess: &session.Session{World: &world.Terrain{PlayRight: 126, PlayBottom: 126}}, radarOptions: radarAllContactsOption}
 	cur := &frame.Frame{
-		Tick:       17,
-		Selection:  frame.SelectionView{LocalPlayer: local},
-		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, MappingSource: 1, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
+		Tick:          17,
+		ViewingPlayer: local,
+		Selection:     frame.SelectionView{LocalPlayer: local},
+		Visibility:    frame.VisibilityView{W: 1, H: 1, Valid: true, MappingSource: 1, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
 		Radar: frame.RadarView{MappingLOS: 3, BlinkPhase: 1, Contacts: []frame.RadarContactView{
 			// Selected, active, non-toggle unit: its published authored range
 			// produces a radar-colored circle and its authored blip pixel.

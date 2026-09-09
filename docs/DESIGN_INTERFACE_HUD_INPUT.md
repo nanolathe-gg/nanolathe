@@ -1314,9 +1314,14 @@ as local chat. The implemented handlers are:
 | `ScrollSpeed n` | store and persist the low byte, including exact zero |
 | `IFace n` | store and persist the integer interface type |
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
+| `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `CDPlay n`, `CDStop` | use the existing music controller; argument zero runs its enabled music tick |
 | `Sound3D` | toggle the live audio output mode; write settings while retaining the separate stored sound-mode preference |
+| `Sing` | toggle the existing voice queue's audible alias override; preserve captions, arbitration and random draws; no settings write |
+| `View p` | skirmish only; queue the low-byte viewing slot without changing command ownership or requesting a visibility refresh |
+| `Give p n metal/energy` | queue a signed resource transfer from the viewing player at drain time through the existing economy ledger; no settings write |
+| `Logo n p` | validate the signed logo index against authored `32xlogos` frame count and the low-byte player argument against the current committed player row; enqueue the authoritative logo-byte assignment; no settings write |
 | `NoMetal`, `NoEnergy` | command alone sets local stock to zero; otherwise the first argument's low byte selects the player and the second supplies the stock value, subject to the established player-record gates |
 | `Selectable` | enqueue the alive-unit walk, setting only the selectable status bit |
 | `LOS`, `Mapping`, `NowISee` | skirmish only; enqueue live visibility toggles or clear both history/current bits; LOS and Mapping write the unchanged setup preferences |
@@ -1324,9 +1329,18 @@ as local chat. The implemented handlers are:
 | `DoubleShot`, `HalfShot` | skirmish only; enqueue independent damage gates, applying signed doubling before halving in the existing weapon pipeline; no settings write |
 | `Radar` | skirmish only; toggle the battle-local full-radar bit for unit contacts; no settings write |
 
+The resource strip retains its existing 30-tick rate latch across `View`.
+The retail viewing-player display deadline is not yet a live presentation
+owner; that existing timing approximation stays marked at the readout site
+`[07 R-HUD-03 §4]`.
+
+The retained classic and native model-cache keys include the published team
+selector, so a committed player-logo change rebuilds cached LOGOS pixels or
+faces on the next presentation frame `[03 R-RAST-01 §3]` `[I6]`.
+
 These commands are partial I10. Shell and direct-map entry use the same live
-display bits; a later direct-entry settings write includes deferred shadow
-preferences. The remaining ordinary local
+display bits, including the persisted low bit that selects dithered fog; a
+later direct-entry settings write includes deferred shadow preferences. The remaining ordinary local
 single-player command families stay in the parent I10 scope. The mask-4
 developer table and default unit-spawn handler remain excluded with developer
 mode; multiplayer `TALK2.GUI`, recipient controls and network chat remain

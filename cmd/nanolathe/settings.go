@@ -27,7 +27,7 @@ func (g *gameShell) attachSettings() {
 	}
 	g.applySettings(loaded)
 	g.settingsWritable = true
-	// The three display-option bits reach the presentation as soon as they are
+	// The display-option bits reach the presentation as soon as they are
 	// read; retail's own loader installs them the same way [07 R-FE-01 §6].
 	g.applyRetailVisualOptions(clPtr)
 }

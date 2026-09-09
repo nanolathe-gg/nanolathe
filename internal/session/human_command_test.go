@@ -63,6 +63,42 @@ func TestHumanSetResourceValidatesPlayerRecord(t *testing.T) {
 	}
 }
 
+func TestHumanSetLogoValidatesPlayerRecordInEitherSessionKind(t *testing.T) {
+	econ := &economy.Service{}
+	econ.Players[0] = economy.Player{Exists: true, ControllerState: 1, Side: 4, Logo: 2}
+	econ.Players[1] = economy.Player{Exists: true, ControllerState: 2, Side: 5, Logo: 3}
+	econ.Players[2] = economy.Player{Exists: true, ControllerState: 3, Side: 6, Logo: 4}
+	econ.Players[3] = economy.Player{Exists: true, ControllerState: 0, Side: 1, Logo: 9}
+	econ.Players[4] = economy.Player{Exists: true, ControllerState: 4, Side: 1, Logo: 9}
+	econ.Players[5] = economy.Player{Exists: true, ControllerState: 2, Side: 10, Logo: 9}
+	econ.Players[6] = economy.Player{ControllerState: 2, Side: 1, Logo: 9}
+	s := &Session{Econ: econ, Mission: &mission.Mission{Type: mission.TypeCampaign}}
+
+	for player := 0; player < 3; player++ {
+		s.applyHumanCommand(HumanCommand{Kind: HumanSetLogo, SetLogo: HumanSetLogoCommand{Player: player, Logo: uint8(7 + player)}}, 1)
+		if got := econ.Players[player].Logo; got != uint8(7+player) {
+			t.Fatalf("controller %d Logo=%d, want %d", player+1, got, 7+player)
+		}
+		if got := econ.Players[player].Side; got != uint8(4+player) {
+			t.Fatalf("controller %d Side changed to %d", player+1, got)
+		}
+	}
+	for _, player := range []int{-1, 3, 4, 5, 6, 10} {
+		s.applyHumanCommand(HumanCommand{Kind: HumanSetLogo, SetLogo: HumanSetLogoCommand{Player: player, Logo: 1}}, 2)
+	}
+	for player := 3; player <= 6; player++ {
+		if got := econ.Players[player].Logo; got != 9 {
+			t.Fatalf("invalid player %d Logo=%d, want unchanged 9", player, got)
+		}
+	}
+
+	s.Mission = nil
+	s.applyHumanCommand(HumanCommand{Kind: HumanSetLogo, SetLogo: HumanSetLogoCommand{Player: 0, Logo: 1}}, 3)
+	if got := econ.Players[0].Logo; got != 1 {
+		t.Fatalf("skirmish Logo=%d, want 1", got)
+	}
+}
+
 func TestHumanMakeSelectableVisitsOnlyLiveUnits(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
 	def := &content.UnitDef{UnitName: "unit", MaxDamage: 10}
@@ -496,5 +532,40 @@ func TestHumanGroupDoesNotWriteAIUnits(t *testing.T) {
 	}
 	if got := w.Unit(aiUnit).Group; got != 4 {
 		t.Fatalf("AI group=%d, want unchanged 4", got)
+	}
+}
+
+func TestViewThenGiveUsesQueuedViewingOwner(t *testing.T) {
+	s := &Session{Econ: &economy.Service{}}
+	for i := 0; i < 3; i++ {
+		s.Econ.Players[i] = economy.Player{Exists: true, ControllerState: 1}
+		s.Econ.Players[i].Stock[economy.Metal] = 30
+	}
+	view := HumanCommand{Kind: HumanView, View: HumanViewCommand{Player: 1}}
+	give := HumanCommand{Kind: HumanGive, Give: HumanGiveCommand{Player: 2, Resource: economy.Metal, Amount: 20}}
+	for _, c := range []HumanCommand{view, give} {
+		if err := s.EnqueueHumanCommand(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.ViewingOwner != 0 || s.Econ.Players[1].Stock[economy.Metal] != 30 {
+		t.Fatal("queued input mutated live state before draining")
+	}
+	s.applyHumanCommands(1)
+	if s.ViewingOwner != 1 || s.LocalOwner != 0 || s.Econ.Players[0].Stock[economy.Metal] != 30 || s.Econ.Players[1].Stock[economy.Metal] != 10 || s.Econ.Players[2].Mirror[economy.Metal].Production != 20 {
+		t.Fatal("Give did not debit the preceding View's player and stage the credit")
+	}
+	s.Mission = &mission.Mission{Type: mission.TypeCampaign}
+	view.View.Player = 0
+	give.Give.Amount = 5
+	s.applyHumanCommand(view, 2)
+	s.applyHumanCommand(give, 2)
+	if s.ViewingOwner != 1 || s.Econ.Players[1].Stock[economy.Metal] != 5 {
+		t.Fatal("campaign gates must reject View but permit Give")
+	}
+	s.Econ.Players[2].Side = 10
+	s.applyHumanCommand(give, 3)
+	if s.Econ.Players[1].Stock[economy.Metal] != 5 {
+		t.Fatal("Give accepted a non-player destination")
 	}
 }

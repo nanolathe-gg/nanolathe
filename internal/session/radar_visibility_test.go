@@ -44,7 +44,7 @@ func TestRadarFeatureVisibleSamplesOwnPositionNotFootprintCorners(t *testing.T) 
 		CX: 4, CZ: 4, FootX: 1, FootZ: 1,
 		X: far, Y: 0, Z: far,
 	}
-	s := &Session{Vis: vis, LocalOwner: local}
+	s := &Session{Vis: vis, LocalOwner: local, ViewingOwner: local}
 	if radarFeatureVisible(s, f) {
 		t.Fatal("feature admitted through a footprint-corner cell, not its own projected position [03 §3.9]")
 	}
@@ -65,7 +65,7 @@ func TestRadarFeatureVisibleOwnerLocalBypass(t *testing.T) {
 	terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
 	vis := visibility.New(terrain, visibility.ModeCurrentEnabled)
 	const local = uint8(3)
-	s := &Session{Vis: vis, LocalOwner: local}
+	s := &Session{Vis: vis, LocalOwner: local, ViewingOwner: local}
 
 	notLocal := frame.FeatureView{Owner: 1, OwnerKnown: true}
 	if radarFeatureVisible(s, notLocal) {
@@ -89,7 +89,7 @@ func TestRadarPublishedFeatureIgnoresFriendlyContactStatusBits(t *testing.T) {
 	terrain := &world.Terrain{CellW: 64, CellH: 64, Plot: make([]world.PlotCell, 64*64)}
 	vis := visibility.New(terrain, visibility.ModeCurrentEnabled)
 	const local = uint8(0)
-	s := &Session{Vis: vis, LocalOwner: local}
+	s := &Session{Vis: vis, LocalOwner: local, ViewingOwner: local}
 
 	// Not visible, not owner-local: must not be admitted regardless of any
 	// status-shaped field a caller might otherwise be tempted to pass through.

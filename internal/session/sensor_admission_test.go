@@ -259,6 +259,7 @@ func TestMinimapCirclesOnlyForTheViewersSelectedUnits(t *testing.T) {
 	s := visibilityFixture(t, true)
 	s.Vis.SetLocal(visibility.PlayerID(1))
 	s.LocalOwner = 1
+	s.ViewingOwner = 1
 	def := s.Catalog.Units[content.CanonicalKey("armcom")]
 	def.RadarDistance = 900
 

@@ -49,11 +49,12 @@ const (
 	DefaultUnitChatText = 5  // unitchattext: caption gate 10-v < priority
 )
 
-// The display block. `VISUALS`'s `VIDSLDR` and its `RESTORE`/`UNDO` buttons are
-// the only writers; the skirmish and campaign load transitions are the only
-// readers, comparing the pair to the presentation window's current size and
-// resizing when they differ [07 R-FE-01 §6][07 R-FE-01 §11]. The missing-value
-// defaults are 640 and 480 [02 R-KEYS-01 §5].
+// The display-mode pair. `VISUALS`'s `VIDSLDR` and its `RESTORE`/`UNDO`
+// buttons are the only writers; the skirmish and campaign load transitions
+// are the only readers, comparing the pair to the presentation window's
+// current size and resizing when they differ [07 R-FE-01 §6]
+// [07 R-FE-01 §11]. The missing-value defaults are 640 and 480
+// [02 R-KEYS-01 §5].
 const (
 	DefaultDisplaymodeWidth  = 640
 	DefaultDisplaymodeHeight = 480
@@ -68,14 +69,16 @@ const (
 // two-stage buttons of the `VISUALS` page, bound to bits 1, 4 and 5 of the
 // display option word; `BSHADOWS` copies bit 4 into bit 3 and bit 3 into bit 2,
 // so the one control drives `FeatureShadows`, `VehicleShadows` and `Shadows`
-// together [07 R-FE-01 §6]. Every one of the five defaults to set and `Gamma`
-// to 12 [02 R-KEYS-01 §5].
+// together [07 R-FE-01 §6]. Every one of those five defaults to set,
+// `DitheredFog` defaults clear and `Gamma` defaults to 12
+// [02 R-KEYS-01 §5].
 const (
 	DefaultAntiAlias      = 1
 	DefaultShadows        = 1
 	DefaultFeatureShadows = 1
 	DefaultVehicleShadows = 1
 	DefaultShading        = 1
+	DefaultDitheredFog    = 0
 	DefaultGamma          = 12
 	// `VISUALS` `GAMMA` is a kind-4 slider whose maximum is 20; the stored
 	// integer is applied as the palette factor 0.5 + g/24 [07 R-FE-01 §6].
@@ -384,9 +387,9 @@ func (m *Messages) Normalize() {
 }
 
 // Display is the `VISUALS` page's persisted block. The two size values are
-// retail's `DisplaymodeWidth`/`DisplaymodeHeight`; the five option values are
-// the display-option-word bits the page's three two-stage buttons drive, kept
-// as separate registry values because that is how retail stores them
+// retail's `DisplaymodeWidth`/`DisplaymodeHeight`; the six option values are
+// display-option-word bits, kept as separate registry values because that is
+// how retail stores them
 // [07 R-FE-01 §6][02 R-KEYS-01 §5].
 type Display struct {
 	Width  int `json:"width"`
@@ -401,6 +404,9 @@ type Display struct {
 	VehicleShadows int `json:"vehicleShadows"`
 	// Shading is bit 5.
 	Shading int `json:"shading"`
+	// DitheredFog is bit 6. Its only options-page writer is front-end
+	// RESTORE; the Dither command toggles it in battle.
+	DitheredFog int `json:"ditheredFog"`
 	// Gamma is the 0..20 slider integer, applied as the palette factor
 	// 0.5 + g/24 [07 R-FE-01 §6].
 	Gamma int `json:"gamma"`
@@ -417,6 +423,7 @@ func DefaultDisplay() Display {
 		FeatureShadows: DefaultFeatureShadows,
 		VehicleShadows: DefaultVehicleShadows,
 		Shading:        DefaultShading,
+		DitheredFog:    DefaultDitheredFog,
 		Gamma:          DefaultGamma,
 	}
 }
@@ -424,9 +431,9 @@ func DefaultDisplay() Display {
 // Normalize repairs a truncated or hand-edited display block. Zero is not a
 // stored choice for either size — the slider's table drops everything below
 // 640x480 [07 R-FE-01 §6] — so a zero or sub-minimum size takes the default.
-// The five option values are booleans in a DWORD, so only a negative value is
-// repaired; a stored 0 is "off" and is kept. Gamma is clamped into the
-// slider's own 0..20 range.
+// The five button values are booleans in a DWORD, so only a negative value is
+// repaired; a stored 0 is "off" and is kept. The DitheredFog loader takes its
+// DWORD's low bit. Gamma is clamped into the slider's own 0..20 range.
 func (d *Display) Normalize() {
 	if d.Width < MinDisplaymodeWidth {
 		d.Width = DefaultDisplaymodeWidth
@@ -439,10 +446,15 @@ func (d *Display) Normalize() {
 			*value = 1
 		}
 	}
+	d.DitheredFog &= 1
 	if d.Gamma < 0 || d.Gamma > MaxGamma {
 		d.Gamma = DefaultGamma
 	}
 }
+
+// DitheredFogEnabled reports the persisted display word's bit-6 source.
+// Retail reads only the stored DWORD's low bit [07 R-FE-01 §11].
+func (d Display) DitheredFogEnabled() bool { return d.DitheredFog&1 != 0 }
 
 // DamageBarsEnabled is the loader's rule for the value: present → bit 0 of the
 // interface-flags word takes the value's low bit; absent → the bit is cleared

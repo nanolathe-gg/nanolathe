@@ -323,6 +323,7 @@ func TestLocalOwnerNonzeroReceivesCommands(t *testing.T) {
 	_ = orders.Lookup("Move_Ground")
 	b := newTestBattle(cat, terrain)
 	b.sess.LocalOwner = 1 // human is player 1, not 0 [RS-P0-004]
+	b.sess.ViewingOwner = 1
 	// Place two units, one owned by 1 (local), one owned by 0
 	localUnit := placeUnit(b, "armcons", numeric.Fixed(180*65536), numeric.Fixed(100*65536))
 	localUnit.Owner = 1

@@ -120,7 +120,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 		return 0, nil, pos
 	}
 	if f, ok := b.currentSnapshot(); ok {
-		if bh, view, hit := client.PickSnapshotUnit(f, sx, sy, b.cam, b.sess.LocalOwner); hit {
+		if bh, view, hit := client.PickSnapshotUnit(f, sx, sy, b.cam, f.ViewingPlayer); hit {
 			copy := &units.Unit{Handle: bh, Owner: view.Owner, X: view.X, Y: view.Y, Z: view.Z, Flags: view.Flags, Health: view.Health, MaxHealth: view.MaxHealth, Remaining: view.BuildRemaining, Alive: true}
 			if b.cat != nil && view.DefName != "" {
 				copy.Def, _ = b.cat.Unit(view.DefName)
@@ -144,7 +144,7 @@ func (b *battleSession) pickTarget(sx, sy int32) (pool.Handle, *units.Unit, *ord
 			if cx < fv.CX || cx >= fv.CX+footX || cz < fv.CZ || cz >= fv.CZ+footZ {
 				continue
 			}
-			if !snapshotFeatureVisible(f, fv, b.sess.LocalOwner) {
+			if !snapshotFeatureVisible(f, fv, f.ViewingPlayer) {
 				continue
 			}
 			pos.HasFeature = true
@@ -306,7 +306,7 @@ func (b *battleSession) eligibleHandlesInRect(f *frame.Frame, rect client.Rect) 
 			eligible[v.Slot] = struct{}{}
 		}
 	}
-	inRect := client.SnapshotUnitHandlesInRect(f, b.cam, rect, b.sess.LocalOwner)
+	inRect := client.SnapshotUnitHandlesInRect(f, b.cam, rect, f.ViewingPlayer)
 	out := make([]pool.Handle, 0, len(inRect))
 	for _, h := range inRect {
 		if _, ok := eligible[h]; ok {

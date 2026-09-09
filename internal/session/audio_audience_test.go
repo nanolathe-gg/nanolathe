@@ -91,6 +91,7 @@ func TestIsAudibleAtTestsLocalPlayerOnly(t *testing.T) {
 	t.Run("explored byte grid", func(t *testing.T) {
 		s := audienceFixture(visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled)
 		s.LocalOwner = 1
+		s.ViewingOwner = 1
 		s.Vis.SetLocal(1)
 		lightByte(s, 0, 1, 1, true)
 		if s.IsAudibleAt(elevated) {
@@ -105,6 +106,7 @@ func TestIsAudibleAtTestsLocalPlayerOnly(t *testing.T) {
 	t.Run("LOS word mask", func(t *testing.T) {
 		s := audienceFixture(visibility.ModeHistoryEnabled)
 		s.LocalOwner = 1
+		s.ViewingOwner = 1
 		s.Vis.SetLocal(1)
 		lightWord(s, 0, 1, 1, true)
 		if s.IsAudibleAt(elevated) {

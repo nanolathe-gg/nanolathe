@@ -711,7 +711,7 @@ func (c *Client) waterlineTints(draw *presentationrender.UnitDraw, owner, kind u
 		return true
 	}
 	cur := c.buffer.Current()
-	return cur != nil && cur.Selection.LocalPlayer < 10 && owner == cur.Selection.LocalPlayer
+	return cur != nil && cur.ViewingPlayer < 10 && owner == cur.ViewingPlayer
 }
 
 // seaLevel is the committed map sea level in world units. It is the map

@@ -440,7 +440,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `Contour` | word 1, word 2 as floats × 256, truncated, into the two contour-line parameters |
 | `ScrollSpeed n` | scroll setting byte = `n` (low byte); write settings ([R-CAM-01 §10]) |
 | `IFace n` | `Interface Type` = `n`; write settings ([R-CAM-01 §5]) |
-| `Give p n metal` / `Give p n energy` | valid slot `p`: transfer `n` (as a float) of the named resource from the local player to slot `p` through the sharing transfer of doc 05 (word 3 compared case-insensitively) |
+| `Give p n metal` / `Give p n energy` | valid slot `p`: transfer `n` (as a float) of the named resource from the viewing player to slot `p` through the sharing transfer of doc 05 (word 3 compared case-insensitively) |
 | `CDPlay n` / `CDStop` | CD audio track play / stop (doc 03 audio) |
 | `Sound3D` | toggle the live 3D-sound state of the audio device; invoke settings write-all, which serializes the unchanged packed `SoundMode` (see below) |
 | `Shading` `AntiAlias` `Shadow` | toggle interface bits `0x20`, `0x02`, `0x04`; rebuild the terrain renderer; write settings |
@@ -452,7 +452,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `RCache` | rebuild the terrain renderer |
 | `Selectable` | set the selectable bit on every unit whose status word has bit 28 (alive) set |
 | `MusicMode n` | music mode `n` into the audio device |
-| `Logo n p` | valid slot `p` and `0 ≤ n <` logo count: slot `p`'s side/logo byte = `n`; renderer rebuild; otherwise post `Invalid logo setting` |
+| `Logo n p` | valid slot `p` and `0 ≤ n <` logo count: slot `p`'s logo byte = `n`; renderer rebuild; otherwise post `Invalid logo setting` |
 | `ScreenChat` | toggle the screen-chat dword; write settings |
 | `Gamma n` | gamma = `n × 0.1` into the display; store `n`; write settings |
 | `Clock` | toggle flags bit 6 (clock display); write settings |
@@ -487,6 +487,28 @@ conversion, after which the amount is converted to single precision and
 assigned directly to the stock. The narrowed player byte is accepted only
 when below `10`, with an occupied record, controller kind `1`, `2`, or `3`,
 and side byte other than `10`; a failed check leaves the stock unchanged.
+
+**Established fact — `Logo` arguments and failure.** The first argument is a
+signed integer and must be nonnegative and less than the unsigned frame count
+of the `32xlogos` entry in `textures/logos.gaf`. The second argument is narrowed
+to its low byte before the player-slot validation above. Success stores the low
+byte of the first argument in that player's logo field, rebuilds the renderer,
+and performs no settings write or success diagnostic. Every failed check posts
+the exact text `Invalid logo setting` with class 2, source unit 0, and speaker
+slot 10. Missing arguments retain the shared zero default and extra arguments
+are ignored.
+
+**Established fact — viewing and control.** `View` changes the viewing slot,
+without changing the true-local command owner or requesting a visibility
+refresh. Its player argument is narrowed to the low byte before the common
+player-record validation. `Give` uses that viewing slot as its source, narrows
+its destination argument to the low byte, converts the second integer argument
+to single precision, and delegates to the resource transfer of doc 05. Negative
+amounts retain that helper's signed behavior. Neither command writes settings.
+The top resource strip retains its previous displayed stocks and rate latches
+across a viewing change; it does not reset them. Cursor actor selection remains
+true-local, while visibility and status-caption ownership use the viewing slot
+([R-HUD-03 §4], [R-HUD-03 §14.1], [04 R-P0-08-B §1]).
 
 **Mask 2 — cheats (10):**
 
@@ -3206,7 +3228,7 @@ left by `PREV` persist at the next save point.
 | `DisplaymodeWidth` / `DisplaymodeHeight` | `VISUALS` `VIDSLDR`, `RESTORE` (640×480), `UNDO` | the skirmish/campaign load transitions compare them to the current window size and, when different, resize the window, re-select the mode and re-create the offscreen; the lobby copies them into the session record | 
 | `DisplaymodeDepth` | nothing | loader only: equality with 256 gates the `Games` read ([02 R-KEYS-01 §3]) |
 | `Gamma` | `VISUALS` `GAMMA`, `RESTORE` (12) | applied as the palette factor `0.5 + g/24` at battle init and at every slider move |
-| `DitheredFog` | `VISUALS` `RESTORE` clears it (front end); no gadget sets it | fog presenter (doc 03) — reader not traced here |
+| `DitheredFog` | `VISUALS` `RESTORE` clears it (front end); `+Dither` toggles it and writes settings; no gadget sets it | loader copies the stored DWORD's low bit into interface bit `0x40`; the fog presenter uses that bit to select plain or patterned current fog ([03 R-RR16-A §2], [03 R-RR16-A §8]) |
 | `SwitchAlt` | nothing | [R-CAM-01 §4] |
 | `screenchat` | nothing | the **message column**'s class filter ([R-HUD-03 §14]): `screenchat` 0 draws only the lines whose routing class is 1, 4 or 8, and any other value draws every class; the filter is not in the footer |
 | `textlines` | `SPEEDS` `MAXLINES` | the message line ring: a line is stored only when `textlines ≠ 0`, and when storing one would exceed `textlines` visible lines the oldest visible line is dropped (`(head + 1) mod textlines == tail` advances the tail; both indices wrap at 30). `textlines` is the **modulus**, not the on-screen budget: the drawer shows `textlines − 1` lines ([R-HUD-03 §14.3], [R-HUD-03 §14.4]) |
@@ -3591,9 +3613,8 @@ validation, and endgame continuation.
 
 ### Unknown
 
-- The `DitheredFog` bit's presenter and the `Gamma` factor's exact palette
-  application beyond the `0.5 + g/24` factor · §5 [R-FE-01 §11], doc 03 ·
-  static trace.
+- The `Gamma` factor's exact palette application beyond the `0.5 + g/24`
+  factor · §5 [R-FE-01 §11], doc 03 · static trace.
 - Whether the label under a briefing blink word also draws the run (so the
   blink overdraws it) or elides it · §5 [R-FE-02 §7] · static trace of the
   pager's copy loop.
@@ -7746,7 +7767,6 @@ and the decider that would close it.
   elides it · §5 [R-FE-02 §7] · static trace of the pager's copy loop.
 - The per-window census of authored gadget association ids · §4, §9, doc 02 §6
   · asset census.
-- The `DitheredFog` presenter · §5 [R-FE-01 §11], doc 03 · static trace.
 - Process-level outcome of malformed HATTFONT or malformed GAF payloads whose
   decoders return null · §5 "Frontend asset failure boundaries" · static
   trace.

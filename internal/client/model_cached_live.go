@@ -19,6 +19,9 @@ type cachedModelBody struct {
 	validityRevision uint64
 	structure        bool
 	construction     float32
+	// Published team selection chooses authored LOGOS pixels/faces and is part
+	// of both retained cache identities [03 R-RAST-01 §3][I6].
+	teamColor teamColor
 	// These are Nanolathe's retained-image memoization inputs. They keep a
 	// cached physical-index raster from crossing a presentation setting or
 	// palette installation; they are not retail's script-driven validity word.
@@ -121,7 +124,7 @@ func (c *Client) replaceCachedBody(id uint64, v frame.UnitView, draw *presentati
 	c.cachedModelBodies[id] = &cachedModelBody{
 		image: cloneModelTarget(image), model: draw.Model.Name,
 		cacheRevision: v.CacheRevision, validityRevision: v.CacheValidityRevision,
-		structure: draw.Structure, construction: v.BuildRemaining,
+		structure: draw.Structure, construction: v.BuildRemaining, teamColor: unitTeamColor(v),
 		shaded: inputs.shaded, supersampled: inputs.supersampled, scale: inputs.scale, palette: inputs.palette,
 	}
 }
@@ -149,7 +152,7 @@ func (c *Client) replaceCachedGeometry(id uint64, v frame.UnitView, draw *presen
 	body.image = nil
 	body.geometry = geometry.Clone()
 	body.model, body.cacheRevision, body.validityRevision = draw.Model.Name, v.CacheRevision, v.CacheValidityRevision
-	body.structure, body.construction = draw.Structure, v.BuildRemaining
+	body.structure, body.construction, body.teamColor = draw.Structure, v.BuildRemaining, unitTeamColor(v)
 	body.shaded, body.supersampled, body.scale, body.palette = inputs.shaded, inputs.supersampled, inputs.scale, inputs.palette
 }
 
@@ -158,6 +161,9 @@ func (c *Client) cachedGeometryMustRebuild(body *cachedModelBody, v frame.UnitVi
 		return true
 	}
 	if body.validityRevision != v.CacheValidityRevision || body.structure && body.construction != v.BuildRemaining {
+		return true
+	}
+	if body.teamColor != unitTeamColor(v) {
 		return true
 	}
 	inputs := c.cachedBodyInputs(draw)
@@ -175,6 +181,9 @@ func (c *Client) cachedBodyMustRebuild(body *cachedModelBody, v frame.UnitView, 
 		return true
 	}
 	if body.structure && body.construction != v.BuildRemaining {
+		return true
+	}
+	if body.teamColor != unitTeamColor(v) {
 		return true
 	}
 	inputs := c.cachedBodyInputs(draw)

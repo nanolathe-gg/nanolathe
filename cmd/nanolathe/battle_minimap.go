@@ -318,7 +318,7 @@ func (b *battleSession) minimapHoverUnit(f *frame.Frame, mx, my int32) pool.Hand
 	bestDist := int64(1 << 62)
 	for i := range f.Units {
 		v := f.Units[i]
-		if v.Slot == 0 || !client.SnapshotVisible(f, v, b.sess.LocalOwner) {
+		if v.Slot == 0 || !client.SnapshotVisible(f, v, f.ViewingPlayer) {
 			continue
 		}
 		rx, ry := render.RadarProjection(radarMapPixel(v.X), radarMapPixel(v.Z), radarMapPixel(v.Y), playW, playH, layout)

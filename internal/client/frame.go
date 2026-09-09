@@ -302,7 +302,7 @@ func (c *Client) drawProjectiles(cur *frame.Frame) {
 	}
 	// Missing projectile GAF metadata suppresses that instruction through the
 	// resolver; admission stays open so it cannot abort unrelated projectiles.
-	c.DrawProjectileViews(cur.Projectiles, cur.Tick, projectileVisible(cur.Visibility, cur.Selection.LocalPlayer), func(frame.ProjectileView) bool { return true }, c.projectileDispatchOptions())
+	c.DrawProjectileViews(cur.Projectiles, cur.Tick, projectileVisible(cur.Visibility, cur.ViewingPlayer), func(frame.ProjectileView) bool { return true }, c.projectileDispatchOptions())
 }
 
 func (c *Client) drawEffects(cur *frame.Frame) {

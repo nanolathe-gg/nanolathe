@@ -51,6 +51,9 @@ const (
 	HumanNoShake
 	HumanATM
 	HumanSetResource
+	HumanSetLogo
+	HumanView
+	HumanGive
 	HumanMakeSelectable
 	HumanVisibility
 	HumanDoubleShot
@@ -116,6 +119,16 @@ type HumanSetResourceCommand struct {
 	Resource economy.Res
 	Amount   float32
 }
+type HumanSetLogoCommand struct {
+	Player int
+	Logo   uint8
+}
+type HumanViewCommand struct{ Player uint8 }
+type HumanGiveCommand struct {
+	Player   int
+	Resource economy.Res
+	Amount   float32
+}
 type HumanVisibilityCommand struct {
 	ToggleMask visibility.Mode
 	ClearMask  visibility.Mode
@@ -168,6 +181,9 @@ type HumanCommand struct {
 	Cloak            HumanCloakCommand
 	SelfDestruct     HumanSelfDestructCommand
 	SetResource      HumanSetResourceCommand
+	SetLogo          HumanSetLogoCommand
+	View             HumanViewCommand
+	Give             HumanGiveCommand
 	Visibility       HumanVisibilityCommand
 }
 
@@ -590,6 +606,30 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 			return
 		}
 		p.Stock[c.SetResource.Resource] = c.SetResource.Amount
+		return
+	case HumanSetLogo:
+		if s.Econ == nil || c.SetLogo.Player < 0 || c.SetLogo.Player >= len(s.Econ.Players) {
+			return
+		}
+		p := &s.Econ.Players[c.SetLogo.Player]
+		if !p.Exists || p.ControllerState < 1 || p.ControllerState > 3 || p.Side == 10 {
+			return
+		}
+		p.Logo = c.SetLogo.Logo
+		return
+	case HumanView:
+		if s.Mission == nil || s.Mission.Type != mission.TypeCampaign {
+			s.SetViewingOwner(c.View.Player)
+		}
+		return
+	case HumanGive:
+		p := s.playerRecord(c.Give.Player)
+		if p == nil || !p.Exists || p.ControllerState < 1 || p.ControllerState > 3 || p.Side == 10 {
+			return
+		}
+		// Resolve the source at drain time so a preceding View in the same
+		// input batch takes effect [07 R-CAM-01 §6][05 R-SHARE-01 §2].
+		s.Econ.Transfer(s.ViewingOwner, uint8(c.Give.Player), c.Give.Resource, c.Give.Amount)
 		return
 	case HumanVisibility:
 		if s.Vis == nil {

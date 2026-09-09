@@ -681,8 +681,9 @@ active-list order `[05 R-FEAT-01 §10]` [I1].
 * **Multiplayer sharing is deferred.** The automatic dispatcher retains the
   network-session gate, remote-human candidate predicates and 60/450-tick
   cadences. In a single-player battle it performs no automatic transfers,
-  matching `[05 R-SHARE-01 §3]`. Local resource-transfer helpers implement stock
-  debit and production credit; the resource receive seam applies a credit
+  matching `[05 R-SHARE-01 §3]`. `Service.Transfer` exposes the existing local
+  stock debit and deferred production credit for `Give`, including signed
+  amounts and source-stock clamping; the resource receive seam applies a credit
   without repeating the debit `[05 R-SHARE-01 §2]` `[05 R-SHARE-01 §4]`.
   Packet emission and network receipt are not implemented. The sensor branch
   increments `SensorShareCalls` as a diagnostic only: it sends no packet and

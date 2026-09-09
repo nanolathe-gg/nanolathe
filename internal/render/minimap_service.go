@@ -117,6 +117,15 @@ func (s *MinimapService) FinalRevision() uint64 {
 	return s.finalRevision
 }
 
+// SetViewingPlayer consumes the committed observer without dirtying MAPPED.
+// View does not request a refresh; the next ordinary mapped invalidation uses
+// this player when it composites the masks [07 R-CAM-01 §6][03 §3.6].
+func (s *MinimapService) SetViewingPlayer(player uint8) {
+	if s != nil {
+		s.local = player
+	}
+}
+
 // Blink is the current radar blink phase [01 R-CORE-03].
 func (s *MinimapService) Blink() BlinkState {
 	if s == nil {

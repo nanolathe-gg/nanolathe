@@ -177,6 +177,15 @@ func (s *Service) SetLocal(p PlayerID) {
 	}
 }
 
+// SetViewingPlayer changes the observer without dirtying the fog or mapped
+// surface. The View command writes only this identity; later ordinary LOS
+// writes retain their existing invalidation rules [07 R-CAM-01 §6].
+func (s *Service) SetViewingPlayer(p PlayerID) {
+	if s != nil && validPlayer(p) {
+		s.local = p
+	}
+}
+
 // Mode returns the current mode word.
 func (s *Service) Mode() Mode {
 	if s == nil {

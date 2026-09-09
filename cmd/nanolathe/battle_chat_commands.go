@@ -81,6 +81,7 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 		s.Display.VehicleShadows = boolInt(vehicle)
 		s.Display.FeatureShadows = boolInt(b.cl.FeatureShadows())
 		s.Display.Shading = boolInt(shading)
+		s.Display.DitheredFog = boolInt(b.cl.DitheredFog())
 	}
 	change(&s)
 	if err := s.Save(); err != nil {
@@ -137,6 +138,59 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		} else {
 			b.saveDirectChatSetting(func(*settings.Settings) {})
 		}
+	case "sing":
+		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Queue != nil {
+			b.sess.Audio.Queue.ToggleSing()
+		}
+	case "view":
+		if b.sess != nil && battleSessionKind(b) == 2 {
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanView, View: session.HumanViewCommand{Player: uint8(localCommandInt(words, 1))}})
+		}
+	case "give":
+		if b.sess == nil || len(words) < 4 {
+			return
+		}
+		var resource economy.Res
+		switch strings.ToLower(words[3]) {
+		case "metal":
+			resource = economy.Metal
+		case "energy":
+			resource = economy.Energy
+		default:
+			return
+		}
+		_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanGive, Give: session.HumanGiveCommand{
+			Player: int(uint8(localCommandInt(words, 1))), Resource: resource, Amount: float32(localCommandInt(words, 2)),
+		}})
+	case "logo":
+		logo := localCommandInt(words, 1)
+		player := int(uint8(localCommandInt(words, 2)))
+		valid := logo >= 0 && b.hud != nil && b.hud.logos != nil
+		if valid {
+			entry, ok := b.hud.logos.Find(sideLogoEntry)
+			valid = ok && logo < int(entry.FrameCount)
+		}
+		if valid {
+			current, ok := b.currentSnapshot()
+			valid = ok && player < len(current.Players)
+			if valid {
+				row := current.Players[player]
+				valid = row.Present && row.Controller >= 1 && row.Controller <= 3 && row.Side != 10
+			}
+		}
+		if !valid {
+			if ring := b.messageRing(); ring != nil {
+				ring.Append("Invalid logo setting", 2, 0, 10, b.currentTick())
+			}
+			return
+		}
+		_ = b.sess.EnqueueHumanCommand(session.HumanCommand{
+			Kind: session.HumanSetLogo,
+			SetLogo: session.HumanSetLogoCommand{
+				Player: player,
+				Logo:   uint8(logo),
+			},
+		})
 	case "nometal", "noenergy":
 		if b.sess == nil {
 			return
@@ -264,6 +318,18 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 			b.shell.saveSettings()
 		} else {
 			b.saveDirectChatSetting(func(s *settings.Settings) { s.Display.AntiAlias = boolInt(value) })
+		}
+	case "dither":
+		if b.cl == nil {
+			return
+		}
+		value := !b.cl.DitheredFog()
+		b.cl.SetDitheredFog(value)
+		if b.shell != nil {
+			b.shell.display.DitheredFog = boolInt(value)
+			b.shell.saveSettings()
+		} else {
+			b.saveDirectChatSetting(func(s *settings.Settings) { s.Display.DitheredFog = boolInt(value) })
 		}
 	case "shading":
 		if b.cl == nil {

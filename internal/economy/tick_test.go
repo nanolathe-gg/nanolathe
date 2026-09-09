@@ -561,6 +561,17 @@ func TestShareTransferUsesLedger(t *testing.T) {
 	if svc.Players[1].Mirror[Metal].Production != 10 {
 		t.Fatalf("dst production 10 got %v", svc.Players[1].Mirror[Metal].Production)
 	}
+	// Manual Give shares the ledger but is not limited by the recipient's
+	// capacity until settlement; the source-stock clamp still applies.
+	svc.Transfer(0, 1, Metal, 200)
+	if svc.Players[0].Stock[Metal] != 0 || svc.Players[0].Mirror[Metal].Requested != 100 || svc.Players[1].Mirror[Metal].Production != 100 || svc.Players[1].Stock[Metal] != 0 {
+		t.Fatal("manual transfer did not clamp source and stage recipient credit")
+	}
+	svc.Transfer(0, 1, Metal, -10)
+	if svc.Players[0].Stock[Metal] != 10 || svc.Players[0].Mirror[Metal].Requested != 90 || svc.Players[1].Mirror[Metal].Production != 90 {
+		t.Fatal("negative transfer lost its signed ledger effect")
+	}
+
 }
 
 // TestTickLoopsPlayersAscending verifies I1 deterministic iteration.

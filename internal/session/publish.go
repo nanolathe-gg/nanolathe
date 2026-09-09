@@ -69,8 +69,7 @@ func (s *Session) PreviewPlacementForCursor(cx, cz int32, def *content.UnitDef, 
 	if s == nil || s.Vis == nil {
 		return world.PlacementResult{}, fmt.Errorf("session: placement visibility unavailable")
 	}
-	local := uint8(localPlayerForSession(s))
-	return s.previewPlacement(cx, cz, def, footX, footZ, self, &sessionPlacementViewer{vis: s.Vis, local: local, player: local})
+	return s.previewPlacement(cx, cz, def, footX, footZ, self, &sessionPlacementViewer{vis: s.Vis, local: s.ViewingOwner, player: s.LocalOwner})
 }
 
 // sessionPlacementViewer is the world package's PlacementViewer over the
@@ -149,6 +148,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 		return
 	}
 	published.Tick = tick
+	published.ViewingPlayer = s.ViewingOwner
 	publication := s.ensurePublicationState()
 	publication.beginUnitIdentities()
 	defer publication.finishUnitIdentities()
@@ -432,14 +432,14 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 		}
 	}
-	// Visibility masks are copied for the validated local player; their
+	// Visibility masks are copied for the viewing player; their
 	// mode-dependent/raw representation remains owned by visibility [03 §3.1–§3.2].
 	// Radar is a separate presentation surface, not a mask
 	// published by visibility.Service [03 §3.4], so it remains unset. The
 	// Visibility publishes immutable presentation revisions; source identity
 	// prevents a fresh service from restoring another service's retained bytes.
 	if s.Vis != nil {
-		publishVisibilityView(s.Vis, s.LocalOwner, published)
+		publishVisibilityView(s.Vis, s.ViewingOwner, published)
 		// Step 3 of the gate compares against the scaled sea-level byte, never
 		// against zero [03 §3.2][03 §2.2].
 		published.Visibility.SeaLevel = publishedSeaLevel(s.World)
@@ -726,7 +726,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				BlinkSuppress: uint8(u.BlinkSuppress),
 				Seen:          status&visibility.SeenBit != 0,
 				Friendly:      status&visibility.FriendlyMask != 0,
-				Visible:       u.Owner == s.LocalOwner || status&visibility.SeenBit != 0,
+				Visible:       u.Owner == s.ViewingOwner || status&visibility.SeenBit != 0,
 				Palette:       palette, PaletteKnown: paletteKnown,
 			}
 			if contactIdx < len(existingContacts) {
@@ -1143,10 +1143,10 @@ func radarPointVisible(s *Session, owner uint8, ownerKnown bool, x, y, z numeric
 	if s == nil {
 		return false
 	}
-	if ownerKnown && owner < 10 && owner == s.LocalOwner {
+	if ownerKnown && owner < 10 && owner == s.ViewingOwner {
 		return true
 	}
-	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.LocalOwner), x, y, z)
+	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), x, y, z)
 }
 
 // radarFeatureVisible is the minimap contacts pass's second-pass admission
@@ -1163,10 +1163,10 @@ func radarFeatureVisible(s *Session, f frame.FeatureView) bool {
 	if s == nil {
 		return false
 	}
-	if f.OwnerKnown && f.Owner < 10 && f.Owner == s.LocalOwner {
+	if f.OwnerKnown && f.Owner < 10 && f.Owner == s.ViewingOwner {
 		return true
 	}
-	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.LocalOwner), f.X, f.Y, f.Z)
+	return s.Vis != nil && s.Vis.VisiblePoint(visibility.PlayerID(s.ViewingOwner), f.X, f.Y, f.Z)
 }
 
 // buildRadarSensorIndex (re)builds the session-retained index that resolves a
@@ -1220,7 +1220,7 @@ func (s *Session) radarSensorInputFor(inputs []visibility.SensorInput, id uint16
 	return &inputs[s.radarSensorIndex[id]]
 }
 
-// publishVisibilityView copies the local player's visibility masks into the
+// publishVisibilityView copies the viewing player's visibility masks into the
 // immutable presentation frame. Radar has no authoritative mask source in the
 // visibility service.
 func publishVisibilityView(vis *visibility.Service, local uint8, dst *frame.Frame) {

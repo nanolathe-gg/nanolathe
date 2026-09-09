@@ -749,6 +749,16 @@ func ImmediateDebit(p *Player, buckets *[2]Bucket, energy, metal float32) bool {
 	return true
 }
 
+// Transfer debits the source's live stock and stages the recipient's credit
+// through the existing sharing ledger. Negative amounts retain their retail
+// direction; recipient capacity is applied at settlement [05 R-SHARE-01 §2].
+func (s *Service) Transfer(source, destination uint8, res Res, amount float32) {
+	if s == nil || source >= 10 || destination >= 10 || res < Metal || res > Energy {
+		return
+	}
+	s.transfer(&s.Players[source], &s.Players[destination], res, amount, true)
+}
+
 // transfer is the sharing helper used by the dispatcher and packet drain.
 // Debit is local-only; received packets credit the destination without
 // debiting again. Credits land in mirror production and are settled later

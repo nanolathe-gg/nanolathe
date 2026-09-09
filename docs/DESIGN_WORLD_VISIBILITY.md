@@ -252,6 +252,15 @@ form, not the feature-draw form — and the friendly-contact status pair `0x300`
 is a term of the minimap's UNIT-pass blip gate only, never of this second pass
 `[03 §3.9]`.
 
+`Session.ViewingOwner` supplies visibility and the published
+`Frame.ViewingPlayer`; `Session.LocalOwner` and `Selection.LocalPlayer` retain
+command ownership. Entry and restore initialize both from the true-local
+player. The queued `View` command changes the observer without invalidating
+fog or mapped surfaces. Publication includes observer identity in its retained
+coverage-copy key; ordinary visibility writes still own cache invalidation.
+HUD resources and footer consume the committed viewing player, while command
+pages keep the true-local owner `[07 R-CAM-01 §6]` `[I6]`.
+
 **Sensors** (`sensors.go`). `SensorTick` runs five walks in order over an
 immutable per-unit view, mutating only each unit's runtime status word: clear
 and friendly marking; radar and sonar emission from the viewing player's own

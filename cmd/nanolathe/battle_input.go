@@ -528,14 +528,11 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 				// With Type 1 an idle left click remains the selection/drag button;
 				// an empty click deselects. Type 0 retains its contextual left-click
 				// branch [07 R-CAM-01 §5].
-				viewer := visibility.PlayerID(0)
-				if b.sess != nil {
-					viewer = visibility.PlayerID(b.sess.LocalOwner)
-				}
 				f, ok := b.currentSnapshot()
 				if !ok {
 					return
 				}
+				viewer := visibility.PlayerID(f.ViewingPlayer)
 				var bh pool.Handle
 				var bu frame.UnitView
 				var hit bool

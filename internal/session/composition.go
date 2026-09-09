@@ -506,7 +506,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 	visible := func(_ int, _ int32) bool {
 		// This is the established unit-level gameplay visibility gate used by
 		// combat acquisition; it never mutates authoritative state [03 §3.2].
-		return s.IsUnitVisible(localPlayerForSession(s), u)
+		return s.IsUnitVisible(int(s.ViewingOwner), u)
 	}
 	registeredPlacement := false
 	if u.Def.BMCode == 0 && s.Build != nil {
@@ -1202,7 +1202,7 @@ func (s *Session) newOrderBinding() *orders.QueueBinding {
 				// authoritative unit ownership/state: dead or dying units and other
 				// players never reach the local message line [04 R-ORD-01 §1][07
 				// R-HUD-03 §14]. Unit.Alive/Dying are this model's live/death state.
-				if int(u.Owner) != localPlayerForSession(s) || !u.Alive || u.Dying {
+				if u.Owner != s.ViewingOwner || !u.Alive || u.Dying {
 					return false
 				}
 				tick := uint32(0)
@@ -1700,7 +1700,7 @@ func createAndBindServices(s *Session) error {
 			s.Vis.SetRayTables(s.Catalog.LOS)
 		}
 	}
-	s.Vis.SetLocal(visibility.PlayerID(localPlayerForSession(s)))
+	s.Vis.SetLocal(visibility.PlayerID(s.ViewingOwner))
 	// Sensor callbacks remain an internal visibility snapshot. Presentation
 	// consumes Frame.Radar after commit and does not bind a mutable surface sink
 	// to the authoritative session [03 §3.4][I6].
@@ -2197,30 +2197,6 @@ func visibilityModeForSession(s *Session) visibility.Mode {
 	return visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled | visibility.ModeTerrainRay
 }
 
-// localPlayerForSession returns the local player slot for fog/sensor predicate [03 §3.2] C15.
-// It derives from Session.LocalOwner, not zero default, and falls back to first human.
-func localPlayerForSession(s *Session) int {
-	if s == nil {
-		return 0
-	}
-	if int(s.LocalOwner) < 10 && s.Econ != nil {
-		p := &s.Econ.Players[int(s.LocalOwner)]
-		if p.Exists && p.ControllerState == 1 && !p.IsObserver {
-			return int(s.LocalOwner)
-		}
-	}
-	// Fallback: first human player (ControllerState==1) [08 "Skirmish configuration"].
-	if s.Econ != nil {
-		for i := 0; i < 10; i++ {
-			p := &s.Econ.Players[i]
-			if p.Exists && p.ControllerState == 1 && !p.IsObserver {
-				return i
-			}
-		}
-	}
-	return int(s.LocalOwner)
-}
-
 // RecalcLocalOwner recomputes LocalOwner from SkirmishConfig after save restore [08 "Skirmish configuration"].
 func (s *Session) RecalcLocalOwner() {
 	if s == nil {
@@ -2464,11 +2440,11 @@ func (s *Session) bindDamageReaction() {
 		},
 		UnderAttackSilenced: orders.UnderAttackSilenced,
 		// The message helper posts the kind-2 message only when the victim is
-		// NOT in the current selection, is owned by the local player, is alive
+		// NOT in the current selection, is owned by the viewing player, is alive
 		// and is not death-latched [06 R-WPN-04 §2 part 4]. Bit 4 of the status
 		// word is the selection bit the local selection commands write.
 		UnderAttackNotice: func(victim *units.Unit) {
-			if victim == nil || victim.Owner != s.LocalOwner {
+			if victim == nil || victim.Owner != s.ViewingOwner {
 				return
 			}
 			if !victim.Alive || victim.Dying {

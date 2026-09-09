@@ -455,7 +455,7 @@ func featureVisibleForFrame(cur *frame.Frame, f frame.FeatureView) bool {
 	if !f.NoDrawUnderGray {
 		return true
 	}
-	viewer := cur.Selection.LocalPlayer
+	viewer := cur.ViewingPlayer
 	if viewer >= 10 {
 		return false
 	}
@@ -494,7 +494,7 @@ func (c *Client) drawWorldPass(cur *frame.Frame, ok bool) {
 	}
 	win := c.worldWindow()
 	camZ := c.cam.Z
-	viewer := cur.Selection.LocalPlayer
+	viewer := cur.ViewingPlayer
 	// The carrier lists are built over every published unit, not only the
 	// bucketed ones: a child rides its carrier's admission and is presented
 	// with it even when its own row falls outside the window

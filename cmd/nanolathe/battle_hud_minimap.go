@@ -138,6 +138,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// Consume only the committed phase. Presentation may redraw the same frame
 	// repeatedly without advancing or otherwise owning the cadence [R-CORE-03]
 	// [03 §3.6][I6].
+	h.radar.SetViewingPlayer(cur.ViewingPlayer)
 	h.radar.SetBlinkPhase(cur.Radar.BlinkPhase)
 	if cur.Visibility.Valid {
 		h.radar.RebuildMappedVersion(cur.Visibility.WordVisible, cur.Visibility.Visible, cur.Visibility.MappingSource, cur.Visibility.MappingVersion)
@@ -174,7 +175,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			// because it is a blip-blink term, not a circle term [03 §3.9].
 			RangeStatus: rangeCircles, Status: published.Status,
 			BlinkSuppress: published.BlinkSuppress, Visible: published.Visible,
-			LocalPlayer:  cur.Selection.LocalPlayer,
+			LocalPlayer:  cur.ViewingPlayer,
 			Options:      b.radarOptions,
 			RawDistRadar: published.RadarDistance, RawDistSonar: published.SonarDistance,
 			RawDistJamR: published.RadarJam, RawDistJamS: published.SonarJam,
@@ -247,7 +248,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 	// radarProjectileDot); gate explicitly on Kind so a projectile's status
 	// word selects the dot/marker split while every feature draws its marker.
 	for _, published := range cur.Radar.Contacts {
-		if published.Kind == frame.RadarContactUnit || !radarPublishedContactVisible(published, cur.Selection.LocalPlayer) {
+		if published.Kind == frame.RadarContactUnit || !radarPublishedContactVisible(published, cur.ViewingPlayer) {
 			continue
 		}
 		rx, ry := render.RadarProjection(radarMapPixel(published.X), radarMapPixel(published.Z), radarMapPixel(published.Y), playW, playH, layout)

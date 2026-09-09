@@ -997,7 +997,7 @@ func (s *Session) tickPlayers(tick uint32) {
 		// The sensor pass follows the settlement gates inside the same
 		// deadline block, even if those later gates refuse settlement
 		// [03 R-SENSOR-01][05 "Authoritative settlement order"].
-		if due && hasLocalPlayer && player == localPlayer {
+		if due && player == int(s.ViewingOwner) {
 			s.stepSensorPhase(tick)
 		}
 	}

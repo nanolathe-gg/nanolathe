@@ -228,6 +228,9 @@ type Session struct {
 	// sites use these, not hard-coded 0/1 [P0-I13].
 	LocalOwner uint8
 	EnemyOwner uint8
+	// ViewingOwner selects visibility and presentation independently of command
+	// ownership. Entry seeds both identities together [03 R-VIS-01 §4].
+	ViewingOwner uint8
 
 	// Latch is the global end-of-mission countdown and win/lose bits
 	// [P1-01 §2.2]. It starts unarmed, arms at four, and publishes ending plus
@@ -892,6 +895,7 @@ func handleLocalPreload(s *Session) {
 		}
 		s.Econ.SeedDeadlines(tick)
 		s.LocalOwner = 0
+		s.ViewingOwner = 0
 		s.EnemyOwner = 1
 	}
 	_ = s.TransitionTo(StateLoading)

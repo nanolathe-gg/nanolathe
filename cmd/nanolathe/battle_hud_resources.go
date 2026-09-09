@@ -14,7 +14,7 @@ import (
 func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
 	var res *frame.EconomyView
 	for i := range f.Economy {
-		if f.Economy[i].Player == h.owner {
+		if f.Economy[i].Player == f.ViewingPlayer {
 			res = &f.Economy[i]
 			break
 		}
@@ -22,6 +22,9 @@ func (h *retailBattleHUD) drawResources(c *client.Client, f *frame.Frame) {
 	if res == nil {
 		return
 	}
+	// TODO(I10): use the viewing player's saved display deadline when that
+	// presentation timing has an owner; this existing 30-tick latch stays
+	// intact on View [07 R-HUD-03 §4].
 	if !h.rateSampleOK || f.Tick < h.rateSampleTick || f.Tick-h.rateSampleTick >= 30 {
 		h.rateSampleTick = f.Tick
 		h.rateSample = *res

@@ -2476,14 +2476,14 @@ kind; the list is not empty in single player.
 The handler appends when all of these hold, in order:
 
 1. the victim's runtime status carries the *live* bit;
-2. the victim's owner slot index equals the local slot index;
+2. the victim's owner slot index equals the viewing slot index;
 3. the visibility mode word has bit 1 set — the `Circular` or `True` modes
    of [03 R-VIS-01 §1], never `Permanent`;
 4. the list holds fewer than 20 records (at 20 the append is silently
    dropped).
 
 The record is then filled exactly as [01 R-PLAT-02 §5] lays it out: owner =
-the local player record; sight distance = the victim definition's
+the viewing player record; sight distance = the victim definition's
 `sightdistance` word [fmt fbi]; height byte = the low byte of the
 definition's height field (the field the target-top and repair-admission
 tests read, [04 R-SPEC-01 §15]); position = the victim's world X, Y, Z with

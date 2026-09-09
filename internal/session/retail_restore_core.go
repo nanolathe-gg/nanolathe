@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/save"
 	"github.com/nanolathe-gg/nanolathe/internal/triggers"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 // RestoreRetailBattleCore applies the D2 live-state passes to a successful D1
@@ -83,6 +84,10 @@ func RestoreRetailBattleCore(stage *RetailBattleStage) error {
 	}
 	if image.HumanPlayer >= 0 && image.HumanPlayer < 10 {
 		s.LocalOwner = uint8(image.HumanPlayer)
+		s.ViewingOwner = uint8(image.HumanPlayer)
+		if s.Vis != nil {
+			s.Vis.SetViewingPlayer(visibility.PlayerID(s.ViewingOwner))
+		}
 	}
 	// Alliance rows are applied by the per-slot loop above, through
 	// PlayerSlot.ApplyToEconomy. The row is the last item of each `Player%i`

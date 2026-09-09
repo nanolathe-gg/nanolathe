@@ -456,6 +456,44 @@ func TestResolveVariantCRT(t *testing.T) {
 	}
 }
 
+func TestSingKeepsVariantDrawAndCaption(t *testing.T) {
+	plain, singing := NewQueue(), NewQueue()
+	cat := categoryFixture()
+	cat.Rows[SlotSelect].Captions = []string{"one", "two"}
+	for _, q := range []*Queue{plain, singing} {
+		q.Register(1, cat, "U", true)
+		q.Seed(777)
+	}
+	singing.ToggleSing()
+	var got string
+	singing.OnPlay(func(alias string, _ Slot, _ pool.Handle) { got = alias })
+	var plainCaption, singingCaption string
+	plain.OnCaption(func(line string, _ Slot, _ pool.Handle) { plainCaption = line })
+	singing.OnCaption(func(line string, _ Slot, _ pool.Handle) { singingCaption = line })
+	for _, tc := range []struct {
+		tick uint32
+		want string
+	}{{240, "honk"}, {270, "sing"}, {480, "honk"}} {
+		for _, q := range []*Queue{plain, singing} {
+			q.InsertAt(tc.tick, SlotSelect, 1, "")
+			q.Drain(tc.tick)
+		}
+		if got != tc.want || plain.crtState != singing.crtState || plainCaption != singingCaption || plainCaption == "" {
+			t.Fatalf("tick %d: alias=%q states=%d/%d captions=%q/%q", tc.tick, got, plain.crtState, singing.crtState, plainCaption, singingCaption)
+		}
+	}
+	cat.Rows[SlotSelect].Variants = nil
+	got = ""
+	singing.InsertAt(510, SlotSelect, 1, "")
+	singing.Drain(510)
+	if got != "" {
+		t.Fatal("Sing bypassed the empty voice-variant gate")
+	}
+	if singing.ToggleSing() {
+		t.Fatal("second toggle did not clear Sing")
+	}
+}
+
 func TestDrainEmptyNoOp(t *testing.T) {
 	q := NewQueue()
 	q.Drain(100) // should not panic

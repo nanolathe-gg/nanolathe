@@ -3,6 +3,7 @@ package session
 import (
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
+	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
 
 // Readers of the runtime PLAYER RECORD.
@@ -40,6 +41,21 @@ func (s *Session) playerRecord(owner int) *economy.Player {
 		return nil
 	}
 	return &s.Econ.Players[owner]
+}
+
+// SetViewingOwner applies the validated viewing-slot assignment at the command
+// boundary. It does not change command ownership, refresh visibility, or write
+// settings [07 R-CAM-01 §6][03 R-VIS-01 §4].
+func (s *Session) SetViewingOwner(player uint8) bool {
+	p := s.playerRecord(int(player))
+	if p == nil || !p.Exists || p.ControllerState < 1 || p.ControllerState > 3 || p.Side == 10 {
+		return false
+	}
+	s.ViewingOwner = player
+	if s.Vis != nil {
+		s.Vis.SetViewingPlayer(visibility.PlayerID(player))
+	}
+	return true
 }
 
 // sideForOwner is the slot's side, and it is the one side reader: the commander

@@ -59,6 +59,7 @@ func visibilityFixture(t *testing.T, withVis bool) *Session {
 	s.Econ.Players[1].Exists = true
 	s.Econ.Players[1].ControllerState = 1
 	s.LocalOwner = 1
+	s.ViewingOwner = 1
 	s.SeedSessionRNG(12345, 67890)
 	return s
 }
@@ -273,6 +274,7 @@ func TestMovedUnitRefreshesVisibilitySameTick(t *testing.T) {
 func TestSensorPassUsesFreshLocalCoverage(t *testing.T) {
 	s := visibilityFixture(t, true)
 	s.LocalOwner = 1
+	s.ViewingOwner = 1
 	s.Vis.SetLocal(visibility.PlayerID(1)) // mirrors composition's local-viewer binding
 	def := s.Catalog.Units[content.CanonicalKey("armcom")]
 	cell := func(n int32) numeric.Fixed { return numeric.Fixed(int64(n) << 16) }

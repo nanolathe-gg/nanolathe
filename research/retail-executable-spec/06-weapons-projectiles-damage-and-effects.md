@@ -3602,7 +3602,7 @@ still see the **previous** packet's kind and attacker-side snapshot):
    the stored attacker-side snapshot differs from the victim's owner byte or the
    stored last damage kind is 1, request the interface message of kind 2
    (`Under Attack`) for the victim. The message helper posts it only when the
-   victim is **not** in the current selection, is owned by the local player, is
+   victim is **not** in the current selection, is owned by the viewing player, is
    alive and not death-latched; doc 07 owns the queue it enters (per-kind
    throttle deadline, eight entries, duplicate-kind suppression). Because the
    test precedes the field rewrite, the first hit on a fresh unit always

@@ -9,7 +9,7 @@ import (
 // Temporary sight sources ("eyeballs") [01 R-PLAT-02 §5][08 R-SESS-01 §3]
 // [03 R-COMP-02 §2].
 //
-// A unit the local player loses keeps revealing its sight radius for sixty
+// A unit the viewing player loses keeps revealing its sight radius for sixty
 // ticks after death under Circular/True line of sight. The record is a
 // self-contained LOS observer that is not a unit: it carries its own stored
 // coverage tile pair and coverage byte, so the visibility service's per-unit
@@ -54,7 +54,7 @@ type eyeballList struct {
 
 // appendDeathEyeball is the producer: the central unit-death handler's
 // temporary-sight append [08 R-SESS-01 §3]. It appends only when, in order,
-// the victim still carries the live bit, its owner is the local slot, the LOS
+// the victim still carries the live bit, its owner is the viewing slot, the LOS
 // mode word has bit 1 set (Circular/True — never Permanent), and the list
 // holds fewer than twenty records. The coverage is published before the count
 // is incremented.
@@ -62,7 +62,7 @@ func (s *Session) appendDeathEyeball(u *units.Unit) {
 	if s == nil || s.Vis == nil || u == nil || !u.Alive || s.Clock == nil {
 		return
 	}
-	if int(u.Owner) != localPlayerForSession(s) {
+	if u.Owner != s.ViewingOwner {
 		return
 	}
 	mode := s.Vis.Mode()

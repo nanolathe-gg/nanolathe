@@ -335,14 +335,9 @@ func (s *Session) stepSensorPhase(tick uint32) {
 	// settled once at the registry rebuild against the alliance rows economy
 	// owns [06 §3.1] (WU-19-210).
 	//
-	// The friendly pass's third disjunct: a defeated or observing viewer marks
-	// every live unit friendly [R-VIS-01 §4] pass 1. Retail keeps the local
-	// player's own slot and the viewing slot as two separate globals and reads
-	// the viewing one here; Nanolathe's two coincide today because composition
-	// binds the visibility service's viewing slot from LocalOwner. They diverge
-	// only in an observer session, which phase 5 does not reach at all — the
-	// caller's local-player scan rejects observer records.
-	viewer := int(s.LocalOwner)
+	// Defeated/observing friendliness is relative to the viewing player,
+	// independently of the true-local command owner [03 R-VIS-01 §4].
+	viewer := int(s.ViewingOwner)
 	defeated := false
 	if s.Econ != nil && viewer >= 0 && viewer < len(s.Econ.Players) {
 		p := &s.Econ.Players[viewer]

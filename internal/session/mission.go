@@ -140,6 +140,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		Econ:         &economy.Service{},
 		Latch:        NewEndLatch(),
 		CampaignSlot: m.CampaignIndex,
+		LocalOwner:   0, ViewingOwner: 0,
 	}
 	// Correct controller states: human local 1, computer enemy 2 [08 "Established AI-facing data and rooted planner"]
 	for i := 0; i < 2 && i < 10; i++ {

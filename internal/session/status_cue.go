@@ -32,15 +32,6 @@ const pendingTargetCloaked uint32 = 0x10000
 // [04 §3.1][04 R-MOV-03 §7].
 const staticTargetObserver uint32 = 0x200
 
-// viewSlotForSession is the VIEW slot of [03 R-AUD-01 §7] — the slot whose side
-// the HUD presents, which retail keeps as a global distinct from the local
-// human's slot so an observer can change it. The two are equal in single
-// player, and single player is this build's whole scope, so it resolves to the
-// local slot. The distinction is kept as a named accessor because §7 gates the
-// cue on the view slot while it gates the interface-panel dirty flag on the
-// local slot: the two must not silently become one identifier.
-func viewSlotForSession(s *Session) int { return localPlayerForSession(s) }
-
 // bindStatusCueSinks installs the raise seam on every live unit. It runs at
 // RegisterAll and again from the creation hook, so a unit placed before the
 // hooks were bound and a unit produced by a factory reach the same sink
@@ -78,9 +69,9 @@ func (s *Session) raiseStatusCue(u *units.Unit, code uint8) {
 	// Step 1, the gate. The unit's owner slot must equal the view slot, its
 	// status word must carry the alive bit and must not carry the death latch
 	// [03 R-AUD-01 §7][04 R-SPEC-01 §12]. Unit.Alive/Dying are this model's
-	// live/death state. Remote and computer players' units therefore never
-	// enter the queue, and a dying unit's edges are silent.
-	if u.Handle != 0 && int(u.Owner) == viewSlotForSession(s) && u.Alive && !u.Dying {
+	// live/death state. Units outside the viewing slot never enter the queue,
+	// and a dying unit's edges are silent.
+	if u.Handle != 0 && u.Owner == s.ViewingOwner && u.Alive && !u.Dying {
 		// Step 2, the text. The edge machine passes no override for any of its
 		// four codes, so the slot's static default caption is used: `Cloaked`
 		// for 14, `Visible` for 15, and empty for 3 and 4, which therefore

@@ -87,7 +87,7 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 	if cur.Visibility.CoverageBytes {
 		mode = ProjectileVisibilityModeBytes
 	}
-	local := cur.Selection.LocalPlayer
+	local := cur.ViewingPlayer
 	for i := range views {
 		v := views[i]
 		switch v.Family {

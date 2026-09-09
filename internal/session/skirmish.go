@@ -625,17 +625,18 @@ func NewSkirmishWithProgress(fs vfs.FSOps, cat *content.Catalog, cfg SkirmishCon
 		}
 	}
 	s := &Session{
-		Catalog:    cat,
-		World:      terrain,
-		Mission:    m,
-		Skirmish:   cfg,
-		Clock:      &clock.State{Requested: 10, Active: 10},
-		Snapshot:   frame.NewBuffer(),
-		Units:      unitsWorld,
-		Econ:       &economy.Service{},
-		Latch:      NewEndLatch(),
-		LocalOwner: uint8(localOwner),
-		EnemyOwner: uint8(enemyOwner),
+		Catalog:      cat,
+		World:        terrain,
+		Mission:      m,
+		Skirmish:     cfg,
+		Clock:        &clock.State{Requested: 10, Active: 10},
+		Snapshot:     frame.NewBuffer(),
+		Units:        unitsWorld,
+		Econ:         &economy.Service{},
+		Latch:        NewEndLatch(),
+		LocalOwner:   uint8(localOwner),
+		ViewingOwner: uint8(localOwner),
+		EnemyOwner:   uint8(enemyOwner),
 	}
 	// Seed both streams fresh at battle bootstrap, before any battle setup
 	// draw [R-CORE-02] DET-01.

@@ -370,7 +370,7 @@ func NewSyntheticSkirmishForTest(fs vfs.FSOps, cat *content.Catalog, cfg Skirmis
 		Units:      unitsWorld,
 		Econ:       &economy.Service{},
 		Latch:      NewEndLatch(),
-		LocalOwner: uint8(localOwner),
+		LocalOwner: uint8(localOwner), ViewingOwner: uint8(localOwner),
 		EnemyOwner: uint8(enemyOwner),
 	}
 	nPlayers := cfg.NumPlayers

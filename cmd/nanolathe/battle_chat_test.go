@@ -13,6 +13,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/gui"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
@@ -175,12 +176,17 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	}
 	campaign.dispatchLocalCommand("+DoubleShot")
 	campaign.dispatchLocalCommand("+HalfShot ignored")
+	campaign.dispatchLocalCommand("+View 1")
 	if got := len(campaign.sess.PendingHumanCommands()); got != 1 {
 		t.Fatalf("campaign damage modes crossed mask-2 gate: pending=%d", got)
 	}
 	campaign.dispatchLocalCommand("+Radar")
 	if campaign.radarOptions != 0 {
 		t.Fatalf("campaign Radar options=%#x, want clear", campaign.radarOptions)
+	}
+	campaign.dispatchLocalCommand("+Sing")
+	if campaign.sess.Audio.Queue.ToggleSing() {
+		t.Fatal("campaign Sing did not reach the existing voice queue")
 	}
 	campaign.dispatchLocalCommand("+CDPlay 2junk")
 	if got := campaign.sess.Audio.Music.CurTrack(); got != 2 || !campaign.sess.Audio.Music.IsPlaying() {
@@ -243,6 +249,13 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	if len(pending) != 4 || pending[0].Kind != session.HumanSetResource || pending[0].SetResource.Player != 3 || pending[0].SetResource.Resource != economy.Metal || pending[0].SetResource.Amount != 0 || pending[1].SetResource.Player != 2 || pending[1].SetResource.Resource != economy.Energy || pending[1].SetResource.Amount != -12 || pending[2].SetResource.Player != 7 || pending[2].SetResource.Amount != 0 || pending[3].Kind != session.HumanMakeSelectable {
 		t.Fatalf("resource/selectable command payloads = %+v", pending)
 	}
+	resources.dispatchLocalCommand("+View 257tail")
+	resources.dispatchLocalCommand("+Give 258 -12junk EnErGy")
+	resources.dispatchLocalCommand("+Give 1 2 unknown")
+	pending = resources.sess.PendingHumanCommands()
+	if len(pending) != 6 || pending[4].Kind != session.HumanView || pending[4].View.Player != 1 || pending[5].Kind != session.HumanGive || pending[5].Give.Player != 2 || pending[5].Give.Resource != economy.Energy || pending[5].Give.Amount != -12 {
+		t.Fatalf("View/Give byte and resource grammar = %+v", pending)
+	}
 	campaignVisibility := &battleSession{sess: &session.Session{Mission: &mission.Mission{Type: mission.TypeCampaign}}}
 	for _, command := range []string{"+LOS", "+Mapping", "+NowISee", "+LOSType"} {
 		campaignVisibility.dispatchLocalCommand(command)
@@ -258,6 +271,67 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	pending = skirmishVisibility.sess.PendingHumanCommands()
 	if len(pending) != 4 || pending[0].Visibility.ToggleMask != visibility.ModeCurrentEnabled || pending[1].Visibility.ToggleMask != visibility.ModeHistoryEnabled || pending[2].Visibility.ToggleMask != visibility.ModeTerrainRay || pending[3].Visibility.ClearMask != visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled {
 		t.Fatalf("skirmish visibility commands = %+v", pending)
+	}
+}
+
+func TestLogoCommandBoundsDiagnosticOrderingAndNoSave(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	t.Setenv(settings.EnvPath, path)
+	if err := settings.Defaults().Save(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	buffer := frame.NewBuffer()
+	write := buffer.BeginWrite()
+	write.Players[0] = frame.PlayerRow{Present: true, Controller: 1, Side: 3}
+	if err := buffer.Publish(1); err != nil {
+		t.Fatal(err)
+	}
+	econ := &economy.Service{}
+	econ.Players[0] = economy.Player{Exists: true, ControllerState: 1, Side: 3, Name: "Player"}
+	cl, err := client.New(client.Options{Buffer: buffer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := &battleSession{
+		sess: &session.Session{
+			Econ:     econ,
+			Mission:  &mission.Mission{Type: mission.TypeCampaign},
+			Snapshot: buffer,
+		},
+		cl: cl,
+		hud: &retailBattleHUD{logos: &formats.GAF{Entries: []formats.GAFEntry{{
+			Name: sideLogoEntry, FrameCount: 10, Frames: make([]formats.GAFFrameRef, 10),
+		}}}},
+	}
+
+	b.commitLocalChat("+Logo -1 0")
+	lines := cl.MessageRing().Visible()
+	if len(lines) != 2 || lines[0].Text != "Invalid logo setting" || lines[0].Class != 2 || lines[0].SourceUnit != 0 || lines[0].SpeakerSlot != 10 || lines[1].Text != "<Player> +Logo -1 0" {
+		t.Fatalf("invalid Logo/chat ordering = %+v", lines)
+	}
+	b.dispatchLocalCommand("+Logo 10 0")
+	b.dispatchLocalCommand("+Logo 7 -1")
+	if pending := b.sess.PendingHumanCommands(); len(pending) != 0 {
+		t.Fatalf("invalid Logo commands queued = %+v", pending)
+	}
+	b.dispatchLocalCommand("+Logo 7 256 ignored")
+	b.dispatchLocalCommand("+Logo")
+	pending := b.sess.PendingHumanCommands()
+	if len(pending) != 2 || pending[0].Kind != session.HumanSetLogo || pending[0].SetLogo.Player != 0 || pending[0].SetLogo.Logo != 7 || pending[1].Kind != session.HumanSetLogo || pending[1].SetLogo.Player != 0 || pending[1].SetLogo.Logo != 0 {
+		t.Fatalf("valid Logo payloads = %+v", pending)
+	}
+	b.sess.Audio = audio.NewService(nil)
+	b.dispatchLocalCommand("+Sing")
+	b.dispatchLocalCommand("+Give 0 1 metal")
+	b.dispatchLocalCommand("+View 0")
+	after, err := os.ReadFile(path)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("Logo settings write changed=%t err=%v", string(after) != string(before), err)
 	}
 }
 

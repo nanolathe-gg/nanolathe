@@ -161,6 +161,12 @@ func StageRetailBattle(bank *save.Bank, deps RetailLoadDeps) (*RetailBattleStage
 			UnitLimit: poolRecords,
 		},
 	}
+	// Saved Human Player seeds both identities before visibility is bound
+	// [08 "Player records"][03 R-VIS-01 §4].
+	if image.HumanPlayer >= 0 && image.HumanPlayer < 10 {
+		s.LocalOwner = uint8(image.HumanPlayer)
+		s.ViewingOwner = uint8(image.HumanPlayer)
+	}
 	s.SeedSessionRNG(deps.SimSeed, deps.CRTSeed)
 	if err := s.Clock.LoadBoxChecked(image.Scheduler); err != nil {
 		return nil, fmt.Errorf("session: restore scheduler: %w", err)

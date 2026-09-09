@@ -86,7 +86,7 @@ func (c *Client) drawUnitLabels(cur *frame.Frame, ok bool) {
 		return
 	}
 	bars := damageBars
-	viewer := cur.Selection.LocalPlayer
+	viewer := cur.ViewingPlayer
 	for i := range cur.Units {
 		u := &cur.Units[i]
 		if !bars && u.Group == 0 {
