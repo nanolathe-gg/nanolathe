@@ -7,6 +7,9 @@ func (b *battleSession) beginDragScroll(x, y int32, cl *client.Client) {
 		return
 	}
 	b.dragScroll.Begin(b.cam)
+	if b.deferFollowInput {
+		b.pendingFollowInput = b.cam.ClearFollow
+	}
 	b.dragScrollLastX, b.dragScrollLastY = x, y
 	b.dragScrollActive = true
 	cl.SetPointerCaptured(true)

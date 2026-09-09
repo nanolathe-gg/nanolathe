@@ -1507,6 +1507,10 @@ func createAndBindServices(s *Session) error {
 	if s.Wind == nil {
 		return fmt.Errorf("session: missing Wind for service wiring [01 §7.3]")
 	}
+	// World rebuilds disable automatic cycling but leave its counter dormant
+	// [07 R-CAM-01 §12]. Held input remains owned by the controller latch.
+	s.bigBrother.enabled = false
+	s.resetBigBrotherEvents()
 	// Bind the battle's single Park-Miller stream before any mission,
 	// commander, or factory allocation reaches the common unit initializer
 	// [01 §7.1][R-P28-ANG-01R §2].

@@ -153,32 +153,35 @@ func localCommanderUnit(sess *session.Session) (*units.Unit, bool) {
 	return nil, false
 }
 
-// applyCommittedShake is battle.go's one post-tick camera hook: it runs after
-// BattleController.Step, once this frame's simulation tick (if any ran) has
-// published. It does two phase-10 jobs at that point, both of which need this
-// frame's fresh publish rather than the previous one: applyFollowCamera closes
-// the follow step toward the latched tracked object's current position
-// (defect PT6-01), and the code below transfers the cumulative phase-10 shake
-// displacement from the current committed frame to the one camera used by
-// input and rendering. Shake lives with battle camera ownership rather than
-// Client so repainting the same frame cannot mutate camera state or consume
-// another random value [03 §5.6].
-func (b *battleSession) applyCommittedShake() {
-	if b == nil || b.cam == nil || b.sess == nil || b.sess.Snapshot == nil {
+// applyPublishedCamera consumes each completed sub-tick once, before another
+// sub-tick can replace it. BigBrother repicks before follow, then the cumulative
+// phase-10 shake delta is applied [04 R-MOV-03 §1][07 R-CAM-01 §12][I6].
+func (b *battleSession) applyPublishedCamera(cur *frame.Frame) {
+	if b == nil || b.cam == nil || cur == nil {
 		return
 	}
-	cur := b.sess.Snapshot.Current()
-	if cur == nil {
-		return
+	if cur.BigBrotherCancelFollow {
+		b.cam.ClearFollow()
+		b.cam.LatchTracked()
 	}
-	b.applyFollowCamera()
+	if cur.BigBrotherResetVisited {
+		b.visitedUnits = nil
+		// TODO(question): map the force-zero page-close deferral bits and current
+		// page owner to this shell before replacing its existing unit-info-only
+		// close [07 R-HUD-04 §3].
+		closeUnitInfo()
+	}
+	if cur.BigBrotherCycle {
+		b.cycleFollowTargetFrom(false, b.cam.LatchedTracked())
+		b.cam.LatchTracked()
+	}
+	b.applyFollowCamera(cur)
 	dx := cur.ShakeOffsetX - b.appliedShakeX
 	dy := cur.ShakeOffsetY - b.appliedShakeY
 	if dx != 0 || dy != 0 {
 		b.cam.Pan(dx, dy)
 	}
-	b.appliedShakeX = cur.ShakeOffsetX
-	b.appliedShakeY = cur.ShakeOffsetY
+	b.appliedShakeX, b.appliedShakeY = cur.ShakeOffsetX, cur.ShakeOffsetY
 }
 
 // scrollSetting returns the persisted scroll speed byte [02 "Settings"] [07 §10] C2.
@@ -300,6 +303,10 @@ func (b *battleSession) refreshScrollDelta() int32 { // [07 §10]
 // followCommander latches the follow camera onto the last own unit in the
 // `Commander` category set [07 R-CAM-01 §2][07 R-CAM-01 §12].
 func (b *battleSession) followCommander() {
+	if b != nil && b.deferFollowInput {
+		b.pendingFollowInput = b.followCommander
+		return
+	}
 	if b == nil || b.cam == nil {
 		return
 	}
@@ -348,12 +355,22 @@ func (b *battleSession) cycleFollowTarget(previous bool) {
 	if b == nil || b.cam == nil {
 		return
 	}
+	if b.deferFollowInput {
+		b.pendingFollowInput = func() { b.cycleFollowTarget(previous) }
+		return
+	}
+	b.cycleFollowTargetFrom(previous, b.cam.Tracked())
+}
+
+func (b *battleSession) cycleFollowTargetFrom(previous bool, current pool.Handle) {
+	if b == nil || b.cam == nil {
+		return
+	}
 	sel := b.selectedHandlesInSlotOrder()
 	if len(sel) == 0 {
 		b.cam.SetTracked(0)
 		return
 	}
-	current := b.cam.Tracked()
 	idx := -1
 	for i, h := range sel {
 		if h == current {
@@ -437,6 +454,9 @@ func (b *battleSession) glideToUnit(v frame.UnitView) {
 	z := radarMapPixel(v.Z)
 	ox, oz := b.cam.BattleViewCenterOrigin(x, z-y/2)
 	b.cam.GlideTo(ox, oz)
+	if b.deferFollowInput {
+		b.pendingFollowInput = func() { b.cam.GlideTo(ox, oz) }
+	}
 }
 
 // glideToMessageSource is F3 [07 R-CAM-01 §14 "F3's leading clear is a
@@ -485,49 +505,36 @@ func (b *battleSession) glideToMessageSource() {
 	}
 	ox, oz := b.cam.BattleViewCenterOrigin(radarMapPixel(v.X), radarMapPixel(v.Z))
 	b.cam.GlideTo(ox, oz)
+	if b.deferFollowInput {
+		b.pendingFollowInput = func() { b.cam.GlideTo(ox, oz) }
+	}
 }
 
-// stepFollowCamera is the pre-tick half of phase 10's follow step
-// [01 §4.4][07 R-CAM-01 §12]. It runs before this frame's hotkey dispatch and
-// simulation tick (battle.go calls it before BattleController.Step), so it
-// only does the parts that must not see this frame's own updates yet:
-// latching which object phase 10 chases (Camera.LatchTracked — see that
-// method for why the timing matters) and continuing an untracked `n`/F3
-// glide, whose target is a fixed point recorded when the glide started and so
-// has no same-frame staleness to avoid. The tracked-object position lookup
-// itself is deferred to applyCommittedShake, which runs after this frame's
-// tick has published (defect PT6-01, see LatchTracked's doc comment).
+// stepFollowCamera retains pre-hotkey targets for this batch. Its movement
+// runs only for completed sub-ticks, through applyPublishedCamera [01 §4.4]
+// [07 R-CAM-01 §12].
 func (b *battleSession) stepFollowCamera() {
 	if b == nil || b.cam == nil {
 		return
 	}
-	if b.cam.LatchTracked() == 0 {
-		b.cam.StepGlide()
-	}
+	b.cam.LatchTracked()
 }
 
-// applyFollowCamera is the post-tick half of phase 10's follow step: the
-// object latched by stepFollowCamera's LatchTracked call is looked up in
-// *this* frame's freshly committed snapshot — the same one the composer is
-// about to draw — so the camera closes toward where the unit actually is on
-// screen this frame, not where it was a publish ago [07 R-CAM-01 §12]. See
-// LatchTracked's doc comment for why the object is latched pre-tick while the
-// position is read post-tick (defect PT6-01).
-func (b *battleSession) applyFollowCamera() {
+// applyFollowCamera uses the current publication's position for the captured
+// target. BigBrother's same-tick repick may replace that target [I6].
+func (b *battleSession) applyFollowCamera(f *frame.Frame) {
 	if b == nil || b.cam == nil {
 		return
 	}
 	tracked := b.cam.LatchedTracked()
 	if tracked == 0 {
-		return
-	}
-	f, ok := b.currentSnapshot()
-	if !ok {
+		b.cam.StepLatchedGlide()
 		return
 	}
 	v, found := snapshotUnitByHandle(f, tracked)
 	if !found || v.Slot == 0 {
 		b.cam.ClearFollow()
+		b.cam.LatchTracked()
 		return
 	}
 	b.cam.FollowTo(camera.TargetPoint{

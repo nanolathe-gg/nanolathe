@@ -71,12 +71,14 @@ func (s *Session) stepOneSubTick(tick uint32) {
 // implementation per phase; legacy wrappers delegate to these methods.
 
 func (s *Session) phaseNetwork(tick uint32) {
+	s.resetBigBrotherEvents()
 	s.applyHumanCommands(tick)
 	s.recordPhase("phase1-network", tick)
 }
 
 func (s *Session) phaseUnits(tick uint32) {
 	s.stepUnitPhase(tick)
+	s.stepBigBrother()
 	s.recordPhase("phase2-units", tick)
 }
 
@@ -1179,6 +1181,9 @@ func (s *Session) Step(scaledNow int32) {
 		// work for every completed sub-tick [01 §4.4][03 §2.4][I6].
 		s.publishSnapshot(tick)
 		s.recordPublication(tick)
+		if s.publicationObserver != nil {
+			s.publicationObserver(s.Snapshot.Current())
+		}
 		if s.State != StateBattle {
 			break // latch armed->ending transitioned to postbattle same tick [P1-01 §2.2]
 		}

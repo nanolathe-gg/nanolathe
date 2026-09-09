@@ -6,6 +6,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
 	"github.com/nanolathe-gg/nanolathe/internal/input"
+	"github.com/nanolathe-gg/nanolathe/internal/session"
 )
 
 // BattleMouseButtons is the logical mouse state consumed by the battle
@@ -52,6 +53,8 @@ func (s *monotonicMillisSource) Millis32() uint32 {
 // presentation input state and timing; authoritative mutation remains in the
 // existing battleSession.handleInput and Session.Step calls.
 type BattleController struct {
+	shiftHeld bool
+
 	battle            *battleSession
 	millis            clock.MillisSource
 	cursorScaled      int32
@@ -84,7 +87,31 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 	if c == nil || c.battle == nil {
 		return
 	}
-	c.battle.handleInput(input.StateFromSample(frame), cl)
+	c.battle.stepFollowCamera()
+	state := input.StateFromSample(frame)
+	if c.battle.sess != nil {
+		c.battle.sess.SetPublicationObserver(c.battle.applyPublishedCamera)
+		shift := state.Kbd.HasShift()
+		if cl != nil && cl.Input() != nil {
+			shift = cl.Input().Kbd.HasShift()
+		}
+		if shift != c.shiftHeld {
+			if c.battle.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanShiftState, ShiftHeld: shift}) == nil {
+				c.shiftHeld = shift
+			}
+		}
+	}
+	// Retail handles follow hotkeys after the sub-tick batch. Keep these
+	// presentation-only requests pending while automatic cycles consume it.
+	c.battle.deferFollowInput = true
+	c.battle.handleInput(state, cl)
+	c.battle.deferFollowInput = false
+	defer func() {
+		if pending := c.battle.pendingFollowInput; pending != nil {
+			c.battle.pendingFollowInput = nil
+			pending()
+		}
+	}()
 	if c.battle.ended || c.battle.sess == nil || c.battle.sess.Clock == nil {
 		return
 	}

@@ -190,7 +190,7 @@ func TestPaletteCallbackProductOrdinalsFactoryAndPlacement(t *testing.T) {
 	cl.Input().Kbd.SetKey(input.KeyShift, true)
 	paletteCallbackToken(t, b, cl, 'a')
 	cl.Input().Kbd.SetKey(input.KeyShift, false)
-	pending := b.sess.PendingHumanCommands()
+	pending := paletteFactoryCommands(b)
 	if len(pending) != 2 {
 		t.Fatalf("factory token commands=%v, want two", pending)
 	}
@@ -205,7 +205,7 @@ func TestPaletteCallbackProductOrdinalsFactoryAndPlacement(t *testing.T) {
 	w := b.hud.windows["armfav1"]
 	paletteCallbackClick(t, b, cl, w, 1, true, false)
 	paletteCallbackClick(t, b, cl, w, 1, true, true)
-	pending = b.sess.PendingHumanCommands()
+	pending = paletteFactoryCommands(b)
 	for i, want := range []int{-1, -5} {
 		got := pending[2+i]
 		if got.Kind != session.HumanFactoryBuild || got.FactoryBuild.Product != "armfav" || got.FactoryBuild.Count != want {
@@ -226,4 +226,15 @@ func TestPaletteCallbackProductOrdinalsFactoryAndPlacement(t *testing.T) {
 	if got := spy.aliases[len(spy.aliases)-1]; got != cueAddBuild {
 		t.Fatalf("mobile placement cue=%q, want %q", got, cueAddBuild)
 	}
+}
+
+// Modifier-latch commands share the stream but are not palette callbacks.
+func paletteFactoryCommands(b *battleSession) []session.HumanCommand {
+	var commands []session.HumanCommand
+	for _, command := range b.sess.PendingHumanCommands() {
+		if command.Kind == session.HumanFactoryBuild {
+			commands = append(commands, command)
+		}
+	}
+	return commands
 }

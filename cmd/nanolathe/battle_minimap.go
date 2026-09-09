@@ -162,6 +162,7 @@ func (b *battleSession) serviceMinimapCameraLatch(mx, my int32, mouse *input.Mou
 	// The minimap latch jumps, and a minimap jump cancels the follow triple
 	// [07 R-CAM-01 §12].
 	b.cam.ClearFollow()
+	b.pendingFollowInput = nil
 	b.cam.JumpToBattleViewCenter(intent.X, intent.Z)
 	// The already-set capture is serviced before this frame's queued up edge.
 	// Only that captured button's release clears it; a missing held sample is

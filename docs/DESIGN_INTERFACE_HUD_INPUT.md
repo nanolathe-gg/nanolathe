@@ -1367,15 +1367,29 @@ movie capture remains excluded below. If that route is implemented later, it
 must supply the retail selector-inheritance condition at this painter rather
 than adding a dormant mode flag now.
 
-`BigBrother` remains unbound. Its retail phase-2 selection cycle must feed
-that same sub-tick's phase-10 follow, including intermediate catch-up ticks.
-The current client latches the tracked unit before a batch and follows only
-the final publication. A post-batch toggle/repick would change that behavior.
-The prerequisite is to move the existing follow/shake bundle to each committed
-sub-tick, pass held Shift through an explicit command-owned latch, and publish
-the cycle/reset indication. That cadence correction is separate from these
-bounded command adapters; no approximate handler is installed
-`[04 R-MOV-03 §1]` `[07 R-CAM-01 §12]` `[I6]`.
+`BigBrother` now enters the session's ordered command stream. A command-owned
+Shift latch pauses the phase-2 cycle; its published cycle/reset events reach
+the camera on every completed sub-tick, including intermediate catch-up ticks.
+The publication observer applies repick, follow/glide and shake in order, with
+no movement on zero-tick host frames. Manual follow requests run after that
+batch, preserving the pre-input tracked target until an automatic cycle
+replaces it `[04 R-MOV-03 §1]` `[07 R-CAM-01 §12]` `[I6]`.
+The cycle currently shares selection commands' unit-info-only page close.
+`TODO(question)`: map the retail force-zero deferral bits and current page
+owner into the shell before claiming complete page-stack close behavior
+`[07 R-HUD-04 §3]`.
+
+The cadence integration's sequential scene-3 Ashap Plateau check used seed 7,
+factories, 1920×1080, zoom 1, remaster off, 30 TPS, 60 warm-up and 180 measured
+draws. Against the accepted baseline, both renderers retained identical
+per-frame censuses and byte-identical inspected captures, including four shake
+frames. Classic record median/p95/max was 10.045/11.769/13.482 →
+10.534/12.020/15.041 ms; modern was 5.259/6.994/15.000 →
+5.166/6.896/10.998 ms. Cadence stayed 177/180 for classic and changed
+105/180 → 107/180 for modern; allocations stayed 1.168 and 5.219 MB/frame.
+These runs establish no performance improvement. The normal benchmark does not
+enable BigBrother or exercise catch-up input; the focused controller fixture
+checks its same-tick repick, two-tick follow and zero-tick behavior.
 
 These commands are partial I10. Shell and direct-map entry use the same live
 display bits, including the persisted low bit that selects dithered fog; a

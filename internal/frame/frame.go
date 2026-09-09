@@ -927,6 +927,9 @@ type FogView struct {
 // after Publish succeeds the writer must treat the frame as immutable until
 // the next permitted BeginWrite reuse.
 type Frame struct {
+	// BigBrother events belong only to this publication [04 R-MOV-03 §1].
+	BigBrotherCycle, BigBrotherResetVisited, BigBrotherCancelFollow bool
+
 	Tick uint32
 	// ViewingPlayer is the observer for this committed frame; selection keeps
 	// its separate true-local owner [03 R-VIS-01 §4].
@@ -1093,6 +1096,7 @@ func (f *Frame) Reset() {
 	f.Events = f.Events[:0]
 	f.Tick = 0
 	f.Paused = false
+	f.BigBrotherCycle, f.BigBrotherResetVisited, f.BigBrotherCancelFollow = false, false, false
 	f.ShakeOffsetX = 0
 	f.ShakeOffsetY = 0
 	f.ShakeActive = false

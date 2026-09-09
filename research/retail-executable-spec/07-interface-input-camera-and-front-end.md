@@ -4876,6 +4876,11 @@ the `+BigBrother` sweep tail [04 R-MOV-03 §1], the build-page switch of
    §3 ([R-WGT-01 §1]) and the test repeats. Returns 0 when the stack empties
    without meeting the command window.
 
+**Unknown — implementation ownership.** The engine currently closes unit info
+for selection changes. Mapping the force-zero deferral flags and current-page
+word to its shell remains unresolved; establishing those owners is required
+before replacing that limited close with this full stack operation.
+
 **Established — the latch-to-idle reset.** The *return the command latch to
 idle* step named by [R-CAM-01 §2] (Escape with a latch armed) and §8
 (right-click) is one routine: the armed-order latch byte becomes 1 (idle),

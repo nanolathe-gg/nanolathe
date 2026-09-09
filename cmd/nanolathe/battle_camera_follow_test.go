@@ -5,9 +5,11 @@ import (
 
 	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/units"
 )
 
 // publishFollowedUnit commits a new frame carrying one unit at the tracked
@@ -39,18 +41,9 @@ func followTestFixture(tracked pool.Handle) (*battleSession, *camera.Camera, *fr
 	return b, cam, buf
 }
 
-// TestFollowCameraUsesThisFramesPublishedPosition locks the PT6-01 fix: the
-// follow step's FollowTo target must come from the same publication the
-// composer is about to draw, not the one before it. Before the fix,
-// stepFollowCamera looked the tracked unit up in currentSnapshot() before
-// this frame's own simulation tick published, so the camera closed toward
-// where the unit *was* while the composer drew where the unit *is* — a
-// mismatch that reappears every frame a tick actually runs and reads as the
-// followed unit shaking against its own camera. The sequence below batches a
-// varying number of ticks per presentation frame (0, 1 or 2), mirroring the
-// wall-clock-driven sub-tick budget the fixed 30 Hz presentation cadence does
-// not by itself make uniform [01 §4.3]; the contract checked here holds
-// regardless of that variance.
+// Every completed sub-tick advances follow once; a zero-tick host frame
+// advances nothing. Intermediate catch-up publications must not be dropped
+// [01 §4.4][07 R-CAM-01 §12].
 func TestFollowCameraUsesThisFramesPublishedPosition(t *testing.T) {
 	const tracked = pool.Handle(7)
 	b, cam, buf := followTestFixture(tracked)
@@ -63,28 +56,20 @@ func TestFollowCameraUsesThisFramesPublishedPosition(t *testing.T) {
 	pos := int32(1000)
 	var tick uint32
 	for i, n := range ticksThisFrame {
-		// Pre-tick half: latch the tracked object, as battle.go's viewerStep
-		// does before BattleController.Step runs this frame's ticks.
+		// Latch before the controller runs this frame's input and ticks.
 		b.stepFollowCamera()
 
-		preX, preZ := cam.X, cam.Z
+		wantX, wantZ := cam.X, cam.Z
 		for j := 0; j < n; j++ {
 			tick++
 			pos += velocity
 			publishFollowedUnit(t, buf, tick, tracked, pos, 0, 500)
+			b.applyPublishedCamera(buf.Current())
+			want := cam.DesiredOrigin(camera.TargetPoint{X: pos, Y: 0, Z: 500})
+			wantX = stepAxisForTest(wantX, want.X)
+			wantZ = stepAxisForTest(wantZ, want.Z)
 		}
 
-		// Post-tick half: apply the follow using whatever this frame actually
-		// published (or, on a zero-tick frame, the still-current publication).
-		b.applyCommittedShake()
-
-		cur := buf.Current()
-		if cur == nil || len(cur.Units) == 0 {
-			t.Fatalf("frame %d: no committed unit", i)
-		}
-		wantDesired := cam.DesiredOrigin(camera.TargetPoint{X: pos, Y: 0, Z: 500})
-		wantX := stepAxisForTest(preX, wantDesired.X)
-		wantZ := stepAxisForTest(preZ, wantDesired.Z)
 		if cam.X != wantX || cam.Z != wantZ {
 			t.Fatalf("frame %d (ticks=%d): camera=(%d,%d), want (%d,%d) stepped toward the just-published position %d — the follow step is reading a stale publication again", i, n, cam.X, cam.Z, wantX, wantZ, pos)
 		}
@@ -126,7 +111,7 @@ func TestFollowedUnitScreenPositionSettlesToAConstantOffset(t *testing.T) {
 		tick++
 		pos += velocity
 		publishFollowedUnit(t, buf, tick, tracked, pos, 0, 300)
-		b.applyCommittedShake()
+		b.applyPublishedCamera(buf.Current())
 		offsets = append(offsets, pos-cam.X)
 	}
 
@@ -140,5 +125,39 @@ func TestFollowedUnitScreenPositionSettlesToAConstantOffset(t *testing.T) {
 		if offsets[i] != settled {
 			t.Fatalf("screen offset at frame %d = %d, want the settled value %d (offsets tail: %v)", i, offsets[i], settled, offsets[frames-5:])
 		}
+	}
+}
+
+// The real controller must consume the automatic repick in its first tick,
+// follow again in its second tick, and do nothing on a zero-tick pump.
+// [04 R-MOV-03 §1][07 R-CAM-01 §12]
+func TestBigBrotherFollowsEveryControllerTick(t *testing.T) {
+	b := newTestBattle(testCatalogON05(), testWorldON05(80, 80))
+	b.sess.State = session.StateBattle
+	first := placeUnit(b, "armcons", numeric.Fixed(400<<16), numeric.Fixed(500<<16))
+	second := placeUnit(b, "armfav", numeric.Fixed(900<<16), numeric.Fixed(800<<16))
+	first.Flags |= units.SelectedStatus
+	b.cam.SetTracked(first.Handle)
+	b.cam.MapW, b.cam.MapH = 1<<20, 1<<20
+	c := NewBattleController(b, &scriptedMillisSource{samples: []uint32{0, 67, 67}})
+	b.dispatchLocalCommand("+BigBrother")
+	c.Step(BattleInputFrame{}, nil)
+	c.Step(BattleInputFrame{}, nil)
+	if b.sess.Clock.GlobalTick != 2 || b.cam.Tracked() != second.Handle {
+		t.Fatalf("tick=%d tracked=%v, want tick 2 and %v", b.sess.Clock.GlobalTick, b.cam.Tracked(), second.Handle)
+	}
+	want := b.cam.DesiredOrigin(camera.TargetPoint{X: 900, Z: 800})
+	x := stepAxisForTest(stepAxisForTest(0, want.X), want.X)
+	z := stepAxisForTest(stepAxisForTest(0, want.Z), want.Z)
+	if b.cam.X != x || b.cam.Z != z {
+		t.Fatalf("origin=(%d,%d), want (%d,%d)", b.cam.X, b.cam.Z, x, z)
+	}
+	b.cam.StoreBookmark(0)
+	c.Step(BattleInputFrame{PressedKeys: []input.Key{input.KeyT, input.KeyF5}}, nil)
+	if b.cam.Tracked() != 0 {
+		t.Fatal("deferred follow undid the later bookmark recall")
+	}
+	if b.cam.X != x || b.cam.Z != z {
+		t.Fatal("zero-tick pump advanced camera")
 	}
 }

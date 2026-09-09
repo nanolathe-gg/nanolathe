@@ -42,33 +42,17 @@ func (c *Camera) DesiredOrigin(target TargetPoint) Origin {
 	}
 }
 
-// LatchTracked captures the currently tracked object for this presentation
-// frame's follow application and returns it. Retail runs phase 10 (follow and
-// shake) once per completed sub-tick, strictly *before* that same host
-// frame's hotkey dispatch step — so a `t`/`T` or Ctrl+C press only changes
-// which object phase 10 chases starting with the *next* frame's pass, never
-// the frame the key was pressed on [07 R-CAM-01 §1 steps 3-4][07 R-CAM-01
-// §12 "Ctrl+C and t/T do not move the camera themselves"].
-//
-// Nanolathe's camera is presentation-only and does not interleave with
-// simulation phases the way retail's phase 10 does [I6]; instead a frame's
-// follow work is split across the presentation frame's own tick boundary:
-// LatchTracked runs before this build's hotkey dispatch (preserving the
-// next-frame timing above), and the caller applies the latch, via
-// LatchedTracked, only after this frame's own simulation tick has published
-// — so the position used is the one the frame's composer is about to draw,
-// not the previous publish (defect PT6-01: reading the previous publish's
-// position here made a followed unit's screen position swing by a
-// tick's worth of its own motion every frame, reading as shake, sharpest
-// whenever the frame's tick count varied, which the fixed presentation
-// cadence of the "Run presentation work at 30 Hz" change did not by itself
-// prevent — the two reads were still on either side of that frame's own
-// publish).
+// LatchTracked retains the pre-hotkey target and glide for every sub-tick in
+// the pending batch. BigBrother can replace this latch after its phase-2
+// selection cycle. No movement occurs until a completed frame is consumed
+// [01 §4.4][07 R-CAM-01 §12][I6].
 func (c *Camera) LatchTracked() pool.Handle {
 	if c == nil {
 		return 0
 	}
 	c.Follow.latched = c.Follow.Tracked
+	c.Follow.latchedDesired = c.Follow.Desired
+	c.Follow.latchedGliding = c.Follow.Gliding
 	return c.Follow.latched
 }
 
@@ -105,5 +89,23 @@ func stepAxis(current, desired int32) int32 {
 		return int32(int64(current) - 320)
 	default:
 		return int32(int64(current) + delta/2)
+	}
+}
+
+// StepLatchedGlide advances the pre-hotkey untracked glide once per committed
+// sub-tick without consuming a newly issued glide in the same host batch.
+// The existing half-step and stop-on-no-movement rule apply [07 R-CAM-01 §12].
+func (c *Camera) StepLatchedGlide() {
+	if c == nil || !c.Follow.latchedGliding {
+		return
+	}
+	x, z := c.X, c.Z
+	c.X = stepAxis(c.X, c.Follow.latchedDesired.X)
+	c.Z = stepAxis(c.Z, c.Follow.latchedDesired.Z)
+	if x == c.X && z == c.Z {
+		c.Follow.latchedGliding = false
+		if c.Follow.Desired == c.Follow.latchedDesired {
+			c.Follow.Gliding = false
+		}
 	}
 }

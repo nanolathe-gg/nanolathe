@@ -320,6 +320,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			continue
 		}
 		if b.cam.RecallBookmark(slot) {
+			if b.deferFollowInput {
+				b.pendingFollowInput = func() { b.cam.RecallBookmark(slot) }
+			}
 			b.playUICue(cl, "SelectSquad")
 		}
 	}

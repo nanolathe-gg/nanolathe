@@ -123,6 +123,9 @@ func (s *Session) ensurePublicationState() *publicationState {
 // services owned centrally by this package C5.
 // Go allows methods in any file, but the struct is defined once here.
 type Session struct {
+	bigBrother          bigBrotherState
+	publicationObserver func(*frame.Frame)
+
 	State         State
 	pendingBattle bool
 
@@ -1391,3 +1394,10 @@ func (s *Session) CycleDebugDisplayMode() {
 // main-thread CRT across this boundary; the approved isolation divergence is
 // recorded in DESIGN_RUNTIME_DETERMINISM §5 [01 R-PLAT-01 §7].
 func NewFrontEndCRT(seed uint32) rng.CRT { return rng.NewCRT(seed) }
+
+// SetPublicationObserver installs the presentation consumer of each completed
+// sub-tick. It receives only the committed frame and cannot participate in
+// authoritative phases [01 §4.4][I6].
+func (s *Session) SetPublicationObserver(observer func(*frame.Frame)) {
+	s.publicationObserver = observer
+}

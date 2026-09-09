@@ -863,6 +863,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 	}
 	publishPlayerRows(s, published)
 	// Shake offset produced at phase 10 [03 §5.6][01 §4.4] DET-04.
+	published.BigBrotherCycle = s.bigBrother.cycle
+	published.BigBrotherResetVisited = s.bigBrother.resetVisited
+	published.BigBrotherCancelFollow = s.bigBrother.cancelFollow
 	published.ShakeOffsetX = s.shakeOffsetX
 	published.ShakeOffsetY = s.shakeOffsetY
 	published.ShakeActive = s.shakeActive

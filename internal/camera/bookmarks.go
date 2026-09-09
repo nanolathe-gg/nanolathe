@@ -37,7 +37,9 @@ type FollowState struct {
 	// that runs later in the same presentation frame still acts on the
 	// object retail's phase 10 would have seen (see LatchTracked) [07
 	// R-CAM-01 §12].
-	latched pool.Handle
+	latched        pool.Handle
+	latchedDesired Origin
+	latchedGliding bool
 }
 
 // SetTracked latches the follow camera's tracked object. Retail's `t`/`T` and

@@ -198,8 +198,10 @@ type battleSession struct {
 	// word; presentation may not write simulation state, so the cycle keeps its
 	// own set here [I6]. The set is only looked up, never ranged, so it takes
 	// part in no order-producing iteration [I1].
-	visitedUnits map[pool.Handle]bool
-	currentUnit  pool.Handle
+	visitedUnits       map[pool.Handle]bool
+	deferFollowInput   bool
+	pendingFollowInput func()
+	currentUnit        pool.Handle
 }
 
 // factoryBuildDelta applies the retail signed button count: left click adds
@@ -582,6 +584,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 		// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
 		b.sess.CommitCampaignTeardown()
 		b.sess.SetPhase7Service(nil)
+		b.sess.SetPublicationObserver(nil)
 		if b.sess.Features != nil {
 			b.sess.Features.SetDefinitionAdmissionObserver(nil)
 		}
@@ -946,7 +949,6 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// hotkey dispatch and the scroll pass [07 R-CAM-01 §1 steps 3-5]
 		// [07 R-CAM-01 §12]: a `t` or Ctrl+C pressed below therefore begins its
 		// glide on the following frame, as retail's does.
-		b.stepFollowCamera()
 		sample := b.pointerSample(in, delta)
 		if talkOwned {
 			sample = talkOwnedInput(producerIn, delta)
@@ -959,7 +961,6 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		if in != nil {
 			producerIn.DiscardTokens(producerIn.PendingTokens())
 		}
-		b.applyCommittedShake()
 	}
 	if b.ended {
 		return
@@ -1005,6 +1006,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		scroll := func(dir camera.Direction) {
 			b.cam.Scroll(scrollSetting, rawDelta, dir)
 			b.cam.ClearFollow()
+			b.pendingFollowInput = nil
 		}
 		// Held-arrow branches gated on TALK absence [07 §10]; edge branches gated on focus, modal, and minimap.
 		// Left: (Left held && !talk) OR (x==0 && y<H) [07 §10]
