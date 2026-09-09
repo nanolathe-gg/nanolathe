@@ -278,17 +278,20 @@ func (in *interpolator) blendUnits(prev, cur *frame.Frame, f16 int64) []frame.Un
 	return in.units
 }
 
-// previousUnit is the unit identity of §13.5: the same pool slot in the
-// previous tick, with an unchanged definition, owner, carrier and mode mirror,
-// the same number of pieces, and a horizontal step within the snap bound. Pool
-// slots carry no generation [01 §6.1], so a reused slot is only recognisable by
-// this consistency check.
+// previousUnit is the unit continuity rule of §13.5. InstanceID must agree
+// across the two ticks, so a missing ID on only one side snaps. Both zero is
+// the fixture exception. Every matching identity still requires the same slot,
+// definition, owner, carrier, mode mirror, piece count, and a horizontal step
+// within the snap bound. Pool slots carry no generation [01 §6.1].
 func (in *interpolator) previousUnit(prev *frame.Frame, u frame.UnitView) *frame.UnitView {
 	slot := int(u.Slot)
 	if slot >= len(in.unitAt) || in.unitAt[slot] == 0 {
 		return nil
 	}
 	p := &prev.Units[in.unitAt[slot]-1]
+	if p.InstanceID != u.InstanceID {
+		return nil
+	}
 	if p.DefID != u.DefID || p.Owner != u.Owner || p.Carrier != u.Carrier || p.MoverMode != u.MoverMode {
 		return nil
 	}

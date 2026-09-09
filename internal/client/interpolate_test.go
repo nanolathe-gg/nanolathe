@@ -113,6 +113,71 @@ func TestReusedSlotSnaps(t *testing.T) {
 	}
 }
 
+// Publication assigns every live unit a nonzero instance identity. A reused
+// slot can otherwise retain every old continuity field, including its poses.
+func TestReusedSlotWithDifferentInstanceIDSnapAtEveryFraction(t *testing.T) {
+	prev := unitAt(3, wu(100), wu(50), 0)
+	prev.InstanceID = 41
+	prev.Heading, prev.Pitch, prev.Bank = 100, 200, 300
+	prev.Pieces = []frame.PieceView{{Tx: wu(1), RotY: 100}}
+	cur := unitAt(3, wu(104), wu(50), 500)
+	cur.InstanceID = 42
+	cur.Pitch, cur.Bank = 600, 700
+	cur.Pieces = []frame.PieceView{{Tx: wu(9), RotY: 900}}
+
+	for _, f16 := range []int64{0, int64(fractionOne) / 2} {
+		got := blendOne(t, prev, cur, f16)
+		if got.X != cur.X || got.Heading != cur.Heading || got.Pitch != cur.Pitch || got.Bank != cur.Bank || got.Pieces[0].Tx != cur.Pieces[0].Tx || got.Pieces[0].RotY != cur.Pieces[0].RotY {
+			t.Fatalf("different instance IDs blended at fraction %d: unit = (%d,%d,%d,%d), piece = (%d,%d)", f16, got.X, got.Heading, got.Pitch, got.Bank, got.Pieces[0].Tx, got.Pieces[0].RotY)
+		}
+	}
+}
+
+func TestMatchingInstanceIDStillUsesContinuityChecks(t *testing.T) {
+	prev := unitAt(3, wu(100), wu(50), 0)
+	prev.InstanceID = 41
+	prev.Pieces = []frame.PieceView{{Tx: wu(1)}}
+	cur := unitAt(3, wu(110), wu(50), 0)
+	cur.InstanceID = 41
+	cur.Pieces = []frame.PieceView{{Tx: wu(9)}}
+	got := blendOne(t, prev, cur, int64(fractionOne)/2)
+	if got.X != wu(105) || got.Pieces[0].Tx != wu(5) {
+		t.Fatalf("matching instance ID did not blend: unit X = %d, piece Tx = %d", got.X, got.Pieces[0].Tx)
+	}
+
+	cur.X = wu(200)
+	got = blendOne(t, prev, cur, int64(fractionOne)/2)
+	if got.X != cur.X {
+		t.Fatalf("matching instance ID bypassed teleport snap: X = %d, want %d", got.X, cur.X)
+	}
+
+	cur.X = wu(110)
+	cur.MoverMode = 2
+	got = blendOne(t, prev, cur, int64(fractionOne)/2)
+	if got.X != cur.X {
+		t.Fatalf("matching instance ID bypassed mode discontinuity: X = %d, want %d", got.X, cur.X)
+	}
+}
+
+// UnitView fixtures created outside session publication have no identity. Two
+// zero identities retain the established continuity fallback; one usable ID is
+// insufficient evidence that they are the same instance and snaps.
+func TestZeroInstanceIDFixturePolicy(t *testing.T) {
+	prev := unitAt(3, wu(100), wu(50), 0)
+	cur := unitAt(3, wu(110), wu(50), 0)
+	got := blendOne(t, prev, cur, int64(fractionOne)/2)
+	if got.X != wu(105) {
+		t.Fatalf("two zero instance IDs did not use fixture continuity: X = %d", got.X)
+	}
+	for _, ids := range [][2]uint64{{0, 41}, {41, 0}} {
+		prev.InstanceID, cur.InstanceID = ids[0], ids[1]
+		got = blendOne(t, prev, cur, int64(fractionOne)/2)
+		if got.X != cur.X {
+			t.Fatalf("mixed instance IDs %v blended: X = %d, want %d", ids, got.X, cur.X)
+		}
+	}
+}
+
 // Beyond the presentation snap bound the subject is treated as teleported.
 func TestLongDisplacementSnaps(t *testing.T) {
 	got := blendOne(t, unitAt(3, wu(100), wu(50), 0), unitAt(3, wu(200), wu(50), 0), int64(fractionOne)/2)

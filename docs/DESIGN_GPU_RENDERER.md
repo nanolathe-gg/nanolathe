@@ -1458,12 +1458,16 @@ Blended fields:
   `PropellerRoll`, `MeteorPitch`;
 * effect `X, Y, Z`.
 
-**Identity and snap.** Pool handles carry no generation [01 §6.1], so a match
-is a handle plus consistency: a unit matches when the previous tick holds the
-same `Slot` with equal `DefID` and `Owner`, unchanged `Carrier` and
-`MoverMode`, the same number of pieces, and a horizontal displacement of at
-most 64 world units in the tick; a projectile matches on `Handle` with equal
-`WeaponID`, `Shooter` and `CreationTick`; an effect matches on
+**Identity and snap.** A published unit match first requires equal nonzero
+`InstanceID` values. Publication assigns that presentation-only identity to a
+live object and changes it when a pool slot is reused; it is not authoritative
+state. Frames that both carry zero retain the fixture fallback: pool handles
+carry no generation [01 §6.1], so the match is a handle plus consistency. A
+unit then requires the same `Slot` with equal `DefID` and `Owner`, unchanged
+`Carrier` and `MoverMode`, the same number of pieces, and a horizontal
+displacement of at most 64 world units in the tick. If only one unit has a
+usable identity, it takes the current pose. A projectile matches on `Handle`
+with equal `WeaponID`, `Shooter` and `CreationTick`; an effect matches on
 `PresentationID` when nonzero, else on `ID`, `EventSeq` and `StartTick`.
 Anything else takes the current pose. The 64-unit bound is a presentation
 constant chosen above any retail movement rate; it is not a retail datum.
