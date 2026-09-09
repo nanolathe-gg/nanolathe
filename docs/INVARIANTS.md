@@ -57,6 +57,7 @@ Allowed floating point, exhaustively:
 | AI metal-spot records and exhaustive-placement heap keys | authored feature-metal copy and helper-local negative squared-distance key, both `float32` | `[08 R-AI-03 §1]`, `[08 R-AI-03 §3]` |
 | Simulation trig-table construction at initialization | `float64` transient; authoritative table entries are integers | `[04 §5.1]` |
 | Model piece rotation trig in the draw path | `float64`, round-to-nearest | `[03 §2.4]` |
+| Queued-order range-ring adaptive chord count `trunc(radius × 2π × 1/8)` | `float64` presentation transient, narrowed immediately to the integer chord count | `[07 R-P0-11 §3]` |
 | Shatter-fragment normal construction — each reciprocal-65535 vertex conversion, vector difference, cross-product component, and normalized component narrows at its named binary32 result; square, sum, square-root and division use working precision until that component store | `float64` transient, `float32` named stores | `[04 R-COB-04 §3]` |
 | Nanolathe particle travel distance (`sqrt`, truncated to the tick count) and the nanoframe reveal's barycentric interpolants | `float64` presentation temporaries, never stored | `[03 §5.5]`, `[03 §5.2]` |
 | Load-time 2× art synthesis (`internal/upscale`: PCA basis, feature distances, tone terms) | `float32`/`float64` presentation-only; runs on the loader goroutine, its output is index art the simulation never reads | DESIGN_GPU_RENDERER §14.4 |
