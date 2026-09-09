@@ -2500,7 +2500,7 @@ func (s *Service) AcceptDamage(w *units.World, tick uint32, in DamageInput) Dama
 // weaponDamageNominal keeps the weapon-side half of C20 separate from the
 // accepted-packet receiver. Fixed producers pass their established nominal to
 // AcceptDamage and never construct a dummy weapon [06 §9.2].
-func weaponDamageNominal(weapon *content.WeaponDef, victim *units.Unit, rawAttacker *units.Unit, falloff float32) int32 {
+func (s *Service) weaponDamageNominal(weapon *content.WeaponDef, victim *units.Unit, rawAttacker *units.Unit, falloff float32) int32 {
 	if weapon == nil || victim == nil {
 		return 0
 	}
@@ -2512,7 +2512,7 @@ func weaponDamageNominal(weapon *content.WeaponDef, victim *units.Unit, rawAttac
 	if rawAttacker != nil {
 		attackerKills = rawAttacker.Kills
 	}
-	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, rawAttacker != nil, false, false)
+	return weaponNominal(SelectBaseDamage(weapon, name), falloff, attackerKills, rawAttacker != nil, s != nil && s.doubleShot, s != nil && s.halfShot)
 }
 
 func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weapon *content.WeaponDef, falloff float32, distance int32, w *units.World, tick uint32) {
@@ -2525,7 +2525,7 @@ func applyDamageToUnit(service *Service, victim *units.Unit, p *Projectile, weap
 	}
 	service.AcceptDamage(w, tick, DamageInput{
 		Victim: victim.Handle, Attacker: p.Shooter,
-		Nominal:   weaponDamageNominal(weapon, victim, w.RawUnitRecord(p.Shooter), falloff),
+		Nominal:   service.weaponDamageNominal(weapon, victim, w.RawUnitRecord(p.Shooter), falloff),
 		Direction: hitDirectionByte(p, victim), Kind: cause,
 	})
 	_ = distance

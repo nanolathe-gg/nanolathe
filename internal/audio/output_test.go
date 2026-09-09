@@ -47,6 +47,27 @@ func TestConfigureOutputRetainsStateUntilOutputInstallation(t *testing.T) {
 	}
 }
 
+func TestToggleOutput3DPreservesRetainedConfiguration(t *testing.T) {
+	previous := GlobalOutput()
+	defer func() {
+		ConfigureOutput(OutputConfig{MasterEnabled: true, EffectsVolume: 1, SoundMode: SoundModeMono, MixingBuffers: 8})
+		SetGlobalOutput(previous)
+	}()
+	spy := &configuredOutputSpy{}
+	SetGlobalOutput(spy)
+	want := OutputConfig{MasterEnabled: false, EffectsVolume: 0.25, SoundMode: SoundModeMono, MixingBuffers: 3}
+	ConfigureOutput(want)
+
+	want.SoundMode = SoundMode3D
+	if got := ToggleOutput3D(); got != SoundMode3D || spy.configs[len(spy.configs)-1] != want {
+		t.Fatalf("3D toggle = %v/%#v, want %#v", got, spy.configs[len(spy.configs)-1], want)
+	}
+	want.SoundMode = SoundModeMono
+	if got := ToggleOutput3D(); got != SoundModeMono || spy.configs[len(spy.configs)-1] != want {
+		t.Fatalf("mono toggle = %v/%#v, want %#v", got, spy.configs[len(spy.configs)-1], want)
+	}
+}
+
 type streamOutputSpy struct {
 	outputSpy
 	streamPlays  []*Sample

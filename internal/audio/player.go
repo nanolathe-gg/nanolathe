@@ -307,3 +307,22 @@ func ConfigureOutput(config OutputConfig) {
 		configurable.ConfigureOutput(config)
 	}
 }
+
+// ToggleOutput3D flips the retained device-placement flag and applies the
+// otherwise unchanged output configuration to the installed device. The
+// packed setup SoundMode is a separate owner [07 R-CAM-01 §6].
+func ToggleOutput3D() SoundMode {
+	globalMu.Lock()
+	if globalConfig.SoundMode == SoundMode3D {
+		globalConfig.SoundMode = SoundModeMono
+	} else {
+		globalConfig.SoundMode = SoundMode3D
+	}
+	config := globalConfig
+	output := globalOutput
+	globalMu.Unlock()
+	if configurable, ok := output.(ConfigurableOutput); ok {
+		configurable.ConfigureOutput(config)
+	}
+	return config.SoundMode
+}

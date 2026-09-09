@@ -358,8 +358,11 @@ type EffectView struct {
 	Gravity        numeric.Fixed
 	Kind           string
 	HasModel       bool
-	SeqA           int32
-	SeqB           int32
+	// FragmentSlot is one-based in the paired fixed fragment table; zero means
+	// this ordinary effect record has no fragment geometry [04 R-COB-04 §3].
+	FragmentSlot uint16
+	SeqA         int32
+	SeqB         int32
 	// ActiveA and ActiveB are the two embedded animation players' published
 	// liveness: whether this record's PRIMARY (named art) and SECONDARY
 	// (calculated flash) layer is still to be drawn [03 §1].
@@ -687,6 +690,9 @@ type RadarContactView struct {
 // RadarView is the committed radar/contact payload. It is rebuilt at every
 // completed simulation tick and owns all nested slices [03 §3.6].
 type RadarView struct {
+	// MappingLOS carries the live history/current mask bits used by unit blip
+	// admission [03 R-MM-01 §3].
+	MappingLOS uint8
 	// Contacts is the whole contacts-pass input: blips, commander markers,
 	// sensor circles and weapon rings all come from these records. There is no
 	// second circle list — [03 §3.10]'s 2026-08-29 correction establishes the

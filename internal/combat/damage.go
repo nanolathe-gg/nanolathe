@@ -326,8 +326,9 @@ func Falloff(d, r float32, edgeEffectiveness float32) float32 {
 //
 // Healing bypasses steps 5 and 6 [06 §9.2]. Paralyzer packets use ordinary
 // incoming scaling before unsigned 16-bit duration credit is queued [06 §9.2].
-// Global double/half gates multiply/adjust before health application [06 §9.2]
-// — exact configuration aliases not recovered; bool gates preserve order.
+// Global double/half gates multiply/adjust before health application [06 §9.2].
+// The local DoubleShot and HalfShot commands independently toggle their
+// battle-owned inputs [07 R-CAM-01 §6].
 // Amount modulo and health subtraction ordering preserves low-32-bit wrap
 // [06 §9.2] per C20.
 // This standalone arithmetic entry models a present shooter; production passes
@@ -359,7 +360,8 @@ func weaponNominal(baseDamage int32, falloff float32, attackerKills int32, hasAt
 
 	// Step 4: apply recovered global double/half gates [06 §9.2] step 4.
 	// Bits are the global options word's bit7 (0x80) for double and bit8
-	// (0x100) for half, in order *2 then /2 so both set nets *1 [P1-07 §2.5][06 §9.2].
+	// (0x100) for half, in order *2 then /2. Doubling wraps before division,
+	// so both set need not recover the input [P1-07 §2.5][06 §9.2].
 	if globalDouble {
 		amount = amount * 2 // [06 §9.2] global double [P1-07 §2.5] options word bit7
 	}

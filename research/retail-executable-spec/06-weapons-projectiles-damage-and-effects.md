@@ -3727,11 +3727,13 @@ exactly when the numeric damage tier first becomes nonzero; the numeric tier
 remains the authoritative arithmetic contract.
 
 **Established fact:** The global double and half gates are bits 7 and 8 of one
-16-bit options word, applied in that order (doubling first). A whole-image
-reference census of that word found writers only for bits 0–6 and 10, so both
-gates are **stock-inert**; the same word's bit 3 enables feature damage (§13.1)
-and bit 4 suppresses camera shake. **Unknown:** the configuration alias that
-would set bits 7 or 8. *Decider:* static trace over the unrecovered regions.
+16-bit options word, applied in that order (doubling first). The local-command
+table's `DoubleShot` and `HalfShot` handlers independently toggle those two
+bits; neither handler writes settings, and a fresh battle begins with both
+clear. The same word's bit 3 enables feature damage (§13.1) and bit 4
+suppresses camera shake. The damage multiply retains the signed low 32 bits
+before the signed division, so setting both gates does not necessarily recover
+the original amount after overflow `[07 R-CAM-01 §6]`.
 
 **Established fact:** Funnel ownership: the armored-state scale and the
 defender veterancy reduction belong to this general pipeline. Document 04
@@ -5876,9 +5878,6 @@ body and are not restated here.
   extreme coordinates · §8.2 · static trace.
 - Sign and scale conventions for vertical velocity, terrain height, and sea
   level outside ordinary map ranges · §8.2 · static trace.
-- The configuration alias that names the global double/half damage bits; the
-  reader is direct and the full-image census found no writer · §9.1 · static
-  trace over the unrecovered regions.
 - A guarded error path for the unguarded unsigned divisions when maximum
   health is zero; stock never authors zero · §9.1 · static trace. Marked
   `TODO(T25)` at two sites.

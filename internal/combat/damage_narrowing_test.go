@@ -25,7 +25,7 @@ func TestWeaponDamageFalloffRetainsLowWord(t *testing.T) {
 			weapon := &content.WeaponDef{Damage: map[string]int32{"target": tc.base}}
 			// The signed authored override crosses the stored-falloff boundary before
 			// any recipient scale [06 §9.2][01 R-DET-01 §1].
-			if got := weaponDamageNominal(weapon, victim, nil, tc.falloff); got != tc.want {
+			if got := (&Service{}).weaponDamageNominal(weapon, victim, nil, tc.falloff); got != tc.want {
 				t.Fatalf("nominal=%d want%d", got, tc.want)
 			}
 		})
@@ -51,7 +51,7 @@ func TestDamageShooterPresencePrecedesArmor(t *testing.T) {
 			if tc.present {
 				attacker = f.attacker
 			}
-			nominal := weaponDamageNominal(weapon, f.victim, attacker, 1)
+			nominal := f.svc.weaponDamageNominal(weapon, f.victim, attacker, 1)
 			// 35,000,000*100 wraps to -794,967,296 before /100. A null shooter
 			// skips that stage, so only the present-shooter arm enters armor [06 §9.2].
 			if nominal != tc.nominal {
@@ -70,13 +70,34 @@ func TestDamageKillReadersUseStoredWord(t *testing.T) {
 	f.attacker.Kills = 65536
 	f.victim.Kills = 65536
 	weapon := &content.WeaponDef{DamageDefault: 100}
-	nominal := weaponDamageNominal(weapon, f.victim, f.attacker, 1)
+	nominal := f.svc.weaponDamageNominal(weapon, f.victim, f.attacker, 1)
 	if nominal != 100 {
 		t.Fatalf("attacker nominal=%d want100", nominal)
 	}
 	got := f.svc.AcceptDamage(f.w, 7, DamageInput{Victim: f.victim.Handle, Nominal: nominal, Kind: KindNoReaction})
 	if !got.Accepted || got.Amount != 100 {
 		t.Fatalf("defender result=%+v want100", got)
+	}
+}
+
+func TestWeaponDamageModesUseProductionNominalOrder(t *testing.T) {
+	victim := &units.Unit{Def: &content.UnitDef{UnitName: "target"}}
+	weapon := &content.WeaponDef{Damage: map[string]int32{"target": 1073741825}}
+	svc := &Service{}
+	if got := svc.weaponDamageNominal(weapon, victim, nil, 1); got != 1073741825 {
+		t.Fatalf("fresh nominal=%d want1073741825", got)
+	}
+	svc.ToggleDoubleShot()
+	if got := svc.weaponDamageNominal(weapon, victim, nil, 1); got != -2147483646 {
+		t.Fatalf("double nominal=%d want-2147483646", got)
+	}
+	svc.ToggleHalfShot()
+	if got := svc.weaponDamageNominal(weapon, victim, nil, 1); got != -1073741823 {
+		t.Fatalf("double-then-half nominal=%d want-1073741823", got)
+	}
+	svc.ToggleDoubleShot()
+	if got := svc.weaponDamageNominal(weapon, victim, nil, 1); got != 536870912 {
+		t.Fatalf("half nominal=%d want536870912", got)
 	}
 }
 

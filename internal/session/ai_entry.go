@@ -195,6 +195,7 @@ func finishBattleEntry(s *Session, overwriteResources func() error) error {
 	if s.battleEntryTailDone {
 		return nil
 	}
+	s.clearWatcherVisibilityMasks()
 	s.stepPlayerPhase(0)
 	if overwriteResources != nil {
 		if err := overwriteResources(); err != nil {
@@ -208,6 +209,16 @@ func finishBattleEntry(s *Session, overwriteResources func() error) error {
 	}
 	s.battleEntryTailDone = true
 	return nil
+}
+
+// clearWatcherVisibilityMasks applies the world-rebuild tail's watcher clear
+// once, after initial unit construction [07 R-CAM-01 §14]. Later commands may
+// change these same live bits.
+func (s *Session) clearWatcherVisibilityMasks() {
+	p := s.playerRecord(int(s.LocalOwner))
+	if p != nil && (p.Watcher || p.IsObserver) && s.Vis != nil {
+		s.Vis.SetMode(s.Vis.Mode() &^ (visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled))
+	}
 }
 
 func clearLiveResourceStocks(s *Session) {

@@ -655,6 +655,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 	// must not manufacture a mode at the frame boundary [I6]. The frame field's
 	// "MarkerMode" name predates the trace that identified the byte.
 	published.Radar.MarkerMode = s.DebugDisplayMode
+	published.Radar.MappingLOS = uint8(s.Vis.Mode()) & 3
 	var sensorInputs []visibility.SensorInput
 	if s.Vis != nil {
 		sensorInputs = s.Vis.SensorInputs()

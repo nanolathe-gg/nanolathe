@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
@@ -129,6 +130,13 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
 			b.sess.Audio.Music.Stop()
 		}
+	case "sound3d":
+		audio.ToggleOutput3D()
+		if b.shell != nil {
+			b.shell.saveSettings()
+		} else {
+			b.saveDirectChatSetting(func(*settings.Settings) {})
+		}
 	case "nometal", "noenergy":
 		if b.sess == nil {
 			return
@@ -188,6 +196,18 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 	case "nowisee":
 		if b.sess != nil && battleSessionKind(b) == 2 {
 			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanVisibility, Visibility: session.HumanVisibilityCommand{ClearMask: visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled}})
+		}
+	case "doubleshot":
+		if b.sess != nil && battleSessionKind(b) == 2 {
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanDoubleShot})
+		}
+	case "halfshot":
+		if b.sess != nil && battleSessionKind(b) == 2 {
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanHalfShot})
+		}
+	case "radar":
+		if b.sess != nil && battleSessionKind(b) == 2 {
+			b.radarOptions ^= radarAllContactsOption
 		}
 	case "switchalt":
 		persist := len(words) == 1

@@ -68,8 +68,11 @@ const FixedEffectCap = 300 // 0x54-byte records, 300 entries [03 §1] (I5)
 // It holds up to 300 fixed-size records; appends at or above the cap allocate
 // nothing [03 §1]. Full integration lives in effects.go (WU-13-2).
 type FixedEffectPool struct {
-	records  []EffectRecord
-	gravity  numeric.Fixed                          // default per-tick gravity when record.Gravity is zero [03 §2.2]
-	heightAt func(x, z numeric.Fixed) numeric.Fixed // terrain height query; nil skips terrain/water contact [03 §1]
-	seaLevel numeric.Fixed                          // sea level in world units byte*65536 [03 §2.2]
+	records          []EffectRecord
+	fragments        [FixedEffectCap]fragmentGeometry
+	fragmentContext  FragmentStepContext
+	fragmentStepping bool
+	gravity          numeric.Fixed                          // default per-tick gravity when record.Gravity is zero [03 §2.2]
+	heightAt         func(x, z numeric.Fixed) numeric.Fixed // terrain height query; nil skips terrain/water contact [03 §1]
+	seaLevel         numeric.Fixed                          // sea level in world units byte*65536 [03 §2.2]
 }

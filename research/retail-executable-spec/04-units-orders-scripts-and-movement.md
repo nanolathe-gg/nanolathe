@@ -5807,8 +5807,12 @@ The new debris owns a separate point workspace and copies the piece pose,
 render flags and explosion motion state. Each draw rebuilds that workspace
 from the model's original vertices after applying the debris record's current
 angle triple, then projects it at the record's world position. The position is
-the copied piece offset plus the source unit's position. Subsequent
-source-piece pose mutation does not change the detached copy.
+the retained source-piece translation copied at admission plus the source
+unit's position. The whole-piece allocator does not refresh that translation
+at admission; reset and piece-transform work are its writers. Subsequent
+source-piece pose mutation does not change the detached copy. A session adapter
+must therefore receive the retained translation rather than recomposing a
+current piece world position at its admission boundary.
 
 **Established — per-tick step.** The effect phase of the tick (the same phase
 as the fixed effect pool, doc 03 §1.3; doc 01 owns the phase order) visits
@@ -5866,10 +5870,10 @@ explosions and weapon impact art) paired with a slot of a fixed table of
    stale contents** and the loop stops (retail relies on the table never
    filling).
 3. Set the record's explode-on-hit bit from engine bit 5.
-4. Seed the fragment's velocity with **half the unit's mover velocity** on
-   each axis (zero for an immobile unit), then draw, in order: `vx += (80 −
-   random(160)) · 2^9`, `vz += (80 − random(160)) · 2^9`, `vy += (80 −
-   random(160)) · 2^9 + 30 · gravity` (a thirty-tick upward kick against the
+4. Retain **half the unit's mover velocity** separately on each axis (zero
+   for an immobile unit). Initialize dynamic velocity with draws in order:
+   `vx = (80 − random(160)) · 2^9`, `vz = (80 − random(160)) · 2^9`,
+   `vy = (80 − random(160)) · 2^9 + 30 · gravity` (a thirty-tick upward kick against the
    fall), and angular rates `800 − random(1600)` for each of three axes.
 5. Copy the quad's four vertices as the front face and the same four in
    reverse as the back face; compute the quad's unit normal in float from
@@ -5900,6 +5904,39 @@ the whole part of `vy` is then below 1 the fragment is freed, spawning the
 `explosion` bitmap first when its explode-on-hit bit is set; below sea level
 it is freed at once, with the `h2oboom2`/`lavasplash` art under the same
 session gates as [R-COB-04 §2].
+
+**Established — paired lifetime and arithmetic.** A live fragment owns both
+one fixed-effect record and one geometry slot; record compaction moves the
+record's slot reference without moving the geometry. Contact dispatch happens
+while both are still live, and only then releases them, so a synchronous impact
+allocation sees the dying record still occupying one of the 300 shared effect
+slots. Fragment position addition, inherited-half-velocity addition and gravity
+subtraction retain signed 32-bit wrapping. A ground-domain visit is selected
+when the wrapped Y word is above the sea word or the terrain whole-unit height
+is at least the sea whole-unit height; within that domain, contact is the
+inclusive signed whole-unit test `Y <= terrain`. Water is the complementary
+case and frees immediately. The normal helper first converts every selected
+vertex coordinate with its stored binary32 reciprocal-65535 constant. It stores
+the two differences `P0-P1` and `P2-P1` independently as binary32, passes them
+to the cross helper in that latter/former order, then stores each cross-product
+component and normalized component as binary32. The square, sum, square-root
+and division retain working precision until each normalized-component store. A
+zero-area quad therefore reaches ordinary non-finite division and the shared
+truncating conversion's zero-low-word result; there is no separate geometry
+rejection.
+After extrusion, summing and centering the eight copied vertices changes only
+the copied geometry; it does not add the mean to the already written fragment
+position. The primitive-copy boundary reads the piece instance's retained live
+point list. Reset and piece-transform writes update that list, while explosion
+admission does not refresh it; the fragment record separately uses the source
+unit position plus the piece's last retained translation. The later session
+adapter therefore needs an upstream materialized point-list producer. It must
+not substitute raw model vertices or recompute the current pose at admission.
+
+**Unknown.** The normal helper's working arithmetic is wider than its named
+binary32 stores. Test whether any valid retained point list produces a different
+final component under the original extended working precision before declaring
+the transient arithmetic equivalent.
 
 ### Bitmap explosions, the calculated frames, and the above-sea flash [R-COB-04 §4]
 

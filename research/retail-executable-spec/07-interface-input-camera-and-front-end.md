@@ -442,7 +442,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `IFace n` | `Interface Type` = `n`; write settings ([R-CAM-01 §5]) |
 | `Give p n metal` / `Give p n energy` | valid slot `p`: transfer `n` (as a float) of the named resource from the local player to slot `p` through the sharing transfer of doc 05 (word 3 compared case-insensitively) |
 | `CDPlay n` / `CDStop` | CD audio track play / stop (doc 03 audio) |
-| `Sound3D` | toggle the 3D-sound state of the audio device; write settings |
+| `Sound3D` | toggle the live 3D-sound state of the audio device; invoke settings write-all, which serializes the unchanged packed `SoundMode` (see below) |
 | `Shading` `AntiAlias` `Shadow` | toggle interface bits `0x20`, `0x02`, `0x04`; rebuild the terrain renderer; write settings |
 | `Dither` | toggle interface bit `0x40`; write settings |
 | `SwitchAlt [n]` | [R-CAM-01 §4] |
@@ -470,6 +470,12 @@ controller kind is `1..3` and its side byte is not `10`.
 | `Compression` | network mode only: toggle outgoing packet compression; post `Ok.  Outgoing packet compression turned ON/OFF` |
 | `BPS` | toggle the bytes-per-second display dword |
 | `SFX` | toggle the sound-effects debug byte |
+
+**Established fact — `Sound3D` device state and settings.** The command reads
+the audio device's live 3-D flag, flips that flag, and then invokes the common
+settings write-all. It does not change the separate packed `SoundMode` setup
+field, so the write serializes that field unchanged rather than persisting the
+new live device flag.
 
 **Established fact — resource-setter argument forms.** `NoMetal` and
 `NoEnergy` inspect the total token count. A vector containing only the command

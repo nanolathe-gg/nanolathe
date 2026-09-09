@@ -31,6 +31,11 @@ func (m *chatMillis) Millis32() uint32 {
 	return m.now
 }
 
+type chatOutputConfigSpy struct{ config audio.OutputConfig }
+
+func (*chatOutputConfigSpy) PlaySample(*audio.Sample, float64, float64) error { return nil }
+func (s *chatOutputConfigSpy) ConfigureOutput(config audio.OutputConfig)      { s.config = config }
+
 func testTalkWindow() *gui.Window {
 	return &gui.Window{
 		Rect: gui.Rect{X: 128, Y: 447, W: 512, H: 33}, OriginX: 128, OriginY: 447,
@@ -168,6 +173,15 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	if got := len(campaign.sess.PendingHumanCommands()); got != 1 {
 		t.Fatalf("campaign ATM crossed mask-2 gate: pending=%d", got)
 	}
+	campaign.dispatchLocalCommand("+DoubleShot")
+	campaign.dispatchLocalCommand("+HalfShot ignored")
+	if got := len(campaign.sess.PendingHumanCommands()); got != 1 {
+		t.Fatalf("campaign damage modes crossed mask-2 gate: pending=%d", got)
+	}
+	campaign.dispatchLocalCommand("+Radar")
+	if campaign.radarOptions != 0 {
+		t.Fatalf("campaign Radar options=%#x, want clear", campaign.radarOptions)
+	}
 	campaign.dispatchLocalCommand("+CDPlay 2junk")
 	if got := campaign.sess.Audio.Music.CurTrack(); got != 2 || !campaign.sess.Audio.Music.IsPlaying() {
 		t.Fatalf("campaign CDPlay track/status = %d/%v, want 2/playing", got, campaign.sess.Audio.Music.Status())
@@ -200,6 +214,20 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	skirmish.dispatchLocalCommand("+ATM")
 	if pending := skirmish.sess.PendingHumanCommands(); len(pending) != 1 || pending[0].Kind != session.HumanATM {
 		t.Fatalf("skirmish ATM = %+v, want one mask-2 command", pending)
+	}
+	skirmish.dispatchLocalCommand("+DoubleShot")
+	skirmish.dispatchLocalCommand("+HalfShot ignored")
+	shotPending := skirmish.sess.PendingHumanCommands()
+	if len(shotPending) != 3 || shotPending[1].Kind != session.HumanDoubleShot || shotPending[2].Kind != session.HumanHalfShot {
+		t.Fatalf("skirmish damage-mode commands = %+v", shotPending)
+	}
+	skirmish.dispatchLocalCommand("+Radar ignored")
+	if skirmish.radarOptions != radarAllContactsOption {
+		t.Fatalf("skirmish Radar options=%#x, want full-radar bit", skirmish.radarOptions)
+	}
+	skirmish.dispatchLocalCommand("+Radar")
+	if skirmish.radarOptions != 0 {
+		t.Fatalf("second skirmish Radar options=%#x, want clear", skirmish.radarOptions)
 	}
 	long := "+" + strings.Repeat("a", 100)
 	skirmish.dispatchLocalCommand(long)
@@ -265,6 +293,28 @@ func TestCorePresentationCommandsPersistExactValues(t *testing.T) {
 	if cl.ScreenChat() != 0 || stored.Messages.ScreenChat != 0 || b.scrollSetting() != 0 || stored.ScrollSpeed != 0 || b.interfaceType != 7 || stored.InterfaceType != settings.InterfaceTypeRightClick {
 		t.Fatalf("stored core values: screen=%d/%d scroll=%d/%d iface=%d/%d", cl.ScreenChat(), stored.Messages.ScreenChat, b.scrollSetting(), stored.ScrollSpeed, b.interfaceType, stored.InterfaceType)
 	}
+	previousOutput := audio.GlobalOutput()
+	t.Cleanup(func() {
+		audio.ConfigureOutput(audio.OutputConfig{MasterEnabled: true, EffectsVolume: 1, SoundMode: audio.SoundModeMono, MixingBuffers: settings.DefaultMixingBuffers})
+		audio.SetGlobalOutput(previousOutput)
+	})
+	audio.SetGlobalOutput(nil)
+	wantOutput := audio.OutputConfig{MasterEnabled: false, EffectsVolume: 0.25, SoundMode: audio.SoundModeMono, MixingBuffers: 3}
+	audio.ConfigureOutput(wantOutput)
+	output := &chatOutputConfigSpy{}
+	audio.SetGlobalOutput(output)
+	storedAudio := stored.Audio
+	b.dispatchLocalCommand("+Sound3D")
+	wantOutput.SoundMode = audio.SoundMode3D
+	stored, err = settings.Load()
+	if err != nil || output.config != wantOutput || stored.Audio != storedAudio {
+		t.Fatalf("Sound3D live/stored = %#v/%+v, want %#v/%+v err=%v", output.config, stored.Audio, wantOutput, storedAudio, err)
+	}
+	b.dispatchLocalCommand("+Sound3D")
+	wantOutput.SoundMode = audio.SoundModeMono
+	if output.config != wantOutput {
+		t.Fatalf("second Sound3D toggle = %#v, want %#v", output.config, wantOutput)
+	}
 	directSetup := session.SkirmishConfig{LineOfSight: 0, Mapping: 1, LOSType: 0}
 	b.sess = &session.Session{Skirmish: directSetup}
 	b.dispatchLocalCommand("+LOSType")
@@ -280,6 +330,15 @@ func TestCorePresentationCommandsPersistExactValues(t *testing.T) {
 	stored, err = settings.Load()
 	if err != nil || b.sess.Skirmish != directSetup || stored.Skirmish.LineOfSight != directSetup.LineOfSight || stored.Skirmish.Mapping != directSetup.Mapping || stored.Skirmish.LOSType != directSetup.LOSType {
 		t.Fatalf("direct visibility write changed setup or serialized live flags: setup=%+v stored=%+v err=%v", b.sess.Skirmish, stored.Skirmish, err)
+	}
+	beforeRadar, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.dispatchLocalCommand("+Radar")
+	afterRadar, err := os.ReadFile(path)
+	if err != nil || b.radarOptions != radarAllContactsOption || string(afterRadar) != string(beforeRadar) {
+		t.Fatalf("Radar live/no-save = %#x/%t err=%v", b.radarOptions, string(afterRadar) == string(beforeRadar), err)
 	}
 
 	// Direct map entry keeps the unsaved TShadow/FShadow bits live until the

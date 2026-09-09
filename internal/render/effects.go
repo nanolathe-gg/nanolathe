@@ -152,7 +152,11 @@ type EffectRecord struct {
 
 	// HasModel indicates a model-bearing record; the integrator can clear the
 	// model pointer on terrain/water contact as the alternative to bouncing [03 §1] C5.
-	HasModel                bool
+	HasModel bool
+	// FragmentSlot is one-based into FixedEffectPool.fragments. It moves with
+	// stable record compaction, while the geometry remains slot-owned [04 R-COB-04 §3].
+	FragmentSlot            uint16
+	FragmentExplodeOnHit    bool
 	NanolatheGeometryKnown  bool
 	NanolatheTargetBoxKnown bool
 	NanolatheTargetMin      [3]numeric.Fixed
@@ -272,8 +276,9 @@ func (p *FixedEffectPool) SnapshotViewsInto(out []frame.EffectView) []frame.Effe
 			Strip: r.Strip,
 			X:     r.X, Y: r.Y, Z: r.Z, VX: r.VX, VY: r.VY, VZ: r.VZ,
 			TargetX: r.TargetX, TargetY: r.TargetY, TargetZ: r.TargetZ,
-			HasModel: r.HasModel,
-			Gravity:  r.Gravity, ExpiryTick: r.ExpiryTick,
+			HasModel:     r.HasModel,
+			FragmentSlot: r.FragmentSlot,
+			Gravity:      r.Gravity, ExpiryTick: r.ExpiryTick,
 			NanolatheGeometryKnown:  r.NanolatheGeometryKnown,
 			NanolatheTargetBoxKnown: r.NanolatheTargetBoxKnown,
 			NanolatheTargetMin:      r.NanolatheTargetMin, NanolatheTargetMax: r.NanolatheTargetMax,
@@ -307,6 +312,7 @@ func (p *FixedEffectPool) RemoveMatching(source, target pool.Handle, kind string
 	removed := false
 	for _, record := range p.records {
 		if !removed && record.Kind == kind && sameEndpoint(record.Source, source, record.Target, target) {
+			p.releaseFragment(record.FragmentSlot)
 			removed = true
 			continue
 		}
@@ -346,7 +352,11 @@ func (p *FixedEffectPool) Clear() {
 		return
 	}
 	for i := range p.records {
+		p.releaseFragment(p.records[i].FragmentSlot)
 		p.records[i] = EffectRecord{}
+	}
+	for i := range p.fragments {
+		p.fragments[i] = fragmentGeometry{}
 	}
 	p.records = p.records[:0]
 }
@@ -419,49 +429,55 @@ func (p *FixedEffectPool) Update(tick uint32) {
 	for read := 0; read < len(p.records); read++ {
 		rec := &p.records[read]
 		if rec.ExpiryTick != 0 && tick >= rec.ExpiryTick {
+			p.releaseFragment(rec.FragmentSlot)
 			continue
 		}
+		if rec.FragmentSlot != 0 {
+			p.stepFragment(read)
+			rec = &p.records[read]
+		} else {
 
-		// Save prior position for possible restore on terrain/water contact [03 §1].
-		prevX, prevY, prevZ := rec.X, rec.Y, rec.Z
+			// Save prior position for possible restore on terrain/water contact [03 §1].
+			prevX, prevY, prevZ := rec.X, rec.Y, rec.Z
 
-		// Advance velocity against gravity [03 §1] C5.
-		g := rec.Gravity
-		if g == 0 {
-			g = p.gravity
-		}
-		if g != 0 {
-			rec.VY -= g // velocity against gravity [03 §1]; Fixed is integer [I2]
-		}
-		// Integrate position.
-		rec.X += rec.VX
-		rec.Y += rec.VY
-		rec.Z += rec.VZ
-
-		// Terrain or water contact check [03 §1] C5.
-		contacted := false
-		if p.heightAt != nil {
-			h := p.heightAt(rec.X, rec.Z)
-			if rec.Y < h {
-				contacted = true
+			// Advance velocity against gravity [03 §1] C5.
+			g := rec.Gravity
+			if g == 0 {
+				g = p.gravity
 			}
-		}
-		if !contacted && p.seaLevel != 0 && rec.Y < p.seaLevel {
-			contacted = true
-		} else if !contacted && p.heightAt == nil && p.seaLevel == 0 {
-			// no terrain query and sea level zero: no contact
-		}
-		if contacted {
-			if rec.HasModel {
-				// clear record's model pointer alternative branch [03 §1] C5
-				rec.HasModel = false
-			} else {
-				// restore prior position and invert/halve vertical velocity [03 §1] C5
-				rec.X = prevX
-				rec.Y = prevY
-				rec.Z = prevZ
-				// invert/halve with trunc toward zero [01 §8][I3]
-				rec.VY = numeric.Fixed(-int64(rec.VY) / 2)
+			if g != 0 {
+				rec.VY -= g // velocity against gravity [03 §1]; Fixed is integer [I2]
+			}
+			// Integrate position.
+			rec.X += rec.VX
+			rec.Y += rec.VY
+			rec.Z += rec.VZ
+
+			// Terrain or water contact check [03 §1] C5.
+			contacted := false
+			if p.heightAt != nil {
+				h := p.heightAt(rec.X, rec.Z)
+				if rec.Y < h {
+					contacted = true
+				}
+			}
+			if !contacted && p.seaLevel != 0 && rec.Y < p.seaLevel {
+				contacted = true
+			} else if !contacted && p.heightAt == nil && p.seaLevel == 0 {
+				// no terrain query and sea level zero: no contact
+			}
+			if contacted {
+				if rec.HasModel {
+					// clear record's model pointer alternative branch [03 §1] C5
+					rec.HasModel = false
+				} else {
+					// restore prior position and invert/halve vertical velocity [03 §1] C5
+					rec.X = prevX
+					rec.Y = prevY
+					rec.Z = prevZ
+					// invert/halve with trunc toward zero [01 §8][I3]
+					rec.VY = numeric.Fixed(-int64(rec.VY) / 2)
+				}
 			}
 		}
 
@@ -472,6 +488,7 @@ func (p *FixedEffectPool) Update(tick uint32) {
 
 		// Remove emptied records by stable left compaction within the same call [03 §1] C5.
 		if rec.isEmpty(tick) {
+			p.releaseFragment(rec.FragmentSlot)
 			continue
 		}
 		if write != read {

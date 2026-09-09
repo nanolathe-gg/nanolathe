@@ -1316,10 +1316,13 @@ as local chat. The implemented handlers are:
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `CDPlay n`, `CDStop` | use the existing music controller; argument zero runs its enabled music tick |
+| `Sound3D` | toggle the live audio output mode; write settings while retaining the separate stored sound-mode preference |
 | `NoMetal`, `NoEnergy` | command alone sets local stock to zero; otherwise the first argument's low byte selects the player and the second supplies the stock value, subject to the established player-record gates |
 | `Selectable` | enqueue the alive-unit walk, setting only the selectable status bit |
 | `LOS`, `Mapping`, `NowISee` | skirmish only; enqueue live visibility toggles or clear both history/current bits; LOS and Mapping write the unchanged setup preferences |
 | `LOSType` | enqueue the terrain-ray visibility toggle in either single-player mode, without a settings write |
+| `DoubleShot`, `HalfShot` | skirmish only; enqueue independent damage gates, applying signed doubling before halving in the existing weapon pipeline; no settings write |
+| `Radar` | skirmish only; toggle the battle-local full-radar bit for unit contacts; no settings write |
 
 These commands are partial I10. Shell and direct-map entry use the same live
 display bits; a later direct-entry settings write includes deferred shadow

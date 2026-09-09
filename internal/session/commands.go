@@ -53,6 +53,8 @@ const (
 	HumanSetResource
 	HumanMakeSelectable
 	HumanVisibility
+	HumanDoubleShot
+	HumanHalfShot
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -604,6 +606,19 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		mode ^= c.Visibility.ToggleMask & semantic
 		mode &^= c.Visibility.ClearMask & semantic
 		s.Vis.SetMode(mode)
+		return
+	case HumanDoubleShot, HumanHalfShot:
+		if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+			return
+		}
+		if s.Combat == nil {
+			return
+		}
+		if c.Kind == HumanDoubleShot {
+			s.Combat.ToggleDoubleShot()
+		} else {
+			s.Combat.ToggleHalfShot()
+		}
 		return
 	}
 	if s.Units == nil {

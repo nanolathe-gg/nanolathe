@@ -68,6 +68,10 @@ func TestPublishSnapshotRadarSensorLookupSurvivesASkippedUnit(t *testing.T) {
 	if cur == nil || len(cur.Radar.Contacts) != 2 {
 		t.Fatalf("published contacts = %#v, want exactly A and C", cur)
 	}
+	vis.SetMode(visibility.ModeTerrainRay)
+	if cur.Radar.MappingLOS != 3 {
+		t.Fatal("radar mask did not retain the committed history/current bits")
+	}
 	byHandle := map[uint16]frame.RadarContactView{}
 	for _, c := range cur.Radar.Contacts {
 		byHandle[uint16(c.Handle)] = c

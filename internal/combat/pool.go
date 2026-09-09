@@ -187,8 +187,10 @@ type pendingAim struct {
 // Records is the parallel named storage (107-byte retail identity, I13) moved
 // identically to the metadata on compaction.
 type Service struct {
-	Slots   pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
-	Records [ProjectileCapacity]Projectile // named records parallel to Slots
+	Slots      pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
+	Records    [ProjectileCapacity]Projectile // named records parallel to Slots
+	doubleShot bool
+	halfShot   bool
 
 	Events        func(Event)               // optional ordered combat event sink; nil-safe
 	pendingAims   map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
@@ -239,6 +241,26 @@ type Service struct {
 	// are kept here rather than re-formed each tick.
 	weaponByIDCatalog *content.Catalog
 	weaponByID        func(id int32) (*content.WeaponDef, bool)
+}
+
+// ToggleDoubleShot flips the battle-local double-damage gate. A fresh combat
+// service starts with the gate clear [07 R-CAM-01 §6][06 §9.2].
+func (s *Service) ToggleDoubleShot() bool {
+	if s == nil {
+		return false
+	}
+	s.doubleShot = !s.doubleShot
+	return s.doubleShot
+}
+
+// ToggleHalfShot flips the battle-local half-damage gate. It is independent
+// of DoubleShot, and both gates may be set together [07 R-CAM-01 §6][06 §9.2].
+func (s *Service) ToggleHalfShot() bool {
+	if s == nil {
+		return false
+	}
+	s.halfShot = !s.halfShot
+	return s.halfShot
 }
 
 // weaponLookupFor returns the catalog's per-identifier weapon lookup

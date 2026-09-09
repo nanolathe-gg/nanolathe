@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/internal/clock"
+	"github.com/nanolathe/nanolathe/internal/combat"
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
@@ -108,6 +109,25 @@ func TestHumanVisibilityMasksAndCampaignGate(t *testing.T) {
 	s.applyHumanCommand(HumanCommand{Kind: HumanVisibility, Visibility: HumanVisibilityCommand{ClearMask: visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled}}, 3)
 	if got := vis.Mode(); got != visibility.ModeTerrainRay || vis.MappingVersion() != version+1 {
 		t.Fatalf("NowISee mode/version = %#x/%d, want terrain-ray and one refresh", got, vis.MappingVersion())
+	}
+}
+
+func TestHumanDamageModeCommandsRespectCampaignGate(t *testing.T) {
+	combatService := &combat.Service{}
+	s := &Session{Combat: combatService, Mission: &mission.Mission{Type: mission.TypeCampaign}}
+	s.applyHumanCommand(HumanCommand{Kind: HumanDoubleShot}, 1)
+	s.applyHumanCommand(HumanCommand{Kind: HumanHalfShot}, 1)
+	if !combatService.ToggleDoubleShot() || !combatService.ToggleHalfShot() {
+		t.Fatal("campaign changed a mask-2 damage mode")
+	}
+	combatService.ToggleDoubleShot()
+	combatService.ToggleHalfShot()
+
+	s.Mission = nil
+	s.applyHumanCommand(HumanCommand{Kind: HumanDoubleShot}, 2)
+	s.applyHumanCommand(HumanCommand{Kind: HumanHalfShot}, 2)
+	if combatService.ToggleDoubleShot() || combatService.ToggleHalfShot() {
+		t.Fatal("skirmish did not toggle both damage modes")
 	}
 }
 

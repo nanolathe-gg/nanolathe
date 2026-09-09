@@ -134,6 +134,11 @@ func TestRadarBlipGateKeepsUndetectedEnemiesOff(t *testing.T) {
 	if radarContactAdmitted(undetected, render.BlinkState{}) {
 		t.Fatal("an enemy contact with no sensor or LOS admission drew a minimap blip [03 §3.9]")
 	}
+	fullRadar := undetected
+	fullRadar.Options = radarAllContactsOption
+	if !radarContactAdmitted(fullRadar, render.BlinkState{}) {
+		t.Fatal("the full-radar option did not admit an otherwise hidden enemy contact [03 §3.9]")
+	}
 
 	detected := undetected
 	detected.Status = uint32(visibility.SeenBit)
@@ -297,15 +302,15 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 			Width: 1, Height: 1, Pixels: []byte{37}, Transparent: []bool{false},
 		}}}},
 	}
-	b := &battleSession{sess: &session.Session{World: &world.Terrain{PlayRight: 126, PlayBottom: 126}}}
+	b := &battleSession{sess: &session.Session{World: &world.Terrain{PlayRight: 126, PlayBottom: 126}}, radarOptions: radarAllContactsOption}
 	cur := &frame.Frame{
 		Tick:       17,
 		Selection:  frame.SelectionView{LocalPlayer: local},
 		Visibility: frame.VisibilityView{W: 1, H: 1, Valid: true, MappingSource: 1, MappingVersion: 1, WordVisible: []uint16{1 << local}, Visible: []uint8{1}},
-		Radar: frame.RadarView{BlinkPhase: 1, Contacts: []frame.RadarContactView{
+		Radar: frame.RadarView{MappingLOS: 3, BlinkPhase: 1, Contacts: []frame.RadarContactView{
 			// Selected, active, non-toggle unit: its published authored range
 			// produces a radar-colored circle and its authored blip pixel.
-			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(63 << 16), Status: 0x10, RangeStatus: true, Active: true, RadarDistance: 8, Palette: 0, PaletteKnown: true, Visible: true},
+			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(32 << 16), Z: numeric.Fixed(63 << 16), Status: 0x10, RangeStatus: true, Active: true, RadarDistance: 8, Palette: 0, PaletteKnown: true, Visible: true, Rings: []frame.RadarRingView{{}, {}}},
 			// Unselected unit retains only its blip; the selected-range circle
 			// must not appear at x=88.
 			{Kind: frame.RadarContactUnit, Owner: local, X: numeric.Fixed(80 << 16), Z: numeric.Fixed(63 << 16), Visible: true, Palette: 0, PaletteKnown: true},
@@ -316,6 +321,12 @@ func TestRebuildRadarPublishedContactPixelsAndSelectedRange(t *testing.T) {
 	final := h.rebuildRadar(b, cur, camera.Minimap{W: 126, H: 126})
 	if final == nil {
 		t.Fatal("published radar contacts did not rebuild final surface")
+	}
+	if len(h.radarContacts) < 2 || h.radarContacts[0].Options != radarAllContactsOption || h.radarContacts[1].Options != radarAllContactsOption {
+		t.Fatalf("full-radar option was not copied to primary and extra-ring contacts: %+v", h.radarContacts)
+	}
+	if h.radarContacts[0].MinimapMode != 3 || h.radarContacts[1].MinimapMode != 3 {
+		t.Fatal("committed visibility mask did not reach primary and extra-ring contacts")
 	}
 	if got, _ := final.At(32, 63); got != 23 {
 		t.Fatalf("unit blip pixel = %d, want authored 23", got)

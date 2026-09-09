@@ -63,6 +63,10 @@ type battleSession struct {
 	// asset by nearest sampling, which is also what --auto-remaster=false gives.
 	// Presentation-only [I6].
 	detail *client.DetailArt
+	// radarOptions is the battle-local minimap options word. Bit 9 admits every
+	// unit contact and starts clear on each fresh battle [03 R-MM-01 §3]
+	// [07 R-CAM-01 §6].
+	radarOptions uint32
 
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
@@ -174,12 +178,6 @@ type battleSession struct {
 	// the score panel's showing test, and the kill-credit finalize's flash arm
 	// [07 R-HUD-04 §1][07 R-CAM-01 §14]. Presentation-only [I6].
 	panelHoldFlag bool
-
-	// watcherSlot latches the world-rebuild tail's watcher branch for the local
-	// slot. Besides the camera jump, that tail clears render-flags bits 0 and 1
-	// — the mapping and LOS masks — so a watcher's minimap is unmasked from its
-	// first frame [07 R-CAM-01 §14][03 R-MM-01 §3]. Presentation-only [I6].
-	watcherSlot bool
 
 	// visitedUnits and currentUnit are the `n` unit cycle's state
 	// [07 R-CAM-01 §2]. Retail keeps the visited bits in each unit's status
@@ -424,7 +422,6 @@ func composeBattleEntryDetached(sess *session.Session, cat *content.Catalog, cs 
 	b := &battleSession{
 		sess: sess, cat: cat, cam: cam, hud: hud, fs: cs.fs, shell: shell,
 		millisSource: newMonotonicMillisSource(), battleUI: ui.NewProductionBattleState(),
-		watcherSlot: sessionLocalIsWatcher(sess),
 	}
 	restoreStart := len(sess.World.FeatureDefs)
 	if sess.Features != nil {

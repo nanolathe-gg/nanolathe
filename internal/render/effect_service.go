@@ -47,6 +47,9 @@ type EffectPool interface {
 	SnapshotViews() []frame.EffectView
 	RemoveMatching(pool.Handle, pool.Handle, string)
 	SnapshotViewsInto([]frame.EffectView) []frame.EffectView
+	AdmitShatter(FragmentRequest, func(uint32) uint32) bool
+	SetFragmentStepContext(FragmentStepContext)
+	FragmentMetadataInto([]FragmentMetadata) []FragmentMetadata
 }
 
 // EffectService is an admission/snapshot adapter around the one canonical
@@ -148,6 +151,33 @@ func (s *EffectService) Admit(tick uint32, e Event) bool {
 		return false
 	}
 	return s.admit(tick, e)
+}
+
+// AdmitShatter synchronously forwards paired fragment admission to the sole
+// fixed-effect owner. A refused quad consumes no fragment draws [04 R-COB-04 §3].
+func (s *EffectService) AdmitShatter(req FragmentRequest, draw func(uint32) uint32) bool {
+	if s == nil || s.owner == nil || draw == nil {
+		return false
+	}
+	return s.owner.AdmitShatter(req, draw)
+}
+
+// SetFragmentStepContext installs the current terrain and water values for the
+// fixed pool's in-loop fragment branch [04 R-COB-04 §3].
+func (s *EffectService) SetFragmentStepContext(ctx FragmentStepContext) {
+	if s == nil || s.owner == nil {
+		return
+	}
+	s.owner.SetFragmentStepContext(ctx)
+}
+
+// FragmentMetadataInto reads the canonical paired geometry table for a later
+// publication adapter. It owns no second geometry store [04 R-COB-04 §3][I6].
+func (s *EffectService) FragmentMetadataInto(dst []FragmentMetadata) []FragmentMetadata {
+	if s == nil || s.owner == nil {
+		return dst[:0]
+	}
+	return s.owner.FragmentMetadataInto(dst)
 }
 
 // Snapshot returns a detached copy of the canonical pool's stable order.

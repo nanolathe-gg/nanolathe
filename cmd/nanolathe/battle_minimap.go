@@ -15,31 +15,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
-// watcherBattleStartCamera is the world-rebuild tail's watcher branch: instead
-// of a stamp position it jumps to the camera origin
-// `(trunc(viewWidth / 2), trunc(viewHeight / 2))` [07 R-CAM-01 §14 "the
-// battle-start jump has no height shear"].
-//
-// A retail camera origin is the world point drawn at the *viewport's*
-// top-left corner; this build's is the world point drawn at the framebuffer's
-// top-left, so the leading inset comes off as well. BattleViewCenterOrigin is
-// the only public converter that applies that inset, and it also subtracts
-// half the span — so the point handed to it is retail's origin plus that same
-// half span, `2 * trunc(view / 2)`, which reproduces the truncation exactly on
-// an odd span too [07 R-CAM-01 §12][03 §4.1].
-// minimapMaskWord is the render-flags word's mapping and LOS mask bits as the
-// minimap contact pass reads them: the blip gate admits a unit when both are
-// clear [03 R-MM-01 §3]. They are the `+Mapping`/`+LOS` toggles, and no `+`
-// command vocabulary exists in this build, so an ordinary slot reads them set.
-// The world-rebuild tail clears both for a watcher slot, whose view is
-// unmasked from its first frame [07 R-CAM-01 §14].
-func (b *battleSession) minimapMaskWord() uint8 {
-	if b != nil && b.watcherSlot {
-		return 0
-	}
-	return 1
-}
-
 // minimapLayout is the sole production adapter for radar geometry. PlayRight
 // and PlayBottom are authored by map loading; the rail destination is the
 // battle composer's fixed 126-pixel canvas origin [07 §6][07 §10].

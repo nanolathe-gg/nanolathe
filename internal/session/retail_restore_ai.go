@@ -124,6 +124,7 @@ func finishRestoredBattleEntry(s *Session) error {
 		return fmt.Errorf("session: retail restore: missing clock for battle-entry tail")
 	}
 	s.RegisterAll()
+	s.clearWatcherVisibilityMasks()
 	s.stepPlayerPhase(s.Clock.GlobalTick)
 	for _, mgr := range s.AI {
 		if mgr != nil {

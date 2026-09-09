@@ -597,6 +597,29 @@ publishes an immutable model identity, piece, pose and current source-owner
 palette; the direct draw rebuilds the selected original piece with stepped
 angles before the fixed effect category walks.
 
+**Shatter core API.** `render.FixedEffectPool.AdmitShatter(FragmentRequest,
+func(uint32) uint32) bool` takes the session-owned draw operation for this
+synchronous call and claims one shared effect record and one first-free
+fragment-geometry slot for each already eligible quad, stopping before the next
+quad when the 300-record effect pool is full. It calls the scalar material
+freezer only after that paired claim; unavailable art returns an invalid frozen
+material but does not cancel geometry or its eight simulation draws. A fragment
+record carries a one-based `FragmentSlot`, copied into its immutable
+`frame.EffectView`; `FragmentMetadataInto` enumerates the slot-owned geometry,
+and a later publisher joins it to the stable effect view order. `SetFragmentStepContext`
+installs terrain, sea and synchronous impact admission. The normal per-record
+fixed-effect update owns fragment movement, contact callback and compaction;
+the callback runs before geometry and record release, so its own attempted
+effect admission observes the source record still consuming capacity. The core
+accepts retained live-point-list quads. The later session adapter must add the
+upstream per-instance materialization producer before it can use this core; it
+must not substitute raw or freshly recomposed vertices. Vertex centering changes
+only copied geometry, never the fragment's already written world position `[04
+R-COB-04 §3]` [I2] [I4] [I5] [I6]. The core uses portable binary64 for the
+normal helper's transient square/sum/square-root/divide work and stores the
+researched binary32 boundaries; the retained-list input range that could expose
+a difference from retail's wider working precision remains a documented question.
+
 **Bitmap production adapter.** The session binds its explosion sink before
 `Create`. Each selected bitmap is admitted synchronously into the existing
 fixed effect pool with named art and calculated table 2. Successful admission
@@ -604,8 +627,9 @@ above the signed whole-unit sea boundary also invokes the existing land-dust
 producer. Binding authored timing after `Create` activates unresolved primary
 players in place, preserving identity, order and secondary animation; it does
 not restart resolved players or add a per-frame retry. Whole-piece requests
-enter the DebrisPool; shatter still has the explicit `TODO(U13)` refusal at
-this boundary `[04 R-COB-04 §1, §4]`. Ground debris impacts use calculated table 0; the
+enter the DebrisPool; the later shatter session adapter supplies eligible quads,
+current source context and frozen material to the paired fixed-effect core
+described above `[04 R-COB-04 §1, §3]`. Ground debris impacts use calculated table 0; the
 direct draw adapter rebuilds original vertices with the stepped angles
 `[04 R-COB-04 §2]` `[03 R-COMP-02 §6]`.
 
@@ -622,8 +646,9 @@ modern from 4.271/4.701/5.339 to 4.298/6.236/13.081 ms. Classic allocations were
 no performance improvement. The workload included 187–198 units, 6–31
 projectiles, 73–162 effects, 4–8 nanoframes/nanolathe events, and four shake
 frames. The whole-piece adapter now connects admission, publication and both
-renderer paths. Shatter admission and drawing remain open under U13; per-frame
-smoke/fire trails retain the explicit RT08 ownership boundary.
+renderer paths. Shatter session admission, publication and drawing remain open
+after the bounded physics core; per-frame smoke/fire trails retain the explicit
+RT08 ownership boundary.
 
 ### 3.4 Model — C20…C24
 

@@ -362,6 +362,25 @@ func TestFinishBattleEntryPrimeOverwriteThenMetalVectorOnce(t *testing.T) {
 	}
 }
 
+func TestWatcherMaskClearOnlyAtBattleEntry(t *testing.T) {
+	const all = visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled | visibility.ModeTerrainRay
+	s := &Session{Econ: &economy.Service{}, LocalOwner: 2, Vis: visibility.New(minimalTerrain(), all)}
+	s.Econ.Players[2].Watcher = true
+	if err := finishBattleEntry(s, nil); err != nil {
+		t.Fatal(err)
+	}
+	if s.Vis.Mode() != visibility.ModeTerrainRay {
+		t.Fatal("watcher entry did not clear both mask bits while retaining terrain-ray mode")
+	}
+	s.Vis.SetMode(all)
+	if err := finishBattleEntry(s, nil); err != nil {
+		t.Fatal(err)
+	}
+	if s.Vis.Mode() != all {
+		t.Fatal("repeated entry overwrote the live visibility mode")
+	}
+}
+
 func TestParseCampaignMissionSelectorRejectsMalformedExplicitIdentity(t *testing.T) {
 	path, idx, err := parseCampaignMissionSelector("camps/arm campaign.tdf:MISSION12")
 	if err != nil || path != "camps/arm campaign.tdf" || idx != 12 {

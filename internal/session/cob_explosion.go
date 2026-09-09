@@ -35,6 +35,9 @@ func (s *cobExplosionSink) AdmitWholePiece(request cob.WholePieceExplosion) bool
 	if piece < 0 || piece >= len(binding.Model.Pieces) {
 		return false
 	}
+	// TODO(question): retain the source render-piece translation at admission.
+	// This adapter currently recomposes the COB locator; retail copies the last
+	// materialized translation without forcing a rebuild [04 R-COB-04 §2, §3].
 	position, ok := presentation.pieceWorldPos(cobPiece)
 	if !ok {
 		return false

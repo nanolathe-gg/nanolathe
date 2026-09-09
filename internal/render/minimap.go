@@ -394,9 +394,7 @@ type MinimapContact struct {
 	// Options is the mode-flags word whose bit 9 is the blip gate's first
 	// disjunct: the **full-radar bit**, which the `+Radar` cheat toggles and
 	// the world rebuild clears [03 R-MM-01 §3][07 R-CAM-01 §6]
-	// [08 R-ENTRY-01 §3]. Until a `+` command vocabulary exists nothing sets
-	// it, so the disjunct reads false — which is the state a battle starts in,
-	// not a gap in the gate.
+	// [08 R-ENTRY-01 §3]. Battle entry starts it clear.
 	Options uint32
 	// MinimapMode carries the render-flags word's mapping and LOS mask bits,
 	// the `+Mapping`/`+LOS` toggles. The gate's second disjunct is both bits

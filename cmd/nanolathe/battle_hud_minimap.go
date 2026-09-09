@@ -13,6 +13,8 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
+const radarAllContactsOption uint32 = 1 << 9
+
 // minimapRect returns the battle composer's fixed radar canvas rectangle.
 func (h *retailBattleHUD) minimapRect() (hud.Rect, bool) {
 	if h == nil || !h.minimapAnchorOK {
@@ -173,9 +175,10 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 			RangeStatus: rangeCircles, Status: published.Status,
 			BlinkSuppress: published.BlinkSuppress, Visible: published.Visible,
 			LocalPlayer:  cur.Selection.LocalPlayer,
+			Options:      b.radarOptions,
 			RawDistRadar: published.RadarDistance, RawDistSonar: published.SonarDistance,
 			RawDistJamR: published.RadarJam, RawDistJamS: published.SonarJam,
-			MinimapMode: b.minimapMaskWord(),
+			MinimapMode: cur.Radar.MappingLOS,
 		}
 		if radarContactAdmitted(contact, blink) {
 			regularArt = append(regularArt, radarGAFFrame(h.radarBlipGAF, h.radarOwnerFrameIndex(published, radarGAFFrameCount(h.radarBlipGAF))))
@@ -196,7 +199,7 @@ func (h *retailBattleHUD) rebuildRadar(b *battleSession, cur *frame.Frame, layou
 				WorldX: contact.WorldX, WorldZ: contact.WorldZ, WorldY: contact.WorldY,
 				Owner: contact.Owner, Status: contact.Status, Stealth: contact.Stealth,
 				RangeStatus: contact.RangeStatus, BlinkSuppress: contact.BlinkSuppress,
-				Visible: contact.Visible, LocalPlayer: contact.LocalPlayer, MinimapMode: contact.MinimapMode,
+				Visible: contact.Visible, LocalPlayer: contact.LocalPlayer, Options: contact.Options, MinimapMode: contact.MinimapMode,
 				RingEnabled: ring.Enabled, RingDashed: ring.Dashed, RingRange: ring.Range,
 			}
 			contacts = append(contacts, ringContact)
