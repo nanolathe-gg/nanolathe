@@ -113,6 +113,11 @@ type Client struct {
 	// §2.2, C-G1). Its zero value is a usable empty list; a warm frame reuses
 	// its backing arrays and allocates nothing.
 	list drawlist.List
+	// uiClip is the current private GUI surface. A child window intersects its
+	// parent's surface before recording commands, so each recorded command keeps
+	// the exact clipped destination it needs at replay time [07 §4].
+	uiClip    drawlist.Rect
+	hasUIClip bool
 	// recordModelGeometry is enabled only for durable recording consumers.
 	// Ordinary classic Frame composition leaves it false so normal presentation
 	// does not allocate model packets before the modern executor asks for them.
@@ -303,6 +308,69 @@ type Client struct {
 	// allocation-free after the first busy frame [03 R-AUD-01 §7][I6].
 	committedEvents []frame.EventView
 	screenChat      uint8
+}
+
+// PushUIClip confines subsequently recorded UI primitives to a private surface
+// until the returned function is called. Nested surfaces intersect their parent
+// rather than replacing it [07 §4].
+func (c *Client) PushUIClip(x, y, w, h int) func() {
+	if c == nil {
+		return func() {}
+	}
+	previous, previousSet := c.uiClip, c.hasUIClip
+	next := drawlist.Rect{X: int32(x), Y: int32(y), W: int32(w), H: int32(h)}
+	if previousSet {
+		next = intersectUIRects(previous, next)
+	}
+	c.uiClip, c.hasUIClip = next, true
+	return func() {
+		c.uiClip, c.hasUIClip = previous, previousSet
+	}
+}
+
+func intersectUIRects(a, b drawlist.Rect) drawlist.Rect {
+	ax0, ay0 := int64(a.X), int64(a.Y)
+	ax1, ay1 := ax0+int64(a.W), ay0+int64(a.H)
+	bx0, by0 := int64(b.X), int64(b.Y)
+	bx1, by1 := bx0+int64(b.W), by0+int64(b.H)
+	if ax1 < ax0 {
+		ax1 = ax0
+	}
+	if ay1 < ay0 {
+		ay1 = ay0
+	}
+	if bx1 < bx0 {
+		bx1 = bx0
+	}
+	if by1 < by0 {
+		by1 = by0
+	}
+	x0, y0 := max(ax0, bx0), max(ay0, by0)
+	x1, y1 := min(ax1, bx1), min(ay1, by1)
+	if x1 < x0 {
+		x1 = x0
+	}
+	if y1 < y0 {
+		y1 = y0
+	}
+	return drawlist.Rect{X: int32(x0), Y: int32(y0), W: int32(x1 - x0), H: int32(y1 - y0)}
+}
+
+func (c *Client) clipUIRect(r drawlist.Rect) drawlist.Rect {
+	if c == nil || !c.hasUIClip {
+		return r
+	}
+	return intersectUIRects(r, c.uiClip)
+}
+
+func (c *Client) clipUISprite(hasClip bool, clip drawlist.Rect) (bool, drawlist.Rect) {
+	if c == nil || !c.hasUIClip {
+		return hasClip, clip
+	}
+	if hasClip {
+		return true, intersectUIRects(clip, c.uiClip)
+	}
+	return true, c.uiClip
 }
 
 // New creates a client. It allocates the indexed framebuffer at the negotiated

@@ -289,6 +289,10 @@ type Surface struct {
 	SrcW, SrcH int32
 	// Dst is the destination rectangle in screen pixels.
 	Dst Rect
+	// Clip confines the scaled destination after sampling coordinates have been
+	// derived from Dst. HasClip is false for an unclipped surface.
+	Clip    Rect
+	HasClip bool
 	// Identity and Revision describe immutable presentation content. Identity
 	// zero preserves a dynamic upload for callers without a durable source.
 	Identity uint64
@@ -580,6 +584,8 @@ func (l *List) Clone() List {
 			SrcW:     sf.SrcW,
 			SrcH:     sf.SrcH,
 			Dst:      sf.Dst,
+			Clip:     sf.Clip,
+			HasClip:  sf.HasClip,
 			Identity: sf.Identity,
 			Revision: sf.Revision,
 		}

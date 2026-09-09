@@ -220,7 +220,39 @@ implementation allocated 4.723 MB/frame). Cadence is 98% → 97%, with a
 1.124 → 1.125 MB/frame and cadence 98% → 97%. These results accept the
 bounded cost of the corrected stages; they do not establish a performance gain.
 
+The classic mobile/Digger silhouette and child-window clipping comparison
+uses `bfdf1d11` → `e553e499` with the same scene-3 native workload above.
+Metadata and every census match. Classic changes 12,965 pixels; modern is
+byte-identical. Both final battle images, dry/submerged ARMSUB captures and the
+clipped editor fixture were inspected. Classic Record median/p95/max is
+10.228/11.973/12.590 → 9.294/10.523/10.817 ms, allocation
+1.125 → 1.111 MB/frame and cadence 98% in both runs. Modern Record is
+5.554/6.227/14.790 → 5.420/6.334/6.702 ms, Submit
+5.393/6.463/7.578 → 5.351/6.542/7.555 ms, allocation
+2.164 → 1.991 MB/frame and cadence 96% → 94% (maximum interval
+62.293 → 67.527 ms). The modern run establishes unchanged pixels, not a
+cadence improvement. Scoped clipping also passes the actual GPU lit-sprite
+and scaled-surface checks.
+
 ### 2.3 `internal/platform/gpurender` — the modern executor
+
+The bitmap/clipping/shadow closeout comparison used pinned `05cd68af` and
+`f258705a`, the same native scene-3 workload above. Unit, projectile, build and
+production counts match; newly admitted bitmap effects raise the peak effect
+count from 162 to 184 and change the shared CRT camera-shake history.
+Both final captures were inspected. Classic Record median/p95/max is
+10.650/11.451/11.906 → 10.165/12.423/22.228 ms, allocation
+1.125 → 1.148 MB/frame and cadence 98% → 97%. Modern Record is
+5.276/5.969/8.595 → 5.288/6.645/10.553 ms; Submit is
+5.292/6.109/11.644 → 12.534/28.525/45.214 ms, allocation
+2.239 → 4.485 MB/frame and cadence 98% → 76% (79.590 ms maximum interval).
+The large calculated table-2 flashes are newly reachable in this workload.
+Coalescing contiguous equal-light pixels within their existing scheduler phase
+reduced Submit from the initial 14.209 ms median and allocation from
+5.001 MB/frame, with identical pixels and all frame censuses in both executors.
+Residual flash submission cost remains a measured limitation; this closeout
+adds no second flash renderer or cache. Artifacts use
+`/private/tmp/nanolathe-last-batch-{baseline,spans}-{classic,modern}`.
 
 Imports Ebitengine; joins `internal/platform/ebitenapp`, `internal/audiobackend`
 and `cmd/nanolathe` in the architecture test's Ebitengine allowlist. Exposes:
@@ -753,9 +785,11 @@ through `ALP[src*256+dst]`. The destination is snapshotted before that commit;
 multiple faces of the same silhouette must not repeatedly darken the ground.
 The body commits afterward. Clones own both packets independently.
 
-This milestone targets the existing classic image. It inherits classic's
-explicit use of the structure rerasterization technique for mobile and Digger
-shadows; implementing the retail silhouette branches is separate work. The
+Modern shadows still use structure rerasterization for mobile and Digger
+subjects. Classic now copies the finished body silhouette for those subjects,
+clears transparent color-key coverage, flattens to index 0 and applies the
+inclusive underwater/buried cutoff. The modern approximation remains explicit;
+this does not claim identical shadows between executors. The
 producer now applies the corrected master/vehicle/Digger gates, independently
 of the structure-body `Shading` preference [03 R-REN-03D §1, §4].
 Actual GPU shadows and omitted shadows are reported separately. The device
@@ -1366,16 +1400,26 @@ scheduler's time source is the scaled timebase floor(milliseconds × 30 /
 1000) [01 §4.1], so its delta is a whole number of thirtieths and, at the
 nominal speed, the budget's carry is identically zero after every step: the
 carry alone never resolves a position inside a tick. The client therefore
-takes a `TickFraction func() float32` option beside `Step`; the battle
-supplies it from the same millisecond source the budget and the scroll pass
-read, un-floored: with `phase = (milliseconds × 30 mod 1000) / 1000` the
-elapsed part of the current scaled unit and `eff` the clock's effective speed
-(active × 0.1 [01 §4.2]), the fraction of the next tick already elapsed is
-`carry + phase × eff`, clamped to [0, 1). While paused the budget does not
-run and the battle returns the value it last returned unpaused, so the blend
-is frozen. No second clock is introduced: the value is the budget's own input
-read at finer resolution. The benchmark at 120 sets the four fractions
-explicitly.
+takes a `TickFraction func() float32` option beside `Step`, and the battle
+supplies it as the time since the most recent tick actually fired: the
+controller notes the host millisecond, the carry and the global tick after
+every session step, stamping them only when the global tick moved, and the
+fraction is `carry at the fire + elapsed seconds × 30 × eff` with `eff` the
+clock's effective speed (active × 0.1 [01 §4.2]), clamped to [0, 1]. While
+paused the budget does not run and the battle returns the value it last
+returned unpaused, so the blend is frozen. The benchmark at 120 sets the
+four fractions explicitly.
+
+The first form of this rule read the wall clock's own phase, `(milliseconds
+× 30 mod 1000) / 1000`, as the elapsed part of the scaled unit. That is
+right for the budget but wrong for the blend: ticks are released only inside
+the window's 30 Hz Update, whose timing drifts against that phase, so an
+Update landing just before the phase wrapped released no tick while the
+phase reset to zero, and every blended pose slid back toward the previous
+tick for a whole Update before jumping two ticks forward. Slowly moving
+units hid it; COB pieces animating at speed showed it as a jiggle. Measured
+from the fire, the fraction cannot move backwards within one tick: an
+Update that releases nothing saturates it at one and holds the pose.
 
 **Camera.** The camera moves in the 30 Hz step, so Enhanced blends it too:
 the client samples the camera origin (X, Z) at every Step, keeps the previous

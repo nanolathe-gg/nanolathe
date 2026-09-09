@@ -172,7 +172,8 @@ func geometryForCommit(p pendingModelCommit) *drawlist.ModelGeometry {
 
 // modelShadowGeometry shares the classic projection and anchor but never calls
 // its software rasterizer. Mobile/Digger silhouettes retain the existing
-// classic approximation described at buildModelShadow [03 R-REN-03D §1–§5].
+// structure-projection approximation; classic uses the separate finished-body
+// silhouette branches at buildModelShadow [03 R-REN-03D §1–§6].
 func (c *Client) modelShadowGeometry(draw *presentationrender.UnitDraw) *drawlist.ModelGeometry {
 	if c == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
 		return nil

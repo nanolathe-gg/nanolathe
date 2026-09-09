@@ -58,6 +58,8 @@ func (g *gameShell) drawRetailWindow(c *client.Client, mode shellMode, p *ui.Pan
 	if p == nil || p.Window == nil {
 		return
 	}
+	r := p.Window.Rect
+	defer c.PushUIClip(int(r.X), int(r.Y), int(r.W), int(r.H))()
 	savedMode := g.frontend.Mode
 	g.frontend.SetMode(mode)
 	defer func() { g.frontend.SetMode(savedMode) }()
@@ -127,6 +129,8 @@ func (g *gameShell) drawRetailModal(c *client.Client) {
 	if m == nil || m.Window == nil {
 		return
 	}
+	r := m.Window.Rect
+	defer c.PushUIClip(int(r.X), int(r.Y), int(r.W), int(r.H))()
 	var page *formats.GAF
 	if g.assets.message != nil {
 		page = g.assets.message.art

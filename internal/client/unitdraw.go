@@ -291,23 +291,20 @@ func (c *Client) UIBlitLit(f *formats.GAFFrame, x, y int, pal *palette.Tables, l
 	})
 }
 
-// uiBlitLitRaw is the byte writer of UIBlitLit's lit path. It is reached only
-// through the classic sink for the converted lit-blit path, so it is never
-// executed twice; the loop, clip and per-pixel LHT lookup are unchanged from the
-// direct call [03 §4.3.1]. The caller (the sink) guarantees pal is non-nil and
-// level > 0, exactly the branch UIBlitLit routes here.
-func (c *Client) uiBlitLitRaw(f *formats.GAFFrame, x, y int, pal *palette.Tables, level int) {
+func (c *Client) uiBlitLitClippedRaw(f *formats.GAFFrame, x, y int, pal *palette.Tables, level, clipX, clipY, clipW, clipH int) {
 	if f == nil || pal == nil {
 		return
 	}
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
 	for row := 0; row < int(f.Height); row++ {
 		py := y + row
-		if py < 0 || py >= c.height {
+		if py < minY || py >= maxY {
 			continue
 		}
 		for col := 0; col < int(f.Width); col++ {
 			px := x + col
-			if px < 0 || px >= c.width {
+			if px < minX || px >= maxX {
 				continue
 			}
 			b, ok := f.At(col, row)
@@ -628,8 +625,9 @@ func (c *Client) uiShadeRectRaw(pal *palette.Tables, x, y, w, h, level int) {
 // PALETTE.PAL, like every other indexed image path.
 //
 // It records a Surface carrying the source bytes and the destination rectangle
-// in Dst, and the classic sink runs uiBlitIndexedRaw inline; the guard is kept
-// here so a degenerate call records nothing (docs/DESIGN_GPU_RENDERER.md §2.2).
+// in Dst, and the classic sink runs its clipped byte writer inline; the guard
+// is kept here so a degenerate call records nothing
+// (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
 	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
 		return
@@ -642,22 +640,25 @@ func (c *Client) UIBlitIndexed(src []byte, srcW, srcH, x, y, w, h int) {
 	})
 }
 
-// uiBlitIndexedRaw is the byte writer of UIBlitIndexed, reached only through the
-// classic sink's Surface branch, so it is never executed twice; the sampling,
-// clip and per-pixel store are unchanged from the direct call.
-func (c *Client) uiBlitIndexedRaw(src []byte, srcW, srcH, x, y, w, h int) {
+// uiBlitIndexedClippedRaw is the byte writer of UIBlitIndexed, reached only
+// through the classic sink's Surface branch. Sampling stays relative to the
+// original destination rectangle while the clip rejects writes outside the
+// owning GUI surface.
+func (c *Client) uiBlitIndexedClippedRaw(src []byte, srcW, srcH, x, y, w, h, clipX, clipY, clipW, clipH int) {
 	if len(src) == 0 || srcW <= 0 || srcH <= 0 || w <= 0 || h <= 0 {
 		return
 	}
+	minX, minY := max(clipX, 0), max(clipY, 0)
+	maxX, maxY := min(clipX+clipW, c.width), min(clipY+clipH, c.height)
 	for dy := 0; dy < h; dy++ {
 		py := y + dy
-		if py < 0 || py >= c.height {
+		if py < minY || py >= maxY {
 			continue
 		}
 		sy := dy * srcH / h
 		for dx := 0; dx < w; dx++ {
 			px := x + dx
-			if px < 0 || px >= c.width {
+			if px < minX || px >= maxX {
 				continue
 			}
 			sx := dx * srcW / w

@@ -16,7 +16,7 @@ import (
 // input text begins three pixels below its authored rectangle and the one-pixel
 // caret begins after the measured byte prefix [07 R-WGT-01 §6].
 func TestRetailTextBoxDrawsFocusedCaret(t *testing.T) {
-	window := &gui.Window{Rect: gui.Rect{W: 32, H: 24}, Gadgets: []gui.Gadget{
+	window := &gui.Window{Rect: gui.Rect{W: 32, H: 12}, Gadgets: []gui.Gadget{
 		{Kind: gui.KindPanel, Active: 1},
 		{Kind: gui.KindTextBox, Name: "GAMENAME", Active: 1, Attribs: 1, MaxChars: 12, Rect: gui.Rect{X: 4, Y: 5, W: 20, H: 14}},
 	}}
@@ -44,9 +44,15 @@ func TestRetailTextBoxDrawsFocusedCaret(t *testing.T) {
 
 	// fixedWidthFont advances each ASCII byte by one pixel. The caret therefore
 	// starts at X + len("ab") and fills the font's line metric from Y+3.
-	for y := 8; y < 18; y++ {
+	for y := 8; y < 12; y++ {
 		if got := snapshot.Indexed[y*32+6]; got != 9 {
 			t.Fatalf("caret pixel (%d,%d) = %d, want GUI entry 9", 6, y, got)
+		}
+	}
+	// The retained editor extends past its owning child surface.
+	for y := 12; y < 18; y++ {
+		if got := snapshot.Indexed[y*32+6]; got != 0 {
+			t.Fatalf("caret escaped child window at y=%d: %d", y, got)
 		}
 	}
 	if got := snapshot.Indexed[8*32+5]; got != 0 {

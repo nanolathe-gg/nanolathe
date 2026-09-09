@@ -39,6 +39,14 @@ type battleSession struct {
 	// returns this value again and the blend freezes
 	// (docs/DESIGN_GPU_RENDERER.md §13.5).
 	lastTickFraction float32
+	// tickFiredAt is the host millisecond at which the most recent session
+	// tick was released, tickFiredCarry the budget's carry just after it, and
+	// tickFiredTick the global tick that was current then. The blend fraction
+	// is measured from that moment (docs/DESIGN_GPU_RENDERER.md §13.5).
+	tickFiredAt    uint32
+	tickFiredCarry float32
+	tickFiredTick  uint32
+	tickFiredValid bool
 
 	// surfaceW/surfaceH is the negotiated presentation surface the pointer and
 	// the world viewport are measured against. The interface art is authored in
@@ -706,22 +714,51 @@ func (b *battleSession) tickFraction() float32 {
 	if b.millisSource == nil {
 		b.millisSource = newMonotonicMillisSource()
 	}
-	phase := float32((uint64(b.millisSource.Millis32())*30)%1000) / 1000
-	// Active is clamped to 1..20 by the budget path; clamp defensively so a
-	// freshly constructed clock cannot scale the phase by zero [01 §4.3].
+	if !b.tickFiredValid {
+		return 0
+	}
+	// Ticks are released only inside the window's 30 Hz Update, whose timing
+	// drifts against the scaled timebase's own phase, so the fraction is the
+	// time since the most recent tick actually fired, not the phase of the
+	// wall clock: elapsed × 30 × the effective speed (active × 0.1 [01 §4.2])
+	// is how much of the next tick the budget has accrued since, on top of
+	// the carry it kept at the fire. Measured from the wall phase instead, an
+	// Update landing just before the phase wrapped released no tick while the
+	// phase reset, which slid every blended pose back toward the previous
+	// tick and then jumped it two ticks forward — the piece jiggle of §13.5.
+	// The clamp at one holds the current pose when an Update releases
+	// nothing; the blend never moves backwards within one tick.
 	active := b.sess.Clock.Active
 	if active < 1 {
 		active = 1
 	} else if active > 20 {
 		active = 20
 	}
-	// The clamp is part of the formula, not a defence: the sum reaches past one
-	// wherever the carry is large and the speed is above nominal. Clamping
-	// through the client keeps the value stored here identical to the one the
-	// blend uses.
-	f := client.ClampTickFraction(b.sess.Clock.Carry + phase*float32(active)*0.1)
+	elapsed := float32(b.millisSource.Millis32()-b.tickFiredAt) / 1000
+	f := client.ClampTickFraction(b.tickFiredCarry + elapsed*30*float32(active)*0.1)
 	b.lastTickFraction = f
 	return f
+}
+
+// noteTickTiming records the moment a session step released a tick. It runs
+// right after every session step, in the same 30 Hz Update the ticks fire in,
+// and stamps the host millisecond only when the global tick moved, so the
+// fraction above measures from the last real tick and not from the step.
+func (b *battleSession) noteTickTiming() {
+	if b == nil || b.sess == nil || b.sess.Clock == nil {
+		return
+	}
+	tick := b.sess.Clock.GlobalTick
+	if b.tickFiredValid && tick == b.tickFiredTick {
+		return
+	}
+	if b.millisSource == nil {
+		b.millisSource = newMonotonicMillisSource()
+	}
+	b.tickFiredAt = b.millisSource.Millis32()
+	b.tickFiredCarry = b.sess.Clock.Carry
+	b.tickFiredTick = tick
+	b.tickFiredValid = true
 }
 
 // viewerStep runs one rendered frame: input → session ticks → camera pan.

@@ -48,7 +48,57 @@ func (c *Client) emitTerrain(t drawlist.Terrain) {
 
 // emitFill records one indexed rectangle.
 func (c *Client) emitFill(f drawlist.Fill) {
+	if c == nil {
+		return
+	}
+	if !c.hasUIClip {
+		c.list.RecordFill(f)
+		return
+	}
+	if f.Style == drawlist.FillOutline {
+		c.emitClippedUIOutline(f)
+		return
+	}
+	if f.Style == drawlist.FillFrameInclusive {
+		f.Clip = intersectUIRects(f.Clip, c.uiClip)
+		if f.Clip.W <= 0 || f.Clip.H <= 0 {
+			return
+		}
+		c.list.RecordFill(f)
+		return
+	}
+	f.Rect = c.clipUIRect(f.Rect)
+	if f.Rect.W <= 0 || f.Rect.H <= 0 {
+		return
+	}
 	c.list.RecordFill(f)
+}
+
+// emitClippedUIOutline records the original frame edges as solid strokes before
+// applying a private-surface clip. Intersecting the whole rectangle first would
+// incorrectly manufacture a new outline along the child surface boundary.
+func (c *Client) emitClippedUIOutline(f drawlist.Fill) {
+	r := f.Rect
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+	recordEdge := func(edge drawlist.Rect) {
+		edge = c.clipUIRect(edge)
+		if edge.W <= 0 || edge.H <= 0 {
+			return
+		}
+		c.list.RecordFill(drawlist.Fill{Rect: edge, Index: f.Index, Style: drawlist.FillSolid})
+	}
+	recordEdge(drawlist.Rect{X: r.X, Y: r.Y, W: r.W, H: 1})
+	if r.H > 1 {
+		recordEdge(drawlist.Rect{X: r.X, Y: r.Y + r.H - 1, W: r.W, H: 1})
+	}
+	if r.H > 2 {
+		recordEdge(drawlist.Rect{X: r.X, Y: r.Y + 1, W: 1, H: r.H - 2})
+		if r.W > 1 {
+			recordEdge(drawlist.Rect{X: r.X + r.W - 1, Y: r.Y + 1, W: 1, H: r.H - 2})
+		}
+	}
 }
 
 // emitFillInclusive records one inclusive-bounds solid rectangle and executes
@@ -75,6 +125,7 @@ func (c *Client) emitFog(fg drawlist.Fog) {
 // sees the list. That preserves each child's destination-dependent ALP read and
 // leaves target clipping to the actual leaf blit [03 R-COMP-01 §2].
 func (c *Client) emitSprite(sp drawlist.Sprite) {
+	sp.HasClip, sp.Clip = c.clipUISprite(sp.HasClip, sp.Clip)
 	if sp.Frame != nil && len(sp.Frame.Subframes) != 0 {
 		switch sp.Kind {
 		case drawlist.BlitKeyed, drawlist.BlitTinted:
@@ -144,6 +195,7 @@ func (c *Client) emitPoints(off int, kind drawlist.PointKind) {
 // emitGlyphs records one FNT text run (the health-bar walk's control-group
 // digit, WU-1.5).
 func (c *Client) emitGlyphs(g drawlist.Glyphs) {
+	g.HasClip, g.Clip = c.clipUISprite(g.HasClip, g.Clip)
 	c.list.RecordGlyphs(g)
 }
 
@@ -155,6 +207,7 @@ func (c *Client) emitCursor(cu drawlist.Cursor) {
 // emitSurface records one indexed byte-surface blit (the SELMAP MAPPIC gadget,
 // WU-1.7b).
 func (c *Client) emitSurface(sf drawlist.Surface) {
+	sf.HasClip, sf.Clip = c.clipUISprite(sf.HasClip, sf.Clip)
 	c.list.RecordSurface(sf)
 }
 
@@ -307,7 +360,8 @@ func (s classicSink) Sprite(sp drawlist.Sprite) {
 		// row selected by LightRow. The palette rides the record (sp.Pal), so the
 		// deferred replay resolves against exactly the palette the caller installed
 		// [03 §4.3.1].
-		c.uiBlitLitRaw(sp.Frame, int(sp.X), int(sp.Y), sp.Pal, int(sp.LightRow))
+		clipX, clipY, clipW, clipH := s.clip(sp.HasClip, sp.Clip)
+		c.uiBlitLitClippedRaw(sp.Frame, int(sp.X), int(sp.Y), sp.Pal, int(sp.LightRow), clipX, clipY, clipW, clipH)
 	case drawlist.BlitScaled:
 		// The surface-gadget blit: sample the source sub-rect Src across the
 		// destination Dst, clipped to Clip [07 R-HUD-03 §11].
@@ -616,10 +670,11 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 }
 
 // Surface replays one indexed byte surface blit (the SELMAP MAPPIC gadget,
-// WU-1.7b). The UIBlitIndexed call site emits and uiBlitIndexedRaw runs here as
-// its only execution; Dst carries the destination rectangle.
+// WU-1.7b). The UIBlitIndexed call site emits and the clipped raw writer runs
+// here as its only execution; Dst remains the source-mapping rectangle.
 func (s classicSink) Surface(sf drawlist.Surface) {
-	s.c.uiBlitIndexedRaw(sf.Pixels, int(sf.SrcW), int(sf.SrcH), int(sf.Dst.X), int(sf.Dst.Y), int(sf.Dst.W), int(sf.Dst.H))
+	clipX, clipY, clipW, clipH := s.clip(sf.HasClip, sf.Clip)
+	s.c.uiBlitIndexedClippedRaw(sf.Pixels, int(sf.SrcW), int(sf.SrcH), int(sf.Dst.X), int(sf.Dst.Y), int(sf.Dst.W), int(sf.Dst.H), clipX, clipY, clipW, clipH)
 }
 
 // Cursor replays the software cursor blit [07 §8]. drawCursor's call site emits

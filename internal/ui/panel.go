@@ -6,6 +6,9 @@ import (
 
 // List is presentation state for one authored list gadget. Items are supplied
 // by the owning screen; selection and scrolling do not mutate simulation.
+// TODO(question): record-list payload and variable row geometry beyond the
+// known height field need [07 R-WGT-01 §4] completed. This owner stores text
+// rows and their known heading flags; it does not invent record payloads.
 type List struct {
 	items    []string
 	flags    []byte

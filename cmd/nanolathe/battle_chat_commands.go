@@ -6,8 +6,10 @@ import (
 	"strings"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/settings"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 const (
@@ -110,6 +112,82 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 	case "atm":
 		if b.sess != nil && battleSessionKind(b) == 2 {
 			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanATM})
+		}
+	case "cdplay":
+		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
+			music := b.sess.Audio.Music
+			track := localCommandInt(words, 1)
+			if track == 0 {
+				if music.IsEnabled() {
+					music.Tick(music.IsPlaying())
+				}
+			} else {
+				_ = music.Play(track)
+			}
+		}
+	case "cdstop":
+		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
+			b.sess.Audio.Music.Stop()
+		}
+	case "nometal", "noenergy":
+		if b.sess == nil {
+			return
+		}
+		player := int(b.sess.LocalOwner)
+		if len(words) > 1 {
+			player = int(uint8(localCommandInt(words, 1)))
+		}
+		resource := economy.Metal
+		if strings.EqualFold(words[0], "noenergy") {
+			resource = economy.Energy
+		}
+		_ = b.sess.EnqueueHumanCommand(session.HumanCommand{
+			Kind: session.HumanSetResource,
+			SetResource: session.HumanSetResourceCommand{
+				Player: player, Resource: resource, Amount: float32(localCommandInt(words, 2)),
+			},
+		})
+	case "selectable":
+		if b.sess != nil {
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanMakeSelectable})
+		}
+	case "los":
+		if b.sess == nil || battleSessionKind(b) != 2 {
+			return
+		}
+		_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanVisibility, Visibility: session.HumanVisibilityCommand{ToggleMask: visibility.ModeCurrentEnabled}})
+		if b.shell != nil {
+			b.shell.saveSettings()
+		} else {
+			setup := b.sess.Skirmish
+			b.saveDirectChatSetting(func(s *settings.Settings) {
+				s.Skirmish.Mapping = setup.Mapping
+				s.Skirmish.LineOfSight = setup.LineOfSight
+				s.Skirmish.LOSType = setup.LOSType
+			})
+		}
+	case "mapping":
+		if b.sess == nil || battleSessionKind(b) != 2 {
+			return
+		}
+		_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanVisibility, Visibility: session.HumanVisibilityCommand{ToggleMask: visibility.ModeHistoryEnabled}})
+		if b.shell != nil {
+			b.shell.saveSettings()
+		} else {
+			setup := b.sess.Skirmish
+			b.saveDirectChatSetting(func(s *settings.Settings) {
+				s.Skirmish.Mapping = setup.Mapping
+				s.Skirmish.LineOfSight = setup.LineOfSight
+				s.Skirmish.LOSType = setup.LOSType
+			})
+		}
+	case "lostype":
+		if b.sess != nil {
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanVisibility, Visibility: session.HumanVisibilityCommand{ToggleMask: visibility.ModeTerrainRay}})
+		}
+	case "nowisee":
+		if b.sess != nil && battleSessionKind(b) == 2 {
+			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanVisibility, Visibility: session.HumanVisibilityCommand{ClearMask: visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled}})
 		}
 	case "switchalt":
 		persist := len(words) == 1

@@ -135,11 +135,12 @@ func (r *Renderer) Sprite(sp drawlist.Sprite) {
 		}
 		r.drawKeyed(sp.Frame, int(sp.X), int(sp.Y), 0, 0, r.w, r.h)
 	case drawlist.BlitLit:
-		// uiBlitLitRaw: every opaque source texel written as LightLookup(row, src),
+		// Every opaque source texel is written as LightLookup(row, src),
 		// the source folded through one LHT row. Not destination-reading, so it is
 		// a keyed blit with a source remap; the row is clamped to LHT's 0..31 range
 		// exactly as LightLookup does [03 §4.3.1].
-		r.drawLit(sp.Frame, int(sp.X), int(sp.Y), clampLHTRow(int(sp.LightRow)))
+		clipX, clipY, clipW, clipH := r.spriteClip(sp.HasClip, sp.Clip)
+		r.drawLit(sp.Frame, int(sp.X), int(sp.Y), clampLHTRow(int(sp.LightRow)), clipX, clipY, clipW, clipH)
 	case drawlist.BlitTinted:
 		// tintedBlitAnchor: each opaque source texel resolves the destination to
 		// ALP[src*256 + dst]; anchored and destination-reading [03 R-COMP-01 §2].
@@ -184,10 +185,12 @@ func (r *Renderer) Surface(sf drawlist.Surface) {
 		return
 	}
 	x, y := int(sf.Dst.X), int(sf.Dst.Y)
-	// uiBlitIndexedRaw clips only to the framebuffer; the source mapping is
-	// sx = dx*srcW/w, sy = dy*srcH/h (size over size, not span over span).
-	qx0, qy0 := maxInt(x, 0), maxInt(y, 0)
-	qx1, qy1 := minInt(x+w, r.w), minInt(y+h, r.h)
+	// The surface clip rejects writes after source mapping has been derived from
+	// Dst: sx = dx*srcW/w and sy = dy*srcH/h (size over size, not span over
+	// span). Resizing Dst to the clipped extent would shift the minimap pixels.
+	clipX, clipY, clipW, clipH := r.spriteClip(sf.HasClip, sf.Clip)
+	qx0, qy0 := maxInt(maxInt(x, clipX), 0), maxInt(maxInt(y, clipY), 0)
+	qx1, qy1 := minInt(minInt(x+w, clipX+clipW), r.w), minInt(minInt(y+h, clipY+clipH), r.h)
 	if qx0 >= qx1 || qy0 >= qy1 {
 		return
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 // HumanCommandKind identifies a typed local-player command. Payloads contain
@@ -44,11 +45,14 @@ const (
 	// descriptor" by name, which HumanOrder cannot express: its 1..14 codes are
 	// the latch bytes of [07 §9] and none of them is self-destruct.
 	HumanSelfDestruct
-	// HumanNoShake and HumanATM are local typed-command mutations. They cross
-	// the same authoritative input boundary as ordinary battle commands rather
-	// than changing the live session from presentation code [07 R-CAM-01 §6].
+	// These local typed-command mutations cross the same authoritative input
+	// boundary as ordinary battle commands rather than changing the live
+	// session from presentation code [07 R-CAM-01 §6].
 	HumanNoShake
 	HumanATM
+	HumanSetResource
+	HumanMakeSelectable
+	HumanVisibility
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -105,6 +109,15 @@ type HumanCloakCommand struct {
 }
 
 type HumanCancelProductionCommand struct{ Unit pool.Handle }
+type HumanSetResourceCommand struct {
+	Player   int
+	Resource economy.Res
+	Amount   float32
+}
+type HumanVisibilityCommand struct {
+	ToggleMask visibility.Mode
+	ClearMask  visibility.Mode
+}
 type HumanStockpileCommand struct {
 	Unit   pool.Handle
 	Queued bool
@@ -152,6 +165,8 @@ type HumanCommand struct {
 	Stance           HumanStanceCommand
 	Cloak            HumanCloakCommand
 	SelfDestruct     HumanSelfDestructCommand
+	SetResource      HumanSetResourceCommand
+	Visibility       HumanVisibilityCommand
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -561,6 +576,35 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		economy.CreditSpawn(p, economy.Metal, 1000)
 		economy.CreditSpawn(p, economy.Energy, 1000)
 		return
+	case HumanSetResource:
+		if s.Econ == nil || c.SetResource.Player < 0 || c.SetResource.Player >= len(s.Econ.Players) {
+			return
+		}
+		if c.SetResource.Resource != economy.Metal && c.SetResource.Resource != economy.Energy {
+			return
+		}
+		p := &s.Econ.Players[c.SetResource.Player]
+		if !p.Exists || p.ControllerState < 1 || p.ControllerState > 3 || p.Side == 10 {
+			return
+		}
+		p.Stock[c.SetResource.Resource] = c.SetResource.Amount
+		return
+	case HumanVisibility:
+		if s.Vis == nil {
+			return
+		}
+		const mask2 = visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled
+		if c.Visibility.ToggleMask&mask2 != 0 || c.Visibility.ClearMask&mask2 != 0 {
+			if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+				return
+			}
+		}
+		const semantic = mask2 | visibility.ModeTerrainRay
+		mode := s.Vis.Mode()
+		mode ^= c.Visibility.ToggleMask & semantic
+		mode &^= c.Visibility.ClearMask & semantic
+		s.Vis.SetMode(mode)
+		return
 	}
 	if s.Units == nil {
 		return
@@ -587,6 +631,12 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		for _, u := range s.Units.Iter() {
 			if u != nil && u.Alive && u.Owner == s.LocalOwner {
 				u.Flags &^= 0x10
+			}
+		}
+	case HumanMakeSelectable:
+		for _, u := range s.Units.Iter() {
+			if u != nil && u.Alive {
+				u.Flags |= units.ClassifierEligibleStatus
 			}
 		}
 	case HumanStop:

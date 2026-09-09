@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nanolathe/nanolathe/formats"
+	"github.com/nanolathe/nanolathe/internal/audio"
 	"github.com/nanolathe/nanolathe/internal/camera"
 	"github.com/nanolathe/nanolathe/internal/client"
 	"github.com/nanolathe/nanolathe/internal/content"
@@ -20,6 +21,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/rng"
 	"github.com/nanolathe/nanolathe/internal/testsupport"
 	"github.com/nanolathe/nanolathe/internal/ui"
+	"github.com/nanolathe/nanolathe/internal/visibility"
 )
 
 type chatMillis struct{ now uint32 }
@@ -156,6 +158,8 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 
 	campaign := &battleSession{sess: &session.Session{Mission: &mission.Mission{Type: mission.TypeCampaign}, Econ: &economy.Service{}}}
 	campaign.sess.Econ.Players[0].Exists = true
+	campaign.sess.Audio = audio.NewService(nil)
+	campaign.sess.Audio.Music.Open(3)
 	campaign.dispatchLocalCommand("+NoShake")
 	if pending := campaign.sess.PendingHumanCommands(); len(pending) != 1 || pending[0].Kind != session.HumanNoShake {
 		t.Fatalf("campaign NoShake = %+v, want one mask-1 command", pending)
@@ -163,6 +167,23 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	campaign.dispatchLocalCommand("+ATM")
 	if got := len(campaign.sess.PendingHumanCommands()); got != 1 {
 		t.Fatalf("campaign ATM crossed mask-2 gate: pending=%d", got)
+	}
+	campaign.dispatchLocalCommand("+CDPlay 2junk")
+	if got := campaign.sess.Audio.Music.CurTrack(); got != 2 || !campaign.sess.Audio.Music.IsPlaying() {
+		t.Fatalf("campaign CDPlay track/status = %d/%v, want 2/playing", got, campaign.sess.Audio.Music.Status())
+	}
+	campaign.dispatchLocalCommand("+CDStop ignored")
+	if got := campaign.sess.Audio.Music.CurTrack(); got != 0 || campaign.sess.Audio.Music.Status() != audio.StatusIdle {
+		t.Fatalf("campaign CDStop track/status = %d/%v, want 0/idle", got, campaign.sess.Audio.Music.Status())
+	}
+	campaign.dispatchLocalCommand("+CDPlay 0")
+	if got := campaign.sess.Audio.Music.CurTrack(); got != 1 || !campaign.sess.Audio.Music.IsPlaying() {
+		t.Fatalf("CDPlay argument zero track/status = %d/%v, want tick-selected 1/playing", got, campaign.sess.Audio.Music.Status())
+	}
+	campaign.sess.Audio = audio.NewService(nil)
+	campaign.dispatchLocalCommand("+CDPlay 2")
+	if got := campaign.sess.Audio.Music.CurTrack(); got != 0 || campaign.sess.Audio.Music.Status() != audio.StatusIdle {
+		t.Fatalf("zero-track CDPlay track/status = %d/%v, want 0/idle", got, campaign.sess.Audio.Music.Status())
 	}
 	cl, err := client.New(client.Options{})
 	if err != nil {
@@ -184,6 +205,31 @@ func TestLocalCommandParserAndSessionMasks(t *testing.T) {
 	skirmish.dispatchLocalCommand(long)
 	if len(skirmish.chat.lastCommand) != lastCommandBytes {
 		t.Fatalf("last command bytes = %d, want %d", len(skirmish.chat.lastCommand), lastCommandBytes)
+	}
+	resources := &battleSession{sess: &session.Session{LocalOwner: 3}}
+	resources.dispatchLocalCommand("+NoMetal")
+	resources.dispatchLocalCommand("+NoEnergy 2 -12junk")
+	resources.dispatchLocalCommand("+NoMetal 263")
+	resources.dispatchLocalCommand("+Selectable")
+	pending := resources.sess.PendingHumanCommands()
+	if len(pending) != 4 || pending[0].Kind != session.HumanSetResource || pending[0].SetResource.Player != 3 || pending[0].SetResource.Resource != economy.Metal || pending[0].SetResource.Amount != 0 || pending[1].SetResource.Player != 2 || pending[1].SetResource.Resource != economy.Energy || pending[1].SetResource.Amount != -12 || pending[2].SetResource.Player != 7 || pending[2].SetResource.Amount != 0 || pending[3].Kind != session.HumanMakeSelectable {
+		t.Fatalf("resource/selectable command payloads = %+v", pending)
+	}
+	campaignVisibility := &battleSession{sess: &session.Session{Mission: &mission.Mission{Type: mission.TypeCampaign}}}
+	for _, command := range []string{"+LOS", "+Mapping", "+NowISee", "+LOSType"} {
+		campaignVisibility.dispatchLocalCommand(command)
+	}
+	pending = campaignVisibility.sess.PendingHumanCommands()
+	if len(pending) != 1 || pending[0].Kind != session.HumanVisibility || pending[0].Visibility.ToggleMask != visibility.ModeTerrainRay {
+		t.Fatalf("campaign visibility commands = %+v, want LOSType only", pending)
+	}
+	skirmishVisibility := &battleSession{sess: &session.Session{}}
+	for _, command := range []string{"+LOS", "+Mapping", "+LOSType", "+NowISee"} {
+		skirmishVisibility.dispatchLocalCommand(command)
+	}
+	pending = skirmishVisibility.sess.PendingHumanCommands()
+	if len(pending) != 4 || pending[0].Visibility.ToggleMask != visibility.ModeCurrentEnabled || pending[1].Visibility.ToggleMask != visibility.ModeHistoryEnabled || pending[2].Visibility.ToggleMask != visibility.ModeTerrainRay || pending[3].Visibility.ClearMask != visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled {
+		t.Fatalf("skirmish visibility commands = %+v", pending)
 	}
 }
 
@@ -218,6 +264,22 @@ func TestCorePresentationCommandsPersistExactValues(t *testing.T) {
 	}
 	if cl.ScreenChat() != 0 || stored.Messages.ScreenChat != 0 || b.scrollSetting() != 0 || stored.ScrollSpeed != 0 || b.interfaceType != 7 || stored.InterfaceType != settings.InterfaceTypeRightClick {
 		t.Fatalf("stored core values: screen=%d/%d scroll=%d/%d iface=%d/%d", cl.ScreenChat(), stored.Messages.ScreenChat, b.scrollSetting(), stored.ScrollSpeed, b.interfaceType, stored.InterfaceType)
+	}
+	directSetup := session.SkirmishConfig{LineOfSight: 0, Mapping: 1, LOSType: 0}
+	b.sess = &session.Session{Skirmish: directSetup}
+	b.dispatchLocalCommand("+LOSType")
+	b.dispatchLocalCommand("+NowISee")
+	stored, err = settings.Load()
+	if err != nil || b.sess.Skirmish != directSetup || stored.Skirmish.LineOfSight != 1 || stored.Skirmish.Mapping != 1 || stored.Skirmish.LOSType != 1 {
+		t.Fatalf("non-writing direct visibility changed setup/settings: setup=%+v stored=%+v err=%v", b.sess.Skirmish, stored.Skirmish, err)
+	}
+	b.dispatchLocalCommand("+LOS")
+	b.dispatchLocalCommand("+Mapping")
+	b.dispatchLocalCommand("+LOS")
+	b.dispatchLocalCommand("+Mapping")
+	stored, err = settings.Load()
+	if err != nil || b.sess.Skirmish != directSetup || stored.Skirmish.LineOfSight != directSetup.LineOfSight || stored.Skirmish.Mapping != directSetup.Mapping || stored.Skirmish.LOSType != directSetup.LOSType {
+		t.Fatalf("direct visibility write changed setup or serialized live flags: setup=%+v stored=%+v err=%v", b.sess.Skirmish, stored.Skirmish, err)
 	}
 
 	// Direct map entry keeps the unsaved TShadow/FShadow bits live until the
@@ -277,6 +339,27 @@ func TestCorePresentationCommandsPersistExactValues(t *testing.T) {
 	shellBattle.dispatchLocalCommand("+Shadow")
 	if master, vehicle, shading = shellClient.ShadowOptions(); master || vehicle || shading {
 		t.Fatalf("Shadow changed sibling bits: live=%t/%t/%t", master, vehicle, shading)
+	}
+	if err := settings.Defaults().Save(); err != nil {
+		t.Fatal(err)
+	}
+	shell.setup.LineOfSight, shell.setup.Mapping, shell.setup.LOSType = 0, 1, 0
+	shellSetup := shell.setup
+	shellSessionSetup := session.SkirmishConfig{LineOfSight: 1, Mapping: 0, LOSType: 1}
+	shellBattle.sess = &session.Session{Skirmish: shellSessionSetup}
+	shellBattle.dispatchLocalCommand("+LOSType")
+	shellBattle.dispatchLocalCommand("+NowISee")
+	stored, err = settings.Load()
+	if err != nil || shell.setup != shellSetup || shellBattle.sess.Skirmish != shellSessionSetup || stored.Skirmish.LineOfSight != 1 || stored.Skirmish.Mapping != 1 || stored.Skirmish.LOSType != 1 {
+		t.Fatalf("non-writing shell visibility changed setup/settings: shell=%+v session=%+v stored=%+v err=%v", shell.setup, shellBattle.sess.Skirmish, stored.Skirmish, err)
+	}
+	shellBattle.dispatchLocalCommand("+LOS")
+	shellBattle.dispatchLocalCommand("+Mapping")
+	shellBattle.dispatchLocalCommand("+LOS")
+	shellBattle.dispatchLocalCommand("+Mapping")
+	stored, err = settings.Load()
+	if err != nil || shell.setup != shellSetup || shellBattle.sess.Skirmish != shellSessionSetup || stored.Skirmish.LineOfSight != shellSetup.LineOfSight || stored.Skirmish.Mapping != shellSetup.Mapping || stored.Skirmish.LOSType != shellSetup.LOSType {
+		t.Fatalf("shell visibility write changed setup or serialized live flags: shell=%+v session=%+v stored=%+v err=%v", shell.setup, shellBattle.sess.Skirmish, stored.Skirmish, err)
 	}
 }
 

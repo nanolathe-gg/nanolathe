@@ -6,11 +6,10 @@ import (
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
-// Model shadows [R-REN-03D]. Retail does not build a stencil and does not
-// darken through an SHD row. It rasterizes the model a second time with a
-// 45-degree shear, fills every face solid with palette index 0, and composites
-// that silhouette over the ground through the tinted blitter, which is an ALP
-// blend of the shadow pixel with whatever is already there.
+// Model shadows [R-REN-03D]. Diggers and ordinary mobiles flatten the finished
+// body silhouette, while structures rasterize a separate quarter-sheared image.
+// All three branches composite palette index 0 through the tinted ALP blitter;
+// none uses a stencil or an SHD row.
 
 // shadowKeyBias is the shadow image's own height-key base. The body image uses
 // 50; the shadow rasterizer uses 25 [R-REN-03D §2].
@@ -32,12 +31,9 @@ const shadowXOffset int32 = 5
 // bit and on neither `canhover` nor `floater` being authored), and a
 // structure's re-rasterized, punched, cached shadow, which tests only the
 // master bit and `noshadow` — not the vehicle-shadow bit, not `canhover`,
-// not `floater` [R-REN-03D §1, corrected]. This client implements only the
-// structure branch's rasterize/punch/tint technique (see punchOut's doc
-// comment); it is applied here for both structure-class draws (the
-// technique the retail structure branch itself uses) and for the
-// mobile/Digger branches it stands in for until their own silhouette-clip
-// shadows are built, so the vehicle-shadow gate still applies to those.
+// not `floater` [R-REN-03D §1, corrected]. The branch builder below preserves
+// that split: Diggers and mobiles copy the final body silhouette, while a
+// structure re-rasterizes and punches its separate shadow image.
 //
 // The tinted blitter's alpha-blend capability is enabled at window startup,
 // independently of the SHADING preference [03 R-REN-03D §4]. SHADING selects
@@ -153,16 +149,21 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 	return scratch.polys
 }
 
-// buildModelShadow rasterizes one model shadow into its own finished, punched
-// composition image and returns it, or nil when the subject casts no shadow or
-// the shadow has no faces. It is the whole of the old drawModelShadow body up to
-// (but not including) the tinted commit. The classic path commits it through
-// ALP; modern mode records the same projection for its own GPU shadow pass
-// [DESIGN_GPU_RENDERER.md §10]. body is the subject's finished composition image
-// the punch-out reads to leave a hole under the hull [R-REN-03D §5][R-RAST-01 §4].
+// buildModelShadow returns one finished shadow image, or nil when the subject
+// casts no shadow or its selected branch has no geometry. Mobile and Digger
+// branches copy the final body silhouette; the structure branch re-rasterizes
+// and punches a separate image. It is the whole of the old drawModelShadow body
+// up to (but not including) the tinted commit. The classic path commits it
+// through ALP; modern mode records its own shadow geometry [DESIGN_GPU_RENDERER.md
+// §10]. body is the subject's finished composition image, copied by the
+// silhouette branches and used by the structure punch [R-REN-03D §5][R-RAST-01
+// §4].
 func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *modelTarget) *modelTarget {
 	if c == nil || draw == nil || !draw.CastsShadow || c.pal == nil {
 		return nil
+	}
+	if draw.DiggerClip || !draw.Structure {
+		return c.buildSilhouetteShadow(draw, body)
 	}
 	polys := c.collectShadowPolys(draw)
 	if len(polys) == 0 {
@@ -178,7 +179,46 @@ func (c *Client) buildModelShadow(draw *presentationrender.UnitDraw, body *model
 	for i := range polys {
 		c.fillPolyTarget(img, &polys[i], shadowColorIndex, nil)
 	}
-	img.punchOut(body)
+	c.punchOutModelShadow(img, body)
+	return img
+}
+
+// buildSilhouetteShadow copies the finished body image for a Digger or mobile
+// subject and turns every drawn pixel black. These branches do not project the
+// model a second time and do not punch a hull-shaped hole: the copied silhouette
+// itself is what the tinted blitter places on the terrain [R-REN-03D §1, §6].
+func (c *Client) buildSilhouetteShadow(draw *presentationrender.UnitDraw, body *modelTarget) *modelTarget {
+	if c == nil || draw == nil || body == nil {
+		return nil
+	}
+	anchorX, anchorY := c.shadowAnchor(draw)
+	img := c.borrowModelImage(body.width, body.heightPx, body.originX, body.originY, anchorX, anchorY, body.height != nil, body.scale)
+	copy(img.color, body.color)
+	copy(img.covered, body.covered)
+	if img.height != nil && body.height != nil {
+		copy(img.height, body.height)
+	}
+	for i, color := range img.color {
+		if color == img.transparent {
+			// A keyed live face can erase color while retaining key coverage.
+			// The tinted shadow blit must still skip that transparent source.
+			img.covered[i] = false
+		} else {
+			img.color[i] = shadowColorIndex
+		}
+	}
+
+	if draw.DiggerClip {
+		// A Digger's key bias makes 125 its model-origin key. The comparison
+		// is inclusive, so the buried half does not cast a shadow [R-REN-03D §1].
+		img.eraseAtOrBelow(uint8(diggerEraseThreshold))
+		return img
+	}
+	if threshold, submerged := waterlineThreshold(c.seaLevel(), draw.WorldPos[1], false); submerged {
+		// Only the above-water part of a submerged mobile casts its silhouette.
+		// No key plane means no clipping, as in the ordinary present path.
+		img.eraseAtOrBelow(threshold)
+	}
 	return img
 }
 
@@ -191,14 +231,25 @@ func (c *Client) shadowAnchor(draw *presentationrender.UnitDraw) (int32, int32) 
 		return 0, 0
 	}
 	sx, sy := c.cam.WorldToScreen(draw.WorldPos[0], draw.GroundY, draw.WorldPos[2])
-	// The five-pixel step is an authored screen offset between two projections
-	// of the same world point, so it takes the model scale like the geometry
-	// it offsets: under Enhanced the shadow's own geometry is twice as large at
-	// the detail scale and an unscaled step would halve the visible offset;
-	// under Original the image is rasterized at native size and the blit
-	// doubles step and geometry together (DESIGN_GPU_RENDERER §14.2). The
-	// GroundY shear is a world height and is not scaled.
-	return sx - camera.OriginX + shadowXOffset*c.modelScale(), sy - camera.OriginY
+	// This is a screen-space offset between two projected points, so it follows
+	// the view scale regardless of whether Original doubles the image later or
+	// Enhanced rasterizes doubled geometry (DESIGN_GPU_RENDERER §14.2). The
+	// GroundY shear is a world height and is already scaled by WorldToScreen.
+	return sx - camera.OriginX + shadowXOffset*c.viewScale(), sy - camera.OriginY
+}
+
+// punchOutModelShadow maps the structure body into its shadow using the scale
+// the classic command will apply later. Composition targets remain native for
+// Original at the detail scale, so use shallow views with that future factor
+// rather than changing their shared scratch state before they are recorded.
+func (c *Client) punchOutModelShadow(shadow, body *modelTarget) {
+	if shadow == nil || body == nil {
+		return
+	}
+	shadowView, bodyView := *shadow, *body
+	blit := c.modelBlitScale()
+	shadowView.blit, bodyView.blit = blit, blit
+	shadowView.punchOut(&bodyView)
 }
 
 // punchOut writes the shadow image's own transparent index wherever the body
@@ -218,10 +269,8 @@ func (c *Client) shadowAnchor(draw *presentationrender.UnitDraw) (int32, int32) 
 // shadow image reproduces that cancellation directly, rather than restating two
 // offsets that annihilate.
 //
-// [R-REN-03D §5] attaches the punch to the structure rasterization of §2, which
-// is the one shadow path this client implements; when the Digger and mobile
-// silhouette branches of [R-REN-03D §6] are added, the punch stays with the
-// structure branch only.
+// [R-REN-03D §5] attaches the punch only to the structure rasterization. The
+// Digger and mobile silhouette branches remain unpunched.
 func (t *modelTarget) punchOut(body *modelTarget) {
 	if t == nil || body == nil {
 		return

@@ -109,10 +109,16 @@ func TestSchedulerLitPointsSplitOnRepeatedPixel(t *testing.T) {
 	if got := r.sched.nphase; got != 1 {
 		t.Fatalf("after four distinct points in one cell: %d phases, want 1", got)
 	}
+	if got := len(r.sched.phases[0].batch[schedDest].verts); got != quadVertices {
+		t.Fatalf("four adjacent same-row points emitted %d vertices, want one span quad", got)
+	}
 	// A repeat of one of them must observe the earlier write.
 	r.Points(drawlist.Points{Kind: drawlist.PointLit, Points: []drawlist.Point{{X: 2, Y: 1}}})
 	if got := r.sched.curPhase; got != 1 {
 		t.Fatalf("the repeated pixel landed in phase %d, want 1", got)
+	}
+	if got := len(r.sched.phases[1].batch[schedDest].verts); got != quadVertices {
+		t.Fatalf("repeated point phase emitted %d vertices, want one point quad", got)
 	}
 	// An opaque write anywhere in a cell a point tagged still follows it: the
 	// point set is not enumerable by a rectangle test.

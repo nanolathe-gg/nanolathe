@@ -458,7 +458,7 @@ controller kind is `1..3` and its side byte is not `10`.
 | `Clock` | toggle flags bit 6 (clock display); write settings |
 | `NetStats` | reset the network statistics block |
 | `Sing` | toggle the "sing" flag read by the unit-chat voice path ([R-CAM-01 §7]) |
-| `NoMetal [p] n` / `NoEnergy [p] n` | slot `p` (own slot when one argument): metal / energy stock = float(`n`) — 1-argument form writes the local player |
+| `NoMetal` / `NoEnergy`; `NoMetal p n` / `NoEnergy p n` | command-only form writes `0` to the local player's metal / energy stock; otherwise the first argument is player `p` (low byte) and the second is integer `n`, converted to a float for the stock assignment |
 | `BigBrother` | toggle a camera-flags bit; when set, write `1` to a companion camera word; when cleared, cancel the follow target ([R-CAM-01 §12]). The companion word is the 90-tick cycle counter of the unit sweep tail, paused while Shift is held ([R-CAM-01 §12], [04 R-MOV-03 §1]). |
 | `Now Film Chris Include Reload Assert` | exactly six words with these exact (case-sensitive) spellings: set the developer bit; any other `+Now …` clears it ([R-CAM-01 §9]) |
 | `Drop n` | flags bit 0 = (`n == 0`) |
@@ -471,6 +471,17 @@ controller kind is `1..3` and its side byte is not `10`.
 | `BPS` | toggle the bytes-per-second display dword |
 | `SFX` | toggle the sound-effects debug byte |
 
+**Established fact — resource-setter argument forms.** `NoMetal` and
+`NoEnergy` inspect the total token count. A vector containing only the command
+name selects the local player; every longer vector reads the first argument,
+narrows it to its low byte, and uses that byte as the player slot. Both forms read the second argument as the amount, so it is
+the absent-value `0` in the command-only form and also when a line supplies
+only a player. The shared integer reader above provides signed decimal-prefix
+conversion, after which the amount is converted to single precision and
+assigned directly to the stock. The narrowed player byte is accepted only
+when below `10`, with an occupied record, controller kind `1`, `2`, or `3`,
+and side byte other than `10`; a failed check leaves the stock unchanged.
+
 **Mask 2 — cheats (10):**
 
 | Command | Effect |
@@ -478,13 +489,23 @@ controller kind is `1..3` and its side byte is not `10`.
 | `Radar` | toggle flags bit 9 (full radar) |
 | `ATM` | local player: metal += `1000.0`, energy += `1000.0` (float adds, no cap) |
 | `View p` | valid slot `p`: the viewing player index = `p` |
-| `LOS` | toggle render-flags bit 1; refresh visibility presentation; write settings |
-| `Mapping` | toggle render-flags bit 0 (mapped); refresh; write settings |
+| `LOS` | toggle live render-flags bit 1; refresh visibility presentation; invoke settings write-all, which serializes the unchanged setup record (see below) |
+| `Mapping` | toggle live render-flags bit 0 (mapped); refresh; invoke settings write-all, which serializes the unchanged setup record (see below) |
 | `DoubleShot` | toggle flags bit 7 |
 | `HalfShot` | toggle flags bit 8 |
 | `NowISee` | clear render-flags bits 0 and 1; refresh |
 | `Meteor [n]` | one word: meteor event; `Meteor n`: `n ≠ 0` → one meteor kind, `0` → the other (doc 03 / doc 06 effects) |
 | `MakePoster …` | write a `BIGSHOT` capture into `<install>\screenshots` and reset the wall-clock base (argument grammar not traced — **Unknown**, static trace; developer tooling) |
+
+**Established fact — visibility commands and setup persistence.** The four
+visibility commands above change the live render-flags word and refresh
+visibility presentation without copying those changes into the separate
+skirmish setup record. `LOSType` and `NowISee` perform no settings write. `LOS`
+and `Mapping` each invoke the common settings write-all after changing the live
+word. That writer obtains `Mapping`, `LineOfSight`, and `LOSType` from the
+unchanged setup record. The write can therefore preserve or restore the
+authored setup triple rather than persist the command's new live visibility
+state.
 
 **Mask 4 — developer (30, plus the default handler):** `AI p` (toggle slot
 `p` between AI and human control), `Control p q` (viewing/controlling

@@ -39,13 +39,11 @@ func clampLHTRow(level int) int {
 	return level
 }
 
-// drawLit reproduces uiBlitLitRaw: every opaque source texel is written as
-// LightLookup(row, src) — the SOURCE index folded through one LHT row — and the
-// transparent key is skipped (docs/DESIGN_GPU_RENDERER.md §2.3)[03 §4.3.1]. It
-// reads no destination, so it joins the opaque batch; the geometry is the plain
-// keyed blit's clip to the framebuffer at (x,y) with no anchor offset, exactly as
-// uiBlitLitRaw walks x+col / y+row. row is the caller's LHT row clamped to 0..31.
-func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row int) {
+// drawLit writes every opaque source texel as LightLookup(row, src), clipping
+// after preserving its source offset from (x,y). The transparent key is skipped
+// [03 §4.3.1]. It reads no destination, so it joins the opaque batch. row is the
+// caller's LHT row clamped to 0..31.
+func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row, clipX, clipY, clipW, clipH int) {
 	if f == nil || r.scene2D == nil || r.tables.atlas == nil {
 		return
 	}
@@ -54,8 +52,10 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row int) {
 		return
 	}
 	fw, fh := int(f.Width), int(f.Height)
-	col0, col1 := maxInt(0, -x), minInt(fw, r.w-x)
-	row0, row1 := maxInt(0, -y), minInt(fh, r.h-y)
+	minX, minY := maxInt(clipX, 0), maxInt(clipY, 0)
+	maxX, maxY := minInt(clipX+clipW, r.w), minInt(clipY+clipH, r.h)
+	col0, col1 := maxInt(0, minX-x), minInt(fw, maxX-x)
+	row0, row1 := maxInt(0, minY-y), minInt(fh, maxY-y)
 	if col0 >= col1 || row0 >= row1 {
 		return
 	}
@@ -178,15 +178,44 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 		return
 	}
 	imgs := [4]*ebiten.Image{1: r.tables.atlas}
+	active := false
+	spanX0, spanX1, spanY, spanRow := 0, 0, 0, 0
+	var spanPhase int32
+	flush := func() {
+		if !active {
+			return
+		}
+		phase, class := r.sched.curPhase, r.sched.curClass
+		r.sched.curPhase, r.sched.curClass = spanPhase, schedDest
+		r.appendDestTableQuad(float32(spanX0), float32(spanY), float32(spanX1), float32(spanY+1), lightScale(spanRow))
+		r.sched.curPhase, r.sched.curClass = phase, class
+		active = false
+	}
 	for _, pt := range points {
 		x, y := int(pt.X), int(pt.Y)
 		if x < 0 || y < 0 || x >= r.w || y >= r.h {
 			continue
 		}
+		row := clampLHTRow(int(pt.Index))
+		// Preserve record order without widening a scheduler command: a point
+		// still owns and tags its own pixel. A discontinuity must flush before
+		// the next placement so its geometry remains before that record.
+		if active && (y != spanY || row != spanRow || x != spanX1) {
+			flush()
+		}
 		r.sched.beginPoint(x, y, imgs)
-		r.appendDestTableQuad(float32(x), float32(y), float32(x+1), float32(y+1),
-			lightScale(clampLHTRow(int(pt.Index))))
+		if active && r.sched.curPhase == spanPhase {
+			spanX1++
+			continue
+		}
+		// A repeated point can force a new phase even when its coordinates
+		// happen to be adjacent to the current span. The earlier span remains
+		// in its recorded phase and the new point starts another one.
+		flush()
+		active = true
+		spanX0, spanX1, spanY, spanRow, spanPhase = x, x+1, y, row, r.sched.curPhase
 	}
+	flush()
 }
 
 // appendDestTableQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1)

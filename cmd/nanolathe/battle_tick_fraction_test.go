@@ -31,11 +31,15 @@ func fractionHarness(active int32) (*battleSession, *scriptedMillis) {
 }
 
 // fractionStep advances the host clock, runs the budget exactly as the
-// controller's session step does, then reads the producer the way the client
-// reads it at Draw time. It reports the ticks the budget released.
+// controller's session step does — the released ticks move the global tick the
+// way the session's phases would, and the timing note follows — then reads the
+// producer the way the client reads it at Draw time. It reports the ticks the
+// budget released.
 func (b *battleSession) fractionStep(millis *scriptedMillis, ms uint32) (int, float32) {
 	millis.ms = ms
 	ticks := b.sess.Clock.AdvanceSP(clock.ScaledNow(millis.Millis32()))
+	b.sess.Clock.GlobalTick += uint32(ticks)
+	b.noteTickTiming()
 	return ticks, b.tickFraction()
 }
 
@@ -47,57 +51,82 @@ func nearlyFraction(got, want float32) bool {
 	return d < 0.002
 }
 
-// At the nominal speed the effective multiplier is one, so the fraction is the
-// phase alone and sweeps the tick instead of sitting at the carry's zero.
-func TestTickFractionSweepsTheTickAtNominalSpeed(t *testing.T) {
+// The fraction measures from the moment the last tick fired, not from the wall
+// clock's phase: ticks are released only inside the 30 Hz Update, whose timing
+// drifts against that phase (§13.5). At the nominal speed one tick is 33.3 ms,
+// so the fraction is the elapsed milliseconds since the fire times 0.03. These
+// tests lock a Nanolathe presentation rule, not retail behaviour.
+func TestTickFractionSweepsFromTheLastFire(t *testing.T) {
 	b, millis := fractionHarness(10)
-	// (ms × 30 mod 1000) / 1000: 0, 0.24, 0.48, 0.75, 0.99. The scaled unit has
-	// not advanced yet at 33 ms, because floor(33 × 30 / 1000) is still 0.
+	// Before any tick has fired there is nothing to blend from.
+	if ticks, got := b.fractionStep(millis, 33); ticks != 0 || got != 0 {
+		t.Fatalf("ms=33 released %d ticks, fraction %.4f; want 0 and 0", ticks, got)
+	}
+	// The scaled unit advances at 41 ms: the tick fires and the fraction
+	// starts from zero there, then climbs with the milliseconds since.
+	if ticks, got := b.fractionStep(millis, 41); ticks != 1 || got != 0 {
+		t.Fatalf("ms=41 released %d ticks, fraction %.4f; want 1 and 0", ticks, got)
+	}
 	for _, want := range []struct {
 		ms       uint32
 		fraction float32
-	}{{0, 0}, {8, 0.24}, {16, 0.48}, {25, 0.75}, {33, 0.99}} {
-		ticks, got := b.fractionStep(millis, want.ms)
-		if ticks != 0 {
-			t.Fatalf("ms=%d released %d ticks before the scaled unit advanced", want.ms, ticks)
-		}
-		if !nearlyFraction(got, want.fraction) {
+	}{{49, 0.24}, {57, 0.48}, {66, 0.75}} {
+		millis.ms = want.ms
+		if got := b.tickFraction(); !nearlyFraction(got, want.fraction) {
 			t.Fatalf("ms=%d fraction = %.4f, want %.4f", want.ms, got, want.fraction)
 		}
 	}
-	// The scaled unit advances at 41 ms: the tick fires and the fraction wraps
-	// back near the start of the next tick instead of continuing to climb.
-	ticks, got := b.fractionStep(millis, 41)
-	if ticks != 1 {
-		t.Fatalf("ms=41 released %d ticks, want 1", ticks)
+}
+
+// An Update that releases no tick — the wall phase wrapped between two Updates
+// — must not move the blend backwards: the fraction saturates at one and holds
+// the current pose until the next fire, which restarts it from zero.
+func TestTickFractionNeverMovesBackWithinOneTick(t *testing.T) {
+	b, millis := fractionHarness(10)
+	b.fractionStep(millis, 41) // first fire
+	last := float32(0)
+	for ms := uint32(42); ms < 100; ms++ {
+		millis.ms = ms
+		got := b.tickFraction()
+		if got < last {
+			t.Fatalf("ms=%d fraction %.4f moved back from %.4f with no tick fired", ms, got, last)
+		}
+		last = got
 	}
-	if !nearlyFraction(got, 0.23) {
-		t.Fatalf("fraction after the tick fired = %.4f, want %.4f", got, float32(0.23))
+	if last < 0.99 {
+		t.Fatalf("fraction after 58 ms without a fire = %.4f, want saturated near 1", last)
+	}
+	// The next fire (scaled unit 3 at 100 ms) restarts the sweep.
+	if ticks, got := b.fractionStep(millis, 100); ticks == 0 || got != 0 {
+		t.Fatalf("ms=100 released %d ticks, fraction %.4f; want a fire and 0", ticks, got)
 	}
 }
 
-// At a non-nominal speed the carry is nonzero and the phase is scaled by the
-// effective speed. The sum stays inside [0, 1) — the clamp is part of the
-// formula, and above a large carry the sum does reach past one — and it never
-// moves backwards inside one tick, which is what makes it usable as a position
-// within that tick.
+// At a non-nominal speed the fire leaves a carry and the sweep runs at the
+// effective rate; inside one tick the fraction still never moves backwards.
 func TestTickFractionAtSevenTenthsSpeed(t *testing.T) {
 	b, millis := fractionHarness(7)
 	last := float32(-1)
-	for ms := uint32(0); ms <= 60; ms += 4 {
+	lastTick := uint32(0)
+	fired := 0
+	for ms := uint32(0); ms <= 400; ms += 4 {
 		ticks, got := b.fractionStep(millis, ms)
-		if got < 0 || got >= 1 {
-			t.Fatalf("ms=%d fraction = %.4f, want [0, 1)", ms, got)
+		if got < 0 || got > 1 {
+			t.Fatalf("ms=%d fraction = %.4f, want [0, 1]", ms, got)
 		}
-		phase := float32((uint64(ms)*30)%1000) / 1000
-		want := client.ClampTickFraction(b.sess.Clock.Carry + phase*0.7)
-		if !nearlyFraction(got, want) {
-			t.Fatalf("ms=%d fraction = %.4f, want clamp(carry + phase × 0.7) = %.4f", ms, got, want)
-		}
-		if ticks == 0 && got < last {
+		if ticks == 0 && b.sess.Clock.GlobalTick == lastTick && got < last {
 			t.Fatalf("ms=%d fraction %.4f moved back from %.4f inside one tick", ms, got, last)
 		}
-		last = got
+		if ticks != 0 {
+			fired++
+			if want := client.ClampTickFraction(b.sess.Clock.Carry); !nearlyFraction(got, want) {
+				t.Fatalf("ms=%d fraction right after a fire = %.4f, want the carry %.4f", ms, got, want)
+			}
+		}
+		last, lastTick = got, b.sess.Clock.GlobalTick
+	}
+	if fired == 0 {
+		t.Fatal("no tick fired in 400 ms at seven tenths speed")
 	}
 }
 
@@ -105,9 +134,11 @@ func TestTickFractionAtSevenTenthsSpeed(t *testing.T) {
 // returned unpaused and the blend freezes (§13.5).
 func TestTickFractionHeldWhilePaused(t *testing.T) {
 	b, millis := fractionHarness(10)
-	_, held := b.fractionStep(millis, 16)
+	b.fractionStep(millis, 41)
+	millis.ms = 50
+	held := b.tickFraction()
 	b.sess.Clock.Paused = true
-	millis.ms = 25
+	millis.ms = 58
 	if got := b.tickFraction(); got != held {
 		t.Fatalf("paused fraction = %.4f, want the held %.4f", got, held)
 	}

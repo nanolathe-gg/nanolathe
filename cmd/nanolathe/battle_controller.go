@@ -109,4 +109,5 @@ func (c *BattleController) Step(frame BattleInputFrame, cl *client.Client) {
 		c.cursorScaledValid = false
 	}
 	c.battle.sess.Step(scaled)
+	c.battle.noteTickTiming()
 }

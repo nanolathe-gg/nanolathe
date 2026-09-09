@@ -11,6 +11,9 @@ import (
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
+	"github.com/nanolathe/nanolathe/internal/units"
+	"github.com/nanolathe/nanolathe/internal/visibility"
+	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 func TestLocalTypedCommandsApplyWithoutAUnitWorld(t *testing.T) {
@@ -29,6 +32,82 @@ func TestLocalTypedCommandsApplyWithoutAUnitWorld(t *testing.T) {
 	s.applyHumanCommand(HumanCommand{Kind: HumanATM}, 2)
 	if econ.Players[0].Stock[economy.Metal] != 1000 || econ.Players[0].Stock[economy.Energy] != 1000 {
 		t.Fatal("HumanATM changed campaign stock across the authoritative mask-2 gate")
+	}
+}
+
+func TestHumanSetResourceValidatesPlayerRecord(t *testing.T) {
+	econ := &economy.Service{}
+	for i, controller := range []uint8{1, 2, 3} {
+		p := &econ.Players[i]
+		p.Exists, p.ControllerState, p.Side = true, controller, uint8(i)
+	}
+	econ.Players[3] = economy.Player{Exists: true, ControllerState: 0, Stock: [2]float32{7, 7}}
+	econ.Players[4] = economy.Player{Exists: true, ControllerState: 4, Stock: [2]float32{7, 7}}
+	econ.Players[5] = economy.Player{Exists: true, ControllerState: 2, Side: 10, Stock: [2]float32{7, 7}}
+	econ.Players[6] = economy.Player{ControllerState: 2, Side: 1, Stock: [2]float32{7, 7}}
+	s := &Session{Econ: econ}
+	for i := 0; i < 3; i++ {
+		s.applyHumanCommand(HumanCommand{Kind: HumanSetResource, SetResource: HumanSetResourceCommand{Player: i, Resource: economy.Metal, Amount: float32(-10 - i)}}, 1)
+		if got := econ.Players[i].Stock[economy.Metal]; got != float32(-10-i) {
+			t.Fatalf("controller %d stock = %v, want %v", i+1, got, -10-i)
+		}
+	}
+	for _, player := range []int{-1, 3, 4, 5, 6, 10} {
+		s.applyHumanCommand(HumanCommand{Kind: HumanSetResource, SetResource: HumanSetResourceCommand{Player: player, Resource: economy.Energy, Amount: 99}}, 1)
+	}
+	for player := 3; player <= 6; player++ {
+		if got := econ.Players[player].Stock[economy.Energy]; got != 7 {
+			t.Fatalf("invalid player %d stock = %v, want unchanged 7", player, got)
+		}
+	}
+}
+
+func TestHumanMakeSelectableVisitsOnlyLiveUnits(t *testing.T) {
+	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}
+	def := &content.UnitDef{UnitName: "unit", MaxDamage: 10}
+	def.CanonicalKey = "unit"
+	w := newSessionFixtureWorld(4, cat)
+	live, _ := w.Create(def, 4, 0, 0, 0)
+	dead, _ := w.Create(def, 5, 0, 0, 0)
+	liveUnit, deadUnit := w.Unit(live), w.Unit(dead)
+	liveUnit.Flags = units.ImmunityStatus | 0x1000
+	deadUnit.Flags = units.ImmunityStatus | 0x1000
+	deadUnit.Alive = false
+	s := &Session{Units: w}
+	s.applyHumanCommand(HumanCommand{Kind: HumanMakeSelectable}, 1)
+	if got := liveUnit.Flags; got != units.ImmunityStatus|0x1000|units.ClassifierEligibleStatus {
+		t.Fatalf("live unit flags = %#x, want selectable with existing flags preserved", got)
+	}
+	if got := deadUnit.Flags; got != units.ImmunityStatus|0x1000 {
+		t.Fatalf("dead unit flags = %#x, want unchanged", got)
+	}
+}
+
+func TestHumanVisibilityMasksAndCampaignGate(t *testing.T) {
+	const all = visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled | visibility.ModeTerrainRay
+	vis := visibility.New(&world.Terrain{CellW: 8, CellH: 8}, all)
+	s := &Session{Vis: vis, Mission: &mission.Mission{Type: mission.TypeCampaign}}
+	version := vis.MappingVersion()
+	s.applyHumanCommand(HumanCommand{Kind: HumanVisibility, Visibility: HumanVisibilityCommand{ToggleMask: visibility.ModeTerrainRay}}, 1)
+	if got := vis.Mode(); got != visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled || vis.MappingVersion() <= version {
+		t.Fatalf("campaign LOSType mode/version = %#x/%d, want history+current and refresh", got, vis.MappingVersion())
+	}
+	version = vis.MappingVersion()
+	s.applyHumanCommand(HumanCommand{Kind: HumanVisibility, Visibility: HumanVisibilityCommand{ToggleMask: visibility.ModeCurrentEnabled}}, 1)
+	s.applyHumanCommand(HumanCommand{Kind: HumanVisibility, Visibility: HumanVisibilityCommand{ClearMask: visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled}}, 1)
+	if got := vis.Mode(); got != visibility.ModeHistoryEnabled|visibility.ModeCurrentEnabled || vis.MappingVersion() != version {
+		t.Fatalf("campaign admitted mask-2 visibility: mode/version=%#x/%d", got, vis.MappingVersion())
+	}
+	s.Mission = nil
+	s.applyHumanCommand(HumanCommand{Kind: HumanVisibility, Visibility: HumanVisibilityCommand{ToggleMask: visibility.ModeCurrentEnabled}}, 2)
+	if got := vis.Mode(); got != visibility.ModeHistoryEnabled {
+		t.Fatalf("LOS toggle mode = %#x, want history only", got)
+	}
+	vis.SetMode(all)
+	version = vis.MappingVersion()
+	s.applyHumanCommand(HumanCommand{Kind: HumanVisibility, Visibility: HumanVisibilityCommand{ClearMask: visibility.ModeHistoryEnabled | visibility.ModeCurrentEnabled}}, 3)
+	if got := vis.Mode(); got != visibility.ModeTerrainRay || vis.MappingVersion() != version+1 {
+		t.Fatalf("NowISee mode/version = %#x/%d, want terrain-ray and one refresh", got, vis.MappingVersion())
 	}
 }
 

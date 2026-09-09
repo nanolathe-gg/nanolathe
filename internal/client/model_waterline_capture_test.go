@@ -114,3 +114,73 @@ func TestSubmergedHullIsTintedBlue(t *testing.T) {
 		t.Fatalf("a fully submerged enemy with no sonar contact composed %d pixels; it must be erased below the surface", enemyPixels)
 	}
 }
+
+// TestMobileShadowCopiesTheComposedSubmarine is a real-geometry capture for
+// the mobile shadow branch. The dry shadow must have the final body's complete
+// silhouette, flattened to black, while a water plane above every possible
+// byte key clips every shadow pixel [R-REN-03D §1, §6][R-RAST-01 §4].
+//
+// Set NANOLATHE_SHOT_DIR to retain dry and submerged captures for visual
+// inspection alongside TestSubmergedHullIsTintedBlue.
+func TestMobileShadowCopiesTheComposedSubmarine(t *testing.T) {
+	c, fs := captureClient(t, 96, 96)
+	const viewer uint8 = 0
+	c.buffer = frame.NewBuffer()
+	m, err := compiledmodel.Load(fs, "objects3d/ARMSUB.3do")
+	if err != nil {
+		t.Skipf("ARMSUB is not in this install: %v", err)
+	}
+	states := make([]compiledmodel.PieceState, len(m.Pieces))
+	draw := presentationrender.BuildUnitDrawSimple(m, states, 0, 0, 0, [3]numeric.Fixed{})
+	draw.KeyPlane, draw.CastsShadow = true, true
+
+	compose := func(tick uint32, sea int32, capture string) (bodyPixels, shadowPixels int) {
+		t.Helper()
+		publishSeaLevel(t, c, tick, sea, viewer)
+		for i := range c.indexed {
+			c.indexed[i] = 200
+		}
+		c.resetListForTest()
+		body, ok := c.composeModel(draw, viewer, teamColor{index: viewer, known: true}, 1, modelCursorUnit, nil, 0)
+		if !ok {
+			t.Fatal("ARMSUB composed no geometry")
+		}
+		shadow := c.buildModelShadow(draw, body.image)
+		if shadow == nil {
+			t.Fatal("ARMSUB mobile shadow was not built")
+		}
+		for _, covered := range body.image.covered {
+			if covered {
+				bodyPixels++
+			}
+		}
+		for i, covered := range shadow.covered {
+			if !covered {
+				continue
+			}
+			if shadow.color[i] != shadowColorIndex {
+				t.Fatalf("ARMSUB shadow pixel %d has palette index %d, want %d", i, shadow.color[i], shadowColorIndex)
+			}
+			shadowPixels++
+		}
+		c.finishModel(body, nil)
+		c.replayForTest()
+		writeCapture(t, c, capture)
+		return bodyPixels, shadowPixels
+	}
+
+	dryBody, dryShadow := compose(1, -200, "armsub-shadow-above-water")
+	if dryBody == 0 || dryShadow != dryBody {
+		t.Fatalf("dry ARMSUB has %d body and %d shadow pixels; the shadow must copy its final body silhouette", dryBody, dryShadow)
+	}
+	// The threshold is clamped to 255, so this positive depth clips every
+	// possible key byte inclusively. The body is still present: waterline
+	// ownership tints it, whereas mobile-shadow clipping removes only shadow.
+	wetBody, wetShadow := compose(2, 1000, "armsub-shadow-submerged")
+	if wetBody != dryBody {
+		t.Fatalf("submerged ARMSUB body has %d pixels, want dry body's %d", wetBody, dryBody)
+	}
+	if wetShadow != 0 {
+		t.Fatalf("fully submerged ARMSUB shadow has %d pixels, want none", wetShadow)
+	}
+}

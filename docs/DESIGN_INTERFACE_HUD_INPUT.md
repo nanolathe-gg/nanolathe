@@ -1278,8 +1278,11 @@ as four successive table operations instead of selection brightening. Flagged
 headings keep their stored ampersand. Tall rows use the closed list wrapper
 and list-owned scroll limit. The unaligned authored case retains the previous
 host inset with `TODO(T25)` because retail leaves that pen scratch unset.
-Record-list images and inherited child-surface clips remain separate work
-`[07 R-WGT-01 §4]`.
+Frontend windows and MSGBOX now establish one scoped child-surface clip.
+Images, scaled map previews, text, shades and original outline edges retain
+that clip in both executors; nested scopes restore their parent. Record-list
+payload and variable geometry remain an explicit code/research Unknown
+`[07 R-WGT-01 §4]`; no record layout is invented.
 
 ### 3.9 Partial I10 and exclusions
 
@@ -1312,6 +1315,9 @@ as local chat. The implemented handlers are:
 | `IFace n` | store and persist the integer interface type |
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
+| `CDPlay n`, `CDStop` | use the existing music controller; argument zero runs its enabled music tick |
+| `NoMetal`, `NoEnergy` | command alone sets local stock to zero; otherwise the first argument's low byte selects the player and the second supplies the stock value, subject to the established player-record gates |
+| `Selectable` | enqueue the alive-unit walk, setting only the selectable status bit |
 
 These commands are partial I10. Shell and direct-map entry use the same live
 display bits; a later direct-entry settings write includes deferred shadow

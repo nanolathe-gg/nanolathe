@@ -3,6 +3,7 @@ package client
 import (
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -134,6 +135,114 @@ func TestShadowIsFilledWithPaletteIndexZero(t *testing.T) {
 	}
 	if shadowXOffset != 5 {
 		t.Fatalf("shadow X offset = %d, want 5", shadowXOffset)
+	}
+}
+
+func TestOriginalDetailShadowKeepsOffsetAndPunchesAtScaledBody(t *testing.T) {
+	c := compositionClient(t)
+	c.cam.Scale = 2
+	c.SetEnhanced(false)
+	unit := numeric.Fixed(20 << 16)
+	draw := &presentationrender.UnitDraw{WorldPos: [3]numeric.Fixed{unit, 0, unit}, GroundY: 0}
+	bodyX, bodyY := c.modelAnchor(draw)
+	shadowX, shadowY := c.shadowAnchor(draw)
+	if want := bodyX + shadowXOffset*2; shadowX != want {
+		t.Fatalf("Original scale-2 shadow X = %d, want %d", shadowX, want)
+	}
+
+	body := newModelImage(1, 1, 0, 0, bodyX, bodyY, true, 1)
+	body.write(0, 44, true)
+	shadow := newModelImage(11, 1, 5, 0, shadowX, shadowY, true, 1)
+	for i := range shadow.color {
+		shadow.write(i, shadowColorIndex, true)
+	}
+	c.punchOutModelShadow(shadow, body)
+	if shadow.color[0] != shadow.transparent || shadow.covered[0] {
+		t.Fatalf("scaled punch left body pixel in shadow: color=%d covered=%v", shadow.color[0], shadow.covered[0])
+	}
+	for i := range c.indexed {
+		c.indexed[i] = 200
+	}
+	shadow.blit = 2
+	shadow.tintedCommit(c.indexed, c.width, c.height, &c.pal.Alpha)
+	if got := c.indexed[int(bodyY)*c.width+int(bodyX)]; got != 200 {
+		t.Fatalf("scaled shadow darkened the final body position to %d", got)
+	}
+}
+
+// TestMobileShadowCopiesTheFinishedBody locks the mobile branch: it copies the
+// final body image instead of running the structure projector, flattens the
+// copied pixels, and removes only the part at or below the positive waterline
+// threshold [R-REN-03D §1, §6][R-RAST-01 §4].
+func TestMobileShadowCopiesTheFinishedBody(t *testing.T) {
+	c := compositionClient(t)
+	c.buffer = frame.NewBuffer()
+	publishSeaLevel(t, c, 1, 1, 0)
+	body := newModelImage(4, 1, 0, 0, 20, 20, true, 1)
+	body.write(0, 20, true)
+	body.height[0] = 50
+	body.write(1, 21, true)
+	body.height[1] = 51
+	body.write(2, 22, true)
+	body.height[2] = 52
+	// A live color-key face leaves a covered erase above the clipping plane.
+	body.write(3, body.transparent, true)
+	body.height[3] = 200
+
+	draw := &presentationrender.UnitDraw{CastsShadow: true}
+	shadow := c.buildModelShadow(draw, body)
+	if shadow == nil {
+		t.Fatal("mobile shadow was not built from its finished body")
+	}
+	wantAnchorX, wantAnchorY := c.shadowAnchor(draw)
+	if shadow.anchorX != wantAnchorX || shadow.anchorY != wantAnchorY {
+		t.Fatalf("mobile shadow placement = (%d,%d), want terrain-shadow placement (%d,%d)", shadow.anchorX, shadow.anchorY, wantAnchorX, wantAnchorY)
+	}
+	if shadow.covered[0] || shadow.covered[1] {
+		t.Fatalf("mobile waterline did not erase keys at or below 51: coverage=%v", shadow.covered)
+	}
+	if !shadow.covered[2] || shadow.color[2] != shadowColorIndex || shadow.height[2] != 52 {
+		t.Fatalf("mobile above-water silhouette = color %d covered %v key %d, want black/true/52", shadow.color[2], shadow.covered[2], shadow.height[2])
+	}
+	if shadow.covered[3] || shadow.color[3] != shadow.transparent {
+		t.Fatalf("transparent body background became shadow coverage: color=%d covered=%v", shadow.color[3], shadow.covered[3])
+	}
+}
+
+// TestDiggerShadowClipsAtItsOriginKey locks both Digger branch selection ahead
+// of structure class and its inclusive <=125 buried-half cutoff [R-REN-03D
+// §1, §6].
+func TestDiggerShadowClipsAtItsOriginKey(t *testing.T) {
+	c := compositionClient(t)
+	body := newModelImage(3, 1, 0, 0, 20, 20, true, 1)
+	for i, key := range []uint8{124, 125, 126} {
+		body.write(i, uint8(40+i), true)
+		body.height[i] = key
+	}
+
+	shadow := c.buildModelShadow(&presentationrender.UnitDraw{CastsShadow: true, Structure: true, DiggerClip: true}, body)
+	if shadow == nil {
+		t.Fatal("Digger did not select its silhouette branch")
+	}
+	if shadow.covered[0] || shadow.covered[1] {
+		t.Fatalf("Digger shadow kept buried pixels: coverage=%v", shadow.covered)
+	}
+	if !shadow.covered[2] || shadow.color[2] != shadowColorIndex || shadow.height[2] != 126 {
+		t.Fatalf("Digger above-origin silhouette = color %d covered %v key %d, want black/true/126", shadow.color[2], shadow.covered[2], shadow.height[2])
+	}
+}
+
+// TestStructureShadowDoesNotReuseTheBody locks the remaining structure branch:
+// it must continue through its separate projected raster and punch path rather
+// than taking the mobile/Digger copy shortcut [R-REN-03D §2, §5].
+func TestStructureShadowDoesNotReuseTheBody(t *testing.T) {
+	c := compositionClient(t)
+	body := newModelImage(1, 1, 0, 0, 20, 20, true, 1)
+	body.write(0, 44, true)
+	body.height[0] = 99
+	shadow := c.buildModelShadow(&presentationrender.UnitDraw{CastsShadow: true, Structure: true}, body)
+	if shadow != nil {
+		t.Fatal("structure shadow reused the body without any projected model geometry")
 	}
 }
 
