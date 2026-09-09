@@ -86,16 +86,20 @@ func (c *Client) drawFragment(v frame.FragmentView) bool {
 	if len(polys) == 0 {
 		return false
 	}
-	if c.geometryOnlyModels {
-		g := c.borrowModelPacket(polys, int32(c.width), int32(c.height), 0, 0, 0, 0, 1, false, drawlist.ModelFallbackNone)
-		c.list.RecordModel(drawlist.Model{Geometry: g})
-		return true
-	}
 	minX, minY, maxX, maxY, ok := directProjectedBounds(polys, int32(c.width), int32(c.height))
 	if !ok {
 		return false
 	}
 	placeFaces(polys, -minX, -minY, 1)
+	if c.geometryOnlyModels {
+		// The fragment needs only its clipped projected box, just like the
+		// direct classic image. Rebasing corners and the packet origin by
+		// the same offset retains every framebuffer coordinate, while avoiding
+		// a viewport-sized device target for each fragment [03 R-COMP-02 §6].
+		g := c.borrowModelPacket(polys, maxX-minX+1, maxY-minY+1, -minX, -minY, 0, 0, 1, false, drawlist.ModelFallbackNone)
+		c.list.RecordModel(drawlist.Model{Geometry: g})
+		return true
+	}
 	target := c.borrowModelImage(int(maxX-minX+1), int(maxY-minY+1), -minX, -minY, 0, 0, false, 1)
 	target.blit = 1
 	for i := range polys {
