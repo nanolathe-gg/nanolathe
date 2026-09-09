@@ -93,14 +93,14 @@ type Slot struct {
 	PendingReload int32 // [06 §4.2] (I13)
 }
 
-// DecrementReload decrements a nonzero reload countdown before target resolve [06 §4.1] C1.
+// DecrementReload decrements a nonzero signed-16 reload countdown before target resolve [06 §4.1] C1.
 // Returns true if a decrement occurred.
 // Order: this is the first step of the per-slot pipeline per [06 §4.1] (I10).
 func (s *Slot) DecrementReload() bool {
-	if s == nil || s.Reload <= 0 {
+	if s == nil || s.Reload == 0 {
 		return false
 	}
-	s.Reload-- // [06 §4.1] decrement nonzero reload, signed 16-bit logical field P0-10
+	s.Reload = int32(int16(s.Reload - 1)) // [06 §4.1] signed-16 decrement, including negative values
 	return true
 }
 
@@ -397,8 +397,8 @@ admission:
 	if spy != nil {
 		spy.Record(StepAdmission)
 	}
-	// Also gate on reload still nonzero: if reload>0 after decrement, admission fails (not ready to fire).
-	if slot.Reload > 0 {
+	// Also gate on a reload word still nonzero after decrement: only exact zero admits.
+	if slot.Reload != 0 {
 		return false
 	}
 	if env.CheckAdmission != nil && !env.CheckAdmission(idx, slot) {
@@ -446,6 +446,7 @@ admission:
 	}
 	if !slot.Weapon.Stockpile {
 		stored := ComputeStoredReload(health, maxHealth, kills, slot.Weapon.ReloadTime) // [06 §4.2] C7 trunc order [01 §8] I3
+		stored = int32(int16(stored))                                                   // signed-16 slot store [06 §4.2]
 		slot.Reload = stored                                                            // store reload, signed 16-bit logical field P0-10
 		slot.PendingReload = stored                                                     // latch for diagnostics (I13)
 	}

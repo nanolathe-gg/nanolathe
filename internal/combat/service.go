@@ -248,14 +248,14 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if slot == nil || !slot.IsPopulated() || !slot.IsEnabled() {
 			continue
 		}
-		// The slot visit's first step: decrement a nonzero reload countdown.
+		// The slot visit's first step: decrement a nonzero signed-16 reload countdown.
 		// It happens for every populated slot, before the target is resolved
 		// and before any later gate can skip the visit, so a weapon that is
 		// out of range or waiting on Aim still recovers its shot
 		// [06 §1.2][06 §4.1]. The fire-time pipeline tests this updated word,
 		// so a one-tick reload reaches zero and may fire on this same visit.
-		if slot.Reload > 0 {
-			slot.Reload--
+		if slot.Reload != 0 {
+			slot.Reload = int32(int16(slot.Reload - 1))
 		}
 		// Autonomous maintenance runs in phase 5 after AI dispatch [06 §3.2].
 		// This phase resolves and fires the target already installed at entry.
@@ -505,7 +505,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		if needResult && !slot.Aim.Ready {
 			continue
 		}
-		if slot.Reload > 0 {
+		if slot.Reload != 0 {
 			continue
 		}
 		if !checkAdmission(u, weapon, pre.tgtPos, terrain) {
@@ -610,7 +610,7 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		}
 		if !weapon.Stockpile {
 			stored := ComputeStoredReload(u.Health, u.MaxHealth, u.Kills, weapon.ReloadTime)
-			slot.Reload = stored
+			slot.Reload = int32(int16(stored))
 		}
 		if weapon.Stockpile && slot.Ammo > 0 {
 			slot.Ammo--

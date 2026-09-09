@@ -715,10 +715,15 @@ in this order: decrement the reload timer when it is nonzero; resolve the
 target point (§3.2); abandon the slot when no executor pointer was installed;
 run the family-specific Aim dispatch below; and then, **only when the reload
 timer is now zero**, run the admission gate, the cost precheck, and the
-executor. **Established fact:** the admission test reads the updated timer.
+executor. **Established fact:** the admission test reads the updated signed
+16-bit timer, and decrements every nonzero signed value in that same width.
 Starting values 0, 1, and 2 become 0, 0, and 1 after their first decrement and,
 with every other gate passing, reach admission on visits 1, 1, and 2
-respectively. A one-tick reload can therefore fire on its decrementing visit.
+respectively. A negative restored word remains blocked and decrements; the
+minimum signed word wraps to the maximum signed word. A one-tick reload can
+therefore fire on its decrementing visit. This closes the countdown transition
+and admission comparison only; malformed inputs to the reload calculation remain
+the separate arithmetic unknowns of §4.2.
 
 **Established fact:** Which executor a weapon uses is decided once, at catalog
 compile time, by the first matching flag in this order: `turret`; else
@@ -1826,12 +1831,14 @@ stored reload  = (health factor * veteran reload) / 100             ; signed
 ```
 
 and the result is stored into the slot as a signed 16-bit tick count. The stored
-value is decremented once per tick at the top of the slot's own pass, then the
-updated value is tested for zero. Thus starts 0 and 1 can admit a shot on the
-first visit, while start 2 admits it on the second if other gates pass; a stored
-positive reload of *n* blocks firing for the next *n - 1* populated-slot visits,
-and its *n*th visit may fire if other gates pass. The decrement still happens
-when a prior visit is out of range or waiting on Aim. Stockpile launch does not
+value is decremented once per tick at the top of the slot's own pass whenever it
+is nonzero, then the updated signed-16 value is tested for exact zero. Thus starts
+0 and 1 can admit a shot on the first visit, while start 2 admits it on the
+second if other gates pass; a stored positive reload of *n* blocks firing for
+the next *n - 1* populated-slot visits, and its *n*th visit may fire if other
+gates pass. Negative restored values also remain nonzero and block; decrement
+uses signed-16 wrapping. The decrement still happens when a prior visit is out
+of range or waiting on Aim. Stockpile launch does not
 write reload. The zero-maximum-health contract is closed in §9.1 (healing clamps
 to zero without dividing; the TakeDamage percentage and this health term perform
 unguarded unsigned divisions and must be guarded as an error path). Negative

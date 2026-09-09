@@ -189,8 +189,8 @@ func (s *Slot) CanFire() bool {
 	if s == nil || !s.IsPopulated() {
 		return false
 	}
-	if s.Reload > 0 {
-		return false // [06 §1.2][06 §4.1] reload countdown before admission
+	if s.Reload != 0 {
+		return false // [06 §1.2][06 §4.1] only an exact signed-16 zero admits
 	}
 	// If an Aim request is outstanding (IssueBit set and not yet Ready), block.
 	// Retail ORs 0x01 immediately after Aim dispatch and Ready grants only on
