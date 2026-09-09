@@ -112,7 +112,7 @@ func TestActivateMoveBindsOnlyThePrimaryHead(t *testing.T) {
 	sys := NewSystem(wakeTerrain(32), wakeProfile, NewOccupancyGrid())
 	w := newMovementFixtureWorld(4)
 	sys.BindWorld(w)
-	sys.ConfigurePath(1, 10)
+	sys.ConfigurePath(1, 10, func(player int) bool { return player >= 0 && player < 1 })
 	def := &content.UnitDef{
 		UnitName: "wakehead", FootprintX: 1, FootprintZ: 1,
 		MaxVelocity: 65536, Acceleration: 65536, BrakeRate: 65536, TurnRate: 65535,
@@ -185,7 +185,7 @@ func TestHelpBuildInstallsAnnulusAndArrivesBesideTarget(t *testing.T) {
 	sys := NewSystem(wakeTerrain(48), wakeProfile, NewOccupancyGrid())
 	w := newMovementFixtureWorld(4)
 	sys.BindWorld(w)
-	sys.ConfigurePath(1, 10)
+	sys.ConfigurePath(1, 10, func(player int) bool { return player >= 0 && player < 1 })
 	builderDef := &content.UnitDef{
 		UnitName: "wakeassist", FootprintX: 2, FootprintZ: 2, BuildDistance: 60, Builder: true,
 		MaxVelocity: 65536, Acceleration: 65536, BrakeRate: 65536, TurnRate: 65535,

@@ -251,7 +251,7 @@ func TestBigRequestStaysActiveAcrossTicks(t *testing.T) {
 	// Ten players share the 1333-step allowance, so one call buys 133 steps:
 	// the 100-step admission charge plus one 100-pop slice already overdraws
 	// it and the request has to resume on a later call [04 R-PATH-01 §6].
-	system.ConfigurePath(10, 500)
+	system.ConfigurePath(10, 500, func(player int) bool { return player >= 0 && player < 10 })
 
 	w := newMovementFixtureWorld(10)
 	def := &content.UnitDef{UnitName: "armflea", MaxVelocity: 3 * 65536, Acceleration: 3 * 65536, BrakeRate: 3 * 65536, TurnRate: 500}

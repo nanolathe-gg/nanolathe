@@ -158,6 +158,7 @@ type pathProvider struct {
 	requests [10][]path.Request
 	cursor   [10]int
 	players  int
+	eligible func(int) bool
 	limit    int32
 }
 
@@ -199,7 +200,7 @@ func (p *pathProvider) Eligible(player int) bool {
 	// Eligibility is player-record existence, not queue non-emptiness. Retail
 	// accrues and spends the equal share while polling that player's followers
 	// even when none currently wants a route [04 R-PATH-01 §6].
-	return player >= 0 && player < p.players
+	return player >= 0 && player < len(p.requests) && p.eligible != nil && p.eligible(player)
 }
 func (p *pathProvider) Poll(player int) (path.Request, path.PollResult) {
 	if !p.Eligible(player) || len(p.requests[player]) == 0 {
@@ -552,7 +553,7 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 		grid.AttachPlot(terrain)
 	}
 	sched := path.NewScheduler(s.searchFunc, s.publishFunc)
-	s.pathProvider = &pathProvider{players: s.PathPlayers, limit: s.PathUnitLimit}
+	s.pathProvider = &pathProvider{players: s.PathPlayers, limit: s.PathUnitLimit, eligible: func(player int) bool { return player == 0 }}
 	sched.SetCandidateProvider(s.pathProvider)
 	// Use DefaultBase unless overridden [P0-I16]; no longer reads mutable global.
 	sched.SetBase(path.DefaultBase)
@@ -562,8 +563,9 @@ func NewSystem(terrain *world.Terrain, fallback Profile, grid *OccupancyGrid) *S
 
 // ConfigurePath supplies the session topology that owns the scheduler's
 // equal-share divisor and pressure tiers [04 R-PATH-01 §6]. Production calls
-// this after the economy player records and sliced unit pool exist.
-func (s *System) ConfigurePath(players int, unitLimit int32) {
+// this after the economy player records and sliced unit pool exist. Eligibility
+// reads the actual player slot separately from the equal-share divisor.
+func (s *System) ConfigurePath(players int, unitLimit int32, eligible func(int) bool) {
 	if s == nil || s.pathProvider == nil || s.Scheduler == nil {
 		return
 	}
@@ -573,6 +575,7 @@ func (s *System) ConfigurePath(players int, unitLimit int32) {
 	s.PathPlayers = players
 	s.PathUnitLimit = unitLimit
 	s.pathProvider.players = players
+	s.pathProvider.eligible = eligible
 	s.pathProvider.limit = unitLimit
 	s.Scheduler.SetCandidateProvider(s.pathProvider)
 }
