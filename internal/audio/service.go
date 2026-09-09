@@ -25,12 +25,8 @@ type Service struct {
 	Cache    *SampleCache
 	Music    *Controller
 
-	viewport Viewport
-	frame    uint32
-	// drainSeq counts rendered frames. The media poll of [03 §8.4] runs once
-	// per rendered frame, which is a different cadence from the queue clock
-	// below, so it gets its own counter.
-	drainSeq          uint32
+	viewport          Viewport
+	frame             uint32
 	fs                vfs.FSOps
 	playbackInstalled bool
 	musicConfigured   bool
@@ -217,8 +213,6 @@ func (a *Service) DrainEvents(committedTick uint32, events []framepkg.EventView)
 		a.hasEventTick = true
 	}
 	a.frame = committedTick
-	a.drainSeq++
-	a.Music.TickFrame(a.drainSeq, a.Music.IsPlaying())
 }
 
 // Frame returns the queue clock as of the last drain — the committed global

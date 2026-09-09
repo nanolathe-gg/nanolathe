@@ -652,6 +652,21 @@ The two `GetTickCount` reads can differ by a millisecond; the difference is
 lost, not accumulated. The service runs only on the busy path, so timers
 stall while an inactive single-player window blocks in `GetMessageA`.
 
+**Registration and callback mutation (Established).** Registration first
+performs the same timer service with fresh time samples, then scans slots in
+ascending order and installs into the first slot whose period is negative.
+The new remaining value equals its period. This also applies to registration
+inside a callback: a nested live service walk precedes the new installation.
+The enclosing walk reloads the current slot's current period after the
+callback returns, and continues through later slots using live contents.
+Newly armed later slots can therefore be visited in that enclosing walk;
+a replacement in an already visited slot waits for a later walk. There is
+no armed-slot snapshot, fixed callback-kind ordering, or catch-up loop.
+Removal only marks the indexed slot's period negative; it does not service
+the table. The two CD timer IDs identify registrations independently, and
+one callback kind can have more than one outstanding registration if a new
+ID replaces the stored reference without removing an older timer.
+
 **Registrants (Established, bounded to the recovered image).** The only
 callers of the registration routine are the CD-audio fade timers of
 [03 R-AUD-01 §4] (the repeating period-2 fade step and the one-shot period-120
