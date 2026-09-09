@@ -252,10 +252,8 @@ func (s *Service) StepWeaponsForUnit(u *units.Unit, tick uint32, w *units.World,
 		// It happens for every populated slot, before the target is resolved
 		// and before any later gate can skip the visit, so a weapon that is
 		// out of range or waiting on Aim still recovers its shot
-		// [06 §1.2][06 §4.1]. Only after the decrement can the reload-zero
-		// fire-time pipeline below admit the visit, which is why a one-tick
-		// reloadtime fires on the tick after the decrement, never the same
-		// tick [06 §4.1].
+		// [06 §1.2][06 §4.1]. The fire-time pipeline tests this updated word,
+		// so a one-tick reload reaches zero and may fire on this same visit.
 		if slot.Reload > 0 {
 			slot.Reload--
 		}
