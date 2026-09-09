@@ -243,6 +243,16 @@ type PrimitiveDraw struct {
 // DefaultModelLight is the shipped model light direction [03 §2.4.1].
 var DefaultModelLight = [3]float64{-0.8, 1.0, 0.25}
 
+// SetModelLight replaces the global shaded-model direction [03 §2.4.1].
+// The stored binary32 multiplier 0.01 is exactly 5368709 / 2^29. Round
+// its integer product once to binary32, then scale by the exact power of two;
+// this avoids rounding the input integer or a working product prematurely.
+func SetModelLight(a, b, c int32) {
+	for i, value := range [3]int32{a, b, c} {
+		DefaultModelLight[i] = float64(float32(int64(value)*5368709) * 0x1p-29)
+	}
+}
+
 // ShadeRowForNormal computes one textured-face corner's SHD row. The normal
 // is deliberately not renormalized: retail averages already-normalized face
 // normals and applies the dot product to that average [03 §2.4.1].

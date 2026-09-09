@@ -1072,9 +1072,17 @@ N = per-vertex smooth normal:
    wrapping negatives to `27..31` (not clamped); the gouraud interpolant is
    `rowStep = (rowR-rowL)/width` in signed 16.16 fixed point, and each pixel samples
    `SHD[row*256+texel]` on the textured path and `SHD[row*256+color]` on the
-   flat path (direct-static). The light direction is read from three settings as
-   integers scaled by 0.01 and written through a dedicated setter that then
-   rebuilds the shadow caches.
+   flat path (direct-static). **Established — light setter and image invalidation.** The global model
+   light direction takes three signed integers. Each is multiplied in working
+   precision by the binary32 value of 0.01 (exactly 5368709 / 2^29), then
+   stored once as binary32, without normalization or clamping. The command
+   then invalidates the shared model image arena, which contains body and
+   auxiliary image allocations. Owner references are cleared; subsequent
+   draws follow their ordinary missing-image rules. Invalidation does not
+   reset retained orientation or piece transforms, advance texture cursors,
+   reload assets, or synchronously render replacement images. `RCache`
+   performs this same invalidation without changing the light vector
+   [07 R-CAM-01 §6].
 
 4. **Texture resolution at load**: each primitive's texture name resolves
    case-insensitively against the side's texture GAF set, then a fallback

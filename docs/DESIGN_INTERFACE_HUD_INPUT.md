@@ -1307,6 +1307,7 @@ as local chat. The implemented handlers are:
 
 | Command | Implemented effect |
 |---|---|
+| `Light a b c`, `RCache` | invalidate client model image/geometry products while preserving retained pose; `Light` first replaces the global shading vector; neither queues simulation work nor writes settings |
 | `NoShake` | enqueue the authoritative toggle through `HumanCommand` |
 | `ATM` | skirmish only; enqueue uncapped `+1000` metal and energy through `HumanCommand` |
 | `SwitchAlt [n]` | no argument toggles and persists; an explicit argument applies `n & 1` without persisting |

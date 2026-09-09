@@ -503,3 +503,18 @@ func modelLaneHasColor(faces []drawlist.ModelFace, color uint8) bool {
 	}
 	return false
 }
+
+func TestModelImageInvalidationPreservesRetainedOrientation(t *testing.T) {
+	c, v := cachedLiveRegressionSubject(t)
+	cachedLiveReplay(t, c, v)
+	before := *c.orientationCache(v.InstanceID)
+	c.InvalidateModelImages()
+	if c.cachedBody(v.InstanceID) != nil {
+		t.Fatal("cached model survived invalidation")
+	}
+	v.Heading = 7
+	cachedLiveReplay(t, c, v)
+	if got := *c.orientationCache(v.InstanceID); got != before {
+		t.Fatalf("invalidation advanced orientation: %v, want %v", got, before)
+	}
+}

@@ -448,8 +448,8 @@ controller kind is `1..3` and its side byte is not `10`.
 | `SwitchAlt [n]` | [R-CAM-01 §4] |
 | `TShadow` `FShadow` | toggle interface bits `0x08`, `0x10` (no write) |
 | `LOSType` | toggle render-flags bit 2; refresh the visibility presentation |
-| `Light a b c` | three integer light parameters into the renderer; rebuild |
-| `RCache` | rebuild the terrain renderer |
+| `Light a b c` | replace the global model light vector from three signed integers, then invalidate shared model images ([03 §2.4.1]); no settings write |
+| `RCache` | invalidate shared model image allocations; subsequent draws rebuild as required without resetting retained pose ([03 §2.4.1]); no settings write |
 | `Selectable` | set the selectable bit on every unit whose status word has bit 28 (alive) set |
 | `MusicMode n` | music mode `n` into the audio device |
 | `Logo n p` | valid slot `p` and `0 ≤ n <` logo count: slot `p`'s logo byte = `n`; renderer rebuild; otherwise post `Invalid logo setting` |

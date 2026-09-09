@@ -48,3 +48,14 @@ func TestShadeRowFormulaEdgeCases(t *testing.T) {
 		t.Fatalf("SHDIdentityRow %d want 15 [03 §4.3][03 R-RAST-01 §5]", SHDIdentityRow)
 	}
 }
+
+// Large integers distinguish the final binary32 store from rounding the
+// command argument before multiplication [03 §2.4.1].
+func TestModelLightStoresScaledIntegersOnce(t *testing.T) {
+	before := DefaultModelLight
+	t.Cleanup(func() { DefaultModelLight = before })
+	SetModelLight(16777217, -16777219, 0)
+	if want := ([3]float64{167772.171875, -167772.1875, 0}); DefaultModelLight != want {
+		t.Fatalf("light = %v, want %v", DefaultModelLight, want)
+	}
+}

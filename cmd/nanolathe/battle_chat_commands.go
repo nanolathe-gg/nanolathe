@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/audio"
 	"github.com/nanolathe-gg/nanolathe/internal/economy"
+	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
 	"github.com/nanolathe-gg/nanolathe/internal/settings"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
@@ -108,6 +109,15 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		return
 	}
 	switch strings.ToLower(words[0]) {
+	case "light":
+		render.SetModelLight(int32(localCommandInt(words, 1)), int32(localCommandInt(words, 2)), int32(localCommandInt(words, 3)))
+		if b.cl != nil {
+			b.cl.InvalidateModelImages()
+		}
+	case "rcache":
+		if b.cl != nil {
+			b.cl.InvalidateModelImages()
+		}
 	case "noshake":
 		if b.sess != nil {
 			_ = b.sess.EnqueueHumanCommand(session.HumanCommand{Kind: session.HumanNoShake})

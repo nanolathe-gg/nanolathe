@@ -7,6 +7,13 @@ import (
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 )
 
+// InvalidateModelImages drops the shared model image products. Retail clears
+// arena owner references and lets ordinary draws rebuild; retained orientation
+// and piece pose are unchanged [07 R-CAM-01 §6][03 §2.4.1].
+func (c *Client) InvalidateModelImages() {
+	clear(c.cachedModelBodies)
+}
+
 // cachedModelBody is the persistent, unfinalized cached-piece composition.
 // Waterline, Digger and child staging operate on a fresh frame-local copy, as
 // their inputs may change while the cached local body remains valid
