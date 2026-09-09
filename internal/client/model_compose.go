@@ -33,7 +33,7 @@ const (
 // co-occur with a texture are all even [R-REN-03A §5]. An untextured face with
 // the bit clear is the format's "clear" primitive — it reaches the quad mapper
 // with no texture bound and the mapper draws nothing [fmt 3do].
-func modelPrimitiveDispatch(pr presentationrender.PrimitiveDraw, resolved bool) modelPrimitiveMode {
+func modelPrimitiveDispatch(pr *presentationrender.PrimitiveDraw, resolved bool) modelPrimitiveMode {
 	if pr.IsColored&1 != 0 {
 		return modelPrimitiveFlat // flat filler, any vertex count [R-REN-03A §5]
 	}
@@ -156,14 +156,14 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 		return nil
 	}
 	faces, corners := 0, 0
-	for _, piece := range draw.Pieces {
-		faces += len(piece.Primitives)
-		for _, pr := range piece.Primitives {
-			corners += len(pr.VertexIndices)
+	for i := range draw.Pieces {
+		prims := draw.Pieces[i].Primitives
+		faces += len(prims)
+		for j := range prims {
+			corners += len(prims[j].VertexIndices)
 		}
 	}
 	scratch := c.borrowPolys(faces, corners)
-	polys := scratch.polys
 
 	// Retail walks the piece list last-to-first. Because the height-key test
 	// admits equal keys, draw order is the tie-break, so this direction is what
@@ -171,11 +171,12 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 	// lifts a factory's build plate through its roof and lets an opened solar
 	// collector's panels swallow the column they intersect [R-REN-03A §3].
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
-		piece := draw.Pieces[pi]
+		piece := &draw.Pieces[pi]
 		if pi >= len(draw.Model.Pieces) {
 			continue
 		}
-		for pri, pr := range piece.Primitives {
+		for pri := range piece.Primitives {
+			pr := &piece.Primitives[pri]
 			if draw.Model.Pieces[pi].Selection && pri == 0 {
 				continue // selection plate is retained by the model but never rasterized [03 §2.4.1]
 			}
@@ -244,10 +245,10 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 			if !valid {
 				continue // malformed primitive suppresses the whole face [fmt 3do]
 			}
-			poly := scratch.face(n)
+			poly := scratch.next(n)
 			poly.color, poly.frame = color, texFrame
 			poly.useSHD = pr.ShadeRow != presentationrender.NoShadeRow
-			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(polys)), piece.SourceIndex, pri, pr.TextureName
+			poly.candidate, poly.piece, poly.primitive, poly.texture = uint32(len(scratch.polys)-1), piece.SourceIndex, pri, pr.TextureName
 			if texFrame != nil && c.rendererTraceSink != nil {
 				poly.frameState = RendererValueAvailable
 				if ref.kind == texStatic {
@@ -292,11 +293,9 @@ func (c *Client) collectDrawPolys(draw *presentationrender.UnitDraw, selector te
 					poly.attr[spanU][corner], poly.attr[spanV][corner] = u[corner], vv[corner]
 				}
 			}
-			polys = append(polys, poly)
 		}
 	}
-	scratch.polys = polys
-	return polys
+	return scratch.polys
 }
 
 func (c *Client) resolveModelTexture(name string) (texRef, bool) {
@@ -313,18 +312,20 @@ func (c *Client) resolveModelTexture(name string) (texRef, bool) {
 func modelExtent(polys []screenPoly) (width, height int, originX, originY int32) {
 	var minX, minY, maxX, maxY int32 // seeded at the model origin, not at a vertex
 	for i := range polys {
-		for k := range polys[i].x {
-			if polys[i].x[k] < minX {
-				minX = polys[i].x[k]
+		xs, ys := polys[i].x, polys[i].y
+		for k := range xs {
+			x, y := xs[k], ys[k]
+			if x < minX {
+				minX = x
 			}
-			if polys[i].x[k] > maxX {
-				maxX = polys[i].x[k]
+			if x > maxX {
+				maxX = x
 			}
-			if polys[i].y[k] < minY {
-				minY = polys[i].y[k]
+			if y < minY {
+				minY = y
 			}
-			if polys[i].y[k] > maxY {
-				maxY = polys[i].y[k]
+			if y > maxY {
+				maxY = y
 			}
 		}
 	}

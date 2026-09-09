@@ -278,7 +278,8 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 			now = committed.Tick
 		}
 	}
-	parent, child := presentationrender.BuildProjectileModelPieces(m.compiled, p, now)
+	parentScratch, childScratch := c.borrowProjectileScratch(), c.borrowProjectileScratch()
+	parent, child := presentationrender.BuildProjectileModelPiecesInto(m.compiled, p, now, parentScratch, childScratch)
 	if parent == nil {
 		return false
 	}

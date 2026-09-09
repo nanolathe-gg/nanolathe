@@ -469,9 +469,20 @@ func (p *Panel) SetRightPressed(index int) {
 	}
 }
 
-// ResetPress clears both held-button indices.
+// ResetPress retires legacy and generic pointer ownership when a window closes.
+// A pending release must not activate a window on a later visit [07 §3].
 func (p *Panel) ResetPress() {
 	if p != nil {
+		if p.capture >= 0 && p.Window != nil && p.capture < len(p.Window.Gadgets) {
+			g := p.Window.Gadgets[p.capture]
+			// Immediate radio/cycle mutations already belong to the down callback;
+			// release-driven controls restore the state preceding their gesture.
+			if g.Kind == gui.KindButton && g.Attribs&(0x10|0x100) == 0 {
+				p.SetStatusAt(p.capture, p.savedDown)
+			}
+		}
+		p.clearCapture()
+		p.sliderDragging = false
 		p.pressed = -1
 		p.rightPressed = -1
 	}

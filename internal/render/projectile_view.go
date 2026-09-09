@@ -317,7 +317,14 @@ func projectileFrameCount(v frame.ProjectileView, opts ProjectileDispatchOptions
 // global-GAF admission failure aborts the batch, preserving the researched
 // whole-renderer abort behavior.
 func BuildProjectileDraws(projectiles []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
-	out := make([]ProjectileDraw, 0, len(projectiles))
+	return BuildProjectileDrawsInto(nil, projectiles, now, visible, admitGlobalGAF, opts)
+}
+
+// BuildProjectileDrawsInto is BuildProjectileDraws over a caller-retained
+// buffer. dst is rewound, never read; the result aliases it, so a caller that
+// keeps the buffer across frames stops allocating the dispatch list.
+func BuildProjectileDrawsInto(dst []ProjectileDraw, projectiles []frame.ProjectileView, now uint32, visible func(frame.ProjectileView) bool, admitGlobalGAF func(frame.ProjectileView) bool, opts ProjectileDispatchOptions) ([]ProjectileDraw, bool) {
+	out := dst[:0]
 	for _, v := range projectiles {
 		if visible == nil || !visible(v) { // [03 §5.4] absent visibility dependency fails closed
 			continue

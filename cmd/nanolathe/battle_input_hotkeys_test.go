@@ -173,12 +173,12 @@ func TestCtrlLetterSelectsInsteadOfArmingLatch(t *testing.T) {
 	one := placeUnit(b, "armcons", numeric.Fixed(200*65536), numeric.Fixed(120*65536))
 	two := placeUnit(b, "armsolar", numeric.Fixed(320*65536), numeric.Fixed(220*65536))
 
-	// Plain `a` arms the attack latch; Ctrl+A selects and leaves the latch idle.
+	// A physical edge without its producer token cannot synthesize a palette
+	// activation. Ctrl+A remains an independent residual hotkey.
 	pressKeys(b, input.KeyA)
-	if b.battleState().Input.Latch != input.LatchAttack {
-		t.Fatalf("`a` did not arm the attack latch")
+	if b.battleState().Input.Latch != input.LatchNormal {
+		t.Fatalf("physical `a` synthesized palette activation")
 	}
-	b.battleState().Input.Latch = input.LatchNormal
 	pressKeys(b, input.KeyCtrl, input.KeyA)
 	if b.battleState().Input.Latch != input.LatchNormal {
 		t.Fatalf("Ctrl+A armed the attack latch; retail's 0xAA can never reach the `a` case")

@@ -26,6 +26,10 @@ type modelScratch struct {
 	imageNext   int
 	outlines    []*outlineScratch
 	outlineNext int
+	// projectiles are the standalone model calls' slots. A projectile's parent
+	// and child calls are live together, so each call takes its own slot.
+	projectiles    []*presentationrender.ProjectileScratch
+	projectileNext int
 }
 
 // outlineScratch is one subject's nanoframe outline: the ring list, the corner
@@ -64,6 +68,7 @@ func resizeScratch[T any](v []T, n int) []T {
 }
 func (s *modelScratch) reset() {
 	s.polyNext, s.imageNext, s.packetNext, s.drawNext, s.stateNext, s.outlineNext = 0, 0, 0, 0, 0, 0
+	s.projectileNext = 0
 	// Rewind, do not erase. Both face and polygon storage is fully rewritten
 	// before it is read again — a borrowed slot resizes and then assigns every
 	// element it hands out — so the only thing a blanket clear achieved was
@@ -119,11 +124,23 @@ func (c *Client) borrowPolys(faces, corners int) *polyScratch {
 	p.corner = 0
 	return p
 }
-func (s *polyScratch) face(n int) screenPoly {
+
+// next extends the borrowed slot by one face, points its corner lanes at the
+// slot's arena and returns a pointer so the caller fills the face in place.
+// borrowPolys sized the slot for every face the subject can emit, so the slot
+// never moves and the pointer stays valid for the frame. The record is erased
+// rather than copied in: the slot carries the previous subject's face, and a
+// polygon is large enough that constructing one as a value and copying it into
+// the slot costs more than the erase.
+func (s *polyScratch) next(n int) *screenPoly {
 	start := s.corner
 	s.corner += n
 	buf := s.lanes[start*(2+spanAttrs) : s.corner*(2+spanAttrs)]
-	p := screenPoly{x: buf[:n:n], y: buf[n : 2*n : 2*n], oddHeight: s.odd[start:s.corner:s.corner]}
+	s.polys = s.polys[:len(s.polys)+1]
+	p := &s.polys[len(s.polys)-1]
+	*p = screenPoly{}
+	p.x, p.y = buf[:n:n], buf[n:2*n:2*n]
+	p.oddHeight = s.odd[start:s.corner:s.corner]
 	for k := 0; k < spanAttrs; k++ {
 		lo := (2 + k) * n
 		p.attr[k] = buf[lo : lo+n : lo+n]
@@ -132,21 +149,22 @@ func (s *polyScratch) face(n int) screenPoly {
 }
 func (c *Client) cloneModelPolys(in []screenPoly) []screenPoly {
 	corners := 0
-	for _, p := range in {
-		corners += len(p.x)
+	for i := range in {
+		corners += len(in[i].x)
 	}
 	s := c.borrowPolys(len(in), corners)
-	for _, p := range in {
-		q := s.face(len(p.x))
-		qcopy := p
-		qcopy.x, qcopy.y, qcopy.attr, qcopy.oddHeight = q.x, q.y, q.attr, q.oddHeight
-		copy(qcopy.x, p.x)
-		copy(qcopy.y, p.y)
-		copy(qcopy.oddHeight, p.oddHeight)
+	for i := range in {
+		p := &in[i]
+		q := s.next(len(p.x))
+		x, y, odd, attr := q.x, q.y, q.oddHeight, q.attr
+		*q = *p
+		q.x, q.y, q.oddHeight, q.attr = x, y, odd, attr
+		copy(q.x, p.x)
+		copy(q.y, p.y)
+		copy(q.oddHeight, p.oddHeight)
 		for k := range p.attr {
-			copy(qcopy.attr[k], p.attr[k])
+			copy(q.attr[k], p.attr[k])
 		}
-		s.polys = append(s.polys, qcopy)
 	}
 	return s.polys
 }
@@ -208,6 +226,22 @@ func (c *Client) borrowModelPacket(polys []screenPoly, width, height, ox, oy, ax
 	}
 	p.vertices = resizeScratch(p.vertices, count)
 	return fillModelPacket(&p.g, p.vertices, polys, width, height, ox, oy, ax, ay, scale, key, fallback)
+}
+
+// borrowProjectileScratch hands out one standalone model call's slot for the
+// frame. Slots never overlap within a frame, so a call's draw record stays
+// valid until the next reset.
+func (c *Client) borrowProjectileScratch() *presentationrender.ProjectileScratch {
+	if !c.modelScratch.active {
+		return &presentationrender.ProjectileScratch{}
+	}
+	s := &c.modelScratch
+	if s.projectileNext == len(s.projectiles) {
+		s.projectiles = append(s.projectiles, &presentationrender.ProjectileScratch{})
+	}
+	p := s.projectiles[s.projectileNext]
+	s.projectileNext++
+	return p
 }
 
 func (c *Client) borrowDrawScratch() *presentationrender.DrawScratch {

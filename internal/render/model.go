@@ -323,42 +323,46 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 	}
 	scratch.transforms = reuseDrawSlice(scratch.transforms, len(m.Pieces))
 	transforms := scratch.transforms
+	// Every composition below reads one model and one state slice, so the
+	// chain trig is evaluated once per piece instead of once per ancestor
+	// visit [03 §2.4] C21.
+	scratch.compose.BeginModel(len(m.Pieces))
 	for i := range transforms {
 		transforms[i] = model.ComposeInto(m, states, i, transforms[i], &scratch.compose)
 	}
 	scratch.pieces = reuseDrawSlice(scratch.pieces, len(m.Pieces))
 	scratch.storage = reuseDrawSlice(scratch.storage, len(m.Pieces))
-	out := scratch.pieces[:0]
-	scratch.visited = reuseDrawSlice(scratch.visited, len(m.Pieces))
-	for i, piece := range m.Pieces {
+	out := scratch.pieces
+	scratch.hidden = reuseDrawSlice(scratch.hidden, len(m.Pieces))
+	scratch.hiddenState = reuseDrawSlice(scratch.hiddenState, len(m.Pieces))
+	scratch.hiddenStack = reuseDrawSlice(scratch.hiddenStack, len(m.Pieces))
+	resolveHidden(m, states, scratch.hidden, scratch.hiddenState, scratch.hiddenStack[:0])
+	for i := range m.Pieces {
+		piece := &m.Pieces[i]
 		store := &scratch.storage[i]
-		tr := transforms[i]
-		if pieceHiddenWithScratch(m, states, i, scratch.visited) {
+		tr := &transforms[i]
+		// The slot carries the previous subject's record, so every field is
+		// written here; a suppressed piece keeps its index and drops the rest.
+		record := &out[i]
+		record.Index, record.SourceIndex, record.Name = i, i, piece.Name
+		record.Transform, record.LocalOrigin = *tr, tr.Origin
+		record.WorldOrigin = [3]numeric.Fixed{
+			tr.Origin[0].Add(worldPos[0]), // position only at final placement [03 §2.4] C24 [03 §5.2]
+			tr.Origin[1].Add(worldPos[1]),
+			tr.Origin[2].Add(worldPos[2]),
+		}
+		record.IsDirty = dirty
+		if scratch.hidden[i] {
 			// Keep the stable piece index while suppressing all authored geometry
 			// under a hidden piece [03 §2.4.1].
-			out = append(out, PieceDraw{
-				Index: i, SourceIndex: i, Name: piece.Name, Transform: tr, LocalOrigin: tr.Origin,
-				WorldOrigin: [3]numeric.Fixed{tr.Origin[0].Add(worldPos[0]), tr.Origin[1].Add(worldPos[1]), tr.Origin[2].Add(worldPos[2])}, IsDirty: dirty,
-			})
+			record.WorldVertices, record.Primitives, record.IsLeafAttachment = nil, nil, false
 			continue
-		}
-		localOrigin := tr.Origin // [03 §2.4] C21 without world pos [03 §5.2]
-		worldOrigin := [3]numeric.Fixed{
-			localOrigin[0].Add(worldPos[0]), // position only at final placement [03 §2.4] C24 [03 §5.2]
-			localOrigin[1].Add(worldPos[1]),
-			localOrigin[2].Add(worldPos[2]),
 		}
 		// World vertices: transform each authored vertex via the same chain then offset by worldPos [03 §2.4] C21
 		store.world = reuseDrawSlice(store.world, len(piece.Vertices))
 		worldVerts := store.world
-		for vi, v := range piece.Vertices {
-			local := tr.Apply(v) // [03 §2.4] C21 from pristine vertices ancestor-after-descendant
-			worldVerts[vi] = [3]numeric.Fixed{
-				local[0].Add(worldPos[0]),
-				local[1].Add(worldPos[1]),
-				local[2].Add(worldPos[2]),
-			}
-		}
+		// [03 §2.4] C21 from pristine vertices ancestor-after-descendant.
+		tr.ApplyOffsetInto(worldVerts, piece.Vertices, worldPos)
 		var rows []int
 		if shaded {
 			// The shaded renderer builds smooth normals from transformed piece
@@ -366,10 +370,9 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 			// unshaded renderer does not read the per-piece shade bit [R-RND-02A].
 			store.normals = reuseDrawSlice(store.normals, len(piece.Vertices))
 			clear(store.normals)
-			store.count = reuseDrawSlice(store.count, len(piece.Vertices))
-			clear(store.count)
-			normals, normalCount := store.normals, store.count
-			for primitiveIndex, pr := range piece.Primitives {
+			normals := store.normals
+			for primitiveIndex := range piece.Primitives {
+				pr := &piece.Primitives[primitiveIndex]
 				if piece.Selection && primitiveIndex == 0 {
 					continue // selection plate is not part of model lighting [03 §2.4.1]
 				}
@@ -385,47 +388,50 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 					if int(vi) >= len(normals) {
 						continue
 					}
-					normals[vi][0] += n[0]
-					normals[vi][1] += n[1]
-					normals[vi][2] += n[2]
-					normalCount[vi]++
+					normals[vi].sum[0] += n[0]
+					normals[vi].sum[1] += n[1]
+					normals[vi].sum[2] += n[2]
+					normals[vi].count++
 				}
 			}
 			store.rows = reuseDrawSlice(store.rows, len(normals))
 			rows = store.rows
+			dontShade := i < len(states) && states[i].DontShade
 			for vi := range normals {
-				if normalCount[vi] == 0 {
+				if normals[vi].count == 0 {
 					rows[vi] = SHDIdentityRow
 					continue
 				}
-				avg := normals[vi]
-				count := float64(normalCount[vi])
+				avg := normals[vi].sum
+				count := float64(normals[vi].count)
 				avg[0] /= count
 				avg[1] /= count
 				avg[2] /= count
-				rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, i < len(states) && states[i].DontShade)
+				rows[vi] = ShadeRowForNormal(avg, DefaultModelLight, dontShade)
 			}
 		}
 		// Primitives in load-fixed order [03 §2.4] C20 [GAP 02-A6] — never resort here
 		store.prims = reuseDrawSlice(store.prims, len(piece.Primitives))
 		prims := store.prims
-		corners := 0
-		for _, pr := range piece.Primitives {
-			corners += len(pr.VertexIndices)
-		}
 		if shaded {
+			corners := 0
+			for pi := range piece.Primitives {
+				corners += len(piece.Primitives[pi].VertexIndices)
+			}
+			// Every corner lane below is assigned, including the unresolvable
+			// ones, so the arena needs no blanket erase.
 			store.shades = reuseDrawSlice(store.shades, corners)
-			clear(store.shades)
 		}
 		shadeOffset := 0
-		for pi, pr := range piece.Primitives {
-			pd := PrimitiveDraw{
-				ColorIndex:    pr.ColorIndex,
-				TextureName:   pr.TextureName,
-				IsColored:     pr.IsColored,
-				VertexIndices: pr.VertexIndices,
-				ShadeRow:      NoShadeRow,
-			}
+		for pi := range piece.Primitives {
+			pr := &piece.Primitives[pi]
+			pd := &prims[pi]
+			pd.ColorIndex = pr.ColorIndex
+			pd.TextureName = pr.TextureName
+			pd.IsColored = pr.IsColored
+			pd.VertexIndices = pr.VertexIndices
+			pd.ShadeRow = NoShadeRow
+			pd.ShadeRows = nil
 			if shaded {
 				// Default to the DONT_SHADE pin (row 15) rather than an invented
 				// mid row: row 15 is the one retail value this field can hold
@@ -438,6 +444,7 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 				shadeOffset = end
 				for k, vi := range pr.VertexIndices {
 					if int(vi) >= len(rows) {
+						pd.ShadeRows[k] = 0
 						continue
 					}
 					pd.ShadeRows[k] = rows[vi]
@@ -446,7 +453,6 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 					pd.ShadeRow = rows[pr.VertexIndices[0]] // [03 R-RAST-01 §5] real trunc(dot*5)&31 row
 				}
 			}
-			prims[pi] = pd
 		}
 		isLeaf := len(piece.Primitives) == 0 && len(piece.Vertices) > 0 // [03 §2.4] C23
 		// Also leaf in hierarchy sense: sibling/child links depth-first [fmt 3do] — a piece with no primitives but with children is not a leaf;
@@ -461,43 +467,62 @@ func buildPieceDrawsInto(m *model.Model, states []model.PieceState, worldPos [3]
 		// Re-evaluate: earlier we cleared isLeaf when children !=0; but spec says leaf implies no children,
 		// so a non-leaf with vertex+no primitive is not counted as leaf attachment by the strict leaf definition.
 		// Keep the strict interpretation but also expose via helper EmitPoints for any piece.
-		out = append(out, PieceDraw{
-			Index:            i,
-			SourceIndex:      i,
-			Name:             piece.Name,
-			Transform:        tr,
-			LocalOrigin:      localOrigin,
-			WorldOrigin:      worldOrigin,
-			WorldVertices:    worldVerts,
-			Primitives:       prims,
-			IsLeafAttachment: isLeaf,
-			IsDirty:          dirty,
-		})
+		record.WorldVertices, record.Primitives, record.IsLeafAttachment = worldVerts, prims, isLeaf
 	}
 	return out, transforms
 }
 
-func pieceHiddenWithScratch(m *model.Model, states []model.PieceState, index int, visited []bool) bool {
-	if index < 0 || index >= len(m.Pieces) {
-		return true
-	}
-	if index < len(states) && states[index].Hidden {
-		return true
-	}
-	visited = reuseDrawSlice(visited, len(m.Pieces))
-	clear(visited)
-	for parent := m.Pieces[index].Parent; parent >= 0 && parent < len(m.Pieces); parent = m.Pieces[parent].Parent {
-		if visited[parent] {
-			// A cyclic public fixture is malformed. Suppress it as hidden rather
-			// than allowing a presentation walk to run forever.
-			return true
+// resolveHidden fills one hidden flag per piece: a piece is suppressed when it
+// or any ancestor is hidden [03 §2.4.1]. Resolving the whole model at once
+// costs one ancestor visit per piece; testing each piece independently walked
+// and erased a per-piece marker array, which is quadratic in the piece count.
+//
+// A cyclic ancestor chain is malformed and every piece on it is suppressed,
+// rather than allowing a presentation walk to run forever.
+func resolveHidden(m *model.Model, states []model.PieceState, hidden []bool, state []uint8, stack []int) {
+	const (
+		unresolved = iota
+		inProgress
+		visible
+		suppressed
+	)
+	clear(state)
+	for i := range m.Pieces {
+		if state[i] != unresolved {
+			continue
 		}
-		visited[parent] = true
-		if parent < len(states) && states[parent].Hidden {
-			return true
+		stack = stack[:0]
+		cur := i
+		result := uint8(visible)
+		for {
+			if cur < 0 || cur >= len(m.Pieces) {
+				break // the chain leaves the model: nothing above suppresses it
+			}
+			if s := state[cur]; s != unresolved {
+				if s == visible {
+					break
+				}
+				// inProgress closes a cycle; suppressed is an already resolved
+				// hidden ancestor. Both suppress everything below.
+				result = suppressed
+				break
+			}
+			if cur < len(states) && states[cur].Hidden {
+				state[cur] = suppressed
+				result = suppressed
+				break
+			}
+			state[cur] = inProgress
+			stack = append(stack, cur)
+			cur = m.Pieces[cur].Parent
+		}
+		for _, idx := range stack {
+			state[idx] = result
 		}
 	}
-	return false
+	for i := range hidden {
+		hidden[i] = state[i] == suppressed
+	}
 }
 
 // BuildUnitDraw builds the full per-unit draw for presentation [03 §2.4][03 §5.2] (I6).
@@ -525,9 +550,11 @@ func BuildUnitDrawInto(m *model.Model, base []model.PieceState, heading, pitch, 
 		needsRebuild = false
 	}
 	scratch.states = reuseDrawSlice(scratch.states, len(m.Pieces))
-	clear(scratch.states)
-	copy(scratch.states, base)
 	states := scratch.states
+	// The base states are copied in and only the tail the caller did not
+	// supply has to be erased; erasing the whole slot first rewrote every
+	// element twice.
+	clear(states[copy(states, base):])
 	model.FoldRootAngles(states, m.Root, heading, pitch, bank) // [03 §2.4] C24
 	worldPos := [3]numeric.Fixed{current.X, current.Y, current.Z}
 	// BuildPieceDraws is the one traversal. Derive the public transform view from
@@ -580,6 +607,25 @@ func BuildUnitDrawSimple(m *model.Model, base []model.PieceState, heading, pitch
 // effect entry receives one model piece per call, and the projectile dispatcher
 // supplies only the model header and its child slot [03 §5.4][03 R-COMP-02 §6].
 func BuildProjectileModelPieces(m *model.Model, v frame.ProjectileView, now uint32) (parent, child *UnitDraw) { // [03 §5.2][06 R-WFX-01 §4]
+	return BuildProjectileModelPiecesInto(m, v, now, &ProjectileScratch{}, &ProjectileScratch{})
+}
+
+// ProjectileScratch retains one standalone model call's storage: the detached
+// one-piece model, its single piece state and the piece-draw arrays. A
+// projectile's parent and child calls are live at the same time, so each takes
+// its own slot; a slot is valid until it is borrowed again.
+type ProjectileScratch struct {
+	model  model.Model
+	pieces [1]model.Piece
+	states [1]model.PieceState
+	draw   DrawScratch
+	result UnitDraw
+}
+
+// BuildProjectileModelPiecesInto is BuildProjectileModelPieces over borrowed
+// storage, so a frame that draws a hundred projectiles allocates nothing per
+// projectile. parentScratch and childScratch must be distinct slots.
+func BuildProjectileModelPiecesInto(m *model.Model, v frame.ProjectileView, now uint32, parentScratch, childScratch *ProjectileScratch) (parent, child *UnitDraw) { // [03 §5.2][06 R-WFX-01 §4]
 	if m == nil || m.Root < 0 || m.Root >= len(m.Pieces) {
 		return nil, nil
 	}
@@ -589,7 +635,7 @@ func BuildProjectileModelPieces(m *model.Model, v frame.ProjectileView, now uint
 	}
 	modelFacing := v.RenderType != RenderTypeRecordOrientation
 	worldPos := [3]numeric.Fixed{v.X, v.Y, v.Z}
-	parent = buildProjectileStandalonePiece(m, m.Root, v.Roll, v.Yaw, pitch, modelFacing, worldPos, nil, now)
+	parent = buildProjectileStandalonePiece(m, m.Root, v.Roll, v.Yaw, pitch, modelFacing, worldPos, nil, now, parentScratch)
 	if v.RenderType != RenderTypeBaseSpriteModel || now >= v.ExpiryTick || len(m.Pieces[m.Root].Children) == 0 {
 		return parent, nil
 	}
@@ -603,7 +649,7 @@ func BuildProjectileModelPieces(m *model.Model, v frame.ProjectileView, now uint
 		childRoll = 0
 		propeller = &v
 	}
-	child = buildProjectileStandalonePiece(m, childIndex, childRoll, v.Yaw, pitch, modelFacing, worldPos, propeller, now)
+	child = buildProjectileStandalonePiece(m, childIndex, childRoll, v.Yaw, pitch, modelFacing, worldPos, propeller, now, childScratch)
 	return parent, child
 }
 
@@ -611,7 +657,7 @@ func BuildProjectileModelPieces(m *model.Model, v frame.ProjectileView, now uint
 // into one UnitDraw. The passed piece is detached from the unit hierarchy: the
 // projectile entry rotates and projects that one piece, then the conditional
 // child is a second call rather than a recursive draw [03 R-COMP-02 §6].
-func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch uint16, modelFacing bool, worldPos [3]numeric.Fixed, propeller *frame.ProjectileView, now uint32) *UnitDraw {
+func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch uint16, modelFacing bool, worldPos [3]numeric.Fixed, propeller *frame.ProjectileView, now uint32, s *ProjectileScratch) *UnitDraw {
 	if m == nil || piece < 0 || piece >= len(m.Pieces) {
 		return nil
 	}
@@ -621,9 +667,11 @@ func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch 
 	// The effect entry rotates this piece's raw vertex buffer and adds only the
 	// projectile world point. It does not compose authored object translation.
 	p.Translate = [3]numeric.Fixed{}
-	single := &model.Model{Pieces: []model.Piece{p}, Root: 0, Name: m.Name}
-	states := make([]model.PieceState, 1)
-	states[0].RotZ = roll // word 0 has no model-facing offset [03 §5.2]
+	s.pieces[0] = p
+	s.model = model.Model{Pieces: s.pieces[:1], Root: 0, Name: m.Name}
+	single := &s.model
+	states := s.states[:1]
+	states[0] = model.PieceState{RotZ: roll} // word 0 has no model-facing offset [03 §5.2]
 	if modelFacing {
 		FoldProjectileAngles(states, 0, yaw, pitch)
 	} else {
@@ -633,17 +681,18 @@ func buildProjectileStandalonePiece(m *model.Model, piece int, roll, yaw, pitch 
 	if propeller != nil {
 		FoldPublishedPropellerSpin(states, 0, *propeller, now)
 	}
-	pieces, transforms := buildPieceDraws(single, states, worldPos, false, false)
+	pieces, transforms := buildPieceDrawsInto(single, states, worldPos, false, false, &s.draw)
 	if len(pieces) != 0 {
 		pieces[0].SourceIndex = piece
 	}
-	return &UnitDraw{
+	s.result = UnitDraw{
 		Model:       single,
 		PieceStates: states,
 		Transforms:  transforms,
 		Pieces:      pieces,
 		WorldPos:    worldPos,
 	}
+	return &s.result
 }
 
 // EmitPoint returns the world-space position of a vertex attachment on a piece [03 §2.4] C23.

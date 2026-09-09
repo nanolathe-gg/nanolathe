@@ -95,21 +95,22 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 		return nil
 	}
 	faces, corners := 0, 0
-	for _, piece := range draw.Pieces {
-		faces += len(piece.Primitives)
-		for _, pr := range piece.Primitives {
-			corners += len(pr.VertexIndices)
+	for i := range draw.Pieces {
+		prims := draw.Pieces[i].Primitives
+		faces += len(prims)
+		for j := range prims {
+			corners += len(prims[j].VertexIndices)
 		}
 	}
 	scratch := c.borrowPolys(faces, corners)
-	polys := scratch.polys
 
 	for pi := len(draw.Pieces) - 1; pi >= 0; pi-- {
 		if pi >= len(draw.Model.Pieces) {
 			continue
 		}
-		piece := draw.Pieces[pi]
-		for pri, pr := range piece.Primitives {
+		piece := &draw.Pieces[pi]
+		for pri := range piece.Primitives {
+			pr := &piece.Primitives[pri]
 			if draw.Model.Pieces[pi].Selection && pri == 0 {
 				continue
 			}
@@ -135,23 +136,21 @@ func (c *Client) collectShadowPolys(draw *presentationrender.UnitDraw) []screenP
 				// body's: two projections of one face can wind differently.
 				continue
 			}
-			poly := scratch.face(n)
+			poly := scratch.next(n)
 			// Every shadow face is the literal palette index 0 and carries no
 			// SHD row, so the flat writer puts that byte down raw
 			// [R-REN-03D §2].
 			poly.color, poly.useSHD = shadowColorIndex, false
-			poly.candidate, poly.piece, poly.primitive = uint32(len(polys)), pi, pri
+			poly.candidate, poly.piece, poly.primitive = uint32(len(scratch.polys)-1), pi, pri
 			for corner, vi := range pr.VertexIndices {
 				sx, sy, ry := shadowLocalVertex(piece.WorldVertices[vi], draw.WorldPos)
 				sx, sy = c.scaleModelLocal(sx, sy)
 				poly.x[corner], poly.y[corner] = sx, sy
 				poly.attr[spanKey][corner] = ry + shadowKeyBias
 			}
-			polys = append(polys, poly)
 		}
 	}
-	scratch.polys = polys
-	return polys
+	return scratch.polys
 }
 
 // buildModelShadow rasterizes one model shadow into its own finished, punched

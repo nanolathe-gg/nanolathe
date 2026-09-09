@@ -213,6 +213,14 @@ func FoldRootAngles(st []PieceState, root int, heading, pitch, bank uint16) {
 }
 
 // xformNode is a leaf→root snapshot for Transform application [03 §2.4] C21.
+//
+// Only nodes that actually rotate are retained. A node whose three angle words
+// are all zero contributes nothing but its translation, and the chain adds
+// translations as whole 16.16 words with no intervening rounding, so the
+// translation of every non-rotating node folds into the neighbour that
+// precedes it in application order — the leading run into Transform.pre, a
+// later run into the rotating node it follows. The arithmetic the surviving
+// nodes perform is unchanged [03 §2.4] C21.
 type xformNode struct {
 	cx, sx, cy, sy, cz, sz float64
 	t                      [3]numeric.Fixed
@@ -249,12 +257,47 @@ type xformNode struct {
 // per [03 §2.4] (I2 allowlist: model draw trig), not fixed-point tables [03 §2.4] C25.
 type Transform struct {
 	Origin [3]numeric.Fixed // world position of piece origin [03 §2.4] C21
-	nodes  []xformNode      // leaf→root snapshot for Apply
+	pre    [3]numeric.Fixed // translation of the leading non-rotating nodes
+	nodes  []xformNode      // leaf→root snapshot for Apply, rotating nodes only
 }
 
 // Apply transforms a point from piece-local space to world space [03 §2.4] C21.
 func (t Transform) Apply(v [3]numeric.Fixed) [3]numeric.Fixed {
-	return applyChain(v, t.nodes)
+	return applyChain(v, t.pre, t.nodes)
+}
+
+// ApplyOffsetInto transforms every vertex of src and adds offset, writing the
+// results to dst. It is the bulk form of Apply followed by the caller's own
+// componentwise add: the arithmetic per vertex is identical, but the composed
+// chain is read once for the whole piece instead of copied into a value
+// receiver per vertex [03 §2.4] C21.
+//
+// dst must be at least as long as src; vertices beyond len(src) are untouched.
+func (t *Transform) ApplyOffsetInto(dst, src [][3]numeric.Fixed, offset [3]numeric.Fixed) {
+	if len(dst) < len(src) {
+		src = src[:len(dst)]
+	}
+	if len(t.nodes) == 0 {
+		// With no rotating node the chain only adds whole 16.16 words, which
+		// the float path carries exactly, so the sum is the integer sum
+		// [03 §2.4] C21.
+		ox := t.pre[0].Add(offset[0])
+		oy := t.pre[1].Add(offset[1])
+		oz := t.pre[2].Add(offset[2])
+		for i := range src {
+			dst[i][0] = src[i][0].Add(ox)
+			dst[i][1] = src[i][1].Add(oy)
+			dst[i][2] = src[i][2].Add(oz)
+		}
+		return
+	}
+	pre, nodes := t.pre, t.nodes
+	for i := range src {
+		local := applyChain(src[i], pre, nodes)
+		dst[i][0] = local[0].Add(offset[0])
+		dst[i][1] = local[1].Add(offset[1])
+		dst[i][2] = local[2].Add(offset[2])
+	}
 }
 
 // ApplyVertex is an alias for Apply [03 §2.4] C21.
@@ -508,6 +551,39 @@ func primitiveMeanY(obj formats.ThreeDOObject, primitiveIndex int) (int32, error
 // composition [03 §2.4] C21.
 type ComposeScratch struct {
 	chain []int
+	trig  []trigNode
+	gen   uint32
+}
+
+// trigNode memoizes one piece's rotation trig for the run of compositions that
+// share one model and one piece-state slice. Every piece's chain ends at the
+// root, so without it the root's cosine and sine are recomputed once per piece.
+// The cached values are the same math.Cos/math.Sin results on the same operand,
+// so the composed transform is bit-identical [03 §2.4] C21.
+type trigNode struct {
+	cx, sx, cy, sy, cz, sz float64
+	ax, ay, az             uint16
+	gen                    uint32
+}
+
+// BeginModel arms the per-piece trig memo for a run of ComposeInto calls that
+// all read the same model and the same piece states. Call it once before the
+// run; without it ComposeInto evaluates the trig per node as before.
+//
+// Entries carry the run they were written in rather than a validity flag, so
+// arming the memo costs nothing per piece. Generation zero is never a live run,
+// so a freshly grown or freshly allocated table starts empty.
+func (s *ComposeScratch) BeginModel(pieces int) {
+	s.gen++
+	if s.gen == 0 {
+		s.gen = 1
+		clear(s.trig)
+	}
+	if cap(s.trig) < pieces {
+		s.trig = make([]trigNode, pieces)
+		return
+	}
+	s.trig = s.trig[:pieces]
 }
 
 // Compose returns the world transform for piece index [03 §2.4] C21.
@@ -550,16 +626,16 @@ func ComposeInto(m *Model, st []PieceState, piece int, previous Transform, scrat
 		}
 	}
 	scratch.chain = chain
-	nodes := previous.nodes
+	nodes := previous.nodes[:0]
 	if cap(nodes) < len(chain) {
 		// Grow geometrically. An exact allocation reallocated on every chain
 		// that was one node deeper than the last one this slot composed, which
 		// on a mixed unit population is most calls; append's growth makes a
 		// reused transform slot stop allocating after a few frames.
-		nodes = slices.Grow(nodes[:0], len(chain))
+		nodes = slices.Grow(nodes, len(chain))
 	}
-	nodes = nodes[:len(chain)]
-	for i, idx := range chain {
+	var pre [3]numeric.Fixed
+	for _, idx := range chain {
 		t := m.Pieces[idx].Translate
 		var ax, ay, az uint16
 		if idx >= 0 && idx < len(st) {
@@ -570,35 +646,68 @@ func ComposeInto(m *Model, st []PieceState, piece int, previous Transform, scrat
 			t[1] = t[1].Add(st[idx].Trans[1])
 			t[2] = t[2].Add(st[idx].Trans[2])
 		}
+		if ax == 0 && ay == 0 && az == 0 {
+			// The node rotates nothing, so its translation may be summed into
+			// whichever add already precedes the next rotation. Whole 16.16
+			// words add exactly on either side of the boundary [03 §2.4] C21.
+			if n := len(nodes); n != 0 {
+				nodes[n-1].t[0] = nodes[n-1].t[0].Add(t[0])
+				nodes[n-1].t[1] = nodes[n-1].t[1].Add(t[1])
+				nodes[n-1].t[2] = nodes[n-1].t[2].Add(t[2])
+			} else {
+				pre[0] = pre[0].Add(t[0])
+				pre[1] = pre[1].Add(t[1])
+				pre[2] = pre[2].Add(t[2])
+			}
+			continue
+		}
 		node := xformNode{t: t, ax: ax, ay: ay, az: az}
 		// Evaluate the same trig expressions once per immutable transform node,
 		// retaining per-axis/per-node rounding at application time [03 §2.4] C21.
-		if az != 0 {
-			theta := float64(az) * 2 * math.Pi / 65536
-			node.cz = math.Cos(theta)
-			node.sz = math.Sin(theta)
+		if cached := scratch.trigFor(idx); cached != nil && cached.gen == scratch.gen && cached.ax == ax && cached.ay == ay && cached.az == az {
+			node.cx, node.sx = cached.cx, cached.sx
+			node.cy, node.sy = cached.cy, cached.sy
+			node.cz, node.sz = cached.cz, cached.sz
+		} else {
+			if az != 0 {
+				theta := float64(az) * 2 * math.Pi / 65536
+				node.cz = math.Cos(theta)
+				node.sz = math.Sin(theta)
+			}
+			if ax != 0 {
+				theta := float64(ax) * 2 * math.Pi / 65536
+				node.cx = math.Cos(theta)
+				node.sx = math.Sin(theta)
+			}
+			if ay != 0 {
+				theta := float64(ay) * 2 * math.Pi / 65536
+				node.cy = math.Cos(theta)
+				node.sy = math.Sin(theta)
+			}
+			if cached != nil {
+				*cached = trigNode{cx: node.cx, sx: node.sx, cy: node.cy, sy: node.sy, cz: node.cz, sz: node.sz, ax: ax, ay: ay, az: az, gen: scratch.gen}
+			}
 		}
-		if ax != 0 {
-			theta := float64(ax) * 2 * math.Pi / 65536
-			node.cx = math.Cos(theta)
-			node.sx = math.Sin(theta)
-		}
-		if ay != 0 {
-			theta := float64(ay) * 2 * math.Pi / 65536
-			node.cy = math.Cos(theta)
-			node.sy = math.Sin(theta)
-		}
-		nodes[i] = node
+		nodes = append(nodes, node)
 	}
-	origin := applyChain([3]numeric.Fixed{}, nodes)
-	return Transform{Origin: origin, nodes: nodes}
+	origin := applyChain([3]numeric.Fixed{}, pre, nodes)
+	return Transform{Origin: origin, pre: pre, nodes: nodes}
 }
 
-func applyChain(p [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {
+// trigFor returns the memo slot for one piece index, or nil when the run has
+// not armed the memo with BeginModel.
+func (s *ComposeScratch) trigFor(idx int) *trigNode {
+	if idx < 0 || idx >= len(s.trig) {
+		return nil
+	}
+	return &s.trig[idx]
+}
+
+func applyChain(p, pre [3]numeric.Fixed, nodes []xformNode) [3]numeric.Fixed {
 	// Work in float64 on raw Fixed values then round per [03 §2.4] C21 (I2).
-	x := float64(p[0].Raw())
-	y := float64(p[1].Raw())
-	z := float64(p[2].Raw())
+	x := float64(p[0].Raw() + pre[0].Raw())
+	y := float64(p[1].Raw() + pre[1].Raw())
+	z := float64(p[2].Raw() + pre[2].Raw())
 	for i := range nodes {
 		n := &nodes[i]
 		if n.az != 0 {

@@ -96,8 +96,8 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 // The order latches below (`m`, `a`, `p`, `r`, `e`, `c`, `g`, `d`, `x`, `o`)
 // have no row in that table at all: retail reaches them through the command
 // palette's authored gadget quick keys [07 §2 "GUI quick keys"], not through
-// the battle dispatcher. They are kept as direct bindings here because the
-// authored quick-key path belongs to the palette's owner.
+// the battle dispatcher. The active palette services them before this
+// residual battle dispatcher.
 //
 // handleInput processes selection, orders, and build placement.
 // It converts input into complete canonical commands with target/position and
@@ -116,7 +116,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
 	b.dragScrollStepped = false
-	if b.serviceDragScroll(mx, my, mouse.Held(input.MouseButtonRight), cl) {
+	if !b.palettePointerOwned && b.serviceDragScroll(mx, my, mouse.Held(input.MouseButtonRight), cl) {
 		return
 	}
 	b.battleState().Input.ShiftHeld = kbd.HasShift()
@@ -132,10 +132,10 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// its first jump is serviced here on the following host frame. Capture is
 	// intentionally serviced before fresh clicks and continues outside the
 	// radar until its matching release [07 R-CAM-01 §5][07 R-CAM-01 §11].
-	if b.serviceMinimapCameraLatch(mx, my, &mouse) {
+	if !b.palettePointerOwned && b.serviceMinimapCameraLatch(mx, my, &mouse) {
 		return
 	}
-	if b.classifyPointer(mx, my) == battlePointerMinimap {
+	if !b.palettePointerOwned && b.classifyPointer(mx, my) == battlePointerMinimap {
 		state := b.battleState().Input
 		// An armed order, including placement, always fires on left. Type 1
 		// therefore cannot let its idle left-button minimap camera latch steal
@@ -155,7 +155,7 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			}
 		}
 	}
-	if b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
+	if !b.palettePointerOwned && b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
 		// The whole canvas suppresses a viewport drag; only its fitted radar
 		// rectangle admits lens input [07 R-CAM-01 §11].
 		return
@@ -167,38 +167,6 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	// does not also arm the attack latch.
 	ctrlHeld := kbd.KeyHeld(input.KeyCtrl)
 	if !ctrlHeld {
-		// Latch arming via hotkeys — retail latch byte IS dispatcher switch key [GAP T22][07 §9] C11.
-		// Preserve authored button order and pagination for build menu [02 "Build-menu catalog keys"].
-		if kbd.KeyDown(input.KeyM) {
-			b.battleState().Input.Latch = input.LatchMove
-		}
-		if kbd.KeyDown(input.KeyA) {
-			b.battleState().Input.Latch = input.LatchAttack
-		}
-		if kbd.KeyDown(input.KeyP) {
-			b.battleState().Input.Latch = input.LatchPatrol
-		}
-		if kbd.KeyDown(input.KeyR) {
-			b.battleState().Input.Latch = input.LatchRepair
-		}
-		if kbd.KeyDown(input.KeyE) {
-			b.battleState().Input.Latch = input.LatchReclaim
-		}
-		if kbd.KeyDown(input.KeyC) {
-			b.battleState().Input.Latch = input.LatchCapture
-		}
-		if kbd.KeyDown(input.KeyG) {
-			b.battleState().Input.Latch = input.LatchFollow
-		}
-		if kbd.KeyDown(input.KeyD) {
-			b.battleState().Input.Latch = input.LatchBlast
-		}
-		if kbd.KeyDown(input.KeyX) {
-			b.cancelSelectedProduction()
-		}
-		if kbd.KeyDown(input.KeyO) {
-			b.toggleOnOffSelected(kbd.HasShift())
-		}
 		// `n` (0x6E) cycles the next unvisited own unit. `N` (0x4E) is a
 		// separate character token and the dispatcher has no case for it, so
 		// Shift+n does nothing: the stockpile round is enqueued only by the
@@ -379,6 +347,12 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		b.battleState().Input.ShiftLatchSticky = false
 		b.battleState().Input.HUDCaptured = false
 		b.battleState().Input.DragActive = false
+		return
+	}
+	// The earlier active-GUI pass owns its pointer gesture before world input.
+	// Reuse that verdict; direct controller samples service the same retained
+	// panel here [07 §3][07 R-WGT-01 §3].
+	if b.hud != nil && b.hud.servicePalettePointer(b, in) {
 		return
 	}
 	// A right click over the viewport is Type 1's idle contextual-order path.

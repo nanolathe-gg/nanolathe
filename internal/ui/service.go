@@ -231,9 +231,13 @@ func (p *Panel) serviceDown(button uint8, double bool, hooks WidgetHooks, result
 		p.markDirty()
 		return p.fire(idx, button, result)
 	}
-	if attr&0x100 != 0 && button == widgetLeftButton {
-		p.cycleDown(idx, hooks)
-		return p.fire(idx, button, result)
+	if attr&0x100 != 0 {
+		if button == widgetLeftButton {
+			p.cycleDown(idx, hooks)
+			p.clearCapture()
+			return p.fire(idx, button, result)
+		}
+		return false
 	}
 	if attr&0x1800 != 0 {
 		// Slider arrows trigger once on their initial press; their repeat arm
@@ -268,6 +272,9 @@ func (p *Panel) serviceUp(button uint8, hooks WidgetHooks, result *ServiceResult
 		p.listEdgeTicks[idx] = 0
 		return false
 	case gui.KindButton:
+		if g.Attribs&0x100 != 0 {
+			return false
+		}
 		if g.Attribs&0x10 != 0 {
 			if !inside {
 				p.SetStatusAt(idx, p.savedDown)
@@ -328,6 +335,9 @@ func (p *Panel) serviceHeld(frame WidgetFrame, hooks WidgetHooks, result *Servic
 	case gui.KindScrollBar:
 		p.serviceSlider(idx, hooks)
 	case gui.KindButton:
+		if g.Attribs&0x100 != 0 {
+			return false
+		}
 		if g.Attribs&0x10 != 0 {
 			if !p.inside(idx) {
 				p.SetStatusAt(idx, p.savedDown)
@@ -342,18 +352,24 @@ func (p *Panel) serviceHeld(frame WidgetFrame, hooks WidgetHooks, result *Servic
 			p.SetStatusAt(idx, 0)
 			return false
 		}
+		if p.StatusAt(idx) == 0 {
+			// Returning inside begins a fresh held press, including its full repeat
+			// delay; a cycle control never reaches this branch [07 R-WGT-01 §3].
+			p.SetStatusAt(idx, 1)
+			p.repeat = 15
+			p.markDirty()
+			return false
+		}
 		if g.Attribs&0x2000 != 0 && frame.TimerAdvanced {
 			if p.repeat > 0 {
 				p.repeat--
-				if p.repeat > 0 {
-					return false
-				}
-			}
-			if g.Attribs&0x1800 != 0 {
-				p.stepAssociatedSlider(idx, hooks)
 				return false
 			}
-			return p.fire(idx, p.captureButton, result)
+			p.markDirty()
+			if g.Attribs&0x1800 != 0 {
+				p.stepAssociatedSlider(idx, hooks)
+			}
+			return false
 		}
 	}
 	return false

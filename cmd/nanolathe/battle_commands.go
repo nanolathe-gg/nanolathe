@@ -75,17 +75,6 @@ func containsStop(s string) bool {
 	return strings.Contains(upper, "STOP")
 }
 
-// cancelSelectedProduction cancels the tail-most matching factory/mobile build for selected units [04 §3.3][P1-14].
-// It walks each selected factory/builder's primary queue tail-most and decrements or frees via
-// construction.CancelTailMost / CancelMobileTailMost. Tombstone bit ensures weapon-target-clear skip [04 §3.3].
-func (b *battleSession) cancelSelectedProduction() {
-	for _, u := range b.selectedCommandUnits() {
-		if u != nil {
-			_ = b.DispatchCancelProduction(u.Handle)
-		}
-	}
-}
-
 // toggleOnOffSelected issues Activate/Deactivate for OnOffable units [02 "Unit record"].
 // OnOffable is data-driven; the command is Activate/Deactivate via orders.NewNodeForOrder [P0-I14].
 func (b *battleSession) toggleOnOffSelected(queued bool) {

@@ -108,8 +108,11 @@ type battleSession struct {
 	dragScroll        camera.DragScroll
 	dragScrollActive  bool
 	dragScrollStepped bool
-	dragScrollLastX   int32
-	dragScrollLastY   int32
+	// The active GUI is serviced once before residual battle input [07 §3].
+	paletteFrameServiced bool
+	palettePointerOwned  bool
+	dragScrollLastX      int32
+	dragScrollLastY      int32
 
 	// switchAlt is captured once when the battle installs its settings. It is
 	// presentation input state only; routeDigit reads this cached bit rather
@@ -692,6 +695,12 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// return as well as the normal controller path [03 §1][R-SEL-02A].
 	defer b.syncSelectionDrag(cl)
 	in := cl.Input()
+	producerIn := in
+	// The command palette owns its ordered accelerator peek before the battle
+	// controller converts the host state into a sample. Samples deliberately
+	// do not carry the token ring, so doing this below controller.Step loses
+	// every producer token [07 R-WGT-01 §§1-3][07 R-WGT-02 §5].
+	b.cl = cl
 	// Advance the canonical panel state during the host-frame update. Drawing
 	// must remain a pure read of this state so hit testing and raster placement
 	// use the same offset [07 §6][I6].
@@ -755,7 +764,28 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// A unit-information child makes its zero-token peek pass before battle
 	// hotkeys. It can claim an admitted quickkey, but it never gives Enter or
 	// Escape automatic default behavior [07 R-WGT-01 §§1-3].
+	unitInfoAtFrameStart := unitInfoOpen()
+	tokensBeforeChild := in.PendingTokens()
 	b.serviceUnitInfoKeyboard(in)
+	tokenClaimed := in.PendingTokens() < tokensBeforeChild
+	b.paletteFrameServiced = true
+	b.palettePointerOwned = unitInfoAtFrameStart && !unitInfoOpen()
+	defer func() { b.paletteFrameServiced, b.palettePointerOwned = false, false }()
+	if b.hud != nil && !unitInfoAtFrameStart {
+		result, owned := b.hud.servicePaletteFrame(b, in, true)
+		b.palettePointerOwned = owned
+		tokenClaimed = result.ConsumedTokens > 0
+	}
+	if tokenClaimed && in.Kbd != nil {
+		// A GUI-claimed token cannot also trigger its physical press edge in the
+		// residual dispatcher. Preserve held modifiers and independent pointer
+		// work; the client's original sample remains untouched [07 §3].
+		residual := *in
+		keyboard := *in.Kbd
+		keyboard.ResetEdges()
+		residual.Kbd = &keyboard
+		in = &residual
+	}
 	if keyDown(input.KeyTab) || (keyDown(input.KeyF2) && !shiftHeld) {
 		b.openBattleMenu()
 		cl.Cursors().SetIndex(render.CursorNormal)
@@ -793,6 +823,13 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// glide on the following frame, as retail's does.
 		b.stepFollowCamera()
 		b.controller.Step(b.pointerSample(in, delta), cl)
+		// The controller receives a value sample, not the client token ring. A
+		// palette/UNITINFO peek that left its prefix unclaimed has now had the
+		// residual battle hotkey pass; battle owns no editor, so it drains the
+		// remaining producer records before a later window can inherit them.
+		if in != nil {
+			producerIn.DiscardTokens(producerIn.PendingTokens())
+		}
 		b.applyCommittedShake()
 	}
 	if b.ended {

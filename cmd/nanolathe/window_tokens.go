@@ -27,6 +27,7 @@ type commandWindowInputState struct {
 
 func (s *commandWindowInputState) open(b *battleSession, f *frame.Frame, window *gui.Window) {
 	if window == nil || f == nil {
+		s.retireCapture(b)
 		s.window = nil
 		s.selection = s.selection[:0]
 		return
@@ -34,9 +35,20 @@ func (s *commandWindowInputState) open(b *battleSession, f *frame.Frame, window 
 	if s.window == window && slices.Equal(s.selection, f.Selection.Handles) {
 		return
 	}
+	s.retireCapture(b)
 	s.window = window
 	s.selection = append(s.selection[:0], f.Selection.Handles...)
 	if b != nil {
 		flushWindowTokens(b.cl)
+	}
+}
+
+// A window close/reopen retires its pointer gesture even when its compiled GUI
+// remains cached for a later visit [07 §6][07 R-HUD-04 §3].
+func (s *commandWindowInputState) retireCapture(b *battleSession) {
+	if b != nil && b.hud != nil && s.window != nil {
+		if p := b.hud.palettePanels[s.window]; p != nil {
+			p.ResetPress()
+		}
 	}
 }

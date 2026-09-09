@@ -34,27 +34,25 @@ func fillModelPacket(g *drawlist.ModelGeometry, vertices []drawlist.ModelVertex,
 		Scale: scale, KeyPlane: keyPlane,
 	}
 	count := 0
-	for _, p := range polys {
-		count += len(p.x)
+	for i := range polys {
+		count += len(polys[i].x)
 	}
 	vertices = resizeScratch(vertices, count)
 	offset := 0
 	for i := range polys {
-		p := polys[i]
-		face := drawlist.ModelFace{
-			Vertices: vertices[offset : offset+len(p.x) : offset+len(p.x)],
-			Texture:  p.frame,
-			Color:    p.color,
-			Shaded:   p.useSHD,
-		}
-		for j := range p.x {
+		p := &polys[i]
+		n := len(p.x)
+		face := &g.Faces[i]
+		face.Vertices = vertices[offset : offset+n : offset+n]
+		face.Texture, face.Color, face.Shaded = p.frame, p.color, p.useSHD
+		key, u, v, row := p.attr[spanKey], p.attr[spanU], p.attr[spanV], p.attr[spanRow]
+		for j := 0; j < n; j++ {
 			face.Vertices[j] = drawlist.ModelVertex{
-				X: p.x[j], Y: p.y[j], Key: p.attr[spanKey][j],
-				U: p.attr[spanU][j], V: p.attr[spanV][j], Shade: uint8(p.attr[spanRow][j]),
+				X: p.x[j], Y: p.y[j], Key: key[j],
+				U: u[j], V: v[j], Shade: uint8(row[j]),
 			}
 		}
-		offset += len(p.x)
-		g.Faces[i] = face
+		offset += n
 	}
 	return g
 }
@@ -98,8 +96,9 @@ func (c *Client) modelOutlineGeometry(draw *presentationrender.UnitDraw, originX
 		if pi >= len(draw.Model.Pieces) {
 			continue
 		}
-		piece := draw.Pieces[pi]
-		for pri, pr := range piece.Primitives {
+		piece := &draw.Pieces[pi]
+		for pri := range piece.Primitives {
+			pr := &piece.Primitives[pri]
 			if draw.Model.Pieces[pi].Selection && pri == 0 || len(pr.VertexIndices) < 2 {
 				continue
 			}

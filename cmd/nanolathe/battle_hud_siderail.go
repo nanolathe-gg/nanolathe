@@ -35,7 +35,12 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 		// Fixed in authored coordinates: the §6 slide moves no rail window and
 		// no gadget rectangle [07 R-HUD-05] (WU-19-223).
 		r := window.PlacedRect(i)
-		down := h.sideButtonDown(b, window, i, gad)
+		down, stage := int(gad.Status), 0
+		panel := h.palettePanels[window]
+		if panel != nil {
+			down, stage = panel.DownAt(i), panel.StageAt(i)
+			gad.ColorF = panel.FlashRow(i)
+		}
 		command, isCommand := commandGadgetVerdict(gad, f, paged)
 		if isCommand && command.hidden {
 			// A hidden command button is one the switch deactivates outright —
@@ -48,7 +53,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 		if isCommand {
 			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, pageGAF), gad, command.stage, grey, down != 0)
 		} else {
-			frameArt = h.gadgetButtonFrame(gad, pageGAF, down, 0, grey)
+			frameArt = h.gadgetButtonFrame(gad, pageGAF, down, stage, grey)
 		}
 		if frameArt != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
@@ -73,10 +78,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 		// alone [07 R-HUD-03 §6]. Stock content authors these gadgets with an
 		// empty label anyway.
 		if !isCommand && gad.Kind == gui.KindButton {
-			text := gad.Text
-			if len(gad.Labels) != 0 {
-				text = gad.Labels[0]
-			}
+			text := retailBattleButtonText(gad, panel, i, stage)
 			// The count-label writer runs over the open page's toys after every
 			// enqueue or cancel and writes the count **into the toy's own text
 			// slot**; the ordinary window text pass then draws that slot with
@@ -111,26 +113,10 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 				// record, `armbutt`/`corbutt` — and the common font when none
 				// matches. That FNT is only reached on the GAF pen's null-slot
 				// fallback below [07 R-WGT-01 §6][03 R-FONT-01 §5].
-				h.drawProductButtonCaptionSelected(c, gad, r, text, window.Font(h.fs, gad.FontNumber))
+				h.drawProductButtonCaptionSelected(c, gad, r, window.Rect, text, window.Font(h.fs, gad.FontNumber))
 			}
 		}
 	}
-}
-
-// sideButtonDown reads the captured command-page gesture instead of sampling
-// whichever rectangle the live pointer happens to occupy. The battle input
-// owner installs HUDCaptured only on an admitted press and clears it on that
-// release, so dragging into a button can never create its down appearance
-// [07 R-WGT-01 §1][07 R-WGT-01 §3].
-func (h *retailBattleHUD) sideButtonDown(b *battleSession, window *gui.Window, index int, gad gui.Gadget) int {
-	if b == nil || b.battleState() == nil {
-		return int(gad.Status)
-	}
-	state := b.battleState().Input
-	if state.HUDCaptured && h.buttonAt(b, state.HUDPressX, state.HUDPressY) == index && window != nil && index >= 0 && index < len(window.Gadgets) && guiRectContains(window.PlacedRect(index), state.PointerX, state.PointerY) {
-		return 1
-	}
-	return int(gad.Status)
 }
 
 // productQueueCountLabel is the bit-0x04 format of the count-label writer
@@ -329,23 +315,25 @@ func (h *retailBattleHUD) buttonCaptionGAFFont() *formats.GAFEntry {
 // called with the width limit dropped, which is what maxWidth < 0 means to
 // UITextWidth.
 func (h *retailBattleHUD) drawProductButtonCaption(c *client.Client, gad gui.Gadget, r gui.Rect, text string) {
-	h.drawProductButtonCaptionSelected(c, gad, r, text, nil)
+	w, height := c.Size()
+	h.drawProductButtonCaptionSelected(c, gad, r, gui.Rect{W: int32(w), H: int32(height)}, text, nil)
 }
 
 // drawProductButtonCaptionSelected is drawProductButtonCaption with the FNT
 // the button's `fontnumber` selected from the page's kind-7 records (nil when
 // none matched): the active FNT the null-slot fallback draws with
 // [07 R-WGT-01 §6][03 R-FONT-01 §5].
-func (h *retailBattleHUD) drawProductButtonCaptionSelected(c *client.Client, gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT) {
-	x, y, font, fallback := h.productButtonCaptionLayoutSelected(gad, r, text, selected)
+func (h *retailBattleHUD) drawProductButtonCaptionSelected(c *client.Client, gad gui.Gadget, r, clip gui.Rect, text string, selected *formats.FNT) {
+	_, _, font, fallback := h.productButtonCaptionLayoutSelected(gad, r, text, selected)
+	var width, metric int
 	if font != nil {
-		drawRetailGAFText(c, font, text, x, y, int(r.W))
+		width, metric = retailGAFTextWidth(font, text), retailGAFTextHeight(font)
+	} else if fallback != nil {
+		width, metric = client.MeasureText(fallback, text), int(fallback.Height)
+	} else {
 		return
 	}
-	if fallback == nil {
-		return
-	}
-	c.UITextWidth(fallback, text, x, y, -1, h.guiColor(0))
+	h.drawBattleButtonCaption(c, clip, gad, r, text, selected, width, metric, gad.ColorF)
 }
 
 // commandPageIsPaged reports the selected builder's page-shown bit (status bit

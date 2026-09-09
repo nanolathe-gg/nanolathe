@@ -61,7 +61,7 @@ func TestModelPrimitiveDispatch(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := modelPrimitiveDispatch(tt.pr, tt.resolved); got != tt.want {
+			if got := modelPrimitiveDispatch(&tt.pr, tt.resolved); got != tt.want {
 				t.Fatalf("dispatch = %d, want %d", got, tt.want)
 			}
 		})

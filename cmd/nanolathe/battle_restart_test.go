@@ -198,7 +198,7 @@ func TestBattleRestartPointerCaptureDrivesPainterState(t *testing.T) {
 	}
 
 	// A captured pointer clears the down word when it leaves. Returning while
-	// still held keeps it clear: the painter reads this word, never live hover.
+	// still held restores it in the input service [07 R-WGT-01 §3].
 	in = input.NewState()
 	in.Mouse.SetPosition(10, 45)
 	in.Mouse.SetButton(input.MouseButtonLeft, true)
@@ -214,8 +214,8 @@ func TestBattleRestartPointerCaptureDrivesPainterState(t *testing.T) {
 	}
 	in.Mouse.SetPosition(10, 45)
 	b.handleBattleRestartInput(in, nil)
-	if got := b.restart.panel.DownAt(index); got != 0 {
-		t.Fatalf("captured return down=%d, want 0", got)
+	if got := b.restart.panel.DownAt(index); got != 1 {
+		t.Fatalf("captured return down=%d, want 1", got)
 	}
 }
 

@@ -6,7 +6,6 @@ package main
 import (
 	"strings"
 
-	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
@@ -136,256 +135,30 @@ func (h *retailBattleHUD) consumeClickDelta(b *battleSession, x, y int32, rightC
 	if window == nil {
 		return false
 	}
-	// Builder and product data are optional for general/order controls, but if
-	// present they come only from the immutable CommandPage [I6].
-	var selectedDef *content.UnitDef
-	var snapshotProducts []string
-	if f.CommandPage.Builder != 0 && f.CommandPage.PageCount != 0 && b.sess != nil && b.cat != nil {
-		if builderView, found := snapshotUnitByHandle(f, f.CommandPage.Builder); found && builderView.Owner == b.sess.LocalOwner {
-			if def, found := b.cat.Unit(builderView.DefName); found && def != nil && def.Builder {
-				selectedDef = def
-				snapshotProducts = f.CommandPage.ProductKeys
-			}
-		}
+	ctx, ok := h.paletteContext(b)
+	if !ok {
+		return false
 	}
-	paged := commandPageIsPaged(f)
-	// buildSlotOrdinals[i] is window.Gadgets[i]'s ordinal position among the
-	// page's build-product slots (-1 for every other gadget), computed once
-	// per click over the whole gadget list rather than as a running counter
-	// inside the loop below: the loop's own rect hit test (`guiRectContains`)
-	// `continue`s past every gadget except the one under the pointer, so a
-	// counter incremented only inside the build-product branch never sees the
-	// gadgets that preceded the struck one on the same click. See the
-	// build-product branch's own comment [07 §9 "Product-page assembly is
-	// closed"].
-	buildSlotOrdinals := buildProductSlotOrdinals(window, f, paged)
 	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+		if i == 0 || gad.Active == 0 || gad.GrayedOut&1 != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
-		// The painter's verdict decides the click too. Greying a command button
-		// from the selection aggregate [07 R-HUD-03 §6] does not touch the
-		// authored gadget, so the authored-grey test above cannot see it, and a
-		// button drawn greyed used to act on a click anyway.
-		command, isCommand := commandGadgetVerdict(gad, f, paged)
+		command, isCommand := commandGadgetVerdict(gad, f, ctx.paged)
 		if isCommand && command.hidden {
-			// A hidden command button is deactivated outright — LOAD without the
-			// transport bit, BLAST with it [07 R-HUD-03 §6]. Hidden gadgets are
-			// skipped before the hit test [07 R-WGT-01 §1], so one neither acts
-			// nor shields whatever lies behind it.
 			continue
 		}
-		// Fixed in authored coordinates: the §6 slide moves no rail gadget
-		// rectangle, so the hit test never follows it [07 R-HUD-05]
-		// (WU-19-223).
 		r := window.PlacedRect(i)
 		if !guiRectContains(r, x, y) {
 			continue
 		}
+		if h.activatePaletteGadget(b, ctx, i, rightClick, shift) {
+			return true
+		}
+		// Greyed command records are transparent to a later overlapping
+		// record, as in the retained generic service [07 R-WGT-01 §§1,3].
 		if isCommand && command.grey {
-			// "Greyed buttons ignore everything" [07 R-WGT-01 §3]: the grey test
-			// runs before any activation effect [07 §3], so a greyed button takes
-			// no capture and fires nothing. It is still hit-tested — only hidden
-			// gadgets are skipped before that — so it does not fire and the pass
-			// simply goes on to the gadgets after it [07 R-WGT-01 §1].
 			continue
 		}
-		upperName := strings.ToUpper(gad.Name)
-		upperText := strings.ToUpper(gad.Text)
-		// BUILD and ORDERS are the two halves of the page-shown bit: they stage
-		// from it and from its inverse [07 R-HUD-03 §6], and clicking one sets
-		// the state its stage names. ORDERS selects page 0, which is what clears
-		// the bit; BUILD selects a build page, which is what sets it.
-		if isCommand {
-			switch commandButtonName(gad.Name) {
-			case "ORDERS":
-				if rightClick {
-					return true
-				}
-				// The gadget's own cue, played by the click handler before the
-				// stage bit is consumed [07 R-HUD-04 §5]. It is not the page
-				// cycle's `nextbuildmenu` — that belongs to `,`/`.` and to
-				// NEXT/PREV [07 §9].
-				b.playUICue(nil, ordersButtonCue)
-				_ = b.DispatchBuildPage(0)
-				return true
-			case "BUILD":
-				if rightClick {
-					return true
-				}
-				b.playUICue(nil, buildButtonCue) // [07 R-HUD-04 §5]
-				_ = b.DispatchBuildPage(buildButtonPage(f))
-				return true
-			}
-		}
-		// Page navigation. The NEXT and PREV gadgets are the two rows of the
-		// page cycle that never return to page 0 [07 R-HUD-03 §6]; the target is
-		// computed from the committed page and dispatched as an absolute page,
-		// so the cycle's wrap lives in one place [I6].
-		nextPage := hud.NextPageButton(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
-		prevPage := hud.PrevPageButton(int(f.CommandPage.Page), int(f.CommandPage.PageCount))
-		if strings.Contains(upperName, "NEXTPAGE") || strings.Contains(upperName, "NEXT") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEDOWN") {
-			if rightClick {
-				return true
-			}
-			_ = b.dispatchBuildPageCued(nextPage)
-			return true
-		}
-		if strings.Contains(upperName, "PREVPAGE") || strings.Contains(upperName, "PREV") && strings.Contains(upperName, "PAGE") || strings.Contains(upperName, "PAGEUP") {
-			if rightClick {
-				return true
-			}
-			_ = b.dispatchBuildPageCued(prevPage)
-			return true
-		}
-		if strings.Contains(upperName, "NEXT") || strings.Contains(upperText, "NEXT") {
-			if rightClick {
-				return true
-			}
-			// PREV and NEXT are deactivated outright after a page opens when the
-			// page-count byte is below 2 [07 R-HUD-03 §6]. With page 0 counted,
-			// a builder that has any authored page has a count of at least 2, so
-			// the test only ever refuses a builder with no build page at all.
-			if f.CommandPage.PageCount > 1 {
-				_ = b.dispatchBuildPageCued(nextPage)
-				return true
-			}
-		}
-		if strings.Contains(upperName, "PREV") || strings.Contains(upperText, "PREV") {
-			if rightClick {
-				return true
-			}
-			if f.CommandPage.PageCount > 1 {
-				_ = b.dispatchBuildPageCued(prevPage)
-				return true
-			}
-		}
-		// The MAKENUKE/MAKEANTI stockpile toy is the only producer of a
-		// BUILDWEAPON round in shipped content: one click queues one round
-		// against the unit the committed page names, with no placement, no
-		// latch and no hotkey [06 §11.1][07 R-CAM-01 §14 item 3]. Shift is the
-		// ordinary queue modifier, which only decides whether the insertion is
-		// silent [04 R-ORD-01 §13].
-		if StockpileGadget(gad) {
-			if rightClick {
-				return true
-			}
-			if err := b.DispatchStockpileGadget(shift); err != nil {
-				h.dispatchErr = err
-			}
-			return true
-		}
-		// Build product binding is ORDINAL, not name-keyed [07 §9 "Product-page
-		// assembly is closed"]: retail's own assembly "matches the builder
-		// definition and page, then patches the product into the named gadget
-		// slot" from the authored CANBUILD sequence, which "maps entries 1-6 to
-		// page one, 7-12 to page two, and so on" — position, never the panel's
-		// authored gadget name. Per-unit `<unit>N.GUI` panels are hand-authored
-		// templates whose build gadgets keep whatever unit name the panel
-		// artist typed while laying out the slot; the engine does not read that
-		// name for identity. Measured against the patched reference install,
-		// `guis/armplat1.gui`'s first build gadget is authored `name=ARMCSA`
-		// while `sidedata.tdf`'s `canbuild1` for the same builder is `ARMCA` —
-		// matching by name dropped that button outright — and the panel's
-		// fourth build gadget (authored `ARMSFIG`) collided with `canbuild3`
-		// instead of its own `canbuild4` (`ARMHAWK`), binding the wrong product
-		// to a live button. `snapshotProducts` (`f.CommandPage.ProductKeys`) is
-		// already the page-local, ordinal-indexed CANBUILD slice a session
-		// publish assembled for this exact builder and page [R-P0-03];
-		// buildSlotOrdinals[i] is this gadget's position among the page's
-		// build-product slots in authored file order, paging/order/stockpile
-		// controls excluded, precomputed above this loop.
-		if slot := buildSlotOrdinals[i]; selectedDef != nil && b.cat != nil && slot >= 0 {
-			if slot < len(snapshotProducts) && snapshotProducts[slot] != "" {
-				prodKey := snapshotProducts[slot]
-				prodDef, _ := b.cat.Unit(prodKey)
-				if prodDef == nil {
-					// The committed page is the sole product identity source. An
-					// unresolved key is consumed but cannot be classified or queued.
-					return true
-				}
-				prodKey = prodDef.CanonicalKey
-				// Retail branches on the product's BMcode, not on the builder
-				// [07 §9]. Product BMcode determines queue versus placement.
-				if !hud.ProductArmsPlacement(prodDef) {
-					delta := factoryBuildDelta(shift, rightClick)
-					// The counted-add routine's own cue runs before the
-					// descriptor routing and before the queue coalesce, so a
-					// click that ends up changing nothing is still audible
-					// [07 R-P0-11 §1].
-					b.playUICue(nil, countedBuildCue(delta))
-					if err := h.dispatchFactoryBuild(b, prodKey, delta); err != nil {
-						h.dispatchErr = err
-					}
-					return true
-				}
-				if rightClick {
-					return true
-				}
-				// The build-button handler "arms the MOBILEBUILD latch (`0xE`),
-				// stores the id in a pending-build word and plays the `addbuild`
-				// cue — the click arms it, not the ghost show" [07 §9].
-				b.armPlacement(prodDef)
-				b.playUICue(nil, cueAddBuild)
-				return true
-			}
-		}
-		upper := strings.ToUpper(gad.Name)
-		// The side-prefixed ONOFF gadget (ARMONOFF / CORONOFF) is the button
-		// form of the on/off command [07 R-HUD-03 §6]; it issues exactly what
-		// key `O` issues, for every selected onoffable unit, with Shift queuing
-		// the record [04 R-ORD-01 §2].
-		if strings.HasSuffix(upper, "ONOFF") {
-			if rightClick {
-				return true
-			}
-			b.toggleOnOffSelected(shift)
-			// "the on/off and cloak arms of the same handler play the
-			// already-documented `specialorders`" [07 §9]. The cue belongs to the
-			// side-panel gadget arm, not to the on/off command itself, so the
-			// hotkey path that shares toggleOnOffSelected does not raise it.
-			b.playUICue(nil, cueSpecialOrders)
-			return true
-		}
-		// The two stance gadgets are resolved by the same longest-suffix table
-		// the stage and grey pass uses, so ARMMOVEORD reaches the stance arm
-		// and never the MOVE substring arm below [04 R-STANCE-01 §2].
-		switch commandButtonName(gad.Name) {
-		case "CLOAK":
-			// The cloak arm of the same handler as the two stance gadgets, and
-			// resolved by the same longest-suffix table, so ARMCLOAK reaches it
-			// [04 R-STANCE-01 §2]. It sits ahead of the order-button chain
-			// below for the same reason MOVEORD and FIREORD do [07 §9]. The arm
-			// plays `specialorders`, which toggleCloakSelected raises after the
-			// transmit, and takes no Shift argument.
-			if rightClick {
-				return true
-			}
-			b.toggleCloakSelected()
-			return true
-		case "MOVEORD":
-			if rightClick {
-				return true
-			}
-			b.cycleStance(false)
-			return true
-		case "FIREORD":
-			if rightClick {
-				return true
-			}
-			b.cycleStance(true)
-			return true
-		}
-		if strings.Contains(upper, "MOVE") ||
-			strings.Contains(upper, "ATTACK") || strings.Contains(upper, "BLAST") ||
-			strings.Contains(upper, "DEFEND") || strings.Contains(upper, "REPAIR") ||
-			strings.Contains(upper, "PATROL") || strings.Contains(upper, "RECLAIM") ||
-			strings.Contains(upper, "CAPTURE") || strings.Contains(upper, "LOAD") ||
-			strings.Contains(upper, "UNLOAD") || strings.Contains(upper, "STOP") {
-			b.handleHudOrderButton(gad.Name)
-			return true
-		}
-		// Any other GUI button still consumes the click to prevent world leak [07 §3]
 		return true
 	}
 	return false
@@ -470,7 +243,7 @@ func (h *retailBattleHUD) hitTestFor(b *battleSession, x, y int32) bool {
 	}
 	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+		if i == 0 || gad.Active == 0 || gad.GrayedOut&1 != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
 		// Neither a greyed nor a hidden command button is an activation target
@@ -508,7 +281,7 @@ func (h *retailBattleHUD) buttonAt(b *battleSession, x, y int32) int {
 	}
 	paged := commandPageIsPaged(f)
 	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Active == 0 || gad.GrayedOut != 0 || gad.Kind != gui.KindButton {
+		if i == 0 || gad.Active == 0 || gad.GrayedOut&1 != 0 || gad.Kind != gui.KindButton {
 			continue
 		}
 		// A greyed button takes no capture and a hidden one is skipped before

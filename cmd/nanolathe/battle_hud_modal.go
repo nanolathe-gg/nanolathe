@@ -176,6 +176,13 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 			v := retailButtonVerdict(gad, 0, int(gad.ArtFrame), down, stage, grey)
 			drawGUIBevelClipped(c, r, h.guiColor(v.top), h.guiColor(v.bot), h.guiColor(v.fill), clip)
 		}
+		if frame != nil && gad.Kind == gui.KindButton && retailButtonVerdict(gad, 1, int(gad.ArtFrame), down, stage, grey).shade {
+			// Grey art is followed by the signed -20 rectangle shader, bounded by
+			// the window's private surface [07 R-WGT-01 §3][03 R-COMP-02 §5].
+			left, top := max(r.X, clip.X), max(r.Y, clip.Y)
+			right, bottom := min(r.X+r.W, clip.X+clip.W), min(r.Y+r.H, clip.Y+clip.H)
+			c.UIShadeRect(h.pal, int(left), int(top), int(right-left), int(bottom-top), retailGreyedButtonShade)
+		}
 		text, dynamic := "", false
 		if textAt != nil {
 			text, dynamic = textAt(i, gad)
@@ -225,7 +232,7 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 			if panel != nil {
 				flash = panel.FlashRow(i)
 			}
-			h.drawModalButtonCaption(c, clip, gad, r, text, selected, textWidth, metric, flash)
+			h.drawBattleButtonCaption(c, clip, gad, r, text, selected, textWidth, metric, flash)
 			continue
 		}
 		x := int(r.X)
@@ -272,10 +279,10 @@ func retailBattleButtonText(gad gui.Gadget, panel *ui.Panel, index, stage int) s
 	return gad.Labels[clampMenuStage(stage, len(gad.Labels))]
 }
 
-// drawModalButtonCaption shares the ordinary button pen with the frontend.
-// The modal keeps its private-surface clip for every GAF glyph; the FNT path
+// drawBattleButtonCaption shares the ordinary button pen with the frontend.
+// Each window keeps its private-surface clip for every GAF glyph; the FNT path
 // retains the pen's no-width-limit fallback [03 R-FONT-01 §6].
-func (h *retailBattleHUD) drawModalButtonCaption(c *client.Client, clip gui.Rect, gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT, textWidth, metric int, flash uint16) {
+func (h *retailBattleHUD) drawBattleButtonCaption(c *client.Client, clip gui.Rect, gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT, textWidth, metric int, flash uint16) {
 	if c == nil || text == "" {
 		return
 	}
@@ -450,23 +457,13 @@ func (h *retailBattleHUD) drawWindowBackground(c *client.Client, window *gui.Win
 	drawWindowPanel(c, window, page, h.common, h.guiColor)
 }
 
-// modalGadgetRect returns the runtime rectangle installed by the modal
-// initializer.
-// Stock button selection replaces the authored width/height with the chosen
-// frame dimensions (YESORNO's 95x20 choices therefore become 96x20).
-func (h *retailBattleHUD) modalGadgetRect(window *gui.Window, index int, page *formats.GAF) gui.Rect {
+// modalGadgetRect reads the geometry installed from the base art at window
+// construction. Later frame choices never resize the gadget [07 R-WGT-01 §3].
+func (h *retailBattleHUD) modalGadgetRect(window *gui.Window, index int, _ *formats.GAF) gui.Rect {
 	if window == nil || index < 0 || index >= len(window.Gadgets) {
 		return gui.Rect{}
 	}
-	r := window.PlacedRect(index)
-	gad := window.Gadgets[index]
-	if gad.Kind == gui.KindButton {
-		if frame := h.modalGadgetFrame(gad, page, false, gad.GrayedOut&1 != 0); frame != nil {
-			r.W = int32(frame.Width)
-			r.H = int32(frame.Height)
-		}
-	}
-	return r
+	return window.PlacedRect(index)
 }
 
 func (h *retailBattleHUD) modalPage(window *gui.Window) *formats.GAF {

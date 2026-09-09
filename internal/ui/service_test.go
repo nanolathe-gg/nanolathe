@@ -254,7 +254,32 @@ func TestServiceCycleUsesResolvedFrames(t *testing.T) {
 	p := servicePanel(gui.Gadget{Kind: gui.KindButton, Active: 1, Attribs: 0x100, Stages: 2, Rect: gui.Rect{W: 10, H: 10}})
 	p.SetStatusAt(1, 2)
 	p.ServiceFrame(WidgetFrame{PointerX: 2, PointerY: 2, HeldButtons: 1, PointerEvents: []input.PointerEvent{{Kind: input.LeftDown, X: 2, Y: 2}}}, WidgetHooks{ArtFrames: func(int) int { return 4 }})
-	if p.StatusAt(1) != 3 {
-		t.Fatalf("cycle=%d, want third resolved frame", p.StatusAt(1))
+	if p.StatusAt(1) != 3 || p.CaptureIndex() != -1 {
+		t.Fatalf("cycle status/capture=%d/%d", p.StatusAt(1), p.CaptureIndex())
+	}
+	result := p.ServiceFrame(WidgetFrame{PointerX: 2, PointerY: 2, PointerEvents: []input.PointerEvent{{Kind: input.LeftUp, X: 2, Y: 2}}}, WidgetHooks{})
+	if result.Fired || p.StatusAt(1) != 3 {
+		t.Fatal("cycle release fired or changed its selected frame")
+	}
+}
+
+func TestServicePlainReentryRestartsRepeatDelay(t *testing.T) {
+	p := servicePanel(gui.Gadget{Kind: gui.KindButton, Active: 1, Attribs: 0x2000, Rect: gui.Rect{W: 10, H: 10}})
+	p.ServiceFrame(WidgetFrame{PointerX: 2, PointerY: 2, HeldButtons: 1, PointerEvents: []input.PointerEvent{{Kind: input.LeftDown, X: 2, Y: 2}}}, WidgetHooks{})
+	p.repeat = 2
+	p.ServiceFrame(WidgetFrame{PointerX: 15, PointerY: 2, HeldButtons: 1}, WidgetHooks{})
+	result := p.ServiceFrame(WidgetFrame{PointerX: 2, PointerY: 2, HeldButtons: 1, TimerAdvanced: true}, WidgetHooks{})
+	if result.Fired || p.StatusAt(1) != 1 || p.repeat != 15 {
+		t.Fatalf("reentry state=%d delay=%d fired=%v", p.StatusAt(1), p.repeat, result.Fired)
+	}
+	p.repeat, p.dirty = 1, false
+	held := WidgetFrame{PointerX: 2, PointerY: 2, HeldButtons: 1, TimerAdvanced: true}
+	p.ServiceFrame(held, WidgetHooks{})
+	if p.repeat != 0 || p.dirty {
+		t.Fatal("last delay tick performed repeat work")
+	}
+	result = p.ServiceFrame(held, WidgetHooks{})
+	if !p.dirty || result.Fired {
+		t.Fatal("plain repeat must repaint without a window callback")
 	}
 }

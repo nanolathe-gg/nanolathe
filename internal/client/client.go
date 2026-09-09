@@ -50,7 +50,10 @@ type Options struct {
 // frame. Rendering consumes only the currently committed frame (I6).
 type Client struct {
 	modelScratch modelScratch
-	opts         Options
+	// projectileDraws retains the projectile dispatch list across frames; it
+	// is rewound and rewritten by every DrawProjectileViews call.
+	projectileDraws []presentationrender.ProjectileDraw
+	opts            Options
 
 	// exitRequested lets authored in-game GUI actions terminate the same
 	// Ebitengine loop as closing the window. It is presentation state only.

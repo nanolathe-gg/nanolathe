@@ -27,6 +27,10 @@ import (
 
 type retailBattleHUD struct {
 	commandWindowInput commandWindowInputState
+	// palettePanels retain the generic widget state per selected command-window
+	// instance. The GUI pointer, not a gadget name, is the identity because
+	// authored pages may carry duplicate names [07 R-WGT-01 §3].
+	palettePanels map[*gui.Window]*ui.Panel
 
 	side    *content.SideDef
 	cat     *content.Catalog

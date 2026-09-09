@@ -215,12 +215,22 @@ origin so no glide survives it `[07 R-CAM-01 §12]`. `WorldToScreen` applies the
 half-height shear `wz − (wy >> 1)` with arithmetic shifts; `ScreenToWorld`
 inverts it at ground height for pixel-level questions only.
 
-Ordinary ARMOPT/EXITMENU/YESORNO/RESTART/ENDMSN child panels now use
-retained `Panel.ServiceFrame` state with zero token mode. Eligible quickkeys
-run at their indexed gadget visit and consume only their claimed token prefix;
-the key matrix remains disabled. YESORNO's explicit Enter/Escape caller row
-routes to No independently of the generic matrix [07 R-FE-01 §7]. Panels are
-built at the owning transition before their first input or draw.
+**I03 command-palette service (implemented).** Ordinary
+ARMOPT/EXITMENU/YESORNO/RESTART/ENDMSN children and each command-window
+identity use retained `Panel.ServiceFrame` state with zero token mode. The
+command palette resolves its current window, including the selection-open
+flush, before it peeks the original client token ring; it then runs before the
+controller turns input into a value sample. Its dynamic hidden/grey/capability
+verdict updates the shared service for that pass, and its indexed fired result
+is the sole callback input for both pointer and quickkey actions. A topmost
+UNITINFO child performs its own peek first and prevents service of the page
+underneath. Eligible quickkeys consume only their claimed prefix; the key
+matrix remains disabled. Pointer capture and staged mutation are therefore
+shared with the release path, so a held button cannot also fire from its
+quickkey. YESORNO's explicit Enter/Escape caller row routes to No independently
+of the generic matrix [07 R-WGT-01 §§1-3,6-7] [07 R-WGT-02 §5]
+[07 R-FE-01 §7]. Panels are built at the owning transition before their first
+input or draw.
 
 **The Ctrl-right drag-scroll primitive** (`drag_scroll.go`).
 `camera.DragScroll.Begin(*Camera)` captures `trunc(origin / 16)` and clears the
@@ -375,8 +385,8 @@ uses `anims/<name>_gadget.GAF` and retains that resolved entry identity,
 including a resolved absence. Button flash state is reset before either gate
 [07 R-WGT-01 §3] [07 R-WGT-01 §7]. [07 R-WGT-02 §2] establishes that quickkey
 service stays enabled throughout supported single-player scope, so a new
-mutable enable flag is unnecessary here. Ordered token service remains open;
-the shared I06 toggle/radio mutation path is implemented.
+mutable enable flag is unnecessary here. I03 owns ordered token service; the
+shared I06 toggle/radio mutation path is implemented.
 
 `TODO(question)`: Nanolathe has no identified authored battle-root
 `MAIN2.GUI` opener. Retail builds that root before the successful transition;
@@ -412,11 +422,11 @@ the fired index as focus before the unchanged screen callback. The options
 pump passes its existing pointer owner rather than installing a second owner
 in Panel. Tests use both production input handlers, low-bit versus upper-bit
 grey, same-button versus other capture, text capture with/without Alt, changed
-keys and duplicate records. The owning scope is admission and callback identity;
-ordered token service remains open. This unit preserves existing
+keys and duplicate records. I03 supplies the command-page equivalent through
+the same service and callback identity. This unit preserves existing
 callback-owned preference mutations and cues.
 
-**I12 frontend button painter (implemented; battle adapters remain open).**
+**I12 shared button painter (implemented).**
 Frontend windows, shell-owned battle options and MSGBOX share the same button
 painter. Missing art uses the shared ordered eight-run bevel with the exact
 up/down/low-grey-bit colour triples [07 R-FE-02 §4]. Its down word comes from
@@ -425,8 +435,11 @@ position depends on stage count, never held-pointer state; build-key colour
 and centred-key underline follow [03 R-FONT-01 §6][07 R-WGT-01 §3]. Authored
 raster fixtures exercise missing art, upper grey bits, stationary pressed text,
 case-insensitive first-byte key decoration and the grey build-key exception.
-The separate battle modal and command-page painters still need their runtime
-capture, installed-art and caption paths reconciled before whole I12 closure.
+Battle modal and command-page painters use the same frame, bevel and caption
+rules. Modal grey art shades the installed rectangle within its private
+surface. The sidebar reads the retained input panel's down, stage and flash
+state; painting never creates a panel or reconstructs a second pointer latch.
+FNT glyph commands carry the private-surface clip into both renderer sinks.
 
 **I04 focus traversal API and lifecycle contract (implemented).**
 `internal/ui` owns `FocusDirection` (`FocusForward`, `FocusBackward`,
@@ -1167,9 +1180,20 @@ clear, which reproduces that. The rows below are the battle hotkey census
 
 Space and the arrows have no ring case: the arrows are the scroll pass's
 held-key queries. The order latch keys `m a p r e c g d x o` have no row in the
-census either — retail reaches those through the command palette's authored
-gadget quick keys `[07 §2]` — and they are kept as direct bindings here because
-the authored quick-key path belongs to the palette's owner. `\`, `Ctrl+F10` and
+census either — retail reaches them through the command palette's visible,
+authored gadget quick keys. The palette consumes an admitted ordered text token
+before this residual table and activates that exact gadget record through the
+same callback path as a pointer release. The production viewer services the
+original token ring and published pointer together in one indexed GUI pass,
+then carries its pointer-ownership verdict into the controller. A claimed
+token clears only the residual sample's press edges; held modifiers and
+unclaimed pointer work remain available. UNITINFO ownership is captured at
+frame entry, so closing it cannot service the underlying palette again in
+that frame. Closing or changing the selected command window retires the old
+panel's pointer capture, and cycle controls obtain the resolved art-frame
+count through the same installed-art resolver used by painting. No held-key
+fallback supplies a palette command `[07 §2]` `[07 §9]` `[07 R-WGT-01 §3]` `[07 R-HUD-03 §6]`.
+`\`, `Ctrl+F10` and
 F11 are developer mode, `Ctrl+F9` is a screenshot with no in-battle writer,
 `h` is the multiplayer share dialog, and Enter is chat: all out of scope
 `[07 §5 "Chat"]` `[07 R-CAM-01 §9]`.

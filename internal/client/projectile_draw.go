@@ -37,7 +37,10 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 	if c == nil || c.cam == nil || len(current) == 0 {
 		return stats
 	}
-	draws, aborted := render.BuildProjectileDraws(current, now, visible, admitGlobalGAF, options)
+	// The dispatch list is rebuilt from the committed views every frame and is
+	// read only inside this call, so it lives in a retained buffer.
+	draws, aborted := render.BuildProjectileDrawsInto(c.projectileDraws[:0], current, now, visible, admitGlobalGAF, options)
+	c.projectileDraws = draws[:cap(draws)]
 	stats.Aborted = aborted
 	// Rendertype 2 admission failure aborts the entire projectile renderer, not
 	// merely the failing record. BuildProjectileDraws retains earlier

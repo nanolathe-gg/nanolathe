@@ -8,6 +8,7 @@ import (
 	"github.com/nanolathe/nanolathe/internal/content"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
+	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/session"
 	"github.com/nanolathe/nanolathe/internal/ui"
@@ -170,32 +171,29 @@ func TestBattleSideButtonPaintsCaptureAndArtlessBevel(t *testing.T) {
 	if got := c.ComposeFrameSnapshot().Indexed[3*32+3]; got != 41 {
 		t.Fatalf("side rest pixel=%d, want frame 0", got)
 	}
-	state := b.battleState()
-	state.Input.HUDCaptured, state.Input.HUDPressX, state.Input.HUDPressY = true, 3, 3
-	state.Input.PointerX, state.Input.PointerY = 30, 20
-	if got := h.sideButtonDown(b, window, 1, gad); got != 0 {
-		t.Fatalf("captured pointer outside reports down=%d", got)
+	panel := h.palettePanel(window)
+	panel.ServiceFrame(ui.WidgetFrame{PointerX: 3, PointerY: 3, HeldButtons: 1, PointerEvents: []input.PointerEvent{{Kind: input.LeftDown, X: 3, Y: 3}}}, ui.WidgetHooks{})
+	panel.ServiceFrame(ui.WidgetFrame{PointerX: 30, PointerY: 20, HeldButtons: 1}, ui.WidgetHooks{})
+	if got := c.ComposeFrameSnapshot().Indexed[3*32+3]; got != 41 {
+		t.Fatalf("outside capture pixel=%d want rest frame", got)
 	}
-	state.Input.PointerX, state.Input.PointerY = 3, 3
-	if got := h.sideButtonDown(b, window, 1, gad); got != 1 {
-		t.Fatalf("captured pointer re-entry reports down=%d", got)
-	}
+	panel.ServiceFrame(ui.WidgetFrame{PointerX: 3, PointerY: 3, HeldButtons: 1}, ui.WidgetHooks{})
 	if got := c.ComposeFrameSnapshot().Indexed[3*32+3]; got != 42 {
 		t.Fatalf("side captured pixel=%d, want down frame", got)
 	}
 	window.Gadgets[1].ButtonArt = nil
-	state.Input.HUDCaptured = false
+	panel.ResetPress()
 	window.Gadgets[1].GrayedOut = 0
 	snap := c.ComposeFrameSnapshot()
 	if snap.Indexed[2*32+5] != 17 || snap.Indexed[11*32+5] != 0 || snap.Indexed[6*32+6] != 20 {
 		t.Fatal("side artless button did not paint the 17/0/20 bevel")
 	}
-	state.Input.HUDCaptured = true
+	panel.ServiceFrame(ui.WidgetFrame{PointerX: 3, PointerY: 3, HeldButtons: 1, PointerEvents: []input.PointerEvent{{Kind: input.LeftDown, X: 3, Y: 3}}}, ui.WidgetHooks{})
 	snap = c.ComposeFrameSnapshot()
 	if snap.Indexed[2*32+5] != 0 || snap.Indexed[11*32+5] != 17 || snap.Indexed[6*32+6] != 20 {
 		t.Fatal("side artless captured button did not paint the 0/17/20 bevel")
 	}
-	state.Input.HUDCaptured = false
+	panel.ResetPress()
 	window.Gadgets[1].GrayedOut = 1
 	snap = c.ComposeFrameSnapshot()
 	if snap.Indexed[2*32+5] != 0 || snap.Indexed[11*32+5] != 19 || snap.Indexed[6*32+6] != 19 {
