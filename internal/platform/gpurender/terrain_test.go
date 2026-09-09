@@ -92,7 +92,7 @@ func TestTerrainAtlasLayoutFitsDevice(t *testing.T) {
 // terrainFixtureList records one terrain command at one view scale, with or
 // without detail tiles, over a full-window viewport.
 func terrainFixtureList(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte,
-	cam *camera.Camera, w, h int, scale int32) drawlist.List {
+	cam *camera.Camera, w, h int, scale camera.ViewScale) drawlist.List {
 	var list drawlist.List
 	list.RecordClear()
 	list.RecordTerrain(drawlist.Terrain{
@@ -114,7 +114,7 @@ func terrainFixtureList(t *world.Terrain, detail [][drawlist.DetailTilePixels]by
 // The camera sits at a position that is not a multiple of the tile size, so the
 // intra-tile remainder and the clipped left/top edge are exercised rather than
 // only whole tiles.
-func checkTerrainDeviceScale(scale int32) error {
+func checkTerrainDeviceScale(scale camera.ViewScale) error {
 	pal := fixturePalette()
 	terrain := terrainFixtureTerrain()
 	detail := terrainFixtureDetail()
@@ -123,7 +123,7 @@ func checkTerrainDeviceScale(scale int32) error {
 	// sized so that both tiles are on screen at either scale and the map's right
 	// and bottom edges are too: the void beyond them, the clipped left and top
 	// edges and the whole tiles between them all appear in one comparison.
-	w, h := 48*int(scale), 24*int(scale)
+	w, h := int(scale.Px(48)), int(scale.Px(24))
 
 	for _, withDetail := range []bool{false, true} {
 		var tiles [][drawlist.DetailTilePixels]byte
@@ -139,7 +139,7 @@ func checkTerrainDeviceScale(scale int32) error {
 		list := terrainFixtureList(terrain, tiles, cam, w, h, scale)
 		img := r.Execute(&list, w, h)
 		if img == nil {
-			return fmt.Errorf("terrain device fixture (%s, scale %d) returned no image", name, scale)
+			return fmt.Errorf("terrain device fixture (%s, scale %s) returned no image", name, scale)
 		}
 		want := make([]byte, w*h)
 		client.BlitTerrainDetail(want, w, h, terrain, cam, tiles)
@@ -157,12 +157,12 @@ func checkTerrainDeviceScale(scale int32) error {
 				detailed++
 			}
 		}
-		if withDetail && scale != 1 {
+		if withDetail && !scale.Native() {
 			if detailed == 0 {
-				return fmt.Errorf("terrain scale %d %s: reference has no detail-tile pixels", scale, name)
+				return fmt.Errorf("terrain scale %s %s: reference has no detail-tile pixels", scale, name)
 			}
 		} else if low == 0 || high == 0 {
-			return fmt.Errorf("terrain scale %d %s: reference has %d pixels of tile 0 and %d of tile 1",
+			return fmt.Errorf("terrain scale %s %s: reference has %d pixels of tile 0 and %d of tile 1",
 				scale, name, low, high)
 		}
 		pixels := make([]byte, w*h*4)
@@ -171,7 +171,7 @@ func checkTerrainDeviceScale(scale int32) error {
 			for x := 0; x < w; x++ {
 				at := (y*w + x) * 4
 				if err := checkExactIndex(
-					fmt.Sprintf("terrain scale %d %s at (%d,%d)", scale, name, x, y),
+					fmt.Sprintf("terrain scale %s %s at (%d,%d)", scale, name, x, y),
 					pixels, at, &pal, want[y*w+x]); err != nil {
 					return err
 				}
@@ -182,12 +182,14 @@ func checkTerrainDeviceScale(scale int32) error {
 }
 
 // checkTerrainDevicePixels is the device-loop entry point: the native scale
-// (which must be unchanged by §14.5) and the detail scale.
+// (which must be unchanged by §14.5), the 1.5x view and the detail scale.
 func checkTerrainDevicePixels() error {
-	if err := checkTerrainDeviceScale(1); err != nil {
-		return err
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+		if err := checkTerrainDeviceScale(scale); err != nil {
+			return err
+		}
 	}
-	return checkTerrainDeviceScale(2)
+	return nil
 }
 
 // TestTerrainDeviceFixture is opt-in because ordinary tests must not require a

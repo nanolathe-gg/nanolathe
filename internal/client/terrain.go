@@ -25,7 +25,9 @@ import (
 const (
 	terrainTileSize   = 32   // pixels per tile side [03 §2.1] C1
 	terrainTilePixels = 1024 // 32×32 [03 §2.2] C5
-	// detailTileSize and detailTilePixels are the 2x tile of the detail view
+	// detailTileSize and detailTilePixels are the 2x tile of the detail view,
+	// the largest tile any scale needs; the 1.5x view's 48x48 tiles occupy the
+	// same slots with their own side as the row stride
 	// (DESIGN_GPU_RENDERER §14.3): one 64x64 index tile per TileSet entry.
 	// detailTilePixels is drawlist.DetailTilePixels, so the two tile types are
 	// the same Go type and a tile set passes across the record unconverted.
@@ -139,7 +141,7 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 		return
 	}
 	var camX, camZ int32
-	var scale int32 = 1
+	scale := camera.ViewScaleNative
 	if cam != nil {
 		camX = cam.X
 		camZ = cam.Z
@@ -151,16 +153,17 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 	// WorldToScreen path per tile so the same helper governs all world→screen
 	// work [03 §2.5] C1.
 	// Derive the visible range from the camera's view scale so rendered tiles and
-	// picked pixels agree at either scale [C-1][03 §2.5][F-P1-008]:
-	// screenX = (worldX - camX)*scale + originX, so worldX = camX + floorDiv(screenX
-	// - originX, scale) — the inverse ScreenToWorld computes. The range is the
-	// whole world pixels covering screen columns [0, dstW): its first is the
-	// inverse of column 0 and its last the inverse of column dstW-1, both floored
-	// so a negative offset lands on the pixel that covers it [I3][03 §2.1].
-	mx0 := int64(camX) + terrainFloorDiv(int64(-originX), int64(scale))
-	my0 := int64(camZ) + terrainFloorDiv(int64(-originY), int64(scale))
-	mx1 := int64(camX) + terrainFloorDiv(int64(dstW-1)-int64(originX), int64(scale))
-	my1 := int64(camZ) + terrainFloorDiv(int64(dstH-1)-int64(originY), int64(scale))
+	// picked pixels agree at every scale [C-1][03 §2.5][F-P1-008]:
+	// screenX = Project(worldX - camX) + originX, so worldX = camX +
+	// Inverse(screenX - originX) — the inverse ScreenToWorld computes. The
+	// range is the whole world pixels covering screen columns [0, dstW): its
+	// first is the inverse of column 0 and its last the inverse of column
+	// dstW-1, both floored so a negative offset lands on the pixel that covers
+	// it [I3][03 §2.1].
+	mx0 := int64(camX) + int64(scale.Inverse(-originX))
+	my0 := int64(camZ) + int64(scale.Inverse(-originY))
+	mx1 := int64(camX) + int64(scale.Inverse(int32(dstW-1)-originX))
+	my1 := int64(camZ) + int64(scale.Inverse(int32(dstH-1)-originY))
 	// Inclusive tile indices covering [mx0,mx1] etc.
 	startTX := terrainFloorDiv(mx0, terrainTileSize)
 	startTY := terrainFloorDiv(my0, terrainTileSize)
@@ -209,10 +212,11 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 			}
 			// Destination rectangle for this tile, clipped at viewport bounds
 			// — partial edge rectangles [03 §2.2]. The screen size is exactly
-			// 32*scale, which is the projection of the tile's opposite corner, so
-			// picking via ScreenToWorld and the rendered tiles agree at either
-			// scale [C-1][F-P1-008] (DESIGN_GPU_RENDERER §14.2).
-			tileScreenW := int(terrainTileSize * scale)
+			// Px(32) — 32, 48 or 64 — which is the projection of the tile's
+			// opposite corner, so picking via ScreenToWorld and the rendered
+			// tiles agree at every scale [C-1][F-P1-008] (DESIGN_GPU_RENDERER
+			// §14.2).
+			tileScreenW := int(scale.Px(terrainTileSize))
 			tileScreenH := tileScreenW
 			dstX0 := int(sx)
 			dstY0 := int(sy)
@@ -233,18 +237,25 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 			if dstX0 >= dstX1 || dstY0 >= dstY1 {
 				continue
 			}
-			// The source is the tile itself at the native scale, and at the detail
-			// scale either a 64x64 detail tile copied one-to-one or the same 32x32
-			// tile doubled by nearest sampling (DESIGN_GPU_RENDERER §14.2, §14.3).
-			// Both are one walk over an exact integer rectangle: the source pixel of
-			// destination column dx is (dx - sx)/step, where step is 1 when the
-			// source side already equals the screen side and 2 for the doubled tile.
+			// The source is the tile itself at the native scale, and at a
+			// magnified scale either a detail tile already at the screen tile
+			// size, copied one-to-one, or the same 32x32 tile resampled by
+			// nearest sampling through the scale's inverse (DESIGN_GPU_RENDERER
+			// §14.2, §14.3). Both are one walk over an exact integer rectangle:
+			// the source pixel of destination column dx is dx - sx for the
+			// detail tile and Inverse(dx - sx) for the native one — at 2x the
+			// halving the doubled tile always had, at 1.5x floor(2/3 of it).
 			srcSide := terrainTileSize
 			src := tile[:]
-			if scale != 1 && int(tileID) < len(detail) {
-				srcSide, src = detailTileSize, detail[tileID][:]
+			direct := true
+			if !scale.Native() {
+				if int(tileID) < len(detail) {
+					srcSide, src = tileScreenW, detail[tileID][:]
+				} else {
+					direct = false
+				}
 			}
-			if scale == 1 {
+			if scale.Native() {
 				// Fast 1:1 path: source intra-tile remainder [03 §2.2].
 				srcX0 := dstX0 - int(sx)
 				srcY0 := dstY0 - int(sy)
@@ -268,19 +279,24 @@ func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 				}
 				continue
 			}
-			step := tileScreenW / srcSide
-			if step <= 0 || len(src) < srcSide*srcSide {
+			if len(src) < srcSide*srcSide {
 				continue
 			}
 			for dy := dstY0; dy < dstY1; dy++ {
-				srcY := (dy - int(sy)) / step
+				srcY := dy - int(sy)
+				if !direct {
+					srcY = int(scale.Inverse(int32(srcY)))
+				}
 				if srcY < 0 || srcY >= srcSide {
 					continue
 				}
 				dstOff := dy*dstW + dstX0
 				srcRow := srcY * srcSide
 				for dx := dstX0; dx < dstX1; dx++ {
-					srcX := (dx - int(sx)) / step
+					srcX := dx - int(sx)
+					if !direct {
+						srcX = int(scale.Inverse(int32(srcX)))
+					}
 					if srcX < 0 || srcX >= srcSide {
 						continue
 					}

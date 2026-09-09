@@ -16,6 +16,7 @@ package client
 // scale or the art it selects.
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -39,9 +40,12 @@ func (c *Client) SetDetailArt(art *DetailArt) {
 		return
 	}
 	c.detailArt = art
-	// The provider's variants are re-indexed from scratch; the doubled
-	// fallbacks are provider-independent and survive.
+	// The provider's variants are re-indexed from scratch, and so are the 1.5x
+	// variants and tiles derived from them; the doubled and 3/2 fallbacks are
+	// provider-independent and survive.
 	c.detailFrames = nil
+	c.midDetailFrames = nil
+	c.midTiles, c.midTilesFrom = nil, nil
 	if art == nil {
 		return
 	}
@@ -77,19 +81,52 @@ func (c *Client) DetailArt() *DetailArt {
 	return c.detailArt
 }
 
-// detailTiles returns the detail tile set for the loaded terrain, or nil when
-// there is no provider or its tile set does not match the loaded one. A short
-// or absent tile set is not an error: the terrain blitter doubles the 32x32
-// tiles it already has (DESIGN_GPU_RENDERER §14.2).
+// detailTiles returns the detail tile set for the loaded terrain at the
+// current view scale, or nil when the scale is native, there is no provider
+// or its tile set does not match the loaded one. A short or absent tile set
+// is not an error: the terrain blitter resamples the 32x32 tiles it already
+// has (DESIGN_GPU_RENDERER §14.2). At 2x the set is the provider's 64x64
+// tiles; at 1.5x it is those tiles decimated to 48x48 once and kept
+// (§14.3), stored with a 48-byte row stride in the same tile slots.
 func (c *Client) detailTiles() [][detailTilePixels]byte {
 	if c == nil || !c.enhanced || c.detailArt == nil || c.terrain == nil {
 		return nil
 	}
 	tiles := c.detailArt.Tiles
-	if len(tiles) != len(c.terrain.TileSet) {
+	if len(tiles) == 0 || len(tiles) != len(c.terrain.TileSet) {
 		return nil
 	}
-	return tiles
+	switch c.viewScale() {
+	case camera.ViewScaleDetail:
+		return tiles
+	case camera.ViewScaleMid:
+		if c.midTilesFrom != &tiles[0] || len(c.midTiles) != len(tiles) {
+			c.midTiles = decimateDetailTiles(tiles, camera.ViewScaleMid)
+			c.midTilesFrom = &tiles[0]
+		}
+		return c.midTiles
+	}
+	return nil
+}
+
+// decimateDetailTiles resamples every 64x64 detail tile to the screen tile
+// size of a scale below 2x by nearest sampling — at 1.5x, 48x48, dropping
+// every fourth row and column. The output tile's row stride is its side.
+func decimateDetailTiles(tiles [][detailTilePixels]byte, scale camera.ViewScale) [][detailTilePixels]byte {
+	side := int(scale.Px(terrainTileSize))
+	out := make([][detailTilePixels]byte, len(tiles))
+	for i := range tiles {
+		src := &tiles[i]
+		dst := &out[i]
+		for y := 0; y < side; y++ {
+			sy := y * detailTileSize / side
+			for x := 0; x < side; x++ {
+				sx := x * detailTileSize / side
+				dst[y*side+x] = src[sy*detailTileSize+sx]
+			}
+		}
+	}
+	return out
 }
 
 // indexDetailBank records the 2x variant of every frame of one loaded bank that
@@ -132,39 +169,59 @@ func (c *Client) indexDetailBank(name string, bank *formats.GAF) {
 // scale (DESIGN_GPU_RENDERER §14.2, §14.3). At the native scale it is the
 // identity, so nothing composed at scale 1 changes. At the detail scale it is
 // the provider's 2x variant when one exists, and otherwise the nearest-doubled
-// frame, built once and kept for the client's life.
+// frame, built once and kept for the client's life. At 1.5x it is the
+// provider's 2x variant resampled at 3/4 when there is one, and otherwise the
+// authored frame at 3/2, again built once.
 //
-// The variant carries its own doubled Width/Height and doubled authored anchor
+// The variant carries its own scaled Width/Height and scaled authored anchor
 // offsets, so every placement contract downstream — the anchor blit's
 // subtraction, drawFeature's own subtraction, the composite leaf walk — lands
-// on the doubled pixel grid without a second scale term.
+// on the scaled pixel grid without a second scale term.
 func (c *Client) viewFrame(f *formats.GAFFrame) *formats.GAFFrame {
-	if c == nil || f == nil || c.cam == nil || c.cam.EffectiveScale() == 1 {
+	if c == nil || f == nil || c.cam == nil {
 		return f
 	}
-	if c.enhanced {
-		if variant, ok := c.detailFrames[f]; ok && variant != nil {
-			return variant
-		}
+	scale := c.cam.EffectiveScale()
+	if scale.Native() {
+		return f
 	}
-	if variant, ok := c.doubledFrames[f]; ok && variant != nil {
+	var detail *formats.GAFFrame
+	if c.enhanced {
+		detail = c.detailFrames[f]
+	}
+	if scale == camera.ViewScaleDetail {
+		if detail != nil {
+			return detail
+		}
+		return cachedVariant(&c.doubledFrames, f, func() *formats.GAFFrame { return f.Doubled() })
+	}
+	if detail != nil {
+		return cachedVariant(&c.midDetailFrames, f, func() *formats.GAFFrame { return detail.Resampled(3, 4) })
+	}
+	return cachedVariant(&c.midFrames, f, func() *formats.GAFFrame { return f.Resampled(3, 2) })
+}
+
+// cachedVariant returns the cached variant of f in one variant map, building
+// and recording it on first use. The maps are looked up, never ranged [I1].
+func cachedVariant(cache *map[*formats.GAFFrame]*formats.GAFFrame, f *formats.GAFFrame, build func() *formats.GAFFrame) *formats.GAFFrame {
+	if variant, ok := (*cache)[f]; ok && variant != nil {
 		return variant
 	}
-	if c.doubledFrames == nil {
-		c.doubledFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
+	if *cache == nil {
+		*cache = map[*formats.GAFFrame]*formats.GAFFrame{}
 	}
-	variant := f.Doubled()
-	c.doubledFrames[f] = variant
+	variant := build()
+	(*cache)[f] = variant
 	return variant
 }
 
 // viewScale is the presentation view scale every world-space emission site
-// multiplies its authored screen offsets and extents by: 1 natively, 2 in the
-// detail view (DESIGN_GPU_RENDERER §14.2). Positions need no such term — they
-// come through camera.WorldToScreen, which applies the scale itself.
-func (c *Client) viewScale() int32 {
+// scales its authored screen offsets and extents by, through ViewScale.Px
+// (DESIGN_GPU_RENDERER §14.2). Positions need no such term — they come
+// through camera.WorldToScreen, which applies the scale itself.
+func (c *Client) viewScale() camera.ViewScale {
 	if c == nil || c.cam == nil {
-		return 1
+		return camera.ViewScaleNative
 	}
 	return c.cam.EffectiveScale()
 }

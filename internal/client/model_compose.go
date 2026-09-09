@@ -456,7 +456,7 @@ func (c *Client) composeDirectDebrisModel(draw *presentationrender.UnitDraw, sel
 	target := c.borrowModelImage(int(maxX-minX+1), int(maxY-minY+1), -minX, -minY, 0, 0, false, 1)
 	// Direct polygon coordinates were already in framebuffer space, so Original
 	// detail mode must not scale the committed image a second time.
-	target.blit = 1
+	target.blit = camera.ViewScaleNative
 	for i := range polys {
 		if polys[i].frame != nil {
 			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, id)

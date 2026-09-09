@@ -3,8 +3,8 @@ package main
 // The detail view's runtime switches — DESIGN_GPU_RENDERER §14.6.
 //
 // The view scale is presentation-only [I6][F-P1-008]: the simulation, the tick
-// fingerprint and the save image are identical at 1x and 2x, and only which
-// pixels present the committed frame differs.
+// fingerprint and the save image are identical at 1x, 1.5x and 2x, and only
+// which pixels present the committed frame differs.
 
 import (
 	"fmt"
@@ -37,7 +37,7 @@ func battleViewCentre(cam *camera.Camera) (int32, int32) {
 }
 
 // setBattleViewScale puts the battle on view scale s about the viewport centre.
-func setBattleViewScale(b *battleSession, s int32) {
+func setBattleViewScale(b *battleSession, s camera.ViewScale) {
 	if b == nil || b.cam == nil {
 		return
 	}
@@ -45,38 +45,67 @@ func setBattleViewScale(b *battleSession, s int32) {
 	b.cam.SetScaleAbout(mx, my, s)
 }
 
-// applyEntryZoom applies `--zoom` at battle entry for the windowed routes.
-// A native run leaves the camera untouched, so nothing composed at scale 1
-// changes (§14.1).
+// The window's default view scale is decided by its resolution (§14.6): the
+// retail 640x480 and 800x600 modes keep the native picture, and anything
+// larger opens at 1.5x, where a 1080p window shows about the world a 1280x720
+// native one would.
+const (
+	defaultZoomMaxNativeW = 800
+	defaultZoomMaxNativeH = 600
+)
+
+// defaultViewScale is the view scale a window of this size opens at when
+// `--zoom` is not given.
+func defaultViewScale(viewW, viewH int32) camera.ViewScale {
+	if viewW > defaultZoomMaxNativeW || viewH > defaultZoomMaxNativeH {
+		return camera.ViewScaleMid
+	}
+	return camera.ViewScaleNative
+}
+
+// entryViewScale resolves the window's start-up view scale: `--zoom` when
+// given, else the resolution default for the battle's viewport.
+func entryViewScale(opts Options, cam *camera.Camera) camera.ViewScale {
+	if opts.Zoom != 0 {
+		return opts.Zoom.Norm()
+	}
+	if cam == nil {
+		return camera.ViewScaleNative
+	}
+	return defaultViewScale(cam.ViewW, cam.ViewH)
+}
+
+// applyEntryZoom applies the start-up view scale at battle entry for the
+// windowed routes. A native scale leaves the camera untouched, so nothing
+// composed at scale 1 changes (§14.1).
 func applyEntryZoom(opts Options, b *battleSession) {
-	if opts.Zoom <= 1 || b == nil || b.cam == nil {
+	if b == nil || b.cam == nil {
 		return
 	}
-	setBattleViewScale(b, int32(opts.Zoom))
+	if s := entryViewScale(opts, b.cam); !s.Native() {
+		setBattleViewScale(b, s)
+	}
 }
 
 // viewScaleOf is the battle's live view scale, for the diagnostics and scene
 // metadata that record which one a measurement was taken at.
-func viewScaleOf(b *battleSession) int32 {
+func viewScaleOf(b *battleSession) camera.ViewScale {
 	if b == nil || b.cam == nil {
-		return 1
+		return camera.ViewScaleNative
 	}
 	return b.cam.EffectiveScale()
 }
 
-// toggleViewScale is F9: 1 <-> 2 about the viewport centre. It is a Nanolathe
-// binding, not a retail one — retail's dispatcher has no case for F9 or F10
-// (§14.6).
+// toggleViewScale is F9: the 1x, 1.5x, 2x cycle about the viewport centre.
+// It is a Nanolathe binding, not a retail one — retail's dispatcher has no
+// case for F9 or F10 (§14.6).
 func (b *battleSession) toggleViewScale() {
 	if b == nil || b.cam == nil {
 		return
 	}
-	next := int32(2)
-	if b.cam.EffectiveScale() >= 2 {
-		next = 1
-	}
+	next := b.cam.EffectiveScale().Next()
 	setBattleViewScale(b, next)
-	fmt.Fprintf(os.Stderr, "nanolathe: view scale %dx\n", next)
+	fmt.Fprintf(os.Stderr, "nanolathe: view scale %s\n", next)
 }
 
 // requestRendererToggle is F10: ask the window adapter to swap executors. The

@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/model"
@@ -101,7 +102,7 @@ func (c *Client) drawFragment(v frame.FragmentView) bool {
 		return true
 	}
 	target := c.borrowModelImage(int(maxX-minX+1), int(maxY-minY+1), -minX, -minY, 0, 0, false, 1)
-	target.blit = 1
+	target.blit = camera.ViewScaleNative
 	for i := range polys {
 		c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, uint64(v.Slot))
 	}

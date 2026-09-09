@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"io"
 	"strings"
 	"testing"
@@ -137,22 +138,26 @@ func TestGPUProfileWindowHasExactlyMeasuredCadenceSamples(t *testing.T) {
 	}
 }
 
-// --zoom is the integer view scale of DESIGN_GPU_RENDERER §14.6, replacing the
-// fractional --shot-zoom. It is not a capture option: the window path takes it
-// too, so it is validated whatever route the run takes.
-func TestZoomFlagAcceptsOnlyOneOrTwo(t *testing.T) {
-	for _, arg := range []string{"1", "2"} {
+// --zoom is the view scale of DESIGN_GPU_RENDERER §14.6 — 1, 1.5 or 2 —
+// replacing the free fractional --shot-zoom. It is not a capture option: the
+// window path takes it too, so it is validated whatever route the run takes,
+// and left unset it stays zero for the routes to resolve.
+func TestZoomFlagAcceptsTheThreeViews(t *testing.T) {
+	for arg, want := range map[string]camera.ViewScale{"1": camera.ViewScaleNative, "1.5": camera.ViewScaleMid, "2": camera.ViewScaleDetail} {
 		opts, err := parseFlags([]string{"-zoom", arg}, io.Discard)
 		if err != nil {
 			t.Fatalf("--zoom %s rejected: %v", arg, err)
 		}
-		if fmt.Sprint(opts.Zoom) != arg {
-			t.Fatalf("--zoom %s parsed as %d", arg, opts.Zoom)
+		if opts.Zoom != want {
+			t.Fatalf("--zoom %s parsed as %s", arg, opts.Zoom)
 		}
 	}
-	for _, arg := range []string{"0", "3", "-1"} {
+	if opts, err := parseFlags(nil, io.Discard); err != nil || opts.Zoom != 0 {
+		t.Fatalf("unset --zoom = %v, %v; want zero and no error", opts.Zoom, err)
+	}
+	for _, arg := range []string{"0", "3", "-1", "1.25"} {
 		_, err := parseFlags([]string{"-zoom", arg}, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "must be 1 (native) or 2 (the detail view)") {
+		if err == nil || !strings.Contains(err.Error(), "must be 1 (native), 1.5 or 2 (the detail view)") {
 			t.Fatalf("--zoom %s error = %v, want the repo's rejection", arg, err)
 		}
 	}

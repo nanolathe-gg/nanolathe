@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
@@ -140,7 +141,7 @@ func TestShadowIsFilledWithPaletteIndexZero(t *testing.T) {
 
 func TestOriginalDetailShadowKeepsOffsetAndPunchesAtScaledBody(t *testing.T) {
 	c := compositionClient(t)
-	c.cam.Scale = 2
+	c.cam.Scale = camera.ViewScaleDetail
 	c.SetEnhanced(false)
 	unit := numeric.Fixed(20 << 16)
 	draw := &presentationrender.UnitDraw{WorldPos: [3]numeric.Fixed{unit, 0, unit}, GroundY: 0}

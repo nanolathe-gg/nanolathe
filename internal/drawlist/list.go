@@ -313,21 +313,26 @@ type Terrain struct {
 	// Cam is the live camera the classic executor reads for per-tile projection.
 	// Clone replaces this pointer with an owned camera value.
 	Cam *camera.Camera
-	// Scale is the presentation view scale this record was projected at: 1
-	// natively and 2 in the detail view, with zero read as 1
-	// (DESIGN_GPU_RENDERER §14.2). A tile's screen rectangle is 32*Scale on a
-	// side. It is additive: an executor that ignores it draws the native view.
-	Scale int32
-	// Detail is the detail tile set of DESIGN_GPU_RENDERER §14.3 — one 64x64
-	// index tile per Terrain.TileSet entry, in the same order — used only at
-	// Scale 2. A nil slice means the 32x32 tiles are doubled by nearest
-	// sampling instead. The tiles are immutable after load, so Clone copies the
-	// slice header and shares the tiles [I6].
+	// Scale is the presentation view scale this record was projected at, in
+	// the camera's half steps, with zero read as native
+	// (DESIGN_GPU_RENDERER §14.2). A tile's screen rectangle is Scale.Px(32)
+	// on a side: 32, 48 or 64. It is additive: an executor that ignores it
+	// draws the native view.
+	Scale camera.ViewScale
+	// Detail is the detail tile set of DESIGN_GPU_RENDERER §14.3 — one index
+	// tile per Terrain.TileSet entry, in the same order, each already at the
+	// screen tile size of the record's Scale and stored with that side as its
+	// row stride (64x64 at 2x, 48x48 in the first 2304 bytes at 1.5x), so an
+	// executor copies it one-to-one. It is nil at the native scale and when
+	// no detail art is installed, and then the executor resamples the 32x32
+	// tile by nearest sampling through the scale's inverse. The tiles are
+	// immutable after load, so Clone copies the slice header and shares the
+	// tiles [I6].
 	Detail [][DetailTilePixels]byte
 }
 
-// DetailTilePixels is the pixel count of one detail tile, 64x64
-// (DESIGN_GPU_RENDERER §14.3).
+// DetailTilePixels is the pixel count of one detail tile slot, 64x64, the
+// largest tile any scale needs (DESIGN_GPU_RENDERER §14.3).
 const DetailTilePixels = 64 * 64
 
 // Cursor records the software cursor blit (docs/DESIGN_GPU_RENDERER.md §2.1),

@@ -31,14 +31,31 @@ package formats
 // after load, which is what lets the client cache one variant per source frame
 // for its life.
 func (f *GAFFrame) Doubled() *GAFFrame {
+	return f.Resampled(2, 1)
+}
+
+// Resampled returns the frame magnified by num/den with nearest sampling, the
+// generalisation of Doubled to the 1.5x view (DESIGN_GPU_RENDERER §14.3): a
+// 1x frame at 3/2, or a remastered 2x frame at 3/4. Width and Height become
+// ceil(v·num/den), the number of screen pixels the frame's world pixels
+// cover; the authored anchor offsets round half away from zero, the rule
+// every scaled extent follows (camera.ViewScale.Px); and output pixel j reads
+// source pixel floor(j·den/num), so a 1x source pixel covers alternately one
+// and two output pixels at 3/2 and a 2x source loses every fourth column at
+// 3/4. At 2/1 the result is byte-for-byte Doubled's. Everything else Doubled
+// says about keys, plain rasters and composites holds here.
+func (f *GAFFrame) Resampled(num, den int) *GAFFrame {
 	if f == nil {
 		return nil
 	}
+	if num <= 0 || den <= 0 {
+		return f
+	}
 	out := &GAFFrame{
-		Width:            f.Width * 2,
-		Height:           f.Height * 2,
-		XOffset:          f.XOffset * 2,
-		YOffset:          f.YOffset * 2,
+		Width:            resampleExtent(f.Width, num, den),
+		Height:           resampleExtent(f.Height, num, den),
+		XOffset:          resampleOffset(f.XOffset, num, den),
+		YOffset:          resampleOffset(f.YOffset, num, den),
 		ColorKey:         f.ColorKey,
 		Compressed:       0,
 		Unknown2:         f.Unknown2,
@@ -46,38 +63,60 @@ func (f *GAFFrame) Doubled() *GAFFrame {
 		SubframeCount:    f.SubframeCount,
 		AlternateBlitter: f.AlternateBlitter,
 	}
-	out.Pixels, out.Transparent = doubleRaster(f.Pixels, f.Transparent, int(f.Width), int(f.Height))
+	w, h := int(f.Width), int(f.Height)
+	dw, dh := int(out.Width), int(out.Height)
+	out.Pixels, out.Transparent = resampleRaster(f.Pixels, f.Transparent, w, h, dw, dh, num, den)
 	if sameByteSlice(f.PlainPixels, f.Pixels) {
-		// The decoder aliases the two views for every frame it materializes;
-		// preserve that so a consumer of either reads the same bytes.
 		out.PlainPixels, out.PlainTransparent = out.Pixels, out.Transparent
 	} else {
-		out.PlainPixels, out.PlainTransparent = doubleRaster(f.PlainPixels, f.PlainTransparent, int(f.Width), int(f.Height))
+		out.PlainPixels, out.PlainTransparent = resampleRaster(f.PlainPixels, f.PlainTransparent, w, h, dw, dh, num, den)
 	}
 	if len(f.Subframes) != 0 {
 		out.Subframes = make([]*GAFFrame, len(f.Subframes))
 		for i, child := range f.Subframes {
-			out.Subframes[i] = child.Doubled()
+			out.Subframes[i] = child.Resampled(num, den)
 		}
 	}
 	return out
 }
 
-// doubleRaster expands one w*h index raster and its parallel transparency mask
-// so each source pixel covers a 2x2 destination block. A source shorter than
-// its declared size leaves the missing tail transparent, which is how
-// GAFFrame.At already treats it.
-func doubleRaster(pixels []byte, transparent []bool, w, h int) ([]byte, []bool) {
-	if w <= 0 || h <= 0 {
+// resampleExtent is ceil(v·num/den) for a non-negative size.
+func resampleExtent(v uint16, num, den int) uint16 {
+	return uint16((int(v)*num + den - 1) / den)
+}
+
+// resampleOffset rounds v·num/den half away from zero, so a symmetric anchor
+// stays symmetric; at a whole factor it is the exact multiply.
+func resampleOffset(v int16, num, den int) int16 {
+	p := int(v) * num * 2
+	if p >= 0 {
+		return int16((p + den) / (2 * den))
+	}
+	return int16((p - den) / (2 * den))
+}
+
+// resampleRaster maps every output pixel to source floor(j·den/num) on both
+// axes. A short Pixels or Transparent slice reads as the decoder left it:
+// missing pixels are zero and, absent a Transparent entry, opaque.
+func resampleRaster(pixels []byte, transparent []bool, w, h, dw, dh, num, den int) ([]byte, []bool) {
+	if w <= 0 || h <= 0 || dw <= 0 || dh <= 0 {
 		return nil, nil
 	}
-	dw := w * 2
-	outPixels := make([]byte, dw*h*2)
-	outTransparent := make([]bool, dw*h*2)
-	for y := 0; y < h; y++ {
-		row := y * w
-		for x := 0; x < w; x++ {
-			index := row + x
+	outPixels := make([]byte, dw*dh)
+	outTransparent := make([]bool, dw*dh)
+	for y := 0; y < dh; y++ {
+		sy := y * den / num
+		if sy >= h {
+			sy = h - 1
+		}
+		row := sy * w
+		outRow := y * dw
+		for x := 0; x < dw; x++ {
+			sx := x * den / num
+			if sx >= w {
+				sx = w - 1
+			}
+			index := row + sx
 			var pixel byte
 			clear := true
 			if index < len(pixels) {
@@ -88,22 +127,13 @@ func doubleRaster(pixels []byte, transparent []bool, w, h int) ([]byte, []bool) 
 			} else if index < len(pixels) {
 				clear = false
 			}
-			base := (y*2)*dw + x*2
-			for dy := 0; dy < 2; dy++ {
-				offset := base + dy*dw
-				outPixels[offset] = pixel
-				outPixels[offset+1] = pixel
-				outTransparent[offset] = clear
-				outTransparent[offset+1] = clear
-			}
+			outPixels[outRow+x] = pixel
+			outTransparent[outRow+x] = clear
 		}
 	}
 	return outPixels, outTransparent
 }
 
-// sameByteSlice reports whether two slices share a backing array from the same
-// start, which is how the decoder marks a frame whose plain raster is its only
-// raster.
 func sameByteSlice(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false

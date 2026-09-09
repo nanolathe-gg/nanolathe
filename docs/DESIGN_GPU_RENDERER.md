@@ -482,11 +482,12 @@ reviewed on the model preview captures and by inspection, not by pixel count.
 
 ### 5.2 Enhanced zoom and strategic view
 
-The detailed 2× view is designed in §14: an integer view scale, 2× terrain and
-feature art synthesized from the map's own pixels at load time, and model
-geometry rasterized at output scale, with every world-space layer, picking,
-fog and the minimap sharing the one transform. Continuous zoom between 1× and
-2×, and the strategic view below 1× (detail reduced progressively until units
+The detailed view is designed in §14: a view scale in half steps (1×, 1.5×,
+2×), 2× terrain and feature art synthesized from the map's own pixels at load
+time and resampled to 1.5× by nearest sampling, and model geometry rasterized
+at output scale, with every world-space layer, picking, fog and the minimap
+sharing the one transform. Continuous zoom between the steps, and the
+strategic view below 1× (detail reduced progressively until units
 become readable dots or icons, rendered into a bounded viewport target rather
 than a whole-map image), remain planned. Strategic markers must show only
 player-known information; marker thresholds, asset selection/fallback, icon
@@ -1551,31 +1552,41 @@ colour planes) and the lit point volume (one quad per covered pixel of every
 flash disc [03 R-FX-01 §4]); a human motion review at the window is still
 owed, because the agents that built this could not inject input.
 
-## 14. The detail view: integer 2× and load-time remaster
+## 14. The detail view: 1.5× and 2× steps and load-time remaster
 
 ### 14.1 Decision
 
-The view scale is an integer, 1 or 2. `camera.Scale` [F-P1-008] becomes an
-`int32` with 0 and 1 meaning native and 2 meaning the detail view; the
-fractional zoom that the camera clamped to 0.25..4 is retired, and with it
-every `float32` in the projection. Retail has one scale, and the point of the
-detail view is that it is *the same view drawn from twice the pixels*: with an
-integer scale the projection is exact,
+The view scale is one of three steps: 1×, 1.5× and 2×. `camera.Scale`
+[F-P1-008] is a `camera.ViewScale`, the scale in half steps — `ViewScaleNative`
+(2), `ViewScaleMid` (3) and `ViewScaleDetail` (4), zero reading as native — and
+the free fractional zoom that the camera once clamped to 0.25..4 stays
+retired, with every `float32` in the projection. Retail has one scale, and
+the point of the magnified views is that each is *the same view drawn from
+more pixels*. The projection is integer at every step,
 
-    screenX = (worldX − camX)·s + originX
-    screenY = (worldZ − (worldY >> 1) − camZ)·s + originY
+    screenX = Project(worldX − camX) + originX
+    screenY = Project(worldZ − (worldY >> 1) − camZ) + originY
+    Project(v) = ceil(v·s / 2)
 
-so a 2× asset lands on the pixel grid one-to-one, a 1× asset doubled by
-nearest sampling lands on the same grid, and the inverse used for picking,
-`world = cam + floor((screen − origin) / s)`, is an exact inverse: every
-screen pixel names one world pixel. Nothing composed at scale 1 changes by a
-pixel from the build before this section — the native fast path is the same
-integer path.
+and the inverse used for picking, `world = cam + floor(2·(screen − origin) / s)`,
+is its exact inverse at every step: every screen pixel names one world pixel,
+and every world pixel projects to the first screen pixel that picks it. At 1×
+and 2× both reduce to the multiply and the floor divide the detail view was
+built on, so a 2× asset lands on the pixel grid one-to-one and a 1× asset
+doubled by nearest sampling lands on the same grid; nothing composed at scale
+1 changes by a pixel from the build before this section, and nothing at 2×
+from the build before the 1.5× step. At 1.5× consecutive world pixels are
+alternately two and one screen pixel apart, which is nearest sampling at 3/2,
+and the arithmetic is the named type's: `Project` for a position, `Px` —
+`v·s/2` rounded half away from zero — for an extent or an authored offset, and
+`Inverse` for a picked pixel. The type is distinct from `int32` so that a
+plain multiply against a pixel count does not compile.
 
-Continuous zoom is not lost by this: a future fractional scale draws the 2×
-assets through the scaled blit family at a fractional factor, which is the
-§5.2 design item. Nothing below depends on it, and the user has asked for the
-2× view first.
+Continuous zoom is not lost by this: a future free scale draws the 2× assets
+through the scaled blit family at any factor, which is the §5.2 design item.
+Nothing below depends on it; the 1.5× step exists because a 1080p window is
+too small at 1× and shows too little at 2×, and it is the window's default
+above 800×600 (§14.6).
 
 The simulation never reads the scale [I6]. Movement, orders, physics, the
 tick fingerprint and the save image are identical at 1× and 2× by
@@ -1589,6 +1600,18 @@ Every world-space command is recorded in screen space by the recorder, and the
 recorder is the one place the scale is applied. The executors replay recorded
 coordinates and never rescale; both replay the same list, so the parity gate
 of §6 applies at 2× exactly as at 1×. The rule per layer:
+
+At 1.5× every row below holds with `Px` in place of `×s` and the 1.5× variant
+of §14.3 in place of the 2× one: terrain tiles are 48 pixels, fog cells 48,
+the health bar's half-extents `Px(17)` and `Px(2)`, the shadow's five-pixel
+step `Px(5) = 8`, the flash disc's pixels the one- or two-pixel spans their
+world pixels project to, and a model's local offsets `Px` each (Enhanced) or
+its native image blitted over those spans (Original). A pre-scaled sprite
+cannot be phase-exact at a fractional factor — a source column covers two
+screen pixels or one depending on where its anchor projects — so a 1.5×
+sprite may sit one pixel off the terrain's own sampling phase; that is the
+cost of drawing variants rather than sampling on the device, and it is
+invisible at 1× and 2×.
 
 | Layer | Position | Size and art at s = 2 |
 |---|---|---|
@@ -1651,6 +1674,23 @@ frame on first use and keeps it for the life of the client, keyed by the
 source frame's pointer (frames are immutable after load). The doubled frame is a plain frame: composites with alternate
 children are doubled leaf by leaf. Executors see only frames; a variant is
 just another frame to the sprite atlas.
+
+**The 1.5× variants.** `formats.(*GAFFrame).Resampled(num, den)` is the
+general nearest resample — sizes `ceil(v·num/den)`, anchors rounded half away
+from zero, output pixel `j` reading source `floor(j·den/num)` — of which
+`Doubled` is the 2/1 case. At 1.5× the client draws the provider's 2× variant
+resampled at 3/4 when one exists (the remaster loses every fourth row and
+column, which reads better than the authored frame at 3/2 with its uneven
+columns) and the authored frame at 3/2 otherwise; both are built once per
+source frame and kept, in caches separate from the doubled ones. The detail
+tile set is decimated the same way, 64×64 to 48×48 by nearest sampling, once
+per provider, and recorded on the terrain command in place of the 64×64 set:
+the record's tiles are always at the screen tile size of its scale, stored
+with that side as their row stride, so an executor copies a detail tile
+one-to-one and resamples the 32×32 tile through `Inverse` only when there is
+none. The fog cloud frames, never remastered, take the 3/2 variant in both
+executors; the queue overlay's dash and icon art take it through the same
+helper.
 
 ### 14.4 Load-time remaster — contract D3
 
@@ -1728,16 +1768,23 @@ fragment, which is a follow-up, not part of this section.
 
 ### 14.6 Runtime switches
 
-* **F9** toggles the view scale between 1 and 2 about the viewport centre.
+* **F9** cycles the view scale 1× → 1.5× → 2× → 1× about the viewport centre
+  (`ViewScale.Next`).
 * **F10** toggles the executor between classic and modern. The client
   publishes the requested executor; the adapter switches at the next Update,
   turning interpolation and the synthesized art off when classic takes over
   (§14.3), and the retained screen bridges the swap. Neither key is a retail binding; retail's dispatcher does
   not read them.
-* `--zoom 1|2` sets the scale at battle entry and applies to captures too; it
-  replaces `--shot-zoom`, whose fractional values are gone. `--shot-focus`
-  stays. `--fps` is §13.5. The battle benchmark accepts `--zoom` and records
-  it in the scene metadata.
+* `--zoom 1|1.5|2` sets the scale at battle entry and applies to captures
+  too; it replaces `--shot-zoom`, whose free fractional values are gone.
+  Left unset, the window opens at 1.5× when its framebuffer exceeds 800×600
+  in either dimension — the retail 640×480 and 800×600 modes stay native, a
+  1024×768 or 1080p window opens magnified — and a restart keeps the scale
+  the player was on. A capture and the battle benchmark take no such default:
+  unset is native there, so every existing capture and benchmark scene is
+  unchanged and a run's scale is always the one on its command line.
+  `--shot-focus` stays. `--fps` is §13.5. The battle benchmark accepts
+  `--zoom` and records it in the scene metadata as the factor (1, 1.5 or 2).
 
 ### 14.7 Verification
 

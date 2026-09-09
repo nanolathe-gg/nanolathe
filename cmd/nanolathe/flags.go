@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"io"
 	"math"
 	"os"
@@ -17,29 +18,29 @@ type Options struct {
 	BenchmarkFactories bool
 	BenchmarkFrames    int
 	BenchmarkTPS       int
-	Root               string // retail install root
-	Map                string // map name without extension, e.g. "ashap plateau"
-	Seed               int64  // battle RNG seed for both streams; <0 = derive pair from clock
-	Headless           bool   // run the session without opening a window
-	Ticks              int    // authoritative tick limit; zero uses the headless default
-	Mission            string // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
-	Difficulty         int    // campaign difficulty
-	LoadSave           string // explicit retail .SAV path to load in the windowed shell
-	Report             string // JSON headless summary path; empty writes to stdout
-	Shot               string // compose one frame to this PNG and exit, opening no window
-	ShotTicks          int    // authoritative ticks to advance before the frame is captured
-	Remaster           string // remaster override: a loose directory or HPI mounted above every retail tier
-	Zoom               int    // presentation view scale: 1 (native) or 2 (the detail view) [F-P1-008]
-	AutoRemaster       bool   // synthesize the detail view's 2x art at load time (DESIGN_GPU_RENDERER §14.4)
-	ShotFocus          string // "x,y" screen point kept fixed while scaling; default the screen centre
-	ShotSelect         bool   // run the Ctrl+A select-all before --shot captures, so the command page is open
-	ShotSize           string // "WxH" surface size for --shot; empty composes at the authored 640x480
-	ShotModal          string // battle modal to open before --shot captures: "options", "exit" or "confirm"
-	ShotSpace          bool   // hold Space for --shot captures, so the bottom slide strip is fully raised
-	Renderer           string // start-up presentation executor: "classic" (default) or "modern"
-	Fullscreen         bool   // host desktop fullscreen override
-	FullscreenSet      bool   // distinguishes an omitted flag from --fullscreen=false
-	FPS                int    // cap on presented frames per second for the modern renderer; 0 = the display's refresh rate
+	Root               string           // retail install root
+	Map                string           // map name without extension, e.g. "ashap plateau"
+	Seed               int64            // battle RNG seed for both streams; <0 = derive pair from clock
+	Headless           bool             // run the session without opening a window
+	Ticks              int              // authoritative tick limit; zero uses the headless default
+	Mission            string           // campaign path and mission selector, e.g. "camps/Arm Campaign.tdf:MISSION0"
+	Difficulty         int              // campaign difficulty
+	LoadSave           string           // explicit retail .SAV path to load in the windowed shell
+	Report             string           // JSON headless summary path; empty writes to stdout
+	Shot               string           // compose one frame to this PNG and exit, opening no window
+	ShotTicks          int              // authoritative ticks to advance before the frame is captured
+	Remaster           string           // remaster override: a loose directory or HPI mounted above every retail tier
+	Zoom               camera.ViewScale // presentation view scale from --zoom; zero is unset: the window picks by resolution, a capture stays native [F-P1-008]
+	AutoRemaster       bool             // synthesize the detail view's 2x art at load time (DESIGN_GPU_RENDERER §14.4)
+	ShotFocus          string           // "x,y" screen point kept fixed while scaling; default the screen centre
+	ShotSelect         bool             // run the Ctrl+A select-all before --shot captures, so the command page is open
+	ShotSize           string           // "WxH" surface size for --shot; empty composes at the authored 640x480
+	ShotModal          string           // battle modal to open before --shot captures: "options", "exit" or "confirm"
+	ShotSpace          bool             // hold Space for --shot captures, so the bottom slide strip is fully raised
+	Renderer           string           // start-up presentation executor: "classic" (default) or "modern"
+	Fullscreen         bool             // host desktop fullscreen override
+	FullscreenSet      bool             // distinguishes an omitted flag from --fullscreen=false
+	FPS                int              // cap on presented frames per second for the modern renderer; 0 = the display's refresh rate
 
 	// ShotRenderer selects which executor --shot captures through:
 	// "classic" (explicit software composer), "modern" (the GPU executor,
@@ -98,7 +99,14 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.Shot, "shot", "", "compose one battle frame to this PNG and exit, opening no window")
 	set.IntVar(&opts.ShotTicks, "shot-ticks", 90, "authoritative ticks to advance before --shot captures the frame")
 	set.StringVar(&opts.Remaster, "remaster", "", "remastered-art override: a loose directory or .hpi mounted above every retail archive")
-	set.IntVar(&opts.Zoom, "zoom", 1, "presentation view scale: 1 (native) or 2 (the detail view)")
+	set.Func("zoom", "presentation view scale: 1 (native), 1.5 or 2 (the detail view); the window defaults to 1.5 above 800x600 and 1 otherwise, captures and the benchmark to 1", func(text string) error {
+		zoom, err := camera.ParseViewScale(text)
+		if err != nil {
+			return err
+		}
+		opts.Zoom = zoom
+		return nil
+	})
 	set.BoolVar(&opts.AutoRemaster, "auto-remaster", true, "synthesize the detail view's 2x terrain and feature art at load time; off leaves every asset to nearest doubling")
 	set.StringVar(&opts.ShotFocus, "shot-focus", "", "screen point \"x,y\" kept fixed by --zoom (default the screen centre)")
 	set.BoolVar(&opts.ShotSelect, "shot-select", false, "select the viewing player's units before --shot captures, so the side rail's command page is open")
@@ -138,12 +146,9 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 			opts.FullscreenSet = true
 		}
 	})
-	// The view scale is an integer, 1 or 2 (DESIGN_GPU_RENDERER §14.1). It is
-	// not a --shot option: the window path takes it too, so it is validated
-	// before either route is chosen.
-	if opts.Zoom != 1 && opts.Zoom != 2 {
-		return opts, fmt.Errorf("nanolathe: --zoom must be 1 (native) or 2 (the detail view), got %d", opts.Zoom)
-	}
+	// The view scale is one of the three views (DESIGN_GPU_RENDERER §14.1),
+	// parsed and rejected by the flag's own function above; an unset flag
+	// stays zero for the routes to resolve (§14.6).
 	if opts.BattleBenchmark != "" {
 		// --zoom is accepted here: the benchmark scene is the same battle at
 		// twice the pixels, and the detail view's cost is exactly what the

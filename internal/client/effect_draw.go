@@ -218,7 +218,7 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 			// The halo is a lit disc in screen pixels, so its radius takes the view
 			// scale while its centre comes through the projection
 			// (DESIGN_GPU_RENDERER §14.2).
-			c.drawLHTHalo(int(x-128), int(y-32), radius*int(c.viewScale()), level, options.TerrainCoverage)
+			c.drawLHTHalo(int(x-128), int(y-32), int(c.viewScale().Px(int32(radius))), level, options.TerrainCoverage)
 			stats.Halos++
 		}
 		if d.StripFill != 0 {
@@ -327,7 +327,7 @@ func (c *Client) fillStripParticle(x, y int, color uint8) bool {
 	// is exactly whether the rect clips to a non-empty span [03 R-STRIP-01 §2].
 	// A fill's extents take the view scale, so the two-by-two mark stays two
 	// world pixels square (DESIGN_GPU_RENDERER §14.2).
-	side := stripParticleSize * int(c.viewScale())
+	side := int(c.viewScale().Px(stripParticleSize))
 	drew := false
 	for dy := 0; dy < side && !drew; dy++ {
 		py := y + dy

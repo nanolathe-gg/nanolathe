@@ -242,8 +242,8 @@ func (c *Client) classicModelImage(t *modelTarget) *drawlist.ClassicModelImage {
 	})
 }
 
-func modelTargetBlit(t *modelTarget, fallback int32) int32 {
-	if t != nil && t.blit > 0 {
+func modelTargetBlit(t *modelTarget, fallback camera.ViewScale) camera.ViewScale {
+	if t != nil && t.blit != 0 {
 		return t.blit
 	}
 	return fallback

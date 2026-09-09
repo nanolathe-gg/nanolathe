@@ -62,7 +62,7 @@ func TestViewportTransformViewScaleProjectionRoundTrip(t *testing.T) {
 	// both scales: distance from cam (128,96) is 72 world pixels, so at scale 2
 	// the screen offset is 144, well inside the 511-wide viewport [C-1][F-P1-008].
 	point := struct{ x, y, z numeric.Fixed }{numeric.Fixed(200 << 16), numeric.Fixed(40 << 16), numeric.Fixed(200 << 16)}
-	for _, scale := range []int32{0, 1, 2} {
+	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
 		cam.Scale = scale // presentation-only view scale [F-P1-008]
 		tr := NewViewportTransform(cam, ter, 640, 480)
 		beam := tr.WorldToBeam(point.x, point.y, point.z)

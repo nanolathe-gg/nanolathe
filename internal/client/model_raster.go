@@ -6,6 +6,7 @@ package client
 
 import (
 	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	presentationrender "github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
 )
@@ -148,9 +149,10 @@ type modelTarget struct {
 	// [R-REN-03A §6]. It is descriptive: the caller has already multiplied the
 	// dimensions and origin.
 	scale int32
-	// blit is the nearest-neighbour factor commit applies about the anchor:
-	// 1 natively, 2 for Original at the detail scale (drawlist.ClassicModelImage.Blit).
-	blit   int32
+	// blit is the nearest-neighbour view scale commit applies about the
+	// anchor: native, or the view scale for Original at a magnified view
+	// (drawlist.ClassicModelImage.Blit).
+	blit   camera.ViewScale
 	trace  *rendererTrace
 	winner []int
 	tick   uint32
@@ -205,34 +207,32 @@ func newModelImage(width, height int, originX, originY, anchorX, anchorY int32, 
 // screenX and screenY map an image pixel back to the framebuffer. The image
 // carries the model's (0,0) at (originX, originY) and that point lands on the
 // framebuffer at (anchorX, anchorY) [R-REN-03A §1].
-func (t *modelTarget) screenX(ix int32) int32 { return t.anchorX + (ix-t.originX)*t.blitFactor() }
-func (t *modelTarget) screenY(iy int32) int32 { return t.anchorY + (iy-t.originY)*t.blitFactor() }
+// The image pixel's block of framebuffer pixels starts at screenX and ends
+// before screenX of the next image pixel: one pixel natively, the scale's
+// Project span at a magnified view.
+func (t *modelTarget) screenX(ix int32) int32 {
+	return t.anchorX + t.blitFactor().Project(ix-t.originX)
+}
+func (t *modelTarget) screenY(iy int32) int32 {
+	return t.anchorY + t.blitFactor().Project(iy-t.originY)
+}
 
-// blitFactor is the nearest-neighbour factor of the final blit, 1 unless the
-// image was recorded for Original at the detail scale.
-func (t *modelTarget) blitFactor() int32 {
-	if t == nil || t.blit < 1 {
-		return 1
+// blitFactor is the nearest-neighbour view scale of the final blit, native
+// unless the image was recorded for Original at a magnified view.
+func (t *modelTarget) blitFactor() camera.ViewScale {
+	if t == nil {
+		return camera.ViewScaleNative
 	}
-	return t.blit
+	return t.blit.Norm()
 }
 
 // imageX and imageY are the inverse, used to record framebuffer-space
 // diagnostics against the image the model was rasterized into.
 func (t *modelTarget) imageX(sx int32) int32 {
-	return floorDivInt32(sx-t.anchorX, t.blitFactor()) + t.originX
+	return t.blitFactor().Inverse(sx-t.anchorX) + t.originX
 }
 func (t *modelTarget) imageY(sy int32) int32 {
-	return floorDivInt32(sy-t.anchorY, t.blitFactor()) + t.originY
-}
-
-// floorDivInt32 is floor(a/b) for b > 0.
-func floorDivInt32(a, b int32) int32 {
-	q := a / b
-	if a%b != 0 && a < 0 {
-		q--
-	}
-	return q
+	return t.blitFactor().Inverse(sy-t.anchorY) + t.originY
 }
 
 // admit applies the height-key test. With no key plane every candidate is
@@ -481,7 +481,7 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 	if t == nil || width <= 0 || height <= 0 {
 		return
 	}
-	if t.blitFactor() != 1 {
+	if !t.blitFactor().Native() {
 		t.commitBlock(dst, width, height, nil)
 		return
 	}
@@ -507,16 +507,17 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 }
 
 // commitBlock is the nearest-neighbour form of commit and tintedCommit for
-// Original at the detail scale: every image pixel covers a blit×blit block
-// about the anchor, clipped to the framebuffer. With alp nil it is the keyed
-// body blit; with alp set it is the translucent shadow blit. The image itself
-// was rasterized at native size, so the block is the whole of the scaling
-// (DESIGN_GPU_RENDERER §14.2).
+// Original at a magnified view: every image pixel covers the block of
+// framebuffer pixels between its own screen position and the next image
+// pixel's — 2×2 at 2x, one or two wide at 1.5x — about the anchor, clipped to
+// the framebuffer. With alp nil it is the keyed body blit; with alp set it is
+// the translucent shadow blit. The image itself was rasterized at native
+// size, so the block is the whole of the scaling (DESIGN_GPU_RENDERER §14.2).
 func (t *modelTarget) commitBlock(dst []uint8, width, height int, alp *[65536]byte) {
-	b := int(t.blitFactor())
 	for iy := 0; iy < t.heightPx; iy++ {
 		sy0 := int(t.screenY(int32(iy)))
-		if sy0+b <= 0 || sy0 >= height {
+		sy1 := int(t.screenY(int32(iy) + 1))
+		if sy1 <= 0 || sy0 >= height {
 			continue
 		}
 		src := iy * t.width
@@ -530,15 +531,16 @@ func (t *modelTarget) commitBlock(dst []uint8, width, height int, alp *[65536]by
 				continue
 			}
 			sx0 := int(t.screenX(int32(ix)))
-			if sx0+b <= 0 || sx0 >= width {
+			sx1 := int(t.screenX(int32(ix) + 1))
+			if sx1 <= 0 || sx0 >= width {
 				continue
 			}
-			for sy := sy0; sy < sy0+b; sy++ {
+			for sy := sy0; sy < sy1; sy++ {
 				if sy < 0 || sy >= height {
 					continue
 				}
 				row := sy * width
-				for sx := sx0; sx < sx0+b; sx++ {
+				for sx := sx0; sx < sx1; sx++ {
 					if sx < 0 || sx >= width {
 						continue
 					}

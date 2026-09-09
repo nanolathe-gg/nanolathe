@@ -148,12 +148,12 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	if opts.Width <= 0 || opts.Height <= 0 || opts.Width > maxModelPreviewDimension || opts.Height > maxModelPreviewDimension {
 		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
 	}
-	// The view scale is an integer: 0 or 1 is native and 2 is the detail view
-	// (DESIGN_GPU_RENDERER §14.1). A fractional request is rejected rather than
-	// rounded, so a caller that wanted 1.5 learns the magnification is gone
-	// instead of silently receiving another one.
-	if opts.Scale != 0 && opts.Scale != 1 && opts.Scale != 2 {
-		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g is not 1 or 2", opts.Scale)
+	// The view scale is one of the three views: 0 or 1 is native, 1.5 the
+	// mid view and 2 the detail view (DESIGN_GPU_RENDERER §14.1). Any other
+	// request is rejected rather than rounded, so a caller learns the
+	// magnification is unavailable instead of silently receiving another one.
+	if opts.Scale != 0 && opts.Scale != 1 && opts.Scale != 1.5 && opts.Scale != 2 {
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g is not 1, 1.5 or 2", opts.Scale)
 	}
 
 	c := r.client
@@ -185,12 +185,9 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	// World position is chosen so modelAnchor lands on the image centre. Scale
 	// magnifies the ordinary orthographic game-camera projection without
 	// changing its angle or shear [03 §2.5][R-REN-03A §1].
-	scale := int32(opts.Scale)
-	if scale == 0 {
-		scale = 1
-	}
-	anchorX := int64(int32(opts.Width/2) / scale)
-	anchorZ := int64(int32(opts.Height/2)/scale) + int64(opts.WorldHeight>>1)
+	scale := camera.ViewScale(opts.Scale * 2).Norm()
+	anchorX := int64(scale.Inverse(int32(opts.Width / 2)))
+	anchorZ := int64(scale.Inverse(int32(opts.Height/2))) + int64(opts.WorldHeight>>1)
 	c.cam = &camera.Camera{
 		ViewW: int32(opts.Width), ViewH: int32(opts.Height),
 		MapW: int32(opts.Width), MapH: int32(opts.Height), Scale: scale,

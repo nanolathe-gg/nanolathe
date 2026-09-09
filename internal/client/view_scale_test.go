@@ -217,7 +217,7 @@ func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 	cam := &camera.Camera{X: 20, Z: 16, ViewW: 320, ViewH: 240, MapW: 4096, MapH: 4096}
 	c.SetCamera(cam)
 	one := recordViewScaleScene(t, c, cur)
-	cam.Scale = 2
+	cam.Scale = camera.ViewScaleDetail
 	two := recordViewScaleScene(t, c, cur)
 
 	if len(one.family) != len(two.family) {
@@ -328,15 +328,15 @@ func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 		if got, want := b.ScreenX1-b.ScreenX0, 2*(a.ScreenX1-a.ScreenX0); got != want {
 			t.Fatalf("fog op %d cell edge %d, want %d", i, got, want)
 		}
-		if b.ViewScale() != 2 {
-			t.Fatalf("fog op %d carries view scale %d, want 2", i, b.ViewScale())
+		if b.ViewScale() != camera.ViewScaleDetail {
+			t.Fatalf("fog op %d carries view scale %s, want 2x", i, b.ViewScale())
 		}
 	}
 
 	if len(one.terrain) != 1 || len(two.terrain) != 1 {
 		t.Fatalf("terrain commands: native %d, detail %d", len(one.terrain), len(two.terrain))
 	}
-	if one.terrain[0].Scale != 1 || two.terrain[0].Scale != 2 {
+	if !one.terrain[0].Scale.Native() || two.terrain[0].Scale != camera.ViewScaleDetail {
 		t.Fatalf("terrain record scale %d then %d, want 1 then 2", one.terrain[0].Scale, two.terrain[0].Scale)
 	}
 
@@ -356,7 +356,7 @@ func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 		if b.Body.Width != a.Body.Width || b.Body.Height != a.Body.Height || b.Body.OriginX != a.Body.OriginX {
 			t.Fatalf("model %d Original image %dx%d must stay native at the detail scale, got %dx%d", i, a.Body.Width, a.Body.Height, b.Body.Width, b.Body.Height)
 		}
-		if a.Body.Blit > 1 || b.Body.Blit != 2 {
+		if !a.Body.Blit.Native() || b.Body.Blit != camera.ViewScaleDetail {
 			t.Fatalf("model %d blit factor %d native, %d detail; want 1 then 2", i, a.Body.Blit, b.Body.Blit)
 		}
 	}
@@ -377,9 +377,66 @@ func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 		if b.Body.AnchorX != 2*a.Body.AnchorX || b.Body.AnchorY != 2*a.Body.AnchorY {
 			t.Fatalf("model %d anchor (%d,%d) native, (%d,%d) enhanced detail; want doubled", i, a.Body.AnchorX, a.Body.AnchorY, b.Body.AnchorX, b.Body.AnchorY)
 		}
-		if b.Body.Width <= a.Body.Width || b.Body.Height <= a.Body.Height || b.Body.Blit > 1 {
-			t.Fatalf("model %d Enhanced image %dx%d did not grow with the scale: %dx%d blit %d", i, a.Body.Width, a.Body.Height, b.Body.Width, b.Body.Height, b.Body.Blit)
+		if b.Body.Width <= a.Body.Width || b.Body.Height <= a.Body.Height || !b.Body.Blit.Native() {
+			t.Fatalf("model %d Enhanced image %dx%d did not grow with the scale: %dx%d blit %s", i, a.Body.Width, a.Body.Height, b.Body.Width, b.Body.Height, b.Body.Blit)
 		}
+	}
+}
+
+// TestViewScaleMidRecordsEveryWorldCommand is the 1.5x form of the §14.2
+// audit. The same scene records the same command families in the same order;
+// every world sprite draws a variant whose size is ceil(1.5x) the authored
+// one; the fog cells are 48 pixels on a side and carry the mid scale; the
+// terrain record carries it too; and the HUD fill is untouched. Nanolathe
+// presentation rule, not retail behaviour.
+func TestViewScaleMidRecordsEveryWorldCommand(t *testing.T) {
+	c, cur := viewScaleScene(t)
+	cam := &camera.Camera{X: 20, Z: 16, ViewW: 320, ViewH: 240, MapW: 4096, MapH: 4096}
+	c.SetCamera(cam)
+	one := recordViewScaleScene(t, c, cur)
+	cam.Scale = camera.ViewScaleMid
+	mid := recordViewScaleScene(t, c, cur)
+
+	if len(one.family) != len(mid.family) {
+		t.Fatalf("command counts differ: native %v, mid %v", one.family, mid.family)
+	}
+	for i := range one.family {
+		if one.family[i] != mid.family[i] {
+			t.Fatalf("command %d family %q at native, %q at 1.5x", i, one.family[i], mid.family[i])
+		}
+	}
+	if len(one.sprites) != len(mid.sprites) || len(one.sprites) == 0 {
+		t.Fatalf("sprites: native %d, mid %d", len(one.sprites), len(mid.sprites))
+	}
+	for i := range one.sprites {
+		a, b := one.sprites[i], mid.sprites[i]
+		if b.Frame == nil || a.Frame == nil {
+			t.Fatalf("sprite %d lost its frame", i)
+		}
+		if b.Frame.Width != (a.Frame.Width*3+1)/2 || b.Frame.Height != (a.Frame.Height*3+1)/2 {
+			t.Fatalf("sprite %d frame %dx%d native, %dx%d mid; want ceil(1.5x)", i, a.Frame.Width, a.Frame.Height, b.Frame.Width, b.Frame.Height)
+		}
+	}
+	if len(mid.fog) == 0 {
+		t.Fatal("no fog ops recorded at 1.5x")
+	}
+	for i, op := range mid.fog {
+		if got := op.ScreenX1 - op.ScreenX0; got != 48 {
+			t.Fatalf("fog op %d cell edge %d at 1.5x, want 48", i, got)
+		}
+		if op.ViewScale() != camera.ViewScaleMid {
+			t.Fatalf("fog op %d carries view scale %s, want 1.5x", i, op.ViewScale())
+		}
+	}
+	if len(mid.terrain) != 1 || mid.terrain[0].Scale != camera.ViewScaleMid {
+		t.Fatalf("terrain record scale = %v, want 1.5x", mid.terrain)
+	}
+	if len(one.fills) == 0 || len(one.fills) != len(mid.fills) {
+		t.Fatalf("fills: native %d, mid %d", len(one.fills), len(mid.fills))
+	}
+	hudA, hudB := one.fills[len(one.fills)-1], mid.fills[len(mid.fills)-1]
+	if hudA.Rect != hudB.Rect || hudA.Index != hudB.Index {
+		t.Fatalf("the HUD fill moved with the 1.5x view: %+v then %+v", hudA.Rect, hudB.Rect)
 	}
 }
 
@@ -390,7 +447,7 @@ func TestViewScaleDoublesEveryWorldCommand(t *testing.T) {
 // detail scale converts to the same world rectangle as the native rectangle
 // over the same world. Nanolathe presentation rule.
 func TestViewScalePickingRoundTrip(t *testing.T) {
-	cam := &camera.Camera{X: 40, Z: 30, ViewW: 320, ViewH: 240, MapW: 4096, MapH: 4096, Scale: 2}
+	cam := &camera.Camera{X: 40, Z: 30, ViewW: 320, ViewH: 240, MapW: 4096, MapH: 4096, Scale: camera.ViewScaleDetail}
 	// The sweep deliberately includes screen coordinates below the beam origin,
 	// where the inverse must FLOOR: truncation toward zero would fold (-1, 0)
 	// onto the same world pixel and leave one unreachable [I3].

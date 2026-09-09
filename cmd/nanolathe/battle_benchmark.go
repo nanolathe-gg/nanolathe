@@ -99,7 +99,12 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 	// the scene's own camera jump and about the viewport centre, so the army
 	// stays framed, and it is recorded in the scene metadata below: two runs
 	// are comparable only at the same scale.
-	applyEntryZoom(opts, b)
+	// The benchmark scene is native unless `--zoom` asks otherwise: the
+	// window's resolution default (§14.6) would silently change the scene two
+	// runs are compared on, and the scale is part of the scene metadata.
+	if !opts.Zoom.Native() {
+		setBattleViewScale(b, opts.Zoom)
+	}
 	census := func() any {
 		f := s.Snapshot.Current()
 		nanoframes, nano := 0, 0
@@ -134,7 +139,7 @@ func runBattleBenchmark(opts Options, b *battleSession, c *client.Client) error 
 		}
 		return map[string]any{"tick": s.Clock.GlobalTick, "units": len(f.Units), "projectiles": len(f.Projectiles), "effects": len(f.Effects), "fragments": len(f.Fragments), "state": s.State.String(), "nanoframes": nanoframes, "nanolathe_events": nano, "factory_production": production, "builds": len(f.Builds), "shake": f.ShakeActive, "camera_x": b.cam.X, "camera_z": b.cam.Z}
 	}
-	err := ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Metadata: map[string]any{"scene_version": 3, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewScaleOf(b), "auto_remaster": opts.AutoRemaster, "warmup_draws": 60, "pre_window_ticks": 30, "display": loadedSettings().Display, "root": opts.Root}})
+	err := ebitenapp.BattleBenchmark(c, step, census, ebitenapp.BenchmarkOptions{Directory: opts.BattleBenchmark, Renderer: opts.Renderer, Frames: opts.BenchmarkFrames, TPS: opts.BenchmarkTPS, Metadata: map[string]any{"scene_version": 3, "tps": opts.BenchmarkTPS, "map": opts.Map, "seed": opts.Seed, "factories": opts.BenchmarkFactories, "viewport": []int{1920, 1080}, "zoom": viewScaleOf(b).Float(), "auto_remaster": opts.AutoRemaster, "warmup_draws": 60, "pre_window_ticks": 30, "display": loadedSettings().Display, "root": opts.Root}})
 	if err != nil {
 		return err
 	}

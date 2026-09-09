@@ -113,10 +113,10 @@ func (c *Client) drawUnitLabels(cur *frame.Frame, ok bool) {
 		x := sx - camera.OriginX
 		sy0 := sy - camera.OriginY
 		if bars {
-			c.drawHealthBar(x, sy0+(healthBarRowOffset-camera.OriginY)*s, u.Health, u.MaxHealth)
+			c.drawHealthBar(x, sy0+s.Px(healthBarRowOffset-camera.OriginY), u.Health, u.MaxHealth)
 		}
 		if u.Group != 0 {
-			c.drawGroupDigit(x, sy0+(groupDigitRowOffset-camera.OriginY)*s, u.Group)
+			c.drawGroupDigit(x, sy0+s.Px(groupDigitRowOffset-camera.OriginY), u.Group)
 		}
 	}
 }
@@ -153,8 +153,8 @@ func (c *Client) drawHealthBar(sx, y, health, maxDamage int32) {
 	// w is derived from the same scaled half-extent, so a full bar still leaves
 	// a one-pixel border at either scale.
 	s := c.viewScale()
-	c.emitFillInclusive(sx-healthBarOuterHalfW*s, y-healthBarOuterHalfH*s,
-		sx+healthBarOuterHalfW*s, y+healthBarOuterHalfH*s, c.paletteIndex(healthBarOuterLogical))
+	halfW, halfH := s.Px(healthBarOuterHalfW), s.Px(healthBarOuterHalfH)
+	c.emitFillInclusive(sx-halfW, y-halfH, sx+halfW, y+halfH, c.paletteIndex(healthBarOuterLogical))
 	if maxDamage <= 0 {
 		// Retail's two divisions are unguarded and would fault on a zero or
 		// negative `maxdamage`; refusing to divide is the bounds-check
@@ -170,8 +170,8 @@ func (c *Client) drawHealthBar(sx, y, health, maxDamage int32) {
 	case hp > third:
 		fill = c.paletteIndex(14)
 	}
-	c.emitFillInclusive(sx-healthBarInnerLeft*s, y-healthBarInnerHalfH*s,
-		sx-healthBarInnerLeft*s+w*s, y+healthBarInnerHalfH*s, fill)
+	innerLeft, innerHalfH := s.Px(healthBarInnerLeft), s.Px(healthBarInnerHalfH)
+	c.emitFillInclusive(sx-innerLeft, y-innerHalfH, sx-innerLeft+s.Px(w), y+innerHalfH, fill)
 }
 
 // drawGroupDigit stamps the one-character label '0' + group at (sx, y)

@@ -296,7 +296,7 @@ func (c *Client) drawTrails() {
 	st := &c.trails
 	s := c.cam.EffectiveScale()
 	w, h := int32(c.width), int32(c.height)
-	margin := 32 * s
+	margin := s.Px(32)
 	st.arena = st.arena[:0]
 	for i := range st.marks {
 		m := &st.marks[i]
@@ -337,27 +337,27 @@ func (c *Client) drawTrails() {
 		case trailFeet:
 			// Feet alternate either side of the path, a footprint's width
 			// apart; the oval is longer along the step than across it.
-			spread := foot * 2 * s
+			spread := s.Px(foot * 2)
 			if m.side == 0 {
 				spread = -spread
 			}
 			st.arena = append(st.arena, drawlist.Trail{
 				X: sx + (perpX*spread)>>8, Y: sy + (perpY*spread)>>8,
-				AxisX: m.dirX * 4 * s, AxisY: m.dirZ * 4 * s,
-				CrossX: perpX * 2 * s, CrossY: perpY * 2 * s,
+				AxisX: s.Px(m.dirX * 4), AxisY: s.Px(m.dirZ * 4),
+				CrossX: s.Px(perpX * 2), CrossY: s.Px(perpY * 2),
 				Shape: drawlist.TrailFootprint, Strength: strength,
 			})
 		case trailTracks:
 			// Two segments, one per tread, each as long as the stride so the
 			// line is continuous.
-			spread := (foot*4 + 2) * s
-			half := int32(trailTrackStride/2) * s
+			spread := s.Px(foot*4 + 2)
+			half := s.Px(int32(trailTrackStride / 2))
 			for _, sign := range [...]int32{-1, 1} {
 				off := spread * sign
 				st.arena = append(st.arena, drawlist.Trail{
 					X: sx + (perpX*off)>>8, Y: sy + (perpY*off)>>8,
 					AxisX: m.dirX * half, AxisY: m.dirZ * half,
-					CrossX: (perpX * 448 * s) >> 8, CrossY: (perpY * 448 * s) >> 8,
+					CrossX: (perpX * s.Px(448)) >> 8, CrossY: (perpY * s.Px(448)) >> 8,
 					Shape: drawlist.TrailTrack, Strength: strength,
 				})
 			}

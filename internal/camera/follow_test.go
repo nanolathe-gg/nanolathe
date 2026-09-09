@@ -81,7 +81,7 @@ func TestFollowToLeavesCurrentClampForLater(t *testing.T) {
 // scale 2 the framebuffer shows 320x240 world pixels, the viewport 256x208 of
 // them, and the leading insets are 64 and 16.
 func TestDesiredOriginUsesEffectiveZoomedViewport(t *testing.T) {
-	cam := &Camera{Scale: 2, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
+	cam := &Camera{Scale: ViewScaleDetail, ViewW: 640, ViewH: 480, MapW: 4096, MapH: 4096}
 	got := cam.DesiredOrigin(TargetPoint{X: 1000, Z: 800})
 	want := Origin{X: 1000 - 64 - 128, Z: 800 - 16 - 104}
 	if got != want {

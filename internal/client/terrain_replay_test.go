@@ -22,8 +22,8 @@ func TestClonedTerrainSurvivesNextCamera(t *testing.T) {
 			terrain.TileSet[0][y*32+x] = byte(1 + x + 3*y)
 		}
 	}
-	for _, scale := range []int32{0, 1, 2} {
-		t.Run(map[int32]string{0: "nil", 1: "native", 2: "detail"}[scale], func(t *testing.T) {
+	for _, scale := range []camera.ViewScale{0, camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
+		t.Run(map[camera.ViewScale]string{0: "nil", camera.ViewScaleNative: "native", camera.ViewScaleMid: "mid", camera.ViewScaleDetail: "detail"}[scale], func(t *testing.T) {
 			c := &Client{width: 32, height: 24, indexed: make([]byte, 32*24)}
 			var cam *camera.Camera
 			if scale != 0 {
@@ -34,7 +34,7 @@ func TestClonedTerrainSurvivesNextCamera(t *testing.T) {
 			want := append([]byte(nil), c.indexed...)
 			saved := c.list.Clone()
 			if cam != nil {
-				cam.X, cam.Z, cam.Scale = 17, 11, 1
+				cam.X, cam.Z, cam.Scale = 17, 11, camera.ViewScaleNative
 			}
 			c.list.Reset()
 			c.list.RecordTerrain(drawlist.Terrain{Terrain: terrain, Cam: &camera.Camera{X: 17, Z: 11}, DstW: 32, DstH: 24})
@@ -46,7 +46,7 @@ func TestClonedTerrainSurvivesNextCamera(t *testing.T) {
 			if !bytes.Equal(c.indexed, want) {
 				t.Fatal("cloned A followed B's camera")
 			}
-			if path := os.Getenv("NANOLATHE_CAMERA_REPLAY_SHOT"); path != "" && scale == 2 {
+			if path := os.Getenv("NANOLATHE_CAMERA_REPLAY_SHOT"); path != "" && scale == camera.ViewScaleDetail {
 				img := image.NewGray(image.Rect(0, 0, 32, 24))
 				for y := 0; y < 24; y++ {
 					for x := 0; x < 32; x++ {

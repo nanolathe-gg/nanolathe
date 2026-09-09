@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/formats"
@@ -318,7 +319,7 @@ func TestCachedBodyMemoizationTracksPresentationInputs(t *testing.T) {
 	c.SetShadowOptions(false, false, true)
 	cachedLiveReplay(t, c, v)
 	first := c.cachedModelBodies[v.InstanceID]
-	if first == nil || first.supersampled || first.scale != 1 || first.palette != p1 || !first.shaded {
+	if first == nil || first.supersampled || first.scale != camera.ViewScaleNative || first.palette != p1 || !first.shaded {
 		t.Fatalf("initial body memo key=%+v", first)
 	}
 
@@ -336,10 +337,10 @@ func TestCachedBodyMemoizationTracksPresentationInputs(t *testing.T) {
 		t.Fatal("effective anti-alias change reused the native cached body")
 	}
 
-	c.cam.Scale = 2
+	c.cam.Scale = camera.ViewScaleDetail
 	cachedLiveReplay(t, c, v)
 	zoom := c.cachedModelBodies[v.InstanceID]
-	if zoom == aa || zoom.scale != 2 {
+	if zoom == aa || zoom.scale != camera.ViewScaleDetail {
 		t.Fatal("effective camera scale change reused the prior cached body")
 	}
 
@@ -378,7 +379,7 @@ func TestCachedBodyMemoRebuildPreservesOrientationReference(t *testing.T) {
 	c, v := cachedLiveRegressionSubject(t)
 	cachedLiveReplay(t, c, v)
 	v.Heading = 7
-	c.cam.Scale = 2
+	c.cam.Scale = camera.ViewScaleDetail
 	cachedLiveReplay(t, c, v)
 	if got := c.orientationCache(v.InstanceID).Heading; got != 0 {
 		t.Fatalf("scale rebuild advanced retained heading to %d", got)

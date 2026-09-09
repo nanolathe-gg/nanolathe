@@ -343,7 +343,7 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 
 func TestCollectDrawPolysUsesCameraScale(t *testing.T) {
 	c := testModelTextureClient()
-	c.cam.Scale = 2
+	c.cam.Scale = camera.ViewScaleDetail
 	// Only Enhanced projects the geometry at the view scale; Original keeps
 	// the native projection and doubles the finished image on the blit
 	// (DESIGN_GPU_RENDERER §14.2). A Nanolathe presentation rule, not retail.

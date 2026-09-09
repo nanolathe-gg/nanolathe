@@ -1,6 +1,9 @@
 package drawlist
 
-import "github.com/nanolathe-gg/nanolathe/formats"
+import (
+	"github.com/nanolathe-gg/nanolathe/formats"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
+)
 
 // ModelVertex is one projected corner of an authored model polygon. Coordinates
 // are composition-image pixels; Key is the signed integer source for the
@@ -71,12 +74,14 @@ type ClassicModelImage struct {
 	OriginX, OriginY int32
 	AnchorX, AnchorY int32
 	Transparent      uint8
-	// Blit is the nearest-neighbour factor the blit applies: 0 or 1 draws
-	// one framebuffer pixel per image pixel, 2 draws a 2x2 block per image
-	// pixel about the anchor. Original at the detail scale rasterizes the
-	// model at its native size and doubles it here, so the classic frame is a
-	// pure upscale of the native one (DESIGN_GPU_RENDERER §14.2).
-	Blit int32
+	// Blit is the nearest-neighbour view scale the blit applies: zero or
+	// native draws one framebuffer pixel per image pixel; a magnified scale
+	// draws each image pixel over the block its Project span covers about the
+	// anchor — 2x2 at 2x, alternately one and two wide at 1.5x. Original at a
+	// magnified scale rasterizes the model at its native size and scales it
+	// here, so the classic frame is a pure nearest upscale of the native one
+	// (DESIGN_GPU_RENDERER §14.2).
+	Blit camera.ViewScale
 }
 
 // Clone returns an image whose mutable planes do not alias the source.

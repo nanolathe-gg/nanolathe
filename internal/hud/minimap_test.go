@@ -238,7 +238,7 @@ func TestMinimapViewportRectOriginFollowsTheCameraAtTheDetailScale(t *testing.T)
 	playW, playH := int32(992), int32(896)
 	m := camera.LayoutMinimap(playW, playH)
 	dst := Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}
-	for _, scale := range []int32{1, 2} {
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleDetail} {
 		cam := &camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH, Scale: scale}
 		got, ok := MinimapViewportRect(cam, m, playW, playH, dst)
 		if !ok {
@@ -254,7 +254,7 @@ func TestMinimapViewportRectOriginFollowsTheCameraAtTheDetailScale(t *testing.T)
 	}
 	// The detail view shows half as much world, so its rectangle is smaller.
 	native, _ := MinimapViewportRect(&camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}, m, playW, playH, dst)
-	detail, _ := MinimapViewportRect(&camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH, Scale: 2}, m, playW, playH, dst)
+	detail, _ := MinimapViewportRect(&camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH, Scale: camera.ViewScaleDetail}, m, playW, playH, dst)
 	if detail.X2-detail.X1 >= native.X2-native.X1 || detail.Y2-detail.Y1 >= native.Y2-native.Y1 {
 		t.Errorf("detail rectangle %+v is not smaller than the native one %+v", detail, native)
 	}

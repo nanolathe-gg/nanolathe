@@ -235,7 +235,7 @@ func (c *Client) shadowAnchor(draw *presentationrender.UnitDraw) (int32, int32) 
 	// the view scale regardless of whether Original doubles the image later or
 	// Enhanced rasterizes doubled geometry (DESIGN_GPU_RENDERER §14.2). The
 	// GroundY shear is a world height and is already scaled by WorldToScreen.
-	return sx - camera.OriginX + shadowXOffset*c.viewScale(), sy - camera.OriginY
+	return sx - camera.OriginX + c.viewScale().Px(shadowXOffset), sy - camera.OriginY
 }
 
 // punchOutModelShadow maps the structure body into its shadow using the scale
@@ -304,7 +304,7 @@ func (t *modelTarget) tintedCommit(dst []uint8, width, height int, alp *[65536]b
 	if t == nil || alp == nil || width <= 0 || height <= 0 {
 		return
 	}
-	if t.blitFactor() != 1 {
+	if !t.blitFactor().Native() {
 		t.commitBlock(dst, width, height, alp)
 		return
 	}

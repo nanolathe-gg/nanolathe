@@ -123,7 +123,7 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 			// is a plain solid rect, so it records as a FillSolid.
 			// A fill's extents take the view scale, so the two-by-two mark stays
 			// two world pixels square (DESIGN_GPU_RENDERER §14.2).
-			side := int32(stripParticleSize) * c.viewScale()
+			side := c.viewScale().Px(stripParticleSize)
 			c.emitFill(drawlist.Fill{
 				Rect: drawlist.Rect{
 					X: sx - camera.OriginX, Y: sy - camera.OriginY,

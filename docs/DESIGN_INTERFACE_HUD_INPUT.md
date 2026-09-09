@@ -1247,10 +1247,14 @@ world scale; this build adds a presentation zoom so a capture or an inspection
 can magnify the composed frame. It changes no authoritative state, is never read
 by a simulation phase, and is not saved [I6].
 
-* **The value.** `Scale` is an `int32` with `0` and `1` meaning native and
-  `2` the detail view; `EffectiveScale` clamps it to `[1, 2]`. It was a
-  fractional `float32` clamped to `[0.25, 4]` until DESIGN_GPU_RENDERER §14
-  made the scale an integer so the projection and its inverse are exact.
+* **The value.** `Scale` is a `camera.ViewScale`, the scale in half steps:
+  `ViewScaleNative` (2, also the zero value's meaning), `ViewScaleMid` (3,
+  1.5×) and `ViewScaleDetail` (4, 2×); `EffectiveScale` clamps it to the
+  three. It was a fractional `float32` clamped to `[0.25, 4]` until
+  DESIGN_GPU_RENDERER §14 made the scale an integer so the projection and its
+  inverse are exact, and the 1.5× step keeps that: `Project` is
+  `ceil(v·s/2)`, its inverse `floor(2·v/s)`, and `Px` scales an extent with
+  half-away rounding.
 * **What it scales.** `EffectiveView` divides the framebuffer view by the scale,
   so zooming in shows less world; `clampInsets` divides the viewport insets by
   it, so the clamp and every recentre stay expressed in world pixels;
@@ -1259,12 +1263,15 @@ by a simulation phase, and is not saved [I6].
 * **The native fast path is exact.** At scale 1 both conversions take the
   original integer path unchanged, so nothing composed at native scale differs
   by a pixel from a build without the feature.
-* **Its writers.** F9 in the battle, which toggles between 1 and 2 about the
-  viewport centre; middle-drag through `Drag`, which converts the screen delta
-  by the inverse of the scale before panning; and `--zoom` with `--shot-focus`
-  through `SetScaleAbout`. `SetScaleAbout` keeps the world point under a given
-  screen position fixed and then clamps. The wheel is not a camera control:
-  it belongs to the GUI list under the pointer [07 §2][07 §10].
+* **Its writers.** F9 in the battle, which cycles 1× → 1.5× → 2× → 1× about
+  the viewport centre; middle-drag through `Drag`, which converts the screen
+  delta by the inverse of the scale before panning; `--zoom` with
+  `--shot-focus` through `SetScaleAbout`; and, with `--zoom` unset, the
+  window's resolution default at battle entry — 1.5× above 800×600, native
+  at or below it (DESIGN_GPU_RENDERER §14.6). `SetScaleAbout` keeps the world
+  point under a given screen position fixed and then clamps. The wheel is not
+  a camera control: it belongs to the GUI list under the pointer [07 §2]
+  [07 §10].
 
 What the scale does to every world-space layer, the 2× art it selects and the
 load-time remaster that produces that art are DESIGN_GPU_RENDERER §14. F10

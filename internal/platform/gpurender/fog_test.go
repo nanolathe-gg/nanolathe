@@ -23,18 +23,18 @@ import (
 // exactly as render.BuildFogOpsWindowInto's producer places it, so the tests
 // exercise the real screen arithmetic rather than a restatement of it.
 func fogOpAt(gx, gy, camX, camZ int32, kind render.FogKind) render.FogOp {
-	return fogOpAtScale(gx, gy, camX, camZ, 1, kind)
+	return fogOpAtScale(gx, gy, camX, camZ, camera.ViewScaleNative, kind)
 }
 
 // fogOpAtScale is fogOpAt at one view scale: render.FogScreenRect's own
-// arithmetic, the cell corner projected and the edge 32*s (§14.2).
-func fogOpAtScale(gx, gy, camX, camZ, scale int32, kind render.FogKind) render.FogOp {
-	x0 := (gx*render.FogTilePixels+render.FogTilePixels/2-camX)*scale + camera.OriginX
-	y0 := (gy*render.FogTilePixels+render.FogTilePixels/2-camZ)*scale + camera.OriginY
+// arithmetic, the cell corner projected and the edge p(32) (§14.2).
+func fogOpAtScale(gx, gy, camX, camZ int32, scale camera.ViewScale, kind render.FogKind) render.FogOp {
+	x0 := scale.Project(gx*render.FogTilePixels+render.FogTilePixels/2-camX) + camera.OriginX
+	y0 := scale.Project(gy*render.FogTilePixels+render.FogTilePixels/2-camZ) + camera.OriginY
 	return render.FogOp{
 		GridX: gx, GridY: gy,
 		ScreenX0: x0, ScreenY0: y0,
-		ScreenX1: x0 + render.FogTilePixels*scale, ScreenY1: y0 + render.FogTilePixels*scale,
+		ScreenX1: x0 + scale.Px(render.FogTilePixels), ScreenY1: y0 + scale.Px(render.FogTilePixels),
 		Kind: kind, Variant: -1, Frame: -1,
 		Scale: scale,
 	}
@@ -351,9 +351,10 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 // [03 §4.3.3]. The fill therefore uses an index whose PAL entry is NOT grey, so
 // the desaturation is visible: (30,60,90) averages to 60.
 func checkFogDevicePixels() error {
-	// The native scale, then the detail view (§14.2): every rectangle and the
-	// frame the cell draws scale together, and the checker does not.
-	for _, scale := range []int32{1, 2} {
+	// The native scale, then the 1.5x and the detail view (§14.2): every
+	// rectangle and the frame the cell draws scale together, and the checker
+	// does not.
+	for _, scale := range []camera.ViewScale{camera.ViewScaleNative, camera.ViewScaleMid, camera.ViewScaleDetail} {
 		if err := checkFogDevicePixelsAt(scale); err != nil {
 			return err
 		}
@@ -361,7 +362,7 @@ func checkFogDevicePixels() error {
 	return nil
 }
 
-func checkFogDevicePixelsAt(scale int32) error {
+func checkFogDevicePixelsAt(scale camera.ViewScale) error {
 	pal := fixturePalette()
 	const fillIndex = byte(100)
 	pal.Base[fillIndex] = [4]byte{30, 60, 90, 255}
@@ -369,8 +370,9 @@ func checkFogDevicePixelsAt(scale int32) error {
 	grayColor := [3]float64{60, 60, 60}
 	darkColor := expandedIndex(&pal, render.FogDarkPaletteIndex)
 	blackFrameColor := expandedIndex(&pal, 3)
-	s := int(scale)
-	w, h := 128*s, 64*s
+	w, h := int(scale.Px(128)), int(scale.Px(64))
+	// p is a native fixture extent at this view scale.
+	p := func(v int32) int { return int(scale.Px(v)) }
 	r, err := NewChecked(&pal, w, h)
 	if err != nil {
 		return err
@@ -442,19 +444,19 @@ func checkFogDevicePixelsAt(scale int32) error {
 		for x := 0; x < w; x++ {
 			want := fillColor
 			switch {
-			case x < 32*s && y < 32*s:
+			case x < p(32) && y < p(32):
 				want = darkColor
-			case x >= 32*s && x < 64*s && y < 32*s:
+			case x >= p(32) && x < p(64) && y < p(32):
 				want = grayColor
-			case x >= 64*s && x < 96*s && y < 32*s:
+			case x >= p(64) && x < p(96) && y < p(32):
 				// The checker is a destination-pixel test, so it stays one pixel
 				// wide at either scale (§14.2).
 				if (int32(x)+int32(y)+parity)&1 == 1 {
 					want = darkColor
 				}
-			case x >= 16*s && x < 32*s && y >= 32*s && y < 48*s:
+			case x >= p(16) && x < p(32) && y >= p(32) && y < p(48):
 				want = blackFrameColor // the overhanging black-family frame
-			case x >= 80*s && x < 96*s && y >= 32*s && y < 48*s:
+			case x >= p(80) && x < p(96) && y >= p(32) && y < p(48):
 				want = grayColor // the overhanging gray-family frame's masked remap
 			}
 			// Every fog value is a colour the pass writes outright, not a blend, so

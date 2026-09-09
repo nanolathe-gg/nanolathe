@@ -160,10 +160,11 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 	}
 	chain := dashChainEntry(b.fs)
 	// The overlay's positions come through the projection and scale with it;
-	// its sprites do not, so the detail view takes the doubled variant of the
-	// dash and icon art — the same nearest doubling the client applies to any
-	// world sprite it has no 2x variant for (DESIGN_GPU_RENDERER §14.2, §14.3).
-	// At scale 1 this is the identity and nothing composed changes.
+	// its sprites do not, so a magnified view takes the resampled variant of
+	// the dash and icon art — the same nearest resampling the client applies
+	// to any world sprite it has no remastered variant for
+	// (DESIGN_GPU_RENDERER §14.2, §14.3). At scale 1 this is the identity and
+	// nothing composed changes.
 	scale := viewScaleOf(b)
 	for _, op := range hud.QueueOverlay(f, opts) {
 		switch op.Kind {
@@ -192,7 +193,7 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 // segment.  The frame's authored offsets are its hotspot, exactly as for the
 // software cursor: the sprite is placed so that pixel lands on the interpolated
 // point [R-P0-11 §3][fmt gaf "Placement offsets"].
-func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, project func(x, y, z numeric.Fixed) hud.QueuePoint, scale int32) {
+func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, project func(x, y, z numeric.Fixed) hud.QueuePoint, scale camera.ViewScale) {
 	if entry == nil || len(entry.Frames) == 0 {
 		return
 	}
@@ -210,27 +211,33 @@ func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimit
 }
 
 // overlayViewFrame is the world-anchored overlay's own frame selector: the
-// authored frame natively, and its nearest-doubled variant in the detail view,
-// built once per source frame and kept for the process's life
-// (DESIGN_GPU_RENDERER §14.3). Frames are immutable after load, so the source
-// pointer identifies the variant; the cursor GAF this art comes from is loaded
-// once per mounted install, like cursorArt above.
-func overlayViewFrame(f *formats.GAFFrame, scale int32) *formats.GAFFrame {
-	if f == nil || scale < 2 {
+// authored frame natively, and its nearest-resampled variant at a magnified
+// view — doubled at 2x, 3/2 at 1.5x — built once per source frame and scale
+// and kept for the process's life (DESIGN_GPU_RENDERER §14.3). Frames are
+// immutable after load, so the source pointer identifies the variant; the
+// cursor GAF this art comes from is loaded once per mounted install, like
+// cursorArt above.
+func overlayViewFrame(f *formats.GAFFrame, scale camera.ViewScale) *formats.GAFFrame {
+	if f == nil || scale.Native() {
 		return f
 	}
-	if variant, ok := overlayDetailFrames[f]; ok {
+	cache := overlayDetailFrames[scale.Norm()]
+	if cache == nil {
+		cache = map[*formats.GAFFrame]*formats.GAFFrame{}
+		overlayDetailFrames[scale.Norm()] = cache
+	}
+	if variant, ok := cache[f]; ok {
 		return variant
 	}
-	variant := f.Doubled()
-	overlayDetailFrames[f] = variant
+	variant := f.Resampled(int(scale.Norm()), 2)
+	cache[f] = variant
 	return variant
 }
 
-// overlayDetailFrames is the doubled-overlay-art cache. It is presentation
-// state keyed by immutable frames and is only ever looked up, never ranged, so
-// it produces no order [I1][I6].
-var overlayDetailFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
+// overlayDetailFrames is the resampled-overlay-art cache, one map per
+// magnified scale. It is presentation state keyed by immutable frames and is
+// only ever looked up, never ranged, so it produces no order [I1][I6].
+var overlayDetailFrames = map[camera.ViewScale]map[*formats.GAFFrame]*formats.GAFFrame{}
 
 // drawQueueIcon blits the queued-order icon at the order's anchor.  The frame
 // comes from the cursor handle array slot the descriptor's icon byte names, and
@@ -242,7 +249,7 @@ var overlayDetailFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
 // The queue walker emits the attack-icon range rings before this blit. Their
 // GUI12/4 tick-parity colour belongs to those lines; the icon itself follows
 // the ordinary GAF path [07 R-P0-11 §3].
-func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, scale int32) {
+func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, scale camera.ViewScale) {
 	if entry == nil || !op.IconKnown {
 		return
 	}

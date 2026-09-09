@@ -242,9 +242,9 @@ func TestDetailScaleLeavesWorldUnchanged(t *testing.T) {
 	b := newTestBattle(cat, terrain)
 	u := placeUnit(b, "armsolar", numeric.Fixed(int64(200)<<16), numeric.Fixed(int64(200)<<16))
 	sx1, sy1 := b.cam.WorldToScreen(u.X, numeric.Fixed(0), u.Z)
-	b.cam.SetScaleAbout(320, 240, 2)
-	if b.cam.Scale != 2 {
-		t.Fatalf("scale should be 2, got %d", b.cam.Scale)
+	b.cam.SetScaleAbout(320, 240, camera.ViewScaleDetail)
+	if b.cam.Scale != camera.ViewScaleDetail {
+		t.Fatalf("scale should be 2x, got %s", b.cam.Scale)
 	}
 	sx2, sy2 := b.cam.WorldToScreen(u.X, numeric.Fixed(0), u.Z)
 	if sx1 == sx2 && sy1 == sy2 {

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/palette"
@@ -33,21 +34,21 @@ type cachedModelBody struct {
 	// cached physical-index raster from crossing a presentation setting or
 	// palette installation; they are not retail's script-driven validity word.
 	shaded, supersampled bool
-	scale                int32
+	scale                camera.ViewScale
 	palette              *palette.Tables
 }
 
 type cachedBodyInputs struct {
 	shaded, supersampled bool
-	scale                int32
+	scale                camera.ViewScale
 	palette              *palette.Tables
 }
 
 func (c *Client) cachedBodyInputs(draw *presentationrender.UnitDraw) cachedBodyInputs {
 	if c == nil {
-		return cachedBodyInputs{scale: 1}
+		return cachedBodyInputs{scale: camera.ViewScaleNative}
 	}
-	input := cachedBodyInputs{palette: c.pal, scale: 1}
+	input := cachedBodyInputs{palette: c.pal, scale: camera.ViewScaleNative}
 	if c.cam != nil {
 		input.scale = c.cam.EffectiveScale()
 	}

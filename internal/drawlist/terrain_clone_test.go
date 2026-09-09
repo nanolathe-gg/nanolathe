@@ -6,7 +6,7 @@ import (
 )
 
 func TestCloneOwnsTerrainCamera(t *testing.T) {
-	original := camera.Camera{X: 7, Z: 11, Scale: 2, ViewW: 32, ViewH: 24}
+	original := camera.Camera{X: 7, Z: 11, Scale: camera.ViewScaleDetail, ViewW: 32, ViewH: 24}
 	cam := original
 	var list List
 	list.RecordTerrain(Terrain{Cam: &cam, OriginX: 7, OriginY: 11, DstW: 32, DstH: 24})

@@ -15,6 +15,7 @@ package client
 
 import (
 	"fmt"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"strings"
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -402,13 +403,14 @@ func modelLocalVertex(v, origin [3]numeric.Fixed) (lx, ly, ry int32) {
 // offset. Retail has no scale; at the retail scale of 1 this is the identity
 // and the offsets stay exactly as [R-REN-03A §1] computes them. At the detail
 // scale it is an exact integer multiply, so a doubled model lands on the pixel
-// grid one-to-one (DESIGN_GPU_RENDERER §14.2).
+// grid one-to-one; at 1.5x it is the half-away rounding every scaled extent
+// uses (DESIGN_GPU_RENDERER §14.2).
 func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
 	s := c.modelScale()
-	if s == 1 {
+	if s.Native() {
 		return lx, ly
 	}
-	return lx * s, ly * s
+	return s.Px(lx), s.Px(ly)
 }
 
 // modelScale is the factor model geometry is projected by, and modelBlitScale
@@ -417,16 +419,16 @@ func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
 // blits one-to-one; Original rasterizes at native size and doubles the image
 // on the blit, so its detail-scale frame is a pure nearest upscale of the
 // native frame (DESIGN_GPU_RENDERER §14.2).
-func (c *Client) modelScale() int32 {
+func (c *Client) modelScale() camera.ViewScale {
 	if c == nil || !c.enhanced {
-		return 1
+		return camera.ViewScaleNative
 	}
 	return c.viewScale()
 }
 
-func (c *Client) modelBlitScale() int32 {
+func (c *Client) modelBlitScale() camera.ViewScale {
 	if c == nil || c.enhanced {
-		return 1
+		return camera.ViewScaleNative
 	}
 	return c.viewScale()
 }

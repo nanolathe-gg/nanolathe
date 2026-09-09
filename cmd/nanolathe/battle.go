@@ -323,7 +323,7 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 	// the second load of the same map a file read (§14.4 "Cache").
 	next.detail = detailArtFor(opts, cs, sess.World, nil)
 	old := *current
-	scale := int32(1)
+	scale := camera.ViewScaleNative
 	if old.cam != nil {
 		scale = old.cam.EffectiveScale()
 	}
@@ -332,7 +332,7 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 	installBattleClient(cl, next)
 	fitDirectBattleViewport(cl, next)
 	// The restarted battle keeps the view scale the player was on.
-	if next.cam != nil && scale > 1 {
+	if next.cam != nil && !scale.Native() {
 		setBattleViewScale(next, scale)
 	}
 	if next.hud != nil && next.hud.windowContext != nil {

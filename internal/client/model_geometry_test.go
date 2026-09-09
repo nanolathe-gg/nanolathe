@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"testing"
 
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
@@ -129,7 +130,7 @@ func TestDirectDebrisProjectionGateAndClassicScale(t *testing.T) {
 	c := testModelTextureClient()
 	c.width, c.height = 64, 64
 	c.indexed = make([]byte, c.width*c.height)
-	c.cam.Scale = 2
+	c.cam.Scale = camera.ViewScaleDetail
 	draw := testPrimitiveDraw(presentationrender.PrimitiveDraw{
 		IsColored: 1, ColorIndex: 77, VertexIndices: []uint16{0, 1, 2},
 	}, [][3]numeric.Fixed{
@@ -164,7 +165,7 @@ func TestDirectDebrisProjectionGateAndClassicScale(t *testing.T) {
 	}
 	c.finishModel(classic, nil)
 	models := c.list.ModelCommands()
-	if len(models) != 1 || models[0].Classic == nil || models[0].Classic.Body == nil || models[0].Classic.Body.Blit != 1 {
+	if len(models) != 1 || models[0].Classic == nil || models[0].Classic.Body == nil || !models[0].Classic.Body.Blit.Native() {
 		t.Fatalf("direct classic packet = %#v, want replay scale one", models)
 	}
 	c.list.Replay(c.classicSink())

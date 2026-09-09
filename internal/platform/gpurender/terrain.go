@@ -2,6 +2,7 @@ package gpurender
 
 import (
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"github.com/nanolathe-gg/nanolathe/internal/drawlist"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 )
@@ -54,7 +55,7 @@ const _ = uint(terrainDetailSize*terrainDetailSize - drawlist.DetailTilePixels)
 type tileAtlasKey struct {
 	terrain *world.Terrain
 	detail  *[drawlist.DetailTilePixels]byte
-	scale   int32
+	scale   camera.ViewScale
 }
 
 // tileAtlas is one map's tile set uploaded at one view scale as index textures
@@ -72,7 +73,7 @@ type tileAtlasKey struct {
 // splitting the pass by page changes no pixel and no order (C-G3).
 type tileAtlas struct {
 	pages   []*ebiten.Image
-	side    int // atlas square per tile, 32*scale
+	side    int // atlas square per tile, the scale's Px(32)
 	cols    int // tiles per atlas row
 	rowsPer int // tile rows per page
 	perPage int // cols*rowsPer
@@ -128,21 +129,23 @@ func terrainAtlasLayout(n, side, maxSide int) (cols, rowsPer, pages int) {
 }
 
 // buildTileAtlas packs every tile of t.TileSet into index textures at one view
-// scale (C-G4, §14.5). The square reserved for a tile is 32·scale, and it is
-// filled the way the classic blitter fills the tile's screen rectangle: from the
-// detail tile when the record has one for that tile at a scale above native, and
-// otherwise from the 32×32 tile magnified by the blitter's own integer step. A
-// source pixel the blitter's guard rejects leaves the atlas texel at index zero,
-// which is the destination the blitter leaves untouched.
+// scale (C-G4, §14.5). The square reserved for a tile is the scale's Px(32),
+// and it is filled the way the classic blitter fills the tile's screen
+// rectangle: from the detail tile — already at that side — when the record has
+// one for that tile at a scale above native, and otherwise from the 32×32 tile
+// resampled through the scale's inverse, the blitter's own nearest sampling. A
+// source pixel the blitter's guard rejects leaves the atlas texel at index
+// zero, which is the destination the blitter leaves untouched.
 //
 // The red channel carries the tile byte; alpha is opaque so the stored red
 // survives premultiplied sampling and decodes back exactly.
-func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, scale int) *tileAtlas {
+func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, scale camera.ViewScale) *tileAtlas {
 	n := len(t.TileSet)
-	if n <= 0 || scale < 1 {
+	if n <= 0 {
 		return nil
 	}
-	side := terrainTileSize * scale
+	scale = scale.Norm()
+	side := int(scale.Px(terrainTileSize))
 	cols, rowsPer, pageCount := terrainAtlasLayout(n, side, terrainAtlasMaxSide())
 	a := &tileAtlas{
 		side:    side,
@@ -167,25 +170,31 @@ func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, 
 			// above native when the record carries one for this tile, and the
 			// 32×32 tile otherwise (§14.2).
 			srcSide, src := terrainTileSize, t.TileSet[i][:]
-			if scale != 1 && i < len(detail) {
-				srcSide, src = terrainDetailSize, detail[i][:]
+			direct := scale.Native()
+			if !scale.Native() && i < len(detail) {
+				srcSide, src, direct = side, detail[i][:], true
 			}
-			step := side / srcSide
-			if step <= 0 || len(src) < srcSide*srcSide {
+			if len(src) < srcSide*srcSide {
 				continue
 			}
 			local := i - first
 			gx := (local % cols) * side
 			gy := (local / cols) * side
 			for ty := 0; ty < side; ty++ {
-				sy := ty / step
+				sy := ty
+				if !direct {
+					sy = int(scale.Inverse(int32(ty)))
+				}
 				if sy >= srcSide {
 					continue
 				}
 				dstRow := ((gy+ty)*atlasW + gx) * 4
 				srcRow := sy * srcSide
 				for tx := 0; tx < side; tx++ {
-					sx := tx / step
+					sx := tx
+					if !direct {
+						sx = int(scale.Inverse(int32(tx)))
+					}
 					if sx >= srcSide {
 						continue
 					}
@@ -205,10 +214,11 @@ func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, 
 // atlasFor returns the cached tile atlas for one (tile set, detail tiles, scale)
 // identity, building it on first use (docs/DESIGN_GPU_RENDERER.md §2.3, §14.5).
 // A nil or empty terrain has no atlas.
-func (r *Renderer) atlasFor(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, scale int32) *tileAtlas {
+func (r *Renderer) atlasFor(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, scale camera.ViewScale) *tileAtlas {
 	if t == nil || t.TileIndices == nil || len(t.TileSet) == 0 {
 		return nil
 	}
+	scale = scale.Norm()
 	key := tileAtlasKey{terrain: t, scale: scale}
 	if len(detail) != 0 {
 		key.detail = &detail[0]
@@ -216,7 +226,7 @@ func (r *Renderer) atlasFor(t *world.Terrain, detail [][drawlist.DetailTilePixel
 	if a, ok := r.tileAtlases[key]; ok {
 		return a
 	}
-	a := buildTileAtlas(t, detail, int(scale))
+	a := buildTileAtlas(t, detail, scale)
 	r.tileAtlases[key] = a
 	return a
 }
@@ -236,12 +246,9 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 		return
 	}
 	t := c.Terrain
-	scale := c.Scale
-	if scale < 1 {
-		// Zero is the native scale: a recorder that never set the field draws
-		// the native view (drawlist.Terrain.Scale).
-		scale = 1
-	}
+	// Zero is the native scale: a recorder that never set the field draws the
+	// native view (drawlist.Terrain.Scale).
+	scale := c.Scale.Norm()
 	atlas := r.atlasFor(t, c.Detail, scale)
 	if atlas == nil {
 		// A nil/empty terrain draws nothing; the offscreen keeps its cleared void
@@ -269,19 +276,18 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	}
 	originX := int(c.OriginX)
 	originY := int(c.OriginY)
-	s := int(scale)
-	tileScreen := terrainTileSize * s
+	tileScreen := atlas.side
 
 	// Visible tile range. Screen column c shows world pixel originX +
-	// floorDiv(c, s), the inverse the camera's ScreenToWorld computes (§14.2),
-	// so the visible world pixels are [originX, originX+floorDiv(dstW-1, s)].
-	// The bounds only bound the loop; the per-tile clip below decides the
-	// covered pixels, so a one-tile pad on each side (harmless, its clipped rect
-	// is empty) guards against any off-by-one in the range itself.
+	// Inverse(c), the inverse the camera's ScreenToWorld computes (§14.2), so
+	// the visible world pixels are [originX, originX+Inverse(dstW-1)]. The
+	// bounds only bound the loop; the per-tile clip below decides the covered
+	// pixels, so a one-tile pad on each side (harmless, its clipped rect is
+	// empty) guards against any off-by-one in the range itself.
 	startTX := floorDivInt(originX, terrainTileSize) - 1
 	startTY := floorDivInt(originY, terrainTileSize) - 1
-	endTX := floorDivInt(originX+floorDivInt(dstW-1, s), terrainTileSize) + 1
-	endTY := floorDivInt(originY+floorDivInt(dstH-1, s), terrainTileSize) + 1
+	endTX := floorDivInt(originX+int(scale.Inverse(int32(dstW-1))), terrainTileSize) + 1
+	endTY := floorDivInt(originY+int(scale.Inverse(int32(dstH-1))), terrainTileSize) + 1
 	if startTX < 0 {
 		startTX = 0
 	}
@@ -317,8 +323,8 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 				}
 				// Tile screen origin (shear term is zero for terrain at ground
 				// height) [03 §2.5](§14.2).
-				sx := (tx*terrainTileSize - originX) * s
-				sy := (ty*terrainTileSize - originY) * s
+				sx := int(scale.Project(int32(tx*terrainTileSize - originX)))
+				sy := int(scale.Project(int32(ty*terrainTileSize - originY)))
 				dstX0, dstY0 := sx, sy
 				dstX1, dstY1 := sx+tileScreen, sy+tileScreen
 				if dstX0 < 0 {

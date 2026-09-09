@@ -234,15 +234,18 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 		return false
 	}
 	// The disc is a lit-point batch whose radius takes the view scale
-	// (DESIGN_GPU_RENDERER §14.2): each generated pixel covers an s-by-s block,
-	// so the disc keeps its traced intensity texture magnified rather than
-	// being regenerated at another radius, and the batch grows with s squared.
-	// At s = 1 the inner loops run once and the emitted points are the same
-	// points, in the same order.
-	s := int(c.viewScale())
+	// (DESIGN_GPU_RENDERER §14.2): each generated pixel covers the block of
+	// screen pixels its world pixel projects to — s-by-s at a whole scale,
+	// alternately one and two wide at 1.5x — so the disc keeps its traced
+	// intensity texture magnified rather than being regenerated at another
+	// radius, and the batch grows with s squared. At s = 1 the inner loops run
+	// once and the emitted points are the same points, in the same order.
+	s := c.viewScale()
 	off := len(c.pointArena)
 	for row := 0; row < d.Side; row++ {
 		base := row * d.Side
+		py0 := cy + int(s.Project(int32(row-d.Offset)))
+		py1 := cy + int(s.Project(int32(row-d.Offset+1)))
 		for col := 0; col < d.Side; col++ {
 			b := d.Pixels[base+col]
 			if b == flashTransparent {
@@ -253,13 +256,13 @@ func (c *Client) drawCalculatedFlash(table int, frameIndex int32, cx, cy int, co
 			// carries the row and the sink folds the destination pixel through it
 			// [03 §4.3.1][03 R-FX-01 §4].
 			level := int(b) - 0x4F
-			for dy := 0; dy < s; dy++ {
-				py := cy + (row-d.Offset)*s + dy
+			px0 := cx + int(s.Project(int32(col-d.Offset)))
+			px1 := cx + int(s.Project(int32(col-d.Offset+1)))
+			for py := py0; py < py1; py++ {
 				if py < 0 || py >= c.height {
 					continue
 				}
-				for dx := 0; dx < s; dx++ {
-					px := cx + (col-d.Offset)*s + dx
+				for px := px0; px < px1; px++ {
 					if px < 0 || px >= c.width {
 						continue
 					}

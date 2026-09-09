@@ -2,6 +2,7 @@ package client
 
 import (
 	"bytes"
+	"github.com/nanolathe-gg/nanolathe/internal/camera"
 	"image"
 	"image/png"
 	"os"
@@ -147,7 +148,7 @@ func TestCachedLiveClassicCaptures(t *testing.T) {
 	cachedLiveReplay(t, c6, settings)
 	aa := c6.cachedModelBodies[settings.InstanceID]
 	writeCachedLivePNG(t, c6, filepath.Join(dir, "cached-live-settings-aa.png"))
-	c6.cam.Scale = 2
+	c6.cam.Scale = camera.ViewScaleDetail
 	cachedLiveReplay(t, c6, settings)
 	zoom := c6.cachedModelBodies[settings.InstanceID]
 	writeCachedLivePNG(t, c6, filepath.Join(dir, "cached-live-settings-zoom.png"))

@@ -7,7 +7,7 @@ func TestBattleViewOriginUsesBeamInsetAtNativeAndZoomedScale(t *testing.T) {
 	if x, z := c.BattleViewOrigin(); x != 138 || z != 52 {
 		t.Fatalf("native beam origin = (%d,%d), want (138,52)", x, z)
 	}
-	c.Scale = 2
+	c.Scale = ViewScaleDetail
 	if x, z := c.BattleViewOrigin(); x != 74 || z != 36 {
 		t.Fatalf("zoomed beam origin = (%d,%d), want (74,36)", x, z)
 	}

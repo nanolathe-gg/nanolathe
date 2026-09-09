@@ -252,14 +252,14 @@ func runShot(opts Options, cs *contentSet) error {
 	// The view scale is presentation-only [F-P1-008]; it is applied after the
 	// ticks so the simulation is identical to a native capture of the same seed
 	// (DESIGN_GPU_RENDERER §14.1).
-	if opts.Zoom > 1 && b.cam != nil {
+	if !opts.Zoom.Native() && b.cam != nil {
 		fx, fy := int32(shotW/2), int32(shotH/2)
 		if opts.ShotFocus != "" {
 			if _, err := fmt.Sscanf(opts.ShotFocus, "%d,%d", &fx, &fy); err != nil {
 				return fmt.Errorf("nanolathe: shot: --shot-focus wants \"x,y\", got %q", opts.ShotFocus)
 			}
 		}
-		b.cam.SetScaleAbout(fx, fy, int32(opts.Zoom))
+		b.cam.SetScaleAbout(fx, fy, opts.Zoom)
 	}
 
 	// `--profile-seconds` is the render-side measurement path. It drives the

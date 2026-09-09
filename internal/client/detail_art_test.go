@@ -23,7 +23,7 @@ func TestDetailArtOnlyWhileEnhancedPresents(t *testing.T) {
 	terrain := &world.Terrain{TileSet: make([][1024]byte, 1)}
 	tiles := make([][detailTilePixels]byte, 1)
 
-	c := &Client{cam: &camera.Camera{Scale: 2}, terrain: terrain, featureGAFs: map[string]*formats.GAF{"rocks": loaded}}
+	c := &Client{cam: &camera.Camera{Scale: camera.ViewScaleDetail}, terrain: terrain, featureGAFs: map[string]*formats.GAF{"rocks": loaded}}
 	c.SetDetailArt(&DetailArt{Tiles: tiles, Banks: map[string]*formats.GAF{"rocks": detail}})
 
 	// Original: the provider is installed but not consulted.
@@ -51,7 +51,7 @@ func TestDetailArtOnlyWhileEnhancedPresents(t *testing.T) {
 	}
 
 	// Native scale is the identity regardless.
-	c.cam.Scale = 1
+	c.cam.Scale = camera.ViewScaleNative
 	c.SetEnhanced(true)
 	if c.viewFrame(source) != source {
 		t.Fatal("scale 1 must draw the authored frame itself")

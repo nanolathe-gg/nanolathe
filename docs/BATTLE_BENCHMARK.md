@@ -21,8 +21,11 @@ without factory orders. Assets are not embedded or committed. Run cases
 sequentially without concurrent builds, tests or other performance workloads.
 
 `--zoom 2` runs the same scene in the detail view: the same simulation from
-twice the pixels (docs/DESIGN_GPU_RENDERER.md §14). The scale is applied after
-the scene's camera jump, about the viewport centre, so the same army is framed;
+twice the pixels (docs/DESIGN_GPU_RENDERER.md §14); `--zoom 1.5` is the 1.5×
+step. The benchmark does not take the window's resolution default — unset is
+native here, so a scene's scale is always the one on its command line. The
+scale is applied after the scene's camera jump, about the viewport centre, so
+the same army is framed;
 `--auto-remaster=false` runs the detail view on nearest-doubled art instead of
 the load-time remaster's. Both are recorded in `frames.json` as `zoom` and
 `auto_remaster`, and a run is comparable only with another at the same scale —

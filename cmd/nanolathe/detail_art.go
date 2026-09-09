@@ -135,7 +135,7 @@ func detailArtFor(opts Options, cs *contentSet, terrain *world.Terrain, progress
 // never consulted (§14.1) and synthesizing it would cost seconds for pixels no
 // capture can show.
 func captureDetailArt(opts Options, cs *contentSet, terrain *world.Terrain) *client.DetailArt {
-	if opts.Zoom <= 1 {
+	if opts.Zoom.Native() {
 		return nil
 	}
 	return detailArtFor(opts, cs, terrain, nil)
