@@ -47,6 +47,7 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	// the load transition reads and the option values the three two-stage
 	// buttons drive [07 R-FE-01 §6][07 R-FE-01 §11].
 	g.display = s.Display
+	g.fullscreen = s.Fullscreen
 	// The message-column ring configuration is the interface page's
 	// `TXTSCROL`, `MAXLINES` and `UNITCHAT` controls plus `screenchat`, which
 	// no screen edits [02 §3][07 R-CAM-01 §7].
@@ -148,6 +149,7 @@ func (g *gameShell) syncMapIndex() {
 func (g *gameShell) captureSettings() settings.Settings {
 	s := settings.Settings{
 		Version:     settings.FileVersion,
+		Fullscreen:  g.fullscreen,
 		Difficulty:  g.missionDifficultyValue,
 		ScrollSpeed: g.scrollSpeed,
 		// The whole block is rewritten from live state, so the interface

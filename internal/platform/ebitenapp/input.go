@@ -19,16 +19,9 @@ type sampledInput struct {
 	timestamp  uint32
 }
 
-// pollInput is the only production device-polling path. Ebitengine reaches no
-// further than this package; downstream code receives the platform-neutral
-// input.State [I6]. timestamp is the scaled 30-Hz host clock supplied by app.
-func pollInput(in *input.State, timestamp uint32) {
-	if in == nil || in.Mouse == nil || in.Kbd == nil {
-		return
-	}
-	applyInput(in, readInput(timestamp))
-}
-
+// readInput is the production device-polling path. Host shortcuts are consumed
+// before applyInput publishes the platform-neutral state [I6]. timestamp is
+// the scaled 30-Hz host clock supplied by app.
 func readInput(timestamp uint32) sampledInput {
 	cx, cy := ebiten.CursorPosition()
 	sample := sampledInput{

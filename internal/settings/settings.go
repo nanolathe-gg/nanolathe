@@ -50,15 +50,16 @@ const (
 )
 
 // The display-mode pair. `VISUALS`'s `VIDSLDR` and its `RESTORE`/`UNDO`
-// buttons are the only writers; the skirmish and campaign load transitions
-// are the only readers, comparing the pair to the presentation window's
+// buttons are the retail writers; the skirmish and campaign load transitions
+// read the pair, comparing it to the presentation window's
 // current size and resizing when they differ [07 R-FE-01 §6]
 // [07 R-FE-01 §11]. The missing-value defaults are 640 and 480
-// [02 R-KEYS-01 §5].
+// [02 R-KEYS-01 §5]. Nanolathe also uses this pair for the stable host window
+// size (DESIGN_PRESENTATION_CLIENT §2.1).
 const (
 	DefaultDisplaymodeWidth  = 640
 	DefaultDisplaymodeHeight = 480
-	// The front end itself always runs at 640x480 whatever the pair holds
+	// The logical front-end canvas always runs at 640x480 whatever the pair holds
 	// [07 R-FE-02 §2]; modes below that are dropped from the slider's table
 	// [07 R-FE-01 §6], so the pair can never name a smaller surface.
 	MinDisplaymodeWidth  = 640
@@ -305,6 +306,9 @@ type Skirmish struct {
 // Settings is the whole persisted block.
 type Settings struct {
 	Version int `json:"version"`
+	// Fullscreen is Nanolathe's desktop presentation preference, independent of
+	// retail display options. Absent in older settings files means windowed.
+	Fullscreen bool `json:"fullscreen"`
 	// Difficulty is retail's top-level "Difficulty" value, the campaign and
 	// mission setting. It is separate from Skirmish.Difficulty, which retail
 	// keeps as its own "SkirmishDifficulty" value.

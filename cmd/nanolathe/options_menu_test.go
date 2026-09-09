@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image/png"
 	"os"
 	"strings"
@@ -17,36 +18,45 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 )
 
-// The display-mode table is the windowed presentation's fixed list, gated on
-// the desktop size, then sorted ascending by width and height with everything
-// below 640x480 dropped [07 R-FE-02 §9][07 R-FE-01 §6].
+// Retail modes keep their desktop gates [07 R-FE-02 §9]. The additional
+// widescreen modes are Nanolathe host choices (DESIGN_PRESENTATION_CLIENT §2.1)
+// and must remain selectable even on a smaller or high-DPI logical desktop.
 func TestRetailDisplayModeTableIsGatedSortedAndFiltered(t *testing.T) {
-	small := retailDisplayModes(1024, 768)
-	want := []retailDisplayMode{{640, 480}, {800, 600}, {1024, 768}}
-	if len(small) != len(want) {
-		t.Fatalf("desktop 1024x768 gave %v; want %v", small, want)
-	}
-	for i, m := range small {
-		if m != want[i] {
-			t.Fatalf("desktop 1024x768 gave %v; want %v", small, want)
+	for _, desktop := range [][2]int{{0, 0}, {1024, 768}, {1280, 1024}, {1600, 1199}, {1600, 1200}, {1920, 1080}} {
+		modes := retailDisplayModes(desktop[0], desktop[1])
+		has := func(mode retailDisplayMode) bool {
+			for _, candidate := range modes {
+				if candidate == mode {
+					return true
+				}
+			}
+			return false
 		}
-	}
-	// Both axes are inclusive, so a desktop exactly at 1280x1024 admits that
-	// mode and a desktop one row short of 1200 does not admit 1600x1200.
-	if got := retailDisplayModes(1280, 1024); len(got) != 4 || got[3] != (retailDisplayMode{1280, 1024}) {
-		t.Fatalf("desktop 1280x1024 gave %v; want the 1280x1024 row admitted", got)
-	}
-	if got := retailDisplayModes(1600, 1199); len(got) != 4 {
-		t.Fatalf("desktop 1600x1199 gave %v; want 1600x1200 withheld", got)
-	}
-	if got := retailDisplayModes(1600, 1200); len(got) != 5 || got[4] != (retailDisplayMode{1600, 1200}) {
-		t.Fatalf("desktop 1600x1200 gave %v; want the 1600x1200 row admitted", got)
-	}
-	// A desktop smaller than the smallest listed mode still keeps 640x480:
-	// the filter drops modes below it, and every row of the fixed list is at
-	// least that size.
-	if got := retailDisplayModes(0, 0); len(got) != 3 || got[0] != (retailDisplayMode{640, 480}) {
-		t.Fatalf("unknown desktop gave %v; want the three unconditional rows", got)
+		for _, mode := range []retailDisplayMode{{640, 480}, {800, 600}, {1024, 768}, {1280, 720}, {1600, 900}, {1920, 1080}} {
+			if !has(mode) {
+				t.Fatalf("desktop %v omitted selectable mode %v", desktop, mode)
+			}
+		}
+		for _, mode := range []retailDisplayMode{{1280, 1024}, {1600, 1200}} {
+			want := desktop[0] >= mode.W && desktop[1] >= mode.H
+			if has(mode) != want {
+				t.Fatalf("desktop %v changed retail gate for %v", desktop, mode)
+			}
+		}
+		for i, mode := range modes {
+			if mode.W < 640 || mode.H < 480 {
+				t.Fatalf("sub-minimum mode %v", mode)
+			}
+			if i > 0 {
+				prev := modes[i-1]
+				if prev.W > mode.W || (prev.W == mode.W && prev.H >= mode.H) {
+					t.Fatalf("modes not sorted and unique: %v", modes)
+				}
+			}
+			if retailDisplayModeIndex(modes, mode.W, mode.H) != i {
+				t.Fatalf("mode %v does not reopen at its slider index", mode)
+			}
+		}
 	}
 }
 
@@ -86,7 +96,7 @@ func TestRetailSliderArithmetic(t *testing.T) {
 	}
 	// Every mode index round-trips through position and back, which is what
 	// keeps a reopened page showing the size that was chosen.
-	for max := 1; max <= 4; max++ {
+	for max := 1; max < len(retailDisplayModes(1920, 1200)); max++ {
 		for value := 0; value <= max; value++ {
 			if got := retailSliderValue(retailSliderKnob(value, 90, max), 90, max); got != value {
 				t.Fatalf("value %d of max %d round-tripped to %d", value, max, got)
@@ -194,6 +204,7 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	shell, _, cl := retailAssetShell(t)
 	shotDir := os.Getenv("NANOLATHE_OPTIONS_SHOT")
 
+	window := shell.windowOptions()
 	shell.openMenu(modeMenuSingle)
 	if !shell.activePanel().ActiveOf("Options") {
 		t.Fatal("SINGLE.GUI has no active Options gadget")
@@ -236,6 +247,25 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 		writeShellShot(t, cl, shotDir+"/options-visuals-800.png")
 	}
 
+	// Widescreen selections use the same slider path and leave the authored
+	// menu canvas and committed host window size unchanged until OK.
+	for _, mode := range []retailDisplayMode{{1280, 720}, {1600, 900}, {1920, 1080}} {
+		index := retailDisplayModeIndex(optionsState.modes, mode.W, mode.H)
+		shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
+		if w, h := window.WindowSize(); w != 640 || h != 480 {
+			t.Fatalf("pending widescreen selection resized the window to %dx%d", w, h)
+		}
+		if got := optionsPanel.TextOf("VIDVAL"); got != fmt.Sprintf("%d X %d", mode.W, mode.H) {
+			t.Fatalf("widescreen label = %q", got)
+		}
+		if w, h := cl.Size(); w != 640 || h != 480 {
+			t.Fatalf("widescreen selection changed menu canvas: %dx%d", w, h)
+		}
+	}
+	if shotDir != "" {
+		writeShellShot(t, cl, shotDir+"/options-visuals-1080.png")
+	}
+
 	// `UNDO` restores the display size from the entry snapshot and reopens the
 	// page; the reopened slider shows the restored size [07 R-FE-01 §6].
 	shell.activateGadget("UNDO")
@@ -257,9 +287,26 @@ func TestRetailOptionsScreenVisualsPageDrivesDisplayMode(t *testing.T) {
 	if shell.display.Width != 800 || shell.display.Height != 600 {
 		t.Fatalf("PREV left %dx%d; want the chosen 800x600", shell.display.Width, shell.display.Height)
 	}
+	if w, h := window.WindowSize(); w != 800 || h != 600 {
+		t.Fatalf("OK did not apply the chosen window size: %dx%d", w, h)
+	}
 	// The captured block carries the chosen mode into the settings file.
 	if got := shell.captureSettings().Display; got.Width != 800 || got.Height != 600 {
 		t.Fatalf("captured settings carry %dx%d; want 800x600", got.Width, got.Height)
+	}
+
+	// Cancel a second selection without moving the already-applied window.
+	shell.activateGadget("Options")
+	shell.activateGadget("VISUALS")
+	slider = shell.retailOptionsSlider("VIDSLDR")
+	index := retailDisplayModeIndex(optionsState.modes, 1920, 1080)
+	shell.moveRetailSlider("VIDSLDR", slider, retailSliderKnob(index, slider.travel, slider.max))
+	shell.activateGadget("CANCEL")
+	if w, h := window.WindowSize(); w != 800 || h != 600 {
+		t.Fatalf("Cancel changed the applied window: %dx%d", w, h)
+	}
+	if shell.display.Width != 800 || shell.display.Height != 600 {
+		t.Fatal("Cancel retained pending resolution")
 	}
 
 	// The load transition is the size pair's only reader: it compares the pair

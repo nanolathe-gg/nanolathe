@@ -130,10 +130,13 @@ type gameShell struct {
 	// persisted preferences. Only that path writes them back, so the
 	// screenshot path and the tests never touch the user's settings file.
 	settingsWritable bool
-	scrollSpeed      int // persisted scrollspeed [02 "Settings"] [07 §10] C2 presentation-only
+	windowSize       retailDisplayMode // committed host size; options edits apply on OK
+	fullscreen       bool              // Nanolathe host preference (DESIGN_PRESENTATION_CLIENT §2.1)
+	scrollSpeed      int               // persisted scrollspeed [02 "Settings"] [07 §10] C2 presentation-only
 	// display is the live `DisplaymodeWidth`/`Height` pair and the `VISUALS`
-	// page's option values. The options screen is their only writer; the load
-	// transition is the size pair's only reader [07 R-FE-01 §6][07 R-FE-01 §11].
+	// page's option values. The load transition reads the pair for the logical
+	// battle canvas [07 R-FE-01 §6][07 R-FE-01 §11]; windowOptions also uses it
+	// for Nanolathe's stable host window (DESIGN_PRESENTATION_CLIENT §2.1).
 	display settings.Display
 	// messages is the message-column ring configuration (`textlines`,
 	// `textscroll`, `screenchat`, `unitchattext`). The options family's
@@ -395,7 +398,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "nanolathe: retail frontend: %d skirmish maps\n", len(maps))
-	return ebitenapp.Run(cl, rendererMode(opts), windowRunOptions(opts))
+	return ebitenapp.Run(cl, rendererMode(opts), shell.windowOptions())
 }
 
 func loadMenuAssets(cs *contentSet) *menuAssets {

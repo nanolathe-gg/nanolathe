@@ -37,6 +37,8 @@ type Options struct {
 	ShotModal          string // battle modal to open before --shot captures: "options", "exit" or "confirm"
 	ShotSpace          bool   // hold Space for --shot captures, so the bottom slide strip is fully raised
 	Renderer           string // start-up presentation executor: "classic" (default) or "modern"
+	Fullscreen         bool   // host desktop fullscreen override
+	FullscreenSet      bool   // distinguishes an omitted flag from --fullscreen=false
 	FPS                int    // cap on presented frames per second for the modern renderer; 0 = the display's refresh rate
 
 	// ShotRenderer selects which executor --shot captures through:
@@ -111,6 +113,7 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 	set.StringVar(&opts.MemProfile, "memprofile", "", "write a pprof allocation profile of the --shot compose path to this file")
 	set.IntVar(&opts.ProfileSeconds, "profile-seconds", 0, "with classic --shot, run the CPU viewer loop headlessly for this many seconds of battle time and report ms per frame")
 	set.StringVar(&opts.Renderer, "renderer", "classic", "start-up presentation renderer: \"classic\" (software) or \"modern\" (GPU); any other value is classic")
+	set.BoolVar(&opts.Fullscreen, "fullscreen", false, "desktop fullscreen (Alt+Enter toggles); omitted uses saved preference")
 	set.IntVar(&opts.FPS, "fps", 0, "cap presented frames per second for --renderer=modern, rounded down to a multiple of the display's refresh (0 = the display's refresh rate)")
 	set.StringVar(&opts.ShotRenderer, "shot-renderer", "", "which executor --shot captures through: \"classic\", \"modern\", or \"both\"; omitted follows --renderer")
 	set.IntVar(&opts.ShotRendererMax, "shot-renderer-max", math.MaxInt32, "with --shot-renderer both, exit non-zero when the diff exceeds this many pixels (default effectively unbounded)")
@@ -130,6 +133,11 @@ func parseFlags(args []string, out io.Writer) (Options, error) {
 		}
 		return opts, err
 	}
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == "fullscreen" {
+			opts.FullscreenSet = true
+		}
+	})
 	// The view scale is an integer, 1 or 2 (DESIGN_GPU_RENDERER §14.1). It is
 	// not a --shot option: the window path takes it too, so it is validated
 	// before either route is chosen.

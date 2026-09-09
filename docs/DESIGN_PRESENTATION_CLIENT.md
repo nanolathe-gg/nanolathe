@@ -115,7 +115,7 @@ producers, not by any draw here; `[03 R-WIND-01]` belongs to
 ### 2.1 `internal/platform/ebitenapp` — the window
 
 `app` adapts `client.Client` to Ebitengine. `Run` sets Ebitengine's update rate
-to 30/s. Each `Update` syncs the window to the client's logical size, polls
+to 30/s. Each `Update` syncs the window to the selected host size, polls
 device input into the client's input state, records focus, and calls
 `Client.Step(1/30)` — the injected session step, which owns the clock, the
 sub-ticks and the frame publication. Wall-clock time never crosses into the
@@ -129,6 +129,48 @@ presentation asks the client for its expanded bytes and does one `WritePixels`
 into a device image recreated only when the logical size changes. `Layout`
 pins the logical resolution, so Ebitengine letterboxes a resized window without
 moving authored HUD coordinates.
+
+**Nanolathe host presentation policy (user-authorized).** Windowed presentation
+keeps the selected display dimensions throughout menus, loading, battle and
+results. The logical front-end canvas remains the established 640×480
+[07 R-FE-02 §2]; battle uses the selected dimensions [07 R-FE-01 §11].
+Ebitengine scales the canvas proportionally into the host window or desktop,
+letterboxing where needed, and reports pointer coordinates in that logical
+canvas. Neither executor renders the world at desktop resolution merely
+because the window is fullscreen.
+
+`RunOptions.WindowSize` supplies the committed host size separately from
+`Client.Size()`. The shell supplies its display preferences; direct battles
+use the saved display dimensions for both the host and battle canvas. The
+adapter checks the committed size before input and after the client step.
+Resolution slider edits, UNDO and RESTORE only change the pending selection;
+the options root's OK commits it and resizes the window once, after closing the
+widgets. Cancel restores the entry selection without resizing. This prevents
+resizing during a drag from moving the pointer relative to its captured widget.
+
+The resolution slider retains the original modes and their desktop gates,
+and adds 1280×720, 1600×900 and 1920×1080 as Nanolathe presentation choices.
+The three 16:9 render sizes are always available, independent of monitor aspect
+or device-independent desktop size. Fullscreen scales them to the display;
+selecting a different aspect still letterboxes rather than stretching. The
+combined list remains sorted by width then height, with no duplicates.
+
+Desktop fullscreen uses Ebitengine's fullscreen API without changing the
+monitor mode. The top-level settings field `fullscreen` defaults to false
+when absent. `--fullscreen[=true|false]` overrides startup; omission restores
+the saved value. Alt+Enter toggles from any screen and is consumed before
+game input publication, including the rest of that Enter hold, so it cannot
+activate a menu default or submit chat. Observed fullscreen changes, including
+native window controls, update only the saved fullscreen preference; they do
+not save pending options edits. While fullscreen the
+adapter continues tracking the selected window size for restoration on exit.
+On macOS, fullscreen entered through the native green window button must be
+exited through the native control; Ebitengine cannot toggle that mode itself.
+
+These are host presentation choices, not additional retail behavioral claims.
+Validate selected-size stability across logical canvas transitions, shortcut
+consumption and settings preservation, plus live menu/battle input and both
+executors in windowed/fullscreen modes.
 
 `Run` installs the PCM device once for the life of the process, before the
 window is shown, and calls `Backend.WarmUp` — see §5. It hides the window

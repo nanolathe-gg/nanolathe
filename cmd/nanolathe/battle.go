@@ -234,10 +234,11 @@ func runBattleView(opts Options, cs *contentSet) error {
 		b  *battleSession
 		cl *client.Client
 	)
+	preferences := loadedSettings()
 	cl, err = client.New(client.Options{
 		Buffer: sess.Snapshot,
-		Width:  retailScreenW,
-		Height: retailScreenH,
+		Width:  preferences.Display.Width,
+		Height: preferences.Display.Height,
 		Title:  "Nanolathe — " + opts.Map,
 		Step: func(delta float64) {
 			b.viewerStep(delta, cl)
@@ -257,6 +258,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	if err != nil {
 		return err
 	}
+	fitDirectBattleViewport(cl, b)
 	// The window's view scale is applied once at battle entry, after the
 	// camera has been squared with the surface, so the detail view starts on
 	// the same world point the native view would have shown (§14.6).
@@ -294,7 +296,7 @@ func runBattleView(opts Options, cs *contentSet) error {
 	}
 	cl.SetCursors(cursors)
 	fmt.Fprintln(os.Stderr, "nanolathe: battle view — drag=select left-click=action right-click=deselect/cancel M=move A=attack P=patrol R=repair E=reclaim C=capture G=guard D=blast B=build X=cancel O=on/off N=stockpile Esc=cancel 1..9/Alt+1..9=pages/groups (SwitchAlt swaps) Shift=queue")
-	return ebitenapp.Run(cl, rendererMode(opts), windowRunOptions(opts))
+	return ebitenapp.Run(cl, rendererMode(opts), directWindowOptions(opts, preferences))
 }
 
 // restartDirectBattle is the --map lifecycle's fresh skirmish entry. The
@@ -328,6 +330,7 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 	old.teardown(cl)
 	*current = next
 	installBattleClient(cl, next)
+	fitDirectBattleViewport(cl, next)
 	// The restarted battle keeps the view scale the player was on.
 	if next.cam != nil && scale > 1 {
 		setBattleViewScale(next, scale)

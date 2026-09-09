@@ -11,6 +11,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/audiobackend"
 	"github.com/nanolathe-gg/nanolathe/internal/client"
 	"github.com/nanolathe-gg/nanolathe/internal/clock"
+	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/platform/gpurender"
 )
 
@@ -56,11 +57,12 @@ type app struct {
 	// has already acted on. Update compares it with the client's own count, so
 	// one F10 press swaps once (docs/DESIGN_GPU_RENDERER.md §14.6).
 	rendererToggles int
-	// windowW/windowH are the size last pushed to the window system. The
-	// client owns the logical size and the adapter only follows it, so the
-	// load transition's Client.Resize moves the window on the next update
-	// without the shell ever reaching a device [07 R-FE-01 §11][I6].
-	windowW, windowH int
+	// windowW/windowH are the last selected host size. Logical menu/battle
+	// transitions do not change them (DESIGN_PRESENTATION_CLIENT §2.1).
+	windowW, windowH    int
+	options             RunOptions
+	fullscreen          bool
+	fullscreenEnterHeld bool
 	// presentPending is set by the 30 Hz update and consumed by Draw. Draw can
 	// still be called at the monitor's refresh rate, so the retained-screen
 	// mode configured by Run lets those extra calls leave the frame untouched.
@@ -97,6 +99,13 @@ type RunOptions struct {
 	// cannot divide into (90 on 120 Hz) rounds down the same way. Classic is
 	// untouched: it presents once per 30 Hz update whatever the cap says.
 	MaxFPS int
+	// WindowSize supplies the selected host window size independently of the
+	// logical menu/battle canvas. Nil follows the client's logical size.
+	WindowSize func() (int, int)
+	Fullscreen bool
+	// FullscreenChanged persists an observed platform change, including native
+	// window controls. It runs on the game loop, never on a simulation tick.
+	FullscreenChanged func(bool)
 }
 
 // Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
@@ -104,9 +113,15 @@ type RunOptions struct {
 // its own accumulator (wall-clock time never enters the sim, I6).
 func (a *app) Update() error {
 	a.syncWindowSize()
-	pollInput(a.c.Input(), a.scaledInputNow())
+	sample := readInput(a.scaledInputNow())
+	if a.consumeFullscreenShortcut(&sample) {
+		ebiten.SetFullscreen(!ebiten.IsFullscreen())
+	}
+	a.observeFullscreen(ebiten.IsFullscreen())
+	applyInput(a.c.Input(), sample)
 	a.c.SetFocused(ebiten.IsFocused())
 	a.stepClient()
+	a.syncWindowSize()
 	a.syncPointerCapture()
 	a.serviceRendererRequest()
 	a.presentPending = true
@@ -272,16 +287,63 @@ func (a *app) consumePresentation() bool {
 	return true
 }
 
-// syncWindowSize pushes a logical size change out to the window system. It is
-// the "move the window and re-select the mode" half of the display-mode change
-// [07 R-FE-01 §11]; the client already re-allocated the offscreen.
+// syncWindowSize follows the selected host size. Ebitengine also remembers
+// this size while fullscreen for restoration when returning to a window.
 func (a *app) syncWindowSize() {
-	width, height := a.c.Size()
+	width, height := a.desiredWindowSize()
 	if width == a.windowW && height == a.windowH {
 		return
 	}
 	a.windowW, a.windowH = width, height
 	ebiten.SetWindowSize(width, height)
+}
+
+// desiredWindowSize keeps the OS window stable when the logical canvas changes
+// for menus/loading/results. This is Nanolathe host presentation policy
+// (DESIGN_PRESENTATION_CLIENT §2.1), not a change to retail's logical layout.
+func (a *app) desiredWindowSize() (int, int) {
+	if a.options.WindowSize != nil {
+		if w, h := a.options.WindowSize(); w > 0 && h > 0 {
+			return w, h
+		}
+	}
+	return a.c.Size()
+}
+
+// Consume Alt+Enter before input publication so fullscreen cannot also activate
+// the selected menu button or submit battle chat. Suppress the whole Enter hold,
+// even if Alt is released first; holding the chord toggles only once.
+func (a *app) consumeFullscreenShortcut(sample *sampledInput) bool {
+	enter := sample.keys[input.KeyEnter]
+	toggle := enter && sample.modifiers.Alt && !a.fullscreenEnterHeld
+	if toggle {
+		a.fullscreenEnterHeld = true
+	}
+	if a.fullscreenEnterHeld {
+		sample.keys[input.KeyEnter] = false
+		chars := sample.characters[:0]
+		for _, r := range sample.characters {
+			if r != '\r' && r != '\n' {
+				chars = append(chars, r)
+			}
+		}
+		sample.characters = chars
+	}
+	if !enter {
+		a.fullscreenEnterHeld = false
+	}
+	return toggle
+}
+
+func (a *app) observeFullscreen(fullscreen bool) {
+	if fullscreen == a.fullscreen {
+		return
+	}
+	a.fullscreen = fullscreen
+	a.presentPending = true
+	if a.options.FullscreenChanged != nil {
+		a.options.FullscreenChanged(fullscreen)
+	}
 }
 
 // Layout keeps the logical resolution fixed; Ebitengine letterboxes if the
@@ -331,7 +393,7 @@ func DesktopSize() (int, int) {
 	return monitor.Size()
 }
 
-// Run starts the windowed main loop and blocks until the window closes. It
+// Run starts the desktop main loop and blocks until the window closes. It
 // must be called from main after option parsing. mode selects the start-up
 // executor (docs/DESIGN_GPU_RENDERER.md §2.4); an unrecognised value presents
 // through the classic executor.
@@ -355,12 +417,15 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 		// This is platform work, not retail behaviour — see Backend.WarmUp.
 		be.WarmUp()
 	}
-	width, height := c.Size()
+	game := &app{c: c, mode: mode, options: options, fullscreen: options.Fullscreen}
+	width, height := game.desiredWindowSize()
+	game.windowW, game.windowH = width, height
 	// From here on this process owns a window: every window-API call below, and
 	// everything the game loop reaches through app.Update, runs on this thread
 	// with the window layer brought up. Arm the seam before the first of them.
 	windowOwned.Store(true)
 	ebiten.SetWindowSize(width, height)
+	ebiten.SetFullscreen(options.Fullscreen)
 	if title := c.Title(); title != "" {
 		ebiten.SetWindowTitle(title)
 	}
@@ -372,7 +437,6 @@ func Run(c *client.Client, mode RendererMode, options RunOptions) error {
 	// clearing the last presented frame.
 	ebiten.SetScreenClearedEveryFrame(false)
 	ebiten.SetTPS(presentationTPS)
-	game := &app{c: c, windowW: width, windowH: height, mode: mode}
 	if options.MaxFPS > 0 {
 		game.presentInterval = time.Second / time.Duration(options.MaxFPS)
 	}

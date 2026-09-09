@@ -202,25 +202,16 @@ type retailDisplayMode struct{ W, H int }
 
 // retailDisplayModes builds that table.
 //
-// Retail's windowed (GDI) presentation offers the fixed list 640x480, 800x600,
-// 1024x768, then 1280x1024 only when the desktop is at least 1280x1024 and
-// 1600x1200 only when the desktop is at least 1600x1200, both axes inclusive;
-// its DirectDraw presentation substitutes the driver's enumeration of 8-bit
-// modes [07 R-FE-02 §9]. Nanolathe presents a software framebuffer through a
-// windowed surface, so the windowed arm is the applicable one and this is it
-// verbatim.
+// Retail's windowed list and desktop gates are established [07 R-FE-02 §9].
+// Nanolathe additionally offers 1280x720, 1600x900 and 1920x1080 as host
+// presentation choices (DESIGN_PRESENTATION_CLIENT §2.1). These logical render
+// sizes remain available on any desktop: fullscreen scales them to the monitor,
+// whose device-independent dimensions need not match its physical pixel count.
 //
-// Nothing here stands in for the DirectDraw arm, and nothing needs to: this
-// build has no 8-bit display driver to enumerate, so there is no mode list to
-// read. If a full-screen indexed presentation ever lands, its enumeration
-// replaces the fixed list above rather than adding to it.
-//
-// The options page then sorts the table ascending by width and then height and
-// drops every mode below 640x480 [07 R-FE-01 §6]. The GDI list is already in
-// that order, but the sort and the filter are applied all the same: they are
-// the page's step, not the source's.
+// The options page still sorts by width then height and drops modes below
+// 640x480 [07 R-FE-01 §6]. The original modes retain their desktop gates.
 func retailDisplayModes(desktopW, desktopH int) []retailDisplayMode {
-	modes := []retailDisplayMode{{640, 480}, {800, 600}, {1024, 768}}
+	modes := []retailDisplayMode{{640, 480}, {800, 600}, {1024, 768}, {1280, 720}, {1600, 900}, {1920, 1080}}
 	if desktopW >= 1280 && desktopH >= 1024 {
 		modes = append(modes, retailDisplayMode{1280, 1024})
 	}
@@ -1299,6 +1290,7 @@ func (g *gameShell) activateRetailOptionsGadget(name string) bool {
 		// "OK": every preference is written back, then the window closes
 		// [07 R-FE-01 §6][07 R-FE-01 §11].
 		g.closeRetailOptionsScreen()
+		g.commitWindowSize()
 		g.saveSettings()
 		return true
 	case "CANCEL":

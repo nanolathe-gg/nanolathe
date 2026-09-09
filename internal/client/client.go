@@ -562,8 +562,8 @@ func (c *Client) Size() (int, int) { return c.width, c.height }
 //
 // Nanolathe's offscreen is these two buffers, so re-allocating them is the
 // whole of it — every drawing path reads c.width/c.height at use time. The
-// platform adapter follows Size() for the window and the uploaded image, so
-// this is the single point that owns the surface size. A same-size call is a
+// platform adapter follows Size() for the uploaded image and logical layout;
+// the host window size is independent (DESIGN_PRESENTATION_CLIENT §2.1). A same-size call is a
 // no-op, which is what makes the "when different" test above cheap enough to
 // run unconditionally at the transition.
 func (c *Client) Resize(width, height int) {

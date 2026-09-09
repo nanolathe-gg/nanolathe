@@ -29,6 +29,17 @@ rendering, and diagnostic options. The separate `cmd/nanolathe-headless`
 command supports displayless simulation runs; see
 [architecture and verification](docs/ARCHITECTURE.md).
 
+Desktop fullscreen is available with `--fullscreen`; Alt+Enter toggles it
+from menus or battle and saves the preference. Use `--fullscreen=false` to
+start windowed regardless of the saved preference. The selected display size
+applies to the window throughout menus, loading, battle and results; menu art
+scales proportionally from its authored 640×480 canvas. The resolution slider
+also offers 1280×720, 1600×900, and 1920×1080. Resolution changes apply when
+you confirm Options with OK; dragging the slider leaves the window stable. Fullscreen scales to
+the desktop without changing the monitor resolution. On macOS, fullscreen
+entered through the green window button must be exited through that native
+control.
+
 Multiplayer is outside the current scope. For implemented contracts and known
 gaps, read the design document for the relevant engine area.
 
