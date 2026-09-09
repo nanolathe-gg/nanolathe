@@ -190,6 +190,7 @@ type worldBuckets struct {
 	childHead    []int32
 	childNext    []int32
 	childTouched []int32
+	unitIndex    []int32 // unit slot to committed slice index plus one
 }
 
 func (b *worldBuckets) reset() {
@@ -207,53 +208,55 @@ func (b *worldBuckets) reset() {
 	b.units = nil
 }
 
-// indexChildren builds the carrier-to-children lists for one committed frame.
-// A child links to the front of its carrier's list, so walking the list yields
-// the most recently attached child first — retail's cargo list is that LIFO
-// order [04 R-UNIT-06 §3]. Units are enumerated in ascending slot, so the
-// order this reproduces is descending slot, which is the attach order for the
-// dominant case of one carrier and one product.
-//
-// A piece-less carry (a negative hang piece) is excluded: the per-unit present
-// draws only children that follow a real piece [03 R-RAST-01 §7]
-// [04 R-UNIT-06 §3].
+// indexChildren resolves each carrier's published head-first cargo list.
+// Slot allocation order does not determine attachment order [04 R-UNIT-06 §3].
+// Piece-less children are excluded by the present gate [03 R-RAST-01 §7].
 func (b *worldBuckets) indexChildren(units []frame.UnitView) {
 	b.units = units
-	if len(units) == 0 {
-		return
-	}
 	if cap(b.childNext) < len(units) {
 		b.childNext = make([]int32, len(units))
 	}
 	b.childNext = b.childNext[:len(units)]
-	for i := range b.childNext {
-		b.childNext[i] = 0
-	}
+	clear(b.childNext)
 	maxSlot := 0
 	for i := range units {
-		if s := int(units[i].Slot); s > maxSlot {
-			maxSlot = s
+		if slot := int(units[i].Slot); slot > maxSlot {
+			maxSlot = slot
 		}
 	}
-	if len(b.childHead) < maxSlot+1 {
-		grown := make([]int32, maxSlot+1)
-		copy(grown, b.childHead)
-		b.childHead = grown
+	if len(b.childHead) <= maxSlot {
+		b.childHead = make([]int32, maxSlot+1)
+	}
+	if len(b.unitIndex) <= maxSlot {
+		b.unitIndex = make([]int32, maxSlot+1)
+	}
+	clear(b.unitIndex)
+	for i := range units {
+		b.unitIndex[int(units[i].Slot)] = int32(i) + 1
 	}
 	for i := range units {
-		u := &units[i]
-		if !isCarried(*u) || u.CarriedPiece < 0 {
-			continue
+		carrier := &units[i]
+		previous := -1
+		for _, slot := range carrier.Cargo {
+			if slot == 0 || int(slot) >= len(b.unitIndex) {
+				continue
+			}
+			childIndex := int(b.unitIndex[int(slot)]) - 1
+			if childIndex < 0 {
+				continue
+			}
+			child := &units[childIndex]
+			if !isCarried(*child) || child.Carrier != carrier.Slot || child.CarriedPiece < 0 {
+				continue
+			}
+			if previous < 0 {
+				b.childHead[int(carrier.Slot)] = int32(childIndex) + 1
+				b.childTouched = append(b.childTouched, int32(carrier.Slot))
+			} else {
+				b.childNext[previous] = int32(childIndex) + 1
+			}
+			previous = childIndex
 		}
-		carrier := int(u.Carrier)
-		if carrier >= len(b.childHead) {
-			continue
-		}
-		if b.childHead[carrier] == 0 {
-			b.childTouched = append(b.childTouched, int32(carrier))
-		}
-		b.childNext[i] = b.childHead[carrier]
-		b.childHead[carrier] = int32(i) + 1
 	}
 }
 

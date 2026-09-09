@@ -268,6 +268,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 			}
 			views = appendUnitView(views, v)
 			vp := &views[len(views)-1]
+			// Copy the linkage owner's traversal order; it can change without
+			// allocation when a child is detached and reattached [04 R-UNIT-06 §3].
+			vp.Cargo = append(vp.Cargo, u.Attachment.Cargo...)
 			// The hull extents and the underwater-exemption bit of the
 			// four-point visibility gate [03 §3.2] steps 3 and 5.
 			publishHullGateInputs(vp, u, s)

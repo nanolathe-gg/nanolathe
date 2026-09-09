@@ -440,7 +440,7 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			u := v.Unit
 			// The player gate of [04 R-MOV-03 §1], read per unit from the
 			// owner record. A slot the sweep does not admit is not visited at
-			// all — not even for its counter, its pre-update or its death
+			// all — not even for its counter, its status refresh or its death
 			// mark, all of which sit inside the visit the gate refuses.
 			var owner uint8
 			if u != nil {
@@ -450,8 +450,6 @@ func (s *Session) stepUnitPhase(tick uint32) {
 			if !visit {
 				return
 			}
-			// unit pre-update (StepPreUpdate) [04 R-MOV-03 §1]
-			s.Units.StepPreUpdate(h, tick)
 			// weapon slot/service step per unit [06 §3][06 §4] — stable weapon index once-compiled [ON-04].
 			// Step 3 of [04 R-MOV-03 §1] runs "for an owner of controller 1 or
 			// 2 only"; the COB drain of step 4 is unconditional, so the else
@@ -472,6 +470,9 @@ func (s *Session) stepUnitPhase(tick uint32) {
 					vm.Drain(1)
 				}
 			}
+			// Steps 5–8 follow the normal drain, including a death-latched
+			// unit's health-sample roll before finalization [04 R-MOV-03 §1].
+			s.Units.StepPostCOBStatus(h, tick)
 			// Step 9 of [04 R-MOV-03 §1] opens with the water-damage packet
 			// of [04 §9.2], BEFORE the two order pumps and the mover tick
 			// that close the same block — so a unit that drowns this tick
@@ -716,6 +717,8 @@ func (s *Session) stepEffectPhase(tick uint32) {
 		s.publication.effects.Advance(tick, presentationEvents)
 	}
 	if s.Features != nil {
+		// Reconcile external feature-grid writes here; reproduction belongs
+		// to the phase-6 lifecycle window [05 R-FEAT-01 §10].
 		s.Features.TickMotion(tick)
 	}
 }
