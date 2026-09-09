@@ -30,11 +30,10 @@ type FragmentQuad struct {
 // geometry and its deterministic random draws [04 R-COB-04 §3].
 type FragmentMaterialFreeze func(unitDefID uint16, pieceIndex int, quad FragmentQuad) FrozenFragmentMaterial
 
-// FragmentRequest contains a piece's retained live-point-list quads and
-// world-space piece origin. Position is not changed by vertex centering [04
-// R-COB-04 §3].
-// TODO(question): the later session adapter needs an owned producer for the
-// retained per-instance point list; do not substitute raw or recomposed pose.
+// FragmentRequest contains posed piece quads and their world-space origin.
+// Position is not changed by vertex centering [04 R-COB-04 §3]. Session uses
+// the approved current-simulation-pose source, independent of draw history
+// [DESIGN_UNITS_ORDERS_COB §3.3 "Shatter core API"].
 type FragmentRequest struct {
 	UnitDefID     uint16
 	PieceIndex    int

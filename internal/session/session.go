@@ -63,6 +63,7 @@ type publicationState struct {
 	effects          *render.EffectService
 	unitIdentities   []publishedUnitIdentity
 	nextUnitIdentity uint64
+	fragments        []render.FragmentMetadata
 }
 
 // Phase7Service is the narrow presentation-owned callback at the phase-7
@@ -123,8 +124,9 @@ func (s *Session) ensurePublicationState() *publicationState {
 // services owned centrally by this package C5.
 // Go allows methods in any file, but the struct is defined once here.
 type Session struct {
-	bigBrother          bigBrotherState
-	publicationObserver func(*frame.Frame)
+	bigBrother               bigBrotherState
+	publicationObserver      func(*frame.Frame)
+	fragmentMaterialResolver func(uint16, int, int, uint8) render.FrozenFragmentMaterial
 
 	State         State
 	pendingBattle bool

@@ -716,6 +716,7 @@ func (s *Session) stepEffectPhase(tick uint32) {
 		presentationEvents = s.publication.events.StagingEvents()
 	}
 	if s.publication != nil && s.publication.effects != nil {
+		s.bindFragmentStepContext(tick)
 		s.publication.effects.Advance(tick, presentationEvents)
 	}
 	if s.Features != nil {

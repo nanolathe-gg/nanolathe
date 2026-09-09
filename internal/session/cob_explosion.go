@@ -76,13 +76,6 @@ func (s *cobExplosionSink) AdmitWholePiece(request cob.WholePieceExplosion) bool
 	})
 }
 
-// AdmitShatter leaves physical shatter unbound. The VM has already made its
-// six physical draws and hidden the source before it reaches this refusal.
-// TODO(question): retained geometry is refreshed by drawing and visible effect
-// visits, not COB setters. Establish an I6-compatible producer or explicitly
-// approve current-pose geometry before binding admission [04 R-COB-04 §3].
-func (s *cobExplosionSink) AdmitShatter(cob.ShatterExplosion) bool { return false }
-
 // AdmitBitmap resolves a COB piece through the same helper as PIECE_XZ and
 // PIECE_Y, then immediately admits the named art and calculated table 2. The
 // named player's exact source is the existing effect timing resolver; the
