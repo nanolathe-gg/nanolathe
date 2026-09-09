@@ -37,7 +37,7 @@ The boundary runs at five places:
 
 * **The tick belongs to `internal/session`.** The per-player ledger runs inside
   the fifth phase, as the economy half of the same per-player walk that carries
-  orders and visibility; phase six advances catalog rest cursors, then calls
+  player maintenance and visibility; phase six advances catalog rest cursors, then calls
   `TickLifecycle` for reproduction and the active walk. Phase four calls
   `TickMotion` only to reconcile external grid writes `[01 §4.4]`
   `[05 R-FEAT-01 §10]`

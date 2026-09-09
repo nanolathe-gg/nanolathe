@@ -43,8 +43,8 @@ first, the failure is silent.
 The boundary runs at six places:
 
 * **The tick belongs to `internal/session`.** The per-unit sweep is the second
-  phase; the orders and work pump runs inside the fifth, per player ascending
-  `[01 §4.4]` `[04 R-MOV-03 §1]`. `internal/units` publishes the traversal — the
+  phase, including each unit's orders and work pump; player settlement runs in
+  the fifth phase `[01 §4.4]` `[04 R-MOV-03 §1]`. `internal/units` publishes the traversal — the
   status refresh after the normal COB drain, the death finalizer at slot end —
   and the session composes the stages between them. None of these packages reads
   a clock.
@@ -120,7 +120,8 @@ numbering `[06 §12.1]` `[08 R-SAVE-02 §6]`.
 traversal: players 0..9 ascending, then slots ascending inside each player's
 slice, with the alive flag read at the moment the slot is reached — so a unit
 created ahead of the cursor is visited in the same tick and one created behind
-it waits `[01 §6.2]` `[04 R-MOV-03 §1]` [I1]. `StepPostCOBStatus` follows the one normal script drain, after weapons and
+it waits `[01 §6.2]` `[04 R-MOV-03 §1]` [I1]. `StepPostCOBStatus` follows the
+one normal script drain, after weapons and
 before water damage, self-repair, orders and movement. Allocated dying units
 receive this refresh, including the health-sample roll consumed by `Killed`;
 `FinalizeDeath` remains the slot-end boundary `[04 §5.1]`.
