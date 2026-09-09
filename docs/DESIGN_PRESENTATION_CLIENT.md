@@ -55,12 +55,12 @@ That gives the boundary its shape, and the shape is a one-way valve.
   only its pixel cache, walking the identical `max(delay, 1)` cadence so the
   frame the simulation timed a record from is the frame painted for it.
 * **Nothing here touches the simulation RNG.** Presentation randomness — the
-  segmented-projectile jitter of render type 7, nanolathe particle placement,
-  the audio variant pick, the music chooser — draws from a *private copy* of
-  the CRT stream, taken by value when the session binds it. Retail draws these
-  from the live CRT; isolating the copy is a recorded divergence (§5) that
-  exists so render cadence cannot move the simulation `[03 §5.4]` `[03 §8.3]`
-  [I4].
+  segmented-projectile jitter of render type 7, the audio variant pick and the
+  music chooser — draws from private CRT copies taken when their owners bind.
+  Nanolathe particles and other effect strips are already advanced in session
+  phase 11 and reach this package as committed values. Retail interleaves all
+  of those draws on its live main-thread CRT; the approved isolation policy is
+  defined in DESIGN_RUNTIME_DETERMINISM §5 `[03 §5.4]` `[03 §8.3]` [I4].
 * **The window is one adapter, and it is thin.** `internal/platform/ebitenapp`
   owns the `*ebiten.Image`, the window size, device input polling and the PCM
   device installation. It calls the client's injected `Step` and then uploads
@@ -225,6 +225,13 @@ reveal verdicts, the shade-row helpers, and the generated flash-table geometry.
 (32×256, brighten-only), `SHD` (32×256, the full signed ramp), the 256-byte
 logical→physical map, and the gray table `[03 §4.3]` `[03 §4.3.3 R-RR16-A §1]`
 `[fmt pal]`. The logical map is not a route for image pixels; see C7.
+
+Gamma is a final colour-output transform. `Client.SetGammaFactor` retains the
+display factor and rebuilds `Client.DisplayPalette` from the immutable
+`palette.Tables.Base`; the classic indexed-to-RGBA conversion and the modern
+PAL atlas row consume those same output colours. The logical and physical
+index-remap tables do not change, and no gamma value reaches simulation state
+`[07 R-FE-01 §11]` [I6].
 
 ### 2.6 `internal/audio` and `internal/audiobackend`
 
@@ -758,11 +765,12 @@ the published offset to the camera.
   the negotiated outside size stay distinct because the HUD arithmetic depends
   on that distinction. The displayless path composes the same session rather
   than running a parallel client.
-* **Presentation draws a private CRT copy.** Retail's segmented projectiles,
-  nanolathe particles, audio variant picks and music chooser draw from the live
-  CRT stream; here the client and the audio service copy the stream *state* and
-  advance only the copy, so render cadence cannot perturb the simulation. This
-  is an approved, recorded divergence, not retail behaviour [I4].
+* **Presentation draws private CRT copies.** The client copies state for
+  segmented projectiles, while the audio queue and music owner each copy state
+  at binding. Their cadence cannot perturb the session CRT. Briefing animation
+  likewise stays in its front-end lifetime and never supplies a battle seed.
+  DESIGN_RUNTIME_DETERMINISM §5 owns the complete approved divergence from
+  retail's shared main-thread history [I4] [I6].
 * **A missing art bank is not fatal.** Retail treats an unresolvable animation
   bank as fatal: a modal message box naming the constructed path, then exit. A
   presentation client cannot do that to a running battle, so an unresolvable

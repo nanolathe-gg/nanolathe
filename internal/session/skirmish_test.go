@@ -240,8 +240,8 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	// supersedes the draw-count reading: battle entry consumes NO wind draws
 	// (briefing speed/direction are front-end display state) and zeroes the
 	// deadline, identically via skirmish and mission. The skirmish slot
-	// shuffle draws from the SESSION CRT, never from rng.Global [DET-01], so
-	// the process-global stream must not move at all.
+	// shuffle draws from its disposable setup CRT, never from the retained
+	// session CRT or rng.Global [DET-01], so neither retained stream moves.
 	// The Network 1 schema authors one StartPos per lobby slot. It carried only
 	// StartPos1 until WU-19-178, when a `StartPos` miss became fatal on the
 	// kind-2 path as [08 R-ENTRY-01 §5] step 4 states: with two players and one
@@ -269,8 +269,8 @@ func TestSkirmishWindSinglePath(t *testing.T) {
 	if missionDraws != 0 {
 		t.Fatalf("mission battle entry consumed %d global CRT draws, want 0 [R-CORE-02][DET-01]", missionDraws)
 	}
-	// Skirmish path: the shuffle draws the session CRT; the global stream is
-	// untouched and wind still draws nothing.
+	// Skirmish path: the shuffle draws its disposable setup CRT; the retained
+	// session and global streams are untouched and wind still draws nothing.
 	rng.SeedGlobal(99, seed)
 	before2 := rng.Global.Crt.Draws()
 	cfg := SkirmishConfig{MapName: "wind", NumPlayers: 2}

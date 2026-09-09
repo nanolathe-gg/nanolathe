@@ -127,23 +127,36 @@ return that session's state; `SeedSessionRNG` installs a fresh pair and resets
 the global tick. This isolates sessions for reproducible runs. Retail resets
 the simulation stream at battle entry, but preserves the main-thread CRT
 history; the entry seed belongs to a separate, temporary loading-thread block
-`[01 R-CORE-02]` `[01 R-PLAT-01 §7]`. The per-session CRT lifetime is therefore
-an implementation divergence tracked by REVIEW RT-08. `rng.Global` exists for
-process bootstrap only and is nil until seeded.
+`[01 R-CORE-02]` `[01 R-PLAT-01 §7]`. Nanolathe's approved lifetime and
+presentation isolation divergence is defined once in §5. `rng.Global` exists
+for process bootstrap only and is nil until seeded.
+
+The owners are intentionally ordered by entry and runtime role:
+
+| Role | Nanolathe owner and lifetime | Retail relationship |
+|---|---|---|
+| battle simulation | `Session.SimRNG`, freshly installed from the explicit battle seed pair | same battle-entry reset role `[01 R-CORE-02]` |
+| skirmish setup shuffle | disposable CRT created from the explicit battle CRT seed and discarded after placement | same temporary loading-owner shape; retail seeds the loading thread's CRT separately `[01 R-CORE-02]` `[01 R-PLAT-01 §7]` |
+| authoritative battle CRT | `Session.CrtRNG`, freshly installed from the explicit battle seed pair and retained for that session | retail instead retains the main thread's process-lifetime CRT `[01 R-PLAT-01 §7]` |
+| briefing animation | private front-end CRT; its final state is never a battle seed | retail briefing draws advance the main-thread CRT carried into battle `[01 R-CORE-02]` |
+| audio queue and music | each copies the supplied front-end or session CRT state when bound and advances its own history | retail variants and track choice draw the live main-thread CRT `[01 R-DET-01 §5]` |
+| segmented-projectile presentation | client copy taken at battle binding | retail draws the live main-thread CRT `[01 R-DET-01 §5]` |
+| effect strips, including nanolathe particles | phase-11 session state; draws the retained session CRT and publishes completed particles | retail's tick-side effect draws use the main-thread CRT `[01 R-DET-01 §4]` `[03 R-STRIP-01 §3]` |
+| battle restore | load supplies a fresh explicit pair; the save restores neither stream | retail reseeds simulation while main-thread CRT history continues `[08 "Scheduler and random state in saves"]` `[01 R-CORE-02]` |
 
 Which stream draws, and when, is a per-phase fact `[01 R-DET-01 §4]`
-`[01 R-DET-01 §5]`. Gameplay draws from the simulation stream. The CRT stream
-serves the meteor scheduler `[06 §6.5]`, the camera shake driver `[03 §5.6]`,
-audio variant selection `[03 §8.3]`, the wind next-change interval `[01 §7.3]`
-and the effect strips' own particle draws `[03 R-STRIP-01 §3]`. In retail every tick-side
+`[01 R-DET-01 §5]`. Gameplay draws from the simulation stream. The retained
+session CRT serves the meteor scheduler `[06 §6.5]`, the camera shake driver
+`[03 §5.6]`, the wind next-change interval `[01 §7.3]` and the effect strips'
+own particle draws `[03 R-STRIP-01 §3]`. Audio variant selection `[03 §8.3]`
+and segmented-projectile presentation use their private copies. In retail every tick-side
 CRT draw continues the stream seeded at process start; battle entry's own CRT
 reseed ran on retail's loading thread and its block was discarded with that
 thread, so nothing reseeds the tick-side CRT stream `[01 R-PLAT-01 §7]`
 `[08 R-ENTRY-01 §2]`. A consumer draws the documented number of times even when
-it discards the result [I4]. Nanolathe presentation copies session stream
-state for jitter (§3.3, DET-01). That isolation does not reproduce retail's
-shared main-thread consumption; REVIEW RT-08 owns the remaining policy and
-consumer audit.
+it discards the result [I4]. Nanolathe's client and audio owners copy stream
+state at their binding seams (§3.3, DET-01); briefing has a separate front-end
+stream, and skirmish setup discards its local stream before the tick begins.
 
 ### 2.3 `internal/sim/numeric` — fixed point, angles, trig
 
@@ -468,8 +481,11 @@ performance-counter source; the main-thread CRT is seeded at process startup
 and continues across battle entry. Setup seeds a separate loading-thread CRT
 block, discarded with that thread `[01 §7.1]` `[01 R-CORE-02]`
 `[01 R-PLAT-01 §7]`. Nanolathe's composition supplies a fresh pair per session;
-`--seed N` fixes both (B4). The CRT lifetime and presentation isolation are
-explicit implementation divergences (§2.2), not reseed parity claims.
+`--seed N` fixes both (B4). Briefing entry uses that same battle seed source,
+never the briefing stream's final state. Skirmish setup seeds a disposable CRT
+from the explicit battle CRT seed and discards it before ticking. The retained
+CRT lifetime and private presentation histories are the §5 divergence, not
+reseed parity claims.
 
 **C11 — wind is phase 8 alone.** The complete scheduled redraw is one phase: a
 strict deadline gate, then one CRT interval draw `((crt × 10) / 0x8000 + 5) ×
@@ -531,8 +547,9 @@ their definition of record.
 
 **DET-01 — random-stream ownership.** There is no package-global fallback in
 the tick path. The session constructs the two streams it owns and injects them;
-`rng.Global` is process bootstrap only. Presentation draws exclusively from
-private copies of stream *state*. Three source-inspecting guards in
+the skirmish setup shuffle receives a disposable CRT and cannot advance the
+retained session CRT; `rng.Global` is process bootstrap only. Presentation
+draws exclusively from private copies of stream *state*. Three source-inspecting guards in
 `internal/architecture` enforce it: presentation packages do not import
 `internal/sim/rng` except through a commented, shrink-only allowlist of files
 that copy state into a private copy; `rng.Global` is referenced only from the
@@ -702,8 +719,17 @@ initialization, whose authoritative entries are integers `[04 §5.1]`.
   a writer/reader census in the owning unit, projectile, order or COB contract.
 * **The dual-stream `--seed` override.** Retail has no way to fix both streams.
   Coupling them behind one flag is a debug affordance, not a runtime mode: the
-  unseeded path uses separate sources, but the per-session CRT lifetime still
-  differs from retail (B4, C10, REVIEW RT-08).
+  unseeded path uses separate sources (B4, C10).
+* **CRT lifetime and presentation isolation.** Retail's main-thread CRT begins
+  at process startup; front-end, tick-side, audio and rendering consumers
+  interleave on that history, while battle setup uses and discards a separate
+  loading-thread CRT `[01 R-CORE-02]` `[01 R-PLAT-01 §7]`. Nanolathe starts a
+  retained CRT from every battle's explicit seed, gives skirmish setup a
+  disposable CRT from that same seed, and gives briefing, audio, music and
+  segmented-projectile presentation private histories. Briefing duration and
+  render/audio cadence therefore cannot move authoritative battle state, and
+  setup draws cannot move gameplay history. This is the approved isolation
+  policy behind I4 and I6; it is one behavior with no compatibility mode.
 * **A zero bound on the CRT sampler.** Retail's unsigned divide would fault. The
   draw is still consumed — retail draws before the divide — and zero is
   returned rather than panicking (C9) [I11].

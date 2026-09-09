@@ -458,8 +458,9 @@ func (s *Session) CrtRNG() *rng.CRT {
 // SeedSessionRNG installs the composition layer's seed pair and resets the
 // per-session streams. DET-01: it does not touch rng.Global. Resetting the CRT
 // here is a Nanolathe isolation policy; retail's main-thread CRT continues
-// across battle entry [01 R-CORE-02][01 R-PLAT-01 §7]. REVIEW RT-08 tracks that
-// lifetime and presentation-consumer divergence.
+// across battle entry. The approved lifetime and presentation isolation policy
+// is recorded in DESIGN_RUNTIME_DETERMINISM §5
+// [01 R-CORE-02][01 R-PLAT-01 §7].
 func (s *Session) SeedSessionRNG(simSeed, crtSeed uint32) {
 	if s == nil {
 		return
@@ -1387,6 +1388,6 @@ func (s *Session) CycleDebugDisplayMode() {
 // Session owns stream construction so front-end composition uses the same
 // recurrence [INVARIANTS I4][DET-01]. Nanolathe seeds the battle's separate
 // per-session CRT through SeedSessionRNG. Retail instead continues its
-// main-thread CRT across this boundary [01 R-PLAT-01 §7]; REVIEW RT-08 owns
-// the remaining lifetime and consumer-policy work.
+// main-thread CRT across this boundary; the approved isolation divergence is
+// recorded in DESIGN_RUNTIME_DETERMINISM §5 [01 R-PLAT-01 §7].
 func NewFrontEndCRT(seed uint32) rng.CRT { return rng.NewCRT(seed) }

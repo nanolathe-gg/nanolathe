@@ -114,9 +114,13 @@ A* heuristic scale as a full signed 64-bit product arithmetically shifted, and
 
 ## I4 — Two RNG streams, call order is behavior
 
-**Rule.** One global Park-Miller simulation stream (`16807 / 127773 / 2836 /
-0x7fffffff`, Schrage) and one CRT stream (`*214013 + 2531011`). No per-entity
-streams, no `math/rand`, no `crypto/rand`.
+**Rule.** One authoritative Park-Miller simulation stream (`16807 / 127773 /
+2836 / 0x7fffffff`, Schrage) and one authoritative CRT stream (`*214013 +
+2531011`) per session. A skirmish setup shuffle uses a disposable CRT seeded
+from the explicit battle seed; briefing, audio, music and client presentation
+advance private copies. None of those histories may advance or seed the
+authoritative session CRT. No per-entity streams, no `math/rand`, no
+`crypto/rand` (DESIGN_RUNTIME_DETERMINISM §2.2 and §5).
 
 Consumers must draw the documented number of times **even when the result is
 discarded**: a pool-full fire attempt still draws up to two spread values
@@ -126,11 +130,13 @@ discarded**: a pool-full fire attempt still draws up to two spread values
 
 Which stream: gameplay normally uses the simulation stream; meteor geometry
 `[06 §6.5]`, screen shake `[03 §5.6]`, audio variant selection `[03 §8.3]`, and
-wind's briefing strength/direction plus next-change interval `[01 §7.3]` use the
-CRT stream. Later wind strength and 16-bit heading use the simulation stream.
+wind's next-change interval `[01 §7.3]` use the CRT recurrence. Audio advances
+its private copy; briefing wind advances the private front-end stream. Later
+battle wind strength and 16-bit heading use the simulation stream.
 
 **Check.** Identical seeded session setups have stable simulation and CRT draw
-counts; the runtime exposes no separate headless execution path.
+counts; setup and briefing draws leave the retained battle CRT fresh; the
+runtime exposes no separate headless execution path.
 
 ## I5 — Pools, not handles
 
@@ -162,6 +168,9 @@ frame, published once after every completed sub-tick and sampled at the
 current committed tick by the renderer, or by Enhanced presentation the two
 most recent committed ticks (DESIGN_GPU_RENDERER §13.5). The active runtime
 has one Ebitengine window path; there is no alternate headless entry.
+Presentation and front-end random histories never become session seed inputs;
+the explicit battle seed pair is the only RNG handoff into composition
+(DESIGN_RUNTIME_DETERMINISM §2.2 and §5).
 
 **Why.** Retail's draw path samples the accumulators exactly as committed at
 the current tick; no interpolation between updates exists `[03 §2.4]`.

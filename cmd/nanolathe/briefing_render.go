@@ -11,7 +11,6 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/input"
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/session"
-	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/ui"
 	"github.com/nanolathe-gg/nanolathe/vfs"
 )
@@ -35,10 +34,11 @@ func (g *gameShell) openCampaignBriefing() {
 	missionIndex := stub.Index
 	_, crtSeed := seedsFor(g.opts)
 	crt := session.NewFrontEndCRT(crtSeed)
+	battleSeeds := newBattleSeedSource(g.opts)
 	request := func() (freshBattleRequest, error) {
 		g.saveSettings()
 		identity := fmt.Sprintf("%s:MISSION%d", campaign.Path, missionIndex)
-		return missionBattleRequest(g.opts, g.cs, identity, g.missionDifficulty(), missionIndex, missionIndex, nil, briefingBattleSeedSource{opts: g.opts, crt: &crt})
+		return missionBattleRequest(g.opts, g.cs, identity, g.missionDifficulty(), missionIndex, missionIndex, nil, battleSeeds)
 	}
 	g.briefing = NewCampaignBriefingController(loaded, g.missionSide, &crt, request)
 	if clPtr != nil && clPtr.Input() != nil {
@@ -193,22 +193,6 @@ func applyRetailContinuationProgress(progress *session.BankProgress, thumbs [25]
 	// into this newly loaded lifetime. WL has no established Summary mapping;
 	// it therefore remains its zero/default value [08 R-CAMP-01 §8].
 	*progress = session.BankProgress{BetweenMissions: 1, Thumbs: thumbs}
-}
-
-// briefingBattleSeedSource carries the front-end CRT state across the battle
-// boundary; the simulation seed is selected independently as usual [I4].
-type briefingBattleSeedSource struct {
-	opts Options
-	crt  *rng.CRT
-}
-
-func (s briefingBattleSeedSource) NextBattleSeeds() BattleSeeds {
-	sim, _ := seedsFor(s.opts)
-	var crt uint32
-	if s.crt != nil {
-		crt = s.crt.State
-	}
-	return BattleSeeds{Simulation: int32(sim), CRT: crt}
 }
 
 func readBriefingText(cs *contentSet, name string) string {

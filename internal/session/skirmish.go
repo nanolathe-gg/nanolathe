@@ -12,6 +12,7 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/mission"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
+	"github.com/nanolathe-gg/nanolathe/internal/sim/rng"
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/world"
 	"github.com/nanolathe-gg/nanolathe/vfs"
@@ -1027,11 +1028,11 @@ func skirmishReconstructUnits(s *Session, cfg SkirmishConfig, m *mission.Mission
 		eligible = append(eligible, i)
 	}
 	n := len(eligible)
-	// The shuffle is the only stream this function touches directly, and it is
-	// the CRT one [P0-04] I4 DET-01: from session, not global. The simulation
-	// stream is not read here at all — the stamp takes no simulation draw
-	// [08 R-ENTRY-01 §5] — so nothing binds it; the allocator reaches its own.
-	crt := s.CrtRNG()
+	// Setup owns a disposable loading stream seeded from the explicit battle
+	// bootstrap seed. The simulation stream and retained session CRT are not
+	// read [01 R-CORE-02][01 R-PLAT-01 §7][08 R-ENTRY-01 §5] [I4] DET-01.
+	setupCRT := rng.NewCRT(cfg.RNGCrtSeed)
+	crt := &setupCRT
 	// Build the permutation of eligible slots.
 	local28 := make([]int, n)
 	copy(local28, eligible)

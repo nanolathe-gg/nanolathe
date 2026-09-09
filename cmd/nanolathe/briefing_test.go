@@ -142,17 +142,6 @@ func TestBriefingWindDrawOrderAndStartRequest(t *testing.T) {
 	}
 }
 
-func TestBriefingBattleSeedSourceCarriesCRTState(t *testing.T) {
-	stream := rng.NewCRT(19)
-	_ = stream.Rand()
-	source := briefingBattleSeedSource{opts: Options{Seed: 33}, crt: &stream}
-	want := stream.State
-	seeds := source.NextBattleSeeds()
-	if seeds.CRT != want {
-		t.Fatalf("battle CRT seed = %d, want post-briefing state %d", seeds.CRT, want)
-	}
-}
-
 func TestBriefingArtKeepsPreviousOnOptionalMediaMiss(t *testing.T) {
 	previous := &formats.GAF{Version: 1}
 	if got := loadBriefingArt(nil, BriefingPlanet{Brief: "LavaBrief"}, previous); got != previous {

@@ -14,7 +14,7 @@ var _ = content.CanonicalKey // ensure content import used
 
 func TestSeedSessionRNGBattleEntryResetAndIsolation(t *testing.T) {
 	s := &Session{Clock: &clock.State{GlobalTick: 23}}
-	// Simulate presentation/setup-adjacent draws before the explicit boundary.
+	// Simulate stale lifetime-local draws before the explicit battle boundary.
 	s.SimRNG().Uint32n(17)
 	s.CrtRNG().Rand()
 	if s.SimRNG().Draws() == 0 || s.CrtRNG().Draws() == 0 {

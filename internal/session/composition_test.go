@@ -118,6 +118,24 @@ func TestSeedSessionRNGWipesPreBattleDrawsAndLeavesGlobalAlone(t *testing.T) {
 	}
 }
 
+func TestSkirmishSetupShuffleDoesNotAdvanceSessionCRT(t *testing.T) {
+	s := strictNewSessionWithUnits(t, 0, 41, 73)
+	cfg := SkirmishConfig{MapName: "test", NumPlayers: 2, Location: 0, RNGSimSeed: 41, RNGCrtSeed: 73}
+	cfg.Players[0].Side = 0
+	cfg.Players[1].Side = 1
+	m := &mission.Mission{Specials: []mission.Special{
+		{Kind: 1, ID: 0, X: 0, Z: 0, Name: "StartPos1"},
+		{Kind: 1, ID: 1, X: 10, Z: 10, Name: "StartPos2"},
+	}}
+	before := *s.CrtRNG()
+	if err := skirmishReconstructUnits(s, cfg, m); err != nil {
+		t.Fatalf("reconstruct skirmish units: %v", err)
+	}
+	if got := s.CrtRNG(); got.State != before.State || got.Draws() != before.Draws() {
+		t.Fatalf("retained CRT moved during setup: state %d→%d draws %d→%d", before.State, got.State, before.Draws(), got.Draws())
+	}
+}
+
 // TestConstructorsDoNotRequireGlobalRNG supersedes the old
 // TestStrictSessionConstructorsRejectMissingGlobalRNG [R-CORE-02] DET-01:
 // constructors no longer consult or require the process-global streams, so

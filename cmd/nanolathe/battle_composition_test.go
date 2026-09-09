@@ -24,6 +24,28 @@ type atomicTestUIStage struct{}
 
 func (*atomicTestUIStage) DrawUI(*client.Client, client.UIFrame) {}
 
+func TestFreshBattleRequestsCarryExplicitSeedPair(t *testing.T) {
+	opts := Options{Seed: 73}
+	cs := &contentSet{fs: vfs.New()}
+
+	missionRequest, err := missionBattleRequest(opts, cs, "campaign:MISSION0", 0, 0, 0, nil, newBattleSeedSource(opts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skirmishRequest, err := skirmishBattleRequest(opts, cs, session.SkirmishConfig{MapName: "test"}, headlessScenarioSkirmish, nil, newBattleSeedSource(opts))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		request freshBattleRequest
+	}{{"mission", missionRequest}, {"skirmish", skirmishRequest}} {
+		if tc.request.value.SimulationSeed != 73 || tc.request.value.CRTSeed != 73 {
+			t.Fatalf("%s request seeds = %d/%d, want explicit 73/73", tc.name, tc.request.value.SimulationSeed, tc.request.value.CRTSeed)
+		}
+	}
+}
+
 func TestBattleCompositionAdaptersSnapshotEqualRequest(t *testing.T) {
 	root := probeRetail(t)
 	opts := Options{Root: root, Map: "ashap plateau", Seed: 1}
