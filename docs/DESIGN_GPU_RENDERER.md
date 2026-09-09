@@ -1466,8 +1466,13 @@ carry no generation [01 §6.1], so the match is a handle plus consistency. A
 unit then requires the same `Slot` with equal `DefID` and `Owner`, unchanged
 `Carrier` and `MoverMode`, the same number of pieces, and a horizontal
 displacement of at most 64 world units in the tick. If only one unit has a
-usable identity, it takes the current pose. A projectile matches on `Handle`
-with equal `WeaponID`, `Shooter` and `CreationTick`; an effect matches on
+usable identity, it takes the current pose. A projectile matches only on an
+equal nonzero `PresentationID`. Combat assigns one process-local,
+presentation-only admission identity for every root and burst clone, carries it
+in a parallel array through stable pool compaction, and publishes it without
+changing the authoritative packed handle, RNG, or retail save state. A zero-ID
+fixture projectile always takes the current pose; it never falls back to the
+packed `Handle`. An effect matches on
 `PresentationID` when nonzero, else on `ID`, `EventSeq` and `StartTick`.
 Anything else takes the current pose. The 64-unit bound is a presentation
 constant chosen above any retail movement rate; it is not a retail datum.

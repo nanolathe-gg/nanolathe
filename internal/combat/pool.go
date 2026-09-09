@@ -1,6 +1,8 @@
 package combat
 
 import (
+	"sync/atomic"
+
 	"github.com/nanolathe-gg/nanolathe/internal/content"
 	"github.com/nanolathe-gg/nanolathe/internal/features"
 	"github.com/nanolathe-gg/nanolathe/internal/pool"
@@ -8,6 +10,13 @@ import (
 	"github.com/nanolathe-gg/nanolathe/internal/units"
 	"github.com/nanolathe-gg/nanolathe/internal/visibility"
 )
+
+// projectilePresentationSequence is deliberately process-local. It supplies
+// publication-only admission identities and never participates in a simulation
+// decision, save record, or RNG stream [I6]. A process sequence keeps two
+// services whose committed-frame buffers overlap from accidentally treating
+// their first records as the same subject.
+var projectilePresentationSequence atomic.Uint64
 
 // ProjectileCapacity is the fixed retail capacity [01 §6.1], [06 §5.1]: exactly
 // 300 records of 107 bytes. Allocation appends at the tail and never fills
@@ -187,10 +196,14 @@ type pendingAim struct {
 // Records is the parallel named storage (107-byte retail identity, I13) moved
 // identically to the metadata on compaction.
 type Service struct {
-	Slots      pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
-	Records    [ProjectileCapacity]Projectile // named records parallel to Slots
-	doubleShot bool
-	halfShot   bool
+	Slots   pool.Projectiles               // sole count/dead authority (I5) [06 §5.1]
+	Records [ProjectileCapacity]Projectile // named records parallel to Slots
+	// presentationIDs are non-retail publication identities. They move with
+	// their records during stable compaction but are not part of Records, so a
+	// burst's whole-record copy cannot inherit its parent's identity [I6].
+	presentationIDs [ProjectileCapacity]uint64
+	doubleShot      bool
+	halfShot        bool
 
 	Events        func(Event)               // optional ordered combat event sink; nil-safe
 	pendingAims   map[pendingKey]pendingAim // Aim dispatch tracking ON-04 [06 §3.3]
@@ -297,6 +310,7 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 	}
 	idx := int(h) - 1
 	if idx >= 0 && idx < len(s.Records) {
+		s.presentationIDs[idx] = nextProjectilePresentationID()
 		// The reservation clears exactly TWO fields, not the record. [06 §4.1]
 		// enumerates it as "test the live count against the hard cap of 300;
 		// take the record at that index; increment the count; clear the
@@ -325,6 +339,28 @@ func (s *Service) Reserve() (pool.Handle, bool) {
 		s.Records[idx].TargetUnit = 0 // [06 §4.1] clear its retained unit target
 	}
 	return h, true
+}
+
+func nextProjectilePresentationID() uint64 {
+	id := projectilePresentationSequence.Add(1)
+	if id == 0 {
+		id = projectilePresentationSequence.Add(1)
+	}
+	return id
+}
+
+// PresentationID returns the publication-only admission identity for h. It
+// follows a live record across compaction and is never an authoritative handle
+// or save field [06 §5.1][06 §5.2][I6].
+func (s *Service) PresentationID(h pool.Handle) uint64 {
+	if s == nil || h == 0 || !s.Slots.Alive(h) {
+		return 0
+	}
+	idx := int(h) - 1
+	if idx < 0 || idx >= len(s.presentationIDs) {
+		return 0
+	}
+	return s.presentationIDs[idx]
 }
 
 // CancelReserve rolls back an early ballistic reservation when the solver finds
@@ -477,6 +513,7 @@ func (s *Service) Compact(follow *pool.Handle) {
 		dest := int(oldToNew[old])
 		if dest >= 0 && dest != old {
 			s.Records[dest] = s.Records[old]
+			s.presentationIDs[dest] = s.presentationIDs[old]
 		}
 	}
 
