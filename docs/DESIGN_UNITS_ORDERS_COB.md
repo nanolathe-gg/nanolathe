@@ -649,8 +649,12 @@ no performance improvement. The workload included 187–198 units, 6–31
 projectiles, 73–162 effects, 4–8 nanoframes/nanolathe events, and four shake
 frames. The whole-piece adapter now connects admission, publication and both
 renderer paths. Shatter session admission, publication and drawing remain open
-after the bounded physics core; per-frame smoke/fire trails retain the explicit
-RT08 ownership boundary.
+after the bounded physics core. The missing producer is the piece instance's
+retained geometry, refreshed by draw and visible effect visits rather than COB
+setters. Feeding that renderer history back into physics violates I6; sampling
+the current simulation pose instead needs an explicit behavior departure
+`[04 R-COB-04 §3]`. Per-frame smoke/fire trails retain the explicit RT08
+ownership boundary.
 
 ### 3.4 Model — C20…C24
 

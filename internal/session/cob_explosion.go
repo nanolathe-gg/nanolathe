@@ -78,8 +78,9 @@ func (s *cobExplosionSink) AdmitWholePiece(request cob.WholePieceExplosion) bool
 
 // AdmitShatter leaves physical shatter unbound. The VM has already made its
 // six physical draws and hidden the source before it reaches this refusal.
-// TODO(U13): bind the fragment geometry arena and its pool-before-draw walk
-// without creating a second effect lifetime [04 R-COB-04 §1, §3].
+// TODO(question): retained geometry is refreshed by drawing and visible effect
+// visits, not COB setters. Establish an I6-compatible producer or explicitly
+// approve current-pose geometry before binding admission [04 R-COB-04 §3].
 func (s *cobExplosionSink) AdmitShatter(cob.ShatterExplosion) bool { return false }
 
 // AdmitBitmap resolves a COB piece through the same helper as PIECE_XZ and

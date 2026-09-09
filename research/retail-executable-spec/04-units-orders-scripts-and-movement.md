@@ -5931,7 +5931,15 @@ rejection.
 After extrusion, summing and centering the eight copied vertices changes only
 the copied geometry; it does not add the mean to the already written fragment
 position. The primitive-copy boundary reads the piece instance's retained live
-point list. Reset and piece-transform writes update that list, while explosion
+point list. Allocation seeds that list from pristine post-load vertices and
+zeros its retained translation. COB transform setters request a rebuild; they
+do not materialize the list. Model drawing and the viewing-player-visible
+effect-opcode refresh visit perform the deferred rebuild. A rebuild resets the
+list and translation, then transforms the hierarchy child-first. Orientation
+changes request a rebuild only when a signed wrapped component difference has
+absolute value greater than seven; any such component refreshes all three
+cached angles. Pending COB changes rebuild even within that tolerance
+[03 R-COMP-01 §4] [03 R-COMP-02 §3] [R-COB-03 §6]. Explosion
 admission does not refresh it; the fragment record separately uses the source
 unit position plus the piece's last retained translation. The later session
 adapter therefore needs an upstream materialized point-list producer. It must
