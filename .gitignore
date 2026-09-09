@@ -4,16 +4,11 @@ REVIEW*.md
 HANDOFF*
 .oracle/
 .claude/*
-!.claude/skills/
 .worktrees/
 /nanolathe
 /nanolathe-headless
-# remaster workspace: retail-derived sources and build products stay local;
-# Only recipes and notes are committed; generated work art stays local.
-remastered/units/*/source/
-remastered/units/*/preview/
-remastered/out/
-remastered/*.hpi
+# Obsolete model-authoring workspace and local tool binaries.
+/remastered/
 /remaster
 
 # headless -report f output when run from the repo root
@@ -26,9 +21,4 @@ remastered/*.hpi
 # Local Codex task state is not source.
 /.codex/
 
-# Generated retail-derived remaster work (recipes and notes remain tracked).
-remastered/units/*/work/textures/
-remastered/units/*/work/model.obj
-remastered/units/*/work/model.mtl
-remastered/units/*/work/model.json
 /patchmatchgo

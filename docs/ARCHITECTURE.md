@@ -26,8 +26,7 @@ has its own design document; this one only says where the boundaries are.
 
 Rules that cut across every package are in [INVARIANTS.md](INVARIANTS.md);
 places where the reference install disproves the written contract are in
-[SPEC_CONFLICTS.md](SPEC_CONFLICTS.md); the unit remastering pipeline is in
-[REMASTER.md](REMASTER.md).
+[SPEC_CONFLICTS.md](SPEC_CONFLICTS.md).
 
 ## 1. Purpose and scope
 
@@ -155,7 +154,6 @@ package implements.
 |---|---|---|
 | `cmd/nanolathe` | The game: front-end screens, briefing, battle composition and dispatch, the battle HUD wiring, load/save screens, post-battle, `--shot` captures, `--headless` | DESIGN_INTERFACE_HUD_INPUT (screens, dispatch), DESIGN_SESSIONS_AI_SAVE (composition, headless) |
 | `cmd/nanolathe-headless` | The displayless runner: one authoritative session to a tick limit or result, JSON report | DESIGN_SESSIONS_AI_SAVE |
-| `cmd/remaster` | The unit remastering pipeline (extract, check, build, preview, pack) | [REMASTER.md](REMASTER.md) |
 
 ### Hygiene, probes and tools
 
@@ -169,7 +167,6 @@ package implements.
 | `internal/testsupport`, `internal/testsupport/retailcat` | `RetailRoot()`, the one place an asset-gated test skips; the shared compiled retail catalog | this document, §6 |
 | `probes/` | Authored, data-driven scenarios for questions only a manual retail observation settles; generators under `<probe>/gen/`, shared writers in `probes/kit/author` | `probes/README.md` |
 | `tools/` | `check` and `check-retail` (the two test tiers), `ci/baseline.sh`, the clean-room baseline and report commands, `loc-audit`, the map upscale prototypes | this document, §6 |
-| `remastered/` | Remaster authoring kit, the automatic remaster prototype, and per-unit recipes | [REMASTER.md](REMASTER.md) |
 
 ## 3. Dependency graph
 
@@ -180,7 +177,7 @@ anything in a lower layer and nothing in a higher one.
 ```
 platform      cmd/nanolathe ─► platform/ebitenapp ─► client, audiobackend
               cmd/nanolathe ─► upscale ─► formats, palette   (load-time 2× art, DESIGN_GPU_RENDERER §14)
-              cmd/nanolathe-headless ─► headless        cmd/remaster ─► client, cob, formats, vfs
+              cmd/nanolathe-headless ─► headless
 
 presentation  client ─► render, hud, audio, camera, palette, input, model, frame,
                         units, visibility, world, content, formats, vfs, numeric, rng
@@ -375,8 +372,8 @@ captures outrank a clean-room note when the two disagree about appearance.
 `[0N "Heading"]`, `[0N R-… §k]` and `[fmt …]` citation in `docs/*.md` against
 the research tree and fails on a dangling one; it fails on any anchored
 research finding (`R-…`) that no document cites; and it scans every Go
-comment under `internal`, `cmd`, `vfs`, `formats`, `probes`, `tools` and
-`remastered` with the same resolver, failing on a citation that does not
+comment under `internal`, `cmd`, `vfs`, `formats`, `probes` and `tools`
+with the same resolver, failing on a citation that does not
 resolve unless it is listed in `internal/docs/testdata/go_citation_baseline.txt`.
 That file holds the misses present when the check was introduced, keyed by
 citation text; it only shrinks.

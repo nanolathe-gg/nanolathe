@@ -121,13 +121,12 @@ func providerNames(fileSystem *vfs.FS) []string {
 // while everything else still resolves from the install.
 const remasterPriority = 1000
 
-// mountRemaster mounts a loose override tree or a packed archive produced by
-// cmd/remaster (docs/REMASTER.md). Only art formats live there; the override
-// never carries unit definitions, so the retail catalog is unchanged.
+// mountRemaster mounts a user-supplied loose art override or packed archive.
+// Art-only overrides leave the retail unit definitions unchanged.
 func mountRemaster(fileSystem *vfs.FS, path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
-		return &missingProductError{what: "remaster override is not readable", logical: path, expected: "a directory or .hpi written by `remaster build` / `remaster pack`"}
+		return &missingProductError{what: "remaster override is not readable", logical: path, expected: "a loose art directory or .hpi archive"}
 	}
 	if info.IsDir() {
 		if err := fileSystem.MountDirectory(path, remasterPriority); err != nil {

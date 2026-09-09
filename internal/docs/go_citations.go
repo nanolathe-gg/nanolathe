@@ -11,7 +11,7 @@ import (
 
 // GoSourceDirs are the directories whose Go comments cite research. Anything
 // outside them (tools' generated content, fixtures) is not a citing surface.
-var GoSourceDirs = []string{"internal", "cmd", "vfs", "formats", "probes", "tools", "remastered"}
+var GoSourceDirs = []string{"internal", "cmd", "vfs", "formats", "probes", "tools"}
 
 // goWalkSkip are directory names never descended into: authored fixtures,
 // version-control metadata, and nested agent worktrees whose files are not

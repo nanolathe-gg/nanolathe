@@ -56,8 +56,6 @@ The repository keeps each kind of guidance in one place:
   rules every change must preserve.
 * [`docs/SPEC_CONFLICTS.md`](docs/SPEC_CONFLICTS.md) — audited cases where a
   retail install corrected an older written contract.
-* [`docs/REMASTER.md`](docs/REMASTER.md) — the remaster authoring kit and the
-  art override the `--remaster` flag mounts.
 * [`research/retail-executable-spec/README.md`](research/retail-executable-spec/README.md)
   — research reading order, category index, evidence language, deciders,
   writing rules, citation convention, and gap disposition.

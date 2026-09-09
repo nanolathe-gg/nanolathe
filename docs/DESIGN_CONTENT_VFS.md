@@ -78,8 +78,8 @@ per mount, for diagnostics), `Providers`, `Notes`, `Manifest`, `ManifestHash`,
 
 `vfs/hpi.go` implements the container: header and footer validation, the
 directory-blob cipher, the 9-byte directory entries, and SQSH chunk decoding
-`[02 §2]` `[fmt hpi]`. `vfs/hpi_write.go` writes one — used by the remaster
-pipeline to pack authored art, never by the engine.
+`[02 §2]` `[fmt hpi]`. `vfs/hpi_write.go` writes archives for authored test
+fixtures; the runtime engine only reads them.
 
 ### 2.2 `formats` — lossless readers
 
@@ -116,8 +116,8 @@ layout is `[fmt cob]` and its behaviour belongs to DESIGN_UNITS_ORDERS_COB.
 The unit record's key table is `[fmt fbi]`.
 
 Two writers exist alongside the readers — `gaf_write.go` and
-`three_do_write.go` — for the remaster pipeline. They are authoring tools; the
-engine only reads.
+`three_do_write.go` — for authored test fixtures. The runtime engine only
+reads these formats.
 
 `Document`/`Section` deliberately preserve source order and duplicate records.
 A section builds its resolved lookup vector once and binary-searches it;

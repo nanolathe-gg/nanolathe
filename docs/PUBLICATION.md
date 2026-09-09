@@ -12,7 +12,8 @@ boundaries, date changes and nearby subsystem transitions guided the groups;
 no group contains more than ten first-parent steps. Redundant sanitized
 snapshots were omitted. Publication follow-ups update the documentation and make a test helper
 portable. Two further integration commits bring in subsequent command, fragment,
-minimap-mask and terrain-trail updates, giving 295 commits in this candidate.
+minimap-mask and terrain-trail updates, followed by removal of the obsolete model-authoring tools, giving 296 commits
+in this candidate.
 
 The original merge graph sometimes follows a topic branch before merging other
 work. These commits are curated integration snapshots, not a reconstruction of
@@ -30,7 +31,10 @@ history. Do not merge original development refs into this repository.
 ## Removed throughout the retained history
 
 - Generated retail-derived remaster textures and model OBJ/MTL/JSON exports;
-  extracted source art, previews and packed outputs. Recipes and notes remain.
+  extracted source art, previews and packed outputs. The obsolete `cmd/remaster`,
+  `remastered/` authoring kit, unit recipes, remaster Claude skill and tool
+  reference were subsequently removed throughout history. The integrated
+  engine map/sprite remastering and GPU rendering pipeline remain.
 - Accidentally tracked build outputs, including the headless engine and map
   upscaler executables.
 - Transient reviews, plans, orchestration reports, scratch diagnostics and
@@ -41,8 +45,10 @@ history. Do not merge original development refs into this repository.
   diagnostics were redacted as well. Explicit omission markers preserve the fact that the
   removed material has not been replaced by independently worded evidence.
 - Retail byte-dump examples and stock-derived COB/BOS script examples in the
-  format references. Authored file schemas are retained in the final reference. The latest Go
-  production executable tokens are unchanged from the original source endpoint.
+  format references. Authored file schemas are retained in the final reference. Retained engine Go
+  executable tokens match the original source endpoint except for the art-override
+  diagnostic, which no longer refers to the removed tools. The citation checker
+  no longer scans the removed authoring directory.
   Two gadget-field comments were clarified, and a source-checking test helper
   now locates the repository through its module file rather than a personal path.
 
