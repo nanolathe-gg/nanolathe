@@ -2075,7 +2075,11 @@ regenerate, so the table and the raw trail
   outcome clears bit 1. It then unconditionally sets bits 2 and 3, clears
   bit 4, and copies `clock` into bit 6. Three in-game toggles flip bits 7, 8
   and 9 of the same word. This word is distinct from the two packed display
-  and sound option words §3 describes.
+  and sound option words §3 describes. The `clock` copy retains only the
+  stored DWORD's low bit, with a failed read clearing bit 6. The `Clock`
+  command flips that bit and immediately invokes the common writer, which
+  serializes the resulting on/off value with the rest of the settings
+  ([07 R-CAM-01 §6]).
 
 #### The `shootme` option bit: writer census [R-KEYS-01 §4]
 
@@ -2569,7 +2573,7 @@ change the accepted bit.
 | `speechfx` | DWORD · 32-bit, bit 0 kept | bit set (1) | `[02 R-SND-01 §2]`, `[03 R-AUD-01 §3]` (unit voice audible gate) | Established (cited) |
 | `fxvol` | DWORD · 32-bit | 27 | `[03 R-AUD-01 §2]` (play gate ≠ 0; system wave mixer level `v << 10`) | Established (cited) |
 | `musicvol` | DWORD · 32-bit | 32 | `[03 R-AUD-01 §2]`, `[03 R-AUD-01 §4]` (CD auxiliary level `v << 10`) | Established (cited) |
-| `clock` | DWORD · 32-bit | bit clear (0) | `[02 §3]` (option-word bit 6, clock display) | Established |
+| `clock` | DWORD · 32-bit, bit 0 kept | bit clear (0) | `[02 §3]`, `[07 R-CAM-01 §6]` (persistent stand-alone clock display) | Established (cited) |
 | `NumSkirmishPlayers` | DWORD · 32-bit | 4 | `[07 §5]`, `[08 R-SKIR-01 §1]`, `[08 "Skirmish configuration"]` | Established (cited) |
 | `MultiCommanderDeath` | DWORD · 32-bit | 1 | `[08 R-SKIR-01 §4]` (multiplayer option word, by analogy with the skirmish loader) | Supported inference |
 | `MultiMapping` | DWORD · 32-bit | 1 | `[03 §3.1]` | Established (cited) |

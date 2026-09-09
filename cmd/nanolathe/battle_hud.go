@@ -39,7 +39,12 @@ type retailBattleHUD struct {
 
 	console *formats.FNT
 	guiFont *formats.FNT
-	pal     *palette.Tables
+	// primaryFont is the process UI FNT (`fonts/COMIX`). The stand-alone clock
+	// uses it after the ordinary message-column selector has run; the side
+	// console remains separately bound for the selector-inheritance edge
+	// [07 R-CAM-01 §6][07 R-HUD-03 §14.4].
+	primaryFont *formats.FNT
+	pal         *palette.Tables
 
 	panelTop    *formats.GAFFrame
 	panelSide   *formats.GAFFrame
@@ -243,6 +248,20 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	if err != nil {
 		return nil, hudAssetError(fs, logicalGUI, fmt.Sprintf("side %s GUI font %q [02 §6]", side.Name, side.FontGUI), err)
 	}
+	// COMIX is already a mandatory process resource for a frontend-backed
+	// battle. Direct-map entry skips that frontend preload, so bind the same
+	// authored FNT here rather than substituting a side font.
+	primaryFont := (*formats.FNT)(nil)
+	if shell != nil {
+		primaryFont = shell.font
+	}
+	if primaryFont == nil {
+		const logicalPrimary = "fonts/comix.fnt"
+		primaryFont, err = formats.LoadFNTFile(fs, logicalPrimary)
+		if err != nil {
+			return nil, hudAssetError(fs, logicalPrimary, "the primary COMIX FNT [03 R-FONT-01 §5]", err)
+		}
+	}
 	// Mandatory side intgaf [02 §6][07 §6].
 	logicalIntGAF := "anims/" + strings.ToLower(side.IntGAF) + ".gaf"
 	intGAF, err := formats.LoadGAFFile(fs, logicalIntGAF)
@@ -349,7 +368,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	var resultPanel *ui.Panel
 	h := &retailBattleHUD{
 		shell: shell, windowContext: windowContext, optionsRelabel: optionsRelabel,
-		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
+		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, primaryFont: primaryFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
 		optionsGAF: optionsGAF, optionsWin: optionsWin, talkWin: talkWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
@@ -858,6 +877,10 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// chrome, and before the in-battle menus that can cover it
 	// [07 R-HUD-04 §1].
 	h.drawScorePanel(c, b, cur)
+	// The persisted stand-alone clock is a late composer layer. It is distinct
+	// from the Space-held LIGHTBAR readout above and remains below every linked
+	// battle window [07 R-CAM-01 §6][07 R-HUD-04 §4].
+	h.drawClock(c, b, cur)
 	h.drawBattleMenu(c, b)
 	// The unit information screen is a child window over the battle
 	// [07 R-HUD-03 §8].

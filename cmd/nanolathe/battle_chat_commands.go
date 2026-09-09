@@ -144,6 +144,15 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		}
 	case "gamma":
 		b.setGammaCommand(localCommandInt(words, 1))
+	case "clock":
+		value := !b.clockShown()
+		b.clockVisible = value
+		if b.shell != nil {
+			b.shell.clockVisible = value
+			b.shell.saveSettings()
+		} else {
+			b.saveDirectChatSetting(func(s *settings.Settings) { s.Clock = boolInt(value) })
+		}
 	case "sound3d":
 		audio.ToggleOutput3D()
 		if b.shell != nil {

@@ -1316,6 +1316,7 @@ as local chat. The implemented handlers are:
 | `IFace n` | store and persist the integer interface type |
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
 | `Gamma n` | apply the command factor to the shared output palette and persist the signed integer; startup and slider callbacks use their distinct factor conversion |
+| `Clock` | toggle and persist the stand-alone battle-clock bit; draw the committed unsigned tick in the late HUD layer |
 | `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `CDPlay n`, `CDStop` | use the existing music controller; argument zero runs its enabled music tick |
@@ -1340,6 +1341,15 @@ owner; that existing timing approximation stays marked at the readout site
 The retained classic and native model-cache keys include the published team
 selector, so a committed player-logo change rebuilds cached LOGOS pixels or
 faces on the next presentation frame `[03 R-RAST-01 §3]` `[I6]`.
+
+The stand-alone clock is presentation state owned by `battleSession`, with the
+frontend shell retaining the persisted bit between battles. Its HUD helper
+reads only the committed frame tick, formats cumulative hours at 30 Hz, and
+draws at the fixed late-composer origin before linked battle windows. It is
+independent of the Space-held `LIGHTBAR` strip. The HUD binds COMIX alongside
+the side console FNT because the retail draw site inherits COMIX after a live
+message-column pass and inherits the side console when `textlines` is zero
+`[07 R-CAM-01 §6]` `[07 R-HUD-03 §14.4]` `[I6]`.
 
 These commands are partial I10. Shell and direct-map entry use the same live
 display bits, including the persisted low bit that selects dithered fog; a

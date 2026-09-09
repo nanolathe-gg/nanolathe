@@ -471,6 +471,35 @@ controller kind is `1..3` and its side byte is not `10`.
 | `BPS` | toggle the bytes-per-second display dword |
 | `SFX` | toggle the sound-effects debug byte |
 
+**Established fact — `Clock` persistence and stand-alone painter.** The
+command ignores extra words, flips only bit 6 of the session option word and
+immediately invokes the common settings writer. Startup reads the `clock`
+DWORD with a missing-value default of zero and copies only its low bit into
+that option bit. No battle-entry reset, session-kind gate or battle-save field
+intervenes, so this is a persistent presentation preference shared by campaign
+and skirmish battles.
+
+The master battle composer tests only that option bit and redraws the clock on
+every composed host frame. It reads the unsigned 32-bit global tick and forms
+`hours = tick / 108000`, `minutes = (tick % 108000) / 1800`, and
+`seconds = (tick % 1800) / 30`; hours are cumulative and do not wrap. The
+translated `Game Time` key is formatted as `%s : %02d:%02d:%02d` and drawn
+without backing art at absolute `x = 130`, `y = screenHeight - 34 - fontHeight`,
+in `dcb[15]`, with the current skip colour, no outline and no control-width
+limit. The painter runs after the bottom slide strip and the optional developer
+rate overlay, and before the network indicator and linked GUI-window painter;
+those later windows may cover it.
+
+The FNT is the stateful current selection at that point. With a nonzero
+`textlines` value, the earlier message-column pass has selected the primary
+`fonts/COMIX` FNT even when the ring is empty. When that value is zero the pass
+returns before selecting a font, so the clock inherits the local side's
+console FNT (unless an enabled developer overlay has selected COMIX in
+between). This painter is independent of §6's Space-held bottom strip: that
+other clock is written in GAF slot 1 over `LIGHTBAR`, at the clip-relative
+strip coordinates, and only while the slide offset is nonzero. Both may draw
+in the same frame.
+
 **Established fact — `Sound3D` device state and settings.** The command reads
 the audio device's live 3-D flag, flips that flag, and then invokes the common
 settings write-all. It does not change the separate packed `SoundMode` setup

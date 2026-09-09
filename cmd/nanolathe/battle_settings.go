@@ -43,6 +43,34 @@ func (b *battleSession) applySwitchAltSetting(s settings.Settings) {
 	b.switchAlt = s.SwitchAltEnabled()
 }
 
+// applyClockSetting installs the persistent stand-alone clock bit and the
+// active-FNT condition at battle entry. The retail composer selects COMIX
+// through the message-column pass when textlines is nonzero; with that pass
+// disabled the clock inherits the side console FNT [07 R-CAM-01 §6]
+// [07 R-HUD-03 §14.4].
+func (b *battleSession) applyClockSetting(s settings.Settings) {
+	if b == nil {
+		return
+	}
+	if b.shell != nil {
+		b.clockVisible = b.shell.clockVisible
+		b.clockUsePrimaryFont = b.shell.messages.TextLines != 0
+		return
+	}
+	b.clockVisible = s.ClockEnabled()
+	b.clockUsePrimaryFont = s.Messages.TextLines != 0
+}
+
+func (b *battleSession) clockShown() bool {
+	if b == nil {
+		return false
+	}
+	if b.shell != nil {
+		return b.shell.clockVisible
+	}
+	return b.clockVisible
+}
+
 // applyInterfaceTypeSetting installs the direct-entry LEFTCLICK stage once at
 // battle setup. A frontend-backed battle keeps the shell as the live owner, so
 // interfaceTypeRightClick reads that in-memory value on each pointer event;

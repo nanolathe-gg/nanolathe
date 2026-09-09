@@ -110,6 +110,9 @@ const (
 	// DefaultInterfaceType is the absent-value default of `Interface Type`
 	// [07 R-CAM-01 §5].
 	DefaultInterfaceType = 0
+	// DefaultClock is the absent-value default of `clock`. The loader keeps
+	// only the stored DWORD's low bit [02 "Settings"][07 R-CAM-01 §6].
+	DefaultClock = 0
 	// DefaultSwitchAlt is the absent-value default of `SwitchAlt`. The reader
 	// keeps only bit 0 [07 R-CAM-01 §4].
 	DefaultSwitchAlt = 0
@@ -331,6 +334,10 @@ type Settings struct {
 	// plain digits to build pages, set maps Alt+digits to build pages
 	// [07 R-CAM-01 §4].
 	SwitchAlt int `json:"switchAlt"`
+	// Clock is the persisted stand-alone battle-clock switch. Only bit 0 is
+	// retained and the `Clock` chat command rewrites it immediately
+	// [02 "Settings"][07 R-CAM-01 §6].
+	Clock int `json:"clock"`
 	// Messages is the message-column ring configuration: `textlines`,
 	// `textscroll`, `screenchat` and `unitchattext` [02 §3][07 R-FE-01 §11].
 	Messages Messages `json:"messages"`
@@ -463,6 +470,9 @@ func (s Settings) DamageBarsEnabled() bool { return s.DamageBars&InterfaceFlagDa
 // SwitchAltEnabled reports the persisted digit-key mux bit.
 func (s Settings) SwitchAltEnabled() bool { return s.SwitchAlt&1 != 0 }
 
+// ClockEnabled reports the persisted stand-alone battle-clock bit.
+func (s Settings) ClockEnabled() bool { return s.Clock&1 != 0 }
+
 // SetDamageBarsEnabled writes the bit back into the stored value.
 func (s *Settings) SetDamageBarsEnabled(on bool) {
 	if on {
@@ -496,7 +506,7 @@ func StoreDamageBars(on bool) error {
 // elevation ignored — so a loader may not treat a zero as an absent value.
 func Defaults() Settings {
 	s := Settings{Version: FileVersion, Difficulty: DefaultDifficulty, ScrollSpeed: DefaultScrollSpeed, DamageBars: DefaultDamageBars, UnitLimit: DefaultUnitLimit,
-		GameSpeed: DefaultGameSpeed, InterfaceType: DefaultInterfaceType, SwitchAlt: DefaultSwitchAlt}
+		GameSpeed: DefaultGameSpeed, InterfaceType: DefaultInterfaceType, SwitchAlt: DefaultSwitchAlt, Clock: DefaultClock}
 	s.Display = DefaultDisplay()
 	s.Audio = DefaultAudio()
 	s.Messages = DefaultMessages()
@@ -592,6 +602,9 @@ func (s *Settings) Normalize() {
 	// Its only consumer reads bit 0 [07 R-CAM-01 §4]. Keep the stored
 	// representation semantic too.
 	s.SwitchAlt &= 1
+	// The `clock` DWORD likewise supplies only one option bit [02 "Settings"]
+	// [07 R-CAM-01 §6].
+	s.Clock &= 1
 	s.Display.Normalize()
 	s.Audio.Normalize()
 	s.Messages.Normalize()

@@ -62,6 +62,7 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.gameSpeed = s.GameSpeed
 	g.interfaceType = s.InterfaceType
 	g.switchAlt = s.SwitchAltEnabled()
+	g.clockVisible = s.ClockEnabled()
 	// The configured per-player unit limit rides on the setup record into
 	// battle entry, where it sizes the unit pool [05 R-SHARE-01 §7]. No
 	// screen edits it: retail reads it from the profile file, and the
@@ -169,6 +170,7 @@ func (g *gameShell) captureSettings() settings.Settings {
 		GameSpeed:     g.gameSpeed,
 		InterfaceType: g.interfaceType,
 		SwitchAlt:     boolInt(g.switchAlt),
+		Clock:         boolInt(g.clockVisible),
 	}
 	s.Skirmish = settings.Skirmish{
 		Map:            g.setup.MapName,

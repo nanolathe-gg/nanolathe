@@ -140,6 +140,14 @@ type battleSession struct {
 	// presentation input state only; routeDigit reads this cached bit rather
 	// than opening the settings file on a keypress [07 R-CAM-01 §4][I6].
 	switchAlt bool
+	// clockVisible is the presentation-only stand-alone clock switch. A shell
+	// mirrors the persisted process setting; a direct battle keeps its loaded
+	// copy here [07 R-CAM-01 §6][I6].
+	clockVisible bool
+	// clockUsePrimaryFont records the stateful FNT selection at the retail
+	// clock draw site for a direct battle. A shell-backed battle reads its live
+	// text-line setting because MAXLINES may change it while battle is running.
+	clockUsePrimaryFont bool
 
 	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
 	// frontend-backed battle reads the shell's live copy instead, so an
@@ -505,6 +513,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// value into a new battle. A direct --map battle has no shell, so its one
 	// install-time settings read supplies the same bit.
 	b.applySwitchAltSetting(s)
+	b.applyClockSetting(s)
 	b.applyInterfaceTypeSetting(s)
 	// `textlines`/`textscroll` configure the message ring and `screenchat`
 	// sets its class filter; retail's startup loader installs these the same
