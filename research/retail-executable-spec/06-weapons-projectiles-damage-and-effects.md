@@ -2664,6 +2664,15 @@ that block — and **two draws per hit attempt**, including a hit attempt that
 then fails on a full pool. Meteors consume zero simulation-stream draws
 `[R-WPN-01 §6]`.
 
+**Established fact:** The local `Meteor` command has two forms. With an
+argument it only writes the scheduler's enable word from the parsed integer's
+zero/nonzero value; it does not stop or otherwise change a storm already in
+progress. Without an argument it enters the ordinary storm-start body
+immediately: active becomes one, the end, next-start and first-hit deadlines
+are anchored to the current tick, and the four target/origin draws are taken.
+This forced form does not consult the enable word. The ordinary scheduled start
+still clears active after those four draws when the enable word is zero.
+
 **Established fact:** A pool-full spawn silently drops the individual meteor: the
 strike timer has already advanced and there is no retry. Spawn-side common
 initialization takes the null-shooter path, giving meteors the neutral side

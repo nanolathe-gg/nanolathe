@@ -1328,6 +1328,7 @@ as local chat. The implemented handlers are:
 | `LOSType` | enqueue the terrain-ray visibility toggle in either single-player mode, without a settings write |
 | `DoubleShot`, `HalfShot` | skirmish only; enqueue independent damage gates, applying signed doubling before halving in the existing weapon pipeline; no settings write |
 | `Radar` | skirmish only; toggle the battle-local full-radar bit for unit contacts; no settings write |
+| `Meteor [n]` | skirmish only; no argument queues a forced storm arm through the existing scheduler owner, while an explicit argument only sets its enable bit from `n != 0`; no settings write |
 
 The resource strip retains its existing 30-tick rate latch across `View`.
 The retail viewing-player display deadline is not yet a live presentation

@@ -236,6 +236,42 @@ func TestMeteorSchedulerDueAndHitBoundaries(t *testing.T) {
 	})
 }
 
+func TestHumanMeteorCommandForceArmsAndArgumentOnlySetsEnabled(t *testing.T) {
+	terrain := &world.Terrain{CellW: 64, CellH: 48}
+	s := &Session{World: terrain, Meteor: MeteorState{
+		Initialized: true, DurationTicks: 5, IntervalTicks: 20,
+	}}
+	s.SeedSessionRNG(1, 2)
+
+	wantCRT := rng.NewCRT(2)
+	wantX, wantZ, wantOriginX, wantOriginZ := combat.MeteorSchedule(&wantCRT, terrain.CellW, terrain.CellH)
+	s.applyHumanCommand(HumanCommand{Kind: HumanMeteor}, 10)
+	if s.Meteor.Enabled || !s.Meteor.Active {
+		t.Fatalf("forced disabled storm enabled/active = %t/%t, want false/true", s.Meteor.Enabled, s.Meteor.Active)
+	}
+	if s.Meteor.StrikeEnds != 15 || s.Meteor.NextStrike != 35 || s.Meteor.NextHit != 10 {
+		t.Fatalf("forced storm deadlines = %d/%d/%d, want 15/35/10", s.Meteor.StrikeEnds, s.Meteor.NextStrike, s.Meteor.NextHit)
+	}
+	if s.Meteor.TargetX != wantX || s.Meteor.TargetZ != wantZ || s.Meteor.OriginX != wantOriginX || s.Meteor.OriginZ != wantOriginZ {
+		t.Fatalf("forced storm geometry = target(%d,%d) origin(%d,%d), want target(%d,%d) origin(%d,%d)", s.Meteor.TargetX, s.Meteor.TargetZ, s.Meteor.OriginX, s.Meteor.OriginZ, wantX, wantZ, wantOriginX, wantOriginZ)
+	}
+	if got := s.CrtRNG().Draws(); got != 4 {
+		t.Fatalf("forced storm draws = %d, want 4", got)
+	}
+
+	armed := s.Meteor
+	s.applyHumanCommand(HumanCommand{Kind: HumanMeteor, Meteor: HumanMeteorCommand{ArgumentPresent: true, Enabled: true}}, 11)
+	wantEnabled := armed
+	wantEnabled.Enabled = true
+	if s.Meteor != wantEnabled || s.CrtRNG().Draws() != 4 {
+		t.Fatalf("enable form changed storm state or RNG: got %+v draws %d, want %+v draws 4", s.Meteor, s.CrtRNG().Draws(), wantEnabled)
+	}
+	s.applyHumanCommand(HumanCommand{Kind: HumanMeteor, Meteor: HumanMeteorCommand{ArgumentPresent: true}}, 12)
+	if s.Meteor != armed || s.CrtRNG().Draws() != 4 {
+		t.Fatalf("disable form changed storm state or RNG: got %+v draws %d, want %+v draws 4", s.Meteor, s.CrtRNG().Draws(), armed)
+	}
+}
+
 // TestMeteorWithoutTerrainDoesNotSchedule verifies that the scheduler has no
 // map-independent geometry source. An invalid session therefore leaves the
 // meteor state and CRT stream untouched rather than substituting dimensions.
