@@ -10,22 +10,7 @@ import (
 // Button captions use a single-line pen. The stage-count bit moves the pen;
 // pointer capture and the current down word do not [03 R-FONT-01 §6].
 func (g *gameShell) drawRetailButtonCaption(c *client.Client, p *ui.Panel, index int, gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT, measure func(string) int, metric int) {
-	s := boolInt(gad.Stages != 0)
-	right, bottom := int(r.X+r.W-1), int(r.Y+r.H-1)
-	x := int(r.X) + (right-measure(text)-int(r.X))/2 + s + 1
-	y := retailTextPenY(gad, r, metric)
-	build, centred := false, false
-	switch {
-	case gad.Attribs&1 != 0:
-		x = int(r.X) + 3 + s
-	case gad.Attribs&4 != 0:
-		x = max(int(r.X), right-3-measure(text))
-	case gad.Attribs&2 != 0:
-		centred = true
-	case gad.Attribs&0x20 != 0:
-		build = true
-		y = bottom - 4 - metric + s
-	}
+	x, y, build, centred := retailButtonCaptionPen(gad, r, measure(text), metric)
 	color, shade := g.retailTextPen(p, index, gad)
 	draw := func(run string, px int, color byte) {
 		g.drawRetailStringSelected(c, run, px, y, int(r.W), color, shade, selected)

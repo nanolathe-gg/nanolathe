@@ -21,9 +21,13 @@ import (
 type BenchmarkOptions struct {
 	Directory, Renderer string
 	Frames              int
-	// TPS is the draw rate; one simulation step still runs per draw. 30 is the
-	// retail cadence, 60 the enhanced presentation target (a cadence at 60
-	// is only reachable when CPU and GPU both finish inside 16.7 ms).
+	// TPS is the draw rate. At 30 and 60 one simulation step runs per draw; 30
+	// is the retail cadence and 60 an intermediate presentation target (a
+	// cadence at 60 is only reachable when CPU and GPU both finish inside
+	// 16.7 ms). At 120 the benchmark runs one authoritative step every fourth
+	// draw and presents the four frames at fractions 0, ¼, ½ and ¾, so the
+	// report measures the interpolated presentation
+	// (docs/DESIGN_GPU_RENDERER.md §13.5).
 	TPS      int
 	Metadata map[string]any
 }
@@ -48,6 +52,23 @@ type battleBenchmark struct {
 	last          time.Time
 	cpu           *os.File
 	mem           runtime.MemStats
+}
+
+// benchmarkInterpolatedTPS is the draw rate at which the benchmark measures the
+// interpolated presentation, and benchmarkStepEvery is how many draws share one
+// authoritative step there (§13.5).
+const (
+	benchmarkInterpolatedTPS = 120
+	benchmarkStepEvery       = benchmarkInterpolatedTPS / 30
+)
+
+// tickPhase reports this draw's position in the four-draw group and whether the
+// run is the interpolated one. At 30 and 60 every draw steps, as before.
+func (g *battleBenchmark) tickPhase() (int, bool) {
+	if g.options.TPS != benchmarkInterpolatedTPS {
+		return 0, false
+	}
+	return g.frame % benchmarkStepEvery, true
 }
 
 func benchmarkMS(start time.Time) float64             { return float64(time.Since(start)) / 1e6 }
@@ -128,8 +149,21 @@ func (g *battleBenchmark) Draw(screen *ebiten.Image) {
 		return
 	}
 	start := time.Now()
-	g.step()
-	step := benchmarkMS(start)
+	step := 0.0
+	if phase, interpolated := g.tickPhase(); !interpolated {
+		g.step()
+		step = benchmarkMS(start)
+	} else {
+		// One authoritative step every fourth draw, then the four presented
+		// frames at fractions 0, ¼, ½ and ¾ (§13.5). The fraction stands in for
+		// the clock's carry, which the benchmark's stepped millisecond source
+		// does not produce.
+		if phase == 0 {
+			g.step()
+			step = benchmarkMS(start)
+		}
+		g.c.SetTickFraction(float32(phase) / float32(benchmarkStepEvery))
+	}
 	now := time.Now()
 	cadence := 0.0
 	if !g.last.IsZero() {
@@ -166,6 +200,11 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 	g := &battleBenchmark{c: c, step: step, census: census, options: options, rows: make([]benchmarkRow, 0, options.Frames)}
 	if options.Renderer == "modern" {
 		g.gpu = gpurender.New(c.PaletteTables(), 1920, 1080)
+		// Only the Enhanced executor blends; the classic rows keep
+		// committed-tick sampling at every draw rate (§13.5) [I6].
+		if options.TPS == benchmarkInterpolatedTPS {
+			c.SetInterpolation(true)
+		}
 	} else {
 		g.img = ebiten.NewImage(1920, 1080)
 	}

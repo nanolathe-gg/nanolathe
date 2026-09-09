@@ -109,10 +109,10 @@ func (c *Client) featureEventFrame(filename, sequence string, visit int32) *form
 	return info.frames[len(info.frames)-1].art
 }
 
-// WarmFeatureSequences decodes every feature definition's event sequences ahead
-// of the battle, so no frame of the feature DRAW pass ever waits on a load. It
-// is called once from the shell; the catalog map is walked in sorted key order
-// so a warm pass is reproducible.
+// WarmFeatureSequences decodes every feature definition's event sequences and
+// their shadow twins ahead of the battle, so no frame of the feature DRAW pass
+// ever waits on a load. It is called once from the shell; the catalog map is
+// walked in sorted key order so a warm pass is reproducible.
 func (c *Client) WarmFeatureSequences(defs map[string]*content.FeatureDef) {
 	if c == nil || defs == nil {
 		return
@@ -127,10 +127,13 @@ func (c *Client) WarmFeatureSequences(defs map[string]*content.FeatureDef) {
 		if def == nil || def.Filename == "" {
 			continue
 		}
-		// Only the three EVENT sequences: those are what the feature phase
-		// reads. The rest sequence stays on the draw path's own lazy load,
+		// Event bodies and their shadow twins are drawn from an attached
+		// runtime record. Rest art stays on the draw path's own lazy load,
 		// which keeps this pass off every GAF that holds nothing but idle art.
-		for _, seq := range [...]string{def.SeqNameBurn, def.SeqNameDie, def.SeqNameReclamate} {
+		for _, seq := range [...]string{
+			def.SeqNameBurn, def.SeqNameDie, def.SeqNameReclamate,
+			def.SeqNameBurnShad, def.SeqNameDieShad, def.SeqNameReclamateShad,
+		} {
 			if seq != "" {
 				c.featureSequenceInfo(def.Filename, seq)
 			}

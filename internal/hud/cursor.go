@@ -52,6 +52,11 @@ type CursorSelection struct {
 	Viewer uint8
 	Units  []*units.Unit
 
+	// InterfaceType chooses the idle-latch column of the cursor table. Zero is
+	// Type 0 (Left Click), preserving existing callers; Type 1 (Right Click)
+	// supplies only the relationship-coloured idle row [07 R-CAM-01 §5][07 §8].
+	InterfaceType InterfaceType
+
 	// Hostile routes side tests through the same diplomacy predicate the order
 	// resolver uses, so the cursor and the order cannot disagree [04 §3.4].
 	Hostile func(actor, target *units.Unit) bool
@@ -61,6 +66,16 @@ type CursorSelection struct {
 	// covered [07 §8][05 "Weapon per-shot cost"].
 	Metal, Energy float32
 }
+
+// InterfaceType is the cursor chooser's small, presentation-only view of the
+// persisted Interface Type setting. It deliberately does not import settings:
+// hud receives an already-owned preference value from the battle shell.
+type InterfaceType uint8
+
+const (
+	InterfaceTypeLeftClick InterfaceType = iota
+	InterfaceTypeRightClick
+)
 
 // ChooseCursor returns the cursor index for one pointer update [07 §8].
 //
@@ -173,6 +188,9 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 
 	switch latch {
 	case input.LatchNormal:
+		if sel.InterfaceType == InterfaceTypeRightClick {
+			return typeOneIdleCursor(u, h, sel, hostile)
+		}
 		return contextualCursor(u, h, sel, hostile, allied)
 
 	case input.LatchMove:
@@ -286,6 +304,27 @@ func cursorForActor(latch input.Latch, u *units.Unit, h CursorHover, sel CursorS
 			return render.CursorNormal
 		}
 		return render.CursorFindSite
+	}
+	return render.CursorNormal
+}
+
+// typeOneIdleCursor is the Type-1 idle-latch column. Its unit-target rows are
+// relationship colours rather than action previews: they do not consult
+// canmove, attack, reclaim, or assistance capability. Its separate
+// feature-only row does test resurrect/reclaim capability [07 R-CAM-01 §5]
+// [07 §8].
+func typeOneIdleCursor(u *units.Unit, h CursorHover, sel CursorSelection, hostile bool) int {
+	if isInspectable(h.Target, sel.Viewer) {
+		return render.CursorSelect
+	}
+	if h.Target != nil {
+		if hostile {
+			return render.CursorRed
+		}
+		return render.CursorGrn
+	}
+	if reclaimableFeature(h) && (u.Def.CanResurrect || u.Def.CanReclamate) {
+		return render.CursorGrn
 	}
 	return render.CursorNormal
 }

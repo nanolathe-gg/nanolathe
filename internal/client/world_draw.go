@@ -697,24 +697,24 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		return
 	}
 	var shadowFrame *formats.GAFFrame
-	if c.featureShadows {
+	if c.featureShadows && (!f.RuntimeLive || f.ShadowEnabled) && (!f.RuntimeLive || f.EventSeqName != "") {
 		shadowFrame = c.featureFrameFor(*f, true)
 	}
-	normalFrame := c.featureFrameFor(*f, false)
+	var normalFrame *formats.GAFFrame
+	if !f.RuntimeLive || f.EventSeqName != "" {
+		normalFrame = c.featureFrameFor(*f, false)
+	}
 	// Record the shadow then the normal frame through the committed-frame draw
 	// list, in the same order the direct blits ran. drawFeature subtracts the
 	// frame's XOffset/YOffset here, so the recorded X/Y are the final top-left
 	// (not the anchored path); the sink selects the keyed or ALP-tinted primitive
 	// without changing that geometry [03 R-RAST-01 §6][03 §5.3.1].
 	if shadowFrame != nil {
-		// A live event record's cursor uses the opaque primitive. The authored
+		// Runtime sprite cursors use the opaque primitive. The authored
 		// shadtrans selector applies to the static definition cursor only
-		// [03 R-RAST-01 §6][03 §5.3.1].
-		// TODO(EC-P5): publish the runtime feature-shadow enable/live state so a
-		// live instance with no current event cursor can be distinguished from
-		// the static definition path; EventSeqName is the only established live
-		// cursor signal currently available here.
-		shadowTrans := f.ShadTrans && f.EventSeqName == ""
+		// [03 R-RAST-01 §6][03 §5.3.1]. RuntimeLive is a record bit, not a
+		// proxy based on EventSeqName.
+		shadowTrans := f.ShadTrans && !f.RuntimeLive
 		c.emitSprite(drawlist.Sprite{
 			Frame: shadowFrame,
 			X:     sx - int32(shadowFrame.XOffset),
@@ -727,7 +727,7 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		// A live event cursor is opaque for both its shadow and body. The authored
 		// animtrans selector applies only to the static definition cursor
 		// [03 R-RAST-01 §6].
-		normalTrans := f.AnimTrans && f.EventSeqName == ""
+		normalTrans := f.AnimTrans && !f.RuntimeLive
 		c.emitSprite(drawlist.Sprite{
 			Frame: normalFrame,
 			X:     sx - int32(normalFrame.XOffset),

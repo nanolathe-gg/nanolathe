@@ -13,7 +13,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
-	"github.com/nanolathe/nanolathe/internal/input"
 )
 
 func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *frame.Frame) {
@@ -36,11 +35,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 		// Fixed in authored coordinates: the §6 slide moves no rail window and
 		// no gadget rectangle [07 R-HUD-05] (WU-19-223).
 		r := window.PlacedRect(i)
-		pressed := false
-		if c.Input() != nil && c.Input().Mouse != nil {
-			mouse, _ := c.Input().PointerSample()
-			pressed = mouse.Held(input.MouseButtonLeft) && guiRectContains(r, int32(mouse.X), int32(mouse.Y))
-		}
+		down := h.sideButtonDown(b, window, i, gad)
 		command, isCommand := commandGadgetVerdict(gad, f, paged)
 		if isCommand && command.hidden {
 			// A hidden command button is one the switch deactivates outright —
@@ -48,17 +43,20 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			// An inactive gadget paints nothing [07 §3].
 			continue
 		}
-		grey := gad.GrayedOut != 0 || (isCommand && command.grey)
+		grey := gad.GrayedOut&1 != 0 || (isCommand && command.grey)
 		var frameArt *formats.GAFFrame
 		if isCommand {
-			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, pageGAF), gad, command.stage, grey, pressed)
+			frameArt = commandButtonFrame(h.gadgetArtEntry(gad, pageGAF), gad, command.stage, grey, down != 0)
 		} else {
-			frameArt = h.gadgetFrame(gad, pageGAF, pressed, grey)
+			frameArt = h.gadgetButtonFrame(gad, pageGAF, down, 0, grey)
 		}
 		if frameArt != nil {
 			// .GUI controls use the authored rectangle origin; unlike the PANEL
 			// shell, their GAF offsets are not applied [07 §4].
 			c.UIBlit(frameArt, int(r.X), int(r.Y))
+		} else if gad.Kind == gui.KindButton {
+			v := retailButtonVerdict(gad, 0, int(gad.ArtFrame), down, command.stage, grey)
+			drawGUIBevel(c, r, h.guiColor(v.top), h.guiColor(v.bot), h.guiColor(v.fill))
 		}
 		// A greyed button's rectangle goes through the rectangle shader after
 		// the frame blit, at level -20 — PALETTE.SHD darken row 12 — unless the
@@ -68,7 +66,7 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 		// (attribute 0x100) is excluded because it has its own greyed frame,
 		// frames-1, and §3 attaches the darken clause to the other three greyed
 		// sub-branches only [07 R-WGT-01 §3].
-		if frameArt != nil && grey && gad.Attribs&guiAttribCheckbox == 0 && !cycleButton(gad) {
+		if frameArt != nil && retailButtonVerdict(gad, 1, int(gad.ArtFrame), down, command.stage, grey).shade {
 			c.UIShadeRect(h.pal, int(r.X), int(r.Y), int(r.W), int(r.H), retailGreyedButtonShade)
 		}
 		// A command button never draws its caption: the painter reads the art
@@ -117,6 +115,22 @@ func (h *retailBattleHUD) drawSidePage(c *client.Client, b *battleSession, f *fr
 			}
 		}
 	}
+}
+
+// sideButtonDown reads the captured command-page gesture instead of sampling
+// whichever rectangle the live pointer happens to occupy. The battle input
+// owner installs HUDCaptured only on an admitted press and clears it on that
+// release, so dragging into a button can never create its down appearance
+// [07 R-WGT-01 §1][07 R-WGT-01 §3].
+func (h *retailBattleHUD) sideButtonDown(b *battleSession, window *gui.Window, index int, gad gui.Gadget) int {
+	if b == nil || b.battleState() == nil {
+		return int(gad.Status)
+	}
+	state := b.battleState().Input
+	if state.HUDCaptured && h.buttonAt(b, state.HUDPressX, state.HUDPressY) == index && window != nil && index >= 0 && index < len(window.Gadgets) && guiRectContains(window.PlacedRect(index), state.PointerX, state.PointerY) {
+		return 1
+	}
+	return int(gad.Status)
 }
 
 // productQueueCountLabel is the bit-0x04 format of the count-label writer
@@ -226,30 +240,8 @@ func stockpileCountLabel(f *frame.Frame) string {
 // bottom-centre of the button, not the vertically-centred left inset a
 // left-aligned button would use.
 func queueCountLabelPen(gad gui.Gadget, r gui.Rect, textWidth, metric int) (x, y int) {
-	s := 0
-	if gad.Stages != 0 {
-		s = 1
-	}
-	gx, gy, w, h := int(r.X), int(r.Y), int(r.W), int(r.H)
-	right := gx + w - 1
-	bottom := gy + h - 1
-	centredX := gx + (right-textWidth-gx)/2 + s + 1
-	switch {
-	case gad.Attribs&1 != 0: // left
-		return gx + 3 + s, gy + (h-1-metric)/2 + s
-	case gad.Attribs&4 != 0: // right
-		x := right - 3 - textWidth
-		if x < gx {
-			x = gx
-		}
-		return x, gy + (h-1-metric)/2 + s
-	case gad.Attribs&2 != 0: // centre
-		return centredX, gy + (h-1-metric)/2 + s
-	case gad.Attribs&0x20 != 0: // build-attribute variant
-		return centredX, bottom - 4 - metric + s
-	default:
-		return gx + 3 + s, gy + (h-1-metric)/2 + s
-	}
+	x, y, _, _ = retailButtonCaptionPen(gad, r, textWidth, metric)
+	return x, y
 }
 
 // productButtonCaptionLayout picks the family and pen the retail button
@@ -304,7 +296,7 @@ func (h *retailBattleHUD) productButtonCaptionLayout(gad gui.Gadget, r gui.Rect,
 // draws with, nil when a GAF font is in the slot or no FNT is available.
 func (h *retailBattleHUD) productButtonCaptionLayoutSelected(gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT) (x, y int, font *formats.GAFEntry, fallback *formats.FNT) {
 	if font = h.buttonCaptionGAFFont(); font != nil {
-		x, y = queueCountLabelPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
+		x, y, _, _ = retailButtonCaptionPen(gad, r, retailGAFTextWidth(font, text), retailGAFTextHeight(font))
 		return x, y, font, nil
 	}
 	fallback = selected
@@ -314,7 +306,7 @@ func (h *retailBattleHUD) productButtonCaptionLayoutSelected(gad gui.Gadget, r g
 	if fallback == nil {
 		return 0, 0, nil, nil
 	}
-	x, y = queueCountLabelPen(gad, r, client.MeasureText(fallback, text), int(fallback.Height))
+	x, y, _, _ = retailButtonCaptionPen(gad, r, client.MeasureText(fallback, text), int(fallback.Height))
 	return x, y, nil, fallback
 }
 
@@ -573,38 +565,16 @@ func commandButtonFrame(entry *formats.GAFEntry, gad gui.Gadget, stage int, grey
 	if entry == nil || len(entry.Frames) == 0 {
 		return nil
 	}
-	last := len(entry.Frames) - 1
-	cycle := cycleButton(gad)
-	// The frame base of a named-art gadget is frame 0, and the authored
-	// `status` is the down-state word that sits on top of it. A press sets the
-	// down-state to 1 while the button is captured, except on a cycle button.
-	const base = 0
+	if cycleButton(gad) && !grey {
+		// Command-page cycle state is supplied by the committed aggregate, not
+		// the generic gadget's down word. It retains that state while captured.
+		idx := max(0, min(stage, len(entry.Frames)-1))
+		return entry.Frames[idx].Frame
+	}
 	down := int(gad.Status)
-	if pressed && !cycle {
+	if pressed && !cycleButton(gad) {
 		down = 1
 	}
-	idx := 0
-	switch {
-	case grey && cycle:
-		idx = last
-	case grey:
-		idx = base + min(stage+down+2, last)
-	case cycle:
-		idx = base + stage
-	case gad.Stages != 0 && down != 0:
-		idx = last - 1
-	case down != 0:
-		idx = base + down
-	default:
-		idx = base + stage
-	}
-	// Authored art shorter than the frame the table asks for is a bounds guard,
-	// not a retail behavior: an out-of-range index would panic here [I11].
-	if idx < 0 {
-		idx = 0
-	}
-	if idx > last {
-		idx = last
-	}
-	return entry.Frames[idx].Frame
+	frame, _ := retailButtonFrameFromEntry(entry, gad, 0, down, stage, grey)
+	return frame
 }

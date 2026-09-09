@@ -138,9 +138,19 @@ func DrawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x
 // helper shape used by the text tests; retail GUI callers pass nil because
 // glyph colors are already active palette indices.
 func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, onWrite func(int)) { // [02 §7][03 §7.1][07 §7]
+	drawTextClipped(frame, width, height, fnt, text, x, y, maxWidth, color, 0, 0, width, height, onWrite)
+}
+
+// drawTextClipped retains drawText's layout and truncation, then confines its
+// pixel writes to one private GUI surface rectangle [03 R-FONT-01 §3].
+func drawTextClipped(frame []uint8, width, height int, fnt *formats.FNT, text string, x, y, maxWidth int, color byte, clipX, clipY, clipW, clipH int, onWrite func(int)) {
 	if len(frame) < width*height || fnt == nil || width <= 0 || height <= 0 || len(text) == 0 {
 		return
 	}
+	if clipW <= 0 || clipH <= 0 {
+		return
+	}
+	clipRight, clipBottom := clipX+clipW, clipY+clipH
 	if maxWidth > 0 {
 		text = TruncateToWidth(fnt, text, maxWidth)
 		if len(text) == 0 {
@@ -163,7 +173,7 @@ func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x
 		// Clip per pixel against the indexed framebuffer.
 		for gy := 0; gy < int(g.Height); gy++ {
 			dy := top + gy
-			if dy < 0 || dy >= height {
+			if dy < 0 || dy >= height || dy < clipY || dy >= clipBottom {
 				continue
 			}
 			rowBase := dy * width
@@ -172,7 +182,7 @@ func drawText(frame []uint8, width, height int, fnt *formats.FNT, text string, x
 					continue
 				}
 				dx := curX + gx
-				if dx < 0 || dx >= width {
+				if dx < 0 || dx >= width || dx < clipX || dx >= clipRight {
 					continue
 				}
 				index := rowBase + dx

@@ -469,20 +469,12 @@ func (g *gameShell) writeBattleSave(path, description string) error {
 // the ResultAction vocabulary, so the name is what the post-battle owner needs
 // [08 R-CAMP-01 §8] [07 §3] [07 §11].
 func (h *retailBattleHUD) resultControlName(in *input.State) (string, bool) {
-	if h == nil || h.resultPanel == nil || in == nil || in.Mouse == nil {
+	if h == nil || h.resultPanel == nil || h.resultPanel.Window == nil || in == nil {
 		return "", false
 	}
-	mouse, _ := publishedPointer(in)
-	mx, my := int32(mouse.X), int32(mouse.Y)
-	if mouse.Pressed(input.MouseButtonLeft) {
-		h.resultPanel.Press(mx, my)
-	}
-	if !mouse.Released(input.MouseButtonLeft) {
+	result := h.serviceBattleResultPanel(in)
+	if !result.Fired || result.FiredIndex < 0 || result.FiredIndex >= len(h.resultPanel.Window.Gadgets) {
 		return "", false
 	}
-	action := h.resultPanel.ReleaseAction(mx, my)
-	if action.Kind != ui.ActionActivate {
-		return "", false
-	}
-	return action.Gadget, true
+	return h.resultPanel.Window.Gadgets[result.FiredIndex].Name, true
 }

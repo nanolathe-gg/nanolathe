@@ -153,6 +153,8 @@ func TestFeatureStaticAndLiveEventRasterSelection(t *testing.T) {
 	liveShadow := featureRasterView()
 	liveShadow.EventSeqName = "transparent-body"
 	liveShadow.EventSeqNameShad = "event-shadow"
+	liveShadow.RuntimeLive = true
+	liveShadow.ShadowEnabled = true
 	liveShadow.ShadTrans = true
 	c.drawFeature(&liveShadow)
 	c.replayForTest()
@@ -164,6 +166,7 @@ func TestFeatureStaticAndLiveEventRasterSelection(t *testing.T) {
 	liveBody := featureRasterView()
 	liveBody.SeqNameShad = ""
 	liveBody.EventSeqName = "event-body"
+	liveBody.RuntimeLive = true
 	liveBody.AnimTrans = true
 	c.drawFeature(&liveBody)
 	c.replayForTest()

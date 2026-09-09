@@ -337,11 +337,20 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 // The scene is one solid fill, then a fog command with one cell per kind: a
 // solid fill, a gray remap, a dithered checker, and a black-family fog GAF whose
 // authored offset makes it overhang into the next cell.
+//
+// Since §13.3 the pass composes in colour over its own read copy: the dark fills
+// and the black frame resolve their index through PAL, and the gray remap is the
+// desaturation the GRAY TABLE was built from — the truncated channel average
+// [03 §4.3.3]. The fill therefore uses an index whose PAL entry is NOT grey, so
+// the desaturation is visible: (30,60,90) averages to 60.
 func checkFogDevicePixels() error {
 	pal := fixturePalette()
-	for i := 0; i < 256; i++ {
-		pal.Gray[i] = byte(255 - i)
-	}
+	const fillIndex = byte(100)
+	pal.Base[fillIndex] = [4]byte{30, 60, 90, 255}
+	fillColor := [3]float64{30, 60, 90}
+	grayColor := [3]float64{60, 60, 60}
+	darkColor := expandedIndex(&pal, render.FogDarkPaletteIndex)
+	blackFrameColor := expandedIndex(&pal, 3)
 	const w, h = 128, 64
 	r, err := NewChecked(&pal, w, h)
 	if err != nil {
@@ -367,7 +376,7 @@ func checkFogDevicePixels() error {
 
 	var list drawlist.List
 	list.RecordClear()
-	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: 100, Style: drawlist.FillSolid})
+	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: fillIndex, Style: drawlist.FillSolid})
 	list.RecordFog(drawlist.Fog{Ops: ops, Black: [4]*formats.GAFEntry{entry}})
 	list.RecordExpand()
 	img := r.Execute(&list, w, h)
@@ -379,16 +388,16 @@ func checkFogDevicePixels() error {
 	}
 	// Clear, fill and fog all land in one phase: the fills are opaque and the fog
 	// reads them, and a phase draws its opaque batch before its destination batch.
-	// That one phase costs three destination switches — the opaque batch into the
-	// composed surface, the read-surface copy, the destination batch back into the
-	// composite — and the expansion one more
-	// (docs/DESIGN_GPU_RENDERER.md §11.5).
+	// Since §13.3 that costs three destination switches and no more — the opaque
+	// batch into the composite, the fog run's read copy into the read surface, and
+	// the fog draw back into the composite. There is no expansion, and no other
+	// family takes a copy.
 	stats := r.ModelStats()
 	if stats.Phases != 1 {
 		return fmt.Errorf("fog fixture compiled %d phases, want 1", stats.Phases)
 	}
-	if stats.Passes != 4 {
-		return fmt.Errorf("fog fixture issued %d destination switches for %d phases, want 4",
+	if stats.Passes != 3 {
+		return fmt.Errorf("fog fixture issued %d destination switches for %d phases, want 3",
 			stats.Passes, stats.Phases)
 	}
 	pixels := make([]byte, w*h*4)
@@ -396,21 +405,26 @@ func checkFogDevicePixels() error {
 	parity := (int32(camX) + int32(camZ)) & 1
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			want := byte(100)
+			want := fillColor
 			switch {
 			case x < 32 && y < 32:
-				want = render.FogDarkPaletteIndex
+				want = darkColor
 			case x >= 32 && x < 64 && y < 32:
-				want = pal.Gray[100]
+				want = grayColor
 			case x >= 64 && x < 96 && y < 32:
 				if (int32(x)+int32(y)+parity)&1 == 1 {
-					want = render.FogDarkPaletteIndex
+					want = darkColor
 				}
 			case x >= 16 && x < 32 && y >= 32 && y < 48:
-				want = 3 // the overhanging black-family frame
+				want = blackFrameColor // the overhanging black-family frame
 			}
-			if got := pixels[(y*w+x)*4]; got != want {
-				return fmt.Errorf("fog device pixel (%d,%d): index %d, want %d", x, y, got, want)
+			// Every fog value is a colour the pass writes outright, not a blend, so
+			// §13.4's exactness rule applies to the whole surface.
+			at := (y*w + x) * 4
+			got := [3]float64{float64(pixels[at]), float64(pixels[at+1]), float64(pixels[at+2])}
+			if got != want || pixels[at+3] != 255 {
+				return fmt.Errorf("fog device pixel (%d,%d): RGBA %v, want %v with alpha 255",
+					x, y, pixels[at:at+4], want)
 			}
 		}
 	}

@@ -177,6 +177,19 @@ func (r *Renderer) fntAtlasFor(fnt *formats.FNT) *fntAtlas {
 	return a
 }
 
+// glyphClipBounds returns the pixel boundary used by the text executor. A
+// Glyphs record owns this boundary so deferred replay cannot borrow a later UI
+// surface's clip.
+func glyphClipBounds(g drawlist.Glyphs, width, height int) (x0, y0, x1, y1 int) {
+	x0, y0, x1, y1 = 0, 0, width, height
+	if !g.HasClip {
+		return
+	}
+	x0, y0 = maxInt(int(g.Clip.X), 0), maxInt(int(g.Clip.Y), 0)
+	x1, y1 = minInt(int(g.Clip.X+g.Clip.W), width), minInt(int(g.Clip.Y+g.Clip.H), height)
+	return
+}
+
 // Glyphs replays one FNT text run, reproducing drawText's layout exactly: the
 // truncate-to-width before clipping, the descender baseline, the offset-0 skip,
 // the per-glyph advance and the newline/NUL terminator (docs/DESIGN_GPU_RENDERER.md
@@ -209,9 +222,10 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 	gh := atlas.height
 	// The run's screen rectangle is its total advance by the font height; the
 	// per-glyph clip below decides the covered pixels inside it.
-	bx0, by0 := maxInt(curX, 0), maxInt(top, 0)
-	bx1 := minInt(curX+measureText(fnt, text), r.w)
-	by1 := minInt(top+gh, r.h)
+	clipX0, clipY0, clipX1, clipY1 := glyphClipBounds(g, r.w, r.h)
+	bx0, by0 := maxInt(curX, clipX0), maxInt(top, clipY0)
+	bx1 := minInt(curX+measureText(fnt, text), clipX1)
+	by1 := minInt(top+gh, clipY1)
 	if !r.sched.begin(schedOpaque, bx0, by0, bx1, by1, r.sceneImages(atlas.entry)) {
 		return
 	}
@@ -232,8 +246,8 @@ func (r *Renderer) Glyphs(g drawlist.Glyphs) {
 			// The glyph is a rectangle, so drawText's per-pixel framebuffer clip is
 			// the rectangular intersection of [curX,curX+gw)×[top,top+gh) with the
 			// framebuffer; the source sub-rect shifts to match.
-			c0, c1 := maxInt(0, -curX), minInt(gw, r.w-curX)
-			r0, r1 := maxInt(0, -top), minInt(gh, r.h-top)
+			c0, c1 := maxInt(clipX0-curX, 0), minInt(gw, clipX1-curX)
+			r0, r1 := maxInt(clipY0-top, 0), minInt(gh, clipY1-top)
 			if c0 < c1 && r0 < r1 {
 				r.sched.quad(schedOpaque,
 					float32(curX+c0), float32(top+r0), float32(curX+c1), float32(top+r1),

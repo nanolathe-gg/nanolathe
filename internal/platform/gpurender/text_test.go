@@ -5,6 +5,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/client"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
 func TestFNTLayoutMatchesSoftwareAfterFirstCodeTableBias(t *testing.T) {
@@ -25,5 +26,15 @@ func TestFNTLayoutMatchesSoftwareAfterFirstCodeTableBias(t *testing.T) {
 	}
 	if got, want := truncateToWidth(f, "AAA", 4), client.TruncateToWidth(f, "AAA", 4); got != want {
 		t.Fatalf("GPU truncate = %q, software = %q", got, want)
+	}
+}
+
+func TestGlyphClipBoundsCarriesPrivateSurface(t *testing.T) {
+	clipped := drawlist.Glyphs{HasClip: true, Clip: drawlist.Rect{X: 3, Y: -2, W: 8, H: 12}}
+	if x0, y0, x1, y1 := glyphClipBounds(clipped, 8, 6); x0 != 3 || y0 != 0 || x1 != 8 || y1 != 6 {
+		t.Fatalf("clipped bounds=%d,%d..%d,%d, want 3,0..8,6", x0, y0, x1, y1)
+	}
+	if x0, y0, x1, y1 := glyphClipBounds(drawlist.Glyphs{}, 8, 6); x0 != 0 || y0 != 0 || x1 != 8 || y1 != 6 {
+		t.Fatalf("unclipped bounds=%d,%d..%d,%d, want framebuffer", x0, y0, x1, y1)
 	}
 }

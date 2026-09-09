@@ -50,6 +50,13 @@ type retailBattleHUD struct {
 	exitWin     *gui.Window
 	confirmWin  *gui.Window
 	restartWin  *gui.Window
+	// Each ordinary battle child retains its indexed widget state from open
+	// through close.  The panels are deliberately not rebuilt by composition:
+	// a child close leaves its surviving parent and its input state intact
+	// [07 R-WGT-01 §1][07 R-WGT-02 §2].
+	optionsPanel *ui.Panel
+	exitPanel    *ui.Panel
+	confirmPanel *ui.Panel
 	// screenW/screenH is the negotiated surface size the chrome is currently
 	// laid out for; applyDisplaySize re-places the size-dependent windows when
 	// it changes [07 R-HUD-05].
@@ -497,6 +504,9 @@ func (h *retailBattleHUD) openOptionsWindow() {
 	}
 	h.installWindow(h.optionsWin, h.optionsGAF)
 	h.optionsBuilt = true
+	if h.optionsWin != nil {
+		h.optionsPanel = ui.NewPanel(h.optionsWin)
+	}
 	if !h.optionsRelabel || h.optionsWin == nil {
 		return
 	}
@@ -518,6 +528,9 @@ func (h *retailBattleHUD) openExitWindow() {
 	}
 	h.installWindow(h.exitWin, nil)
 	h.exitBuilt = true
+	if h.exitWin != nil {
+		h.exitPanel = ui.NewPanel(h.exitWin)
+	}
 }
 
 func (h *retailBattleHUD) openConfirmWindow() {
@@ -526,6 +539,9 @@ func (h *retailBattleHUD) openConfirmWindow() {
 	}
 	h.installWindow(h.confirmWin, nil)
 	h.confirmBuilt = true
+	if h.confirmWin != nil {
+		h.confirmPanel = ui.NewPanel(h.confirmWin)
+	}
 }
 
 // openRestartWindow builds RESTART.GUI only after EXITMENU has yielded to its

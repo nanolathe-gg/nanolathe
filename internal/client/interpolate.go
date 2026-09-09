@@ -1,0 +1,452 @@
+package client
+
+import (
+	"github.com/nanolathe/nanolathe/internal/frame"
+	"github.com/nanolathe/nanolathe/internal/sim/numeric"
+)
+
+// Enhanced interpolation. The simulation stays at its 30 Hz authoritative
+// cadence while the modern window presents at the display's refresh rate, so a
+// presented frame that is not a tick boundary shows a pose blended from the two
+// most recent committed ticks (docs/DESIGN_GPU_RENDERER.md §13.5). Everything
+// here is presentation: the committed frames are read, never written, no
+// simulation RNG is drawn, and the blend never reaches authoritative state
+// [I6]. Original (classic) and `--shot` keep committed-tick sampling — they
+// never call SetInterpolation.
+//
+// The arithmetic is integer. The fraction is carried as a 16.16 value so a
+// 16.16 world coordinate blends as `prev + ((cur-prev) * f16) >> 16` with
+// truncation toward zero, and a 65536-per-circle angle blends along the
+// shortest arc [I2][I3].
+
+// fractionOne is the 16.16 unit. tickFraction16 is clamped to
+// 0..fractionOne-1, which is the [0, 1) of §13.5 expressed in that domain: the
+// clock's carry is a float32 store that can round a remainder just below one up
+// to exactly one [01 §4.2], and a fraction of one would show the next tick's
+// pose a tick early.
+const fractionOne = int32(numeric.FixedOne)
+
+// clampFraction16 narrows a producer's fraction into the 16.16 form the blend
+// uses. The comparison order rejects NaN as well as a negative value, and the
+// upper clamp keeps the domain half-open.
+func clampFraction16(f float32) int32 {
+	v := int32(0)
+	if f > 0 {
+		v = int32(f * float32(fractionOne))
+	}
+	if v >= fractionOne {
+		v = fractionOne - 1
+	} else if v < 0 {
+		v = 0
+	}
+	return v
+}
+
+// ClampTickFraction narrows a fraction into the half-open [0, 1) the blend
+// uses, in the client's own 16.16 domain. A producer calls it so the value it
+// keeps and the value the blend uses are the same number; §13.5 puts the clamp
+// in the formula, and the doubled speeds are where the unclamped sum passes
+// one.
+func ClampTickFraction(f float32) float32 {
+	return float32(clampFraction16(f)) / float32(fractionOne)
+}
+
+// SetTickFraction sets the fraction explicitly and makes that value win over
+// the Options.TickFraction producer for the rest of the run. The 120 TPS
+// benchmark is its caller: it drives the four fractions itself (§13.5), and a
+// benchmark client built by the ordinary battle composition also carries the
+// live producer, which must not overwrite them.
+func (c *Client) SetTickFraction(f float32) {
+	if c == nil {
+		return
+	}
+	c.tickFraction16 = clampFraction16(f)
+	c.tickFractionSet = true
+}
+
+// TickFraction reports the clamped fraction the blend currently uses, in the
+// same [0, 1) domain the producer supplies, so a producer can be checked
+// against §13.5 without reaching into the client.
+func (c *Client) TickFraction() float32 {
+	if c == nil {
+		return 0
+	}
+	return float32(c.tickFraction16) / float32(fractionOne)
+}
+
+// sampleTickFraction reads the fraction for the frame about to be recorded.
+// §13.5 reads it at Draw time, not at the 30 Hz step, because the whole point
+// is a position *between* two steps: the producer is the battle's own
+// millisecond source, un-floored, and the client only clamps what it returns.
+func (c *Client) sampleTickFraction() int64 {
+	if !c.tickFractionSet && c.opts.TickFraction != nil {
+		c.tickFraction16 = clampFraction16(c.opts.TickFraction())
+	}
+	return int64(c.tickFraction16)
+}
+
+// SetInterpolation selects the Enhanced blended view. Only the modern window
+// path and the 120 TPS benchmark enable it (docs/DESIGN_GPU_RENDERER.md §13.5).
+func (c *Client) SetInterpolation(enabled bool) {
+	if c == nil {
+		return
+	}
+	c.interpolation = enabled
+}
+
+// presentationFrame is the frame the recorder reads. It is the committed frame
+// itself unless Enhanced interpolation is on and a previous committed tick
+// exists; a nil previous is a snap (docs/DESIGN_GPU_RENDERER.md §13.5).
+func (c *Client) presentationFrame() *frame.Frame {
+	if c == nil {
+		return nil
+	}
+	cur := c.buffer.Current()
+	if cur == nil || !c.interpolation {
+		return cur
+	}
+	prev := c.buffer.Previous()
+	if prev == nil {
+		return cur
+	}
+	blended := c.interp.blend(prev, cur, c.sampleTickFraction())
+	// The effect strip buckets are keyed by frame pointer and committed tick,
+	// and they hold copies of the views. The blended frame keeps both across the
+	// several presented frames of one tick, so the classification has to be
+	// redone for every blend or every effect would hold its first blended
+	// position for the whole tick.
+	c.stripsValid = false
+	return blended
+}
+
+// sampleCameraOrigin records the camera origin at the 30 Hz step. The camera
+// moves in that step — the scroll pass and the follow glide both write it
+// [07 §10][07 R-CAM-01 §12] — so Enhanced blends it with the same fraction as
+// the world it frames, or the world would slide under a camera that jumps
+// (§13.5). Presentation state only; nothing reads it back into the session
+// [I6].
+func (c *Client) sampleCameraOrigin() {
+	if c == nil || c.cam == nil {
+		c.camSamples = 0
+		return
+	}
+	c.camPrevX, c.camPrevZ = c.camCurX, c.camCurZ
+	c.camCurX, c.camCurZ = c.cam.X, c.cam.Z
+	if c.camSamples < 2 {
+		c.camSamples++
+	}
+}
+
+// SetCameraFraction records how far the window is through the current Update,
+// which is the camera's own fraction and not the tick fraction (§13.5).
+//
+// The camera advances on the window's Update grid; the simulation's scaled
+// units are not phase-aligned with it [01 §4.1]. Blending the origin by the
+// tick fraction would therefore snap it backwards whenever a tick fired
+// mid-update — 0.9 of the way along, then 0.05 of the way along the same
+// unchanged pair of samples. The window adapter timestamps each Update and
+// supplies (now − lastUpdate) × 30 here; the value is platform time and reaches
+// neither the client's clock nor the simulation [I6].
+func (c *Client) SetCameraFraction(f float32) {
+	if c == nil {
+		return
+	}
+	c.cameraFraction16 = clampFraction16(f)
+	c.cameraFractionSet = true
+}
+
+// beginCameraBlend moves the live camera origin to its blended position for the
+// duration of one recording and reports whether it must be restored. Nothing
+// else observes the blend: endCameraBlend puts the stepped origin back before
+// the frame ends, so hit testing, orders and the next step all see the camera
+// the 30 Hz step left (§13.5) [I6].
+//
+// A jump larger than the viewport in an axis — a minimap click, a bookmark
+// recall — snaps that axis instead of sweeping across the map. Scale is not
+// blended. A client whose presentations do not come through the window adapter
+// — the 120 TPS benchmark, a test harness — supplies no camera fraction, and
+// its camera is not blended at all.
+func (c *Client) beginCameraBlend() bool {
+	if c == nil || c.cam == nil || c.camSamples < 2 || !c.cameraFractionSet {
+		return false
+	}
+	f16 := int64(c.cameraFraction16)
+	c.camSaveX, c.camSaveZ = c.cam.X, c.cam.Z
+	c.cam.X = lerpOrigin(c.camPrevX, c.camCurX, f16, c.cam.ViewW)
+	c.cam.Z = lerpOrigin(c.camPrevZ, c.camCurZ, f16, c.cam.ViewH)
+	return true
+}
+
+func (c *Client) endCameraBlend(applied bool) {
+	if !applied || c == nil || c.cam == nil {
+		return
+	}
+	c.cam.X, c.cam.Z = c.camSaveX, c.camSaveZ
+}
+
+// lerpOrigin blends one camera axis with integer truncation, snapping when the
+// step moved further than the viewport measures in that axis (§13.5).
+func lerpOrigin(prev, cur int32, f16 int64, viewport int32) int32 {
+	d := int64(cur) - int64(prev)
+	if viewport > 0 && (d > int64(viewport) || d < -int64(viewport)) {
+		return cur
+	}
+	return int32(int64(prev) + (d*f16)/int64(fractionOne))
+}
+
+// interpolator owns the blended view and the retained buffers that hold it.
+// Everything grows to the frame's size and is reused, so a steady-state frame
+// allocates nothing.
+type interpolator struct {
+	view        frame.Frame
+	units       []frame.UnitView
+	pieces      [][]frame.PieceView
+	projectiles []frame.ProjectileView
+	effects     []frame.EffectView
+	// unitAt and projAt are the previous tick's lookup tables: the record's
+	// index plus one, addressed by pool slot and by projectile handle, both of
+	// which are uint16 [01 §6.1]. Zero means the previous tick holds no record
+	// at that handle. effectAt is a map because an effect's identity is not a
+	// pool slot; it is only ever looked up on the frame path, never ranged [I1].
+	unitAt   []int32
+	projAt   []int32
+	effectAt map[effectKey]int32
+}
+
+// effectKey is the effect identity of §13.5: the presentation identity when it
+// is nonzero, and otherwise the record identity, its admission sequence and its
+// start tick together.
+type effectKey struct {
+	presentation uint64
+	sequence     uint64
+	id           uint32
+	start        uint32
+}
+
+func keyForEffect(e frame.EffectView) effectKey {
+	if e.PresentationID != 0 {
+		return effectKey{presentation: e.PresentationID}
+	}
+	return effectKey{sequence: e.EventSeq, id: e.ID, start: e.StartTick}
+}
+
+// snapDistance is the horizontal displacement above which a unit is treated as
+// a different subject rather than one that moved: 64 world units in one tick,
+// well above any authored movement rate. It is a presentation constant of
+// §13.5, not a retail datum.
+const snapDistance = numeric.Fixed(64) * numeric.FixedOne
+
+// blend builds the view of §13.5: a copy of the current frame whose units,
+// projectiles and effects are blended against the previous committed tick.
+// Every other field — fog, visibility, selection, orders, events, the HUD
+// readouts and Tick — is the current tick's.
+func (in *interpolator) blend(prev, cur *frame.Frame, f16 int64) *frame.Frame {
+	in.view = *cur
+	in.view.Units = in.blendUnits(prev, cur, f16)
+	in.view.Projectiles = in.blendProjectiles(prev, cur, f16)
+	in.view.Effects = in.blendEffects(prev, cur, f16)
+	return &in.view
+}
+
+func (in *interpolator) blendUnits(prev, cur *frame.Frame, f16 int64) []frame.UnitView {
+	in.unitAt = resetIndex(in.unitAt, maxUnitSlot(prev.Units))
+	for i := range prev.Units {
+		if slot := int(prev.Units[i].Slot); slot < len(in.unitAt) {
+			in.unitAt[slot] = int32(i) + 1
+		}
+	}
+	in.units = growSlice(in.units, len(cur.Units))
+	for i := range cur.Units {
+		u := cur.Units[i]
+		p := in.previousUnit(prev, u)
+		if p != nil {
+			u.X = lerpFixed(p.X, u.X, f16)
+			u.Y = lerpFixed(p.Y, u.Y, f16)
+			u.Z = lerpFixed(p.Z, u.Z, f16)
+			u.Heading = lerpAngle(p.Heading, u.Heading, f16)
+			u.Pitch = lerpAngle(p.Pitch, u.Pitch, f16)
+			u.Bank = lerpAngle(p.Bank, u.Bank, f16)
+			u.Pieces = in.blendPieces(i, p.Pieces, u.Pieces, f16)
+		}
+		in.units[i] = u
+	}
+	return in.units
+}
+
+// previousUnit is the unit identity of §13.5: the same pool slot in the
+// previous tick, with an unchanged definition, owner, carrier and mode mirror,
+// the same number of pieces, and a horizontal step within the snap bound. Pool
+// slots carry no generation [01 §6.1], so a reused slot is only recognisable by
+// this consistency check.
+func (in *interpolator) previousUnit(prev *frame.Frame, u frame.UnitView) *frame.UnitView {
+	slot := int(u.Slot)
+	if slot >= len(in.unitAt) || in.unitAt[slot] == 0 {
+		return nil
+	}
+	p := &prev.Units[in.unitAt[slot]-1]
+	if p.DefID != u.DefID || p.Owner != u.Owner || p.Carrier != u.Carrier || p.MoverMode != u.MoverMode {
+		return nil
+	}
+	if len(p.Pieces) != len(u.Pieces) {
+		return nil
+	}
+	dx, dz := u.X-p.X, u.Z-p.Z
+	if dx < 0 {
+		dx = -dx
+	}
+	if dz < 0 {
+		dz = -dz
+	}
+	// The per-axis test comes first so the squared distance below cannot
+	// overflow on a map-crossing teleport.
+	if dx > snapDistance || dz > snapDistance {
+		return nil
+	}
+	if int64(dx)*int64(dx)+int64(dz)*int64(dz) > int64(snapDistance)*int64(snapDistance) {
+		return nil
+	}
+	return p
+}
+
+// blendPieces blends one unit's COB piece transforms into this unit index's
+// retained buffer. A piece hidden in either tick is drawn as the current tick
+// says (§13.5), so its transform is copied rather than blended; every other
+// piece field is the current tick's either way.
+func (in *interpolator) blendPieces(unit int, prev, cur []frame.PieceView, f16 int64) []frame.PieceView {
+	for len(in.pieces) <= unit {
+		in.pieces = append(in.pieces, nil)
+	}
+	buf := growSlice(in.pieces[unit], len(cur))
+	in.pieces[unit] = buf
+	for j := range cur {
+		p := cur[j]
+		q := prev[j]
+		if !p.Hidden && !q.Hidden {
+			p.Tx = lerpFixed(q.Tx, p.Tx, f16)
+			p.Ty = lerpFixed(q.Ty, p.Ty, f16)
+			p.Tz = lerpFixed(q.Tz, p.Tz, f16)
+			p.RotX = lerpAngle(q.RotX, p.RotX, f16)
+			p.RotY = lerpAngle(q.RotY, p.RotY, f16)
+			p.RotZ = lerpAngle(q.RotZ, p.RotZ, f16)
+		}
+		buf[j] = p
+	}
+	return buf
+}
+
+func (in *interpolator) blendProjectiles(prev, cur *frame.Frame, f16 int64) []frame.ProjectileView {
+	in.projAt = resetIndex(in.projAt, maxProjectileHandle(prev.Projectiles))
+	for i := range prev.Projectiles {
+		if h := int(prev.Projectiles[i].Handle); h < len(in.projAt) {
+			in.projAt[h] = int32(i) + 1
+		}
+	}
+	in.projectiles = growSlice(in.projectiles, len(cur.Projectiles))
+	for i := range cur.Projectiles {
+		v := cur.Projectiles[i]
+		// A projectile matches on its handle with an unchanged weapon, shooter
+		// and creation tick; the pool reuses slots immediately [I5], so those
+		// three are what separate one record from its successor (§13.5).
+		if h := int(v.Handle); h < len(in.projAt) && in.projAt[h] != 0 {
+			p := &prev.Projectiles[in.projAt[h]-1]
+			if p.WeaponID == v.WeaponID && p.Shooter == v.Shooter && p.CreationTick == v.CreationTick {
+				v.X = lerpFixed(p.X, v.X, f16)
+				v.Y = lerpFixed(p.Y, v.Y, f16)
+				v.Z = lerpFixed(p.Z, v.Z, f16)
+				v.StartX = lerpFixed(p.StartX, v.StartX, f16)
+				v.StartY = lerpFixed(p.StartY, v.StartY, f16)
+				v.StartZ = lerpFixed(p.StartZ, v.StartZ, f16)
+				v.TailX = lerpFixed(p.TailX, v.TailX, f16)
+				v.TailY = lerpFixed(p.TailY, v.TailY, f16)
+				v.TailZ = lerpFixed(p.TailZ, v.TailZ, f16)
+				v.Yaw = lerpAngle(p.Yaw, v.Yaw, f16)
+				v.Pitch = lerpAngle(p.Pitch, v.Pitch, f16)
+				v.Roll = lerpAngle(p.Roll, v.Roll, f16)
+				v.PropellerRoll = lerpAngle(p.PropellerRoll, v.PropellerRoll, f16)
+				v.MeteorPitch = lerpAngle(p.MeteorPitch, v.MeteorPitch, f16)
+			}
+		}
+		in.projectiles[i] = v
+	}
+	return in.projectiles
+}
+
+func (in *interpolator) blendEffects(prev, cur *frame.Frame, f16 int64) []frame.EffectView {
+	if in.effectAt == nil {
+		in.effectAt = make(map[effectKey]int32, len(prev.Effects))
+	}
+	clear(in.effectAt)
+	for i := range prev.Effects {
+		in.effectAt[keyForEffect(prev.Effects[i])] = int32(i) + 1
+	}
+	in.effects = growSlice(in.effects, len(cur.Effects))
+	for i := range cur.Effects {
+		e := cur.Effects[i]
+		// Only the position blends: sprite and animation cursors, the flash
+		// tables and the strip assignment are the current tick's (§13.5).
+		if at := in.effectAt[keyForEffect(e)]; at != 0 {
+			p := &prev.Effects[at-1]
+			e.X = lerpFixed(p.X, e.X, f16)
+			e.Y = lerpFixed(p.Y, e.Y, f16)
+			e.Z = lerpFixed(p.Z, e.Z, f16)
+		}
+		in.effects[i] = e
+	}
+	return in.effects
+}
+
+// lerpFixed blends two 16.16 world values: `prev + ((cur-prev) * f16) >> 16`
+// with truncation toward zero, which is what a `__ftol`-shaped narrowing does
+// [I3]. Integer division in Go truncates toward zero, so it is the shift for a
+// positive delta and the truncating form for a negative one.
+func lerpFixed(prev, cur numeric.Fixed, f16 int64) numeric.Fixed {
+	return prev + numeric.Fixed((int64(cur-prev)*f16)/int64(fractionOne))
+}
+
+// lerpAngle blends two 65536-per-circle angles along the shortest arc: the
+// difference is read as a signed 16-bit value, scaled by the fraction and added
+// back, so a heading crossing zero sweeps the short way (§13.5) [I2].
+func lerpAngle(prev, cur uint16, f16 int64) uint16 {
+	d := int64(int16(cur - prev))
+	return prev + uint16((d*f16)/int64(fractionOne))
+}
+
+func maxUnitSlot(units []frame.UnitView) int {
+	n := 0
+	for i := range units {
+		if s := int(units[i].Slot); s >= n {
+			n = s + 1
+		}
+	}
+	return n
+}
+
+func maxProjectileHandle(projectiles []frame.ProjectileView) int {
+	n := 0
+	for i := range projectiles {
+		if h := int(projectiles[i].Handle); h >= n {
+			n = h + 1
+		}
+	}
+	return n
+}
+
+// resetIndex returns a zeroed lookup table of n entries, reusing the retained
+// backing array whenever it is large enough.
+func resetIndex(dst []int32, n int) []int32 {
+	if cap(dst) < n {
+		return make([]int32, n)
+	}
+	dst = dst[:n]
+	clear(dst)
+	return dst
+}
+
+// growSlice returns a slice of exactly n elements over the retained backing
+// array, growing it only when the frame is larger than any seen before.
+func growSlice[T any](dst []T, n int) []T {
+	if cap(dst) < n {
+		return make([]T, n)
+	}
+	return dst[:n]
+}

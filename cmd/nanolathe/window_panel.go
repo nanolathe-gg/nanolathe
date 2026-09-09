@@ -53,6 +53,45 @@ func drawGUIBevel(c *client.Client, r gui.Rect, topLeft, bottomRight, fill byte)
 	line(x+2, bottom-1, right, bottom-1, light)
 }
 
+// drawGUIBevelClipped is the same ordered bevel written into a modal's
+// private surface. The frontend path already draws into a window-sized
+// surface; battle composes directly into the presentation surface and needs
+// this explicit child boundary [07 R-FE-02 §4].
+func drawGUIBevelClipped(c *client.Client, r gui.Rect, topLeft, bottomRight, fill byte, clip gui.Rect) {
+	if c == nil || r.W <= 0 || r.H <= 0 || clip.W <= 0 || clip.H <= 0 {
+		return
+	}
+	x, y, w, h := int(r.X), int(r.Y), int(r.W), int(r.H)
+	clipFill(c, x, y, w, h, fill, clip)
+	line := func(x1, y1, x2, y2 int, index byte) {
+		left, top := max(x, min(x1, x2)), max(y, min(y1, y2))
+		right, bottom := min(x+w-1, max(x1, x2)), min(y+h-1, max(y1, y2))
+		if left <= right && top <= bottom {
+			clipFill(c, left, top, right-left+1, bottom-top+1, index, clip)
+		}
+	}
+	right, bottom := x+w-1, y+h-1
+	line(x, y, right, y, topLeft)
+	line(x, y+1, right-1, y+1, topLeft)
+	line(x, y, x, bottom, topLeft)
+	line(x+1, y, x+1, bottom-1, topLeft)
+	line(right, y+1, right, bottom, bottomRight)
+	line(right-1, y+2, right-1, bottom, bottomRight)
+	line(x+1, bottom, right, bottom, bottomRight)
+	line(x+2, bottom-1, right, bottom-1, bottomRight)
+}
+
+func clipFill(c *client.Client, x, y, w, h int, color byte, clip gui.Rect) {
+	if c == nil || w <= 0 || h <= 0 {
+		return
+	}
+	left, top := max(x, int(clip.X)), max(y, int(clip.Y))
+	right, bottom := min(x+w, int(clip.X+clip.W)), min(y+h, int(clip.Y+clip.H))
+	if left < right && top < bottom {
+		c.UIFillRect(left, top, right-left, bottom-top, color)
+	}
+}
+
 // windowPanelEntry resolves a window's panel entry: the window's own GAF, then
 // the common GUI GAF, then the common GAF's literal `BackTile` [07 R-WGT-01 §12]
 // [07 R-FE-02 §4]. A name that resolves nowhere, or an empty one, falls to

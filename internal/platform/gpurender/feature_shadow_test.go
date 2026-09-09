@@ -19,8 +19,12 @@ const (
 	featureDeviceBackground = byte(201)
 	featureDeviceShadow     = byte(37)
 	featureDeviceBody       = byte(41)
-	featureDeviceShadowALP  = byte(88)
-	featureDeviceBodyALP    = byte(99)
+	// The ALP builder's own target for each pair over the background:
+	// floor((src + dst)/2) [03 §4.3.4]. The Enhanced composite evaluates that in
+	// RGB instead of looking it up, so these are the classic indices the blended
+	// pixels are measured against (§13.4).
+	featureDeviceShadowALP = byte((int(featureDeviceShadow) + int(featureDeviceBackground)) / 2)
+	featureDeviceBodyALP   = byte((int(featureDeviceBody) + int(featureDeviceBackground)) / 2)
 )
 
 // Feature shadows reuse the existing keyed and ALP-tinted GPU stages. The
@@ -105,8 +109,7 @@ func checkFeatureShadowDevicePixels() error {
 	for i := 0; i < 256; i++ {
 		p.Base[i] = [4]byte{byte(i), byte(i), byte(i), 255}
 	}
-	p.Alpha[int(featureDeviceShadow)*256+int(featureDeviceBackground)] = featureDeviceShadowALP
-	p.Alpha[int(featureDeviceBody)*256+int(featureDeviceBackground)] = featureDeviceBodyALP
+	fixtureALP(&p)
 	r, err := NewChecked(&p, featureDeviceWidth, featureDeviceHeight)
 	if err != nil {
 		return fmt.Errorf("compile feature-shadow fixture shaders: %w", err)
@@ -147,32 +150,34 @@ func checkFeatureShadowDevicePixels() error {
 	}
 	pixels := make([]byte, featureDeviceWidth*featureDeviceHeight*4)
 	img.ReadPixels(pixels)
-	check := func(name string, x, y int, want byte) error {
-		i := (y*featureDeviceWidth + x) * 4
-		if got := pixels[i]; got != want {
-			return fmt.Errorf("%s at (%d,%d): red %d, want exact index %d", name, x, y, got, want)
-		}
-		if pixels[i+1] != want || pixels[i+2] != want || pixels[i+3] != 255 {
-			return fmt.Errorf("%s at (%d,%d): RGBA %v, want grayscale index %d", name, x, y, pixels[i:i+4], want)
-		}
-		return nil
-	}
+	// The composite is colour; the palette is the grey ramp, so a check names the
+	// classic index and the helpers expand it through PAL (§13.4). Only the two
+	// translucent blocks are blended; every other pixel must be exact.
 	checks := []struct {
-		name   string
-		x, y   int
-		wanted byte
+		name    string
+		x, y    int
+		wanted  byte
+		blended bool
 	}{
-		{"opaque keyed source", 4, 6, featureDeviceShadow},
-		{"opaque keyed transparent skip", 11, 6, featureDeviceBackground},
-		{"translucent shadow ALP", 20, 6, featureDeviceShadowALP},
-		{"translucent shadow offset cancellation", 18, 5, featureDeviceBackground},
-		{"translucent shadow transparent skip", 27, 6, featureDeviceBackground},
-		{"static body ALP", 36, 6, featureDeviceBodyALP},
-		{"live event opaque", 52, 6, featureDeviceShadow},
-		{"feature option disabled omission", 68, 6, featureDeviceBackground},
+		{name: "opaque keyed source", x: 4, y: 6, wanted: featureDeviceShadow},
+		{name: "opaque keyed transparent skip", x: 11, y: 6, wanted: featureDeviceBackground},
+		{name: "translucent shadow ALP", x: 20, y: 6, wanted: featureDeviceShadowALP, blended: true},
+		{name: "translucent shadow offset cancellation", x: 18, y: 5, wanted: featureDeviceBackground},
+		{name: "translucent shadow transparent skip", x: 27, y: 6, wanted: featureDeviceBackground},
+		{name: "static body ALP", x: 36, y: 6, wanted: featureDeviceBodyALP, blended: true},
+		{name: "live event opaque", x: 52, y: 6, wanted: featureDeviceShadow},
+		{name: "feature option disabled omission", x: 68, y: 6, wanted: featureDeviceBackground},
 	}
 	for _, c := range checks {
-		if err := check(c.name, c.x, c.y, c.wanted); err != nil {
+		at := (c.y*featureDeviceWidth + c.x) * 4
+		name := fmt.Sprintf("%s at (%d,%d)", c.name, c.x, c.y)
+		var err error
+		if c.blended {
+			err = checkBlendedIndex(name+" [ALP floor]", pixels, at, &p, c.wanted)
+		} else {
+			err = checkExactIndex(name, pixels, at, &p, c.wanted)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -192,28 +197,34 @@ const (
 	overlapBack   = byte(200)
 )
 
-// overlapALP is the fixture's authored ALP table: a deterministic function of
-// the source and destination index, so the expected chain below is computed from
-// the same table the shader samples rather than from a captured image.
+// overlapALP is the ALP builder's own arithmetic, the value the classic table
+// holds for this fixture's grey palette and the value the Enhanced blend forms
+// in RGB [03 §4.3.4](§13.2 ALP row). The expected chain below is computed from
+// it rather than from a captured image.
 func overlapALP(src, dst byte) byte {
-	return byte((int(src)*7+int(dst)*3+11)%251 + 1)
+	return byte((int(src) + int(dst)) / 2)
 }
 
 // checkTintedOverlapDevicePixels is the scheduler's record-order fixture
 // (docs/DESIGN_GPU_RENDERER.md §11.2 "The scheduler", C-G3). Two overlapping
 // ALP-tinted puffs must blend one after the other, an opaque write over one of
-// them must land after that blend, and a third puff over both must read what
-// they left [03 R-COMP-01 §2][03 R-FX-02 §3]. Every one of those commands shares
-// a 32-pixel grid cell, so the scheduler has to open a phase per dependency; a
-// batch that merged them would show the background under the second puff.
+// them must land after that blend, and a third puff over both must composite over
+// what they left [03 R-COMP-01 §2][03 R-FX-02 §3]. Every one of those commands
+// shares a 32-pixel grid cell, so the scheduler has to open a phase per
+// dependency; a batch that merged them would show the background under the second
+// puff.
+//
+// Every pixel here is covered by a blended command, so §13.4's bound is what
+// applies — but this fixture locks ORDER, and an ordering mistake moves a pixel
+// by tens of units, so it is asserted per pixel rather than as a mean: the chain
+// values are 104, 104, 89, 121, 121, 110, 146, 146 and each of the mistakes the
+// fixture is here to catch moves one of them well outside the bound.
 func checkTintedOverlapDevicePixels() error {
 	var p palette.Tables
 	for i := 0; i < 256; i++ {
 		p.Base[i] = [4]byte{byte(i), byte(i), byte(i), 255}
-		for j := 0; j < 256; j++ {
-			p.Alpha[i*256+j] = overlapALP(byte(i), byte(j))
-		}
 	}
+	fixtureALP(&p)
 	r, err := NewChecked(&p, overlapWidth, overlapHeight)
 	if err != nil {
 		return fmt.Errorf("compile tinted-overlap fixture shaders: %w", err)
@@ -262,15 +273,19 @@ func checkTintedOverlapDevicePixels() error {
 	}
 	pixels := make([]byte, overlapWidth*overlapHeight*4)
 	img.ReadPixels(pixels)
+	var stats compositeStats
 	for y := 0; y < overlapHeight; y++ {
 		for x := 0; x < overlapWidth; x++ {
-			if got := pixels[(y*overlapWidth+x)*4]; got != want[x] {
-				return fmt.Errorf("tinted overlap at (%d,%d): index %d, want %d (record-order chain %v)",
-					x, y, got, want[x], want)
+			at := (y*overlapWidth + x) * 4
+			stats.add(pixels, at, &p, want[x])
+			if err := checkBlendedIndex(
+				fmt.Sprintf("tinted overlap at (%d,%d) [ALP floor, record-order chain %v]", x, y, want),
+				pixels, at, &p, want[x]); err != nil {
+				return err
 			}
 		}
 	}
-	return nil
+	return stats.check("tinted overlap [ALP floor]")
 }
 
 func writeFeatureShadowDeviceShot(path string, pixels []byte) error {

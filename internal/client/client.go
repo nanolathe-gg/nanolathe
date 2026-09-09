@@ -27,6 +27,15 @@ import (
 type Options struct {
 	Step func(delta float64) // injected owner of clock/sub-ticks/snapshot publish (C9)
 
+	// TickFraction is the Enhanced blend's fraction producer, read at Draw time
+	// when an interpolated frame is recorded (docs/DESIGN_GPU_RENDERER.md
+	// §13.5). The battle supplies it from the same millisecond source the tick
+	// budget and the scroll pass read, un-floored; the client only clamps the
+	// result into [0, 1) and never reads a clock itself [I6]. Nil leaves the
+	// fraction at whatever SetTickFraction last stored, which is zero for a
+	// client that never interpolates.
+	TickFraction func() float32
+
 	// Presentation snapshot source. If nil, an empty buffer is used.
 	Buffer *frame.Buffer
 
@@ -45,8 +54,11 @@ type Client struct {
 
 	// exitRequested lets authored in-game GUI actions terminate the same
 	// Ebitengine loop as closing the window. It is presentation state only.
-	exitRequested bool
-	focused       bool
+	exitRequested                  bool
+	focused                        bool
+	pointerCaptured                bool
+	cursorRestorePending           bool
+	cursorRestoreX, cursorRestoreY float32
 
 	// stripBuckets holds the committed effects of one composed frame sorted by
 	// strip barrier, with stripUnstripped holding the fixed pool. They are
@@ -59,6 +71,31 @@ type Client struct {
 	stripsValid     bool
 
 	buffer *frame.Buffer
+
+	// Enhanced interpolation state (docs/DESIGN_GPU_RENDERER.md §13.5).
+	// interpolation is set only by the modern window path and the 120 TPS
+	// benchmark; tickFraction16 is the blend fraction in 16.16 and
+	// tickFractionSet says an explicit SetTickFraction outranks the option
+	// producer; interp owns the blended view and its retained buffers. The
+	// camera fields are the two stepped origin samples, the blend's save slot
+	// and how many samples exist yet. See interpolate.go.
+	interpolation   bool
+	tickFraction16  int32
+	tickFractionSet bool
+	interp          interpolator
+	camPrevX        int32
+	camPrevZ        int32
+	camCurX         int32
+	camCurZ         int32
+	camSaveX        int32
+	camSaveZ        int32
+	camSamples      uint8
+	// cameraFraction16 is the camera's own blend fraction — how far the window
+	// is through the current Update — which is not the tick fraction (§13.5).
+	// cameraFractionSet is false for a client that never presents through the
+	// window adapter, and such a client does not blend its camera.
+	cameraFraction16  int32
+	cameraFractionSet bool
 
 	width, height int
 	indexed       []uint8
@@ -445,10 +482,15 @@ func (c *Client) Step(delta float64) {
 	if c == nil {
 		return
 	}
+	c.cursorRestorePending = false
 	c.runtime += delta
 	if c.opts.Step != nil {
 		c.opts.Step(delta)
 	}
+	// The camera has now been moved by this step's scroll and follow passes, so
+	// this is where Enhanced takes the sample it blends between
+	// (docs/DESIGN_GPU_RENDERER.md §13.5).
+	c.sampleCameraOrigin()
 }
 
 // Present composes one frame and returns the expanded RGBA framebuffer for the

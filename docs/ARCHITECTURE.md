@@ -272,12 +272,19 @@ site per phase, in `internal/session/step.go`:
 After phase 12 the sharing pass and the per-sub-tick result evaluation run;
 then the session **publishes** the committed frame. Publication is outside
 the phase registry and follows every completed sub-tick; nothing presents
-between phases, and presentation samples the committed tick with no
-interpolation `[03 §2.4]` [I6]. After the last runnable sub-tick of a pump the
+between phases. Original presentation samples the committed tick without
+interpolation `[03 §2.4]`; Enhanced may blend the last two committed ticks
+under DESIGN_GPU_RENDERER §13.5 [I6]. After the last runnable sub-tick of a pump the
 executor tail runs once — the temporary-sight expiry sweep, the deadline-ring
 slide and the barrier routines `[03 R-COMP-02 §2]` `[01 R-PLAT-02 §7]`.
 Authoritative ticks run only in the battle state of the session state machine
 `[08 "Session states"]`.
+
+Publication assigns each live unit a presentation-only `InstanceID`. It stays
+stable for the same unit object and changes when a pool slot is reused, even
+without an intervening empty frame. Only the integer enters the snapshot;
+retired object references are cleared. This is cache ownership bookkeeping,
+not an authoritative handle, saved generation, or RNG consumer [I6].
 
 **Random streams.** There are two, and call order is behavior [I4]. The
 simulation stream is Park-Miller (`16807`, modulus `0x7fffffff`, Schrage) and

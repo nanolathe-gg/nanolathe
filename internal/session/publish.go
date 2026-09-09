@@ -149,6 +149,9 @@ func (s *Session) publishSnapshot(tick uint32) {
 		return
 	}
 	published.Tick = tick
+	publication := s.ensurePublicationState()
+	publication.beginUnitIdentities()
+	defer publication.finishUnitIdentities()
 	published.Paused = s.Clock != nil && s.Clock.Paused
 	// The §6 slide strip's two non-tick readouts. Both are scheduling/lobby
 	// scalars the composer may not read live [07 §6][07 R-HUD-04 §4][I6].
@@ -174,6 +177,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				continue
 			}
 			v := frame.UnitView{
+				InstanceID:     publication.unitIdentity(u),
 				Slot:           u.Handle,
 				Owner:          u.Owner,
 				X:              u.X,
@@ -467,6 +471,7 @@ func (s *Session) publishSnapshot(tick uint32) {
 				continue
 			}
 			featureOwner, featureOwnerKnown := featureOwnerSelector(inst)
+			runtime := inst.RuntimeView()
 			fv := frame.FeatureView{
 				Owner:      featureOwner,
 				OwnerKnown: featureOwnerKnown,
@@ -502,6 +507,8 @@ func (s *Session) publishSnapshot(tick uint32) {
 				NoDrawUnderGray: inst.Def.NoDrawUnderGray,
 				Height:          inst.Def.Height,
 				Geothermal:      inst.Def.Geothermal,
+				RuntimeLive:     runtime.Live,
+				ShadowEnabled:   runtime.ShadowEnabled,
 			}
 			if fv.Model == "" {
 				fv.Model = inst.Def.Filename

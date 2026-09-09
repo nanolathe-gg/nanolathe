@@ -213,6 +213,14 @@ func checkModelSlotFrames() error {
 	if p := a.modelStagePasses(); p != firstPasses {
 		return fmt.Errorf("crowded frame model stage passes=%d, want the single-copy count %d", p, firstPasses)
 	}
+	// The attached-unit staging is ordered by destination too, so four copies of
+	// every group cost the frame the same device destination switches as one: the
+	// staging atlas gives each group a disjoint region and merges child k of every
+	// group in a single pass (docs/DESIGN_GPU_RENDERER.md §13.3, model_stage.go).
+	if s := a.ModelStats(); s.Passes != first.Passes {
+		return fmt.Errorf("crowded frame destination switches=%d for %d composed groups, want the single-copy count %d for %d",
+			s.Passes, s.ComposedGroups, first.Passes, first.ComposedGroups)
+	}
 	return nil
 }
 

@@ -11,24 +11,23 @@ import (
 )
 
 // Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3,
-// §11.2, §11.5). It owns the palette table atlas, the scene atlas, the two
-// indexed surfaces the frame's phases alternate between (index in the red
-// channel), the expanded RGBA surface presented at the end, and the compiled
-// passes. It implements drawlist.Sink, so Execute replays a recorded List
-// straight through it. Every device resource lives here, never on the client [I6].
+// §11.2, §11.5, §13.3). It owns the palette table atlas, the scene atlas, the
+// true-colour composite surface Execute returns, the read surface the fog run
+// copies into, and the compiled passes. It implements drawlist.Sink, so Execute
+// replays a recorded List straight through it. Every device resource lives here,
+// never on the client [I6].
 //
 // The Sink methods compile rather than draw: each appends its command's clipped
 // rectangle, class and vertices to the phase scheduler (schedule.go), and Execute
 // submits the phases after Replay returns. A barrier — a carrier/child group, a
-// model subject the slot atlas could not fit, the clear and the expansion —
+// model subject the slot atlas could not fit, the clear and the Expand marker —
 // submits everything pending first, so those keep their places in record order
-// (C-G3). The fog composite is no longer one of them: it compiles as an ordinary
-// destination-reading command over the visible fog region.
+// (C-G3). The fog composite is not one of them: it compiles as an ordinary
+// destination command over the visible fog region.
 type Renderer struct {
 	modelPrep modelPrepScratch
 	tables    tables
-	expand    *ebiten.Shader
-	// scene2D is the one opaque pass and sceneDest the one destination-reading
+	// scene2D is the one opaque pass and sceneDest the one destination-compositing
 	// pass (§11.2 "One scene shader for the 2D families").
 	scene2D   *ebiten.Shader
 	sceneDest *ebiten.Shader
@@ -46,24 +45,25 @@ type Renderer struct {
 	modelChild        *ebiten.Shader
 	modelResolve      *ebiten.Shader
 
-	// surfaces[0] is the indexed frame surface the whole composite is drawn into,
-	// RGBA8 with the palette index in the red channel (C-G4). surfaces[1] is the
-	// phase read surface: before a phase's destination-reading batch writes the
-	// composed surface, the union rectangle of that batch is copied here, and the
-	// batch reads it while writing the composite — so a destination-reading write
-	// never samples a pixel the same batch changed. output is the expanded RGBA
-	// surface Execute returns.
+	// surfaces[0] is the true-colour composite the whole frame is drawn into and
+	// the image Execute returns: every source index is resolved through PAL as it
+	// is written, so there is no expansion pass (C-G8 as amended, §13.3).
+	// surfaces[1] survives only as the fog run's read copy — the fog composite is
+	// the one family that still reads the pixels it rewrites, and its region is
+	// copied here just before it draws.
 	surfaces [2]*ebiten.Image
-	output   *ebiten.Image
 	// placeholder backs an image slot no op in a run requested, for the case
 	// where no palette (and so no table atlas) has been installed.
 	placeholder *ebiten.Image
 	// modelAtlas is the per-frame slot atlas every model subject rasterizes
 	// into before any of them commits (docs/DESIGN_GPU_RENDERER.md §11.2).
-	// modelStage/modelStageScratch are the attached-unit group's staging pair,
-	// grown to the largest group seen and reused. modelOpts and modelStageOp
-	// are reused draw options, so a steady-state frame's model draws allocate
-	// no options value and no uniform map.
+	// modelGroups is the attached-unit staging atlas the frame's groups compose
+	// over together (model_stage.go); modelStage/modelStageScratch are the
+	// fallback pair a group the atlas could not serve composes over one at a
+	// time, grown to the largest such group seen and reused. modelOpts and
+	// modelStageOp are reused draw options, so a steady-state frame's model draws
+	// allocate no options value and no uniform map.
+	modelGroups                   modelStageAtlas
 	modelAtlas                    modelSlotAtlas
 	modelPageLimit                int
 	modelStage, modelStageScratch *ebiten.Image
@@ -118,12 +118,6 @@ type Renderer struct {
 	// Both are diagnostic only.
 	frameDraws int
 	lastDest   *ebiten.Image
-
-	// verts and idx are the geometry scratch the fog pass, the expansion and the
-	// model rasterization passes share; the batched 2D families use the
-	// scheduler's own buffers instead.
-	verts []ebiten.Vertex
-	idx   []uint16
 
 	modelStats ModelStats
 
@@ -188,7 +182,6 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 			firstErr = err
 		}
 	}
-	compile(&r.expand, newExpandShader)
 	compile(&r.scene2D, newScene2DShader)
 	compile(&r.sceneDest, newSceneDestShader)
 	compile(&r.modelKey, newModelKeyShader)
@@ -207,8 +200,8 @@ func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	return r, firstErr
 }
 
-// ensureSize allocates or reallocates the two indexed surfaces and the expanded
-// output when the frame size changes.
+// ensureSize allocates or reallocates the composite and the fog read surface
+// when the frame size changes.
 func (r *Renderer) ensureSize(w, h int) {
 	if w <= 0 || h <= 0 {
 		return
@@ -218,16 +211,15 @@ func (r *Renderer) ensureSize(w, h int) {
 	}
 	r.surfaces[0] = ebiten.NewImage(w, h)
 	r.surfaces[1] = ebiten.NewImage(w, h)
-	r.output = ebiten.NewImage(w, h)
 	r.w, r.h = w, h
 	r.sched.resetFrame(w, h)
 }
 
 // Execute replays the recorded frame list through this renderer and returns the
-// expanded RGBA surface for the adapter to present (docs/DESIGN_GPU_RENDERER.md
-// §2.3). The list is visited in exact record order (C-G3); the Sink methods
-// compile the commands into phases and this submits them (§11.2), ending with the
-// palette expansion after every indexed composite.
+// composite for the adapter to present (docs/DESIGN_GPU_RENDERER.md §2.3). The
+// list is visited in exact record order (C-G3); the Sink methods compile the
+// commands into phases and this submits them (§11.2). The composite is already
+// colour, so there is no expansion after it (§13.3).
 //
 // It returns nil when the surface cannot be sized (a degenerate w/h) or when the
 // list is nil, so the adapter can fall back to leaving the screen untouched.
@@ -247,12 +239,17 @@ func (r *Renderer) Execute(list *drawlist.List, w, h int) *ebiten.Image {
 	defer r.modelPrep.reset()
 	// Every eligible subject of the frame is rasterized into the slot atlas
 	// before Replay commits any of them, so the model stages cost a fixed
-	// number of draws instead of one set per subject (§11.2).
+	// number of draws instead of one set per subject (§11.2). The frame's
+	// attached-unit groups then compose over the shared staging atlas, ordered by
+	// destination, so their cost is a fixed handful of passes rather than three
+	// per group (model_stage.go).
 	r.prepareModelSlots(list)
+	r.prepareModelGroups(list)
+	r.composeModelStage()
 	list.Replay(r)
 	// A list without an Expand marker still leaves no compiled work behind.
 	r.submitSchedule()
-	return r.output
+	return r.surfaces[0]
 }
 
 // DeviceDraws reports the device draws the most recent Execute issued. It is
@@ -264,13 +261,15 @@ func (r *Renderer) DeviceDraws() int {
 	return r.frameDraws
 }
 
-// index0Color is the offscreen's cleared value: index 0 in the red channel with
-// opaque alpha, so premultiplied sampling recovers red exactly (C-G4).
+// index0Color is the model slot atlas key plane's cleared value: index 0 in the
+// red channel with opaque alpha, so premultiplied sampling recovers red exactly.
+// The model stage stays in index space (C-G4); only its commit resolves colour.
 var index0Color = color.RGBA{R: 0, G: 0, B: 0, A: 255}
 
-// Clear fills the indexed surface with palette index 0 — the first command of
-// every committed frame (C-G1). Index 0 rides the red channel; alpha is opaque so
-// the stored red survives premultiplication and decodes back to 0 (C-G4).
+// Clear fills the composite with palette index 0 resolved through PAL — the
+// first command of every committed frame (C-G1). It rides the scene shader's
+// constant-index op, so the clear resolves its colour the same way every other
+// opaque family does (C-G8 as amended, §13.3).
 //
 // It is a barrier that opens a segment rather than a device call: the clear
 // compiles as an opaque full-surface fill at the head of the new segment's first
@@ -291,36 +290,17 @@ func (r *Renderer) Clear() {
 		[4]float32{0, 0, 0, 0}, [4]float32{0, 0, 0, sceneOpSolid})
 }
 
-// Expand runs the index→RGBA expansion pass: the composed indexed surface
-// through PALETTE.PAL into the output surface, the single colour pass of the
-// composite (docs/DESIGN_GPU_RENDERER.md C-G8). It is a barrier — every compiled
-// phase is submitted before the surface is read.
+// Expand marks the end of the recorded composite. The Enhanced executor has no
+// expansion pass: every fragment already resolved its index through PALETTE.PAL
+// as it was written, which is the same lookup the software expansion made, done
+// per fragment instead of once per frame (C-G8 as amended,
+// docs/DESIGN_GPU_RENDERER.md §13.3).
 //
-// The quad maps the output 1:1 to the indexed surface, so each output pixel
-// samples its own texel with nearest filtering (C-G4). BlendCopy overwrites the
-// output outright — no blend arithmetic on the result (C-G4).
+// It remains a barrier, so a caller that reads the composite after the marker —
+// a capture, or the window adapter presenting it — sees every compiled phase
+// submitted.
 func (r *Renderer) Expand() {
 	r.submitSchedule()
-	if r.expand == nil || r.surfaces[0] == nil || r.output == nil || r.tables.atlas == nil {
-		// Without a compiled shader or an installed palette there is nothing to
-		// expand; leave the output as-is rather than guessing a colour (I9).
-		return
-	}
-	fw, fh := float32(r.w), float32(r.h)
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
-	r.appendTexQuad(0, 0, fw, fh, 0, 0, fw, fh)
-	r.sceneOpts.Blend = ebiten.BlendCopy
-	r.sceneOpts.Images[0] = r.surfaces[0] // the indexed frame, index in red
-	r.sceneOpts.Images[1] = r.tables.atlas
-	r.sceneOpts.Images[2] = nil
-	r.sceneOpts.Images[3] = nil
-	r.beginPass(r.output)
-	r.output.DrawTrianglesShader(r.verts, r.idx, r.expand, &r.sceneOpts)
-	r.sceneOpts.Images[1] = nil
-	r.frameDraws++
-	r.verts = r.verts[:0]
-	r.idx = r.idx[:0]
 }
 
 // The drawing families live beside this file: Terrain in terrain.go, the fills,

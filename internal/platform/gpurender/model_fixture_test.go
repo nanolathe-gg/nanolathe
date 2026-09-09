@@ -89,10 +89,19 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	}
 	var pixels = make([]byte, 80*48*4)
 	img.ReadPixels(pixels)
+	// The composite is colour now, so a check names the classic index and the
+	// helper expands it through PAL (§13.4). An opaque family must land on it
+	// exactly; the ALP-blended shadow commits are inside the §13.2 bound.
 	check := func(name string, x, y int, want byte) {
-		got := pixels[(y*80+x)*4]
-		if got != want && g.err == nil {
-			g.err = fmt.Errorf("%s at (%d,%d): index %d, want %d", name, x, y, got, want)
+		if err := checkExactIndex(fmt.Sprintf("%s at (%d,%d)", name, x, y),
+			pixels, (y*80+x)*4, &pal, want); err != nil && g.err == nil {
+			g.err = err
+		}
+	}
+	checkBlended := func(name string, x, y int, want byte) {
+		if err := checkBlendedIndex(fmt.Sprintf("%s at (%d,%d) [ALP floor]", name, x, y),
+			pixels, (y*80+x)*4, &pal, want); err != nil && g.err == nil {
+			g.err = err
 		}
 	}
 	check("equal key later face", 1, 2, 4)
@@ -118,8 +127,10 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if !textured && g.err == nil {
 		g.err = fmt.Errorf("cyclic textured quad did not draw an authored gradient texel")
 	}
-	check("shadow ALP blend", 1, 16, 11)
-	check("overlapping shadow faces blend once", 3, 16, 11)
+	// One blend of the silhouette over the background: floor((200 + 7)/2) = 103.
+	// Two blends would give 151, far outside the bound [03 R-REN-03D §4–§5].
+	checkBlended("shadow ALP blend", 1, 16, 103)
+	checkBlended("overlapping shadow faces blend once", 3, 16, 103)
 	check("body punches shadow", 5, 16, 13)
 	check("shadow bounds", 10, 16, 7)
 	check("reveal keeps lower body", 1, 27, 15)
@@ -140,7 +151,7 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	check("negative shifted child loses", 5, 37, 23)
 	check("equal shifted child wins", 7, 37, 26)
 	check("erased carrier retains key ownership", 13, 37, 7)
-	check("child shadow-only blend", 59, 37, 11)
+	checkBlended("child shadow-only blend", 59, 37, 103)
 	check("child shadow-only punches own body", 61, 37, 7)
 	check("child shadow-only omits body commit", 63, 37, 7)
 	check("structure ALP row and pair order", 68, 37, 43)
@@ -195,33 +206,47 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if g.err == nil {
 		g.err = checkFogDevicePixels()
 	}
+	if g.err == nil {
+		g.err = checkRowScaleDevicePixels()
+	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
 
 func (g *modelFixtureGame) Layout(int, int) (int, int) { return 80, 48 }
 
+// fixturePalette is the grey ramp every device fixture composes against:
+// PAL[i] = (i,i,i), so a readback pixel names the classic index it stands for,
+// and ALP is its own builder's arithmetic [03 §4.3.4], so the classic table and
+// the Enhanced blend agree exactly (see composite_test.go). The authored ALP
+// entries after the fill are the source-side lookups the structure supersample
+// resolve makes, which stay exact table fetches (C-G4).
 func fixturePalette() palette.Tables {
 	var p palette.Tables
 	for i := 0; i < 256; i++ {
 		p.Base[i] = [4]byte{byte(i), byte(i), byte(i), 255}
 		p.Logical[i] = byte(i)
-		p.Alpha[i*256+i] = byte(i)
 		p.Gray[i], p.Blue[i] = byte(i), byte(i)
 		for row := 0; row < 32; row++ {
 			p.Light[row*256+i] = byte(i)
 			p.Shade[row][i] = byte(i)
 		}
 	}
+	fixtureALP(&p)
 	p.Alpha[31*256+32] = 41
 	p.Alpha[33*256+34] = 42
 	p.Alpha[41*256+42] = 43
 	p.Alpha[31*256+1] = 45
 	p.Alpha[45*256+1] = 46
 	p.Blue[15] = 17
-	p.Alpha[7] = 11
-	p.Alpha[11] = 12 // A repeated shadow blend must not reach this index.
 	return p
 }
+
+// fixtureShadowIndex is the silhouette index both shadow subjects paint. It sits
+// far from the fixture background so the difference between blending the
+// silhouette once and blending it twice is far outside §13.4's bound: over
+// background 7 one blend gives 103 and two would give 151
+// [03 R-REN-03D §4–§5].
+const fixtureShadowIndex = uint8(200)
 
 func fixtureModelList() drawlist.List {
 	var list drawlist.List
@@ -283,7 +308,8 @@ func fixtureModelList() drawlist.List {
 		drawlist.ModelFace{Vertices: rotated, Texture: gradient},
 	)})
 	body := fixtureGeometry(0, true, fixtureFace(4, 14, 4, 6, 50, 13))
-	body.Shadow = fixtureGeometry(0, true, fixtureFace(0, 14, 7, 6, 25, 0), fixtureFace(2, 14, 7, 6, 35, 0))
+	body.Shadow = fixtureGeometry(0, true,
+		fixtureFace(0, 14, 7, 6, 25, fixtureShadowIndex), fixtureFace(2, 14, 7, 6, 35, fixtureShadowIndex))
 	list.RecordModel(drawlist.Model{Geometry: body})
 	reveal := fixtureGeometry(0, true, fixtureFace(0, 26, 12, 6, 10, 15), fixtureFace(4, 26, 8, 6, 30, 16), fixtureFace(14, 26, 4, 6, 20, 15))
 	reveal.Reveal = &drawlist.ModelReveal{Floor: 20, Line: 30, Below: -1, Band: 18, Above: -2}
@@ -315,7 +341,7 @@ func fixtureModelList() drawlist.List {
 	erasedCarrier.Children = []drawlist.ModelChild{{Geometry: fixtureGeometry(0, true, fixtureFace(12, 36, 4, 6, 100, 24))}}
 	list.RecordModel(drawlist.Model{Geometry: erasedCarrier})
 	shadowOnly := fixtureGeometry(0, true, fixtureFace(60, 36, 4, 6, 50, 19))
-	shadowOnly.Shadow = fixtureGeometry(0, true, fixtureFace(58, 36, 4, 6, 25, 0))
+	shadowOnly.Shadow = fixtureGeometry(0, true, fixtureFace(58, 36, 4, 6, 25, fixtureShadowIndex))
 	list.RecordModel(drawlist.Model{Geometry: shadowOnly, ShadowOnly: true})
 	resolved := fixtureGeometry(68, true, fixtureFace(0, 0, 2, 1, 50, 31))
 	resolved.AnchorY, resolved.Width, resolved.Height = 37, 2, 1

@@ -243,10 +243,10 @@ func TestMinimapUsesPersistedAlternatePolarity(t *testing.T) {
 	b.shell = &gameShell{interfaceType: settings.InterfaceTypeRightClick}
 	u := placeUnit(b, "armcons", numeric.Fixed(8*65536), numeric.Fixed(8*65536))
 	replaceSelectionForTest(t, b, u)
-	b.battleState().Input.Latch = input.LatchMove
 
-	// Type 1 swaps the minimap roles: left down captures the camera and does
-	// not move it until the following host frame.
+	// Type 1 swaps the *idle* minimap roles: left down captures the camera and
+	// does not move it until the following host frame. An armed order still
+	// owns left, as verified separately below [07 R-CAM-01 §5].
 	left := input.NewState()
 	left.Mouse.X, left.Mouse.Y = 70, 50
 	left.Mouse.SetButton(input.MouseButtonLeft, true)
@@ -263,14 +263,15 @@ func TestMinimapUsesPersistedAlternatePolarity(t *testing.T) {
 	left.Mouse.SetButton(input.MouseButtonLeft, false)
 	b.handleInput(left, nil)
 
-	// The complementary right down reaches the one order producer rather than
-	// the Type-0 cancellation path.
-	right := input.NewState()
-	right.Mouse.X, right.Mouse.Y = 70, 50
-	right.Mouse.SetButton(input.MouseButtonRight, true)
-	b.handleInput(right, nil)
+	// Once armed, Type 1's left button continues to reach the order producer;
+	// its idle camera capture cannot steal this action.
+	b.battleState().Input.Latch = input.LatchMove
+	armedLeft := input.NewState()
+	armedLeft.Mouse.X, armedLeft.Mouse.Y = 70, 50
+	armedLeft.Mouse.SetButton(input.MouseButtonLeft, true)
+	b.handleInput(armedLeft, nil)
 	if pending := b.sess.PendingHumanCommands(); len(pending) != 1 || pending[0].Kind != session.HumanOrder {
-		t.Fatalf("Interface Type 1 right minimap click queued %+v, want one HumanOrder", pending)
+		t.Fatalf("Interface Type 1 armed left minimap click queued %+v, want one HumanOrder", pending)
 	}
 }
 

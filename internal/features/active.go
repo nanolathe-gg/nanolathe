@@ -76,6 +76,12 @@ func (s *Service) unlinkActive(inst *Instance) {
 // the active list at the head.
 func (s *Service) attachEventRecord(inst *Instance) {
 	s.billArena(inst)
+	if inst != nil {
+		inst.runtimeLive = true
+		shadow := eventShadowName(inst.Def, inst.AnimationSelector)
+		inst.runtimeShadowEnabled = isSpriteDef(inst.Def) && shadow != "" &&
+			s.ShadowSequenceResolved != nil && s.ShadowSequenceResolved(inst.Def, shadow)
+	}
 	s.linkActive(inst)
 }
 
@@ -96,6 +102,8 @@ func (s *Service) releaseArena(inst *Instance) {
 		return
 	}
 	inst.arenaBilled = false
+	inst.runtimeLive = false
+	inst.runtimeShadowEnabled = false
 	s.arenaHeld--
 }
 

@@ -20,9 +20,14 @@ Each output directory must be new. Use `--root` for another retail install,
 without factory orders. Assets are not embedded or committed. Run cases
 sequentially without concurrent builds, tests or other performance workloads.
 The visible window runs with VSync at `--benchmark-tps` draws per second (30, the
-retail cadence, by default; 60 is the enhanced presentation target) and
-continues when unfocused. One simulation step still runs per draw, so a 60 TPS
-run advances the battle twice as fast in wall time; compare runs at one rate.
+retail cadence, by default; 60 an intermediate rate; 120 the Enhanced
+presentation target) and continues when unfocused. At 30 and 60 one simulation
+step runs per draw, so a 60 TPS run advances the battle twice as fast in wall
+time. At 120 one authoritative step runs every fourth draw and the four frames
+are presented at tick fractions 0, 1/4, 1/2 and 3/4, so the report measures the
+interpolated presentation of docs/DESIGN_GPU_RENDERER.md §13.5 at the retail
+simulation rate; only the modern renderer blends, classic keeps committed-tick
+sampling at every rate. Compare runs at one rate.
 
 `frames.json` records scene version, seed, map, renderer, display options, runtime
 and build information, per-frame timings and feature census. `cpu.pprof`,
@@ -34,8 +39,9 @@ queue phase, stance and target are included in each census. Compare the same sce
 factory production changes RNG consumption and battle evolution, so old captures
 and exact stall tick numbers are not the new scene's baseline.
 
-There are 30 pre-window simulation steps and 60 warm-up draws. Exactly one
-simulation step runs per draw. This isolates comparable tick sequences but does
+There are 30 pre-window simulation steps and 60 warm-up draws. At 30 and 60 TPS
+exactly one simulation step runs per draw; at 120 one runs every fourth draw.
+This isolates comparable tick sequences but does
 not exercise the ordinary interactive catch-up scheduler or live user input.
 The seed fixes simulation streams; authored content, settings and code revision
 also matter. Camera origins and shake status are recorded with each census.
@@ -48,7 +54,8 @@ also matter. Camera origins and shake status are recorded with each census.
 - `Cadence`: intervals measured after each simulation step, including pacing.
   With VSync the cadence quantizes to whole display refreshes, so a run whose
   CPU and GPU work fit the period sits at the floor (33.3 ms at 30, 16.7 ms at
-  60) and one that does not alternates between one and two refreshes. The
+  60, 8.3 ms at 120) and one that does not alternates between one and two
+  refreshes. The
   report's "on cadence" share is the fraction of frames at the floor; it is the
   first figure to compare when the medians are at the floor already.
 - Modern is GPU-bound before it is CPU-bound: a 60 TPS run whose `Submit` is

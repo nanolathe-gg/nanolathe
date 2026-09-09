@@ -6,25 +6,25 @@ import (
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 )
 
-// The destination-reading families for the modern executor beyond fog: the
+// The destination-compositing families for the modern executor beyond fog: the
 // translucent strip blit (BlitTinted), translucent feature bodies and shadows,
 // the UI light/shade rects (FillLitRect/FillShadeRect) and the lit point batch
 // (PointLit), plus the source-through-LHT strip blit (BlitLit), which reads no
-// destination (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4, C-G7).
+// destination (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4, C-G7, §13.3).
 //
-// Every destination-reading family runs over the phase's read surface: before a
-// phase's destination batch writes the composed surface, the union rectangle of
-// that batch is copied into the read surface, and the batch reads that copy while
-// writing the composite — the same read/write split fog uses for its gray layer
-// (C-G7), so a destination-reading write never samples a pixel its own batch
-// changed. The read surface is bound at submission rather than at compile time
-// (§11.5), which is also what lets the fog composite ride the same batch.
+// None of them reads the destination any more. In the true-colour composite the
+// destination-side tables are the arithmetic they were generated from
+// [03 §4.3.4], so each family hands the device a fragment and a blend instead:
+// the ALP families the premultiplied half-colour (PAL[src]/2, 1/2) under
+// source-over, and the row families the scale k under the scale blend
+// (§13.2, §13.3). The GPU reads the framebuffer for them, so there is no
+// snapshot and no copy.
 //
-// The scheduler places a destination-reading command one whole phase after every
-// earlier command it overlaps that also read the destination, so an overlapping
-// later command still reads the earlier command's writes, exactly as the byte
-// writers do when they read c.indexed in record order
-// (§11.2 "The scheduler")[03 R-COMP-01 §2].
+// The order they impose is unchanged, and so is the scheduler: a command of this
+// class is still placed one whole phase after every earlier command of the class
+// it overlaps, so an overlapping later command still composites over the earlier
+// command's result, exactly as the byte writers do when they read c.indexed in
+// record order (§11.2 "The scheduler")[03 R-COMP-01 §2].
 
 // clampLHTRow clamps a light level to the LHT's 0..31 row range, matching
 // palette.Tables.LightLookup's own clamp so the GPU row equals the byte writer's
@@ -72,9 +72,10 @@ func (r *Renderer) drawLit(f *formats.GAFFrame, x, y, row int) {
 }
 
 // drawTint reproduces tintedBlitAnchor: it subtracts the frame's authored anchor
-// offsets, clips to the framebuffer, and for every opaque source texel writes
-// ALP[src*256 + dst] — a destination read (docs/DESIGN_GPU_RENDERER.md §2.3)
-// [03 R-COMP-01 §2][03 R-FX-02 §2]. The family's gate is "ALP present": with no
+// offsets, clips to the framebuffer, and for every opaque source texel composites
+// the ALP builder's floor((src + dst)/2) over the destination
+// (docs/DESIGN_GPU_RENDERER.md §2.3, §13.3)[03 §4.3.4][03 R-COMP-01 §2]
+// [03 R-FX-02 §2]. The family's gate is "the palette is installed": with no
 // palette it draws nothing, exactly as tintedBlitAnchor returns on a nil palette
 // [03 R-COMP-01 §2].
 func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clipH int) {
@@ -108,18 +109,18 @@ func (r *Renderer) drawTint(f *formats.GAFFrame, x, y, clipX, clipY, clipW, clip
 }
 
 // drawLitRect reproduces uiLightRectRaw: every pixel of the framebuffer-clipped
-// rect is rewritten as LightLookup(level, dst) — a destination read through one
-// LHT row (docs/DESIGN_GPU_RENDERER.md §2.3)[03 §4.3.1]. The level is clamped to
-// the LHT's 0..31 row range as LightLookup does.
+// rect is brightened through one LHT row (docs/DESIGN_GPU_RENDERER.md §2.3)
+// [03 §4.3.1]. The level is clamped to the LHT's 0..31 row range as LightLookup
+// does, and the row becomes the scale its builder multiplied by (§13.3).
 func (r *Renderer) drawLitRect(x, y, w, h, level int) {
-	r.drawDestRect(x, y, w, h, tableRowLHT+clampLHTRow(level))
+	r.drawDestRect(x, y, w, h, lightScale(clampLHTRow(level)))
 }
 
 // drawShadeRect reproduces uiShadeRectRaw: every pixel of the framebuffer-clipped
-// rect is rewritten through the signed fade table — SHD row level+32 (clamped at
-// -32) for a negative level, else LHT row level — a destination read
-// (docs/DESIGN_GPU_RENDERER.md §2.3)[03 R-COMP-02 §5]. The row selection and its
-// clamps match uiShadeRectRaw exactly.
+// rect is taken through the signed fade table — SHD row level+32 (clamped at -32)
+// for a negative level, else LHT row level (docs/DESIGN_GPU_RENDERER.md §2.3)
+// [03 R-COMP-02 §5]. The row selection and its clamps match uiShadeRectRaw
+// exactly; only the lookup becomes the row's own scale (§13.3).
 func (r *Renderer) drawShadeRect(x, y, w, h, level int) {
 	useShade := level < 0
 	row := level
@@ -135,20 +136,19 @@ func (r *Renderer) drawShadeRect(x, y, w, h, level int) {
 	if row < 0 {
 		row = 0
 	}
-	base := tableRowLHT
 	if useShade {
-		base = tableRowSHD
+		r.drawDestRect(x, y, w, h, shadeScale(row))
+		return
 	}
-	r.drawDestRect(x, y, w, h, base+row)
+	r.drawDestRect(x, y, w, h, lightScale(row))
 }
 
 // drawDestRect is the shared body of the UI light/shade rects: it clips the rect
-// to the framebuffer and rewrites every pixel as TABLE[row][dst] through the
-// destination pass (docs/DESIGN_GPU_RENDERER.md §2.3). row is the absolute table
-// atlas row and rides the vertex colour, constant across the quad. With no
-// palette installed there is no table atlas and nothing is drawn, matching the
-// byte writers' nil-palette return.
-func (r *Renderer) drawDestRect(x, y, w, h, row int) {
+// to the framebuffer and scales every pixel of it by k through the destination
+// pass (docs/DESIGN_GPU_RENDERER.md §2.3, §13.3). k rides the vertex colour,
+// constant across the quad. With no palette installed nothing is drawn, matching
+// the byte writers' nil-palette return.
+func (r *Renderer) drawDestRect(x, y, w, h int, k float32) {
 	if r.sceneDest == nil || r.tables.atlas == nil || w <= 0 || h <= 0 {
 		return
 	}
@@ -157,21 +157,22 @@ func (r *Renderer) drawDestRect(x, y, w, h, row int) {
 	if x0 >= x1 || y0 >= y1 {
 		return
 	}
-	if !r.sched.begin(schedDest, x0, y0, x1, y1, [4]*ebiten.Image{1: r.tables.atlas}) {
+	if !r.sched.beginBlended(schedDest, x0, y0, x1, y1,
+		[4]*ebiten.Image{1: r.tables.atlas}, nil, blendScaleDestination, schedReadNone) {
 		return
 	}
-	r.appendDestTableQuad(float32(x0), float32(y0), float32(x1), float32(y1), row)
+	r.appendDestTableQuad(float32(x0), float32(y0), float32(x1), float32(y1), k)
 }
 
 // drawLitPoints reproduces the PointLit branch of classicSink.Points: each point
-// rewrites its destination pixel as LightLookup(pt.Index, dst) — a destination
-// read through the point's own LHT row (docs/DESIGN_GPU_RENDERER.md §2.3)
-// [03 §4.3.1][03 R-FX-01 §4]. Each point is placed on its own, so the batch tags
-// the cells its points occupy rather than its bounding rectangle, and a point
-// that repeats a pixel an earlier point of this segment wrote is placed one phase
-// after it — that write must observe the earlier one, exactly as the byte
-// writer's record-order chain does (§11.2 "The scheduler"). Points outside the
-// framebuffer are skipped, matching the producers' own clip.
+// brightens its destination pixel through the point's own LHT row
+// (docs/DESIGN_GPU_RENDERER.md §2.3)[03 §4.3.1][03 R-FX-01 §4]. Each point is
+// placed on its own, so the batch tags the cells its points occupy rather than
+// its bounding rectangle, and a point that repeats a pixel an earlier point of
+// this segment wrote is placed one phase after it — that write must observe the
+// earlier one, exactly as the byte writer's record-order chain does
+// (§11.2 "The scheduler"). Points outside the framebuffer are skipped, matching
+// the producers' own clip.
 func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 	if r.sceneDest == nil || r.tables.atlas == nil || len(points) == 0 {
 		return
@@ -184,15 +185,16 @@ func (r *Renderer) drawLitPoints(points []drawlist.Point) {
 		}
 		r.sched.beginPoint(x, y, imgs)
 		r.appendDestTableQuad(float32(x), float32(y), float32(x+1), float32(y+1),
-			tableRowLHT+clampLHTRow(int(pt.Index)))
+			lightScale(clampLHTRow(int(pt.Index))))
 	}
 }
 
 // appendDestTableQuad appends one axis-aligned quad covering [dx0,dx1)×[dy0,dy1)
-// for the destination table op: the absolute table atlas row rides the red vertex
-// lane and the fragment reads the phase snapshot under its own screen pixel
-// (C-G4).
-func (r *Renderer) appendDestTableQuad(dx0, dy0, dx1, dy1 float32, row int) {
+// for the row-family op. The scale k is split across the red and green vertex
+// lanes; the fragment emits them and the scale blend multiplies the destination
+// by their sum (§13.3).
+func (r *Renderer) appendDestTableQuad(dx0, dy0, dx1, dy1, k float32) {
+	low, high := rowScaleLanes(k)
 	r.sched.quad(schedDest, dx0, dy0, dx1, dy1, 0, 0, 0, 0,
-		[4]float32{float32(row), 0, 0, 0}, [4]float32{0, 0, 0, destOpTable})
+		[4]float32{low, high, 0, 0}, [4]float32{0, 0, 0, destOpTable})
 }

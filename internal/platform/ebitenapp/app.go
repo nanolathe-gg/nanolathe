@@ -13,6 +13,12 @@ import (
 	"github.com/nanolathe/nanolathe/internal/platform/gpurender"
 )
 
+// presentationTPS is the window's Update rate. It stays at 30: every per-host-
+// frame step the battle takes — input edges, the follow-camera glide's per-frame
+// step [07 R-CAM-01 §12], the scroll pass [07 §10], the sub-tick budget
+// [01 §4.2] — keeps the cadence retail gives it. Draw is called at the display's
+// refresh rate regardless, which is what the Enhanced path presents on
+// (docs/DESIGN_GPU_RENDERER.md §13.5).
 const presentationTPS = 30
 
 // RendererMode selects which executor Draw presents through — the one sanctioned
@@ -53,10 +59,22 @@ type app struct {
 	// presentPending is set by the 30 Hz update and consumed by Draw. Draw can
 	// still be called at the monitor's refresh rate, so the retained-screen
 	// mode configured by Run lets those extra calls leave the frame untouched.
+	// It gates the classic path only: modern records and replays on every Draw
+	// (§13.5).
 	presentPending bool
+	// interpolating records that the modern path has enabled the client's
+	// blended view; it is armed once, on the first modern Draw, and classic
+	// never arms it (§13.5).
+	interpolating bool
 	// inputStarted anchors the platform-only host clock used to timestamp
 	// polled pointer records. It is deliberately outside the client and sim.
 	inputStarted time.Time
+	// updatedAt is when the last Update returned. It measures how far the
+	// window is through the current Update, which is the camera's blend
+	// fraction (§13.5) — the camera moves on this grid, not on the simulation's
+	// scaled units. Like inputStarted it is platform time and never reaches the
+	// client's clock or the sim [I6].
+	updatedAt time.Time
 }
 
 // Update runs at presentationTPS. Delta is the fixed 1/TPS period: stable
@@ -66,12 +84,40 @@ func (a *app) Update() error {
 	a.syncWindowSize()
 	pollInput(a.c.Input(), a.scaledInputNow())
 	a.c.SetFocused(ebiten.IsFocused())
-	a.c.Step(1.0 / float64(presentationTPS))
+	a.stepClient()
+	a.syncPointerCapture()
 	a.presentPending = true
+	a.updatedAt = time.Now()
 	if a.c.ExitRequested() {
+		a.c.SetPointerCaptured(false)
+		a.syncPointerCapture()
 		return ebiten.Termination
 	}
 	return nil
+}
+
+func (a *app) stepClient() {
+	a.c.Step(1.0 / float64(presentationTPS))
+	if !a.c.IsFocused() {
+		// Host focus loss ends relative capture; no historical native pointer
+		// record is synthesized for the lost interval [01 R-PLAT-01 §6][T25].
+		a.c.SetPointerCaptured(false)
+	}
+}
+
+// Captured mode supplies an unbounded virtual cursor. The battle owner spends
+// successive differences, equivalent to recentering after each sampled frame
+// [07 R-CAM-01 §11]. Leaving capture restores the native pre-capture position.
+// TODO(T25): native capture starts after the host poll, so its restore point
+// cannot reproduce a historical queued pointer record's position exactly.
+func (a *app) syncPointerCapture() {
+	want := ebiten.CursorModeHidden
+	if a.c.PointerCaptured() {
+		want = ebiten.CursorModeCaptured
+	}
+	if ebiten.CursorMode() != want {
+		ebiten.SetCursorMode(want)
+	}
 }
 
 func (a *app) scaledInputNow() uint32 {
@@ -85,12 +131,15 @@ func (a *app) scaledInputNow() uint32 {
 // Draw presents one composed frame. The image is recreated only when the
 // logical size changes; WritePixels replaces its contents wholesale.
 func (a *app) Draw(screen *ebiten.Image) {
-	if !a.consumePresentation() {
-		return
-	}
 	width, height := a.c.Size()
+	// Enhanced presents on every Draw — that is the whole of the refresh-rate
+	// cadence — so it does not consume the update's pending flag; the blended
+	// view differs between two Draws of one update (§13.5).
 	if a.mode == RendererModern {
 		a.drawModern(screen, width, height)
+		return
+	}
+	if !a.consumePresentation() {
 		return
 	}
 	if a.img == nil || a.img.Bounds().Dx() != width || a.img.Bounds().Dy() != height {
@@ -109,6 +158,19 @@ func (a *app) Draw(screen *ebiten.Image) {
 func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 	if a.gpu == nil {
 		a.gpu = gpurender.New(a.c.PaletteTables(), width, height)
+	}
+	// How far this Draw is through the current Update, in updates: the camera's
+	// own fraction (§13.5). Before the first Update there is nothing to measure
+	// and the camera stays where it is.
+	if !a.updatedAt.IsZero() {
+		a.c.SetCameraFraction(float32(time.Since(a.updatedAt).Seconds() * presentationTPS))
+	}
+	if !a.interpolating {
+		// Enhanced is the one presentation path allowed to read two committed
+		// ticks; the client blends the world with the fraction the battle
+		// produces and the camera with the update phase above (§13.5) [I6].
+		a.c.SetInterpolation(true)
+		a.interpolating = true
 	}
 	list := a.c.RecordFrame()
 	img := a.gpu.Execute(list, width, height)

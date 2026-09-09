@@ -59,8 +59,10 @@ type MeteorState struct {
 // the public frame. Keeping these coupled prevents a second event/effect owner
 // from entering the authoritative graph [01 §4.4][03 §1].
 type publicationState struct {
-	events  *frame.EventBuffer
-	effects *render.EffectService
+	events           *frame.EventBuffer
+	effects          *render.EffectService
+	unitIdentities   []publishedUnitIdentity
+	nextUnitIdentity uint64
 }
 
 // Phase7Service is the narrow presentation-owned callback at the phase-7

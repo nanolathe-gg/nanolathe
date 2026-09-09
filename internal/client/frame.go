@@ -156,8 +156,17 @@ func (c *Client) recordFrame() {
 	}
 	// Audio: drain queue once per rendered frame outside simulation [03 §8.3] C18.
 	// Presentation-only; uses CRT stream [03 §8.3] C19 [I4]; never touches Sim RNG.
-	cur := c.buffer.Current()
+	//
+	// The recorder reads the committed frame, or — when the Enhanced path has
+	// enabled interpolation and a previous committed tick exists — the blended
+	// view of the two most recent committed ticks. Classic and `--shot` never
+	// enable it, so they still record exactly the committed tick
+	// (docs/DESIGN_GPU_RENDERER.md §13.5) [I6].
+	cur := c.presentationFrame()
 	ok := cur != nil
+	// blending is true when presentationFrame returned the interpolator's view
+	// rather than the committed frame itself.
+	blending := ok && cur != c.buffer.Current()
 	// Keep audio viewport in sync with camera for positional pan/attenuation [03 §8.3].
 	if c.cam != nil {
 		c.UpdateAudioViewportFromCamera()
@@ -170,9 +179,19 @@ func (c *Client) recordFrame() {
 	// touching c.indexed; drawCursor records the software cursor after them, so it
 	// sits above world, HUD and modal overlays [07 §8]; the expansion marker is
 	// recorded last (docs/DESIGN_GPU_RENDERER.md §2.2, C-G1, C-G8).
+	//
+	// The camera origin is blended for exactly the length of this recording and
+	// put back immediately after, so the audio viewport above, hit testing,
+	// orders and the next step all see the origin the 30 Hz step left
+	// (docs/DESIGN_GPU_RENDERER.md §13.5) [I6].
+	blendedCamera := false
+	if blending {
+		blendedCamera = c.beginCameraBlend()
+	}
 	c.composeIndexed(cur, ok)
 	c.drawCursor()
 	c.list.RecordExpand()
+	c.endCameraBlend(blendedCamera)
 }
 
 // RecordFrame records one committed frame and returns the frame's draw list for

@@ -213,21 +213,6 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	}
 }
 
-// appendTexQuad appends one axis-aligned quad mapping destination rect
-// [dx0,dx1)×[dy0,dy1) to source rect [sx0,sx1)×[sy0,sy1) as two triangles, into
-// the reusable geometry scratch the fog pass and the expansion share. Vertices
-// sit on integer pixel corners with no colour operand.
-func (r *Renderer) appendTexQuad(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float32) {
-	base := uint16(len(r.verts))
-	r.verts = append(r.verts,
-		ebiten.Vertex{DstX: dx0, DstY: dy0, SrcX: sx0, SrcY: sy0},
-		ebiten.Vertex{DstX: dx1, DstY: dy0, SrcX: sx1, SrcY: sy0},
-		ebiten.Vertex{DstX: dx0, DstY: dy1, SrcX: sx0, SrcY: sy1},
-		ebiten.Vertex{DstX: dx1, DstY: dy1, SrcX: sx1, SrcY: sy1},
-	)
-	r.idx = append(r.idx, base, base+1, base+2, base+1, base+2, base+3)
-}
-
 // floorDivInt is floor division for int, correct for negative numerators
 // [INVARIANTS I3]. Terrain projection uses it for the visible-tile range.
 func floorDivInt(a, b int) int {

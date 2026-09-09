@@ -41,6 +41,7 @@ func simArtFixture(t *testing.T) *vfs.FS {
 			frame(16, 24, -3, 9, 2),
 		}},
 		{Name: "treedie", Frames: []formats.GAFWriteFrame{frame(8, 8, 1, 1, 4)}},
+		{Name: "treedieshad", Frames: []formats.GAFWriteFrame{frame(8, 8, 1, 1, 4)}},
 	})
 	if err != nil {
 		t.Fatalf("encode feature gaf fixture: %v", err)
@@ -77,7 +78,7 @@ func simArtFixture(t *testing.T) *vfs.FS {
 
 func simArtFixtureCatalog() *Catalog {
 	return &Catalog{Features: map[string]*FeatureDef{
-		"tree1": {Filename: "trees", SeqName: "tree1", SeqNameBurn: "treeburn", SeqNameDie: "treedie"},
+		"tree1": {Filename: "trees", SeqName: "tree1", SeqNameBurn: "treeburn", SeqNameDie: "treedie", SeqNameDieShad: "treedieshad"},
 		// A definition whose file does not exist must compile to a miss, not
 		// to a load attempt at simulation time.
 		"ghost": {Filename: "nosuchfile", SeqNameDie: "ghostdie"},
@@ -143,6 +144,16 @@ func TestSimArtReportsUnknownRatherThanAFallback(t *testing.T) {
 	}
 	if _, ok := nilArt.EffectEntryFrameCount("", "smoke 1"); ok {
 		t.Fatal("a nil table resolved an effect entry")
+	}
+}
+
+func TestSimArtCompilesEventShadowsWithoutGivingThemCursorTiming(t *testing.T) {
+	art := CompileSimArt(simArtFixture(t), simArtFixtureCatalog())
+	if _, _, _, _, _, ok := art.FeatureSequence("trees", "treedieshad", 0); !ok {
+		t.Fatal("authored event shadow did not resolve")
+	}
+	if _, _, _, _, _, ok := art.FeatureSequence("trees", "missing-shadow", 0); ok {
+		t.Fatal("missing event shadow resolved")
 	}
 }
 

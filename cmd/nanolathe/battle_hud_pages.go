@@ -414,13 +414,27 @@ func (h *retailBattleHUD) generatedProductGAF(product string) *formats.GAF {
 }
 
 func (h *retailBattleHUD) gadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
+	return h.gadgetButtonFrame(gad, page, boolInt(pressed), 0, disabled)
+}
+
+// gadgetButtonFrame consumes one installed art entry and the runtime button
+// words. Other painters retain gadgetFrame's compatibility adapter above.
+func (h *retailBattleHUD) gadgetButtonFrame(gad gui.Gadget, page *formats.GAF, down, stage int, disabled bool) *formats.GAFFrame {
 	entry := h.gadgetArtEntry(gad, page)
 	stockButtons := false
 	if entry == nil && !gad.ButtonArtResolved && !gad.ExternalArtResolved && gad.Kind == gui.KindButton && h.common != nil {
 		entry, _ = h.common.Find("BUTTONS0")
 		stockButtons = entry != nil
 	}
-	return selectGadgetFrame(entry, gad, pressed, disabled, stockButtons)
+	if gad.Kind != gui.KindButton {
+		return selectGadgetFrame(entry, gad, false, disabled, stockButtons)
+	}
+	base := int(gad.ArtFrame)
+	if stockButtons {
+		base = stockButtonBase(entry, gad)
+	}
+	frame, _ := retailButtonFrameFromEntry(entry, gad, base, down, stage, disabled)
+	return frame
 }
 
 func selectGadgetFrame(entry *formats.GAFEntry, gad gui.Gadget, pressed, disabled, stockButtons bool) *formats.GAFFrame {

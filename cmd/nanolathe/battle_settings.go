@@ -43,6 +43,31 @@ func (b *battleSession) applySwitchAltSetting(s settings.Settings) {
 	b.switchAlt = s.SwitchAltEnabled()
 }
 
+// applyInterfaceTypeSetting installs the direct-entry LEFTCLICK stage once at
+// battle setup. A frontend-backed battle keeps the shell as the live owner, so
+// interfaceTypeRightClick reads that in-memory value on each pointer event;
+// neither route reads preferences from disk in the input path [07 R-CAM-01
+// §5][07 R-CAM-01 §7].
+func (b *battleSession) applyInterfaceTypeSetting(s settings.Settings) {
+	if b == nil || b.shell != nil {
+		return
+	}
+	b.interfaceType = s.InterfaceType
+}
+
+// interfaceTypeRightClick is the one input polarity gate. Only the two
+// normalized settings stages are meaningful; an uninitialized test battle
+// naturally retains the documented Type-0 default [07 R-CAM-01 §5].
+func (b *battleSession) interfaceTypeRightClick() bool {
+	if b == nil {
+		return false
+	}
+	if b.shell != nil {
+		return b.shell.interfaceType == settings.InterfaceTypeRightClick
+	}
+	return b.interfaceType == settings.InterfaceTypeRightClick
+}
+
 // applyMessageLineSettings installs the loaded block's message-column ring
 // configuration onto the battle client. `textlines` is the ring's line
 // budget and `textscroll` its line-age limit; both are read once at settings

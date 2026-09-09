@@ -74,20 +74,27 @@ const (
 // draw per fog cell, and its per-pixel result is the classic byte writers'
 // [03 §3.3][R-RR16-A §1][R-RR16-A §2][R-RR16-A §8].
 //
-// Sources: image 0 is the pre-fog snapshot of the indexed offscreen (index in
-// red, sampled 1:1 under the fragment); image 1 is the per-cell grid; image 2
-// is the fog GAF atlas (index in red, opacity flag in green); image 3 is the
-// GRAY TABLE (256×1, index in red). The lattice origin and the checker parity
-// ride the vertex custom attributes, so no uniform map is built per frame.
+// Sources: image 0 is the pre-fog read copy of the composite (colour, sampled
+// 1:1 under the fragment); image 1 is the per-cell grid; image 2 is the fog GAF
+// atlas (index in red, opacity flag in green); image 3 is the table atlas, whose
+// PAL row resolves the dark index and the black-family frames. The lattice origin
+// and the checker parity ride the vertex custom attributes, so no uniform map is
+// built per frame.
 //
-// Why the pass carries a running index rather than sampling the destination
-// once per operation: the classic writer paints cells in op order and clips a
-// fog GAF frame only against the framebuffer, never against its own cell
-// [03 §3.3]. A frame that reaches into the next cell therefore lands under a
-// later cell's gray remap, and the remap must see it. The shader walks the same
-// 2×2 block of cells in the same row-major order the op list is built in, and
-// each operation transforms the index the previous one produced, so the chain
-// is the sequential byte writers' chain.
+// The per-pixel values are the byte writers' operations evaluated in colour
+// (§13.3): the gray fills and the gray-family frames desaturate to the luminance
+// floor((r+g+b)/3) the GRAY TABLE was built from [03 §4.3.3], the solid and
+// checker fills write PAL of the fog dark index, and the black-family frames
+// write PAL of their own keyed source index.
+//
+// Why the pass carries a running colour rather than sampling the copy once per
+// operation: the classic writer paints cells in op order and clips a fog GAF
+// frame only against the framebuffer, never against its own cell [03 §3.3]. A
+// frame that reaches into the next cell therefore lands under a later cell's gray
+// remap, and the remap must see it. The shader walks the same 2×2 block of cells
+// in the same row-major order the op list is built in, and each operation
+// transforms the colour the previous one produced, so the chain is the sequential
+// byte writers' chain.
 //
 // The anchor arithmetic reproduces one further detail of the composer: it
 // clamps a cell's rectangle to the framebuffer BEFORE handing the origin to the
@@ -110,12 +117,25 @@ const (
 	ch1GrayPlain = %[9]d.0
 	ch0Solid     = %[10]d.0
 	ch0Black     = %[11]d.0
+	palRow       = %[12]d.0
 )
 
+// palAt resolves one physical palette index through the table atlas' PAL row.
+func palAt(idx float) vec3 {
+	return imageSrc3AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, palRow+0.5)).rgb
+}
+
+// desaturate is the GRAY TABLE's own construction: the truncated channel average
+// as a grey [03 §4.3.3](§13.2 GRAY row).
+func desaturate(c vec3) vec3 {
+	avg := floor((floor(c.r*255.0+0.5) + floor(c.g*255.0+0.5) + floor(c.b*255.0+0.5)) / 3.0)
+	return vec3(avg/255.0, avg/255.0, avg/255.0)
+}
+
 func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
-	// The fragment's screen pixel and the pre-fog index under it.
+	// The fragment's screen pixel and the pre-fog colour under it.
 	p := floor(dstPos.xy - imageDstOrigin())
-	idx := floor(imageSrc0At(srcPos).r*255.0 + 0.5)
+	col := imageSrc0At(srcPos).rgb
 	// The byte writers' checker phase: write where (x + y + parity) & 1 == 1.
 	checker := mod(p.x+p.y+custom.z, 2.0)
 	// The cell whose unclamped 32-pixel rectangle contains this pixel.
@@ -137,11 +157,11 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			// Channel one renders before channel zero.
 			if code1 == ch1GrayFill {
 				if inCell {
-					idx = floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, 0.5)).r*255.0 + 0.5)
+					col = desaturate(col)
 				}
 			} else if code1 == ch1PatFill {
 				if inCell && checker > 0.5 {
-					idx = darkIndex
+					col = palAt(darkIndex)
 				}
 			} else if code1 >= ch1GrayPlain && inTile {
 				slot := code1 - ch1GrayPlain
@@ -151,39 +171,40 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 					dithered = true
 				}
 				row := floor(slot / atlasCols)
-				col := slot - row*atlasCols
-				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(col*atlasTile+d.x+0.5, row*atlasTile+d.y+0.5))
+				tileCol := slot - row*atlasCols
+				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(tileCol*atlasTile+d.x+0.5, row*atlasTile+d.y+0.5))
 				if t.g >= 0.5 {
 					if dithered {
 						if checker > 0.5 {
-							idx = darkIndex
+							col = palAt(darkIndex)
 						}
 					} else {
-						idx = floor(imageSrc3AtFromSrc0Pos(imageSrc0Origin()+vec2(idx+0.5, 0.5)).r*255.0 + 0.5)
+						col = desaturate(col)
 					}
 				}
 			}
 			if code0 == ch0Solid {
 				if inCell {
-					idx = darkIndex
+					col = palAt(darkIndex)
 				}
 			} else if code0 >= ch0Black && inTile {
 				slot := code0 - ch0Black
 				row := floor(slot / atlasCols)
-				col := slot - row*atlasCols
-				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(col*atlasTile+d.x+0.5, (blackRow0+row)*atlasTile+d.y+0.5))
+				tileCol := slot - row*atlasCols
+				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(tileCol*atlasTile+d.x+0.5, (blackRow0+row)*atlasTile+d.y+0.5))
 				if t.g >= 0.5 {
-					idx = floor(t.r*255.0 + 0.5)
+					col = palAt(floor(t.r*255.0 + 0.5))
 				}
 			}
 		}
 	}
-	return vec4(idx/255.0, 0.0, 0.0, 1.0)
+	return vec4(col, 1.0)
 }
 `,
 	fogCellPixels, fogAtlasTile, fogAtlasCols, fogVariants, fogSlots,
 	int(render.FogDarkPaletteIndex),
-	fogCh1GrayFill, fogCh1PatFill, fogCh1GrayPlain, fogCh0Solid, fogCh0Black)
+	fogCh1GrayFill, fogCh1PatFill, fogCh1GrayPlain, fogCh0Solid, fogCh0Black,
+	tableRowPAL)
 
 // newFogPassShader compiles the fog composite pass. It is compiled lazily on the
 // first Fog command rather than in NewChecked, so the fog unit owns its own

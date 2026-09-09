@@ -168,7 +168,7 @@ func (c *Client) Cursors() *Cursors { return c.cursors }
 // the pointer, so the blit origin is the pointer minus the offset
 // [07 §8][fmt gaf "Placement offsets"].
 func (c *Client) drawCursor() {
-	if c == nil || c.cursors == nil {
+	if c == nil || c.cursors == nil || c.PointerCaptured() {
 		return
 	}
 	f := c.cursors.Frame()
@@ -176,6 +176,9 @@ func (c *Client) drawCursor() {
 		return
 	}
 	mouse, _ := c.in.PointerSample()
+	if c.cursorRestorePending {
+		mouse.X, mouse.Y = c.cursorRestoreX, c.cursorRestoreY
+	}
 	x, y := render.CursorHotspot(f, int(mouse.X), int(mouse.Y))
 	// Record then execute inline: classicSink.Cursor runs the same UIBlit at the
 	// hotspot-resolved origin this used to call directly [07 §8].

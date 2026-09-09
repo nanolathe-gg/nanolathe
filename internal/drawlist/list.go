@@ -118,6 +118,10 @@ type Glyphs struct {
 	// max-width 0 (no truncation) [03 R-FX-01 §6A]; the frontend text paths carry
 	// the authored gadget width here instead.
 	MaxWidth int32
+	// Clip confines the rasterized glyph pixels after the retail width
+	// truncation. HasClip is false for every existing call site.
+	Clip    Rect
+	HasClip bool
 }
 
 // FillStyle selects which rectangle writer a Fill replays as

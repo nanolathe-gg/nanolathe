@@ -67,7 +67,7 @@ import "github.com/hajimehoshi/ebiten/v2"
 // # Barriers
 //
 // A barrier — the clear, a composed attached-unit group's shared staging image,
-// a model subject the slot atlas could not fit, the expansion — ends a SEGMENT:
+// a model subject the slot atlas could not fit, the Expand marker — ends a SEGMENT:
 // everything compiled so far is submitted, and every later command is placed
 // after it. Fog is no longer a barrier: it is an ordinary destination-reading
 // command whose rectangle is the visible fog region, so the rectangle rules
@@ -80,8 +80,11 @@ import "github.com/hajimehoshi/ebiten/v2"
 // shader the run cannot bind, or when the run reaches its vertex limit.
 
 const (
-	// schedOpaque is the class of every command that reads no destination
-	// pixel; schedDest is the class of the table lookups on the destination.
+	// schedOpaque is the class of every command that overwrites its pixels;
+	// schedDest is the class of the families whose result depends on what is
+	// already there — the ALP composites, the row scales and the fog composite.
+	// Since §13.3 those are device blends rather than destination reads, but the
+	// order they impose is the same, so the placement rules are unchanged.
 	schedOpaque  = 0
 	schedDest    = 1
 	schedClasses = 2
@@ -108,14 +111,10 @@ const schedCellOwners = 4
 // it. Splitting never reorders geometry (C-G3).
 const schedRunVertexLimit = 1 << 20
 
-// schedReadNone marks a run that binds no read surface.
+// schedReadNone marks a run that binds no read surface. Since §13.3 that is
+// every run but the fog composite's: the ALP and row families are device blends
+// over the composite and read nothing.
 const schedReadNone = int8(-1)
-
-// schedDestReadSlot is the image slot the destination shader samples the phase's
-// read surface from (sceneDestShaderSource's snapAt). It is filled at
-// submission, not at compilation, because which of the two alternating surfaces
-// a phase reads is only known once the phases are ordered (§11.5).
-const schedDestReadSlot = int8(2)
 
 // schedOwner is one placed command's clipped screen rectangle together with the
 // phase it landed in and whether it read the destination. contribution is the
@@ -138,13 +137,18 @@ func (o *schedOwner) contribution() int32 {
 }
 
 // schedRun is one device draw: a contiguous slice of its batch's vertex and
-// index scratch, the four source images it binds, and the shader it draws with
-// (nil for the class's own shader). imgs entries left nil are filled with a
-// placeholder at submission, so a shader never samples an unbound slot; readSlot
-// names the one slot the phase's read surface is bound into instead.
+// index scratch, the four source images it binds, the shader it draws with (nil
+// for the class's own shader) and the blend it draws under. imgs entries left nil
+// are filled with a placeholder at submission, so a shader never samples an
+// unbound slot; readSlot names the one slot the read copy is bound into instead.
+//
+// The blend is part of the run key (§13.3): the ALP families and the row
+// families composite differently, so two commands with different blends never
+// share a device draw even when their images and shader agree.
 type schedRun struct {
 	imgs       [4]*ebiten.Image
 	shader     *ebiten.Shader
+	blend      ebiten.Blend
 	readSlot   int8
 	vOff, vLen int32
 	iOff, iLen int32
@@ -457,21 +461,22 @@ func bind(run *[4]*ebiten.Image, req *[4]*ebiten.Image) {
 // selectRun keeps the batch's last run when it can serve this command's shader
 // and sources, and opens the next run when it cannot. A batch is only ever
 // appended to, so its last run is its open one.
-func (b *schedBatch) selectRun(imgs [4]*ebiten.Image, shader *ebiten.Shader, readSlot int8) {
+func (b *schedBatch) selectRun(imgs [4]*ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, readSlot int8) {
 	if n := len(b.runs); n > 0 {
 		run := &b.runs[n-1]
-		if run.shader == shader && run.readSlot == readSlot && bindable(&run.imgs, &imgs) {
+		if run.shader == shader && run.blend == blend && run.readSlot == readSlot && bindable(&run.imgs, &imgs) {
 			bind(&run.imgs, &imgs)
 			return
 		}
 	}
-	b.openRun(imgs, shader, readSlot)
+	b.openRun(imgs, shader, blend, readSlot)
 }
 
-func (b *schedBatch) openRun(imgs [4]*ebiten.Image, shader *ebiten.Shader, readSlot int8) {
+func (b *schedBatch) openRun(imgs [4]*ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, readSlot int8) {
 	b.runs = append(b.runs, schedRun{
 		imgs:     imgs,
 		shader:   shader,
+		blend:    blend,
 		readSlot: readSlot,
 		vOff:     int32(len(b.verts)),
 		iOff:     int32(len(b.idx)),
@@ -484,14 +489,18 @@ func (b *schedBatch) openRun(imgs [4]*ebiten.Image, shader *ebiten.Shader, readS
 // clipped screen rectangle. It returns false for an empty rectangle, which the
 // caller treats as a command that covers nothing.
 func (s *scheduler) begin(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.Image) bool {
-	return s.beginShader(class, x0, y0, x1, y1, imgs, nil)
+	blend := blendComposite
+	if class == schedDest {
+		blend = blendHalfSource
+	}
+	return s.beginBlended(class, x0, y0, x1, y1, imgs, nil, blend, schedReadNone)
 }
 
-// beginShader is beginFloor for a command that draws with its own shader rather
-// than the class's — today only the fog composite. The run binds the phase's read
-// surface in slot 0 for the fog pass and in the destination shader's snapshot
-// slot for every other destination-reading command.
-func (s *scheduler) beginShader(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.Image, shader *ebiten.Shader) bool {
+// beginBlended is begin for a command that needs its own shader, blend or read
+// copy: the row families' scale blend, and the fog composite, which is the one
+// command still reading the pixels it rewrites and so binds the read copy in its
+// own first slot (fogPassShaderSource).
+func (s *scheduler) beginBlended(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.Image, shader *ebiten.Shader, blend ebiten.Blend, readSlot int8) bool {
 	if x0 >= x1 || y0 >= y1 {
 		return false
 	}
@@ -499,30 +508,22 @@ func (s *scheduler) beginShader(class int, x0, y0, x1, y1 int, imgs [4]*ebiten.I
 	phase := s.place(x0, y0, x1, y1, false)
 	s.tag(x0, y0, x1, y1, phase, dest)
 	p := s.phaseAt(phase)
-	readSlot := schedReadNone
 	if dest {
 		s.growDest(p, x0, y0, x1, y1)
-		readSlot = schedDestReadSlot
-		if shader != nil {
-			// The fog pass samples the pre-fog destination from its own first
-			// slot (fogPassShaderSource), not from the destination shader's
-			// snapshot slot.
-			readSlot = 0
-		}
 	}
-	p.batch[class].selectRun(imgs, shader, readSlot)
+	p.batch[class].selectRun(imgs, shader, blend, readSlot)
 	s.curPhase, s.curClass = phase, class
 	return true
 }
 
-// beginPoint places one lit point of a destination-reading batch. Its own pixel
-// is what decides it, not its batch's bounding rectangle.
+// beginPoint places one lit point of a destination-compositing batch. Its own
+// pixel is what decides it, not its batch's bounding rectangle.
 func (s *scheduler) beginPoint(x, y int, imgs [4]*ebiten.Image) {
 	phase := s.placePoint(x, y)
 	s.tagPoint(x, y, phase)
 	p := s.phaseAt(phase)
 	s.growDest(p, x, y, x+1, y+1)
-	p.batch[schedDest].selectRun(imgs, nil, schedDestReadSlot)
+	p.batch[schedDest].selectRun(imgs, nil, blendScaleDestination, schedReadNone)
 	s.curPhase, s.curClass = phase, schedDest
 }
 
@@ -551,8 +552,8 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 	}
 	run := &b.runs[len(b.runs)-1]
 	if int(run.vLen)+quadVertices > schedRunVertexLimit {
-		imgs, shader, readSlot := run.imgs, run.shader, run.readSlot
-		b.openRun(imgs, shader, readSlot)
+		imgs, shader, blend, readSlot := run.imgs, run.shader, run.blend, run.readSlot
+		b.openRun(imgs, shader, blend, readSlot)
 		run = &b.runs[len(b.runs)-1]
 	}
 	base := uint32(run.vLen)
@@ -577,31 +578,20 @@ func (s *scheduler) quad(class int, dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1 float
 
 // submitSchedule draws every compiled phase of the current segment and clears it.
 // It runs at every barrier — a composed attached-unit group, an overflowing model
-// subject, the clear and the expansion — and at the end of Execute.
+// subject, the clear and the Expand marker — and at the end of Execute.
 //
-// A phase is submitted as
+// A phase is submitted as one draw per run of its opaque batch followed by one
+// draw per run of its destination batch, all into the composite, with no copy
+// between them: since §13.3 the destination families are device blends, so the
+// hardware reads the composite for them and the per-phase snapshot is gone. A
+// whole segment is therefore ONE render pass — the destination never changes —
+// and the phases survive only as the submission ORDER that the byte writers'
+// dependencies require (§13.3 "The scheduler keeps its placement and loses its
+// snapshots").
 //
-//  1. one draw per run of its opaque batch, into the composed surface;
-//  2. one copy of the composed surface into the read surface, over the union
-//     rectangle of the phase's destination-reading batch;
-//  3. one draw per run of its destination-reading batch, into the composed
-//     surface, reading the copy.
-//
-// The copy is what makes a destination-reading batch read the state its phase
-// begins with rather than the pixels it is writing, and it only has to cover the
-// batch's own rectangles: nothing in the batch samples the destination outside
-// its own quad.
-//
-// TODO(H1): docs/DESIGN_GPU_RENDERER.md §11.5 asks for one pass per phase, with
-// two full-size surfaces alternating so that the copy and its destination switch
-// disappear. Implemented as written, that scheme composes a battle frame whose
-// model shadow commits differ from this executor's by about 500 pixels of
-// 2,073,600, and the difference survives every variation of the copy rectangle,
-// the copy blend, run merging and the phase assignment; the same placement over
-// the snapshot submission below is byte-identical. What remains unexplained is
-// why the alternation itself changes those pixels, so the snapshot submission
-// stands until it is. Critical-path placement alone still cuts the passes per
-// frame by more than half, because it more than halves the phases.
+// The one exception is a run that declares a read slot: the fog composite still
+// reads the pixels it rewrites, so drawBatch copies the phase's destination
+// rectangle into the read surface just before that run draws.
 func (r *Renderer) submitSchedule() {
 	s := &r.sched
 	if r.surfaces[0] == nil || s.nphase == 0 {
@@ -609,24 +599,23 @@ func (r *Renderer) submitSchedule() {
 		return
 	}
 	r.modelStats.Phases += s.nphase
-	compose, read := r.surfaces[0], r.surfaces[1]
+	compose := r.surfaces[0]
 	for k := 0; k < s.nphase; k++ {
 		p := &s.phases[k]
-		r.drawBatch(compose, p, schedOpaque, nil)
+		r.drawBatch(compose, p, schedOpaque)
 		if p.hasDest {
-			r.copyIndexed(read, compose, int(p.x0), int(p.y0), int(p.x1), int(p.y1))
-			r.drawBatch(compose, p, schedDest, read)
+			r.drawBatch(compose, p, schedDest)
 		}
 	}
 	s.resetSegment()
 }
 
-// drawBatch submits one phase's batch for a class into dst. read is the phase's
-// read surface, bound into each run's declared read slot; it is nil for an opaque
-// batch, which reads no destination. Unbound image slots are filled with the
-// table atlas (or, before a palette is installed, a 1×1 placeholder) so no shader
-// samples a nil slot; a command never reads a slot it did not request.
-func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int, read *ebiten.Image) {
+// drawBatch submits one phase's batch for a class into dst. Unbound image slots
+// are filled with the table atlas (or, before a palette is installed, a 1×1
+// placeholder) so no shader samples a nil slot; a command never reads a slot it
+// did not request. A run that declares a read slot takes the phase's read copy
+// first and binds it there.
+func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int) {
 	b := &p.batch[class]
 	if dst == nil || b.empty() {
 		return
@@ -648,23 +637,23 @@ func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int, read *
 		if shader == nil {
 			continue
 		}
+		if run.readSlot != schedReadNone {
+			// The one read copy of the frame. The phase's destination rectangles
+			// are pairwise disjoint, so nothing this phase has already drawn lies
+			// under this run, and the copy is the state the run must read.
+			r.copyComposite(r.surfaces[1], dst, int(p.x0), int(p.y0), int(p.x1), int(p.y1))
+		}
 		for j := 0; j < 4; j++ {
 			img := run.imgs[j]
 			if int8(j) == run.readSlot {
-				img = read
+				img = r.surfaces[1]
 			}
 			if img == nil {
 				img = fill
 			}
 			r.sceneOpts.Images[j] = img
 		}
-		// One blend serves every family: each fragment returns either an opaque
-		// index or a fully transparent "skip", and source-over with alpha 1
-		// stores the index unchanged while alpha 0 leaves the destination byte
-		// in place — the byte writers' overwrite and key-skip exactly (C-G4).
-		// The fog pass always returns alpha 1, so source-over reproduces the
-		// copy blend its own draw used.
-		r.sceneOpts.Blend = ebiten.BlendSourceOver
+		r.sceneOpts.Blend = run.blend
 		r.beginPass(dst)
 		dst.DrawTrianglesShader32(
 			b.verts[run.vOff:run.vOff+run.vLen],
@@ -674,11 +663,11 @@ func (r *Renderer) drawBatch(dst *ebiten.Image, p *schedPhase, class int, read *
 	}
 }
 
-// copyIndexed copies the clipped rectangle of src into the same rectangle of dst.
-// It is a shader copy rather than an image draw so it allocates no sub-image per
-// pass: the scene shader's plain copy op reads the source index and writes it
-// back unchanged, which reproduces the stored byte exactly (C-G4).
-func (r *Renderer) copyIndexed(dst, src *ebiten.Image, x0, y0, x1, y1 int) {
+// copyComposite copies the clipped rectangle of the composite into the same
+// rectangle of dst. It is a shader copy rather than an image draw so it allocates
+// no sub-image per pass: the scene shader's colour copy op reads the composite's
+// own RGB and writes it back unchanged (§13.3).
+func (r *Renderer) copyComposite(dst, src *ebiten.Image, x0, y0, x1, y1 int) {
 	if dst == nil || src == nil || r.scene2D == nil {
 		return
 	}
@@ -692,12 +681,12 @@ func (r *Renderer) copyIndexed(dst, src *ebiten.Image, x0, y0, x1, y1 int) {
 	corners := [4][2]float32{{fx0, fy0}, {fx1, fy0}, {fx0, fy1}, {fx1, fy1}}
 	for i, c := range corners {
 		r.copyVerts[i] = ebiten.Vertex{DstX: c[0], DstY: c[1], SrcX: c[0], SrcY: c[1],
-			Custom3: sceneOpCopy}
+			Custom3: sceneOpCopyColor}
 	}
 	fill := r.placeholderImage()
 	r.sceneOpts.Images[0] = src
 	r.sceneOpts.Images[1], r.sceneOpts.Images[2], r.sceneOpts.Images[3] = fill, fill, fill
-	r.sceneOpts.Blend = ebiten.BlendSourceOver
+	r.sceneOpts.Blend = blendComposite
 	r.beginPass(dst)
 	dst.DrawTrianglesShader32(r.copyVerts[:], r.copyIdx[:], r.scene2D, &r.sceneOpts)
 	r.frameDraws++

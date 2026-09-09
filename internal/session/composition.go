@@ -2508,6 +2508,8 @@ func (s *Session) bindDamageReaction() {
 //     the visit a record completes on — and so the visit the transition of
 //     [05 R-FEAT-01 §5] stamps its successor and the burn stamps
 //     `featureburnt` — is the sum of those words.
+//   - ShadowSequenceResolved asks whether the attached event's separately
+//     named shadow entry resolved. It does not supply cursor timing.
 //
 // Both read the battle's immutable content.SimArt table, which
 // createAndBindServices compiles before it reaches this binder — so the
@@ -2565,6 +2567,15 @@ func (s *Session) bindFeatureStripProducers() {
 				return nil
 			}
 			return delays
+		}
+	}
+	if s.Features.ShadowSequenceResolved == nil {
+		s.Features.ShadowSequenceResolved = func(def *content.FeatureDef, sequence string) bool {
+			if s.simArt == nil || def == nil || sequence == "" {
+				return false
+			}
+			_, _, _, _, _, ok := s.simArt.FeatureSequence(def.Filename, sequence, 0)
+			return ok
 		}
 	}
 	// The burn weapon of [05 R-FEAT-01 §11 step 3] is "the ordinary weapon

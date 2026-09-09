@@ -1604,6 +1604,7 @@ func simArtCompositionFS(t *testing.T) *vfs.FS {
 			frameOf(20, 12, 7, 5, 3), frameOf(5, 7, 2, 3, 0), frameOf(16, 24, -3, 9, 2),
 		}},
 		{Name: "treedie", Frames: []formats.GAFWriteFrame{frameOf(8, 8, 1, 1, 4)}},
+		{Name: "treedieshad", Frames: []formats.GAFWriteFrame{frameOf(8, 8, 1, 1, 4)}},
 	})
 	if err != nil {
 		t.Fatalf("encode feature bank: %v", err)
@@ -1640,7 +1641,7 @@ func TestCompositionInstallsContentAnimationMetadata(t *testing.T) {
 	fs := simArtCompositionFS(t)
 	cat := minimalCatalogForStrict()
 	cat.Features = map[string]*content.FeatureDef{
-		"tree1": {Filename: "trees", SeqNameBurn: "treeburn", SeqNameDie: "treedie"},
+		"tree1": {Filename: "trees", SeqNameBurn: "treeburn", SeqNameDie: "treedie", SeqNameDieShad: "treedieshad"},
 	}
 	w, err := newSlicedWorldWithCOB(cat, fs)
 	if err != nil {
@@ -1669,7 +1670,7 @@ func TestCompositionInstallsContentAnimationMetadata(t *testing.T) {
 	}
 	// The two feature seams, bound against the same table.
 	def := cat.Features["tree1"]
-	if s.Features == nil || s.Features.SequenceFrames == nil || s.Features.BurnFrameGeometry == nil {
+	if s.Features == nil || s.Features.SequenceFrames == nil || s.Features.ShadowSequenceResolved == nil || s.Features.BurnFrameGeometry == nil {
 		t.Fatal("composition left a feature art seam unbound")
 	}
 	if got := s.Features.SequenceFrames(def, 1); len(got) != 1 || got[0] != 4 {
@@ -1679,6 +1680,12 @@ func TestCompositionInstallsContentAnimationMetadata(t *testing.T) {
 	// transition keeps its immediate replacement. Nothing is invented for it.
 	if got := s.Features.SequenceFrames(def, 2); got != nil {
 		t.Fatalf("unauthored reclaim sequence reported delays %v, want none", got)
+	}
+	if !s.Features.ShadowSequenceResolved(def, def.SeqNameDieShad) {
+		t.Fatal("authored event shadow did not resolve through composition")
+	}
+	if s.Features.ShadowSequenceResolved(def, "missing-shadow") {
+		t.Fatal("missing event shadow resolved through composition")
 	}
 	gw, gh, gx, gy := s.Features.BurnFrameGeometry(def, 0)
 	if gw != 20 || gh != 12 || gx != 7 || gy != 5 {

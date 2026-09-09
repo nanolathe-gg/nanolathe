@@ -797,29 +797,6 @@ func (g *gameShell) retailButtonArt(gad gui.Gadget, down, stage int, grey bool) 
 		return nil
 	}
 	gad = art.gadget
-	last := len(art.entry.Frames) - 1
-	idx := art.base
-	switch {
-	case grey && cycleButton(gad):
-		idx = last
-	case grey && gad.Attribs&0x1800 != 0:
-		idx = art.base
-	case grey && gad.Stages != 0:
-		idx = stage
-	case grey:
-		idx = art.base + min(down+2, last)
-	case gad.Stages != 0 && down != 0 && int(gad.Stages) < len(art.entry.Frames):
-		idx = last - 1
-	case gad.Stages != 0:
-		idx = stage
-	case down != 0:
-		idx = art.base + down
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	if idx > last {
-		idx = last
-	}
-	return art.entry.Frames[idx].Frame
+	frame, _ := retailButtonFrameFromEntry(art.entry, gad, art.base, down, stage, grey)
+	return frame
 }

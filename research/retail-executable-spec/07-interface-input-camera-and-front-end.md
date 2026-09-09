@@ -780,10 +780,11 @@ shell and the in-battle options root set it ([R-WGT-02 §2]), and the
 in-battle window openers — `UNITINFOx.GUI`'s among them — set nothing. With
 it zero the pass takes the peek branch of [R-WGT-01 §1] step 3 (token left in
 the queue, `0xE2..0xEB` zeroed for that pass only) and skips the matrix
-outright. So for a battle child window: no token is consumed, every battle
-hotkey still runs after the GUI pass, and `escdefault`/`crdefault` never fire
-from Escape or Enter — the authored defaults are reachable only by clicking
-the gadget they name. The separate navigation switch is identified below; it does not change
+outright. Thus the matrix consumes no token for an ordinary battle child,
+and `escdefault`/`crdefault` do not fire from Escape or Enter through that
+matrix. Indexed gadget quickkeys and an editor can still claim tokens under
+their own rules; remaining tokens reach the caller. A caller-specific key
+transition, such as the YESORNO No row in [R-FE-01 §7], is separate. The separate navigation switch is identified below; it does not change
 this token-mode exclusion.
 
 **Established — navigation enable is separate from the fired result.**
@@ -2660,7 +2661,7 @@ table before the transition.
 | `YESORNO` (surrender) | `CHOICE1` "Yes" (Y) | stop sounds; teardown; main-menu variant → host mode 1 → front end; exit variant → quit | `MAINMENU` or process quit |
 | `YESORNO` | `CHOICE2` "No" (N, Enter, Esc) | — | battle |
 | `RESTART` | `RESTART` | disc check by mission type else MSGBOX; mount pass; difficulty := stage; restart flag raised | battle restart (consumer: doc 08) |
-| `RESTART` | `CANCEL` (Esc/Enter) / `Difficulty` | — | battle |
+| `RESTART` | `CANCEL` (authored Esc/Enter defaults; skipped by the zero-mode matrix) / `Difficulty` | — | battle |
 | `HELP` | `Page` | page loaded (§7) | — |
 | `HELP` / `BRIEFING` / `GAMEOPTIONS` / `MSGBOX` / `CDCHECK` | `OK` | default close | caller |
 | `LOADGAME` (save) | `LOAD` ("OK"/Enter), `GAMES`, `GAMENAME` | cue `smlbutton`; writes `SAVEGAME\<name>.SAV` when the name box is non-empty (§8) | — |

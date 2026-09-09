@@ -2,7 +2,6 @@ package main
 
 import (
 	"github.com/nanolathe/nanolathe/internal/client"
-	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
@@ -34,6 +33,7 @@ func (b *battleSession) openBattleMenu() {
 	if b == nil || b.sess == nil {
 		return
 	}
+	b.endDragScroll(b.cl)
 	if b.hud != nil {
 		b.hud.openOptionsWindow()
 	}
@@ -52,28 +52,6 @@ func (b *battleSession) closeBattleMenu() {
 	}
 	if state := b.battleState(); state != nil {
 		b.applyBattleSchedule(state.CloseOptions())
-	}
-}
-
-func (b *battleSession) menuWindow() *gui.Window {
-	if b == nil || b.hud == nil || b.battleState() == nil {
-		return nil
-	}
-	switch b.battleState().Modal() {
-	case ui.BattleModalOptions:
-		b.hud.openOptionsWindow()
-		return b.hud.optionsWin
-	case ui.BattleModalExit:
-		b.hud.openExitWindow()
-		return b.hud.exitWin
-	case ui.BattleModalConfirmMain, ui.BattleModalConfirmExit:
-		b.hud.openConfirmWindow()
-		return b.hud.confirmWin
-	case ui.BattleModalRestart:
-		b.hud.openRestartWindow()
-		return b.hud.restartWin
-	default:
-		return nil
 	}
 }
 
@@ -97,38 +75,29 @@ func (b *battleSession) handleBattleMenuInput(in *input.State, cl *client.Client
 		return
 	}
 	state := b.battleState()
-	if b == nil || state == nil || in == nil || in.Kbd == nil || in.Mouse == nil || state.Modal() == ui.BattleModalClosed {
+	if b == nil || state == nil || in == nil || state.Modal() == ui.BattleModalClosed {
 		return
 	}
-	// Both authored confirmation defaults are No [07 R-FE-01 §7]. Keep
-	// this local to YESORNO; other windows have their own keyboard matrix.
-	if (state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) && in.Kbd.KeyDown(input.KeyEnter) {
-		b.activateBattleMenuButton("CHOICE2", cl)
-		return
-	}
-	if in.Kbd.KeyDown(input.KeyEscape) {
+	// This is the modal-chain back transition, not the ordinary child window's
+	// Escape default.  It remains a battle caller key and therefore does not
+	// enable the zero-token child's key matrix [07 R-FE-01 §7][07 R-WGT-01 §2].
+	if in.Kbd != nil && in.Kbd.KeyDown(input.KeyEscape) {
 		b.applyBattleSchedule(state.Back())
 		return
 	}
-
-	mouse, _ := publishedPointer(in)
-	mx, my := int32(mouse.X), int32(mouse.Y)
-	if b.hud != nil && mouse.Pressed(input.MouseButtonLeft) {
-		state.PressModal(b.hud.modalButtonAt(b.menuWindow(), mx, my))
-	}
-	if !mouse.Released(input.MouseButtonLeft) {
+	// YESORNO additionally has an explicit battle caller row: raw Enter routes
+	// to CHOICE2.  It is not the child key matrix or a header default, which
+	// stays excluded by zero token mode [07 R-FE-01 §7][07 R-CAM-01 §2].
+	if in.Kbd != nil && in.Kbd.KeyDown(input.KeyEnter) &&
+		(state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) {
+		b.activateBattleMenuButton("CHOICE2", cl)
 		return
 	}
-	window := b.menuWindow()
-	released := -1
-	if b.hud != nil {
-		released = b.hud.modalButtonAt(window, mx, my)
+	panel, window, page := b.battleModalPanel()
+	result := b.serviceBattleChildPanel(panel, window, page, in)
+	if result.Fired && panel != nil && result.FiredIndex >= 0 && result.FiredIndex < len(panel.Window.Gadgets) {
+		b.activateBattleMenuButton(panel.Window.Gadgets[result.FiredIndex].Name, cl)
 	}
-	pressed, ok := state.ReleaseModal(released)
-	if !ok || window == nil || pressed >= len(window.Gadgets) {
-		return
-	}
-	b.activateBattleMenuButton(window.Gadgets[pressed].Name, cl)
 }
 
 func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client) {
@@ -138,6 +107,17 @@ func (b *battleSession) activateBattleMenuButton(name string, cl *client.Client)
 	}
 	before := state.Modal()
 	action := state.Activate(name)
+	// Child construction belongs to the transition that exposed it.  The draw
+	// path only consumes the retained panel, so it cannot replace a capture or
+	// flush input while a child remains open [07 R-WGT-01 §1][07 R-WGT-02 §2].
+	if b.hud != nil {
+		switch state.Modal() {
+		case ui.BattleModalExit:
+			b.hud.openExitWindow()
+		case ui.BattleModalConfirmMain, ui.BattleModalConfirmExit:
+			b.hud.openConfirmWindow()
+		}
+	}
 	if state.Modal() != before && (state.Modal() == ui.BattleModalExit || state.Modal() == ui.BattleModalRestart || state.Modal() == ui.BattleModalConfirmMain || state.Modal() == ui.BattleModalConfirmExit) {
 		flushWindowTokens(cl)
 	}

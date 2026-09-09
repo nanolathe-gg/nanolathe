@@ -12,7 +12,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/session"
-	"github.com/nanolathe/nanolathe/internal/settings"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
 
@@ -113,12 +112,12 @@ func (b *battleSession) classifyPointer(x, y int32) battlePointerRegion {
 	return battlePointerChrome
 }
 
-// minimapCameraButton and minimapOrderButton read the existing persisted
-// Interface Type value through the battle shell. A direct command-line battle
-// has no shell and therefore uses the registry's absent-value default [07
-// R-CAM-01 §5]. The full world-view Type-1 drag path remains I09.
+// minimapCameraButton and minimapOrderButton use the same in-memory Interface
+// Type owner as the world-click path. Shell battles observe a live options
+// change; direct battles retain the entry-time persisted setting without a
+// per-frame settings read [07 R-CAM-01 §5][07 R-CAM-01 §7].
 func (b *battleSession) minimapCameraButton() input.MouseButton {
-	if b != nil && b.shell != nil && b.shell.interfaceType == settings.InterfaceTypeRightClick {
+	if b.interfaceTypeRightClick() {
 		return input.MouseButtonLeft
 	}
 	return input.MouseButtonRight
@@ -203,6 +202,13 @@ func (b *battleSession) serviceMinimapCameraLatch(mx, my int32, mouse *input.Mou
 // R-CAM-01 §5][07 R-CAM-01 §11].
 func (b *battleSession) beginMinimapCameraLatch(mx, my int32, mouse *input.MouseState) bool {
 	if b == nil || mouse == nil || !mouse.Pressed(b.minimapCameraButton()) || b.classifyPointer(mx, my) != battlePointerMinimap {
+		return false
+	}
+	// The alternate camera button is only an idle gesture. In both interface
+	// modes an armed order continues to fire on left, and a build placement is
+	// likewise an armed world action [07 R-CAM-01 §5].
+	in := &b.battleState().Input
+	if in.Latch != input.LatchNormal || in.BuildDef != "" {
 		return false
 	}
 	b.minimapCameraCaptured = true

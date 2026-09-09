@@ -31,15 +31,18 @@ Retail evidence remains in the owning research document.
    every current pixel has been verified against retail. Rasterization and CPU
    captures need no GPU; the current interactive Ebitengine window still does.
    A GPU-free window backend is separate, deferred platform work.
-2. **GPU Classic** targets the original appearance and composition rules with
-   modern GPU techniques. Small, visually unobtrusive differences in coverage,
-   interpolation, texture sampling, and shade/key quantization are permitted.
-   Exact retail raster arithmetic is not a requirement for this mode. Differences
-   are measured and reviewed visually, including in motion; a pixel threshold
-   alone is never approval. This mode remains an enhancement-disabled reference.
-3. **Enhanced** shares the GPU executor and adds explicitly designed presentation
-   changes (§5). Lighting and glow are deferred designs, not prerequisites for
-   the model prototypes. No enhancement changes authoritative simulation.
+2. **GPU Classic** targeted the original appearance and composition rules with
+   modern GPU techniques while staying in palette index space. It was the
+   modern executor through §11 and is retired by §13: an index-exact composite
+   needs one render pass per destination read, which is what keeps the
+   executor off a 120 Hz cadence. Its measurements and fixtures remain the
+   record of what the index-exact device path cost.
+3. **Enhanced** is the modern executor from §13 on. It composes in true colour
+   with the palette tables' generating arithmetic in place of their
+   nearest-palette quantization, presents at the display's refresh rate and
+   interpolates committed poses (§13.5). Differences from Original are measured
+   and reviewed visually, including in motion; a pixel threshold alone is never
+   approval. No enhancement changes authoritative simulation.
 
 One committed-frame ordering remains `drawCommittedFrame` [03 §1]. Neither
 executor reads live pools or simulation RNG or writes authoritative state [I6].
@@ -48,10 +51,13 @@ immutable resources. Classic model packets own their completed image planes;
 modern model packets own geometry, as specified by C-G5.
 
 The projection remains orthographic with the retail half-height shear
-[03 §2.5]. GPU Classic stays in palette index space through the retail composite:
-ALP, LHT, SHD, Gray and Blue remain table operations, not approximate RGB blends
-[03 §4.3]. Enhanced may add auxiliary material/emission data and RGB passes;
-material lighting cannot be reconstructed from the expanded image alone.
+[03 §2.5]. Original stays in palette index space through the retail composite:
+ALP, LHT, SHD, Gray and Blue are table operations there [03 §4.3]. Enhanced
+keeps every *source-side* table lookup exact (a texel remapped before it is
+written) and replaces every *destination-side* lookup with the arithmetic the
+table was generated from, applied in RGB by the device blend (§13.3). Enhanced
+may add auxiliary material/emission data and RGB passes; material lighting
+cannot be reconstructed from the expanded image alone.
 
 ## 2. Packages, files and key types
 
@@ -254,8 +260,11 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   `[03 §4.3.3 R-RR16-A §1]`. The visible result per pixel is the byte writer's.
 * **C-G8 Expansion last, PAL only.** The final pass maps index to colour
   through `PALETTE.PAL` alone, forcing alpha opaque as the software expansion
-  does. Nothing after it in the retail composite exists. The enhancement stage
-  of §5, when it exists, begins after this pass and only in modern mode.
+  does. Nothing after it in the retail composite exists. Enhanced (§13) has no
+  separate expansion pass: it resolves each source index through `PALETTE.PAL`
+  at the moment it is written, which is the same lookup applied per fragment
+  instead of per frame, and every colour the retail composite would have
+  looked up is looked up the same way.
 * **C-G9 Model textures resolve once.** The 3DO texture atlas is built from
   the same resolution the classic path performs at load: case-insensitive name
   against the side's texture set then the fallback set, a miss becoming flat
@@ -374,16 +383,17 @@ Strategic markers show only player-known information. Marker thresholds, asset
 selection/fallback, icon aggregation, and filtering need design and human review
 before implementation. Classic zoom [F-P1-008] is unchanged by this milestone.
 
-### 5.3 Enhanced interpolation (planned, not implemented)
+### 5.3 Enhanced interpolation
 
-Target at least 60 presented frames/s (16.7 ms frame budget) while retaining the
-30 Hz authoritative simulation. Rendering more often without interpolation repeats
-committed poses. Optional Enhanced interpolation may use two immutable committed
-snapshots; it must never write interpolated values back or consume simulation RNG.
-Before implementation define object identity across slot reuse, spawn/death,
-teleportation, child attachment changes, piece animation, input latency and pause
-behavior. Original/GPU Classic retain committed-tick sampling. I6 permits this
-future design only; this milestone changes neither cadence nor frame publication.
+Target the display's refresh rate — 120 presented frames/s, an 8.3 ms frame
+budget — while retaining the 30 Hz authoritative simulation. Rendering more
+often without interpolation repeats committed poses. Enhanced interpolation
+uses two immutable committed snapshots; it never writes interpolated values
+back or consumes simulation RNG. Object identity across slot reuse, spawn and
+death, teleportation, child attachment changes, piece animation, input latency
+and pause behaviour are specified in §13.5. Original retains committed-tick
+sampling; I6 names Enhanced as the one presentation path allowed to read two
+committed ticks.
 
 ### 5.4 Lighting, glow and antialiasing (deferred)
 
@@ -1118,3 +1128,234 @@ must report, not make, any change it needs there. After each merge the
 orchestrator runs the battle benchmark on both renderers at 30 and 60 TPS and
 records phases, passes, submission, cadence, on-cadence share and allocations in
 the merge commit.
+
+## 13. True-colour composite and refresh-rate presentation (third round)
+
+These are implementation decisions approved by the user on 2026-09-08, not
+retail findings. The goal of this round is 120 presented frames per second
+with the 30 Hz simulation interpolated, staying visually close to Original
+without requiring index-exact pixels.
+
+### 13.1 Why the index-exact executor cannot get there
+
+Measured on main `eb7a6df1` (1080p battle benchmark, 180 frames, M3 Pro):
+
+| | per presented frame |
+|---|---|
+| Budget at 120 Hz | 8.3 ms |
+| Modern Submit (CPU) at 30 TPS | 6.4 ms |
+| Destination switches (render passes) | 104, about 70 µs each on the device |
+| Ebitengine with 20 draws of 2,000 quads, vsync on, TPS 30 | 120.2 fps, 1.8 ms CPU per Draw |
+| Ebitengine with 60 such draws | 121 fps, 2.9 ms |
+| Ebitengine with 150 such draws | 100 fps, 6.1 ms |
+
+Ebitengine calls Draw at the display's refresh rate with vsync on and Update at
+TPS, which is exactly the interpolation model; it holds 120 Hz on this display
+up to roughly sixty device draws per frame. The passes are the problem, and
+every pass exists for one reason: the framebuffer holds palette indices, the
+destination-reading families remap the destination index through a table, and
+a Kage shader cannot read its render target. Each destination read therefore
+costs a snapshot copy and a pass. Optimising the pass structure further (§11.5)
+bottoms out near fifty passes, which is still 3.5 ms of device time before a
+pixel is drawn. The composite has to stop reading the destination.
+
+### 13.2 The tables are their formulas
+
+The destination-side tables are not authored art. Research establishes their
+builders [03 §4.3.4], and measured against the shipped retail tables every one
+of them is its builder's arithmetic followed by the nearest-palette search:
+
+| table | generating arithmetic (RGB, per channel) | mean RGB distance, table vs formula | nearest-palette floor |
+|---|---|---|---|
+| ALP[src][dst] | floor((src + dst) / 2) | 19.2 | 19.1 |
+| LHT row r | trunc(c · (1 + r/30)), clamp 255 | 0.0 (r=0) … 16.1 (r=30) | 0.0 … 15.7 |
+| SHD row r | trunc(c · 0.06875·r), clamp 255 | 0.0 (r=0), 4.1 (r=15), 16.7 (r=31) | 0.0, 4.1, 16.1 |
+| GRAY | avg = floor((r+g+b)/3) | 5.6 | 5.6 |
+| BLUE | (r/2, g/2, b/2 + 50) | 17.8 | 17.6 |
+
+(The floor is the mean distance from the formula's colour to the nearest
+palette entry; where the two columns agree the table adds nothing beyond
+quantization.) So an executor that evaluates the arithmetic in RGB reproduces
+the retail composite up to palette rounding, and the rounding is the only
+thing it loses. That is the whole of the visual change in this round.
+
+### 13.3 The Enhanced composite
+
+The recorded `drawlist.List` is unchanged; the classic sink and the recorder
+are untouched. Sources stay indexed: GAF frames, tiles, glyph strips, PCX and
+the model slot pages carry the index in red exactly as before (C-G4 applies to
+every source and to the model stage). What changes is the framebuffer and the
+destination-reading families.
+
+**Framebuffer.** One RGBA8 composite surface holding colour. Every opaque
+family's fragment resolves its index through the PAL row of the table atlas
+before writing (C-G8 as amended). The expansion pass disappears; `Expand`
+remains a barrier and the composite is what `Execute` returns. The clear
+writes PAL[0].
+
+**Source-side lookups stay exact.** `BlitLit` (source through one LHT row) and
+the model stage's SHD, ALP resolve, Gray-free paths and BLUE waterline all
+remap a texel before it is written; they keep their integer texel fetches and
+resolve through PAL at the end. The model slot atlas, key plane, reveal,
+outline, waterline, digger and supersample resolve are unchanged; only the
+commit resolves colour.
+
+**Destination-side lookups become blends** with the arithmetic of §13.2:
+
+* *ALP families* — `BlitTinted`, translucent feature body and shadow, and the
+  model shadow commit — write `mix(dst, PAL[src], 1/2)`: source-over with the
+  premultiplied fragment `(PAL[src]/2, 1/2)`. The shadow commit keeps its body
+  punch in the shader (a shadow texel under the body's own coverage is skipped)
+  so overlapping silhouette faces of one subject darken once; overlapping
+  shadows of different subjects darken twice, as the byte writers do
+  [03 R-REN-03D §4–§5].
+* *Row families* — `FillLitRect`, `FillShadeRect`, `PointLit` — scale the
+  destination: LHT row r by `1 + r/30`, SHD row r by `0.06875·r`. One blend
+  serves both: source factor destination-colour, destination factor
+  source-alpha, so `out = dst · (src.rgb + src.a)`; the fragment carries
+  `(min(k,1), min(k,1), min(k,1), max(k−1, 0))`. A factor above 2 clamps at 2
+  (SHD row 31 is 2.13; the difference is below the quantization floor).
+* *Fog* keeps one read copy. The gray remap is a desaturation, which no
+  fixed-function blend expresses, so the fog command stays a shader run over a
+  copy of its region: luminance `floor((r+g+b)/3)` for the gray fills and gray
+  GAF, PAL[dark] for the solid and checker fills, keyed copies for the black
+  family. That is one copy pass per frame, not one per phase.
+
+**The scheduler keeps its placement and loses its snapshots.** Critical-path
+placement (§11.5) still decides order among overlapping commands — the blends
+are order-dependent exactly where the table lookups were. A phase now submits
+its opaque runs and then its destination runs into the same surface, with no
+copy between them; a run is keyed by images, shader and blend, and within one
+phase's destination batch the runs may be grouped by blend because the batch's
+rectangles are pairwise disjoint. A whole segment is therefore one render pass.
+Passes per 1080p battle frame as landed: model stage 6, fog copy 2, composite
+1, attached-unit staging 2 — eleven on every benchmark frame, against 104.
+The staging figure needed one change beyond this section's first draft:
+composing each attached-unit group on the shared staging pair cost three
+passes per group (9 + 3 × groups, 21–33 on the benchmark with four to eight
+factories building), so R1 also placed every group of the frame on one
+staging atlas ordered by destination, with one pass for every group's
+background and parent and one pass per child index across all groups. The
+merge order inside a group is unchanged and the captures are byte-identical
+with and without it.
+
+**Blend classes.** `schedOpaque` draws with source-over and alpha 1 or 0 as
+today. `schedDest` splits into source-over (ALP families) and scale (row
+families); the fog run binds its own shader and read slot as it does now.
+
+### 13.4 Verification
+
+* Device fixtures: for every fixture whose commands are all opaque, the modern
+  surface equals the classic bytes expanded through PAL exactly. For fixtures
+  with blended commands, pixels no blended command covers are exact, and the
+  covered pixels' mean RGB distance from the classic expansion is at or below
+  the §13.2 floor for that family plus 5 units; the fixture states which
+  family's floor it uses.
+* Captures M1–M8 through `tools/gpu-compare --report-only`, viewed by the
+  orchestrator beside classic; `--shot-renderer both` pixel counts are
+  reported, not gated, because every blended pixel now differs by design.
+* Battle benchmark at 30 and 60 TPS: passes per frame ≤ 12, phases unchanged,
+  Submit and on-cadence share reported in the merge commit.
+* Ebitengine allowlist and `docs/INVARIANTS.md` checks unchanged.
+
+### 13.5 Refresh-rate presentation and interpolation
+
+The composite of §13.3 draws one recorded list in a few passes, so the modern
+window can record and replay a list every presented frame. Interpolation then
+needs no new draw-list family: the recorder is handed a blended view of the
+two most recent committed ticks and records it exactly as it records a
+committed tick today. Everything below is an Enhanced presentation rule, not
+retail behaviour; Original keeps committed-tick sampling.
+
+**Cadence.** The window's Update stays at 30 per second. Everything the
+battle step does per host frame — input edges, the follow-camera glide's
+per-frame step [07 R-CAM-01 §12], the scroll pass [07 §10], the sub-tick
+budget [01 §4.2] — keeps the cadence retail gives it, unchanged. Draw is
+called at the display's refresh rate regardless of TPS; Original presents
+only after an Update, as today, and Enhanced presents on every Draw, so the
+presentation-only work between two Updates is one recording and one replay
+per frame.
+
+**Fraction.** Read at Draw time, when the modern path records. The
+scheduler's time source is the scaled timebase floor(milliseconds × 30 /
+1000) [01 §4.1], so its delta is a whole number of thirtieths and, at the
+nominal speed, the budget's carry is identically zero after every step: the
+carry alone never resolves a position inside a tick. The client therefore
+takes a `TickFraction func() float32` option beside `Step`; the battle
+supplies it from the same millisecond source the budget and the scroll pass
+read, un-floored: with `phase = (milliseconds × 30 mod 1000) / 1000` the
+elapsed part of the current scaled unit and `eff` the clock's effective speed
+(active × 0.1 [01 §4.2]), the fraction of the next tick already elapsed is
+`carry + phase × eff`, clamped to [0, 1). While paused the budget does not
+run and the battle returns the value it last returned unpaused, so the blend
+is frozen. No second clock is introduced: the value is the budget's own input
+read at finer resolution. The benchmark at 120 sets the four fractions
+explicitly.
+
+**Camera.** The camera moves in the 30 Hz step, so Enhanced blends it too:
+the client samples the camera origin (X, Z) at every Step, keeps the previous
+sample, and while recording an interpolated frame presents the origin blended
+with integer truncation, restoring the live origin after the record. The
+camera's fraction is not the tick fraction: the camera advances on the
+window's Update grid, which is not phase-aligned with the simulation's scaled
+units, so blending it by the tick fraction would snap it back whenever a tick
+fired mid-update. The window adapter timestamps each Update and hands the
+client `(now − lastUpdate) × 30`, clamped to [0, 1), before each modern Draw
+(`SetCameraFraction`); this is platform time in the adapter, where the input
+timestamps already live, and never reaches the client's clock or the sim. A
+jump larger than the viewport in either axis (a minimap click or a bookmark
+recall) snaps rather than sweeps. Zoom is not blended.
+
+**Two committed ticks.** `frame.Buffer` gains `Previous()`: the slot published
+immediately before `Current()`, or nil before the second publication or while
+a write is in progress. Presentation reads both slots on the main goroutine
+between Updates, when no write is in progress. A nil previous is a snap.
+
+**Blended view.** `RecordFrame` in the Enhanced path records a shallow copy
+of the current `Frame` whose `Units`, `Projectiles` and `Effects` slices are
+replaced by blended copies held in retained client buffers; every other slice
+and scalar (fog, visibility, selection, orders, events, HUD readouts, `Tick`)
+is the current tick's. Blending is `prev + (cur − prev)·f` with the fraction
+as 16.16 and truncation toward zero for `numeric.Fixed`, and along the
+shortest arc for `uint16` angles (the signed 16-bit difference scaled by f).
+Blended fields:
+
+* unit `X, Y, Z`, `Heading, Pitch, Bank`, and each piece's `Tx, Ty, Tz`,
+  `RotX, RotY, RotZ`;
+* projectile `X, Y, Z`, `StartX..Z`, `TailX..Z`, `Yaw, Pitch, Roll`,
+  `PropellerRoll`, `MeteorPitch`;
+* effect `X, Y, Z`.
+
+**Identity and snap.** Pool handles carry no generation [01 §6.1], so a match
+is a handle plus consistency: a unit matches when the previous tick holds the
+same `Slot` with equal `DefID` and `Owner`, unchanged `Carrier` and
+`MoverMode`, the same number of pieces, and a horizontal displacement of at
+most 64 world units in the tick; a projectile matches on `Handle` with equal
+`WeaponID`, `Shooter` and `CreationTick`; an effect matches on
+`PresentationID` when nonzero, else on `ID`, `EventSeq` and `StartTick`.
+Anything else takes the current pose. The 64-unit bound is a presentation
+constant chosen above any retail movement rate; it is not a retail datum.
+
+**Never interpolated.** Sprite and animation frame indices, the nanoframe
+reveal band, damage flashes, palette rows, fog, visibility, selection, the
+cursor and the HUD. A piece hidden in either tick is drawn as the current tick
+says. A COB `turn` with no speed sweeps over one tick instead of jumping; this
+is accepted.
+
+**Benchmark.** `--benchmark-tps=120` runs one authoritative step every fourth
+Draw and presents the four frames at fractions 0, ¼, ½ and ¾, so the report
+measures the interpolated presentation; 30 and 60 keep one step per Draw.
+
+**I6.** Amended for Enhanced only: the presentation may read the two most
+recent committed ticks and the clock's carry; it writes nothing back and
+consumes no simulation RNG. `--shot` and Original never blend.
+
+### 13.6 Work units
+
+| Unit | Scope | Files owned | Gate |
+|---|---|---|---|
+| R1 composite (landed) | true-colour surface, PAL resolve in the scene shader, blend classes for the ALP and row families, shadow commit blend, fog over one read copy, scheduler without per-phase snapshots, expansion removed, attached-unit staging on one atlas, device fixtures rewritten to §13.4 | `internal/platform/gpurender/*` | §13.4 fixtures; M1–M8 captures viewed; passes 11 on every benchmark frame |
+| R2 cadence and interpolation | Update stays at 30, modern presents on every Draw; `Buffer.Previous`; draw-time tick fraction from the un-floored millisecond source; blended camera origin; blended view with the identity and snap rules of §13.5; `--benchmark-tps=120` | `internal/frame/frame.go`, `internal/client/interpolate.go` (new) and the client entry points it needs, `internal/platform/ebitenapp/app.go`, `internal/platform/ebitenapp/battle_benchmark.go`, `cmd/nanolathe/battle.go`, `cmd/nanolathe/battle_benchmark.go`, `cmd/nanolathe/flags.go`, `docs/BATTLE_BENCHMARK.md` | `--shot` captures byte-identical on both renderers; classic benchmark rows unchanged; 120 TPS benchmark on-cadence share reported; motion viewed |
+
+R1 and R2 are independent (R2 never edits `internal/platform/gpurender`) and
+run in parallel; the per-frame budget is measured once both have landed.

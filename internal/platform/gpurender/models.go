@@ -256,12 +256,14 @@ func (r *Renderer) commitModelSlot(page *ebiten.Image, src, dst image.Rectangle)
 		[4]float32{}, [4]float32{0, 0, 0, sceneOpModelCommit})
 }
 
-// commitModelShadow blends the silhouette through ALP over the phase snapshot,
-// punching the body's coverage first so overlapping silhouette faces darken the
-// ground once [03 R-REN-03D §4–§5]. The shadow plane rides source slot 3 and the
-// body plane source slot 0; Custom0/1 carries the body-page offset of a shadow
-// texel and the colour lanes the body slot's page bounds, so a shadow texel
-// outside the body slot reads as uncovered.
+// commitModelShadow composites the silhouette over the composite through the ALP
+// builder's arithmetic, punching the body's coverage first so overlapping
+// silhouette faces darken the ground once [03 R-REN-03D §4–§5][03 §4.3.4]. The
+// punch reads the body plane, not the destination, so this commit takes no
+// snapshot: it is an ordinary blend (docs/DESIGN_GPU_RENDERER.md §13.3). The
+// shadow plane rides source slot 3 and the body plane source slot 0; Custom0/1
+// carries the body-page offset of a shadow texel and the colour lanes the body
+// slot's page bounds, so a shadow texel outside the body slot reads as uncovered.
 // It returns the shadow command's scheduler owner, which the paired body commit
 // names as its exemption.
 func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlot, bg *drawlist.ModelGeometry, body modelSlot) {
@@ -300,22 +302,33 @@ func (r *Renderer) commitModelShadow(sg *drawlist.ModelGeometry, shadow modelSlo
 	r.modelStats.Shadows++
 }
 
-// composeModelChildren merges an attached-unit group over a local staging pair.
-// Each child is finished in its own slot, then merged with the full signed
-// shifted-key comparison and the wrapped byte store [03 R-REN-03A §4].
+// composeModelChildren commits an attached-unit group: each child is finished in
+// its own slot and merged over the parent's plane with the full signed shifted-key
+// comparison and the wrapped byte store [03 R-REN-03A §4].
 //
-// The staging pair is shared by every group of the frame, so composing one is a
-// scheduler barrier: the phases compiled so far are submitted first, while the
-// previous group's staging image still holds the plane its commit samples
-// (docs/DESIGN_GPU_RENDERER.md §11.2). One barrier per group, and the group's own
-// commit then joins the batch that follows it.
+// The frame's groups are normally composed together before Replay, on the shared
+// staging atlas (model_stage.go), so this only accounts for the group's children
+// and commits the finished plane — no staging draw and no barrier. A group the
+// atlas could not serve is composed here instead, over the fallback staging pair
+// shared by every such group, which makes it a scheduler barrier: the phases
+// compiled so far are submitted first, while the previous fallback group's image
+// still holds the plane its commit samples (docs/DESIGN_GPU_RENDERER.md §11.2).
 func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelSlot) {
-	b := modelWorldBounds(g)
-	for _, child := range g.Children {
-		if cg := child.Geometry; cg != nil && cg.Eligible && cg.KeyPlane && len(cg.Children) == 0 {
-			b = b.Union(modelWorldBounds(cg))
+	if grp, ok := r.batchedGroup(g); ok {
+		// The staging atlas already merged this group; the omissions still have to
+		// be counted here, where record order visits it.
+		for _, child := range g.Children {
+			if !mergeableChild(child.Geometry) {
+				r.modelStats.Skipped++
+				continue
+			}
+			r.modelStats.GPU++
 		}
+		r.commitModelSlot(grp.plane, grp.region, grp.bounds)
+		r.modelStats.ComposedGroups++
+		return
 	}
+	b := modelGroupBounds(g)
 	r.submitSchedule()
 	r.ensureModelStage(b.Dx(), b.Dy())
 	if r.modelStage == nil {
@@ -334,7 +347,7 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 	stage.DrawImage(parent.image(), &r.modelStageOp)
 	for _, child := range g.Children {
 		cg := child.Geometry
-		if cg == nil || !cg.KeyPlane || len(cg.Children) != 0 {
+		if !mergeableChild(cg) {
 			r.modelStats.Skipped++
 			continue
 		}
@@ -347,10 +360,8 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 		r.beginPass(scratchImg)
 		scratch.DrawImage(stage, &r.modelStageOp)
 		cb := modelWorldBounds(cg).Sub(b.Min)
-		r.resetGeometry()
 		r.appendModelQuad(cb, slot.box, [4]float32{}, [4]float32{float32(child.KeyDelta), 0, 0, 0})
 		r.modelDraw(scratch, r.modelChild, ebiten.BlendCopy, slot.image(), stage, nil, nil)
-		r.resetGeometry()
 		stage, scratch = scratch, stage
 		stageImg, scratchImg = scratchImg, stageImg
 		r.modelStats.GPU++

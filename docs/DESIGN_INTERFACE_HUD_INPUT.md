@@ -215,6 +215,35 @@ origin so no glide survives it `[07 R-CAM-01 §12]`. `WorldToScreen` applies the
 half-height shear `wz − (wy >> 1)` with arithmetic shifts; `ScreenToWorld`
 inverts it at ground height for pixel-level questions only.
 
+Ordinary ARMOPT/EXITMENU/YESORNO/RESTART/ENDMSN child panels now use
+retained `Panel.ServiceFrame` state with zero token mode. Eligible quickkeys
+run at their indexed gadget visit and consume only their claimed token prefix;
+the key matrix remains disabled. YESORNO's explicit Enter/Escape caller row
+routes to No independently of the generic matrix [07 R-FE-01 §7]. Panels are
+built at the owning transition before their first input or draw.
+
+**The Ctrl-right drag-scroll primitive** (`drag_scroll.go`).
+`camera.DragScroll.Begin(*Camera)` captures `trunc(origin / 16)` and clears the
+tracked follow and its pending host sample once, because pointer dispatch
+precedes phase 10. `Step(*Camera, dx, dy)` writes each origin as
+`(trunc(delta / 4) + anchor) × 16`, clamps it, copies current into desired, and
+updates the anchor; it does not clear follow during later steps. Its battle
+adapter supplies successive pointer deltas. The camera primitive quantizes the
+retail beam origin through `BattleViewOrigin`, never framebuffer `X`/`Z`,
+because the two coordinate frames differ by the viewport inset `[07 R-CAM-01 §11]` `[03 §4.1]`.
+
+`battleSession` admits this capture only for an idle Type-0 Ctrl-right event
+inside the world view. It spends motion before release and suppresses the
+ordinary camera scroll branch during that frame. `Client.SetPointerCaptured`
+is presentation-only; Ebitengine captured mode supplies cumulative virtual
+pointer positions, and its desktop adapter restores the native capture-start
+position on release. The software cursor is hidden while captured. T25 remains
+explicit: host polling cannot reproduce the historical native event's restore
+point or warp chronology; focus loss and screen ownership changes release
+host capture. The projectile-hold camera owner is still absent, so entry clears
+tracked-unit/glide state but has no projectile hold state to clear; the pending
+owner connection remains at the code site.
+
 **Follow and bookmarks** (`follow.go`, `bookmarks.go`). `FollowState` is the
 rest of the retail camera block: the desired origin, the tracked object handle
 and four bookmark slots. `DesiredOrigin` and `FollowTo` step the origin toward
@@ -421,7 +450,8 @@ wrap, tie, admission, capture and text-setup contracts. Existing authored
 fixtures that relied on unspecified default focus should state their intended
 focus explicitly rather than weakening production opening behavior.
 
-**I04 keyboard matrix and ordered-token service (partial; review remains).**
+**I04 keyboard matrix and ordered-token service (implemented; explicit platform
+limits remain).**
 `WidgetFrame.Tokens` is the producer-ordered keyboard-ring snapshot and
 `ServiceResult.ConsumedTokens` identifies only the serviced prefix. A
 consuming, navigation-enabled front-end or battle-options root passes Tab,
@@ -995,13 +1025,15 @@ Not persisted: the networking identity fields, which are retail values this
 engine has no owner for and are deliberately absent rather than written as
 invented defaults.
 
-Three persisted values are stored and re-shown but not yet consumed, each with
+Two persisted values are stored and re-shown but not yet consumed, each with
 its consumer named at the write site: `Sound Mode`'s `Mono`-versus-`3D`
 distinction (the output device's 3-D flag — this build pans positionally either
-way), `Interface Type` (`internal/orders` holds the word behind a `TODO(T23)`
-and exports no setter), and the per-track music category array (retail persists
-it in the `CDLISTS` ring keyed by the drive's volume serial, which this build
-has no analogue for). `gamespeed` is consumed only from the in-battle arm: the
+way), and the per-track music category array (retail persists it in the
+`CDLISTS` ring keyed by the drive's volume serial, which this build has no
+analogue for). `Interface Type` is consumed by the battle pointer and cursor
+paths: a shell battle reads its live in-memory stage, and a direct battle copies
+the loaded stage at entry, with no per-frame preferences read `[07 R-CAM-01
+§5]`. `gamespeed` is consumed only from the in-battle arm: the
 front-end root has no session to apply it to, and battle entry is the reader
 there.
 
@@ -1063,14 +1095,18 @@ chosen on the **press** edge. In order:
    record until the matching right up edge. The signed lens conversion runs
    before camera clamp even after the drag leaves the lens. Left down issues
    the armed order or world click at the lens point. `Interface Type 1` swaps
-   those two minimap buttons. The canvas letterbox bars suppress a viewport
+   those two **idle** minimap buttons. An armed order or placement remains a
+   left-click action in either mode, so Type 1's idle camera button cannot
+   capture it. The canvas letterbox bars suppress a viewport
    drag but are not lens/world-pointer input; cursor, footer and command paths
    share that classification `[07 R-CAM-01 §5]` `[07 R-CAM-01 §11]` `[07 §8]`.
-2. **Right button, anywhere else.** Right is deselect and cancel only: a factory
-   product button is the one exception, subtracting one or five from the
-   matching tail node; otherwise an armed placement disarms, then an armed latch
-   returns to idle, then a non-empty selection clears. No right-button path
-   queues an order `[07 §9]` `[04 §3.4]` `[07 R-P0-11 §1]`.
+2. **Right button, anywhere else.** Under `Interface Type 0`, right is
+   deselect and cancel only. Under `Interface Type 1`, an idle right-down in
+   the viewport issues the contextual order; an armed placement or latch still
+   cancels on right. A factory product button is the one exception, subtracting
+   one or five from the matching tail node. Thus only Type 1's idle viewport
+   path queues a right-button order `[07 R-CAM-01 §5]` `[07 §9]` `[04 §3.4]`
+   `[07 R-P0-11 §1]`.
 3. **Left press that lands on chrome** takes the HUD capture and records the
    press point. The matching release activates only when the *same* authored
    gadget is under both endpoints, so a drag across the rail cannot fire a
@@ -1088,7 +1124,9 @@ chosen on the **press** edge. In order:
    then returns to idle unless Shift keeps it; with the idle latch it selects
    when the picked unit passes the shared eligibility predicate, issues the
    contextual code 1 when a selection exists, and otherwise clears the selection
-   unless Shift is held. A larger rectangle is a drag selection, replacing or
+   unless Shift is held. With `Interface Type 1`, the same idle left click only
+   selects an eligible unit or clears the selection; its contextual code 1 is
+   the right-down path in step 2. A larger rectangle is a drag selection, replacing or
    toggling by the modifier `[07 §9]` `[07 R-CAM-01 §14]`.
 
 Two rules cut across the machine. A latch held by Shift retires on the live

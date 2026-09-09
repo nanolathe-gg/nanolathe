@@ -9,7 +9,6 @@ import (
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/gui"
 	"github.com/nanolathe/nanolathe/internal/hud"
-	"github.com/nanolathe/nanolathe/internal/input"
 	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/ui"
 )
@@ -63,23 +62,18 @@ func (h *retailBattleHUD) drawBattleMenu(c *client.Client, b *battleSession) {
 	}
 	state := b.battleState()
 	if state.HasOptionsLayer() {
-		h.openOptionsWindow()
-		h.drawGUIWindow(c, h.optionsWin, h.optionsGAF, "")
+		h.drawGUIWindowState(c, h.optionsWin, h.optionsGAF, "", h.optionsPanel, nil)
 	}
 	if state.HasExitLayer() {
-		h.openExitWindow()
-		h.drawGUIWindow(c, h.exitWin, nil, "")
+		h.drawGUIWindowState(c, h.exitWin, nil, "", h.exitPanel, nil)
 	}
 	if state.Modal() == ui.BattleModalRestart {
-		h.openRestartWindow()
 		h.drawBattleRestartWindow(c, b)
 	}
 	if state.Modal() == ui.BattleModalConfirmMain {
-		h.openConfirmWindow()
-		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
+		h.drawGUIWindowState(c, h.confirmWin, nil, state.ConfirmTitle(), h.confirmPanel, nil)
 	} else if state.Modal() == ui.BattleModalConfirmExit {
-		h.openConfirmWindow()
-		h.drawGUIWindow(c, h.confirmWin, nil, state.ConfirmTitle())
+		h.drawGUIWindowState(c, h.confirmWin, nil, state.ConfirmTitle(), h.confirmPanel, nil)
 	}
 }
 
@@ -137,7 +131,11 @@ func commanderDeathOption(b *battleSession) int {
 // Every write is clipped to the window rectangle before that surface is
 // presented, and buttons take the runtime dimensions of their selected art.
 func (h *retailBattleHUD) drawGUIWindow(c *client.Client, window *gui.Window, page *formats.GAF, title string) {
-	h.drawGUIWindowState(c, window, page, title, nil, nil)
+	panel := (*ui.Panel)(nil)
+	if h != nil && window == h.resultWin {
+		panel = h.resultPanel
+	}
+	h.drawGUIWindowState(c, window, page, title, panel, nil)
 }
 
 // drawGUIWindowState retains the shared modal painter while allowing a
@@ -161,26 +159,22 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 			continue
 		}
 		r := h.modalGadgetRect(window, i, page)
-		pressed := false
-		stage := 0
+		down, stage := int(gad.Status), 0
 		if panel != nil {
-			pressed = panel.DownAt(i) != 0
+			down = panel.DownAt(i)
 			stage = panel.StageAt(i)
-		} else if c.Input() != nil && c.Input().Mouse != nil {
-			mouse, _ := c.Input().PointerSample()
-			pressed = mouse.Held(input.MouseButtonLeft) && guiRectContains(r, int32(mouse.X), int32(mouse.Y))
 		}
 		grey := gad.GrayedOut&1 != 0
-		frame := h.modalGadgetFrame(gad, page, pressed, grey)
-		if panel != nil && gad.Kind == gui.KindButton && gad.Stages != 0 {
-			frame = h.modalStagedButtonFrame(gad, page, pressed, stage, grey)
-		}
+		frame := h.modalGadgetFrameState(gad, page, down, stage, grey)
 		if frame != nil {
 			if modalArtResampled(gad.Kind, frame, r) {
 				c.UIBlitFrameScaledClipped(frame, int(r.X), int(r.Y), int(r.W), int(r.H), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 			} else {
 				c.UIBlitClipped(frame, int(r.X), int(r.Y), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
 			}
+		} else if gad.Kind == gui.KindButton {
+			v := retailButtonVerdict(gad, 0, int(gad.ArtFrame), down, stage, grey)
+			drawGUIBevelClipped(c, r, h.guiColor(v.top), h.guiColor(v.bot), h.guiColor(v.fill), clip)
 		}
 		text, dynamic := "", false
 		if textAt != nil {
@@ -188,8 +182,8 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 		}
 		if !dynamic && window.GadgetIndex("TITLE") == i && title != "" {
 			text = title
-		} else if !dynamic && gad.Kind == gui.KindButton && len(gad.Labels) != 0 {
-			text = gad.Labels[0]
+		} else if !dynamic && gad.Kind == gui.KindButton {
+			text = retailBattleButtonText(gad, panel, i, stage)
 		} else if !dynamic {
 			text = gad.Text
 		}
@@ -226,6 +220,14 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 		default:
 			continue
 		}
+		if gad.Kind == gui.KindButton {
+			flash := uint16(0)
+			if panel != nil {
+				flash = panel.FlashRow(i)
+			}
+			h.drawModalButtonCaption(c, clip, gad, r, text, selected, textWidth, metric, flash)
+			continue
+		}
 		x := int(r.X)
 		switch {
 		case gad.Attribs&1 != 0:
@@ -239,9 +241,6 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 			x += (int(r.W)-1-textWidth)/2 + 1
 		default:
 			x += 3
-		}
-		if gad.Kind == gui.KindButton && gad.Stages != 0 {
-			x++
 		}
 		y := retailTextPenY(gad, r, metric)
 		if h.modalFont != nil {
@@ -257,6 +256,75 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 		}
 		c.UITextWidth(fallback, text, x, y, -1, color)
 	}
+}
+
+// retailBattleButtonText selects the retained runtime stage caption. Dynamic
+// callers supply their text before this helper; ordinary button labels follow
+// the same stage word the frame selector reads [07 R-WGT-01 §3].
+func retailBattleButtonText(gad gui.Gadget, panel *ui.Panel, index, stage int) string {
+	text := gad.Text
+	if panel != nil {
+		text = panel.TextAt(index)
+	}
+	if len(gad.Labels) == 0 {
+		return text
+	}
+	return gad.Labels[clampMenuStage(stage, len(gad.Labels))]
+}
+
+// drawModalButtonCaption shares the ordinary button pen with the frontend.
+// The modal keeps its private-surface clip for every GAF glyph; the FNT path
+// retains the pen's no-width-limit fallback [03 R-FONT-01 §6].
+func (h *retailBattleHUD) drawModalButtonCaption(c *client.Client, clip gui.Rect, gad gui.Gadget, r gui.Rect, text string, selected *formats.FNT, textWidth, metric int, flash uint16) {
+	if c == nil || text == "" {
+		return
+	}
+	x, y, build, centred := retailButtonCaptionPen(gad, r, textWidth, metric)
+	color := h.guiColor(byte(flash))
+	if gad.Stages != 0 {
+		color = h.guiColor(0)
+	}
+	measure := func(s string) int { return textWidth }
+	if h.modalFont != nil {
+		measure = func(s string) int { return retailGAFTextWidth(h.modalFont, s) }
+	} else if selected != nil {
+		measure = func(s string) int { return client.MeasureText(selected, s) }
+	} else if h.guiFont != nil {
+		selected = h.guiFont
+		measure = func(s string) int { return client.MeasureText(selected, s) }
+	} else {
+		return
+	}
+	draw := func(s string, px int, foreground byte) {
+		if h.modalFont != nil {
+			// GAF mode-0 glyphs carry their own colours. The foreground is still
+			// calculated so the null-slot FNT path takes the same branch.
+			drawRetailGAFTextClipped(c, h.modalFont, s, px, y, int(r.W), int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+			return
+		}
+		c.UITextWidthClipped(selected, s, px, y, -1, foreground, int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+	}
+	key := captionQuickKeyIndex(text, gad.QuickKey)
+	if key < 0 || (!build && (!centred || gad.GrayedOut&1 != 0)) {
+		draw(text, x, color)
+		return
+	}
+	prefix, letter, suffix := text[:key], text[key:key+1], text[key+1:]
+	draw(prefix, x, color)
+	x += measure(prefix)
+	keyColor := color
+	if build {
+		keyColor = h.guiColor(10)
+	}
+	draw(letter, x, keyColor)
+	if centred {
+		underline := byte(2)
+		if gad.Stages != 0 {
+			underline = 0
+		}
+		clipFill(c, x, y+metric-1, measure(letter), 1, h.guiColor(underline), clip)
+	}
+	draw(suffix, x+measure(letter), color)
 }
 
 // drawBattleRestartWindow supplies RESTART.GUI's session-owned labels and
@@ -408,22 +476,6 @@ func (h *retailBattleHUD) modalPage(window *gui.Window) *formats.GAF {
 	return nil
 }
 
-func (h *retailBattleHUD) modalButtonAt(window *gui.Window, x, y int32) int {
-	if h == nil || window == nil {
-		return -1
-	}
-	page := h.modalPage(window)
-	for i, gad := range window.Gadgets {
-		if i == 0 || gad.Kind != gui.KindButton || gad.Active == 0 || gad.GrayedOut != 0 {
-			continue
-		}
-		if guiRectContains(h.modalGadgetRect(window, i, page), x, y) {
-			return i
-		}
-	}
-	return -1
-}
-
 // modalGadgetFrame resolves modal control art through [07 §4]'s three-link
 // chain: the gadget's own named entry in the window's own GAF, then the
 // side-specific interface GAF, then the built-in fallback (the common GUI
@@ -440,11 +492,20 @@ func (h *retailBattleHUD) modalButtonAt(window *gui.Window, x, y int32) int {
 // Side-*page* GAFs are still not consulted: they carry unrelated entries with
 // colliding names (notably EXIT) and are not part of ARMOPT's retail binding.
 func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pressed, disabled bool) *formats.GAFFrame {
+	return h.modalGadgetFrameState(gad, page, boolInt(pressed), 0, disabled)
+}
+
+func (h *retailBattleHUD) modalGadgetFrameState(gad gui.Gadget, page *formats.GAF, down, stage int, disabled bool) *formats.GAFFrame {
 	if gad.Kind == gui.KindButton && gad.ExternalArtResolved {
-		return selectGadgetFrame(gad.ExternalArt, gad, pressed, disabled, false)
+		frame, _ := retailButtonFrameFromEntry(gad.ExternalArt, gad, int(gad.ArtFrame), down, stage, disabled)
+		return frame
 	}
 	if gad.ButtonArtResolved {
-		return selectGadgetFrame(gad.ButtonArt, gad, pressed, disabled, false)
+		if gad.Kind == gui.KindButton {
+			frame, _ := retailButtonFrameFromEntry(gad.ButtonArt, gad, int(gad.ArtFrame), down, stage, disabled)
+			return frame
+		}
+		return selectGadgetFrame(gad.ButtonArt, gad, false, disabled, false)
 	}
 	name := gad.Art
 	if name == "" {
@@ -455,69 +516,31 @@ func (h *retailBattleHUD) modalGadgetFrame(gad gui.Gadget, page *formats.GAF, pr
 			continue
 		}
 		if entry, ok := gaf.Find(name); ok {
-			return selectGadgetFrame(entry, gad, pressed, disabled, false)
+			if gad.Kind == gui.KindButton {
+				frame, _ := retailButtonFrameFromEntry(entry, gad, int(gad.ArtFrame), down, stage, disabled)
+				return frame
+			}
+			return selectGadgetFrame(entry, gad, false, disabled, false)
 		}
 	}
 	if gad.Kind == gui.KindButton && h.common != nil {
 		if entry, ok := h.common.Find("BUTTONS0"); ok {
-			return selectGadgetFrame(entry, gad, pressed, disabled, true)
+			base := stockButtonBase(entry, gad)
+			frame, _ := retailButtonFrameFromEntry(entry, gad, base, down, stage, disabled)
+			return frame
 		}
 	}
 	return nil
 }
 
-// modalStagedButtonFrame keeps a staged child on the common button-state
-// contract even in a renderer test that has no frontend shell. An installed
-// shell remains the normal resolver; the local path repeats only its frame
-// selection after the modal's own already-resolved art lookup.
+// modalStagedButtonFrame is the compatibility adapter retained for staged
+// renderer tests. Both shell-backed and direct battles now use the same
+// installed-art verdict as the ordinary modal painter.
 func (h *retailBattleHUD) modalStagedButtonFrame(gad gui.Gadget, page *formats.GAF, pressed bool, stage int, grey bool) *formats.GAFFrame {
-	if h != nil && h.shell != nil {
-		if frame := h.shell.retailButtonArt(gad, boolInt(pressed), stage, grey); frame != nil {
-			return frame
-		}
-	}
-	entry, stock := h.modalButtonArtEntry(gad, page)
-	if entry == nil || len(entry.Frames) == 0 {
+	if h == nil {
 		return nil
 	}
-	last := len(entry.Frames) - 1
-	base := int(gad.ArtFrame)
-	if stock {
-		best, bestScore := -1, int(^uint(0)>>1)
-		for i, ref := range entry.Frames {
-			if ref.Frame == nil {
-				continue
-			}
-			score := absInt(int(ref.Frame.Width)-int(gad.Rect.W)) + absInt(int(ref.Frame.Height)-int(gad.Rect.H))
-			if score < bestScore {
-				best, bestScore = i, score
-			}
-		}
-		if best < 0 {
-			return nil
-		}
-		base = (best / 4) * 4
-	}
-	idx := base
-	switch {
-	case grey && cycleButton(gad):
-		idx = last
-	case grey && gad.Attribs&0x1800 != 0:
-		idx = base
-	case grey:
-		idx = stage
-	case pressed && int(gad.Stages) < len(entry.Frames):
-		idx = last - 1
-	default:
-		idx = stage
-	}
-	if idx < 0 {
-		idx = 0
-	}
-	if idx > last {
-		idx = last
-	}
-	return entry.Frames[idx].Frame
+	return h.modalGadgetFrameState(gad, page, boolInt(pressed), stage, grey)
 }
 
 // modalButtonArtEntry has the same explicit-resolution boundary as the

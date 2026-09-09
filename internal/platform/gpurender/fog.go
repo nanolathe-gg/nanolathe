@@ -124,13 +124,21 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		// surface as it is rather than guessing a fog colour (I9).
 		return
 	}
+	if r.tables.atlas == nil {
+		// The fog dark fills and the black-family frames resolve their colour
+		// through PAL; with no palette installed there is nothing to draw and
+		// nothing to guess (I9).
+		return
+	}
 	r.fog.ensureAtlas(fg.Gray, fg.Black)
 
 	w, h := int32(r.w), int32(r.h)
-	// The gray-reading operations are skipped outright when the palette carries
-	// no gray table, exactly as fogFillGray and blitFogGAF(fogBlitGray) return
-	// early when the palette is absent [03 §3.3].
-	grayReady := r.tables.gray != nil
+	// The gray remap no longer reads the GRAY TABLE: in the true-colour composite
+	// it is the desaturation the table was built from, the luminance
+	// floor((r+g+b)/3) of the colour already there [03 §4.3.3](§13.2 GRAY row,
+	// §13.3). The classic byte writer's "no gray table, no gray fill" gate
+	// therefore becomes the palette gate above.
+	const grayReady = true
 
 	region := fogRegionFor(fg.Ops, w, h)
 	if !region.ok {
@@ -141,21 +149,16 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		return
 	}
 
-	// A nil gray table means no operation samples source 3; bind the grid there
-	// so the shader's sampler still has an image behind it.
-	grayTable := r.tables.gray
-	if grayTable == nil {
-		grayTable = r.fog.grid
-	}
-	// Source slot 0 is the phase's read surface, left unbound here and filled at
-	// submission (§11.5). The pass writes every pixel of the region, unfogged
-	// ones with the value it read there, and always returns an opaque fragment,
-	// so the batch's source-over blend stores the index unchanged — the copy the
-	// pass used when it drew on its own (C-G4).
-	imgs := [4]*ebiten.Image{1: r.fog.grid, 2: r.fog.atlas, 3: grayTable}
-	if !r.sched.beginShader(schedDest,
+	// Source slot 0 is the read copy of the region, left unbound here and filled
+	// at submission (§11.5, §13.3): fog is the one family that still reads the
+	// pixels it rewrites, because the gray remap is a desaturation no
+	// fixed-function blend expresses. The pass writes every pixel of the region,
+	// unfogged ones with the colour it read there, and always returns an opaque
+	// fragment, so source-over stores the colour unchanged.
+	imgs := [4]*ebiten.Image{1: r.fog.grid, 2: r.fog.atlas, 3: r.tables.atlas}
+	if !r.sched.beginBlended(schedDest,
 		int(region.x0), int(region.y0), int(region.x1), int(region.y1),
-		imgs, r.fog.shader) {
+		imgs, r.fog.shader, blendComposite, 0) {
 		return
 	}
 	// The lattice origin and the checker parity ride the vertex custom attributes

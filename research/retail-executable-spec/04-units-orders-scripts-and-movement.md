@@ -5791,8 +5791,10 @@ does not require reproducing the executable's memory layout.
 
 The arena keeps a cursor and an ordered partition into occupied or free
 blocks. If the requested charge exceeds the remaining tail, clear all blocks
-from the cursor through the tail and wrap to the beginning. Starting at the
-chosen cursor, clear complete blocks until their combined charge covers the
+from the cursor through the tail and wrap to the beginning. Tail clearing
+removes ownership but preserves every block boundary and charge; adjacent
+cleared blocks are not coalesced. Starting at the chosen cursor, clear
+complete blocks until their combined charge covers the
 request. Clearing a block removes its live debris only if that slot still
 owns this exact allocation; a slot reused since the old debris died is not
 removed. If the excess charge is at least nine, leave that excess as a free
@@ -5808,7 +5810,10 @@ pose mutation does not change the detached copy.
 
 **Established — per-tick step.** The effect phase of the tick (the same phase
 as the fixed effect pool, doc 03 §1.3; doc 01 owns the phase order) visits
-every occupied slot:
+every occupied slot. Position/velocity arithmetic uses signed 32-bit wrapping
+for the predicted-height sum, each position update and gravity subtraction.
+Comparisons use the signed wrapped result; a wider host fixed-point type must
+explicitly narrow these operations.
 
 1. Read the lifetime, store `lifetime − 1`, and free the slot when the value
    read was already 0 — a debris piece therefore survives its 900 steps and

@@ -127,10 +127,10 @@ func TestFeatureSequenceMissesAreMemoisedAndNeverLoadTwice(t *testing.T) {
 // first visit of the feature phase is a map lookup.
 func TestWarmFeatureSequencesCompilesTheCatalogOffTheSimPath(t *testing.T) {
 	c := newFeatureSequenceClient(t)
-	def := &content.FeatureDef{Filename: "trees", SeqNameBurn: "treeburn", SeqNameDie: "treedie"}
+	def := &content.FeatureDef{Filename: "trees", SeqNameBurn: "treeburn", SeqNameDie: "treedie", SeqNameDieShad: "missing-shadow"}
 	def.CanonicalKey = "tree1"
 	c.WarmFeatureSequences(map[string]*content.FeatureDef{"tree1": def})
-	for _, seq := range []string{"treeburn", "treedie"} {
+	for _, seq := range []string{"treeburn", "treedie", "missing-shadow"} {
 		if _, seen := c.featureSeqs[featureSequenceKey("trees", seq)]; !seen {
 			t.Fatalf("warm pass left %q uncompiled", seq)
 		}

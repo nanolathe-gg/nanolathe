@@ -68,6 +68,16 @@ type Instance struct {
 	onActive               bool
 	arenaBilled            bool
 
+	// runtimeLive is the independent representation of the anchor's attached
+	// runtime record. A resting sprite still has this package's convenience
+	// lookup Instance, but it has neither an arena record nor this bit
+	// [05 R-FEAT-01 §2][05 R-FEAT-01 §3]. runtimeShadowEnabled is the attached sprite
+	// record's shadow-present bit; it is meaningful only while runtimeLive is
+	// true [03 R-RAST-01 §6]. They are published through RuntimeView rather
+	// than inferred from lookup-record presence or a sequence name.
+	runtimeLive          bool
+	runtimeShadowEnabled bool
+
 	// Animation/status byte bit0 clear means GAF at rest [06 §13.1].
 	Status uint8
 
@@ -208,6 +218,14 @@ type Service struct {
 	// sequences memoises SequenceFrames per definition and selector; it is
 	// read by key only.
 	sequences map[sequenceKey][]int32
+	// ShadowSequenceResolved reports whether an attached sprite event record's
+	// named shadow entry resolved in the battle's immutable art metadata. It
+	// has no cursor or timing role: the main event sequence alone supplies the
+	// cursor's delay words. The renderer admits the opaque live-record shadow
+	// only when this answer is true [05 R-FEAT-01 §9][03 R-RAST-01 §6]. A nil
+	// seam answers false, preserving the missing-entry outcome rather than
+	// inferring a shadow from its authored name.
+	ShadowSequenceResolved func(def *content.FeatureDef, sequence string) bool
 
 	// BurnWeapon is the ordinary weapon request the burn event fires its
 	// `burnweapon` through [05 R-FEAT-01 §11 step 3]: the weapon name and the

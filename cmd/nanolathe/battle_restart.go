@@ -161,13 +161,7 @@ func (b *battleSession) handleBattleRestartInput(in *input.State, cl *client.Cli
 		return
 	}
 	p := b.restart.panel
-	frame := pointerFrame(in, nil, false)
-	result := p.ServiceFrame(frame, ui.WidgetHooks{ArtFrames: func(index int) int {
-		if b.hud == nil || b.hud.restartWin == nil || index < 0 || index >= len(b.hud.restartWin.Gadgets) {
-			return 0
-		}
-		return b.hud.modalGadgetArtFrames(b.hud.restartWin.Gadgets[index], b.hud.modalPage(b.hud.restartWin))
-	}})
+	result := b.serviceBattleChildPanel(p, b.hud.restartWin, b.hud.modalPage(b.hud.restartWin), in)
 	if result.Fired {
 		b.activateBattleRestartGadget(result.FiredIndex, cl)
 	}

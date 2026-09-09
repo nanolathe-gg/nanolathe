@@ -39,14 +39,16 @@ func checkMinimapSurfaceDevicePixels() error {
 	}
 	rgba := make([]byte, 8*6*4)
 	img.ReadPixels(rgba)
+	// Every command here is opaque, so §13.4's exactness rule applies: the
+	// composite must equal the classic byte plane expanded through PAL.
 	expected := map[int]byte{9: 0, 10: 77, 11: 2, 17: 3, 18: 4, 19: 5, 21: 9, 22: 10, 29: 11, 30: 12}
 	for i := 0; i < 8*6; i++ {
 		want, ok := expected[i]
 		if !ok {
 			want = 251
 		}
-		if rgba[i*4] != want {
-			return fmt.Errorf("minimap surface device pixel %d: got %d want %d", i, rgba[i*4], want)
+		if err := checkExactIndex(fmt.Sprintf("minimap surface device pixel %d", i), rgba, i*4, &pal, want); err != nil {
+			return err
 		}
 	}
 	return nil

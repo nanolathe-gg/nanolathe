@@ -157,19 +157,20 @@ presentation `[06 §5.2]`.
 **Rule.** Sim never reads wall-clock time, input state, camera, or renderer
 state. Presentation never writes sim state. The only channel is the committed
 frame, published once after every completed sub-tick and sampled at the
-current committed tick by the renderer. The active runtime has one Ebitengine
-window path; there is no alternate headless entry, previous-frame
-interpolation, or render `alpha`.
+current committed tick by the renderer, or by Enhanced presentation the two
+most recent committed ticks (DESIGN_GPU_RENDERER §13.5). The active runtime
+has one Ebitengine window path; there is no alternate headless entry.
 
 **Why.** Retail's draw path samples the accumulators exactly as committed at
 the current tick; no interpolation between updates exists `[03 §2.4]`.
-Original and GPU Classic preserve that sampling. A future Enhanced-only
-interpolation design is authorized by DESIGN_GPU_RENDERER §5.3, using immutable
-committed snapshots with no simulation feedback. It is not implemented by the
-GPU prototype milestone; the simulation still publishes only after the complete
-phase sequence [01 §4.4].
+Original preserves that sampling. Enhanced presentation
+(DESIGN_GPU_RENDERER §13.5) is the one path allowed to read the two most
+recent committed ticks and the clock's carry, blending them in retained
+presentation buffers; it writes nothing back, consumes no simulation RNG, and
+the simulation still publishes only after the complete phase sequence
+[01 §4.4]. `--shot` and Original never blend.
 
-**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. The production frame path has no `Lerp`, `alpha`, or previous-frame read.
+**Check.** `grep -rn "time.Now\|time.Since" internal/{clock,units,orders,cob,movement,path,economy,construction,features,combat,visibility,ai,mission,triggers}` returns nothing. `internal/client` imports sim packages; no sim package imports `internal/client`. Outside `internal/client/interpolate.go` the frame path has no `Lerp`, `alpha`, or previous-frame read; `frame.Buffer.Previous` has no caller outside that file and its tests.
 
 ## I7 — Tick phase order
 

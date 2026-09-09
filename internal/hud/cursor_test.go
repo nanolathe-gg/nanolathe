@@ -141,6 +141,50 @@ func TestChooseCursorHoverTable(t *testing.T) {
 	}
 }
 
+// TestTypeOneIdleCursorLocks the alternate idle column independently of the
+// default action-shaped column. Armed rows retain their existing table
+// regardless of Interface Type [07 R-CAM-01 §5][07 §8].
+func TestTypeOneIdleCursorLocks(t *testing.T) {
+	mover := &content.UnitDef{UnitName: "ARMPW", CanMove: true}
+	reclaimer := &content.UnitDef{UnitName: "ARMCV", CanMove: true, CanReclamate: true}
+	attacker := &content.UnitDef{UnitName: "CORAK", CanMove: true, CanAttack: true}
+	actor := unit(0, mover)
+	own := unit(0, mover)
+	hostile := unit(1, attacker)
+	other := unit(2, mover)
+	wreck := &content.FeatureDef{Reclaimable: true}
+
+	sel := func(u *units.Unit) CursorSelection {
+		return CursorSelection{Viewer: 0, Units: []*units.Unit{u}, InterfaceType: InterfaceTypeRightClick,
+			Hostile: func(_, target *units.Unit) bool { return target.Owner == 1 }}
+	}
+	cases := []struct {
+		name  string
+		sel   CursorSelection
+		hover CursorHover
+		want  int
+	}{
+		{"own eligible unit selects", sel(actor), CursorHover{OverWorld: true, Target: own}, render.CursorSelect},
+		{"hostile is red without attack capability", sel(actor), CursorHover{OverWorld: true, Target: hostile}, render.CursorRed},
+		{"other unit is green", sel(actor), CursorHover{OverWorld: true, Target: other}, render.CursorGrn},
+		{"reclaimable feature is normal without capability", sel(actor), CursorHover{OverWorld: true, Feature: wreck}, render.CursorNormal},
+		{"reclaimable feature is green with reclaim capability", sel(unit(0, reclaimer)), CursorHover{OverWorld: true, Feature: wreck}, render.CursorGrn},
+		{"empty selection retains inspect fallback", CursorSelection{Viewer: 0, InterfaceType: InterfaceTypeRightClick}, CursorHover{OverWorld: true, Target: own}, render.CursorSelect},
+	}
+	for _, tc := range cases {
+		if got := ChooseCursor(input.LatchNormal, tc.sel, tc.hover); got != tc.want {
+			t.Errorf("%s: cursor = %d (%s), want %d (%s) [07 R-CAM-01 §5][07 §8]", tc.name, got, render.CursorName(got), tc.want, render.CursorName(tc.want))
+		}
+	}
+	// Type 1 changes no armed row: the attack answer remains action-shaped.
+	if got := ChooseCursor(input.LatchAttack, sel(actor), CursorHover{OverWorld: true, Target: hostile}); got != render.CursorNormal {
+		t.Fatalf("armed attack without capability = %d, want cursornormal [07 R-CAM-01 §5]", got)
+	}
+	if got := ChooseCursor(input.LatchAttack, sel(unit(0, attacker)), CursorHover{OverWorld: true, Target: hostile}); got != render.CursorAttack {
+		t.Fatalf("armed attack with capability = %d, want cursorattack [07 R-CAM-01 §5]", got)
+	}
+}
+
 // TestChooseCursorLowestIndexWins locks the reduction across a mixed selection
 // [07 §8]: the index table's numbering is its shape priority order.
 func TestChooseCursorLowestIndexWins(t *testing.T) {

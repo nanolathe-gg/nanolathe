@@ -571,6 +571,41 @@ retains no record; session owns all bounded arena storage and effect-phase
 updates. Smoke/fire trail class identity and the stale claimed-effect case stay
 `TODO(question)` until their owning research gaps close `[04 R-COB-04 §1]`–`[04 R-COB-04 §4]` [I4] [I5] [I6].
 
+**DebrisPool API — whole-piece prerequisite.** `internal/render.NewDebrisPool`
+owns a fixed 100-slot, 100,000-charge arena. `Admit(DebrisRequest) bool` takes
+one already-seeded whole-piece request: immutable model/primitive identity,
+copied point and render state, absolute world offset, the six-draw velocity and
+angle-rate seed, lifetime, and the four semantic fall/on-hit/smoke/fire flags.
+It scans slots in ascending order for the first empty one; its allocation
+charge is 12 per vertex plus 110 fixed charges. Its cursor-forward allocation clears whole blocks
+(and their slots): when the tail is too short it clears cursor-to-tail, wraps,
+then clears from the start until the request fits. A remainder below nine
+charges joins the new block; otherwise it remains the cursor's next free
+block. Admission does no random work and retains no queue.
+`Step(DebrisStepContext, DebrisImpactSink)` walks occupied slots in slot
+order, applies the lifetime, terrain/sea, bounce, velocity and angle rules of
+`[04 R-COB-04 §2]`, and synchronously calls the typed ground or water impact
+method when an on-hit record requires one. `SnapshotInto` provides copies of
+live detached records for later session publication; it never exposes the
+arena's mutable point storage. Session will adapt the COB request and bind this
+pool; frame publication and renderer consumption remain outside this API
+`[04 R-COB-04 §1]`–`[04 R-COB-04 §2]` [I4] [I5] [I6].
+
+**Whole-piece pool validation.** The bounded pool passed independent review,
+`tools/check`, `tools/check-retail`, and the GPU device fixtures after integration.
+A sequential scene-version-3 Ashap Plateau comparison used seed 7, factories,
+1920×1080, 30 TPS, 60 warm-up draws and 180 measured draws. Both renderers kept
+identical per-frame censuses and byte-identical captures against the accepted
+baseline; the pool is still awaiting its production adapter. Classic record
+median/p95/max changed from 13.330/18.385/21.022 to 13.335/14.870/15.980 ms;
+modern from 4.271/4.701/5.339 to 4.298/6.236/13.081 ms. Classic allocations were
+0.891→0.892 MB/frame and cadence share 96→98%; modern allocations were
+1.805→1.867 MB/frame and cadence share 91→88%. These individual runs establish
+no performance improvement. The workload included 187–198 units, 6–31
+projectiles, 73–162 effects, 4–8 nanoframes/nanolathe events, and four shake
+frames. Full adapter, shared effect-pool admission, publication and drawing
+remain open under U13.
+
 ### 3.4 Model — C20…C24
 
 **C20 — load-time order is fixed at load.** After relocation and before any

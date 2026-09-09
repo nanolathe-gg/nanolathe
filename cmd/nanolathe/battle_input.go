@@ -115,6 +115,10 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	kbd := in.Kbd
 	mouse, pointerModifiers := publishedPointer(in)
 	mx, my := int32(mouse.X), int32(mouse.Y)
+	b.dragScrollStepped = false
+	if b.serviceDragScroll(mx, my, mouse.Held(input.MouseButtonRight), cl) {
+		return
+	}
 	b.battleState().Input.ShiftHeld = kbd.HasShift()
 	b.battleState().Input.PointerX, b.battleState().Input.PointerY = mx, my
 	// Any latch held by Shift retires on the live Shift-up, regardless of
@@ -131,12 +135,25 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	if b.serviceMinimapCameraLatch(mx, my, &mouse) {
 		return
 	}
-	if b.beginMinimapCameraLatch(mx, my, &mouse) {
-		return
-	}
-	if b.classifyPointer(mx, my) == battlePointerMinimap && mouse.Pressed(b.minimapOrderButton()) {
-		b.minimapClickOrder(cl, mx, my, pointerModifiers.Shift)
-		return
+	if b.classifyPointer(mx, my) == battlePointerMinimap {
+		state := b.battleState().Input
+		// An armed order, including placement, always fires on left. Type 1
+		// therefore cannot let its idle left-button minimap camera latch steal
+		// an armed left click [07 R-CAM-01 §5].
+		if state.Latch != input.LatchNormal || state.BuildDef != "" {
+			if mouse.Pressed(input.MouseButtonLeft) {
+				b.minimapClickOrder(cl, mx, my, pointerModifiers.Shift)
+				return
+			}
+		} else {
+			if b.beginMinimapCameraLatch(mx, my, &mouse) {
+				return
+			}
+			if mouse.Pressed(b.minimapOrderButton()) {
+				b.minimapClickOrder(cl, mx, my, pointerModifiers.Shift)
+				return
+			}
+		}
 	}
 	if b.isOverMinimap(mx, my) && mouse.Held(input.MouseButtonLeft) {
 		// The whole canvas suppresses a viewport drag; only its fitted radar
@@ -364,11 +381,20 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 		b.battleState().Input.DragActive = false
 		return
 	}
-	// Right button is deselect/cancel only: every world order fires on left [07 §9][04 §3.4].
+	// A right click over the viewport is Type 1's idle contextual-order path.
+	// It stays a no-op with no selection; the cursor's relationship colour does
+	// not grant an actor or bypass command validation [07 R-CAM-01 §5].
 	if mouse.Pressed(input.MouseButtonRight) {
 		// A factory product button is the one right-click exception: it
 		// subtracts one/five from the matching tail node [R-P0-11].
 		if b.hud != nil && b.hud.hitTestFor(b, mx, my) && b.hud.consumeRightClickWithShift(b, mx, my, pointerModifiers.Shift) {
+			return
+		}
+		state := b.battleState().Input
+		if b.interfaceTypeRightClick() && state.BuildDef == "" && state.Latch == input.LatchNormal && b.classifyPointer(mx, my) == battlePointerViewport {
+			if b.hasSelection() {
+				b.orderSelected(1, mx, my, pointerModifiers.Shift)
+			}
 			return
 		}
 		if b.battleState().Input.BuildDef != "" {
@@ -381,6 +407,10 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			// Cancel armed order latch to idle [07 §9][07 §8][07 §9].
 			b.battleState().Input.Latch = input.LatchNormal
 			b.battleState().Input.ShiftLatchSticky = false
+			return
+		}
+		if !b.interfaceTypeRightClick() && pointerModifiers.Ctrl && b.classifyPointer(mx, my) == battlePointerViewport {
+			b.beginDragScroll(mx, my, cl)
 			return
 		}
 		if b.hasSelection() {
@@ -510,8 +540,9 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 					b.battleState().Input.ShiftLatchSticky = false
 				}
 			} else {
-				// Idle latch left-click: every world command is left-click; right-click is deselect/cancel only [07 §9][04 §3.4].
-				// When clicking an own visible unit we change selection; otherwise with a selection we issue the contextual order (code 1) which delegates to move/attack/repair/etc. based on the target [04 §3.4].
+				// With Type 1 an idle left click remains the selection/drag button;
+				// an empty click deselects. Type 0 retains its contextual left-click
+				// branch [07 R-CAM-01 §5].
 				viewer := visibility.PlayerID(0)
 				if b.sess != nil {
 					viewer = visibility.PlayerID(b.sess.LocalOwner)
@@ -553,9 +584,16 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 						_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionReplace, Selection: session.HumanSelectionCommand{Handles: []pool.Handle{bh}}})
 					}
 					playSelectionCue(b.sess, []pool.Handle{bh}) // [07 §9]
+				} else if b.interfaceTypeRightClick() {
+					// Type 1's idle empty-left branch deselects regardless of
+					// Shift. Shift only modifies an eligible select or a drag
+					// rectangle; it does not preserve this branch [07 R-CAM-01
+					// §14 step 4].
+					_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 				} else {
 					if b.hasSelection() {
-						// Left-click contextual order when a selection exists and the click is not on own unit [04 §3.4][07 §9].
+						// Type-0 left-click contextual order when a selection exists
+						// and the click is not on an own unit [04 §3.4][07 §9].
 						b.orderSelected(1, mx, my, additive)
 					} else {
 						// No selection and click not on own unit: clear if not additive, else preserve [07 §9] C6.
@@ -582,7 +620,8 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 			playSelectionCue(b.sess, handles) // [07 §9]
 		}
 	}
-	// No right-button order path: right-click is deselect/cancel only, handled at the top [07 §9][04 §3.4].
+	// Type 1's idle right-click order is handled before captures and cancels;
+	// every armed row still uses left and right cancels it [07 R-CAM-01 §5].
 }
 
 func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool, cl *client.Client) {

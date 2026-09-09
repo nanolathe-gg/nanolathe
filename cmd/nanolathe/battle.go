@@ -34,6 +34,11 @@ type battleSession struct {
 	shell *gameShell
 
 	millisSource clock.MillisSource // host millisecond source for Session.Step [01 §4.1]
+	// lastTickFraction is the Enhanced blend fraction last produced while the
+	// battle was running. A paused battle runs no budget, so tickFraction
+	// returns this value again and the blend freezes
+	// (docs/DESIGN_GPU_RENDERER.md §13.5).
+	lastTickFraction float32
 
 	// surfaceW/surfaceH is the negotiated presentation surface the pointer and
 	// the world viewport are measured against. The interface art is authored in
@@ -100,10 +105,22 @@ type battleSession struct {
 	// bytes are 1..255, so 0 doubles as "not primed yet".
 	scrollSpeedByte byte
 
+	dragScroll        camera.DragScroll
+	dragScrollActive  bool
+	dragScrollStepped bool
+	dragScrollLastX   int32
+	dragScrollLastY   int32
+
 	// switchAlt is captured once when the battle installs its settings. It is
 	// presentation input state only; routeDigit reads this cached bit rather
 	// than opening the settings file on a keypress [07 R-CAM-01 §4][I6].
 	switchAlt bool
+
+	// interfaceType is the persisted LEFTCLICK stage for a direct battle. A
+	// frontend-backed battle reads the shell's live copy instead, so an
+	// in-battle options change reaches the next pointer event without disk I/O
+	// [07 R-CAM-01 §5][07 R-CAM-01 §7].
+	interfaceType int
 
 	// The footer's pointer record [07 R-HUD-03 §1]. Both words are
 	// presentation-only: the simulation neither writes nor reads them [I6].
@@ -190,6 +207,9 @@ func runBattleView(opts Options, cs *contentSet) error {
 		Step: func(delta float64) {
 			b.viewerStep(delta, cl)
 		},
+		// Read at Draw time by the Enhanced path only; the classic executor and
+		// `--shot` never ask for it (docs/DESIGN_GPU_RENDERER.md §13.5).
+		TickFraction: func() float32 { return b.tickFraction() },
 	})
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)
@@ -417,6 +437,7 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	// value into a new battle. A direct --map battle has no shell, so its one
 	// install-time settings read supplies the same bit.
 	b.applySwitchAltSetting(s)
+	b.applyInterfaceTypeSetting(s)
 	// `textlines`/`textscroll` configure the message ring and `screenchat`
 	// sets its class filter; retail's startup loader installs these the same
 	// way it installs damagebars [02 §3][07 R-HUD-03 §14.3][07 R-HUD-03 §14.4].
@@ -476,6 +497,7 @@ func (b *battleSession) teardown(cl *client.Client) {
 	if b == nil {
 		return
 	}
+	b.endDragScroll(cl)
 	if b.sess != nil {
 		// The score teardown also runs for manual exits [08 R-CAMP-01 §7].
 		b.sess.CommitCampaignTeardown()
@@ -603,10 +625,61 @@ func (b *battleSession) pointerSample(in *input.State, delta float64) input.Samp
 	return input.SampleFromState(in, delta, w, h)
 }
 
+// tickFraction is the Enhanced blend's fraction producer: how much of the next
+// authoritative tick has already elapsed, read at Draw time by the client
+// (docs/DESIGN_GPU_RENDERER.md §13.5).
+//
+// The scheduler's own time source is the scaled timebase
+// floor(milliseconds × 30 / 1000) [01 §4.1], so its delta is a whole number of
+// thirtieths and the budget's carry never resolves a position inside a tick: at
+// the nominal speed it is identically zero after every step. The fraction is
+// therefore that same millisecond source read un-floored — the source the tick
+// budget and the scroll pass already sample [07 §10], not a second clock. With
+// `phase = (milliseconds × 30 mod 1000) / 1000` the elapsed part of the current
+// scaled unit and `eff` the clock's effective speed (active × 0.1 [01 §4.2]),
+// the fraction is `carry + phase × eff`; the client clamps it into [0, 1),
+// which is what bounds the doubled speeds where the phase alone can pass one.
+//
+// While paused the budget does not run, so the value last returned unpaused is
+// returned again and the blend is frozen.
+func (b *battleSession) tickFraction() float32 {
+	if b == nil || b.sess == nil || b.sess.Clock == nil {
+		return 0
+	}
+	if b.sess.Clock.Paused {
+		return b.lastTickFraction
+	}
+	if b.millisSource == nil {
+		b.millisSource = newMonotonicMillisSource()
+	}
+	phase := float32((uint64(b.millisSource.Millis32())*30)%1000) / 1000
+	// Active is clamped to 1..20 by the budget path; clamp defensively so a
+	// freshly constructed clock cannot scale the phase by zero [01 §4.3].
+	active := b.sess.Clock.Active
+	if active < 1 {
+		active = 1
+	} else if active > 20 {
+		active = 20
+	}
+	// The clamp is part of the formula, not a defence: the sum reaches past one
+	// wherever the carry is large and the speed is above nominal. Clamping
+	// through the client keeps the value stored here identical to the one the
+	// blend uses.
+	f := client.ClampTickFraction(b.sess.Clock.Carry + phase*float32(active)*0.1)
+	b.lastTickFraction = f
+	return f
+}
+
 // viewerStep runs one rendered frame: input → session ticks → camera pan.
 func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	if b == nil || cl == nil {
 		return
+	}
+	b.dragScrollStepped = false
+	if b.dragScrollActive && (!cl.IsFocused() || b.isResultVisible() || b.battleState().Modal() != ui.BattleModalClosed) {
+		// TODO(T25): release native relative capture when another screen takes
+		// ownership; the host cannot preserve retail's native warp sequence.
+		b.endDragScroll(cl)
 	}
 	// The client owns the surface size; the battle follows it before reading
 	// the pointer, so a mode change reaches the placement path on the same
@@ -739,7 +812,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// - focus gating before edge [07 §10]
 	// - scroll setting from persisted settings byte [02 "Settings"] default 32 [C-5]
 	// W/A/S/D remain unbound per ON-05 (do not pan) [F-P1-008].
-	if b.cam != nil && state.Modal() == ui.BattleModalClosed {
+	if b.cam != nil && state.Modal() == ui.BattleModalClosed && !b.dragScrollActive && !b.dragScrollStepped {
 		kbd := cl.Input().Kbd
 		mouse := cl.Input().Mouse
 		rawDelta := b.scrollDelta // refreshed at the budget step above [07 §1]

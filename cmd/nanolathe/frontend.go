@@ -335,6 +335,16 @@ func runGameShell(opts Options, cs *contentSet) error {
 		Height: winH,
 		Title:  "Nanolathe",
 		Step:   func(delta float64) { shell.step(delta, cl) },
+		// The shell's client morphs into the battle's, so the Enhanced blend's
+		// fraction producer follows whichever battle is live; outside a battle
+		// there is no tick to be part-way through
+		// (docs/DESIGN_GPU_RENDERER.md §13.5).
+		TickFraction: func() float32 {
+			if shell.battle == nil {
+				return 0
+			}
+			return shell.battle.tickFraction()
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("nanolathe: client: %w", err)

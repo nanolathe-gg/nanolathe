@@ -80,11 +80,12 @@ type SimArt struct {
 // CompileSimArt builds the table from the battle's VFS and compiled catalog.
 //
 // It compiles exactly what the simulation asks for and nothing else: the
-// default effect bank's entry lengths, and the three EVENT sequences of every
-// feature definition — burn, die and reclamate. A definition's rest and shadow
-// sequences are drawn but never timed by the simulation, so they stay on the
-// presentation cache's own lazy load and no GAF is opened here that holds
-// nothing but idle art.
+// default effect bank's entry lengths, and the three EVENT sequences plus
+// their three shadow twins of every feature definition — burn, die and
+// reclamate. Shadow entries do not time a cursor, but attachment must record
+// whether the named shadow resolved so the runtime draw path can admit it.
+// A definition's rest sequences remain presentation-only and stay out of this
+// table.
 //
 // A file or entry that will not resolve is simply absent from the table, which
 // makes every consumer report "unknown" rather than a plausible substitute
@@ -117,7 +118,10 @@ func CompileSimArt(fs vfs.FSOps, cat *Catalog) *SimArt {
 		if def == nil || trimTDFSemantic(def.Filename) == "" {
 			continue
 		}
-		for _, seq := range [...]string{def.SeqNameBurn, def.SeqNameDie, def.SeqNameReclamate} {
+		for _, seq := range [...]string{
+			def.SeqNameBurn, def.SeqNameDie, def.SeqNameReclamate,
+			def.SeqNameBurnShad, def.SeqNameDieShad, def.SeqNameReclamateShad,
+		} {
 			if trimTDFSemantic(seq) == "" {
 				continue
 			}

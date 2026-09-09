@@ -36,6 +36,9 @@ func (b *battleSession) updateCursor(cl *client.Client) {
 		hover.Feature = b.hoverFeature(mx, my)
 	}
 	sel := hud.CursorSelection{Viewer: b.sess.LocalOwner, Hostile: b.hostile}
+	if b.interfaceTypeRightClick() {
+		sel.InterfaceType = hud.InterfaceTypeRightClick
+	}
 	if f, ok := b.currentSnapshot(); ok {
 		for _, handle := range f.Selection.Handles {
 			for i := range f.Units {

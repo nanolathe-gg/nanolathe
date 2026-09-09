@@ -48,10 +48,10 @@ type PieceView struct {
 	DontCache bool
 }
 
-// UnitView is the committed presentation copy of one live unit.  InstanceID
-// remains for the current client identity adapter; it is not a pool
-// generation.  The eventual publisher may omit it when all consumers use
-// pool slots directly.
+// UnitView is the committed presentation copy of one live unit. InstanceID
+// distinguishes successive unit objects in a reused pool slot for presentation
+// cache ownership. It is assigned only during publication and is never an
+// authoritative handle or a serialized simulation generation [I6].
 type UnitView struct {
 	InstanceID           uint64
 	Slot                 pool.Handle
@@ -278,6 +278,14 @@ type FeatureView struct {
 	// [03 R-RAST-01 §6][05 R-FEAT-01 §10].
 	EventSeqName     string
 	EventSeqNameShad string
+	// RuntimeLive is the attached feature-runtime record bit. It is independent
+	// from the convenience publication record and from whether its event cursor
+	// names a sequence; a live sprite with no drawable cursor must not select
+	// the static rest path [05 R-FEAT-01 §2][05 R-FEAT-01 §10][03 R-RAST-01 §6].
+	RuntimeLive bool
+	// ShadowEnabled is the attached runtime sprite record's shadow-present bit.
+	// The draw path additionally requires the feature-shadow preference.
+	ShadowEnabled bool
 	// EventSeqVisit is that cursor's visit count: frame i of the entry holds
 	// for max(delay, 1) visits [05 R-FEAT-01 §10].
 	EventSeqVisit      int32
@@ -1113,6 +1121,15 @@ type Buffer struct {
 	writing   bool
 	lastTick  uint32
 	published bool
+	// previousSlot names the slot published immediately before the committed
+	// one, and previousValid says whether that slot still holds it. Enhanced
+	// presentation blends the two most recent committed ticks
+	// (docs/DESIGN_GPU_RENDERER.md §13.5); every other consumer reads only
+	// Current. BeginWrite clears the flag because the writer reuses exactly
+	// that slot, so the older tick stops existing the moment a write starts
+	// [I6].
+	previousSlot  uint8
+	previousValid bool
 	// Retained committed events, drained by the presentation consumer. See
 	// event_retention.go: the two slots carry current STATE, which the next
 	// publication legitimately supersedes, while events are one-shot
@@ -1148,6 +1165,10 @@ func (b *Buffer) BeginWrite() *Frame {
 	}
 	b.writeSlot = idx
 	b.writing = true
+	// The pending write overwrites the older of the two committed ticks, so the
+	// previous slot is unavailable until this write is published
+	// (docs/DESIGN_GPU_RENDERER.md §13.5).
+	b.previousValid = false
 	f := &b.slots[idx]
 	f.Reset()
 	return f
@@ -1171,6 +1192,12 @@ func (b *Buffer) Publish(tick uint32) error {
 	// faster than the presentation drain therefore supersedes state but never
 	// discards an occurrence [03 R-AUD-01 §7][I6].
 	b.retainCommittedEvents(f.Events)
+	// The slot being superseded becomes the previous tick. Before the second
+	// publication there is none (docs/DESIGN_GPU_RENDERER.md §13.5).
+	if committed := b.committed.Load(); committed != 0 {
+		b.previousSlot = uint8(committed - 1)
+		b.previousValid = true
+	}
 	b.committed.Store(uint32(b.writeSlot) + 1)
 	b.lastTick = tick
 	b.published = true
@@ -1190,6 +1217,18 @@ func (b *Buffer) Current() *Frame {
 		return nil
 	}
 	return &b.slots[committed-1]
+}
+
+// Previous returns the frame published immediately before Current, or nil
+// before the second publication and while a write is in progress. It is the
+// older of the two immutable committed ticks the Enhanced presentation blends
+// (docs/DESIGN_GPU_RENDERER.md §13.5); it writes nothing back and no
+// simulation path reads it [I6].
+func (b *Buffer) Previous() *Frame {
+	if b == nil || b.writing || !b.previousValid {
+		return nil
+	}
+	return &b.slots[b.previousSlot]
 }
 
 // PublishedTick reports the last committed tick.

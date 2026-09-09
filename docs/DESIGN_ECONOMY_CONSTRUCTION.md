@@ -286,6 +286,22 @@ predicate is a 3D definition or a sprite carrying an event record
 (`cellHasInstance`, `hasEventRecordAt`), and every ignition, spread and
 damage test reads it that way.
 
+**Runtime publication API (EC-P5).** `Instance.RuntimeView` is the only
+presentation-facing report of that attached-record predicate. Its `Live` bit
+is written on arena attachment and cleared on release, independently of the
+convenience lookup record and the event cursor name. Its `ShadowEnabled` bit
+is the attached sprite record's resolved shadow-present state: attachment asks
+the battle's immutable art table whether the separately named event-shadow
+entry resolves, and an absent or malformed entry clears the bit. The main
+event sequence alone supplies cursor timing. `frame.FeatureView`
+copies both values at publication; the client takes the runtime sprite path
+only when `Live`, requires both `ShadowEnabled` and the feature-shadow
+preference before drawing its shadow, and never falls back to static art when
+a live record has no drawable event cursor [05 R-FEAT-01 §2][05 R-FEAT-01 §5][05 R-FEAT-01 §9][05 R-FEAT-01 §10]
+[03 R-RAST-01 §6]. Static rest art retains its authored `shadtrans` and
+`animtrans` choices. This is a publication seam only: EC-G2's retained-slot
+and slot-reuse limitation remains unchanged.
+
 **The event cursor** (`cursor.go`). A burning, dying or reclaiming sprite
 record runs one `eventCursor`: a frame index and that frame's delay countdown
 over the sequence's authored per-frame delay words `[fmt gaf]`. It starts at
