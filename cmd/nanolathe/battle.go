@@ -146,6 +146,9 @@ type battleSession struct {
 	// in-battle options change reaches the next pointer event without disk I/O
 	// [07 R-CAM-01 §5][07 R-CAM-01 §7].
 	interfaceType int
+	// gammaSetting retains the direct battle's write-all value independently
+	// of the command's immediate display factor [07 R-CAM-01 §6].
+	gammaSetting int
 
 	// The footer's pointer record [07 R-HUD-03 §1]. Both words are
 	// presentation-only: the simulation neither writes nor reads them [I6].
@@ -490,6 +493,12 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	cl.SetPalette(b.hud.pal)
 	cl.SetFNT(b.hud.console)
 	s := loadedSettings()
+	gamma := s.Display.Gamma
+	if b.shell != nil {
+		gamma = b.shell.display.Gamma
+	}
+	b.gammaSetting = gamma
+	applyGammaOption(cl, gamma)
 	applyBattleAudioOptions(b, s)
 	applyDamageBarsSetting(s)
 	// A shell already holds the startup settings block and may carry its live

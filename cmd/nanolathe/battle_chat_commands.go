@@ -83,6 +83,7 @@ func (b *battleSession) saveDirectChatSetting(change func(*settings.Settings)) {
 		s.Display.Shading = boolInt(shading)
 		s.Display.DitheredFog = boolInt(b.cl.DitheredFog())
 	}
+	s.Display.Gamma = b.gammaSetting
 	change(&s)
 	if err := s.Save(); err != nil {
 		fmt.Fprintf(os.Stderr, "nanolathe: %v\n", err)
@@ -131,6 +132,8 @@ func (b *battleSession) dispatchLocalCommand(text string) {
 		if b.sess != nil && b.sess.Audio != nil && b.sess.Audio.Music != nil {
 			b.sess.Audio.Music.Stop()
 		}
+	case "gamma":
+		b.setGammaCommand(localCommandInt(words, 1))
 	case "sound3d":
 		audio.ToggleOutput3D()
 		if b.shell != nil {

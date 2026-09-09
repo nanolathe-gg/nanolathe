@@ -1314,6 +1314,7 @@ as local chat. The implemented handlers are:
 | `ScrollSpeed n` | store and persist the low byte, including exact zero |
 | `IFace n` | store and persist the integer interface type |
 | `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
+| `Gamma n` | apply the command factor to the shared output palette and persist the signed integer; startup and slider callbacks use their distinct factor conversion |
 | `Dither` | toggle the live current-fog pattern selector and persist `0` or `1` immediately |
 | `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
 | `CDPlay n`, `CDStop` | use the existing music controller; argument zero runs its enabled music tick |

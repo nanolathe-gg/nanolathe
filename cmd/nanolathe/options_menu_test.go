@@ -107,8 +107,8 @@ func TestSettingsDisplayBlockDefaultsAndRepair(t *testing.T) {
 	}
 	broken := settings.Display{Width: 320, Height: 200, Gamma: 99}
 	broken.Normalize()
-	if broken.Width != 640 || broken.Height != 480 || broken.Gamma != 12 {
-		t.Fatalf("repaired block is %+v; want the defaults restored", broken)
+	if broken.Width != 640 || broken.Height != 480 || broken.Gamma != 99 {
+		t.Fatalf("repaired block is %+v; want default size and preserved gamma", broken)
 	}
 	// A stored zero is "off" for a bit and must survive; only a negative value
 	// is repaired.

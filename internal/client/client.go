@@ -508,7 +508,7 @@ func (c *Client) rebuildDisplayPalette() {
 			}
 			c.base[i][channel] = byte(numeric.TruncateFloat64ToLow32(value))
 		}
-		c.base[i][3] = source[3]
+		c.base[i][3] = 0
 	}
 }
 

@@ -156,6 +156,7 @@ func (g *modernShotGame) Draw(screen *ebiten.Image) {
 	if profileMeasured {
 		submitStart = time.Now()
 	}
+	g.gpu.SetDisplayPalette(g.cl.DisplayPalette())
 	img := g.gpu.Execute(g.list, g.w, g.h)
 	if img == nil {
 		g.err = fmt.Errorf("nanolathe: shot: modern executor returned no surface for %dx%d", g.w, g.h)

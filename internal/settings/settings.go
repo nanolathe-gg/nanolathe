@@ -407,8 +407,8 @@ type Display struct {
 	// DitheredFog is bit 6. Its only options-page writer is front-end
 	// RESTORE; the Dither command toggles it in battle.
 	DitheredFog int `json:"ditheredFog"`
-	// Gamma is the 0..20 slider integer, applied as the palette factor
-	// 0.5 + g/24 [07 R-FE-01 §6].
+	// Gamma retains the signed command integer; the slider writes 0..20.
+	// Load alone maps 10 to 12 [07 R-FE-01 §11][07 R-CAM-01 §6].
 	Gamma int `json:"gamma"`
 }
 
@@ -433,7 +433,7 @@ func DefaultDisplay() Display {
 // 640x480 [07 R-FE-01 §6] — so a zero or sub-minimum size takes the default.
 // The five button values are booleans in a DWORD, so only a negative value is
 // repaired; a stored 0 is "off" and is kept. The DitheredFog loader takes its
-// DWORD's low bit. Gamma is clamped into the slider's own 0..20 range.
+// DWORD's low bit. Gamma retains command values outside the slider range.
 func (d *Display) Normalize() {
 	if d.Width < MinDisplaymodeWidth {
 		d.Width = DefaultDisplaymodeWidth
@@ -447,9 +447,6 @@ func (d *Display) Normalize() {
 		}
 	}
 	d.DitheredFog &= 1
-	if d.Gamma < 0 || d.Gamma > MaxGamma {
-		d.Gamma = DefaultGamma
-	}
 }
 
 // DitheredFogEnabled reports the persisted display word's bit-6 source.
@@ -672,6 +669,11 @@ func LoadFrom(path string) (Settings, error) {
 		return Defaults(), fmt.Errorf("settings: parse %s: %w", path, err)
 	}
 	s.Normalize()
+	// This is a load-only substitution; write-all preserves +Gamma 10 until
+	// the next startup [07 R-FE-01 §11].
+	if s.Display.Gamma == 10 {
+		s.Display.Gamma = DefaultGamma
+	}
 	// Startup clamps the stored interface word to the two stages of LEFTCLICK.
 	// The typed +IFace command may write any integer during a running battle,
 	// and the settings writer preserves that raw value until the next load

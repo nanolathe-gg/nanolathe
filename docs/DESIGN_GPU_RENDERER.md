@@ -260,6 +260,9 @@ and `cmd/nanolathe` in the architecture test's Ebitengine allowlist. Exposes:
 * `New(pal *palette.Tables, w, h int) *Renderer` — uploads the tables
   once: `PAL` as 256×1 RGBA, `ALP` as 256×256, `SHD` and `LHT` as 256×32,
   `Gray` and `Blue` as 256×1, each storing indices in the red channel.
+* `(*Renderer).SetDisplayPalette([256][4]byte)` — updates only the final
+  colour row when the client's gamma-adjusted palette changes. Index remapping
+  tables and source assets remain immutable `[07 R-FE-01 §11]`.
 * `(*Renderer).Execute(list *drawlist.List, w, h int) *ebiten.Image` — the
   `Sink`; replays into the frame's indexed offscreen and returns the expanded
   RGB image for `Draw` to present, or for `--shot` to read back.

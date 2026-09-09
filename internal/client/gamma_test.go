@@ -1,8 +1,9 @@
 package client
 
 import (
-	"github.com/nanolathe-gg/nanolathe/internal/palette"
 	"testing"
+
+	"github.com/nanolathe-gg/nanolathe/internal/palette"
 )
 
 func TestGammaUsesAuthoredChannelsAndLowByteTruncation(t *testing.T) {
@@ -11,10 +12,10 @@ func TestGammaUsesAuthoredChannelsAndLowByteTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var p palette.Tables
-	p.Base[7] = [4]byte{3, 170, 255, 0}
+	p.Base[7] = [4]byte{3, 170, 255, 123}
 	original := p
 	c.SetPalette(&p)
-	if c.DisplayPalette()[7] != p.Base[7] {
+	if c.DisplayPalette()[7] != [4]byte{3, 170, 255, 0} {
 		t.Fatal("initial factor changed palette")
 	}
 	for _, tc := range []struct {

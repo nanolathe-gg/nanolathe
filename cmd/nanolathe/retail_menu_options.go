@@ -572,6 +572,7 @@ func (g *gameShell) restoreRetailOptionsSnapshot(s retailOptionsSnapshot) {
 		optionsState.categories = s.categories
 	}
 	g.applyRetailVisualOptions(clPtr)
+	applyGammaOption(clPtr, g.display.Gamma)
 	g.applyRetailAudioOptions()
 	// In battle the restored game speed, scroll speed and message-column
 	// values have live consumers, so the same writes the page made have to be
@@ -1126,6 +1127,7 @@ func (g *gameShell) restoreRetailOptionsDefaults() {
 			g.display.DitheredFog = settings.DefaultDitheredFog
 		}
 		g.applyRetailVisualOptions(clPtr)
+		applyGammaOption(clPtr, g.display.Gamma)
 	case "sound":
 		// `fxvol` 27, bits 4-6 set, Sound Mode 1 with the 3-D flag cleared,
 		// and the acknowledgement voice level 10 [03 R-AUD-01 §2].
@@ -1176,6 +1178,7 @@ func (g *gameShell) undoRetailOptionsPage() {
 			g.display.Width, g.display.Height = width, height
 		}
 		g.applyRetailVisualOptions(clPtr)
+		applyGammaOption(clPtr, g.display.Gamma)
 	case "sound":
 		g.audioPrefs.SoundMode = s.audio.SoundMode
 		g.audioPrefs.AckFX, g.audioPrefs.BuildFX, g.audioPrefs.SpeechFX = s.audio.AckFX, s.audio.BuildFX, s.audio.SpeechFX
@@ -1469,11 +1472,9 @@ func (g *gameShell) commitRetailSliderValue(index int, s *retailSliderState) {
 	case "gamma":
 		// `GAMMA`'s integer is applied as the palette factor 0.5 + g/24, and
 		// the wave and CD volumes are re-pushed whenever it changes
-		// [07 R-FE-01 §6][03 R-AUD-01 §2]. The value persists and is re-shown;
-		// the palette factor is not applied, because nothing in this build owns
-		// a display-palette gamma ramp — the consumer is the palette install of
-		// [03 R-FONT-01 §6]'s surface path.
+		// [07 R-FE-01 §6][03 R-AUD-01 §2].
 		g.display.Gamma = value
+		applyGammaOption(clPtr, value)
 		g.applyRetailAudioOptions()
 	case "fxvol":
 		// `fxvol` gates every play and sets the wave device's level; the CD

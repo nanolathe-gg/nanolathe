@@ -362,6 +362,7 @@ func runGameShell(opts Options, cs *contentSet) error {
 	// The preferences were read before the client existed, so the three
 	// display-option bits reach it here [07 R-FE-01 §6].
 	shell.applyRetailVisualOptions(cl)
+	applyGammaOption(cl, shell.display.Gamma)
 	if shell.assets != nil && shell.assets.pal != nil {
 		// Retail keeps one indexed display palette for frontend and battle. GAF,
 		// PCX, and FNT raster bytes all address PALETTE.PAL directly; GUIPAL is
