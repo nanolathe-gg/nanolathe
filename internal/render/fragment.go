@@ -17,7 +17,7 @@ type FrozenFragmentMaterial struct {
 	Valid          bool
 }
 
-// FragmentQuad is one already eligible quadrilateral. The later session adapter
+// FragmentQuad is one already eligible quadrilateral. The session adapter
 // supplies primitives in model order and excludes ground plates and flagged
 // primitives [04 R-COB-04 §3].
 type FragmentQuad struct {
@@ -81,7 +81,7 @@ type FragmentImpactSink interface {
 	WaterFragmentImpact(WaterFragmentImpact)
 }
 
-// FragmentMetadata is the detached geometry read for the later frame adapter.
+// FragmentMetadata is the detached geometry read for the frame adapter.
 // Slot is zero-based; EffectView.FragmentSlot is its one-based owner identity.
 type FragmentMetadata struct {
 	Slot     int
@@ -154,7 +154,7 @@ func (p *FixedEffectPool) SetFragmentStepContext(ctx FragmentStepContext) {
 }
 
 // FragmentMetadataInto appends live geometry in stable effect-record order. The
-// later presentation adapter follows its one-based FragmentSlot identity.
+// presentation adapter follows its one-based FragmentSlot identity.
 func (p *FixedEffectPool) FragmentMetadataInto(out []FragmentMetadata) []FragmentMetadata {
 	if p == nil {
 		return out[:0]

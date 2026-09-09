@@ -608,7 +608,7 @@ freezer only after that paired claim; unavailable art returns an invalid frozen
 material but does not cancel geometry or its eight simulation draws. A fragment
 record carries a one-based `FragmentSlot`, copied into its immutable
 `frame.EffectView`; `FragmentMetadataInto` enumerates the slot-owned geometry,
-and a later publisher joins it to the stable effect view order. `SetFragmentStepContext`
+and publication joins it to the stable effect view order. `SetFragmentStepContext`
 installs terrain, sea and synchronous impact admission. The normal per-record
 fixed-effect update owns fragment movement, contact callback and compaction;
 the callback runs before geometry and record release, so its own attempted
@@ -661,6 +661,22 @@ can precede registry binding and therefore retains invalid material while its
 physics still runs; no later drawing pass retries or changes that admission.
 Ordinary in-battle creation uses the already bound registry. Per-frame smoke/fire trails retain the explicit RT08
 ownership boundary.
+
+**Shatter production validation.** Sequential classic and modern runs of the
+same scene-version-3 Ashap Plateau benchmark (seed 7, factories, 1920×1080,
+30 TPS, 60 warm-up draws, 180 measured draws) published identical simulation
+censuses: 10–61 fragments, 189–198 units and 4–8 active construction effects.
+Both captures were inspected. Classic recording median/p95/max was
+8.920/11.723/15.227 ms, with 1.110 MB allocated per frame and 99% cadence share;
+modern was 4.448/7.587/10.224 ms, 9.550 MB/frame and 68%. Bounding fragment
+GPU targets reduced modern allocations from the initial viewport-sized
+implementation's 18.265 MB/frame. The pre-shatter baseline was 5.219 MB/frame
+and 52% cadence share in modern; admitting fragments changes simulation RNG
+consumption and therefore the battle workload, so this is not an isolated
+performance comparison. GPU allocation overhead remains measurable. The target-size
+change preserved the classic capture exactly; modern differed at 59 pixels
+(58 shadow-edge brightness changes and one colour texel), with no shifted
+fragment bodies. Exact modern pixel neutrality is not claimed.
 
 ### 3.4 Model — C20…C24
 

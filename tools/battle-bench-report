@@ -25,7 +25,9 @@ for directory in sys.argv[1:]:
     print(f"On cadence at {tps} Hz (<= {budget:.1f} ms): {on_cadence}/{len(rows)} frames ({100*on_cadence/len(rows):.0f}%)")
     print(f"Alloc: {data['alloc_bytes']/len(rows)/1e6:.3f} MB/frame, "
           f"{data['mallocs']/len(rows):.1f} objects/frame; GC {data['gc']}")
-    for key in ("units", "projectiles", "effects", "builds", "nanoframes", "nanolathe_events", "shake"):
+    for key in ("units", "projectiles", "effects", "fragments", "builds", "nanoframes", "nanolathe_events", "shake"):
+        if key not in rows[0]["Census"]:
+            continue
         values = [row["Census"][key] for row in rows]
         print(f"{key}: {min(values)}..{max(values)}; present in {sum(bool(v) for v in values)} frames")
 

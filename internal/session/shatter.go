@@ -103,10 +103,10 @@ func (s *Session) bindFragmentStepContext(tick uint32) {
 type fragmentImpactSink struct{ debrisImpactSink }
 
 func (sink fragmentImpactSink) GroundFragmentImpact(impact render.GroundFragmentImpact) {
-	sink.GroundDebrisImpact(render.GroundDebrisImpact{Position: impact.Position, Graphic: impact.Graphic, CalculatedFrameTable: impact.CalculatedFrameTable, AboveSeaFlash: impact.AboveSeaFlash})
+	sink.GroundDebrisImpact(render.GroundDebrisImpact(impact))
 }
 func (sink fragmentImpactSink) WaterFragmentImpact(impact render.WaterFragmentImpact) {
-	sink.WaterDebrisImpact(render.WaterDebrisImpact{Position: impact.Position, Graphic: impact.Graphic, Lava: impact.Lava})
+	sink.WaterDebrisImpact(render.WaterDebrisImpact(impact))
 }
 
 func (s *Session) publishFragments(out []frame.FragmentView) []frame.FragmentView {

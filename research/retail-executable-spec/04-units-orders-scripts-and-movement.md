@@ -5898,6 +5898,13 @@ explosions and weapon impact art) paired with a slot of a fixed table of
    remain shared, but no mutable playback cursor is shared with the fragment
    ([03 R-COMP-02 §4], [03 R-CRD-005 §1]).
 
+**Established — detached draw.** Fragment angle lanes correspond to Z, Y, X.
+The standalone helper applies Z from the first lane, then X from the third,
+then Y from the second, with rounded coordinate stores. It uses the projected
+origin viewport gate and visits the six template primitives in stored order.
+Drawing is unshaded and has no key plane. There is no extra fragment normal
+cull; the ordinary textured-quad span winding determines which spans draw.
+
 So a shatter makes **eight** simulation draws per fragment actually created,
 after the six draws of [R-COB-04 §1], and the count of fragments depends on
 the model and on pool occupancy at that moment. Fragment physics, in the same
@@ -5984,7 +5991,12 @@ marker `0xFF`, the values 8 and 6, an all-ones word, and pointers into two
 fixed regions holding eight vertex triples and six primitive records per
 slot — the storage [R-COB-04 §3] fills). The `explode` flags do not select
 among these templates: the records are identical scratch geometry, selected
-first-free. There is
+first-free. Their six quadrilateral index rings, in draw order, are `(0,1,2,3)`,
+`(2,1,6,5)`, `(0,3,4,7)`, `(1,0,7,6)`, `(3,2,5,4)`, and `(4,5,6,7)`.
+The first is the front, the next four join its edges to the reversed back,
+and the last is the back. Admission copies the source primitive's material
+and flags onto all six; side faces do not acquire a separate solid colour.
+There is
 **no `explodepiece` TDF key, no per-unit explosion weapon, and no reader**
 outside the effect code. Any implementation reading such a key from unit
 definitions would be inventing content.

@@ -1,12 +1,13 @@
 package client
 
 import (
+	"testing"
+
 	"github.com/nanolathe-gg/nanolathe/formats"
 	"github.com/nanolathe-gg/nanolathe/internal/frame"
 	"github.com/nanolathe-gg/nanolathe/internal/model"
 	"github.com/nanolathe-gg/nanolathe/internal/render"
 	"github.com/nanolathe-gg/nanolathe/internal/sim/numeric"
-	"testing"
 )
 
 func fragmentDrawFixture() (*Client, frame.FragmentView, *formats.GAFFrame) {
@@ -83,6 +84,10 @@ func TestFragmentFixedWalkAndBothPackets(t *testing.T) {
 			t.Fatalf("got %d models", len(commands))
 		}
 		if modern {
+			geometry := commands[0].Geometry
+			if geometry.Width >= int32(c.width) || geometry.Height >= int32(c.height) {
+				t.Fatal("small fragment allocated a viewport-sized GPU target")
+			}
 			if commands[0].Geometry.Faces[0].Texture.Pixels[0] != 77 || commands[1].Geometry.Faces[0].Texture.Pixels[0] != 31 || commands[0].Geometry.KeyPlane {
 				t.Fatal("fragment packet lost fixed-effect order or unkeyed path")
 			}

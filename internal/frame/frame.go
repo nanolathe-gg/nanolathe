@@ -45,7 +45,7 @@ type FragmentView struct {
 	FrameIndex                 int32
 	MaterialValid              bool
 	Position                   [3]numeric.Fixed
-	Angles                     [3]uint16
+	Angles                     [3]uint16 // fragment rate order: Z, Y, X [04 R-COB-04 §3]
 	Vertices                   [8][3]numeric.Fixed
 }
 
