@@ -685,6 +685,18 @@ func BuildProjectileModelPiecesInto(m *model.Model, v frame.ProjectileView, now 
 	return parent, child
 }
 
+// BuildDebrisModelPieceInto builds one detached whole-piece draw from its
+// original vertices and current stepped angle words. The debris path carries
+// no projectile-facing half turn and does not compose the former unit root
+// again [04 R-COB-04 §2][03 R-COMP-02 §6].
+func BuildDebrisModelPieceInto(m *model.Model, v frame.DebrisView, scratch *ProjectileScratch) *UnitDraw {
+	if scratch == nil {
+		scratch = &ProjectileScratch{}
+	}
+	return buildProjectileStandalonePiece(m, v.PieceIndex, v.Angles[2], v.Angles[1], v.Angles[0], false,
+		[3]numeric.Fixed{v.X, v.Y, v.Z}, nil, 0, scratch)
+}
+
 // buildProjectileStandalonePiece translates the retail standalone model call
 // into one UnitDraw. The passed piece is detached from the unit hierarchy: the
 // projectile entry rotates and projects that one piece, then the conditional

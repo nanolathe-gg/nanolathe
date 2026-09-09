@@ -201,6 +201,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		g.err = checkModelSlotFrames()
 	}
 	if g.err == nil {
+		g.err = checkModelSlotNeighbourIndependence()
+	}
+	if g.err == nil {
 		g.err = checkFeatureShadowDevicePixels()
 	}
 	if g.err == nil {

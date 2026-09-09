@@ -112,6 +112,12 @@ func (c *Client) drawFixedEffects(cur *frame.Frame) {
 	if c == nil || cur == nil || c.cam == nil {
 		return
 	}
+	// The 100-slot whole-piece table precedes both fixed-effect category walks.
+	// Keep DrawEffectViews intact: it retains all calculated secondaries before
+	// all named primary/model records [04 R-COB-04 §2][03 §1].
+	for i := range cur.Debris {
+		c.drawDebrisModel(cur.Debris[i])
+	}
 	effects := c.unstrippedEffectViews(cur)
 	if len(effects) == 0 {
 		return

@@ -242,3 +242,55 @@ func moveModelFixture(g *drawlist.ModelGeometry, dx, dy int32) {
 		moveModelFixture(child.Geometry, dx, dy)
 	}
 }
+
+// checkModelSlotNeighbourIndependence holds the slot atlas to its own premise:
+// slots are disjoint, so a subject's pixels are a function of its packet alone
+// [DESIGN_GPU_RENDERER.md §11.2]. Subjects placed off the framebuffer reserve
+// and rasterize slots — moving every later subject to a different page origin,
+// with a different parity, on a page of a different height — but commit
+// nothing, so the finished frame must not change by one byte. A subject whose
+// faces reached outside its slot, or a resolve that read its doubled block from
+// the page's parity instead of its own slot's, would move with its neighbours
+// and show up here.
+func checkModelSlotNeighbourIndependence() error {
+	pal := fixturePalette()
+	r, err := NewChecked(&pal, 80, 48)
+	if err != nil {
+		return err
+	}
+	source := fixtureModelList()
+	models := source.ModelCommands()
+	record := func(l *drawlist.List, dx, dy int32) {
+		for _, original := range models {
+			cmd := original
+			cmd.Geometry = cmd.Geometry.Clone()
+			moveModelFixture(cmd.Geometry, dx, dy)
+			l.RecordModel(cmd)
+		}
+	}
+	build := func(fillers int) drawlist.List {
+		var l drawlist.List
+		l.RecordClear()
+		l.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: 80, H: 48}, Index: 7, Style: drawlist.FillSolid})
+		for i := 0; i < fillers; i++ {
+			// Far outside the framebuffer: reserved and rasterized, committed
+			// nowhere. The odd offsets keep the fillers from coinciding.
+			record(&l, int32(4000+37*i), int32(4000+29*i))
+		}
+		record(&l, 0, 0)
+		l.RecordExpand()
+		return l
+	}
+	alone := build(0)
+	want := make([]byte, 80*48*4)
+	r.Execute(&alone, 80, 48).ReadPixels(want)
+	for _, fillers := range []int{1, 2, 3} {
+		crowded := build(fillers)
+		got := make([]byte, 80*48*4)
+		r.Execute(&crowded, 80, 48).ReadPixels(got)
+		if !bytes.Equal(want, got) {
+			return fmt.Errorf("committed pixels changed with %d uncommitted neighbour sets on the page", fillers)
+		}
+	}
+	return nil
+}

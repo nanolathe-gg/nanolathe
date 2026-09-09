@@ -117,6 +117,7 @@ const (
 	modelCursorUnit       uint8 = 0 // [03 §2.4.1] unit model texture cursor family
 	modelCursorFeature    uint8 = 1 // [03 §5.1] feature model texture cursor family
 	modelCursorProjectile uint8 = 2 // [03 §5.2] projectile model texture cursor family
+	modelCursorDebris     uint8 = 3 // [04 R-COB-04 §2] detached whole-piece cursor family
 )
 
 // resolveTextureRef makes side-before-default precedence explicit. Callers

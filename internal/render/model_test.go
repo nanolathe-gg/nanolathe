@@ -120,6 +120,30 @@ func TestUnitOrientationFoldOrder(t *testing.T) {
 	}
 }
 
+// TestBuildDebrisModelPieceUsesRawPieceAndSteppedAngles locks the detached
+// debris draw: it ignores the former hierarchy translation and applies the
+// record's X/Y/Z words directly, with no projectile half turn [04 R-COB-04 §2].
+func TestBuildDebrisModelPieceUsesRawPieceAndSteppedAngles(t *testing.T) {
+	m := &model.Model{Root: 0, Pieces: []model.Piece{{
+		Name: "piece", Parent: -1,
+		Translate: [3]numeric.Fixed{numeric.FixedFromInt(50), 0, 0},
+		Vertices:  [][3]numeric.Fixed{{numeric.FixedFromInt(1), 0, 0}},
+	}}}
+	v := frame.DebrisView{
+		PieceIndex: 0, X: numeric.FixedFromInt(2),
+		Angles: [3]uint16{0, 16384, 0}, // Y quarter turn only
+	}
+	draw := BuildDebrisModelPieceInto(m, v, &ProjectileScratch{})
+	if draw == nil || len(draw.Pieces) != 1 || len(draw.Pieces[0].WorldVertices) != 1 {
+		t.Fatalf("debris draw = %#v, want one transformed piece", draw)
+	}
+	got := draw.Pieces[0].WorldVertices[0]
+	want := [3]numeric.Fixed{numeric.FixedFromInt(2), 0, numeric.FixedFromInt(1)}
+	if got != want {
+		t.Fatalf("debris vertex = %v, want %v (raw vertex rotated then world-positioned)", got, want)
+	}
+}
+
 // TestProjectileOffsetWrap verifies yaw−32768 and pitch−32768 wrapping [03 §5.2].
 func TestProjectileOffsetWrap(t *testing.T) {
 	m := &model.Model{

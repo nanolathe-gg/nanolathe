@@ -147,6 +147,13 @@ func (c *Client) modelForProjectile(v frame.ProjectileView) *unitModel {
 	return c.unitModelFor(v.Model)
 }
 
+func (c *Client) modelForDebris(v frame.DebrisView) *unitModel {
+	if c != nil && c.modelTextures != nil {
+		return c.modelTextures.unitModel(v.DefName, v.DefID, v.Model)
+	}
+	return c.unitModelFor(v.Model)
+}
+
 // modelStates copies committed piece lanes into the canonical presentation state.
 // All model callers use this representation, so hierarchy traversal and angle
 // composition have one implementation in internal/render [03 §2.4][03 §5.2].
@@ -332,6 +339,39 @@ func (c *Client) drawProjectileModel(p frame.ProjectileView) bool {
 			return false
 		}
 	}
+	return true
+}
+
+func (c *Client) drawDebrisModel(v frame.DebrisView) bool {
+	m := c.modelForDebris(v)
+	if m == nil || m.compiled == nil || c.cam == nil {
+		return false
+	}
+	draw := presentationrender.BuildDebrisModelPieceInto(m.compiled, v, c.borrowProjectileScratch())
+	if draw == nil {
+		return false
+	}
+	// Whole debris enters the direct unkeyed, unshaded model path. Its owner
+	// palette was captured at publication from the source raw slot [04 R-COB-04 §2].
+	selector := teamColor{index: v.OwnerColor, known: v.OwnerColorKnown}
+	if !c.directModelOriginVisible(draw) {
+		return false
+	}
+	if c.geometryOnlyModels {
+		g := c.directDebrisGeometry(draw, selector, uint64(v.Slot))
+		if g == nil {
+			return false
+		}
+		c.list.RecordModel(drawlist.Model{Geometry: g})
+		return true
+	}
+	direct, ok := c.composeDirectDebrisModel(draw, selector, uint64(v.Slot))
+	if !ok {
+		return false
+	}
+	c.finishModel(direct, nil)
+	// TODO(RT08): whole-debris smoke and flame are per-render-frame CRT trail
+	// producers; presentation CRT ownership is not established at this seam.
 	return true
 }
 

@@ -120,3 +120,58 @@ func TestGeometryOnlyDiggerRecordsClipping(t *testing.T) {
 		t.Fatalf("geometry-only omission = %#v, want eligible digger clipping", models)
 	}
 }
+
+// TestDirectDebrisProjectionGateAndClassicScale locks the detached model path:
+// projected coordinates use the direct combined-world truncation, origin
+// admission is inclusive, and an Original-2x replay does not scale an already
+// framebuffer-positioned image again [03 R-COMP-02 §6][03 R-RAST-01 §2].
+func TestDirectDebrisProjectionGateAndClassicScale(t *testing.T) {
+	c := testModelTextureClient()
+	c.width, c.height = 64, 64
+	c.indexed = make([]byte, c.width*c.height)
+	c.cam.Scale = 2
+	draw := testPrimitiveDraw(presentationrender.PrimitiveDraw{
+		IsColored: 1, ColorIndex: 77, VertexIndices: []uint16{0, 1, 2},
+	}, [][3]numeric.Fixed{
+		fixedVertex(10, 0, 10), fixedVertex(20, 0, 10), fixedVertex(10, 0, 0),
+	})
+	draw.WorldPos = [3]numeric.Fixed{numeric.FixedFromInt(10).Add(1), 0, numeric.FixedFromInt(10)}
+	geometry := c.directDebrisGeometry(draw, teamColor{}, 3)
+	if geometry == nil || len(geometry.Faces) != 1 {
+		t.Fatal("in-viewport direct debris did not record geometry")
+	}
+	wantX, wantY := c.modelDirectVertex(draw.Pieces[0].WorldVertices[0], draw.WorldPos)
+	got := geometry.Faces[0].Vertices[0]
+	if got.X != wantX || got.Y != wantY {
+		t.Fatalf("direct debris vertex = (%d,%d), want direct projection (%d,%d)", got.X, got.Y, wantX, wantY)
+	}
+	draw.WorldPos[0] = numeric.FixedFromInt(32) // projects to the inclusive right edge at scale 2
+	if g := c.directDebrisGeometry(draw, teamColor{}, 3); g == nil {
+		t.Fatal("right-edge debris origin was rejected")
+	}
+
+	// Geometry overlap is irrelevant once the detached call's own origin has
+	// left the inclusive viewport.
+	draw.WorldPos[0] = numeric.FixedFromInt(65)
+	if g := c.directDebrisGeometry(draw, teamColor{}, 3); g != nil {
+		t.Fatal("off-origin debris recorded overlapping geometry")
+	}
+	draw.WorldPos[0] = numeric.FixedFromInt(10).Add(1)
+
+	classic, ok := c.composeDirectDebrisModel(draw, teamColor{}, 3)
+	if !ok {
+		t.Fatal("classic direct debris did not compose")
+	}
+	c.finishModel(classic, nil)
+	models := c.list.ModelCommands()
+	if len(models) != 1 || models[0].Classic == nil || models[0].Classic.Body == nil || models[0].Classic.Body.Blit != 1 {
+		t.Fatalf("direct classic packet = %#v, want replay scale one", models)
+	}
+	c.list.Replay(c.classicSink())
+	if c.indexed[22*c.width+22] != 77 {
+		t.Fatalf("direct 2x replay pixel = %d, want native-screen debris colour", c.indexed[22*c.width+22])
+	}
+	if c.indexed[44*c.width+44] == 77 {
+		t.Fatal("direct 2x replay scaled framebuffer coordinates twice")
+	}
+}

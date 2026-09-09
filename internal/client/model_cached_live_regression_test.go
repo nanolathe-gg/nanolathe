@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
@@ -361,4 +362,88 @@ func TestCachedLiveTransparentBodyPreservesGroundShadow(t *testing.T) {
 	if exposed == 0 {
 		t.Fatal("transparent live face incorrectly removed the shadow below the body")
 	}
+}
+
+// A cache or shade script setter discards the composition image on every call
+// and leaves the cached-body validity state alone [03 R-COMP-01 §4]
+// [04 R-MOV-03 §4]. The retained native lane is that discarded reference, so a
+// piece whose cache bit is restored has to return to the cached lane; keeping
+// the stale lane draws it in neither lane and the body disappears behind the
+// pieces that are still live, which is what a Kbot Lab shows after its door
+// animation [03 R-REN-03A §4].
+func TestGeometryOnlyImageDiscardRebuildsCachedLaneMembership(t *testing.T) {
+	c, v := cachedLiveRegressionSubject(t)
+	c.geometryOnlyModels = true
+	c.modelScratch.reset()
+	c.modelScratch.active = true
+	defer func() { c.modelScratch.active = false }()
+	// Both pieces live: the cached lane is empty, exactly as it is while a
+	// script holds the whole model in its animated half.
+	v.Pieces[0].DontCache = true
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("all-live unit was not recorded")
+	}
+	if got := len(c.list.ModelCommands()[0].Geometry.Faces); got != 0 {
+		t.Fatalf("all-live cached lane holds %d faces, want none", got)
+	}
+	// The script caches the body again: the flag write discards the image and
+	// advances no validity state.
+	c.list.Reset()
+	c.modelScratch.reset()
+	v.Pieces[0].DontCache = false
+	v.CacheRevision++
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("recached unit was not recorded")
+	}
+	g := c.list.ModelCommands()[0].Geometry
+	if !modelLaneHasColor(g.Faces, 31) {
+		t.Fatal("recached body piece returned to neither lane")
+	}
+	if modelLaneHasColor(g.LiveFaces, 31) {
+		t.Fatal("recached body piece stayed in the live lane")
+	}
+	if !modelLaneHasColor(g.LiveFaces, 99) {
+		t.Fatal("still-live piece left the live lane")
+	}
+}
+
+// The Kbot Lab shape: the retained lane was built while the animated half was
+// dont-cached, so it holds the base alone. Caching those pieces again empties
+// the live lane, and without reading the discard the retained lane draws the
+// base and nothing else [03 R-COMP-01 §4][03 R-REN-03A §4].
+func TestGeometryOnlyRecachedAnimationReturnsToCachedLane(t *testing.T) {
+	c, v := cachedLiveRegressionSubject(t)
+	c.geometryOnlyModels = true
+	c.modelScratch.reset()
+	c.modelScratch.active = true
+	defer func() { c.modelScratch.active = false }()
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("animating unit was not recorded")
+	}
+	if got := c.list.ModelCommands()[0].Geometry; !modelLaneHasColor(got.Faces, 31) || !modelLaneHasColor(got.LiveFaces, 99) {
+		t.Fatal("animating record did not split base and live lanes")
+	}
+	c.list.Reset()
+	c.modelScratch.reset()
+	v.Pieces[1].DontCache = false
+	v.CacheRevision++
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("recached unit was not recorded")
+	}
+	g := c.list.ModelCommands()[0].Geometry
+	if len(g.LiveFaces) != 0 {
+		t.Fatalf("recached piece left %d faces in the live lane", len(g.LiveFaces))
+	}
+	if !modelLaneHasColor(g.Faces, 99) || !modelLaneHasColor(g.Faces, 31) {
+		t.Fatal("recached animated piece is drawn by neither lane")
+	}
+}
+
+func modelLaneHasColor(faces []drawlist.ModelFace, color uint8) bool {
+	for i := range faces {
+		if faces[i].Color == color {
+			return true
+		}
+	}
+	return false
 }

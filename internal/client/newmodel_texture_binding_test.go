@@ -7,6 +7,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/world"
 	"github.com/nanolathe/nanolathe/vfs"
 )
@@ -27,6 +28,12 @@ func TestModelTextureRegistryBindsLoadedModelIdentitiesAndTopology(t *testing.T)
 		t.Fatalf("one definition did not retain its loaded model: %p want %p", got, first)
 	}
 	cl := &Client{modelTextures: r}
+	if got := cl.modelForDebris(frame.DebrisView{DefName: "alpha", DefID: 1, Model: "shared"}); got != first {
+		t.Fatalf("debris alpha model = %p, want definition cursor %p", got, first)
+	}
+	if got := cl.modelForDebris(frame.DebrisView{DefName: "beta", DefID: 2, Model: "shared"}); got != second {
+		t.Fatalf("debris beta model = %p, want definition cursor %p", got, second)
+	}
 	beforePicking := len(r.players)
 	if got := cl.HullModel("SHARED"); got != first.compiled {
 		t.Fatalf("picker lost the authored model-name lookup: %p want %p", got, first.compiled)

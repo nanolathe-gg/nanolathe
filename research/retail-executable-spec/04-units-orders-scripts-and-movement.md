@@ -5877,8 +5877,18 @@ explosions and weapon impact art) paired with a slot of a fixed table of
    512))` and `vz −= random(200) · int16(trunc(nz · 512))`; extrude the back
    face by `trunc(n · 65535)` per axis; and centre all eight vertices on
    their mean.
-6. Copy the primitive record and, for textured primitives, resolve the
-   texture name against the owning side's palette index.
+6. Copy the primitive's material record. A static texture keeps its bound
+   frame. An ordinary animated texture copies the loaded primitive's playback
+   cursor **by value**, including its currently selected frame and its
+   reference to the immutable entry. The fragment's copied cursor is not added
+   to the phase-7 registry, so it never follows later advances of the source
+   primitive: the ordinary texture frame is frozen at fragment admission.
+   A team-colour LOGOS texture instead resolves the owning player's current
+   colour to a concrete frame immediately and clears dynamic texture
+   resolution on the copied material. It is frozen too; later player-colour
+   changes do not recolour an existing fragment. The immutable entry data may
+   remain shared, but no mutable playback cursor is shared with the fragment
+   ([03 R-COMP-02 §4], [03 R-CRD-005 §1]).
 
 So a shatter makes **eight** simulation draws per fragment actually created,
 after the six draws of [R-COB-04 §1], and the count of fragments depends on
@@ -13747,8 +13757,9 @@ and the decider that would close it.
   ([R-COB-01 §1]); which of these retail reaches first under exhaustion
   · §4.6, §3.9 · static trace of the pool allocator's failure return at each
   caller.
-- Identity of the smoke and fire trail classes the debris draw pass emits
-  · [R-COB-04 §2], doc 03 · doc 03's effect class census.
+- The presentation boundary that owns the per-render-frame CRT calls for the
+  established debris smoke and flame-stream trails · [R-COB-04 §2], [03
+  R-FX-01 §3] · renderer CRT-owner contract (RT08).
 - Whether the effect-pool records a shatter claims but cannot pair with a
   fragment (fragment table full) advance stale animation words · [R-COB-04 §3]
   · static trace of the effect sim pass against a record with stale name

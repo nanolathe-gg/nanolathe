@@ -1479,6 +1479,30 @@ measures the interpolated presentation; 30 and 60 keep one step per Draw.
 recent committed ticks and the clock's carry; it writes nothing back and
 consumes no simulation RNG. `--shot` and Original never blend.
 
+**Per-frame model differences are the blend, not the atlas.** A report of a
+"static structure that renders differently on every presented frame" was
+traced against the 1080p battle benchmark at `--benchmark-tps=120` with the
+four presented frames of three consecutive ticks dumped. Hashing every
+recorded `ModelGeometry` per subject per frame separates the two sides. Of
+145 subjects, 64 recorded a byte-identical packet across all twelve frames,
+and every one of those rendered identical pixels except where a moving
+neighbour crossed its box; a device fixture now holds the executor to that
+premise (`checkModelSlotNeighbourIndependence` — uncommitted subjects added
+to the page move every later subject to a different page origin and parity
+and must not change one committed byte). The subjects that did differ per
+frame were mobile units whose blended pose genuinely moved; the screen box
+the report named holds seven of them and no structure. Original snaps to the
+committed tick, so the same subjects step once per tick there — the contrast
+is the blend working, not a defect.
+
+The real defect the investigation did find is on the recording side and is
+not per-frame: `unitGeometryPair` never read the cached-image discard a
+`cache`/`shade` script setter raises [03 R-COMP-01 §4][04 R-MOV-03 §4], so a
+piece whose cache bit came back was in the retained lane's past and neither
+lane's present and stopped being drawn. It now applies the same three-term
+gate the classic composer applies, and the cached lane's membership can no
+longer go stale across an animation that toggles cache bits.
+
 ### 13.6 Work units
 
 | Unit | Scope | Files owned | Gate |

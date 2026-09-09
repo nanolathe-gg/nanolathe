@@ -45,9 +45,9 @@ type ExplosionKinematics struct {
 type PhysicalExplosionFlags uint8
 
 const (
-	// TODO(question): the presentation trail classes selected for FIRE and
-	// SMOKE are unknown; doc 04's effect-class census must settle them before
-	// the session arena emits either trail [04 R-COB-04 §2].
+	// FIRE and SMOKE select the established flame-stream and strip-9 smoke
+	// classes. Their producer remains presentation-owned because it runs once
+	// per rendered frame and consumes CRT there [04 R-COB-04 §2][03 R-FX-01 §3].
 	ExplosionFire PhysicalExplosionFlags = 1 << iota
 	ExplosionSmoke
 	ExplosionShatter

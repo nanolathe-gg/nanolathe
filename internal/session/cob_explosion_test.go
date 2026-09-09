@@ -6,6 +6,7 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/render"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -105,6 +106,101 @@ func TestCOBBitmapExplosionBindsBeforeCreate(t *testing.T) {
 	if got := len(s.strips.strips[9]); got != len(views) {
 		t.Fatalf("above-sea bitmap explosions built %d land-dust emitters, want %d", got, len(views))
 	}
+}
+
+// TestCOBWholePieceExplosionPublishesDetachedSlot locks the physical Create
+// path: the arena copies the child pose and source slot after hide, while a
+// later same-slot unit supplies the current owner palette at publication
+// [04 R-COB-04 §1, §2][P0-16].
+func TestCOBWholePieceExplosionPublishesDetachedSlot(t *testing.T) {
+	s, first := bitmapExplosionFixture(t, 0, numeric.FixedFromInt(11))
+	if got := s.SimRNG().Draws(); got != 6 {
+		t.Fatalf("physical Create simulation draws = %d, want 6", got)
+	}
+	if s.debris == nil {
+		t.Fatal("whole-piece arena was not created")
+	}
+	if got := s.debris.SlotCount(); got != 1 {
+		t.Fatalf("whole-piece slot count = %d, want 1", got)
+	}
+	if len(first.RenderPieceFlags) < 2 || first.RenderPieceFlags[1]&1 != 0 {
+		t.Fatalf("physical explode left source visible: flags=%#v", first.RenderPieceFlags)
+	}
+	parts := s.debris.SnapshotInto(nil)
+	if len(parts) != 1 || parts[0].Source != first.Handle || parts[0].PieceIndex != 1 {
+		t.Fatalf("debris source = %+v, want child from slot %d", parts, first.Handle)
+	}
+	if parts[0].Angles != [3]uint16{} {
+		t.Fatalf("debris angles = %#v, want copied child-only zero pose", parts[0].Angles)
+	}
+	s.Units.Destroy(first.Handle, units.DeathKilled)
+	if result := s.Units.FinalizeDeath(first.Handle, 1); !result.Freed {
+		t.Fatal("first source did not free")
+	}
+	// RawUnitRecord aliases the reused slot. Publication reads that current
+	// record instead of keeping an admission-time palette.
+	s.Econ = &economy.Service{}
+	s.Econ.Players[0].Exists, s.Econ.Players[0].Logo = true, 7
+	secondHandle, err := s.Units.Create(first.Def, 0, first.X, first.Y, first.Z)
+	if err != nil {
+		t.Fatalf("reuse source slot: %v", err)
+	}
+	if secondHandle != first.Handle {
+		t.Fatalf("reused handle = %d, want %d", secondHandle, first.Handle)
+	}
+	s.Snapshot = frame.NewBuffer(frame.Capacities{Debris: 2})
+	s.publishSnapshot(1)
+	cur := s.Snapshot.Current()
+	if cur == nil || len(cur.Debris) < 1 {
+		t.Fatal("whole debris was not published")
+	}
+	got := cur.Debris[0]
+	if got.RawSlot != first.Handle || !got.OwnerColorKnown || got.OwnerColor != 7 {
+		t.Fatalf("published debris owner = %+v, want reused source slot and palette 7", got)
+	}
+}
+
+// TestWholeDebrisGroundImpactAdmitsBeforeDust locks the phase-4 collision
+// handoff: an above-sea stopped piece adds class-7 land dust only after its
+// calculated-table-0 bitmap owns a fixed effect slot [04 R-COB-04 §2, §4].
+func TestWholeDebrisGroundImpactAdmitsBeforeDust(t *testing.T) {
+	admitStoppedPiece := func(t *testing.T, s *Session) {
+		t.Helper()
+		if !s.debris.Admit(render.DebrisRequest{
+			Points:       make([][3]numeric.Fixed, 3),
+			Position:     [3]numeric.Fixed{0, numeric.FixedFromInt(11), 0},
+			Velocity:     [3]numeric.Fixed{0, numeric.FixedFromInt(-2), 0},
+			Lifetime:     900,
+			ExplodeOnHit: true,
+		}) {
+			t.Fatal("stopped whole debris admission failed")
+		}
+	}
+	t.Run("admitted bitmap then dust", func(t *testing.T) {
+		s, _ := bitmapExplosionFixture(t, 0, numeric.FixedFromInt(11))
+		admitStoppedPiece(t, s)
+		s.stepDebris(18)
+		views := s.publication.effects.Snapshot()
+		if len(views) != 1 || !views[0].HasCalculatedFlash || views[0].CalculatedTable != 0 {
+			t.Fatalf("ground impact effects = %+v, want one calculated table-0 bitmap", views)
+		}
+		if got := len(s.strips.strips[9]); got != 1 {
+			t.Fatalf("ground impact dust emitters = %d, want 1 after bitmap admission", got)
+		}
+	})
+	t.Run("refused bitmap suppresses dust", func(t *testing.T) {
+		s, _ := bitmapExplosionFixture(t, 0, numeric.FixedFromInt(11))
+		for i := 0; i < render.EffectCapacity; i++ {
+			if !s.publication.effects.Admit(0, frame.Event{Kind: frame.KindExplosion, Tick: 1}) {
+				t.Fatalf("prefill admission %d failed", i)
+			}
+		}
+		admitStoppedPiece(t, s)
+		s.stepDebris(18)
+		if got := len(s.strips.strips[9]); got != 0 {
+			t.Fatalf("refused ground bitmap built %d dust emitters", got)
+		}
+	})
 }
 
 // TestCOBBitmapExplosionHydratesAfterCreateTimingBinding exercises the

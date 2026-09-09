@@ -568,8 +568,10 @@ its debris slot and ring allocation after the six draws. The source hide occurs
 for either physical kind even on refusal. Bitmap requests consume no simulation
 draws and do not hide a bitmap-only source. The sink runs synchronously and
 retains no record; session owns all bounded arena storage and effect-phase
-updates. Smoke/fire trail class identity and the stale claimed-effect case stay
-`TODO(question)` until their owning research gaps close `[04 R-COB-04 §1]`–`[04 R-COB-04 §4]` [I4] [I5] [I6].
+updates. Smoke/fire select the established strip-9 smoke and flame-stream
+classes, but their per-render-frame CRT producer remains `TODO(RT08)` at the
+client draw boundary; the stale claimed-effect case remains open
+`[04 R-COB-04 §1]`–`[04 R-COB-04 §4]` [I4] [I5] [I6].
 
 **DebrisPool API — whole-piece prerequisite.** `internal/render.NewDebrisPool`
 owns a fixed 100-slot, 100,000-charge arena. `Admit(DebrisRequest) bool` takes
@@ -585,11 +587,15 @@ block. Admission does no random work and retains no queue.
 `Step(DebrisStepContext, DebrisImpactSink)` walks occupied slots in slot
 order, applies the lifetime, terrain/sea, bounce, velocity and angle rules of
 `[04 R-COB-04 §2]`, and synchronously calls the typed ground or water impact
-method when an on-hit record requires one. `SnapshotInto` provides copies of
-live detached records for later session publication; it never exposes the
-arena's mutable point storage. Session will adapt the COB request and bind this
-pool; frame publication and renderer consumption remain outside this API
-`[04 R-COB-04 §1]`–`[04 R-COB-04 §2]` [I4] [I5] [I6].
+method when an on-hit record requires one. `SnapshotInto` provides detached
+inspection copies, while `SnapshotViewsInto` publishes only model metadata and
+never duplicates the arena's mutable point storage. Session adapts the COB
+request and binds this pool; frame publication and renderer consumption remain outside this API
+`[04 R-COB-04 §1]`–`[04 R-COB-04 §2]` [I4] [I5] [I6]. The production adapter
+retains the source raw slot, steps this pool before the fixed effect pool, and
+publishes an immutable model identity, piece, pose and current source-owner
+palette; the direct draw rebuilds the selected original piece with stepped
+angles before the fixed effect category walks.
 
 **Bitmap production adapter.** The session binds its explosion sink before
 `Create`. Each selected bitmap is admitted synchronously into the existing
@@ -597,10 +603,10 @@ fixed effect pool with named art and calculated table 2. Successful admission
 above the signed whole-unit sea boundary also invokes the existing land-dust
 producer. Binding authored timing after `Create` activates unresolved primary
 players in place, preserving identity, order and secondary animation; it does
-not restart resolved players or add a per-frame retry. Physical whole-piece
-and shatter requests still have explicit `TODO(U13)` refusals at this boundary
-`[04 R-COB-04 §1, §4]`. Ground debris impacts use calculated table 0; their
-future draw adapter must rebuild original vertices with the stepped angles
+not restart resolved players or add a per-frame retry. Whole-piece requests
+enter the DebrisPool; shatter still has the explicit `TODO(U13)` refusal at
+this boundary `[04 R-COB-04 §1, §4]`. Ground debris impacts use calculated table 0; the
+direct draw adapter rebuilds original vertices with the stepped angles
 `[04 R-COB-04 §2]` `[03 R-COMP-02 §6]`.
 
 **Whole-piece pool validation.** The bounded pool passed independent review,
@@ -608,15 +614,16 @@ future draw adapter must rebuild original vertices with the stepped angles
 A sequential scene-version-3 Ashap Plateau comparison used seed 7, factories,
 1920×1080, 30 TPS, 60 warm-up draws and 180 measured draws. Both renderers kept
 identical per-frame censuses and byte-identical captures against the accepted
-baseline; the pool is still awaiting its production adapter. Classic record
+baseline; this comparison preceded the production adapter. Classic record
 median/p95/max changed from 13.330/18.385/21.022 to 13.335/14.870/15.980 ms;
 modern from 4.271/4.701/5.339 to 4.298/6.236/13.081 ms. Classic allocations were
 0.891→0.892 MB/frame and cadence share 96→98%; modern allocations were
 1.805→1.867 MB/frame and cadence share 91→88%. These individual runs establish
 no performance improvement. The workload included 187–198 units, 6–31
 projectiles, 73–162 effects, 4–8 nanoframes/nanolathe events, and four shake
-frames. Full adapter, shared effect-pool admission, publication and drawing
-remain open under U13.
+frames. The whole-piece adapter now connects admission, publication and both
+renderer paths. Shatter admission and drawing remain open under U13; per-frame
+smoke/fire trails retain the explicit RT08 ownership boundary.
 
 ### 3.4 Model — C20…C24
 

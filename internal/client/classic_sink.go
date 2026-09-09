@@ -238,8 +238,15 @@ func (c *Client) classicModelImage(t *modelTarget) *drawlist.ClassicModelImage {
 		Color: t.color, Coverage: t.covered, Key: t.height,
 		Width: int32(t.width), Height: int32(t.heightPx),
 		OriginX: t.originX, OriginY: t.originY, AnchorX: t.anchorX, AnchorY: t.anchorY,
-		Transparent: t.transparent, Blit: c.modelBlitScale(),
+		Transparent: t.transparent, Blit: modelTargetBlit(t, c.modelBlitScale()),
 	})
+}
+
+func modelTargetBlit(t *modelTarget, fallback int32) int32 {
+	if t != nil && t.blit > 0 {
+		return t.blit
+	}
+	return fallback
 }
 
 // classicModelTarget adapts owned packet planes to the one model-image blitter

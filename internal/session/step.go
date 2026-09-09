@@ -704,6 +704,10 @@ func (s *Session) stepEffectPhase(tick uint32) {
 	// advanced once at this phase boundary. Admission consumes the current
 	// ordered presentation window; publication only snapshots the resulting
 	// pool [03 §1][01 §4.4].
+	// The whole-piece arena is the leading phase-4 table. Any synchronous
+	// impact admission is therefore visible to the following fixed-pool walk
+	// in this same phase [04 R-COB-04 §2][03 §1].
+	s.stepDebris(tick)
 	var presentationEvents []frame.Event
 	if s.publication != nil && s.publication.events != nil {
 		presentationEvents = s.publication.events.StagingEvents()

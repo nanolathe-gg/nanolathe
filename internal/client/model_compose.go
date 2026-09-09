@@ -438,6 +438,87 @@ func (c *Client) composeDirectLiveModel(draw *presentationrender.UnitDraw, selec
 	return composedModel{image: target, raster: target, draw: draw, direct: true, directLane: lane}, true
 }
 
+// composeDirectDebrisModel is the bounded classic counterpart of the direct
+// standalone model call. Projection happens before rebasing, so fractional
+// world coordinates follow the direct truncation path; the resulting target
+// covers only its clipped projected-vertex box and replays at scale one
+// [03 R-COMP-02 §6][03 R-RAST-01 §2].
+func (c *Client) composeDirectDebrisModel(draw *presentationrender.UnitDraw, selector teamColor, id uint64) (composedModel, bool) {
+	if !c.directModelOriginVisible(draw) {
+		return composedModel{}, false
+	}
+	polys := c.collectDrawPolysLaneProjected(draw, selector, id, modelCursorDebris, presentationrender.PieceLaneAll, true)
+	minX, minY, maxX, maxY, ok := directProjectedBounds(polys, int32(c.width), int32(c.height))
+	if !ok {
+		return composedModel{}, false
+	}
+	placeFaces(polys, -minX, -minY, 1)
+	target := c.borrowModelImage(int(maxX-minX+1), int(maxY-minY+1), -minX, -minY, 0, 0, false, 1)
+	// Direct polygon coordinates were already in framebuffer space, so Original
+	// detail mode must not scale the committed image a second time.
+	target.blit = 1
+	for i := range polys {
+		if polys[i].frame != nil {
+			c.blitTexturedPolyTarget(target, &polys[i], polys[i].frame, nil, id)
+			continue
+		}
+		c.fillPolyTarget(target, &polys[i], polys[i].color, nil, id)
+	}
+	return composedModel{image: target, raster: target, draw: draw, direct: true, directLane: presentationrender.PieceLaneAll}, true
+}
+
+func (c *Client) directModelOriginVisible(draw *presentationrender.UnitDraw) bool {
+	if c == nil || c.cam == nil || draw == nil || c.width <= 0 || c.height <= 0 {
+		return false
+	}
+	x, y := c.modelAnchor(draw)
+	return x >= 0 && x <= int32(c.width) && y >= 0 && y <= int32(c.height)
+}
+
+func directProjectedBounds(polys []screenPoly, width, height int32) (minX, minY, maxX, maxY int32, ok bool) {
+	if width <= 0 || height <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	first := true
+	for i := range polys {
+		for j := range polys[i].x {
+			x, y := polys[i].x[j], polys[i].y[j]
+			if first {
+				minX, maxX, minY, maxY, first = x, x, y, y, false
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if y > maxY {
+				maxY = y
+			}
+		}
+	}
+	if first || maxX < 0 || maxY < 0 || minX >= width || minY >= height {
+		return 0, 0, 0, 0, false
+	}
+	if minX < 0 {
+		minX = 0
+	}
+	if minY < 0 {
+		minY = 0
+	}
+	if maxX >= width {
+		maxX = width - 1
+	}
+	if maxY >= height {
+		maxY = height - 1
+	}
+	return minX, minY, maxX, maxY, true
+}
+
 // composeModel composes one unit into its own image and returns it
 // UNCOMMITTED. Traversal is performed by internal/render; this function only
 // resolves authored textures and rasterizes [03 §2.4][03 §2.4.1]

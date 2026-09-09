@@ -1,7 +1,9 @@
 package render
 
 import (
+	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/model"
+	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 )
 
@@ -28,6 +30,9 @@ const (
 // adapter resolves a COB source, model piece and unit transform before calling
 // Admit; this package does not import COB.
 type DebrisRequest struct {
+	Source       pool.Handle
+	DefID        uint16
+	DefName      string
 	Model        *model.Model
 	PieceIndex   int
 	GeometryName string
@@ -89,6 +94,9 @@ type DebrisSnapshot struct {
 	Model        *model.Model
 	PieceIndex   int
 	GeometryName string
+	Source       pool.Handle
+	DefID        uint16
+	DefName      string
 	Points       [][3]numeric.Fixed
 	Position     [3]numeric.Fixed
 	Angles       [3]uint16
@@ -111,6 +119,9 @@ type debrisSlot struct {
 	model        *model.Model
 	pieceIndex   int
 	geometryName string
+	source       pool.Handle
+	defID        uint16
+	defName      string
 	position     [3]numeric.Fixed
 	angles       [3]uint16
 	renderFlags  uint8
@@ -184,7 +195,7 @@ func (p *DebrisPool) Admit(req DebrisRequest) bool {
 	p.slots[slotIndex] = debrisSlot{
 		live: true, generation: p.serial,
 		pointStart: pointStart, pointCount: len(req.Points),
-		model: req.Model, pieceIndex: req.PieceIndex, geometryName: req.GeometryName,
+		model: req.Model, pieceIndex: req.PieceIndex, geometryName: req.GeometryName, source: req.Source, defID: req.DefID, defName: req.DefName,
 		position: debrisWord3(req.Position), angles: req.Angles, renderFlags: req.RenderFlags,
 		velocity: debrisWord3(req.Velocity), angularRates: req.AngularRates, lifetime: req.Lifetime,
 		fall: req.Fall, explodeOnHit: req.ExplodeOnHit, smoke: req.Smoke, fire: req.Fire,
@@ -270,10 +281,33 @@ func (p *DebrisPool) SnapshotInto(out []DebrisSnapshot) []DebrisSnapshot {
 		points := make([][3]numeric.Fixed, s.pointCount)
 		copy(points, p.points[s.pointStart:s.pointStart+s.pointCount])
 		out = append(out, DebrisSnapshot{
-			Slot: i, Model: s.model, PieceIndex: s.pieceIndex, GeometryName: s.geometryName,
+			Slot: i, Model: s.model, PieceIndex: s.pieceIndex, GeometryName: s.geometryName, Source: s.source, DefID: s.defID, DefName: s.defName,
 			Points: points, Position: s.position, Angles: s.angles, RenderFlags: s.renderFlags,
 			Velocity: s.velocity, AngularRates: s.angularRates, Lifetime: s.lifetime,
 			Fall: s.fall, ExplodeOnHit: s.explodeOnHit, Smoke: s.smoke, Fire: s.fire,
+		})
+	}
+	return out
+}
+
+// SnapshotViewsInto copies only the presentation metadata needed to rebuild a
+// selected immutable model piece. The arena-owned vertex workspace remains in
+// the pool; frame publication must not create a second debris geometry store
+// [04 R-COB-04 §2][I6].
+func (p *DebrisPool) SnapshotViewsInto(out []frame.DebrisView) []frame.DebrisView {
+	if p == nil {
+		return out[:0]
+	}
+	out = out[:0]
+	for i := range p.slots {
+		s := &p.slots[i]
+		if !s.live || s.model == nil {
+			continue
+		}
+		out = append(out, frame.DebrisView{
+			Slot: i, DefID: s.defID, DefName: s.defName, Model: s.model.Name, PieceIndex: s.pieceIndex, RawSlot: s.source,
+			X: s.position[0], Y: s.position[1], Z: s.position[2], Angles: s.angles,
+			RenderFlags: s.renderFlags,
 		})
 	}
 	return out

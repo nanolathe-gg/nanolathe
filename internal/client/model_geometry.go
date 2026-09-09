@@ -225,7 +225,19 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 	}
 	orient := c.orientationCache(id)
 	body := c.cachedBody(id)
-	if c.cachedGeometryMustRebuild(body, v, draw, orient) {
+	// A cache or shade script setter writes its flag unconditionally and
+	// discards the composition-image reference on every call, without clearing
+	// the cached-body validity state [03 R-COMP-01 §4][04 R-MOV-03 §4]. The
+	// retained lane is that discarded reference, and the cached/live membership
+	// it was built from is exactly what such a write changes, so a discard has
+	// to be read here or a piece that leaves the live lane is drawn by neither.
+	// Discarding is separate from invalidating: a structure or a required key
+	// plane rebuilds, while a mobile subject without one draws every visible
+	// piece directly [03 R-REN-03A §4]. This is the same three-term gate the
+	// classic composer applies at composeUnitModelState.
+	missing := body == nil || body.geometry == nil || body.cacheRevision != v.CacheRevision
+	required := draw.Structure || draw.KeyPlane
+	if c.cachedGeometryMustRebuild(body, v, draw, orient) || missing && required {
 		all := c.collectDrawPolys(draw, unitTeamColor(v), id, modelCursorUnit)
 		cached := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneCached)
 		if len(all) == 0 {
@@ -244,12 +256,13 @@ func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawli
 		base := c.borrowModelPacket(cached, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
 		base.Supersample = supersample
 		c.replaceCachedGeometry(id, v, draw, base)
+		missing = false
 		if draw.NeedsRebuild {
 			orient.UpdateKey(draw.Model.Name, v.Heading, v.Pitch, v.Bank)
 		}
 		body = c.cachedBody(id)
 	}
-	if body == nil || body.geometry == nil {
+	if missing || body == nil || body.geometry == nil {
 		return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
 	}
 	all := c.collectDrawPolys(draw, unitTeamColor(v), id, modelCursorUnit)
@@ -369,11 +382,25 @@ func copyModelFaces(dst []drawlist.ModelFace, vertices []drawlist.ModelVertex, s
 }
 
 func (c *Client) directUnitGeometry(draw *presentationrender.UnitDraw, selector teamColor, id uint64, lane presentationrender.PieceLane) *drawlist.ModelGeometry {
-	polys := c.collectDrawPolysLaneProjected(draw, selector, id, modelCursorUnit, lane, true)
+	return c.directModelGeometry(draw, selector, id, modelCursorUnit, lane)
+}
+
+// directModelGeometry records the standalone direct projection.
+func (c *Client) directModelGeometry(draw *presentationrender.UnitDraw, selector teamColor, id uint64, kind uint8, lane presentationrender.PieceLane) *drawlist.ModelGeometry {
+	polys := c.collectDrawPolysLaneProjected(draw, selector, id, kind, lane, true)
 	if len(polys) == 0 {
 		return nil
 	}
 	return c.borrowModelPacket(polys, int32(c.width), int32(c.height), 0, 0, 0, 0, 1, false, drawlist.ModelFallbackNone)
+}
+
+// directDebrisGeometry applies the detached-piece origin gate independently
+// of face overlap [03 R-COMP-02 §6].
+func (c *Client) directDebrisGeometry(draw *presentationrender.UnitDraw, selector teamColor, id uint64) *drawlist.ModelGeometry {
+	if !c.directModelOriginVisible(draw) {
+		return nil
+	}
+	return c.directModelGeometry(draw, selector, id, modelCursorDebris, presentationrender.PieceLaneAll)
 }
 
 // The doubled projection shares placeFaces with classic, including its odd

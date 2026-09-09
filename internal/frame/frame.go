@@ -24,6 +24,7 @@ type Capacities struct {
 	Projectiles     int
 	Features        int
 	Effects         int
+	Debris          int
 	OrderQueues     int
 	Builds          int
 	Cues            int
@@ -32,6 +33,24 @@ type Capacities struct {
 	Visibility      int
 	RadarContacts   int
 	Fog             int
+}
+
+// DebrisView is the committed presentation copy of one whole-piece debris
+// slot. RawSlot is resolved by session publication only; it lets a reused unit
+// slot select its current owner colour without exposing mutable units to the
+// client [04 R-COB-04 §2][I6].
+type DebrisView struct {
+	Slot            int
+	DefID           uint16
+	DefName         string
+	Model           string
+	PieceIndex      int
+	RawSlot         pool.Handle
+	X, Y, Z         numeric.Fixed
+	Angles          [3]uint16
+	RenderFlags     uint8
+	OwnerColor      uint8
+	OwnerColorKnown bool
 }
 
 // PieceView carries one committed COB piece transform [03 §2.4].
@@ -904,6 +923,7 @@ type Frame struct {
 	Projectiles []ProjectileView
 	Features    []FeatureView
 	Effects     []EffectView
+	Debris      []DebrisView
 	// Strips is every live strip-object sub-record, in the composer's walk
 	// order: strips ascending, objects in insertion order, sub-records in
 	// vector order [03 §1][03 R-STRIP-01 §2]. Strip objects are authoritative
@@ -971,6 +991,7 @@ func (f *Frame) Reserve(c Capacities) {
 	f.Projectiles = reserve(f.Projectiles, c.Projectiles)
 	f.Features = reserve(f.Features, c.Features)
 	f.Effects = reserve(f.Effects, c.Effects)
+	f.Debris = reserve(f.Debris, c.Debris)
 	f.OrderQueues = reserve(f.OrderQueues, c.OrderQueues)
 	f.Builds = reserve(f.Builds, c.Builds)
 	f.Events = reserve(f.Events, c.Cues)
@@ -1036,6 +1057,7 @@ func (f *Frame) Reset() {
 	f.Result.Scores = f.Result.Scores[:0]
 	clear(f.Projectiles)
 	clear(f.Features)
+	clear(f.Debris)
 	clear(f.Economy)
 	clear(f.Builds)
 	clear(f.Strips)
@@ -1043,6 +1065,7 @@ func (f *Frame) Reset() {
 	f.Projectiles = f.Projectiles[:0]
 	f.Features = f.Features[:0]
 	f.Effects = f.Effects[:0]
+	f.Debris = f.Debris[:0]
 	f.Strips = f.Strips[:0]
 	f.OrderQueues = f.OrderQueues[:0]
 	f.Economy = f.Economy[:0]

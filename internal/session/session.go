@@ -157,6 +157,7 @@ type Session struct {
 	Snapshot *frame.Buffer
 
 	publication *publicationState // staged events and admitted effects at the committed-frame boundary [01 §4.4][03 §1]
+	debris      *render.DebrisPool
 	// featurePublicationScratch is reused only while copying feature values.
 	// Entries are cleared before publication returns, so retired records are not retained.
 	featurePublicationScratch []*features.Instance
