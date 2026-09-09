@@ -21,10 +21,10 @@ import (
 //
 // The client is already stepped to the captured tick and its published buffer is
 // frozen; this loop never calls Client.Step, so the simulation does not advance
-// while the frame is drawn. Modern-only capture records geometry once and
-// replays that cloned list (C-G1). Explicit both capture passes a snapshot whose
-// classic image remains a diagnostic reference; its pixels never enter the GPU.
-func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrames int, prepared *client.ComposedFrameSnapshot, preparation time.Duration, preparationLabel string) (*image.RGBA, error) {
+// while the frame is drawn. It records geometry once and replays that cloned
+// list (C-G1). The explicit both route first composes its classic image, then
+// uses this same geometry recording path from the unchanged committed state.
+func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrames int) (*image.RGBA, error) {
 	if cl == nil {
 		return nil, fmt.Errorf("nanolathe: shot: modern capture has no client")
 	}
@@ -34,18 +34,13 @@ func captureModernShot(cl *client.Client, w, h int, mapName string, profileFrame
 	if profileFrames < 0 {
 		return nil, fmt.Errorf("nanolathe: shot: modern capture profile frame count must be nonnegative, got %d", profileFrames)
 	}
-	if prepared == nil {
-		started := time.Now()
-		live := cl.RecordFrame()
-		if live == nil {
-			return nil, fmt.Errorf("nanolathe: shot: modern capture recorded no frame")
-		}
-		list := live.Clone()
-		prepared = &client.ComposedFrameSnapshot{List: list}
-		preparation = time.Since(started)
-		preparationLabel = "modern geometry/draw-list recording (CPU)"
+	started := time.Now()
+	live := cl.RecordFrame()
+	if live == nil {
+		return nil, fmt.Errorf("nanolathe: shot: modern capture recorded no frame")
 	}
-	game := &modernShotGame{cl: cl, list: &prepared.List, w: w, h: h, profileFrames: profileFrames, preparation: preparation, preparationLabel: preparationLabel}
+	list := live.Clone()
+	game := &modernShotGame{cl: cl, list: &list, w: w, h: h, profileFrames: profileFrames, preparation: time.Since(started), preparationLabel: "modern geometry/draw-list recording (CPU)"}
 
 	// SetWindowVisible(false) before RunGame runs the game without ever showing
 	// the window (Ebitengine window contract). The size is set so the default

@@ -1792,13 +1792,12 @@ All four units landed 2026-09-09 (main `dd8c9337`). Measured:
 | 120 TPS modern benchmark, 2× | cadence 8.86 ms median, 48% on the floor; Submit 4.1 ms against 2.5 ms |
 | Largest 64×64 tile atlas | Lava & Two Hills, 6,912² pixels, 182 MB RGBA8 |
 
-Found on the way and not part of this round: `--shot-renderer both` omits
-every model from its modern image since the cached-live composition landed
-(main `dfb98555`, before this round; bisected against `a1795d2e`, where the
-same capture drew the commander). The separate `--shot-renderer modern`
-capture draws models, so parity at 2× was measured with separate captures
-and `tools/framediff`. The both route is the parity tool and needs fixing
-by whoever owns the cached-live lanes.
+`--shot-renderer both` records the classic indexed image and the modern
+geometry list separately, from one unchanged committed frame, camera and
+presentation configuration. The modern half uses the same geometry-only
+recording path as `--shot-renderer modern`; it never replays a
+classic-inclusive packet or falls back to CPU model planes. This keeps the
+combined route a valid parity tool after cached/live model composition.
 
 Owed: a human look at the window with `--renderer=modern --zoom 2`, F9 and
 F10 during motion, and at projectiles, effects, halos and health bars at

@@ -322,7 +322,7 @@ func runShot(opts Options, cs *contentSet) error {
 			return err
 		}
 	case "modern":
-		modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames, nil, 0, "")
+		modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames)
 		if err != nil {
 			return err
 		}
@@ -421,12 +421,13 @@ func validateShotOptions(opts Options) error {
 // --shot-renderer-max controls the explicit comparison acceptance threshold;
 // the default remains effectively unbounded for historical capture callers.
 func runShotBoth(opts Options, cl *client.Client, shotW, shotH int) error {
-	started := time.Now()
-	snapshot := cl.ComposeFrameSnapshot()
-	preparation := time.Since(started)
-	classic := image.NewRGBA(image.Rect(0, 0, snapshot.Width, snapshot.Height))
-	copy(classic.Pix, snapshot.RGBA)
-	modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames, &snapshot, preparation, "classic compose+snapshot")
+	// Each executor records its own native product from the same frozen
+	// committed frame. ComposeFrame makes the classic index image, while
+	// captureModernShot calls RecordFrame to retain the geometry-only model
+	// packets the GPU consumes. Reusing the classic-inclusive list here would
+	// omit models from the modern replay after cached/live composition.
+	classic := cl.ComposeFrame()
+	modern, err := captureModernShot(cl, shotW, shotH, shotSceneLabel(opts), opts.ShotGPUProfileFrames)
 	if err != nil {
 		return err
 	}
