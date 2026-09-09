@@ -191,7 +191,14 @@ func (c *Client) shadowAnchor(draw *presentationrender.UnitDraw) (int32, int32) 
 		return 0, 0
 	}
 	sx, sy := c.cam.WorldToScreen(draw.WorldPos[0], draw.GroundY, draw.WorldPos[2])
-	return sx - camera.OriginX + shadowXOffset, sy - camera.OriginY
+	// The five-pixel step is an authored screen offset between two projections
+	// of the same world point, so it takes the model scale like the geometry
+	// it offsets: under Enhanced the shadow's own geometry is twice as large at
+	// the detail scale and an unscaled step would halve the visible offset;
+	// under Original the image is rasterized at native size and the blit
+	// doubles step and geometry together (DESIGN_GPU_RENDERER §14.2). The
+	// GroundY shear is a world height and is not scaled.
+	return sx - camera.OriginX + shadowXOffset*c.modelScale(), sy - camera.OriginY
 }
 
 // punchOut writes the shadow image's own transparent index wherever the body
@@ -246,6 +253,10 @@ func (t *modelTarget) punchOut(body *modelTarget) {
 // ground pixel halfway toward black [R-REN-03D §4].
 func (t *modelTarget) tintedCommit(dst []uint8, width, height int, alp *[65536]byte) {
 	if t == nil || alp == nil || width <= 0 || height <= 0 {
+		return
+	}
+	if t.blitFactor() != 1 {
+		t.commitBlock(dst, width, height, alp)
 		return
 	}
 	for iy := 0; iy < t.heightPx; iy++ {

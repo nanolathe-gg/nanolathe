@@ -146,8 +146,12 @@ Construction reveal changes a frame-owned copy, preserving the raw retained
 body. The direct fill keeps the same exclusive last-row/column clip as the
 local rasterizer.
 Classic recording consumes these lanes directly. Geometry-only modern recording
-continues to carry native geometry and never substitutes a classic image; its
-packet split must preserve the same lane order.
+retains only cached-lane faces beside the same presentation identity and emits
+current live faces every frame. A keyed packet carries both lanes: cached faces
+resolve, reveal and outline first, then native unshaded live faces enter the
+same key plane. A keyless packet commits its cached faces and records direct
+projected live faces as the later Model command. Neither route creates a
+classic image or a device image cache.
 [03 R-REN-03A §4][03 R-RAST-01 §2][03 §5.2][03 R-COMP-01 §4]
 
 For its own retained-raster memoization, the classic client also records the
@@ -200,7 +204,21 @@ allocation 1.640 versus 1.649 MB/frame, cadence 98% versus 97%; no modern
 performance improvement is claimed. Its comparison image was byte-identical.
 Classic changed 36,332 pixels inside the model region, consistent with the
 corrected cached/live, transparency and shadow paths; both final images were
-visually inspected. The modern packet split remains open.
+visually inspected. Modern recording now retains cached geometry per
+presentation identity and carries current live geometry in its native packet.
+
+Modern cached/live acceptance compares `dd8c9337` with `1e72ddb7` using the
+same scene above, native zoom and automatic detail-art generation disabled.
+Metadata and all 180 frame censuses match; classic pixels are identical and
+modern changes 36,101 model-region pixels. Both final captures were inspected.
+Modern Record median/p95/max is 3.828/4.193/4.649 → 5.156/5.751/14.797 ms;
+Submit is 5.512/6.460/13.104 → 5.182/6.093/8.289 ms. Allocation is
+1.500 → 1.993 MB/frame after reusing existing packet scratch (the initial
+implementation allocated 4.723 MB/frame). Cadence is 98% → 97%, with a
+73.861 ms maximum interval in the final run. Classic Record is
+10.517/11.282/11.706 → 10.211/11.266/14.058 ms, allocation
+1.124 → 1.125 MB/frame and cadence 98% → 97%. These results accept the
+bounded cost of the corrected stages; they do not establish a performance gain.
 
 ### 2.3 `internal/platform/gpurender` — the modern executor
 
@@ -309,9 +327,9 @@ excluded from presentation timing (§6). The diff tool is `tools/framediff`.
   resolve [03 R-REN-03A §6–§7]. Live pieces draw at native scale afterward.
   Mobile units are not supersampled in GPU Classic. A full subject-wide MSAA
   or SSAA replacement belongs to Enhanced and needs a separate design.
-  The GPU recorder still submits all pieces together. Classic now splits
-  cached and live lanes; native GPU packet retention and the live 1x pass
-  remain implementation work (§10).
+  The GPU recorder retains the cached lane and records current live faces
+  separately. Native execution resolves cached structure faces first, then
+  rasterizes the unshaded live lane at 1x (§10).
 * **C-G7 Fog composition.** The recorded fog ops are converted to a per-tile
   grid texture (kind, variant, frame, pattern parity) and may be applied by a combined
   shader over the world image: solid fills write the dark index, gray fills
@@ -558,7 +576,9 @@ key, texture U/V and shade row; resolved immutable texture frame, physical flat
 color, shade selector; target dimensions, origin/anchor, key-plane flag and
 supersample scale. Preserve polygon order and arity; triangulation is GPU-owned.
 Retain per-corner pre-shear information if needed to reproduce structure scaling.
-The geometry packet owns its vertex and face slices and survives the next frame.
+Ordinary geometry packets borrow distinct per-frame vertex and face storage,
+valid until the next recording pass. `List.Clone` deep-copies that storage for
+consumers that retain a frame.
 No client pointer, live camera, or simulation pool is permitted in it. Give the
 CPU bridge neutral pixel-plane data rather than making drawlist import client.
 
@@ -570,8 +590,9 @@ transparent index, dimensions, origin and framebuffer anchor. Recording builds
 the shadow before it releases the composer, so replay retains no live draw,
 camera, client model cache, or frame-local lookup. Its optional trace image and
 observer are strictly diagnostic and cannot write pixels. `List.Clone`
-deep-copies all classic plane slices. `ModelGeometry` owns ordered
-`[]ModelFace`, each owning its ordered `[]ModelVertex`; a vertex holds projected
+deep-copies all classic plane slices and modern geometry. `ModelGeometry` carries
+ordered `[]ModelFace` and `[]ModelVertex` slices, borrowed for the recording
+frame or independently owned by a clone; a vertex holds projected
 `X`, `Y`, signed pre-interpolation `Key`, integer texel `U`/`V`, and physical
 `Shade` row. A face holds its immutable resolved `*formats.GAFFrame` (or nil),
 physical flat `Color`, and `Shaded` selector. The packet carries `Width`,
@@ -713,8 +734,8 @@ diagnostic counts, not simulation data.
 
 ## 10. Approximate visual parity before enhanced features
 
-GPU model shadows, reveal/outline, waterline/digger processing, attached-unit
-staging, and structure resolve are implemented. The capture audit below checks
+GPU model shadows, cached/live composition, reveal/outline, waterline/digger
+processing, attached-unit staging, and structure resolve are implemented. The capture audit below checks
 these stages alongside the existing terrain, feature, weapon, effect, fog and
 interface command families. All work stays behind `--renderer=modern`. Enhanced
 lighting, glow, camera zoom and interpolation wait for human visual acceptance.
@@ -750,10 +771,10 @@ apply to static/rest-cursor sprites, while a published live event selects opaque
 for both commands [03 R-RAST-01 §6][03 §5.3.1]. Both executors use the existing
 keyed/tinted primitives for these selections, including the startup palette
 capability; there is no separate feature-shadow shader or shade-row policy.
-The current publisher proves a running event with `EventSeqName`; it does not
-carry independent live-record and runtime-shadow-enable state when that cursor
-is absent. `TODO(EC-P5)` at the draw site tracks that publication boundary; this
-raster correction does not complete the feature arena/cursor lifecycle.
+The publisher carries independent `RuntimeLive` and `ShadowEnabled` state.
+A live record without a drawable event cursor does not select static rest art.
+The retained-slot arena limitation remains documented in the economy design
+under EC-G2; it does not require another presentation fallback.
 
 ### Reveal, outline and submerged geometry
 
@@ -777,10 +798,9 @@ classic order without uploading a CPU image. The GPU packs the carrier's color
 and key planes into red/green channels, including keys under erased pixels,
 then merges each finished child using a separate destination image. The signed
 shifted key is compared before narrowing to the stored byte. The next child
-sees that narrowed key. Finally the group commits once. This GPU path retains its existing
-per-subject waterline policy. Classic now finalizes waterline and Digger over
-the carrier staging image after its children; native GPU group finalization
-remains to be reconciled. [03 R-REN-03A §4]
+sees that narrowed key. The carrier's live lane enters before those merges;
+after the final child, waterline and Digger process the combined plane once,
+then the group commits once. [03 R-REN-03A §4]
 
 A keyless carrier records independent body commands in painter order; a missing
 carrier still records each valid child independently. Both diagnostic and
@@ -800,11 +820,11 @@ participates in the filter. The native outline and clipping passes follow the
 resolve, and a child's resolved image is what enters carrier composition.
 No CPU pixels are involved. [03 R-REN-03A §6–§7]
 
-This GPU path still supersamples all pieces together. Classic now limits
-structure supersampling to its cached lane and draws live pieces at 1x;
-the matching native GPU packet split remains open. Model-only `both` captures can continue
-using their explicitly logged native-scale comparison recipe; the scene matrix
-and AA-enabled preview API cover the normal structure option.
+Only cached faces enter this GPU path. Native live faces follow its resolve at
+1x and are unshaded, so the structure filter never includes a live piece.
+Model-only `both` captures can continue using their explicitly logged
+native-scale comparison recipe; the scene matrix and AA-enabled preview API
+cover the normal structure option.
 
 ### Weapon, effect and asset coverage review
 
@@ -1127,7 +1147,8 @@ two-surface alternation above, or fewer phases.
 **Model slot passes.** The slot stage today alternates its destinations per
 page: two clears, the key faces into the key plane, the colour faces into the
 body plane, reveal, the outline keys back into the key plane, the outline
-colours into the body plane, then the clip pass, for each of up to three native
+colours into the body plane, the separate live key and colour passes, then
+the clip pass, for each of up to three native
 pages and the supersample page, about twenty switches. Stacking every page as a
 vertical band of one image per plane (body, key, post; 2048 wide) and ordering
 the work by destination — every page's clears, then every page's key work, then
@@ -1178,7 +1199,7 @@ draws per frame, submission, cadence and allocations in the merge commit.
 |---|---|---|---|
 | H0 benchmark | `--benchmark-tps`, on-cadence share in the report | `cmd/nanolathe/flags.go`, `cmd/nanolathe/battle_benchmark.go`, `internal/platform/ebitenapp/battle_benchmark.go`, `tools/battle-bench-report`, `docs/BATTLE_BENCHMARK.md` | landed (`a4fb00cd`) |
 | H1 scheduler | critical-path placement (landed), one pass per phase (not landed, see §11.5 status), `Phases`/`Passes` stats, fog and clear as phases, retained uint32 index buffers | `schedule.go`, `deststage.go`, `renderer.go`, `fog.go`, `draw.go`, `sprites.go`, `terrain.go`, `text.go`, `shaders.go`, `atlas.go`, `models.go` (commit and shadow call sites), their tests | M1–M8 modern byte-identical to the previous revision's modern; fog, tinted-overlap and carrier fixtures; phases about 31 and phase passes equal to phases on the benchmark; 60 TPS on-cadence share reported |
-| H2 model stage (landed) | stacked pages, passes ordered by destination, vertices emitted once per page for key and colour, scratch arena without per-frame clearing, uint32 indices, recyclable sub-images | `model_slots.go`, `model_prepare.go`, `model_quads.go`, `model_scratch.go`, `model_atlas.go`, `model_shaders.go`, their tests | model device fixtures; ARMSOLAR and carrier captures; model stage passes ≤ 8 and independent of page count; executor allocations reported |
+| H2 model stage (landed) | stacked pages, passes ordered by destination, vertices emitted once per page for key and colour, scratch arena without per-frame clearing, uint32 indices, recyclable sub-images | `model_slots.go`, `model_prepare.go`, `model_quads.go`, `model_scratch.go`, `model_atlas.go`, `model_shaders.go`, their tests | model device fixtures; ARMSOLAR and carrier captures; model stage passes ≤ 10 and independent of page count; executor allocations reported |
 | H3 recorder (landed) | retained buffers in the recorder and HUD: outline geometry, composition scratch, effect draws, minimap surfaces | `internal/client/model_geometry.go`, `internal/client/model_scratch.go`, `internal/model/model.go` (composition scratch only), `internal/render/effect_view.go`, `internal/render/minimap*.go`, `cmd/nanolathe/battle_hud_minimap.go`, their tests | M1–M8 classic byte-identical; classic and modern battle captures identical to the previous revision's; recorder objects per frame reported before and after |
 
 H1, H2 and H3 are independent and run in parallel; H1 owns `models.go` and H2
@@ -1493,8 +1514,8 @@ of §6 applies at 2× exactly as at 1×. The rule per layer:
 | Terrain | tile origin through `WorldToScreen` | 64×64 tiles from the detail tile set (§14.3), or the 32×32 tile doubled by nearest sampling when there is none; the record carries the scale and the detail tiles |
 | Feature sprites, normal and shadow, opaque and ALP-tinted | anchor through `WorldToScreen`, authored offsets ×s | the frame's 2× variant (§14.3), drawn one-to-one through the same blit kind |
 | Effect and projectile sprites | anchor through `WorldToScreen`, offsets ×s | the 2× variant; the load-time remaster covers features only, so these are nearest-doubled variants |
-| Models: units, 3DO features, projectiles, the build ghost | projected local offsets ×s (`scaleModelLocal`, integer) | rasterized at output scale from the scaled geometry; textures sample nearest so each texel covers s×s pixels; shadow, outline, reveal and waterline use the same scaled geometry. Height keys, the digger erase threshold and the sea level are world heights and do not scale |
-| Fog | cell rectangle through the same projection | cell edge 32·s; the gray-remap and solid fills cover the scaled rectangle; the dithered pattern tiles the cell at native size (s×s blits of the 32×32 fog frame) so the checker stays one pixel |
+| Models: units, 3DO features, projectiles, the build ghost | anchor through `WorldToScreen` | Enhanced: projected local offsets ×s (`scaleModelLocal`, integer) and the image rasterized at output scale from the scaled geometry, textures sampling nearest so each texel covers s×s pixels; shadow, outline, reveal and waterline use the same scaled geometry. Original: the image is rasterized at native size exactly as at 1× and the classic blit doubles it about the anchor (`ClassicModelImage.Blit`), the shadow's five-pixel step included, so the classic frame is a pure nearest upscale. Height keys, the digger erase threshold and the sea level are world heights and do not scale in either |
+| Fog | cell rectangle through the same projection | cell edge 32·s; the gray-remap and solid fills cover the scaled rectangle; the fog GAF cell (the cloud-edge variants) is drawn once from its 2× variant. The dither checker is a destination-pixel test inside the blit, so it stays one pixel at any scale on its own — tiling the 32×32 frame s×s times, the first draft here, stamped four cloud edges per cell and drew a cross through every boundary cell |
 | Fills: health bars, selection plate, footprint and drag rectangles | through `WorldToScreen` | extents ×s |
 | Lit points (flash discs) | centre through `WorldToScreen` | radius ×s; the point count grows with s², a known cost (§14.5) |
 | Lines: nano beams, lasers, selection quad, dotted paths | endpoints through `WorldToScreen` | one pixel wide at every scale — a divergence accepted for now; a scaled width needs a width on the record in both executors |
@@ -1536,11 +1557,17 @@ battle entry and cleared with the terrain:
 
 The client maps a loaded frame to its 2× variant by entry and frame index, not
 by content, so the remastered bank and the loaded bank need not share
-pointers. Where no variant exists — an effect, a projectile sprite, a bank the
-remaster did not cover, or the whole provider when `--auto-remaster=false` —
-the client builds the nearest-doubled frame on first use and keeps it for the
-life of the client, keyed by the source frame's pointer (frames are immutable
-after load). The doubled frame is a plain frame: composites with alternate
+pointers. The provider is consulted only while the Enhanced executor
+presents: the synthesized art is an Enhanced feature, and Original draws the
+authored tiles and frames at every scale, so switching to classic at 2×
+shows the original art nearest-doubled. The adapter tells the client which
+executor presents on every switch; the capture and benchmark routes tell it
+for the executor they drive (a "both" capture records for the modern one).
+Where no variant exists — an effect, a projectile sprite, a bank the
+remaster did not cover, the whole provider when `--auto-remaster=false`, or
+any frame while Original presents — the client builds the nearest-doubled
+frame on first use and keeps it for the life of the client, keyed by the
+source frame's pointer (frames are immutable after load). The doubled frame is a plain frame: composites with alternate
 children are doubled leaf by leaf. Executors see only frames; a variant is
 just another frame to the sprite atlas.
 
@@ -1564,13 +1591,21 @@ section records only the engine contract.
   independent, so worker count does not change the result. The cache below
   relies on that: a cached result and a fresh one are identical.
 * **Coverage.** Terrain, and the feature banks the map's plot cells name
-  through their feature definitions' `Filename`. Every entry of such a bank
-  is a query, including the sequences the definitions name for burn, die and
-  reclaim; the examples are the bank's own entries less the tool's default
-  exclusions (fire, explosion, smoke and reclaim art). Shadow sequences — the
-  entries a definition names as a shadow twin — are flat two-colour art the
-  synthesizer handles badly (README); they are nearest-doubled. 3DO features
-  and effect banks are not remastered.
+  through their feature definitions' `Filename`. The queries are the entries
+  those definitions name — the rest sequence and the burn, die and reclaim
+  sequences — not every entry of the bank: a bank can hold art no feature
+  uses (`trees.gaf` carries three 640×480 `treegrow` frames that cost 3 s
+  each, and frames of one entry are seeded from the previous frame so they
+  cannot run in parallel), and synthesizing it would triple the first load
+  for nothing on screen. The examples are the bank's own entries less the
+  tool's default exclusions (fire, explosion, smoke and reclaim art, whose
+  colours leak into idle art); the package expresses that as a filtered bank
+  passed in `examples`, while `skip` names entries not synthesized at all.
+  Shadow sequences — the entries a definition names as a shadow twin — are
+  flat two-colour art the synthesizer handles badly (README); they are
+  skipped and nearest-doubled by the client. An entry skipped and an entry
+  the definitions do not name both leave nil frame slots, which the client
+  doubles itself (D2). 3DO features and effect banks are not remastered.
 * **Cache.** `os.UserCacheDir()/nanolathe/upscale/<format version>/<key>`
   where the key is a SHA-256 over the algorithm version and every input byte
   (tiles, tile map, palette, ALP; or bank bytes, example bank bytes, palette,
@@ -1578,8 +1613,11 @@ section records only the engine contract.
   parse is recomputed and rewritten. The cache is derived retail art and is
   never committed or shipped.
 * **When.** On the loader goroutine after the session composes, before the
-  battle is adopted, for the frontend load, the `--map` direct route and the
-  capture route alike; the shot route runs it inline. First load of a map
+  battle is adopted, for the frontend load and the `--map` direct route; the
+  capture route runs it inline and only at `--zoom 2`; a save restore adopts
+  on the render thread and runs it inline too, blocking on a cold cache once
+  for that map. Every windowed load pays it, even at 1×, because F9 can
+  raise the scale later. First load of a map
   costs seconds (the READMEs' numbers: 2–5 s for terrain on twelve workers,
   0.2–1 s per bank plus 10–20 ms per frame); a cached load costs a file read.
   Progress is reported through the loading screen's progress callback under
@@ -1595,7 +1633,13 @@ The executor replays the recorded coordinates, so most layers need nothing.
 The terrain pass builds one atlas per (tile set, scale): 64×64 tiles from the
 record's detail tiles when present, else the 32×32 tiles doubled, and samples
 it exactly as the native atlas at the native scale. The largest retail tile
-set (Painted Desert, 6,875 tiles) is 28 MB at 64×64, within the atlas limit.
+set is Lava & Two Hills at 11,561 tiles (a scan of all 276 retail maps; the
+first draft here named Painted Desert's 6,875): a 108×108 grid, 6,912² pixels
+at 64×64, 182 MB as the RGBA8 index texture the atlas is today. That is one
+page under this device's 16,384 maximum image size and three under a 4,096
+one, so the atlas pages against `ebiten.MaxImageSize()` and draws one pass
+per page. Storing the index in one channel would cut the texture to a
+quarter; that is a follow-up.
 Model geometry arrives in screen space and rasterizes as at 1×. The lit-point
 volume grows with s² and was already the second lever of §13.7; if 2× costs
 the 120 Hz budget, the disc becomes one quad with the disc test in the
@@ -1606,8 +1650,8 @@ fragment, which is a follow-up, not part of this section.
 * **F9** toggles the view scale between 1 and 2 about the viewport centre.
 * **F10** toggles the executor between classic and modern. The client
   publishes the requested executor; the adapter switches at the next Update,
-  turning interpolation off when classic takes over, and the retained screen
-  bridges the swap. Neither key is a retail binding; retail's dispatcher does
+  turning interpolation and the synthesized art off when classic takes over
+  (§14.3), and the retained screen bridges the swap. Neither key is a retail binding; retail's dispatcher does
   not read them.
 * `--zoom 1|2` sets the scale at battle entry and applies to captures too; it
   replaces `--shot-zoom`, whose fractional values are gone. `--shot-focus`
@@ -1644,11 +1688,37 @@ fragment, which is a follow-up, not part of this section.
 
 | Unit | Scope | Files owned | Gate |
 |---|---|---|---|
-| U1 upscale package | move both synthesizers into `internal/upscale` with the tools as wrappers; the cache; the bank and tile-set APIs of §14.4 | `internal/upscale/*` (new), `tools/mapupscale/patchmatchgo/*`, `tools/mapupscale/featupscale/*` | byte-identical tool output before and after; cache round trip; retail-gated timing printed |
-| D1 client view scale | integer camera scale; every world-space layer of §14.2; the detail-art provider and nearest-doubled fallback of §14.3; terrain record with scale and detail tiles; `--zoom` replaces `--shot-zoom` | `internal/camera/*`, `internal/client/*`, `internal/render/fog*.go`, `internal/drawlist/*`, `formats/gaf_variant.go` (new), `cmd/nanolathe/shot.go`, `cmd/nanolathe/flags.go` | §14.7 items 1–3; a classic 2× capture with every layer in place, viewed |
-| D4 modern executor | detail tile atlas per scale; everything else verified rather than changed | `internal/platform/gpurender/*` | §14.7 items 1 and 4 |
-| W1 wiring | load-time remaster on the loader goroutine with the cache and progress; the provider installed at battle entry and for captures; F9/F10; `--auto-remaster`; benchmark `--zoom` | `cmd/nanolathe/*`, `internal/platform/ebitenapp/app.go`, `docs/BATTLE_BENCHMARK.md` | §14.7 items 5 and 6; first-load and cached-load times reported |
+| U1 upscale package (landed) | move both synthesizers into `internal/upscale` with the tools as wrappers; the cache; the bank and tile-set APIs of §14.4 | `internal/upscale/*` (new), `tools/mapupscale/patchmatchgo/*`, `tools/mapupscale/featupscale/*` | byte-identical tool output before and after (9 of 9 files on `ac01` and `trees`); cache round trip; first load 1.35 s wall for a 1,984-tile map, 3 ms cached |
+| D1 client view scale (landed) | integer camera scale; every world-space layer of §14.2; the detail-art provider and nearest-doubled fallback of §14.3; terrain record with scale and detail tiles; `--zoom` replaces `--shot-zoom` | `internal/camera/*`, `internal/client/*`, `internal/render/fog*.go`, `internal/drawlist/*`, `formats/gaf_variant.go` (new), `cmd/nanolathe/shot.go`, `cmd/nanolathe/flags.go` | §14.7 items 1–3; a classic 2× capture with every layer in place, viewed |
+| D4 modern executor (landed) | detail tile atlas per scale; everything else verified rather than changed | `internal/platform/gpurender/*` | §14.7 items 1 and 4 |
+| W1 wiring (landed) | load-time remaster on the loader goroutine with the cache and progress; the provider installed at battle entry and for captures; F9/F10; `--auto-remaster`; benchmark `--zoom` | `cmd/nanolathe/*`, `internal/platform/ebitenapp/app.go`, `docs/BATTLE_BENCHMARK.md` | §14.7 items 5 and 6; first-load and cached-load times reported |
 
 U1 and D1 are independent and run in parallel. D4 and W1 follow D1 (D4 needs
 the terrain record's scale and detail tiles; W1 needs the provider API) and
 run in parallel with each other; W1 also needs U1.
+
+### 14.9 Outcome
+
+All four units landed 2026-09-09 (main `dd8c9337`). Measured:
+
+| | value |
+|---|---|
+| 1× captures, both executors, four scenes | byte-identical to main before the round |
+| First load with the remaster (terrain + feature banks) | Ashap Plateau 4.8 s, Great Divide 2.2 s, Arm mission 1 2.5 s |
+| Cached load | 13–90 ms |
+| 2× classic-vs-modern diff, Ashap Plateau / Great Divide | 1.4% / 1.9% of pixels, all fog-table and ALP rounding of the §13.3 composite (max channel delta 11–92); at 1× the same scenes differ by 0.6% / 1.2% with the §5.1 model raster (max delta 236–240) |
+| 120 TPS modern benchmark, 1× | cadence 8.33 ms median, 71% on the floor (unchanged) |
+| 120 TPS modern benchmark, 2× | cadence 8.86 ms median, 48% on the floor; Submit 4.1 ms against 2.5 ms |
+| Largest 64×64 tile atlas | Lava & Two Hills, 6,912² pixels, 182 MB RGBA8 |
+
+Found on the way and not part of this round: `--shot-renderer both` omits
+every model from its modern image since the cached-live composition landed
+(main `dfb98555`, before this round; bisected against `a1795d2e`, where the
+same capture drew the commander). The separate `--shot-renderer modern`
+capture draws models, so parity at 2× was measured with separate captures
+and `tools/framediff`. The both route is the parity tool and needs fixing
+by whoever owns the cached-live lanes.
+
+Owed: a human look at the window with `--renderer=modern --zoom 2`, F9 and
+F10 during motion, and at projectiles, effects, halos and health bars at
+2×, which no capture scene produced.

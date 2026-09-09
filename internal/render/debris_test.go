@@ -173,8 +173,8 @@ func TestDebrisTerrainEqualityBouncesAndRequestsGroundImpact(t *testing.T) {
 	}
 	log := &debrisImpactLog{}
 	p.Step(testDebrisContext(), log)
-	if len(log.ground) != 1 || log.ground[0].Graphic != "explosion" || !log.ground[0].AboveSeaFlash || log.ground[0].CalculatedFrameTable != 1 {
-		t.Fatalf("ground impact = %#v, want calculated above-sea explosion", log.ground)
+	if len(log.ground) != 1 || log.ground[0].Graphic != "explosion" || !log.ground[0].AboveSeaFlash || log.ground[0].CalculatedFrameTable != 0 {
+		t.Fatalf("ground impact = %#v, want calculated-table-0 above-sea explosion", log.ground)
 	}
 	if p.SlotCount() != 0 {
 		t.Fatal("equal terrain touch should remove slow bounced debris")

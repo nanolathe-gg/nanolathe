@@ -1,6 +1,9 @@
 # patchmatchgo — 2x terrain upscale from original game data
 
-Prototype. Not wired into the engine yet.
+The synthesizer itself lives in `internal/upscale`, which the engine calls at
+battle load through `Tiles2x` (docs/DESIGN_GPU_RENDERER.md §14.4); this command
+is the wrapper that reads the export dataset and writes the tile set and the
+inspection previews. Everything below describes what that package computes.
 
 ## Goal
 

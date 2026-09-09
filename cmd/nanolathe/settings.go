@@ -38,9 +38,7 @@ func (g *gameShell) applySettings(s settings.Settings) {
 	g.missionDifficultyValue = s.Difficulty
 	// Scroll speed is the persisted scrollspeed byte [02 "Settings"] [07 §10] C2.
 	// It is presentation-only and never touches sim [I6].
-	if s.ScrollSpeed != 0 {
-		g.scrollSpeed = s.ScrollSpeed
-	}
+	g.scrollSpeed = s.ScrollSpeed
 	// `damagebars` becomes bit 0 of the interface-flags word at settings load
 	// [07 R-HUD-03 §7][03 R-FX-01 §6].
 	applyDamageBarsSetting(s)
@@ -170,9 +168,6 @@ func (g *gameShell) captureSettings() settings.Settings {
 		GameSpeed:     g.gameSpeed,
 		InterfaceType: g.interfaceType,
 		SwitchAlt:     boolInt(g.switchAlt),
-	}
-	if s.ScrollSpeed == 0 {
-		s.ScrollSpeed = settings.DefaultScrollSpeed
 	}
 	s.Skirmish = settings.Skirmish{
 		Map:            g.setup.MapName,

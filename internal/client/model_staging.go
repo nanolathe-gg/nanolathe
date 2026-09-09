@@ -137,20 +137,27 @@ func (c *Client) composeCarrier(v frame.UnitView, sx, sy int32, children []frame
 // order, retaining only geometry. Keyless or missing carriers leave children
 // in the ordinary painter path [03 R-REN-03A §4].
 func (c *Client) recordCarrierGeometry(v frame.UnitView, children []frame.UnitView) bool {
-	carrier := c.unitGeometry(v, false)
+	carrier, carrierLive := c.unitGeometryPair(v, false)
 	if carrier == nil || !carrier.KeyPlane {
 		if carrier != nil {
 			c.list.RecordModel(drawlist.Model{Geometry: carrier})
 		}
+		if carrierLive != nil {
+			c.list.RecordModel(drawlist.Model{Geometry: carrierLive})
+		}
 		for _, child := range children {
-			if g := c.unitGeometry(child, false); g != nil {
+			g, live := c.unitGeometryPair(child, false)
+			if g != nil {
 				c.list.RecordModel(drawlist.Model{Geometry: g})
+			}
+			if live != nil {
+				c.list.RecordModel(drawlist.Model{Geometry: live})
 			}
 		}
 		return carrier != nil
 	}
 	for _, child := range children {
-		g := c.unitGeometry(child, true)
+		g, _ := c.unitGeometryPair(child, true)
 		if g == nil {
 			continue
 		}
@@ -160,18 +167,6 @@ func (c *Client) recordCarrierGeometry(v frame.UnitView, children []frame.UnitVi
 	}
 	c.list.RecordModel(drawlist.Model{Geometry: carrier})
 	return true
-}
-
-func (c *Client) unitGeometry(v frame.UnitView, forceKeyPlane bool) *drawlist.ModelGeometry {
-	draw, ok := c.unitDrawFor(v)
-	if !ok {
-		return nil
-	}
-	if forceKeyPlane {
-		draw.KeyPlane = true
-	}
-	reveal, outline := c.unitNanoframeReveal(v)
-	return c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
 }
 
 // finishStagedChild resolves and emits a composited child's parity trace after

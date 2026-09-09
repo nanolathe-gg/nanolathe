@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -49,6 +50,34 @@ func TestDefaultsMatchRetail(t *testing.T) {
 	wantMessages := Messages{TextLines: 10, TextScroll: 10, ScreenChat: 1, UnitChatText: 5}
 	if s.Messages != wantMessages {
 		t.Errorf("Messages = %+v, want %+v [02 §3]", s.Messages, wantMessages)
+	}
+}
+
+func TestTypedCommandValuesSaveRawAndNormalizeAtLoad(t *testing.T) {
+	s := Defaults()
+	s.ScrollSpeed = 0
+	s.InterfaceType = 7
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := s.SaveTo(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored Settings
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.ScrollSpeed != 0 || stored.InterfaceType != 7 {
+		t.Fatalf("Save rewrote typed-command settings to scroll=%d interface=%d", stored.ScrollSpeed, stored.InterfaceType)
+	}
+	loaded, err := LoadFrom(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ScrollSpeed != 0 || loaded.InterfaceType != InterfaceTypeRightClick {
+		t.Fatalf("Load normalized typed-command settings to scroll=%d interface=%d", loaded.ScrollSpeed, loaded.InterfaceType)
 	}
 }
 

@@ -1,4 +1,4 @@
-package main
+package upscale
 
 // The feature basis: the PCA subspace fitted to the example blocks and the
 // per-palette-index contributions the quantizer uses. See README.md.

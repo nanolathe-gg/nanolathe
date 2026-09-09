@@ -5385,11 +5385,13 @@ models) first rotates each vertex by the object's three angle words through
 the rotation helper of [03 §2.4] — about the Z axis by the first word, then
 the X axis by the third, then the Y axis by the second — into the shared
 rotated-point scratch, then projects. The **debris entry** ([04 R-COB-04 §2])
-takes the debris record's position directly, applies no rotation, and is
-gated on the projected origin lying inside the viewport rectangle
-(inclusive point-in-rectangle test); the fixed-effect draw pass applies the
-same test before calling the effect entry. Neither entry reads `SHD`, the height key, or the
-composition image; both write straight to the target image.
+likewise rebuilds its detached point workspace from the model's original
+vertices using the debris record's current angle triple, then projects at the
+record's position. It is gated on the projected origin lying inside the
+viewport rectangle (inclusive point-in-rectangle test); the fixed-effect draw
+pass applies the same test before calling the effect entry. Neither entry reads
+`SHD`, the height key, or the composition image; both write straight to the
+target image.
 
 **Consequently a projectile or effect model has no key plane and never reaches
 the structure anti-alias gate (Established, direct-static).** The fillers these entries call are the **framebuffer** variants

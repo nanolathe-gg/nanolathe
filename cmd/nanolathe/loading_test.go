@@ -18,6 +18,7 @@ func TestLoadingStageMapping(t *testing.T) {
 		content.FamilyBuildMenus, content.FamilyModels,
 		session.FamilyTerrain, session.FamilyUnitWorld,
 		session.FamilyPlacement, session.FamilyScripts,
+		familyDetailArt,
 	}
 	for _, family := range reported {
 		if _, ok := retailLoadStageOf[family]; !ok {
@@ -35,11 +36,21 @@ func TestLoadingStageMapping(t *testing.T) {
 	if got := l.percent[5].Load(); got != 100 {
 		t.Errorf("Explosions after features = %d, want 100", got)
 	}
-	// Terrain is fed by the map census and the terrain load, and the census
-	// reports a running percentage rather than only completion.
+	// Terrain is fed by the map census, the terrain load and the load-time
+	// remaster (DESIGN_GPU_RENDERER §14.4), and the census reports a running
+	// percentage rather than only completion: half of one of three families is
+	// a sixth of the bar.
 	l.report(content.FamilyMaps, 50)
-	if got := l.percent[1].Load(); got != 25 {
-		t.Errorf("Terrain at half the census = %d, want 25", got)
+	if got := l.percent[1].Load(); got != 16 {
+		t.Errorf("Terrain at half the census = %d, want 16", got)
+	}
+	// Every load drives the remaster family to 100, including one that
+	// synthesizes nothing, so the bar always completes.
+	l.report(content.FamilyMaps, 100)
+	l.report(session.FamilyTerrain, 100)
+	l.report(familyDetailArt, 100)
+	if got := l.percent[1].Load(); got != 100 {
+		t.Errorf("Terrain with every family done = %d, want 100", got)
 	}
 }
 

@@ -43,6 +43,7 @@ type EffectPool interface {
 	Len() int
 	Update(uint32)
 	AppendView(frame.EffectView) bool
+	resolveUnresolvedPrimary(TimingResolver)
 	SnapshotViews() []frame.EffectView
 	RemoveMatching(pool.Handle, pool.Handle, string)
 	SnapshotViewsInto([]frame.EffectView) []frame.EffectView
@@ -84,8 +85,16 @@ func NewEffectServiceWithPool(max int, owner EffectPool) *EffectService {
 // authored frame timing. A nil resolver leaves timing unresolved, which keeps
 // the frame player inactive rather than inventing a lifetime [03 §4.4] [I9].
 func (s *EffectService) SetTimingResolver(resolver TimingResolver) {
-	if s != nil {
-		s.resolver = resolver
+	if s == nil {
+		return
+	}
+	s.resolver = resolver
+	// COB Create can admit named art before the shell has installed its
+	// asset-backed resolver. Hydrate only those unresolved primary players in
+	// the canonical owner; this neither changes record order nor retries from
+	// the per-frame path [03 §1][I6].
+	if resolver != nil && s.owner != nil {
+		s.owner.resolveUnresolvedPrimary(resolver)
 	}
 }
 
@@ -126,8 +135,19 @@ func (s *EffectService) Advance(tick uint32, events []Event) {
 		if !effectKind(e.Kind) {
 			continue
 		}
-		s.admit(tick, e)
+		s.Admit(tick, e)
 	}
+}
+
+// Admit synchronously offers one effect to the canonical fixed pool. It is
+// used by producers whose allocation happens inside an authoritative callback,
+// where retaining a later event queue would change the shared pool's capacity
+// decision [03 §1][I5].
+func (s *EffectService) Admit(tick uint32, e Event) bool {
+	if s == nil || !effectKind(e.Kind) {
+		return false
+	}
+	return s.admit(tick, e)
 }
 
 // Snapshot returns a detached copy of the canonical pool's stable order.
@@ -166,16 +186,16 @@ func copyEffectViews(dst, src []frame.EffectView) []frame.EffectView {
 	return dst
 }
 
-func (s *EffectService) admit(now uint32, e Event) {
+func (s *EffectService) admit(now uint32, e Event) bool {
 	if s.owner != nil && s.owner.Len() >= s.max {
 		s.noteDrop()
-		return
+		return false
 	}
 	id := e.ID
 	if id == 0 {
 		if s.nextID == 0 {
 			s.noteDrop()
-			return
+			return false
 		}
 		id = s.nextID
 		s.nextID++
@@ -232,6 +252,7 @@ func (s *EffectService) admit(now uint32, e Event) {
 	if s.owner != nil {
 		if !s.owner.AppendView(view) {
 			s.noteDrop()
+			return false
 		}
 	} else {
 		// The pool is the normal publisher of per-player liveness and this
@@ -243,6 +264,7 @@ func (s *EffectService) admit(now uint32, e Event) {
 		s.pending = append(s.pending, view)
 	}
 	_ = now // the pool advances once per call; StartTick remains event-authored.
+	return true
 }
 
 func (s *EffectService) removePending(source, target pool.Handle) {

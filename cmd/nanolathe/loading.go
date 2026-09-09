@@ -89,11 +89,16 @@ var retailLoadBars = [retailLoadStages]struct {
 // ours; only the six labels, their geometry and the completion flash are
 // retail's.
 var retailLoadStageOf = map[string]int{
-	content.FamilySides:        0,
-	content.FamilySounds:       0,
-	content.FamilyBuildMenus:   0,
-	content.FamilyMaps:         1,
-	session.FamilyTerrain:      1,
+	content.FamilySides:      0,
+	content.FamilySounds:     0,
+	content.FamilyBuildMenus: 0,
+	content.FamilyMaps:       1,
+	session.FamilyTerrain:    1,
+	// The load-time remaster is map art and is reported on the terrain bar
+	// (DESIGN_GPU_RENDERER §14.4 "When"). Every load that shows this screen
+	// drives the family to 100 even when the remaster is off, because the bar
+	// is the mean of its families.
+	familyDetailArt:            1,
 	content.FamilyUnits:        2,
 	content.FamilyMovement:     2,
 	content.FamilyAIProfiles:   2,
@@ -119,6 +124,10 @@ var retailLoadStageWeight = func() (w [retailLoadStages]int) {
 type loadResult struct {
 	sess *session.Session
 	err  error
+	// detail is the load-time remaster's art for this map, synthesized on the
+	// loader goroutine beside the session and installed at adoption
+	// (DESIGN_GPU_RENDERER §14.4). Nil is "no provider": nearest doubling.
+	detail *client.DetailArt
 }
 
 // loadingState is the model behind the loading screen. The loader runs on its
@@ -239,6 +248,13 @@ func (g *gameShell) loadRetailSavePath(path string) error {
 	if err != nil {
 		return err
 	}
+	// A restored save adopts on the render thread with no loader goroutine,
+	// so the remaster runs inline here and the restore blocks on it. The cache
+	// makes that a file read for any map loaded before; a cold cache costs the
+	// same seconds a fresh load of the map would, once (DESIGN_GPU_RENDERER
+	// §14.4 "When"). It is handed over through pendingDetail exactly as the
+	// loading screen's goroutine hands its result to commitBattleCandidate.
+	g.pendingDetail = detailArtFor(g.opts, g.cs, sess.World, nil)
 	// Retail's battle-restoration dispatcher runs as part of the staging
 	// above and, as its first step, carries the save's own `Summary.maxunits`
 	// into the process-wide configured unit-limit word — never into the
@@ -312,7 +328,18 @@ func (g *gameShell) beginFreshBattleLoad(mapName string, back shellMode, request
 		if err == nil && after != nil {
 			after(authoritative.Session)
 		}
-		state.done <- loadResult{sess: authoritative.Session, err: err}
+		// The load-time remaster runs here, on the loader goroutine, after the
+		// session composes and before the battle is adopted, and reports through
+		// the same progress callback so the terrain bar keeps moving
+		// (DESIGN_GPU_RENDERER §14.4 "When"). A failed load has no world to
+		// remaster; the family still reaches 100 so the bar is not left short.
+		var detail *client.DetailArt
+		if err == nil && authoritative.Session != nil {
+			detail = detailArtFor(g.opts, g.cs, authoritative.Session.World, state.report)
+		} else {
+			state.report(familyDetailArt, 100)
+		}
+		state.done <- loadResult{sess: authoritative.Session, err: err, detail: detail}
 	}()
 }
 
@@ -344,6 +371,11 @@ func (g *gameShell) stepLoading(delta float64) {
 		// [07 "The loading screen"]. A failed load stays on 640x480, where the
 		// screen it returns to belongs.
 		g.applyDisplayMode(clPtr)
+		// The remaster's art belongs to the world this load composed; the
+		// candidate picks it up at the one render-thread adoption point
+		// (commitBattleCandidate), which is also where the terrain reaches the
+		// client (DESIGN_GPU_RENDERER §14.3).
+		g.pendingDetail = res.detail
 		if err := g.enterBattle(res.sess, res.sess.Catalog); err != nil {
 			g.loadingReturn = returnMode
 			g.openMenu(returnMode)

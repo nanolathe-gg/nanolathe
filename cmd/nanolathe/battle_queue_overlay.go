@@ -156,6 +156,12 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 		// radius.
 	}
 	chain := dashChainEntry(b.fs)
+	// The overlay's positions come through the projection and scale with it;
+	// its sprites do not, so the detail view takes the doubled variant of the
+	// dash and icon art — the same nearest doubling the client applies to any
+	// world sprite it has no 2x variant for (DESIGN_GPU_RENDERER §14.2, §14.3).
+	// At scale 1 this is the identity and nothing composed changes.
+	scale := viewScaleOf(b)
 	for _, op := range hud.QueueOverlay(f, opts) {
 		switch op.Kind {
 		case hud.QueuePrimitiveMarker:
@@ -163,7 +169,7 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 				drawQueueLine(c, hud.QueuePoint{X: seg.X0, Y: seg.Y0}, hud.QueuePoint{X: seg.X1, Y: seg.Y1}, c.GUIColor(seg.Color))
 			}
 		case hud.QueuePrimitiveDash:
-			drawDashChain(c, chain, op, project)
+			drawDashChain(c, chain, op, project, scale)
 		case hud.QueuePrimitiveCircle:
 			// The overlay color-index initialization for the circle helper is
 			// not yet available at this presentation seam. A guessed GUI color
@@ -173,7 +179,7 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 				drawQueueLine(c, op.A, op.B, c.GUIColor(op.Color))
 			}
 		case hud.QueuePrimitiveIcon:
-			drawQueueIcon(c, queueIconEntry(b.fs, op.IconCursor), op)
+			drawQueueIcon(c, queueIconEntry(b.fs, op.IconCursor), op, scale)
 		}
 	}
 }
@@ -182,20 +188,45 @@ func drawQueueOverlay(c *client.Client, b *battleSession, f *frame.Frame, tick u
 // segment.  The frame's authored offsets are its hotspot, exactly as for the
 // software cursor: the sprite is placed so that pixel lands on the interpolated
 // point [R-P0-11 §3][fmt gaf "Placement offsets"].
-func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, project func(x, y, z numeric.Fixed) hud.QueuePoint) {
+func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, project func(x, y, z numeric.Fixed) hud.QueuePoint, scale int32) {
 	if entry == nil || len(entry.Frames) == 0 {
 		return
 	}
 	ticksPerFrame := int(entry.Frames[0].Value)
+	// The spacing along the segment is world distance and scales with the
+	// projection; only the sprite itself needs the variant.
 	hud.DashSprites(op.WorldA, op.WorldB, op.DashAge, ticksPerFrame, len(entry.Frames), func(index int, x, y, z numeric.Fixed) {
-		ref := entry.Frames[index]
-		if ref.Frame == nil {
+		f := overlayViewFrame(entry.Frames[index].Frame, scale)
+		if f == nil {
 			return
 		}
 		at := project(x, y, z)
-		c.UIBlit(ref.Frame, int(at.X)-int(ref.Frame.XOffset), int(at.Y)-int(ref.Frame.YOffset))
+		c.UIBlit(f, int(at.X)-int(f.XOffset), int(at.Y)-int(f.YOffset))
 	})
 }
+
+// overlayViewFrame is the world-anchored overlay's own frame selector: the
+// authored frame natively, and its nearest-doubled variant in the detail view,
+// built once per source frame and kept for the process's life
+// (DESIGN_GPU_RENDERER §14.3). Frames are immutable after load, so the source
+// pointer identifies the variant; the cursor GAF this art comes from is loaded
+// once per mounted install, like cursorArt above.
+func overlayViewFrame(f *formats.GAFFrame, scale int32) *formats.GAFFrame {
+	if f == nil || scale < 2 {
+		return f
+	}
+	if variant, ok := overlayDetailFrames[f]; ok {
+		return variant
+	}
+	variant := f.Doubled()
+	overlayDetailFrames[f] = variant
+	return variant
+}
+
+// overlayDetailFrames is the doubled-overlay-art cache. It is presentation
+// state keyed by immutable frames and is only ever looked up, never ranged, so
+// it produces no order [I1][I6].
+var overlayDetailFrames = map[*formats.GAFFrame]*formats.GAFFrame{}
 
 // drawQueueIcon blits the queued-order icon at the order's anchor.  The frame
 // comes from the cursor handle array slot the descriptor's icon byte names, and
@@ -210,7 +241,7 @@ func drawDashChain(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimit
 // indexed GAF bytes, blitted rather than recoloured, and the ring radii are the
 // weapon-definition fields the committed frame does not publish.  Suppressing
 // them keeps a guessed radius or palette entry out of the overlay.
-func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive) {
+func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimitive, scale int32) {
 	if entry == nil || !op.IconKnown {
 		return
 	}
@@ -218,11 +249,11 @@ func drawQueueIcon(c *client.Client, entry *formats.GAFEntry, op hud.QueuePrimit
 	if index < 0 || index >= len(entry.Frames) {
 		return
 	}
-	ref := entry.Frames[index]
-	if ref.Frame == nil {
+	f := overlayViewFrame(entry.Frames[index].Frame, scale)
+	if f == nil {
 		return
 	}
-	c.UIBlit(ref.Frame, int(op.Center.X)-int(ref.Frame.XOffset), int(op.Center.Y)-int(ref.Frame.YOffset))
+	c.UIBlit(f, int(op.Center.X)-int(f.XOffset), int(op.Center.Y)-int(f.YOffset))
 }
 
 // drawQueueLine is the indexed-framebuffer equivalent of retail's integer

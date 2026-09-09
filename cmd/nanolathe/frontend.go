@@ -93,6 +93,13 @@ type gameShell struct {
 	opts Options
 	cs   *contentSet
 
+	// pendingDetail is the load-time remaster's art for the battle the loading
+	// screen has just finished, handed to the candidate at the one render-thread
+	// adoption point and cleared there (DESIGN_GPU_RENDERER §14.4). A battle
+	// adopted by another route — a restored save — leaves it nil and gets the
+	// client's nearest doubling.
+	pendingDetail *client.DetailArt
+
 	assets *menuAssets
 	font   *formats.FNT
 
@@ -787,6 +794,10 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 	}
 	g.battle = nil
 	g.cam = nil
+	// The art the loading goroutine synthesized for this world, if this
+	// candidate is the one that load produced (DESIGN_GPU_RENDERER §14.3).
+	battle.detail = g.pendingDetail
+	g.pendingDetail = nil
 	installBattleClient(clPtr, battle)
 	g.cam = battle.cam
 	// The battle viewport is the presentation surface. Battle composition
@@ -800,6 +811,9 @@ func (g *gameShell) commitBattleCandidate(battle *battleSession) {
 			g.cam.Clamp()
 		}
 	}
+	// `--zoom` is a start-up view scale, so it is applied once the viewport is
+	// the surface's, about the battle viewport's centre (§14.6).
+	applyEntryZoom(g.opts, battle)
 	g.applyRetailVisualOptions(clPtr)
 	g.battle = battle
 	g.battle.returnToMenu = g.returnFromBattle

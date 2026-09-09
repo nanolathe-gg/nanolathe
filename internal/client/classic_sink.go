@@ -185,7 +185,7 @@ func (c *Client) classicModelImage(t *modelTarget) *drawlist.ClassicModelImage {
 		Color: t.color, Coverage: t.covered, Key: t.height,
 		Width: int32(t.width), Height: int32(t.heightPx),
 		OriginX: t.originX, OriginY: t.originY, AnchorX: t.anchorX, AnchorY: t.anchorY,
-		Transparent: t.transparent,
+		Transparent: t.transparent, Blit: c.modelBlitScale(),
 	})
 }
 
@@ -199,7 +199,7 @@ func classicModelTarget(i *drawlist.ClassicModelImage) *modelTarget {
 		color: i.Color, covered: i.Coverage, height: i.Key,
 		width: int(i.Width), heightPx: int(i.Height),
 		originX: i.OriginX, originY: i.OriginY, anchorX: i.AnchorX, anchorY: i.AnchorY,
-		transparent: i.Transparent,
+		transparent: i.Transparent, blit: i.Blit,
 	}
 }
 
@@ -248,7 +248,11 @@ func (s classicSink) Clear() {
 // live camera; a nil terrain clears the destination and a nil camera projects
 // from 0,0, exactly as the direct call did (docs/DESIGN_GPU_RENDERER.md §2.2).
 func (s classicSink) Terrain(t drawlist.Terrain) {
-	BlitTerrain(s.c.indexed, s.c.width, s.c.height, t.Terrain, t.Cam)
+	// The record's detail tiles are used only at the detail scale, where the
+	// blitter copies a 64x64 tile one-to-one; without them it doubles the 32x32
+	// tile by nearest sampling (DESIGN_GPU_RENDERER §14.2, §14.3). The scale
+	// itself rides the camera, which is the record's projection authority.
+	BlitTerrainDetail(s.c.indexed, s.c.width, s.c.height, t.Terrain, t.Cam, t.Detail)
 }
 
 // Sprite replays one GAF-frame or PCX blit. It routes each recorded blit to its
@@ -524,6 +528,19 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 			x1 -= camera.OriginX
 			y1 -= camera.OriginY
 		}
+		// DIVERGENCE from DESIGN_GPU_RENDERER §14.2, made on the evidence of a
+		// 2x capture. The section has the GAF families tile the authored 32x32
+		// frame s-by-s times across the scaled cell so the dithered checker
+		// stays one pixel. In this build the checker is a test on the
+		// DESTINATION pixel — blitFogGAF skips where (dstX+x + dstY + parity)
+		// is even — so it is already one pixel at any scale, and tiling instead
+		// stamps four copies of a cloud edge authored for one cell: the 2x
+		// capture showed a black cross across every fogged boundary cell. The
+		// cell therefore takes the frame's 2x VARIANT in one blit, which keeps
+		// the cloud shape aligned to the scaled cell and keeps the checker one
+		// pixel wide for the reason the section gives. The variant's authored
+		// offsets are doubled with it, so the anchor arithmetic below is
+		// unchanged.
 		if x0 < 0 {
 			x0 = 0
 		}
@@ -566,13 +583,13 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 				entry := c.fogGray[op.Variant]
 				if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
 					frame := entry.Frames[op.Frame].Frame
+					mode := fogBlitGray
 					if op.Patterned {
-						c.blitFogGAF(frame, int(x0), int(y0), fogBlitPatterned)
-					} else {
-						// Plain Gray family is a masked GRAY TABLE remap of the
-						// destination, not a copy of the source art [R-RR16-A §1].
-						c.blitFogGAF(frame, int(x0), int(y0), fogBlitGray)
+						mode = fogBlitPatterned
 					}
+					// Plain Gray family is a masked GRAY TABLE remap of the
+					// destination, not a copy of the source art [R-RR16-A §1].
+					c.blitFogGAF(c.viewFrame(frame), int(x0), int(y0), mode)
 					continue
 				}
 			}
@@ -585,7 +602,7 @@ func (s classicSink) Fog(fg drawlist.Fog) {
 				entry := c.fogBlack[op.Variant]
 				if entry != nil && op.Frame < len(entry.Frames) && entry.Frames[op.Frame].Frame != nil {
 					frame := entry.Frames[op.Frame].Frame
-					c.blitFogGAF(frame, int(x0), int(y0), fogBlitBlack)
+					c.blitFogGAF(c.viewFrame(frame), int(x0), int(y0), fogBlitBlack)
 					continue
 				}
 			}

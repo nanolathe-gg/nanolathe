@@ -183,7 +183,10 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 				continue
 			}
 			x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
-			c.drawLHTHalo(int(x-128), int(y-32), radius, level, options.TerrainCoverage)
+			// The halo is a lit disc in screen pixels, so its radius takes the view
+			// scale while its centre comes through the projection
+			// (DESIGN_GPU_RENDERER §14.2).
+			c.drawLHTHalo(int(x-128), int(y-32), radius*int(c.viewScale()), level, options.TerrainCoverage)
 			stats.Halos++
 		}
 		if d.StripFill != 0 {
@@ -221,7 +224,10 @@ func (c *Client) DrawEffectViews(effects []frame.EffectView, options EffectDrawO
 		x, y := c.cam.WorldToScreen(d.X, d.Y, d.Z)
 		// The named effect art is a plain keyed frame-anchor blit [03 §1]; Anchored
 		// selects the offset-subtracting UIBlitAnchor placement (WU-1.7b).
-		c.emitSprite(drawlist.Sprite{Frame: frame, X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
+		// The load-time remaster covers feature banks only, so an effect frame
+		// resolves to its nearest-doubled variant in the detail view; at the
+		// native scale viewFrame is the identity (DESIGN_GPU_RENDERER §14.3).
+		c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(frame), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
 		stats.Sprites++
 	}
 	return stats
@@ -287,13 +293,16 @@ func (c *Client) fillStripParticle(x, y int, color uint8) bool {
 	// The two-by-two mark is the same clipped solid rectangle fillIndexedRect
 	// writes; drew reports whether any of its pixels land on the surface, which
 	// is exactly whether the rect clips to a non-empty span [03 R-STRIP-01 §2].
+	// A fill's extents take the view scale, so the two-by-two mark stays two
+	// world pixels square (DESIGN_GPU_RENDERER §14.2).
+	side := stripParticleSize * int(c.viewScale())
 	drew := false
-	for dy := 0; dy < stripParticleSize && !drew; dy++ {
+	for dy := 0; dy < side && !drew; dy++ {
 		py := y + dy
 		if py < 0 || py >= c.height {
 			continue
 		}
-		for dx := 0; dx < stripParticleSize; dx++ {
+		for dx := 0; dx < side; dx++ {
 			px := x + dx
 			if px >= 0 && px < c.width {
 				drew = true
@@ -305,7 +314,7 @@ func (c *Client) fillStripParticle(x, y int, color uint8) bool {
 		return false
 	}
 	c.emitFill(drawlist.Fill{
-		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: stripParticleSize, H: stripParticleSize},
+		Rect:  drawlist.Rect{X: int32(x), Y: int32(y), W: int32(side), H: int32(side)},
 		Index: color,
 		Style: drawlist.FillSolid,
 	})

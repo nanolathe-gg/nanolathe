@@ -75,6 +75,7 @@ type modelPageSubject struct {
 	origin  image.Point
 	rect    image.Rectangle
 	faces   []preparedModelFace
+	live    []preparedModelFace
 	outline []modelGPUFace
 	reveal  *drawlist.ModelReveal
 
@@ -282,7 +283,7 @@ func modelSlotBounds(g *drawlist.ModelGeometry) image.Rectangle {
 	// every subject of the frame (docs/DESIGN_GPU_RENDERER.md §13 "CPU/allocation
 	// policy"). The producer's box is never empty here, so the result is the same.
 	x0, y0, x1, y1 := int32(b.Min.X), int32(b.Min.Y), int32(b.Max.X), int32(b.Max.Y)
-	for _, faces := range [][]drawlist.ModelFace{g.Faces, g.Outline} {
+	for _, faces := range [][]drawlist.ModelFace{g.Faces, g.LiveFaces, g.Outline} {
 		for i := range faces {
 			for _, v := range faces[i].Vertices {
 				x0, y0 = min(x0, v.X), min(y0, v.Y)
@@ -351,13 +352,21 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 	if !ok {
 		return
 	}
+	var liveCrosses []bool
+	if len(g.LiveFaces) != 0 {
+		livePacket := *g
+		livePacket.Faces = g.LiveFaces
+		if liveCrosses, ok = r.modelFacesSupported(&livePacket); !ok {
+			return
+		}
+	}
 	var ssCrosses []bool
 	if ss := g.Supersample; ss != nil {
 		if ssCrosses, ok = r.modelFacesSupported(ss); !ok {
 			return
 		}
 	}
-	slot, ok := r.placeModelSubject(g, crosses, ssCrosses, &a.page, &a.resolves)
+	slot, ok := r.placeModelSubject(g, crosses, ssCrosses, liveCrosses, &a.page, &a.resolves)
 	if !ok {
 		// The frame does not fit; this subject takes the per-subject route at
 		// commit time rather than disappearing from the frame.
@@ -371,7 +380,7 @@ func (r *Renderer) reserveModelSlot(g *drawlist.ModelGeometry) {
 // placeModelSubject reserves the native slot and the doubled slot a structure
 // resolve needs, and appends the page subjects that rasterize them. Both land on
 // the same page, so a doubled body costs no pass of its own.
-func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCrosses []bool, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
+func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCrosses, liveCrosses []bool, page *modelPage, resolves *[]modelResolveJob) (modelSlot, bool) {
 	local := modelSlotBounds(g)
 	if local.Empty() {
 		return modelSlot{}, false
@@ -384,9 +393,17 @@ func (r *Renderer) placeModelSubject(g *drawlist.ModelGeometry, crosses, ssCross
 	slot := modelSlot{page: page, rect: rect, box: modelLocalBounds(g).Add(origin)}
 	sub := modelPageSubject{
 		origin: origin, rect: rect, keyed: g.KeyPlane,
-		waterline: g.Waterline, waterlineKey: g.WaterlineKey, digger: g.Digger, diggerKey: g.DiggerKey,
+	}
+	if len(g.Children) == 0 {
+		sub.waterline, sub.waterlineKey = g.Waterline, g.WaterlineKey
+		sub.digger, sub.diggerKey = g.Digger, g.DiggerKey
 	}
 	sub.outline = r.prepareModelOutline(g)
+	if len(g.LiveFaces) != 0 {
+		livePacket := *g
+		livePacket.Faces = g.LiveFaces
+		sub.live = r.prepareModelFaces(&livePacket, origin, liveCrosses)
+	}
 	if ss := g.Supersample; ss != nil {
 		// The doubled body and its reveal rasterize into a doubled slot on the
 		// same page; the native slot receives the resolve, then the native
@@ -496,15 +513,21 @@ func (r *Renderer) flushModelPage(p *modelPage, resolves []modelResolveJob) {
 	// wrote somewhere else.
 	r.modelAtlas.lastDst = nil
 	r.clearModelPage(p)
-	r.buildModelFaceRuns(p, false)
+	r.buildModelFaceRuns(p, false, false)
 	r.drawModelKeyRuns(p)
 	r.drawModelColourRuns(p)
 	r.drawModelReveal(p)
 	r.drawModelResolvePass(resolves, true)
-	r.buildModelFaceRuns(p, true)
+	r.buildModelFaceRuns(p, true, false)
 	r.drawModelKeyRuns(p)
 	r.drawModelRevealCopyBack(p)
 	r.drawModelResolvePass(resolves, false)
+	r.drawModelColourRuns(p)
+	// Live pieces use the resolved cached key and colour as their starting
+	// plane. Their own equal-key writes are later, so an index-1 live texel
+	// erases cached colour while retaining the key [03 R-REN-03A §4–§5].
+	r.buildModelFaceRuns(p, false, true)
+	r.drawModelKeyRuns(p)
 	r.drawModelColourRuns(p)
 	r.drawModelClip(p)
 }
@@ -542,7 +565,7 @@ func fillModelRegion(img *ebiten.Image, rect image.Rectangle, c color.RGBA) {
 // Source face and scanline order is preserved inside each subject, so an
 // equal-key tie still goes to the later face [03 R-REN-03A §3]; subject order
 // within a page is free because slots are disjoint.
-func (r *Renderer) buildModelFaceRuns(p *modelPage, outline bool) {
+func (r *Renderer) buildModelFaceRuns(p *modelPage, outline, live bool) {
 	a := &r.modelAtlas
 	a.verts, a.idx, a.runs = a.verts[:0], a.idx[:0], a.runs[:0]
 	run := modelFaceRun{keyed: true}
@@ -629,10 +652,14 @@ func (r *Renderer) buildModelFaceRuns(p *modelPage, outline bool) {
 				}
 				continue
 			}
+			faces := s.faces
+			if live {
+				faces = s.live
+			}
 			// The texture page is resolved once per source face at preparation
 			// time; every strip of one face shares it.
-			for j := range s.faces {
-				f := &s.faces[j]
+			for j := range faces {
+				f := &faces[j]
 				textured := f.face.Texture != nil
 				for _, strip := range f.strips {
 					emit(strip.Vertices, modelQuadIndices, f.tex, textured, strip.Color, strip.Shaded, s.keyed, s.origin, 0)
@@ -902,7 +929,7 @@ func (r *Renderer) rasterizeModelOverflow(g *drawlist.ModelGeometry, set int) (m
 	a.overflowResolves = a.overflowResolves[:0]
 	// The fallback route re-prepares the subject outside the admission pass, so
 	// its faces recompute their own ring test.
-	slot, ok := r.placeModelSubject(g, nil, nil, page, &a.overflowResolves)
+	slot, ok := r.placeModelSubject(g, nil, nil, nil, page, &a.overflowResolves)
 	if !ok {
 		return modelSlot{}, false
 	}

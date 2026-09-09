@@ -21,4 +21,11 @@
 // Terrain, sprites, UI, fog, models and their palette composites execute on the
 // device. Model stages still awaiting GPU support carry explicit omissions;
 // there is no CPU model-image fallback (DESIGN_GPU_RENDERER §9–§10).
+//
+// The executor replays recorded screen coordinates, so the detail view scale is
+// almost entirely the recorder's business (§14.2). Two things here read it: the
+// terrain atlas, which holds one 32·s square per tile so the tile blit stays a
+// 1:1 copy (§14.5), and the fog pass, whose cell lattice is 32·s and whose GAF
+// cell is drawn from the frame's 2× variant. Sprite variants arrive as ordinary
+// frames and model geometry arrives already projected and scaled.
 package gpurender

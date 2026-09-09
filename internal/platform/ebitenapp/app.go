@@ -2,6 +2,7 @@ package ebitenapp
 
 import (
 	"fmt"
+	"os"
 	"sync/atomic"
 	"time"
 
@@ -51,6 +52,10 @@ type app struct {
 	// (docs/DESIGN_GPU_RENDERER.md §2.4).
 	mode RendererMode
 	gpu  *gpurender.Renderer
+	// rendererToggles is the client's executor-swap request count this adapter
+	// has already acted on. Update compares it with the client's own count, so
+	// one F10 press swaps once (docs/DESIGN_GPU_RENDERER.md §14.6).
+	rendererToggles int
 	// windowW/windowH are the size last pushed to the window system. The
 	// client owns the logical size and the adapter only follows it, so the
 	// load transition's Client.Resize moves the window on the next update
@@ -103,6 +108,7 @@ func (a *app) Update() error {
 	a.c.SetFocused(ebiten.IsFocused())
 	a.stepClient()
 	a.syncPointerCapture()
+	a.serviceRendererRequest()
 	a.presentPending = true
 	a.updatedAt = time.Now()
 	if a.c.ExitRequested() {
@@ -111,6 +117,44 @@ func (a *app) Update() error {
 		return ebiten.Termination
 	}
 	return nil
+}
+
+// serviceRendererRequest applies the client's pending executor swaps — F10 of
+// docs/DESIGN_GPU_RENDERER.md §14.6. The swap happens between two Updates, so
+// no Draw ever sees a half-changed adapter, and the retained screen keeps the
+// last presented frame on the display across it.
+//
+// Classic cannot present a blended view, so interpolation is turned off when it
+// takes over and the modern path re-arms it itself on its next Draw (§13.5).
+// The classic path also presents only on a pending update, so the swap sets
+// that flag: without it the swapped-in executor would wait for the next 30 Hz
+// Update before anything reached the screen.
+func (a *app) serviceRendererRequest() {
+	requested := a.c.RendererToggleCount()
+	if requested == a.rendererToggles {
+		return
+	}
+	a.rendererToggles = requested
+	if a.mode == RendererModern {
+		a.mode = RendererClassic
+		a.c.SetInterpolation(false)
+		// Original draws the authored art: the synthesized 2x tiles and
+		// sprites are an Enhanced feature (DESIGN_GPU_RENDERER §14.3).
+		a.c.SetEnhanced(false)
+		a.interpolating = false
+	} else {
+		a.mode = RendererModern
+		a.c.SetEnhanced(true)
+	}
+	a.presentPending = true
+	fmt.Fprintf(os.Stderr, "nanolathe: renderer %s\n", rendererName(a.mode))
+}
+
+func rendererName(mode RendererMode) string {
+	if mode == RendererModern {
+		return "modern"
+	}
+	return "classic"
 }
 
 func (a *app) stepClient() {
@@ -190,6 +234,7 @@ func (a *app) drawModern(screen *ebiten.Image, width, height int) {
 		// ticks; the client blends the world with the fraction the battle
 		// produces and the camera with the update phase above (§13.5) [I6].
 		a.c.SetInterpolation(true)
+		a.c.SetEnhanced(true)
 		a.interpolating = true
 	}
 	list := a.c.RecordFrame()

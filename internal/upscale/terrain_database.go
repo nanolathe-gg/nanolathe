@@ -1,4 +1,4 @@
-package main
+package upscale
 
 // The example database: the parent/child tile records built from the map's
 // own authored pixels, their quantized feature vectors, the weighted sampler
@@ -168,9 +168,9 @@ func quantizeFeatures(sums *[featureDims]float32) [featureDims]int8 {
 	return out
 }
 
-func makeTileAtlas(data dataset) tileAtlas {
-	mapWidth := data.metadata.Width / sourceTileSize
-	mapHeight := data.metadata.Height / sourceTileSize
+func makeTileAtlas(data terrainData) tileAtlas {
+	mapWidth := data.width / sourceTileSize
+	mapHeight := data.height / sourceTileSize
 	first := make([]int, 0, mapWidth*mapHeight)
 	tileMap := make([]int, mapWidth*mapHeight)
 	seen := make(map[string]int)
@@ -178,7 +178,7 @@ func makeTileAtlas(data dataset) tileAtlas {
 	for placement := range tileMap {
 		tileY, tileX := placement/mapWidth, placement%mapWidth
 		for row := range sourceTileSize {
-			source := (tileY*sourceTileSize+row)*data.metadata.Width + tileX*sourceTileSize
+			source := (tileY*sourceTileSize+row)*data.width + tileX*sourceTileSize
 			copy(tile[row*sourceTileSize:(row+1)*sourceTileSize], data.high[source:source+sourceTileSize])
 		}
 		key := string(tile[:])
@@ -200,10 +200,10 @@ func makeTileAtlas(data dataset) tileAtlas {
 		tileY, tileX := placement/mapWidth, placement%mapWidth
 		cellY, cellX := (identifier/atlasColumns)*cellSize, (identifier%atlasColumns)*cellSize
 		for y := range cellSize {
-			sourceY := clamp(tileY*sourceTileSize+y-haloSize, 0, data.metadata.Height-1)
+			sourceY := clamp(tileY*sourceTileSize+y-haloSize, 0, data.height-1)
 			for x := range cellSize {
-				sourceX := clamp(tileX*sourceTileSize+x-haloSize, 0, data.metadata.Width-1)
-				atlas.pix[(cellY+y)*atlas.width+cellX+x] = data.high[sourceY*data.metadata.Width+sourceX]
+				sourceX := clamp(tileX*sourceTileSize+x-haloSize, 0, data.width-1)
+				atlas.pix[(cellY+y)*atlas.width+cellX+x] = data.high[sourceY*data.width+sourceX]
 			}
 		}
 	}
@@ -263,7 +263,7 @@ func buildDatabase(atlas tileAtlas, alp []byte, workers int) database {
 	return result
 }
 
-func prepareDatabaseCandidates(db *database, data dataset) {
+func prepareDatabaseCandidates(db *database, data terrainData) {
 	rareBright := rareBrightIndices(data)
 	for position, parent := range db.low {
 		if db.valid[position] == 0 {
@@ -283,7 +283,7 @@ func prepareDatabaseCandidates(db *database, data dataset) {
 // rareBrightIndices marks palette entries that are both rare in the source
 // map and bright: copying one of those into a block whose parent differs
 // scatters isolated highlights, so such blocks are excluded as examples.
-func rareBrightIndices(data dataset) [paletteSize]bool {
+func rareBrightIndices(data terrainData) [paletteSize]bool {
 	var sourceCounts [paletteSize]int
 	for _, index := range data.high {
 		sourceCounts[index]++
@@ -330,7 +330,7 @@ func indexDatabaseCandidates(db *database) {
 // take part in random draws but not in propagation.
 const supplementLimit = 8192
 
-func supplementMissingParents(db *database, records *[]record, data dataset, contributions []float32,
+func supplementMissingParents(db *database, records *[]record, data terrainData, contributions []float32,
 	workers int) int {
 	dimensions := featureDims
 	var missing [paletteSize]bool
@@ -345,7 +345,7 @@ func supplementMissingParents(db *database, records *[]record, data dataset, con
 		return 0
 	}
 	rareBright := rareBrightIndices(data)
-	width, height := data.metadata.Width, data.metadata.Height
+	width, height := data.width, data.height
 	reduce := func(y, x int) byte {
 		y = clamp(y, 0, height-2)
 		x = clamp(x, 0, width-2)

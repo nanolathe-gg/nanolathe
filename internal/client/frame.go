@@ -267,6 +267,10 @@ func (c *Client) drawTerrainPrep() {
 		// OriginX/OriginY describe the record from the shell viewport origin 0,0
 		// (a tile at world pixel px lands at px-camX): the classic sink projects
 		// through Cam, and a later unit's GPU sink uses these fields instead.
+		// Scale and Detail are the detail view's operands: the record carries the
+		// scale it was projected at and the 2x tile set when one is installed, so
+		// an executor that cannot reach client state builds the same picture
+		// (DESIGN_GPU_RENDERER §14.2, §14.3).
 		c.emitTerrain(drawlist.Terrain{
 			Terrain: c.terrain,
 			Cam:     c.cam,
@@ -274,6 +278,8 @@ func (c *Client) drawTerrainPrep() {
 			OriginY: c.cam.Z,
 			DstW:    int32(c.width),
 			DstH:    int32(c.height),
+			Scale:   c.viewScale(),
+			Detail:  c.detailTiles(),
 		})
 	}
 	// A frontend without terrain remains the cleared indexed surface. Retail

@@ -144,7 +144,12 @@ func runShot(opts Options, cs *contentSet) error {
 	// defaults. Without this a capture could never show a structure composed
 	// at 1x or a model drawn unshaded [07 R-FE-01 §6].
 	applyVisualOptions(cl, loadedSettings().Display)
-	b, err = composeBattleEntry(sess, authoritative.Session.Catalog, cs, cl, nil)
+	// The capture route runs the load-time remaster inline — it has no loader
+	// goroutine and no bar to report against — so a 2x capture shows the same
+	// synthesized art the window would (DESIGN_GPU_RENDERER §14.4 "When"). At
+	// scale 1 the provider is never consulted, so a native capture is
+	// unchanged by it.
+	b, err = composeBattleEntryWithDetail(sess, authoritative.Session.Catalog, cs, cl, nil, captureDetailArt(opts, cs, sess.World))
 	if err != nil {
 		return err
 	}
@@ -238,16 +243,17 @@ func runShot(opts Options, cs *contentSet) error {
 		}
 	}
 
-	// Zoom is presentation-only [F-P1-008]; it is applied after the ticks so
-	// the simulation is identical to an unzoomed capture of the same seed.
-	if opts.ShotZoom != 0 && opts.ShotZoom != 1 && b.cam != nil {
+	// The view scale is presentation-only [F-P1-008]; it is applied after the
+	// ticks so the simulation is identical to a native capture of the same seed
+	// (DESIGN_GPU_RENDERER §14.1).
+	if opts.Zoom > 1 && b.cam != nil {
 		fx, fy := int32(shotW/2), int32(shotH/2)
 		if opts.ShotFocus != "" {
 			if _, err := fmt.Sscanf(opts.ShotFocus, "%d,%d", &fx, &fy); err != nil {
 				return fmt.Errorf("nanolathe: shot: --shot-focus wants \"x,y\", got %q", opts.ShotFocus)
 			}
 		}
-		b.cam.SetScaleAbout(fx, fy, float32(opts.ShotZoom))
+		b.cam.SetScaleAbout(fx, fy, int32(opts.Zoom))
 	}
 
 	// `--profile-seconds` is the render-side measurement path. It drives the
@@ -300,6 +306,10 @@ func runShot(opts Options, cs *contentSet) error {
 	// writes the --shot PNG [DESIGN_GPU_RENDERER.md §2.5]. classic is the
 	// reference (C-G11) and its output is unchanged; modern and both run the GPU
 	// executor through a hidden one-frame Ebitengine loop.
+	// The synthesized 2x art is an Enhanced feature: a modern capture records
+	// it and a classic capture records the authored art; "both" records once
+	// for the executor under test, the modern one (DESIGN_GPU_RENDERER §14.3).
+	cl.SetEnhanced(shotRenderer != "classic")
 	switch shotRenderer {
 	case "classic":
 		if err := encodeShotPNG(opts.Shot, cl.ComposeFrame()); err != nil {
@@ -360,8 +370,11 @@ func validateShotOptions(opts Options) error {
 		if opts.ShotModelHeading > 65535 {
 			return fmt.Errorf("nanolathe: shot model: --shot-model-heading must be 0..65535, got %d", opts.ShotModelHeading)
 		}
-		if !(opts.ShotModelScale >= 0.25 && opts.ShotModelScale <= 4) {
-			return fmt.Errorf("nanolathe: shot model: --shot-model-scale must be 0.25..4, got %.3g", opts.ShotModelScale)
+		// The model preview magnifies through the camera's view scale, which is
+		// now an integer (DESIGN_GPU_RENDERER §14.1), so the fractional
+		// magnifications this once accepted are gone.
+		if opts.ShotModelScale != 0 && opts.ShotModelScale != 1 && opts.ShotModelScale != 2 {
+			return fmt.Errorf("nanolathe: shot model: --shot-model-scale must be 1 or 2, got %.3g", opts.ShotModelScale)
 		}
 		if opts.ShotModelPose != "" && opts.ShotModelPose != "open" && opts.ShotModelPose != "activated" {
 			return fmt.Errorf("nanolathe: shot model: --shot-model-pose wants \"open\" or \"activated\", got %q", opts.ShotModelPose)

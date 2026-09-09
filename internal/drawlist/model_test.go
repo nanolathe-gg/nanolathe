@@ -9,6 +9,7 @@ func TestModelGeometryCloneOwnsFaceStorage(t *testing.T) {
 			Color:    7,
 			Vertices: []ModelVertex{{X: 1, Y: 2, Key: -3, U: 4, V: 5, Shade: 6}, {X: 7, Y: 8, Key: 9}},
 		}},
+		LiveFaces: []ModelFace{{Vertices: []ModelVertex{{X: 10, Y: 11, Key: 12}}}},
 	}
 	classic := &ClassicModel{Body: &ClassicModelImage{
 		Color: []byte{8, 9}, Coverage: []bool{true, false}, Key: []byte{50, 51},
@@ -27,6 +28,10 @@ func TestModelGeometryCloneOwnsFaceStorage(t *testing.T) {
 	}
 	if got := clone.model[0].Geometry.Faces[0].Vertices[0].Key; got != -3 {
 		t.Fatalf("cloned pre-interpolation key = %d, want -3", got)
+	}
+	geometry.LiveFaces[0].Vertices[0].X = 99
+	if got := clone.model[0].Geometry.LiveFaces[0].Vertices[0].X; got != 10 {
+		t.Fatalf("cloned geometry aliases live face vertices: X=%d, want 10", got)
 	}
 	classic.Body.Color[0], classic.Body.Coverage[0], classic.Body.Key[0] = 99, false, 99
 	if got := clone.model[0].Classic.Body.Color[0]; got != 8 {

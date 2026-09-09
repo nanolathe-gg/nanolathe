@@ -309,7 +309,22 @@ type Terrain struct {
 	// Cam is the live camera the classic executor reads for per-tile projection.
 	// Clone replaces this pointer with an owned camera value.
 	Cam *camera.Camera
+	// Scale is the presentation view scale this record was projected at: 1
+	// natively and 2 in the detail view, with zero read as 1
+	// (DESIGN_GPU_RENDERER §14.2). A tile's screen rectangle is 32*Scale on a
+	// side. It is additive: an executor that ignores it draws the native view.
+	Scale int32
+	// Detail is the detail tile set of DESIGN_GPU_RENDERER §14.3 — one 64x64
+	// index tile per Terrain.TileSet entry, in the same order — used only at
+	// Scale 2. A nil slice means the 32x32 tiles are doubled by nearest
+	// sampling instead. The tiles are immutable after load, so Clone copies the
+	// slice header and shares the tiles [I6].
+	Detail [][DetailTilePixels]byte
 }
+
+// DetailTilePixels is the pixel count of one detail tile, 64x64
+// (DESIGN_GPU_RENDERER §14.3).
+const DetailTilePixels = 64 * 64
 
 // Cursor records the software cursor blit (docs/DESIGN_GPU_RENDERER.md §2.1),
 // replayed as drawCursor [07 §8]. The GAF frame reference is immutable after
@@ -523,6 +538,9 @@ func (l *List) Replay(s Sink) {
 func (l *List) Clone() List {
 	var c List
 	c.order = append([]tag(nil), l.order...)
+	// The Terrain records copy by value, which carries the Detail slice HEADER:
+	// the detail tiles are immutable after load, so the clone shares them the
+	// way it shares the world terrain itself (DESIGN_GPU_RENDERER §14.3) [I6].
 	c.terrain = append([]Terrain(nil), l.terrain...)
 	for i, terrain := range l.terrain {
 		if terrain.Cam != nil {

@@ -14,35 +14,39 @@ import (
 // classic byte writers' result for every pixel of the fog region in one draw.
 // Three numbers fix its geometry, and they have to agree with one another:
 //
-//   - fogCellPixels is the hard 32-pixel fog cell [03 §3.3].
-//   - fogAtlasTile is the square the atlas reserves for one fog GAF frame,
-//     measured from the CELL ORIGIN rather than from the frame's own top-left:
-//     the shipped frames carry their placement in the signed XOffset/YOffset
-//     header words and are drawn at `cell origin - offset`, so a frame can
-//     reach past its own 32×32 cell [03 §3.3][R-RR16-A §3][fmt gaf]. Baking the
-//     authored offset into the tile is what lets the shader address a frame
-//     from the cell index alone, with no per-frame size or offset lookup.
+//   - fogCellPixels is the hard 32-pixel fog cell [03 §3.3]. At the detail view
+//     scale the cell rectangle is 32·s (§14.2), so the pass takes the scale on a
+//     vertex lane and multiplies; every number below scales with it.
+//   - fogAtlasNativeTile is the square the atlas reserves for one fog GAF frame
+//     at the native scale, measured from the CELL ORIGIN rather than from the
+//     frame's own top-left: the shipped frames carry their placement in the
+//     signed XOffset/YOffset header words and are drawn at `cell origin -
+//     offset`, so a frame can reach past its own 32×32 cell
+//     [03 §3.3][R-RR16-A §3][fmt gaf]. Baking the authored offset into the tile
+//     is what lets the shader address a frame from the cell index alone, with no
+//     per-frame size or offset lookup. At scale s the tile is fogAtlasTile(s),
+//     and the frame stored in it is the frame's 2× variant, whose pixels, size
+//     and authored offsets are all doubled.
 //   - the shader visits the 2×2 block of cells whose origins can reach a pixel.
-//     A cell one column to the left contributes at offsets 32..63, and a cell
-//     two columns to the left would start at 64 — so a 2×2 neighbourhood covers
-//     offsets 0..63 exactly, and fogAtlasTile is 64 to match it. A frame that
-//     needed more would need a wider neighbourhood; the atlas builder counts
+//     A cell one column to the left contributes at offsets 32·s..64·s−1, and a
+//     cell two columns to the left would start at 64·s — so a 2×2 neighbourhood
+//     covers offsets 0..64·s−1 exactly, and the tile is 64·s to match it. A frame
+//     that needed more would need a wider neighbourhood; the atlas builder counts
 //     such a frame as oversized rather than clipping it silently.
 //
 // Every frame of the retail anims/fog.gaf fits: the largest reach past a cell
 // origin is 33 pixels (the 33×19 gray unions and the 21×20 gray corner at
-// y-offset 13), and no frame reaches a negative offset. TestFogAtlasFitsRetail
-// re-measures that against the installed corpus.
+// y-offset 13), and no frame reaches a negative offset. Doubling scales both the
+// reach and the tile, so the detail view's variants fit for the same reason.
+// TestFogAtlasFitsRetail re-measures that against the installed corpus.
 const (
-	fogCellPixels = render.FogTilePixels // 32 [03 §3.3]
-	fogAtlasTile  = 64
+	fogCellPixels      = render.FogTilePixels // 32 [03 §3.3]
+	fogAtlasNativeTile = 64
 	// One atlas row per family variant, one column per nibble value 1..14.
 	fogAtlasCols = 14
 	fogVariants  = 4
 	fogAtlasRows = 2 * fogVariants // Gray1-4 then Black1-4 [03 §3.3]
 	fogSlots     = fogVariants * fogAtlasCols
-	fogAtlasW    = fogAtlasCols * fogAtlasTile
-	fogAtlasH    = fogAtlasRows * fogAtlasTile
 )
 
 // The per-cell grid texel encoding. Red carries the channel-one operation and
@@ -77,9 +81,14 @@ const (
 // Sources: image 0 is the pre-fog read copy of the composite (colour, sampled
 // 1:1 under the fragment); image 1 is the per-cell grid; image 2 is the fog GAF
 // atlas (index in red, opacity flag in green); image 3 is the table atlas, whose
-// PAL row resolves the dark index and the black-family frames. The lattice origin
-// and the checker parity ride the vertex custom attributes, so no uniform map is
-// built per frame.
+// PAL row resolves the dark index and the black-family frames. The lattice origin,
+// the checker parity and the view scale ride the vertex custom attributes, so no
+// uniform map is built per frame.
+//
+// The view scale multiplies the cell edge and the atlas tile (§14.2, §14.5). The
+// checker is not scaled: it is a test on the DESTINATION pixel, so it stays one
+// pixel wide at any scale on its own, which is why the cell takes the frame's 2×
+// variant in one blit rather than tiling the native frame across the cell.
 //
 // The per-pixel values are the byte writers' operations evaluated in colour
 // (§13.3): the gray fills and the gray-family frames desaturate to the luminance
@@ -100,7 +109,7 @@ const (
 // clamps a cell's rectangle to the framebuffer BEFORE handing the origin to the
 // fog GAF blit, so a cell that hangs off the left or top edge draws its frame
 // from the clamped origin. `anchor` is that clamped origin; `raw` is the
-// unclamped one the 32-pixel fills are measured from.
+// unclamped one the 32·s-pixel fills are measured from.
 var fogPassShaderSource = fmt.Sprintf(`//kage:unit pixels
 
 package main
@@ -136,10 +145,14 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	// The fragment's screen pixel and the pre-fog colour under it.
 	p := floor(dstPos.xy - imageDstOrigin())
 	col := imageSrc0At(srcPos).rgb
+	// The view scale: the cell edge and the atlas tile are both measured in it.
+	viewScale := max(custom.w, 1.0)
+	cellPix := cellPixels * viewScale
+	tilePix := atlasTile * viewScale
 	// The byte writers' checker phase: write where (x + y + parity) & 1 == 1.
 	checker := mod(p.x+p.y+custom.z, 2.0)
-	// The cell whose unclamped 32-pixel rectangle contains this pixel.
-	cell := floor((p - custom.xy) / cellPixels)
+	// The cell whose unclamped 32·s-pixel rectangle contains this pixel.
+	cell := floor((p - custom.xy) / cellPix)
 	for j := 0; j < 2; j++ {
 		for i := 0; i < 2; i++ {
 			c := cell + vec2(float(i)-1.0, float(j)-1.0)
@@ -149,11 +162,11 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 			if code1 == 0.0 && code0 == 0.0 {
 				continue
 			}
-			raw := custom.xy + c*cellPixels
+			raw := custom.xy + c*cellPix
 			anchor := max(raw, vec2(0.0, 0.0))
 			d := p - anchor
-			inCell := p.x >= raw.x && p.x < raw.x+cellPixels && p.y >= raw.y && p.y < raw.y+cellPixels
-			inTile := d.x >= 0.0 && d.x < atlasTile && d.y >= 0.0 && d.y < atlasTile
+			inCell := p.x >= raw.x && p.x < raw.x+cellPix && p.y >= raw.y && p.y < raw.y+cellPix
+			inTile := d.x >= 0.0 && d.x < tilePix && d.y >= 0.0 && d.y < tilePix
 			// Channel one renders before channel zero.
 			if code1 == ch1GrayFill {
 				if inCell {
@@ -172,7 +185,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 				}
 				row := floor(slot / atlasCols)
 				tileCol := slot - row*atlasCols
-				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(tileCol*atlasTile+d.x+0.5, row*atlasTile+d.y+0.5))
+				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(tileCol*tilePix+d.x+0.5, row*tilePix+d.y+0.5))
 				if t.g >= 0.5 {
 					if dithered {
 						if checker > 0.5 {
@@ -191,7 +204,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 				slot := code0 - ch0Black
 				row := floor(slot / atlasCols)
 				tileCol := slot - row*atlasCols
-				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(tileCol*atlasTile+d.x+0.5, (blackRow0+row)*atlasTile+d.y+0.5))
+				t := imageSrc2AtFromSrc0Pos(imageSrc0Origin() + vec2(tileCol*tilePix+d.x+0.5, (blackRow0+row)*tilePix+d.y+0.5))
 				if t.g >= 0.5 {
 					col = palAt(floor(t.r*255.0 + 0.5))
 				}
@@ -201,7 +214,7 @@ func Fragment(dstPos vec4, srcPos vec2, color vec4, custom vec4) vec4 {
 	return vec4(col, 1.0)
 }
 `,
-	fogCellPixels, fogAtlasTile, fogAtlasCols, fogVariants, fogSlots,
+	fogCellPixels, fogAtlasNativeTile, fogAtlasCols, fogVariants, fogSlots,
 	int(render.FogDarkPaletteIndex),
 	fogCh1GrayFill, fogCh1PatFill, fogCh1GrayPlain, fogCh0Solid, fogCh0Black,
 	tableRowPAL)

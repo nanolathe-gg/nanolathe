@@ -5,7 +5,9 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/construction"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
@@ -42,6 +44,11 @@ const (
 	// descriptor" by name, which HumanOrder cannot express: its 1..14 codes are
 	// the latch bytes of [07 §9] and none of them is self-destruct.
 	HumanSelfDestruct
+	// HumanNoShake and HumanATM are local typed-command mutations. They cross
+	// the same authoritative input boundary as ordinary battle commands rather
+	// than changing the live session from presentation code [07 R-CAM-01 §6].
+	HumanNoShake
+	HumanATM
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -533,7 +540,29 @@ func removeQueuedWorldOrder(actor *units.Unit, kind orders.ID, target pool.Handl
 }
 
 func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
-	if s == nil || s.Units == nil {
+	if s == nil {
+		return
+	}
+	switch c.Kind {
+	case HumanNoShake:
+		s.ToggleNoShake()
+		return
+	case HumanATM:
+		if s.Mission != nil && s.Mission.Type == mission.TypeCampaign {
+			return
+		}
+		if s.Econ == nil || int(s.LocalOwner) >= len(s.Econ.Players) {
+			return
+		}
+		p := &s.Econ.Players[s.LocalOwner]
+		if !p.Exists {
+			return
+		}
+		economy.CreditSpawn(p, economy.Metal, 1000)
+		economy.CreditSpawn(p, economy.Energy, 1000)
+		return
+	}
+	if s.Units == nil {
 		return
 	}
 	switch c.Kind {

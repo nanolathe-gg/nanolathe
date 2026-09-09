@@ -140,9 +140,12 @@ func MinimapViewportRect(cam *camera.Camera, m camera.Minimap, playW, playH int3
 	viewW &^= 15
 	viewH &^= 15
 	// Retail's camera origin, from this build's framebuffer-origin camera
-	// [03 §4.1][03 R-MM-01 §1].
-	camX := cam.X + camera.OriginX
-	camZ := cam.Z + camera.OriginY
+	// [03 §4.1][03 R-MM-01 §1]. The leading inset is the camera's own, not the
+	// authored constant: at the detail view the inset covers half as much world
+	// (128 screen pixels are 64 world pixels), and BattleViewOrigin is the one
+	// definition of that conversion — the same one BattleView above already
+	// uses for the span (DESIGN_GPU_RENDERER §14.2).
+	camX, camZ := cam.BattleViewOrigin()
 
 	// Signed truncating divides throughout, as retail's are [03 R-MM-01 §1].
 	left := m.PadX + int32(int64(camX)*int64(m.W)/int64(playW))

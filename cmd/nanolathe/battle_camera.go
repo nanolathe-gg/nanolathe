@@ -196,8 +196,9 @@ func (b *battleSession) scrollSetting() byte { // [07 §10] [02 "Settings"]
 	if b == nil {
 		return byte(settings.DefaultScrollSpeed)
 	}
-	if b.scrollSpeedByte == 0 {
+	if !b.scrollSpeedPrimed {
 		b.scrollSpeedByte = b.readScrollSetting()
+		b.scrollSpeedPrimed = true
 	}
 	return b.scrollSpeedByte
 }
@@ -216,7 +217,7 @@ func (b *battleSession) readScrollSetting() byte {
 		s, _ := settings.Load()
 		ss = s.ScrollSpeed
 	}
-	if ss <= 0 || ss > 255 {
+	if ss < 0 || ss > 255 {
 		ss = settings.DefaultScrollSpeed
 	}
 	return byte(ss)
@@ -232,6 +233,7 @@ func (b *battleSession) primeScrollSetting() {
 		return
 	}
 	b.scrollSpeedByte = b.readScrollSetting()
+	b.scrollSpeedPrimed = true
 }
 
 // refreshScrollDelta advances the scroll pass's clock and returns this host

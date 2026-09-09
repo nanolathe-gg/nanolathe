@@ -99,13 +99,24 @@ func (c *Client) drawUnitLabels(cur *frame.Frame, ok bool) {
 		// sy0 is the section's projection, the anchor row less the viewport's
 		// Y origin; both rows are then carried into the surface's
 		// origin-removed space. See the geometry note above.
+		//
+		// Each row offset is an authored screen offset from the unit's model
+		// anchor, so it takes the view scale: at the detail scale the model is
+		// twice as tall and the bar has to sit twice as far below the anchor to
+		// stay clear of it (DESIGN_GPU_RENDERER §14.2). The offset that scales is
+		// the one measured from the ANCHOR, which is the section's row less the
+		// viewport's Y origin — ten rows for the bar and fourteen for the digit —
+		// so the two constants are combined before the multiply rather than
+		// after. The GLYPH itself is not scaled: text is interface, and only the
+		// anchor it is drawn at moves.
+		s := c.viewScale()
 		x := sx - camera.OriginX
 		sy0 := sy - camera.OriginY
 		if bars {
-			c.drawHealthBar(x, sy0+healthBarRowOffset-camera.OriginY, u.Health, u.MaxHealth)
+			c.drawHealthBar(x, sy0+(healthBarRowOffset-camera.OriginY)*s, u.Health, u.MaxHealth)
 		}
 		if u.Group != 0 {
-			c.drawGroupDigit(x, sy0+groupDigitRowOffset-camera.OriginY, u.Group)
+			c.drawGroupDigit(x, sy0+(groupDigitRowOffset-camera.OriginY)*s, u.Group)
 		}
 	}
 }
@@ -137,8 +148,13 @@ func (c *Client) drawHealthBar(sx, y, health, maxDamage int32) {
 	// runs the same inclusive-bounds filler fillRectInclusive this used to call
 	// directly. The rect is carried in extent form; the sink reconstructs the
 	// inclusive right/bottom [03 R-FX-01 §6].
-	c.emitFillInclusive(sx-healthBarOuterHalfW, y-healthBarOuterHalfH,
-		sx+healthBarOuterHalfW, y+healthBarOuterHalfH, c.paletteIndex(healthBarOuterLogical))
+	// The bar is a fill, so its extents take the view scale while its anchor
+	// comes through the projection (DESIGN_GPU_RENDERER §14.2). The fill width
+	// w is derived from the same scaled half-extent, so a full bar still leaves
+	// a one-pixel border at either scale.
+	s := c.viewScale()
+	c.emitFillInclusive(sx-healthBarOuterHalfW*s, y-healthBarOuterHalfH*s,
+		sx+healthBarOuterHalfW*s, y+healthBarOuterHalfH*s, c.paletteIndex(healthBarOuterLogical))
 	if maxDamage <= 0 {
 		// Retail's two divisions are unguarded and would fault on a zero or
 		// negative `maxdamage`; refusing to divide is the bounds-check
@@ -154,8 +170,8 @@ func (c *Client) drawHealthBar(sx, y, health, maxDamage int32) {
 	case hp > third:
 		fill = c.paletteIndex(14)
 	}
-	c.emitFillInclusive(sx-healthBarInnerLeft, y-healthBarInnerHalfH,
-		sx-healthBarInnerLeft+w, y+healthBarInnerHalfH, fill)
+	c.emitFillInclusive(sx-healthBarInnerLeft*s, y-healthBarInnerHalfH*s,
+		sx-healthBarInnerLeft*s+w*s, y+healthBarInnerHalfH*s, fill)
 }
 
 // drawGroupDigit stamps the one-character label '0' + group at (sx, y)

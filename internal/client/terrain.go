@@ -16,9 +16,8 @@ package client
 // indices only, so palette animation stays possible.
 
 import (
-	"math"
-
 	"github.com/nanolathe/nanolathe/internal/camera"
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/sim/numeric"
 	"github.com/nanolathe/nanolathe/internal/world"
 )
@@ -26,6 +25,12 @@ import (
 const (
 	terrainTileSize   = 32   // pixels per tile side [03 §2.1] C1
 	terrainTilePixels = 1024 // 32×32 [03 §2.2] C5
+	// detailTileSize and detailTilePixels are the 2x tile of the detail view
+	// (DESIGN_GPU_RENDERER §14.3): one 64x64 index tile per TileSet entry.
+	// detailTilePixels is drawlist.DetailTilePixels, so the two tile types are
+	// the same Go type and a tile set passes across the record unconverted.
+	detailTileSize   = terrainTileSize * 2
+	detailTilePixels = drawlist.DetailTilePixels
 )
 
 // floorDiv returns floor(a/b) with sign correction [INVARIANTS I3] [03 §2.1].
@@ -73,6 +78,16 @@ func BlitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 	BlitTerrainOrigin(dst, dstW, dstH, t, cam, 0, 0)
 }
 
+// BlitTerrainDetail is BlitTerrain with the detail tile set of
+// DESIGN_GPU_RENDERER §14.3. At the detail scale a non-nil detail slice
+// supplies one 64x64 tile per TileSet entry, in the same order, and the
+// blitter copies it one-to-one; a nil slice, a short slice or a nil entry
+// falls back to doubling the 32x32 tile by nearest sampling. At the native
+// scale the detail tiles are unused and this is exactly BlitTerrain.
+func BlitTerrainDetail(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Camera, detail [][detailTilePixels]byte) {
+	blitTerrain(dst, dstW, dstH, t, cam, 0, 0, detail)
+}
+
 // BlitTerrainOrigin is BlitTerrain with an explicit viewport origin. originX/Y
 // is the screen offset added after the camera subtraction — the viewport-
 // specific originX/Y of [03 §2.5] C1. The shell window uses 0,0; callers that
@@ -87,6 +102,10 @@ func BlitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Came
 // position through cam.WorldToScreen and then re-bases from the 128,32 offsets
 // to the requested origin, so call sites do not hard-code literals (PLAN_04A C1).
 func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Camera, originX, originY int32) {
+	blitTerrain(dst, dstW, dstH, t, cam, originX, originY, nil)
+}
+
+func blitTerrain(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camera.Camera, originX, originY int32, detail [][detailTilePixels]byte) {
 	if dstW <= 0 || dstH <= 0 || len(dst) < dstW*dstH {
 		return
 	}
@@ -120,33 +139,33 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 		return
 	}
 	var camX, camZ int32
-	var scale float64 = 1
+	var scale int32 = 1
 	if cam != nil {
 		camX = cam.X
 		camZ = cam.Z
-		scale = float64(cam.EffectiveScale())
-		if scale == 0 {
-			scale = 1
-		}
+		scale = cam.EffectiveScale()
 	}
 	// Visible map rectangle in map pixels for the viewport [originX/Y, originX+dstW).
 	// For the half-height shear, terrain is at Y=0 so the shear term is zero
 	// and the projection reduces to map-pixel translation; we keep the general
 	// WorldToScreen path per tile so the same helper governs all world→screen
 	// work [03 §2.5] C1.
-	// Derive visible range from Camera.Scale so rendered tiles and picked pixels
-	// agree at any zoom [C-1][03 §2.5][F-P1-008]: screenX = (worldX - camX)*scale + originX
-	// => worldX = camX + (screenX - originX)/scale . At scale !=1 the tile range is
-	// dstW/scale world pixels. Use floor division for negative correctly [I3][03 §2.1].
-	mx0 := float64(camX) - float64(originX)/scale
-	my0 := float64(camZ) - float64(originY)/scale
-	mx1 := mx0 + float64(dstW)/scale // exclusive
-	my1 := my0 + float64(dstH)/scale
-	// Inclusive tile indices covering [mx0,mx1) etc.
-	startTX := terrainFloorDiv(int64(math.Floor(mx0)), terrainTileSize)
-	startTY := terrainFloorDiv(int64(math.Floor(my0)), terrainTileSize)
-	endTX := terrainFloorDiv(int64(math.Floor(mx1-1e-9)), terrainTileSize)
-	endTY := terrainFloorDiv(int64(math.Floor(my1-1e-9)), terrainTileSize)
+	// Derive the visible range from the camera's view scale so rendered tiles and
+	// picked pixels agree at either scale [C-1][03 §2.5][F-P1-008]:
+	// screenX = (worldX - camX)*scale + originX, so worldX = camX + floorDiv(screenX
+	// - originX, scale) — the inverse ScreenToWorld computes. The range is the
+	// whole world pixels covering screen columns [0, dstW): its first is the
+	// inverse of column 0 and its last the inverse of column dstW-1, both floored
+	// so a negative offset lands on the pixel that covers it [I3][03 §2.1].
+	mx0 := int64(camX) + terrainFloorDiv(int64(-originX), int64(scale))
+	my0 := int64(camZ) + terrainFloorDiv(int64(-originY), int64(scale))
+	mx1 := int64(camX) + terrainFloorDiv(int64(dstW-1)-int64(originX), int64(scale))
+	my1 := int64(camZ) + terrainFloorDiv(int64(dstH-1)-int64(originY), int64(scale))
+	// Inclusive tile indices covering [mx0,mx1] etc.
+	startTX := terrainFloorDiv(mx0, terrainTileSize)
+	startTY := terrainFloorDiv(my0, terrainTileSize)
+	endTX := terrainFloorDiv(mx1, terrainTileSize)
+	endTY := terrainFloorDiv(my1, terrainTileSize)
 
 	// Stable iteration over intersecting tiles in row-major order (determinism
 	// per I1 is preserved — no map iteration).
@@ -189,36 +208,12 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 				sy = int32(tileMapY) + originY
 			}
 			// Destination rectangle for this tile, clipped at viewport bounds
-			// — partial edge rectangles [03 §2.2]. At scale 1 the rect is 32×32.
-			// At other scales the screen size is 32*scale [F-P1-008] so picking
-			// via ScreenToWorld and rendered tiles agree [C-1].
-			var tileScreenW, tileScreenH int
-			if cam != nil && scale != 1 {
-				// Compute opposite corner via projection to get exact scaled size
-				// with same truncation as WorldToScreen [03 §2.5].
-				wx1 := numeric.Fixed(int64(tileMapX+terrainTileSize) << 16)
-				wz1 := numeric.Fixed(int64(tileMapY+terrainTileSize) << 16)
-				bsx1, bsy1 := cam.WorldToScreen(wx1, 0, wz1)
-				sx1 := bsx1 - camera.OriginX + originX
-				sy1 := bsy1 - camera.OriginY + originY
-				tileScreenW = int(sx1 - sx)
-				tileScreenH = int(sy1 - sy)
-				if tileScreenW <= 0 {
-					tileScreenW = int(float64(terrainTileSize) * scale)
-					if tileScreenW <= 0 {
-						tileScreenW = 1
-					}
-				}
-				if tileScreenH <= 0 {
-					tileScreenH = int(float64(terrainTileSize) * scale)
-					if tileScreenH <= 0 {
-						tileScreenH = 1
-					}
-				}
-			} else {
-				tileScreenW = terrainTileSize
-				tileScreenH = terrainTileSize
-			}
+			// — partial edge rectangles [03 §2.2]. The screen size is exactly
+			// 32*scale, which is the projection of the tile's opposite corner, so
+			// picking via ScreenToWorld and the rendered tiles agree at either
+			// scale [C-1][F-P1-008] (DESIGN_GPU_RENDERER §14.2).
+			tileScreenW := int(terrainTileSize * scale)
+			tileScreenH := tileScreenW
 			dstX0 := int(sx)
 			dstY0 := int(sy)
 			dstX1 := dstX0 + tileScreenW
@@ -237,6 +232,17 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 			}
 			if dstX0 >= dstX1 || dstY0 >= dstY1 {
 				continue
+			}
+			// The source is the tile itself at the native scale, and at the detail
+			// scale either a 64x64 detail tile copied one-to-one or the same 32x32
+			// tile doubled by nearest sampling (DESIGN_GPU_RENDERER §14.2, §14.3).
+			// Both are one walk over an exact integer rectangle: the source pixel of
+			// destination column dx is (dx - sx)/step, where step is 1 when the
+			// source side already equals the screen side and 2 for the doubled tile.
+			srcSide := terrainTileSize
+			src := tile[:]
+			if scale != 1 && int(tileID) < len(detail) {
+				srcSide, src = detailTileSize, detail[tileID][:]
 			}
 			if scale == 1 {
 				// Fast 1:1 path: source intra-tile remainder [03 §2.2].
@@ -260,35 +266,29 @@ func BlitTerrainOrigin(dst []uint8, dstW, dstH int, t *world.Terrain, cam *camer
 					}
 					copy(dst[dstOff:dstOff+w], tile[srcOff:srcOff+w])
 				}
-			} else {
-				// Scaled nearest-neighbour: map each dest pixel to nearest source
-				// via (dest - sx)/scale [F-P1-008] presentation-only.
-				for dy := dstY0; dy < dstY1; dy++ {
-					srcY := int(float32(dy-int(sy)) / float32(scale))
-					if srcY < 0 {
-						srcY = 0
-					} else if srcY >= terrainTileSize {
-						srcY = terrainTileSize - 1
+				continue
+			}
+			step := tileScreenW / srcSide
+			if step <= 0 || len(src) < srcSide*srcSide {
+				continue
+			}
+			for dy := dstY0; dy < dstY1; dy++ {
+				srcY := (dy - int(sy)) / step
+				if srcY < 0 || srcY >= srcSide {
+					continue
+				}
+				dstOff := dy*dstW + dstX0
+				srcRow := srcY * srcSide
+				for dx := dstX0; dx < dstX1; dx++ {
+					srcX := (dx - int(sx)) / step
+					if srcX < 0 || srcX >= srcSide {
+						continue
 					}
-					dstOff := dy*dstW + dstX0
-					srcRow := srcY * terrainTileSize
-					for dx := dstX0; dx < dstX1; dx++ {
-						srcX := int(float32(dx-int(sx)) / float32(scale))
-						if srcX < 0 {
-							srcX = 0
-						} else if srcX >= terrainTileSize {
-							srcX = terrainTileSize - 1
-						}
-						srcIdx := srcRow + srcX
-						if srcIdx < 0 || srcIdx >= terrainTilePixels {
-							continue
-						}
-						dstIdx := dstOff + (dx - dstX0)
-						if dstIdx < 0 || dstIdx >= len(dst) {
-							continue
-						}
-						dst[dstIdx] = tile[srcIdx]
+					dstIdx := dstOff + (dx - dstX0)
+					if dstIdx < 0 || dstIdx >= len(dst) {
+						continue
 					}
+					dst[dstIdx] = src[srcRow+srcX]
 				}
 			}
 		}

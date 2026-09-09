@@ -8,6 +8,10 @@ at least `-tie` of its four pixels are (default 2), so silhouettes get
 authored edge detail. Research tool for remastering; output is derived retail
 art and is never committed.
 
+The synthesizer itself lives in `internal/upscale`, which the engine calls at
+battle load through `Bank2x` (docs/DESIGN_GPU_RENDERER.md §14.4); this command
+is the wrapper that picks the query entries and writes the per-frame PNGs.
+
 ```sh
 go run ./tools/mapupscale/featupscale -gaf trees -seq leaf1 -epx -out /tmp/featupscale
 go run ./tools/mapupscale/featupscale -gaf trees -seq all -frame -1 -out /tmp/featupscale/trees

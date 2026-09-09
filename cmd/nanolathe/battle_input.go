@@ -60,7 +60,7 @@ func (b *battleSession) syncSelectionDrag(cl *client.Client) {
 //	token                  key            state
 //	0x09                   Tab            done — opens/closes the options window (viewerStep)
 //	0xE3                   F2             done — same window; Shift+F2's Unit Builder Probe is a developer overlay, out of scope
-//	0x0D                   Enter          out of scope — chat is `TALK.GUI` with its own dialog, focus and recipient rows [07 §5 "Chat"]; single player drops the packet unsent
+//	0x0D                   Enter          done — opens single-player `TALK.GUI`; local text and the bounded `+` command set enter the shared message ring [07 §5 "Chat"]
 //	0x1B                   Escape         done — options close, latch cancel, else deselect all
 //	0x21 0x23 0x2A         ! # *          done — Shift+1/3/8, the same "label every unit" bit as ` and ~ [07 R-CAM-01 §14]
 //	0x60 0x7E              ` ~            done — "label every unit" bit
@@ -205,6 +205,17 @@ func (b *battleSession) handleInput(in *input.State, cl *client.Client) {
 	}
 	if kbd.KeyDown(input.KeyMinus) || kbd.KeyDown(input.KeyNumpadSubtract) {
 		b.adjustGameSpeed(-1)
+	}
+	// F9 and F10 are Nanolathe bindings, not retail's: retail's dispatcher has
+	// no case for either key (DESIGN_GPU_RENDERER §14.6). F9 toggles the view
+	// scale about the viewport centre; F10 asks the window adapter to swap
+	// executors. Both are presentation-only — the simulation cannot tell which
+	// scale or which executor is active [I6].
+	if kbd.KeyDown(input.KeyF9) {
+		b.toggleViewScale()
+	}
+	if kbd.KeyDown(input.KeyF10) {
+		requestRendererToggle(cl)
 	}
 	// Digit routing uses the established SwitchAlt gate [07 R-CAM-01 §4].
 	// Ctrl+digit is assignment and plays `CreateSquad`; the non-page branch is
@@ -617,17 +628,10 @@ func (b *battleSession) routeDigit(digit int, altHeld, shiftHeld bool, cl *clien
 }
 
 // isTalkGUIActive reports whether TALK.GUI suppresses held-arrow movement [07 §10].
-// Retail suppresses only held-arrow, not edge. In Nanolathe chat is not yet fully
-// wired, so we treat any active modal that would correspond to chat as active.
-// For now, no dedicated TALK.GUI state exists, so held-arrow is never suppressed
-// except when a modal menu is active which already suppresses edge separately.
-// This preserves retail's distinction: TALK suppresses arrow but not edge.
+// ownsFrame remains set through a commit/cancel frame so the closing Enter or
+// Escape cannot expose held arrow state to the camera pass.
 func (b *battleSession) isTalkGUIActive() bool { // [07 §10]
-	// Chat is out of scope for this build — it is `TALK.GUI` with its own
-	// dialog, focus and recipient rows [07 §5 "Chat"], and a single-player
-	// session drops the packet unsent — so no TALK.GUI is ever active and the
-	// suppression this predicate gates never fires. Not an open question.
-	return false
+	return b != nil && (b.chat.active || b.chat.ownsFrame)
 }
 
 // dispatchCtrlLetters is the Ctrl+letter column of [07 R-CAM-01 §2]: Ctrl+A,

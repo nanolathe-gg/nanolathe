@@ -164,6 +164,24 @@ func (c *Client) SetScreenChat(mode uint8) {
 	}
 }
 
+// ScreenChat returns the live message-column class-filter word.
+func (c *Client) ScreenChat() uint8 {
+	if c == nil {
+		return 0
+	}
+	return c.screenChat
+}
+
+// ToggleScreenChat flips bit zero of the live message-column class filter and
+// returns the resulting stored value [07 R-CAM-01 §6].
+func (c *Client) ToggleScreenChat() uint8 {
+	if c == nil {
+		return 0
+	}
+	c.screenChat ^= 1
+	return c.screenChat
+}
+
 // MessageLines returns the currently visible message-column lines after the
 // screenchat class filter. The returned slice is detached from the ring.
 func (c *Client) MessageLines() []frame.MessageLine {

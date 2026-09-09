@@ -121,10 +121,13 @@ func (c *Client) drawStripBarrier(cur *frame.Frame, strip int8) StripDrawStats {
 			// passed through the logical-to-physical remap the
 			// beam and lightning colours use [03 R-FX-01 §3]. The two-by-two mark
 			// is a plain solid rect, so it records as a FillSolid.
+			// A fill's extents take the view scale, so the two-by-two mark stays
+			// two world pixels square (DESIGN_GPU_RENDERER §14.2).
+			side := int32(stripParticleSize) * c.viewScale()
 			c.emitFill(drawlist.Fill{
 				Rect: drawlist.Rect{
 					X: sx - camera.OriginX, Y: sy - camera.OriginY,
-					W: stripParticleSize, H: stripParticleSize,
+					W: side, H: side,
 				},
 				Index: v.Fill,
 				Style: drawlist.FillSolid,
@@ -174,7 +177,10 @@ func (c *Client) blitStripFrame(v frame.StripView) bool {
 	// present): a resolved identity that could run counts Blitted even when every
 	// pixel clipped away, and only a missing table counts Unresolved.
 	c.emitSprite(drawlist.Sprite{
-		Frame: art,
+		// The strip frame's 2x variant in the detail view; the tinted blitter
+		// places by the anchor, and the variant's authored offsets are already
+		// doubled (DESIGN_GPU_RENDERER §14.2, §14.3).
+		Frame: c.viewFrame(art),
 		X:     sx - camera.OriginX,
 		Y:     sy - camera.OriginY,
 		Kind:  drawlist.BlitTinted,

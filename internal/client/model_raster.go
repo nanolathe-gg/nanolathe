@@ -147,7 +147,10 @@ type modelTarget struct {
 	// scale is 1, or 2 while the structure anti-alias supersample is active
 	// [R-REN-03A §6]. It is descriptive: the caller has already multiplied the
 	// dimensions and origin.
-	scale  int32
+	scale int32
+	// blit is the nearest-neighbour factor commit applies about the anchor:
+	// 1 natively, 2 for Original at the detail scale (drawlist.ClassicModelImage.Blit).
+	blit   int32
 	trace  *rendererTrace
 	winner []int
 	tick   uint32
@@ -202,13 +205,35 @@ func newModelImage(width, height int, originX, originY, anchorX, anchorY int32, 
 // screenX and screenY map an image pixel back to the framebuffer. The image
 // carries the model's (0,0) at (originX, originY) and that point lands on the
 // framebuffer at (anchorX, anchorY) [R-REN-03A §1].
-func (t *modelTarget) screenX(ix int32) int32 { return t.anchorX + ix - t.originX }
-func (t *modelTarget) screenY(iy int32) int32 { return t.anchorY + iy - t.originY }
+func (t *modelTarget) screenX(ix int32) int32 { return t.anchorX + (ix-t.originX)*t.blitFactor() }
+func (t *modelTarget) screenY(iy int32) int32 { return t.anchorY + (iy-t.originY)*t.blitFactor() }
+
+// blitFactor is the nearest-neighbour factor of the final blit, 1 unless the
+// image was recorded for Original at the detail scale.
+func (t *modelTarget) blitFactor() int32 {
+	if t == nil || t.blit < 1 {
+		return 1
+	}
+	return t.blit
+}
 
 // imageX and imageY are the inverse, used to record framebuffer-space
 // diagnostics against the image the model was rasterized into.
-func (t *modelTarget) imageX(sx int32) int32 { return sx - t.anchorX + t.originX }
-func (t *modelTarget) imageY(sy int32) int32 { return sy - t.anchorY + t.originY }
+func (t *modelTarget) imageX(sx int32) int32 {
+	return floorDivInt32(sx-t.anchorX, t.blitFactor()) + t.originX
+}
+func (t *modelTarget) imageY(sy int32) int32 {
+	return floorDivInt32(sy-t.anchorY, t.blitFactor()) + t.originY
+}
+
+// floorDivInt32 is floor(a/b) for b > 0.
+func floorDivInt32(a, b int32) int32 {
+	q := a / b
+	if a%b != 0 && a < 0 {
+		q--
+	}
+	return q
+}
 
 // admit applies the height-key test. With no key plane every candidate is
 // admitted and composition is pure painter order [R-REN-03A §2].
@@ -456,6 +481,10 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 	if t == nil || width <= 0 || height <= 0 {
 		return
 	}
+	if t.blitFactor() != 1 {
+		t.commitBlock(dst, width, height, nil)
+		return
+	}
 	for iy := 0; iy < t.heightPx; iy++ {
 		sy := t.screenY(int32(iy))
 		if sy < 0 || sy >= int32(height) {
@@ -473,6 +502,53 @@ func (t *modelTarget) commit(dst []uint8, width, height int) {
 				continue
 			}
 			dst[row+int(sx)] = t.color[i]
+		}
+	}
+}
+
+// commitBlock is the nearest-neighbour form of commit and tintedCommit for
+// Original at the detail scale: every image pixel covers a blit×blit block
+// about the anchor, clipped to the framebuffer. With alp nil it is the keyed
+// body blit; with alp set it is the translucent shadow blit. The image itself
+// was rasterized at native size, so the block is the whole of the scaling
+// (DESIGN_GPU_RENDERER §14.2).
+func (t *modelTarget) commitBlock(dst []uint8, width, height int, alp *[65536]byte) {
+	b := int(t.blitFactor())
+	for iy := 0; iy < t.heightPx; iy++ {
+		sy0 := int(t.screenY(int32(iy)))
+		if sy0+b <= 0 || sy0 >= height {
+			continue
+		}
+		src := iy * t.width
+		for ix := 0; ix < t.width; ix++ {
+			i := src + ix
+			if alp == nil {
+				if t.color[i] == t.transparent {
+					continue
+				}
+			} else if !t.covered[i] {
+				continue
+			}
+			sx0 := int(t.screenX(int32(ix)))
+			if sx0+b <= 0 || sx0 >= width {
+				continue
+			}
+			for sy := sy0; sy < sy0+b; sy++ {
+				if sy < 0 || sy >= height {
+					continue
+				}
+				row := sy * width
+				for sx := sx0; sx < sx0+b; sx++ {
+					if sx < 0 || sx >= width {
+						continue
+					}
+					if alp == nil {
+						dst[row+sx] = t.color[i]
+					} else {
+						dst[row+sx] = alp[int(t.color[i])*256+int(dst[row+sx])]
+					}
+				}
+			}
 		}
 	}
 }

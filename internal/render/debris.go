@@ -223,7 +223,7 @@ func (p *DebrisPool) Step(ctx DebrisStepContext, sink DebrisImpactSink) {
 				if s.velocity[1] < debrisStopVelocity {
 					if s.explodeOnHit && sink != nil {
 						sink.GroundDebrisImpact(GroundDebrisImpact{
-							Position: s.position, Graphic: "explosion", CalculatedFrameTable: 1, AboveSeaFlash: true,
+							Position: s.position, Graphic: "explosion", CalculatedFrameTable: 0, AboveSeaFlash: true,
 						})
 					}
 					p.releaseSlot(i)

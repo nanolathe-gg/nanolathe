@@ -105,6 +105,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 		}
 	}
 	check("equal key later face", 1, 2, 4)
+	check("equal key later live face", 9, 2, 9)
+	check("live transparent index erases cached color", 11, 2, 7)
+	check("keyed live-only body", 41, 2, 27)
 	check("transparent texture leaves background", 6, 2, 7)
 	check("wrapped gradient wins", 13, 2, 5)
 	check("wrapped gradient loses", 16, 2, 2)
@@ -154,8 +157,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	checkBlended("child shadow-only blend", 59, 37, 103)
 	check("child shadow-only punches own body", 61, 37, 7)
 	check("child shadow-only omits body commit", 63, 37, 7)
-	check("structure ALP row and pair order", 68, 37, 43)
-	check("structure resolve takes top-left key", 69, 37, 44)
+	check("structure live lane follows ALP resolve", 68, 37, 47)
+	check("structure resolve takes top-left key", 69, 37, 7)
 	check("structure resolve includes transparent background", 72, 37, 46)
 	check("untriangulated upper lobe", 17, 16, 19)
 	check("untriangulated pinch leaves prior face", 18, 17, 18)
@@ -173,8 +176,8 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	if stats.Shadows != 2 && g.err == nil {
 		g.err = fmt.Errorf("fixture GPU shadow count = %d, want 2", stats.Shadows)
 	}
-	if stats.GPU != 24 && g.err == nil {
-		g.err = fmt.Errorf("fixture GPU count = %d, want 24", stats.GPU)
+	if stats.GPU != 26 && g.err == nil {
+		g.err = fmt.Errorf("fixture GPU count = %d, want 26", stats.GPU)
 	}
 	if stats.Skipped != 1 && g.err == nil {
 		g.err = fmt.Errorf("fixture omitted count = %d, want 1", stats.Skipped)
@@ -208,6 +211,9 @@ func (g *modelFixtureGame) Draw(screen *ebiten.Image) {
 	}
 	if g.err == nil {
 		g.err = checkRowScaleDevicePixels()
+	}
+	if g.err == nil {
+		g.err = checkTerrainDevicePixels()
 	}
 	screen.DrawImage(img, &ebiten.DrawImageOptions{})
 }
@@ -261,6 +267,14 @@ func fixtureModelList() drawlist.List {
 	// Equal key: the later color 4 owns the tie.
 	list.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true,
 		fixtureFace(0, 0, 4, 4, 20, 3), fixtureFace(0, 0, 4, 4, 20, 4))})
+	// Live faces run after cached resolve/outline. Equal keys therefore admit
+	// the later colour, including index 1 which erases at the composition edge.
+	live := fixtureGeometry(0, true, fixtureFace(9, 0, 3, 4, 20, 8))
+	live.LiveFaces = []drawlist.ModelFace{fixtureFace(9, 0, 1, 4, 20, 9), fixtureFace(10, 0, 2, 4, 20, 1)}
+	list.RecordModel(drawlist.Model{Geometry: live})
+	liveOnly := fixtureGeometry(0, true)
+	liveOnly.LiveFaces = []drawlist.ModelFace{fixtureFace(39, 0, 4, 4, 20, 27)}
+	list.RecordModel(drawlist.Model{Geometry: liveOnly})
 	// Texture index 1 owns the key but is the model composition transparent
 	// index, so the prior background remains visible.
 	list.RecordModel(drawlist.Model{Geometry: fixtureGeometry(0, true,
@@ -351,6 +365,8 @@ func fixtureModelList() drawlist.List {
 		ss.Faces = append(ss.Faces, fixtureFace(x, 0, 1, 1, 70, 31), fixtureFace(x+1, 0, 1, 1, 200, 32), fixtureFace(x, 1, 1, 1, 210, 33), fixtureFace(x+1, 1, 1, 1, 220, 34))
 	}
 	resolved.Supersample = ss
+	resolved.LiveFaces = []drawlist.ModelFace{fixtureFace(0, 0, 1, 1, 220, 47)}
+	resolved.Waterline, resolved.WaterlineKey = drawlist.ModelWaterlineErase, 100
 	resolved.Children = []drawlist.ModelChild{{Geometry: fixtureGeometry(0, true, fixtureFace(69, 37, 1, 1, 100, 44))}}
 	list.RecordModel(drawlist.Model{Geometry: resolved})
 	edge := fixtureGeometry(72, true, fixtureFace(0, 0, 1, 1, 50, 31))

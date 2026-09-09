@@ -226,3 +226,36 @@ func TestPlaySizeForMinimap(t *testing.T) { // Wpix-32, Hpix-128 [03 §3.4]
 		t.Fatalf("PlaySizeForMinimap missing extents want 0,0 got %d,%d", w2, h2)
 	}
 }
+
+// TestMinimapViewportRectOriginFollowsTheCameraAtTheDetailScale locks the
+// detail view's minimap rectangle to the camera's own battle-view origin
+// (DESIGN_GPU_RENDERER §14.2). The leading chrome inset is 128 framebuffer
+// pixels at either scale, but at scale 2 those pixels cover 64 world pixels,
+// so an open-coded `cam.X + camera.OriginX` would place the rectangle 64 world
+// pixels east and 16 south of where the view actually starts — and its size,
+// which already comes from BattleView, would disagree with its origin.
+func TestMinimapViewportRectOriginFollowsTheCameraAtTheDetailScale(t *testing.T) {
+	playW, playH := int32(992), int32(896)
+	m := camera.LayoutMinimap(playW, playH)
+	dst := Rect{X1: 0, Y1: 0, X2: 125, Y2: 125}
+	for _, scale := range []int32{1, 2} {
+		cam := &camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH, Scale: scale}
+		got, ok := MinimapViewportRect(cam, m, playW, playH, dst)
+		if !ok {
+			t.Fatalf("scale %d produced no rectangle", scale)
+		}
+		originX, originZ := cam.BattleViewOrigin()
+		wantX := m.PadX + int32(int64(originX)*int64(m.W)/int64(playW))
+		wantY := m.PadY + int32(int64(originZ)*int64(m.H)/int64(playH))
+		if got.X1 != wantX || got.Y1 != wantY {
+			t.Errorf("scale %d rectangle origin = (%d,%d), want the battle view origin's (%d,%d)",
+				scale, got.X1, got.Y1, wantX, wantY)
+		}
+	}
+	// The detail view shows half as much world, so its rectangle is smaller.
+	native, _ := MinimapViewportRect(&camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH}, m, playW, playH, dst)
+	detail, _ := MinimapViewportRect(&camera.Camera{X: 200, Z: 100, ViewW: 640, ViewH: 480, MapW: playW, MapH: playH, Scale: 2}, m, playW, playH, dst)
+	if detail.X2-detail.X1 >= native.X2-native.X1 || detail.Y2-detail.Y1 >= native.Y2-native.Y1 {
+		t.Errorf("detail rectangle %+v is not smaller than the native one %+v", detail, native)
+	}
+}

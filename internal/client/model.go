@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	compiledmodel "github.com/nanolathe/nanolathe/internal/model"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
@@ -234,12 +235,15 @@ func (c *Client) drawUnitModel(v frame.UnitView, sx, sy int32) bool {
 	// coordinates and are retained only so the two present passes read alike.
 	_, _ = sx, sy
 	if c.geometryOnlyModels {
-		draw, ok := c.unitDrawFor(v)
-		if !ok {
+		g, live := c.unitGeometryPair(v, false)
+		if g == nil {
 			return false
 		}
-		reveal, outline := c.unitNanoframeReveal(v)
-		return c.recordModelGeometryOnly(draw, v.Owner, unitTeamColor(v), unitPresentationID(v), modelCursorUnit, reveal, outline)
+		c.list.RecordModel(drawlist.Model{Geometry: g})
+		if live != nil {
+			c.list.RecordModel(drawlist.Model{Geometry: live})
+		}
+		return true
 	}
 	m, ok := c.composeUnitModel(v)
 	if !ok {
@@ -354,18 +358,37 @@ func modelLocalVertex(v, origin [3]numeric.Fixed) (lx, ly, ry int32) {
 	return rx, zn - (ry >> 1), ry
 }
 
-// scaleModelLocal applies presentation zoom to a model-relative offset. Retail
-// has no zoom; at the retail scale of 1 this is the identity and the offsets
-// stay exactly as [R-REN-03A §1] computes them.
+// scaleModelLocal applies the presentation view scale to a model-relative
+// offset. Retail has no scale; at the retail scale of 1 this is the identity
+// and the offsets stay exactly as [R-REN-03A §1] computes them. At the detail
+// scale it is an exact integer multiply, so a doubled model lands on the pixel
+// grid one-to-one (DESIGN_GPU_RENDERER §14.2).
 func (c *Client) scaleModelLocal(lx, ly int32) (int32, int32) {
-	if c == nil || c.cam == nil {
-		return lx, ly
-	}
-	s := c.cam.EffectiveScale()
+	s := c.modelScale()
 	if s == 1 {
 		return lx, ly
 	}
-	return int32(float32(lx) * s), int32(float32(ly) * s)
+	return lx * s, ly * s
+}
+
+// modelScale is the factor model geometry is projected by, and modelBlitScale
+// the factor the finished image is blitted by; their product is the view scale.
+// Enhanced rasterizes the scaled geometry (smooth edges, texels doubled) and
+// blits one-to-one; Original rasterizes at native size and doubles the image
+// on the blit, so its detail-scale frame is a pure nearest upscale of the
+// native frame (DESIGN_GPU_RENDERER §14.2).
+func (c *Client) modelScale() int32 {
+	if c == nil || !c.enhanced {
+		return 1
+	}
+	return c.viewScale()
+}
+
+func (c *Client) modelBlitScale() int32 {
+	if c == nil || c.enhanced {
+		return 1
+	}
+	return c.viewScale()
 }
 
 // modelHeightKey computes the per-vertex key shared by completed-model

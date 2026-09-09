@@ -68,7 +68,11 @@ type modelStageGroup struct {
 	// plane is the staging image holding the finished composition once
 	// composeModelStage has run: which of the two it is depends on the group's
 	// own child count.
-	plane *ebiten.Image
+	plane        *ebiten.Image
+	waterline    drawlist.ModelWaterline
+	waterlineKey uint8
+	digger       bool
+	diggerKey    uint8
 }
 
 // modelStageAtlas owns the frame's staging pair and its shelf allocator. Every
@@ -220,6 +224,8 @@ func (r *Renderer) prepareModelGroups(l *drawlist.List) {
 			parentOffset: modelWorldBounds(g).Min.Sub(b.Min),
 			childOff:     off,
 			childCount:   n,
+			waterline:    g.Waterline, waterlineKey: g.WaterlineKey,
+			digger: g.Digger, diggerKey: g.DiggerKey,
 		})
 		if n > s.maxChildren {
 			s.maxChildren = n
@@ -306,6 +312,28 @@ func (r *Renderer) composeModelStage() {
 			grp.plane = dst
 		}
 		src, dst = dst, src
+	}
+	// Carrier waterline and Digger run after its live lane and every child
+	// merge. The group plane contains both colour and key, so the same native
+	// clip shader applies without a CPU staging image [03 R-REN-03A §4].
+	for i := range s.groups {
+		grp := &s.groups[i]
+		if grp.waterline == drawlist.ModelWaterlineNone && !grp.digger {
+			continue
+		}
+		dst := s.a
+		if grp.plane == dst {
+			dst = s.b
+		}
+		srcSub := grp.plane.RecyclableSubImage(grp.region)
+		dstSub := dst.RecyclableSubImage(grp.region)
+		r.beginPass(dst)
+		r.appendModelQuad(grp.region, grp.region,
+			[4]float32{float32(grp.waterline), float32(grp.waterlineKey), boolFloat(grp.digger), float32(grp.diggerKey)}, [4]float32{})
+		r.modelDraw(dstSub, r.modelClip, ebiten.BlendCopy, srcSub, r.tables.blue, nil, nil)
+		srcSub.Recycle()
+		dstSub.Recycle()
+		grp.plane = dst
 	}
 }
 

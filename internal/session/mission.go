@@ -147,6 +147,7 @@ func NewMissionWithProgressSeeds(fs vfs.FSOps, cat *content.Catalog, path string
 		p.Exists = true
 		if i == 0 {
 			p.ControllerState = 1
+			p.Name = "Player"
 		} else {
 			p.ControllerState = 2
 		}

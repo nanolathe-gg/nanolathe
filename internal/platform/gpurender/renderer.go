@@ -7,7 +7,6 @@ import (
 	"github.com/nanolathe/nanolathe/formats"
 	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/palette"
-	"github.com/nanolathe/nanolathe/internal/world"
 )
 
 // Renderer is the modern (GPU) executor (docs/DESIGN_GPU_RENDERER.md §2.3,
@@ -73,11 +72,12 @@ type Renderer struct {
 	textureAtlas                  modelTextureAtlas
 	w, h                          int
 
-	// tileAtlases caches one tile-index atlas per *world.Terrain identity, built
-	// on first Terrain draw and reused for the map's lifetime (C-G4,
-	// docs/DESIGN_GPU_RENDERER.md §2.3). Keyed by pointer, never ranged in a way
-	// that reaches output, so it introduces no ordering [I1].
-	tileAtlases map[*world.Terrain]*tileAtlas
+	// tileAtlases caches one tile-index atlas per (tile set identity, detail tile
+	// set identity, view scale), built on first Terrain draw at that scale and
+	// reused for the map's lifetime (C-G4, docs/DESIGN_GPU_RENDERER.md §2.3,
+	// §14.5). Keyed by pointer and scale, never ranged in a way that reaches
+	// output, so it introduces no ordering [I1].
+	tileAtlases map[tileAtlasKey]*tileAtlas
 
 	// gafImages caches one index texture per *formats.GAFFrame identity for the
 	// model material passes, which sample a frame directly rather than through
@@ -163,7 +163,7 @@ func New(pal *palette.Tables, w, h int) *Renderer {
 func NewChecked(pal *palette.Tables, w, h int) (*Renderer, error) {
 	r := &Renderer{
 		tables:      uploadTables(pal),
-		tileAtlases: make(map[*world.Terrain]*tileAtlas),
+		tileAtlases: make(map[tileAtlasKey]*tileAtlas),
 		gafImages:   make(map[*formats.GAFFrame]*ebiten.Image),
 		copyIdx:     [6]uint32{0, 1, 2, 1, 2, 3},
 	}

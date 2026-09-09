@@ -23,13 +23,20 @@ import (
 // exactly as render.BuildFogOpsWindowInto's producer places it, so the tests
 // exercise the real screen arithmetic rather than a restatement of it.
 func fogOpAt(gx, gy, camX, camZ int32, kind render.FogKind) render.FogOp {
-	x0 := gx*render.FogTilePixels + render.FogTilePixels/2 - camX + camera.OriginX
-	y0 := gy*render.FogTilePixels + render.FogTilePixels/2 - camZ + camera.OriginY
+	return fogOpAtScale(gx, gy, camX, camZ, 1, kind)
+}
+
+// fogOpAtScale is fogOpAt at one view scale: render.FogScreenRect's own
+// arithmetic, the cell corner projected and the edge 32*s (§14.2).
+func fogOpAtScale(gx, gy, camX, camZ, scale int32, kind render.FogKind) render.FogOp {
+	x0 := (gx*render.FogTilePixels+render.FogTilePixels/2-camX)*scale + camera.OriginX
+	y0 := (gy*render.FogTilePixels+render.FogTilePixels/2-camZ)*scale + camera.OriginY
 	return render.FogOp{
 		GridX: gx, GridY: gy,
 		ScreenX0: x0, ScreenY0: y0,
-		ScreenX1: x0 + render.FogTilePixels, ScreenY1: y0 + render.FogTilePixels,
+		ScreenX1: x0 + render.FogTilePixels*scale, ScreenY1: y0 + render.FogTilePixels*scale,
 		Kind: kind, Variant: -1, Frame: -1,
+		Scale: scale,
 	}
 }
 
@@ -71,7 +78,7 @@ func TestFogRegionLatticeFromOps(t *testing.T) {
 		fogOpAt(14, 4, camX, camZ, render.FogKindGrayRemap),
 		fogOpAt(23, 9, camX, camZ, render.FogKindPatterned),
 	}
-	region := fogRegionFor(ops, 640, 480)
+	region := fogRegionFor(ops, 640, 480, 1)
 	if !region.ok {
 		t.Fatal("region rejected an on-screen op list")
 	}
@@ -91,7 +98,7 @@ func TestFogRegionLatticeFromOps(t *testing.T) {
 		t.Fatalf("region top-left (%d,%d) excludes the first cell origin (%d,%d)",
 			region.x0, region.y0, wantX, wantY)
 	}
-	lastX := 23*render.FogTilePixels + render.FogTilePixels/2 - camX + fogAtlasTile
+	lastX := 23*render.FogTilePixels + render.FogTilePixels/2 - camX + fogAtlasNativeTile
 	if int(region.x1) < lastX && region.x1 != 640 {
 		t.Fatalf("region right edge %d excludes the last cell's frame reach %d", region.x1, lastX)
 	}
@@ -167,11 +174,11 @@ func TestFogGridEncoding(t *testing.T) {
 	f.slotPresent[0*fogSlots+1*fogAtlasCols+3] = true  // Gray2 frame 3
 	f.slotPresent[1*fogSlots+0*fogAtlasCols+13] = true // Black1 frame 13
 
-	region := fogRegionFor(ops, 640, 480)
+	region := fogRegionFor(ops, 640, 480, 1)
 	if !region.ok {
 		t.Fatal("region rejected the op list")
 	}
-	f.encodeGrid(region, ops, 640, 480, true)
+	f.encodeGrid(region, ops, 640, 480, 1, true)
 	imgW, _ := f.gridImageSize(region)
 	at := func(gx int32) (byte, byte) {
 		col := int(gx - 13)
@@ -204,7 +211,7 @@ func TestFogGridEncoding(t *testing.T) {
 	// Without a gray table the gray-reading operations are skipped and nothing
 	// else changes, exactly as fogFillGray and blitFogGAF(fogBlitGray) return
 	// early when the palette is absent [03 §3.3].
-	f.encodeGrid(region, ops, 640, 480, false)
+	f.encodeGrid(region, ops, 640, 480, 1, false)
 	if c1, _ := at(14); c1 != fogCh1None {
 		t.Fatalf("gray fill without a gray table = %d, want 0", c1)
 	}
@@ -240,8 +247,8 @@ func TestFogGridEncodeIsAllocationFree(t *testing.T) {
 	f.slotPresent[0*fogSlots] = true
 	f.slotPresent[1*fogSlots] = true
 	encode := func() {
-		region := fogRegionFor(ops, 640, 480)
-		f.encodeGrid(region, ops, 640, 480, true)
+		region := fogRegionFor(ops, 640, 480, 1)
+		f.encodeGrid(region, ops, 640, 480, 1, true)
 	}
 	encode()
 	if got := testing.AllocsPerRun(8, encode); got != 0 {
@@ -267,20 +274,20 @@ func TestFogGridImageGrowsOnly(t *testing.T) {
 // neighbourhood the pass visits does not fit.
 func TestFogFrameTilePlacement(t *testing.T) {
 	fits := &formats.GAFFrame{Width: 33, Height: 19, XOffset: 0, YOffset: -13}
-	ox, oy, ok := fogFrameTilePlacement(fits)
+	ox, oy, ok := fogFrameTilePlacement(fits, fogAtlasNativeTile)
 	if !ok || ox != 0 || oy != 13 {
 		t.Fatalf("33x19 at offset (0,-13): (%d,%d,%v), want (0,13,true)", ox, oy, ok)
 	}
 	before := &formats.GAFFrame{Width: 16, Height: 16, XOffset: 4}
-	if _, _, ok := fogFrameTilePlacement(before); ok {
+	if _, _, ok := fogFrameTilePlacement(before, fogAtlasNativeTile); ok {
 		t.Fatal("a frame starting before the cell origin was accepted")
 	}
-	past := &formats.GAFFrame{Width: fogAtlasTile + 1, Height: 16}
-	if _, _, ok := fogFrameTilePlacement(past); ok {
+	past := &formats.GAFFrame{Width: fogAtlasNativeTile + 1, Height: 16}
+	if _, _, ok := fogFrameTilePlacement(past, fogAtlasNativeTile); ok {
 		t.Fatal("a frame reaching past the cell neighbourhood was accepted")
 	}
 	degenerate := &formats.GAFFrame{Width: 0, Height: 16}
-	if _, _, ok := fogFrameTilePlacement(degenerate); ok {
+	if _, _, ok := fogFrameTilePlacement(degenerate, fogAtlasNativeTile); ok {
 		t.Fatal("a degenerate frame was accepted")
 	}
 }
@@ -311,10 +318,10 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 				if ref.Frame == nil {
 					continue
 				}
-				ox, oy, ok := fogFrameTilePlacement(ref.Frame)
+				ox, oy, ok := fogFrameTilePlacement(ref.Frame, fogAtlasNativeTile)
 				if !ok {
 					t.Fatalf("%s frame %d (%dx%d at offset (%d,%d)) does not fit a %d-pixel tile",
-						name, i, ref.Frame.Width, ref.Frame.Height, ox, oy, fogAtlasTile)
+						name, i, ref.Frame.Width, ref.Frame.Height, ox, oy, fogAtlasNativeTile)
 				}
 				frames++
 				maxX = maxInt(maxX, ox+int(ref.Frame.Width))
@@ -325,7 +332,7 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 	if frames == 0 {
 		t.Fatal("anims/fog.gaf decoded no fog frames")
 	}
-	t.Logf("%d fog frames reach at most %d x %d past a cell origin (tile %d)", frames, maxX, maxY, fogAtlasTile)
+	t.Logf("%d fog frames reach at most %d x %d past a cell origin (tile %d)", frames, maxX, maxY, fogAtlasNativeTile)
 }
 
 // checkFogDevicePixels drives the compiled fog pass on a real device and
@@ -344,6 +351,17 @@ func TestFogAtlasFitsRetail(t *testing.T) {
 // [03 §4.3.3]. The fill therefore uses an index whose PAL entry is NOT grey, so
 // the desaturation is visible: (30,60,90) averages to 60.
 func checkFogDevicePixels() error {
+	// The native scale, then the detail view (§14.2): every rectangle and the
+	// frame the cell draws scale together, and the checker does not.
+	for _, scale := range []int32{1, 2} {
+		if err := checkFogDevicePixelsAt(scale); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkFogDevicePixelsAt(scale int32) error {
 	pal := fixturePalette()
 	const fillIndex = byte(100)
 	pal.Base[fillIndex] = [4]byte{30, 60, 90, 255}
@@ -351,33 +369,50 @@ func checkFogDevicePixels() error {
 	grayColor := [3]float64{60, 60, 60}
 	darkColor := expandedIndex(&pal, render.FogDarkPaletteIndex)
 	blackFrameColor := expandedIndex(&pal, 3)
-	const w, h = 128, 64
+	s := int(scale)
+	w, h := 128*s, 64*s
 	r, err := NewChecked(&pal, w, h)
 	if err != nil {
 		return err
 	}
 	// A 16x16 opaque block anchored one cell to the right of its own cell, so
-	// the pass has to reach it from the neighbouring cell.
+	// the pass has to reach it from the neighbouring cell. The detail view draws
+	// the frame's 2x variant, which the pass builds for itself the way the client
+	// does for art no remaster covers (§14.3).
 	frame := &formats.GAFFrame{Width: 16, Height: 16, XOffset: -16, YOffset: 0,
 		Pixels: make([]byte, 16*16), Transparent: make([]bool, 16*16)}
 	for i := range frame.Pixels {
 		frame.Pixels[i] = 3
 	}
 	entry := &formats.GAFEntry{Name: "Black1", Frames: []formats.GAFFrameRef{{Frame: frame}}}
+	// The gray family's plain frame is a MASKED remap of the destination, not a
+	// copy of its own pixels [R-RR16-A §1], so the same block anchored the same
+	// way must desaturate exactly the pixels it covers — the second half of the
+	// scaled-anchor arithmetic the black family exercises.
+	grayFrame := &formats.GAFFrame{Width: 16, Height: 16, XOffset: -16, YOffset: 0,
+		Pixels: make([]byte, 16*16), Transparent: make([]bool, 16*16)}
+	for i := range grayFrame.Pixels {
+		grayFrame.Pixels[i] = 7
+	}
+	grayEntry := &formats.GAFEntry{Name: "Gray1", Frames: []formats.GAFFrameRef{{Frame: grayFrame}}}
 
 	// Camera (16,16) puts cell (0,0)'s rebased origin at (0,0).
 	const camX, camZ = 16, 16
-	solid := fogOpAt(0, 0, camX, camZ, render.FogKindSolidDark)
-	gray := fogOpAt(1, 0, camX, camZ, render.FogKindGrayRemap)
-	pat := fogOpAt(2, 0, camX, camZ, render.FogKindPatterned)
-	black := fogOpAt(0, 1, camX, camZ, render.FogKindGAFCh0)
+	solid := fogOpAtScale(0, 0, camX, camZ, scale, render.FogKindSolidDark)
+	gray := fogOpAtScale(1, 0, camX, camZ, scale, render.FogKindGrayRemap)
+	pat := fogOpAtScale(2, 0, camX, camZ, scale, render.FogKindPatterned)
+	black := fogOpAtScale(0, 1, camX, camZ, scale, render.FogKindGAFCh0)
 	black.Variant, black.Frame = 0, 0
-	ops := []render.FogOp{solid, gray, pat, black}
+	grayGAF := fogOpAtScale(2, 1, camX, camZ, scale, render.FogKindGAFCh1)
+	grayGAF.Variant, grayGAF.Frame = 0, 0
+	ops := []render.FogOp{solid, gray, pat, black, grayGAF}
 
 	var list drawlist.List
 	list.RecordClear()
-	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: w, H: h}, Index: fillIndex, Style: drawlist.FillSolid})
-	list.RecordFog(drawlist.Fog{Ops: ops, Black: [4]*formats.GAFEntry{entry}})
+	list.RecordFill(drawlist.Fill{Rect: drawlist.Rect{W: int32(w), H: int32(h)}, Index: fillIndex, Style: drawlist.FillSolid})
+	list.RecordFog(drawlist.Fog{Ops: ops,
+		Gray:  [4]*formats.GAFEntry{grayEntry},
+		Black: [4]*formats.GAFEntry{entry}})
 	list.RecordExpand()
 	img := r.Execute(&list, w, h)
 	if img == nil {
@@ -407,24 +442,28 @@ func checkFogDevicePixels() error {
 		for x := 0; x < w; x++ {
 			want := fillColor
 			switch {
-			case x < 32 && y < 32:
+			case x < 32*s && y < 32*s:
 				want = darkColor
-			case x >= 32 && x < 64 && y < 32:
+			case x >= 32*s && x < 64*s && y < 32*s:
 				want = grayColor
-			case x >= 64 && x < 96 && y < 32:
+			case x >= 64*s && x < 96*s && y < 32*s:
+				// The checker is a destination-pixel test, so it stays one pixel
+				// wide at either scale (§14.2).
 				if (int32(x)+int32(y)+parity)&1 == 1 {
 					want = darkColor
 				}
-			case x >= 16 && x < 32 && y >= 32 && y < 48:
+			case x >= 16*s && x < 32*s && y >= 32*s && y < 48*s:
 				want = blackFrameColor // the overhanging black-family frame
+			case x >= 80*s && x < 96*s && y >= 32*s && y < 48*s:
+				want = grayColor // the overhanging gray-family frame's masked remap
 			}
 			// Every fog value is a colour the pass writes outright, not a blend, so
 			// §13.4's exactness rule applies to the whole surface.
 			at := (y*w + x) * 4
 			got := [3]float64{float64(pixels[at]), float64(pixels[at+1]), float64(pixels[at+2])}
 			if got != want || pixels[at+3] != 255 {
-				return fmt.Errorf("fog device pixel (%d,%d): RGBA %v, want %v with alpha 255",
-					x, y, pixels[at:at+4], want)
+				return fmt.Errorf("fog device pixel (%d,%d) at scale %d: RGBA %v, want %v with alpha 255",
+					x, y, scale, pixels[at:at+4], want)
 			}
 		}
 	}

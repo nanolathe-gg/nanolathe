@@ -696,13 +696,17 @@ func (c *Client) drawFeature(f *frame.FeatureView) {
 		_ = c.drawFeatureModel(*f)
 		return
 	}
+	// Both passes draw the frame's 2x variant in the detail view; at the native
+	// scale viewFrame is the identity. The variant carries doubled authored
+	// offsets, so the subtraction below needs no scale term of its own
+	// (DESIGN_GPU_RENDERER §14.2, §14.3).
 	var shadowFrame *formats.GAFFrame
 	if c.featureShadows && (!f.RuntimeLive || f.ShadowEnabled) && (!f.RuntimeLive || f.EventSeqName != "") {
-		shadowFrame = c.featureFrameFor(*f, true)
+		shadowFrame = c.viewFrame(c.featureFrameFor(*f, true))
 	}
 	var normalFrame *formats.GAFFrame
 	if !f.RuntimeLive || f.EventSeqName != "" {
-		normalFrame = c.featureFrameFor(*f, false)
+		normalFrame = c.viewFrame(c.featureFrameFor(*f, false))
 	}
 	// Record the shadow then the normal frame through the committed-frame draw
 	// list, in the same order the direct blits ran. drawFeature subtracts the

@@ -49,6 +49,13 @@ type battleSession struct {
 	// zero means "not negotiated yet" and reads back as the authored size.
 	surfaceW, surfaceH int32
 
+	// detail is the load-time remaster's 2x art for this battle, synthesized on
+	// the loader goroutine and installed with the terrain at adoption
+	// (DESIGN_GPU_RENDERER §14.3, §14.4). Nil means the client doubles every 1x
+	// asset by nearest sampling, which is also what --auto-remaster=false gives.
+	// Presentation-only [I6].
+	detail *client.DetailArt
+
 	battleUI         *ui.BattleState
 	returnToMenu     func(*client.Client)
 	returnToSkirmish func(*client.Client)
@@ -101,9 +108,12 @@ type battleSession struct {
 	// [07 §10] C2. It is read once — at battle entry, by primeScrollSetting —
 	// rather than from disk on every host frame [WU-19-114]; scrollSetting
 	// falls back to loading it lazily so a battleSession built without going
-	// through the composition root (tests) still resolves a real value. Valid
-	// bytes are 1..255, so 0 doubles as "not primed yet".
-	scrollSpeedByte byte
+	// through the composition root (tests) still resolves a real value. Zero
+	// is a valid typed-command setting, so a separate bit records priming.
+	scrollSpeedByte   byte
+	scrollSpeedPrimed bool
+
+	chat battleChatState
 
 	dragScroll        camera.DragScroll
 	dragScrollActive  bool
@@ -218,10 +228,17 @@ func runBattleView(opts Options, cs *contentSet) error {
 		return fmt.Errorf("nanolathe: client: %w", err)
 	}
 	cl.SetModelFS(cs.fs)
-	b, err = composeBattleEntry(sess, cat, cs, cl, nil)
+	// The --map route has no loading screen to report against, so the remaster
+	// runs here, before the battle is adopted, and prints its own timing lines
+	// (DESIGN_GPU_RENDERER §14.4 "When").
+	b, err = composeBattleEntryWithDetail(sess, cat, cs, cl, nil, detailArtFor(opts, cs, sess.World, nil))
 	if err != nil {
 		return err
 	}
+	// The window's view scale is applied once at battle entry, after the
+	// camera has been squared with the surface, so the detail view starts on
+	// the same world point the native view would have shown (§14.6).
+	applyEntryZoom(opts, b)
 	clPtr = cl
 	exitBattle := func(cl *client.Client) {
 		// The battle view has no menu shell callback; mark it ended and exit.
@@ -278,10 +295,21 @@ func restartDirectBattle(opts Options, cs *contentSet, cl *client.Client, curren
 	if err != nil {
 		return err
 	}
+	// A restart is a fresh map load and gets its own remaster; the cache makes
+	// the second load of the same map a file read (§14.4 "Cache").
+	next.detail = detailArtFor(opts, cs, sess.World, nil)
 	old := *current
+	scale := int32(1)
+	if old.cam != nil {
+		scale = old.cam.EffectiveScale()
+	}
 	old.teardown(cl)
 	*current = next
 	installBattleClient(cl, next)
+	// The restarted battle keeps the view scale the player was on.
+	if next.cam != nil && scale > 1 {
+		setBattleViewScale(next, scale)
+	}
 	if next.hud != nil && next.hud.windowContext != nil {
 		next.hud.windowContext.completeTransition()
 	}
@@ -316,10 +344,19 @@ func windowRunOptions(opts Options) ebitenapp.RunOptions {
 // grant [08 R-ENTRY-01 §8]. This helper does not change which authored HUD
 // surfaces the existing battle loader provides.
 func composeBattleEntry(sess *session.Session, cat *content.Catalog, cs *contentSet, cl *client.Client, shell *gameShell) (*battleSession, error) {
+	return composeBattleEntryWithDetail(sess, cat, cs, cl, shell, nil)
+}
+
+// composeBattleEntryWithDetail is composeBattleEntry with the load-time
+// remaster's art, which the route that owns the load has already synthesized
+// (DESIGN_GPU_RENDERER §14.4 "When"). The art reaches the client at the same
+// grouped adoption that installs the terrain, and is cleared with it.
+func composeBattleEntryWithDetail(sess *session.Session, cat *content.Catalog, cs *contentSet, cl *client.Client, shell *gameShell, detail *client.DetailArt) (*battleSession, error) {
 	b, err := composeBattleEntryDetached(sess, cat, cs, shell, nil)
 	if err != nil {
 		return nil, err
 	}
+	b.detail = detail
 	if cl != nil {
 		installBattleClient(cl, b)
 	}
@@ -441,6 +478,9 @@ func installBattleClient(cl *client.Client, b *battleSession) {
 	bindBattleMessageRetirement(b.sess, cl)
 	cl.SetSnapshot(b.sess.Snapshot)
 	cl.SetTerrain(b.sess.World)
+	// The detail-art provider is installed with the terrain it belongs to and
+	// cleared by the SetTerrain(nil) of teardown (DESIGN_GPU_RENDERER §14.3).
+	cl.SetDetailArt(b.detail)
 	cl.SetCamera(b.cam)
 	cl.SetPalette(b.hud.pal)
 	cl.SetFNT(b.hud.console)
@@ -721,7 +761,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// finalize's flash arm [07 R-HUD-04 §1][07 R-CAM-01 §14]. It used to be
 	// ORed in here, which pinned the rail open as well as the panel.
 	spaceHeld := in != nil && in.Kbd != nil && in.Kbd.KeyHeld(input.KeySpace)
-	editorFocused := b.hud != nil && b.hud.editorFocused()
+	editorFocused := b.isTalkGUIActive() || b.hud != nil && b.hud.editorFocused()
 	b.battleState().AdvancePanelNow(spaceHeld, editorFocused)
 	// End-mission presentation takes ownership of the frame once the
 	// authoritative result is latched. The authored result panel owns any
@@ -772,20 +812,36 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
 	}
-	// A unit-information child makes its zero-token peek pass before battle
-	// hotkeys. It can claim an admitted quickkey, but it never gives Enter or
-	// Escape automatic default behavior [07 R-WGT-01 §§1-3].
-	unitInfoAtFrameStart := unitInfoOpen()
-	tokensBeforeChild := in.PendingTokens()
-	b.serviceUnitInfoKeyboard(in)
-	tokenClaimed := in.PendingTokens() < tokensBeforeChild
+	// An already-open TALK window owns its entire frame before ordinary battle
+	// children. Otherwise UNITINFO and the command palette receive their usual
+	// ordered peek, and only an Enter left unclaimed by both opens TALK
+	// [07 §3][07 §5 "Chat"].
+	talkOwned := b.chat.active
+	tokenClaimed := false
+	unitInfoAtFrameStart := false
 	b.paletteFrameServiced = true
-	b.palettePointerOwned = unitInfoAtFrameStart && !unitInfoOpen()
-	defer func() { b.paletteFrameServiced, b.palettePointerOwned = false, false }()
-	if b.hud != nil && !unitInfoAtFrameStart {
-		result, owned := b.hud.servicePaletteFrame(b, in, true)
-		b.palettePointerOwned = owned
-		tokenClaimed = result.ConsumedTokens > 0
+	b.palettePointerOwned = talkOwned
+	defer func() {
+		b.paletteFrameServiced, b.palettePointerOwned = false, false
+		b.chat.ownsFrame = false
+	}()
+	if talkOwned {
+		b.serviceTalk(in)
+	} else {
+		unitInfoAtFrameStart = unitInfoOpen()
+		tokensBeforeChild := in.PendingTokens()
+		b.serviceUnitInfoKeyboard(in)
+		tokenClaimed = in.PendingTokens() < tokensBeforeChild
+		b.palettePointerOwned = unitInfoAtFrameStart && !unitInfoOpen()
+		if b.hud != nil && !unitInfoAtFrameStart {
+			result, owned := b.hud.servicePaletteFrame(b, in, true)
+			b.palettePointerOwned = owned
+			tokenClaimed = result.ConsumedTokens > 0
+		}
+		if !tokenClaimed && talkOpenToken(in) && b.openTalk(in, cl) {
+			talkOwned = true
+			b.palettePointerOwned = true
+		}
 	}
 	if tokenClaimed && in.Kbd != nil {
 		// A GUI-claimed token cannot also trigger its physical press edge in the
@@ -797,7 +853,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		residual.Kbd = &keyboard
 		in = &residual
 	}
-	if keyDown(input.KeyTab) || (keyDown(input.KeyF2) && !shiftHeld) {
+	if !talkOwned && (keyDown(input.KeyTab) || keyDown(input.KeyF2) && !shiftHeld) {
 		b.openBattleMenu()
 		cl.Cursors().SetIndex(render.CursorNormal)
 		return
@@ -805,7 +861,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 	// Escape with the options window closed: an armed latch or placement
 	// returns to idle, and an idle latch deselects everything. It does not open
 	// the options window — that is F2's and Tab's row [07 R-CAM-01 §2].
-	if keyDown(input.KeyEscape) {
+	if !talkOwned && keyDown(input.KeyEscape) {
 		if b.battleState().Input.Latch == input.LatchNormal && b.battleState().Input.BuildDef == "" {
 			_ = b.enqueueSelectionCommand(session.HumanCommand{Kind: session.HumanSelectionClear})
 		}
@@ -833,7 +889,11 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 		// [07 R-CAM-01 §12]: a `t` or Ctrl+C pressed below therefore begins its
 		// glide on the following frame, as retail's does.
 		b.stepFollowCamera()
-		b.controller.Step(b.pointerSample(in, delta), cl)
+		sample := b.pointerSample(in, delta)
+		if talkOwned {
+			sample = talkOwnedInput(producerIn, delta)
+		}
+		b.controller.Step(sample, cl)
 		// The controller receives a value sample, not the client token ring. A
 		// palette/UNITINFO peek that left its prefix unclaimed has now had the
 		// residual battle hotkey pass; battle owns no editor, so it drains the
@@ -914,7 +974,7 @@ func (b *battleSession) viewerStep(delta float64, cl *client.Client) {
 			scroll(camera.DirDown)
 		}
 		// Middle-drag camera pan [F-P1-008]: presentation-only, uses mouse delta / scale.
-		if mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
+		if !talkActive && mouse.Held(input.MouseButtonMiddle) && mouse.Moved() {
 			dx := int32(mouse.X - b.battleState().Input.PrevMouseX)
 			dy := int32(mouse.Y - b.battleState().Input.PrevMouseY)
 			if dx != 0 || dy != 0 {

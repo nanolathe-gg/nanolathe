@@ -106,7 +106,10 @@ func (c *Client) DrawProjectileViews(current []frame.ProjectileView, now uint32,
 			x, y := c.cam.WorldToScreen(view.X, view.Y, view.Z)
 			// The sprite/GAF render types blit their frame keyed at the anchor
 			// [03 §5.4]; Anchored selects the offset-subtracting placement (WU-1.7b).
-			c.emitSprite(drawlist.Sprite{Frame: d.FrameAsset, X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
+			// The remaster covers feature banks only, so a projectile frame takes
+			// its nearest-doubled variant in the detail view
+			// (DESIGN_GPU_RENDERER §14.2, §14.3).
+			c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(d.FrameAsset), X: x - 128, Y: y - 32, Kind: drawlist.BlitKeyed, Anchored: true})
 			stats.Sprites++
 		}
 	}
@@ -137,7 +140,7 @@ func (c *Client) drawProjectileShadow(shadow *formats.GAFFrame, v frame.Projecti
 	sx, sy := c.cam.WorldToScreen(v.X, floor, v.Z)
 	// The ground shadow is a plain keyed frame-anchor blit [03 §5.4]; Anchored
 	// selects the offset-subtracting placement (WU-1.7b).
-	c.emitSprite(drawlist.Sprite{Frame: shadow, X: sx - camera.OriginX, Y: sy - camera.OriginY, Kind: drawlist.BlitKeyed, Anchored: true})
+	c.emitSprite(drawlist.Sprite{Frame: c.viewFrame(shadow), X: sx - camera.OriginX, Y: sy - camera.OriginY, Kind: drawlist.BlitKeyed, Anchored: true})
 	return true
 }
 

@@ -206,20 +206,30 @@ func (c *Client) borrowModelImage(width, height int, ox, oy, ax, ay int32, key b
 }
 
 type packetScratch struct {
-	g        drawlist.ModelGeometry
-	vertices []drawlist.ModelVertex
+	g                drawlist.ModelGeometry
+	vertices         []drawlist.ModelVertex
+	cachedFaces      []drawlist.ModelFace
+	cachedVertices   []drawlist.ModelVertex
+	supersample      drawlist.ModelGeometry
+	supersampleFaces []drawlist.ModelFace
+	supersampleVerts []drawlist.ModelVertex
 }
 
-func (c *Client) borrowModelPacket(polys []screenPoly, width, height, ox, oy, ax, ay, scale int32, key bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
-	if !c.modelScratch.active {
-		return modelGeometryPacketAt(polys, width, height, ox, oy, ax, ay, scale, key, fallback)
-	}
+func (c *Client) borrowPacketScratch() *packetScratch {
 	s := &c.modelScratch
 	if s.packetNext == len(s.packets) {
 		s.packets = append(s.packets, &packetScratch{})
 	}
 	p := s.packets[s.packetNext]
 	s.packetNext++
+	return p
+}
+
+func (c *Client) borrowModelPacket(polys []screenPoly, width, height, ox, oy, ax, ay, scale int32, key bool, fallback drawlist.ModelFallbackReason) *drawlist.ModelGeometry {
+	if !c.modelScratch.active {
+		return modelGeometryPacketAt(polys, width, height, ox, oy, ax, ay, scale, key, fallback)
+	}
+	p := c.borrowPacketScratch()
 	count := 0
 	for _, f := range polys {
 		count += len(f.x)

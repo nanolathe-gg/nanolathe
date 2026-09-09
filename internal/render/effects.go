@@ -202,6 +202,35 @@ func (p *FixedEffectPool) AppendView(v frame.EffectView) bool {
 	return p.Append(r)
 }
 
+// resolveUnresolvedPrimary supplies authored timing to named primary players
+// admitted before composition installed its resolver. A player with valid
+// durations has already resolved (or completed), so binding never restarts it; the
+// secondary player and stable record order are untouched [03 §1][I6].
+func (p *FixedEffectPool) resolveUnresolvedPrimary(resolver TimingResolver) {
+	if p == nil || resolver == nil {
+		return
+	}
+	for i := range p.records {
+		record := &p.records[i]
+		if record.Graphic == "" || record.AnimA.Active || validDurations(record.AnimA.Durations) {
+			continue
+		}
+		timing, ok := resolver(Event{Graphic: record.Graphic, AssetID: record.AssetID})
+		if !ok || !validDurations(timing.Durations) {
+			continue
+		}
+		primary := EffectAnimPlayer{
+			Idx:       record.AnimA.Idx,
+			Loop:      timing.Loop,
+			Active:    true,
+			Frames:    len(timing.Durations),
+			Durations: append([]int32(nil), timing.Durations...),
+		}
+		primary.Countdown = primary.frameDuration(primary.Idx)
+		record.AnimA = primary
+	}
+}
+
 // SnapshotViews returns a detached, stable read-only view of the active pool.
 // It is the only data presentation consumers need from the mutable pool [I6].
 func (p *FixedEffectPool) SnapshotViews() []frame.EffectView {

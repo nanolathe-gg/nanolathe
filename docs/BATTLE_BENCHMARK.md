@@ -19,6 +19,16 @@ Each output directory must be new. Use `--root` for another retail install,
 180 measured draws, and `--benchmark-factories=false` for the earlier battle
 without factory orders. Assets are not embedded or committed. Run cases
 sequentially without concurrent builds, tests or other performance workloads.
+
+`--zoom 2` runs the same scene in the detail view: the same simulation from
+twice the pixels (docs/DESIGN_GPU_RENDERER.md §14). The scale is applied after
+the scene's camera jump, about the viewport centre, so the same army is framed;
+`--auto-remaster=false` runs the detail view on nearest-doubled art instead of
+the load-time remaster's. Both are recorded in `frames.json` as `zoom` and
+`auto_remaster`, and a run is comparable only with another at the same scale —
+the detail view is a different amount of pixel work, not a different scene. The
+first `--zoom 2` run of a map pays the remaster (seconds, before the window
+opens and outside every measurement); later runs read its cache.
 The visible window runs with VSync at `--benchmark-tps` draws per second (30, the
 retail cadence, by default; 60 an intermediate rate; 120 the Enhanced
 presentation target) and continues when unfocused. At 30 and 60 one simulation
@@ -29,7 +39,7 @@ interpolated presentation of docs/DESIGN_GPU_RENDERER.md §13.5 at the retail
 simulation rate; only the modern renderer blends, classic keeps committed-tick
 sampling at every rate. Compare runs at one rate.
 
-`frames.json` records scene version, seed, map, renderer, display options, runtime
+`frames.json` records scene version, seed, map, renderer, view scale, display options, runtime
 and build information, per-frame timings and feature census. `cpu.pprof`,
 `alloc-base.pprof` and `alloc.pprof` cover the measurement window; inspect allocation
 deltas with `go tool pprof -base OUTPUT/alloc-base.pprof OUTPUT/alloc.pprof`.

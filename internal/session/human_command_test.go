@@ -5,11 +5,32 @@ import (
 
 	"github.com/nanolathe/nanolathe/internal/clock"
 	"github.com/nanolathe/nanolathe/internal/content"
+	"github.com/nanolathe/nanolathe/internal/economy"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/hud"
+	"github.com/nanolathe/nanolathe/internal/mission"
 	"github.com/nanolathe/nanolathe/internal/orders"
 	"github.com/nanolathe/nanolathe/internal/pool"
 )
+
+func TestLocalTypedCommandsApplyWithoutAUnitWorld(t *testing.T) {
+	econ := &economy.Service{}
+	econ.Players[0].Exists = true
+	s := &Session{Econ: econ, LocalOwner: 0}
+	s.applyHumanCommand(HumanCommand{Kind: HumanNoShake}, 1)
+	if !s.NoShake() {
+		t.Fatal("HumanNoShake did not use the authoritative toggle")
+	}
+	s.applyHumanCommand(HumanCommand{Kind: HumanATM}, 1)
+	if econ.Players[0].Stock[economy.Metal] != 1000 || econ.Players[0].Stock[economy.Energy] != 1000 {
+		t.Fatalf("HumanATM stock = %v, want uncapped 1000 metal and energy", econ.Players[0].Stock)
+	}
+	s.Mission = &mission.Mission{Type: mission.TypeCampaign}
+	s.applyHumanCommand(HumanCommand{Kind: HumanATM}, 2)
+	if econ.Players[0].Stock[economy.Metal] != 1000 || econ.Players[0].Stock[economy.Energy] != 1000 {
+		t.Fatal("HumanATM changed campaign stock across the authoritative mask-2 gate")
+	}
+}
 
 func TestHumanCommandSequenceAndDueTickAreSessionOwned(t *testing.T) {
 	cat := &content.Catalog{Units: map[string]*content.UnitDef{}}

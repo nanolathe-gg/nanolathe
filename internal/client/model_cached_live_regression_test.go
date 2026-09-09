@@ -33,6 +33,68 @@ func TestCachedLiveMotionExpandsRetainedBounds(t *testing.T) {
 	}
 }
 
+func TestGeometryOnlyCachedLaneRetainsBodyAndRecordsLiveFaces(t *testing.T) {
+	c, v := cachedLiveRegressionSubject(t)
+	c.antiAlias, c.pal = true, &palette.Tables{}
+	v.Pieces[1].Tx = numeric.Fixed(48 << 16)
+	c.geometryOnlyModels = true
+	c.modelScratch.reset()
+	c.modelScratch.active = true
+	defer func() { c.modelScratch.active = false }()
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("geometry-only unit was not recorded")
+	}
+	models := c.list.ModelCommands()
+	if len(models) != 1 || models[0].Geometry == nil || len(models[0].Geometry.Faces) == 0 || len(models[0].Geometry.LiveFaces) == 0 {
+		t.Fatalf("first native lanes = %#v, want cached and live geometry", models)
+	}
+	if got := len(c.cachedModelBodies[v.InstanceID].geometry.LiveFaces); got != 0 {
+		t.Fatalf("retained cached geometry holds %d live faces", got)
+	}
+	if models[0].Geometry.Supersample == nil {
+		t.Fatal("structure cached lane lost its doubled geometry")
+	}
+	native := models[0].Geometry.Faces[0].Vertices[0]
+	doubled := models[0].Geometry.Supersample.Faces[0].Vertices[0]
+	if doubled.X != 2*native.X || doubled.Y != 2*native.Y {
+		t.Fatalf("doubled cached corner=%+v, native=%+v", doubled, native)
+	}
+	cachedVertex := models[0].Geometry.Faces[0].Vertices[0]
+	cachedWidth, cachedHeight := models[0].Geometry.Width, models[0].Geometry.Height
+	c.list.Reset()
+	c.modelScratch.reset()
+	v.Pieces[1].Tx = 0
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("second geometry-only unit was not recorded")
+	}
+	second := c.list.ModelCommands()[0].Geometry
+	if len(second.LiveFaces) == 0 || second.Faces[0].Vertices[0] != cachedVertex {
+		t.Fatal("current live pose changed retained cached lane")
+	}
+	if second.Width < cachedWidth || second.Height < cachedHeight {
+		t.Fatalf("contracted live pose cropped retained box: %dx%d, want at least %dx%d", second.Width, second.Height, cachedWidth, cachedHeight)
+	}
+}
+
+func TestGeometryOnlyKeylessLiveIsLaterDirectModel(t *testing.T) {
+	c, v := cachedLiveRegressionSubject(t)
+	v.BMCode, v.ZBuffer = true, false
+	c.geometryOnlyModels = true
+	c.modelScratch.reset()
+	c.modelScratch.active = true
+	defer func() { c.modelScratch.active = false }()
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("keyless geometry-only unit was not recorded")
+	}
+	models := c.list.ModelCommands()
+	if len(models) != 2 || models[0].Geometry.KeyPlane || models[1].Geometry.KeyPlane || len(models[0].Geometry.LiveFaces) != 0 {
+		t.Fatalf("keyless record = %#v, want cached body then direct live", models)
+	}
+	if models[1].Geometry.Width != int32(c.width) || models[1].Geometry.Height != int32(c.height) {
+		t.Fatal("later live command did not use direct framebuffer projection")
+	}
+}
+
 func TestCachedLiveChildPassWinsEqualCachedKeys(t *testing.T) {
 	c, v := cachedLiveRegressionSubject(t)
 	c.resetListForTest()
@@ -229,6 +291,27 @@ func TestCachedBodyMemoizationTracksPresentationInputs(t *testing.T) {
 	paletteChanged := c.cachedModelBodies[v.InstanceID]
 	if paletteChanged == zoom || paletteChanged.palette != p2 {
 		t.Fatal("palette installation reused the prior cached body")
+	}
+
+	// Switching to the native recorder rebuilds retained geometry under the
+	// new palette identity. It must not relabel this classic plane and let a
+	// later classic frame reuse it.
+	oldImage := paletteChanged.image
+	c.SetPalette(p1)
+	c.geometryOnlyModels = true
+	c.modelScratch.reset()
+	c.modelScratch.active = true
+	if !c.drawUnitModel(v, 0, 0) {
+		t.Fatal("geometry-only cached lane was not recorded")
+	}
+	c.modelScratch.active = false
+	c.geometryOnlyModels = false
+	if body := c.cachedModelBodies[v.InstanceID]; body.image != nil {
+		t.Fatal("geometry replacement retained a classic image under new inputs")
+	}
+	cachedLiveReplay(t, c, v)
+	if body := c.cachedModelBodies[v.InstanceID]; body.image == nil || body.image == oldImage || body.palette != p1 {
+		t.Fatal("classic replay reused the pre-geometry cached image")
 	}
 }
 

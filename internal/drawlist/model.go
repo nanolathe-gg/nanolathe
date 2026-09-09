@@ -71,6 +71,12 @@ type ClassicModelImage struct {
 	OriginX, OriginY int32
 	AnchorX, AnchorY int32
 	Transparent      uint8
+	// Blit is the nearest-neighbour factor the blit applies: 0 or 1 draws
+	// one framebuffer pixel per image pixel, 2 draws a 2x2 block per image
+	// pixel about the anchor. Original at the detail scale rasterizes the
+	// model at its native size and doubles it here, so the classic frame is a
+	// pure upscale of the native one (DESIGN_GPU_RENDERER §14.2).
+	Blit int32
 }
 
 // Clone returns an image whose mutable planes do not alias the source.
@@ -118,8 +124,9 @@ type ModelChild struct {
 }
 
 // ModelGeometry is the immutable, subject-local geometry input for the modern
-// model path. Its slices are owned by the packet and never alias the recorder's
-// scratch storage. Origin is the image pixel at model-local (0,0), and Anchor
+// model path. Recorded slices remain valid until the next recording pass;
+// Clone owns independent slices for retained consumers. Origin is the image
+// pixel at model-local (0,0), and Anchor
 // is that point on the framebuffer. The outer packet describes native output;
 // Supersample optionally supplies a doubled local body raster for the resolve.
 //
@@ -130,6 +137,9 @@ type ModelGeometry struct {
 	Eligible bool
 	Fallback ModelFallbackReason
 	Faces    []ModelFace
+	// LiveFaces are the current unshaded DontCache lane. Faces remain the
+	// retained cached lane, including the optional structure supersample.
+	LiveFaces []ModelFace
 	// Shadow is a separately projected silhouette, committed before this body.
 	Shadow *ModelGeometry
 	// Supersample is an optional doubled body raster in local image coordinates.
@@ -175,6 +185,11 @@ func (g *ModelGeometry) Clone() *ModelGeometry {
 	for i := range g.Faces {
 		out.Faces[i] = g.Faces[i]
 		out.Faces[i].Vertices = append([]ModelVertex(nil), g.Faces[i].Vertices...)
+	}
+	out.LiveFaces = make([]ModelFace, len(g.LiveFaces))
+	for i := range g.LiveFaces {
+		out.LiveFaces[i] = g.LiveFaces[i]
+		out.LiveFaces[i].Vertices = append([]ModelVertex(nil), g.LiveFaces[i].Vertices...)
 	}
 	return &out
 }

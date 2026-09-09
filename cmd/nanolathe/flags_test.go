@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -84,7 +85,7 @@ func TestValidateShotModelRequiresModernAndValidPose(t *testing.T) {
 		want string
 	}{
 		{Options{Shot: "model.png", ShotModel: "armsolar", Renderer: "classic", ShotModelScale: 2}, "requires --renderer=modern"},
-		{Options{Shot: "model.png", ShotModel: "armsolar", Renderer: "modern", ShotModelScale: 8}, "0.25..4"},
+		{Options{Shot: "model.png", ShotModel: "armsolar", Renderer: "modern", ShotModelScale: 8}, "must be 1 or 2"},
 		{Options{Shot: "model.png", ShotModel: "armsolar", Renderer: "modern", ShotRenderer: "both", ShotModelScale: 2, ShotGPUProfileFrames: 120}, "battle captures only"},
 		{Options{Shot: "model.png", ShotModel: "armsolar", Renderer: "modern", ShotModelScale: 2, ShotModelPose: "unknown"}, "wants \"open\" or \"activated\""},
 	} {
@@ -133,5 +134,29 @@ func TestGPUProfileWindowHasExactlyMeasuredCadenceSamples(t *testing.T) {
 				t.Fatalf("final capture changed draw count to %d, want %d", w.draws, gpuProfileWarmupFrames+requested+1)
 			}
 		})
+	}
+}
+
+// --zoom is the integer view scale of DESIGN_GPU_RENDERER §14.6, replacing the
+// fractional --shot-zoom. It is not a capture option: the window path takes it
+// too, so it is validated whatever route the run takes.
+func TestZoomFlagAcceptsOnlyOneOrTwo(t *testing.T) {
+	for _, arg := range []string{"1", "2"} {
+		opts, err := parseFlags([]string{"-zoom", arg}, io.Discard)
+		if err != nil {
+			t.Fatalf("--zoom %s rejected: %v", arg, err)
+		}
+		if fmt.Sprint(opts.Zoom) != arg {
+			t.Fatalf("--zoom %s parsed as %d", arg, opts.Zoom)
+		}
+	}
+	for _, arg := range []string{"0", "3", "-1"} {
+		_, err := parseFlags([]string{"-zoom", arg}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "must be 1 (native) or 2 (the detail view)") {
+			t.Fatalf("--zoom %s error = %v, want the repo's rejection", arg, err)
+		}
+	}
+	if _, err := parseFlags([]string{"-shot-zoom", "2"}, io.Discard); err == nil {
+		t.Fatal("--shot-zoom is retired and must no longer parse")
 	}
 }

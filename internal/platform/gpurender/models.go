@@ -88,7 +88,7 @@ func (r *Renderer) Model(cmd drawlist.Model) {
 }
 
 func (r *Renderer) modelGeometryConfigSupported(g *drawlist.ModelGeometry) bool {
-	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelCopy == nil {
+	if r == nil || g == nil || g.Scale != 1 || len(g.Faces) == 0 && len(g.LiveFaces) == 0 || r.modelKey == nil || r.modelBody == nil || r.modelCommit == nil || r.modelCopy == nil {
 		return false
 	}
 	if g.Reveal != nil {
@@ -160,7 +160,7 @@ func modelLocalBounds(g *drawlist.ModelGeometry) image.Rectangle {
 		return image.Rect(0, 0, int(g.Width), int(g.Height))
 	}
 	var b image.Rectangle
-	for _, faces := range [][]drawlist.ModelFace{g.Faces, g.Outline} {
+	for _, faces := range [][]drawlist.ModelFace{g.Faces, g.LiveFaces, g.Outline} {
 		for _, f := range faces {
 			for _, v := range f.Vertices {
 				b = b.Union(image.Rect(int(v.X), int(v.Y), int(v.X)+1, int(v.Y)+1))
@@ -377,6 +377,13 @@ func (r *Renderer) composeModelChildren(g *drawlist.ModelGeometry, parent modelS
 		stage, scratch = scratch, stage
 		stageImg, scratchImg = scratchImg, stageImg
 		r.modelStats.GPU++
+	}
+	if g.Waterline != drawlist.ModelWaterlineNone || g.Digger {
+		r.beginPass(scratchImg)
+		r.appendModelQuad(area, area,
+			[4]float32{float32(g.Waterline), float32(g.WaterlineKey), boolFloat(g.Digger), float32(g.DiggerKey)}, [4]float32{})
+		r.modelDraw(scratch, r.modelClip, ebiten.BlendCopy, stage, r.tables.blue, nil, nil)
+		stageImg = scratchImg
 	}
 	r.commitModelSlot(stageImg, area, b)
 	r.modelStats.ComposedGroups++

@@ -191,10 +191,15 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 			text = title
 		} else if !dynamic && gad.Kind == gui.KindButton {
 			text = retailBattleButtonText(gad, panel, i, stage)
+		} else if !dynamic && gad.Kind == gui.KindTextBox && panel != nil {
+			text = panel.TextAt(i)
 		} else if !dynamic {
 			text = gad.Text
 		}
-		if text == "" || (gad.Kind != gui.KindButton && gad.Kind != gui.KindLabel) {
+		if text == "" && !(gad.Kind == gui.KindTextBox && panel != nil && panel.EditorCaptured() && panel.EditorIndex() == i) {
+			continue
+		}
+		if gad.Kind != gui.KindButton && gad.Kind != gui.KindLabel && gad.Kind != gui.KindTextBox {
 			continue
 		}
 		// The painter first selects the FNT the gadget's `fontnumber` picks
@@ -225,6 +230,24 @@ func (h *retailBattleHUD) drawGUIWindowState(c *client.Client, window *gui.Windo
 		case fallback != nil:
 			textWidth, metric = client.MeasureText(fallback, text), int(fallback.Height)
 		default:
+			continue
+		}
+		if gad.Kind == gui.KindTextBox {
+			color := h.guiColor(byte(panel.FlashRow(i)))
+			drawTextEditorState(c, panel, i, gad, r, text, func(s string) int {
+				if h.modalFont != nil {
+					return retailGAFTextWidth(h.modalFont, s)
+				}
+				return client.MeasureText(fallback, s)
+			}, metric, 0, h.guiColor(9),
+				func(x, y, w, height int, fill byte) { clipFill(c, x, y, w, height, fill, clip) },
+				func(text string, x, y, width int) {
+					if h.modalFont != nil {
+						drawRetailGAFTextClipped(c, h.modalFont, text, x, y, width, int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+					} else {
+						c.UITextWidthClipped(fallback, text, x, y, width, color, int(clip.X), int(clip.Y), int(clip.W), int(clip.H))
+					}
+				})
 			continue
 		}
 		if gad.Kind == gui.KindButton {

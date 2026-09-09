@@ -51,6 +51,9 @@ type retailBattleHUD struct {
 	logos       *formats.GAF
 	optionsGAF  *formats.GAF
 	optionsWin  *gui.Window
+	talkWin     *gui.Window
+	talkPanel   *ui.Panel
+	talkBuilt   bool
 	exitWin     *gui.Window
 	confirmWin  *gui.Window
 	restartWin  *gui.Window
@@ -274,6 +277,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 	// battle-entry failure or a fabricated modal [07 §11 "Missing and unknown"].
 	captions := windowContext.captions()
 	optionsWin := loadGUIOptional(fs, "guis/armopt.gui", "options window [07 \"Tab options menu and manual exit\"]", captions)
+	talkWin := loadGUIOptional(fs, "guis/talk.gui", "single-player chat window [07 §5 \"Chat\"]", captions)
 	optionsGAF := loadGAFOptional(fs, "anims/armopt.gaf", "options GAF [07 \"Tab options menu and manual exit\"]")
 	exitWin := loadGUIOptional(fs, "guis/exitmenu.gui", "exitmenu.gui [07 \"Tab options menu and manual exit\"]", captions)
 	confirmWin := loadGUIOptional(fs, "guis/yesorno.gui", "yesorno.gui [07 \"Tab options menu and manual exit\"]", captions)
@@ -348,7 +352,7 @@ func loadRetailBattleHUD(fs vfs.FSOps, sess *session.Session, cat *content.Catal
 		side: side, cat: cat, owner: sess.LocalOwner, anchors: anchors, console: console, guiFont: guiFont, pal: pal,
 		panelTop: panelTop, panelSide: panelSide, panelBottom: panelBottom,
 		intGAF: intGAF, common: common, oldMain: oldMain, share: share, logos: logos,
-		optionsGAF: optionsGAF, optionsWin: optionsWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
+		optionsGAF: optionsGAF, optionsWin: optionsWin, talkWin: talkWin, exitWin: exitWin, confirmWin: confirmWin, restartWin: restartWin,
 		modalFont: modalFont, modalFontSmall: modalFontSmall, stripArt: stripArt,
 		pausedFrame: pausedFrame, victoryFrame: victoryFrame, defeatFrame: defeatFrame,
 		resultWin: resultWin, resultGAF: resultGAF, resultVictoryFrame: resultVictoryFrame, resultDefeatFrame: resultDefeatFrame, resultPanel: resultPanel,
@@ -486,6 +490,36 @@ func (h *retailBattleHUD) applyDisplaySize(w, height int) {
 	placeBattleModal(h.exitWin, w, height)
 	placeBattleModal(h.confirmWin, w, height)
 	placeBattleModal(h.restartWin, w, height)
+	h.placeTalkWindow(w, height)
+}
+
+// openTalkWindow completes TALK.GUI's authored bottom-strip placement and
+// builds its retained editor only when Enter opens it [07 §5 "Chat"].
+func (h *retailBattleHUD) openTalkWindow() {
+	if h == nil || h.talkBuilt {
+		return
+	}
+	h.placeTalkWindow(int(h.screenW), int(h.screenH))
+	h.installWindow(h.talkWin, nil)
+	h.talkBuilt = true
+	if h.talkWin != nil {
+		h.talkPanel = ui.NewPanel(h.talkWin)
+		if sendTo := h.talkPanel.Index("SENDTO"); sendTo >= 0 {
+			h.talkPanel.SetActiveAt(sendTo, false)
+		}
+	}
+}
+
+func (h *retailBattleHUD) placeTalkWindow(w, height int) {
+	if h == nil || h.talkWin == nil || w <= 0 || height <= 0 {
+		return
+	}
+	x, y := int32(128), int32(height)-h.talkWin.Rect.H
+	h.talkWin.Rect.X, h.talkWin.Rect.Y = x, y
+	h.talkWin.OriginX, h.talkWin.OriginY = x, y
+	if len(h.talkWin.Gadgets) != 0 {
+		h.talkWin.Gadgets[0].Rect.X, h.talkWin.Gadgets[0].Rect.Y = x, y
+	}
 }
 
 func battleFrame(g *formats.GAF, name string) (*formats.GAFFrame, error) {
@@ -828,6 +862,9 @@ func (h *retailBattleHUD) draw(c *client.Client, b *battleSession, presented cli
 	// The unit information screen is a child window over the battle
 	// [07 R-HUD-03 §8].
 	h.drawUnitInfo(c)
+	// UNITINFO owns no keyboard, so Enter may open TALK while it remains on the
+	// linked window stack. TALK is the newer child and paints above it [07 §3].
+	h.drawTalk(c, b)
 	var result frame.ResultView
 	if cur != nil {
 		result = cur.Result

@@ -227,9 +227,9 @@ func checkModelSlotFrames() error {
 
 // modelStageMaxPasses is the contract of the destination-ordered slot stage:
 // the clear of each plane, the key work, the colour work, the reveal ping-pong,
-// the resolves that ride it, and the clipping that follows colour
+// the resolves that ride it, the separate live key/colour passes, and final clipping
 // [DESIGN_GPU_RENDERER.md §11.5 "Model slot passes"].
-const modelStageMaxPasses = 8
+const modelStageMaxPasses = 10
 
 func moveModelFixture(g *drawlist.ModelGeometry, dx, dy int32) {
 	if g == nil {

@@ -1,6 +1,7 @@
 package client
 
 import (
+	"github.com/nanolathe/nanolathe/internal/drawlist"
 	"github.com/nanolathe/nanolathe/internal/frame"
 	"github.com/nanolathe/nanolathe/internal/palette"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
@@ -12,6 +13,7 @@ import (
 // [03 R-REN-03A §4].
 type cachedModelBody struct {
 	image            *modelTarget
+	geometry         *drawlist.ModelGeometry
 	model            string
 	cacheRevision    uint64
 	validityRevision uint64
@@ -21,13 +23,13 @@ type cachedModelBody struct {
 	// cached physical-index raster from crossing a presentation setting or
 	// palette installation; they are not retail's script-driven validity word.
 	shaded, supersampled bool
-	scale                float32
+	scale                int32
 	palette              *palette.Tables
 }
 
 type cachedBodyInputs struct {
 	shaded, supersampled bool
-	scale                float32
+	scale                int32
 	palette              *palette.Tables
 }
 
@@ -122,6 +124,47 @@ func (c *Client) replaceCachedBody(id uint64, v frame.UnitView, draw *presentati
 		structure: draw.Structure, construction: v.BuildRemaining,
 		shaded: inputs.shaded, supersampled: inputs.supersampled, scale: inputs.scale, palette: inputs.palette,
 	}
+}
+
+// replaceCachedGeometry retains only the cached piece lane. Unlike the classic
+// image, this is immutable native input; current live pieces are added to a
+// frame-owned packet by unitGeometryPair.
+func (c *Client) replaceCachedGeometry(id uint64, v frame.UnitView, draw *presentationrender.UnitDraw, geometry *drawlist.ModelGeometry) {
+	if c == nil || draw == nil || geometry == nil {
+		return
+	}
+	if c.cachedModelBodies == nil {
+		c.cachedModelBodies = make(map[uint64]*cachedModelBody)
+	}
+	inputs := c.cachedBodyInputs(draw)
+	body := c.cachedModelBodies[id]
+	if body == nil {
+		body = &cachedModelBody{}
+		c.cachedModelBodies[id] = body
+	}
+	// Geometry-only recording has just established a new validity/settings
+	// identity for the cached lane. A retained classic image from the prior
+	// identity cannot inherit that tag: the next classic consumer must rebuild
+	// its own physical-index plane.
+	body.image = nil
+	body.geometry = geometry.Clone()
+	body.model, body.cacheRevision, body.validityRevision = draw.Model.Name, v.CacheRevision, v.CacheValidityRevision
+	body.structure, body.construction = draw.Structure, v.BuildRemaining
+	body.shaded, body.supersampled, body.scale, body.palette = inputs.shaded, inputs.supersampled, inputs.scale, inputs.palette
+}
+
+func (c *Client) cachedGeometryMustRebuild(body *cachedModelBody, v frame.UnitView, draw *presentationrender.UnitDraw, orient *presentationrender.OrientationCache) bool {
+	if body == nil || body.geometry == nil || draw == nil || draw.Model == nil || body.model != draw.Model.Name || body.geometry.KeyPlane != draw.KeyPlane {
+		return true
+	}
+	if body.validityRevision != v.CacheValidityRevision || body.structure && body.construction != v.BuildRemaining {
+		return true
+	}
+	inputs := c.cachedBodyInputs(draw)
+	if body.shaded != inputs.shaded || body.supersampled != inputs.supersampled || body.scale != inputs.scale || body.palette != inputs.palette {
+		return true
+	}
+	return orient == nil || orient.Model != draw.Model.Name || orient.NeedsRebuild(v.Heading, v.Pitch, v.Bank)
 }
 
 func (c *Client) cachedBodyMustRebuild(body *cachedModelBody, v frame.UnitView, draw *presentationrender.UnitDraw, orient *presentationrender.OrientationCache) bool {

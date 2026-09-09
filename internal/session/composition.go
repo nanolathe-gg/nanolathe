@@ -502,6 +502,7 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		return fmt.Errorf("unit %q model %s: %w", u.Def.UnitName, prov.ProviderID(), err)
 	}
 	sink := &cobPresentationSink{publication: s.publication, clock: s.Clock, source: u.Handle, session: s}
+	explosionSink := &cobExplosionSink{presentation: sink}
 	visible := func(_ int, _ int32) bool {
 		// This is the established unit-level gameplay visibility gate used by
 		// combat acquisition; it never mutates authoritative state [03 §3.2].
@@ -531,6 +532,9 @@ func (s *Session) bindUnitCOB(fs vfs.FSOps, u *units.Unit) error {
 		if s.World != nil {
 			binding.VM.BindPort(cob.Port(16), cob.GroundHeightPortFunc(s.World.HeightAt))
 		}
+		// Explode can run from Create, so its fixed-pool boundary must be bound
+		// before the VM enters that callback [04 R-COB-04 §1][R-CB-01 §4].
+		binding.VM.SetExplosionSink(explosionSink)
 		s.bindQueryPorts(binding, u)
 		// COB attach/drop carry a 16-bit unit identity. Bind this before Create
 		// so a Create callback sees the same carrier-owned mutation surface as

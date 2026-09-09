@@ -591,6 +591,18 @@ arena's mutable point storage. Session will adapt the COB request and bind this
 pool; frame publication and renderer consumption remain outside this API
 `[04 R-COB-04 §1]`–`[04 R-COB-04 §2]` [I4] [I5] [I6].
 
+**Bitmap production adapter.** The session binds its explosion sink before
+`Create`. Each selected bitmap is admitted synchronously into the existing
+fixed effect pool with named art and calculated table 2. Successful admission
+above the signed whole-unit sea boundary also invokes the existing land-dust
+producer. Binding authored timing after `Create` activates unresolved primary
+players in place, preserving identity, order and secondary animation; it does
+not restart resolved players or add a per-frame retry. Physical whole-piece
+and shatter requests still have explicit `TODO(U13)` refusals at this boundary
+`[04 R-COB-04 §1, §4]`. Ground debris impacts use calculated table 0; their
+future draw adapter must rebuild original vertices with the stepped angles
+`[04 R-COB-04 §2]` `[03 R-COMP-02 §6]`.
+
 **Whole-piece pool validation.** The bounded pool passed independent review,
 `tools/check`, `tools/check-retail`, and the GPU device fixtures after integration.
 A sequential scene-version-3 Ashap Plateau comparison used seed 7, factories,

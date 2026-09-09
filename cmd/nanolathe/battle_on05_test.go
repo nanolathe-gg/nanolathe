@@ -234,28 +234,24 @@ func TestMiddleDragLeavesWorldUnchanged(t *testing.T) {
 	}
 }
 
-// Wheel zoom changes only presentation projection [07 §10].
-func TestWheelZoomLeavesWorldUnchanged(t *testing.T) {
+// The detail view scale changes only the presentation projection [07 §10]
+// [F-P1-008] (DESIGN_GPU_RENDERER §14.1). The wheel is not a camera control.
+func TestDetailScaleLeavesWorldUnchanged(t *testing.T) {
 	cat := testCatalogON05()
 	terrain := testWorldON05(20, 20)
 	b := newTestBattle(cat, terrain)
 	u := placeUnit(b, "armsolar", numeric.Fixed(int64(200)<<16), numeric.Fixed(int64(200)<<16))
 	sx1, sy1 := b.cam.WorldToScreen(u.X, numeric.Fixed(0), u.Z)
-	origScale := b.cam.Scale
-	if origScale == 0 {
-		origScale = 1
-	}
-	b.cam.AddZoom(1, 320, 240)
-	newScale := b.cam.Scale
-	if newScale == origScale {
-		t.Fatalf("wheel should change scale")
+	b.cam.SetScaleAbout(320, 240, 2)
+	if b.cam.Scale != 2 {
+		t.Fatalf("scale should be 2, got %d", b.cam.Scale)
 	}
 	sx2, sy2 := b.cam.WorldToScreen(u.X, numeric.Fixed(0), u.Z)
 	if sx1 == sx2 && sy1 == sy2 {
-		t.Fatalf("projection should change after zoom")
+		t.Fatalf("projection should change at the detail scale")
 	}
 	if u.X != numeric.Fixed(int64(200)<<16) {
-		t.Fatalf("unit world pos should not change on zoom")
+		t.Fatalf("unit world pos should not change with the view scale")
 	}
 }
 

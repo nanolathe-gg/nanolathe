@@ -8,12 +8,19 @@ import (
 
 // Terrain draw for the modern executor — the orthographic tile pass in palette-
 // index space (docs/DESIGN_GPU_RENDERER.md §2.3, C-G4). It reproduces the classic
-// tile blitter (internal/client BlitTerrainOrigin) exactly at native scale: for
+// tile blitter (internal/client blitTerrain) exactly at either view scale: for
 // each visible tile it copies the same source block plus intra-tile remainder to
 // the same clipped destination rectangle, drawing an axis-aligned integer quad
-// that samples the per-map tile atlas with nearest filtering. Axis-aligned
-// integer quads rasterize to exactly the classic rect's pixels, so the two
-// executors write the same indices [03 §2.2][03 §2.5].
+// that samples the per-(tile set, scale) atlas with nearest filtering. Axis-
+// aligned integer quads rasterize to exactly the classic rect's pixels, so the
+// two executors write the same indices [03 §2.2][03 §2.5].
+//
+// The detail view is contract D4 (§14.5): the atlas holds one 32·s square per
+// tile, so the source-to-destination map stays 1:1 at every scale and the intra-
+// tile remainder is the classic blitter's own. At s = 2 that square is the
+// record's detail tile when it has one and the 32×32 tile magnified by s
+// otherwise, which is the per-tile choice the classic blitter makes (§14.2,
+// §14.3).
 //
 // Palette lookups stay deferred: this pass writes indices only, and the expansion
 // pass turns them to colour once at the end (C-G8).
@@ -24,97 +31,218 @@ const (
 	// is a file-format constant, not shared code.
 	terrainTileSize   = 32
 	terrainTilePixels = terrainTileSize * terrainTileSize
+	// terrainDetailSize is the side of one detail tile, the 2× tile set of
+	// DESIGN_GPU_RENDERER §14.3. drawlist.DetailTilePixels is its pixel count.
+	terrainDetailSize = 64
+	// terrainAtlasFallbackSide is the atlas side used before the graphics device
+	// reports its own maximum. ebiten.MaxImageSize answers 0 until the game has
+	// started, and every backend Ebitengine supports allows at least this, so a
+	// pre-device build is packed to a size no device rejects rather than to a
+	// guess that might.
+	terrainAtlasFallbackSide = 4096
 )
 
-// tileAtlas is one map's tile set uploaded as a single texture whose red channel
-// holds tile indices (C-G4). Tile i occupies the 32×32 block at grid position
-// (i%cols, i/cols); a tile pixel's atlas coordinate is derived in atlasSrc.
+// The detail tile the record carries is exactly terrainDetailSize squared; this
+// fails to compile if the two ever disagree.
+const _ = uint(terrainDetailSize*terrainDetailSize - drawlist.DetailTilePixels)
+
+// tileAtlasKey identifies one built atlas. The terrain pointer is the tile set's
+// identity, the scale selects the tile square, and the detail slice's backing
+// array distinguishes "no detail tiles yet" from a detail set installed later:
+// the load-time remaster (§14.4) can install tiles after the first frame, and
+// the atlas built before it must not be served afterwards.
+type tileAtlasKey struct {
+	terrain *world.Terrain
+	detail  *[drawlist.DetailTilePixels]byte
+	scale   int32
+}
+
+// tileAtlas is one map's tile set uploaded at one view scale as index textures
+// whose red channel holds tile bytes (C-G4). Tile i occupies the side×side block
+// at grid position (i%cols, (i/cols)%rowsPer) of page i/perPage; a tile pixel's
+// atlas coordinate is derived in atlasSrc.
+//
+// The atlas is paged because the square grid of a large tile set can exceed the
+// device's maximum image size at the detail scale. Measured over the 276 map
+// tile sets of a retail install, the largest is Lava & Two Hills at 11,561
+// tiles: 108×108 squares, which is 3,456 px at 32 and 6,912 px at 64. That is
+// one page on a device reporting 8,192 or more and three pages at 4,096; a
+// device whose maximum is below the grid gets one page per band of rows, and the
+// draw walks the pages in turn. Tile rectangles are pairwise disjoint, so
+// splitting the pass by page changes no pixel and no order (C-G3).
 type tileAtlas struct {
-	img   *ebiten.Image
-	cols  int // tiles per atlas row
-	count int // number of tiles (len(TileSet))
+	pages   []*ebiten.Image
+	side    int // atlas square per tile, 32*scale
+	cols    int // tiles per atlas row
+	rowsPer int // tile rows per page
+	perPage int // cols*rowsPer
+	count   int // number of tiles (len(TileSet))
 }
 
-// atlasSrc returns the atlas pixel coordinate of intra-tile pixel (sx, sy) of
-// tile id. The caller has already validated id against count.
-func (a *tileAtlas) atlasSrc(id, sx, sy int) (int, int) {
-	gx := (id % a.cols) * terrainTileSize
-	gy := (id / a.cols) * terrainTileSize
-	return gx + sx, gy + sy
+// atlasSrc returns the page and the atlas pixel coordinate of intra-tile pixel
+// (sx, sy) of tile id. The caller has already validated id against count.
+func (a *tileAtlas) atlasSrc(id, sx, sy int) (page, ax, ay int) {
+	page = id / a.perPage
+	local := id % a.perPage
+	gx := (local % a.cols) * a.side
+	gy := (local / a.cols) * a.side
+	return page, gx + sx, gy + sy
 }
 
-// buildTileAtlas packs every tile of t.TileSet into one index texture (C-G4).
-// Tiles are laid out in a near-square grid so neither atlas dimension grows
-// without bound. The red channel carries the tile byte; alpha is opaque so the
-// stored red survives premultiplied sampling and decodes back exactly.
-func buildTileAtlas(t *world.Terrain) *tileAtlas {
-	n := len(t.TileSet)
-	if n <= 0 {
-		return nil
+// terrainAtlasMaxSide is the largest atlas dimension this device accepts.
+// ebiten.MaxImageSize answers 0 before the game starts, which is when the
+// renderer's own tests build an atlas without a device.
+func terrainAtlasMaxSide() int {
+	if n := ebiten.MaxImageSize(); n > 0 {
+		return n
 	}
+	return terrainAtlasFallbackSide
+}
+
+// terrainAtlasLayout picks the page grid for n tiles of the given side: a near-
+// square grid, narrowed to what one page can hold, and banded into pages when
+// the rows do not fit one page either.
+func terrainAtlasLayout(n, side, maxSide int) (cols, rowsPer, pages int) {
 	// Near-square grid: cols = ceil(sqrt(n)). Integer sqrt by search keeps this
 	// free of float rounding at the grid boundary.
-	cols := 1
+	cols = 1
 	for cols*cols < n {
 		cols++
 	}
-	rows := (n + cols - 1) / cols
-	atlasW := cols * terrainTileSize
-	atlasH := rows * terrainTileSize
-	buf := make([]byte, atlasW*atlasH*4)
-	for i := 0; i < n; i++ {
-		tile := &t.TileSet[i]
-		gx := (i % cols) * terrainTileSize
-		gy := (i / cols) * terrainTileSize
-		for ty := 0; ty < terrainTileSize; ty++ {
-			dstRow := ((gy+ty)*atlasW + gx) * 4
-			srcRow := ty * terrainTileSize
-			for tx := 0; tx < terrainTileSize; tx++ {
-				p := dstRow + tx*4
-				buf[p] = tile[srcRow+tx]
-				buf[p+3] = 255
-			}
-		}
+	perSide := maxSide / side
+	if perSide < 1 {
+		// A single tile is wider than the device allows; one tile per page is
+		// the most this can do, and the draw still addresses it.
+		perSide = 1
 	}
-	img := ebiten.NewImage(atlasW, atlasH)
-	img.WritePixels(buf)
-	return &tileAtlas{img: img, cols: cols, count: n}
+	if cols > perSide {
+		cols = perSide
+	}
+	rows := (n + cols - 1) / cols
+	rowsPer = rows
+	if rowsPer > perSide {
+		rowsPer = perSide
+	}
+	pages = (rows + rowsPer - 1) / rowsPer
+	return cols, rowsPer, pages
 }
 
-// atlasFor returns the cached tile atlas for t, building it on first use and
-// caching it by pointer identity (docs/DESIGN_GPU_RENDERER.md §2.3). A nil or
-// empty terrain has no atlas.
-func (r *Renderer) atlasFor(t *world.Terrain) *tileAtlas {
+// buildTileAtlas packs every tile of t.TileSet into index textures at one view
+// scale (C-G4, §14.5). The square reserved for a tile is 32·scale, and it is
+// filled the way the classic blitter fills the tile's screen rectangle: from the
+// detail tile when the record has one for that tile at a scale above native, and
+// otherwise from the 32×32 tile magnified by the blitter's own integer step. A
+// source pixel the blitter's guard rejects leaves the atlas texel at index zero,
+// which is the destination the blitter leaves untouched.
+//
+// The red channel carries the tile byte; alpha is opaque so the stored red
+// survives premultiplied sampling and decodes back exactly.
+func buildTileAtlas(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, scale int) *tileAtlas {
+	n := len(t.TileSet)
+	if n <= 0 || scale < 1 {
+		return nil
+	}
+	side := terrainTileSize * scale
+	cols, rowsPer, pageCount := terrainAtlasLayout(n, side, terrainAtlasMaxSide())
+	a := &tileAtlas{
+		side:    side,
+		cols:    cols,
+		rowsPer: rowsPer,
+		perPage: cols * rowsPer,
+		count:   n,
+		pages:   make([]*ebiten.Image, pageCount),
+	}
+	atlasW := cols * side
+	for page := 0; page < pageCount; page++ {
+		first := page * a.perPage
+		last := first + a.perPage
+		if last > n {
+			last = n
+		}
+		rows := (last - first + cols - 1) / cols
+		atlasH := rows * side
+		buf := make([]byte, atlasW*atlasH*4)
+		for i := first; i < last; i++ {
+			// The blitter's per-tile source choice: the detail tile at a scale
+			// above native when the record carries one for this tile, and the
+			// 32×32 tile otherwise (§14.2).
+			srcSide, src := terrainTileSize, t.TileSet[i][:]
+			if scale != 1 && i < len(detail) {
+				srcSide, src = terrainDetailSize, detail[i][:]
+			}
+			step := side / srcSide
+			if step <= 0 || len(src) < srcSide*srcSide {
+				continue
+			}
+			local := i - first
+			gx := (local % cols) * side
+			gy := (local / cols) * side
+			for ty := 0; ty < side; ty++ {
+				sy := ty / step
+				if sy >= srcSide {
+					continue
+				}
+				dstRow := ((gy+ty)*atlasW + gx) * 4
+				srcRow := sy * srcSide
+				for tx := 0; tx < side; tx++ {
+					sx := tx / step
+					if sx >= srcSide {
+						continue
+					}
+					p := dstRow + tx*4
+					buf[p] = src[srcRow+sx]
+					buf[p+3] = 255
+				}
+			}
+		}
+		img := ebiten.NewImage(atlasW, atlasH)
+		img.WritePixels(buf)
+		a.pages[page] = img
+	}
+	return a
+}
+
+// atlasFor returns the cached tile atlas for one (tile set, detail tiles, scale)
+// identity, building it on first use (docs/DESIGN_GPU_RENDERER.md §2.3, §14.5).
+// A nil or empty terrain has no atlas.
+func (r *Renderer) atlasFor(t *world.Terrain, detail [][drawlist.DetailTilePixels]byte, scale int32) *tileAtlas {
 	if t == nil || t.TileIndices == nil || len(t.TileSet) == 0 {
 		return nil
 	}
-	if a, ok := r.tileAtlases[t]; ok {
+	key := tileAtlasKey{terrain: t, scale: scale}
+	if len(detail) != 0 {
+		key.detail = &detail[0]
+	}
+	if a, ok := r.tileAtlases[key]; ok {
 		return a
 	}
-	a := buildTileAtlas(t)
-	r.tileAtlases[t] = a
+	a := buildTileAtlas(t, detail, int(scale))
+	r.tileAtlases[key] = a
 	return a
 }
 
 // Terrain replays one terrain blit into the indexed offscreen (C-G4). It matches
-// the classic BlitTerrainOrigin at native scale: a tile at world pixel (px, pz)
-// lands at (px-OriginX, pz-OriginY), the same rebasing the record's Origin fields
-// fold in [03 §2.5], and each tile's clipped destination rectangle and intra-tile
-// source offset are computed exactly as the byte blitter does.
+// the classic blitTerrain at either view scale: a tile at world pixel (px, pz)
+// lands at ((px-OriginX)·s, (pz-OriginY)·s), the rebasing and scaling the
+// record's Origin and Scale fields describe [03 §2.5](§14.2), and each tile's
+// clipped destination rectangle and intra-tile source offset are computed exactly
+// as the byte blitter does.
 //
-// The GPU executor derives projection from the record's OriginX/OriginY and the
-// DstW/DstH window rather than from the camera, so this path is native-scale
-// only. TODO(question): world-space zoom for modern terrain is a Phase-3 design
-// item (docs/DESIGN_GPU_RENDERER.md §5, world-space zoom); the parity matrix
-// keeps zoom at 1, so the scale term is not carried on the record and not applied
-// here. What would settle it: the design's world-space-zoom entry, which replaces
-// per-tile scaling with a single scaled compose.
+// The GPU executor derives projection from the record's OriginX/OriginY, its
+// Scale and the DstW/DstH window rather than from the camera, so it never reads
+// client state.
 func (r *Renderer) Terrain(c drawlist.Terrain) {
 	if r == nil || r.surfaces[0] == nil || r.scene2D == nil {
 		return
 	}
 	t := c.Terrain
-	atlas := r.atlasFor(t)
+	scale := c.Scale
+	if scale < 1 {
+		// Zero is the native scale: a recorder that never set the field draws
+		// the native view (drawlist.Terrain.Scale).
+		scale = 1
+	}
+	atlas := r.atlasFor(t, c.Detail, scale)
 	if atlas == nil {
 		// A nil/empty terrain draws nothing; the offscreen keeps its cleared void
 		// index, exactly as the classic clear-to-0 left it [03 §2.2].
@@ -141,14 +269,19 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 	}
 	originX := int(c.OriginX)
 	originY := int(c.OriginY)
+	s := int(scale)
+	tileScreen := terrainTileSize * s
 
-	// Visible tile range. The bounds only bound the loop; the per-tile clip below
-	// decides the covered pixels, so a one-tile pad on each side (harmless, its
-	// clipped rect is empty) guards against any off-by-one in the range itself.
+	// Visible tile range. Screen column c shows world pixel originX +
+	// floorDiv(c, s), the inverse the camera's ScreenToWorld computes (§14.2),
+	// so the visible world pixels are [originX, originX+floorDiv(dstW-1, s)].
+	// The bounds only bound the loop; the per-tile clip below decides the
+	// covered pixels, so a one-tile pad on each side (harmless, its clipped rect
+	// is empty) guards against any off-by-one in the range itself.
 	startTX := floorDivInt(originX, terrainTileSize) - 1
 	startTY := floorDivInt(originY, terrainTileSize) - 1
-	endTX := floorDivInt(originX+dstW-1, terrainTileSize) + 1
-	endTY := floorDivInt(originY+dstH-1, terrainTileSize) + 1
+	endTX := floorDivInt(originX+floorDivInt(dstW-1, s), terrainTileSize) + 1
+	endTY := floorDivInt(originY+floorDivInt(dstH-1, s), terrainTileSize) + 1
 	if startTX < 0 {
 		startTX = 0
 	}
@@ -162,53 +295,69 @@ func (r *Renderer) Terrain(c drawlist.Terrain) {
 		endTY = tileMapH - 1
 	}
 
-	// One command: the tile atlas rides source slot 3 of the scene shader, so the
-	// terrain pass merges into the same batch as the frame's sprites, glyphs and
-	// fills (docs/DESIGN_GPU_RENDERER.md §11.2).
-	if !r.sched.begin(schedOpaque, 0, 0, dstW, dstH, [4]*ebiten.Image{3: atlas.img}) {
-		return
-	}
-	for ty := startTY; ty <= endTY; ty++ {
-		for tx := startTX; tx <= endTX; tx++ {
-			tileID := int(t.TileIndices[ty*tileMapW+tx])
-			if tileID < 0 || tileID >= atlas.count {
-				continue
+	// One command per atlas page: the page rides source slot 3 of the scene
+	// shader, so the terrain pass merges into the same batch as the frame's
+	// sprites, glyphs and fills (docs/DESIGN_GPU_RENDERER.md §11.2). A tile set
+	// small enough for one page — every retail set on a current device — is one
+	// command, as it was before the detail view.
+	for page := 0; page < len(atlas.pages); page++ {
+		img := atlas.pages[page]
+		if img == nil {
+			continue
+		}
+		begun := false
+		for ty := startTY; ty <= endTY; ty++ {
+			for tx := startTX; tx <= endTX; tx++ {
+				tileID := int(t.TileIndices[ty*tileMapW+tx])
+				if tileID < 0 || tileID >= atlas.count {
+					continue
+				}
+				if tileID/atlas.perPage != page {
+					continue
+				}
+				// Tile screen origin (shear term is zero for terrain at ground
+				// height) [03 §2.5](§14.2).
+				sx := (tx*terrainTileSize - originX) * s
+				sy := (ty*terrainTileSize - originY) * s
+				dstX0, dstY0 := sx, sy
+				dstX1, dstY1 := sx+tileScreen, sy+tileScreen
+				if dstX0 < 0 {
+					dstX0 = 0
+				}
+				if dstY0 < 0 {
+					dstY0 = 0
+				}
+				if dstX1 > dstW {
+					dstX1 = dstW
+				}
+				if dstY1 > dstH {
+					dstY1 = dstH
+				}
+				if dstX0 >= dstX1 || dstY0 >= dstY1 {
+					continue
+				}
+				// Intra-tile source offset (remainder). The atlas square is the
+				// tile's screen square, so this is the blitter's own remainder at
+				// either scale [03 §2.2](§14.5).
+				srcX0 := dstX0 - sx
+				srcY0 := dstY0 - sy
+				w := dstX1 - dstX0
+				h := dstY1 - dstY0
+				if srcX0 < 0 || srcY0 < 0 || srcX0+w > atlas.side || srcY0+h > atlas.side {
+					continue
+				}
+				if !begun {
+					if !r.sched.begin(schedOpaque, 0, 0, dstW, dstH, [4]*ebiten.Image{3: img}) {
+						return
+					}
+					begun = true
+				}
+				_, ax0, ay0 := atlas.atlasSrc(tileID, srcX0, srcY0)
+				r.sched.quad(schedOpaque,
+					float32(dstX0), float32(dstY0), float32(dstX1), float32(dstY1),
+					float32(ax0), float32(ay0), float32(ax0+w), float32(ay0+h),
+					[4]float32{}, [4]float32{0, 0, 0, sceneOpTerrain})
 			}
-			// Tile screen origin at native scale (shear term is zero for terrain at
-			// ground height) [03 §2.5].
-			sx := tx*terrainTileSize - originX
-			sy := ty*terrainTileSize - originY
-			dstX0, dstY0 := sx, sy
-			dstX1, dstY1 := sx+terrainTileSize, sy+terrainTileSize
-			if dstX0 < 0 {
-				dstX0 = 0
-			}
-			if dstY0 < 0 {
-				dstY0 = 0
-			}
-			if dstX1 > dstW {
-				dstX1 = dstW
-			}
-			if dstY1 > dstH {
-				dstY1 = dstH
-			}
-			if dstX0 >= dstX1 || dstY0 >= dstY1 {
-				continue
-			}
-			// Intra-tile source offset (remainder), matching BlitTerrainOrigin's
-			// scale-1 path and its guard [03 §2.2].
-			srcX0 := dstX0 - sx
-			srcY0 := dstY0 - sy
-			w := dstX1 - dstX0
-			h := dstY1 - dstY0
-			if srcX0 < 0 || srcY0 < 0 || srcX0+w > terrainTileSize || srcY0+h > terrainTileSize {
-				continue
-			}
-			ax0, ay0 := atlas.atlasSrc(tileID, srcX0, srcY0)
-			r.sched.quad(schedOpaque,
-				float32(dstX0), float32(dstY0), float32(dstX1), float32(dstY1),
-				float32(ax0), float32(ay0), float32(ax0+w), float32(ay0+h),
-				[4]float32{}, [4]float32{0, 0, 0, sceneOpTerrain})
 		}
 	}
 }

@@ -22,31 +22,29 @@ func TestMiddleDragChangesCameraOnly(t *testing.T) {
 	// Pan is presentation-only: no side effect on sim
 }
 
-func TestWheelChangesPresentationOnly(t *testing.T) {
+// The view scale is presentation-only: setting it changes where a world point
+// lands on screen and nothing else [F-P1-008] (DESIGN_GPU_RENDERER §14.1). The
+// wheel is no longer a camera control, so the scale is set directly.
+func TestDetailScaleChangesPresentationOnly(t *testing.T) {
 	cam := &Camera{X: 50, Z: 50, ViewW: 640, ViewH: 480, MapW: 2000, MapH: 2000, Scale: 1}
-	// World point at (100,100) pixels
+	// World point at (200,200) pixels
 	wx := numeric.Fixed(int64(200) << 16)
 	wz := numeric.Fixed(int64(200) << 16)
 	sx1, sy1 := cam.WorldToScreen(wx, numeric.Fixed(0), wz)
-	origScale := cam.scale()
-	cam.AddZoom(1, 320, 240) // wheel up at center
-	newScale := cam.scale()
-	if newScale == origScale {
-		t.Fatalf("wheel should change scale")
+	cam.SetScaleAbout(320, 240, 2)
+	if cam.scale() != 2 {
+		t.Fatalf("scale should be 2, got %d", cam.scale())
 	}
 	sx2, sy2 := cam.WorldToScreen(wx, numeric.Fixed(0), wz)
 	if sx1 == sx2 && sy1 == sy2 {
-		t.Fatalf("presentation projection should change after zoom: before %d,%d after %d,%d", sx1, sy1, sx2, sy2)
+		t.Fatalf("presentation projection should change at the detail scale: before %d,%d after %d,%d", sx1, sy1, sx2, sy2)
 	}
-	// World coordinates unchanged (presentation only)
-	// ScreenToWorld inverse should still map approximately
+	// The inverse is exact at every integer scale, so the projected point maps
+	// back to the world pixel it came from (DESIGN_GPU_RENDERER §14.1).
 	wx2, wz2 := cam.ScreenToWorld(sx2, sy2)
-	// Allow small rounding error due to float scale
-	if int64(wx2>>16) != int64(wx>>16) && cam.Scale != 1 {
-		// The zoom keeps cursor point stable, but generic point may shift; just verify scale changed not world origin
+	if int64(wx2>>16) != int64(wx>>16) || int64(wz2>>16) != int64(wz>>16) {
+		t.Fatalf("round trip lost the world pixel: %d,%d", wx2>>16, wz2>>16)
 	}
-	_ = wx2
-	_ = wz2
 }
 
 func TestWASDUnbound(t *testing.T) {
@@ -65,18 +63,22 @@ func TestWASDUnbound(t *testing.T) {
 	// No WASD magic in camera package itself.
 }
 
-func TestZoomClamp(t *testing.T) {
-	cam := &Camera{Scale: 1, ViewW: 640, ViewH: 480, MapW: 1000, MapH: 1000, X: 0, Z: 0}
-	for i := 0; i < 20; i++ {
-		cam.AddZoom(1, 320, 240)
+// SetScaleAbout clamps to the integer scale's [1, 2] and keeps the world point
+// under the given screen position fixed [F-P1-008]
+// (DESIGN_GPU_RENDERER §14.1).
+func TestViewScaleClamp(t *testing.T) {
+	cam := &Camera{Scale: 1, ViewW: 640, ViewH: 480, MapW: 4000, MapH: 4000, X: 200, Z: 200}
+	before, _ := cam.ScreenToWorld(320, 240)
+	cam.SetScaleAbout(320, 240, 9)
+	if cam.scale() != 2 {
+		t.Fatalf("scale should clamp to 2, got %d", cam.scale())
 	}
-	if cam.scale() > 4.01 {
-		t.Fatalf("zoom should clamp max 4, got %f", cam.scale())
+	after, _ := cam.ScreenToWorld(320, 240)
+	if before != after {
+		t.Fatalf("the point under the cursor moved: %d then %d", before>>16, after>>16)
 	}
-	for i := 0; i < 40; i++ {
-		cam.AddZoom(-1, 320, 240)
-	}
-	if cam.scale() < 0.24 {
-		t.Fatalf("zoom should clamp min 0.25, got %f", cam.scale())
+	cam.SetScaleAbout(320, 240, -3)
+	if cam.scale() != 1 {
+		t.Fatalf("scale should clamp to 1, got %d", cam.scale())
 	}
 }

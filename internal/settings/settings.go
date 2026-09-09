@@ -560,9 +560,6 @@ func (s *Settings) Normalize() {
 	if s.ScrollSpeed < 0 || s.ScrollSpeed > 255 {
 		s.ScrollSpeed = DefaultScrollSpeed
 	}
-	if s.ScrollSpeed == 0 {
-		s.ScrollSpeed = DefaultScrollSpeed
-	}
 	// The unit limit's clamp is retail's own start-up clamp, not a schema
 	// repair: an absent value installs 250, and a stored value outside
 	// 20..500 is pulled to the nearer bound [08 R-SKIR-01 §6]. Zero cannot be
@@ -581,9 +578,6 @@ func (s *Settings) Normalize() {
 	// [07 R-CAM-01 §3][07 R-CAM-01 §7].
 	if s.GameSpeed < MinGameSpeed || s.GameSpeed > MaxGameSpeed {
 		s.GameSpeed = DefaultGameSpeed
-	}
-	if s.InterfaceType != InterfaceTypeLeftClick && s.InterfaceType != InterfaceTypeRightClick {
-		s.InterfaceType = DefaultInterfaceType
 	}
 	// Its only consumer reads bit 0 [07 R-CAM-01 §4]. Keep the stored
 	// representation semantic too.
@@ -666,6 +660,13 @@ func LoadFrom(path string) (Settings, error) {
 		return Defaults(), fmt.Errorf("settings: parse %s: %w", path, err)
 	}
 	s.Normalize()
+	// Startup clamps the stored interface word to the two stages of LEFTCLICK.
+	// The typed +IFace command may write any integer during a running battle,
+	// and the settings writer preserves that raw value until the next load
+	// [02 "Settings"][07 R-CAM-01 §5][07 R-CAM-01 §6].
+	if s.InterfaceType > InterfaceTypeRightClick {
+		s.InterfaceType = InterfaceTypeRightClick
+	}
 	return s, nil
 }
 

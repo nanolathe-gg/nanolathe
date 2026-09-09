@@ -5803,10 +5803,12 @@ allocation and advance to the following block, wrapping immediately at the
 arena end. A dead piece's block remains charged until the cursor reaches it.
 Eviction never preserves only part of a piece.
 
-The new debris owns separate transformed-point storage and copies the piece's
-pose, render flags and explosion motion state. Its world position is the
-copied piece offset plus the source unit's position. Subsequent source-piece
-pose mutation does not change the detached copy.
+The new debris owns a separate point workspace and copies the piece pose,
+render flags and explosion motion state. Each draw rebuilds that workspace
+from the model's original vertices after applying the debris record's current
+angle triple, then projects it at the record's world position. The position is
+the copied piece offset plus the source unit's position. Subsequent
+source-piece pose mutation does not change the detached copy.
 
 **Established — per-tick step.** The effect phase of the tick (the same phase
 as the fixed effect pool, doc 03 §1.3; doc 01 owns the phase order) visits

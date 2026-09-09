@@ -402,9 +402,10 @@ chat. The inline `+<digit>`/`+a`/`+e` mini-language of §5 "Chat" runs
 
 **Established fact — dispatch mechanics.** A `+` line is copied (at most 79
 bytes) into a persistent last-command buffer, tokenised into up to 20
-whitespace-separated words (a `#` ends the line; words keep their case; the
-word storage is 126 bytes), and the first word is looked up in the command
-vector by **case-insensitive** binary search. The entry's route mask is ANDed
+whitespace-separated words (a `#` ends parsing even inside a word, a semicolon
+is ordinary word content, words keep their case, and the shared word storage
+is 126 bytes including terminators), and the first word is looked up in the
+command vector by **case-insensitive** binary search. The entry's route mask is ANDed
 with the caller's route word: on a nonzero result the entry's handler runs and
 the entry's mask is returned; otherwise, if a default handler is installed
 and its mask matches, the default handler runs and its mask is returned;
@@ -422,8 +423,10 @@ is forced to `0` (everyone), so a cheat is broadcast to all players.
 **Unknown (out of scope):** how the multiplayer receive path applies the
 lobby bit before re-dispatching a received `+` line.
 
-Handlers read word *n* as text or as its integer value (`atoi` semantics;
-absent words read as `0`). `flags` below means the mode-flags word that also
+Handlers read word *n* as text or as its integer value: the longest signed
+decimal prefix is converted with 32-bit `atoi` semantics, trailing bytes are
+ignored, and an absent word or one without a digit prefix reads as `0`.
+`flags` below means the mode-flags word that also
 holds the developer bit; `interface flags` the word of [R-CAM-01 §4]; `render
 flags` the terrain-render flags word; "write settings" the registry write-all
 path. Player-slot arguments are valid when `0..9`, the slot is occupied, its
@@ -2527,16 +2530,18 @@ every session kind; the `0x05` chat packet built first is dropped unsent in
 single player ([08 R-OOS-01 §1]).
 
 **The chat contract is closed.** Character token `0x0D` (Enter) opens chat
-through the battle hotkey dispatcher and plays the `SmallButton` cue. The
-dialog is `TALK.GUI`, except that the expanded `TALK2.GUI` form opens when a
-persistent expansion-flag byte has bit `0x01` set and the mission-mode word
-equals `3` (battle); the expanded form opens with its placement parameter
-reduced by `0x80` (`0x800` instead of `0x880`). Opening installs the dialog
-callback, sets chat-active state bit `0x04` in the battle-interface state
+through the battle hotkey dispatcher and plays the `SmallButton` cue. The two
+single-player session kinds always open `TALK.GUI`; its installed rectangle
+keeps the authored left edge at 128 and is aligned to the live surface bottom.
+The expanded `TALK2.GUI` form is confined to multiplayer session kind 3 and
+opens only when a persistent expansion-flag byte has bit `0x01` set; its
+placement parameter is reduced by `0x80` (`0x800` instead of `0x880`). Opening
+installs the dialog callback, sets chat-active state bit `0x04` in the battle-interface state
 byte, binds the persistent text storage into the `TALK` control, moves
 keyboard focus there, configures `SENDTO`, and in the expanded battle form
-also configures `SENDTYPE`; in non-battle modes `SENDTO` is hidden. The first
-open zero-fills the persistent storage exactly once; later opens reuse
+also configures `SENDTYPE`. The single-player form hides `SENDTO` and
+synthesises no player-recipient rows. The first open zero-fills the persistent
+storage exactly once; later opens reuse
 whatever text survived close/reopen.
 
 Recipient selection has exactly four modes driven by a persistent recipient-
@@ -2564,6 +2569,15 @@ commit callback handles the mini-language inline on the same text:
 digit, `+a`/`+e` (case-insensitive) set the recipient-mode byte to allies or
 enemies with the matching label, and any other `+...` sends the whole text as
 plain chat.
+
+**Established fact — the single-player local post.** The post uses the
+registered local player name without
+a fallback and composes `<name> text` (literal angle brackets followed by one
+space) before the message ring's own 63-character bound. It appends routing
+class 4, source-unit value 0 and speaker-slot sentinel 10 at the current
+published tick. Campaign entry registers the local player as `Player` before
+this path is reachable. The sentinel means this local chat line has neither a
+player-logo prefix nor a `MessageArrived` cue ([R-HUD-03 §14.3]).
 
 Activating the `TALK` control commits: the callback closes the dialog
 (clearing chat-active bit `0x04` when the gadget association is generic),

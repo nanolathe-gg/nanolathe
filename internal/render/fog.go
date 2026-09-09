@@ -66,6 +66,23 @@ type FogOp struct {
 	Frame              int   // value-1 when GAF, else -1 [03 §3.3]
 	Patterned          bool  // dither checker when applicable [03 §3.3]
 	R, G, B, A         uint8 // palette/SHD dark color or GAF-modulated (presentation) [03 §4.3]
+	// Scale is the presentation view scale the rectangle was projected at: 1
+	// natively and 2 in the detail view (DESIGN_GPU_RENDERER §14.2). It is an
+	// additive field, zero meaning 1, and it is what tells an executor which
+	// variant of the fog frame covers the scaled cell. The fills need only the
+	// rectangle, which already carries the scale.
+	Scale int32
+}
+
+// ViewScale is the op's view scale with its zero value read as the native
+// scale: the cell rectangle is 32*ViewScale on a side and the fog frame an
+// executor draws into it is the frame's ViewScale variant
+// (DESIGN_GPU_RENDERER §14.2).
+func (op FogOp) ViewScale() int32 {
+	if op.Scale < 1 {
+		return 1
+	}
+	return op.Scale
 }
 
 // floorDiv returns floor(a/b) for b>0 with sign correction [03 §2.1][I3].
@@ -107,16 +124,23 @@ func FogTileForWorld(world numeric.Fixed) int32 {
 // cell is therefore centred on the corner where tiles (gx,gy), (gx-1,gy),
 // (gx,gy-1), (gx-1,gy-1) meet — exactly the four tiles the 4-bit nibble
 // accumulates [03 §3.3].
+//
+// The rectangle is the cell's map-pixel origin through the same projection every
+// other world layer uses, so at the presentation view scale its edge is 32*s and
+// its corner is the projected corner [F-P1-008] (DESIGN_GPU_RENDERER §14.2). At
+// s = 1 the expression is the original one, unchanged.
 func FogScreenRect(cam *camera.Camera, gx, gy int32) (x0, y0, x1, y1 int32) {
 	var camX, camZ int32
+	var scale int32 = 1
 	if cam != nil {
 		camX = cam.X
 		camZ = cam.Z
+		scale = cam.EffectiveScale()
 	}
-	x0 = gx*FogTilePixels + FogTilePixels/2 - camX + camera.OriginX // [03 §2.5][03 §3.3][03 §3.3]
-	y0 = gy*FogTilePixels + FogTilePixels/2 - camZ + camera.OriginY
-	x1 = x0 + FogTilePixels // hard 32 [03 §3.3]
-	y1 = y0 + FogTilePixels
+	x0 = (gx*FogTilePixels+FogTilePixels/2-camX)*scale + camera.OriginX // [03 §2.5][03 §3.3]
+	y0 = (gy*FogTilePixels+FogTilePixels/2-camZ)*scale + camera.OriginY
+	x1 = x0 + FogTilePixels*scale // hard 32 world pixels [03 §3.3]
+	y1 = y0 + FogTilePixels*scale
 	return x0, y0, x1, y1
 }
 
@@ -154,8 +178,15 @@ func FogDarkRGBA(tables *palette.Tables) (r, g, b, a uint8) {
 // BEFORE channel zero [03 §3.3]. Channel zero ==15 short-circuits the cell
 // [03 §3.3].
 func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, tables *palette.Tables, dither bool) []FogOp {
-	x0, y0, x1, y1 := FogScreenRect(cam, gx, gy) // hard 32 [03 §3.3]
+	x0, y0, x1, y1 := FogScreenRect(cam, gx, gy) // hard 32 world pixels [03 §3.3]
 	dr, dg, db, da := FogDarkRGBA(tables)        // palette [03 §4.3] C7
+	// Every op of this cell carries the scale it was projected at, so an
+	// executor tiles the native fog frame across the scaled rectangle
+	// (DESIGN_GPU_RENDERER §14.2).
+	var scale int32 = 1
+	if cam != nil {
+		scale = cam.EffectiveScale()
+	}
 
 	// Channel zero ==15: fill whole 32x32 with default dark; nothing else [03 §3.3].
 	if c0 == 15 {
@@ -166,6 +197,7 @@ func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, ta
 			Kind:    FogKindSolidDark,
 			Variant: -1, Frame: -1,
 			R: dr, G: dg, B: db, A: da,
+			Scale: scale,
 		})
 	}
 
@@ -186,6 +218,7 @@ func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, ta
 			Kind: kind, Variant: -1, Frame: -1,
 			Patterned: patterned,
 			R:         dr, G: dg, B: db, A: da,
+			Scale: scale,
 		})
 	} else if c1 >= 1 && c1 <= 14 {
 		// GAF frame value-1 from four-way variant family selected by (col+row+camPhase)&3 [03 §3.3].
@@ -201,6 +234,7 @@ func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, ta
 			Kind: FogKindGAFCh1, Variant: variant, Frame: frame,
 			Patterned: patterned,
 			R:         dr, G: dg, B: db, A: da,
+			Scale: scale,
 		})
 	}
 
@@ -215,6 +249,7 @@ func cellOpsInto(ops []FogOp, gx, gy int32, c0, c1 uint8, cam *camera.Camera, ta
 			Channel0: c0, Channel1: c1,
 			Kind: FogKindGAFCh0, Variant: variant, Frame: frame,
 			R: dr, G: dg, B: db, A: da,
+			Scale: scale,
 		})
 	}
 
@@ -290,20 +325,27 @@ func BuildFogOpsWindowInto(out []FogOp, cache *visibility.FogCache, cam *camera.
 		return out
 	}
 	var camX, camZ int32
+	var scale int32 = 1
 	if cam != nil {
 		camX, camZ = cam.X, cam.Z
+		scale = cam.EffectiveScale()
 	}
+	// The window test is in SCREEN pixels: the composer's rebase and
+	// FogScreenRect's origin still cancel, but the cell's rebased rect is
+	// [(gx*32 + 16 - camX)*s, +32*s) at the view scale, so both the offset and
+	// the edge carry it (DESIGN_GPU_RENDERER §14.2).
+	edge := FogTilePixels * scale
 	for row := int32(0); row < h; row++ {
 		// The row test is hoisted out of the column walk: a fog grid is far
 		// taller than a viewport, so most rows are rejected by one comparison
 		// instead of by one per cell.
-		y0 := (oz+row)*FogTilePixels + FogTilePixels/2 - camZ
-		if y0+FogTilePixels <= 0 || y0 >= surfH {
+		y0 := ((oz+row)*FogTilePixels + FogTilePixels/2 - camZ) * scale
+		if y0+edge <= 0 || y0 >= surfH {
 			continue
 		}
 		for col := int32(0); col < w; col++ {
-			x0 := (ox+col)*FogTilePixels + FogTilePixels/2 - camX
-			if x0+FogTilePixels <= 0 || x0 >= surfW {
+			x0 := ((ox+col)*FogTilePixels + FogTilePixels/2 - camX) * scale
+			if x0+edge <= 0 || x0 >= surfW {
 				continue
 			}
 			c0, c1 := cache.Channel(col, row)

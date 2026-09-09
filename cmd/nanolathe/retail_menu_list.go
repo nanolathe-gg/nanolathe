@@ -437,10 +437,6 @@ func listIndexForAssocPanel(p *ui.Panel, assoc int32) int {
 	return -1
 }
 
-func (g *gameShell) listRectForAssoc(assoc int32) gui.Rect {
-	return listRectForAssocPanel(g.activePanel(), assoc)
-}
-
 func listRectForAssocPanel(p *ui.Panel, assoc int32) gui.Rect {
 	if p == nil || p.Window == nil {
 		return gui.Rect{}
@@ -520,10 +516,6 @@ func retailListItemHeight(gad gui.Gadget, fontHeight int) int {
 		height = minimum
 	}
 	return height
-}
-
-func (g *gameShell) retailListAssocItemHeight(assoc int32) int {
-	return retailListAssocItemHeightPanel(g, g.activePanel(), assoc)
 }
 
 func retailListAssocItemHeightPanel(g *gameShell, p *ui.Panel, assoc int32) int {

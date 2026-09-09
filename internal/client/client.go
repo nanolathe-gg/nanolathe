@@ -57,7 +57,11 @@ type Client struct {
 
 	// exitRequested lets authored in-game GUI actions terminate the same
 	// Ebitengine loop as closing the window. It is presentation state only.
-	exitRequested                  bool
+	exitRequested bool
+	// rendererToggles counts the executor swaps requested through
+	// RequestRendererToggle (F10). The window adapter polls it; nothing else
+	// reads it (docs/DESIGN_GPU_RENDERER.md §14.6) [I6].
+	rendererToggles                int
 	focused                        bool
 	pointerCaptured                bool
 	cursorRestorePending           bool
@@ -202,6 +206,20 @@ type Client struct {
 	featureGAFs   map[string]*formats.GAF      // lower filename -> GAF
 	featureFrames map[string]*formats.GAFFrame // lower "filename|seqname" -> frame
 	featureGACErr map[string]error             // memoised load failures (presentation-only)
+	// detailArt is the installed 2x art provider and detailFrames the resolved
+	// per-frame variants: the provider's own where it covers a frame, and the
+	// nearest-doubled frame built on first use everywhere else. Both are
+	// presentation-only and are never iterated on a draw path
+	// (DESIGN_GPU_RENDERER §14.3) [I1][I6].
+	detailArt    *DetailArt
+	detailFrames map[*formats.GAFFrame]*formats.GAFFrame
+	// doubledFrames is the nearest-doubled fallback cache, provider-independent
+	// and kept for the client's life. enhanced records that the Enhanced
+	// (modern) executor is presenting: only then is the provider consulted, so
+	// Original (classic) draws the authored tiles and frames, doubled, at the
+	// detail scale (DESIGN_GPU_RENDERER §14.3).
+	doubledFrames map[*formats.GAFFrame]*formats.GAFFrame
+	enhanced      bool
 	// featureSeqs memoises the compiled animation sequences the SIMULATION
 	// reads through Client.FeatureSequence — the burn frame geometry and the
 	// die/reclaim/burn lifetimes of [05 R-FEAT-01 §10]. A nil value is a
@@ -363,11 +381,16 @@ func New(opts Options) (*Client, error) {
 	return c, nil
 }
 
-// SetTerrain sets the world terrain for Gate 1 drawing [PLAN_04A C1].
+// SetTerrain sets the world terrain for Gate 1 drawing [PLAN_04A C1]. Clearing
+// the terrain clears the detail art with it: the tile set it carries belongs to
+// the map that is going away (DESIGN_GPU_RENDERER §14.3).
 func (c *Client) SetTerrain(t *world.Terrain) {
 	if c != nil && c.terrain != t {
 		c.resetFogCache()
 		c.terrain = t
+		if t == nil {
+			c.SetDetailArt(nil)
+		}
 	}
 }
 
@@ -523,6 +546,28 @@ func (c *Client) RequestExit() { c.exitRequested = true }
 // ExitRequested reports whether RequestExit has been called.
 func (c *Client) ExitRequested() bool { return c.exitRequested }
 
+// RequestRendererToggle asks the window adapter to swap presentation executors
+// — F10 of docs/DESIGN_GPU_RENDERER.md §14.6. The client owns neither executor,
+// so it publishes the request as a count the adapter polls at its next Update;
+// a route with no adapter (a capture, a test) never services it and nothing
+// changes. Presentation-only: no simulation phase reads it [I6].
+func (c *Client) RequestRendererToggle() {
+	if c == nil {
+		return
+	}
+	c.rendererToggles++
+}
+
+// RendererToggleCount reports how many executor swaps have been requested. The
+// adapter compares it with the count it last acted on, so a request made while
+// the window was between updates is never lost and never applied twice.
+func (c *Client) RendererToggleCount() int {
+	if c == nil {
+		return 0
+	}
+	return c.rendererToggles
+}
+
 // StepCursorScaledDelta advances the software cursor from the positive
 // scaled wall-clock delta used by the presentation adapter. Cursor playback
 // is not tied to runnable simulation ticks; the underlying cursor consumes a
@@ -564,6 +609,8 @@ func (c *Client) SetModelFS(fs *vfs.FS) {
 	c.logoIndex = map[string]texRef{}
 	c.featureGAFs = map[string]*formats.GAF{}
 	c.featureFrames = map[string]*formats.GAFFrame{}
+	c.detailArt = nil
+	c.detailFrames = nil
 	c.featureGACErr = map[string]error{}
 	c.featureSeqs = map[string]*featureSequenceInfo{}
 	c.projectileGAF = nil
@@ -784,6 +831,10 @@ func (c *Client) featureGAFFor(filename string) (*formats.GAF, error) {
 		return nil, err
 	}
 	c.featureGAFs[key] = gaf
+	// A bank loaded after the provider was installed is indexed as it loads, so
+	// the frame-variant lookup does not depend on load order
+	// (DESIGN_GPU_RENDERER §14.3).
+	c.indexDetailBank(key, gaf)
 	return gaf, nil
 }
 

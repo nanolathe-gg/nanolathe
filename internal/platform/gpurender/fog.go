@@ -48,14 +48,20 @@ type fogPass struct {
 	compiled  bool
 
 	// atlas packs every frame of all four variants of both families, each frame
-	// placed inside a fogAtlasTile square at its authored offset. atlasGray and
-	// atlasBlack are the family identity it was built for; slotPresent records
-	// which slots hold a drawable frame, which is the same admission
-	// classicSink.Fog makes per op (entry present, frame index in range, frame
-	// non-nil) [03 §3.3].
+	// placed inside a fogAtlasTile(scale) square at its authored offset.
+	// atlasGray, atlasBlack and atlasScale are the identity it was built for;
+	// slotPresent records which slots hold a drawable frame, which is the same
+	// admission classicSink.Fog makes per op (entry present, frame index in
+	// range, frame non-nil) [03 §3.3].
+	//
+	// The scale is part of that identity because the detail view draws each cell
+	// from the frame's 2× variant, one blit into the scaled cell (§14.2): the
+	// variant's pixels, its size and its authored offsets are all doubled, so it
+	// needs its own atlas geometry.
 	atlas       *ebiten.Image
 	atlasGray   [4]*formats.GAFEntry
 	atlasBlack  [4]*formats.GAFEntry
+	atlasScale  int32
 	atlasReady  bool
 	slotPresent [fogAtlasRows * fogAtlasCols]bool
 	// oversized counts frames that do not fit a fogAtlasTile square measured
@@ -90,8 +96,9 @@ type fogPass struct {
 // the region of the framebuffer the pass has to cover.
 type fogRegion struct {
 	// originX and originY are the UNCLAMPED rebased screen position of grid
-	// cell (0,0); every op's rebased origin is this plus a multiple of 32, so
-	// the shader recovers a cell index from a pixel by one floor division.
+	// cell (0,0); every op's rebased origin is this plus a multiple of the cell
+	// edge 32·s, so the shader recovers a cell index from a pixel by one floor
+	// division.
 	originX, originY int32
 	cols, rows       int
 	// The framebuffer region the pass draws, a superset of every pixel the
@@ -130,7 +137,10 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		// nothing to guess (I9).
 		return
 	}
-	r.fog.ensureAtlas(fg.Gray, fg.Black)
+	// The view scale the ops were projected at (§14.2). Every op of one frame is
+	// built from one camera, so the first op names the whole list's scale.
+	scale := fogOpsScale(fg.Ops)
+	r.fog.ensureAtlas(fg.Gray, fg.Black, scale)
 
 	w, h := int32(r.w), int32(r.h)
 	// The gray remap no longer reads the GRAY TABLE: in the true-colour composite
@@ -140,11 +150,11 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 	// therefore becomes the palette gate above.
 	const grayReady = true
 
-	region := fogRegionFor(fg.Ops, w, h)
+	region := fogRegionFor(fg.Ops, w, h, scale)
 	if !region.ok {
 		return
 	}
-	r.fog.encodeGrid(region, fg.Ops, w, h, grayReady)
+	r.fog.encodeGrid(region, fg.Ops, w, h, scale, grayReady)
 	if !r.fog.uploadGrid(region) {
 		return
 	}
@@ -161,17 +171,18 @@ func (r *Renderer) Fog(fg drawlist.Fog) {
 		imgs, r.fog.shader, blendComposite, 0) {
 		return
 	}
-	// The lattice origin and the checker parity ride the vertex custom attributes
-	// rather than a uniform map, so a steady-state frame builds no per-draw
-	// uniform (§11.2 "Allocation policy"). All four vertices carry the same
-	// values, so the interpolated attribute is constant across the region. Source
-	// coordinates equal destination coordinates, so the read surface is sampled
-	// 1:1 under each fragment.
+	// The lattice origin, the checker parity and the view scale ride the vertex
+	// custom attributes rather than a uniform map, so a steady-state frame builds
+	// no per-draw uniform (§11.2 "Allocation policy"). All four vertices carry the
+	// same values, so the interpolated attribute is constant across the region.
+	// Source coordinates equal destination coordinates, so the read surface is
+	// sampled 1:1 under each fragment.
 	x0, y0 := float32(region.x0), float32(region.y0)
 	x1, y1 := float32(region.x1), float32(region.y1)
 	r.sched.quad(schedDest, x0, y0, x1, y1, x0, y0, x1, y1,
 		[4]float32{},
-		[4]float32{float32(region.originX), float32(region.originY), float32(fogParityOps(fg.Ops)), 0})
+		[4]float32{float32(region.originX), float32(region.originY),
+			float32(fogParityOps(fg.Ops, scale)), float32(scale)})
 	r.fog.draws++
 }
 
@@ -214,17 +225,20 @@ func fogOpRect(op *render.FogOp, w, h int32) (rawX, rawY, x0, y0, x1, y1 int32, 
 // the region the pass must cover.
 //
 // The lattice comes from the ops themselves, never from a camera pointer: the
-// producer places a cell at rebased origin gx*32 + 16 - camX (render.FogScreenRect
-// with camera.OriginX cancelling against the composer's rebase), so every op's
-// rebased origin differs from every other by a multiple of 32 and the smallest
-// of them names cell (0,0) [03 §3.3].
+// producer places a cell at rebased origin (gx*32 + 16 - camX)·s
+// (render.FogScreenRect with camera.OriginX cancelling against the composer's
+// rebase), so every op's rebased origin differs from every other by a multiple
+// of the cell edge 32·s and the smallest of them names cell (0,0)
+// [03 §3.3](§14.2).
 //
 // The covered region is the union of [clamped origin, clamped origin +
-// fogAtlasTile) over the surviving ops, clipped to the framebuffer. That is a
+// fogAtlasTile(s)) over the surviving ops, clipped to the framebuffer. That is a
 // superset of every pixel the byte writers touch: a fill stays inside the cell's
-// own 32 pixels, and a fog GAF frame is anchored at the clamped origin and fits
-// inside a fogAtlasTile square by construction of the atlas.
-func fogRegionFor(ops []render.FogOp, w, h int32) fogRegion {
+// own 32·s pixels, and a fog GAF frame is anchored at the clamped origin and
+// fits inside a fogAtlasTile(s) square by construction of the atlas.
+func fogRegionFor(ops []render.FogOp, w, h, scale int32) fogRegion {
+	cell := fogCellPixels * scale
+	tile := int32(fogAtlasTile(scale))
 	var out fogRegion
 	var minRawX, minRawY, maxRawX, maxRawY int32
 	var minAX, minAY, maxAX, maxAY int32
@@ -248,29 +262,54 @@ func fogRegionFor(ops []render.FogOp, w, h int32) fogRegion {
 		return out
 	}
 	out.originX, out.originY = minRawX, minRawY
-	out.cols = int((maxRawX-minRawX)/fogCellPixels) + 1
-	out.rows = int((maxRawY-minRawY)/fogCellPixels) + 1
+	out.cols = int((maxRawX-minRawX)/cell) + 1
+	out.rows = int((maxRawY-minRawY)/cell) + 1
 	out.x0 = maxInt32(minAX, 0)
 	out.y0 = maxInt32(minAY, 0)
-	out.x1 = minInt32(maxAX+fogAtlasTile, w)
-	out.y1 = minInt32(maxAY+fogAtlasTile, h)
+	out.x1 = minInt32(maxAX+tile, w)
+	out.y1 = minInt32(maxAY+tile, h)
 	if out.x0 >= out.x1 || out.y0 >= out.y1 {
 		out.ok = false
 	}
 	return out
 }
 
+// fogOpsScale is the view scale one frame's fog ops were projected at. Every op
+// of a frame comes from one camera, so the first op names the list's scale; an
+// empty list is the native scale (render.FogOp.ViewScale)(§14.2).
+func fogOpsScale(ops []render.FogOp) int32 {
+	if len(ops) == 0 {
+		return 1
+	}
+	return ops[0].ViewScale()
+}
+
 // fogParityOps derives the fog checker parity (camX + camZ) & 1 from an op's
-// screen rectangle, so the pass needs no camera pointer. The producer places a
-// cell at ScreenX0 = gx*32 + 16 - camX + OriginX and ScreenY0 = gy*32 + 16 -
-// camZ + OriginY (render.FogScreenRect); every term but -camX / -camZ is even,
-// so (ScreenX0 + ScreenY0) & 1 == (camX + camZ) & 1 for every op — the same
+// grid cell and screen rectangle, so the pass needs no camera pointer. The
+// producer places a cell at ScreenX0 = (gx*32 + 16 - camX)·s + OriginX and
+// ScreenY0 = (gy*32 + 16 - camZ)·s + OriginY (render.FogScreenRect), and the
+// scaled term is exactly divisible, so
+//
+//	camX = gx*32 + 16 - (ScreenX0 - OriginX)/s
+//
+// recovers the camera the byte writers read, and likewise camZ. That is the
 // value fogFillChecker and blitFogGAF compute from the camera [03 §3.3].
-func fogParityOps(ops []render.FogOp) int32 {
+//
+// The scale term matters: at s = 2 every rebased origin is even, so the parity
+// cannot be read off the screen rectangle alone the way it can at s = 1, where
+// this expression reduces to (ScreenX0 + ScreenY0) & 1 because 32, 16 and the
+// beam offsets are all even.
+func fogParityOps(ops []render.FogOp, scale int32) int32 {
 	if len(ops) == 0 {
 		return 0
 	}
-	return (ops[0].ScreenX0 + ops[0].ScreenY0) & 1
+	if scale < 1 {
+		scale = 1
+	}
+	op := &ops[0]
+	camX := op.GridX*render.FogTilePixels + render.FogTilePixels/2 - (op.ScreenX0-camera.OriginX)/scale
+	camZ := op.GridY*render.FogTilePixels + render.FogTilePixels/2 - (op.ScreenY0-camera.OriginY)/scale
+	return (camX + camZ) & 1
 }
 
 // encodeGrid fills the reused grid buffer from the op list. A cell carries at
@@ -278,7 +317,8 @@ func fogParityOps(ops []render.FogOp) int32 {
 // it; a visible cell, an operation the palette makes impossible and an
 // operation whose GAF frame is missing all stay zero, which is the cell keeping
 // the underlying tile exactly as classicSink.Fog's skip does [03 §3.3].
-func (f *fogPass) encodeGrid(region fogRegion, ops []render.FogOp, w, h int32, grayReady bool) {
+func (f *fogPass) encodeGrid(region fogRegion, ops []render.FogOp, w, h, scale int32, grayReady bool) {
+	cell := fogCellPixels * scale
 	imgW, imgH := f.gridImageSize(region)
 	need := imgW * imgH * 4
 	if cap(f.gridBuf) < need {
@@ -299,8 +339,8 @@ func (f *fogPass) encodeGrid(region fogRegion, ops []render.FogOp, w, h int32, g
 		if !ok {
 			continue
 		}
-		col := int((rawX - region.originX) / fogCellPixels)
-		row := int((rawY - region.originY) / fogCellPixels)
+		col := int((rawX - region.originX) / cell)
+		row := int((rawY - region.originY) / cell)
 		if col < 0 || row < 0 || col >= imgW || row >= imgH {
 			continue
 		}
@@ -391,27 +431,38 @@ func (f *fogPass) uploadGrid(region fogRegion) bool {
 	return true
 }
 
-// ensureAtlas builds the fog GAF atlas for one (Gray, Black) family identity and
+// ensureAtlas builds the fog GAF atlas for one (Gray, Black, scale) identity and
 // keeps it for that identity's lifetime. The families are immutable after load,
-// so identity is the eight entry pointers [03 §3.3].
+// so identity is the eight entry pointers and the view scale [03 §3.3](§14.2).
 //
-// Every frame is stored in its own fogAtlasTile square at the position it lands
-// at relative to the CELL ORIGIN: retail subtracts the frame's signed
+// Every frame is stored in its own fogAtlasTile(scale) square at the position it
+// lands at relative to the CELL ORIGIN: retail subtracts the frame's signed
 // XOffset/YOffset before clipping, so the fog quadrant geometry lives entirely
 // in those anchors [03 §3.3][R-RR16-A §3][fmt gaf]. Baking them here is what
 // lets the pass address a frame from the cell index alone.
-func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry) {
-	if f.atlasReady && f.atlasGray == gray && f.atlasBlack == black {
+//
+// At the detail scale the frame stored is the one the classic sink draws there:
+// the client resolves a world-space sprite through viewFrame, and no remaster
+// covers anims/fog.gaf, so a fog frame resolves to its nearest-doubled variant —
+// doubled pixels, doubled size, doubled authored offsets (§14.3). Building the
+// atlas from that variant is the same one-blit-per-cell the classic sink makes.
+func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry, scale int32) {
+	if scale < 1 {
+		scale = 1
+	}
+	if f.atlasReady && f.atlasGray == gray && f.atlasBlack == black && f.atlasScale == scale {
 		return
 	}
 	f.atlasReady = true
-	f.atlasGray, f.atlasBlack = gray, black
+	f.atlasGray, f.atlasBlack, f.atlasScale = gray, black, scale
 	f.oversized, f.oversizedNote = 0, ""
 	for i := range f.slotPresent {
 		f.slotPresent[i] = false
 	}
 
-	buf := make([]byte, fogAtlasW*fogAtlasH*4)
+	tile := fogAtlasTile(scale)
+	atlasW, atlasH := fogAtlasCols*tile, fogAtlasRows*tile
+	buf := make([]byte, atlasW*atlasH*4)
 	for i := 3; i < len(buf); i += 4 {
 		buf[i] = 255
 	}
@@ -424,11 +475,11 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry) {
 				continue
 			}
 			for frame := 0; frame < fogAtlasCols && frame < len(entry.Frames); frame++ {
-				fr := entry.Frames[frame].Frame
+				fr := fogViewFrame(entry.Frames[frame].Frame, scale)
 				if fr == nil {
 					continue
 				}
-				ox, oy, ok := fogFrameTilePlacement(fr)
+				ox, oy, ok := fogFrameTilePlacement(fr, tile)
 				if !ok {
 					if int(fr.Width) <= 0 || int(fr.Height) <= 0 {
 						// blitFogGAF returns without drawing a degenerate frame.
@@ -438,32 +489,54 @@ func (f *fogPass) ensureAtlas(gray, black [4]*formats.GAFEntry) {
 					if f.oversizedNote == "" {
 						f.oversizedNote = fmt.Sprintf(
 							"nanolathe: fog GAF frame reaches past the %d-pixel cell neighbourhood: entry %s%d frame %d, %dx%d at offset (%d,%d)",
-							fogAtlasTile, names[family], variant+1, frame, fr.Width, fr.Height, ox, oy)
+							tile, names[family], variant+1, frame, fr.Width, fr.Height, ox, oy)
 					}
 					continue
 				}
-				writeFogAtlasTile(buf, family*fogVariants+variant, frame, ox, oy, fr)
+				writeFogAtlasTile(buf, atlasW, tile, family*fogVariants+variant, frame, ox, oy, fr)
 				f.slotPresent[family*fogSlots+variant*fogAtlasCols+frame] = true
 			}
 		}
 	}
-	f.atlas = ebiten.NewImage(fogAtlasW, fogAtlasH)
+	f.atlas = ebiten.NewImage(atlasW, atlasH)
 	f.atlas.WritePixels(buf)
 }
 
+// fogViewFrame is the frame the classic sink draws for one fog cell at this view
+// scale: the frame itself at the native scale, and its nearest-doubled variant at
+// the detail scale, which is what the client's viewFrame resolves for art no
+// remaster covers (§14.3). anims/fog.gaf is not a feature bank, so it is never
+// covered.
+func fogViewFrame(fr *formats.GAFFrame, scale int32) *formats.GAFFrame {
+	if fr == nil || scale == 1 {
+		return fr
+	}
+	return fr.Doubled()
+}
+
+// fogAtlasTile is the square the atlas reserves for one fog GAF frame at one
+// view scale: twice the cell edge, the reach of the 2×2 cell neighbourhood the
+// pass visits (fog_shaders.go).
+func fogAtlasTile(scale int32) int {
+	if scale < 1 {
+		scale = 1
+	}
+	return fogAtlasNativeTile * int(scale)
+}
+
 // fogFrameTilePlacement returns where one fog GAF frame lands inside its
-// fogAtlasTile square, measured from the cell origin, and whether it fits.
+// tile-sized square, measured from the cell origin, and whether it fits.
 // Retail subtracts the frame's signed XOffset/YOffset from the destination
 // before clipping, so the placement is (-XOffset, -YOffset)
 // [03 §3.3][R-RR16-A §3][fmt gaf]. A frame that starts before the cell origin or
 // reaches past the tile does not fit the 2×2 cell neighbourhood the pass visits.
-func fogFrameTilePlacement(fr *formats.GAFFrame) (ox, oy int, ok bool) {
+func fogFrameTilePlacement(fr *formats.GAFFrame, tile int) (ox, oy int, ok bool) {
 	ox, oy = -int(fr.XOffset), -int(fr.YOffset)
 	fw, fh := int(fr.Width), int(fr.Height)
 	if fw <= 0 || fh <= 0 {
 		return ox, oy, false
 	}
-	if ox < 0 || oy < 0 || ox+fw > fogAtlasTile || oy+fh > fogAtlasTile {
+	if ox < 0 || oy < 0 || ox+fw > tile || oy+fh > tile {
 		return ox, oy, false
 	}
 	return ox, oy, true
@@ -475,18 +548,18 @@ func fogFrameTilePlacement(fr *formats.GAFFrame) (ox, oy int, ok bool) {
 // fog art is a mask — every shipped frame is built from the colour key and the
 // cloud index — so what reaches the screen is decided by the family, not by
 // these source indices [R-RR16-A §3][R-RR16-A §8].
-func writeFogAtlasTile(buf []byte, row, col, ox, oy int, fr *formats.GAFFrame) {
+func writeFogAtlasTile(buf []byte, atlasW, tile, row, col, ox, oy int, fr *formats.GAFFrame) {
 	fw, fh := int(fr.Width), int(fr.Height)
 	np, nt := len(fr.Pixels), len(fr.Transparent)
-	baseX := col*fogAtlasTile + ox
-	baseY := row*fogAtlasTile + oy
+	baseX := col*tile + ox
+	baseY := row*tile + oy
 	for y := 0; y < fh; y++ {
 		for x := 0; x < fw; x++ {
 			src := y*fw + x
 			// Key pixels leave the destination alone; the decoder records the
 			// key match in Transparent [fmt gaf].
 			opaque := src < np && (src >= nt || !fr.Transparent[src])
-			at := ((baseY+y)*fogAtlasW + baseX + x) * 4
+			at := ((baseY+y)*atlasW + baseX + x) * 4
 			if src < np {
 				buf[at+0] = fr.Pixels[src]
 			}

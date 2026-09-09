@@ -1,13 +1,12 @@
-package main
+package upscale
 
 // The PatchMatch search itself: query construction, propagation and random
-// search, the parent relaxation pass and the cost summaries. See README.md.
+// search, the parent relaxation pass and the cost summaries. See
+// tools/mapupscale/patchmatchgo/README.md.
 
-import (
-	"fmt"
-)
+import "sync"
 
-func makeTileQueries(data dataset, atlas tileAtlas, contributions []float32, workers int) tileQueries {
+func makeTileQueries(data terrainData, atlas tileAtlas, contributions []float32, workers int) tileQueries {
 	dimensions := featureDims
 	mapWidth, mapHeight := atlas.mapWidth, atlas.mapHeight
 	first, tileMap := atlas.firstPlacements, atlas.tileMap
@@ -22,14 +21,14 @@ func makeTileQueries(data dataset, atlas tileAtlas, contributions []float32, wor
 			for y := range sourceTileSize {
 				for x := range sourceTileSize {
 					query := identifier*sourceTileSize*sourceTileSize + y*sourceTileSize + x
-					parents[query] = data.high[(originY+y)*data.metadata.Width+originX+x]
+					parents[query] = data.high[(originY+y)*data.width+originX+x]
 					clear(sums[:])
 					patchPosition := 0
 					for dy := -patchRadius; dy <= patchRadius; dy++ {
-						sampleY := clamp(originY+y+dy, 0, data.metadata.Height-1)
+						sampleY := clamp(originY+y+dy, 0, data.height-1)
 						for dx := -patchRadius; dx <= patchRadius; dx++ {
-							sampleX := clamp(originX+x+dx, 0, data.metadata.Width-1)
-							index := int(data.high[sampleY*data.metadata.Width+sampleX])
+							sampleX := clamp(originX+x+dx, 0, data.width-1)
+							index := int(data.high[sampleY*data.width+sampleX])
 							contribution := (patchPosition*paletteSize + index) * dimensions
 							for dimension := range dimensions {
 								sums[dimension] += contributions[contribution+dimension]
@@ -60,8 +59,10 @@ func makeTileQueries(data dataset, atlas tileAtlas, contributions []float32, wor
 // block may be brighter than the parent, options.spread makes each candidate
 // also offset a fraction of the mean error of its already-chosen 3x3
 // neighbours, letting neighbouring pixels compensate for one another.
+// progress, when non-nil, is called once per finished tile with the number of
+// tiles done so far and the total; calls are serialized and monotonic.
 func patchMatch(queries tileQueries, db database, records []record, palette []byte, atlas tileAtlas, iterations int,
-	options searchOptions, workers int) ([]int32, []int32, int) {
+	options searchOptions, workers int, progress func(done, total int)) ([]int32, []int32, int) {
 	toneWeight, spread, deadzone := options.tone, options.spread, options.deadzone
 	sums := paletteSums(palette)
 	var targets [paletteSize][3]int32
@@ -111,6 +112,8 @@ func patchMatch(queries tileQueries, db database, records []record, palette []by
 	tileCount := n / tilePixels
 	matches := make([]int32, n)
 	costs := make([]int32, n)
+	var progressLock sync.Mutex
+	progressDone := 0
 
 	parallel(tileCount, workers, func(begin, end int) {
 		var candidates [8]int32
@@ -372,10 +375,15 @@ func patchMatch(queries tileQueries, db database, records []record, palette []by
 				}
 			}
 			copy(costs[base:base+tilePixels], featCosts[:])
+			if progress != nil {
+				progressLock.Lock()
+				progressDone++
+				progress(progressDone, tileCount)
+				progressLock.Unlock()
+			}
 		}
 	})
-	mean, unmatched := costSummary(costs)
-	fmt.Printf("iterations=%d mean-cost=%.2f unmatched=%d\n", iterations, mean, unmatched)
+	_, unmatched := costSummary(costs)
 	return matches, costs, unmatched
 }
 

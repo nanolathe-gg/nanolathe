@@ -55,15 +55,15 @@ func TestViewportTransformRoundTripFlat(t *testing.T) {
 	}
 }
 
-func TestViewportTransformZoomProjectionRoundTrip(t *testing.T) {
+func TestViewportTransformViewScaleProjectionRoundTrip(t *testing.T) {
 	ter := viewportTerrain(func(int, int) uint8 { return 40 }, 0)
 	cam := &camera.Camera{X: 128, Z: 96, ViewW: 512, ViewH: 416, MapW: 1024, MapH: 1024}
-	// Point chosen to stay inside the drawn-chrome viewport (129,32..639,447) at all
-	// zoom levels: distance from cam (128,96) is 72 world pixels, so at scale 4
-	// the screen offset is 288, well inside the 511-wide viewport [C-1][F-P1-008].
+	// Point chosen to stay inside the drawn-chrome viewport (129,32..639,447) at
+	// both scales: distance from cam (128,96) is 72 world pixels, so at scale 2
+	// the screen offset is 144, well inside the 511-wide viewport [C-1][F-P1-008].
 	point := struct{ x, y, z numeric.Fixed }{numeric.Fixed(200 << 16), numeric.Fixed(40 << 16), numeric.Fixed(200 << 16)}
-	for _, scale := range []float32{0.25, 0.5, 1, 2, 4} {
-		cam.Scale = scale // presentation-only zoom [F-P1-008]
+	for _, scale := range []int32{0, 1, 2} {
+		cam.Scale = scale // presentation-only view scale [F-P1-008]
 		tr := NewViewportTransform(cam, ter, 640, 480)
 		beam := tr.WorldToBeam(point.x, point.y, point.z)
 		if got := tr.ViewportToBeam(tr.BeamToViewport(beam)); got != beam {
@@ -77,7 +77,7 @@ func TestViewportTransformZoomProjectionRoundTrip(t *testing.T) {
 		if !ok {
 			t.Fatalf("scale %v: projected point was classified as HUD", scale)
 		}
-		const tolerance = int64(2 << 16) // two map pixels cover integer/zoom truncation [03 §2.1][07 §8]
+		const tolerance = int64(2 << 16) // two map pixels cover the terrain resolve's own rounding [03 §2.1][07 §8]
 		if d := int64(gotX - point.x); d < -tolerance || d > tolerance {
 			t.Errorf("scale %v: x error=%d, tolerance=%d", scale, d, tolerance)
 		}

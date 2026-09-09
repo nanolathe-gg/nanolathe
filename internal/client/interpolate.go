@@ -172,8 +172,13 @@ func (c *Client) beginCameraBlend() bool {
 	}
 	f16 := int64(c.cameraFraction16)
 	c.camSaveX, c.camSaveZ = c.cam.X, c.cam.Z
-	c.cam.X = lerpOrigin(c.camPrevX, c.camCurX, f16, c.cam.ViewW)
-	c.cam.Z = lerpOrigin(c.camPrevZ, c.camCurZ, f16, c.cam.ViewH)
+	// The snap threshold is the viewport measured in WORLD pixels, because the
+	// origins being blended are world pixels: at the detail scale the same
+	// framebuffer shows half the world, so a step that crosses the visible band
+	// is half as large [F-P1-008] (DESIGN_GPU_RENDERER §14.2).
+	viewW, viewH := c.cam.EffectiveView()
+	c.cam.X = lerpOrigin(c.camPrevX, c.camCurX, f16, viewW)
+	c.cam.Z = lerpOrigin(c.camPrevZ, c.camCurZ, f16, viewH)
 	return true
 }
 

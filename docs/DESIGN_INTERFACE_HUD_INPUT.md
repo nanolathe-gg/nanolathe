@@ -836,7 +836,7 @@ while the offset is non-zero `[07 R-HUD-04 §4]` `[07 §6]`.
 `--shot-ticks` authoritative ticks and exit without opening a window.
 `--shot-select` runs the select-all first so the command page is open,
 `--shot-modal` opens one of the modal layers, `--shot-space` holds Space so the
-slide strip is raised, `--shot-zoom` and `--shot-focus` stage the presentation
+slide strip is raised, `--zoom` and `--shot-focus` stage the presentation
 zoom of §3.5, and `--shot-size` composes at a surface other than the authored
 640×480. A capture is the evidence for any visual change in these packages.
 
@@ -961,8 +961,9 @@ plain digit pages and Alt+digit recalls, and with the option set the two swap.
 `SwitchAlt` is a persisted low-bit preference: an absent value is clear, the
 frontend shell carries its normalized bit into battle, and a direct battle
 captures it at install time. Digit handling reads that captured bit and never
-opens settings on a keypress. The option has no authored options-page gadget;
-the local chat command that can alter it is outside this unit's chat scope.
+opens settings on a keypress. The option has no authored options-page gadget.
+Partial I10 implements its local chat command through the shared TALK command
+path (§3.9).
 The page number lives in unit-flag bits 23–25 with bit 22 marking paged, guarded
 by the builder's page count. Generated menu records author `PAGE` and `BUTTON`
 explicitly, and the generated `<unit>N.GUI` pages determine page existence and
@@ -1201,7 +1202,8 @@ count through the same installed-art resolver used by painting. No held-key
 fallback supplies a palette command `[07 §2]` `[07 §9]` `[07 R-WGT-01 §3]` `[07 R-HUD-03 §6]`.
 `\`, `Ctrl+F10` and
 F11 are developer mode, `Ctrl+F9` is a screenshot with no in-battle writer,
-`h` is the multiplayer share dialog, and Enter is chat: all out of scope
+`h` is the multiplayer share dialog and remains out of scope. Unclaimed Enter
+opens the single-player TALK editor through partial I10 (§3.9)
 `[07 §5 "Chat"]` `[07 R-CAM-01 §9]`.
 
 ### 3.7 The command dispatch boundary
@@ -1279,12 +1281,46 @@ host inset with `TODO(T25)` because retail leaves that pen scratch unset.
 Record-list images and inherited child-surface clips remain separate work
 `[07 R-WGT-01 §4]`.
 
-### 3.9 Not implemented
+### 3.9 Partial I10 and exclusions
 
-* **Chat.** `TALK.GUI` and `TALK2.GUI`, the recipient modes, the `+`-command
-  vocabulary and the chat line composer are not implemented. In single player
-  retail drops the packet unsent, so the surface has no single-player behaviour
-  to clone `[07 §5 "Chat"]` `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
+**Partial I10 — single-player TALK.** After the active GUI and command palette
+decline Enter, battle opens the installed `TALK.GUI`, plays `SmallButton`,
+places its authored 512×33 strip at `(128, H−33)`, hides `SENDTO`, and focuses
+the retained common-widget editor. The dialog owns keyboard, button and world
+pointer input through its close frame. Simulation continues, pointer-edge
+camera scrolling remains live, and held-arrow and drag camera movement are
+suppressed. Enter posts and Escape cancels; either exit clears the editor.
+Posting reads the registered local-player name without a fallback and appends
+`<name> text` to the local message ring with class 4, source unit 0, speaker
+sentinel 10 and the current published tick. Campaign entry registers the name
+`Player` before TALK is reachable `[07 §5 "Chat"]` `[07 R-FE-02 §12]`.
+
+The same path has a deliberately partial `+`-command implementation. It keeps
+the 79-byte last-command copy separate from tokenisation, admits at most 20
+words into 126 shared bytes including terminators, treats `#` as an inline end
+marker and semicolon as ordinary content, and reads integer arguments with
+signed decimal-prefix `atoi` semantics. Every typed `+` line is still posted
+as local chat. The implemented handlers are:
+
+| Command | Implemented effect |
+|---|---|
+| `NoShake` | enqueue the authoritative toggle through `HumanCommand` |
+| `ATM` | skirmish only; enqueue uncapped `+1000` metal and energy through `HumanCommand` |
+| `SwitchAlt [n]` | no argument toggles and persists; an explicit argument applies `n & 1` without persisting |
+| `ScreenChat` | toggle and persist the screen-chat word |
+| `ScrollSpeed n` | store and persist the low byte, including exact zero |
+| `IFace n` | store and persist the integer interface type |
+| `AntiAlias`, `Shading`, `Shadow` | toggle the independent live display bit and persist immediately |
+| `TShadow`, `FShadow` | toggle vehicle or feature shadows independently; persist on the next settings write |
+
+These commands are partial I10. Shell and direct-map entry use the same live
+display bits; a later direct-entry settings write includes deferred shadow
+preferences. The remaining ordinary local
+single-player command families stay in the parent I10 scope. The mask-4
+developer table and default unit-spawn handler remain excluded with developer
+mode; multiplayer `TALK2.GUI`, recipient controls and network chat remain
+excluded with multiplayer `[07 R-CAM-01 §6]` `[07 R-FE-02 §12]`.
+
 * **The multiplayer lobby shell.** Out of scope for the whole engine; the
   single-player skirmish setup screen is a different surface and is implemented
   `[07 §12]` `[07 R-FE-02 §1]`.

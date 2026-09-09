@@ -1,6 +1,9 @@
 package render
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 // TestEffectServiceResolvesPrimaryTimingBesideACalculatedFlash locks the
 // per-player timing lookup [06 R-WFX-01 §2][03 §1].
@@ -65,6 +68,54 @@ func TestEffectServiceResolvesPrimaryTimingBesideACalculatedFlash(t *testing.T) 
 	if views = miss.SnapshotViews(); len(views) != 1 || views[0].ActiveA {
 		t.Fatalf("an unresolvable entry published a live primary player: %+v", views)
 	}
+}
+
+// TestEffectServiceBindsAlreadyAdmittedPrimaryTiming locks the Create-before-
+// composition sequence. COB can append named art while the session has its
+// canonical pool but before the client installs the GAF timing resolver; that
+// binding must activate the existing primary player without re-admitting,
+// reordering, or changing its calculated secondary [03 §1][06 R-WFX-01 §2].
+func TestEffectServiceBindsAlreadyAdmittedPrimaryTiming(t *testing.T) {
+	pool := &FixedEffectPool{}
+	s := NewEffectServiceWithPool(EffectCapacity, pool)
+	s.Advance(1, []Event{{
+		ID: 91, Kind: KindExplosion, Tick: 1, Sequence: 1,
+		Graphic: "art", AssetID: "fx",
+		HasCalculatedFlash: true, CalculatedTable: 2,
+		DurationsB: FlashFrameDurations(2),
+	}})
+	before := pool.Records()
+	if len(before) != 1 || before[0].AnimA.Active || !before[0].AnimB.Active {
+		t.Fatalf("pre-binding record = %+v, want unresolved primary and live calculated secondary", before)
+	}
+	id := before[0].ID
+	secondary := before[0].AnimB
+	secondaryDurations := append([]int32(nil), secondary.Durations...)
+	resolved := 0
+	s.SetTimingResolver(func(e Event) (FrameTiming, bool) {
+		resolved++
+		if e.Graphic != "art" || e.AssetID != "fx" {
+			return FrameTiming{}, false
+		}
+		return FrameTiming{Durations: []int32{2, 3}}, true
+	})
+	after := pool.Records()
+	if resolved != 1 || len(after) != 1 || after[0].ID != id {
+		t.Fatalf("binding changed record admission: calls=%d records=%+v", resolved, after)
+	}
+	if got := after[0].AnimA; !got.Active || got.Idx != 0 || got.Countdown != 2 || got.Frames != 2 || len(got.Durations) != 2 {
+		t.Fatalf("binding primary = %+v, want active authored player", got)
+	}
+	if got := after[0].AnimB; got.Idx != secondary.Idx || got.Countdown != secondary.Countdown ||
+		got.Loop != secondary.Loop || got.Active != secondary.Active || got.Frames != secondary.Frames ||
+		!slices.Equal(got.Durations, secondaryDurations) {
+		t.Fatalf("binding changed calculated secondary: got %+v, want %+v", got, secondary)
+	}
+	// Rebinding does not restart an already resolved primary player.
+	s.SetTimingResolver(func(Event) (FrameTiming, bool) {
+		t.Fatal("rebind resolved an already active primary")
+		return FrameTiming{}, false
+	})
 }
 
 // TestEffectServicePendingViewsCarryLiveness covers the fixture fallback that

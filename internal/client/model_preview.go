@@ -34,7 +34,9 @@ type ModelPreviewOptions struct {
 	Width   int
 	Height  int
 	// Scale magnifies the unchanged orthographic game-camera projection through
-	// the client's existing presentation zoom. Zero means native scale 1.
+	// the client's presentation view scale. Zero means native scale 1. The view
+	// scale is an integer, so only 1 and 2 are accepted
+	// (DESIGN_GPU_RENDERER §14.1); a fractional magnification no longer exists.
 	Scale      float32
 	Background uint8
 	Structure  bool
@@ -146,8 +148,12 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	if opts.Width <= 0 || opts.Height <= 0 || opts.Width > maxModelPreviewDimension || opts.Height > maxModelPreviewDimension {
 		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: output size %dx%d outside 1..%d", opts.Width, opts.Height, maxModelPreviewDimension)
 	}
-	if opts.Scale < 0 || opts.Scale > 4 || (opts.Scale > 0 && opts.Scale < 0.25) {
-		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g outside 0.25..4", opts.Scale)
+	// The view scale is an integer: 0 or 1 is native and 2 is the detail view
+	// (DESIGN_GPU_RENDERER §14.1). A fractional request is rejected rather than
+	// rounded, so a caller that wanted 1.5 learns the magnification is gone
+	// instead of silently receiving another one.
+	if opts.Scale != 0 && opts.Scale != 1 && opts.Scale != 2 {
+		return ModelPreviewRecord{}, fmt.Errorf("nanolathe: rendering model preview: scale %.3g is not 1 or 2", opts.Scale)
 	}
 
 	c := r.client
@@ -179,12 +185,12 @@ func (r *ModelPreviewRenderer) recordModel(opts ModelPreviewOptions, geometryOnl
 	// World position is chosen so modelAnchor lands on the image centre. Scale
 	// magnifies the ordinary orthographic game-camera projection without
 	// changing its angle or shear [03 §2.5][R-REN-03A §1].
-	scale := opts.Scale
+	scale := int32(opts.Scale)
 	if scale == 0 {
 		scale = 1
 	}
-	anchorX := int64(float32(opts.Width/2) / scale)
-	anchorZ := int64(float32(opts.Height/2)/scale) + int64(opts.WorldHeight>>1)
+	anchorX := int64(int32(opts.Width/2) / scale)
+	anchorZ := int64(int32(opts.Height/2)/scale) + int64(opts.WorldHeight>>1)
 	c.cam = &camera.Camera{
 		ViewW: int32(opts.Width), ViewH: int32(opts.Height),
 		MapW: int32(opts.Width), MapH: int32(opts.Height), Scale: scale,

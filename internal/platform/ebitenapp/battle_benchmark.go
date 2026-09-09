@@ -200,6 +200,7 @@ func BattleBenchmark(c *client.Client, step func(), census func() any, options B
 	g := &battleBenchmark{c: c, step: step, census: census, options: options, rows: make([]benchmarkRow, 0, options.Frames)}
 	if options.Renderer == "modern" {
 		g.gpu = gpurender.New(c.PaletteTables(), 1920, 1080)
+		c.SetEnhanced(true)
 		// Only the Enhanced executor blends; the classic rows keep
 		// committed-tick sampling at every draw rate (§13.5) [I6].
 		if options.TPS == benchmarkInterpolatedTPS {

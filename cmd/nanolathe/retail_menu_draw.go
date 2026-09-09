@@ -258,26 +258,16 @@ func (g *gameShell) drawRetailTextState(c *client.Client, p *ui.Panel, index int
 		return
 	}
 	if gad.Kind == gui.KindTextBox {
-		// A filled kind-3 input owns its plain background; otherwise the
-		// window background already restored by the panel draw remains visible
-		// [07 R-WGT-01 §6].
-		if gad.Attribs&1 != 0 {
-			c.UIFillRect(int(r.X), int(r.Y), int(r.W), int(r.H), 0)
-		}
-		x, y := int(r.X), int(r.Y)+3
 		color, shade := g.retailTextPen(p, index, gad)
-		if selected != nil && g.retailGAFTextFont() == nil {
-			c.UITextWidth(selected, text, x, y, int(r.W), color)
-		} else {
-			g.drawRetailStringLit(c, text, x, y, int(r.W), color, shade)
-		}
-		if p.EditorCaptured() && p.EditorIndex() == index {
-			caret := p.EditorCaret()
-			if caret > len(text) {
-				caret = len(text)
-			}
-			c.UIFillRect(x+measure(text[:caret]), y, 1, lineStep, g.guiColor(9))
-		}
+		drawTextEditorState(c, p, index, gad, r, text, measure, lineStep, 0, g.guiColor(9),
+			func(x, y, w, h int, fill byte) { c.UIFillRect(x, y, w, h, fill) },
+			func(text string, x, y, width int) {
+				if selected != nil && g.retailGAFTextFont() == nil {
+					c.UITextWidth(selected, text, x, y, width, color)
+				} else {
+					g.drawRetailStringLit(c, text, x, y, width, color, shade)
+				}
+			})
 		return
 	}
 	width := measure(text)

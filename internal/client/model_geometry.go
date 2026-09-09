@@ -2,6 +2,7 @@ package client
 
 import (
 	"github.com/nanolathe/nanolathe/internal/drawlist"
+	"github.com/nanolathe/nanolathe/internal/frame"
 	presentationrender "github.com/nanolathe/nanolathe/internal/render"
 )
 
@@ -202,6 +203,176 @@ func (c *Client) prepareModelGeometry(draw *presentationrender.UnitDraw, owner u
 		supersample.Reveal = g.Reveal
 	}
 	return g
+}
+
+// unitGeometryPair records the native counterpart of the retained classic
+// body. The cached lane keeps the orientation used when it was recorded; the
+// live lane is rebuilt from this frame's script pose and is rebased into the
+// cached body's current union box [03 R-REN-03A §4].
+func (c *Client) unitGeometryPair(v frame.UnitView, forceKeyPlane bool) (*drawlist.ModelGeometry, *drawlist.ModelGeometry) {
+	draw, ok := c.unitDrawFor(v)
+	if !ok {
+		return nil, nil
+	}
+	if forceKeyPlane {
+		draw.KeyPlane = true
+	}
+	id := unitPresentationID(v)
+	reveal, outline := c.unitNanoframeReveal(v)
+	if id == 0 || !c.modelScratch.active {
+		return c.prepareModelGeometry(draw, v.Owner, unitTeamColor(v), id, modelCursorUnit, reveal, outline), nil
+	}
+	orient := c.orientationCache(id)
+	body := c.cachedBody(id)
+	if c.cachedGeometryMustRebuild(body, v, draw, orient) {
+		all := c.collectDrawPolys(draw, unitTeamColor(v), id, modelCursorUnit)
+		cached := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneCached)
+		if len(all) == 0 {
+			return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
+		}
+		if len(cached) == 0 && !draw.KeyPlane {
+			return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
+		}
+		w, h, ox, oy := modelExtent(all)
+		ax, ay := c.modelAnchor(draw)
+		var supersample *drawlist.ModelGeometry
+		if len(cached) != 0 {
+			supersample = c.modelSupersampleGeometry(cached, draw, w, h, ox, oy)
+		}
+		placeFaces(cached, ox, oy, 1)
+		base := c.borrowModelPacket(cached, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone)
+		base.Supersample = supersample
+		c.replaceCachedGeometry(id, v, draw, base)
+		if draw.NeedsRebuild {
+			orient.UpdateKey(draw.Model.Name, v.Heading, v.Pitch, v.Bank)
+		}
+		body = c.cachedBody(id)
+	}
+	if body == nil || body.geometry == nil {
+		return c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneAll), nil
+	}
+	all := c.collectDrawPolys(draw, unitTeamColor(v), id, modelCursorUnit)
+	if len(all) == 0 {
+		return nil, nil
+	}
+	w, h, ox, oy := retainedModelExtent(body.geometry, all)
+	ax, ay := c.modelAnchor(draw)
+	g := c.borrowRebasedModelGeometry(body.geometry, int32(w), int32(h), ox, oy, ax, ay)
+	c.configureModelGeometry(g, draw, v.Owner, modelCursorUnit, reveal, outline)
+	if g.Supersample != nil {
+		g.Supersample.Reveal = g.Reveal
+	}
+	if !draw.UnderConstruction {
+		live := c.collectDrawPolysLane(draw, unitTeamColor(v), id, modelCursorUnit, presentationrender.PieceLaneLive)
+		if len(live) != 0 {
+			placeFaces(live, ox, oy, 1)
+			g.LiveFaces = c.borrowModelPacket(live, int32(w), int32(h), ox, oy, ax, ay, 1, draw.KeyPlane, drawlist.ModelFallbackNone).Faces
+		}
+	}
+	if g.KeyPlane {
+		return g, nil
+	}
+	// The one-plane branch commits its cached body, then the direct projected
+	// live invocation as a later Model command [03 R-RAST-01 §2].
+	g.LiveFaces = nil
+	return g, c.directUnitGeometry(draw, unitTeamColor(v), id, presentationrender.PieceLaneLive)
+}
+
+// retainedModelExtent keeps the cached composition envelope when current live
+// geometry contracts. A packet's declared box is its commit rectangle, so
+// rebasing cached corners into only the current all-piece box would crop them.
+func retainedModelExtent(retained *drawlist.ModelGeometry, current []screenPoly) (width, height int, originX, originY int32) {
+	width, height, originX, originY = modelExtent(current)
+	if retained == nil {
+		return
+	}
+	minX, minY := -originX, -originY
+	maxX, maxY := int32(width)-originX, int32(height)-originY
+	include := func(x, y int32) {
+		if x < minX {
+			minX = x
+		}
+		if y < minY {
+			minY = y
+		}
+		if x > maxX {
+			maxX = x
+		}
+		if y > maxY {
+			maxY = y
+		}
+	}
+	include(-retained.OriginX, -retained.OriginY)
+	include(retained.Width-retained.OriginX, retained.Height-retained.OriginY)
+	for _, face := range retained.Faces {
+		for _, vertex := range face.Vertices {
+			include(vertex.X-retained.OriginX, vertex.Y-retained.OriginY)
+			include(vertex.X-retained.OriginX+1, vertex.Y-retained.OriginY+1)
+		}
+	}
+	originX, originY = -minX, -minY
+	return int(maxX - minX), int(maxY - minY), originX, originY
+}
+
+// borrowRebasedModelGeometry copies the retained cached lane into this frame's
+// packet arena. The retained entry remains immutable while the output can move
+// into the current union box and acquire its current live lane.
+func (c *Client) borrowRebasedModelGeometry(src *drawlist.ModelGeometry, width, height, originX, originY, anchorX, anchorY int32) *drawlist.ModelGeometry {
+	if c == nil || src == nil || !c.modelScratch.active {
+		return nil
+	}
+	p := c.borrowPacketScratch()
+	p.g = *src
+	dx, dy := originX-src.OriginX, originY-src.OriginY
+	p.cachedFaces, p.cachedVertices = copyModelFaces(p.cachedFaces, p.cachedVertices, src.Faces, dx, dy)
+	p.g.Faces, p.g.LiveFaces, p.g.Outline = p.cachedFaces, nil, nil
+	p.g.Reveal, p.g.Shadow, p.g.Children = nil, nil, nil
+	p.g.Waterline, p.g.Digger = drawlist.ModelWaterlineNone, false
+	p.g.Width, p.g.Height, p.g.OriginX, p.g.OriginY, p.g.AnchorX, p.g.AnchorY = width, height, originX, originY, anchorX, anchorY
+	if src.Supersample == nil {
+		p.g.Supersample = nil
+		return &p.g
+	}
+	p.supersample = *src.Supersample
+	p.supersampleFaces, p.supersampleVerts = copyModelFaces(p.supersampleFaces, p.supersampleVerts, src.Supersample.Faces, 2*dx, 2*dy)
+	p.supersample.Faces = p.supersampleFaces
+	p.supersample.LiveFaces, p.supersample.Outline, p.supersample.Reveal, p.supersample.Shadow, p.supersample.Children = nil, nil, nil, nil, nil
+	p.supersample.Width, p.supersample.Height = 2*width, 2*height
+	p.supersample.OriginX, p.supersample.OriginY = 2*originX, 2*originY
+	p.supersample.AnchorX, p.supersample.AnchorY = 2*originX, 2*originY
+	p.g.Supersample = &p.supersample
+	return &p.g
+}
+
+func copyModelFaces(dst []drawlist.ModelFace, vertices []drawlist.ModelVertex, src []drawlist.ModelFace, dx, dy int32) ([]drawlist.ModelFace, []drawlist.ModelVertex) {
+	dst = resizeScratch(dst, len(src))
+	count := 0
+	for i := range src {
+		count += len(src[i].Vertices)
+	}
+	vertices = resizeScratch(vertices, count)
+	off := 0
+	for i := range src {
+		face := src[i]
+		n := len(face.Vertices)
+		dst[i] = face
+		dst[i].Vertices = vertices[off : off+n : off+n]
+		for j := range face.Vertices {
+			vertex := face.Vertices[j]
+			vertex.X, vertex.Y = vertex.X+dx, vertex.Y+dy
+			dst[i].Vertices[j] = vertex
+		}
+		off += n
+	}
+	return dst, vertices
+}
+
+func (c *Client) directUnitGeometry(draw *presentationrender.UnitDraw, selector teamColor, id uint64, lane presentationrender.PieceLane) *drawlist.ModelGeometry {
+	polys := c.collectDrawPolysLaneProjected(draw, selector, id, modelCursorUnit, lane, true)
+	if len(polys) == 0 {
+		return nil
+	}
+	return c.borrowModelPacket(polys, int32(c.width), int32(c.height), 0, 0, 0, 0, 1, false, drawlist.ModelFallbackNone)
 }
 
 // The doubled projection shares placeFaces with classic, including its odd

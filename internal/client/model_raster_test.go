@@ -344,6 +344,10 @@ func TestFeatureAnimatedModelSuppressesMissingIdentity(t *testing.T) {
 func TestCollectDrawPolysUsesCameraScale(t *testing.T) {
 	c := testModelTextureClient()
 	c.cam.Scale = 2
+	// Only Enhanced projects the geometry at the view scale; Original keeps
+	// the native projection and doubles the finished image on the blit
+	// (DESIGN_GPU_RENDERER §14.2). A Nanolathe presentation rule, not retail.
+	c.SetEnhanced(true)
 	vertices := [][3]numeric.Fixed{fixedVertex(2, 4, 6), fixedVertex(4, 4, 6), fixedVertex(2, 4, 4), fixedVertex(2, 4, 6)}
 	pr := presentationrender.PrimitiveDraw{TextureName: "tex", VertexIndices: []uint16{0, 1, 2, 3}}
 	polys := c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit)
@@ -366,6 +370,11 @@ func TestCollectDrawPolysUsesCameraScale(t *testing.T) {
 	// Spelled out for corner 0: x = 2*2, y = 2*(-6 - (4>>1)).
 	if face.x[0] != 4 || face.y[0] != -16 {
 		t.Fatalf("corner 0 = (%d,%d), want (4,-16)", face.x[0], face.y[0])
+	}
+	c.SetEnhanced(false)
+	polys = c.collectDrawPolys(testPrimitiveDraw(pr, vertices), teamColor{index: 0, known: true}, 1, modelCursorUnit)
+	if len(polys) == 0 || polys[0].x[0] != 2 || polys[0].y[0] != -8 {
+		t.Fatalf("Original at scale 2 must project natively: corner 0 = (%d,%d), want (2,-8)", polys[0].x[0], polys[0].y[0])
 	}
 }
 

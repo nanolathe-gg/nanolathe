@@ -17,12 +17,14 @@ const (
 // X,Z are the camera origin in map pixels.
 // ViewW,ViewH are the viewport size in the same units.
 // MapW,MapH are the map extents in map pixels.
-// Scale is presentation-only zoom (1 == no zoom) [F-P1-008]. Zero means 1.
+// Scale is the presentation-only view scale [F-P1-008]: 0 and 1 mean native,
+// 2 the detail view. It is an integer so the projection and its inverse are
+// exact (DESIGN_GPU_RENDERER §14.1).
 type Camera struct {
 	X, Z         int32
 	ViewW, ViewH int32
 	MapW, MapH   int32
-	Scale        float32 // presentation zoom; 1 == native [F-P1-008]
+	Scale        int32 // presentation view scale; 0 or 1 == native [F-P1-008]
 
 	// Follow is the rest of the retail camera block: the desired origin, the
 	// tracked object and the four bookmark slots [07 R-CAM-01 §12]. It is
@@ -130,47 +132,46 @@ func clampAxis(camera, mapSize, viewportSpan, leading int32) int32 { // [07 §10
 // columns and its top and bottom 32 rows, and nothing at the right edge.
 //
 // Presentation zoom is not a retail concept [F-P1-008]. The chrome is drawn in
-// framebuffer pixels, so a zoomed camera sees fewer (or more) world pixels
-// behind the same chrome and the insets divide by the effective scale, exactly
-// as EffectiveView does — which keeps "every playable pixel is reachable" true
-// at any zoom.
+// framebuffer pixels, so a magnified camera sees fewer world pixels behind the
+// same chrome and the insets divide by the effective scale, exactly as
+// EffectiveView does — which keeps "every playable pixel is reachable" true at
+// either scale. The division is integer, as the scale is
+// (DESIGN_GPU_RENDERER §14.2).
 func (c *Camera) clampInsets() (leadX, trailX, leadZ, trailZ int32) { // [03 §4.1]
 	s := c.scale()
 	if s == 1 {
 		return OriginX, 0, OriginY, OriginY
 	}
-	insetY := int32(float32(OriginY) / s)
-	return int32(float32(OriginX) / s), 0, insetY, insetY
+	insetY := OriginY / s
+	return OriginX / s, 0, insetY, insetY
 }
 
-// scale returns effective presentation scale (1 when zero) [F-P1-008].
-func (c *Camera) scale() float32 {
-	if c == nil || c.Scale == 0 {
+// scale returns the effective view scale, clamped to [1, 2] with zero meaning
+// native [F-P1-008] (DESIGN_GPU_RENDERER §14.1).
+func (c *Camera) scale() int32 {
+	if c == nil || c.Scale <= 1 {
 		return 1
 	}
-	if c.Scale < 0.25 {
-		return 0.25
-	}
-	if c.Scale > 4 {
-		return 4
+	if c.Scale > 2 {
+		return 2
 	}
 	return c.Scale
 }
 
-// EffectiveScale returns the clamped presentation scale [F-P1-008].
-// Presentation-only; sim never reads it [I6].
-func (c *Camera) EffectiveScale() float32 { // [F-P1-008]
+// EffectiveScale returns the clamped presentation view scale, 1 or 2
+// [F-P1-008]. Presentation-only; sim never reads it [I6].
+func (c *Camera) EffectiveScale() int32 { // [F-P1-008]
 	return c.scale()
 }
 
-// EffectiveView returns the view size in world pixels after zoom. When zoomed
-// in, less world is visible; when zoomed out, more. Clamp uses this.
+// EffectiveView returns the view size in world pixels after the view scale.
+// At the detail scale less world is visible. Clamp uses this.
 func (c *Camera) EffectiveView() (int32, int32) {
 	s := c.scale()
 	if s == 1 {
 		return c.ViewW, c.ViewH
 	}
-	return int32(float32(c.ViewW) / s), int32(float32(c.ViewH) / s)
+	return c.ViewW / s, c.ViewH / s
 }
 
 // BattleView returns the size of the *battle viewport* in map pixels — the
@@ -296,70 +297,64 @@ func (c *Camera) Clamp() {
 	c.Z = clampAxis(c.Z, c.MapH, spanH, leadZ)
 }
 
-// Drag pans by screen-pixel delta via middle-drag, scaled by zoom [F-P1-008][07 §10].
-// It is presentation-only and never touches sim.
+// Drag pans by a screen-pixel delta via middle-drag, converted to world pixels
+// by the inverse of the view scale so the world stays under the pointer
+// [F-P1-008][07 §10] (DESIGN_GPU_RENDERER §14.2). It is presentation-only and
+// never touches sim.
 func (c *Camera) Drag(dx, dy int32) {
 	if c == nil {
 		return
 	}
 	s := c.scale()
-	// screen delta → world delta (inverse of zoom)
-	wx := int32(float32(dx) / s)
-	wz := int32(float32(dy) / s)
+	// screen delta → world delta (inverse of the view scale)
+	wx := dx / s
+	wz := dy / s
 	// Drag direction: moving mouse right should pan world right → camera follows mouse
 	c.Pan(-wx, -wz)
 }
 
-// AddZoom adjusts presentation zoom by wheel delta, centered at mx,my where
-// practical [F-P1-008]. Positive dy zooms in; negative zooms out. It keeps the
-// world point under the cursor stable when possible.
-func (c *Camera) AddZoom(delta float32, mx, my int32) {
-	if c == nil {
-		return
-	}
-	if delta == 0 {
-		return
-	}
-	oldS := c.scale()
-	// Wheel step: each notch ~1.1x; clamp to [0.25,4].
-	factor := float32(1.0)
-	if delta > 0 {
-		factor = 1.1
-	} else if delta < 0 {
-		factor = 1 / 1.1
-	}
-	c.SetScaleAbout(mx, my, oldS*factor)
-}
-
-// SetScaleAbout sets the presentation zoom, clamped to [0.25, 4], keeping the
-// world point under screen position (mx, my) where it is [F-P1-008]. The
-// wheel path steps through it; tooling captures use it to zoom to an exact
-// factor.
-func (c *Camera) SetScaleAbout(mx, my int32, newS float32) {
+// SetScaleAbout sets the view scale, clamped to [1, 2], keeping the world
+// point under screen position (mx, my) where it is [F-P1-008]
+// (DESIGN_GPU_RENDERER §14.1). F9 toggles through it about the viewport
+// centre; `--zoom` with `--shot-focus` uses it for captures.
+//
+// The arithmetic is the projection's own inverse, so the fixed point is exact:
+// world = cam + floorDiv(screen − origin, s), and the new origin is that world
+// point less the same quantity at the new scale.
+func (c *Camera) SetScaleAbout(mx, my, newS int32) {
 	if c == nil {
 		return
 	}
 	oldS := c.scale()
-	if newS < 0.25 {
-		newS = 0.25
+	if newS < 1 {
+		newS = 1
 	}
-	if newS > 4 {
-		newS = 4
+	if newS > 2 {
+		newS = 2
 	}
 	if newS == oldS {
+		c.Scale = newS
 		return
 	}
-	// Keep the point stable: world = (screen - Origin)/oldS + cam
-	// New cam = world - (screen - Origin)/newS
-	// Use float for subpixel before trunc.
-	ox := float32(OriginX)
-	oy := float32(OriginY)
-	wx := float32(c.X) + (float32(mx)-ox)/oldS
-	wz := float32(c.Z) + (float32(my)-oy)/oldS
-	c.X = int32(wx - (float32(mx)-ox)/newS)
-	c.Z = int32(wz - (float32(my)-oy)/newS)
+	dx := int64(mx) - int64(OriginX)
+	dy := int64(my) - int64(OriginY)
+	wx := int64(c.X) + floorDiv(dx, int64(oldS))
+	wz := int64(c.Z) + floorDiv(dy, int64(oldS))
+	c.X = int32(wx - floorDiv(dx, int64(newS)))
+	c.Z = int32(wz - floorDiv(dy, int64(newS)))
 	c.Scale = newS
 	c.Clamp()
+}
+
+// floorDiv is the floor division of [I3]: the screen-to-world inverse must
+// floor so a beam offset left of the origin maps to the world pixel that
+// covers it rather than to the one after it [03 §2.1].
+func floorDiv(a, b int64) int64 {
+	q := a / b
+	if a%b != 0 && (a < 0) != (b < 0) {
+		q--
+	}
+	return q
 }
 
 // NewFromTerrain creates a camera whose map extents are the playable insets [P1-15].
@@ -413,16 +408,18 @@ func (c *Camera) Scroll(setting byte, rawDelta int32, dir Direction) { // [07 §
 }
 
 // WorldToScreen projects fixed-point world (x,y,z) to orthographic screen
-// coordinates [03 §2.5] C1 with presentation zoom [F-P1-008]:
+// coordinates [03 §2.5] C1 at the presentation view scale [F-P1-008]:
 //
-//	screenX = (worldX>>16 - cameraX)*Scale + originX
-//	screenY = (worldZ>>16 - ((worldY>>16)>>1) - cameraZ)*Scale + originY
+//	screenX = (worldX>>16 - cameraX)*s + originX
+//	screenY = ((worldZ>>16 - ((worldY>>16)>>1)) - cameraZ)*s + originY
 //
 // The half-height shear ((worldY>>16)>>1) uses arithmetic shifts so negative
-// worldY is handled as retail does. Origin is taken from the viewport
-// constants OriginX/Y (128,32 for the observed beam path) rather than
-// inlining literals at call sites [03 §2.5]. When Scale is 0 or 1 the
-// original integer path is preserved for determinism of tests.
+// worldY is handled as retail does, and it is applied BEFORE the scale, so a
+// doubled view is the same picture at twice the pixels rather than a differently
+// sheared one (DESIGN_GPU_RENDERER §14.1). Origin is taken from the viewport
+// constants OriginX/Y (128,32 for the observed beam path) rather than inlining
+// literals at call sites [03 §2.5]. At s = 1 the expression reduces to the
+// original integer path exactly.
 func (c *Camera) WorldToScreen(x, y, z numeric.Fixed) (sx, sy int32) { // [03 §2.5]
 	wx := int32(int64(x) >> 16)
 	wy := int32(int64(y) >> 16)
@@ -434,16 +431,23 @@ func (c *Camera) WorldToScreen(x, y, z numeric.Fixed) (sx, sy int32) { // [03 §
 		sy = wz - shear - c.Z + OriginY
 		return
 	}
-	sx = int32(float32(wx-c.X)*s) + OriginX
-	sy = int32(float32(wz-shear-c.Z)*s) + OriginY
+	sx = (wx-c.X)*s + OriginX
+	sy = (wz-shear-c.Z)*s + OriginY
 	return
 }
 
-// ScreenToWorld inverts WorldToScreen at ground height (worldY=0) [03 §2.5]
-// with presentation zoom [F-P1-008].
+// ScreenToWorld inverts WorldToScreen at ground height (worldY=0) [03 §2.5] at
+// the presentation view scale [F-P1-008].
 // Retail's projection includes a half-height shear on Y; the inverse for
 // picking assumes Y=0 so the shear term is zero. This is the ground-plane
 // pick used by the minimap direct branch and cursor picking [07 §10].
+//
+// The divide FLOORS rather than truncating: a beam offset left of or above the
+// viewport origin is negative, and truncation toward zero would map the whole
+// pair (-1, 0) onto world pixel 0 at s = 2 while leaving -1 unreachable
+// [I3][03 §2.1]. With floor division every screen pixel names exactly one world
+// pixel and the round trip world → screen → world is the identity
+// (DESIGN_GPU_RENDERER §14.1).
 func (c *Camera) ScreenToWorld(sx, sy int32) (x, z numeric.Fixed) { // [03 §2.5]
 	s := c.scale()
 	if s == 1 {
@@ -451,7 +455,7 @@ func (c *Camera) ScreenToWorld(sx, sy int32) (x, z numeric.Fixed) { // [03 §2.5
 		wz := int64(sy-OriginY+c.Z) << 16
 		return numeric.Fixed(wx), numeric.Fixed(wz)
 	}
-	wx := int64(float32(sx-OriginX)/s+float32(c.X)) << 16
-	wz := int64(float32(sy-OriginY)/s+float32(c.Z)) << 16
+	wx := (int64(c.X) + floorDiv(int64(sx)-int64(OriginX), int64(s))) << 16
+	wz := (int64(c.Z) + floorDiv(int64(sy)-int64(OriginY), int64(s))) << 16
 	return numeric.Fixed(wx), numeric.Fixed(wz)
 }
