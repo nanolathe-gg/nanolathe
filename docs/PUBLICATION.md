@@ -10,8 +10,8 @@ The original 5,903 commits were grouped into adjacent integration snapshots
 along their first-parent ancestry. The original root, bootstrap, early phase
 boundaries, date changes and nearby subsystem transitions guided the groups;
 no group contains more than ten first-parent steps. Redundant sanitized
-snapshots were omitted. A final commit updates the publication documentation, giving 292 commits
-in this curated candidate.
+snapshots were omitted. Publication follow-ups update the documentation and make a test helper
+portable, giving 293 commits in this curated candidate.
 
 The original merge graph sometimes follows a topic branch before merging other
 work. These commits are curated integration snapshots, not a reconstruction of
@@ -39,8 +39,9 @@ history. Do not merge original development refs into this repository.
   removed material has not been replaced by independently worded evidence.
 - Retail byte-dump examples and stock-derived COB/BOS script examples in the
   format references. Authored file schemas are retained in the final reference. The latest Go
-  executable tokens are unchanged from the original source endpoint; two
-  gadget-field comments were clarified.
+  production executable tokens are unchanged from the original source endpoint.
+  Two gadget-field comments were clarified, and a source-checking test helper
+  now locates the repository through its module file rather than a personal path.
 
 These removals concern publication scope. They are not claims that every
 excluded file infringed a right. The retained original source is MIT licensed;

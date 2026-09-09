@@ -391,21 +391,13 @@ func TestRS06_MapIterationDetector(t *testing.T) {
 
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
-	if b, err := os.ReadFile("../../go.mod"); err == nil && strings.Contains(string(b), "module github.com/nanolathe/nanolathe") {
-		if _, err := os.Stat("../../internal/session/session.go"); err == nil {
-			return "../.."
+	for _, root := range []string{"../..", "."} {
+		if b, err := os.ReadFile(root + "/go.mod"); err == nil && strings.Contains(string(b), "module github.com/nanolathe/nanolathe") {
+			return root
 		}
 	}
-	if _, err := os.Stat("session.go"); err == nil {
-		return "."
-	}
-	if _, err := os.Stat("internal/session/session.go"); err == nil {
-		return "."
-	}
-	if _, err := os.Stat("/path/to/home/src/nanolathe-wt-rs06-determinism/internal/session/loop.go"); err == nil {
-		return "/path/to/home/src/nanolathe-wt-rs06-determinism"
-	}
-	return "."
+	t.Fatal("cannot locate repository go.mod for source checks")
+	return ""
 }
 
 func walkGoFiles(root string, fn func(path, content string)) error {
