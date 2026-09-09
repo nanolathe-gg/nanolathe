@@ -99,9 +99,9 @@ and wait on readiness → the shot-admission gate → the family spawner → sto
 reload and ammunition → debit `[06 §4.1]` `[06 §4.2]`. A gate that fails
 short-circuits the later steps and reorders none of the earlier ones; the
 reload decrement happens whether or not anything downstream succeeds. Admission
-tests the decremented word: a slot beginning at reload 1 reaches zero and may
-fire on that visit; starts 0, 1, and 2 respectively reach fire admission on
-visits 1, 1, and 2 when all other gates pass `[06 §3.3]` `[06 §4.2]`.
+tests the decremented word. Starts 0, 1, and 2 become 0, 0, and 1 after their
+first decrement and respectively reach fire admission on visits 1, 1, and 2
+when all other gates pass `[06 §3.3]` `[06 §4.2]`.
 
 `StepWeaponsForUnit` is the authoritative per-unit entry point the session's
 slot visit calls. It is what makes the script handshake single-drain: all three

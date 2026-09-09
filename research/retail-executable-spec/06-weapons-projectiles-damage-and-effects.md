@@ -715,8 +715,9 @@ in this order: decrement the reload timer when it is nonzero; resolve the
 target point (§3.2); abandon the slot when no executor pointer was installed;
 run the family-specific Aim dispatch below; and then, **only when the reload
 timer is now zero**, run the admission gate, the cost precheck, and the
-executor. The admission test reads the updated timer: with every other gate
-passing, starting values 0, 1, and 2 reach admission on visits 1, 1, and 2
+executor. **Established fact:** the admission test reads the updated timer.
+Starting values 0, 1, and 2 become 0, 0, and 1 after their first decrement and,
+with every other gate passing, reach admission on visits 1, 1, and 2
 respectively. A one-tick reload can therefore fire on its decrementing visit.
 
 **Established fact:** Which executor a weapon uses is decided once, at catalog
@@ -1826,8 +1827,10 @@ stored reload  = (health factor * veteran reload) / 100             ; signed
 and the result is stored into the slot as a signed 16-bit tick count. The stored
 value is decremented once per tick at the top of the slot's own pass, then the
 updated value is tested for zero. Thus starts 0 and 1 can admit a shot on the
-first eligible visit, while start 2 admits it on the second; a stored reload of
-*n* blocks the next *n - 1* eligible visits when *n* is positive. Stockpile launch does not
+first visit, while start 2 admits it on the second if other gates pass; a stored
+positive reload of *n* blocks firing for the next *n - 1* populated-slot visits,
+and its *n*th visit may fire if other gates pass. The decrement still happens
+when a prior visit is out of range or waiting on Aim. Stockpile launch does not
 write reload. The zero-maximum-health contract is closed in §9.1 (healing clamps
 to zero without dividing; the TakeDamage percentage and this health term perform
 unguarded unsigned divisions and must be guarded as an error path). Negative
