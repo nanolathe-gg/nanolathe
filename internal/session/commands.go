@@ -59,6 +59,8 @@ const (
 	HumanDoubleShot
 	HumanHalfShot
 	HumanMeteor
+	HumanBigBrother
+	HumanShiftState
 )
 
 type HumanSelectionCommand struct{ Handles []pool.Handle }
@@ -191,6 +193,7 @@ type HumanCommand struct {
 	Give             HumanGiveCommand
 	Visibility       HumanVisibilityCommand
 	Meteor           HumanMeteorCommand
+	ShiftHeld        bool
 }
 
 func cloneHumanHandles(in []pool.Handle) []pool.Handle {
@@ -583,6 +586,17 @@ func (s *Session) applyHumanCommand(c HumanCommand, tick uint32) {
 		return
 	}
 	switch c.Kind {
+	case HumanBigBrother:
+		s.bigBrother.enabled = !s.bigBrother.enabled
+		if s.bigBrother.enabled {
+			s.bigBrother.countdown = 1
+		} else {
+			s.bigBrother.cancelFollow = true
+		}
+		return
+	case HumanShiftState:
+		s.bigBrother.shiftHeld = c.ShiftHeld
+		return
 	case HumanNoShake:
 		s.ToggleNoShake()
 		return

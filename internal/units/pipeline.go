@@ -102,3 +102,7 @@ func (w *World) selectionReady(u *Unit) bool {
 	carrier := w.Unit(u.Attachment.Carrier)
 	return carrier != nil && carrier.Flags&CargoSelectableStatus != 0
 }
+
+// SelectionReady exposes the shared sweep and next-ready selector predicate
+// [04 R-MOV-03 §1].
+func (w *World) SelectionReady(u *Unit) bool { return w.selectionReady(u) }
