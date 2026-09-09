@@ -208,13 +208,11 @@ type interpolator struct {
 	pieces      [][]frame.PieceView
 	projectiles []frame.ProjectileView
 	effects     []frame.EffectView
-	// unitAt and projAt are the previous tick's lookup tables: the record's
-	// index plus one, addressed by pool slot and by projectile handle, both of
-	// which are uint16 [01 §6.1]. Zero means the previous tick holds no record
-	// at that handle. effectAt is a map because an effect's identity is not a
-	// pool slot; it is only ever looked up on the frame path, never ranged [I1].
+	// unitAt is the previous tick's pool-slot lookup. projAt and effectAt are
+	// presentation-identity lookups, used only on the frame path and never
+	// ranged [I1].
 	unitAt   []int32
-	projAt   []int32
+	projAt   map[uint64]int32
 	effectAt map[effectKey]int32
 }
 
@@ -343,20 +341,24 @@ func (in *interpolator) blendPieces(unit int, prev, cur []frame.PieceView, f16 i
 }
 
 func (in *interpolator) blendProjectiles(prev, cur *frame.Frame, f16 int64) []frame.ProjectileView {
-	in.projAt = resetIndex(in.projAt, maxProjectileHandle(prev.Projectiles))
+	if in.projAt == nil {
+		in.projAt = make(map[uint64]int32, len(prev.Projectiles))
+	} else {
+		clear(in.projAt)
+	}
 	for i := range prev.Projectiles {
-		if h := int(prev.Projectiles[i].Handle); h < len(in.projAt) {
-			in.projAt[h] = int32(i) + 1
+		if id := prev.Projectiles[i].PresentationID; id != 0 {
+			in.projAt[id] = int32(i) + 1
 		}
 	}
 	in.projectiles = growSlice(in.projectiles, len(cur.Projectiles))
 	for i := range cur.Projectiles {
 		v := cur.Projectiles[i]
-		// A projectile matches on its handle with an unchanged weapon, shooter
-		// and creation tick; the pool reuses slots immediately [I5], so those
-		// three are what separate one record from its successor (§13.5).
-		if h := int(v.Handle); h < len(in.projAt) && in.projAt[h] != 0 {
-			p := &prev.Projectiles[in.projAt[h]-1]
+		// A nonzero admission identity stays with a projectile when the packed
+		// pool compacts. A zero fixture identity never borrows history: a handle
+		// is a packed-array position, not a subject identity [06 §5.1][§5.2].
+		if prior := in.projAt[v.PresentationID]; v.PresentationID != 0 && prior != 0 {
+			p := &prev.Projectiles[prior-1]
 			if p.WeaponID == v.WeaponID && p.Shooter == v.Shooter && p.CreationTick == v.CreationTick {
 				v.X = lerpFixed(p.X, v.X, f16)
 				v.Y = lerpFixed(p.Y, v.Y, f16)
@@ -424,16 +426,6 @@ func maxUnitSlot(units []frame.UnitView) int {
 	for i := range units {
 		if s := int(units[i].Slot); s >= n {
 			n = s + 1
-		}
-	}
-	return n
-}
-
-func maxProjectileHandle(projectiles []frame.ProjectileView) int {
-	n := 0
-	for i := range projectiles {
-		if h := int(projectiles[i].Handle); h >= n {
-			n = h + 1
 		}
 	}
 	return n

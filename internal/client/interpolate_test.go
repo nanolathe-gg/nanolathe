@@ -191,29 +191,40 @@ func TestLongDisplacementSnaps(t *testing.T) {
 	}
 }
 
-// Projectiles match on handle plus weapon, shooter and creation tick; effects
-// match on their presentation identity. A mismatch snaps.
+// Projectiles match on their admission identity across packed-pool compaction;
+// effects match on their presentation identity. A mismatch snaps.
 func TestProjectileAndEffectIdentity(t *testing.T) {
 	var in interpolator
 	prev := &frame.Frame{Tick: 1,
 		Projectiles: []frame.ProjectileView{
-			{Handle: 2, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(10), Yaw: 100},
-			{Handle: 3, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(10)},
+			// A and B deliberately share all continuity metadata. Compaction
+			// moves B into A's old handle, where a handle matcher would blend B
+			// from A's unrelated position.
+			{PresentationID: 20, Handle: 1, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(0)},
+			{PresentationID: 21, Handle: 2, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(100), Yaw: 100},
+			{PresentationID: 23, Handle: 3, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(10)},
 		},
 		Effects: []frame.EffectView{{PresentationID: 40, X: wu(0)}},
 	}
 	cur := &frame.Frame{Tick: 2,
 		Projectiles: []frame.ProjectileView{
-			{Handle: 2, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(20), Yaw: 300},
-			{Handle: 3, WeaponID: 5, Shooter: 9, CreationTick: 2, X: wu(20)},
+			// B survived and compacted from handle 2 to handle 1. It must blend
+			// with B's X=100, yielding 105, rather than A's X=0.
+			{PresentationID: 21, Handle: 1, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(110), Yaw: 300},
+			// A distinct same-tick admission at the old handle must snap even
+			// though all prior matching metadata can coincide.
+			{PresentationID: 22, Handle: 2, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(20)},
+			// Identity does not override existing continuity checks: a changed
+			// creation tick still snaps.
+			{PresentationID: 23, Handle: 3, WeaponID: 5, Shooter: 9, CreationTick: 2, X: wu(20)},
 		},
 		Effects: []frame.EffectView{{PresentationID: 40, X: wu(8)}, {PresentationID: 41, X: wu(8)}},
 	}
 	view := in.blend(prev, cur, int64(fractionOne)/2)
-	if view.Projectiles[0].X != wu(15) || view.Projectiles[0].Yaw != 200 {
-		t.Fatalf("blended projectile = (%d,%d), want (%d,200)", view.Projectiles[0].X, view.Projectiles[0].Yaw, wu(15))
+	if view.Projectiles[0].X != wu(105) || view.Projectiles[0].Yaw != 200 {
+		t.Fatalf("compacted projectile blended from the wrong trajectory = (%d,%d), want (%d,200)", view.Projectiles[0].X, view.Projectiles[0].Yaw, wu(105))
 	}
-	if view.Projectiles[1].X != wu(20) {
+	if view.Projectiles[1].X != wu(20) || view.Projectiles[2].X != wu(20) {
 		t.Fatalf("a reused projectile handle blended: X = %d, want %d", view.Projectiles[1].X, wu(20))
 	}
 	if view.Effects[0].X != wu(4) {
@@ -222,16 +233,48 @@ func TestProjectileAndEffectIdentity(t *testing.T) {
 	if view.Effects[1].X != wu(8) {
 		t.Fatalf("a new effect blended: X = %d, want the current position %d", view.Effects[1].X, wu(8))
 	}
+
+	// A third committed frame verifies that B continues its own trajectory
+	// after the compaction boundary.
+	next := &frame.Frame{Tick: 3, Projectiles: []frame.ProjectileView{
+		{PresentationID: 21, Handle: 1, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(120), Yaw: 500},
+	}}
+	view = in.blend(cur, next, int64(fractionOne)/2)
+	if view.Projectiles[0].X != wu(115) || view.Projectiles[0].Yaw != 400 {
+		t.Fatalf("compacted projectile did not continue its own trajectory = (%d,%d), want (%d,400)", view.Projectiles[0].X, view.Projectiles[0].Yaw, wu(115))
+	}
+}
+
+// Projectile fixtures without a usable admission identity always take the
+// current pose. Unlike units, even two zero identities have no handle fallback.
+func TestZeroProjectilePresentationIDSnaps(t *testing.T) {
+	for _, ids := range [][2]uint64{{0, 0}, {0, 7}, {7, 0}} {
+		var in interpolator
+		prev := &frame.Frame{Tick: 1, Projectiles: []frame.ProjectileView{{
+			PresentationID: ids[0], Handle: 1, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(100),
+		}}}
+		cur := &frame.Frame{Tick: 2, Projectiles: []frame.ProjectileView{{
+			PresentationID: ids[1], Handle: 1, WeaponID: 5, Shooter: 9, CreationTick: 1, X: wu(110),
+		}}}
+		got := in.blend(prev, cur, int64(fractionOne)/2).Projectiles[0]
+		if got.X != cur.Projectiles[0].X {
+			t.Fatalf("projectile IDs %v blended: X = %d, want current pose %d", ids, got.X, cur.Projectiles[0].X)
+		}
+	}
 }
 
 // The retained buffers are reused: a second blend of the same shape allocates
 // nothing, which is what lets the modern path record every presented frame.
 func TestSteadyStateBlendAllocatesNothing(t *testing.T) {
 	var in interpolator
+	projectiles := make([]frame.ProjectileView, 300)
+	for i := range projectiles {
+		projectiles[i] = frame.ProjectileView{PresentationID: uint64(i + 1), Handle: pool.Handle(i + 1)}
+	}
 	prev := &frame.Frame{Tick: 1, Units: []frame.UnitView{{Slot: 1, Pieces: []frame.PieceView{{}, {}}}},
-		Projectiles: []frame.ProjectileView{{Handle: 1}}, Effects: []frame.EffectView{{PresentationID: 1}}}
+		Projectiles: projectiles, Effects: []frame.EffectView{{PresentationID: 1}}}
 	cur := &frame.Frame{Tick: 2, Units: []frame.UnitView{{Slot: 1, Pieces: []frame.PieceView{{}, {}}}},
-		Projectiles: []frame.ProjectileView{{Handle: 1}}, Effects: []frame.EffectView{{PresentationID: 1}}}
+		Projectiles: append([]frame.ProjectileView(nil), projectiles...), Effects: []frame.EffectView{{PresentationID: 1}}}
 	in.blend(prev, cur, int64(fractionOne)/2)
 	if n := testing.AllocsPerRun(20, func() { in.blend(prev, cur, int64(fractionOne)/2) }); n != 0 {
 		t.Fatalf("steady-state blend allocated %v times per frame, want 0", n)

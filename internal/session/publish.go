@@ -557,14 +557,15 @@ func (s *Session) publishSnapshot(tick uint32) {
 			p := s.Combat.Records[i]
 			owner, ownerKnown := projectileOwnerFromRecord(s, p.Shooter, p.ShooterSide)
 			pv := frame.ProjectileView{
-				Handle:     h,
-				Owner:      owner,
-				OwnerKnown: ownerKnown,
-				X:          p.Pos.X,
-				Y:          p.Pos.Y,
-				Z:          p.Pos.Z,
-				WeaponID:   p.WeaponID,
-				Shooter:    p.Shooter,
+				PresentationID: s.Combat.PresentationID(h),
+				Handle:         h,
+				Owner:          owner,
+				OwnerKnown:     ownerKnown,
+				X:              p.Pos.X,
+				Y:              p.Pos.Y,
+				Z:              p.Pos.Z,
+				WeaponID:       p.WeaponID,
+				Shooter:        p.Shooter,
 				// The frame carries retail's yaw word: combat's own stored
 				// yaw is half a turn from it (a documented transform,
 				// [06 R-WPN-05 §11]) and the renderer's projectile angle
