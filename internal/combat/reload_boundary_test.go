@@ -40,3 +40,56 @@ func TestReloadBoundaryUsesTheDecrementedWord(t *testing.T) {
 		})
 	}
 }
+
+// TestReloadNegativeSavedWordsStayBlocked exercises signed values that the
+// retail unit restore accepts. Every nonzero word decrements before the exact
+// zero admission test; the minimum signed value wraps in that 16-bit field
+// [06 §3.3][06 §4.2].
+func TestReloadNegativeSavedWordsStayBlocked(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		start, want int32
+	}{
+		{name: "minus-one", start: -1, want: -2},
+		{name: "minimum-wraps", start: -32768, want: 32767},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w, terrain, shooter, target := newTestWorldAndUnits(t)
+			weapon := weaponNonTurret(903)
+			shooter.InstallWeapon(0, weapon)
+			slot := shooter.SlotAt(0)
+			slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
+			slot.Reload = tc.start
+			catalog := &content.Catalog{Weapons: map[string]*content.WeaponDef{"negative-reload": weapon}}
+			catalog.RebuildWeaponIndex()
+			var svc Service
+			sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, catalog, nil, nil)
+			if sum.Fired != 0 || svc.Count() != 0 || slot.Reload != tc.want {
+				t.Fatalf("reload %d produced fired=%d count=%d next=%d, want blocked and %d", tc.start, sum.Fired, svc.Count(), slot.Reload, tc.want)
+			}
+		})
+	}
+}
+
+// TestReloadStoreNarrowsTheComputedResult keeps the slot's final write at its
+// signed-16 width even when a direct fixture supplies a wider definition word.
+// The arithmetic helper remains wide so its documented truncation sequence is
+// independently observable; this test covers only the destination store
+// [06 §4.2].
+func TestReloadStoreNarrowsTheComputedResult(t *testing.T) {
+	w, terrain, shooter, target := newTestWorldAndUnits(t)
+	weapon := weaponNonTurret(904)
+	weapon.ReloadTime = 32768
+	shooter.InstallWeapon(0, weapon)
+	slot := shooter.SlotAt(0)
+	slot.Target = units.Target{Kind: units.TargetUnit, Unit: target.Handle}
+	catalog := &content.Catalog{Weapons: map[string]*content.WeaponDef{"wide-reload": weapon}}
+	catalog.RebuildWeaponIndex()
+	var svc Service
+	if sum := svc.StepWeaponsForUnit(shooter, 1, w, nil, terrain, nil, catalog, nil, nil); sum.Fired != 1 {
+		t.Fatalf("fixture did not fire: %+v", sum)
+	}
+	if slot.Reload != -32768 {
+		t.Fatalf("stored reload=%d, want signed-16 -32768", slot.Reload)
+	}
+}
