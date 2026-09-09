@@ -703,9 +703,10 @@ heading and never rewrites the parent's stored yaw `[06 §4.3]`
 
 **C9 — aim-ready is granted only on an explicit nonzero return.** A new dispatch
 first clears readiness; every delivered return replaces it, so zero clears and
-an explicit nonzero grants. A held request remains untouched. The request latch
-is set immediately after dispatch; there is no timeout, and a missing script or
-an exhausted thread pool never authorizes fire
+an explicit nonzero grants. Revisiting a held request does not reset its receiver
+or synthesize a delivery; its deferred completion still may arrive. The request
+latch is set immediately after dispatch and a zero delivery does not clear it;
+there is no timeout, and a missing script or an exhausted thread pool never authorizes fire
 `[06 §3.3]` `[06 §3.4]` `[06 R-P0-07]`.
 
 ### 3.2 The pool — C10–C12

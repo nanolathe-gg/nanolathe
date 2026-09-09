@@ -753,9 +753,10 @@ or all eight COB thread slots are occupied; signal termination and abnormal
 termination do not call the receiver. Before a new receiver-bearing dispatch,
 the receiver is zeroed. A zero delivery — explicit return or dispatcher — keeps
 that new request without permission; an explicit nonzero delivery grants
-permission. A held request receives neither reset nor delivery. No timeout is
-present, the absence of a timeout writer being established by a bounded search
-over the weapon-slot code.
+permission. A zero delivery does not clear the Aim-request latch. Revisiting a
+held request does not reset its receiver or synthesize a delivery; its actual
+deferred completion may still arrive. No timeout is present, the absence of a
+timeout writer being established by a bounded search over the weapon-slot code.
 A nil VM or missing script must therefore not set an Aim-ready state for a
 family that requires a result: a missing or blocked Aim script delivers zero
 through the same receiver.
